@@ -4,6 +4,8 @@ A modular, high-performance **Terminal User Interface (TUI)** and **Windowing Sy
 
 This library shifts away from naive command-line printing (which causes terminal flickering and excessive CPU overhead) to provide a desktop-like windowed environment inside standard ANSI/TTY terminal applications.
 
+<video src="https://github.com/user-attachments/assets/a850086b-de1b-4fda-86f0-c97e339ff271" width="100%" autoplay loop muted controls></video>
+
 ---
 
 > [!WARNING]
