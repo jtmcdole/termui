@@ -4,6 +4,8 @@ A Flutter GUI embedder and high-performance renderer for [`termui`](../termui) a
 
 `termui_flutter` allows you to host fully-interactive terminal applications (TUIs) inside Flutter mobile, desktop, and web apps. It bridges Flutter's rendering pipeline and gesture/focus systems with `termui`'s state machine, double-buffered canvas, and widget engine.
 
+<video src="https://github.com/user-attachments/assets/a92129b8-1bbb-4d74-8983-6c8de75a1962" width="100%" autoplay loop muted controls></video>
+
 ---
 
 ## Why termui_flutter?
