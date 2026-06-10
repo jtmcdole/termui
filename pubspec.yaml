@@ -1,0 +1,43 @@
+name: termui_monorepo
+description: Root workspace of the termui monorepo.
+version: 0.0.1
+publish_to: 'none'
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+
+workspace:
+  - packages/termui
+  - packages/termui_flutter
+  - packages/termui_flutter/example
+  - packages/termui_shared_examples
+
+dev_dependencies:
+  melos: ^7.0.0
+
+dependency_overrides:
+  test_api: 0.7.11
+
+melos:
+  command:
+    bootstrap:
+      environment:
+        sdk: ">=3.10.0 <4.0.0"
+        flutter: ">=3.0.0"
+  scripts:
+    analyze:
+      run: dart run melos exec -c 1 -- "dart analyze"
+      description: Run static analysis on all packages.
+    test:dart:
+      run: dart run melos exec --dir-exists=test --no-flutter -- "dart test"
+      description: Run unit tests for pure Dart packages.
+    test:flutter:
+      run: dart run melos exec --dir-exists=test --flutter -- "flutter test"
+      description: Run unit tests for Flutter packages.
+    test:all:
+      steps:
+        - melos run test:dart
+        - melos run test:flutter
+      packageFilters:
+        dirExists: test
+      description: Run all tests in the monorepo.

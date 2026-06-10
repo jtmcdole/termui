@@ -1,0 +1,155 @@
+import '../buffer.dart';
+import '../style.dart';
+import '../layout.dart';
+import '../color.dart';
+import '../easing.dart';
+
+/// A progress bar widget that fills its horizontal area with block characters.
+///
+/// It supports custom styling, progress smoothing (using fractional block
+/// Unicode characters), gradient coloring (interpolating between start and end
+/// colors), and custom mathematical easing curves.
+///
+/// ### Example Usage
+///
+/// ```dart
+/// LinearProgressIndicator(
+///   0.75,
+///   smooth: true,
+///   startColor: Color(0xFF00FF00), // Green
+///   endColor: Color(0xFFFF0000),   // Red
+///   easing: Easing.easeInOutQuad,
+/// );
+/// ```
+///
+/// ### Properties and Settings
+///
+/// | Property | Type | Description |
+/// | :--- | :--- | :--- |
+/// | `fraction` | [double] | Progress percentage from `0.0` to `1.0`. |
+/// | `style` | [Style] | Rendering style (foreground/background color). |
+/// | `showPercentage` | [bool] | Overlay the text representation (e.g. "75%"). |
+/// | `smooth` | [bool] | Draw fractional widths (1/8 to 7/8 characters). |
+/// | `startColor` | [Color]? | Starting color for the horizontal gradient. |
+/// | `endColor` | [Color]? | Ending color for the horizontal gradient. |
+/// | `easing` | [EasingFunction] | Mathematical formula adjusting progress speed. |
+class LinearProgressIndicator extends Widget {
+  /// Progress percentage from `0.0` to `1.0`.
+  final double fraction; // 0.0 to 1.0
+
+  /// Rendering style (foreground/background color).
+  final Style style;
+
+  /// Overlay the text representation (e.g. "75%").
+  final bool showPercentage;
+
+  /// Draw fractional widths (1/8 to 7/8 characters).
+  final bool smooth;
+
+  /// Starting color for the horizontal gradient.
+  final Color? startColor;
+
+  /// Ending color for the horizontal gradient.
+  final Color? endColor;
+
+  /// Mathematical formula adjusting progress speed.
+  final EasingFunction easing;
+
+  /// Creates a [LinearProgressIndicator].
+  const LinearProgressIndicator(
+    this.fraction, {
+    this.style = Style.empty,
+    this.showPercentage = true,
+    this.smooth = false,
+    this.startColor,
+    this.endColor,
+    this.easing = Easing.linear,
+  });
+
+  /// List of fractional block characters for smooth progress representation.
+  static const List<String> eighths = [
+    '▏', // 1/8
+    '▎', // 2/8
+    '▍', // 3/8
+    '▌', // 4/8
+    '▋', // 5/8
+    '▊', // 6/8
+    '▉', // 7/8
+    '█', // 8/8
+  ];
+
+  @override
+  void render(Buffer buffer, Rect area) {
+    if (area.width <= 0 || area.height <= 0) return;
+
+    final clamped = fraction.clamp(0.0, 1.0);
+    final eased = easing(clamped);
+    final progressVal = (eased * area.width).clamp(0.0, area.width.toDouble());
+    final filledWidth = progressVal.floor();
+
+    // Determine the percentage text if shown
+    String? pctText;
+    int? pctStartIdx;
+    if (showPercentage) {
+      pctText = '${(eased * 100).toInt().clamp(0, 100)}%';
+      if (pctText.length < area.width - 2) {
+        pctStartIdx = ((area.width - pctText.length) / 2).floor();
+      } else {
+        pctText = null;
+      }
+    }
+
+    final hasGradient = startColor != null && endColor != null;
+    var cellStyle = style;
+
+    for (var x = 0; x < area.width; x++) {
+      // 1. Calculate style (interpolate color if gradient enabled)
+      if (hasGradient) {
+        final t = area.width > 1 ? x / (area.width - 1) : 0.0;
+        final r = (startColor!.r + t * (endColor!.r - startColor!.r)).round();
+        final g = (startColor!.g + t * (endColor!.g - startColor!.g)).round();
+        final b = (startColor!.b + t * (endColor!.b - startColor!.b)).round();
+        cellStyle = Style(
+          foreground: Color(r, g, b),
+          background: style.background,
+          modifiers: style.modifiers,
+        );
+      }
+
+      // 2. Determine character
+      String char = '░'; // background character
+
+      // Check if we are inside the percentage text range
+      if (pctText != null &&
+          pctStartIdx != null &&
+          x >= pctStartIdx &&
+          x < pctStartIdx + pctText.length) {
+        char = pctText[x - pctStartIdx];
+      } else {
+        if (x < filledWidth) {
+          char = '█';
+        } else if (x == filledWidth) {
+          final remainder = progressVal - filledWidth;
+          if (smooth) {
+            final idx = (remainder * 8).round() - 1;
+            if (idx >= 0 && idx < 8) {
+              char = eighths[idx];
+            } else if (idx >= 8) {
+              char = '█';
+            }
+          } else {
+            if (remainder >= 0.5) {
+              char = '█';
+            }
+          }
+        }
+      }
+
+      final cell = buffer.getCell(x, 0);
+      if (cell != null) {
+        cell.char = char;
+        cell.style = cellStyle;
+      }
+    }
+  }
+}

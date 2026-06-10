@@ -1,0 +1,15 @@
+name: termui_shared_examples
+description: Shared example widgets and screens for termui and termui_flutter.
+version: 0.0.1
+publish_to: none
+
+resolution: workspace
+
+environment:
+  sdk: ">=3.10.0 <4.0.0"
+
+dependencies:
+  termui:
+    path: ../termui
+  characters: ^1.4.0
+  file: ^7.0.1

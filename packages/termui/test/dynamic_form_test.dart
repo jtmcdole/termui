@@ -1,0 +1,127 @@
+import 'package:test/test.dart';
+import 'package:termui/ui/buffer.dart';
+import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/event.dart';
+import 'package:termui/ui/widget_toolkit.dart';
+
+void main() {
+  group('Dynamic Form & FormField Tests', () {
+    test('Dynamic field registration and validation', () {
+      final nameField = TextFormField(
+        label: 'Name',
+        initialValue: '',
+        validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+      );
+      final emailField = TextFormField(
+        label: 'Email',
+        initialValue: '',
+        validator: (val) =>
+            (val == null || !val.contains('@')) ? 'Invalid' : null,
+      );
+
+      final form = Form(child: Column([nameField, emailField]));
+
+      final tree = ElementWidget(form);
+      final buffer = Buffer.blank(20, 10);
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      final formState = tree.findState<FormState>();
+      expect(formState, isNotNull);
+
+      // Verify validation fails initially
+      expect(formState!.validate(), isFalse);
+      expect(nameField.hasError, isTrue);
+      expect(nameField.errorText, equals('Required'));
+      expect(emailField.hasError, isTrue);
+      expect(emailField.errorText, equals('Invalid'));
+
+      // Fill in name
+      nameField.value = 'Alice';
+      expect(formState.validate(), isFalse);
+      expect(nameField.hasError, isFalse);
+      expect(emailField.hasError, isTrue);
+
+      // Fill in email
+      emailField.value = 'alice@example.com';
+      expect(formState.validate(), isTrue);
+      expect(nameField.hasError, isFalse);
+      expect(emailField.hasError, isFalse);
+    });
+
+    test('Dynamic Form reset', () {
+      final nameField = TextFormField(
+        label: 'Name',
+        initialValue: 'Bob',
+        validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+      );
+      final form = Form(child: Column([nameField]));
+
+      final tree = ElementWidget(form);
+      final buffer = Buffer.blank(20, 10);
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      final formState = tree.findState<FormState>()!;
+      nameField.value = '';
+      expect(formState.validate(), isFalse);
+      expect(nameField.hasError, isTrue);
+
+      // Reset
+      formState.reset();
+      expect(nameField.value, equals('Bob'));
+      expect(nameField.hasError, isFalse);
+      expect(nameField.errorText, isNull);
+    });
+
+    test('Dynamic Form focus traversal', () {
+      final f1 = TextFormField(label: 'F1');
+      final f2 = TextFormField(label: 'F2');
+      final form = Form(child: Column([f1, f2]));
+
+      final tree = ElementWidget(form);
+      final buffer = Buffer.blank(20, 10);
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      final formState = tree.findState<FormState>()!;
+      f1.focused = true;
+      expect(f1.focused, isTrue);
+      expect(f2.focused, isFalse);
+
+      // Press Tab moves to F2
+      formState.handleKeyEvent(const KeyEvent('tab', KeyType.character));
+      expect(f1.focused, isFalse);
+      expect(f2.focused, isTrue);
+
+      // Press Backtab moves to F1
+      formState.handleKeyEvent(const KeyEvent('backtab', KeyType.character));
+      expect(f1.focused, isTrue);
+      expect(f2.focused, isFalse);
+    });
+
+    test('Legacy Form LeftBorder focus updates on tab', () {
+      final f1 = TextFormField(label: 'Field 1');
+      final f2 = TextFormField(label: 'Field 2');
+      final form = Form(fields: [f1, f2]);
+
+      final tree = ElementWidget(form);
+      final buffer = Buffer.blank(20, 10);
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      final formState = tree.findState<FormState>()!;
+
+      // Initially, Field 1 is focused (border starts with │) and Field 2 is unfocused (border starts with space)
+      expect(buffer.getCell(0, 0)!.char, equals('│'));
+      expect(buffer.getCell(0, 3)!.char, equals(' '));
+
+      // Press Tab to move focus to Field 2
+      formState.handleKeyEvent(const KeyEvent('tab', KeyType.character));
+
+      // Re-render
+      buffer.clear();
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      // Field 1 should now be unfocused, Field 2 should be focused
+      expect(buffer.getCell(0, 0)!.char, equals(' '));
+      expect(buffer.getCell(0, 3)!.char, equals('│'));
+    });
+  });
+}

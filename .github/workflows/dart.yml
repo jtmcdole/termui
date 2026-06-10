@@ -1,0 +1,37 @@
+name: Dart CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Build, Analyze, and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.1
+
+      - name: Install Melos
+        run: dart pub global activate melos
+
+      - name: Bootstrap workspace
+        run: melos bootstrap
+
+      - name: Verify formatting
+        run: melos exec -c 1 -- "dart format --output=none --set-exit-if-changed ."
+
+      - name: Analyze project source
+        run: melos run analyze
+
+      - name: Run unit tests
+        run: melos run test:all
