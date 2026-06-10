@@ -1,15 +1,17 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:test/test.dart';
 import 'package:file/memory.dart';
 import 'package:termui/perf/tracer.dart';
 
 void main() {
   group('Tracer Tests', () {
-    final traceFilePath =
-        '/home/codefu/.gemini/antigravity-cli/scratch/test_trace.json';
+    late String traceFilePath;
 
     setUp(() async {
+      traceFilePath =
+          '${Directory.current.path}${Platform.pathSeparator}test_trace_${Random().nextInt(10000000)}.json';
       await Tracer.initialize();
     });
 
