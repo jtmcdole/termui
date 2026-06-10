@@ -3,6 +3,12 @@ description: Flutter integration package for termui, containing the reusable Ter
 version: 0.1.0
 repository: https://github.com/jtmcdole/termui/packages/termui_flutter
 
+topics:
+  - cli
+  - tui
+  - terminal
+  - console
+
 resolution: workspace
 
 environment:
