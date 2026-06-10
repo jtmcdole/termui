@@ -4,6 +4,8 @@ A high-performance, double-buffered **Terminal User Interface (TUI)** and **decl
 
 `termui` enables you to build complex, rich, and highly interactive terminal applications with overlapping windows, layout grids, and a widget tree structure inspired by Flutter; without the performance pitfalls, low-level ANSI complexity, or terminal flickering of naive CLI output printing.
 
+<video src="https://github.com/user-attachments/assets/a850086b-de1b-4fda-86f0-c97e339ff271" width="100%" autoplay loop muted controls></video>
+
 ---
 
 ## Why termui?
