@@ -134,7 +134,7 @@ class IoTerminalBackend implements TerminalBackend {
 }
 
 void _windowsInputReaderEntry(SendPort sendPort) {
-  final inputHandle = GetStdHandle(STD_INPUT_HANDLE);
+  final inputHandle = GetStdHandle(STD_INPUT_HANDLE).value;
   final buffer = calloc<Uint16>(256);
   final numRead = calloc<Uint32>();
 
@@ -142,11 +142,10 @@ void _windowsInputReaderEntry(SendPort sendPort) {
     while (true) {
       // Wait for input to be available on stdin with a timeout of 20ms
       final waitResult = WaitForSingleObject(inputHandle, 20);
-      const waitObject0 = 0;
-      if (waitResult == waitObject0) {
+      if (waitResult.value == WAIT_OBJECT_0) {
         final result = ReadConsole(inputHandle, buffer, 256, numRead, nullptr);
 
-        if (result != 0 && numRead.value > 0) {
+        if (result.value && numRead.value > 0) {
           final chars = <int>[];
           for (var i = 0; i < numRead.value; i++) {
             chars.add(buffer[i]);
