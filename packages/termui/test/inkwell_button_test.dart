@@ -6,6 +6,7 @@ import 'package:termui/ui/style.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/event.dart' hide Modifier;
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 
 void main() {
   group('InkwellButton Tests', () {
@@ -34,36 +35,12 @@ void main() {
 
       tree.render(buffer, const Rect(0, 0, 10, 4));
 
-      // Normal state body at Rect(0, 0, 9, 3)
-      // So rightmost column 9 and bottom row 3 are empty/transparent
-      expect(buffer.getCell(9, 0)!.isTransparent, isTrue);
-      expect(buffer.getCell(9, 1)!.isTransparent, isTrue);
-      expect(buffer.getCell(9, 2)!.isTransparent, isTrue);
-      expect(buffer.getCell(9, 3)!.isTransparent, isTrue);
-      expect(buffer.getCell(0, 3)!.isTransparent, isTrue);
-      expect(buffer.getCell(5, 3)!.isTransparent, isTrue);
-
-      // Body background should be red (color1)
-      final bodyCell = buffer.getCell(0, 0)!;
-      expect(bodyCell.style.background, equals(Colors.red));
-
-      // Text 'Click' centered inside body Rect(0, 0, 9, 3)
-      // bodyWidth = 9, bodyHeight = 3
-      // textLen = 5. Center row = 1, start column = 2 (relative to body)
-      // So buffer coordinates: row = 1, start column = 2
-      expect(buffer.getCell(2, 1)!.char, equals('C'));
-      expect(buffer.getCell(3, 1)!.char, equals('l'));
-      expect(buffer.getCell(4, 1)!.char, equals('i'));
-      expect(buffer.getCell(5, 1)!.char, equals('c'));
-      expect(buffer.getCell(6, 1)!.char, equals('k'));
-
-      // Verify text style has white foreground and bold modifier merged with red background
-      final firstCharCell = buffer.getCell(2, 1)!;
-      expect(firstCharCell.style.foreground, equals(Colors.white));
-      expect(firstCharCell.style.background, equals(Colors.red));
       expect(
-        Modifier.has(firstCharCell.style.modifiers, Modifier.bold),
-        isTrue,
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/inkwell_button_normal.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
       );
     });
 
@@ -101,37 +78,13 @@ void main() {
       // Render again to reflect state
       tree.render(buffer, const Rect(0, 0, 10, 4));
 
-      // Body at Rect(0, 0, 9, 3)
-      expect(buffer.getCell(0, 0)!.style.background, equals(Colors.red));
-
-      // Text centered inside body Rect(0, 0, 9, 3) -> row = 1, start column = 2
-      expect(buffer.getCell(2, 1)!.char, equals('C'));
-      expect(buffer.getCell(3, 1)!.char, equals('l'));
-      expect(buffer.getCell(4, 1)!.char, equals('i'));
-      expect(buffer.getCell(5, 1)!.char, equals('c'));
-      expect(buffer.getCell(6, 1)!.char, equals('k'));
-
-      // Drop shadow in bottom row (H - 1 = 3) and rightmost column (W - 1 = 9)
-      final shadowColor = const Color(64, 64, 64);
-      // Rightmost column shadow (from row 1 to H - 2) draws Right Half-Block '▐'
-      expect(buffer.getCell(9, 1)!.char, equals('▐'));
-      expect(buffer.getCell(9, 1)!.style.foreground, equals(shadowColor));
-      expect(buffer.getCell(9, 2)!.char, equals('▐'));
-      expect(buffer.getCell(9, 2)!.style.foreground, equals(shadowColor));
-
-      // Bottom row shadow (from column 1 to W - 1) draws Lower Half-Block '▄'
-      expect(buffer.getCell(1, 3)!.char, equals('▄'));
-      expect(buffer.getCell(1, 3)!.style.foreground, equals(shadowColor));
-      expect(buffer.getCell(8, 3)!.char, equals('▄'));
-      expect(buffer.getCell(8, 3)!.style.foreground, equals(shadowColor));
-
-      // Bottom-right corner shadow
-      expect(buffer.getCell(9, 3)!.char, equals('▄'));
-      expect(buffer.getCell(9, 3)!.style.foreground, equals(shadowColor));
-
-      // Other cells (like top-right 9,0 and bottom-left 0,3) are transparent/empty
-      expect(buffer.getCell(9, 0)!.isTransparent, isTrue);
-      expect(buffer.getCell(0, 3)!.isTransparent, isTrue);
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/inkwell_button_hover.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test(
@@ -268,15 +221,13 @@ void main() {
       // Render it. The parent area is 10x4, but the button should render constrained to 8x3.
       tree.render(buffer, const Rect(0, 0, 10, 4));
 
-      // Body at Rect(0, 0, 7, 2). Columns: 0 to 6. Rows: 0 to 1.
-      // Column 7 should be empty/transparent since width is 8 (columns 0..7, so shadow is at 7, body at 0..6).
-      // Row 2 should be empty/transparent since height is 3 (rows 0..2, so shadow is at 2, body at 0..1).
-      expect(buffer.getCell(7, 0)!.isTransparent, isTrue);
-      expect(buffer.getCell(0, 2)!.isTransparent, isTrue);
-
-      // Cells outside 8x3 should remain untouched (not transparent in a blank buffer)
-      expect(buffer.getCell(8, 0)!.isTransparent, isFalse);
-      expect(buffer.getCell(0, 3)!.isTransparent, isFalse);
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/inkwell_button_custom_size.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 }

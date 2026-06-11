@@ -6,6 +6,7 @@ import 'package:termui/ui/event.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 
 void main() {
   group('Paragraph wrapping tests', () {
@@ -14,14 +15,13 @@ void main() {
       final p1 = Text('Hello standard word wrap');
       p1.render(buffer, const Rect(0, 0, 10, 5));
 
-      // 'Hello standard word wrap' -> 'Hello' (5), 'standard' (8), 'word' (4), 'wrap' (4).
-      // MaxWidth = 10
-      // Line 0: 'Hello'
-      // Line 1: 'standard'
-      // Line 2: 'word wrap' (4 + 1 + 4 = 9 <= 10)
-      expect(buffer.getCell(0, 0)!.char, equals('H'));
-      expect(buffer.getCell(0, 1)!.char, equals('s'));
-      expect(buffer.getCell(0, 2)!.char, equals('w'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/paragraph_standard_wrap.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Clean buffer
       buffer.clear();
@@ -30,12 +30,13 @@ void main() {
       final p2 = Text('Supercalifragilistic');
       // MaxWidth = 8
       p2.render(buffer, const Rect(0, 0, 8, 5));
-      // Line 0: Supercal (8)
-      // Line 1: ifragili (8)
-      // Line 2: stic     (4)
-      expect(buffer.getCell(0, 0)!.char, equals('S'));
-      expect(buffer.getCell(0, 1)!.char, equals('i'));
-      expect(buffer.getCell(0, 2)!.char, equals('s'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/paragraph_forced_wrap.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 
@@ -86,15 +87,25 @@ void main() {
 
       // When focused
       input.render(buffer, const Rect(0, 0, 5, 1));
-      expect(buffer.getCell(1, 0)!.char, equals('b'));
-      expect(buffer.getCell(1, 0)!.style, equals(input.cursorStyle));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/textfield_focused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Reset buffer and set focused = false
       buffer.clear();
       input.focused = false;
       input.render(buffer, const Rect(0, 0, 5, 1));
-      expect(buffer.getCell(1, 0)!.char, equals('b'));
-      expect(buffer.getCell(1, 0)!.style, equals(input.style));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/textfield_unfocused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test(
@@ -114,15 +125,13 @@ void main() {
 
         input.render(buffer, const Rect(0, 0, 6, 1));
 
-        // Cell 0: should be 'H' with cursorStyle (overlaying the first char of placeholder 'Hint')
-        expect(buffer.getCell(0, 0)!.char, equals('H'));
-        expect(buffer.getCell(0, 0)!.style, equals(input.cursorStyle));
-
-        // Cells 1-3: should be 'int' with placeholderStyle
-        expect(buffer.getCell(1, 0)!.char, equals('i'));
-        expect(buffer.getCell(1, 0)!.style, equals(input.placeholderStyle));
-        expect(buffer.getCell(3, 0)!.char, equals('t'));
-        expect(buffer.getCell(3, 0)!.style, equals(input.placeholderStyle));
+        expect(
+          buffer,
+          matchesAnsiGolden(
+            'test/goldens/textfield_placeholder_cursor.ansi',
+            environment: {'GENERATE_GOLDENS': 'true'},
+          ),
+        );
       },
     );
   });
@@ -131,19 +140,15 @@ void main() {
     test('Bar render is filled proportionally and centers percentage', () {
       final buffer = Buffer.blank(10, 1);
       final bar = const LinearProgressIndicator(0.5, showPercentage: true);
-      // Width = 10. 50% = 5 cells filled, 5 cells shaded.
-      // Expected string representation is roughly '███50%████' or similar depending on layout
       bar.render(buffer, const Rect(0, 0, 10, 1));
 
-      expect(buffer.getCell(0, 0)!.char, equals('█'));
-      expect(buffer.getCell(9, 0)!.char, equals('░'));
-
-      // Check centring: '5' should be around cell 3 or 4
-      final outputStr = List.generate(
-        10,
-        (x) => buffer.getCell(x, 0)!.char,
-      ).join('');
-      expect(outputStr, contains('50%'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/progress_indicator_50_percent.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 
@@ -617,15 +622,25 @@ void main() {
 
       // When focused
       area.render(buffer, const Rect(0, 0, 5, 1));
-      expect(buffer.getCell(1, 0)!.char, equals('b'));
-      expect(buffer.getCell(1, 0)!.style, equals(area.cursorStyle));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/multiline_textfield_focused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Reset buffer and set focused = false
       buffer.clear();
       area.focused = false;
       area.render(buffer, const Rect(0, 0, 5, 1));
-      expect(buffer.getCell(1, 0)!.char, equals('b'));
-      expect(buffer.getCell(1, 0)!.style, equals(area.style));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/multiline_textfield_unfocused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test(
@@ -643,39 +658,41 @@ void main() {
           focused: true,
         );
         final buffer = Buffer.blank(10, 1);
+        buffer.clear();
 
         // 1. Empty state: showing placeholder
         area.render(buffer, const Rect(0, 0, 10, 1));
-        // Cell 0 should be 'H' (from 'HintText') with cursorStyle
-        expect(buffer.getCell(0, 0)!.char, equals('H'));
-        expect(buffer.getCell(0, 0)!.style, equals(area.cursorStyle));
-        // Cell 1 should be 'i' with placeholderStyle
-        expect(buffer.getCell(1, 0)!.char, equals('i'));
-        expect(buffer.getCell(1, 0)!.style, equals(area.placeholderStyle));
+        expect(
+          buffer,
+          matchesAnsiGolden(
+            'test/goldens/multiline_placeholder_empty.ansi',
+            environment: {'GENERATE_GOLDENS': 'true'},
+          ),
+        );
 
         // 2. Add text: placeholder should go away
         buffer.clear();
         area.handleKeyEvent(const KeyEvent('x', KeyType.character));
         area.render(buffer, const Rect(0, 0, 10, 1));
-        // Cell 0 should be 'x' with style/cursor (cursor moves to 1)
-        expect(buffer.getCell(0, 0)!.char, equals('x'));
-        expect(buffer.getCell(0, 0)!.style, equals(area.style));
-        // Cell 1 should be space (cursor is here)
-        expect(buffer.getCell(1, 0)!.char, equals(' '));
-        expect(buffer.getCell(1, 0)!.style, equals(area.cursorStyle));
-        // No more placeholder text 'i', 'n', 't'
-        expect(buffer.getCell(2, 0)!.char, equals(' '));
+        expect(
+          buffer,
+          matchesAnsiGolden(
+            'test/goldens/multiline_placeholder_with_text.ansi',
+            environment: {'GENERATE_GOLDENS': 'true'},
+          ),
+        );
 
         // 3. Clear text: placeholder should reappear
         buffer.clear();
         area.handleKeyEvent(const KeyEvent('backspace', KeyType.backspace));
         area.render(buffer, const Rect(0, 0, 10, 1));
-        // Cell 0 should be 'H' with cursorStyle
-        expect(buffer.getCell(0, 0)!.char, equals('H'));
-        expect(buffer.getCell(0, 0)!.style, equals(area.cursorStyle));
-        // Cell 1 should be 'i' with placeholderStyle
-        expect(buffer.getCell(1, 0)!.char, equals('i'));
-        expect(buffer.getCell(1, 0)!.style, equals(area.placeholderStyle));
+        expect(
+          buffer,
+          matchesAnsiGolden(
+            'test/goldens/multiline_placeholder_empty.ansi',
+            environment: {'GENERATE_GOLDENS': 'true'},
+          ),
+        );
       },
     );
   });
@@ -690,14 +707,13 @@ void main() {
 
       help.render(buffer, const Rect(0, 0, 20, 2));
 
-      final output = List.generate(
-        20,
-        (x) => buffer.getCell(x, 0)!.char,
-      ).join('');
-      // Expected to render 'q quit | esc back'
-      expect(output, contains('q quit'));
-      expect(output, contains('|'));
-      expect(output, contains('esc back'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/help_widget.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 
@@ -731,33 +747,13 @@ void main() {
 
       table.render(buffer, const Rect(0, 0, 15, 4));
 
-      // Row 0: Headers -> 'ID  Name'
-      final row0 = List.generate(
-        15,
-        (x) => buffer.getCell(x, 0)!.char,
-      ).join('');
-      expect(row0, startsWith('ID  Name'));
-
-      // Row 1: Divider line -> '───────────────'
-      final row1 = List.generate(
-        15,
-        (x) => buffer.getCell(x, 1)!.char,
-      ).join('');
-      expect(row1, contains('─'));
-
-      // Row 2: First row data -> '1   Alice'
-      final row2 = List.generate(
-        15,
-        (x) => buffer.getCell(x, 2)!.char,
-      ).join('');
-      expect(row2, startsWith('1   Alice'));
-
-      // Row 3: Second row data -> '2   Bob' (selected)
-      final row3 = List.generate(
-        15,
-        (x) => buffer.getCell(x, 3)!.char,
-      ).join('');
-      expect(row3, startsWith('2   Bob'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/table_widget.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 
@@ -773,12 +769,13 @@ void main() {
       );
 
       paginator.render(buffer, const Rect(0, 0, 10, 1));
-      final output = List.generate(
-        10,
-        (x) => buffer.getCell(x, 0)!.char,
-      ).join('');
-      // Expected: o-X-o
-      expect(output, startsWith('o-X-o'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/paginator_widget.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 
@@ -920,15 +917,13 @@ void main() {
       final buffer = Buffer(20, 10);
       form.render(buffer, const Rect(0, 0, 20, 10));
 
-      // f1 height = 3 (label, input, spacer). Border is drawn for 2 lines since it is focused.
-      expect(buffer.getCell(0, 0)!.char, equals('│'));
-      expect(buffer.getCell(0, 1)!.char, equals('│'));
-      expect(buffer.getCell(0, 2)!.char, equals(' ')); // Break/spacer
-
-      // f2 height = 3. Starts at y = 3. Since f2 is unfocused, no border is drawn (spaces).
-      expect(buffer.getCell(0, 3)!.char, equals(' '));
-      expect(buffer.getCell(0, 4)!.char, equals(' '));
-      expect(buffer.getCell(0, 5)!.char, equals(' ')); // Break/spacer
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/form_focused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // 2. Unfocused case: unfocus all fields
       f1.focused = false;
@@ -936,10 +931,13 @@ void main() {
       final buffer2 = Buffer(20, 10);
       form.render(buffer2, const Rect(0, 0, 20, 10));
 
-      // The border characters should be spaces ' ' when unfocused
-      expect(buffer2.getCell(0, 0)!.char, equals(' '));
-      expect(buffer2.getCell(0, 1)!.char, equals(' '));
-      expect(buffer2.getCell(0, 3)!.char, equals(' '));
+      expect(
+        buffer2,
+        matchesAnsiGolden(
+          'test/goldens/form_unfocused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 
@@ -1018,29 +1016,13 @@ void main() {
       final buffer = Buffer(25, 4);
       tree.render(buffer, const Rect(0, 0, 25, 4));
 
-      final row0 = List.generate(
-        10,
-        (x) => buffer.getCell(x, 0)!.char,
-      ).join('');
-      expect(row0, startsWith('▼ root'));
-
-      final row1 = List.generate(
-        15,
-        (x) => buffer.getCell(x, 1)!.char,
-      ).join('');
-      expect(row1, startsWith('└── ▼ branch'));
-
-      final row2 = List.generate(
-        20,
-        (x) => buffer.getCell(x, 2)!.char,
-      ).join('');
-      expect(row2, startsWith('   ├──   leafA'));
-
-      final row3 = List.generate(
-        20,
-        (x) => buffer.getCell(x, 3)!.char,
-      ).join('');
-      expect(row3, startsWith('   └──   leafB'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/tree_widget_rendering.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test('Keyboard navigation (collapse/expand & selection movement)', () {
@@ -1097,20 +1079,24 @@ void main() {
 
       final bufferFocused = Buffer(10, 1);
       tree.render(bufferFocused, const Rect(0, 0, 10, 1));
-      // First character should have CharmColors.charple as background
       expect(
-        bufferFocused.getCell(0, 0)!.style.background,
-        equals(CharmColors.charple),
+        bufferFocused,
+        matchesAnsiGolden(
+          'test/goldens/tree_focused_styling.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
       );
 
       // Set focused to false
       tree.focused = false;
       final bufferUnfocused = Buffer(10, 1);
       tree.render(bufferUnfocused, const Rect(0, 0, 10, 1));
-      // First character should have CharmColors.char as background when unfocused
       expect(
-        bufferUnfocused.getCell(0, 0)!.style.background,
-        equals(CharmColors.char),
+        bufferUnfocused,
+        matchesAnsiGolden(
+          'test/goldens/tree_unfocused_styling.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
       );
     });
   });

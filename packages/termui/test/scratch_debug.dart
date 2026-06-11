@@ -1,31 +1,45 @@
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
+import 'package:termui/ui/event.dart';
+import 'package:termui/ui/color.dart';
 import 'package:termui/ui/layout.dart';
-
-class TestWidget extends Widget {
-  final String char;
-  const TestWidget(this.char);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    print('TestWidget rendering "$char" into area: $area');
-    buffer.writeString(0, 0, char, Style.empty);
-  }
-}
+import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_recorder/src/ansi_screenshot.dart';
 
 void main() {
+  final area = TextField(
+    initialText: '',
+    multiline: true,
+    placeholder: 'HintText',
+    placeholderStyle: const Style(foreground: Color(100, 100, 100)),
+    cursorStyle: const Style(
+      foreground: Colors.black,
+      background: Colors.orange,
+    ),
+    focused: true,
+  );
   final buffer = Buffer.blank(10, 1);
-  final row = Row([
-    const SizedBox(width: 2, child: TestWidget('A')),
-    const Expanded(child: TestWidget('B')),
-    const Flexible(flex: 2, child: TestWidget('C')),
-  ]);
+  buffer
+      .clear(); // <--- Clear first to make initial state match cleared state style
 
-  print('Calling row.render...');
-  row.render(buffer, const Rect(0, 0, 10, 1));
+  // 1. Empty state: showing placeholder
+  area.render(buffer, const Rect(0, 0, 10, 1));
+  final ansi1 = AnsiScreenshot.capture(buffer);
 
-  print('Buffer content:');
-  for (var i = 0; i < 10; i++) {
-    print('Cell $i: "${buffer.getCell(i, 0)!.char}"');
-  }
+  // 2. Add text
+  buffer.clear();
+  area.handleKeyEvent(const KeyEvent('x', KeyType.character));
+  area.render(buffer, const Rect(0, 0, 10, 1));
+
+  // 3. Clear text
+  buffer.clear();
+  area.handleKeyEvent(const KeyEvent('backspace', KeyType.backspace));
+  area.render(buffer, const Rect(0, 0, 10, 1));
+  final ansi3 = AnsiScreenshot.capture(buffer);
+
+  print('ansi1 length: ${ansi1.length}');
+  print('ansi3 length: ${ansi3.length}');
+  print('ansi1 bytes: ${ansi1.codeUnits}');
+  print('ansi3 bytes: ${ansi3.codeUnits}');
+  print('Equal? ${ansi1 == ansi3}');
 }

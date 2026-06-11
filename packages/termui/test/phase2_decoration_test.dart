@@ -4,6 +4,7 @@ import 'package:termui/ui/style.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/layout.dart';
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 
 class ThemeDisplayWidget extends StatelessWidget {
   const ThemeDisplayWidget();
@@ -74,31 +75,13 @@ void main() {
 
       widget.render(buffer, const Rect(0, 0, 4, 4));
 
-      // Check borders
-      expect(buffer.getCell(0, 0)!.char, '┌');
-      expect(buffer.getCell(1, 0)!.char, '─');
-      expect(buffer.getCell(2, 0)!.char, '─');
-      expect(buffer.getCell(3, 0)!.char, '┐');
-
-      expect(buffer.getCell(0, 1)!.char, '│');
-      expect(buffer.getCell(3, 1)!.char, '│');
-
-      expect(buffer.getCell(0, 2)!.char, '│');
-      expect(buffer.getCell(3, 2)!.char, '│');
-
-      expect(buffer.getCell(0, 3)!.char, '└');
-      expect(buffer.getCell(1, 3)!.char, '─');
-      expect(buffer.getCell(2, 3)!.char, '─');
-      expect(buffer.getCell(3, 3)!.char, '┘');
-
-      // Check child rendering
-      expect(buffer.getCell(1, 1)!.char, 'X');
-      expect(buffer.getCell(2, 1)!.char, 'X');
-      expect(buffer.getCell(1, 2)!.char, 'X');
-      expect(buffer.getCell(2, 2)!.char, 'X');
-
-      // Check background style applied to the border cells (where background filled and border style merged)
-      expect(buffer.getCell(0, 0)!.style.background, Colors.red);
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/decorated_box_single.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test('Renders Border.doubleLine', () {
@@ -110,14 +93,13 @@ void main() {
 
       widget.render(buffer, const Rect(0, 0, 3, 3));
 
-      expect(buffer.getCell(0, 0)!.char, '╔');
-      expect(buffer.getCell(1, 0)!.char, '═');
-      expect(buffer.getCell(2, 0)!.char, '╗');
-      expect(buffer.getCell(0, 1)!.char, '║');
-      expect(buffer.getCell(2, 1)!.char, '║');
-      expect(buffer.getCell(0, 2)!.char, '╚');
-      expect(buffer.getCell(1, 2)!.char, '═');
-      expect(buffer.getCell(2, 2)!.char, '╝');
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/decorated_box_double.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test('Renders Border.rounded', () {
@@ -129,10 +111,13 @@ void main() {
 
       widget.render(buffer, const Rect(0, 0, 3, 3));
 
-      expect(buffer.getCell(0, 0)!.char, '╭');
-      expect(buffer.getCell(2, 0)!.char, '╮');
-      expect(buffer.getCell(0, 2)!.char, '╰');
-      expect(buffer.getCell(2, 2)!.char, '╯');
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/decorated_box_rounded.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test('Renders Border.ascii', () {
@@ -144,14 +129,13 @@ void main() {
 
       widget.render(buffer, const Rect(0, 0, 3, 3));
 
-      expect(buffer.getCell(0, 0)!.char, '+');
-      expect(buffer.getCell(1, 0)!.char, '-');
-      expect(buffer.getCell(2, 0)!.char, '+');
-      expect(buffer.getCell(0, 1)!.char, '|');
-      expect(buffer.getCell(2, 1)!.char, '|');
-      expect(buffer.getCell(0, 2)!.char, '+');
-      expect(buffer.getCell(1, 2)!.char, '-');
-      expect(buffer.getCell(2, 2)!.char, '+');
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/decorated_box_ascii.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 

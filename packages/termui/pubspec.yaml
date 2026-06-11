@@ -34,3 +34,5 @@ dev_dependencies:
   lints: ^6.0.0
   termui_shared_examples:
     path: ../termui_shared_examples
+  termui_recorder:
+    path: ../termui_recorder
