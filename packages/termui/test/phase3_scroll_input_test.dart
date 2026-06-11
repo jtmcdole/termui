@@ -5,6 +5,7 @@ import 'package:termui/ui/style.dart';
 import 'package:termui/ui/event.dart' hide Modifier;
 import 'package:termui/ui/event.dart' as ev show Modifier;
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 
 class SimpleTextWidget extends Widget {
   final String text;
@@ -67,6 +68,7 @@ void main() {
   group('SingleChildScrollView Tests', () {
     test('Clipping and rendering of scroll view offset', () {
       final buffer = Buffer.blank(20, 5);
+      buffer.clear();
       final controller = DiscreteScrollController(initialScrollOffset: 2);
 
       // Let's create a Column with 10 text lines of 1 height each
@@ -87,20 +89,13 @@ void main() {
       // Render scroll view inside an area of height 5.
       scrollView.render(buffer, const Rect(0, 0, 20, 5));
 
-      // With scrollOffset = 2, we expect:
-      // Row 0: Item 2
-      // Row 1: Item 3
-      // Row 2: Item 4
-      // Row 3: Item 5
-      // Row 4: Item 6
-      expect(buffer.getCell(0, 0)!.char, equals('I'));
-      expect(buffer.getCell(5, 0)!.char, equals('2'));
-
-      expect(buffer.getCell(0, 1)!.char, equals('I'));
-      expect(buffer.getCell(5, 1)!.char, equals('3'));
-
-      expect(buffer.getCell(0, 4)!.char, equals('I'));
-      expect(buffer.getCell(5, 4)!.char, equals('6'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/scrollview_clipping.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 
@@ -190,10 +185,15 @@ void main() {
 
       // Verify rendering
       final buffer = Buffer.blank(15, 1);
+      buffer.clear();
       getCheckbox(focused: false).render(buffer, const Rect(0, 0, 15, 1));
-      expect(buffer.getCell(0, 0)!.char, equals('['));
-      expect(buffer.getCell(1, 0)!.char, equals(' '));
-      expect(buffer.getCell(2, 0)!.char, equals(']'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/checkbox_unselected.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Handle click
       getCheckbox(focused: true).handleMouseEvent(
@@ -211,7 +211,13 @@ void main() {
       // Render again
       buffer.clear();
       getCheckbox(focused: false).render(buffer, const Rect(0, 0, 15, 1));
-      expect(buffer.getCell(1, 0)!.char, equals('X'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/checkbox_selected.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Handle Key Space
       getCheckbox(
@@ -232,9 +238,15 @@ void main() {
           );
 
       final buffer = Buffer.blank(15, 1);
+      buffer.clear();
       getRadio('B', focused: false).render(buffer, const Rect(0, 0, 15, 1));
-      // B is not selected, should render '( )'
-      expect(buffer.getCell(1, 0)!.char, equals(' '));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/radio_unselected.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Press Enter to select
       getRadio(
@@ -245,8 +257,13 @@ void main() {
 
       buffer.clear();
       getRadio('B', focused: false).render(buffer, const Rect(0, 0, 15, 1));
-      // Now B is selected, should render '(*)'
-      expect(buffer.getCell(1, 0)!.char, equals('*'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/radio_selected.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test('Switch toggle key/mouse', () {
@@ -259,9 +276,15 @@ void main() {
       );
 
       final buffer = Buffer.blank(15, 1);
+      buffer.clear();
       getSwitch(focused: false).render(buffer, const Rect(0, 0, 15, 1));
-      // Value false renders '[○─]'
-      expect(buffer.getCell(1, 0)!.char, equals('○'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/switch_unselected.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Click to toggle
       getSwitch(focused: true).handleMouseEvent(
@@ -278,11 +301,13 @@ void main() {
 
       buffer.clear();
       getSwitch(focused: false).render(buffer, const Rect(0, 0, 15, 1));
-      // Value true renders '[─●]'
-      // Wait, let's see: value ? '[─●]' : '[○─]'
-      // index 0: '─' or '○', index 1: '●' or '─'
-      expect(buffer.getCell(1, 0)!.char, equals('─'));
-      expect(buffer.getCell(2, 0)!.char, equals('●'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/switch_selected.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test('Button trigger key/mouse', () {

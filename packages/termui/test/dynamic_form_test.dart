@@ -3,6 +3,7 @@ import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/layout.dart';
 import 'package:termui/ui/event.dart';
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 
 void main() {
   group('Dynamic Form & FormField Tests', () {
@@ -104,13 +105,18 @@ void main() {
 
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
+      buffer.clear();
       tree.render(buffer, const Rect(0, 0, 20, 10));
 
       final formState = tree.findState<FormState>()!;
 
-      // Initially, Field 1 is focused (border starts with │) and Field 2 is unfocused (border starts with space)
-      expect(buffer.getCell(0, 0)!.char, equals('│'));
-      expect(buffer.getCell(0, 3)!.char, equals(' '));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/dynamic_form_field1_focused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
 
       // Press Tab to move focus to Field 2
       formState.handleKeyEvent(const KeyEvent('tab', KeyType.character));
@@ -119,9 +125,13 @@ void main() {
       buffer.clear();
       tree.render(buffer, const Rect(0, 0, 20, 10));
 
-      // Field 1 should now be unfocused, Field 2 should be focused
-      expect(buffer.getCell(0, 0)!.char, equals(' '));
-      expect(buffer.getCell(0, 3)!.char, equals('│'));
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/dynamic_form_field2_focused.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
   });
 }

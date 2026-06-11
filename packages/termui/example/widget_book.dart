@@ -13,6 +13,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/perf/tracer.dart';
 import 'package:termui/perf/fs_locator.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_examples.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 
 // Pre-define pages for the widget book
 enum DemoPage {
@@ -84,6 +85,20 @@ void main(List<String> arguments) async {
     var selectedPage = DemoPage.textInputs;
     var focusDemoPane = false; // true if demo pane is active, false if sidebar
     var showHelpDialog = false;
+
+    AsciicastRecorder? castRecorder;
+    StringBuffer? castOutput;
+    var isRecordingCast = false;
+    var statusMessage = '';
+    Timer? statusClearTimer;
+
+    void setStatus(String msg) {
+      statusMessage = msg;
+      statusClearTimer?.cancel();
+      statusClearTimer = Timer(const Duration(seconds: 4), () {
+        statusMessage = '';
+      });
+    }
 
     // Setup sidebar list widget
     final sidebarList = ListWidget(
@@ -162,7 +177,13 @@ void main(List<String> arguments) async {
         sidebarList: sidebarList,
         examples: examples,
         currentFps: currentFps,
+        isRecordingCast: isRecordingCast,
+        statusMessage: statusMessage,
       );
+
+      if (isRecordingCast && castRecorder != null) {
+        castRecorder.recordFrame(buffer);
+      }
     });
 
     // Listen to sizing changes
@@ -203,6 +224,49 @@ void main(List<String> arguments) async {
 
         // 2. Handle global mouse events
         if (event is ui.MouseEvent) {
+          if (event.type == ui.MouseEventType.press && event.y - 1 == 0) {
+            final clickX = event.x - 1;
+            final headerText = _getHeaderText(
+              isInline: isInline,
+              width: width,
+              height: height,
+              currentFps: currentFps,
+              isRecordingCast: isRecordingCast,
+              statusMessage: statusMessage,
+            );
+
+            final castIndex = headerText.indexOf('[Record Cast]');
+            final stopCastIndex = headerText.indexOf('[Stop Cast]');
+
+            if (castIndex != -1 &&
+                clickX >= castIndex &&
+                clickX < castIndex + 13) {
+              castOutput = StringBuffer();
+              castRecorder = AsciicastRecorder(
+                castOutput,
+                width: width,
+                height: height,
+              );
+              isRecordingCast = true;
+              setStatus('Recording Cast...');
+            } else if (stopCastIndex != -1 &&
+                clickX >= stopCastIndex &&
+                clickX < stopCastIndex + 11) {
+              isRecordingCast = false;
+              if (castOutput != null) {
+                final timestamp = DateTime.now().millisecondsSinceEpoch;
+                final filename = 'recording_$timestamp.cast';
+                File(filename).writeAsStringSync(castOutput.toString());
+                setStatus('Saved to $filename');
+              } else {
+                setStatus('Recording failed');
+              }
+              castRecorder = null;
+              castOutput = null;
+            }
+            continue;
+          }
+
           final sidebarWidth = (width * 0.25).round();
           final demoX = sidebarWidth + 2;
           final demoY = 3;
@@ -332,6 +396,15 @@ void main(List<String> arguments) async {
     } finally {
       animationTimer.cancel();
       sizeSubscription.cancel();
+      statusClearTimer?.cancel();
+
+      if (isRecordingCast && castOutput != null) {
+        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        File(
+          'recording_$timestamp.cast',
+        ).writeAsStringSync(castOutput.toString());
+      }
+
       if (!isInline) {
         terminal.showCursor();
         terminal.disableMouseTracking();
@@ -358,6 +431,8 @@ void _drawFrame({
   required ListWidget sidebarList,
   required Map<DemoPage, WidgetBookExample> examples,
   double currentFps = 0.0,
+  bool isRecordingCast = false,
+  String statusMessage = '',
 }) {
   buffer.clear();
 
@@ -370,9 +445,14 @@ void _drawFrame({
     SizedBox(
       height: 1,
       child: Text(
-        isInline
-            ? ' 📖 Widget Book Demo (Inline mode - relative delta updating) [Size: ${width}x$height] [FPS: ${currentFps.toStringAsFixed(1)}] '
-            : ' 📖 Widget Book Demo (Alternate screen absolute mode) [Size: ${width}x$height] [FPS: ${currentFps.toStringAsFixed(1)}] ',
+        _getHeaderText(
+          isInline: isInline,
+          width: width,
+          height: height,
+          currentFps: currentFps,
+          isRecordingCast: isRecordingCast,
+          statusMessage: statusMessage,
+        ),
         style: const Style(
           foreground: CharmColors.pepper,
           background: CharmColors.soda,
@@ -568,4 +648,22 @@ void _drawFrame({
   if (sb.isNotEmpty) {
     stdout.write(sb.toString());
   }
+}
+
+String _getHeaderText({
+  required bool isInline,
+  required int width,
+  required int height,
+  required double currentFps,
+  required bool isRecordingCast,
+  required String statusMessage,
+}) {
+  final prefix = isInline
+      ? ' 📖 Widget Book Demo (Inline) [Size: ${width}x$height] [FPS: ${currentFps.toStringAsFixed(1)}]'
+      : ' 📖 Widget Book Demo (Alt) [Size: ${width}x$height] [FPS: ${currentFps.toStringAsFixed(1)}]';
+
+  final castBtnText = isRecordingCast ? '🔴 [Stop Cast]' : '⏺ [Record Cast]';
+  final status = statusMessage.isNotEmpty ? '  [$statusMessage]' : '';
+
+  return '$prefix  $castBtnText$status';
 }

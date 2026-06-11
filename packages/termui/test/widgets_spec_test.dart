@@ -4,6 +4,7 @@ import 'package:termui/ui/layout.dart';
 import 'package:termui/ui/event.dart';
 import 'package:termui/ui/window.dart';
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 
 class SpyWidget extends Widget {
   int renderCount = 0;
@@ -40,6 +41,28 @@ void main() {
       expect(buffer.getCell(11, 4)!.char, equals('|'));
       expect(buffer.getCell(10, 0)!.char, equals(' ')); // left side child area
       expect(buffer.getCell(12, 0)!.char, equals(' ')); // right side child area
+    });
+
+    test('Visual Layout Test - matches golden file', () {
+      final splitPane = SplitPane(
+        child1: const DummyWidget(),
+        constraint1: const PercentageConstraint(50),
+        child2: const DummyWidget(),
+        constraint2: const PercentageConstraint(50),
+        direction: LayoutDirection.horizontal,
+        dividerChar: '|',
+      );
+
+      final buffer = Buffer.blank(21, 5);
+      splitPane.render(buffer, const Rect(0, 0, 21, 5));
+
+      expect(
+        buffer,
+        matchesAnsiGolden(
+          'test/goldens/split_pane.ansi',
+          environment: {'GENERATE_GOLDENS': 'true'},
+        ),
+      );
     });
 
     test(
