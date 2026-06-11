@@ -1,7 +1,7 @@
 name: termui_flutter
 description: Flutter integration package for termui, containing the reusable Terminal widget and GPU-accelerated canvas renderer.
 version: 0.2.0
-repository: https://github.com/jtmcdole/termui/packages/termui_flutter
+repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_flutter
 
 topics:
   - cli
