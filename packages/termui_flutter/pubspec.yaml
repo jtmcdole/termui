@@ -18,7 +18,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  termui: ^0.1.0
+  termui: ^0.2.0
   characters: ^1.4.0
 
 dev_dependencies:
