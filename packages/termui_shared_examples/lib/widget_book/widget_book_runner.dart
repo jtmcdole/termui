@@ -231,8 +231,8 @@ Future<void> runWidgetBookShared(
         } else if (event is ui.MouseEvent) {
           activeExample.handleOverlayMouseEvent(
             event,
-            event.x,
-            event.y,
+            event.x - 1,
+            event.y - 1,
             width,
             height,
           );
@@ -241,6 +241,13 @@ Future<void> runWidgetBookShared(
       }
 
       if (event is ui.KeyEvent) {
+        final isCtrlC =
+            (event.key.length == 1 && event.key.codeUnits[0] == 3) ||
+            (event.key == 'c' && event.modifiers.contains(ui.Modifier.control));
+        if (isCtrlC) {
+          break;
+        }
+
         if (event.type == ui.KeyType.character && event.key == 'q') {
           break;
         }
@@ -307,13 +314,16 @@ Future<void> runWidgetBookShared(
         }
       } else if (event is ui.MouseEvent) {
         final sidebarWidth = (width * 0.25).round();
-        final contentStartX = sidebarWidth + 2;
-        final contentWidth = width - contentStartX - 1;
-        final contentStartY = 2;
+        final contentStartX = sidebarWidth + 3;
+        final contentWidth = width - sidebarWidth - 3;
+        final contentStartY = 4;
         final contentHeight = height - 5;
 
         final inSidebar =
-            event.x < sidebarWidth && event.y > 0 && event.y < height - 1;
+            event.x >= 1 &&
+            event.x <= sidebarWidth &&
+            event.y >= 3 &&
+            event.y < height;
         final inContent =
             event.x >= contentStartX &&
             event.x < contentStartX + contentWidth &&
@@ -322,9 +332,10 @@ Future<void> runWidgetBookShared(
 
         if (inSidebar) {
           focusDemoPane = false;
-          final relativeY = event.y - 1;
-          if (relativeY >= 0 && relativeY < sidebarList.items.length) {
-            sidebarList.selectedIndex = relativeY;
+          final relativeY = event.y - 3;
+          final clickedIdx = relativeY + sidebarList.scrollOffset;
+          if (clickedIdx >= 0 && clickedIdx < sidebarList.items.length) {
+            sidebarList.selectedIndex = clickedIdx;
             final newPage = DemoPage.values[sidebarList.selectedIndex];
             if (newPage != selectedPage) {
               selectedPage = newPage;
