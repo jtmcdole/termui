@@ -13,6 +13,9 @@ import 'package:termui/terminal/raw/terminal.dart' as raw;
 /// Returns the platform-specific terminal backend for Dart VM (IO).
 TerminalBackend getPlatformBackend() => IoTerminalBackend();
 
+/// Returns whether the current terminal program is iTerm2.
+bool isItermTerminal() => Platform.environment['TERM_PROGRAM'] == 'iTerm.app';
+
 /// A terminal backend implementation using `dart:io` and FFI.
 class IoTerminalBackend implements TerminalBackend {
   @override
