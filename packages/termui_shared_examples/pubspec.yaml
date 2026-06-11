@@ -11,5 +11,7 @@ environment:
 dependencies:
   termui:
     path: ../termui
+  termui_recorder:
+    path: ../termui_recorder
   characters: ^1.4.0
   file: ^7.0.1
