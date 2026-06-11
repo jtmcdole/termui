@@ -1,9 +1,18 @@
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/layout.dart';
 import 'package:termui/ui/event.dart' as ui;
+import 'package:termui/terminal/terminal.dart' as core;
 
 /// Base class for a single page example within the Widget Book.
 abstract class WidgetBookExample {
+  /// The terminal instance.
+  core.Terminal? terminal;
+
+  /// Attaches the active terminal instance to this example page.
+  void attachTerminal(core.Terminal terminal) {
+    this.terminal = terminal;
+  }
+
   /// Initialize widgets and state.
   void init() {}
 

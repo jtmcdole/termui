@@ -16,3 +16,4 @@ export 'layout_state.dart';
 export 'decorated_widgets.dart';
 export 'animations.dart';
 export 'scenario_a.dart';
+export 'mouse_cursors.dart';

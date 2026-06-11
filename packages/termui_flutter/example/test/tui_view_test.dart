@@ -293,4 +293,39 @@ void main() {
 
     terminal.dispose();
   });
+
+  testWidgets(
+    'TuiView updates cursor state in MouseRegion when OSC 22 is received',
+    (WidgetTester tester) async {
+      final terminal = FlutterTerminal();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Terminal(terminal: terminal, onRun: (term, drawFrame) async {}),
+        ),
+      );
+
+      // Wait for the asynchronous GlyphAtlas generation
+      await tester.pumpAndSettle();
+
+      // Verify basic cursor initially
+      final mouseRegionFinder = find.descendant(
+        of: find.byType(PrivateTuiView),
+        matching: find.byType(MouseRegion),
+      );
+      var mouseRegion = tester.widget<MouseRegion>(mouseRegionFinder);
+      expect(mouseRegion.cursor, equals(SystemMouseCursors.basic));
+
+      // Write OSC 22 sequence via backend
+      terminal.backend.write('\x1b]22;pointer\x1b\\');
+      await tester.idle();
+      await tester.pump();
+
+      // Verify cursor has updated to click cursor
+      mouseRegion = tester.widget<MouseRegion>(mouseRegionFinder);
+      expect(mouseRegion.cursor, equals(SystemMouseCursors.click));
+
+      terminal.dispose();
+    },
+  );
 }

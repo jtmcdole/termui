@@ -227,4 +227,89 @@ class Terminal {
 
   /// Sends the sequence to reset all cell styling back to default.
   void resetStyle() => backend.write(resetStyleSequence);
+
+  /// Sets the mouse pointer shape to the specified [pointer] type.
+  ///
+  /// Note: This uses the `OSC 22` escape sequence, which is supported by some
+  /// modern terminal emulators (such as Kitty or xterm), but is ignored
+  /// by others (such as iTerm2 or Windows Terminal).
+  void setMousePointer(MousePointer pointer) {
+    backend.write('\x1b]22;${pointer.value}\x1b\\');
+  }
+
+  /// Resets the mouse pointer shape back to the terminal's default pointer.
+  void resetMousePointer() {
+    backend.write('\x1b]22;\x1b\\');
+  }
+}
+
+/// Represents the mouse pointer shapes supported by compatible terminals via OSC 22.
+enum MousePointer {
+  /// The platform default cursor (usually an arrow).
+  defaultCursor('default'),
+
+  /// Text selection cursor (I-beam).
+  text('text'),
+
+  /// Hand/pointing cursor (indicates a link or clickable element).
+  pointer('pointer'),
+
+  /// Crosshair cursor (precision selection).
+  crosshair('crosshair'),
+
+  /// Help cursor (arrow with question mark).
+  help('help'),
+
+  /// Busy cursor with background activity indicator.
+  progress('progress'),
+
+  /// Busy/loading cursor (hourglass or spinner).
+  wait('wait'),
+
+  /// Move/drag cursor (four-directional arrows).
+  move('move'),
+
+  /// Prohibited action cursor (circle with slash).
+  notAllowed('not-allowed'),
+
+  /// Open hand cursor (before grabbing).
+  grab('grab'),
+
+  /// Closed hand cursor (while dragging).
+  grabbing('grabbing'),
+
+  /// Invisible cursor.
+  none('none'),
+
+  /// Alias/shortcut cursor (arrow with link badge).
+  alias('alias'),
+
+  /// Copy cursor (arrow with a plus sign).
+  copy('copy'),
+
+  /// Cell selection cursor (thick crosshair).
+  cell('cell'),
+
+  /// Item not allowed to be dropped here (circle with a diagonal slash).
+  noDrop('no-drop'),
+
+  /// Zoom-in cursor (magnifying glass with plus).
+  zoomIn('zoom-in'),
+
+  /// Zoom-out cursor (magnifying glass with minus).
+  zoomOut('zoom-out'),
+
+  /// Vertical resize cursor (two-headed vertical arrow).
+  resizeUpDown('ns-resize'),
+
+  /// Horizontal resize cursor (two-headed horizontal arrow).
+  resizeLeftRight('ew-resize'),
+
+  /// All-scroll cursor (four-way arrow indicator).
+  allScroll('all-scroll');
+
+  /// The parameter value for the OSC 22 sequence.
+  final String value;
+
+  const MousePointer(this.value);
 }

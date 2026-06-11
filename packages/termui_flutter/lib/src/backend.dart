@@ -29,6 +29,15 @@ import 'dart:math';
 class FlutterTerminalBackend implements TerminalBackend {
   Point<int> _size = const Point(80, 24);
   final _sizeController = StreamController<Point<int>>.broadcast();
+  final _mouseCursorController = StreamController<String?>.broadcast();
+
+  static const _esc = '\x1b';
+  static const _bel = '\x07';
+
+  /// Matches OSC 22 sequences. Capture Group 1 extracts the cursor shape name.
+  static final RegExp _osc22Regex = RegExp(
+    '$_esc\\]22;([^$_esc$_bel]*)(?:$_esc\\\\|$_bel)',
+  );
 
   @override
   bool get isWindows => false;
@@ -37,13 +46,23 @@ class FlutterTerminalBackend implements TerminalBackend {
   Stream<List<int>> get rawInput => const Stream.empty();
 
   @override
-  void write(String data) {}
+  void write(String data) {
+    final matches = _osc22Regex.allMatches(data);
+    if (matches.isNotEmpty) {
+      final lastMatch = matches.last;
+      final cursorName = lastMatch.group(1);
+      _mouseCursorController.add(cursorName == '' ? null : cursorName);
+    }
+  }
 
   @override
   Point<int> get size => _size;
 
   @override
   Stream<Point<int>> watchSize() => _sizeController.stream;
+
+  /// Stream emitting the active OSC 22 mouse cursor name requested by the TUI.
+  Stream<String?> get mouseCursorChanges => _mouseCursorController.stream;
 
   /// Updates the terminal size and notifies listeners via [watchSize].
   ///
@@ -66,6 +85,7 @@ class FlutterTerminalBackend implements TerminalBackend {
   @override
   void dispose() {
     _sizeController.close();
+    _mouseCursorController.close();
   }
 }
 
@@ -94,6 +114,9 @@ class FlutterTerminal extends core.Terminal {
   final _initialSizeCompleter = Completer<Point<int>>();
   final _fontSizeController = StreamController<double>.broadcast();
   double _fontSize;
+
+  /// Stream emitting changes to the TUI's requested mouse cursor.
+  Stream<String?> get mouseCursorChanges => _flutterBackend.mouseCursorChanges;
 
   static final int _traceSetFontSizeId = Tracer.registerString(
     'FlutterTerminal:setFontSize',
