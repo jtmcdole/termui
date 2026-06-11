@@ -37,7 +37,8 @@ enum DemoPage {
   vectorGraphics('Clock & Radar'),
   decoratedWidgets('Decorated Box & Selectors'),
   animations('Animations & Effects'),
-  scenarioA('Scenario A: Overlapping Windows');
+  scenarioA('Scenario A: Overlapping Windows'),
+  mouseCursors('Mouse Cursors (OSC 22)');
 
   final String title;
   const DemoPage(this.title);
@@ -95,9 +96,11 @@ Future<void> runWidgetBook(
     DemoPage.decoratedWidgets: DecoratedWidgetsExample(),
     DemoPage.animations: AnimationsExample(),
     DemoPage.scenarioA: ScenarioAExample(),
+    DemoPage.mouseCursors: MouseCursorsExample(),
   };
 
   for (final example in examples.values) {
+    example.attachTerminal(terminal);
     example.init();
   }
 
@@ -231,6 +234,7 @@ Future<void> runWidgetBook(
           if (clickedIdx >= 0 && clickedIdx < DemoPage.values.length) {
             sidebarList.selectedIndex = clickedIdx;
             selectedPage = DemoPage.values[clickedIdx];
+            terminal.resetMousePointer(); // Reset cursor shape on page switch
           }
         }
 
@@ -242,6 +246,9 @@ Future<void> runWidgetBook(
             demoWidth,
             demoHeight,
           );
+        } else {
+          terminal
+              .resetMousePointer(); // Reset cursor when mouse leaves demo pane
         }
         continue;
       }
@@ -318,7 +325,11 @@ Future<void> runWidgetBook(
                 DemoPage.values.length - 1,
               );
             }
-            selectedPage = DemoPage.values[sidebarList.selectedIndex];
+            final newPage = DemoPage.values[sidebarList.selectedIndex];
+            if (newPage != selectedPage) {
+              selectedPage = newPage;
+              terminal.resetMousePointer(); // Reset cursor shape on page switch
+            }
           }
         }
       }

@@ -32,7 +32,8 @@ enum DemoPage {
   vectorGraphics('Clock & Radar'),
   decoratedWidgets('Decorated Box & Selectors'),
   animations('Animations & Effects'),
-  scenarioA('Scenario A: Overlapping Windows');
+  scenarioA('Scenario A: Overlapping Windows'),
+  mouseCursors('Mouse Cursors (OSC 22)');
 
   final String title;
   const DemoPage(this.title);
@@ -114,9 +115,11 @@ void main(List<String> arguments) async {
       DemoPage.decoratedWidgets: DecoratedWidgetsExample(),
       DemoPage.animations: AnimationsExample(),
       DemoPage.scenarioA: ScenarioAExample(),
+      DemoPage.mouseCursors: MouseCursorsExample(),
     };
 
     for (final example in examples.values) {
+      example.attachTerminal(terminal);
       example.init();
     }
 
@@ -229,6 +232,7 @@ void main(List<String> arguments) async {
             if (clickedIdx >= 0 && clickedIdx < DemoPage.values.length) {
               sidebarList.selectedIndex = clickedIdx;
               selectedPage = DemoPage.values[clickedIdx];
+              terminal.resetMousePointer(); // Reset cursor shape on page switch
             }
           }
 
@@ -240,6 +244,9 @@ void main(List<String> arguments) async {
               demoWidth,
               demoHeight,
             );
+          } else {
+            terminal
+                .resetMousePointer(); // Reset cursor when mouse leaves demo pane
           }
           continue;
         }
@@ -312,7 +319,12 @@ void main(List<String> arguments) async {
                 sidebarList.selectedIndex = (sidebarList.selectedIndex + 1)
                     .clamp(0, DemoPage.values.length - 1);
               }
-              selectedPage = DemoPage.values[sidebarList.selectedIndex];
+              final newPage = DemoPage.values[sidebarList.selectedIndex];
+              if (newPage != selectedPage) {
+                selectedPage = newPage;
+                terminal
+                    .resetMousePointer(); // Reset cursor shape on page switch
+              }
             }
           }
         }

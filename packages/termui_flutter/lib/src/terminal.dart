@@ -176,6 +176,8 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   final GlobalKey _boundaryKey = GlobalKey();
   GlyphAtlas? _atlas;
   Buffer? _currentBuffer;
+  StreamSubscription<String?>? _mouseCursorSubscription;
+  MouseCursor _currentCursor = SystemMouseCursors.basic;
 
   final Map<(String, bool, bool, Color), TextPainter> _fallbackPainters = {};
   final Set<String> _pendingGlyphs = {};
@@ -208,6 +210,16 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           _fontSize = newSize;
         });
         _recreateAtlas();
+      }
+    });
+
+    _mouseCursorSubscription = widget.terminal.mouseCursorChanges.listen((
+      cursorName,
+    ) {
+      if (mounted) {
+        setState(() {
+          _currentCursor = _mapOsc22ToSystemCursor(cursorName);
+        });
       }
     });
 
@@ -250,6 +262,56 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     Tracer.record(_traceRecreateAtlasId, Phase.end);
   }
 
+  MouseCursor _mapOsc22ToSystemCursor(String? cursorName) {
+    if (cursorName == null || cursorName.isEmpty || cursorName == 'default') {
+      return SystemMouseCursors.basic;
+    }
+    switch (cursorName) {
+      case 'text':
+        return SystemMouseCursors.text;
+      case 'pointer':
+        return SystemMouseCursors.click;
+      case 'crosshair':
+        return SystemMouseCursors.precise;
+      case 'help':
+        return SystemMouseCursors.help;
+      case 'progress':
+        return SystemMouseCursors.progress;
+      case 'wait':
+        return SystemMouseCursors.wait;
+      case 'move':
+        return SystemMouseCursors.move;
+      case 'not-allowed':
+        return SystemMouseCursors.forbidden;
+      case 'grab':
+        return SystemMouseCursors.grab;
+      case 'grabbing':
+        return SystemMouseCursors.grabbing;
+      case 'none':
+        return SystemMouseCursors.none;
+      case 'alias':
+        return SystemMouseCursors.alias;
+      case 'copy':
+        return SystemMouseCursors.copy;
+      case 'cell':
+        return SystemMouseCursors.cell;
+      case 'no-drop':
+        return SystemMouseCursors.noDrop;
+      case 'zoom-in':
+        return SystemMouseCursors.zoomIn;
+      case 'zoom-out':
+        return SystemMouseCursors.zoomOut;
+      case 'ns-resize':
+        return SystemMouseCursors.resizeUpDown;
+      case 'ew-resize':
+        return SystemMouseCursors.resizeLeftRight;
+      case 'all-scroll':
+        return SystemMouseCursors.allScroll;
+      default:
+        return SystemMouseCursors.basic;
+    }
+  }
+
   @override
   void didUpdateWidget(PrivateTuiView oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -276,6 +338,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   @override
   void dispose() {
     _fontSizeSubscription?.cancel();
+    _mouseCursorSubscription?.cancel();
     _focusNode.dispose();
     super.dispose();
   }
@@ -730,31 +793,34 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
             child: Center(
               child: RepaintBoundary(
                 key: _boundaryKey,
-                child: Listener(
-                  onPointerDown: (e) => _handlePointerEvent(e, layoutSize),
-                  onPointerMove: (e) => _handlePointerEvent(e, layoutSize),
-                  onPointerHover: (e) => _handlePointerEvent(e, layoutSize),
-                  onPointerUp: (e) => _handlePointerEvent(e, layoutSize),
-                  onPointerSignal: (signal) {
-                    if (signal is PointerScrollEvent) {
-                      _handlePointerEvent(signal, layoutSize);
-                    }
-                  },
-                  child: Container(
-                    width: layoutSize.width,
-                    height: layoutSize.height,
-                    color: widget.backgroundColor,
-                    child: _currentBuffer == null
-                        ? const SizedBox()
-                        : CustomPaint(
-                            size: layoutSize,
-                            painter: TuiAtlasPainter(
-                              buffer: _currentBuffer!,
-                              atlas: _atlas!,
-                              fallbackPainters: _fallbackPainters,
-                              onMissingGlyphs: _onMissingGlyphs,
+                child: MouseRegion(
+                  cursor: _currentCursor,
+                  child: Listener(
+                    onPointerDown: (e) => _handlePointerEvent(e, layoutSize),
+                    onPointerMove: (e) => _handlePointerEvent(e, layoutSize),
+                    onPointerHover: (e) => _handlePointerEvent(e, layoutSize),
+                    onPointerUp: (e) => _handlePointerEvent(e, layoutSize),
+                    onPointerSignal: (signal) {
+                      if (signal is PointerScrollEvent) {
+                        _handlePointerEvent(signal, layoutSize);
+                      }
+                    },
+                    child: Container(
+                      width: layoutSize.width,
+                      height: layoutSize.height,
+                      color: widget.backgroundColor,
+                      child: _currentBuffer == null
+                          ? const SizedBox()
+                          : CustomPaint(
+                              size: layoutSize,
+                              painter: TuiAtlasPainter(
+                                buffer: _currentBuffer!,
+                                atlas: _atlas!,
+                                fallbackPainters: _fallbackPainters,
+                                onMissingGlyphs: _onMissingGlyphs,
+                              ),
                             ),
-                          ),
+                    ),
                   ),
                 ),
               ),
