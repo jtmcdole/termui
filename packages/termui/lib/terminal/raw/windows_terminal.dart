@@ -11,26 +11,29 @@ import 'package:win32/win32.dart';
 
 class WindowsTerminal implements Terminal {
   WindowsTerminal() {
-    outputHandle = GetStdHandle(STD_OUTPUT_HANDLE);
-    inputHandle = GetStdHandle(STD_INPUT_HANDLE);
+    outputHandle = GetStdHandle(STD_OUTPUT_HANDLE).value;
+    inputHandle = GetStdHandle(STD_INPUT_HANDLE).value;
   }
 
-  late final int inputHandle;
-  late final int outputHandle;
+  late final HANDLE inputHandle;
+  late final HANDLE outputHandle;
 
   @override
   void enableRawMode() {
-    const dwMode =
+    final dwMode =
         (~ENABLE_ECHO_INPUT) &
         (~ENABLE_PROCESSED_INPUT) &
         (~ENABLE_LINE_INPUT) &
         (~ENABLE_WINDOW_INPUT);
-    SetConsoleMode(inputHandle, dwMode | ENABLE_VIRTUAL_TERMINAL_INPUT);
+    SetConsoleMode(
+      inputHandle,
+      CONSOLE_MODE(dwMode | ENABLE_VIRTUAL_TERMINAL_INPUT),
+    );
   }
 
   @override
   void disableRawMode() {
-    const dwMode =
+    final dwMode =
         ENABLE_ECHO_INPUT |
         ENABLE_EXTENDED_FLAGS |
         ENABLE_INSERT_MODE |
@@ -39,7 +42,7 @@ class WindowsTerminal implements Terminal {
         ENABLE_PROCESSED_INPUT |
         ENABLE_QUICK_EDIT_MODE |
         ENABLE_VIRTUAL_TERMINAL_INPUT;
-    SetConsoleMode(inputHandle, dwMode);
+    SetConsoleMode(inputHandle, CONSOLE_MODE(dwMode));
   }
 
   @override

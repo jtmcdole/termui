@@ -239,7 +239,8 @@ class Terminal {
 
   /// Resets the mouse pointer shape back to the terminal's default pointer.
   void resetMousePointer() {
-    backend.write('\x1b]22;\x1b\\');
+    const terminator = '\x1b\\';
+    backend.write('\x1b]22;$terminator');
   }
 }
 

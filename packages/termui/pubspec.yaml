@@ -17,7 +17,7 @@ platforms:
 resolution: workspace
 
 environment:
-  sdk: ">=3.10.0 <4.0.0"
+  sdk: ">=3.11.0 <4.0.0"
 
 dependencies:
   ansicolor: ^2.0.3
@@ -27,7 +27,7 @@ dependencies:
   ffi: ^2.2.0
   file: ^7.0.0
   quiver: ^3.2.2
-  win32: ^5.5.4
+  win32: ^6.0.0
 
 dev_dependencies:
   test: ">=1.24.0 <2.0.0"
