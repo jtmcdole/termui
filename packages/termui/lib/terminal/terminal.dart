@@ -231,57 +231,10 @@ class Terminal {
   /// Sets the mouse pointer shape to the specified [pointer] type.
   ///
   /// Note: This uses the `OSC 22` escape sequence, which is supported by some
-  /// modern terminal emulators (such as Kitty, WezTerm, Alacritty, or iTerm2),
-  /// but is ignored by others (such as Windows Terminal).
+  /// modern terminal emulators (such as Kitty or xterm), but is ignored
+  /// by others (such as iTerm2 or Windows Terminal).
   void setMousePointer(MousePointer pointer) {
-    var value = pointer.value;
-    if (isItermTerminal()) {
-      switch (pointer) {
-        case MousePointer.defaultCursor:
-          value = 'arrow';
-        case MousePointer.text:
-          value = 'xterm';
-        case MousePointer.pointer:
-          value = 'hand2';
-        case MousePointer.crosshair:
-          value = 'crosshair';
-        case MousePointer.help:
-          value = 'arrow';
-        case MousePointer.progress:
-          value = 'arrow';
-        case MousePointer.wait:
-          value = 'arrow';
-        case MousePointer.move:
-          value = 'sb_h_double_arrow';
-        case MousePointer.notAllowed:
-          value = 'cross';
-        case MousePointer.grab:
-          value = 'hand1';
-        case MousePointer.grabbing:
-          value = 'hand1';
-        case MousePointer.none:
-          value = 'X_cursor';
-        case MousePointer.alias:
-          value = 'arrow';
-        case MousePointer.copy:
-          value = 'arrow';
-        case MousePointer.cell:
-          value = 'crosshair';
-        case MousePointer.noDrop:
-          value = 'cross';
-        case MousePointer.zoomIn:
-          value = 'arrow';
-        case MousePointer.zoomOut:
-          value = 'arrow';
-        case MousePointer.resizeUpDown:
-          value = 'sb_v_double_arrow';
-        case MousePointer.resizeLeftRight:
-          value = 'sb_h_double_arrow';
-        case MousePointer.allScroll:
-          value = 'sb_h_double_arrow';
-      }
-    }
-    backend.write('\x1b]22;$value\x1b\\');
+    backend.write('\x1b]22;${pointer.value}\x1b\\');
   }
 
   /// Resets the mouse pointer shape back to the terminal's default pointer.

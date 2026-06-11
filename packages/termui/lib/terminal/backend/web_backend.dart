@@ -6,9 +6,6 @@ import 'terminal_backend.dart';
 /// Returns the platform-specific terminal backend for the Web.
 TerminalBackend getPlatformBackend() => WebTerminalBackend();
 
-/// Returns whether the current terminal program is iTerm2.
-bool isItermTerminal() => false;
-
 /// A terminal backend implementation for web environments.
 class WebTerminalBackend implements TerminalBackend {
   @override
