@@ -168,6 +168,35 @@ class BurgerOrderExample extends WidgetBookExample {
     required int width,
     required int height,
   }) {
+    if (!focusDemoPane) {
+      for (final field in burgerForm1.fields) {
+        field.focused = false;
+      }
+      for (final field in burgerForm2.fields) {
+        field.focused = false;
+      }
+      for (final field in burgerForm3.fields) {
+        field.focused = false;
+      }
+    } else {
+      if (burgerStage == 1) {
+        final activeIdx = burgerForm1.activeFieldIndex;
+        for (var i = 0; i < burgerForm1.fields.length; i++) {
+          burgerForm1.fields[i].focused = (i == activeIdx);
+        }
+      } else if (burgerStage == 2) {
+        final activeIdx = burgerForm2.activeFieldIndex;
+        for (var i = 0; i < burgerForm2.fields.length; i++) {
+          burgerForm2.fields[i].focused = (i == activeIdx);
+        }
+      } else if (burgerStage == 3) {
+        final activeIdx = burgerForm3.activeFieldIndex;
+        for (var i = 0; i < burgerForm3.fields.length; i++) {
+          burgerForm3.fields[i].focused = (i == activeIdx);
+        }
+      }
+    }
+
     if (burgerStage == 0) {
       return Column([
         SizedBox(

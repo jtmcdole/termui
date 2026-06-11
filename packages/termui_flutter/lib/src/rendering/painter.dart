@@ -160,8 +160,11 @@ class TuiAtlasPainter extends CustomPainter {
         _rectsBg![idx * 4 + 2] = whiteX + whiteW + bleedBg;
         _rectsBg![idx * 4 + 3] = whiteY + whiteH + bleedBg;
 
-        final bgCol = style.background;
-        _colorsBg![idx] = bgCol != null ? bgCol.argb : 0xFF000000;
+        final isReverse = Modifier.has(style.modifiers, Modifier.reverse);
+        final bgCol = isReverse ? style.foreground : style.background;
+        _colorsBg![idx] = bgCol != null
+            ? bgCol.argb
+            : (isReverse ? 0xFFFFFFFF : 0xFF000000);
 
         // Foreground
         if (char.isNotEmpty && char != ' ') {
@@ -184,8 +187,10 @@ class TuiAtlasPainter extends CustomPainter {
             _rectsFg![fgIdx * 4 + 2] = sourceRect.right + bleedFg;
             _rectsFg![fgIdx * 4 + 3] = sourceRect.bottom + bleedFg;
 
-            final fgCol = style.foreground;
-            _colorsFg![fgIdx] = fgCol != null ? fgCol.argb : 0xFFFFFFFF;
+            final fgCol = isReverse ? style.background : style.foreground;
+            _colorsFg![fgIdx] = fgCol != null
+                ? fgCol.argb
+                : (isReverse ? 0xFF000000 : 0xFFFFFFFF);
           } else {
             missingGlyphs.add(char);
 
@@ -235,8 +240,11 @@ class TuiAtlasPainter extends CustomPainter {
 
     if (!kIsWeb && fallbackCells.isNotEmpty) {
       for (final fc in fallbackCells) {
-        final fgCol = fc.style.foreground;
-        final color = fgCol != null ? Color(fgCol.argb) : Colors.white;
+        final isReverse = Modifier.has(fc.style.modifiers, Modifier.reverse);
+        final fgCol = isReverse ? fc.style.background : fc.style.foreground;
+        final color = fgCol != null
+            ? Color(fgCol.argb)
+            : (isReverse ? Colors.black : Colors.white);
 
         final isBold = Modifier.has(fc.style.modifiers, Modifier.bold);
         final isDim = Modifier.has(fc.style.modifiers, Modifier.dim);

@@ -66,8 +66,25 @@ abstract class FormField<T> extends StatefulWidget {
   /// The validation error text if validation fails; otherwise, `null`.
   String? errorText;
 
+  /// Whether this field has been focused at least once.
+  bool touched = false;
+
+  bool _focused = false;
+
   /// Whether this field currently has input focus.
-  bool focused;
+  bool get focused => _focused;
+
+  set focused(bool val) {
+    if (_focused && !val) {
+      if (touched) {
+        validate();
+      }
+    }
+    _focused = val;
+    if (val) {
+      touched = true;
+    }
+  }
 
   /// Creates a [FormField] with common properties.
   FormField({
@@ -75,8 +92,9 @@ abstract class FormField<T> extends StatefulWidget {
     this.description = '',
     this.initialValue,
     this.validator,
-    this.focused = false,
-  }) : value = initialValue;
+    bool focused = false,
+  }) : value = initialValue,
+       _focused = focused;
 
   /// Returns whether this field currently contains a validation error.
   bool get hasError => errorText != null;
@@ -110,39 +128,36 @@ abstract class FormField<T> extends StatefulWidget {
 /// [FormField] with its parent [Form]. It hooks into [didChangeDependencies] and
 /// [dispose] to coordinate dynamic inherited widget bindings with [FormScope].
 abstract class FormFieldState<T> extends State<FormField<T>> {
-  String? _errorText;
-
   /// Retrieves the current value of the form field.
   T? get value => widget.value;
 
   /// Retrieves the validation error message if invalid; otherwise, `null`.
-  String? get errorText => _errorText;
+  String? get errorText => widget.errorText;
 
   /// Returns whether this field currently holds an active validation error.
-  bool get hasError => _errorText != null;
+  bool get hasError => widget.errorText != null;
 
   /// Triggers field validation using [FormField.validator].
   ///
-  /// Updates [_errorText], notifies listeners of state updates via [setState], and returns
+  /// Updates widget.errorText, notifies listeners of state updates via [setState], and returns
   /// whether the field is currently valid.
   bool validate() {
     setState(() {
       if (widget.validator != null) {
-        _errorText = widget.validator!(widget.value);
+        widget.errorText = widget.validator!(widget.value);
       } else {
-        _errorText = null;
+        widget.errorText = null;
       }
-      widget.errorText = _errorText;
     });
-    return _errorText == null;
+    return widget.errorText == null;
   }
 
   /// Resets the form field to its [FormField.initialValue] and clears any active errors.
   void reset() {
     setState(() {
       widget.value = widget.initialValue;
-      _errorText = null;
       widget.errorText = null;
+      widget.touched = false;
     });
   }
 
@@ -203,14 +218,35 @@ class Form extends StatefulWidget {
 
   FormState? _state;
 
+  int _activeFieldIndex = 0;
+
   /// The index of the currently active form field.
-  int activeFieldIndex = 0;
+  int get activeFieldIndex {
+    if (_state != null) {
+      return _state!.activeFieldIndex;
+    }
+    final idx = fields.indexWhere((f) => f.focused);
+    return idx != -1 ? idx : _activeFieldIndex;
+  }
+
+  set activeFieldIndex(int val) {
+    if (_state != null) {
+      _state!.activeFieldIndex = val;
+      return;
+    }
+    _activeFieldIndex = val;
+    if (fields.isNotEmpty) {
+      for (var i = 0; i < fields.length; i++) {
+        fields[i].focused = (i == val);
+      }
+    }
+  }
 
   /// Creates a [Form] to group multiple input fields.
   Form({this.child, this.fields = const []}) {
     if (fields.isNotEmpty) {
       for (var i = 0; i < fields.length; i++) {
-        fields[i].focused = (i == 0);
+        fields[i]._focused = (i == 0);
       }
     }
   }
@@ -245,6 +281,16 @@ class Form extends StatefulWidget {
       fields[activeFieldIndex].focused = false;
       activeFieldIndex = (activeFieldIndex - 1 + fields.length) % fields.length;
       fields[activeFieldIndex].focused = true;
+    } else if (event.type == KeyType.enter) {
+      final currentField = fields[activeFieldIndex];
+      currentField.validate();
+      if (currentField is! TextAreaFormField) {
+        currentField.focused = false;
+        activeFieldIndex = (activeFieldIndex + 1) % fields.length;
+        fields[activeFieldIndex].focused = true;
+      } else {
+        currentField.handleKeyEvent(event);
+      }
     } else {
       fields[activeFieldIndex].handleKeyEvent(event);
     }
@@ -298,10 +344,39 @@ class FormState extends State<Form> {
     for (final field in widget.fields) {
       field.value = field.initialValue;
       field.errorText = null;
+      field.touched = false;
     }
     for (final fieldState in _fields) {
       fieldState.reset();
     }
+  }
+
+  /// The index of the currently active form field.
+  int get activeFieldIndex {
+    final list = _fields.toList();
+    if (list.isNotEmpty) {
+      final idx = list.indexWhere((fs) => fs.widget.focused);
+      return idx != -1 ? idx : 0;
+    }
+    final wIdx = widget.fields.indexWhere((f) => f.focused);
+    return wIdx != -1 ? wIdx : 0;
+  }
+
+  set activeFieldIndex(int val) {
+    setState(() {
+      final list = _fields.toList();
+      if (list.isNotEmpty) {
+        for (var i = 0; i < list.length; i++) {
+          list[i].widget.focused = (i == val);
+        }
+        return;
+      }
+      if (widget.fields.isNotEmpty) {
+        for (var i = 0; i < widget.fields.length; i++) {
+          widget.fields[i].focused = (i == val);
+        }
+      }
+    });
   }
 
   /// Routes a key event to the focused field, handling tab navigation.
@@ -324,6 +399,19 @@ class FormState extends State<Form> {
         activeIdx = (activeIdx - 1 + list.length) % list.length;
         list[activeIdx].widget.focused = true;
       });
+    } else if (event.type == KeyType.enter) {
+      final currentField = list[activeIdx].widget;
+      currentField.validate();
+      if (currentField is! TextAreaFormField) {
+        setState(() {
+          currentField.focused = false;
+          activeIdx = (activeIdx + 1) % list.length;
+          list[activeIdx].widget.focused = true;
+        });
+      } else {
+        list[activeIdx].widget.handleKeyEvent(event);
+        list[activeIdx].setState(() {});
+      }
     } else {
       list[activeIdx].widget.handleKeyEvent(event);
       list[activeIdx].setState(() {});

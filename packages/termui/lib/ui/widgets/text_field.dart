@@ -559,7 +559,7 @@ class TextField extends StatefulWidget {
 
     if (event.type == KeyType.enter ||
         (event.type == KeyType.character &&
-            (event.key == '\n' || event.key == '\r'))) {
+            (event.key == '\n' || event.key == '\r' || event.key == '\r\n'))) {
       if (multiline) {
         controller.saveStateToHistory();
         final lines = List<String>.from(controller.value.lines);
