@@ -133,5 +133,69 @@ void main() {
         ),
       );
     });
+
+    test('validate when navigating away', () {
+      final field = TextFormField(
+        label: 'Email',
+        initialValue: '',
+        validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+      );
+      final form = Form(fields: [field]);
+      final tree = ElementWidget(form);
+      final buffer = Buffer.blank(20, 10);
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      expect(field.hasError, isFalse);
+
+      field.focused = true;
+      expect(field.hasError, isFalse);
+
+      field.focused = false;
+      expect(field.hasError, isTrue);
+      expect(field.errorText, equals('Required'));
+    });
+
+    test('hitting enter moves to next field and validates', () {
+      final f1 = TextFormField(
+        label: 'F1',
+        initialValue: '',
+        validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+      );
+      final f2 = TextFormField(label: 'F2');
+      final form = Form(fields: [f1, f2]);
+      final tree = ElementWidget(form);
+      final buffer = Buffer.blank(20, 10);
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      expect(f1.focused, isTrue);
+      expect(f2.focused, isFalse);
+      expect(f1.hasError, isFalse);
+
+      form.handleKeyEvent(const KeyEvent('\n', KeyType.enter));
+
+      expect(f1.focused, isFalse);
+      expect(f2.focused, isTrue);
+      expect(f1.hasError, isTrue);
+      expect(form.activeFieldIndex, equals(1));
+    });
+
+    test('no validation on initial focus loss if never touched', () {
+      final field = TextFormField(
+        label: 'Email',
+        initialValue: '',
+        validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+      );
+      final form = Form(fields: [field]);
+      final tree = ElementWidget(form);
+      final buffer = Buffer.blank(20, 10);
+      tree.render(buffer, const Rect(0, 0, 20, 10));
+
+      expect(field.focused, isTrue);
+      expect(field.hasError, isFalse);
+
+      // Simulate the widget book toggling focus to false on initial build before any interaction
+      field.focused = false;
+      expect(field.hasError, isFalse);
+    });
   });
 }

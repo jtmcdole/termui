@@ -357,8 +357,11 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       if (char.isNotEmpty &&
           char != ' ' &&
           !atlas.charRects.containsKey(char)) {
-        final fgCol = cell.style.foreground;
-        final color = fgCol != null ? Color(fgCol.argb) : Colors.white;
+        final isReverse = Modifier.has(cell.style.modifiers, Modifier.reverse);
+        final fgCol = isReverse ? cell.style.background : cell.style.foreground;
+        final color = fgCol != null
+            ? Color(fgCol.argb)
+            : (isReverse ? Colors.black : Colors.white);
         final isBold = Modifier.has(cell.style.modifiers, Modifier.bold);
         final isDim = Modifier.has(cell.style.modifiers, Modifier.dim);
 
@@ -498,10 +501,19 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           term.KeyType.escape,
           modifiers: mods,
         );
-      } else if (key == LogicalKeyboardKey.enter) {
+      } else if (key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter) {
         termEvent = term.KeyEvent('\n', term.KeyType.enter, modifiers: mods);
       } else if (key == LogicalKeyboardKey.tab) {
-        termEvent = term.KeyEvent('\t', term.KeyType.tab, modifiers: mods);
+        if (mods.contains(term.Modifier.shift)) {
+          termEvent = term.KeyEvent(
+            'backtab',
+            term.KeyType.tab,
+            modifiers: mods,
+          );
+        } else {
+          termEvent = term.KeyEvent('\t', term.KeyType.tab, modifiers: mods);
+        }
       } else if (key == LogicalKeyboardKey.f1) {
         termEvent = term.KeyEvent('f1', term.KeyType.f1, modifiers: mods);
       } else if (key == LogicalKeyboardKey.f2) {
@@ -539,8 +551,19 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           modifiers: mods,
         );
       } else if (event.character != null && event.character!.isNotEmpty) {
+        final char = event.character!;
+        if (char == '\n' || char == '\r' || char == '\r\n') {
+          termEvent = term.KeyEvent('\n', term.KeyType.enter, modifiers: mods);
+        } else {
+          termEvent = term.KeyEvent(
+            char,
+            term.KeyType.character,
+            modifiers: mods,
+          );
+        }
+      } else if (key.keyLabel.length == 1) {
         termEvent = term.KeyEvent(
-          event.character!,
+          key.keyLabel.toLowerCase(),
           term.KeyType.character,
           modifiers: mods,
         );

@@ -17,6 +17,10 @@ class FormsExample extends WidgetBookExample {
         label: 'Email Address',
         description: 'We will send a validation code here.',
         placeholder: 'e.g. user@domain.com',
+        cursorStyle: const Style(
+          foreground: CharmColors.pepper,
+          background: CharmColors.charple,
+        ),
         validator: (val) {
           if (val == null || val.isEmpty) {
             return 'Email is required';
@@ -57,6 +61,17 @@ class FormsExample extends WidgetBookExample {
     required int width,
     required int height,
   }) {
+    if (!focusDemoPane) {
+      for (final field in formDemo.fields) {
+        field.focused = false;
+      }
+    } else {
+      final activeIdx = formDemo.activeFieldIndex;
+      for (var i = 0; i < formDemo.fields.length; i++) {
+        formDemo.fields[i].focused = (i == activeIdx);
+      }
+    }
+
     return Column([
       SizedBox(
         height: 2,
@@ -73,8 +88,10 @@ class FormsExample extends WidgetBookExample {
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
     if (event.type == ui.KeyType.enter) {
-      formDemo.validate();
-      return true;
+      if (formDemo.activeFieldIndex == formDemo.fields.length - 1) {
+        formDemo.validate();
+        return true;
+      }
     }
 
     formDemo.handleKeyEvent(event);
