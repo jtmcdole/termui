@@ -17,3 +17,5 @@ export 'decorated_widgets.dart';
 export 'animations.dart';
 export 'scenario_a.dart';
 export 'mouse_cursors.dart';
+export 'widget_book_platform.dart';
+export 'widget_book_runner.dart';
