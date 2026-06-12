@@ -138,16 +138,55 @@ abstract class BuildContext {
       Zone.current[#buildContext] as BuildContext?;
 }
 
+/// A unique identifier for [Widget] configurations.
+abstract class Key {
+  /// Initializes a key.
+  const Key();
+}
+
+/// A key that is unique across the entire element tree.
+/// Global keys allow widgets to be uniquely identified and retrieved from
+/// the registry.
+class GlobalKey<T extends State<StatefulWidget>> extends Key {
+  static final Map<GlobalKey, Element> _registry = {};
+
+  /// Initializes a global key.
+  const GlobalKey() : super();
+
+  /// Retrieves the current [State] associated with the widget registered with this key.
+  T? get currentState {
+    final element = _registry[this];
+    if (element is StatefulElement) {
+      return element.state as T?;
+    }
+    return null;
+  }
+
+  /// Retrieves the [BuildContext] / [Element] registered with this key.
+  BuildContext? get currentContext => _registry[this];
+
+  /// Retrieves the [Widget] configuration registered with this key.
+  Widget? get currentWidget => _registry[this]?.widget;
+}
+
 /// Abstract base class for all renderable widgets.
 abstract class Widget {
+  /// The optional key for this widget.
+  final Key? key;
+
   /// Initializes the widget configuration.
-  const Widget();
+  const Widget({this.key});
 
   /// Creates an [Element] to manage this widget's location in the tree.
   Element createElement() => LeafElement(this);
 
   /// Renders the widget onto the provided [buffer] within the specified [area].
   void render(Buffer buffer, Rect area);
+
+  /// Computes the intrinsic height of this widget under the given [width] constraint.
+  int getIntrinsicHeight(int width) {
+    return 1;
+  }
 }
 
 /// Instantiated element in the widget tree that keeps track of widget updates and state.
@@ -165,10 +204,18 @@ abstract class Element implements BuildContext {
   /// Adds this element to the tree as a child of [parent].
   void mount(Element? parent) {
     this.parent = parent;
+    final k = widget.key;
+    if (k is GlobalKey) {
+      GlobalKey._registry[k] = this;
+    }
   }
 
   /// Removes this element from the tree.
   void unmount() {
+    final k = widget.key;
+    if (k is GlobalKey && GlobalKey._registry[k] == this) {
+      GlobalKey._registry.remove(k);
+    }
     parent = null;
   }
 
@@ -212,7 +259,7 @@ class LeafElement extends Element {
 /// A widget that has configuration but delegates rendering to its built child.
 abstract class StatelessWidget extends Widget {
   /// Initializes a stateless widget.
-  const StatelessWidget();
+  const StatelessWidget({super.key});
 
   /// Describes the part of the user interface represented by this widget.
   Widget build(BuildContext context);
@@ -225,6 +272,14 @@ abstract class StatelessWidget extends Widget {
     // Statelessly build and render child directly if called outside of an active element tree.
     final rootContext = StatelessElement(this)..mount(null);
     rootContext.render(buffer, area);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final rootContext = StatelessElement(this)..mount(null);
+    final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
+    rootContext.unmount();
+    return h;
   }
 }
 
@@ -239,7 +294,7 @@ class StatelessElement extends Element {
   @override
   /// Adds this element to the tree and builds the child element.
   void mount(Element? parent) {
-    this.parent = parent;
+    super.mount(parent);
     rebuild();
   }
 
@@ -288,7 +343,7 @@ class StatelessElement extends Element {
 /// A widget that has mutable state.
 abstract class StatefulWidget extends Widget {
   /// Initializes a stateful widget.
-  const StatefulWidget();
+  const StatefulWidget({super.key});
 
   /// Creates the mutable state for this widget at a given location in the tree.
   State createState();
@@ -301,6 +356,14 @@ abstract class StatefulWidget extends Widget {
     // Lazily run stateful loop if rendered without app container.
     final rootContext = StatefulElement(this)..mount(null);
     rootContext.render(buffer, area);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final rootContext = StatefulElement(this)..mount(null);
+    final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
+    rootContext.unmount();
+    return h;
   }
 }
 
@@ -361,7 +424,7 @@ class StatefulElement extends Element {
   @override
   /// Adds this element to the tree, creates the state, and builds the child.
   void mount(Element? parent) {
-    this.parent = parent;
+    super.mount(parent);
     state = (widget as StatefulWidget).createState();
     state._widget = widget as StatefulWidget;
     state._context = this;
@@ -434,6 +497,11 @@ abstract class InheritedWidget extends Widget {
     rootContext.render(buffer, area);
   }
 
+  @override
+  int getIntrinsicHeight(int width) {
+    return child.getIntrinsicHeight(width);
+  }
+
   /// Whether the framework should notify widgets that inherit from this widget.
   bool updateShouldNotify(covariant InheritedWidget oldWidget);
 }
@@ -449,7 +517,7 @@ class InheritedElement extends Element {
   @override
   /// Adds this element to the tree and builds the child element.
   void mount(Element? parent) {
-    this.parent = parent;
+    super.mount(parent);
     rebuild();
   }
 
@@ -835,6 +903,25 @@ class Row extends Widget {
       child.render(viewport, Rect(0, 0, childArea.width, childArea.height));
     }
   }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    if (children.isEmpty) return 0;
+    final constraints = children
+        .map((c) => _getConstraint(c, LayoutDirection.horizontal))
+        .toList();
+    final rects = splitRect(
+      Rect(0, 0, width, 1),
+      constraints,
+      LayoutDirection.horizontal,
+    );
+    var maxH = 0;
+    for (var i = 0; i < children.length; i++) {
+      final h = children[i].getIntrinsicHeight(rects[i].width);
+      if (h > maxH) maxH = h;
+    }
+    return maxH;
+  }
 }
 
 /// An element that manages a [Row] widget.
@@ -922,6 +1009,15 @@ class Column extends Widget {
       final viewport = Viewport(buffer, childArea);
       child.render(viewport, Rect(0, 0, childArea.width, childArea.height));
     }
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    var totalHeight = 0;
+    for (final child in children) {
+      totalHeight += child.getIntrinsicHeight(width);
+    }
+    return totalHeight;
   }
 }
 
@@ -1057,6 +1153,16 @@ class Stack extends Widget {
         child.render(viewport, Rect(0, 0, area.width, area.height));
       }
     }
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    var maxH = 0;
+    for (final child in children) {
+      final h = child.getIntrinsicHeight(width);
+      if (h > maxH) maxH = h;
+    }
+    return maxH;
   }
 }
 
@@ -1197,6 +1303,12 @@ class Positioned extends Widget {
   void render(Buffer buffer, Rect area) {
     child.render(buffer, area);
   }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    if (height != null) return height!;
+    return child.getIntrinsicHeight(width);
+  }
 }
 
 /// An element that manages a [Positioned] widget.
@@ -1258,6 +1370,15 @@ class SizedBox extends Widget {
       final viewport = Viewport(buffer, childArea);
       child!.render(viewport, Rect(0, 0, targetWidth, targetHeight));
     }
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    if (height != null) return height!;
+    if (child != null) {
+      return child!.getIntrinsicHeight(this.width ?? width);
+    }
+    return 0;
   }
 }
 
@@ -1359,6 +1480,13 @@ class ConstrainedBox extends Widget {
     final viewport = Viewport(buffer, childArea);
     child.render(viewport, Rect(0, 0, clampedWidth, clampedHeight));
   }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final w = width.clamp(constraints.minWidth, constraints.maxWidth);
+    final h = child.getIntrinsicHeight(w);
+    return h.clamp(constraints.minHeight, constraints.maxHeight);
+  }
 }
 
 /// An element that manages a [ConstrainedBox] widget.
@@ -1419,6 +1547,11 @@ class Flexible extends Widget {
   @override
   void render(Buffer buffer, Rect area) {
     child.render(buffer, area);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    return child.getIntrinsicHeight(width);
   }
 }
 
@@ -1565,6 +1698,14 @@ class Align extends Widget {
 
     final childViewport = Viewport(buffer, childArea);
     child.render(childViewport, Rect(0, 0, childWidth, childHeight));
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    if (heightFactor != null) {
+      return (child.getIntrinsicHeight(width) * heightFactor!).round();
+    }
+    return child.getIntrinsicHeight(width);
   }
 }
 

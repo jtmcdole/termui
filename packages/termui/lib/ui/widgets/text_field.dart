@@ -338,6 +338,7 @@ class TextField extends StatefulWidget {
 
   /// Creates a [TextField].
   TextField({
+    super.key,
     String initialText = '',
     String? value,
     int? cursorPosition,
@@ -814,6 +815,13 @@ class TextField extends StatefulWidget {
 
   @override
   State createState() => TextFieldState();
+
+  @override
+  int getIntrinsicHeight(int width) {
+    if (!multiline) return 1;
+    final lines = value.split('\n');
+    return max(1, lines.length);
+  }
 }
 
 /// The state for a [TextField].
