@@ -12,6 +12,7 @@ workspace:
   - packages/termui_flutter/example
   - packages/termui_shared_examples
   - packages/termui_recorder
+  - examples
 
 dev_dependencies:
   melos: ^7.0.0

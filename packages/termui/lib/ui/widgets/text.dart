@@ -95,6 +95,16 @@ class Text extends Widget {
     }
   }
 
+  @override
+  int getIntrinsicHeight(int width) {
+    if (!wrap) {
+      return maxLines != null ? min(maxLines!, 1) : 1;
+    }
+    final lines = _wrapText(data, width);
+    final count = lines.length;
+    return maxLines != null ? min(maxLines!, count) : count;
+  }
+
   void _renderLines(Buffer buffer, Rect area, List<String> lines) {
     final limit = maxLines != null ? min(maxLines!, area.height) : area.height;
     for (var i = 0; i < lines.length; i++) {

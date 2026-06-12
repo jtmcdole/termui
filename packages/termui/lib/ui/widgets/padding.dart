@@ -32,6 +32,13 @@ class Padding extends Widget {
     final childViewport = Viewport(buffer, childArea);
     child.render(childViewport, Rect(0, 0, childWidth, childHeight));
   }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final childWidth = width - padding.left - padding.right;
+    if (childWidth <= 0) return padding.top + padding.bottom;
+    return child.getIntrinsicHeight(childWidth) + padding.top + padding.bottom;
+  }
 }
 
 /// An element that represents a [Padding] widget.
