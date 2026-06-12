@@ -1,3 +1,7 @@
+## 0.2.1
+
+ - **FEAT**(ui): add intrinsic height calculation, SelectionController, and printWidget extension.
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
