@@ -1,10 +1,10 @@
-## 0.2.0+1
+## 0.3.0
 
  - Update a dependency to the latest release.
 
-# Changelog
+## 0.2.0+1
 
-All notable changes to this project will be documented in this file.
+ - Update a dependency to the latest release.
 
 ## 0.2.0
 
