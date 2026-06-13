@@ -1,0 +1,7 @@
+{
+  "name": "architect",
+  "description": "An agent configured for design.",
+  "configPath": {
+    "relativePathToConfig": "config.yaml"
+  }
+}
