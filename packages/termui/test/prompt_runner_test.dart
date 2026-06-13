@@ -71,7 +71,9 @@ class MockTerminal extends Terminal {
   }
 }
 
-class TestKeyConsumerWidget extends Widget {
+class TestKeyConsumerWidget extends Widget
+    implements Focusable, KeyEventHandler {
+  @override
   final bool focused;
   final bool shouldConsume;
 
@@ -80,6 +82,7 @@ class TestKeyConsumerWidget extends Widget {
   @override
   void render(Buffer buffer, Rect area) {}
 
+  @override
   bool handleKeyEvent(ui.KeyEvent event) {
     return shouldConsume;
   }

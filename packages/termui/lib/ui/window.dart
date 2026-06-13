@@ -21,131 +21,183 @@ import '../perf/tracer.dart';
 /// | [children] | Direct descendants of this focus node. |
 /// | [onKeyEvent] | Callback to process a key event. Return `true` to stop propagation. |
 /// | [onFocusChange] | Callback executed when focus status transitions. |
+/// Centralized registry managing active focus paths.
+class FocusManager {
+  /// The singleton instance of [FocusManager].
+  static final FocusManager instance = FocusManager._();
+  FocusManager._();
+
+  FocusNode? _primaryFocus;
+
+  /// Returns the currently active focused leaf node in O(1) time.
+  FocusNode? get primaryFocus => _primaryFocus;
+
+  /// Sets focus to [node], updating the focus path to the root.
+  void setPrimaryFocus(FocusNode? node) {
+    if (_primaryFocus == node) return;
+
+    final oldPath = _getPathToRoot(_primaryFocus);
+    final newPath = _getPathToRoot(node);
+
+    // Unfocus nodes no longer on the active path
+    for (final oldNode in oldPath) {
+      if (!newPath.contains(oldNode)) {
+        oldNode._setFocused(false);
+      }
+    }
+
+    // Focus nodes entering the active path
+    for (final newNode in newPath) {
+      if (!oldPath.contains(newNode)) {
+        newNode._setFocused(true);
+      }
+      if (newNode.parent is FocusScopeNode) {
+        (newNode.parent as FocusScopeNode)._focusedChild = newNode;
+      }
+    }
+
+    _primaryFocus = node;
+  }
+
+  List<FocusNode> _getPathToRoot(FocusNode? node) {
+    final path = <FocusNode>[];
+    var current = node;
+    while (current != null) {
+      path.add(current);
+      current = current.parent;
+    }
+    return path;
+  }
+}
+
+/// A representation of a node in the focus tree.
 class FocusNode {
   /// Unique identifier of the focus node (useful for debugging).
   final String id;
 
-  /// Whether this node currently holds keyboard focus.
-  bool isFocused = false;
-
   /// The parent focus node, if any.
   FocusNode? parent;
 
-  /// The child nodes nested under this node.
+  /// The children focus nodes nested under this node.
   final List<FocusNode> children = [];
 
-  /// Callback executed when a key event hits this node.
-  /// Return `true` to consume the keypress and prevent it from bubbling up the tree.
-  bool Function(KeyEvent event)? onKeyEvent;
+  /// Whether this node currently holds focus.
+  bool _isFocused = false;
+
+  /// Whether this node currently has focus.
+  bool get hasFocus => _isFocused;
+
+  /// Whether this node currently holds focus.
+  bool get isFocused => _isFocused;
 
   /// Callback executed when this focus node gains or loses focus.
   void Function(bool hasFocus)? onFocusChange;
 
-  /// Creates a [FocusNode] with the given [id].
+  /// Callback executed when a key event hits this node.
+  /// Return `true` to consume the keypress and prevent it from bubbling.
+  bool Function(KeyEvent event)? onKeyEvent;
+
+  /// Creates a new [FocusNode] with the given [id].
   FocusNode({required this.id});
 
-  /// Whether this node has focus.
-  bool get hasFocus => isFocused;
-
   /// Whether this node has primary focus, meaning it is focused and none of its children are.
-  bool get hasPrimaryFocus => isFocused && children.every((c) => !c.isFocused);
+  bool get hasPrimaryFocus =>
+      _isFocused && children.every((c) => !c._isFocused);
+
+  /// Request focus for this specific node.
+  void requestFocus() {
+    FocusManager.instance.setPrimaryFocus(this);
+  }
+
+  /// Removes focus from this node.
+  void unfocus() {
+    if (hasFocus) {
+      FocusManager.instance.setPrimaryFocus(parent);
+    } else {
+      _setFocused(false);
+    }
+  }
+
+  /// Internal focus state setter. Called by [FocusManager].
+  void _setFocused(bool value) {
+    if (_isFocused == value) return;
+    _isFocused = value;
+    onFocusChange?.call(value);
+  }
 
   /// Adds a child focus node to this branch.
   void addChild(FocusNode child) {
+    if (child.parent == this) return;
+    child.parent?.children.remove(child);
     child.parent = this;
     children.add(child);
+    if (child._isFocused) {
+      FocusNode? current = this;
+      while (current != null) {
+        current._setFocused(true);
+        if (current.parent is FocusScopeNode) {
+          (current.parent as FocusScopeNode)._focusedChild = current;
+        }
+        current = current.parent;
+      }
+    }
   }
 
-  /// Requests focus for this node, unfocusing other sibling branches recursively.
-  void requestFocus() {
-    // 1. Find root
-    var root = this;
-    while (root.parent != null) {
-      root = root.parent!;
+  /// Removes a child focus node from this branch.
+  void removeChild(FocusNode child) {
+    if (child.parent == this) {
+      children.remove(child);
+      child.parent = null;
     }
+  }
 
-    // 2. Unfocus everything under root
-    root._unfocusRecursive();
-
-    // 3. Focus path from this node to root
-    FocusNode? current = this;
+  /// Bubbles the [event] up the parent chain starting from the focused leaf.
+  bool bubbleKeyEvent(KeyEvent event) {
+    FocusNode? current = findFocusedLeaf() ?? this;
     while (current != null) {
-      final wasFocused = current.isFocused;
-      current.isFocused = true;
-      if (!wasFocused) {
-        current.onFocusChange?.call(true);
-      }
-      if (current is FocusScopeNode) {
-        FocusNode? childOnPath;
-        for (final child in current.children) {
-          if (child.isFocused) {
-            childOnPath = child;
-            break;
-          }
-        }
-        if (childOnPath != null) {
-          current._focusedChild = childOnPath;
-        }
+      if (current.onKeyEvent != null && current.onKeyEvent!(event)) {
+        return true; // Consumed
       }
       current = current.parent;
     }
-  }
-
-  /// Removes focus from this node and its descendants.
-  void unfocus() {
-    if (!isFocused) return;
-    _unfocusRecursive();
-  }
-
-  void _unfocusRecursive() {
-    final wasFocused = isFocused;
-    isFocused = false;
-    if (wasFocused) {
-      onFocusChange?.call(false);
-    }
-    for (final child in children) {
-      child._unfocusRecursive();
-    }
+    return false; // Propagates to system fallback
   }
 
   /// Traverses down the focused path to find the deeply focused leaf node.
   FocusNode? findFocusedLeaf() {
-    if (!isFocused) return null;
+    if (!_isFocused) return null;
     for (final child in children) {
-      if (child.isFocused) {
+      if (child._isFocused) {
         return child.findFocusedLeaf();
       }
     }
     return this;
   }
 
-  /// Traverses up from the primary focus node to let nodes consume keypresses.
-  bool bubbleKeyEvent(KeyEvent event) {
-    final leaf = findFocusedLeaf();
-    if (leaf != null) {
-      return leaf._bubbleUp(event);
+  /// Disposes of the focus node, detaching it from the tree.
+  void dispose() {
+    if (hasFocus) {
+      FocusNode? nextTarget = parent;
+      if (parent != null) {
+        final siblings = parent!.children.where((c) => c != this).toList();
+        if (siblings.isNotEmpty) {
+          nextTarget = siblings.first;
+        }
+      }
+      FocusManager.instance.setPrimaryFocus(nextTarget);
     }
-    return false;
-  }
-
-  bool _bubbleUp(KeyEvent event) {
-    if (onKeyEvent != null && onKeyEvent!(event)) {
-      return true; // consumed
+    final p = parent;
+    if (p != null) {
+      p.children.remove(this);
+      if (p is FocusScopeNode && p._focusedChild == this) {
+        p._focusedChild = p.children.isNotEmpty ? p.children.first : null;
+      }
+      parent = null;
     }
-    return parent?._bubbleUp(event) ?? false;
   }
 }
 
 /// A specialized focus scope node that manages focus traversal.
-///
-/// Grouping interactive focus nodes inside a [FocusScopeNode] enables cycling focus
-/// among its descendants (e.g. by pressing Tab for forward cycles or Shift-Tab for backward cycles).
-/// It keeps track of the currently active focused child in the scope.
-///
-/// ### Traversal APIs
-///
-/// * [nextFocus()]: Move focus to the next child in [children].
-/// * [previousFocus()]: Move focus to the previous child in [children].
 class FocusScopeNode extends FocusNode {
   FocusNode? _focusedChild;
 
@@ -154,6 +206,16 @@ class FocusScopeNode extends FocusNode {
 
   /// The active focused child node inside this scope.
   FocusNode? get focusedChild => _focusedChild;
+
+  @override
+  void requestFocus() {
+    if (children.isEmpty) {
+      super.requestFocus();
+      return;
+    }
+    final target = _focusedChild ?? children.first;
+    target.requestFocus();
+  }
 
   /// Cycles keyboard focus forward to the next sibling in the scope's focus list.
   void nextFocus() {

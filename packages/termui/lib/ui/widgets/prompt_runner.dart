@@ -3,6 +3,8 @@ import '../../terminal/terminal.dart' as term;
 import '../buffer.dart';
 import '../layout.dart';
 import '../renderer.dart';
+import 'focus.dart';
+import '../window.dart';
 
 /// An interface that indicates a widget or state can receive keyboard focus.
 abstract interface class Focusable {
@@ -240,7 +242,7 @@ class PromptRunner<T> {
           comp.complete(result as T?);
         }
       },
-      child: widget,
+      child: FocusScope(autofocus: true, child: widget),
     );
 
     // Mount the widget tree element persistently so states and focus configuration
@@ -323,6 +325,13 @@ class PromptRunner<T> {
 
   /// Recursively walks the element tree to find the focused element and route the key event.
   bool _routeKeyEvent(Element element, term.KeyEvent event) {
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus != null) {
+      if (primaryFocus.bubbleKeyEvent(event)) {
+        return true;
+      }
+    }
+
     final elWidget = element.widget;
     bool isFocused = false;
     if (elWidget is Focusable) {

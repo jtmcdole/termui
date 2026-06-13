@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import '../buffer.dart';
 import '../layout.dart';
@@ -6,6 +7,8 @@ import '../event.dart' hide Modifier;
 import 'text.dart';
 import '../../terminal/terminal.dart' as term;
 import 'prompt_runner.dart';
+import 'focus.dart';
+import '../window.dart';
 
 /// A function that builds a widget given a build context.
 typedef WidgetBuilder = Widget Function(BuildContext context);
@@ -233,6 +236,31 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
   /// The index of the currently selected or highlighted item.
   int selectedIndex = 0;
 
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(id: 'dropdown_${widget.hashCode}');
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(DropdownButton<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+  }
+
   /// The on-screen bounds of the dropdown button.
   Rect buttonBounds = const Rect(0, 0, 0, 0);
 
@@ -309,6 +337,7 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
 
   @override
   void dispose() {
+    _focusNode.dispose();
     overlayEntry?.remove();
     super.dispose();
   }
@@ -362,21 +391,30 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
         ? currentItem.child
         : (widget.hint ?? const Text('Select...'));
 
-    return _DropdownButtonRenderWidget(
-      displayWidget: displayWidget,
-      isOpen: isOpen,
-      focused: widget.focused,
-      style: widget.style,
-      onRender: (bounds) {
-        if (buttonBounds != bounds) {
-          buttonBounds = bounds;
-          if (isOpen && overlayEntry != null) {
-            overlayEntry?._overlayState?.setState(() {});
-          }
-        }
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
       },
-      onAction: toggleDropdown,
-      onKey: handleKeyEvent,
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: _DropdownButtonRenderWidget(
+        displayWidget: displayWidget,
+        isOpen: isOpen,
+        focused: _focusNode.hasFocus || widget.focused,
+        style: widget.style,
+        onRender: (bounds) {
+          if (buttonBounds != bounds) {
+            buttonBounds = bounds;
+            if (isOpen && overlayEntry != null) {
+              overlayEntry?._overlayState?.setState(() {});
+            }
+          }
+        },
+        onAction: toggleDropdown,
+        onKey: handleKeyEvent,
+      ),
     );
   }
 }
@@ -595,6 +633,31 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
   /// The index of the currently highlighted menu item.
   int selectedIndex = 0;
 
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _focusNode = FocusNode(id: 'popup_${widget.hashCode}');
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(PopupMenuButton<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+  }
+
   /// The on-screen bounds of the trigger button.
   Rect buttonBounds = const Rect(0, 0, 0, 0);
 
@@ -664,6 +727,7 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
 
   @override
   void dispose() {
+    _focusNode.dispose();
     overlayEntry?.remove();
     super.dispose();
   }
@@ -705,21 +769,30 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
 
   @override
   Widget build(BuildContext context) {
-    return _DropdownButtonRenderWidget(
-      displayWidget: widget.child,
-      isOpen: isOpen,
-      focused: widget.focused,
-      style: Style.empty,
-      onRender: (bounds) {
-        if (buttonBounds != bounds) {
-          buttonBounds = bounds;
-          if (isOpen && overlayEntry != null) {
-            overlayEntry?._overlayState?.setState(() {});
-          }
-        }
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
       },
-      onAction: toggleMenu,
-      onKey: handleKeyEvent,
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: _DropdownButtonRenderWidget(
+        displayWidget: widget.child,
+        isOpen: isOpen,
+        focused: _focusNode.hasFocus || widget.focused,
+        style: Style.empty,
+        onRender: (bounds) {
+          if (buttonBounds != bounds) {
+            buttonBounds = bounds;
+            if (isOpen && overlayEntry != null) {
+              overlayEntry?._overlayState?.setState(() {});
+            }
+          }
+        },
+        onAction: toggleMenu,
+        onKey: handleKeyEvent,
+      ),
     );
   }
 }

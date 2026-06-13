@@ -1,40 +1,15 @@
+import 'dart:async';
 import '../buffer.dart';
 import '../layout.dart';
 import '../style.dart';
 import '../event.dart' hide Modifier;
 import '../../terminal/terminal.dart' as term;
 import 'prompt_runner.dart';
+import 'focus.dart';
+import '../window.dart';
 
 /// An interactive TUI button widget that triggers a callback when activated.
-///
-/// ### Interfaces
-/// - **Keyboard**: When [focused] is true, pressing Space (`' '`), Enter
-///   (`'\n'`), or Carriage Return (`'\r'`) will trigger [onPressed].
-/// - **Mouse**: Left-clicking (mouse press event) inside the bounds of the
-///   button triggers [onPressed].
-///
-/// ### Example Usage
-///
-/// ```dart
-/// Button(
-///   text: 'Submit',
-///   focused: true,
-///   onPressed: () {
-///     print('Button clicked!');
-///   },
-/// );
-/// ```
-///
-/// ### Properties and Styling
-///
-/// | Property | Type | Description |
-/// | :--- | :--- | :--- |
-/// | `text` | [String] | Label displayed on the button. |
-/// | `onPressed` | `void Function()` | Callback executed when activated. |
-/// | `focused` | [bool] | Whether this button currently has keyboard focus. |
-/// | `style` | [Style] | Normal rendering style. |
-/// | `focusedStyle` | [Style] | Rendering style applied when [focused] is true. |
-class Button extends Widget implements Focusable, KeyEventHandler {
+class Button extends StatefulWidget implements Focusable, KeyEventHandler {
   /// The text label displayed on the button.
   final String text;
 
@@ -52,12 +27,122 @@ class Button extends Widget implements Focusable, KeyEventHandler {
   final Style focusedStyle;
 
   /// Creates a new [Button].
-  const Button({
+  Button({
+    super.key,
     required this.text,
     required this.onPressed,
     this.focused = false,
     this.style = Style.empty,
     this.focusedStyle = const Style(modifiers: Modifier.reverse),
+  });
+
+  // ignore: must_be_immutable
+  ButtonState? _state;
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
+    if (hasFocus &&
+        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
+      onPressed();
+      _state?.setState(() {});
+      return true;
+    }
+    return false;
+  }
+
+  /// Delegated mouse event handler.
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    if (event.type == MouseEventType.press) {
+      onPressed();
+      _state?.setState(() {});
+    }
+  }
+
+  @override
+  State<Button> createState() {
+    final state = ButtonState();
+    _state = state;
+    return state;
+  }
+}
+
+/// The state for a [Button] widget.
+class ButtonState extends State<Button> implements KeyEventHandler {
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget._state = this;
+    _focusNode = FocusNode(id: 'button_${widget.hashCode}');
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(Button oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget._state = this;
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  /// Handles mouse events for the button.
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    widget.handleMouseEvent(event, localX, localY);
+  }
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
+      },
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: _ButtonRenderWidget(
+        text: widget.text,
+        focused: _focusNode.hasFocus || widget.focused,
+        style: widget.style,
+        focusedStyle: widget.focusedStyle,
+      ),
+    );
+  }
+}
+
+class _ButtonRenderWidget extends Widget {
+  final String text;
+  final bool focused;
+  final Style style;
+  final Style focusedStyle;
+
+  const _ButtonRenderWidget({
+    required this.text,
+    required this.focused,
+    required this.style,
+    required this.focusedStyle,
   });
 
   @override
@@ -66,56 +151,10 @@ class Button extends Widget implements Focusable, KeyEventHandler {
     final label = focused ? '[ $text ]' : '  $text  ';
     buffer.writeString(0, 0, label, focused ? focusedStyle : style);
   }
-
-  /// Handles key activations (Space or Enter).
-  @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    if (focused &&
-        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
-      onPressed();
-      return true;
-    }
-    return false;
-  }
-
-  /// Handles mouse clicks.
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    if (event.type == MouseEventType.press) {
-      onPressed();
-    }
-  }
 }
 
-/// An interactive checkbox widget for toggling boolean flags.
-///
-/// ### Interfaces
-/// - **Keyboard**: When [focused] is true, pressing Space (`' '`), Enter
-///   (`'\n'`), or Carriage Return (`'\r'`) toggles [value] and triggers [onChanged].
-/// - **Mouse**: Left-clicking inside bounds toggles [value] and triggers [onChanged].
-///
-/// ### Example Usage
-///
-/// ```dart
-/// Checkbox(
-///   value: isAgreed,
-///   label: 'I agree to the terms',
-///   onChanged: (val) {
-///     setState(() => isAgreed = val);
-///   },
-/// );
-/// ```
-///
-/// ### Properties and Styling
-///
-/// | Property | Type | Description |
-/// | :--- | :--- | :--- |
-/// | `value` | [bool] | Current check state (checked if true). |
-/// | `label` | [String] | Descriptive text label next to the checkbox. |
-/// | `onChanged` | `Function(bool)` | Callback triggered when state toggles. |
-/// | `focused` | [bool] | Whether the widget has keyboard focus. |
-/// | `style` | [Style] | Normal rendering style. |
-/// | `focusedStyle` | [Style] | Style applied when [focused] is true. |
-class Checkbox extends Widget implements Focusable, KeyEventHandler {
+/// An interactive checkbox widget supporting toggled true/false options.
+class Checkbox extends StatefulWidget implements Focusable, KeyEventHandler {
   /// The current check state (checked if true).
   final bool value;
 
@@ -136,7 +175,8 @@ class Checkbox extends Widget implements Focusable, KeyEventHandler {
   final Style focusedStyle;
 
   /// Creates a new [Checkbox].
-  const Checkbox({
+  Checkbox({
+    super.key,
     required this.value,
     required this.label,
     required this.onChanged,
@@ -145,64 +185,128 @@ class Checkbox extends Widget implements Focusable, KeyEventHandler {
     this.focusedStyle = const Style(modifiers: Modifier.reverse),
   });
 
+  // ignore: must_be_immutable
+  CheckboxState? _state;
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
+    if (hasFocus &&
+        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
+      onChanged(!value);
+      _state?.setState(() {});
+      return true;
+    }
+    return false;
+  }
+
+  /// Delegated mouse event handler.
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    if (event.type == MouseEventType.press) {
+      onChanged(!value);
+      _state?.setState(() {});
+    }
+  }
+
+  @override
+  State<Checkbox> createState() {
+    final state = CheckboxState();
+    _state = state;
+    return state;
+  }
+}
+
+/// The state for a [Checkbox] widget.
+class CheckboxState extends State<Checkbox> implements KeyEventHandler {
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget._state = this;
+    _focusNode = FocusNode(id: 'checkbox_${widget.hashCode}');
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(Checkbox oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget._state = this;
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  /// Handles mouse events for the checkbox.
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    widget.handleMouseEvent(event, localX, localY);
+  }
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
+      },
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: _CheckboxRenderWidget(
+        value: widget.value,
+        label: widget.label,
+        focused: _focusNode.hasFocus || widget.focused,
+        style: widget.style,
+        focusedStyle: widget.focusedStyle,
+      ),
+    );
+  }
+}
+
+class _CheckboxRenderWidget extends Widget {
+  final bool value;
+  final String label;
+  final bool focused;
+  final Style style;
+  final Style focusedStyle;
+
+  const _CheckboxRenderWidget({
+    required this.value,
+    required this.label,
+    required this.focused,
+    required this.style,
+    required this.focusedStyle,
+  });
+
   @override
   void render(Buffer buffer, Rect area) {
     if (area.width <= 0 || area.height <= 0) return;
     final box = value ? '[X]' : '[ ]';
     buffer.writeString(0, 0, '$box $label', focused ? focusedStyle : style);
   }
-
-  /// Handles key activations (Space or Enter).
-  @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    if (focused &&
-        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
-      onChanged(!value);
-      return true;
-    }
-    return false;
-  }
-
-  /// Handles mouse clicks.
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    if (event.type == MouseEventType.press) {
-      onChanged(!value);
-    }
-  }
 }
 
 /// An interactive radio button widget to select a single value from a group.
-///
-/// ### Interfaces
-/// - **Keyboard**: When [focused] is true, pressing Space (`' '`), Enter
-///   (`'\n'`), or Carriage Return (`'\r'`) selects [value] and triggers [onChanged].
-/// - **Mouse**: Left-clicking inside bounds selects [value] and triggers [onChanged].
-///
-/// ### Example Usage
-///
-/// ```dart
-/// Radio<ThemeMode>(
-///   value: ThemeMode.dark,
-///   groupValue: activeTheme,
-///   label: 'Dark Mode',
-///   onChanged: (ThemeMode val) {
-///     setState(() => activeTheme = val);
-///   },
-/// );
-/// ```
-///
-/// ### Properties and Styling
-///
-/// | Property | Type | Description |
-/// | :--- | :--- | :--- |
-/// | `value` | `T` | The specific value represented by this radio button. |
-/// | `groupValue` | `T` | The currently selected value of the radio group. |
-/// | `label` | [String] | Descriptive label text next to the radio circle. |
-/// | `onChanged` | `Function(T)` | Callback triggered when this option is selected. |
-/// | `focused` | [bool] | Whether the widget has keyboard focus. |
-/// | `style` | [Style] | Normal rendering style. |
-/// | `focusedStyle` | [Style] | Style applied when [focused] is true. |
-class Radio<T> extends Widget implements Focusable, KeyEventHandler {
+class Radio<T> extends StatefulWidget implements Focusable, KeyEventHandler {
   /// The specific value represented by this radio button.
   final T value;
 
@@ -226,7 +330,8 @@ class Radio<T> extends Widget implements Focusable, KeyEventHandler {
   final Style focusedStyle;
 
   /// Creates a new [Radio].
-  const Radio({
+  Radio({
+    super.key,
     required this.value,
     required this.groupValue,
     required this.label,
@@ -236,8 +341,120 @@ class Radio<T> extends Widget implements Focusable, KeyEventHandler {
     this.focusedStyle = const Style(modifiers: Modifier.reverse),
   });
 
+  // ignore: must_be_immutable
+  RadioState<T>? _state;
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
+    if (hasFocus &&
+        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
+      onChanged(value);
+      _state?.setState(() {});
+      return true;
+    }
+    return false;
+  }
+
+  /// Delegated mouse event handler.
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    if (event.type == MouseEventType.press) {
+      onChanged(value);
+      _state?.setState(() {});
+    }
+  }
+
+  @override
+  State<Radio<T>> createState() {
+    final state = RadioState<T>();
+    _state = state;
+    return state;
+  }
+}
+
+/// The state for a [Radio] widget.
+class RadioState<T> extends State<Radio<T>> implements KeyEventHandler {
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget._state = this;
+    _focusNode = FocusNode(id: 'radio_${widget.hashCode}');
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(Radio<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget._state = this;
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
   /// Whether this radio button is currently selected.
-  bool get isSelected => value == groupValue;
+  bool get isSelected => widget.value == widget.groupValue;
+
+  /// Handles mouse events for the radio button.
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    widget.handleMouseEvent(event, localX, localY);
+  }
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
+      },
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: _RadioRenderWidget(
+        isSelected: isSelected,
+        label: widget.label,
+        focused: _focusNode.hasFocus || widget.focused,
+        style: widget.style,
+        focusedStyle: widget.focusedStyle,
+      ),
+    );
+  }
+}
+
+class _RadioRenderWidget extends Widget {
+  final bool isSelected;
+  final String label;
+  final bool focused;
+  final Style style;
+  final Style focusedStyle;
+
+  const _RadioRenderWidget({
+    required this.isSelected,
+    required this.label,
+    required this.focused,
+    required this.style,
+    required this.focusedStyle,
+  });
 
   @override
   void render(Buffer buffer, Rect area) {
@@ -245,56 +462,10 @@ class Radio<T> extends Widget implements Focusable, KeyEventHandler {
     final marker = isSelected ? '(*)' : '( )';
     buffer.writeString(0, 0, '$marker $label', focused ? focusedStyle : style);
   }
-
-  /// Handles key activations (Space or Enter).
-  @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    if (focused &&
-        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
-      onChanged(value);
-      return true;
-    }
-    return false;
-  }
-
-  /// Handles mouse clicks.
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    if (event.type == MouseEventType.press) {
-      onChanged(value);
-    }
-  }
 }
 
 /// An interactive visual switch toggle widget representing true/false state.
-///
-/// ### Interfaces
-/// - **Keyboard**: When [focused] is true, pressing Space (`' '`), Enter
-///   (`'\n'`), or Carriage Return (`'\r'`) toggles [value] and triggers [onChanged].
-/// - **Mouse**: Left-clicking inside bounds toggles [value] and triggers [onChanged].
-///
-/// ### Example Usage
-///
-/// ```dart
-/// Switch(
-///   value: isNotificationsEnabled,
-///   label: 'Enable Notifications',
-///   onChanged: (val) {
-///     setState(() => isNotificationsEnabled = val);
-///   },
-/// );
-/// ```
-///
-/// ### Properties and Styling
-///
-/// | Property | Type | Description |
-/// | :--- | :--- | :--- |
-/// | `value` | [bool] | The switch toggle state (on/off). |
-/// | `label` | [String] | The text label accompanying the switch. |
-/// | `onChanged` | `Function(bool)` | Callback triggered when the state changes. |
-/// | `focused` | [bool] | Whether this switch has focus. |
-/// | `style` | [Style] | Normal rendering style. |
-/// | `focusedStyle` | [Style] | Style applied when [focused] is true. |
-class Switch extends Widget implements Focusable, KeyEventHandler {
+class Switch extends StatefulWidget implements Focusable, KeyEventHandler {
   /// The switch toggle state (on/off).
   final bool value;
 
@@ -315,7 +486,8 @@ class Switch extends Widget implements Focusable, KeyEventHandler {
   final Style focusedStyle;
 
   /// Creates a new [Switch].
-  const Switch({
+  Switch({
+    super.key,
     required this.value,
     required this.label,
     required this.onChanged,
@@ -324,28 +496,122 @@ class Switch extends Widget implements Focusable, KeyEventHandler {
     this.focusedStyle = const Style(modifiers: Modifier.reverse),
   });
 
-  @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    final marker = value ? '[─●]' : '[○─]';
-    buffer.writeString(0, 0, '$marker $label', focused ? focusedStyle : style);
-  }
+  // ignore: must_be_immutable
+  SwitchState? _state;
 
-  /// Handles key activations (Space or Enter).
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    if (focused &&
+    final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
+    if (hasFocus &&
         (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
       onChanged(!value);
+      _state?.setState(() {});
       return true;
     }
     return false;
   }
 
-  /// Handles mouse clicks.
+  /// Delegated mouse event handler.
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       onChanged(!value);
+      _state?.setState(() {});
     }
+  }
+
+  @override
+  State<Switch> createState() {
+    final state = SwitchState();
+    _state = state;
+    return state;
+  }
+}
+
+/// The state for a [Switch] widget.
+class SwitchState extends State<Switch> implements KeyEventHandler {
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget._state = this;
+    _focusNode = FocusNode(id: 'switch_${widget.hashCode}');
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(Switch oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget._state = this;
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  /// Handles mouse events for the switch.
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    widget.handleMouseEvent(event, localX, localY);
+  }
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
+      },
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: _SwitchRenderWidget(
+        value: widget.value,
+        label: widget.label,
+        focused: _focusNode.hasFocus || widget.focused,
+        style: widget.style,
+        focusedStyle: widget.focusedStyle,
+      ),
+    );
+  }
+}
+
+class _SwitchRenderWidget extends Widget {
+  final bool value;
+  final String label;
+  final bool focused;
+  final Style style;
+  final Style focusedStyle;
+
+  const _SwitchRenderWidget({
+    required this.value,
+    required this.label,
+    required this.focused,
+    required this.style,
+    required this.focusedStyle,
+  });
+
+  @override
+  void render(Buffer buffer, Rect area) {
+    if (area.width <= 0 || area.height <= 0) return;
+    final marker = value ? '[─●]' : '[○─]';
+    buffer.writeString(0, 0, '$marker $label', focused ? focusedStyle : style);
   }
 }

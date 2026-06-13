@@ -5,6 +5,7 @@ import 'package:termui/terminal/terminal.dart';
 import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/ui/buffer.dart';
+import 'package:termui/perf/tracer.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_platform.dart';
 
@@ -168,5 +169,63 @@ void main() {
         terminal.dispose();
       }
     });
+
+    test(
+      'Focused text field consumes character keys and prevents global hotkeys',
+      () async {
+        final backend = FakeTerminalBackend();
+        final terminal = MockTerminal(backend);
+        final platform = TestWidgetBookPlatform();
+
+        // Run widget book runner
+        final bookFuture = runWidgetBookShared(terminal, platform);
+
+        // Wait for initialization
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // By default, focusDemoPane is false.
+        // Press Tab to focus the demo pane.
+        terminal.injectTestEvent(const ui.KeyEvent('\t', ui.KeyType.tab));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // Now focusDemoPane is true.
+        // Inject a key event like 't' which is a global shortcut to start/stop tracing.
+        terminal.injectTestEvent(const ui.KeyEvent('t', ui.KeyType.character));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // If 't' was consumed by the demo pane, Tracer should NOT be enabled.
+        expect(Tracer.isEnabled, isFalse);
+
+        // Inject 'q' key event while focused.
+        // 'q' is a global shortcut to quit. Since we are focused, it should be consumed and NOT quit.
+        terminal.injectTestEvent(const ui.KeyEvent('q', ui.KeyType.character));
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // We should still be running. Let's verify by checking that the book future hasn't completed.
+        var isCompleted = false;
+        bookFuture.then((_) => isCompleted = true);
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(isCompleted, isFalse);
+
+        // Now unfocus the demo pane by injecting escape
+        terminal.injectTestEvent(
+          const ui.KeyEvent('\u001b', ui.KeyType.escape),
+        );
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // Now focusDemoPane should be false.
+        // Injecting 'q' now should exit the runner loop.
+        terminal.injectTestEvent(const ui.KeyEvent('q', ui.KeyType.character));
+
+        await bookFuture.timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => throw TimeoutException(
+            'Widget book did not exit on "q" after unfocusing',
+          ),
+        );
+
+        terminal.dispose();
+      },
+    );
   });
 }
