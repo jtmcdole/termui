@@ -53,7 +53,7 @@ class IoTerminalBackend implements TerminalBackend {
       _windowsReceivePort!.sendPort,
     );
     _windowsReceivePort!.listen(
-      (dynamic message) {
+      (message) {
         if (message is List<int>) {
           _rawInputController.add(message);
         }

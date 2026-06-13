@@ -1,17 +1,19 @@
 import 'package:characters/characters.dart';
 import '../color.dart';
-import '../event.dart' hide Modifier;
 import '../layout.dart';
 import '../style.dart';
 import 'text.dart';
 import 'selection_controller.dart';
+import '../../terminal/terminal.dart' as term;
+import 'prompt_runner.dart';
 
 /// A horizontal group of radio-like choices.
-class HorizontalRadioGroup extends StatefulWidget {
+class HorizontalRadioGroup extends StatefulWidget implements Focusable {
   /// The controller managing the selection state and options.
   final SelectionController<String> controller;
 
   /// Whether this group has active keyboard focus.
+  @override
   final bool focused;
 
   /// Creates a [HorizontalRadioGroup].
@@ -26,7 +28,8 @@ class HorizontalRadioGroup extends StatefulWidget {
 }
 
 /// The state class for [HorizontalRadioGroup] managing selections and keyboard routing.
-class HorizontalRadioGroupState extends State<HorizontalRadioGroup> {
+class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
+    implements KeyEventHandler {
   SelectionController<String>? _listenedController;
 
   void _onControllerChanged() {
@@ -54,7 +57,8 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup> {
   }
 
   /// Handles option selection and navigation.
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     final controller = widget.controller;
     if (event.key == 'left' || event.key == 'h' || event.key == 'backtab') {
       setState(() {
@@ -64,11 +68,13 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup> {
           controller.focusedIndex += controller.options.length;
         }
       });
+      return true;
     } else if (event.key == 'right' || event.key == 'l' || event.key == 'tab') {
       setState(() {
         controller.focusedIndex =
             (controller.focusedIndex + 1) % controller.options.length;
       });
+      return true;
     } else if (event.key == ' ' ||
         event.key == 'space' ||
         event.key == 'enter' ||
@@ -77,7 +83,9 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup> {
       setState(() {
         controller.selectedIndex = controller.focusedIndex;
       });
+      return true;
     }
+    return false;
   }
 
   @override

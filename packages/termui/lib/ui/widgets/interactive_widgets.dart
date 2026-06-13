@@ -2,6 +2,8 @@ import '../buffer.dart';
 import '../layout.dart';
 import '../style.dart';
 import '../event.dart' hide Modifier;
+import '../../terminal/terminal.dart' as term;
+import 'prompt_runner.dart';
 
 /// An interactive TUI button widget that triggers a callback when activated.
 ///
@@ -32,7 +34,7 @@ import '../event.dart' hide Modifier;
 /// | `focused` | [bool] | Whether this button currently has keyboard focus. |
 /// | `style` | [Style] | Normal rendering style. |
 /// | `focusedStyle` | [Style] | Rendering style applied when [focused] is true. |
-class Button extends Widget {
+class Button extends Widget implements Focusable, KeyEventHandler {
   /// The text label displayed on the button.
   final String text;
 
@@ -40,6 +42,7 @@ class Button extends Widget {
   final void Function() onPressed;
 
   /// Whether this button currently has keyboard focus.
+  @override
   final bool focused;
 
   /// The normal rendering style.
@@ -65,11 +68,14 @@ class Button extends Widget {
   }
 
   /// Handles key activations (Space or Enter).
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     if (focused &&
         (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
       onPressed();
+      return true;
     }
+    return false;
   }
 
   /// Handles mouse clicks.
@@ -109,7 +115,7 @@ class Button extends Widget {
 /// | `focused` | [bool] | Whether the widget has keyboard focus. |
 /// | `style` | [Style] | Normal rendering style. |
 /// | `focusedStyle` | [Style] | Style applied when [focused] is true. |
-class Checkbox extends Widget {
+class Checkbox extends Widget implements Focusable, KeyEventHandler {
   /// The current check state (checked if true).
   final bool value;
 
@@ -120,6 +126,7 @@ class Checkbox extends Widget {
   final void Function(bool newValue) onChanged;
 
   /// Whether the widget has keyboard focus.
+  @override
   final bool focused;
 
   /// The normal rendering style.
@@ -146,11 +153,14 @@ class Checkbox extends Widget {
   }
 
   /// Handles key activations (Space or Enter).
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     if (focused &&
         (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
       onChanged(!value);
+      return true;
     }
+    return false;
   }
 
   /// Handles mouse clicks.
@@ -192,7 +202,7 @@ class Checkbox extends Widget {
 /// | `focused` | [bool] | Whether the widget has keyboard focus. |
 /// | `style` | [Style] | Normal rendering style. |
 /// | `focusedStyle` | [Style] | Style applied when [focused] is true. |
-class Radio<T> extends Widget {
+class Radio<T> extends Widget implements Focusable, KeyEventHandler {
   /// The specific value represented by this radio button.
   final T value;
 
@@ -206,6 +216,7 @@ class Radio<T> extends Widget {
   final void Function(T newValue) onChanged;
 
   /// Whether the widget has keyboard focus.
+  @override
   final bool focused;
 
   /// The normal rendering style.
@@ -236,11 +247,14 @@ class Radio<T> extends Widget {
   }
 
   /// Handles key activations (Space or Enter).
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     if (focused &&
         (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
       onChanged(value);
+      return true;
     }
+    return false;
   }
 
   /// Handles mouse clicks.
@@ -280,7 +294,7 @@ class Radio<T> extends Widget {
 /// | `focused` | [bool] | Whether this switch has focus. |
 /// | `style` | [Style] | Normal rendering style. |
 /// | `focusedStyle` | [Style] | Style applied when [focused] is true. |
-class Switch extends Widget {
+class Switch extends Widget implements Focusable, KeyEventHandler {
   /// The switch toggle state (on/off).
   final bool value;
 
@@ -291,6 +305,7 @@ class Switch extends Widget {
   final void Function(bool newValue) onChanged;
 
   /// Whether this switch has keyboard focus.
+  @override
   final bool focused;
 
   /// The normal rendering style.
@@ -317,11 +332,14 @@ class Switch extends Widget {
   }
 
   /// Handles key activations (Space or Enter).
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     if (focused &&
         (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
       onChanged(!value);
+      return true;
     }
+    return false;
   }
 
   /// Handles mouse clicks.
