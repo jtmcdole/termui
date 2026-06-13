@@ -2,6 +2,14 @@ import '../buffer.dart';
 import '../layout.dart';
 
 /// A widget that wraps another widget and inserts padding around it.
+///
+/// Example usage:
+/// ```dart
+/// final paddedText = Padding(
+///   padding: EdgeInsets.all(2),
+///   child: Text('Padded Content'),
+/// );
+/// ```
 class Padding extends Widget {
   /// The widget below this widget in the tree.
   final Widget child;

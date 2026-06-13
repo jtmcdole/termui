@@ -4,6 +4,15 @@ import '../style.dart';
 import '../layout.dart';
 
 /// A scrollable list of string items.
+///
+/// Example usage:
+/// ```dart
+/// final listWidget = ListWidget(
+///   ['Item 1', 'Item 2', 'Item 3'],
+///   selectedIndex: 1,
+///   selectedStyle: Style(modifiers: Modifier.reverse),
+/// );
+/// ```
 class ListWidget extends Widget {
   /// The items to display in the list.
   final List<String> items;

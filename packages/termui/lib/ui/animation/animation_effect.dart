@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:clock/clock.dart';
 import '../buffer.dart';
 import '../style.dart';
 import '../layout.dart';
@@ -126,7 +127,7 @@ abstract class TuiAnimationEffect {
     final currentRaw = rawProgress;
     status = AnimationStatus.forward;
     if (_stopwatch == null) {
-      _stopwatch = Stopwatch()..start();
+      _stopwatch = clock.stopwatch()..start();
       _transitionStartTimeMs = 0;
       _lastFrameTimeMs = 0;
     } else {
@@ -141,7 +142,7 @@ abstract class TuiAnimationEffect {
     final currentRaw = rawProgress;
     status = AnimationStatus.reverse;
     if (_stopwatch == null) {
-      _stopwatch = Stopwatch()..start();
+      _stopwatch = clock.stopwatch()..start();
       _transitionStartTimeMs = 0;
       _lastFrameTimeMs = 0;
     } else {
