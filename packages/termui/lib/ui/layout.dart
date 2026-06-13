@@ -335,6 +335,27 @@ class GlobalKey<T extends State<StatefulWidget>> extends Key {
   Widget? get currentWidget => _registry[this]?.widget;
 }
 
+/// A concrete subclass of [Key] for matching widgets by a value.
+class ValueKey<T> extends Key {
+  /// The value associated with this key.
+  final T value;
+
+  /// Creates a [ValueKey] wrapping the given [value].
+  const ValueKey(this.value);
+
+  @override
+  bool operator ==(Object other) {
+    if (other.runtimeType != runtimeType) return false;
+    return other is ValueKey<T> && other.value == value;
+  }
+
+  @override
+  int get hashCode => Object.hash(runtimeType, value);
+
+  @override
+  String toString() => 'ValueKey($value)';
+}
+
 /// Abstract base class for all renderable widgets.
 abstract class Widget {
   /// The optional key for this widget.
@@ -369,6 +390,12 @@ abstract class Element implements BuildContext {
 
   /// The resolved size of the element from the last layout pass.
   Size get size => _cachedSize ?? Size.zero;
+
+  /// Returns the offset of this element relative to its parent's offset.
+  Offset get relativeOffset => Offset.zero;
+
+  /// Returns the offset of [child] relative to this element's local space.
+  Offset getChildOffset(Element child) => Offset.zero;
 
   /// Creates an element that uses the given [widget] as its configuration.
   Element(this.widget);
@@ -1204,6 +1231,15 @@ class RowElement extends Element {
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
   }
+
+  @override
+  Offset getChildOffset(Element child) {
+    final idx = childElements.indexOf(child);
+    if (idx >= 0 && idx < _childOffsets.length) {
+      return _childOffsets[idx];
+    }
+    return Offset.zero;
+  }
 }
 
 /// A layout widget that arranges its children vertically.
@@ -1330,6 +1366,15 @@ class ColumnElement extends Element {
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
+  }
+
+  @override
+  Offset getChildOffset(Element child) {
+    final idx = childElements.indexOf(child);
+    if (idx >= 0 && idx < _childOffsets.length) {
+      return _childOffsets[idx];
+    }
+    return Offset.zero;
   }
 }
 
@@ -1507,6 +1552,15 @@ class StackElement extends Element {
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
+  }
+
+  @override
+  Offset getChildOffset(Element child) {
+    final idx = childElements.indexOf(child);
+    if (idx >= 0 && idx < _childOffsets.length) {
+      return _childOffsets[idx];
+    }
+    return Offset.zero;
   }
 }
 
@@ -2041,6 +2095,14 @@ class AlignElement extends Element {
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  Offset getChildOffset(Element child) {
+    if (child == childElement) {
+      return _childOffset;
+    }
+    return Offset.zero;
   }
 }
 

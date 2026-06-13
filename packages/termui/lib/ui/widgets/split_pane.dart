@@ -266,6 +266,22 @@ class SplitPaneElement extends Element {
     }
   }
 
+  @override
+  Offset getChildOffset(Element child) {
+    final split = widget as SplitPane;
+    if (child == childElement1) {
+      return Offset.zero;
+    }
+    if (child == childElement2) {
+      if (split.direction == LayoutDirection.horizontal) {
+        return Offset(split.dividerPosition + 1, 0);
+      } else {
+        return Offset(0, split.dividerPosition + 1);
+      }
+    }
+    return Offset.zero;
+  }
+
   int _calculateDividerPos(int totalSize) {
     final split = widget as SplitPane;
     final c1 = split.constraint1;

@@ -12,6 +12,7 @@ workspace:
   - packages/termui_flutter/example
   - packages/termui_shared_examples
   - packages/termui_recorder
+  - packages/termui_test
   - examples
 
 dev_dependencies:

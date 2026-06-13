@@ -1,5 +1,5 @@
-import 'dart:async';
 import 'dart:math';
+import 'package:fake_async/fake_async.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/layout.dart';
@@ -129,39 +129,41 @@ void main() {
       expect(updated, isFalse);
     });
 
-    test('Tick progress and completion', () async {
-      final effect = TestEffect(duration: const Duration(milliseconds: 50));
-      var updateCount = 0;
+    test('Tick progress and completion', () {
+      fakeAsync((async) {
+        final effect = TestEffect(duration: const Duration(milliseconds: 50));
+        var updateCount = 0;
 
-      effect.start(const Point(0, 0), () {
-        updateCount++;
+        effect.start(const Point(0, 0), () {
+          updateCount++;
+        });
+
+        // Advance time slightly
+        async.elapse(const Duration(milliseconds: 15));
+        final ticking = effect.tick();
+
+        expect(ticking, isTrue);
+        expect(effect.status, equals(AnimationStatus.forward));
+        expect(effect.isAnimating, isTrue);
+        expect(effect.isVisible, isTrue);
+        expect(effect.progress, greaterThan(0.0));
+        expect(effect.progress, lessThan(1.0));
+        expect(
+          updateCount,
+          equals(1),
+        ); // targetFrameInterval is zero, tick triggers update on every frame
+
+        // Wait until duration completes
+        async.elapse(const Duration(milliseconds: 45));
+        final tickingDone = effect.tick();
+
+        expect(tickingDone, isFalse);
+        expect(effect.status, equals(AnimationStatus.completed));
+        expect(effect.isAnimating, isFalse);
+        expect(effect.isVisible, isTrue);
+        expect(effect.progress, equals(1.0)); // completed progress is 1.0
+        expect(updateCount, equals(2)); // callback triggered on completion
       });
-
-      // Advance time slightly
-      await Future.delayed(const Duration(milliseconds: 15));
-      final ticking = effect.tick();
-
-      expect(ticking, isTrue);
-      expect(effect.status, equals(AnimationStatus.forward));
-      expect(effect.isAnimating, isTrue);
-      expect(effect.isVisible, isTrue);
-      expect(effect.progress, greaterThan(0.0));
-      expect(effect.progress, lessThan(1.0));
-      expect(
-        updateCount,
-        equals(1),
-      ); // targetFrameInterval is zero, tick triggers update on every frame
-
-      // Wait until duration completes
-      await Future.delayed(const Duration(milliseconds: 45));
-      final tickingDone = effect.tick();
-
-      expect(tickingDone, isFalse);
-      expect(effect.status, equals(AnimationStatus.completed));
-      expect(effect.isAnimating, isFalse);
-      expect(effect.isVisible, isTrue);
-      expect(effect.progress, equals(1.0)); // completed progress is 1.0
-      expect(updateCount, equals(2)); // callback triggered on completion
     });
 
     test('Stop freezes and reset clears animation state', () {
@@ -182,45 +184,49 @@ void main() {
       expect(effect.progress, equals(0.0));
     });
 
-    test('AnimationStatus forward and reverse transitions', () async {
-      final effect = TestEffect(duration: const Duration(milliseconds: 100));
-      effect.start(const Point(0, 0), () {});
+    test('AnimationStatus forward and reverse transitions', () {
+      fakeAsync((async) {
+        final effect = TestEffect(duration: const Duration(milliseconds: 100));
+        effect.start(const Point(0, 0), () {});
 
-      await Future.delayed(const Duration(milliseconds: 30));
-      effect.tick();
-      expect(effect.status, equals(AnimationStatus.forward));
-      expect(effect.progress, greaterThan(0.0));
+        async.elapse(const Duration(milliseconds: 30));
+        effect.tick();
+        expect(effect.status, equals(AnimationStatus.forward));
+        expect(effect.progress, greaterThan(0.0));
 
-      // Reverse direction
-      effect.reverse();
-      expect(effect.status, equals(AnimationStatus.reverse));
-      expect(effect.isAnimating, isTrue);
-      expect(effect.isVisible, isTrue);
+        // Reverse direction
+        effect.reverse();
+        expect(effect.status, equals(AnimationStatus.reverse));
+        expect(effect.isAnimating, isTrue);
+        expect(effect.isVisible, isTrue);
 
-      // Tick to reverse completion (back to 0.0)
-      await Future.delayed(const Duration(milliseconds: 50));
-      final ticking = effect.tick();
-      expect(ticking, isFalse);
-      expect(effect.status, equals(AnimationStatus.dismissed));
-      expect(effect.isAnimating, isFalse);
-      expect(effect.isVisible, isFalse);
-      expect(effect.progress, equals(0.0));
+        // Tick to reverse completion (back to 0.0)
+        async.elapse(const Duration(milliseconds: 50));
+        final ticking = effect.tick();
+        expect(ticking, isFalse);
+        expect(effect.status, equals(AnimationStatus.dismissed));
+        expect(effect.isAnimating, isFalse);
+        expect(effect.isVisible, isFalse);
+        expect(effect.progress, equals(0.0));
+      });
     });
 
-    test('Easing calculations applied to progress', () async {
-      final effect = TestEffect(
-        duration: const Duration(milliseconds: 100),
-        easing: Easing.easeOutQuad,
-      );
+    test('Easing calculations applied to progress', () {
+      fakeAsync((async) {
+        final effect = TestEffect(
+          duration: const Duration(milliseconds: 100),
+          easing: Easing.easeOutQuad,
+        );
 
-      effect.start(const Point(0, 0), () {});
-      await Future.delayed(const Duration(milliseconds: 40));
+        effect.start(const Point(0, 0), () {});
+        async.elapse(const Duration(milliseconds: 40));
 
-      final progressLinear =
-          effect.progress; // This is already eased internally
-      // Since it's easeOutQuad: f(t) = 1 - (1 - t)^2
-      // If t is around 0.4, eased t is around 1 - 0.6^2 = 0.64, which is > 0.4.
-      expect(progressLinear, greaterThan(0.0));
+        final progressLinear =
+            effect.progress; // This is already eased internally
+        // Since it's easeOutQuad: f(t) = 1 - (1 - t)^2
+        // If t is around 0.4, eased t is around 1 - 0.6^2 = 0.64, which is > 0.4.
+        expect(progressLinear, greaterThan(0.0));
+      });
     });
   });
 
@@ -242,60 +248,64 @@ void main() {
       TuiAnimationConfig.vsyncInterval = oldInterval; // Restore
     });
 
-    test('Paint/repaint throttling using targetFrameInterval', () async {
-      final effect = TestEffect(
-        duration: const Duration(milliseconds: 100),
-        targetFrameInterval: const Duration(milliseconds: 30),
-      );
+    test('Paint/repaint throttling using targetFrameInterval', () {
+      fakeAsync((async) {
+        final effect = TestEffect(
+          duration: const Duration(milliseconds: 100),
+          targetFrameInterval: const Duration(milliseconds: 30),
+        );
 
-      var updateCount = 0;
-      effect.start(const Point(0, 0), () {
-        updateCount++;
+        var updateCount = 0;
+        effect.start(const Point(0, 0), () {
+          updateCount++;
+        });
+
+        // Tick rapidly immediately (0 ms elapsed since start)
+        effect.tick();
+        expect(updateCount, equals(0));
+
+        // Wait 15 ms (less than 30 ms interval)
+        async.elapse(const Duration(milliseconds: 15));
+        effect.tick();
+        expect(updateCount, equals(0));
+
+        // Wait another 20 ms (total 35 ms > 30 ms interval)
+        async.elapse(const Duration(milliseconds: 20));
+        effect.tick();
+        expect(updateCount, equals(1));
+
+        // Wait another 35 ms
+        async.elapse(const Duration(milliseconds: 35));
+        effect.tick();
+        expect(updateCount, equals(2));
       });
-
-      // Tick rapidly immediately (0 ms elapsed since start)
-      effect.tick();
-      expect(updateCount, equals(0));
-
-      // Wait 15 ms (less than 30 ms interval)
-      await Future.delayed(const Duration(milliseconds: 15));
-      effect.tick();
-      expect(updateCount, equals(0));
-
-      // Wait another 20 ms (total 35 ms > 30 ms interval)
-      await Future.delayed(const Duration(milliseconds: 20));
-      effect.tick();
-      expect(updateCount, equals(1));
-
-      // Wait another 35 ms
-      await Future.delayed(const Duration(milliseconds: 35));
-      effect.tick();
-      expect(updateCount, equals(2));
     });
   });
 
   group('TuiAnimatedStateMixin Integration Tests', () {
-    test('Effect registration and automatic ticker cleanup', () async {
-      final effect = TestEffect(duration: const Duration(milliseconds: 30));
-      final widget = TestAnimatedWidget(effect: effect);
-      final tree = ElementWidget(widget);
-      final buffer = Buffer.blank(5, 5);
+    test('Effect registration and automatic ticker cleanup', () {
+      fakeAsync((async) {
+        final effect = TestEffect(duration: const Duration(milliseconds: 30));
+        final widget = TestAnimatedWidget(effect: effect);
+        final tree = ElementWidget(widget);
+        final buffer = Buffer.blank(5, 5);
 
-      tree.layout(BoxConstraints.tight(const Size(5, 5)));
-      tree.paint(buffer, Offset.zero);
-      final state = tree.findState<TestAnimatedWidgetState>()!;
+        tree.layout(BoxConstraints.tight(const Size(5, 5)));
+        tree.paint(buffer, Offset.zero);
+        final state = tree.findState<TestAnimatedWidgetState>()!;
 
-      expect(state.hasTicker(), isFalse);
+        expect(state.hasTicker(), isFalse);
 
-      // Trigger effect starts the ticker
-      state.startEffect(const Point(1, 1));
-      expect(state.hasTicker(), isTrue);
+        // Trigger effect starts the ticker
+        state.startEffect(const Point(1, 1));
+        expect(state.hasTicker(), isTrue);
 
-      // Wait for duration to expire (30ms) plus a tick interval
-      await Future.delayed(const Duration(milliseconds: 50));
+        // Wait for duration to expire (30ms) plus a tick interval
+        async.elapse(const Duration(milliseconds: 50));
 
-      // Ticker should be automatically cleaned up
-      expect(state.hasTicker(), isFalse);
+        // Ticker should be automatically cleaned up
+        expect(state.hasTicker(), isFalse);
+      });
     });
 
     test('Dispose cancels ticker and resets effects', () {
