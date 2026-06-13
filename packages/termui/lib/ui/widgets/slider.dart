@@ -3,6 +3,8 @@ import '../color.dart';
 import '../event.dart' hide Modifier;
 import '../layout.dart';
 import '../style.dart';
+import '../../terminal/terminal.dart' as term;
+import 'prompt_runner.dart';
 
 /// The orientation of the slider.
 enum SliderAxis {
@@ -14,7 +16,11 @@ enum SliderAxis {
 }
 
 /// A widget for selecting a numeric value by sliding a thumb along a track.
-class Slider extends Widget {
+class Slider extends Widget implements Focusable, KeyEventHandler {
+  /// Whether the slider is focused.
+  @override
+  final bool focused;
+
   /// The current value.
   double value;
 
@@ -47,6 +53,7 @@ class Slider extends Widget {
     required this.value,
     required this.min,
     required this.max,
+    this.focused = false,
     this.axis = SliderAxis.horizontal,
     this.trackStyle = const Style(foreground: CharmColors.iron),
     this.thumbStyle = const Style(modifiers: Modifier.bold),
@@ -83,25 +90,31 @@ class Slider extends Widget {
   }
 
   /// Handles keyboard events for moving the slider.
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     final step = (max - min) / 20.0; // 5% step size
     if (axis == SliderAxis.horizontal) {
       if (event.type == KeyType.left) {
         value = (value - step).clamp(min, max);
         onChanged?.call(value);
+        return true;
       } else if (event.type == KeyType.right) {
         value = (value + step).clamp(min, max);
         onChanged?.call(value);
+        return true;
       }
     } else {
       if (event.type == KeyType.up) {
         value = (value + step).clamp(min, max);
         onChanged?.call(value);
+        return true;
       } else if (event.type == KeyType.down) {
         value = (value - step).clamp(min, max);
         onChanged?.call(value);
+        return true;
       }
     }
+    return false;
   }
 
   @override

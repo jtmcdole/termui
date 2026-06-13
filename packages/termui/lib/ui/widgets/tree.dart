@@ -4,6 +4,8 @@ import '../style.dart';
 import '../layout.dart';
 import '../event.dart' hide Modifier;
 import '../color.dart';
+import '../../terminal/terminal.dart' as term;
+import 'prompt_runner.dart';
 
 /// A node in the hierarchical tree structure.
 class TreeNode<T> {
@@ -111,7 +113,7 @@ class FlatNode<T> {
 /// | `lineStyle` | [Style] | Style applied to vertical/horizontal guide lines. |
 /// | `showRoot` | [bool] | Whether to display the root node in the tree list. |
 /// | `focused` | [bool] | Whether this widget currently has focus. |
-class TreeWidget<T> extends Widget {
+class TreeWidget<T> extends Widget implements Focusable, KeyEventHandler {
   /// The root node of the tree.
   final TreeNode<T> root;
 
@@ -131,6 +133,7 @@ class TreeWidget<T> extends Widget {
   bool showRoot;
 
   /// Whether the tree currently has keyboard focus.
+  @override
   bool focused;
 
   late List<FlatNode<T>> _flatNodes;
@@ -199,13 +202,16 @@ class TreeWidget<T> extends Widget {
   }
 
   /// Handles incoming key events for navigation and selection.
-  void handleKeyEvent(KeyEvent event) {
-    if (_flatNodes.isEmpty) return;
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    if (_flatNodes.isEmpty) return false;
 
     if (event.type == KeyType.up) {
       _selectedIndex = (_selectedIndex - 1).clamp(0, _flatNodes.length - 1);
+      return true;
     } else if (event.type == KeyType.down) {
       _selectedIndex = (_selectedIndex + 1).clamp(0, _flatNodes.length - 1);
+      return true;
     } else if (event.type == KeyType.right) {
       final flat = _flatNodes[_selectedIndex];
       if (!flat.node.isLeaf) {
@@ -218,6 +224,7 @@ class TreeWidget<T> extends Widget {
           }
         }
       }
+      return true;
     } else if (event.type == KeyType.left) {
       final flat = _flatNodes[_selectedIndex];
       if (!flat.node.isLeaf && flat.node.isExpanded) {
@@ -232,11 +239,14 @@ class TreeWidget<T> extends Widget {
           }
         }
       }
+      return true;
     } else if (event.key == ' ' || event.type == KeyType.enter) {
       if (onSelect != null) {
         onSelect!(_flatNodes[_selectedIndex].node);
       }
+      return true;
     }
+    return false;
   }
 
   /// Adjusts the scroll offset to keep the selected item visible within the [viewportHeight].

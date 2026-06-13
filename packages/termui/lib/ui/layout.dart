@@ -241,6 +241,9 @@ abstract class Element implements BuildContext {
     }
     return null;
   }
+
+  /// Rebuilds the element.
+  void rebuild() {}
 }
 
 /// Default element for leaf widgets that do not build children.
@@ -305,6 +308,7 @@ class StatelessElement extends Element {
     super.unmount();
   }
 
+  @override
   /// Rebuilds the child widget configuration and updates the child element.
   void rebuild() {
     final builtWidget = runZoned(() {
@@ -442,6 +446,7 @@ class StatefulElement extends Element {
     super.unmount();
   }
 
+  @override
   /// Rebuilds the child widget configuration and updates the child element.
   void rebuild() {
     final builtWidget = runZoned(() {
@@ -521,6 +526,7 @@ class InheritedElement extends Element {
     rebuild();
   }
 
+  @override
   /// Rebuilds the child widget configuration and updates the child element.
   void rebuild() {
     final inheritedWidget = widget as InheritedWidget;

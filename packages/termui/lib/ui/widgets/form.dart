@@ -8,6 +8,8 @@ import 'text_field.dart';
 import 'padding.dart';
 import 'rich_text.dart';
 import 'left_border.dart';
+import '../../terminal/terminal.dart' as term;
+import 'prompt_runner.dart';
 
 /// Ancestor provider to expose form state to field elements.
 class FormScope extends InheritedWidget {
@@ -46,7 +48,8 @@ class FormScope extends InheritedWidget {
 /// | [initialValue] | `T?` | The default value when initialized or reset. |
 /// | [validator] | `String? Function(T?)?` | Callback to execute during validation. |
 /// | [focused] | `bool` | Current keyboard focus status. |
-abstract class FormField<T> extends StatefulWidget {
+abstract class FormField<T> extends StatefulWidget
+    implements Focusable, KeyEventHandler {
   /// The title label displayed for this field.
   final String label;
 
@@ -72,6 +75,7 @@ abstract class FormField<T> extends StatefulWidget {
   bool _focused = false;
 
   /// Whether this field currently has input focus.
+  @override
   bool get focused => _focused;
 
   set focused(bool val) {
@@ -117,7 +121,8 @@ abstract class FormField<T> extends StatefulWidget {
   int getPreferredHeight();
 
   /// Handles user key inputs to update the internal value.
-  void handleKeyEvent(KeyEvent event);
+  @override
+  bool handleKeyEvent(term.KeyEvent event);
 
   FormFieldState<T>? _state;
 }
@@ -209,7 +214,15 @@ abstract class FormFieldState<T> extends State<FormField<T>> {
 ///   ]),
 /// )
 /// ```
-class Form extends StatefulWidget {
+class Form extends StatefulWidget implements Focusable {
+  @override
+  bool get focused {
+    if (_state != null) {
+      return _state!._fields.any((fs) => fs.widget.focused);
+    }
+    return fields.any((f) => f.focused);
+  }
+
   /// The child subtree containing form fields. Used in Declarative Mode.
   final Widget? child;
 
@@ -307,7 +320,7 @@ class Form extends StatefulWidget {
 }
 
 /// The mutable state of a [Form].
-class FormState extends State<Form> {
+class FormState extends State<Form> implements KeyEventHandler {
   final Set<FormFieldState> _fields = {};
 
   /// Retrieves the list of currently registered form field states.
@@ -380,8 +393,9 @@ class FormState extends State<Form> {
   }
 
   /// Routes a key event to the focused field, handling tab navigation.
-  void handleKeyEvent(KeyEvent event) {
-    if (_fields.isEmpty) return;
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    if (_fields.isEmpty) return false;
 
     final list = _fields.toList();
     var activeIdx = list.indexWhere((fs) => fs.widget.focused);
@@ -393,12 +407,14 @@ class FormState extends State<Form> {
         activeIdx = (activeIdx + 1) % list.length;
         list[activeIdx].widget.focused = true;
       });
+      return true;
     } else if (event.key == 'backtab') {
       setState(() {
         list[activeIdx].widget.focused = false;
         activeIdx = (activeIdx - 1 + list.length) % list.length;
         list[activeIdx].widget.focused = true;
       });
+      return true;
     } else if (event.type == KeyType.enter) {
       final currentField = list[activeIdx].widget;
       currentField.validate();
@@ -409,12 +425,14 @@ class FormState extends State<Form> {
           list[activeIdx].widget.focused = true;
         });
       } else {
-        list[activeIdx].widget.handleKeyEvent(event);
+        currentField.handleKeyEvent(event);
         list[activeIdx].setState(() {});
       }
+      return true;
     } else {
       list[activeIdx].widget.handleKeyEvent(event);
       list[activeIdx].setState(() {});
+      return true;
     }
   }
 
@@ -507,19 +525,26 @@ class TextFormField extends FormField<String> {
   }
 
   @override
-  void handleKeyEvent(KeyEvent event) {
+  bool handleKeyEvent(term.KeyEvent event) {
     _input.handleKeyEvent(event);
     value = _input.value;
     if (_state != null) {
       _state!.setState(() {});
     }
+    return true;
   }
 
   @override
   State createState() => _TextFormFieldState();
 }
 
-class _TextFormFieldState extends FormFieldState<String> {
+class _TextFormFieldState extends FormFieldState<String>
+    implements KeyEventHandler {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
   @override
   Widget build(BuildContext context) {
     return _TextFormFieldRenderWidget(widget as TextFormField, this);
@@ -640,19 +665,26 @@ class TextAreaFormField extends FormField<String> {
   }
 
   @override
-  void handleKeyEvent(KeyEvent event) {
+  bool handleKeyEvent(term.KeyEvent event) {
     _input.handleKeyEvent(event);
     value = _input.value;
     if (_state != null) {
       _state!.setState(() {});
     }
+    return true;
   }
 
   @override
   State createState() => _TextAreaFormFieldState();
 }
 
-class _TextAreaFormFieldState extends FormFieldState<String> {
+class _TextAreaFormFieldState extends FormFieldState<String>
+    implements KeyEventHandler {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
   @override
   Widget build(BuildContext context) {
     return _TextAreaFormFieldRenderWidget(widget as TextAreaFormField, this);
@@ -785,8 +817,8 @@ class SelectFormField<T> extends FormField<T> {
   }
 
   @override
-  void handleKeyEvent(KeyEvent event) {
-    if (options.isEmpty) return;
+  bool handleKeyEvent(term.KeyEvent event) {
+    if (options.isEmpty) return false;
 
     if (event.type == KeyType.up) {
       _selectedIndex = (_selectedIndex - 1).clamp(0, options.length - 1);
@@ -794,20 +826,29 @@ class SelectFormField<T> extends FormField<T> {
       if (_state != null) {
         _state!.setState(() {});
       }
+      return true;
     } else if (event.type == KeyType.down) {
       _selectedIndex = (_selectedIndex + 1).clamp(0, options.length - 1);
       value = options[_selectedIndex].value;
       if (_state != null) {
         _state!.setState(() {});
       }
+      return true;
     }
+    return false;
   }
 
   @override
   State createState() => _SelectFormFieldState<T>();
 }
 
-class _SelectFormFieldState<T> extends FormFieldState<T> {
+class _SelectFormFieldState<T> extends FormFieldState<T>
+    implements KeyEventHandler {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
   int get _selectedIndex {
     final selectWidget = widget as SelectFormField<T>;
     final idx = selectWidget.options.indexWhere(
@@ -932,7 +973,7 @@ class ConfirmFormField extends FormField<bool> {
   }
 
   @override
-  void handleKeyEvent(KeyEvent event) {
+  bool handleKeyEvent(term.KeyEvent event) {
     if (event.type == KeyType.left ||
         event.type == KeyType.right ||
         event.key == ' ') {
@@ -940,14 +981,22 @@ class ConfirmFormField extends FormField<bool> {
       if (_state != null) {
         _state!.setState(() {});
       }
+      return true;
     }
+    return false;
   }
 
   @override
   State createState() => _ConfirmFormFieldState();
 }
 
-class _ConfirmFormFieldState extends FormFieldState<bool> {
+class _ConfirmFormFieldState extends FormFieldState<bool>
+    implements KeyEventHandler {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
   @override
   Widget build(BuildContext context) {
     return _ConfirmFormFieldRenderWidget(widget as ConfirmFormField, this);
@@ -1102,8 +1151,8 @@ class MultiSelectFormField<T> extends FormField<List<T>> {
   }
 
   @override
-  void handleKeyEvent(KeyEvent event) {
-    if (options.isEmpty) return;
+  bool handleKeyEvent(term.KeyEvent event) {
+    if (options.isEmpty) return false;
 
     final currentVal = value ?? [];
     for (var i = 0; i < options.length; i++) {
@@ -1115,11 +1164,13 @@ class MultiSelectFormField<T> extends FormField<List<T>> {
       if (_state != null) {
         _state!.setState(() {});
       }
+      return true;
     } else if (event.type == KeyType.down) {
       _selectedIndex = (_selectedIndex + 1).clamp(0, options.length - 1);
       if (_state != null) {
         _state!.setState(() {});
       }
+      return true;
     } else if (event.key == ' ' || event.type == KeyType.enter) {
       _selected[_selectedIndex] = !_selected[_selectedIndex];
       final nextVal = <T>[];
@@ -1132,14 +1183,22 @@ class MultiSelectFormField<T> extends FormField<List<T>> {
       if (_state != null) {
         _state!.setState(() {});
       }
+      return true;
     }
+    return false;
   }
 
   @override
   State createState() => _MultiSelectFormFieldState<T>();
 }
 
-class _MultiSelectFormFieldState<T> extends FormFieldState<List<T>> {
+class _MultiSelectFormFieldState<T> extends FormFieldState<List<T>>
+    implements KeyEventHandler {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
   @override
   Widget build(BuildContext context) {
     return _MultiSelectFormFieldRenderWidget<T>(
