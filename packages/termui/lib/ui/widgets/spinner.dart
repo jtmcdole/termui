@@ -1,6 +1,7 @@
 import '../buffer.dart';
 import '../style.dart';
 import '../layout.dart';
+import 'package:clock/clock.dart';
 
 /// An interface for widgets that support animation ticks or time-based rendering.
 abstract class Animatable {
@@ -47,7 +48,10 @@ class Spinner extends Widget implements Animatable {
 
   /// Whether the spinner animation is currently paused.
   final bool paused;
-  static final int _globalStartTimeMs = DateTime.now().millisecondsSinceEpoch;
+
+  /// An optional stopwatch to override the global clock, useful for rendering multiple states.
+  final Stopwatch clockStopwatch;
+  static final Stopwatch _globalStopwatch = clock.stopwatch()..start();
 
   int _manualTicks = 0;
   bool _useWallClock = true;
@@ -61,18 +65,21 @@ class Spinner extends Widget implements Animatable {
     this.style = Style.empty,
     this.speed = const Duration(milliseconds: 100),
     this.paused = false,
-  });
+    Stopwatch? clockStopwatch,
+  }) : clockStopwatch = clockStopwatch ?? _globalStopwatch;
 
   /// Creates a classic 10-frame Braille dots spinner.
   factory Spinner.dots({
     Style style = Style.empty,
     Duration speed = const Duration(milliseconds: 80),
     bool paused = false,
+    Stopwatch? clockStopwatch,
   }) => Spinner(
     frames: const ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'],
     style: style,
     speed: speed,
     paused: paused,
+    clockStopwatch: clockStopwatch,
   );
 
   /// Creates a classic 4-frame rotating line spinner.
@@ -80,11 +87,13 @@ class Spinner extends Widget implements Animatable {
     Style style = Style.empty,
     Duration speed = const Duration(milliseconds: 100),
     bool paused = false,
+    Stopwatch? clockStopwatch,
   }) => Spinner(
     frames: const ['|', '/', '-', '\\'],
     style: style,
     speed: speed,
     paused: paused,
+    clockStopwatch: clockStopwatch,
   );
 
   /// Creates a 6-frame pulsing density block spinner.
@@ -92,11 +101,13 @@ class Spinner extends Widget implements Animatable {
     Style style = Style.empty,
     Duration speed = const Duration(milliseconds: 120),
     bool paused = false,
+    Stopwatch? clockStopwatch,
   }) => Spinner(
     frames: const ['░', '▒', '▓', '█', '▓', '▒'],
     style: style,
     speed: speed,
     paused: paused,
+    clockStopwatch: clockStopwatch,
   );
 
   /// Advance the spinner to the next frame (manual control).
@@ -111,8 +122,7 @@ class Spinner extends Widget implements Animatable {
       return frames[0];
     }
     if (_useWallClock) {
-      final elapsed =
-          DateTime.now().millisecondsSinceEpoch - _globalStartTimeMs;
+      final elapsed = clockStopwatch.elapsedMilliseconds;
       final idx = (elapsed ~/ speed.inMilliseconds) % frames.length;
       return frames[idx];
     } else {
