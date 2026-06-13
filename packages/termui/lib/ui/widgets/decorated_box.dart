@@ -403,4 +403,12 @@ class DecoratedBoxElement extends Element {
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
   }
+
+  @override
+  Offset getChildOffset(Element child) {
+    if (child == childElement) {
+      return Offset(_cachedLeftOffset, _cachedTopOffset);
+    }
+    return Offset.zero;
+  }
 }

@@ -125,4 +125,14 @@ class LeftBorderElement extends Element {
       childElement!.paint(buffer, childOffset);
     }
   }
+
+  @override
+  Offset getChildOffset(Element child) {
+    if (child == childElement) {
+      final borderWidget = widget as LeftBorder;
+      final padding = borderWidget.padding;
+      return Offset(1 + padding.left, padding.top);
+    }
+    return Offset.zero;
+  }
 }

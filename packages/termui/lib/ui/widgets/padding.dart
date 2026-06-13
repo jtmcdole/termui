@@ -18,7 +18,7 @@ class Padding extends Widget {
   final EdgeInsets padding;
 
   /// Creates a [Padding] widget that insets its child.
-  const Padding({required this.child, required this.padding});
+  const Padding({super.key, required this.child, required this.padding});
 
   @override
   Element createElement() => PaddingElement(this);
@@ -130,5 +130,13 @@ class PaddingElement extends Element {
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  Offset getChildOffset(Element child) {
+    if (child == childElement) {
+      return _childOffset;
+    }
+    return Offset.zero;
   }
 }

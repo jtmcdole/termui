@@ -125,6 +125,12 @@ class PromptRunner<T> {
   Element? _rootElement;
   bool _isDisposed = false;
 
+  /// Exposes the root element of the mounted widget tree for testing.
+  Element? get rootElement => _rootElement;
+
+  /// Exposes whether the prompt runner is disposed.
+  bool get isDisposed => _isDisposed;
+
   /// Creates a new [PromptRunner].
   PromptRunner({
     required this.terminal,
@@ -318,7 +324,7 @@ class PromptRunner<T> {
       return await _completer!.future;
     } finally {
       _isDisposed = true;
-      await subscription.cancel();
+      subscription.cancel();
       // Restore cursor visibility
       terminal.showCursor();
       // Reset the repaint handler to avoid leaks.

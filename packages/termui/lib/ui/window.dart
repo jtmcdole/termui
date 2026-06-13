@@ -476,6 +476,20 @@ class WindowElement extends Element {
       childElement!.paint(contentViewport, Offset.zero);
     }
   }
+
+  @override
+  Offset get relativeOffset {
+    final win = widget as Window;
+    return Offset(win.bounds.x, win.bounds.y);
+  }
+
+  @override
+  Offset getChildOffset(Element child) {
+    if (child == childElement) {
+      return const Offset(1, 1);
+    }
+    return Offset.zero;
+  }
 }
 
 /// A desktop-like window manager to handle routing of mouse/keyboard events.

@@ -76,6 +76,7 @@ class Text extends Widget {
   /// Creates a [Text] widget to render styled text.
   const Text(
     this.data, {
+    super.key,
     this.style = Style.empty,
     this.wrap = true,
     this.textAlign = TextAlign.left,
