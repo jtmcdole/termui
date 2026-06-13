@@ -1,3 +1,9 @@
+## 0.3.0
+
+ - **FEAT**(termui): add multi-progress bar compilation build dashboard example.
+ - **FEAT**(termui): introduce focus and key event routing interfaces with PromptScope.
+ - **FEAT**(ui): add intrinsic height calculation, SelectionController, and printWidget extension (#12).
+
 ## 0.2.1
 
  - **FEAT**(ui): add intrinsic height calculation, SelectionController, and printWidget extension.

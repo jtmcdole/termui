@@ -3,6 +3,29 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-06-12
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.3.0`](#termui---v030)
+
+---
+
+#### `termui` - `v0.3.0`
+
+ - **FEAT**(termui): add multi-progress bar compilation build dashboard example.
+ - **FEAT**(termui): introduce focus and key event routing interfaces with PromptScope.
+ - **FEAT**(ui): add intrinsic height calculation, SelectionController, and printWidget extension (#12).
+
+
 ## 2026-06-11
 
 ### Changes
