@@ -99,56 +99,7 @@ class ScrollBar extends Widget {
   Rect? _lastArea;
 
   @override
-  void render(Buffer buffer, Rect area) {
-    _lastArea = area;
-    if (area.width <= 0 || area.height <= 0) return;
-
-    final trackHeight = direction == LayoutDirection.vertical
-        ? area.height
-        : area.width;
-
-    final total = _totalExtent;
-    final view = _viewportExtent;
-    if (total <= 0) return;
-
-    // 1. Calculate thumb size
-    final double ratio = (view / total).clamp(0.0, 1.0);
-    final int thumbHeight = (ratio * trackHeight).round().clamp(1, trackHeight);
-
-    // 2. Calculate thumb position
-    final int maxScrollOffset = total - view;
-    int thumbPos = 0;
-    if (maxScrollOffset > 0) {
-      final double scrollRatio = (_scrollOffset / maxScrollOffset).clamp(
-        0.0,
-        1.0,
-      );
-      thumbPos = (scrollRatio * (trackHeight - thumbHeight)).round().clamp(
-        0,
-        trackHeight - thumbHeight,
-      );
-    }
-
-    if (direction == LayoutDirection.vertical) {
-      for (var y = 0; y < trackHeight; y++) {
-        final isThumb = y >= thumbPos && y < thumbPos + thumbHeight;
-        final cell = buffer.getCell(0, y);
-        if (cell != null) {
-          cell.char = isThumb ? thumbChar : trackChar;
-          cell.style = isThumb ? thumbStyle : trackStyle;
-        }
-      }
-    } else {
-      for (var x = 0; x < trackHeight; x++) {
-        final isThumb = x >= thumbPos && x < thumbPos + thumbHeight;
-        final cell = buffer.getCell(x, 0);
-        if (cell != null) {
-          cell.char = isThumb ? thumbChar : trackChar;
-          cell.style = isThumb ? thumbStyle : trackStyle;
-        }
-      }
-    }
-  }
+  Element createElement() => ScrollBarElement(this);
 
   /// Handles track clicks or dragging of the thumb to update the scroll offset.
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
@@ -171,5 +122,88 @@ class ScrollBar extends Widget {
       maxScrollOffset > 0 ? maxScrollOffset : 0,
     );
     _updateScrollOffset(newOffset);
+  }
+}
+
+/// Mount element class corresponding to [ScrollBar].
+class ScrollBarElement extends Element {
+  /// Proportional height of the thumb indicator calculated during layout.
+  int thumbHeight = 0;
+
+  /// Index position of the thumb indicator calculated during layout.
+  int thumbPos = 0;
+
+  /// Physical track span calculated during layout.
+  int trackHeight = 0;
+
+  /// Instantiates the rendering element for the given ScrollBar.
+  ScrollBarElement(ScrollBar super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final sb = widget as ScrollBar;
+    final width = constraints.hasBoundedWidth
+        ? constraints.maxWidth
+        : (sb.direction == LayoutDirection.vertical ? 1 : 80);
+    final height = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : (sb.direction == LayoutDirection.vertical ? 80 : 1);
+
+    trackHeight = sb.direction == LayoutDirection.vertical ? height : width;
+
+    final total = sb._totalExtent;
+    final view = sb._viewportExtent;
+    if (total <= 0) {
+      thumbHeight = 0;
+      thumbPos = 0;
+    } else {
+      final double ratio = (view / total).clamp(0.0, 1.0);
+      thumbHeight = (ratio * trackHeight).round().clamp(1, trackHeight);
+
+      final int maxScrollOffset = total - view;
+      thumbPos = 0;
+      if (maxScrollOffset > 0) {
+        final double scrollRatio = (sb._scrollOffset / maxScrollOffset).clamp(
+          0.0,
+          1.0,
+        );
+        thumbPos = (scrollRatio * (trackHeight - thumbHeight)).round().clamp(
+          0,
+          trackHeight - thumbHeight,
+        );
+      }
+    }
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final sb = widget as ScrollBar;
+    sb._lastArea = Rect(offset.dx, offset.dy, size.width, size.height);
+
+    if (size.width <= 0 || size.height <= 0) return;
+    final total = sb._totalExtent;
+    if (total <= 0) return;
+
+    if (sb.direction == LayoutDirection.vertical) {
+      for (var y = 0; y < trackHeight; y++) {
+        final isThumb = y >= thumbPos && y < thumbPos + thumbHeight;
+        final cell = buffer.getCell(offset.dx, offset.dy + y);
+        if (cell != null) {
+          cell.char = isThumb ? sb.thumbChar : sb.trackChar;
+          cell.style = isThumb ? sb.thumbStyle : sb.trackStyle;
+        }
+      }
+    } else {
+      for (var x = 0; x < trackHeight; x++) {
+        final isThumb = x >= thumbPos && x < thumbPos + thumbHeight;
+        final cell = buffer.getCell(offset.dx + x, offset.dy);
+        if (cell != null) {
+          cell.char = isThumb ? sb.thumbChar : sb.trackChar;
+          cell.style = isThumb ? sb.thumbStyle : sb.trackStyle;
+        }
+      }
+    }
   }
 }

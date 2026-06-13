@@ -145,16 +145,43 @@ class TabBar extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => TabBarElement(this);
+}
+
+/// An element that manages the rendering and layout of a [TabBar] widget.
+class TabBarElement extends Element {
+  /// Creates a [TabBarElement] for the given [widget].
+  TabBarElement(TabBar super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final tabBar = widget as TabBar;
+    var w = 0;
+    for (var i = 0; i < tabBar.labels.length; i++) {
+      final label = tabBar.labels[i];
+      final text = ' [ $label ] ';
+      w += text.characters.length;
+    }
+    return constraints.constrain(Size(w, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final tabBar = widget as TabBar;
+    if (size.width <= 0 || size.height <= 0) return;
 
     var currentX = 0;
-    for (var i = 0; i < labels.length; i++) {
-      final label = labels[i];
-      final isActive = (i == controller.index);
-      final style = isActive ? activeStyle : inactiveStyle;
+    for (var i = 0; i < tabBar.labels.length; i++) {
+      final label = tabBar.labels[i];
+      final isActive = (i == tabBar.controller.index);
+      final style = isActive ? tabBar.activeStyle : tabBar.inactiveStyle;
       final text = ' [ $label ] ';
-      buffer.writeString(currentX, 0, text, style);
+      if (currentX + text.characters.length > size.width) break;
+      viewport.writeString(currentX, 0, text, style);
       currentX += text.characters.length;
     }
   }
@@ -192,10 +219,65 @@ class TabPanel extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => TabPanelElement(this);
+}
 
-    final activeWidget = children[controller.index];
-    activeWidget.render(buffer, area);
+/// An element that manages the active panel rendering and layout of a [TabPanel] widget.
+class TabPanelElement extends Element {
+  Element? _activeChildElement;
+  int _lastActiveIndex = -1;
+
+  /// Creates a [TabPanelElement] for the given [widget].
+  TabPanelElement(TabPanel super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final panel = widget as TabPanel;
+    final activeIndex = panel.controller.index;
+    final activeWidget = panel.children[activeIndex];
+
+    if (_activeChildElement != null &&
+        _lastActiveIndex == activeIndex &&
+        _activeChildElement!.widget.runtimeType == activeWidget.runtimeType) {
+      _activeChildElement!.update(activeWidget);
+    } else {
+      _activeChildElement?.unmount();
+      _activeChildElement = activeWidget.createElement();
+      _activeChildElement!.mount(this);
+      _lastActiveIndex = activeIndex;
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    if (_activeChildElement != null) visitor(_activeChildElement!);
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    rebuild();
+    if (_activeChildElement != null) {
+      return _activeChildElement!.layout(constraints);
+    }
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    if (_activeChildElement != null) {
+      _activeChildElement!.paint(buffer, offset);
+    }
   }
 }

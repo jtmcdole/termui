@@ -76,9 +76,12 @@ graph TD
 
 ## Running Examples
 
-To check out the windowing system and widgets, run any of the built-in examples:
+To check out the windowing system and widgets, navigate to the `packages/termui` directory and run any of the built-in examples:
 
 ```bash
+# Navigate to package directory
+cd packages/termui
+
 # 1. Runs the comprehensive interactive widget book
 dart run example/widget_book.dart
 

@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:characters/characters.dart';
 import '../buffer.dart';
 import '../layout.dart';
@@ -22,19 +23,118 @@ class LazyList extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0 || itemCount <= 0) return;
+  Element createElement() => LazyListElement(this);
+}
 
-    scrollOffset = scrollOffset.clamp(0, itemCount - 1);
+/// Mount element class corresponding to [LazyList].
+class LazyListElement extends Element {
+  /// Caches child elements created for the visible items.
+  List<Element?> childElements = [];
 
-    for (var i = 0; i < area.height; i++) {
-      final index = scrollOffset + i;
-      if (index >= itemCount) break;
+  /// Instantiates the rendering element for the given LazyList.
+  LazyListElement(LazyList super.widget);
 
-      final childWidget = itemBuilder(index);
-      final childArea = Rect(0, i, area.width, 1);
-      final vp = Viewport(buffer, childArea);
-      childWidget.render(vp, Rect(0, 0, area.width, 1));
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void unmount() {
+    for (final el in childElements) {
+      el?.unmount();
+    }
+    childElements.clear();
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final lazy = widget as LazyList;
+    _reconcileChildren(lazy.scrollOffset, childElements.length);
+  }
+
+  void _reconcileChildren(int start, int count) {
+    final lazy = widget as LazyList;
+    final targetCount = min(count, lazy.itemCount - start);
+
+    while (childElements.length > targetCount) {
+      childElements.removeLast()?.unmount();
+    }
+
+    while (childElements.length < targetCount) {
+      childElements.add(null);
+    }
+
+    for (var i = 0; i < targetCount; i++) {
+      final index = start + i;
+      if (index >= lazy.itemCount) break;
+      final childWidget = lazy.itemBuilder(index);
+      final currentChild = childElements[i];
+      if (currentChild != null &&
+          currentChild.widget.runtimeType == childWidget.runtimeType) {
+        currentChild.update(childWidget);
+      } else {
+        currentChild?.unmount();
+        final newChild = childWidget.createElement();
+        newChild.mount(this);
+        childElements[i] = newChild;
+      }
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    for (final el in childElements) {
+      if (el != null) visitor(el);
+    }
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final lazy = widget as LazyList;
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : lazy.itemCount;
+
+    if (lazy.itemCount > 0) {
+      lazy.scrollOffset = lazy.scrollOffset.clamp(0, lazy.itemCount - 1);
+    } else {
+      lazy.scrollOffset = 0;
+    }
+
+    final visibleCount = min(height, lazy.itemCount - lazy.scrollOffset);
+    _reconcileChildren(lazy.scrollOffset, height);
+
+    for (var i = 0; i < visibleCount; i++) {
+      final el = childElements[i];
+      if (el != null) {
+        el.layout(BoxConstraints.tight(Size(width, 1)));
+      }
+    }
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final lazy = widget as LazyList;
+    final limit = min(size.height, lazy.itemCount - lazy.scrollOffset);
+    for (var i = 0; i < limit; i++) {
+      final el = childElements[i];
+      if (el != null) {
+        final childRect = Rect(offset.dx, offset.dy + i, size.width, 1);
+        final vp = Viewport(buffer, childRect);
+        el.paint(vp, Offset.zero);
+      }
     }
   }
 }
@@ -131,70 +231,105 @@ class LazyTable extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => LazyTableElement(this);
+}
 
-    final hasHeaders = headers.isNotEmpty;
+/// Mount element class corresponding to [LazyTable].
+class LazyTableElement extends Element {
+  /// Column widths resolved during [performLayout].
+  List<int> resolvedColumnWidths = [];
+
+  /// Instantiates the rendering element for the given LazyTable.
+  LazyTableElement(LazyTable super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final table = widget as LazyTable;
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : (table.itemCount + (table.headers.isNotEmpty ? 2 : 0));
+
+    final hasHeaders = table.headers.isNotEmpty;
     final headerRowsCount = hasHeaders ? 2 : 0;
-    final usableHeight = area.height - headerRowsCount;
+    final usableHeight = height - headerRowsCount;
+
+    if (usableHeight > 0) {
+      table.adjustScroll(usableHeight);
+    }
+
+    resolvedColumnWidths = List<int>.generate(table.headers.length, (c) {
+      return c < table.columnWidths.length ? table.columnWidths[c] : 10;
+    });
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final table = widget as LazyTable;
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+
+    final hasHeaders = table.headers.isNotEmpty;
+    final headerRowsCount = hasHeaders ? 2 : 0;
+    final usableHeight = h - headerRowsCount;
 
     if (usableHeight <= 0) return;
 
     // 1. Render Headers
     if (hasHeaders) {
       final headerSb = StringBuffer();
-      for (var i = 0; i < headers.length; i++) {
-        final width = i < columnWidths.length ? columnWidths[i] : 10;
-        final text = headers[i];
+      for (var i = 0; i < table.headers.length; i++) {
+        final width = resolvedColumnWidths[i];
+        final text = table.headers[i];
         final chars = text.characters;
         final padded = chars.length >= width
             ? chars.take(width).toString()
             : chars.toString() + (' ' * (width - chars.length));
         headerSb.write(padded);
-        if (i < headers.length - 1) headerSb.write(' ');
+        if (i < table.headers.length - 1) headerSb.write(' ');
       }
       final headerChars = headerSb.toString().characters;
-      final headerStr = headerChars.length >= area.width
-          ? headerChars.take(area.width).toString()
-          : headerChars.toString() + (' ' * (area.width - headerChars.length));
-      buffer.writeString(0, 0, headerStr, headerStyle);
+      final headerStr = headerChars.length >= w
+          ? headerChars.take(w).toString()
+          : headerChars.toString() + (' ' * (w - headerChars.length));
+      buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
 
       // Render Divider Line
       final dividerChar = '─';
-      final divider = dividerChar * area.width;
-      buffer.writeString(0, 1, divider, borderStyle);
+      final divider = dividerChar * w;
+      buffer.writeString(offset.dx, offset.dy + 1, divider, table.borderStyle);
     }
 
-    // 2. Adjust Scroll
-    adjustScroll(usableHeight);
-
-    // 3. Render Visible Rows
+    // 2. Render Visible Rows
     for (var r = 0; r < usableHeight; r++) {
-      final rowIdx = scrollOffset + r;
-      if (rowIdx >= itemCount) break;
+      final rowIdx = table.scrollOffset + r;
+      if (rowIdx >= table.itemCount) break;
 
-      final rowData = itemBuilder(rowIdx);
-      final isSelected = rowIdx == selectedRowIndex;
-      final currentStyle = isSelected ? selectedRowStyle : rowStyle;
+      final rowData = table.itemBuilder(rowIdx);
+      final isSelected = rowIdx == table.selectedRowIndex;
+      final currentStyle = isSelected ? table.selectedRowStyle : table.rowStyle;
 
       final rowSb = StringBuffer();
-      for (var c = 0; c < headers.length; c++) {
-        final width = c < columnWidths.length ? columnWidths[c] : 10;
+      for (var c = 0; c < table.headers.length; c++) {
+        final width = resolvedColumnWidths[c];
         final cellText = c < rowData.length ? rowData[c] : '';
         final chars = cellText.characters;
         final padded = chars.length >= width
             ? chars.take(width).toString()
             : chars.toString() + (' ' * (width - chars.length));
         rowSb.write(padded);
-        if (c < headers.length - 1) rowSb.write(' ');
+        if (c < table.headers.length - 1) rowSb.write(' ');
       }
 
       final rowChars = rowSb.toString().characters;
-      final targetY = headerRowsCount + r;
+      final targetY = offset.dy + headerRowsCount + r;
 
-      for (var x = 0; x < area.width; x++) {
+      for (var x = 0; x < w; x++) {
         final char = x < rowChars.length ? rowChars.elementAt(x) : ' ';
-        final cell = buffer.getCell(x, targetY);
+        final cell = buffer.getCell(offset.dx + x, targetY);
         if (cell != null) {
           cell.char = char;
           cell.style = currentStyle;

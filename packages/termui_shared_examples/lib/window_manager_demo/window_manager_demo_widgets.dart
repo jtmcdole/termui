@@ -15,23 +15,36 @@ class InfoWidget extends Widget {
   final List<String> keys = [];
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Element createElement() => _InfoElement(this);
+}
+
+class _InfoElement extends Element {
+  _InfoElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as InfoWidget;
     buffer.writeString(
-      0,
-      0,
+      offset.dx,
+      offset.dy,
       'Click windows to focus.\nWin 1 onKeyEvent logs keys below.\nPress Q on other windows to quit.',
       const Style(foreground: Colors.white),
     );
     buffer.writeString(
-      0,
-      4,
-      'Focused Win: $focusedWindow',
+      offset.dx,
+      offset.dy + 4,
+      'Focused Win: ${w.focusedWindow}',
       const Style(foreground: Colors.orange, modifiers: Modifier.bold),
     );
     buffer.writeString(
-      0,
-      6,
-      'Win 1 Keys: ${keys.map((k) => k == '\r' || k == '\n' ? 'Enter' : k).join(" ")}',
+      offset.dx,
+      offset.dy + 6,
+      'Win 1 Keys: ${w.keys.map((k) => k == '\r' || k == '\n' ? 'Enter' : k).join(" ")}',
       const Style(foreground: Colors.green, modifiers: Modifier.bold),
     );
   }
@@ -55,29 +68,42 @@ class MouseTrackerWidget extends Widget {
   String lastTransition = 'None';
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Element createElement() => _MouseTrackerElement(this);
+}
+
+class _MouseTrackerElement extends Element {
+  _MouseTrackerElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as MouseTrackerWidget;
     buffer.writeString(
-      0,
-      0,
-      'Cursor Coords: ($mouseX, $mouseY)',
+      offset.dx,
+      offset.dy,
+      'Cursor Coords: (${w.mouseX}, ${w.mouseY})',
       const Style(foreground: Color(0, 255, 255), modifiers: Modifier.bold),
     );
     buffer.writeString(
-      0,
-      2,
-      'Hover Window: $hoverWindow',
+      offset.dx,
+      offset.dy + 2,
+      'Hover Window: ${w.hoverWindow}',
       const Style(foreground: Colors.white),
     );
     buffer.writeString(
-      0,
-      4,
-      'Event: $lastEvent',
+      offset.dx,
+      offset.dy + 4,
+      'Event: ${w.lastEvent}',
       const Style(foreground: Colors.white),
     );
     buffer.writeString(
-      0,
-      6,
-      'Log: $lastTransition',
+      offset.dx,
+      offset.dy + 6,
+      'Log: ${w.lastTransition}',
       const Style(foreground: Color(255, 255, 0)),
     );
   }
@@ -92,13 +118,26 @@ class SizeWidget extends Widget {
   SizeWidget(this.windowFn);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final win = windowFn();
+  Element createElement() => _SizeElement(this);
+}
+
+class _SizeElement extends Element {
+  _SizeElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final wWidget = widget as SizeWidget;
+    final win = wWidget.windowFn();
     final w = win.bounds.width;
     final h = win.bounds.height;
     buffer.writeString(
-      0,
-      0,
+      offset.dx,
+      offset.dy,
       'Drag bottom corners (╚/╝) to resize.\n\nWidth:  $w\nHeight: $h',
       const Style(foreground: Colors.white),
     );
@@ -111,10 +150,24 @@ class BrailleCanvasWidget extends Widget {
   int frame = 0;
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final w = area.width;
-    final h = area.height;
+  Element createElement() => _BrailleCanvasElement(this);
+}
+
+class _BrailleCanvasElement extends Element {
+  _BrailleCanvasElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = size.width;
+    final h = size.height;
     if (w <= 0 || h <= 0) return;
+    final target = widget as BrailleCanvasWidget;
+    final frame = target.frame;
 
     final canvas = Canvas(w, h, style: const Style(foreground: Colors.green));
 
@@ -138,6 +191,9 @@ class BrailleCanvasWidget extends Widget {
       canvas.setPixel(px, py, true);
     }
 
-    canvas.render(buffer, Rect(0, 0, w, h));
+    final canvasEl = canvas.createElement()..mount(null);
+    canvasEl.layout(BoxConstraints.tight(Size(w, h)));
+    canvasEl.paint(buffer, offset);
+    canvasEl.unmount();
   }
 }

@@ -195,7 +195,9 @@ void main() async {
       ..sort((a, b) => a.zIndex.compareTo(b.zIndex));
 
     for (final win in sortedWins) {
-      win.render(screenBuffer, Rect(0, 0, width, height));
+      final winElement = win.createElement()..mount(null);
+      winElement.layout(BoxConstraints.tight(Size(width, height)));
+      winElement.paint(screenBuffer, Offset.zero);
     }
 
     // Top status bar

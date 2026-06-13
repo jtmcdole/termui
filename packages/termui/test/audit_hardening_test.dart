@@ -11,9 +11,28 @@ class MockWidget extends Widget {
   Rect? renderedArea;
 
   @override
-  void render(Buffer buffer, Rect area) {
-    rendered = true;
-    renderedArea = area;
+  Element createElement() => MockElement(this);
+}
+
+class MockElement extends Element {
+  MockElement(MockWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as MockWidget;
+    w.rendered = true;
+    w.renderedArea = Rect(offset.dx, offset.dy, size.width, size.height);
   }
 }
 
@@ -61,15 +80,21 @@ void main() {
       final items = [Flexible(child: mock)];
 
       final row = Row(items);
-      row.render(buffer, const Rect(0, 0, 0, 10));
+      final rowEl = row.createElement()..mount(null);
+      rowEl.layout(BoxConstraints.tight(const Size(0, 10)));
+      rowEl.paint(buffer, Offset.zero);
       expect(mock.rendered, isFalse);
 
       final col = Column(items);
-      col.render(buffer, const Rect(0, 0, 10, -5));
+      final colEl = col.createElement()..mount(null);
+      colEl.layout(BoxConstraints.tight(const Size(10, -5)));
+      colEl.paint(buffer, Offset.zero);
       expect(mock.rendered, isFalse);
 
       final stack = Stack([mock]);
-      stack.render(buffer, const Rect(0, 0, -2, 0));
+      final stackEl = stack.createElement()..mount(null);
+      stackEl.layout(BoxConstraints.tight(const Size(-2, 0)));
+      stackEl.paint(buffer, Offset.zero);
       expect(mock.rendered, isFalse);
     });
 
@@ -85,7 +110,11 @@ void main() {
         );
 
         // Width of 1 (too small for borders) should not crash and should not render child
-        win.render(buffer, const Rect(0, 0, 10, 10));
+        final winEl = win.createElement()..mount(null);
+        winEl.layout(
+          BoxConstraints.tight(Size(win.bounds.width, win.bounds.height)),
+        );
+        winEl.paint(buffer, Offset.zero);
         expect(child.rendered, isFalse);
 
         // Width/height <= 0 should return immediately
@@ -94,7 +123,13 @@ void main() {
           bounds: const Rect(0, 0, 0, 0),
           child: child,
         );
-        winZero.render(buffer, const Rect(0, 0, 10, 10));
+        final winZeroEl = winZero.createElement()..mount(null);
+        winZeroEl.layout(
+          BoxConstraints.tight(
+            Size(winZero.bounds.width, winZero.bounds.height),
+          ),
+        );
+        winZeroEl.paint(buffer, Offset.zero);
         expect(child.rendered, isFalse);
       },
     );
@@ -110,10 +145,13 @@ void main() {
       );
 
       // Should clip the title safely without throwing a RangeError/ArgumentError
-      expect(
-        () => win.render(buffer, const Rect(0, 0, 20, 5)),
-        returnsNormally,
-      );
+      expect(() {
+        final el = win.createElement()..mount(null);
+        el.layout(
+          BoxConstraints.tight(Size(win.bounds.width, win.bounds.height)),
+        );
+        el.paint(buffer, Offset.zero);
+      }, returnsNormally);
       expect(win.isPositionOnTitle(3, 0), isTrue);
     });
 
@@ -121,27 +159,30 @@ void main() {
       final buffer = Buffer(10, 5);
 
       final label = const Text('🌟✨💫🔥');
-      expect(
-        () => label.render(buffer, const Rect(0, 0, 3, 1)),
-        returnsNormally,
-      );
+      expect(() {
+        final el = label.createElement()..mount(null);
+        el.layout(BoxConstraints.tight(const Size(3, 1)));
+        el.paint(buffer, Offset.zero);
+      }, returnsNormally);
 
       // Paragraph wrapping of long emoji sequences
       final paragraph = Text('🌟✨ 💫🔥💥⚡️🌈');
-      expect(
-        () => paragraph.render(buffer, const Rect(0, 0, 4, 5)),
-        returnsNormally,
-      );
+      expect(() {
+        final el = paragraph.createElement()..mount(null);
+        el.layout(BoxConstraints.tight(const Size(4, 5)));
+        el.paint(buffer, Offset.zero);
+      }, returnsNormally);
     });
 
     test('ListWidget, Table, and NumberSelector handle emojis safely', () {
       final buffer = Buffer(20, 10);
 
       final list = ListWidget(['🌟 item 1', '🔥 item 2']);
-      expect(
-        () => list.render(buffer, const Rect(0, 0, 10, 5)),
-        returnsNormally,
-      );
+      expect(() {
+        final el = list.createElement()..mount(null);
+        el.layout(BoxConstraints.tight(const Size(10, 5)));
+        el.paint(buffer, Offset.zero);
+      }, returnsNormally);
 
       final table = Table(
         headers: ['Header 🌟', 'Header 2'],
@@ -150,10 +191,11 @@ void main() {
         ],
         columnWidths: [10, 8],
       );
-      expect(
-        () => table.render(buffer, const Rect(0, 0, 20, 5)),
-        returnsNormally,
-      );
+      expect(() {
+        final el = table.createElement()..mount(null);
+        el.layout(BoxConstraints.tight(const Size(20, 5)));
+        el.paint(buffer, Offset.zero);
+      }, returnsNormally);
 
       final selector = NumberSelector(
         label: 'Selector 🌟',
@@ -161,10 +203,11 @@ void main() {
         min: 0,
         max: 10,
       );
-      expect(
-        () => selector.render(buffer, const Rect(0, 0, 20, 1)),
-        returnsNormally,
-      );
+      expect(() {
+        final el = selector.createElement()..mount(null);
+        el.layout(BoxConstraints.tight(const Size(20, 1)));
+        el.paint(buffer, Offset.zero);
+      }, returnsNormally);
     });
   });
 

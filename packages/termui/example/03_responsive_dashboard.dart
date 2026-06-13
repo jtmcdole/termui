@@ -22,22 +22,99 @@ class SafeLayout extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width < minWidth || area.height < minHeight) {
-      final fallback = Center(
-        child: Text(
-          'Screen too small!',
-          style: Style(foreground: Colors.red, modifiers: Modifier.bold),
-        ),
-      );
-      fallback.render(buffer, area);
+  Element createElement() => SafeLayoutElement(this);
+
+  @override
+  int getIntrinsicHeight(int width) => child.getIntrinsicHeight(width);
+}
+
+class SafeLayoutElement extends Element {
+  Element? fallbackElement;
+  Element? childElement;
+  bool useFallback = false;
+
+  SafeLayoutElement(SafeLayout super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final sl = widget as SafeLayout;
+    final fallback = Center(
+      child: Text(
+        'Screen too small!',
+        style: Style(foreground: Colors.red, modifiers: Modifier.bold),
+      ),
+    );
+
+    if (fallbackElement != null) {
+      fallbackElement!.update(fallback);
     } else {
-      child.render(buffer, area);
+      fallbackElement = fallback.createElement();
+      fallbackElement!.mount(this);
+    }
+
+    if (childElement != null &&
+        childElement!.widget.runtimeType == sl.child.runtimeType) {
+      childElement!.update(sl.child);
+    } else {
+      childElement?.unmount();
+      childElement = sl.child.createElement();
+      childElement!.mount(this);
     }
   }
 
   @override
-  int getIntrinsicHeight(int width) => child.getIntrinsicHeight(width);
+  void visitChildren(void Function(Element child) visitor) {
+    if (useFallback) {
+      if (fallbackElement != null) visitor(fallbackElement!);
+    } else {
+      if (childElement != null) visitor(childElement!);
+    }
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final sl = widget as SafeLayout;
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+
+    if (w < sl.minWidth || h < sl.minHeight) {
+      useFallback = true;
+      if (fallbackElement != null) {
+        fallbackElement!.layout(constraints);
+      }
+    } else {
+      useFallback = false;
+      if (childElement != null) {
+        childElement!.layout(constraints);
+      }
+    }
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    if (useFallback) {
+      fallbackElement?.paint(buffer, offset);
+    } else {
+      childElement?.paint(buffer, offset);
+    }
+  }
 }
 
 /// A component that renders status indicators with custom styles and borders.
@@ -192,24 +269,47 @@ class _LogWindowRender extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => _LogWindowRenderElement(this);
+}
 
-    // Verify cache before rendering
-    onRender(area.width);
+class _LogWindowRenderElement extends Element {
+  _LogWindowRenderElement(_LogWindowRender super.widget);
 
-    final wrappedLines = getWrappedLines();
-    final startIdx = max(0, wrappedLines.length - area.height);
-    final visibleLines = wrappedLines.sublist(startIdx);
-
-    for (var i = 0; i < visibleLines.length; i++) {
-      if (i >= area.height) break;
-      buffer.writeString(0, i, visibleLines[i], Style.empty);
-    }
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
   }
 
   @override
-  int getIntrinsicHeight(int width) => 0;
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as _LogWindowRender;
+    final areaWidth = size.width.toInt();
+    final areaHeight = size.height.toInt();
+    if (areaWidth <= 0 || areaHeight <= 0) return;
+
+    // Verify cache before rendering
+    w.onRender(areaWidth);
+
+    final wrappedLines = w.getWrappedLines();
+    final startIdx = max(0, wrappedLines.length - areaHeight);
+    final visibleLines = wrappedLines.sublist(startIdx);
+
+    for (var i = 0; i < visibleLines.length; i++) {
+      if (i >= areaHeight) break;
+      buffer.writeString(
+        offset.dx.toInt(),
+        offset.dy.toInt() + i,
+        visibleLines[i],
+        Style.empty,
+      );
+    }
+  }
 }
 
 /// Helper function to wrap text safely using characters visual width measurement.
@@ -505,7 +605,8 @@ void main() async {
     void drawFrame() {
       buffer.clear();
       buffer.fill(Cell(' ', Style.empty));
-      elementWrapper.render(buffer, Rect(0, 0, width, height));
+      elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       final sb = StringBuffer();
       renderer.render(buffer, sb);

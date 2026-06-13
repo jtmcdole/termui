@@ -57,7 +57,9 @@ Future<void> runScenarioADemo(
       ),
     ]);
 
-    layout.render(screenBuffer, Rect(0, 0, width, height));
+    final elementWrapper = ElementWidget(layout);
+    elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+    elementWrapper.paint(screenBuffer, Offset.zero);
 
     if (onFrameRedrawn != null) {
       onFrameRedrawn(screenBuffer);

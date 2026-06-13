@@ -109,6 +109,8 @@ Future<void> runWidgetBookShared(
   var statusMessage = '';
   Timer? statusClearTimer;
 
+  Element? rootElement;
+
   void setStatus(String msg) {
     statusMessage = msg;
     statusClearTimer?.cancel();
@@ -181,7 +183,7 @@ Future<void> runWidgetBookShared(
         lastFpsMs = currentMs;
       }
 
-      _drawFrame(
+      rootElement = _drawFrame(
         terminal: terminal,
         buffer: buffer,
         renderer: renderer,
@@ -197,6 +199,7 @@ Future<void> runWidgetBookShared(
         platform: platform,
         isRecordingCast: isRecordingCast,
         statusMessage: statusMessage,
+        rootElement: rootElement,
       );
 
       if (isRecordingCast && castRecorder != null) {
@@ -402,6 +405,7 @@ Future<void> runWidgetBookShared(
     platform.stopTicker();
     sizeSubscription.cancel();
     statusClearTimer?.cancel();
+    rootElement?.unmount();
 
     if (isRecordingCast && castOutput != null) {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -420,7 +424,7 @@ Future<void> runWidgetBookShared(
   }
 }
 
-void _drawFrame({
+Element? _drawFrame({
   required term.Terminal terminal,
   required Buffer buffer,
   required Renderer renderer,
@@ -436,6 +440,7 @@ void _drawFrame({
   required WidgetBookPlatform platform,
   bool isRecordingCast = false,
   String statusMessage = '',
+  Element? rootElement,
 }) {
   buffer.clear();
 
@@ -548,7 +553,15 @@ void _drawFrame({
   Tracer.record(_traceFrameBuildId, Phase.end);
 
   Tracer.record(_traceFrameRenderId, Phase.begin);
-  appLayout.render(buffer, Rect(0, 0, width, height));
+  final Element currentRootElement;
+  if (rootElement == null) {
+    currentRootElement = appLayout.createElement()..mount(null);
+  } else {
+    currentRootElement = rootElement;
+    currentRootElement.update(appLayout);
+  }
+  currentRootElement.layout(BoxConstraints.tight(Size(width, height)));
+  currentRootElement.paint(buffer, Offset.zero);
 
   if (showModalDemo) {
     activeExample.renderOverlay(buffer, width, height);
@@ -649,6 +662,7 @@ void _drawFrame({
     }
   }
   Tracer.record(_traceFrameOutputId, Phase.end);
+  return currentRootElement;
 }
 
 String _getHeaderText({

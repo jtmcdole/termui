@@ -136,31 +136,62 @@ class ModalOverlay extends Window {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (bounds.width <= 0 || bounds.height <= 0) return;
+  Element createElement() => ModalOverlayElement(this);
+}
+
+/// Element class corresponding to [ModalOverlay], managing layout and paint of the modal.
+class ModalOverlayElement extends WindowElement {
+  /// Instantiates the rendering element for the given ModalOverlay.
+  ModalOverlayElement(ModalOverlay super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final modal = widget as ModalOverlay;
+    final width = constraints.hasBoundedWidth
+        ? constraints.maxWidth
+        : modal.bounds.width;
+    final height = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : modal.bounds.height;
+
+    if (childElement != null) {
+      final childW = max(0, modal.dialogBounds.width - 2);
+      final childH = max(0, modal.dialogBounds.height - 2);
+      childElement!.layout(BoxConstraints.tight(Size(childW, childH)));
+    }
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final modal = widget as ModalOverlay;
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
 
     // 1. Check/force focus to modal if it got lost/not set
     bool anyFocused = false;
-    for (final node in modalFocusNodes) {
+    for (final node in modal.modalFocusNodes) {
       if (node.isFocused) {
         anyFocused = true;
         break;
       }
     }
-    if (!anyFocused && modalFocusNodes.isNotEmpty) {
-      modalFocusNodes.first.requestFocus();
+    if (!anyFocused && modal.modalFocusNodes.isNotEmpty) {
+      modal.modalFocusNodes.first.requestFocus();
     }
 
     // 2. Draw the background scrim (dimming the cells beneath the modal)
-    for (var y = 0; y < bounds.height; y++) {
-      for (var x = 0; x < bounds.width; x++) {
-        final cell = buffer.getCell(bounds.x + x, bounds.y + y);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final cell = buffer.getCell(offset.dx + x, offset.dy + y);
         if (cell != null) {
           final isInsideDialog =
-              x >= dialogBounds.x &&
-              x < dialogBounds.x + dialogBounds.width &&
-              y >= dialogBounds.y &&
-              y < dialogBounds.y + dialogBounds.height;
+              x >= modal.dialogBounds.x &&
+              x < modal.dialogBounds.x + modal.dialogBounds.width &&
+              y >= modal.dialogBounds.y &&
+              y < modal.dialogBounds.y + modal.dialogBounds.height;
           if (!isInsideDialog) {
             cell.style = Style(
               foreground: cell.style.foreground,
@@ -173,9 +204,97 @@ class ModalOverlay extends Window {
     }
 
     // 3. Draw the central dialog box inside dialogBounds
-    final originalBounds = bounds;
-    bounds = dialogBounds;
-    super.render(buffer, area);
-    bounds = originalBounds;
+    final dialogX = offset.dx + modal.dialogBounds.x;
+    final dialogY = offset.dy + modal.dialogBounds.y;
+    final dw = modal.dialogBounds.width;
+    final dh = modal.dialogBounds.height;
+
+    if (dw < 2 || dh < 2) {
+      for (var y = 0; y < dh; y++) {
+        for (var x = 0; x < dw; x++) {
+          final cell = buffer.getCell(dialogX + x, dialogY + y);
+          if (cell != null) {
+            cell.char = ' ';
+            cell.style = modal.borderStyle;
+          }
+        }
+      }
+      return;
+    }
+
+    // Draw top border
+    final topBorder =
+        modal.borderChars[0] +
+        modal.borderChars[1] * (dw - 2) +
+        modal.borderChars[2];
+    buffer.writeString(dialogX, dialogY, topBorder, modal.borderStyle);
+
+    // Overlay title
+    if (modal.title.isNotEmpty) {
+      final titleChars = modal.title.characters;
+      final maxTitleLen = dw - 4;
+      String displayedTitle;
+      if (titleChars.length > maxTitleLen) {
+        final cutLen = dw - 7;
+        if (cutLen > 0) {
+          displayedTitle = ' ${titleChars.take(cutLen).toString()}... ';
+        } else {
+          displayedTitle = '';
+        }
+      } else {
+        displayedTitle = ' ${modal.title} ';
+      }
+
+      if (displayedTitle.isNotEmpty) {
+        final dispChars = displayedTitle.characters;
+        final titleX = max(
+          1,
+          min(dw - 2, ((dw - dispChars.length) / 2).floor()),
+        );
+        buffer.writeString(
+          dialogX + titleX,
+          dialogY,
+          displayedTitle,
+          modal.titleStyle,
+        );
+      }
+    }
+
+    // Side borders
+    for (var y = 1; y < dh - 1; y++) {
+      buffer.writeString(
+        dialogX,
+        dialogY + y,
+        modal.borderChars[3],
+        modal.borderStyle,
+      );
+      buffer.writeString(
+        dialogX + dw - 1,
+        dialogY + y,
+        modal.borderChars[5],
+        modal.borderStyle,
+      );
+    }
+
+    // Bottom border
+    final bottomBorder =
+        modal.borderChars[6] +
+        modal.borderChars[7] * (dw - 2) +
+        modal.borderChars[8];
+    buffer.writeString(
+      dialogX,
+      dialogY + dh - 1,
+      bottomBorder,
+      modal.borderStyle,
+    );
+
+    // Render child content viewport
+    final contentArea = Rect(dialogX + 1, dialogY + 1, dw - 2, dh - 2);
+    final contentViewport = Viewport(buffer, contentArea);
+    contentViewport.fill(Cell(' ', modal.backgroundStyle));
+
+    if (childElement != null) {
+      childElement!.paint(contentViewport, Offset.zero);
+    }
   }
 }

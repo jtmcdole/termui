@@ -24,24 +24,6 @@ class Padding extends Widget {
   Element createElement() => PaddingElement(this);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final childWidth = area.width - padding.left - padding.right;
-    final childHeight = area.height - padding.top - padding.bottom;
-
-    if (childWidth <= 0 || childHeight <= 0) return;
-
-    final childArea = Rect(
-      area.x + padding.left,
-      area.y + padding.top,
-      childWidth,
-      childHeight,
-    );
-
-    final childViewport = Viewport(buffer, childArea);
-    child.render(childViewport, Rect(0, 0, childWidth, childHeight));
-  }
-
-  @override
   int getIntrinsicHeight(int width) {
     final childWidth = width - padding.left - padding.right;
     if (childWidth <= 0) return padding.top + padding.bottom;
@@ -53,41 +35,100 @@ class Padding extends Widget {
 class PaddingElement extends Element {
   /// The instantiated element corresponding to the child widget.
   Element? childElement;
+  Offset _childOffset = Offset.zero;
 
   /// Creates an element for the [Padding] widget.
   PaddingElement(Padding super.widget);
 
   @override
-  void visitChildren(void Function(Element child) visitor) {
-    if (childElement != null) visitor(childElement!);
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final paddingWidget = widget as Padding;
-    final childWidth =
-        area.width - paddingWidget.padding.left - paddingWidget.padding.right;
-    final childHeight =
-        area.height - paddingWidget.padding.top - paddingWidget.padding.bottom;
-
-    if (childWidth <= 0 || childHeight <= 0) return;
-
-    final childArea = Rect(
-      area.x + paddingWidget.padding.left,
-      area.y + paddingWidget.padding.top,
-      childWidth,
-      childHeight,
-    );
-
     if (childElement != null &&
         childElement!.widget.runtimeType == paddingWidget.child.runtimeType) {
       childElement!.update(paddingWidget.child);
     } else {
+      childElement?.unmount();
       childElement = paddingWidget.child.createElement();
       childElement!.mount(this);
     }
+  }
 
-    final childViewport = Viewport(buffer, childArea);
-    childElement!.render(childViewport, Rect(0, 0, childWidth, childHeight));
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final paddingWidget = widget as Padding;
+    final padding = paddingWidget.padding;
+
+    final doubleWidth = padding.left + padding.right;
+    final doubleHeight = padding.top + padding.bottom;
+
+    final childMinWidth = constraints.minWidth - doubleWidth < 0
+        ? 0
+        : constraints.minWidth - doubleWidth;
+    final childMaxWidth = constraints.maxWidth == BoxConstraints.infinity
+        ? BoxConstraints.infinity
+        : (constraints.maxWidth - doubleWidth < 0
+              ? 0
+              : constraints.maxWidth - doubleWidth);
+    final childMinHeight = constraints.minHeight - doubleHeight < 0
+        ? 0
+        : constraints.minHeight - doubleHeight;
+    final childMaxHeight = constraints.maxHeight == BoxConstraints.infinity
+        ? BoxConstraints.infinity
+        : (constraints.maxHeight - doubleHeight < 0
+              ? 0
+              : constraints.maxHeight - doubleHeight);
+
+    final childConstraints = BoxConstraints(
+      minWidth: childMinWidth,
+      maxWidth: childMaxWidth,
+      minHeight: childMinHeight,
+      maxHeight: childMaxHeight,
+    );
+
+    _childOffset = Offset(padding.left, padding.top);
+
+    if (childElement != null) {
+      final childSize = childElement!.layout(childConstraints);
+      return Size(
+        childSize.width + doubleWidth,
+        childSize.height + doubleHeight,
+      );
+    }
+
+    return Size(doubleWidth, doubleHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final paddingWidget = widget as Padding;
+    final padding = paddingWidget.padding;
+    final doubleWidth = padding.left + padding.right;
+    final doubleHeight = padding.top + padding.bottom;
+    if (size.width > doubleWidth && size.height > doubleHeight) {
+      childElement?.paint(buffer, offset + _childOffset);
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    if (childElement != null) visitor(childElement!);
   }
 }

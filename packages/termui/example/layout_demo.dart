@@ -75,7 +75,9 @@ void main() {
     ),
   ]);
 
-  layout.render(buffer, const Rect(0, 0, width, height));
+  final elementWrapper = ElementWidget(layout);
+  elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+  elementWrapper.paint(buffer, Offset.zero);
 
   final buf = StringBuffer();
   // Render buffer to stdout

@@ -146,7 +146,10 @@ class ModalDialogExample extends WidgetBookExample {
         ),
       ]),
     );
-    modal.render(buffer, Rect(0, 0, width, height));
+    final modalEl = modal.createElement()..mount(null);
+    modalEl.layout(BoxConstraints.tight(Size(width, height)));
+    modalEl.paint(buffer, Offset.zero);
+    modalEl.unmount();
   }
 
   @override

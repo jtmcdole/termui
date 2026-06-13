@@ -23,10 +23,29 @@ class TestWidget extends Widget {
   const TestWidget(this.char);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    for (var y = 0; y < area.height; y++) {
-      for (var x = 0; x < area.width; x++) {
-        buffer.setCell(area.x + x, area.y + y, Cell(char, Style.empty));
+  Element createElement() => TestWidgetElement(this);
+}
+
+class TestWidgetElement extends Element {
+  TestWidgetElement(TestWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as TestWidget;
+    for (var y = 0; y < size.height; y++) {
+      for (var x = 0; x < size.width; x++) {
+        buffer.setCell(offset.dx + x, offset.dy + y, Cell(w.char, Style.empty));
       }
     }
   }
@@ -40,7 +59,8 @@ void main() {
 
       final element = widget.createElement();
       element.mount(null);
-      element.render(buffer, const Rect(0, 0, 1, 1));
+      element.layout(BoxConstraints.tight(const Size(1, 1)));
+      element.paint(buffer, Offset.zero);
 
       // Default dark theme primaryStyle has white foreground
       expect(buffer.getCell(0, 0)!.char, 'W');
@@ -55,7 +75,8 @@ void main() {
 
       final element = widget.createElement();
       element.mount(null);
-      element.render(buffer, const Rect(0, 0, 1, 1));
+      element.layout(BoxConstraints.tight(const Size(1, 1)));
+      element.paint(buffer, Offset.zero);
 
       // Light theme primaryStyle has black foreground
       expect(buffer.getCell(0, 0)!.char, 'B');
@@ -73,7 +94,9 @@ void main() {
         child: const TestWidget('X'),
       );
 
-      widget.render(buffer, const Rect(0, 0, 4, 4));
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(4, 4)));
+      wrapper.paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -91,7 +114,9 @@ void main() {
         child: const TestWidget(' '),
       );
 
-      widget.render(buffer, const Rect(0, 0, 3, 3));
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -109,7 +134,9 @@ void main() {
         child: const TestWidget(' '),
       );
 
-      widget.render(buffer, const Rect(0, 0, 3, 3));
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -127,7 +154,9 @@ void main() {
         child: const TestWidget(' '),
       );
 
-      widget.render(buffer, const Rect(0, 0, 3, 3));
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -150,7 +179,9 @@ void main() {
       final buffer = Buffer.blank(10, 1);
       final widget = const Text('Hello你好', wrap: false);
 
-      widget.render(buffer, const Rect(0, 0, 10, 1));
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(10, 1)));
+      wrapper.paint(buffer, Offset.zero);
       // "Hello你好": Hello is 5, 你好 is 4. Total = 9.
       expect(buffer.getCell(0, 0)!.char, 'H');
       expect(buffer.getCell(5, 0)!.char, '你');
@@ -167,7 +198,9 @@ void main() {
         wrap: false,
       ); // Hello = 5, 你 = 2. Total = 7.
 
-      widget.render(buffer, const Rect(0, 0, 6, 1));
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(6, 1)));
+      wrapper.paint(buffer, Offset.zero);
       // Should show "Hello" and a space since "你" requires 2 cells but only 1 remains.
       expect(buffer.getCell(0, 0)!.char, 'H');
       expect(buffer.getCell(4, 0)!.char, 'o');
@@ -183,7 +216,9 @@ void main() {
       // Line 3: "World" (5).
       final widget = const Text('Hello 你好 😀 World', wrap: true);
 
-      widget.render(buffer, const Rect(0, 0, 8, 3));
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(8, 3)));
+      wrapper.paint(buffer, Offset.zero);
 
       // Line 1
       expect(buffer.getCell(0, 0)!.char, 'H');
@@ -210,21 +245,24 @@ void main() {
       final bufferCenter = Buffer.blank(10, 1);
       final bufferRight = Buffer.blank(10, 1);
 
-      const Text(
-        '你好',
-        wrap: false,
-        textAlign: TextAlign.left,
-      ).render(bufferLeft, const Rect(0, 0, 10, 1));
-      const Text(
+      final wLeft = const Text('你好', wrap: false, textAlign: TextAlign.left);
+      final wrapperLeft = ElementWidget(wLeft);
+      wrapperLeft.layout(BoxConstraints.tight(const Size(10, 1)));
+      wrapperLeft.paint(bufferLeft, Offset.zero);
+
+      final wCenter = const Text(
         '你好',
         wrap: false,
         textAlign: TextAlign.center,
-      ).render(bufferCenter, const Rect(0, 0, 10, 1));
-      const Text(
-        '你好',
-        wrap: false,
-        textAlign: TextAlign.right,
-      ).render(bufferRight, const Rect(0, 0, 10, 1));
+      );
+      final wrapperCenter = ElementWidget(wCenter);
+      wrapperCenter.layout(BoxConstraints.tight(const Size(10, 1)));
+      wrapperCenter.paint(bufferCenter, Offset.zero);
+
+      final wRight = const Text('你好', wrap: false, textAlign: TextAlign.right);
+      final wrapperRight = ElementWidget(wRight);
+      wrapperRight.layout(BoxConstraints.tight(const Size(10, 1)));
+      wrapperRight.paint(bufferRight, Offset.zero);
 
       // Left
       expect(bufferLeft.getCell(0, 0)!.char, '你');

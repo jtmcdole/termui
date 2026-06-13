@@ -20,6 +20,7 @@ void main() async {
     height - 2,
     style: const Style(foreground: Colors.green),
   );
+  final canvasElement = canvas.createElement()..mount(null);
 
   print('\x1b[?25l'); // Hide cursor
   print('\x1b[2J'); // Clear screen
@@ -58,9 +59,11 @@ void main() async {
       const Style(foreground: Colors.white, modifiers: Modifier.bold),
     );
 
-    // Render canvas inside the layout area
     final canvasArea = const Rect(0, 1, width, height - 2);
-    canvas.render(buffer, canvasArea);
+    canvasElement.layout(
+      BoxConstraints.tight(Size(canvasArea.width, canvasArea.height)),
+    );
+    canvasElement.paint(buffer, Offset(canvasArea.x, canvasArea.y));
 
     buffer.writeString(
       0,

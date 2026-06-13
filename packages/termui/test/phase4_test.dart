@@ -7,9 +7,22 @@ import 'package:termui/ui/window.dart';
 
 class SimpleWidget extends Widget {
   const SimpleWidget();
+
   @override
-  void render(Buffer buffer, Rect area) {
-    buffer.writeString(0, 0, 'X', Style.empty);
+  Element createElement() => _SimpleElement(this);
+}
+
+class _SimpleElement extends Element {
+  _SimpleElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(const Size(1, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    buffer.writeString(offset.dx, offset.dy, 'X', Style.empty);
   }
 }
 
@@ -235,7 +248,9 @@ void main() {
         child: const SimpleWidget(),
       );
 
-      win.render(buffer, const Rect(0, 0, 15, 10));
+      ElementWidget(win)
+        ..layout(BoxConstraints.tight(const Size(15, 10)))
+        ..paint(buffer, Offset.zero);
 
       // Window bounds: (1, 1) to (10, 5) on buffer
       // Top border corner at (1, 1) is '┌'

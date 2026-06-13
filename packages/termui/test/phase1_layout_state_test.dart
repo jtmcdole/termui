@@ -9,15 +9,35 @@ class TestWidget extends Widget {
   const TestWidget(this.char);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (char.length == 1) {
+  Element createElement() => TestWidgetElement(this);
+}
+
+class TestWidgetElement extends Element {
+  TestWidgetElement(TestWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as TestWidget;
+    final area = Rect(offset.dx, offset.dy, size.width, size.height);
+    if (w.char.length == 1) {
       for (var y = 0; y < area.height; y++) {
         for (var x = 0; x < area.width; x++) {
-          buffer.setCell(x, y, Cell(char, Style.empty));
+          buffer.setCell(area.x + x, area.y + y, Cell(w.char, Style.empty));
         }
       }
     } else {
-      buffer.writeString(0, 0, char, Style.empty);
+      buffer.writeString(area.x, area.y, w.char, Style.empty);
     }
   }
 }
@@ -102,7 +122,9 @@ void main() {
         child: const TestWidget('X'),
       );
 
-      padding.render(buffer, const Rect(0, 0, 6, 4));
+      final elementWrapper = ElementWidget(padding);
+      elementWrapper.layout(BoxConstraints.tight(const Size(6, 4)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       // Rect bounds: left=2, top=1, right=1, bottom=1.
       // Width = 6 - 2 - 1 = 3. Height = 4 - 1 - 1 = 2.
@@ -125,7 +147,9 @@ void main() {
         const Flexible(flex: 2, child: TestWidget('C')),
       ]);
 
-      row.render(buffer, const Rect(0, 0, 10, 1));
+      final elementWrapper = ElementWidget(row);
+      elementWrapper.layout(BoxConstraints.tight(const Size(10, 1)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       // Total width = 10.
       // Sized child width = 2. Remaining width = 8.
@@ -151,7 +175,9 @@ void main() {
         const Expanded(child: TestWidget('B')),
       ]);
 
-      column.render(buffer, const Rect(0, 0, 1, 6));
+      final elementWrapper = ElementWidget(column);
+      elementWrapper.layout(BoxConstraints.tight(const Size(1, 6)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       // Total height = 6.
       // Sized child = 2. Remaining = 4.
@@ -179,7 +205,9 @@ void main() {
         ),
       ]);
 
-      stack.render(buffer, const Rect(0, 0, 5, 5));
+      final elementWrapper = ElementWidget(stack);
+      elementWrapper.layout(BoxConstraints.tight(const Size(5, 5)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       // Base: A fills entire 5x5.
       // Overlay: B renders at x: [1, 2], y: 2.
@@ -197,7 +225,9 @@ void main() {
         child: const SizedBox(width: 1, height: 1, child: TestWidget('X')),
       );
 
-      center.render(buffer, const Rect(0, 0, 5, 5));
+      final elementWrapper = ElementWidget(center);
+      elementWrapper.layout(BoxConstraints.tight(const Size(5, 5)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       // Buffer size 5x5. Child size 1x1.
       // Centered: remaining = 4. offset = 4 / 2 = 2.
@@ -218,7 +248,8 @@ void main() {
       element.mount(null);
 
       // Render initial state
-      element.render(buffer, const Rect(0, 0, 10, 1));
+      element.layout(BoxConstraints.tight(const Size(10, 1)));
+      element.paint(buffer, Offset.zero);
       expect(buffer.getCell(0, 0)!.char, 'v');
       expect(buffer.getCell(4, 0)!.char, '0');
 
@@ -227,7 +258,8 @@ void main() {
       state.increment();
 
       // Render updated state
-      element.render(buffer, const Rect(0, 0, 10, 1));
+      element.layout(BoxConstraints.tight(const Size(10, 1)));
+      element.paint(buffer, Offset.zero);
       expect(buffer.getCell(4, 0)!.char, '1');
     });
   });
@@ -240,7 +272,8 @@ void main() {
       final element = widget.createElement();
       element.mount(null);
 
-      element.render(buffer, const Rect(0, 0, 5, 1));
+      element.layout(BoxConstraints.tight(const Size(5, 1)));
+      element.paint(buffer, Offset.zero);
       expect(buffer.getCell(0, 0)!.char, 'R');
     });
   });

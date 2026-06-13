@@ -290,82 +290,7 @@ class Window extends Widget {
        focusNode = focusNode ?? FocusNode(id: title);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (bounds.width <= 0 || bounds.height <= 0) return;
-
-    // Render window inside parent buffer at this window's bounds.
-    final absoluteBounds = Rect(
-      area.x + bounds.x,
-      area.y + bounds.y,
-      bounds.width,
-      bounds.height,
-    );
-
-    final windowViewport = Viewport(buffer, absoluteBounds);
-    final w = bounds.width;
-    final h = bounds.height;
-
-    if (w < 2 || h < 2) {
-      for (var y = 0; y < h; y++) {
-        for (var x = 0; x < w; x++) {
-          final cell = windowViewport.getCell(x, y);
-          if (cell != null) {
-            cell.char = ' ';
-            cell.style = borderStyle;
-          }
-        }
-      }
-      return;
-    }
-
-    // Draw top border
-    final topBorder =
-        borderChars[0] + borderChars[1] * (w - 2) + borderChars[2];
-    windowViewport.writeString(0, 0, topBorder, borderStyle);
-
-    // Overlay title
-    if (title.isNotEmpty) {
-      final titleChars = title.characters;
-      final maxTitleLen = w - 4;
-      String displayedTitle;
-      if (titleChars.length > maxTitleLen) {
-        final cutLen = w - 7;
-        if (cutLen > 0) {
-          displayedTitle = ' ${titleChars.take(cutLen).toString()}... ';
-        } else {
-          displayedTitle = '';
-        }
-      } else {
-        displayedTitle = ' $title ';
-      }
-
-      if (displayedTitle.isNotEmpty) {
-        final dispChars = displayedTitle.characters;
-        final titleX = max(1, min(w - 2, ((w - dispChars.length) / 2).floor()));
-        windowViewport.writeString(titleX, 0, displayedTitle, titleStyle);
-      }
-    }
-
-    // Side borders
-    for (var y = 1; y < h - 1; y++) {
-      windowViewport.writeString(0, y, borderChars[3], borderStyle);
-      windowViewport.writeString(w - 1, y, borderChars[5], borderStyle);
-    }
-
-    // Bottom border
-    final bottomBorder =
-        borderChars[6] + borderChars[7] * (w - 2) + borderChars[8];
-    windowViewport.writeString(0, h - 1, bottomBorder, borderStyle);
-
-    // Render child content viewport
-    final contentArea = Rect(1, 1, w - 2, h - 2);
-    final contentViewport = Viewport(windowViewport, contentArea);
-    contentViewport.fill(Cell(' ', backgroundStyle));
-    child.render(
-      contentViewport,
-      Rect(0, 0, contentArea.width, contentArea.height),
-    );
-  }
+  Element createElement() => WindowElement(this);
 
   /// Returns true if the local coordinates [localX] and [localY] lie on the title text.
   bool isPositionOnTitle(int localX, int localY) {
@@ -391,6 +316,165 @@ class Window extends Widget {
     final dispChars = displayedTitle.characters;
     final titleX = max(1, min(w - 2, ((w - dispChars.length) / 2).floor()));
     return localX >= titleX && localX < titleX + dispChars.length;
+  }
+}
+
+/// Element class corresponding to [Window], managing child reconciliation, layout and paint.
+class WindowElement extends Element {
+  /// The element corresponding to the built child widget.
+  Element? childElement;
+
+  /// Instantiates the rendering element for the given Window.
+  WindowElement(Window super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final win = widget as Window;
+    if (childElement != null &&
+        childElement!.widget.runtimeType == win.child.runtimeType) {
+      childElement!.update(win.child);
+    } else {
+      childElement?.unmount();
+      childElement = win.child.createElement();
+      childElement!.mount(this);
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final win = widget as Window;
+    final width = win.bounds.width;
+    final height = win.bounds.height;
+
+    if (childElement != null) {
+      final childW = max(0, width - 2);
+      final childH = max(0, height - 2);
+      childElement!.layout(BoxConstraints.tight(Size(childW, childH)));
+    }
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final win = widget as Window;
+    final w = win.bounds.width;
+    final h = win.bounds.height;
+    final paintOffset = offset + Offset(win.bounds.x, win.bounds.y);
+
+    if (w < 2 || h < 2) {
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
+          final cell = buffer.getCell(paintOffset.dx + x, paintOffset.dy + y);
+          if (cell != null) {
+            cell.char = ' ';
+            cell.style = win.borderStyle;
+          }
+        }
+      }
+      return;
+    }
+
+    // Draw top border
+    final topBorder =
+        win.borderChars[0] + win.borderChars[1] * (w - 2) + win.borderChars[2];
+    buffer.writeString(
+      paintOffset.dx,
+      paintOffset.dy,
+      topBorder,
+      win.borderStyle,
+    );
+
+    // Overlay title
+    if (win.title.isNotEmpty) {
+      final titleChars = win.title.characters;
+      final maxTitleLen = w - 4;
+      String displayedTitle;
+      if (titleChars.length > maxTitleLen) {
+        final cutLen = w - 7;
+        if (cutLen > 0) {
+          displayedTitle = ' ${titleChars.take(cutLen).toString()}... ';
+        } else {
+          displayedTitle = '';
+        }
+      } else {
+        displayedTitle = ' ${win.title} ';
+      }
+
+      if (displayedTitle.isNotEmpty) {
+        final dispChars = displayedTitle.characters;
+        final titleX = max(1, min(w - 2, ((w - dispChars.length) / 2).floor()));
+        buffer.writeString(
+          paintOffset.dx + titleX,
+          paintOffset.dy,
+          displayedTitle,
+          win.titleStyle,
+        );
+      }
+    }
+
+    // Side borders
+    for (var y = 1; y < h - 1; y++) {
+      buffer.writeString(
+        paintOffset.dx,
+        paintOffset.dy + y,
+        win.borderChars[3],
+        win.borderStyle,
+      );
+      buffer.writeString(
+        paintOffset.dx + w - 1,
+        paintOffset.dy + y,
+        win.borderChars[5],
+        win.borderStyle,
+      );
+    }
+
+    // Bottom border
+    final bottomBorder =
+        win.borderChars[6] + win.borderChars[7] * (w - 2) + win.borderChars[8];
+    buffer.writeString(
+      paintOffset.dx,
+      paintOffset.dy + h - 1,
+      bottomBorder,
+      win.borderStyle,
+    );
+
+    // Render child content viewport
+    final contentArea = Rect(
+      paintOffset.dx + 1,
+      paintOffset.dy + 1,
+      w - 2,
+      h - 2,
+    );
+    final contentViewport = Viewport(buffer, contentArea);
+    contentViewport.fill(Cell(' ', win.backgroundStyle));
+
+    if (childElement != null) {
+      childElement!.paint(contentViewport, Offset.zero);
+    }
   }
 }
 

@@ -99,7 +99,9 @@ class MyApp extends StatelessWidget {
                   ]);
 
                   // Draw layout to buffer
-                  layout.render(buffer, termui.Rect(0, 0, termSize.x, termSize.y));
+                  final elementWrapper = termui.ElementWidget(layout);
+                  elementWrapper.layout(termui.BoxConstraints.tight(termui.Size(termSize.x, termSize.y)));
+                  elementWrapper.paint(buffer, termui.Offset.zero);
                   // Flush buffer to the Flutter painter
                   drawFrame(buffer);
                 }

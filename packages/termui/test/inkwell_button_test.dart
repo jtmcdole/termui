@@ -33,7 +33,8 @@ void main() {
       final tree = ElementWidget(btn);
       final buffer = Buffer.blank(10, 4);
 
-      tree.render(buffer, const Rect(0, 0, 10, 4));
+      tree.layout(BoxConstraints.tight(const Size(10, 4)));
+      tree.paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -56,7 +57,8 @@ void main() {
       final buffer = Buffer.blank(10, 4);
 
       // Render first to mount the element and state
-      tree.render(buffer, const Rect(0, 0, 10, 4));
+      tree.layout(BoxConstraints.tight(const Size(10, 4)));
+      tree.paint(buffer, Offset.zero);
 
       final state = tree.findState<InkwellButtonState>()!;
       expect(state.isHovered, isFalse);
@@ -76,7 +78,8 @@ void main() {
       expect(state.isHovered, isTrue);
 
       // Render again to reflect state
-      tree.render(buffer, const Rect(0, 0, 10, 4));
+      tree.layout(BoxConstraints.tight(const Size(10, 4)));
+      tree.paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -104,7 +107,8 @@ void main() {
         final buffer = Buffer.blank(10, 4);
 
         // Render first to mount
-        tree.render(buffer, const Rect(0, 0, 10, 4));
+        tree.layout(BoxConstraints.tight(const Size(10, 4)));
+        tree.paint(buffer, Offset.zero);
 
         final state = tree.findState<InkwellButtonState>()!;
         expect(state.isPressed, isFalse);
@@ -132,7 +136,8 @@ void main() {
         expect(state.rippleProgress, greaterThan(0.0));
 
         // Render pressed state
-        tree.render(buffer, const Rect(0, 0, 10, 4));
+        tree.layout(BoxConstraints.tight(const Size(10, 4)));
+        tree.paint(buffer, Offset.zero);
 
         // Pressed body is at Rect(0, 0, 9, 3), same as normal
         // No shadow should be present
@@ -171,7 +176,8 @@ void main() {
         final tree = ElementWidget(btn);
         final buffer = Buffer.blank(10, 4);
 
-        tree.render(buffer, const Rect(0, 0, 10, 4));
+        tree.layout(BoxConstraints.tight(const Size(10, 4)));
+        tree.paint(buffer, Offset.zero);
         final state = tree.findState<InkwellButtonState>()!;
 
         // Press down inside
@@ -219,7 +225,8 @@ void main() {
       final buffer = Buffer.blank(10, 4);
 
       // Render it. The parent area is 10x4, but the button should render constrained to 8x3.
-      tree.render(buffer, const Rect(0, 0, 10, 4));
+      tree.layout(BoxConstraints.tight(const Size(10, 4)));
+      tree.paint(buffer, Offset.zero);
 
       expect(
         buffer,

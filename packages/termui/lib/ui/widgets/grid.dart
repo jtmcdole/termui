@@ -28,13 +28,41 @@ class Grid extends Widget {
   Grid(this.tiles);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    for (var y = 0; y < tiles.length; y++) {
-      if (y >= area.height) break;
-      final row = tiles[y];
+  Element createElement() => GridElement(this);
+}
+
+/// Element class that manages layout and paint of [Grid].
+class GridElement extends Element {
+  /// Calculated width of the grid from tiles.
+  int calculatedWidth = 0;
+
+  /// Calculated height of the grid from tiles.
+  int calculatedHeight = 0;
+
+  /// Instantiates the rendering element for the given Grid.
+  GridElement(Grid super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final grid = widget as Grid;
+    calculatedHeight = grid.tiles.length;
+    calculatedWidth = calculatedHeight > 0 ? grid.tiles[0].length : 0;
+
+    return constraints.constrain(Size(calculatedWidth, calculatedHeight));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final grid = widget as Grid;
+    final w = size.width;
+    final h = size.height;
+
+    for (var y = 0; y < grid.tiles.length; y++) {
+      if (y >= h) break;
+      final row = grid.tiles[y];
       for (var x = 0; x < row.length; x++) {
-        if (x >= area.width) break;
-        final cell = buffer.getCell(x, y);
+        if (x >= w) break;
+        final cell = buffer.getCell(offset.dx + x, offset.dy + y);
         if (cell != null) {
           cell.char = row[x].char;
           cell.style = row[x].style;

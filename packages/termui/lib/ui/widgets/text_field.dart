@@ -339,6 +339,12 @@ class TextField extends StatefulWidget implements Focusable {
   /// Custom key mappings for input actions.
   final Map<TextFieldShortcut, TextFieldAction>? customShortcuts;
 
+  /// Optional custom FocusNode to manage this text field's focus.
+  final FocusNode? focusNode;
+
+  /// Optional callback executed when focus status transitions.
+  final void Function(bool hasFocus)? onFocusChange;
+
   /// Vertical scroll offset.
   int scrollOffset = 0;
 
@@ -356,6 +362,8 @@ class TextField extends StatefulWidget implements Focusable {
     this.placeholderStyle = const Style(foreground: Color(128, 128, 128)),
     this.focused = true,
     this.customShortcuts,
+    this.focusNode,
+    this.onFocusChange,
   }) : controller =
            controller ?? TextEditingController(text: value ?? initialText) {
     if (cursorPosition != null && controller == null) {
@@ -859,7 +867,8 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
   @override
   void initState() {
     super.initState();
-    _focusNode = FocusNode(id: 'textfield_${widget.hashCode}');
+    _focusNode =
+        widget.focusNode ?? FocusNode(id: 'textfield_${widget.hashCode}');
     _updateListener();
     if (widget.focused) {
       scheduleMicrotask(() {
@@ -872,6 +881,13 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
   void didUpdateWidget(TextField oldWidget) {
     super.didUpdateWidget(oldWidget);
     _updateListener();
+    if (widget.focusNode != oldWidget.focusNode) {
+      if (oldWidget.focusNode == null) {
+        _focusNode.dispose();
+      }
+      _focusNode =
+          widget.focusNode ?? FocusNode(id: 'textfield_${widget.hashCode}');
+    }
     if (widget.focused != oldWidget.focused) {
       if (widget.focused) {
         _focusNode.requestFocus();
@@ -884,7 +900,9 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
   @override
   void dispose() {
     _listenedController?.removeListener(_onControllerChanged);
-    _focusNode.dispose();
+    if (widget.focusNode == null) {
+      _focusNode.dispose();
+    }
     super.dispose();
   }
 
@@ -895,6 +913,7 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
         widget.focused = hasFocus;
+        widget.onFocusChange?.call(hasFocus);
         setState(() {}); // Redraw cursor highlight
       },
       onKeyEvent: (event) {
@@ -906,44 +925,77 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
 }
 
 class _TextFieldRenderWidget extends Widget {
-  final TextField widget;
-  const _TextFieldRenderWidget(this.widget);
+  /// The parent TextField widget configuration.
+  final TextField textFieldWidget;
+
+  /// Creates a render proxy for a TextField.
+  const _TextFieldRenderWidget(this.textFieldWidget);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => _TextFieldRenderWidgetElement(this);
+}
 
-    widget.adjustScroll(area.height);
+/// Element that performs layout and paint for [_TextFieldRenderWidget].
+class _TextFieldRenderWidgetElement extends Element {
+  /// Instantiates the rendering element for the given [_TextFieldRenderWidget].
+  _TextFieldRenderWidgetElement(_TextFieldRenderWidget super.widget);
 
-    final textToRender = widget.value.isEmpty ? widget.placeholder : '';
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final renderWidget = widget as _TextFieldRenderWidget;
+    final textField = renderWidget.textFieldWidget;
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : textField.controller.value.lines.length;
+
+    textField.adjustScroll(height);
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final renderWidget = widget as _TextFieldRenderWidget;
+    final textField = renderWidget.textFieldWidget;
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+
+    final textToRender = textField.value.isEmpty ? textField.placeholder : '';
     if (textToRender.isNotEmpty) {
-      buffer.writeString(0, 0, textToRender, widget.placeholderStyle);
-      if (widget.focused) {
-        final cell = buffer.getCell(0, 0);
+      buffer.writeString(
+        offset.dx,
+        offset.dy,
+        textToRender,
+        textField.placeholderStyle,
+      );
+      if (textField.focused) {
+        final cell = buffer.getCell(offset.dx, offset.dy);
         if (cell != null) {
-          cell.style = widget.cursorStyle;
+          cell.style = textField.cursorStyle;
         }
       }
       return;
     }
 
-    final lines = widget.controller.value.lines;
-    final cursorLine = widget.cursorLine;
-    final cursorColumn = widget.cursorColumn;
+    final lines = textField.controller.value.lines;
+    final cursorLine = textField.cursorLine;
+    final cursorColumn = textField.cursorColumn;
 
-    for (var y = 0; y < area.height; y++) {
-      final lineIdx = widget.scrollOffset + y;
+    for (var y = 0; y < h; y++) {
+      final lineIdx = textField.scrollOffset + y;
       if (lineIdx >= lines.length) break;
 
       final line = lines[lineIdx];
       final charsList = line.characters.toList();
 
-      for (var x = 0; x < area.width; x++) {
+      for (var x = 0; x < w; x++) {
         final char = x < charsList.length ? charsList[x] : ' ';
         final isCursor =
-            widget.focused && lineIdx == cursorLine && x == cursorColumn;
-        final cellStyle = isCursor ? widget.cursorStyle : widget.style;
-        final cell = buffer.getCell(x, y);
+            textField.focused && lineIdx == cursorLine && x == cursorColumn;
+        final cellStyle = isCursor ? textField.cursorStyle : textField.style;
+        final cell = buffer.getCell(offset.dx + x, offset.dy + y);
         if (cell != null) {
           cell.char = char;
           cell.style = cellStyle;
@@ -951,14 +1003,14 @@ class _TextFieldRenderWidget extends Widget {
       }
 
       // Render cursor at end of line if needed
-      if (widget.focused &&
+      if (textField.focused &&
           lineIdx == cursorLine &&
           cursorColumn >= charsList.length) {
         final cursorX = charsList.length;
-        if (cursorX < area.width) {
-          final cell = buffer.getCell(cursorX, y);
+        if (cursorX < w) {
+          final cell = buffer.getCell(offset.dx + cursorX, offset.dy + y);
           if (cell != null) {
-            cell.style = widget.cursorStyle;
+            cell.style = textField.cursorStyle;
           }
         }
       }

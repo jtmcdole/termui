@@ -79,47 +79,75 @@ class LinearProgressIndicator extends Widget {
   ];
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => LinearProgressIndicatorElement(this);
+}
 
-    final clamped = fraction.clamp(0.0, 1.0);
-    final eased = easing(clamped);
-    final progressVal = (eased * area.width).clamp(0.0, area.width.toDouble());
+/// An element that manages the rendering of a [LinearProgressIndicator] widget.
+class LinearProgressIndicatorElement extends Element {
+  /// Creates a [LinearProgressIndicatorElement] for the given [widget].
+  LinearProgressIndicatorElement(LinearProgressIndicator super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 20
+        : constraints.maxWidth;
+    return constraints.constrain(Size(w, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final progress = widget as LinearProgressIndicator;
+    if (size.width <= 0 || size.height <= 0) return;
+
+    final clamped = progress.fraction.clamp(0.0, 1.0);
+    final eased = progress.easing(clamped);
+    final progressVal = (eased * size.width).clamp(0.0, size.width.toDouble());
     final filledWidth = progressVal.floor();
 
-    // Determine the percentage text if shown
     String? pctText;
     int? pctStartIdx;
-    if (showPercentage) {
+    if (progress.showPercentage) {
       pctText = '${(eased * 100).toInt().clamp(0, 100)}%';
-      if (pctText.length < area.width - 2) {
-        pctStartIdx = ((area.width - pctText.length) / 2).floor();
+      if (pctText.length < size.width - 2) {
+        pctStartIdx = ((size.width - pctText.length) / 2).floor();
       } else {
         pctText = null;
       }
     }
 
-    final hasGradient = startColor != null && endColor != null;
-    var cellStyle = style;
+    final hasGradient =
+        progress.startColor != null && progress.endColor != null;
+    var cellStyle = progress.style;
 
-    for (var x = 0; x < area.width; x++) {
-      // 1. Calculate style (interpolate color if gradient enabled)
+    for (var x = 0; x < size.width; x++) {
       if (hasGradient) {
-        final t = area.width > 1 ? x / (area.width - 1) : 0.0;
-        final r = (startColor!.r + t * (endColor!.r - startColor!.r)).round();
-        final g = (startColor!.g + t * (endColor!.g - startColor!.g)).round();
-        final b = (startColor!.b + t * (endColor!.b - startColor!.b)).round();
+        final t = size.width > 1 ? x / (size.width - 1) : 0.0;
+        final r =
+            (progress.startColor!.r +
+                    t * (progress.endColor!.r - progress.startColor!.r))
+                .round();
+        final g =
+            (progress.startColor!.g +
+                    t * (progress.endColor!.g - progress.startColor!.g))
+                .round();
+        final b =
+            (progress.startColor!.b +
+                    t * (progress.endColor!.b - progress.startColor!.b))
+                .round();
         cellStyle = Style(
           foreground: Color(r, g, b),
-          background: style.background,
-          modifiers: style.modifiers,
+          background: progress.style.background,
+          modifiers: progress.style.modifiers,
         );
       }
 
-      // 2. Determine character
-      String char = '░'; // background character
+      String char = '░';
 
-      // Check if we are inside the percentage text range
       if (pctText != null &&
           pctStartIdx != null &&
           x >= pctStartIdx &&
@@ -130,10 +158,10 @@ class LinearProgressIndicator extends Widget {
           char = '█';
         } else if (x == filledWidth) {
           final remainder = progressVal - filledWidth;
-          if (smooth) {
+          if (progress.smooth) {
             final idx = (remainder * 8).round() - 1;
             if (idx >= 0 && idx < 8) {
-              char = eighths[idx];
+              char = LinearProgressIndicator.eighths[idx];
             } else if (idx >= 8) {
               char = '█';
             }
@@ -145,7 +173,7 @@ class LinearProgressIndicator extends Widget {
         }
       }
 
-      final cell = buffer.getCell(x, 0);
+      final cell = viewport.getCell(x, 0);
       if (cell != null) {
         cell.char = char;
         cell.style = cellStyle;

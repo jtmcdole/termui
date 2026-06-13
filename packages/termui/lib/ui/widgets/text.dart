@@ -83,17 +83,7 @@ class Text extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-
-    if (!wrap) {
-      final lines = [data];
-      _renderLines(buffer, area, lines);
-    } else {
-      final lines = _wrapText(data, area.width);
-      _renderLines(buffer, area, lines);
-    }
-  }
+  Element createElement() => TextElement(this);
 
   @override
   int getIntrinsicHeight(int width) {
@@ -103,35 +93,6 @@ class Text extends Widget {
     final lines = _wrapText(data, width);
     final count = lines.length;
     return maxLines != null ? min(maxLines!, count) : count;
-  }
-
-  void _renderLines(Buffer buffer, Rect area, List<String> lines) {
-    final limit = maxLines != null ? min(maxLines!, area.height) : area.height;
-    for (var i = 0; i < lines.length; i++) {
-      if (i >= limit) break;
-      final line = lines[i];
-      final lineWidth = measureStringWidth(line);
-
-      var startX = 0;
-      switch (textAlign) {
-        case TextAlign.left:
-          startX = 0;
-          break;
-        case TextAlign.right:
-          startX = max(0, area.width - lineWidth);
-          break;
-        case TextAlign.center:
-          startX = max(0, (area.width - lineWidth) ~/ 2);
-          break;
-        case TextAlign.justify:
-          // Fallback to left-align for justify in basic TUI cells
-          startX = 0;
-          break;
-      }
-
-      final visibleChars = _truncateToWidth(line, area.width - startX);
-      buffer.writeString(startX, i, visibleChars, style);
-    }
   }
 
   String _truncateToWidth(String text, int maxWidth) {
@@ -239,5 +200,85 @@ class Text extends Widget {
     }
 
     return lines;
+  }
+}
+
+/// An element that represents a [Text] widget.
+class TextElement extends Element {
+  List<String> _cachedLines = [];
+
+  /// Creates a text element for a [Text] widget.
+  TextElement(Text super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final textWidget = widget as Text;
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? 999999
+        : constraints.maxWidth;
+
+    if (!textWidget.wrap) {
+      _cachedLines = [textWidget.data];
+    } else {
+      _cachedLines = textWidget._wrapText(textWidget.data, width);
+    }
+
+    final limit = textWidget.maxLines != null
+        ? min(textWidget.maxLines!, _cachedLines.length)
+        : _cachedLines.length;
+
+    var measuredWidth = 0;
+    for (var i = 0; i < limit; i++) {
+      final lineW = measureStringWidth(_cachedLines[i]);
+      if (lineW > measuredWidth) {
+        measuredWidth = lineW;
+      }
+    }
+
+    final height = limit;
+    return constraints.constrain(Size(measuredWidth, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final textWidget = widget as Text;
+    final area = Rect(offset.dx, offset.dy, size.width, size.height);
+
+    final limit = textWidget.maxLines != null
+        ? min(textWidget.maxLines!, area.height)
+        : area.height;
+
+    for (var i = 0; i < _cachedLines.length; i++) {
+      if (i >= limit) break;
+      final line = _cachedLines[i];
+      final lineWidth = measureStringWidth(line);
+
+      var startX = 0;
+      switch (textWidget.textAlign) {
+        case TextAlign.left:
+          startX = 0;
+          break;
+        case TextAlign.right:
+          startX = max(0, area.width - lineWidth);
+          break;
+        case TextAlign.center:
+          startX = max(0, (area.width - lineWidth) ~/ 2);
+          break;
+        case TextAlign.justify:
+          startX = 0;
+          break;
+      }
+
+      final visibleChars = textWidget._truncateToWidth(
+        line,
+        area.width - startX,
+      );
+      buffer.writeString(
+        area.x + startX,
+        area.y + i,
+        visibleChars,
+        textWidget.style,
+      );
+    }
   }
 }

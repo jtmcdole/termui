@@ -77,7 +77,9 @@ void main() {
         ),
       ]);
 
-      layout.render(buffer, const Rect(0, 0, width, height));
+      final elementWrapper = ElementWidget(layout);
+      elementWrapper.layout(BoxConstraints.tight(const Size(width, height)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       final screenshot = AnsiScreenshot.capture(buffer);
 

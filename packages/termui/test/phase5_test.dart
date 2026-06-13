@@ -13,7 +13,9 @@ void main() {
     test('Basic wrapping and forced breaks on constraint shrink', () {
       final buffer = Buffer.blank(10, 5);
       final p1 = Text('Hello standard word wrap');
-      p1.render(buffer, const Rect(0, 0, 10, 5));
+      ElementWidget(p1)
+        ..layout(BoxConstraints.tight(const Size(10, 5)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -29,7 +31,9 @@ void main() {
       // Forced wrapping of a single word larger than max width
       final p2 = Text('Supercalifragilistic');
       // MaxWidth = 8
-      p2.render(buffer, const Rect(0, 0, 8, 5));
+      ElementWidget(p2)
+        ..layout(BoxConstraints.tight(const Size(8, 5)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -86,7 +90,9 @@ void main() {
       final buffer = Buffer.blank(5, 1);
 
       // When focused
-      input.render(buffer, const Rect(0, 0, 5, 1));
+      ElementWidget(input)
+        ..layout(BoxConstraints.tight(const Size(5, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -98,7 +104,9 @@ void main() {
       // Reset buffer and set focused = false
       buffer.clear();
       input.focused = false;
-      input.render(buffer, const Rect(0, 0, 5, 1));
+      ElementWidget(input)
+        ..layout(BoxConstraints.tight(const Size(5, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -123,7 +131,9 @@ void main() {
         )..cursorColumn = 0;
         final buffer = Buffer.blank(6, 1);
 
-        input.render(buffer, const Rect(0, 0, 6, 1));
+        ElementWidget(input)
+          ..layout(BoxConstraints.tight(const Size(6, 1)))
+          ..paint(buffer, Offset.zero);
 
         expect(
           buffer,
@@ -140,7 +150,9 @@ void main() {
     test('Bar render is filled proportionally and centers percentage', () {
       final buffer = Buffer.blank(10, 1);
       final bar = const LinearProgressIndicator(0.5, showPercentage: true);
-      bar.render(buffer, const Rect(0, 0, 10, 1));
+      ElementWidget(bar)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -159,7 +171,9 @@ void main() {
       canvas.setPixel(0, 0, true);
 
       final buffer = Buffer.blank(1, 1);
-      canvas.render(buffer, const Rect(0, 0, 1, 1));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(1, 1)))
+        ..paint(buffer, Offset.zero);
 
       // Unicode value should be U+2800 + 0x01 = 0x2801
       expect(buffer.getCell(0, 0)!.char, equals(String.fromCharCode(0x2801)));
@@ -167,13 +181,17 @@ void main() {
       // Clear and set bottom-right pixel (1, 3) -> Dot 8 (0x80)
       canvas.clear();
       canvas.setPixel(1, 3, true);
-      canvas.render(buffer, const Rect(0, 0, 1, 1));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(1, 1)))
+        ..paint(buffer, Offset.zero);
       // Unicode value should be U+2800 + 0x80 = 0x2880 (⢀)
       expect(buffer.getCell(0, 0)!.char, equals(String.fromCharCode(0x2880)));
 
       // Set both: U+2881
       canvas.setPixel(0, 0, true);
-      canvas.render(buffer, const Rect(0, 0, 1, 1));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(1, 1)))
+        ..paint(buffer, Offset.zero);
       expect(buffer.getCell(0, 0)!.char, equals(String.fromCharCode(0x2881)));
     });
 
@@ -181,7 +199,9 @@ void main() {
       final canvas = Canvas(6, 3); // 12x12 sub-pixels
       canvas.drawLine(0, 0, 10, 10);
       final buffer = Buffer.blank(6, 3);
-      canvas.render(buffer, const Rect(0, 0, 6, 3));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(6, 3)))
+        ..paint(buffer, Offset.zero);
 
       var totalFlagged = 0;
       for (var y = 0; y < 3; y++) {
@@ -229,7 +249,9 @@ void main() {
       // Draw with anti-aliasing on cell (0, 0) only (2x4 sub-pixels)
       canvas.fillBox(0, 0, 2, 4, antiAliased: true);
       final buffer = Buffer.blank(2, 2);
-      canvas.render(buffer, const Rect(0, 0, 2, 2));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(2, 2)))
+        ..paint(buffer, Offset.zero);
 
       // Cell (0, 0) is completely covered (8/8 sub-pixels).
       // So it should render as solid block '█' rather than Braille characters.
@@ -250,7 +272,9 @@ void main() {
       canvas.isOccluded = (col, row) => col == 1 && row == 1;
 
       final buffer = Buffer.blank(3, 3);
-      canvas.render(buffer, const Rect(0, 0, 3, 3));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(3, 3)))
+        ..paint(buffer, Offset.zero);
 
       // Cell (1, 1) should be blank/empty because we skipped translation
       expect(buffer.getCell(1, 1)!.char, equals(' ')); // blank cell
@@ -264,7 +288,9 @@ void main() {
 
       // Draw a line colored from red to blue
       canvas.drawLineColored(0, 0, 4, 8, Colors.red, Colors.blue);
-      canvas.render(buffer, const Rect(0, 0, 3, 3));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(3, 3)))
+        ..paint(buffer, Offset.zero);
 
       // The cell at (0, 0) should have a foreground color that is Red
       final cell0 = buffer.getCell(0, 0);
@@ -296,7 +322,9 @@ void main() {
         Colors.blue,
       );
       buffer.clear();
-      canvas.render(buffer, const Rect(0, 0, 3, 3));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(3, 3)))
+        ..paint(buffer, Offset.zero);
 
       // Ensure some pixels are colored
       expect(buffer.getCell(0, 0)!.style.foreground, isNotNull);
@@ -318,7 +346,9 @@ void main() {
         Colors.green,
       );
       buffer.clear();
-      canvas.render(buffer, const Rect(0, 0, 3, 3));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(3, 3)))
+        ..paint(buffer, Offset.zero);
 
       // Ensure some pixels are colored
       expect(buffer.getCell(0, 0)!.style.foreground, isNotNull);
@@ -337,7 +367,9 @@ void main() {
         8,
         cellStyle: const Style(foreground: Colors.green),
       );
-      canvas.render(buffer, const Rect(0, 0, 3, 3));
+      ElementWidget(canvas)
+        ..layout(BoxConstraints.tight(const Size(3, 3)))
+        ..paint(buffer, Offset.zero);
 
       // Cell at (0, 0) has the line pixel, should have green foreground and black background
       final cell0 = buffer.getCell(0, 0);
@@ -365,7 +397,9 @@ void main() {
         for (var i = 0; i < 100; i++) {
           canvas.setPixel((f + i) % 160, (f * 2 + i) % 96, true);
         }
-        canvas.render(buffer, const Rect(0, 0, 80, 24));
+        ElementWidget(canvas)
+          ..layout(BoxConstraints.tight(const Size(80, 24)))
+          ..paint(buffer, Offset.zero);
       }
 
       stopwatch.stop();
@@ -467,7 +501,9 @@ void main() {
           );
 
           final buffer = Buffer.blank(width, height);
-          canvas.render(buffer, Rect(0, 0, width, height));
+          ElementWidget(canvas)
+            ..layout(BoxConstraints.tight(Size(width, height)))
+            ..paint(buffer, Offset.zero);
 
           // Bounding box of the triangle
           final minX = t2px.reduce(min);
@@ -621,7 +657,9 @@ void main() {
       final buffer = Buffer.blank(5, 1);
 
       // When focused
-      area.render(buffer, const Rect(0, 0, 5, 1));
+      ElementWidget(area)
+        ..layout(BoxConstraints.tight(const Size(5, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -633,7 +671,9 @@ void main() {
       // Reset buffer and set focused = false
       buffer.clear();
       area.focused = false;
-      area.render(buffer, const Rect(0, 0, 5, 1));
+      ElementWidget(area)
+        ..layout(BoxConstraints.tight(const Size(5, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -661,7 +701,9 @@ void main() {
         buffer.clear();
 
         // 1. Empty state: showing placeholder
-        area.render(buffer, const Rect(0, 0, 10, 1));
+        ElementWidget(area)
+          ..layout(BoxConstraints.tight(const Size(10, 1)))
+          ..paint(buffer, Offset.zero);
         expect(
           buffer,
           matchesAnsiGolden(
@@ -673,7 +715,9 @@ void main() {
         // 2. Add text: placeholder should go away
         buffer.clear();
         area.handleKeyEvent(const KeyEvent('x', KeyType.character));
-        area.render(buffer, const Rect(0, 0, 10, 1));
+        ElementWidget(area)
+          ..layout(BoxConstraints.tight(const Size(10, 1)))
+          ..paint(buffer, Offset.zero);
         expect(
           buffer,
           matchesAnsiGolden(
@@ -685,7 +729,9 @@ void main() {
         // 3. Clear text: placeholder should reappear
         buffer.clear();
         area.handleKeyEvent(const KeyEvent('backspace', KeyType.backspace));
-        area.render(buffer, const Rect(0, 0, 10, 1));
+        ElementWidget(area)
+          ..layout(BoxConstraints.tight(const Size(10, 1)))
+          ..paint(buffer, Offset.zero);
         expect(
           buffer,
           matchesAnsiGolden(
@@ -705,7 +751,9 @@ void main() {
         separator: ' | ',
       );
 
-      help.render(buffer, const Rect(0, 0, 20, 2));
+      ElementWidget(help)
+        ..layout(BoxConstraints.tight(const Size(20, 2)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -745,7 +793,9 @@ void main() {
         selectedRowIndex: 1,
       );
 
-      table.render(buffer, const Rect(0, 0, 15, 4));
+      ElementWidget(table)
+        ..layout(BoxConstraints.tight(const Size(15, 4)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -768,7 +818,9 @@ void main() {
         separator: '-',
       );
 
-      paginator.render(buffer, const Rect(0, 0, 10, 1));
+      ElementWidget(paginator)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -915,7 +967,9 @@ void main() {
 
       // 1. Focused case: f1 is focused by default, f2 is unfocused
       final buffer = Buffer(20, 10);
-      form.render(buffer, const Rect(0, 0, 20, 10));
+      ElementWidget(form)
+        ..layout(BoxConstraints.tight(const Size(20, 10)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -929,7 +983,9 @@ void main() {
       f1.focused = false;
       f2.focused = false;
       final buffer2 = Buffer(20, 10);
-      form.render(buffer2, const Rect(0, 0, 20, 10));
+      ElementWidget(form)
+        ..layout(BoxConstraints.tight(const Size(20, 10)))
+        ..paint(buffer2, Offset.zero);
 
       expect(
         buffer2,
@@ -963,7 +1019,9 @@ void main() {
         easing: Easing.linear,
       );
       final bufferLinear = Buffer(12, 1);
-      barLinear.render(bufferLinear, const Rect(0, 0, 12, 1));
+      ElementWidget(barLinear)
+        ..layout(BoxConstraints.tight(const Size(12, 1)))
+        ..paint(bufferLinear, Offset.zero);
 
       var filledLinear = 0;
       for (var x = 0; x < 12; x++) {
@@ -980,7 +1038,9 @@ void main() {
         easing: Easing.easeInQuad,
       );
       final bufferEased = Buffer(12, 1);
-      barEased.render(bufferEased, const Rect(0, 0, 12, 1));
+      ElementWidget(barEased)
+        ..layout(BoxConstraints.tight(const Size(12, 1)))
+        ..paint(bufferEased, Offset.zero);
 
       var filledEased = 0;
       for (var x = 0; x < 12; x++) {
@@ -1014,7 +1074,9 @@ void main() {
       expect(tree.flatNodes.length, equals(4));
 
       final buffer = Buffer(25, 4);
-      tree.render(buffer, const Rect(0, 0, 25, 4));
+      ElementWidget(tree)
+        ..layout(BoxConstraints.tight(const Size(25, 4)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -1078,7 +1140,9 @@ void main() {
       expect(tree.focused, isTrue);
 
       final bufferFocused = Buffer(10, 1);
-      tree.render(bufferFocused, const Rect(0, 0, 10, 1));
+      ElementWidget(tree)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(bufferFocused, Offset.zero);
       expect(
         bufferFocused,
         matchesAnsiGolden(
@@ -1090,7 +1154,9 @@ void main() {
       // Set focused to false
       tree.focused = false;
       final bufferUnfocused = Buffer(10, 1);
-      tree.render(bufferUnfocused, const Rect(0, 0, 10, 1));
+      ElementWidget(tree)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(bufferUnfocused, Offset.zero);
       expect(
         bufferUnfocused,
         matchesAnsiGolden(
