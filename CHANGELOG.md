@@ -15,6 +15,28 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - [`termui_flutter` - `v0.3.0`](#termui_flutter---v030)
+ - [`termui_recorder` - `v0.3.0`](#termui_recorder---v030)
+
+---
+
+#### `termui_flutter` - `v0.3.0`
+
+#### `termui_recorder` - `v0.3.0`
+
+
+## 2026-06-12
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`termui` - `v0.3.0`](#termui---v030)
 
 ---

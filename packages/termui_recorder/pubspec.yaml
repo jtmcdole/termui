@@ -1,6 +1,6 @@
 name: termui_recorder
 description: Testing and recording utilities for termui, supporting ANSI screenshots, Asciinema v2 formats, and playbacks.
-version: 0.2.0+1
+version: 0.3.0
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_recorder
 
 resolution: workspace
