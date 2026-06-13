@@ -168,40 +168,7 @@ class RichText extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-
-    final allStyledChars = <StyledChar>[];
-    text.buildStyledChars(allStyledChars, Style.empty);
-
-    final lines = wrap
-        ? _wrapStyledChars(allStyledChars, area.width)
-        : _clipStyledChars(allStyledChars, area.width);
-
-    final limit = maxLines != null ? min(maxLines!, area.height) : area.height;
-    for (var y = 0; y < lines.length; y++) {
-      if (y >= limit) break;
-      final line = lines[y];
-
-      // Compute horizontal alignments
-      final lineLen = line.length;
-      var startX = 0;
-      if (textAlign == TextAlign.right) {
-        startX = max(0, area.width - lineLen);
-      } else if (textAlign == TextAlign.center) {
-        startX = max(0, (area.width - lineLen) ~/ 2);
-      }
-
-      for (var x = 0; x < line.length; x++) {
-        if (startX + x >= area.width) break;
-        final cell = buffer.getCell(startX + x, y);
-        if (cell != null) {
-          cell.char = line[x].char;
-          cell.style = line[x].style;
-        }
-      }
-    }
-  }
+  Element createElement() => RichTextElement(this);
 
   List<List<StyledChar>> _clipStyledChars(
     List<StyledChar> chars,
@@ -329,5 +296,75 @@ class RichText extends Widget {
     }
 
     return lines;
+  }
+}
+
+/// An element that manages a [RichText] widget.
+class RichTextElement extends Element {
+  List<List<StyledChar>> _cachedLines = [];
+
+  /// Creates a rich text element for a [RichText] widget.
+  RichTextElement(RichText super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final richTextWidget = widget as RichText;
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? 999999
+        : constraints.maxWidth;
+
+    final allStyledChars = <StyledChar>[];
+    richTextWidget.text.buildStyledChars(allStyledChars, Style.empty);
+
+    _cachedLines = richTextWidget.wrap
+        ? richTextWidget._wrapStyledChars(allStyledChars, width)
+        : richTextWidget._clipStyledChars(allStyledChars, width);
+
+    final limit = richTextWidget.maxLines != null
+        ? min(richTextWidget.maxLines!, _cachedLines.length)
+        : _cachedLines.length;
+
+    var measuredWidth = 0;
+    for (var i = 0; i < limit; i++) {
+      final lineLen = _cachedLines[i].length;
+      if (lineLen > measuredWidth) {
+        measuredWidth = lineLen;
+      }
+    }
+
+    final height = limit;
+    return constraints.constrain(Size(measuredWidth, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final richTextWidget = widget as RichText;
+    final area = Rect(offset.dx, offset.dy, size.width, size.height);
+
+    final limit = richTextWidget.maxLines != null
+        ? min(richTextWidget.maxLines!, area.height)
+        : area.height;
+    for (var y = 0; y < _cachedLines.length; y++) {
+      if (y >= limit) break;
+      final line = _cachedLines[y];
+
+      // Compute horizontal alignments
+      final lineLen = line.length;
+      var startX = 0;
+      if (richTextWidget.textAlign == TextAlign.right) {
+        startX = max(0, area.width - lineLen);
+      } else if (richTextWidget.textAlign == TextAlign.center) {
+        startX = max(0, (area.width - lineLen) ~/ 2);
+      }
+
+      for (var x = 0; x < line.length; x++) {
+        if (startX + x >= area.width) break;
+        final cell = buffer.getCell(area.x + startX + x, area.y + y);
+        if (cell != null) {
+          cell.char = line[x].char;
+          cell.style = line[x].style;
+        }
+      }
+    }
   }
 }

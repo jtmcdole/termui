@@ -20,10 +20,24 @@ class SystemDiagnosticsWidget extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final w = area.width;
-    final h = area.height;
+  Element createElement() => _SystemDiagnosticsElement(this);
+}
+
+class _SystemDiagnosticsElement extends Element {
+  _SystemDiagnosticsElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = size.width;
+    final h = size.height;
     if (w <= 0 || h <= 0) return;
+    final target = widget as SystemDiagnosticsWidget;
+    final tickCount = target.tickCount;
 
     final table = Table(
       headers: ['PID', 'Process', 'CPU%', 'Mem'],
@@ -49,23 +63,28 @@ class SystemDiagnosticsWidget extends Widget {
           '76MB',
         ],
       ],
-      selectedRowStyle: const Style(
-        foreground: Colors.white,
-        background: Colors.orange,
-        modifiers: Modifier.bold,
-      ),
     );
 
-    final progressCols = (w - 2 > 0) ? ((w - 2) * progress).round() : 0;
-    final remainingCols = max(0, w - 2 - progressCols);
-    final progressBar = '[${'█' * progressCols}${'░' * remainingCols}]';
+    // Render title block
+    final totalCpu =
+        19.5 + sin(tickCount * 0.1) * 3 + cos(tickCount * 0.05) * 0.5;
+    final progressBarWidth = (w - 18).clamp(5, 40);
+    final filledWidth = (progressBarWidth * (totalCpu / 100)).round().clamp(
+      0,
+      progressBarWidth,
+    );
+    final progressBar =
+        '[${'█' * filledWidth}${'░' * (progressBarWidth - filledWidth)}]';
 
     final col = Column([
       SizedBox(
         height: 1,
         child: Text(
-          'CPU Task Sync Progress:',
-          style: const Style(modifiers: Modifier.bold),
+          ' SYSTEM MONITOR - CPU: ${totalCpu.toStringAsFixed(1)}%',
+          style: const Style(
+            foreground: Color(0, 255, 0),
+            modifiers: Modifier.bold,
+          ),
         ),
       ),
       SizedBox(
@@ -79,7 +98,10 @@ class SystemDiagnosticsWidget extends Widget {
       Expanded(child: table),
     ]);
 
-    col.render(buffer, Rect(0, 0, w, h));
+    final colEl = col.createElement()..mount(null);
+    colEl.layout(BoxConstraints.tight(Size(w, h)));
+    colEl.paint(buffer, offset);
+    colEl.unmount();
   }
 }
 
@@ -88,19 +110,19 @@ class RadarWidget extends Widget {
   /// Current animation frame of the radar sweep.
   int frame = 0;
 
-  /// The rendering mode used by the canvas.
-  CanvasRenderMode renderMode;
-
-  /// Whether anti-aliasing is enabled.
-  bool antiAliased;
-
-  /// The base style applied to the canvas cells.
-  final Style style;
-
-  /// Cache canvas to avoid allocations on resize.
+  /// Internal sub-pixel Braille canvas cache.
   Canvas? canvas;
 
-  /// Creates a new [RadarWidget] with the given parameters.
+  /// Render mode.
+  CanvasRenderMode renderMode;
+
+  /// Anti-aliasing.
+  bool antiAliased;
+
+  /// Widget Style.
+  final Style style;
+
+  /// Construct the Radar simulation widget.
   RadarWidget({
     this.renderMode = CanvasRenderMode.braille,
     this.antiAliased = false,
@@ -108,118 +130,130 @@ class RadarWidget extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final w = area.width;
-    final h = area.height;
-    if (w <= 0 || h <= 0) return;
+  Element createElement() => _RadarElement(this);
+}
 
-    if (canvas == null || canvas!.width != w || canvas!.height != h) {
-      canvas = Canvas(w, h, renderMode: renderMode, style: style);
+class _RadarElement extends Element {
+  _RadarElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+    final radar = widget as RadarWidget;
+
+    if (radar.canvas == null ||
+        radar.canvas!.width != w ||
+        radar.canvas!.height != h) {
+      radar.canvas = Canvas(
+        w,
+        h,
+        renderMode: radar.renderMode,
+        style: radar.style,
+      );
     } else {
-      canvas!.clear();
+      radar.canvas!.clear();
     }
 
-    canvas!.renderMode = renderMode;
+    radar.canvas!.renderMode = radar.renderMode;
 
     final cx = w;
     final cy = h * 2;
     final r = (min(w, h * 2) - 3).clamp(8, 25);
 
     // Draw static radar face cross-hairs and concentric circles
-    canvas!.drawCircle(
+    radar.canvas!.drawCircle(
       cx,
       cy,
       r,
       antiAliased: false,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
-    canvas!.drawCircle(
+    radar.canvas!.drawCircle(
       cx,
       cy,
-      (r * 0.67).round(),
+      (r * 0.66).round(),
       antiAliased: false,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
-    canvas!.drawCircle(
+    radar.canvas!.drawCircle(
       cx,
       cy,
       (r * 0.33).round(),
       antiAliased: false,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
-    canvas!.drawLine(
+
+    // Draw static axes
+    radar.canvas!.drawLine(
       cx - r,
       cy,
       cx + r,
       cy,
-      antiAliased: false,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
-    canvas!.drawLine(
+    radar.canvas!.drawLine(
       cx,
       cy - r,
       cx,
       cy + r,
-      antiAliased: false,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
 
-    final sweepAngle = (frame * 0.03) % (2 * pi);
-    final rx = cx + (r * cos(sweepAngle)).round();
-    final ry = cy + (r * sin(sweepAngle)).round();
-    canvas!.drawLineColored(
+    // Draw scanning sweep line
+    final sweepAngle = radar.frame * 0.05;
+    final sx = (cx + r * cos(sweepAngle)).round();
+    final sy = (cy + r * sin(sweepAngle)).round();
+    radar.canvas!.drawLine(
       cx,
       cy,
-      rx,
-      ry,
-      CharmColors.spinach,
-      CharmColors.julep,
-      antiAliased: antiAliased,
+      sx,
+      sy,
+      cellStyle: const Style(foreground: CharmColors.lichen),
     );
 
-    void drawBlip(int blipDist, double blipAngle) {
-      final bx = cx + (blipDist * cos(blipAngle)).round();
-      final by = cy + (blipDist * sin(blipAngle)).round();
+    // Draw sweeping radar cone gradient
+    final fadeSteps = 16;
+    for (var i = 1; i <= fadeSteps; i++) {
+      final angle = sweepAngle - (i * 0.04);
+      final ex = (cx + r * cos(angle)).round();
+      final ey = (cy + r * sin(angle)).round();
+      final greenFadeVal = (120 - (i * 7)).clamp(30, 255);
+      radar.canvas!.drawLine(
+        cx,
+        cy,
+        ex,
+        ey,
+        cellStyle: Style(foreground: Color(0, greenFadeVal, 0)),
+      );
+    }
 
-      var diff = sweepAngle - blipAngle;
-      while (diff < 0) {
-        diff += 2 * pi;
-      }
-      while (diff > 2 * pi) {
-        diff -= 2 * pi;
-      }
-
-      double intensity = 0.0;
-      if (diff < pi / 2) {
-        intensity = 1.0 - (diff / (pi / 2));
-      } else if (diff > 2 * pi - 0.05) {
-        intensity = 0.2;
-      }
-
-      if (intensity > 0.0) {
-        final cxCell = bx ~/ 2;
-        final cyCell = by ~/ 4;
-        if (cxCell >= 0 && cxCell < w && cyCell >= 0 && cyCell < h) {
-          int numDots = intensity > 0.75
-              ? 8
-              : (intensity > 0.5 ? 6 : (intensity > 0.25 ? 4 : 2));
-          final blipStyle = Style(
-            foreground: intensity > 0.6
-                ? CharmColors.mustard
-                : CharmColors.paprika,
-          );
-          for (var i = 0; i < numDots; i++) {
-            final dx = i % 2;
-            final dy = i ~/ 2;
-            canvas!.setPixel(
-              cxCell * 2 + dx,
-              cyCell * 4 + dy,
-              true,
-              antiAliased: antiAliased,
-              cellStyle: blipStyle,
-            );
-          }
-        }
+    // Dynamic blips
+    void drawBlip(int distance, double targetAngle) {
+      final difference = (sweepAngle - targetAngle) % (2 * pi);
+      if (difference < 1.5) {
+        final bx = (cx + distance * cos(targetAngle)).round();
+        final by = (cy + distance * sin(targetAngle)).round();
+        final brightness = ((1.5 - difference) / 1.5 * 255).round().clamp(
+          0,
+          255,
+        );
+        radar.canvas!.fillCircle(
+          bx,
+          by,
+          1,
+          antiAliased: false,
+          cellStyle: Style(
+            foreground: Color(brightness, brightness, 0),
+            modifiers: Modifier.bold,
+          ),
+        );
       }
     }
 
@@ -234,7 +268,10 @@ class RadarWidget extends Widget {
     drawBlip(blipDistance2.round(), blipAngle2);
     drawBlip(blipDistance3.round(), blipAngle3);
 
-    canvas!.render(buffer, Rect(0, 0, w, h));
+    final canvasEl = radar.canvas!.createElement()..mount(null);
+    canvasEl.layout(BoxConstraints.tight(Size(w, h)));
+    canvasEl.paint(buffer, offset);
+    canvasEl.unmount();
   }
 }
 
@@ -249,13 +286,13 @@ class SpinningCubeWidget extends Widget {
   /// Rotation angle around Z axis.
   double rotZ = 0.0;
 
-  /// The base style applied to the canvas cells.
-  final Style style;
-
-  /// Cache canvas to avoid allocations on resize.
+  /// Internal canvas cache.
   Canvas? canvas;
 
-  /// Creates a new [SpinningCubeWidget] with the given parameters.
+  /// Widget style.
+  final Style style;
+
+  /// Construct a spinning 3D cube widget.
   SpinningCubeWidget({this.style = Style.empty});
 
   /// Advance the rotation angles for the next frame simulation.
@@ -266,20 +303,35 @@ class SpinningCubeWidget extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final w = area.width;
-    final h = area.height;
-    if (w <= 0 || h <= 0) return;
+  Element createElement() => _SpinningCubeElement(this);
+}
 
-    if (canvas == null || canvas!.width != w || canvas!.height != h) {
-      canvas = Canvas(
+class _SpinningCubeElement extends Element {
+  _SpinningCubeElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+    final cube = widget as SpinningCubeWidget;
+
+    if (cube.canvas == null ||
+        cube.canvas!.width != w ||
+        cube.canvas!.height != h) {
+      cube.canvas = Canvas(
         w,
         h,
         renderMode: CanvasRenderMode.quadrants,
-        style: style,
+        style: cube.style,
       );
     } else {
-      canvas!.clear();
+      cube.canvas!.clear();
     }
 
     // 8 vertices of a 3D cube
@@ -314,15 +366,15 @@ class SpinningCubeWidget extends Widget {
       final z = v[2];
 
       // Rotate X
-      final y1 = y * cos(rotX) - z * sin(rotX);
-      final z1 = y * sin(rotX) + z * cos(rotX);
+      final y1 = y * cos(cube.rotX) - z * sin(cube.rotX);
+      final z1 = y * sin(cube.rotX) + z * cos(cube.rotX);
 
       // Rotate Y
-      final x2 = x * cos(rotY) + z1 * sin(rotY);
+      final x2 = x * cos(cube.rotY) + z1 * sin(cube.rotY);
 
       // Rotate Z
-      final x3 = x2 * cos(rotZ) - y1 * sin(rotZ);
-      final y3 = x2 * sin(rotZ) + y1 * cos(rotZ);
+      final x3 = x2 * cos(cube.rotZ) - y1 * sin(cube.rotZ);
+      final y3 = x2 * sin(cube.rotZ) + y1 * cos(cube.rotZ);
 
       // Simple perspective/orthographic projection
       final px = (cx + x3 * scale * 1.6).round(); // aspect ratio adjustment
@@ -335,9 +387,12 @@ class SpinningCubeWidget extends Widget {
     for (final edge in edges) {
       final p1 = projected[edge[0]];
       final p2 = projected[edge[1]];
-      canvas!.drawLine(p1.x, p1.y, p2.x, p2.y, cellStyle: edgeStyle);
+      cube.canvas!.drawLine(p1.x, p1.y, p2.x, p2.y, cellStyle: edgeStyle);
     }
 
-    canvas!.render(buffer, Rect(0, 0, w, h));
+    final canvasEl = cube.canvas!.createElement()..mount(null);
+    canvasEl.layout(BoxConstraints.tight(Size(w, h)));
+    canvasEl.paint(buffer, offset);
+    canvasEl.unmount();
   }
 }

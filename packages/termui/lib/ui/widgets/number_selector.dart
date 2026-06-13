@@ -72,22 +72,50 @@ class NumberSelector extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final labelLen = label.characters.length;
-    final displayChars = '$label: < $value >'.characters;
+  Element createElement() => NumberSelectorElement(this);
+}
+
+/// An element that manages the rendering and layout of a [NumberSelector] widget.
+class NumberSelectorElement extends Element {
+  /// Creates a [NumberSelectorElement] for the given [widget].
+  NumberSelectorElement(NumberSelector super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final selector = widget as NumberSelector;
+    final displayChars = '${selector.label}: < ${selector.value} >';
+    final w = displayChars.characters.length;
+    return constraints.constrain(Size(w, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final selector = widget as NumberSelector;
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+
+    final labelLen = selector.label.characters.length;
+    final displayChars = '${selector.label}: < ${selector.value} >'.characters;
     final leftArrowIdx = labelLen + 2;
     final rightArrowIdx = displayChars.length - 1;
 
     // Render the label and spacing
-    buffer.writeString(0, 0, '$label: ', style);
+    viewport.writeString(0, 0, '${selector.label}: ', selector.style);
 
     // Render '<' button
-    buffer.writeString(leftArrowIdx, 0, '<', buttonStyle);
+    viewport.writeString(leftArrowIdx, 0, '<', selector.buttonStyle);
 
     // Render value
-    buffer.writeString(leftArrowIdx + 2, 0, '$value', style);
+    viewport.writeString(
+      leftArrowIdx + 2,
+      0,
+      '${selector.value}',
+      selector.style,
+    );
 
     // Render '>' button
-    buffer.writeString(rightArrowIdx, 0, '>', buttonStyle);
+    viewport.writeString(rightArrowIdx, 0, '>', selector.buttonStyle);
   }
 }

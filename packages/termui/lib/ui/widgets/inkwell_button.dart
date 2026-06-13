@@ -240,7 +240,39 @@ class _InkwellButtonRenderWidget extends Widget {
   const _InkwellButtonRenderWidget(this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    state._render(buffer, area);
+  Element createElement() => _InkwellButtonElement(this);
+}
+
+class _InkwellButtonElement extends Element {
+  _InkwellButtonElement(_InkwellButtonRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _InkwellButtonRenderWidget;
+    final state = wWidget.state;
+    final w =
+        state.widget.width ??
+        (constraints.maxWidth == BoxConstraints.infinity
+            ? 0
+            : constraints.maxWidth);
+    final h =
+        state.widget.height ??
+        (constraints.maxHeight == BoxConstraints.infinity
+            ? 0
+            : constraints.maxHeight);
+    state._lastWidth = w;
+    state._lastHeight = h;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final wWidget = widget as _InkwellButtonRenderWidget;
+    final state = wWidget.state;
+    state._render(viewport, Rect(0, 0, size.width, size.height));
   }
 }

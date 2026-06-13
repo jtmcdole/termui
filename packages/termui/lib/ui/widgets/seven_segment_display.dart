@@ -111,23 +111,46 @@ class SevenSegmentDisplay extends Widget {
   };
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height < 5) return;
+  Element createElement() => SevenSegmentDisplayElement(this);
+}
 
-    final activeSt = Style(foreground: activeColor);
-    final inactiveSt = Style(foreground: inactiveColor);
+/// An element that manages the rendering and layout of a [SevenSegmentDisplay] widget.
+class SevenSegmentDisplayElement extends Element {
+  /// Creates a [SevenSegmentDisplayElement] for the given [widget].
+  SevenSegmentDisplayElement(SevenSegmentDisplay super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final display = widget as SevenSegmentDisplay;
+    final count = display.value.length;
+    final w = count > 0 ? (count * 6 - 1) : 0;
+    return constraints.constrain(Size(w, 5));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final display = widget as SevenSegmentDisplay;
+    if (size.width <= 0 || size.height < 5) return;
+
+    final activeSt = Style(foreground: display.activeColor);
+    final inactiveSt = Style(foreground: display.inactiveColor);
 
     int offsetX = 0;
-    for (int i = 0; i < value.length; i++) {
-      final char = value[i];
-      final matrix = _digits[char] ?? _digits[' '];
+    for (int i = 0; i < display.value.length; i++) {
+      final char = display.value[i];
+      final matrix =
+          SevenSegmentDisplay._digits[char] ?? SevenSegmentDisplay._digits[' '];
 
       if (matrix != null) {
         for (int y = 0; y < 5; y++) {
           for (int x = 0; x < 5; x++) {
-            if (offsetX + x < area.width && y < area.height) {
+            if (offsetX + x < size.width && y < size.height) {
               final active = matrix[y][x] == 1;
-              buffer.writeString(
+              viewport.writeString(
                 offsetX + x,
                 y,
                 '█',

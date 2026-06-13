@@ -7,35 +7,52 @@ import 'package:termui/ui/layout.dart';
 import 'package:termui/ui/renderer.dart';
 import 'package:termui/ui/widget_toolkit.dart';
 
-// A custom styled Container widget since termui doesn't have DecoratedBox/Container yet
-class Container extends Widget {
+// A custom styled Container widget using composition
+class Container extends StatelessWidget {
   final Widget child;
   final Style style;
 
   const Container({required this.child, required this.style});
 
   @override
-  void render(Buffer buffer, Rect area) {
-    // Fill the area with the background and foreground style
-    for (var y = 0; y < area.height; y++) {
-      for (var x = 0; x < area.width; x++) {
-        buffer.setCell(x, y, Cell(' ', style));
-      }
-    }
-    // Render child widget within this area
-    child.render(buffer, area);
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(backgroundStyle: style),
+      child: child,
+    );
   }
 }
 
-// A custom VerticalDivider widget to draw a solid vertical separator line
+// A custom VerticalDivider widget using custom element paint
 class VerticalDivider extends Widget {
   final Style style;
   const VerticalDivider({required this.style});
 
   @override
-  void render(Buffer buffer, Rect area) {
-    for (var y = 0; y < area.height; y++) {
-      buffer.setCell(0, y, Cell('│', style));
+  Element createElement() => _VerticalDividerElement(this);
+}
+
+class _VerticalDividerElement extends Element {
+  _VerticalDividerElement(VerticalDivider super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.minWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w > 1 ? w : 1, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final v = widget as VerticalDivider;
+    for (var y = 0; y < size.height; y++) {
+      buffer.setCell(
+        offset.dx.toInt(),
+        (offset.dy + y).toInt(),
+        Cell('│', v.style),
+      );
     }
   }
 }
@@ -351,7 +368,8 @@ void main() async {
     buffer.fill(Cell(' ', Style.empty));
 
     // Render the mounted element tree to the buffer
-    elementWrapper.render(buffer, Rect(0, 0, width, height));
+    elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+    elementWrapper.paint(buffer, Offset.zero);
 
     // Output to stdout via Renderer diffing
     final sb = StringBuffer();

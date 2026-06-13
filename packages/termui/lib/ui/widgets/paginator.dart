@@ -70,29 +70,71 @@ class Paginator extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (totalPages <= 0 || area.width <= 0 || area.height <= 0) return;
+  Element createElement() => PaginatorElement(this);
+}
 
-    final current = currentPage.clamp(0, totalPages - 1);
+/// An element that manages the rendering and layout of a [Paginator] widget.
+class PaginatorElement extends Element {
+  /// Creates a [PaginatorElement] for the given [widget].
+  PaginatorElement(Paginator super.widget);
 
-    final dotChars = activeDot.characters;
-    final inactiveDotChars = inactiveDot.characters;
-    final separatorChars = separator.characters;
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final paginator = widget as Paginator;
+    if (paginator.totalPages <= 0) return constraints.constrain(Size.zero);
+
+    final dotChars = paginator.activeDot.characters;
+    final inactiveDotChars = paginator.inactiveDot.characters;
+    final separatorChars = paginator.separator.characters;
+
+    var w = 0;
+    for (var i = 0; i < paginator.totalPages; i++) {
+      final isCurrent = i == paginator.currentPage;
+      w += isCurrent ? dotChars.length : inactiveDotChars.length;
+      if (i < paginator.totalPages - 1) {
+        w += separatorChars.length;
+      }
+    }
+    return constraints.constrain(Size(w, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final paginator = widget as Paginator;
+    if (paginator.totalPages <= 0 || size.width <= 0 || size.height <= 0) {
+      return;
+    }
+
+    final current = paginator.currentPage.clamp(0, paginator.totalPages - 1);
+    final dotChars = paginator.activeDot.characters;
+    final inactiveDotChars = paginator.inactiveDot.characters;
+    final separatorChars = paginator.separator.characters;
 
     var currentX = 0;
-    for (var i = 0; i < totalPages; i++) {
+    for (var i = 0; i < paginator.totalPages; i++) {
       final isCurrent = i == current;
-      final dot = isCurrent ? activeDot : inactiveDot;
+      final dot = isCurrent ? paginator.activeDot : paginator.inactiveDot;
       final dotLen = isCurrent ? dotChars.length : inactiveDotChars.length;
-      final dotStyle = isCurrent ? activeStyle : inactiveStyle;
+      final dotStyle = isCurrent
+          ? paginator.activeStyle
+          : paginator.inactiveStyle;
 
-      if (currentX + dotLen > area.width) break;
-      buffer.writeString(currentX, 0, dot, dotStyle);
+      if (currentX + dotLen > size.width) break;
+      viewport.writeString(currentX, 0, dot, dotStyle);
       currentX += dotLen;
 
-      if (i < totalPages - 1) {
-        if (currentX + separatorChars.length > area.width) break;
-        buffer.writeString(currentX, 0, separator, separatorStyle);
+      if (i < paginator.totalPages - 1) {
+        if (currentX + separatorChars.length > size.width) break;
+        viewport.writeString(
+          currentX,
+          0,
+          paginator.separator,
+          paginator.separatorStyle,
+        );
         currentX += separatorChars.length;
       }
     }

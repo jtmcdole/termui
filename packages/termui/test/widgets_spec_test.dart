@@ -8,16 +8,42 @@ import 'package:termui_recorder/termui_recorder.dart';
 
 class SpyWidget extends Widget {
   int renderCount = 0;
+
   @override
-  void render(Buffer buffer, Rect area) {
-    renderCount++;
+  Element createElement() => _SpyElement(this);
+}
+
+class _SpyElement extends Element {
+  _SpyElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    (widget as SpyWidget).renderCount++;
   }
 }
 
 class DummyWidget extends Widget {
   const DummyWidget();
+
   @override
-  void render(Buffer buffer, Rect area) {}
+  Element createElement() => _DummyElement(this);
+}
+
+class _DummyElement extends Element {
+  _DummyElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {}
 }
 
 void main() {
@@ -33,7 +59,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(21, 5);
-      splitPane.render(buffer, const Rect(0, 0, 21, 5));
+      ElementWidget(splitPane)
+        ..layout(BoxConstraints.tight(const Size(21, 5)))
+        ..paint(buffer, Offset.zero);
 
       // 50% of 21 is round(10.5) = 11.
       // So divider is drawn at x = 11.
@@ -54,7 +82,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(21, 5);
-      splitPane.render(buffer, const Rect(0, 0, 21, 5));
+      ElementWidget(splitPane)
+        ..layout(BoxConstraints.tight(const Size(21, 5)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -78,13 +108,13 @@ void main() {
         );
 
         final buffer = Buffer.blank(21, 5);
-        splitPane.render(
-          buffer,
-          const Rect(0, 0, 21, 5),
-        ); // Resolves dividerX to 11
+        final splitPaneWrapper = ElementWidget(splitPane);
+        splitPaneWrapper.layout(BoxConstraints.tight(const Size(21, 5)));
+        splitPaneWrapper.paint(buffer, Offset.zero);
+        final splitPaneEl = splitPaneWrapper.element as SplitPaneElement;
 
         // Inject press sequence at divider (11)
-        splitPane.handleMouseEvent(
+        splitPaneEl.handleMouseEvent(
           const MouseEvent(
             x: 12,
             y: 1,
@@ -96,7 +126,7 @@ void main() {
         );
 
         // Drag left by 5 columns (to 6)
-        splitPane.handleMouseEvent(
+        splitPaneEl.handleMouseEvent(
           const MouseEvent(
             x: 7,
             y: 1,
@@ -130,13 +160,13 @@ void main() {
       );
 
       final buffer = Buffer.blank(21, 5);
-      splitPane.render(
-        buffer,
-        const Rect(0, 0, 21, 5),
-      ); // Initial ratio is min = 8
+      final splitPaneWrapper = ElementWidget(splitPane);
+      splitPaneWrapper.layout(BoxConstraints.tight(const Size(21, 5)));
+      splitPaneWrapper.paint(buffer, Offset.zero);
+      final splitPaneEl = splitPaneWrapper.element as SplitPaneElement;
 
       // Press at divider (8)
-      splitPane.handleMouseEvent(
+      splitPaneEl.handleMouseEvent(
         const MouseEvent(
           x: 9,
           y: 1,
@@ -148,7 +178,7 @@ void main() {
       );
 
       // Attempt to drag past child1's min limit (8) to 5
-      splitPane.handleMouseEvent(
+      splitPaneEl.handleMouseEvent(
         const MouseEvent(
           x: 6,
           y: 1,
@@ -179,7 +209,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(20, 50);
-      lazyTable.render(buffer, const Rect(0, 0, 20, 50));
+      ElementWidget(lazyTable)
+        ..layout(BoxConstraints.tight(const Size(20, 50)))
+        ..paint(buffer, Offset.zero);
 
       expect(builderCalls, equals(50));
     });
@@ -199,7 +231,9 @@ void main() {
       final buffer = Buffer.blank(20, 50);
 
       // Initial render at scrollOffset = 0
-      lazyTable.render(buffer, const Rect(0, 0, 20, 50));
+      ElementWidget(lazyTable)
+        ..layout(BoxConstraints.tight(const Size(20, 50)))
+        ..paint(buffer, Offset.zero);
       expect(queriedIndices.first, equals(0));
       expect(queriedIndices.last, equals(49));
 
@@ -208,7 +242,9 @@ void main() {
       // Scroll down by 1
       lazyTable.scrollOffset = 1;
       lazyTable.selectedRowIndex = 1;
-      lazyTable.render(buffer, const Rect(0, 0, 20, 50));
+      ElementWidget(lazyTable)
+        ..layout(BoxConstraints.tight(const Size(20, 50)))
+        ..paint(buffer, Offset.zero);
 
       // Index 0 must be dropped (not queried), and index 50 must be queried
       expect(queriedIndices.contains(0), isFalse);
@@ -234,7 +270,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(1, 10);
-      scrollBar.render(buffer, const Rect(0, 0, 1, 10));
+      ElementWidget(scrollBar)
+        ..layout(BoxConstraints.tight(const Size(1, 10)))
+        ..paint(buffer, Offset.zero);
 
       // Assert only 1 cell contains the thumb char '█'
       var thumbCount = 0;
@@ -258,11 +296,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(1, 10);
-      scrollBar.render(
-        buffer,
-        const Rect(0, 0, 1, 10),
-      ); // Resolves area height to 10
-
+      final scrollBarWrapper = ElementWidget(scrollBar);
+      scrollBarWrapper.layout(BoxConstraints.tight(const Size(1, 10)));
+      scrollBarWrapper.paint(buffer, Offset.zero);
       // Click at y = 5 (which is 50% of track height 10)
       scrollBar.handleMouseEvent(
         const MouseEvent(
@@ -290,8 +326,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(1, 10);
-      scrollBar.render(buffer, const Rect(0, 0, 1, 10));
-
+      final scrollBarWrapper = ElementWidget(scrollBar);
+      scrollBarWrapper.layout(BoxConstraints.tight(const Size(1, 10)));
+      scrollBarWrapper.paint(buffer, Offset.zero);
       // Drag past top (y = -5)
       scrollBar.handleMouseEvent(
         const MouseEvent(
@@ -339,7 +376,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(10, 5);
-      panel.render(buffer, const Rect(0, 0, 10, 5));
+      ElementWidget(panel)
+        ..layout(BoxConstraints.tight(const Size(10, 5)))
+        ..paint(buffer, Offset.zero);
 
       expect(spy1.renderCount, equals(1));
       expect(spy2.renderCount, equals(0));

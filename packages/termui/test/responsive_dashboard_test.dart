@@ -9,10 +9,10 @@ void main() {
     final element = app.createElement()..mount(null);
 
     final buffer = Buffer.blank(80, 20);
-    expect(
-      () => element.render(buffer, const Rect(0, 0, 80, 20)),
-      returnsNormally,
-    );
+    expect(() {
+      element.layout(BoxConstraints.tight(const Size(80, 20)));
+      element.paint(buffer, Offset.zero);
+    }, returnsNormally);
 
     element.unmount(); // Clean up timers
   });
@@ -22,10 +22,10 @@ void main() {
     final element = app.createElement()..mount(null);
 
     final buffer = Buffer.blank(30, 8);
-    expect(
-      () => element.render(buffer, const Rect(0, 0, 30, 8)),
-      returnsNormally,
-    );
+    expect(() {
+      element.layout(BoxConstraints.tight(const Size(30, 8)));
+      element.paint(buffer, Offset.zero);
+    }, returnsNormally);
 
     // Verify it renders the fallback message: "Screen too small!"
     var foundFallbackText = false;
@@ -50,17 +50,17 @@ void main() {
 
     // Initial render
     final buffer1 = Buffer.blank(80, 20);
-    expect(
-      () => element.render(buffer1, const Rect(0, 0, 80, 20)),
-      returnsNormally,
-    );
+    expect(() {
+      element.layout(BoxConstraints.tight(const Size(80, 20)));
+      element.paint(buffer1, Offset.zero);
+    }, returnsNormally);
 
     // Simulate resize by rendering with a different bounding box
     final buffer2 = Buffer.blank(100, 30);
-    expect(
-      () => element.render(buffer2, const Rect(0, 0, 100, 30)),
-      returnsNormally,
-    );
+    expect(() {
+      element.layout(BoxConstraints.tight(const Size(100, 30)));
+      element.paint(buffer2, Offset.zero);
+    }, returnsNormally);
 
     element.unmount(); // Clean up timers
   });

@@ -155,9 +155,41 @@ class _AnimatedButtonRenderWidget extends Widget {
   const _AnimatedButtonRenderWidget(this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final W = state.widget.width ?? area.width;
-    final H = state.widget.height ?? area.height;
+  Element createElement() => _AnimatedButtonElement(this);
+}
+
+class _AnimatedButtonElement extends Element {
+  _AnimatedButtonElement(_AnimatedButtonRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _AnimatedButtonRenderWidget;
+    final state = wWidget.state;
+    final w =
+        state.widget.width ??
+        (constraints.maxWidth == BoxConstraints.infinity
+            ? 0
+            : constraints.maxWidth);
+    final h =
+        state.widget.height ??
+        (constraints.maxHeight == BoxConstraints.infinity
+            ? 0
+            : constraints.maxHeight);
+    state._lastWidth = w;
+    state._lastHeight = h;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final wWidget = widget as _AnimatedButtonRenderWidget;
+    final state = wWidget.state;
+    final W = size.width;
+    final H = size.height;
     state._lastWidth = W;
     state._lastHeight = H;
 
@@ -165,7 +197,7 @@ class _AnimatedButtonRenderWidget extends Widget {
     final baseStyle = state.widget.style;
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        buffer.setCell(x, y, Cell(' ', baseStyle));
+        viewport.setCell(x, y, Cell(' ', baseStyle));
       }
     }
 
@@ -174,10 +206,9 @@ class _AnimatedButtonRenderWidget extends Widget {
     final textLen = chars.length;
     final startX = max(0, (W - textLen) ~/ 2);
     final startY = max(0, (H - 1) ~/ 2);
-    buffer.writeString(startX, startY, state.widget.text, baseStyle);
+    viewport.writeString(startX, startY, state.widget.text, baseStyle);
 
     // 3. Delegate overlays to the animation framework mixin.
-    // This overlays animation calculations on top of existing cells.
-    state.paintEffects(buffer, Rect(0, 0, W, H), baseStyle);
+    state.paintEffects(viewport, Rect(0, 0, W, H), baseStyle);
   }
 }

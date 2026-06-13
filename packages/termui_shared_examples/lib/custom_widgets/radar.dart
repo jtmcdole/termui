@@ -39,37 +39,64 @@ class Radar extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => _RadarElement(this);
+}
+
+class _RadarElement extends Element {
+  _RadarElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+    final rWidget = widget as Radar;
 
     // Use a Canvas to draw the radar
-    final canvas = Canvas(area.width, area.height);
+    final canvas = Canvas(w, h);
 
     // Calculate center in sub-pixel coordinates
-    final cx = area.width; // area.width * 2 / 2
-    final cy = area.height * 2; // area.height * 4 / 2
+    final cx = w; // area.width * 2 / 2
+    final cy = h * 2; // area.height * 4 / 2
 
     final radius = min(cx, cy) - 1;
 
     if (radius > 0) {
       // Draw outer circle
-      canvas.drawCircle(cx, cy, radius, cellStyle: gridStyle);
+      canvas.drawCircle(cx, cy, radius, cellStyle: rWidget.gridStyle);
 
       // Draw inner circles
-      canvas.drawCircle(cx, cy, radius ~/ 2, cellStyle: gridStyle);
-      canvas.drawCircle(cx, cy, radius ~/ 4, cellStyle: gridStyle);
+      canvas.drawCircle(cx, cy, radius ~/ 2, cellStyle: rWidget.gridStyle);
+      canvas.drawCircle(cx, cy, radius ~/ 4, cellStyle: rWidget.gridStyle);
 
       // Draw crosshairs
-      canvas.drawLine(cx - radius, cy, cx + radius, cy, cellStyle: gridStyle);
-      canvas.drawLine(cx, cy - radius, cx, cy + radius, cellStyle: gridStyle);
+      canvas.drawLine(
+        cx - radius,
+        cy,
+        cx + radius,
+        cy,
+        cellStyle: rWidget.gridStyle,
+      );
+      canvas.drawLine(
+        cx,
+        cy - radius,
+        cx,
+        cy + radius,
+        cellStyle: rWidget.gridStyle,
+      );
 
       // Draw scanner arm
-      final armX = cx + (cos(scannerAngle) * radius).round();
-      final armY = cy + (sin(scannerAngle) * radius).round();
+      final armX = cx + (cos(rWidget.scannerAngle) * radius).round();
+      final armY = cy + (sin(rWidget.scannerAngle) * radius).round();
       canvas.drawLineColored(cx, cy, armX, armY, Colors.white, Colors.green);
 
       // Draw blips
-      for (final blip in blips) {
+      for (final blip in rWidget.blips) {
         final blipR = blip.distance * radius;
         final blipX = cx + (cos(blip.angle) * blipR).round();
         final blipY = cy + (sin(blip.angle) * blipR).round();
@@ -85,6 +112,9 @@ class Radar extends Widget {
     }
 
     // Render the canvas onto the buffer
-    canvas.render(buffer, area);
+    final canvasEl = canvas.createElement()..mount(null);
+    canvasEl.layout(BoxConstraints.tight(Size(w, h)));
+    canvasEl.paint(buffer, offset);
+    canvasEl.unmount();
   }
 }

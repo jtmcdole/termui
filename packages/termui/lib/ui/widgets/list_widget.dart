@@ -50,22 +50,58 @@ class ListWidget extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    adjustScroll(area.height);
+  Element createElement() => ListWidgetElement(this);
+}
 
-    for (var i = 0; i < area.height; i++) {
-      final itemIdx = scrollOffset + i;
-      if (itemIdx >= items.length) break;
+/// Mount element class corresponding to [ListWidget].
+class ListWidgetElement extends Element {
+  /// The indices of the visible items calculated in [performLayout].
+  List<int> visibleIndices = [];
 
-      final isSelected = itemIdx == selectedIndex;
-      final text = items[itemIdx];
-      // Pad line to fit full width in a grapheme-safe way
+  /// Instantiates the rendering element for the given ListWidget.
+  ListWidgetElement(ListWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final listWidget = widget as ListWidget;
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : listWidget.items.length;
+
+    listWidget.adjustScroll(height);
+
+    visibleIndices = [];
+    for (var i = 0; i < height; i++) {
+      final itemIdx = listWidget.scrollOffset + i;
+      if (itemIdx >= listWidget.items.length) break;
+      visibleIndices.add(itemIdx);
+    }
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final listWidget = widget as ListWidget;
+    final w = size.width;
+
+    for (var i = 0; i < visibleIndices.length; i++) {
+      final itemIdx = visibleIndices[i];
+      final isSelected = itemIdx == listWidget.selectedIndex;
+      final text = listWidget.items[itemIdx];
+
       final chars = text.characters;
-      final padded = chars.length >= area.width
-          ? chars.take(area.width).toString()
-          : chars.toString() + (' ' * (area.width - chars.length));
+      final padded = chars.length >= w
+          ? chars.take(w).toString()
+          : chars.toString() + (' ' * (w - chars.length));
 
-      buffer.writeString(0, i, padded, isSelected ? selectedStyle : itemStyle);
+      buffer.writeString(
+        offset.dx,
+        offset.dy + i,
+        padded,
+        isSelected ? listWidget.selectedStyle : listWidget.itemStyle,
+      );
     }
   }
 }

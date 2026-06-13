@@ -30,7 +30,8 @@ void main() {
       );
 
       final buffer = Buffer.blank(10, 10);
-      tree.render(buffer, const Rect(0, 0, 10, 10));
+      tree.layout(BoxConstraints.tight(const Size(10, 10)));
+      tree.paint(buffer, Offset.zero);
 
       // Check parenting
       expect(childNode1.parent, equals(rootScope));

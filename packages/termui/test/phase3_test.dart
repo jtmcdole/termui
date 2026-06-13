@@ -9,8 +9,25 @@ class LabelWidget extends Widget {
   const LabelWidget(this.text);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    buffer.writeString(0, 0, text, Style.empty);
+  Element createElement() => _LabelElement(this);
+}
+
+class _LabelElement extends Element {
+  _LabelElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(Size((widget as LabelWidget).text.length, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      (widget as LabelWidget).text,
+      Style.empty,
+    );
   }
 }
 
@@ -99,7 +116,9 @@ void main() {
         const Expanded(child: LabelWidget('3')),
       ]);
 
-      layout.render(root, const Rect(0, 0, 10, 10));
+      ElementWidget(layout)
+        ..layout(BoxConstraints.tight(const Size(10, 10)))
+        ..paint(root, Offset.zero);
 
       // Left column (0..4) is handled by Column.
       // Row 0 has LabelWidget('1') -> '1' at (0, 0)
@@ -120,7 +139,9 @@ void main() {
         child: const LabelWidget('Hi'),
       );
 
-      padding.render(root, const Rect(0, 0, 10, 5));
+      ElementWidget(padding)
+        ..layout(BoxConstraints.tight(const Size(10, 5)))
+        ..paint(root, Offset.zero);
 
       // Root buffer starts at (0, 0).
       // Padding adds left=2, top=1.
@@ -142,7 +163,9 @@ void main() {
 
       // Width = 5, padding left=3 + right=3 = 6 (which exceeds 5).
       // Should not crash and should not render anything.
-      padding.render(root, const Rect(0, 0, 5, 5));
+      ElementWidget(padding)
+        ..layout(BoxConstraints.tight(const Size(5, 5)))
+        ..paint(root, Offset.zero);
       for (var y = 0; y < 5; y++) {
         for (var x = 0; x < 5; x++) {
           expect(root.getCell(x, y)!.char, ' ');

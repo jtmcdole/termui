@@ -131,8 +131,27 @@ class Spinner extends Widget implements Animatable {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    buffer.writeString(0, 0, currentFrame, style);
+  Element createElement() => SpinnerElement(this);
+}
+
+/// An element that manages the rendering and layout of a [Spinner] widget.
+class SpinnerElement extends Element {
+  /// Creates a [SpinnerElement] for the given [widget].
+  SpinnerElement(Spinner super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(const Size(1, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final spinner = widget as Spinner;
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      spinner.currentFrame,
+      spinner.style,
+    );
   }
 }

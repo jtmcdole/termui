@@ -116,7 +116,10 @@ class PromptRunner<T> {
 
   /// Default exit conditions mapping.
   static const Map<PromptExitTrigger, PromptExitAction> defaultExitConditions =
-      {PromptExitTrigger.controlC: PromptExitAction.abort};
+      {
+        PromptExitTrigger.controlC: PromptExitAction.abort,
+        PromptExitTrigger.enter: PromptExitAction.complete,
+      };
 
   Completer<T?>? _completer;
   Element? _rootElement;
@@ -257,7 +260,8 @@ class PromptRunner<T> {
 
       buffer.clear();
       // Render the rebuilt element tree on our double buffer canvas.
-      rootElement.render(buffer, Rect(0, 0, width, computedHeight));
+      rootElement.layout(BoxConstraints.tight(Size(width, computedHeight)));
+      rootElement.paint(buffer, Offset.zero);
 
       final sb = StringBuffer();
       renderer.render(buffer, sb);
@@ -394,7 +398,8 @@ extension PrintWidgetExtension on term.Terminal {
     final buffer = Buffer.blank(width, height);
     final element = widget.createElement();
     element.mount(null);
-    element.render(buffer, Rect(0, 0, width, height));
+    element.layout(BoxConstraints.tight(Size(width, height)));
+    element.paint(buffer, Offset.zero);
     element.unmount();
 
     final renderer = Renderer(width, height, mode: RenderingMode.inline);

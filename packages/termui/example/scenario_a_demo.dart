@@ -62,7 +62,9 @@ void main() async {
         ),
       ]);
 
-      layout.render(buffer, Rect(0, 0, width, height));
+      final elementWrapper = ElementWidget(layout);
+      elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       final sb = StringBuffer();
       renderer.render(buffer, sb);

@@ -72,13 +72,33 @@ class _TestAnimatedRenderWidget extends Widget {
   const _TestAnimatedRenderWidget(this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Element createElement() => _TestAnimatedRenderElement(this);
+}
+
+class _TestAnimatedRenderElement extends Element {
+  _TestAnimatedRenderElement(_TestAnimatedRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as _TestAnimatedRenderWidget;
+    final area = Rect(offset.dx, offset.dy, size.width, size.height);
     for (var y = 0; y < area.height; y++) {
       for (var x = 0; x < area.width; x++) {
-        buffer.setCell(x, y, Cell(' ', Style.empty));
+        buffer.setCell(area.x + x, area.y + y, Cell(' ', Style.empty));
       }
     }
-    state.paintEffects(buffer, area, Style.empty);
+    w.state.paintEffects(buffer, area, Style.empty);
   }
 }
 
@@ -214,7 +234,8 @@ void main() {
       final tree = ElementWidget(widget);
       final buffer = Buffer.blank(5, 5);
 
-      tree.render(buffer, const Rect(0, 0, 5, 5));
+      tree.layout(BoxConstraints.tight(const Size(5, 5)));
+      tree.paint(buffer, Offset.zero);
       final state = tree.findState<TestAnimatedWidgetState>()!;
 
       expect(state.vsyncInterval, equals(const Duration(milliseconds: 8)));
@@ -260,7 +281,8 @@ void main() {
       final tree = ElementWidget(widget);
       final buffer = Buffer.blank(5, 5);
 
-      tree.render(buffer, const Rect(0, 0, 5, 5));
+      tree.layout(BoxConstraints.tight(const Size(5, 5)));
+      tree.paint(buffer, Offset.zero);
       final state = tree.findState<TestAnimatedWidgetState>()!;
 
       expect(state.hasTicker(), isFalse);
@@ -282,7 +304,8 @@ void main() {
       final tree = ElementWidget(widget);
       final buffer = Buffer.blank(5, 5);
 
-      tree.render(buffer, const Rect(0, 0, 5, 5));
+      tree.layout(BoxConstraints.tight(const Size(5, 5)));
+      tree.paint(buffer, Offset.zero);
       final state = tree.findState<TestAnimatedWidgetState>()!;
 
       state.startEffect(const Point(2, 2));
@@ -388,7 +411,8 @@ void main() {
       final buffer = Buffer.blank(10, 3);
 
       // Render base state
-      tree.render(buffer, const Rect(0, 0, 10, 3));
+      tree.layout(BoxConstraints.tight(const Size(10, 3)));
+      tree.paint(buffer, Offset.zero);
       final state = tree.findState<AnimatedButtonState>()!;
 
       expect(state.isHovered, isFalse);
@@ -427,7 +451,8 @@ void main() {
       expect(state.isHovered, isFalse);
 
       // Verify that particles and ripple painted something modified
-      tree.render(buffer, const Rect(0, 0, 10, 3));
+      tree.layout(BoxConstraints.tight(const Size(10, 3)));
+      tree.paint(buffer, Offset.zero);
 
       // Release mouse inside: Pressed deactivates, Hover activates, onPressed called
       btn.handleMouseEvent(

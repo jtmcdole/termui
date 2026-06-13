@@ -24,20 +24,37 @@ class Gauge extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0) return;
+  Element createElement() => _GaugeElement(this);
+}
 
-    final percent = ((value - min) / (max - min)).clamp(0.0, 1.0);
-    final width = area.width;
-    final needlePos = (percent * (width - 1)).round();
+class _GaugeElement extends Element {
+  _GaugeElement(super.widget);
 
-    for (int i = 0; i < width; i++) {
-      final posPercent = i / (width - 1 > 0 ? width - 1 : 1);
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
 
-      Color activeColor = thresholds.isNotEmpty
-          ? thresholds.first.$2
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+    final gauge = widget as Gauge;
+
+    final percent = ((gauge.value - gauge.min) / (gauge.max - gauge.min)).clamp(
+      0.0,
+      1.0,
+    );
+    final needlePos = (percent * (w - 1)).round();
+
+    for (int i = 0; i < w; i++) {
+      final posPercent = i / (w - 1 > 0 ? w - 1 : 1);
+
+      Color activeColor = gauge.thresholds.isNotEmpty
+          ? gauge.thresholds.first.$2
           : Colors.white;
-      for (final threshold in thresholds) {
+      for (final threshold in gauge.thresholds) {
         if (posPercent >= threshold.$1) {
           activeColor = threshold.$2;
         }
@@ -46,22 +63,22 @@ class Gauge extends Widget {
       final style = Style(foreground: activeColor);
 
       if (i == needlePos) {
-        if (area.height > 1) {
+        if (h > 1) {
           buffer.writeString(
-            i,
-            0,
+            offset.dx + i,
+            offset.dy,
             '▼',
             style.merge(const Style(modifiers: Modifier.bold)),
           );
-          buffer.writeString(i, 1, '█', style);
+          buffer.writeString(offset.dx + i, offset.dy + 1, '█', style);
         } else {
-          buffer.writeString(i, 0, '█', style);
+          buffer.writeString(offset.dx + i, offset.dy, '█', style);
         }
       } else {
-        if (area.height > 1) {
-          buffer.writeString(i, 1, '▒', style);
+        if (h > 1) {
+          buffer.writeString(offset.dx + i, offset.dy + 1, '▒', style);
         } else {
-          buffer.writeString(i, 0, '▒', style);
+          buffer.writeString(offset.dx + i, offset.dy, '▒', style);
         }
       }
     }

@@ -441,46 +441,7 @@ class _DropdownButtonRenderWidget extends Widget
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final absBounds = getAbsoluteRect(buffer, area);
-    onRender(absBounds);
-
-    final arrow = isOpen ? '▲' : '▼';
-    final displayStyle = focused
-        ? const Style(modifiers: Modifier.reverse)
-        : style;
-
-    if (area.width > 3) {
-      final childViewport = Viewport(
-        buffer,
-        Rect(area.x + 1, area.y, area.width - 4, area.height),
-      );
-      displayWidget.render(
-        childViewport,
-        Rect(0, 0, area.width - 4, area.height),
-      );
-
-      // Apply the displayStyle (reverse-highlighting when focused) to all cells of childViewport
-      for (var y = 0; y < area.height; y++) {
-        for (var x = 0; x < area.width - 4; x++) {
-          final cell = childViewport.getCell(x, y);
-          if (cell != null) {
-            cell.style = cell.style.merge(displayStyle);
-          }
-        }
-      }
-
-      buffer.writeString(area.x, area.y, '[', displayStyle);
-      buffer.writeString(
-        area.x + area.width - 3,
-        area.y,
-        ' $arrow]',
-        displayStyle,
-      );
-    } else {
-      buffer.writeString(area.x, area.y, arrow, displayStyle);
-    }
-  }
+  Element createElement() => _DropdownButtonRenderWidgetElement(this);
 
   @override
   bool handleKeyEvent(term.KeyEvent event) {
@@ -490,6 +451,107 @@ class _DropdownButtonRenderWidget extends Widget
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       onAction();
+    }
+  }
+}
+
+class _DropdownButtonRenderWidgetElement extends Element {
+  Element? displayWidgetElement;
+
+  _DropdownButtonRenderWidgetElement(_DropdownButtonRenderWidget super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void unmount() {
+    displayWidgetElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final dButton = widget as _DropdownButtonRenderWidget;
+    if (displayWidgetElement != null &&
+        displayWidgetElement!.widget.runtimeType ==
+            dButton.displayWidget.runtimeType) {
+      displayWidgetElement!.update(dButton.displayWidget);
+    } else {
+      displayWidgetElement?.unmount();
+      displayWidgetElement = dButton.displayWidget.createElement();
+      displayWidgetElement!.mount(this);
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    if (displayWidgetElement != null) visitor(displayWidgetElement!);
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight ? constraints.maxHeight : 1;
+
+    if (displayWidgetElement != null && width > 3) {
+      displayWidgetElement!.layout(
+        BoxConstraints.tight(Size(width - 4, height)),
+      );
+    }
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final dButton = widget as _DropdownButtonRenderWidget;
+    final w = size.width;
+    final h = size.height;
+
+    final absBounds = getAbsoluteRect(buffer, Rect(offset.dx, offset.dy, w, h));
+    dButton.onRender(absBounds);
+
+    final arrow = dButton.isOpen ? '▲' : '▼';
+    final displayStyle = dButton.focused
+        ? const Style(modifiers: Modifier.reverse)
+        : dButton.style;
+
+    if (w > 3) {
+      final childViewport = Viewport(
+        buffer,
+        Rect(offset.dx + 1, offset.dy, w - 4, h),
+      );
+      if (displayWidgetElement != null) {
+        displayWidgetElement!.paint(childViewport, Offset.zero);
+      }
+
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w - 4; x++) {
+          final cell = childViewport.getCell(x, y);
+          if (cell != null) {
+            cell.style = cell.style.merge(displayStyle);
+          }
+        }
+      }
+
+      buffer.writeString(offset.dx, offset.dy, '[', displayStyle);
+      buffer.writeString(
+        offset.dx + w - 3,
+        offset.dy,
+        ' $arrow]',
+        displayStyle,
+      );
+    } else {
+      buffer.writeString(offset.dx, offset.dy, arrow, displayStyle);
     }
   }
 }
@@ -506,18 +568,81 @@ class _DropdownMenuItemWidget extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final itemStyle = selected ? style : Style.empty;
-    for (var y = 0; y < area.height; y++) {
-      buffer.writeString(area.x, area.y + y, ' ' * area.width, itemStyle);
+  Element createElement() => _DropdownMenuItemWidgetElement(this);
+}
+
+class _DropdownMenuItemWidgetElement extends Element {
+  Element? childElement;
+
+  _DropdownMenuItemWidgetElement(_DropdownMenuItemWidget super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final item = widget as _DropdownMenuItemWidget;
+    if (childElement != null &&
+        childElement!.widget.runtimeType == item.child.runtimeType) {
+      childElement!.update(item.child);
+    } else {
+      childElement?.unmount();
+      childElement = item.child.createElement();
+      childElement!.mount(this);
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight ? constraints.maxHeight : 1;
+
+    if (childElement != null) {
+      childElement!.layout(BoxConstraints.tight(Size(width, height)));
     }
 
-    final vp = Viewport(buffer, area);
-    child.render(vp, Rect(0, 0, area.width, area.height));
+    return constraints.constrain(Size(width, height));
+  }
 
-    if (selected) {
-      for (var y = 0; y < area.height; y++) {
-        for (var x = 0; x < area.width; x++) {
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final item = widget as _DropdownMenuItemWidget;
+    final w = size.width;
+    final h = size.height;
+
+    final itemStyle = item.selected ? item.style : Style.empty;
+    for (var y = 0; y < h; y++) {
+      buffer.writeString(offset.dx, offset.dy + y, ' ' * w, itemStyle);
+    }
+
+    final vp = Viewport(buffer, Rect(offset.dx, offset.dy, w, h));
+    if (childElement != null) {
+      childElement!.paint(vp, Offset.zero);
+    }
+
+    if (item.selected) {
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
           final cell = vp.getCell(x, y);
           if (cell != null) {
             cell.style = cell.style.merge(itemStyle);

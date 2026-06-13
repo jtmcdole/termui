@@ -200,113 +200,6 @@ class DecoratedBox extends Widget {
 
   @override
   Element createElement() => DecoratedBoxElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    // Fill background if defined
-    var bgStyle = decoration.backgroundStyle;
-    if (bgStyle == null && decoration.backgroundColor != null) {
-      bgStyle = Style(background: decoration.backgroundColor);
-    }
-    if (bgStyle != null) {
-      for (var y = 0; y < area.height; y++) {
-        for (var x = 0; x < area.width; x++) {
-          buffer.setCell(area.x + x, area.y + y, Cell(' ', bgStyle));
-        }
-      }
-    }
-
-    // Draw border if defined
-    final border = decoration.border;
-    var topOffset = 0;
-    var bottomOffset = 0;
-    var leftOffset = 0;
-    var rightOffset = 0;
-
-    if (border != null) {
-      final style = bgStyle != null
-          ? bgStyle.merge(border.style)
-          : border.style;
-
-      // Draw horizontal lines (excluding corners)
-      if (border.topChar.isNotEmpty && area.height > 0) {
-        topOffset = 1;
-        for (var x = 1; x < area.width - 1; x++) {
-          buffer.setCell(area.x + x, area.y, Cell(border.topChar, style));
-        }
-      }
-      if (border.bottomChar.isNotEmpty && area.height > 1) {
-        bottomOffset = 1;
-        for (var x = 1; x < area.width - 1; x++) {
-          buffer.setCell(
-            area.x + x,
-            area.y + area.height - 1,
-            Cell(border.bottomChar, style),
-          );
-        }
-      }
-
-      // Draw vertical lines (excluding corners)
-      if (border.leftChar.isNotEmpty && area.width > 0) {
-        leftOffset = 1;
-        for (var y = 1; y < area.height - 1; y++) {
-          buffer.setCell(area.x, area.y + y, Cell(border.leftChar, style));
-        }
-      }
-      if (border.rightChar.isNotEmpty && area.width > 1) {
-        rightOffset = 1;
-        for (var y = 1; y < area.height - 1; y++) {
-          buffer.setCell(
-            area.x + area.width - 1,
-            area.y + y,
-            Cell(border.rightChar, style),
-          );
-        }
-      }
-
-      // Draw corners
-      if (border.topLeftChar.isNotEmpty && area.width > 0 && area.height > 0) {
-        buffer.setCell(area.x, area.y, Cell(border.topLeftChar, style));
-      }
-      if (border.topRightChar.isNotEmpty && area.width > 1 && area.height > 0) {
-        buffer.setCell(
-          area.x + area.width - 1,
-          area.y,
-          Cell(border.topRightChar, style),
-        );
-      }
-      if (border.bottomLeftChar.isNotEmpty &&
-          area.width > 0 &&
-          area.height > 1) {
-        buffer.setCell(
-          area.x,
-          area.y + area.height - 1,
-          Cell(border.bottomLeftChar, style),
-        );
-      }
-      if (border.bottomRightChar.isNotEmpty &&
-          area.width > 1 &&
-          area.height > 1) {
-        buffer.setCell(
-          area.x + area.width - 1,
-          area.y + area.height - 1,
-          Cell(border.bottomRightChar, style),
-        );
-      }
-    }
-
-    // Render child in remaining area
-    final childX = area.x + leftOffset;
-    final childY = area.y + topOffset;
-    final childWidth = area.width - leftOffset - rightOffset;
-    final childHeight = area.height - topOffset - bottomOffset;
-
-    if (childWidth > 0 && childHeight > 0) {
-      final childArea = Rect(childX, childY, childWidth, childHeight);
-      final childViewport = Viewport(buffer, childArea);
-      child.render(childViewport, Rect(0, 0, childWidth, childHeight));
-    }
-  }
 }
 
 /// Element for [DecoratedBox].
@@ -314,12 +207,107 @@ class DecoratedBoxElement extends Element {
   /// The element corresponding to the [DecoratedBox]'s child.
   Element? childElement;
 
+  int _cachedTopOffset = 0;
+  int _cachedBottomOffset = 0;
+  int _cachedLeftOffset = 0;
+  int _cachedRightOffset = 0;
+
   /// Creates a new [DecoratedBoxElement].
   DecoratedBoxElement(DecoratedBox super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final db = widget as DecoratedBox;
+    if (childElement != null &&
+        childElement!.widget.runtimeType == db.child.runtimeType) {
+      childElement!.update(db.child);
+    } else {
+      childElement?.unmount();
+      childElement = db.child.createElement();
+      childElement!.mount(this);
+    }
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final db = widget as DecoratedBox;
+    final border = db.decoration.border;
+
+    _cachedTopOffset = 0;
+    _cachedBottomOffset = 0;
+    _cachedLeftOffset = 0;
+    _cachedRightOffset = 0;
+
+    if (border != null) {
+      if (border.topChar.isNotEmpty) {
+        _cachedTopOffset = 1;
+      }
+      if (border.bottomChar.isNotEmpty) {
+        _cachedBottomOffset = 1;
+      }
+      if (border.leftChar.isNotEmpty) {
+        _cachedLeftOffset = 1;
+      }
+      if (border.rightChar.isNotEmpty) {
+        _cachedRightOffset = 1;
+      }
+    }
+
+    final doubleWidth = _cachedLeftOffset + _cachedRightOffset;
+    final doubleHeight = _cachedTopOffset + _cachedBottomOffset;
+
+    final childConstraints = BoxConstraints(
+      minWidth: constraints.minWidth - doubleWidth < 0
+          ? 0
+          : constraints.minWidth - doubleWidth,
+      maxWidth: constraints.maxWidth == BoxConstraints.infinity
+          ? BoxConstraints.infinity
+          : (constraints.maxWidth - doubleWidth < 0
+                ? 0
+                : constraints.maxWidth - doubleWidth),
+      minHeight: constraints.minHeight - doubleHeight < 0
+          ? 0
+          : constraints.minHeight - doubleHeight,
+      maxHeight: constraints.maxHeight == BoxConstraints.infinity
+          ? BoxConstraints.infinity
+          : (constraints.maxHeight - doubleHeight < 0
+                ? 0
+                : constraints.maxHeight - doubleHeight),
+    );
+
+    if (childElement != null) {
+      final childSize = childElement!.layout(childConstraints);
+      return Size(
+        childSize.width + doubleWidth,
+        childSize.height + doubleHeight,
+      );
+    }
+
+    return Size(doubleWidth, doubleHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final db = widget as DecoratedBox;
+    final area = Rect(offset.dx, offset.dy, size.width, size.height);
 
     // Fill background if defined
     var bgStyle = db.decoration.backgroundStyle;
@@ -336,10 +324,6 @@ class DecoratedBoxElement extends Element {
 
     // Draw border if defined
     final border = db.decoration.border;
-    var topOffset = 0;
-    var bottomOffset = 0;
-    var leftOffset = 0;
-    var rightOffset = 0;
 
     if (border != null) {
       final style = bgStyle != null
@@ -348,13 +332,11 @@ class DecoratedBoxElement extends Element {
 
       // Draw horizontal lines (excluding corners)
       if (border.topChar.isNotEmpty && area.height > 0) {
-        topOffset = 1;
         for (var x = 1; x < area.width - 1; x++) {
           buffer.setCell(area.x + x, area.y, Cell(border.topChar, style));
         }
       }
       if (border.bottomChar.isNotEmpty && area.height > 1) {
-        bottomOffset = 1;
         for (var x = 1; x < area.width - 1; x++) {
           buffer.setCell(
             area.x + x,
@@ -366,13 +348,11 @@ class DecoratedBoxElement extends Element {
 
       // Draw vertical lines (excluding corners)
       if (border.leftChar.isNotEmpty && area.width > 0) {
-        leftOffset = 1;
         for (var y = 1; y < area.height - 1; y++) {
           buffer.setCell(area.x, area.y + y, Cell(border.leftChar, style));
         }
       }
       if (border.rightChar.isNotEmpty && area.width > 1) {
-        rightOffset = 1;
         for (var y = 1; y < area.height - 1; y++) {
           buffer.setCell(
             area.x + area.width - 1,
@@ -413,23 +393,9 @@ class DecoratedBoxElement extends Element {
       }
     }
 
-    final childX = area.x + leftOffset;
-    final childY = area.y + topOffset;
-    final childWidth = area.width - leftOffset - rightOffset;
-    final childHeight = area.height - topOffset - bottomOffset;
-
-    if (childWidth > 0 && childHeight > 0) {
-      if (childElement != null &&
-          childElement!.widget.runtimeType == db.child.runtimeType) {
-        childElement!.update(db.child);
-      } else {
-        childElement = db.child.createElement();
-        childElement!.mount(this);
-      }
-
-      final childArea = Rect(childX, childY, childWidth, childHeight);
-      final childViewport = Viewport(buffer, childArea);
-      childElement!.render(childViewport, Rect(0, 0, childWidth, childHeight));
+    if (childElement != null) {
+      final childOffset = Offset(_cachedLeftOffset, _cachedTopOffset);
+      childElement!.paint(buffer, offset + childOffset);
     }
   }
 

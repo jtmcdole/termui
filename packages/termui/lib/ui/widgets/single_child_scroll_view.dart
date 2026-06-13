@@ -110,13 +110,6 @@ class _ScrollViewRenderProxy extends Widget {
 
   @override
   Element createElement() => _ScrollViewRenderProxyElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    // Fallback for direct widget rendering outside of active element tree
-    final rootContext = _ScrollViewRenderProxyElement(this)..mount(null);
-    rootContext.render(buffer, area);
-  }
 }
 
 class _ScrollViewRenderProxyElement extends Element {
@@ -125,81 +118,131 @@ class _ScrollViewRenderProxyElement extends Element {
   _ScrollViewRenderProxyElement(_ScrollViewRenderProxy super.widget);
 
   @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final proxyWidget = widget as _ScrollViewRenderProxy;
+    if (childElement != null &&
+        childElement!.widget.runtimeType == proxyWidget.child.runtimeType) {
+      childElement!.update(proxyWidget.child);
+    } else {
+      childElement?.unmount();
+      childElement = proxyWidget.child.createElement();
+      childElement!.mount(this);
+    }
+  }
+
+  @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Size performLayout(BoxConstraints constraints) {
     final proxyWidget = widget as _ScrollViewRenderProxy;
-    if (area.width <= 0 || area.height <= 0) return;
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight ? constraints.maxHeight : 80;
 
     final extent = proxyWidget.scrollDirection == LayoutDirection.vertical
-        ? area.height
-        : area.width;
+        ? height
+        : width;
     proxyWidget.controller.viewportExtent = extent;
 
-    final scrollOffset = proxyWidget.controller.scrollOffset;
     final int childWidth =
         proxyWidget.scrollDirection == LayoutDirection.vertical
-        ? area.width
+        ? width
         : proxyWidget.controller.totalExtent;
     final int childHeight =
         proxyWidget.scrollDirection == LayoutDirection.vertical
         ? proxyWidget.controller.totalExtent
-        : area.height;
+        : height;
 
-    if (childWidth <= 0 || childHeight <= 0) return;
-
-    if (childElement != null &&
-        childElement!.widget.runtimeType == proxyWidget.child.runtimeType) {
-      childElement!.update(proxyWidget.child);
-    } else {
-      childElement = proxyWidget.child.createElement();
-      childElement!.mount(this);
+    if (childElement != null && childWidth > 0 && childHeight > 0) {
+      final childConstraints = BoxConstraints.tight(
+        Size(childWidth, childHeight),
+      );
+      childElement!.layout(childConstraints);
     }
 
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final proxyWidget = widget as _ScrollViewRenderProxy;
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+
+    final scrollOffset = proxyWidget.controller.scrollOffset;
+    final int childWidth =
+        proxyWidget.scrollDirection == LayoutDirection.vertical
+        ? w
+        : proxyWidget.controller.totalExtent;
+    final int childHeight =
+        proxyWidget.scrollDirection == LayoutDirection.vertical
+        ? proxyWidget.controller.totalExtent
+        : h;
+
+    if (childWidth <= 0 || childHeight <= 0 || childElement == null) return;
+
     final virtualBuffer = Buffer.blank(childWidth, childHeight);
-    childElement!.render(virtualBuffer, Rect(0, 0, childWidth, childHeight));
+    childElement!.paint(virtualBuffer, Offset.zero);
 
     if (proxyWidget.scrollDirection == LayoutDirection.vertical) {
-      for (var y = 0; y < area.height; y++) {
+      for (var y = 0; y < h; y++) {
         final srcY = scrollOffset + y;
         if (srcY >= childHeight) break;
-        for (var x = 0; x < area.width; x++) {
+        for (var x = 0; x < w; x++) {
           final cell = virtualBuffer.getCell(x, srcY);
           if (cell != null) {
-            final targetCell = buffer.getCell(area.x + x, area.y + y);
+            final targetCell = buffer.getCell(offset.dx + x, offset.dy + y);
             if (targetCell != null) {
               final mergedStyle = targetCell.style.merge(cell.style);
               buffer.setCell(
-                area.x + x,
-                area.y + y,
+                offset.dx + x,
+                offset.dy + y,
                 Cell(cell.char, mergedStyle),
               );
             } else {
-              buffer.setCell(area.x + x, area.y + y, cell);
+              buffer.setCell(offset.dx + x, offset.dy + y, cell);
             }
           }
         }
       }
     } else {
-      for (var y = 0; y < area.height; y++) {
-        for (var x = 0; x < area.width; x++) {
+      for (var y = 0; y < h; y++) {
+        for (var x = 0; x < w; x++) {
           final srcX = scrollOffset + x;
           if (srcX >= childWidth) break;
           final cell = virtualBuffer.getCell(srcX, y);
           if (cell != null) {
-            final targetCell = buffer.getCell(area.x + x, area.y + y);
+            final targetCell = buffer.getCell(offset.dx + x, offset.dy + y);
             if (targetCell != null) {
               final mergedStyle = targetCell.style.merge(cell.style);
               buffer.setCell(
-                area.x + x,
-                area.y + y,
+                offset.dx + x,
+                offset.dy + y,
                 Cell(cell.char, mergedStyle),
               );
             } else {
-              buffer.setCell(area.x + x, area.y + y, cell);
+              buffer.setCell(offset.dx + x, offset.dy + y, cell);
             }
           }
         }

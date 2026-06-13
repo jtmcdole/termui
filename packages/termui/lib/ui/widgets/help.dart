@@ -57,18 +57,80 @@ class Help extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (bindings.isEmpty || area.width <= 0 || area.height <= 0) return;
+  Element createElement() => HelpElement(this);
+}
+
+/// An element that manages the layout and rendering of a [Help] widget.
+class HelpElement extends Element {
+  /// Creates a [HelpElement] for the given [widget].
+  HelpElement(Help super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final help = widget as Help;
+    final maxWidth = constraints.maxWidth == BoxConstraints.infinity
+        ? 999999
+        : constraints.maxWidth;
+
+    if (help.bindings.isEmpty || maxWidth <= 0) {
+      return constraints.constrain(Size.zero);
+    }
 
     final items = <_HelpItem>[];
-    for (final entry in bindings.entries) {
+    for (final entry in help.bindings.entries) {
+      items.add(_HelpItem(entry.key, entry.value));
+    }
+
+    var currentLineY = 1;
+    var currentLineX = 0;
+    final separatorChars = help.separator.characters;
+
+    for (var i = 0; i < items.length; i++) {
+      final item = items[i];
+      final itemLength =
+          item.key.characters.length + 1 + item.desc.characters.length;
+      final isLast = i == items.length - 1;
+
+      if (currentLineX + itemLength > maxWidth && currentLineX > 0) {
+        currentLineY++;
+        currentLineX = 0;
+      }
+
+      currentLineX += itemLength;
+
+      if (!isLast) {
+        if (currentLineX + separatorChars.length <= maxWidth) {
+          currentLineX += separatorChars.length;
+        } else {
+          currentLineY++;
+          currentLineX = 0;
+        }
+      }
+    }
+
+    final resolvedWidth = constraints.maxWidth == BoxConstraints.infinity
+        ? currentLineX
+        : constraints.maxWidth;
+    return constraints.constrain(Size(resolvedWidth, currentLineY));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final help = widget as Help;
+    if (help.bindings.isEmpty || size.width <= 0 || size.height <= 0) return;
+
+    final items = <_HelpItem>[];
+    for (final entry in help.bindings.entries) {
       items.add(_HelpItem(entry.key, entry.value));
     }
 
     var currentLineY = 0;
     var currentLineX = 0;
-
-    final separatorChars = separator.characters;
+    final separatorChars = help.separator.characters;
 
     for (var i = 0; i < items.length; i++) {
       final item = items[i];
@@ -78,37 +140,40 @@ class Help extends Widget {
       final descPartChars = descPart.characters;
       final isLast = i == items.length - 1;
 
-      // Calculate the length of "key desc" + separator (if not last)
       final itemLength = keyPartChars.length + 1 + descPartChars.length;
 
-      // Wrap to next line if it doesn't fit on the current line
-      if (currentLineX + itemLength > area.width && currentLineX > 0) {
+      if (currentLineX + itemLength > size.width && currentLineX > 0) {
         currentLineY++;
         currentLineX = 0;
       }
 
-      if (currentLineY >= area.height) break;
+      if (currentLineY >= size.height) break;
 
       // Render key
-      buffer.writeString(currentLineX, currentLineY, keyPart, keyStyle);
+      viewport.writeString(currentLineX, currentLineY, keyPart, help.keyStyle);
       currentLineX += keyPartChars.length;
 
       // Render space
-      buffer.writeString(currentLineX, currentLineY, ' ', Style.empty);
+      viewport.writeString(currentLineX, currentLineY, ' ', Style.empty);
       currentLineX += 1;
 
       // Render description
-      buffer.writeString(currentLineX, currentLineY, descPart, descStyle);
+      viewport.writeString(
+        currentLineX,
+        currentLineY,
+        descPart,
+        help.descStyle,
+      );
       currentLineX += descPartChars.length;
 
       // Render separator
       if (!isLast) {
-        if (currentLineX + separatorChars.length <= area.width) {
-          buffer.writeString(
+        if (currentLineX + separatorChars.length <= size.width) {
+          viewport.writeString(
             currentLineX,
             currentLineY,
-            separator,
-            separatorStyle,
+            help.separator,
+            help.separatorStyle,
           );
           currentLineX += separatorChars.length;
         } else {

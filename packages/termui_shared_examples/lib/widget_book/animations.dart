@@ -323,18 +323,35 @@ class _SparkleButtonRenderWidget extends Widget {
   const _SparkleButtonRenderWidget(this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final W = area.width;
-    final H = area.height;
-    state._lastWidth = W;
-    state._lastHeight = H;
+  Element createElement() => _SparkleButtonRenderElement(this);
+}
+
+class _SparkleButtonRenderElement extends Element {
+  _SparkleButtonRenderElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final W = size.width;
+    final H = size.height;
+    final wWidget = widget as _SparkleButtonRenderWidget;
+    wWidget.state._lastWidth = W;
+    wWidget.state._lastHeight = H;
 
     if (W <= 0 || H <= 0) return;
 
     // Clear transparent
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        buffer.setCell(x, y, Cell(' ', Style.transparent));
+        buffer.setCell(
+          offset.dx + x,
+          offset.dy + y,
+          Cell(' ', Style.transparent),
+        );
       }
     }
 
@@ -344,16 +361,24 @@ class _SparkleButtonRenderWidget extends Widget {
     final int bodyHeight = H - 1;
 
     // Draw shadow if hovering
-    if (state._isHovered && !state._isPressed) {
+    if (wWidget.state._isHovered && !wWidget.state._isPressed) {
       final shadowStyle = const Style(
         foreground: Color(64, 64, 64),
         modifiers: Modifier.dim,
       );
       for (var y = 1; y < H - 1; y++) {
-        buffer.setCell(W - 1, y, Cell('▐', shadowStyle));
+        buffer.setCell(
+          offset.dx + W - 1,
+          offset.dy + y,
+          Cell('▐', shadowStyle),
+        );
       }
       for (var x = 1; x < W; x++) {
-        buffer.setCell(x, H - 1, Cell('▄', shadowStyle));
+        buffer.setCell(
+          offset.dx + x,
+          offset.dy + H - 1,
+          Cell('▄', shadowStyle),
+        );
       }
     }
 
@@ -361,25 +386,29 @@ class _SparkleButtonRenderWidget extends Widget {
     // Draw body background
     for (var y = 0; y < bodyHeight; y++) {
       for (var x = 0; x < bodyWidth; x++) {
-        buffer.setCell(x, y, Cell(' ', baseStyle));
+        buffer.setCell(offset.dx + x, offset.dy + y, Cell(' ', baseStyle));
       }
     }
 
     // Write text
-    final textLen = state.widget.text.characters.length;
+    final textLen = wWidget.state.widget.text.characters.length;
     final startX = max(0, (bodyWidth - textLen) ~/ 2);
     final startY = max(0, (bodyHeight - 1) ~/ 2);
     buffer.writeString(
-      startX,
-      startY,
-      state.widget.text,
+      offset.dx + startX,
+      offset.dy + startY,
+      wWidget.state.widget.text,
       const Style(
         foreground: Colors.white,
         modifiers: Modifier.bold,
       ).merge(baseStyle),
     );
 
-    state.paintEffects(buffer, Rect(0, 0, bodyWidth, bodyHeight), baseStyle);
+    final v = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, bodyWidth, bodyHeight),
+    );
+    wWidget.state.paintEffects(v, Rect(0, 0, bodyWidth, bodyHeight), baseStyle);
   }
 }
 
@@ -484,18 +513,35 @@ class _FlashButtonRenderWidget extends Widget {
   const _FlashButtonRenderWidget(this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final W = area.width;
-    final H = area.height;
-    state._lastWidth = W;
-    state._lastHeight = H;
+  Element createElement() => _FlashButtonRenderElement(this);
+}
+
+class _FlashButtonRenderElement extends Element {
+  _FlashButtonRenderElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final W = size.width;
+    final H = size.height;
+    final wWidget = widget as _FlashButtonRenderWidget;
+    wWidget.state._lastWidth = W;
+    wWidget.state._lastHeight = H;
 
     if (W <= 0 || H <= 0) return;
 
     // Clear transparent
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        buffer.setCell(x, y, Cell(' ', Style.transparent));
+        buffer.setCell(
+          offset.dx + x,
+          offset.dy + y,
+          Cell(' ', Style.transparent),
+        );
       }
     }
 
@@ -505,16 +551,24 @@ class _FlashButtonRenderWidget extends Widget {
     final int bodyHeight = H - 1;
 
     // Draw shadow if hovering
-    if (state._isHovered && !state._isPressed) {
+    if (wWidget.state._isHovered && !wWidget.state._isPressed) {
       final shadowStyle = const Style(
         foreground: Color(64, 64, 64),
         modifiers: Modifier.dim,
       );
       for (var y = 1; y < H - 1; y++) {
-        buffer.setCell(W - 1, y, Cell('▐', shadowStyle));
+        buffer.setCell(
+          offset.dx + W - 1,
+          offset.dy + y,
+          Cell('▐', shadowStyle),
+        );
       }
       for (var x = 1; x < W; x++) {
-        buffer.setCell(x, H - 1, Cell('▄', shadowStyle));
+        buffer.setCell(
+          offset.dx + x,
+          offset.dy + H - 1,
+          Cell('▄', shadowStyle),
+        );
       }
     }
 
@@ -522,24 +576,28 @@ class _FlashButtonRenderWidget extends Widget {
     // Draw body background
     for (var y = 0; y < bodyHeight; y++) {
       for (var x = 0; x < bodyWidth; x++) {
-        buffer.setCell(x, y, Cell(' ', baseStyle));
+        buffer.setCell(offset.dx + x, offset.dy + y, Cell(' ', baseStyle));
       }
     }
 
     // Write text
-    final textLen = state.widget.text.characters.length;
+    final textLen = wWidget.state.widget.text.characters.length;
     final startX = max(0, (bodyWidth - textLen) ~/ 2);
     final startY = max(0, (bodyHeight - 1) ~/ 2);
     buffer.writeString(
-      startX,
-      startY,
-      state.widget.text,
+      offset.dx + startX,
+      offset.dy + startY,
+      wWidget.state.widget.text,
       const Style(
         foreground: Colors.white,
         modifiers: Modifier.bold,
       ).merge(baseStyle),
     );
 
-    state.paintEffects(buffer, Rect(0, 0, bodyWidth, bodyHeight), baseStyle);
+    final v = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, bodyWidth, bodyHeight),
+    );
+    wWidget.state.paintEffects(v, Rect(0, 0, bodyWidth, bodyHeight), baseStyle);
   }
 }

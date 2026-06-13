@@ -77,7 +77,9 @@ void main() {
           Spinner.dots(clockStopwatch: MockStopwatch(320)),
         ]);
 
-        layout.render(buffer, Rect(0, 0, width, 1));
+        final elementWrapper = ElementWidget(layout);
+        elementWrapper.layout(BoxConstraints.tight(Size(width, 1)));
+        elementWrapper.paint(buffer, Offset.zero);
 
         // With Row layout, each gets equal width (4 columns out of 20).
         expect(buffer.getCell(0, 0)?.char, '⠋');

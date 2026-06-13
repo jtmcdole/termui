@@ -202,35 +202,78 @@ class _SliderRenderWidget extends Widget {
   const _SliderRenderWidget({required this.widget, required this.focused});
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final percent = ((widget.value - widget.min) / (widget.max - widget.min))
-        .clamp(0.0, 1.0);
+  Element createElement() => _SliderElement(this);
+}
 
-    if (widget.axis == SliderAxis.horizontal) {
-      final trackLength = area.width;
+class _SliderElement extends Element {
+  _SliderElement(_SliderRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _SliderRenderWidget;
+    final w = wWidget.widget.axis == SliderAxis.horizontal
+        ? (constraints.maxWidth == BoxConstraints.infinity
+              ? 20
+              : constraints.maxWidth)
+        : 1;
+    final h = wWidget.widget.axis == SliderAxis.horizontal
+        ? 1
+        : (constraints.maxHeight == BoxConstraints.infinity
+              ? 10
+              : constraints.maxHeight);
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final wWidget = widget as _SliderRenderWidget;
+    final percent =
+        ((wWidget.widget.value - wWidget.widget.min) /
+                (wWidget.widget.max - wWidget.widget.min))
+            .clamp(0.0, 1.0);
+
+    if (wWidget.widget.axis == SliderAxis.horizontal) {
+      final trackLength = size.width;
       if (trackLength <= 0) return;
       final thumbPos = (percent * (trackLength - 1)).round();
-      final tc = widget.trackChar == '─' ? '─' : widget.trackChar;
+      final tc = wWidget.widget.trackChar == '─'
+          ? '─'
+          : wWidget.widget.trackChar;
 
       for (int i = 0; i < trackLength; i++) {
         if (i == thumbPos) {
-          buffer.writeString(i, 0, widget.thumbChar, widget.thumbStyle);
+          viewport.writeString(
+            i,
+            0,
+            wWidget.widget.thumbChar,
+            wWidget.widget.thumbStyle,
+          );
         } else {
-          buffer.writeString(i, 0, tc, widget.trackStyle);
+          viewport.writeString(i, 0, tc, wWidget.widget.trackStyle);
         }
       }
     } else {
-      final trackLength = area.height;
+      final trackLength = size.height;
       if (trackLength <= 0) return;
-      // In terminal, Y=0 is top. For vertical sliders, top is max.
       final thumbPos = trackLength - 1 - (percent * (trackLength - 1)).round();
-      final tc = widget.trackChar == '─' ? '│' : widget.trackChar;
+      final tc = wWidget.widget.trackChar == '─'
+          ? '│'
+          : wWidget.widget.trackChar;
 
       for (int i = 0; i < trackLength; i++) {
         if (i == thumbPos) {
-          buffer.writeString(0, i, widget.thumbChar, widget.thumbStyle);
+          viewport.writeString(
+            0,
+            i,
+            wWidget.widget.thumbChar,
+            wWidget.widget.thumbStyle,
+          );
         } else {
-          buffer.writeString(0, i, tc, widget.trackStyle);
+          viewport.writeString(0, i, tc, wWidget.widget.trackStyle);
         }
       }
     }
