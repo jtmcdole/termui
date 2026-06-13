@@ -96,13 +96,6 @@ class Table extends Widget {
 
   @override
   Element createElement() => TableElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    // Fallback if rendered outside element tree
-    final el = TableElement(this)..mount(null);
-    el.render(buffer, area);
-  }
 }
 
 /// Mount element class corresponding to [Table], preserving per-cell states.
@@ -110,8 +103,89 @@ class TableElement extends Element {
   /// Caches child elements created for cells with widget values.
   List<List<Element?>> cellElements = [];
 
+  /// Caching column widths resolved during layout.
+  List<int> resolvedColumnWidths = [];
+
+  /// Caching column X offsets computed during layout.
+  List<int> columnXOffsets = [];
+
+  /// Caching total content width of the table.
+  int totalContentWidth = 0;
+
   /// Instantiates the rendering element for the given table.
   TableElement(Table super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void unmount() {
+    for (final row in cellElements) {
+      for (final el in row) {
+        el?.unmount();
+      }
+    }
+    cellElements.clear();
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final table = widget as Table;
+    // Reconcile cell elements list
+    while (cellElements.length < table.rows.length) {
+      cellElements.add(
+        List.filled(table.headers.length, null, growable: false),
+      );
+    }
+    while (cellElements.length > table.rows.length) {
+      final removed = cellElements.removeLast();
+      for (final el in removed) {
+        el?.unmount();
+      }
+    }
+
+    for (var r = 0; r < table.rows.length; r++) {
+      final rowData = table.rows[r];
+      if (cellElements[r].length != table.headers.length) {
+        for (final el in cellElements[r]) {
+          el?.unmount();
+        }
+        cellElements[r] = List.filled(
+          table.headers.length,
+          null,
+          growable: false,
+        );
+      }
+      for (var c = 0; c < table.headers.length; c++) {
+        final cellData = c < rowData.length ? rowData[c] : '';
+        if (cellData is Widget) {
+          Element? cellEl = cellElements[r][c];
+          if (cellEl != null &&
+              cellEl.widget.runtimeType == cellData.runtimeType) {
+            cellEl.update(cellData);
+          } else {
+            cellEl?.unmount();
+            cellEl = cellData.createElement();
+            cellEl.mount(this);
+            cellElements[r][c] = cellEl;
+          }
+        } else {
+          cellElements[r][c]?.unmount();
+          cellElements[r][c] = null;
+        }
+      }
+    }
+  }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
@@ -123,19 +197,60 @@ class TableElement extends Element {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Size performLayout(BoxConstraints constraints) {
     final table = widget as Table;
+    final width = constraints.hasBoundedWidth ? constraints.maxWidth : 80;
+    final height = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : (table.rows.length + 2);
+
+    final usableHeight = height - 2;
+    table.adjustScroll(usableHeight);
+
+    // Calculate column widths
+    resolvedColumnWidths = List<int>.generate(table.headers.length, (c) {
+      return c < table.columnWidths.length ? table.columnWidths[c] : 10;
+    });
+
+    // Compute cell offsets
+    columnXOffsets = [];
+    int startX = 0;
+    for (var c = 0; c < table.headers.length; c++) {
+      columnXOffsets.add(startX);
+      startX += resolvedColumnWidths[c] + 1;
+    }
+    totalContentWidth = startX > 0 ? startX - 1 : 0;
+
+    // Layout child elements
+    for (var r = 0; r < table.rows.length; r++) {
+      for (var c = 0; c < table.headers.length; c++) {
+        final cellEl = cellElements[r][c];
+        if (cellEl != null) {
+          final colWidth = resolvedColumnWidths[c];
+          cellEl.layout(BoxConstraints.tight(Size(colWidth, 1)));
+        }
+      }
+    }
+
+    return constraints.constrain(Size(width, height));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final table = widget as Table;
+    final w = size.width;
+    final h = size.height;
     if (table.headers.isEmpty ||
         table.columnWidths.isEmpty ||
-        area.height <= 2 ||
-        area.width <= 0) {
+        h <= 2 ||
+        w <= 0) {
       return;
     }
 
     // 1. Render Headers
     final headerSb = StringBuffer();
     for (var i = 0; i < table.headers.length; i++) {
-      final width = i < table.columnWidths.length ? table.columnWidths[i] : 10;
+      final width = resolvedColumnWidths[i];
       final text = table.headers[i];
       final chars = text.characters;
       final padded = chars.length >= width
@@ -145,30 +260,18 @@ class TableElement extends Element {
       if (i < table.headers.length - 1) headerSb.write(' ');
     }
     final headerChars = headerSb.toString().characters;
-    final headerStr = headerChars.length >= area.width
-        ? headerChars.take(area.width).toString()
-        : headerChars.toString() + (' ' * (area.width - headerChars.length));
-    buffer.writeString(0, 0, headerStr, table.headerStyle);
+    final headerStr = headerChars.length >= w
+        ? headerChars.take(w).toString()
+        : headerChars.toString() + (' ' * (w - headerChars.length));
+    buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
 
     // 2. Render Header Divider Line
     final dividerChar = '─';
-    final divider = dividerChar * area.width;
-    buffer.writeString(0, 1, divider, table.borderStyle);
+    final divider = dividerChar * w;
+    buffer.writeString(offset.dx, offset.dy + 1, divider, table.borderStyle);
 
-    // 3. Render Rows with Scroll Adjustment
-    final usableHeight = area.height - 2;
-    table.adjustScroll(usableHeight);
-
-    // Synchronize cell elements list
-    while (cellElements.length < table.rows.length) {
-      cellElements.add(
-        List.filled(table.headers.length, null, growable: false),
-      );
-    }
-    if (cellElements.length > table.rows.length) {
-      cellElements.removeRange(table.rows.length, cellElements.length);
-    }
-
+    // 3. Render Rows
+    final usableHeight = h - 2;
     for (var r = 0; r < usableHeight; r++) {
       final rowIdx = table.scrollOffset + r;
       if (rowIdx >= table.rows.length) break;
@@ -179,34 +282,25 @@ class TableElement extends Element {
 
       int startX = 0;
       for (var c = 0; c < table.headers.length; c++) {
-        final colWidth = c < table.columnWidths.length
-            ? table.columnWidths[c]
-            : 10;
+        final colWidth = resolvedColumnWidths[c];
         final cellData = c < rowData.length ? rowData[c] : '';
+        final cellStartX = columnXOffsets[c];
 
-        final cellRect = Rect(startX, 2 + r, colWidth, 1);
+        final cellRect = Rect(
+          offset.dx + cellStartX,
+          offset.dy + 2 + r,
+          colWidth,
+          1,
+        );
         final vp = Viewport(buffer, cellRect);
 
         if (cellData is Widget) {
-          // Pre-fill cell viewport with space using currentStyle
           vp.fill(Cell(' ', currentStyle));
-
-          // Mount / update child element
-          Element? cellEl = cellElements[rowIdx][c];
-          if (cellEl != null &&
-              cellEl.widget.runtimeType == cellData.runtimeType) {
-            cellEl.update(cellData);
-          } else {
-            cellEl = cellData.createElement();
-            cellEl.mount(this);
-            cellElements[rowIdx][c] = cellEl;
+          final cellEl = cellElements[rowIdx][c];
+          if (cellEl != null) {
+            cellEl.paint(vp, Offset.zero);
           }
-
-          cellEl.render(vp, Rect(0, 0, colWidth, 1));
-          // We do NOT apply selection style on top of the rendered cell cells
-          // to prevent negative image and custom styling override.
         } else {
-          // Standard text rendering
           final cellText = cellData.toString();
           final chars = cellText.characters;
           final padded = chars.length >= colWidth
@@ -215,21 +309,29 @@ class TableElement extends Element {
           vp.writeString(0, 0, padded, currentStyle);
         }
 
-        // Render spacing between columns
         if (c < table.headers.length - 1) {
-          final sepX = startX + colWidth;
-          if (sepX < area.width) {
-            buffer.writeString(sepX, 2 + r, ' ', currentStyle);
+          final sepX = cellStartX + colWidth;
+          if (sepX < w) {
+            buffer.writeString(
+              offset.dx + sepX,
+              offset.dy + 2 + r,
+              ' ',
+              currentStyle,
+            );
           }
         }
 
         startX += colWidth + 1;
       }
 
-      // Pad remainder of the row to fill area.width
-      if (startX < area.width) {
-        final remainder = area.width - startX;
-        buffer.writeString(startX, 2 + r, ' ' * remainder, currentStyle);
+      if (startX < w) {
+        final remainder = w - startX;
+        buffer.writeString(
+          offset.dx + startX,
+          offset.dy + 2 + r,
+          ' ' * remainder,
+          currentStyle,
+        );
       }
     }
   }

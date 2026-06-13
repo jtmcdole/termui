@@ -23,18 +23,24 @@ void main() {
       .clear(); // <--- Clear first to make initial state match cleared state style
 
   // 1. Empty state: showing placeholder
-  area.render(buffer, const Rect(0, 0, 10, 1));
+  ElementWidget(area)
+    ..layout(BoxConstraints.tight(const Size(10, 1)))
+    ..paint(buffer, Offset.zero);
   final ansi1 = AnsiScreenshot.capture(buffer);
 
   // 2. Add text
   buffer.clear();
   area.handleKeyEvent(const KeyEvent('x', KeyType.character));
-  area.render(buffer, const Rect(0, 0, 10, 1));
+  ElementWidget(area)
+    ..layout(BoxConstraints.tight(const Size(10, 1)))
+    ..paint(buffer, Offset.zero);
 
   // 3. Clear text
   buffer.clear();
   area.handleKeyEvent(const KeyEvent('backspace', KeyType.backspace));
-  area.render(buffer, const Rect(0, 0, 10, 1));
+  ElementWidget(area)
+    ..layout(BoxConstraints.tight(const Size(10, 1)))
+    ..paint(buffer, Offset.zero);
   final ansi3 = AnsiScreenshot.capture(buffer);
 
   print('ansi1 length: ${ansi1.length}');

@@ -17,16 +17,38 @@ class WindowManagerWidget extends Widget {
   WindowManagerWidget(this.windowManager);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Element createElement() => _WindowManagerElement(this);
+}
+
+class _WindowManagerElement extends Element {
+  _WindowManagerElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(constraints.maxWidth, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as WindowManagerWidget;
+    final localBuffer = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
     // Fill background with a dark mesh pattern
-    buffer.fill(Cell('░', const Style(foreground: Color(45, 45, 45))));
+    localBuffer.fill(Cell('░', const Style(foreground: Color(45, 45, 45))));
 
     // Sort windows by Z-Index to render bottom-to-top
-    final sortedWins = List<Window>.from(windowManager.windows)
+    final sortedWins = List<Window>.from(w.windowManager.windows)
       ..sort((a, b) => a.zIndex.compareTo(b.zIndex));
 
     for (final win in sortedWins) {
-      win.render(buffer, area);
+      final winEl = win.createElement()..mount(null);
+      winEl.layout(
+        BoxConstraints.tight(Size(localBuffer.width, localBuffer.height)),
+      );
+      winEl.paint(localBuffer, Offset.zero);
+      winEl.unmount();
     }
   }
 }

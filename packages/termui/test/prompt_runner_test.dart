@@ -80,12 +80,24 @@ class TestKeyConsumerWidget extends Widget
   const TestKeyConsumerWidget({this.focused = true, this.shouldConsume = true});
 
   @override
-  void render(Buffer buffer, Rect area) {}
+  Element createElement() => _TestKeyConsumerElement(this);
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
     return shouldConsume;
   }
+}
+
+class _TestKeyConsumerElement extends Element {
+  _TestKeyConsumerElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {}
 }
 
 void main() {

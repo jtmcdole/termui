@@ -4,6 +4,172 @@ import 'package:characters/characters.dart';
 import 'buffer.dart';
 import 'style.dart';
 
+/// Represents integer dimensions on the terminal cell grid.
+class Size {
+  /// The horizontal dimension.
+  final int width;
+
+  /// The vertical dimension.
+  final int height;
+
+  /// Creates a [Size] with the given [width] and [height].
+  const Size(this.width, this.height);
+
+  /// A size with zero width and height.
+  static const Size zero = Size(0, 0);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Size && other.width == width && other.height == height;
+
+  @override
+  int get hashCode => Object.hash(width, height);
+
+  @override
+  String toString() => 'Size($width, $height)';
+}
+
+/// Represents an offset on the terminal cell grid coordinate space.
+class Offset {
+  /// The horizontal offset.
+  final int dx;
+
+  /// The vertical offset.
+  final int dy;
+
+  /// Creates an [Offset] with the given [dx] and [dy].
+  const Offset(this.dx, this.dy);
+
+  /// An offset with zero horizontal and vertical values.
+  static const Offset zero = Offset(0, 0);
+
+  /// Adds [other] offset to this offset.
+  Offset operator +(Offset other) => Offset(dx + other.dx, dy + other.dy);
+
+  /// Subtracts [other] offset from this offset.
+  Offset operator -(Offset other) => Offset(dx - other.dx, dy - other.dy);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Offset && other.dx == dx && other.dy == dy;
+
+  @override
+  int get hashCode => Object.hash(dx, dy);
+
+  @override
+  String toString() => 'Offset($dx, $dy)';
+}
+
+/// Defines layout boundaries inside terminal cell limits.
+class BoxConstraints {
+  /// The minimum width allowed.
+  final int minWidth;
+
+  /// The maximum width allowed.
+  final int maxWidth;
+
+  /// The minimum height allowed.
+  final int minHeight;
+
+  /// The maximum height allowed.
+  final int maxHeight;
+
+  /// The default maximum value indicating unbounded constraints.
+  static const int infinity = 999999;
+
+  /// Creates box constraints with the given limits.
+  const BoxConstraints({
+    this.minWidth = 0,
+    this.maxWidth = infinity,
+    this.minHeight = 0,
+    this.maxHeight = infinity,
+  });
+
+  /// Creates box constraints that require the given size exactly.
+  BoxConstraints.tight(Size size)
+    : minWidth = size.width,
+      maxWidth = size.width,
+      minHeight = size.height,
+      maxHeight = size.height;
+
+  /// Creates box constraints that forbid sizes larger than the given size.
+  BoxConstraints.loose(Size size)
+    : minWidth = 0,
+      maxWidth = size.width,
+      minHeight = 0,
+      maxHeight = size.height;
+
+  /// Creates box constraints that require the given width or height.
+  const BoxConstraints.tightFor({int? width, int? height})
+    : minWidth = width ?? 0,
+      maxWidth = width ?? infinity,
+      minHeight = height ?? 0,
+      maxHeight = height ?? infinity;
+
+  /// Clamps the input [Size] within these constraints.
+  Size constrain(Size size) {
+    return Size(
+      size.width.clamp(minWidth, maxWidth),
+      size.height.clamp(minHeight, maxHeight),
+    );
+  }
+
+  /// Whether the maximum width is bounded.
+  bool get hasBoundedWidth => maxWidth < infinity;
+
+  /// Whether the maximum height is bounded.
+  bool get hasBoundedHeight => maxHeight < infinity;
+
+  /// Whether the constraints are tight (min and max match for both width and height).
+  bool get isTight => minWidth == maxWidth && minHeight == maxHeight;
+
+  /// Creates a copy of this [BoxConstraints] with updated values.
+  BoxConstraints copyWith({
+    int? minWidth,
+    int? maxWidth,
+    int? minHeight,
+    int? maxHeight,
+  }) {
+    return BoxConstraints(
+      minWidth: minWidth ?? this.minWidth,
+      maxWidth: maxWidth ?? this.maxWidth,
+      minHeight: minHeight ?? this.minHeight,
+      maxHeight: maxHeight ?? this.maxHeight,
+    );
+  }
+
+  /// Enforces the given [constraints] on this constraint.
+  BoxConstraints enforce(BoxConstraints constraints) {
+    return BoxConstraints(
+      minWidth: minWidth.clamp(constraints.minWidth, constraints.maxWidth),
+      maxWidth: maxWidth.clamp(constraints.minWidth, constraints.maxWidth),
+      minHeight: minHeight.clamp(constraints.minHeight, constraints.maxHeight),
+      maxHeight: maxHeight.clamp(constraints.minHeight, constraints.maxHeight),
+    );
+  }
+
+  /// Tightens the constraints with the given width and height.
+  BoxConstraints tighten({int? width, int? height}) {
+    return BoxConstraints(
+      minWidth: width == null ? minWidth : width.clamp(minWidth, maxWidth),
+      maxWidth: width == null ? maxWidth : width.clamp(minWidth, maxWidth),
+      minHeight: height == null
+          ? minHeight
+          : height.clamp(minHeight, maxHeight),
+      maxHeight: height == null
+          ? maxHeight
+          : height.clamp(minHeight, maxHeight),
+    );
+  }
+
+  @override
+  String toString() {
+    return 'BoxConstraints(minWidth: $minWidth, maxWidth: $maxWidth, minHeight: $minHeight, maxHeight: $maxHeight)';
+  }
+}
+
 /// A 2D rectangle representing bounds in terminal space.
 class Rect {
   /// The horizontal x-coordinate of the rectangle's top-left corner.
@@ -180,9 +346,6 @@ abstract class Widget {
   /// Creates an [Element] to manage this widget's location in the tree.
   Element createElement() => LeafElement(this);
 
-  /// Renders the widget onto the provided [buffer] within the specified [area].
-  void render(Buffer buffer, Rect area);
-
   /// Computes the intrinsic height of this widget under the given [width] constraint.
   int getIntrinsicHeight(int width) {
     return 1;
@@ -197,6 +360,15 @@ abstract class Element implements BuildContext {
 
   /// The parent element in the widget tree.
   Element? parent;
+
+  BoxConstraints? _cachedConstraints;
+  Size? _cachedSize;
+
+  /// The cached constraints from the last layout pass.
+  BoxConstraints? get constraints => _cachedConstraints;
+
+  /// The resolved size of the element from the last layout pass.
+  Size get size => _cachedSize ?? Size.zero;
 
   /// Creates an element that uses the given [widget] as its configuration.
   Element(this.widget);
@@ -224,8 +396,25 @@ abstract class Element implements BuildContext {
     widget = newWidget;
   }
 
-  /// Renders the underlying widget to the provided [buffer] within the [area].
-  void render(Buffer buffer, Rect area);
+  /// Calculates the size of the element based on the given constraints.
+  Size layout(BoxConstraints constraints) {
+    _cachedConstraints = constraints;
+    final resolvedSize = performLayout(constraints);
+    _cachedSize = constraints.constrain(resolvedSize);
+    return _cachedSize!;
+  }
+
+  /// Hook for subclasses to perform layout within the given constraints.
+  Size performLayout(BoxConstraints constraints) {
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final height = widget.getIntrinsicHeight(width);
+    return constraints.constrain(Size(width, height));
+  }
+
+  /// Paints the element onto the provided buffer at the given offset.
+  void paint(Buffer buffer, Offset offset) {}
 
   /// Invokes [visitor] on each child element of this node.
   void visitChildren(void Function(Element child) visitor) {}
@@ -252,11 +441,16 @@ class LeafElement extends Element {
   LeafElement(super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    runZoned(() {
-      widget.render(buffer, area);
-    }, zoneValues: {#buildContext: this});
+  Size performLayout(BoxConstraints constraints) {
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final height = widget.getIntrinsicHeight(width);
+    return constraints.constrain(Size(width, height));
   }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {}
 }
 
 /// A widget that has configuration but delegates rendering to its built child.
@@ -269,13 +463,6 @@ abstract class StatelessWidget extends Widget {
 
   @override
   Element createElement() => StatelessElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    // Statelessly build and render child directly if called outside of an active element tree.
-    final rootContext = StatelessElement(this)..mount(null);
-    rootContext.render(buffer, area);
-  }
 
   @override
   int getIntrinsicHeight(int width) {
@@ -337,10 +524,16 @@ class StatelessElement extends Element {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    runZoned(() {
-      childElement?.render(buffer, area);
-    }, zoneValues: {#buildContext: this});
+  Size performLayout(BoxConstraints constraints) {
+    if (childElement != null) {
+      return childElement!.layout(constraints);
+    }
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset);
   }
 }
 
@@ -354,13 +547,6 @@ abstract class StatefulWidget extends Widget {
 
   @override
   Element createElement() => StatefulElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    // Lazily run stateful loop if rendered without app container.
-    final rootContext = StatefulElement(this)..mount(null);
-    rootContext.render(buffer, area);
-  }
 
   @override
   int getIntrinsicHeight(int width) {
@@ -483,10 +669,16 @@ class StatefulElement extends Element {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    runZoned(() {
-      childElement?.render(buffer, area);
-    }, zoneValues: {#buildContext: this});
+  Size performLayout(BoxConstraints constraints) {
+    if (childElement != null) {
+      return childElement!.layout(constraints);
+    }
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset);
   }
 }
 
@@ -500,12 +692,6 @@ abstract class InheritedWidget extends Widget {
 
   @override
   Element createElement() => InheritedElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    final rootContext = InheritedElement(this)..mount(null);
-    rootContext.render(buffer, area);
-  }
 
   @override
   int getIntrinsicHeight(int width) {
@@ -546,12 +732,8 @@ class InheritedElement extends Element {
 
   @override
   void update(Widget newWidget) {
-    final oldWidget = widget as InheritedWidget;
     super.update(newWidget);
-    final nextWidget = newWidget as InheritedWidget;
-    if (nextWidget.updateShouldNotify(oldWidget)) {
-      rebuild();
-    }
+    rebuild();
   }
 
   @override
@@ -560,10 +742,16 @@ class InheritedElement extends Element {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    runZoned(() {
-      childElement?.render(buffer, area);
-    }, zoneValues: {#buildContext: this});
+  Size performLayout(BoxConstraints constraints) {
+    if (childElement != null) {
+      return childElement!.layout(constraints);
+    }
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset);
   }
 }
 
@@ -879,16 +1067,6 @@ Constraint _getConstraint(Widget widget, LayoutDirection direction) {
   return const FlexConstraint(1);
 }
 
-Widget _getRealWidget(Widget widget) {
-  if (widget is Flexible) {
-    return widget.child;
-  }
-  if (widget is SizedBox) {
-    return widget.child ?? const SizedBox.shrink();
-  }
-  return widget;
-}
-
 /// A layout widget that arranges its children horizontally.
 class Row extends Widget {
   /// The children widgets to align horizontally.
@@ -899,21 +1077,6 @@ class Row extends Widget {
 
   @override
   Element createElement() => RowElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    final constraints = children
-        .map((c) => _getConstraint(c, LayoutDirection.horizontal))
-        .toList();
-    final rects = splitRect(area, constraints, LayoutDirection.horizontal);
-    for (var i = 0; i < children.length; i++) {
-      final child = _getRealWidget(children[i]);
-      final childArea = rects[i];
-      final viewport = Viewport(buffer, childArea);
-      child.render(viewport, Rect(0, 0, childArea.width, childArea.height));
-    }
-  }
 
   @override
   int getIntrinsicHeight(int width) {
@@ -939,28 +1102,26 @@ class Row extends Widget {
 class RowElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
+  List<Offset> _childOffsets = [];
 
   /// Creates a row element for a [Row] widget.
   RowElement(Row super.widget);
 
   @override
-  void unmount() {
-    for (final child in childElements) {
-      child.unmount();
-    }
-    super.unmount();
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final row = widget as Row;
-    if (area.width <= 0 || area.height <= 0) return;
-
-    final constraints = row.children
-        .map((c) => _getConstraint(c, LayoutDirection.horizontal))
-        .toList();
-    final rects = splitRect(area, constraints, LayoutDirection.horizontal);
-
     final newElements = <Element>[];
     for (var i = 0; i < row.children.length; i++) {
       final childWidget = row.children[i];
@@ -981,12 +1142,61 @@ class RowElement extends Element {
       childElements[i].unmount();
     }
     childElements = newElements;
+  }
+
+  @override
+  void unmount() {
+    for (final child in childElements) {
+      child.unmount();
+    }
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final row = widget as Row;
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final height = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    final area = Rect(0, 0, width, height);
+
+    final rowConstraints = row.children
+        .map((c) => _getConstraint(c, LayoutDirection.horizontal))
+        .toList();
+    final rects = splitRect(area, rowConstraints, LayoutDirection.horizontal);
+
+    _childOffsets = List<Offset>.filled(childElements.length, Offset.zero);
+    var maxChildHeight = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childArea = rects[i];
-      final viewport = Viewport(buffer, childArea);
-      childEl.render(viewport, Rect(0, 0, childArea.width, childArea.height));
+      _childOffsets[i] = Offset(childArea.x, childArea.y);
+      final childSize = childEl.layout(
+        BoxConstraints(
+          minWidth: childArea.width,
+          maxWidth: childArea.width,
+          minHeight: 0,
+          maxHeight: height,
+        ),
+      );
+      if (childSize.height > maxChildHeight) {
+        maxChildHeight = childSize.height;
+      }
+    }
+    return Size(width, maxChildHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    if (size.width <= 0 || size.height <= 0) return;
+    for (var i = 0; i < childElements.length; i++) {
+      if (i < _childOffsets.length) {
+        childElements[i].paint(buffer, offset + _childOffsets[i]);
+      }
     }
   }
 
@@ -1008,21 +1218,6 @@ class Column extends Widget {
   Element createElement() => ColumnElement(this);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    final constraints = children
-        .map((c) => _getConstraint(c, LayoutDirection.vertical))
-        .toList();
-    final rects = splitRect(area, constraints, LayoutDirection.vertical);
-    for (var i = 0; i < children.length; i++) {
-      final child = _getRealWidget(children[i]);
-      final childArea = rects[i];
-      final viewport = Viewport(buffer, childArea);
-      child.render(viewport, Rect(0, 0, childArea.width, childArea.height));
-    }
-  }
-
-  @override
   int getIntrinsicHeight(int width) {
     var totalHeight = 0;
     for (final child in children) {
@@ -1036,28 +1231,26 @@ class Column extends Widget {
 class ColumnElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
+  List<Offset> _childOffsets = [];
 
   /// Creates a column element for a [Column] widget.
   ColumnElement(Column super.widget);
 
   @override
-  void unmount() {
-    for (final child in childElements) {
-      child.unmount();
-    }
-    super.unmount();
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final column = widget as Column;
-    if (area.width <= 0 || area.height <= 0) return;
-
-    final constraints = column.children
-        .map((c) => _getConstraint(c, LayoutDirection.vertical))
-        .toList();
-    final rects = splitRect(area, constraints, LayoutDirection.vertical);
-
     final newElements = <Element>[];
     for (var i = 0; i < column.children.length; i++) {
       final childWidget = column.children[i];
@@ -1078,12 +1271,59 @@ class ColumnElement extends Element {
       childElements[i].unmount();
     }
     childElements = newElements;
+  }
+
+  @override
+  void unmount() {
+    for (final child in childElements) {
+      child.unmount();
+    }
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final column = widget as Column;
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final height = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    final area = Rect(0, 0, width, height);
+
+    final columnConstraints = column.children
+        .map((c) => _getConstraint(c, LayoutDirection.vertical))
+        .toList();
+    final rects = splitRect(area, columnConstraints, LayoutDirection.vertical);
+
+    _childOffsets = List<Offset>.filled(childElements.length, Offset.zero);
+    var totalHeight = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childArea = rects[i];
-      final viewport = Viewport(buffer, childArea);
-      childEl.render(viewport, Rect(0, 0, childArea.width, childArea.height));
+      _childOffsets[i] = Offset(childArea.x, childArea.y);
+      final childSize = childEl.layout(
+        BoxConstraints(
+          minWidth: 0,
+          maxWidth: width,
+          minHeight: childArea.height,
+          maxHeight: childArea.height,
+        ),
+      );
+      totalHeight += childSize.height;
+    }
+    return Size(width, totalHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    if (size.width <= 0 || size.height <= 0) return;
+    for (var i = 0; i < childElements.length; i++) {
+      if (i < _childOffsets.length) {
+        childElements[i].paint(buffer, offset + _childOffsets[i]);
+      }
     }
   }
 
@@ -1105,68 +1345,6 @@ class Stack extends Widget {
   Element createElement() => StackElement(this);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    for (final child in children) {
-      if (child is Positioned) {
-        int childX = area.x;
-        int childY = area.y;
-        int childWidth = area.width;
-        int childHeight = area.height;
-
-        if (child.left != null) {
-          childX = area.x + child.left!;
-          if (child.right != null) {
-            childWidth = area.width - child.left! - child.right!;
-          } else if (child.width != null) {
-            childWidth = child.width!;
-          } else {
-            childWidth = area.width - child.left!;
-          }
-        } else if (child.right != null) {
-          if (child.width != null) {
-            childWidth = child.width!;
-            childX = area.x + area.width - child.right! - childWidth;
-          } else {
-            childWidth = area.width - child.right!;
-          }
-        } else if (child.width != null) {
-          childWidth = child.width!;
-        }
-
-        if (child.top != null) {
-          childY = area.y + child.top!;
-          if (child.bottom != null) {
-            childHeight = area.height - child.top! - child.bottom!;
-          } else if (child.height != null) {
-            childHeight = child.height!;
-          } else {
-            childHeight = area.height - child.top!;
-          }
-        } else if (child.bottom != null) {
-          if (child.height != null) {
-            childHeight = child.height!;
-            childY = area.y + area.height - child.bottom! - childHeight;
-          } else {
-            childHeight = area.height - child.bottom!;
-          }
-        } else if (child.height != null) {
-          childHeight = child.height!;
-        }
-
-        if (childWidth <= 0 || childHeight <= 0) continue;
-
-        final childArea = Rect(childX, childY, childWidth, childHeight);
-        final viewport = Viewport(buffer, childArea);
-        child.child.render(viewport, Rect(0, 0, childWidth, childHeight));
-      } else {
-        final viewport = Viewport(buffer, area);
-        child.render(viewport, Rect(0, 0, area.width, area.height));
-      }
-    }
-  }
-
-  @override
   int getIntrinsicHeight(int width) {
     var maxH = 0;
     for (final child in children) {
@@ -1181,15 +1359,26 @@ class Stack extends Widget {
 class StackElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
+  List<Offset> _childOffsets = [];
 
   /// Creates a stack element for a [Stack] widget.
   StackElement(Stack super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final stack = widget as Stack;
-    if (area.width <= 0 || area.height <= 0) return;
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
 
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final stack = widget as Stack;
     final newElements = <Element>[];
     for (var i = 0; i < stack.children.length; i++) {
       final childWidget = stack.children[i];
@@ -1198,71 +1387,119 @@ class StackElement extends Element {
         childElements[i].update(childWidget);
         newElements.add(childElements[i]);
       } else {
+        if (i < childElements.length) {
+          childElements[i].unmount();
+        }
         final newEl = childWidget.createElement();
         newEl.mount(this);
         newElements.add(newEl);
       }
     }
+    for (var i = stack.children.length; i < childElements.length; i++) {
+      childElements[i].unmount();
+    }
     childElements = newElements;
+  }
+
+  @override
+  void unmount() {
+    for (final child in childElements) {
+      child.unmount();
+    }
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final height = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+
+    _childOffsets = List<Offset>.filled(childElements.length, Offset.zero);
+
+    var maxW = 0;
+    var maxH = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childWidget = childEl.widget;
 
       if (childWidget is Positioned) {
-        int childX = area.x;
-        int childY = area.y;
-        int childWidth = area.width;
-        int childHeight = area.height;
+        int childX = 0;
+        int childY = 0;
+        int childWidth = width;
+        int childHeight = height;
 
         if (childWidget.left != null) {
-          childX = area.x + childWidget.left!;
+          childX = childWidget.left!;
           if (childWidget.right != null) {
-            childWidth = area.width - childWidget.left! - childWidget.right!;
+            childWidth = width - childWidget.left! - childWidget.right!;
           } else if (childWidget.width != null) {
             childWidth = childWidget.width!;
           } else {
-            childWidth = area.width - childWidget.left!;
+            childWidth = width - childWidget.left!;
           }
         } else if (childWidget.right != null) {
           if (childWidget.width != null) {
             childWidth = childWidget.width!;
-            childX = area.x + area.width - childWidget.right! - childWidth;
+            childX = width - childWidget.right! - childWidth;
           } else {
-            childWidth = area.width - childWidget.right!;
+            childWidth = width - childWidget.right!;
           }
         } else if (childWidget.width != null) {
           childWidth = childWidget.width!;
         }
 
         if (childWidget.top != null) {
-          childY = area.y + childWidget.top!;
+          childY = childWidget.top!;
           if (childWidget.bottom != null) {
-            childHeight = area.height - childWidget.top! - childWidget.bottom!;
+            childHeight = height - childWidget.top! - childWidget.bottom!;
           } else if (childWidget.height != null) {
             childHeight = childWidget.height!;
           } else {
-            childHeight = area.height - childWidget.top!;
+            childHeight = height - childWidget.top!;
           }
         } else if (childWidget.bottom != null) {
           if (childWidget.height != null) {
             childHeight = childWidget.height!;
-            childY = area.y + area.height - childWidget.bottom! - childHeight;
+            childY = height - childWidget.bottom! - childHeight;
           } else {
-            childHeight = area.height - childWidget.bottom!;
+            childHeight = height - childWidget.bottom!;
           }
         } else if (childWidget.height != null) {
           childHeight = childWidget.height!;
         }
 
-        if (childWidth <= 0 || childHeight <= 0) continue;
-
-        final childArea = Rect(childX, childY, childWidth, childHeight);
-        final viewport = Viewport(buffer, childArea);
-        childEl.render(viewport, Rect(0, 0, childWidth, childHeight));
+        _childOffsets[i] = Offset(childX, childY);
+        if (childWidth > 0 && childHeight > 0) {
+          final childSize = childEl.layout(
+            BoxConstraints.tight(Size(childWidth, childHeight)),
+          );
+          final rightEdge = childX + childSize.width;
+          final bottomEdge = childY + childSize.height;
+          if (rightEdge > maxW) maxW = rightEdge;
+          if (bottomEdge > maxH) maxH = bottomEdge;
+        }
       } else {
-        final viewport = Viewport(buffer, area);
-        childEl.render(viewport, Rect(0, 0, area.width, area.height));
+        _childOffsets[i] = Offset.zero;
+        final childSize = childEl.layout(constraints);
+        if (childSize.width > maxW) maxW = childSize.width;
+        if (childSize.height > maxH) maxH = childSize.height;
+      }
+    }
+
+    return Size(maxW, maxH);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    if (size.width <= 0 || size.height <= 0) return;
+    for (var i = 0; i < childElements.length; i++) {
+      if (i < _childOffsets.length) {
+        childElements[i].paint(buffer, offset + _childOffsets[i]);
       }
     }
   }
@@ -1311,11 +1548,6 @@ class Positioned extends Widget {
   Element createElement() => PositionedElement(this);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    child.render(buffer, area);
-  }
-
-  @override
   int getIntrinsicHeight(int width) {
     if (height != null) return height!;
     return child.getIntrinsicHeight(width);
@@ -1331,16 +1563,47 @@ class PositionedElement extends Element {
   PositionedElement(Positioned super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final pos = widget as Positioned;
     if (childElement != null &&
         childElement!.widget.runtimeType == pos.child.runtimeType) {
       childElement!.update(pos.child);
     } else {
+      childElement?.unmount();
       childElement = pos.child.createElement();
       childElement!.mount(this);
     }
-    childElement!.render(buffer, area);
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    if (childElement != null) {
+      return childElement!.layout(constraints);
+    }
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset);
   }
 
   @override
@@ -1370,20 +1633,6 @@ class SizedBox extends Widget {
   Element createElement() => SizedBoxElement(this);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final targetWidth = width ?? area.width;
-    final targetHeight = height ?? area.height;
-
-    if (targetWidth <= 0 || targetHeight <= 0) return;
-
-    if (child != null) {
-      final childArea = Rect(area.x, area.y, targetWidth, targetHeight);
-      final viewport = Viewport(buffer, childArea);
-      child!.render(viewport, Rect(0, 0, targetWidth, targetHeight));
-    }
-  }
-
-  @override
   int getIntrinsicHeight(int width) {
     if (height != null) return height!;
     if (child != null) {
@@ -1402,62 +1651,61 @@ class SizedBoxElement extends Element {
   SizedBoxElement(SizedBox super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final sb = widget as SizedBox;
-    final targetWidth = sb.width ?? area.width;
-    final targetHeight = sb.height ?? area.height;
-
-    if (targetWidth <= 0 || targetHeight <= 0) return;
-
     if (sb.child != null) {
       if (childElement != null &&
-          childElement!.widget.runtimeType == sb.child.runtimeType) {
+          childElement!.widget.runtimeType == sb.child!.runtimeType) {
         childElement!.update(sb.child!);
       } else {
+        childElement?.unmount();
         childElement = sb.child!.createElement();
         childElement!.mount(this);
       }
-
-      final childArea = Rect(area.x, area.y, targetWidth, targetHeight);
-      final viewport = Viewport(buffer, childArea);
-      childElement!.render(viewport, Rect(0, 0, targetWidth, targetHeight));
+    } else {
+      childElement?.unmount();
+      childElement = null;
     }
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final sb = widget as SizedBox;
+    final tightened = constraints.tighten(width: sb.width, height: sb.height);
+    if (childElement != null) {
+      final childSize = childElement!.layout(tightened);
+      return childSize;
+    }
+    return tightened.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset);
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
   }
-}
-
-/// Immutable box layout constraints.
-class BoxConstraints {
-  /// The minimum width allowed.
-  final int minWidth;
-
-  /// The maximum width allowed.
-  final int maxWidth;
-
-  /// The minimum height allowed.
-  final int minHeight;
-
-  /// The maximum height allowed.
-  final int maxHeight;
-
-  /// Creates box constraints with the given limits.
-  const BoxConstraints({
-    this.minWidth = 0,
-    this.maxWidth = 999999,
-    this.minHeight = 0,
-    this.maxHeight = 999999,
-  });
-
-  /// Creates box constraints that require the given width or height.
-  const BoxConstraints.tightFor({int? width, int? height})
-    : minWidth = width ?? 0,
-      maxWidth = width ?? 999999,
-      minHeight = height ?? 0,
-      maxHeight = height ?? 999999;
 }
 
 /// A widget that imposes [BoxConstraints] on its child.
@@ -1473,24 +1721,6 @@ class ConstrainedBox extends Widget {
 
   @override
   Element createElement() => ConstrainedBoxElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    final clampedWidth = area.width.clamp(
-      constraints.minWidth,
-      constraints.maxWidth,
-    );
-    final clampedHeight = area.height.clamp(
-      constraints.minHeight,
-      constraints.maxHeight,
-    );
-
-    if (clampedWidth <= 0 || clampedHeight <= 0) return;
-
-    final childArea = Rect(area.x, area.y, clampedWidth, clampedHeight);
-    final viewport = Viewport(buffer, childArea);
-    child.render(viewport, Rect(0, 0, clampedWidth, clampedHeight));
-  }
 
   @override
   int getIntrinsicHeight(int width) {
@@ -1509,30 +1739,49 @@ class ConstrainedBoxElement extends Element {
   ConstrainedBoxElement(ConstrainedBox super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final cb = widget as ConstrainedBox;
-    final clampedWidth = area.width.clamp(
-      cb.constraints.minWidth,
-      cb.constraints.maxWidth,
-    );
-    final clampedHeight = area.height.clamp(
-      cb.constraints.minHeight,
-      cb.constraints.maxHeight,
-    );
-
-    if (clampedWidth <= 0 || clampedHeight <= 0) return;
-
     if (childElement != null &&
         childElement!.widget.runtimeType == cb.child.runtimeType) {
       childElement!.update(cb.child);
     } else {
+      childElement?.unmount();
       childElement = cb.child.createElement();
       childElement!.mount(this);
     }
+  }
 
-    final childArea = Rect(area.x, area.y, clampedWidth, clampedHeight);
-    final viewport = Viewport(buffer, childArea);
-    childElement!.render(viewport, Rect(0, 0, clampedWidth, clampedHeight));
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final cb = widget as ConstrainedBox;
+    final childConstraints = constraints.enforce(cb.constraints);
+    if (childElement != null) {
+      return childElement!.layout(childConstraints);
+    }
+    return childConstraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset);
   }
 
   @override
@@ -1556,11 +1805,6 @@ class Flexible extends Widget {
   Element createElement() => FlexibleElement(this);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    child.render(buffer, area);
-  }
-
-  @override
   int getIntrinsicHeight(int width) {
     return child.getIntrinsicHeight(width);
   }
@@ -1575,16 +1819,47 @@ class FlexibleElement extends Element {
   FlexibleElement(Flexible super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final flex = widget as Flexible;
     if (childElement != null &&
         childElement!.widget.runtimeType == flex.child.runtimeType) {
       childElement!.update(flex.child);
     } else {
+      childElement?.unmount();
       childElement = flex.child.createElement();
       childElement!.mount(this);
     }
-    childElement!.render(buffer, area);
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    if (childElement != null) {
+      return childElement!.layout(constraints);
+    }
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset);
   }
 
   @override
@@ -1664,54 +1939,6 @@ class Align extends Widget {
   Element createElement() => AlignElement(this);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    int childWidth = area.width;
-    int childHeight = area.height;
-
-    if (child is SizedBox) {
-      final sb = child as SizedBox;
-      childWidth = sb.width ?? area.width;
-      childHeight = sb.height ?? area.height;
-    } else if (child is ConstrainedBox) {
-      final cb = child as ConstrainedBox;
-      childWidth = area.width.clamp(
-        cb.constraints.minWidth,
-        cb.constraints.maxWidth,
-      );
-      childHeight = area.height.clamp(
-        cb.constraints.minHeight,
-        cb.constraints.maxHeight,
-      );
-    }
-
-    if (widthFactor != null) {
-      childWidth = (childWidth * widthFactor!).round();
-    }
-    if (heightFactor != null) {
-      childHeight = (childHeight * heightFactor!).round();
-    }
-
-    childWidth = childWidth.clamp(0, area.width);
-    childHeight = childHeight.clamp(0, area.height);
-
-    final double remainingWidth = (area.width - childWidth).toDouble();
-    final int offsetX = (remainingWidth * (alignment.x + 1.0) / 2.0).round();
-
-    final double remainingHeight = (area.height - childHeight).toDouble();
-    final int offsetY = (remainingHeight * (alignment.y + 1.0) / 2.0).round();
-
-    final childArea = Rect(
-      area.x + offsetX,
-      area.y + offsetY,
-      childWidth,
-      childHeight,
-    );
-
-    final childViewport = Viewport(buffer, childArea);
-    child.render(childViewport, Rect(0, 0, childWidth, childHeight));
-  }
-
-  @override
   int getIntrinsicHeight(int width) {
     if (heightFactor != null) {
       return (child.getIntrinsicHeight(width) * heightFactor!).round();
@@ -1724,66 +1951,91 @@ class Align extends Widget {
 class AlignElement extends Element {
   /// The child element.
   Element? childElement;
+  Offset _childOffset = Offset.zero;
 
   /// Creates an align element for an [Align] widget.
   AlignElement(Align super.widget);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
     final align = widget as Align;
-    int childWidth = area.width;
-    int childHeight = area.height;
-
-    final childWidget = align.child;
-    if (childWidget is SizedBox) {
-      childWidth = childWidget.width ?? area.width;
-      childHeight = childWidget.height ?? area.height;
-    } else if (childWidget is ConstrainedBox) {
-      childWidth = area.width.clamp(
-        childWidget.constraints.minWidth,
-        childWidget.constraints.maxWidth,
-      );
-      childHeight = area.height.clamp(
-        childWidget.constraints.minHeight,
-        childWidget.constraints.maxHeight,
-      );
-    }
-
-    if (align.widthFactor != null) {
-      childWidth = (childWidth * align.widthFactor!).round();
-    }
-    if (align.heightFactor != null) {
-      childHeight = (childHeight * align.heightFactor!).round();
-    }
-
-    childWidth = childWidth.clamp(0, area.width);
-    childHeight = childHeight.clamp(0, area.height);
-
-    final double remainingWidth = (area.width - childWidth).toDouble();
-    final int offsetX = (remainingWidth * (align.alignment.x + 1.0) / 2.0)
-        .round();
-
-    final double remainingHeight = (area.height - childHeight).toDouble();
-    final int offsetY = (remainingHeight * (align.alignment.y + 1.0) / 2.0)
-        .round();
-
     if (childElement != null &&
-        childElement!.widget.runtimeType == childWidget.runtimeType) {
-      childElement!.update(childWidget);
+        childElement!.widget.runtimeType == align.child.runtimeType) {
+      childElement!.update(align.child);
     } else {
-      childElement = childWidget.createElement();
+      childElement?.unmount();
+      childElement = align.child.createElement();
       childElement!.mount(this);
     }
+  }
 
-    final childArea = Rect(
-      area.x + offsetX,
-      area.y + offsetY,
-      childWidth,
-      childHeight,
-    );
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
 
-    final childViewport = Viewport(buffer, childArea);
-    childElement!.render(childViewport, Rect(0, 0, childWidth, childHeight));
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final align = widget as Align;
+    if (childElement != null) {
+      final childConstraints = BoxConstraints(
+        minWidth: 0,
+        maxWidth: constraints.maxWidth,
+        minHeight: 0,
+        maxHeight: constraints.maxHeight,
+      );
+      final childSize = childElement!.layout(childConstraints);
+
+      final parentWidth = align.widthFactor != null
+          ? (childSize.width * align.widthFactor!).round().clamp(
+              constraints.minWidth,
+              constraints.maxWidth,
+            )
+          : (constraints.maxWidth == BoxConstraints.infinity
+                ? childSize.width
+                : constraints.maxWidth);
+      final parentHeight = align.heightFactor != null
+          ? (childSize.height * align.heightFactor!).round().clamp(
+              constraints.minHeight,
+              constraints.maxHeight,
+            )
+          : (constraints.maxHeight == BoxConstraints.infinity
+                ? childSize.height
+                : constraints.maxHeight);
+
+      final childWidth = childSize.width.clamp(0, parentWidth);
+      final childHeight = childSize.height.clamp(0, parentHeight);
+
+      final double remainingWidth = (parentWidth - childWidth).toDouble();
+      final int offsetX = (remainingWidth * (align.alignment.x + 1.0) / 2.0)
+          .round();
+
+      final double remainingHeight = (parentHeight - childHeight).toDouble();
+      final int offsetY = (remainingHeight * (align.alignment.y + 1.0) / 2.0)
+          .round();
+
+      _childOffset = Offset(offsetX, offsetY);
+      return Size(parentWidth, parentHeight);
+    }
+    return constraints.constrain(Size.zero);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    childElement?.paint(buffer, offset + _childOffset);
   }
 
   @override
@@ -1815,14 +2067,22 @@ class ElementWidget extends Widget {
   Element? get element => _element;
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Element createElement() => ElementWidgetElement(this);
+
+  /// Resolves the layout of the embedded widget tree.
+  void layout(BoxConstraints constraints) {
     if (_element == null) {
       _element = child.createElement();
       _element!.mount(null);
     } else {
       _element!.update(child);
     }
-    _element!.render(buffer, area);
+    _element!.layout(constraints);
+  }
+
+  /// Paints the embedded widget tree.
+  void paint(Buffer buffer, Offset offset) {
+    _element?.paint(buffer, offset);
   }
 
   /// Finds a State of type S inside this widget's element tree.
@@ -1846,5 +2106,55 @@ class ElementWidget extends Widget {
       }
     });
     return found;
+  }
+}
+
+/// Element for [ElementWidget] that delegates layout, painting, and child lifecycle management.
+class ElementWidgetElement extends Element {
+  /// Creates a new [ElementWidgetElement].
+  ElementWidgetElement(ElementWidget super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    final w = widget as ElementWidget;
+    w._element ??= w.child.createElement();
+    w._element!.mount(this);
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    final w = widget as ElementWidget;
+    w._element?.update(w.child);
+  }
+
+  @override
+  void unmount() {
+    final w = widget as ElementWidget;
+    w._element?.unmount();
+    w._element = null;
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = widget as ElementWidget;
+    if (w._element != null) {
+      return w._element!.layout(constraints);
+    }
+    return Size.zero;
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final w = widget as ElementWidget;
+    w._element?.paint(buffer, offset);
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    final w = widget as ElementWidget;
+    if (w._element != null) visitor(w._element!);
   }
 }

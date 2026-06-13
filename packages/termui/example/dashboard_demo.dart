@@ -441,8 +441,8 @@ void main() async {
     void drawFrame() {
       buffer.clear();
       // Pre-fill background
-      buffer.fill(Cell(' ', Style.empty));
-      elementWrapper.render(buffer, Rect(0, 0, width, height));
+      elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+      elementWrapper.paint(buffer, Offset.zero);
 
       final sb = StringBuffer();
       renderer.render(buffer, sb);

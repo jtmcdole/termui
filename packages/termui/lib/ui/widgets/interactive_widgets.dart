@@ -7,6 +7,7 @@ import '../../terminal/terminal.dart' as term;
 import 'prompt_runner.dart';
 import 'focus.dart';
 import '../window.dart';
+import 'package:characters/characters.dart';
 
 /// An interactive TUI button widget that triggers a callback when activated.
 class Button extends StatefulWidget implements Focusable, KeyEventHandler {
@@ -146,10 +147,33 @@ class _ButtonRenderWidget extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    final label = focused ? '[ $text ]' : '  $text  ';
-    buffer.writeString(0, 0, label, focused ? focusedStyle : style);
+  Element createElement() => _ButtonElement(this);
+}
+
+class _ButtonElement extends Element {
+  _ButtonElement(_ButtonRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _ButtonRenderWidget;
+    final label = wWidget.focused
+        ? '[ ${wWidget.text} ]'
+        : '  ${wWidget.text}  ';
+    return constraints.constrain(Size(label.characters.length, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final wWidget = widget as _ButtonRenderWidget;
+    final label = wWidget.focused
+        ? '[ ${wWidget.text} ]'
+        : '  ${wWidget.text}  ';
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      label,
+      wWidget.focused ? wWidget.focusedStyle : wWidget.style,
+    );
   }
 }
 
@@ -298,10 +322,31 @@ class _CheckboxRenderWidget extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    final box = value ? '[X]' : '[ ]';
-    buffer.writeString(0, 0, '$box $label', focused ? focusedStyle : style);
+  Element createElement() => _CheckboxElement(this);
+}
+
+class _CheckboxElement extends Element {
+  _CheckboxElement(_CheckboxRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _CheckboxRenderWidget;
+    final box = wWidget.value ? '[X]' : '[ ]';
+    final label = '$box ${wWidget.label}';
+    return constraints.constrain(Size(label.characters.length, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final wWidget = widget as _CheckboxRenderWidget;
+    final box = wWidget.value ? '[X]' : '[ ]';
+    final label = '$box ${wWidget.label}';
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      label,
+      wWidget.focused ? wWidget.focusedStyle : wWidget.style,
+    );
   }
 }
 
@@ -457,10 +502,31 @@ class _RadioRenderWidget extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    final marker = isSelected ? '(*)' : '( )';
-    buffer.writeString(0, 0, '$marker $label', focused ? focusedStyle : style);
+  Element createElement() => _RadioElement(this);
+}
+
+class _RadioElement extends Element {
+  _RadioElement(_RadioRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _RadioRenderWidget;
+    final marker = wWidget.isSelected ? '(*)' : '( )';
+    final label = '$marker ${wWidget.label}';
+    return constraints.constrain(Size(label.characters.length, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final wWidget = widget as _RadioRenderWidget;
+    final marker = wWidget.isSelected ? '(*)' : '( )';
+    final label = '$marker ${wWidget.label}';
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      label,
+      wWidget.focused ? wWidget.focusedStyle : wWidget.style,
+    );
   }
 }
 
@@ -609,9 +675,30 @@ class _SwitchRenderWidget extends Widget {
   });
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
-    final marker = value ? '[─●]' : '[○─]';
-    buffer.writeString(0, 0, '$marker $label', focused ? focusedStyle : style);
+  Element createElement() => _SwitchElement(this);
+}
+
+class _SwitchElement extends Element {
+  _SwitchElement(_SwitchRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _SwitchRenderWidget;
+    final marker = wWidget.value ? '[─●]' : '[○─]';
+    final label = '$marker ${wWidget.label}';
+    return constraints.constrain(Size(label.characters.length, 1));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final wWidget = widget as _SwitchRenderWidget;
+    final marker = wWidget.value ? '[─●]' : '[○─]';
+    final label = '$marker ${wWidget.label}';
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      label,
+      wWidget.focused ? wWidget.focusedStyle : wWidget.style,
+    );
   }
 }

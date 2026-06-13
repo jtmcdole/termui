@@ -12,8 +12,27 @@ class SimpleTextWidget extends Widget {
   const SimpleTextWidget(this.text);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    buffer.writeString(0, 0, text, Style.empty);
+  Element createElement() => _SimpleTextElement(this);
+}
+
+class _SimpleTextElement extends Element {
+  _SimpleTextElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(
+      Size((widget as SimpleTextWidget).text.length, 1),
+    );
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      (widget as SimpleTextWidget).text,
+      Style.empty,
+    );
   }
 }
 
@@ -87,7 +106,9 @@ void main() {
       );
 
       // Render scroll view inside an area of height 5.
-      scrollView.render(buffer, const Rect(0, 0, 20, 5));
+      ElementWidget(scrollView)
+        ..layout(BoxConstraints.tight(const Size(20, 5)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -186,7 +207,9 @@ void main() {
       // Verify rendering
       final buffer = Buffer.blank(15, 1);
       buffer.clear();
-      getCheckbox(focused: false).render(buffer, const Rect(0, 0, 15, 1));
+      ElementWidget(getCheckbox(focused: false))
+        ..layout(BoxConstraints.tight(const Size(15, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -210,7 +233,9 @@ void main() {
 
       // Render again
       buffer.clear();
-      getCheckbox(focused: false).render(buffer, const Rect(0, 0, 15, 1));
+      ElementWidget(getCheckbox(focused: false))
+        ..layout(BoxConstraints.tight(const Size(15, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -239,7 +264,9 @@ void main() {
 
       final buffer = Buffer.blank(15, 1);
       buffer.clear();
-      getRadio('B', focused: false).render(buffer, const Rect(0, 0, 15, 1));
+      ElementWidget(getRadio('B', focused: false))
+        ..layout(BoxConstraints.tight(const Size(15, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -256,7 +283,9 @@ void main() {
       expect(groupVal, equals('B'));
 
       buffer.clear();
-      getRadio('B', focused: false).render(buffer, const Rect(0, 0, 15, 1));
+      ElementWidget(getRadio('B', focused: false))
+        ..layout(BoxConstraints.tight(const Size(15, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -277,7 +306,9 @@ void main() {
 
       final buffer = Buffer.blank(15, 1);
       buffer.clear();
-      getSwitch(focused: false).render(buffer, const Rect(0, 0, 15, 1));
+      ElementWidget(getSwitch(focused: false))
+        ..layout(BoxConstraints.tight(const Size(15, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -300,7 +331,9 @@ void main() {
       expect(switchVal, isTrue);
 
       buffer.clear();
-      getSwitch(focused: false).render(buffer, const Rect(0, 0, 15, 1));
+      ElementWidget(getSwitch(focused: false))
+        ..layout(BoxConstraints.tight(const Size(15, 1)))
+        ..paint(buffer, Offset.zero);
       expect(
         buffer,
         matchesAnsiGolden(
@@ -348,7 +381,9 @@ void main() {
       );
 
       final buffer = Buffer.blank(1, 10);
-      scrollBar.render(buffer, const Rect(0, 0, 1, 10));
+      ElementWidget(scrollBar)
+        ..layout(BoxConstraints.tight(const Size(1, 10)))
+        ..paint(buffer, Offset.zero);
 
       // Click at the exact middle of the 10-line scrollbar (y = 5)
       // clickRatio = 5 / 10 = 0.5.

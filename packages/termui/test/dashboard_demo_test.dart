@@ -13,7 +13,8 @@ void main() {
     final buffer = Buffer.blank(80, 20);
 
     // Initial render
-    rootEl.render(buffer, const Rect(0, 0, 80, 20));
+    rootEl.layout(BoxConstraints.tight(const Size(80, 20)));
+    rootEl.paint(buffer, Offset.zero);
 
     // Find the state dynamically by looking for the DashboardApp widget's element
     StatefulElement? dashboardEl;
@@ -35,7 +36,8 @@ void main() {
 
     // 1. Send 'right' key to focus the action
     appState.handleKeyEvent(const ui.KeyEvent('right', ui.KeyType.right));
-    rootEl.render(buffer, const Rect(0, 0, 80, 20));
+    rootEl.layout(BoxConstraints.tight(const Size(80, 20)));
+    rootEl.paint(buffer, Offset.zero);
     expect(appState.isActionFocused, isTrue);
 
     // Find the DropdownButton element and verify it is focused
@@ -130,7 +132,8 @@ void main() {
     }
 
     simulateGlobalKey(const ui.KeyEvent(' ', ui.KeyType.character));
-    rootEl.render(buffer, const Rect(0, 0, 80, 20));
+    rootEl.layout(BoxConstraints.tight(const Size(80, 20)));
+    rootEl.paint(buffer, Offset.zero);
 
     // Verify dropdown is now open
     overlayOpen = false;
@@ -140,12 +143,14 @@ void main() {
 
     // 3. Move selection down to 'Paused' (index 1)
     simulateGlobalKey(const ui.KeyEvent('down', ui.KeyType.down));
-    rootEl.render(buffer, const Rect(0, 0, 80, 20));
+    rootEl.layout(BoxConstraints.tight(const Size(80, 20)));
+    rootEl.paint(buffer, Offset.zero);
     expect(openOverlayState.selectedIndex, equals(1));
 
     // 4. Confirm selection using 'enter'
     simulateGlobalKey(const ui.KeyEvent('\n', ui.KeyType.enter));
-    rootEl.render(buffer, const Rect(0, 0, 80, 20));
+    rootEl.layout(BoxConstraints.tight(const Size(80, 20)));
+    rootEl.paint(buffer, Offset.zero);
 
     // Verify dropdown is closed and value changed
     overlayOpen = false;

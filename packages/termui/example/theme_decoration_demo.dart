@@ -398,7 +398,9 @@ void main() async {
         data: isDarkTheme ? ThemeData.dark : ThemeData.light,
         child: const ThemeDemoDashboard(),
       );
-      rootWidget.render(buffer, Rect(0, 0, width, height));
+      final rootWrapper = ElementWidget(rootWidget);
+      rootWrapper.layout(BoxConstraints.tight(Size(width, height)));
+      rootWrapper.paint(buffer, Offset.zero);
 
       final sb = StringBuffer();
       renderer.render(buffer, sb);

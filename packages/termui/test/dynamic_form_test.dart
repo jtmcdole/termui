@@ -24,7 +24,8 @@ void main() {
 
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       final formState = tree.findState<FormState>();
       expect(formState, isNotNull);
@@ -59,7 +60,8 @@ void main() {
 
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       final formState = tree.findState<FormState>()!;
       nameField.value = '';
@@ -80,7 +82,8 @@ void main() {
 
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       final formState = tree.findState<FormState>()!;
       f1.focused = true;
@@ -106,7 +109,8 @@ void main() {
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
       buffer.clear();
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       final formState = tree.findState<FormState>()!;
 
@@ -123,7 +127,8 @@ void main() {
 
       // Re-render
       buffer.clear();
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -143,7 +148,8 @@ void main() {
       final form = Form(fields: [field]);
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       expect(field.hasError, isFalse);
 
@@ -165,7 +171,8 @@ void main() {
       final form = Form(fields: [f1, f2]);
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       expect(f1.focused, isTrue);
       expect(f2.focused, isFalse);
@@ -188,7 +195,8 @@ void main() {
       final form = Form(fields: [field]);
       final tree = ElementWidget(form);
       final buffer = Buffer.blank(20, 10);
-      tree.render(buffer, const Rect(0, 0, 20, 10));
+      tree.layout(BoxConstraints.tight(const Size(20, 10)));
+      tree.paint(buffer, Offset.zero);
 
       expect(field.focused, isTrue);
       expect(field.hasError, isFalse);

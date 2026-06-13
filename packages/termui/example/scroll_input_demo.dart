@@ -330,7 +330,9 @@ void main() async {
         ]),
       );
 
-      rootWidget.render(buffer, Rect(0, 0, width, height));
+      final rootWrapper = ElementWidget(rootWidget);
+      rootWrapper.layout(BoxConstraints.tight(Size(width, height)));
+      rootWrapper.paint(buffer, Offset.zero);
 
       if (submitted) {
         final okBtnNode = FocusNode(id: 'okBtn');
@@ -430,7 +432,9 @@ void main() async {
             ),
           ),
         );
-        modal.render(buffer, Rect(0, 0, width, height));
+        final modalWrapper = ElementWidget(modal);
+        modalWrapper.layout(BoxConstraints.tight(Size(width, height)));
+        modalWrapper.paint(buffer, Offset.zero);
       }
 
       final sb = StringBuffer();

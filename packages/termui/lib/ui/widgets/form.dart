@@ -1,4 +1,3 @@
-import '../buffer.dart';
 import '../layout.dart';
 import '../style.dart';
 import '../color.dart';
@@ -551,14 +550,14 @@ class _TextFormFieldState extends FormFieldState<String>
   }
 }
 
-class _TextFormFieldRenderWidget extends Widget {
+class _TextFormFieldRenderWidget extends StatelessWidget {
   final TextFormField widget;
   final _TextFormFieldState state;
 
   const _TextFormFieldRenderWidget(this.widget, this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Widget build(BuildContext context) {
     widget._input.focused = widget.focused;
     if (widget._input.value != state.value) {
       widget._input.value = state.value ?? '';
@@ -608,8 +607,7 @@ class _TextFormFieldRenderWidget extends Widget {
         ),
     ];
 
-    final vbox = Column(layoutItems);
-    vbox.render(buffer, area);
+    return Column(layoutItems);
   }
 }
 
@@ -691,14 +689,14 @@ class _TextAreaFormFieldState extends FormFieldState<String>
   }
 }
 
-class _TextAreaFormFieldRenderWidget extends Widget {
+class _TextAreaFormFieldRenderWidget extends StatelessWidget {
   final TextAreaFormField widget;
   final _TextAreaFormFieldState state;
 
   const _TextAreaFormFieldRenderWidget(this.widget, this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Widget build(BuildContext context) {
     widget._input.focused = widget.focused;
     if (widget._input.value != state.value) {
       widget._input.value = state.value ?? '';
@@ -748,8 +746,7 @@ class _TextAreaFormFieldRenderWidget extends Widget {
         ),
     ];
 
-    final vbox = Column(layoutItems);
-    vbox.render(buffer, area);
+    return Column(layoutItems);
   }
 }
 
@@ -863,14 +860,14 @@ class _SelectFormFieldState<T> extends FormFieldState<T>
   }
 }
 
-class _SelectFormFieldRenderWidget<T> extends Widget {
+class _SelectFormFieldRenderWidget<T> extends StatelessWidget {
   final SelectFormField<T> widget;
   final _SelectFormFieldState<T> state;
 
   const _SelectFormFieldRenderWidget(this.widget, this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Widget build(BuildContext context) {
     final optionItems = <Widget>[];
 
     for (var i = 0; i < widget.options.length; i++) {
@@ -936,8 +933,7 @@ class _SelectFormFieldRenderWidget<T> extends Widget {
         ),
     ];
 
-    final vbox = Column(layoutItems);
-    vbox.render(buffer, area);
+    return Column(layoutItems);
   }
 }
 
@@ -1003,14 +999,14 @@ class _ConfirmFormFieldState extends FormFieldState<bool>
   }
 }
 
-class _ConfirmFormFieldRenderWidget extends Widget {
+class _ConfirmFormFieldRenderWidget extends StatelessWidget {
   final ConfirmFormField widget;
   final _ConfirmFormFieldState state;
 
   const _ConfirmFormFieldRenderWidget(this.widget, this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Widget build(BuildContext context) {
     final isYes = state.value ?? false;
 
     final yesStyle = isYes
@@ -1081,8 +1077,7 @@ class _ConfirmFormFieldRenderWidget extends Widget {
         ),
     ];
 
-    final vbox = Column(layoutItems);
-    vbox.render(buffer, area);
+    return Column(layoutItems);
   }
 }
 
@@ -1208,14 +1203,14 @@ class _MultiSelectFormFieldState<T> extends FormFieldState<List<T>>
   }
 }
 
-class _MultiSelectFormFieldRenderWidget<T> extends Widget {
+class _MultiSelectFormFieldRenderWidget<T> extends StatelessWidget {
   final MultiSelectFormField<T> widget;
   final _MultiSelectFormFieldState<T> state;
 
   const _MultiSelectFormFieldRenderWidget(this.widget, this.state);
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Widget build(BuildContext context) {
     final optionItems = <Widget>[];
 
     for (var i = 0; i < widget.options.length; i++) {
@@ -1283,7 +1278,6 @@ class _MultiSelectFormFieldRenderWidget<T> extends Widget {
         ),
     ];
 
-    final vbox = Column(layoutItems);
-    vbox.render(buffer, area);
+    return Column(layoutItems);
   }
 }

@@ -1,45 +1,39 @@
-# Developer & AI Agent Handbook: CLI Experiment Windowing System
+# Developer & AI Agent Handbook: CLI Element-based Windowing System
 
-Welcome to the **cli_experiment** codebase. This document serves as a comprehensive system map and developer guide detailing the product vision, tech stack, and internal architecture. Use this guide to understand how components interact, where to make modifications, and how the underlying terminal layout engine operates.
-
----
-
-## 1. Product Overview
-
-The `cli_experiment` project is a modular, performant, double-buffered **Terminal User Interface (TUI)** and **Windowing System** written in Dart. It moves away from naive CLI output printing (which causes terminal flicker and high overhead) and provides a desktop-like environment inside standard ANSI/TTY terminal applications.
-
-### Key Capabilities
-- **Overlapping Window Management**: Supports floating, draggable, and resizeable frames with custom titles, borders, and Z-index layering.
-- **Double Buffering**: Prevents terminal flickering by maintaining an in-memory frame buffer of what is visible on-screen and comparing it with a previous frame to compute delta updates.
-- **Minimal ANSI Diffing**: Emits the shortest possible terminal sequences (cursor jumps and style transitions) to repaint only the modified cells.
-- **Layout Solver**: Flexible constraints layout system featuring fixed size, percentage, flex (proportional), and min-max boundaries.
-- **Hierarchical Input & Focus System**: Translates raw ANSI byte streams from `stdin` into high-level event objects (keys, mouse clicks/scrolls/drags, paste segments) and dispatches them down a keyboard focus node tree.
-- **Modular Widget Toolkit**: Standard widgets including paragraph wrappers, lists, interactive input fields with visual cursors, progress bars, a braille-based grid canvas, tile maps, and menu overlays.
+Welcome to the **cli_experiment** / **termui** codebase. This document serves as a comprehensive developer and AI agent handbook detailing the product vision, core architectures, package layouts, element tree lifecycles, and testing practices.
 
 ---
 
-## 2. Tech Stack
+## 1. Product Overview & System Map
 
-The project runs on the Dart environment and depends on lightweight packages to coordinate raw input parsing and native Windows support:
+`termui` is a high-performance, double-buffered **Terminal User Interface (TUI)** and **Windowing System** written in Dart. It moves away from naive CLI output printing (which causes terminal flicker and high overhead) and provides a desktop-like environment inside standard ANSI/TTY terminal applications.
 
-- **Dart SDK**: `^3.10.0` (utilizes modern Dart collections, record matching, and extensions).
-- **Core Dependencies**:
-  - `dart:ffi`: Crucial for loading platform C libraries (`libc.so.6` or `/usr/lib/libSystem.dylib` on Unix) to configure standard input raw mode, and querying terminal sizes.
-  - [package:win32](file:///app/pubspec.yaml#L17) (`^5.5.4`): Enables native console state manipulation (`SetConsoleMode`, `GetConsoleScreenBufferInfo`) on Windows.
-  - [package:ffi](file:///app/pubspec.yaml#L14) (`^2.1.3`): Allocates C structures and handles pointer conversions for FFI.
-  - [package:characters](file:///app/pubspec.yaml#L12) (`^1.3.0`): Treats user-perceived grapheme clusters correctly (correctly handling multi-byte characters, ZWJ sequences, and emojis).
-  - [package:ansicolor](file:///app/pubspec.yaml#L10) (`^2.0.3`): Utilities for 8-bit color pen styling.
-  - [package:args](file:///app/pubspec.yaml#L11) (`^2.4.2`): Standard CLI command-line arguments parsing.
-  - [package:quiver](file:///app/pubspec.yaml#L15) (`^3.2.2`): Collection and comparison utility helpers.
-- **Development Dependencies**:
-  - [package:test](file:///app/pubspec.yaml#L16) (`^1.25.8`): Framework for running unit and integration tests.
-  - [package:lints](file:///app/pubspec.yaml#L20) (`^6.0.0`): Static analysis and formatting.
+### Core Goals
+* **Overlapping Window Management**: Supports floating, draggable, and resizeable frames with custom titles, borders, and Z-index layering.
+* **Double Buffering**: Prevents terminal flickering by maintaining an in-memory frame buffer of what is visible on-screen and comparing it with a previous frame to compute delta updates.
+* **Minimal ANSI Diffing**: Emits the shortest possible terminal sequences (cursor jumps and style transitions) to repaint only the modified cells.
+* **Element & Widget Tree**: Re-implements a Flutter-like reactive layout system where widgets describe configurations, elements manage tree lifecycles, and states hold stateful properties.
+* **Hierarchical Input & Focus System**: Translates raw ANSI byte streams from `stdin` into high-level event objects (keys, mouse clicks/scrolls/drags, paste segments) and dispatches them down a keyboard focus node tree.
+* **Modular Widget Toolkit**: Standard widgets including paragraph wrappers, lists, interactive input fields with visual cursors, progress bars, a braille-based grid canvas, tile maps, and menu overlays.
 
 ---
 
-## 3. Architecture & Subsystems
+## 2. Monorepo Package Architecture
 
-The system is structured as a series of layered abstractions from the native operating system TTY layer to the user-facing widgets.
+The project is managed as a Melos monorepo with the following workspace packages:
+
+1. **[termui](/packages/termui)** (Core package): Implements the layout engine, widgets, elements, focus management, and ANSI rendering pipeline.
+2. **[termui_shared_examples](/packages/termui_shared_examples)**: Contains example interfaces and reusable scenario layouts.
+3. **[termui_recorder](/packages/termui_recorder)**: Mock terminal recorder framework used for testing and validating rendering behaviors.
+
+### Dependencies & Platforms
+* **Dart SDK**: Target environment is `sdk: ">=3.11.0 <4.0.0"`.
+* **Platform APIs**: Interacts with libc APIs on Linux/Unix using `dart:ffi` and Windows APIs using [win32](/pubspec.yaml#L17) (`^6.0.0`) to configure TTY raw mode and query screen sizing.
+* **Unicode / Wide Characters**: Uses [characters](/pubspec.yaml#L12) (`^1.4.0`) to correctly measure and slice grapheme clusters (correctly handling multi-byte characters, ZWJ sequences, and emojis).
+
+---
+
+## 3. Subsystem Breakdown
 
 ```mermaid
 graph TD
@@ -57,67 +51,105 @@ graph TD
   Renderer -->|Minimal ANSI codes| Terminal
 ```
 
-### A. Terminal Layer (`lib/terminal/`)
+### A. Terminal & TTY Layer
 Responsible for switching terminal input modes, polling window sizes, and handling low-level byte channels.
+* **[Terminal](/packages/termui/lib/terminal/terminal.dart)**: The main entrypoint exposing screen sizing, SIGWINCH size observers (or polling on Windows), and raw input streams.
+* **[UnixTerminal](/packages/termui/lib/terminal/raw/unix_terminal.dart)**: Interacts with libc `tcgetattr` and `tcsetattr` via FFI, disabling terminal echo, canonical processing (`ICANON`), and signal processing (`ISIG`).
+* **[WindowsTerminal](/packages/termui/lib/terminal/raw/windows_terminal.dart)**: Uses FFI to invoke Windows APIs for TTY controls.
 
-- **[Terminal](file:///app/lib/terminal/terminal.dart)**: The main interface exposing screen sizing, SIGWINCH size observers (or polling on Windows), and raw input streams.
-- **[Terminal raw factory](file:///app/lib/terminal/raw/terminal.dart)**: Dispatches implementation classes:
-  - **[UnixTerminal](file:///app/lib/terminal/raw/unix_terminal.dart)**: Interacts with libc `tcgetattr` and `tcsetattr` via FFI, disabling terminal echo, canonical processing (`ICANON`), and signal processing (`ISIG`).
-  - **[WindowsTerminal](file:///app/lib/terminal/raw/windows_terminal.dart)**: Uses FFI to invoke Windows APIs for TTY controls.
+### B. Buffering & Painting
+* **[Cell](/packages/termui/lib/ui/buffer.dart#L8)**: Represents a single coordinate atom. Contains a single character grapheme cluster and a [Style](/packages/termui/lib/ui/style.dart) (combining RGB [Colors](/packages/termui/lib/ui/color.dart) and bitmask attributes like bold, dim, underline, reverse, and transparency).
+* **[Buffer](/packages/termui/lib/ui/buffer.dart#L49)**: Grid layout representing a rectangular viewport.
+* **[Compositor](/packages/termui/lib/ui/buffer.dart#L149)**: Composites multiple LayeredBuffer components onto a single target screen buffer. It employs a bit-packed `Uint32List` occlusion map to perform an early-exit optimization (skipping drawing cells that are obscured by solid higher Z-index layers).
+* **[Renderer](/packages/termui/lib/ui/renderer.dart)**: Diffs `backBuffer` against `frontBuffer` and outputs minimal ANSI escape updates. Supports both absolute full screen alternate screen addresses and relative offset inline animations.
 
-### B. Input Processing Layer (`lib/ui/event.dart` & `lib/ui/input_parser.dart`)
-Transforms streams of terminal bytes into typed events.
+### C. Element & Widget Tree
+The library replicates a reactive element tree:
+* **[Widget](/packages/termui/lib/ui/layout.dart#L309)**: Immutable configuration classes.
+* **[Element](/packages/termui/lib/ui/layout.dart#L356)**: Mutable nodes managing the lifecycle of the tree.
+* **[StatelessElement](/packages/termui/lib/ui/layout.dart#L477)**: Rebuilds children dynamically on configuration changes.
+* **[StatefulElement](/packages/termui/lib/ui/layout.dart#L607)**: Manages [State](/packages/termui/lib/ui/layout.dart#L564) objects, calling `initState()`, `didUpdateWidget()`, and `dispose()`.
+* **[InheritedElement](/packages/termui/lib/ui/layout.dart#L706)**: Propagates data down the context tree. When updated, it triggers a `rebuild()` to ensure children configurations refresh.
 
-- **[InputParser](file:///app/lib/ui/input_parser.dart)**: Uses a state machine to decode keyboard letters, arrows, function keys (F1–F12) with modifiers (Shift, Alt, Control, Meta), SGR/X10 mouse coordinates, paste blocks (Bracketed Paste Mode), and focus change notifications.
-- **[InputEvent Classes](file:///app/lib/ui/event.dart)**:
-  - `KeyEvent`: Key types and active modifiers.
-  - `MouseEvent`: Positions, click types (press, release, drag, move), and scroll wheels.
-  - `PasteEvent`: Text pasted from clipboard.
-  - `FocusInEvent` / `FocusOutEvent`: State transitions of terminal window focus.
-
-### C. Double Buffering & Compositing (`lib/ui/buffer.dart` & `lib/ui/renderer.dart`)
-Manages screen pixels in-memory to execute fast diff-based frame repaints.
-
-- **[Cell](file:///app/lib/ui/buffer.dart#L8)**: Represents a single coordinates atom. Contains a single character grapheme cluster and a [Style](file:///app/lib/ui/style.dart) (combining RGB [Colors](file:///app/lib/ui/color.dart) and bitmask attributes like bold, dim, underline, reverse, and transparency).
-- **[Buffer](file:///app/lib/ui/buffer.dart#L49)**: Grid layout representing a rectangular viewport.
-- **[Compositor](file:///app/lib/ui/buffer.dart#L149)**: Composites multiple `LayeredBuffer` components onto a single target screen buffer. It employs a bit-packed `Uint32List` occlusion map to perform an early-exit optimization (skipping drawing cells that are obscured by solid higher Z-index layers).
-- **[Renderer](file:///app/lib/ui/renderer.dart)**: Diffs `backBuffer` against `frontBuffer` and outputs minimal ANSI escape updates.
-  - Supports `RenderingMode.alternateScreen` (absolute full screen addresses).
-  - Supports `RenderingMode.inline` (relative offset moves, enabling inline CLI animations/controls without screen clearing).
-
-### D. Layout & Widget Engine (`lib/ui/layout.dart` & `lib/ui/widgets/`)
-Builds structured layout frames and exposes standard widgets. The widgets are organized modularly under `lib/ui/widgets/` and re-exported via [widget_toolkit.dart](file:///app/lib/ui/widget_toolkit.dart).
-
-- **[splitRect](file:///app/lib/ui/layout.dart#L162)**: Splits bounding boxes into coordinates based on constraints (`LengthConstraint`, `PercentageConstraint`, `FlexConstraint`, and `MinMaxConstraint`).
-- **[Viewport](file:///app/lib/ui/layout.dart#L82)**: Implements `Buffer` wrapping to clip and translate relative local coordinate spaces for nested widgets.
-- **Layout Containers**: `Column`, `Row`, and `Stack` layout managers align lists of flex widgets.
-- **Widgets Directory (`lib/ui/widgets/`)**:
-  - `Text` ([text.dart](file:///app/lib/ui/widgets/text.dart)): Renders plain or wrapped text.
-  - `RichText` ([rich_text.dart](file:///app/lib/ui/widgets/rich_text.dart)): Renders styled rich text runs with text wrapping support.
-  - `ListWidget` ([list_widget.dart](file:///app/lib/ui/widgets/list_widget.dart)): Navigable scroll list.
-  - `TextField` ([text_field.dart](file:///app/lib/ui/widgets/text_field.dart)): Single-line or multi-line interactive text entry field with custom cursor, placeholders, and history stacks.
-  - `LinearProgressIndicator` ([linear_progress_indicator.dart](file:///app/lib/ui/widgets/linear_progress_indicator.dart)): Unicode block progress indicator with easing support.
-  - `Canvas` ([canvas.dart](file:///app/lib/ui/widgets/canvas.dart)): 2D Braille grid pixel drawing tool.
-  - `Grid` ([grid.dart](file:///app/lib/ui/widgets/grid.dart)): 2D tile map layer.
-  - `NumberSelector` ([number_selector.dart](file:///app/lib/ui/widgets/number_selector.dart)): Spinner control.
-  - `Padding` ([padding.dart](file:///app/lib/ui/widgets/padding.dart)): Wraps a child widget, shrinking viewport bounds by specified top/bottom/left/right padding offsets.
-  - `Help` ([help.dart](file:///app/lib/ui/widgets/help.dart)): Flexible keybindings help line builder.
-  - `Spinner` ([spinner.dart](file:///app/lib/ui/widgets/spinner.dart)): Animated progress loading indicator.
-  - `Table` ([table.dart](file:///app/lib/ui/widgets/table.dart)): Multi-column grid viewer with header division and selected row cursor tracking.
-  - `Paginator` ([paginator.dart](file:///app/lib/ui/widgets/paginator.dart)): Navigation dot indicator.
-
-### E. Focus & Window Management (`lib/ui/window.dart`)
-Coordinates windows, window hierarchies, drag/resize events, and focus targets.
-
-- **[FocusNode](file:///app/lib/ui/window.dart#L7)**: Represents a leaf or branch in the active keyboard focus tree. Handles request queries and root traversal.
-- **[Window](file:///app/lib/ui/window.dart#L61)**: Floating widget layout frame containing borders, title overrides, and drag handles.
-- **[WindowManager](file:///app/lib/ui/window.dart#L152)**: Manages mouse drag-to-move, click-corner-to-resize, Z-indexing (bringing active windows to the front), and routing incoming key/mouse events to target focus nodes or hit positions.
+### D. Focus & Input Processing
+* **[FocusNode](/packages/termui/lib/ui/window.dart#L74)**: Node in the focus tree representing an interactive layout element.
+* **[FocusScopeNode](/packages/termui/lib/ui/window.dart#L201)**: A specialized node grouping siblings for direction-based focus traversal (up/down/left/right/tab).
+* **[FocusManager](/packages/termui/lib/ui/window.dart#L25)**: Singleton registry tracking `primaryFocus` and coordinating focus paths.
+* **[InputParser](/packages/termui/lib/ui/input_parser.dart)**: Parses raw ansi escape byte streams into [InputEvent](/packages/termui/lib/ui/event.dart) classes (keys, mouse, paste events).
 
 ---
 
-## 4. Quick Start: Coding Guidelines
+## 4. Widget Catalog
 
-When modifying or expanding the codebase:
-1. **Prefer Modern Collection Features**: In compliance with Dart collection guidelines, leverage spread operators (`...`), control-flow elements (`if`, `for`), and null-aware collection entries.
-2. **Buffer Access Optimization**: Do not perform direct `stdout` writing outside the [Renderer](file:///app/lib/ui/renderer.dart) class. Perform all layout drawing operations on the widget's local [Viewport](file:///app/lib/ui/layout.dart#L82) buffer.
-3. **Multi-byte Characters Safety**: When computing widths, slicing strings, or measuring layout boundaries, always use `text.characters` from `package:characters` rather than `text.length` or `text.substring` to prevent breaking multi-byte unicode or emoji sequences.
+All custom widgets are located in the [widgets/](/packages/termui/lib/ui/widgets) directory and re-exported via [widget_toolkit.dart](/packages/termui/lib/ui/widget_toolkit.dart):
+* **[Text](/packages/termui/lib/ui/widgets/text.dart)**: Plain or wrapped text.
+* **[RichText](/packages/termui/lib/ui/widgets/rich_text.dart)**: Text styling runs with automatic wrap support.
+* **[TextField](/packages/termui/lib/ui/widgets/text_field.dart#L316)**: Multi-line / single-line interactive input fields with undo/redo support, text editing controllers, and focused style attributes.
+* **[DecoratedBox](/packages/termui/lib/ui/widgets/decorated_box.dart#L191)**: Applies borders and backgrounds around nested subtrees.
+* **[LinearProgressIndicator](/packages/termui/lib/ui/widgets/linear_progress_indicator.dart)**: Block-based progression indicator.
+* **[Canvas](/packages/termui/lib/ui/widgets/canvas.dart)**: Vector drawing viewport utilizing sub-pixel Braille dot mapping.
+* **[Grid](/packages/termui/lib/ui/widgets/grid.dart)**: 2D tile layout map.
+* **[Window](/packages/termui/lib/ui/window.dart#L241)**: Draggable, resizeable floating window panels.
+
+---
+
+## 5. Development Guidelines & Rules
+
+When writing or modifying code in this repository:
+
+1. **Use Modern Dart Collections**: Leverage Dart collection language features such as `if` elements, `for` elements, spread operators (`...`), and null-aware collection entries. See the [Dart Collections Guide](https://dart.dev/language/collections) for syntax references.
+2. **Multi-byte & Emoji Safety**: Never use `String.length` or `String.substring` for coordinates or drawing offsets. Always use `text.characters` from `package:characters` to handle grapheme cluster boundaries.
+3. **Always Check if Mounted**: Focus changes can fire when widgets are being unmounted or cleaned up. Always guard `setState` calls in focus listeners with an `if (mounted)` check:
+   ```dart
+   focusNode.onFocusChange = (hasFocus) {
+     if (hasFocus && mounted) {
+       setState(() {
+         // Update state properties
+       });
+     }
+   };
+   ```
+4. **Propagate InheritedWidget Updates**: Ensure [InheritedElement.update](/packages/termui/lib/ui/layout.dart#L734) always calls `rebuild()` to ensure that children configurations get updated downstream when the parent rebuilds.
+5. **Conventional Commits**: Write structured, clear commit messages conforming to the Conventional Commits 1.0.0 specification (e.g. `feat(core): ...`, `fix(focus): ...`).
+
+---
+
+## 6. Testing & Golden Suites
+
+All test files are located in [packages/termui/test](/packages/termui/test).
+
+### Testing Practices
+* **Stateful Rebuilds**: Unlike running applications which schedule frame updates on the microtask queue, tests run synchronously. You must call `element.rebuild()`, followed by `element.layout(...)` and `element.paint(...)` to force widgets to redraw after focus or state changes.
+* **Focus Singleton Cleanup**: Since `FocusManager` is a singleton, focus state persists across tests. You must call `FocusManager.instance.setPrimaryFocus(null)` in `setUp()` to ensure a clean slate.
+* **Golden Tests**: Uses `fake_async` and mock recorders to output Golden ANSI files under `test/goldens/` and verifies pixel-perfect compliance.
+
+### Commands
+Run the following commands inside `/app/packages/termui`:
+* Run all unit and integration tests:
+  ```bash
+  dart test
+  ```
+* Run specific test suites:
+  ```bash
+  dart test test/multi_pane_settings_test.dart
+  ```
+* Verify static analysis (returns zero warnings):
+  ```bash
+  dart analyze
+  ```
+* Format codebase:
+  ```bash
+  dart format .
+  ```
+
+---
+
+## 7. Example Gallery & Links
+
+Check out the interactive examples in `packages/termui/example/`:
+* **[01_questionnaire_example.dart](/packages/termui/example/01_questionnaire_example.dart)**: A simple terminal form collecting user answers.
+* **[02_progress_bars.dart](/packages/termui/example/02_progress_bars.dart)**: Demonstrates linear and spinner progression indicators.
+* **[03_responsive_dashboard.dart](/packages/termui/example/03_responsive_dashboard.dart)**: Grid-aligned terminal dashboard that reflows on resize.
+* **[04_multi_pane_settings.dart](/packages/termui/example/04_multi_pane_settings.dart)**: Dual-pane settings panel displaying list-to-detail sibling traversal and text inputs.
+* **[braille_canvas.dart](/packages/termui/example/braille_canvas.dart)**: Demonstrates vector graphics mapping on a braille sub-pixel layout.
+* **[widget_book.dart](/packages/termui/example/widget_book.dart)**: Interactive widget component book with custom page routes.

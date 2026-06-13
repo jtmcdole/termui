@@ -91,46 +91,72 @@ class TimerWidget extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    if (area.width <= 0 || area.height <= 0) return;
+  Element createElement() => TimerWidgetElement(this);
+}
 
-    final minutes = duration.inMinutes;
-    final seconds = duration.inSeconds % 60;
+/// An element that manages the rendering and layout of a [TimerWidget] widget.
+class TimerWidgetElement extends Element {
+  /// Creates a [TimerWidgetElement] for the given [widget].
+  TimerWidgetElement(TimerWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 10
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 2
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final timer = widget as TimerWidget;
+    if (size.width <= 0 || size.height <= 0) return;
+
+    final minutes = timer.duration.inMinutes;
+    final seconds = timer.duration.inSeconds % 60;
 
     final mm = minutes.toString().padLeft(2, '0');
     final ss = seconds.toString().padLeft(2, '0');
 
-    final timeStringLength = 5; // "MM:SS"
-    final startX = ((area.width - timeStringLength) / 2).floor().clamp(
+    const timeStringLength = 5; // "MM:SS"
+    final startX = ((size.width - timeStringLength) / 2).floor().clamp(
       0,
-      area.width,
+      size.width,
     );
 
     // Draw digits & separators
-    if (startX + 5 <= area.width) {
-      buffer.writeString(startX, 0, mm, digitStyle);
-      buffer.writeString(startX + 2, 0, ':', separatorStyle);
-      buffer.writeString(startX + 3, 0, ss, digitStyle);
+    if (startX + 5 <= size.width) {
+      viewport.writeString(startX, 0, mm, timer.digitStyle);
+      viewport.writeString(startX + 2, 0, ':', timer.separatorStyle);
+      viewport.writeString(startX + 3, 0, ss, timer.digitStyle);
     } else {
       // Fallback: draw what fits
-      final fallback = '$mm:$ss'.substring(0, area.width);
-      buffer.writeString(0, 0, fallback, digitStyle);
+      final fallback = '$mm:$ss'.substring(0, size.width);
+      viewport.writeString(0, 0, fallback, timer.digitStyle);
     }
 
-    if (area.height >= 2) {
+    if (size.height >= 2) {
       // Draw progress bar below
-      final progress = initialDuration.inMilliseconds == 0
+      final progress = timer.initialDuration.inMilliseconds == 0
           ? 0.0
-          : duration.inMilliseconds / initialDuration.inMilliseconds;
+          : timer.duration.inMilliseconds /
+                timer.initialDuration.inMilliseconds;
 
-      final progressWidth = area.width;
+      final progressWidth = size.width;
       final filledCount = (progress * progressWidth).round().clamp(
         0,
         progressWidth,
       );
 
       final barText = '█' * filledCount + '░' * (progressWidth - filledCount);
-      buffer.writeString(0, 1, barText, progressStyle);
+      viewport.writeString(0, 1, barText, timer.progressStyle);
     }
   }
 }

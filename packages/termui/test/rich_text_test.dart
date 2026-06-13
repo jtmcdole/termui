@@ -30,7 +30,9 @@ void main() {
         ),
       );
 
-      label.render(buffer, const Rect(0, 0, 10, 1));
+      ElementWidget(label)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -67,7 +69,9 @@ void main() {
       // 'rich' (4) + ' ' -> fits (total 10)
       // 'world' (5) -> wraps to line 1
       // 'wrapping' (8) -> wraps to line 2
-      paragraph.render(buffer, const Rect(0, 0, 10, 3));
+      ElementWidget(paragraph)
+        ..layout(BoxConstraints.tight(const Size(10, 3)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,
@@ -107,7 +111,9 @@ void main() {
       );
       final buffer = Buffer.blank(10, 2);
 
-      timer.render(buffer, const Rect(0, 0, 10, 2));
+      ElementWidget(timer)
+        ..layout(BoxConstraints.tight(const Size(10, 2)))
+        ..paint(buffer, Offset.zero);
 
       expect(
         buffer,

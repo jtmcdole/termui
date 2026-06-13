@@ -10,8 +10,27 @@ class TestCellWidget extends Widget {
   const TestCellWidget(this.content);
 
   @override
-  void render(Buffer buffer, Rect area) {
-    buffer.writeString(0, 0, content, Style.empty);
+  Element createElement() => _TestCellElement(this);
+}
+
+class _TestCellElement extends Element {
+  _TestCellElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(
+      Size((widget as TestCellWidget).content.length, 1),
+    );
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    buffer.writeString(
+      offset.dx,
+      offset.dy,
+      (widget as TestCellWidget).content,
+      Style.empty,
+    );
   }
 }
 
@@ -23,7 +42,9 @@ void main() {
         0.5,
         showPercentage: false,
       );
-      indicator.render(buffer, const Rect(0, 0, 10, 1));
+      ElementWidget(indicator)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(buffer, Offset.zero);
 
       // 0.5 of 10 is 5 cells filled
       expect(buffer.getCell(0, 0)!.char, equals('█'));
@@ -71,7 +92,9 @@ void main() {
         columnWidths: [6, 6],
       );
 
-      table.render(buffer, const Rect(0, 0, 20, 4));
+      ElementWidget(table)
+        ..layout(BoxConstraints.tight(const Size(20, 4)))
+        ..paint(buffer, Offset.zero);
 
       // Row 0: Headers
       final row0 = List.generate(
@@ -130,7 +153,8 @@ void main() {
 
       // Lazily run stateful loop
       final rootEl = StatefulElement(overlayWidget)..mount(null);
-      rootEl.render(buffer, const Rect(0, 0, 10, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(10, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       // E1 rendered at (0, 0)
       expect(buffer.getCell(0, 0)!.char, equals('E'));
@@ -144,7 +168,8 @@ void main() {
       // E2 is removed
       entry2.remove();
       buffer.clear();
-      rootEl.render(buffer, const Rect(0, 0, 10, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(10, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       expect(buffer.getCell(0, 0)!.char, equals('E'));
       // E2 position is now empty/clear
@@ -165,7 +190,8 @@ void main() {
 
       final rootEl = StatefulElement(app)..mount(null);
       final buffer = Buffer.blank(20, 10);
-      rootEl.render(buffer, const Rect(0, 0, 20, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(20, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       // Initially closed, shows selection
       // Find DropdownButton element and trigger action
@@ -178,7 +204,8 @@ void main() {
 
       // Open dropdown
       dropState.handleKeyEvent(const KeyEvent(' ', KeyType.character));
-      rootEl.render(buffer, const Rect(0, 0, 20, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(20, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       // Dropdown menu elements should render below the button (row 1 and row 2)
       // Since first item is selected, row 1 shows 'One'
@@ -188,12 +215,14 @@ void main() {
 
       // Move selection down
       dropState.handleKeyEvent(const KeyEvent('down', KeyType.down));
-      rootEl.render(buffer, const Rect(0, 0, 20, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(20, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       // Confirm selection
       dropState.handleKeyEvent(const KeyEvent('enter', KeyType.enter));
       buffer.clear();
-      rootEl.render(buffer, const Rect(0, 0, 20, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(20, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       // Menu is closed, row 1 is now empty/clear
       expect(buffer.getCell(0, 1)!.char, equals(' '));
@@ -218,7 +247,8 @@ void main() {
 
       final rootEl = StatefulElement(app)..mount(null);
       final buffer = Buffer.blank(20, 10);
-      rootEl.render(buffer, const Rect(0, 0, 20, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(20, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       final stackEl = rootEl.childElement! as StackElement;
       final posEl = stackEl.childElements[0] as PositionedElement;
@@ -229,7 +259,8 @@ void main() {
 
       // Open menu
       menuState.handleKeyEvent(const KeyEvent(' ', KeyType.character));
-      rootEl.render(buffer, const Rect(0, 0, 20, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(20, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       // Action A should render below the button (row 1)
       expect(buffer.getCell(0, 1)!.char, equals('A'));
@@ -238,7 +269,8 @@ void main() {
       // Select first action
       menuState.handleKeyEvent(const KeyEvent('enter', KeyType.enter));
       buffer.clear();
-      rootEl.render(buffer, const Rect(0, 0, 20, 10));
+      rootEl.layout(BoxConstraints.tight(const Size(20, 10)));
+      rootEl.paint(buffer, Offset.zero);
 
       expect(selectedVal, equals('A'));
       // Menu is closed, row 1 is now empty/clear

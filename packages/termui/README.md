@@ -101,7 +101,10 @@ void main() async {
       ]);
 
       // Render the layout elements onto the offscreen buffer
-      layout.render(buffer, Rect(0, 0, width, height));
+      final rootElement = layout.createElement()..mount(null);
+      rootElement.layout(BoxConstraints.tight(Size(width, height)));
+      rootElement.paint(buffer, Offset.zero);
+      rootElement.unmount();
 
       // Compute diff and write ANSI sequences to stdout
       final sb = StringBuffer();
@@ -152,9 +155,12 @@ void main() async {
 
 ## Running the Examples
 
-This repository includes several prebuilt showcase examples under the `example/` directory:
+Navigate to the `termui` package directory first, then run the showcase examples:
 
 ```bash
+# Navigate to package directory
+cd packages/termui
+
 # A comprehensive interactive layout and widget explorer
 dart run example/widget_book.dart
 

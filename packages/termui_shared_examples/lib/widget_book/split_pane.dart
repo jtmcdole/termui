@@ -11,11 +11,11 @@ import 'example_base.dart';
 /// (percentage or length) in real-time based on mouse interactions.
 class SplitPaneExample extends WidgetBookExample {
   /// The interactive split pane layout.
-  late final SplitPane splitPaneDemo;
+  late final ElementWidget splitPaneWrapper;
 
   @override
   void init() {
-    splitPaneDemo = SplitPane(
+    final splitPaneDemo = SplitPane(
       child1: Text(
         'Left Panel. Drag the │ divider in the middle with your mouse! Try resizing the window or dragging past the limit of 5 columns.',
         style: const Style(foreground: CharmColors.uni),
@@ -27,6 +27,7 @@ class SplitPaneExample extends WidgetBookExample {
       ),
       constraint2: const PercentageConstraint(50),
     );
+    splitPaneWrapper = ElementWidget(splitPaneDemo);
   }
 
   @override
@@ -35,7 +36,7 @@ class SplitPaneExample extends WidgetBookExample {
     required int width,
     required int height,
   }) {
-    return splitPaneDemo;
+    return splitPaneWrapper;
   }
 
   @override
@@ -46,7 +47,26 @@ class SplitPaneExample extends WidgetBookExample {
     int width,
     int height,
   ) {
-    splitPaneDemo.handleMouseEvent(event, localX, localY);
+    final el = splitPaneWrapper.element;
+    if (el is SplitPaneElement) {
+      final split = el.widget as SplitPane;
+      final lastArea = split.lastArea;
+      if (lastArea != null) {
+        final splitX = event.x - lastArea.x;
+        final splitY = event.y - lastArea.y;
+        el.handleMouseEvent(event, splitX, splitY);
+      }
+    }
+  }
+
+  @override
+  bool get capturesMouse {
+    final el = splitPaneWrapper.element;
+    if (el is SplitPaneElement) {
+      final split = el.widget as SplitPane;
+      return split.isDragging;
+    }
+    return false;
   }
 
   @override

@@ -76,6 +76,10 @@ class SplitPane extends Widget {
   });
 
   Rect? _lastArea;
+
+  /// The bounds of the split pane in the last paint pass.
+  Rect? get lastArea => _lastArea;
+
   int _dividerX = 0;
   bool _isDragging = false;
   int? _origMin1;
@@ -85,6 +89,9 @@ class SplitPane extends Widget {
 
   /// Gets the current divider position.
   int get dividerPosition => _dividerX;
+
+  /// Whether the divider is currently being dragged.
+  bool get isDragging => _isDragging;
 
   void _initLimits() {
     if (_origMin1 != null) return;
@@ -101,89 +108,168 @@ class SplitPane extends Widget {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    _lastArea = area;
-    final w = area.width;
-    final h = area.height;
-    if (w <= 0 || h <= 0) return;
+  Element createElement() => SplitPaneElement(this);
+}
 
-    _initLimits();
-    final totalSize = direction == LayoutDirection.horizontal ? w : h;
+/// An element that manages the layout and rendering of a [SplitPane] widget.
+class SplitPaneElement extends Element {
+  /// The element for the first pane child widget.
+  Element? childElement1;
 
-    // 1. Calculate raw divider position based on constraints
+  /// The element for the second pane child widget.
+  Element? childElement2;
+
+  /// Creates a [SplitPaneElement] for the given [widget].
+  SplitPaneElement(SplitPane super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final split = widget as SplitPane;
+    if (childElement1 != null &&
+        childElement1!.widget.runtimeType == split.child1.runtimeType) {
+      childElement1!.update(split.child1);
+    } else {
+      childElement1?.unmount();
+      childElement1 = split.child1.createElement();
+      childElement1!.mount(this);
+    }
+
+    if (childElement2 != null &&
+        childElement2!.widget.runtimeType == split.child2.runtimeType) {
+      childElement2!.update(split.child2);
+    } else {
+      childElement2?.unmount();
+      childElement2 = split.child2.createElement();
+      childElement2!.mount(this);
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    if (childElement1 != null) visitor(childElement1!);
+    if (childElement2 != null) visitor(childElement2!);
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final split = widget as SplitPane;
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 20
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 10
+        : constraints.maxHeight;
+
+    split._initLimits();
+    final totalSize = split.direction == LayoutDirection.horizontal ? w : h;
+
     int dividerPos = _calculateDividerPos(totalSize);
 
-    // 2. Solve min/max limits
-    int minW1 = _origMin1 ?? 0;
-    int maxW1 = _origMax1 ?? (totalSize - 1);
-    if (_origMin2 != null) {
-      maxW1 = min(maxW1, totalSize - _origMin2! - 1);
+    int minW1 = split._origMin1 ?? 0;
+    int maxW1 = split._origMax1 ?? (totalSize - 1);
+    if (split._origMin2 != null) {
+      maxW1 = min(maxW1, totalSize - split._origMin2! - 1);
     }
-    if (_origMax2 != null) {
-      minW1 = max(minW1, totalSize - _origMax2! - 1);
+    if (split._origMax2 != null) {
+      minW1 = max(minW1, totalSize - split._origMax2! - 1);
     }
     minW1 = minW1.clamp(0, totalSize - 1);
     maxW1 = maxW1.clamp(0, totalSize - 1);
     if (minW1 > maxW1) minW1 = maxW1;
 
     dividerPos = dividerPos.clamp(minW1, maxW1);
-    _dividerX = dividerPos;
+    split._dividerX = dividerPos;
 
-    if (direction == LayoutDirection.horizontal) {
-      // Render child1
-      final child1Area = Rect(area.x, area.y, dividerPos, h);
-      if (dividerPos > 0) {
-        final vp1 = Viewport(buffer, child1Area);
-        child1.render(vp1, Rect(0, 0, dividerPos, h));
+    if (split.direction == LayoutDirection.horizontal) {
+      if (dividerPos > 0 && childElement1 != null) {
+        childElement1!.layout(BoxConstraints.tight(Size(dividerPos, h)));
       }
-
-      // Render Divider
-      for (var y = 0; y < h; y++) {
-        final cell = buffer.getCell(area.x + dividerPos, area.y + y);
-        if (cell != null) {
-          cell.char = dividerChar;
-          cell.style = dividerStyle;
-        }
-      }
-
-      // Render child2
       final child2Width = w - dividerPos - 1;
-      final child2Area = Rect(area.x + dividerPos + 1, area.y, child2Width, h);
-      if (child2Width > 0) {
-        final vp2 = Viewport(buffer, child2Area);
-        child2.render(vp2, Rect(0, 0, child2Width, h));
+      if (child2Width > 0 && childElement2 != null) {
+        childElement2!.layout(BoxConstraints.tight(Size(child2Width, h)));
       }
     } else {
-      // Vertical
-      // Render child1
-      final child1Area = Rect(area.x, area.y, w, dividerPos);
-      if (dividerPos > 0) {
-        final vp1 = Viewport(buffer, child1Area);
-        child1.render(vp1, Rect(0, 0, w, dividerPos));
+      if (dividerPos > 0 && childElement1 != null) {
+        childElement1!.layout(BoxConstraints.tight(Size(w, dividerPos)));
+      }
+      final child2Height = h - dividerPos - 1;
+      if (child2Height > 0 && childElement2 != null) {
+        childElement2!.layout(BoxConstraints.tight(Size(w, child2Height)));
+      }
+    }
+
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final split = widget as SplitPane;
+    split._lastArea = Rect(offset.dx, offset.dy, size.width, size.height);
+    final w = size.width;
+    final h = size.height;
+    if (w <= 0 || h <= 0) return;
+
+    final dividerPos = split._dividerX;
+
+    if (split.direction == LayoutDirection.horizontal) {
+      if (dividerPos > 0 && childElement1 != null) {
+        childElement1!.paint(buffer, offset);
       }
 
-      // Render Divider
-      for (var x = 0; x < w; x++) {
-        final cell = buffer.getCell(area.x + x, area.y + dividerPos);
+      for (var y = 0; y < h; y++) {
+        final cell = buffer.getCell(offset.dx + dividerPos, offset.dy + y);
         if (cell != null) {
-          cell.char = dividerChar;
-          cell.style = dividerStyle;
+          cell.char = split.dividerChar;
+          cell.style = split.dividerStyle;
         }
       }
 
-      // Render child2
+      final child2Width = w - dividerPos - 1;
+      if (child2Width > 0 && childElement2 != null) {
+        childElement2!.paint(
+          buffer,
+          Offset(offset.dx + dividerPos + 1, offset.dy),
+        );
+      }
+    } else {
+      if (dividerPos > 0 && childElement1 != null) {
+        childElement1!.paint(buffer, offset);
+      }
+
+      for (var x = 0; x < w; x++) {
+        final cell = buffer.getCell(offset.dx + x, offset.dy + dividerPos);
+        if (cell != null) {
+          cell.char = split.dividerChar;
+          cell.style = split.dividerStyle;
+        }
+      }
+
       final child2Height = h - dividerPos - 1;
-      final child2Area = Rect(area.x, area.y + dividerPos + 1, w, child2Height);
-      if (child2Height > 0) {
-        final vp2 = Viewport(buffer, child2Area);
-        child2.render(vp2, Rect(0, 0, w, child2Height));
+      if (child2Height > 0 && childElement2 != null) {
+        childElement2!.paint(
+          buffer,
+          Offset(offset.dx, offset.dy + dividerPos + 1),
+        );
       }
     }
   }
 
   int _calculateDividerPos(int totalSize) {
-    final c1 = constraint1;
-    final c2 = constraint2;
+    final split = widget as SplitPane;
+    final c1 = split.constraint1;
+    final c2 = split.constraint2;
 
     if (c1 is LengthConstraint) {
       return c1.length.clamp(0, totalSize - 1);
@@ -202,32 +288,35 @@ class SplitPane extends Widget {
 
   /// Intercepts mouse drag/press events over the divider.
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    if (_lastArea == null) return;
-    _initLimits();
-    final totalSize = direction == LayoutDirection.horizontal
-        ? _lastArea!.width
-        : _lastArea!.height;
+    final split = widget as SplitPane;
+    if (split._lastArea == null) return;
+    split._initLimits();
+    final totalSize = split.direction == LayoutDirection.horizontal
+        ? split._lastArea!.width
+        : split._lastArea!.height;
     if (totalSize <= 0) return;
 
-    final mousePos = direction == LayoutDirection.horizontal ? localX : localY;
+    final mousePos = split.direction == LayoutDirection.horizontal
+        ? localX
+        : localY;
 
     if (event.type == MouseEventType.press) {
-      if (mousePos == _dividerX) {
-        _isDragging = true;
+      if (mousePos == split._dividerX) {
+        split._isDragging = true;
       }
     } else if (event.type == MouseEventType.release) {
-      _isDragging = false;
-    } else if (event.type == MouseEventType.drag && _isDragging) {
+      split._isDragging = false;
+    } else if (event.type == MouseEventType.drag && split._isDragging) {
       int newDividerPos = mousePos;
 
       // Solve bounds/limits
-      int minW1 = _origMin1 ?? 0;
-      int maxW1 = _origMax1 ?? (totalSize - 1);
-      if (_origMin2 != null) {
-        maxW1 = min(maxW1, totalSize - _origMin2! - 1);
+      int minW1 = split._origMin1 ?? 0;
+      int maxW1 = split._origMax1 ?? (totalSize - 1);
+      if (split._origMin2 != null) {
+        maxW1 = min(maxW1, totalSize - split._origMin2! - 1);
       }
-      if (_origMax2 != null) {
-        minW1 = max(minW1, totalSize - _origMax2! - 1);
+      if (split._origMax2 != null) {
+        minW1 = max(minW1, totalSize - split._origMax2! - 1);
       }
       minW1 = minW1.clamp(0, totalSize - 1);
       maxW1 = maxW1.clamp(0, totalSize - 1);
@@ -236,35 +325,37 @@ class SplitPane extends Widget {
       newDividerPos = newDividerPos.clamp(minW1, maxW1);
 
       // Mutate constraints in place
-      final c1 = constraint1;
+      final c1 = split.constraint1;
       if (c1 is LengthConstraint) {
-        constraint1 = LengthConstraint(newDividerPos);
-        constraint2 = LengthConstraint(totalSize - newDividerPos - 1);
+        split.constraint1 = LengthConstraint(newDividerPos);
+        split.constraint2 = LengthConstraint(totalSize - newDividerPos - 1);
       } else if (c1 is PercentageConstraint) {
         final p1 = (newDividerPos * 100 / totalSize).round().clamp(0, 100);
-        constraint1 = PercentageConstraint(p1);
-        constraint2 = PercentageConstraint(100 - p1);
+        split.constraint1 = PercentageConstraint(p1);
+        split.constraint2 = PercentageConstraint(100 - p1);
       } else if (c1 is FlexConstraint) {
-        constraint1 = FlexConstraint(newDividerPos);
-        constraint2 = FlexConstraint(totalSize - newDividerPos - 1);
+        split.constraint1 = FlexConstraint(newDividerPos);
+        split.constraint2 = FlexConstraint(totalSize - newDividerPos - 1);
       } else if (c1 is MinMaxConstraint) {
         // Here we keep the min limits but update the current value via a new MinMaxConstraint.
         // Wait, since MinMaxConstraint uses min to represent the preferred size, we update the min.
         // But the original min limit is stored in _origMin1, so we still clamp correctly.
-        constraint1 = MinMaxConstraint(
+        split.constraint1 = MinMaxConstraint(
           min: newDividerPos,
-          max: _origMax1 ?? 99999,
+          max: split._origMax1 ?? 99999,
         );
-        if (constraint2 is MinMaxConstraint) {
-          constraint2 = MinMaxConstraint(
+        if (split.constraint2 is MinMaxConstraint) {
+          split.constraint2 = MinMaxConstraint(
             min: totalSize - newDividerPos - 1,
-            max: _origMax2 ?? 99999,
+            max: split._origMax2 ?? 99999,
           );
         } else {
-          constraint2 = MinMaxConstraint(min: totalSize - newDividerPos - 1);
+          split.constraint2 = MinMaxConstraint(
+            min: totalSize - newDividerPos - 1,
+          );
         }
       }
-      _dividerX = newDividerPos;
+      split._dividerX = newDividerPos;
     }
   }
 }

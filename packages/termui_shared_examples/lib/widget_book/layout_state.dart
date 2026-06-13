@@ -219,9 +219,22 @@ class VerticalDivider extends Widget {
   const VerticalDivider({this.style = Style.empty});
 
   @override
-  void render(Buffer buffer, Rect area) {
-    for (var y = 0; y < area.height; y++) {
-      buffer.setCell(0, y, Cell('│', style));
+  Element createElement() => _VerticalDividerElement(this);
+}
+
+class _VerticalDividerElement extends Element {
+  _VerticalDividerElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return Size(1, constraints.maxHeight);
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final vWidget = widget as VerticalDivider;
+    for (var y = 0; y < size.height; y++) {
+      buffer.setCell(offset.dx, offset.dy + y, Cell('│', vWidget.style));
     }
   }
 }

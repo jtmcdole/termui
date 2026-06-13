@@ -1,3 +1,4 @@
+import 'dart:math';
 import '../buffer.dart';
 import '../layout.dart';
 import '../style.dart';
@@ -30,13 +31,6 @@ class LeftBorder extends Widget {
 
   @override
   Element createElement() => LeftBorderElement(this);
-
-  @override
-  void render(Buffer buffer, Rect area) {
-    // Fallback for direct widget rendering outside of active element tree
-    final rootContext = LeftBorderElement(this)..mount(null);
-    rootContext.render(buffer, area);
-  }
 }
 
 /// The Element corresponding to a [LeftBorder] widget.
@@ -48,23 +42,74 @@ class LeftBorderElement extends Element {
   LeftBorderElement(LeftBorder super.widget);
 
   @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final borderWidget = widget as LeftBorder;
+    if (childElement != null &&
+        childElement!.widget.runtimeType == borderWidget.child.runtimeType) {
+      childElement!.update(borderWidget.child);
+    } else {
+      childElement?.unmount();
+      childElement = borderWidget.child.createElement();
+      childElement!.mount(this);
+    }
+  }
+
+  @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
+  Size performLayout(BoxConstraints constraints) {
+    final borderWidget = widget as LeftBorder;
+    final padding = borderWidget.padding;
+    final extraW = 1 + padding.left + padding.right;
+    final extraH = padding.top + padding.bottom;
+
+    if (childElement != null) {
+      final childConstraints = BoxConstraints(
+        minWidth: max(0, constraints.minWidth - extraW),
+        maxWidth: constraints.maxWidth == BoxConstraints.infinity
+            ? BoxConstraints.infinity
+            : max(0, constraints.maxWidth - extraW),
+        minHeight: max(0, constraints.minHeight - extraH),
+        maxHeight: constraints.maxHeight == BoxConstraints.infinity
+            ? BoxConstraints.infinity
+            : max(0, constraints.maxHeight - extraH),
+      );
+      final childSize = childElement!.layout(childConstraints);
+      return constraints.constrain(
+        Size(childSize.width + extraW, childSize.height + extraH),
+      );
+    }
+    return constraints.constrain(Size(extraW, extraH));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
     final borderWidget = widget as LeftBorder;
     final padding = borderWidget.padding;
     final requiredWidth = 1 + padding.left + padding.right;
     final requiredHeight = padding.top + padding.bottom;
-    if (area.width <= requiredWidth || area.height <= requiredHeight) return;
+    if (size.width <= requiredWidth || size.height <= requiredHeight) return;
 
-    final limit = borderWidget.borderHeight ?? area.height;
+    final limit = borderWidget.borderHeight ?? size.height;
     // 1. Draw the vertical line on the left
-    for (var y = 0; y < area.height; y++) {
+    for (var y = 0; y < size.height; y++) {
       final cellChar = y < limit ? borderWidget.char : ' ';
-      final cell = buffer.getCell(area.x, area.y + y);
+      final cell = buffer.getCell(offset.dx, offset.dy + y);
       if (cell != null) {
         cell.char = cellChar;
         cell.style = borderWidget.style;
@@ -72,21 +117,12 @@ class LeftBorderElement extends Element {
     }
 
     // 2. Render the child in the remaining area
-    final childX = area.x + 1 + padding.left;
-    final childWidth = area.width - 1 - padding.left - padding.right;
-    final childY = area.y + padding.top;
-    final childHeight = area.height - padding.top - padding.bottom;
-    final childArea = Rect(childX, childY, childWidth, childHeight);
-
-    if (childElement != null &&
-        childElement!.widget.runtimeType == borderWidget.child.runtimeType) {
-      childElement!.update(borderWidget.child);
-    } else {
-      childElement = borderWidget.child.createElement();
-      childElement!.mount(this);
+    if (childElement != null) {
+      final childOffset = Offset(
+        offset.dx + 1 + padding.left,
+        offset.dy + padding.top,
+      );
+      childElement!.paint(buffer, childOffset);
     }
-
-    final childViewport = Viewport(buffer, childArea);
-    childElement!.render(childViewport, Rect(0, 0, childWidth, childHeight));
   }
 }

@@ -71,7 +71,9 @@ void main() {
         wrap: false,
         textAlign: TextAlign.center,
       );
-      centerRich.render(buffer, const Rect(0, 0, 10, 1));
+      ElementWidget(centerRich)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(buffer, Offset.zero);
 
       // 'abc' centered in 10 width -> startX = (10 - 3) ~/ 2 = 3.
       // Cells 3-5: 'abc'
@@ -86,7 +88,9 @@ void main() {
         textAlign: TextAlign.right,
       );
       final viewport = Viewport(buffer, const Rect(0, 1, 10, 1));
-      rightRich.render(viewport, const Rect(0, 0, 10, 1));
+      ElementWidget(rightRich)
+        ..layout(BoxConstraints.tight(const Size(10, 1)))
+        ..paint(viewport, Offset.zero);
 
       // 'xyz' right-aligned in 10 width -> startX = 10 - 3 = 7.
       // Cells 7-9: 'xyz' on line 1

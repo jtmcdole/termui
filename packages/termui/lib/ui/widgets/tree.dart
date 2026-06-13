@@ -288,6 +288,9 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
 
   @override
   void dispose() {
+    if (widget._state == this) {
+      widget._state = null;
+    }
     _focusNode.dispose();
     super.dispose();
   }
@@ -327,24 +330,51 @@ class _TreeWidgetRenderWidget extends Widget {
   const _TreeWidgetRenderWidget({required this.widget, required this.focused});
 
   @override
-  void render(Buffer buffer, Rect area) {
-    widget._updateFlatNodes();
-    widget.adjustScroll(area.height);
+  Element createElement() => _TreeWidgetElement(this);
+}
 
-    final activeSelectedStyle = focused
-        ? widget.selectedStyle
+class _TreeWidgetElement extends Element {
+  _TreeWidgetElement(_TreeWidgetRenderWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final wWidget = widget as _TreeWidgetRenderWidget;
+    wWidget.widget._updateFlatNodes();
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 20
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? wWidget.widget.flatNodes.length
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {
+    final viewport = Viewport(
+      buffer,
+      Rect(offset.dx, offset.dy, size.width, size.height),
+    );
+    final wWidget = widget as _TreeWidgetRenderWidget;
+    final tWidget = wWidget.widget;
+
+    tWidget._updateFlatNodes();
+    tWidget.adjustScroll(size.height);
+
+    final activeSelectedStyle = wWidget.focused
+        ? tWidget.selectedStyle
         : Style(
-            foreground: widget.selectedStyle.foreground,
+            foreground: tWidget.selectedStyle.foreground,
             background: CharmColors.char,
-            modifiers: widget.selectedStyle.modifiers,
+            modifiers: tWidget.selectedStyle.modifiers,
           );
 
-    final nodes = widget.flatNodes;
-    final offset = widget.scrollOffset;
-    final selIdx = widget.selectedIndex;
+    final nodes = tWidget.flatNodes;
+    final scrollOffsetVal = tWidget.scrollOffset;
+    final selIdx = tWidget.selectedIndex;
 
-    for (var i = 0; i < area.height; i++) {
-      final nodeIdx = offset + i;
+    for (var i = 0; i < size.height; i++) {
+      final nodeIdx = scrollOffsetVal + i;
       if (nodeIdx >= nodes.length) break;
 
       final flat = nodes[nodeIdx];
@@ -354,58 +384,58 @@ class _TreeWidgetRenderWidget extends Widget {
 
       // 1. Ancestor guide lines
       for (var depthIdx = 0; depthIdx < flat.depth - 1; depthIdx++) {
-        if (x >= area.width) break;
+        if (x >= size.width) break;
         final isLast = flat.ancestorIsLast[depthIdx];
         final part = isLast ? '   ' : '│  ';
-        buffer.writeString(
-          area.x + x,
-          area.y + i,
+        viewport.writeString(
+          x,
+          i,
           part,
-          isSelected ? activeSelectedStyle : widget.lineStyle,
+          isSelected ? activeSelectedStyle : tWidget.lineStyle,
         );
         x += 3;
       }
 
       // 2. Active node guide line
-      if (flat.depth > 0 && x < area.width) {
+      if (flat.depth > 0 && x < size.width) {
         final isLast = flat.ancestorIsLast.last;
         final part = isLast ? '└── ' : '├── ';
-        buffer.writeString(
-          area.x + x,
-          area.y + i,
+        viewport.writeString(
+          x,
+          i,
           part,
-          isSelected ? activeSelectedStyle : widget.lineStyle,
+          isSelected ? activeSelectedStyle : tWidget.lineStyle,
         );
         x += 4;
       }
 
       // 3. Expander indicator
-      if (x < area.width) {
+      if (x < size.width) {
         final indicator = flat.node.isLeaf
             ? '  '
             : (flat.node.isExpanded ? '▼ ' : '▶ ');
-        buffer.writeString(
-          area.x + x,
-          area.y + i,
+        viewport.writeString(
+          x,
+          i,
           indicator,
-          isSelected ? activeSelectedStyle : widget.lineStyle,
+          isSelected ? activeSelectedStyle : tWidget.lineStyle,
         );
         x += 2;
       }
 
       // 4. Label
-      final remainingWidth = area.width - x;
+      final remainingWidth = size.width - x;
       if (remainingWidth > 0) {
         final labelChars = flat.node.label.characters;
         final labelText = labelChars.length > remainingWidth
             ? labelChars.take(remainingWidth).toString()
             : labelChars.toString() +
                   (' ' * (remainingWidth - labelChars.length));
-        buffer.writeString(
-          area.x + x,
-          area.y + i,
+        viewport.writeString(
+          x,
+          i,
           labelText,
-          isSelected ? activeSelectedStyle : widget.unselectedStyle,
+          isSelected ? activeSelectedStyle : tWidget.unselectedStyle,
         );
       }
     }
