@@ -4,6 +4,8 @@ import '../layout.dart';
 import '../style.dart';
 import '../event.dart' hide Modifier;
 import 'text.dart';
+import '../../terminal/terminal.dart' as term;
+import 'prompt_runner.dart';
 
 /// A function that builds a widget given a build context.
 typedef WidgetBuilder = Widget Function(BuildContext context);
@@ -181,7 +183,7 @@ class DropdownMenuItem<T> {
 /// | `onChanged` | `Function(T?)` | Callback fired when a selection is made. |
 /// | `focused` | [bool] | Whether this button has keyboard focus. |
 /// | `dropdownStyle`| [Style] | Style applied to items in the dropdown menu. |
-class DropdownButton<T> extends StatefulWidget {
+class DropdownButton<T> extends StatefulWidget implements Focusable {
   /// The list of items to display in the dropdown.
   final List<DropdownMenuItem<T>> items;
 
@@ -201,6 +203,7 @@ class DropdownButton<T> extends StatefulWidget {
   final Style dropdownStyle;
 
   /// Whether the button is currently focused.
+  @override
   final bool focused;
 
   /// Creates a new dropdown button.
@@ -219,7 +222,8 @@ class DropdownButton<T> extends StatefulWidget {
 }
 
 /// State for a [DropdownButton].
-class DropdownButtonState<T> extends State<DropdownButton<T>> {
+class DropdownButtonState<T> extends State<DropdownButton<T>>
+    implements KeyEventHandler {
   /// Whether the dropdown menu is currently open.
   bool isOpen = false;
 
@@ -310,12 +314,14 @@ class DropdownButtonState<T> extends State<DropdownButton<T>> {
   }
 
   /// Handles incoming keyboard events to navigate and interact with the menu.
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     if (!isOpen) {
       if (event.key == ' ' || event.key == '\n' || event.key == 'down') {
         openDropdown();
+        return true;
       }
-      return;
+      return false;
     }
 
     if (event.key == 'down') {
@@ -323,17 +329,22 @@ class DropdownButtonState<T> extends State<DropdownButton<T>> {
         selectedIndex = (selectedIndex + 1) % widget.items.length;
       });
       overlayEntry?._overlayState?.setState(() {});
+      return true;
     } else if (event.key == 'up') {
       setState(() {
         selectedIndex =
             (selectedIndex - 1 + widget.items.length) % widget.items.length;
       });
       overlayEntry?._overlayState?.setState(() {});
+      return true;
     } else if (event.key == 'enter' || event.key == '\n' || event.key == ' ') {
       selectItem(selectedIndex);
+      return true;
     } else if (event.key == 'escape') {
       closeDropdown();
+      return true;
     }
+    return false;
   }
 
   @override
@@ -370,14 +381,16 @@ class DropdownButtonState<T> extends State<DropdownButton<T>> {
   }
 }
 
-class _DropdownButtonRenderWidget extends Widget {
+class _DropdownButtonRenderWidget extends Widget
+    implements Focusable, KeyEventHandler {
   final Widget displayWidget;
   final bool isOpen;
+  @override
   final bool focused;
   final Style style;
   final void Function(Rect bounds) onRender;
   final void Function() onAction;
-  final void Function(KeyEvent event) onKey;
+  final bool Function(KeyEvent event) onKey;
 
   const _DropdownButtonRenderWidget({
     required this.displayWidget,
@@ -431,8 +444,9 @@ class _DropdownButtonRenderWidget extends Widget {
     }
   }
 
-  void handleKeyEvent(KeyEvent event) {
-    onKey(event);
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return onKey(event);
   }
 
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
@@ -535,7 +549,7 @@ class PopupMenuItem<T> {
 /// | `onCanceled` | `Function()` | Callback triggered when closed via Escape. |
 /// | `child` | [Widget] | The trigger widget displaying on the screen. |
 /// | `dropdownStyle`| [Style] | The selection hover style in the menu. |
-class PopupMenuButton<T> extends StatefulWidget {
+class PopupMenuButton<T> extends StatefulWidget implements Focusable {
   /// The list of items to display in the popup menu.
   final List<PopupMenuItem<T>> items;
 
@@ -552,6 +566,7 @@ class PopupMenuButton<T> extends StatefulWidget {
   final Style dropdownStyle;
 
   /// Whether the button is currently focused.
+  @override
   final bool focused;
 
   /// Creates a new popup menu button.
@@ -569,7 +584,8 @@ class PopupMenuButton<T> extends StatefulWidget {
 }
 
 /// State for a [PopupMenuButton].
-class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
+class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
+    implements KeyEventHandler {
   /// Whether the popup menu is currently open.
   bool isOpen = false;
 
@@ -653,12 +669,14 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
   }
 
   /// Handles incoming keyboard events to navigate and interact with the menu.
-  void handleKeyEvent(KeyEvent event) {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
     if (!isOpen) {
       if (event.key == ' ' || event.key == '\n' || event.key == 'down') {
         openMenu();
+        return true;
       }
-      return;
+      return false;
     }
 
     if (event.key == 'down') {
@@ -666,18 +684,23 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>> {
         selectedIndex = (selectedIndex + 1) % widget.items.length;
       });
       overlayEntry?._overlayState?.setState(() {});
+      return true;
     } else if (event.key == 'up') {
       setState(() {
         selectedIndex =
             (selectedIndex - 1 + widget.items.length) % widget.items.length;
       });
       overlayEntry?._overlayState?.setState(() {});
+      return true;
     } else if (event.key == 'enter' || event.key == '\n' || event.key == ' ') {
       selectItem(selectedIndex);
+      return true;
     } else if (event.key == 'escape') {
       widget.onCanceled?.call();
       closeMenu();
+      return true;
     }
+    return false;
   }
 
   @override

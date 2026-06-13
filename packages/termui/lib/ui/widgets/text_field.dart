@@ -6,6 +6,8 @@ import '../layout.dart';
 import '../event.dart' hide Modifier;
 import '../event.dart' as ev show Modifier;
 import '../color.dart';
+import '../../terminal/terminal.dart' as term;
+import 'prompt_runner.dart';
 
 /// Actions supported by the [TextField] widget.
 enum TextFieldAction {
@@ -308,7 +310,7 @@ class TextEditingController {
 /// | `placeholderStyle`| [Style] | Style of the placeholder hint text. |
 /// | `focused` | [bool] | Determines if cursor is drawn and keys are processed. |
 /// | `customShortcuts` | [Map]? | Custom key mappings for input actions. |
-class TextField extends StatefulWidget {
+class TextField extends StatefulWidget implements Focusable {
   /// The text editing controller.
   final TextEditingController controller;
 
@@ -328,6 +330,7 @@ class TextField extends StatefulWidget {
   final String placeholder;
 
   /// Determines if cursor is drawn and keys are processed.
+  @override
   bool focused;
 
   /// Custom key mappings for input actions.
@@ -535,7 +538,7 @@ class TextField extends StatefulWidget {
   }
 
   /// Handles key events to update the text area value and cursor position.
-  void handleKeyEvent(KeyEvent event) {
+  bool handleKeyEvent(KeyEvent event) {
     // Determine the mapped action
     TextFieldAction? action;
     final shortcuts = customShortcuts ?? defaultShortcuts;
@@ -549,7 +552,7 @@ class TextField extends StatefulWidget {
 
     if (action != null) {
       _executeAction(action);
-      return;
+      return true;
     }
 
     // Default character inserts
@@ -590,12 +593,13 @@ class TextField extends StatefulWidget {
             cursorColumn: nextCol,
           ),
         );
+        return true;
       }
-      return;
+      return false;
     }
 
     if (event.type == KeyType.character && !hasControlOrAltOrMeta) {
-      if (event.key == '\t') return;
+      if (event.key == '\t') return false;
       controller.saveStateToHistory();
       final lines = List<String>.from(controller.value.lines);
       final lineIdx = cursorLine;
@@ -620,7 +624,10 @@ class TextField extends StatefulWidget {
           cursorColumn: nextCol,
         ),
       );
+      return true;
     }
+
+    return false;
   }
 
   void _executeAction(TextFieldAction action) {
@@ -825,7 +832,12 @@ class TextField extends StatefulWidget {
 }
 
 /// The state for a [TextField].
-class TextFieldState extends State<TextField> {
+class TextFieldState extends State<TextField> implements KeyEventHandler {
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return widget.handleKeyEvent(event);
+  }
+
   TextEditingController? _listenedController;
 
   void _onControllerChanged() {
