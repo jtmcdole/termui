@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:characters/characters.dart';
 import '../buffer.dart';
@@ -8,6 +9,8 @@ import '../event.dart' as ev show Modifier;
 import '../color.dart';
 import '../../terminal/terminal.dart' as term;
 import 'prompt_runner.dart';
+import 'focus.dart';
+import '../window.dart';
 
 /// Actions supported by the [TextField] widget.
 enum TextFieldAction {
@@ -831,7 +834,7 @@ class TextField extends StatefulWidget implements Focusable {
   }
 }
 
-/// The state for a [TextField].
+/// The state for a [TextField] widget.
 class TextFieldState extends State<TextField> implements KeyEventHandler {
   @override
   bool handleKeyEvent(term.KeyEvent event) {
@@ -839,6 +842,7 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
   }
 
   TextEditingController? _listenedController;
+  late FocusNode _focusNode;
 
   void _onControllerChanged() {
     setState(() {});
@@ -855,19 +859,49 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
   @override
   void initState() {
     super.initState();
+    _focusNode = FocusNode(id: 'textfield_${widget.hashCode}');
     _updateListener();
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(TextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _updateListener();
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
   }
 
   @override
   void dispose() {
     _listenedController?.removeListener(_onControllerChanged);
+    _focusNode.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     _updateListener();
-    return _TextFieldRenderWidget(widget);
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        widget.focused = hasFocus;
+        setState(() {}); // Redraw cursor highlight
+      },
+      onKeyEvent: (event) {
+        return widget.handleKeyEvent(event);
+      },
+      child: _TextFieldRenderWidget(widget),
+    );
   }
 }
 

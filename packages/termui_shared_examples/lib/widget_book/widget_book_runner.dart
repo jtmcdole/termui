@@ -248,6 +248,20 @@ Future<void> runWidgetBookShared(
           break;
         }
 
+        bool consumedByDemoPane = false;
+        if (focusDemoPane) {
+          if (event.type == ui.KeyType.escape) {
+            focusDemoPane = false;
+            continue;
+          }
+
+          consumedByDemoPane = activeExample.handleKeyEvent(event);
+        }
+
+        if (consumedByDemoPane) {
+          continue;
+        }
+
         if (event.type == ui.KeyType.character && event.key == 'q') {
           break;
         }
@@ -276,14 +290,6 @@ Future<void> runWidgetBookShared(
         }
 
         if (focusDemoPane) {
-          if (event.type == ui.KeyType.escape) {
-            focusDemoPane = false;
-            continue;
-          }
-
-          final consumed = activeExample.handleKeyEvent(event);
-          if (consumed) continue;
-
           if (event.type == ui.KeyType.tab &&
               !event.modifiers.contains(ui.Modifier.shift)) {
             focusDemoPane = false;

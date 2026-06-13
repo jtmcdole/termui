@@ -398,6 +398,9 @@ abstract class State<T extends StatefulWidget> {
   /// Called when a dependency of this [State] object changes.
   void didChangeDependencies() {}
 
+  /// Called whenever the widget configuration changes.
+  void didUpdateWidget(covariant T oldWidget) {}
+
   /// Called when this object is removed from the tree permanently.
   void dispose() {}
 
@@ -466,8 +469,10 @@ class StatefulElement extends Element {
   @override
   /// Updates the element with a new [Widget] and triggers a state update.
   void update(Widget newWidget) {
+    final oldWidget = state.widget;
     super.update(newWidget);
     state._widget = newWidget as StatefulWidget;
+    state.didUpdateWidget(oldWidget);
     state.didChangeDependencies();
     rebuild();
   }

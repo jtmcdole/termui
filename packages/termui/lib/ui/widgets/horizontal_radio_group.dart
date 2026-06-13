@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:characters/characters.dart';
 import '../color.dart';
 import '../layout.dart';
@@ -6,6 +7,8 @@ import 'text.dart';
 import 'selection_controller.dart';
 import '../../terminal/terminal.dart' as term;
 import 'prompt_runner.dart';
+import 'focus.dart';
+import '../window.dart';
 
 /// A horizontal group of radio-like choices.
 class HorizontalRadioGroup extends StatefulWidget implements Focusable {
@@ -31,6 +34,7 @@ class HorizontalRadioGroup extends StatefulWidget implements Focusable {
 class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
     implements KeyEventHandler {
   SelectionController<String>? _listenedController;
+  late FocusNode _focusNode;
 
   void _onControllerChanged() {
     setState(() {});
@@ -47,12 +51,32 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
   @override
   void initState() {
     super.initState();
+    _focusNode = FocusNode(id: 'horizontal_radio_group_${widget.hashCode}');
     _updateListener();
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(HorizontalRadioGroup oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _updateListener();
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
   }
 
   @override
   void dispose() {
     _listenedController?.removeListener(_onControllerChanged);
+    _focusNode.dispose();
     super.dispose();
   }
 
@@ -99,7 +123,9 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
       }
       final option = controller.options[i];
       final isSelected = (controller.selectedIndex == i);
-      final isFocused = widget.focused && (controller.focusedIndex == i);
+      final isFocused =
+          (_focusNode.hasFocus || widget.focused) &&
+          (controller.focusedIndex == i);
 
       final box = isSelected ? '[X]' : '[ ]';
       final text = '$box $option';
@@ -121,6 +147,15 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
       );
     }
 
-    return Row(optionWidgets);
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
+      },
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: Row(optionWidgets),
+    );
   }
 }

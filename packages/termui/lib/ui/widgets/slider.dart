@@ -1,3 +1,4 @@
+import 'dart:async';
 import '../buffer.dart';
 import '../color.dart';
 import '../event.dart' hide Modifier;
@@ -5,6 +6,8 @@ import '../layout.dart';
 import '../style.dart';
 import '../../terminal/terminal.dart' as term;
 import 'prompt_runner.dart';
+import 'focus.dart';
+import '../window.dart';
 
 /// The orientation of the slider.
 enum SliderAxis {
@@ -16,7 +19,7 @@ enum SliderAxis {
 }
 
 /// A widget for selecting a numeric value by sliding a thumb along a track.
-class Slider extends Widget implements Focusable, KeyEventHandler {
+class Slider extends StatefulWidget implements Focusable, KeyEventHandler {
   /// Whether the slider is focused.
   @override
   final bool focused;
@@ -50,6 +53,7 @@ class Slider extends Widget implements Focusable, KeyEventHandler {
 
   /// Creates a slider.
   Slider({
+    super.key,
     required this.value,
     required this.min,
     required this.max,
@@ -62,21 +66,77 @@ class Slider extends Widget implements Focusable, KeyEventHandler {
     this.onChanged,
   });
 
+  // ignore: must_be_immutable
+  SliderState? _state;
+
+  @override
+  bool handleKeyEvent(term.KeyEvent event) {
+    return _state?.handleKeyEvent(event) ?? false;
+  }
+
   /// Handles mouse events for dragging the slider thumb.
+  void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
+    _state?.handleMouseEvent(event, localX, localY, area);
+  }
+
+  @override
+  State<Slider> createState() {
+    final state = SliderState();
+    _state = state;
+    return state;
+  }
+}
+
+/// The state for a [Slider] widget.
+class SliderState extends State<Slider> implements KeyEventHandler {
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget._state = this;
+    _focusNode = FocusNode(id: 'slider_${widget.hashCode}');
+    if (widget.focused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
+    }
+  }
+
+  @override
+  void didUpdateWidget(Slider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget._state = this;
+    if (widget.focused != oldWidget.focused) {
+      if (widget.focused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  /// Handles mouse events to update the slider's value on drag or click.
   void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
     if (event.type != MouseEventType.press &&
         event.type != MouseEventType.drag) {
       return;
     }
 
-    if (axis == SliderAxis.horizontal) {
+    if (widget.axis == SliderAxis.horizontal) {
       if (localY != 0) return;
       final trackLength = area.width;
       if (trackLength <= 1) return;
 
       final percent = (localX / (trackLength - 1)).clamp(0.0, 1.0);
-      value = min + percent * (max - min);
-      onChanged?.call(value);
+      widget.value = widget.min + percent * (widget.max - widget.min);
+      widget.onChanged?.call(widget.value);
     } else {
       if (localX != 0) return;
       final trackLength = area.height;
@@ -84,33 +144,33 @@ class Slider extends Widget implements Focusable, KeyEventHandler {
 
       // For vertical slider, top (y=0) is max, bottom (y=height-1) is min
       final percent = 1.0 - (localY / (trackLength - 1)).clamp(0.0, 1.0);
-      value = min + percent * (max - min);
-      onChanged?.call(value);
+      widget.value = widget.min + percent * (widget.max - widget.min);
+      widget.onChanged?.call(widget.value);
     }
   }
 
   /// Handles keyboard events for moving the slider.
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    final step = (max - min) / 20.0; // 5% step size
-    if (axis == SliderAxis.horizontal) {
+    final step = (widget.max - widget.min) / 20.0; // 5% step size
+    if (widget.axis == SliderAxis.horizontal) {
       if (event.type == KeyType.left) {
-        value = (value - step).clamp(min, max);
-        onChanged?.call(value);
+        widget.value = (widget.value - step).clamp(widget.min, widget.max);
+        widget.onChanged?.call(widget.value);
         return true;
       } else if (event.type == KeyType.right) {
-        value = (value + step).clamp(min, max);
-        onChanged?.call(value);
+        widget.value = (widget.value + step).clamp(widget.min, widget.max);
+        widget.onChanged?.call(widget.value);
         return true;
       }
     } else {
       if (event.type == KeyType.up) {
-        value = (value + step).clamp(min, max);
-        onChanged?.call(value);
+        widget.value = (widget.value + step).clamp(widget.min, widget.max);
+        widget.onChanged?.call(widget.value);
         return true;
       } else if (event.type == KeyType.down) {
-        value = (value - step).clamp(min, max);
-        onChanged?.call(value);
+        widget.value = (widget.value - step).clamp(widget.min, widget.max);
+        widget.onChanged?.call(widget.value);
         return true;
       }
     }
@@ -118,20 +178,45 @@ class Slider extends Widget implements Focusable, KeyEventHandler {
   }
 
   @override
-  void render(Buffer buffer, Rect area) {
-    final percent = ((value - min) / (max - min)).clamp(0.0, 1.0);
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _focusNode,
+      onFocusChange: (hasFocus) {
+        setState(() {});
+      },
+      onKeyEvent: (event) {
+        return handleKeyEvent(event);
+      },
+      child: _SliderRenderWidget(
+        widget: widget,
+        focused: _focusNode.hasFocus || widget.focused,
+      ),
+    );
+  }
+}
 
-    if (axis == SliderAxis.horizontal) {
+class _SliderRenderWidget extends Widget {
+  final Slider widget;
+  final bool focused;
+
+  const _SliderRenderWidget({required this.widget, required this.focused});
+
+  @override
+  void render(Buffer buffer, Rect area) {
+    final percent = ((widget.value - widget.min) / (widget.max - widget.min))
+        .clamp(0.0, 1.0);
+
+    if (widget.axis == SliderAxis.horizontal) {
       final trackLength = area.width;
       if (trackLength <= 0) return;
       final thumbPos = (percent * (trackLength - 1)).round();
-      final tc = trackChar == '─' ? '─' : trackChar;
+      final tc = widget.trackChar == '─' ? '─' : widget.trackChar;
 
       for (int i = 0; i < trackLength; i++) {
         if (i == thumbPos) {
-          buffer.writeString(i, 0, thumbChar, thumbStyle);
+          buffer.writeString(i, 0, widget.thumbChar, widget.thumbStyle);
         } else {
-          buffer.writeString(i, 0, tc, trackStyle);
+          buffer.writeString(i, 0, tc, widget.trackStyle);
         }
       }
     } else {
@@ -139,13 +224,13 @@ class Slider extends Widget implements Focusable, KeyEventHandler {
       if (trackLength <= 0) return;
       // In terminal, Y=0 is top. For vertical sliders, top is max.
       final thumbPos = trackLength - 1 - (percent * (trackLength - 1)).round();
-      final tc = trackChar == '─' ? '│' : trackChar;
+      final tc = widget.trackChar == '─' ? '│' : widget.trackChar;
 
       for (int i = 0; i < trackLength; i++) {
         if (i == thumbPos) {
-          buffer.writeString(0, i, thumbChar, thumbStyle);
+          buffer.writeString(0, i, widget.thumbChar, widget.thumbStyle);
         } else {
-          buffer.writeString(0, i, tc, trackStyle);
+          buffer.writeString(0, i, tc, widget.trackStyle);
         }
       }
     }
