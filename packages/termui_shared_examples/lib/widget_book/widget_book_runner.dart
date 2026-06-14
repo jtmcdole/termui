@@ -627,20 +627,10 @@ class SidebarWidget extends StatefulWidget {
 }
 
 class _SidebarWidgetState extends State<SidebarWidget> {
-  int scrollOffset = 0;
-
-  void adjustScroll(int viewportHeight) {
-    if (widget.items.isEmpty || viewportHeight <= 0) return;
-    final selectedIdx = widget.selectedIndex.clamp(0, widget.items.length - 1);
-
-    if (selectedIdx < scrollOffset) {
-      scrollOffset = selectedIdx;
-    } else if (selectedIdx >= scrollOffset + viewportHeight) {
-      scrollOffset = selectedIdx - viewportHeight + 1;
-    }
-  }
+  ListView? _lastListWidget;
 
   void handleMouseEvent(term.MouseEvent event, int localX, int localY) {
+    final scrollOffset = _lastListWidget?.scrollOffset ?? 0;
     if (event.type == term.MouseEventType.press) {
       widget.focusNode.requestFocus();
       final clickedIdx = localY + scrollOffset;
@@ -660,7 +650,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final listWidget = ListWidget(
+    final listWidget = ListView.fromStrings(
       widget.items,
       selectedIndex: widget.selectedIndex,
       hoveredIndex: widget.hoveredIndex,
@@ -675,6 +665,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
         modifiers: Modifier.dim,
       ),
     );
+    _lastListWidget = listWidget;
 
     return Focus(
       focusNode: widget.focusNode,
@@ -708,7 +699,7 @@ class _SidebarWidgetState extends State<SidebarWidget> {
 }
 
 class _SidebarRenderWidget extends Widget {
-  final ListWidget listWidget;
+  final ListView listWidget;
   final void Function(term.MouseEvent event, int localX, int localY)
   onMouseEvent;
 

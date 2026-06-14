@@ -35,7 +35,6 @@ class Padding extends Widget {
 class PaddingElement extends Element {
   /// The instantiated element corresponding to the child widget.
   Element? childElement;
-  Offset _childOffset = Offset.zero;
 
   /// Creates an element for the [Padding] widget.
   PaddingElement(Padding super.widget);
@@ -103,10 +102,9 @@ class PaddingElement extends Element {
       maxHeight: childMaxHeight,
     );
 
-    _childOffset = Offset(padding.left, padding.top);
-
     if (childElement != null) {
       final childSize = childElement!.layout(childConstraints);
+      childElement!.relativeOffset = Offset(padding.left, padding.top);
       return Size(
         childSize.width + doubleWidth,
         childSize.height + doubleHeight,
@@ -122,21 +120,15 @@ class PaddingElement extends Element {
     final padding = paddingWidget.padding;
     final doubleWidth = padding.left + padding.right;
     final doubleHeight = padding.top + padding.bottom;
-    if (size.width > doubleWidth && size.height > doubleHeight) {
-      childElement?.paint(buffer, offset + _childOffset);
+    if (size.width > doubleWidth &&
+        size.height > doubleHeight &&
+        childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    if (child == childElement) {
-      return _childOffset;
-    }
-    return Offset.zero;
   }
 }

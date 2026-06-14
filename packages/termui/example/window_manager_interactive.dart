@@ -37,7 +37,7 @@ void main() async {
   final infoWidget = InfoWidget();
   final mouseTrackerWidget = MouseTrackerWidget();
 
-  final listWidget = ListWidget(
+  final listWidget = ListView.fromStrings(
     ['Option A', 'Option B', 'Option C', 'Option D', 'Option E'],
     selectedStyle: const Style(
       foreground: Colors.white,

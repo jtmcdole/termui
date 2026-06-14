@@ -1,5 +1,5 @@
 export 'widgets/text.dart';
-export 'widgets/list_widget.dart';
+export 'widgets/list_view.dart';
 export 'widgets/linear_progress_indicator.dart';
 export 'widgets/canvas.dart';
 export 'widgets/grid.dart';

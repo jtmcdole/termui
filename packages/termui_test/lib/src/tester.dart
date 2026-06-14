@@ -325,8 +325,8 @@ class TerminalTester {
     final size = element.size;
 
     // Center coordinates (1-indexed terminal columns/rows)
-    final int x = (absoluteOffset.dx + 1 + (size.width / 2).floor()).toInt();
-    final int y = (absoluteOffset.dy + 1 + (size.height / 2).floor()).toInt();
+    final int x = (absoluteOffset.dx + 1 + (size.width ~/ 2));
+    final int y = (absoluteOffset.dy + 1 + (size.height ~/ 2));
 
     // Mouse Down
     mouseDown(x, y, button: button);
@@ -354,11 +354,7 @@ class TerminalTester {
     Element? current = element;
     while (current != null) {
       offset += current.relativeOffset;
-      final parent = current.parent;
-      if (parent != null) {
-        offset += parent.getChildOffset(current);
-      }
-      current = parent;
+      current = current.parent;
     }
     return offset;
   }

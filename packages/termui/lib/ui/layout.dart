@@ -385,17 +385,14 @@ abstract class Element implements BuildContext {
   BoxConstraints? _cachedConstraints;
   Size? _cachedSize;
 
+  /// The cached local position assigned by the parent during layout.
+  Offset relativeOffset = Offset.zero;
+
   /// The cached constraints from the last layout pass.
   BoxConstraints? get constraints => _cachedConstraints;
 
   /// The resolved size of the element from the last layout pass.
   Size get size => _cachedSize ?? Size.zero;
-
-  /// Returns the offset of this element relative to its parent's offset.
-  Offset get relativeOffset => Offset.zero;
-
-  /// Returns the offset of [child] relative to this element's local space.
-  Offset getChildOffset(Element child) => Offset.zero;
 
   bool _mounted = false;
 
@@ -572,6 +569,7 @@ class StatelessElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     if (childElement != null) {
+      childElement!.relativeOffset = Offset.zero;
       return childElement!.layout(constraints);
     }
     return constraints.constrain(Size.zero);
@@ -579,7 +577,9 @@ class StatelessElement extends Element {
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 }
 
@@ -725,6 +725,7 @@ class StatefulElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     if (childElement != null) {
+      childElement!.relativeOffset = Offset.zero;
       return childElement!.layout(constraints);
     }
     return constraints.constrain(Size.zero);
@@ -732,7 +733,9 @@ class StatefulElement extends Element {
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 }
 
@@ -800,6 +803,7 @@ class InheritedElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     if (childElement != null) {
+      childElement!.relativeOffset = Offset.zero;
       return childElement!.layout(constraints);
     }
     return constraints.constrain(Size.zero);
@@ -807,7 +811,9 @@ class InheritedElement extends Element {
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 }
 
@@ -1158,7 +1164,6 @@ class Row extends Widget {
 class RowElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
-  List<Offset> _childOffsets = [];
 
   /// Creates a row element for a [Row] widget.
   RowElement(Row super.widget);
@@ -1224,13 +1229,11 @@ class RowElement extends Element {
         .toList();
     final rects = splitRect(area, rowConstraints, LayoutDirection.horizontal);
 
-    _childOffsets = List<Offset>.filled(childElements.length, Offset.zero);
     var maxChildHeight = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childArea = rects[i];
-      _childOffsets[i] = Offset(childArea.x, childArea.y);
       final childSize = childEl.layout(
         BoxConstraints(
           minWidth: childArea.width,
@@ -1239,6 +1242,7 @@ class RowElement extends Element {
           maxHeight: height,
         ),
       );
+      childEl.relativeOffset = Offset(childArea.x, childArea.y);
       if (childSize.height > maxChildHeight) {
         maxChildHeight = childSize.height;
       }
@@ -1249,25 +1253,14 @@ class RowElement extends Element {
   @override
   void paint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
-    for (var i = 0; i < childElements.length; i++) {
-      if (i < _childOffsets.length) {
-        childElements[i].paint(buffer, offset + _childOffsets[i]);
-      }
+    for (final child in childElements) {
+      child.paint(buffer, offset + child.relativeOffset);
     }
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    final idx = childElements.indexOf(child);
-    if (idx >= 0 && idx < _childOffsets.length) {
-      return _childOffsets[idx];
-    }
-    return Offset.zero;
   }
 }
 
@@ -1296,7 +1289,6 @@ class Column extends Widget {
 class ColumnElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
-  List<Offset> _childOffsets = [];
 
   /// Creates a column element for a [Column] widget.
   ColumnElement(Column super.widget);
@@ -1362,13 +1354,11 @@ class ColumnElement extends Element {
         .toList();
     final rects = splitRect(area, columnConstraints, LayoutDirection.vertical);
 
-    _childOffsets = List<Offset>.filled(childElements.length, Offset.zero);
     var totalHeight = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childArea = rects[i];
-      _childOffsets[i] = Offset(childArea.x, childArea.y);
       final childSize = childEl.layout(
         BoxConstraints(
           minWidth: 0,
@@ -1377,6 +1367,7 @@ class ColumnElement extends Element {
           maxHeight: childArea.height,
         ),
       );
+      childEl.relativeOffset = Offset(childArea.x, childArea.y);
       totalHeight += childSize.height;
     }
     return Size(width, totalHeight);
@@ -1385,25 +1376,14 @@ class ColumnElement extends Element {
   @override
   void paint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
-    for (var i = 0; i < childElements.length; i++) {
-      if (i < _childOffsets.length) {
-        childElements[i].paint(buffer, offset + _childOffsets[i]);
-      }
+    for (final child in childElements) {
+      child.paint(buffer, offset + child.relativeOffset);
     }
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    final idx = childElements.indexOf(child);
-    if (idx >= 0 && idx < _childOffsets.length) {
-      return _childOffsets[idx];
-    }
-    return Offset.zero;
   }
 }
 
@@ -1433,7 +1413,6 @@ class Stack extends Widget {
 class StackElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
-  List<Offset> _childOffsets = [];
 
   /// Creates a stack element for a [Stack] widget.
   StackElement(Stack super.widget);
@@ -1491,8 +1470,6 @@ class StackElement extends Element {
     final height = constraints.maxHeight == BoxConstraints.infinity
         ? 0
         : constraints.maxHeight;
-
-    _childOffsets = List<Offset>.filled(childElements.length, Offset.zero);
 
     var maxW = 0;
     var maxH = 0;
@@ -1554,7 +1531,7 @@ class StackElement extends Element {
           }
         }
 
-        _childOffsets[i] = Offset(childX, childY);
+        childEl.relativeOffset = Offset(childX, childY);
         if (childWidth > 0 && childHeight > 0) {
           final childSize = childEl.layout(
             BoxConstraints.tight(Size(childWidth, childHeight)),
@@ -1565,7 +1542,7 @@ class StackElement extends Element {
           if (bottomEdge > maxH) maxH = bottomEdge;
         }
       } else {
-        _childOffsets[i] = Offset.zero;
+        childEl.relativeOffset = Offset.zero;
         final childSize = childEl.layout(constraints);
         if (childSize.width > maxW) maxW = childSize.width;
         if (childSize.height > maxH) maxH = childSize.height;
@@ -1578,25 +1555,14 @@ class StackElement extends Element {
   @override
   void paint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
-    for (var i = 0; i < childElements.length; i++) {
-      if (i < _childOffsets.length) {
-        childElements[i].paint(buffer, offset + _childOffsets[i]);
-      }
+    for (final child in childElements) {
+      child.paint(buffer, offset + child.relativeOffset);
     }
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    final idx = childElements.indexOf(child);
-    if (idx >= 0 && idx < _childOffsets.length) {
-      return _childOffsets[idx];
-    }
-    return Offset.zero;
   }
 }
 
@@ -1697,14 +1663,18 @@ class PositionedElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     if (childElement != null) {
-      return childElement!.layout(constraints);
+      final size = childElement!.layout(constraints);
+      childElement!.relativeOffset = Offset.zero;
+      return size;
     }
     return constraints.constrain(Size.zero);
   }
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 
   @override
@@ -1793,6 +1763,7 @@ class SizedBoxElement extends Element {
     final tightened = constraints.tighten(width: sb.width, height: sb.height);
     if (childElement != null) {
       final childSize = childElement!.layout(tightened);
+      childElement!.relativeOffset = Offset.zero;
       return childSize;
     }
     return tightened.constrain(Size.zero);
@@ -1800,7 +1771,9 @@ class SizedBoxElement extends Element {
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 
   @override
@@ -1875,14 +1848,18 @@ class ConstrainedBoxElement extends Element {
     final cb = widget as ConstrainedBox;
     final childConstraints = constraints.enforce(cb.constraints);
     if (childElement != null) {
-      return childElement!.layout(childConstraints);
+      final size = childElement!.layout(childConstraints);
+      childElement!.relativeOffset = Offset.zero;
+      return size;
     }
     return childConstraints.constrain(Size.zero);
   }
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 
   @override
@@ -1953,14 +1930,18 @@ class FlexibleElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     if (childElement != null) {
-      return childElement!.layout(constraints);
+      final size = childElement!.layout(constraints);
+      childElement!.relativeOffset = Offset.zero;
+      return size;
     }
     return constraints.constrain(Size.zero);
   }
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 
   @override
@@ -2052,7 +2033,6 @@ class Align extends Widget {
 class AlignElement extends Element {
   /// The child element.
   Element? childElement;
-  Offset _childOffset = Offset.zero;
 
   /// Creates an align element for an [Align] widget.
   AlignElement(Align super.widget);
@@ -2128,7 +2108,7 @@ class AlignElement extends Element {
       final int offsetY = (remainingHeight * (align.alignment.y + 1.0) / 2.0)
           .round();
 
-      _childOffset = Offset(offsetX, offsetY);
+      childElement!.relativeOffset = Offset(offsetX, offsetY);
       return Size(parentWidth, parentHeight);
     }
     return constraints.constrain(Size.zero);
@@ -2136,20 +2116,14 @@ class AlignElement extends Element {
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    childElement?.paint(buffer, offset + _childOffset);
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    if (child == childElement) {
-      return _childOffset;
-    }
-    return Offset.zero;
   }
 }
 
@@ -2250,6 +2224,7 @@ class ElementWidgetElement extends Element {
   Size performLayout(BoxConstraints constraints) {
     final w = widget as ElementWidget;
     if (w._element != null) {
+      w._element!.relativeOffset = Offset.zero;
       return w._element!.layout(constraints);
     }
     return Size.zero;
@@ -2258,7 +2233,9 @@ class ElementWidgetElement extends Element {
   @override
   void paint(Buffer buffer, Offset offset) {
     final w = widget as ElementWidget;
-    w._element?.paint(buffer, offset);
+    if (w._element != null) {
+      w._element!.paint(buffer, offset + w._element!.relativeOffset);
+    }
   }
 
   @override

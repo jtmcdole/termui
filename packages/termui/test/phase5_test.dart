@@ -44,9 +44,9 @@ void main() {
     });
   });
 
-  group('ListWidget tests', () {
+  group('ListView tests', () {
     test('Scrolling offset changes based on index selection', () {
-      final list = ListWidget(['A', 'B', 'C', 'D', 'E']);
+      final list = ListView.fromStrings(['A', 'B', 'C', 'D', 'E']);
       // Viewport height is 3
       list.selectedIndex = 0;
       list.adjustScroll(3);

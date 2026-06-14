@@ -461,12 +461,7 @@ class PromptRunner<T> {
     });
 
     for (final child in children.reversed) {
-      final childLocalOffset = element.getChildOffset(child);
-      final childConsumed = _routeMouseEvent(
-        child,
-        event,
-        absOffset + childLocalOffset,
-      );
+      final childConsumed = _routeMouseEvent(child, event, absOffset);
       if (childConsumed) {
         return true;
       }
