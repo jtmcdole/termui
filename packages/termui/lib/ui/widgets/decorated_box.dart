@@ -295,6 +295,10 @@ class DecoratedBoxElement extends Element {
 
     if (childElement != null) {
       final childSize = childElement!.layout(childConstraints);
+      childElement!.relativeOffset = Offset(
+        _cachedLeftOffset,
+        _cachedTopOffset,
+      );
       return Size(
         childSize.width + doubleWidth,
         childSize.height + doubleHeight,
@@ -394,21 +398,12 @@ class DecoratedBoxElement extends Element {
     }
 
     if (childElement != null) {
-      final childOffset = Offset(_cachedLeftOffset, _cachedTopOffset);
-      childElement!.paint(buffer, offset + childOffset);
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    if (child == childElement) {
-      return Offset(_cachedLeftOffset, _cachedTopOffset);
-    }
-    return Offset.zero;
   }
 }

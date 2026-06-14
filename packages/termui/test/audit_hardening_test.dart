@@ -174,10 +174,10 @@ void main() {
       }, returnsNormally);
     });
 
-    test('ListWidget, Table, and NumberSelector handle emojis safely', () {
+    test('ListView, Table, and NumberSelector handle emojis safely', () {
       final buffer = Buffer(20, 10);
 
-      final list = ListWidget(['🌟 item 1', '🔥 item 2']);
+      final list = ListView.fromStrings(['🌟 item 1', '🔥 item 2']);
       expect(() {
         final el = list.createElement()..mount(null);
         el.layout(BoxConstraints.tight(const Size(10, 5)));

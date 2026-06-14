@@ -370,6 +370,7 @@ class WindowElement extends Element {
     final height = win.bounds.height;
 
     if (childElement != null) {
+      childElement!.relativeOffset = const Offset(1, 1);
       final childW = max(0, width - 2);
       final childH = max(0, height - 2);
       childElement!.layout(BoxConstraints.tight(Size(childW, childH)));
@@ -481,14 +482,6 @@ class WindowElement extends Element {
   Offset get relativeOffset {
     final win = widget as Window;
     return Offset(win.bounds.x, win.bounds.y);
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    if (child == childElement) {
-      return const Offset(1, 1);
-    }
-    return Offset.zero;
   }
 }
 

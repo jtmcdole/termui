@@ -90,6 +90,7 @@ class LeftBorderElement extends Element {
             : max(0, constraints.maxHeight - extraH),
       );
       final childSize = childElement!.layout(childConstraints);
+      childElement!.relativeOffset = Offset(1 + padding.left, padding.top);
       return constraints.constrain(
         Size(childSize.width + extraW, childSize.height + extraH),
       );
@@ -118,21 +119,7 @@ class LeftBorderElement extends Element {
 
     // 2. Render the child in the remaining area
     if (childElement != null) {
-      final childOffset = Offset(
-        offset.dx + 1 + padding.left,
-        offset.dy + padding.top,
-      );
-      childElement!.paint(buffer, childOffset);
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    if (child == childElement) {
-      final borderWidget = widget as LeftBorder;
-      final padding = borderWidget.padding;
-      return Offset(1 + padding.left, padding.top);
-    }
-    return Offset.zero;
   }
 }

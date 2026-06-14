@@ -193,20 +193,32 @@ class SplitPaneElement extends Element {
     split._dividerX = dividerPos;
 
     if (split.direction == LayoutDirection.horizontal) {
-      if (dividerPos > 0 && childElement1 != null) {
-        childElement1!.layout(BoxConstraints.tight(Size(dividerPos, h)));
+      if (childElement1 != null) {
+        childElement1!.relativeOffset = Offset.zero;
+        if (dividerPos > 0) {
+          childElement1!.layout(BoxConstraints.tight(Size(dividerPos, h)));
+        }
       }
-      final child2Width = w - dividerPos - 1;
-      if (child2Width > 0 && childElement2 != null) {
-        childElement2!.layout(BoxConstraints.tight(Size(child2Width, h)));
+      if (childElement2 != null) {
+        childElement2!.relativeOffset = Offset(dividerPos + 1, 0);
+        final child2Width = w - dividerPos - 1;
+        if (child2Width > 0) {
+          childElement2!.layout(BoxConstraints.tight(Size(child2Width, h)));
+        }
       }
     } else {
-      if (dividerPos > 0 && childElement1 != null) {
-        childElement1!.layout(BoxConstraints.tight(Size(w, dividerPos)));
+      if (childElement1 != null) {
+        childElement1!.relativeOffset = Offset.zero;
+        if (dividerPos > 0) {
+          childElement1!.layout(BoxConstraints.tight(Size(w, dividerPos)));
+        }
       }
-      final child2Height = h - dividerPos - 1;
-      if (child2Height > 0 && childElement2 != null) {
-        childElement2!.layout(BoxConstraints.tight(Size(w, child2Height)));
+      if (childElement2 != null) {
+        childElement2!.relativeOffset = Offset(0, dividerPos + 1);
+        final child2Height = h - dividerPos - 1;
+        if (child2Height > 0) {
+          childElement2!.layout(BoxConstraints.tight(Size(w, child2Height)));
+        }
       }
     }
 
@@ -225,7 +237,7 @@ class SplitPaneElement extends Element {
 
     if (split.direction == LayoutDirection.horizontal) {
       if (dividerPos > 0 && childElement1 != null) {
-        childElement1!.paint(buffer, offset);
+        childElement1!.paint(buffer, offset + childElement1!.relativeOffset);
       }
 
       for (var y = 0; y < h; y++) {
@@ -238,14 +250,11 @@ class SplitPaneElement extends Element {
 
       final child2Width = w - dividerPos - 1;
       if (child2Width > 0 && childElement2 != null) {
-        childElement2!.paint(
-          buffer,
-          Offset(offset.dx + dividerPos + 1, offset.dy),
-        );
+        childElement2!.paint(buffer, offset + childElement2!.relativeOffset);
       }
     } else {
       if (dividerPos > 0 && childElement1 != null) {
-        childElement1!.paint(buffer, offset);
+        childElement1!.paint(buffer, offset + childElement1!.relativeOffset);
       }
 
       for (var x = 0; x < w; x++) {
@@ -258,28 +267,9 @@ class SplitPaneElement extends Element {
 
       final child2Height = h - dividerPos - 1;
       if (child2Height > 0 && childElement2 != null) {
-        childElement2!.paint(
-          buffer,
-          Offset(offset.dx, offset.dy + dividerPos + 1),
-        );
+        childElement2!.paint(buffer, offset + childElement2!.relativeOffset);
       }
     }
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    final split = widget as SplitPane;
-    if (child == childElement1) {
-      return Offset.zero;
-    }
-    if (child == childElement2) {
-      if (split.direction == LayoutDirection.horizontal) {
-        return Offset(split.dividerPosition + 1, 0);
-      } else {
-        return Offset(0, split.dividerPosition + 1);
-      }
-    }
-    return Offset.zero;
   }
 
   int _calculateDividerPos(int totalSize) {

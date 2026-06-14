@@ -178,6 +178,12 @@ class _ScrollViewRenderProxyElement extends Element {
         Size(childWidth, childHeight),
       );
       childElement!.layout(childConstraints);
+      final scrollOffset = proxyWidget.controller.scrollOffset;
+      if (proxyWidget.scrollDirection == LayoutDirection.vertical) {
+        childElement!.relativeOffset = Offset(0, -scrollOffset);
+      } else {
+        childElement!.relativeOffset = Offset(-scrollOffset, 0);
+      }
     }
 
     return constraints.constrain(Size(width, height));
@@ -248,19 +254,5 @@ class _ScrollViewRenderProxyElement extends Element {
         }
       }
     }
-  }
-
-  @override
-  Offset getChildOffset(Element child) {
-    if (child == childElement) {
-      final proxyWidget = widget as _ScrollViewRenderProxy;
-      final scrollOffset = proxyWidget.controller.scrollOffset;
-      if (proxyWidget.scrollDirection == LayoutDirection.vertical) {
-        return Offset(0, -scrollOffset);
-      } else {
-        return Offset(-scrollOffset, 0);
-      }
-    }
-    return Offset.zero;
   }
 }

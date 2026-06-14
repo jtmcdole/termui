@@ -6,7 +6,6 @@ import 'package:termui/terminal/terminal.dart';
 import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/layout.dart' as ui;
 import 'package:termui/perf/tracer.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_platform.dart';
@@ -377,8 +376,20 @@ void main() {
           // 1. Navigate down the sidebar to "Layout & State" (Index 5)
           for (var i = 0; i < 5; i++) {
             tester.sendKey(LogicalKey.arrowDown);
+            await tester.pump();
           }
+
+          final menuEntry = find.descendant(
+            of: find.byType<SidebarWidget>(),
+            matching: find.text('Layout & State'),
+          );
+          expect(menuEntry, findsOneWidget);
+
+          tester.tap(menuEntry);
+
           await tester.pump();
+
+          debugDumpTree(tester.rootElement);
 
           // Verify the routing worked and the right pane rebuilt
           expect(find.text('Layout & State Preview'), findsOneWidget);
