@@ -4,3 +4,5 @@ library;
 export 'src/mock_backend.dart';
 export 'src/tester.dart';
 export 'src/finders.dart';
+export 'src/extensions.dart';
+export 'src/utils.dart';

@@ -11,6 +11,7 @@ import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_platform.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui/ui/window.dart';
 
 class FakeTerminalBackend implements TerminalBackend {
   final StreamController<List<int>> _inputController =
@@ -91,6 +92,10 @@ class MockTerminal extends Terminal {
 }
 
 void main() {
+  setUp(() {
+    FocusManager.instance.setPrimaryFocus(null);
+  });
+
   group('Widget Book Runner Mouse Event Tests', () {
     test('Sidebar navigation clicks change page correctly', () async {
       final backend = FakeTerminalBackend();
@@ -242,7 +247,7 @@ void main() {
           isInline: false,
         );
         await tester.pumpWidget(app);
-        expect(find.text('COMPONENTS'), findsOneWidget);
+        expect(find.text(' COMPONENTS '), findsOneWidget);
       });
     });
 
@@ -264,14 +269,14 @@ void main() {
           await tester.pump();
 
           // Assert initial page is 'Text Inputs'
-          expect(find.text('Text Inputs Preview'), findsOneWidget);
+          expect(find.textPattern('Text Inputs Preview'), findsOneWidget);
 
           // Inject arrowDown key
           tester.sendKey(LogicalKey.arrowDown);
           await tester.pump();
 
           // Assert selected page updated to 'Data Displays'
-          expect(find.text('Data Displays Preview'), findsOneWidget);
+          expect(find.textPattern('Data Displays Preview'), findsOneWidget);
 
           runner.dispose();
         });
@@ -305,7 +310,10 @@ void main() {
           await tester.pump();
 
           // Preview pane should now be [ACTIVE]
-          expect(find.text('[ACTIVE]'), findsOneWidget);
+          expect(
+            find.textPattern(r'Text Inputs Preview \[ACTIVE\]'),
+            findsOneWidget,
+          );
 
           runner.dispose();
         });
@@ -346,8 +354,8 @@ void main() {
           await tester.pump();
 
           // Assert that the sidebar did NOT change page (remain on 'Text Inputs')
-          expect(find.text('Text Inputs Preview'), findsOneWidget);
-          expect(find.text('Data Displays Preview'), findsNothing);
+          expect(find.textPattern('Text Inputs Preview'), findsOneWidget);
+          expect(find.textPattern('Data Displays Preview'), findsNothing);
 
           runner.dispose();
         });
@@ -367,7 +375,7 @@ void main() {
         final runner = PromptRunner<void>(
           terminal: tester.terminal,
           widget: app,
-          alternateScreen: false,
+          alternateScreen: true,
         );
 
         final runnerFuture = tester.runPrompt(runner, () async {
@@ -392,14 +400,17 @@ void main() {
           debugDumpTree(tester.rootElement);
 
           // Verify the routing worked and the right pane rebuilt
-          expect(find.text('Layout & State Preview'), findsOneWidget);
+          expect(find.textPattern('Layout & State Preview'), findsOneWidget);
 
           // 2. Handoff focus to the preview pane
           tester.sendKey(LogicalKey.tab);
           await tester.pump();
 
           // Verify the pane is active
-          expect(find.text('Layout & State Preview [ACTIVE]'), findsOneWidget);
+          expect(
+            find.textPattern(r'Layout & State Preview \[ACTIVE\]'),
+            findsOneWidget,
+          );
 
           // 3. Verify the initial state of the counter
           expect(
@@ -454,6 +465,219 @@ void main() {
           expect(find.text('Layout & State Preview [ACTIVE]'), findsNothing);
 
           // Clean exit
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('TextField - Cursor Navigation and Edit Operations', () async {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Navigate to "Text Inputs" using the newly fixed spatial hit-testing
+          tester.tap(find.text('Text Inputs'));
+          await tester.pump();
+
+          // 2. Handoff focus to the right pane
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify the pane is active and the first text field reports focus
+          expect(
+            find.textPattern(r'Text Inputs Preview \[ACTIVE\]'),
+            findsOneWidget,
+          );
+          expect(find.textPattern(r'\(focused\)'), findsOneWidget);
+
+          // Helper function to simulate typing a string
+          void typeText(String text) {
+            for (final char in text.split('')) {
+              tester.sendKey(LogicalKey.character(char));
+            }
+          }
+
+          // 3. Initial Input
+          typeText('one two three');
+          await tester.pump();
+          expect(find.textPattern('one two three'), findsOneWidget);
+
+          // 4. Test Home & End Keys
+          tester.sendKey(LogicalKey.home);
+          typeText('start ');
+          await tester.pump();
+          expect(find.textPattern('start one two three'), findsOneWidget);
+
+          tester.sendKey(LogicalKey.end);
+          typeText(' end');
+          await tester.pump();
+          expect(find.textPattern('start one two three end'), findsOneWidget);
+
+          // 5. Test Single Character Arrows (Left / Right)
+          // Move left 3 spaces (cursor before 'end'), insert 'X'
+          for (var i = 0; i < 3; i++) {
+            tester.sendKey(LogicalKey.arrowLeft);
+          }
+          typeText('X');
+          await tester.pump();
+          tester.expectUI(
+            find.textPattern('start one two three Xend'),
+            findsOneWidget,
+          );
+
+          // Move right 1 space (cursor after 'e'), insert 'Y'
+          tester.sendKey(LogicalKey.arrowRight);
+          typeText('Y');
+          await tester.pump();
+          expect(find.textPattern('start one two three XeYnd'), findsOneWidget);
+
+          // 6. Test Word Jumps (Ctrl + Left / Right)
+          // Note: Assuming tester.sendKey supports a control boolean flag or chord mapping.
+          // Jump back two words (over 'XeYnd' and 'three'). Cursor before 'three'.
+          tester.sendKey(LogicalKey.arrowLeft, control: true);
+          tester.sendKey(LogicalKey.arrowLeft, control: true);
+
+          // 7. Test Word Deletions (Ctrl+W / Ctrl+D)
+          // Delete word backward (deletes 'two ')
+          tester.sendKey(LogicalKey.character('W'), control: true);
+          await tester.pump();
+          expect(find.textPattern('start one three XeYnd'), findsOneWidget);
+
+          // print(tester.screenshot());
+
+          // Delete word forward (deletes 'three')
+          tester.sendKey(LogicalKey.character('D'), control: true);
+          await tester.pump();
+          expect(find.textPattern('start one  XeYnd'), findsOneWidget);
+
+          // 8. Test Line Deletions (Ctrl+Backspace / Ctrl+K)
+          // Delete from cursor to start of line (deletes 'start one  ')
+          tester.sendKey(LogicalKey.backspace, control: true);
+          await tester.pump();
+          tester.expectUI(find.text(' XeYnd'), findsOneWidget);
+
+          print(tester.screenshot());
+
+          // Move cursor right by 1 (after 'X'), delete to end of line (deletes 'eYnd')
+          tester.sendKey(LogicalKey.home);
+          tester.sendKey(LogicalKey.arrowRight);
+          tester.sendKey(LogicalKey.arrowRight); // past the X
+          tester.sendKey(LogicalKey.character('K'), control: true);
+          await tester.pump();
+          tester.expectUI(find.text(' X'), findsOneWidget);
+
+          // 9. Test Undo / Redo (Ctrl+Z / Ctrl+Y)
+          // Undo the Ctrl+K deletion
+          tester.sendKey(LogicalKey.character('Z'), control: true);
+          await tester.pump();
+          expect(find.textPattern(' XeYnd'), findsOneWidget);
+
+          // Redo the Ctrl+K deletion
+          tester.sendKey(LogicalKey.character('Y'), control: true);
+          await tester.pump();
+          expect(find.textPattern(' X'), findsOneWidget);
+
+          // Clean exit
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+
+          tester.expectUI(find.textPattern(r'\(focused\)'), findsNothing);
+          tester.expectUI(
+            find.textPattern(r'Text Inputs Preview \[ACTIVE\]'),
+            findsNothing,
+          );
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('Multi-line TextField - Focus Cycling and Line Breaks', () async {
+      final tester = TerminalTester();
+
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true, // Let it breathe
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Navigate to the component
+          tester.tap(find.text('Text Inputs'));
+          await tester.pump();
+
+          // 2. Tab into the right pane (Focuses Single-line TextField)
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Helper for typing strings
+          void typeText(String text) {
+            for (final char in text.split('')) {
+              tester.sendKey(LogicalKey.character(char));
+            }
+          }
+
+          // 3. Type in the first input
+          typeText('one line');
+          await tester.pump();
+          tester.expectUI(find.text('one line'), findsOneWidget);
+
+          // 4. Cycle Focus to the Multi-line TextField
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // 5. Verify focus shifted.
+          // (Assuming your UI moves the "▶" and "(focused)" labels)
+          tester.expectUI(
+            find.textPattern(r'▶ Multi-line TextField \(focused\)'),
+            findsOneWidget,
+          );
+          // Ensure the single-line field lost focus
+          tester.expectUI(
+            find.textPattern(r'▶ Single-line TextField \(focused\)'),
+            findsNothing,
+          );
+
+          // 6. Test Multi-line specific behavior (Enter key)
+          typeText('first line');
+          tester.sendKey(
+            LogicalKey.enter,
+          ); // This should create a newline, not exit!
+          typeText('second line');
+          await tester.pump();
+
+          // 7. Verify both lines exist in the buffer
+          tester.expectUI(find.text('first line'), findsOneWidget);
+          tester.expectUI(find.text('second line'), findsOneWidget);
+
+          // Clean exit
+          tester.sendKey(LogicalKey.escape);
           runner.dispose();
         });
 

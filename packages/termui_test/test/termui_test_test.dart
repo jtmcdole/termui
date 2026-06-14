@@ -24,7 +24,7 @@ void main() {
 
         // Find by text
         expect(find.text('Hello World'), findsOneWidget);
-        expect(find.text('Framework'), findsOneWidget);
+        expect(find.textPattern('Framework'), findsOneWidget);
         expect(find.text('Nonexistent'), findsNothing);
 
         // Find by key
@@ -196,9 +196,9 @@ void main() {
         await tester.pumpWidget(widget);
 
         // Substring within individual span should match
-        expect(find.text('Name'), findsOneWidget);
-        expect(find.text('Age'), findsOneWidget);
-        expect(find.text('Nam'), findsOneWidget);
+        expect(find.textPattern('Name'), findsOneWidget);
+        expect(find.textPattern('Age'), findsOneWidget);
+        expect(find.textPattern('Nam'), findsOneWidget);
 
         // Exact match of full flattened text should match
         expect(find.text('NameAge'), findsOneWidget);

@@ -4,6 +4,7 @@ import 'package:fake_async/fake_async.dart';
 import 'package:termui/termui.dart';
 import 'mock_backend.dart';
 import 'finders.dart';
+import 'utils.dart' as utils;
 
 /// Representation of standard terminal keys for simulation.
 class LogicalKey {
@@ -129,6 +130,9 @@ class TerminalTester {
   FakeAsync? _fakeAsync;
   Element? _rootElement;
   Buffer? _testBuffer;
+
+  /// Current buffer or null.
+  Buffer? get buffer => _testBuffer;
 
   /// The currently active tester instance in this execution context.
   static TerminalTester? get active => _active;
@@ -261,8 +265,66 @@ class TerminalTester {
   }
 
   /// Simulates pressing a key.
-  void sendKey(LogicalKey key) {
-    sendString(key.escapeSequence);
+  /// Simulates pressing a key with optional modifiers.
+  void sendKey(
+    LogicalKey key, {
+    bool control = false,
+    bool shift = false,
+    bool alt = false,
+  }) {
+    // Explicitly trap Control+Backspace
+    if (key == LogicalKey.backspace && control && !alt && !shift) {
+      // \x1b[ = CSI, 127 = Backspace, 5 = Control modifier, u = Kitty protocol
+      sendString('\x1b[127;5u');
+      return;
+    }
+
+    final baseSeq = key.escapeSequence;
+
+    // 1. Calculate the standard xterm modifier code
+    // Base is 1. Add 1 for Shift, 2 for Alt, 4 for Control.
+    final modifierValue =
+        1 + (shift ? 1 : 0) + (alt ? 2 : 0) + (control ? 4 : 0);
+
+    // If no modifiers are pressed, send the raw sequence
+    if (modifierValue == 1) {
+      sendString(baseSeq);
+      return;
+    }
+
+    // 2. Handle ASCII Control Characters (e.g., Ctrl+Z, Ctrl+W)
+    // If the base sequence is a single character and Control is held
+    if (baseSeq.length == 1 && control && !alt) {
+      final charCode = baseSeq.toUpperCase().codeUnitAt(0);
+      // Letters A-Z fall between 65 and 90 on the ASCII table.
+      // Control maps them down to 1-26.
+      if (charCode >= 64 && charCode <= 95) {
+        final ctrlChar = String.fromCharCode(charCode - 64);
+        sendString(ctrlChar);
+        return;
+      }
+    }
+
+    // 3. Handle Special VT100 Escape Sequences (e.g., Ctrl+Left, Shift+Home)
+    if (baseSeq.startsWith('\x1b[')) {
+      final content = baseSeq.substring(2); // Strip the '\x1b[' prefix
+
+      if (content.length == 1) {
+        // Arrow keys / Home / End: \x1b[D becomes \x1b[1;5D
+        sendString('\x1b[1;$modifierValue$content');
+      } else if (content.endsWith('~')) {
+        // Extended keys like Delete: \x1b[3~ becomes \x1b[3;5~
+        final numberPart = content.substring(0, content.length - 1);
+        sendString('\x1b[$numberPart;$modifierValue~');
+      } else {
+        // Fallback for unknown multi-char sequences
+        sendString(baseSeq);
+      }
+      return;
+    }
+
+    // Fallback if we don't know how to modify the key safely
+    sendString(baseSeq);
   }
 
   int _getButtonCode(MouseButton button) => switch (button) {
@@ -358,19 +420,9 @@ class TerminalTester {
     }
     return offset;
   }
-}
 
-/// Prints the [element] and its children to the stdout.
-void debugDumpTree(Element? element, [int depth = 0]) {
-  if (element == null) return;
-  final indent = '  ' * depth;
-  // Prints the runtime type and any readable text data
-  final widget = element.widget;
-  String info = widget.runtimeType.toString();
-
-  if (widget is Text) info += '("${widget.data}")';
-  // Add other widget types as needed...
-
-  print('$indent- $info');
-  element.visitChildren((child) => debugDumpTree(child, depth + 1));
+  /// Prints a tree from the root element.
+  void debugDumpTree([int depth = 0]) {
+    utils.debugDumpTree(rootElement, depth);
+  }
 }

@@ -25,6 +25,11 @@ class CommonFinders {
   /// Finds widgets that contain the given [text] string.
   Finder text(String text) => _ByTextFinder(text);
 
+  /// Finds widgets with text that matches the provided Regular Expression string.
+  Finder textPattern(String regExpPattern, {bool caseSensitive = true}) {
+    return _ByTextFinder(RegExp(regExpPattern, caseSensitive: caseSensitive));
+  }
+
   /// Finds widgets that have the specified [key].
   Finder byKey(Key key) => _ByKeyFinder(key);
 
@@ -50,8 +55,23 @@ class _ByTypeFinder extends Finder {
 }
 
 class _ByTextFinder extends Finder {
-  final String text;
-  const _ByTextFinder(this.text);
+  final Pattern pattern;
+  const _ByTextFinder(this.pattern);
+
+  bool _matches(String? data) {
+    if (data == null) return false;
+    if (pattern is String) {
+      // Enforce exact match for find.text() (or match any line in multi-line text)
+      if (data.contains('\n')) {
+        return data.split('\n').any((line) => line == pattern);
+      }
+      return data == pattern;
+    } else if (pattern is RegExp) {
+      // Enforce pattern match for find.textMatch()
+      return (pattern as RegExp).hasMatch(data);
+    }
+    return false;
+  }
 
   @override
   Iterable<Element> apply(Iterable<Element> candidates) {
@@ -59,44 +79,35 @@ class _ByTextFinder extends Finder {
       final widget = element.widget;
       switch (widget) {
         case Text(data: final data):
-          return data.contains(text);
+          return _matches(data);
         case RichText(text: final span):
-          return _matchTextSpan(span, text);
+          return _matches(_collectTextSpan(span));
         case TextField(controller: final ctrl):
-          return ctrl.text.contains(text);
+          final txt = ctrl.text;
+          if (pattern is String) {
+            return txt.contains(pattern as String);
+          } else if (pattern is RegExp) {
+            return (pattern as RegExp).hasMatch(txt);
+          }
+          return false;
         default:
           try {
             final dynamic dynWidget = widget;
             final dynamic widgetText = dynWidget.text;
-            if (widgetText is String && widgetText.contains(text)) {
+            if (widgetText is String && _matches(widgetText)) {
               return true;
             }
           } catch (_) {}
           try {
             final dynamic dynWidget = widget;
             final dynamic widgetLabel = dynWidget.label;
-            if (widgetLabel is String && widgetLabel.contains(text)) {
+            if (widgetLabel is String && _matches(widgetLabel)) {
               return true;
             }
           } catch (_) {}
           return false;
       }
     });
-  }
-
-  bool _matchTextSpan(TextSpan span, String query) {
-    if (span.text != null && span.text!.contains(query)) {
-      return true;
-    }
-    for (final child in span.children) {
-      if (_matchTextSpan(child, query)) {
-        return true;
-      }
-    }
-    if (_collectTextSpan(span) == query) {
-      return true;
-    }
-    return false;
   }
 
   String _collectTextSpan(TextSpan span) {
@@ -109,7 +120,10 @@ class _ByTextFinder extends Finder {
   }
 
   @override
-  String toString() => 'text "$text"';
+  String toString() {
+    if (pattern is String) return 'text "$pattern"';
+    return 'textMatch "${(pattern as RegExp).pattern}"';
+  }
 }
 
 class _ByKeyFinder extends Finder {
