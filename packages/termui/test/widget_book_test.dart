@@ -684,5 +684,134 @@ void main() {
         await runnerFuture;
       });
     });
+
+    test('Forms & Validation - Focus Traversal and Enter Key Validation', () async {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Navigate to "Forms & Validation" page
+          tester.tap(find.text('Forms & Validation'));
+          await tester.pump();
+
+          // 2. Focus the preview pane (Handoff focus to the right pane)
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify the preview is active
+          expect(
+            find.textPattern(r'Forms & Validation Preview \[ACTIVE\]'),
+            findsOneWidget,
+          );
+
+          // Get the Form widget from the tree to inspect field states
+          final formElements = find.byType<Form>().apply(
+            collectAllElements(tester.rootElement!),
+          );
+          final form = formElements.first.widget as Form;
+
+          // Initially, the first field (Email Address) is focused
+          expect(form.fields[0].focused, isTrue);
+          expect(form.fields[1].focused, isFalse);
+
+          // Type some text in the Email field
+          tester.sendKey(LogicalKey.character('t'));
+          tester.sendKey(LogicalKey.character('e'));
+          tester.sendKey(LogicalKey.character('s'));
+          tester.sendKey(LogicalKey.character('t'));
+          await tester.pump();
+          expect(form.fields[0].value, equals('test'));
+
+          // 3. Tab to move focus forward
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify focus shifted to the Favorite Programming Language field
+          expect(form.fields[0].focused, isFalse);
+          expect(form.fields[1].focused, isTrue);
+
+          // Verify that the email value is NOT erased!
+          expect(form.fields[0].value, equals('test'));
+
+          // Tab to move to Agree to Terms
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(form.fields[2].focused, isTrue);
+
+          // Tab back to Email Address (cycles)
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(form.fields[0].focused, isTrue);
+          expect(form.fields[0].value, equals('test'));
+
+          // 4. Test Enter key validation and shifting
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // Verify focus shifted forward to the Favorite Programming Language field on Enter
+          expect(form.fields[0].focused, isFalse);
+          expect(form.fields[1].focused, isTrue);
+
+          // Clean exit: Escape to sidebar
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+
+          // Verify sidebar is focused
+          final sidebarElements = find.byType<SidebarWidget>().apply(
+            collectAllElements(tester.rootElement!),
+          );
+          expect(sidebarElements, isNotEmpty);
+          final sidebar = sidebarElements.first.widget as SidebarWidget;
+          expect(sidebar.focusNode.hasFocus, isTrue);
+
+          // Tap "Text Inputs" to navigate back
+          tester.tap(find.text('Text Inputs'));
+          await tester.pump();
+
+          // Verify Text Inputs preview is now selected
+          expect(find.textPattern(r'Text Inputs Preview'), findsOneWidget);
+
+          // Tab to focus the Text Inputs preview pane
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify Text Inputs preview is active
+          expect(
+            find.textPattern(r'Text Inputs Preview \[ACTIVE\]'),
+            findsOneWidget,
+          );
+
+          // Verify we can tab around inside Text Inputs (starts at Single-line, tabs to Multi-line)
+          expect(
+            find.textPattern(r'▶ Single-line TextField \(focused\):'),
+            findsOneWidget,
+          );
+
+          // Press Tab to cycle focus to Multi-line
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(
+            find.textPattern(r'▶ Multi-line TextField \(focused\):'),
+            findsOneWidget,
+          );
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
   });
 }

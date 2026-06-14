@@ -157,6 +157,13 @@ class SplitPaneElement extends Element {
   }
 
   @override
+  void unmount() {
+    childElement1?.unmount();
+    childElement2?.unmount();
+    super.unmount();
+  }
+
+  @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement1 != null) visitor(childElement1!);
     if (childElement2 != null) visitor(childElement2!);

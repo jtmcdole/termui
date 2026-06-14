@@ -550,6 +550,11 @@ class TextField extends StatefulWidget implements Focusable {
 
   /// Handles key events to update the text area value and cursor position.
   bool handleKeyEvent(KeyEvent event) {
+    if (event.type == KeyType.tab ||
+        event.key == '\t' ||
+        event.key == 'backtab') {
+      return false;
+    }
     // Determine the mapped action
     TextFieldAction? action;
     final shortcuts = customShortcuts ?? defaultShortcuts;
