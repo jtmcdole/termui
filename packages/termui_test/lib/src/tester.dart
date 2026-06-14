@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:fake_async/fake_async.dart';
+import 'package:test_api/hooks.dart';
 import 'package:termui/termui.dart';
+import 'package:termui/perf/fs_locator.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 import 'mock_backend.dart';
 import 'finders.dart';
 import 'utils.dart' as utils;
@@ -109,8 +112,19 @@ class TerminalTester {
   final bool _isWindows;
   final Point<int>? _size;
 
+  /// Whether to record asciicast trace recordings.
+  final bool recordTraces;
+
+  final List<String> _actionLog = [];
+
+  /// The log of simulated actions executed by this tester.
+  List<String> get actionLog => List.unmodifiable(_actionLog);
+
   MockTerminalBackend? _backend;
   Terminal? _terminal;
+
+  AsciicastRecorder? _recorder;
+  int _lastRecordedActionIndex = 0;
 
   /// The mock terminal backend providing buffered standard I/O.
   MockTerminalBackend get backend =>
@@ -139,9 +153,15 @@ class TerminalTester {
   static TerminalTester? _active;
 
   /// Creates a [TerminalTester] wrapper.
-  TerminalTester({bool isWindows = false, Point<int>? size})
-    : _isWindows = isWindows,
-      _size = size;
+  TerminalTester({
+    bool isWindows = false,
+    Point<int>? size,
+    bool recordTraces = false,
+  }) : _isWindows = isWindows,
+       _size = size,
+       recordTraces =
+           recordTraces &&
+           const bool.fromEnvironment('ASCIICAST_TESTS', defaultValue: true);
 
   /// The root element of the active widget tree being tested.
   Element? get rootElement => _runner?.rootElement ?? _rootElement;
@@ -149,41 +169,62 @@ class TerminalTester {
   /// Executes the test callback within a controlled [FakeAsync] time environment.
   void run(Future<void> Function() callback) {
     _active = this;
-    fakeAsync((async) {
-      _fakeAsync = async;
-      _backend = MockTerminalBackend(isWindows: _isWindows, size: _size);
-      _terminal = Terminal(_backend!);
+    _actionLog.clear();
+    _lastRecordedActionIndex = 0;
+    if (recordTraces) {
+      final fs = getDefaultFileSystem();
+      var filename = 'trace';
+      final currentTestName = TestHandle.current.name;
+      filename = sanitizeTestName(currentTestName);
+      final file = fs.file('$filename.cast');
+      final w = _size?.x ?? 80;
+      final h = _size?.y ?? 24;
+      _recorder = AsciicastRecorder(
+        FileAsciicastWriter(file),
+        width: w,
+        height: h,
+      );
+    }
+    try {
+      fakeAsync((async) {
+        _fakeAsync = async;
+        _backend = MockTerminalBackend(isWindows: _isWindows, size: _size);
+        _terminal = Terminal(_backend!);
 
-      final future = callback();
-      var completed = false;
-      var hasError = false;
-      Object? error;
-      StackTrace? stackTrace;
+        final future = callback();
+        var completed = false;
+        var hasError = false;
+        Object? error;
+        StackTrace? stackTrace;
 
-      future
-          .then((_) {
-            completed = true;
-          })
-          .catchError((Object e, StackTrace st) {
-            completed = true;
-            hasError = true;
-            error = e;
-            stackTrace = st;
-          });
+        future
+            .then((_) {
+              completed = true;
+            })
+            .catchError((Object e, StackTrace st) {
+              completed = true;
+              hasError = true;
+              error = e;
+              stackTrace = st;
+            });
 
-      try {
-        while (!completed) {
-          async.elapse(const Duration(milliseconds: 1));
+        try {
+          while (!completed) {
+            async.elapse(const Duration(milliseconds: 1));
+          }
+        } finally {
+          _backend?.dispose();
+          _active = null;
         }
-      } finally {
-        _backend?.dispose();
-        _active = null;
-      }
 
-      if (hasError) {
-        Error.throwWithStackTrace(error!, stackTrace!);
-      }
-    });
+        if (hasError) {
+          Error.throwWithStackTrace(error!, stackTrace!);
+        }
+      });
+    } finally {
+      _recorder?.close();
+      _recorder = null;
+    }
   }
 
   /// Runs an interactive [PromptRunner] within the tester context.
@@ -227,6 +268,15 @@ class TerminalTester {
     }
 
     _fakeAsync?.flushMicrotasks();
+
+    if (recordTraces) {
+      final poppedActions = _actionLog.sublist(_lastRecordedActionIndex);
+      _lastRecordedActionIndex = _actionLog.length;
+      final activeBuffer = _testBuffer ?? backend.buffer;
+      if (activeBuffer != null) {
+        _recorder?.recordFrame(activeBuffer, poppedActions);
+      }
+    }
   }
 
   /// Continuously advances time until there are no pending microtasks or timers.
@@ -252,8 +302,20 @@ class TerminalTester {
     return count;
   }
 
+  /// Helper function to simulate typing a string
+  void typeText(String text) {
+    for (final char in text.split('')) {
+      sendKey(LogicalKey.character(char));
+    }
+  }
+
   /// Simulates typing a key string.
   void sendString(String value) {
+    _actionLog.add('Type: $value');
+    _sendStringRaw(value);
+  }
+
+  void _sendStringRaw(String value) {
     // Write to the terminal's actual backend (which is terminal.backend)
     // Wait, the tester is initialized with terminal, which has its own backend.
     // So we should write to terminal.backend!
@@ -272,16 +334,17 @@ class TerminalTester {
     bool shift = false,
     bool alt = false,
   }) {
+    _actionLog.add('Key: ${key.debugName}');
     // Explicitly trap Enter
     if (key == LogicalKey.enter) {
-      sendString('\n');
+      _sendStringRaw('\n');
       return;
     }
 
     // Explicitly trap Control+Backspace
     if (key == LogicalKey.backspace && control && !alt && !shift) {
       // \x1b[ = CSI, 127 = Backspace, 5 = Control modifier, u = Kitty protocol
-      sendString('\x1b[127;5u');
+      _sendStringRaw('\x1b[127;5u');
       return;
     }
 
@@ -294,7 +357,7 @@ class TerminalTester {
 
     // If no modifiers are pressed, send the raw sequence
     if (modifierValue == 1) {
-      sendString(baseSeq);
+      _sendStringRaw(baseSeq);
       return;
     }
 
@@ -306,7 +369,7 @@ class TerminalTester {
       // Control maps them down to 1-26.
       if (charCode >= 64 && charCode <= 95) {
         final ctrlChar = String.fromCharCode(charCode - 64);
-        sendString(ctrlChar);
+        _sendStringRaw(ctrlChar);
         return;
       }
     }
@@ -317,20 +380,20 @@ class TerminalTester {
 
       if (content.length == 1) {
         // Arrow keys / Home / End: \x1b[D becomes \x1b[1;5D
-        sendString('\x1b[1;$modifierValue$content');
+        _sendStringRaw('\x1b[1;$modifierValue$content');
       } else if (content.endsWith('~')) {
         // Extended keys like Delete: \x1b[3~ becomes \x1b[3;5~
         final numberPart = content.substring(0, content.length - 1);
-        sendString('\x1b[$numberPart;$modifierValue~');
+        _sendStringRaw('\x1b[$numberPart;$modifierValue~');
       } else {
         // Fallback for unknown multi-char sequences
-        sendString(baseSeq);
+        _sendStringRaw(baseSeq);
       }
       return;
     }
 
     // Fallback if we don't know how to modify the key safely
-    sendString(baseSeq);
+    _sendStringRaw(baseSeq);
   }
 
   int _getButtonCode(MouseButton button) => switch (button) {
@@ -345,13 +408,13 @@ class TerminalTester {
   /// Simulates pressing a mouse button down at the given coordinate.
   void mouseDown(int x, int y, {MouseButton button = MouseButton.left}) {
     final btnVal = _getButtonCode(button);
-    sendString('\x1b[<$btnVal;$x;${y}M');
+    _sendStringRaw('\x1b[<$btnVal;$x;${y}M');
   }
 
   /// Simulates releasing a mouse button at the given coordinate.
   void mouseUp(int x, int y, {MouseButton button = MouseButton.left}) {
     final btnVal = _getButtonCode(button);
-    sendString('\x1b[<$btnVal;$x;${y}m');
+    _sendStringRaw('\x1b[<$btnVal;$x;${y}m');
   }
 
   /// Simulates moving the mouse to the given coordinate.
@@ -365,14 +428,15 @@ class TerminalTester {
   }) {
     if (drag) {
       final btnVal = _getButtonCode(button) | 32;
-      sendString('\x1b[<$btnVal;$x;${y}M');
+      _sendStringRaw('\x1b[<$btnVal;$x;${y}M');
     } else {
-      sendString('\x1b[<35;$x;${y}M');
+      _sendStringRaw('\x1b[<35;$x;${y}M');
     }
   }
 
   /// Resolves the center coordinate of the widget matched by [finder] and simulates a mouse click.
   void tap(Finder finder, {MouseButton button = MouseButton.left}) {
+    _actionLog.add('Tap: $finder');
     final root = rootElement;
     if (root == null) {
       throw StateError(
@@ -407,6 +471,7 @@ class TerminalTester {
   /// Updates the mock backend size, notifies size watchers, resizes the internal
   /// test buffer if in [pumpWidget] mode, and triggers a layout/paint pass.
   Future<void> simulateResize(Size newSize) async {
+    _actionLog.add('Resize: $newSize');
     final b = terminal.backend;
     if (b is MockTerminalBackend) {
       b.size = Point<int>(newSize.width, newSize.height);
@@ -431,4 +496,14 @@ class TerminalTester {
   void debugDumpTree([int depth = 0]) {
     utils.debugDumpTree(rootElement, depth);
   }
+}
+
+/// Sanitizes a test name into a valid, safe filename.
+String sanitizeTestName(String name) {
+  final sanitized = name
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9_-]'), '_')
+      .replaceAll(RegExp(r'_{2,}'), '_')
+      .replaceAll(RegExp(r'^_+|_+$'), '');
+  return sanitized.isEmpty ? 'trace' : sanitized;
 }

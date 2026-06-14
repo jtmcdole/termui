@@ -283,10 +283,17 @@ class PromptRunner<T> {
 
       onFramePainted?.call(buffer);
 
+      final b = terminal.backend;
+      try {
+        (b as dynamic).buffer = buffer;
+      } catch (_) {
+        // Ignore if backend doesn't support a buffer setter (e.g. real/stub backend)
+      }
+
       final sb = StringBuffer();
       renderer.render(buffer, sb);
       if (sb.isNotEmpty) {
-        terminal.backend.write(sb.toString());
+        b.write(sb.toString());
       }
     }
 

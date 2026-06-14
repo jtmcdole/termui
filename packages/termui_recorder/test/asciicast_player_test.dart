@@ -28,7 +28,7 @@ void main() {
 
       // 2. Playback to a StringBuffer
       final sb = StringBuffer();
-      final player = AsciicastPlayer(tempFile, stdout: sb);
+      final player = AsciicastPlayer(tempFile.readAsStringSync(), stdout: sb);
 
       final start = DateTime.now();
       await player.play(speedMultiplier: 10.0, interactive: false);
@@ -49,10 +49,25 @@ void main() {
       tempFile.writeAsStringSync(castContent);
 
       final sb = StringBuffer();
-      final player = AsciicastPlayer(tempFile, stdout: sb);
+      final player = AsciicastPlayer(tempFile.readAsStringSync(), stdout: sb);
 
       await player.play(speedMultiplier: 10.0, interactive: false);
       expect(sb.toString(), equals('Valid Output'));
+    });
+
+    test('intercepts "d" events and does not write them to stdout', () async {
+      final castContent =
+          '{"version": 2, "width": 80, "height": 24}\n'
+          '[0.1, "d", "Actions: Type: Hello"]\n' // Metadata event
+          '[0.1, "o", "Visible Output"]\n';
+      tempFile.writeAsStringSync(castContent);
+
+      final sb = StringBuffer();
+      final player = AsciicastPlayer(tempFile.readAsStringSync(), stdout: sb);
+
+      await player.play(speedMultiplier: 10.0, interactive: false);
+      // The "d" event should not be in the output, only "Visible Output"
+      expect(sb.toString(), equals('Visible Output'));
     });
   });
 }

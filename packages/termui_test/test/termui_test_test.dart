@@ -1,7 +1,11 @@
+import 'dart:convert';
 import 'dart:math';
+import 'package:termui/perf/fs_locator.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui/termui.dart';
 import 'package:test/test.dart';
+// ignore: implementation_imports, depend_on_referenced_packages
+import 'package:test_api/src/backend/invoker.dart';
 
 void main() {
   group('TerminalTester Integration Tests', () {
@@ -269,5 +273,89 @@ void main() {
         expect(events[3].type, equals(MouseEventType.release));
       });
     });
+
+    test(
+      'recordTraces configuration and actionLog queue work correctly',
+      () async {
+        final defaultTester = TerminalTester();
+        expect(defaultTester.recordTraces, isFalse);
+
+        defaultTester.run(() async {
+          final key = const ValueKey('widget');
+          await defaultTester.pumpWidget(
+            Text('Action Logging', key: key),
+            size: const Size(80, 24),
+          );
+
+          defaultTester.sendString('Hello');
+          defaultTester.sendKey(LogicalKey.arrowDown);
+          defaultTester.tap(find.byKey(key));
+          await defaultTester.simulateResize(const Size(100, 30));
+
+          expect(defaultTester.actionLog, [
+            'Type: Hello',
+            'Key: arrowDown',
+            'Tap: key ValueKey(widget)',
+            'Resize: Size(100, 30)',
+          ]);
+        });
+
+        final fs = getDefaultFileSystem();
+        final testName = Invoker.current?.liveTest.test.name ?? 'trace';
+        final traceFile = fs.file('${sanitizeTestName(testName)}.cast');
+        if (traceFile.existsSync()) {
+          traceFile.deleteSync();
+        }
+
+        final customTester = TerminalTester(recordTraces: true);
+        expect(customTester.recordTraces, isTrue);
+
+        customTester.run(() async {
+          final key = const ValueKey('widget');
+          await customTester.pumpWidget(
+            Text('Action Logging', key: key),
+            size: const Size(80, 24),
+          );
+
+          customTester.sendString('Hello');
+          customTester.sendKey(LogicalKey.arrowDown);
+          customTester.tap(find.byKey(key));
+          await customTester.simulateResize(const Size(100, 30));
+
+          expect(customTester.actionLog, [
+            'Type: Hello',
+            'Key: arrowDown',
+            'Tap: key ValueKey(widget)',
+            'Resize: Size(100, 30)',
+          ]);
+        });
+
+        expect(traceFile.existsSync(), isTrue);
+        final lines = traceFile.readAsLinesSync();
+        expect(lines, isNotEmpty);
+
+        bool foundActionsRow = false;
+        for (final line in lines) {
+          if (line.trim().isEmpty) continue;
+          try {
+            final row = jsonDecode(line) as List<dynamic>;
+            if (row.length == 3 && row[1] == 'd') {
+              expect(
+                row[2],
+                equals(
+                  'Actions: Type: Hello, Key: arrowDown, Tap: key ValueKey(widget), Resize: Size(100, 30)',
+                ),
+              );
+              foundActionsRow = true;
+            }
+          } catch (_) {}
+        }
+        expect(foundActionsRow, isTrue);
+
+        if (traceFile.existsSync()) {
+          traceFile.deleteSync();
+        }
+      },
+    );
   });
 }

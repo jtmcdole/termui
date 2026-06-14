@@ -19,6 +19,18 @@ Future<void> main(List<String> args) async {
       defaultsTo: false,
     )
     ..addFlag(
+      'paused',
+      abbr: 'p',
+      help: 'Start playback in a paused state',
+      defaultsTo: false,
+    )
+    ..addFlag(
+      'keep-alive',
+      abbr: 'k',
+      help: 'Do not close the player when playback reaches the end',
+      defaultsTo: false,
+    )
+    ..addFlag(
       'help',
       abbr: 'h',
       help: 'Show usage instructions',
@@ -56,11 +68,19 @@ Future<void> main(List<String> args) async {
   final speedStr = results['speed'] as String;
   final speed = double.tryParse(speedStr) ?? 1.0;
   final interactive = !(results['non-interactive'] as bool);
+  final paused = results['paused'] as bool;
+  final noCloseAtEnd = results['keep-alive'] as bool;
 
-  final player = AsciicastPlayer(file);
+  final player = AsciicastPlayer(file.readAsStringSync());
 
   try {
-    await player.play(speedMultiplier: speed, interactive: interactive);
+    await player.play(
+      speedMultiplier: speed,
+      interactive: interactive,
+      paused: paused,
+      noCloseAtEnd: noCloseAtEnd,
+    );
+    exit(0);
   } catch (e) {
     print('Error during playback: $e');
     exit(1);

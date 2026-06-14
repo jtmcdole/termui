@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:termui/terminal/backend/terminal_backend.dart';
+import 'package:termui/ui/buffer.dart';
 
 /// A mock implementation of [TerminalBackend] for testing.
 ///
@@ -9,6 +10,9 @@ import 'package:termui/terminal/backend/terminal_backend.dart';
 class MockTerminalBackend implements TerminalBackend {
   @override
   final bool isWindows;
+
+  /// The active screen buffer painted by the prompt runner.
+  Buffer? buffer;
 
   final StreamController<List<int>> _rawInputController =
       StreamController<List<int>>.broadcast();
