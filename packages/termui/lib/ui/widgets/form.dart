@@ -304,7 +304,19 @@ class Form extends StatefulWidget implements Focusable {
         currentField.handleKeyEvent(event);
       }
     } else {
-      fields[activeFieldIndex].handleKeyEvent(event);
+      final handled = fields[activeFieldIndex].handleKeyEvent(event);
+      if (!handled) {
+        if (event.type == KeyType.up) {
+          fields[activeFieldIndex].focused = false;
+          activeFieldIndex =
+              (activeFieldIndex - 1 + fields.length) % fields.length;
+          fields[activeFieldIndex].focused = true;
+        } else if (event.type == KeyType.down) {
+          fields[activeFieldIndex].focused = false;
+          activeFieldIndex = (activeFieldIndex + 1) % fields.length;
+          fields[activeFieldIndex].focused = true;
+        }
+      }
     }
   }
 
@@ -365,17 +377,26 @@ class FormState extends State<Form> implements KeyEventHandler {
 
   /// The index of the currently active form field.
   int get activeFieldIndex {
+    if (widget.fields.isNotEmpty) {
+      final idx = widget.fields.indexWhere((f) => f.focused);
+      return idx != -1 ? idx : 0;
+    }
     final list = _fields.toList();
     if (list.isNotEmpty) {
       final idx = list.indexWhere((fs) => fs.widget.focused);
       return idx != -1 ? idx : 0;
     }
-    final wIdx = widget.fields.indexWhere((f) => f.focused);
-    return wIdx != -1 ? wIdx : 0;
+    return 0;
   }
 
   set activeFieldIndex(int val) {
     setState(() {
+      if (widget.fields.isNotEmpty) {
+        for (var i = 0; i < widget.fields.length; i++) {
+          widget.fields[i].focused = (i == val);
+        }
+        return;
+      }
       final list = _fields.toList();
       if (list.isNotEmpty) {
         for (var i = 0; i < list.length; i++) {
@@ -383,17 +404,69 @@ class FormState extends State<Form> implements KeyEventHandler {
         }
         return;
       }
-      if (widget.fields.isNotEmpty) {
-        for (var i = 0; i < widget.fields.length; i++) {
-          widget.fields[i].focused = (i == val);
-        }
-      }
     });
   }
 
   /// Routes a key event to the focused field, handling tab navigation.
   @override
   bool handleKeyEvent(term.KeyEvent event) {
+    if (widget.fields.isNotEmpty) {
+      final list = widget.fields;
+      var activeIdx = list.indexWhere((f) => f.focused);
+      if (activeIdx == -1) activeIdx = 0;
+
+      if (event.key == 'tab' || event.key == '\t') {
+        setState(() {
+          list[activeIdx].focused = false;
+          activeIdx = (activeIdx + 1) % list.length;
+          list[activeIdx].focused = true;
+        });
+        return true;
+      } else if (event.key == 'backtab') {
+        setState(() {
+          list[activeIdx].focused = false;
+          activeIdx = (activeIdx - 1 + list.length) % list.length;
+          list[activeIdx].focused = true;
+        });
+        return true;
+      } else if (event.type == KeyType.enter) {
+        final currentField = list[activeIdx];
+        currentField.validate();
+        if (currentField is! TextAreaFormField) {
+          setState(() {
+            currentField.focused = false;
+            activeIdx = (activeIdx + 1) % list.length;
+            list[activeIdx].focused = true;
+          });
+        } else {
+          currentField.handleKeyEvent(event);
+          currentField._state?.setState(() {});
+        }
+        return true;
+      } else {
+        final handled = list[activeIdx].handleKeyEvent(event);
+        list[activeIdx]._state?.setState(() {});
+        if (!handled) {
+          if (event.type == KeyType.up) {
+            setState(() {
+              list[activeIdx].focused = false;
+              activeIdx = (activeIdx - 1 + list.length) % list.length;
+              list[activeIdx].focused = true;
+            });
+            return true;
+          } else if (event.type == KeyType.down) {
+            setState(() {
+              list[activeIdx].focused = false;
+              activeIdx = (activeIdx + 1) % list.length;
+              list[activeIdx].focused = true;
+            });
+            return true;
+          }
+        }
+        return handled;
+      }
+    }
+
     if (_fields.isEmpty) return false;
 
     final list = _fields.toList();
@@ -429,9 +502,26 @@ class FormState extends State<Form> implements KeyEventHandler {
       }
       return true;
     } else {
-      list[activeIdx].widget.handleKeyEvent(event);
+      final handled = list[activeIdx].widget.handleKeyEvent(event);
       list[activeIdx].setState(() {});
-      return true;
+      if (!handled) {
+        if (event.type == KeyType.up) {
+          setState(() {
+            list[activeIdx].widget.focused = false;
+            activeIdx = (activeIdx - 1 + list.length) % list.length;
+            list[activeIdx].widget.focused = true;
+          });
+          return true;
+        } else if (event.type == KeyType.down) {
+          setState(() {
+            list[activeIdx].widget.focused = false;
+            activeIdx = (activeIdx + 1) % list.length;
+            list[activeIdx].widget.focused = true;
+          });
+          return true;
+        }
+      }
+      return handled;
     }
   }
 
@@ -493,6 +583,12 @@ class FormState extends State<Form> implements KeyEventHandler {
 class TextFormField extends FormField<String> {
   final TextField _input;
 
+  /// The cursor line in the text field.
+  int get cursorLine => _input.cursorLine;
+
+  /// The cursor column in the text field.
+  int get cursorColumn => _input.cursorColumn;
+
   /// Creates a [TextFormField] for single-line text input.
   TextFormField({
     required super.label,
@@ -525,12 +621,12 @@ class TextFormField extends FormField<String> {
 
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    _input.handleKeyEvent(event);
+    final handled = _input.handleKeyEvent(event);
     value = _input.value;
     if (_state != null) {
       _state!.setState(() {});
     }
-    return true;
+    return handled;
   }
 
   @override
@@ -627,6 +723,12 @@ class _TextFormFieldRenderWidget extends StatelessWidget {
 class TextAreaFormField extends FormField<String> {
   final TextField _input;
 
+  /// The cursor line in the text area.
+  int get cursorLine => _input.cursorLine;
+
+  /// The cursor column in the text area.
+  int get cursorColumn => _input.cursorColumn;
+
   /// The fixed height of the text area.
   final int fieldHeight;
 
@@ -664,12 +766,12 @@ class TextAreaFormField extends FormField<String> {
 
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    _input.handleKeyEvent(event);
+    final handled = _input.handleKeyEvent(event);
     value = _input.value;
     if (_state != null) {
       _state!.setState(() {});
     }
-    return true;
+    return handled;
   }
 
   @override

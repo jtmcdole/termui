@@ -562,6 +562,15 @@ class TextField extends StatefulWidget implements Focusable {
     }
 
     if (action != null) {
+      if (action == TextFieldAction.moveUp) {
+        if (!multiline || cursorLine == 0) {
+          return false;
+        }
+      } else if (action == TextFieldAction.moveDown) {
+        if (!multiline || cursorLine == controller.value.lines.length - 1) {
+          return false;
+        }
+      }
       _executeAction(action);
       return true;
     }

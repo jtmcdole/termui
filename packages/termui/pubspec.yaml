@@ -37,4 +37,6 @@ dev_dependencies:
     path: ../termui_shared_examples
   termui_recorder:
     path: ../termui_recorder
+  termui_test:
+    path: ../termui_test
   fake_async: ^1.3.3

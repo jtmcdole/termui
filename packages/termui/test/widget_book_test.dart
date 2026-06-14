@@ -1,13 +1,17 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:termui_shared_examples/widget_book/layout_state.dart';
 import 'package:test/test.dart';
 import 'package:termui/terminal/terminal.dart';
 import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/ui/buffer.dart';
+import 'package:termui/ui/layout.dart' as ui;
 import 'package:termui/perf/tracer.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_platform.dart';
+import 'package:termui_test/termui_test.dart';
+import 'package:termui/ui/widget_toolkit.dart';
 
 class FakeTerminalBackend implements TerminalBackend {
   final StreamController<List<int>> _inputController =
@@ -227,5 +231,223 @@ void main() {
         terminal.dispose();
       },
     );
+  });
+
+  group('Widget Book Integration Tests (TerminalTester)', () {
+    test('The Boot & Mount Test', () {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        await tester.pumpWidget(app);
+        expect(find.text('COMPONENTS'), findsOneWidget);
+      });
+    });
+
+    test('The Spatial Input Routing Test', () {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: false,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // Assert initial page is 'Text Inputs'
+          expect(find.text('Text Inputs Preview'), findsOneWidget);
+
+          // Inject arrowDown key
+          tester.sendKey(LogicalKey.arrowDown);
+          await tester.pump();
+
+          // Assert selected page updated to 'Data Displays'
+          expect(find.text('Data Displays Preview'), findsOneWidget);
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('The Focus Handoff Test (Tab Traversal)', () {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: false,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // Initially, preview should NOT be active
+          expect(find.text('[ACTIVE]'), findsNothing);
+
+          // Send tab key to traversal focus to the preview pane
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Preview pane should now be [ACTIVE]
+          expect(find.text('[ACTIVE]'), findsOneWidget);
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('The Modal Z-Index Test', () {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: false,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // Assert help dialog is NOT shown initially
+          expect(find.byType<HelpDialog>(), findsNothing);
+
+          // Press 'h' to show help dialog
+          tester.sendKey(LogicalKey.character('h'));
+          await tester.pump();
+
+          // Assert help dialog is shown
+          expect(find.byType<HelpDialog>(), findsOneWidget);
+
+          // Inject arrowDown key
+          tester.sendKey(LogicalKey.arrowDown);
+          await tester.pump();
+
+          // Assert that the sidebar did NOT change page (remain on 'Text Inputs')
+          expect(find.text('Text Inputs Preview'), findsOneWidget);
+          expect(find.text('Data Displays Preview'), findsNothing);
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('Layout & State Demo - Button Interaction and State Mutation', () {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: false,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Navigate down the sidebar to "Layout & State" (Index 5)
+          for (var i = 0; i < 5; i++) {
+            tester.sendKey(LogicalKey.arrowDown);
+          }
+          await tester.pump();
+
+          // Verify the routing worked and the right pane rebuilt
+          expect(find.text('Layout & State Preview'), findsOneWidget);
+
+          // 2. Handoff focus to the preview pane
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify the pane is active
+          expect(find.text('Layout & State Preview [ACTIVE]'), findsOneWidget);
+
+          // 3. Verify the initial state of the counter
+          expect(
+            find.descendant(
+              of: find.byType<StatefulCounter>(),
+              matching: find.text('0'),
+            ),
+            findsOneWidget,
+          );
+          expect(find.text('[ INACTIVE ]'), findsOneWidget);
+
+          // 4. Trigger the interaction
+          // Assuming the button accepts 'Space' to trigger its onPressed callback
+          tester.sendKey(LogicalKey.character(' '));
+          await tester.pump();
+
+          // You can dump the tree on failure.
+          // debugDumpTree(tester.rootElement);
+
+          // 5. Verify the state mutated and the UI repainted
+          expect(
+            find.descendant(
+              of: find.byType<StatefulCounter>(),
+              matching: find.text('1'),
+            ),
+            findsOneWidget,
+          );
+          expect(find.text('[ ACTIVE ]'), findsOneWidget);
+
+          // 4. Trigger the interaction
+          // Assuming the button accepts 'Space' to trigger its onPressed callback
+          tester.sendKey(LogicalKey.character(' '));
+          await tester.pump();
+
+          // You can dump the tree on failure.
+          // debugDumpTree(tester.rootElement);
+
+          expect(
+            find.descendant(
+              of: find.byType<StatefulCounter>(),
+              matching: find.text('2'),
+            ),
+            findsOneWidget,
+          );
+          expect(find.text('[ INACTIVE ]'), findsOneWidget);
+
+          // 4. Exit the panel
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+
+          // Verify the pane is not active
+          expect(find.text('Layout & State Preview [ACTIVE]'), findsNothing);
+
+          // Clean exit
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
   });
 }
