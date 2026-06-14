@@ -680,7 +680,20 @@ class _TextFormFieldState extends FormFieldState<String>
   }
 
   void _onControllerChanged() {
-    widget.value = (widget as TextFormField)._input.value;
+    final newValue = (widget as TextFormField)._input.value;
+    widget.value = newValue;
+    if (widget.validator != null) {
+      final newError = widget.validator!(newValue);
+      if (newError != widget.errorText) {
+        setState(() {
+          widget.errorText = newError;
+        });
+      }
+    } else if (widget.errorText != null) {
+      setState(() {
+        widget.errorText = null;
+      });
+    }
   }
 
   @override
@@ -868,7 +881,20 @@ class _TextAreaFormFieldState extends FormFieldState<String>
   }
 
   void _onControllerChanged() {
-    widget.value = (widget as TextAreaFormField)._input.value;
+    final newValue = (widget as TextAreaFormField)._input.value;
+    widget.value = newValue;
+    if (widget.validator != null) {
+      final newError = widget.validator!(newValue);
+      if (newError != widget.errorText) {
+        setState(() {
+          widget.errorText = newError;
+        });
+      }
+    } else if (widget.errorText != null) {
+      setState(() {
+        widget.errorText = null;
+      });
+    }
   }
 
   @override

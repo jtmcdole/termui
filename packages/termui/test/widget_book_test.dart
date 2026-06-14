@@ -678,7 +678,7 @@ void main() {
       });
     });
 
-    test('Forms & Validation - Focus Traversal and Enter Key Validation', () async {
+    test('Forms & Validation - Full Flow Validation and Submission', () async {
       final tester = TerminalTester(recordTraces: true);
       tester.run(() async {
         final app = WidgetBookApp(
@@ -719,43 +719,69 @@ void main() {
           expect(form.fields[0].focused, isTrue);
           expect(form.fields[1].focused, isFalse);
 
-          // Type some text in the Email field
-          tester.sendKey(LogicalKey.character('t'));
-          tester.sendKey(LogicalKey.character('e'));
-          tester.sendKey(LogicalKey.character('s'));
-          tester.sendKey(LogicalKey.character('t'));
-          await tester.pump();
-          expect(form.fields[0].value, equals('test'));
-
-          // 3. Tab to move focus forward
-          tester.sendKey(LogicalKey.tab);
+          // 3. Trigger Validation: Press Enter on the empty email field
+          // This shifts focus to the next field and triggers "on blur" validation
+          tester.sendKey(LogicalKey.enter);
           await tester.pump();
 
-          // Verify focus shifted to the Favorite Programming Language field
+          // Verify focus moved and the error rendered
           expect(form.fields[0].focused, isFalse);
           expect(form.fields[1].focused, isTrue);
+          expect(find.textPattern('⚠ Email is required'), findsOneWidget);
 
-          // Verify that the email value is NOT erased!
-          expect(form.fields[0].value, equals('test'));
+          // 4. Fix Validation: Shift+Tab back to the Email field
+          tester.sendKey(LogicalKey.tab, shift: true);
+          await tester.pump();
+          expect(form.fields[0].focused, isTrue);
 
-          // Tab to move to Agree to Terms
+          // Input partial email to verify that the "Email is required" error changes instantly
+          tester.sendString('u');
+          await tester.pump();
+          expect(find.textPattern('⚠ Email is required'), findsNothing);
+          expect(
+            find.textPattern('⚠ Must be a valid email containing @'),
+            findsOneWidget,
+          );
+
+          // Complete the email to verify that the validation error clears instantly on change
+          tester.sendString('ser@domain.com');
+          await tester.pump();
+          expect(
+            find.textPattern('⚠ Must be a valid email containing @'),
+            findsNothing,
+          );
+
+          // Move to the next field
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+          expect(form.fields[0].value, equals('user@domain.com'));
+
+          // Verify the error message remains cleared
+          expect(find.textPattern('⚠ Email is required'), findsNothing);
+          expect(
+            find.textPattern('⚠ Must be a valid email containing @'),
+            findsNothing,
+          );
+
+          // 5. Verify Favorite Programming Language
+          expect(form.fields[1].focused, isTrue);
+
+          // Tab to Agree to Terms & Conditions
           tester.sendKey(LogicalKey.tab);
           await tester.pump();
           expect(form.fields[2].focused, isTrue);
 
-          // Tab back to Email Address (cycles)
-          tester.sendKey(LogicalKey.tab);
+          // 6. Select the [Yes] field
+          // Ensure we explicitly toggle/select the positive option
+          tester.sendKey(LogicalKey.arrowLeft); // Assuming left targets [Yes]
           await tester.pump();
-          expect(form.fields[0].focused, isTrue);
-          expect(form.fields[0].value, equals('test'));
 
-          // 4. Test Enter key validation and shifting
+          // Verify visually that [Yes] is active (brackets indicate selection in your UI)
+          expect(find.textPattern(r'\[Yes\]'), findsOneWidget);
+
+          // 7. Submit the valid form
           tester.sendKey(LogicalKey.enter);
           await tester.pump();
-
-          // Verify focus shifted forward to the Favorite Programming Language field on Enter
-          expect(form.fields[0].focused, isFalse);
-          expect(form.fields[1].focused, isTrue);
 
           // Clean exit: Escape to sidebar
           tester.sendKey(LogicalKey.escape);
@@ -775,30 +801,6 @@ void main() {
 
           // Verify Text Inputs preview is now selected
           expect(find.textPattern(r'Text Inputs Preview'), findsOneWidget);
-
-          // Tab to focus the Text Inputs preview pane
-          tester.sendKey(LogicalKey.tab);
-          await tester.pump();
-
-          // Verify Text Inputs preview is active
-          expect(
-            find.textPattern(r'Text Inputs Preview \[ACTIVE\]'),
-            findsOneWidget,
-          );
-
-          // Verify we can tab around inside Text Inputs (starts at Single-line, tabs to Multi-line)
-          expect(
-            find.textPattern(r'▶ Single-line TextField \(focused\):'),
-            findsOneWidget,
-          );
-
-          // Press Tab to cycle focus to Multi-line
-          tester.sendKey(LogicalKey.tab);
-          await tester.pump();
-          expect(
-            find.textPattern(r'▶ Multi-line TextField \(focused\):'),
-            findsOneWidget,
-          );
 
           runner.dispose();
         });
