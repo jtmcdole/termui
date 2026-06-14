@@ -20,6 +20,9 @@ class ListWidget extends Widget {
   /// The currently selected item index.
   int selectedIndex;
 
+  /// The index of the item currently hovered, if any.
+  int? hoveredIndex;
+
   /// The current scroll offset, representing the index of the first visible item.
   int scrollOffset = 0;
 
@@ -29,12 +32,17 @@ class ListWidget extends Widget {
   /// The style applied to the selected item.
   final Style selectedStyle;
 
+  /// The style applied to the hovered item.
+  final Style? hoveredStyle;
+
   /// Creates a [ListWidget] to display a selectable list of items.
   ListWidget(
     this.items, {
     this.selectedIndex = 0,
+    this.hoveredIndex,
     this.itemStyle = Style.empty,
     this.selectedStyle = const Style(modifiers: Modifier.reverse),
+    this.hoveredStyle,
   });
 
   /// Updates scroll offset based on selected index to keep selection visible.
@@ -89,6 +97,7 @@ class ListWidgetElement extends Element {
     for (var i = 0; i < visibleIndices.length; i++) {
       final itemIdx = visibleIndices[i];
       final isSelected = itemIdx == listWidget.selectedIndex;
+      final isHovered = itemIdx == listWidget.hoveredIndex;
       final text = listWidget.items[itemIdx];
 
       final chars = text.characters;
@@ -96,12 +105,14 @@ class ListWidgetElement extends Element {
           ? chars.take(w).toString()
           : chars.toString() + (' ' * (w - chars.length));
 
-      buffer.writeString(
-        offset.dx,
-        offset.dy + i,
-        padded,
-        isSelected ? listWidget.selectedStyle : listWidget.itemStyle,
-      );
+      var style = listWidget.itemStyle;
+      if (isSelected) {
+        style = listWidget.selectedStyle;
+      } else if (isHovered) {
+        style = listWidget.hoveredStyle ?? const Style(modifiers: Modifier.dim);
+      }
+
+      buffer.writeString(offset.dx, offset.dy + i, padded, style);
     }
   }
 }

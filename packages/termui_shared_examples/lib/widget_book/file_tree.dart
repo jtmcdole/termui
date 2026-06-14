@@ -17,8 +17,11 @@ const bool _kIsWeb =
 
 /// An example showcasing an interactive file tree view of the local project.
 class FileTreeExample extends WidgetBookExample {
-  /// The tree widget rendering the file system entities.
-  late final TreeWidget<FileSystemEntity> fileTreeWidget;
+  /// The root node of the file tree.
+  late final TreeNode<FileSystemEntity> fileTreeRoot;
+
+  /// The active tree widget rendering the file system entities.
+  TreeWidget<FileSystemEntity>? _treeWidget;
 
   /// The currently selected file or directory path.
   String selectedPath = 'lib';
@@ -37,13 +40,18 @@ class FileTreeExample extends WidgetBookExample {
       fs = const LocalFileSystem();
     }
 
-    final fileTreeRoot = FileTreeHelper.buildFromPath(fs, 'lib');
-    fileTreeWidget = TreeWidget<FileSystemEntity>(
+    fileTreeRoot = FileTreeHelper.buildFromPath(fs, 'lib');
+  }
+
+  TreeWidget<FileSystemEntity> _buildTreeWidget(bool active) {
+    _treeWidget = TreeWidget<FileSystemEntity>(
       root: fileTreeRoot,
+      focused: active,
       onSelect: (node) {
         selectedPath = node.value.path;
       },
     );
+    return _treeWidget!;
   }
 
   @override
@@ -52,7 +60,7 @@ class FileTreeExample extends WidgetBookExample {
     required int width,
     required int height,
   }) {
-    fileTreeWidget.focused = focusDemoPane;
+    final tree = _buildTreeWidget(focusDemoPane);
     return Column([
       SizedBox(
         height: 1,
@@ -62,7 +70,7 @@ class FileTreeExample extends WidgetBookExample {
         ),
       ),
       const SizedBox(height: 1, child: Text('')),
-      Expanded(child: fileTreeWidget),
+      Expanded(child: tree),
       const SizedBox(height: 1, child: Text('')),
       SizedBox(
         height: 1,
@@ -80,7 +88,7 @@ class FileTreeExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
-    fileTreeWidget.handleKeyEvent(event);
+    _treeWidget?.handleKeyEvent(event);
     return true;
   }
 

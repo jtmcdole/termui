@@ -16,8 +16,13 @@ class RichTextTimerExample extends WidgetBookExample {
   );
 
   @override
-  void tick(Duration duration) {
+  bool get requiresTick => true;
+
+  @override
+  bool tick(Duration duration) {
+    final oldDuration = timerWidget.duration;
     timerWidget.tick(duration);
+    return timerWidget.running || oldDuration != timerWidget.duration;
   }
 
   @override

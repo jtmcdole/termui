@@ -10,29 +10,53 @@ class TextInputsExample extends WidgetBookExample {
   /// The index of the currently active text field.
   int activeFieldIndex = 0;
 
-  /// The single-line text field widget.
-  late final singleLineField = TextField(
-    placeholder: 'Enter text here...',
-    style: const Style(foreground: CharmColors.soda),
-    cursorStyle: const Style(
-      foreground: CharmColors.pepper,
-      background: CharmColors.charple,
-    ),
-    multiline: false,
+  /// The single-line text field controller.
+  late final TextEditingController singleLineController =
+      TextEditingController();
+
+  /// The multi-line text field controller.
+  late final TextEditingController multiLineController = TextEditingController(
+    text:
+        'Multi-line TextField editor.\nPress [Tab] to cycle focus.\nUse arrows to navigate.',
   );
 
-  /// The multi-line text field widget.
-  late final multiLineField = TextField(
-    initialText:
-        'Multi-line TextField editor.\nPress [Tab] to cycle focus.\nUse arrows to navigate.',
-    style: const Style(foreground: CharmColors.soda),
-    cursorStyle: const Style(
-      foreground: CharmColors.pepper,
-      background: CharmColors.charple,
-    ),
-    placeholder: 'Type multi-line text...',
-    multiline: true,
-  );
+  /// Helper to build the single-line text field widget.
+  TextField _buildSingleLineField(bool active) {
+    return TextField(
+      controller: singleLineController,
+      placeholder: 'Enter text here...',
+      style: active
+          ? const Style(foreground: CharmColors.charple)
+          : const Style(foreground: CharmColors.soda),
+      cursorStyle: active
+          ? const Style(
+              foreground: CharmColors.pepper,
+              background: CharmColors.charple,
+            )
+          : const Style(modifiers: Modifier.none),
+      multiline: false,
+      focused: active,
+    );
+  }
+
+  /// Helper to build the multi-line text field widget.
+  TextField _buildMultiLineField(bool active) {
+    return TextField(
+      controller: multiLineController,
+      style: active
+          ? const Style(foreground: CharmColors.charple)
+          : const Style(foreground: CharmColors.soda),
+      cursorStyle: active
+          ? const Style(
+              foreground: CharmColors.pepper,
+              background: CharmColors.charple,
+            )
+          : const Style(modifiers: Modifier.none),
+      placeholder: 'Type multi-line text...',
+      multiline: true,
+      focused: active,
+    );
+  }
 
   @override
   Widget build({
@@ -43,27 +67,8 @@ class TextInputsExample extends WidgetBookExample {
     final singleLineActive = focusDemoPane && activeFieldIndex == 0;
     final multiLineActive = focusDemoPane && activeFieldIndex == 1;
 
-    singleLineField.focused = singleLineActive;
-    singleLineField.style = singleLineActive
-        ? const Style(foreground: CharmColors.charple)
-        : const Style(foreground: CharmColors.soda);
-    singleLineField.cursorStyle = singleLineActive
-        ? const Style(
-            foreground: CharmColors.pepper,
-            background: CharmColors.charple,
-          )
-        : const Style(modifiers: Modifier.none);
-
-    multiLineField.focused = multiLineActive;
-    multiLineField.style = multiLineActive
-        ? const Style(foreground: CharmColors.charple)
-        : const Style(foreground: CharmColors.soda);
-    multiLineField.cursorStyle = multiLineActive
-        ? const Style(
-            foreground: CharmColors.pepper,
-            background: CharmColors.charple,
-          )
-        : const Style(modifiers: Modifier.none);
+    final singleLineField = _buildSingleLineField(singleLineActive);
+    final multiLineField = _buildMultiLineField(multiLineActive);
 
     return Column([
       SizedBox(
@@ -110,6 +115,9 @@ class TextInputsExample extends WidgetBookExample {
       }
       return true;
     }
+
+    final singleLineField = _buildSingleLineField(activeFieldIndex == 0);
+    final multiLineField = _buildMultiLineField(activeFieldIndex == 1);
 
     if (activeFieldIndex == 0) {
       if (event.type == ui.KeyType.down || event.type == ui.KeyType.enter) {

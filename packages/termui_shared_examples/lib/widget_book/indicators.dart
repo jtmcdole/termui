@@ -23,7 +23,10 @@ class IndicatorsExample extends WidgetBookExample {
   );
 
   @override
-  void tick(Duration duration) {
+  bool get requiresTick => true;
+
+  @override
+  bool tick(Duration duration) {
     progressVal += 0.005;
     if (progressVal > 1.0) progressVal = 0.0;
 
@@ -32,6 +35,7 @@ class IndicatorsExample extends WidgetBookExample {
       spinnerLine.tick();
       spinnerDots.tick();
     }
+    return true;
   }
 
   @override

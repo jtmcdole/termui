@@ -37,7 +37,11 @@ abstract class WidgetBookExample {
   ) {}
 
   /// Periodic tick for animations/timers.
-  void tick(Duration duration) {}
+  /// Returns true if the example has changed and needs to be repainted.
+  bool tick(Duration duration) => false;
+
+  /// Whether this example requires a ticker to update.
+  bool get requiresTick => false;
 
   /// Whether this example currently has an active overlay (e.g. modal).
   bool get hasActiveOverlay => false;

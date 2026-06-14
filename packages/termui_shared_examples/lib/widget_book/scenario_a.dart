@@ -154,10 +154,14 @@ class ScenarioAExample extends WidgetBookExample {
   Widget winCubeChild() => cubeWidget;
 
   @override
-  void tick(Duration duration) {
+  bool get requiresTick => true;
+
+  @override
+  bool tick(Duration duration) {
     diagnosticsWidget.update();
     radarWidget.frame++;
     cubeWidget.update();
+    return true;
   }
 
   @override

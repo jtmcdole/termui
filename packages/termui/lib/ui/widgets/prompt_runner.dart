@@ -111,6 +111,12 @@ class PromptRunner<T> {
   /// An optional completion callback returning the final value of type [T].
   final T Function()? onComplete;
 
+  /// Whether to render in alternate screen mode.
+  final bool alternateScreen;
+
+  /// Callback after each frame is painted onto the buffer.
+  final void Function(Buffer buffer)? onFramePainted;
+
   /// Mapping of exit triggers to their corresponding actions.
   final Map<PromptExitTrigger, PromptExitAction> exitConditions;
 
@@ -139,6 +145,8 @@ class PromptRunner<T> {
     Map<PromptExitTrigger, PromptExitAction>? exitConditions,
     this.onKeyEvent,
     this.onComplete,
+    this.alternateScreen = false,
+    this.onFramePainted,
   }) : exitConditions = exitConditions ?? defaultExitConditions;
 
   /// Public programmatic abort.
@@ -227,17 +235,21 @@ class PromptRunner<T> {
   /// Starts the inline prompt loop and returns a Future containing the final result.
   Future<T?> run() async {
     final termSize = await terminal.size;
-    final width = termSize.x;
+    var width = termSize.x;
 
     // Autosize the height dynamically if not explicitly specified.
-    final computedHeight = height ?? widget.getIntrinsicHeight(width);
+    var computedHeight =
+        height ??
+        (alternateScreen ? termSize.y : widget.getIntrinsicHeight(width));
 
     // Create a temporary buffer and inline renderer.
-    final buffer = Buffer.blank(width, computedHeight);
-    final renderer = Renderer(
+    var buffer = Buffer.blank(width, computedHeight);
+    var renderer = Renderer(
       width,
       computedHeight,
-      mode: RenderingMode.inline,
+      mode: alternateScreen
+          ? RenderingMode.alternateScreen
+          : RenderingMode.inline,
     );
 
     _completer = Completer<T?>();
@@ -262,12 +274,14 @@ class PromptRunner<T> {
     void draw() {
       if (_isDisposed) return;
       // Rebuild the element tree to consume any new state modifications.
-      rootElement.rebuild();
+      BuildOwner.buildScope();
 
       buffer.clear();
       // Render the rebuilt element tree on our double buffer canvas.
       rootElement.layout(BoxConstraints.tight(Size(width, computedHeight)));
       rootElement.paint(buffer, Offset.zero);
+
+      onFramePainted?.call(buffer);
 
       final sb = StringBuffer();
       renderer.render(buffer, sb);
@@ -281,7 +295,26 @@ class PromptRunner<T> {
     State.onNeedRepaint = draw;
 
     // Initial frame draw
+    BuildOwner.markNeedsBuild(rootElement);
     draw();
+
+    final sizeSubscription = terminal.watchSize().listen((size) {
+      if (_isDisposed) return;
+      width = size.x;
+      computedHeight =
+          height ??
+          (alternateScreen ? size.y : widget.getIntrinsicHeight(width));
+      buffer.resize(width, computedHeight);
+      renderer = Renderer(
+        width,
+        computedHeight,
+        mode: alternateScreen
+            ? RenderingMode.alternateScreen
+            : RenderingMode.inline,
+      );
+      BuildOwner.markNeedsBuild(rootElement);
+      draw();
+    });
 
     final subscription = terminal.events.listen(
       (event) {
@@ -311,6 +344,16 @@ class PromptRunner<T> {
 
           // Force a redraw to reflect any selections or edits.
           draw();
+        } else if (event is term.MouseEvent) {
+          final isDone = _routeMouseEvent(rootElement, event, Offset.zero);
+          if (isDone) {
+            draw();
+          }
+        }
+      },
+      onDone: () {
+        if (_completer != null && !_completer!.isCompleted) {
+          _completer!.complete(null);
         }
       },
       onError: (e, stack) {
@@ -324,6 +367,7 @@ class PromptRunner<T> {
       return await _completer!.future;
     } finally {
       _isDisposed = true;
+      sizeSubscription.cancel();
       subscription.cancel();
       // Restore cursor visibility
       terminal.showCursor();
@@ -387,6 +431,76 @@ class PromptRunner<T> {
     });
 
     return childConsumed;
+  }
+
+  /// Recursively walks the element tree to route a mouse event spatially.
+  bool _routeMouseEvent(
+    Element element,
+    term.MouseEvent event,
+    Offset parentOffset,
+  ) {
+    final absOffset = parentOffset + element.relativeOffset;
+    final sx = event.x - 1;
+    final sy = event.y - 1;
+
+    // Check if the mouse is within the element's bounding box
+    final inside =
+        sx >= absOffset.dx &&
+        sx < absOffset.dx + element.size.width &&
+        sy >= absOffset.dy &&
+        sy < absOffset.dy + element.size.height;
+
+    if (!inside) {
+      return false;
+    }
+
+    // Traverse children in reverse order (topmost first, e.g. Stack children at the end are on top)
+    final children = <Element>[];
+    element.visitChildren((child) {
+      children.add(child);
+    });
+
+    for (final child in children.reversed) {
+      final childLocalOffset = element.getChildOffset(child);
+      final childConsumed = _routeMouseEvent(
+        child,
+        event,
+        absOffset + childLocalOffset,
+      );
+      if (childConsumed) {
+        return true;
+      }
+    }
+
+    final elWidget = element.widget;
+    final localX = sx - absOffset.dx.toInt();
+    final localY = sy - absOffset.dy.toInt();
+
+    if (element is StatefulElement) {
+      final state = element.state;
+      try {
+        (state as dynamic).handleMouseEvent(event, localX, localY);
+        return true;
+      } catch (_) {
+        // Ignored if not supported
+      }
+    }
+
+    try {
+      (element as dynamic).handleMouseEvent(event, localX, localY);
+      return true;
+    } catch (_) {
+      // Ignored if not supported
+    }
+
+    try {
+      (elWidget as dynamic).handleMouseEvent(event, localX, localY);
+      return true;
+    } catch (_) {
+      // Ignored if not supported
+    }
+
+    return false;
   }
 }
 
