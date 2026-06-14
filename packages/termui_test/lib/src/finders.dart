@@ -27,6 +27,10 @@ class CommonFinders {
 
   /// Finds widgets that have the specified [key].
   Finder byKey(Key key) => _ByKeyFinder(key);
+
+  /// Finds widgets matching [matching] that are descendants of widgets matching [of].
+  Finder descendant({required Finder of, required Finder matching}) =>
+      _DescendantFinder(of, matching);
 }
 
 /// The global finder builder namespace.
@@ -220,5 +224,26 @@ class _FinderMatcher extends Matcher {
     final elements = item.apply(collectAllElements(root));
     final count = elements.length;
     return mismatchDescription.add('found $count widgets matching $item');
+  }
+}
+
+class _DescendantFinder extends Finder {
+  final Finder of;
+  final Finder matching;
+  const _DescendantFinder(this.of, this.matching);
+
+  @override
+  Iterable<Element> apply(Iterable<Element> candidates) {
+    final parentElements = of.apply(candidates);
+    if (parentElements.isEmpty) return const [];
+
+    // For every matching parent, search its children
+    final results = <Element>{};
+    for (final parent in parentElements) {
+      final children = <Element>[];
+      parent.visitChildren((child) => _collectElements(child, children));
+      results.addAll(matching.apply(children));
+    }
+    return results;
   }
 }
