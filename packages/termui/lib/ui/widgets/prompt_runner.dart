@@ -342,6 +342,10 @@ class PromptRunner<T> {
             }
           }
 
+          if (isDone) {
+            BuildOwner.markNeedsBuild(rootElement);
+          }
+
           // Force a redraw to reflect any selections or edits.
           draw();
         } else if (event is term.MouseEvent) {

@@ -784,6 +784,7 @@ class InheritedElement extends Element {
         childElement!.update(inheritedWidget.child);
       }
     } else {
+      childElement?.unmount();
       childElement = inheritedWidget.child.createElement();
       childElement!.mount(this);
     }
