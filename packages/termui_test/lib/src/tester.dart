@@ -341,6 +341,12 @@ class TerminalTester {
       return;
     }
 
+    // Explicitly trap Shift+Tab (Back Tab)
+    if (key == LogicalKey.tab && shift && !control && !alt) {
+      sendString('\x1b[Z');
+      return;
+    }
+
     // Explicitly trap Control+Backspace
     if (key == LogicalKey.backspace && control && !alt && !shift) {
       // \x1b[ = CSI, 127 = Backspace, 5 = Control modifier, u = Kitty protocol

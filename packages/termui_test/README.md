@@ -51,7 +51,7 @@ void main() {
 
       // Simulate a mouse tap/click on the 'Submit' text widget
       tester.tap(find.text('Submit'));
-      
+
       // Wait for layout updates or timers to settle
       await tester.pump();
 
@@ -89,7 +89,7 @@ dart test --dart-define=ASCIICAST_TESTS=false
 
 ### 2. Dynamic Trace Filenames
 
-When trace recording is enabled, trace files are automatically generated using dynamic, sanitized filenames based on the active test name (retrieved via `Invoker`/`TestHandle`). 
+When trace recording is enabled, trace files are automatically generated using dynamic, sanitized filenames based on the active test name (retrieved via `Invoker`/`TestHandle`).
 - A test named `'Verify multi-pane settings layout'` will produce a sanitized trace file named `verify_multi_pane_settings_layout.cast` in the project root.
 - Unnamed or empty test states default to `trace.cast`.
 
