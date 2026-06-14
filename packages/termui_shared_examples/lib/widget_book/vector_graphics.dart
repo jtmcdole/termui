@@ -34,10 +34,15 @@ class VectorGraphicsExample extends WidgetBookExample {
   Canvas? squareCanvas;
 
   @override
-  void tick(Duration duration) {
+  bool get requiresTick => true;
+
+  @override
+  bool tick(Duration duration) {
     if (!vectorGraphicsPaused) {
       rotationFrameCount++;
+      return true;
     }
+    return false;
   }
 
   @override

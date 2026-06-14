@@ -397,12 +397,22 @@ abstract class Element implements BuildContext {
   /// Returns the offset of [child] relative to this element's local space.
   Offset getChildOffset(Element child) => Offset.zero;
 
+  bool _mounted = false;
+
+  /// Whether this element is currently mounted in the tree.
+  bool get mounted => _mounted;
+
+  int _depth = 0;
+  bool _dirty = false;
+
   /// Creates an element that uses the given [widget] as its configuration.
   Element(this.widget);
 
   /// Adds this element to the tree as a child of [parent].
   void mount(Element? parent) {
     this.parent = parent;
+    _depth = parent != null ? parent._depth + 1 : 0;
+    _mounted = true;
     final k = widget.key;
     if (k is GlobalKey) {
       GlobalKey._registry[k] = this;
@@ -415,12 +425,19 @@ abstract class Element implements BuildContext {
     if (k is GlobalKey && GlobalKey._registry[k] == this) {
       GlobalKey._registry.remove(k);
     }
+    _mounted = false;
     parent = null;
   }
 
   /// Updates this element to use a new [Widget] configuration.
   void update(Widget newWidget) {
     widget = newWidget;
+  }
+
+  /// Performs the actual rebuild and clears the dirty flag.
+  void performRebuild() {
+    _dirty = false;
+    rebuild();
   }
 
   /// Calculates the size of the element based on the given constraints.
@@ -531,7 +548,9 @@ class StatelessElement extends Element {
 
     if (childElement != null &&
         childElement!.widget.runtimeType == builtWidget.runtimeType) {
-      childElement!.update(builtWidget);
+      if (!identical(childElement!.widget, builtWidget)) {
+        childElement!.update(builtWidget);
+      }
     } else {
       childElement?.unmount();
       childElement = builtWidget.createElement();
@@ -620,7 +639,13 @@ abstract class State<T extends StatefulWidget> {
   /// Notifies the framework that the internal state of this object has changed.
   void setState(VoidCallback fn) {
     fn();
-    (_context as StatefulElement).rebuild();
+    if (_context != null) {
+      if (State.onNeedRepaint != null) {
+        BuildOwner.markNeedsBuild(_context as Element);
+      } else {
+        (_context as Element).performRebuild();
+      }
+    }
     if (onNeedRepaint != null) {
       onNeedRepaint!();
     }
@@ -671,7 +696,9 @@ class StatefulElement extends Element {
 
     if (childElement != null &&
         childElement!.widget.runtimeType == builtWidget.runtimeType) {
-      childElement!.update(builtWidget);
+      if (!identical(childElement!.widget, builtWidget)) {
+        childElement!.update(builtWidget);
+      }
     } else {
       childElement?.unmount();
       childElement = builtWidget.createElement();
@@ -750,7 +777,9 @@ class InheritedElement extends Element {
     final inheritedWidget = widget as InheritedWidget;
     if (childElement != null &&
         childElement!.widget.runtimeType == inheritedWidget.child.runtimeType) {
-      childElement!.update(inheritedWidget.child);
+      if (!identical(childElement!.widget, inheritedWidget.child)) {
+        childElement!.update(inheritedWidget.child);
+      }
     } else {
       childElement = inheritedWidget.child.createElement();
       childElement!.mount(this);
@@ -1478,44 +1507,51 @@ class StackElement extends Element {
         int childWidth = width;
         int childHeight = height;
 
-        if (childWidget.left != null) {
-          childX = childWidget.left!;
-          if (childWidget.right != null) {
-            childWidth = width - childWidget.left! - childWidget.right!;
+        if (childWidget.isCentered) {
+          childWidth = childWidget.width ?? width;
+          childHeight = childWidget.height ?? height;
+          childX = (width - childWidth) ~/ 2;
+          childY = (height - childHeight) ~/ 2;
+        } else {
+          if (childWidget.left != null) {
+            childX = childWidget.left!;
+            if (childWidget.right != null) {
+              childWidth = width - childWidget.left! - childWidget.right!;
+            } else if (childWidget.width != null) {
+              childWidth = childWidget.width!;
+            } else {
+              childWidth = width - childWidget.left!;
+            }
+          } else if (childWidget.right != null) {
+            if (childWidget.width != null) {
+              childWidth = childWidget.width!;
+              childX = width - childWidget.right! - childWidth;
+            } else {
+              childWidth = width - childWidget.right!;
+            }
           } else if (childWidget.width != null) {
             childWidth = childWidget.width!;
-          } else {
-            childWidth = width - childWidget.left!;
           }
-        } else if (childWidget.right != null) {
-          if (childWidget.width != null) {
-            childWidth = childWidget.width!;
-            childX = width - childWidget.right! - childWidth;
-          } else {
-            childWidth = width - childWidget.right!;
-          }
-        } else if (childWidget.width != null) {
-          childWidth = childWidget.width!;
-        }
 
-        if (childWidget.top != null) {
-          childY = childWidget.top!;
-          if (childWidget.bottom != null) {
-            childHeight = height - childWidget.top! - childWidget.bottom!;
+          if (childWidget.top != null) {
+            childY = childWidget.top!;
+            if (childWidget.bottom != null) {
+              childHeight = height - childWidget.top! - childWidget.bottom!;
+            } else if (childWidget.height != null) {
+              childHeight = childWidget.height!;
+            } else {
+              childHeight = height - childWidget.top!;
+            }
+          } else if (childWidget.bottom != null) {
+            if (childWidget.height != null) {
+              childHeight = childWidget.height!;
+              childY = height - childWidget.bottom! - childHeight;
+            } else {
+              childHeight = height - childWidget.bottom!;
+            }
           } else if (childWidget.height != null) {
             childHeight = childWidget.height!;
-          } else {
-            childHeight = height - childWidget.top!;
           }
-        } else if (childWidget.bottom != null) {
-          if (childWidget.height != null) {
-            childHeight = childWidget.height!;
-            childY = height - childWidget.bottom! - childHeight;
-          } else {
-            childHeight = height - childWidget.bottom!;
-          }
-        } else if (childWidget.height != null) {
-          childHeight = childWidget.height!;
         }
 
         _childOffsets[i] = Offset(childX, childY);
@@ -1584,6 +1620,9 @@ class Positioned extends Widget {
   /// The constrained height.
   final int? height;
 
+  /// Whether this positioned widget should be centered in the stack.
+  final bool isCentered;
+
   /// The child widget.
   final Widget child;
 
@@ -1596,7 +1635,15 @@ class Positioned extends Widget {
     this.width,
     this.height,
     required this.child,
-  });
+  }) : isCentered = false;
+
+  /// Creates a centered positioned widget inside a [Stack].
+  const Positioned.center({this.width, this.height, required this.child})
+    : left = null,
+      top = null,
+      right = null,
+      bottom = null,
+      isCentered = true;
 
   @override
   Element createElement() => PositionedElement(this);
@@ -2218,5 +2265,33 @@ class ElementWidgetElement extends Element {
   void visitChildren(void Function(Element child) visitor) {
     final w = widget as ElementWidget;
     if (w._element != null) visitor(w._element!);
+  }
+}
+
+/// Manages the build lifecycle and dirty element queue.
+class BuildOwner {
+  static final Set<Element> _dirtyElements = {};
+
+  /// Marks the element as dirty and schedules it for rebuilding.
+  static void markNeedsBuild(Element element) {
+    if (element._dirty) return;
+    element._dirty = true;
+    _dirtyElements.add(element);
+  }
+
+  /// Rebuilds all registered dirty elements, depth-sorted (parents first).
+  static void buildScope() {
+    if (_dirtyElements.isEmpty) return;
+
+    final sorted = _dirtyElements.where((e) => e.mounted).toList()
+      ..sort((a, b) => a._depth.compareTo(b._depth));
+
+    _dirtyElements.clear();
+
+    for (final element in sorted) {
+      if (element.mounted && element._dirty) {
+        element.performRebuild();
+      }
+    }
   }
 }
