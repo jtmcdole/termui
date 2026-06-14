@@ -473,7 +473,7 @@ void main() {
     });
 
     test('TextField - Cursor Navigation and Edit Operations', () async {
-      final tester = TerminalTester();
+      final tester = TerminalTester(recordTraces: true);
       tester.run(() async {
         final app = WidgetBookApp(
           terminal: tester.terminal,
@@ -505,26 +505,19 @@ void main() {
           );
           expect(find.textPattern(r'\(focused\)'), findsOneWidget);
 
-          // Helper function to simulate typing a string
-          void typeText(String text) {
-            for (final char in text.split('')) {
-              tester.sendKey(LogicalKey.character(char));
-            }
-          }
-
           // 3. Initial Input
-          typeText('one two three');
+          tester.typeText('one two three');
           await tester.pump();
           expect(find.textPattern('one two three'), findsOneWidget);
 
           // 4. Test Home & End Keys
           tester.sendKey(LogicalKey.home);
-          typeText('start ');
+          tester.typeText('start ');
           await tester.pump();
           expect(find.textPattern('start one two three'), findsOneWidget);
 
           tester.sendKey(LogicalKey.end);
-          typeText(' end');
+          tester.typeText(' end');
           await tester.pump();
           expect(find.textPattern('start one two three end'), findsOneWidget);
 
@@ -533,7 +526,7 @@ void main() {
           for (var i = 0; i < 3; i++) {
             tester.sendKey(LogicalKey.arrowLeft);
           }
-          typeText('X');
+          tester.typeText('X');
           await tester.pump();
           tester.expectUI(
             find.textPattern('start one two three Xend'),
@@ -542,7 +535,7 @@ void main() {
 
           // Move right 1 space (cursor after 'e'), insert 'Y'
           tester.sendKey(LogicalKey.arrowRight);
-          typeText('Y');
+          tester.typeText('Y');
           await tester.pump();
           expect(find.textPattern('start one two three XeYnd'), findsOneWidget);
 
@@ -686,7 +679,7 @@ void main() {
     });
 
     test('Forms & Validation - Focus Traversal and Enter Key Validation', () async {
-      final tester = TerminalTester();
+      final tester = TerminalTester(recordTraces: true);
       tester.run(() async {
         final app = WidgetBookApp(
           terminal: tester.terminal,

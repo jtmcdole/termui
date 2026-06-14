@@ -8,7 +8,11 @@ void main() {
   group('AsciicastRecorder', () {
     test('records asciicast header and frame updates', () {
       final sb = StringBuffer();
-      final recorder = AsciicastRecorder(sb, width: 80, height: 24);
+      final recorder = AsciicastRecorder(
+        StringSinkAsciicastWriter(sb),
+        width: 80,
+        height: 24,
+      );
 
       final buffer = Buffer.blank(80, 24);
       buffer.setCell(0, 0, Cell('A', Style.empty));
@@ -26,13 +30,11 @@ void main() {
       expect(header['height'], equals(24));
 
       // Verify first frame event format (Line 1)
-      if (lines.length > 1) {
-        final event = jsonDecode(lines[1]) as List<dynamic>;
-        expect(event.length, equals(3));
-        expect(event[0], isA<double>()); // timestamp
-        expect(event[1], equals('o')); // output type
-        expect(event[2], contains('A')); // character written
-      }
+      final event = jsonDecode(lines[1]) as List<dynamic>;
+      expect(event.length, equals(3));
+      expect(event[0], isA<double>()); // timestamp
+      expect(event[1], equals('o')); // output type
+      expect(event[2], contains('A')); // character written
     });
   });
 }

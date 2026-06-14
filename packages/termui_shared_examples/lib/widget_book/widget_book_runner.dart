@@ -313,7 +313,11 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
       final element = context as Element;
       final w = element.size.width;
       final h = element.size.height;
-      castRecorder = AsciicastRecorder(castOutput!, width: w, height: h);
+      castRecorder = AsciicastRecorder(
+        StringSinkAsciicastWriter(castOutput!),
+        width: w,
+        height: h,
+      );
       _setStatus('Recording asciicast...');
     }
   }
