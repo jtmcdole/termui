@@ -175,6 +175,16 @@ abstract class FormFieldState<T> extends State<FormField<T>> {
   }
 
   @override
+  void didUpdateWidget(covariant FormField<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget._state = this;
+    widget.value = oldWidget.value;
+    widget.errorText = oldWidget.errorText;
+    widget.touched = oldWidget.touched;
+    widget.focused = oldWidget.focused;
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     Form.of(context)?.registerField(this);
@@ -532,6 +542,13 @@ class FormState extends State<Form> implements KeyEventHandler {
   }
 
   @override
+  void didUpdateWidget(covariant Form oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    widget._state = this;
+    widget._activeFieldIndex = oldWidget._activeFieldIndex;
+  }
+
+  @override
   void dispose() {
     if (widget._state == this) {
       widget._state = null;
@@ -636,6 +653,37 @@ class TextFormField extends FormField<String> {
 class _TextFormFieldState extends FormFieldState<String>
     implements KeyEventHandler {
   @override
+  void initState() {
+    super.initState();
+    (widget as TextFormField)._input.controller.addListener(
+      _onControllerChanged,
+    );
+  }
+
+  @override
+  void dispose() {
+    (widget as TextFormField)._input.controller.removeListener(
+      _onControllerChanged,
+    );
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant TextFormField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldController = oldWidget._input.controller;
+    final newController = (widget as TextFormField)._input.controller;
+    if (newController != oldController) {
+      oldController.removeListener(_onControllerChanged);
+      newController.addListener(_onControllerChanged);
+    }
+  }
+
+  void _onControllerChanged() {
+    widget.value = (widget as TextFormField)._input.value;
+  }
+
+  @override
   bool handleKeyEvent(term.KeyEvent event) {
     return widget.handleKeyEvent(event);
   }
@@ -687,7 +735,19 @@ class _TextFormFieldRenderWidget extends StatelessWidget {
         height: 1,
         child: Padding(
           padding: const EdgeInsets.only(left: 2),
-          child: widget._input,
+          child: TextField(
+            key: widget._input.key,
+            controller: widget._input.controller,
+            focused: widget.focused,
+            style: widget._input.style,
+            cursorStyle: widget._input.cursorStyle,
+            placeholder: widget._input.placeholder,
+            placeholderStyle: widget._input.placeholderStyle,
+            multiline: widget._input.multiline,
+            customShortcuts: widget._input.customShortcuts,
+            focusNode: widget._input.focusNode,
+            onFocusChange: widget._input.onFocusChange,
+          ),
         ),
       ),
       if (hasError)
@@ -781,6 +841,37 @@ class TextAreaFormField extends FormField<String> {
 class _TextAreaFormFieldState extends FormFieldState<String>
     implements KeyEventHandler {
   @override
+  void initState() {
+    super.initState();
+    (widget as TextAreaFormField)._input.controller.addListener(
+      _onControllerChanged,
+    );
+  }
+
+  @override
+  void dispose() {
+    (widget as TextAreaFormField)._input.controller.removeListener(
+      _onControllerChanged,
+    );
+    super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant TextAreaFormField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final oldController = oldWidget._input.controller;
+    final newController = (widget as TextAreaFormField)._input.controller;
+    if (newController != oldController) {
+      oldController.removeListener(_onControllerChanged);
+      newController.addListener(_onControllerChanged);
+    }
+  }
+
+  void _onControllerChanged() {
+    widget.value = (widget as TextAreaFormField)._input.value;
+  }
+
+  @override
   bool handleKeyEvent(term.KeyEvent event) {
     return widget.handleKeyEvent(event);
   }
@@ -832,7 +923,19 @@ class _TextAreaFormFieldRenderWidget extends StatelessWidget {
         height: widget.fieldHeight,
         child: Padding(
           padding: const EdgeInsets.only(left: 2),
-          child: widget._input,
+          child: TextField(
+            key: widget._input.key,
+            controller: widget._input.controller,
+            focused: widget.focused,
+            style: widget._input.style,
+            cursorStyle: widget._input.cursorStyle,
+            placeholder: widget._input.placeholder,
+            placeholderStyle: widget._input.placeholderStyle,
+            multiline: widget._input.multiline,
+            customShortcuts: widget._input.customShortcuts,
+            focusNode: widget._input.focusNode,
+            onFocusChange: widget._input.onFocusChange,
+          ),
         ),
       ),
       if (hasError)

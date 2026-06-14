@@ -272,6 +272,12 @@ class TerminalTester {
     bool shift = false,
     bool alt = false,
   }) {
+    // Explicitly trap Enter
+    if (key == LogicalKey.enter) {
+      sendString('\n');
+      return;
+    }
+
     // Explicitly trap Control+Backspace
     if (key == LogicalKey.backspace && control && !alt && !shift) {
       // \x1b[ = CSI, 127 = Backspace, 5 = Control modifier, u = Kitty protocol

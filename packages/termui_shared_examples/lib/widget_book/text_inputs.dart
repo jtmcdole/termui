@@ -5,6 +5,8 @@ import 'package:termui/ui/widget_toolkit.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
+import 'package:termui/ui/window.dart';
+
 /// An example showcasing single-line and multi-line text input fields.
 class TextInputsExample extends WidgetBookExample {
   /// The single-line text field controller.
@@ -36,32 +38,7 @@ class TextInputsExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
-    final state = _key.currentState;
-    if (state == null) return false;
-
-    if (event.key == '\t' || event.key == 'backtab') {
-      state.cycleFocus(event.key == 'backtab');
-      return true;
-    }
-
-    final singleLineActive = state.activeFieldIndex == 0;
-
-    if (singleLineActive) {
-      if (event.type == ui.KeyType.down || event.type == ui.KeyType.enter) {
-        state.setActiveFieldIndex(1);
-      } else {
-        final field = state._buildSingleLineField(true);
-        field.handleKeyEvent(event);
-      }
-    } else {
-      final field = state._buildMultiLineField(true);
-      if (event.type == ui.KeyType.up && field.cursorLine == 0) {
-        state.setActiveFieldIndex(0);
-      } else {
-        field.handleKeyEvent(event);
-      }
-    }
-    return true;
+    return false;
   }
 
   @override
@@ -96,31 +73,26 @@ class TextInputsDemoWidget extends StatefulWidget {
 
 /// The state for [TextInputsDemoWidget].
 class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
-  /// The index of the currently active text field.
-  int activeFieldIndex = 0;
+  late final FocusNode _singleLineFocusNode = FocusNode(
+    id: 'single_line_input',
+  );
+  late final FocusNode _multiLineFocusNode = FocusNode(id: 'multi_line_input');
 
-  /// Cycles focus index.
-  void cycleFocus(bool reverse) {
-    setState(() {
-      if (reverse) {
-        activeFieldIndex = (activeFieldIndex - 1 + 2) % 2;
-      } else {
-        activeFieldIndex = (activeFieldIndex + 1) % 2;
-      }
-    });
-  }
-
-  /// Sets focus index.
-  void setActiveFieldIndex(int index) {
-    setState(() {
-      activeFieldIndex = index;
-    });
+  @override
+  void dispose() {
+    _singleLineFocusNode.dispose();
+    _multiLineFocusNode.dispose();
+    super.dispose();
   }
 
   /// Helper to build the single-line text field widget.
   TextField _buildSingleLineField(bool active) {
     return TextField(
       controller: widget.singleLineController,
+      focusNode: _singleLineFocusNode,
+      onFocusChange: (hasFocus) {
+        if (mounted) setState(() {});
+      },
       placeholder: 'Enter text here...',
       style: active
           ? const Style(foreground: CharmColors.charple)
@@ -129,6 +101,7 @@ class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
           ? const Style(
               foreground: CharmColors.pepper,
               background: CharmColors.charple,
+              modifiers: Modifier.reverse,
             )
           : const Style(modifiers: Modifier.none),
       multiline: false,
@@ -140,6 +113,10 @@ class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
   TextField _buildMultiLineField(bool active) {
     return TextField(
       controller: widget.multiLineController,
+      focusNode: _multiLineFocusNode,
+      onFocusChange: (hasFocus) {
+        if (mounted) setState(() {});
+      },
       style: active
           ? const Style(foreground: CharmColors.charple)
           : const Style(foreground: CharmColors.soda),
@@ -147,6 +124,7 @@ class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
           ? const Style(
               foreground: CharmColors.pepper,
               background: CharmColors.charple,
+              modifiers: Modifier.reverse,
             )
           : const Style(modifiers: Modifier.none),
       placeholder: 'Type multi-line text...',
@@ -157,8 +135,10 @@ class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final singleLineActive = widget.focusDemoPane && activeFieldIndex == 0;
-    final multiLineActive = widget.focusDemoPane && activeFieldIndex == 1;
+    final singleLineActive =
+        widget.focusDemoPane && _singleLineFocusNode.hasFocus;
+    final multiLineActive =
+        widget.focusDemoPane && _multiLineFocusNode.hasFocus;
 
     final singleLineField = _buildSingleLineField(singleLineActive);
     final multiLineField = _buildMultiLineField(multiLineActive);

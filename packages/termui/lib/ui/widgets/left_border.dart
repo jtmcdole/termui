@@ -67,6 +67,12 @@ class LeftBorderElement extends Element {
   }
 
   @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
   }

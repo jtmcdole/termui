@@ -4,6 +4,7 @@ import 'buffer.dart';
 import 'style.dart';
 import 'layout.dart';
 import 'event.dart';
+import 'event.dart' as ev;
 import '../perf/tracer.dart';
 
 /// A node in the keyboard focus tree.
@@ -157,6 +158,21 @@ class FocusNode {
     while (current != null) {
       if (current.onKeyEvent != null && current.onKeyEvent!(event)) {
         return true; // Consumed
+      }
+      if (current is FocusScopeNode) {
+        if (event.type == KeyType.tab ||
+            event.key == '\t' ||
+            event.key == 'backtab') {
+          final isShift =
+              event.modifiers.contains(ev.Modifier.shift) ||
+              event.key == 'backtab';
+          if (isShift) {
+            current.previousFocus();
+          } else {
+            current.nextFocus();
+          }
+          return true; // Consumed
+        }
       }
       current = current.parent;
     }

@@ -130,6 +130,13 @@ class SafeLayoutElement extends Element {
   }
 
   @override
+  void unmount() {
+    childElement?.unmount();
+    fallbackElement?.unmount();
+    super.unmount();
+  }
+
+  @override
   void paint(Buffer buffer, Offset offset) {
     if (useFallback) {
       fallbackElement?.paint(buffer, offset);
