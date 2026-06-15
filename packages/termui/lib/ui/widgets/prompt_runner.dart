@@ -108,7 +108,7 @@ class UserInterruptException extends PromptAbortedException {
 ///   onComplete: () => myController.text,
 /// ).run();
 /// ```
-class PromptRunner<T> {
+class PromptRunner<T> implements SceneRenderer {
   /// The active terminal instance.
   final term.Terminal terminal;
 
@@ -161,8 +161,21 @@ class PromptRunner<T> {
   /// Exposes whether the prompt runner is disposed.
   bool get isDisposed => _isDisposed;
 
+  @override
   /// Exposes the current buffer containing the rendered output.
   Buffer? get currentBuffer => _currentBuffer;
+
+  @override
+  bool get wantsMouseTracking => debugPaintHoverEnabled;
+
+  @override
+  bool get wantsAlternateScreen => alternateScreen;
+
+  @override
+  bool get showsCursor => false;
+
+  @override
+  Point<int>? get requestedCursorPosition => null;
 
   /// Creates a new [PromptRunner].
   PromptRunner({
@@ -868,4 +881,64 @@ bool _routeToElement(
   }
 
   return false;
+}
+
+/// Defines sizing policies for layout layers in a compositing scene.
+enum LayerSizing {
+  /// Matches the dimensions of the terminal screen/viewport.
+  fullscreen,
+
+  /// Calculates dimensions dynamically based on child widget intrinsic height and width.
+  intrinsic,
+
+  /// Uses hardcoded dimensions.
+  fixed,
+}
+
+/// A contract defining terminal state requests from a runner or layer.
+abstract interface class TerminalStateRequest {
+  /// Whether mouse tracking features are requested.
+  bool get wantsMouseTracking;
+
+  /// Whether alternate screen buffer mode is requested.
+  bool get wantsAlternateScreen;
+
+  /// Whether the hardware terminal cursor should be shown.
+  bool get showsCursor;
+
+  /// The requested cursor coordinates, if any.
+  Point<int>? get requestedCursorPosition;
+}
+
+/// An interface representing a rendering system in a composited scene.
+abstract interface class SceneRenderer implements TerminalStateRequest {
+  /// The current rendering output buffer.
+  Buffer? get currentBuffer;
+}
+
+/// Represents a single renderable layer inside a composited terminal scene.
+class SceneLayer {
+  /// The renderer managing this layer.
+  final SceneRenderer renderer;
+
+  /// The sizing policy for this layer.
+  final LayerSizing sizing;
+
+  /// The horizontal column coordinate of the layer's top-left corner.
+  int x;
+
+  /// The vertical row coordinate of the layer's top-left corner.
+  int y;
+
+  /// The stacking order index of the layer.
+  int zIndex;
+
+  /// Creates a new [SceneLayer] with the given [renderer], [sizing], and placement parameters.
+  SceneLayer({
+    required this.renderer,
+    required this.sizing,
+    this.x = 0,
+    this.y = 0,
+    this.zIndex = 0,
+  });
 }
