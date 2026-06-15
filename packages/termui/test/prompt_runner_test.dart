@@ -197,8 +197,7 @@ void main() {
         await future;
       } catch (_) {}
 
-      // Repaint handler should be cleared and cursor restored
-      expect(State.onNeedRepaint, isNull);
+      // Cursor restored
       expect(terminal.isCursorVisible, isTrue);
     });
 
@@ -288,6 +287,49 @@ void main() {
 
       final result = await runner.run();
       expect(result, 'Scope Completed!');
+    });
+
+    test('Managed Mode Bypasses Hardware Hooks and Writes', () async {
+      final runner = PromptRunner<String>(
+        terminal: terminal,
+        widget: const Text('Managed Mode Content'),
+        mode: ExecutionMode.managed,
+        exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
+        onComplete: () => 'Managed Done',
+      );
+
+      final future = runner.run();
+      await Future.delayed(const Duration(milliseconds: 10));
+
+      expect(runner.currentBuffer, isNotNull);
+      expect(runner.currentBuffer!.width, equals(80));
+
+      var hasContent = false;
+      for (var y = 0; y < runner.currentBuffer!.height; y++) {
+        for (var x = 0; x < runner.currentBuffer!.width; x++) {
+          final char = runner.currentBuffer!.getCell(x, y)?.char;
+          if (char != null && char.isNotEmpty && char != ' ') {
+            hasContent = true;
+          }
+        }
+      }
+      expect(hasContent, isTrue);
+
+      expect(backend.writtenData, isEmpty);
+
+      runner.pump();
+      expect(runner.currentBuffer, isNotNull);
+
+      terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
+
+      bool completed = false;
+      future.then((_) => completed = true);
+      await Future.delayed(const Duration(milliseconds: 10));
+      expect(completed, isFalse);
+
+      runner.dispose();
+      final result = await future;
+      expect(result, isNull);
     });
   });
 }

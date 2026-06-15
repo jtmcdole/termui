@@ -20,7 +20,7 @@ void main() async {
 
   final screenBuffer = Buffer.blank(width, height);
   final renderer = Renderer(width, height);
-  final windowManager = WindowManager();
+  final windowManager = WindowManager()..screenSize = Size(width, height);
 
   int currentDelayMs = 30;
 

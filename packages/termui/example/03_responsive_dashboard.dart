@@ -493,10 +493,16 @@ void main() async {
 
     final elementWrapper = ElementWidget(const DashboardApp());
 
+    late final BuildOwner buildOwner;
+
     void drawFrame() {
+      buildOwner.buildScope();
       buffer.clear();
       buffer.fill(Cell(' ', Style.empty));
-      elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+      elementWrapper.layout(
+        BoxConstraints.tight(Size(width, height)),
+        buildOwner,
+      );
       elementWrapper.paint(buffer, Offset.zero);
 
       final sb = StringBuffer();
@@ -518,7 +524,8 @@ void main() async {
       }
     }
 
-    State.onNeedRepaint = scheduleRepaint;
+    buildOwner = BuildOwner(onNeedVisualUpdate: scheduleRepaint);
+
     drawFrame();
 
     final sizeSubscription = terminal.watchSize().listen((size) {
@@ -544,7 +551,6 @@ void main() async {
     } finally {
       sizeSubscription.cancel();
       elementWrapper.element?.unmount();
-      State.onNeedRepaint = null;
       terminal.showCursor();
       terminal.exitAlternateScreen();
       terminal.resetStyle();

@@ -400,7 +400,16 @@ abstract class Element implements BuildContext {
   bool get mounted => _mounted;
 
   int _depth = 0;
+
+  /// The depth of this element in the widget tree.
+  int get depth => _depth;
   bool _dirty = false;
+
+  BuildOwner? _owner;
+
+  /// The BuildOwner managing this element, resolving up the parent chain.
+  BuildOwner? get owner => _owner ?? parent?.owner;
+  set owner(BuildOwner? value) => _owner = value;
 
   /// Creates an element that uses the given [widget] as its configuration.
   Element(this.widget);
@@ -408,11 +417,24 @@ abstract class Element implements BuildContext {
   /// Adds this element to the tree as a child of [parent].
   void mount(Element? parent) {
     this.parent = parent;
+    if (parent != null) {
+      _owner = parent.owner;
+    }
     _depth = parent != null ? parent._depth + 1 : 0;
     _mounted = true;
     final k = widget.key;
     if (k is GlobalKey) {
       GlobalKey._registry[k] = this;
+    }
+  }
+
+  /// Marks this element as needing a build.
+  void markNeedsBuild() {
+    final activeOwner = owner;
+    if (activeOwner != null) {
+      activeOwner.scheduleBuildFor(this);
+    } else {
+      performRebuild();
     }
   }
 
@@ -621,9 +643,6 @@ abstract class State<T extends StatefulWidget> {
   /// Whether this [State] object is currently in a tree.
   bool get mounted => _context != null;
 
-  /// Optional callback invoked when the tree needs repainting.
-  static VoidCallback? onNeedRepaint;
-
   /// Called when this object is inserted into the tree.
   void initState() {}
 
@@ -640,14 +659,7 @@ abstract class State<T extends StatefulWidget> {
   void setState(VoidCallback fn) {
     fn();
     if (_context != null) {
-      if (State.onNeedRepaint != null) {
-        BuildOwner.markNeedsBuild(_context as Element);
-      } else {
-        (_context as Element).performRebuild();
-      }
-    }
-    if (onNeedRepaint != null) {
-      onNeedRepaint!();
+      (_context as Element).markNeedsBuild();
     }
   }
 
@@ -2160,9 +2172,12 @@ class ElementWidget extends Widget {
   Element createElement() => ElementWidgetElement(this);
 
   /// Resolves the layout of the embedded widget tree.
-  void layout(BoxConstraints constraints) {
+  void layout(BoxConstraints constraints, [BuildOwner? owner]) {
     if (_element == null) {
       _element = child.createElement();
+      if (owner != null) {
+        _element!.owner = owner;
+      }
       _element!.mount(null);
     } else {
       _element!.update(child);
@@ -2254,24 +2269,27 @@ class ElementWidgetElement extends Element {
 
 /// Manages the build lifecycle and dirty element queue.
 class BuildOwner {
-  static final Set<Element> _dirtyElements = {};
+  /// Callback triggered when a visual update (rebuild) is needed.
+  final void Function()? onNeedVisualUpdate;
+  final Set<Element> _dirtyElements = {};
 
-  /// Marks the element as dirty and schedules it for rebuilding.
-  static void markNeedsBuild(Element element) {
+  /// Creates a new [BuildOwner] with an optional [onNeedVisualUpdate] callback.
+  BuildOwner({this.onNeedVisualUpdate});
+
+  /// Schedules the given [element] to be rebuilt.
+  void scheduleBuildFor(Element element) {
     if (element._dirty) return;
     element._dirty = true;
     _dirtyElements.add(element);
+    onNeedVisualUpdate?.call();
   }
 
-  /// Rebuilds all registered dirty elements, depth-sorted (parents first).
-  static void buildScope() {
+  /// Rebuilds all dirty elements that have been scheduled.
+  void buildScope() {
     if (_dirtyElements.isEmpty) return;
-
     final sorted = _dirtyElements.where((e) => e.mounted).toList()
       ..sort((a, b) => a._depth.compareTo(b._depth));
-
     _dirtyElements.clear();
-
     for (final element in sorted) {
       if (element.mounted && element._dirty) {
         element.performRebuild();
