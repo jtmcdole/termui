@@ -510,6 +510,9 @@ class WindowManager {
   /// The list of currently managed windows.
   final List<Window> windows = [];
 
+  /// The size of the screen/viewport to clamp window resizing and dragging.
+  Size screenSize = const Size(80, 24);
+
   /// The root focus node for the window manager.
   final FocusNode rootFocusNode = FocusNode(id: 'root');
 
@@ -586,15 +589,20 @@ class WindowManager {
         Tracer.record(_traceWindowResizeId, Phase.begin);
         try {
           final b = _resizingWindow!.bounds;
+          final maxW = screenSize.width;
+          final maxH = screenSize.height;
           if (_resizeBottomRight) {
-            final newWidth = (sx - b.x + 1).clamp(10, 100);
-            final newHeight = (sy - b.y + 1).clamp(5, 40);
+            final limitW = (maxW - b.x) < 10 ? 10 : maxW - b.x;
+            final limitH = (maxH - b.y) < 5 ? 5 : maxH - b.y;
+            final newWidth = (sx - b.x + 1).clamp(10, limitW);
+            final newHeight = (sy - b.y + 1).clamp(5, limitH);
             _resizingWindow!.bounds = Rect(b.x, b.y, newWidth, newHeight);
           } else if (_resizeBottomLeft) {
             final rightEdge = b.x + b.width;
             final newX = sx.clamp(0, rightEdge - 10);
             final newWidth = rightEdge - newX;
-            final newHeight = (sy - b.y + 1).clamp(5, 40);
+            final limitH = (maxH - b.y) < 5 ? 5 : maxH - b.y;
+            final newHeight = (sy - b.y + 1).clamp(5, limitH);
             _resizingWindow!.bounds = Rect(newX, b.y, newWidth, newHeight);
           }
         } finally {
@@ -604,14 +612,18 @@ class WindowManager {
       }
 
       if (_draggingWindow != null) {
-        final newX = sx - _dragStartX;
-        final newY = sy - _dragStartY;
-        _draggingWindow!.bounds = Rect(
-          newX,
-          newY,
-          _draggingWindow!.bounds.width,
-          _draggingWindow!.bounds.height,
-        );
+        final maxW = screenSize.width;
+        final maxH = screenSize.height;
+        final width = _draggingWindow!.bounds.width;
+        final height = _draggingWindow!.bounds.height;
+        final targetX = sx - _dragStartX;
+        final targetY = sy - _dragStartY;
+
+        // Clamp so the window title bar remains accessible
+        final newX = targetX.clamp(-width + 3, maxW - 3);
+        final newY = targetY.clamp(0, maxH - 1);
+
+        _draggingWindow!.bounds = Rect(newX, newY, width, height);
         return true;
       }
     }

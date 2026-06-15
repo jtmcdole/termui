@@ -362,13 +362,19 @@ void main() async {
   );
 
   // 4. Set up rendering logic
+  late final BuildOwner buildOwner;
+
   void drawFrame() {
+    buildOwner.buildScope();
     buffer.clear();
     // Fill background with blank cells
     buffer.fill(Cell(' ', Style.empty));
 
     // Render the mounted element tree to the buffer
-    elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+    elementWrapper.layout(
+      BoxConstraints.tight(Size(width, height)),
+      buildOwner,
+    );
     elementWrapper.paint(buffer, Offset.zero);
 
     // Output to stdout via Renderer diffing
@@ -377,8 +383,7 @@ void main() async {
     stdout.write(sb.toString());
   }
 
-  // Hook StatefulWidget repaint requests to our frame render function
-  State.onNeedRepaint = drawFrame;
+  buildOwner = BuildOwner(onNeedVisualUpdate: drawFrame);
 
   // Watch for window size changes and adapt
   final sizeSubscription = terminal.watchSize().listen((size) {

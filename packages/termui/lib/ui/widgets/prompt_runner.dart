@@ -1,10 +1,14 @@
 import 'dart:async';
+import 'dart:math';
 import '../../terminal/terminal.dart' as term;
 import '../buffer.dart';
 import '../layout.dart';
 import '../renderer.dart';
 import 'focus.dart';
 import '../window.dart';
+import '../termui_debug.dart';
+import '../color.dart';
+import '../style.dart';
 
 /// An interface that indicates a widget or state can receive keyboard focus.
 abstract interface class Focusable {
@@ -43,6 +47,15 @@ enum PromptExitAction {
 
   /// Rejects the prompt runner's future by throwing a [PromptAbortedException].
   abort,
+}
+
+/// Defines the execution mode for the [PromptRunner].
+enum ExecutionMode {
+  /// The runner manages its own terminal event subscriptions, input handling, and terminal writing.
+  standalone,
+
+  /// The runner is controlled by an external manager, bypassing hardware hooks and direct terminal writing.
+  managed,
 }
 
 /// Base exception thrown when a [PromptRunner] is aborted via [PromptExitAction.abort].
@@ -120,6 +133,9 @@ class PromptRunner<T> {
   /// Mapping of exit triggers to their corresponding actions.
   final Map<PromptExitTrigger, PromptExitAction> exitConditions;
 
+  /// The execution mode of this runner.
+  final ExecutionMode mode;
+
   /// Default exit conditions mapping.
   static const Map<PromptExitTrigger, PromptExitAction> defaultExitConditions =
       {
@@ -130,12 +146,23 @@ class PromptRunner<T> {
   Completer<T?>? _completer;
   Element? _rootElement;
   bool _isDisposed = false;
+  Point<int>? _lastMousePosition;
+  Element? _mouseCaptureElement;
+  BuildOwner? _buildOwner;
+
+  Buffer? _currentBuffer;
+  Renderer? _renderer;
+  int _width = 0;
+  int _computedHeight = 0;
 
   /// Exposes the root element of the mounted widget tree for testing.
   Element? get rootElement => _rootElement;
 
   /// Exposes whether the prompt runner is disposed.
   bool get isDisposed => _isDisposed;
+
+  /// Exposes the current buffer containing the rendered output.
+  Buffer? get currentBuffer => _currentBuffer;
 
   /// Creates a new [PromptRunner].
   PromptRunner({
@@ -147,6 +174,7 @@ class PromptRunner<T> {
     this.onComplete,
     this.alternateScreen = false,
     this.onFramePainted,
+    this.mode = ExecutionMode.standalone,
   }) : exitConditions = exitConditions ?? defaultExitConditions;
 
   /// Public programmatic abort.
@@ -232,21 +260,73 @@ class PromptRunner<T> {
     }
   }
 
+  /// Recalculates layout and paints the widget tree to the internal buffer.
+  void draw() {
+    if (_isDisposed) return;
+    final rootElement = _rootElement;
+    final buffer = _currentBuffer;
+    if (rootElement == null || buffer == null) return;
+
+    // Rebuild the element tree to consume any new state modifications.
+    _buildOwner?.buildScope();
+
+    buffer.clear();
+    // Render the rebuilt element tree on our double buffer canvas.
+    rootElement.layout(BoxConstraints.tight(Size(_width, _computedHeight)));
+    rootElement.paint(buffer, Offset.zero);
+
+    if (debugPaintHoverEnabled && _lastMousePosition != null) {
+      final hovered = _findHoveredElement(rootElement, _lastMousePosition);
+      if (hovered != null) {
+        _highlightHoveredElement(buffer, hovered);
+      }
+    }
+
+    if (debugPaintSizeEnabled) {
+      _drawElementOutlines(rootElement, buffer, Offset.zero);
+    }
+
+    onFramePainted?.call(buffer);
+
+    if (mode == ExecutionMode.standalone) {
+      final b = terminal.backend;
+      try {
+        (b as dynamic).buffer = buffer;
+      } catch (_) {
+        // Ignore if backend doesn't support a buffer setter (e.g. real/stub backend)
+      }
+
+      final sb = StringBuffer();
+      _renderer?.render(buffer, sb);
+      if (sb.isNotEmpty) {
+        b.write(sb.toString());
+      }
+    }
+  }
+
+  /// Forces a rebuild of the element tree and repaints to the internal buffer.
+  void pump() {
+    if (_rootElement != null) {
+      _rootElement!.markNeedsBuild();
+    }
+    draw();
+  }
+
   /// Starts the inline prompt loop and returns a Future containing the final result.
   Future<T?> run() async {
     final termSize = await terminal.size;
-    var width = termSize.x;
+    _width = termSize.x;
 
     // Autosize the height dynamically if not explicitly specified.
-    var computedHeight =
+    _computedHeight =
         height ??
-        (alternateScreen ? termSize.y : widget.getIntrinsicHeight(width));
+        (alternateScreen ? termSize.y : widget.getIntrinsicHeight(_width));
 
     // Create a temporary buffer and inline renderer.
-    var buffer = Buffer.blank(width, computedHeight);
-    var renderer = Renderer(
-      width,
-      computedHeight,
+    _currentBuffer = Buffer.blank(_width, _computedHeight);
+    _renderer = Renderer(
+      _width,
+      _computedHeight,
       mode: alternateScreen
           ? RenderingMode.alternateScreen
           : RenderingMode.inline,
@@ -266,126 +346,179 @@ class PromptRunner<T> {
       child: FocusScope(autofocus: true, child: widget),
     );
 
-    // Mount the widget tree element persistently so states and focus configuration
-    // are retained between keyboard event loop iterations.
-    final rootElement = scopedWidget.createElement()..mount(null);
+    _buildOwner = BuildOwner(onNeedVisualUpdate: draw);
+
+    final rootElement = scopedWidget.createElement();
+    rootElement.owner = _buildOwner;
+    rootElement.mount(null);
     _rootElement = rootElement;
 
-    void draw() {
-      if (_isDisposed) return;
-      // Rebuild the element tree to consume any new state modifications.
-      BuildOwner.buildScope();
-
-      buffer.clear();
-      // Render the rebuilt element tree on our double buffer canvas.
-      rootElement.layout(BoxConstraints.tight(Size(width, computedHeight)));
-      rootElement.paint(buffer, Offset.zero);
-
-      onFramePainted?.call(buffer);
-
-      final b = terminal.backend;
-      try {
-        (b as dynamic).buffer = buffer;
-      } catch (_) {
-        // Ignore if backend doesn't support a buffer setter (e.g. real/stub backend)
-      }
-
-      final sb = StringBuffer();
-      renderer.render(buffer, sb);
-      if (sb.isNotEmpty) {
-        b.write(sb.toString());
-      }
+    if (mode == ExecutionMode.standalone && debugPaintHoverEnabled) {
+      terminal.enableMouseTracking();
     }
 
-    // Connect the static repainter callback so that inner setState() invocations
-    // (e.g. from typing inside a TextField) trigger screen updates.
-    State.onNeedRepaint = draw;
-
     // Initial frame draw
-    BuildOwner.markNeedsBuild(rootElement);
+    rootElement.markNeedsBuild();
     draw();
 
-    final sizeSubscription = terminal.watchSize().listen((size) {
-      if (_isDisposed) return;
-      width = size.x;
-      computedHeight =
-          height ??
-          (alternateScreen ? size.y : widget.getIntrinsicHeight(width));
-      buffer.resize(width, computedHeight);
-      renderer = Renderer(
-        width,
-        computedHeight,
-        mode: alternateScreen
-            ? RenderingMode.alternateScreen
-            : RenderingMode.inline,
-      );
-      BuildOwner.markNeedsBuild(rootElement);
-      draw();
-    });
+    StreamSubscription<Point<int>>? sizeSubscription;
+    StreamSubscription<term.InputEvent>? subscription;
 
-    final subscription = terminal.events.listen(
-      (event) {
-        if (_completer!.isCompleted) return;
+    if (mode == ExecutionMode.standalone) {
+      sizeSubscription = terminal.watchSize().listen((size) {
+        if (_isDisposed) return;
+        _width = size.x;
+        _computedHeight =
+            height ??
+            (alternateScreen ? size.y : widget.getIntrinsicHeight(_width));
+        _currentBuffer?.resize(_width, _computedHeight);
+        _renderer = Renderer(
+          _width,
+          _computedHeight,
+          mode: alternateScreen
+              ? RenderingMode.alternateScreen
+              : RenderingMode.inline,
+        );
+        rootElement.markNeedsBuild();
+        draw();
+      });
 
-        if (event is term.KeyEvent) {
-          var isDone = false;
+      subscription = terminal.events.listen(
+        (event) {
+          if (_completer!.isCompleted) return;
 
-          // Step 1: Custom Interceptor
-          if (onKeyEvent != null) {
-            isDone = onKeyEvent!(event);
-          }
+          if (event is term.KeyEvent) {
+            var isDone = false;
 
-          // Step 2: Widget Event Routing
-          if (!isDone) {
-            isDone = _routeKeyEvent(rootElement, event);
-          }
+            // Step 1: Custom Interceptor
+            if (onKeyEvent != null) {
+              isDone = onKeyEvent!(event);
+            }
 
-          // Step 3: Standard & System Exit Evaluation
-          if (!isDone) {
-            final trigger = _detectTrigger(event);
-            if (trigger != null && exitConditions.containsKey(trigger)) {
-              _handleAction(trigger, event);
-              return;
+            // Step 2: Widget Event Routing
+            if (!isDone) {
+              isDone = _routeKeyEvent(rootElement, event);
+            }
+
+            // Step 3: Standard & System Exit Evaluation
+            if (!isDone) {
+              final trigger = _detectTrigger(event);
+              if (trigger != null && exitConditions.containsKey(trigger)) {
+                _handleAction(trigger, event);
+                return;
+              }
+            }
+
+            if (isDone) {
+              rootElement.markNeedsBuild();
+            }
+
+            // Force a redraw to reflect any selections or edits.
+            draw();
+          } else if (event is term.MouseEvent) {
+            if (debugPaintHoverEnabled) {
+              _lastMousePosition = Point<int>(event.x, event.y);
+            }
+            var isDone = false;
+            if (_mouseCaptureElement != null &&
+                (event.type == term.MouseEventType.drag ||
+                    event.type == term.MouseEventType.release)) {
+              final captureElement = _mouseCaptureElement!;
+              final absOffset = _getAbsoluteOffset(captureElement);
+              final sx = event.x - 1;
+              final sy = event.y - 1;
+              final localX = sx - absOffset.dx;
+              final localY = sy - absOffset.dy;
+
+              isDone = _routeToElement(captureElement, event, localX, localY);
+
+              if (event.type == term.MouseEventType.release) {
+                _mouseCaptureElement = null;
+              }
+            } else {
+              isDone = _routeMouseEvent(rootElement, event, Offset.zero);
+            }
+
+            if (isDone || debugPaintHoverEnabled) {
+              draw();
             }
           }
-
-          if (isDone) {
-            BuildOwner.markNeedsBuild(rootElement);
+        },
+        onDone: () {
+          if (_completer != null && !_completer!.isCompleted) {
+            _completer!.complete(null);
           }
-
-          // Force a redraw to reflect any selections or edits.
-          draw();
-        } else if (event is term.MouseEvent) {
-          final isDone = _routeMouseEvent(rootElement, event, Offset.zero);
-          if (isDone) {
-            draw();
+        },
+        onError: (e, stack) {
+          if (!_completer!.isCompleted) {
+            _completer!.completeError(e, stack);
           }
-        }
-      },
-      onDone: () {
-        if (_completer != null && !_completer!.isCompleted) {
-          _completer!.complete(null);
-        }
-      },
-      onError: (e, stack) {
-        if (!_completer!.isCompleted) {
-          _completer!.completeError(e, stack);
-        }
-      },
-    );
+        },
+      );
+    }
 
     try {
       return await _completer!.future;
     } finally {
       _isDisposed = true;
-      sizeSubscription.cancel();
-      subscription.cancel();
+      sizeSubscription?.cancel();
+      subscription?.cancel();
       // Restore cursor visibility
-      terminal.showCursor();
-      // Reset the repaint handler to avoid leaks.
-      State.onNeedRepaint = null;
+      if (mode == ExecutionMode.standalone) {
+        terminal.showCursor();
+        if (debugPaintHoverEnabled) {
+          terminal.disableMouseTracking();
+        }
+      }
       _rootElement?.unmount();
     }
+  }
+
+  /// Programmatically resizes the runner viewport and updates layout/buffers.
+  void resize(int width, int height) {
+    _width = width;
+    _computedHeight = height;
+    _currentBuffer?.resize(width, height);
+    _renderer = Renderer(
+      width,
+      height,
+      mode: alternateScreen
+          ? RenderingMode.alternateScreen
+          : RenderingMode.inline,
+    );
+
+    final rootElement = _rootElement;
+    if (rootElement != null) {
+      _updateWindowManagers(rootElement, width, height);
+      rootElement.markNeedsBuild();
+    }
+    draw();
+  }
+
+  void _updateWindowManagers(Element element, int width, int height) {
+    final w = element.widget;
+    try {
+      final dynamic dynWidget = w;
+      if (dynWidget.windowManager != null) {
+        final dynamic wm = dynWidget.windowManager;
+        wm.screenSize = Size(width, height);
+      }
+    } catch (_) {}
+
+    if (element is StatefulElement) {
+      final state = element.state;
+      try {
+        final dynamic dynState = state;
+        if (dynState.windowManager != null) {
+          final dynamic wm = dynState.windowManager;
+          wm.screenSize = Size(width, height);
+        }
+      } catch (_) {}
+    }
+
+    element.visitChildren((child) {
+      _updateWindowManagers(child, width, height);
+    });
   }
 
   /// Recursively walks the element tree to find the focused element and route the key event.
@@ -478,32 +611,15 @@ class PromptRunner<T> {
       }
     }
 
-    final elWidget = element.widget;
     final localX = sx - absOffset.dx.toInt();
     final localY = sy - absOffset.dy.toInt();
 
-    if (element is StatefulElement) {
-      final state = element.state;
-      try {
-        (state as dynamic).handleMouseEvent(event, localX, localY);
-        return true;
-      } catch (_) {
-        // Ignored if not supported
+    final handled = _routeToElement(element, event, localX, localY);
+    if (handled) {
+      if (event.type == term.MouseEventType.press) {
+        _mouseCaptureElement = element;
       }
-    }
-
-    try {
-      (element as dynamic).handleMouseEvent(event, localX, localY);
       return true;
-    } catch (_) {
-      // Ignored if not supported
-    }
-
-    try {
-      (elWidget as dynamic).handleMouseEvent(event, localX, localY);
-      return true;
-    } catch (_) {
-      // Ignored if not supported
     }
 
     return false;
@@ -526,6 +642,9 @@ extension PrintWidgetExtension on term.Terminal {
     element.mount(null);
     element.layout(BoxConstraints.tight(Size(width, height)));
     element.paint(buffer, Offset.zero);
+    if (debugPaintSizeEnabled) {
+      _drawElementOutlines(element, buffer, Offset.zero);
+    }
     element.unmount();
 
     final renderer = Renderer(width, height, mode: RenderingMode.inline);
@@ -582,4 +701,171 @@ class PromptScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(PromptScope oldWidget) => false;
+}
+
+void _drawBoxOutline(Buffer buffer, Offset offset, Size size, Style style) {
+  final ox = offset.dx;
+  final oy = offset.dy;
+  final w = size.width;
+  final h = size.height;
+
+  if (w <= 0 || h <= 0) return;
+
+  if (w == 1 && h == 1) {
+    _safeSetCell(buffer, ox, oy, '¤', style);
+    return;
+  }
+
+  // Draw horizontal edges
+  for (var x = ox + 1; x < ox + w - 1; x++) {
+    _safeSetCell(buffer, x, oy, '─', style);
+    _safeSetCell(buffer, x, oy + h - 1, '─', style);
+  }
+
+  // Draw vertical edges
+  for (var y = oy + 1; y < oy + h - 1; y++) {
+    _safeSetCell(buffer, ox, y, '│', style);
+    _safeSetCell(buffer, ox + w - 1, y, '│', style);
+  }
+
+  // Draw corners
+  _safeSetCell(buffer, ox, oy, '┌', style);
+  if (w > 1) {
+    _safeSetCell(buffer, ox + w - 1, oy, '┐', style);
+  }
+  if (h > 1) {
+    _safeSetCell(buffer, ox, oy + h - 1, '└', style);
+  }
+  if (w > 1 && h > 1) {
+    _safeSetCell(buffer, ox + w - 1, oy + h - 1, '┘', style);
+  }
+}
+
+void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
+  final cell = buffer.getCell(x, y);
+  if (cell != null) {
+    cell.char = char;
+    cell.style = style;
+  }
+}
+
+void _drawElementOutlines(
+  Element element,
+  Buffer buffer,
+  Offset absoluteOffset,
+) {
+  final size = element.size;
+  // Alternate colors based on element depth: even depth gets Cyan, odd depth gets Yellow.
+  final color = (element.depth % 2 == 0)
+      ? const Color(0, 255, 255)
+      : const Color(255, 255, 0);
+  final style = Style(foreground: color);
+
+  _drawBoxOutline(buffer, absoluteOffset, size, style);
+
+  element.visitChildren((child) {
+    _drawElementOutlines(child, buffer, absoluteOffset + child.relativeOffset);
+  });
+}
+
+Element? _findHoveredElement(
+  Element rootElement,
+  Point<int>? lastMousePosition,
+) {
+  if (lastMousePosition == null) return null;
+  return _findDeepestElementAt(rootElement, Offset.zero, lastMousePosition);
+}
+
+Element? _findDeepestElementAt(
+  Element element,
+  Offset absoluteOffset,
+  Point<int> mousePos,
+) {
+  final px = mousePos.x - 1;
+  final py = mousePos.y - 1;
+
+  final ox = absoluteOffset.dx;
+  final oy = absoluteOffset.dy;
+  final w = element.size.width;
+  final h = element.size.height;
+
+  if (px < ox || px >= ox + w || py < oy || py >= oy + h) {
+    return null;
+  }
+
+  Element? deepestChild;
+  element.visitChildren((child) {
+    final childOffset = absoluteOffset + child.relativeOffset;
+    final childDeepest = _findDeepestElementAt(child, childOffset, mousePos);
+    if (childDeepest != null) {
+      deepestChild = childDeepest;
+    }
+  });
+
+  return deepestChild ?? element;
+}
+
+Offset _getAbsoluteOffset(Element element) {
+  var offset = Offset.zero;
+  Element? current = element;
+  while (current != null) {
+    offset = offset + current.relativeOffset;
+    current = current.parent;
+  }
+  return offset;
+}
+
+void _highlightHoveredElement(Buffer buffer, Element element) {
+  final offset = _getAbsoluteOffset(element);
+  final w = element.size.width;
+  final h = element.size.height;
+  final ox = offset.dx;
+  final oy = offset.dy;
+
+  for (var y = oy; y < oy + h; y++) {
+    for (var x = ox; x < ox + w; x++) {
+      final cell = buffer.getCell(x, y);
+      if (cell != null) {
+        cell.style = Style(
+          foreground: cell.style.foreground,
+          background: const Color(255, 0, 255), // Magenta background
+          modifiers: cell.style.modifiers & ~Modifier.transparent,
+        );
+      }
+    }
+  }
+}
+
+bool _routeToElement(
+  Element element,
+  term.MouseEvent event,
+  int localX,
+  int localY,
+) {
+  if (element is StatefulElement) {
+    final state = element.state;
+    try {
+      (state as dynamic).handleMouseEvent(event, localX, localY);
+      return true;
+    } catch (_) {
+      // Ignored if not supported
+    }
+  }
+
+  try {
+    (element as dynamic).handleMouseEvent(event, localX, localY);
+    return true;
+  } catch (_) {
+    // Ignored if not supported
+  }
+
+  final elWidget = element.widget;
+  try {
+    (elWidget as dynamic).handleMouseEvent(event, localX, localY);
+    return true;
+  } catch (_) {
+    // Ignored if not supported
+  }
+
+  return false;
 }

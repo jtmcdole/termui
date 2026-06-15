@@ -12,6 +12,7 @@ import 'package:termui/ui/event.dart' hide Modifier;
 import 'package:termui/ui/window.dart';
 import 'package:termui/perf/tracer.dart';
 import 'package:termui/perf/fs_locator.dart';
+import 'package:termui/ui/termui_debug.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_examples.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 
@@ -113,6 +114,27 @@ Future<void> runWidgetBookShared(
       }
       platform.onFrameRedrawn(buf);
       state?.recordFrame(buf);
+    },
+    onKeyEvent: (event) {
+      if (event.type == KeyType.f10 || event.key == 'f10') {
+        debugPaintSizeEnabled = !debugPaintSizeEnabled;
+        return true;
+      }
+      if (event.type == KeyType.f12 || event.key == 'f12') {
+        debugPaintHoverEnabled = !debugPaintHoverEnabled;
+        return true;
+      }
+      if (event.modifiers.contains(term.Modifier.control)) {
+        if (event.key == 'p' || event.key == 'P') {
+          debugPaintSizeEnabled = !debugPaintSizeEnabled;
+          return true;
+        }
+        if (event.key == 'o' || event.key == 'O') {
+          debugPaintHoverEnabled = !debugPaintHoverEnabled;
+          return true;
+        }
+      }
+      return false;
     },
   );
 
@@ -238,10 +260,7 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
       if (needsRepaint) {
         final previewElement = _previewPaneKey.currentContext as Element?;
         if (previewElement != null) {
-          BuildOwner.markNeedsBuild(previewElement);
-          if (State.onNeedRepaint != null) {
-            State.onNeedRepaint!();
-          }
+          previewElement.markNeedsBuild();
         }
       }
     }
@@ -966,6 +985,8 @@ class _HelpDialogElement extends Element {
       ('Ctrl + Backspace', 'Delete cursor to start of line'),
       ('Ctrl + Z / Alt + Z', 'Undo last operation'),
       ('Ctrl + Y / Alt + Y', 'Redo last operation'),
+      ('F10 / Ctrl + P', 'Toggle paint size debug'),
+      ('F12 / Ctrl + O', 'Toggle mouse hover debug'),
     ];
 
     for (var i = 0; i < dialogHeight - 2; i++) {

@@ -438,10 +438,16 @@ void main() async {
       ),
     );
 
+    late final BuildOwner buildOwner;
+
     void drawFrame() {
+      buildOwner.buildScope();
       buffer.clear();
       // Pre-fill background
-      elementWrapper.layout(BoxConstraints.tight(Size(width, height)));
+      elementWrapper.layout(
+        BoxConstraints.tight(Size(width, height)),
+        buildOwner,
+      );
       elementWrapper.paint(buffer, Offset.zero);
 
       final sb = StringBuffer();
@@ -451,7 +457,7 @@ void main() async {
       }
     }
 
-    State.onNeedRepaint = drawFrame;
+    buildOwner = BuildOwner(onNeedVisualUpdate: drawFrame);
 
     // Timer to drive animations at ~30 FPS
     final animationTimer = Timer.periodic(const Duration(milliseconds: 33), (
@@ -492,7 +498,7 @@ void main() async {
                 sy < bounds.y + bounds.height) {
               if (event.type == ui.MouseEventType.press) {
                 dState.toggleDropdown();
-                State.onNeedRepaint?.call();
+                drawFrame();
               }
               handled = true;
               return;
@@ -509,7 +515,7 @@ void main() async {
                 if (event.type == ui.MouseEventType.press) {
                   final clickedItemIdx = sy - itemYStart;
                   dState.selectItem(clickedItemIdx);
-                  State.onNeedRepaint?.call();
+                  drawFrame();
                 }
                 handled = true;
                 return;
@@ -525,7 +531,7 @@ void main() async {
                 sy < bounds.y + bounds.height) {
               if (event.type == ui.MouseEventType.press) {
                 pState.toggleMenu();
-                State.onNeedRepaint?.call();
+                drawFrame();
               }
               handled = true;
               return;
@@ -543,7 +549,7 @@ void main() async {
                 if (event.type == ui.MouseEventType.press) {
                   final clickedItemIdx = sy - itemYStart;
                   pState.selectItem(clickedItemIdx);
-                  State.onNeedRepaint?.call();
+                  drawFrame();
                 }
                 handled = true;
                 return;

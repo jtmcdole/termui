@@ -258,7 +258,7 @@ class TerminalTester {
     }
 
     if (_runner != null) {
-      State.onNeedRepaint?.call();
+      _runner!.pump();
     } else if (_rootElement != null && _testBuffer != null) {
       _rootElement!.rebuild();
       _rootElement!.layout(

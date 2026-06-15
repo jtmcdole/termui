@@ -90,6 +90,7 @@ class Slider extends StatefulWidget implements Focusable, KeyEventHandler {
 /// The state for a [Slider] widget.
 class SliderState extends State<Slider> implements KeyEventHandler {
   late FocusNode _focusNode;
+  bool _isDragging = false;
 
   @override
   void initState() {
@@ -124,13 +125,23 @@ class SliderState extends State<Slider> implements KeyEventHandler {
 
   /// Handles mouse events to update the slider's value on drag or click.
   void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
-    if (event.type != MouseEventType.press &&
-        event.type != MouseEventType.drag) {
+    if (event.type == MouseEventType.press) {
+      if (widget.axis == SliderAxis.horizontal) {
+        if (localY != 0) return;
+      } else {
+        if (localX != 0) return;
+      }
+      _isDragging = true;
+    } else if (event.type == MouseEventType.drag) {
+      if (!_isDragging) return;
+    } else if (event.type == MouseEventType.release) {
+      _isDragging = false;
+      return;
+    } else {
       return;
     }
 
     if (widget.axis == SliderAxis.horizontal) {
-      if (localY != 0) return;
       final trackLength = area.width;
       if (trackLength <= 1) return;
 
@@ -138,7 +149,6 @@ class SliderState extends State<Slider> implements KeyEventHandler {
       widget.value = widget.min + percent * (widget.max - widget.min);
       widget.onChanged?.call(widget.value);
     } else {
-      if (localX != 0) return;
       final trackLength = area.height;
       if (trackLength <= 1) return;
 

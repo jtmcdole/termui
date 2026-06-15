@@ -8,3 +8,4 @@ export 'ui/color.dart';
 export 'ui/layout.dart';
 export 'ui/style.dart';
 export 'ui/widget_toolkit.dart';
+export 'ui/termui_debug.dart';
