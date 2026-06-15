@@ -331,7 +331,71 @@ void main() {
       final result = await future;
       expect(result, isNull);
     });
+
+    test('routes 4-argument mouse events correctly', () async {
+      late ui.MouseEvent receivedEvent;
+      late int receivedX;
+      late int receivedY;
+      late Rect receivedArea;
+
+      final runner = PromptRunner<String>(
+        terminal: terminal,
+        height: 10,
+        widget: Test4ArgMouseWidget((event, x, y, area) {
+          receivedEvent = event;
+          receivedX = x;
+          receivedY = y;
+          receivedArea = area;
+        }),
+      );
+
+      final future = runner.run();
+      await Future.delayed(const Duration(milliseconds: 10));
+
+      final click = const ui.MouseEvent(
+        x: 5,
+        y: 5,
+        button: ui.MouseButton.left,
+        type: ui.MouseEventType.press,
+      );
+      terminal.injectTestEvent(click);
+
+      await Future.delayed(const Duration(milliseconds: 10));
+
+      expect(receivedEvent.type, equals(ui.MouseEventType.press));
+      expect(receivedX, equals(4)); // global 5 (1-based) is local 4 (0-based)
+      expect(receivedY, equals(4));
+      expect(receivedArea.width, equals(80));
+      expect(receivedArea.height, equals(10));
+
+      runner.dispose();
+      await future;
+    });
   });
+}
+
+class Test4ArgMouseWidget extends Widget {
+  final void Function(ui.MouseEvent event, int localX, int localY, Rect area) onMouse;
+  const Test4ArgMouseWidget(this.onMouse);
+
+  @override
+  Element createElement() => _Test4ArgMouseElement(this);
+}
+
+class _Test4ArgMouseElement extends Element {
+  _Test4ArgMouseElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    return constraints.constrain(const Size(10, 10));
+  }
+
+  @override
+  void paint(Buffer buffer, Offset offset) {}
+
+  void handleMouseEvent(ui.MouseEvent event, int localX, int localY, Rect area) {
+    (widget as Test4ArgMouseWidget).onMouse(event, localX, localY, area);
+  }
 }
 
 class PromptScopeTestWidget extends StatefulWidget {

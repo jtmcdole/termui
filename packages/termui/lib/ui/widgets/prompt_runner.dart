@@ -398,63 +398,10 @@ class PromptRunner<T> implements SceneRenderer {
 
       subscription = terminal.events.listen(
         (event) {
-          if (_completer!.isCompleted) return;
-
           if (event is term.KeyEvent) {
-            var isDone = false;
-
-            // Step 1: Custom Interceptor
-            if (onKeyEvent != null) {
-              isDone = onKeyEvent!(event);
-            }
-
-            // Step 2: Widget Event Routing
-            if (!isDone) {
-              isDone = _routeKeyEvent(rootElement, event);
-            }
-
-            // Step 3: Standard & System Exit Evaluation
-            if (!isDone) {
-              final trigger = _detectTrigger(event);
-              if (trigger != null && exitConditions.containsKey(trigger)) {
-                _handleAction(trigger, event);
-                return;
-              }
-            }
-
-            if (isDone) {
-              rootElement.markNeedsBuild();
-            }
-
-            // Force a redraw to reflect any selections or edits.
-            draw();
+            handleKeyEvent(event);
           } else if (event is term.MouseEvent) {
-            if (debugPaintHoverEnabled) {
-              _lastMousePosition = Point<int>(event.x, event.y);
-            }
-            var isDone = false;
-            if (_mouseCaptureElement != null &&
-                (event.type == term.MouseEventType.drag ||
-                    event.type == term.MouseEventType.release)) {
-              final captureElement = _mouseCaptureElement!;
-              final absOffset = _getAbsoluteOffset(captureElement);
-              final sx = event.x - 1;
-              final sy = event.y - 1;
-              final localX = sx - absOffset.dx;
-              final localY = sy - absOffset.dy;
-
-              isDone = _routeToElement(captureElement, event, localX, localY);
-
-              if (event.type == term.MouseEventType.release) {
-                _mouseCaptureElement = null;
-              }
-            } else {
-              isDone = _routeMouseEvent(rootElement, event, Offset.zero);
-            }
-
-            if (isDone || debugPaintHoverEnabled) {
-              draw();
-            }
+            handleMouseEvent(event);
           }
         },
         onDone: () {
@@ -488,6 +435,7 @@ class PromptRunner<T> implements SceneRenderer {
   }
 
   /// Programmatically resizes the runner viewport and updates layout/buffers.
+  @override
   void resize(int width, int height) {
     _width = width;
     _computedHeight = height;
@@ -636,6 +584,76 @@ class PromptRunner<T> implements SceneRenderer {
     }
 
     return false;
+  }
+
+  @override
+  void handleKeyEvent(term.KeyEvent event) {
+    if (_completer == null || _completer!.isCompleted) return;
+
+    var isDone = false;
+    final rootElement = _rootElement;
+    if (rootElement == null) return;
+
+    // Step 1: Custom Interceptor
+    if (onKeyEvent != null) {
+      isDone = onKeyEvent!(event);
+    }
+
+    // Step 2: Widget Event Routing
+    if (!isDone) {
+      isDone = _routeKeyEvent(rootElement, event);
+    }
+
+    // Step 3: Standard & System Exit Evaluation
+    if (!isDone) {
+      final trigger = _detectTrigger(event);
+      if (trigger != null && exitConditions.containsKey(trigger)) {
+        _handleAction(trigger, event);
+        return;
+      }
+    }
+
+    if (isDone) {
+      rootElement.markNeedsBuild();
+    }
+
+    // Force a redraw to reflect any selections or edits.
+    draw();
+  }
+
+  @override
+  void handleMouseEvent(term.MouseEvent event) {
+    if (_completer == null || _completer!.isCompleted) return;
+
+    if (debugPaintHoverEnabled) {
+      _lastMousePosition = Point<int>(event.x, event.y);
+    }
+    var isDone = false;
+    final rootElement = _rootElement;
+    if (rootElement == null) return;
+
+    if (_mouseCaptureElement != null &&
+        (event.type == term.MouseEventType.drag ||
+            event.type == term.MouseEventType.release)) {
+      final captureElement = _mouseCaptureElement!;
+      final absOffset = _getAbsoluteOffset(captureElement);
+      final sx = event.x - 1;
+      final sy = event.y - 1;
+      final localX = sx - absOffset.dx;
+      final localY = sy - absOffset.dy;
+
+      isDone = _routeToElement(captureElement, event, localX, localY);
+
+      if (event.type == term.MouseEventType.release) {
+        _mouseCaptureElement = null;
+      }
+    } else {
+      isDone = _routeMouseEvent(rootElement, event, Offset.zero);
+    }
+
+    if (isDone || debugPaintHoverEnabled) {
+      draw();
+    }
   }
 }
 
@@ -855,29 +873,45 @@ bool _routeToElement(
   int localX,
   int localY,
 ) {
+  final area = Rect(0, 0, element.size.width, element.size.height);
   if (element is StatefulElement) {
     final state = element.state;
     try {
-      (state as dynamic).handleMouseEvent(event, localX, localY);
+      (state as dynamic).handleMouseEvent(event, localX, localY, area);
+      return true;
+    } catch (_) {
+      try {
+        (state as dynamic).handleMouseEvent(event, localX, localY);
+        return true;
+      } catch (_) {
+        // Ignored if not supported
+      }
+    }
+  }
+
+  try {
+    (element as dynamic).handleMouseEvent(event, localX, localY, area);
+    return true;
+  } catch (_) {
+    try {
+      (element as dynamic).handleMouseEvent(event, localX, localY);
       return true;
     } catch (_) {
       // Ignored if not supported
     }
   }
 
-  try {
-    (element as dynamic).handleMouseEvent(event, localX, localY);
-    return true;
-  } catch (_) {
-    // Ignored if not supported
-  }
-
   final elWidget = element.widget;
   try {
-    (elWidget as dynamic).handleMouseEvent(event, localX, localY);
+    (elWidget as dynamic).handleMouseEvent(event, localX, localY, area);
     return true;
   } catch (_) {
-    // Ignored if not supported
+    try {
+      (elWidget as dynamic).handleMouseEvent(event, localX, localY);
+      return true;
+    } catch (_) {
+      // Ignored if not supported
+    }
   }
 
   return false;
@@ -914,6 +948,15 @@ abstract interface class TerminalStateRequest {
 abstract interface class SceneRenderer implements TerminalStateRequest {
   /// The current rendering output buffer.
   Buffer? get currentBuffer;
+
+  /// Handles key events routed to this renderer.
+  void handleKeyEvent(term.KeyEvent event);
+
+  /// Handles mouse events routed to this renderer.
+  void handleMouseEvent(term.MouseEvent event);
+
+  /// Resizes the renderer viewport and updates layout/buffers.
+  void resize(int width, int height);
 }
 
 /// Represents a single renderable layer inside a composited terminal scene.
