@@ -42,3 +42,4 @@ export 'widgets/horizontal_radio_group.dart';
 export 'widgets/selection_controller.dart';
 export 'widgets/layout_builder.dart';
 export 'widgets/safe_layout.dart';
+export 'widgets/scene_manager.dart';
