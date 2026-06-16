@@ -74,7 +74,7 @@ class MyApp extends StatelessWidget {
 
                 void render() {
                   buffer.clear();
-                  
+
                   // Build a simple layout
                   final layout = termui.Column([
                     termui.SizedBox(
@@ -121,7 +121,7 @@ class MyApp extends StatelessWidget {
                     }
                   } else if (event is termui.MouseEvent) {
                     // Increment counter on left click
-                    if (event.type == termui.MouseEventType.press && 
+                    if (event.type == termui.MouseEventType.press &&
                         event.button == termui.MouseButton.left) {
                       counter++;
                     }
@@ -137,6 +137,60 @@ class MyApp extends StatelessWidget {
   }
 }
 ```
+
+---
+
+## Scene Management and Managed Prompt Execution
+
+For complex applications embedded in Flutter (such as windowed terminal terminals, multi-pane sidebars, or stacked overlapping layers), the underlying `termui` layout engine utilizes a composited system managed by `SceneManager` and `PromptRunner`.
+
+```mermaid
+graph TD
+  FlutterWidget[Flutter Terminal Widget] -->|Gestures & KeyEvents| EventBridge[Event Bridge]
+  EventBridge -->|Global Events| SceneManager[SceneManager]
+
+  SceneManager -->|Watch Size| ResizeCoord[Resizing Coordinator]
+  SceneManager -->|Intercept Inputs| EventRouter[Focus & Event Router]
+
+  EventRouter -->|Keys / Local Mouse Events| ManagedRunner1[PromptRunner Layer 1 <br>ExecutionMode.managed]
+  EventRouter -->|Keys / Local Mouse Events| ManagedRunner2[PromptRunner Layer 2 <br>ExecutionMode.managed]
+
+  ManagedRunner1 -->|Render to Local Buffer| LocalBuf1[Buffer 1]
+  ManagedRunner2 -->|Render to Local Buffer| LocalBuf2[Buffer 2]
+
+  LocalBuf1 -->|LayeredBuffer x, y, zIndex| Compositor[Compositor]
+  LocalBuf2 -->|LayeredBuffer x, y, zIndex| Compositor
+
+  Compositor -->|Flattened Screen Buffer| FlutterPainter[Flutter CustomPainter / GlyphAtlas]
+```
+
+### Managed Execution Mode (`ExecutionMode.managed`)
+
+By default, a `PromptRunner` runs in `ExecutionMode.standalone` (hooking into raw terminal stdout, stdin, and resize signals). Under a composited GUI environment, `PromptRunner` instances run in **managed mode** (`ExecutionMode.managed`):
+* **Bypassed Console I/O**: The runner disables direct platform streams (like `stdin` or `stdout`), allowing Flutter's gesture detection and hardware key listeners to bridge input events via memory streams instead.
+* **Delegated Rendering**: The runner acts as a `SceneRenderer` layer. It constructs its widget element tree and renders onto a local offscreen `Buffer` (exposed via `currentBuffer`).
+* **Asynchronous Integration**: The runner is initialized asynchronously (e.g., via `unawaited(runner.run())`) to mount its element tree, while screen composition is delegated entirely to the `SceneManager`.
+
+### SceneManager: The Root Orchestrator
+
+The `SceneManager` serves as the global coordinator and compositor for all active `SceneLayer` instances within the terminal viewport.
+
+1. **Event Capture & Routing**:
+   * **KeyEvents**: Hardware key presses captured by Flutter are bridge-forwarded to `SceneManager`. The manager routes them directly to the `SceneRenderer` of the active `focusedLayer` via `handleKeyEvent(event)`.
+   * **Mouse/Gesture Events**: The manager performs spatial hit-testing using the bounding box of each layer sorted by `zIndex`. When a mouse click or tap gesture is captured, it updates focus, translates the global coordinate offset to the target layer's local coordinate system, and routes the event via `handleMouseEvent(localEvent)`.
+   * **Dragging**: If a layer is marked `draggable`, the manager handles mouse click-and-drag delta streams, adjusting the layer's coordinates (`x`, `y`), and schedules the repaint.
+2. **Resizing Coordination**:
+   * When the Flutter widget changes size (e.g., due to window resizing or parent layout changes), the new grid size is propagated to `SceneManager`.
+   * Fullscreen layers (`LayerSizing.fullscreen`) are automatically reset to `(0, 0)`.
+   * The manager cascades size changes downwards, invoking `layer.renderer.resize(width, height)` on affected layer renderers so they resize their internal buffers and recalculate layouts.
+3. **Double-Buffered Compositing**:
+   * During a frame repaint (`SceneManager.render()`), the manager collects buffers from all active layers.
+   * It wraps them in `LayeredBuffer` instances containing the layer's current offset and Z-index.
+   * It delegates the composition to `Compositor.composite(...)`, which uses a bit-packed occlusion map to optimize rendering by skipping cell draws that are obscured by solid overlapping layers of a higher Z-index.
+   * The final flattened screen buffer is written to the terminal backend, triggering the Flutter `CustomPainter` to repaint the grid using the high-performance GPU `GlyphAtlas`.
+4. **Hardware State Synchronization**:
+   * `SceneManager` inspects the active layer's `TerminalStateRequest` properties (`showsCursor`, `requestedCursorPosition`, and `wantsMouseTracking`).
+   * It translates cursor rendering requests and coordinate positions into the bridge, prompting Flutter to display/hide the visual blinking caret at the correct pixel coordinate.
 
 ---
 
