@@ -149,18 +149,12 @@ class BurgerOrderExample extends WidgetBookExample {
     return '${items.sublist(0, items.length - 1).join(', ')}, and ${items.last}';
   }
 
-  String _getSpiceString(String spice) {
-    switch (spice) {
-      case 'Mild':
-        return 'Mild ';
-      case 'Medium':
-        return 'Medium-Spicy ';
-      case 'Hot':
-        return 'Spicy-Hot ';
-      default:
-        return '';
-    }
-  }
+  String _getSpiceString(String spice) => switch (spice) {
+    'Mild' => 'Mild ',
+    'Medium' => 'Medium-Spicy ',
+    'Hot' => 'Spicy-Hot ',
+    _ => '',
+  };
 
   @override
   Widget build({
@@ -496,6 +490,13 @@ class BurgerOrderExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
+    final keyType = event.type;
+    final isEnter =
+        keyType == ui.KeyType.enter ||
+        event.key == '\r' ||
+        event.key == '\n' ||
+        event.key == 'enter';
+
     if (event.key == '\t' || event.key == 'backtab') {
       if (burgerStage == 1) {
         if (event.key == 'backtab' && burgerForm1.activeFieldIndex == 0) {
@@ -535,11 +536,8 @@ class BurgerOrderExample extends WidgetBookExample {
       return false; // Toggle sidebar/demo focus globally
     }
 
-    final keyType = event.type;
     if (burgerStage == 0) {
-      if (keyType == ui.KeyType.enter ||
-          event.key == ' ' ||
-          keyType == ui.KeyType.right) {
+      if (isEnter || event.key == ' ' || keyType == ui.KeyType.right) {
         burgerStage = 1;
         _focusFirstField(burgerForm1);
         return true;
@@ -554,7 +552,7 @@ class BurgerOrderExample extends WidgetBookExample {
           _focusFirstField(burgerForm2);
         }
         return true;
-      } else if (keyType == ui.KeyType.enter) {
+      } else if (isEnter) {
         if (burgerForm1.activeFieldIndex < burgerForm1.fields.length - 1) {
           _focusNextField(burgerForm1);
         } else {
@@ -579,7 +577,7 @@ class BurgerOrderExample extends WidgetBookExample {
           _focusFirstField(burgerForm3);
         }
         return true;
-      } else if (keyType == ui.KeyType.enter) {
+      } else if (isEnter) {
         if (burgerForm2.activeFieldIndex < burgerForm2.fields.length - 1) {
           _focusNextField(burgerForm2);
         } else {
@@ -600,7 +598,7 @@ class BurgerOrderExample extends WidgetBookExample {
         burgerStage = 2;
         _focusFirstField(burgerForm2);
         return true;
-      } else if (keyType == ui.KeyType.enter) {
+      } else if (isEnter) {
         if (burgerForm3.activeFieldIndex < burgerForm3.fields.length - 1) {
           _focusNextField(burgerForm3);
         } else {
@@ -614,7 +612,7 @@ class BurgerOrderExample extends WidgetBookExample {
         return true;
       }
     } else if (burgerStage == 4) {
-      if (keyType == ui.KeyType.enter || event.key == ' ') {
+      if (isEnter || event.key == ' ') {
         initBurgerForms();
         burgerStage = 0;
         return true;

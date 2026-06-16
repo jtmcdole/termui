@@ -346,7 +346,13 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
   @override
   bool handleKeyEvent(term.KeyEvent event) {
     if (!isOpen) {
-      if (event.key == ' ' || event.key == '\n' || event.key == 'down') {
+      if (event.key == ' ' ||
+          event.key == 'space' ||
+          event.key == '\n' ||
+          event.key == '\r' ||
+          event.key == 'enter' ||
+          event.type == term.KeyType.enter ||
+          event.key == 'down') {
         openDropdown();
         return true;
       }
@@ -366,7 +372,12 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
       });
       overlayEntry?._overlayState?.setState(() {});
       return true;
-    } else if (event.key == 'enter' || event.key == '\n' || event.key == ' ') {
+    } else if (event.key == 'enter' ||
+        event.key == '\n' ||
+        event.key == '\r' ||
+        event.type == term.KeyType.enter ||
+        event.key == ' ' ||
+        event.key == 'space') {
       selectItem(selectedIndex);
       return true;
     } else if (event.key == 'escape') {
@@ -394,7 +405,7 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);
@@ -420,7 +431,7 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
 }
 
 class _DropdownButtonRenderWidget extends Widget
-    implements Focusable, KeyEventHandler {
+    implements Focusable, KeyEventHandler, MouseEventHandler {
   final Widget displayWidget;
   final bool isOpen;
   @override
@@ -448,6 +459,7 @@ class _DropdownButtonRenderWidget extends Widget
     return onKey(event);
   }
 
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       onAction();
@@ -861,7 +873,13 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
   @override
   bool handleKeyEvent(term.KeyEvent event) {
     if (!isOpen) {
-      if (event.key == ' ' || event.key == '\n' || event.key == 'down') {
+      if (event.key == ' ' ||
+          event.key == 'space' ||
+          event.key == '\n' ||
+          event.key == '\r' ||
+          event.key == 'enter' ||
+          event.type == term.KeyType.enter ||
+          event.key == 'down') {
         openMenu();
         return true;
       }
@@ -881,7 +899,12 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
       });
       overlayEntry?._overlayState?.setState(() {});
       return true;
-    } else if (event.key == 'enter' || event.key == '\n' || event.key == ' ') {
+    } else if (event.key == 'enter' ||
+        event.key == '\n' ||
+        event.key == '\r' ||
+        event.type == term.KeyType.enter ||
+        event.key == ' ' ||
+        event.key == 'space') {
       selectItem(selectedIndex);
       return true;
     } else if (event.key == 'escape') {
@@ -897,7 +920,7 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);

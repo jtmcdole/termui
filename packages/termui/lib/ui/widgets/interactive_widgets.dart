@@ -10,7 +10,8 @@ import '../window.dart';
 import 'package:characters/characters.dart';
 
 /// An interactive TUI button widget that triggers a callback when activated.
-class Button extends StatefulWidget implements Focusable, KeyEventHandler {
+class Button extends StatefulWidget
+    implements Focusable, KeyEventHandler, MouseEventHandler {
   /// The text label displayed on the button.
   final String text;
 
@@ -44,7 +45,12 @@ class Button extends StatefulWidget implements Focusable, KeyEventHandler {
   bool handleKeyEvent(term.KeyEvent event) {
     final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
     if (hasFocus &&
-        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
+        (event.key == ' ' ||
+            event.key == 'space' ||
+            event.key == '\n' ||
+            event.key == '\r' ||
+            event.key == 'enter' ||
+            event.type == term.KeyType.enter)) {
       onPressed();
       _state?.setState(() {});
       return true;
@@ -53,6 +59,7 @@ class Button extends StatefulWidget implements Focusable, KeyEventHandler {
   }
 
   /// Delegated mouse event handler.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       onPressed();
@@ -69,7 +76,8 @@ class Button extends StatefulWidget implements Focusable, KeyEventHandler {
 }
 
 /// The state for a [Button] widget.
-class ButtonState extends State<Button> implements KeyEventHandler {
+class ButtonState extends State<Button>
+    implements KeyEventHandler, MouseEventHandler {
   late FocusNode _focusNode;
 
   @override
@@ -104,6 +112,7 @@ class ButtonState extends State<Button> implements KeyEventHandler {
   }
 
   /// Handles mouse events for the button.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     widget.handleMouseEvent(event, localX, localY);
   }
@@ -118,7 +127,7 @@ class ButtonState extends State<Button> implements KeyEventHandler {
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);
@@ -178,7 +187,8 @@ class _ButtonElement extends Element {
 }
 
 /// An interactive checkbox widget supporting toggled true/false options.
-class Checkbox extends StatefulWidget implements Focusable, KeyEventHandler {
+class Checkbox extends StatefulWidget
+    implements Focusable, KeyEventHandler, MouseEventHandler {
   /// The current check state (checked if true).
   final bool value;
 
@@ -216,7 +226,12 @@ class Checkbox extends StatefulWidget implements Focusable, KeyEventHandler {
   bool handleKeyEvent(term.KeyEvent event) {
     final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
     if (hasFocus &&
-        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
+        (event.key == ' ' ||
+            event.key == 'space' ||
+            event.key == '\n' ||
+            event.key == '\r' ||
+            event.key == 'enter' ||
+            event.type == term.KeyType.enter)) {
       onChanged(!value);
       _state?.setState(() {});
       return true;
@@ -225,6 +240,7 @@ class Checkbox extends StatefulWidget implements Focusable, KeyEventHandler {
   }
 
   /// Delegated mouse event handler.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       onChanged(!value);
@@ -241,7 +257,8 @@ class Checkbox extends StatefulWidget implements Focusable, KeyEventHandler {
 }
 
 /// The state for a [Checkbox] widget.
-class CheckboxState extends State<Checkbox> implements KeyEventHandler {
+class CheckboxState extends State<Checkbox>
+    implements KeyEventHandler, MouseEventHandler {
   late FocusNode _focusNode;
 
   @override
@@ -276,6 +293,7 @@ class CheckboxState extends State<Checkbox> implements KeyEventHandler {
   }
 
   /// Handles mouse events for the checkbox.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     widget.handleMouseEvent(event, localX, localY);
   }
@@ -290,7 +308,7 @@ class CheckboxState extends State<Checkbox> implements KeyEventHandler {
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);
@@ -351,7 +369,8 @@ class _CheckboxElement extends Element {
 }
 
 /// An interactive radio button widget to select a single value from a group.
-class Radio<T> extends StatefulWidget implements Focusable, KeyEventHandler {
+class Radio<T> extends StatefulWidget
+    implements Focusable, KeyEventHandler, MouseEventHandler {
   /// The specific value represented by this radio button.
   final T value;
 
@@ -393,7 +412,12 @@ class Radio<T> extends StatefulWidget implements Focusable, KeyEventHandler {
   bool handleKeyEvent(term.KeyEvent event) {
     final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
     if (hasFocus &&
-        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
+        (event.key == ' ' ||
+            event.key == 'space' ||
+            event.key == '\n' ||
+            event.key == '\r' ||
+            event.key == 'enter' ||
+            event.type == term.KeyType.enter)) {
       onChanged(value);
       _state?.setState(() {});
       return true;
@@ -402,6 +426,7 @@ class Radio<T> extends StatefulWidget implements Focusable, KeyEventHandler {
   }
 
   /// Delegated mouse event handler.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       onChanged(value);
@@ -418,7 +443,8 @@ class Radio<T> extends StatefulWidget implements Focusable, KeyEventHandler {
 }
 
 /// The state for a [Radio] widget.
-class RadioState<T> extends State<Radio<T>> implements KeyEventHandler {
+class RadioState<T> extends State<Radio<T>>
+    implements KeyEventHandler, MouseEventHandler {
   late FocusNode _focusNode;
 
   @override
@@ -456,6 +482,7 @@ class RadioState<T> extends State<Radio<T>> implements KeyEventHandler {
   bool get isSelected => widget.value == widget.groupValue;
 
   /// Handles mouse events for the radio button.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     widget.handleMouseEvent(event, localX, localY);
   }
@@ -470,7 +497,7 @@ class RadioState<T> extends State<Radio<T>> implements KeyEventHandler {
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);
@@ -531,7 +558,8 @@ class _RadioElement extends Element {
 }
 
 /// An interactive visual switch toggle widget representing true/false state.
-class Switch extends StatefulWidget implements Focusable, KeyEventHandler {
+class Switch extends StatefulWidget
+    implements Focusable, KeyEventHandler, MouseEventHandler {
   /// The switch toggle state (on/off).
   final bool value;
 
@@ -569,7 +597,12 @@ class Switch extends StatefulWidget implements Focusable, KeyEventHandler {
   bool handleKeyEvent(term.KeyEvent event) {
     final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
     if (hasFocus &&
-        (event.key == ' ' || event.key == '\n' || event.key == '\r')) {
+        (event.key == ' ' ||
+            event.key == 'space' ||
+            event.key == '\n' ||
+            event.key == '\r' ||
+            event.key == 'enter' ||
+            event.type == term.KeyType.enter)) {
       onChanged(!value);
       _state?.setState(() {});
       return true;
@@ -578,6 +611,7 @@ class Switch extends StatefulWidget implements Focusable, KeyEventHandler {
   }
 
   /// Delegated mouse event handler.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       onChanged(!value);
@@ -594,7 +628,8 @@ class Switch extends StatefulWidget implements Focusable, KeyEventHandler {
 }
 
 /// The state for a [Switch] widget.
-class SwitchState extends State<Switch> implements KeyEventHandler {
+class SwitchState extends State<Switch>
+    implements KeyEventHandler, MouseEventHandler {
   late FocusNode _focusNode;
 
   @override
@@ -629,6 +664,7 @@ class SwitchState extends State<Switch> implements KeyEventHandler {
   }
 
   /// Handles mouse events for the switch.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     widget.handleMouseEvent(event, localX, localY);
   }
@@ -643,7 +679,7 @@ class SwitchState extends State<Switch> implements KeyEventHandler {
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);
