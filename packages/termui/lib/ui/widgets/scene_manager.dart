@@ -25,6 +25,13 @@ class SceneManager {
   StreamSubscription<InputEvent>? _eventsSubscription;
   StreamSubscription<Point<int>>? _sizeSubscription;
 
+  SceneLayer? _draggingLayer;
+  SceneLayer? _capturedMouseLayer;
+  int _dragStartX = 0;
+  int _dragStartY = 0;
+  int _layerStartX = 0;
+  int _layerStartY = 0;
+
   /// Exposes the internal renderer.
   Renderer? get renderer => _renderer;
 
@@ -56,26 +63,42 @@ class SceneManager {
     if (event is KeyEvent) {
       focusedLayer?.renderer.handleKeyEvent(event);
     } else if (event is MouseEvent) {
-      final mouseX = event.x - 1;
-      final mouseY = event.y - 1;
+      if (event.type == MouseEventType.press) {
+        final mouseX = event.x - 1;
+        final mouseY = event.y - 1;
 
-      final sortedLayers = List<SceneLayer>.from(layers)
-        ..sort((a, b) => b.zIndex.compareTo(a.zIndex));
+        final sortedLayers = List<SceneLayer>.from(layers)
+          ..sort((a, b) => b.zIndex.compareTo(a.zIndex));
 
-      for (final layer in sortedLayers) {
-        final buf = layer.renderer.currentBuffer;
-        if (buf == null) continue;
+        SceneLayer? hitLayer;
+        for (final layer in sortedLayers) {
+          final buf = layer.renderer.currentBuffer;
+          if (buf == null) continue;
 
-        if (mouseX >= layer.x &&
-            mouseX < layer.x + buf.width &&
-            mouseY >= layer.y &&
-            mouseY < layer.y + buf.height) {
-          if (event.type == MouseEventType.press && focusedLayer != layer) {
-            focusedLayer = layer;
+          if (mouseX >= layer.x &&
+              mouseX < layer.x + buf.width &&
+              mouseY >= layer.y &&
+              mouseY < layer.y + buf.height) {
+            hitLayer = layer;
+            break;
+          }
+        }
+
+        if (hitLayer != null) {
+          _capturedMouseLayer = hitLayer;
+          if (focusedLayer != hitLayer) {
+            focusedLayer = hitLayer;
+          }
+          if (hitLayer.draggable) {
+            _draggingLayer = hitLayer;
+            _dragStartX = event.x;
+            _dragStartY = event.y;
+            _layerStartX = hitLayer.x;
+            _layerStartY = hitLayer.y;
           }
 
-          final localX = mouseX - layer.x;
-          final localY = mouseY - layer.y;
+          final localX = mouseX - hitLayer.x;
+          final localY = mouseY - hitLayer.y;
           final localEvent = MouseEvent(
             x: localX + 1,
             y: localY + 1,
@@ -83,9 +106,75 @@ class SceneManager {
             type: event.type,
             modifiers: event.modifiers,
           );
+          hitLayer.renderer.handleMouseEvent(localEvent);
+        }
+      } else if (event.type == MouseEventType.drag) {
+        if (_draggingLayer != null) {
+          final dx = event.x - _dragStartX;
+          final dy = event.y - _dragStartY;
+          _draggingLayer!.x = _layerStartX + dx;
+          _draggingLayer!.y = _layerStartY + dy;
+          render();
+        } else if (_capturedMouseLayer != null) {
+          final mouseX = event.x - 1;
+          final mouseY = event.y - 1;
+          final localX = mouseX - _capturedMouseLayer!.x;
+          final localY = mouseY - _capturedMouseLayer!.y;
+          final localEvent = MouseEvent(
+            x: localX + 1,
+            y: localY + 1,
+            button: event.button,
+            type: event.type,
+            modifiers: event.modifiers,
+          );
+          _capturedMouseLayer!.renderer.handleMouseEvent(localEvent);
+        }
+      } else if (event.type == MouseEventType.release) {
+        final targetLayer = _draggingLayer ?? _capturedMouseLayer;
+        if (targetLayer != null) {
+          final mouseX = event.x - 1;
+          final mouseY = event.y - 1;
+          final localX = mouseX - targetLayer.x;
+          final localY = mouseY - targetLayer.y;
+          final localEvent = MouseEvent(
+            x: localX + 1,
+            y: localY + 1,
+            button: event.button,
+            type: event.type,
+            modifiers: event.modifiers,
+          );
+          targetLayer.renderer.handleMouseEvent(localEvent);
+        }
+        _draggingLayer = null;
+        _capturedMouseLayer = null;
+      } else {
+        // For hover (move) events, perform hit-test and route
+        final mouseX = event.x - 1;
+        final mouseY = event.y - 1;
 
-          layer.renderer.handleMouseEvent(localEvent);
-          break; // Stop routing after hitting the topmost layer
+        final sortedLayers = List<SceneLayer>.from(layers)
+          ..sort((a, b) => b.zIndex.compareTo(a.zIndex));
+
+        for (final layer in sortedLayers) {
+          final buf = layer.renderer.currentBuffer;
+          if (buf == null) continue;
+
+          if (mouseX >= layer.x &&
+              mouseX < layer.x + buf.width &&
+              mouseY >= layer.y &&
+              mouseY < layer.y + buf.height) {
+            final localX = mouseX - layer.x;
+            final localY = mouseY - layer.y;
+            final localEvent = MouseEvent(
+              x: localX + 1,
+              y: localY + 1,
+              button: event.button,
+              type: event.type,
+              modifiers: event.modifiers,
+            );
+            layer.renderer.handleMouseEvent(localEvent);
+            break;
+          }
         }
       }
     }
@@ -136,7 +225,9 @@ class SceneManager {
     final req = focused?.renderer;
 
     final showsCursor = req?.showsCursor ?? false;
-    final wantsMouseTracking = req?.wantsMouseTracking ?? false;
+    final wantsMouseTracking =
+        (req?.wantsMouseTracking ?? false) ||
+        layers.any((layer) => layer.draggable);
 
     var effectiveShowsCursor = showsCursor;
     int? absX;
@@ -193,6 +284,8 @@ class SceneManager {
     }
     layers.clear();
     focusedLayer = null;
+    _draggingLayer = null;
+    _capturedMouseLayer = null;
     _renderer = null;
     _targetBuffer = null;
   }

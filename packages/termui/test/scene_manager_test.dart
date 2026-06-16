@@ -431,5 +431,141 @@ void main() {
       expect(fgRenderer.mouseEvents.first.x, equals(3));
       expect(fgRenderer.mouseEvents.first.y, equals(3));
     });
+
+    test('dragging a draggable layer updates its coordinates', () async {
+      final renderer = MockSceneRenderer()..currentBuffer = Buffer(5, 5);
+      final layer = SceneLayer(
+        renderer: renderer,
+        sizing: LayerSizing.fixed,
+        x: 10,
+        y: 10,
+        draggable: true,
+      );
+
+      sceneManager.layers.add(layer);
+
+      // 1. Press at global 1-based (12, 12) -> hit-test succeeds
+      final pressEvent = const MouseEvent(
+        x: 12,
+        y: 12,
+        button: MouseButton.left,
+        type: MouseEventType.press,
+      );
+      terminal.injectTestEvent(pressEvent);
+
+      await Future.delayed(Duration.zero);
+
+      // 2. Drag to global 1-based (15, 17) -> dx = 3, dy = 5
+      final dragEvent = const MouseEvent(
+        x: 15,
+        y: 17,
+        button: MouseButton.left,
+        type: MouseEventType.drag,
+      );
+      terminal.injectTestEvent(dragEvent);
+
+      await Future.delayed(Duration.zero);
+
+      // Layer position should be updated: x = 10 + 3 = 13, y = 10 + 5 = 15
+      expect(layer.x, equals(13));
+      expect(layer.y, equals(15));
+
+      // 3. Release mouse
+      final releaseEvent = const MouseEvent(
+        x: 15,
+        y: 17,
+        button: MouseButton.left,
+        type: MouseEventType.release,
+      );
+      terminal.injectTestEvent(releaseEvent);
+
+      await Future.delayed(Duration.zero);
+
+      // Dragging should be cleared: subsequent drag should do nothing
+      final dragEvent2 = const MouseEvent(
+        x: 20,
+        y: 20,
+        button: MouseButton.left,
+        type: MouseEventType.drag,
+      );
+      terminal.injectTestEvent(dragEvent2);
+
+      await Future.delayed(Duration.zero);
+
+      expect(layer.x, equals(13));
+      expect(layer.y, equals(15));
+    });
+
+    test(
+      'mouse events are captured by the pressed layer even if dragging/releasing outside',
+      () async {
+        final renderer = MockSceneRenderer()..currentBuffer = Buffer(5, 5);
+        final layer = SceneLayer(
+          renderer: renderer,
+          sizing: LayerSizing.fixed,
+          x: 10,
+          y: 10,
+          draggable: false,
+        );
+
+        sceneManager.layers.add(layer);
+
+        // Press at global 1-based (12, 12) -> inside layer (10, 10) to (15, 15)
+        terminal.injectTestEvent(
+          const MouseEvent(
+            x: 12,
+            y: 12,
+            button: MouseButton.left,
+            type: MouseEventType.press,
+          ),
+        );
+        await Future.delayed(Duration.zero);
+
+        // Drag to global 1-based (5, 5) -> outside layer
+        terminal.injectTestEvent(
+          const MouseEvent(
+            x: 5,
+            y: 5,
+            button: MouseButton.left,
+            type: MouseEventType.drag,
+          ),
+        );
+        await Future.delayed(Duration.zero);
+
+        // Release at global 1-based (6, 6) -> outside layer
+        terminal.injectTestEvent(
+          const MouseEvent(
+            x: 6,
+            y: 6,
+            button: MouseButton.left,
+            type: MouseEventType.release,
+          ),
+        );
+        await Future.delayed(Duration.zero);
+
+        // Verify all 3 events routed to the layer
+        expect(renderer.mouseEvents, hasLength(3));
+        expect(renderer.mouseEvents[0].type, equals(MouseEventType.press));
+        expect(
+          renderer.mouseEvents[0].x,
+          equals(2),
+        ); // local 1-based (12 - 10) = 2
+        expect(renderer.mouseEvents[0].y, equals(2));
+
+        expect(renderer.mouseEvents[1].type, equals(MouseEventType.drag));
+        expect(
+          renderer.mouseEvents[1].x,
+          equals(-5),
+        ); // local 1-based (5 - 10) = -5
+        expect(renderer.mouseEvents[1].y, equals(-5));
+
+        expect(renderer.mouseEvents[2].type, equals(MouseEventType.release));
+        expect(
+          renderer.mouseEvents[2].x,
+          equals(-4),
+        ); // local 1-based (6 - 10) = -4
+        expect(renderer.mouseEvents[2].y, equals(-4));
+      },
+    );
   });
 }

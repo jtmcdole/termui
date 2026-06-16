@@ -112,8 +112,40 @@ class PromptRunner<T> implements SceneRenderer {
   /// The active terminal instance.
   final term.Terminal terminal;
 
+  Widget _widget;
+
   /// The root widget configuration to display.
-  final Widget widget;
+  Widget get widget => _widget;
+  set widget(Widget value) {
+    if (_widget == value) return;
+    _widget = value;
+    final rootElement = _rootElement;
+    if (rootElement != null) {
+      final scopedWidget = PromptScope(
+        onDone: (result) {
+          final comp = _completer;
+          if (comp != null && !comp.isCompleted) {
+            comp.complete(result as T?);
+          }
+        },
+        child: FocusScope(autofocus: true, child: _widget),
+      );
+      rootElement.update(scopedWidget);
+
+      if (height == null && !alternateScreen) {
+        _computedHeight = _widget.getIntrinsicHeight(_width);
+        _currentBuffer?.resize(_width, _computedHeight);
+        _renderer = Renderer(
+          _width,
+          _computedHeight,
+          mode: alternateScreen
+              ? RenderingMode.alternateScreen
+              : RenderingMode.inline,
+        );
+      }
+      draw();
+    }
+  }
 
   /// The height constraint of the inline rendering block. If null, calculated dynamically.
   final int? height;
@@ -180,7 +212,7 @@ class PromptRunner<T> implements SceneRenderer {
   /// Creates a new [PromptRunner].
   PromptRunner({
     required this.terminal,
-    required this.widget,
+    required Widget widget,
     this.height,
     Map<PromptExitTrigger, PromptExitAction>? exitConditions,
     this.onKeyEvent,
@@ -188,7 +220,8 @@ class PromptRunner<T> implements SceneRenderer {
     this.alternateScreen = false,
     this.onFramePainted,
     this.mode = ExecutionMode.standalone,
-  }) : exitConditions = exitConditions ?? defaultExitConditions;
+  }) : _widget = widget,
+       exitConditions = exitConditions ?? defaultExitConditions;
 
   /// Public programmatic abort.
   void abort([Object? exception]) {
@@ -976,6 +1009,9 @@ class SceneLayer {
   /// The stacking order index of the layer.
   int zIndex;
 
+  /// Whether this layer is draggable via mouse click-and-drag.
+  bool draggable;
+
   /// Creates a new [SceneLayer] with the given [renderer], [sizing], and placement parameters.
   SceneLayer({
     required this.renderer,
@@ -983,5 +1019,6 @@ class SceneLayer {
     this.x = 0,
     this.y = 0,
     this.zIndex = 0,
+    this.draggable = false,
   });
 }
