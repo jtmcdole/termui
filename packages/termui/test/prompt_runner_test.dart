@@ -375,7 +375,8 @@ void main() {
 }
 
 class Test4ArgMouseWidget extends Widget {
-  final void Function(ui.MouseEvent event, int localX, int localY, Rect area) onMouse;
+  final void Function(ui.MouseEvent event, int localX, int localY, Rect area)
+  onMouse;
   const Test4ArgMouseWidget(this.onMouse);
 
   @override
@@ -393,7 +394,12 @@ class _Test4ArgMouseElement extends Element {
   @override
   void paint(Buffer buffer, Offset offset) {}
 
-  void handleMouseEvent(ui.MouseEvent event, int localX, int localY, Rect area) {
+  void handleMouseEvent(
+    ui.MouseEvent event,
+    int localX,
+    int localY,
+    Rect area,
+  ) {
     (widget as Test4ArgMouseWidget).onMouse(event, localX, localY, area);
   }
 }
