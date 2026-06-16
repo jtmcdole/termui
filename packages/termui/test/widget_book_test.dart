@@ -2,16 +2,14 @@ import 'dart:async';
 import 'dart:math';
 import 'package:termui_shared_examples/widget_book/layout_state.dart';
 import 'package:test/test.dart';
-import 'package:termui/terminal/terminal.dart';
 import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as ui;
-import 'package:termui/ui/buffer.dart';
 import 'package:termui/perf/tracer.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_platform.dart';
 import 'package:termui_test/termui_test.dart';
-import 'package:termui/ui/widget_toolkit.dart';
 import 'package:termui/ui/window.dart';
+import 'package:termui/termui.dart';
 
 class FakeTerminalBackend implements TerminalBackend {
   final StreamController<List<int>> _inputController =
@@ -53,11 +51,15 @@ class FakeTerminalBackend implements TerminalBackend {
 }
 
 class TestWidgetBookPlatform implements WidgetBookPlatform {
+  Buffer? lastBuffer;
+
   @override
   bool get shouldRenderToTerminal => false;
 
   @override
-  void onFrameRedrawn(Buffer buffer) {}
+  void onFrameRedrawn(Buffer buffer) {
+    lastBuffer = buffer;
+  }
 
   @override
   void startTicker(void Function(Duration elapsed) onTick) {}
@@ -116,6 +118,52 @@ void main() {
       backend.injectBytes('\x1b[<0;5;4M'.codeUnits);
 
       // Wait for event processing
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
+      expect(
+        backend.writtenData.any((s) => s.contains('\x1b]22;\x1b\\')),
+        isTrue,
+      );
+
+      terminal.dispose();
+      await bookFuture;
+    });
+
+    test('Sidebar navigation hover highlights and click changes page', () async {
+      final backend = FakeTerminalBackend();
+      final terminal = Terminal(backend);
+      final platform = TestWidgetBookPlatform();
+
+      // Run widget book runner
+      final bookFuture = runWidgetBookShared(terminal, platform);
+
+      // Wait for initialization
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Clear written data from initial frame renders
+      backend.writtenData.clear();
+
+      // Move/hover mouse over the second sidebar item (Data Displays, index 1, 1-indexed row 4)
+      // SGR mouse move sequence: \x1b[<35;5;4M
+      backend.injectBytes('\x1b[<35;5;4M'.codeUnits);
+
+      // Wait for event processing
+      await Future.delayed(const Duration(milliseconds: 50));
+
+      // Verify that index 1 'Data Displays' is hovered and highlighted with CharmColors.charple background
+      final activeBuffer = platform.lastBuffer;
+      expect(activeBuffer, isNotNull);
+      final cell = activeBuffer!.getCell(0, 3);
+      expect(cell, isNotNull);
+      expect(cell!.char, equals('D'));
+      expect(cell.style.background, equals(CharmColors.charple));
+
+      // Click on the second sidebar item (Data Displays)
+      backend.injectBytes('\x1b[<0;5;4M'.codeUnits);
+      backend.injectBytes('\x1b[<0;5;4m'.codeUnits);
+
+      // Wait for click event processing
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'

@@ -21,6 +21,9 @@ class SceneManager {
   /// The currently focused layer, if any. Used to sync hardware state.
   SceneLayer? focusedLayer;
 
+  /// Whether mouse tracking is explicitly forced/enabled.
+  bool enableMouseTracking = false;
+
   final Compositor _compositor = Compositor();
   Renderer? _renderer;
   Buffer? _targetBuffer;
@@ -289,6 +292,7 @@ class SceneManager {
 
     final showsCursor = req?.showsCursor ?? false;
     final wantsMouseTracking =
+        enableMouseTracking ||
         (req?.wantsMouseTracking ?? false) ||
         layers.any((layer) => layer.draggable) ||
         debugMouseCursorEnabled;
