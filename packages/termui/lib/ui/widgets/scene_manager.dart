@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:math';
 
-import '../../terminal/terminal.dart';
+import '../../terminal/terminal.dart' hide Modifier;
 import '../buffer.dart';
+import '../color.dart';
 import '../renderer.dart';
+import '../style.dart';
+import '../termui_debug.dart';
 import 'prompt_runner.dart';
 
 /// Manages multiple visual layers in a terminal windowing system,
@@ -32,6 +35,10 @@ class SceneManager {
   int _layerStartX = 0;
   int _layerStartY = 0;
 
+  int? _globalMouseX;
+  int? _globalMouseY;
+  bool _isGlobalMouseDown = false;
+
   /// Exposes the internal renderer.
   Renderer? get renderer => _renderer;
 
@@ -59,16 +66,50 @@ class SceneManager {
     render();
   }
 
+  void _cleanOrphanedLayers() {
+    if (focusedLayer != null && !layers.contains(focusedLayer)) {
+      focusedLayer = null;
+    }
+    if (_draggingLayer != null && !layers.contains(_draggingLayer)) {
+      _draggingLayer = null;
+    }
+    if (_capturedMouseLayer != null && !layers.contains(_capturedMouseLayer)) {
+      _capturedMouseLayer = null;
+    }
+  }
+
+  List<SceneLayer> _getSortedLayers() {
+    final sorted = List<SceneLayer>.from(layers);
+    final originalIndices = {
+      for (var i = 0; i < layers.length; i++) layers[i]: i,
+    };
+    sorted.sort((a, b) {
+      final cmp = b.zIndex.compareTo(a.zIndex);
+      if (cmp != 0) return cmp;
+      return originalIndices[b]!.compareTo(originalIndices[a]!);
+    });
+    return sorted;
+  }
+
   void _handleInputEvent(InputEvent event) {
+    _cleanOrphanedLayers();
+
     if (event is KeyEvent) {
       focusedLayer?.renderer.handleKeyEvent(event);
     } else if (event is MouseEvent) {
+      _globalMouseX = event.x - 1;
+      _globalMouseY = event.y - 1;
+      _isGlobalMouseDown =
+          event.type == MouseEventType.press ||
+          event.type == MouseEventType.drag;
+
+      var didRender = false;
+
       if (event.type == MouseEventType.press) {
         final mouseX = event.x - 1;
         final mouseY = event.y - 1;
 
-        final sortedLayers = List<SceneLayer>.from(layers)
-          ..sort((a, b) => b.zIndex.compareTo(a.zIndex));
+        final sortedLayers = _getSortedLayers();
 
         SceneLayer? hitLayer;
         for (final layer in sortedLayers) {
@@ -115,6 +156,7 @@ class SceneManager {
           _draggingLayer!.x = _layerStartX + dx;
           _draggingLayer!.y = _layerStartY + dy;
           render();
+          didRender = true;
         } else if (_capturedMouseLayer != null) {
           final mouseX = event.x - 1;
           final mouseY = event.y - 1;
@@ -152,8 +194,7 @@ class SceneManager {
         final mouseX = event.x - 1;
         final mouseY = event.y - 1;
 
-        final sortedLayers = List<SceneLayer>.from(layers)
-          ..sort((a, b) => b.zIndex.compareTo(a.zIndex));
+        final sortedLayers = _getSortedLayers();
 
         for (final layer in sortedLayers) {
           final buf = layer.renderer.currentBuffer;
@@ -177,12 +218,18 @@ class SceneManager {
           }
         }
       }
+
+      if (debugMouseCursorEnabled && !didRender) {
+        render();
+      }
     }
   }
 
   /// Composites all active layers into a single flattened terminal output
   /// and writes it to the terminal.
   void render() {
+    _cleanOrphanedLayers();
+
     final size = terminal.backend.size;
     var width = size.x;
     var height = size.y;
@@ -195,8 +242,12 @@ class SceneManager {
 
     final layeredBuffers = <LayeredBuffer>[];
     for (final layer in layers) {
-      final buffer = layer.renderer.currentBuffer;
+      var buffer = layer.renderer.currentBuffer;
       if (buffer == null) continue;
+
+      if (debugPaintLayerBordersEnabled) {
+        buffer = _cloneBufferWithBorder(buffer);
+      }
 
       layeredBuffers.add(
         LayeredBuffer(
@@ -216,6 +267,18 @@ class SceneManager {
 
     _compositor.composite(target: target, layers: layeredBuffers);
 
+    if (debugMouseCursorEnabled &&
+        _globalMouseX != null &&
+        _globalMouseY != null) {
+      final cursorStyle = Style(
+        foreground: _isGlobalMouseDown
+            ? const Color(255, 0, 0)
+            : const Color(0, 255, 255),
+        modifiers: Modifier.bold,
+      );
+      target.writeString(_globalMouseX!, _globalMouseY!, '⦿', cursorStyle);
+    }
+
     final sb = StringBuffer();
     _renderer!.render(target, sb);
     terminal.backend.write(sb.toString());
@@ -227,7 +290,8 @@ class SceneManager {
     final showsCursor = req?.showsCursor ?? false;
     final wantsMouseTracking =
         (req?.wantsMouseTracking ?? false) ||
-        layers.any((layer) => layer.draggable);
+        layers.any((layer) => layer.draggable) ||
+        debugMouseCursorEnabled;
 
     var effectiveShowsCursor = showsCursor;
     int? absX;
@@ -286,7 +350,74 @@ class SceneManager {
     focusedLayer = null;
     _draggingLayer = null;
     _capturedMouseLayer = null;
+    _globalMouseX = null;
+    _globalMouseY = null;
+    _isGlobalMouseDown = false;
     _renderer = null;
     _targetBuffer = null;
   }
+}
+
+Buffer _cloneBufferWithBorder(Buffer source) {
+  final copy = Buffer(source.width, source.height);
+  for (var y = 0; y < source.height; y++) {
+    for (var x = 0; x < source.width; x++) {
+      final cell = source.getCell(x, y);
+      if (cell != null) {
+        copy.setCell(x, y, cell.clone());
+      }
+    }
+  }
+
+  final w = source.width;
+  final h = source.height;
+  if (w > 0 && h > 0) {
+    final borderStyle = const Style(
+      foreground: Colors.yellow,
+      modifiers: Modifier.bold,
+    );
+
+    final x2 = w - 1;
+    final y2 = h - 1;
+
+    void setBorderCell(int x, int y, String char) {
+      final cell = copy.getCell(x, y);
+      if (cell != null) {
+        if (cell.char == '') {
+          if (x - 1 >= 0) {
+            final prev = copy.getCell(x - 1, y);
+            if (prev != null && isWideGrapheme(prev.char)) {
+              prev.char = ' ';
+            }
+          }
+        } else if (isWideGrapheme(cell.char)) {
+          if (x + 1 < w) {
+            final next = copy.getCell(x + 1, y);
+            if (next != null && next.char == '') {
+              next.char = ' ';
+            }
+          }
+        }
+      }
+      copy.setCell(x, y, Cell(char, borderStyle));
+    }
+
+    // Draw horizontal lines
+    for (var x = 0; x < w; x++) {
+      setBorderCell(x, 0, '─');
+      setBorderCell(x, y2, '─');
+    }
+    // Draw vertical lines
+    for (var y = 0; y < h; y++) {
+      setBorderCell(0, y, '│');
+      setBorderCell(x2, y, '│');
+    }
+    // Draw corners
+    setBorderCell(0, 0, '┌');
+    setBorderCell(x2, 0, '┐');
+    setBorderCell(0, y2, '└');
+    setBorderCell(x2, y2, '┘');
+  }
+
+  return copy;
 }

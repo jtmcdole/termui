@@ -328,10 +328,6 @@ class PromptRunner<T> implements SceneRenderer {
       }
     }
 
-    if (debugPaintSizeEnabled) {
-      _drawElementOutlines(rootElement, buffer, Offset.zero);
-    }
-
     onFramePainted?.call(buffer);
 
     if (mode == ExecutionMode.standalone) {
@@ -706,9 +702,6 @@ extension PrintWidgetExtension on term.Terminal {
     element.mount(null);
     element.layout(BoxConstraints.tight(Size(width, height)));
     element.paint(buffer, Offset.zero);
-    if (debugPaintSizeEnabled) {
-      _drawElementOutlines(element, buffer, Offset.zero);
-    }
     element.unmount();
 
     final renderer = Renderer(width, height, mode: RenderingMode.inline);
@@ -813,25 +806,6 @@ void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
   }
 }
 
-void _drawElementOutlines(
-  Element element,
-  Buffer buffer,
-  Offset absoluteOffset,
-) {
-  final size = element.size;
-  // Alternate colors based on element depth: even depth gets Cyan, odd depth gets Yellow.
-  final color = (element.depth % 2 == 0)
-      ? const Color(0, 255, 255)
-      : const Color(255, 255, 0);
-  final style = Style(foreground: color);
-
-  _drawBoxOutline(buffer, absoluteOffset, size, style);
-
-  element.visitChildren((child) {
-    _drawElementOutlines(child, buffer, absoluteOffset + child.relativeOffset);
-  });
-}
-
 Element? _findHoveredElement(
   Element rootElement,
   Point<int>? lastMousePosition,
@@ -880,24 +854,43 @@ Offset _getAbsoluteOffset(Element element) {
 }
 
 void _highlightHoveredElement(Buffer buffer, Element element) {
+  if (element.size.width <= 0 || element.size.height <= 0) return;
   final offset = _getAbsoluteOffset(element);
-  final w = element.size.width;
-  final h = element.size.height;
-  final ox = offset.dx;
-  final oy = offset.dy;
 
-  for (var y = oy; y < oy + h; y++) {
-    for (var x = ox; x < ox + w; x++) {
-      final cell = buffer.getCell(x, y);
-      if (cell != null) {
-        cell.style = Style(
-          foreground: cell.style.foreground,
-          background: const Color(255, 0, 255), // Magenta background
-          modifiers: cell.style.modifiers & ~Modifier.transparent,
-        );
-      }
-    }
+  final left = max(0, offset.dx - 1);
+  final top = max(0, offset.dy - 1);
+  final right = min(buffer.width - 1, offset.dx + element.size.width);
+  final bottom = min(buffer.height - 1, offset.dy + element.size.height);
+
+  final expandedOffset = Offset(left, top);
+  final expandedSize = Size(right - left + 1, bottom - top + 1);
+
+  const style = Style(
+    foreground: Color(255, 0, 255), // Magenta
+    modifiers: Modifier.bold,
+  );
+
+  _drawBoxOutline(buffer, expandedOffset, expandedSize, style);
+
+  final typeName = element.widget.runtimeType.toString();
+  final label = ' $typeName ';
+
+  const labelStyle = Style(
+    foreground: Color(255, 255, 255), // White
+    background: Color(255, 0, 255), // Magenta
+    modifiers: Modifier.bold,
+  );
+
+  final int badgeY;
+  if (bottom == buffer.height - 1) {
+    badgeY = top;
+  } else {
+    badgeY = bottom;
   }
+
+  final badgeX = max(0, min(left + 1, buffer.width - label.length));
+
+  buffer.writeString(badgeX, badgeY, label, labelStyle);
 }
 
 bool _routeToElement(
