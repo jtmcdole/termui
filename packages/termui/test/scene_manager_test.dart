@@ -7,6 +7,8 @@ import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/widgets/prompt_runner.dart';
 import 'package:termui/ui/widgets/scene_manager.dart';
 import 'package:termui/ui/style.dart';
+import 'package:termui/ui/color.dart';
+import 'package:termui/ui/termui_debug.dart';
 
 class FakeTerminalBackend implements TerminalBackend {
   final List<String> writtenData = [];
@@ -567,5 +569,250 @@ void main() {
         expect(renderer.mouseEvents[2].y, equals(-4));
       },
     );
+
+    test(
+      'renders layer borders when debugPaintLayerBordersEnabled is true',
+      () {
+        debugPaintLayerBordersEnabled = true;
+        addTearDown(() {
+          debugPaintLayerBordersEnabled = false;
+        });
+
+        final layerBuf = Buffer(5, 5);
+        // Fill layer buffer with 'a'
+        for (var y = 0; y < 5; y++) {
+          for (var x = 0; x < 5; x++) {
+            layerBuf.setCell(x, y, Cell('a', Style.empty));
+          }
+        }
+
+        final renderer = MockSceneRenderer()..currentBuffer = layerBuf;
+        final layer = SceneLayer(
+          renderer: renderer,
+          sizing: LayerSizing.fixed,
+          x: 2,
+          y: 2,
+          zIndex: 1,
+        );
+
+        sceneManager.layers.add(layer);
+        sceneManager.render();
+
+        final target = sceneManager.renderer!.frontBuffer;
+        // Borders should be drawn at x: 2..6, y: 2..6.
+        // Corners:
+        // (2, 2) is '┌'
+        // (6, 2) is '┐'
+        // (2, 6) is '└'
+        // (6, 6) is '┘'
+        expect(target.getCell(2, 2)?.char, equals('┌'));
+        expect(target.getCell(6, 2)?.char, equals('┐'));
+        expect(target.getCell(2, 6)?.char, equals('└'));
+        expect(target.getCell(6, 6)?.char, equals('┘'));
+
+        // The border style should have foreground yellow
+        expect(target.getCell(2, 2)?.style.foreground, equals(Colors.yellow));
+
+        // Inside cell (e.g. 3, 3) should still be 'a' from layer buffer
+        expect(target.getCell(3, 3)?.char, equals('a'));
+      },
+    );
+
+    test(
+      'renders mouse cursor overlay when debugMouseCursorEnabled is true',
+      () async {
+        debugMouseCursorEnabled = true;
+        addTearDown(() {
+          debugMouseCursorEnabled = false;
+        });
+
+        final layerBuf = Buffer(10, 10);
+        final renderer = MockSceneRenderer()..currentBuffer = layerBuf;
+        final layer = SceneLayer(
+          renderer: renderer,
+          sizing: LayerSizing.fixed,
+          x: 0,
+          y: 0,
+        );
+
+        sceneManager.layers.add(layer);
+        sceneManager.render();
+
+        // 1. Move/Press mouse to global 1-based (5, 5) -> global 0-based (4, 4)
+        terminal.injectTestEvent(
+          const MouseEvent(
+            x: 5,
+            y: 5,
+            button: MouseButton.left,
+            type: MouseEventType.press,
+          ),
+        );
+        await Future.delayed(Duration.zero);
+
+        var target = sceneManager.renderer!.frontBuffer;
+        // Cell at (4, 4) should be '⦿' with bright red color (since button is down)
+        expect(target.getCell(4, 4)?.char, equals('⦿'));
+        expect(
+          target.getCell(4, 4)?.style.foreground,
+          equals(const Color(255, 0, 0)),
+        );
+
+        // 2. Move mouse to global 1-based (8, 8) with button up (move event) -> global 0-based (7, 7)
+        terminal.injectTestEvent(
+          const MouseEvent(
+            x: 8,
+            y: 8,
+            button: MouseButton.none,
+            type: MouseEventType.move,
+          ),
+        );
+        await Future.delayed(Duration.zero);
+
+        target = sceneManager.renderer!.frontBuffer;
+        // Cell at (7, 7) should be '⦿' with bright cyan color (since button is up)
+        expect(target.getCell(7, 7)?.char, equals('⦿'));
+        expect(
+          target.getCell(7, 7)?.style.foreground,
+          equals(const Color(0, 255, 255)),
+        );
+      },
+    );
+
+    test('stable layer ordering and composition when zIndex is equal', () {
+      // Create two layers with identical zIndex
+      final l1Buffer = Buffer(5, 5);
+      l1Buffer.fill(Cell('1', Style.empty));
+      final l1Renderer = MockSceneRenderer()..currentBuffer = l1Buffer;
+      final layer1 = SceneLayer(
+        renderer: l1Renderer,
+        sizing: LayerSizing.fixed,
+        x: 0,
+        y: 0,
+        zIndex: 5,
+      );
+
+      final l2Buffer = Buffer(5, 5);
+      l2Buffer.fill(Cell('2', Style.empty));
+      final l2Renderer = MockSceneRenderer()..currentBuffer = l2Buffer;
+      final layer2 = SceneLayer(
+        renderer: l2Renderer,
+        sizing: LayerSizing.fixed,
+        x: 2,
+        y: 2,
+        zIndex: 5, // Same zIndex
+      );
+
+      // Add to sceneManager in order: layer1 then layer2.
+      // Since layer2 is added later, it should sit on top of layer1.
+      sceneManager.layers.add(layer1);
+      sceneManager.layers.add(layer2);
+
+      sceneManager.render();
+      final target = sceneManager.renderer!.frontBuffer;
+
+      // Overlap area at (2, 2) to (4, 4) should be '2', not '1'.
+      expect(target.getCell(2, 2)?.char, equals('2'));
+      expect(target.getCell(4, 4)?.char, equals('2'));
+
+      // If we reverse the insertion order but keep identical zIndex
+      sceneManager.layers.clear();
+      sceneManager.layers.add(layer2);
+      sceneManager.layers.add(layer1);
+
+      sceneManager.render();
+      final target2 = sceneManager.renderer!.frontBuffer;
+
+      // Now layer1 is added later, so it should sit on top of layer2.
+      // Overlap area at (2, 2) to (4, 4) should be '1', not '2'.
+      expect(target2.getCell(2, 2)?.char, equals('1'));
+      expect(target2.getCell(4, 4)?.char, equals('1'));
+    });
+
+    test('cleans up references to orphaned layers', () async {
+      final renderer = MockSceneRenderer()..currentBuffer = Buffer(5, 5);
+      final layer = SceneLayer(
+        renderer: renderer,
+        sizing: LayerSizing.fixed,
+        x: 0,
+        y: 0,
+        draggable: true,
+      );
+
+      sceneManager.layers.add(layer);
+      sceneManager.focusedLayer = layer;
+
+      // Render first to initialize the renderer
+      sceneManager.render();
+      expect(sceneManager.renderer, isNotNull);
+
+      // Simulate a press to set captured and dragging layers
+      terminal.injectTestEvent(
+        const MouseEvent(
+          x: 1,
+          y: 1,
+          button: MouseButton.left,
+          type: MouseEventType.press,
+        ),
+      );
+      await Future.delayed(Duration.zero);
+
+      expect(sceneManager.focusedLayer, equals(layer));
+
+      // Now remove the layer from sceneManager.layers
+      sceneManager.layers.remove(layer);
+
+      // Triggering render or an event should clean them up
+      sceneManager.render();
+
+      expect(sceneManager.focusedLayer, isNull);
+    });
+
+    test('visual debug borders respect z-index occlusion', () {
+      debugPaintLayerBordersEnabled = true;
+      addTearDown(() {
+        debugPaintLayerBordersEnabled = false;
+      });
+
+      // Bottom layer: 10x10 filled with '1', zIndex: 0
+      final l1Buffer = Buffer(10, 10);
+      l1Buffer.fill(Cell('1', Style.empty));
+      final l1Renderer = MockSceneRenderer()..currentBuffer = l1Buffer;
+      final layer1 = SceneLayer(
+        renderer: l1Renderer,
+        sizing: LayerSizing.fixed,
+        x: 0,
+        y: 0,
+        zIndex: 0,
+      );
+
+      // Top layer: 5x5 filled with '2', zIndex: 10, positioned at x: 6, y: 6.
+      // Its borders will be at local edges (x=6, x=10, y=6, y=10).
+      // Global (9, 7) corresponds to local coordinates on layer2 of (lx=3, ly=1), which is in the interior.
+      final l2Buffer = Buffer(5, 5);
+      l2Buffer.fill(Cell('2', Style.empty));
+      final l2Renderer = MockSceneRenderer()..currentBuffer = l2Buffer;
+      final layer2 = SceneLayer(
+        renderer: l2Renderer,
+        sizing: LayerSizing.fixed,
+        x: 6,
+        y: 6,
+        zIndex: 10,
+      );
+
+      sceneManager.layers.add(layer1);
+      sceneManager.layers.add(layer2);
+
+      sceneManager.render();
+      final target = sceneManager.renderer!.frontBuffer;
+
+      // The border of layer1 at (9, 7) would normally draw vertical border line '│'.
+      // But layer2 is on top (zIndex 10) and covers (9, 7) with its interior content '2'.
+      // Therefore, the border of layer1 at (9, 7) must be occluded by layer2's content ('2').
+      expect(target.getCell(9, 7)?.char, equals('2'));
+
+      // Also check a non-occluded border coordinate of layer1: e.g. (9, 0)
+      // Since it's not occluded, it should render as a border corner '┐'
+      expect(target.getCell(9, 0)?.char, equals('┐'));
+    });
   });
 }

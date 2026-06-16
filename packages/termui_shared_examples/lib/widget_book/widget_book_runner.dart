@@ -95,6 +95,8 @@ Future<void> runWidgetBookShared(
 
   final appKey = GlobalKey<_WidgetBookAppState>();
 
+  final sceneManager = SceneManager(terminal);
+
   final runner = PromptRunner<void>(
     terminal: terminal,
     widget: WidgetBookApp(
@@ -104,6 +106,7 @@ Future<void> runWidgetBookShared(
       isInline: isInline,
     ),
     alternateScreen: !isInline,
+    mode: ExecutionMode.managed,
     onFramePainted: (buf) {
       final state = appKey.currentState;
       if (state != null) {
@@ -114,19 +117,17 @@ Future<void> runWidgetBookShared(
       }
       platform.onFrameRedrawn(buf);
       state?.recordFrame(buf);
+      sceneManager.render();
     },
     onKeyEvent: (event) {
-      if (event.type == KeyType.f10 || event.key == 'f10') {
-        debugPaintSizeEnabled = !debugPaintSizeEnabled;
-        return true;
-      }
       if (event.type == KeyType.f12 || event.key == 'f12') {
         debugPaintHoverEnabled = !debugPaintHoverEnabled;
         return true;
       }
       if (event.modifiers.contains(term.Modifier.control)) {
         if (event.key == 'p' || event.key == 'P') {
-          debugPaintSizeEnabled = !debugPaintSizeEnabled;
+          debugMouseCursorEnabled = !debugMouseCursorEnabled;
+          sceneManager.render();
           return true;
         }
         if (event.key == 'o' || event.key == 'O') {
@@ -138,6 +139,24 @@ Future<void> runWidgetBookShared(
     },
   );
 
+  final mainLayer = SceneLayer(
+    renderer: runner,
+    sizing: LayerSizing.fullscreen,
+    x: 0,
+    y: 0,
+    zIndex: 0,
+  );
+
+  sceneManager.layers.add(mainLayer);
+  sceneManager.focusedLayer = mainLayer;
+
+  final eventsSub = terminal.events.listen(
+    null,
+    onDone: () {
+      runner.abort();
+    },
+  );
+
   try {
     await runner.run();
   } on PromptAbortedException catch (e) {
@@ -145,6 +164,8 @@ Future<void> runWidgetBookShared(
       rethrow;
     }
   } finally {
+    await eventsSub.cancel();
+    sceneManager.dispose();
     if (!isInline) {
       terminal.showCursor();
       terminal.disableMouseTracking();

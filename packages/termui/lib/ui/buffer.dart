@@ -259,7 +259,14 @@ class Compositor {
 
       // Stable sort in descending order (highest zIndex first)
       final sortedLayers = List<LayeredBuffer>.from(layers);
-      sortedLayers.sort((a, b) => b.zIndex.compareTo(a.zIndex));
+      final originalIndices = {
+        for (var i = 0; i < layers.length; i++) layers[i]: i,
+      };
+      sortedLayers.sort((a, b) {
+        final cmp = b.zIndex.compareTo(a.zIndex);
+        if (cmp != 0) return cmp;
+        return originalIndices[b]!.compareTo(originalIndices[a]!);
+      });
 
       final totalCells = target.width * target.height;
       final written = Uint32List((totalCells + 31) >> 5);

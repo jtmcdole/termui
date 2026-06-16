@@ -70,46 +70,17 @@ void main() {
   setUp(() {
     backend = FakeTerminalBackend();
     terminal = MockTerminal(backend);
-    debugPaintSizeEnabled = false;
     debugPaintHoverEnabled = false;
   });
 
   tearDown(() {
-    debugPaintSizeEnabled = false;
     debugPaintHoverEnabled = false;
     terminal.dispose();
   });
 
   group('Visual Debug Overlays', () {
-    test('debugPaintSizeEnabled draws boxes around widgets', () {
-      debugPaintSizeEnabled = true;
-
-      final widget = const SizedBox(width: 5, height: 3);
-      final element = widget.createElement();
-      element.mount(null);
-      element.layout(const BoxConstraints(maxWidth: 5, maxHeight: 3));
-
-      final buffer = Buffer.blank(5, 3);
-      element.paint(buffer, Offset.zero);
-
-      // Now we print it via printWidget which uses printWidget extension
-      terminal.printWidget(widget);
-
-      // Since printWidget uses _drawElementOutlines, the printed buffer should have box drawing chars:
-      // ┌ ─── ┐
-      // │     │
-      // └ ─── ┘
-      final written = backend.writtenData.join();
-      expect(written, contains('┌'));
-      expect(written, contains('┐'));
-      expect(written, contains('└'));
-      expect(written, contains('┘'));
-      expect(written, contains('─'));
-      expect(written, contains('│'));
-    });
-
     test(
-      'debugPaintHoverEnabled enables mouse tracking and highlights hovered leaf element',
+      'debugPaintHoverEnabled enables mouse tracking and highlights hovered leaf element with a magenta border and a badge',
       () async {
         debugPaintHoverEnabled = true;
 
@@ -147,10 +118,19 @@ void main() {
         final activeBuffer = backend.buffer;
         expect(activeBuffer, isNotNull);
 
-        // Let's verify the cell at (5, 2) has a Magenta background.
-        final cell = activeBuffer!.getCell(5, 2);
-        expect(cell, isNotNull);
-        expect(cell!.style.background, equals(const Color(255, 0, 255)));
+        // Top-left corner of the hovered SizedBox is at (0, 1) due to expanded bounds
+        final cornerCell = activeBuffer!.getCell(0, 1);
+        expect(cornerCell, isNotNull);
+        expect(cornerCell!.char, equals('┌'));
+        expect(cornerCell.style.foreground, equals(const Color(255, 0, 255)));
+
+        // The badge ' SizedBox ' should start at (1, 4) due to expanded bounds
+        // Check character 'S' at (2, 4)
+        final charCell = activeBuffer.getCell(2, 4);
+        expect(charCell, isNotNull);
+        expect(charCell!.char, equals('S'));
+        expect(charCell.style.foreground, equals(const Color(255, 255, 255)));
+        expect(charCell.style.background, equals(const Color(255, 0, 255)));
 
         // Abort runner
         runner.abort();

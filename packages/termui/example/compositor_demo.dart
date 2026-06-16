@@ -70,6 +70,9 @@ Widget buildBackgroundWidget(Point<int>? mousePos, List<SceneLayer> layers) {
 }
 
 void main() async {
+  debugMouseCursorEnabled = true;
+  debugPaintLayerBordersEnabled = true;
+
   // We run the application inside runGuarded to guarantee terminal settings restoration.
   await Terminal.runGuarded((terminal) async {
     // 1. Setup alternate screen and clean terminal state
