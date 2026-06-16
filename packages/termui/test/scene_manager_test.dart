@@ -219,6 +219,29 @@ void main() {
       expect(written, contains(Terminal.disableMouseTrackingSequence));
     });
 
+    test(
+      'enables mouse tracking when enableMouseTracking is true, even if renderer wants it false',
+      () {
+        final renderer = MockSceneRenderer()
+          ..currentBuffer = Buffer(5, 5)
+          ..showsCursor = false
+          ..wantsMouseTracking = false;
+
+        final layer = SceneLayer(renderer: renderer, sizing: LayerSizing.fixed);
+
+        sceneManager.layers.add(layer);
+        sceneManager.focusedLayer = layer;
+        sceneManager.enableMouseTracking = true;
+
+        sceneManager.render();
+
+        final written = backend.writtenData.join();
+        // Should enable mouse tracking because enableMouseTracking is true
+        expect(written, contains(Terminal.enableMouseTrackingSequence));
+        expect(written, isNot(contains(Terminal.disableMouseTrackingSequence)));
+      },
+    );
+
     test('hides cursor if it is requested off-screen', () {
       final renderer = MockSceneRenderer()
         ..currentBuffer = Buffer(5, 5)

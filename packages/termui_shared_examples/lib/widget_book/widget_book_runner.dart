@@ -95,7 +95,7 @@ Future<void> runWidgetBookShared(
 
   final appKey = GlobalKey<_WidgetBookAppState>();
 
-  final sceneManager = SceneManager(terminal);
+  final sceneManager = SceneManager(terminal)..enableMouseTracking = true;
 
   final runner = PromptRunner<void>(
     terminal: terminal,
