@@ -1,6 +1,7 @@
 // ignore_for_file: file_names
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart' as term;
@@ -128,4 +129,6 @@ void main() async {
       terminal.showCursor();
     }
   });
+
+  exit(0);
 }
