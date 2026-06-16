@@ -1,3 +1,7 @@
+## 0.3.1
+
+ - **FEAT**(recorder): support action logging, trace recording, and interactive player debugging.
+
 ## 0.3.0
 
  - Update a dependency to the latest release.

@@ -1,3 +1,11 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **DOCS**: document scene management and managed prompt execution.
+ - **BREAKING** **REFACTOR**(ui): replace getChildOffset with Element.relativeOffset and ListWidget with ListView.
+ - **BREAKING** **REFACTOR**(ui): transition rendering pipeline to declarative Element-based architecture.
+
 ## 0.3.0
 
  - Update a dependency to the latest release.
