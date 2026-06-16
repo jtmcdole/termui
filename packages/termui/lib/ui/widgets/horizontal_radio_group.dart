@@ -99,15 +99,19 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
             (controller.focusedIndex + 1) % controller.options.length;
       });
       return true;
-    } else if (event.key == ' ' ||
-        event.key == 'space' ||
-        event.key == 'enter' ||
-        event.key == '\n' ||
-        event.key == '\r') {
+    } else if (event.key == ' ' || event.key == 'space') {
       setState(() {
         controller.selectedIndex = controller.focusedIndex;
       });
       return true;
+    } else if (event.key == 'enter' ||
+        event.key == '\n' ||
+        event.key == '\r' ||
+        event.type == term.KeyType.enter) {
+      setState(() {
+        controller.selectedIndex = controller.focusedIndex;
+      });
+      return false;
     }
     return false;
   }
@@ -150,7 +154,7 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) setState(() {});
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);

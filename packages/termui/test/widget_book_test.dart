@@ -856,5 +856,123 @@ void main() {
         await runnerFuture;
       });
     });
+
+    test('Burger Order Form - Keyboard-only Traversal', () async {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Navigate to the Burger Order Form page
+          print('--- BEFORE TAP ---');
+          print(tester.screenshot());
+          tester.tap(find.text('Burger Order Form'));
+          await tester.pump();
+          print('--- AFTER TAP ---');
+          print(tester.screenshot());
+
+          // 2. Focus the preview pane (Handoff focus to the right pane)
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          print('--- AFTER TAB ---');
+          print(tester.screenshot());
+
+          // Verify the preview is active and showing stage 0
+          expect(
+            find.textPattern(r'Burger Order Form Preview \[ACTIVE\]'),
+            findsOneWidget,
+          );
+          expect(find.text('Welcome to Dartaburger™.'), findsOneWidget);
+
+          // 3. Press Enter to start the order (move from Stage 0 to Stage 1)
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+          print('--- AFTER ENTER ---');
+          print(tester.screenshot());
+
+          // Stage 1: Build your burger.
+          expect(
+            find.textPattern('Stage 1 of 3: Build your burger'),
+            findsOneWidget,
+          );
+
+          // 4. Press Enter to move to Toppings field (activeFieldIndex 0 -> 1)
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // 5. Press Enter to proceed to Stage 2
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // Stage 2: Choose sides & spice.
+          expect(
+            find.textPattern('Stage 2 of 3: Choose sides & spice'),
+            findsOneWidget,
+          );
+
+          // 6. Press Enter to move to Sides field
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // 7. Press Enter to proceed to Stage 3
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // Stage 3: Customer details.
+          expect(
+            find.textPattern('Stage 3 of 3: Customer details'),
+            findsOneWidget,
+          );
+
+          // 8. Type name "John" in TextFormField
+          print('--- STAGE 3 BEFORE TYPE ---');
+          print(tester.screenshot());
+          tester.typeText('John');
+          await tester.pump();
+          print('--- STAGE 3 AFTER TYPE ---');
+          print(tester.screenshot());
+
+          // 9. Press Enter to move to Special Instructions
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+          print('--- STAGE 3 AFTER ENTER 1 ---');
+          print(tester.screenshot());
+
+          // 10. Press Tab to move to Confirm (discount)
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          print('--- STAGE 3 AFTER ENTER 2 ---');
+          print(tester.screenshot());
+
+          // 11. Press Enter to submit the order (Stage 3 -> Stage 4 receipt)
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+          print('--- STAGE 3 AFTER ENTER 3 ---');
+          print(tester.screenshot());
+
+          // Verify receipt screen (Stage 4)
+          expect(find.textPattern('BURGER RECEIPT'), findsOneWidget);
+          expect(
+            find.textPattern('Thanks for your order, John!'),
+            findsOneWidget,
+          );
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
   });
 }

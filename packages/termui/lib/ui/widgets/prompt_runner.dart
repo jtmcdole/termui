@@ -22,6 +22,23 @@ abstract interface class KeyEventHandler {
   bool handleKeyEvent(term.KeyEvent event);
 }
 
+/// An interface that indicates a widget or state can handle terminal mouse events.
+abstract interface class MouseEventHandler {
+  /// Handles a mouse event at local coordinates.
+  void handleMouseEvent(term.MouseEvent event, int localX, int localY);
+}
+
+/// An interface that indicates a widget or state can handle terminal mouse events with an explicit area boundary.
+abstract interface class MouseEventHandlerWithArea {
+  /// Handles a mouse event at local coordinates and bounding area.
+  void handleMouseEvent(
+    term.MouseEvent event,
+    int localX,
+    int localY,
+    Rect area,
+  );
+}
+
 /// Defines keyboard inputs or signals that can terminate the prompt runner's execution.
 enum PromptExitTrigger {
   /// Pressing the Enter key (carriage return `\r`, newline `\n`, or key string `'enter'`).
@@ -175,6 +192,12 @@ class PromptRunner<T> implements SceneRenderer {
         PromptExitTrigger.enter: PromptExitAction.complete,
       };
 
+  /// Static hook called when a prompt runner starts running.
+  static void Function(PromptRunner<dynamic> runner)? onPromptStarted;
+
+  /// Static hook called when a prompt runner ends/disposes.
+  static void Function(PromptRunner<dynamic> runner)? onPromptEnded;
+
   Completer<T?>? _completer;
   Element? _rootElement;
   bool _isDisposed = false;
@@ -243,6 +266,7 @@ class PromptRunner<T> implements SceneRenderer {
   void dispose() {
     if (_isDisposed) return;
     _isDisposed = true;
+    onPromptEnded?.call(this);
     final activeCompleter = _completer;
     if (activeCompleter != null && !activeCompleter.isCompleted) {
       activeCompleter.complete(null);
@@ -356,6 +380,7 @@ class PromptRunner<T> implements SceneRenderer {
 
   /// Starts the inline prompt loop and returns a Future containing the final result.
   Future<T?> run() async {
+    onPromptStarted?.call(this);
     final termSize = await terminal.size;
     _width = termSize.x;
 
@@ -450,6 +475,7 @@ class PromptRunner<T> implements SceneRenderer {
       return await _completer!.future;
     } finally {
       _isDisposed = true;
+      onPromptEnded?.call(this);
       sizeSubscription?.cancel();
       subscription?.cancel();
       // Restore cursor visibility
@@ -902,12 +928,50 @@ bool _routeToElement(
   final area = Rect(0, 0, element.size.width, element.size.height);
   if (element is StatefulElement) {
     final state = element.state;
+    if (state is MouseEventHandlerWithArea) {
+      (state as MouseEventHandlerWithArea).handleMouseEvent(
+        event,
+        localX,
+        localY,
+        area,
+      );
+      return true;
+    } else if (state is MouseEventHandler) {
+      (state as MouseEventHandler).handleMouseEvent(event, localX, localY);
+      return true;
+    } else {
+      try {
+        (state as dynamic).handleMouseEvent(event, localX, localY, area);
+        return true;
+      } catch (_) {
+        try {
+          (state as dynamic).handleMouseEvent(event, localX, localY);
+          return true;
+        } catch (_) {
+          // Ignored if not supported
+        }
+      }
+    }
+  }
+
+  if (element is MouseEventHandlerWithArea) {
+    (element as MouseEventHandlerWithArea).handleMouseEvent(
+      event,
+      localX,
+      localY,
+      area,
+    );
+    return true;
+  } else if (element is MouseEventHandler) {
+    (element as MouseEventHandler).handleMouseEvent(event, localX, localY);
+    return true;
+  } else {
     try {
-      (state as dynamic).handleMouseEvent(event, localX, localY, area);
+      (element as dynamic).handleMouseEvent(event, localX, localY, area);
       return true;
     } catch (_) {
       try {
-        (state as dynamic).handleMouseEvent(event, localX, localY);
+        (element as dynamic).handleMouseEvent(event, localX, localY);
         return true;
       } catch (_) {
         // Ignored if not supported
@@ -915,28 +979,29 @@ bool _routeToElement(
     }
   }
 
-  try {
-    (element as dynamic).handleMouseEvent(event, localX, localY, area);
-    return true;
-  } catch (_) {
-    try {
-      (element as dynamic).handleMouseEvent(event, localX, localY);
-      return true;
-    } catch (_) {
-      // Ignored if not supported
-    }
-  }
-
   final elWidget = element.widget;
-  try {
-    (elWidget as dynamic).handleMouseEvent(event, localX, localY, area);
+  if (elWidget is MouseEventHandlerWithArea) {
+    (elWidget as MouseEventHandlerWithArea).handleMouseEvent(
+      event,
+      localX,
+      localY,
+      area,
+    );
     return true;
-  } catch (_) {
+  } else if (elWidget is MouseEventHandler) {
+    (elWidget as MouseEventHandler).handleMouseEvent(event, localX, localY);
+    return true;
+  } else {
     try {
-      (elWidget as dynamic).handleMouseEvent(event, localX, localY);
+      (elWidget as dynamic).handleMouseEvent(event, localX, localY, area);
       return true;
     } catch (_) {
-      // Ignored if not supported
+      try {
+        (elWidget as dynamic).handleMouseEvent(event, localX, localY);
+        return true;
+      } catch (_) {
+        // Ignored if not supported
+      }
     }
   }
 

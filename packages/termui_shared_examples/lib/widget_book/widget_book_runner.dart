@@ -323,6 +323,7 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
   }
 
   void _setStatus(String msg) {
+    if (!mounted) return;
     setState(() {
       _statusMessage = msg;
     });
@@ -887,6 +888,7 @@ class _PreviewPaneElement extends Element {
           return false;
         }
         if (w.activeExample.handleKeyEvent(event)) {
+          markNeedsBuild();
           return true;
         }
         return false;

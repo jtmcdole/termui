@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:file/file.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:test_api/hooks.dart';
 import 'package:termui/termui.dart';
@@ -176,7 +177,15 @@ class TerminalTester {
       var filename = 'trace';
       final currentTestName = TestHandle.current.name;
       filename = sanitizeTestName(currentTestName);
-      final file = fs.file('$filename.cast');
+      Directory parentDir = fs.currentDirectory;
+      try {
+        final dummyFile = fs.file('.write_test');
+        dummyFile.writeAsStringSync('');
+        dummyFile.deleteSync();
+      } catch (_) {
+        parentDir = fs.systemTempDirectory;
+      }
+      final file = parentDir.childFile('$filename.cast');
       final w = _size?.x ?? 80;
       final h = _size?.y ?? 24;
       _recorder = AsciicastRecorder(
@@ -190,6 +199,19 @@ class TerminalTester {
         _fakeAsync = async;
         _backend = MockTerminalBackend(isWindows: _isWindows, size: _size);
         _terminal = Terminal(_backend!);
+
+        final oldOnPromptStarted = PromptRunner.onPromptStarted;
+        final oldOnPromptEnded = PromptRunner.onPromptEnded;
+        PromptRunner.onPromptStarted = (runner) {
+          if (runner.terminal == _terminal) {
+            _runner = runner;
+          }
+        };
+        PromptRunner.onPromptEnded = (runner) {
+          if (_runner == runner) {
+            _runner = null;
+          }
+        };
 
         final future = callback();
         var completed = false;
@@ -213,6 +235,8 @@ class TerminalTester {
             async.elapse(const Duration(milliseconds: 1));
           }
         } finally {
+          PromptRunner.onPromptStarted = oldOnPromptStarted;
+          PromptRunner.onPromptEnded = oldOnPromptEnded;
           _backend?.dispose();
           _active = null;
         }

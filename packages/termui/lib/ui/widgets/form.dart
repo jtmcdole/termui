@@ -303,7 +303,10 @@ class Form extends StatefulWidget implements Focusable {
       fields[activeFieldIndex].focused = false;
       activeFieldIndex = (activeFieldIndex - 1 + fields.length) % fields.length;
       fields[activeFieldIndex].focused = true;
-    } else if (event.type == KeyType.enter) {
+    } else if (event.type == KeyType.enter ||
+        event.key == '\r' ||
+        event.key == '\n' ||
+        event.key == 'enter') {
       final currentField = fields[activeFieldIndex];
       currentField.validate();
       if (currentField is! TextAreaFormField) {
@@ -439,7 +442,10 @@ class FormState extends State<Form> implements KeyEventHandler {
           list[activeIdx].focused = true;
         });
         return true;
-      } else if (event.type == KeyType.enter) {
+      } else if (event.type == KeyType.enter ||
+          event.key == '\r' ||
+          event.key == '\n' ||
+          event.key == 'enter') {
         final currentField = list[activeIdx];
         currentField.validate();
         if (currentField is! TextAreaFormField) {
@@ -497,7 +503,10 @@ class FormState extends State<Form> implements KeyEventHandler {
         list[activeIdx].widget.focused = true;
       });
       return true;
-    } else if (event.type == KeyType.enter) {
+    } else if (event.type == KeyType.enter ||
+        event.key == '\r' ||
+        event.key == '\n' ||
+        event.key == 'enter') {
       final currentField = list[activeIdx].widget;
       currentField.validate();
       if (currentField is! TextAreaFormField) {
@@ -1397,7 +1406,12 @@ class MultiSelectFormField<T> extends FormField<List<T>> {
         _state!.setState(() {});
       }
       return true;
-    } else if (event.key == ' ' || event.type == KeyType.enter) {
+    } else if (event.key == ' ' ||
+        event.key == 'space' ||
+        event.type == KeyType.enter ||
+        event.key == '\r' ||
+        event.key == '\n' ||
+        event.key == 'enter') {
       _selected[_selectedIndex] = !_selected[_selectedIndex];
       final nextVal = <T>[];
       for (var i = 0; i < options.length; i++) {

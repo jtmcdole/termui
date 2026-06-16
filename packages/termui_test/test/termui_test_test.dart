@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'package:file/file.dart';
 import 'package:termui/perf/fs_locator.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui/termui.dart';
@@ -302,7 +303,17 @@ void main() {
 
         final fs = getDefaultFileSystem();
         final testName = Invoker.current?.liveTest.test.name ?? 'trace';
-        final traceFile = fs.file('${sanitizeTestName(testName)}.cast');
+        Directory parentDir = fs.currentDirectory;
+        try {
+          final dummyFile = fs.file('.write_test');
+          dummyFile.writeAsStringSync('');
+          dummyFile.deleteSync();
+        } catch (_) {
+          parentDir = fs.systemTempDirectory;
+        }
+        final traceFile = parentDir.childFile(
+          '${sanitizeTestName(testName)}.cast',
+        );
         if (traceFile.existsSync()) {
           traceFile.deleteSync();
         }
