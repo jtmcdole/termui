@@ -68,7 +68,7 @@ void main() async {
     // 3. Define the UI rendering method
     void drawFrame() {
       buffer.clear();
-      
+
       // Build a declarative layout tree (Column -> Center -> Text)
       final layout = Column([
         SizedBox(
@@ -150,6 +150,61 @@ void main() async {
   });
 }
 ```
+
+---
+
+## Scene Management and Managed Prompt Execution
+
+For complex terminal layouts (such as overlapping draggable windows, multi-pane sidebars, or stacked layouts), `termui` provides a composited windowing system managed by `SceneManager` and `PromptRunner`.
+
+```mermaid
+graph TD
+  Terminal[Terminal Layer] -->|Global Events| SceneManager[SceneManager]
+  SceneManager -->|Watch Size| ResizeCoord[Resizing Coordinate Dispatcher]
+  SceneManager -->|Intercept Inputs| EventRouter[Focus & Event Router]
+
+  EventRouter -->|Keys / Local Mouse Events| ManagedRunner1[PromptRunner Layer 1 <br>ExecutionMode.managed]
+  EventRouter -->|Keys / Local Mouse Events| ManagedRunner2[PromptRunner Layer 2 <br>ExecutionMode.managed]
+
+  ManagedRunner1 -->|Render to Local Buffer| LocalBuf1[Buffer 1]
+  ManagedRunner2 -->|Render to Local Buffer| LocalBuf2[Buffer 2]
+
+  LocalBuf1 -->|LayeredBuffer x, y, zIndex| Compositor[Compositor]
+  LocalBuf2 -->|LayeredBuffer x, y, zIndex| Compositor
+
+  Compositor -->|Flattened Screen Buffer| DiffRenderer[ANSI Diff Renderer]
+  DiffRenderer -->|Minimal ANSI Escapes| Terminal
+```
+
+### Managed Execution Mode (`ExecutionMode.managed`)
+
+By default, a `PromptRunner` executes in `ExecutionMode.standalone`. In standalone mode, the runner directly binds to low-level hardware streams: it listens to global terminal sizing events, captures input streams, and writes ANSI escape updates directly to `stdout`.
+
+When integrated into a layered UI, `PromptRunner` instances run in **managed mode** (`ExecutionMode.managed`):
+* **Bypassed Hardware Streams**: The runner does not hook into `terminal.events` or `terminal.watchSize()`, and skips writing ANSI updates to `stdout`.
+* **Delegated Rendering**: The runner acts strictly as a `SceneRenderer` layer. It builds and manages its local widget element tree and renders onto its own offscreen `Buffer` (exposed via `currentBuffer`).
+* **Asynchronous Integration**: The runner is started asynchronously (e.g., via `unawaited(runner.run())`) to initialize state owners and mount element trees without taking control of the global application thread/event loop.
+
+### SceneManager: The Root Orchestrator
+
+The `SceneManager` serves as the global coordinator and compositor for all active `SceneLayer` instances.
+
+1. **Event Capture & Routing**:
+   * **KeyEvents**: Keyboard events are intercepted globally by the `SceneManager` and forwarded directly to the `SceneRenderer` of the active `focusedLayer` via `handleKeyEvent(event)`.
+   * **MouseEvents**: The manager performs spatial hit-testing on global coordinates using layer bounding boxes sorted by `zIndex`. On `press`, it changes the `focusedLayer` to the clicked layer. It translates coordinates from global values into layer-relative local offsets before forwarding the event via `handleMouseEvent(localEvent)`.
+   * **Dragging**: If a layer is marked `draggable` and clicked, `SceneManager` tracks dragging coordinates, updates the layer's offset (`x`, `y`), and schedules screen composition repaints.
+2. **Resizing Propagation**:
+   * The manager observes global terminal resizing events (`SIGWINCH` or polling).
+   * Repositioning: Fullscreen layers (`LayerSizing.fullscreen`) are automatically reset to `(0, 0)`.
+   * Propagation: The manager delegates size changes downwards, invoking `layer.renderer.resize(width, height)` on affected layer renderers so they resize their internal buffers and recalculate layouts.
+3. **Double-Buffered Compositing**:
+   * During a frame repaint (`SceneManager.render()`), the manager collects buffers from all active layers.
+   * It wraps them in `LayeredBuffer` instances containing the layer's current offset and Z-index.
+   * It delegates the composition to `Compositor.composite(...)`, which uses a bit-packed occlusion map to optimize rendering by skipping cell draws that are obscured by solid overlapping layers of a higher Z-index.
+   * The resulting flattened screen buffer is compared against the previous frame using `Renderer` to write the minimal ANSI diff updates to the terminal.
+4. **Hardware State Synchronization**:
+   * `SceneManager` inspects the active layer's `TerminalStateRequest` properties (`showsCursor`, `requestedCursorPosition`, and `wantsMouseTracking`).
+   * It coordinates native terminal configuration (toggling mouse tracking and cursor visibility) and repositions the physical terminal cursor at the correct absolute coordinate.
 
 ---
 
