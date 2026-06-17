@@ -1,0 +1,24 @@
+[38;2;32;31;38;48;2;251;251;251;1m📖 Widget Book Demo (Alt) [Size: 80x24] [FPS: 0.0] ⏺ [Record Cast][0m              [0m
+[38;2;251;251;251;2mCOMPONENTS[0m         [2m│[0m [38;2;107;80;255;1mModal & Scrollbar Preview [ACTIVE][0m                         [0m
+Text Inputs        [2m│[0m                                                            [0m
+Data Displays      [2m│[0m [38;2;107;80;255;1;2mModal & Focus Trap Demo[0m[2m                                  [0m  [0m
+Indicators         [2m│[0m [2m                                                         [0m  [0m
+Rich Text & Timer  [2m│[0m [38;2;251;251;251;2mPress [Enter] to open a modal dialog overlay that traps[0m[2m  [0m  [0m
+Layout & Padding   [2m│[0m [38;2;251;251;251;2mfocus between confirm/cancel buttons and dims the[0m[2m        [0m  [0m
+Layout & State     [2m│[0m [38;2;251;251;251;2mbackground.[0m[2m                                              [0m  [0m
+Charm Colors       [2m│[0m [2m      [0m[38;2;107;80;255;48;2;45;44;54m┌───────────[38;2;251;251;251;48;2;107;80;255;1m Charm Modal Dialog [0m[38;2;107;80;255;48;2;45;44;54m───────────┐[0m[2m       [0m  [0m
+Forms & Validation [2m│[0m [38;2;32;31;38;48;2;0;255;178;1;2m[ Pres[0m[38;2;107;80;255;48;2;45;44;54m│[38;2;251;251;251mThis is a focus-trapped modal! Use Tab to[0m[48;2;45;44;54m [38;2;107;80;255m│[0m[2m       [0m  [0m
+Burger Order Form  [2m│[0m [2m      [0m[38;2;107;80;255;48;2;45;44;54m│[38;2;251;251;251mcycle between buttons.[0m[48;2;45;44;54m                    [38;2;107;80;255m│[0m[2m       [0m  [0m
+File Tree          [2m│[0m [38;2;107;80;255;1;2mResult[0m[38;2;107;80;255;48;2;45;44;54m│[0m[48;2;45;44;54m                                          [38;2;107;80;255m│[0m[2m       [0m  [0m
+Split Pane         [2m│[0m [2m      [0m[38;2;107;80;255;48;2;45;44;54m│[0m[48;2;45;44;54m    [48;2;0;0;0m  [38;2;0;255;178;1mConfirm[0m[48;2;0;0;0m   [0m [48;2;45;44;54m        [48;2;211;108;100m   [38;2;32;31;38;1mCancel[0m[48;2;211;108;100m   [0m [48;2;45;44;54m    [38;2;107;80;255m│[0m[2m       [0m  [0m
+Virtual Scrolling  [2m│[0m [2m      [0m[38;2;107;80;255;48;2;45;44;54m│[0m[48;2;45;44;54m    [48;2;0;0;0m            [0m [48;2;45;44;54m        [48;2;211;108;100m            [0m [48;2;45;44;54m    [38;2;107;80;255m│[0m[2m       [0m  [0m
+[38;2;32;31;38;48;2;107;80;255;1mModal & Scrollbar  [0m[2m│[0m [2m      [0m[38;2;107;80;255;48;2;45;44;54m│[0m[48;2;45;44;54m    [0m             [48;2;45;44;54m        [0m             [48;2;45;44;54m    [38;2;107;80;255m│[0m[2m       [0m  [0m
+Clock & Radar      [2m│[0m [2m      [0m[38;2;107;80;255;48;2;45;44;54m└──────────────────────────────────────────┘[0m[2m       [0m  [0m
+Decorated Box &    [2m│[0m [2m                                                         [0m  [0m
+Animations &       [2m│[0m [2m                                                         [0m  [0m
+Mouse Cursors (OSC [2m│[0m [2m                                                         [0m  [0m
+                   [2m│[0m [2m                                                         [0m  [0m
+                   [2m│[0m [2m                                                         [0m  [0m
+                   [2m│[0m [2m                                                         [0m  [0m
+                                                                                [0m
+[38;2;0;255;178;1mEnter[0m [2mOpen Modal Overlay • [0m[38;2;0;255;178;1mTab[0m [2mSidebar • [0m[38;2;0;255;178;1mEsc[0m [2mDefocus • [0m[38;2;0;255;178;1mT[0m [2mStart Tracing • [0m       [0m

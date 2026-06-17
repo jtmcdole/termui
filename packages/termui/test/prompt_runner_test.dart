@@ -72,7 +72,7 @@ class MockTerminal extends Terminal {
 }
 
 class TestKeyConsumerWidget extends Widget
-    implements Focusable, KeyEventHandler {
+    implements ui.Focusable, ui.KeyEventHandler {
   @override
   final bool focused;
   final bool shouldConsume;

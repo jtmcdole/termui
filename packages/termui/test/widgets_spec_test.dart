@@ -443,6 +443,26 @@ void main() {
       modal.onKeyEvent!(const KeyEvent('backtab', KeyType.tab));
       expect(btn1Node.isFocused, isTrue);
       expect(btn2Node.isFocused, isFalse);
+
+      // Simulate Right Arrow key press
+      modal.onKeyEvent!(const KeyEvent('right', KeyType.right));
+      expect(btn2Node.isFocused, isTrue);
+      expect(btn1Node.isFocused, isFalse);
+
+      // Simulate Left Arrow key press
+      modal.onKeyEvent!(const KeyEvent('left', KeyType.left));
+      expect(btn1Node.isFocused, isTrue);
+      expect(btn2Node.isFocused, isFalse);
+
+      // Simulate Down Arrow key press
+      modal.onKeyEvent!(const KeyEvent('down', KeyType.down));
+      expect(btn2Node.isFocused, isTrue);
+      expect(btn1Node.isFocused, isFalse);
+
+      // Simulate Up Arrow key press
+      modal.onKeyEvent!(const KeyEvent('up', KeyType.up));
+      expect(btn1Node.isFocused, isTrue);
+      expect(btn2Node.isFocused, isFalse);
     });
 
     test('Input Blackhole Test - clicks outside dialog are intercepted', () {

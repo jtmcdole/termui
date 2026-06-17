@@ -21,8 +21,11 @@ class ModalDialogExample extends WidgetBookExample {
   /// The focus node for the second button (Cancel).
   final modalBtn2Node = FocusNode(id: 'modalBtn2');
 
+  /// The focus scope node for the modal overlay.
+  final modalScopeNode = FocusScopeNode(id: 'modalScope');
+
   @override
-  bool get hasActiveOverlay => showModalDemo;
+  bool get hasActiveOverlay => false;
 
   @override
   Widget build({
@@ -30,7 +33,70 @@ class ModalDialogExample extends WidgetBookExample {
     required int width,
     required int height,
   }) {
-    return Column([
+    return ModalDialogDemoWidget(example: this, width: width, height: height);
+  }
+
+  @override
+  bool handleKeyEvent(ui.KeyEvent event) {
+    if (event.type == ui.KeyType.enter) {
+      showModalDemo = true;
+      modalBtn1Node.requestFocus();
+      return true;
+    }
+    return false;
+  }
+
+  @override
+  void renderOverlay(Buffer buffer, int width, int height) {}
+
+  @override
+  void handleOverlayKeyEvent(ui.KeyEvent event) {}
+
+  @override
+  void handleOverlayMouseEvent(
+    ui.MouseEvent event,
+    int x,
+    int y,
+    int width,
+    int height,
+  ) {}
+
+  @override
+  Map<String, String> get helpBindings => {'Enter': 'Open Modal Overlay'};
+}
+
+/// A demo widget presenting the modal dialog layout, styling, and key interaction.
+class ModalDialogDemoWidget extends StatefulWidget {
+  /// The parent example instance containing state and focus node definitions.
+  final ModalDialogExample example;
+
+  /// Layout width constraints.
+  final int width;
+
+  /// Layout height constraints.
+  final int height;
+
+  /// Creates a [ModalDialogDemoWidget].
+  const ModalDialogDemoWidget({
+    required this.example,
+    required this.width,
+    required this.height,
+  });
+
+  @override
+  State<ModalDialogDemoWidget> createState() => _ModalDialogDemoWidgetState();
+}
+
+class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
+  void _onFocusChange(bool hasFocus) {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mainContent = Column([
       SizedBox(
         height: 1,
         child: Text(
@@ -65,7 +131,9 @@ class ModalDialogExample extends WidgetBookExample {
       SizedBox(
         height: 1,
         child: Text(
-          modalResult != null ? 'Result: $modalResult' : 'Result: None',
+          widget.example.modalResult != null
+              ? 'Result: ${widget.example.modalResult}'
+              : 'Result: None',
           style: const Style(
             foreground: CharmColors.charple,
             modifiers: Modifier.bold,
@@ -73,164 +141,142 @@ class ModalDialogExample extends WidgetBookExample {
         ),
       ),
     ]);
-  }
 
-  @override
-  bool handleKeyEvent(ui.KeyEvent event) {
-    if (event.type == ui.KeyType.enter) {
-      showModalDemo = true;
-      modalBtn1Node.requestFocus();
-      return true;
+    if (!widget.example.showModalDemo) {
+      return mainContent;
     }
-    return false;
-  }
 
-  @override
-  void renderOverlay(Buffer buffer, int width, int height) {
-    if (!showModalDemo) return;
+    final dialogW = 44;
+    final dialogH = 8;
+    final dialogX = (widget.width - dialogW) ~/ 2;
+    final dialogY = (widget.height - dialogH) ~/ 2;
 
-    final modal = ModalOverlay(
-      title: 'Charm Modal Dialog',
-      width: width,
-      height: height,
-      dialogBounds: Rect((width - 44) ~/ 2, (height - 8) ~/ 2, 44, 8),
-      modalFocusNodes: [modalBtn1Node, modalBtn2Node],
-      onDismiss: () {},
-      child: Column([
-        Expanded(
-          child: Text(
-            'This is a focus-trapped modal! Use Tab to cycle between buttons.',
-            style: const Style(foreground: CharmColors.soda),
+    return Stack([
+      Positioned(
+        left: 0,
+        top: 0,
+        width: widget.width,
+        height: widget.height,
+        child: mainContent,
+      ),
+      Positioned(
+        left: 0,
+        top: 0,
+        width: widget.width,
+        height: widget.height,
+        child: ModalOverlay(
+          title: 'Charm Modal Dialog',
+          width: widget.width,
+          height: widget.height,
+          dialogBounds: Rect(dialogX, dialogY, dialogW, dialogH),
+          focusNode: widget.example.modalScopeNode,
+          modalFocusNodes: [
+            widget.example.modalBtn1Node,
+            widget.example.modalBtn2Node,
+          ],
+          borderStyle: const Style(
+            foreground: CharmColors.charple,
+            background: CharmColors.bbq,
           ),
-        ),
-        SizedBox(
-          height: 3,
-          child: Row([
-            const SizedBox(width: 4, child: Text('')),
-            SizedBox(
-              width: 13,
+          titleStyle: const Style(
+            foreground: CharmColors.soda,
+            background: CharmColors.charple,
+            modifiers: Modifier.bold,
+          ),
+          backgroundStyle: const Style(background: CharmColors.bbq),
+          onDismiss: () {
+            setState(() {
+              widget.example.showModalDemo = false;
+            });
+          },
+          onKeyEvent: (event) {
+            if (event.type == ui.KeyType.enter) {
+              setState(() {
+                if (widget.example.modalBtn1Node.isFocused) {
+                  widget.example.modalResult = 'Confirmed';
+                } else if (widget.example.modalBtn2Node.isFocused) {
+                  widget.example.modalResult = 'Cancelled';
+                }
+                widget.example.showModalDemo = false;
+              });
+              return true; // Consume event
+            }
+            if (event.key == 'escape') {
+              setState(() {
+                widget.example.showModalDemo = false;
+              });
+              return true; // Consume event
+            }
+            return false;
+          },
+          child: Column([
+            Expanded(
               child: Text(
-                modalBtn1Node.isFocused
-                    ? '             \n  ▶ Confirm  \n             '
-                    : '             \n    Confirm  \n             ',
-                style: Style(
-                  foreground: modalBtn1Node.isFocused
-                      ? CharmColors.pepper
-                      : CharmColors.julep,
-                  background: modalBtn1Node.isFocused
-                      ? CharmColors.julep
-                      : Colors.black,
-                  modifiers: Modifier.bold,
-                ),
+                'This is a focus-trapped modal! Use Tab to cycle between buttons.',
+                style: const Style(foreground: CharmColors.soda),
               ),
             ),
-            const SizedBox(width: 8, child: Text('')),
             SizedBox(
-              width: 13,
-              child: Text(
-                modalBtn2Node.isFocused
-                    ? '             \n  ▶ Cancel   \n             '
-                    : '             \n    Cancel   \n             ',
-                style: Style(
-                  foreground: modalBtn2Node.isFocused
-                      ? CharmColors.pepper
-                      : CharmColors.paprika,
-                  background: modalBtn2Node.isFocused
-                      ? CharmColors.paprika
-                      : Colors.black,
-                  modifiers: Modifier.bold,
+              height: 3,
+              child: Row([
+                const SizedBox(width: 4, child: Text('')),
+                Focus(
+                  focusNode: widget.example.modalBtn1Node,
+                  onFocusChange: _onFocusChange,
+                  child: InkwellButton(
+                    text: 'Confirm',
+                    width: 13,
+                    height: 3,
+                    color1: widget.example.modalBtn1Node.isFocused
+                        ? CharmColors.julep
+                        : Colors.black,
+                    color2: CharmColors.pepper,
+                    textStyle: Style(
+                      foreground: widget.example.modalBtn1Node.isFocused
+                          ? CharmColors.pepper
+                          : CharmColors.julep,
+                      modifiers: Modifier.bold,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        widget.example.modalResult = 'Confirmed';
+                        widget.example.showModalDemo = false;
+                      });
+                    },
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8, child: Text('')),
+                Focus(
+                  focusNode: widget.example.modalBtn2Node,
+                  onFocusChange: _onFocusChange,
+                  child: InkwellButton(
+                    text: 'Cancel',
+                    width: 13,
+                    height: 3,
+                    color1: widget.example.modalBtn2Node.isFocused
+                        ? CharmColors.paprika
+                        : Colors.black,
+                    color2: CharmColors.pepper,
+                    textStyle: Style(
+                      foreground: widget.example.modalBtn2Node.isFocused
+                          ? CharmColors.pepper
+                          : CharmColors.paprika,
+                      modifiers: Modifier.bold,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        widget.example.modalResult = 'Cancelled';
+                        widget.example.showModalDemo = false;
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(width: 4, child: Text('')),
+              ]),
             ),
-            const SizedBox(width: 4, child: Text('')),
           ]),
         ),
-      ]),
-    );
-    final modalEl = modal.createElement()..mount(null);
-    modalEl.layout(BoxConstraints.tight(Size(width, height)));
-    modalEl.paint(buffer, Offset.zero);
-    modalEl.unmount();
+      ),
+    ]);
   }
-
-  @override
-  void handleOverlayKeyEvent(ui.KeyEvent event) {
-    if (event.type == ui.KeyType.enter) {
-      if (modalBtn1Node.isFocused) {
-        modalResult = 'Confirmed';
-      } else if (modalBtn2Node.isFocused) {
-        modalResult = 'Cancelled';
-      }
-      showModalDemo = false;
-      return;
-    }
-
-    if (event.key == 'escape') {
-      showModalDemo = false;
-      return;
-    }
-
-    if (event.key == '\t' || event.key == 'backtab') {
-      final modal = ModalOverlay(
-        title: 'Charm Modal Dialog',
-        width: 80,
-        height: 24,
-        dialogBounds: Rect(0, 0, 44, 8),
-        modalFocusNodes: [modalBtn1Node, modalBtn2Node],
-        onDismiss: () {},
-        child: const Text(''),
-      );
-      modal.onKeyEvent?.call(event);
-    }
-  }
-
-  @override
-  void handleOverlayMouseEvent(
-    ui.MouseEvent event,
-    int x,
-    int y,
-    int width,
-    int height,
-  ) {
-    final dialogX = (width - 44) ~/ 2;
-    final dialogY = (height - 8) ~/ 2;
-    final localX = x - dialogX;
-    final localY = y - dialogY;
-
-    final modal = ModalOverlay(
-      title: 'Charm Modal Dialog',
-      width: width,
-      height: height,
-      dialogBounds: Rect(dialogX, dialogY, 44, 8),
-      modalFocusNodes: [modalBtn1Node, modalBtn2Node],
-      onDismiss: () {
-        showModalDemo = false;
-      },
-      child: const Text(''),
-    );
-
-    if (event.type == ui.MouseEventType.press) {
-      if (localX >= 5 && localX < 18 && localY >= 4 && localY <= 6) {
-        // Clicked Confirm
-        modalBtn1Node.requestFocus();
-        modalResult = 'Confirmed';
-        showModalDemo = false;
-      } else if (localX >= 26 && localX < 39 && localY >= 4 && localY <= 6) {
-        // Clicked Cancel
-        modalBtn2Node.requestFocus();
-        modalResult = 'Cancelled';
-        showModalDemo = false;
-      } else if (localX >= 0 && localX < 44 && localY >= 0 && localY < 8) {
-        // Clicked inside modal dialog, do nothing
-      } else {
-        // Clicked outside modal dialog, dismiss
-        showModalDemo = false;
-      }
-    } else {
-      modal.onMouseEvent?.call(event, x, y);
-    }
-  }
-
-  @override
-  Map<String, String> get helpBindings => {'Enter': 'Open Modal Overlay'};
 }

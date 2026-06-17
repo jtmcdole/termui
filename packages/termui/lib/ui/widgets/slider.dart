@@ -5,7 +5,6 @@ import '../event.dart' hide Modifier;
 import '../layout.dart';
 import '../style.dart';
 import '../../terminal/terminal.dart' as term;
-import 'prompt_runner.dart';
 import 'focus.dart';
 import '../window.dart';
 

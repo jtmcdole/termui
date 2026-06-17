@@ -6,7 +6,7 @@ import '../style.dart';
 import 'text.dart';
 import 'selection_controller.dart';
 import '../../terminal/terminal.dart' as term;
-import 'prompt_runner.dart';
+import '../event.dart' show Focusable, KeyEventHandler;
 import 'focus.dart';
 import '../window.dart';
 
