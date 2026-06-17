@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:termui_shared_examples/widget_book/layout_state.dart';
+import 'package:termui_shared_examples/widget_book/modal_dialog.dart';
 import 'package:test/test.dart';
 import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as ui;
@@ -8,6 +9,7 @@ import 'package:termui/perf/tracer.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_platform.dart';
 import 'package:termui_test/termui_test.dart';
+import 'package:termui_recorder/termui_recorder.dart';
 import 'package:termui/ui/window.dart';
 import 'package:termui/termui.dart';
 
@@ -612,8 +614,6 @@ void main() {
           await tester.pump();
           tester.expectUI(find.text(' XeYnd'), findsOneWidget);
 
-          print(tester.screenshot());
-
           // Move cursor right by 1 (after 'X'), delete to end of line (deletes 'eYnd')
           tester.sendKey(LogicalKey.home);
           tester.sendKey(LogicalKey.arrowRight);
@@ -875,18 +875,12 @@ void main() {
           await tester.pump();
 
           // 1. Navigate to the Burger Order Form page
-          print('--- BEFORE TAP ---');
-          print(tester.screenshot());
           tester.tap(find.text('Burger Order Form'));
           await tester.pump();
-          print('--- AFTER TAP ---');
-          print(tester.screenshot());
 
           // 2. Focus the preview pane (Handoff focus to the right pane)
           tester.sendKey(LogicalKey.tab);
           await tester.pump();
-          print('--- AFTER TAB ---');
-          print(tester.screenshot());
 
           // Verify the preview is active and showing stage 0
           expect(
@@ -898,8 +892,6 @@ void main() {
           // 3. Press Enter to start the order (move from Stage 0 to Stage 1)
           tester.sendKey(LogicalKey.enter);
           await tester.pump();
-          print('--- AFTER ENTER ---');
-          print(tester.screenshot());
 
           // Stage 1: Build your burger.
           expect(
@@ -936,30 +928,20 @@ void main() {
           );
 
           // 8. Type name "John" in TextFormField
-          print('--- STAGE 3 BEFORE TYPE ---');
-          print(tester.screenshot());
           tester.typeText('John');
           await tester.pump();
-          print('--- STAGE 3 AFTER TYPE ---');
-          print(tester.screenshot());
 
           // 9. Press Enter to move to Special Instructions
           tester.sendKey(LogicalKey.enter);
           await tester.pump();
-          print('--- STAGE 3 AFTER ENTER 1 ---');
-          print(tester.screenshot());
 
           // 10. Press Tab to move to Confirm (discount)
           tester.sendKey(LogicalKey.tab);
           await tester.pump();
-          print('--- STAGE 3 AFTER ENTER 2 ---');
-          print(tester.screenshot());
 
           // 11. Press Enter to submit the order (Stage 3 -> Stage 4 receipt)
           tester.sendKey(LogicalKey.enter);
           await tester.pump();
-          print('--- STAGE 3 AFTER ENTER 3 ---');
-          print(tester.screenshot());
 
           // Verify receipt screen (Stage 4)
           expect(find.textPattern('BURGER RECEIPT'), findsOneWidget);
@@ -967,6 +949,271 @@ void main() {
             find.textPattern('Thanks for your order, John!'),
             findsOneWidget,
           );
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('Modal & Scrollbar - Traversal and Interaction Flow', () async {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Navigate to the Modal & Scrollbar page
+          tester.tap(find.text('Modal & Scrollbar'));
+          await tester.pump();
+
+          // 2. Focus the preview pane (Handoff focus to the right pane)
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify the preview is active
+          expect(find.textPattern(r'Modal & Focus Trap Demo'), findsOneWidget);
+
+          // 3. Press Enter to open the modal
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // Verify the modal is now visible
+          expect(
+            find.textPattern(r'This is a focus-trapped modal!'),
+            findsOneWidget,
+          );
+
+          final demoWidget =
+              find
+                      .byType<ModalDialogDemoWidget>()
+                      .apply(collectAllElements(tester.rootElement!))
+                      .first
+                      .widget
+                  as ModalDialogDemoWidget;
+
+          // Initially Confirm has focus
+          expect(demoWidget.example.modalBtn1Node.isFocused, isTrue);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isFalse);
+
+          // Verify hover enter and hover exit on the Confirm button
+          final confirmButtonElement =
+              find
+                      .byType<InkwellButton>()
+                      .apply(collectAllElements(tester.rootElement!))
+                      .first
+                  as StatefulElement;
+          final confirmState = confirmButtonElement.state as InkwellButtonState;
+
+          Offset getAbsoluteOffset(Element element) {
+            var offset = Offset.zero;
+            Element? current = element;
+            while (current != null) {
+              offset = offset + current.relativeOffset;
+              current = current.parent;
+            }
+            return offset;
+          }
+
+          final confirmOffset = getAbsoluteOffset(confirmButtonElement);
+          final buttonX = confirmOffset.dx.toInt() + 3;
+          final buttonY = confirmOffset.dy.toInt() + 2;
+
+          // Mouse moves over the Confirm button
+          tester.mouseMove(buttonX, buttonY, drag: false);
+          await tester.pump();
+          expect(confirmState.isHovered, isTrue);
+
+          // Mouse moves away (X=10, Y=10)
+          tester.mouseMove(10, 10, drag: false);
+          await tester.pump();
+          expect(confirmState.isHovered, isFalse);
+
+          // 4. Press Arrow Right to move focus to Cancel
+          tester.sendKey(LogicalKey.arrowRight);
+          await tester.pump();
+          expect(demoWidget.example.modalBtn1Node.isFocused, isFalse);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isTrue);
+
+          // Press Arrow Left to move focus back to Confirm
+          tester.sendKey(LogicalKey.arrowLeft);
+          await tester.pump();
+          expect(demoWidget.example.modalBtn1Node.isFocused, isTrue);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isFalse);
+
+          // Press Arrow Down to move focus to Cancel
+          tester.sendKey(LogicalKey.arrowDown);
+          await tester.pump();
+          expect(demoWidget.example.modalBtn1Node.isFocused, isFalse);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isTrue);
+
+          // Press Arrow Up to move focus back to Confirm
+          tester.sendKey(LogicalKey.arrowUp);
+          await tester.pump();
+          expect(demoWidget.example.modalBtn1Node.isFocused, isTrue);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isFalse);
+
+          // Press Tab to move focus to Cancel
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(demoWidget.example.modalBtn1Node.isFocused, isFalse);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isTrue);
+
+          // Press Shift+Tab to move focus back to Confirm
+          tester.sendKey(LogicalKey.tab, shift: true);
+          await tester.pump();
+          expect(demoWidget.example.modalBtn1Node.isFocused, isTrue);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isFalse);
+
+          // Press Tab to move focus to Cancel
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(demoWidget.example.modalBtn1Node.isFocused, isFalse);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isTrue);
+
+          // 5. Press Enter to select Cancel and dismiss the modal
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // Verify the modal closes and updates state
+          expect(
+            find.textPattern(r'This is a focus-trapped modal!'),
+            findsNothing,
+          );
+          expect(find.textPattern(r'Result: Cancelled'), findsOneWidget);
+
+          // Focus is currently on preview node. Let's assert that.
+          expect(FocusManager.instance.primaryFocus?.id, equals('preview'));
+
+          // Press Enter to open the modal again
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // Verify the modal is now visible again
+          expect(
+            find.textPattern(r'This is a focus-trapped modal!'),
+            findsOneWidget,
+          );
+
+          // Press Escape to dismiss the modal via Escape key
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+
+          // Verify the modal closes
+          expect(
+            find.textPattern(r'This is a focus-trapped modal!'),
+            findsNothing,
+          );
+
+          // Press Escape to defocus the preview pane (returning focus to the sidebar)
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+
+          // Assert focus returns to the sidebar
+          expect(FocusManager.instance.primaryFocus?.id, equals('sidebar'));
+
+          // Now we should be on the sidebar. Pressing Enter or Arrow Up/Down should work.
+          // Let's press Enter (which will open the page/trigger options or click)
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('Modal & Scrollbar - Golden Screen Tests', () async {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Navigate to the Modal & Scrollbar page
+          tester.tap(find.text('Modal & Scrollbar'));
+          await tester.pump();
+
+          // 2. Focus the preview pane (Handoff focus to the right pane)
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify the preview is active
+          expect(find.textPattern(r'Modal & Focus Trap Demo'), findsOneWidget);
+
+          // 3. Press Enter to open the modal
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // Verify the modal is now visible
+          expect(
+            find.textPattern(r'This is a focus-trapped modal!'),
+            findsOneWidget,
+          );
+
+          // Assert that the buffer matches a golden named 'test/goldens/widget_book_modal_before_navigation.ansi'
+          expect(
+            tester.backend.buffer,
+            matchesAnsiGolden(
+              'test/goldens/widget_book_modal_before_navigation.ansi',
+              environment: {'GENERATE_GOLDENS': 'true'},
+            ),
+          );
+
+          final demoWidget =
+              find
+                      .byType<ModalDialogDemoWidget>()
+                      .apply(collectAllElements(tester.rootElement!))
+                      .first
+                      .widget
+                  as ModalDialogDemoWidget;
+
+          // Initially Confirm has focus
+          expect(demoWidget.example.modalBtn1Node.isFocused, isTrue);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isFalse);
+
+          // 4. Move focus to the Cancel button
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Assert Cancel button has focus
+          expect(demoWidget.example.modalBtn1Node.isFocused, isFalse);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isTrue);
+
+          // Assert that the buffer matches 'test/goldens/widget_book_modal_after_navigation.ansi'
+          expect(
+            tester.backend.buffer,
+            matchesAnsiGolden(
+              'test/goldens/widget_book_modal_after_navigation.ansi',
+              environment: {'GENERATE_GOLDENS': 'true'},
+            ),
+          );
+
+          // Clean exit: select Cancel and dismiss the modal
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
 
           runner.dispose();
         });

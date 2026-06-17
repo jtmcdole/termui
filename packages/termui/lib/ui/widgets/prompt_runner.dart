@@ -10,34 +10,12 @@ import '../termui_debug.dart';
 import '../color.dart';
 import '../style.dart';
 
-/// An interface that indicates a widget or state can receive keyboard focus.
-abstract interface class Focusable {
-  /// Whether this object currently has keyboard focus.
-  bool get focused;
-}
-
-/// An interface that indicates a widget or state can handle terminal keyboard events.
-abstract interface class KeyEventHandler {
-  /// Handles a keyboard event, returning true if the event was consumed.
-  bool handleKeyEvent(term.KeyEvent event);
-}
-
-/// An interface that indicates a widget or state can handle terminal mouse events.
-abstract interface class MouseEventHandler {
-  /// Handles a mouse event at local coordinates.
-  void handleMouseEvent(term.MouseEvent event, int localX, int localY);
-}
-
-/// An interface that indicates a widget or state can handle terminal mouse events with an explicit area boundary.
-abstract interface class MouseEventHandlerWithArea {
-  /// Handles a mouse event at local coordinates and bounding area.
-  void handleMouseEvent(
-    term.MouseEvent event,
-    int localX,
-    int localY,
-    Rect area,
-  );
-}
+import '../event.dart'
+    show
+        Focusable,
+        KeyEventHandler,
+        MouseEventHandler,
+        MouseEventHandlerWithArea;
 
 /// Defines keyboard inputs or signals that can terminate the prompt runner's execution.
 enum PromptExitTrigger {
@@ -204,6 +182,16 @@ class PromptRunner<T> implements SceneRenderer {
   Point<int>? _lastMousePosition;
   Element? _mouseCaptureElement;
   BuildOwner? _buildOwner;
+  bool _drawScheduled = false;
+
+  void _scheduleDraw() {
+    if (_drawScheduled) return;
+    _drawScheduled = true;
+    scheduleMicrotask(() {
+      _drawScheduled = false;
+      draw();
+    });
+  }
 
   Buffer? _currentBuffer;
   Renderer? _renderer;
@@ -413,7 +401,7 @@ class PromptRunner<T> implements SceneRenderer {
       child: FocusScope(autofocus: true, child: widget),
     );
 
-    _buildOwner = BuildOwner(onNeedVisualUpdate: draw);
+    _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleDraw);
 
     final rootElement = scopedWidget.createElement();
     rootElement.owner = _buildOwner;
@@ -583,7 +571,12 @@ class PromptRunner<T> implements SceneRenderer {
         sy >= absOffset.dy &&
         sy < absOffset.dy + element.size.height;
 
-    if (!inside) {
+    final isMoveOrDragOrRelease =
+        event.type == term.MouseEventType.move ||
+        event.type == term.MouseEventType.drag ||
+        event.type == term.MouseEventType.release;
+
+    if (!inside && !isMoveOrDragOrRelease) {
       return false;
     }
 
@@ -593,11 +586,19 @@ class PromptRunner<T> implements SceneRenderer {
       children.add(child);
     });
 
+    bool childConsumed = false;
     for (final child in children.reversed) {
-      final childConsumed = _routeMouseEvent(child, event, absOffset);
-      if (childConsumed) {
-        return true;
+      final consumed = _routeMouseEvent(child, event, absOffset);
+      if (consumed) {
+        childConsumed = true;
+        if (!isMoveOrDragOrRelease) {
+          break;
+        }
       }
+    }
+
+    if (childConsumed && inside) {
+      return true;
     }
 
     final localX = sx - absOffset.dx.toInt();
@@ -608,10 +609,10 @@ class PromptRunner<T> implements SceneRenderer {
       if (event.type == term.MouseEventType.press) {
         _mouseCaptureElement = element;
       }
-      return true;
+      return inside;
     }
 
-    return false;
+    return childConsumed && inside;
   }
 
   @override

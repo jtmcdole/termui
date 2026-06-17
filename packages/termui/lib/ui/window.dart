@@ -5,7 +5,6 @@ import 'style.dart';
 import 'layout.dart';
 import 'event.dart';
 import 'event.dart' as ev;
-import 'widgets/prompt_runner.dart';
 
 /// A node in the keyboard focus tree.
 ///
@@ -147,6 +146,9 @@ class FocusNode {
   /// Removes a child focus node from this branch.
   void removeChild(FocusNode child) {
     if (child.parent == this) {
+      if (child.hasFocus) {
+        child.unfocus();
+      }
       children.remove(child);
       child.parent = null;
     }

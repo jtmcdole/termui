@@ -7,9 +7,10 @@ import '../layout.dart';
 import '../event.dart' hide Modifier;
 import '../animation/effects.dart';
 import '../animation/animated_state_mixin.dart';
+import 'focus.dart';
 
 /// A button widget with hover elevation (floating shadow) and pressed radial gradient inkwell ripple animation.
-class InkwellButton extends StatefulWidget {
+class InkwellButton extends StatefulWidget implements MouseEventHandler {
   /// The label text.
   final String text;
 
@@ -49,6 +50,7 @@ class InkwellButton extends StatefulWidget {
   InkwellButtonState? _state;
 
   /// Translates mouse interactions to update hover and pressed states.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     _state?.handleMouseEvent(event, localX, localY);
   }
@@ -63,7 +65,8 @@ class InkwellButton extends StatefulWidget {
 
 /// The state for an [InkwellButton].
 class InkwellButtonState extends State<InkwellButton>
-    with TuiAnimatedStateMixin<InkwellButton> {
+    with TuiAnimatedStateMixin<InkwellButton>
+    implements MouseEventHandler {
   late final InkwellRippleEffect _ripple;
 
   bool _isHovered = false;
@@ -99,6 +102,7 @@ class InkwellButtonState extends State<InkwellButton>
   }
 
   /// Handles mouse interactions.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     final resolvedWidth = widget.width ?? _lastWidth;
     final resolvedHeight = widget.height ?? _lastHeight;
@@ -113,6 +117,7 @@ class InkwellButtonState extends State<InkwellButton>
 
     if (event.type == MouseEventType.press) {
       if (inBounds) {
+        Focus.of(context)?.requestFocus();
         setState(() {
           _isPressed = true;
           _isHovered = false;
@@ -207,25 +212,56 @@ class InkwellButtonState extends State<InkwellButton>
     final textY = (bodyHeight - 1) ~/ 2;
     final textX = (bodyWidth - textLen) ~/ 2;
 
-    // Paint baseline button cells
+    // Paint baseline button cells (only spaces first)
     final baseStyle = Style(background: widget.color1);
     for (var by = 0; by < bodyHeight; by++) {
       for (var bx = 0; bx < bodyWidth; bx++) {
-        if (by == textY && bx >= textX && bx < textX + textLen) {
-          final charIndex = bx - textX;
-          buffer.setCell(
-            bodyX + bx,
-            bodyY + by,
-            Cell(textChars[charIndex], widget.textStyle.merge(baseStyle)),
-          );
-        } else {
-          buffer.setCell(bodyX + bx, bodyY + by, Cell(' ', baseStyle));
-        }
+        buffer.setCell(bodyX + bx, bodyY + by, Cell(' ', baseStyle));
       }
     }
 
     // Delegate overlay drawing to the animation mixin
     paintEffects(buffer, Rect(bodyX, bodyY, bodyWidth, bodyHeight), baseStyle);
+
+    // Now draw the text on top, adjusting foreground for contrast
+    for (var i = 0; i < textLen; i++) {
+      final bx = textX + i;
+      final by = textY;
+      if (bx >= 0 && bx < bodyWidth && by >= 0 && by < bodyHeight) {
+        final cell = buffer.getCell(bodyX + bx, bodyY + by);
+        if (cell != null) {
+          cell.char = textChars[i];
+          final bg =
+              cell.style.background ?? baseStyle.background ?? Colors.black;
+
+          Style resolvedTextStyle = widget.textStyle;
+          if (widget.textStyle.foreground != null) {
+            final fgColor = widget.textStyle.foreground!;
+            final fgLuminance =
+                0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
+            final bgLuminance = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b;
+
+            // Check if contrast is too low (e.g. both dark or both light)
+            final bothDark = fgLuminance < 110 && bgLuminance < 110;
+            final bothLight = fgLuminance >= 110 && bgLuminance >= 110;
+            if (bothDark) {
+              final fg =
+                  (widget.color1.r < 50 &&
+                      widget.color1.g < 50 &&
+                      widget.color1.b < 50)
+                  ? Colors.white
+                  : widget.color1;
+              resolvedTextStyle = widget.textStyle.merge(Style(foreground: fg));
+            } else if (bothLight) {
+              resolvedTextStyle = widget.textStyle.merge(
+                const Style(foreground: Colors.black),
+              );
+            }
+          }
+          cell.style = cell.style.merge(resolvedTextStyle);
+        }
+      }
+    }
   }
 
   @override

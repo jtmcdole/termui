@@ -8,7 +8,6 @@ import 'padding.dart';
 import 'rich_text.dart';
 import 'left_border.dart';
 import '../../terminal/terminal.dart' as term;
-import 'prompt_runner.dart';
 
 /// Ancestor provider to expose form state to field elements.
 class FormScope extends InheritedWidget {

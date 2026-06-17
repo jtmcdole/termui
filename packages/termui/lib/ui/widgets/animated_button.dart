@@ -10,7 +10,7 @@ import '../animation/effects.dart';
 import '../animation/animated_state_mixin.dart';
 
 /// A button widget featuring multiple layered custom animation effects.
-class AnimatedButton extends StatefulWidget {
+class AnimatedButton extends StatefulWidget implements MouseEventHandler {
   /// The text label displayed on the button.
   final String text;
 
@@ -41,6 +41,7 @@ class AnimatedButton extends StatefulWidget {
   AnimatedButtonState? _state;
 
   /// Internal mouse event handler delegated from parent event loop.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     _state?.handleMouseEvent(event, localX, localY);
   }
