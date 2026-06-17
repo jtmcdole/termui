@@ -66,9 +66,6 @@ enum DemoPage {
   /// Animated progress bar transitions.
   animations('Animations & Effects'),
 
-  /// Overlapping draggable floating windows.
-  scenarioA('Scenario A: Overlapping Windows'),
-
   /// Dynamic cursor styling protocol tests.
   mouseCursors('Mouse Cursors (OSC 22)');
 
@@ -239,7 +236,6 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
     DemoPage.vectorGraphics: VectorGraphicsExample(),
     DemoPage.decoratedWidgets: DecoratedWidgetsExample(),
     DemoPage.animations: AnimationsExample(),
-    DemoPage.scenarioA: ScenarioAExample(),
     DemoPage.mouseCursors: MouseCursorsExample(),
   };
 

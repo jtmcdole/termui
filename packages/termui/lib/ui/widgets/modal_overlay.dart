@@ -27,14 +27,14 @@ class ModalOverlay extends Window {
   /// Creates a [ModalOverlay] widget that traps focus within its bounds.
   ModalOverlay({
     required super.title,
-    required super.bounds,
+    required super.width,
+    required super.height,
     required this.dialogBounds,
     required super.child,
     required this.modalFocusNodes,
     this.onDismiss,
     this.scrimStyle = const Style(modifiers: Modifier.dim),
     super.focusNode,
-    super.zIndex = 10,
     void Function(KeyEvent event)? onKeyEvent,
   }) : customOnKeyEvent = onKeyEvent,
        super(borderChars: ['┌', '─', '┐', '│', ' ', '│', '└', '─', '┘']) {
@@ -149,10 +149,10 @@ class ModalOverlayElement extends WindowElement {
     final modal = widget as ModalOverlay;
     final width = constraints.hasBoundedWidth
         ? constraints.maxWidth
-        : modal.bounds.width;
+        : modal.width;
     final height = constraints.hasBoundedHeight
         ? constraints.maxHeight
-        : modal.bounds.height;
+        : modal.height;
 
     if (childElement != null) {
       final childW = max(0, modal.dialogBounds.width - 2);

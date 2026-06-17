@@ -192,11 +192,18 @@ class MouseEvent extends InputEvent {
   /// Y coordinate (1-indexed terminal coordinate).
   final int y;
 
+  /// Optional global X coordinate (1-indexed terminal coordinate).
+  final int? globalX;
+
+  /// Optional global Y coordinate (1-indexed terminal coordinate).
+  final int? globalY;
+
   /// Which button was pressed.
   final MouseButton button;
 
   /// The type of mouse event.
   final MouseEventType type;
+
   @override
   final Set<Modifier> modifiers;
 
@@ -204,6 +211,8 @@ class MouseEvent extends InputEvent {
   const MouseEvent({
     required this.x,
     required this.y,
+    this.globalX,
+    this.globalY,
     required this.button,
     required this.type,
     this.modifiers = const <Modifier>{},
@@ -215,18 +224,27 @@ class MouseEvent extends InputEvent {
     return other is MouseEvent &&
         other.x == x &&
         other.y == y &&
+        other.globalX == globalX &&
+        other.globalY == globalY &&
         other.button == button &&
         other.type == type &&
         _setEquals(other.modifiers, modifiers);
   }
 
   @override
-  int get hashCode =>
-      Object.hash(x, y, button, type, Object.hashAll(modifiers));
+  int get hashCode => Object.hash(
+    x,
+    y,
+    globalX,
+    globalY,
+    button,
+    type,
+    Object.hashAll(modifiers),
+  );
 
   @override
   String toString() {
-    return 'MouseEvent(x: $x, y: $y, button: $button, type: $type, modifiers: $modifiers)';
+    return 'MouseEvent(x: $x, y: $y, globalX: $globalX, globalY: $globalY, button: $button, type: $type, modifiers: $modifiers)';
   }
 }
 

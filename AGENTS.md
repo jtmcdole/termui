@@ -39,7 +39,7 @@ The project is managed as a Melos monorepo with the following workspace packages
 graph TD
   NativeTTY[Native TTY / OS Console] <--> |FFI / stdin / stdout| Terminal[Terminal Layer]
   Terminal --> |Raw bytes| InputParser[Input Parser]
-  InputParser --> |Structured events| WindowManager[Window Manager / Focus Tree]
+  InputParser --> |Structured events| SceneManager[Scene Manager / Focus Tree]
   
   subgraph Composition & Layout
     Column/Row/Stack[Layout Containers] -->|splitRect Constraints| Viewport[Viewport Clipping]

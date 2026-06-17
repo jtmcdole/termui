@@ -6,13 +6,9 @@ import 'package:termui/terminal/terminal.dart' as termui;
 import 'package:termui/ui/buffer.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'widget_book.dart';
-import 'window_manager_interactive_demo.dart';
-import 'scenario_a_demo.dart';
 
 enum TuiDemo {
-  widgetBook('Widget Book'),
-  windowManager('Window Manager'),
-  scenarioA('Scenario A Dashboard');
+  widgetBook('Widget Book');
 
   final String label;
   const TuiDemo(this.label);
@@ -108,17 +104,6 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
           _log('main.dart: Running WidgetBook');
           await runWidgetBook(_terminal, onFrameRedrawn: onDrawFrame);
           _log('main.dart: WidgetBook returned');
-        } else if (_currentDemo == TuiDemo.windowManager) {
-          _log('main.dart: Running WindowManagerInteractive');
-          await runWindowManagerInteractive(
-            _terminal,
-            onFrameRedrawn: onDrawFrame,
-          );
-          _log('main.dart: WindowManagerInteractive returned');
-        } else if (_currentDemo == TuiDemo.scenarioA) {
-          _log('main.dart: Running ScenarioADemo');
-          await runScenarioADemo(_terminal, onFrameRedrawn: onDrawFrame);
-          _log('main.dart: ScenarioADemo returned');
         }
 
         if (!mounted) {
@@ -181,20 +166,6 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
               _switchDemo(TuiDemo.widgetBook);
             },
             child: const Text('Widget Book'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _switchDemo(TuiDemo.windowManager);
-            },
-            child: const Text('Window Manager'),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _switchDemo(TuiDemo.scenarioA);
-            },
-            child: const Text('Scenario A Dashboard'),
           ),
         ],
       ),

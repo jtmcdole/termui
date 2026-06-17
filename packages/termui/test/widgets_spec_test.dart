@@ -385,13 +385,8 @@ void main() {
       expect(spy3.renderCount, equals(0));
     });
 
-    test('Event Routing & Focus Resetting', () {
-      final windowManager = WindowManager();
+    test('TabPanel handles tab change and requests focus on new tab nodes', () {
       final controller = TabController(length: 3);
-      final spy1 = SpyWidget();
-      final spy2 = SpyWidget();
-      final spy3 = SpyWidget();
-
       final t1 = FocusNode(id: 't1');
       final t2 = FocusNode(id: 't2');
       final t3 = FocusNode(id: 't3');
@@ -402,110 +397,60 @@ void main() {
       t1.addChild(btnOld);
       t2.addChild(btnNew);
 
-      final tabBar = TabBar(
+      TabPanel(
         controller: controller,
-        labels: ['Tab1', 'Tab2', 'Tab3'],
-        windowManager: windowManager,
-      );
-
-      final panel = TabPanel(
-        controller: controller,
-        children: [spy1, spy2, spy3],
+        children: [
+          const DummyWidget(),
+          const DummyWidget(),
+          const DummyWidget(),
+        ],
         tabFocusNodes: [t1, t2, t3],
       );
 
-      final win = Window(
-        title: 'TabWindow',
-        bounds: const Rect(0, 0, 30, 10),
-        child: panel,
-      );
-      win.focusNode.addChild(t1);
-      win.focusNode.addChild(t2);
-      win.focusNode.addChild(t3);
-
-      windowManager.addWindow(win);
-
-      // Focus elements inside the old tab
       btnOld.requestFocus();
       expect(btnOld.isFocused, isTrue);
 
-      // Inject "Next Tab" key event `]`
-      final handled = windowManager.handleKeyEvent(
-        const KeyEvent(']', KeyType.character),
-      );
-      expect(handled, isTrue);
-      expect(controller.index, equals(1));
+      controller.index = 1;
 
-      // Verify that old focus dropped and new tab top element is focused
       expect(btnOld.isFocused, isFalse);
       expect(btnNew.isFocused, isTrue);
-
-      tabBar.dispose();
     });
   });
 
   group('5. ModalOverlay (Z-Index Focus Trapping)', () {
     test('Focus Trap Test - focus cycles strictly between modal buttons', () {
-      final windowManager = WindowManager();
-
-      // Background TextInput
-      final bgInput = TextField(focused: true);
-      final bgWin = Window(
-        title: 'BgWin',
-        bounds: const Rect(0, 0, 100, 100),
-        child: bgInput,
-      );
-      windowManager.addWindow(bgWin);
-      bgWin.focusNode.requestFocus();
-      expect(bgWin.focusNode.isFocused, isTrue);
-
-      // Modal buttons FocusNodes
       final btn1Node = FocusNode(id: 'btn1');
       final btn2Node = FocusNode(id: 'btn2');
 
       final modal = ModalOverlay(
         title: 'Modal',
-        bounds: const Rect(0, 0, 100, 100),
+        width: 100,
+        height: 100,
         dialogBounds: const Rect(10, 10, 30, 10),
         modalFocusNodes: [btn1Node, btn2Node],
         child: const DummyWidget(),
       );
-      windowManager.addWindow(modal);
+
       btn1Node.requestFocus();
-
-      // Ensure focus is initially on btn1
       expect(btn1Node.isFocused, isTrue);
-      expect(bgWin.focusNode.isFocused, isFalse);
 
-      // Inject Tab KeyEvent to cycle focus
-      windowManager.handleKeyEvent(const KeyEvent('tab', KeyType.tab));
+      // Simulate Tab key press
+      modal.onKeyEvent!(const KeyEvent('tab', KeyType.tab));
       expect(btn2Node.isFocused, isTrue);
       expect(btn1Node.isFocused, isFalse);
 
-      // Inject another Tab KeyEvent
-      windowManager.handleKeyEvent(const KeyEvent('tab', KeyType.tab));
+      // Simulate Shift+Tab key press
+      modal.onKeyEvent!(const KeyEvent('backtab', KeyType.tab));
       expect(btn1Node.isFocused, isTrue);
       expect(btn2Node.isFocused, isFalse);
     });
 
     test('Input Blackhole Test - clicks outside dialog are intercepted', () {
-      final windowManager = WindowManager();
-
-      var bgClicked = false;
-      final bgWin = Window(
-        title: 'BgWin',
-        bounds: const Rect(0, 0, 100, 100),
-        child: const DummyWidget(),
-        onMouseEvent: (event, lx, ly) {
-          bgClicked = true;
-        },
-      );
-      windowManager.addWindow(bgWin);
-
       var modalDismissed = false;
       final modal = ModalOverlay(
         title: 'Modal',
-        bounds: const Rect(0, 0, 100, 100),
+        width: 100,
+        height: 100,
         dialogBounds: const Rect(10, 10, 30, 10),
         modalFocusNodes: [],
         child: const DummyWidget(),
@@ -513,21 +458,20 @@ void main() {
           modalDismissed = true;
         },
       );
-      windowManager.addWindow(modal);
 
-      // Click at x: 3, y: 3 (maps to sx: 2, sy: 2, outside the modal dialog bounds 10..40)
-      final handled = windowManager.handleMouseEvent(
+      // Click outside dialogBounds (localX: 3, localY: 3, dialog is at 10..40)
+      modal.onMouseEvent!(
         const MouseEvent(
-          x: 3,
-          y: 3,
+          x: 4,
+          y: 4,
           button: MouseButton.left,
           type: MouseEventType.press,
         ),
+        3,
+        3,
       );
 
-      expect(handled, isTrue);
       expect(modalDismissed, isTrue);
-      expect(bgClicked, isFalse);
     });
   });
 }

@@ -103,9 +103,14 @@ void main() async {
 
     // 3. The Floating Window Layer
     // Isolated Window widget containing simple text
-    final windowWidget = Window(
+    late final SceneLayer fgLayer;
+    late final PromptRunner<void> fgRunner;
+
+    late final Window windowWidget;
+    windowWidget = Window(
       title: 'Compositor Test',
-      bounds: const Rect(0, 0, 40, 15),
+      width: 40,
+      height: 15,
       borderStyle: const Style(
         foreground: Colors.green,
         modifiers: Modifier.bold,
@@ -115,25 +120,36 @@ void main() async {
         modifiers: Modifier.bold,
       ),
       backgroundStyle: const Style(background: Color(25, 25, 35)),
+      onPan: (dx, dy) {
+        fgLayer.x += dx;
+        fgLayer.y += dy;
+        sceneManager.render();
+      },
+      onResize: (w, h) {
+        windowWidget.width = w;
+        windowWidget.height = h;
+        fgRunner.resize(w, h);
+        sceneManager.render();
+      },
       child: const Center(
         child: Text('I am floating!', style: Style(foreground: Colors.white)),
       ),
     );
 
-    final fgRunner = PromptRunner<void>(
+    fgRunner = PromptRunner<void>(
       terminal: terminal,
       widget: windowWidget,
       mode: ExecutionMode.managed,
       alternateScreen: false,
     );
 
-    final fgLayer = SceneLayer(
+    fgLayer = SceneLayer(
       renderer: fgRunner,
       sizing: LayerSizing.fixed,
       x: 15,
       y: 5,
       zIndex: 10,
-      draggable: true,
+      draggable: false,
     );
 
     // Register layers in the SceneManager

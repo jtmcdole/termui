@@ -346,7 +346,8 @@ void main() async {
 
         final modal = ModalOverlay(
           title: 'Submission Success',
-          bounds: Rect(0, 0, width, height),
+          width: width,
+          height: height,
           dialogBounds: Rect((width - 48) ~/ 2, (height - 12) ~/ 2, 48, 12),
           modalFocusNodes: [okBtnNode],
           onDismiss: () {

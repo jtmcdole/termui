@@ -5,7 +5,7 @@ import 'style.dart';
 import 'layout.dart';
 import 'event.dart';
 import 'event.dart' as ev;
-import '../perf/tracer.dart';
+import 'widgets/prompt_runner.dart';
 
 /// A node in the keyboard focus tree.
 ///
@@ -253,16 +253,16 @@ class FocusScopeNode extends FocusNode {
 }
 
 /// A Window widget that acts as an isolated floating frame with borders,
-/// titles, Z-indexing, and local content viewports.
+/// titles, and local content viewports.
 class Window extends Widget {
   /// The title text shown in the window border.
   final String title;
 
-  /// The layout boundaries of the window.
-  Rect bounds;
+  /// The width of the window.
+  int width;
 
-  /// The Z-index of the window determining stacking order.
-  int zIndex;
+  /// The height of the window.
+  int height;
 
   /// The child widget displayed inside the window.
   final Widget child;
@@ -288,12 +288,18 @@ class Window extends Widget {
   /// Callback triggered when a keyboard event is routed to this window.
   final void Function(KeyEvent event)? onKeyEvent;
 
+  /// Callback triggered when the window is dragged.
+  final void Function(int dx, int dy)? onPan;
+
+  /// Callback triggered when the window is resized.
+  final void Function(int newWidth, int newHeight)? onResize;
+
   /// Creates a [Window] with the specified parameters.
   Window({
     required this.title,
-    required this.bounds,
+    required this.width,
+    required this.height,
     required this.child,
-    this.zIndex = 0,
     List<String>? borderChars,
     this.borderStyle = Style.empty,
     this.titleStyle = Style.empty,
@@ -301,6 +307,8 @@ class Window extends Widget {
     FocusNode? focusNode,
     this.onMouseEvent,
     this.onKeyEvent,
+    this.onPan,
+    this.onResize,
   }) : borderChars =
            borderChars ?? ['┌', '─', '┐', '│', ' ', '│', '└', '─', '┘'],
        focusNode = focusNode ?? FocusNode(id: title);
@@ -311,7 +319,7 @@ class Window extends Widget {
   /// Returns true if the local coordinates [localX] and [localY] lie on the title text.
   bool isPositionOnTitle(int localX, int localY) {
     if (localY != 0 || title.isEmpty) return false;
-    final w = bounds.width;
+    final w = width;
     if (w < 2) return false;
 
     final titleChars = title.characters;
@@ -336,9 +344,15 @@ class Window extends Widget {
 }
 
 /// Element class corresponding to [Window], managing child reconciliation, layout and paint.
-class WindowElement extends Element {
+class WindowElement extends Element implements MouseEventHandler {
   /// The element corresponding to the built child widget.
   Element? childElement;
+
+  bool _dragStartedOnTitle = false;
+  bool _resizeStartedOnBottomLeft = false;
+  bool _resizeStartedOnBottomRight = false;
+  int _lastX = 0;
+  int _lastY = 0;
 
   /// Instantiates the rendering element for the given Window.
   WindowElement(Window super.widget);
@@ -382,8 +396,8 @@ class WindowElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     final win = widget as Window;
-    final width = win.bounds.width;
-    final height = win.bounds.height;
+    final width = win.width;
+    final height = win.height;
 
     if (childElement != null) {
       childElement!.relativeOffset = const Offset(1, 1);
@@ -398,9 +412,9 @@ class WindowElement extends Element {
   @override
   void paint(Buffer buffer, Offset offset) {
     final win = widget as Window;
-    final w = win.bounds.width;
-    final h = win.bounds.height;
-    final paintOffset = offset + Offset(win.bounds.x, win.bounds.y);
+    final w = win.width;
+    final h = win.height;
+    final paintOffset = offset;
 
     if (w < 2 || h < 2) {
       for (var y = 0; y < h; y++) {
@@ -495,215 +509,85 @@ class WindowElement extends Element {
   }
 
   @override
-  Offset get relativeOffset {
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
     final win = widget as Window;
-    return Offset(win.bounds.x, win.bounds.y);
-  }
-}
 
-/// A desktop-like window manager to handle routing of mouse/keyboard events.
-class WindowManager {
-  static final int _traceWindowResizeId = Tracer.registerString(
-    'Window:resize',
-  );
+    if (event.type == MouseEventType.press) {
+      _dragStartedOnTitle = false;
+      _resizeStartedOnBottomLeft = false;
+      _resizeStartedOnBottomRight = false;
 
-  /// The list of currently managed windows.
-  final List<Window> windows = [];
+      // Check resize handles at bottom-left or bottom-right corners (with 2-cell tolerance)
+      final isAtBottomBorder = localY == win.height - 1;
+      final isAtLeftBorder = localX == 0;
+      final isAtRightBorder = localX == win.width - 1;
 
-  /// The size of the screen/viewport to clamp window resizing and dragging.
-  Size screenSize = const Size(80, 24);
+      final isNearBottomLeft =
+          (isAtBottomBorder && localX <= 2) ||
+          (isAtLeftBorder && localY >= win.height - 3);
+      final isNearBottomRight =
+          (isAtBottomBorder && localX >= win.width - 3) ||
+          (isAtRightBorder && localY >= win.height - 3);
 
-  /// The root focus node for the window manager.
-  final FocusNode rootFocusNode = FocusNode(id: 'root');
-
-  /// Adds a [window] to the manager and registers its focus node.
-  void addWindow(Window window) {
-    windows.add(window);
-    rootFocusNode.addChild(window.focusNode);
-  }
-
-  /// Removes a [window] from the manager and its focus node.
-  void removeWindow(Window window) {
-    windows.remove(window);
-    window.focusNode.parent?.children.remove(window.focusNode);
-  }
-
-  /// Returns the topmost window that contains the coordinates (gx, gy).
-  Window? findWindowAt(int gx, int gy) {
-    // Sort windows by Z-Index descending (topmost first)
-    final sorted = List<Window>.from(windows)
-      ..sort((a, b) => b.zIndex.compareTo(a.zIndex));
-
-    for (final win in sorted) {
-      final b = win.bounds;
-      if (gx >= b.x && gx < b.x + b.width && gy >= b.y && gy < b.y + b.height) {
-        return win;
-      }
-    }
-    return null;
-  }
-
-  // Drag state
-  Window? _draggingWindow;
-  int _dragStartX = 0;
-  int _dragStartY = 0;
-
-  // Resize state
-  Window? _resizingWindow;
-  bool _resizeBottomLeft = false;
-  bool _resizeBottomRight = false;
-
-  /// Whether the window manager is currently dragging or resizing a window.
-  bool get isDraggingOrResizing =>
-      _draggingWindow != null || _resizingWindow != null;
-
-  /// Brings the given window to the front of all windows.
-  void bringToFront(Window win) {
-    if (windows.isEmpty) return;
-    var maxZ = win.zIndex;
-    for (final other in windows) {
-      if (other != win && other.zIndex > maxZ) {
-        maxZ = other.zIndex;
-      }
-    }
-    if (win.zIndex <= maxZ) {
-      win.zIndex = maxZ + 1;
-    }
-  }
-
-  /// Routes a mouse event, performing coordinate translation and triggering click/drag handlers.
-  bool handleMouseEvent(MouseEvent event) {
-    if (event.type == MouseEventType.release ||
-        event.type == MouseEventType.press) {
-      _draggingWindow = null;
-      _resizingWindow = null;
-      _resizeBottomLeft = false;
-      _resizeBottomRight = false;
-    }
-
-    final sx = event.x - 1;
-    final sy = event.y - 1;
-
-    if (event.type == MouseEventType.drag) {
-      if (_resizingWindow != null) {
-        Tracer.record(_traceWindowResizeId, Phase.begin);
-        try {
-          final b = _resizingWindow!.bounds;
-          final maxW = screenSize.width;
-          final maxH = screenSize.height;
-          if (_resizeBottomRight) {
-            final limitW = (maxW - b.x) < 10 ? 10 : maxW - b.x;
-            final limitH = (maxH - b.y) < 5 ? 5 : maxH - b.y;
-            final newWidth = (sx - b.x + 1).clamp(10, limitW);
-            final newHeight = (sy - b.y + 1).clamp(5, limitH);
-            _resizingWindow!.bounds = Rect(b.x, b.y, newWidth, newHeight);
-          } else if (_resizeBottomLeft) {
-            final rightEdge = b.x + b.width;
-            final newX = sx.clamp(0, rightEdge - 10);
-            final newWidth = rightEdge - newX;
-            final limitH = (maxH - b.y) < 5 ? 5 : maxH - b.y;
-            final newHeight = (sy - b.y + 1).clamp(5, limitH);
-            _resizingWindow!.bounds = Rect(newX, b.y, newWidth, newHeight);
-          }
-        } finally {
-          Tracer.record(_traceWindowResizeId, Phase.end);
-        }
-        return true;
-      }
-
-      if (_draggingWindow != null) {
-        final maxW = screenSize.width;
-        final maxH = screenSize.height;
-        final width = _draggingWindow!.bounds.width;
-        final height = _draggingWindow!.bounds.height;
-        final targetX = sx - _dragStartX;
-        final targetY = sy - _dragStartY;
-
-        // Clamp so the window title bar remains accessible
-        final newX = targetX.clamp(-width + 3, maxW - 3);
-        final newY = targetY.clamp(0, maxH - 1);
-
-        _draggingWindow!.bounds = Rect(newX, newY, width, height);
-        return true;
-      }
-    }
-
-    final win = findWindowAt(sx, sy);
-    if (win != null) {
-      final localX = sx - win.bounds.x;
-      final localY = sy - win.bounds.y;
-
-      if (event.type == MouseEventType.press) {
-        win.focusNode.requestFocus();
-        bringToFront(win);
-
-        // Check resize handles at bottom-left or bottom-right corners (with 2-cell tolerance)
-        final isAtBottomBorder = localY == win.bounds.height - 1;
-        final isAtLeftBorder = localX == 0;
-        final isAtRightBorder = localX == win.bounds.width - 1;
-
-        final isNearBottomLeft =
-            (isAtBottomBorder && localX <= 2) ||
-            (isAtLeftBorder && localY >= win.bounds.height - 3);
-        final isNearBottomRight =
-            (isAtBottomBorder && localX >= win.bounds.width - 3) ||
-            (isAtRightBorder && localY >= win.bounds.height - 3);
-
-        if (isNearBottomLeft) {
-          _resizingWindow = win;
-          _resizeBottomLeft = true;
-          _resizeBottomRight = false;
-          return true;
-        } else if (isNearBottomRight) {
-          _resizingWindow = win;
-          _resizeBottomLeft = false;
-          _resizeBottomRight = true;
-          return true;
-        }
-
-        // Start dragging if clicked on the title
-        if (win.isPositionOnTitle(localX, localY)) {
-          _draggingWindow = win;
-          _dragStartX = localX;
-          _dragStartY = localY;
-          return true;
-        }
+      if (isNearBottomLeft) {
+        _resizeStartedOnBottomLeft = true;
+        _lastX = event.globalX ?? event.x;
+        _lastY = event.globalY ?? event.y;
+      } else if (isNearBottomRight) {
+        _resizeStartedOnBottomRight = true;
+        _lastX = event.globalX ?? event.x;
+        _lastY = event.globalY ?? event.y;
+      } else if (win.isPositionOnTitle(localX, localY)) {
+        _dragStartedOnTitle = true;
+        _lastX = event.globalX ?? event.x;
+        _lastY = event.globalY ?? event.y;
       }
 
       if (win.onMouseEvent != null) {
         win.onMouseEvent!(event, localX, localY);
       }
-      return true;
-    }
-    return false;
-  }
+    } else if (event.type == MouseEventType.drag) {
+      final mouseX = event.globalX ?? event.x;
+      final mouseY = event.globalY ?? event.y;
 
-  /// A list of global key listeners. If a listener returns true, the event is consumed.
-  final List<bool Function(KeyEvent event)> globalKeyListeners = [];
+      if (_dragStartedOnTitle) {
+        final dx = mouseX - _lastX;
+        final dy = mouseY - _lastY;
+        _lastX = mouseX;
+        _lastY = mouseY;
+        win.onPan?.call(dx, dy);
+      } else if (_resizeStartedOnBottomRight) {
+        final dx = mouseX - _lastX;
+        final dy = mouseY - _lastY;
+        _lastX = mouseX;
+        _lastY = mouseY;
+        final newWidth = max(10, win.width + dx);
+        final newHeight = max(5, win.height + dy);
+        win.onResize?.call(newWidth, newHeight);
+      } else if (_resizeStartedOnBottomLeft) {
+        final dx = mouseX - _lastX;
+        final dy = mouseY - _lastY;
+        _lastX = mouseX;
+        _lastY = mouseY;
+        final newWidth = max(10, win.width - dx);
+        final actualDx = win.width - newWidth;
+        final newHeight = max(5, win.height + dy);
+        win.onPan?.call(actualDx, 0);
+        win.onResize?.call(newWidth, newHeight);
+      }
 
-  /// Routes a keyboard event to the currently focused window.
-  bool handleKeyEvent(KeyEvent event) {
-    for (final listener in globalKeyListeners) {
-      if (listener(event)) return true;
-    }
-    var leaf = rootFocusNode.findFocusedLeaf();
-    if (leaf != null) {
-      // Trace up parent chain to find immediate child of rootFocusNode
-      while (leaf != null && leaf.parent != rootFocusNode) {
-        leaf = leaf.parent;
+      if (win.onMouseEvent != null) {
+        win.onMouseEvent!(event, localX, localY);
       }
-      if (leaf != null) {
-        for (final win in windows) {
-          if (win.focusNode == leaf) {
-            if (win.onKeyEvent != null) {
-              win.onKeyEvent!(event);
-              return true;
-            }
-            break;
-          }
-        }
+    } else {
+      if (event.type == MouseEventType.release) {
+        _dragStartedOnTitle = false;
+        _resizeStartedOnBottomLeft = false;
+        _resizeStartedOnBottomRight = false;
+      }
+      if (win.onMouseEvent != null) {
+        win.onMouseEvent!(event, localX, localY);
       }
     }
-    return false;
   }
 }

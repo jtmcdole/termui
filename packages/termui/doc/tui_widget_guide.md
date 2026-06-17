@@ -13,8 +13,8 @@ This guide details how to build rich, interactive terminal user interfaces (TUIs
 ```mermaid
 graph TD
     Stdin[Raw Byte Stream: stdin] -->|Byte Sequence| Parser[InputParser]
-    Parser -->|KeyEvent / MouseEvent| WindowMgr[WindowManager]
-    WindowMgr -->|Forward Event| RootFocus[Root FocusScopeNode]
+    Parser -->|KeyEvent / MouseEvent| SceneMgr[SceneManager]
+    SceneMgr -->|Forward Event| RootFocus[Root FocusScopeNode]
     RootFocus -->|bubbleKeyEvent| ActiveFocusNode[Primary Focused FocusNode]
     ActiveFocusNode -->|1. Try onKeyEvent Callback| Consume{Event Consumed?}
     Consume -->|Yes| End([End Event Loop])
