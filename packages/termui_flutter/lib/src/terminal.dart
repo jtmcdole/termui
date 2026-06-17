@@ -205,7 +205,11 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     _fontSize = widget.terminal.fontSize;
     _fontSizeSubscription = widget.terminal.watchFontSize().listen((newSize) {
       if (mounted) {
-        Tracer.record(_traceFontSizeChangedId, Phase.instant);
+        Tracer.record(
+          _traceFontSizeChangedId,
+          Phase.instant,
+          TraceCategory.layout,
+        );
         setState(() {
           _fontSize = newSize;
         });
@@ -243,7 +247,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
 
   Future<void> _recreateAtlas() async {
     final genId = ++_atlasGenerationId;
-    Tracer.record(_traceRecreateAtlasId, Phase.begin);
+    Tracer.record(_traceRecreateAtlasId, Phase.begin, TraceCategory.paint);
     _fallbackPainters.clear();
     _pendingGlyphs.clear();
     _processingGlyphs.clear();
@@ -259,7 +263,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         _atlas = newAtlas;
       });
     }
-    Tracer.record(_traceRecreateAtlasId, Phase.end);
+    Tracer.record(_traceRecreateAtlasId, Phase.end, TraceCategory.paint);
   }
 
   MouseCursor _mapOsc22ToSystemCursor(String? cursorName) {
@@ -320,7 +324,11 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       _fontSize = widget.terminal.fontSize;
       _fontSizeSubscription = widget.terminal.watchFontSize().listen((newSize) {
         if (mounted) {
-          Tracer.record(_traceFontSizeChangedId, Phase.instant);
+          Tracer.record(
+            _traceFontSizeChangedId,
+            Phase.instant,
+            TraceCategory.layout,
+          );
           setState(() {
             _fontSize = newSize;
           });
@@ -407,7 +415,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     if (_isUpdatingAtlas || _pendingGlyphs.isEmpty || _atlas == null) return;
     _isUpdatingAtlas = true;
     final genId = _atlasGenerationId;
-    Tracer.record(_traceTriggerAtlasUpdateId, Phase.begin);
+    Tracer.record(_traceTriggerAtlasUpdateId, Phase.begin, TraceCategory.paint);
 
     final batch = _pendingGlyphs.toList();
     _pendingGlyphs.removeAll(batch);
@@ -426,7 +434,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     } finally {
       _processingGlyphs.removeAll(batch);
       _isUpdatingAtlas = false;
-      Tracer.record(_traceTriggerAtlasUpdateId, Phase.end);
+      Tracer.record(_traceTriggerAtlasUpdateId, Phase.end, TraceCategory.paint);
       if (_pendingGlyphs.isNotEmpty && genId == _atlasGenerationId) {
         _triggerAtlasUpdate();
       }

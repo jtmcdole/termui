@@ -82,7 +82,7 @@ class Buffer {
 
   /// Resets all cells in the buffer to transparent empty cells.
   void clear() {
-    Tracer.record(_traceClearId, Phase.begin);
+    Tracer.record(_traceClearId, Phase.begin, TraceCategory.paint);
     try {
       for (var i = 0; i < cells.length; i++) {
         final cell = cells[i];
@@ -92,7 +92,7 @@ class Buffer {
         }
       }
     } finally {
-      Tracer.record(_traceClearId, Phase.end);
+      Tracer.record(_traceClearId, Phase.end, TraceCategory.paint);
     }
   }
 
@@ -107,7 +107,7 @@ class Buffer {
 
   /// Resizes the buffer to the new dimensions, preserving existing content where it fits.
   void resize(int newWidth, int newHeight) {
-    Tracer.record(_traceResizeId, Phase.begin);
+    Tracer.record(_traceResizeId, Phase.begin, TraceCategory.layout);
     try {
       newWidth = max(0, newWidth);
       newHeight = max(0, newHeight);
@@ -126,7 +126,7 @@ class Buffer {
       height = newHeight;
       cells = newCells;
     } finally {
-      Tracer.record(_traceResizeId, Phase.end);
+      Tracer.record(_traceResizeId, Phase.end, TraceCategory.layout);
     }
   }
 
@@ -253,7 +253,7 @@ class Compositor {
     required Buffer target,
     required List<LayeredBuffer> layers,
   }) {
-    Tracer.record(_traceCompositeId, Phase.begin);
+    Tracer.record(_traceCompositeId, Phase.begin, TraceCategory.compositor);
     try {
       if (layers.isEmpty) return;
 
@@ -307,7 +307,7 @@ class Compositor {
         }
       }
     } finally {
-      Tracer.record(_traceCompositeId, Phase.end);
+      Tracer.record(_traceCompositeId, Phase.end, TraceCategory.compositor);
     }
   }
 }

@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:characters/characters.dart';
 import 'buffer.dart';
 import 'style.dart';
+import '../perf/tracer.dart';
 
 /// Represents integer dimensions on the terminal cell grid.
 class Size {
@@ -411,6 +412,19 @@ abstract class Element implements BuildContext {
   BuildOwner? get owner => _owner ?? parent?.owner;
   set owner(BuildOwner? value) => _owner = value;
 
+  int? _rebuildTraceId;
+
+  /// Cached tracer ID for rebuilding this element.
+  int get rebuildTraceId => _rebuildTraceId ??= Tracer.registerString(
+    '${widget.runtimeType}:rebuild',
+  );
+
+  int? _paintTraceId;
+
+  /// Cached tracer ID for painting this element.
+  int get paintTraceId =>
+      _paintTraceId ??= Tracer.registerString('${widget.runtimeType}:paint');
+
   /// Creates an element that uses the given [widget] as its configuration.
   Element(this.widget);
 
@@ -451,12 +465,19 @@ abstract class Element implements BuildContext {
   /// Updates this element to use a new [Widget] configuration.
   void update(Widget newWidget) {
     widget = newWidget;
+    _rebuildTraceId = null;
+    _paintTraceId = null;
   }
 
   /// Performs the actual rebuild and clears the dirty flag.
   void performRebuild() {
     _dirty = false;
-    rebuild();
+    Tracer.record(rebuildTraceId, Phase.begin, TraceCategory.build);
+    try {
+      rebuild();
+    } finally {
+      Tracer.record(rebuildTraceId, Phase.end, TraceCategory.build);
+    }
   }
 
   /// Calculates the size of the element based on the given constraints.
@@ -2158,6 +2179,8 @@ class Center extends Align {
 /// Use this to embed reactive widgets (like [StatefulWidget]s or [InheritedWidget]s)
 /// inside immediate-mode rendering loops that reconstruct the widget tree on every frame.
 class ElementWidget extends Widget {
+  static final int _tracePaintId = Tracer.registerString('ElementWidget:paint');
+
   /// The child widget.
   final Widget child;
   Element? _element;
@@ -2187,7 +2210,12 @@ class ElementWidget extends Widget {
 
   /// Paints the embedded widget tree.
   void paint(Buffer buffer, Offset offset) {
-    _element?.paint(buffer, offset);
+    Tracer.record(_tracePaintId, Phase.begin, TraceCategory.paint);
+    try {
+      _element?.paint(buffer, offset);
+    } finally {
+      Tracer.record(_tracePaintId, Phase.end, TraceCategory.paint);
+    }
   }
 
   /// Finds a State of type S inside this widget's element tree.
@@ -2269,6 +2297,10 @@ class ElementWidgetElement extends Element {
 
 /// Manages the build lifecycle and dirty element queue.
 class BuildOwner {
+  static final int _traceBuildScopeId = Tracer.registerString(
+    'BuildOwner:buildScope',
+  );
+
   /// Callback triggered when a visual update (rebuild) is needed.
   final void Function()? onNeedVisualUpdate;
   final Set<Element> _dirtyElements = {};
@@ -2287,13 +2319,18 @@ class BuildOwner {
   /// Rebuilds all dirty elements that have been scheduled.
   void buildScope() {
     if (_dirtyElements.isEmpty) return;
-    final sorted = _dirtyElements.where((e) => e.mounted).toList()
-      ..sort((a, b) => a._depth.compareTo(b._depth));
-    _dirtyElements.clear();
-    for (final element in sorted) {
-      if (element.mounted && element._dirty) {
-        element.performRebuild();
+    Tracer.record(_traceBuildScopeId, Phase.begin, TraceCategory.build);
+    try {
+      final sorted = _dirtyElements.where((e) => e.mounted).toList()
+        ..sort((a, b) => a._depth.compareTo(b._depth));
+      _dirtyElements.clear();
+      for (final element in sorted) {
+        if (element.mounted && element._dirty) {
+          element.performRebuild();
+        }
       }
+    } finally {
+      Tracer.record(_traceBuildScopeId, Phase.end, TraceCategory.build);
     }
   }
 }

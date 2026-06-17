@@ -57,7 +57,7 @@ class Renderer {
 
   /// Diffs [backBuffer] against [_frontBuffer] and writes minimal ANSI escape sequences to [out].
   void render(Buffer backBuffer, StringSink out) {
-    Tracer.record(_traceRenderId, Phase.begin);
+    Tracer.record(_traceRenderId, Phase.begin, TraceCategory.paint);
     try {
       bool sizeChanged = _firstFrame;
       _firstFrame = false;
@@ -167,7 +167,7 @@ class Renderer {
         _lastHeight = backBuffer.height;
       }
     } finally {
-      Tracer.record(_traceRenderId, Phase.end);
+      Tracer.record(_traceRenderId, Phase.end, TraceCategory.paint);
     }
   }
 

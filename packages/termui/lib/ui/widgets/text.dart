@@ -3,6 +3,7 @@ import 'package:characters/characters.dart';
 import '../buffer.dart';
 import '../style.dart';
 import '../layout.dart';
+import '../../perf/tracer.dart';
 
 /// Text alignments for TUI rendering.
 enum TextAlign {
@@ -206,6 +207,8 @@ class Text extends Widget {
 
 /// An element that represents a [Text] widget.
 class TextElement extends Element {
+  static final int _tracePaintId = Tracer.registerString('Text:paint');
+
   List<String> _cachedLines = [];
 
   /// Creates a text element for a [Text] widget.
@@ -242,44 +245,49 @@ class TextElement extends Element {
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    final textWidget = widget as Text;
-    final area = Rect(offset.dx, offset.dy, size.width, size.height);
+    Tracer.record(_tracePaintId, Phase.begin, TraceCategory.paint);
+    try {
+      final textWidget = widget as Text;
+      final area = Rect(offset.dx, offset.dy, size.width, size.height);
 
-    final limit = textWidget.maxLines != null
-        ? min(textWidget.maxLines!, area.height)
-        : area.height;
+      final limit = textWidget.maxLines != null
+          ? min(textWidget.maxLines!, area.height)
+          : area.height;
 
-    for (var i = 0; i < _cachedLines.length; i++) {
-      if (i >= limit) break;
-      final line = _cachedLines[i];
-      final lineWidth = measureStringWidth(line);
+      for (var i = 0; i < _cachedLines.length; i++) {
+        if (i >= limit) break;
+        final line = _cachedLines[i];
+        final lineWidth = measureStringWidth(line);
 
-      var startX = 0;
-      switch (textWidget.textAlign) {
-        case TextAlign.left:
-          startX = 0;
-          break;
-        case TextAlign.right:
-          startX = max(0, area.width - lineWidth);
-          break;
-        case TextAlign.center:
-          startX = max(0, (area.width - lineWidth) ~/ 2);
-          break;
-        case TextAlign.justify:
-          startX = 0;
-          break;
+        var startX = 0;
+        switch (textWidget.textAlign) {
+          case TextAlign.left:
+            startX = 0;
+            break;
+          case TextAlign.right:
+            startX = max(0, area.width - lineWidth);
+            break;
+          case TextAlign.center:
+            startX = max(0, (area.width - lineWidth) ~/ 2);
+            break;
+          case TextAlign.justify:
+            startX = 0;
+            break;
+        }
+
+        final visibleChars = textWidget._truncateToWidth(
+          line,
+          area.width - startX,
+        );
+        buffer.writeString(
+          area.x + startX,
+          area.y + i,
+          visibleChars,
+          textWidget.style,
+        );
       }
-
-      final visibleChars = textWidget._truncateToWidth(
-        line,
-        area.width - startX,
-      );
-      buffer.writeString(
-        area.x + startX,
-        area.y + i,
-        visibleChars,
-        textWidget.style,
-      );
+    } finally {
+      Tracer.record(_tracePaintId, Phase.end, TraceCategory.paint);
     }
   }
 }

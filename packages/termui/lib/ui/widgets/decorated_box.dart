@@ -2,6 +2,7 @@ import '../buffer.dart';
 import '../color.dart';
 import '../layout.dart';
 import '../style.dart';
+import '../../perf/tracer.dart';
 
 /// Represents the character set and style configuration used to draw a box border.
 ///
@@ -204,6 +205,8 @@ class DecoratedBox extends Widget {
 
 /// Element for [DecoratedBox].
 class DecoratedBoxElement extends Element {
+  static final int _tracePaintId = Tracer.registerString('DecoratedBox:paint');
+
   /// The element corresponding to the [DecoratedBox]'s child.
   Element? childElement;
 
@@ -310,95 +313,104 @@ class DecoratedBoxElement extends Element {
 
   @override
   void paint(Buffer buffer, Offset offset) {
-    final db = widget as DecoratedBox;
-    final area = Rect(offset.dx, offset.dy, size.width, size.height);
+    Tracer.record(_tracePaintId, Phase.begin, TraceCategory.paint);
+    try {
+      final db = widget as DecoratedBox;
+      final area = Rect(offset.dx, offset.dy, size.width, size.height);
 
-    // Fill background if defined
-    var bgStyle = db.decoration.backgroundStyle;
-    if (bgStyle == null && db.decoration.backgroundColor != null) {
-      bgStyle = Style(background: db.decoration.backgroundColor);
-    }
-    if (bgStyle != null) {
-      for (var y = 0; y < area.height; y++) {
-        for (var x = 0; x < area.width; x++) {
-          buffer.setCell(area.x + x, area.y + y, Cell(' ', bgStyle));
-        }
+      // Fill background if defined
+      var bgStyle = db.decoration.backgroundStyle;
+      if (bgStyle == null && db.decoration.backgroundColor != null) {
+        bgStyle = Style(background: db.decoration.backgroundColor);
       }
-    }
-
-    // Draw border if defined
-    final border = db.decoration.border;
-
-    if (border != null) {
-      final style = bgStyle != null
-          ? bgStyle.merge(border.style)
-          : border.style;
-
-      // Draw horizontal lines (excluding corners)
-      if (border.topChar.isNotEmpty && area.height > 0) {
-        for (var x = 1; x < area.width - 1; x++) {
-          buffer.setCell(area.x + x, area.y, Cell(border.topChar, style));
-        }
-      }
-      if (border.bottomChar.isNotEmpty && area.height > 1) {
-        for (var x = 1; x < area.width - 1; x++) {
-          buffer.setCell(
-            area.x + x,
-            area.y + area.height - 1,
-            Cell(border.bottomChar, style),
-          );
+      if (bgStyle != null) {
+        for (var y = 0; y < area.height; y++) {
+          for (var x = 0; x < area.width; x++) {
+            buffer.setCell(area.x + x, area.y + y, Cell(' ', bgStyle));
+          }
         }
       }
 
-      // Draw vertical lines (excluding corners)
-      if (border.leftChar.isNotEmpty && area.width > 0) {
-        for (var y = 1; y < area.height - 1; y++) {
-          buffer.setCell(area.x, area.y + y, Cell(border.leftChar, style));
+      // Draw border if defined
+      final border = db.decoration.border;
+
+      if (border != null) {
+        final style = bgStyle != null
+            ? bgStyle.merge(border.style)
+            : border.style;
+
+        // Draw horizontal lines (excluding corners)
+        if (border.topChar.isNotEmpty && area.height > 0) {
+          for (var x = 1; x < area.width - 1; x++) {
+            buffer.setCell(area.x + x, area.y, Cell(border.topChar, style));
+          }
         }
-      }
-      if (border.rightChar.isNotEmpty && area.width > 1) {
-        for (var y = 1; y < area.height - 1; y++) {
+        if (border.bottomChar.isNotEmpty && area.height > 1) {
+          for (var x = 1; x < area.width - 1; x++) {
+            buffer.setCell(
+              area.x + x,
+              area.y + area.height - 1,
+              Cell(border.bottomChar, style),
+            );
+          }
+        }
+
+        // Draw vertical lines (excluding corners)
+        if (border.leftChar.isNotEmpty && area.width > 0) {
+          for (var y = 1; y < area.height - 1; y++) {
+            buffer.setCell(area.x, area.y + y, Cell(border.leftChar, style));
+          }
+        }
+        if (border.rightChar.isNotEmpty && area.width > 1) {
+          for (var y = 1; y < area.height - 1; y++) {
+            buffer.setCell(
+              area.x + area.width - 1,
+              area.y + y,
+              Cell(border.rightChar, style),
+            );
+          }
+        }
+
+        // Draw corners
+        if (border.topLeftChar.isNotEmpty &&
+            area.width > 0 &&
+            area.height > 0) {
+          buffer.setCell(area.x, area.y, Cell(border.topLeftChar, style));
+        }
+        if (border.topRightChar.isNotEmpty &&
+            area.width > 1 &&
+            area.height > 0) {
           buffer.setCell(
             area.x + area.width - 1,
-            area.y + y,
-            Cell(border.rightChar, style),
+            area.y,
+            Cell(border.topRightChar, style),
+          );
+        }
+        if (border.bottomLeftChar.isNotEmpty &&
+            area.width > 0 &&
+            area.height > 1) {
+          buffer.setCell(
+            area.x,
+            area.y + area.height - 1,
+            Cell(border.bottomLeftChar, style),
+          );
+        }
+        if (border.bottomRightChar.isNotEmpty &&
+            area.width > 1 &&
+            area.height > 1) {
+          buffer.setCell(
+            area.x + area.width - 1,
+            area.y + area.height - 1,
+            Cell(border.bottomRightChar, style),
           );
         }
       }
 
-      // Draw corners
-      if (border.topLeftChar.isNotEmpty && area.width > 0 && area.height > 0) {
-        buffer.setCell(area.x, area.y, Cell(border.topLeftChar, style));
+      if (childElement != null) {
+        childElement!.paint(buffer, offset + childElement!.relativeOffset);
       }
-      if (border.topRightChar.isNotEmpty && area.width > 1 && area.height > 0) {
-        buffer.setCell(
-          area.x + area.width - 1,
-          area.y,
-          Cell(border.topRightChar, style),
-        );
-      }
-      if (border.bottomLeftChar.isNotEmpty &&
-          area.width > 0 &&
-          area.height > 1) {
-        buffer.setCell(
-          area.x,
-          area.y + area.height - 1,
-          Cell(border.bottomLeftChar, style),
-        );
-      }
-      if (border.bottomRightChar.isNotEmpty &&
-          area.width > 1 &&
-          area.height > 1) {
-        buffer.setCell(
-          area.x + area.width - 1,
-          area.y + area.height - 1,
-          Cell(border.bottomRightChar, style),
-        );
-      }
-    }
-
-    if (childElement != null) {
-      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    } finally {
+      Tracer.record(_tracePaintId, Phase.end, TraceCategory.paint);
     }
   }
 

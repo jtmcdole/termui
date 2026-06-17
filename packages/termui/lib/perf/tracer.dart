@@ -5,6 +5,24 @@ import 'fs_locator.dart';
 import 'tracer_sink.dart';
 import 'sink_creator.dart';
 
+/// Categories for surgical profiling of the framework's subsystems.
+enum TraceCategory {
+  /// Traces related to building widgets.
+  build,
+
+  /// Traces related to layout.
+  layout,
+
+  /// Traces related to painting/drawing.
+  paint,
+
+  /// Traces related to user input events.
+  events,
+
+  /// Traces related to the compositor.
+  compositor,
+}
+
 /// Represents event phases in the trace log.
 class Phase {
   /// A begin phase event.
@@ -19,6 +37,9 @@ class Phase {
 
 /// A high-performance, low-overhead event tracer.
 class Tracer {
+  /// Active configuration of trace categories to record.
+  static Set<TraceCategory> activeCategories = TraceCategory.values.toSet();
+
   /// Whether the tracer is currently enabled and recording events.
   static bool isEnabled = false;
 
@@ -97,7 +118,8 @@ class Tracer {
 
   /// Record a trace event to the buffer.
   @pragma('vm:prefer-inline')
-  static void record(int stringId, int phase) {
+  static void record(int stringId, int phase, TraceCategory category) {
+    if (!activeCategories.contains(category)) return;
     if (!isEnabled) return;
     final idx = _writeIndex;
 

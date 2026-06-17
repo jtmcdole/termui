@@ -543,7 +543,7 @@ class GridBenchmarkPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     dev.Timeline.startSync('GridBenchmarkPainter.paint');
-    Tracer.record(_tracePaintId, Phase.begin);
+    Tracer.record(_tracePaintId, Phase.begin, TraceCategory.paint);
 
     final sw = Stopwatch()..start();
     final cellWidth = size.width / cols;
@@ -553,7 +553,7 @@ class GridBenchmarkPainter extends CustomPainter {
     switch (mode) {
       case RenderMode.drawRawAtlasSingle:
         dev.Timeline.startSync('Prepare Buffers');
-        Tracer.record(_tracePrepId, Phase.begin);
+        Tracer.record(_tracePrepId, Phase.begin, TraceCategory.paint);
         // Prepare background block colors and transforms
         for (var i = 0; i < count; i++) {
           final col = i % cols;
@@ -575,7 +575,7 @@ class GridBenchmarkPainter extends CustomPainter {
           // Color tint: Alternate blue and red
           colorsBg[i] = ((col + row) % 2 == 0) ? 0xFF3F51B5 : 0xFFE91E63;
         }
-        Tracer.record(_tracePrepId, Phase.end);
+        Tracer.record(_tracePrepId, Phase.end, TraceCategory.paint);
         dev.Timeline.finishSync();
 
         _drawRawAtlasInChunks(
@@ -588,13 +588,13 @@ class GridBenchmarkPainter extends CustomPainter {
           BlendMode.srcIn,
           Paint(),
         );
-        Tracer.record(_traceDrawId, Phase.end);
+        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
         dev.Timeline.finishSync();
         break;
 
       case RenderMode.drawRawAtlasDouble:
         dev.Timeline.startSync('Prepare Buffers');
-        Tracer.record(_tracePrepId, Phase.begin);
+        Tracer.record(_tracePrepId, Phase.begin, TraceCategory.paint);
         // 1. Prepare Background & Foreground buffers
         for (var i = 0; i < count; i++) {
           final col = i % cols;
@@ -637,7 +637,7 @@ class GridBenchmarkPainter extends CustomPainter {
               ? 0xFF00FF00
               : (col % 3 == 1 ? 0xFFFFEB3B : 0xFF00E5FF);
         }
-        Tracer.record(_tracePrepId, Phase.end);
+        Tracer.record(_tracePrepId, Phase.end, TraceCategory.paint);
         dev.Timeline.finishSync();
 
         // Draw backgrounds
@@ -663,13 +663,13 @@ class GridBenchmarkPainter extends CustomPainter {
           BlendMode.modulate,
           Paint(),
         );
-        Tracer.record(_traceDrawId, Phase.end);
+        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
         dev.Timeline.finishSync();
         break;
 
       case RenderMode.drawRectLoop:
         dev.Timeline.startSync('Canvas DrawRect Loop');
-        Tracer.record(_traceDrawId, Phase.begin);
+        Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
         final bgPaint = Paint();
         // Benchmark standard drawRect calls
         for (var row = 0; row < rows; row++) {
@@ -686,13 +686,13 @@ class GridBenchmarkPainter extends CustomPainter {
             canvas.drawRect(rect, bgPaint);
           }
         }
-        Tracer.record(_traceDrawId, Phase.end);
+        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
         dev.Timeline.finishSync();
         break;
 
       case RenderMode.textPainterLoop:
         dev.Timeline.startSync('Canvas TextPainter Loop');
-        Tracer.record(_traceDrawId, Phase.begin);
+        Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
         final bgPaint = Paint();
 
         // Note: Creating TextPainters in the paint loop is bad practice, but we do it to demonstrate the baseline standard approach's impact.
@@ -727,14 +727,14 @@ class GridBenchmarkPainter extends CustomPainter {
             tp.paint(canvas, Offset(col * cellWidth, row * cellHeight));
           }
         }
-        Tracer.record(_traceDrawId, Phase.end);
+        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
         dev.Timeline.finishSync();
         break;
     }
 
     sw.stop();
     onMeasure(sw.elapsedMicroseconds / 1000.0);
-    Tracer.record(_tracePaintId, Phase.end);
+    Tracer.record(_tracePaintId, Phase.end, TraceCategory.paint);
     dev.Timeline.finishSync();
   }
 

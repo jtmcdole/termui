@@ -152,7 +152,7 @@ class FlutterTerminal extends core.Terminal {
   /// | :--- | :--- | :--- |
   /// | `size` | [double] | The target font size. |
   void setFontSize(double size) {
-    Tracer.record(_traceSetFontSizeId, Phase.instant);
+    Tracer.record(_traceSetFontSizeId, Phase.instant, TraceCategory.layout);
     final clamped = size.clamp(4.0, 72.0);
     if (_fontSize != clamped) {
       _fontSize = clamped;
@@ -166,7 +166,11 @@ class FlutterTerminal extends core.Terminal {
   /// | :--- | :--- | :--- |
   /// | `delta` | [double] | The amount to increase by. Defaults to `1.0`. |
   void increaseFontSize([double delta = 1.0]) {
-    Tracer.record(_traceIncreaseFontSizeId, Phase.instant);
+    Tracer.record(
+      _traceIncreaseFontSizeId,
+      Phase.instant,
+      TraceCategory.layout,
+    );
     setFontSize(_fontSize + delta);
   }
 
@@ -176,7 +180,11 @@ class FlutterTerminal extends core.Terminal {
   /// | :--- | :--- | :--- |
   /// | `delta` | [double] | The amount to decrease by. Defaults to `1.0`. |
   void decreaseFontSize([double delta = 1.0]) {
-    Tracer.record(_traceDecreaseFontSizeId, Phase.instant);
+    Tracer.record(
+      _traceDecreaseFontSizeId,
+      Phase.instant,
+      TraceCategory.layout,
+    );
     setFontSize(_fontSize - delta);
   }
 
