@@ -3,8 +3,6 @@ import '../buffer.dart';
 import '../layout.dart';
 import '../style.dart';
 import '../color.dart';
-import '../event.dart' hide Modifier;
-import '../event.dart' as ev show Modifier;
 import '../window.dart';
 
 /// A controller that coordinates the active tab index across TabBar and TabPanel.
@@ -54,12 +52,6 @@ class TabController {
 /// - `]`: Swaps the active tab index forward (increases index, wraps around).
 /// - `Shift + Tab` (or `backtab`): Swaps the active tab index backward.
 ///
-/// ### Lifecycle and Listener Cleanup
-/// If a [WindowManager] is provided to bind global keys, this widget adds a
-/// listener to intercept tab commands. To prevent memory leaks, you must
-/// call [dispose] when this widget is removed from the tree to clean up the key
-/// listener registration.
-///
 /// ### Example Usage
 ///
 /// ```dart
@@ -67,11 +59,7 @@ class TabController {
 /// final tabBar = TabBar(
 ///   controller: controller,
 ///   labels: const ['General', 'Settings', 'About'],
-///   windowManager: myWindowManager,
 /// );
-///
-/// // Clean up later when the view changes:
-/// tabBar.dispose();
 /// ```
 ///
 /// ### Properties and Settings
@@ -80,7 +68,6 @@ class TabController {
 /// | :--- | :--- | :--- |
 /// | `controller` | [TabController] | Coordinates the active tab index. |
 /// | `labels` | [List]<[String]> | Text labels for each tab. |
-/// | `windowManager` | [WindowManager]? | Window manager to bind global hotkeys. |
 /// | `activeStyle` | [Style] | Style of the selected tab. |
 /// | `inactiveStyle` | [Style] | Style of the unselected tabs. |
 class TabBar extends Widget {
@@ -89,9 +76,6 @@ class TabBar extends Widget {
 
   /// Text labels for each tab.
   final List<String> labels;
-
-  /// Window manager to bind global hotkeys.
-  final WindowManager? windowManager;
 
   /// Style of the selected tab.
   final Style activeStyle;
@@ -103,7 +87,6 @@ class TabBar extends Widget {
   TabBar({
     required this.controller,
     required this.labels,
-    this.windowManager,
     this.activeStyle = const Style(
       foreground: CharmColors.charple,
       modifiers: Modifier.bold,
@@ -114,35 +97,10 @@ class TabBar extends Widget {
     ),
   }) {
     assert(labels.length == controller.length);
-    windowManager?.globalKeyListeners.add(_globalKeyListener);
   }
 
-  bool _globalKeyListener(KeyEvent event) {
-    if (event.key == ']' ||
-        (event.type == KeyType.character && event.key == ']')) {
-      controller.index = (controller.index + 1) % controller.length;
-      return true;
-    } else if (event.key == '[' ||
-        (event.type == KeyType.character && event.key == '[')) {
-      controller.index =
-          (controller.index - 1 + controller.length) % controller.length;
-      return true;
-    } else if (event.key == 'backtab' ||
-        (event.type == KeyType.tab &&
-            event.modifiers.contains(ev.Modifier.shift))) {
-      controller.index =
-          (controller.index - 1 + controller.length) % controller.length;
-      return true;
-    }
-    return false;
-  }
-
-  /// Cleans up registered global key listeners from the [windowManager].
-  ///
-  /// Must be invoked when the tab bar is removed from the active layout context.
-  void dispose() {
-    windowManager?.globalKeyListeners.remove(_globalKeyListener);
-  }
+  /// Cleans up resources.
+  void dispose() {}
 
   @override
   Element createElement() => TabBarElement(this);

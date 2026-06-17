@@ -91,7 +91,8 @@ class ModalDialogExample extends WidgetBookExample {
 
     final modal = ModalOverlay(
       title: 'Charm Modal Dialog',
-      bounds: Rect(0, 0, width, height),
+      width: width,
+      height: height,
       dialogBounds: Rect((width - 44) ~/ 2, (height - 8) ~/ 2, 44, 8),
       modalFocusNodes: [modalBtn1Node, modalBtn2Node],
       onDismiss: () {},
@@ -172,7 +173,8 @@ class ModalDialogExample extends WidgetBookExample {
     if (event.key == '\t' || event.key == 'backtab') {
       final modal = ModalOverlay(
         title: 'Charm Modal Dialog',
-        bounds: Rect(0, 0, 80, 24), // bounds don't matter for tab cycle
+        width: 80,
+        height: 24,
         dialogBounds: Rect(0, 0, 44, 8),
         modalFocusNodes: [modalBtn1Node, modalBtn2Node],
         onDismiss: () {},
@@ -197,7 +199,8 @@ class ModalDialogExample extends WidgetBookExample {
 
     final modal = ModalOverlay(
       title: 'Charm Modal Dialog',
-      bounds: Rect(0, 0, width, height),
+      width: width,
+      height: height,
       dialogBounds: Rect(dialogX, dialogY, 44, 8),
       modalFocusNodes: [modalBtn1Node, modalBtn2Node],
       onDismiss: () {

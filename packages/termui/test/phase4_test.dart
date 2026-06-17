@@ -2,7 +2,6 @@ import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/layout.dart';
-import 'package:termui/ui/event.dart';
 import 'package:termui/ui/window.dart';
 
 class SimpleWidget extends Widget {
@@ -60,199 +59,21 @@ void main() {
     });
   });
 
-  group('Hit-Testing & Coordinate Translation', () {
-    test('Topmost window hit-test and coordinates', () {
-      final manager = WindowManager();
-
-      final w1 = Window(
-        title: 'Win1',
-        bounds: const Rect(2, 2, 5, 5),
-        zIndex: 1,
-        child: const SimpleWidget(),
-      );
-
-      final w2 = Window(
-        title: 'Win2',
-        bounds: const Rect(3, 3, 5, 5),
-        zIndex: 2,
-        child: const SimpleWidget(),
-      );
-
-      manager.addWindow(w1);
-      manager.addWindow(w2);
-
-      // Coordinates (4, 4) overlap both. w2 has higher Z-index so it should receive the hit.
-      final hitWin = manager.findWindowAt(4, 4);
-      expect(hitWin, equals(w2));
-
-      // Coordinate (2, 2) is only on w1.
-      final hitWin2 = manager.findWindowAt(2, 2);
-      expect(hitWin2, equals(w1));
-
-      // Click at (12, 13) translates to 0-indexed screen coordinate (11, 12).
-      // On testWin (bounds 10, 10), this translates to:
-      // localX = 11 - 10 = 1
-      // localY = 12 - 10 = 2
-      int callbackX = -1;
-      int callbackY = -1;
-      var called = false;
-
-      final testWin = Window(
-        title: 'Test',
-        bounds: const Rect(10, 10, 5, 5),
-        child: const SimpleWidget(),
-        onMouseEvent: (event, lx, ly) {
-          called = true;
-          callbackX = lx;
-          callbackY = ly;
-        },
-      );
-      manager.addWindow(testWin);
-
-      final mouseEvent = const MouseEvent(
-        x: 12,
-        y: 13,
-        button: MouseButton.left,
-        type: MouseEventType.press,
-      );
-
-      final handled = manager.handleMouseEvent(mouseEvent);
-      expect(handled, isTrue);
-      expect(called, isTrue);
-      expect(callbackX, equals(1));
-      expect(callbackY, equals(2));
-      expect(testWin.focusNode.isFocused, isTrue);
-    });
-
-    test(
-      'isDraggingOrResizing state transitions during dragging and resizing',
-      () {
-        final manager = WindowManager();
-        final win = Window(
-          title: 'Win',
-          bounds: const Rect(2, 2, 10, 10),
-          child: const SimpleWidget(),
-        );
-        manager.addWindow(win);
-
-        expect(manager.isDraggingOrResizing, isFalse);
-
-        // Press on the title bar (sx = 4, sy = 2, localX = 2, localY = 0)
-        final pressEvent = const MouseEvent(
-          x: 5,
-          y: 3,
-          button: MouseButton.left,
-          type: MouseEventType.press,
-        );
-        manager.handleMouseEvent(pressEvent);
-
-        expect(manager.isDraggingOrResizing, isTrue);
-
-        // Drag mouse
-        final dragEvent = const MouseEvent(
-          x: 6,
-          y: 3,
-          button: MouseButton.left,
-          type: MouseEventType.drag,
-        );
-        manager.handleMouseEvent(dragEvent);
-        expect(manager.isDraggingOrResizing, isTrue);
-
-        // Release mouse
-        final releaseEvent = const MouseEvent(
-          x: 6,
-          y: 3,
-          button: MouseButton.left,
-          type: MouseEventType.release,
-        );
-        expect(releaseEvent, isNotNull); // dummy check
-        manager.handleMouseEvent(releaseEvent);
-        expect(manager.isDraggingOrResizing, isFalse);
-      },
-    );
-
-    test('Window resizing bounds updates correctly on corner drag', () {
-      final manager = WindowManager();
-      final win = Window(
-        title: 'Win',
-        bounds: const Rect(2, 2, 10, 10),
-        child: const SimpleWidget(),
-      );
-      manager.addWindow(win);
-
-      // Click at bottom-right corner of the window (localX = 9, localY = 9)
-      // window bounds is 2, 2, 10, 10.
-      // sx = 2 + 10 - 1 = 11.
-      // sy = 2 + 10 - 1 = 11.
-      // event.x = sx + 1 = 12.
-      // event.y = sy + 1 = 12.
-      final pressEvent = const MouseEvent(
-        x: 12,
-        y: 12,
-        button: MouseButton.left,
-        type: MouseEventType.press,
-      );
-      manager.handleMouseEvent(pressEvent);
-
-      expect(manager.isDraggingOrResizing, isTrue);
-
-      // Drag to x = 14, y = 14 (sx = 13, sy = 13)
-      final dragEvent = const MouseEvent(
-        x: 14,
-        y: 14,
-        button: MouseButton.left,
-        type: MouseEventType.drag,
-      );
-      manager.handleMouseEvent(dragEvent);
-
-      // The new width should be: sx - b.x + 1 = 13 - 2 + 1 = 12.
-      // The new height should be: sy - b.y + 1 = 13 - 2 + 1 = 12.
-      expect(win.bounds.width, equals(12));
-      expect(win.bounds.height, equals(12));
-    });
-
-    test('Window resizing works when clicking near the corner (tolerance)', () {
-      final manager = WindowManager();
-      final win = Window(
-        title: 'Win',
-        bounds: const Rect(2, 2, 10, 10),
-        child: const SimpleWidget(),
-      );
-      manager.addWindow(win);
-
-      expect(manager.isDraggingOrResizing, isFalse);
-
-      // Click 1 cell to the left of the bottom-right corner (localX = 8, localY = 9)
-      // sx = 2 + 8 = 10.
-      // sy = 2 + 9 = 11.
-      // event.x = sx + 1 = 11.
-      // event.y = sy + 1 = 12.
-      final pressEvent = const MouseEvent(
-        x: 11,
-        y: 12,
-        button: MouseButton.left,
-        type: MouseEventType.press,
-      );
-      manager.handleMouseEvent(pressEvent);
-
-      expect(manager.isDraggingOrResizing, isTrue);
-    });
-  });
-
   group('Visual Border Drawing Tests', () {
     test('Window borders and contents placement', () {
       final buffer = Buffer.blank(15, 10);
       final win = Window(
         title: 'A',
-        bounds: const Rect(1, 1, 10, 5),
+        width: 10,
+        height: 5,
         child: const SimpleWidget(),
       );
 
       ElementWidget(win)
         ..layout(BoxConstraints.tight(const Size(15, 10)))
-        ..paint(buffer, Offset.zero);
+        ..paint(buffer, const Offset(1, 1));
 
-      // Window bounds: (1, 1) to (10, 5) on buffer
+      // Window bounds: offset (1, 1) to (10, 5) size on buffer
       // Top border corner at (1, 1) is '┌'
       expect(buffer.getCell(1, 1)!.char, equals('┌'));
       // Top border horizontal line at (2, 1) is '─'

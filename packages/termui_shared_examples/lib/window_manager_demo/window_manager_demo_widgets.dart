@@ -133,8 +133,8 @@ class _SizeElement extends Element {
   void paint(Buffer buffer, Offset offset) {
     final wWidget = widget as SizeWidget;
     final win = wWidget.windowFn();
-    final w = win.bounds.width;
-    final h = win.bounds.height;
+    final w = win.width;
+    final h = win.height;
     buffer.writeString(
       offset.dx,
       offset.dy,

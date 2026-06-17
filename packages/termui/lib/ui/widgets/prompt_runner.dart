@@ -505,36 +505,9 @@ class PromptRunner<T> implements SceneRenderer {
 
     final rootElement = _rootElement;
     if (rootElement != null) {
-      _updateWindowManagers(rootElement, width, height);
       rootElement.markNeedsBuild();
     }
     draw();
-  }
-
-  void _updateWindowManagers(Element element, int width, int height) {
-    final w = element.widget;
-    try {
-      final dynamic dynWidget = w;
-      if (dynWidget.windowManager != null) {
-        final dynamic wm = dynWidget.windowManager;
-        wm.screenSize = Size(width, height);
-      }
-    } catch (_) {}
-
-    if (element is StatefulElement) {
-      final state = element.state;
-      try {
-        final dynamic dynState = state;
-        if (dynState.windowManager != null) {
-          final dynamic wm = dynState.windowManager;
-          wm.screenSize = Size(width, height);
-        }
-      } catch (_) {}
-    }
-
-    element.visitChildren((child) {
-      _updateWindowManagers(child, width, height);
-    });
   }
 
   /// Recursively walks the element tree to find the focused element and route the key event.

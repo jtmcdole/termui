@@ -100,9 +100,14 @@ void main() {
       );
 
       // 2. Setup floating window layer (matching demo coordinates: x=15, y=5, bounds=40x15)
-      final windowWidget = Window(
+      late final SceneLayer fgLayer;
+      late final PromptRunner<void> fgRunner;
+      late final Window windowWidget;
+
+      windowWidget = Window(
         title: 'Compositor Test',
-        bounds: const Rect(0, 0, 40, 15),
+        width: 40,
+        height: 15,
         borderStyle: const Style(
           foreground: Colors.green,
           modifiers: Modifier.bold,
@@ -112,18 +117,29 @@ void main() {
           modifiers: Modifier.bold,
         ),
         backgroundStyle: const Style(background: Color(25, 25, 35)),
+        onPan: (dx, dy) {
+          fgLayer.x += dx;
+          fgLayer.y += dy;
+          sceneManager.render();
+        },
+        onResize: (w, h) {
+          windowWidget.width = w;
+          windowWidget.height = h;
+          fgRunner.resize(w, h);
+          sceneManager.render();
+        },
         child: const Center(
           child: Text('I am floating!', style: Style(foreground: Colors.white)),
         ),
       );
 
-      final fgRunner = PromptRunner<void>(
+      fgRunner = PromptRunner<void>(
         terminal: terminal,
         widget: windowWidget,
         mode: ExecutionMode.managed,
         alternateScreen: false,
       );
-      final fgLayer = SceneLayer(
+      fgLayer = SceneLayer(
         renderer: fgRunner,
         sizing: LayerSizing.fixed,
         x: 15,
@@ -239,6 +255,51 @@ void main() {
         updatedContent.toString(),
         contains(
           'Layer 1 - zIndex: 10, bounds: Rect(20, 7, 40, 15), draggable: true',
+        ),
+      );
+
+      // 5. Inject a second Mouse Drag to 1-based (28, 10) which is global 0-based (27, 9)
+      // dx = 28 - 25 = 3, dy = 10 - 9 = 1.
+      // Total delta from start should be: x = 20 + 3 = 23, y = 7 + 1 = 8.
+      terminal.injectTestEvent(
+        const MouseEvent(
+          x: 28,
+          y: 10,
+          button: MouseButton.left,
+          type: MouseEventType.drag,
+        ),
+      );
+
+      await Future.delayed(Duration.zero);
+
+      // Trigger listener in demo for the second drag event
+      final dragPos2 = const Point<int>(28, 10);
+      bgRunner.widget = buildBackgroundWidget(dragPos2, sceneManager.layers);
+      bgRunner.pump();
+      sceneManager.render();
+
+      // Verify that the floating window layer was successfully dragged by another dx=3, dy=1
+      // x = 20 + 3 = 23
+      // y = 7 + 1 = 8
+      expect(fgLayer.x, equals(23));
+      expect(fgLayer.y, equals(8));
+
+      // Check that mouse position and layer bounds updated in the printed buffer again
+      final finalBgBuf = bgRunner.currentBuffer!;
+      final finalContent = StringBuffer();
+      for (var y = 0; y < finalBgBuf.height; y++) {
+        for (var x = 0; x < finalBgBuf.width; x++) {
+          finalContent.write(finalBgBuf.getCell(x, y)?.char ?? ' ');
+        }
+      }
+      expect(
+        finalContent.toString(),
+        contains('Mouse Position (1-based): x: 28, y: 10'),
+      );
+      expect(
+        finalContent.toString(),
+        contains(
+          'Layer 1 - zIndex: 10, bounds: Rect(23, 8, 40, 15), draggable: true',
         ),
       );
     });

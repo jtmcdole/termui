@@ -103,31 +103,24 @@ void main() {
       () {
         final buffer = Buffer(10, 10);
         final child = MockWidget();
-        final win = Window(
-          title: 'Title',
-          bounds: const Rect(0, 0, 1, 5),
-          child: child,
-        );
+        final win = Window(title: 'Title', width: 1, height: 5, child: child);
 
         // Width of 1 (too small for borders) should not crash and should not render child
         final winEl = win.createElement()..mount(null);
-        winEl.layout(
-          BoxConstraints.tight(Size(win.bounds.width, win.bounds.height)),
-        );
+        winEl.layout(BoxConstraints.tight(Size(win.width, win.height)));
         winEl.paint(buffer, Offset.zero);
         expect(child.rendered, isFalse);
 
         // Width/height <= 0 should return immediately
         final winZero = Window(
           title: 'Title',
-          bounds: const Rect(0, 0, 0, 0),
+          width: 0,
+          height: 0,
           child: child,
         );
         final winZeroEl = winZero.createElement()..mount(null);
         winZeroEl.layout(
-          BoxConstraints.tight(
-            Size(winZero.bounds.width, winZero.bounds.height),
-          ),
+          BoxConstraints.tight(Size(winZero.width, winZero.height)),
         );
         winZeroEl.paint(buffer, Offset.zero);
         expect(child.rendered, isFalse);
@@ -140,16 +133,15 @@ void main() {
       final buffer = Buffer(20, 5);
       final win = Window(
         title: 'Hello 🌟 World', // 13 characters with emoji
-        bounds: const Rect(0, 0, 10, 5), // w=10, maxTitleLen=6, cutLen=3
+        width: 10,
+        height: 5,
         child: MockWidget(),
       );
 
       // Should clip the title safely without throwing a RangeError/ArgumentError
       expect(() {
         final el = win.createElement()..mount(null);
-        el.layout(
-          BoxConstraints.tight(Size(win.bounds.width, win.bounds.height)),
-        );
+        el.layout(BoxConstraints.tight(Size(win.width, win.height)));
         el.paint(buffer, Offset.zero);
       }, returnsNormally);
       expect(win.isPositionOnTitle(3, 0), isTrue);
@@ -212,35 +204,23 @@ void main() {
   });
 
   group('TUI Hardening - Nested Focus Node Event Routing', () {
-    test('WindowManager handleKeyEvent walks up nested focus paths', () {
-      final manager = WindowManager();
-
-      final winFocusNode = FocusNode(id: 'winFocus');
+    test('FocusNode bubbleKeyEvent walks up nested focus paths', () {
+      final parentFocusNode = FocusNode(id: 'parentFocus');
       final childFocusNode = FocusNode(id: 'childFocus');
 
-      winFocusNode.addChild(childFocusNode);
+      parentFocusNode.addChild(childFocusNode);
 
       var keyReceived = false;
-      final win = Window(
-        title: 'Target Win',
-        bounds: const Rect(0, 0, 20, 10),
-        child: MockWidget(),
-        focusNode: winFocusNode,
-        onKeyEvent: (event) {
-          keyReceived = true;
-        },
-      );
-
-      manager.addWindow(win);
+      parentFocusNode.onKeyEvent = (event) {
+        keyReceived = true;
+        return true;
+      };
 
       // Request focus for nested child focus node
       childFocusNode.requestFocus();
 
-      // The leaf node should be the child focus node
-      expect(manager.rootFocusNode.findFocusedLeaf(), equals(childFocusNode));
-
       // Send keyboard event
-      final handled = manager.handleKeyEvent(
+      final handled = childFocusNode.bubbleKeyEvent(
         const KeyEvent('a', KeyType.character),
       );
 

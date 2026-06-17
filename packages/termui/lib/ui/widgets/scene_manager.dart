@@ -146,6 +146,8 @@ class SceneManager {
           final localEvent = MouseEvent(
             x: localX + 1,
             y: localY + 1,
+            globalX: event.globalX ?? event.x,
+            globalY: event.globalY ?? event.y,
             button: event.button,
             type: event.type,
             modifiers: event.modifiers,
@@ -168,6 +170,8 @@ class SceneManager {
           final localEvent = MouseEvent(
             x: localX + 1,
             y: localY + 1,
+            globalX: event.globalX ?? event.x,
+            globalY: event.globalY ?? event.y,
             button: event.button,
             type: event.type,
             modifiers: event.modifiers,
@@ -184,6 +188,8 @@ class SceneManager {
           final localEvent = MouseEvent(
             x: localX + 1,
             y: localY + 1,
+            globalX: event.globalX ?? event.x,
+            globalY: event.globalY ?? event.y,
             button: event.button,
             type: event.type,
             modifiers: event.modifiers,
@@ -212,6 +218,8 @@ class SceneManager {
             final localEvent = MouseEvent(
               x: localX + 1,
               y: localY + 1,
+              globalX: event.globalX ?? event.x,
+              globalY: event.globalY ?? event.y,
               button: event.button,
               type: event.type,
               modifiers: event.modifiers,
