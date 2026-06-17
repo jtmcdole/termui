@@ -8,10 +8,21 @@ import '../renderer.dart';
 import '../style.dart';
 import '../termui_debug.dart';
 import 'prompt_runner.dart';
+import '../../perf/tracer.dart';
 
 /// Manages multiple visual layers in a terminal windowing system,
 /// handles rendering composition and hardware sync.
 class SceneManager {
+  static final int _traceKeyEventId = Tracer.registerString(
+    'SceneManager:handleKeyEvent',
+  );
+  static final int _traceMouseEventId = Tracer.registerString(
+    'SceneManager:handleMouseEvent',
+  );
+  static final int _traceRenderId = Tracer.registerString(
+    'SceneManager:render',
+  );
+
   /// The hardware/platform terminal wrapper.
   final Terminal terminal;
 
@@ -94,12 +105,20 @@ class SceneManager {
     return sorted;
   }
 
-  void _handleInputEvent(InputEvent event) {
-    _cleanOrphanedLayers();
-
-    if (event is KeyEvent) {
+  /// Handles a keyboard event and routes it to the focused layer.
+  void handleKeyEvent(KeyEvent event) {
+    Tracer.record(_traceKeyEventId, Phase.begin, TraceCategory.events);
+    try {
       focusedLayer?.renderer.handleKeyEvent(event);
-    } else if (event is MouseEvent) {
+    } finally {
+      Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
+    }
+  }
+
+  /// Handles a mouse event, performing hit testing and routing to layers.
+  void handleMouseEvent(MouseEvent event) {
+    Tracer.record(_traceMouseEventId, Phase.begin, TraceCategory.events);
+    try {
       _globalMouseX = event.x - 1;
       _globalMouseY = event.y - 1;
       _isGlobalMouseDown =
@@ -233,115 +252,132 @@ class SceneManager {
       if (debugMouseCursorEnabled && !didRender) {
         render();
       }
+    } finally {
+      Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
+    }
+  }
+
+  void _handleInputEvent(InputEvent event) {
+    _cleanOrphanedLayers();
+
+    if (event is KeyEvent) {
+      handleKeyEvent(event);
+    } else if (event is MouseEvent) {
+      handleMouseEvent(event);
     }
   }
 
   /// Composites all active layers into a single flattened terminal output
   /// and writes it to the terminal.
   void render() {
-    _cleanOrphanedLayers();
+    Tracer.record(_traceRenderId, Phase.begin, TraceCategory.compositor);
+    try {
+      _cleanOrphanedLayers();
 
-    final size = terminal.backend.size;
-    var width = size.x;
-    var height = size.y;
-    if (width <= 0 || height <= 0) {
-      width = 80;
-      height = 24;
-    }
-
-    _renderer ??= Renderer(width, height);
-
-    final layeredBuffers = <LayeredBuffer>[];
-    for (final layer in layers) {
-      var buffer = layer.renderer.currentBuffer;
-      if (buffer == null) continue;
-
-      if (debugPaintLayerBordersEnabled) {
-        buffer = _cloneBufferWithBorder(buffer);
+      final size = terminal.backend.size;
+      var width = size.x;
+      var height = size.y;
+      if (width <= 0 || height <= 0) {
+        width = 80;
+        height = 24;
       }
 
-      layeredBuffers.add(
-        LayeredBuffer(
-          buffer: buffer,
-          x: layer.x,
-          y: layer.y,
-          zIndex: layer.zIndex,
-        ),
-      );
-    }
+      _renderer ??= Renderer(width, height);
 
-    final target = _targetBuffer ??= Buffer(width, height);
-    if (target.width != width || target.height != height) {
-      target.resize(width, height);
-    }
-    target.clear();
+      final layeredBuffers = <LayeredBuffer>[];
+      for (final layer in layers) {
+        var buffer = layer.renderer.currentBuffer;
+        if (buffer == null) continue;
 
-    _compositor.composite(target: target, layers: layeredBuffers);
+        if (debugPaintLayerBordersEnabled) {
+          buffer = _cloneBufferWithBorder(buffer);
+        }
 
-    if (debugMouseCursorEnabled &&
-        _globalMouseX != null &&
-        _globalMouseY != null) {
-      final cursorStyle = Style(
-        foreground: _isGlobalMouseDown
-            ? const Color(255, 0, 0)
-            : const Color(0, 255, 255),
-        modifiers: Modifier.bold,
-      );
-      target.writeString(_globalMouseX!, _globalMouseY!, '⦿', cursorStyle);
-    }
+        layeredBuffers.add(
+          LayeredBuffer(
+            buffer: buffer,
+            x: layer.x,
+            y: layer.y,
+            zIndex: layer.zIndex,
+          ),
+        );
+      }
 
-    final sb = StringBuffer();
-    _renderer!.render(target, sb);
-    terminal.backend.write(sb.toString());
+      final target = _targetBuffer ??= Buffer(width, height);
+      if (target.width != width || target.height != height) {
+        target.resize(width, height);
+      }
+      target.clear();
 
-    // Hardware state sync based on focused layer's requests.
-    final focused = focusedLayer;
-    final req = focused?.renderer;
+      _compositor.composite(target: target, layers: layeredBuffers);
 
-    final showsCursor = req?.showsCursor ?? false;
-    final wantsMouseTracking =
-        enableMouseTracking ||
-        (req?.wantsMouseTracking ?? false) ||
-        layers.any((layer) => layer.draggable) ||
-        debugMouseCursorEnabled;
+      if (debugMouseCursorEnabled &&
+          _globalMouseX != null &&
+          _globalMouseY != null) {
+        final cursorStyle = Style(
+          foreground: _isGlobalMouseDown
+              ? const Color(255, 0, 0)
+              : const Color(0, 255, 255),
+          modifiers: Modifier.bold,
+        );
+        target.writeString(_globalMouseX!, _globalMouseY!, '⦿', cursorStyle);
+      }
 
-    var effectiveShowsCursor = showsCursor;
-    int? absX;
-    int? absY;
+      final sb = StringBuffer();
+      _renderer!.render(target, sb);
+      terminal.backend.write(sb.toString());
 
-    if (showsCursor) {
-      final pos = req?.requestedCursorPosition;
-      if (pos != null) {
-        absX = (focused?.x ?? 0) + pos.x;
-        absY = (focused?.y ?? 0) + pos.y;
-        if (absX < 0 || absX >= width || absY < 0 || absY >= height) {
+      // Hardware state sync based on focused layer's requests.
+      final focused = focusedLayer;
+      final req = focused?.renderer;
+
+      final showsCursor = req?.showsCursor ?? false;
+      final wantsMouseTracking =
+          enableMouseTracking ||
+          (req?.wantsMouseTracking ?? false) ||
+          layers.any((layer) => layer.draggable) ||
+          debugMouseCursorEnabled;
+
+      var effectiveShowsCursor = showsCursor;
+      int? absX;
+      int? absY;
+
+      if (showsCursor) {
+        final pos = req?.requestedCursorPosition;
+        if (pos != null) {
+          absX = (focused?.x ?? 0) + pos.x;
+          absY = (focused?.y ?? 0) + pos.y;
+          if (absX < 0 || absX >= width || absY < 0 || absY >= height) {
+            effectiveShowsCursor = false;
+          }
+        } else {
           effectiveShowsCursor = false;
         }
-      } else {
-        effectiveShowsCursor = false;
       }
-    }
 
-    if (effectiveShowsCursor != _lastShowsCursor) {
-      if (effectiveShowsCursor) {
-        terminal.showCursor();
-      } else {
-        terminal.hideCursor();
+      if (effectiveShowsCursor != _lastShowsCursor) {
+        if (effectiveShowsCursor) {
+          terminal.showCursor();
+        } else {
+          terminal.hideCursor();
+        }
+        _lastShowsCursor = effectiveShowsCursor;
       }
-      _lastShowsCursor = effectiveShowsCursor;
-    }
 
-    if (wantsMouseTracking != _lastWantsMouseTracking) {
-      if (wantsMouseTracking) {
-        terminal.enableMouseTracking();
-      } else {
-        terminal.disableMouseTracking();
+      if (wantsMouseTracking != _lastWantsMouseTracking) {
+        if (wantsMouseTracking) {
+          terminal.enableMouseTracking();
+        } else {
+          terminal.disableMouseTracking();
+        }
+        _lastWantsMouseTracking = wantsMouseTracking;
       }
-      _lastWantsMouseTracking = wantsMouseTracking;
-    }
 
-    if (effectiveShowsCursor && absX != null && absY != null) {
-      terminal.goto(x: absX + 1, y: absY + 1);
+      if (effectiveShowsCursor && absX != null && absY != null) {
+        terminal.goto(x: absX + 1, y: absY + 1);
+      }
+    } finally {
+      Tracer.record(_traceRenderId, Phase.end, TraceCategory.compositor);
     }
   }
 

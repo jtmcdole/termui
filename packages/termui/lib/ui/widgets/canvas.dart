@@ -208,7 +208,11 @@ class Canvas extends Widget {
     bool value = true,
     bool antiAliased = false,
   }) {
-    Tracer.record(_traceCanvasDrawLineColoredId, Phase.begin);
+    Tracer.record(
+      _traceCanvasDrawLineColoredId,
+      Phase.begin,
+      TraceCategory.paint,
+    );
     try {
       drawLineColoredPacked(
         x0,
@@ -221,7 +225,11 @@ class Canvas extends Widget {
         antiAliased: antiAliased,
       );
     } finally {
-      Tracer.record(_traceCanvasDrawLineColoredId, Phase.end);
+      Tracer.record(
+        _traceCanvasDrawLineColoredId,
+        Phase.end,
+        TraceCategory.paint,
+      );
     }
   }
 
@@ -686,7 +694,7 @@ class Canvas extends Widget {
     bool value = true,
     bool antiAliased = false,
   }) {
-    Tracer.record(_traceCanvasFillTriangleId, Phase.begin);
+    Tracer.record(_traceCanvasFillTriangleId, Phase.begin, TraceCategory.paint);
     try {
       // Sort vertices by Y coordinate so py0 <= py1 <= py2
       var px0 = x0, py0 = y0, pc0 = c0;
@@ -808,7 +816,7 @@ class Canvas extends Widget {
         );
       }
     } finally {
-      Tracer.record(_traceCanvasFillTriangleId, Phase.end);
+      Tracer.record(_traceCanvasFillTriangleId, Phase.end, TraceCategory.paint);
     }
   }
 
@@ -830,7 +838,7 @@ class Canvas extends Widget {
     bool value = true,
     bool antiAliased = false,
   }) {
-    Tracer.record(_traceCanvasFillQuadId, Phase.begin);
+    Tracer.record(_traceCanvasFillQuadId, Phase.begin, TraceCategory.paint);
     try {
       // Split quad (p0, p1, p2, p3) into two triangles sharing diagonal (p0 -> p2)
       fillTriangleColored(
@@ -860,7 +868,7 @@ class Canvas extends Widget {
         antiAliased: antiAliased,
       );
     } finally {
-      Tracer.record(_traceCanvasFillQuadId, Phase.end);
+      Tracer.record(_traceCanvasFillQuadId, Phase.end, TraceCategory.paint);
     }
   }
 
@@ -958,7 +966,11 @@ class CanvasElement extends Element {
   @override
   void paint(Buffer buffer, Offset offset) {
     final canvas = widget as Canvas;
-    Tracer.record(Canvas._traceCanvasRenderId, Phase.begin);
+    Tracer.record(
+      Canvas._traceCanvasRenderId,
+      Phase.begin,
+      TraceCategory.paint,
+    );
     try {
       var currentBuffer = buffer;
       var startX = offset.dx;
@@ -1024,7 +1036,11 @@ class CanvasElement extends Element {
         }
       }
     } finally {
-      Tracer.record(Canvas._traceCanvasRenderId, Phase.end);
+      Tracer.record(
+        Canvas._traceCanvasRenderId,
+        Phase.end,
+        TraceCategory.paint,
+      );
     }
   }
 }

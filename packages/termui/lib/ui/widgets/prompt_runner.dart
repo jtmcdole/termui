@@ -9,6 +9,7 @@ import '../window.dart';
 import '../termui_debug.dart';
 import '../color.dart';
 import '../style.dart';
+import '../../perf/tracer.dart';
 
 import '../event.dart'
     show
@@ -104,6 +105,13 @@ class UserInterruptException extends PromptAbortedException {
 /// ).run();
 /// ```
 class PromptRunner<T> implements SceneRenderer {
+  static final int _traceKeyEventId = Tracer.registerString(
+    'PromptRunner:handleKeyEvent',
+  );
+  static final int _traceMouseEventId = Tracer.registerString(
+    'PromptRunner:handleMouseEvent',
+  );
+
   /// The active terminal instance.
   final term.Terminal terminal;
 
@@ -617,71 +625,81 @@ class PromptRunner<T> implements SceneRenderer {
 
   @override
   void handleKeyEvent(term.KeyEvent event) {
-    if (_completer == null || _completer!.isCompleted) return;
+    Tracer.record(_traceKeyEventId, Phase.begin, TraceCategory.events);
+    try {
+      if (_completer == null || _completer!.isCompleted) return;
 
-    var isDone = false;
-    final rootElement = _rootElement;
-    if (rootElement == null) return;
+      var isDone = false;
+      final rootElement = _rootElement;
+      if (rootElement == null) return;
 
-    // Step 1: Custom Interceptor
-    if (onKeyEvent != null) {
-      isDone = onKeyEvent!(event);
-    }
-
-    // Step 2: Widget Event Routing
-    if (!isDone) {
-      isDone = _routeKeyEvent(rootElement, event);
-    }
-
-    // Step 3: Standard & System Exit Evaluation
-    if (!isDone) {
-      final trigger = _detectTrigger(event);
-      if (trigger != null && exitConditions.containsKey(trigger)) {
-        _handleAction(trigger, event);
-        return;
+      // Step 1: Custom Interceptor
+      if (onKeyEvent != null) {
+        isDone = onKeyEvent!(event);
       }
-    }
 
-    if (isDone) {
-      rootElement.markNeedsBuild();
-    }
+      // Step 2: Widget Event Routing
+      if (!isDone) {
+        isDone = _routeKeyEvent(rootElement, event);
+      }
 
-    // Force a redraw to reflect any selections or edits.
-    draw();
+      // Step 3: Standard & System Exit Evaluation
+      if (!isDone) {
+        final trigger = _detectTrigger(event);
+        if (trigger != null && exitConditions.containsKey(trigger)) {
+          _handleAction(trigger, event);
+          return;
+        }
+      }
+
+      if (isDone) {
+        rootElement.markNeedsBuild();
+      }
+
+      // Force a redraw to reflect any selections or edits.
+      draw();
+    } finally {
+      Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
+    }
   }
 
   @override
   void handleMouseEvent(term.MouseEvent event) {
-    if (_completer == null || _completer!.isCompleted) return;
+    Tracer.record(_traceMouseEventId, Phase.begin, TraceCategory.events);
+    try {
+      if (_completer == null || _completer!.isCompleted) return;
 
-    if (debugPaintHoverEnabled) {
-      _lastMousePosition = Point<int>(event.x, event.y);
-    }
-    var isDone = false;
-    final rootElement = _rootElement;
-    if (rootElement == null) return;
-
-    if (_mouseCaptureElement != null &&
-        (event.type == term.MouseEventType.drag ||
-            event.type == term.MouseEventType.release)) {
-      final captureElement = _mouseCaptureElement!;
-      final absOffset = _getAbsoluteOffset(captureElement);
-      final sx = event.x - 1;
-      final sy = event.y - 1;
-      final localX = sx - absOffset.dx;
-      final localY = sy - absOffset.dy;
-
-      isDone = _routeToElement(captureElement, event, localX, localY);
-
-      if (event.type == term.MouseEventType.release) {
-        _mouseCaptureElement = null;
+      if (debugPaintHoverEnabled) {
+        _lastMousePosition = Point<int>(event.x, event.y);
       }
-    } else {
-      isDone = _routeMouseEvent(rootElement, event, Offset.zero);
-    }
+      var isDone = false;
+      final rootElement = _rootElement;
+      if (rootElement == null) return;
 
-    if (isDone || debugPaintHoverEnabled) {
-      draw();
+      if (_mouseCaptureElement != null &&
+          (event.type == term.MouseEventType.drag ||
+              event.type == term.MouseEventType.release)) {
+        final captureElement = _mouseCaptureElement!;
+        final absOffset = _getAbsoluteOffset(captureElement);
+        final sx = event.x - 1;
+        final sy = event.y - 1;
+        final localX = sx - absOffset.dx;
+        final localY = sy - absOffset.dy;
+
+        isDone = _routeToElement(captureElement, event, localX, localY);
+
+        if (event.type == term.MouseEventType.release) {
+          _mouseCaptureElement = null;
+        }
+      } else {
+        isDone = _routeMouseEvent(rootElement, event, Offset.zero);
+      }
+
+      if (isDone || debugPaintHoverEnabled) {
+        draw();
+      }
+    } finally {
+      Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
     }
   }
 }

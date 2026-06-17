@@ -13,6 +13,11 @@ void main() {
       traceFilePath =
           '${Directory.current.path}${Platform.pathSeparator}test_trace_${Random().nextInt(10000000)}.json';
       await Tracer.initialize();
+      Tracer.activeCategories = {
+        TraceCategory.paint,
+        TraceCategory.layout,
+        TraceCategory.events,
+      };
     });
 
     tearDown(() async {
@@ -31,9 +36,9 @@ void main() {
       await Tracer.start(traceFilePath);
 
       // Record some events
-      Tracer.record(drawFrameId, Phase.begin);
-      Tracer.record(updateLayoutId, Phase.instant);
-      Tracer.record(drawFrameId, Phase.end);
+      Tracer.record(drawFrameId, Phase.begin, TraceCategory.paint);
+      Tracer.record(updateLayoutId, Phase.instant, TraceCategory.layout);
+      Tracer.record(drawFrameId, Phase.end, TraceCategory.paint);
 
       // Stop tracing to flush buffers and close file
       await Tracer.stop();
@@ -70,8 +75,8 @@ void main() {
       await Tracer.start(traceFilePath);
 
       final dynamicEventId = Tracer.registerString('dynamicEvent');
-      Tracer.record(dynamicEventId, Phase.begin);
-      Tracer.record(dynamicEventId, Phase.end);
+      Tracer.record(dynamicEventId, Phase.begin, TraceCategory.events);
+      Tracer.record(dynamicEventId, Phase.end, TraceCategory.events);
 
       await Tracer.stop();
 
@@ -91,8 +96,8 @@ void main() {
       final memEventId = Tracer.registerString('memEvent');
 
       await Tracer.start(memTracePath, fs: memoryFs);
-      Tracer.record(memEventId, Phase.begin);
-      Tracer.record(memEventId, Phase.end);
+      Tracer.record(memEventId, Phase.begin, TraceCategory.events);
+      Tracer.record(memEventId, Phase.end, TraceCategory.events);
       await Tracer.stop();
 
       final file = memoryFs.file(memTracePath);
