@@ -22,7 +22,7 @@ class _SpyElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     (widget as SpyWidget).renderCount++;
   }
 }
@@ -43,7 +43,7 @@ class _DummyElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {}
+  void performPaint(Buffer buffer, Offset offset) {}
 }
 
 void main() {

@@ -27,7 +27,7 @@ class TestWidgetElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = widget as TestWidget;
     final area = Rect(offset.dx, offset.dy, size.width, size.height);
     if (w.char.length == 1) {

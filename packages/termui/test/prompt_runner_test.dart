@@ -97,7 +97,7 @@ class _TestKeyConsumerElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {}
+  void performPaint(Buffer buffer, Offset offset) {}
 }
 
 void main() {
@@ -340,7 +340,6 @@ void main() {
 
       final runner = PromptRunner<String>(
         terminal: terminal,
-        height: 10,
         widget: Test4ArgMouseWidget((event, x, y, area) {
           receivedEvent = event;
           receivedX = x;
@@ -380,6 +379,9 @@ class Test4ArgMouseWidget extends Widget {
   const Test4ArgMouseWidget(this.onMouse);
 
   @override
+  int getIntrinsicHeight(int width) => 10;
+
+  @override
   Element createElement() => _Test4ArgMouseElement(this);
 }
 
@@ -392,7 +394,7 @@ class _Test4ArgMouseElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {}
+  void performPaint(Buffer buffer, Offset offset) {}
 
   void handleMouseEvent(
     ui.MouseEvent event,

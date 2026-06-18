@@ -284,6 +284,9 @@ class Window extends Widget {
   /// The focus node representing this window's focus state.
   final FocusNode focusNode;
 
+  /// Whether to show the close button [x] on the top right.
+  final bool showCloseButton;
+
   /// Callback triggered when a mouse event hits this window.
   final void Function(MouseEvent event, int localX, int localY)? onMouseEvent;
 
@@ -307,6 +310,7 @@ class Window extends Widget {
     this.titleStyle = Style.empty,
     this.backgroundStyle = Style.empty,
     FocusNode? focusNode,
+    this.showCloseButton = false,
     this.onMouseEvent,
     this.onKeyEvent,
     this.onPan,
@@ -412,7 +416,7 @@ class WindowElement extends Element implements MouseEventHandler {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final win = widget as Window;
     final w = win.width;
     final h = win.height;
@@ -440,6 +444,16 @@ class WindowElement extends Element implements MouseEventHandler {
       topBorder,
       win.borderStyle,
     );
+
+    // Draw close button [x] at the top right of the window border, e.g. at w - 4, w - 3, w - 2.
+    if (win.showCloseButton && w >= 6) {
+      buffer.writeString(
+        paintOffset.dx + w - 4,
+        paintOffset.dy,
+        '[x]',
+        win.borderStyle,
+      );
+    }
 
     // Overlay title
     if (win.title.isNotEmpty) {

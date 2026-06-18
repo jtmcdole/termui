@@ -112,5 +112,82 @@ void main() {
       expect(jsonList[0]['name'], equals('memEvent'));
       expect(jsonList[0]['ph'], equals('B'));
     });
+
+    test(
+      'should record and serialize event metadata correctly for IsolateSink',
+      () async {
+        final localEventId = Tracer.registerString('localEvent');
+        await Tracer.start(traceFilePath);
+        Tracer.record(
+          localEventId,
+          Phase.begin,
+          TraceCategory.paint,
+          metadata: {'widget': 'LocalTestWidget', 'key': 'value'},
+        );
+        await Tracer.stop();
+
+        final localFile = File(traceFilePath);
+        expect(await localFile.exists(), isTrue);
+        final localContents = await localFile.readAsString();
+        final localJsonList = jsonDecode(localContents) as List<dynamic>;
+        expect(localJsonList.length, equals(1));
+        expect(localJsonList[0]['name'], equals('localEvent'));
+        expect(localJsonList[0]['args'], isNotNull);
+        expect(localJsonList[0]['args']['widget'], equals('LocalTestWidget'));
+        expect(localJsonList[0]['args']['key'], equals('value'));
+      },
+    );
+
+    test(
+      'should record and serialize event metadata correctly for FileSystemSink',
+      () async {
+        final memoryFs = MemoryFileSystem();
+        final memTracePath = '/mem/trace_meta.json';
+        final memEventId = Tracer.registerString('memEvent');
+        await Tracer.start(memTracePath, fs: memoryFs);
+        Tracer.record(
+          memEventId,
+          Phase.begin,
+          TraceCategory.paint,
+          metadata: {'widget': 'MemTestWidget', 'foo': 'bar'},
+        );
+        await Tracer.stop();
+
+        final memFile = memoryFs.file(memTracePath);
+        expect(memFile.existsSync(), isTrue);
+        final memContents = memFile.readAsStringSync();
+        final memJsonList = jsonDecode(memContents) as List<dynamic>;
+        expect(memJsonList.length, equals(1));
+        expect(memJsonList[0]['name'], equals('memEvent'));
+        expect(memJsonList[0]['args'], isNotNull);
+        expect(memJsonList[0]['args']['widget'], equals('MemTestWidget'));
+        expect(memJsonList[0]['args']['foo'], equals('bar'));
+      },
+    );
+
+    test(
+      'Adversarial Metadata: special characters and strings in metadata map',
+      () async {
+        final eventId = Tracer.registerString('adversarialMetaEvent');
+        await Tracer.start(traceFilePath);
+
+        Tracer.record(
+          eventId,
+          Phase.begin,
+          TraceCategory.paint,
+          metadata: {
+            'closureString': (() => 'hello').toString(),
+            'weird': '{"nested": "value", "quote": "\\""}',
+            'newline': 'a\nb',
+          },
+        );
+        await Tracer.stop();
+
+        final file = File(traceFilePath);
+        expect(await file.exists(), isTrue);
+        final contents = await file.readAsString();
+        expect(() => jsonDecode(contents), returnsNormally);
+      },
+    );
   });
 }

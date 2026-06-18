@@ -137,7 +137,7 @@ class SafeLayoutElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (useFallback) {
       fallbackElement?.paint(buffer, offset);
     } else {

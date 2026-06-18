@@ -105,7 +105,7 @@ class LeftBorderElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final borderWidget = widget as LeftBorder;
     final padding = borderWidget.padding;
     final requiredWidth = 1 + padding.left + padding.right;

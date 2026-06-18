@@ -178,7 +178,7 @@ class _LogWindowRenderElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = widget as _LogWindowRender;
     final areaWidth = size.width.toInt();
     final areaHeight = size.height.toInt();

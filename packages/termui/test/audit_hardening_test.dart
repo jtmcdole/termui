@@ -29,7 +29,7 @@ class MockElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = widget as MockWidget;
     w.rendered = true;
     w.renderedArea = Rect(offset.dx, offset.dy, size.width, size.height);

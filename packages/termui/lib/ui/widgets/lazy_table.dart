@@ -125,7 +125,7 @@ class LazyListElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final lazy = widget as LazyList;
     final limit = min(size.height, lazy.itemCount - lazy.scrollOffset);
     for (var i = 0; i < limit; i++) {
@@ -266,7 +266,7 @@ class LazyTableElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final table = widget as LazyTable;
     final w = size.width;
     final h = size.height;

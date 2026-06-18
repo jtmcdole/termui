@@ -190,7 +190,7 @@ class _ScrollViewRenderProxyElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final proxyWidget = widget as _ScrollViewRenderProxy;
     final w = size.width;
     final h = size.height;

@@ -75,6 +75,9 @@ void main() async {
   debugMouseCursorEnabled = true;
   debugPaintLayerBordersEnabled = true;
 
+  await Tracer.initialize();
+  await Tracer.start('compositor_trace.json');
+
   // We run the application inside runGuarded to guarantee terminal settings restoration.
   await Terminal.runGuarded((terminal) async {
     // 1. Setup alternate screen and clean terminal state
@@ -209,6 +212,7 @@ void main() async {
       terminal.exitAlternateScreen();
       terminal.showCursor();
       terminal.disableMouseTracking();
+      await Tracer.stop();
     }
   });
 

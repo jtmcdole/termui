@@ -523,7 +523,7 @@ class _DropdownButtonRenderWidgetElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final dButton = widget as _DropdownButtonRenderWidget;
     final w = size.width;
     final h = size.height;
@@ -636,7 +636,7 @@ class _DropdownMenuItemWidgetElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final item = widget as _DropdownMenuItemWidget;
     final w = size.width;
     final h = size.height;

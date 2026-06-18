@@ -89,7 +89,7 @@ class NumberSelectorElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final selector = widget as NumberSelector;
     final viewport = Viewport(
       buffer,

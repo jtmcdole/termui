@@ -3,7 +3,6 @@ import 'package:characters/characters.dart';
 import '../buffer.dart';
 import '../style.dart';
 import '../layout.dart';
-import '../../perf/tracer.dart';
 
 /// Text alignments for TUI rendering.
 enum TextAlign {
@@ -86,6 +85,16 @@ class Text extends Widget {
 
   @override
   Element createElement() => TextElement(this);
+
+  @override
+  int getIntrinsicWidth(int height) {
+    var maxWidth = 0;
+    for (final line in data.split('\n')) {
+      final w = measureStringWidth(line);
+      if (w > maxWidth) maxWidth = w;
+    }
+    return maxWidth;
+  }
 
   @override
   int getIntrinsicHeight(int width) {
@@ -207,12 +216,20 @@ class Text extends Widget {
 
 /// An element that represents a [Text] widget.
 class TextElement extends Element {
-  static final int _tracePaintId = Tracer.registerString('Text:paint');
-
   List<String> _cachedLines = [];
 
   /// Creates a text element for a [Text] widget.
   TextElement(Text super.widget);
+
+  @override
+  Map<String, String>? get paintTraceMetadata {
+    final textWidget = widget as Text;
+    return {
+      'text': textWidget.data.length > 40
+          ? '${textWidget.data.substring(0, 40)}...'
+          : textWidget.data,
+    };
+  }
 
   @override
   Size performLayout(BoxConstraints constraints) {
@@ -244,50 +261,45 @@ class TextElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
-    Tracer.record(_tracePaintId, Phase.begin, TraceCategory.paint);
-    try {
-      final textWidget = widget as Text;
-      final area = Rect(offset.dx, offset.dy, size.width, size.height);
+  void performPaint(Buffer buffer, Offset offset) {
+    final textWidget = widget as Text;
+    final area = Rect(offset.dx, offset.dy, size.width, size.height);
 
-      final limit = textWidget.maxLines != null
-          ? min(textWidget.maxLines!, area.height)
-          : area.height;
+    final limit = textWidget.maxLines != null
+        ? min(textWidget.maxLines!, area.height)
+        : area.height;
 
-      for (var i = 0; i < _cachedLines.length; i++) {
-        if (i >= limit) break;
-        final line = _cachedLines[i];
-        final lineWidth = measureStringWidth(line);
+    for (var i = 0; i < _cachedLines.length; i++) {
+      if (i >= limit) break;
+      final line = _cachedLines[i];
+      final lineWidth = measureStringWidth(line);
 
-        var startX = 0;
-        switch (textWidget.textAlign) {
-          case TextAlign.left:
-            startX = 0;
-            break;
-          case TextAlign.right:
-            startX = max(0, area.width - lineWidth);
-            break;
-          case TextAlign.center:
-            startX = max(0, (area.width - lineWidth) ~/ 2);
-            break;
-          case TextAlign.justify:
-            startX = 0;
-            break;
-        }
-
-        final visibleChars = textWidget._truncateToWidth(
-          line,
-          area.width - startX,
-        );
-        buffer.writeString(
-          area.x + startX,
-          area.y + i,
-          visibleChars,
-          textWidget.style,
-        );
+      var startX = 0;
+      switch (textWidget.textAlign) {
+        case TextAlign.left:
+          startX = 0;
+          break;
+        case TextAlign.right:
+          startX = max(0, area.width - lineWidth);
+          break;
+        case TextAlign.center:
+          startX = max(0, (area.width - lineWidth) ~/ 2);
+          break;
+        case TextAlign.justify:
+          startX = 0;
+          break;
       }
-    } finally {
-      Tracer.record(_tracePaintId, Phase.end, TraceCategory.paint);
+
+      final visibleChars = textWidget._truncateToWidth(
+        line,
+        area.width - startX,
+      );
+      buffer.writeString(
+        area.x + startX,
+        area.y + i,
+        visibleChars,
+        textWidget.style,
+      );
     }
   }
 }

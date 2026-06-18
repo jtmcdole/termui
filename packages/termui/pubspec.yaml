@@ -3,6 +3,9 @@ description: A high-performance terminal UI and windowing system for Dart featur
 version: 0.4.0
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui
 
+executables:
+  termui_trace:
+
 topics:
   - cli
   - tui
