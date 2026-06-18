@@ -35,7 +35,12 @@ class _AnsiGoldenMatcher extends Matcher {
         goldenFile.writeAsStringSync(currentAnsi);
         return true;
       }
-      matchState['failure'] = 'Golden file does not exist at $goldenPath';
+      final failPath = '$goldenPath.fail';
+      final failedFile = File(failPath);
+      failedFile.createSync(recursive: true);
+      failedFile.writeAsStringSync(currentAnsi);
+      matchState['failure'] =
+          'Golden file does not exist at $goldenPath - see $failPath';
       return false;
     }
 

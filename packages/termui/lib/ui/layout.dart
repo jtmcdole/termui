@@ -372,6 +372,11 @@ abstract class Widget {
   int getIntrinsicHeight(int width) {
     return 1;
   }
+
+  /// Computes the intrinsic width of this widget under the given [height] constraint.
+  int getIntrinsicWidth(int height) {
+    return 0;
+  }
 }
 
 /// Instantiated element in the widget tree that keeps track of widget updates and state.
@@ -472,11 +477,30 @@ abstract class Element implements BuildContext {
   /// Performs the actual rebuild and clears the dirty flag.
   void performRebuild() {
     _dirty = false;
-    Tracer.record(rebuildTraceId, Phase.begin, TraceCategory.build);
+    final isTracing =
+        Tracer.isEnabled &&
+        Tracer.activeCategories.contains(TraceCategory.build);
+    Map<String, String>? meta;
+    if (isTracing) {
+      meta = {'widget': widget.runtimeType.toString()};
+      Tracer.record(
+        rebuildTraceId,
+        Phase.begin,
+        TraceCategory.build,
+        metadata: meta,
+      );
+    }
     try {
       rebuild();
     } finally {
-      Tracer.record(rebuildTraceId, Phase.end, TraceCategory.build);
+      if (isTracing) {
+        Tracer.record(
+          rebuildTraceId,
+          Phase.end,
+          TraceCategory.build,
+          metadata: meta,
+        );
+      }
     }
   }
 
@@ -497,8 +521,40 @@ abstract class Element implements BuildContext {
     return constraints.constrain(Size(width, height));
   }
 
-  /// Paints the element onto the provided buffer at the given offset.
-  void paint(Buffer buffer, Offset offset) {}
+  /// Custom metadata for paint tracing.
+  Map<String, String>? get paintTraceMetadata => null;
+
+  /// Hook for subclasses to implement actual painting.
+  void performPaint(Buffer buffer, Offset offset) {}
+
+  /// Paints the element and records tracing metrics.
+  void paint(Buffer buffer, Offset offset) {
+    final isTracing =
+        Tracer.isEnabled &&
+        Tracer.activeCategories.contains(TraceCategory.paint);
+    if (isTracing) {
+      final customMeta = paintTraceMetadata;
+      final meta = {'widget': widget.runtimeType.toString(), ...?customMeta};
+      Tracer.record(
+        paintTraceId,
+        Phase.begin,
+        TraceCategory.paint,
+        metadata: meta,
+      );
+      try {
+        performPaint(buffer, offset);
+      } finally {
+        Tracer.record(
+          paintTraceId,
+          Phase.end,
+          TraceCategory.paint,
+          metadata: meta,
+        );
+      }
+    } else {
+      performPaint(buffer, offset);
+    }
+  }
 
   /// Invokes [visitor] on each child element of this node.
   void visitChildren(void Function(Element child) visitor) {}
@@ -534,7 +590,7 @@ class LeafElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {}
+  void performPaint(Buffer buffer, Offset offset) {}
 }
 
 /// A widget that has configuration but delegates rendering to its built child.
@@ -619,7 +675,7 @@ class StatelessElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
@@ -765,7 +821,7 @@ class StatefulElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
@@ -850,11 +906,47 @@ class InheritedElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
   }
+}
+
+/// How children are aligned along the cross axis.
+enum CrossAxisAlignment {
+  /// Align children to the start of the cross axis.
+  start,
+
+  /// Align children to the center of the cross axis.
+  center,
+
+  /// Align children to the end of the cross axis.
+  end,
+
+  /// Stretch children to fill the cross axis.
+  stretch,
+}
+
+/// How children are aligned along the main axis.
+enum MainAxisAlignment {
+  /// Place children as close to the start of the main axis as possible.
+  start,
+
+  /// Place children as close to the end of the main axis as possible.
+  end,
+
+  /// Place children as close to the center of the main axis as possible.
+  center,
+
+  /// Place free space evenly between children.
+  spaceBetween,
+
+  /// Place free space evenly between children, and half of that space before the first and after the last child.
+  spaceAround,
+
+  /// Place free space evenly between children, and before the first and after the last child.
+  spaceEvenly,
 }
 
 /// Layout direction for box splitting.
@@ -1056,8 +1148,9 @@ class Viewport implements Buffer {
 List<Rect> splitRect(
   Rect area,
   List<Constraint> constraints,
-  LayoutDirection direction,
-) {
+  LayoutDirection direction, {
+  MainAxisAlignment mainAxisAlignment = MainAxisAlignment.start,
+}) {
   final clampedArea = Rect(
     area.x,
     area.y,
@@ -1136,19 +1229,68 @@ List<Rect> splitRect(
 
   // 5. Construct child Rects
   final rects = <Rect>[];
-  var offset = 0;
-  for (var i = 0; i < sizes.length; i++) {
-    final size = sizes[i];
-    if (direction == LayoutDirection.horizontal) {
-      rects.add(
-        Rect(clampedArea.x + offset, clampedArea.y, size, clampedArea.height),
-      );
-    } else {
-      rects.add(
-        Rect(clampedArea.x, clampedArea.y + offset, clampedArea.width, size),
-      );
+  final N = sizes.length;
+  final remaining = totalSize - usedSize;
+
+  if (remaining <= 0 || N == 0) {
+    var offset = 0;
+    for (var i = 0; i < N; i++) {
+      final size = sizes[i];
+      if (direction == LayoutDirection.horizontal) {
+        rects.add(
+          Rect(clampedArea.x + offset, clampedArea.y, size, clampedArea.height),
+        );
+      } else {
+        rects.add(
+          Rect(clampedArea.x, clampedArea.y + offset, clampedArea.width, size),
+        );
+      }
+      offset += size;
     }
-    offset += size;
+  } else {
+    // We have remaining space to distribute
+    final sumOfSizes = List<int>.filled(N + 1, 0);
+    for (var i = 0; i < N; i++) {
+      sumOfSizes[i + 1] = sumOfSizes[i] + sizes[i];
+    }
+
+    int getChildOffset(int i) {
+      switch (mainAxisAlignment) {
+        case MainAxisAlignment.start:
+          return sumOfSizes[i];
+        case MainAxisAlignment.end:
+          return remaining + sumOfSizes[i];
+        case MainAxisAlignment.center:
+          return (remaining ~/ 2) + sumOfSizes[i];
+        case MainAxisAlignment.spaceBetween:
+          if (N <= 1) return sumOfSizes[i];
+          final numGaps = N - 1;
+          final gapOffset = (remaining * i) ~/ numGaps;
+          return gapOffset + sumOfSizes[i];
+        case MainAxisAlignment.spaceAround:
+          final numUnits = N * 2;
+          final unitOffset = (remaining * (i * 2 + 1) / numUnits).floor();
+          return unitOffset + sumOfSizes[i];
+        case MainAxisAlignment.spaceEvenly:
+          final numUnits = N + 1;
+          final unitOffset = (remaining * (i + 1) / numUnits).floor();
+          return unitOffset + sumOfSizes[i];
+      }
+    }
+
+    for (var i = 0; i < N; i++) {
+      final size = sizes[i];
+      final offset = getChildOffset(i);
+      if (direction == LayoutDirection.horizontal) {
+        rects.add(
+          Rect(clampedArea.x + offset, clampedArea.y, size, clampedArea.height),
+        );
+      } else {
+        rects.add(
+          Rect(clampedArea.x, clampedArea.y + offset, clampedArea.width, size),
+        );
+      }
+    }
   }
 
   return rects;
@@ -1166,6 +1308,22 @@ Constraint _getConstraint(Widget widget, LayoutDirection direction) {
       return LengthConstraint(size);
     }
   }
+  if (widget case final w
+      when w is! StatefulWidget &&
+          w is! StatelessWidget &&
+          w is! InheritedWidget) {
+    if (direction == LayoutDirection.vertical) {
+      final intH = widget.getIntrinsicHeight(0);
+      if (intH > 0) {
+        return LengthConstraint(intH);
+      }
+    } else {
+      final intW = widget.getIntrinsicWidth(0);
+      if (intW > 0) {
+        return LengthConstraint(intW);
+      }
+    }
+  }
   return const FlexConstraint(1);
 }
 
@@ -1174,8 +1332,27 @@ class Row extends Widget {
   /// The children widgets to align horizontally.
   final List<Widget> children;
 
+  /// How the children should be placed along the cross axis.
+  final CrossAxisAlignment crossAxisAlignment;
+
+  /// How the children should be placed along the main axis.
+  final MainAxisAlignment mainAxisAlignment;
+
+  /// A background fill character.
+  final String? backgroundChar;
+
+  /// A background fill style.
+  final Style? backgroundStyle;
+
   /// Creates a horizontal layout for [children].
-  const Row(this.children);
+  const Row(
+    this.children, {
+    super.key,
+    this.crossAxisAlignment = CrossAxisAlignment.start,
+    this.mainAxisAlignment = MainAxisAlignment.start,
+    this.backgroundChar,
+    this.backgroundStyle,
+  });
 
   @override
   Element createElement() => RowElement(this);
@@ -1190,6 +1367,7 @@ class Row extends Widget {
       Rect(0, 0, width, 1),
       constraints,
       LayoutDirection.horizontal,
+      mainAxisAlignment: mainAxisAlignment,
     );
     var maxH = 0;
     for (var i = 0; i < children.length; i++) {
@@ -1267,18 +1445,26 @@ class RowElement extends Element {
     final rowConstraints = row.children
         .map((c) => _getConstraint(c, LayoutDirection.horizontal))
         .toList();
-    final rects = splitRect(area, rowConstraints, LayoutDirection.horizontal);
+    final rects = splitRect(
+      area,
+      rowConstraints,
+      LayoutDirection.horizontal,
+      mainAxisAlignment: row.mainAxisAlignment,
+    );
 
     var maxChildHeight = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childArea = rects[i];
+      final minH = row.crossAxisAlignment == CrossAxisAlignment.stretch
+          ? height
+          : 0;
       final childSize = childEl.layout(
         BoxConstraints(
           minWidth: childArea.width,
           maxWidth: childArea.width,
-          minHeight: 0,
+          minHeight: minH,
           maxHeight: height,
         ),
       );
@@ -1291,8 +1477,24 @@ class RowElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
+    final row = widget as Row;
+    if (row.backgroundChar != null) {
+      final char = row.backgroundChar!;
+      final style = row.backgroundStyle ?? Style.empty;
+      final startX = offset.dx;
+      final startY = offset.dy;
+      for (var y = 0; y < size.height; y++) {
+        for (var x = 0; x < size.width; x++) {
+          final cell = buffer.getCell(startX + x, startY + y);
+          if (cell != null) {
+            cell.char = char;
+            cell.style = style;
+          }
+        }
+      }
+    }
     for (final child in childElements) {
       child.paint(buffer, offset + child.relativeOffset);
     }
@@ -1309,8 +1511,19 @@ class Column extends Widget {
   /// The children widgets to align vertically.
   final List<Widget> children;
 
+  /// How the children should be placed along the cross axis.
+  final CrossAxisAlignment crossAxisAlignment;
+
+  /// How the children should be placed along the main axis.
+  final MainAxisAlignment mainAxisAlignment;
+
   /// Creates a vertical layout for [children].
-  const Column(this.children);
+  const Column(
+    this.children, {
+    super.key,
+    this.crossAxisAlignment = CrossAxisAlignment.start,
+    this.mainAxisAlignment = MainAxisAlignment.start,
+  });
 
   @override
   Element createElement() => ColumnElement(this);
@@ -1392,16 +1605,24 @@ class ColumnElement extends Element {
     final columnConstraints = column.children
         .map((c) => _getConstraint(c, LayoutDirection.vertical))
         .toList();
-    final rects = splitRect(area, columnConstraints, LayoutDirection.vertical);
+    final rects = splitRect(
+      area,
+      columnConstraints,
+      LayoutDirection.vertical,
+      mainAxisAlignment: column.mainAxisAlignment,
+    );
 
     var totalHeight = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childArea = rects[i];
+      final minW = column.crossAxisAlignment == CrossAxisAlignment.stretch
+          ? width
+          : 0;
       final childSize = childEl.layout(
         BoxConstraints(
-          minWidth: 0,
+          minWidth: minW,
           maxWidth: width,
           minHeight: childArea.height,
           maxHeight: childArea.height,
@@ -1414,7 +1635,7 @@ class ColumnElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
     for (final child in childElements) {
       child.paint(buffer, offset + child.relativeOffset);
@@ -1593,7 +1814,7 @@ class StackElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
     for (final child in childElements) {
       child.paint(buffer, offset + child.relativeOffset);
@@ -1711,7 +1932,7 @@ class PositionedElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
@@ -1810,7 +2031,7 @@ class SizedBoxElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
@@ -1896,7 +2117,7 @@ class ConstrainedBoxElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
@@ -1978,7 +2199,7 @@ class FlexibleElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
@@ -2155,7 +2376,7 @@ class AlignElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
@@ -2281,7 +2502,7 @@ class ElementWidgetElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = widget as ElementWidget;
     if (w._element != null) {
       w._element!.paint(buffer, offset + w._element!.relativeOffset);

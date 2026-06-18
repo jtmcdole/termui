@@ -23,7 +23,7 @@ class SimpleLeafElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = widget as SimpleLeafWidget;
     buffer.writeString(offset.dx, offset.dy, w.content, Style.empty);
   }

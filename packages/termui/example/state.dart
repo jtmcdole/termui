@@ -45,7 +45,7 @@ class _VerticalDividerElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final v = widget as VerticalDivider;
     for (var y = 0; y < size.height; y++) {
       buffer.setCell(

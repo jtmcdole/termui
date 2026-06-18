@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'package:file/file.dart';
 import 'tracer.dart';
@@ -29,7 +30,11 @@ class FileSystemSink implements TracerSink {
   }
 
   @override
-  void add(List<int> buffer, List<String> newStrings) {
+  void add(
+    List<int> buffer,
+    List<String> newStrings, [
+    Map<int, Map<String, String>> metadata = const {},
+  ]) {
     _stringTable.addAll(newStrings);
 
     final numEvents = buffer.length ~/ 2;
@@ -56,8 +61,12 @@ class FileSystemSink implements TracerSink {
         _isFirst = false;
       }
 
+      final metaStr = metadata.containsKey(i)
+          ? ', "args": ${jsonEncode(metadata[i])}'
+          : '';
+      final escapedName = jsonEncode(name);
       _ios.write(
-        '  {"name": "$name", "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId}',
+        '  {"name": $escapedName, "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId$metaStr}',
       );
     }
   }

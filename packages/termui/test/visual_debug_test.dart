@@ -87,11 +87,13 @@ void main() {
         // We use a small column of a few widgets
         final runner = PromptRunner<void>(
           terminal: terminal,
-          widget: Column([
-            const SizedBox(width: 10, height: 2),
-            const SizedBox(width: 10, height: 2),
-          ]),
-          height: 10,
+          widget: SizedBox(
+            height: 10,
+            child: Column([
+              const SizedBox(width: 10, height: 2),
+              const SizedBox(width: 10, height: 2),
+            ]),
+          ),
           alternateScreen: true,
         );
 

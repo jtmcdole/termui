@@ -21,7 +21,7 @@ class _TestLeafElement extends Element {
   _TestLeafElement(super.widget);
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     buffer.writeString(
       offset.dx,
       offset.dy,
@@ -78,7 +78,7 @@ class TrackingElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final trackWidget = widget as TrackingWidget;
     buffer.writeString(offset.dx, offset.dy, trackWidget.label, Style.empty);
   }

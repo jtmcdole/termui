@@ -41,7 +41,7 @@ class TestWidgetElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = widget as TestWidget;
     for (var y = 0; y < size.height; y++) {
       for (var x = 0; x < size.width; x++) {

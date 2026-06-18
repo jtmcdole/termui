@@ -115,7 +115,7 @@ class PaddingElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final paddingWidget = widget as Padding;
     final padding = paddingWidget.padding;
     final doubleWidth = padding.left + padding.right;

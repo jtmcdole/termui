@@ -1,7 +1,9 @@
+import 'dart:math';
 import 'package:characters/characters.dart';
 import '../buffer.dart';
 import '../style.dart';
 import '../layout.dart';
+import '../event.dart' hide Modifier;
 import 'text.dart';
 
 class _ListViewState {
@@ -40,6 +42,15 @@ class ListView extends Widget {
   final int _initialSelectedIndex;
   final int? _initialHoveredIndex;
 
+  /// Whether to render a vertical scrollbar on the right edge.
+  final bool showScrollbar;
+
+  /// Callback when an item is selected by mouse click or other interaction.
+  final void Function(int)? onSelect;
+
+  /// Callback when an item is hovered by mouse.
+  final void Function(int?)? onHover;
+
   /// Creates a [ListView] containing the specified [children].
   const ListView({
     super.key,
@@ -49,6 +60,9 @@ class ListView extends Widget {
     this.itemStyle = Style.empty,
     this.selectedStyle = const Style(modifiers: Modifier.reverse),
     this.hoveredStyle,
+    this.showScrollbar = false,
+    this.onSelect,
+    this.onHover,
   }) : _initialSelectedIndex = selectedIndex,
        _initialHoveredIndex = hoveredIndex;
 
@@ -61,6 +75,9 @@ class ListView extends Widget {
     Style itemStyle = Style.empty,
     Style selectedStyle = const Style(modifiers: Modifier.reverse),
     Style? hoveredStyle,
+    bool showScrollbar = false,
+    void Function(int)? onSelect,
+    void Function(int?)? onHover,
   }) {
     return ListView(
       key: key,
@@ -70,6 +87,9 @@ class ListView extends Widget {
       itemStyle: itemStyle,
       selectedStyle: selectedStyle,
       hoveredStyle: hoveredStyle,
+      showScrollbar: showScrollbar,
+      onSelect: onSelect,
+      onHover: onHover,
     );
   }
 
@@ -82,6 +102,9 @@ class ListView extends Widget {
     Style itemStyle = Style.empty,
     Style selectedStyle = const Style(modifiers: Modifier.reverse),
     Style? hoveredStyle,
+    bool showScrollbar = false,
+    void Function(int)? onSelect,
+    void Function(int?)? onHover,
   }) {
     return _RawListWidget(
       key: key,
@@ -91,6 +114,9 @@ class ListView extends Widget {
       itemStyle: itemStyle,
       selectedStyle: selectedStyle,
       hoveredStyle: hoveredStyle,
+      showScrollbar: showScrollbar,
+      onSelect: onSelect,
+      onHover: onHover,
     );
   }
 
@@ -125,7 +151,7 @@ class ListView extends Widget {
 }
 
 /// The element managing a [ListView] widget.
-class ListViewElement extends Element {
+class ListViewElement extends Element implements MouseEventHandlerWithArea {
   /// The active child elements.
   List<Element> childElements = [];
 
@@ -214,7 +240,7 @@ class ListViewElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final listView = widget as ListView;
     final w = size.width;
 
@@ -257,11 +283,75 @@ class ListViewElement extends Element {
         }
       }
     }
+
+    if (listView.showScrollbar && listView.children.isNotEmpty) {
+      final total = listView.children.length;
+      final viewportHeight = size.height.toInt();
+      if (total > viewportHeight) {
+        final thumbSize = max(1, (viewportHeight * viewportHeight) ~/ total);
+        final maxScrollOffset = total - viewportHeight;
+        final scrollPercent = listView.scrollOffset / maxScrollOffset;
+        final thumbOffset = (scrollPercent * (viewportHeight - thumbSize))
+            .round();
+
+        for (var i = 0; i < viewportHeight; i++) {
+          final isThumb = i >= thumbOffset && i < thumbOffset + thumbSize;
+          final char = isThumb ? '█' : '│';
+          buffer.writeString(
+            offset.dx.toInt() + w - 1,
+            offset.dy.toInt() + i,
+            char,
+            Style.empty,
+          );
+        }
+      }
+    }
   }
 
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
+  }
+
+  @override
+  void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
+    final listView = widget as ListView;
+    if (event.button == MouseButton.wheelUp) {
+      listView.scrollOffset = max(0, listView.scrollOffset - 1);
+      if (listView.selectedIndex >=
+          listView.scrollOffset + size.height.toInt()) {
+        listView.selectedIndex =
+            listView.scrollOffset + size.height.toInt() - 1;
+      }
+      rebuild();
+    } else if (event.button == MouseButton.wheelDown) {
+      listView.scrollOffset = min(
+        max(0, listView.children.length - size.height.toInt()),
+        listView.scrollOffset + 1,
+      );
+      if (listView.selectedIndex < listView.scrollOffset) {
+        listView.selectedIndex = listView.scrollOffset;
+      }
+      rebuild();
+    } else if (event.type == MouseEventType.press &&
+        event.button == MouseButton.left) {
+      final clickedIndex = listView.scrollOffset + localY;
+      if (clickedIndex >= 0 && clickedIndex < listView.children.length) {
+        listView.selectedIndex = clickedIndex;
+        listView.onSelect?.call(clickedIndex);
+        rebuild();
+      }
+    } else if (event.type == MouseEventType.move ||
+        event.type == MouseEventType.drag) {
+      final hoveredIndex = listView.scrollOffset + localY;
+      if (hoveredIndex >= 0 && hoveredIndex < listView.children.length) {
+        if (listView.hoveredIndex != hoveredIndex) {
+          listView.hoveredIndex = hoveredIndex;
+          listView.onHover?.call(hoveredIndex);
+          rebuild();
+        }
+      }
+    }
   }
 }
 
@@ -276,6 +366,9 @@ class _RawListWidget extends ListView {
     super.itemStyle,
     super.selectedStyle,
     super.hoveredStyle,
+    super.showScrollbar,
+    super.onSelect,
+    super.onHover,
   }) : super(children: const []);
 
   @override
@@ -287,7 +380,8 @@ class _RawListWidget extends ListView {
   Element createElement() => _RawListWidgetElement(this);
 }
 
-class _RawListWidgetElement extends Element {
+class _RawListWidgetElement extends Element
+    implements MouseEventHandlerWithArea {
   List<int> visibleIndices = [];
 
   _RawListWidgetElement(_RawListWidget super.widget);
@@ -313,7 +407,7 @@ class _RawListWidgetElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final rawWidget = widget as _RawListWidget;
     final w = size.width;
 
@@ -341,6 +435,75 @@ class _RawListWidgetElement extends Element {
         padded,
         style,
       );
+    }
+
+    if (rawWidget.showScrollbar && rawWidget.lines.isNotEmpty) {
+      final total = rawWidget.lines.length;
+      final viewportHeight = size.height.toInt();
+      if (total > viewportHeight) {
+        final thumbSize = max(1, (viewportHeight * viewportHeight) ~/ total);
+        final maxScrollOffset = total - viewportHeight;
+        final scrollPercent = rawWidget.scrollOffset / maxScrollOffset;
+        final thumbOffset = (scrollPercent * (viewportHeight - thumbSize))
+            .round();
+
+        for (var i = 0; i < viewportHeight; i++) {
+          final isThumb = i >= thumbOffset && i < thumbOffset + thumbSize;
+          final char = isThumb ? '█' : '│';
+          buffer.writeString(
+            offset.dx.toInt() + w - 1,
+            offset.dy.toInt() + i,
+            char,
+            Style.empty,
+          );
+        }
+      }
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    // Leaf node, no dynamic child elements.
+  }
+
+  @override
+  void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
+    final rawWidget = widget as _RawListWidget;
+    if (event.button == MouseButton.wheelUp) {
+      rawWidget.scrollOffset = max(0, rawWidget.scrollOffset - 1);
+      if (rawWidget.selectedIndex >=
+          rawWidget.scrollOffset + size.height.toInt()) {
+        rawWidget.selectedIndex =
+            rawWidget.scrollOffset + size.height.toInt() - 1;
+      }
+      rebuild();
+    } else if (event.button == MouseButton.wheelDown) {
+      rawWidget.scrollOffset = min(
+        max(0, rawWidget.lines.length - size.height.toInt()),
+        rawWidget.scrollOffset + 1,
+      );
+      if (rawWidget.selectedIndex < rawWidget.scrollOffset) {
+        rawWidget.selectedIndex = rawWidget.scrollOffset;
+      }
+      rebuild();
+    } else if (event.type == MouseEventType.press &&
+        event.button == MouseButton.left) {
+      final clickedIndex = rawWidget.scrollOffset + localY;
+      if (clickedIndex >= 0 && clickedIndex < rawWidget.lines.length) {
+        rawWidget.selectedIndex = clickedIndex;
+        rawWidget.onSelect?.call(clickedIndex);
+        rebuild();
+      }
+    } else if (event.type == MouseEventType.move ||
+        event.type == MouseEventType.drag) {
+      final hoveredIndex = rawWidget.scrollOffset + localY;
+      if (hoveredIndex >= 0 && hoveredIndex < rawWidget.lines.length) {
+        if (rawWidget.hoveredIndex != hoveredIndex) {
+          rawWidget.hoveredIndex = hoveredIndex;
+          rawWidget.onHover?.call(hoveredIndex);
+          rebuild();
+        }
+      }
     }
   }
 }

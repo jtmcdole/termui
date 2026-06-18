@@ -58,6 +58,10 @@ class MockTerminal extends Terminal {
   }
 
   void injectResize(Point<int> newSize) {
+    final be = backend;
+    if (be is FakeTerminalBackend) {
+      be.currentSize = newSize;
+    }
     _sizeController.add(newSize);
   }
 

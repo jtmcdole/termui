@@ -319,7 +319,7 @@ class ModalOverlayElement extends WindowElement {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final modal = widget as ModalOverlay;
     final w = size.width;
     final h = size.height;

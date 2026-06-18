@@ -145,7 +145,7 @@ class SpinnerElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final spinner = widget as Spinner;
     buffer.writeString(
       offset.dx,

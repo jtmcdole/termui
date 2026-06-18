@@ -49,6 +49,7 @@ class Tracer {
   static const int _bufferMask = _bufferLength - 1;
 
   static late List<int> _activeBuffer;
+  static Map<int, Map<String, String>> _activeMetadata = {};
   static late List<int> _backupBuffer;
   static int _writeIndex = 0;
 
@@ -85,6 +86,10 @@ class Tracer {
   static Future<void> start(String traceFilePath, {FileSystem? fs}) async {
     if (isEnabled) return;
 
+    _writeIndex = 0;
+    _activeMetadata = {};
+    _activeBuffer.fillRange(0, _activeBuffer.length, 0);
+
     final fileSystem = fs ?? getDefaultFileSystem();
     _baseEpochUs = DateTime.now().microsecondsSinceEpoch;
     _stopwatch.reset();
@@ -118,7 +123,12 @@ class Tracer {
 
   /// Record a trace event to the buffer.
   @pragma('vm:prefer-inline')
-  static void record(int stringId, int phase, TraceCategory category) {
+  static void record(
+    int stringId,
+    int phase,
+    TraceCategory category, {
+    Map<String, String>? metadata,
+  }) {
     if (!activeCategories.contains(category)) return;
     if (!isEnabled) return;
     final idx = _writeIndex;
@@ -128,6 +138,9 @@ class Tracer {
 
     // Word 1: monotonic timestamp
     _activeBuffer[idx + 1] = _stopwatch.elapsedMicroseconds;
+    if (metadata != null) {
+      _activeMetadata[idx ~/ 2] = metadata;
+    }
 
     final nextIdx = (idx + 2) & _bufferMask;
     _writeIndex = nextIdx;
@@ -147,8 +160,12 @@ class Tracer {
       // Send the partially filled buffer
       final copy = _createBuffer(_writeIndex);
       List.copyRange(copy, 0, _activeBuffer, 0, _writeIndex);
-      _sink!.add(copy, const []);
+      _sink!.add(copy, const [], _activeMetadata);
     }
+
+    _writeIndex = 0;
+    _activeMetadata = {};
+    _activeBuffer.fillRange(0, _activeBuffer.length, 0);
 
     await _sink!.close();
     _sink = null;
@@ -160,6 +177,8 @@ class Tracer {
     _backupBuffer = fullBuffer;
     _writeIndex = 0;
 
-    _sink!.add(fullBuffer, const []);
+    final fullMetadata = _activeMetadata;
+    _activeMetadata = {};
+    _sink!.add(fullBuffer, const [], fullMetadata);
   }
 }

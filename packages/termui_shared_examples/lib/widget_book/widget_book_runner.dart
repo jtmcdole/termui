@@ -668,25 +668,8 @@ class SidebarWidget extends StatefulWidget {
 }
 
 class _SidebarWidgetState extends State<SidebarWidget> {
-  ListView? _lastListWidget;
-
   void handleMouseEvent(term.MouseEvent event, int localX, int localY) {
-    final scrollOffset = _lastListWidget?.scrollOffset ?? 0;
-    if (event.type == term.MouseEventType.press) {
-      widget.focusNode.requestFocus();
-      final clickedIdx = localY + scrollOffset;
-      if (clickedIdx >= 0 && clickedIdx < widget.items.length) {
-        widget.onSelected(clickedIdx);
-      }
-    } else if (event.type == term.MouseEventType.move ||
-        event.type == term.MouseEventType.drag) {
-      final hoverIdx = localY + scrollOffset;
-      if (hoverIdx >= 0 && hoverIdx < widget.items.length) {
-        widget.onHovered(hoverIdx);
-      } else {
-        widget.onHovered(null);
-      }
-    }
+    // Scroll and hover handled by ListView directly
   }
 
   @override
@@ -705,8 +688,14 @@ class _SidebarWidgetState extends State<SidebarWidget> {
         background: CharmColors.charple,
         modifiers: Modifier.dim,
       ),
+      onSelect: (index) {
+        widget.focusNode.requestFocus();
+        widget.onSelected(index);
+      },
+      onHover: (index) {
+        widget.onHovered(index);
+      },
     );
-    _lastListWidget = listWidget;
 
     return Focus(
       focusNode: widget.focusNode,
@@ -731,23 +720,15 @@ class _SidebarWidgetState extends State<SidebarWidget> {
         }
         return false;
       },
-      child: _SidebarRenderWidget(
-        listWidget: listWidget,
-        onMouseEvent: handleMouseEvent,
-      ),
+      child: _SidebarRenderWidget(listWidget: listWidget),
     );
   }
 }
 
 class _SidebarRenderWidget extends Widget {
   final ListView listWidget;
-  final void Function(term.MouseEvent event, int localX, int localY)
-  onMouseEvent;
 
-  const _SidebarRenderWidget({
-    required this.listWidget,
-    required this.onMouseEvent,
-  });
+  const _SidebarRenderWidget({required this.listWidget});
 
   @override
   Element createElement() => _SidebarRenderWidgetElement(this);
@@ -807,10 +788,6 @@ class _SidebarRenderWidgetElement extends Element {
     if (childElement != null) {
       childElement!.paint(buffer, offset);
     }
-  }
-
-  void handleMouseEvent(term.MouseEvent event, int localX, int localY) {
-    (widget as _SidebarRenderWidget).onMouseEvent(event, localX, localY);
   }
 }
 

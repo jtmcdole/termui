@@ -968,7 +968,7 @@ class _TextFieldRenderWidgetElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final renderWidget = widget as _TextFieldRenderWidget;
     final textField = renderWidget.textFieldWidget;
     final w = size.width;

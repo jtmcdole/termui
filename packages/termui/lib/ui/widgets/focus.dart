@@ -68,7 +68,7 @@ class FocusState extends State<Focus> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final parentScope = FocusScope.of(context);
+    final parentScope = Focus.of(context);
     if (_focusNode.parent != parentScope) {
       _focusNode.parent?.children.remove(_focusNode);
       _focusNode.parent = null;
@@ -86,7 +86,7 @@ class FocusState extends State<Focus> {
       _focusNode.dispose();
       _focusNode = widget.focusNode ?? createFocusNode();
       _updateNodeProperties();
-      final parentScope = FocusScope.of(context);
+      final parentScope = Focus.of(context);
       if (parentScope != null) {
         parentScope.addChild(_focusNode);
       }

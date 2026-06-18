@@ -236,7 +236,7 @@ class TableElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final table = widget as Table;
     final w = size.width;
     final h = size.height;

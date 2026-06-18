@@ -26,6 +26,9 @@ class SceneManager {
   /// The hardware/platform terminal wrapper.
   final Terminal terminal;
 
+  /// The rendering mode for the compositor.
+  final RenderingMode renderingMode;
+
   /// The list of layers to composite and render.
   final List<SceneLayer> layers = [];
 
@@ -43,6 +46,10 @@ class SceneManager {
   StreamSubscription<Point<int>>? _sizeSubscription;
 
   SceneLayer? _draggingLayer;
+  SceneLayer? _resizingLayer;
+  int _resizeCorner = 0; // 0: None, 1: TL, 2: TR, 3: BL, 4: BR
+  int _layerStartWidth = 0;
+  int _layerStartHeight = 0;
   SceneLayer? _capturedMouseLayer;
   int _dragStartX = 0;
   int _dragStartY = 0;
@@ -59,8 +66,8 @@ class SceneManager {
   bool? _lastShowsCursor;
   bool? _lastWantsMouseTracking;
 
-  /// Creates a new scene manager on [terminal].
-  SceneManager(this.terminal) {
+  /// Creates a new SceneManager attached to the given [terminal].
+  SceneManager(this.terminal, {this.renderingMode = RenderingMode.inline}) {
     _eventsSubscription = terminal.events.listen(_handleInputEvent);
     _sizeSubscription = terminal.watchSize().listen(_handleSizeEvent);
   }
@@ -152,7 +159,32 @@ class SceneManager {
           if (focusedLayer != hitLayer) {
             focusedLayer = hitLayer;
           }
-          if (hitLayer.draggable) {
+          final buf = hitLayer.renderer.currentBuffer;
+          final isTL = mouseX == hitLayer.x && mouseY == hitLayer.y;
+          final isTR =
+              mouseX == hitLayer.x + buf!.width - 1 && mouseY == hitLayer.y;
+          final isBL =
+              mouseX == hitLayer.x && mouseY == hitLayer.y + buf.height - 1;
+          final isBR =
+              mouseX == hitLayer.x + buf.width - 1 &&
+              mouseY == hitLayer.y + buf.height - 1;
+
+          if (hitLayer.resizable && (isTL || isTR || isBL || isBR)) {
+            _resizingLayer = hitLayer;
+            _resizeCorner = isTL
+                ? 1
+                : isTR
+                ? 2
+                : isBL
+                ? 3
+                : 4;
+            _dragStartX = event.x;
+            _dragStartY = event.y;
+            _layerStartX = hitLayer.x;
+            _layerStartY = hitLayer.y;
+            _layerStartWidth = hitLayer.width ?? buf.width;
+            _layerStartHeight = hitLayer.height ?? buf.height;
+          } else if (hitLayer.draggable) {
             _draggingLayer = hitLayer;
             _dragStartX = event.x;
             _dragStartY = event.y;
@@ -160,21 +192,69 @@ class SceneManager {
             _layerStartY = hitLayer.y;
           }
 
-          final localX = mouseX - hitLayer.x;
-          final localY = mouseY - hitLayer.y;
-          final localEvent = MouseEvent(
-            x: localX + 1,
-            y: localY + 1,
-            globalX: event.globalX ?? event.x,
-            globalY: event.globalY ?? event.y,
-            button: event.button,
-            type: event.type,
-            modifiers: event.modifiers,
-          );
-          hitLayer.renderer.handleMouseEvent(localEvent);
+          if (_resizingLayer == null) {
+            final localX = mouseX - hitLayer.x;
+            final localY = mouseY - hitLayer.y;
+            final localEvent = MouseEvent(
+              x: localX + 1,
+              y: localY + 1,
+              globalX: event.globalX ?? event.x,
+              globalY: event.globalY ?? event.y,
+              button: event.button,
+              type: event.type,
+              modifiers: event.modifiers,
+            );
+            hitLayer.renderer.handleMouseEvent(localEvent);
+          }
         }
       } else if (event.type == MouseEventType.drag) {
-        if (_draggingLayer != null) {
+        if (_resizingLayer != null) {
+          int dx = event.x - _dragStartX;
+          int dy = event.y - _dragStartY;
+
+          if (_resizeCorner == 1 || _resizeCorner == 3) {
+            if (_layerStartWidth - dx < 10) dx = _layerStartWidth - 10;
+          } else {
+            if (_layerStartWidth + dx < 10) dx = 10 - _layerStartWidth;
+          }
+
+          if (_resizeCorner == 1 || _resizeCorner == 2) {
+            if (_layerStartHeight - dy < 5) dy = _layerStartHeight - 5;
+          } else {
+            if (_layerStartHeight + dy < 5) dy = 5 - _layerStartHeight;
+          }
+
+          var newX = _layerStartX;
+          var newY = _layerStartY;
+          var newW = _layerStartWidth;
+          var newH = _layerStartHeight;
+
+          if (_resizeCorner == 1) {
+            newX += dx;
+            newY += dy;
+            newW -= dx;
+            newH -= dy;
+          } else if (_resizeCorner == 2) {
+            newY += dy;
+            newW += dx;
+            newH -= dy;
+          } else if (_resizeCorner == 3) {
+            newX += dx;
+            newW -= dx;
+            newH += dy;
+          } else if (_resizeCorner == 4) {
+            newW += dx;
+            newH += dy;
+          }
+
+          _resizingLayer!.x = newX;
+          _resizingLayer!.y = newY;
+          _resizingLayer!.width = newW;
+          _resizingLayer!.height = newH;
+          _resizingLayer!.renderer.resize(newW, newH);
+          render();
+          didRender = true;
+        } else if (_draggingLayer != null) {
           final dx = event.x - _dragStartX;
           final dy = event.y - _dragStartY;
           _draggingLayer!.x = _layerStartX + dx;
@@ -198,25 +278,31 @@ class SceneManager {
           _capturedMouseLayer!.renderer.handleMouseEvent(localEvent);
         }
       } else if (event.type == MouseEventType.release) {
-        final targetLayer = _draggingLayer ?? _capturedMouseLayer;
-        if (targetLayer != null) {
-          final mouseX = event.x - 1;
-          final mouseY = event.y - 1;
-          final localX = mouseX - targetLayer.x;
-          final localY = mouseY - targetLayer.y;
-          final localEvent = MouseEvent(
-            x: localX + 1,
-            y: localY + 1,
-            globalX: event.globalX ?? event.x,
-            globalY: event.globalY ?? event.y,
-            button: event.button,
-            type: event.type,
-            modifiers: event.modifiers,
-          );
-          targetLayer.renderer.handleMouseEvent(localEvent);
+        if (_resizingLayer != null) {
+          _resizingLayer = null;
+          _resizeCorner = 0;
+          _capturedMouseLayer = null;
+        } else {
+          final targetLayer = _draggingLayer ?? _capturedMouseLayer;
+          if (targetLayer != null) {
+            final mouseX = event.x - 1;
+            final mouseY = event.y - 1;
+            final localX = mouseX - targetLayer.x;
+            final localY = mouseY - targetLayer.y;
+            final localEvent = MouseEvent(
+              x: localX + 1,
+              y: localY + 1,
+              globalX: event.globalX ?? event.x,
+              globalY: event.globalY ?? event.y,
+              button: event.button,
+              type: event.type,
+              modifiers: event.modifiers,
+            );
+            targetLayer.renderer.handleMouseEvent(localEvent);
+          }
+          _draggingLayer = null;
+          _capturedMouseLayer = null;
         }
-        _draggingLayer = null;
-        _capturedMouseLayer = null;
       } else {
         // For hover (move) events, perform hit-test and route
         final mouseX = event.x - 1;
@@ -282,10 +368,27 @@ class SceneManager {
         height = 24;
       }
 
-      _renderer ??= Renderer(width, height);
+      _renderer ??= Renderer(width, height, mode: renderingMode);
 
       final layeredBuffers = <LayeredBuffer>[];
       for (final layer in layers) {
+        if (layer.sizing == LayerSizing.fullscreen) {
+          if (layer.width != width || layer.height != height) {
+            layer.width = width;
+            layer.height = height;
+            layer.renderer.resize(width, height);
+          }
+        } else {
+          final buf = layer.renderer.currentBuffer;
+          if (buf == null ||
+              buf.width != layer.width ||
+              buf.height != layer.height) {
+            if (layer.width != null && layer.height != null) {
+              layer.renderer.resize(layer.width!, layer.height!);
+            }
+          }
+        }
+
         var buffer = layer.renderer.currentBuffer;
         if (buffer == null) continue;
 

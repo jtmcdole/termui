@@ -171,7 +171,7 @@ class _ButtonElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final wWidget = widget as _ButtonRenderWidget;
     final label = wWidget.focused
         ? '[ ${wWidget.text} ]'
@@ -354,7 +354,7 @@ class _CheckboxElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final wWidget = widget as _CheckboxRenderWidget;
     final box = wWidget.value ? '[X]' : '[ ]';
     final label = '$box ${wWidget.label}';
@@ -543,7 +543,7 @@ class _RadioElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final wWidget = widget as _RadioRenderWidget;
     final marker = wWidget.isSelected ? '(*)' : '( )';
     final label = '$marker ${wWidget.label}';
@@ -725,7 +725,7 @@ class _SwitchElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final wWidget = widget as _SwitchRenderWidget;
     final marker = wWidget.value ? '[─●]' : '[○─]';
     final label = '$marker ${wWidget.label}';

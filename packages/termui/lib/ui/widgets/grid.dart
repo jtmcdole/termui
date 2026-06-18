@@ -52,7 +52,7 @@ class GridElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final grid = widget as Grid;
     final w = size.width;
     final h = size.height;

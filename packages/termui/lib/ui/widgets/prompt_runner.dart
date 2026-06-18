@@ -135,7 +135,7 @@ class PromptRunner<T> implements SceneRenderer {
       );
       rootElement.update(scopedWidget);
 
-      if (height == null && !alternateScreen) {
+      if (!alternateScreen && mode == ExecutionMode.standalone) {
         _computedHeight = _widget.getIntrinsicHeight(_width);
         _currentBuffer?.resize(_width, _computedHeight);
         _renderer = Renderer(
@@ -149,9 +149,6 @@ class PromptRunner<T> implements SceneRenderer {
       draw();
     }
   }
-
-  /// The height constraint of the inline rendering block. If null, calculated dynamically.
-  final int? height;
 
   /// An optional key event handler callback. Returns true if prompt is completed.
   final bool Function(term.KeyEvent event)? onKeyEvent;
@@ -232,7 +229,6 @@ class PromptRunner<T> implements SceneRenderer {
   PromptRunner({
     required this.terminal,
     required Widget widget,
-    this.height,
     Map<PromptExitTrigger, PromptExitAction>? exitConditions,
     this.onKeyEvent,
     this.onComplete,
@@ -263,6 +259,11 @@ class PromptRunner<T> implements SceneRenderer {
     if (_isDisposed) return;
     _isDisposed = true;
     onPromptEnded?.call(this);
+
+    // Unmount element tree so focus nodes and states can clean up
+    _rootElement?.unmount();
+    _rootElement = null;
+
     final activeCompleter = _completer;
     if (activeCompleter != null && !activeCompleter.isCompleted) {
       activeCompleter.complete(null);
@@ -377,13 +378,21 @@ class PromptRunner<T> implements SceneRenderer {
   /// Starts the inline prompt loop and returns a Future containing the final result.
   Future<T?> run() async {
     onPromptStarted?.call(this);
-    final termSize = await terminal.size;
-    _width = termSize.x;
 
-    // Autosize the height dynamically if not explicitly specified.
-    _computedHeight =
-        height ??
-        (alternateScreen ? termSize.y : widget.getIntrinsicHeight(_width));
+    if (mode == ExecutionMode.standalone) {
+      final termSize = await terminal.size;
+      _width = termSize.x;
+      _computedHeight = alternateScreen
+          ? termSize.y
+          : widget.getIntrinsicHeight(_width);
+    } else {
+      if (_width <= 0) {
+        _width = 80;
+      }
+      if (_computedHeight <= 0) {
+        _computedHeight = widget.getIntrinsicHeight(_width);
+      }
+    }
 
     // Create a temporary buffer and inline renderer.
     _currentBuffer = Buffer.blank(_width, _computedHeight);
@@ -431,9 +440,9 @@ class PromptRunner<T> implements SceneRenderer {
       sizeSubscription = terminal.watchSize().listen((size) {
         if (_isDisposed) return;
         _width = size.x;
-        _computedHeight =
-            height ??
-            (alternateScreen ? size.y : widget.getIntrinsicHeight(_width));
+        _computedHeight = alternateScreen
+            ? size.y
+            : widget.getIntrinsicHeight(_width);
         _currentBuffer?.resize(_width, _computedHeight);
         _renderer = Renderer(
           _width,
@@ -1056,11 +1065,20 @@ class SceneLayer {
   /// The vertical row coordinate of the layer's top-left corner.
   int y;
 
+  /// The width of this layer, if fixed.
+  int? width;
+
+  /// The height of this layer, if fixed.
+  int? height;
+
   /// The stacking order index of the layer.
   int zIndex;
 
   /// Whether this layer is draggable via mouse click-and-drag.
   bool draggable;
+
+  /// Whether this layer can be resized by dragging its corners.
+  bool resizable;
 
   /// Creates a new [SceneLayer] with the given [renderer], [sizing], and placement parameters.
   SceneLayer({
@@ -1068,7 +1086,14 @@ class SceneLayer {
     required this.sizing,
     this.x = 0,
     this.y = 0,
+    this.width,
+    this.height,
     this.zIndex = 0,
     this.draggable = false,
-  });
+    this.resizable = false,
+  }) {
+    if (sizing == LayerSizing.fixed && width != null && height != null) {
+      renderer.resize(width!, height!);
+    }
+  }
 }

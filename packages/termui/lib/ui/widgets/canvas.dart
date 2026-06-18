@@ -60,9 +60,6 @@ enum CanvasRenderMode {
 /// | `style` | [Style] | Base style for the canvas cell blocks. |
 /// | `renderMode` | [CanvasRenderMode] | Pixel mapping mode (braille, density, quadrants). |
 class Canvas extends Widget {
-  static final int _traceCanvasRenderId = Tracer.registerString(
-    'Canvas:render',
-  );
   static final int _traceCanvasFillTriangleId = Tracer.registerString(
     'Canvas:fillTriangleColored',
   );
@@ -964,83 +961,70 @@ class CanvasElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final canvas = widget as Canvas;
-    Tracer.record(
-      Canvas._traceCanvasRenderId,
-      Phase.begin,
-      TraceCategory.paint,
-    );
-    try {
-      var currentBuffer = buffer;
-      var startX = offset.dx;
-      var startY = offset.dy;
-      while (currentBuffer is Viewport) {
-        startX += currentBuffer.bounds.x;
-        startY += currentBuffer.bounds.y;
-        currentBuffer = currentBuffer.parent;
-      }
-      final targetBuffer = currentBuffer;
+    var currentBuffer = buffer;
+    var startX = offset.dx;
+    var startY = offset.dy;
+    while (currentBuffer is Viewport) {
+      startX += currentBuffer.bounds.x;
+      startY += currentBuffer.bounds.y;
+      currentBuffer = currentBuffer.parent;
+    }
+    final targetBuffer = currentBuffer;
 
-      final targetWidth = targetBuffer.width;
-      final targetHeight = targetBuffer.height;
-      final targetCells = targetBuffer.cells;
+    final targetWidth = targetBuffer.width;
+    final targetHeight = targetBuffer.height;
+    final targetCells = targetBuffer.cells;
 
-      final w = size.width;
-      final h = size.height;
+    final w = size.width;
+    final h = size.height;
 
-      final drawWidth = min(w, canvas.width);
-      final drawHeight = min(h, canvas.height);
+    final drawWidth = min(w, canvas.width);
+    final drawHeight = min(h, canvas.height);
 
-      for (var cy = 0; cy < drawHeight; cy++) {
-        final ty = startY + cy;
-        if (ty < 0 || ty >= targetHeight) continue;
+    for (var cy = 0; cy < drawHeight; cy++) {
+      final ty = startY + cy;
+      if (ty < 0 || ty >= targetHeight) continue;
 
-        for (var cx = 0; cx < drawWidth; cx++) {
-          final tx = startX + cx;
-          if (tx < 0 || tx >= targetWidth) continue;
+      for (var cx = 0; cx < drawWidth; cx++) {
+        final tx = startX + cx;
+        if (tx < 0 || tx >= targetWidth) continue;
 
-          if (canvas.isOccluded != null && canvas.isOccluded!(cx, cy)) continue;
+        if (canvas.isOccluded != null && canvas.isOccluded!(cx, cy)) continue;
 
-          final idx = cy * canvas.width + cx;
-          final dots = canvas._grid[idx];
-          if (dots == 0 &&
-              canvas._styles[idx] == null &&
-              canvas.style == Style.empty) {
-            continue;
-          }
+        final idx = cy * canvas.width + cx;
+        final dots = canvas._grid[idx];
+        if (dots == 0 &&
+            canvas._styles[idx] == null &&
+            canvas.style == Style.empty) {
+          continue;
+        }
 
-          final String char;
-          if (canvas.renderMode == CanvasRenderMode.quadrants) {
-            char = Canvas._quadrantCache[dots];
-          } else if (canvas.renderMode == CanvasRenderMode.density ||
-              canvas._antiAliased[idx] == 1) {
-            char = Canvas._densityCache[dots];
-          } else {
-            char = Canvas._brailleCache[dots];
-          }
+        final String char;
+        if (canvas.renderMode == CanvasRenderMode.quadrants) {
+          char = Canvas._quadrantCache[dots];
+        } else if (canvas.renderMode == CanvasRenderMode.density ||
+            canvas._antiAliased[idx] == 1) {
+          char = Canvas._densityCache[dots];
+        } else {
+          char = Canvas._brailleCache[dots];
+        }
 
-          final targetIdx = ty * targetWidth + tx;
-          final cell = targetCells[targetIdx];
-          cell.char = char;
-          final s = canvas._styles[idx];
-          if (s != null) {
-            cell.style = Style(
-              foreground: s.foreground ?? canvas.style.foreground,
-              background: s.background ?? canvas.style.background,
-              modifiers: s.modifiers | canvas.style.modifiers,
-            );
-          } else {
-            cell.style = canvas.style;
-          }
+        final targetIdx = ty * targetWidth + tx;
+        final cell = targetCells[targetIdx];
+        cell.char = char;
+        final s = canvas._styles[idx];
+        if (s != null) {
+          cell.style = Style(
+            foreground: s.foreground ?? canvas.style.foreground,
+            background: s.background ?? canvas.style.background,
+            modifiers: s.modifiers | canvas.style.modifiers,
+          );
+        } else {
+          cell.style = canvas.style;
         }
       }
-    } finally {
-      Tracer.record(
-        Canvas._traceCanvasRenderId,
-        Phase.end,
-        TraceCategory.paint,
-      );
     }
   }
 }

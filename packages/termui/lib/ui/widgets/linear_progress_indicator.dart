@@ -96,7 +96,7 @@ class LinearProgressIndicatorElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final viewport = Viewport(
       buffer,
       Rect(offset.dx, offset.dy, size.width, size.height),

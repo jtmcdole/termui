@@ -90,7 +90,7 @@ class _TestAnimatedRenderElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = widget as _TestAnimatedRenderWidget;
     final area = Rect(offset.dx, offset.dy, size.width, size.height);
     for (var y = 0; y < area.height; y++) {

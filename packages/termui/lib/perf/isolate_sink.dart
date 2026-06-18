@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'dart:isolate';
@@ -34,23 +35,49 @@ class IsolateSink implements TracerSink {
   }
 
   @override
-  void add(List<int> buffer, List<String> newStrings) {
+  void add(
+    List<int> buffer,
+    List<String> newStrings, [
+    Map<int, Map<String, String>> metadata = const {},
+  ]) {
     if (!_initialized) {
       _initCompleter.future.then((_) {
-        _sendData(buffer, newStrings);
+        _sendData(buffer, newStrings, metadata);
       });
     } else {
-      _sendData(buffer, newStrings);
+      _sendData(buffer, newStrings, metadata);
     }
   }
 
-  void _sendData(List<int> buffer, List<String> newStrings) {
+  void _sendData(
+    List<int> buffer,
+    List<String> newStrings,
+    Map<int, Map<String, String>> metadata,
+  ) {
     if (newStrings.isNotEmpty) {
       _serializerPort.send(_StringTableSync(newStrings));
     }
     if (buffer.isNotEmpty) {
+      Uint8List? metadataBytes;
+      if (metadata.isNotEmpty) {
+        final builder = BytesBuilder(copy: false);
+        for (final entry in metadata.entries) {
+          final jsonStr = jsonEncode(entry.value);
+          final bytes = utf8.encode(jsonStr);
+          final header = ByteData(8);
+          header.setInt32(0, entry.key, Endian.host);
+          header.setInt32(4, bytes.length, Endian.host);
+          builder.add(header.buffer.asUint8List());
+          builder.add(bytes);
+        }
+        metadataBytes = builder.toBytes();
+      }
+
       _serializerPort.send(
-        TransferableTypedData.fromList([buffer as TypedData]),
+        _TraceData(
+          TransferableTypedData.fromList([buffer as TypedData]),
+          metadataBytes,
+        ),
       );
     }
   }
@@ -80,6 +107,12 @@ class _StringTableSync {
   _StringTableSync(this.newStrings);
 }
 
+class _TraceData {
+  final TransferableTypedData buffer;
+  final Uint8List? metadataBytes;
+  _TraceData(this.buffer, this.metadataBytes);
+}
+
 class _TerminateSignal {
   final SendPort replyPort;
   _TerminateSignal(this.replyPort);
@@ -105,9 +138,29 @@ void _serializerEntryPoint(_SerializerConfig config) {
   receivePort.listen((message) async {
     if (message is _StringTableSync) {
       stringTable.addAll(message.newStrings);
-    } else if (message is TransferableTypedData) {
-      final buffer = message.materialize().asInt64List();
+    } else if (message is _TraceData) {
+      final byteBuffer = message.buffer.materialize();
+      final buffer = byteBuffer.asInt64List();
       final numEvents = buffer.length ~/ 2;
+
+      Map<int, String> metadata = {};
+      final metaBytes = message.metadataBytes;
+      if (metaBytes != null) {
+        var offset = 0;
+        final byteData = ByteData.sublistView(metaBytes);
+        while (offset < metaBytes.length) {
+          final idx = byteData.getInt32(offset, Endian.host);
+          final len = byteData.getInt32(offset + 4, Endian.host);
+          offset += 8;
+          final strBytes = Uint8List.sublistView(
+            metaBytes,
+            offset,
+            offset + len,
+          );
+          metadata[idx] = utf8.decode(strBytes);
+          offset += len;
+        }
+      }
 
       for (int i = 0; i < numEvents; i++) {
         final word0 = buffer[i * 2];
@@ -132,8 +185,11 @@ void _serializerEntryPoint(_SerializerConfig config) {
           isFirst = false;
         }
 
+        final meta = metadata[i];
+        final metaStr = meta != null ? ', "args": $meta' : '';
+        final escapedName = jsonEncode(name);
         ios.write(
-          '  {"name": "$name", "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId}',
+          '  {"name": $escapedName, "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId$metaStr}',
         );
       }
     } else if (message is _TerminateSignal) {

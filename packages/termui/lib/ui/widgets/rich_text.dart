@@ -337,7 +337,7 @@ class RichTextElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final richTextWidget = widget as RichText;
     final area = Rect(offset.dx, offset.dy, size.width, size.height);
 

@@ -233,7 +233,7 @@ class SplitPaneElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final split = widget as SplitPane;
     split._lastArea = Rect(offset.dx, offset.dy, size.width, size.height);
     final w = size.width;

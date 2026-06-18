@@ -20,7 +20,7 @@ class _SimpleElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     buffer.writeString(offset.dx, offset.dy, 'X', Style.empty);
   }
 }
