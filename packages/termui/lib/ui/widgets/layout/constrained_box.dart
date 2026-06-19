@@ -23,43 +23,12 @@ class ConstrainedBox extends Widget {
 }
 
 /// An element that manages a [ConstrainedBox] widget.
-class ConstrainedBoxElement extends Element {
-  /// The child element.
-  Element? childElement;
-
-  /// Creates a constrained box element for a [ConstrainedBox] widget.
+class ConstrainedBoxElement extends SingleChildElement {
+  /// Creates a constrainedbox element for a [ConstrainedBox] widget.
   ConstrainedBoxElement(ConstrainedBox super.widget);
 
   @override
-  void mount(Element? parent) {
-    super.mount(parent);
-    rebuild();
-  }
-
-  @override
-  void update(Widget newWidget) {
-    super.update(newWidget);
-    rebuild();
-  }
-
-  @override
-  void rebuild() {
-    final cb = widget as ConstrainedBox;
-    if (childElement != null &&
-        childElement!.widget.runtimeType == cb.child.runtimeType) {
-      childElement!.update(cb.child);
-    } else {
-      childElement?.unmount();
-      childElement = cb.child.createElement();
-      childElement!.mount(this);
-    }
-  }
-
-  @override
-  void unmount() {
-    childElement?.unmount();
-    super.unmount();
-  }
+  Widget? get childWidget => (widget as ConstrainedBox).child;
 
   @override
   Size performLayout(BoxConstraints constraints) {

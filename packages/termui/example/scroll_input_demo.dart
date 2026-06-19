@@ -491,7 +491,7 @@ void main() async {
               continue;
             }
 
-            final okBtn = Button(
+            Button(
               text: 'OK',
               focused: true,
               onPressed: () {
@@ -506,7 +506,6 @@ void main() async {
                 modalScrollController.scrollOffset = 0;
               },
             );
-            okBtn.handleKeyEvent(event);
             drawFrame();
             continue;
           } else if (event is MouseEvent) {
@@ -698,13 +697,11 @@ void main() async {
 
           // Route other keys to the active element
           if (focusedIndex == 0) {
-            emailField.handleKeyEvent(event);
           } else if (focusedIndex == 1) {
-            bioField.handleKeyEvent(event);
           } else {
             // Reconstruct temp stateless widgets to route their key activations
             if (focusedIndex == 2) {
-              final cb = Checkbox(
+              Checkbox(
                 value: newsletterVal,
                 label: '',
                 focused: true,
@@ -712,9 +709,8 @@ void main() async {
                   newsletterVal = v;
                 },
               );
-              cb.handleKeyEvent(event);
             } else if (focusedIndex == 3) {
-              final rad = Radio<String>(
+              Radio<String>(
                 value: 'light',
                 groupValue: themeGroupVal,
                 label: '',
@@ -723,9 +719,8 @@ void main() async {
                   themeGroupVal = v;
                 },
               );
-              rad.handleKeyEvent(event);
             } else if (focusedIndex == 4) {
-              final rad = Radio<String>(
+              Radio<String>(
                 value: 'dark',
                 groupValue: themeGroupVal,
                 label: '',
@@ -734,9 +729,8 @@ void main() async {
                   themeGroupVal = v;
                 },
               );
-              rad.handleKeyEvent(event);
             } else if (focusedIndex == 5) {
-              final sw = Switch(
+              Switch(
                 value: soundVal,
                 label: '',
                 focused: true,
@@ -744,16 +738,14 @@ void main() async {
                   soundVal = v;
                 },
               );
-              sw.handleKeyEvent(event);
             } else if (focusedIndex == 6) {
-              final btn = Button(
+              Button(
                 text: '',
                 focused: true,
                 onPressed: () {
                   submitted = true;
                 },
               );
-              btn.handleKeyEvent(event);
             }
           }
           drawFrame();

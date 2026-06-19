@@ -200,48 +200,17 @@ class DecoratedBox extends Widget {
 }
 
 /// Element for [DecoratedBox].
-class DecoratedBoxElement extends Element {
-  /// The element corresponding to the [DecoratedBox]'s child.
-  Element? childElement;
-
+class DecoratedBoxElement extends SingleChildElement {
   int _cachedTopOffset = 0;
   int _cachedBottomOffset = 0;
   int _cachedLeftOffset = 0;
   int _cachedRightOffset = 0;
 
-  /// Creates a new [DecoratedBoxElement].
+  /// Creates a decoratedbox element for a [DecoratedBox] widget.
   DecoratedBoxElement(DecoratedBox super.widget);
 
   @override
-  void mount(Element? parent) {
-    super.mount(parent);
-    rebuild();
-  }
-
-  @override
-  void update(Widget newWidget) {
-    super.update(newWidget);
-    rebuild();
-  }
-
-  @override
-  void rebuild() {
-    final db = widget as DecoratedBox;
-    if (childElement != null &&
-        childElement!.widget.runtimeType == db.child.runtimeType) {
-      childElement!.update(db.child);
-    } else {
-      childElement?.unmount();
-      childElement = db.child.createElement();
-      childElement!.mount(this);
-    }
-  }
-
-  @override
-  void unmount() {
-    childElement?.unmount();
-    super.unmount();
-  }
+  Widget? get childWidget => (widget as DecoratedBox).child;
 
   @override
   Size performLayout(BoxConstraints constraints) {

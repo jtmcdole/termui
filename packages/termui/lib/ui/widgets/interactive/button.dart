@@ -1,11 +1,9 @@
-import 'dart:async';
 import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
 /// Undocumented public member.
-class Button extends StatefulWidget
-    implements Focusable, KeyEventHandler, MouseEventHandler {
+class Button extends StatefulWidget implements Focusable {
   /// The text label displayed on the button.
   final String text;
 
@@ -32,12 +30,34 @@ class Button extends StatefulWidget
     this.focusedStyle = const Style(modifiers: Modifier.reverse),
   });
 
-  // ignore: must_be_immutable
-  ButtonState? _state;
+  @override
+  State<Button> createState() {
+    return ButtonState();
+  }
+}
+
+/// Undocumented public member.
+class ButtonState extends State<Button>
+    with FocusableStateMixin<Button>
+    implements KeyEventHandler, MouseEventHandler {
+  @override
+  bool get isWidgetFocused => widget.focused;
+
+  @override
+  String get focusNodeIdPrefix => 'button';
+
+  /// Handles mouse events for the button.
+  @override
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    if (event.type == MouseEventType.press) {
+      widget.onPressed();
+      setState(() {});
+    }
+  }
 
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
+    final hasFocus = widget.focused || focusNode.hasFocus;
     if (hasFocus &&
         (event.key == ' ' ||
             event.key == 'space' ||
@@ -45,81 +65,17 @@ class Button extends StatefulWidget
             event.key == '\r' ||
             event.key == 'enter' ||
             event.type == term.KeyType.enter)) {
-      onPressed();
-      _state?.setState(() {});
+      widget.onPressed();
+      setState(() {});
       return true;
     }
     return false;
   }
 
-  /// Delegated mouse event handler.
-  @override
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    if (event.type == MouseEventType.press) {
-      onPressed();
-      _state?.setState(() {});
-    }
-  }
-
-  @override
-  State<Button> createState() {
-    final state = ButtonState();
-    _state = state;
-    return state;
-  }
-}
-
-/// Undocumented public member.
-class ButtonState extends State<Button>
-    implements KeyEventHandler, MouseEventHandler {
-  late FocusNode _focusNode;
-
-  @override
-  void initState() {
-    super.initState();
-    widget._state = this;
-    _focusNode = FocusNode(id: 'button_${widget.hashCode}');
-    if (widget.focused) {
-      scheduleMicrotask(() {
-        if (mounted) _focusNode.requestFocus();
-      });
-    }
-  }
-
-  @override
-  void didUpdateWidget(Button oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    widget._state = this;
-    if (widget.focused != oldWidget.focused) {
-      if (widget.focused) {
-        _focusNode.requestFocus();
-      } else {
-        _focusNode.unfocus();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _focusNode.dispose();
-    super.dispose();
-  }
-
-  /// Handles mouse events for the button.
-  @override
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    widget.handleMouseEvent(event, localX, localY);
-  }
-
-  @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    return widget.handleKeyEvent(event);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Focus(
-      focusNode: _focusNode,
+      focusNode: focusNode,
       onFocusChange: (hasFocus) {
         if (mounted) setState(() {});
       },
@@ -128,7 +84,7 @@ class ButtonState extends State<Button>
       },
       child: _ButtonRenderWidget(
         text: widget.text,
-        focused: _focusNode.hasFocus || widget.focused,
+        focused: focusNode.hasFocus || widget.focused,
         style: widget.style,
         focusedStyle: widget.focusedStyle,
       ),

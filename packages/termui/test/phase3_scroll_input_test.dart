@@ -1,3 +1,4 @@
+import 'package:termui_test/termui_test.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/widgets/layout/column.dart';
@@ -200,23 +201,19 @@ void main() {
   });
 
   group('Interactive Widgets Tests', () {
-    test('Checkbox toggle key/mouse', () {
+    test('Checkbox toggle key/mouse', () async {
       bool checkboxVal = false;
-      Checkbox getCheckbox({required bool focused}) => Checkbox(
+      Widget getCheckbox({required bool focused}) => Checkbox(
         value: checkboxVal,
         label: 'Agree',
         focused: focused,
         onChanged: (v) => checkboxVal = v,
       );
 
-      // Verify rendering
-      final buffer = Buffer.blank(15, 1);
-      buffer.clear();
-      ElementWidget(getCheckbox(focused: false))
-        ..layout(BoxConstraints.tight(const Size(15, 1)))
-        ..paint(buffer, Offset.zero);
+      final tester = TerminalTester();
+      await tester.pumpWidget(getCheckbox(focused: false));
       expect(
-        buffer,
+        tester.buffer,
         matchesAnsiGolden(
           'test/goldens/checkbox_unselected.ansi',
           environment: {'GENERATE_GOLDENS': 'true'},
@@ -224,25 +221,23 @@ void main() {
       );
 
       // Handle click
-      getCheckbox(focused: true).handleMouseEvent(
-        const MouseEvent(
-          x: 1,
-          y: 1,
-          button: MouseButton.left,
-          type: MouseEventType.press,
-        ),
-        0,
-        0,
-      );
+      await tester.pumpWidget(getCheckbox(focused: true));
+      ((tester.rootElement as StatefulElement).state as CheckboxState)
+          .handleMouseEvent(
+            const MouseEvent(
+              x: 1,
+              y: 1,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+            0,
+            0,
+          );
       expect(checkboxVal, isTrue);
 
-      // Render again
-      buffer.clear();
-      ElementWidget(getCheckbox(focused: false))
-        ..layout(BoxConstraints.tight(const Size(15, 1)))
-        ..paint(buffer, Offset.zero);
+      await tester.pumpWidget(getCheckbox(focused: false));
       expect(
-        buffer,
+        tester.buffer,
         matchesAnsiGolden(
           'test/goldens/checkbox_selected.ansi',
           environment: {'GENERATE_GOLDENS': 'true'},
@@ -250,49 +245,41 @@ void main() {
       );
 
       // Handle Key Space
-      getCheckbox(
-        focused: true,
-      ).handleKeyEvent(const KeyEvent(' ', KeyType.character));
+      await tester.pumpWidget(getCheckbox(focused: true));
+      ((tester.rootElement as StatefulElement).state as CheckboxState)
+          .handleKeyEvent(const KeyEvent(' ', KeyType.character));
       expect(checkboxVal, isFalse);
     });
 
-    test('Radio select key/mouse', () {
+    test('Radio select key/mouse', () async {
       String groupVal = 'A';
-      Radio<String> getRadio(String val, {required bool focused}) =>
-          Radio<String>(
-            value: val,
-            groupValue: groupVal,
-            label: 'Option $val',
-            focused: focused,
-            onChanged: (v) => groupVal = v,
-          );
+      Widget getRadio(String val, {required bool focused}) => Radio<String>(
+        value: val,
+        groupValue: groupVal,
+        label: 'Option $val',
+        focused: focused,
+        onChanged: (v) => groupVal = v,
+      );
 
-      final buffer = Buffer.blank(15, 1);
-      buffer.clear();
-      ElementWidget(getRadio('B', focused: false))
-        ..layout(BoxConstraints.tight(const Size(15, 1)))
-        ..paint(buffer, Offset.zero);
+      final tester = TerminalTester();
+      await tester.pumpWidget(getRadio('B', focused: false));
       expect(
-        buffer,
+        tester.buffer,
         matchesAnsiGolden(
           'test/goldens/radio_unselected.ansi',
           environment: {'GENERATE_GOLDENS': 'true'},
         ),
       );
 
-      // Press Enter to select
-      getRadio(
-        'B',
-        focused: true,
-      ).handleKeyEvent(const KeyEvent('\n', KeyType.enter));
+      // Press Enter
+      await tester.pumpWidget(getRadio('B', focused: true));
+      ((tester.rootElement as StatefulElement).state as RadioState<String>)
+          .handleKeyEvent(const KeyEvent('\n', KeyType.enter));
       expect(groupVal, equals('B'));
 
-      buffer.clear();
-      ElementWidget(getRadio('B', focused: false))
-        ..layout(BoxConstraints.tight(const Size(15, 1)))
-        ..paint(buffer, Offset.zero);
+      await tester.pumpWidget(getRadio('B', focused: false));
       expect(
-        buffer,
+        tester.buffer,
         matchesAnsiGolden(
           'test/goldens/radio_selected.ansi',
           environment: {'GENERATE_GOLDENS': 'true'},
@@ -300,47 +287,42 @@ void main() {
       );
     });
 
-    test('Switch toggle key/mouse', () {
+    test('Switch toggle key/mouse', () async {
       bool switchVal = false;
-      Switch getSwitch({required bool focused}) => Switch(
+      Widget getSwitch({required bool focused}) => Switch(
         value: switchVal,
         label: 'Sound',
         focused: focused,
         onChanged: (v) => switchVal = v,
       );
 
-      final buffer = Buffer.blank(15, 1);
-      buffer.clear();
-      ElementWidget(getSwitch(focused: false))
-        ..layout(BoxConstraints.tight(const Size(15, 1)))
-        ..paint(buffer, Offset.zero);
+      final tester = TerminalTester();
+      await tester.pumpWidget(getSwitch(focused: false));
       expect(
-        buffer,
+        tester.buffer,
         matchesAnsiGolden(
           'test/goldens/switch_unselected.ansi',
           environment: {'GENERATE_GOLDENS': 'true'},
         ),
       );
 
-      // Click to toggle
-      getSwitch(focused: true).handleMouseEvent(
-        const MouseEvent(
-          x: 1,
-          y: 1,
-          button: MouseButton.left,
-          type: MouseEventType.press,
-        ),
-        0,
-        0,
-      );
+      await tester.pumpWidget(getSwitch(focused: true));
+      ((tester.rootElement as StatefulElement).state as SwitchState)
+          .handleMouseEvent(
+            const MouseEvent(
+              x: 1,
+              y: 1,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+            0,
+            0,
+          );
       expect(switchVal, isTrue);
 
-      buffer.clear();
-      ElementWidget(getSwitch(focused: false))
-        ..layout(BoxConstraints.tight(const Size(15, 1)))
-        ..paint(buffer, Offset.zero);
+      await tester.pumpWidget(getSwitch(focused: false));
       expect(
-        buffer,
+        tester.buffer,
         matchesAnsiGolden(
           'test/goldens/switch_selected.ansi',
           environment: {'GENERATE_GOLDENS': 'true'},
@@ -348,7 +330,7 @@ void main() {
       );
     });
 
-    test('Button trigger key/mouse', () {
+    test('Button trigger key/mouse', () async {
       bool pressed = false;
       final btn = Button(
         text: 'Click',
@@ -356,20 +338,25 @@ void main() {
         onPressed: () => pressed = true,
       );
 
-      btn.handleKeyEvent(const KeyEvent(' ', KeyType.character));
+      final tester = TerminalTester();
+      await tester.pumpWidget(btn);
+
+      ((tester.rootElement as StatefulElement).state as ButtonState)
+          .handleKeyEvent(const KeyEvent(' ', KeyType.character));
       expect(pressed, isTrue);
 
       pressed = false;
-      btn.handleMouseEvent(
-        const MouseEvent(
-          x: 1,
-          y: 1,
-          button: MouseButton.left,
-          type: MouseEventType.press,
-        ),
-        0,
-        0,
-      );
+      ((tester.rootElement as StatefulElement).state as ButtonState)
+          .handleMouseEvent(
+            const MouseEvent(
+              x: 1,
+              y: 1,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+            0,
+            0,
+          );
       expect(pressed, isTrue);
     });
   });
