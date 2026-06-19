@@ -1,6 +1,8 @@
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/layout/column.dart';
+import 'package:termui/ui/widgets/core/widget.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/event.dart';
 import 'package:termui/ui/widget_toolkit.dart';
 import 'package:termui_recorder/termui_recorder.dart';

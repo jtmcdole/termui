@@ -1,5 +1,4 @@
-import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/terminal/terminal.dart' as core;
 

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:termui/termui.dart';
-import 'package:termui/ui/window.dart';
 import '../example/compositor_demo.dart';
 
 import 'package:termui_test/termui_test.dart';

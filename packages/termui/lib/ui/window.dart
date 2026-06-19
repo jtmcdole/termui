@@ -1,9 +1,6 @@
+import 'package:termui/termui.dart';
 import 'dart:math';
 import 'package:characters/characters.dart';
-import 'buffer.dart';
-import 'style.dart';
-import 'layout.dart';
-import 'event.dart';
 import 'event.dart' as ev;
 
 /// A node in the keyboard focus tree.

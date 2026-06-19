@@ -1,7 +1,4 @@
-import 'package:termui/ui/layout.dart';
-import 'package:termui/ui/style.dart';
-import 'package:termui/ui/color.dart';
-import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui/termui.dart';
 import 'example_base.dart';
 
 /// Example demonstrating various progress indicators and spinners.

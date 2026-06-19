@@ -1,6 +1,6 @@
-import '../models/trace_models.dart';
+import "package:termui/termui_trace.dart";
+import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
-import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as evt;
 
 class QueryToken {

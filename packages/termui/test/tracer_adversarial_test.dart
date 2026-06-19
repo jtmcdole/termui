@@ -5,7 +5,9 @@ import 'package:test/test.dart';
 import 'package:file/memory.dart';
 import 'package:termui/perf/tracer.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/core/widget.dart';
+import 'package:termui/ui/widgets/core/element.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 
 class AdversarialWidget extends Widget {
   int runtimeTypeAccessCount = 0;

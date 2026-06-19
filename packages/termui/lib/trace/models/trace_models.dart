@@ -63,8 +63,18 @@ class TraceSpan {
   }) : displayLabel = displayLabel ?? _computeDisplayLabel(name, args);
 
   static String _computeDisplayLabel(String name, Map<String, String> args) {
+    String widgetName = name;
+    String action = '';
+
+    final parts = name.split(':');
+    if (parts.length == 2) {
+      widgetName = parts[0];
+      action = parts[1];
+    }
+
+    String metaPart = '';
+
     if (args.containsKey('text')) {
-      // The text value might be JSON encoded with quotes, let's strip surrounding quotes if they exist, or just use it.
       var text = args['text']!;
       if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
         text = text.substring(1, text.length - 1);
@@ -72,7 +82,9 @@ class TraceSpan {
       final truncated = text.characters.length > 20
           ? '${text.characters.take(17).toString()}...'
           : text;
-      return '$name "$truncated"';
+      if (truncated != widgetName) {
+        metaPart = '[$truncated]';
+      }
     } else if (args.containsKey('key')) {
       var keyStr = args['key']!;
       if (keyStr.startsWith('"') &&
@@ -80,9 +92,17 @@ class TraceSpan {
           keyStr.length >= 2) {
         keyStr = keyStr.substring(1, keyStr.length - 1);
       }
-      return '$name [$keyStr]';
+      if (keyStr != widgetName) {
+        metaPart = '[$keyStr]';
+      }
     }
-    return name;
+
+    final components = <String>[];
+    if (metaPart.isNotEmpty) components.add(metaPart);
+    if (action.isNotEmpty) components.add(action);
+    if (widgetName.isNotEmpty) components.add(widgetName);
+
+    return components.join(' ');
   }
 }
 

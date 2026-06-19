@@ -1,5 +1,4 @@
-import 'package:termui/terminal/terminal.dart';
-import 'package:termui/ui/buffer.dart';
+import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as ui;
 
 /// Interface defining platform-specific behavior needed by the shared Widget Book.

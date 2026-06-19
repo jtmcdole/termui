@@ -1,5 +1,4 @@
-import '../terminal/event.dart';
-import 'layout.dart';
+import 'package:termui/termui.dart';
 
 export '../terminal/event.dart';
 

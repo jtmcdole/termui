@@ -5,7 +5,7 @@ import 'dart:io';
 
 import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart' as term;
-import 'package:termui/ui/ui.dart';
+import 'package:termui/termui.dart';
 
 /// A dashboard widget simulating a heavy compilation process.
 /// This example demonstrates live timing, vsync-aligned repaints,

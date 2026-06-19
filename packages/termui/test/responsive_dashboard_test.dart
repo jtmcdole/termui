@@ -1,6 +1,6 @@
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 import '../example/03_responsive_dashboard.dart';
 
 void main() {

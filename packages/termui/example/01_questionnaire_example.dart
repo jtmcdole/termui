@@ -2,7 +2,7 @@
 
 import 'dart:io';
 import 'package:termui/terminal/terminal.dart' as term;
-import 'package:termui/ui/ui.dart';
+import 'package:termui/termui.dart';
 
 void main() async {
   // We run the application inside runGuarded to guarantee that the terminal's

@@ -1,10 +1,12 @@
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:fake_async/fake_async.dart';
-import 'package:termui/ui/widgets/spinner.dart';
+import 'package:termui/ui/widgets/display/spinner.dart';
 import 'package:termui/ui/animation/animation_effect.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/layout/row.dart';
+import 'package:termui/ui/widgets/core/widget.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/style.dart';
 
 class TestAnimationEffect extends TuiAnimationEffect {

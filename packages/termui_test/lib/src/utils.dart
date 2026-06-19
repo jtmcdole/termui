@@ -1,4 +1,4 @@
-import 'package:termui/ui/ui.dart';
+import 'package:termui/termui.dart';
 
 /// Prints the [element] and its children to the stdout.
 void debugDumpTree(Element? element, [int depth = 0]) {

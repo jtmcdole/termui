@@ -1,18 +1,14 @@
-import '../models/trace_models.dart';
-import 'timeline_canvas.dart';
-import 'search_overlay.dart';
-import 'inspector_panel.dart';
-import 'package:file/file.dart';
-import 'package:file/local.dart';
+import "package:file/file.dart";
+import "package:file/local.dart";
+import "package:termui/termui_trace.dart";
+import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 
 import 'dart:math';
-import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as evt;
-import 'package:termui/ui/window.dart';
 
 late SceneManager globalSceneManager;
 

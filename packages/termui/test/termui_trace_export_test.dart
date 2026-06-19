@@ -6,8 +6,6 @@ import 'package:test/test.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/termui_trace.dart';
-import 'package:termui/ui/renderer.dart';
-import 'package:termui/ui/window.dart';
 
 void main() {
   group('Trace Viewer Export Integration Tests', () {

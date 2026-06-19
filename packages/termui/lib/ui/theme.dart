@@ -1,6 +1,4 @@
-import 'layout.dart';
-import 'style.dart';
-import 'color.dart';
+import 'package:termui/termui.dart';
 
 /// A class that holds the color and style configurations for a [Theme].
 class ThemeData {

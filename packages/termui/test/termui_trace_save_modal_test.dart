@@ -3,7 +3,6 @@ import 'dart:math';
 import 'package:file/memory.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/termui_trace.dart';
-import 'package:termui/ui/renderer.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:test/test.dart';
 

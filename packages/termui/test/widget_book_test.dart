@@ -3,12 +3,10 @@ import 'package:termui_shared_examples/widget_book/layout_state.dart';
 import 'package:termui_shared_examples/widget_book/modal_dialog.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/event.dart' as ui;
-import 'package:termui/perf/tracer.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_platform.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui_recorder/termui_recorder.dart';
-import 'package:termui/ui/window.dart';
 import 'package:termui/termui.dart';
 
 class TestWidgetBookPlatform implements WidgetBookPlatform {

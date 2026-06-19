@@ -4,8 +4,6 @@ import 'dart:math';
 
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/event.dart' as ev;
-import 'package:termui/ui/window.dart';
-import 'package:termui/perf/tracer.dart';
 
 Widget buildBackgroundWidget(Point<int>? mousePos, List<SceneLayer> layers) {
   final debugInfo = <Widget>[

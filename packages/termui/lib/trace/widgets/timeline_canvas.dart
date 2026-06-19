@@ -1,8 +1,7 @@
-import '../models/trace_models.dart';
-import 'trace_utils.dart';
+import "package:termui/termui_trace.dart";
+import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
 import 'dart:math';
-import 'package:termui/termui.dart';
 
 void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
   final cell = buffer.getCell(x, y);

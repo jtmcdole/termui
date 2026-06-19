@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 
 void main() {
   group('Size Tests', () {

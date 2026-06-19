@@ -1,7 +1,4 @@
-import 'package:termui/ui/layout.dart';
-import 'package:termui/ui/widgets/text.dart';
-import 'package:termui/ui/widgets/rich_text.dart';
-import 'package:termui/ui/widgets/text_field.dart';
+import 'package:termui/termui.dart';
 import 'package:test/test.dart';
 import 'tester.dart';
 

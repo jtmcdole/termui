@@ -1,7 +1,10 @@
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/core/widget.dart';
+import 'package:termui/ui/widgets/core/element.dart';
+import 'package:termui/ui/widgets/core/build_context.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/widget_toolkit.dart';
 
 class TestLeafWidget extends Widget {

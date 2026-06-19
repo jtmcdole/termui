@@ -1,10 +1,6 @@
 import 'dart:math';
 import 'package:clock/clock.dart';
-import '../buffer.dart';
-import '../style.dart';
-import '../layout.dart';
-import '../color.dart';
-import '../easing.dart';
+import 'package:termui/termui.dart';
 
 /// The status of an animation transition.
 enum AnimationStatus {

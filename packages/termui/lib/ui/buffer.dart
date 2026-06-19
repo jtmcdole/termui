@@ -1,8 +1,7 @@
+import 'package:termui/termui.dart';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:characters/characters.dart';
-import '../perf/tracer.dart';
-import 'style.dart';
 
 /// A single cell in the terminal buffer.
 ///

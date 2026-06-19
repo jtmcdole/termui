@@ -6,7 +6,7 @@ import 'dart:math';
 
 import 'package:characters/characters.dart';
 import 'package:termui/terminal/terminal.dart' as term;
-import 'package:termui/ui/ui.dart';
+import 'package:termui/termui.dart';
 
 /// A component that renders status indicators with custom styles and borders.
 class StatCard extends StatelessWidget {

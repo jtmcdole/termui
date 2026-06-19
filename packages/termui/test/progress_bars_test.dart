@@ -1,6 +1,5 @@
 import 'package:fake_async/fake_async.dart';
-import 'package:termui/ui/ui.dart';
-import 'package:termui/ui/window.dart';
+import 'package:termui/termui.dart';
 import 'package:test/test.dart';
 
 import '../example/02_progress_bars.dart';
