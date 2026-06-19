@@ -1,10 +1,13 @@
 import 'dart:async';
 import 'package:test/test.dart';
 import 'package:termui/ui/event.dart' as ui;
-import 'package:termui/ui/widgets/prompt_runner.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/core/prompt_runner.dart';
+import 'package:termui/ui/widgets/core/widget.dart';
+import 'package:termui/ui/widgets/core/element.dart';
+import 'package:termui/ui/widgets/core/build_context.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/widgets/text.dart';
+import 'package:termui/ui/widgets/display/text.dart';
 
 import 'package:termui_test/termui_test.dart';
 

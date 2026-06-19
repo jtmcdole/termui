@@ -1,8 +1,7 @@
-import '../models/trace_models.dart';
-import 'trace_viewer_app.dart';
+import "package:termui/termui_trace.dart";
+import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
 import 'dart:math';
-import 'package:termui/termui.dart';
 
 String formatDuration(double ms) {
   if (ms < 0.001) {
@@ -46,87 +45,81 @@ Widget buildInspectorPanel(
   TimeDisplayMode timeDisplayMode,
   int? baseTime,
 ) {
-  int rawLineCount = 1;
-  if (exportMessage == null && hoveredSpan != null) {
-    rawLineCount = 2; // Title + Timing
-    if (hoveredSpan.args.isNotEmpty) {
-      rawLineCount += 1 + hoveredSpan.args.length;
-    }
-  }
-  final panelHeight = min(rawLineCount, 12);
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      final maxWidth = constraints.maxWidth;
 
-  return SizedBox(
-    height: panelHeight + 2,
-    child: LayoutBuilder(
-      builder: (context, constraints) {
-        final maxWidth = constraints.maxWidth;
+      Widget contentWidget;
+      int contentHeight = 1;
 
-        Widget contentWidget;
-        if (exportMessage != null) {
-          contentWidget = Text(
-            exportMessage,
-            style: const Style(foreground: Color(100, 255, 100)),
-          );
-        } else if (hoveredSpan == null) {
-          contentWidget = Text(
-            'No event hovered. Hover over a span to inspect details.',
-            style: const Style(foreground: Colors.white),
-          );
-        } else {
-          final span = hoveredSpan;
-          final durMs = (span.endUs - span.startUs) / 1000.0;
-          final startMs = span.startUs / 1000.0;
-          final endMs = span.endUs / 1000.0;
+      if (exportMessage != null) {
+        contentWidget = Text(
+          exportMessage,
+          style: const Style(foreground: Color(100, 255, 100)),
+        );
+      } else if (hoveredSpan == null) {
+        contentWidget = Text(
+          'No event hovered. Hover over a span to inspect details.',
+          style: const Style(foreground: Colors.white),
+        );
+      } else {
+        final span = hoveredSpan;
+        final durMs = (span.endUs - span.startUs) / 1000.0;
+        final startMs = span.startUs / 1000.0;
+        final endMs = span.endUs / 1000.0;
 
-          final lines = <String>[];
+        final lines = <String>[];
 
-          String titleLine = '[Hovered] ${span.displayLabel}';
-          if (titleLine.length > maxWidth - 2) {
-            titleLine = '${titleLine.substring(0, maxWidth - 5)}...';
+        String titleLine = '[Hovered] ${span.displayLabel}';
+        if (titleLine.length > maxWidth - 2) {
+          titleLine = '${titleLine.substring(0, maxWidth - 5)}...';
+        }
+        lines.add(titleLine);
+
+        String timingLine = '';
+        switch (timeDisplayMode) {
+          case TimeDisplayMode.formatted:
+            timingLine =
+                'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}';
+            break;
+          case TimeDisplayMode.rawRelative:
+            timingLine =
+                'Start: ${span.startUs}  |  End: ${span.endUs}  |  Duration: ${formatDuration(durMs)}';
+            break;
+          case TimeDisplayMode.rawAbsolute:
+            final absStart = span.startUs + (baseTime ?? 0);
+            final absEnd = span.endUs + (baseTime ?? 0);
+            timingLine =
+                'Start: $absStart  |  End: $absEnd  |  Duration: ${formatDuration(durMs)}';
+            break;
+        }
+        if (timingLine.length > maxWidth - 2) {
+          timingLine = '${timingLine.substring(0, maxWidth - 5)}...';
+        }
+        lines.add(timingLine);
+
+        if (span.args.isNotEmpty) {
+          lines.add('Args:');
+          for (final entry in span.args.entries) {
+            final argStr = '  ${entry.key}: ${entry.value}';
+            lines.addAll(wrapTraceText(argStr, maxWidth - 2));
           }
-          lines.add(titleLine);
-
-          String timingLine = '';
-          switch (timeDisplayMode) {
-            case TimeDisplayMode.formatted:
-              timingLine =
-                  'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}';
-              break;
-            case TimeDisplayMode.rawRelative:
-              timingLine =
-                  'Start: ${span.startUs}  |  End: ${span.endUs}  |  Duration: ${formatDuration(durMs)}';
-              break;
-            case TimeDisplayMode.rawAbsolute:
-              final absStart = span.startUs + (baseTime ?? 0);
-              final absEnd = span.endUs + (baseTime ?? 0);
-              timingLine =
-                  'Start: $absStart  |  End: $absEnd  |  Duration: ${formatDuration(durMs)}';
-              break;
-          }
-          if (timingLine.length > maxWidth - 2) {
-            timingLine = '${timingLine.substring(0, maxWidth - 5)}...';
-          }
-          lines.add(timingLine);
-
-          if (span.args.isNotEmpty) {
-            lines.add('Args:');
-            for (final entry in span.args.entries) {
-              final argStr = '  ${entry.key}: ${entry.value}';
-              lines.addAll(wrapTraceText(argStr, maxWidth - 2));
-            }
-          }
-
-          final totalLines = lines.length;
-
-          contentWidget = ListView.fromStrings(
-            lines,
-            itemStyle: const Style(foreground: Colors.white),
-            selectedStyle: const Style(foreground: Colors.white),
-            showScrollbar: totalLines > panelHeight,
-          );
         }
 
-        return DecoratedBox(
+        final totalLines = lines.length;
+        contentHeight = min(totalLines, 12);
+
+        contentWidget = ListView.fromStrings(
+          lines,
+          itemStyle: const Style(foreground: Colors.white),
+          selectedStyle: const Style(foreground: Colors.white),
+          showScrollbar: totalLines > contentHeight,
+        );
+      }
+
+      return SizedBox(
+        height: contentHeight + 2,
+        child: DecoratedBox(
           decoration: const BoxDecoration(
             border: Border(
               topChar: '─',
@@ -145,8 +138,8 @@ Widget buildInspectorPanel(
             padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 0),
             child: contentWidget,
           ),
-        );
-      },
-    ),
+        ),
+      );
+    },
   );
 }

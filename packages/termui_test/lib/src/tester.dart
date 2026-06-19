@@ -1,10 +1,10 @@
+import "package:termui/perf/fs_locator.dart";
 import 'dart:async';
 import 'dart:math';
 import 'package:file/file.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:test_api/hooks.dart';
 import 'package:termui/termui.dart';
-import 'package:termui/perf/fs_locator.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 import 'mock_backend.dart';
 import 'finders.dart';

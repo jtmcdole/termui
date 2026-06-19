@@ -1,6 +1,7 @@
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/core/element.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/widget_toolkit.dart';
 import 'package:termui/ui/event.dart' as ui;
 import '../example/dashboard_demo.dart';

@@ -1,10 +1,5 @@
 import 'dart:math';
-import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/style.dart';
-import 'package:termui/ui/color.dart';
-import 'package:termui/ui/layout.dart';
-import 'package:termui/ui/window.dart';
-import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui/termui.dart';
 
 /// A widget that displays instructions and the currently focused window.
 class InfoWidget extends Widget {

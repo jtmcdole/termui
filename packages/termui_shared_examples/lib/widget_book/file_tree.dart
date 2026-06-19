@@ -1,11 +1,8 @@
+import "package:termui/termui_io.dart";
 import 'package:file/file.dart';
 import 'package:file/local.dart';
 import 'package:file/memory.dart';
-import 'package:termui/ui/layout.dart';
-import 'package:termui/ui/style.dart';
-import 'package:termui/ui/color.dart';
-import 'package:termui/ui/widget_toolkit.dart';
-import 'package:termui/ui/widgets/io/file_tree_helper.dart';
+import 'package:termui/termui.dart';
 import 'example_base.dart';
 
 /// True if the current application is compiled to run on the web.

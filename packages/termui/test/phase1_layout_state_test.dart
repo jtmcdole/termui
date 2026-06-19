@@ -1,7 +1,17 @@
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
-import 'package:termui/ui/layout.dart';
+import 'package:termui/ui/widgets/layout/row.dart';
+import 'package:termui/ui/widgets/layout/column.dart';
+import 'package:termui/ui/widgets/layout/stack.dart';
+import 'package:termui/ui/widgets/layout/positioned.dart';
+import 'package:termui/ui/widgets/layout/sized_box.dart';
+import 'package:termui/ui/widgets/layout/flexible.dart';
+import 'package:termui/ui/widgets/layout/align.dart';
+import 'package:termui/ui/widgets/core/widget.dart';
+import 'package:termui/ui/widgets/core/element.dart';
+import 'package:termui/ui/widgets/core/build_context.dart';
+import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/widget_toolkit.dart';
 
 class TestWidget extends Widget {

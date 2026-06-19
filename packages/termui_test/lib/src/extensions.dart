@@ -1,4 +1,4 @@
-import 'package:termui/ui/ui.dart' show Buffer, Offset;
+import 'package:termui/termui.dart' show Buffer, Offset;
 import 'package:test/test.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 

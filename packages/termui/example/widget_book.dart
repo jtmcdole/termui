@@ -1,3 +1,4 @@
+import 'package:termui/termui.dart';
 import 'dart:async';
 import 'dart:io';
 

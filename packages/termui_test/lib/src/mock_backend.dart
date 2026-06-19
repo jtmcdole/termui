@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:termui/terminal/backend/terminal_backend.dart';
-import 'package:termui/ui/buffer.dart';
+import 'package:termui/termui.dart';
 
 /// A mock implementation of [TerminalBackend] for testing.
 ///

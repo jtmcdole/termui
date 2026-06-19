@@ -1,9 +1,5 @@
 import 'dart:math';
-import '../buffer.dart';
-import '../style.dart';
-import '../layout.dart';
-import '../color.dart';
-import 'animation_effect.dart';
+import 'package:termui/termui.dart';
 
 /// A radial expanding ripple effect that radiates from a click coordinate.
 class InkwellRippleEffect extends TuiAnimationEffect {

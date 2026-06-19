@@ -1,9 +1,6 @@
 import 'dart:async';
 import 'dart:math';
-import '../buffer.dart';
-import '../style.dart';
-import '../layout.dart';
-import 'animation_effect.dart';
+import 'package:termui/termui.dart';
 
 /// Mixin for [State] objects that allows registration and execution of TUI animations.
 mixin TuiAnimatedStateMixin<T extends StatefulWidget> on State<T> {

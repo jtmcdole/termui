@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:termui/ui/widgets/text_field.dart';
+import 'package:termui/ui/widgets/interactive/text_field.dart';
 
 void main() {
   group('TextEditingController Tests', () {

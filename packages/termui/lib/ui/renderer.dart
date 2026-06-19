@@ -1,6 +1,4 @@
-import '../perf/tracer.dart';
-import 'buffer.dart';
-import 'style.dart';
+import 'package:termui/termui.dart';
 
 /// The target mode for terminal rendering.
 enum RenderingMode {

@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:termui/termui.dart';
 import 'package:termui/termui_trace.dart';
-import 'package:termui/ui/renderer.dart';
 
 void main(List<String> arguments) async {
   if (arguments.isEmpty) {

@@ -1,21 +1,12 @@
+import "package:termui/perf/fs_locator.dart";
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:termui/terminal/terminal.dart' as term;
-import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/style.dart';
-import 'package:termui/ui/color.dart';
-import 'package:termui/ui/layout.dart';
-import 'package:termui/ui/widget_toolkit.dart';
-import 'package:termui/ui/event.dart' hide Modifier;
-import 'package:termui/ui/window.dart';
-import 'package:termui/perf/tracer.dart';
-import 'package:termui/perf/fs_locator.dart';
-import 'package:termui/ui/termui_debug.dart';
+import 'package:termui/termui.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_examples.dart';
 import 'package:termui_recorder/termui_recorder.dart';
-import 'package:termui/ui/renderer.dart';
 
 /// Pre-defined pages for the shared widget book.
 enum DemoPage {
