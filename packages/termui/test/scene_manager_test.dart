@@ -102,6 +102,8 @@ class MockSceneRenderer implements SceneRenderer {
     mouseEvents.add(event);
   }
 
+  void render() {}
+
   @override
   void resize(int width, int height) {
     currentBuffer?.resize(width, height);

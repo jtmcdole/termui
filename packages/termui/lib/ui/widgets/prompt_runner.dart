@@ -146,7 +146,7 @@ class PromptRunner<T> implements SceneRenderer {
               : RenderingMode.inline,
         );
       }
-      draw();
+      render();
     }
   }
 
@@ -189,12 +189,12 @@ class PromptRunner<T> implements SceneRenderer {
   BuildOwner? _buildOwner;
   bool _drawScheduled = false;
 
-  void _scheduleDraw() {
+  void _scheduleRender() {
     if (_drawScheduled) return;
     _drawScheduled = true;
     scheduleMicrotask(() {
       _drawScheduled = false;
-      draw();
+      render();
     });
   }
 
@@ -328,7 +328,7 @@ class PromptRunner<T> implements SceneRenderer {
   }
 
   /// Recalculates layout and paints the widget tree to the internal buffer.
-  void draw() {
+  void render() {
     if (_isDisposed) return;
     final rootElement = _rootElement;
     final buffer = _currentBuffer;
@@ -372,7 +372,7 @@ class PromptRunner<T> implements SceneRenderer {
     if (_rootElement != null) {
       _rootElement!.markNeedsBuild();
     }
-    draw();
+    render();
   }
 
   /// Starts the inline prompt loop and returns a Future containing the final result.
@@ -418,7 +418,7 @@ class PromptRunner<T> implements SceneRenderer {
       child: FocusScope(autofocus: true, child: widget),
     );
 
-    _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleDraw);
+    _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleRender);
 
     final rootElement = scopedWidget.createElement();
     rootElement.owner = _buildOwner;
@@ -431,7 +431,7 @@ class PromptRunner<T> implements SceneRenderer {
 
     // Initial frame draw
     rootElement.markNeedsBuild();
-    draw();
+    render();
 
     StreamSubscription<Point<int>>? sizeSubscription;
     StreamSubscription<term.InputEvent>? subscription;
@@ -452,7 +452,7 @@ class PromptRunner<T> implements SceneRenderer {
               : RenderingMode.inline,
         );
         rootElement.markNeedsBuild();
-        draw();
+        render();
       });
 
       subscription = terminal.events.listen(
@@ -512,7 +512,7 @@ class PromptRunner<T> implements SceneRenderer {
     if (rootElement != null) {
       rootElement.markNeedsBuild();
     }
-    draw();
+    render();
   }
 
   /// Recursively walks the element tree to find the focused element and route the key event.
@@ -634,7 +634,12 @@ class PromptRunner<T> implements SceneRenderer {
 
   @override
   void handleKeyEvent(term.KeyEvent event) {
-    Tracer.record(_traceKeyEventId, Phase.begin, TraceCategory.events);
+    Tracer.record(
+      _traceKeyEventId,
+      Phase.begin,
+      TraceCategory.events,
+      metadata: {'key': event.key},
+    );
     try {
       if (_completer == null || _completer!.isCompleted) return;
 
@@ -664,9 +669,6 @@ class PromptRunner<T> implements SceneRenderer {
       if (isDone) {
         rootElement.markNeedsBuild();
       }
-
-      // Force a redraw to reflect any selections or edits.
-      draw();
     } finally {
       Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
     }
@@ -705,7 +707,7 @@ class PromptRunner<T> implements SceneRenderer {
       }
 
       if (isDone || debugPaintHoverEnabled) {
-        draw();
+        _scheduleRender();
       }
     } finally {
       Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
