@@ -140,6 +140,29 @@ class KeyEvent extends InputEvent {
   @override
   int get hashCode => Object.hash(key, type, Object.hashAll(modifiers));
 
+  /// Returns a human-readable string combining modifiers and the key,
+  /// e.g. "Control+W", "Alt+Shift+Enter", "A".
+  String get logicalKey {
+    final mods = <String>[];
+    if (modifiers.contains(Modifier.control)) mods.add('Control');
+    if (modifiers.contains(Modifier.alt)) mods.add('Alt');
+    if (modifiers.contains(Modifier.meta)) mods.add('Meta');
+    if (modifiers.contains(Modifier.shift)) mods.add('Shift');
+
+    var keyName = key;
+    if (type != KeyType.character) {
+      final name = type.name;
+      keyName = name.isNotEmpty
+          ? '${name[0].toUpperCase()}${name.substring(1)}'
+          : name;
+    } else {
+      keyName = keyName.toUpperCase();
+    }
+
+    if (mods.isEmpty) return keyName;
+    return '${mods.join('+')}+$keyName';
+  }
+
   @override
   String toString() => 'KeyEvent($key, type: $type, modifiers: $modifiers)';
 }

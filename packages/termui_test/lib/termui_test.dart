@@ -2,6 +2,7 @@
 library;
 
 export 'src/mock_backend.dart';
+export 'src/mock_terminal.dart';
 export 'src/tester.dart';
 export 'src/finders.dart';
 export 'src/extensions.dart';

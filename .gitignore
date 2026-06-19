@@ -8,3 +8,5 @@
 *.cast
 trace*.json
 debug.log
+**/coverage/
+*.py

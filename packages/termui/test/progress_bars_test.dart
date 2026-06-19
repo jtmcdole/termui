@@ -1,74 +1,19 @@
-import 'dart:async';
-import 'dart:math';
-
 import 'package:fake_async/fake_async.dart';
-import 'package:termui/terminal/backend/terminal_backend.dart';
-import 'package:termui/terminal/terminal.dart' as term;
-import 'package:termui/ui/event.dart';
 import 'package:termui/ui/ui.dart';
 import 'package:termui/ui/window.dart';
 import 'package:test/test.dart';
 
 import '../example/02_progress_bars.dart';
 
-class FakeTerminalBackend implements TerminalBackend {
-  final List<String> writtenData = [];
-  Point<int> currentSize = const Point(80, 24);
-
-  @override
-  bool get isWindows => false;
-
-  @override
-  Stream<List<int>> get rawInput => const Stream.empty();
-
-  @override
-  void write(String data) {
-    writtenData.add(data);
-  }
-
-  @override
-  Point<int> get size => currentSize;
-
-  @override
-  Stream<Point<int>> watchSize() => const Stream.empty();
-
-  @override
-  void enableRawMode() {}
-
-  @override
-  void disableRawMode() {}
-
-  @override
-  void dispose() {}
-}
-
-class MockTerminal extends term.Terminal {
-  final _eventsController = StreamController<InputEvent>.broadcast();
-  final _sizeController = StreamController<Point<int>>.broadcast();
-
-  MockTerminal(super.backend);
-
-  @override
-  Stream<InputEvent> get events => _eventsController.stream;
-
-  @override
-  Stream<Point<int>> watchSize() => _sizeController.stream;
-
-  @override
-  void dispose() {
-    _eventsController.close();
-    _sizeController.close();
-    super.dispose();
-  }
-}
+import 'package:termui_test/termui_test.dart';
 
 void main() {
   group('Progress Bars Example Tests', () {
-    late FakeTerminalBackend backend;
+    late MockTerminalBackend backend;
     late MockTerminal terminal;
 
     setUp(() {
-      backend = FakeTerminalBackend();
+      backend = MockTerminalBackend();
       terminal = MockTerminal(backend);
       FocusManager.instance.setPrimaryFocus(null);
     });

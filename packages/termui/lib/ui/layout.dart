@@ -488,7 +488,6 @@ abstract class Element implements BuildContext {
         Tracer.activeCategories.contains(TraceCategory.build);
     Map<String, String>? meta;
     if (isTracing) {
-      meta = {'widget': widget.runtimeType.toString()};
       Tracer.record(
         rebuildTraceId,
         Phase.begin,
@@ -520,7 +519,7 @@ abstract class Element implements BuildContext {
         layoutTraceId,
         Phase.begin,
         TraceCategory.build,
-        metadata: {'widget': widget.runtimeType.toString()},
+        metadata: null,
       );
     }
     try {
@@ -557,7 +556,7 @@ abstract class Element implements BuildContext {
         Tracer.activeCategories.contains(TraceCategory.paint);
     if (isTracing) {
       final customMeta = paintTraceMetadata;
-      final meta = {'widget': widget.runtimeType.toString(), ...?customMeta};
+      final meta = customMeta;
       Tracer.record(
         paintTraceId,
         Phase.begin,
@@ -1319,7 +1318,11 @@ List<Rect> splitRect(
   return rects;
 }
 
-Constraint _getConstraint(Widget widget, LayoutDirection direction) {
+Constraint _getConstraint(
+  Widget widget,
+  LayoutDirection direction, {
+  int crossSize = 0,
+}) {
   if (widget is Flexible) {
     return FlexConstraint(widget.flex);
   }
@@ -1336,12 +1339,12 @@ Constraint _getConstraint(Widget widget, LayoutDirection direction) {
           w is! StatelessWidget &&
           w is! InheritedWidget) {
     if (direction == LayoutDirection.vertical) {
-      final intH = widget.getIntrinsicHeight(0);
+      final intH = widget.getIntrinsicHeight(crossSize);
       if (intH > 0) {
         return LengthConstraint(intH);
       }
     } else {
-      final intW = widget.getIntrinsicWidth(0);
+      final intW = widget.getIntrinsicWidth(crossSize);
       if (intW > 0) {
         return LengthConstraint(intW);
       }
@@ -1383,12 +1386,12 @@ class Row extends Widget {
   @override
   int getIntrinsicHeight(int width) {
     if (children.isEmpty) return 0;
-    final constraints = children
-        .map((c) => _getConstraint(c, LayoutDirection.horizontal))
+    final rowConstraints = children
+        .map((c) => _getConstraint(c, LayoutDirection.horizontal, crossSize: 0))
         .toList();
     final rects = splitRect(
       Rect(0, 0, width, 1),
-      constraints,
+      rowConstraints,
       LayoutDirection.horizontal,
       mainAxisAlignment: mainAxisAlignment,
     );
@@ -1466,7 +1469,10 @@ class RowElement extends Element {
     final area = Rect(0, 0, width, height);
 
     final rowConstraints = row.children
-        .map((c) => _getConstraint(c, LayoutDirection.horizontal))
+        .map(
+          (c) =>
+              _getConstraint(c, LayoutDirection.horizontal, crossSize: height),
+        )
         .toList();
     final rects = splitRect(
       area,
@@ -1626,7 +1632,9 @@ class ColumnElement extends Element {
     final area = Rect(0, 0, width, height);
 
     final columnConstraints = column.children
-        .map((c) => _getConstraint(c, LayoutDirection.vertical))
+        .map(
+          (c) => _getConstraint(c, LayoutDirection.vertical, crossSize: width),
+        )
         .toList();
     final rects = splitRect(
       area,

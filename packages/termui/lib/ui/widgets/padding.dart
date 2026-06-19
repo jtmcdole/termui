@@ -26,8 +26,8 @@ class Padding extends Widget {
   @override
   int getIntrinsicHeight(int width) {
     final childWidth = width - padding.left - padding.right;
-    if (childWidth <= 0) return padding.top + padding.bottom;
-    return child.getIntrinsicHeight(childWidth) + padding.top + padding.bottom;
+    final w = childWidth < 0 ? 0 : childWidth;
+    return child.getIntrinsicHeight(w) + padding.top + padding.bottom;
   }
 }
 

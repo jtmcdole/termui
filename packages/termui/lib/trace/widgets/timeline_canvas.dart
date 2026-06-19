@@ -1,0 +1,331 @@
+import '../models/trace_models.dart';
+import 'trace_utils.dart';
+// ignore_for_file: public_member_api_docs
+import 'dart:math';
+import 'package:termui/termui.dart';
+
+void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
+  final cell = buffer.getCell(x, y);
+  if (cell != null) {
+    cell.char = char;
+    cell.style = style;
+  }
+}
+
+String _getFractionalBlock(double fraction) {
+  if (fraction <= 0) return ' ';
+  if (fraction <= 1 / 8) return '▏';
+  if (fraction <= 2 / 8) return '▎';
+  if (fraction <= 3 / 8) return '▍';
+  if (fraction <= 4 / 8) return '▌';
+  if (fraction <= 5 / 8) return '▋';
+  if (fraction <= 6 / 8) return '▊';
+  if (fraction <= 7 / 8) return '▉';
+  return '█';
+}
+
+List<TraceSpan> _getCulledSpans(
+  List<TraceSpan> spans,
+  double viewportStartUs,
+  double viewportEndUs,
+) {
+  if (spans.isEmpty) return [];
+  int idx = 0;
+  int low = 0;
+  int high = spans.length - 1;
+  while (low <= high) {
+    int mid = (low + high) ~/ 2;
+    if (spans[mid].startUs >= viewportStartUs) {
+      idx = mid;
+      high = mid - 1;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  final visibleSpans = <TraceSpan>[];
+  for (int i = idx - 1; i >= 0; i--) {
+    if (spans[i].endUs >= viewportStartUs) {
+      visibleSpans.add(spans[i]);
+    }
+  }
+  for (int i = idx; i < spans.length; i++) {
+    if (spans[i].startUs <= viewportEndUs) {
+      visibleSpans.add(spans[i]);
+    } else {
+      break;
+    }
+  }
+  return visibleSpans;
+}
+
+/// An imperative canvas widget drawing the Main Isolate flame chart spans.
+class TimelineCanvas extends Widget {
+  final List<TraceSpan> spans;
+  final double offsetX;
+  final int offsetY;
+  final double zoomLevel;
+  final double? measureStartMs;
+  final double? measureEndMs;
+  final int? selectionStartUs;
+  final int? selectionEndUs;
+
+  const TimelineCanvas({
+    super.key,
+    required this.spans,
+    required this.offsetX,
+    required this.offsetY,
+    required this.zoomLevel,
+    this.measureStartMs,
+    this.measureEndMs,
+    this.selectionStartUs,
+    this.selectionEndUs,
+  });
+
+  @override
+  Element createElement() => TimelineCanvasElement(this);
+
+  @override
+  int getIntrinsicHeight(int width) => 10;
+}
+
+class TimelineCanvasElement extends Element {
+  TimelineCanvasElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 10
+        : constraints.maxHeight;
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 80
+        : constraints.maxWidth;
+    return constraints.constrain(Size(w, h));
+  }
+
+  /// Paints the flame chart timeline.
+  /// Maps temporal spans into spatial columns using [w.offsetX] and [w.zoomLevel].
+  @override
+  void performPaint(Buffer buffer, Offset offset) {
+    final w = widget as TimelineCanvas;
+    final width = size.width;
+    final height = size.height;
+
+    final startX = offset.dx;
+    final startY = offset.dy;
+
+    void drawCell(int cx, int cy, String char, Style style) {
+      if (cx >= startX &&
+          cx < startX + width &&
+          cy >= startY &&
+          cy < startY + height) {
+        _safeSetCell(buffer, cx, cy, char, style);
+      }
+    }
+
+    final borderStyle = const Style(foreground: Color(120, 120, 120));
+
+    // Paint left/right borders
+    for (var y = 0; y < height; y++) {
+      drawCell(startX, startY + y, '│', borderStyle);
+      drawCell(startX + width - 1, startY + y, '│', borderStyle);
+    }
+
+    if (w.selectionStartUs != null && w.selectionEndUs != null) {
+      final startUs = w.selectionStartUs!.toDouble();
+      final endUs = w.selectionEndUs!.toDouble();
+
+      final startColF = (startUs - w.offsetX) / w.zoomLevel;
+      final endColF = (endUs - w.offsetX) / w.zoomLevel;
+
+      final startCol = startColF.floor().clamp(0, width - 3);
+      final endCol = endColF.floor().clamp(0, width - 3);
+
+      if (endCol >= 0 && startCol < width - 2) {
+        final highlightStyle = const Style(background: Color(40, 40, 80));
+        for (var col = startCol; col <= endCol; col++) {
+          final x = startX + 1 + col;
+          for (var cy = startY; cy < startY + height; cy++) {
+            _safeSetCell(buffer, x, cy, ' ', highlightStyle);
+          }
+        }
+      }
+    }
+
+    final viewportStartUs = w.offsetX;
+    final viewportEndUs = w.offsetX + (width - 2) * w.zoomLevel;
+    final visibleSpans = _getCulledSpans(
+      w.spans,
+      viewportStartUs,
+      viewportEndUs,
+    );
+    final mainSpans = visibleSpans;
+
+    final Set<int> drawnCells = {};
+
+    for (final span in mainSpans) {
+      final depth = span.depth;
+      final visualY = depth - w.offsetY;
+      if (visualY < 0 || visualY >= height) continue;
+      final y = startY + visualY;
+
+      final spanStartUs = span.startUs.toDouble();
+      final spanEndUs = span.endUs.toDouble();
+
+      final startColF = (spanStartUs - w.offsetX) / w.zoomLevel;
+      final endColF = (spanEndUs - w.offsetX) / w.zoomLevel;
+
+      final startCol = startColF.floor().clamp(0, width - 3);
+      final endCol = endColF.floor().clamp(0, width - 3);
+
+      final style = getCategoryStyle(span.category, span.name);
+
+      if (spanStartUs == spanEndUs) {
+        final x = startX + 1 + startCol;
+        final cellKey = (x << 16) | y;
+        if (drawnCells.contains(cellKey)) continue;
+
+        final existing = buffer.getCell(x, y);
+        final bg = existing?.style.background;
+        drawCell(x, y, '│', style.merge(Style(background: bg)));
+        drawnCells.add(cellKey);
+        continue;
+      }
+
+      final bgColStyle = Style(
+        background: style.foreground,
+        foreground: Colors.white,
+      );
+      final fallbackStyle = style;
+
+      final nameWithPrefix = '▼ ${span.displayLabel}';
+      final spanColWidth = endCol - startCol + 1;
+
+      for (var col = startCol; col <= endCol; col++) {
+        final x = startX + 1 + col;
+        final cellKey = (x << 16) | y;
+        if (drawnCells.contains(cellKey)) continue;
+
+        final cellStart = w.offsetX + col * w.zoomLevel;
+        final cellEnd = cellStart + w.zoomLevel;
+
+        final cov = _coverage(spanStartUs, spanEndUs, cellStart, cellEnd);
+        if (cov > 0) {
+          String char;
+          Style cellStyle = bgColStyle;
+
+          if (cov > 0.99) {
+            final relativeCol = col - startCol;
+            if (spanColWidth >= nameWithPrefix.length &&
+                relativeCol >= 0 &&
+                relativeCol < nameWithPrefix.length) {
+              char = nameWithPrefix[relativeCol];
+            } else {
+              char = ' ';
+            }
+            drawnCells.add(cellKey);
+          } else {
+            if (startCol == endCol) {
+              char = cov <= 0.1 ? '│' : _getFractionalBlock(cov);
+              cellStyle = fallbackStyle;
+            } else if (col == startCol) {
+              char = _getFractionalBlock(1.0 - cov);
+              cellStyle = style.merge(
+                Style(
+                  foreground: null,
+                  background: style.foreground ?? const Color(255, 255, 255),
+                ),
+              );
+            } else {
+              char = _getFractionalBlock(cov);
+              cellStyle = fallbackStyle;
+            }
+            if (char == '│' || char == '█') {
+              drawnCells.add(cellKey);
+            }
+          }
+          drawCell(x, y, char, cellStyle);
+        }
+      }
+    }
+
+    // Draw Caliper Overlay
+    if (w.measureStartMs != null && w.measureEndMs != null) {
+      final startUs = w.measureStartMs! * 1000.0;
+      final endUs = w.measureEndMs! * 1000.0;
+      final col1 = ((startUs - w.offsetX) / w.zoomLevel).round();
+      final col2 = ((endUs - w.offsetX) / w.zoomLevel).round();
+      final leftCol = min(col1, col2).clamp(0, width - 3) + 1;
+      final rightCol = max(col1, col2).clamp(0, width - 3) + 1;
+      final spanWidth = rightCol - leftCol + 1;
+      final durationMs = (endUs - startUs).abs() / 1000.0;
+      final text = ' ${durationMs.toStringAsFixed(1)}ms ';
+      String caliperStr;
+      if (spanWidth >= text.length + 4) {
+        final dashes = spanWidth - 2 - text.length;
+        final leftDashes = dashes ~/ 2;
+        final rightDashes = dashes - leftDashes;
+        caliperStr = '├${'─' * leftDashes}$text${'─' * rightDashes}┤';
+      } else if (spanWidth >= 2) {
+        caliperStr = '├${'─' * (spanWidth - 2)}┤';
+      } else {
+        caliperStr = '│';
+      }
+
+      final caliperStyle = const Style(
+        foreground: Color(0, 255, 255),
+        modifiers: Modifier.bold,
+      );
+      final caliperRow = startY - 1;
+      // We draw directly into the buffer for startY - 1, bypassing drawCell's cy >= startY check
+      for (var i = 0; i < caliperStr.length; i++) {
+        final cx = startX + leftCol + i;
+        if (cx >= startX && cx < startX + width) {
+          final existingCell = buffer.getCell(cx, caliperRow);
+          final bg = existingCell?.style.background;
+          _safeSetCell(
+            buffer,
+            cx,
+            caliperRow,
+            caliperStr[i],
+            caliperStyle.merge(Style(background: bg)),
+          );
+        }
+      }
+
+      for (var y = caliperRow + 1; y < startY + height; y++) {
+        final ex1 = buffer.getCell(startX + leftCol, y);
+        final bg1 = ex1?.style.background;
+        drawCell(
+          startX + leftCol,
+          y,
+          '│',
+          caliperStyle.merge(Style(background: bg1)),
+        );
+
+        if (rightCol > leftCol) {
+          final ex2 = buffer.getCell(startX + rightCol, y);
+          final bg2 = ex2?.style.background;
+          drawCell(
+            startX + rightCol,
+            y,
+            '│',
+            caliperStyle.merge(Style(background: bg2)),
+          );
+        }
+      }
+    }
+  }
+}
+
+double _coverage(
+  double spanStart,
+  double spanEnd,
+  double cellStart,
+  double cellEnd,
+) {
+  final start = max(spanStart, cellStart);
+  final end = min(spanEnd, cellEnd);
+  if (start >= end) return 0.0;
+  return (end - start) / (cellEnd - cellStart);
+}

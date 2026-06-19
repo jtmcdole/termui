@@ -108,12 +108,12 @@ class InkwellButtonState extends State<InkwellButton>
     final resolvedHeight = widget.height ?? _lastHeight;
     if (resolvedWidth <= 0 || resolvedHeight <= 0) return;
 
-    // Body is always at (0, 0) with width W - 1 and height H - 1
+    final fallback = resolvedWidth < 2 || resolvedHeight < 2;
+    final bodyW = fallback ? resolvedWidth : resolvedWidth - 1;
+    final bodyH = fallback ? resolvedHeight : resolvedHeight - 1;
+
     final inBounds =
-        localX >= 0 &&
-        localX < resolvedWidth - 1 &&
-        localY >= 0 &&
-        localY < resolvedHeight - 1;
+        localX >= 0 && localX < bodyW && localY >= 0 && localY < bodyH;
 
     if (event.type == MouseEventType.press) {
       if (inBounds) {

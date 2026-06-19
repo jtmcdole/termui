@@ -1,6 +1,6 @@
 import 'package:test/test.dart';
 
-import '../bin/termui_trace.dart';
+import 'package:termui/termui_trace.dart';
 
 void main() {
   group('QueryToken Logic', () {

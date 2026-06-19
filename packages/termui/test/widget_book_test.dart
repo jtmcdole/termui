@@ -1,9 +1,7 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:termui_shared_examples/widget_book/layout_state.dart';
 import 'package:termui_shared_examples/widget_book/modal_dialog.dart';
 import 'package:test/test.dart';
-import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/perf/tracer.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_runner.dart';
@@ -12,45 +10,6 @@ import 'package:termui_test/termui_test.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 import 'package:termui/ui/window.dart';
 import 'package:termui/termui.dart';
-
-class FakeTerminalBackend implements TerminalBackend {
-  final StreamController<List<int>> _inputController =
-      StreamController<List<int>>();
-  final List<String> writtenData = [];
-  final Point<int> _size = const Point(80, 24);
-
-  @override
-  bool get isWindows => false;
-
-  @override
-  Stream<List<int>> get rawInput => _inputController.stream;
-
-  @override
-  void write(String data) {
-    writtenData.add(data);
-  }
-
-  @override
-  Point<int> get size => _size;
-
-  @override
-  Stream<Point<int>> watchSize() => const Stream.empty();
-
-  @override
-  void enableRawMode() {}
-
-  @override
-  void disableRawMode() {}
-
-  @override
-  void dispose() {
-    _inputController.close();
-  }
-
-  void injectBytes(List<int> bytes) {
-    _inputController.add(bytes);
-  }
-}
 
 class TestWidgetBookPlatform implements WidgetBookPlatform {
   Buffer? lastBuffer;
@@ -76,25 +35,6 @@ class TestWidgetBookPlatform implements WidgetBookPlatform {
   void onExit() {}
 }
 
-class MockTerminal extends Terminal {
-  final _eventsController = StreamController<ui.InputEvent>.broadcast();
-
-  MockTerminal(super.backend);
-
-  @override
-  Stream<ui.InputEvent> get events => _eventsController.stream;
-
-  void injectTestEvent(ui.InputEvent event) {
-    _eventsController.add(event);
-  }
-
-  @override
-  void dispose() {
-    _eventsController.close();
-    super.dispose();
-  }
-}
-
 void main() {
   setUp(() {
     FocusManager.instance.setPrimaryFocus(null);
@@ -102,7 +42,7 @@ void main() {
 
   group('Widget Book Runner Mouse Event Tests', () {
     test('Sidebar navigation clicks change page correctly', () async {
-      final backend = FakeTerminalBackend();
+      final backend = MockTerminalBackend();
       final terminal = Terminal(backend);
       final platform = TestWidgetBookPlatform();
 
@@ -113,27 +53,24 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Clear written data from initial frame renders
-      backend.writtenData.clear();
+      backend.writes.clear();
 
       // Click on the second sidebar item (Data Displays, index 1, 1-indexed row 4)
       // SGR mouse press sequence: \x1b[<0;5;4M
-      backend.injectBytes('\x1b[<0;5;4M'.codeUnits);
+      backend.pushBytes('\x1b[<0;5;4M'.codeUnits);
 
       // Wait for event processing
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
-      expect(
-        backend.writtenData.any((s) => s.contains('\x1b]22;\x1b\\')),
-        isTrue,
-      );
+      expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
 
       terminal.dispose();
       await bookFuture;
     });
 
     test('Sidebar navigation hover highlights and click changes page', () async {
-      final backend = FakeTerminalBackend();
+      final backend = MockTerminalBackend();
       final terminal = Terminal(backend);
       final platform = TestWidgetBookPlatform();
 
@@ -144,11 +81,11 @@ void main() {
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Clear written data from initial frame renders
-      backend.writtenData.clear();
+      backend.writes.clear();
 
       // Move/hover mouse over the second sidebar item (Data Displays, index 1, 1-indexed row 4)
       // SGR mouse move sequence: \x1b[<35;5;4M
-      backend.injectBytes('\x1b[<35;5;4M'.codeUnits);
+      backend.pushBytes('\x1b[<35;5;4M'.codeUnits);
 
       // Wait for event processing
       await Future.delayed(const Duration(milliseconds: 50));
@@ -162,17 +99,14 @@ void main() {
       expect(cell.style.background, equals(CharmColors.charple));
 
       // Click on the second sidebar item (Data Displays)
-      backend.injectBytes('\x1b[<0;5;4M'.codeUnits);
-      backend.injectBytes('\x1b[<0;5;4m'.codeUnits);
+      backend.pushBytes('\x1b[<0;5;4M'.codeUnits);
+      backend.pushBytes('\x1b[<0;5;4m'.codeUnits);
 
       // Wait for click event processing
       await Future.delayed(const Duration(milliseconds: 50));
 
       // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
-      expect(
-        backend.writtenData.any((s) => s.contains('\x1b]22;\x1b\\')),
-        isTrue,
-      );
+      expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
 
       terminal.dispose();
       await bookFuture;
@@ -181,7 +115,7 @@ void main() {
     test('Ctrl+C terminates widget book runner loop', () async {
       // 1. Test standard Ctrl+C parsed from byte stream
       {
-        final backend = FakeTerminalBackend();
+        final backend = MockTerminalBackend();
         final terminal = Terminal(backend);
         final platform = TestWidgetBookPlatform();
 
@@ -189,7 +123,7 @@ void main() {
         await Future.delayed(const Duration(milliseconds: 50));
 
         // Inject Ctrl+C bytes (code 3)
-        backend.injectBytes([3]);
+        backend.pushBytes([3]);
 
         await bookFuture.timeout(
           const Duration(seconds: 2),
@@ -202,7 +136,7 @@ void main() {
 
       // 2. Test Flutter-injected Ctrl+C KeyEvent using MockTerminal
       {
-        final backend = FakeTerminalBackend();
+        final backend = MockTerminalBackend();
         final terminal = MockTerminal(backend);
         final platform = TestWidgetBookPlatform();
 
@@ -231,7 +165,7 @@ void main() {
     test(
       'Focused text field consumes character keys and prevents global hotkeys',
       () async {
-        final backend = FakeTerminalBackend();
+        final backend = MockTerminalBackend();
         final terminal = MockTerminal(backend);
         final platform = TestWidgetBookPlatform();
 

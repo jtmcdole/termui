@@ -954,6 +954,12 @@ class _TextFieldRenderWidgetElement extends Element {
   _TextFieldRenderWidgetElement(_TextFieldRenderWidget super.widget);
 
   @override
+  Map<String, String>? get paintTraceMetadata {
+    final renderWidget = widget as _TextFieldRenderWidget;
+    return {'text': renderWidget.textFieldWidget.value};
+  }
+
+  @override
   Size performLayout(BoxConstraints constraints) {
     final renderWidget = widget as _TextFieldRenderWidget;
     final textField = renderWidget.textFieldWidget;

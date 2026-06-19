@@ -28,13 +28,17 @@ class _AnsiGoldenMatcher extends Matcher {
     final currentAnsi = AnsiScreenshot.capture(item);
     final goldenFile = File(goldenPath);
 
+    final updateGoldens =
+        _environment['GENERATE_GOLDENS'] == 'true' ||
+        _environment['UPDATE_GOLDENS'] == 'true';
+
+    if (updateGoldens) {
+      goldenFile.createSync(recursive: true);
+      goldenFile.writeAsStringSync(currentAnsi);
+      return true;
+    }
+
     if (!goldenFile.existsSync()) {
-      // Auto-create golden file if running in generation mode
-      if (_environment['GENERATE_GOLDENS'] == 'true') {
-        goldenFile.createSync(recursive: true);
-        goldenFile.writeAsStringSync(currentAnsi);
-        return true;
-      }
       final failPath = '$goldenPath.fail';
       final failedFile = File(failPath);
       failedFile.createSync(recursive: true);

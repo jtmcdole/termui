@@ -2,73 +2,15 @@ import 'dart:async';
 import 'package:test/test.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as ui;
-import 'package:termui/terminal/backend/terminal_backend.dart';
-import 'dart:math';
 
-class FakeTerminalBackend implements TerminalBackend {
-  final List<String> writtenData = [];
-  Buffer? buffer;
-
-  @override
-  bool get isWindows => false;
-
-  @override
-  Stream<List<int>> get rawInput => const Stream.empty();
-
-  @override
-  void write(String data) {
-    writtenData.add(data);
-  }
-
-  @override
-  Point<int> get size => const Point(80, 24);
-
-  @override
-  Stream<Point<int>> watchSize() => const Stream.empty();
-
-  @override
-  void enableRawMode() {}
-
-  @override
-  void disableRawMode() {}
-
-  @override
-  void dispose() {}
-}
-
-class MockTerminal extends Terminal {
-  final _eventsController = StreamController<ui.InputEvent>.broadcast();
-  bool isCursorVisible = true;
-  bool mouseTrackingEnabled = false;
-
-  MockTerminal(super.backend);
-
-  @override
-  Stream<ui.InputEvent> get events => _eventsController.stream;
-
-  void injectTestEvent(ui.InputEvent event) {
-    _eventsController.add(event);
-  }
-
-  @override
-  void enableMouseTracking() {
-    mouseTrackingEnabled = true;
-    super.enableMouseTracking();
-  }
-
-  @override
-  void disableMouseTracking() {
-    mouseTrackingEnabled = false;
-    super.disableMouseTracking();
-  }
-}
+import 'package:termui_test/termui_test.dart';
 
 void main() {
-  late FakeTerminalBackend backend;
+  late MockTerminalBackend backend;
   late MockTerminal terminal;
 
   setUp(() {
-    backend = FakeTerminalBackend();
+    backend = MockTerminalBackend();
     terminal = MockTerminal(backend);
     debugPaintHoverEnabled = false;
   });

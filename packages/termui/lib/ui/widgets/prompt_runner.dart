@@ -633,19 +633,19 @@ class PromptRunner<T> implements SceneRenderer {
   }
 
   @override
-  void handleKeyEvent(term.KeyEvent event) {
+  bool handleKeyEvent(term.KeyEvent event) {
     Tracer.record(
       _traceKeyEventId,
       Phase.begin,
       TraceCategory.events,
-      metadata: {'key': event.key},
+      metadata: {'key': event.logicalKey},
     );
     try {
-      if (_completer == null || _completer!.isCompleted) return;
+      if (_completer == null || _completer!.isCompleted) return false;
 
       var isDone = false;
       final rootElement = _rootElement;
-      if (rootElement == null) return;
+      if (rootElement == null) return false;
 
       // Step 1: Custom Interceptor
       if (onKeyEvent != null) {
@@ -662,13 +662,14 @@ class PromptRunner<T> implements SceneRenderer {
         final trigger = _detectTrigger(event);
         if (trigger != null && exitConditions.containsKey(trigger)) {
           _handleAction(trigger, event);
-          return;
+          return true;
         }
       }
 
       if (isDone) {
         rootElement.markNeedsBuild();
       }
+      return isDone;
     } finally {
       Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
     }
@@ -1043,8 +1044,8 @@ abstract interface class SceneRenderer implements TerminalStateRequest {
   /// The current rendering output buffer.
   Buffer? get currentBuffer;
 
-  /// Handles key events routed to this renderer.
-  void handleKeyEvent(term.KeyEvent event);
+  /// Handles key events routed to this renderer. Returns true if handled.
+  bool handleKeyEvent(term.KeyEvent event);
 
   /// Handles mouse events routed to this renderer.
   void handleMouseEvent(term.MouseEvent event);
