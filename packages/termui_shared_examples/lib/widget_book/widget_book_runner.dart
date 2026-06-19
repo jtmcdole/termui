@@ -110,6 +110,9 @@ Future<void> runWidgetBookShared(
     ),
     alternateScreen: !isInline,
     mode: ExecutionMode.managed,
+    exitConditions: const {
+      PromptExitTrigger.controlC: PromptExitAction.abort,
+    },
     onFramePainted: (buf) {
       final state = appKey.currentState;
       if (state != null) {
@@ -474,6 +477,7 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
                     setState(() {
                       _selectedPageIdx = idx;
                       _selectedPage = DemoPage.values[idx];
+                      _hoveredPageIdx = null; // Clear hover state
                       widget.terminal.resetMousePointer();
                     });
                     _updateTickerState();

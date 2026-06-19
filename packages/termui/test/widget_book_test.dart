@@ -1221,5 +1221,47 @@ void main() {
         await runnerFuture;
       });
     });
+    test('Split Pane Focus Bug Regression', () async {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Find and mouse-click on Split Pane
+          tester.tap(find.text('Split Pane'));
+          await tester.pump();
+
+          // Verify we navigated to Split Pane
+          expect(find.textPattern('Split Pane Preview'), findsOneWidget);
+
+          // 2. Arrow up twice
+          tester.sendKey(LogicalKey.arrowUp);
+          tester.sendKey(LogicalKey.arrowUp);
+          await tester.pump();
+
+          // 3. Send the enter key. It should NOT exit widgetbook.
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+
+          // If the app had exited on Enter, sending Q here would either do nothing
+          // or error out. But since the app is still running, Q cleanly exits.
+          tester.sendKey(LogicalKey.character('q'));
+          await tester.pump();
+        });
+
+        await runnerFuture;
+      });
+    });
   });
 }
