@@ -62,8 +62,7 @@ class FlatNode<T> {
 }
 
 /// A tree widget that displays nested TreeNode hierarchies.
-class TreeWidget<T> extends StatefulWidget
-    implements Focusable, KeyEventHandler {
+class TreeWidget<T> extends StatefulWidget {
   /// The root node of the tree.
   final TreeNode<T> root;
 
@@ -71,27 +70,22 @@ class TreeWidget<T> extends StatefulWidget
   final void Function(TreeNode<T>)? onSelect;
 
   /// The style applied to the selected active node.
-  Style selectedStyle;
+  final Style selectedStyle;
 
   /// The style applied to unselected nodes.
-  Style unselectedStyle;
+  final Style unselectedStyle;
 
   /// The style applied to the horizontal and vertical guide lines.
-  Style lineStyle;
+  final Style lineStyle;
 
   /// Whether to show the root node in the tree.
-  bool showRoot;
+  final bool showRoot;
 
   /// Whether the tree currently has keyboard focus.
-  @override
-  bool focused;
-
-  late List<FlatNode<T>> _flatNodes;
-  int _selectedIndex = 0;
-  int _scrollOffset = 0;
+  final bool focused;
 
   /// Creates a [TreeWidget] with the specified [root] node.
-  TreeWidget({
+  const TreeWidget({
     super.key,
     required this.root,
     this.onSelect,
@@ -104,51 +98,49 @@ class TreeWidget<T> extends StatefulWidget
     this.lineStyle = const Style(foreground: CharmColors.bbq),
     this.showRoot = true,
     this.focused = true,
-  }) {
-    _updateFlatNodes();
-  }
+  });
 
-  /// The index of the currently selected node in the flattened tree.
-  int get selectedIndex =>
-      _state != null ? _state!._selectedIndex : _selectedIndex;
+  @override
+  State<TreeWidget<T>> createState() => TreeWidgetState<T>();
+}
 
-  /// Sets the index of the currently selected node and clamps it to valid bounds.
-  set selectedIndex(int val) {
-    if (_state != null) {
-      if (_state!._flatNodes.isNotEmpty) {
-        _state!._selectedIndex = val.clamp(0, _state!._flatNodes.length - 1);
-      }
-    } else {
-      if (_flatNodes.isNotEmpty) {
-        _selectedIndex = val.clamp(0, _flatNodes.length - 1);
-      }
+/// The state for a [TreeWidget] widget.
+class TreeWidgetState<T> extends State<TreeWidget<T>>
+    implements KeyEventHandler {
+  late FocusNode _focusNode;
+
+  /// The list of visible nodes after flattening the tree based on expansion state.
+  List<FlatNode<T>> flatNodes = [];
+
+  /// The currently selected node index within the [flatNodes] list.
+  int selectedIndex = 0;
+
+  /// The current vertical scroll offset.
+  int scrollOffset = 0;
+
+  bool _isFocused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _isFocused = widget.focused;
+    updateFlatNodes();
+    _focusNode = FocusNode(id: 'tree_${widget.hashCode}');
+    if (_isFocused) {
+      scheduleMicrotask(() {
+        if (mounted) _focusNode.requestFocus();
+      });
     }
   }
 
-  /// The scroll offset of the tree.
-  int get scrollOffset =>
-      _state != null ? _state!._scrollOffset : _scrollOffset;
-
-  /// Sets the scroll offset of the tree.
-  set scrollOffset(int val) {
-    if (_state != null) {
-      _state!._scrollOffset = val;
+  /// Rebuilds the [flatNodes] list by traversing the tree starting from the root.
+  void updateFlatNodes() {
+    flatNodes = [];
+    _flatten(widget.root, 0, [], true, flatNodes);
+    if (flatNodes.isNotEmpty) {
+      selectedIndex = selectedIndex.clamp(0, flatNodes.length - 1);
     } else {
-      _scrollOffset = val;
-    }
-  }
-
-  /// The list of visible flattened nodes in the tree.
-  List<FlatNode<T>> get flatNodes =>
-      _state != null ? _state!._flatNodes : _flatNodes;
-
-  void _updateFlatNodes() {
-    if (_state != null) {
-      _state!._flatNodes = [];
-      _flatten(root, 0, [], true, _state!._flatNodes);
-    } else {
-      _flatNodes = [];
-      _flatten(root, 0, [], true, _flatNodes);
+      selectedIndex = 0;
     }
   }
 
@@ -159,18 +151,27 @@ class TreeWidget<T> extends StatefulWidget
     bool isLast,
     List<FlatNode<T>> target,
   ) {
-    final nextAncestorIsLast = List<bool>.from(ancestorIsLast);
-    if (depth > 0) {
-      nextAncestorIsLast.add(isLast);
-    }
-
-    if (depth > 0 || showRoot) {
+    if (depth > 0 || widget.showRoot) {
       target.add(
-        FlatNode(node: node, depth: depth, ancestorIsLast: nextAncestorIsLast),
+        FlatNode(
+          node: node,
+          depth: widget.showRoot ? depth : depth - 1,
+          ancestorIsLast: depth == 0
+              ? []
+              : widget.showRoot
+              ? [...ancestorIsLast, isLast]
+              : ancestorIsLast,
+        ),
       );
     }
 
-    if (node.isExpanded && !node.isLeaf) {
+    if (node.isExpanded) {
+      final nextAncestorIsLast = widget.showRoot
+          ? [...ancestorIsLast, isLast]
+          : <bool>[];
+      if (!widget.showRoot && depth > 0) {
+        nextAncestorIsLast.addAll([...ancestorIsLast, isLast]);
+      }
       for (var i = 0; i < node.children.length; i++) {
         final child = node.children[i];
         final isLastChild = i == node.children.length - 1;
@@ -179,18 +180,44 @@ class TreeWidget<T> extends StatefulWidget
     }
   }
 
-  // ignore: must_be_immutable
-  TreeWidgetState<T>? _state;
+  /// Adjusts the scroll offset so that the [selectedIndex] item is visible.
+  void adjustScroll(int viewportHeight) {
+    if (flatNodes.isEmpty || viewportHeight <= 0) return;
+    selectedIndex = selectedIndex.clamp(0, flatNodes.length - 1);
+
+    if (selectedIndex < scrollOffset) {
+      scrollOffset = selectedIndex;
+    } else if (selectedIndex >= scrollOffset + viewportHeight) {
+      scrollOffset = selectedIndex - viewportHeight + 1;
+    }
+    scrollOffset = scrollOffset.clamp(
+      0,
+      (flatNodes.length - viewportHeight).clamp(0, flatNodes.length),
+    );
+  }
+
+  @override
+  void didUpdateWidget(TreeWidget<T> oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focused != oldWidget.focused) {
+      _isFocused = widget.focused;
+      if (_isFocused) {
+        _focusNode.requestFocus();
+      } else {
+        _focusNode.unfocus();
+      }
+    }
+    updateFlatNodes();
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    super.dispose();
+  }
 
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    if (_state != null) {
-      return _state!.handleKeyEvent(event);
-    }
-    return _handleKeyEventInternal(event);
-  }
-
-  bool _handleKeyEventInternal(term.KeyEvent event) {
     final nodes = flatNodes;
     if (nodes.isEmpty) return false;
 
@@ -207,7 +234,7 @@ class TreeWidget<T> extends StatefulWidget
       if (!flat.node.isLeaf) {
         if (!flat.node.isExpanded) {
           flat.node.isExpanded = true;
-          _updateFlatNodes();
+          updateFlatNodes();
         } else {
           if (selectedIndex < nodes.length - 1) {
             selectedIndex = selectedIndex + 1;
@@ -219,7 +246,7 @@ class TreeWidget<T> extends StatefulWidget
       final flat = nodes[selectedIndex];
       if (!flat.node.isLeaf && flat.node.isExpanded) {
         flat.node.isExpanded = false;
-        _updateFlatNodes();
+        updateFlatNodes();
       } else {
         // Move to parent
         final parent = flat.node.parent;
@@ -232,71 +259,12 @@ class TreeWidget<T> extends StatefulWidget
       }
       handled = true;
     } else if (event.key == ' ' || event.type == KeyType.enter) {
-      if (onSelect != null) {
-        onSelect!(nodes[selectedIndex].node);
+      if (widget.onSelect != null) {
+        widget.onSelect!(nodes[selectedIndex].node);
       }
       handled = true;
     }
 
-    return handled;
-  }
-
-  @override
-  State<TreeWidget<T>> createState() {
-    final state = TreeWidgetState<T>();
-    _state = state;
-    return state;
-  }
-}
-
-/// The state for a [TreeWidget] widget.
-class TreeWidgetState<T> extends State<TreeWidget<T>>
-    implements KeyEventHandler {
-  late FocusNode _focusNode;
-  late List<FlatNode<T>> _flatNodes;
-  int _selectedIndex = 0;
-  int _scrollOffset = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _selectedIndex = widget._selectedIndex;
-    _scrollOffset = widget._scrollOffset;
-    widget._state = this;
-    widget._updateFlatNodes();
-    _focusNode = FocusNode(id: 'tree_${widget.hashCode}');
-    if (widget.focused) {
-      scheduleMicrotask(() {
-        if (mounted) _focusNode.requestFocus();
-      });
-    }
-  }
-
-  @override
-  void didUpdateWidget(TreeWidget<T> oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    widget._state = this;
-    if (widget.focused != oldWidget.focused) {
-      if (widget.focused) {
-        _focusNode.requestFocus();
-      } else {
-        _focusNode.unfocus();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    if (widget._state == this) {
-      widget._state = null;
-    }
-    _focusNode.dispose();
-    super.dispose();
-  }
-
-  @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    final handled = widget._handleKeyEventInternal(event);
     if (handled) {
       setState(() {});
     }
@@ -308,15 +276,18 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        widget.focused = hasFocus;
-        setState(() {});
+        if (_isFocused != hasFocus) {
+          _isFocused = hasFocus;
+          setState(() {});
+        }
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);
       },
       child: _TreeWidgetRenderWidget(
         widget: widget,
-        focused: _focusNode.hasFocus || widget.focused,
+        state: this,
+        focused: _focusNode.hasFocus || _isFocused,
       ),
     );
   }
@@ -324,9 +295,14 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
 
 class _TreeWidgetRenderWidget extends Widget {
   final TreeWidget widget;
+  final TreeWidgetState state;
   final bool focused;
 
-  const _TreeWidgetRenderWidget({required this.widget, required this.focused});
+  const _TreeWidgetRenderWidget({
+    required this.widget,
+    required this.state,
+    required this.focused,
+  });
 
   @override
   Element createElement() => _TreeWidgetElement(this);
@@ -338,12 +314,12 @@ class _TreeWidgetElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     final wWidget = widget as _TreeWidgetRenderWidget;
-    wWidget.widget._updateFlatNodes();
+    wWidget.state.updateFlatNodes();
     final w = constraints.maxWidth == BoxConstraints.infinity
         ? 20
         : constraints.maxWidth;
     final h = constraints.maxHeight == BoxConstraints.infinity
-        ? wWidget.widget.flatNodes.length
+        ? wWidget.state.flatNodes.length
         : constraints.maxHeight;
     return constraints.constrain(Size(w, h));
   }
@@ -356,9 +332,10 @@ class _TreeWidgetElement extends Element {
     );
     final wWidget = widget as _TreeWidgetRenderWidget;
     final tWidget = wWidget.widget;
+    final state = wWidget.state;
 
-    tWidget._updateFlatNodes();
-    tWidget.adjustScroll(size.height);
+    state.updateFlatNodes();
+    state.adjustScroll(size.height);
 
     final activeSelectedStyle = wWidget.focused
         ? tWidget.selectedStyle
@@ -368,9 +345,9 @@ class _TreeWidgetElement extends Element {
             modifiers: tWidget.selectedStyle.modifiers,
           );
 
-    final nodes = tWidget.flatNodes;
-    final scrollOffsetVal = tWidget.scrollOffset;
-    final selIdx = tWidget.selectedIndex;
+    final nodes = state.flatNodes;
+    final scrollOffsetVal = state.scrollOffset;
+    final selIdx = state.selectedIndex;
 
     for (var i = 0; i < size.height; i++) {
       final nodeIdx = scrollOffsetVal + i;
@@ -438,25 +415,5 @@ class _TreeWidgetElement extends Element {
         );
       }
     }
-  }
-}
-
-/// Extension to manage scroll offsets for [TreeWidget].
-extension TreeWidgetScrollExtension on TreeWidget {
-  /// Adjusts the scroll offset to keep the selected item visible.
-  void adjustScroll(int viewportHeight) {
-    final nodes = flatNodes;
-    if (nodes.isEmpty || viewportHeight <= 0) return;
-    selectedIndex = selectedIndex.clamp(0, nodes.length - 1);
-
-    if (selectedIndex < scrollOffset) {
-      scrollOffset = selectedIndex;
-    } else if (selectedIndex >= scrollOffset + viewportHeight) {
-      scrollOffset = selectedIndex - viewportHeight + 1;
-    }
-    scrollOffset = scrollOffset.clamp(
-      0,
-      (nodes.length - viewportHeight).clamp(0, nodes.length),
-    );
   }
 }

@@ -1812,6 +1812,9 @@ class SearchOverlayState extends State<SearchOverlay> {
               showScrollbar: true,
               selectedIndex: selectedIndex,
               onSelect: (index) {
+                setState(() {
+                  selectedIndex = index;
+                });
                 widget.onMatchSelected(filteredSpans[index]);
               },
               children: filteredSpans

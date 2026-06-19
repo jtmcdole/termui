@@ -6,25 +6,6 @@ import '../layout.dart';
 import '../event.dart' hide Modifier;
 import 'text.dart';
 
-class _ListViewState {
-  int selectedIndex;
-  int? hoveredIndex;
-  int scrollOffset = 0;
-
-  _ListViewState({required this.selectedIndex, this.hoveredIndex});
-
-  void adjustScroll(int viewportHeight, int itemCount) {
-    if (itemCount <= 0 || viewportHeight <= 0) return;
-    selectedIndex = selectedIndex.clamp(0, itemCount - 1);
-
-    if (selectedIndex < scrollOffset) {
-      scrollOffset = selectedIndex;
-    } else if (selectedIndex >= scrollOffset + viewportHeight) {
-      scrollOffset = selectedIndex - viewportHeight + 1;
-    }
-  }
-}
-
 /// A scrollable list of child widgets.
 class ListView extends Widget {
   /// The child widgets inside the list.
@@ -39,8 +20,11 @@ class ListView extends Widget {
   /// The style applied to the hovered list item, if any.
   final Style? hoveredStyle;
 
-  final int _initialSelectedIndex;
-  final int? _initialHoveredIndex;
+  /// The initially selected item index.
+  final int initialSelectedIndex;
+
+  /// The initially hovered item index.
+  final int? initialHoveredIndex;
 
   /// Whether to render a vertical scrollbar on the right edge.
   final bool showScrollbar;
@@ -52,7 +36,7 @@ class ListView extends Widget {
   final void Function(int?)? onHover;
 
   /// Creates a [ListView] containing the specified [children].
-  const ListView({
+  ListView({
     super.key,
     required this.children,
     int selectedIndex = 0,
@@ -63,8 +47,8 @@ class ListView extends Widget {
     this.showScrollbar = false,
     this.onSelect,
     this.onHover,
-  }) : _initialSelectedIndex = selectedIndex,
-       _initialHoveredIndex = hoveredIndex;
+  }) : initialSelectedIndex = selectedIndex,
+       initialHoveredIndex = hoveredIndex;
 
   /// Creates a [ListView] from a list of raw string [items].
   factory ListView.fromStrings(
@@ -120,32 +104,6 @@ class ListView extends Widget {
     );
   }
 
-  static final _stateExpando = Expando<_ListViewState>();
-
-  _ListViewState get _state {
-    return _stateExpando[this] ??= _ListViewState(
-      selectedIndex: _initialSelectedIndex,
-      hoveredIndex: _initialHoveredIndex,
-    );
-  }
-
-  /// The currently selected item index.
-  int get selectedIndex => _state.selectedIndex;
-  set selectedIndex(int val) => _state.selectedIndex = val;
-
-  /// The currently hovered item index, if any.
-  int? get hoveredIndex => _state.hoveredIndex;
-  set hoveredIndex(int? val) => _state.hoveredIndex = val;
-
-  /// The current scroll offset, representing the index of the first visible item.
-  int get scrollOffset => _state.scrollOffset;
-  set scrollOffset(int val) => _state.scrollOffset = val;
-
-  /// Updates scroll offset based on selected index to keep selection visible.
-  void adjustScroll(int viewportHeight) {
-    _state.adjustScroll(viewportHeight, children.length);
-  }
-
   @override
   Element createElement() => ListViewElement(this);
 }
@@ -158,19 +116,53 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
   /// The indices of the currently visible items.
   List<int> visibleIndices = [];
 
+  /// The current vertical scroll offset (index of top visible item).
+  int scrollOffset = 0;
+
+  /// The currently selected list item index.
+  int selectedIndex = 0;
+
+  /// The index of the item currently being hovered over, if any.
+  int? hoveredIndex;
+
   /// Creates a [ListViewElement] for [widget].
   ListViewElement(ListView super.widget);
 
   @override
   void mount(Element? parent) {
+    final listView = widget as ListView;
+    selectedIndex = listView.initialSelectedIndex;
+    hoveredIndex = listView.initialHoveredIndex;
     super.mount(parent);
     rebuild();
   }
 
   @override
   void update(Widget newWidget) {
+    final oldListView = widget as ListView;
+    final newListView = newWidget as ListView;
+
+    if (newListView.initialSelectedIndex != oldListView.initialSelectedIndex) {
+      selectedIndex = newListView.initialSelectedIndex;
+    }
+
     super.update(newWidget);
     rebuild();
+  }
+
+  /// Adjusts the scroll offset to ensure the currently selected item is visible
+  /// within the [viewportHeight].
+  void adjustScroll(int viewportHeight) {
+    final listView = widget as ListView;
+    final itemCount = listView.children.length;
+    if (itemCount <= 0 || viewportHeight <= 0) return;
+    selectedIndex = selectedIndex.clamp(0, itemCount - 1);
+
+    if (selectedIndex < scrollOffset) {
+      scrollOffset = selectedIndex;
+    } else if (selectedIndex >= scrollOffset + viewportHeight) {
+      scrollOffset = selectedIndex - viewportHeight + 1;
+    }
   }
 
   @override
@@ -217,13 +209,13 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
         ? constraints.maxHeight
         : listView.children.length;
 
-    listView.adjustScroll(height);
+    adjustScroll(height);
 
     visibleIndices = [];
     final childConstraints = BoxConstraints.tight(Size(width, 1));
 
     for (var i = 0; i < height; i++) {
-      final itemIdx = listView.scrollOffset + i;
+      final itemIdx = scrollOffset + i;
       if (itemIdx >= childElements.length) break;
 
       final childElement = childElements[itemIdx];
@@ -252,8 +244,8 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
       // Get the spatial coordinate calculated during performLayout
       final childOffset = child.relativeOffset;
 
-      final isSelected = itemIdx == listView.selectedIndex;
-      final isHovered = itemIdx == listView.hoveredIndex;
+      final isSelected = itemIdx == selectedIndex;
+      final isHovered = itemIdx == hoveredIndex;
 
       var style = listView.itemStyle;
       if (isSelected) {
@@ -271,15 +263,25 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
       );
 
       // Paint child
+      // Provide the background and foreground via InheritedTheme or just write it first.
+      // But we can just use the target style as the default for the child
+      // However since this is legacy code, we paint child on top of background
       child.paint(buffer, offset + childOffset);
 
-      // Merge style onto the written cells
-      for (var col = 0; col < w; col++) {
-        final cellX = offset.dx.toInt() + col;
-        final cellY = offset.dy.toInt() + i;
-        final cell = buffer.getCell(cellX, cellY);
-        if (cell != null) {
-          cell.style = style.merge(cell.style);
+      // Apply the inherited style to the text
+      // Instead of reading every cell, we can just use composite buffer or accept that child.paint wrote with correct styles.
+      // For brevity and correct O(1) text rendering, let's just write the child again?
+      // Wait, we can't change child's render pipeline here, so we must mutate cells.
+      // But we can optimize to only merge if the style isn't empty!
+      if (style != Style.empty) {
+        for (var col = 0; col < w; col++) {
+          final cell = buffer.getCell(
+            offset.dx.toInt() + col,
+            offset.dy.toInt() + i,
+          );
+          if (cell != null) {
+            cell.style = style.merge(cell.style);
+          }
         }
       }
     }
@@ -290,7 +292,7 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
       if (total > viewportHeight) {
         final thumbSize = max(1, (viewportHeight * viewportHeight) ~/ total);
         final maxScrollOffset = total - viewportHeight;
-        final scrollPercent = listView.scrollOffset / maxScrollOffset;
+        final scrollPercent = scrollOffset / maxScrollOffset;
         final thumbOffset = (scrollPercent * (viewportHeight - thumbSize))
             .round();
 
@@ -317,37 +319,35 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
   void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
     final listView = widget as ListView;
     if (event.button == MouseButton.wheelUp) {
-      listView.scrollOffset = max(0, listView.scrollOffset - 1);
-      if (listView.selectedIndex >=
-          listView.scrollOffset + size.height.toInt()) {
-        listView.selectedIndex =
-            listView.scrollOffset + size.height.toInt() - 1;
+      scrollOffset = max(0, scrollOffset - 1);
+      if (selectedIndex >= scrollOffset + size.height.toInt()) {
+        selectedIndex = scrollOffset + size.height.toInt() - 1;
       }
       rebuild();
     } else if (event.button == MouseButton.wheelDown) {
-      listView.scrollOffset = min(
+      scrollOffset = min(
         max(0, listView.children.length - size.height.toInt()),
-        listView.scrollOffset + 1,
+        scrollOffset + 1,
       );
-      if (listView.selectedIndex < listView.scrollOffset) {
-        listView.selectedIndex = listView.scrollOffset;
+      if (selectedIndex < scrollOffset) {
+        selectedIndex = scrollOffset;
       }
       rebuild();
     } else if (event.type == MouseEventType.press &&
         event.button == MouseButton.left) {
-      final clickedIndex = listView.scrollOffset + localY;
+      final clickedIndex = scrollOffset + localY;
       if (clickedIndex >= 0 && clickedIndex < listView.children.length) {
-        listView.selectedIndex = clickedIndex;
+        selectedIndex = clickedIndex;
         listView.onSelect?.call(clickedIndex);
         rebuild();
       }
     } else if (event.type == MouseEventType.move ||
         event.type == MouseEventType.drag) {
-      final hoveredIndex = listView.scrollOffset + localY;
-      if (hoveredIndex >= 0 && hoveredIndex < listView.children.length) {
-        if (listView.hoveredIndex != hoveredIndex) {
-          listView.hoveredIndex = hoveredIndex;
-          listView.onHover?.call(hoveredIndex);
+      final hoveredIdx = scrollOffset + localY;
+      if (hoveredIdx >= 0 && hoveredIdx < listView.children.length) {
+        if (hoveredIndex != hoveredIdx) {
+          hoveredIndex = hoveredIdx;
+          listView.onHover?.call(hoveredIdx);
           rebuild();
         }
       }
@@ -372,19 +372,51 @@ class _RawListWidget extends ListView {
   }) : super(children: const []);
 
   @override
-  void adjustScroll(int viewportHeight) {
-    _state.adjustScroll(viewportHeight, lines.length);
-  }
-
-  @override
   Element createElement() => _RawListWidgetElement(this);
 }
 
-class _RawListWidgetElement extends Element
+class _RawListWidgetElement extends LeafElement
     implements MouseEventHandlerWithArea {
   List<int> visibleIndices = [];
 
+  int scrollOffset = 0;
+  int selectedIndex = 0;
+  int? hoveredIndex;
+
   _RawListWidgetElement(_RawListWidget super.widget);
+
+  @override
+  void mount(Element? parent) {
+    final listView = widget as _RawListWidget;
+    selectedIndex = listView.initialSelectedIndex;
+    hoveredIndex = listView.initialHoveredIndex;
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    final oldListView = widget as _RawListWidget;
+    final newListView = newWidget as _RawListWidget;
+
+    if (newListView.initialSelectedIndex != oldListView.initialSelectedIndex) {
+      selectedIndex = newListView.initialSelectedIndex;
+    }
+    super.update(newWidget);
+  }
+
+  void adjustScroll(int viewportHeight) {
+    final rawWidget = widget as _RawListWidget;
+    final itemCount = rawWidget.lines.length;
+    if (itemCount <= 0 || viewportHeight <= 0) return;
+    selectedIndex = selectedIndex.clamp(0, itemCount - 1);
+
+    if (selectedIndex < scrollOffset) {
+      scrollOffset = selectedIndex;
+    } else if (selectedIndex >= scrollOffset + viewportHeight) {
+      scrollOffset = selectedIndex - viewportHeight + 1;
+    }
+  }
 
   @override
   Size performLayout(BoxConstraints constraints) {
@@ -394,11 +426,11 @@ class _RawListWidgetElement extends Element
         ? constraints.maxHeight
         : rawWidget.lines.length;
 
-    rawWidget.adjustScroll(height);
+    adjustScroll(height);
 
     visibleIndices = [];
     for (var i = 0; i < height; i++) {
-      final itemIdx = rawWidget.scrollOffset + i;
+      final itemIdx = scrollOffset + i;
       if (itemIdx >= rawWidget.lines.length) break;
       visibleIndices.add(itemIdx);
     }
@@ -413,8 +445,8 @@ class _RawListWidgetElement extends Element
 
     for (var i = 0; i < visibleIndices.length; i++) {
       final itemIdx = visibleIndices[i];
-      final isSelected = itemIdx == rawWidget.selectedIndex;
-      final isHovered = itemIdx == rawWidget.hoveredIndex;
+      final isSelected = itemIdx == selectedIndex;
+      final isHovered = itemIdx == hoveredIndex;
       final text = rawWidget.lines[itemIdx];
 
       final chars = text.characters;
@@ -443,7 +475,7 @@ class _RawListWidgetElement extends Element
       if (total > viewportHeight) {
         final thumbSize = max(1, (viewportHeight * viewportHeight) ~/ total);
         final maxScrollOffset = total - viewportHeight;
-        final scrollPercent = rawWidget.scrollOffset / maxScrollOffset;
+        final scrollPercent = scrollOffset / maxScrollOffset;
         final thumbOffset = (scrollPercent * (viewportHeight - thumbSize))
             .round();
 
@@ -470,37 +502,35 @@ class _RawListWidgetElement extends Element
   void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
     final rawWidget = widget as _RawListWidget;
     if (event.button == MouseButton.wheelUp) {
-      rawWidget.scrollOffset = max(0, rawWidget.scrollOffset - 1);
-      if (rawWidget.selectedIndex >=
-          rawWidget.scrollOffset + size.height.toInt()) {
-        rawWidget.selectedIndex =
-            rawWidget.scrollOffset + size.height.toInt() - 1;
+      scrollOffset = max(0, scrollOffset - 1);
+      if (selectedIndex >= scrollOffset + size.height.toInt()) {
+        selectedIndex = scrollOffset + size.height.toInt() - 1;
       }
       rebuild();
     } else if (event.button == MouseButton.wheelDown) {
-      rawWidget.scrollOffset = min(
+      scrollOffset = min(
         max(0, rawWidget.lines.length - size.height.toInt()),
-        rawWidget.scrollOffset + 1,
+        scrollOffset + 1,
       );
-      if (rawWidget.selectedIndex < rawWidget.scrollOffset) {
-        rawWidget.selectedIndex = rawWidget.scrollOffset;
+      if (selectedIndex < scrollOffset) {
+        selectedIndex = scrollOffset;
       }
       rebuild();
     } else if (event.type == MouseEventType.press &&
         event.button == MouseButton.left) {
-      final clickedIndex = rawWidget.scrollOffset + localY;
+      final clickedIndex = scrollOffset + localY;
       if (clickedIndex >= 0 && clickedIndex < rawWidget.lines.length) {
-        rawWidget.selectedIndex = clickedIndex;
+        selectedIndex = clickedIndex;
         rawWidget.onSelect?.call(clickedIndex);
         rebuild();
       }
     } else if (event.type == MouseEventType.move ||
         event.type == MouseEventType.drag) {
-      final hoveredIndex = rawWidget.scrollOffset + localY;
-      if (hoveredIndex >= 0 && hoveredIndex < rawWidget.lines.length) {
-        if (rawWidget.hoveredIndex != hoveredIndex) {
-          rawWidget.hoveredIndex = hoveredIndex;
-          rawWidget.onHover?.call(hoveredIndex);
+      final hoveredIdx = scrollOffset + localY;
+      if (hoveredIdx >= 0 && hoveredIdx < rawWidget.lines.length) {
+        if (hoveredIndex != hoveredIdx) {
+          hoveredIndex = hoveredIdx;
+          rawWidget.onHover?.call(hoveredIdx);
           rebuild();
         }
       }

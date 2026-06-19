@@ -6,7 +6,6 @@ import 'package:termui/ui/style.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/widget_toolkit.dart';
 import 'package:termui/ui/widgets/io/file_tree_helper.dart';
-import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// True if the current application is compiled to run on the web.
@@ -84,12 +83,6 @@ class FileTreeExample extends WidgetBookExample {
         ),
       ),
     ]);
-  }
-
-  @override
-  bool handleKeyEvent(ui.KeyEvent event) {
-    _treeWidget?.handleKeyEvent(event);
-    return true;
   }
 
   @override

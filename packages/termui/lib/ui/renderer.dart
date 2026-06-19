@@ -133,11 +133,6 @@ class Renderer {
               out.write('\x1b[${y + 1};${runStart + 1}H');
             }
 
-            if (activeStyle != Style.empty) {
-              out.write('\x1b[0m');
-              activeStyle = Style.empty;
-            }
-
             // Render each cell in the run
             for (var rx = runStart; rx < runEnd; rx++) {
               final cell = backCells[rowOffset + rx];

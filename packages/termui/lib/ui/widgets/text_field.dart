@@ -1001,10 +1001,14 @@ class _TextFieldRenderWidgetElement extends Element {
       if (lineIdx >= lines.length) break;
 
       final line = lines[lineIdx];
-      final charsList = line.characters.toList();
+      final charIter = line.characters.iterator;
+      var lineLen = 0;
 
       for (var x = 0; x < w; x++) {
-        final char = x < charsList.length ? charsList[x] : ' ';
+        final hasChar = charIter.moveNext();
+        final char = hasChar ? charIter.current : ' ';
+        if (hasChar) lineLen++;
+
         final isCursor =
             textField.focused && lineIdx == cursorLine && x == cursorColumn;
         final cellStyle = isCursor ? textField.cursorStyle : textField.style;
@@ -1018,8 +1022,8 @@ class _TextFieldRenderWidgetElement extends Element {
       // Render cursor at end of line if needed
       if (textField.focused &&
           lineIdx == cursorLine &&
-          cursorColumn >= charsList.length) {
-        final cursorX = charsList.length;
+          cursorColumn >= lineLen) {
+        final cursorX = lineLen;
         if (cursorX < w) {
           final cell = buffer.getCell(offset.dx + cursorX, offset.dy + y);
           if (cell != null) {
