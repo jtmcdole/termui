@@ -46,23 +46,30 @@ void main() {
 
   group('ListView tests', () {
     test('Scrolling offset changes based on index selection', () {
-      final list = ListView.fromStrings(['A', 'B', 'C', 'D', 'E']);
+      final listElement =
+          ListView.fromStrings(['A', 'B', 'C', 'D', 'E']).createElement()
+              as ListViewElement;
+      // final list = ListView.fromStrings(['A', 'B', 'C', 'D', 'E']);
       // Viewport height is 3
-      list.selectedIndex = 0;
-      list.adjustScroll(3);
-      expect(list.scrollOffset, equals(0));
+      listElement.selectedIndex = 0;
+      listElement.adjustScroll(3);
+      expect(listElement.scrollOffset, equals(0));
 
-      list.selectedIndex = 2;
-      list.adjustScroll(3);
-      expect(list.scrollOffset, equals(0));
+      listElement.selectedIndex = 2;
+      listElement.adjustScroll(3);
+      expect(listElement.scrollOffset, equals(0));
 
-      list.selectedIndex = 3;
-      list.adjustScroll(3); // Moves scrollOffset down so index 3 is visible
-      expect(list.scrollOffset, equals(1));
+      listElement.selectedIndex = 3;
+      listElement.adjustScroll(
+        3,
+      ); // Moves scrollOffset down so index 3 is visible
+      expect(listElement.scrollOffset, equals(1));
 
-      list.selectedIndex = 1;
-      list.adjustScroll(3); // Moves scrollOffset up so index 1 is visible
-      expect(list.scrollOffset, equals(1));
+      listElement.selectedIndex = 1;
+      listElement.adjustScroll(
+        3,
+      ); // Moves scrollOffset up so index 1 is visible
+      expect(listElement.scrollOffset, equals(1));
     });
   });
 
@@ -1069,12 +1076,16 @@ void main() {
         isExpanded: true,
       );
 
-      final tree = TreeWidget<String>(root: root, showRoot: true);
+      final treeElement =
+          TreeWidget<String>(root: root, showRoot: true).createElement()
+              as StatefulElement;
+      treeElement.mount(null);
+      final tree = treeElement.state as TreeWidgetState;
 
       expect(tree.flatNodes.length, equals(4));
 
       final buffer = Buffer(25, 4);
-      ElementWidget(tree)
+      ElementWidget(treeElement.widget)
         ..layout(BoxConstraints.tight(const Size(25, 4)))
         ..paint(buffer, Offset.zero);
 
@@ -1102,7 +1113,11 @@ void main() {
         isExpanded: true,
       );
 
-      final tree = TreeWidget<String>(root: root, showRoot: true);
+      final treeElement =
+          TreeWidget<String>(root: root, showRoot: true).createElement()
+              as StatefulElement;
+      treeElement.mount(null);
+      final tree = treeElement.state as TreeWidgetState;
 
       expect(tree.flatNodes.length, equals(2));
       expect(tree.selectedIndex, equals(0));
@@ -1128,19 +1143,21 @@ void main() {
 
     test('Focused and unfocused selection styling', () {
       final root = TreeNode<String>(label: 'root', value: 'rt');
-      final tree = TreeWidget<String>(
+      final treeWidget = TreeWidget<String>(
         root: root,
         selectedStyle: const Style(
           foreground: CharmColors.pepper,
           background: CharmColors.charple,
         ),
       );
+      final treeElement = treeWidget.createElement() as StatefulElement;
+      treeElement.mount(null);
 
       // By default, it's focused
-      expect(tree.focused, isTrue);
+      expect((treeElement.widget as TreeWidget).focused, isTrue);
 
       final bufferFocused = Buffer(10, 1);
-      ElementWidget(tree)
+      ElementWidget(treeElement.widget)
         ..layout(BoxConstraints.tight(const Size(10, 1)))
         ..paint(bufferFocused, Offset.zero);
       expect(
@@ -1152,9 +1169,18 @@ void main() {
       );
 
       // Set focused to false
-      tree.focused = false;
+      treeElement.update(
+        TreeWidget<String>(
+          root: root,
+          focused: false,
+          selectedStyle: const Style(
+            foreground: CharmColors.pepper,
+            background: CharmColors.charple,
+          ),
+        ),
+      );
       final bufferUnfocused = Buffer(10, 1);
-      ElementWidget(tree)
+      ElementWidget(treeElement.widget)
         ..layout(BoxConstraints.tight(const Size(10, 1)))
         ..paint(bufferUnfocused, Offset.zero);
       expect(

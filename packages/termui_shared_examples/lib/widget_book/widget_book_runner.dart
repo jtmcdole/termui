@@ -15,6 +15,7 @@ import 'package:termui/perf/fs_locator.dart';
 import 'package:termui/ui/termui_debug.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_examples.dart';
 import 'package:termui_recorder/termui_recorder.dart';
+import 'package:termui/ui/renderer.dart';
 
 /// Pre-defined pages for the shared widget book.
 enum DemoPage {
@@ -92,7 +93,12 @@ Future<void> runWidgetBookShared(
 
   final appKey = GlobalKey<_WidgetBookAppState>();
 
-  final sceneManager = SceneManager(terminal)..enableMouseTracking = true;
+  final sceneManager = SceneManager(
+    terminal,
+    renderingMode: isInline
+        ? RenderingMode.inline
+        : RenderingMode.alternateScreen,
+  )..enableMouseTracking = true;
 
   final runner = PromptRunner<void>(
     terminal: terminal,

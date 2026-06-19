@@ -203,8 +203,7 @@ class _AnimatedButtonElement extends Element {
     }
 
     // 2. Draw button text label centered inside the viewport
-    final chars = state.widget.text.characters.toList();
-    final textLen = chars.length;
+    final textLen = state.widget.text.characters.length;
     final startX = max(0, (W - textLen) ~/ 2);
     final startY = max(0, (H - 1) ~/ 2);
     viewport.writeString(startX, startY, state.widget.text, baseStyle);

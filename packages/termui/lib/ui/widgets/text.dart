@@ -214,9 +214,16 @@ class Text extends Widget {
   }
 }
 
+class _RenderLine {
+  final String visibleChars;
+  final int startX;
+
+  _RenderLine(this.visibleChars, this.startX);
+}
+
 /// An element that represents a [Text] widget.
 class TextElement extends Element {
-  List<String> _cachedLines = [];
+  List<_RenderLine> _cachedLines = [];
 
   /// Creates a text element for a [Text] widget.
   TextElement(Text super.widget);
@@ -238,26 +245,61 @@ class TextElement extends Element {
         ? 999999
         : constraints.maxWidth;
 
+    List<String> textLines;
     if (!textWidget.wrap) {
-      _cachedLines = [textWidget.data];
+      textLines = [textWidget.data];
     } else {
-      _cachedLines = textWidget._wrapText(textWidget.data, width);
+      textLines = textWidget._wrapText(textWidget.data, width);
     }
 
     final limit = textWidget.maxLines != null
-        ? min(textWidget.maxLines!, _cachedLines.length)
-        : _cachedLines.length;
+        ? min(textWidget.maxLines!, textLines.length)
+        : textLines.length;
 
     var measuredWidth = 0;
+    final lineMeasurements = <int>[];
     for (var i = 0; i < limit; i++) {
-      final lineW = measureStringWidth(_cachedLines[i]);
+      final lineW = measureStringWidth(textLines[i]);
+      lineMeasurements.add(lineW);
       if (lineW > measuredWidth) {
         measuredWidth = lineW;
       }
     }
 
     final height = limit;
-    return constraints.constrain(Size(measuredWidth, height));
+    final resolvedSize = constraints.constrain(Size(measuredWidth, height));
+
+    // Now that final size is known, precompute render lines
+    _cachedLines = [];
+    final areaWidth = resolvedSize.width;
+    for (var i = 0; i < limit; i++) {
+      final line = textLines[i];
+      final lineWidth = lineMeasurements[i];
+
+      var startX = 0;
+      switch (textWidget.textAlign) {
+        case TextAlign.left:
+          startX = 0;
+          break;
+        case TextAlign.right:
+          startX = max(0, areaWidth - lineWidth);
+          break;
+        case TextAlign.center:
+          startX = max(0, (areaWidth - lineWidth) ~/ 2);
+          break;
+        case TextAlign.justify:
+          startX = 0;
+          break;
+      }
+
+      final availableWidth = areaWidth - startX;
+      final visibleChars = lineWidth > availableWidth
+          ? textWidget._truncateToWidth(line, availableWidth)
+          : line;
+      _cachedLines.add(_RenderLine(visibleChars, startX));
+    }
+
+    return resolvedSize;
   }
 
   @override
@@ -272,32 +314,11 @@ class TextElement extends Element {
     for (var i = 0; i < _cachedLines.length; i++) {
       if (i >= limit) break;
       final line = _cachedLines[i];
-      final lineWidth = measureStringWidth(line);
 
-      var startX = 0;
-      switch (textWidget.textAlign) {
-        case TextAlign.left:
-          startX = 0;
-          break;
-        case TextAlign.right:
-          startX = max(0, area.width - lineWidth);
-          break;
-        case TextAlign.center:
-          startX = max(0, (area.width - lineWidth) ~/ 2);
-          break;
-        case TextAlign.justify:
-          startX = 0;
-          break;
-      }
-
-      final visibleChars = textWidget._truncateToWidth(
-        line,
-        area.width - startX,
-      );
       buffer.writeString(
-        area.x + startX,
+        area.x + line.startX,
         area.y + i,
-        visibleChars,
+        line.visibleChars,
         textWidget.style,
       );
     }
