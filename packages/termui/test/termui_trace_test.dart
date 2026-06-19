@@ -18,20 +18,57 @@ void main() {
       FocusManager.instance.setPrimaryFocus(null);
 
       // Create mock JSON events
-      final jsonTrace = [
-        {
-          "ph": "B",
-          "name": "MainTask",
-          "ts": 1000,
-          "cat": "TUI",
-          "args": {"metaKey": "metaVal"},
-        },
-        {"ph": "E", "name": "MainTask", "ts": 3000, "cat": "TUI"},
-        {"ph": "B", "name": "KeyEvent", "ts": 1500, "cat": "event"},
-        {"ph": "E", "name": "KeyEvent", "ts": 1600, "cat": "event"},
+      final rawEvents = [
+        TraceEvent(
+          name: 'KeyEvent',
+          phase: 'B',
+          category: 'event',
+          timestamp: 999000,
+          tid: 1,
+          args: {},
+        ),
+        TraceEvent(
+          name: 'MainTask',
+          phase: 'B',
+          category: 'tui',
+          timestamp: 1000000,
+          tid: 1,
+          args: {'metaKey': 'metaVal'},
+        ),
+        TraceEvent(
+          name: 'SubTask',
+          phase: 'B',
+          category: 'tui',
+          timestamp: 1000500,
+          tid: 1,
+          args: {},
+        ),
+        TraceEvent(
+          name: 'SubTask',
+          phase: 'E',
+          category: 'tui',
+          timestamp: 1001500,
+          tid: 1,
+          args: {},
+        ),
+        TraceEvent(
+          name: 'MainTask',
+          phase: 'E',
+          category: 'tui',
+          timestamp: 1002000,
+          tid: 1,
+          args: {},
+        ),
+        TraceEvent(
+          name: 'KeyEvent',
+          phase: 'E',
+          category: 'event',
+          timestamp: 1003000,
+          tid: 1,
+          args: {},
+        ),
       ];
 
-      final rawEvents = jsonTrace.map((e) => TraceEvent.fromJson(e)).toList();
       final baseTime = rawEvents.map((e) => e.timestamp).reduce(min);
       final events = rawEvents.map((e) {
         return TraceEvent(
@@ -39,7 +76,8 @@ void main() {
           phase: e.phase,
           category: e.category,
           timestamp: e.timestamp - baseTime,
-          metadata: e.metadata,
+          tid: e.tid,
+          args: e.args,
         );
       }).toList();
 
@@ -120,15 +158,15 @@ void main() {
           expect(state.offsetX, lessThan(pannedRight));
 
           // 3. Test Hover Inspector
-          // Hover main task (depth 0, row terminal y = 4, x = 10)
-          tester.mouseMove(10, 4, drag: false);
+          // Hover main task (depth 1, row terminal y = 4, x = 25)
+          tester.mouseMove(25, 5, drag: false);
           await tester.pumpAndSettle();
           expect(state.hoveredSpan, isNotNull);
           expect(state.hoveredSpan!.name, equals('MainTask'));
-          expect(state.hoveredSpan!.metadata['metaKey'], equals('metaVal'));
+          expect(state.hoveredSpan!.args['metaKey'], equals('metaVal'));
 
-          // Hover input event key event (row terminal y = 16, x = 23)
-          tester.mouseMove(23, 16, drag: false);
+          // Hover input event key event (row terminal y = 3, x = 10)
+          tester.mouseMove(10, 4, drag: false);
           await tester.pumpAndSettle();
           expect(state.hoveredSpan, isNotNull);
           expect(state.hoveredSpan!.name, equals('KeyEvent'));
@@ -278,6 +316,42 @@ void main() {
           expect(
             tester.backend.buffer,
             matchesAnsiGolden('test/goldens/termui_trace_viewer_base.ansi'),
+          );
+
+          tester.sendKey(LogicalKey.character('q'));
+          await tester.pumpAndSettle();
+        });
+
+        await runnerFuture;
+      });
+    });
+
+    test('Golden Screen Test: Trace Viewer Inspector Layout', () async {
+      final tester = TerminalTester(size: const Point(80, 24));
+      tester.run(() async {
+        globalSceneManager = SceneManager(
+          tester.terminal,
+          renderingMode: RenderingMode.alternateScreen,
+        );
+        final app = TraceViewerApp(spans: spans, minTs: minTs, maxTs: maxTs);
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pumpAndSettle();
+
+          // Hover main task (depth 1, row terminal y = 4, x = 25)
+          tester.mouseMove(25, 5, drag: false);
+          await tester.pumpAndSettle();
+
+          expect(
+            tester.backend.buffer,
+            matchesAnsiGolden(
+              'test/goldens/termui_trace_viewer_inspector.ansi',
+            ),
           );
 
           tester.sendKey(LogicalKey.character('q'));

@@ -7,28 +7,29 @@ import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as evt;
 import 'package:termui/ui/renderer.dart';
 
-/// Custom data model representing a parsed trace event.
 class TraceEvent {
   final String name;
   final String phase;
   final String category;
   final int timestamp;
-  final Map<String, String> metadata;
+  final int tid;
+  final Map<String, String> args;
 
   TraceEvent({
     required this.name,
     required this.phase,
     required this.category,
     required this.timestamp,
-    required this.metadata,
+    required this.tid,
+    required this.args,
   });
 
   factory TraceEvent.fromJson(Map<String, dynamic> json) {
-    final args = json['args'] ?? json['metadata'];
-    final Map<String, String> meta = {};
-    if (args is Map) {
-      args.forEach((k, v) {
-        meta[k.toString()] = v.toString();
+    final argsRaw = json['args'] ?? json['metadata'];
+    final Map<String, String> parsedArgs = {};
+    if (argsRaw is Map) {
+      argsRaw.forEach((k, v) {
+        parsedArgs[k.toString()] = jsonEncode(v);
       });
     }
     return TraceEvent(
@@ -36,7 +37,8 @@ class TraceEvent {
       phase: json['ph'] as String? ?? 'i',
       category: json['cat'] as String? ?? 'TUI',
       timestamp: json['ts'] as int? ?? 0,
-      metadata: meta,
+      tid: json['tid'] as int? ?? 0,
+      args: parsedArgs,
     );
   }
 }
@@ -48,7 +50,9 @@ class TraceSpan {
   final int startUs;
   final int endUs;
   final int depth;
-  final Map<String, String> metadata;
+  final Map<String, String> args;
+
+  final String displayLabel;
 
   TraceSpan({
     required this.name,
@@ -56,8 +60,36 @@ class TraceSpan {
     required this.startUs,
     required this.endUs,
     required this.depth,
-    required this.metadata,
-  });
+    required this.args,
+    String? displayLabel,
+  }) : displayLabel = displayLabel ?? _computeDisplayLabel(name, args);
+
+  static String _computeDisplayLabel(String name, Map<String, String> args) {
+    if (args.containsKey('text')) {
+      // The text value might be JSON encoded with quotes, let's strip surrounding quotes if they exist, or just use it.
+      var text = args['text']!;
+      if (text.startsWith('"') && text.endsWith('"') && text.length >= 2) {
+        text = text.substring(1, text.length - 1);
+      }
+      final truncated = text.length > 20 ? '${text.substring(0, 17)}...' : text;
+      return '$name "$truncated"';
+    } else if (args.containsKey('widget')) {
+      var widgetStr = args['widget']!;
+      if (widgetStr.startsWith('"') &&
+          widgetStr.endsWith('"') &&
+          widgetStr.length >= 2) {
+        widgetStr = widgetStr.substring(1, widgetStr.length - 1);
+      }
+      return '$name <$widgetStr>';
+    }
+    return name;
+  }
+}
+
+class _StackEntry {
+  final TraceEvent event;
+  final int depth;
+  _StackEntry(this.event, this.depth);
 }
 
 /// Reconstructs TraceSpans from raw TraceEvents.
@@ -65,30 +97,54 @@ List<TraceSpan> computeSpans(List<TraceEvent> events) {
   final sorted = List<TraceEvent>.from(events)
     ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
+  final absoluteMaxTimestamp = sorted.isEmpty ? 0 : sorted.last.timestamp;
+
   final List<TraceSpan> spans = [];
-  final List<TraceEvent> stack = [];
+  final Map<int, List<_StackEntry>> activeStacksByTid = {};
 
   for (final event in sorted) {
+    final tid = event.tid;
+    activeStacksByTid.putIfAbsent(tid, () => []);
+    final stack = activeStacksByTid[tid]!;
+
     if (event.phase == 'B') {
-      stack.add(event);
+      stack.add(_StackEntry(event, stack.length));
     } else if (event.phase == 'E') {
       int matchIdx = -1;
       for (int i = stack.length - 1; i >= 0; i--) {
-        if (stack[i].name == event.name) {
+        if (stack[i].event.name == event.name) {
           matchIdx = i;
           break;
         }
       }
       if (matchIdx != -1) {
-        final begin = stack.removeAt(matchIdx);
+        // Pop orphaned children above the matched parent
+        while (stack.length > matchIdx + 1) {
+          final orphanEntry = stack.removeLast();
+          final orphanEvent = orphanEntry.event;
+          spans.add(
+            TraceSpan(
+              name: orphanEvent.name,
+              category: orphanEvent.category,
+              startUs: orphanEvent.timestamp,
+              endUs: event.timestamp, // Auto-closed at parent's end
+              depth: orphanEntry.depth,
+              args: orphanEvent.args,
+            ),
+          );
+        }
+
+        // Pop the actual matched parent
+        final beginEntry = stack.removeLast();
+        final begin = beginEntry.event;
         spans.add(
           TraceSpan(
             name: begin.name,
             category: begin.category,
             startUs: begin.timestamp,
             endUs: event.timestamp,
-            depth: matchIdx,
-            metadata: begin.metadata,
+            depth: beginEntry.depth,
+            args: begin.args,
           ),
         );
       }
@@ -100,7 +156,23 @@ List<TraceSpan> computeSpans(List<TraceEvent> events) {
           startUs: event.timestamp,
           endUs: event.timestamp + 1,
           depth: stack.length,
-          metadata: event.metadata,
+          args: event.args,
+        ),
+      );
+    }
+  }
+  for (final tid in activeStacksByTid.keys) {
+    for (final entry in activeStacksByTid[tid]!) {
+      final begin = entry.event;
+      spans.add(
+        TraceSpan(
+          name: begin.name,
+          category: begin.category,
+          startUs: begin.timestamp,
+          endUs:
+              absoluteMaxTimestamp, // Indicates missing 'E' phase is clamped to trace end
+          depth: entry.depth,
+          args: begin.args,
         ),
       );
     }
@@ -108,22 +180,55 @@ List<TraceSpan> computeSpans(List<TraceEvent> events) {
   return spans;
 }
 
-Style getCategoryStyle(String category, String name) {
-  final cat = '$category:$name'.toLowerCase();
-  if (cat.contains('build') || cat.contains('rebuild')) {
-    return const Style(foreground: Color(30, 144, 255)); // Blue
-  } else if (cat.contains('paint')) {
-    return const Style(foreground: Color(50, 205, 50)); // Green
-  } else if (cat.contains('compositor')) {
-    return const Style(foreground: Color(255, 0, 255)); // Magenta
-  } else if (cat.contains('layout')) {
-    return const Style(foreground: Color(255, 215, 0)); // Yellow
-  } else if (cat.contains('event') ||
-      cat.contains('key') ||
-      cat.contains('mouse')) {
-    return const Style(foreground: Color(0, 255, 255)); // Cyan
+int fnv1aHash(String string) {
+  int hash = 0x811c9dc5;
+  for (int i = 0; i < string.length; i++) {
+    hash ^= string.codeUnitAt(i);
+    hash = (hash * 0x01000193) & 0xFFFFFFFF;
   }
-  return const Style(foreground: Color(200, 200, 200));
+  return hash;
+}
+
+Color hslToRgb(double h, double s, double l) {
+  double c = (1 - (2 * l - 1).abs()) * s;
+  double x = c * (1 - ((h / 60.0) % 2.0 - 1).abs());
+  double m = l - c / 2.0;
+  double r = 0, g = 0, b = 0;
+  if (h >= 0 && h < 60) {
+    r = c;
+    g = x;
+    b = 0;
+  } else if (h >= 60 && h < 120) {
+    r = x;
+    g = c;
+    b = 0;
+  } else if (h >= 120 && h < 180) {
+    r = 0;
+    g = c;
+    b = x;
+  } else if (h >= 180 && h < 240) {
+    r = 0;
+    g = x;
+    b = c;
+  } else if (h >= 240 && h < 300) {
+    r = x;
+    g = 0;
+    b = c;
+  } else if (h >= 300 && h < 360) {
+    r = c;
+    g = 0;
+    b = x;
+  }
+  return Color(
+    ((r + m) * 255).round(),
+    ((g + m) * 255).round(),
+    ((b + m) * 255).round(),
+  );
+}
+
+Style getCategoryStyle(String category, String name) {
+  int h = fnv1aHash(name).abs() % 360;
+  return Style(foreground: hslToRgb(h.toDouble(), 0.75, 0.60));
 }
 
 void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
@@ -193,153 +298,11 @@ List<TraceSpan> _getCulledSpans(
   return visibleSpans;
 }
 
-bool isInputEvent(TraceSpan span) {
-  final name = span.name.toLowerCase();
-  final cat = span.category.toLowerCase();
-  return name.contains('event') ||
-      cat.contains('event') ||
-      name.contains('key') ||
-      name.contains('mouse');
-}
-
-/// An imperative canvas widget drawing the input events row.
-class InputEventsCanvas extends Widget {
-  final List<TraceSpan> spans;
-  final double offsetX;
-  final double zoomLevel;
-
-  const InputEventsCanvas({
-    super.key,
-    required this.spans,
-    required this.offsetX,
-    required this.zoomLevel,
-  });
-
-  @override
-  Element createElement() => InputEventsCanvasElement(this);
-
-  @override
-  int getIntrinsicHeight(int width) => 1;
-}
-
-class InputEventsCanvasElement extends Element {
-  InputEventsCanvasElement(super.widget);
-
-  @override
-  Size performLayout(BoxConstraints constraints) {
-    return constraints.constrain(Size(constraints.maxWidth, 1));
-  }
-
-  /// Paints the timeline events.
-  /// Uses [w.offsetX] (in microseconds) and [w.zoomLevel] (microseconds per column)
-  /// to map temporal spans into spatial cell columns.
-  @override
-  void performPaint(Buffer buffer, Offset offset) {
-    final w = widget as InputEventsCanvas;
-    final width = size.width;
-    final height = size.height;
-    final startX = offset.dx;
-    final startY = offset.dy;
-
-    void drawCell(int cx, int cy, String char, Style style) {
-      if (cx >= startX &&
-          cx < startX + width &&
-          cy >= startY &&
-          cy < startY + height) {
-        _safeSetCell(buffer, cx, cy, char, style);
-      }
-    }
-
-    final borderStyle = const Style(foreground: Color(120, 120, 120));
-    final bgStyle = const Style(background: Color(15, 15, 20));
-
-    // Clear buffer to empty spaces
-    for (var y = 0; y < height; y++) {
-      for (var x = 0; x < width; x++) {
-        drawCell(startX + x, startY + y, ' ', bgStyle);
-      }
-    }
-
-    // Paint left/right borders
-    for (var y = 0; y < height; y++) {
-      drawCell(startX, startY + y, '│', borderStyle);
-      drawCell(startX + width - 1, startY + y, '│', borderStyle);
-    }
-
-    final viewportStartUs = w.offsetX;
-    final viewportEndUs = w.offsetX + (width - 2) * w.zoomLevel;
-    final visibleSpans = _getCulledSpans(
-      w.spans,
-      viewportStartUs,
-      viewportEndUs,
-    );
-    final inputSpans = visibleSpans.where(isInputEvent).toList();
-
-    for (final span in inputSpans) {
-      final spanStartUs = span.startUs.toDouble();
-      final spanEndUs = span.endUs.toDouble();
-
-      final startCol = ((spanStartUs - w.offsetX) / w.zoomLevel).floor().clamp(
-        0,
-        width - 3,
-      );
-      final endCol = ((spanEndUs - w.offsetX) / w.zoomLevel).floor().clamp(
-        0,
-        width - 3,
-      );
-
-      final style = getCategoryStyle('event', span.name);
-
-      if (spanStartUs == spanEndUs) {
-        final x = startX + 1 + startCol;
-        final existing = buffer.getCell(x, startY);
-        final bg = existing?.style.background ?? const Color(15, 15, 20);
-        drawCell(x, startY, '│', style.merge(Style(background: bg)));
-        continue;
-      }
-
-      final fallbackStyle = style.merge(
-        const Style(background: Color(15, 15, 20)),
-      );
-
-      for (var col = startCol; col <= endCol; col++) {
-        final x = startX + 1 + col;
-        final cellStart = w.offsetX + col * w.zoomLevel;
-        final cellEnd = cellStart + w.zoomLevel;
-
-        final cov = _coverage(spanStartUs, spanEndUs, cellStart, cellEnd);
-        if (cov > 0) {
-          String char;
-          Style cellStyle = fallbackStyle;
-
-          if (cov > 0.99) {
-            char = '█';
-          } else {
-            if (startCol == endCol) {
-              char = cov <= 0.1 ? '│' : _getFractionalBlock(cov);
-            } else if (col == startCol) {
-              char = _getFractionalBlock(1.0 - cov);
-              cellStyle = style.merge(
-                Style(
-                  foreground: const Color(15, 15, 20),
-                  background: style.foreground ?? const Color(255, 255, 255),
-                ),
-              );
-            } else {
-              char = _getFractionalBlock(cov);
-            }
-          }
-          drawCell(x, startY, char, cellStyle);
-        }
-      }
-    }
-  }
-}
-
 /// An imperative canvas widget drawing the Main Isolate flame chart spans.
 class TimelineCanvas extends Widget {
   final List<TraceSpan> spans;
   final double offsetX;
+  final int offsetY;
   final double zoomLevel;
   final double? measureStartMs;
   final double? measureEndMs;
@@ -348,6 +311,7 @@ class TimelineCanvas extends Widget {
     super.key,
     required this.spans,
     required this.offsetX,
+    required this.offsetY,
     required this.zoomLevel,
     this.measureStartMs,
     this.measureEndMs,
@@ -395,14 +359,6 @@ class TimelineCanvasElement extends Element {
     }
 
     final borderStyle = const Style(foreground: Color(120, 120, 120));
-    final bgStyle = const Style(background: Color(15, 15, 20));
-
-    // Clear buffer to empty spaces
-    for (var y = 0; y < height; y++) {
-      for (var x = 0; x < width; x++) {
-        drawCell(startX + x, startY + y, ' ', bgStyle);
-      }
-    }
 
     // Paint left/right borders
     for (var y = 0; y < height; y++) {
@@ -417,12 +373,15 @@ class TimelineCanvasElement extends Element {
       viewportStartUs,
       viewportEndUs,
     );
-    final mainSpans = visibleSpans.where((s) => !isInputEvent(s)).toList();
+    final mainSpans = visibleSpans;
+
+    final Set<int> drawnCells = {};
 
     for (final span in mainSpans) {
       final depth = span.depth;
-      final y = startY + depth;
-      if (y >= startY + height) continue;
+      final visualY = depth - w.offsetY;
+      if (visualY < 0 || visualY >= height) continue;
+      final y = startY + visualY;
 
       final spanStartUs = span.startUs.toDouble();
       final spanEndUs = span.endUs.toDouble();
@@ -437,9 +396,13 @@ class TimelineCanvasElement extends Element {
 
       if (spanStartUs == spanEndUs) {
         final x = startX + 1 + startCol;
+        final cellKey = (x << 16) | y;
+        if (drawnCells.contains(cellKey)) continue;
+
         final existing = buffer.getCell(x, y);
-        final bg = existing?.style.background ?? const Color(15, 15, 20);
+        final bg = existing?.style.background;
         drawCell(x, y, '│', style.merge(Style(background: bg)));
+        drawnCells.add(cellKey);
         continue;
       }
 
@@ -447,15 +410,16 @@ class TimelineCanvasElement extends Element {
         background: style.foreground,
         foreground: Colors.white,
       );
-      final fallbackStyle = style.merge(
-        const Style(background: Color(15, 15, 20)),
-      );
+      final fallbackStyle = style;
 
-      final nameWithPrefix = '▼ ${span.name}';
+      final nameWithPrefix = '▼ ${span.displayLabel}';
       final spanColWidth = endCol - startCol + 1;
 
       for (var col = startCol; col <= endCol; col++) {
         final x = startX + 1 + col;
+        final cellKey = (x << 16) | y;
+        if (drawnCells.contains(cellKey)) continue;
+
         final cellStart = w.offsetX + col * w.zoomLevel;
         final cellEnd = cellStart + w.zoomLevel;
 
@@ -473,6 +437,7 @@ class TimelineCanvasElement extends Element {
             } else {
               char = ' ';
             }
+            drawnCells.add(cellKey);
           } else {
             if (startCol == endCol) {
               char = cov <= 0.1 ? '│' : _getFractionalBlock(cov);
@@ -481,13 +446,16 @@ class TimelineCanvasElement extends Element {
               char = _getFractionalBlock(1.0 - cov);
               cellStyle = style.merge(
                 Style(
-                  foreground: const Color(15, 15, 20),
+                  foreground: null,
                   background: style.foreground ?? const Color(255, 255, 255),
                 ),
               );
             } else {
               char = _getFractionalBlock(cov);
               cellStyle = fallbackStyle;
+            }
+            if (char == '│' || char == '█') {
+              drawnCells.add(cellKey);
             }
           }
           drawCell(x, y, char, cellStyle);
@@ -528,7 +496,7 @@ class TimelineCanvasElement extends Element {
         final cx = startX + leftCol + i;
         if (cx >= startX && cx < startX + width) {
           final existingCell = buffer.getCell(cx, caliperRow);
-          final bg = existingCell?.style.background ?? const Color(15, 15, 20);
+          final bg = existingCell?.style.background;
           _safeSetCell(
             buffer,
             cx,
@@ -541,7 +509,7 @@ class TimelineCanvasElement extends Element {
 
       for (var y = caliperRow + 1; y < startY + height; y++) {
         final ex1 = buffer.getCell(startX + leftCol, y);
-        final bg1 = ex1?.style.background ?? const Color(15, 15, 20);
+        final bg1 = ex1?.style.background;
         drawCell(
           startX + leftCol,
           y,
@@ -551,7 +519,7 @@ class TimelineCanvasElement extends Element {
 
         if (rightCol > leftCol) {
           final ex2 = buffer.getCell(startX + rightCol, y);
-          final bg2 = ex2?.style.background ?? const Color(15, 15, 20);
+          final bg2 = ex2?.style.background;
           drawCell(
             startX + rightCol,
             y,
@@ -584,7 +552,8 @@ Future<Map<String, Object>?> _parseTraceFile(String path) async {
           phase: ev.phase,
           category: ev.category,
           timestamp: ev.timestamp - baseTime,
-          metadata: ev.metadata,
+          tid: ev.tid,
+          args: ev.args,
         );
       }
     }
@@ -627,6 +596,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
 
   late double offsetX;
   late double zoomLevel;
+  int offsetY = 0;
 
   // Memoized search overlay state
   int _searchWindowW = 40;
@@ -983,10 +953,20 @@ class _TraceViewerAppState extends State<TraceViewerApp>
       return true;
     }
 
-    if (keyLower == 'w' ||
-        type == evt.KeyType.up ||
-        keyLower == '=' ||
-        keyLower == '+') {
+    if (keyLower == 'w' || type == evt.KeyType.up) {
+      setState(() {
+        offsetY = max(0, offsetY - 1);
+      });
+      return true;
+    }
+    if (keyLower == 's' || type == evt.KeyType.down) {
+      setState(() {
+        offsetY++;
+      });
+      return true;
+    }
+
+    if (keyLower == '=' || keyLower == '+') {
       final width = ((context as Element).size.width).toDouble();
       final centerCol = (width - 2) / 2.0;
       final focusTime = offsetX + centerCol * zoomLevel;
@@ -997,7 +977,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
       });
       return true;
     }
-    if (keyLower == 's' || type == evt.KeyType.down || keyLower == '-') {
+    if (keyLower == '-') {
       final width = ((context as Element).size.width).toDouble();
       final centerCol = (width - 2) / 2.0;
       final focusTime = offsetX + centerCol * zoomLevel;
@@ -1134,20 +1114,10 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     final hoveredTime = offsetX + (localX - 1) * zoomLevel;
     TraceSpan? hit;
 
-    final hoveredDepth = localY - 3;
-    if (localY >= 3 && localY <= H - 11 && hoveredDepth >= 0) {
+    final hoveredDepth = localY - 3 + offsetY;
+    if (localY >= 3 && localY <= H - 7 && hoveredDepth >= 0) {
       for (final span in spans!) {
         if (span.depth == hoveredDepth &&
-            !isInputEvent(span) &&
-            hoveredTime >= span.startUs &&
-            hoveredTime <= span.endUs) {
-          hit = span;
-          break;
-        }
-      }
-    } else if (localY == H - 9) {
-      for (final span in spans!) {
-        if (isInputEvent(span) &&
             hoveredTime >= span.startUs &&
             hoveredTime <= span.endUs) {
           hit = span;
@@ -1212,7 +1182,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
             }
 
             final tickTimeMs = (offsetX + col * zoomLevel) / 1000.0;
-            final label = '${tickTimeMs.toStringAsFixed(1)}ms';
+            final label = formatDuration(tickTimeMs);
 
             children.add(
               Expanded(
@@ -1250,55 +1220,118 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     );
   }
 
-  Widget buildInspectorPanel() {
-    String content;
-    if (hoveredSpan == null) {
-      content = 'No event hovered. Hover over a span to inspect details.';
+  String formatDuration(double ms) {
+    if (ms < 0.001) {
+      return '${(ms * 1000000).toStringAsFixed(1)} ns';
+    } else if (ms < 1.0) {
+      return '${(ms * 1000).toStringAsFixed(1)} μs';
     } else {
-      final span = hoveredSpan!;
-      final durMs = (span.endUs - span.startUs) / 1000.0;
-      final startMs = span.startUs / 1000.0;
-      final endMs = span.endUs / 1000.0;
-      var metaStr = '';
-      span.metadata.forEach((k, v) {
-        if (metaStr.isNotEmpty) {
-          metaStr += '\n  • $k: "$v"';
-        } else {
-          metaStr += '  • $k: "$v"';
-        }
-      });
-      if (metaStr.isEmpty) {
-        metaStr = '  • None';
-      }
-
-      content =
-          '[Hovered] ${span.name}\n'
-          'Duration: ${durMs.toStringAsFixed(3)}ms\n'
-          'Start: ${startMs.toStringAsFixed(3)}ms       | End: ${endMs.toStringAsFixed(3)}ms\n\n'
-          'Metadata:\n'
-          '$metaStr';
+      return '${ms.toStringAsFixed(2)} ms';
     }
+  }
 
+  Widget buildInspectorPanel() {
     return SizedBox(
-      height: 8,
-      child: DecoratedBox(
-        decoration: const BoxDecoration(
-          border: Border(
-            topChar: '─',
-            bottomChar: '─',
-            leftChar: '│',
-            rightChar: '│',
-            topLeftChar: '├',
-            topRightChar: '┤',
-            bottomLeftChar: '└',
-            bottomRightChar: '┘',
-            style: Style(foreground: Color(120, 120, 120)),
-          ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 1),
-          child: Text(content, style: const Style(foreground: Colors.white)),
-        ),
+      height: 6,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final maxWidth = constraints.maxWidth;
+
+          Widget contentWidget;
+          if (hoveredSpan == null) {
+            contentWidget = Text(
+              'No event hovered. Hover over a span to inspect details.',
+              style: const Style(foreground: Colors.white),
+            );
+          } else {
+            final span = hoveredSpan!;
+            final durMs = (span.endUs - span.startUs) / 1000.0;
+            final startMs = span.startUs / 1000.0;
+            final endMs = span.endUs / 1000.0;
+
+            final children = <Widget>[];
+
+            String titleLine = '[Hovered] ${span.displayLabel}';
+            if (titleLine.length > maxWidth - 4) {
+              titleLine = '${titleLine.substring(0, maxWidth - 7)}...';
+            }
+            children.add(
+              Text(
+                titleLine,
+                style: const Style(foreground: Colors.white),
+                wrap: false,
+              ),
+            );
+
+            String timingLine =
+                'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}';
+            if (timingLine.length > maxWidth - 4) {
+              timingLine = '${timingLine.substring(0, maxWidth - 7)}...';
+            }
+            children.add(
+              Text(
+                timingLine,
+                style: const Style(foreground: Colors.white),
+                wrap: false,
+              ),
+            );
+
+            if (span.args.isNotEmpty) {
+              children.add(
+                Text(
+                  'Args:',
+                  style: const Style(foreground: Colors.white),
+                  wrap: false,
+                ),
+              );
+
+              final argChildren = <Widget>[];
+              for (final entry in span.args.entries) {
+                var line = '  ${entry.key}: ${entry.value}';
+                if (line.length > maxWidth - 4) {
+                  line = '${line.substring(0, maxWidth - 7)}...';
+                }
+                argChildren.add(
+                  Text(
+                    line,
+                    style: const Style(foreground: Colors.white),
+                    wrap: false,
+                  ),
+                );
+              }
+              children.add(
+                Expanded(
+                  child: ListView(
+                    children: argChildren,
+                    selectedStyle: Style.empty,
+                  ),
+                ),
+              );
+            }
+
+            contentWidget = Column(children);
+          }
+
+          return DecoratedBox(
+            decoration: const BoxDecoration(
+              border: Border(
+                topChar: '─',
+                bottomChar: '─',
+                leftChar: '│',
+                rightChar: '│',
+                topLeftChar: '├',
+                topRightChar: '┤',
+                bottomLeftChar: '└',
+                bottomRightChar: '┘',
+                style: Style(foreground: Color(120, 120, 120)),
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 0),
+              child: contentWidget,
+            ),
+          );
+        },
       ),
     );
   }
@@ -1341,13 +1374,12 @@ class _TraceViewerAppState extends State<TraceViewerApp>
         child: TimelineCanvas(
           spans: spans!,
           offsetX: offsetX,
+          offsetY: offsetY,
           zoomLevel: zoomLevel,
           measureStartMs: measureStartMs,
           measureEndMs: measureEndMs,
         ),
       ),
-      buildSeparator('Input Events'),
-      InputEventsCanvas(spans: spans!, offsetX: offsetX, zoomLevel: zoomLevel),
       buildInspectorPanel(),
     ], crossAxisAlignment: CrossAxisAlignment.stretch);
   }
@@ -1575,13 +1607,13 @@ class QueryToken {
         case 'category':
           searchTargets.add(span.category);
         case String f:
-          if (span.metadata.containsKey(f)) {
-            searchTargets.add(span.metadata[f]!);
+          if (span.args.containsKey(f)) {
+            searchTargets.add(span.args[f]!);
           }
         case null:
           searchTargets.add(span.name);
           searchTargets.add(span.category);
-          searchTargets.addAll(span.metadata.values);
+          searchTargets.addAll(span.args.values);
       }
 
       for (final target in searchTargets) {
