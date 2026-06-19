@@ -2,77 +2,19 @@ import 'dart:async';
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:termui/termui.dart';
-import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/window.dart';
 import '../example/compositor_demo.dart';
 
-class FakeTerminalBackend implements TerminalBackend {
-  final List<String> writtenData = [];
-  Point<int> currentSize = const Point(80, 24);
-
-  @override
-  bool get isWindows => false;
-
-  @override
-  Stream<List<int>> get rawInput => const Stream.empty();
-
-  @override
-  void write(String data) {
-    writtenData.add(data);
-  }
-
-  @override
-  Point<int> get size => currentSize;
-
-  @override
-  Stream<Point<int>> watchSize() => const Stream.empty();
-
-  @override
-  void enableRawMode() {}
-
-  @override
-  void disableRawMode() {}
-
-  @override
-  void dispose() {}
-}
-
-class MockTerminal extends Terminal {
-  final _eventsController = StreamController<InputEvent>.broadcast();
-  final _sizeController = StreamController<Point<int>>.broadcast();
-
-  MockTerminal(super.backend);
-
-  @override
-  Stream<InputEvent> get events => _eventsController.stream;
-
-  @override
-  Stream<Point<int>> watchSize() => _sizeController.stream;
-
-  void injectTestEvent(InputEvent event) {
-    _eventsController.add(event);
-  }
-
-  void injectResize(Point<int> newSize) {
-    _sizeController.add(newSize);
-  }
-
-  @override
-  void dispose() {
-    _eventsController.close();
-    _sizeController.close();
-    super.dispose();
-  }
-}
+import 'package:termui_test/termui_test.dart';
 
 void main() {
   group('Compositor Demo Integration Tests', () {
-    late FakeTerminalBackend backend;
+    late MockTerminalBackend backend;
     late MockTerminal terminal;
     late SceneManager sceneManager;
 
     setUp(() {
-      backend = FakeTerminalBackend();
+      backend = MockTerminalBackend();
       terminal = MockTerminal(backend);
       sceneManager = SceneManager(terminal);
     });

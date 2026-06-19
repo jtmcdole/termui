@@ -1,75 +1,12 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:test/test.dart';
-import 'package:termui/terminal/terminal.dart';
-import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/ui/widgets/prompt_runner.dart';
 import 'package:termui/ui/layout.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/widgets/text.dart';
 
-class FakeTerminalBackend implements TerminalBackend {
-  final List<String> writtenData = [];
-
-  @override
-  bool get isWindows => false;
-
-  @override
-  Stream<List<int>> get rawInput => const Stream.empty();
-
-  @override
-  void write(String data) {
-    writtenData.add(data);
-  }
-
-  @override
-  Point<int> get size => const Point(80, 24);
-
-  @override
-  Stream<Point<int>> watchSize() => const Stream.empty();
-
-  @override
-  void enableRawMode() {}
-
-  @override
-  void disableRawMode() {}
-
-  @override
-  void dispose() {}
-}
-
-class MockTerminal extends Terminal {
-  final _eventsController = StreamController<ui.InputEvent>.broadcast();
-  bool isCursorVisible = true;
-
-  MockTerminal(super.backend);
-
-  @override
-  Stream<ui.InputEvent> get events => _eventsController.stream;
-
-  void injectTestEvent(ui.InputEvent event) {
-    _eventsController.add(event);
-  }
-
-  @override
-  void showCursor() {
-    isCursorVisible = true;
-    super.showCursor();
-  }
-
-  @override
-  void hideCursor() {
-    isCursorVisible = false;
-    super.hideCursor();
-  }
-
-  @override
-  void dispose() {
-    _eventsController.close();
-    super.dispose();
-  }
-}
+import 'package:termui_test/termui_test.dart';
 
 class TestKeyConsumerWidget extends Widget
     implements ui.Focusable, ui.KeyEventHandler {
@@ -102,11 +39,11 @@ class _TestKeyConsumerElement extends Element {
 
 void main() {
   group('PromptRunner Refactoring Tests', () {
-    late FakeTerminalBackend backend;
+    late MockTerminalBackend backend;
     late MockTerminal terminal;
 
     setUp(() {
-      backend = FakeTerminalBackend();
+      backend = MockTerminalBackend();
       terminal = MockTerminal(backend);
     });
 
@@ -315,7 +252,7 @@ void main() {
       }
       expect(hasContent, isTrue);
 
-      expect(backend.writtenData, isEmpty);
+      expect(backend.writes, isEmpty);
 
       runner.pump();
       expect(runner.currentBuffer, isNotNull);

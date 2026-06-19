@@ -111,6 +111,9 @@ When writing or modifying code in this repository:
    ```
 4. **Propagate InheritedWidget Updates**: Ensure [InheritedElement.update](/packages/termui/lib/ui/layout.dart#L734) always calls `rebuild()` to ensure that children configurations get updated downstream when the parent rebuilds.
 5. **Conventional Commits**: Write structured, clear commit messages conforming to the Conventional Commits 1.0.0 specification (e.g. `feat(core): ...`, `fix(focus): ...`).
+6. **Avoid stdout Terminal Properties**: Never use `stdout.terminalColumns` or `stdout.hasTerminal` to determine screen dimensions or check for a terminal. Tests run in headless environments where these getters throw exceptions. Always use the `terminal` instance provided by the mock environment (e.g., `MockTerminalBackend` from `termui_test`) or `globalSceneManager.terminal.size`.
+7. **Consider Terminal Emulator/Muxer Hotkey Conflicts**: When assigning keyboard shortcuts for the TUI, always consider conflicts with common terminal multiplexers (tmux, byobu) and emulators (iTerm2, Windows Terminal, PowerShell). For example, `Ctrl+S` is often intercepted by flow control (XOFF) or tmux prefixes, and `Ctrl+W` or `Ctrl+T` are common tab-management shortcuts. Always report potential conflicts to the developer and offer alternative/fallback bindings (e.g., providing `Alt+S` as an alternative to `Ctrl+S`).
+8. **Finalizing Tasks (Format & Analyze)**: Always run `dart format .` and then `dart analyze --fatal-infos` when completing tasks. The `dart analyze` check must complete cleanly with no reported issues before you finish your task.
 
 ---
 

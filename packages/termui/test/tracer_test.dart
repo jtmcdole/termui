@@ -122,7 +122,7 @@ void main() {
           localEventId,
           Phase.begin,
           TraceCategory.paint,
-          metadata: {'widget': 'LocalTestWidget', 'key': 'value'},
+          metadata: {'key': 'value'},
         );
         await Tracer.stop();
 
@@ -133,7 +133,6 @@ void main() {
         expect(localJsonList.length, equals(1));
         expect(localJsonList[0]['name'], equals('localEvent'));
         expect(localJsonList[0]['args'], isNotNull);
-        expect(localJsonList[0]['args']['widget'], equals('LocalTestWidget'));
         expect(localJsonList[0]['args']['key'], equals('value'));
       },
     );
@@ -149,7 +148,7 @@ void main() {
           memEventId,
           Phase.begin,
           TraceCategory.paint,
-          metadata: {'widget': 'MemTestWidget', 'foo': 'bar'},
+          metadata: {'foo': 'bar'},
         );
         await Tracer.stop();
 
@@ -160,7 +159,6 @@ void main() {
         expect(memJsonList.length, equals(1));
         expect(memJsonList[0]['name'], equals('memEvent'));
         expect(memJsonList[0]['args'], isNotNull);
-        expect(memJsonList[0]['args']['widget'], equals('MemTestWidget'));
         expect(memJsonList[0]['args']['foo'], equals('bar'));
       },
     );

@@ -2,10 +2,10 @@ import 'dart:math';
 import 'package:test/test.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui/termui.dart';
+import 'package:termui/termui_trace.dart';
 import 'package:termui/ui/renderer.dart';
 import 'package:termui/ui/window.dart';
 import 'package:termui_recorder/termui_recorder.dart';
-import '../bin/termui_trace.dart';
 
 void main() {
   group('Trace Viewer Integration Tests', () {

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:termui/terminal/terminal.dart';
-import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/widgets/prompt_runner.dart';
 import 'package:termui/ui/widgets/scene_manager.dart';
@@ -10,68 +9,7 @@ import 'package:termui/ui/style.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/termui_debug.dart';
 
-class FakeTerminalBackend implements TerminalBackend {
-  final List<String> writtenData = [];
-  Point<int> currentSize = const Point(80, 24);
-
-  @override
-  bool get isWindows => false;
-
-  @override
-  Stream<List<int>> get rawInput => const Stream.empty();
-
-  @override
-  void write(String data) {
-    writtenData.add(data);
-  }
-
-  @override
-  Point<int> get size => currentSize;
-
-  @override
-  Stream<Point<int>> watchSize() => const Stream.empty();
-
-  @override
-  void enableRawMode() {}
-
-  @override
-  void disableRawMode() {}
-
-  @override
-  void dispose() {}
-}
-
-class MockTerminal extends Terminal {
-  final _eventsController = StreamController<InputEvent>.broadcast();
-  final _sizeController = StreamController<Point<int>>.broadcast();
-
-  MockTerminal(super.backend);
-
-  @override
-  Stream<InputEvent> get events => _eventsController.stream;
-
-  @override
-  Stream<Point<int>> watchSize() => _sizeController.stream;
-
-  void injectTestEvent(InputEvent event) {
-    _eventsController.add(event);
-  }
-
-  void injectResize(Point<int> newSize) {
-    final be = backend;
-    if (be is FakeTerminalBackend) {
-      be.currentSize = newSize;
-    }
-    _sizeController.add(newSize);
-  }
-
-  @override
-  void dispose() {
-    _eventsController.close();
-    _sizeController.close();
-    super.dispose();
-  }
-}
+import 'package:termui_test/termui_test.dart';
 
 class MockSceneRenderer implements SceneRenderer {
   @override
@@ -93,8 +31,9 @@ class MockSceneRenderer implements SceneRenderer {
   final List<MouseEvent> mouseEvents = [];
 
   @override
-  void handleKeyEvent(KeyEvent event) {
+  bool handleKeyEvent(KeyEvent event) {
     keyEvents.add(event);
+    return false;
   }
 
   @override
@@ -112,12 +51,12 @@ class MockSceneRenderer implements SceneRenderer {
 
 void main() {
   group('SceneManager Tests', () {
-    late FakeTerminalBackend backend;
+    late MockTerminalBackend backend;
     late MockTerminal terminal;
     late SceneManager sceneManager;
 
     setUp(() {
-      backend = FakeTerminalBackend();
+      backend = MockTerminalBackend();
       terminal = MockTerminal(backend);
       sceneManager = SceneManager(terminal);
     });
@@ -195,7 +134,7 @@ void main() {
       sceneManager.render();
 
       // Verify cursor shown sequence was written
-      final written = backend.writtenData.join();
+      final written = backend.writes.join();
       expect(written, contains(Terminal.showCursorSequence));
       expect(written, contains(Terminal.enableMouseTrackingSequence));
 
@@ -219,7 +158,7 @@ void main() {
 
       sceneManager.render();
 
-      final written = backend.writtenData.join();
+      final written = backend.writes.join();
       // Should hide cursor and disable mouse tracking
       expect(written, contains(Terminal.hideCursorSequence));
       expect(written, contains(Terminal.disableMouseTrackingSequence));
@@ -241,7 +180,7 @@ void main() {
 
         sceneManager.render();
 
-        final written = backend.writtenData.join();
+        final written = backend.writes.join();
         // Should enable mouse tracking because enableMouseTracking is true
         expect(written, contains(Terminal.enableMouseTrackingSequence));
         expect(written, isNot(contains(Terminal.disableMouseTrackingSequence)));
@@ -267,7 +206,7 @@ void main() {
 
       sceneManager.render();
 
-      final written = backend.writtenData.join();
+      final written = backend.writes.join();
       // Should hide cursor because it is off-screen (absolute X = 79 + 1 = 80 which is >= width 80)
       expect(written, contains(Terminal.hideCursorSequence));
       // Should not contain the goto ESC code \x1b[1;81H
@@ -283,7 +222,7 @@ void main() {
       sceneManager.render();
 
       // Resize terminal backend
-      backend.currentSize = const Point(100, 30);
+      backend.size = const Point(100, 30);
       sceneManager.render();
 
       expect(sceneManager.renderer!.frontBuffer.width, equals(100));
@@ -304,11 +243,11 @@ void main() {
       sceneManager.render();
 
       // Clear written history
-      backend.writtenData.clear();
+      backend.writes.clear();
 
       sceneManager.dispose();
 
-      final written = backend.writtenData.join();
+      final written = backend.writes.join();
       // Should show cursor and disable mouse tracking upon disposal
       expect(written, contains(Terminal.showCursorSequence));
       expect(written, contains(Terminal.disableMouseTrackingSequence));

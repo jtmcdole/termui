@@ -120,11 +120,13 @@ class SceneManager {
       _traceKeyEventId,
       Phase.begin,
       TraceCategory.events,
-      metadata: {'key': event.key},
+      metadata: {'key': event.logicalKey},
     );
     try {
-      _clearHoverState();
-      focusedLayer?.renderer.handleKeyEvent(event);
+      final handled = focusedLayer?.renderer.handleKeyEvent(event) ?? false;
+      if (!handled) {
+        _clearHoverState();
+      }
     } finally {
       Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
     }
@@ -470,6 +472,9 @@ class SceneManager {
 
       final sb = StringBuffer();
       _renderer!.render(target, sb);
+      try {
+        (terminal.backend as dynamic).buffer = target;
+      } catch (_) {}
       terminal.backend.write(sb.toString());
 
       // Hardware state sync based on focused layer's requests.
