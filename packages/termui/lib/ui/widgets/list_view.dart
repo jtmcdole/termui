@@ -344,10 +344,16 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
     } else if (event.type == MouseEventType.move ||
         event.type == MouseEventType.drag) {
       final hoveredIdx = scrollOffset + localY;
-      if (hoveredIdx >= 0 && hoveredIdx < listView.children.length) {
+      if (localX >= 0 && localX < area.width && localY >= 0 && localY < area.height && hoveredIdx >= 0 && hoveredIdx < listView.children.length) {
         if (hoveredIndex != hoveredIdx) {
           hoveredIndex = hoveredIdx;
           listView.onHover?.call(hoveredIdx);
+          rebuild();
+        }
+      } else {
+        if (hoveredIndex != null) {
+          hoveredIndex = null;
+          listView.onHover?.call(null);
           rebuild();
         }
       }
@@ -527,10 +533,16 @@ class _RawListWidgetElement extends LeafElement
     } else if (event.type == MouseEventType.move ||
         event.type == MouseEventType.drag) {
       final hoveredIdx = scrollOffset + localY;
-      if (hoveredIdx >= 0 && hoveredIdx < rawWidget.lines.length) {
+      if (localX >= 0 && localX < area.width && localY >= 0 && localY < area.height && hoveredIdx >= 0 && hoveredIdx < rawWidget.lines.length) {
         if (hoveredIndex != hoveredIdx) {
           hoveredIndex = hoveredIdx;
           rawWidget.onHover?.call(hoveredIdx);
+          rebuild();
+        }
+      } else {
+        if (hoveredIndex != null) {
+          hoveredIndex = null;
+          rawWidget.onHover?.call(null);
           rebuild();
         }
       }
