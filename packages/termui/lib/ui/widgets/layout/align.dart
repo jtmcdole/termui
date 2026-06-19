@@ -35,43 +35,12 @@ class Align extends Widget {
 }
 
 /// An element that manages an [Align] widget.
-class AlignElement extends Element {
-  /// The child element.
-  Element? childElement;
-
-  /// Creates an align element for an [Align] widget.
+class AlignElement extends SingleChildElement {
+  /// Creates a align element for a [Align] widget.
   AlignElement(Align super.widget);
 
   @override
-  void mount(Element? parent) {
-    super.mount(parent);
-    rebuild();
-  }
-
-  @override
-  void update(Widget newWidget) {
-    super.update(newWidget);
-    rebuild();
-  }
-
-  @override
-  void rebuild() {
-    final align = widget as Align;
-    if (childElement != null &&
-        childElement!.widget.runtimeType == align.child.runtimeType) {
-      childElement!.update(align.child);
-    } else {
-      childElement?.unmount();
-      childElement = align.child.createElement();
-      childElement!.mount(this);
-    }
-  }
-
-  @override
-  void unmount() {
-    childElement?.unmount();
-    super.unmount();
-  }
+  Widget? get childWidget => (widget as Align).child;
 
   @override
   Size performLayout(BoxConstraints constraints) {

@@ -30,6 +30,7 @@ export 'ui/widgets/layout/align.dart';
 export 'ui/widgets/layout/flex.dart';
 export 'ui/widgets/core/widget.dart';
 export 'ui/widgets/core/element.dart';
+export 'ui/widgets/core/single_child_element.dart';
 export 'ui/widgets/core/build_context.dart';
 export 'ui/widgets/core/key.dart';
 export 'ui/widgets/core/geometry.dart';
@@ -82,3 +83,4 @@ export 'ui/animation/effects.dart';
 export 'ui/easing.dart';
 
 export 'ui/scroll_controller.dart';
+export 'ui/widgets/core/focusable_state_mixin.dart';

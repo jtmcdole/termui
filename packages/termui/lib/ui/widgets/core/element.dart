@@ -271,7 +271,7 @@ class StatelessElement extends Element {
     }, zoneValues: {#buildContext: this});
 
     if (childElement != null &&
-        childElement!.widget.runtimeType == builtWidget.runtimeType) {
+        Widget.canUpdate(childElement!.widget, builtWidget)) {
       if (!identical(childElement!.widget, builtWidget)) {
         childElement!.update(builtWidget);
       }
@@ -350,7 +350,7 @@ class StatefulElement extends Element {
     }, zoneValues: {#buildContext: this});
 
     if (childElement != null &&
-        childElement!.widget.runtimeType == builtWidget.runtimeType) {
+        Widget.canUpdate(childElement!.widget, builtWidget)) {
       if (!identical(childElement!.widget, builtWidget)) {
         childElement!.update(builtWidget);
       }
@@ -414,7 +414,7 @@ class InheritedElement extends Element {
   void rebuild() {
     final inheritedWidget = widget as InheritedWidget;
     if (childElement != null &&
-        childElement!.widget.runtimeType == inheritedWidget.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, inheritedWidget.child)) {
       if (!identical(childElement!.widget, inheritedWidget.child)) {
         childElement!.update(inheritedWidget.child);
       }

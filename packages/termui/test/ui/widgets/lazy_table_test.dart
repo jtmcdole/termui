@@ -1,5 +1,4 @@
 import 'package:termui/termui.dart';
-import 'package:termui_test/termui_test.dart';
 import 'package:test/test.dart';
 
 void main() {

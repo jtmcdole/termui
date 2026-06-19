@@ -31,43 +31,12 @@ class Padding extends Widget {
 }
 
 /// An element that represents a [Padding] widget.
-class PaddingElement extends Element {
-  /// The instantiated element corresponding to the child widget.
-  Element? childElement;
-
-  /// Creates an element for the [Padding] widget.
+class PaddingElement extends SingleChildElement {
+  /// Creates a padding element for a [Padding] widget.
   PaddingElement(Padding super.widget);
 
   @override
-  void mount(Element? parent) {
-    super.mount(parent);
-    rebuild();
-  }
-
-  @override
-  void update(Widget newWidget) {
-    super.update(newWidget);
-    rebuild();
-  }
-
-  @override
-  void rebuild() {
-    final paddingWidget = widget as Padding;
-    if (childElement != null &&
-        childElement!.widget.runtimeType == paddingWidget.child.runtimeType) {
-      childElement!.update(paddingWidget.child);
-    } else {
-      childElement?.unmount();
-      childElement = paddingWidget.child.createElement();
-      childElement!.mount(this);
-    }
-  }
-
-  @override
-  void unmount() {
-    childElement?.unmount();
-    super.unmount();
-  }
+  Widget? get childWidget => (widget as Padding).child;
 
   @override
   Size performLayout(BoxConstraints constraints) {

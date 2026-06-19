@@ -31,48 +31,12 @@ class SizedBox extends Widget {
 }
 
 /// An element that manages a [SizedBox] widget.
-class SizedBoxElement extends Element {
-  /// The child element.
-  Element? childElement;
-
+class SizedBoxElement extends SingleChildElement {
   /// Creates a sized box element for a [SizedBox] widget.
   SizedBoxElement(SizedBox super.widget);
 
   @override
-  void mount(Element? parent) {
-    super.mount(parent);
-    rebuild();
-  }
-
-  @override
-  void update(Widget newWidget) {
-    super.update(newWidget);
-    rebuild();
-  }
-
-  @override
-  void rebuild() {
-    final sb = widget as SizedBox;
-    if (sb.child != null) {
-      if (childElement != null &&
-          childElement!.widget.runtimeType == sb.child!.runtimeType) {
-        childElement!.update(sb.child!);
-      } else {
-        childElement?.unmount();
-        childElement = sb.child!.createElement();
-        childElement!.mount(this);
-      }
-    } else {
-      childElement?.unmount();
-      childElement = null;
-    }
-  }
-
-  @override
-  void unmount() {
-    childElement?.unmount();
-    super.unmount();
-  }
+  Widget? get childWidget => (widget as SizedBox).child;
 
   @override
   Size performLayout(BoxConstraints constraints) {
@@ -91,11 +55,6 @@ class SizedBoxElement extends Element {
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
-  }
-
-  @override
-  void visitChildren(void Function(Element child) visitor) {
-    if (childElement != null) visitor(childElement!);
   }
 }
 

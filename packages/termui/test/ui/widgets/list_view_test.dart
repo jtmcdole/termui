@@ -1,19 +1,11 @@
 import 'package:termui/termui.dart';
-import 'package:termui/terminal/event.dart' as evt;
 import 'package:termui_test/termui_test.dart';
 import 'package:test/test.dart';
 
 void main() {
   group('ListView Tests', () {
     test('ListView.fromStrings handles interactions', () async {
-      int? selected;
-      int? hovered;
-
-      final listView = ListView.fromStrings(
-        const ['A', 'B', 'C'],
-        onSelect: (i) => selected = i,
-        onHover: (i) => hovered = i,
-      );
+      final listView = ListView.fromStrings(const ['A', 'B', 'C']);
 
       final element = listView.createElement();
       element.mount(null);
@@ -21,11 +13,8 @@ void main() {
     });
 
     test('ListView.raw renders correctly', () async {
-      int? selected;
-
       final rawList = ListView.raw(
         lines: const ['Item 1', 'Item 2', 'Item 3'],
-        onSelect: (i) => selected = i,
         showScrollbar: true,
       );
 
@@ -35,11 +24,7 @@ void main() {
       expect(tester.buffer!.getCell(0, 0)?.char, 'I');
       expect(tester.buffer!.getCell(5, 0)?.char, '1');
 
-      await tester.pumpWidget(ListView.raw(
-        lines: const ['Item A', 'Item B'],
-        selectedIndex: 1,
-        hoveredIndex: 0,
-      ));
+      await tester.pumpWidget(ListView.raw(lines: const ['Item A', 'Item B']));
       expect(tester.buffer!.getCell(0, 1)?.char, 'I'); // Item B selected
     });
 

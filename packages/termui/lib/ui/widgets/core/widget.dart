@@ -8,6 +8,13 @@ abstract class Widget {
   /// Initializes the widget configuration.
   const Widget({this.key});
 
+  /// Whether the [newWidget] can be used to update an element that currently
+  /// holds the [oldWidget] as its configuration.
+  static bool canUpdate(Widget oldWidget, Widget newWidget) {
+    return oldWidget.runtimeType == newWidget.runtimeType &&
+        oldWidget.key == newWidget.key;
+  }
+
   /// Creates an [Element] to manage this widget's location in the tree.
   Element createElement() => LeafElement(this);
 

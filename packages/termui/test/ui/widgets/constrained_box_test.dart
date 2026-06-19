@@ -1,5 +1,4 @@
 import 'package:termui/termui.dart';
-import 'package:termui_test/termui_test.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -12,7 +11,9 @@ void main() {
 
       final element = widget.createElement();
       element.mount(null);
-      final size = element.layout(const BoxConstraints(maxWidth: 50, maxHeight: 50));
+      final size = element.layout(
+        const BoxConstraints(maxWidth: 50, maxHeight: 50),
+      );
 
       expect(size.width, 20);
       expect(size.height, 10);
@@ -26,7 +27,9 @@ void main() {
 
       final element = widget.createElement();
       element.mount(null);
-      final size = element.layout(const BoxConstraints(maxWidth: 100, maxHeight: 100));
+      final size = element.layout(
+        const BoxConstraints(maxWidth: 100, maxHeight: 100),
+      );
 
       expect(size.width, 15);
       expect(size.height, 8);
@@ -40,8 +43,6 @@ void main() {
 
       expect(widget.getIntrinsicHeight(10), 20); // 50 clamped to max 20
     });
-
-
 
     test('ConstrainedBox paints child correctly', () {
       final widget = ConstrainedBox(

@@ -1,11 +1,9 @@
-import 'dart:async';
 import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
 /// Undocumented public member.
-class Radio<T> extends StatefulWidget
-    implements Focusable, KeyEventHandler, MouseEventHandler {
+class Radio<T> extends StatefulWidget implements Focusable {
   /// The specific value represented by this radio button.
   final T value;
 
@@ -40,78 +38,21 @@ class Radio<T> extends StatefulWidget
     this.focusedStyle = const Style(modifiers: Modifier.reverse),
   });
 
-  // ignore: must_be_immutable
-  RadioState<T>? _state;
-
-  @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    final hasFocus = focused || (_state?._focusNode.hasFocus ?? false);
-    if (hasFocus &&
-        (event.key == ' ' ||
-            event.key == 'space' ||
-            event.key == '\n' ||
-            event.key == '\r' ||
-            event.key == 'enter' ||
-            event.type == term.KeyType.enter)) {
-      onChanged(value);
-      _state?.setState(() {});
-      return true;
-    }
-    return false;
-  }
-
-  /// Delegated mouse event handler.
-  @override
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    if (event.type == MouseEventType.press) {
-      onChanged(value);
-      _state?.setState(() {});
-    }
-  }
-
   @override
   State<Radio<T>> createState() {
-    final state = RadioState<T>();
-    _state = state;
-    return state;
+    return RadioState<T>();
   }
 }
 
 /// Undocumented public member.
 class RadioState<T> extends State<Radio<T>>
+    with FocusableStateMixin<Radio<T>>
     implements KeyEventHandler, MouseEventHandler {
-  late FocusNode _focusNode;
+  @override
+  bool get isWidgetFocused => widget.focused;
 
   @override
-  void initState() {
-    super.initState();
-    widget._state = this;
-    _focusNode = FocusNode(id: 'radio_${widget.hashCode}');
-    if (widget.focused) {
-      scheduleMicrotask(() {
-        if (mounted) _focusNode.requestFocus();
-      });
-    }
-  }
-
-  @override
-  void didUpdateWidget(Radio<T> oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    widget._state = this;
-    if (widget.focused != oldWidget.focused) {
-      if (widget.focused) {
-        _focusNode.requestFocus();
-      } else {
-        _focusNode.unfocus();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    _focusNode.dispose();
-    super.dispose();
-  }
+  String get focusNodeIdPrefix => 'radio';
 
   /// Whether this radio button is currently selected.
   bool get isSelected => widget.value == widget.groupValue;
@@ -119,18 +60,33 @@ class RadioState<T> extends State<Radio<T>>
   /// Handles mouse events for the radio button.
   @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    widget.handleMouseEvent(event, localX, localY);
+    if (event.type == MouseEventType.press) {
+      widget.onChanged(widget.value);
+      setState(() {});
+    }
   }
 
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    return widget.handleKeyEvent(event);
+    final hasFocus = widget.focused || focusNode.hasFocus;
+    if (hasFocus &&
+        (event.key == ' ' ||
+            event.key == 'space' ||
+            event.key == '\n' ||
+            event.key == '\r' ||
+            event.key == 'enter' ||
+            event.type == term.KeyType.enter)) {
+      widget.onChanged(widget.value);
+      setState(() {});
+      return true;
+    }
+    return false;
   }
 
   @override
   Widget build(BuildContext context) {
     return Focus(
-      focusNode: _focusNode,
+      focusNode: focusNode,
       onFocusChange: (hasFocus) {
         if (mounted) setState(() {});
       },
@@ -140,7 +96,7 @@ class RadioState<T> extends State<Radio<T>>
       child: _RadioRenderWidget(
         isSelected: isSelected,
         label: widget.label,
-        focused: _focusNode.hasFocus || widget.focused,
+        focused: focusNode.hasFocus || widget.focused,
         style: widget.style,
         focusedStyle: widget.focusedStyle,
       ),
