@@ -112,13 +112,34 @@ class SceneManager {
     return sorted;
   }
 
+  SceneLayer? _lastHoveredLayer;
+
   /// Handles a keyboard event and routes it to the focused layer.
   void handleKeyEvent(KeyEvent event) {
     Tracer.record(_traceKeyEventId, Phase.begin, TraceCategory.events);
     try {
+      _clearHoverState();
       focusedLayer?.renderer.handleKeyEvent(event);
     } finally {
       Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
+    }
+  }
+
+  void _clearHoverState() {
+    _globalMouseX = null;
+    _globalMouseY = null;
+    if (_lastHoveredLayer != null) {
+      final localEvent = MouseEvent(
+        x: -1,
+        y: -1,
+        globalX: -1,
+        globalY: -1,
+        button: MouseButton.none,
+        type: MouseEventType.move,
+        modifiers: const {},
+      );
+      _lastHoveredLayer!.renderer.handleMouseEvent(localEvent);
+      _lastHoveredLayer = null;
     }
   }
 
@@ -309,6 +330,7 @@ class SceneManager {
         final mouseY = event.y - 1;
 
         final sortedLayers = _getSortedLayers();
+        SceneLayer? hitLayer;
 
         for (final layer in sortedLayers) {
           final buf = layer.renderer.currentBuffer;
@@ -318,6 +340,7 @@ class SceneManager {
               mouseX < layer.x + buf.width &&
               mouseY >= layer.y &&
               mouseY < layer.y + buf.height) {
+            hitLayer = layer;
             final localX = mouseX - layer.x;
             final localY = mouseY - layer.y;
             final localEvent = MouseEvent(
@@ -333,6 +356,20 @@ class SceneManager {
             break;
           }
         }
+
+        if (_lastHoveredLayer != null && _lastHoveredLayer != hitLayer) {
+           final localEvent = MouseEvent(
+              x: -1,
+              y: -1,
+              globalX: event.globalX ?? event.x,
+              globalY: event.globalY ?? event.y,
+              button: event.button,
+              type: event.type,
+              modifiers: event.modifiers,
+            );
+            _lastHoveredLayer!.renderer.handleMouseEvent(localEvent);
+        }
+        _lastHoveredLayer = hitLayer;
       }
 
       if (debugMouseCursorEnabled && !didRender) {
