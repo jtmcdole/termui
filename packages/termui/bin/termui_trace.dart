@@ -81,6 +81,14 @@ class TraceSpan {
         widgetStr = widgetStr.substring(1, widgetStr.length - 1);
       }
       return '$name <$widgetStr>';
+    } else if (args.containsKey('key')) {
+      var keyStr = args['key']!;
+      if (keyStr.startsWith('"') &&
+          keyStr.endsWith('"') &&
+          keyStr.length >= 2) {
+        keyStr = keyStr.substring(1, keyStr.length - 1);
+      }
+      return '$name [$keyStr]';
     }
     return name;
   }
@@ -597,6 +605,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
   late double offsetX;
   late double zoomLevel;
   int offsetY = 0;
+  bool showRawTime = false;
 
   // Memoized search overlay state
   int _searchWindowW = 40;
@@ -867,6 +876,13 @@ class _TraceViewerAppState extends State<TraceViewerApp>
 
     if (keyLower == 'q') {
       PromptScope.of(context)?.done();
+      return true;
+    }
+
+    if (keyLower == 't') {
+      setState(() {
+        showRawTime = !showRawTime;
+      });
       return true;
     }
 
@@ -1182,7 +1198,9 @@ class _TraceViewerAppState extends State<TraceViewerApp>
             }
 
             final tickTimeMs = (offsetX + col * zoomLevel) / 1000.0;
-            final label = formatDuration(tickTimeMs);
+            final label = showRawTime
+                ? (tickTimeMs * 1000).round().toString()
+                : formatDuration(tickTimeMs);
 
             children.add(
               Expanded(
@@ -1263,8 +1281,9 @@ class _TraceViewerAppState extends State<TraceViewerApp>
               ),
             );
 
-            String timingLine =
-                'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}';
+            String timingLine = showRawTime
+                ? 'Start: ${span.startUs}  |  End: ${span.endUs}  |  Duration: ${formatDuration(durMs)}'
+                : 'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}';
             if (timingLine.length > maxWidth - 4) {
               timingLine = '${timingLine.substring(0, maxWidth - 7)}...';
             }
@@ -1410,6 +1429,8 @@ class MarqueeRenderer implements SceneRenderer {
 
   @override
   void handleMouseEvent(evt.MouseEvent event) {}
+
+  void render() {}
 
   @override
   void resize(int width, int height) {

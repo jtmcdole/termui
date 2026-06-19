@@ -110,9 +110,7 @@ Future<void> runWidgetBookShared(
     ),
     alternateScreen: !isInline,
     mode: ExecutionMode.managed,
-    exitConditions: const {
-      PromptExitTrigger.controlC: PromptExitAction.abort,
-    },
+    exitConditions: const {PromptExitTrigger.controlC: PromptExitAction.abort},
     onFramePainted: (buf) {
       final state = appKey.currentState;
       if (state != null) {

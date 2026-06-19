@@ -116,7 +116,12 @@ class SceneManager {
 
   /// Handles a keyboard event and routes it to the focused layer.
   void handleKeyEvent(KeyEvent event) {
-    Tracer.record(_traceKeyEventId, Phase.begin, TraceCategory.events);
+    Tracer.record(
+      _traceKeyEventId,
+      Phase.begin,
+      TraceCategory.events,
+      metadata: {'key': event.key},
+    );
     try {
       _clearHoverState();
       focusedLayer?.renderer.handleKeyEvent(event);
@@ -358,16 +363,16 @@ class SceneManager {
         }
 
         if (_lastHoveredLayer != null && _lastHoveredLayer != hitLayer) {
-           final localEvent = MouseEvent(
-              x: -1,
-              y: -1,
-              globalX: event.globalX ?? event.x,
-              globalY: event.globalY ?? event.y,
-              button: event.button,
-              type: event.type,
-              modifiers: event.modifiers,
-            );
-            _lastHoveredLayer!.renderer.handleMouseEvent(localEvent);
+          final localEvent = MouseEvent(
+            x: -1,
+            y: -1,
+            globalX: event.globalX ?? event.x,
+            globalY: event.globalY ?? event.y,
+            button: event.button,
+            type: event.type,
+            modifiers: event.modifiers,
+          );
+          _lastHoveredLayer!.renderer.handleMouseEvent(localEvent);
         }
         _lastHoveredLayer = hitLayer;
       }

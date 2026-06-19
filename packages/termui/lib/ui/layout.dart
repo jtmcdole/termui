@@ -430,6 +430,12 @@ abstract class Element implements BuildContext {
   int get paintTraceId =>
       _paintTraceId ??= Tracer.registerString('${widget.runtimeType}:paint');
 
+  int? _layoutTraceId;
+
+  /// Cached tracer ID for layout of this element.
+  int get layoutTraceId =>
+      _layoutTraceId ??= Tracer.registerString('${widget.runtimeType}:layout');
+
   /// Creates an element that uses the given [widget] as its configuration.
   Element(this.widget);
 
@@ -506,10 +512,27 @@ abstract class Element implements BuildContext {
 
   /// Calculates the size of the element based on the given constraints.
   Size layout(BoxConstraints constraints) {
-    _cachedConstraints = constraints;
-    final resolvedSize = performLayout(constraints);
-    _cachedSize = constraints.constrain(resolvedSize);
-    return _cachedSize!;
+    final isTracing =
+        Tracer.isEnabled &&
+        Tracer.activeCategories.contains(TraceCategory.build);
+    if (isTracing) {
+      Tracer.record(
+        layoutTraceId,
+        Phase.begin,
+        TraceCategory.build,
+        metadata: {'widget': widget.runtimeType.toString()},
+      );
+    }
+    try {
+      _cachedConstraints = constraints;
+      final resolvedSize = performLayout(constraints);
+      _cachedSize = constraints.constrain(resolvedSize);
+      return _cachedSize!;
+    } finally {
+      if (isTracing) {
+        Tracer.record(layoutTraceId, Phase.end, TraceCategory.build);
+      }
+    }
   }
 
   /// Hook for subclasses to perform layout within the given constraints.
