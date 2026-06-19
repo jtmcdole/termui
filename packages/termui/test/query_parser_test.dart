@@ -23,7 +23,7 @@ void main() {
         startUs: 0,
         endUs: 400000, // 0.4s
         depth: 0,
-        metadata: {},
+        args: {},
       );
 
       // 0.4s < 0.5s is true, but isExclusion makes it false
@@ -46,7 +46,7 @@ void main() {
         startUs: 0,
         endUs: 10,
         depth: 0,
-        metadata: {},
+        args: {},
       );
       expect(token.matches(span1), isTrue);
 
@@ -56,7 +56,7 @@ void main() {
         startUs: 0,
         endUs: 10,
         depth: 0,
-        metadata: {},
+        args: {},
       );
       // Smart case requires exact case match if query has upper case
       expect(token.matches(span2), isFalse);
@@ -78,7 +78,7 @@ void main() {
         startUs: 0,
         endUs: 10,
         depth: 0,
-        metadata: {},
+        args: {},
       );
       expect(token.matches(span1), isTrue);
 
@@ -88,7 +88,7 @@ void main() {
         startUs: 0,
         endUs: 10,
         depth: 0,
-        metadata: {},
+        args: {},
       );
       expect(token.matches(span2), isFalse);
     });
