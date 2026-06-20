@@ -1,6 +1,6 @@
 # Developer & AI Agent Handbook: CLI Element-based Windowing System
 
-Welcome to the **cli_experiment** / **termui** codebase. This document serves as a comprehensive developer and AI agent handbook detailing the product vision, core architectures, package layouts, element tree lifecycles, and testing practices.
+Welcome to the **termui** codebase. This document serves as a comprehensive developer and AI agent handbook detailing the product vision, core architectures, package layouts, element tree lifecycles, and testing practices.
 
 ---
 
@@ -23,8 +23,10 @@ Welcome to the **cli_experiment** / **termui** codebase. This document serves as
 The project is managed as a Melos monorepo with the following workspace packages:
 
 1. **[termui](/packages/termui)** (Core package): Implements the layout engine, widgets, elements, focus management, and ANSI rendering pipeline.
-2. **[termui_shared_examples](/packages/termui_shared_examples)**: Contains example interfaces and reusable scenario layouts.
-3. **[termui_recorder](/packages/termui_recorder)**: Mock terminal recorder framework used for testing and validating rendering behaviors.
+2. **[termui_flutter](/packages/termui_flutter)** (Core package): Performant Flutter renderer.
+3. **[termui_test](/packages/termui_test)** (Core package): Fakes, Mocks, Integration testing, Matchers, Goldent testing.
+4. **[termui_shared_examples](/packages/termui_shared_examples)**: Contains example interfaces and reusable scenario layouts.
+5. **[termui_recorder](/packages/termui_recorder)**: Asciicast v3 recording and playback, screenshots.
 
 ### Dependencies & Platforms
 * **Dart SDK**: Target environment is `sdk: ">=3.11.0 <4.0.0"`.
@@ -33,67 +35,7 @@ The project is managed as a Melos monorepo with the following workspace packages
 
 ---
 
-## 3. Subsystem Breakdown
-
-```mermaid
-graph TD
-  NativeTTY[Native TTY / OS Console] <--> |FFI / stdin / stdout| Terminal[Terminal Layer]
-  Terminal --> |Raw bytes| InputParser[Input Parser]
-  InputParser --> |Structured events| SceneManager[Scene Manager / Focus Tree]
-  
-  subgraph Composition & Layout
-    Column/Row/Stack[Layout Containers] -->|splitRect Constraints| Viewport[Viewport Clipping]
-    Widgets[Core Widgets] -->|Render| Buffer[Canvas Buffers]
-    Window[Window Frames] -->|Compose| Compositor[Compositor / Z-Index Occlusion]
-  end
-  
-  Compositor -->|Screen Back-Buffer| Renderer[Diff Renderer]
-  Renderer -->|Minimal ANSI codes| Terminal
-```
-
-### A. Terminal & TTY Layer
-Responsible for switching terminal input modes, polling window sizes, and handling low-level byte channels.
-* **[Terminal](/packages/termui/lib/terminal/terminal.dart)**: The main entrypoint exposing screen sizing, SIGWINCH size observers (or polling on Windows), and raw input streams.
-* **[UnixTerminal](/packages/termui/lib/terminal/raw/unix_terminal.dart)**: Interacts with libc `tcgetattr` and `tcsetattr` via FFI, disabling terminal echo, canonical processing (`ICANON`), and signal processing (`ISIG`).
-* **[WindowsTerminal](/packages/termui/lib/terminal/raw/windows_terminal.dart)**: Uses FFI to invoke Windows APIs for TTY controls.
-
-### B. Buffering & Painting
-* **[Cell](/packages/termui/lib/ui/buffer.dart#L8)**: Represents a single coordinate atom. Contains a single character grapheme cluster and a [Style](/packages/termui/lib/ui/style.dart) (combining RGB [Colors](/packages/termui/lib/ui/color.dart) and bitmask attributes like bold, dim, underline, reverse, and transparency).
-* **[Buffer](/packages/termui/lib/ui/buffer.dart#L49)**: Grid layout representing a rectangular viewport.
-* **[Compositor](/packages/termui/lib/ui/buffer.dart#L149)**: Composites multiple LayeredBuffer components onto a single target screen buffer. It employs a bit-packed `Uint32List` occlusion map to perform an early-exit optimization (skipping drawing cells that are obscured by solid higher Z-index layers).
-* **[Renderer](/packages/termui/lib/ui/renderer.dart)**: Diffs `backBuffer` against `frontBuffer` and outputs minimal ANSI escape updates. Supports both absolute full screen alternate screen addresses and relative offset inline animations.
-
-### C. Element & Widget Tree
-The library replicates a reactive element tree:
-* **[Widget](/packages/termui/lib/ui/layout.dart#L309)**: Immutable configuration classes.
-* **[Element](/packages/termui/lib/ui/layout.dart#L356)**: Mutable nodes managing the lifecycle of the tree.
-* **[StatelessElement](/packages/termui/lib/ui/layout.dart#L477)**: Rebuilds children dynamically on configuration changes.
-* **[StatefulElement](/packages/termui/lib/ui/layout.dart#L607)**: Manages [State](/packages/termui/lib/ui/layout.dart#L564) objects, calling `initState()`, `didUpdateWidget()`, and `dispose()`.
-* **[InheritedElement](/packages/termui/lib/ui/layout.dart#L706)**: Propagates data down the context tree. When updated, it triggers a `rebuild()` to ensure children configurations refresh.
-
-### D. Focus & Input Processing
-* **[FocusNode](/packages/termui/lib/ui/window.dart#L74)**: Node in the focus tree representing an interactive layout element.
-* **[FocusScopeNode](/packages/termui/lib/ui/window.dart#L201)**: A specialized node grouping siblings for direction-based focus traversal (up/down/left/right/tab).
-* **[FocusManager](/packages/termui/lib/ui/window.dart#L25)**: Singleton registry tracking `primaryFocus` and coordinating focus paths.
-* **[InputParser](/packages/termui/lib/ui/input_parser.dart)**: Parses raw ansi escape byte streams into [InputEvent](/packages/termui/lib/ui/event.dart) classes (keys, mouse, paste events).
-
----
-
-## 4. Widget Catalog
-
-All custom widgets are located in the [widgets/](/packages/termui/lib/ui/widgets) directory and re-exported via [widget_toolkit.dart](/packages/termui/lib/ui/widget_toolkit.dart):
-* **[Text](/packages/termui/lib/ui/widgets/text.dart)**: Plain or wrapped text.
-* **[RichText](/packages/termui/lib/ui/widgets/rich_text.dart)**: Text styling runs with automatic wrap support.
-* **[TextField](/packages/termui/lib/ui/widgets/text_field.dart#L316)**: Multi-line / single-line interactive input fields with undo/redo support, text editing controllers, and focused style attributes.
-* **[DecoratedBox](/packages/termui/lib/ui/widgets/decorated_box.dart#L191)**: Applies borders and backgrounds around nested subtrees.
-* **[LinearProgressIndicator](/packages/termui/lib/ui/widgets/linear_progress_indicator.dart)**: Block-based progression indicator.
-* **[Canvas](/packages/termui/lib/ui/widgets/canvas.dart)**: Vector drawing viewport utilizing sub-pixel Braille dot mapping.
-* **[Grid](/packages/termui/lib/ui/widgets/grid.dart)**: 2D tile layout map.
-* **[Window](/packages/termui/lib/ui/window.dart#L241)**: Draggable, resizeable floating window panels.
-
----
-
-## 5. Development Guidelines & Rules
+## 3. Development Guidelines & Rules
 
 When writing or modifying code in this repository:
 
