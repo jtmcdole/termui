@@ -28,6 +28,15 @@ class SizedBox extends Widget {
     }
     return 0;
   }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    if (width != null) return width!;
+    if (child != null) {
+      return child!.getIntrinsicWidth(this.height ?? height);
+    }
+    return 0;
+  }
 }
 
 /// An element that manages a [SizedBox] widget.

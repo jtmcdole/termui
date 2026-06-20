@@ -1,11 +1,5 @@
 import 'package:test/test.dart';
-import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/style.dart';
-import 'package:termui/ui/widgets/core/widget.dart';
-import 'package:termui/ui/widgets/core/element.dart';
-import 'package:termui/ui/widgets/core/build_context.dart';
-import 'package:termui/ui/widgets/core/geometry.dart';
-import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui/termui.dart';
 
 class TestLeafWidget extends Widget {
   final String content;
@@ -287,5 +281,34 @@ void main() {
         element.unmount();
       },
     );
+
+    test(
+      'LayoutBuilder calculates intrinsic dimensions by querying the built child',
+      () {
+        final widget = LayoutBuilder(
+          builder: (context, constraints) {
+            final h = constraints.maxWidth > 50 ? 10 : 5;
+            return SizedBox(height: h, width: 20);
+          },
+        );
+
+        expect(widget.getIntrinsicHeight(100), 10);
+        expect(widget.getIntrinsicHeight(20), 5);
+        expect(widget.getIntrinsicWidth(10), 20);
+      },
+    );
+
+    test('LayoutBuilder is correctly sized inside Column layout', () {
+      final widget = Column([
+        const TestLeafWidget('Header'), // intrinsic height 1
+        LayoutBuilder(
+          builder: (context, constraints) {
+            return const SizedBox(height: 5);
+          },
+        ),
+      ]);
+
+      expect(widget.getIntrinsicHeight(80), 6); // 1 + 5 = 6
+    });
   });
 }
