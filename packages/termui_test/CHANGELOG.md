@@ -1,3 +1,12 @@
+## 0.2.1
+
+ - **REFACTOR**: simplify imports by using termui barrel file.
+ - **REFACTOR**: modularize trace viewer and enhance testing utilities.
+ - **REFACTOR**(widgets): introduce type-safe mouse handlers and fix unmounted setState.
+ - **REFACTOR**(widgets): introduce type-safe mouse handlers and fix unmounted setState.
+ - **FEAT**(recorder): support asciicast v3 format and gzip trace compression.
+ - **DOCS**(workspace): consolidate documentation and remove obsolete examples package.
+
 ## 0.2.0
 
 > Note: This release has breaking changes.

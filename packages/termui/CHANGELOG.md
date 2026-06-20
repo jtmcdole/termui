@@ -1,3 +1,35 @@
+## 0.5.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**: simplify imports by using termui barrel file.
+ - **REFACTOR**: modularize trace viewer and enhance testing utilities.
+ - **REFACTOR**(core): rename draw to render in rendering pipeline.
+ - **REFACTOR**(widgets): introduce type-safe mouse handlers and fix unmounted setState.
+ - **REFACTOR**(widgets): introduce type-safe mouse handlers and fix unmounted setState.
+ - **FIX**(core): globally clear mouse hover state on keyboard events and correctly clear list view hover out-of-bounds.
+ - **FIX**(widgetbook): Prevent graceful exit on unhandled Enter key and clear hover highlight when selecting pages.
+ - **FIX**(example): ensure 02_progress_bars exits on completion and add regression test.
+ - **FEAT**(layout): implement intrinsic dimension queries for LayoutBuilder and SizedBox.
+ - **FEAT**(examples): add 3D isometric logo widget book example.
+ - **FEAT**(recorder): support asciicast v3 format and gzip trace compression.
+ - **FEAT**(perf): introduce selective subsystem profiling using TraceCategory.
+ - **FEAT**(widgets): enhance modal overlay focus management and event routing.
+ - **FEAT**(ui): allow forcing mouse tracking in SceneManager.
+ - **FEAT**(ui): add visual debug overlays and stable layer compositing.
+ - **FEAT**(ui): add draggable layers and mouse event capturing in SceneManager.
+ - **FEAT**(ui): introduce SceneManager for multi-layer rendering and input routing.
+ - **FEAT**(ui): allow forcing mouse tracking in SceneManager.
+ - **FEAT**(ui): add visual debug overlays and stable layer compositing.
+ - **FEAT**(ui): add draggable layers and mouse event capturing in SceneManager.
+ - **FEAT**(ui): introduce SceneManager for multi-layer rendering and input routing.
+ - **DOCS**(workspace): consolidate documentation and remove obsolete examples package.
+ - **DOCS**: document scene management and managed prompt execution.
+ - **DOCS**: document scene management and managed prompt execution.
+ - **BREAKING** **REFACTOR**(window): simplify windowing system and remove WindowManager.
+ - **BREAKING** **FIX**(ui): make widgets immutable and preserve state on rebuild.
+ - **BREAKING** **FEAT**(ui): update paint API and add trace utility.
+
 ## 0.4.0
 
 > Note: This release has breaking changes.

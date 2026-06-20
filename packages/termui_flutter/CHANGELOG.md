@@ -1,3 +1,14 @@
+## 0.5.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(recorder): support asciicast v3 format and gzip trace compression.
+ - **FEAT**(perf): introduce selective subsystem profiling using TraceCategory.
+ - **DOCS**(workspace): consolidate documentation and remove obsolete examples package.
+ - **DOCS**: document scene management and managed prompt execution.
+ - **DOCS**: document scene management and managed prompt execution.
+ - **BREAKING** **REFACTOR**(window): simplify windowing system and remove WindowManager.
+
 ## 0.4.0
 
 > Note: This release has breaking changes.

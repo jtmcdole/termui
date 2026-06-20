@@ -1,3 +1,12 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**: modularize trace viewer and enhance testing utilities.
+ - **FEAT**(recorder): support asciicast v3 format and gzip trace compression.
+ - **DOCS**(workspace): consolidate documentation and remove obsolete examples package.
+ - **BREAKING** **FEAT**(ui): update paint API and add trace utility.
+
 ## 0.3.1
 
  - **FEAT**(recorder): support action logging, trace recording, and interactive player debugging.
