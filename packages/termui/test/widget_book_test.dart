@@ -1195,5 +1195,81 @@ void main() {
         await runnerFuture;
       });
     });
+
+    test('McDole Logo - Flat Shading and Interactive Rendering', () async {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final app = WidgetBookApp(
+          terminal: tester.terminal,
+          platform: TestWidgetBookPlatform(),
+          isInline: false,
+        );
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: app,
+          alternateScreen: true,
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          // 1. Find and mouse-click on 3D Isometric Logo
+          final menuEntry = find.descendant(
+            of: find.byType<SidebarWidget>(),
+            matching: find.text('3D Isometric Logo'),
+          );
+          expect(menuEntry, findsOneWidget);
+          tester.tap(menuEntry);
+          await tester.pump();
+
+          // Verify we navigated to 3D Isometric Logo
+          expect(find.textPattern('3D Isometric Logo Preview'), findsOneWidget);
+
+          // 2. Press Tab to focus preview pane
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify preview pane is active
+          expect(
+            find.textPattern(r'3D Isometric Logo \(Mcdole Heavy Industries\)'),
+            findsOneWidget,
+          );
+
+          // 3. Press F to toggle solid vs wireframe
+          tester.sendKey(LogicalKey.character('f'));
+          await tester.pump();
+
+          // 4. Press C to cycle color modes
+          tester.sendKey(LogicalKey.character('c'));
+          await tester.pump();
+
+          // 5. Press B to toggle backface lines bleeding
+          tester.sendKey(LogicalKey.character('b'));
+          await tester.pump();
+
+          // 6. Press M to cycle render modes (Braille, Density, Quadrants)
+          tester.sendKey(LogicalKey.character('m'));
+          await tester.pump();
+
+          // 7. Press P to toggle pause state
+          tester.sendKey(LogicalKey.character('p'));
+          await tester.pump();
+
+          // 8. Press + to zoom in
+          tester.sendKey(LogicalKey.character('+'));
+          await tester.pump();
+
+          // 9. Press - to zoom out
+          tester.sendKey(LogicalKey.character('-'));
+          await tester.pump();
+
+          // Clean exit
+          tester.sendKey(LogicalKey.character('q'));
+          await tester.pump();
+        });
+
+        await runnerFuture;
+      });
+    });
   });
 }
