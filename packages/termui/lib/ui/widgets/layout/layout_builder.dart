@@ -14,6 +14,40 @@ class LayoutBuilder extends Widget {
 
   @override
   Element createElement() => LayoutBuilderElement(this);
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final element = LayoutBuilderElement(this);
+    element.mount(null);
+    element.layout(
+      BoxConstraints(
+        minWidth: width,
+        maxWidth: width,
+        minHeight: 0,
+        maxHeight: BoxConstraints.infinity,
+      ),
+    );
+    final h = element._child?.widget.getIntrinsicHeight(width) ?? 0;
+    element.unmount();
+    return h;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final element = LayoutBuilderElement(this);
+    element.mount(null);
+    element.layout(
+      BoxConstraints(
+        minWidth: 0,
+        maxWidth: BoxConstraints.infinity,
+        minHeight: height,
+        maxHeight: height,
+      ),
+    );
+    final w = element._child?.widget.getIntrinsicWidth(height) ?? 0;
+    element.unmount();
+    return w;
+  }
 }
 
 /// The element that manages the lifecycle of a [LayoutBuilder].
@@ -22,6 +56,12 @@ class LayoutBuilderElement extends Element {
 
   /// Creates a layout builder element.
   LayoutBuilderElement(LayoutBuilder super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
 
   @override
   void visitChildren(void Function(Element child) visitor) {

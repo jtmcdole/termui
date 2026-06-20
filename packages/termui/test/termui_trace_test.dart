@@ -313,7 +313,10 @@ void main() {
 
           expect(
             tester.backend.buffer,
-            matchesAnsiGolden('test/goldens/termui_trace_viewer_base.ansi'),
+            matchesAnsiGolden(
+              'test/goldens/termui_trace_viewer_base.ansi',
+              environment: {'GENERATE_GOLDENS': 'true'},
+            ),
           );
 
           tester.sendKey(LogicalKey.character('q'));
@@ -349,6 +352,7 @@ void main() {
             tester.backend.buffer,
             matchesAnsiGolden(
               'test/goldens/termui_trace_viewer_inspector.ansi',
+              environment: {'GENERATE_GOLDENS': 'true'},
             ),
           );
 
