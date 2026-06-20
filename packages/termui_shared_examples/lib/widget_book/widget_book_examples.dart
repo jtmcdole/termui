@@ -16,5 +16,6 @@ export 'layout_state.dart';
 export 'decorated_widgets.dart';
 export 'animations.dart';
 export 'mouse_cursors.dart';
+export 'mcdole_logo.dart';
 export 'widget_book_platform.dart';
 export 'widget_book_runner.dart';

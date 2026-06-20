@@ -75,6 +75,34 @@ class Canvas extends Widget {
   final Uint8List _antiAliased;
   final List<Style?> _styles;
 
+  /// Merges [other] canvas into this canvas.
+  /// If [overwrite] is true, cells that are written to in [other] (i.e. grid != 0)
+  /// will completely replace the cells in this canvas.
+  void merge(Canvas other, {bool overwrite = false}) {
+    if (width != other.width || height != other.height) {
+      throw ArgumentError(
+        'Canvas dimensions must match: ${width}x$height vs ${other.width}x${other.height}',
+      );
+    }
+    final len = width * height;
+    for (var i = 0; i < len; i++) {
+      final otherDots = other._grid[i];
+      if (otherDots != 0) {
+        if (overwrite) {
+          _grid[i] = otherDots;
+          _antiAliased[i] = other._antiAliased[i];
+          _styles[i] = other._styles[i];
+        } else {
+          _grid[i] |= otherDots;
+          _antiAliased[i] |= other._antiAliased[i];
+          if (other._styles[i] != null) {
+            _styles[i] = other._styles[i];
+          }
+        }
+      }
+    }
+  }
+
   /// Base style for the canvas cell blocks.
   final Style style;
 
@@ -135,9 +163,10 @@ class Canvas extends Widget {
     bool antiAliased = false,
     Style? cellStyle,
   }) {
+    if (px < 0 || py < 0 || px >= width * 2 || py >= height * 4) return;
+
     final cx = px ~/ 2;
     final cy = py ~/ 4;
-    if (cx < 0 || cx >= width || cy < 0 || cy >= height) return;
 
     final dx = px % 2;
     final dy = py % 4;
