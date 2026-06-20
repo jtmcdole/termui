@@ -3,6 +3,7 @@ import 'package:file/file.dart';
 import 'package:clock/clock.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/renderer.dart';
+import 'package:archive/archive.dart';
 
 /// An interface for writing Asciicast stream data.
 abstract interface class AsciicastWriter {
@@ -16,6 +17,7 @@ abstract interface class AsciicastWriter {
 /// A writer that sends Asciicast lines to a standard [File] using synchronous I/O.
 class FileAsciicastWriter implements AsciicastWriter {
   final File _file;
+  final StringBuffer _buffer = StringBuffer();
 
   /// Creates a [FileAsciicastWriter] wrapping the given [file].
   FileAsciicastWriter(File file) : _file = file {
@@ -27,16 +29,14 @@ class FileAsciicastWriter implements AsciicastWriter {
 
   @override
   void writeLine(String line) {
-    _file.writeAsStringSync(
-      '$line\n',
-      mode: FileMode.writeOnlyAppend,
-      flush: true,
-    );
+    _buffer.writeln(line);
   }
 
   @override
   void close() {
-    // No-op as writes are performed synchronously and flushed immediately
+    final bytes = utf8.encode(_buffer.toString());
+    final compressed = GZipEncoder().encode(bytes);
+    _file.writeAsBytesSync(compressed);
   }
 }
 
@@ -49,7 +49,7 @@ class StringSinkAsciicastWriter implements AsciicastWriter {
 
   @override
   void writeLine(String line) {
-    _sink.write('$line\n');
+    _sink.writeln(line);
   }
 
   @override
@@ -59,7 +59,7 @@ class StringSinkAsciicastWriter implements AsciicastWriter {
 }
 
 /// A recorder that captures terminal frame states and serializes them
-/// into the Asciinema Asciicast v2 format.
+/// into the Asciinema Asciicast v3 format.
 class AsciicastRecorder {
   /// The column width of the recorded terminal session.
   final int width;
@@ -69,6 +69,7 @@ class AsciicastRecorder {
 
   final AsciicastWriter _writer;
   DateTime? _startTime;
+  DateTime? _lastEventTime;
   late final Renderer _renderer;
   bool _headerWritten = false;
 
@@ -81,14 +82,12 @@ class AsciicastRecorder {
     _renderer = Renderer(width, height, mode: RenderingMode.alternateScreen);
   }
 
-  /// Writes the Asciicast header chunk.
+  /// Writes the Asciicast header chunk in v3 format.
   void _writeHeader() {
     final header = {
-      'version': 2,
-      'width': width,
-      'height': height,
+      'version': 3,
+      'term': {'cols': width, 'rows': height},
       'timestamp': _startTime!.millisecondsSinceEpoch ~/ 1000,
-      'env': {'TERM': 'xterm-256color', 'SHELL': '/bin/sh'},
     };
     _writer.writeLine(jsonEncode(header));
     _headerWritten = true;
@@ -99,23 +98,12 @@ class AsciicastRecorder {
   ///
   /// Optionally accepts [actions] performed in this frame.
   void recordFrame(Buffer buffer, [List<String>? actions]) {
-    _startTime ??= clock.now();
+    final now = clock.now();
+    _startTime ??= now;
+    _lastEventTime ??= now;
 
     if (!_headerWritten) {
       _writeHeader();
-    }
-
-    final elapsed = clock.now().difference(_startTime!);
-    final elapsedSeconds = elapsed.inMicroseconds / 1000000.0;
-
-    if (actions != null && actions.isNotEmpty) {
-      final joinedActions = actions.join(', ');
-      final actionRow = [
-        elapsedSeconds,
-        'd', // Custom actions metadata code
-        'Actions: $joinedActions',
-      ];
-      _writer.writeLine(jsonEncode(actionRow));
     }
 
     final frameOutput = StringBuffer();
@@ -124,8 +112,22 @@ class AsciicastRecorder {
     final deltaAnsi = frameOutput.toString();
     if (deltaAnsi.isEmpty) return; // No updates drawn
 
+    final elapsed = now.difference(_lastEventTime!);
+    final intervalSeconds = elapsed.inMicroseconds / 1000000.0;
+    _lastEventTime = now;
+
+    if (actions != null && actions.isNotEmpty) {
+      final joinedActions = actions.join(', ');
+      final actionRow = [
+        0.0, // Attach metadata exactly at the same tick (0.0 interval from the previous event)
+        'd', // Custom actions metadata code
+        'Actions: $joinedActions',
+      ];
+      _writer.writeLine(jsonEncode(actionRow));
+    }
+
     final eventRow = [
-      elapsedSeconds,
+      intervalSeconds,
       'o', // Output sequence type
       deltaAnsi,
     ];

@@ -1,5 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:args/args.dart';
+import 'package:archive/archive.dart';
+import 'package:file/local.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 
 /// The entrypoint for the termui_play command-line tool.
@@ -43,26 +46,27 @@ Future<void> main(List<String> args) async {
   } catch (e) {
     print('Error parsing arguments: $e');
     _printUsage(parser);
-    exit(1);
+    return;
   }
 
   if (results['help'] as bool) {
     _printUsage(parser);
-    exit(0);
+    return;
   }
 
   final rest = results.rest;
   if (rest.isEmpty) {
     print('Error: Missing input .cast file path.');
     _printUsage(parser);
-    exit(1);
+    return;
   }
 
   final filePath = rest[0];
-  final file = File(filePath);
+  final fs = LocalFileSystem();
+  final file = fs.file(filePath);
   if (!file.existsSync()) {
     print('Error: File does not exist at $filePath');
-    exit(1);
+    return;
   }
 
   final speedStr = results['speed'] as String;
@@ -71,7 +75,16 @@ Future<void> main(List<String> args) async {
   final paused = results['paused'] as bool;
   final noCloseAtEnd = results['keep-alive'] as bool;
 
-  final player = AsciicastPlayer(file.readAsStringSync());
+  final bytes = file.readAsBytesSync();
+  String data;
+  try {
+    data = utf8.decode(GZipDecoder().decodeBytes(bytes));
+  } catch (_) {
+    // Fallback to plain text if not gzipped
+    data = utf8.decode(bytes);
+  }
+
+  final player = AsciicastPlayer(data);
 
   try {
     await player.play(

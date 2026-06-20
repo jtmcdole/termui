@@ -69,6 +69,14 @@ class MouseCursorsExample extends WidgetBookExample {
     final rowHeight = height ~/ 7;
     if (colWidth == 0 || rowHeight == 0) return;
 
+    if (localX < 0 || localY < 0 || localX >= width || localY >= height) {
+      if (_hoveredIndex != null) {
+        _hoveredIndex = null;
+        terminal?.resetMousePointer();
+      }
+      return;
+    }
+
     final col = localX ~/ colWidth;
     final row = localY ~/ rowHeight;
 
@@ -84,7 +92,7 @@ class MouseCursorsExample extends WidgetBookExample {
       }
     }
 
-    // Reset when mouse moves over empty spaces
+    // Reset area or outside valid pointers
     if (_hoveredIndex != null) {
       _hoveredIndex = null;
       terminal?.resetMousePointer();

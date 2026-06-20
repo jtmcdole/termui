@@ -25,9 +25,9 @@ void main() {
 
       // Verify header format (Line 0)
       final header = jsonDecode(lines[0]) as Map<String, dynamic>;
-      expect(header['version'], equals(2));
-      expect(header['width'], equals(80));
-      expect(header['height'], equals(24));
+      expect(header['version'], equals(3));
+      expect(header['term']['cols'], equals(80));
+      expect(header['term']['rows'], equals(24));
 
       // Verify first frame event format (Line 1)
       final event = jsonDecode(lines[1]) as List<dynamic>;

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:archive/archive.dart';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:file/memory.dart';
@@ -78,7 +79,9 @@ void main() {
         final file = memoryFs.file(memTracePath);
         expect(file.existsSync(), isTrue);
 
-        final contents = file.readAsStringSync();
+        final contents = utf8.decode(
+          GZipDecoder().decodeBytes(file.readAsBytesSync()),
+        );
 
         // Verify that it is valid JSON
         expect(
@@ -113,7 +116,9 @@ void main() {
 
           expect(tempFile.existsSync(), isTrue);
 
-          final contents = tempFile.readAsStringSync();
+          final contents = utf8.decode(
+            GZipDecoder().decodeBytes(tempFile.readAsBytesSync()),
+          );
 
           // Verify that it is valid JSON
           expect(

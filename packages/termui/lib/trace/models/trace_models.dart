@@ -205,7 +205,16 @@ Future<Map<String, Object>?> parseTraceFile(String path) async {
     final file = File(path);
     if (!file.existsSync()) return null;
 
-    final content = file.readAsStringSync();
+    String content;
+    if (path.endsWith('.gz')) {
+      final bytes = file.readAsBytesSync();
+      // dart:io gzip decoder
+      final decompressed = gzip.decode(bytes);
+      content = utf8.decode(decompressed);
+    } else {
+      content = file.readAsStringSync();
+    }
+
     final jsonList = jsonDecode(content) as List<dynamic>;
     final events = jsonList
         .map((e) => TraceEvent.fromJson(e as Map<String, dynamic>))

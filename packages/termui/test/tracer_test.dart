@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:archive/archive.dart';
 import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
@@ -47,7 +48,9 @@ void main() {
       final file = File(traceFilePath);
       expect(await file.exists(), isTrue);
 
-      final contents = await file.readAsString();
+      final contents = utf8.decode(
+        GZipDecoder().decodeBytes(await file.readAsBytes()),
+      );
       expect(contents, startsWith('[\n'));
       expect(contents, endsWith('\n]\n'));
 
@@ -83,7 +86,13 @@ void main() {
       final file = File(traceFilePath);
       expect(await file.exists(), isTrue);
 
-      final jsonList = jsonDecode(await file.readAsString()) as List<dynamic>;
+      final jsonList =
+          jsonDecode(
+                utf8.decode(
+                  GZipDecoder().decodeBytes(await file.readAsBytes()),
+                ),
+              )
+              as List<dynamic>;
       expect(jsonList.length, equals(2));
       expect(jsonList[0]['name'], equals('dynamicEvent'));
       expect(jsonList[0]['ph'], equals('B'));
@@ -103,7 +112,9 @@ void main() {
       final file = memoryFs.file(memTracePath);
       expect(file.existsSync(), isTrue);
 
-      final contents = file.readAsStringSync();
+      final contents = utf8.decode(
+        GZipDecoder().decodeBytes(file.readAsBytesSync()),
+      );
       expect(contents, startsWith('[\n'));
       expect(contents, endsWith('\n]\n'));
 
@@ -128,7 +139,9 @@ void main() {
 
         final localFile = File(traceFilePath);
         expect(await localFile.exists(), isTrue);
-        final localContents = await localFile.readAsString();
+        final localContents = utf8.decode(
+          GZipDecoder().decodeBytes(await localFile.readAsBytes()),
+        );
         final localJsonList = jsonDecode(localContents) as List<dynamic>;
         expect(localJsonList.length, equals(1));
         expect(localJsonList[0]['name'], equals('localEvent'));
@@ -154,7 +167,9 @@ void main() {
 
         final memFile = memoryFs.file(memTracePath);
         expect(memFile.existsSync(), isTrue);
-        final memContents = memFile.readAsStringSync();
+        final memContents = utf8.decode(
+          GZipDecoder().decodeBytes(memFile.readAsBytesSync()),
+        );
         final memJsonList = jsonDecode(memContents) as List<dynamic>;
         expect(memJsonList.length, equals(1));
         expect(memJsonList[0]['name'], equals('memEvent'));
@@ -183,7 +198,9 @@ void main() {
 
         final file = File(traceFilePath);
         expect(await file.exists(), isTrue);
-        final contents = await file.readAsString();
+        final contents = utf8.decode(
+          GZipDecoder().decodeBytes(await file.readAsBytes()),
+        );
         expect(() => jsonDecode(contents), returnsNormally);
       },
     );

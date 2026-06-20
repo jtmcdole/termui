@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:math';
+import 'package:archive/archive.dart';
 import 'package:file/file.dart';
 import 'package:termui/perf/fs_locator.dart';
 import 'package:termui_test/termui_test.dart';
@@ -342,7 +343,10 @@ void main() {
         });
 
         expect(traceFile.existsSync(), isTrue);
-        final lines = traceFile.readAsLinesSync();
+        final bytes = traceFile.readAsBytesSync();
+        final decompressed = GZipDecoder().decodeBytes(bytes);
+        final content = utf8.decode(decompressed);
+        final lines = const LineSplitter().convert(content);
         expect(lines, isNotEmpty);
 
         bool foundActionsRow = false;

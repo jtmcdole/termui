@@ -9,6 +9,7 @@ environment:
 resolution: workspace
 
 dependencies:
+  archive: ^4.0.9
   termui: ^0.4.0
   characters: ^1.4.0
   clock: ^1.1.2

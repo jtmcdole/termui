@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:file/local.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'ansi_screenshot.dart';
@@ -17,16 +17,17 @@ Matcher matchesAnsiGolden(
 class _AnsiGoldenMatcher extends Matcher {
   final String goldenPath;
   final Map<String, String> _environment;
+  final _fs = const LocalFileSystem();
 
   _AnsiGoldenMatcher(this.goldenPath, {Map<String, String>? environment})
-    : _environment = environment ?? Platform.environment;
+    : _environment = environment ?? const {};
 
   @override
   bool matches(dynamic item, Map matchState) {
     if (item is! Buffer) return false;
 
     final currentAnsi = AnsiScreenshot.capture(item);
-    final goldenFile = File(goldenPath);
+    final goldenFile = _fs.file(goldenPath);
 
     final updateGoldens =
         _environment['GENERATE_GOLDENS'] == 'true' ||
@@ -40,7 +41,7 @@ class _AnsiGoldenMatcher extends Matcher {
 
     if (!goldenFile.existsSync()) {
       final failPath = '$goldenPath.fail';
-      final failedFile = File(failPath);
+      final failedFile = _fs.file(failPath);
       failedFile.createSync(recursive: true);
       failedFile.writeAsStringSync(currentAnsi);
       matchState['failure'] =
