@@ -1,10 +1,10 @@
-# Termui Core Engine Documentation
+# termui
 
 A high-performance, double-buffered **Terminal User Interface (TUI)** and **declarative layout engine** for Dart.
 
 `termui` enables you to build complex, rich, and highly interactive terminal applications with overlapping windows, layout grids, and a widget tree structure inspired by Flutter; without the performance pitfalls, low-level ANSI complexity, or terminal flickering of naive CLI output printing.
 
-<video src="https://github.com/user-attachments/assets/a850086b-de1b-4fda-86f0-c97e339ff271" width="100%" autoplay loop muted controls></video>
+<video src="https://github.com/user-attachments/assets/a850086b-de1b-4fda-86f0-c97e339ff271" width="50%" autoplay loop muted controls></video>
 
 ---
 
@@ -19,6 +19,20 @@ See what is possible with `termui` in your browser! Check out our live interacti
 To host a `termui` TUI application in a graphical environment (e.g. within a Flutter mobile/desktop widget or a browser canvas), check out the companion package:
 
   **[termui_flutter](../termui_flutter)**
+
+---
+
+## Screenshots
+
+<video src="https://github.com/user-attachments/assets/e7975a3a-0732-4f54-a987-49b0375bd307" width="50%" autoplay loop muted controls></video>
+
+<img width="1267" height="110" alt="Screenshot 2026-06-19 221607" src="https://github.com/user-attachments/assets/86581ba2-722a-46db-a607-a0ce349ff80c" />
+<img width="293" height="181" alt="Screenshot 2026-06-19 221456" src="https://github.com/user-attachments/assets/9c741765-a612-43cd-b0e0-9e58eb3fac2c" />
+<img width="260" height="178" alt="Screenshot 2026-06-19 221452" src="https://github.com/user-attachments/assets/d45946fc-7186-4088-893e-cc81de04f07f" />
+<img width="221" height="237" alt="Screenshot 2026-06-19 221439" src="https://github.com/user-attachments/assets/ced3691c-1fce-4342-ac17-9c742db39026" />
+<img width="263" height="90" alt="Screenshot 2026-06-19 221409" src="https://github.com/user-attachments/assets/59040743-c9d3-4292-bbbd-12b7d48873b7" />
+<img width="295" height="77" alt="Screenshot 2026-06-19 221402" src="https://github.com/user-attachments/assets/e9e67ff8-39cf-4df1-8214-805534fb5555" />
+<img width="940" height="135" alt="Screenshot 2026-06-19 215626" src="https://github.com/user-attachments/assets/9a6f272e-757d-4aa3-b924-03572f294066" />
 
 ---
 
