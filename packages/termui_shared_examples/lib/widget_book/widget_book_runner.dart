@@ -1,6 +1,5 @@
 import "package:termui/perf/fs_locator.dart";
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
 import 'package:termui/terminal/terminal.dart' as term;
@@ -209,7 +208,6 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
   String _statusMessage = '';
 
   AsciicastRecorder? castRecorder;
-  StringBuffer? castOutput;
   bool _isRecordingCast = false;
 
   Timer? _statusClearTimer;
@@ -306,11 +304,8 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
     _previewFocusNode.dispose();
     _rootScopeNode.dispose();
 
-    if (_isRecordingCast && castOutput != null) {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      File(
-        'recording_$timestamp.cast',
-      ).writeAsStringSync(castOutput!.toString());
+    if (_isRecordingCast && castRecorder != null) {
+      castRecorder!.close();
     }
 
     super.dispose();
@@ -335,21 +330,24 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
     if (_isRecordingCast) {
       _isRecordingCast = false;
       if (castRecorder != null) {
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-        final file = File('recording_$timestamp.cast');
-        file.writeAsStringSync(castOutput!.toString());
-        _setStatus('Asciicast saved to ${file.path}');
+        castRecorder!.close();
+        _setStatus('Asciicast saved to recording.cast.gz');
         castRecorder = null;
-        castOutput = null;
       }
     } else {
       _isRecordingCast = true;
-      castOutput = StringBuffer();
       final element = context as Element;
       final w = element.size.width;
       final h = element.size.height;
+      final fs = getDefaultFileSystem();
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final path = fs.path.join(
+        fs.currentDirectory.path,
+        'recording_$timestamp.cast.gz',
+      );
+      final file = fs.file(path);
       castRecorder = AsciicastRecorder(
-        StringSinkAsciicastWriter(castOutput!),
+        FileAsciicastWriter(file),
         width: w,
         height: h,
       );
@@ -372,7 +370,7 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final tracePath = fs.path.join(
         fs.currentDirectory.path,
-        'trace_$timestamp.json',
+        'trace_$timestamp.json.gz',
       );
       await Tracer.start(tracePath, fs: fs);
       _setStatus('Tracing started: $tracePath');
@@ -396,8 +394,9 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
 
     if (localY == 0) {
       final headerText = _getHeaderText(w, h);
-      final castBtnX = headerText.indexOf('⏺') - 1;
-      if (localX >= castBtnX && localX < castBtnX + 16) {
+      final iconStr = _isRecordingCast ? '🔴' : '⏺';
+      final castBtnX = headerText.indexOf(iconStr) - 1;
+      if (castBtnX >= 0 && localX >= castBtnX && localX < castBtnX + 16) {
         if (event.type == term.MouseEventType.press) {
           _toggleRecording();
         }
@@ -821,7 +820,7 @@ class PreviewPaneWidget extends Widget {
   Element createElement() => _PreviewPaneElement(this);
 }
 
-class _PreviewPaneElement extends Element {
+class _PreviewPaneElement extends Element implements MouseEventHandler {
   Element? childElement;
 
   _PreviewPaneElement(PreviewPaneWidget super.widget);
@@ -897,6 +896,7 @@ class _PreviewPaneElement extends Element {
     }
   }
 
+  @override
   void handleMouseEvent(term.MouseEvent event, int localX, int localY) {
     final w = widget as PreviewPaneWidget;
     w.focusNode.requestFocus();
@@ -907,6 +907,7 @@ class _PreviewPaneElement extends Element {
       w.contentWidth,
       w.contentHeight,
     );
+    markNeedsBuild();
   }
 }
 

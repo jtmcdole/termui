@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:termui/terminal/terminal.dart';
 
@@ -53,23 +52,36 @@ class AsciicastPlayer {
     // Parse header (line 0)
     var castWidth = 80;
     var castHeight = 24;
+    var version = 2;
     try {
       final header = jsonDecode(lines[0]) as Map<String, dynamic>;
-      castWidth = header['width'] as int? ?? 80;
-      castHeight = header['height'] as int? ?? 24;
+      version = header['version'] as int? ?? 2;
+      if (version == 3) {
+        final term = header['term'] as Map<String, dynamic>?;
+        castWidth = term?['cols'] as int? ?? 80;
+        castHeight = term?['rows'] as int? ?? 24;
+      } else {
+        castWidth = header['width'] as int? ?? 80;
+        castHeight = header['height'] as int? ?? 24;
+      }
     } catch (_) {
       // Ignore malformed header JSON
     }
 
     // Parse events (subsequent lines)
     final events = <AsciicastEvent>[];
+    var accumulatedTime = 0.0;
     for (var i = 1; i < lines.length; i++) {
       final line = lines[i].trim();
       if (line.isEmpty) continue;
       try {
         final array = jsonDecode(line) as List<dynamic>;
         if (array.length == 3) {
-          final time = (array[0] as num).toDouble();
+          var time = (array[0] as num).toDouble();
+          if (version == 3) {
+            accumulatedTime += time;
+            time = accumulatedTime;
+          }
           final type = array[1] as String;
           final data = array[2] as String;
           events.add(AsciicastEvent(time, type, data));
@@ -83,7 +95,7 @@ class AsciicastPlayer {
 
     if (!interactive) {
       // Non-interactive playback: just delay and write directly to stdout
-      final out = _stdoutOverride ?? stdout;
+      final out = _stdoutOverride;
       final stopwatch = Stopwatch()..start();
       for (final event in events) {
         if (event.type != 'o') {
@@ -95,9 +107,11 @@ class AsciicastPlayer {
         if (sleepMs > 0) {
           await Future<void>.delayed(Duration(milliseconds: sleepMs));
         }
-        out.write(event.data);
-        if (out is Stdout) {
-          await out.flush();
+        if (out != null) {
+          out.write(event.data);
+        } else {
+          // Fallback to print if no sink is provided and we can't use dart:io stdout
+          print(event.data);
         }
       }
       return;

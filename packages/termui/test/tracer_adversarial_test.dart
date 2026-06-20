@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:archive/archive.dart';
 import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
@@ -101,7 +102,9 @@ void main() {
         final file = memoryFs.file(memTracePath);
         expect(file.existsSync(), isTrue);
 
-        final contents = file.readAsStringSync();
+        final contents = utf8.decode(
+          GZipDecoder().decodeBytes(file.readAsBytesSync()),
+        );
 
         // Attempt to decode the JSON - this will throw an exception if the format is invalid
         expect(
@@ -127,7 +130,9 @@ void main() {
         final file = File(localTracePath);
         expect(await file.exists(), isTrue);
 
-        final contents = await file.readAsString();
+        final contents = utf8.decode(
+          GZipDecoder().decodeBytes(await file.readAsBytes()),
+        );
 
         // Attempt to decode the JSON - this will throw an exception if the format is invalid
         expect(

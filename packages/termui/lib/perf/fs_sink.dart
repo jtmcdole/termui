@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:file/file.dart';
+import 'package:archive/archive.dart';
 import 'tracer.dart';
 import 'tracer_sink.dart';
 
@@ -15,7 +16,7 @@ class FileSystemSink implements TracerSink {
   /// The base epoch timestamp in microseconds for the trace.
   final int baseEpochUs;
   late final File _file;
-  late final IOSink _ios;
+  final StringBuffer _buffer = StringBuffer();
   bool _isFirst = true;
   final List<String> _stringTable = ['Unknown'];
 
@@ -25,8 +26,7 @@ class FileSystemSink implements TracerSink {
     if (!_file.parent.existsSync()) {
       _file.parent.createSync(recursive: true);
     }
-    _ios = _file.openWrite(mode: FileMode.write);
-    _ios.write('[\n');
+    _buffer.write('[\n');
   }
 
   @override
@@ -56,7 +56,7 @@ class FileSystemSink implements TracerSink {
       final realTs = baseEpochUs + ts;
 
       if (!_isFirst) {
-        _ios.write(',\n');
+        _buffer.write(',\n');
       } else {
         _isFirst = false;
       }
@@ -65,7 +65,7 @@ class FileSystemSink implements TracerSink {
           ? ', "args": ${jsonEncode(metadata[i])}'
           : '';
       final escapedName = jsonEncode(name);
-      _ios.write(
+      _buffer.write(
         '  {"name": $escapedName, "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId$metaStr}',
       );
     }
@@ -73,8 +73,9 @@ class FileSystemSink implements TracerSink {
 
   @override
   Future<void> close() async {
-    _ios.write('\n]\n');
-    await _ios.flush();
-    await _ios.close();
+    _buffer.write('\n]\n');
+    final bytes = utf8.encode(_buffer.toString());
+    final compressed = GZipEncoder().encode(bytes);
+    _file.writeAsBytesSync(compressed);
   }
 }

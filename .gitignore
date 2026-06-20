@@ -6,7 +6,9 @@
 .idea/
 *.iml
 *.cast
+*.cast.gz
 trace*.json
+trace*.json.gz
 debug.log
 **/coverage/
 *.py

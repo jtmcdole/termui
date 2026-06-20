@@ -154,21 +154,32 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
   Future<void> _toggleTrace() async {
     if (_isRecordingTrace) {
       await Tracer.stop();
-      setState(() {
-        _isRecordingTrace = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isRecordingTrace = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Benchmark trace saved to: $_traceFilePath'),
+            duration: const Duration(seconds: 8),
+            action: SnackBarAction(label: 'Dismiss', onPressed: () {}),
+          ),
+        );
+      }
     } else {
       final fs = getDefaultFileSystem();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final path = fs.path.join(
         fs.currentDirectory.path,
-        'benchmark_trace_$timestamp.json',
+        'benchmark_trace_$timestamp.json.gz',
       );
       await Tracer.start(path, fs: fs);
-      setState(() {
-        _isRecordingTrace = true;
-        _traceFilePath = path;
-      });
+      if (mounted) {
+        setState(() {
+          _isRecordingTrace = true;
+          _traceFilePath = path;
+        });
+      }
     }
   }
 
@@ -179,7 +190,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final path = fs.path.join(
       fs.currentDirectory.path,
-      'auto_benchmark_trace_$timestamp.json',
+      'auto_benchmark_trace_$timestamp.json.gz',
     );
 
     ScaffoldMessenger.of(context).showSnackBar(
