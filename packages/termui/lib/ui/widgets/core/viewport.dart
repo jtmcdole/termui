@@ -45,6 +45,26 @@ class Viewport implements Buffer {
   }
 
   @override
+  List<RegisteredEffect> get effects => parent.effects;
+
+  @override
+  void addEffect(RegisteredEffect effect) {
+    parent.addEffect(
+      RegisteredEffect(
+        effect.effect,
+        Rect(
+          bounds.x + effect.bounds.x,
+          bounds.y + effect.bounds.y,
+          effect.bounds.width,
+          effect.bounds.height,
+        ),
+        effect.zIndex,
+        effect.originalIndex,
+      ),
+    );
+  }
+
+  @override
   void setCell(int x, int y, Cell cell) {
     if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return;
     parent.setCell(bounds.x + x, bounds.y + y, cell);

@@ -17,6 +17,11 @@ class SizedBox extends Widget {
   /// Creates a sized box with 0 width and height.
   const SizedBox.shrink({this.child}) : width = 0, height = 0;
 
+  /// Creates a sized box that expands to fit its parent.
+  const SizedBox.expand({this.child})
+    : width = BoxConstraints.infinity,
+      height = BoxConstraints.infinity;
+
   @override
   Element createElement() => SizedBoxElement(this);
 

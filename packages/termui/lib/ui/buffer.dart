@@ -57,6 +57,14 @@ class Buffer {
   /// The flat list of cells representing the 2D grid.
   List<Cell> cells;
 
+  /// The list of terminal effects registered in this buffer.
+  final List<RegisteredEffect> effects = [];
+
+  /// Adds a terminal effect to this buffer.
+  void addEffect(RegisteredEffect effect) {
+    effects.add(effect);
+  }
+
   /// Creates a new buffer of [width] by [height] initialized with transparent empty cells.
   Buffer(this.width, this.height)
     : cells = List.generate(width * height, (_) => Cell.empty());
@@ -90,6 +98,7 @@ class Buffer {
           cell.style = Style.transparent;
         }
       }
+      effects.clear();
     } finally {
       Tracer.record(_traceClearId, Phase.end, TraceCategory.paint);
     }
@@ -243,6 +252,12 @@ class Compositor {
   static final int _traceCompositeId = Tracer.registerString(
     'Compositor:composite',
   );
+  static final int _traceCompositeRecursiveId = Tracer.registerString(
+    'Compositor:_compositeRecursive',
+  );
+  static final int _traceCompositeOpaqueContentId = Tracer.registerString(
+    'Compositor:_compositeOpaqueContent',
+  );
 
   /// Flattens [layers] onto [target] in descending Z-index order (topmost first).
   ///
@@ -267,46 +282,282 @@ class Compositor {
         return originalIndices[b]!.compareTo(originalIndices[a]!);
       });
 
+      _compositeRecursive(target, sortedLayers, 0);
+    } finally {
+      Tracer.record(_traceCompositeId, Phase.end, TraceCategory.compositor);
+    }
+  }
+
+  void _compositeRecursive(
+    Buffer target,
+    List<LayeredBuffer> sortedLayers,
+    int startIndex, {
+    bool initializeMasksFromTarget = false,
+  }) {
+    Tracer.record(
+      _traceCompositeRecursiveId,
+      Phase.begin,
+      TraceCategory.compositor,
+    );
+    try {
       final totalCells = target.width * target.height;
-      final written = Uint32List((totalCells + 31) >> 5);
-      var remainingTargetCells = totalCells;
+      final fgWritten = Uint32List((totalCells + 31) >> 5);
+      final bgWritten = Uint32List((totalCells + 31) >> 5);
+      var remainingFg = totalCells;
+      var remainingBg = totalCells;
 
-      for (final layer in sortedLayers) {
-        if (remainingTargetCells <= 0) break; // Early exit: everything covered
+      if (initializeMasksFromTarget) {
+        // Initialize masks based on existing target content (e.g. from pre-filled effect layers)
+        for (var i = 0; i < totalCells; i++) {
+          final cell = target.cells[i];
+          if (!cell.isTransparent) {
+            final word = i >> 5;
+            final bit = i & 31;
+            // Foreground is considered written if the cell is not transparent
+            fgWritten[word] |= (1 << bit);
+            remainingFg--;
 
-        final buf = layer.buffer;
-        final ox = layer.x;
-        final oy = layer.y;
-
-        for (var ly = 0; ly < buf.height; ly++) {
-          final ty = oy + ly;
-          if (ty < 0 || ty >= target.height) continue;
-
-          for (var lx = 0; lx < buf.width; lx++) {
-            final tx = ox + lx;
-            if (tx < 0 || tx >= target.width) continue;
-
-            final targetIdx = ty * target.width + tx;
-            final word = targetIdx >> 5;
-            final bit = targetIdx & 31;
-
-            if ((written[word] & (1 << bit)) != 0) {
-              continue; // Already covered by a higher layer
+            if (cell.style.background != null) {
+              bgWritten[word] |= (1 << bit);
+              remainingBg--;
             }
+          }
+        }
+      }
 
-            final sourceCell = buf.getCell(lx, ly);
-            if (sourceCell == null || sourceCell.isTransparent) continue;
+      for (var i = startIndex; i < sortedLayers.length; i++) {
+        if (remainingFg <= 0 && remainingBg <= 0) {
+          break; // Early exit: everything covered
+        }
 
-            final targetCell = target.cells[targetIdx];
-            targetCell.char = sourceCell.char;
-            targetCell.style = sourceCell.style;
-            written[word] |= (1 << bit);
-            remainingTargetCells--;
+        final layer = sortedLayers[i];
+
+        if (layer.buffer.effects.isNotEmpty) {
+          final tempBuffer = Buffer(target.width, target.height);
+
+          // 1. Composite this layer's content onto tempBuffer
+          _compositeOpaqueContent(tempBuffer, layer);
+
+          // 2. Recurse to resolve the remaining lower layers into tempBuffer
+          if (i + 1 < sortedLayers.length) {
+            _compositeRecursive(
+              tempBuffer,
+              sortedLayers,
+              i + 1,
+              initializeMasksFromTarget: true,
+            );
+          }
+
+          // 3. Apply this layer's effects to the resolved background
+          for (final effect in layer.buffer.effects) {
+            final effectTraceId = Tracer.registerString(
+              'Compositor:applyEffect:${effect.effect.runtimeType}',
+            );
+            Tracer.record(effectTraceId, Phase.begin, TraceCategory.compositor);
+            try {
+              effect.effect.applyEffect(
+                tempBuffer,
+                Rect(
+                  layer.x + effect.bounds.x,
+                  layer.y + effect.bounds.y,
+                  effect.bounds.width,
+                  effect.bounds.height,
+                ),
+              );
+            } finally {
+              Tracer.record(effectTraceId, Phase.end, TraceCategory.compositor);
+            }
+          }
+
+          // Composite the mutated background onto our target (respecting occlusion)
+          var targetIdx = 0;
+          for (var ty = 0; ty < target.height; ty++) {
+            for (var tx = 0; tx < target.width; tx++, targetIdx++) {
+              final word = targetIdx >> 5;
+              final bit = targetIdx & 31;
+
+              final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
+              final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
+
+              if (fgOccluded && bgOccluded) continue; // Fully occluded
+
+              final sourceCell = tempBuffer.cells[targetIdx];
+              if (sourceCell.isTransparent) continue;
+
+              final targetCell = target.cells[targetIdx];
+
+              if (!fgOccluded &&
+                  !bgOccluded &&
+                  sourceCell.style.background != null) {
+                targetCell.char = sourceCell.char;
+                targetCell.style = sourceCell.style;
+                fgWritten[word] |= (1 << bit);
+                bgWritten[word] |= (1 << bit);
+                remainingFg--;
+                remainingBg--;
+              } else {
+                var newChar = targetCell.char;
+                var newFg = targetCell.style.foreground;
+                var newBg = targetCell.style.background;
+                var newMods = targetCell.style.modifiers;
+
+                if (!fgOccluded) {
+                  newChar = sourceCell.char;
+                  newFg = sourceCell.style.foreground;
+                  newMods = sourceCell.style.modifiers;
+                  fgWritten[word] |= (1 << bit);
+                  remainingFg--;
+                }
+
+                if (!bgOccluded && sourceCell.style.background != null) {
+                  newBg = sourceCell.style.background;
+                  bgWritten[word] |= (1 << bit);
+                  remainingBg--;
+                }
+
+                targetCell.char = newChar;
+                if (targetCell.style.foreground != newFg ||
+                    targetCell.style.background != newBg ||
+                    targetCell.style.modifiers != newMods) {
+                  targetCell.style = Style(
+                    foreground: newFg,
+                    background: newBg,
+                    modifiers: newMods,
+                  );
+                }
+              }
+            }
+          }
+
+          // We have processed all remaining layers in the recursive call
+          break;
+        } else {
+          final buf = layer.buffer;
+          final ox = layer.x;
+          final oy = layer.y;
+
+          // No effects on this layer. Fast path: Composite directly to target.
+          for (var ly = 0; ly < buf.height; ly++) {
+            final ty = oy + ly;
+            if (ty < 0 || ty >= target.height) continue;
+
+            var targetIdx = ty * target.width + ox;
+            for (var lx = 0; lx < buf.width; lx++, targetIdx++) {
+              final tx = ox + lx;
+              if (tx < 0 || tx >= target.width) continue;
+
+              final word = targetIdx >> 5;
+              final bit = targetIdx & 31;
+
+              final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
+              final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
+
+              if (fgOccluded && bgOccluded) continue; // Fully occluded
+
+              final sourceCell = buf.getCell(lx, ly);
+              if (sourceCell == null || sourceCell.isTransparent) continue;
+
+              final targetCell = target.cells[targetIdx];
+
+              if (!fgOccluded &&
+                  !bgOccluded &&
+                  sourceCell.style.background != null) {
+                // Fast path: write both!
+                targetCell.char = sourceCell.char;
+                targetCell.style = sourceCell.style;
+                fgWritten[word] |= (1 << bit);
+                bgWritten[word] |= (1 << bit);
+                remainingFg--;
+                remainingBg--;
+              } else {
+                // Slow path: independent foreground/background blending
+                var newChar = targetCell.char;
+                var newFg = targetCell.style.foreground;
+                var newBg = targetCell.style.background;
+                var newMods = targetCell.style.modifiers;
+
+                if (!fgOccluded) {
+                  newChar = sourceCell.char;
+                  newFg = sourceCell.style.foreground;
+                  newMods = sourceCell.style.modifiers;
+                  fgWritten[word] |= (1 << bit);
+                  remainingFg--;
+                }
+
+                if (!bgOccluded && sourceCell.style.background != null) {
+                  newBg = sourceCell.style.background;
+                  bgWritten[word] |= (1 << bit);
+                  remainingBg--;
+                }
+
+                targetCell.char = newChar;
+                if (targetCell.style.foreground != newFg ||
+                    targetCell.style.background != newBg ||
+                    targetCell.style.modifiers != newMods) {
+                  targetCell.style = Style(
+                    foreground: newFg,
+                    background: newBg,
+                    modifiers: newMods,
+                  );
+                }
+              }
+            }
           }
         }
       }
     } finally {
-      Tracer.record(_traceCompositeId, Phase.end, TraceCategory.compositor);
+      Tracer.record(
+        _traceCompositeRecursiveId,
+        Phase.end,
+        TraceCategory.compositor,
+      );
+    }
+  }
+
+  void _compositeOpaqueContent(Buffer target, LayeredBuffer layer) {
+    Tracer.record(
+      _traceCompositeOpaqueContentId,
+      Phase.begin,
+      TraceCategory.compositor,
+    );
+    try {
+      final buf = layer.buffer;
+      final ox = layer.x;
+      final oy = layer.y;
+
+      for (var ly = 0; ly < buf.height; ly++) {
+        final ty = oy + ly;
+        if (ty < 0 || ty >= target.height) continue;
+
+        var targetIdx = ty * target.width + ox;
+        for (var lx = 0; lx < buf.width; lx++, targetIdx++) {
+          final tx = ox + lx;
+          if (tx < 0 || tx >= target.width) continue;
+
+          final sourceCell = buf.getCell(lx, ly);
+          if (sourceCell == null || sourceCell.isTransparent) continue;
+
+          final targetCell = target.cells[targetIdx];
+
+          if (sourceCell.style.background != null) {
+            targetCell.char = sourceCell.char;
+            targetCell.style = sourceCell.style;
+          } else {
+            targetCell.char = sourceCell.char;
+            targetCell.style = Style(
+              foreground: sourceCell.style.foreground,
+              background: targetCell.style.background,
+              modifiers: sourceCell.style.modifiers,
+            );
+          }
+        }
+      }
+    } finally {
+      Tracer.record(
+        _traceCompositeOpaqueContentId,
+        Phase.end,
+        TraceCategory.compositor,
+      );
     }
   }
 }
