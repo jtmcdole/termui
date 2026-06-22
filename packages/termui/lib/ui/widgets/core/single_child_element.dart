@@ -24,6 +24,13 @@ abstract class SingleChildElement extends Element {
   }
 
   @override
+  void performPaint(Buffer buffer, Offset offset) {
+    if (childElement != null) {
+      childElement!.paint(buffer, offset + childElement!.relativeOffset);
+    }
+  }
+
+  @override
   void rebuild() {
     final cw = childWidget;
     if (cw != null) {

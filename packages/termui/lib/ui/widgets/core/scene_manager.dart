@@ -462,6 +462,8 @@ class SceneManager {
       }
       target.clear();
 
+      // The Compositor natively handles occlusion culling and off-screen
+      // effect layer resolution using recursive saveLayer/backdrop filter patterns.
       _compositor.composite(target: target, layers: layeredBuffers);
 
       if (debugMouseCursorEnabled &&

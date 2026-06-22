@@ -152,7 +152,11 @@ class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
         top: 0,
         width: widget.width,
         height: widget.height,
-        child: mainContent,
+        child: EffectWidget(
+          globalComposite: false,
+          effect: DimmerEffect(scalar: 0.4),
+          child: mainContent,
+        ),
       ),
       Positioned(
         left: 0,

@@ -31,6 +31,7 @@ export 'ui/widgets/layout/flex.dart';
 export 'ui/widgets/core/widget.dart';
 export 'ui/widgets/core/element.dart';
 export 'ui/widgets/core/single_child_element.dart';
+export 'ui/effect.dart';
 export 'ui/widgets/core/build_context.dart';
 export 'ui/widgets/core/key.dart';
 export 'ui/widgets/core/geometry.dart';
