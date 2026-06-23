@@ -50,7 +50,7 @@ void main() {
       final content = Column([
         EffectWidget(
           globalComposite: true,
-          effect: DimmerEffect(scalar: 0.5),
+          effect: const DimmerEffect(scalar: 0.5),
           child: SizedBox(
             width: 20,
             height: 5,
@@ -137,7 +137,9 @@ void main() {
       final layer1Buffer = Buffer(20, 10);
       final layer1Content = EffectWidget(
         globalComposite: true,
-        effect: DimmerEffect(scalar: 0.5), // Should turn 0,0,255 into 0,0,127
+        effect: const DimmerEffect(
+          scalar: 0.5,
+        ), // Should turn 0,0,255 into 0,0,127
         child: SizedBox(
           width: 10,
           height: 5,

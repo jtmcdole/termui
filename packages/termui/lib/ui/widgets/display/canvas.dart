@@ -1000,7 +1000,6 @@ class CanvasElement extends Element {
 
     final targetWidth = targetBuffer.width;
     final targetHeight = targetBuffer.height;
-    final targetCells = targetBuffer.cells;
 
     final w = size.width;
     final h = size.height;
@@ -1037,17 +1036,19 @@ class CanvasElement extends Element {
         }
 
         final targetIdx = ty * targetWidth + tx;
-        final cell = targetCells[targetIdx];
-        cell.char = char;
+        targetBuffer.characters[targetIdx] = char;
         final s = canvas._styles[idx];
         if (s != null) {
-          cell.style = Style(
-            foreground: s.foreground ?? canvas.style.foreground,
-            background: s.background ?? canvas.style.background,
-            modifiers: s.modifiers | canvas.style.modifiers,
-          );
+          targetBuffer.fgColors[targetIdx] =
+              s.foreground?.argb ?? canvas.style.foreground?.argb ?? 0;
+          targetBuffer.bgColors[targetIdx] =
+              s.background?.argb ?? canvas.style.background?.argb ?? 0;
+          targetBuffer.modifiers[targetIdx] =
+              s.modifiers | canvas.style.modifiers;
         } else {
-          cell.style = canvas.style;
+          targetBuffer.fgColors[targetIdx] = canvas.style.foreground?.argb ?? 0;
+          targetBuffer.bgColors[targetIdx] = canvas.style.background?.argb ?? 0;
+          targetBuffer.modifiers[targetIdx] = canvas.style.modifiers;
         }
       }
     }

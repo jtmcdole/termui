@@ -1,5 +1,6 @@
 import 'package:characters/characters.dart';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:termui/termui.dart';
 
 /// Undocumented public member.
@@ -34,9 +35,36 @@ class Viewport implements Buffer {
   @override
   List<Cell> get cells =>
       throw UnsupportedError('Flat cells access not supported on Viewport');
+
   @override
-  set cells(List<Cell> val) =>
-      throw UnsupportedError('Flat cells access not supported on Viewport');
+  List<String> get characters => throw UnsupportedError(
+    'Flat characters access not supported on Viewport',
+  );
+  @override
+  set characters(List<String> val) => throw UnsupportedError(
+    'Flat characters access not supported on Viewport',
+  );
+
+  @override
+  Uint32List get fgColors =>
+      throw UnsupportedError('Flat fgColors access not supported on Viewport');
+  @override
+  set fgColors(Uint32List val) =>
+      throw UnsupportedError('Flat fgColors access not supported on Viewport');
+
+  @override
+  Uint32List get bgColors =>
+      throw UnsupportedError('Flat bgColors access not supported on Viewport');
+  @override
+  set bgColors(Uint32List val) =>
+      throw UnsupportedError('Flat bgColors access not supported on Viewport');
+
+  @override
+  Uint32List get modifiers =>
+      throw UnsupportedError('Flat modifiers access not supported on Viewport');
+  @override
+  set modifiers(Uint32List val) =>
+      throw UnsupportedError('Flat modifiers access not supported on Viewport');
 
   @override
   Cell? getCell(int x, int y) {

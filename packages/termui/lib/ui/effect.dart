@@ -5,24 +5,18 @@ class ColorMutator {
   /// The scalar to multiply each RGB channel by.
   final double scalar;
 
-  final Map<Color, Color> _cache = {};
-
   /// Creates a [ColorMutator] with the given [scalar].
-  ColorMutator(this.scalar);
+  const ColorMutator(this.scalar);
 
   /// Dims the given [color] by multiplying its RGB channels by [scalar].
   Color dim(Color color) {
     if (color.isTransparent) return color;
-    final cached = _cache[color];
-    if (cached != null) return cached;
 
     int r = (color.r * scalar).toInt().clamp(0, 255);
     int g = (color.g * scalar).toInt().clamp(0, 255);
     int b = (color.b * scalar).toInt().clamp(0, 255);
 
-    final newColor = Color.argb((color.a << 24) | (r << 16) | (g << 8) | b);
-    _cache[color] = newColor;
-    return newColor;
+    return Color.argb((color.a << 24) | (r << 16) | (g << 8) | b);
   }
 }
 
@@ -78,9 +72,16 @@ extension EffectHelpers on Buffer {
     final y = bounds.y + rowIndex;
     if (y < 0 || y >= height) return;
 
-    void swap(int x1, int x2) {
-      final cx1 = bounds.x + x1;
-      final cx2 = bounds.x + x2;
+    final n = bounds.width;
+    _reverseRow(bounds.x, y, 0, n - 1);
+    _reverseRow(bounds.x, y, 0, amount - 1);
+    _reverseRow(bounds.x, y, amount, n - 1);
+  }
+
+  void _reverseRow(int startX, int y, int start, int end) {
+    while (start < end) {
+      final cx1 = startX + start;
+      final cx2 = startX + end;
       if (cx1 >= 0 && cx1 < width && cx2 >= 0 && cx2 < width) {
         final c1 = getCell(cx1, y);
         final c2 = getCell(cx2, y);
@@ -93,20 +94,9 @@ extension EffectHelpers on Buffer {
           c2.style = tempStyle;
         }
       }
+      start++;
+      end--;
     }
-
-    void reverse(int start, int end) {
-      while (start < end) {
-        swap(start, end);
-        start++;
-        end--;
-      }
-    }
-
-    final n = bounds.width;
-    reverse(0, n - 1);
-    reverse(0, amount - 1);
-    reverse(amount, n - 1);
   }
 
   /// Rotates a specific column within the given bounds by [amount] downward.
@@ -120,9 +110,16 @@ extension EffectHelpers on Buffer {
     final x = bounds.x + colIndex;
     if (x < 0 || x >= width) return;
 
-    void swap(int y1, int y2) {
-      final cy1 = bounds.y + y1;
-      final cy2 = bounds.y + y2;
+    final n = bounds.height;
+    _reverseCol(x, bounds.y, 0, n - 1);
+    _reverseCol(x, bounds.y, 0, amount - 1);
+    _reverseCol(x, bounds.y, amount, n - 1);
+  }
+
+  void _reverseCol(int x, int startY, int start, int end) {
+    while (start < end) {
+      final cy1 = startY + start;
+      final cy2 = startY + end;
       if (cy1 >= 0 && cy1 < height && cy2 >= 0 && cy2 < height) {
         final c1 = getCell(x, cy1);
         final c2 = getCell(x, cy2);
@@ -135,20 +132,9 @@ extension EffectHelpers on Buffer {
           c2.style = tempStyle;
         }
       }
+      start++;
+      end--;
     }
-
-    void reverse(int start, int end) {
-      while (start < end) {
-        swap(start, end);
-        start++;
-        end--;
-      }
-    }
-
-    final n = bounds.height;
-    reverse(0, n - 1);
-    reverse(0, amount - 1);
-    reverse(amount, n - 1);
   }
 
   /// Fills the foreground style of all cells in [bounds] using [blend].
@@ -212,9 +198,6 @@ class EffectWidget extends Widget {
   /// The child widget.
   final Widget child;
 
-  /// Whether this effect absorbs pointer events.
-  final bool absorbPointer;
-
   /// If true, the effect is applied globally during the Scene compositing phase.
   /// If false, the effect is applied locally to the widget's bounds immediately after paint.
   final bool globalComposite;
@@ -224,7 +207,6 @@ class EffectWidget extends Widget {
     super.key,
     required this.effect,
     required this.child,
-    this.absorbPointer = false,
     this.globalComposite = true,
   });
 
@@ -235,9 +217,7 @@ class EffectWidget extends Widget {
   int getIntrinsicWidth(int height) => child.getIntrinsicWidth(height);
 
   @override
-  Element createElement() => absorbPointer
-      ? AbsorbingEffectWidgetElement(this)
-      : EffectWidgetElement(this);
+  Element createElement() => EffectWidgetElement(this);
 }
 
 /// Element for [EffectWidget] that ignores pointer events.
@@ -252,9 +232,10 @@ class EffectWidgetElement extends SingleChildElement {
   Size performLayout(BoxConstraints constraints) {
     if (childElement != null) {
       final size = childElement!.layout(constraints);
+      childElement!.relativeOffset = Offset.zero;
       return size;
     }
-    return Size.zero;
+    return constraints.constrain(Size.zero);
   }
 
   @override
@@ -291,52 +272,43 @@ class EffectWidgetElement extends SingleChildElement {
 }
 
 /// Element for [EffectWidget] that absorbs pointer events.
-class AbsorbingEffectWidgetElement extends EffectWidgetElement
-    implements MouseEventHandler {
-  /// Creates an absorbing effect widget element.
-  AbsorbingEffectWidgetElement(super.widget);
-
-  @override
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    // Absorbs pointer events so they don't reach children.
-    final effectWidget = widget as EffectWidget;
-    if (effectWidget.effect is MouseEventHandler) {
-      (effectWidget.effect as MouseEventHandler).handleMouseEvent(
-        event,
-        localX,
-        localY,
-      );
-    }
-  }
-}
-
 /// An effect that dims the colors beneath it.
 class DimmerEffect extends TerminalEffect {
   /// The scalar to dim colors by.
   final double scalar;
-  final ColorMutator _mutator;
 
   /// Creates a dimmer effect.
-  DimmerEffect({this.scalar = 0.5}) : _mutator = ColorMutator(scalar);
+  const DimmerEffect({this.scalar = 0.5});
 
   @override
   void applyEffect(Buffer target, Rect bounds) {
+    final mutator = ColorMutator(scalar);
+    final Map<Style, Style> styleCache = {};
     for (var y = bounds.y; y < bounds.y + bounds.height; y++) {
       if (y < 0 || y >= target.height) continue;
       for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
         if (x < 0 || x >= target.width) continue;
         final cell = target.getCell(x, y);
         if (cell != null) {
+          final cached = styleCache[cell.style];
+          if (cached != null) {
+            cell.style = cached;
+            continue;
+          }
           final fg = cell.style.foreground;
           final bg = cell.style.background;
-          final newFg = fg != null ? _mutator.dim(fg) : null;
-          final newBg = bg != null ? _mutator.dim(bg) : null;
+          final newFg = fg != null ? mutator.dim(fg) : null;
+          final newBg = bg != null ? mutator.dim(bg) : null;
           if (newFg != null || newBg != null) {
-            cell.style = Style(
+            final newStyle = Style(
               foreground: newFg ?? fg,
               background: newBg ?? bg,
               modifiers: cell.style.modifiers,
             );
+            styleCache[cell.style] = newStyle;
+            cell.style = newStyle;
+          } else {
+            styleCache[cell.style] = cell.style;
           }
         }
       }
@@ -373,11 +345,12 @@ class DimmingBarrier extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return EffectWidget(
-      effect: DimmerEffect(scalar: scalar),
-      globalComposite: true,
-      absorbPointer: true,
-      child: const SizedBox.expand(),
+    return AbsorbPointer(
+      child: EffectWidget(
+        effect: DimmerEffect(scalar: scalar),
+        globalComposite: true,
+        child: const SizedBox.expand(),
+      ),
     );
   }
 }

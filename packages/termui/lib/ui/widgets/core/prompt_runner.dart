@@ -582,6 +582,15 @@ class PromptRunner<T> implements SceneRenderer {
       return false;
     }
 
+    if (element is AbsorbPointerElement &&
+        (element.widget as AbsorbPointer).absorbing &&
+        inside) {
+      final localX = sx - absOffset.dx.toInt();
+      final localY = sy - absOffset.dy.toInt();
+      _routeToElement(element, event, localX, localY);
+      return true;
+    }
+
     // Traverse children in reverse order (topmost first, e.g. Stack children at the end are on top)
     final children = <Element>[];
     element.visitChildren((child) {

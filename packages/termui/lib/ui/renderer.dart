@@ -32,27 +32,6 @@ class Renderer {
   /// Exposes the current front-buffer representing the screen state.
   Buffer get frontBuffer => _frontBuffer;
 
-  bool _styleEquals(Style a, Style b) {
-    if (identical(a, b)) return true;
-    if (a.modifiers != b.modifiers) return false;
-
-    final afg = a.foreground;
-    final bfg = b.foreground;
-    if (afg != bfg) {
-      if (afg == null || bfg == null) return false;
-      if (afg.argb != bfg.argb) return false;
-    }
-
-    final abg = a.background;
-    final bbg = b.background;
-    if (abg != bbg) {
-      if (abg == null || bbg == null) return false;
-      if (abg.argb != bbg.argb) return false;
-    }
-
-    return true;
-  }
-
   /// Diffs [backBuffer] against [_frontBuffer] and writes minimal ANSI escape sequences to [out].
   void render(Buffer backBuffer, StringSink out) {
     Tracer.record(_traceRenderId, Phase.begin, TraceCategory.paint);
@@ -90,32 +69,41 @@ class Renderer {
 
       final width = backBuffer.width;
       final height = backBuffer.height;
-      final backCells = backBuffer.cells;
-      final frontCells = _frontBuffer.cells;
+
+      final backChars = backBuffer.characters;
+      final backFg = backBuffer.fgColors;
+      final backBg = backBuffer.bgColors;
+      final backMod = backBuffer.modifiers;
+
+      final frontChars = _frontBuffer.characters;
+      final frontFg = _frontBuffer.fgColors;
+      final frontBg = _frontBuffer.bgColors;
+      final frontMod = _frontBuffer.modifiers;
 
       for (var y = 0; y < height; y++) {
         var x = 0;
         final rowOffset = y * width;
         while (x < width) {
           final idx = rowOffset + x;
-          final backCell = backCells[idx];
-          final frontCell = frontCells[idx];
 
           final changed =
               sizeChanged ||
-              (backCell.char != frontCell.char ||
-                  !_styleEquals(backCell.style, frontCell.style));
+              (backChars[idx] != frontChars[idx] ||
+                  backFg[idx] != frontFg[idx] ||
+                  backBg[idx] != frontBg[idx] ||
+                  backMod[idx] != frontMod[idx]);
 
           if (changed) {
             final runStart = x;
             var runEnd = x;
             // Find the end of the contiguous run of changed cells in the current row
             while (runEnd < width) {
-              final cell = backCells[rowOffset + runEnd];
-              final fCell = frontCells[rowOffset + runEnd];
+              final ridx = rowOffset + runEnd;
               if (sizeChanged ||
-                  cell.char != fCell.char ||
-                  !_styleEquals(cell.style, fCell.style)) {
+                  backChars[ridx] != frontChars[ridx] ||
+                  backFg[ridx] != frontFg[ridx] ||
+                  backBg[ridx] != frontBg[ridx] ||
+                  backMod[ridx] != frontMod[ridx]) {
                 runEnd++;
               } else {
                 break;
@@ -133,12 +121,24 @@ class Renderer {
 
             // Render each cell in the run
             for (var rx = runStart; rx < runEnd; rx++) {
-              final cell = backCells[rowOffset + rx];
-              activeStyle = _writeStyleTransition(out, activeStyle, cell.style);
-              out.write(cell.char);
-              final fCell = frontCells[rowOffset + rx];
-              fCell.char = cell.char;
-              fCell.style = cell.style;
+              final rxIdx = rowOffset + rx;
+              final cellStyle = Style(
+                foreground: backFg[rxIdx] != 0
+                    ? Color.argb(backFg[rxIdx])
+                    : null,
+                background: backBg[rxIdx] != 0
+                    ? Color.argb(backBg[rxIdx])
+                    : null,
+                modifiers: backMod[rxIdx],
+              );
+              activeStyle = _writeStyleTransition(out, activeStyle, cellStyle);
+              out.write(backChars[rxIdx]);
+
+              frontChars[rxIdx] = backChars[rxIdx];
+              frontFg[rxIdx] = backFg[rxIdx];
+              frontBg[rxIdx] = backBg[rxIdx];
+              frontMod[rxIdx] = backMod[rxIdx];
+
               if (mode == RenderingMode.inline) {
                 cursorX++;
               }
