@@ -1,7 +1,6 @@
 import 'package:termui/termui.dart';
 import 'dart:math';
 import 'dart:typed_data';
-import 'dart:collection';
 import 'package:characters/characters.dart';
 
 /// A single cell in the terminal buffer.
@@ -92,9 +91,6 @@ class Buffer {
       modifiers = Uint32List(width * height);
 
   int _index(int x, int y) => y * width + x;
-
-  /// Compatibility getter returning a list wrapper of virtual proxy cells.
-  List<Cell> get cells => _CellListWrapper(this);
 
   /// Gets the cell at ([x], [y]). Returns null if coordinates are out of bounds.
   Cell? getCell(int x, int y) {
@@ -616,32 +612,6 @@ bool isWideGrapheme(String grapheme) {
   if (codePoint >= 0x1F000 && codePoint <= 0x1F2FF) return true;
 
   return false;
-}
-
-/// Compatibility list wrapper that exposes typed array data as Cell objects.
-class _CellListWrapper extends ListBase<Cell> {
-  final Buffer _buffer;
-  _CellListWrapper(this._buffer);
-
-  @override
-  int get length => _buffer.width * _buffer.height;
-
-  @override
-  set length(int newLength) =>
-      throw UnsupportedError('Cannot resize cells list');
-
-  @override
-  Cell operator [](int index) {
-    return _VirtualCell(_buffer, index);
-  }
-
-  @override
-  void operator []=(int index, Cell value) {
-    _buffer.characters[index] = value.char;
-    _buffer.fgColors[index] = value.style.foreground?.argb ?? 0;
-    _buffer.bgColors[index] = value.style.background?.argb ?? 0;
-    _buffer.modifiers[index] = value.style.modifiers;
-  }
 }
 
 /// A virtual proxy Cell that intercepts reads/writes and delegates them to the Buffer.
