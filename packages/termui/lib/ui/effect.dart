@@ -8,15 +8,23 @@ class ColorMutator {
   /// Creates a [ColorMutator] with the given [scalar].
   const ColorMutator(this.scalar);
 
+  /// Dims the raw packed 32-bit integer color without allocating Color objects.
+  int dimPacked(int argb) {
+    if (argb == 0) return 0;
+
+    final int a = (argb >> 24) & 0xFF;
+    if (a == 0) return argb;
+
+    final int r = (((argb >> 16) & 0xFF) * scalar).toInt().clamp(0, 255);
+    final int g = (((argb >> 8) & 0xFF) * scalar).toInt().clamp(0, 255);
+    final int b = ((argb & 0xFF) * scalar).toInt().clamp(0, 255);
+
+    return (a << 24) | (r << 16) | (g << 8) | b;
+  }
+
   /// Dims the given [color] by multiplying its RGB channels by [scalar].
   Color dim(Color color) {
-    if (color.isTransparent) return color;
-
-    int r = (color.r * scalar).toInt().clamp(0, 255);
-    int g = (color.g * scalar).toInt().clamp(0, 255);
-    int b = (color.b * scalar).toInt().clamp(0, 255);
-
-    return Color.argb((color.a << 24) | (r << 16) | (g << 8) | b);
+    return Color.argb(dimPacked(color.argb));
   }
 }
 
@@ -79,20 +87,28 @@ extension EffectHelpers on Buffer {
   }
 
   void _reverseRow(int startX, int y, int start, int end) {
+    final rowOffset = y * width;
     while (start < end) {
       final cx1 = startX + start;
       final cx2 = startX + end;
       if (cx1 >= 0 && cx1 < width && cx2 >= 0 && cx2 < width) {
-        final c1 = getCell(cx1, y);
-        final c2 = getCell(cx2, y);
-        if (c1 != null && c2 != null) {
-          final tempChar = c1.char;
-          final tempStyle = c1.style;
-          c1.char = c2.char;
-          c1.style = c2.style;
-          c2.char = tempChar;
-          c2.style = tempStyle;
-        }
+        final idx1 = rowOffset + cx1;
+        final idx2 = rowOffset + cx2;
+
+        final tempChar = characters[idx1];
+        final tempFg = fgColors[idx1];
+        final tempBg = bgColors[idx1];
+        final tempMod = modifiers[idx1];
+
+        characters[idx1] = characters[idx2];
+        fgColors[idx1] = fgColors[idx2];
+        bgColors[idx1] = bgColors[idx2];
+        modifiers[idx1] = modifiers[idx2];
+
+        characters[idx2] = tempChar;
+        fgColors[idx2] = tempFg;
+        bgColors[idx2] = tempBg;
+        modifiers[idx2] = tempMod;
       }
       start++;
       end--;
@@ -121,16 +137,23 @@ extension EffectHelpers on Buffer {
       final cy1 = startY + start;
       final cy2 = startY + end;
       if (cy1 >= 0 && cy1 < height && cy2 >= 0 && cy2 < height) {
-        final c1 = getCell(x, cy1);
-        final c2 = getCell(x, cy2);
-        if (c1 != null && c2 != null) {
-          final tempChar = c1.char;
-          final tempStyle = c1.style;
-          c1.char = c2.char;
-          c1.style = c2.style;
-          c2.char = tempChar;
-          c2.style = tempStyle;
-        }
+        final idx1 = cy1 * width + x;
+        final idx2 = cy2 * width + x;
+
+        final tempChar = characters[idx1];
+        final tempFg = fgColors[idx1];
+        final tempBg = bgColors[idx1];
+        final tempMod = modifiers[idx1];
+
+        characters[idx1] = characters[idx2];
+        fgColors[idx1] = fgColors[idx2];
+        bgColors[idx1] = bgColors[idx2];
+        modifiers[idx1] = modifiers[idx2];
+
+        characters[idx2] = tempChar;
+        fgColors[idx2] = tempFg;
+        bgColors[idx2] = tempBg;
+        modifiers[idx2] = tempMod;
       }
       start++;
       end--;
@@ -139,25 +162,24 @@ extension EffectHelpers on Buffer {
 
   /// Fills the foreground style of all cells in [bounds] using [blend].
   void fillForegroundStyle(Rect bounds, Style style, BlendOption blend) {
+    final fgVal = style.foreground?.argb ?? 0;
+    final styleMods = style.modifiers;
     for (var y = bounds.y; y < bounds.y + bounds.height; y++) {
+      if (y < 0 || y >= height) continue;
+      final rowOffset = y * width;
       for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
-        final cell = getCell(x, y);
-        if (cell != null) {
-          if (blend == BlendOption.replace) {
-            cell.style = style;
-          } else if (blend == BlendOption.colorOnly) {
-            cell.style = Style(
-              foreground: style.foreground ?? cell.style.foreground,
-              background: cell.style.background,
-              modifiers: cell.style.modifiers,
-            );
-          } else if (blend == BlendOption.addModifiers) {
-            cell.style = Style(
-              foreground: cell.style.foreground,
-              background: cell.style.background,
-              modifiers: cell.style.modifiers | style.modifiers,
-            );
+        if (x < 0 || x >= width) continue;
+        final idx = rowOffset + x;
+        if (blend == BlendOption.replace) {
+          fgColors[idx] = fgVal;
+          bgColors[idx] = style.background?.argb ?? 0;
+          modifiers[idx] = styleMods;
+        } else if (blend == BlendOption.colorOnly) {
+          if (fgVal != 0) {
+            fgColors[idx] = fgVal;
           }
+        } else if (blend == BlendOption.addModifiers) {
+          modifiers[idx] |= styleMods;
         }
       }
     }
@@ -165,25 +187,24 @@ extension EffectHelpers on Buffer {
 
   /// Fills the background style of all cells in [bounds] using [blend].
   void fillBackgroundStyle(Rect bounds, Style style, BlendOption blend) {
+    final bgVal = style.background?.argb ?? 0;
+    final styleMods = style.modifiers;
     for (var y = bounds.y; y < bounds.y + bounds.height; y++) {
+      if (y < 0 || y >= height) continue;
+      final rowOffset = y * width;
       for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
-        final cell = getCell(x, y);
-        if (cell != null) {
-          if (blend == BlendOption.replace) {
-            cell.style = style;
-          } else if (blend == BlendOption.colorOnly) {
-            cell.style = Style(
-              foreground: cell.style.foreground,
-              background: style.background ?? cell.style.background,
-              modifiers: cell.style.modifiers,
-            );
-          } else if (blend == BlendOption.addModifiers) {
-            cell.style = Style(
-              foreground: cell.style.foreground,
-              background: cell.style.background,
-              modifiers: cell.style.modifiers | style.modifiers,
-            );
+        if (x < 0 || x >= width) continue;
+        final idx = rowOffset + x;
+        if (blend == BlendOption.replace) {
+          fgColors[idx] = style.foreground?.argb ?? 0;
+          bgColors[idx] = bgVal;
+          modifiers[idx] = styleMods;
+        } else if (blend == BlendOption.colorOnly) {
+          if (bgVal != 0) {
+            bgColors[idx] = bgVal;
           }
+        } else if (blend == BlendOption.addModifiers) {
+          modifiers[idx] |= styleMods;
         }
       }
     }
@@ -283,33 +304,22 @@ class DimmerEffect extends TerminalEffect {
   @override
   void applyEffect(Buffer target, Rect bounds) {
     final mutator = ColorMutator(scalar);
-    final Map<Style, Style> styleCache = {};
     for (var y = bounds.y; y < bounds.y + bounds.height; y++) {
       if (y < 0 || y >= target.height) continue;
+      final rowOffset = y * target.width;
       for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
         if (x < 0 || x >= target.width) continue;
-        final cell = target.getCell(x, y);
-        if (cell != null) {
-          final cached = styleCache[cell.style];
-          if (cached != null) {
-            cell.style = cached;
-            continue;
-          }
-          final fg = cell.style.foreground;
-          final bg = cell.style.background;
-          final newFg = fg != null ? mutator.dim(fg) : null;
-          final newBg = bg != null ? mutator.dim(bg) : null;
-          if (newFg != null || newBg != null) {
-            final newStyle = Style(
-              foreground: newFg ?? fg,
-              background: newBg ?? bg,
-              modifiers: cell.style.modifiers,
-            );
-            styleCache[cell.style] = newStyle;
-            cell.style = newStyle;
-          } else {
-            styleCache[cell.style] = cell.style;
-          }
+        final idx = rowOffset + x;
+        if ((target.modifiers[idx] & Modifier.transparent) != 0) continue;
+
+        final fg = target.fgColors[idx];
+        if (fg != 0) {
+          target.fgColors[idx] = mutator.dimPacked(fg);
+        }
+
+        final bg = target.bgColors[idx];
+        if (bg != 0) {
+          target.bgColors[idx] = mutator.dimPacked(bg);
         }
       }
     }
