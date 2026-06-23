@@ -33,10 +33,6 @@ class Viewport implements Buffer {
       throw UnsupportedError('Cannot set height of a Viewport');
 
   @override
-  List<Cell> get cells =>
-      throw UnsupportedError('Flat cells access not supported on Viewport');
-
-  @override
   List<String> get characters => throw UnsupportedError(
     'Flat characters access not supported on Viewport',
   );

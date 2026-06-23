@@ -360,18 +360,20 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     if (atlas == null) return;
 
     final cellHeight = atlas.cellHeight;
-    for (final cell in buffer.cells) {
-      final char = cell.char;
+    final total = buffer.width * buffer.height;
+    for (var i = 0; i < total; i++) {
+      final char = buffer.characters[i];
       if (char.isNotEmpty &&
           char != ' ' &&
           !atlas.charRects.containsKey(char)) {
-        final isReverse = Modifier.has(cell.style.modifiers, Modifier.reverse);
-        final fgCol = isReverse ? cell.style.background : cell.style.foreground;
-        final color = fgCol != null
-            ? Color(fgCol.argb)
+        final mods = buffer.modifiers[i];
+        final isReverse = Modifier.has(mods, Modifier.reverse);
+        final fgVal = isReverse ? buffer.bgColors[i] : buffer.fgColors[i];
+        final color = fgVal != 0
+            ? Color(fgVal)
             : (isReverse ? Colors.black : Colors.white);
-        final isBold = Modifier.has(cell.style.modifiers, Modifier.bold);
-        final isDim = Modifier.has(cell.style.modifiers, Modifier.dim);
+        final isBold = Modifier.has(mods, Modifier.bold);
+        final isDim = Modifier.has(mods, Modifier.dim);
 
         final key = (char, isBold, isDim, color);
         _fallbackPainters.putIfAbsent(key, () {
@@ -637,25 +639,28 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           'cells': [],
         };
 
-        String? formatColor(dynamic color) {
-          if (color == null) return null;
-          return '0x${color.argb.toRadixString(16).padLeft(8, '0').toUpperCase()}';
-        }
-
         final cellsList = data['cells'] as List;
         for (var y = 0; y < buffer.height; y++) {
+          final rowOffset = y * buffer.width;
           for (var x = 0; x < buffer.width; x++) {
-            final cell = buffer.getCell(x, y);
-            if (cell == null) continue;
+            final idx = rowOffset + x;
+            final char = buffer.characters[idx];
+            final fg = buffer.fgColors[idx];
+            final bg = buffer.bgColors[idx];
+            final mods = buffer.modifiers[idx];
 
-            final rect = atlas.charRects[cell.char];
+            final rect = atlas.charRects[char];
             final cellData = {
               'x': x,
               'y': y,
-              'char': cell.char,
-              'fg': formatColor(cell.style.foreground),
-              'bg': formatColor(cell.style.background),
-              'modifiers': cell.style.modifiers,
+              'char': char,
+              'fg': fg != 0
+                  ? '0x${fg.toRadixString(16).padLeft(8, '0').toUpperCase()}'
+                  : null,
+              'bg': bg != 0
+                  ? '0x${bg.toRadixString(16).padLeft(8, '0').toUpperCase()}'
+                  : null,
+              'modifiers': mods,
             };
             if (rect != null) {
               cellData['atlasRect'] = {

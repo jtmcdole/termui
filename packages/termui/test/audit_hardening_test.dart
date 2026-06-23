@@ -79,7 +79,7 @@ void main() {
       buffer.resize(-2, -5);
       expect(buffer.width, equals(0));
       expect(buffer.height, equals(0));
-      expect(buffer.cells.isEmpty, isTrue);
+      expect(buffer.characters.isEmpty, isTrue);
     });
 
     test('Row, Column, Stack early-exit on zero/negative render areas', () {
