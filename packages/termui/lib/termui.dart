@@ -27,6 +27,7 @@ export 'ui/widgets/layout/sized_box.dart';
 export 'ui/widgets/layout/constrained_box.dart';
 export 'ui/widgets/layout/flexible.dart';
 export 'ui/widgets/layout/align.dart';
+export 'ui/widgets/layout/fitted_box.dart';
 export 'ui/widgets/layout/flex.dart';
 export 'ui/widgets/core/widget.dart';
 export 'ui/widgets/core/element.dart';
