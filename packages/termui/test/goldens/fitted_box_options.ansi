@@ -1,10 +1,10 @@
                                         
                                         
-  +--------+   +--------+   CenterNone  
-  | Contain|   |TopLeftN|   Leaks    |  
-  | Center |   |Overflow|   Bounds   |  
-  | Short  |   |Massivel|   Way      |  
-  +--------+   +--------+   Out------+  
+  +--------++--------+CenterNone        
+  | Contain||TopLeftN|Leaks    |        
+  | Center ||Overflow|Bounds   |        
+  | Short  ||Massivel|Way      |        
+  +--------++--------+Out------+        
                                         
                                         
                                         

@@ -20,6 +20,16 @@ class Stack extends Widget {
     }
     return maxH;
   }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    var maxW = 0;
+    for (final child in children) {
+      final w = child.getIntrinsicWidth(height);
+      if (w > maxW) maxW = w;
+    }
+    return maxW;
+  }
 }
 
 /// An element that manages a [Stack] widget.
@@ -176,6 +186,26 @@ class StackElement extends Element {
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    var maxH = 0;
+    for (final child in childElements) {
+      final h = child.getIntrinsicHeight(width);
+      if (h > maxH) maxH = h;
+    }
+    return maxH;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    var maxW = 0;
+    for (final child in childElements) {
+      final w = child.getIntrinsicWidth(height);
+      if (w > maxW) maxW = w;
+    }
+    return maxW;
   }
 }
 

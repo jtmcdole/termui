@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:termui/termui.dart';
 
 /// Signature for the builder callback used by [LayoutBuilder].
@@ -17,36 +18,40 @@ class LayoutBuilder extends Widget {
 
   @override
   int getIntrinsicHeight(int width) {
-    final element = LayoutBuilderElement(this);
-    element.mount(null);
-    element.layout(
-      BoxConstraints(
-        minWidth: width,
-        maxWidth: width,
-        minHeight: 0,
-        maxHeight: BoxConstraints.infinity,
-      ),
-    );
-    final h = element._child?.widget.getIntrinsicHeight(width) ?? 0;
-    element.unmount();
-    return h;
+    return runZoned(() {
+      final element = LayoutBuilderElement(this);
+      element.mount(null);
+      element.layout(
+        BoxConstraints(
+          minWidth: width,
+          maxWidth: width,
+          minHeight: 0,
+          maxHeight: BoxConstraints.infinity,
+        ),
+      );
+      final h = element._child?.widget.getIntrinsicHeight(width) ?? 0;
+      element.unmount();
+      return h;
+    }, zoneValues: {#isMeasuringIntrinsics: true});
   }
 
   @override
   int getIntrinsicWidth(int height) {
-    final element = LayoutBuilderElement(this);
-    element.mount(null);
-    element.layout(
-      BoxConstraints(
-        minWidth: 0,
-        maxWidth: BoxConstraints.infinity,
-        minHeight: height,
-        maxHeight: height,
-      ),
-    );
-    final w = element._child?.widget.getIntrinsicWidth(height) ?? 0;
-    element.unmount();
-    return w;
+    return runZoned(() {
+      final element = LayoutBuilderElement(this);
+      element.mount(null);
+      element.layout(
+        BoxConstraints(
+          minWidth: 0,
+          maxWidth: BoxConstraints.infinity,
+          minHeight: height,
+          maxHeight: height,
+        ),
+      );
+      final w = element._child?.widget.getIntrinsicWidth(height) ?? 0;
+      element.unmount();
+      return w;
+    }, zoneValues: {#isMeasuringIntrinsics: true});
   }
 }
 
@@ -125,4 +130,10 @@ class LayoutBuilderElement extends Element {
   void performPaint(Buffer buffer, Offset offset) {
     _child?.paint(buffer, offset);
   }
+
+  @override
+  int getIntrinsicHeight(int width) => _child?.getIntrinsicHeight(width) ?? 0;
+
+  @override
+  int getIntrinsicWidth(int height) => _child?.getIntrinsicWidth(height) ?? 0;
 }

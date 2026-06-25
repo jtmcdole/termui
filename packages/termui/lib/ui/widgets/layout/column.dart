@@ -30,6 +30,16 @@ class Column extends Widget {
     }
     return totalHeight;
   }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    var maxW = 0;
+    for (final child in children) {
+      final w = child.getIntrinsicWidth(height);
+      if (w > maxW) maxW = w;
+    }
+    return maxW;
+  }
 }
 
 /// An element that manages a [Column] widget.
@@ -149,6 +159,20 @@ class ColumnElement extends Element {
   @override
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) =>
+      childElements.fold(0, (sum, el) => sum + el.getIntrinsicHeight(width));
+
+  @override
+  int getIntrinsicWidth(int height) {
+    var maxW = 0;
+    for (final child in childElements) {
+      final w = child.getIntrinsicWidth(height);
+      if (w > maxW) maxW = w;
+    }
+    return maxW;
   }
 }
 

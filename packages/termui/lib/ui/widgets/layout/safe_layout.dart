@@ -30,6 +30,9 @@ class SafeLayout extends Widget {
 
   @override
   int getIntrinsicHeight(int width) => child.getIntrinsicHeight(width);
+
+  @override
+  int getIntrinsicWidth(int height) => child.getIntrinsicWidth(height);
 }
 
 /// The element managing the lifecycle, constraints, and painting of [SafeLayout].
@@ -140,4 +143,12 @@ class SafeLayoutElement extends Element {
       childElement?.paint(buffer, offset);
     }
   }
+
+  @override
+  int getIntrinsicHeight(int width) =>
+      childElement?.getIntrinsicHeight(width) ?? 0;
+
+  @override
+  int getIntrinsicWidth(int height) =>
+      childElement?.getIntrinsicWidth(height) ?? 0;
 }

@@ -222,6 +222,12 @@ abstract class Element implements BuildContext {
     return null;
   }
 
+  /// Returns the intrinsic height of this element.
+  int getIntrinsicHeight(int width) => widget.getIntrinsicHeight(width);
+
+  /// Returns the intrinsic width of this element.
+  int getIntrinsicWidth(int height) => widget.getIntrinsicWidth(height);
+
   /// Rebuilds the element.
   void rebuild() {}
 }
@@ -311,6 +317,14 @@ class StatelessElement extends Element {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
   }
+
+  @override
+  int getIntrinsicHeight(int width) =>
+      childElement?.getIntrinsicHeight(width) ?? 0;
+
+  @override
+  int getIntrinsicWidth(int height) =>
+      childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
 /// A widget that has mutable state.
@@ -395,6 +409,14 @@ class StatefulElement extends Element {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
   }
+
+  @override
+  int getIntrinsicHeight(int width) =>
+      childElement?.getIntrinsicHeight(width) ?? 0;
+
+  @override
+  int getIntrinsicWidth(int height) =>
+      childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
 /// A widget that propagates information down the tree.
@@ -460,6 +482,14 @@ class InheritedElement extends Element {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
   }
+
+  @override
+  int getIntrinsicHeight(int width) =>
+      childElement?.getIntrinsicHeight(width) ?? 0;
+
+  @override
+  int getIntrinsicWidth(int height) =>
+      childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
 /// How children are aligned along the cross axis.
@@ -515,6 +545,18 @@ class ElementWidgetElement extends Element {
   void visitChildren(void Function(Element child) visitor) {
     final w = widget as ElementWidget;
     if (w.internalElement != null) visitor(w.internalElement!);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final w = widget as ElementWidget;
+    return w.internalElement?.getIntrinsicHeight(width) ?? 0;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final w = widget as ElementWidget;
+    return w.internalElement?.getIntrinsicWidth(height) ?? 0;
   }
 }
 

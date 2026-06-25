@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:file/local.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
@@ -20,7 +21,7 @@ class _AnsiGoldenMatcher extends Matcher {
   final _fs = const LocalFileSystem();
 
   _AnsiGoldenMatcher(this.goldenPath, {Map<String, String>? environment})
-    : _environment = environment ?? const {};
+    : _environment = environment ?? Platform.environment;
 
   @override
   bool matches(dynamic item, Map matchState) {

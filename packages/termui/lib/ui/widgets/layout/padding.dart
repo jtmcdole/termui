@@ -28,6 +28,13 @@ class Padding extends Widget {
     final w = childWidth < 0 ? 0 : childWidth;
     return child.getIntrinsicHeight(w) + padding.top + padding.bottom;
   }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final childHeight = height - padding.top - padding.bottom;
+    final h = childHeight < 0 ? 0 : childHeight;
+    return child.getIntrinsicWidth(h) + padding.left + padding.right;
+  }
 }
 
 /// An element that represents a [Padding] widget.
@@ -98,5 +105,23 @@ class PaddingElement extends SingleChildElement {
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final padding = (widget as Padding).padding;
+    final childWidth = width - padding.left - padding.right;
+    final w = childWidth < 0 ? 0 : childWidth;
+    final childHeight = childElement?.getIntrinsicHeight(w) ?? 0;
+    return childHeight + padding.top + padding.bottom;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final padding = (widget as Padding).padding;
+    final childHeight = height - padding.top - padding.bottom;
+    final h = childHeight < 0 ? 0 : childHeight;
+    final childWidth = childElement?.getIntrinsicWidth(h) ?? 0;
+    return childWidth + padding.left + padding.right;
   }
 }
