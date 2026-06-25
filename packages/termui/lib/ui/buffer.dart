@@ -726,8 +726,14 @@ class Compositor {
 }
 
 /// Returns true if the given grapheme cluster is a double-width (wide) character.
+///
+/// [Optimization Note - ASCII Fast-Path]:
+/// Since the overwhelming majority of characters in typical TUI applications are standard ASCII
+/// (alphanumeric characters, punctuation, spaces), we check the first codeUnit. If it is < 128,
+/// we bypass the expensive grapheme cluster iterator/rune inspection and Unicode range checks entirely.
 bool isWideGrapheme(String grapheme) {
   if (grapheme.isEmpty) return false;
+  if (grapheme.codeUnitAt(0) < 128) return false;
   final codePoint = grapheme.runes.first;
 
   // CJK Unified Ideographs & Extension A
