@@ -43,7 +43,14 @@ class TestWidgetElement extends Element {
     if (w.char.length == 1) {
       for (var y = 0; y < area.height; y++) {
         for (var x = 0; x < area.width; x++) {
-          buffer.setCell(area.x + x, area.y + y, Cell(w.char, Style.empty));
+          buffer.setAttributes(
+            area.x + x,
+            area.y + y,
+            char: w.char,
+            fg: 0,
+            bg: 0,
+            modifiers: Modifier.transparent,
+          );
         }
       }
     } else {
@@ -139,12 +146,12 @@ void main() {
       // Rect bounds: left=2, top=1, right=1, bottom=1.
       // Width = 6 - 2 - 1 = 3. Height = 4 - 1 - 1 = 2.
       // Filled area relative to buffer: x in [2, 4], y in [1, 2].
-      expect(buffer.getCell(0, 0)!.char, ' ');
-      expect(buffer.getCell(2, 1)!.char, 'X');
-      expect(buffer.getCell(3, 1)!.char, 'X');
-      expect(buffer.getCell(4, 1)!.char, 'X');
-      expect(buffer.getCell(5, 1)!.char, ' ');
-      expect(buffer.getCell(2, 3)!.char, ' ');
+      expect(buffer.getCharacter(0, 0), ' ');
+      expect(buffer.getCharacter(2, 1), 'X');
+      expect(buffer.getCharacter(3, 1), 'X');
+      expect(buffer.getCharacter(4, 1), 'X');
+      expect(buffer.getCharacter(5, 1), ' ');
+      expect(buffer.getCharacter(2, 3), ' ');
     });
   });
 
@@ -170,12 +177,12 @@ void main() {
       // A (size 2): index 0, 1
       // B (flex 1, size 2): index 2, 3
       // C (flex 2, size 6): index 4, 5, 6, 7, 8, 9
-      expect(buffer.getCell(0, 0)!.char, 'A');
-      expect(buffer.getCell(1, 0)!.char, 'A');
-      expect(buffer.getCell(2, 0)!.char, 'B');
-      expect(buffer.getCell(3, 0)!.char, 'B');
-      expect(buffer.getCell(4, 0)!.char, 'C');
-      expect(buffer.getCell(9, 0)!.char, 'C');
+      expect(buffer.getCharacter(0, 0), 'A');
+      expect(buffer.getCharacter(1, 0), 'A');
+      expect(buffer.getCharacter(2, 0), 'B');
+      expect(buffer.getCharacter(3, 0), 'B');
+      expect(buffer.getCharacter(4, 0), 'C');
+      expect(buffer.getCharacter(9, 0), 'C');
     });
 
     test('Column flex layout', () {
@@ -194,10 +201,10 @@ void main() {
       // B takes remainder = 4.
       // y=0, 1 -> A
       // y=2, 3, 4, 5 -> B
-      expect(buffer.getCell(0, 0)!.char, 'A');
-      expect(buffer.getCell(0, 1)!.char, 'A');
-      expect(buffer.getCell(0, 2)!.char, 'B');
-      expect(buffer.getCell(0, 5)!.char, 'B');
+      expect(buffer.getCharacter(0, 0), 'A');
+      expect(buffer.getCharacter(0, 1), 'A');
+      expect(buffer.getCharacter(0, 2), 'B');
+      expect(buffer.getCharacter(0, 5), 'B');
     });
   });
 
@@ -221,10 +228,10 @@ void main() {
 
       // Base: A fills entire 5x5.
       // Overlay: B renders at x: [1, 2], y: 2.
-      expect(buffer.getCell(0, 0)!.char, 'A');
-      expect(buffer.getCell(1, 2)!.char, 'B');
-      expect(buffer.getCell(2, 2)!.char, 'B');
-      expect(buffer.getCell(3, 2)!.char, 'A');
+      expect(buffer.getCharacter(0, 0), 'A');
+      expect(buffer.getCharacter(1, 2), 'B');
+      expect(buffer.getCharacter(2, 2), 'B');
+      expect(buffer.getCharacter(3, 2), 'A');
     });
   });
 
@@ -242,9 +249,9 @@ void main() {
       // Buffer size 5x5. Child size 1x1.
       // Centered: remaining = 4. offset = 4 / 2 = 2.
       // Centered cell at (2, 2)
-      expect(buffer.getCell(2, 2)!.char, 'X');
-      expect(buffer.getCell(1, 2)!.char, ' ');
-      expect(buffer.getCell(2, 1)!.char, ' ');
+      expect(buffer.getCharacter(2, 2), 'X');
+      expect(buffer.getCharacter(1, 2), ' ');
+      expect(buffer.getCharacter(2, 1), ' ');
     });
   });
 
@@ -260,8 +267,8 @@ void main() {
       // Render initial state
       element.layout(BoxConstraints.tight(const Size(10, 1)));
       element.paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)!.char, 'v');
-      expect(buffer.getCell(4, 0)!.char, '0');
+      expect(buffer.getCharacter(0, 0), 'v');
+      expect(buffer.getCharacter(4, 0), '0');
 
       // Increment state
       final state = (element as StatefulElement).state as _CounterWidgetState;
@@ -270,7 +277,7 @@ void main() {
       // Render updated state
       element.layout(BoxConstraints.tight(const Size(10, 1)));
       element.paint(buffer, Offset.zero);
-      expect(buffer.getCell(4, 0)!.char, '1');
+      expect(buffer.getCharacter(4, 0), '1');
     });
   });
 
@@ -284,7 +291,7 @@ void main() {
 
       element.layout(BoxConstraints.tight(const Size(5, 1)));
       element.paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)!.char, 'R');
+      expect(buffer.getCharacter(0, 0), 'R');
     });
   });
 }

@@ -46,9 +46,9 @@ void main() {
       // [1, 1, 1, 1, 1]
       // [1, 0, 0, 0, 1]
       // [1, 1, 1, 1, 1]
-      expect(buffer.getCell(0, 0)?.style.foreground, widget.activeColor);
-      expect(buffer.getCell(2, 0)?.style.foreground, widget.activeColor);
-      expect(buffer.getCell(1, 1)?.style.foreground, widget.inactiveColor);
+      expect(Color.argb(buffer.getForeground(0, 0)), widget.activeColor);
+      expect(Color.argb(buffer.getForeground(2, 0)), widget.activeColor);
+      expect(Color.argb(buffer.getForeground(1, 1)), widget.inactiveColor);
     });
 
     test('renders golden correctly for 8', () {

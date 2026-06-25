@@ -401,3 +401,34 @@ abstract class CharmColors {
   /// The `deletions` collection of colors from the CharmTone palette.
   static const List<Color> deletions = [toast, steak, pom, cherry];
 }
+
+/// Extension on [int] to provide easy access and manipulation of ARGB colors
+/// represented as 32-bit integers.
+extension ColorIntExtension on int {
+  /// Extract the alpha channel (0-255).
+  int get a => (this >> 24) & 0xFF;
+
+  /// Extract the red channel (0-255).
+  int get r => (this >> 16) & 0xFF;
+
+  /// Extract the green channel (0-255).
+  int get g => (this >> 8) & 0xFF;
+
+  /// Extract the blue channel (0-255).
+  int get b => this & 0xFF;
+
+  /// Returns true if this color is fully transparent (alpha == 0).
+  bool get isTransparent => a == 0;
+
+  /// Returns a new ARGB integer with the updated alpha value (0-255).
+  int withAlpha(int a) => (this & 0x00FFFFFF) | ((a & 0xFF) << 24);
+
+  /// Returns a new ARGB integer with the updated red value (0-255).
+  int withRed(int r) => (this & 0xFF00FFFF) | ((r & 0xFF) << 16);
+
+  /// Returns a new ARGB integer with the updated green value (0-255).
+  int withGreen(int g) => (this & 0xFFFF00FF) | ((g & 0xFF) << 8);
+
+  /// Returns a new ARGB integer with the updated blue value (0-255).
+  int withBlue(int b) => (this & 0xFFFFFF00) | (b & 0xFF);
+}

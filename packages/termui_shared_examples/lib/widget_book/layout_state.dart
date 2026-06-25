@@ -230,7 +230,14 @@ class _VerticalDividerElement extends Element {
   void paint(Buffer buffer, Offset offset) {
     final vWidget = widget as VerticalDivider;
     for (var y = 0; y < size.height; y++) {
-      buffer.setCell(offset.dx, offset.dy + y, Cell('│', vWidget.style));
+      buffer.setAttributes(
+        offset.dx,
+        offset.dy + y,
+        char: '│',
+        fg: vWidget.style.foreground?.argb,
+        bg: vWidget.style.background?.argb,
+        modifiers: vWidget.style.modifiers,
+      );
     }
   }
 }

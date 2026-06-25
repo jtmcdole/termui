@@ -245,11 +245,14 @@ class SplitPaneElement extends Element {
       }
 
       for (var y = 0; y < h; y++) {
-        final cell = buffer.getCell(offset.dx + dividerPos, offset.dy + y);
-        if (cell != null) {
-          cell.char = split.dividerChar;
-          cell.style = split.dividerStyle;
-        }
+        buffer.setAttributes(
+          offset.dx + dividerPos,
+          offset.dy + y,
+          char: split.dividerChar,
+          fg: split.dividerStyle.foreground?.argb ?? 0,
+          bg: split.dividerStyle.background?.argb ?? 0,
+          modifiers: split.dividerStyle.modifiers,
+        );
       }
 
       final child2Width = w - dividerPos - 1;
@@ -262,11 +265,14 @@ class SplitPaneElement extends Element {
       }
 
       for (var x = 0; x < w; x++) {
-        final cell = buffer.getCell(offset.dx + x, offset.dy + dividerPos);
-        if (cell != null) {
-          cell.char = split.dividerChar;
-          cell.style = split.dividerStyle;
-        }
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy + dividerPos,
+          char: split.dividerChar,
+          fg: split.dividerStyle.foreground?.argb ?? 0,
+          bg: split.dividerStyle.background?.argb ?? 0,
+          modifiers: split.dividerStyle.modifiers,
+        );
       }
 
       final child2Height = h - dividerPos - 1;

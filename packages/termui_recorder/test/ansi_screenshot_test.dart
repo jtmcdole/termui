@@ -8,17 +8,87 @@ void main() {
   group('AnsiScreenshot', () {
     test('renders plain text buffer without styles', () {
       final buffer = Buffer.blank(5, 2);
-      buffer.setCell(0, 0, Cell('H', Style.empty));
-      buffer.setCell(1, 0, Cell('e', Style.empty));
-      buffer.setCell(2, 0, Cell('l', Style.empty));
-      buffer.setCell(3, 0, Cell('l', Style.empty));
-      buffer.setCell(4, 0, Cell('o', Style.empty));
+      buffer.setAttributes(
+        0,
+        0,
+        char: 'H',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        1,
+        0,
+        char: 'e',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        2,
+        0,
+        char: 'l',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        3,
+        0,
+        char: 'l',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        4,
+        0,
+        char: 'o',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
 
-      buffer.setCell(0, 1, Cell('W', Style.empty));
-      buffer.setCell(1, 1, Cell('o', Style.empty));
-      buffer.setCell(2, 1, Cell('r', Style.empty));
-      buffer.setCell(3, 1, Cell('l', Style.empty));
-      buffer.setCell(4, 1, Cell('d', Style.empty));
+      buffer.setAttributes(
+        0,
+        1,
+        char: 'W',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        1,
+        1,
+        char: 'o',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        2,
+        1,
+        char: 'r',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        3,
+        1,
+        char: 'l',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
+      buffer.setAttributes(
+        4,
+        1,
+        char: 'd',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
 
       final ansi = AnsiScreenshot.capture(buffer, resetLineEndings: true);
       expect(ansi, equals('Hello\nWorld\n'));
@@ -29,9 +99,30 @@ void main() {
       final redFgStyle = const Style(foreground: Color(255, 0, 0));
       final greenBgStyle = const Style(background: Color(0, 255, 0));
 
-      buffer.setCell(0, 0, Cell('R', redFgStyle));
-      buffer.setCell(1, 0, Cell('G', greenBgStyle));
-      buffer.setCell(2, 0, Cell('B', Style.empty));
+      buffer.setAttributes(
+        0,
+        0,
+        char: 'R',
+        fg: redFgStyle.foreground?.argb,
+        bg: redFgStyle.background?.argb,
+        modifiers: redFgStyle.modifiers,
+      );
+      buffer.setAttributes(
+        1,
+        0,
+        char: 'G',
+        fg: greenBgStyle.foreground?.argb,
+        bg: greenBgStyle.background?.argb,
+        modifiers: greenBgStyle.modifiers,
+      );
+      buffer.setAttributes(
+        2,
+        0,
+        char: 'B',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
 
       final ansi = AnsiScreenshot.capture(buffer, resetLineEndings: true);
 
@@ -46,8 +137,22 @@ void main() {
       final boldStyle = const Style(modifiers: Modifier.bold);
       final italicStyle = const Style(modifiers: Modifier.italic);
 
-      buffer.setCell(0, 0, Cell('B', boldStyle));
-      buffer.setCell(1, 0, Cell('I', italicStyle));
+      buffer.setAttributes(
+        0,
+        0,
+        char: 'B',
+        fg: boldStyle.foreground?.argb,
+        bg: boldStyle.background?.argb,
+        modifiers: boldStyle.modifiers,
+      );
+      buffer.setAttributes(
+        1,
+        0,
+        char: 'I',
+        fg: italicStyle.foreground?.argb,
+        bg: italicStyle.background?.argb,
+        modifiers: italicStyle.modifiers,
+      );
 
       final ansi = AnsiScreenshot.capture(buffer, resetLineEndings: true);
 
@@ -61,9 +166,30 @@ void main() {
       final redFgStyle = const Style(foreground: Color(255, 0, 0));
       final greenBgStyle = const Style(background: Color(0, 255, 0));
 
-      buffer.setCell(0, 0, Cell('R', redFgStyle));
-      buffer.setCell(1, 0, Cell('G', greenBgStyle));
-      buffer.setCell(2, 0, Cell('B', Style.empty));
+      buffer.setAttributes(
+        0,
+        0,
+        char: 'R',
+        fg: redFgStyle.foreground?.argb,
+        bg: redFgStyle.background?.argb,
+        modifiers: redFgStyle.modifiers,
+      );
+      buffer.setAttributes(
+        1,
+        0,
+        char: 'G',
+        fg: greenBgStyle.foreground?.argb,
+        bg: greenBgStyle.background?.argb,
+        modifiers: greenBgStyle.modifiers,
+      );
+      buffer.setAttributes(
+        2,
+        0,
+        char: 'B',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
 
       final ansi = AnsiScreenshot.capture(buffer, resetLineEndings: true);
 
@@ -72,17 +198,21 @@ void main() {
       expect(parsedBuffer.width, equals(buffer.width));
       expect(parsedBuffer.height, equals(buffer.height));
 
-      final cellR = parsedBuffer.getCell(0, 0)!;
-      expect(cellR.char, equals('R'));
-      expect(cellR.style.foreground, equals(const Color(255, 0, 0)));
+      expect(parsedBuffer.getCharacter(0, 0), equals('R'));
+      expect(
+        parsedBuffer.getForeground(0, 0),
+        equals(const Color(255, 0, 0).argb),
+      );
 
-      final cellG = parsedBuffer.getCell(1, 0)!;
-      expect(cellG.char, equals('G'));
-      expect(cellG.style.background, equals(const Color(0, 255, 0)));
+      expect(parsedBuffer.getCharacter(1, 0), equals('G'));
+      expect(
+        parsedBuffer.getBackground(1, 0),
+        equals(const Color(0, 255, 0).argb),
+      );
 
-      final cellB = parsedBuffer.getCell(2, 0)!;
-      expect(cellB.char, equals('B'));
-      expect(cellB.style, equals(Style.empty));
+      expect(parsedBuffer.getCharacter(2, 0), equals('B'));
+      expect(parsedBuffer.getForeground(2, 0), equals(0));
+      expect(parsedBuffer.getBackground(2, 0), equals(0));
     });
   });
 }

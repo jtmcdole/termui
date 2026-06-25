@@ -1211,9 +1211,16 @@ class MarqueeRenderer implements SceneRenderer {
         }
 
         if (char != null) {
-          _buffer!.setCell(x, y, Cell(char, style));
+          _buffer!.setAttributes(
+            x,
+            y,
+            char: char,
+            fg: style.foreground?.argb ?? 0,
+            bg: style.background?.argb ?? 0,
+            modifiers: style.modifiers,
+          );
         } else {
-          _buffer!.setCell(x, y, Cell.empty());
+          _buffer!.setAttributes(x, y, char: ' ', fg: 0, bg: 0, modifiers: 0);
         }
       }
     }

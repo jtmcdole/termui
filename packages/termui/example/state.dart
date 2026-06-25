@@ -59,10 +59,13 @@ class _VerticalDividerElement extends Element {
   void performPaint(Buffer buffer, Offset offset) {
     final v = widget as VerticalDivider;
     for (var y = 0; y < size.height; y++) {
-      buffer.setCell(
+      buffer.setAttributes(
         offset.dx.toInt(),
         (offset.dy + y).toInt(),
-        Cell('│', v.style),
+        char: '│',
+        fg: v.style.foreground?.argb ?? 0,
+        bg: v.style.background?.argb ?? 0,
+        modifiers: v.style.modifiers,
       );
     }
   }
@@ -379,7 +382,7 @@ void main() async {
     buildOwner.buildScope();
     buffer.clear();
     // Fill background with blank cells
-    buffer.fill(Cell(' ', Style.empty));
+    buffer.fillAttributes(char: ' ', fg: 0, bg: 0, modifiers: 0);
 
     // Render the mounted element tree to the buffer
     elementWrapper.layout(

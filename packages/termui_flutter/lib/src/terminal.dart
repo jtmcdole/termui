@@ -361,14 +361,19 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
 
     final cellHeight = atlas.cellHeight;
     final total = buffer.width * buffer.height;
+    final width = buffer.width;
     for (var i = 0; i < total; i++) {
       final char = buffer.characters[i];
       if (char.isNotEmpty &&
           char != ' ' &&
           !atlas.charRects.containsKey(char)) {
-        final mods = buffer.modifiers[i];
+        final x = i % width;
+        final y = i ~/ width;
+        final mods = buffer.getModifiers(x, y);
         final isReverse = Modifier.has(mods, Modifier.reverse);
-        final fgVal = isReverse ? buffer.bgColors[i] : buffer.fgColors[i];
+        final fgVal = isReverse
+            ? buffer.getBackground(x, y)
+            : buffer.getForeground(x, y);
         final color = fgVal != 0
             ? Color(fgVal)
             : (isReverse ? Colors.black : Colors.white);
@@ -645,9 +650,9 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           for (var x = 0; x < buffer.width; x++) {
             final idx = rowOffset + x;
             final char = buffer.characters[idx];
-            final fg = buffer.fgColors[idx];
-            final bg = buffer.bgColors[idx];
-            final mods = buffer.modifiers[idx];
+            final fg = buffer.getForeground(x, y);
+            final bg = buffer.getBackground(x, y);
+            final mods = buffer.getModifiers(x, y);
 
             final rect = atlas.charRects[char];
             final cellData = {

@@ -271,13 +271,26 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
       // But we can optimize to only merge if the style isn't empty!
       if (style != Style.empty) {
         for (var col = 0; col < w; col++) {
-          final cell = buffer.getCell(
-            offset.dx.toInt() + col,
-            offset.dy.toInt() + i,
+          final targetX = offset.dx.toInt() + col;
+          final targetY = offset.dy.toInt() + i;
+
+          final fg = buffer.getForeground(targetX, targetY);
+          final bg = buffer.getBackground(targetX, targetY);
+          final mods = buffer.getModifiers(targetX, targetY);
+          final currentStyle = Style(
+            foreground: fg != 0 ? Color.argb(fg) : null,
+            background: bg != 0 ? Color.argb(bg) : null,
+            modifiers: mods,
           );
-          if (cell != null) {
-            cell.style = style.merge(cell.style);
-          }
+
+          final newStyle = style.merge(currentStyle);
+          buffer.setAttributes(
+            targetX,
+            targetY,
+            fg: newStyle.foreground?.argb,
+            bg: newStyle.background?.argb,
+            modifiers: newStyle.modifiers,
+          );
         }
       }
     }

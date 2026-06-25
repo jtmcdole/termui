@@ -114,11 +114,14 @@ class LeftBorderElement extends Element {
     // 1. Draw the vertical line on the left
     for (var y = 0; y < size.height; y++) {
       final cellChar = y < limit ? borderWidget.char : ' ';
-      final cell = buffer.getCell(offset.dx, offset.dy + y);
-      if (cell != null) {
-        cell.char = cellChar;
-        cell.style = borderWidget.style;
-      }
+      buffer.setAttributes(
+        offset.dx.toInt(),
+        (offset.dy + y).toInt(),
+        char: cellChar,
+        fg: borderWidget.style.foreground?.argb,
+        bg: borderWidget.style.background?.argb,
+        modifiers: borderWidget.style.modifiers,
+      );
     }
 
     // 2. Render the child in the remaining area

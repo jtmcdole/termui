@@ -92,21 +92,21 @@ void main() {
 
       // Check root buffer values:
       // Viewport starts at (2, 1) in root buffer coordinate.
-      expect(rootBuffer.getCell(2, 1)!.char, 'A');
-      expect(rootBuffer.getCell(3, 1)!.char, 'B');
-      expect(rootBuffer.getCell(4, 1)!.char, 'C');
-      expect(rootBuffer.getCell(5, 1)!.char, 'D');
+      expect(rootBuffer.getCharacter(2, 1), 'A');
+      expect(rootBuffer.getCharacter(3, 1), 'B');
+      expect(rootBuffer.getCharacter(4, 1), 'C');
+      expect(rootBuffer.getCharacter(5, 1), 'D');
 
       // (6, 1) is outside the viewport (x bounds 2-5). Should be empty space.
-      expect(rootBuffer.getCell(6, 1)!.char, ' ');
+      expect(rootBuffer.getCharacter(6, 1), ' ');
 
       // Write with vertical wrap: 'A\nB\nC\nD' relative to viewport.
       // Viewport height = 3. 'D' should be clipped vertically.
       viewport.writeString(1, 0, 'X\nY\nZ\nW', Style.empty);
-      expect(rootBuffer.getCell(3, 1)!.char, 'X');
-      expect(rootBuffer.getCell(3, 2)!.char, 'Y');
-      expect(rootBuffer.getCell(3, 3)!.char, 'Z');
-      expect(rootBuffer.getCell(3, 4)!.char, ' '); // clipped
+      expect(rootBuffer.getCharacter(3, 1), 'X');
+      expect(rootBuffer.getCharacter(3, 2), 'Y');
+      expect(rootBuffer.getCharacter(3, 3), 'Z');
+      expect(rootBuffer.getCharacter(3, 4), ' '); // clipped
     });
   });
 
@@ -130,12 +130,12 @@ void main() {
 
       // Left column (0..4) is handled by Column.
       // Row 0 has LabelWidget('1') -> '1' at (0, 0)
-      expect(root.getCell(0, 0)!.char, '1');
+      expect(root.getCharacter(0, 0), '1');
       // Row 2 has LabelWidget('2') -> '2' at (0, 2)
-      expect(root.getCell(0, 2)!.char, '2');
+      expect(root.getCharacter(0, 2), '2');
 
       // Right column (5..9) is handled by LabelWidget('3') -> '3' at (5, 0)
-      expect(root.getCell(5, 0)!.char, '3');
+      expect(root.getCharacter(5, 0), '3');
     });
   });
 
@@ -154,12 +154,12 @@ void main() {
       // Root buffer starts at (0, 0).
       // Padding adds left=2, top=1.
       // So the child LabelWidget renders 'Hi' at (2, 1) relative to root.
-      expect(root.getCell(2, 1)!.char, 'H');
-      expect(root.getCell(3, 1)!.char, 'i');
+      expect(root.getCharacter(2, 1), 'H');
+      expect(root.getCharacter(3, 1), 'i');
 
       // The areas outside the padding should remain blank spaces.
-      expect(root.getCell(1, 1)!.char, ' ');
-      expect(root.getCell(2, 0)!.char, ' ');
+      expect(root.getCharacter(1, 1), ' ');
+      expect(root.getCharacter(2, 0), ' ');
     });
 
     test('Padding handles zero-area gracefully', () {
@@ -176,7 +176,7 @@ void main() {
         ..paint(root, Offset.zero);
       for (var y = 0; y < 5; y++) {
         for (var x = 0; x < 5; x++) {
-          expect(root.getCell(x, y)!.char, ' ');
+          expect(root.getCharacter(x, y), ' ');
         }
       }
     });

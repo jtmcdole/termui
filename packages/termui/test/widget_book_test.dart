@@ -91,10 +91,11 @@ void main() {
       // Verify that index 1 'Data Displays' is hovered and highlighted with CharmColors.charple background
       final activeBuffer = platform.lastBuffer;
       expect(activeBuffer, isNotNull);
-      final cell = activeBuffer!.getCell(0, 3);
-      expect(cell, isNotNull);
-      expect(cell!.char, equals('D'));
-      expect(cell.style.background, equals(CharmColors.charple));
+      expect(activeBuffer!.getCharacter(0, 3), equals('D'));
+      expect(
+        Color.argb(activeBuffer.getBackground(0, 3)),
+        equals(CharmColors.charple),
+      );
 
       // Click on the second sidebar item (Data Displays)
       backend.pushBytes('\x1b[<0;5;4M'.codeUnits);

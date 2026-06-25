@@ -67,11 +67,11 @@ void main() {
       expect(viewport.width, equals(0));
       expect(viewport.height, equals(0));
       // Operations on zero-size viewport should clip safely
-      expect(viewport.getCell(0, 0), isNull);
-      viewport.setCell(0, 0, Cell('x', Style.empty));
+      expect(viewport.getCharacter(0, 0), ' ');
+      viewport.setAttributes(0, 0, char: 'x');
       viewport.writeString(0, 0, 'hello', Style.empty);
       viewport.clear();
-      viewport.fill(Cell('a', Style.empty));
+      viewport.fillAttributes(char: 'a');
     });
 
     test('Buffer.resize clamps negative new dimensions to zero', () {

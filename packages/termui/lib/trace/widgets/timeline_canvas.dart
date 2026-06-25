@@ -4,11 +4,14 @@ import "package:termui/termui.dart";
 import 'dart:math';
 
 void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
-  final cell = buffer.getCell(x, y);
-  if (cell != null) {
-    cell.char = char;
-    cell.style = style;
-  }
+  buffer.setAttributes(
+    x,
+    y,
+    char: char,
+    fg: style.foreground?.argb ?? 0,
+    bg: style.background?.argb ?? 0,
+    modifiers: style.modifiers,
+  );
 }
 
 String _getFractionalBlock(double fraction) {
@@ -184,8 +187,8 @@ class TimelineCanvasElement extends Element {
         final cellKey = (x << 16) | y;
         if (drawnCells.contains(cellKey)) continue;
 
-        final existing = buffer.getCell(x, y);
-        final bg = existing?.style.background;
+        final bgArgb = buffer.getBackground(x, y);
+        final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
         drawCell(x, y, '│', style.merge(Style(background: bg)));
         drawnCells.add(cellKey);
         continue;
@@ -280,8 +283,8 @@ class TimelineCanvasElement extends Element {
       for (var i = 0; i < caliperStr.length; i++) {
         final cx = startX + leftCol + i;
         if (cx >= startX && cx < startX + width) {
-          final existingCell = buffer.getCell(cx, caliperRow);
-          final bg = existingCell?.style.background;
+          final bgArgb = buffer.getBackground(cx, caliperRow);
+          final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
           _safeSetCell(
             buffer,
             cx,
@@ -293,8 +296,8 @@ class TimelineCanvasElement extends Element {
       }
 
       for (var y = caliperRow + 1; y < startY + height; y++) {
-        final ex1 = buffer.getCell(startX + leftCol, y);
-        final bg1 = ex1?.style.background;
+        final bgArgb1 = buffer.getBackground(startX + leftCol, y);
+        final bg1 = bgArgb1 == 0 ? null : Color.argb(bgArgb1);
         drawCell(
           startX + leftCol,
           y,
@@ -303,8 +306,8 @@ class TimelineCanvasElement extends Element {
         );
 
         if (rightCol > leftCol) {
-          final ex2 = buffer.getCell(startX + rightCol, y);
-          final bg2 = ex2?.style.background;
+          final bgArgb2 = buffer.getBackground(startX + rightCol, y);
+          final bg2 = bgArgb2 == 0 ? null : Color.argb(bgArgb2);
           drawCell(
             startX + rightCol,
             y,

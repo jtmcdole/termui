@@ -3,46 +3,6 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:characters/characters.dart';
 
-/// A single cell in the terminal buffer.
-///
-/// It only contains [char] and [style], minimizing memory allocation overhead.
-class Cell {
-  /// The single grapheme cluster character for this cell.
-  String char;
-
-  /// The style applied to this cell (includes transparency bit).
-  Style style;
-
-  /// Creates a cell with the given [char] and [style].
-  Cell(this.char, this.style);
-
-  /// Creates a cell initialized as a transparent space.
-  Cell.empty() : char = ' ', style = Style.transparent;
-
-  /// Creates a cell initialized as a solid space with empty style.
-  Cell.blank() : char = ' ', style = Style.empty;
-
-  /// Returns true if this cell has the transparent modifier active.
-  bool get isTransparent => Modifier.has(style.modifiers, Modifier.transparent);
-
-  /// Clones the cell.
-  Cell clone() => Cell(char, style);
-
-  @override
-  bool operator ==(Object other) {
-    if (identical(this, other)) return true;
-    return other is Cell && other.char == char && other.style == style;
-  }
-
-  @override
-  int get hashCode => Object.hash(char, style);
-
-  @override
-  String toString() {
-    return "Cell('$char', style: $style)";
-  }
-}
-
 /// A 2D grid of cell data stored in parallel flat lists.
 class Buffer {
   static final int _traceClearId = Tracer.registerString('Buffer:clear');
@@ -57,14 +17,9 @@ class Buffer {
   /// Flat list of characters representing the grid.
   List<String> characters;
 
-  /// Flat list of packed 32-bit foreground colors.
-  Uint32List fgColors;
-
-  /// Flat list of packed 32-bit background colors.
-  Uint32List bgColors;
-
-  /// Flat list of packed 32-bit style modifier bitmasks.
-  Uint32List modifiers;
+  /// Single unified data array for fg, bg, and modifiers.
+  /// layout: [fg, bg, mod, fg, bg, mod...]
+  Uint32List attributes;
 
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
@@ -77,35 +32,97 @@ class Buffer {
   /// Creates a new buffer of [width] by [height] initialized with transparent empty cell data.
   Buffer(this.width, this.height)
     : characters = List.filled(width * height, ' '),
-      fgColors = Uint32List(width * height),
-      bgColors = Uint32List(width * height),
-      modifiers = Uint32List(width * height) {
-    modifiers.fillRange(0, modifiers.length, Modifier.transparent);
+      attributes = Uint32List(width * height * 3) {
+    for (var i = 2; i < attributes.length; i += 3) {
+      attributes[i] = Modifier.transparent;
+    }
   }
 
   /// Creates a new buffer of [width] by [height] initialized with solid blank cell data.
   Buffer.blank(this.width, this.height)
     : characters = List.filled(width * height, ' '),
-      fgColors = Uint32List(width * height),
-      bgColors = Uint32List(width * height),
-      modifiers = Uint32List(width * height);
+      attributes = Uint32List(width * height * 3);
 
-  int _index(int x, int y) => y * width + x;
-
-  /// Gets the cell at ([x], [y]). Returns null if coordinates are out of bounds.
-  Cell? getCell(int x, int y) {
-    if (x < 0 || x >= width || y < 0 || y >= height) return null;
-    return _VirtualCell(this, _index(x, y));
+  /// Gets the character at ([x], [y]). Returns a space if coordinates are out of bounds.
+  String getCharacter(int x, int y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return ' ';
+    return characters[y * width + x];
   }
 
-  /// Sets the cell data at ([x], [y]) using [cell]. Does nothing if coordinates are out of bounds.
-  void setCell(int x, int y, Cell cell) {
+  /// Gets the foreground color at ([x], [y]). Returns 0 if coordinates are out of bounds.
+  int getForeground(int x, int y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+    return attributes[(y * width + x) * 3 + 0];
+  }
+
+  /// Gets the background color at ([x], [y]). Returns 0 if coordinates are out of bounds.
+  int getBackground(int x, int y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+    return attributes[(y * width + x) * 3 + 1];
+  }
+
+  /// Gets the modifiers at ([x], [y]). Returns transparent if coordinates are out of bounds.
+  int getModifiers(int x, int y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) {
+      return Modifier.transparent;
+    }
+    return attributes[(y * width + x) * 3 + 2];
+  }
+
+  /// Sets character at coordinates.
+  void setCharacter(int x, int y, String char) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      characters[y * width + x] = char;
+    }
+  }
+
+  /// Sets foreground color at coordinates.
+  void setForeground(int x, int y, int fg) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      attributes[(y * width + x) * 3 + 0] = fg;
+    }
+  }
+
+  /// Sets background color at coordinates.
+  void setBackground(int x, int y, int bg) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      attributes[(y * width + x) * 3 + 1] = bg;
+    }
+  }
+
+  /// Sets modifiers at coordinates.
+  void setModifiers(int x, int y, int mod) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      attributes[(y * width + x) * 3 + 2] = mod;
+    }
+  }
+
+  /// Sets character, colors, and modifiers at coordinates.
+  void setCell(int x, int y, String char, int fg, int bg, int mod) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      final idx = (y * width + x) * 3;
+      characters[y * width + x] = char;
+      attributes[idx + 0] = fg;
+      attributes[idx + 1] = bg;
+      attributes[idx + 2] = mod;
+    }
+  }
+
+  /// Sets the cell attributes at ([x], [y]). Does nothing if coordinates are out of bounds.
+  void setAttributes(
+    int x,
+    int y, {
+    String? char,
+    int? fg,
+    int? bg,
+    int? modifiers,
+  }) {
     if (x < 0 || x >= width || y < 0 || y >= height) return;
-    final idx = _index(x, y);
-    characters[idx] = cell.char;
-    fgColors[idx] = cell.style.foreground?.argb ?? 0;
-    bgColors[idx] = cell.style.background?.argb ?? 0;
-    modifiers[idx] = cell.style.modifiers;
+    final idx = (y * width + x) * 3;
+    if (char != null) characters[y * width + x] = char;
+    if (fg != null) attributes[idx + 0] = fg;
+    if (bg != null) attributes[idx + 1] = bg;
+    if (modifiers != null) attributes[idx + 2] = modifiers;
   }
 
   /// Resets all cells in the buffer to transparent empty cells.
@@ -113,21 +130,27 @@ class Buffer {
     Tracer.record(_traceClearId, Phase.begin, TraceCategory.paint);
     try {
       characters.fillRange(0, characters.length, ' ');
-      fgColors.fillRange(0, fgColors.length, 0);
-      bgColors.fillRange(0, bgColors.length, 0);
-      modifiers.fillRange(0, modifiers.length, Modifier.transparent);
+      attributes.fillRange(0, attributes.length, 0);
+      for (var i = 2; i < attributes.length; i += 3) {
+        attributes[i] = Modifier.transparent;
+      }
       effects.clear();
     } finally {
       Tracer.record(_traceClearId, Phase.end, TraceCategory.paint);
     }
   }
 
-  /// Fills the entire buffer with a copy of [cell].
-  void fill(Cell cell) {
-    characters.fillRange(0, characters.length, cell.char);
-    fgColors.fillRange(0, fgColors.length, cell.style.foreground?.argb ?? 0);
-    bgColors.fillRange(0, bgColors.length, cell.style.background?.argb ?? 0);
-    modifiers.fillRange(0, modifiers.length, cell.style.modifiers);
+  /// Fills the entire buffer with the specified attributes.
+  void fillAttributes({String? char, int? fg, int? bg, int? modifiers}) {
+    if (char != null) characters.fillRange(0, characters.length, char);
+    if (fg != null || bg != null || modifiers != null) {
+      for (var i = 0; i < characters.length; i++) {
+        final idx = i * 3;
+        if (fg != null) attributes[idx + 0] = fg;
+        if (bg != null) attributes[idx + 1] = bg;
+        if (modifiers != null) attributes[idx + 2] = modifiers;
+      }
+    }
   }
 
   /// Resizes the buffer to the new dimensions, preserving existing content where it fits.
@@ -137,30 +160,41 @@ class Buffer {
       newWidth = max(0, newWidth);
       newHeight = max(0, newHeight);
       final newChars = List.filled(newWidth * newHeight, ' ');
-      final newFg = Uint32List(newWidth * newHeight);
-      final newBg = Uint32List(newWidth * newHeight);
-      final newModifiers = Uint32List(newWidth * newHeight);
+      final newAttributes = Uint32List(newWidth * newHeight * 3);
 
-      newModifiers.fillRange(0, newModifiers.length, Modifier.transparent);
+      for (var i = 2; i < newAttributes.length; i += 3) {
+        newAttributes[i] = Modifier.transparent;
+      }
 
-      for (var y = 0; y < newHeight; y++) {
-        for (var x = 0; x < newWidth; x++) {
-          final targetIdx = y * newWidth + x;
-          if (x < width && y < height) {
-            final sourceIdx = _index(x, y);
-            newChars[targetIdx] = characters[sourceIdx];
-            newFg[targetIdx] = fgColors[sourceIdx];
-            newBg[targetIdx] = bgColors[sourceIdx];
-            newModifiers[targetIdx] = modifiers[sourceIdx];
-          }
+      final overlapWidth = min(width, newWidth);
+      final overlapHeight = min(height, newHeight);
+
+      if (overlapWidth > 0 && overlapHeight > 0) {
+        for (var y = 0; y < overlapHeight; y++) {
+          final targetCharStart = y * newWidth;
+          final sourceCharStart = y * width;
+          newChars.setRange(
+            targetCharStart,
+            targetCharStart + overlapWidth,
+            characters,
+            sourceCharStart,
+          );
+
+          final targetAttrStart = y * newWidth * 3;
+          final sourceAttrStart = y * width * 3;
+          newAttributes.setRange(
+            targetAttrStart,
+            targetAttrStart + overlapWidth * 3,
+            attributes,
+            sourceAttrStart,
+          );
         }
       }
+
       width = newWidth;
       height = newHeight;
       characters = newChars;
-      fgColors = newFg;
-      bgColors = newBg;
-      modifiers = newModifiers;
+      attributes = newAttributes;
     } finally {
       Tracer.record(_traceResizeId, Phase.end, TraceCategory.layout);
     }
@@ -172,9 +206,98 @@ class Buffer {
   /// Any characters that fall out of bounds are clipped.
   void writeString(int x, int y, String text, Style style) {
     final startX = x;
-    final chars = text.characters;
     var currentX = x;
     var currentY = y;
+
+    if (text.runes.length == text.length) {
+      final len = text.length;
+      final fg = style.foreground?.argb ?? 0;
+      final bg = style.background?.argb ?? 0;
+      final modifiers = style.modifiers;
+      final hasFg = style.foreground != null;
+      final hasBg = style.background != null;
+
+      for (var i = 0; i < len; i++) {
+        final codeUnit = text.codeUnitAt(i);
+        if (codeUnit == 10) {
+          // '\n'
+          currentX = startX;
+          currentY++;
+          continue;
+        }
+        if (currentX >= 0 &&
+            currentX < width &&
+            currentY >= 0 &&
+            currentY < height) {
+          final idx = currentY * width + currentX;
+          final char = String.fromCharCode(codeUnit);
+
+          // Clear potential wide char we are about to overwrite
+          if (characters[idx] == '') {
+            if (currentX - 1 >= 0) {
+              final prevIdx = idx - 1;
+              if (isWideGrapheme(characters[prevIdx])) {
+                characters[prevIdx] = ' ';
+              }
+            }
+          } else if (isWideGrapheme(characters[idx])) {
+            if (currentX + 1 < width) {
+              final nextIdx = idx + 1;
+              if (characters[nextIdx] == '') {
+                characters[nextIdx] = ' ';
+              }
+            }
+          }
+
+          final isWide = isWideGrapheme(char);
+          if (isWide && currentX == width - 1) {
+            characters[idx] = ' ';
+            final attrIdx = idx * 3;
+            attributes[attrIdx + 0] = hasFg ? fg : 0;
+            if (hasBg) attributes[attrIdx + 1] = bg;
+            attributes[attrIdx + 2] = modifiers;
+            currentX += 1;
+          } else {
+            characters[idx] = char;
+            final attrIdx = idx * 3;
+            attributes[attrIdx + 0] = hasFg ? fg : 0;
+            if (hasBg) attributes[attrIdx + 1] = bg;
+            attributes[attrIdx + 2] = modifiers;
+            if (isWide) {
+              if (currentX + 1 < width) {
+                final nextIdx = idx + 1;
+                // Clear potential wide char we are overwriting in the next cell
+                if (isWideGrapheme(characters[nextIdx]) &&
+                    currentX + 2 < width) {
+                  final nextNextIdx = idx + 2;
+                  if (characters[nextNextIdx] == '') {
+                    characters[nextNextIdx] = ' ';
+                  }
+                }
+                characters[nextIdx] = '';
+                final nextAttrIdx = nextIdx * 3;
+                attributes[nextAttrIdx + 0] = hasFg ? fg : 0;
+                if (hasBg) attributes[nextAttrIdx + 1] = bg;
+                attributes[nextAttrIdx + 2] = modifiers;
+              }
+              currentX += 2;
+            } else {
+              currentX += 1;
+            }
+          }
+        } else {
+          currentX += 1;
+        }
+      }
+      return;
+    }
+
+    final chars = text.characters;
+    final fg = style.foreground?.argb ?? 0;
+    final bg = style.background?.argb ?? 0;
+    final modifiers = style.modifiers;
+    final hasFg = style.foreground != null;
+    final hasBg = style.background != null;
 
     for (final char in chars) {
       if (char == '\n') {
@@ -186,18 +309,18 @@ class Buffer {
           currentX < width &&
           currentY >= 0 &&
           currentY < height) {
-        final idx = _index(currentX, currentY);
+        final idx = currentY * width + currentX;
         // Clear potential wide char we are about to overwrite
         if (characters[idx] == '') {
           if (currentX - 1 >= 0) {
-            final prevIdx = _index(currentX - 1, currentY);
+            final prevIdx = idx - 1;
             if (isWideGrapheme(characters[prevIdx])) {
               characters[prevIdx] = ' ';
             }
           }
         } else if (isWideGrapheme(characters[idx])) {
           if (currentX + 1 < width) {
-            final nextIdx = _index(currentX + 1, currentY);
+            final nextIdx = idx + 1;
             if (characters[nextIdx] == '') {
               characters[nextIdx] = ' ';
             }
@@ -208,29 +331,32 @@ class Buffer {
         if (isWide && currentX == width - 1) {
           // Can't fit wide character in the last column, write a space instead
           characters[idx] = ' ';
-          fgColors[idx] = style.foreground?.argb ?? 0;
-          bgColors[idx] = style.background?.argb ?? bgColors[idx];
-          modifiers[idx] = style.modifiers;
+          final attrIdx = idx * 3;
+          attributes[attrIdx + 0] = hasFg ? fg : 0;
+          if (hasBg) attributes[attrIdx + 1] = bg;
+          attributes[attrIdx + 2] = modifiers;
           currentX += 1;
         } else {
           characters[idx] = char;
-          fgColors[idx] = style.foreground?.argb ?? 0;
-          bgColors[idx] = style.background?.argb ?? bgColors[idx];
-          modifiers[idx] = style.modifiers;
+          final attrIdx = idx * 3;
+          attributes[attrIdx + 0] = hasFg ? fg : 0;
+          if (hasBg) attributes[attrIdx + 1] = bg;
+          attributes[attrIdx + 2] = modifiers;
           if (isWide) {
             if (currentX + 1 < width) {
-              final nextIdx = _index(currentX + 1, currentY);
+              final nextIdx = idx + 1;
               // Clear potential wide char we are overwriting in the next cell
               if (isWideGrapheme(characters[nextIdx]) && currentX + 2 < width) {
-                final nextNextIdx = _index(currentX + 2, currentY);
+                final nextNextIdx = idx + 2;
                 if (characters[nextNextIdx] == '') {
                   characters[nextNextIdx] = ' ';
                 }
               }
               characters[nextIdx] = '';
-              fgColors[nextIdx] = style.foreground?.argb ?? 0;
-              bgColors[nextIdx] = style.background?.argb ?? bgColors[nextIdx];
-              modifiers[nextIdx] = style.modifiers;
+              final nextAttrIdx = nextIdx * 3;
+              attributes[nextAttrIdx + 0] = hasFg ? fg : 0;
+              if (hasBg) attributes[nextAttrIdx + 1] = bg;
+              attributes[nextAttrIdx + 2] = modifiers;
             }
             currentX += 2;
           } else {
@@ -350,7 +476,7 @@ class Compositor {
         // Initialize masks based on existing target content (e.g. from pre-filled effect layers)
         for (var i = 0; i < totalCells; i++) {
           final isTransparent =
-              (target.modifiers[i] & Modifier.transparent) != 0;
+              (target.attributes[i * 3 + 2] & Modifier.transparent) != 0;
           if (!isTransparent) {
             final word = i >> 5;
             final bit = i & 31;
@@ -358,7 +484,7 @@ class Compositor {
             fgWritten[word] |= (1 << bit);
             remainingFg--;
 
-            if (target.bgColors[i] != 0) {
+            if (target.attributes[i * 3 + 1] != 0) {
               bgWritten[word] |= (1 << bit);
               remainingBg--;
             }
@@ -422,17 +548,23 @@ class Compositor {
 
               if (fgOccluded && bgOccluded) continue; // Fully occluded
 
+              final sourceAttrIdx = targetIdx * 3;
               final sourceIsTransparent =
-                  (tempBuffer.modifiers[targetIdx] & Modifier.transparent) != 0;
+                  (tempBuffer.attributes[sourceAttrIdx + 2] &
+                      Modifier.transparent) !=
+                  0;
               if (sourceIsTransparent) continue;
 
-              final sourceBg = tempBuffer.bgColors[targetIdx];
+              final sourceBg = tempBuffer.attributes[sourceAttrIdx + 1];
+              final targetAttrIdx = targetIdx * 3;
 
               if (!fgOccluded && !bgOccluded && sourceBg != 0) {
                 target.characters[targetIdx] = tempBuffer.characters[targetIdx];
-                target.fgColors[targetIdx] = tempBuffer.fgColors[targetIdx];
-                target.bgColors[targetIdx] = sourceBg;
-                target.modifiers[targetIdx] = tempBuffer.modifiers[targetIdx];
+                target.attributes[targetAttrIdx + 0] =
+                    tempBuffer.attributes[sourceAttrIdx + 0];
+                target.attributes[targetAttrIdx + 1] = sourceBg;
+                target.attributes[targetAttrIdx + 2] =
+                    tempBuffer.attributes[sourceAttrIdx + 2];
                 fgWritten[word] |= (1 << bit);
                 bgWritten[word] |= (1 << bit);
                 remainingFg--;
@@ -441,14 +573,16 @@ class Compositor {
                 if (!fgOccluded) {
                   target.characters[targetIdx] =
                       tempBuffer.characters[targetIdx];
-                  target.fgColors[targetIdx] = tempBuffer.fgColors[targetIdx];
-                  target.modifiers[targetIdx] = tempBuffer.modifiers[targetIdx];
+                  target.attributes[targetAttrIdx + 0] =
+                      tempBuffer.attributes[sourceAttrIdx + 0];
+                  target.attributes[targetAttrIdx + 2] =
+                      tempBuffer.attributes[sourceAttrIdx + 2];
                   fgWritten[word] |= (1 << bit);
                   remainingFg--;
                 }
 
                 if (!bgOccluded && sourceBg != 0) {
-                  target.bgColors[targetIdx] = sourceBg;
+                  target.attributes[targetAttrIdx + 1] = sourceBg;
                   bgWritten[word] |= (1 << bit);
                   remainingBg--;
                 }
@@ -463,55 +597,67 @@ class Compositor {
           final ox = layer.x;
           final oy = layer.y;
 
-          // No effects on this layer. Fast path: Composite directly to target.
-          for (var ly = 0; ly < buf.height; ly++) {
-            final ty = oy + ly;
-            if (ty < 0 || ty >= target.height) continue;
+          // No effects on this layer. Fast path: Composite directly to target with pre-calculated bounds.
+          final startX = max(0, ox);
+          final endX = min(target.width, ox + buf.width);
+          final startY = max(0, oy);
+          final endY = min(target.height, oy + buf.height);
 
-            var targetIdx = ty * target.width + ox;
-            for (var lx = 0; lx < buf.width; lx++, targetIdx++) {
-              final tx = ox + lx;
-              if (tx < 0 || tx >= target.width) continue;
+          if (startX < endX && startY < endY) {
+            for (var ty = startY; ty < endY; ty++) {
+              final ly = ty - oy;
+              final sourceRowOffset = ly * buf.width;
+              var targetIdx = ty * target.width + startX;
+              for (var tx = startX; tx < endX; tx++, targetIdx++) {
+                final word = targetIdx >> 5;
+                final bit = targetIdx & 31;
 
-              final word = targetIdx >> 5;
-              final bit = targetIdx & 31;
+                final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
+                final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
 
-              final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
-              final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
+                if (fgOccluded && bgOccluded) continue; // Fully occluded
 
-              if (fgOccluded && bgOccluded) continue; // Fully occluded
+                final lx = tx - ox;
+                final sourceIdx = sourceRowOffset + lx;
+                final sourceAttrIdx = sourceIdx * 3;
+                final sourceIsTransparent =
+                    (buf.attributes[sourceAttrIdx + 2] &
+                        Modifier.transparent) !=
+                    0;
+                if (sourceIsTransparent) continue;
 
-              final sourceIdx = ly * buf.width + lx;
-              final sourceIsTransparent =
-                  (buf.modifiers[sourceIdx] & Modifier.transparent) != 0;
-              if (sourceIsTransparent) continue;
+                final sourceBg = buf.attributes[sourceAttrIdx + 1];
+                final targetAttrIdx = targetIdx * 3;
 
-              final sourceBg = buf.bgColors[sourceIdx];
-
-              if (!fgOccluded && !bgOccluded && sourceBg != 0) {
-                // Fast path: write both!
-                target.characters[targetIdx] = buf.characters[sourceIdx];
-                target.fgColors[targetIdx] = buf.fgColors[sourceIdx];
-                target.bgColors[targetIdx] = sourceBg;
-                target.modifiers[targetIdx] = buf.modifiers[sourceIdx];
-                fgWritten[word] |= (1 << bit);
-                bgWritten[word] |= (1 << bit);
-                remainingFg--;
-                remainingBg--;
-              } else {
-                // Slow path: independent foreground/background blending
-                if (!fgOccluded) {
+                if (!fgOccluded && !bgOccluded && sourceBg != 0) {
+                  // Fast path: write both!
                   target.characters[targetIdx] = buf.characters[sourceIdx];
-                  target.fgColors[targetIdx] = buf.fgColors[sourceIdx];
-                  target.modifiers[targetIdx] = buf.modifiers[sourceIdx];
+                  target.attributes[targetAttrIdx + 0] =
+                      buf.attributes[sourceAttrIdx + 0];
+                  target.attributes[targetAttrIdx + 1] = sourceBg;
+                  target.attributes[targetAttrIdx + 2] =
+                      buf.attributes[sourceAttrIdx + 2];
                   fgWritten[word] |= (1 << bit);
-                  remainingFg--;
-                }
-
-                if (!bgOccluded && sourceBg != 0) {
-                  target.bgColors[targetIdx] = sourceBg;
                   bgWritten[word] |= (1 << bit);
+                  remainingFg--;
                   remainingBg--;
+                } else {
+                  // Slow path: independent foreground/background blending
+                  if (!fgOccluded) {
+                    target.characters[targetIdx] = buf.characters[sourceIdx];
+                    target.attributes[targetAttrIdx + 0] =
+                        buf.attributes[sourceAttrIdx + 0];
+                    target.attributes[targetAttrIdx + 2] =
+                        buf.attributes[sourceAttrIdx + 2];
+                    fgWritten[word] |= (1 << bit);
+                    remainingFg--;
+                  }
+
+                  if (!bgOccluded && sourceBg != 0) {
+                    target.attributes[targetAttrIdx + 1] = sourceBg;
+                    bgWritten[word] |= (1 << bit);
+                    remainingBg--;
+                  }
                 }
               }
             }
@@ -538,30 +684,34 @@ class Compositor {
       final ox = layer.x;
       final oy = layer.y;
 
-      for (var ly = 0; ly < buf.height; ly++) {
-        final ty = oy + ly;
-        if (ty < 0 || ty >= target.height) continue;
+      final startX = max(0, ox);
+      final endX = min(target.width, ox + buf.width);
+      final startY = max(0, oy);
+      final endY = min(target.height, oy + buf.height);
 
-        var targetIdx = ty * target.width + ox;
-        for (var lx = 0; lx < buf.width; lx++, targetIdx++) {
-          final tx = ox + lx;
-          if (tx < 0 || tx >= target.width) continue;
+      if (startX < endX && startY < endY) {
+        for (var ty = startY; ty < endY; ty++) {
+          final ly = ty - oy;
+          final sourceRowOffset = ly * buf.width;
+          var targetIdx = ty * target.width + startX;
+          for (var tx = startX; tx < endX; tx++, targetIdx++) {
+            final lx = tx - ox;
+            final sourceIdx = sourceRowOffset + lx;
+            final sourceAttrIdx = sourceIdx * 3;
+            final sourceIsTransparent =
+                (buf.attributes[sourceAttrIdx + 2] & Modifier.transparent) != 0;
+            if (sourceIsTransparent) continue;
 
-          final sourceIdx = ly * buf.width + lx;
-          final sourceIsTransparent =
-              (buf.modifiers[sourceIdx] & Modifier.transparent) != 0;
-          if (sourceIsTransparent) continue;
-
-          final bg = buf.bgColors[sourceIdx];
-          if (bg != 0) {
+            final bg = buf.attributes[sourceAttrIdx + 1];
+            final targetAttrIdx = targetIdx * 3;
             target.characters[targetIdx] = buf.characters[sourceIdx];
-            target.fgColors[targetIdx] = buf.fgColors[sourceIdx];
-            target.bgColors[targetIdx] = bg;
-            target.modifiers[targetIdx] = buf.modifiers[sourceIdx];
-          } else {
-            target.characters[targetIdx] = buf.characters[sourceIdx];
-            target.fgColors[targetIdx] = buf.fgColors[sourceIdx];
-            target.modifiers[targetIdx] = buf.modifiers[sourceIdx];
+            target.attributes[targetAttrIdx + 0] =
+                buf.attributes[sourceAttrIdx + 0];
+            if (bg != 0) {
+              target.attributes[targetAttrIdx + 1] = bg;
+            }
+            target.attributes[targetAttrIdx + 2] =
+                buf.attributes[sourceAttrIdx + 2];
           }
         }
       }
@@ -612,54 +762,4 @@ bool isWideGrapheme(String grapheme) {
   if (codePoint >= 0x1F000 && codePoint <= 0x1F2FF) return true;
 
   return false;
-}
-
-/// A virtual proxy Cell that intercepts reads/writes and delegates them to the Buffer.
-class _VirtualCell extends Cell {
-  final Buffer _buffer;
-  final int _index;
-
-  _VirtualCell(this._buffer, this._index)
-    : super(
-        _buffer.characters[_index],
-        Style(
-          foreground: _buffer.fgColors[_index] != 0
-              ? Color.argb(_buffer.fgColors[_index])
-              : null,
-          background: _buffer.bgColors[_index] != 0
-              ? Color.argb(_buffer.bgColors[_index])
-              : null,
-          modifiers: _buffer.modifiers[_index],
-        ),
-      );
-
-  @override
-  String get char => _buffer.characters[_index];
-
-  @override
-  set char(String value) {
-    super.char = value;
-    _buffer.characters[_index] = value;
-  }
-
-  @override
-  Style get style {
-    return Style(
-      foreground: _buffer.fgColors[_index] != 0
-          ? Color.argb(_buffer.fgColors[_index])
-          : null,
-      background: _buffer.bgColors[_index] != 0
-          ? Color.argb(_buffer.bgColors[_index])
-          : null,
-      modifiers: _buffer.modifiers[_index],
-    );
-  }
-
-  @override
-  set style(Style value) {
-    super.style = value;
-    _buffer.fgColors[_index] = value.foreground?.argb ?? 0;
-    _buffer.bgColors[_index] = value.background?.argb ?? 0;
-    _buffer.modifiers[_index] = value.modifiers;
-  }
 }

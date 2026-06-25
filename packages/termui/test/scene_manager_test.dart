@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:test/test.dart';
-import 'package:termui/terminal/terminal.dart';
+import 'package:termui/terminal/terminal.dart' hide Modifier;
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/widgets/core/prompt_runner.dart';
 import 'package:termui/ui/widgets/core/scene_manager.dart';
@@ -66,7 +66,7 @@ void main() {
       final bgBuffer = Buffer(80, 24);
       for (var y = 0; y < 24; y++) {
         for (var x = 0; x < 80; x++) {
-          bgBuffer.setCell(x, y, Cell('.', Style.empty));
+          bgBuffer.setAttributes(x, y, char: '.', modifiers: Modifier.none);
         }
       }
       final bgRenderer = MockSceneRenderer()..currentBuffer = bgBuffer;
@@ -82,7 +82,7 @@ void main() {
       final fgBuffer = Buffer(3, 3);
       for (var y = 0; y < 3; y++) {
         for (var x = 0; x < 3; x++) {
-          fgBuffer.setCell(x, y, Cell('X', Style.empty));
+          fgBuffer.setAttributes(x, y, char: 'X', modifiers: Modifier.none);
         }
       }
       final fgRenderer = MockSceneRenderer()..currentBuffer = fgBuffer;
@@ -105,12 +105,12 @@ void main() {
 
       final front = renderer!.frontBuffer;
       // Coordinates (0, 0) should be background cell '.'
-      expect(front.getCell(0, 0)?.char, equals('.'));
+      expect(front.getCharacter(0, 0), equals('.'));
       // Coordinates (2, 2) should be overlay cell 'X'
-      expect(front.getCell(2, 2)?.char, equals('X'));
-      expect(front.getCell(4, 4)?.char, equals('X'));
+      expect(front.getCharacter(2, 2), equals('X'));
+      expect(front.getCharacter(4, 4), equals('X'));
       // Coordinates (5, 5) should be background cell '.'
-      expect(front.getCell(5, 5)?.char, equals('.'));
+      expect(front.getCharacter(5, 5), equals('.'));
     });
 
     test('hardware sync matches the focused layer', () {
@@ -550,7 +550,7 @@ void main() {
         // Fill layer buffer with 'a'
         for (var y = 0; y < 5; y++) {
           for (var x = 0; x < 5; x++) {
-            layerBuf.setCell(x, y, Cell('a', Style.empty));
+            layerBuf.setAttributes(x, y, char: 'a', modifiers: Modifier.none);
           }
         }
 
@@ -573,16 +573,16 @@ void main() {
         // (6, 2) is '┐'
         // (2, 6) is '└'
         // (6, 6) is '┘'
-        expect(target.getCell(2, 2)?.char, equals('┌'));
-        expect(target.getCell(6, 2)?.char, equals('┐'));
-        expect(target.getCell(2, 6)?.char, equals('└'));
-        expect(target.getCell(6, 6)?.char, equals('┘'));
+        expect(target.getCharacter(2, 2), equals('┌'));
+        expect(target.getCharacter(6, 2), equals('┐'));
+        expect(target.getCharacter(2, 6), equals('└'));
+        expect(target.getCharacter(6, 6), equals('┘'));
 
         // The border style should have foreground yellow
-        expect(target.getCell(2, 2)?.style.foreground, equals(Colors.yellow));
+        expect(Color.argb(target.getForeground(2, 2)), equals(Colors.yellow));
 
         // Inside cell (e.g. 3, 3) should still be 'a' from layer buffer
-        expect(target.getCell(3, 3)?.char, equals('a'));
+        expect(target.getCharacter(3, 3), equals('a'));
       },
     );
 
@@ -619,9 +619,9 @@ void main() {
 
         var target = sceneManager.renderer!.frontBuffer;
         // Cell at (4, 4) should be '⦿' with bright red color (since button is down)
-        expect(target.getCell(4, 4)?.char, equals('⦿'));
+        expect(target.getCharacter(4, 4), equals('⦿'));
         expect(
-          target.getCell(4, 4)?.style.foreground,
+          Color.argb(target.getForeground(4, 4)),
           equals(const Color(255, 0, 0)),
         );
 
@@ -638,9 +638,9 @@ void main() {
 
         target = sceneManager.renderer!.frontBuffer;
         // Cell at (7, 7) should be '⦿' with bright cyan color (since button is up)
-        expect(target.getCell(7, 7)?.char, equals('⦿'));
+        expect(target.getCharacter(7, 7), equals('⦿'));
         expect(
-          target.getCell(7, 7)?.style.foreground,
+          Color.argb(target.getForeground(7, 7)),
           equals(const Color(0, 255, 255)),
         );
       },
@@ -649,7 +649,7 @@ void main() {
     test('stable layer ordering and composition when zIndex is equal', () {
       // Create two layers with identical zIndex
       final l1Buffer = Buffer(5, 5);
-      l1Buffer.fill(Cell('1', Style.empty));
+      l1Buffer.fillAttributes(char: '1', modifiers: Modifier.none);
       final l1Renderer = MockSceneRenderer()..currentBuffer = l1Buffer;
       final layer1 = SceneLayer(
         renderer: l1Renderer,
@@ -660,7 +660,7 @@ void main() {
       );
 
       final l2Buffer = Buffer(5, 5);
-      l2Buffer.fill(Cell('2', Style.empty));
+      l2Buffer.fillAttributes(char: '2', modifiers: Modifier.none);
       final l2Renderer = MockSceneRenderer()..currentBuffer = l2Buffer;
       final layer2 = SceneLayer(
         renderer: l2Renderer,
@@ -679,8 +679,8 @@ void main() {
       final target = sceneManager.renderer!.frontBuffer;
 
       // Overlap area at (2, 2) to (4, 4) should be '2', not '1'.
-      expect(target.getCell(2, 2)?.char, equals('2'));
-      expect(target.getCell(4, 4)?.char, equals('2'));
+      expect(target.getCharacter(2, 2), equals('2'));
+      expect(target.getCharacter(4, 4), equals('2'));
 
       // If we reverse the insertion order but keep identical zIndex
       sceneManager.layers.clear();
@@ -692,8 +692,8 @@ void main() {
 
       // Now layer1 is added later, so it should sit on top of layer2.
       // Overlap area at (2, 2) to (4, 4) should be '1', not '2'.
-      expect(target2.getCell(2, 2)?.char, equals('1'));
-      expect(target2.getCell(4, 4)?.char, equals('1'));
+      expect(target2.getCharacter(2, 2), equals('1'));
+      expect(target2.getCharacter(4, 4), equals('1'));
     });
 
     test('cleans up references to orphaned layers', () async {
@@ -743,7 +743,7 @@ void main() {
 
       // Bottom layer: 10x10 filled with '1', zIndex: 0
       final l1Buffer = Buffer(10, 10);
-      l1Buffer.fill(Cell('1', Style.empty));
+      l1Buffer.fillAttributes(char: '1', modifiers: Modifier.none);
       final l1Renderer = MockSceneRenderer()..currentBuffer = l1Buffer;
       final layer1 = SceneLayer(
         renderer: l1Renderer,
@@ -757,7 +757,7 @@ void main() {
       // Its borders will be at local edges (x=6, x=10, y=6, y=10).
       // Global (9, 7) corresponds to local coordinates on layer2 of (lx=3, ly=1), which is in the interior.
       final l2Buffer = Buffer(5, 5);
-      l2Buffer.fill(Cell('2', Style.empty));
+      l2Buffer.fillAttributes(char: '2', modifiers: Modifier.none);
       final l2Renderer = MockSceneRenderer()..currentBuffer = l2Buffer;
       final layer2 = SceneLayer(
         renderer: l2Renderer,
@@ -776,11 +776,11 @@ void main() {
       // The border of layer1 at (9, 7) would normally draw vertical border line '│'.
       // But layer2 is on top (zIndex 10) and covers (9, 7) with its interior content '2'.
       // Therefore, the border of layer1 at (9, 7) must be occluded by layer2's content ('2').
-      expect(target.getCell(9, 7)?.char, equals('2'));
+      expect(target.getCharacter(9, 7), equals('2'));
 
       // Also check a non-occluded border coordinate of layer1: e.g. (9, 0)
       // Since it's not occluded, it should render as a border corner '┐'
-      expect(target.getCell(9, 0)?.char, equals('┐'));
+      expect(target.getCharacter(9, 0), equals('┐'));
     });
   });
 }

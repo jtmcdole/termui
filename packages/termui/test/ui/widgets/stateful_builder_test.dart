@@ -25,8 +25,8 @@ void main() {
       expect(storedSetState, isNotNull);
 
       // Verify initial paint
-      expect(buffer.getCell(0, 0)?.char, 'R');
-      expect(buffer.getCell(10, 0)?.char, '1'); // 'Rebuilds: 1'
+      expect(buffer.getCharacter(0, 0), 'R');
+      expect(buffer.getCharacter(10, 0), '1'); // 'Rebuilds: 1'
 
       // Call setState
       storedSetState!(() {});
@@ -38,7 +38,7 @@ void main() {
       element.paint(buffer, Offset.zero);
 
       expect(rebuildCount, greaterThan(1));
-      expect(buffer.getCell(10, 0)?.char, isNot('1'));
+      expect(buffer.getCharacter(10, 0), isNot('1'));
     });
   });
 }

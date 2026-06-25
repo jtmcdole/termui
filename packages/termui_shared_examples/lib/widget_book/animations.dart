@@ -343,10 +343,13 @@ class _SparkleButtonRenderElement extends Element {
     // Clear transparent
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        buffer.setCell(
+        buffer.setAttributes(
           offset.dx + x,
           offset.dy + y,
-          Cell(' ', Style.transparent),
+          char: ' ',
+          fg: Style.transparent.foreground?.argb,
+          bg: Style.transparent.background?.argb,
+          modifiers: Style.transparent.modifiers,
         );
       }
     }
@@ -363,17 +366,23 @@ class _SparkleButtonRenderElement extends Element {
         modifiers: Modifier.dim,
       );
       for (var y = 1; y < H - 1; y++) {
-        buffer.setCell(
+        buffer.setAttributes(
           offset.dx + W - 1,
           offset.dy + y,
-          Cell('▐', shadowStyle),
+          char: '▐',
+          fg: shadowStyle.foreground?.argb,
+          bg: shadowStyle.background?.argb,
+          modifiers: shadowStyle.modifiers,
         );
       }
       for (var x = 1; x < W; x++) {
-        buffer.setCell(
+        buffer.setAttributes(
           offset.dx + x,
           offset.dy + H - 1,
-          Cell('▄', shadowStyle),
+          char: '▄',
+          fg: shadowStyle.foreground?.argb,
+          bg: shadowStyle.background?.argb,
+          modifiers: shadowStyle.modifiers,
         );
       }
     }
@@ -382,7 +391,14 @@ class _SparkleButtonRenderElement extends Element {
     // Draw body background
     for (var y = 0; y < bodyHeight; y++) {
       for (var x = 0; x < bodyWidth; x++) {
-        buffer.setCell(offset.dx + x, offset.dy + y, Cell(' ', baseStyle));
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy + y,
+          char: ' ',
+          fg: baseStyle.foreground?.argb,
+          bg: baseStyle.background?.argb,
+          modifiers: baseStyle.modifiers,
+        );
       }
     }
 
@@ -533,10 +549,13 @@ class _FlashButtonRenderElement extends Element {
     // Clear transparent
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        buffer.setCell(
+        buffer.setAttributes(
           offset.dx + x,
           offset.dy + y,
-          Cell(' ', Style.transparent),
+          char: ' ',
+          fg: Style.transparent.foreground?.argb,
+          bg: Style.transparent.background?.argb,
+          modifiers: Style.transparent.modifiers,
         );
       }
     }
@@ -553,17 +572,23 @@ class _FlashButtonRenderElement extends Element {
         modifiers: Modifier.dim,
       );
       for (var y = 1; y < H - 1; y++) {
-        buffer.setCell(
+        buffer.setAttributes(
           offset.dx + W - 1,
           offset.dy + y,
-          Cell('▐', shadowStyle),
+          char: '▐',
+          fg: shadowStyle.foreground?.argb,
+          bg: shadowStyle.background?.argb,
+          modifiers: shadowStyle.modifiers,
         );
       }
       for (var x = 1; x < W; x++) {
-        buffer.setCell(
+        buffer.setAttributes(
           offset.dx + x,
           offset.dy + H - 1,
-          Cell('▄', shadowStyle),
+          char: '▄',
+          fg: shadowStyle.foreground?.argb,
+          bg: shadowStyle.background?.argb,
+          modifiers: shadowStyle.modifiers,
         );
       }
     }
@@ -572,7 +597,14 @@ class _FlashButtonRenderElement extends Element {
     // Draw body background
     for (var y = 0; y < bodyHeight; y++) {
       for (var x = 0; x < bodyWidth; x++) {
-        buffer.setCell(offset.dx + x, offset.dy + y, Cell(' ', baseStyle));
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy + y,
+          char: ' ',
+          fg: baseStyle.foreground?.argb,
+          bg: baseStyle.background?.argb,
+          modifiers: baseStyle.modifiers,
+        );
       }
     }
 

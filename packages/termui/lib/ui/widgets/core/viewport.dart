@@ -42,30 +42,38 @@ class Viewport implements Buffer {
   );
 
   @override
-  Uint32List get fgColors =>
-      throw UnsupportedError('Flat fgColors access not supported on Viewport');
+  Uint32List get attributes => throw UnsupportedError(
+    'Flat attributes access not supported on Viewport',
+  );
   @override
-  set fgColors(Uint32List val) =>
-      throw UnsupportedError('Flat fgColors access not supported on Viewport');
+  set attributes(Uint32List val) => throw UnsupportedError(
+    'Flat attributes access not supported on Viewport',
+  );
 
   @override
-  Uint32List get bgColors =>
-      throw UnsupportedError('Flat bgColors access not supported on Viewport');
-  @override
-  set bgColors(Uint32List val) =>
-      throw UnsupportedError('Flat bgColors access not supported on Viewport');
+  String getCharacter(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return ' ';
+    return parent.getCharacter(bounds.x + x, bounds.y + y);
+  }
 
   @override
-  Uint32List get modifiers =>
-      throw UnsupportedError('Flat modifiers access not supported on Viewport');
-  @override
-  set modifiers(Uint32List val) =>
-      throw UnsupportedError('Flat modifiers access not supported on Viewport');
+  int getForeground(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return 0;
+    return parent.getForeground(bounds.x + x, bounds.y + y);
+  }
 
   @override
-  Cell? getCell(int x, int y) {
-    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return null;
-    return parent.getCell(bounds.x + x, bounds.y + y);
+  int getBackground(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return 0;
+    return parent.getBackground(bounds.x + x, bounds.y + y);
+  }
+
+  @override
+  int getModifiers(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) {
+      return Modifier.transparent;
+    }
+    return parent.getModifiers(bounds.x + x, bounds.y + y);
   }
 
   @override
@@ -89,35 +97,88 @@ class Viewport implements Buffer {
   }
 
   @override
-  void setCell(int x, int y, Cell cell) {
+  void setCharacter(int x, int y, String char) {
+    if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
+      parent.setCharacter(bounds.x + x, bounds.y + y, char);
+    }
+  }
+
+  @override
+  void setForeground(int x, int y, int fg) {
+    if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
+      parent.setForeground(bounds.x + x, bounds.y + y, fg);
+    }
+  }
+
+  @override
+  void setBackground(int x, int y, int bg) {
+    if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
+      parent.setBackground(bounds.x + x, bounds.y + y, bg);
+    }
+  }
+
+  @override
+  void setModifiers(int x, int y, int mod) {
+    if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
+      parent.setModifiers(bounds.x + x, bounds.y + y, mod);
+    }
+  }
+
+  @override
+  void setCell(int x, int y, String char, int fg, int bg, int mod) {
+    if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
+      parent.setCell(bounds.x + x, bounds.y + y, char, fg, bg, mod);
+    }
+  }
+
+  @override
+  void setAttributes(
+    int x,
+    int y, {
+    String? char,
+    int? fg,
+    int? bg,
+    int? modifiers,
+  }) {
     if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return;
-    parent.setCell(bounds.x + x, bounds.y + y, cell);
+    parent.setAttributes(
+      bounds.x + x,
+      bounds.y + y,
+      char: char,
+      fg: fg,
+      bg: bg,
+      modifiers: modifiers,
+    );
   }
 
   @override
   void clear() {
     for (var y = 0; y < bounds.height; y++) {
       for (var x = 0; x < bounds.width; x++) {
-        final cell = parent.getCell(bounds.x + x, bounds.y + y);
-        if (cell != null) {
-          if (cell.char != ' ' || cell.style != Style.transparent) {
-            cell.char = ' ';
-            cell.style = Style.transparent;
-          }
-        }
+        parent.setAttributes(
+          bounds.x + x,
+          bounds.y + y,
+          char: ' ',
+          modifiers: Modifier.transparent,
+          fg: 0,
+          bg: 0,
+        );
       }
     }
   }
 
   @override
-  void fill(Cell cell) {
+  void fillAttributes({String? char, int? fg, int? bg, int? modifiers}) {
     for (var y = 0; y < bounds.height; y++) {
       for (var x = 0; x < bounds.width; x++) {
-        final targetCell = parent.getCell(bounds.x + x, bounds.y + y);
-        if (targetCell != null) {
-          targetCell.char = cell.char;
-          targetCell.style = cell.style;
-        }
+        parent.setAttributes(
+          bounds.x + x,
+          bounds.y + y,
+          char: char,
+          fg: fg,
+          bg: bg,
+          modifiers: modifiers,
+        );
       }
     }
   }
@@ -145,27 +206,36 @@ class Viewport implements Buffer {
           currentY >= 0 &&
           currentY < bounds.height) {
         // Clear potential wide char we are about to overwrite
-        final cell = parent.getCell(bounds.x + currentX, bounds.y + currentY);
-        if (cell != null) {
-          if (cell.char == '') {
-            if (currentX - 1 >= 0) {
-              final prevCell = parent.getCell(
+        final currentChar = parent.getCharacter(
+          bounds.x + currentX,
+          bounds.y + currentY,
+        );
+        if (currentChar == '') {
+          if (currentX - 1 >= 0) {
+            final prevChar = parent.getCharacter(
+              bounds.x + currentX - 1,
+              bounds.y + currentY,
+            );
+            if (isWideGrapheme(prevChar)) {
+              parent.setAttributes(
                 bounds.x + currentX - 1,
                 bounds.y + currentY,
+                char: ' ',
               );
-              if (prevCell != null && isWideGrapheme(prevCell.char)) {
-                prevCell.char = ' ';
-              }
             }
-          } else if (isWideGrapheme(cell.char)) {
-            if (currentX + 1 < bounds.width) {
-              final nextCell = parent.getCell(
+          }
+        } else if (isWideGrapheme(currentChar)) {
+          if (currentX + 1 < bounds.width) {
+            final nextChar = parent.getCharacter(
+              bounds.x + currentX + 1,
+              bounds.y + currentY,
+            );
+            if (nextChar == '') {
+              parent.setAttributes(
                 bounds.x + currentX + 1,
                 bounds.y + currentY,
+                char: ' ',
               );
-              if (nextCell != null && nextCell.char == '') {
-                nextCell.char = ' ';
-              }
             }
           }
         }
@@ -173,51 +243,64 @@ class Viewport implements Buffer {
         final isWide = isWideGrapheme(char);
         if (isWide && currentX == bounds.width - 1) {
           // Can't fit wide character in the last column, write a space instead
-          final cell = parent.getCell(bounds.x + currentX, bounds.y + currentY);
-          if (cell != null) {
-            cell.char = ' ';
-            cell.style = Style(
-              foreground: style.foreground,
-              background: style.background ?? cell.style.background,
-              modifiers: style.modifiers,
-            );
-          }
+          final currentBg = parent.getBackground(
+            bounds.x + currentX,
+            bounds.y + currentY,
+          );
+          parent.setAttributes(
+            bounds.x + currentX,
+            bounds.y + currentY,
+            char: ' ',
+            fg: style.foreground?.argb ?? 0,
+            bg: style.background?.argb ?? currentBg,
+            modifiers: style.modifiers,
+          );
           currentX += 1;
         } else {
-          final cell = parent.getCell(bounds.x + currentX, bounds.y + currentY);
-          if (cell != null) {
-            cell.char = char;
-            cell.style = Style(
-              foreground: style.foreground,
-              background: style.background ?? cell.style.background,
-              modifiers: style.modifiers,
-            );
-          }
+          final currentBg = parent.getBackground(
+            bounds.x + currentX,
+            bounds.y + currentY,
+          );
+          parent.setAttributes(
+            bounds.x + currentX,
+            bounds.y + currentY,
+            char: char,
+            fg: style.foreground?.argb ?? 0,
+            bg: style.background?.argb ?? currentBg,
+            modifiers: style.modifiers,
+          );
           if (isWide) {
             if (currentX + 1 < bounds.width) {
               // Clear potential wide char we are overwriting in the next cell
-              final nextCell = parent.getCell(
+              final nextChar = parent.getCharacter(
                 bounds.x + currentX + 1,
                 bounds.y + currentY,
               );
-              if (nextCell != null) {
-                if (isWideGrapheme(nextCell.char) &&
-                    currentX + 2 < bounds.width) {
-                  final nextNextCell = parent.getCell(
+              if (isWideGrapheme(nextChar) && currentX + 2 < bounds.width) {
+                final nextNextChar = parent.getCharacter(
+                  bounds.x + currentX + 2,
+                  bounds.y + currentY,
+                );
+                if (nextNextChar == '') {
+                  parent.setAttributes(
                     bounds.x + currentX + 2,
                     bounds.y + currentY,
+                    char: ' ',
                   );
-                  if (nextNextCell != null && nextNextCell.char == '') {
-                    nextNextCell.char = ' ';
-                  }
                 }
-                nextCell.char = '';
-                nextCell.style = Style(
-                  foreground: style.foreground,
-                  background: style.background ?? nextCell.style.background,
-                  modifiers: style.modifiers,
-                );
               }
+              final nextBg = parent.getBackground(
+                bounds.x + currentX + 1,
+                bounds.y + currentY,
+              );
+              parent.setAttributes(
+                bounds.x + currentX + 1,
+                bounds.y + currentY,
+                char: '',
+                fg: style.foreground?.argb ?? 0,
+                bg: style.background?.argb ?? nextBg,
+                modifiers: style.modifiers,
+              );
             }
             currentX += 2;
           } else {

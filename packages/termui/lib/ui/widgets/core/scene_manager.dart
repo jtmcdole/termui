@@ -568,10 +568,14 @@ Buffer _cloneBufferWithBorder(Buffer source) {
   final copy = Buffer(source.width, source.height);
   for (var y = 0; y < source.height; y++) {
     for (var x = 0; x < source.width; x++) {
-      final cell = source.getCell(x, y);
-      if (cell != null) {
-        copy.setCell(x, y, cell.clone());
-      }
+      copy.setAttributes(
+        x,
+        y,
+        char: source.getCharacter(x, y),
+        fg: source.getForeground(x, y),
+        bg: source.getBackground(x, y),
+        modifiers: source.getModifiers(x, y),
+      );
     }
   }
 
@@ -587,25 +591,44 @@ Buffer _cloneBufferWithBorder(Buffer source) {
     final y2 = h - 1;
 
     void setBorderCell(int x, int y, String char) {
-      final cell = copy.getCell(x, y);
-      if (cell != null) {
-        if (cell.char == '') {
-          if (x - 1 >= 0) {
-            final prev = copy.getCell(x - 1, y);
-            if (prev != null && isWideGrapheme(prev.char)) {
-              prev.char = ' ';
-            }
+      final cellChar = copy.getCharacter(x, y);
+      if (cellChar == '') {
+        if (x - 1 >= 0) {
+          final prevChar = copy.getCharacter(x - 1, y);
+          if (isWideGrapheme(prevChar)) {
+            copy.setAttributes(
+              x - 1,
+              y,
+              char: ' ',
+              fg: copy.getForeground(x - 1, y),
+              bg: copy.getBackground(x - 1, y),
+              modifiers: copy.getModifiers(x - 1, y),
+            );
           }
-        } else if (isWideGrapheme(cell.char)) {
-          if (x + 1 < w) {
-            final next = copy.getCell(x + 1, y);
-            if (next != null && next.char == '') {
-              next.char = ' ';
-            }
+        }
+      } else if (isWideGrapheme(cellChar)) {
+        if (x + 1 < w) {
+          final nextChar = copy.getCharacter(x + 1, y);
+          if (nextChar == '') {
+            copy.setAttributes(
+              x + 1,
+              y,
+              char: ' ',
+              fg: copy.getForeground(x + 1, y),
+              bg: copy.getBackground(x + 1, y),
+              modifiers: copy.getModifiers(x + 1, y),
+            );
           }
         }
       }
-      copy.setCell(x, y, Cell(char, borderStyle));
+      copy.setAttributes(
+        x,
+        y,
+        char: char,
+        fg: borderStyle.foreground?.argb ?? 0,
+        bg: borderStyle.background?.argb ?? 0,
+        modifiers: borderStyle.modifiers,
+      );
     }
 
     // Draw horizontal lines

@@ -32,7 +32,7 @@ void main() {
     for (var y = 0; y < buffer.height; y++) {
       final sb = StringBuffer();
       for (var x = 0; x < buffer.width; x++) {
-        sb.write(buffer.getCell(x, y)?.char ?? ' ');
+        sb.write(buffer.getCharacter(x, y));
       }
       if (sb.toString().contains('Screen too small!')) {
         foundFallbackText = true;

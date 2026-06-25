@@ -140,9 +140,10 @@ class TuiAtlasPainter extends CustomPainter {
 
     for (var y = 0; y < rows; y++) {
       for (var x = 0; x < cols; x++) {
-        final cell = buffer.getCell(x, y)!;
-        final style = cell.style;
-        final char = cell.char;
+        final char = buffer.getCharacter(x, y);
+        final bgArgb = buffer.getBackground(x, y);
+        final fgArgb = buffer.getForeground(x, y);
+        final modifiers = buffer.getModifiers(x, y);
 
         final idx = y * cols + x;
         final screenX = x * cellWidth;
@@ -160,11 +161,11 @@ class TuiAtlasPainter extends CustomPainter {
         _rectsBg![idx * 4 + 2] = whiteX + whiteW + bleedBg;
         _rectsBg![idx * 4 + 3] = whiteY + whiteH + bleedBg;
 
-        final isReverse = Modifier.has(style.modifiers, Modifier.reverse);
-        final bgCol = isReverse ? style.foreground : style.background;
-        _colorsBg![idx] = bgCol != null
-            ? bgCol.argb
-            : (isReverse ? 0xFFFFFFFF : 0xFF000000);
+        final isReverse = Modifier.has(modifiers, Modifier.reverse);
+        final bgCol = isReverse
+            ? (fgArgb == 0 ? null : fgArgb)
+            : (bgArgb == 0 ? null : bgArgb);
+        _colorsBg![idx] = bgCol ?? (isReverse ? 0xFFFFFFFF : 0xFF000000);
 
         // Foreground
         if (char.isNotEmpty && char != ' ') {
@@ -187,17 +188,19 @@ class TuiAtlasPainter extends CustomPainter {
             _rectsFg![fgIdx * 4 + 2] = sourceRect.right + bleedFg;
             _rectsFg![fgIdx * 4 + 3] = sourceRect.bottom + bleedFg;
 
-            final fgCol = isReverse ? style.background : style.foreground;
-            _colorsFg![fgIdx] = fgCol != null
-                ? fgCol.argb
-                : (isReverse ? 0xFF000000 : 0xFFFFFFFF);
+            final fgCol = isReverse
+                ? (bgArgb == 0 ? null : bgArgb)
+                : (fgArgb == 0 ? null : fgArgb);
+            _colorsFg![fgIdx] = fgCol ?? (isReverse ? 0xFF000000 : 0xFFFFFFFF);
           } else {
             missingGlyphs.add(char);
 
             fallbackCells.add(
               _FallbackCell(
                 char: char,
-                style: style,
+                modifiers: modifiers,
+                fgArgb: fgArgb,
+                bgArgb: bgArgb,
                 x: screenX,
                 y: screenY,
                 w: isWideGrapheme(char) ? 2 * cellWidth : cellWidth,
@@ -240,14 +243,16 @@ class TuiAtlasPainter extends CustomPainter {
 
     if (!kIsWeb && fallbackCells.isNotEmpty) {
       for (final fc in fallbackCells) {
-        final isReverse = Modifier.has(fc.style.modifiers, Modifier.reverse);
-        final fgCol = isReverse ? fc.style.background : fc.style.foreground;
+        final isReverse = Modifier.has(fc.modifiers, Modifier.reverse);
+        final fgCol = isReverse
+            ? (fc.bgArgb == 0 ? null : fc.bgArgb)
+            : (fc.fgArgb == 0 ? null : fc.fgArgb);
         final color = fgCol != null
-            ? Color(fgCol.argb)
+            ? Color(fgCol)
             : (isReverse ? Colors.black : Colors.white);
 
-        final isBold = Modifier.has(fc.style.modifiers, Modifier.bold);
-        final isDim = Modifier.has(fc.style.modifiers, Modifier.dim);
+        final isBold = Modifier.has(fc.modifiers, Modifier.bold);
+        final isDim = Modifier.has(fc.modifiers, Modifier.dim);
 
         final key = (fc.char, isBold, isDim, color);
         final tp = fallbackPainters[key];
@@ -266,7 +271,9 @@ class TuiAtlasPainter extends CustomPainter {
 
 class _FallbackCell {
   final String char;
-  final Style style;
+  final int modifiers;
+  final int fgArgb;
+  final int bgArgb;
   final double x;
   final double y;
   final double w;
@@ -274,7 +281,9 @@ class _FallbackCell {
 
   _FallbackCell({
     required this.char,
-    required this.style,
+    required this.modifiers,
+    required this.fgArgb,
+    required this.bgArgb,
     required this.x,
     required this.y,
     required this.w,

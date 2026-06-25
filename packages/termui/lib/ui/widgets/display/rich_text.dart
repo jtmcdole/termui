@@ -356,11 +356,14 @@ class RichTextElement extends Element {
 
       for (var x = 0; x < line.length; x++) {
         if (startX + x >= area.width) break;
-        final cell = buffer.getCell(area.x + startX + x, area.y + y);
-        if (cell != null) {
-          cell.char = line[x].char;
-          cell.style = line[x].style;
-        }
+        buffer.setAttributes(
+          area.x + startX + x,
+          area.y + y,
+          char: line[x].char,
+          fg: line[x].style.foreground?.argb ?? 0,
+          bg: line[x].style.background?.argb ?? 0,
+          modifiers: line[x].style.modifiers,
+        );
       }
     }
   }

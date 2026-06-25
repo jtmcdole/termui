@@ -40,13 +40,13 @@ void main() {
       final buffer = Buffer(10, 10);
       element.paint(buffer, Offset.zero);
 
-      expect(buffer.getCell(0, 0)?.char, 'F');
+      expect(buffer.getCharacter(0, 0), 'F');
 
       // Update with same widget
       element.update(Focus(child: const Text('Bar'), onFocusChange: (f) {}));
       element.layout(const BoxConstraints(maxWidth: 50, maxHeight: 10));
       element.paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)?.char, 'B');
+      expect(buffer.getCharacter(0, 0), 'B');
     });
   });
 }

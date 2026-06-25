@@ -354,7 +354,7 @@ void main() {
       element.mount(null);
       element.layout(BoxConstraints.tight(const Size(21, 1)));
       element.paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)?.char, '.');
+      expect(buffer.getCharacter(0, 0), '.');
 
       final vWidget = Slider(
         value: 50,
@@ -368,7 +368,7 @@ void main() {
       vElement.layout(BoxConstraints.tight(const Size(1, 21)));
       buffer.clear();
       vElement.paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)?.char, '.');
+      expect(buffer.getCharacter(0, 0), '.');
     });
   });
 }

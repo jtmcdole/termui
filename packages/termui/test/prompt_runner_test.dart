@@ -247,8 +247,8 @@ void main() {
       var hasContent = false;
       for (var y = 0; y < runner.currentBuffer!.height; y++) {
         for (var x = 0; x < runner.currentBuffer!.width; x++) {
-          final char = runner.currentBuffer!.getCell(x, y)?.char;
-          if (char != null && char.isNotEmpty && char != ' ') {
+          final char = runner.currentBuffer!.getCharacter(x, y);
+          if (char.isNotEmpty && char != ' ') {
             hasContent = true;
           }
         }

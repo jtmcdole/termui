@@ -94,21 +94,23 @@ extension EffectHelpers on Buffer {
       if (cx1 >= 0 && cx1 < width && cx2 >= 0 && cx2 < width) {
         final idx1 = rowOffset + cx1;
         final idx2 = rowOffset + cx2;
+        final idx1Attr = idx1 * 3;
+        final idx2Attr = idx2 * 3;
 
         final tempChar = characters[idx1];
-        final tempFg = fgColors[idx1];
-        final tempBg = bgColors[idx1];
-        final tempMod = modifiers[idx1];
+        final tempFg = attributes[idx1Attr + 0];
+        final tempBg = attributes[idx1Attr + 1];
+        final tempMod = attributes[idx1Attr + 2];
 
         characters[idx1] = characters[idx2];
-        fgColors[idx1] = fgColors[idx2];
-        bgColors[idx1] = bgColors[idx2];
-        modifiers[idx1] = modifiers[idx2];
+        attributes[idx1Attr + 0] = attributes[idx2Attr + 0];
+        attributes[idx1Attr + 1] = attributes[idx2Attr + 1];
+        attributes[idx1Attr + 2] = attributes[idx2Attr + 2];
 
         characters[idx2] = tempChar;
-        fgColors[idx2] = tempFg;
-        bgColors[idx2] = tempBg;
-        modifiers[idx2] = tempMod;
+        attributes[idx2Attr + 0] = tempFg;
+        attributes[idx2Attr + 1] = tempBg;
+        attributes[idx2Attr + 2] = tempMod;
       }
       start++;
       end--;
@@ -139,21 +141,23 @@ extension EffectHelpers on Buffer {
       if (cy1 >= 0 && cy1 < height && cy2 >= 0 && cy2 < height) {
         final idx1 = cy1 * width + x;
         final idx2 = cy2 * width + x;
+        final idx1Attr = idx1 * 3;
+        final idx2Attr = idx2 * 3;
 
         final tempChar = characters[idx1];
-        final tempFg = fgColors[idx1];
-        final tempBg = bgColors[idx1];
-        final tempMod = modifiers[idx1];
+        final tempFg = attributes[idx1Attr + 0];
+        final tempBg = attributes[idx1Attr + 1];
+        final tempMod = attributes[idx1Attr + 2];
 
         characters[idx1] = characters[idx2];
-        fgColors[idx1] = fgColors[idx2];
-        bgColors[idx1] = bgColors[idx2];
-        modifiers[idx1] = modifiers[idx2];
+        attributes[idx1Attr + 0] = attributes[idx2Attr + 0];
+        attributes[idx1Attr + 1] = attributes[idx2Attr + 1];
+        attributes[idx1Attr + 2] = attributes[idx2Attr + 2];
 
         characters[idx2] = tempChar;
-        fgColors[idx2] = tempFg;
-        bgColors[idx2] = tempBg;
-        modifiers[idx2] = tempMod;
+        attributes[idx2Attr + 0] = tempFg;
+        attributes[idx2Attr + 1] = tempBg;
+        attributes[idx2Attr + 2] = tempMod;
       }
       start++;
       end--;
@@ -170,16 +174,17 @@ extension EffectHelpers on Buffer {
       for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
         if (x < 0 || x >= width) continue;
         final idx = rowOffset + x;
+        final attrIdx = idx * 3;
         if (blend == BlendOption.replace) {
-          fgColors[idx] = fgVal;
-          bgColors[idx] = style.background?.argb ?? 0;
-          modifiers[idx] = styleMods;
+          attributes[attrIdx + 0] = fgVal;
+          attributes[attrIdx + 1] = style.background?.argb ?? 0;
+          attributes[attrIdx + 2] = styleMods;
         } else if (blend == BlendOption.colorOnly) {
           if (fgVal != 0) {
-            fgColors[idx] = fgVal;
+            attributes[attrIdx + 0] = fgVal;
           }
         } else if (blend == BlendOption.addModifiers) {
-          modifiers[idx] |= styleMods;
+          attributes[attrIdx + 2] |= styleMods;
         }
       }
     }
@@ -195,16 +200,17 @@ extension EffectHelpers on Buffer {
       for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
         if (x < 0 || x >= width) continue;
         final idx = rowOffset + x;
+        final attrIdx = idx * 3;
         if (blend == BlendOption.replace) {
-          fgColors[idx] = style.foreground?.argb ?? 0;
-          bgColors[idx] = bgVal;
-          modifiers[idx] = styleMods;
+          attributes[attrIdx + 0] = style.foreground?.argb ?? 0;
+          attributes[attrIdx + 1] = bgVal;
+          attributes[attrIdx + 2] = styleMods;
         } else if (blend == BlendOption.colorOnly) {
           if (bgVal != 0) {
-            bgColors[idx] = bgVal;
+            attributes[attrIdx + 1] = bgVal;
           }
         } else if (blend == BlendOption.addModifiers) {
-          modifiers[idx] |= styleMods;
+          attributes[attrIdx + 2] |= styleMods;
         }
       }
     }
@@ -310,16 +316,19 @@ class DimmerEffect extends TerminalEffect {
       for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
         if (x < 0 || x >= target.width) continue;
         final idx = rowOffset + x;
-        if ((target.modifiers[idx] & Modifier.transparent) != 0) continue;
-
-        final fg = target.fgColors[idx];
-        if (fg != 0) {
-          target.fgColors[idx] = mutator.dimPacked(fg);
+        final attrIdx = idx * 3;
+        if ((target.attributes[attrIdx + 2] & Modifier.transparent) != 0) {
+          continue;
         }
 
-        final bg = target.bgColors[idx];
+        final fg = target.attributes[attrIdx + 0];
+        if (fg != 0) {
+          target.attributes[attrIdx + 0] = mutator.dimPacked(fg);
+        }
+
+        final bg = target.attributes[attrIdx + 1];
         if (bg != 0) {
-          target.bgColors[idx] = mutator.dimPacked(bg);
+          target.attributes[attrIdx + 1] = mutator.dimPacked(bg);
         }
       }
     }

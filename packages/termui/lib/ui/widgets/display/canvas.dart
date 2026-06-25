@@ -1038,17 +1038,20 @@ class CanvasElement extends Element {
         final targetIdx = ty * targetWidth + tx;
         targetBuffer.characters[targetIdx] = char;
         final s = canvas._styles[idx];
+        final targetAttrIdx = targetIdx * 3;
         if (s != null) {
-          targetBuffer.fgColors[targetIdx] =
+          targetBuffer.attributes[targetAttrIdx + 0] =
               s.foreground?.argb ?? canvas.style.foreground?.argb ?? 0;
-          targetBuffer.bgColors[targetIdx] =
+          targetBuffer.attributes[targetAttrIdx + 1] =
               s.background?.argb ?? canvas.style.background?.argb ?? 0;
-          targetBuffer.modifiers[targetIdx] =
+          targetBuffer.attributes[targetAttrIdx + 2] =
               s.modifiers | canvas.style.modifiers;
         } else {
-          targetBuffer.fgColors[targetIdx] = canvas.style.foreground?.argb ?? 0;
-          targetBuffer.bgColors[targetIdx] = canvas.style.background?.argb ?? 0;
-          targetBuffer.modifiers[targetIdx] = canvas.style.modifiers;
+          targetBuffer.attributes[targetAttrIdx + 0] =
+              canvas.style.foreground?.argb ?? 0;
+          targetBuffer.attributes[targetAttrIdx + 1] =
+              canvas.style.background?.argb ?? 0;
+          targetBuffer.attributes[targetAttrIdx + 2] = canvas.style.modifiers;
         }
       }
     }

@@ -327,11 +327,14 @@ class LazyTableElement extends Element {
 
       for (var x = 0; x < w; x++) {
         final char = x < rowChars.length ? rowChars.elementAt(x) : ' ';
-        final cell = buffer.getCell(offset.dx + x, targetY);
-        if (cell != null) {
-          cell.char = char;
-          cell.style = currentStyle;
-        }
+        buffer.setAttributes(
+          (offset.dx + x).toInt(),
+          targetY.toInt(),
+          char: char,
+          fg: currentStyle.foreground?.argb,
+          bg: currentStyle.background?.argb,
+          modifiers: currentStyle.modifiers,
+        );
       }
     }
   }

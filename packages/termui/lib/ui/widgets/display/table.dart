@@ -293,7 +293,12 @@ class TableElement extends Element {
         final vp = Viewport(buffer, cellRect);
 
         if (cellData is Widget) {
-          vp.fill(Cell(' ', currentStyle));
+          vp.fillAttributes(
+            char: ' ',
+            fg: currentStyle.foreground?.argb ?? 0,
+            bg: currentStyle.background?.argb ?? 0,
+            modifiers: currentStyle.modifiers,
+          );
           final cellEl = cellElements[rowIdx][c];
           if (cellEl != null) {
             cellEl.paint(vp, Offset.zero);

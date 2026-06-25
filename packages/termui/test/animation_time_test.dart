@@ -84,11 +84,11 @@ void main() {
         elementWrapper.paint(buffer, Offset.zero);
 
         // With Row layout, each gets equal width (4 columns out of 20).
-        expect(buffer.getCell(0, 0)?.char, '⠋');
-        expect(buffer.getCell(4, 0)?.char, '⠙');
-        expect(buffer.getCell(8, 0)?.char, '⠹');
-        expect(buffer.getCell(12, 0)?.char, '⠸');
-        expect(buffer.getCell(16, 0)?.char, '⠼');
+        expect(buffer.getCharacter(0, 0), '⠋');
+        expect(buffer.getCharacter(4, 0), '⠙');
+        expect(buffer.getCharacter(8, 0), '⠹');
+        expect(buffer.getCharacter(12, 0), '⠸');
+        expect(buffer.getCharacter(16, 0), '⠼');
       },
     );
   });

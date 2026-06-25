@@ -46,9 +46,6 @@ class InkwellRippleEffect extends TuiAnimationEffect {
 
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        final cell = buffer.getCell(x, y);
-        if (cell == null) continue;
-
         final dx = x - trigger.x;
         final dy = (y - trigger.y) * 2.0; // Aspect ratio adjustment
         final d = sqrt(dx * dx + dy * dy);
@@ -59,15 +56,18 @@ class InkwellRippleEffect extends TuiAnimationEffect {
             1.0,
           );
           final fadeFactor = radialFactor * (1.0 - p) + p;
-          final originalBg =
-              cell.style.background ?? baseStyle.background ?? Colors.black;
+
+          final bgArgb = buffer.getBackground(x, y);
+          final originalBg = bgArgb == 0
+              ? (baseStyle.background ?? Colors.black)
+              : Color.argb(bgArgb);
 
           final blendedBg = interpolateColor(
             originalBg,
             rippleColor,
             fadeFactor,
           );
-          cell.style = cell.style.merge(Style(background: blendedBg));
+          buffer.setAttributes(x, y, bg: blendedBg.argb);
         }
       }
     }
@@ -134,16 +134,17 @@ class SparkleEffect extends TuiAnimationEffect {
 
     for (final p in _particles) {
       if (p.life > 0.0) {
-        final cell = buffer.getCell(p.x, p.y);
-        if (cell != null) {
-          // Dim the character color as life decays
-          final dimmedColor = interpolateColor(Colors.black, p.color, p.life);
+        // Dim the character color as life decays
+        final dimmedColor = interpolateColor(Colors.black, p.color, p.life);
 
-          cell.char = p.char;
-          cell.style = cell.style.merge(
-            Style(foreground: dimmedColor, modifiers: Modifier.bold),
-          );
-        }
+        final currentModifiers = buffer.getModifiers(p.x, p.y);
+        buffer.setAttributes(
+          p.x,
+          p.y,
+          char: p.char,
+          fg: dimmedColor.argb,
+          modifiers: currentModifiers | Modifier.bold,
+        );
       }
     }
 
@@ -205,11 +206,11 @@ class FlashEffect extends TuiAnimationEffect {
 
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        final cell = buffer.getCell(x, y);
-        if (cell == null) continue;
+        final bgArgb = buffer.getBackground(x, y);
+        final originalBg = bgArgb == 0
+            ? (baseStyle.background ?? Colors.black)
+            : Color.argb(bgArgb);
 
-        final originalBg =
-            cell.style.background ?? baseStyle.background ?? Colors.black;
         // Cap blending factor at 60% to maintain baseline legibility of text content
         final blendedBg = interpolateColor(
           originalBg,
@@ -217,7 +218,7 @@ class FlashEffect extends TuiAnimationEffect {
           intensity * 0.6,
         );
 
-        cell.style = cell.style.merge(Style(background: blendedBg));
+        buffer.setAttributes(x, y, bg: blendedBg.argb);
       }
     }
   }

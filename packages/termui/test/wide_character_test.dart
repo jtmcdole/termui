@@ -34,41 +34,41 @@ void main() {
         final buffer = Buffer(5, 1);
         buffer.writeString(0, 0, '中A', Style.empty);
 
-        expect(buffer.getCell(0, 0)!.char, '中');
-        expect(buffer.getCell(1, 0)!.char, '');
-        expect(buffer.getCell(2, 0)!.char, 'A');
+        expect(buffer.getCharacter(0, 0), '中');
+        expect(buffer.getCharacter(1, 0), '');
+        expect(buffer.getCharacter(2, 0), 'A');
       },
     );
 
     test('Overwriting second cell of wide character clears the first cell', () {
       final buffer = Buffer(5, 1);
       buffer.writeString(0, 0, '中', Style.empty);
-      expect(buffer.getCell(0, 0)!.char, '中');
-      expect(buffer.getCell(1, 0)!.char, '');
+      expect(buffer.getCharacter(0, 0), '中');
+      expect(buffer.getCharacter(1, 0), '');
 
       // Overwrite the dummy cell (1, 0) with 'A'
       buffer.writeString(1, 0, 'A', Style.empty);
-      expect(buffer.getCell(0, 0)!.char, ' ');
-      expect(buffer.getCell(1, 0)!.char, 'A');
+      expect(buffer.getCharacter(0, 0), ' ');
+      expect(buffer.getCharacter(1, 0), 'A');
     });
 
     test('Overwriting first cell of wide character clears the second cell', () {
       final buffer = Buffer(5, 1);
       buffer.writeString(0, 0, '中', Style.empty);
-      expect(buffer.getCell(0, 0)!.char, '中');
-      expect(buffer.getCell(1, 0)!.char, '');
+      expect(buffer.getCharacter(0, 0), '中');
+      expect(buffer.getCharacter(1, 0), '');
 
       // Overwrite first cell (0, 0) with 'A'
       buffer.writeString(0, 0, 'A', Style.empty);
-      expect(buffer.getCell(0, 0)!.char, 'A');
-      expect(buffer.getCell(1, 0)!.char, ' ');
+      expect(buffer.getCharacter(0, 0), 'A');
+      expect(buffer.getCharacter(1, 0), ' ');
     });
 
     test('Writing wide character at the last column falls back to space', () {
       final buffer = Buffer(5, 1);
       buffer.writeString(4, 0, '中', Style.empty);
 
-      expect(buffer.getCell(4, 0)!.char, ' ');
+      expect(buffer.getCharacter(4, 0), ' ');
     });
   });
 }

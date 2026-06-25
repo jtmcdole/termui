@@ -335,20 +335,20 @@ class ModalOverlayElement extends WindowElement {
     // 2. Draw the background scrim (dimming the cells beneath the modal)
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
-        final cell = buffer.getCell(offset.dx + x, offset.dy + y);
-        if (cell != null) {
-          final isInsideDialog =
-              x >= modal.dialogBounds.x &&
-              x < modal.dialogBounds.x + modal.dialogBounds.width &&
-              y >= modal.dialogBounds.y &&
-              y < modal.dialogBounds.y + modal.dialogBounds.height;
-          if (!isInsideDialog) {
-            cell.style = Style(
-              foreground: cell.style.foreground,
-              background: cell.style.background,
-              modifiers: cell.style.modifiers | Modifier.dim,
-            );
-          }
+        final targetX = (offset.dx + x).toInt();
+        final targetY = (offset.dy + y).toInt();
+        final isInsideDialog =
+            x >= modal.dialogBounds.x &&
+            x < modal.dialogBounds.x + modal.dialogBounds.width &&
+            y >= modal.dialogBounds.y &&
+            y < modal.dialogBounds.y + modal.dialogBounds.height;
+        if (!isInsideDialog) {
+          final modifiers = buffer.getModifiers(targetX, targetY);
+          buffer.setAttributes(
+            targetX,
+            targetY,
+            modifiers: modifiers | Modifier.dim,
+          );
         }
       }
     }
@@ -362,11 +362,14 @@ class ModalOverlayElement extends WindowElement {
     if (dw < 2 || dh < 2) {
       for (var y = 0; y < dh; y++) {
         for (var x = 0; x < dw; x++) {
-          final cell = buffer.getCell(dialogX + x, dialogY + y);
-          if (cell != null) {
-            cell.char = ' ';
-            cell.style = modal.borderStyle;
-          }
+          buffer.setAttributes(
+            (dialogX + x).toInt(),
+            (dialogY + y).toInt(),
+            char: ' ',
+            fg: modal.borderStyle.foreground?.argb,
+            bg: modal.borderStyle.background?.argb,
+            modifiers: modal.borderStyle.modifiers,
+          );
         }
       }
       return;
@@ -441,7 +444,12 @@ class ModalOverlayElement extends WindowElement {
     // Render child content viewport
     final contentArea = Rect(dialogX + 1, dialogY + 1, dw - 2, dh - 2);
     final contentViewport = Viewport(buffer, contentArea);
-    contentViewport.fill(Cell(' ', modal.backgroundStyle));
+    contentViewport.fillAttributes(
+      char: ' ',
+      fg: modal.backgroundStyle.foreground?.argb,
+      bg: modal.backgroundStyle.background?.argb,
+      modifiers: modal.backgroundStyle.modifiers,
+    );
 
     if (childElement != null) {
       childElement!.paint(contentViewport, Offset.zero);

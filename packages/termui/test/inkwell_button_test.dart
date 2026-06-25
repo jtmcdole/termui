@@ -142,7 +142,10 @@ void main() {
 
         // Pressed body is at Rect(0, 0, 9, 3), same as normal
         // No shadow should be present
-        expect(buffer.getCell(9, 1)!.isTransparent, isTrue);
+        expect(
+          Modifier.has(buffer.getModifiers(9, 1), Modifier.transparent),
+          isTrue,
+        );
 
         // Now release mouse inside bounds
         btn.handleMouseEvent(

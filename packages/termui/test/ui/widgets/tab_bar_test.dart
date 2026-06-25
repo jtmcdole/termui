@@ -57,12 +57,12 @@ void main() {
       final tester = TerminalTester();
       await tester.pumpWidget(panel);
 
-      expect(tester.buffer!.getCell(0, 0)?.char, 'F'); // First
+      expect(tester.buffer!.getCharacter(0, 0), 'F'); // First
 
       controller.index = 1;
       await tester.pump();
 
-      expect(tester.buffer!.getCell(0, 0)?.char, 'S'); // Second
+      expect(tester.buffer!.getCharacter(0, 0), 'S'); // Second
     });
   });
 }

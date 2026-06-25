@@ -185,20 +185,28 @@ class ScrollBarElement extends Element {
     if (sb.direction == LayoutDirection.vertical) {
       for (var y = 0; y < trackHeight; y++) {
         final isThumb = y >= thumbPos && y < thumbPos + thumbHeight;
-        final cell = buffer.getCell(offset.dx, offset.dy + y);
-        if (cell != null) {
-          cell.char = isThumb ? sb.thumbChar : sb.trackChar;
-          cell.style = isThumb ? sb.thumbStyle : sb.trackStyle;
-        }
+        final style = isThumb ? sb.thumbStyle : sb.trackStyle;
+        buffer.setAttributes(
+          offset.dx,
+          offset.dy + y,
+          char: isThumb ? sb.thumbChar : sb.trackChar,
+          fg: style.foreground?.argb ?? 0,
+          bg: style.background?.argb ?? 0,
+          modifiers: style.modifiers,
+        );
       }
     } else {
       for (var x = 0; x < trackHeight; x++) {
         final isThumb = x >= thumbPos && x < thumbPos + thumbHeight;
-        final cell = buffer.getCell(offset.dx + x, offset.dy);
-        if (cell != null) {
-          cell.char = isThumb ? sb.thumbChar : sb.trackChar;
-          cell.style = isThumb ? sb.thumbStyle : sb.trackStyle;
-        }
+        final style = isThumb ? sb.thumbStyle : sb.trackStyle;
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy,
+          char: isThumb ? sb.thumbChar : sb.trackChar,
+          fg: style.foreground?.argb ?? 0,
+          bg: style.background?.argb ?? 0,
+          modifiers: style.modifiers,
+        );
       }
     }
   }

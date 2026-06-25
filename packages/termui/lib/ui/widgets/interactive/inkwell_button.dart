@@ -153,7 +153,14 @@ class InkwellButtonState extends State<InkwellButton>
     // Clear rendering area with transparent cells first
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        buffer.setCell(x, y, Cell(' ', Style.transparent));
+        buffer.setAttributes(
+          x,
+          y,
+          char: ' ',
+          fg: 0,
+          bg: 0,
+          modifiers: Modifier.transparent,
+        );
       }
     }
 
@@ -161,7 +168,14 @@ class InkwellButtonState extends State<InkwellButton>
       // Fallback for extremely small sizes
       for (var y = 0; y < H; y++) {
         for (var x = 0; x < W; x++) {
-          buffer.setCell(x, y, Cell(' ', Style(background: widget.color1)));
+          buffer.setAttributes(
+            x,
+            y,
+            char: ' ',
+            fg: 0,
+            bg: widget.color1.argb,
+            modifiers: Modifier.none,
+          );
         }
       }
       if (widget.text.isNotEmpty) {
@@ -191,11 +205,25 @@ class InkwellButtonState extends State<InkwellButton>
       );
       // Rightmost column W - 1 (from row 1 to H - 2) draws Right Half-Block '▐'
       for (var y = 1; y < H - 1; y++) {
-        buffer.setCell(W - 1, y, Cell('▐', shadowStyle));
+        buffer.setAttributes(
+          W - 1,
+          y,
+          char: '▐',
+          fg: shadowStyle.foreground?.argb ?? 0,
+          bg: shadowStyle.background?.argb ?? 0,
+          modifiers: shadowStyle.modifiers,
+        );
       }
       // Bottom row H - 1 (from column 1 to W - 1) draws Lower Half-Block '▄'
       for (var x = 1; x < W; x++) {
-        buffer.setCell(x, H - 1, Cell('▄', shadowStyle));
+        buffer.setAttributes(
+          x,
+          H - 1,
+          char: '▄',
+          fg: shadowStyle.foreground?.argb ?? 0,
+          bg: shadowStyle.background?.argb ?? 0,
+          modifiers: shadowStyle.modifiers,
+        );
       }
     }
 
@@ -209,7 +237,14 @@ class InkwellButtonState extends State<InkwellButton>
     final baseStyle = Style(background: widget.color1);
     for (var by = 0; by < bodyHeight; by++) {
       for (var bx = 0; bx < bodyWidth; bx++) {
-        buffer.setCell(bodyX + bx, bodyY + by, Cell(' ', baseStyle));
+        buffer.setAttributes(
+          bodyX + bx,
+          bodyY + by,
+          char: ' ',
+          fg: baseStyle.foreground?.argb ?? 0,
+          bg: baseStyle.background?.argb ?? 0,
+          modifiers: baseStyle.modifiers,
+        );
       }
     }
 
@@ -221,38 +256,57 @@ class InkwellButtonState extends State<InkwellButton>
       final bx = textX + i;
       final by = textY;
       if (bx >= 0 && bx < bodyWidth && by >= 0 && by < bodyHeight) {
-        final cell = buffer.getCell(bodyX + bx, bodyY + by);
-        if (cell != null) {
-          cell.char = textChars[i];
-          final bg =
-              cell.style.background ?? baseStyle.background ?? Colors.black;
+        final bgArgb = buffer.getBackground(bodyX + bx, bodyY + by);
+        final bgR = bgArgb != 0
+            ? (bgArgb >> 16) & 0xFF
+            : (baseStyle.background?.r ?? 0);
+        final bgG = bgArgb != 0
+            ? (bgArgb >> 8) & 0xFF
+            : (baseStyle.background?.g ?? 0);
+        final bgB = bgArgb != 0
+            ? bgArgb & 0xFF
+            : (baseStyle.background?.b ?? 0);
 
-          Style resolvedTextStyle = widget.textStyle;
-          if (widget.textStyle.foreground != null) {
-            final fgColor = widget.textStyle.foreground!;
-            final fgLuminance =
-                0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
-            final bgLuminance = 0.299 * bg.r + 0.587 * bg.g + 0.114 * bg.b;
+        Style resolvedTextStyle = widget.textStyle;
+        if (widget.textStyle.foreground != null) {
+          final fgColor = widget.textStyle.foreground!;
+          final fgLuminance =
+              0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
+          final bgLuminance = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
 
-            // Check if contrast is too low (e.g. both dark or both light)
-            final bothDark = fgLuminance < 110 && bgLuminance < 110;
-            final bothLight = fgLuminance >= 110 && bgLuminance >= 110;
-            if (bothDark) {
-              final fg =
-                  (widget.color1.r < 50 &&
-                      widget.color1.g < 50 &&
-                      widget.color1.b < 50)
-                  ? Colors.white
-                  : widget.color1;
-              resolvedTextStyle = widget.textStyle.merge(Style(foreground: fg));
-            } else if (bothLight) {
-              resolvedTextStyle = widget.textStyle.merge(
-                const Style(foreground: Colors.black),
-              );
-            }
+          // Check if contrast is too low (e.g. both dark or both light)
+          final bothDark = fgLuminance < 110 && bgLuminance < 110;
+          final bothLight = fgLuminance >= 110 && bgLuminance >= 110;
+          if (bothDark) {
+            final fg =
+                (widget.color1.r < 50 &&
+                    widget.color1.g < 50 &&
+                    widget.color1.b < 50)
+                ? Colors.white
+                : widget.color1;
+            resolvedTextStyle = widget.textStyle.merge(Style(foreground: fg));
+          } else if (bothLight) {
+            resolvedTextStyle = widget.textStyle.merge(
+              const Style(foreground: Colors.black),
+            );
           }
-          cell.style = cell.style.merge(resolvedTextStyle);
         }
+
+        final oldModifiers = buffer.getModifiers(bodyX + bx, bodyY + by);
+        var mergedModifiers = oldModifiers | resolvedTextStyle.modifiers;
+        if ((resolvedTextStyle.modifiers & Modifier.transparent) == 0) {
+          mergedModifiers &= ~Modifier.transparent;
+        }
+        final oldFg = buffer.getForeground(bodyX + bx, bodyY + by);
+
+        buffer.setAttributes(
+          bodyX + bx,
+          bodyY + by,
+          char: textChars[i],
+          fg: resolvedTextStyle.foreground?.argb ?? oldFg,
+          bg: resolvedTextStyle.background?.argb ?? bgArgb,
+          modifiers: mergedModifiers,
+        );
       }
     }
   }

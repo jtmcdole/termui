@@ -984,10 +984,13 @@ class _TextFieldRenderWidgetElement extends Element {
         textField.placeholderStyle,
       );
       if (textField.focused) {
-        final cell = buffer.getCell(offset.dx, offset.dy);
-        if (cell != null) {
-          cell.style = textField.cursorStyle;
-        }
+        buffer.setAttributes(
+          offset.dx,
+          offset.dy,
+          fg: textField.cursorStyle.foreground?.argb ?? 0,
+          bg: textField.cursorStyle.background?.argb ?? 0,
+          modifiers: textField.cursorStyle.modifiers,
+        );
       }
       return;
     }
@@ -1012,11 +1015,14 @@ class _TextFieldRenderWidgetElement extends Element {
         final isCursor =
             textField.focused && lineIdx == cursorLine && x == cursorColumn;
         final cellStyle = isCursor ? textField.cursorStyle : textField.style;
-        final cell = buffer.getCell(offset.dx + x, offset.dy + y);
-        if (cell != null) {
-          cell.char = char;
-          cell.style = cellStyle;
-        }
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy + y,
+          char: char,
+          fg: cellStyle.foreground?.argb ?? 0,
+          bg: cellStyle.background?.argb ?? 0,
+          modifiers: cellStyle.modifiers,
+        );
       }
 
       // Render cursor at end of line if needed
@@ -1025,10 +1031,13 @@ class _TextFieldRenderWidgetElement extends Element {
           cursorColumn >= lineLen) {
         final cursorX = lineLen;
         if (cursorX < w) {
-          final cell = buffer.getCell(offset.dx + cursorX, offset.dy + y);
-          if (cell != null) {
-            cell.style = textField.cursorStyle;
-          }
+          buffer.setAttributes(
+            offset.dx + cursorX,
+            offset.dy + y,
+            fg: textField.cursorStyle.foreground?.argb ?? 0,
+            bg: textField.cursorStyle.background?.argb ?? 0,
+            modifiers: textField.cursorStyle.modifiers,
+          );
         }
       }
     }

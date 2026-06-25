@@ -111,7 +111,7 @@ void main() {
         ),
       );
 
-      expect(tester.buffer!.getCell(0, 0)?.char, 'A');
+      expect(tester.buffer!.getCharacter(0, 0), 'A');
     });
   });
 }

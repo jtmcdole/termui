@@ -87,8 +87,7 @@ void main() {
       final buffer = Buffer.blank(10, 1);
       element.paint(buffer, Offset.zero);
 
-      final cell = buffer.getCell(0, 0);
-      expect(cell?.char, 'H');
+      expect(buffer.getCharacter(0, 0), 'H');
 
       element.unmount();
     });
@@ -114,8 +113,7 @@ void main() {
       final buffer = Buffer.blank(10, 1);
       element.paint(buffer, Offset.zero);
 
-      final cell = buffer.getCell(0, 0);
-      expect(cell?.char, 'W');
+      expect(buffer.getCharacter(0, 0), 'W');
 
       element.unmount();
     });
@@ -141,8 +139,7 @@ void main() {
       final buffer = Buffer.blank(10, 1);
       element.paint(buffer, Offset.zero);
 
-      final cell = buffer.getCell(0, 0);
-      expect(cell?.char, 'S');
+      expect(buffer.getCharacter(0, 0), 'S');
 
       element.unmount();
     });
@@ -168,8 +165,7 @@ void main() {
       final buffer = Buffer.blank(10, 1);
       element.paint(buffer, Offset.zero);
 
-      final cell = buffer.getCell(0, 0);
-      expect(cell?.char, 'I');
+      expect(buffer.getCharacter(0, 0), 'I');
 
       element.unmount();
     });
@@ -192,8 +188,7 @@ void main() {
       final buffer = Buffer.blank(10, 1);
       widget.paint(buffer, Offset.zero);
 
-      final cell = buffer.getCell(0, 0);
-      expect(cell?.char, 'B');
+      expect(buffer.getCharacter(0, 0), 'B');
     });
 
     test('Element layout and paint performs layout and paint', () {
@@ -206,8 +201,7 @@ void main() {
       element.paint(buffer, Offset.zero);
 
       expect(element.size.width, 10);
-      final cell = buffer.getCell(0, 0);
-      expect(cell?.char, 'F');
+      expect(buffer.getCharacter(0, 0), 'F');
 
       element.unmount();
     });
