@@ -38,6 +38,8 @@ class MockRenderer implements SceneRenderer {
   void handleMouseEvent(MouseEvent event) {}
   @override
   void resize(int width, int height) {}
+  @override
+  void dispose() {}
 }
 
 void main() {

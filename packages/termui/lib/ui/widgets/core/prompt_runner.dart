@@ -179,6 +179,9 @@ class PromptRunner<T> implements ListenableSceneRenderer {
     _onNeedVisualUpdate = value;
   }
 
+  @override
+  bool get isDirty => _buildOwner?.isDirtyElements.isNotEmpty ?? false;
+
   Point<int>? _lastMousePosition;
   Element? _mouseCaptureElement;
   BuildOwner? _buildOwner;
@@ -250,6 +253,7 @@ class PromptRunner<T> implements ListenableSceneRenderer {
   }
 
   /// Public programmatic dispose/cleanup.
+  @override
   void dispose() {
     if (_isDisposed) return;
     _isDisposed = true;
@@ -325,6 +329,7 @@ class PromptRunner<T> implements ListenableSceneRenderer {
   }
 
   /// Recalculates layout and paints the widget tree to the internal buffer.
+  @override
   void render() {
     if (_isDisposed) return;
     final rootElement = _rootElement;
@@ -666,10 +671,11 @@ class PromptRunner<T> implements ListenableSceneRenderer {
 
       // Step 3: Standard & System Exit Evaluation
       if (!isDone) {
-        final trigger = _detectTrigger(event);
-        if (trigger != null && exitConditions.containsKey(trigger)) {
-          _handleAction(trigger, event);
-          return true;
+        if (_detectTrigger(event) case final trigger?) {
+          if (exitConditions.containsKey(trigger)) {
+            _handleAction(trigger, event);
+            return true;
+          }
         }
       }
 
@@ -941,46 +947,27 @@ bool _routeToElement(
   int localY,
 ) {
   final area = Rect(0, 0, element.size.width, element.size.height);
-  if (element is StatefulElement) {
-    final state = element.state;
-    if (state is MouseEventHandlerWithArea) {
-      (state as MouseEventHandlerWithArea).handleMouseEvent(
-        event,
-        localX,
-        localY,
-        area,
-      );
-      return true;
-    } else if (state is MouseEventHandler) {
-      (state as MouseEventHandler).handleMouseEvent(event, localX, localY);
-      return true;
+
+  bool tryRoute(Object handler) {
+    switch (handler) {
+      case final MouseEventHandlerWithArea h:
+        h.handleMouseEvent(event, localX, localY, area);
+        return true;
+      case final MouseEventHandler h:
+        h.handleMouseEvent(event, localX, localY);
+        return true;
+      default:
+        return false;
     }
   }
 
-  if (element is MouseEventHandlerWithArea) {
-    (element as MouseEventHandlerWithArea).handleMouseEvent(
-      event,
-      localX,
-      localY,
-      area,
-    );
-    return true;
-  } else if (element is MouseEventHandler) {
-    (element as MouseEventHandler).handleMouseEvent(event, localX, localY);
+  if (element is StatefulElement && tryRoute(element.state)) {
     return true;
   }
-
-  final elWidget = element.widget;
-  if (elWidget is MouseEventHandlerWithArea) {
-    (elWidget as MouseEventHandlerWithArea).handleMouseEvent(
-      event,
-      localX,
-      localY,
-      area,
-    );
+  if (tryRoute(element)) {
     return true;
-  } else if (elWidget is MouseEventHandler) {
-    (elWidget as MouseEventHandler).handleMouseEvent(event, localX, localY);
+  }
+  if (tryRoute(element.widget)) {
     return true;
   }
 
@@ -1027,6 +1014,9 @@ abstract interface class SceneRenderer implements TerminalStateRequest {
 
   /// Resizes the renderer viewport and updates layout/buffers.
   void resize(int width, int height);
+
+  /// Cleans up resources.
+  void dispose();
 }
 
 /// An interface for [SceneRenderer]s that can notify their manager when they need a visual update.
@@ -1034,6 +1024,12 @@ abstract interface class ListenableSceneRenderer implements SceneRenderer {
   /// Callback triggered when this renderer's visual content changes and needs to be composited/repainted.
   void Function()? get onNeedVisualUpdate;
   set onNeedVisualUpdate(void Function()? value);
+
+  /// Whether the renderer needs a visual rebuild/update.
+  bool get isDirty;
+
+  /// Forces a rebuild/paint of the renderer.
+  void render();
 }
 
 /// Represents a single renderable layer inside a composited terminal scene.

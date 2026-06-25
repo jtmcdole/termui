@@ -47,6 +47,9 @@ class MockSceneRenderer implements SceneRenderer {
   void resize(int width, int height) {
     currentBuffer?.resize(width, height);
   }
+
+  @override
+  void dispose() {}
 }
 
 void main() {

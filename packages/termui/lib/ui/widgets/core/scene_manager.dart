@@ -35,6 +35,8 @@ class SceneManager {
   bool _renderScheduled = false;
   final Set<ListenableSceneRenderer> _activeRenderers = {};
   late final void Function() _handleLayerVisualUpdate = scheduleRender;
+  final Map<SceneRenderer, Point<int>> _lastRequestedSizes = {};
+  bool _isRendering = false;
 
   final Compositor _compositor = Compositor();
   Renderer? _renderer;
@@ -71,6 +73,14 @@ class SceneManager {
     _sizeSubscription = terminal.watchSize().listen(_handleSizeEvent);
   }
 
+  void _resizeRenderer(SceneRenderer renderer, int w, int h) {
+    final targetSize = Point<int>(w, h);
+    if (_lastRequestedSizes[renderer] != targetSize) {
+      _lastRequestedSizes[renderer] = targetSize;
+      renderer.resize(w, h);
+    }
+  }
+
   void _handleSizeEvent(Point<int> newSize) {
     final width = newSize.x;
     final height = newSize.y;
@@ -80,7 +90,7 @@ class SceneManager {
       if (layer.sizing == LayerSizing.fullscreen) {
         layer.x = 0;
         layer.y = 0;
-        layer.renderer.resize(width, height);
+        _resizeRenderer(layer.renderer, width, height);
       }
     }
     render();
@@ -96,6 +106,18 @@ class SceneManager {
     if (_capturedMouseLayer != null && !layers.contains(_capturedMouseLayer)) {
       _capturedMouseLayer = null;
     }
+  }
+
+  void _onLayerRemoved(SceneLayer layer) {
+    _lastRequestedSizes.remove(layer.renderer);
+    if (focusedLayer == layer) focusedLayer = null;
+    if (_draggingLayer == layer) _draggingLayer = null;
+    if (_capturedMouseLayer == layer) _capturedMouseLayer = null;
+    if (_resizingLayer == layer) {
+      _resizingLayer = null;
+      _resizeCorner = 0;
+    }
+    _syncLayerListeners();
   }
 
   List<SceneLayer> _getSortedLayers() {
@@ -291,7 +313,7 @@ class SceneManager {
           _resizingLayer!.y = newY;
           _resizingLayer!.width = newW;
           _resizingLayer!.height = newH;
-          _resizingLayer!.renderer.resize(newW, newH);
+          _resizeRenderer(_resizingLayer!.renderer, newW, newH);
           render();
           didRender = true;
         } else if (_draggingLayer != null) {
@@ -401,155 +423,167 @@ class SceneManager {
 
   void _handleInputEvent(InputEvent event) {
     _cleanOrphanedLayers();
-
-    if (event is KeyEvent) {
-      handleKeyEvent(event);
-    } else if (event is MouseEvent) {
-      handleMouseEvent(event);
+    switch (event) {
+      case final KeyEvent e:
+        handleKeyEvent(e);
+      case final MouseEvent e:
+        handleMouseEvent(e);
     }
   }
 
   /// Composites all active layers into a single flattened terminal output
   /// and writes it to the terminal.
   void render() {
-    _renderScheduled = false;
-    Tracer.record(_traceRenderId, Phase.begin, TraceCategory.compositor);
+    _isRendering = true;
     try {
-      _cleanOrphanedLayers();
+      _renderScheduled = false;
+      Tracer.record(_traceRenderId, Phase.begin, TraceCategory.compositor);
+      try {
+        _cleanOrphanedLayers();
 
-      final size = terminal.backend.size;
-      var width = size.x;
-      var height = size.y;
-      if (width <= 0 || height <= 0) {
-        width = 80;
-        height = 24;
-      }
-
-      final renderer = _renderer ??= Renderer(
-        width,
-        height,
-        mode: renderingMode,
-      );
-
-      final layeredBuffers = <LayeredBuffer>[];
-      for (final layer in layers) {
-        if (layer.sizing == LayerSizing.fullscreen) {
-          if (layer.width != width || layer.height != height) {
-            layer.width = width;
-            layer.height = height;
-            layer.renderer.resize(width, height);
+        for (final layer in layers) {
+          final r = layer.renderer;
+          if (r is ListenableSceneRenderer && r.isDirty) {
+            r.render();
           }
-        } else {
-          final buf = layer.renderer.currentBuffer;
-          if (buf == null ||
-              buf.width != layer.width ||
-              buf.height != layer.height) {
-            if (layer.width != null && layer.height != null) {
-              layer.renderer.resize(layer.width!, layer.height!);
+        }
+
+        final size = terminal.backend.size;
+        var width = size.x;
+        var height = size.y;
+        if (width <= 0 || height <= 0) {
+          width = 80;
+          height = 24;
+        }
+
+        final renderer = _renderer ??= Renderer(
+          width,
+          height,
+          mode: renderingMode,
+        );
+
+        final layeredBuffers = <LayeredBuffer>[];
+        for (final layer in layers) {
+          if (layer.sizing == LayerSizing.fullscreen) {
+            if (layer.width != width || layer.height != height) {
+              layer.width = width;
+              layer.height = height;
+              _resizeRenderer(layer.renderer, width, height);
+            }
+          } else {
+            final buf = layer.renderer.currentBuffer;
+            if (buf == null ||
+                buf.width != layer.width ||
+                buf.height != layer.height) {
+              if (layer.width != null && layer.height != null) {
+                _resizeRenderer(layer.renderer, layer.width!, layer.height!);
+              }
             }
           }
+
+          var buffer = layer.renderer.currentBuffer;
+          if (buffer == null) continue;
+
+          if (debugPaintLayerBordersEnabled) {
+            buffer = _cloneBufferWithBorder(buffer);
+          }
+
+          layeredBuffers.add(
+            LayeredBuffer(
+              buffer: buffer,
+              x: layer.x,
+              y: layer.y,
+              zIndex: layer.zIndex,
+            ),
+          );
         }
 
-        var buffer = layer.renderer.currentBuffer;
-        if (buffer == null) continue;
+        final target = _targetBuffer ??= Buffer(width, height);
+        if (target.width != width || target.height != height) {
+          target.resize(width, height);
+        }
+        target.clear();
 
-        if (debugPaintLayerBordersEnabled) {
-          buffer = _cloneBufferWithBorder(buffer);
+        // The Compositor natively handles occlusion culling and off-screen
+        // effect layer resolution using recursive saveLayer/backdrop filter patterns.
+        _compositor.composite(target: target, layers: layeredBuffers);
+
+        final globalMouseX = _globalMouseX;
+        final globalMouseY = _globalMouseY;
+        if (debugMouseCursorEnabled &&
+            globalMouseX != null &&
+            globalMouseY != null) {
+          final cursorStyle = Style(
+            foreground: _isGlobalMouseDown
+                ? const Color(255, 0, 0)
+                : const Color(0, 255, 255),
+            modifiers: Modifier.bold,
+          );
+          target.writeString(globalMouseX, globalMouseY, '⦿', cursorStyle);
         }
 
-        layeredBuffers.add(
-          LayeredBuffer(
-            buffer: buffer,
-            x: layer.x,
-            y: layer.y,
-            zIndex: layer.zIndex,
-          ),
-        );
-      }
+        final sb = StringBuffer();
+        renderer.render(target, sb);
+        final backend = terminal.backend;
+        if (backend is BufferedTerminalBackend) {
+          backend.buffer = target;
+        }
+        backend.write(sb.toString());
 
-      final target = _targetBuffer ??= Buffer(width, height);
-      if (target.width != width || target.height != height) {
-        target.resize(width, height);
-      }
-      target.clear();
+        // Hardware state sync based on focused layer's requests.
+        final focused = focusedLayer;
+        final req = focused?.renderer;
 
-      // The Compositor natively handles occlusion culling and off-screen
-      // effect layer resolution using recursive saveLayer/backdrop filter patterns.
-      _compositor.composite(target: target, layers: layeredBuffers);
+        final showsCursor = req?.showsCursor ?? false;
+        final wantsMouseTracking =
+            enableMouseTracking ||
+            (req?.wantsMouseTracking ?? false) ||
+            layers.any((layer) => layer.draggable) ||
+            debugMouseCursorEnabled;
 
-      final globalMouseX = _globalMouseX;
-      final globalMouseY = _globalMouseY;
-      if (debugMouseCursorEnabled &&
-          globalMouseX != null &&
-          globalMouseY != null) {
-        final cursorStyle = Style(
-          foreground: _isGlobalMouseDown
-              ? const Color(255, 0, 0)
-              : const Color(0, 255, 255),
-          modifiers: Modifier.bold,
-        );
-        target.writeString(globalMouseX, globalMouseY, '⦿', cursorStyle);
-      }
+        var effectiveShowsCursor = showsCursor;
+        int? absX;
+        int? absY;
 
-      final sb = StringBuffer();
-      renderer.render(target, sb);
-      final backend = terminal.backend;
-      if (backend is BufferedTerminalBackend) {
-        backend.buffer = target;
-      }
-      backend.write(sb.toString());
-
-      // Hardware state sync based on focused layer's requests.
-      final focused = focusedLayer;
-      final req = focused?.renderer;
-
-      final showsCursor = req?.showsCursor ?? false;
-      final wantsMouseTracking =
-          enableMouseTracking ||
-          (req?.wantsMouseTracking ?? false) ||
-          layers.any((layer) => layer.draggable) ||
-          debugMouseCursorEnabled;
-
-      var effectiveShowsCursor = showsCursor;
-      int? absX;
-      int? absY;
-
-      if (showsCursor) {
-        final pos = req?.requestedCursorPosition;
-        if (pos != null) {
-          absX = (focused?.x ?? 0) + pos.x;
-          absY = (focused?.y ?? 0) + pos.y;
-          if (absX < 0 || absX >= width || absY < 0 || absY >= height) {
+        if (showsCursor) {
+          final pos = req?.requestedCursorPosition;
+          if (pos != null) {
+            absX = (focused?.x ?? 0) + pos.x;
+            absY = (focused?.y ?? 0) + pos.y;
+            if (absX < 0 || absX >= width || absY < 0 || absY >= height) {
+              effectiveShowsCursor = false;
+            }
+          } else {
             effectiveShowsCursor = false;
           }
-        } else {
-          effectiveShowsCursor = false;
         }
-      }
 
-      if (effectiveShowsCursor != _lastShowsCursor) {
-        if (effectiveShowsCursor) {
-          terminal.showCursor();
-        } else {
-          terminal.hideCursor();
+        if (effectiveShowsCursor != _lastShowsCursor) {
+          if (effectiveShowsCursor) {
+            terminal.showCursor();
+          } else {
+            terminal.hideCursor();
+          }
+          _lastShowsCursor = effectiveShowsCursor;
         }
-        _lastShowsCursor = effectiveShowsCursor;
-      }
 
-      if (wantsMouseTracking != _lastWantsMouseTracking) {
-        if (wantsMouseTracking) {
-          terminal.enableMouseTracking();
-        } else {
-          terminal.disableMouseTracking();
+        if (wantsMouseTracking != _lastWantsMouseTracking) {
+          if (wantsMouseTracking) {
+            terminal.enableMouseTracking();
+          } else {
+            terminal.disableMouseTracking();
+          }
+          _lastWantsMouseTracking = wantsMouseTracking;
         }
-        _lastWantsMouseTracking = wantsMouseTracking;
-      }
 
-      if (effectiveShowsCursor && absX != null && absY != null) {
-        terminal.goto(x: absX + 1, y: absY + 1);
+        if (effectiveShowsCursor && absX != null && absY != null) {
+          terminal.goto(x: absX + 1, y: absY + 1);
+        }
+      } finally {
+        Tracer.record(_traceRenderId, Phase.end, TraceCategory.compositor);
       }
     } finally {
-      Tracer.record(_traceRenderId, Phase.end, TraceCategory.compositor);
+      _isRendering = false;
     }
   }
 
@@ -567,7 +601,11 @@ class SceneManager {
     if (_lastWantsMouseTracking == true) {
       terminal.disableMouseTracking();
     }
+    for (final layer in layers) {
+      layer.renderer.dispose();
+    }
     layers.clear();
+    _lastRequestedSizes.clear();
     focusedLayer = null;
     _draggingLayer = null;
     _capturedMouseLayer = null;
@@ -580,6 +618,7 @@ class SceneManager {
 
   /// Schedules a render pass to recomposite layers, coalescing multiple requests.
   void scheduleRender() {
+    if (_isRendering) return;
     if (_isDisposed || _renderScheduled) return;
     _renderScheduled = true;
     scheduleMicrotask(() {
@@ -590,13 +629,10 @@ class SceneManager {
   }
 
   void _syncLayerListeners() {
-    final currentRenderers = <ListenableSceneRenderer>{};
-    for (final layer in layers) {
-      final r = layer.renderer;
-      if (r is ListenableSceneRenderer) {
-        currentRenderers.add(r);
-      }
-    }
+    final currentRenderers = {
+      for (final layer in layers)
+        if (layer.renderer case final ListenableSceneRenderer r) r,
+    };
 
     for (final r in _activeRenderers) {
       if (!currentRenderers.contains(r)) {
@@ -713,6 +749,11 @@ class _SceneLayerList extends ListBase<SceneLayer> {
 
   @override
   set length(int newLength) {
+    if (newLength < _inner.length) {
+      for (var i = newLength; i < _inner.length; i++) {
+        _manager._onLayerRemoved(_inner[i]);
+      }
+    }
     _inner.length = newLength;
     _manager._syncLayerListeners();
   }
@@ -722,7 +763,9 @@ class _SceneLayerList extends ListBase<SceneLayer> {
 
   @override
   void operator []=(int index, SceneLayer value) {
+    final old = _inner[index];
     _inner[index] = value;
+    _manager._onLayerRemoved(old);
     _manager._syncLayerListeners();
   }
 
@@ -740,24 +783,30 @@ class _SceneLayerList extends ListBase<SceneLayer> {
 
   @override
   bool remove(Object? element) {
-    final result = _inner.remove(element);
-    if (result) {
-      _manager._syncLayerListeners();
+    if (element is SceneLayer) {
+      final index = _inner.indexOf(element);
+      if (index != -1) {
+        removeAt(index);
+        return true;
+      }
     }
-    return result;
+    return false;
   }
 
   @override
   SceneLayer removeAt(int index) {
     final result = _inner.removeAt(index);
-    _manager._syncLayerListeners();
+    _manager._onLayerRemoved(result);
     return result;
   }
 
   @override
   void clear() {
+    final temp = List<SceneLayer>.from(_inner);
     _inner.clear();
-    _manager._syncLayerListeners();
+    for (final layer in temp) {
+      _manager._onLayerRemoved(layer);
+    }
   }
 
   @override
@@ -774,19 +823,30 @@ class _SceneLayerList extends ListBase<SceneLayer> {
 
   @override
   void removeRange(int start, int end) {
+    final removed = _inner.sublist(start, end);
     _inner.removeRange(start, end);
-    _manager._syncLayerListeners();
+    for (final layer in removed) {
+      _manager._onLayerRemoved(layer);
+    }
   }
 
   @override
   void replaceRange(int start, int end, Iterable<SceneLayer> replacement) {
+    final removed = _inner.sublist(start, end);
     _inner.replaceRange(start, end, replacement);
+    for (final layer in removed) {
+      _manager._onLayerRemoved(layer);
+    }
     _manager._syncLayerListeners();
   }
 
   @override
   void fillRange(int start, int end, [SceneLayer? fillValue]) {
+    final removed = _inner.sublist(start, end);
     _inner.fillRange(start, end, fillValue);
+    for (final layer in removed) {
+      _manager._onLayerRemoved(layer);
+    }
     _manager._syncLayerListeners();
   }
 
@@ -797,44 +857,61 @@ class _SceneLayerList extends ListBase<SceneLayer> {
     Iterable<SceneLayer> iterable, [
     int skipCount = 0,
   ]) {
+    final removed = _inner.sublist(start, end);
     _inner.setRange(start, end, iterable, skipCount);
+    for (final layer in removed) {
+      _manager._onLayerRemoved(layer);
+    }
     _manager._syncLayerListeners();
   }
 
   @override
   void setAll(int index, Iterable<SceneLayer> iterable) {
+    final len = iterable.length;
+    final removed = _inner.sublist(index, index + len);
     _inner.setAll(index, iterable);
+    for (final layer in removed) {
+      _manager._onLayerRemoved(layer);
+    }
     _manager._syncLayerListeners();
   }
 
   @override
   void removeWhere(bool Function(SceneLayer element) test) {
+    final removed = _inner.where(test).toList();
     _inner.removeWhere(test);
+    for (final layer in removed) {
+      _manager._onLayerRemoved(layer);
+    }
     _manager._syncLayerListeners();
   }
 
   @override
   void retainWhere(bool Function(SceneLayer element) test) {
+    final removed = _inner.where((e) => !test(e)).toList();
     _inner.retainWhere(test);
+    for (final layer in removed) {
+      _manager._onLayerRemoved(layer);
+    }
     _manager._syncLayerListeners();
   }
 
   @override
   void sort([int Function(SceneLayer a, SceneLayer b)? compare]) {
     _inner.sort(compare);
-    _manager._syncLayerListeners();
+    _manager.scheduleRender();
   }
 
   @override
   void shuffle([Random? random]) {
     _inner.shuffle(random);
-    _manager._syncLayerListeners();
+    _manager.scheduleRender();
   }
 
   @override
   SceneLayer removeLast() {
     final result = _inner.removeLast();
-    _manager._syncLayerListeners();
+    _manager._onLayerRemoved(result);
     return result;
   }
 }
