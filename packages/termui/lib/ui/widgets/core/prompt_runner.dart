@@ -89,7 +89,7 @@ class UserInterruptException extends PromptAbortedException {
 ///   onComplete: () => myController.text,
 /// ).run();
 /// ```
-class PromptRunner<T> implements SceneRenderer {
+class PromptRunner<T> implements ListenableSceneRenderer {
   static final int _traceKeyEventId = Tracer.registerString(
     'PromptRunner:handleKeyEvent',
   );
@@ -169,6 +169,16 @@ class PromptRunner<T> implements SceneRenderer {
   Completer<T?>? _completer;
   Element? _rootElement;
   bool _isDisposed = false;
+  void Function()? _onNeedVisualUpdate;
+
+  @override
+  void Function()? get onNeedVisualUpdate => _onNeedVisualUpdate;
+
+  @override
+  set onNeedVisualUpdate(void Function()? value) {
+    _onNeedVisualUpdate = value;
+  }
+
   Point<int>? _lastMousePosition;
   Element? _mouseCaptureElement;
   BuildOwner? _buildOwner;
@@ -253,6 +263,8 @@ class PromptRunner<T> implements SceneRenderer {
     if (activeCompleter != null && !activeCompleter.isCompleted) {
       activeCompleter.complete(null);
     }
+
+    onNeedVisualUpdate = null;
   }
 
   /// Helper to detect exit triggers case-insensitively.
@@ -335,13 +347,12 @@ class PromptRunner<T> implements SceneRenderer {
     }
 
     onFramePainted?.call(buffer);
+    onNeedVisualUpdate?.call();
 
     if (mode == ExecutionMode.standalone) {
       final b = terminal.backend;
-      try {
-        (b as dynamic).buffer = buffer;
-      } catch (_) {
-        // Ignore if backend doesn't support a buffer setter (e.g. real/stub backend)
+      if (b is BufferedTerminalBackend) {
+        b.buffer = buffer;
       }
 
       final sb = StringBuffer();
@@ -354,8 +365,9 @@ class PromptRunner<T> implements SceneRenderer {
 
   /// Forces a rebuild of the element tree and repaints to the internal buffer.
   void pump() {
-    if (_rootElement != null) {
-      _rootElement!.markNeedsBuild();
+    final rootElement = _rootElement;
+    if (rootElement != null) {
+      rootElement.markNeedsBuild();
     }
     render();
   }
@@ -389,15 +401,15 @@ class PromptRunner<T> implements SceneRenderer {
           : RenderingMode.inline,
     );
 
-    _completer = Completer<T?>();
+    final completer = Completer<T?>();
+    _completer = completer;
     _isDisposed = false;
 
     // Wrap the widget tree in a PromptScope to expose the clean completion API
     final scopedWidget = PromptScope(
       onDone: (result) {
-        final comp = _completer;
-        if (comp != null && !comp.isCompleted) {
-          comp.complete(result as T?);
+        if (!completer.isCompleted) {
+          completer.complete(result as T?);
         }
       },
       child: FocusScope(autofocus: true, child: widget),
@@ -449,20 +461,20 @@ class PromptRunner<T> implements SceneRenderer {
           }
         },
         onDone: () {
-          if (_completer != null && !_completer!.isCompleted) {
-            _completer!.complete(null);
+          if (!completer.isCompleted) {
+            completer.complete(null);
           }
         },
         onError: (e, stack) {
-          if (!_completer!.isCompleted) {
-            _completer!.completeError(e, stack);
+          if (!completer.isCompleted) {
+            completer.completeError(e, stack);
           }
         },
       );
     }
 
     try {
-      return await _completer!.future;
+      return await completer.future;
     } finally {
       _isDisposed = true;
       onPromptEnded?.call(this);
@@ -635,7 +647,8 @@ class PromptRunner<T> implements SceneRenderer {
       metadata: {'key': event.logicalKey},
     );
     try {
-      if (_completer == null || _completer!.isCompleted) return false;
+      final completer = _completer;
+      if (completer == null || completer.isCompleted) return false;
 
       var isDone = false;
       final rootElement = _rootElement;
@@ -673,7 +686,8 @@ class PromptRunner<T> implements SceneRenderer {
   void handleMouseEvent(term.MouseEvent event) {
     Tracer.record(_traceMouseEventId, Phase.begin, TraceCategory.events);
     try {
-      if (_completer == null || _completer!.isCompleted) return;
+      final completer = _completer;
+      if (completer == null || completer.isCompleted) return;
 
       if (debugPaintHoverEnabled) {
         _lastMousePosition = Point<int>(event.x, event.y);
@@ -940,18 +954,6 @@ bool _routeToElement(
     } else if (state is MouseEventHandler) {
       (state as MouseEventHandler).handleMouseEvent(event, localX, localY);
       return true;
-    } else {
-      try {
-        (state as dynamic).handleMouseEvent(event, localX, localY, area);
-        return true;
-      } catch (_) {
-        try {
-          (state as dynamic).handleMouseEvent(event, localX, localY);
-          return true;
-        } catch (_) {
-          // Ignored if not supported
-        }
-      }
     }
   }
 
@@ -966,18 +968,6 @@ bool _routeToElement(
   } else if (element is MouseEventHandler) {
     (element as MouseEventHandler).handleMouseEvent(event, localX, localY);
     return true;
-  } else {
-    try {
-      (element as dynamic).handleMouseEvent(event, localX, localY, area);
-      return true;
-    } catch (_) {
-      try {
-        (element as dynamic).handleMouseEvent(event, localX, localY);
-        return true;
-      } catch (_) {
-        // Ignored if not supported
-      }
-    }
   }
 
   final elWidget = element.widget;
@@ -992,18 +982,6 @@ bool _routeToElement(
   } else if (elWidget is MouseEventHandler) {
     (elWidget as MouseEventHandler).handleMouseEvent(event, localX, localY);
     return true;
-  } else {
-    try {
-      (elWidget as dynamic).handleMouseEvent(event, localX, localY, area);
-      return true;
-    } catch (_) {
-      try {
-        (elWidget as dynamic).handleMouseEvent(event, localX, localY);
-        return true;
-      } catch (_) {
-        // Ignored if not supported
-      }
-    }
   }
 
   return false;
@@ -1049,6 +1027,13 @@ abstract interface class SceneRenderer implements TerminalStateRequest {
 
   /// Resizes the renderer viewport and updates layout/buffers.
   void resize(int width, int height);
+}
+
+/// An interface for [SceneRenderer]s that can notify their manager when they need a visual update.
+abstract interface class ListenableSceneRenderer implements SceneRenderer {
+  /// Callback triggered when this renderer's visual content changes and needs to be composited/repainted.
+  void Function()? get onNeedVisualUpdate;
+  set onNeedVisualUpdate(void Function()? value);
 }
 
 /// Represents a single renderable layer inside a composited terminal scene.

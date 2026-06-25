@@ -131,7 +131,7 @@ class SplitPane extends Widget {
 }
 
 /// An element that manages the layout and rendering of a [SplitPane] widget.
-class SplitPaneElement extends Element {
+class SplitPaneElement extends Element implements MouseEventHandler {
   /// The element for the first pane child widget.
   Element? childElement1;
 
@@ -349,6 +349,7 @@ class SplitPaneElement extends Element {
   }
 
   /// Intercepts mouse drag/press events over the divider.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     final split = widget as SplitPane;
     if (split._lastArea == null) return;

@@ -12,7 +12,8 @@ enum SliderAxis {
 }
 
 /// A widget for selecting a numeric value by sliding a thumb along a track.
-class Slider extends StatefulWidget implements Focusable, KeyEventHandler {
+class Slider extends StatefulWidget
+    implements Focusable, KeyEventHandler, MouseEventHandlerWithArea {
   /// Whether the slider is focused.
   @override
   final bool focused;
@@ -68,6 +69,7 @@ class Slider extends StatefulWidget implements Focusable, KeyEventHandler {
   }
 
   /// Handles mouse events for dragging the slider thumb.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
     _state?.handleMouseEvent(event, localX, localY, area);
   }
@@ -81,7 +83,8 @@ class Slider extends StatefulWidget implements Focusable, KeyEventHandler {
 }
 
 /// The state for a [Slider] widget.
-class SliderState extends State<Slider> implements KeyEventHandler {
+class SliderState extends State<Slider>
+    implements KeyEventHandler, MouseEventHandlerWithArea {
   late FocusNode _focusNode;
   bool _isDragging = false;
 
@@ -117,6 +120,7 @@ class SliderState extends State<Slider> implements KeyEventHandler {
   }
 
   /// Handles mouse events to update the slider's value on drag or click.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
     if (event.type == MouseEventType.press) {
       if (widget.axis == SliderAxis.horizontal) {

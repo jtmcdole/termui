@@ -325,7 +325,8 @@ class Test4ArgMouseWidget extends Widget {
   Element createElement() => _Test4ArgMouseElement(this);
 }
 
-class _Test4ArgMouseElement extends Element {
+class _Test4ArgMouseElement extends Element
+    implements ui.MouseEventHandlerWithArea {
   _Test4ArgMouseElement(super.widget);
 
   @override
@@ -336,6 +337,7 @@ class _Test4ArgMouseElement extends Element {
   @override
   void performPaint(Buffer buffer, Offset offset) {}
 
+  @override
   void handleMouseEvent(
     ui.MouseEvent event,
     int localX,

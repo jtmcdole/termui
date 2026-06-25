@@ -33,7 +33,7 @@ import 'package:termui/termui.dart';
 /// | `thumbStyle` | [Style] | Style of the draggable scrollbar thumb. |
 /// | `thumbChar` | [String] | Character used to draw the slider thumb. |
 /// | `trackChar` | [String] | Character used to draw the track background. |
-class ScrollBar extends Widget {
+class ScrollBar extends Widget implements MouseEventHandler {
   /// The controller that manages the scrolling state.
   final DiscreteScrollController? controller;
 
@@ -98,6 +98,7 @@ class ScrollBar extends Widget {
   Element createElement() => ScrollBarElement(this);
 
   /// Handles track clicks or dragging of the thumb to update the scroll offset.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (_lastArea == null) return;
     final trackHeight = direction == LayoutDirection.vertical

@@ -196,7 +196,8 @@ class WidgetBookApp extends StatefulWidget {
   State<WidgetBookApp> createState() => _WidgetBookAppState();
 }
 
-class _WidgetBookAppState extends State<WidgetBookApp> {
+class _WidgetBookAppState extends State<WidgetBookApp>
+    implements MouseEventHandler {
   late final FocusScopeNode _rootScopeNode = FocusScopeNode(id: 'root_scope');
   late final FocusNode _sidebarFocusNode = FocusNode(id: 'sidebar');
   late final FocusScopeNode _previewFocusNode = FocusScopeNode(id: 'preview');
@@ -381,6 +382,7 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
     }
   }
 
+  @override
   void handleMouseEvent(term.MouseEvent event, int localX, int localY) {
     if (_hoveredPageIdx != null) {
       setState(() {

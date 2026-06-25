@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:math';
 import 'package:termui/termui.dart';
 
@@ -22,13 +23,18 @@ class SceneManager {
   final RenderingMode renderingMode;
 
   /// The list of layers to composite and render.
-  final List<SceneLayer> layers = [];
+  late final List<SceneLayer> layers;
 
   /// The currently focused layer, if any. Used to sync hardware state.
   SceneLayer? focusedLayer;
 
   /// Whether mouse tracking is explicitly forced/enabled.
   bool enableMouseTracking = false;
+
+  bool _isDisposed = false;
+  bool _renderScheduled = false;
+  final Set<ListenableSceneRenderer> _activeRenderers = {};
+  late final void Function() _handleLayerVisualUpdate = scheduleRender;
 
   final Compositor _compositor = Compositor();
   Renderer? _renderer;
@@ -60,6 +66,7 @@ class SceneManager {
 
   /// Creates a new SceneManager attached to the given [terminal].
   SceneManager(this.terminal, {this.renderingMode = RenderingMode.inline}) {
+    layers = _SceneLayerList(this);
     _eventsSubscription = terminal.events.listen(_handleInputEvent);
     _sizeSubscription = terminal.watchSize().listen(_handleSizeEvent);
   }
@@ -92,16 +99,15 @@ class SceneManager {
   }
 
   List<SceneLayer> _getSortedLayers() {
-    final sorted = List<SceneLayer>.from(layers);
-    final originalIndices = {
-      for (var i = 0; i < layers.length; i++) layers[i]: i,
-    };
-    sorted.sort((a, b) {
-      final cmp = b.zIndex.compareTo(a.zIndex);
+    final packed = [
+      for (var i = 0; i < layers.length; i++) (layer: layers[i], index: i),
+    ];
+    packed.sort((a, b) {
+      final cmp = b.layer.zIndex.compareTo(a.layer.zIndex);
       if (cmp != 0) return cmp;
-      return originalIndices[b]!.compareTo(originalIndices[a]!);
+      return b.index.compareTo(a.index);
     });
-    return sorted;
+    return [for (final p in packed) p.layer];
   }
 
   SceneLayer? _lastHoveredLayer;
@@ -406,6 +412,7 @@ class SceneManager {
   /// Composites all active layers into a single flattened terminal output
   /// and writes it to the terminal.
   void render() {
+    _renderScheduled = false;
     Tracer.record(_traceRenderId, Phase.begin, TraceCategory.compositor);
     try {
       _cleanOrphanedLayers();
@@ -418,7 +425,11 @@ class SceneManager {
         height = 24;
       }
 
-      _renderer ??= Renderer(width, height, mode: renderingMode);
+      final renderer = _renderer ??= Renderer(
+        width,
+        height,
+        mode: renderingMode,
+      );
 
       final layeredBuffers = <LayeredBuffer>[];
       for (final layer in layers) {
@@ -466,24 +477,27 @@ class SceneManager {
       // effect layer resolution using recursive saveLayer/backdrop filter patterns.
       _compositor.composite(target: target, layers: layeredBuffers);
 
+      final globalMouseX = _globalMouseX;
+      final globalMouseY = _globalMouseY;
       if (debugMouseCursorEnabled &&
-          _globalMouseX != null &&
-          _globalMouseY != null) {
+          globalMouseX != null &&
+          globalMouseY != null) {
         final cursorStyle = Style(
           foreground: _isGlobalMouseDown
               ? const Color(255, 0, 0)
               : const Color(0, 255, 255),
           modifiers: Modifier.bold,
         );
-        target.writeString(_globalMouseX!, _globalMouseY!, '⦿', cursorStyle);
+        target.writeString(globalMouseX, globalMouseY, '⦿', cursorStyle);
       }
 
       final sb = StringBuffer();
-      _renderer!.render(target, sb);
-      try {
-        (terminal.backend as dynamic).buffer = target;
-      } catch (_) {}
-      terminal.backend.write(sb.toString());
+      renderer.render(target, sb);
+      final backend = terminal.backend;
+      if (backend is BufferedTerminalBackend) {
+        backend.buffer = target;
+      }
+      backend.write(sb.toString());
 
       // Hardware state sync based on focused layer's requests.
       final focused = focusedLayer;
@@ -541,6 +555,7 @@ class SceneManager {
 
   /// Clears resources and restores terminal hardware state if modified.
   void dispose() {
+    _isDisposed = true;
     _eventsSubscription?.cancel();
     _eventsSubscription = null;
     _sizeSubscription?.cancel();
@@ -561,6 +576,42 @@ class SceneManager {
     _isGlobalMouseDown = false;
     _renderer = null;
     _targetBuffer = null;
+  }
+
+  /// Schedules a render pass to recomposite layers, coalescing multiple requests.
+  void scheduleRender() {
+    if (_isDisposed || _renderScheduled) return;
+    _renderScheduled = true;
+    scheduleMicrotask(() {
+      if (_isDisposed || !_renderScheduled) return;
+      _renderScheduled = false;
+      render();
+    });
+  }
+
+  void _syncLayerListeners() {
+    final currentRenderers = <ListenableSceneRenderer>{};
+    for (final layer in layers) {
+      final r = layer.renderer;
+      if (r is ListenableSceneRenderer) {
+        currentRenderers.add(r);
+      }
+    }
+
+    for (final r in _activeRenderers) {
+      if (!currentRenderers.contains(r)) {
+        r.onNeedVisualUpdate = null;
+      }
+    }
+
+    for (final r in currentRenderers) {
+      if (!_activeRenderers.contains(r)) {
+        r.onNeedVisualUpdate = _handleLayerVisualUpdate;
+      }
+    }
+
+    _activeRenderers.clear();
+    _activeRenderers.addAll(currentRenderers);
   }
 }
 
@@ -649,4 +700,141 @@ Buffer _cloneBufferWithBorder(Buffer source) {
   }
 
   return copy;
+}
+
+class _SceneLayerList extends ListBase<SceneLayer> {
+  final List<SceneLayer> _inner = [];
+  final SceneManager _manager;
+
+  _SceneLayerList(this._manager);
+
+  @override
+  int get length => _inner.length;
+
+  @override
+  set length(int newLength) {
+    _inner.length = newLength;
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  SceneLayer operator [](int index) => _inner[index];
+
+  @override
+  void operator []=(int index, SceneLayer value) {
+    _inner[index] = value;
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void add(SceneLayer element) {
+    _inner.add(element);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void addAll(Iterable<SceneLayer> iterable) {
+    _inner.addAll(iterable);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  bool remove(Object? element) {
+    final result = _inner.remove(element);
+    if (result) {
+      _manager._syncLayerListeners();
+    }
+    return result;
+  }
+
+  @override
+  SceneLayer removeAt(int index) {
+    final result = _inner.removeAt(index);
+    _manager._syncLayerListeners();
+    return result;
+  }
+
+  @override
+  void clear() {
+    _inner.clear();
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void insert(int index, SceneLayer element) {
+    _inner.insert(index, element);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void insertAll(int index, Iterable<SceneLayer> iterable) {
+    _inner.insertAll(index, iterable);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void removeRange(int start, int end) {
+    _inner.removeRange(start, end);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void replaceRange(int start, int end, Iterable<SceneLayer> replacement) {
+    _inner.replaceRange(start, end, replacement);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void fillRange(int start, int end, [SceneLayer? fillValue]) {
+    _inner.fillRange(start, end, fillValue);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void setRange(
+    int start,
+    int end,
+    Iterable<SceneLayer> iterable, [
+    int skipCount = 0,
+  ]) {
+    _inner.setRange(start, end, iterable, skipCount);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void setAll(int index, Iterable<SceneLayer> iterable) {
+    _inner.setAll(index, iterable);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void removeWhere(bool Function(SceneLayer element) test) {
+    _inner.removeWhere(test);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void retainWhere(bool Function(SceneLayer element) test) {
+    _inner.retainWhere(test);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void sort([int Function(SceneLayer a, SceneLayer b)? compare]) {
+    _inner.sort(compare);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  void shuffle([Random? random]) {
+    _inner.shuffle(random);
+    _manager._syncLayerListeners();
+  }
+
+  @override
+  SceneLayer removeLast() {
+    final result = _inner.removeLast();
+    _manager._syncLayerListeners();
+    return result;
+  }
 }

@@ -6,6 +6,7 @@ import 'event.dart';
 export 'event.dart';
 import 'input_parser.dart';
 import 'package:termui/terminal/backend/terminal_backend.dart';
+export 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/terminal/backend/stub_backend.dart'
     if (dart.library.io) 'package:termui/terminal/backend/io_backend.dart'
     if (dart.library.js_interop) 'package:termui/terminal/backend/web_backend.dart';
