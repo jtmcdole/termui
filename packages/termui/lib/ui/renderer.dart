@@ -63,7 +63,9 @@ class Renderer {
         }
       }
 
-      Style activeStyle = Style.empty;
+      int activeFg = 0;
+      int activeBg = 0;
+      int activeMod = 0;
       int cursorX = 0;
       int cursorY = 0;
 
@@ -121,16 +123,23 @@ class Renderer {
             for (var rx = runStart; rx < runEnd; rx++) {
               final rxIdx = rowOffset + rx;
               final rxAttrIdx = rxIdx * 3;
-              final cellStyle = Style(
-                foreground: backAttr[rxAttrIdx + 0] != 0
-                    ? Color.argb(backAttr[rxAttrIdx + 0])
-                    : null,
-                background: backAttr[rxAttrIdx + 1] != 0
-                    ? Color.argb(backAttr[rxAttrIdx + 1])
-                    : null,
-                modifiers: backAttr[rxAttrIdx + 2],
+              final cellFg = backAttr[rxAttrIdx + 0];
+              final cellBg = backAttr[rxAttrIdx + 1];
+              final cellMod = backAttr[rxAttrIdx + 2];
+
+              _writeStyleTransitionPrims(
+                out,
+                activeFg,
+                activeBg,
+                activeMod,
+                cellFg,
+                cellBg,
+                cellMod,
               );
-              activeStyle = _writeStyleTransition(out, activeStyle, cellStyle);
+              activeFg = cellFg;
+              activeBg = cellBg;
+              activeMod = cellMod;
+
               out.write(backChars[rxIdx]);
 
               frontChars[rxIdx] = backChars[rxIdx];
@@ -149,7 +158,7 @@ class Renderer {
         }
       }
 
-      if (activeStyle != Style.empty) {
+      if (activeFg != 0 || activeBg != 0 || activeMod != 0) {
         out.write('\x1b[0m');
       }
 
@@ -196,81 +205,94 @@ class Renderer {
     }
   }
 
-  Style _writeStyleTransition(StringSink out, Style current, Style target) {
-    if (current == target) return current;
+  /// Writes the ANSI style transitions between the current style state and the target state.
+  ///
+  /// [Optimization Note - Primitive Unboxing]:
+  /// Instead of instantiating [Style] and [Color] objects in the inner rendering loop,
+  /// this method takes raw unboxed integers for foreground, background, and modifiers.
+  /// This eliminates garbage collector allocation pressure and hot-path object layout checks.
+  void _writeStyleTransitionPrims(
+    StringSink out,
+    int curFg,
+    int curBg,
+    int curMod,
+    int tgtFg,
+    int tgtBg,
+    int tgtMod,
+  ) {
+    if (curFg == tgtFg && curBg == tgtBg && curMod == tgtMod) return;
 
-    if (target == Style.empty) {
+    if (tgtFg == 0 && tgtBg == 0 && tgtMod == 0) {
       out.write('\x1b[0m');
-      return Style.empty;
+      return;
     }
 
     final colorCleared =
-        (current.foreground != null && target.foreground == null) ||
-        (current.background != null && target.background == null);
+        (curFg != 0 && tgtFg == 0) || (curBg != 0 && tgtBg == 0);
+    final modifierTurnedOff = (curMod & ~tgtMod) != 0;
 
-    bool modifierTurnedOff = false;
-    for (var i = 0; i < 8; i++) {
-      final mod = 1 << i;
-      if (Modifier.has(current.modifiers, mod) &&
-          !Modifier.has(target.modifiers, mod)) {
-        modifierTurnedOff = true;
-        break;
-      }
-    }
+    var effectiveFg = curFg;
+    var effectiveBg = curBg;
+    var effectiveMod = curMod;
 
-    var effectiveCurrent = current;
     if (colorCleared || modifierTurnedOff) {
       out.write('\x1b[0m');
-      effectiveCurrent = Style.empty;
+      effectiveFg = 0;
+      effectiveBg = 0;
+      effectiveMod = 0;
     }
 
     final sb = StringBuffer();
 
-    if (target.foreground != effectiveCurrent.foreground &&
-        target.foreground != null) {
-      final fg = target.foreground!;
-      sb.write('38;2;${fg.r};${fg.g};${fg.b};');
+    if (tgtFg != effectiveFg && tgtFg != 0) {
+      final r = (tgtFg >> 16) & 0xFF;
+      final g = (tgtFg >> 8) & 0xFF;
+      final b = tgtFg & 0xFF;
+      sb.write('38;2;$r;$g;$b;');
     }
 
-    if (target.background != effectiveCurrent.background &&
-        target.background != null) {
-      final bg = target.background!;
-      sb.write('48;2;${bg.r};${bg.g};${bg.b};');
+    if (tgtBg != effectiveBg && tgtBg != 0) {
+      final r = (tgtBg >> 16) & 0xFF;
+      final g = (tgtBg >> 8) & 0xFF;
+      final b = tgtBg & 0xFF;
+      sb.write('48;2;$r;$g;$b;');
     }
 
-    for (var i = 0; i < 8; i++) {
-      final mod = 1 << i;
-      if (Modifier.has(target.modifiers, mod) &&
-          !Modifier.has(effectiveCurrent.modifiers, mod)) {
-        int code = 0;
-        switch (mod) {
-          case Modifier.bold:
-            code = 1;
-            break;
-          case Modifier.dim:
-            code = 2;
-            break;
-          case Modifier.italic:
-            code = 3;
-            break;
-          case Modifier.underline:
-            code = 4;
-            break;
-          case Modifier.blink:
-            code = 5;
-            break;
-          case Modifier.reverse:
-            code = 7;
-            break;
-          case Modifier.hidden:
-            code = 8;
-            break;
-          case Modifier.crossedOut:
-            code = 9;
-            break;
-        }
-        if (code != 0) {
-          sb.write('$code;');
+    final addedMods = tgtMod & ~effectiveMod;
+    if (addedMods != 0) {
+      for (var i = 0; i < 8; i++) {
+        final mod = 1 << i;
+        if ((addedMods & mod) != 0) {
+          int code = 0;
+          switch (mod) {
+            case Modifier.bold:
+              code = 1;
+              break;
+            case Modifier.dim:
+              code = 2;
+              break;
+            case Modifier.italic:
+              code = 3;
+              break;
+            case Modifier.underline:
+              code = 4;
+              break;
+            case Modifier.blink:
+              code = 5;
+              break;
+            case Modifier.reverse:
+              code = 7;
+              break;
+            case Modifier.hidden:
+              code = 8;
+              break;
+            case Modifier.crossedOut:
+              code = 9;
+              break;
+          }
+          if (code != 0) {
+            sb.write('$code;');
+          }
         }
       }
     }
@@ -282,7 +304,5 @@ class Renderer {
       }
       out.write('\x1b[${s}m');
     }
-
-    return target;
   }
 }
