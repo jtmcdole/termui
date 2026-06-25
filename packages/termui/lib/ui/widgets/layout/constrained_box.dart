@@ -20,6 +20,13 @@ class ConstrainedBox extends Widget {
     final h = child.getIntrinsicHeight(w);
     return h.clamp(constraints.minHeight, constraints.maxHeight);
   }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final h = height.clamp(constraints.minHeight, constraints.maxHeight);
+    final w = child.getIntrinsicWidth(h);
+    return w.clamp(constraints.minWidth, constraints.maxWidth);
+  }
 }
 
 /// An element that manages a [ConstrainedBox] widget.
@@ -52,6 +59,22 @@ class ConstrainedBoxElement extends SingleChildElement {
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final cb = widget as ConstrainedBox;
+    final w = width.clamp(cb.constraints.minWidth, cb.constraints.maxWidth);
+    final h = childElement?.getIntrinsicHeight(w) ?? 0;
+    return h.clamp(cb.constraints.minHeight, cb.constraints.maxHeight);
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final cb = widget as ConstrainedBox;
+    final h = height.clamp(cb.constraints.minHeight, cb.constraints.maxHeight);
+    final w = childElement?.getIntrinsicWidth(h) ?? 0;
+    return w.clamp(cb.constraints.minWidth, cb.constraints.maxWidth);
   }
 }
 

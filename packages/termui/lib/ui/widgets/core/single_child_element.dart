@@ -57,4 +57,12 @@ abstract class SingleChildElement extends Element {
   void visitChildren(void Function(Element element) visitor) {
     if (childElement != null) visitor(childElement!);
   }
+
+  @override
+  int getIntrinsicHeight(int width) =>
+      childElement?.getIntrinsicHeight(width) ?? 0;
+
+  @override
+  int getIntrinsicWidth(int height) =>
+      childElement?.getIntrinsicWidth(height) ?? 0;
 }

@@ -199,66 +199,11 @@ List<Rect> splitRect(
   return rects;
 }
 
-/// Recursively traverses the already-mounted element tree to determine the
-/// intrinsic height of the given [element]. By traversing [StatelessElement],
-/// [StatefulElement], [InheritedElement], and [ElementWidgetElement] directly,
-/// we avoid falling back to the widget tree which would trigger expensive
-/// temporary mounts/unmounts and potentially corrupt the GlobalKey registry.
-int _getElementIntrinsicHeight(Element element, int width) {
-  if (element is StatelessElement) {
-    if (element.childElement != null) {
-      return _getElementIntrinsicHeight(element.childElement!, width);
-    }
-  } else if (element is StatefulElement) {
-    if (element.childElement != null) {
-      return _getElementIntrinsicHeight(element.childElement!, width);
-    }
-  } else if (element is InheritedElement) {
-    if (element.childElement != null) {
-      return _getElementIntrinsicHeight(element.childElement!, width);
-    }
-  } else if (element is ElementWidgetElement) {
-    final child = (element.widget as ElementWidget).element;
-    if (child != null) {
-      return _getElementIntrinsicHeight(child, width);
-    }
-  }
-  return element.widget.getIntrinsicHeight(width);
-}
-
-/// Recursively traverses the already-mounted element tree to determine the
-/// intrinsic width of the given [element]. By traversing [StatelessElement],
-/// [StatefulElement], [InheritedElement], and [ElementWidgetElement] directly,
-/// we avoid falling back to the widget tree which would trigger expensive
-/// temporary mounts/unmounts and potentially corrupt the GlobalKey registry.
-int _getElementIntrinsicWidth(Element element, int height) {
-  if (element is StatelessElement) {
-    if (element.childElement != null) {
-      return _getElementIntrinsicWidth(element.childElement!, height);
-    }
-  } else if (element is StatefulElement) {
-    if (element.childElement != null) {
-      return _getElementIntrinsicWidth(element.childElement!, height);
-    }
-  } else if (element is InheritedElement) {
-    if (element.childElement != null) {
-      return _getElementIntrinsicWidth(element.childElement!, height);
-    }
-  } else if (element is ElementWidgetElement) {
-    final child = (element.widget as ElementWidget).element;
-    if (child != null) {
-      return _getElementIntrinsicWidth(child, height);
-    }
-  }
-  return element.widget.getIntrinsicWidth(height);
-}
-
 /// Undocumented public member.
 ///
 /// Retrieves the layout constraint for the given [widget].
 /// If the optional [element] parameter is provided, we query its intrinsic
-/// size by recursively traversing the mounted element tree to avoid temporary
-/// mounting overhead.
+/// size by calling the element's polymorphic layout getters.
 Constraint getConstraint(
   Widget widget,
   LayoutDirection direction, {
@@ -278,14 +223,14 @@ Constraint getConstraint(
   }
   if (direction == LayoutDirection.vertical) {
     final intH = element != null
-        ? _getElementIntrinsicHeight(element, crossSize)
+        ? element.getIntrinsicHeight(crossSize)
         : widget.getIntrinsicHeight(crossSize);
     if (intH > 0) {
       return LengthConstraint(intH);
     }
   } else {
     final intW = element != null
-        ? _getElementIntrinsicWidth(element, crossSize)
+        ? element.getIntrinsicWidth(crossSize)
         : widget.getIntrinsicWidth(crossSize);
     if (intW > 0) {
       return LengthConstraint(intW);

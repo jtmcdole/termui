@@ -32,6 +32,14 @@ class Align extends Widget {
     }
     return child.getIntrinsicHeight(width);
   }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    if (widthFactor != null) {
+      return (child.getIntrinsicWidth(height) * widthFactor!).round();
+    }
+    return child.getIntrinsicWidth(height);
+  }
 }
 
 /// An element that manages an [Align] widget.
@@ -98,6 +106,24 @@ class AlignElement extends SingleChildElement {
   @override
   void visitChildren(void Function(Element child) visitor) {
     if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final align = widget as Align;
+    final childHeight = childElement?.getIntrinsicHeight(width) ?? 0;
+    return align.heightFactor != null
+        ? (childHeight * align.heightFactor!).round()
+        : childHeight;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final align = widget as Align;
+    final childWidth = childElement?.getIntrinsicWidth(height) ?? 0;
+    return align.widthFactor != null
+        ? (childWidth * align.widthFactor!).round()
+        : childWidth;
   }
 }
 

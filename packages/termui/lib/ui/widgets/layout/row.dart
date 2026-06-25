@@ -49,6 +49,15 @@ class Row extends Widget {
     }
     return maxH;
   }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    var totalWidth = 0;
+    for (final child in children) {
+      totalWidth += child.getIntrinsicWidth(height);
+    }
+    return totalWidth;
+  }
 }
 
 /// An element that manages a [Row] widget.
@@ -190,6 +199,20 @@ class RowElement extends Element {
   void visitChildren(void Function(Element child) visitor) {
     childElements.forEach(visitor);
   }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    var maxH = 0;
+    for (final child in childElements) {
+      final h = child.getIntrinsicHeight(width);
+      if (h > maxH) maxH = h;
+    }
+    return maxH;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) =>
+      childElements.fold(0, (sum, el) => sum + el.getIntrinsicWidth(height));
 }
 
 /// A layout widget that arranges its children vertically.

@@ -228,4 +228,12 @@ class _FittedBoxElement extends Element {
   void visitChildren(void Function(Element child) visitor) {
     if (_childElement != null) visitor(_childElement!);
   }
+
+  @override
+  int getIntrinsicHeight(int width) =>
+      _childElement?.getIntrinsicHeight(width) ?? 0;
+
+  @override
+  int getIntrinsicWidth(int height) =>
+      _childElement?.getIntrinsicWidth(height) ?? 0;
 }

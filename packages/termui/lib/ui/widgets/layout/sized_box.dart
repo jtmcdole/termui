@@ -70,6 +70,20 @@ class SizedBoxElement extends SingleChildElement {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
     }
   }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final sb = widget as SizedBox;
+    if (sb.height != null) return sb.height!;
+    return childElement?.getIntrinsicHeight(sb.width ?? width) ?? 0;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final sb = widget as SizedBox;
+    if (sb.width != null) return sb.width!;
+    return childElement?.getIntrinsicWidth(sb.height ?? height) ?? 0;
+  }
 }
 
 /// A widget that imposes [BoxConstraints] on its child.

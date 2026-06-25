@@ -106,6 +106,28 @@ class SplitPane extends Widget {
 
   @override
   Element createElement() => SplitPaneElement(this);
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final h1 = child1.getIntrinsicHeight(width);
+    final h2 = child2.getIntrinsicHeight(width);
+    if (direction == LayoutDirection.vertical) {
+      return h1 + h2 + 1;
+    } else {
+      return max(h1, h2);
+    }
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final w1 = child1.getIntrinsicWidth(height);
+    final w2 = child2.getIntrinsicWidth(height);
+    if (direction == LayoutDirection.horizontal) {
+      return w1 + w2 + 1;
+    } else {
+      return max(w1, w2);
+    }
+  }
 }
 
 /// An element that manages the layout and rendering of a [SplitPane] widget.
@@ -164,6 +186,30 @@ class SplitPaneElement extends Element {
   void visitChildren(void Function(Element child) visitor) {
     if (childElement1 != null) visitor(childElement1!);
     if (childElement2 != null) visitor(childElement2!);
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    final split = widget as SplitPane;
+    final h1 = childElement1?.getIntrinsicHeight(width) ?? 0;
+    final h2 = childElement2?.getIntrinsicHeight(width) ?? 0;
+    if (split.direction == LayoutDirection.vertical) {
+      return h1 + h2 + 1;
+    } else {
+      return max(h1, h2);
+    }
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    final split = widget as SplitPane;
+    final w1 = childElement1?.getIntrinsicWidth(height) ?? 0;
+    final w2 = childElement2?.getIntrinsicWidth(height) ?? 0;
+    if (split.direction == LayoutDirection.horizontal) {
+      return w1 + w2 + 1;
+    } else {
+      return max(w1, w2);
+    }
   }
 
   @override
