@@ -34,31 +34,31 @@ void main() {
       final buffer = Buffer(10, 5);
       expect(buffer.width, 10);
       expect(buffer.height, 5);
-      expect(buffer.getCell(0, 0)!.isTransparent, isTrue);
-      expect(buffer.getCell(0, 0)!.char, ' ');
+      expect((buffer.getModifiers(0, 0) & Modifier.transparent) != 0, isTrue);
+      expect(buffer.getCharacter(0, 0), ' ');
     });
 
     test('Buffer solid blank creation', () {
       final buffer = Buffer.blank(5, 5);
-      expect(buffer.getCell(0, 0)!.isTransparent, isFalse);
+      expect((buffer.getModifiers(0, 0) & Modifier.transparent) != 0, isFalse);
     });
 
     test('Buffer writeString with clipping and wrapping', () {
       final buffer = Buffer(5, 3);
       buffer.writeString(0, 0, 'ABC\nDE', Style.empty);
 
-      expect(buffer.getCell(0, 0)!.char, 'A');
-      expect(buffer.getCell(1, 0)!.char, 'B');
-      expect(buffer.getCell(2, 0)!.char, 'C');
-      expect(buffer.getCell(3, 0)!.char, ' '); // Transparent space
+      expect(buffer.getCharacter(0, 0), 'A');
+      expect(buffer.getCharacter(1, 0), 'B');
+      expect(buffer.getCharacter(2, 0), 'C');
+      expect(buffer.getCharacter(3, 0), ' '); // Transparent space
 
-      expect(buffer.getCell(0, 1)!.char, 'D');
-      expect(buffer.getCell(1, 1)!.char, 'E');
+      expect(buffer.getCharacter(0, 1), 'D');
+      expect(buffer.getCharacter(1, 1), 'E');
 
       // Writing out of bounds clips safely
       buffer.writeString(3, 2, 'HELLO', Style.empty);
-      expect(buffer.getCell(3, 2)!.char, 'H');
-      expect(buffer.getCell(4, 2)!.char, 'E');
+      expect(buffer.getCharacter(3, 2), 'H');
+      expect(buffer.getCharacter(4, 2), 'E');
     });
 
     test('Buffer resizing', () {
@@ -68,11 +68,11 @@ void main() {
       buffer.resize(2, 2);
       expect(buffer.width, 2);
       expect(buffer.height, 2);
-      expect(buffer.getCell(0, 0)!.char, '1');
-      expect(buffer.getCell(1, 0)!.char, '2');
-      expect(buffer.getCell(0, 1)!.char, '4');
-      expect(buffer.getCell(1, 1)!.char, '5');
-      expect(buffer.getCell(0, 2), isNull); // out of bounds
+      expect(buffer.getCharacter(0, 0), '1');
+      expect(buffer.getCharacter(1, 0), '2');
+      expect(buffer.getCharacter(0, 1), '4');
+      expect(buffer.getCharacter(1, 1), '5');
+      expect(buffer.getCharacter(0, 2), ' '); // out of bounds
     });
   });
 
@@ -83,12 +83,12 @@ void main() {
       final layer2 = Buffer(3, 3);
 
       // Layer 1 has '1's at 0,0 and 1,0 and is otherwise transparent
-      layer1.setCell(0, 0, Cell('1', Style.empty));
-      layer1.setCell(1, 0, Cell('1', Style.empty));
+      layer1.setAttributes(0, 0, char: '1', modifiers: 0);
+      layer1.setAttributes(1, 0, char: '1', modifiers: 0);
 
       // Layer 2 has '2's at 1,0 and 2,0 and is otherwise transparent
-      layer2.setCell(1, 0, Cell('2', Style.empty));
-      layer2.setCell(2, 0, Cell('2', Style.empty));
+      layer2.setAttributes(1, 0, char: '2', modifiers: 0);
+      layer2.setAttributes(2, 0, char: '2', modifiers: 0);
 
       final comp = Compositor();
 
@@ -101,13 +101,13 @@ void main() {
         ],
       );
 
-      expect(target.getCell(0, 0)!.char, '1');
-      expect(target.getCell(1, 0)!.char, '2');
-      expect(target.getCell(2, 0)!.char, '2');
-      expect(target.getCell(3, 0)!.char, ' ');
+      expect(target.getCharacter(0, 0), '1');
+      expect(target.getCharacter(1, 0), '2');
+      expect(target.getCharacter(2, 0), '2');
+      expect(target.getCharacter(3, 0), ' ');
 
       // Reset target
-      target.fill(Cell.blank());
+      target.fillAttributes(char: ' ', modifiers: Modifier.transparent);
 
       // Case 2: layer1 has higher z-index, should overwrite layer2
       comp.composite(
@@ -118,10 +118,10 @@ void main() {
         ],
       );
 
-      expect(target.getCell(0, 0)!.char, '1');
-      expect(target.getCell(1, 0)!.char, '1');
-      expect(target.getCell(2, 0)!.char, '2');
-      expect(target.getCell(3, 0)!.char, ' ');
+      expect(target.getCharacter(0, 0), '1');
+      expect(target.getCharacter(1, 0), '1');
+      expect(target.getCharacter(2, 0), '2');
+      expect(target.getCharacter(3, 0), ' ');
     });
   });
 
@@ -172,11 +172,19 @@ void main() {
         foreground: Color(255, 0, 0),
         modifiers: Modifier.bold,
       );
-      back.setCell(0, 0, Cell('X', styled));
-      back.setCell(
+      back.setAttributes(
+        0,
+        0,
+        char: 'X',
+        fg: styled.foreground?.argb,
+        bg: styled.background?.argb,
+        modifiers: styled.modifiers,
+      );
+      back.setAttributes(
         1,
         0,
-        Cell('Y', Style.empty),
+        char: 'Y',
+        modifiers: 0,
       ); // Style.empty clears colors and bold modifier
 
       final sb = StringBuffer();
@@ -194,8 +202,8 @@ void main() {
       final back = Buffer.blank(5, 2);
 
       // Frame 1: Write 'A' at (1, 0) and 'B' at (3, 1)
-      back.setCell(1, 0, Cell('A', Style.empty));
-      back.setCell(3, 1, Cell('B', Style.empty));
+      back.setAttributes(1, 0, char: 'A', modifiers: 0);
+      back.setAttributes(3, 1, char: 'B', modifiers: 0);
 
       final sb1 = StringBuffer();
       renderer.render(back, sb1);
@@ -210,7 +218,7 @@ void main() {
       expect(out1.endsWith('\n\r'), isTrue);
 
       // Frame 2: change 'B' at (3, 1) to 'C'
-      back.setCell(3, 1, Cell('C', Style.empty));
+      back.setAttributes(3, 1, char: 'C', modifiers: 0);
 
       final sb2 = StringBuffer();
       renderer.render(back, sb2);

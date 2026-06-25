@@ -422,10 +422,16 @@ class WindowElement extends Element implements MouseEventHandler {
     if (w < 2 || h < 2) {
       for (var y = 0; y < h; y++) {
         for (var x = 0; x < w; x++) {
-          final cell = buffer.getCell(paintOffset.dx + x, paintOffset.dy + y);
-          if (cell != null) {
-            cell.char = ' ';
-            cell.style = win.borderStyle;
+          if (buffer.getCharacter(paintOffset.dx + x, paintOffset.dy + y) !=
+              '') {
+            buffer.setAttributes(
+              paintOffset.dx + x,
+              paintOffset.dy + y,
+              char: ' ',
+              fg: win.borderStyle.foreground?.argb,
+              bg: win.borderStyle.background?.argb,
+              modifiers: win.borderStyle.modifiers,
+            );
           }
         }
       }
@@ -514,7 +520,12 @@ class WindowElement extends Element implements MouseEventHandler {
       h - 2,
     );
     final contentViewport = Viewport(buffer, contentArea);
-    contentViewport.fill(Cell(' ', win.backgroundStyle));
+    contentViewport.fillAttributes(
+      char: ' ',
+      fg: win.backgroundStyle.foreground?.argb,
+      bg: win.backgroundStyle.background?.argb,
+      modifiers: win.backgroundStyle.modifiers,
+    );
 
     if (childElement != null) {
       childElement!.paint(contentViewport, Offset.zero);

@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// A widget that renders a static 2D grid of customized [Cell]s.
+/// A widget that renders a static 2D grid of customized [GridCell]s.
 ///
 /// It acts like a tile map, copying characters and styles from the provided 2D
 /// array directly into the local draw buffer up to the active constraints.
@@ -9,8 +9,8 @@ import 'package:termui/termui.dart';
 ///
 /// ```dart
 /// final map = Grid([
-///   [Cell('█', Style(foreground: Color(0xFF00FF00))), Cell(' ', Style.empty)],
-///   [Cell(' ', Style.empty), Cell('█', Style(foreground: Color(0xFF00FF00)))],
+///   [GridCell('█', Style(foreground: Color(0xFF00FF00))), GridCell(' ', Style.empty)],
+///   [GridCell(' ', Style.empty), GridCell('█', Style(foreground: Color(0xFF00FF00)))],
 /// ]);
 /// ```
 ///
@@ -18,10 +18,10 @@ import 'package:termui/termui.dart';
 ///
 /// | Property | Type | Description |
 /// | :--- | :--- | :--- |
-/// | `tiles` | [List]<[List]<[Cell]>> | A 2D list of cells representing rows and columns. |
+/// | `tiles` | [List]<[List]<[GridCell]>> | A 2D list of cells representing rows and columns. |
 class Grid extends Widget {
   /// A 2D list of cells representing rows and columns.
-  final List<List<Cell>> tiles;
+  final List<List<GridCell>> tiles;
 
   /// Creates a new [Grid] with the given [tiles].
   Grid(this.tiles);
@@ -61,12 +61,27 @@ class GridElement extends Element {
       final row = grid.tiles[y];
       for (var x = 0; x < row.length; x++) {
         if (x >= w) break;
-        final cell = buffer.getCell(offset.dx + x, offset.dy + y);
-        if (cell != null) {
-          cell.char = row[x].char;
-          cell.style = row[x].style;
-        }
+        buffer.setAttributes(
+          (offset.dx + x).toInt(),
+          (offset.dy + y).toInt(),
+          char: row[x].char,
+          fg: row[x].style.foreground?.argb,
+          bg: row[x].style.background?.argb,
+          modifiers: row[x].style.modifiers,
+        );
       }
     }
   }
+}
+
+/// A cell inside a [Grid].
+class GridCell {
+  /// The character.
+  final String char;
+
+  /// The style.
+  final Style style;
+
+  /// Creates a GridCell.
+  const GridCell(this.char, [this.style = Style.empty]);
 }

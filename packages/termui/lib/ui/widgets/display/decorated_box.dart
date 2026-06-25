@@ -287,7 +287,14 @@ class DecoratedBoxElement extends SingleChildElement {
     if (bgStyle != null) {
       for (var y = 0; y < area.height; y++) {
         for (var x = 0; x < area.width; x++) {
-          buffer.setCell(area.x + x, area.y + y, Cell(' ', bgStyle));
+          buffer.setAttributes(
+            area.x + x,
+            area.y + y,
+            char: ' ',
+            fg: bgStyle.foreground?.argb,
+            bg: bgStyle.background?.argb,
+            modifiers: bgStyle.modifiers,
+          );
         }
       }
     }
@@ -303,15 +310,25 @@ class DecoratedBoxElement extends SingleChildElement {
       // Draw horizontal lines (excluding corners)
       if (border.topChar.isNotEmpty && area.height > 0) {
         for (var x = 1; x < area.width - 1; x++) {
-          buffer.setCell(area.x + x, area.y, Cell(border.topChar, style));
+          buffer.setAttributes(
+            area.x + x,
+            area.y,
+            char: border.topChar,
+            fg: style.foreground?.argb,
+            bg: style.background?.argb,
+            modifiers: style.modifiers,
+          );
         }
       }
       if (border.bottomChar.isNotEmpty && area.height > 1) {
         for (var x = 1; x < area.width - 1; x++) {
-          buffer.setCell(
+          buffer.setAttributes(
             area.x + x,
             area.y + area.height - 1,
-            Cell(border.bottomChar, style),
+            char: border.bottomChar,
+            fg: style.foreground?.argb,
+            bg: style.background?.argb,
+            modifiers: style.modifiers,
           );
         }
       }
@@ -319,46 +336,72 @@ class DecoratedBoxElement extends SingleChildElement {
       // Draw vertical lines (excluding corners)
       if (border.leftChar.isNotEmpty && area.width > 0) {
         for (var y = 1; y < area.height - 1; y++) {
-          buffer.setCell(area.x, area.y + y, Cell(border.leftChar, style));
+          buffer.setAttributes(
+            area.x,
+            area.y + y,
+            char: border.leftChar,
+            fg: style.foreground?.argb,
+            bg: style.background?.argb,
+            modifiers: style.modifiers,
+          );
         }
       }
       if (border.rightChar.isNotEmpty && area.width > 1) {
         for (var y = 1; y < area.height - 1; y++) {
-          buffer.setCell(
+          buffer.setAttributes(
             area.x + area.width - 1,
             area.y + y,
-            Cell(border.rightChar, style),
+            char: border.rightChar,
+            fg: style.foreground?.argb,
+            bg: style.background?.argb,
+            modifiers: style.modifiers,
           );
         }
       }
 
       // Draw corners
       if (border.topLeftChar.isNotEmpty && area.width > 0 && area.height > 0) {
-        buffer.setCell(area.x, area.y, Cell(border.topLeftChar, style));
+        buffer.setAttributes(
+          area.x,
+          area.y,
+          char: border.topLeftChar,
+          fg: style.foreground?.argb,
+          bg: style.background?.argb,
+          modifiers: style.modifiers,
+        );
       }
       if (border.topRightChar.isNotEmpty && area.width > 1 && area.height > 0) {
-        buffer.setCell(
+        buffer.setAttributes(
           area.x + area.width - 1,
           area.y,
-          Cell(border.topRightChar, style),
+          char: border.topRightChar,
+          fg: style.foreground?.argb,
+          bg: style.background?.argb,
+          modifiers: style.modifiers,
         );
       }
       if (border.bottomLeftChar.isNotEmpty &&
           area.width > 0 &&
           area.height > 1) {
-        buffer.setCell(
+        buffer.setAttributes(
           area.x,
           area.y + area.height - 1,
-          Cell(border.bottomLeftChar, style),
+          char: border.bottomLeftChar,
+          fg: style.foreground?.argb,
+          bg: style.background?.argb,
+          modifiers: style.modifiers,
         );
       }
       if (border.bottomRightChar.isNotEmpty &&
           area.width > 1 &&
           area.height > 1) {
-        buffer.setCell(
+        buffer.setAttributes(
           area.x + area.width - 1,
           area.y + area.height - 1,
-          Cell(border.bottomRightChar, style),
+          char: border.bottomRightChar,
+          fg: style.foreground?.argb,
+          bg: style.background?.argb,
+          modifiers: style.modifiers,
         );
       }
     }

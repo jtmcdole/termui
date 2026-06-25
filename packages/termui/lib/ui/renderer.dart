@@ -71,27 +71,24 @@ class Renderer {
       final height = backBuffer.height;
 
       final backChars = backBuffer.characters;
-      final backFg = backBuffer.fgColors;
-      final backBg = backBuffer.bgColors;
-      final backMod = backBuffer.modifiers;
+      final backAttr = backBuffer.attributes;
 
       final frontChars = _frontBuffer.characters;
-      final frontFg = _frontBuffer.fgColors;
-      final frontBg = _frontBuffer.bgColors;
-      final frontMod = _frontBuffer.modifiers;
+      final frontAttr = _frontBuffer.attributes;
 
       for (var y = 0; y < height; y++) {
         var x = 0;
         final rowOffset = y * width;
         while (x < width) {
           final idx = rowOffset + x;
+          final attrIdx = idx * 3;
 
           final changed =
               sizeChanged ||
               (backChars[idx] != frontChars[idx] ||
-                  backFg[idx] != frontFg[idx] ||
-                  backBg[idx] != frontBg[idx] ||
-                  backMod[idx] != frontMod[idx]);
+                  backAttr[attrIdx + 0] != frontAttr[attrIdx + 0] ||
+                  backAttr[attrIdx + 1] != frontAttr[attrIdx + 1] ||
+                  backAttr[attrIdx + 2] != frontAttr[attrIdx + 2]);
 
           if (changed) {
             final runStart = x;
@@ -99,11 +96,12 @@ class Renderer {
             // Find the end of the contiguous run of changed cells in the current row
             while (runEnd < width) {
               final ridx = rowOffset + runEnd;
+              final rattrIdx = ridx * 3;
               if (sizeChanged ||
                   backChars[ridx] != frontChars[ridx] ||
-                  backFg[ridx] != frontFg[ridx] ||
-                  backBg[ridx] != frontBg[ridx] ||
-                  backMod[ridx] != frontMod[ridx]) {
+                  backAttr[rattrIdx + 0] != frontAttr[rattrIdx + 0] ||
+                  backAttr[rattrIdx + 1] != frontAttr[rattrIdx + 1] ||
+                  backAttr[rattrIdx + 2] != frontAttr[rattrIdx + 2]) {
                 runEnd++;
               } else {
                 break;
@@ -122,22 +120,23 @@ class Renderer {
             // Render each cell in the run
             for (var rx = runStart; rx < runEnd; rx++) {
               final rxIdx = rowOffset + rx;
+              final rxAttrIdx = rxIdx * 3;
               final cellStyle = Style(
-                foreground: backFg[rxIdx] != 0
-                    ? Color.argb(backFg[rxIdx])
+                foreground: backAttr[rxAttrIdx + 0] != 0
+                    ? Color.argb(backAttr[rxAttrIdx + 0])
                     : null,
-                background: backBg[rxIdx] != 0
-                    ? Color.argb(backBg[rxIdx])
+                background: backAttr[rxAttrIdx + 1] != 0
+                    ? Color.argb(backAttr[rxAttrIdx + 1])
                     : null,
-                modifiers: backMod[rxIdx],
+                modifiers: backAttr[rxAttrIdx + 2],
               );
               activeStyle = _writeStyleTransition(out, activeStyle, cellStyle);
               out.write(backChars[rxIdx]);
 
               frontChars[rxIdx] = backChars[rxIdx];
-              frontFg[rxIdx] = backFg[rxIdx];
-              frontBg[rxIdx] = backBg[rxIdx];
-              frontMod[rxIdx] = backMod[rxIdx];
+              frontAttr[rxAttrIdx + 0] = backAttr[rxAttrIdx + 0];
+              frontAttr[rxAttrIdx + 1] = backAttr[rxAttrIdx + 1];
+              frontAttr[rxAttrIdx + 2] = backAttr[rxAttrIdx + 2];
 
               if (mode == RenderingMode.inline) {
                 cursorX++;

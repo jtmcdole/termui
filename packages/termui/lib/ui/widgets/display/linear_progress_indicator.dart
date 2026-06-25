@@ -169,11 +169,14 @@ class LinearProgressIndicatorElement extends Element {
         }
       }
 
-      final cell = viewport.getCell(x, 0);
-      if (cell != null) {
-        cell.char = char;
-        cell.style = cellStyle;
-      }
+      viewport.setAttributes(
+        x,
+        0,
+        char: char,
+        fg: cellStyle.foreground?.argb,
+        bg: cellStyle.background?.argb,
+        modifiers: cellStyle.modifiers,
+      );
     }
   }
 }

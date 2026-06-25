@@ -63,18 +63,23 @@ void main() {
         expect(activeBuffer, isNotNull);
 
         // Top-left corner of the hovered SizedBox is at (0, 1) due to expanded bounds
-        final cornerCell = activeBuffer!.getCell(0, 1);
-        expect(cornerCell, isNotNull);
-        expect(cornerCell!.char, equals('┌'));
-        expect(cornerCell.style.foreground, equals(const Color(255, 0, 255)));
+        expect(activeBuffer!.getCharacter(0, 1), equals('┌'));
+        expect(
+          Color.argb(activeBuffer.getForeground(0, 1)),
+          equals(const Color(255, 0, 255)),
+        );
 
         // The badge ' SizedBox ' should start at (1, 4) due to expanded bounds
         // Check character 'S' at (2, 4)
-        final charCell = activeBuffer.getCell(2, 4);
-        expect(charCell, isNotNull);
-        expect(charCell!.char, equals('S'));
-        expect(charCell.style.foreground, equals(const Color(255, 255, 255)));
-        expect(charCell.style.background, equals(const Color(255, 0, 255)));
+        expect(activeBuffer.getCharacter(2, 4), equals('S'));
+        expect(
+          Color.argb(activeBuffer.getForeground(2, 4)),
+          equals(const Color(255, 255, 255)),
+        );
+        expect(
+          Color.argb(activeBuffer.getBackground(2, 4)),
+          equals(const Color(255, 0, 255)),
+        );
 
         // Abort runner
         runner.abort();

@@ -192,7 +192,14 @@ class _AnimatedButtonElement extends Element {
     final baseStyle = state.widget.style;
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        viewport.setCell(x, y, Cell(' ', baseStyle));
+        viewport.setAttributes(
+          x,
+          y,
+          char: ' ',
+          fg: baseStyle.foreground?.argb ?? 0,
+          bg: baseStyle.background?.argb ?? 0,
+          modifiers: baseStyle.modifiers,
+        );
       }
     }
 

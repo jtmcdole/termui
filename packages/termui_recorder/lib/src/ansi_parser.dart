@@ -62,7 +62,14 @@ class AnsiParser {
       }
 
       if (y < targetHeight && x < targetWidth) {
-        buffer.setCell(x, y, Cell(char, currentStyle));
+        buffer.setAttributes(
+          x,
+          y,
+          char: char,
+          fg: currentStyle.foreground?.argb ?? 0,
+          bg: currentStyle.background?.argb ?? 0,
+          modifiers: currentStyle.modifiers,
+        );
         x++;
       }
     }
@@ -151,7 +158,14 @@ class AnsiParser {
 
       // Normal character: write it
       if (y >= 0 && y < buffer.height && x >= 0 && x < buffer.width) {
-        buffer.setCell(x, y, Cell(char, style));
+        buffer.setAttributes(
+          x,
+          y,
+          char: char,
+          fg: style.foreground?.argb ?? 0,
+          bg: style.background?.argb ?? 0,
+          modifiers: style.modifiers,
+        );
         x++;
       }
     }

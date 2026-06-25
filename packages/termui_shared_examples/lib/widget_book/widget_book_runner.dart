@@ -488,7 +488,7 @@ class _WidgetBookAppState extends State<WidgetBookApp> {
             child: Grid(
               List.generate(
                 max(0, height - 3),
-                (_) => [Cell('│', const Style(modifiers: Modifier.dim))],
+                (_) => [GridCell('│', const Style(modifiers: Modifier.dim))],
               ),
             ),
           ),

@@ -56,8 +56,8 @@ void main() {
 
       final buffer = Buffer(10, 10);
       element.paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)?.char, 'H');
-      expect(buffer.getCell(1, 0)?.char, 'i');
+      expect(buffer.getCharacter(0, 0), 'H');
+      expect(buffer.getCharacter(1, 0), 'i');
 
       var visited = false;
       element.visitChildren((child) {

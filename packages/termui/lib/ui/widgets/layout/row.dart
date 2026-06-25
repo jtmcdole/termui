@@ -163,11 +163,14 @@ class RowElement extends Element {
       final startY = offset.dy;
       for (var y = 0; y < size.height; y++) {
         for (var x = 0; x < size.width; x++) {
-          final cell = buffer.getCell(startX + x, startY + y);
-          if (cell != null) {
-            cell.char = char;
-            cell.style = style;
-          }
+          buffer.setAttributes(
+            startX + x,
+            startY + y,
+            char: char,
+            fg: style.foreground?.argb ?? 0,
+            bg: style.background?.argb ?? 0,
+            modifiers: style.modifiers,
+          );
         }
       }
     }

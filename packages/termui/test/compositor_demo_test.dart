@@ -122,7 +122,7 @@ void main() {
       final bufferContent = StringBuffer();
       for (var y = 0; y < bgBuf.height; y++) {
         for (var x = 0; x < bgBuf.width; x++) {
-          bufferContent.write(bgBuf.getCell(x, y)?.char ?? ' ');
+          bufferContent.write(bgBuf.getCharacter(x, y));
         }
       }
       expect(
@@ -185,7 +185,7 @@ void main() {
       final updatedContent = StringBuffer();
       for (var y = 0; y < updatedBgBuf.height; y++) {
         for (var x = 0; x < updatedBgBuf.width; x++) {
-          updatedContent.write(updatedBgBuf.getCell(x, y)?.char ?? ' ');
+          updatedContent.write(updatedBgBuf.getCharacter(x, y));
         }
       }
       expect(
@@ -230,7 +230,7 @@ void main() {
       final finalContent = StringBuffer();
       for (var y = 0; y < finalBgBuf.height; y++) {
         for (var x = 0; x < finalBgBuf.width; x++) {
-          finalContent.write(finalBgBuf.getCell(x, y)?.char ?? ' ');
+          finalContent.write(finalBgBuf.getCharacter(x, y));
         }
       }
       expect(

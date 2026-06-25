@@ -541,10 +541,20 @@ class _DropdownButtonRenderWidgetElement extends Element {
 
       for (var y = 0; y < h; y++) {
         for (var x = 0; x < w - 4; x++) {
-          final cell = childViewport.getCell(x, y);
-          if (cell != null) {
-            cell.style = cell.style.merge(displayStyle);
-          }
+          final targetMod = childViewport.getModifiers(x, y);
+          final mergedMod = targetMod | displayStyle.modifiers;
+          childViewport.setAttributes(
+            x,
+            y,
+            char: childViewport.getCharacter(x, y),
+            fg:
+                displayStyle.foreground?.argb ??
+                childViewport.getForeground(x, y),
+            bg:
+                displayStyle.background?.argb ??
+                childViewport.getBackground(x, y),
+            modifiers: mergedMod,
+          );
         }
       }
 
@@ -648,10 +658,16 @@ class _DropdownMenuItemWidgetElement extends Element {
     if (item.selected) {
       for (var y = 0; y < h; y++) {
         for (var x = 0; x < w; x++) {
-          final cell = vp.getCell(x, y);
-          if (cell != null) {
-            cell.style = cell.style.merge(itemStyle);
-          }
+          final targetMod = vp.getModifiers(x, y);
+          final mergedMod = targetMod | itemStyle.modifiers;
+          vp.setAttributes(
+            x,
+            y,
+            char: vp.getCharacter(x, y),
+            fg: itemStyle.foreground?.argb ?? vp.getForeground(x, y),
+            bg: itemStyle.background?.argb ?? vp.getBackground(x, y),
+            modifiers: mergedMod,
+          );
         }
       }
     }

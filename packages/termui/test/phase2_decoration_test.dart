@@ -48,7 +48,12 @@ class TestWidgetElement extends Element {
     final w = widget as TestWidget;
     for (var y = 0; y < size.height; y++) {
       for (var x = 0; x < size.width; x++) {
-        buffer.setCell(offset.dx + x, offset.dy + y, Cell(w.char, Style.empty));
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy + y,
+          char: w.char,
+          modifiers: 0,
+        );
       }
     }
   }
@@ -66,7 +71,7 @@ void main() {
       element.paint(buffer, Offset.zero);
 
       // Default dark theme primaryStyle has white foreground
-      expect(buffer.getCell(0, 0)!.char, 'W');
+      expect(buffer.getCharacter(0, 0), 'W');
     });
 
     test('Propagates custom light theme down the context tree', () {
@@ -82,7 +87,7 @@ void main() {
       element.paint(buffer, Offset.zero);
 
       // Light theme primaryStyle has black foreground
-      expect(buffer.getCell(0, 0)!.char, 'B');
+      expect(buffer.getCharacter(0, 0), 'B');
     });
   });
 
@@ -186,12 +191,12 @@ void main() {
       wrapper.layout(BoxConstraints.tight(const Size(10, 1)));
       wrapper.paint(buffer, Offset.zero);
       // "Hello你好": Hello is 5, 你好 is 4. Total = 9.
-      expect(buffer.getCell(0, 0)!.char, 'H');
-      expect(buffer.getCell(5, 0)!.char, '你');
-      expect(buffer.getCell(6, 0)!.char, '');
-      expect(buffer.getCell(7, 0)!.char, '好');
-      expect(buffer.getCell(8, 0)!.char, '');
-      expect(buffer.getCell(9, 0)!.char, ' ');
+      expect(buffer.getCharacter(0, 0), 'H');
+      expect(buffer.getCharacter(5, 0), '你');
+      expect(buffer.getCharacter(6, 0), '');
+      expect(buffer.getCharacter(7, 0), '好');
+      expect(buffer.getCharacter(8, 0), '');
+      expect(buffer.getCharacter(9, 0), ' ');
     });
 
     test('Truncation on narrow area boundary for CJK', () {
@@ -205,9 +210,9 @@ void main() {
       wrapper.layout(BoxConstraints.tight(const Size(6, 1)));
       wrapper.paint(buffer, Offset.zero);
       // Should show "Hello" and a space since "你" requires 2 cells but only 1 remains.
-      expect(buffer.getCell(0, 0)!.char, 'H');
-      expect(buffer.getCell(4, 0)!.char, 'o');
-      expect(buffer.getCell(5, 0)!.char, ' ');
+      expect(buffer.getCharacter(0, 0), 'H');
+      expect(buffer.getCharacter(4, 0), 'o');
+      expect(buffer.getCharacter(5, 0), ' ');
     });
 
     test('Text wrapping with CJK and Emojis', () {
@@ -224,23 +229,23 @@ void main() {
       wrapper.paint(buffer, Offset.zero);
 
       // Line 1
-      expect(buffer.getCell(0, 0)!.char, 'H');
-      expect(buffer.getCell(4, 0)!.char, 'o');
-      expect(buffer.getCell(5, 0)!.char, ' ');
+      expect(buffer.getCharacter(0, 0), 'H');
+      expect(buffer.getCharacter(4, 0), 'o');
+      expect(buffer.getCharacter(5, 0), ' ');
 
       // Line 2
-      expect(buffer.getCell(0, 1)!.char, '你');
-      expect(buffer.getCell(1, 1)!.char, '');
-      expect(buffer.getCell(2, 1)!.char, '好');
-      expect(buffer.getCell(3, 1)!.char, '');
-      expect(buffer.getCell(4, 1)!.char, ' ');
-      expect(buffer.getCell(5, 1)!.char, '😀');
-      expect(buffer.getCell(6, 1)!.char, '');
-      expect(buffer.getCell(7, 1)!.char, ' ');
+      expect(buffer.getCharacter(0, 1), '你');
+      expect(buffer.getCharacter(1, 1), '');
+      expect(buffer.getCharacter(2, 1), '好');
+      expect(buffer.getCharacter(3, 1), '');
+      expect(buffer.getCharacter(4, 1), ' ');
+      expect(buffer.getCharacter(5, 1), '😀');
+      expect(buffer.getCharacter(6, 1), '');
+      expect(buffer.getCharacter(7, 1), ' ');
 
       // Line 3
-      expect(buffer.getCell(0, 2)!.char, 'W');
-      expect(buffer.getCell(4, 2)!.char, 'd');
+      expect(buffer.getCharacter(0, 2), 'W');
+      expect(buffer.getCharacter(4, 2), 'd');
     });
 
     test('Text alignments (Left, Center, Right)', () {
@@ -268,20 +273,20 @@ void main() {
       wrapperRight.paint(bufferRight, Offset.zero);
 
       // Left
-      expect(bufferLeft.getCell(0, 0)!.char, '你');
-      expect(bufferLeft.getCell(2, 0)!.char, '好');
-      expect(bufferLeft.getCell(4, 0)!.char, ' ');
+      expect(bufferLeft.getCharacter(0, 0), '你');
+      expect(bufferLeft.getCharacter(2, 0), '好');
+      expect(bufferLeft.getCharacter(4, 0), ' ');
 
       // Center: width 10, content width 4. start = (10-4) ~/ 2 = 3.
-      expect(bufferCenter.getCell(2, 0)!.char, ' ');
-      expect(bufferCenter.getCell(3, 0)!.char, '你');
-      expect(bufferCenter.getCell(5, 0)!.char, '好');
-      expect(bufferCenter.getCell(7, 0)!.char, ' ');
+      expect(bufferCenter.getCharacter(2, 0), ' ');
+      expect(bufferCenter.getCharacter(3, 0), '你');
+      expect(bufferCenter.getCharacter(5, 0), '好');
+      expect(bufferCenter.getCharacter(7, 0), ' ');
 
       // Right: start = 10 - 4 = 6.
-      expect(bufferRight.getCell(5, 0)!.char, ' ');
-      expect(bufferRight.getCell(6, 0)!.char, '你');
-      expect(bufferRight.getCell(8, 0)!.char, '好');
+      expect(bufferRight.getCharacter(5, 0), ' ');
+      expect(bufferRight.getCharacter(6, 0), '你');
+      expect(bufferRight.getCharacter(8, 0), '好');
     });
   });
 }

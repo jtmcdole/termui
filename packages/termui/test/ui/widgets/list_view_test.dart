@@ -21,11 +21,11 @@ void main() {
       final tester = TerminalTester();
       await tester.pumpWidget(rawList);
 
-      expect(tester.buffer!.getCell(0, 0)?.char, 'I');
-      expect(tester.buffer!.getCell(5, 0)?.char, '1');
+      expect(tester.buffer!.getCharacter(0, 0), 'I');
+      expect(tester.buffer!.getCharacter(5, 0), '1');
 
       await tester.pumpWidget(ListView.raw(lines: const ['Item A', 'Item B']));
-      expect(tester.buffer!.getCell(0, 1)?.char, 'I'); // Item B selected
+      expect(tester.buffer!.getCharacter(0, 1), 'I'); // Item B selected
     });
 
     test('ListView handles scroll bounds', () async {

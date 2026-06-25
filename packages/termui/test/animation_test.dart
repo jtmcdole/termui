@@ -26,10 +26,8 @@ class TestEffect extends TuiAnimationEffect {
   @override
   void paint(Buffer buffer, Rect area, Style baseStyle) {
     painted = true;
-    final cell = buffer.getCell(0, 0);
-    if (cell != null) {
-      cell.char = 'X';
-      cell.style = cell.style.merge(const Style(foreground: Colors.red));
+    if (buffer.getCharacter(0, 0) != '') {
+      buffer.setAttributes(0, 0, char: 'X', fg: Colors.red.argb);
     }
   }
 }
@@ -98,7 +96,14 @@ class _TestAnimatedRenderElement extends Element {
     final area = Rect(offset.dx, offset.dy, size.width, size.height);
     for (var y = 0; y < area.height; y++) {
       for (var x = 0; x < area.width; x++) {
-        buffer.setCell(area.x + x, area.y + y, Cell(' ', Style.empty));
+        buffer.setAttributes(
+          area.x + x,
+          area.y + y,
+          char: ' ',
+          fg: 0,
+          bg: 0,
+          modifiers: Modifier.transparent,
+        );
       }
     }
     w.state.paintEffects(buffer, area, Style.empty);
@@ -348,12 +353,10 @@ void main() {
       ripple.paint(buffer, const Rect(0, 0, 10, 5), Style.empty);
 
       // Center cell should be blended with rippleColor
-      final centerCell = buffer.getCell(5, 2)!;
-      expect(centerCell.style.background, equals(Colors.blue));
+      expect(buffer.getBackground(5, 2), equals(Colors.blue.argb));
 
       // Cell far away should not be affected yet or blended less
-      final cornerCell = buffer.getCell(0, 0)!;
-      expect(cornerCell.style.background, isNot(equals(Colors.blue)));
+      expect(buffer.getBackground(0, 0), isNot(equals(Colors.blue.argb)));
     });
 
     test('SparkleEffect particle spawning and decay', () {
@@ -374,11 +377,14 @@ void main() {
         attempts++;
         for (var y = 0; y < 5; y++) {
           for (var x = 0; x < 10; x++) {
-            final cell = buffer.getCell(x, y)!;
-            if (sparkles.sparkleChars.contains(cell.char)) {
+            final char = buffer.getCharacter(x, y);
+            if (sparkles.sparkleChars.contains(char)) {
               sparkleFound = true;
-              expect(cell.style.foreground, isNotNull);
-              expect(Modifier.has(cell.style.modifiers, Modifier.bold), isTrue);
+              expect(buffer.getForeground(x, y), isNot(equals(0)));
+              expect(
+                Modifier.has(buffer.getModifiers(x, y), Modifier.bold),
+                isTrue,
+              );
             }
           }
         }
@@ -401,8 +407,7 @@ void main() {
       // All cells should be affected since FlashEffect acts on whole buffer
       for (var y = 0; y < 5; y++) {
         for (var x = 0; x < 10; x++) {
-          final cell = buffer.getCell(x, y)!;
-          expect(cell.style.background, isNotNull);
+          expect(buffer.getBackground(x, y), isNot(equals(0)));
         }
       }
     });
@@ -432,8 +437,8 @@ void main() {
       expect(state.isPressed, isFalse);
 
       // Center should contain 'Animate' (len = 7). W = 10, start = 1. H = 3, center row = 1.
-      expect(buffer.getCell(1, 1)!.char, equals('A'));
-      expect(buffer.getCell(7, 1)!.char, equals('e'));
+      expect(buffer.getCharacter(1, 1), equals('A'));
+      expect(buffer.getCharacter(7, 1), equals('e'));
 
       // Move mouse inside: Hover should activate
       btn.handleMouseEvent(

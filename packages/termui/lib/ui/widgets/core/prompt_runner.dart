@@ -823,11 +823,14 @@ void _drawBoxOutline(Buffer buffer, Offset offset, Size size, Style style) {
 }
 
 void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
-  final cell = buffer.getCell(x, y);
-  if (cell != null) {
-    cell.char = char;
-    cell.style = style;
-  }
+  buffer.setAttributes(
+    x,
+    y,
+    char: char,
+    fg: style.foreground?.argb ?? 0,
+    bg: style.background?.argb ?? 0,
+    modifiers: style.modifiers,
+  );
 }
 
 Element? _findHoveredElement(

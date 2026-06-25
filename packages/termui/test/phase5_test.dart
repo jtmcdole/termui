@@ -185,7 +185,7 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // Unicode value should be U+2800 + 0x01 = 0x2801
-      expect(buffer.getCell(0, 0)!.char, equals(String.fromCharCode(0x2801)));
+      expect(buffer.getCharacter(0, 0), equals(String.fromCharCode(0x2801)));
 
       // Clear and set bottom-right pixel (1, 3) -> Dot 8 (0x80)
       canvas.clear();
@@ -194,14 +194,14 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(1, 1)))
         ..paint(buffer, Offset.zero);
       // Unicode value should be U+2800 + 0x80 = 0x2880 (⢀)
-      expect(buffer.getCell(0, 0)!.char, equals(String.fromCharCode(0x2880)));
+      expect(buffer.getCharacter(0, 0), equals(String.fromCharCode(0x2880)));
 
       // Set both: U+2881
       canvas.setPixel(0, 0, true);
       ElementWidget(canvas)
         ..layout(BoxConstraints.tight(const Size(1, 1)))
         ..paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)!.char, equals(String.fromCharCode(0x2881)));
+      expect(buffer.getCharacter(0, 0), equals(String.fromCharCode(0x2881)));
     });
 
     test('Bresenham Integrity Test', () {
@@ -215,9 +215,9 @@ void main() {
       var totalFlagged = 0;
       for (var y = 0; y < 3; y++) {
         for (var x = 0; x < 6; x++) {
-          final cell = buffer.getCell(x, y);
-          if (cell != null) {
-            final code = cell.char.codeUnitAt(0);
+          final char = buffer.getCharacter(x, y);
+          if (char.isNotEmpty && char != ' ') {
+            final code = char.codeUnitAt(0);
             if (code >= 0x2800 && code <= 0x28FF) {
               final dots = code - 0x2800;
               var temp = dots;
@@ -264,11 +264,11 @@ void main() {
 
       // Cell (0, 0) is completely covered (8/8 sub-pixels).
       // So it should render as solid block '█' rather than Braille characters.
-      expect(buffer.getCell(0, 0)!.char, equals('█'));
+      expect(buffer.getCharacter(0, 0), equals('█'));
 
       // Cell (1, 0) is not drawn, so it is empty space (U+2800)
       expect(
-        buffer.getCell(1, 0)!.char,
+        buffer.getCharacter(1, 0),
         anyOf(equals('⠀'), equals(' ')),
       ); // U+2800 or U+0020
     });
@@ -286,9 +286,9 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // Cell (1, 1) should be blank/empty because we skipped translation
-      expect(buffer.getCell(1, 1)!.char, equals(' ')); // blank cell
+      expect(buffer.getCharacter(1, 1), equals(' ')); // blank cell
       // Other cells should be filled
-      expect(buffer.getCell(0, 0)!.char, equals('█'));
+      expect(buffer.getCharacter(0, 0), equals('█'));
     });
 
     test('Canvas Color Interpolation and Custom Styles Test', () {
@@ -302,20 +302,20 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // The cell at (0, 0) should have a foreground color that is Red
-      final cell0 = buffer.getCell(0, 0);
-      expect(cell0, isNotNull);
-      expect(cell0!.style.foreground, isNotNull);
-      expect(cell0.style.foreground!.r, equals(255));
-      expect(cell0.style.foreground!.g, equals(0));
-      expect(cell0.style.foreground!.b, equals(0));
+      final fg0 = buffer.getForeground(0, 0);
+      final c0 = Color.argb(fg0);
+      expect(fg0, isNot(equals(0)));
+      expect(c0.r, equals(255));
+      expect(c0.g, equals(0));
+      expect(c0.b, equals(0));
 
       // The cell at (2, 2) should have a foreground color that is Blue
-      final cell2 = buffer.getCell(2, 2);
-      expect(cell2, isNotNull);
-      expect(cell2!.style.foreground, isNotNull);
-      expect(cell2.style.foreground!.r, equals(0));
-      expect(cell2.style.foreground!.g, equals(0));
-      expect(cell2.style.foreground!.b, equals(255));
+      final fg2 = buffer.getForeground(2, 2);
+      final c2 = Color.argb(fg2);
+      expect(fg2, isNot(equals(0)));
+      expect(c2.r, equals(0));
+      expect(c2.g, equals(0));
+      expect(c2.b, equals(255));
 
       // Test fillTriangleColored
       canvas.clear();
@@ -336,7 +336,7 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // Ensure some pixels are colored
-      expect(buffer.getCell(0, 0)!.style.foreground, isNotNull);
+      expect(buffer.getForeground(0, 0), isNot(equals(0)));
 
       // Test fillQuadColored
       canvas.clear();
@@ -360,7 +360,7 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // Ensure some pixels are colored
-      expect(buffer.getCell(0, 0)!.style.foreground, isNotNull);
+      expect(buffer.getForeground(0, 0), isNot(equals(0)));
     });
 
     test('Canvas Style Propagation and Background Merging Test', () {
@@ -381,16 +381,13 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // Cell at (0, 0) has the line pixel, should have green foreground and black background
-      final cell0 = buffer.getCell(0, 0);
-      expect(cell0, isNotNull);
-      expect(cell0!.char, isNot(equals(' ')));
-      expect(cell0.style.foreground, equals(Colors.green));
-      expect(cell0.style.background, equals(Colors.black));
+      final c0 = buffer.getCharacter(0, 0);
+      expect(c0, isNot(equals(' ')));
+      expect(Color.argb(buffer.getForeground(0, 0)), equals(Colors.green));
+      expect(Color.argb(buffer.getBackground(0, 0)), equals(Colors.black));
 
       // Cell at (2, 0) has no pixel (dots == 0), should have black background
-      final cell1 = buffer.getCell(2, 0);
-      expect(cell1, isNotNull);
-      expect(cell1!.style.background, equals(Colors.black));
+      expect(Color.argb(buffer.getBackground(2, 0)), equals(Colors.black));
     });
 
     test('Canvas 60fps benchmark test', () {
@@ -587,9 +584,9 @@ void main() {
                       cellX < width &&
                       cellY >= 0 &&
                       cellY < height) {
-                    final cell = buffer.getCell(cellX, cellY);
-                    if (cell == null) continue;
-                    final code = cell.char.codeUnitAt(0);
+                    final char = buffer.getCharacter(cellX, cellY);
+                    if (char.isEmpty) continue;
+                    final code = char.codeUnitAt(0);
                     if (code >= 0x2800 && code <= 0x28FF) {
                       final dots = code - 0x2800;
                       final dx = px % 2;
@@ -598,7 +595,7 @@ void main() {
                       if ((dots & mask) == 0) {
                         totalGaps++;
                       }
-                    } else if (cell.char != '█') {
+                    } else if (char != '█') {
                       totalGaps++;
                     }
                   }
@@ -1034,7 +1031,7 @@ void main() {
 
       var filledLinear = 0;
       for (var x = 0; x < 12; x++) {
-        if (bufferLinear.getCell(x, 0)!.char == '█') {
+        if (bufferLinear.getCharacter(x, 0) == '█') {
           filledLinear++;
         }
       }
@@ -1053,7 +1050,7 @@ void main() {
 
       var filledEased = 0;
       for (var x = 0; x < 12; x++) {
-        if (bufferEased.getCell(x, 0)!.char == '█') {
+        if (bufferEased.getCharacter(x, 0) == '█') {
           filledEased++;
         }
       }

@@ -214,20 +214,28 @@ class _ScrollViewRenderProxyElement extends Element {
         final srcY = scrollOffset + y;
         if (srcY >= childHeight) break;
         for (var x = 0; x < w; x++) {
-          final cell = virtualBuffer.getCell(x, srcY);
-          if (cell != null) {
-            final targetCell = buffer.getCell(offset.dx + x, offset.dy + y);
-            if (targetCell != null) {
-              final mergedStyle = targetCell.style.merge(cell.style);
-              buffer.setCell(
-                offset.dx + x,
-                offset.dy + y,
-                Cell(cell.char, mergedStyle),
-              );
-            } else {
-              buffer.setCell(offset.dx + x, offset.dy + y, cell);
-            }
+          final char = virtualBuffer.getCharacter(x, srcY);
+          final vFg = virtualBuffer.getForeground(x, srcY);
+          final vBg = virtualBuffer.getBackground(x, srcY);
+          final vMod = virtualBuffer.getModifiers(x, srcY);
+
+          final targetFg = buffer.getForeground(offset.dx + x, offset.dy + y);
+          final targetBg = buffer.getBackground(offset.dx + x, offset.dy + y);
+          final targetMod = buffer.getModifiers(offset.dx + x, offset.dy + y);
+
+          var mergedMod = targetMod | vMod;
+          if ((vMod & Modifier.transparent) == 0) {
+            mergedMod &= ~Modifier.transparent;
           }
+
+          buffer.setAttributes(
+            offset.dx + x,
+            offset.dy + y,
+            char: char,
+            fg: vFg != 0 ? vFg : targetFg,
+            bg: vBg != 0 ? vBg : targetBg,
+            modifiers: mergedMod,
+          );
         }
       }
     } else {
@@ -235,20 +243,28 @@ class _ScrollViewRenderProxyElement extends Element {
         for (var x = 0; x < w; x++) {
           final srcX = scrollOffset + x;
           if (srcX >= childWidth) break;
-          final cell = virtualBuffer.getCell(srcX, y);
-          if (cell != null) {
-            final targetCell = buffer.getCell(offset.dx + x, offset.dy + y);
-            if (targetCell != null) {
-              final mergedStyle = targetCell.style.merge(cell.style);
-              buffer.setCell(
-                offset.dx + x,
-                offset.dy + y,
-                Cell(cell.char, mergedStyle),
-              );
-            } else {
-              buffer.setCell(offset.dx + x, offset.dy + y, cell);
-            }
+          final char = virtualBuffer.getCharacter(srcX, y);
+          final vFg = virtualBuffer.getForeground(srcX, y);
+          final vBg = virtualBuffer.getBackground(srcX, y);
+          final vMod = virtualBuffer.getModifiers(srcX, y);
+
+          final targetFg = buffer.getForeground(offset.dx + x, offset.dy + y);
+          final targetBg = buffer.getBackground(offset.dx + x, offset.dy + y);
+          final targetMod = buffer.getModifiers(offset.dx + x, offset.dy + y);
+
+          var mergedMod = targetMod | vMod;
+          if ((vMod & Modifier.transparent) == 0) {
+            mergedMod &= ~Modifier.transparent;
           }
+
+          buffer.setAttributes(
+            offset.dx + x,
+            offset.dy + y,
+            char: char,
+            fg: vFg != 0 ? vFg : targetFg,
+            bg: vBg != 0 ? vBg : targetBg,
+            modifiers: mergedMod,
+          );
         }
       }
     }

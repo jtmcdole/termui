@@ -128,11 +128,11 @@ void main() {
       // Diff = 5 - 9 = -4.
       // offset.dx = -4 / 2 * 1.0 (since alignment is center, dx = -2).
       // So '12' is cut off. '34567' is drawn.
-      expect(buffer.getCell(0, 0)?.char, '3');
-      expect(buffer.getCell(1, 0)?.char, '4');
-      expect(buffer.getCell(2, 0)?.char, '5');
-      expect(buffer.getCell(3, 0)?.char, '6');
-      expect(buffer.getCell(4, 0)?.char, '7');
+      expect(buffer.getCharacter(0, 0), '3');
+      expect(buffer.getCharacter(1, 0), '4');
+      expect(buffer.getCharacter(2, 0), '5');
+      expect(buffer.getCharacter(3, 0), '6');
+      expect(buffer.getCharacter(4, 0), '7');
     });
 
     test(

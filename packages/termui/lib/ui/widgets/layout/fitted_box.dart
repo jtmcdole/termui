@@ -163,19 +163,33 @@ class _FittedBoxElement extends Element {
 
       for (var y = 0; y < size.height; y++) {
         for (var x = 0; x < size.width; x++) {
-          final cell = virtualBuffer.getCell(x, y);
-          if (cell != null && (cell.char != ' ' || !cell.isTransparent)) {
-            final targetCell = buffer.getCell(offset.dx + x, offset.dy + y);
-            if (targetCell != null) {
-              final mergedStyle = targetCell.style.merge(cell.style);
-              buffer.setCell(
-                offset.dx + x,
-                offset.dy + y,
-                Cell(cell.char, mergedStyle),
-              );
-            } else {
-              buffer.setCell(offset.dx + x, offset.dy + y, cell);
+          final char = virtualBuffer.getCharacter(x, y);
+          final modifiers = virtualBuffer.getModifiers(x, y);
+          final isTransparent = (modifiers & Modifier.transparent) != 0;
+          if (char != ' ' || !isTransparent) {
+            final targetFg = buffer.getForeground(offset.dx + x, offset.dy + y);
+            final targetBg = buffer.getBackground(offset.dx + x, offset.dy + y);
+            final targetModifiers = buffer.getModifiers(
+              offset.dx + x,
+              offset.dy + y,
+            );
+
+            final vFg = virtualBuffer.getForeground(x, y);
+            final vBg = virtualBuffer.getBackground(x, y);
+
+            var nextModifiers = targetModifiers | modifiers;
+            if ((modifiers & Modifier.transparent) == 0) {
+              nextModifiers &= ~Modifier.transparent;
             }
+
+            buffer.setAttributes(
+              offset.dx + x,
+              offset.dy + y,
+              char: char,
+              fg: vFg != 0 ? vFg : targetFg,
+              bg: vBg != 0 ? vBg : targetBg,
+              modifiers: nextModifiers,
+            );
           }
         }
       }

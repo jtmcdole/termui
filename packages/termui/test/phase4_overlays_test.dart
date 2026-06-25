@@ -53,9 +53,9 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // 0.5 of 10 is 5 cells filled
-      expect(buffer.getCell(0, 0)!.char, equals('█'));
-      expect(buffer.getCell(4, 0)!.char, equals('█'));
-      expect(buffer.getCell(5, 0)!.char, equals('░'));
+      expect(buffer.getCharacter(0, 0), equals('█'));
+      expect(buffer.getCharacter(4, 0), equals('█'));
+      expect(buffer.getCharacter(5, 0), equals('░'));
     });
   });
 
@@ -103,24 +103,15 @@ void main() {
         ..paint(buffer, Offset.zero);
 
       // Row 0: Headers
-      final row0 = List.generate(
-        20,
-        (x) => buffer.getCell(x, 0)!.char,
-      ).join('');
+      final row0 = List.generate(20, (x) => buffer.getCharacter(x, 0)).join('');
       expect(row0, startsWith('Name   Status'));
 
       // Row 2: First row data ('Alice  RUN')
-      final row2 = List.generate(
-        20,
-        (x) => buffer.getCell(x, 2)!.char,
-      ).join('');
+      final row2 = List.generate(20, (x) => buffer.getCharacter(x, 2)).join('');
       expect(row2, startsWith('Alice  RUN'));
 
       // Row 3: Second row data ('Bob    OK')
-      final row3 = List.generate(
-        20,
-        (x) => buffer.getCell(x, 3)!.char,
-      ).join('');
+      final row3 = List.generate(20, (x) => buffer.getCharacter(x, 3)).join('');
       expect(row3, startsWith('Bob    OK'));
     });
   });
@@ -163,12 +154,12 @@ void main() {
       rootEl.paint(buffer, Offset.zero);
 
       // E1 rendered at (0, 0)
-      expect(buffer.getCell(0, 0)!.char, equals('E'));
-      expect(buffer.getCell(1, 0)!.char, equals('1'));
+      expect(buffer.getCharacter(0, 0), equals('E'));
+      expect(buffer.getCharacter(1, 0), equals('1'));
 
       // E2 rendered at (2, 0)
-      expect(buffer.getCell(2, 0)!.char, equals('E'));
-      expect(buffer.getCell(3, 0)!.char, equals('2'));
+      expect(buffer.getCharacter(2, 0), equals('E'));
+      expect(buffer.getCharacter(3, 0), equals('2'));
 
       // BG (child) is overwritten/covered under (0, 0) by E1, but visible elsewhere if rendered
       // E2 is removed
@@ -177,9 +168,9 @@ void main() {
       rootEl.layout(BoxConstraints.tight(const Size(10, 10)));
       rootEl.paint(buffer, Offset.zero);
 
-      expect(buffer.getCell(0, 0)!.char, equals('E'));
+      expect(buffer.getCharacter(0, 0), equals('E'));
       // E2 position is now empty/clear
-      expect(buffer.getCell(2, 0)!.char, equals(' '));
+      expect(buffer.getCharacter(2, 0), equals(' '));
     });
 
     test('DropdownButton toggles dropdown menu on action', () {
@@ -215,9 +206,9 @@ void main() {
 
       // Dropdown menu elements should render below the button (row 1 and row 2)
       // Since first item is selected, row 1 shows 'One'
-      expect(buffer.getCell(0, 1)!.char, equals('O'));
-      expect(buffer.getCell(1, 1)!.char, equals('n'));
-      expect(buffer.getCell(2, 1)!.char, equals('e'));
+      expect(buffer.getCharacter(0, 1), equals('O'));
+      expect(buffer.getCharacter(1, 1), equals('n'));
+      expect(buffer.getCharacter(2, 1), equals('e'));
 
       // Move selection down
       dropState.handleKeyEvent(const KeyEvent('down', KeyType.down));
@@ -231,7 +222,7 @@ void main() {
       rootEl.paint(buffer, Offset.zero);
 
       // Menu is closed, row 1 is now empty/clear
-      expect(buffer.getCell(0, 1)!.char, equals(' '));
+      expect(buffer.getCharacter(0, 1), equals(' '));
     });
 
     test('PopupMenuButton toggles popup menu on action', () {
@@ -269,8 +260,8 @@ void main() {
       rootEl.paint(buffer, Offset.zero);
 
       // Action A should render below the button (row 1)
-      expect(buffer.getCell(0, 1)!.char, equals('A'));
-      expect(buffer.getCell(1, 1)!.char, equals('c'));
+      expect(buffer.getCharacter(0, 1), equals('A'));
+      expect(buffer.getCharacter(1, 1), equals('c'));
 
       // Select first action
       menuState.handleKeyEvent(const KeyEvent('enter', KeyType.enter));
@@ -280,7 +271,7 @@ void main() {
 
       expect(selectedVal, equals('A'));
       // Menu is closed, row 1 is now empty/clear
-      expect(buffer.getCell(0, 1)!.char, equals(' '));
+      expect(buffer.getCharacter(0, 1), equals(' '));
     });
   });
 }

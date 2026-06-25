@@ -27,11 +27,8 @@ void main() {
 
       // Verify written
       for (var i = 0; i < 10; i++) {
-        expect(buffer.getCell(i, 0)!.char, equals(i.toString()));
-        expect(
-          buffer.getCell(i, 0)!.style.foreground,
-          equals(Color(255, 255, 255)),
-        );
+        expect(buffer.getCharacter(i, 0), equals(i.toString()));
+        expect(buffer.getForeground(i, 0), equals(Color(255, 255, 255).argb));
       }
 
       // Create dimmer effect directly for the right half
@@ -40,22 +37,22 @@ void main() {
 
       // Check left half untouched
       for (var i = 0; i < 5; i++) {
-        final cell = buffer.getCell(i, 0)!;
-        expect(cell.char, equals(i.toString()));
-        expect(cell.style.foreground, equals(Color(255, 255, 255)));
-        expect(cell.style.background, equals(Color(255, 255, 255)));
+        expect(buffer.getCharacter(i, 0), equals(i.toString()));
+        expect(buffer.getForeground(i, 0), equals(Color(255, 255, 255).argb));
+        expect(buffer.getBackground(i, 0), equals(Color(255, 255, 255).argb));
       }
 
       // Check right half dimmed
       for (var i = 5; i < 10; i++) {
-        final cell = buffer.getCell(i, 0)!;
-        expect(cell.char, equals(i.toString()));
-        expect(cell.style.foreground!.r, equals(127));
-        expect(cell.style.foreground!.g, equals(127));
-        expect(cell.style.foreground!.b, equals(127));
-        expect(cell.style.background!.r, equals(127));
-        expect(cell.style.background!.g, equals(127));
-        expect(cell.style.background!.b, equals(127));
+        expect(buffer.getCharacter(i, 0), equals(i.toString()));
+        final fg = Color.argb(buffer.getForeground(i, 0));
+        final bg = Color.argb(buffer.getBackground(i, 0));
+        expect(fg.r, equals(127));
+        expect(fg.g, equals(127));
+        expect(fg.b, equals(127));
+        expect(bg.r, equals(127));
+        expect(bg.g, equals(127));
+        expect(bg.b, equals(127));
       }
     });
 

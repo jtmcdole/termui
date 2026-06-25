@@ -22,7 +22,7 @@ void main() {
 
       final buffer = Buffer(20, 5);
       element.paint(buffer, Offset.zero);
-      expect(buffer.getCell(0, 0)?.char, 'I');
+      expect(buffer.getCharacter(0, 0), 'I');
 
       // Update widget with new offset
       final lazy2 = LazyList(
@@ -70,7 +70,7 @@ void main() {
       final buffer = Buffer(20, 5);
       element.paint(buffer, Offset.zero);
 
-      expect(buffer.getCell(0, 0)?.char, 'I'); // Header 'ID'
+      expect(buffer.getCharacter(0, 0), 'I'); // Header 'ID'
     });
 
     test('LazyTable scrolling and dynamic data', () {

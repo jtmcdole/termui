@@ -79,10 +79,10 @@ void main() {
 
       // 'abc' centered in 10 width -> startX = (10 - 3) ~/ 2 = 3.
       // Cells 3-5: 'abc'
-      expect(buffer.getCell(3, 0)!.char, equals('a'));
-      expect(buffer.getCell(4, 0)!.char, equals('b'));
-      expect(buffer.getCell(5, 0)!.char, equals('c'));
-      expect(buffer.getCell(2, 0)!.char, equals(' '));
+      expect(buffer.getCharacter(3, 0), equals('a'));
+      expect(buffer.getCharacter(4, 0), equals('b'));
+      expect(buffer.getCharacter(5, 0), equals('c'));
+      expect(buffer.getCharacter(2, 0), equals(' '));
 
       final rightRich = RichText(
         text: const TextSpan(text: 'xyz'),
@@ -96,10 +96,10 @@ void main() {
 
       // 'xyz' right-aligned in 10 width -> startX = 10 - 3 = 7.
       // Cells 7-9: 'xyz' on line 1
-      expect(buffer.getCell(7, 1)!.char, equals('x'));
-      expect(buffer.getCell(8, 1)!.char, equals('y'));
-      expect(buffer.getCell(9, 1)!.char, equals('z'));
-      expect(buffer.getCell(6, 1)!.char, equals(' '));
+      expect(buffer.getCharacter(7, 1), equals('x'));
+      expect(buffer.getCharacter(8, 1), equals('y'));
+      expect(buffer.getCharacter(9, 1), equals('z'));
+      expect(buffer.getCharacter(6, 1), equals(' '));
     });
   });
 }

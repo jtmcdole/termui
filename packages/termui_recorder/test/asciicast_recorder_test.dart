@@ -15,7 +15,14 @@ void main() {
       );
 
       final buffer = Buffer.blank(80, 24);
-      buffer.setCell(0, 0, Cell('A', Style.empty));
+      buffer.setAttributes(
+        0,
+        0,
+        char: 'A',
+        fg: Style.empty.foreground?.argb,
+        bg: Style.empty.background?.argb,
+        modifiers: Style.empty.modifiers,
+      );
 
       // Record first frame
       recorder.recordFrame(buffer);

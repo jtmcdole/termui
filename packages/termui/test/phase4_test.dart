@@ -77,18 +77,18 @@ void main() {
 
       // Window bounds: offset (1, 1) to (10, 5) size on buffer
       // Top border corner at (1, 1) is '┌'
-      expect(buffer.getCell(1, 1)!.char, equals('┌'));
+      expect(buffer.getCharacter(1, 1), equals('┌'));
       // Top border horizontal line at (2, 1) is '─'
-      expect(buffer.getCell(2, 1)!.char, equals('─'));
+      expect(buffer.getCharacter(2, 1), equals('─'));
       // Title 'A' overlay at (5, 1) - centered: ((10 - 3) / 2).floor() = 3. 3 + 1 offset in buffer = 4. Wait, title starts at index 3 in window, so index 3+1=4 is ' ', index 4+1=5 is 'A'
-      expect(buffer.getCell(5, 1)!.char, equals('A'));
+      expect(buffer.getCharacter(5, 1), equals('A'));
 
       // Bottom corner at (1, 5) is '└'
-      expect(buffer.getCell(1, 5)!.char, equals('└'));
+      expect(buffer.getCharacter(1, 5), equals('└'));
 
       // Content child (SimpleWidget writes 'X' at (0, 0) relative to content viewport)
       // Content viewport starts at (1, 1) relative to window, which is (2, 2) relative to root buffer
-      expect(buffer.getCell(2, 2)!.char, equals('X'));
+      expect(buffer.getCharacter(2, 2), equals('X'));
     });
   });
 }

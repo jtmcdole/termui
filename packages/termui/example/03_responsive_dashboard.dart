@@ -498,7 +498,7 @@ void main() async {
     void drawFrame() {
       buildOwner.buildScope();
       buffer.clear();
-      buffer.fill(Cell(' ', Style.empty));
+      buffer.fillAttributes(char: ' ', fg: 0, bg: 0, modifiers: 0);
       elementWrapper.layout(
         BoxConstraints.tight(Size(width, height)),
         buildOwner,

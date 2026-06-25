@@ -68,10 +68,10 @@ void main() {
 
       // 50% of 21 is round(10.5) = 11.
       // So divider is drawn at x = 11.
-      expect(buffer.getCell(11, 0)!.char, equals('|'));
-      expect(buffer.getCell(11, 4)!.char, equals('|'));
-      expect(buffer.getCell(10, 0)!.char, equals(' ')); // left side child area
-      expect(buffer.getCell(12, 0)!.char, equals(' ')); // right side child area
+      expect(buffer.getCharacter(11, 0), equals('|'));
+      expect(buffer.getCharacter(11, 4), equals('|'));
+      expect(buffer.getCharacter(10, 0), equals(' ')); // left side child area
+      expect(buffer.getCharacter(12, 0), equals(' ')); // right side child area
     });
 
     test('Visual Layout Test - matches golden file', () {
@@ -280,7 +280,7 @@ void main() {
       // Assert only 1 cell contains the thumb char '█'
       var thumbCount = 0;
       for (var y = 0; y < 10; y++) {
-        if (buffer.getCell(0, y)!.char == '█') {
+        if (buffer.getCharacter(0, y) == '█') {
           thumbCount++;
         }
       }

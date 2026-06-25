@@ -152,7 +152,7 @@ void main() {
 
         final buffer1 = Buffer.blank(8, 1);
         element.paint(buffer1, Offset.zero);
-        expect(buffer1.getCell(0, 0)?.char, 'W'); // Starts with 'W' from "Wide"
+        expect(buffer1.getCharacter(0, 0), 'W'); // Starts with 'W' from "Wide"
 
         // Narrow constraints
         final size2 = element.layout(
@@ -168,7 +168,7 @@ void main() {
         final buffer2 = Buffer.blank(4, 1);
         element.paint(buffer2, Offset.zero);
         expect(
-          buffer2.getCell(0, 0)?.char,
+          buffer2.getCharacter(0, 0),
           'N',
         ); // Starts with 'N' from "Narrow"
 
@@ -213,7 +213,7 @@ void main() {
 
         final buffer1 = Buffer.blank(5, 1);
         element.paint(buffer1, Offset.zero);
-        expect(buffer1.getCell(0, 0)?.char, 'A');
+        expect(buffer1.getCharacter(0, 0), 'A');
 
         // 2. Rebuild with same widget type (updates child)
         label = 'B';
@@ -225,7 +225,7 @@ void main() {
 
         final buffer2 = Buffer.blank(5, 1);
         element.paint(buffer2, Offset.zero);
-        expect(buffer2.getCell(0, 0)?.char, 'B');
+        expect(buffer2.getCharacter(0, 0), 'B');
 
         // 3. Update the LayoutBuilder widget itself with a new builder
         var newBuilderCount = 0;
@@ -253,7 +253,7 @@ void main() {
 
         final buffer3 = Buffer.blank(5, 1);
         element.paint(buffer3, Offset.zero);
-        expect(buffer3.getCell(0, 0)?.char, 'C');
+        expect(buffer3.getCharacter(0, 0), 'C');
 
         // 4. Force builder to return different widget type (should unmount old and mount new)
         var differentBuilderCount = 0;
@@ -274,7 +274,7 @@ void main() {
 
         final buffer4 = Buffer.blank(5, 1);
         element.paint(buffer4, Offset.zero);
-        expect(buffer4.getCell(0, 0)?.char, 'L'); // "Leaf"
+        expect(buffer4.getCharacter(0, 0), 'L'); // "Leaf"
 
         // 5. Unmount LayoutBuilder element (unmounts active child subtree)
         expect(element.parent, isNull);

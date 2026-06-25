@@ -1,5 +1,6 @@
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
+import 'package:termui/ui/color.dart';
 
 /// A utility class to serialize a [Buffer] into a styled ANSI string representation.
 class AnsiScreenshot {
@@ -12,14 +13,24 @@ class AnsiScreenshot {
 
     for (var y = 0; y < buffer.height; y++) {
       for (var x = 0; x < buffer.width; x++) {
-        final cell = buffer.getCell(x, y);
-        if (cell == null) continue;
+        final char = buffer.getCharacter(x, y);
+        // Do not skip transparent spaces; they are needed for alignment
 
         // Wide character padding cells are represented by empty strings. Skip them.
-        if (cell.char == '') continue;
+        if (char == '') continue;
 
-        activeStyle = _writeStyleTransition(sb, activeStyle, cell.style);
-        sb.write(cell.char);
+        final currentStyle = Style(
+          foreground: buffer.getForeground(x, y) == 0
+              ? null
+              : Color.argb(buffer.getForeground(x, y)),
+          background: buffer.getBackground(x, y) == 0
+              ? null
+              : Color.argb(buffer.getBackground(x, y)),
+          modifiers: buffer.getModifiers(x, y),
+        );
+
+        activeStyle = _writeStyleTransition(sb, activeStyle, currentStyle);
+        sb.write(char);
       }
 
       if (resetLineEndings && activeStyle != Style.empty) {
