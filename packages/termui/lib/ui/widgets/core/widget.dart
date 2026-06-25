@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:termui/termui.dart';
 
 /// Undocumented public member.
@@ -42,10 +43,28 @@ abstract class StatelessWidget extends Widget {
 
   @override
   int getIntrinsicHeight(int width) {
-    final rootContext = StatelessElement(this)..mount(null);
-    final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
-    rootContext.unmount();
-    return h;
+    // Run within a zone specifying #isMeasuringIntrinsics = true to prevent
+    // temporary mounting of children from polluting or corrupting the global
+    // GlobalKey registry.
+    return runZoned(() {
+      final rootContext = StatelessElement(this)..mount(null);
+      final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
+      rootContext.unmount();
+      return h;
+    }, zoneValues: {#isMeasuringIntrinsics: true});
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    // Run within a zone specifying #isMeasuringIntrinsics = true to prevent
+    // temporary mounting of children from polluting or corrupting the global
+    // GlobalKey registry.
+    return runZoned(() {
+      final rootContext = StatelessElement(this)..mount(null);
+      final w = rootContext.childElement?.widget.getIntrinsicWidth(height) ?? 0;
+      rootContext.unmount();
+      return w;
+    }, zoneValues: {#isMeasuringIntrinsics: true});
   }
 }
 
@@ -62,10 +81,28 @@ abstract class StatefulWidget extends Widget {
 
   @override
   int getIntrinsicHeight(int width) {
-    final rootContext = StatefulElement(this)..mount(null);
-    final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
-    rootContext.unmount();
-    return h;
+    // Run within a zone specifying #isMeasuringIntrinsics = true to prevent
+    // temporary mounting of children from polluting or corrupting the global
+    // GlobalKey registry.
+    return runZoned(() {
+      final rootContext = StatefulElement(this)..mount(null);
+      final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
+      rootContext.unmount();
+      return h;
+    }, zoneValues: {#isMeasuringIntrinsics: true});
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    // Run within a zone specifying #isMeasuringIntrinsics = true to prevent
+    // temporary mounting of children from polluting or corrupting the global
+    // GlobalKey registry.
+    return runZoned(() {
+      final rootContext = StatefulElement(this)..mount(null);
+      final w = rootContext.childElement?.widget.getIntrinsicWidth(height) ?? 0;
+      rootContext.unmount();
+      return w;
+    }, zoneValues: {#isMeasuringIntrinsics: true});
   }
 }
 
@@ -127,6 +164,11 @@ abstract class InheritedWidget extends Widget {
   @override
   int getIntrinsicHeight(int width) {
     return child.getIntrinsicHeight(width);
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    return child.getIntrinsicWidth(height);
   }
 
   /// Whether the framework should notify widgets that inherit from this widget.

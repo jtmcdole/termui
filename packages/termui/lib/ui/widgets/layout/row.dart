@@ -115,10 +115,17 @@ class RowElement extends Element {
         : constraints.maxHeight;
     final area = Rect(0, 0, width, height);
 
-    final rowConstraints = row.children
+    // Map directly over childElements to retrieve their widgets and calculate
+    // constraints, avoiding index desyncs or out-of-bounds errors that could occur
+    // if we relied on zip-indexing between row.children and childElements.
+    final rowConstraints = childElements
         .map(
-          (c) =>
-              getConstraint(c, LayoutDirection.horizontal, crossSize: height),
+          (el) => getConstraint(
+            el.widget,
+            LayoutDirection.horizontal,
+            crossSize: height,
+            element: el,
+          ),
         )
         .toList();
     final rects = splitRect(

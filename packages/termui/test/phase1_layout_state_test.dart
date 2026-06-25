@@ -108,6 +108,27 @@ class ThemeDisplay extends StatelessWidget {
   }
 }
 
+class SimpleStatelessWrapper extends StatelessWidget {
+  final Widget child;
+  const SimpleStatelessWrapper({required this.child, super.key});
+
+  @override
+  Widget build(BuildContext context) => child;
+}
+
+class SimpleStatefulWrapper extends StatefulWidget {
+  final Widget child;
+  const SimpleStatefulWrapper({required this.child, super.key});
+
+  @override
+  State createState() => _SimpleStatefulWrapperState();
+}
+
+class _SimpleStatefulWrapperState extends State<SimpleStatefulWrapper> {
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 void main() {
   group('EdgeInsets Tests', () {
     test('Constructors and properties', () {
@@ -206,6 +227,59 @@ void main() {
       expect(buffer.getCharacter(0, 2), 'B');
       expect(buffer.getCharacter(0, 5), 'B');
     });
+
+    test(
+      'Column handles custom StatelessWidget and StatefulWidget intrinsic size',
+      () {
+        final buffer = Buffer.blank(1, 5);
+        final column = Column([
+          const Expanded(child: TestWidget('A')),
+          const SimpleStatelessWrapper(
+            child: SizedBox(height: 1, child: TestWidget('B')),
+          ),
+          const SimpleStatefulWrapper(
+            child: SizedBox(height: 1, child: TestWidget('C')),
+          ),
+        ]);
+
+        final elementWrapper = ElementWidget(column);
+        elementWrapper.layout(BoxConstraints.tight(const Size(1, 5)));
+        elementWrapper.paint(buffer, Offset.zero);
+
+        expect(buffer.getCharacter(0, 0), 'A');
+        expect(buffer.getCharacter(0, 1), 'A');
+        expect(buffer.getCharacter(0, 2), 'A');
+        expect(buffer.getCharacter(0, 3), 'B');
+        expect(buffer.getCharacter(0, 4), 'C');
+      },
+    );
+
+    test(
+      'Row handles custom StatelessWidget and StatefulWidget intrinsic size',
+      () {
+        final buffer = Buffer.blank(6, 1);
+        final row = Row([
+          const Expanded(child: TestWidget('A')),
+          const SimpleStatelessWrapper(
+            child: SizedBox(width: 1, child: TestWidget('B')),
+          ),
+          const SimpleStatefulWrapper(
+            child: SizedBox(width: 1, child: TestWidget('C')),
+          ),
+        ]);
+
+        final elementWrapper = ElementWidget(row);
+        elementWrapper.layout(BoxConstraints.tight(const Size(6, 1)));
+        elementWrapper.paint(buffer, Offset.zero);
+
+        expect(buffer.getCharacter(0, 0), 'A');
+        expect(buffer.getCharacter(1, 0), 'A');
+        expect(buffer.getCharacter(2, 0), 'A');
+        expect(buffer.getCharacter(3, 0), 'A');
+        expect(buffer.getCharacter(4, 0), 'B');
+        expect(buffer.getCharacter(5, 0), 'C');
+      },
+    );
   });
 
   group('Stack & Positioned Layout Tests', () {

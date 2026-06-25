@@ -74,7 +74,10 @@ abstract class Element implements BuildContext {
     treeDepth = parent != null ? parent.treeDepth + 1 : 0;
     _mounted = true;
     final k = widget.key;
-    if (k is GlobalKey) {
+    // Skip GlobalKey registration if we are measuring intrinsics in a temporary
+    // subtree. Registering here would overwrite the real active element's key
+    // mapping and prematurely remove it from the registry during unmount.
+    if (k is GlobalKey && Zone.current[#isMeasuringIntrinsics] != true) {
       GlobalKey.registry[k] = this;
     }
   }

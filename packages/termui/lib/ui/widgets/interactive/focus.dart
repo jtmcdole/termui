@@ -68,10 +68,16 @@ class FocusState extends State<Focus> {
     super.didChangeDependencies();
     final parentScope = Focus.of(context);
     if (_focusNode.parent != parentScope) {
-      _focusNode.parent?.children.remove(_focusNode);
-      _focusNode.parent = null;
+      final p = _focusNode.parent;
       if (parentScope != null) {
         parentScope.addChild(_focusNode);
+      } else if (p != null) {
+        // Clean up parenting relationship via removeChild instead of directly
+        // mutating the parent's children list, which would bypass state propagation
+        // and leave the parent node in an inconsistent state if this child had focus.
+        p.removeChild(_focusNode);
+      } else if (_focusNode.hasFocus) {
+        _focusNode.unfocus();
       }
     }
   }
@@ -81,7 +87,19 @@ class FocusState extends State<Focus> {
     super.didUpdateWidget(oldWidget);
     if (widget.focusNode != oldWidget.focusNode) {
       final hadPrimaryFocus = FocusManager.instance.primaryFocus == _focusNode;
-      _focusNode.dispose();
+      if (oldWidget.focusNode == null) {
+        _focusNode.dispose();
+      } else {
+        final p = _focusNode.parent;
+        if (p != null) {
+          // Clean up parenting relationship via removeChild instead of directly
+          // mutating the parent's children list, which would bypass state propagation
+          // and leave the parent node in an inconsistent state if this child had focus.
+          p.removeChild(_focusNode);
+        } else if (_focusNode.hasFocus) {
+          _focusNode.unfocus();
+        }
+      }
       _focusNode = widget.focusNode ?? createFocusNode();
       _updateNodeProperties();
       final parentScope = Focus.of(context);
@@ -103,7 +121,18 @@ class FocusState extends State<Focus> {
 
   @override
   void dispose() {
-    _focusNode.dispose();
+    final p = _focusNode.parent;
+    if (p != null) {
+      // Clean up parenting relationship via removeChild instead of directly
+      // mutating the parent's children list, which would bypass state propagation
+      // and leave the parent node in an inconsistent state if this child had focus.
+      p.removeChild(_focusNode);
+    } else if (_focusNode.hasFocus) {
+      _focusNode.unfocus();
+    }
+    if (widget.focusNode == null) {
+      _focusNode.dispose();
+    }
     super.dispose();
   }
 
