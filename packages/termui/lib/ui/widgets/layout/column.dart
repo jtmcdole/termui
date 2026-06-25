@@ -96,9 +96,17 @@ class ColumnElement extends Element {
         : constraints.maxHeight;
     final area = Rect(0, 0, width, height);
 
-    final columnConstraints = column.children
+    // Map directly over childElements to retrieve their widgets and calculate
+    // constraints, avoiding index desyncs or out-of-bounds errors that could occur
+    // if we relied on zip-indexing between column.children and childElements.
+    final columnConstraints = childElements
         .map(
-          (c) => getConstraint(c, LayoutDirection.vertical, crossSize: width),
+          (el) => getConstraint(
+            el.widget,
+            LayoutDirection.vertical,
+            crossSize: width,
+            element: el,
+          ),
         )
         .toList();
     final rects = splitRect(
