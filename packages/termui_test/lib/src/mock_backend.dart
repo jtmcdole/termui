@@ -1,17 +1,17 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/termui.dart';
 
 /// A mock implementation of [TerminalBackend] for testing.
 ///
 /// It intercepts stdout writes, stores them in a buffer, and allows pushing
 /// raw ANSI/SGR escape sequences into the stdin/rawInput stream.
-class MockTerminalBackend implements TerminalBackend {
+class MockTerminalBackend implements BufferedTerminalBackend {
   @override
   final bool isWindows;
 
   /// The active screen buffer painted by the prompt runner.
+  @override
   Buffer? buffer;
 
   final StreamController<List<int>> _rawInputController =

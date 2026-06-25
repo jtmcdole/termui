@@ -2,7 +2,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 /// A widget for selecting a numeric value using '<' and '>' buttons.
-class NumberSelector extends Widget {
+class NumberSelector extends Widget implements MouseEventHandler {
   /// The text label displayed before the selector.
   final String label;
 
@@ -52,6 +52,7 @@ class NumberSelector extends Widget {
   }
 
   /// Interprets mouse interactions to increment or decrement the selector.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type != MouseEventType.press) return;
     if (localY != 0) return;

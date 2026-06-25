@@ -1,4 +1,5 @@
 import 'dart:math';
+import '../../ui/buffer.dart';
 
 /// An abstract base class for native terminal backend implementations.
 ///
@@ -28,4 +29,11 @@ abstract class TerminalBackend {
 
   /// Cleans up resources.
   void dispose();
+}
+
+/// A terminal backend that maintains a rendering buffer.
+abstract interface class BufferedTerminalBackend implements TerminalBackend {
+  /// The buffer used by the backend.
+  Buffer? get buffer;
+  set buffer(Buffer? value);
 }
