@@ -1228,4 +1228,7 @@ class MarqueeRenderer implements SceneRenderer {
     // Use writeString to handle double-width character properly
     _buffer!.writeString(width ~/ 2, height ~/ 2, '🔎', style);
   }
+
+  @override
+  void dispose() {}
 }
