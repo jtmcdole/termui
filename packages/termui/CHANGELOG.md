@@ -1,3 +1,22 @@
+## 0.6.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**(termui): simplify Stack layout constraints calculation with pattern matching.
+ - **REFACTOR**(termui): improve SceneRenderer lifecycle, memory management, and layout performance.
+ - **REFACTOR**(core): remove legacy `cells` property and optimize rendering.
+ - **PERF**(renderer): eliminate hot-path style allocations and add ASCII fast-path.
+ - **PERF**(ui): optimize terminal effects to avoid Cell and Style allocations.
+ - **PERF**(core): optimize buffer storage with typed arrays and modularize pointer absorption.
+ - **FIX**(layout): support dynamic offset calculations for positioned children in Stack.
+ - **FIX**(layout): resolve implicit FlexConstraint(1) on stateful and stateless widgets.
+ - **FIX**(termui): correct intrinsic size measurement and avoid layout/focus desyncs.
+ - **FEAT**(widgets): add custom border presets and border gradients.
+ - **FEAT**(termui): add reactive rendering support and refactor mouse event handling.
+ - **FEAT**(layout): implement terminal-native FittedBox.
+ - **FEAT**(ui): implement terminal effects pipeline and dimming barrier.
+ - **BREAKING** **PERF**(core): unify buffer attributes into flat array and remove Cell.
+
 ## 0.5.0
 
 > Note: This release has breaking changes.

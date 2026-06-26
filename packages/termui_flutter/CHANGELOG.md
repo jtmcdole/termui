@@ -1,3 +1,10 @@
+## 0.6.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**(core): remove legacy `cells` property and optimize rendering.
+ - **BREAKING** **PERF**(core): unify buffer attributes into flat array and remove Cell.
+
 ## 0.5.0
 
 > Note: This release has breaking changes.

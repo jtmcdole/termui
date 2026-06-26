@@ -1,3 +1,7 @@
+## 0.2.2
+
+ - **FEAT**(termui): add reactive rendering support and refactor mouse event handling.
+
 ## 0.2.1
 
  - **REFACTOR**: simplify imports by using termui barrel file.

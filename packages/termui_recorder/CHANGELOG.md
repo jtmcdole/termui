@@ -1,3 +1,10 @@
+## 0.5.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(layout): resolve implicit FlexConstraint(1) on stateful and stateless widgets.
+ - **BREAKING** **PERF**(core): unify buffer attributes into flat array and remove Cell.
+
 ## 0.4.0
 
 > Note: This release has breaking changes.
