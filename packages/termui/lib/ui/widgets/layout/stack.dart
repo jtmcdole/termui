@@ -133,89 +133,63 @@ class StackElement extends Element {
       final childWidget = childEl.widget;
 
       if (childWidget is Positioned) {
-        int minChildW;
-        int maxChildW;
-        int? childX;
+        final (minChildW, maxChildW, childX) = switch ((
+          childWidget.isCentered,
+          childWidget.left,
+          childWidget.right,
+          childWidget.width,
+        )) {
+          (true, _, _, int w) => (w, w, null as int?),
+          (true, _, _, null) => (0, resolvedW, null as int?),
+          (false, int left, int right, _) => (
+            (resolvedW - left - right) < 0 ? 0 : resolvedW - left - right,
+            (resolvedW - left - right) < 0 ? 0 : resolvedW - left - right,
+            left as int?,
+          ),
+          (false, int left, null, int w) => (w, w, left as int?),
+          (false, null, int right, int w) => (w, w, resolvedW - right - w),
+          (false, int left, null, null) => (
+            0,
+            (resolvedW - left) < 0 ? 0 : resolvedW - left,
+            left as int?,
+          ),
+          (false, null, int right, null) => (
+            0,
+            (resolvedW - right) < 0 ? 0 : resolvedW - right,
+            null as int?,
+          ),
+          (false, null, null, int w) => (w, w, 0 as int?),
+          (false, null, null, null) => (0, resolvedW, 0 as int?),
+        };
 
-        if (childWidget.isCentered) {
-          if (childWidget.width != null) {
-            minChildW = maxChildW = childWidget.width!;
-          } else {
-            minChildW = 0;
-            maxChildW = resolvedW;
-          }
-        } else {
-          if (childWidget.left != null && childWidget.right != null) {
-            final w = resolvedW - childWidget.left! - childWidget.right!;
-            minChildW = maxChildW = w < 0 ? 0 : w;
-            childX = childWidget.left!;
-          } else if (childWidget.left != null && childWidget.width != null) {
-            minChildW = maxChildW = childWidget.width!;
-            childX = childWidget.left!;
-          } else if (childWidget.right != null && childWidget.width != null) {
-            minChildW = maxChildW = childWidget.width!;
-            childX = resolvedW - childWidget.right! - childWidget.width!;
-          } else if (childWidget.left != null) {
-            minChildW = 0;
-            final w = resolvedW - childWidget.left!;
-            maxChildW = w < 0 ? 0 : w;
-            childX = childWidget.left!;
-          } else if (childWidget.right != null) {
-            minChildW = 0;
-            final w = resolvedW - childWidget.right!;
-            maxChildW = w < 0 ? 0 : w;
-            childX = null;
-          } else if (childWidget.width != null) {
-            minChildW = maxChildW = childWidget.width!;
-            childX = 0;
-          } else {
-            minChildW = 0;
-            maxChildW = resolvedW;
-            childX = 0;
-          }
-        }
-
-        int minChildH;
-        int maxChildH;
-        int? childY;
-
-        if (childWidget.isCentered) {
-          if (childWidget.height != null) {
-            minChildH = maxChildH = childWidget.height!;
-          } else {
-            minChildH = 0;
-            maxChildH = resolvedH;
-          }
-        } else {
-          if (childWidget.top != null && childWidget.bottom != null) {
-            final h = resolvedH - childWidget.top! - childWidget.bottom!;
-            minChildH = maxChildH = h < 0 ? 0 : h;
-            childY = childWidget.top!;
-          } else if (childWidget.top != null && childWidget.height != null) {
-            minChildH = maxChildH = childWidget.height!;
-            childY = childWidget.top!;
-          } else if (childWidget.bottom != null && childWidget.height != null) {
-            minChildH = maxChildH = childWidget.height!;
-            childY = resolvedH - childWidget.bottom! - childWidget.height!;
-          } else if (childWidget.top != null) {
-            minChildH = 0;
-            final h = resolvedH - childWidget.top!;
-            maxChildH = h < 0 ? 0 : h;
-            childY = childWidget.top!;
-          } else if (childWidget.bottom != null) {
-            minChildH = 0;
-            final h = resolvedH - childWidget.bottom!;
-            maxChildH = h < 0 ? 0 : h;
-            childY = null;
-          } else if (childWidget.height != null) {
-            minChildH = maxChildH = childWidget.height!;
-            childY = 0;
-          } else {
-            minChildH = 0;
-            maxChildH = resolvedH;
-            childY = 0;
-          }
-        }
+        final (minChildH, maxChildH, childY) = switch ((
+          childWidget.isCentered,
+          childWidget.top,
+          childWidget.bottom,
+          childWidget.height,
+        )) {
+          (true, _, _, int h) => (h, h, null as int?),
+          (true, _, _, null) => (0, resolvedH, null as int?),
+          (false, int top, int bottom, _) => (
+            (resolvedH - top - bottom) < 0 ? 0 : resolvedH - top - bottom,
+            (resolvedH - top - bottom) < 0 ? 0 : resolvedH - top - bottom,
+            top as int?,
+          ),
+          (false, int top, null, int h) => (h, h, top as int?),
+          (false, null, int bottom, int h) => (h, h, resolvedH - bottom - h),
+          (false, int top, null, null) => (
+            0,
+            (resolvedH - top) < 0 ? 0 : resolvedH - top,
+            top as int?,
+          ),
+          (false, null, int bottom, null) => (
+            0,
+            (resolvedH - bottom) < 0 ? 0 : resolvedH - bottom,
+            null as int?,
+          ),
+          (false, null, null, int h) => (h, h, 0 as int?),
+          (false, null, null, null) => (0, resolvedH, 0 as int?),
+        };
 
         final childSize = childEl.layout(
           BoxConstraints(
@@ -226,15 +200,15 @@ class StackElement extends Element {
           ),
         );
 
-        if (childWidget.isCentered) {
-          childX = (resolvedW - childSize.width) ~/ 2;
-          childY = (resolvedH - childSize.height) ~/ 2;
-        } else {
-          childX ??= resolvedW - childWidget.right! - childSize.width;
-          childY ??= resolvedH - childWidget.bottom! - childSize.height;
-        }
+        final finalX = childWidget.isCentered
+            ? (resolvedW - childSize.width) ~/ 2
+            : (childX ?? resolvedW - childWidget.right! - childSize.width);
 
-        childEl.relativeOffset = Offset(childX, childY);
+        final finalY = childWidget.isCentered
+            ? (resolvedH - childSize.height) ~/ 2
+            : (childY ?? resolvedH - childWidget.bottom! - childSize.height);
+
+        childEl.relativeOffset = Offset(finalX, finalY);
       }
     }
 
