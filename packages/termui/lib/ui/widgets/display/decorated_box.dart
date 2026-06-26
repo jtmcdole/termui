@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// Represents the character set and style configuration used to draw a box border.
@@ -34,7 +35,7 @@ import 'package:termui/termui.dart';
 /// | `topRightChar` | [String] | Character used for the top-right corner. |
 /// | `bottomLeftChar` | [String] | Character used for the bottom-left corner. |
 /// | `bottomRightChar` | [String] | Character used for the bottom-right corner. |
-class Border {
+final class Border {
   /// Style attributes applied to the border cells.
   final Style style;
 
@@ -105,7 +106,20 @@ class Border {
     bottomRightChar: '╝',
   );
 
+  /// Heavy-line border.
+  static const Border heavy = Border(
+    topChar: '━',
+    bottomChar: '━',
+    leftChar: '┃',
+    rightChar: '┃',
+    topLeftChar: '┏',
+    topRightChar: '┓',
+    bottomLeftChar: '┗',
+    bottomRightChar: '┛',
+  );
+
   /// Muted rounded corners border.
+
   static const Border rounded = Border(
     topLeftChar: '╭',
     topRightChar: '╮',
@@ -124,11 +138,145 @@ class Border {
     bottomLeftChar: '+',
     bottomRightChar: '+',
   );
+
+  /// Light dashed border.
+  static const Border dashed = Border(
+    topChar: '╌',
+    bottomChar: '╌',
+    leftChar: '╎',
+    rightChar: '╎',
+    topLeftChar: '┌',
+    topRightChar: '┐',
+    bottomLeftChar: '└',
+    bottomRightChar: '┘',
+  );
+
+  /// Solid retro block border.
+  static const Border block = Border(
+    topChar: '█',
+    bottomChar: '█',
+    leftChar: '█',
+    rightChar: '█',
+    topLeftChar: '█',
+    topRightChar: '█',
+    bottomLeftChar: '█',
+    bottomRightChar: '█',
+  );
+
+  /// Light shaded block border.
+  static const Border shadedLight = Border(
+    topChar: '░',
+    bottomChar: '░',
+    leftChar: '░',
+    rightChar: '░',
+    topLeftChar: '░',
+    topRightChar: '░',
+    bottomLeftChar: '░',
+    bottomRightChar: '░',
+  );
+
+  /// Medium shaded block border.
+  static const Border shadedMedium = Border(
+    topChar: '▒',
+    bottomChar: '▒',
+    leftChar: '▒',
+    rightChar: '▒',
+    topLeftChar: '▒',
+    topRightChar: '▒',
+    bottomLeftChar: '▒',
+    bottomRightChar: '▒',
+  );
+
+  /// Dark shaded block border.
+  static const Border shadedDark = Border(
+    topChar: '▓',
+    bottomChar: '▓',
+    leftChar: '▓',
+    rightChar: '▓',
+    topLeftChar: '▓',
+    topRightChar: '▓',
+    bottomLeftChar: '▓',
+    bottomRightChar: '▓',
+  );
+
+  /// Space-saving half-block border.
+  static const Border halfBlock = Border(
+    topChar: '▀',
+    bottomChar: '▄',
+    leftChar: '▌',
+    rightChar: '▐',
+    topLeftChar: '▛',
+    topRightChar: '▜',
+    bottomLeftChar: '▙',
+    bottomRightChar: '▟',
+  );
+
+  /// Diagonal slash border (top-right to bottom-left).
+  static const Border diagonalSlash = Border(
+    topChar: '▞',
+    bottomChar: '▞',
+    leftChar: '▞',
+    rightChar: '▞',
+    topLeftChar: '▞',
+    topRightChar: '▞',
+    bottomLeftChar: '▞',
+    bottomRightChar: '▞',
+  );
+
+  /// Diagonal backslash border (top-left to bottom-right).
+  static const Border diagonalBackslash = Border(
+    topChar: '▚',
+    bottomChar: '▚',
+    leftChar: '▚',
+    rightChar: '▚',
+    topLeftChar: '▚',
+    topRightChar: '▚',
+    bottomLeftChar: '▚',
+    bottomRightChar: '▚',
+  );
+
+  /// Border using quadrant diagonals for the corners.
+  static const Border quadDiagonals = Border(
+    topChar: '▀',
+    bottomChar: '▄',
+    leftChar: '▌',
+    rightChar: '▐',
+    topLeftChar: '▞',
+    topRightChar: '▚',
+    bottomLeftChar: '▚',
+    bottomRightChar: '▞',
+  );
+
+  /// Border using single quadrants for corners, creating an inner padding look.
+  static const Border quadPadding = Border(
+    topChar: '▀',
+    bottomChar: '▄',
+    leftChar: '▌',
+    rightChar: '▐',
+    topLeftChar: '▘',
+    topRightChar: '▝',
+    bottomLeftChar: '▖',
+    bottomRightChar: '▗',
+  );
+
+  /// Border using Braille patterns for a high-density, dot-matrix outline.
+  static const Border braille = Border(
+    topChar: '⠉',
+    bottomChar: '⣀',
+    leftChar: '⡇',
+    rightChar: '⢸',
+    topLeftChar: '⡏',
+    topRightChar: '⢹',
+    bottomLeftChar: '⣇',
+    bottomRightChar: '⣸',
+  );
 }
 
 /// Defines the visual decoration style (background and borders) for a box.
 ///
-/// Consists of an optional background style and an optional [Border].
+/// Consists of an optional background style, background color, and an optional [Border].
+/// It also supports linear color gradients on the borders using [borderStartColor],
+/// [borderEndColor], and [borderGradientAngle].
 ///
 /// ### Example Usage
 ///
@@ -136,6 +284,9 @@ class Border {
 /// const decoration = BoxDecoration(
 ///   backgroundStyle: Style(background: Color(0xFF0000FF)),
 ///   border: Border.rounded,
+///   borderStartColor: Color(0, 240, 200), // Teal start
+///   borderEndColor: Color(180, 40, 250),  // Purple end
+///   borderGradientAngle: 0.785,            // ~45 degrees diagonal gradient
 /// );
 /// ```
 ///
@@ -144,8 +295,12 @@ class Border {
 /// | Property | Type | Description |
 /// | :--- | :--- | :--- |
 /// | `backgroundStyle`| [Style]? | The style (e.g. color) used to paint background cells. |
+/// | `backgroundColor`| [Color]? | The background color. |
 /// | `border` | [Border]? | The border style configuration. |
-class BoxDecoration {
+/// | `borderStartColor`| [Color]? | The starting color of the border gradient. |
+/// | `borderEndColor`| [Color]? | The ending color of the border gradient. |
+/// | `borderGradientAngle`| [double] | The angle of the border gradient in radians (defaults to 0.0). |
+final class BoxDecoration {
   /// The style used to paint the background.
   final Style? backgroundStyle;
 
@@ -155,11 +310,23 @@ class BoxDecoration {
   /// The border configuration.
   final Border? border;
 
+  /// Starting color for horizontal border gradients.
+  final Color? borderStartColor;
+
+  /// Ending color for horizontal border gradients.
+  final Color? borderEndColor;
+
+  /// The angle of the border gradient in radians (defaults to 0.0, horizontal).
+  final double borderGradientAngle;
+
   /// Creates a new [BoxDecoration].
   const BoxDecoration({
     this.backgroundStyle,
     this.backgroundColor,
     this.border,
+    this.borderStartColor,
+    this.borderEndColor,
+    this.borderGradientAngle = 0.0,
   });
 }
 
@@ -206,6 +373,14 @@ class DecoratedBoxElement extends SingleChildElement {
   int _cachedLeftOffset = 0;
   int _cachedRightOffset = 0;
 
+  // Cached char widths to prevent measuring during paint
+  int _topCharWidth = 0;
+  int _bottomCharWidth = 0;
+  int _topLeftCharWidth = 0;
+  int _topRightCharWidth = 0;
+  int _bottomLeftCharWidth = 0;
+  int _bottomRightCharWidth = 0;
+
   /// Creates a decoratedbox element for a [DecoratedBox] widget.
   DecoratedBoxElement(DecoratedBox super.widget);
 
@@ -221,42 +396,57 @@ class DecoratedBoxElement extends SingleChildElement {
     _cachedBottomOffset = 0;
     _cachedLeftOffset = 0;
     _cachedRightOffset = 0;
+    _topCharWidth = 0;
+    _bottomCharWidth = 0;
+    _topLeftCharWidth = 0;
+    _topRightCharWidth = 0;
+    _bottomLeftCharWidth = 0;
+    _bottomRightCharWidth = 0;
 
     if (border != null) {
-      if (border.topChar.isNotEmpty) {
+      _topCharWidth = measureStringWidth(border.topChar);
+      _bottomCharWidth = measureStringWidth(border.bottomChar);
+      _topLeftCharWidth = measureStringWidth(border.topLeftChar);
+      _topRightCharWidth = measureStringWidth(border.topRightChar);
+      _bottomLeftCharWidth = measureStringWidth(border.bottomLeftChar);
+      _bottomRightCharWidth = measureStringWidth(border.bottomRightChar);
+
+      if (_topCharWidth > 0 ||
+          _topLeftCharWidth > 0 ||
+          _topRightCharWidth > 0) {
         _cachedTopOffset = 1;
       }
-      if (border.bottomChar.isNotEmpty) {
+      if (_bottomCharWidth > 0 ||
+          _bottomLeftCharWidth > 0 ||
+          _bottomRightCharWidth > 0) {
         _cachedBottomOffset = 1;
       }
-      if (border.leftChar.isNotEmpty) {
-        _cachedLeftOffset = 1;
-      }
-      if (border.rightChar.isNotEmpty) {
-        _cachedRightOffset = 1;
-      }
+
+      _cachedLeftOffset = [
+        measureStringWidth(border.leftChar),
+        _topLeftCharWidth,
+        _bottomLeftCharWidth,
+      ].reduce(max);
+
+      _cachedRightOffset = [
+        measureStringWidth(border.rightChar),
+        _topRightCharWidth,
+        _bottomRightCharWidth,
+      ].reduce(max);
     }
 
     final doubleWidth = _cachedLeftOffset + _cachedRightOffset;
     final doubleHeight = _cachedTopOffset + _cachedBottomOffset;
 
     final childConstraints = BoxConstraints(
-      minWidth: constraints.minWidth - doubleWidth < 0
-          ? 0
-          : constraints.minWidth - doubleWidth,
+      minWidth: max(0, constraints.minWidth - doubleWidth),
       maxWidth: constraints.maxWidth == BoxConstraints.infinity
           ? BoxConstraints.infinity
-          : (constraints.maxWidth - doubleWidth < 0
-                ? 0
-                : constraints.maxWidth - doubleWidth),
-      minHeight: constraints.minHeight - doubleHeight < 0
-          ? 0
-          : constraints.minHeight - doubleHeight,
+          : max(0, constraints.maxWidth - doubleWidth),
+      minHeight: max(0, constraints.minHeight - doubleHeight),
       maxHeight: constraints.maxHeight == BoxConstraints.infinity
           ? BoxConstraints.infinity
-          : (constraints.maxHeight - doubleHeight < 0
-                ? 0
-                : constraints.maxHeight - doubleHeight),
+          : max(0, constraints.maxHeight - doubleHeight),
     );
 
     if (childElement != null) {
@@ -265,13 +455,12 @@ class DecoratedBoxElement extends SingleChildElement {
         _cachedLeftOffset,
         _cachedTopOffset,
       );
-      return Size(
-        childSize.width + doubleWidth,
-        childSize.height + doubleHeight,
+      return constraints.constrain(
+        Size(childSize.width + doubleWidth, childSize.height + doubleHeight),
       );
     }
 
-    return Size(doubleWidth, doubleHeight);
+    return constraints.constrain(Size(doubleWidth, doubleHeight));
   }
 
   @override
@@ -279,129 +468,237 @@ class DecoratedBoxElement extends SingleChildElement {
     final db = widget as DecoratedBox;
     final area = Rect(offset.dx, offset.dy, size.width, size.height);
 
-    // Fill background if defined
+    // Merge backgroundStyle and backgroundColor correctly
     var bgStyle = db.decoration.backgroundStyle;
-    if (bgStyle == null && db.decoration.backgroundColor != null) {
-      bgStyle = Style(background: db.decoration.backgroundColor);
+    if (db.decoration.backgroundColor != null) {
+      final fallbackBg = Style(background: db.decoration.backgroundColor);
+      bgStyle = bgStyle != null ? fallbackBg.merge(bgStyle) : fallbackBg;
     }
+
     if (bgStyle != null) {
+      final bgFg = bgStyle.foreground?.argb;
+      final bgBg = bgStyle.background?.argb;
+      final bgModifiers = bgStyle.modifiers;
+      // Fill background
       for (var y = 0; y < area.height; y++) {
+        final drawY = area.y + y;
         for (var x = 0; x < area.width; x++) {
           buffer.setAttributes(
             area.x + x,
-            area.y + y,
+            drawY,
             char: ' ',
-            fg: bgStyle.foreground?.argb,
-            bg: bgStyle.background?.argb,
-            modifiers: bgStyle.modifiers,
+            fg: bgFg,
+            bg: bgBg,
+            modifiers: bgModifiers,
           );
         }
       }
     }
 
-    // Draw border if defined
     final border = db.decoration.border;
-
     if (border != null) {
       final style = bgStyle != null
           ? bgStyle.merge(border.style)
           : border.style;
 
+      // Extract colors for gradient check
+      final borderStart = db.decoration.borderStartColor;
+      final borderEnd = db.decoration.borderEndColor;
+      final hasGradient = borderStart != null && borderEnd != null;
+      final angle = db.decoration.borderGradientAngle;
+
+      double cosA = 0.0;
+      double sinA = 0.0;
+      double pMin = 0.0;
+      double pRange = 0.0;
+      int startR = 0, startG = 0, startB = 0;
+      int diffR = 0, diffG = 0, diffB = 0;
+
+      if (hasGradient) {
+        final start = borderStart;
+        final end = borderEnd;
+        startR = start.r;
+        startG = start.g;
+        startB = start.b;
+        diffR = end.r - startR;
+        diffG = end.g - startG;
+        diffB = end.b - startB;
+      }
+
+      if (hasGradient && angle != 0.0) {
+        cosA = cos(angle);
+        sinA = sin(angle);
+        final dx = size.width - 1.0;
+        final dy = size.height - 1.0;
+        final p00 = 0.0;
+        final pW0 = dx * cosA;
+        final p0H = dy * sinA;
+        final pWH = dx * cosA + dy * sinA;
+
+        pMin = p00;
+        if (pW0 < pMin) pMin = pW0;
+        if (p0H < pMin) pMin = p0H;
+        if (pWH < pMin) pMin = pWH;
+
+        var pMax = p00;
+        if (pW0 > pMax) pMax = pW0;
+        if (p0H > pMax) pMax = p0H;
+        if (pWH > pMax) pMax = pWH;
+
+        pRange = pMax - pMin;
+      }
+
+      Color? getGradientColor(int x, int y) {
+        if (!hasGradient) return null;
+        final w = size.width;
+
+        if (angle == 0.0) {
+          if (w <= 1) return borderStart;
+          final ratio = x / (w - 1);
+          final r = (startR + diffR * ratio).round().clamp(0, 255);
+          final g = (startG + diffG * ratio).round().clamp(0, 255);
+          final b = (startB + diffB * ratio).round().clamp(0, 255);
+          return Color(r, g, b);
+        }
+
+        if (pRange.abs() < 1e-5) return borderStart;
+        final proj = x * cosA + y * sinA;
+        final ratio = (proj - pMin) / pRange;
+        final r = (startR + diffR * ratio).round().clamp(0, 255);
+        final g = (startG + diffG * ratio).round().clamp(0, 255);
+        final b = (startB + diffB * ratio).round().clamp(0, 255);
+        return Color(r, g, b);
+      }
+
+      // Optimisation: Cache style objects for horizontal gradients (angle == 0.0)
+      List<Style>? horizontalStyleCache;
+      if (hasGradient && angle == 0.0) {
+        horizontalStyleCache = List.generate(size.width, (x) {
+          final gColor = getGradientColor(x, 0);
+          return Style(
+            foreground: gColor,
+            background: style.background,
+            modifiers: style.modifiers,
+          );
+        });
+      }
+
+      Style getCellStyle(int x, int y) {
+        if (!hasGradient) return style;
+        if (angle == 0.0 && horizontalStyleCache != null) {
+          return horizontalStyleCache[x];
+        }
+        final gColor = getGradientColor(x, y);
+        if (gColor != null) {
+          return Style(
+            foreground: gColor,
+            background: style.background,
+            modifiers: style.modifiers,
+          );
+        }
+        return style;
+      }
+
       // Draw horizontal lines (excluding corners)
       if (border.topChar.isNotEmpty && area.height > 0) {
-        for (var x = 1; x < area.width - 1; x++) {
-          buffer.setAttributes(
+        final step = max(1, _topCharWidth);
+        for (
+          var x = _cachedLeftOffset;
+          x < area.width - _cachedRightOffset;
+          x += step
+        ) {
+          buffer.writeString(
             area.x + x,
             area.y,
-            char: border.topChar,
-            fg: style.foreground?.argb,
-            bg: style.background?.argb,
-            modifiers: style.modifiers,
+            border.topChar,
+            getCellStyle(x, 0),
           );
         }
       }
       if (border.bottomChar.isNotEmpty && area.height > 1) {
-        for (var x = 1; x < area.width - 1; x++) {
-          buffer.setAttributes(
+        final step = max(1, _bottomCharWidth);
+        for (
+          var x = _cachedLeftOffset;
+          x < area.width - _cachedRightOffset;
+          x += step
+        ) {
+          buffer.writeString(
             area.x + x,
             area.y + area.height - 1,
-            char: border.bottomChar,
-            fg: style.foreground?.argb,
-            bg: style.background?.argb,
-            modifiers: style.modifiers,
+            border.bottomChar,
+            getCellStyle(x, area.height - 1),
           );
         }
       }
 
       // Draw vertical lines (excluding corners)
       if (border.leftChar.isNotEmpty && area.width > 0) {
-        for (var y = 1; y < area.height - 1; y++) {
-          buffer.setAttributes(
+        for (
+          var y = _cachedTopOffset;
+          y < area.height - _cachedBottomOffset;
+          y++
+        ) {
+          buffer.writeString(
             area.x,
             area.y + y,
-            char: border.leftChar,
-            fg: style.foreground?.argb,
-            bg: style.background?.argb,
-            modifiers: style.modifiers,
+            border.leftChar,
+            getCellStyle(0, y),
           );
         }
       }
-      if (border.rightChar.isNotEmpty && area.width > 1) {
-        for (var y = 1; y < area.height - 1; y++) {
-          buffer.setAttributes(
-            area.x + area.width - 1,
+      if (border.rightChar.isNotEmpty &&
+          area.width > _cachedLeftOffset + _cachedRightOffset) {
+        for (
+          var y = _cachedTopOffset;
+          y < area.height - _cachedBottomOffset;
+          y++
+        ) {
+          buffer.writeString(
+            area.x + area.width - _cachedRightOffset,
             area.y + y,
-            char: border.rightChar,
-            fg: style.foreground?.argb,
-            bg: style.background?.argb,
-            modifiers: style.modifiers,
+            border.rightChar,
+            getCellStyle(area.width - _cachedRightOffset, y),
           );
         }
       }
 
       // Draw corners
       if (border.topLeftChar.isNotEmpty && area.width > 0 && area.height > 0) {
-        buffer.setAttributes(
+        buffer.writeString(
           area.x,
           area.y,
-          char: border.topLeftChar,
-          fg: style.foreground?.argb,
-          bg: style.background?.argb,
-          modifiers: style.modifiers,
+          border.topLeftChar,
+          getCellStyle(0, 0),
         );
       }
-      if (border.topRightChar.isNotEmpty && area.width > 1 && area.height > 0) {
-        buffer.setAttributes(
-          area.x + area.width - 1,
+      if (border.topRightChar.isNotEmpty &&
+          area.width > _cachedLeftOffset + _cachedRightOffset &&
+          area.height > 0) {
+        buffer.writeString(
+          area.x + area.width - _topRightCharWidth,
           area.y,
-          char: border.topRightChar,
-          fg: style.foreground?.argb,
-          bg: style.background?.argb,
-          modifiers: style.modifiers,
+          border.topRightChar,
+          getCellStyle(area.width - _topRightCharWidth, 0),
         );
       }
       if (border.bottomLeftChar.isNotEmpty &&
           area.width > 0 &&
-          area.height > 1) {
-        buffer.setAttributes(
+          area.height > _cachedTopOffset + _cachedBottomOffset) {
+        buffer.writeString(
           area.x,
           area.y + area.height - 1,
-          char: border.bottomLeftChar,
-          fg: style.foreground?.argb,
-          bg: style.background?.argb,
-          modifiers: style.modifiers,
+          border.bottomLeftChar,
+          getCellStyle(0, area.height - 1),
         );
       }
       if (border.bottomRightChar.isNotEmpty &&
-          area.width > 1 &&
-          area.height > 1) {
-        buffer.setAttributes(
-          area.x + area.width - 1,
+          area.width > _cachedLeftOffset + _cachedRightOffset &&
+          area.height > _cachedTopOffset + _cachedBottomOffset) {
+        buffer.writeString(
+          area.x + area.width - _bottomRightCharWidth,
           area.y + area.height - 1,
-          char: border.bottomRightChar,
-          fg: style.foreground?.argb,
-          bg: style.background?.argb,
-          modifiers: style.modifiers,
+          border.bottomRightChar,
+          getCellStyle(area.width - _bottomRightCharWidth, area.height - 1),
         );
       }
     }
