@@ -59,6 +59,56 @@ class TestWidgetElement extends Element {
   }
 }
 
+class LabelWidget extends Widget {
+  final String label;
+  const LabelWidget(this.label);
+
+  @override
+  Element createElement() => LabelWidgetElement(this);
+}
+
+class LabelWidgetElement extends Element {
+  LabelWidgetElement(LabelWidget super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final w = constraints.maxWidth == BoxConstraints.infinity
+        ? 0
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
+        ? 0
+        : constraints.maxHeight;
+    return constraints.constrain(Size(w, h));
+  }
+
+  @override
+  void performPaint(Buffer buffer, Offset offset) {
+    final w = widget as LabelWidget;
+    for (var y = 0; y < size.height; y++) {
+      for (var x = 0; x < size.width; x++) {
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy + y,
+          char: ' ',
+          modifiers: 0,
+        );
+      }
+    }
+    final labelX = (size.width - w.label.length) ~/ 2;
+    final labelY = size.height ~/ 2;
+    if (labelX >= 0 && labelY >= 0) {
+      for (var i = 0; i < w.label.length; i++) {
+        buffer.setAttributes(
+          offset.dx + labelX + i,
+          offset.dy + labelY,
+          char: w.label[i],
+          modifiers: 0,
+        );
+      }
+    }
+  }
+}
+
 void main() {
   group('Theme and ThemeData Tests', () {
     test('Default Theme (dark) falls back if none provided', () {
@@ -108,10 +158,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/decorated_box_single.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/decorated_box_single.ansi'),
       );
     });
 
@@ -128,10 +175,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/decorated_box_double.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/decorated_box_double.ansi'),
       );
     });
 
@@ -148,10 +192,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/decorated_box_rounded.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/decorated_box_rounded.ansi'),
       );
     });
 
@@ -168,11 +209,373 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/decorated_box_ascii.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/decorated_box_ascii.ansi'),
       );
+    });
+
+    test('Renders Border.heavy', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.heavy),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_heavy.ansi'),
+      );
+    });
+
+    test('Renders Border.dashed', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.dashed),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_dashed.ansi'),
+      );
+    });
+
+    test('Renders Border.block', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.block),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_block.ansi'),
+      );
+    });
+
+    test('Renders Border.shadedLight', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.shadedLight),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_shaded_light.ansi'),
+      );
+    });
+
+    test('Renders Border.shadedMedium', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.shadedMedium),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_shaded_medium.ansi'),
+      );
+    });
+
+    test('Renders Border.shadedDark', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.shadedDark),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_shaded_dark.ansi'),
+      );
+    });
+
+    test('Renders Border.halfBlock', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.halfBlock),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_half_block.ansi'),
+      );
+    });
+
+    test('Renders Border.diagonalSlash', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.diagonalSlash),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_diagonal_slash.ansi'),
+      );
+    });
+
+    test('Renders Border.diagonalBackslash', () {
+      final buffer = Buffer.blank(3, 3);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.diagonalBackslash),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(3, 3)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_diagonal_backslash.ansi'),
+      );
+    });
+
+    test('Renders Border.quadDiagonals', () {
+      final buffer = Buffer.blank(4, 4);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.quadDiagonals),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(4, 4)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_quad_diagonals.ansi'),
+      );
+    });
+
+    test('Renders Border.quadPadding', () {
+      final buffer = Buffer.blank(4, 4);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.quadPadding),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(4, 4)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_quad_padding.ansi'),
+      );
+    });
+
+    test('Renders Border.braille', () {
+      final buffer = Buffer.blank(4, 4);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(border: Border.braille),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(4, 4)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_braille.ansi'),
+      );
+    });
+
+    test('Renders emoji border and matches golden', () {
+      final buffer = Buffer.blank(6, 6);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border(
+            topChar: '😀',
+            bottomChar: '😁',
+            leftChar: '😂',
+            rightChar: '😃',
+            topLeftChar: '🤩',
+            topRightChar: '🥳',
+            bottomLeftChar: '😇',
+            bottomRightChar: '🤠',
+          ),
+        ),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(6, 6)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_emoji.ansi'),
+      );
+    });
+
+    test('Renders Neon Gradient shaded border', () {
+      final buffer = Buffer.blank(10, 4);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border.shadedLight,
+          borderStartColor: Color(0, 240, 200),
+          borderEndColor: Color(180, 40, 250),
+        ),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(10, 4)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_neon_gradient.ansi'),
+      );
+    });
+
+    test('Renders diagonal Neon Gradient border', () {
+      final buffer = Buffer.blank(10, 4);
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border.shadedLight,
+          borderStartColor: Color(0, 240, 200),
+          borderEndColor: Color(180, 40, 250),
+          borderGradientAngle: 0.785, // ~45 degrees diagonal gradient
+        ),
+        child: const TestWidget(' '),
+      );
+
+      final wrapper = ElementWidget(widget);
+      wrapper.layout(BoxConstraints.tight(const Size(10, 4)));
+      wrapper.paint(buffer, Offset.zero);
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_diagonal_gradient.ansi'),
+      );
+    });
+
+    test('Renders rotating Neon Gradient borders (10 angles 0-360)', () {
+      // 10 boxes, each is 10x4.
+      // We lay them out in a 2x5 grid.
+      // Space between columns is 2, space between rows is 2.
+      // Total width = 5 * 10 + 4 * 2 = 58.
+      // Total height = 2 * 4 + 1 * 2 = 10.
+      final buffer = Buffer.blank(58, 10);
+
+      // We generate 10 angles from 0 to 360 degrees (in radians: 0 to 2*pi).
+      // Let's divide 2*pi into 10 steps.
+      const numBoxes = 10;
+      const piVal = 3.141592653589793;
+      for (var i = 0; i < numBoxes; i++) {
+        final angle = (i * 2 * piVal) / numBoxes;
+        final deg = i * 360 ~/ numBoxes;
+        final widget = DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border.shadedLight,
+            borderStartColor: const Color(0, 240, 200),
+            borderEndColor: const Color(180, 40, 250),
+            borderGradientAngle: angle,
+          ),
+          child: LabelWidget('$deg°'),
+        );
+
+        final col = i % 5;
+        final row = i ~/ 5;
+
+        final x = col * 12;
+        final y = row * 6;
+
+        final wrapper = ElementWidget(widget);
+        wrapper.layout(BoxConstraints.tight(const Size(10, 4)));
+        wrapper.paint(buffer, Offset(x, y));
+      }
+
+      expect(
+        buffer,
+        matchesAnsiGolden('test/goldens/decorated_box_rotation_gradient.ansi'),
+      );
+    });
+
+    test('Wide corners adjust layout offsets and prevent child overlap', () {
+      final widget = DecoratedBox(
+        decoration: const BoxDecoration(
+          border: Border(
+            topChar: '─',
+            bottomChar: '─',
+            leftChar: '', // empty side
+            rightChar: '', // empty side
+            topLeftChar: '😀', // width 2
+            topRightChar: '🥳', // width 2
+            bottomLeftChar: '😇', // width 2
+            bottomRightChar: '🤠', // width 2
+          ),
+        ),
+        child: const TestWidget('X'),
+      );
+
+      final element = widget.createElement() as DecoratedBoxElement;
+      element.mount(null);
+
+      // Total outer size is 8x4.
+      // Top and bottom borders exist (height offset = 1 for top, 1 for bottom).
+      // Left and right side characters are empty (width 0), but corners are width 2.
+      // So _cachedLeftOffset = max(0, 2, 2) = 2.
+      // _cachedRightOffset = max(0, 2, 2) = 2.
+      // Total border horizontal width = 4, vertical height = 2.
+      element.layout(BoxConstraints.tight(const Size(8, 4)));
+
+      // Check offsets computed
+      expect(element.childElement?.relativeOffset.dx, 2);
+      expect(element.childElement?.relativeOffset.dy, 1);
+
+      // Check inner child size
+      expect(element.childElement?.size.width, 4); // 8 - 4
+      expect(element.childElement?.size.height, 2); // 4 - 2
+
+      final buffer = Buffer.blank(8, 4);
+      element.paint(buffer, Offset.zero);
+
+      // Left corners (x=0,1) and right corners (x=6,7) are drawn.
+      // The child widget 'X' is drawn starting at relativeOffset (x=2, y=1) to (x=5, y=2).
+      // So at x=2, y=1 we should find 'X', not ' ' or part of corner emoji.
+      expect(buffer.getCharacter(2, 1), 'X');
+      expect(buffer.getCharacter(5, 1), 'X');
+      // At x=2, y=0 it should be '─' border line.
+      expect(buffer.getCharacter(2, 0), '─');
     });
   });
 
