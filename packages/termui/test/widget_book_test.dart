@@ -1148,6 +1148,16 @@ void main() {
           tester.sendKey(LogicalKey.enter);
           await tester.pump();
 
+          expect(demoWidget.example.modalBtn1Node.isFocused, isFalse);
+          expect(demoWidget.example.modalBtn2Node.isFocused, isFalse);
+
+          // Press Tab to cycle focus back to the sidebar
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+
+          // Verify that the sidebar gets focused
+          expect(FocusManager.instance.primaryFocus?.id, 'sidebar');
+
           runner.dispose();
         });
 

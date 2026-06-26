@@ -87,92 +87,158 @@ class StackElement extends Element {
 
   @override
   Size performLayout(BoxConstraints constraints) {
-    final width = constraints.maxWidth == BoxConstraints.infinity
-        ? 0
-        : constraints.maxWidth;
-    final height = constraints.maxHeight == BoxConstraints.infinity
-        ? 0
-        : constraints.maxHeight;
-
     var maxW = 0;
     var maxH = 0;
+    var hasNonPositioned = false;
 
+    // 1. First pass: lay out non-positioned children to determine the Stack's size.
+    final childConstraints = BoxConstraints(
+      minWidth: 0,
+      maxWidth: constraints.maxWidth < 0 ? 0 : constraints.maxWidth,
+      minHeight: 0,
+      maxHeight: constraints.maxHeight < 0 ? 0 : constraints.maxHeight,
+    );
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
       final childWidget = childEl.widget;
 
-      if (childWidget is Positioned) {
-        int childX = 0;
-        int childY = 0;
-        int childWidth = width;
-        int childHeight = height;
-
-        if (childWidget.isCentered) {
-          childWidth = childWidget.width ?? width;
-          childHeight = childWidget.height ?? height;
-          childX = (width - childWidth) ~/ 2;
-          childY = (height - childHeight) ~/ 2;
-        } else {
-          if (childWidget.left != null) {
-            childX = childWidget.left!;
-            if (childWidget.right != null) {
-              childWidth = width - childWidget.left! - childWidget.right!;
-            } else if (childWidget.width != null) {
-              childWidth = childWidget.width!;
-            } else {
-              childWidth = width - childWidget.left!;
-            }
-          } else if (childWidget.right != null) {
-            if (childWidget.width != null) {
-              childWidth = childWidget.width!;
-              childX = width - childWidget.right! - childWidth;
-            } else {
-              childWidth = width - childWidget.right!;
-            }
-          } else if (childWidget.width != null) {
-            childWidth = childWidget.width!;
-          }
-
-          if (childWidget.top != null) {
-            childY = childWidget.top!;
-            if (childWidget.bottom != null) {
-              childHeight = height - childWidget.top! - childWidget.bottom!;
-            } else if (childWidget.height != null) {
-              childHeight = childWidget.height!;
-            } else {
-              childHeight = height - childWidget.top!;
-            }
-          } else if (childWidget.bottom != null) {
-            if (childWidget.height != null) {
-              childHeight = childWidget.height!;
-              childY = height - childWidget.bottom! - childHeight;
-            } else {
-              childHeight = height - childWidget.bottom!;
-            }
-          } else if (childWidget.height != null) {
-            childHeight = childWidget.height!;
-          }
-        }
-
-        childEl.relativeOffset = Offset(childX, childY);
-        if (childWidth > 0 && childHeight > 0) {
-          final childSize = childEl.layout(
-            BoxConstraints.tight(Size(childWidth, childHeight)),
-          );
-          final rightEdge = childX + childSize.width;
-          final bottomEdge = childY + childSize.height;
-          if (rightEdge > maxW) maxW = rightEdge;
-          if (bottomEdge > maxH) maxH = bottomEdge;
-        }
-      } else {
+      if (childWidget is! Positioned) {
+        hasNonPositioned = true;
         childEl.relativeOffset = Offset.zero;
-        final childSize = childEl.layout(constraints);
+        final childSize = childEl.layout(childConstraints);
         if (childSize.width > maxW) maxW = childSize.width;
         if (childSize.height > maxH) maxH = childSize.height;
       }
     }
 
-    return Size(maxW, maxH);
+    // 2. Resolve the final size of the Stack.
+    int resolvedW;
+    int resolvedH;
+    if (hasNonPositioned) {
+      final resolvedSize = constraints.constrain(Size(maxW, maxH));
+      resolvedW = resolvedSize.width;
+      resolvedH = resolvedSize.height;
+    } else {
+      resolvedW = constraints.maxWidth == BoxConstraints.infinity
+          ? constraints.minWidth
+          : constraints.maxWidth;
+      resolvedH = constraints.maxHeight == BoxConstraints.infinity
+          ? constraints.minHeight
+          : constraints.maxHeight;
+    }
+
+    // 3. Second pass: lay out and position Positioned children using the resolved Stack size.
+    for (var i = 0; i < childElements.length; i++) {
+      final childEl = childElements[i];
+      final childWidget = childEl.widget;
+
+      if (childWidget is Positioned) {
+        int minChildW;
+        int maxChildW;
+        int? childX;
+
+        if (childWidget.isCentered) {
+          if (childWidget.width != null) {
+            minChildW = maxChildW = childWidget.width!;
+          } else {
+            minChildW = 0;
+            maxChildW = resolvedW;
+          }
+        } else {
+          if (childWidget.left != null && childWidget.right != null) {
+            final w = resolvedW - childWidget.left! - childWidget.right!;
+            minChildW = maxChildW = w < 0 ? 0 : w;
+            childX = childWidget.left!;
+          } else if (childWidget.left != null && childWidget.width != null) {
+            minChildW = maxChildW = childWidget.width!;
+            childX = childWidget.left!;
+          } else if (childWidget.right != null && childWidget.width != null) {
+            minChildW = maxChildW = childWidget.width!;
+            childX = resolvedW - childWidget.right! - childWidget.width!;
+          } else if (childWidget.left != null) {
+            minChildW = 0;
+            final w = resolvedW - childWidget.left!;
+            maxChildW = w < 0 ? 0 : w;
+            childX = childWidget.left!;
+          } else if (childWidget.right != null) {
+            minChildW = 0;
+            final w = resolvedW - childWidget.right!;
+            maxChildW = w < 0 ? 0 : w;
+            childX = null;
+          } else if (childWidget.width != null) {
+            minChildW = maxChildW = childWidget.width!;
+            childX = 0;
+          } else {
+            minChildW = 0;
+            maxChildW = resolvedW;
+            childX = 0;
+          }
+        }
+
+        int minChildH;
+        int maxChildH;
+        int? childY;
+
+        if (childWidget.isCentered) {
+          if (childWidget.height != null) {
+            minChildH = maxChildH = childWidget.height!;
+          } else {
+            minChildH = 0;
+            maxChildH = resolvedH;
+          }
+        } else {
+          if (childWidget.top != null && childWidget.bottom != null) {
+            final h = resolvedH - childWidget.top! - childWidget.bottom!;
+            minChildH = maxChildH = h < 0 ? 0 : h;
+            childY = childWidget.top!;
+          } else if (childWidget.top != null && childWidget.height != null) {
+            minChildH = maxChildH = childWidget.height!;
+            childY = childWidget.top!;
+          } else if (childWidget.bottom != null && childWidget.height != null) {
+            minChildH = maxChildH = childWidget.height!;
+            childY = resolvedH - childWidget.bottom! - childWidget.height!;
+          } else if (childWidget.top != null) {
+            minChildH = 0;
+            final h = resolvedH - childWidget.top!;
+            maxChildH = h < 0 ? 0 : h;
+            childY = childWidget.top!;
+          } else if (childWidget.bottom != null) {
+            minChildH = 0;
+            final h = resolvedH - childWidget.bottom!;
+            maxChildH = h < 0 ? 0 : h;
+            childY = null;
+          } else if (childWidget.height != null) {
+            minChildH = maxChildH = childWidget.height!;
+            childY = 0;
+          } else {
+            minChildH = 0;
+            maxChildH = resolvedH;
+            childY = 0;
+          }
+        }
+
+        final childSize = childEl.layout(
+          BoxConstraints(
+            minWidth: minChildW,
+            maxWidth: maxChildW,
+            minHeight: minChildH,
+            maxHeight: maxChildH,
+          ),
+        );
+
+        if (childWidget.isCentered) {
+          childX = (resolvedW - childSize.width) ~/ 2;
+          childY = (resolvedH - childSize.height) ~/ 2;
+        } else {
+          childX ??= resolvedW - childWidget.right! - childSize.width;
+          childY ??= resolvedH - childWidget.bottom! - childSize.height;
+        }
+
+        childEl.relativeOffset = Offset(childX, childY);
+      }
+    }
+
+    return Size(resolvedW, resolvedH);
   }
 
   @override

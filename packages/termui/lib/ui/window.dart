@@ -158,7 +158,7 @@ class FocusNode {
       if (current.onKeyEvent != null && current.onKeyEvent!(event)) {
         return true; // Consumed
       }
-      if (current is FocusScopeNode) {
+      if (current is FocusScopeNode && current.children.isNotEmpty) {
         if (event.type == KeyType.tab ||
             event.key == '\t' ||
             event.key == 'backtab') {
@@ -180,6 +180,7 @@ class FocusNode {
 
   /// Traverses down the focused path to find the deeply focused leaf node.
   FocusNode? findFocusedLeaf() {
+    if (this == FocusManager.instance.primaryFocus) return this;
     if (!_isFocused) return null;
     for (final child in children) {
       if (child._isFocused) {
