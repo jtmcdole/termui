@@ -1,7 +1,0 @@
-{
-  "name": "debugger",
-  "description": "An agent configured for debugging code, issues, reports.",
-  "configPath": {
-    "relativePathToConfig": "config.yaml"
-  }
-}

@@ -1,7 +1,0 @@
-{
-  "name": "coder",
-  "description": "An agent configured for writing code and tests.",
-  "configPath": {
-    "relativePathToConfig": "config.yaml"
-  }
-}
