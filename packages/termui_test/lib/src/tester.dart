@@ -232,7 +232,20 @@ class TerminalTester {
 
         try {
           while (!completed) {
-            async.elapse(const Duration(milliseconds: 1));
+            if (async.microtaskCount == 0 && !completed) {
+              if (async.pendingTimers.isNotEmpty) {
+                throw StateError(
+                  'TerminalTester test is stuck: a timer is pending but time is not advancing. '
+                  'Make sure to call tester.pump(duration) to advance time.',
+                );
+              } else {
+                throw StateError(
+                  'TerminalTester test is stuck: the event loop is idle but the test has not completed. '
+                  'Are you awaiting a Future that never completes?',
+                );
+              }
+            }
+            async.flushMicrotasks();
           }
         } finally {
           PromptRunner.onPromptStarted = oldOnPromptStarted;
@@ -314,12 +327,22 @@ class TerminalTester {
     await pump();
     count++;
 
-    while (_fakeAsync != null &&
-        (_fakeAsync!.pendingTimers.isNotEmpty ||
-            _fakeAsync!.microtaskCount > 0)) {
+    while (_fakeAsync != null) {
       if (watch.elapsed > timeout) {
         throw TimeoutException('pumpAndSettle timed out');
       }
+
+      final hasPendingWork = _runner != null
+          ? (_runner!.isDirty ||
+                _runner!.hasScheduledFrame ||
+                _fakeAsync!.pendingTimers.isNotEmpty)
+          : (_fakeAsync!.pendingTimers.isNotEmpty ||
+                _fakeAsync!.microtaskCount > 0);
+
+      if (!hasPendingWork) {
+        break;
+      }
+
       await pump(duration);
       count++;
     }
