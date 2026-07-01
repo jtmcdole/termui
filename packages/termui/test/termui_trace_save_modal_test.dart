@@ -29,75 +29,78 @@ void main() {
     final minTs = 1000;
     final maxTs = 2500;
 
-    test('Integration test: Save modal saves, dismisses and shows 3s message', () {
-      final fs = MemoryFileSystem();
-      final tester = TerminalTester(size: const Point(80, 24));
-      tester.run(() async {
-        globalSceneManager = SceneManager(
-          tester.terminal,
-          renderingMode: RenderingMode.alternateScreen,
-        );
-        globalSceneManager.enableMouseTracking = true;
+    test(
+      'Integration test: Save modal saves, dismisses and shows 3s message',
+      () {
+        final fs = MemoryFileSystem();
+        final tester = TerminalTester(size: const Point(80, 24));
+        tester.run(() async {
+          globalSceneManager = SceneManager(
+            tester.terminal,
+            renderingMode: RenderingMode.alternateScreen,
+          );
+          globalSceneManager.enableMouseTracking = true;
 
-        final app = TraceViewerApp(
-          spans: spans,
-          minTs: minTs,
-          maxTs: maxTs,
-          fileSystem: fs,
-        );
+          final app = TraceViewerApp(
+            spans: spans,
+            minTs: minTs,
+            maxTs: maxTs,
+            fileSystem: fs,
+          );
 
-        final runner = PromptRunner<void>(
-          terminal: tester.terminal,
-          widget: app,
-          alternateScreen: false,
-          mode: ExecutionMode.managed,
-          onFramePainted: (_) => globalSceneManager.render(),
-        );
+          final runner = PromptRunner<void>(
+            terminal: tester.terminal,
+            widget: app,
+            alternateScreen: false,
+            mode: ExecutionMode.managed,
+            onFramePainted: (_) => globalSceneManager.render(),
+          );
 
-        final appLayer = SceneLayer(
-          renderer: runner,
-          sizing: LayerSizing.fullscreen,
-        );
-        globalSceneManager.layers.add(appLayer);
-        globalSceneManager.focusedLayer = appLayer;
+          final appLayer = SceneLayer(
+            renderer: runner,
+            sizing: LayerSizing.fullscreen,
+          );
+          globalSceneManager.layers.add(appLayer);
+          globalSceneManager.focusedLayer = appLayer;
 
-        await tester.runPrompt(runner, () async {
-          await tester.pump();
-          final state = findTraceViewerState(tester.rootElement!);
+          await tester.runPrompt(runner, () async {
+            await tester.pump();
+            final state = findTraceViewerState(tester.rootElement!);
 
-          // Press Ctrl+S to spawn modal (we have no selection, so it selects all)
-          tester.sendKey(LogicalKey.character('s'), control: true);
-          await tester.pump();
+            // Press Ctrl+S to spawn modal (we have no selection, so it selects all)
+            tester.sendKey(LogicalKey.character('s'), control: true);
+            await tester.pump();
 
-          expect(globalSceneManager.layers.length, equals(2));
+            expect(globalSceneManager.layers.length, equals(2));
 
-          // Press Enter to submit
-          tester.sendKey(LogicalKey.enter);
-          await tester.pump();
+            // Press Enter to submit
+            tester.sendKey(LogicalKey.enter);
+            await tester.pump();
 
-          // Modal should be dismissed
-          expect(globalSceneManager.layers.length, equals(1));
+            // Modal should be dismissed
+            expect(globalSceneManager.layers.length, equals(1));
 
-          // File should exist
-          final exportedFile = fs.file('trace_cropped.json');
-          expect(exportedFile.existsSync(), isTrue);
+            // File should exist
+            final exportedFile = fs.file('trace_cropped.json');
+            expect(exportedFile.existsSync(), isTrue);
 
-          // exportMessage should be set
-          expect(state.exportMessage, isNotNull);
-          expect(state.exportMessage, contains('Exported'));
+            // exportMessage should be set
+            expect(state.exportMessage, isNotNull);
+            expect(state.exportMessage, contains('Exported'));
 
-          // Wait 3 seconds using Future.delayed so fakeAsync elapses it safely
-          await Future.delayed(const Duration(seconds: 3));
+            // Wait 3 seconds using pump so fakeAsync elapses it safely
+            await tester.pump(const Duration(seconds: 3));
 
-          // Message should be gone
-          expect(state.exportMessage, isNull);
+            // Message should be gone
+            expect(state.exportMessage, isNull);
 
-          runner.dispose();
+            runner.dispose();
+          });
+
+          globalSceneManager.dispose();
         });
-
-        globalSceneManager.dispose();
-      });
-    });
+      },
+    );
 
     test('Integration test: Save modal [x] dismisses without saving', () {
       final fs = MemoryFileSystem();

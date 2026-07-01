@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:archive/archive.dart';
@@ -372,5 +373,38 @@ void main() {
         }
       },
     );
+
+    test('pumpAndSettle does not time out with background microtasks', () {
+      final tester = TerminalTester();
+      tester.run(() async {
+        final runner = PromptRunner<void>(
+          terminal: tester.terminal,
+          widget: const Text('Test Screen'),
+        );
+
+        final runnerFuture = tester.runPrompt(runner, () async {
+          await tester.pump();
+
+          final future = tester.pumpAndSettle(
+            timeout: const Duration(seconds: 1),
+          );
+
+          void scheduleChain(int depth) {
+            if (depth > 0) {
+              scheduleMicrotask(() => scheduleChain(depth - 1));
+            }
+          }
+
+          scheduleMicrotask(() => scheduleChain(5));
+
+          final pumpCount = await future;
+          expect(pumpCount, equals(1));
+
+          runner.dispose();
+        });
+
+        await runnerFuture;
+      });
+    });
   });
 }

@@ -182,6 +182,9 @@ class PromptRunner<T> implements ListenableSceneRenderer {
   @override
   bool get isDirty => _buildOwner?.isDirtyElements.isNotEmpty ?? false;
 
+  /// Exposes whether a draw frame is currently scheduled.
+  bool get hasScheduledFrame => _drawScheduled;
+
   Point<int>? _lastMousePosition;
   Element? _mouseCaptureElement;
   BuildOwner? _buildOwner;
