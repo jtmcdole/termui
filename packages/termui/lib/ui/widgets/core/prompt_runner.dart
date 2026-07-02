@@ -1073,6 +1073,9 @@ class SceneLayer {
   /// Whether this layer can be resized by dragging its corners.
   bool resizable;
 
+  /// Optional callback invoked when the terminal is resized.
+  void Function(Point<int> newSize)? onResize;
+
   /// Creates a new [SceneLayer] with the given [renderer], [sizing], and placement parameters.
   SceneLayer({
     required this.renderer,
@@ -1084,6 +1087,7 @@ class SceneLayer {
     this.zIndex = 0,
     this.draggable = false,
     this.resizable = false,
+    this.onResize,
   }) {
     if (sizing == LayerSizing.fixed && width != null && height != null) {
       renderer.resize(width!, height!);
