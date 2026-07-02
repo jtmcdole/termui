@@ -28,6 +28,47 @@ int measureStringWidth(String text) {
   return width;
 }
 
+/// Pads or truncates a string to match the specified visual column width in a terminal,
+/// correctly accounting for wide characters (CJK and Emoji) and utilizing a fast-path
+/// for pure ASCII text.
+String padOrTruncate(String text, int width) {
+  if (width <= 0) return '';
+
+  // 1. ASCII Fast-Path: bypass characters allocation for standard text
+  var isAscii = true;
+  final len = text.length;
+  for (var i = 0; i < len; i++) {
+    if (text.codeUnitAt(i) >= 128) {
+      isAscii = false;
+      break;
+    }
+  }
+
+  if (isAscii) {
+    if (len == width) return text;
+    if (len > width) return text.substring(0, width);
+    return text.padRight(width);
+  }
+
+  // 2. Slow-Path fallback for CJK and Emoji text
+  final cellWidth = measureStringWidth(text);
+  if (cellWidth == width) return text;
+  if (cellWidth < width) return text + (' ' * (width - cellWidth));
+
+  var currentWidth = 0;
+  final sb = StringBuffer();
+  for (final char in text.characters) {
+    final charWidth = isWideGrapheme(char) ? 2 : 1;
+    if (currentWidth + charWidth > width) break;
+    sb.write(char);
+    currentWidth += charWidth;
+  }
+  if (currentWidth < width) {
+    sb.write(' ' * (width - currentWidth));
+  }
+  return sb.toString();
+}
+
 /// A widget that renders styled text with optional wrapping.
 ///
 /// It supports standard formatting, custom maximum lines, and alignment.

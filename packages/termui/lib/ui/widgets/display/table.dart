@@ -1,4 +1,3 @@
-import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 /// A widget for displaying tabular columns of data with optional row selection.
@@ -250,17 +249,24 @@ class TableElement extends Element {
     for (var i = 0; i < table.headers.length; i++) {
       final width = resolvedColumnWidths[i];
       final text = table.headers[i];
-      final chars = text.characters;
-      final padded = chars.length >= width
-          ? chars.take(width).toString()
-          : chars.toString() + (' ' * (width - chars.length));
+      final padded = padOrTruncate(text, width);
       headerSb.write(padded);
       if (i < table.headers.length - 1) headerSb.write(' ');
     }
-    final headerChars = headerSb.toString().characters;
-    final headerStr = headerChars.length >= w
-        ? headerChars.take(w).toString()
-        : headerChars.toString() + (' ' * (w - headerChars.length));
+
+    final int columnsTotalWidth =
+        resolvedColumnWidths.fold<int>(0, (prev, val) => prev + val) +
+        (table.headers.isNotEmpty ? table.headers.length - 1 : 0);
+
+    String headerStr;
+    if (columnsTotalWidth <= w) {
+      if (columnsTotalWidth < w) {
+        headerSb.write(' ' * (w - columnsTotalWidth));
+      }
+      headerStr = headerSb.toString();
+    } else {
+      headerStr = padOrTruncate(headerSb.toString(), w);
+    }
     buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
 
     // 2. Render Header Divider Line
@@ -305,10 +311,7 @@ class TableElement extends Element {
           }
         } else {
           final cellText = cellData.toString();
-          final chars = cellText.characters;
-          final padded = chars.length >= colWidth
-              ? chars.take(colWidth).toString()
-              : chars.toString() + (' ' * (colWidth - chars.length));
+          final padded = padOrTruncate(cellText, colWidth);
           vp.writeString(0, 0, padded, currentStyle);
         }
 
