@@ -16,7 +16,7 @@ metadata:
 
 ## Core Concepts
 
-Use the `go_router` package for declarative routing in Flutter. It provides a robust API for complex routing scenarios, deep linking, and nested navigation. 
+Use the `go_router` package for declarative routing in Flutter. It provides a robust API for complex routing scenarios, deep linking, and nested navigation.
 
 - **GoRouter**: The central configuration object defining the application's route tree.
 - **GoRoute**: A standard route mapping a URL path to a Flutter screen.
@@ -120,7 +120,7 @@ Configure the native platforms to intercept specific URLs and route them into th
 ```
 
 ### If configuring for iOS:
-1. **Modify `Info.plist`**: Opt-in to Flutter's default deep link handler. 
+1. **Modify `Info.plist`**: Opt-in to Flutter's default deep link handler.
 *Note: If using a third-party deep linking plugin (e.g., `app_links`), set this to `NO` to prevent conflicts.*
 ```xml
 <key>FlutterDeepLinkingEnabled</key>

@@ -230,6 +230,14 @@ abstract class Element implements BuildContext {
 
   /// Rebuilds the element.
   void rebuild() {}
+
+  /// Called during hot reload to invalidate the element and trigger a rebuild.
+  void reassemble() {
+    markNeedsBuild();
+    visitChildren((Element child) {
+      child.reassemble();
+    });
+  }
 }
 
 /// Default element for leaf widgets that do not build children.
@@ -387,6 +395,12 @@ class StatefulElement extends Element {
     state.didUpdateWidget(oldWidget);
     state.didChangeDependencies();
     rebuild();
+  }
+
+  @override
+  void reassemble() {
+    state.reassemble();
+    super.reassemble();
   }
 
   @override

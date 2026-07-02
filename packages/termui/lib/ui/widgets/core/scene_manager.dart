@@ -5,7 +5,7 @@ import 'package:termui/termui.dart';
 
 /// Manages multiple visual layers in a terminal windowing system,
 /// handles rendering composition and hardware sync.
-class SceneManager {
+class SceneManager implements Reassemblable {
   static final int _traceKeyEventId = Tracer.registerString(
     'SceneManager:handleKeyEvent',
   );
@@ -71,6 +71,7 @@ class SceneManager {
     layers = _SceneLayerList(this);
     _eventsSubscription = terminal.events.listen(_handleInputEvent);
     _sizeSubscription = terminal.watchSize().listen(_handleSizeEvent);
+    TermuiBinding.register(this);
   }
 
   void _resizeRenderer(SceneRenderer renderer, int w, int h) {
@@ -590,6 +591,7 @@ class SceneManager {
 
   /// Clears resources and restores terminal hardware state if modified.
   void dispose() {
+    TermuiBinding.unregister(this);
     _isDisposed = true;
     _eventsSubscription?.cancel();
     _eventsSubscription = null;
@@ -627,6 +629,18 @@ class SceneManager {
       _renderScheduled = false;
       render();
     });
+  }
+
+  /// Called during hot reload to force all layers and widget trees to rebuild and repaint.
+  @override
+  void reassemble() {
+    for (final layer in layers) {
+      final r = layer.renderer;
+      if (r is PromptRunner) {
+        r.reassemble();
+      }
+    }
+    scheduleRender();
   }
 
   void _syncLayerListeners() {

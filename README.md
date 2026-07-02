@@ -9,7 +9,7 @@ This library shifts away from naive command-line printing (which causes terminal
 ---
 
 > [!WARNING]
-> **Experimental Status:** This project is experimental and currently under active development. The APIs are subject to change, and features are being added and refactored frequently. If you want to use it, reach out and give feedback! 
+> **Experimental Status:** This project is experimental and currently under active development. The APIs are subject to change, and features are being added and refactored frequently. If you want to use it, reach out and give feedback!
 
 ---
 

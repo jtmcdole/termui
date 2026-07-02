@@ -46,3 +46,4 @@ export 'widgets/interactive/selection_controller.dart';
 export 'widgets/layout/layout_builder.dart';
 export 'widgets/layout/safe_layout.dart';
 export 'widgets/core/scene_manager.dart';
+export 'widgets/interactive/stream_builder.dart';
