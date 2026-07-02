@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:test/test.dart';
+import 'package:termui/terminal/terminal.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/ui/widgets/core/prompt_runner.dart';
 import 'package:termui/ui/widgets/core/widget.dart';
@@ -310,7 +311,161 @@ void main() {
       runner.dispose();
       await future;
     });
+
+    test(
+      'Standalone Mode with alternateScreen enters and exits alternate screen',
+      () async {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          mode: ExecutionMode.standalone,
+          alternateScreen: true,
+          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
+          onComplete: () => 'Alternate Completed',
+        );
+
+        final future = runner.run();
+        await Future.delayed(const Duration(milliseconds: 10));
+
+        // Should have entered alternate screen
+        expect(backend.writes, contains(Terminal.enterAlternateScreenSequence));
+
+        // Complete prompt
+        terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
+        await future;
+
+        // Should have exited alternate screen
+        expect(backend.writes, contains(Terminal.exitAlternateScreenSequence));
+      },
+    );
+
+    test(
+      'Managed Mode with alternateScreen does not mutate alternate screen state',
+      () async {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          mode: ExecutionMode.managed,
+          alternateScreen: true,
+          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
+        );
+
+        final future = runner.run();
+        await Future.delayed(const Duration(milliseconds: 10));
+
+        // Should NOT have entered alternate screen
+        expect(
+          backend.writes,
+          isNot(contains(Terminal.enterAlternateScreenSequence)),
+        );
+
+        // Dispose/Complete
+        runner.dispose();
+        await future;
+
+        // Should NOT have exited alternate screen
+        expect(
+          backend.writes,
+          isNot(contains(Terminal.exitAlternateScreenSequence)),
+        );
+      },
+    );
+
+    test(
+      'Standalone Mode with alternateScreen: false does not enter or exit alternate screen',
+      () async {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          mode: ExecutionMode.standalone,
+          alternateScreen: false,
+          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
+          onComplete: () => 'Completed',
+        );
+
+        final future = runner.run();
+        await Future.delayed(const Duration(milliseconds: 10));
+
+        expect(
+          backend.writes,
+          isNot(contains(Terminal.enterAlternateScreenSequence)),
+        );
+
+        terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
+        await future;
+
+        expect(
+          backend.writes,
+          isNot(contains(Terminal.exitAlternateScreenSequence)),
+        );
+      },
+    );
+
+    test(
+      'Exception during initialization/mounting cleans up alternate screen',
+      () async {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const ThrowingWidget(),
+          mode: ExecutionMode.standalone,
+          alternateScreen: true,
+        );
+
+        final future = runner.run();
+
+        expect(future, throwsA(isA<Exception>()));
+        await Future.delayed(const Duration(milliseconds: 10));
+
+        expect(backend.writes, contains(Terminal.enterAlternateScreenSequence));
+        expect(backend.writes, contains(Terminal.exitAlternateScreenSequence));
+      },
+    );
+
+    test(
+      'onPromptEnded is called exactly once even when runner is disposed',
+      () async {
+        int endCounter = 0;
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          mode: ExecutionMode.standalone,
+        );
+        PromptRunner.onPromptEnded = (r) {
+          if (identical(r, runner)) {
+            endCounter++;
+          }
+        };
+
+        final future = runner.run();
+        await Future.delayed(const Duration(milliseconds: 10));
+
+        runner.dispose();
+        await future;
+
+        expect(endCounter, equals(1));
+        PromptRunner.onPromptEnded = null; // Clean up static hook
+      },
+    );
   });
+}
+
+class ThrowingWidget extends Widget {
+  const ThrowingWidget();
+
+  @override
+  Element createElement() => _ThrowingElement(this);
+}
+
+class _ThrowingElement extends Element {
+  _ThrowingElement(super.widget);
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    throw Exception('Simulated Mount/Layout Error');
+  }
+
+  @override
+  void performPaint(Buffer buffer, Offset offset) {}
 }
 
 class Test4ArgMouseWidget extends Widget {
