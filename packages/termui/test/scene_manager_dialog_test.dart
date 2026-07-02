@@ -398,5 +398,90 @@ void main() {
         sceneManager.dispose();
       });
     });
+
+    test(
+      'showDialog centers responsively on terminal resize events and handles bounds safety',
+      () {
+        final tester = TerminalTester(size: const Point(80, 24));
+        tester.run(() async {
+          final sceneManager = SceneManager(
+            tester.terminal,
+            renderingMode: RenderingMode.alternateScreen,
+          );
+
+          final runner = PromptRunner<void>(
+            terminal: tester.terminal,
+            widget: const SizedBox(width: 10, height: 1, child: Text('Base')),
+            alternateScreen: false,
+            mode: ExecutionMode.managed,
+            onFramePainted: (_) => sceneManager.render(),
+          );
+
+          final baseLayer = SceneLayer(
+            renderer: runner,
+            sizing: LayerSizing.fullscreen,
+          );
+          sceneManager.layers.add(baseLayer);
+          sceneManager.focusedLayer = baseLayer;
+
+          await tester.runPrompt(runner, () async {
+            await tester.pump();
+
+            final dialogFuture = sceneManager.showDialog<void>(
+              width: 20,
+              height: 10,
+              builder: (context) {
+                return const SizedBox(
+                  width: 20,
+                  height: 10,
+                  child: Text('Dialog'),
+                );
+              },
+            );
+
+            await tester.pump();
+
+            // Get reference to the dialog layer
+            // dialogLayer is the 3rd layer added (index 2)
+            final dialogLayer = sceneManager.layers[2];
+            expect(dialogLayer.sizing, equals(LayerSizing.fixed));
+
+            // Initial centering verification
+            expect(dialogLayer.x, equals((80 - 20) ~/ 2)); // 30
+            expect(dialogLayer.y, equals((24 - 10) ~/ 2)); // 7
+
+            // Resize terminal to 100x40
+            await tester.simulateResize(const Size(100, 40));
+            await tester.pump();
+
+            // Centering verification after resize
+            expect(dialogLayer.x, equals((100 - 20) ~/ 2)); // 40
+            expect(dialogLayer.y, equals((40 - 10) ~/ 2)); // 15
+
+            // Test coordinate boundary safety with a terminal smaller than the dialog
+            await tester.simulateResize(const Size(10, 5));
+            await tester.pump();
+
+            // Centering offsets should be clamped to 0
+            expect(dialogLayer.x, equals(0));
+            expect(dialogLayer.y, equals(0));
+
+            // Resize back to 100x40 so we can click the barrier to dismiss
+            await tester.simulateResize(const Size(100, 40));
+            await tester.pump();
+
+            // Clean up by clicking barrier (which is outside the 20x10 dialog centered at 40,15)
+            tester.mouseDown(1, 1);
+            tester.mouseUp(1, 1);
+            await tester.pump();
+            await dialogFuture;
+
+            runner.dispose();
+          });
+
+          sceneManager.dispose();
+        });
+      },
+    );
   });
 }

@@ -92,6 +92,7 @@ class SceneManager {
         layer.y = 0;
         _resizeRenderer(layer.renderer, width, height);
       }
+      layer.onResize?.call(newSize);
     }
     render();
   }
@@ -716,10 +717,11 @@ class SceneManager {
     );
 
     final terminalSize = terminal.backend.size;
-    final x = (terminalSize.x - width) ~/ 2;
-    final y = (terminalSize.y - height) ~/ 2;
+    final x = max(0, (terminalSize.x - width) ~/ 2);
+    final y = max(0, (terminalSize.y - height) ~/ 2);
 
-    final dialogLayer = SceneLayer(
+    late final SceneLayer dialogLayer;
+    dialogLayer = SceneLayer(
       renderer: runner,
       sizing: LayerSizing.fixed,
       x: x,
@@ -727,6 +729,10 @@ class SceneManager {
       width: width,
       height: height,
       zIndex: baseZIndex + 1,
+      onResize: (newSize) {
+        dialogLayer.x = max(0, (newSize.x - width) ~/ 2);
+        dialogLayer.y = max(0, (newSize.y - height) ~/ 2);
+      },
     );
 
     layers.add(barrierLayer);
