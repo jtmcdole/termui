@@ -230,8 +230,8 @@ class InputParser {
     final isDrag = (buttonVal & 32) != 0;
     final isWheel = (buttonVal & 64) != 0;
 
-    MouseButton button;
-    MouseEventType type;
+    final MouseButton button;
+    final MouseEventType type;
 
     if (isWheel) {
       button = (buttonVal & 1) == 0
@@ -240,23 +240,18 @@ class InputParser {
       type = MouseEventType.press;
     } else {
       final btnCode = buttonVal & 3;
-      if (btnCode == 0) {
-        button = MouseButton.left;
-      } else if (btnCode == 1) {
-        button = MouseButton.middle;
-      } else if (btnCode == 2) {
-        button = MouseButton.right;
-      } else {
-        button = MouseButton.none;
-      }
+      button = switch (btnCode) {
+        0 => MouseButton.left,
+        1 => MouseButton.middle,
+        2 => MouseButton.right,
+        _ => MouseButton.none,
+      };
 
-      if (btnCode == 3) {
-        type = MouseEventType.release;
-      } else if (isDrag) {
-        type = MouseEventType.drag;
-      } else {
-        type = MouseEventType.press;
-      }
+      type = switch (btnCode) {
+        3 => MouseEventType.release,
+        _ when isDrag => MouseEventType.drag,
+        _ => MouseEventType.press,
+      };
     }
 
     return MouseEvent(x: x, y: y, button: button, type: type, modifiers: mods);
@@ -362,17 +357,11 @@ class InputParser {
     return KeyEvent(seq, KeyType.character);
   }
 
-  InputEvent _parseSs3Key(int term) {
-    switch (term) {
-      case 80:
-        return const KeyEvent('f1', KeyType.f1);
-      case 81:
-        return const KeyEvent('f2', KeyType.f2);
-      case 82:
-        return const KeyEvent('f3', KeyType.f3);
-      case 83:
-        return const KeyEvent('f4', KeyType.f4);
-    }
-    return KeyEvent(String.fromCharCode(term), KeyType.character);
-  }
+  InputEvent _parseSs3Key(int term) => switch (term) {
+    80 => const KeyEvent('f1', KeyType.f1),
+    81 => const KeyEvent('f2', KeyType.f2),
+    82 => const KeyEvent('f3', KeyType.f3),
+    83 => const KeyEvent('f4', KeyType.f4),
+    _ => KeyEvent(String.fromCharCode(term), KeyType.character),
+  };
 }

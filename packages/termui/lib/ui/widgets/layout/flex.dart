@@ -157,29 +157,17 @@ List<Rect> splitRect(
       sumOfSizes[i + 1] = sumOfSizes[i] + sizes[i];
     }
 
-    int getChildOffset(int i) {
-      switch (mainAxisAlignment) {
-        case MainAxisAlignment.start:
-          return sumOfSizes[i];
-        case MainAxisAlignment.end:
-          return remaining + sumOfSizes[i];
-        case MainAxisAlignment.center:
-          return (remaining ~/ 2) + sumOfSizes[i];
-        case MainAxisAlignment.spaceBetween:
-          if (N <= 1) return sumOfSizes[i];
-          final numGaps = N - 1;
-          final gapOffset = (remaining * i) ~/ numGaps;
-          return gapOffset + sumOfSizes[i];
-        case MainAxisAlignment.spaceAround:
-          final numUnits = N * 2;
-          final unitOffset = (remaining * (i * 2 + 1) / numUnits).floor();
-          return unitOffset + sumOfSizes[i];
-        case MainAxisAlignment.spaceEvenly:
-          final numUnits = N + 1;
-          final unitOffset = (remaining * (i + 1) / numUnits).floor();
-          return unitOffset + sumOfSizes[i];
-      }
-    }
+    int getChildOffset(int i) => switch (mainAxisAlignment) {
+      MainAxisAlignment.start => sumOfSizes[i],
+      MainAxisAlignment.end => remaining + sumOfSizes[i],
+      MainAxisAlignment.center => (remaining ~/ 2) + sumOfSizes[i],
+      MainAxisAlignment.spaceBetween =>
+        N <= 1 ? sumOfSizes[i] : ((remaining * i) ~/ (N - 1)) + sumOfSizes[i],
+      MainAxisAlignment.spaceAround =>
+        (remaining * (i * 2 + 1) / (N * 2)).floor() + sumOfSizes[i],
+      MainAxisAlignment.spaceEvenly =>
+        (remaining * (i + 1) / (N + 1)).floor() + sumOfSizes[i],
+    };
 
     for (var i = 0; i < N; i++) {
       final size = sizes[i];

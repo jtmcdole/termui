@@ -91,29 +91,21 @@ class _FittedBoxElement extends Element {
   Size performLayout(BoxConstraints constraints) {
     if (_childElement != null) {
       final w = widget as FittedBox;
-      BoxConstraints childConstraints;
-
-      switch (w.fit) {
-        case BoxFit.contain:
-          childConstraints = BoxConstraints(
-            minWidth: 0,
-            maxWidth: constraints.maxWidth,
-            minHeight: 0,
-            maxHeight: constraints.maxHeight,
-          );
-          break;
-        case BoxFit.cover:
-          childConstraints = BoxConstraints(
-            minWidth: constraints.hasBoundedWidth ? constraints.maxWidth : 0,
-            maxWidth: BoxConstraints.infinity,
-            minHeight: constraints.hasBoundedHeight ? constraints.maxHeight : 0,
-            maxHeight: BoxConstraints.infinity,
-          );
-          break;
-        case BoxFit.none:
-          childConstraints = const BoxConstraints();
-          break;
-      }
+      final childConstraints = switch (w.fit) {
+        BoxFit.contain => BoxConstraints(
+          minWidth: 0,
+          maxWidth: constraints.maxWidth,
+          minHeight: 0,
+          maxHeight: constraints.maxHeight,
+        ),
+        BoxFit.cover => BoxConstraints(
+          minWidth: constraints.hasBoundedWidth ? constraints.maxWidth : 0,
+          maxWidth: BoxConstraints.infinity,
+          minHeight: constraints.hasBoundedHeight ? constraints.maxHeight : 0,
+          maxHeight: BoxConstraints.infinity,
+        ),
+        BoxFit.none => const BoxConstraints(),
+      };
 
       final childSize = _childElement!.layout(childConstraints);
 

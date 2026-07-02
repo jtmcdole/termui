@@ -962,16 +962,15 @@ bool _routeToElement(
   final area = Rect(0, 0, element.size.width, element.size.height);
 
   bool tryRoute(Object handler) {
-    switch (handler) {
-      case final MouseEventHandlerWithArea h:
-        h.handleMouseEvent(event, localX, localY, area);
-        return true;
-      case final MouseEventHandler h:
-        h.handleMouseEvent(event, localX, localY);
-        return true;
-      default:
-        return false;
+    if (handler case final MouseEventHandlerWithArea h) {
+      h.handleMouseEvent(event, localX, localY, area);
+      return true;
     }
+    if (handler case final MouseEventHandler h) {
+      h.handleMouseEvent(event, localX, localY);
+      return true;
+    }
+    return false;
   }
 
   if (element is StatefulElement && tryRoute(element.state)) {

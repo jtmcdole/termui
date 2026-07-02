@@ -76,23 +76,14 @@ Widget buildInspectorPanel(
         }
         lines.add(titleLine);
 
-        String timingLine = '';
-        switch (timeDisplayMode) {
-          case TimeDisplayMode.formatted:
-            timingLine =
-                'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}';
-            break;
-          case TimeDisplayMode.rawRelative:
-            timingLine =
-                'Start: ${span.startUs}  |  End: ${span.endUs}  |  Duration: ${formatDuration(durMs)}';
-            break;
-          case TimeDisplayMode.rawAbsolute:
-            final absStart = span.startUs + (baseTime ?? 0);
-            final absEnd = span.endUs + (baseTime ?? 0);
-            timingLine =
-                'Start: $absStart  |  End: $absEnd  |  Duration: ${formatDuration(durMs)}';
-            break;
-        }
+        var timingLine = switch (timeDisplayMode) {
+          TimeDisplayMode.formatted =>
+            'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}',
+          TimeDisplayMode.rawRelative =>
+            'Start: ${span.startUs}  |  End: ${span.endUs}  |  Duration: ${formatDuration(durMs)}',
+          TimeDisplayMode.rawAbsolute =>
+            'Start: ${span.startUs + (baseTime ?? 0)}  |  End: ${span.endUs + (baseTime ?? 0)}  |  Duration: ${formatDuration(durMs)}',
+        };
         if (timingLine.length > maxWidth - 2) {
           timingLine = '${timingLine.substring(0, maxWidth - 5)}...';
         }

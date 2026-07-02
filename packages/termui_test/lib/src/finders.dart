@@ -81,12 +81,11 @@ class _ByTextFinder extends Finder {
           return _matches(_collectTextSpan(span));
         case TextField(controller: final ctrl):
           final txt = ctrl.text;
-          if (pattern is String) {
-            return txt.contains(pattern as String);
-          } else if (pattern is RegExp) {
-            return (pattern as RegExp).hasMatch(txt);
-          }
-          return false;
+          return switch (pattern) {
+            final String p => txt.contains(p),
+            final RegExp r => r.hasMatch(txt),
+            _ => false,
+          };
         default:
           try {
             final dynamic dynWidget = widget;

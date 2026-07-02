@@ -98,33 +98,17 @@ class AnsiScreenshot {
       final mod = 1 << i;
       if (Modifier.has(target.modifiers, mod) &&
           !Modifier.has(effectiveCurrent.modifiers, mod)) {
-        int code = 0;
-        switch (mod) {
-          case Modifier.bold:
-            code = 1;
-            break;
-          case Modifier.dim:
-            code = 2;
-            break;
-          case Modifier.italic:
-            code = 3;
-            break;
-          case Modifier.underline:
-            code = 4;
-            break;
-          case Modifier.blink:
-            code = 5;
-            break;
-          case Modifier.reverse:
-            code = 7;
-            break;
-          case Modifier.hidden:
-            code = 8;
-            break;
-          case Modifier.crossedOut:
-            code = 9;
-            break;
-        }
+        final code = switch (mod) {
+          Modifier.bold => 1,
+          Modifier.dim => 2,
+          Modifier.italic => 3,
+          Modifier.underline => 4,
+          Modifier.blink => 5,
+          Modifier.reverse => 7,
+          Modifier.hidden => 8,
+          Modifier.crossedOut => 9,
+          _ => 0,
+        };
         if (code != 0) {
           codeBuilder.write('$code;');
         }

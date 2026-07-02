@@ -315,21 +315,11 @@ class TextElement extends Element {
       final line = textLines[i];
       final lineWidth = lineMeasurements[i];
 
-      var startX = 0;
-      switch (textWidget.textAlign) {
-        case TextAlign.left:
-          startX = 0;
-          break;
-        case TextAlign.right:
-          startX = max(0, areaWidth - lineWidth);
-          break;
-        case TextAlign.center:
-          startX = max(0, (areaWidth - lineWidth) ~/ 2);
-          break;
-        case TextAlign.justify:
-          startX = 0;
-          break;
-      }
+      final startX = switch (textWidget.textAlign) {
+        TextAlign.left || TextAlign.justify => 0,
+        TextAlign.right => max(0, areaWidth - lineWidth),
+        TextAlign.center => max(0, (areaWidth - lineWidth) ~/ 2),
+      };
 
       final availableWidth = areaWidth - startX;
       final visibleChars = lineWidth > availableWidth
