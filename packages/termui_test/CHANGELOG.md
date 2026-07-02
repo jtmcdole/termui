@@ -1,3 +1,7 @@
+## 0.2.2+1
+
+ - **FIX**(testing): resolve pumpAndSettle timeouts and align fakeAsync time model with Flutter.
+
 ## 0.2.2
 
  - **FEAT**(termui): add reactive rendering support and refactor mouse event handling.

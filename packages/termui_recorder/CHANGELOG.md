@@ -1,3 +1,7 @@
+## 0.5.1
+
+ - **FEAT**(recorder): generate visual diff highlights and asciicast comparisons for golden mismatches.
+
 ## 0.5.0
 
 > Note: This release has breaking changes.

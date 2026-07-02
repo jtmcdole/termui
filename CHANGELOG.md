@@ -3,6 +3,50 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-01
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.6.1`](#termui---v061)
+ - [`termui_recorder` - `v0.5.1`](#termui_recorder---v051)
+ - [`termui_test` - `v0.2.2+1`](#termui_test---v0221)
+ - [`termui_flutter` - `v0.6.0+1`](#termui_flutter---v0601)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.6.0+1`
+
+---
+
+#### `termui` - `v0.6.1`
+
+ - **REFACTOR**(core): make modal dialog layers responsive to terminal resize events.
+ - **FIX**(core): delegate intrinsic sizing in AbsorbPointer to child and add tests.
+ - **FIX**(core): restrict alternate screen transitions in PromptRunner to standalone mode.
+ - **FIX**(termui): support wide characters and CJK in tables without layout shifting.
+ - **FIX**(termui): support wide characters and CJK in LazyTable without layout shifting.
+ - **FIX**(testing): resolve pumpAndSettle timeouts and align fakeAsync time model with Flutter.
+ - **FEAT**(core): extract Builder and implement overlay-based modal dialogs with dimming barriers.
+
+#### `termui_recorder` - `v0.5.1`
+
+ - **FEAT**(recorder): generate visual diff highlights and asciicast comparisons for golden mismatches.
+
+#### `termui_test` - `v0.2.2+1`
+
+ - **FIX**(testing): resolve pumpAndSettle timeouts and align fakeAsync time model with Flutter.
+
+
 ## 2026-06-25
 
 ### Changes
