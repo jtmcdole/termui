@@ -1,5 +1,4 @@
 import 'dart:math';
-import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 /// A virtual scrolling list widget. Only renders items within the visible viewport.
@@ -263,42 +262,6 @@ class LazyTableElement extends Element {
     return constraints.constrain(Size(width, height));
   }
 
-  String _padOrTruncate(String text, int width) {
-    // 1. ASCII Fast-Path: bypass characters allocation for standard text
-    var isAscii = true;
-    final len = text.length;
-    for (var i = 0; i < len; i++) {
-      if (text.codeUnitAt(i) >= 128) {
-        isAscii = false;
-        break;
-      }
-    }
-
-    if (isAscii) {
-      if (len == width) return text;
-      if (len > width) return text.substring(0, width);
-      return text.padRight(width);
-    }
-
-    // 2. Slow-Path fallback for CJK and Emoji text
-    final cellWidth = measureStringWidth(text);
-    if (cellWidth == width) return text;
-    if (cellWidth < width) return text + (' ' * (width - cellWidth));
-
-    var currentWidth = 0;
-    final sb = StringBuffer();
-    for (final char in text.characters) {
-      final charWidth = isWideGrapheme(char) ? 2 : 1;
-      if (currentWidth + charWidth > width) break;
-      sb.write(char);
-      currentWidth += charWidth;
-    }
-    if (currentWidth < width) {
-      sb.write(' ' * (width - currentWidth));
-    }
-    return sb.toString();
-  }
-
   @override
   void performPaint(Buffer buffer, Offset offset) {
     final table = widget as LazyTable;
@@ -323,7 +286,7 @@ class LazyTableElement extends Element {
       for (var i = 0; i < table.headers.length; i++) {
         final width = resolvedColumnWidths[i];
         final text = table.headers[i];
-        final padded = _padOrTruncate(text, width);
+        final padded = padOrTruncate(text, width);
         headerSb.write(padded);
         if (i < table.headers.length - 1) headerSb.write(' ');
       }
@@ -335,7 +298,7 @@ class LazyTableElement extends Element {
         }
         headerStr = headerSb.toString();
       } else {
-        headerStr = _padOrTruncate(headerSb.toString(), w);
+        headerStr = padOrTruncate(headerSb.toString(), w);
       }
       buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
 
@@ -358,7 +321,7 @@ class LazyTableElement extends Element {
       for (var c = 0; c < table.headers.length; c++) {
         final width = resolvedColumnWidths[c];
         final cellText = c < rowData.length ? rowData[c] : '';
-        final padded = _padOrTruncate(cellText, width);
+        final padded = padOrTruncate(cellText, width);
         rowSb.write(padded);
         if (c < table.headers.length - 1) rowSb.write(' ');
       }
@@ -370,7 +333,7 @@ class LazyTableElement extends Element {
         }
         rowStr = rowSb.toString();
       } else {
-        rowStr = _padOrTruncate(rowSb.toString(), w);
+        rowStr = padOrTruncate(rowSb.toString(), w);
       }
       final targetY = offset.dy + headerRowsCount + r;
 
