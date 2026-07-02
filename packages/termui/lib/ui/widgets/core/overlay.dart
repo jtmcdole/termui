@@ -3,9 +3,6 @@ import 'dart:math';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
-/// A function that builds a widget given a build context.
-typedef WidgetBuilder = Widget Function(BuildContext context);
-
 /// Helper function to traverse the parent chain of a [Buffer] to find its absolute [Rect] boundaries.
 Rect getAbsoluteRect(Buffer buffer, Rect localRect) {
   int x = localRect.x;
@@ -951,5 +948,93 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
         onKey: handleKeyEvent,
       ),
     );
+  }
+}
+
+/// A full-screen widget that blocks pointer events and invokes [onDismiss] when clicked.
+class ModalDismissBarrier extends Widget {
+  /// The child widget.
+  final Widget child;
+
+  /// Callback when the barrier is clicked.
+  final void Function() onDismiss;
+
+  /// Creates a new [ModalDismissBarrier].
+  const ModalDismissBarrier({
+    super.key,
+    required this.child,
+    required this.onDismiss,
+  });
+
+  @override
+  Element createElement() => ModalDismissBarrierElement(this);
+}
+
+/// Element managing a [ModalDismissBarrier] widget.
+class ModalDismissBarrierElement extends Element implements MouseEventHandler {
+  /// The child element.
+  Element? childElement;
+
+  /// Creates a modal dismiss barrier element.
+  ModalDismissBarrierElement(ModalDismissBarrier super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+
+  @override
+  void rebuild() {
+    final w = widget as ModalDismissBarrier;
+    if (childElement != null &&
+        childElement!.widget.runtimeType == w.child.runtimeType) {
+      childElement!.update(w.child);
+    } else {
+      childElement?.unmount();
+      childElement = w.child.createElement();
+      childElement!.mount(this);
+    }
+  }
+
+  @override
+  void visitChildren(void Function(Element child) visitor) {
+    if (childElement != null) visitor(childElement!);
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    if (childElement != null) {
+      childElement!.layout(constraints);
+    }
+    return constraints.constrain(
+      Size(constraints.maxWidth, constraints.maxHeight),
+    );
+  }
+
+  @override
+  void performPaint(Buffer buffer, Offset offset) {
+    if (childElement != null) {
+      childElement!.paint(buffer, offset);
+    }
+  }
+
+  @override
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    if (event.type == MouseEventType.press) {
+      (widget as ModalDismissBarrier).onDismiss();
+    }
   }
 }

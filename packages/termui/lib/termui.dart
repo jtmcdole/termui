@@ -73,6 +73,7 @@ export 'ui/widgets/display/table.dart';
 export 'ui/widgets/display/tree.dart';
 export 'ui/widgets/display/help.dart';
 export 'ui/widgets/core/modal_overlay.dart';
+export 'ui/widgets/core/builder.dart';
 export 'ui/widgets/core/overlay.dart';
 export 'ui/widgets/core/prompt_runner.dart';
 export 'ui/widgets/core/scene_manager.dart';
