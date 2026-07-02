@@ -3,6 +3,43 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-02
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.6.2`](#termui---v062)
+ - [`termui_hotreload` - `v0.6.2`](#termui_hotreload---v062)
+ - [`termui_flutter` - `v0.6.0+2`](#termui_flutter---v0602)
+ - [`termui_recorder` - `v0.5.1+1`](#termui_recorder---v0511)
+ - [`termui_test` - `v0.2.2+2`](#termui_test---v0222)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.6.0+2`
+ - `termui_recorder` - `v0.5.1+1`
+ - `termui_test` - `v0.2.2+2`
+
+---
+
+#### `termui` - `v0.6.2`
+
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+
+#### `termui_hotreload` - `v0.6.2`
+
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+
+
 ## 2026-07-01
 
 ### Changes
