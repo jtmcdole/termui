@@ -36,6 +36,41 @@ To host a `termui` TUI application in a graphical environment (e.g. within a Flu
 
 ---
 
+## Hot Reloading
+
+`termui` provides native support for Dart VM hot reloading via the companion package **[termui_hotreload](../termui_hotreload)**. This enables rapid prototyping of terminal layout structures and state without requiring manual process restarts or rebuilding.
+
+To use it, wrap your application initialization with `TermuiHotReload` and execute your Dart script with the VM service enabled:
+
+```bash
+dart --enable-vm-service bin/main.dart
+```
+
+**Implementation Snapshot:**
+```dart
+import 'package:termui_hotreload/termui_hotreload.dart';
+
+void main() async {
+  // 1. Enable watcher before UI startup
+  final hotreload = await TermuiHotReload.enable(
+    onError: (e) => print('Failed to attach HotReloader: $e'),
+  );
+
+  // 2. Initialize terminal and run PromptRunner
+  final terminal = Terminal();
+  final runner = PromptRunner<void>(...);
+  await runner.run();
+
+  // 3. Disable watcher and free descriptors to exit cleanly
+  await hotreload?.disable();
+  terminal.dispose();
+}
+```
+
+Check out the interactive stateful example at **[termui_hotreload/example](../termui_hotreload/example/lib/main.dart)**.
+
+---
+
 ## 1. System Architecture
 
 The core rendering and windowing model of `termui` revolves around three central components: `SceneManager`, `Compositor`, and `Renderer`. Together, they coordinate hardware abstraction, overlapping UI layer flattening, and minimum-cost terminal updates.

@@ -135,6 +135,9 @@ abstract class State<T extends StatefulWidget> {
   /// Called whenever the widget configuration changes.
   void didUpdateWidget(covariant T oldWidget) {}
 
+  /// Called when the application is reassembled during debugging (hot reload).
+  void reassemble() {}
+
   /// Called when this object is removed from the tree permanently.
   void dispose() {}
 

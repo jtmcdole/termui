@@ -89,7 +89,7 @@ class UserInterruptException extends PromptAbortedException {
 ///   onComplete: () => myController.text,
 /// ).run();
 /// ```
-class PromptRunner<T> implements ListenableSceneRenderer {
+class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   static final int _traceKeyEventId = Tracer.registerString(
     'PromptRunner:handleKeyEvent',
   );
@@ -260,6 +260,9 @@ class PromptRunner<T> implements ListenableSceneRenderer {
   void dispose() {
     if (_isDisposed) return;
     _isDisposed = true;
+    if (mode == ExecutionMode.standalone) {
+      TermuiBinding.unregister(this);
+    }
     onPromptEnded?.call(this);
 
     // Unmount element tree so focus nodes and states can clean up
@@ -380,11 +383,19 @@ class PromptRunner<T> implements ListenableSceneRenderer {
     render();
   }
 
+  /// Called during hot reload to force the entire widget tree to rebuild and repaint.
+  @override
+  void reassemble() {
+    _rootElement?.reassemble();
+    _scheduleRender();
+  }
+
   /// Starts the inline prompt loop and returns a Future containing the final result.
   Future<T?> run() async {
     onPromptStarted?.call(this);
 
     if (mode == ExecutionMode.standalone) {
+      TermuiBinding.register(this);
       final termSize = await terminal.size;
       _width = termSize.x;
       _computedHeight = alternateScreen
@@ -487,6 +498,9 @@ class PromptRunner<T> implements ListenableSceneRenderer {
 
       return await completer.future;
     } finally {
+      if (mode == ExecutionMode.standalone) {
+        TermuiBinding.unregister(this);
+      }
       final wasDisposedBefore = _isDisposed;
       _isDisposed = true;
       if (!wasDisposedBefore) {

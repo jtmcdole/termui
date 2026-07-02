@@ -13,6 +13,8 @@ workspace:
   - packages/termui_shared_examples
   - packages/termui_recorder
   - packages/termui_test
+  - packages/termui_hotreload
+  - packages/termui_hotreload/example
 
 dev_dependencies:
   melos: ^7.0.0

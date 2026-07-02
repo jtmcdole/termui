@@ -98,7 +98,7 @@ void processData() {
   // Suppress for a specific line
   // ignore: invalid_assignment
   int x = '';
-  
+
   const y = 10; // ignore: constant_identifier_names
 }
 ```

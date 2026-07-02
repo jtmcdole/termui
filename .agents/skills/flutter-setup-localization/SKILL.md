@@ -190,8 +190,8 @@ class GreetingWidget extends StatelessWidget {
   final int notificationCount;
 
   const GreetingWidget({
-    super.key, 
-    required this.userName, 
+    super.key,
+    required this.userName,
     required this.notificationCount,
   });
 

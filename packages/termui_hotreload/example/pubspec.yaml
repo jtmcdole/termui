@@ -1,0 +1,15 @@
+name: termui_hotreload_example
+description: Example application demonstrating termui_hotreload.
+publish_to: 'none'
+version: 1.0.0
+
+environment:
+  sdk: ">=3.11.0 <4.0.0"
+
+resolution: workspace
+
+
+dependencies:
+  termui: ^0.6.1
+  termui_hotreload:
+    path: ../

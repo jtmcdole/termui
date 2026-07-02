@@ -38,6 +38,7 @@ export 'ui/widgets/core/build_context.dart';
 export 'ui/widgets/core/key.dart';
 export 'ui/widgets/core/geometry.dart';
 export 'ui/widgets/core/build_owner.dart';
+export 'ui/widgets/core/binding.dart';
 export 'ui/widgets/core/viewport.dart';
 export 'ui/widgets/layout/layout_builder.dart';
 export 'ui/widgets/layout/safe_layout.dart';
@@ -88,3 +89,4 @@ export 'ui/easing.dart';
 
 export 'ui/scroll_controller.dart';
 export 'ui/widgets/core/focusable_state_mixin.dart';
+export 'ui/widgets/interactive/stream_builder.dart';

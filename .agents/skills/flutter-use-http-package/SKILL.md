@@ -43,7 +43,7 @@ Execute HTTP operations and map responses to strongly typed Dart objects.
 *   **URIs:** Always parse URL strings using `Uri.parse('your_url')`.
 *   **Headers:** Inject authorization and content-type headers via the `headers` parameter map. Use `HttpHeaders.authorizationHeader` for auth tokens.
 *   **Payloads:** For POST and PUT requests, encode the body using `jsonEncode()` from `dart:convert`.
-*   **Status Validation:** Evaluate `response.statusCode`. Treat `200 OK` (GET/PUT/DELETE) and `201 CREATED` (POST) as success. 
+*   **Status Validation:** Evaluate `response.statusCode`. Treat `200 OK` (GET/PUT/DELETE) and `201 CREATED` (POST) as success.
 *   **Error Handling:** Throw explicit exceptions for non-success status codes. Never return `null` on failure, as this prevents `FutureBuilder` from triggering its error state and causes infinite loading indicators.
 *   **Deserialization:** Parse the raw string using `jsonDecode(response.body)` and map it to a custom Dart object using a factory constructor (e.g., `fromJson`).
 
@@ -164,7 +164,7 @@ class _PhotoGalleryState extends State<PhotoGallery> {
         } else if (snapshot.hasError) {
           return Center(child: Text('Error: ${snapshot.error}'));
         }
-        
+
         // Default loading state
         return const Center(child: CircularProgressIndicator());
       },
