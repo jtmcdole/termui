@@ -1,3 +1,13 @@
+## 0.6.1
+
+ - **REFACTOR**(core): make modal dialog layers responsive to terminal resize events.
+ - **FIX**(core): delegate intrinsic sizing in AbsorbPointer to child and add tests.
+ - **FIX**(core): restrict alternate screen transitions in PromptRunner to standalone mode.
+ - **FIX**(termui): support wide characters and CJK in tables without layout shifting.
+ - **FIX**(termui): support wide characters and CJK in LazyTable without layout shifting.
+ - **FIX**(testing): resolve pumpAndSettle timeouts and align fakeAsync time model with Flutter.
+ - **FEAT**(core): extract Builder and implement overlay-based modal dialogs with dimming barriers.
+
 ## 0.6.0
 
 > Note: This release has breaking changes.
