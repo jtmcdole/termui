@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'dart:io';
+import 'package:archive/archive.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
@@ -62,17 +64,75 @@ void main() {
       },
     );
 
-    test('fails when golden file content differs', () {
-      final buffer = Buffer.blank(5, 1);
-      buffer.writeString(0, 0, 'Test', Style.empty);
+    test(
+      'fails when golden file content differs and generates fail/diff/cast outputs',
+      () {
+        final buffer = Buffer.blank(5, 1);
+        buffer.writeString(0, 0, 'Test', Style.empty);
 
-      final goldenPath = '${tempDir.path}/diff.ansi';
-      final file = File(goldenPath)..createSync(recursive: true);
-      file.writeAsStringSync('DiffContent\n');
+        final goldenPath = '${tempDir.path}/diff.ansi';
+        final file = File(goldenPath)..createSync(recursive: true);
+        file.writeAsStringSync('DiffContent\n');
 
-      expect(() {
-        expect(buffer, matchesAnsiGolden(goldenPath));
-      }, throwsA(isA<TestFailure>()));
-    });
+        TestFailure? failure;
+        try {
+          expect(buffer, matchesAnsiGolden(goldenPath));
+        } on TestFailure catch (e) {
+          failure = e;
+        }
+
+        expect(failure, isNotNull);
+        expect(failure!.message, contains('Mismatch detected for golden file'));
+        expect(failure.message, contains('Actual output saved to:'));
+        expect(failure.message, contains('Highlighted diff saved to:'));
+        expect(
+          failure.message,
+          contains('Play comparison slideshow cast with:'),
+        );
+        expect(
+          failure.message,
+          contains('dart run termui_recorder:termui_play'),
+        );
+
+        // Check that files are written
+        final failPath = '$goldenPath.fail';
+        final diffPath = '$goldenPath.diff';
+        final castPath = '$goldenPath.cast';
+
+        expect(File(failPath).existsSync(), isTrue);
+        expect(File(diffPath).existsSync(), isTrue);
+        expect(File(castPath).existsSync(), isTrue);
+
+        // Verify actual contents
+        expect(
+          File(failPath).readAsStringSync(),
+          equals(AnsiScreenshot.capture(buffer)),
+        );
+        expect(
+          File(diffPath).readAsStringSync(),
+          contains('48;2;128;0;0m'),
+        ); // Mismatches highlighted in red
+
+        // Verify Gzipped Asciicast contents
+        final castBytes = File(castPath).readAsBytesSync();
+        final decodedBytes = GZipDecoder().decodeBytes(castBytes);
+        final castContent = utf8.decode(decodedBytes);
+        final castLines = castContent.trim().split('\n');
+
+        expect(
+          castLines.length,
+          greaterThanOrEqualTo(4),
+        ); // Header + 3 frames + optional action events
+
+        final headerJson = jsonDecode(castLines[0]) as Map<String, dynamic>;
+        expect(headerJson['version'], equals(3));
+        expect(headerJson['term']['cols'], equals(5));
+        expect(headerJson['term']['rows'], equals(1));
+
+        // The last line should represent the final frame output event
+        final lastLineJson = jsonDecode(castLines.last) as List<dynamic>;
+        expect(lastLineJson[1], equals('o')); // output sequence
+      },
+    );
   });
 }
