@@ -11,8 +11,18 @@ void main() {
 
   final actualBuffer = Buffer.blank(30, 5);
   actualBuffer.writeString(0, 0, '=== EXPECTED SCREEN ===', Style.empty);
-  actualBuffer.writeString(0, 2, 'Item 1: FAILED', Style.empty); // Mismatch here
-  actualBuffer.writeString(0, 3, 'Item 2: Active', Style.empty); // Mismatch here
+  actualBuffer.writeString(
+    0,
+    2,
+    'Item 1: FAILED',
+    Style.empty,
+  ); // Mismatch here
+  actualBuffer.writeString(
+    0,
+    3,
+    'Item 2: Active',
+    Style.empty,
+  ); // Mismatch here
 
   final fixtureDir = Directory('test/fixtures');
   if (!fixtureDir.existsSync()) {
