@@ -1,26 +1,36 @@
-# termui Overlay & Navigation System Refactoring Proposals
+# termui Overlay & Navigation System Architecture
 
-This document outlines structural design suggestions to elevate modal dialog rendering from local component stacks to a screen-wide global root overlay system, mirroring Flutter's overlay design.
-
----
-
-## 1. Global Root Overlay & Navigator System
-Currently, widgets like `ModalOverlay` in the `widget_book` are declared locally using a `Stack` component. This confines the modal bounds to the containing widget (e.g., the right-side preview pane in the split-layout widget book) instead of rendering over the entire terminal canvas.
-
-### Proposed Architecture:
-1. **Root Overlay Widget**:
-   - Introduce an `Overlay` widget positioned at the very root of the application element tree (managed by the `SceneRenderer` or top-level shell).
-   - This `Overlay` maintains a list of overlay entries (`OverlayEntry`) which are rendered sequentially on top of the base widget tree.
-2. **Navigator Integration**:
-   - Implement a lightweight `Navigator` widget that sits inside/alongside the `Overlay`.
-   - Provide programmatic imperative APIs (e.g., `showDialog()`, `Navigator.push()`, etc.) that declare and append dialog components to the root `Overlay` tree.
-3. **Decoupled Compositing & Focus**:
-   - Programmatically handle focus trapping within the topmost active `OverlayEntry`.
-   - Utilize a global `DimmingBarrier` inside the root overlay stack to dim all underlying application pages/components.
+This document outlines the structural design choice for rendering screens, overlay menus, and modal dialogs in the `termui` windowing system.
 
 ---
 
-## 2. Benefits
-- **Full Screen Bounds**: Modal dialogs, popup lists, dropdown selections, and tooltips will render on top of all panes, sidebars, and title headers.
-- **Improved Declarative Ergonomics**: Component developers won't need to manually design local `Stack` structures or coordinate bounding boxes to overlay components on top.
-- **Unified Event Interception**: Mouse events and keyboard events (like Esc for dismissal) can be intercepted cleanly at the root overlay level rather than trapped inside local page scopes.
+## 1. The Chosen Architecture: State-Machine Driven Layout & SceneManager Layers
+
+Instead of introducing a Flutter-style nested `Navigator` widget (which introduces high boilerplate, nested BuildContext dependency, and fragile focus trapping), `termui` applications should utilize a **Hierarchical State Machine (HSM)** and the **`SceneManager` layer stack**.
+
+### Key Advantages:
+1. **Headless Testability**: The application flow, menu transitions, and dialog triggers can be fully unit-tested headlessly in pure Dart without compiling/mounting the widget tree or simulating a visual terminal layout.
+2. **Deterministic Focus Lifecycle**: Focus transitions are managed cleanly via the state machine's `onEnter` and `onExit` hooks, avoiding fragile ad-hoc focus checks in paint and build loops.
+3. **Decoupled Business Logic**: Widgets remain purely declarative. They do not invoke imperative navigation commands (e.g. `Navigator.of(context).push(...)`). Instead, they post events to an event bus or transition state variables in a ViewModel.
+
+---
+
+## 2. Implementing Modal Overlays and Dialogs
+
+To display modal overlays, dialogs, or dropdown lists, use a dedicated high Z-index `SceneLayer` registered directly on the `SceneManager`:
+
+1. **Overlay Layer Registration**:
+   Create a new fixed-size or intrinsic `SceneLayer` wrapping a `PromptRunner` or `SceneRenderer` that hosts the dialog widget. Add this layer to the `SceneManager.layers` stack with a high `zIndex` (e.g., `zIndex: 100`).
+2. **Focus Redirection**:
+   Set `SceneManager.focusedLayer` to the overlay layer to automatically direct keyboard and mouse inputs to the dialog.
+3. **Global Dimming Scrim**:
+   Wrap the dialog widget or base content in a `DimmingBarrier` (which utilizes `EffectWidget` with `DimmerEffect`) to dim all underlying application screens and intercept pointer events.
+4. **Transition Animations (e.g., Screen Sliding)**:
+   For screen transition effects (like sliding menus), animate the `x` or `y` coordinates of the target `SceneLayer` objects simultaneously over successive frames in the render loop.
+
+---
+
+## 3. Local vs. Global Overlays
+
+- **Global Overlays (Dialogs, Modals, System Tooltips)**: Managed as top-level `SceneLayer`s in the `SceneManager` stack.
+- **Local Overlays (Dropdown Selection, Button Hover Menu)**: Managed locally within a widget subtree using the existing `Overlay` and `OverlayEntry` stack (rendered via a local `Stack` component) since their layout bounds are confined to the coordinate system of the parent component.

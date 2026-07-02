@@ -649,6 +649,119 @@ class SceneManager {
     _activeRenderers.clear();
     _activeRenderers.addAll(currentRenderers);
   }
+
+  /// Displays a modal dialog by adding it as a higher layer.
+  /// Returns a Future that completes when the dialog is dismissed/completed.
+  Future<T?> showDialog<T>({
+    required WidgetBuilder builder,
+    bool barrierDismissible = true,
+    double barrierScalar = 0.5,
+    int width = 40,
+    int height = 10,
+  }) {
+    final completer = Completer<T?>();
+
+    late final PromptRunner<T> runner;
+
+    final barrierWidget = Stack([
+      Positioned(
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        child: DimmingBarrier(scalar: barrierScalar),
+      ),
+      Positioned(
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+        child: ModalDismissBarrier(
+          onDismiss: () {
+            if (barrierDismissible) {
+              runner.abort();
+            }
+          },
+          child: const SizedBox.expand(),
+        ),
+      ),
+    ]);
+
+    final barrierRunner = PromptRunner<void>(
+      terminal: terminal,
+      widget: barrierWidget,
+      alternateScreen: false,
+      mode: ExecutionMode.managed,
+      onFramePainted: (_) => render(),
+    );
+
+    final dialogWidget = Builder(builder: builder);
+
+    final previousFocusedLayer = focusedLayer;
+
+    runner = PromptRunner<T>(
+      terminal: terminal,
+      widget: dialogWidget,
+      alternateScreen: false,
+      mode: ExecutionMode.managed,
+      onFramePainted: (_) => render(),
+    );
+
+    final baseZIndex = 1000 + layers.length * 2;
+
+    final barrierLayer = SceneLayer(
+      renderer: barrierRunner,
+      sizing: LayerSizing.fullscreen,
+      zIndex: baseZIndex,
+    );
+
+    final terminalSize = terminal.backend.size;
+    final x = (terminalSize.x - width) ~/ 2;
+    final y = (terminalSize.y - height) ~/ 2;
+
+    final dialogLayer = SceneLayer(
+      renderer: runner,
+      sizing: LayerSizing.fixed,
+      x: x,
+      y: y,
+      width: width,
+      height: height,
+      zIndex: baseZIndex + 1,
+    );
+
+    layers.add(barrierLayer);
+    layers.add(dialogLayer);
+    focusedLayer = dialogLayer;
+    render();
+
+    barrierRunner.run();
+    runner
+        .run()
+        .then((result) {
+          completer.complete(result);
+        })
+        .catchError((err) {
+          if (err is PromptAbortedException) {
+            completer.complete(null);
+          } else {
+            completer.completeError(err);
+          }
+        })
+        .whenComplete(() {
+          layers.remove(dialogLayer);
+          layers.remove(barrierLayer);
+          runner.dispose();
+          barrierRunner.dispose();
+          if (focusedLayer == dialogLayer || focusedLayer == barrierLayer) {
+            focusedLayer =
+                previousFocusedLayer ??
+                (layers.isNotEmpty ? layers.last : null);
+          }
+          render();
+        });
+
+    return completer.future;
+  }
 }
 
 Buffer _cloneBufferWithBorder(Buffer source) {
