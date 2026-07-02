@@ -16,6 +16,12 @@ class AbsorbPointer extends Widget {
 
   @override
   Element createElement() => AbsorbPointerElement(this);
+
+  @override
+  int getIntrinsicHeight(int width) => child.getIntrinsicHeight(width);
+
+  @override
+  int getIntrinsicWidth(int height) => child.getIntrinsicWidth(height);
 }
 
 /// Element for [AbsorbPointer] that handles pointer event absorption.
