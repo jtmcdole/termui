@@ -390,6 +390,9 @@ class PromptRunner<T> implements ListenableSceneRenderer {
       _computedHeight = alternateScreen
           ? termSize.y
           : widget.getIntrinsicHeight(_width);
+      if (alternateScreen) {
+        terminal.enterAlternateScreen();
+      }
     } else {
       if (_width <= 0) {
         _width = 80;
@@ -399,103 +402,110 @@ class PromptRunner<T> implements ListenableSceneRenderer {
       }
     }
 
-    // Create a temporary buffer and inline renderer.
-    _currentBuffer = Buffer.blank(_width, _computedHeight);
-    _renderer = Renderer(
-      _width,
-      _computedHeight,
-      mode: alternateScreen
-          ? RenderingMode.alternateScreen
-          : RenderingMode.inline,
-    );
-
-    final completer = Completer<T?>();
-    _completer = completer;
-    _isDisposed = false;
-
-    // Wrap the widget tree in a PromptScope to expose the clean completion API
-    final scopedWidget = PromptScope(
-      onDone: (result) {
-        if (!completer.isCompleted) {
-          completer.complete(result as T?);
-        }
-      },
-      child: FocusScope(autofocus: true, child: widget),
-    );
-
-    _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleRender);
-
-    final rootElement = scopedWidget.createElement();
-    rootElement.owner = _buildOwner;
-    rootElement.mount(null);
-    _rootElement = rootElement;
-
-    if (mode == ExecutionMode.standalone && debugPaintHoverEnabled) {
-      terminal.enableMouseTracking();
-    }
-
-    // Initial frame draw
-    rootElement.markNeedsBuild();
-    render();
-
     StreamSubscription<Point<int>>? sizeSubscription;
     StreamSubscription<term.InputEvent>? subscription;
 
-    if (mode == ExecutionMode.standalone) {
-      sizeSubscription = terminal.watchSize().listen((size) {
-        if (_isDisposed) return;
-        _width = size.x;
-        _computedHeight = alternateScreen
-            ? size.y
-            : widget.getIntrinsicHeight(_width);
-        _currentBuffer?.resize(_width, _computedHeight);
-        _renderer = Renderer(
-          _width,
-          _computedHeight,
-          mode: alternateScreen
-              ? RenderingMode.alternateScreen
-              : RenderingMode.inline,
-        );
-        rootElement.markNeedsBuild();
-        render();
-      });
-
-      subscription = terminal.events.listen(
-        (event) {
-          if (event is term.KeyEvent) {
-            handleKeyEvent(event);
-          } else if (event is term.MouseEvent) {
-            handleMouseEvent(event);
-          }
-        },
-        onDone: () {
-          if (!completer.isCompleted) {
-            completer.complete(null);
-          }
-        },
-        onError: (e, stack) {
-          if (!completer.isCompleted) {
-            completer.completeError(e, stack);
-          }
-        },
-      );
-    }
-
     try {
+      // Create a temporary buffer and inline renderer.
+      _currentBuffer = Buffer.blank(_width, _computedHeight);
+      _renderer = Renderer(
+        _width,
+        _computedHeight,
+        mode: alternateScreen
+            ? RenderingMode.alternateScreen
+            : RenderingMode.inline,
+      );
+
+      final completer = Completer<T?>();
+      _completer = completer;
+      _isDisposed = false;
+
+      // Wrap the widget tree in a PromptScope to expose the clean completion API
+      final scopedWidget = PromptScope(
+        onDone: (result) {
+          if (!completer.isCompleted) {
+            completer.complete(result as T?);
+          }
+        },
+        child: FocusScope(autofocus: true, child: widget),
+      );
+
+      _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleRender);
+
+      final rootElement = scopedWidget.createElement();
+      rootElement.owner = _buildOwner;
+      rootElement.mount(null);
+      _rootElement = rootElement;
+
+      if (mode == ExecutionMode.standalone && debugPaintHoverEnabled) {
+        terminal.enableMouseTracking();
+      }
+
+      // Initial frame draw
+      rootElement.markNeedsBuild();
+      render();
+
+      if (mode == ExecutionMode.standalone) {
+        sizeSubscription = terminal.watchSize().listen((size) {
+          if (_isDisposed) return;
+          _width = size.x;
+          _computedHeight = alternateScreen
+              ? size.y
+              : widget.getIntrinsicHeight(_width);
+          _currentBuffer?.resize(_width, _computedHeight);
+          _renderer = Renderer(
+            _width,
+            _computedHeight,
+            mode: alternateScreen
+                ? RenderingMode.alternateScreen
+                : RenderingMode.inline,
+          );
+          rootElement.markNeedsBuild();
+          render();
+        });
+
+        subscription = terminal.events.listen(
+          (event) {
+            if (event is term.KeyEvent) {
+              handleKeyEvent(event);
+            } else if (event is term.MouseEvent) {
+              handleMouseEvent(event);
+            }
+          },
+          onDone: () {
+            if (!completer.isCompleted) {
+              completer.complete(null);
+            }
+          },
+          onError: (e, stack) {
+            if (!completer.isCompleted) {
+              completer.completeError(e, stack);
+            }
+          },
+        );
+      }
+
       return await completer.future;
     } finally {
+      final wasDisposedBefore = _isDisposed;
       _isDisposed = true;
-      onPromptEnded?.call(this);
+      if (!wasDisposedBefore) {
+        onPromptEnded?.call(this);
+      }
       sizeSubscription?.cancel();
       subscription?.cancel();
       // Restore cursor visibility
       if (mode == ExecutionMode.standalone) {
+        if (alternateScreen) {
+          terminal.exitAlternateScreen();
+        }
         terminal.showCursor();
         if (debugPaintHoverEnabled) {
           terminal.disableMouseTracking();
         }
       }
       _rootElement?.unmount();
+      _rootElement = null;
     }
   }
 
