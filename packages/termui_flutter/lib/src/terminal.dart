@@ -270,50 +270,29 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     if (cursorName == null || cursorName.isEmpty || cursorName == 'default') {
       return SystemMouseCursors.basic;
     }
-    switch (cursorName) {
-      case 'text':
-        return SystemMouseCursors.text;
-      case 'pointer':
-        return SystemMouseCursors.click;
-      case 'crosshair':
-        return SystemMouseCursors.precise;
-      case 'help':
-        return SystemMouseCursors.help;
-      case 'progress':
-        return SystemMouseCursors.progress;
-      case 'wait':
-        return SystemMouseCursors.wait;
-      case 'move':
-        return SystemMouseCursors.move;
-      case 'not-allowed':
-        return SystemMouseCursors.forbidden;
-      case 'grab':
-        return SystemMouseCursors.grab;
-      case 'grabbing':
-        return SystemMouseCursors.grabbing;
-      case 'none':
-        return SystemMouseCursors.none;
-      case 'alias':
-        return SystemMouseCursors.alias;
-      case 'copy':
-        return SystemMouseCursors.copy;
-      case 'cell':
-        return SystemMouseCursors.cell;
-      case 'no-drop':
-        return SystemMouseCursors.noDrop;
-      case 'zoom-in':
-        return SystemMouseCursors.zoomIn;
-      case 'zoom-out':
-        return SystemMouseCursors.zoomOut;
-      case 'ns-resize':
-        return SystemMouseCursors.resizeUpDown;
-      case 'ew-resize':
-        return SystemMouseCursors.resizeLeftRight;
-      case 'all-scroll':
-        return SystemMouseCursors.allScroll;
-      default:
-        return SystemMouseCursors.basic;
-    }
+    return switch (cursorName) {
+      'text' => SystemMouseCursors.text,
+      'pointer' => SystemMouseCursors.click,
+      'crosshair' => SystemMouseCursors.precise,
+      'help' => SystemMouseCursors.help,
+      'progress' => SystemMouseCursors.progress,
+      'wait' => SystemMouseCursors.wait,
+      'move' => SystemMouseCursors.move,
+      'not-allowed' => SystemMouseCursors.forbidden,
+      'grab' => SystemMouseCursors.grab,
+      'grabbing' => SystemMouseCursors.grabbing,
+      'none' => SystemMouseCursors.none,
+      'alias' => SystemMouseCursors.alias,
+      'copy' => SystemMouseCursors.copy,
+      'cell' => SystemMouseCursors.cell,
+      'no-drop' => SystemMouseCursors.noDrop,
+      'zoom-in' => SystemMouseCursors.zoomIn,
+      'zoom-out' => SystemMouseCursors.zoomOut,
+      'ns-resize' => SystemMouseCursors.resizeUpDown,
+      'ew-resize' => SystemMouseCursors.resizeLeftRight,
+      'all-scroll' => SystemMouseCursors.allScroll,
+      _ => SystemMouseCursors.basic,
+    };
   }
 
   @override

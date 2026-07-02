@@ -1036,33 +1036,23 @@ class _TraceViewerAppState extends State<TraceViewerApp>
           final children = <Widget>[Text('│', style: borderStyle)];
 
           for (var i = 0; i < tickCount; i++) {
-            int col;
-            TextAlign align;
-            if (i == 0) {
-              col = 0;
-              align = TextAlign.left;
-            } else if (i == tickCount - 1) {
-              col = segmentsWidth;
-              align = TextAlign.right;
-            } else {
-              col = ((i + 0.5) * segmentsWidth / tickCount).round();
-              align = TextAlign.center;
-            }
+            final (col, align) = switch (i) {
+              0 => (0, TextAlign.left),
+              _ when i == tickCount - 1 => (segmentsWidth, TextAlign.right),
+              _ => (
+                ((i + 0.5) * segmentsWidth / tickCount).round(),
+                TextAlign.center,
+              ),
+            };
 
             final tickTimeMs = (offsetX + col * zoomLevel) / 1000.0;
-            String label;
-            switch (timeDisplayMode) {
-              case TimeDisplayMode.formatted:
-                label = formatDuration(tickTimeMs);
-                break;
-              case TimeDisplayMode.rawRelative:
-                label = (tickTimeMs * 1000).round().toString();
-                break;
-              case TimeDisplayMode.rawAbsolute:
-                label = ((tickTimeMs * 1000).round() + (baseTime ?? 0))
-                    .toString();
-                break;
-            }
+            final label = switch (timeDisplayMode) {
+              TimeDisplayMode.formatted => formatDuration(tickTimeMs),
+              TimeDisplayMode.rawRelative =>
+                (tickTimeMs * 1000).round().toString(),
+              TimeDisplayMode.rawAbsolute =>
+                ((tickTimeMs * 1000).round() + (baseTime ?? 0)).toString(),
+            };
 
             children.add(
               Expanded(
