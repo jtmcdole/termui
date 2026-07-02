@@ -1,3 +1,7 @@
+## 0.6.2
+
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+
 ## 0.6.1
 
  - **REFACTOR**(core): make modal dialog layers responsive to terminal resize events.
