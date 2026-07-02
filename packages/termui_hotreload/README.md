@@ -1,39 +1,62 @@
-<!--
-This README describes the package. If you publish this package to pub.dev,
-this README's contents appear on the landing page for your package.
+# termui_hotreload
 
-For information about how to write a good package README, see the guide for
-[writing package pages](https://dart.dev/tools/pub/writing-package-pages).
-
-For general information about developing packages, see the Dart guide for
-[creating packages](https://dart.dev/tools/pub/create-packages)
-and the Flutter guide for
-[developing packages and plugins](https://flutter.dev/to/develop-packages).
--->
-
-TODO: Put a short description of the package here that helps potential users
-know whether this package might be useful for them.
+An optional companion package for `termui` that provides dead-simple automatic hot reloading during development.
 
 ## Features
 
-TODO: List what your package can do. Maybe include images, gifs, or videos.
+- **Seamless integration:** Injects Dart VM hot reloading into your `termui` application.
+- **Zero-config binding:** Automatically broadcasts hot reload events to all registered `Reassemblable` widgets in the `termui` widget tree.
+- **Development only:** Gracefully bypasses hot reload initialization when compiled or run in a production environment (when `dart.vm.product` is true).
 
 ## Getting started
 
-TODO: List prerequisites and provide or point to information on how to
-start using the package.
+Add `termui_hotreload` to your `pubspec.yaml`:
+
+```yaml
+dependencies:
+  termui_hotreload: any
+```
 
 ## Usage
 
-TODO: Include short and useful examples for package users. Add longer examples
-to `/example` folder.
+Simply call `TermuiHotReload.enable()` at the beginning of your `main()` function, and call `disable()` when your application is shutting down.
 
 ```dart
-const like = 'sample';
+import 'package:termui/termui.dart';
+import 'package:termui_hotreload/termui_hotreload.dart';
+
+void main() async {
+  // 1. Setup HotReloader in development mode
+  final hotreload = await TermuiHotReload.enable(
+    onError: (e) {
+      // Custom fallback logic if VM service is not found
+    },
+  );
+
+  final terminal = Terminal();
+  final runner = PromptRunner<void>(
+    terminal: terminal,
+    widget: const Text('Hello World!'),
+  );
+
+  await runner.run();
+
+  // 2. Disable at the end so the Dart process can gracefully exit
+  await hotreload?.disable();
+  terminal.dispose();
+}
 ```
+
+### Running with Hot Reload
+
+To allow the application to hot reload, you must run your Dart application with the VM service enabled:
+
+```sh
+dart --enable-vm-service bin/main.dart
+```
+
+Now modify your widget code, save the file, and watch the terminal UI update instantly without losing state!
 
 ## Additional information
 
-TODO: Tell users more about the package: where to find more information, how to
-contribute to the package, how to file issues, what response they can expect
-from the package authors, and more.
+For more information, visit the [termui repository](https://github.com/jtmcdole/termui).
