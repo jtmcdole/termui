@@ -31,6 +31,9 @@ class SceneManager implements Reassemblable {
   /// Whether mouse tracking is explicitly forced/enabled.
   bool enableMouseTracking = false;
 
+  /// Optional callback invoked whenever a composited frame is completely rendered.
+  void Function(Buffer buffer)? onFrameRedrawn;
+
   bool _isDisposed = false;
   bool _renderScheduled = false;
   final Set<ListenableSceneRenderer> _activeRenderers = {};
@@ -531,6 +534,7 @@ class SceneManager implements Reassemblable {
           backend.buffer = target;
         }
         backend.write(sb.toString());
+        onFrameRedrawn?.call(target);
 
         // Hardware state sync based on focused layer's requests.
         final focused = focusedLayer;
