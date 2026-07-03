@@ -4,7 +4,8 @@ import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
 /// A horizontal group of radio-like choices.
-class HorizontalRadioGroup extends StatefulWidget implements Focusable {
+class HorizontalRadioGroup extends StatefulWidget
+    implements Focusable, MouseEventHandlerWithArea {
   /// The controller managing the selection state and options.
   final SelectionController<String> controller;
 
@@ -13,19 +14,36 @@ class HorizontalRadioGroup extends StatefulWidget implements Focusable {
   final bool focused;
 
   /// Creates a [HorizontalRadioGroup].
-  const HorizontalRadioGroup({
+  HorizontalRadioGroup({
     super.key,
     required this.controller,
     this.focused = false,
   });
 
+  // ignore: must_be_immutable
+  HorizontalRadioGroupState? _state;
+
   @override
-  State<HorizontalRadioGroup> createState() => HorizontalRadioGroupState();
+  void handleMouseEvent(
+    term.MouseEvent event,
+    int localX,
+    int localY,
+    Rect area,
+  ) {
+    _state?.handleMouseEvent(event, localX, localY, area);
+  }
+
+  @override
+  State<HorizontalRadioGroup> createState() {
+    final state = HorizontalRadioGroupState();
+    _state = state;
+    return state;
+  }
 }
 
 /// The state class for [HorizontalRadioGroup] managing selections and keyboard routing.
 class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
-    implements KeyEventHandler {
+    implements KeyEventHandler, MouseEventHandlerWithArea {
   SelectionController<String>? _listenedController;
   late FocusNode _focusNode;
 
@@ -44,6 +62,7 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
   @override
   void initState() {
     super.initState();
+    widget._state = this;
     _focusNode = FocusNode(id: 'horizontal_radio_group_${widget.hashCode}');
     _updateListener();
     if (widget.focused) {
@@ -56,6 +75,7 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
   @override
   void didUpdateWidget(HorizontalRadioGroup oldWidget) {
     super.didUpdateWidget(oldWidget);
+    widget._state = this;
     _updateListener();
     if (widget.focused != oldWidget.focused) {
       if (widget.focused) {
@@ -107,6 +127,32 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
       return false;
     }
     return false;
+  }
+
+  @override
+  void handleMouseEvent(
+    term.MouseEvent event,
+    int localX,
+    int localY,
+    Rect area,
+  ) {
+    if (event.type == term.MouseEventType.press) {
+      int currentX = 0;
+      final controller = widget.controller;
+      for (var i = 0; i < controller.options.length; i++) {
+        if (i > 0) currentX += 4;
+        final option = controller.options[i];
+        final textLength = 4 + option.characters.length;
+        if (localX >= currentX && localX < currentX + textLength) {
+          setState(() {
+            controller.selectedIndex = i;
+            controller.focusedIndex = i;
+          });
+          return;
+        }
+        currentX += textLength;
+      }
+    }
   }
 
   @override

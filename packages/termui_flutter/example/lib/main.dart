@@ -7,8 +7,11 @@ import 'package:termui/ui/buffer.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'widget_book.dart';
 
+import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
+
 enum TuiDemo {
-  widgetBook('Widget Book');
+  widgetBook('Widget Book'),
+  glassCompositing('Glass Compositing');
 
   final String label;
   const TuiDemo(this.label);
@@ -73,7 +76,7 @@ class TermUIWebHome extends StatefulWidget {
 class _TermUIWebHomeState extends State<TermUIWebHome> {
   late final FlutterTerminal _terminal;
 
-  TuiDemo _currentDemo = TuiDemo.widgetBook;
+  TuiDemo _currentDemo = TuiDemo.glassCompositing;
   bool _switching = false;
   bool _tuiRunning = false;
   void Function(Buffer)? _onDrawFrame;
@@ -104,6 +107,14 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
           _log('main.dart: Running WidgetBook');
           await runWidgetBook(_terminal, onFrameRedrawn: onDrawFrame);
           _log('main.dart: WidgetBook returned');
+        } else if (_currentDemo == TuiDemo.glassCompositing) {
+          _log('main.dart: Running Glass Compositing');
+          await runGlassCompositingShared(
+            _terminal,
+            isInline: false,
+            onFrameRedrawn: onDrawFrame,
+          );
+          _log('main.dart: Glass Compositing returned');
         }
 
         if (!mounted) {
@@ -167,6 +178,13 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
             },
             child: const Text('Widget Book'),
           ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _switchDemo(TuiDemo.glassCompositing);
+            },
+            child: const Text('Glass Compositing'),
+          ),
         ],
       ),
     );
@@ -176,7 +194,6 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('TermUI ${_currentDemo.label} - Direct Canvas'),
         backgroundColor: Colors.black87,
         actions: [
           IconButton(
