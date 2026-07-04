@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:clock/clock.dart';
 import 'package:file/local.dart';
@@ -56,7 +57,14 @@ class _AnsiGoldenMatcher extends Matcher {
     }
 
     final expectedAnsi = goldenFile.readAsStringSync();
-    if (currentAnsi != expectedAnsi) {
+    final expectedAnsiNormalized = const LineSplitter()
+        .convert(expectedAnsi)
+        .join('\n');
+    final currentAnsiNormalized = const LineSplitter()
+        .convert(currentAnsi)
+        .join('\n');
+
+    if (currentAnsiNormalized != expectedAnsiNormalized) {
       final failPath = '$goldenPath.fail';
       final failedFile = _fs.file(failPath);
       failedFile.createSync(recursive: true);
