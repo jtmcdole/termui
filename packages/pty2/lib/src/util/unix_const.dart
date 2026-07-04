@@ -1,4 +1,4 @@
-// ignore_for_file: non_constant_identifier_names, annotate_overrides
+// ignore_for_file: public_member_api_docs, non_constant_identifier_names, annotate_overrides, constant_identifier_names
 
 import 'dart:io';
 

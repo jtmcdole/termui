@@ -1,4 +1,4 @@
-// ignore_for_file: library_private_types_in_public_api, non_constant_identifier_names, no_leading_underscores_for_local_identifiers, camel_case_types
+// ignore_for_file: public_member_api_docs, library_private_types_in_public_api, non_constant_identifier_names, no_leading_underscores_for_local_identifiers, camel_case_types
 
 import 'dart:ffi';
 import 'dart:io';

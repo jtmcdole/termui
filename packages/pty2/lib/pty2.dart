@@ -68,6 +68,7 @@ abstract class PseudoTerminal {
   /// This must be called after creating the terminal, usually done automatically
   /// by [start].
   void init();
+
   /// Kills the underlying process.
   ///
   /// Sends the provided [signal] (defaults to [ProcessSignal.sigterm]) to the

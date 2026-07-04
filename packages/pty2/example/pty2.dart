@@ -1,7 +1,7 @@
 // ignore_for_file: avoid_print
 
 import 'dart:io';
-import 'package:pty2/pty.dart';
+import 'package:pty2/pty2.dart';
 
 void main() async {
   print('Platform: ${Platform.isWindows ? 'pwsh.exe' : 'bash'}');

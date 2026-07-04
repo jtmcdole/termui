@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:pty2/pty.dart';
+import 'package:pty2/pty2.dart';
 import 'package:pty2/src/impl/windows.dart' if (dart.library.html) '';
 
 void main() async {
