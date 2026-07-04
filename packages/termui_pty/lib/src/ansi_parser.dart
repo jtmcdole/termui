@@ -31,6 +31,7 @@ enum _ParserState {
 
 /// A highly optimized VT100/ANSI state machine parser.
 class AnsiParser {
+  /// The terminal handler that processes parsed escape sequences.
   final TerminalHandler handler;
 
   _ParserState _state = _ParserState.ground;
@@ -40,8 +41,8 @@ class AnsiParser {
   bool _hasParam = false;
   final List<int> _intermediates = [];
   final List<int> _oscBuffer = [];
-  bool _isOscTitle = false;
 
+  /// Creates a new [AnsiParser] instance bound to the given [handler].
   AnsiParser(this.handler);
 
   void _flushText() {
@@ -59,6 +60,7 @@ class AnsiParser {
     } catch (_) {}
   }
 
+  /// Parses a chunk of VT100/ANSI string text and updates the bound handler.
   void parse(String chunk) {
     final len = chunk.length;
     for (var i = 0; i < len; i++) {
@@ -66,12 +68,14 @@ class AnsiParser {
 
       // Handle C0 controls everywhere except OSC string
       if (c >= 0x00 && c <= 0x1F && _state != _ParserState.oscString) {
-        if (c == 0x1B) { // ESC
+        if (c == 0x1B) {
+          // ESC
           _flushText();
           _state = _ParserState.escape;
           _intermediates.clear();
           continue;
-        } else if (c == 0x18 || c == 0x1A) { // CAN, SUB
+        } else if (c == 0x18 || c == 0x1A) {
+          // CAN, SUB
           _state = _ParserState.ground;
           _execute(c);
           continue;
@@ -90,15 +94,16 @@ class AnsiParser {
           if (c >= 0x20 && c <= 0x2F) {
             _intermediates.add(c);
             _state = _ParserState.escapeIntermediate;
-          } else if (c == 0x5B) { // '['
+          } else if (c == 0x5B) {
+            // '['
             _params.clear();
             _currentParam = 0;
             _hasParam = false;
             _intermediates.clear();
             _state = _ParserState.csiEntry;
-          } else if (c == 0x5D) { // ']'
+          } else if (c == 0x5D) {
+            // ']'
             _oscBuffer.clear();
-            _isOscTitle = false;
             _state = _ParserState.oscString;
           } else if (c >= 0x30 && c <= 0x4F) {
             _state = _ParserState.ground;
@@ -119,21 +124,26 @@ class AnsiParser {
             _intermediates.add(c);
           } else if (c >= 0x30 && c <= 0x7E) {
             _state = _ParserState.ground;
-            handler.esc(String.fromCharCodes(_intermediates) + String.fromCharCode(c));
+            handler.esc(
+              String.fromCharCodes(_intermediates) + String.fromCharCode(c),
+            );
           }
           break;
 
         case _ParserState.csiEntry:
-          if (c >= 0x30 && c <= 0x39) { // 0-9
+          if (c >= 0x30 && c <= 0x39) {
+            // 0-9
             _currentParam = (_currentParam * 10) + (c - 0x30);
             _hasParam = true;
             _state = _ParserState.csiParam;
-          } else if (c == 0x3B) { // ';'
+          } else if (c == 0x3B) {
+            // ';'
             _params.add(_hasParam ? _currentParam : 0);
             _currentParam = 0;
             _hasParam = false;
             _state = _ParserState.csiParam;
-          } else if (c >= 0x3C && c <= 0x3F) { // < = > ?
+          } else if (c >= 0x3C && c <= 0x3F) {
+            // < = > ?
             _intermediates.add(c);
             _state = _ParserState.csiParam;
           } else if (c >= 0x20 && c <= 0x2F) {
@@ -149,7 +159,8 @@ class AnsiParser {
           if (c >= 0x30 && c <= 0x39) {
             _currentParam = (_currentParam * 10) + (c - 0x30);
             _hasParam = true;
-          } else if (c == 0x3B) { // ';'
+          } else if (c == 0x3B) {
+            // ';'
             _params.add(_hasParam ? _currentParam : 0);
             _currentParam = 0;
             _hasParam = false;
@@ -185,10 +196,12 @@ class AnsiParser {
           break;
 
         case _ParserState.oscString:
-          if (c == 0x07) { // BEL
+          if (c == 0x07) {
+            // BEL
             _state = _ParserState.ground;
             _dispatchOsc();
-          } else if (c == 0x1B) { // ESC (ST)
+          } else if (c == 0x1B) {
+            // ESC (ST)
             _state = _ParserState.escape;
             _dispatchOsc();
           } else if (c >= 0x20) {
@@ -208,8 +221,12 @@ class AnsiParser {
 
   void _dispatchCsi(int commandCode) {
     final command = String.fromCharCode(commandCode);
-    final intermediate = _intermediates.isNotEmpty ? String.fromCharCodes(_intermediates) : null;
-    _log('csi(command: "$command", params: $_params, intermediate: $intermediate)');
+    final intermediate = _intermediates.isNotEmpty
+        ? String.fromCharCodes(_intermediates)
+        : null;
+    _log(
+      'csi(command: "$command", params: $_params, intermediate: $intermediate)',
+    );
     handler.csi(command, List.from(_params), intermediate: intermediate);
   }
 

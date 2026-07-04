@@ -1,6 +1,6 @@
 # pty2
 
-A modern, high-performance Pseudo-Terminal (PTY) package for Dart and Flutter. 
+A modern, high-performance Pseudo-Terminal (PTY) package for Dart and Flutter.
 
 `pty2` provides programmatic access to native OS terminal file descriptors, allowing you to spawn and interact with command-line applications (like `bash`, `pwsh`, `vim`, or `htop`) directly from Dart. It serves as the native backend for building terminal emulators and CLI wrappers.
 

@@ -5,7 +5,7 @@ import 'package:test/test.dart';
 void main() {
   test('VirtualTerminal processes ANSI sequences into Buffer', () {
     final terminal = VirtualTerminal(width: 10, height: 5);
-    
+
     // Simulate raw byte stream from PTY
     // 1. Move to 1,1
     // 2. Set color to red (31)
@@ -14,12 +14,12 @@ void main() {
     terminal.write(sequence.codeUnits);
 
     final buffer = terminal.buffer;
-    
+
     // Verify content
     expect(buffer.characters.join(), startsWith('Hello'));
-    
-    // Verify style (Red)
+
+    // Verify style (Red - mapped to 0xAA0000 in standard 16 colors)
     final fg = buffer.getForeground(0, 0); // 'H'
-    expect(fg, equals(Colors.red.argb));
+    expect(fg, equals(const Color(170, 0, 0).argb));
   });
 }

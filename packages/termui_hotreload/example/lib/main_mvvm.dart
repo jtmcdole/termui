@@ -5,6 +5,7 @@ import 'package:termui_hotreload/termui_hotreload.dart';
 /// 1. MODEL
 /// Represents the raw data state.
 class CounterModel {
+  /// The total number of clicks.
   int clicks = 0;
 }
 
@@ -15,15 +16,20 @@ class CounterViewModel {
 
   // Using a standard Dart broadcast stream for reactive updates
   final _stateController = StreamController<int>.broadcast();
+
+  /// A stream of state updates broadcasting the current click count.
   Stream<int> get stateStream => _stateController.stream;
 
+  /// The current number of clicks in the model.
   int get currentClicks => _model.clicks;
 
+  /// Increments the click count and broadcasts the new state.
   void increment() {
     _model.clicks++;
     _stateController.add(_model.clicks);
   }
 
+  /// Cleans up resources held by the view model.
   void dispose() {
     _stateController.close();
   }
@@ -32,8 +38,10 @@ class CounterViewModel {
 /// 3. VIEW
 /// Binds to the ViewModel. Only the exact node requiring updates rebuilds.
 class MyAppMVVM extends StatelessWidget {
+  /// The view model binding this view to the application state.
   final CounterViewModel viewModel;
 
+  /// Creates a new view bound to the given [viewModel].
   const MyAppMVVM({super.key, required this.viewModel});
 
   @override

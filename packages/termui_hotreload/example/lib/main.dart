@@ -5,6 +5,11 @@ import 'package:termui_hotreload/termui_hotreload.dart';
 /// dart --enable-vm-service bin/hotreload_demo.dart
 ///
 /// Then, modify the text or colors below and save the file to see the terminal update instantly.
+
+/// Global scene manager instance for the application.
+late final SceneManager globalSceneManager;
+
+/// Entry point for the simple hot-reload example.
 void main() async {
   // 1. One-liner that encapsulates HotReloader setup in development mode
   final hotreload = await TermuiHotReload.enable(
@@ -33,7 +38,9 @@ void main() async {
   terminal.dispose();
 }
 
+/// The main application widget for the hot reload demo.
 class MyApp extends StatefulWidget {
+  /// Creates the main application widget.
   const MyApp({super.key});
 
   @override
