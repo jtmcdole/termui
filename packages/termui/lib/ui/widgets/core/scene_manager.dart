@@ -150,10 +150,7 @@ class SceneManager implements Reassemblable {
       metadata: {'key': event.logicalKey},
     );
     try {
-      if (debugToggleHotkey != null &&
-          event.type == KeyType.f6 &&
-          event.key == 'F6') {
-        // Wait, the key is F6, so event.type == KeyType.f6
+      if (debugToggleHotkey != null && event.type == debugToggleHotkey) {
         debugShowTouchesEnabled = !debugShowTouchesEnabled;
         debugPaintHoverEnabled = !debugPaintHoverEnabled;
         scheduleRender();

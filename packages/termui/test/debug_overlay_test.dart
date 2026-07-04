@@ -44,20 +44,20 @@ void main() {
       });
     });
 
-    test('Toggles debug overlay via F6 hotkey', () {
+    test('Toggles debug overlay via hotkey', () {
       final tester = TerminalTester();
       tester.run(() async {
         final manager = SceneManager(tester.terminal);
-
+        
         expect(debugShowTouchesEnabled, isFalse);
-
-        final f6Event = KeyEvent('F6', KeyType.f6);
-        manager.handleKeyEvent(f6Event);
-
+        
+        final hotkeyEvent = KeyEvent('F10', debugToggleHotkey!);
+        manager.handleKeyEvent(hotkeyEvent);
+        
         expect(debugShowTouchesEnabled, isTrue);
         expect(debugPaintHoverEnabled, isTrue);
-
-        manager.handleKeyEvent(f6Event);
+        
+        manager.handleKeyEvent(hotkeyEvent);
 
         expect(debugShowTouchesEnabled, isFalse);
         expect(debugPaintHoverEnabled, isFalse);
