@@ -28,14 +28,14 @@ void main() {
         );
         manager.handleMouseEvent(pressEvent);
         manager.render();
-        
+
         final backend = tester.terminal.backend as BufferedTerminalBackend;
         expect(backend.buffer!.getCharacter(4, 4), '❶');
 
         // Fast forward time by 200ms
         await tester.pump(const Duration(milliseconds: 200));
         manager.render();
-        
+
         // Fast forward time by 600ms (decay threshold is 500ms)
         await tester.pump(const Duration(milliseconds: 600));
         manager.render();
@@ -44,21 +44,21 @@ void main() {
       });
     });
 
-    test('Toggles debug overlay via F12 hotkey', () {
+    test('Toggles debug overlay via F6 hotkey', () {
       final tester = TerminalTester();
       tester.run(() async {
         final manager = SceneManager(tester.terminal);
-        
+
         expect(debugShowTouchesEnabled, isFalse);
-        
-        final f12Event = KeyEvent('F12', KeyType.f12);
-        manager.handleKeyEvent(f12Event);
-        
+
+        final f6Event = KeyEvent('F6', KeyType.f6);
+        manager.handleKeyEvent(f6Event);
+
         expect(debugShowTouchesEnabled, isTrue);
         expect(debugPaintHoverEnabled, isTrue);
-        
-        manager.handleKeyEvent(f12Event);
-        
+
+        manager.handleKeyEvent(f6Event);
+
         expect(debugShowTouchesEnabled, isFalse);
         expect(debugPaintHoverEnabled, isFalse);
       });

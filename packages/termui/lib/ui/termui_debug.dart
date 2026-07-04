@@ -14,4 +14,4 @@ bool debugPaintLayerBordersEnabled = false;
 bool debugShowTouchesEnabled = false;
 
 /// Hotkey to toggle debug overlays globally (if null, hotkey is disabled).
-KeyType? debugToggleHotkey = KeyType.f12;
+KeyType? debugToggleHotkey = KeyType.f6;

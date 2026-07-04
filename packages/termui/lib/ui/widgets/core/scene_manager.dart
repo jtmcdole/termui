@@ -150,8 +150,10 @@ class SceneManager implements Reassemblable {
       metadata: {'key': event.logicalKey},
     );
     try {
-      if (debugToggleHotkey != null && event.type == KeyType.f12 && event.key == 'F12') {
-        // Wait, the key is F12, so event.type == KeyType.f12
+      if (debugToggleHotkey != null &&
+          event.type == KeyType.f6 &&
+          event.key == 'F6') {
+        // Wait, the key is F6, so event.type == KeyType.f6
         debugShowTouchesEnabled = !debugShowTouchesEnabled;
         debugPaintHoverEnabled = !debugPaintHoverEnabled;
         scheduleRender();
@@ -222,14 +224,17 @@ class SceneManager implements Reassemblable {
             ),
           );
           if (_debugTouchTimer == null || !_debugTouchTimer!.isActive) {
-            _debugTouchTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
-              final now = DateTime.now().millisecondsSinceEpoch;
-              _activeTouches.removeWhere((t) => now - t.startTime > 500);
-              scheduleRender();
-              if (_activeTouches.isEmpty) {
-                timer.cancel();
-              }
-            });
+            _debugTouchTimer = Timer.periodic(
+              const Duration(milliseconds: 16),
+              (timer) {
+                final now = DateTime.now().millisecondsSinceEpoch;
+                _activeTouches.removeWhere((t) => now - t.startTime > 500);
+                scheduleRender();
+                if (_activeTouches.isEmpty) {
+                  timer.cancel();
+                }
+              },
+            );
           }
         }
       }
@@ -843,7 +848,11 @@ class SceneManager implements Reassemblable {
             target.writeString(layer.x + buf.width - 1, layer.y, '╗', style);
             target.writeString(layer.x, layer.y + buf.height - 1, '╚', style);
             target.writeString(
-                layer.x + buf.width - 1, layer.y + buf.height - 1, '╝', style);
+              layer.x + buf.width - 1,
+              layer.y + buf.height - 1,
+              '╝',
+              style,
+            );
             break;
           }
         }
@@ -853,14 +862,14 @@ class SceneManager implements Reassemblable {
     if (debugShowTouchesEnabled && _activeTouches.isNotEmpty) {
       final canvas = Canvas(target.width, target.height);
       final now = DateTime.now().millisecondsSinceEpoch;
-      
+
       for (final touch in _activeTouches) {
         final elapsed = now - touch.startTime;
         if (elapsed > 500) continue;
-        
+
         final progress = elapsed / 500.0;
         final radius = (progress * 20).round();
-        
+
         final colorValue = (255 * (1.0 - progress)).round().clamp(0, 255);
         final color = Color(colorValue, colorValue, colorValue);
         final style = Style(foreground: color);
@@ -895,7 +904,7 @@ class SceneManager implements Reassemblable {
             indicator = '①';
           }
         }
-        
+
         if (indicator.isNotEmpty) {
           target.writeString(touch.x, touch.y, indicator, style);
         }
