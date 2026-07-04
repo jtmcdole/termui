@@ -1,4 +1,4 @@
-library termui_pty;
+library;
 
 export 'src/platform_view.dart';
 export 'src/virtual_terminal.dart';

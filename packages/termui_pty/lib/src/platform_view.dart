@@ -10,8 +10,19 @@ class PlatformView extends StatefulWidget implements MouseEventHandler {
   /// The running pseudo-terminal process.
   final PseudoTerminal pty;
 
+  /// If true, the terminal will use a transparent background (e.g. for compositing overlays).
+  final bool transparentBackground;
+
+  /// The default foreground color applied to characters when no explicit color is set.
+  final Color? defaultForeground;
+
   /// Creates a PlatformView that manages a virtual terminal connected to [pty].
-  PlatformView({super.key, required this.pty});
+  PlatformView({
+    super.key,
+    required this.pty,
+    this.transparentBackground = false,
+    this.defaultForeground,
+  });
 
   _PlatformViewState? _state;
 
@@ -28,7 +39,8 @@ class PlatformView extends StatefulWidget implements MouseEventHandler {
   }
 }
 
-class _PlatformViewState extends State<PlatformView> implements MouseEventHandler {
+class _PlatformViewState extends State<PlatformView>
+    implements MouseEventHandler {
   late VirtualTerminal _terminal;
   StreamSubscription? _outSubscription;
   final FocusNode _focusNode = FocusNode(id: 'platform_view');
@@ -38,7 +50,12 @@ class _PlatformViewState extends State<PlatformView> implements MouseEventHandle
   @override
   void initState() {
     super.initState();
-    _terminal = VirtualTerminal(width: 80, height: 24);
+    _terminal = VirtualTerminal(
+      width: 80,
+      height: 24,
+      transparentBackground: widget.transparentBackground,
+      defaultForeground: widget.defaultForeground,
+    );
     _outSubscription = widget.pty.out.listen((data) {
       _terminal.write(data.codeUnits);
       if (mounted) setState(() {});
@@ -67,10 +84,17 @@ class _PlatformViewState extends State<PlatformView> implements MouseEventHandle
 
   @override
   void handleMouseEvent(ev.MouseEvent event, int localX, int localY) {
-    // Need to pass the original global event or rewrite the X,Y back to terminal coords for the PTY.
-    // The ANSI mouse event requires 1-indexed terminal coordinates (event.x, event.y).
-    // The InputEncoder uses event.x and event.y. Let's make sure it's using the global event x, y.
-    final str = InputEncoder.encode(event);
+    // Convert local coordinates back to 1-indexed VT100 coordinates
+    final translatedEvent = ev.MouseEvent(
+      x: localX + 1,
+      y: localY + 1,
+      globalX: event.globalX,
+      globalY: event.globalY,
+      button: event.button,
+      type: event.type,
+      modifiers: event.modifiers,
+    );
+    final str = InputEncoder.encode(translatedEvent);
     if (str.isNotEmpty) {
       widget.pty.write(str);
     }
@@ -81,11 +105,13 @@ class _PlatformViewState extends State<PlatformView> implements MouseEventHandle
     widget._state = this;
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width = constraints.maxWidth == BoxConstraints.infinity 
-            ? 80 : constraints.maxWidth;
-        final height = constraints.maxHeight == BoxConstraints.infinity 
-            ? 24 : constraints.maxHeight;
-            
+        final width = constraints.maxWidth == BoxConstraints.infinity
+            ? 80
+            : constraints.maxWidth;
+        final height = constraints.maxHeight == BoxConstraints.infinity
+            ? 24
+            : constraints.maxHeight;
+
         _resizeIfNecessary(width, height);
 
         return Focus(
@@ -113,7 +139,7 @@ class _RawTerminalBufferWidget extends Widget {
 
   @override
   Element createElement() => _RawTerminalBufferElement(this);
-  
+
   @override
   int getIntrinsicHeight(int width) => buffer.height;
 
@@ -134,24 +160,24 @@ class _RawTerminalBufferElement extends LeafElement {
   void performPaint(Buffer buffer, Offset offset) {
     final w = widget as _RawTerminalBufferWidget;
     final source = w.buffer;
-    
+
     // We just composite the source buffer into the target buffer at offset
     final startX = offset.dx.toInt();
     final startY = offset.dy.toInt();
     final endX = (startX + source.width).clamp(0, buffer.width);
     final endY = (startY + source.height).clamp(0, buffer.height);
-    
+
     if (startX < endX && startY < endY) {
       for (var ty = startY; ty < endY; ty++) {
         final sy = ty - startY;
         for (var tx = startX; tx < endX; tx++) {
           final sx = tx - startX;
-          
+
           final char = source.getCharacter(sx, sy);
           final fg = source.getForeground(sx, sy);
           final bg = source.getBackground(sx, sy);
           final mod = source.getModifiers(sx, sy);
-          
+
           if ((mod & Modifier.transparent) == 0) {
             buffer.setCell(tx, ty, char, fg, bg, mod);
           }

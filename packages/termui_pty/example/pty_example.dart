@@ -20,9 +20,7 @@ void main() async {
       final runner = PromptRunner(
         terminal: terminal,
         alternateScreen: true,
-        widget: SizedBox.expand(
-          child: PlatformView(pty: pty),
-        ),
+        widget: SizedBox.expand(child: PlatformView(pty: pty)),
       );
 
       // Run until the user types 'q' in top, which exits top and closes the pty?
@@ -35,7 +33,7 @@ void main() async {
       terminal.exitAlternateScreen();
     }
   });
-  
+
   print('Exited cleanly.');
   exit(0);
 }
