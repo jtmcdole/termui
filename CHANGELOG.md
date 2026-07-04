@@ -3,6 +3,56 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-04
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`pty2` - `v0.5.0`](#pty2---v050)
+
+Packages with other changes:
+
+ - [`termui` - `v0.6.3`](#termui---v063)
+ - [`termui_flutter` - `v0.6.1`](#termui_flutter---v061)
+ - [`termui_hotreload` - `v0.6.3`](#termui_hotreload---v063)
+ - [`termui_recorder` - `v0.5.1+2`](#termui_recorder---v0512)
+ - [`termui_test` - `v0.2.2+3`](#termui_test---v0223)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.5.1+2`
+ - `termui_test` - `v0.2.2+3`
+
+---
+
+#### `pty2` - `v0.5.0`
+
+ - **DOCS**: fixing up documentation.
+ - **BREAKING** **FEAT**(pty2): add pty2 package for cross-platform pseudo-terminals.
+
+#### `termui` - `v0.6.3`
+
+ - **FEAT**(demos): add glass compositing demo and flutter web integration.
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+
+#### `termui_flutter` - `v0.6.1`
+
+ - **FEAT**(demos): add glass compositing demo and flutter web integration.
+
+#### `termui_hotreload` - `v0.6.3`
+
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+ - **DOCS**: fixing up documentation.
+ - **DOCS**(hotreload): crappy readme.
+
+
 ## 2026-07-02
 
 ### Changes

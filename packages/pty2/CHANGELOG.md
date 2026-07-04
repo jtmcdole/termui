@@ -1,3 +1,10 @@
+## 0.5.0
+
+> Note: This release has breaking changes.
+
+ - **DOCS**: fixing up documentation.
+ - **BREAKING** **FEAT**(pty2): add pty2 package for cross-platform pseudo-terminals.
+
 ## 0.4.0
 
 The real fix for Windows being flakey: "more data in buffer" was treated as an error instead of just reading again. "ERROR_SUCCESS" is such a great enum.

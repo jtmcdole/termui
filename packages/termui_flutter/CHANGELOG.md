@@ -1,3 +1,7 @@
+## 0.6.1
+
+ - **FEAT**(demos): add glass compositing demo and flutter web integration.
+
 ## 0.6.0+2
 
  - Update a dependency to the latest release.

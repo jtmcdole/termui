@@ -1,3 +1,9 @@
+## 0.6.3
+
+ - **FEAT**(demos): add glass compositing demo and flutter web integration.
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+ - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
+
 ## 0.6.2
 
  - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.
