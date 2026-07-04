@@ -12,3 +12,4 @@ trace*.json.gz
 debug.log
 **/coverage/
 *.py
+parser.log
