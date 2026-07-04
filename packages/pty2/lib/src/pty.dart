@@ -1,10 +1,12 @@
+// ignore_for_file: public_member_api_docs
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:pty2/pty.dart';
+import 'package:pty2/pty2.dart';
 import 'package:pty2/src/pty_core.dart';
 
 abstract class BasePseudoTerminal implements PseudoTerminal {

@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:test/test.dart';
-import 'package:pty2/pty.dart';
+import 'package:pty2/pty2.dart';
 
 void main() {
   test('PseudoTerminal exits with non-zero code on failure', () async {

@@ -25,7 +25,7 @@ Below is a simple example demonstrating how to spawn a shell, write to its stdin
 
 ```dart
 import 'dart:io';
-import 'package:pty2/pty.dart';
+import 'package:pty2/pty2.dart';
 
 void main() async {
   // 1. Spawn a Pseudo-Terminal
