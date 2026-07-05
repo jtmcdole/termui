@@ -71,6 +71,9 @@ typedef _dart_forkpty =
       Pointer<winsize> winp,
     );
 
+typedef _c_openpty = Int32 Function(Pointer<Int32>, Pointer<Int32>, Pointer<Int8>, Pointer<termios>, Pointer<winsize>);
+typedef _dart_openpty = int Function(Pointer<Int32>, Pointer<Int32>, Pointer<Int8>, Pointer<termios>, Pointer<winsize>);
+
 typedef _c_execve =
     Int32 Function(
       Pointer<Utf8> __file,
@@ -161,12 +164,12 @@ class Unix {
         'cfmakeraw',
       );
     }
-    fork = lib.lookupFunction<_c_fork, _dart_fork>('fork');
+    fork = lib.lookupFunction<_c_fork, _dart_fork>('fork', isLeaf: true);
     setsid = lib.lookupFunction<_c_setsid, _dart_setsid>('setsid');
     ptsname = lib.lookupFunction<_c_ptsname, _dart_ptsname>('ptsname');
     dup2 = lib.lookupFunction<_c_dup2, _dart_dup2>('dup2');
     execvp = lib.lookupFunction<_c_execvp, _dart_execvp>('execvp');
-    execve = lib.lookupFunction<_c_execve, _dart_execve>('execve');
+    execve = lib.lookupFunction<_c_execve, _dart_execve>('execve', isLeaf: true);
     read = lib.lookupFunction<_c_read, _dart_read>('read');
     waitpid = lib.lookupFunction<_c_waitpid, _dart_waitpid>('waitpid');
     kill = lib.lookupFunction<_c_kill, _dart_kill>('kill');
@@ -175,27 +178,31 @@ class Unix {
     fcntl = lib.lookupFunction<_c_fcntl, _dart_fcntl>('fcntl');
     fcntl3 = lib.lookupFunction<_c_fcntl3, _dart_fcntl3>('fcntl');
     perror = lib.lookupFunction<_c_perror, _dart_perror>('perror');
-    close = lib.lookupFunction<_c_close, _dart_close>('close');
+    close = lib.lookupFunction<_c_close, _dart_close>('close', isLeaf: true);
 
     try {
       close_range = lib.lookupFunction<_c_close_range, _dart_close_range>(
         'close_range',
+        isLeaf: true,
       );
     } catch (_) {}
 
     try {
       closefrom = lib.lookupFunction<_c_closefrom, _dart_closefrom>(
         'closefrom',
+        isLeaf: true,
       );
     } catch (_) {}
     putenv = lib.lookupFunction<_c_putenv, _dart_putenv>('putenv');
     setenv = lib.lookupFunction<_c_setenv, _dart_setenv>('setenv');
-    chdir = lib.lookupFunction<_c_chdir, _dart_chdir>('chdir');
-    cExit = lib.lookupFunction<_c_exit, _dart_exit>('_exit');
+    chdir = lib.lookupFunction<_c_chdir, _dart_chdir>('chdir', isLeaf: true);
+    cExit = lib.lookupFunction<_c_exit, _dart_exit>('_exit', isLeaf: true);
     if (utilsLib != null) {
-      forkpty = utilsLib.lookupFunction<_c_forkpty, _dart_forkpty>('forkpty');
+      forkpty = utilsLib.lookupFunction<_c_forkpty, _dart_forkpty>('forkpty', isLeaf: true);
+      openpty = utilsLib.lookupFunction<_c_openpty, _dart_openpty>('openpty');
     } else {
-      forkpty = lib.lookupFunction<_c_forkpty, _dart_forkpty>('forkpty');
+      forkpty = lib.lookupFunction<_c_forkpty, _dart_forkpty>('forkpty', isLeaf: true);
+      openpty = lib.lookupFunction<_c_openpty, _dart_openpty>('openpty');
     }
   }
 
@@ -214,6 +221,7 @@ class Unix {
   late final _dart_execvp execvp;
   late final _dart_execve execve;
   late final _dart_forkpty forkpty;
+  late final _dart_openpty openpty;
   late final _dart_read read;
   late final _dart_waitpid waitpid;
   late final _dart_kill kill;
