@@ -47,7 +47,7 @@ dependencies:
     path: ../../termui_recorder
   termui_pty:
     path: ../../termui_pty
-  pty2: ^0.5.0
+  pty2: ^0.5.1
 
 dev_dependencies:
   flutter_test:

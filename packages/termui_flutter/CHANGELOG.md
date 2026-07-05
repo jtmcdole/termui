@@ -1,3 +1,9 @@
+## 0.6.2
+
+ - **FIX**(termui): migrate DateTime.now to clock for test determinism.
+ - **FEAT**(termui_pty): decouple VirtualTerminal from FFI for web support.
+ - **FEAT**(termui_flutter): showcase PTY glass example in Flutter demo.
+
 ## 0.6.1
 
  - **FEAT**(demos): add glass compositing demo and flutter web integration.

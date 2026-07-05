@@ -1,3 +1,16 @@
+## 0.7.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**(core): change debug overlay hotkey from F6 to F10 and make logic dynamic.
+ - **REFACTOR**(core): change debug overlay hotkey from F12 to F6.
+ - **FIX**(termui): migrate DateTime.now to clock for test determinism.
+ - **FEAT**(termui): standardize keyboard input handling with TermKey constants.
+ - **FEAT**(core): implement android-style global touch visualizer and debug overlays.
+ - **FEAT**(pty): stabilize termui_pty, add benchmarks, and finalize examples.
+ - **FEAT**(pty): introduce termui_pty package for ANSI terminal emulation.
+ - **BREAKING** **REFACTOR**(termui_pty): decouple PTY transport from terminal rendering.
+
 ## 0.6.3
 
  - **FEAT**(demos): add glass compositing demo and flutter web integration.

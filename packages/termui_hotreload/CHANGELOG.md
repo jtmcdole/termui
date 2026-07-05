@@ -1,3 +1,8 @@
+## 0.6.4
+
+ - **FEAT**(termui): standardize keyboard input handling with TermKey constants.
+ - **FEAT**(pty): stabilize termui_pty, add benchmarks, and finalize examples.
+
 ## 0.6.3
 
  - **FEAT**(hotreload): introduce termui_hotreload package and StreamBuilder.

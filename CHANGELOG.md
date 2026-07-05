@@ -3,6 +3,76 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-05
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.7.0`](#termui---v070)
+ - [`termui_pty` - `v0.3.0`](#termui_pty---v030)
+
+Packages with other changes:
+
+ - [`pty2` - `v0.5.1`](#pty2---v051)
+ - [`termui_flutter` - `v0.6.2`](#termui_flutter---v062)
+ - [`termui_hotreload` - `v0.6.4`](#termui_hotreload---v064)
+ - [`termui_recorder` - `v0.5.1+3`](#termui_recorder---v0513)
+ - [`termui_test` - `v0.2.2+4`](#termui_test---v0224)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.5.1+3`
+ - `termui_test` - `v0.2.2+4`
+
+---
+
+#### `termui` - `v0.7.0`
+
+ - **REFACTOR**(core): change debug overlay hotkey from F6 to F10 and make logic dynamic.
+ - **REFACTOR**(core): change debug overlay hotkey from F12 to F6.
+ - **FIX**(termui): migrate DateTime.now to clock for test determinism.
+ - **FEAT**(termui): standardize keyboard input handling with TermKey constants.
+ - **FEAT**(core): implement android-style global touch visualizer and debug overlays.
+ - **FEAT**(pty): stabilize termui_pty, add benchmarks, and finalize examples.
+ - **FEAT**(pty): introduce termui_pty package for ANSI terminal emulation.
+ - **BREAKING** **REFACTOR**(termui_pty): decouple PTY transport from terminal rendering.
+
+#### `termui_pty` - `v0.3.0`
+
+ - **FIX**(termui): migrate DateTime.now to clock for test determinism.
+ - **FIX**(pty): fix test timer leak and buffer string comparison.
+ - **FEAT**(termui_pty): decouple VirtualTerminal from FFI for web support.
+ - **FEAT**(termui): standardize keyboard input handling with TermKey constants.
+ - **FEAT**(pty): stabilize termui_pty, add benchmarks, and finalize examples.
+ - **FEAT**(pty): introduce termui_pty package for ANSI terminal emulation.
+ - **BREAKING** **REFACTOR**(termui_pty): decouple PTY transport from terminal rendering.
+
+#### `pty2` - `v0.5.1`
+
+ - **FIX**(tests): github actions exercised different pathways in the testing.
+ - **FIX**(pty2): resolve fork deadlocks by replacing forkpty with native openpty and eagerly-resolved POSIX calls.
+ - **FIX**(pty2): pre-evaluate properties before forkpty to avoid deadlocks.
+ - **FIX**(pty2): strictly enforce POSIX async-signal-safety post-fork.
+ - **FEAT**(termui_pty): decouple VirtualTerminal from FFI for web support.
+ - **FEAT**(pty): stabilize termui_pty, add benchmarks, and finalize examples.
+
+#### `termui_flutter` - `v0.6.2`
+
+ - **FIX**(termui): migrate DateTime.now to clock for test determinism.
+ - **FEAT**(termui_pty): decouple VirtualTerminal from FFI for web support.
+ - **FEAT**(termui_flutter): showcase PTY glass example in Flutter demo.
+
+#### `termui_hotreload` - `v0.6.4`
+
+ - **FEAT**(termui): standardize keyboard input handling with TermKey constants.
+ - **FEAT**(pty): stabilize termui_pty, add benchmarks, and finalize examples.
+
+
 ## 2026-07-04
 
 ### Changes

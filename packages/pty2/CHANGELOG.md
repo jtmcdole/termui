@@ -1,3 +1,12 @@
+## 0.5.1
+
+ - **FIX**(tests): github actions exercised different pathways in the testing.
+ - **FIX**(pty2): resolve fork deadlocks by replacing forkpty with native openpty and eagerly-resolved POSIX calls.
+ - **FIX**(pty2): pre-evaluate properties before forkpty to avoid deadlocks.
+ - **FIX**(pty2): strictly enforce POSIX async-signal-safety post-fork.
+ - **FEAT**(termui_pty): decouple VirtualTerminal from FFI for web support.
+ - **FEAT**(pty): stabilize termui_pty, add benchmarks, and finalize examples.
+
 ## 0.5.0
 
 > Note: This release has breaking changes.
