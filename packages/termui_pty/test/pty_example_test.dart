@@ -37,14 +37,14 @@ void main() {
 
       final runFuture = runner.run();
 
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 100));
 
       expect(debugShowTouchesEnabled, isFalse);
 
       // Feed Ctrl+O
       tester.sendKey(LogicalKey('o', 'o'), control: true);
 
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 100));
 
       expect(debugShowTouchesEnabled, isTrue);
 
@@ -52,7 +52,7 @@ void main() {
       // We will just send x=10, y=10 and check all nearby characters!
       tester.sendString('\x1b[<35;10;10M');
 
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 100));
 
       final backend = tester.terminal.backend as BufferedTerminalBackend;
       final buffer = backend.buffer!;

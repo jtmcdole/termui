@@ -9,8 +9,8 @@ import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart'
 
 void main() async {
   final pty = PseudoTerminal.start(
-    'bash',
-    ['-c', 'btop'],
+    Platform.isWindows ? 'pwsh.exe' : 'bash',
+    Platform.isWindows ? ['-C', 'ping 127.0.0.1 -t'] : ['-c', 'btop'],
     environment: {...Platform.environment},
   );
 

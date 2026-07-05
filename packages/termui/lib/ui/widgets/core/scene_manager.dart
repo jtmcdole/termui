@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:clock/clock.dart';
 import 'dart:collection';
 import 'dart:math';
 import 'package:termui/termui.dart';
@@ -251,14 +252,14 @@ class SceneManager implements Reassemblable {
               y: _globalMouseY!,
               button: event.button,
               type: event.type,
-              startTime: DateTime.now().millisecondsSinceEpoch,
+              startTime: clock.now().millisecondsSinceEpoch,
             ),
           );
           if (_debugTouchTimer == null || !_debugTouchTimer!.isActive) {
             _debugTouchTimer = Timer.periodic(
               const Duration(milliseconds: 16),
               (timer) {
-                final now = DateTime.now().millisecondsSinceEpoch;
+                final now = clock.now().millisecondsSinceEpoch;
                 _activeTouches.removeWhere((t) => now - t.startTime > 500);
                 scheduleRender();
                 if (_activeTouches.isEmpty) {
@@ -901,7 +902,7 @@ class SceneManager implements Reassemblable {
 
     if (debugShowTouchesEnabled && _activeTouches.isNotEmpty) {
       final canvas = Canvas(target.width, target.height);
-      final now = DateTime.now().millisecondsSinceEpoch;
+      final now = clock.now().millisecondsSinceEpoch;
 
       for (final touch in _activeTouches) {
         final elapsed = now - touch.startTime;
