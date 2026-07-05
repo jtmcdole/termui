@@ -71,8 +71,22 @@ typedef _dart_forkpty =
       Pointer<winsize> winp,
     );
 
-typedef _c_openpty = Int32 Function(Pointer<Int32>, Pointer<Int32>, Pointer<Int8>, Pointer<termios>, Pointer<winsize>);
-typedef _dart_openpty = int Function(Pointer<Int32>, Pointer<Int32>, Pointer<Int8>, Pointer<termios>, Pointer<winsize>);
+typedef _c_openpty =
+    Int32 Function(
+      Pointer<Int32>,
+      Pointer<Int32>,
+      Pointer<Int8>,
+      Pointer<termios>,
+      Pointer<winsize>,
+    );
+typedef _dart_openpty =
+    int Function(
+      Pointer<Int32>,
+      Pointer<Int32>,
+      Pointer<Int8>,
+      Pointer<termios>,
+      Pointer<winsize>,
+    );
 
 typedef _c_execve =
     Int32 Function(
@@ -169,7 +183,10 @@ class Unix {
     ptsname = lib.lookupFunction<_c_ptsname, _dart_ptsname>('ptsname');
     dup2 = lib.lookupFunction<_c_dup2, _dart_dup2>('dup2');
     execvp = lib.lookupFunction<_c_execvp, _dart_execvp>('execvp');
-    execve = lib.lookupFunction<_c_execve, _dart_execve>('execve', isLeaf: true);
+    execve = lib.lookupFunction<_c_execve, _dart_execve>(
+      'execve',
+      isLeaf: true,
+    );
     read = lib.lookupFunction<_c_read, _dart_read>('read');
     waitpid = lib.lookupFunction<_c_waitpid, _dart_waitpid>('waitpid');
     kill = lib.lookupFunction<_c_kill, _dart_kill>('kill');
@@ -198,10 +215,16 @@ class Unix {
     chdir = lib.lookupFunction<_c_chdir, _dart_chdir>('chdir', isLeaf: true);
     cExit = lib.lookupFunction<_c_exit, _dart_exit>('_exit', isLeaf: true);
     if (utilsLib != null) {
-      forkpty = utilsLib.lookupFunction<_c_forkpty, _dart_forkpty>('forkpty', isLeaf: true);
+      forkpty = utilsLib.lookupFunction<_c_forkpty, _dart_forkpty>(
+        'forkpty',
+        isLeaf: true,
+      );
       openpty = utilsLib.lookupFunction<_c_openpty, _dart_openpty>('openpty');
     } else {
-      forkpty = lib.lookupFunction<_c_forkpty, _dart_forkpty>('forkpty', isLeaf: true);
+      forkpty = lib.lookupFunction<_c_forkpty, _dart_forkpty>(
+        'forkpty',
+        isLeaf: true,
+      );
       openpty = lib.lookupFunction<_c_openpty, _dart_openpty>('openpty');
     }
   }
