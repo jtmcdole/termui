@@ -215,9 +215,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
           runner.dispose();
           return true;
         }
-        if (event.type == evt.KeyType.enter ||
-            (event.type == evt.KeyType.character &&
-                (event.key == '\n' || event.key == '\r'))) {
+        if (event.baseKey == TermKey.enter) {
           _exportSelection(textController.text, overlappingSpans);
           handleClose();
           runner.dispose();
@@ -672,7 +670,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
       return true;
     }
 
-    if (event.key == '[') {
+    if (event.baseKey == TermKey.openSquareBracket) {
       if (hoveredSpan != null) {
         setState(() {
           selectionStartUs = hoveredSpan!.startUs;
@@ -687,7 +685,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
       return true;
     }
 
-    if (event.key == ']') {
+    if (event.baseKey == TermKey.closingSquareBracket) {
       if (hoveredSpan != null) {
         setState(() {
           selectionEndUs = hoveredSpan!.endUs;
@@ -1170,7 +1168,7 @@ class MarqueeRenderer implements SceneRenderer {
   }
 
   @override
-  void handleMouseEvent(evt.MouseEvent event) {}
+  bool handleMouseEvent(evt.MouseEvent event) => false;
 
   void render() {}
 

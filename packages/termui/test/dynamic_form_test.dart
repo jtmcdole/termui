@@ -93,12 +93,14 @@ void main() {
       expect(f2.focused, isFalse);
 
       // Press Tab moves to F2
-      formState.handleKeyEvent(const KeyEvent('tab', KeyType.character));
+      formState.handleKeyEvent(const KeyEvent('\\t', KeyType.tab));
       expect(f1.focused, isFalse);
       expect(f2.focused, isTrue);
 
       // Press Backtab moves to F1
-      formState.handleKeyEvent(const KeyEvent('backtab', KeyType.character));
+      formState.handleKeyEvent(
+        const KeyEvent('\\t', KeyType.tab, modifiers: {Modifier.shift}),
+      );
       expect(f1.focused, isTrue);
       expect(f2.focused, isFalse);
     });

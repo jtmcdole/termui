@@ -1,23 +1,32 @@
 name: termui_pty
 description: A custom ANSI terminal emulator and PTY view for termui.
 version: 0.1.0
-publish_to: none
+repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_pty
 
 resolution: workspace
+
+topics:
+  - cli
+  - tui
+  - terminal
+  - console
+  - pty
+
+platforms:
+  windows:
+  macos:
+  linux:
 
 environment:
   sdk: ">=3.11.0 <4.0.0"
 
 dependencies:
-  termui:
-    path: ../termui
-  pty2:
-    path: ../pty2
+  termui: ^0.6.3
+  pty2: ^0.5.0
 
 dev_dependencies:
   test: ">=1.24.0 <2.0.0"
-  termui_test:
-    path: ../termui_test
+  termui_test: ^0.2.2+3
   termui_shared_examples:
     path: ../termui_shared_examples
   benchmark_harness: ^2.2.0

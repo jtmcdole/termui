@@ -5,6 +5,7 @@ import 'package:termui/ui/widgets/core/widget.dart';
 import 'package:termui/ui/widgets/core/element.dart';
 import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/event.dart';
+import 'package:termui/ui/event.dart' as ev;
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/widget_toolkit.dart';
@@ -872,12 +873,14 @@ void main() {
       expect(f2.focused, isFalse);
 
       // Press Tab moves to F2
-      form.handleKeyEvent(const KeyEvent('tab', KeyType.character));
+      form.handleKeyEvent(const KeyEvent('\\t', KeyType.tab));
       expect(f1.focused, isFalse);
       expect(f2.focused, isTrue);
 
       // Press Shift-Tab/backtab moves back to F1
-      form.handleKeyEvent(const KeyEvent('backtab', KeyType.character));
+      form.handleKeyEvent(
+        const KeyEvent('\\t', KeyType.tab, modifiers: {ev.Modifier.shift}),
+      );
       expect(f1.focused, isTrue);
       expect(f2.focused, isFalse);
     });

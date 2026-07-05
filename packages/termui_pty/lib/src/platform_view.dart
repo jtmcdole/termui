@@ -16,12 +16,16 @@ class PlatformView extends StatefulWidget implements MouseEventHandler {
   /// The default foreground color applied to characters when no explicit color is set.
   final Color? defaultForeground;
 
+  /// Optional focus node for managing keyboard focus.
+  final FocusNode? focusNode;
+
   /// Creates a PlatformView that manages a virtual terminal connected to [pty].
   PlatformView({
     super.key,
     required this.pty,
     this.transparentBackground = false,
     this.defaultForeground,
+    this.focusNode,
   });
 
   _PlatformViewState? _state;
@@ -43,13 +47,20 @@ class _PlatformViewState extends State<PlatformView>
     implements MouseEventHandler {
   late VirtualTerminal _terminal;
   StreamSubscription? _outSubscription;
-  final FocusNode _focusNode = FocusNode(id: 'platform_view');
+  late final FocusNode _focusNode;
+  bool _ownsFocusNode = false;
   int _lastWidth = 0;
   int _lastHeight = 0;
 
   @override
   void initState() {
     super.initState();
+    if (widget.focusNode != null) {
+      _focusNode = widget.focusNode!;
+    } else {
+      _focusNode = FocusNode(id: 'platform_view');
+      _ownsFocusNode = true;
+    }
     _terminal = VirtualTerminal(
       width: 80,
       height: 24,
@@ -65,7 +76,9 @@ class _PlatformViewState extends State<PlatformView>
   @override
   void dispose() {
     _outSubscription?.cancel();
-    _focusNode.dispose();
+    if (_ownsFocusNode) {
+      _focusNode.dispose();
+    }
     super.dispose();
   }
 
@@ -84,6 +97,8 @@ class _PlatformViewState extends State<PlatformView>
 
   @override
   void handleMouseEvent(ev.MouseEvent event, int localX, int localY) {
+    _focusNode.requestFocus();
+
     // Convert local coordinates back to 1-indexed VT100 coordinates
     final translatedEvent = ev.MouseEvent(
       x: localX + 1,

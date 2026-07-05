@@ -336,12 +336,8 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
   @override
   bool handleKeyEvent(term.KeyEvent event) {
     if (!isOpen) {
-      if (event.key == ' ' ||
-          event.key == 'space' ||
-          event.key == '\n' ||
-          event.key == '\r' ||
-          event.key == 'enter' ||
-          event.type == term.KeyType.enter ||
+      if (event.baseKey == term.TermKey.space ||
+          event.baseKey == term.TermKey.enter ||
           event.key == 'down') {
         openDropdown();
         return true;
@@ -362,12 +358,8 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
       });
       overlayEntry?._overlayState?.setState(() {});
       return true;
-    } else if (event.key == 'enter' ||
-        event.key == '\n' ||
-        event.key == '\r' ||
-        event.type == term.KeyType.enter ||
-        event.key == ' ' ||
-        event.key == 'space') {
+    } else if (event.baseKey == term.TermKey.enter ||
+        event.baseKey == term.TermKey.space) {
       selectItem(selectedIndex);
       return true;
     } else if (event.key == 'escape') {
@@ -879,12 +871,8 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
   @override
   bool handleKeyEvent(term.KeyEvent event) {
     if (!isOpen) {
-      if (event.key == ' ' ||
-          event.key == 'space' ||
-          event.key == '\n' ||
-          event.key == '\r' ||
-          event.key == 'enter' ||
-          event.type == term.KeyType.enter ||
+      if (event.baseKey == term.TermKey.space ||
+          event.baseKey == term.TermKey.enter ||
           event.key == 'down') {
         openMenu();
         return true;
@@ -905,12 +893,8 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
       });
       overlayEntry?._overlayState?.setState(() {});
       return true;
-    } else if (event.key == 'enter' ||
-        event.key == '\n' ||
-        event.key == '\r' ||
-        event.type == term.KeyType.enter ||
-        event.key == ' ' ||
-        event.key == 'space') {
+    } else if (event.baseKey == term.TermKey.enter ||
+        event.baseKey == term.TermKey.space) {
       selectItem(selectedIndex);
       return true;
     } else if (event.key == 'escape') {

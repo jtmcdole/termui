@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui_pty/termui_pty.dart';
+import 'package:termui/ui/termui_debug.dart' as dbg;
 import 'package:pty2/pty2.dart';
 import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
 
@@ -29,6 +30,7 @@ void main() async {
     config.speed = 1.5;
 
     // 1. Bottom Layer: PlatformView running 'top'
+    final ptyFocusNode = FocusNode(id: 'pty');
     final ptyRunner = PromptRunner(
       terminal: terminal,
       // Pass a custom default foreground (e.g. bright green) for a "hacker" theme look
@@ -37,6 +39,7 @@ void main() async {
           pty: pty,
           transparentBackground: true,
           defaultForeground: CharmColors.julep,
+          focusNode: ptyFocusNode,
         ),
       ),
       alternateScreen: false,
@@ -90,10 +93,31 @@ void main() async {
     sceneManager.layers.add(fireLayer);
     fireRunner.run().catchError((_) {});
 
+    bool settingsVisible = false;
+    late final SceneLayer settingsLayer;
+
     // 2. Middle Layer: Glass Overlay Text (with Glitch)
+    final glassFocusNode = FocusNode(id: 'glass');
     final glassRunner = PromptRunner(
       terminal: terminal,
-      widget: GlassOverlayApp(config: config),
+      widget: KeyboardListener(
+        focusNode: glassFocusNode,
+        onKeyEvent: (event) {
+          if (event.baseKey == TermKey.s) {
+            settingsVisible = !settingsVisible;
+            if (settingsVisible) {
+              sceneManager.layers.add(settingsLayer);
+              sceneManager.focusedLayer = settingsLayer;
+            } else {
+              sceneManager.layers.remove(settingsLayer);
+            }
+            sceneManager.scheduleRender();
+            return true;
+          }
+          return false;
+        },
+        child: GlassOverlayApp(config: config),
+      ),
       alternateScreen: false,
       mode: ExecutionMode.managed,
       onFramePainted: (_) => sceneManager.scheduleRender(),
@@ -105,30 +129,43 @@ void main() async {
     );
     sceneManager.layers.add(glassLayer);
     glassRunner.run().catchError((_) {});
+    glassFocusNode.requestFocus();
 
     // 3. Top Layer: Settings Window
+    final settingsFocusNode = FocusNode(id: 'settings');
     final settingsRunner = PromptRunner(
       terminal: terminal,
-      widget: SettingsApp(config: config),
+      widget: KeyboardListener(
+        focusNode: settingsFocusNode,
+        onKeyEvent: (event) {
+          if (event.baseKey == TermKey.s) {
+            settingsVisible = false;
+            sceneManager.layers.remove(settingsLayer);
+            sceneManager.scheduleRender();
+            return true;
+          }
+          return false;
+        },
+        child: SettingsApp(config: config),
+      ),
       alternateScreen: false,
       mode: ExecutionMode.managed,
       onFramePainted: (_) => sceneManager.scheduleRender(),
     );
-    final settingsLayer = SceneLayer(
+    settingsLayer = SceneLayer(
       renderer: settingsRunner,
       sizing: LayerSizing.fixed,
       x: 2,
       y: 2,
       width: 42,
       height: 18,
-      zIndex: 30,
+      zIndex: 100,
       draggable: true,
       resizable: true,
     );
     settingsRunner.run().catchError((_) {});
 
-    sceneManager.focusedLayer = glassLayer;
-    bool settingsVisible = false;
+    sceneManager.focusedLayer = ptyLayer;
 
     final fontTimer = Timer.periodic(const Duration(seconds: 10), (t) {
       config.fontIndex = (config.fontIndex + 1) % 5;
@@ -137,43 +174,39 @@ void main() async {
       config.themeIndex = (config.themeIndex + 1) % 6;
     });
 
-    try {
-      await for (final event in terminal.events) {
-        if (event is term.KeyEvent) {
-          if (event.key == 'q' || event.key == 'Q' || event.key == '\x03') {
-            break;
-          }
-          if (event.key == '\x14') {
-            // Ctrl+T to toggle focus
-            if (sceneManager.focusedLayer == ptyLayer) {
-              sceneManager.focusedLayer = glassLayer; // defocus
-            } else {
-              sceneManager.focusedLayer = ptyLayer; // focus
-            }
-            sceneManager.scheduleRender();
-            continue;
-          }
-          if (event.key == 's' || event.key == 'S') {
-            settingsVisible = !settingsVisible;
-            if (settingsVisible) {
-              sceneManager.layers.add(settingsLayer);
-              sceneManager.focusedLayer = settingsLayer;
-            } else {
-              sceneManager.layers.remove(settingsLayer);
-              sceneManager.focusedLayer =
-                  ptyLayer; // Focus PTY when settings hidden
-            }
-            sceneManager.scheduleRender();
-            continue;
-          }
-        }
+    final completer = Completer<void>();
 
-        if (event is term.KeyEvent) {
-          sceneManager.handleKeyEvent(event);
-        } else if (event is term.MouseEvent) {
-          sceneManager.handleMouseEvent(event);
-        }
+    sceneManager.onKeyEvent = (event) {
+      if (event.baseKey == TermKey.q || event.logicalKey == TermKey.controlC) {
+        completer.complete();
+        return true;
       }
+      if (event.baseKey == TermKey.d) {
+        // Toggle debug overlays
+        dbg.debugMouseCursorEnabled = !dbg.debugMouseCursorEnabled;
+        dbg.debugShowTouchesEnabled = !dbg.debugShowTouchesEnabled;
+        dbg.debugPaintHoverEnabled = !dbg.debugPaintHoverEnabled;
+        sceneManager.scheduleRender();
+        return true;
+      }
+      if (event.logicalKey == TermKey.controlT) {
+        // Ctrl+T to toggle focus
+        if (sceneManager.focusedLayer == ptyLayer) {
+          sceneManager.focusedLayer = glassLayer; // defocus
+          glassFocusNode.requestFocus();
+        } else {
+          sceneManager.focusedLayer = ptyLayer; // focus
+          ptyFocusNode.requestFocus();
+        }
+        sceneManager.scheduleRender();
+        return true;
+      }
+      // s is now handled by the glass layer directly!
+      return false; // let SceneManager route the event
+    };
+
+    try {
+      await completer.future;
     } finally {
       fontTimer.cancel();
       themeTimer.cancel();

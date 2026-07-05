@@ -79,6 +79,7 @@ export 'ui/widgets/core/overlay.dart';
 export 'ui/widgets/core/prompt_runner.dart';
 export 'ui/widgets/core/scene_manager.dart';
 export 'ui/widgets/interactive/button.dart';
+export 'ui/widgets/interactive/keyboard_listener.dart';
 export 'ui/widgets/interactive/checkbox.dart';
 export 'ui/widgets/interactive/radio.dart';
 export 'ui/widgets/interactive/switch.dart';

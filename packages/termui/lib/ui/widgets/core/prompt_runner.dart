@@ -357,6 +357,17 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       }
     }
 
+    if (mode == ExecutionMode.standalone) {
+      if (debugMouseCursorEnabled && _lastMousePosition != null) {
+        final pos = _lastMousePosition!;
+        final cursorStyle = Style(
+          foreground: const Color(0, 255, 255),
+          modifiers: Modifier.bold,
+        );
+        buffer.writeString(pos.x - 1, pos.y - 1, '⦿', cursorStyle);
+      }
+    }
+
     onFramePainted?.call(buffer);
     onNeedVisualUpdate?.call();
 
@@ -686,6 +697,24 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       final rootElement = _rootElement;
       if (rootElement == null) return false;
 
+      // Step 0: Debug Overlay Toggle
+      if (debugToggleKey != null && event == debugToggleKey) {
+        debugShowTouchesEnabled = !debugShowTouchesEnabled;
+        debugPaintHoverEnabled = !debugPaintHoverEnabled;
+        debugMouseCursorEnabled = !debugMouseCursorEnabled;
+
+        if (mode == ExecutionMode.standalone) {
+          if (debugPaintHoverEnabled) {
+            terminal.enableMouseTracking();
+          } else {
+            terminal.disableMouseTracking();
+          }
+        }
+
+        _scheduleRender();
+        return true;
+      }
+
       // Step 1: Custom Interceptor
       if (onKeyEvent != null) {
         isDone = onKeyEvent!(event);
@@ -716,18 +745,18 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   }
 
   @override
-  void handleMouseEvent(term.MouseEvent event) {
+  bool handleMouseEvent(term.MouseEvent event) {
     Tracer.record(_traceMouseEventId, Phase.begin, TraceCategory.events);
     try {
       final completer = _completer;
-      if (completer == null || completer.isCompleted) return;
+      if (completer == null || completer.isCompleted) return false;
 
       if (debugPaintHoverEnabled) {
         _lastMousePosition = Point<int>(event.x, event.y);
       }
       var isDone = false;
       final rootElement = _rootElement;
-      if (rootElement == null) return;
+      if (rootElement == null) return false;
 
       if (_mouseCaptureElement != null &&
           (event.type == term.MouseEventType.drag ||
@@ -751,6 +780,8 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       if (isDone || debugPaintHoverEnabled) {
         _scheduleRender();
       }
+
+      return isDone;
     } finally {
       Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
     }
@@ -1035,8 +1066,8 @@ abstract interface class SceneRenderer implements TerminalStateRequest {
   /// Handles key events routed to this renderer. Returns true if handled.
   bool handleKeyEvent(term.KeyEvent event);
 
-  /// Handles mouse events routed to this renderer.
-  void handleMouseEvent(term.MouseEvent event);
+  /// Handles mouse events routed to this renderer. Returns true if the event was consumed.
+  bool handleMouseEvent(term.MouseEvent event);
 
   /// Resizes the renderer viewport and updates layout/buffers.
   void resize(int width, int height);
@@ -1087,6 +1118,9 @@ class SceneLayer {
   /// Whether this layer can be resized by dragging its corners.
   bool resizable;
 
+  /// Whether this layer receives mouse events. If false, mouse events pass through to layers below.
+  bool hitTestable;
+
   /// Optional callback invoked when the terminal is resized.
   void Function(Point<int> newSize)? onResize;
 
@@ -1101,6 +1135,7 @@ class SceneLayer {
     this.zIndex = 0,
     this.draggable = false,
     this.resizable = false,
+    this.hitTestable = true,
     this.onResize,
   }) {
     if (sizing == LayerSizing.fixed && width != null && height != null) {

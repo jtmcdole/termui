@@ -286,18 +286,16 @@ class Form extends StatefulWidget implements Focusable {
     }
     if (fields.isEmpty) return;
 
-    if (event.key == 'tab' || event.key == '\t') {
+    if (event.logicalKey == term.TermKey.tab) {
       fields[activeFieldIndex].focused = false;
       activeFieldIndex = (activeFieldIndex + 1) % fields.length;
       fields[activeFieldIndex].focused = true;
-    } else if (event.key == 'backtab') {
+    } else if (event.logicalKey == term.TermKey.shiftTab) {
       fields[activeFieldIndex].focused = false;
       activeFieldIndex = (activeFieldIndex - 1 + fields.length) % fields.length;
       fields[activeFieldIndex].focused = true;
     } else if (event.type == KeyType.enter ||
-        event.key == '\r' ||
-        event.key == '\n' ||
-        event.key == 'enter') {
+        event.baseKey == term.TermKey.enter) {
       final currentField = fields[activeFieldIndex];
       currentField.validate();
       if (currentField is! TextAreaFormField) {
@@ -419,14 +417,14 @@ class FormState extends State<Form> implements KeyEventHandler {
       var activeIdx = list.indexWhere((f) => f.focused);
       if (activeIdx == -1) activeIdx = 0;
 
-      if (event.key == 'tab' || event.key == '\t') {
+      if (event.logicalKey == term.TermKey.tab) {
         setState(() {
           list[activeIdx].focused = false;
           activeIdx = (activeIdx + 1) % list.length;
           list[activeIdx].focused = true;
         });
         return true;
-      } else if (event.key == 'backtab') {
+      } else if (event.logicalKey == term.TermKey.shiftTab) {
         setState(() {
           list[activeIdx].focused = false;
           activeIdx = (activeIdx - 1 + list.length) % list.length;
@@ -434,9 +432,7 @@ class FormState extends State<Form> implements KeyEventHandler {
         });
         return true;
       } else if (event.type == KeyType.enter ||
-          event.key == '\r' ||
-          event.key == '\n' ||
-          event.key == 'enter') {
+          event.baseKey == term.TermKey.enter) {
         final currentField = list[activeIdx];
         currentField.validate();
         if (currentField is! TextAreaFormField) {
@@ -480,14 +476,14 @@ class FormState extends State<Form> implements KeyEventHandler {
     var activeIdx = list.indexWhere((fs) => fs.widget.focused);
     if (activeIdx == -1) activeIdx = 0;
 
-    if (event.key == 'tab' || event.key == '\t') {
+    if (event.logicalKey == term.TermKey.tab) {
       setState(() {
         list[activeIdx].widget.focused = false;
         activeIdx = (activeIdx + 1) % list.length;
         list[activeIdx].widget.focused = true;
       });
       return true;
-    } else if (event.key == 'backtab') {
+    } else if (event.logicalKey == term.TermKey.shiftTab) {
       setState(() {
         list[activeIdx].widget.focused = false;
         activeIdx = (activeIdx - 1 + list.length) % list.length;
@@ -495,9 +491,7 @@ class FormState extends State<Form> implements KeyEventHandler {
       });
       return true;
     } else if (event.type == KeyType.enter ||
-        event.key == '\r' ||
-        event.key == '\n' ||
-        event.key == 'enter') {
+        event.baseKey == term.TermKey.enter) {
       final currentField = list[activeIdx].widget;
       currentField.validate();
       if (currentField is! TextAreaFormField) {
@@ -1397,12 +1391,8 @@ class MultiSelectFormField<T> extends FormField<List<T>> {
         _state!.setState(() {});
       }
       return true;
-    } else if (event.key == ' ' ||
-        event.key == 'space' ||
-        event.type == KeyType.enter ||
-        event.key == '\r' ||
-        event.key == '\n' ||
-        event.key == 'enter') {
+    } else if (event.baseKey == term.TermKey.space ||
+        event.baseKey == term.TermKey.enter) {
       _selected[_selectedIndex] = !_selected[_selectedIndex];
       final nextVal = <T>[];
       for (var i = 0; i < options.length; i++) {
