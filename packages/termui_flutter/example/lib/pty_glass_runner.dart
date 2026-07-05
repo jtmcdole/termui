@@ -22,6 +22,7 @@ Future<void> runPtyGlassDemo(
     renderingMode: RenderingMode.alternateScreen,
   );
   sceneManager.enableMouseTracking = true;
+  sceneManager.onFrameRedrawn = onFrameRedrawn;
 
   terminal.enterAlternateScreen();
   terminal.hideCursor();
@@ -48,9 +49,6 @@ Future<void> runPtyGlassDemo(
     mode: ExecutionMode.managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
-      onFrameRedrawn?.call(
-        (terminal.backend as BufferedTerminalBackend?)?.buffer ?? Buffer(1, 1),
-      );
     },
   );
 
@@ -92,9 +90,6 @@ Future<void> runPtyGlassDemo(
     mode: ExecutionMode.managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
-      onFrameRedrawn?.call(
-        (terminal.backend as BufferedTerminalBackend?)?.buffer ?? Buffer(1, 1),
-      );
     },
   );
   final fireLayer = SceneLayer(
@@ -134,9 +129,6 @@ Future<void> runPtyGlassDemo(
     mode: ExecutionMode.managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
-      onFrameRedrawn?.call(
-        (terminal.backend as BufferedTerminalBackend?)?.buffer ?? Buffer(1, 1),
-      );
     },
   );
   final glassLayer = SceneLayer(
@@ -169,9 +161,6 @@ Future<void> runPtyGlassDemo(
     mode: ExecutionMode.managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
-      onFrameRedrawn?.call(
-        (terminal.backend as BufferedTerminalBackend?)?.buffer ?? Buffer(1, 1),
-      );
     },
   );
   settingsLayer = SceneLayer(

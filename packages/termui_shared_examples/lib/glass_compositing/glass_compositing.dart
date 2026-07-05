@@ -824,7 +824,10 @@ Future<void> runGlassCompositingShared(
   try {
     await for (final event in terminal.events) {
       if (event is term.KeyEvent) {
-        if (event.key == 'q' || event.key == 'Q' || event.key == '\x03') {
+        if (event.key == 'q' ||
+            event.key == 'Q' ||
+            event.key == '\x03' ||
+            event.logicalKey == term.TermKey.controlC) {
           break;
         }
         if (event.key == 's' || event.key == 'S') {

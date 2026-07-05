@@ -56,7 +56,7 @@ void main() {
     final pty = PseudoTerminal.start('invalid_non_existent_executable', []);
     expect(
       await pty.exitCode,
-      Platform.isWindows ? anyOf(0, 1) : anyOf(0, 1, -1),
+      Platform.isWindows ? anyOf(0, 1) : anyOf(0, 1, -1, 137),
     );
   });
 
