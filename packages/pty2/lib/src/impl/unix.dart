@@ -45,95 +45,95 @@ class PtyCoreUnix implements PtyCore, Finalizable {
       }
     }
 
-    final pPtm = calloc<Int32>();
-    pPtm.value = -1;
-
-    final sz = calloc<winsize>();
-    sz.ref.ws_col = 80;
-    sz.ref.ws_row = 20;
-
-    final pid = unix.forkpty(pPtm, nullptr, nullptr, sz);
-    calloc.free(sz);
-
-    var ptm = pPtm.value;
-    calloc.free(pPtm);
-
-    if (pid < 0) {
-      throw PtyException('fork failed.');
-    } else if (pid == 0) {
-      // Close all file descriptors except stdin, stdout, stderr (0, 1, 2)
-      // This prevents slave PTYs from leaking into concurrent child processes
-      // across different isolates when forkpty races.
-      if (Platform.isLinux && unix.close_range != null) {
-        final ret = unix.close_range!(3, 4294967295, 0); // ~0U is 4294967295
-        if (ret == -1) {
-          for (var fd = 3; fd < 1024; fd++) {
-            unix.close(fd);
-          }
-        }
-      } else if (unix.closefrom != null) {
-        unix.closefrom!(3);
-      } else {
-        for (var fd = 3; fd < 1024; fd++) {
-          unix.close(fd);
+    var resolvedExecutable = executable;
+    if (!resolvedExecutable.contains('/')) {
+      final pathEnv =
+          effectiveEnv['PATH'] ?? Platform.environment['PATH'] ?? '';
+      for (final dir in pathEnv.split(':')) {
+        if (dir.isEmpty) continue;
+        final testPath = '$dir/$executable';
+        if (File(testPath).existsSync()) {
+          resolvedExecutable = testPath;
+          break;
         }
       }
+    }
 
-      // set working directory
-      if (workingDirectory != null) {
-        unix.chdir(workingDirectory.toNativeUtf8());
-      }
+    return using((Arena arena) {
+      final nativeExecutable = resolvedExecutable.toNativeUtf8(
+        allocator: arena,
+      );
+      final nativeWorkDir =
+          workingDirectory?.toNativeUtf8(allocator: arena) ?? nullptr;
 
-      // build argv
-      final argv = calloc<Pointer<Utf8>>(arguments.length + 2);
-      (argv + 0).value = executable.toNativeUtf8();
+      final argv = arena<Pointer<Utf8>>(arguments.length + 2);
+      (argv + 0).value = executable.toNativeUtf8(allocator: arena);
       (argv + arguments.length + 1).value = nullptr;
       for (var i = 0; i < arguments.length; i++) {
-        (argv + i + 1).value = arguments[i].toNativeUtf8();
+        (argv + i + 1).value = arguments[i].toNativeUtf8(allocator: arena);
       }
 
-      //build env
-      final env = calloc<Pointer<Utf8>>(effectiveEnv.length + 1);
+      final env = arena<Pointer<Utf8>>(effectiveEnv.length + 1);
       (env + effectiveEnv.length).value = nullptr;
       var cnt = 0;
       for (var entry in effectiveEnv.entries) {
         final envVal = '${entry.key}=${entry.value}';
-        (env + cnt).value = envVal.toNativeUtf8();
+        (env + cnt).value = envVal.toNativeUtf8(allocator: arena);
         cnt++;
       }
 
-      var resolvedExecutable = executable;
-      if (!resolvedExecutable.contains('/')) {
-        final pathEnv =
-            effectiveEnv['PATH'] ?? Platform.environment['PATH'] ?? '';
-        for (final dir in pathEnv.split(':')) {
-          if (dir.isEmpty) continue;
-          final testPath = '$dir/$executable';
-          if (File(testPath).existsSync()) {
-            resolvedExecutable = testPath;
-            break;
+      final pPtm = arena<Int32>();
+      pPtm.value = -1;
+
+      final sz = arena<winsize>();
+      sz.ref.ws_col = 80;
+      sz.ref.ws_row = 20;
+
+      final pid = unix.forkpty(pPtm, nullptr, nullptr, sz);
+
+      if (pid == 0) {
+        // Child process - strict async-signal-safe POSIX calls only
+        if (Platform.isLinux && unix.close_range != null) {
+          final ret = unix.close_range!(3, 4294967295, 0); // ~0U is 4294967295
+          if (ret == -1) {
+            for (var fd = 3; fd < 1024; fd++) {
+              unix.close(fd);
+            }
+          }
+        } else if (unix.closefrom != null) {
+          unix.closefrom!(3);
+        } else {
+          for (var fd = 3; fd < 1024; fd++) {
+            unix.close(fd);
           }
         }
-      }
 
-      unix.execve(resolvedExecutable.toNativeUtf8(), argv, env);
-      unix.cExit(1);
-    } else {
-      unix.setsid();
-
-      if (raw && unix.cfmakeraw != null) {
-        final termp = calloc<termios>();
-        if (unix.tcgetattr(ptm, termp) != -1) {
-          unix.cfmakeraw!(termp);
-          unix.tcsetattr(ptm, consts.TCSANOW, termp);
+        if (nativeWorkDir != nullptr) {
+          unix.chdir(nativeWorkDir);
         }
-        calloc.free(termp);
+
+        unix.execve(nativeExecutable, argv, env);
+        unix.cExit(1);
       }
 
-      return PtyCoreUnix._(pid, ptm);
-    }
+      final ptm = pPtm.value;
 
-    throw PtyException('unreachable');
+      if (pid < 0) {
+        throw PtyException('fork failed.');
+      } else {
+        unix.setsid();
+
+        if (raw && unix.cfmakeraw != null) {
+          final termp = arena<termios>();
+          if (unix.tcgetattr(ptm, termp) != -1) {
+            unix.cfmakeraw!(termp);
+            unix.tcsetattr(ptm, consts.TCSANOW, termp);
+          }
+        }
+
+        return PtyCoreUnix._(pid, ptm);
+      }
+    });
   }
 
   PtyCoreUnix._(this._pid, this._ptm) {
