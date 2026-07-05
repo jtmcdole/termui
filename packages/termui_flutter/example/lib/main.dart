@@ -157,7 +157,7 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
       // Inject Ctrl+C to terminate current loop
       _terminal.injectEvent(
         const termui.KeyEvent(
-          '\x03',
+          'c',
           termui.KeyType.character,
           modifiers: {termui.Modifier.control},
         ),

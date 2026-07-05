@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:isolate';
 import 'package:pty2/pty2.dart';
 import 'package:test/test.dart';
@@ -21,7 +22,9 @@ void main() {
       try {
         for (var i = 0; i < 1; i++) {
           print('starting $i');
-          final pty = PseudoTerminal.start('./test/c_test', []);
+          final exec = Platform.isWindows ? 'cmd.exe' : 'sh';
+          final args = Platform.isWindows ? ['/c', 'exit 0'] : ['-c', 'exit 0'];
+          final pty = PseudoTerminal.start(exec, args);
           print('started $i');
           final code = await pty.exitCode.timeout(const Duration(seconds: 10));
           print('exited $i');
