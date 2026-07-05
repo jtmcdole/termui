@@ -8,10 +8,12 @@ import 'package:termui_flutter/termui_flutter.dart';
 import 'widget_book.dart';
 
 import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
+import 'pty_glass_stub.dart' if (dart.library.io) 'pty_glass_io.dart';
 
 enum TuiDemo {
   widgetBook('Widget Book'),
-  glassCompositing('Glass Compositing');
+  glassCompositing('Glass Compositing'),
+  ptyGlassCompositing('PTY Glass Compositing (Desktop Only)');
 
   final String label;
   const TuiDemo(this.label);
@@ -115,6 +117,10 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
             onFrameRedrawn: onDrawFrame,
           );
           _log('main.dart: Glass Compositing returned');
+        } else if (_currentDemo == TuiDemo.ptyGlassCompositing) {
+          _log('main.dart: Running PTY Glass Compositing');
+          await runPtyGlassDemo(_terminal, onFrameRedrawn: onDrawFrame);
+          _log('main.dart: PTY Glass Compositing returned');
         }
 
         if (!mounted) {
@@ -185,6 +191,14 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
             },
             child: const Text('Glass Compositing'),
           ),
+          if (!kIsWeb)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _switchDemo(TuiDemo.ptyGlassCompositing);
+              },
+              child: const Text('PTY Glass Compositing'),
+            ),
         ],
       ),
     );
