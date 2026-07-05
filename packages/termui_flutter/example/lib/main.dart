@@ -13,7 +13,7 @@ import 'pty_glass_stub.dart' if (dart.library.io) 'pty_glass_io.dart';
 enum TuiDemo {
   widgetBook('Widget Book'),
   glassCompositing('Glass Compositing'),
-  ptyGlassCompositing('PTY Glass Compositing (Desktop Only)');
+  ptyGlassCompositing('PTY Glass Compositing');
 
   final String label;
   const TuiDemo(this.label);
@@ -191,14 +191,13 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
             },
             child: const Text('Glass Compositing'),
           ),
-          if (!kIsWeb)
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _switchDemo(TuiDemo.ptyGlassCompositing);
-              },
-              child: const Text('PTY Glass Compositing'),
-            ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _switchDemo(TuiDemo.ptyGlassCompositing);
+            },
+            child: const Text('PTY Glass Compositing'),
+          ),
         ],
       ),
     );
