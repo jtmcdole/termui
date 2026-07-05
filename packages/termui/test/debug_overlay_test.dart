@@ -48,16 +48,15 @@ void main() {
       final tester = TerminalTester();
       tester.run(() async {
         final manager = SceneManager(tester.terminal);
-        
+
         expect(debugShowTouchesEnabled, isFalse);
-        
-        final hotkeyEvent = KeyEvent('F10', debugToggleHotkey!);
-        manager.handleKeyEvent(hotkeyEvent);
-        
+
+        manager.handleKeyEvent(debugToggleKey!);
+
         expect(debugShowTouchesEnabled, isTrue);
         expect(debugPaintHoverEnabled, isTrue);
-        
-        manager.handleKeyEvent(hotkeyEvent);
+
+        manager.handleKeyEvent(debugToggleKey!);
 
         expect(debugShowTouchesEnabled, isFalse);
         expect(debugPaintHoverEnabled, isFalse);

@@ -544,8 +544,13 @@ class TextField extends StatefulWidget implements Focusable {
   /// Handles key events to update the text area value and cursor position.
   bool handleKeyEvent(KeyEvent event) {
     if (event.type == KeyType.tab ||
-        event.key == '\t' ||
-        event.key == 'backtab') {
+        event == const term.KeyEvent('\t', term.KeyType.tab) ||
+        event ==
+            const term.KeyEvent(
+              '\t',
+              term.KeyType.tab,
+              modifiers: {term.Modifier.shift},
+            )) {
       return false;
     }
     // Determine the mapped action
@@ -581,7 +586,7 @@ class TextField extends StatefulWidget implements Focusable {
 
     if (event.type == KeyType.enter ||
         (event.type == KeyType.character &&
-            (event.key == '\n' || event.key == '\r' || event.key == '\r\n'))) {
+            (event.type == term.KeyType.enter))) {
       if (multiline) {
         controller.saveStateToHistory();
         final lines = List<String>.from(controller.value.lines);
@@ -617,7 +622,7 @@ class TextField extends StatefulWidget implements Focusable {
     }
 
     if (event.type == KeyType.character && !hasControlOrAltOrMeta) {
-      if (event.key == '\t') return false;
+      if (event == const term.KeyEvent('\t', term.KeyType.tab)) return false;
       controller.saveStateToHistory();
       final lines = List<String>.from(controller.value.lines);
       final lineIdx = cursorLine;

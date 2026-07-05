@@ -44,23 +44,14 @@ class ModalOverlay extends Window {
       }
 
       final isNext =
-          event.key == 'tab' ||
-          event.key == '\t' ||
-          (event.type == KeyType.tab &&
-              !event.modifiers.contains(ev.Modifier.shift)) ||
+          event.logicalKey == TermKey.tab ||
           event.type == KeyType.right ||
-          event.key == 'right' ||
-          event.type == KeyType.down ||
-          event.key == 'down';
+          event.type == KeyType.down;
 
       final isPrev =
-          event.key == 'backtab' ||
-          (event.type == KeyType.tab &&
-              event.modifiers.contains(ev.Modifier.shift)) ||
+          event.logicalKey == TermKey.shiftTab ||
           event.type == KeyType.left ||
-          event.key == 'left' ||
-          event.type == KeyType.up ||
-          event.key == 'up';
+          event.type == KeyType.up;
 
       if (isNext) {
         int currentIndex = -1;
@@ -159,23 +150,16 @@ class ModalOverlay extends Window {
     }
 
     final isNext =
-        event.key == 'tab' ||
-        event.key == '\t' ||
         (event.type == KeyType.tab &&
             !event.modifiers.contains(ev.Modifier.shift)) ||
         event.type == KeyType.right ||
-        event.key == 'right' ||
-        event.type == KeyType.down ||
-        event.key == 'down';
+        event.type == KeyType.down;
 
     final isPrev =
-        event.key == 'backtab' ||
         (event.type == KeyType.tab &&
             event.modifiers.contains(ev.Modifier.shift)) ||
         event.type == KeyType.left ||
-        event.key == 'left' ||
-        event.type == KeyType.up ||
-        event.key == 'up';
+        event.type == KeyType.up;
 
     if (isNext) {
       int currentIndex = -1;

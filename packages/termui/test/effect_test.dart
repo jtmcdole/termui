@@ -35,7 +35,7 @@ class MockRenderer implements SceneRenderer {
   @override
   bool handleKeyEvent(KeyEvent event) => false;
   @override
-  void handleMouseEvent(MouseEvent event) {}
+  bool handleMouseEvent(MouseEvent event) => false;
   @override
   void resize(int width, int height) {}
   @override

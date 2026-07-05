@@ -70,12 +70,8 @@ class RadioState<T> extends State<Radio<T>>
   bool handleKeyEvent(term.KeyEvent event) {
     final hasFocus = widget.focused || focusNode.hasFocus;
     if (hasFocus &&
-        (event.key == ' ' ||
-            event.key == 'space' ||
-            event.key == '\n' ||
-            event.key == '\r' ||
-            event.key == 'enter' ||
-            event.type == term.KeyType.enter)) {
+        (event.baseKey == term.TermKey.space ||
+            event.baseKey == term.TermKey.enter)) {
       widget.onChanged(widget.value);
       setState(() {});
       return true;

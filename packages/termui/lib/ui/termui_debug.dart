@@ -13,5 +13,10 @@ bool debugPaintLayerBordersEnabled = false;
 /// Show active touches and expansion rings for visual debugging.
 bool debugShowTouchesEnabled = false;
 
-/// Hotkey to toggle debug overlays globally (if null, hotkey is disabled).
-KeyType? debugToggleHotkey = KeyType.f10;
+/// Key sequence to toggle debug overlays globally (if null, hotkey is disabled).
+/// Defaults to Ctrl+O to avoid terminal multiplexer conflicts.
+KeyEvent? debugToggleKey = const KeyEvent(
+  'o',
+  KeyType.character,
+  modifiers: {Modifier.control},
+);

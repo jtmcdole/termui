@@ -25,14 +25,29 @@ class SceneManager implements Reassemblable {
   /// The list of layers to composite and render.
   late final List<SceneLayer> layers;
 
+  SceneLayer? _focusedLayer;
+  final List<SceneLayer> _focusStack = [];
+
   /// The currently focused layer, if any. Used to sync hardware state.
-  SceneLayer? focusedLayer;
+  SceneLayer? get focusedLayer => _focusedLayer;
+  set focusedLayer(SceneLayer? layer) {
+    if (_focusedLayer == layer) return;
+    _focusedLayer = layer;
+    if (layer != null) {
+      _focusStack.remove(layer);
+      _focusStack.add(layer);
+    }
+  }
 
   /// Whether mouse tracking is explicitly forced/enabled.
   bool enableMouseTracking = false;
 
   /// Optional callback invoked whenever a composited frame is completely rendered.
   void Function(Buffer buffer)? onFrameRedrawn;
+
+  /// Optional callback to intercept key events before they are routed to the focused layer.
+  /// If this returns true, the event is consumed and not propagated.
+  bool Function(KeyEvent event)? onKeyEvent;
 
   bool _isDisposed = false;
   bool _renderScheduled = false;
@@ -117,7 +132,21 @@ class SceneManager implements Reassemblable {
 
   void _onLayerRemoved(SceneLayer layer) {
     _lastRequestedSizes.remove(layer.renderer);
-    if (focusedLayer == layer) focusedLayer = null;
+    _focusStack.remove(layer);
+
+    if (focusedLayer == layer) {
+      _focusedLayer = null; // Bypass setter to prevent redundant stack changes
+      while (_focusStack.isNotEmpty) {
+        final candidate = _focusStack.last;
+        if (layers.contains(candidate)) {
+          _focusedLayer = candidate;
+          break;
+        } else {
+          _focusStack.removeLast();
+        }
+      }
+    }
+
     if (_draggingLayer == layer) _draggingLayer = null;
     if (_capturedMouseLayer == layer) _capturedMouseLayer = null;
     if (_resizingLayer == layer) {
@@ -150,10 +179,15 @@ class SceneManager implements Reassemblable {
       metadata: {'key': event.logicalKey},
     );
     try {
-      if (debugToggleHotkey != null && event.type == debugToggleHotkey) {
+      if (debugToggleKey != null && event == debugToggleKey) {
         debugShowTouchesEnabled = !debugShowTouchesEnabled;
         debugPaintHoverEnabled = !debugPaintHoverEnabled;
+        debugMouseCursorEnabled = !debugMouseCursorEnabled;
         scheduleRender();
+        return;
+      }
+
+      if (onKeyEvent?.call(event) ?? false) {
         return;
       }
 
@@ -246,6 +280,8 @@ class SceneManager implements Reassemblable {
 
         SceneLayer? hitLayer;
         for (final layer in sortedLayers) {
+          if (!layer.hitTestable) continue;
+
           final buf = layer.renderer.currentBuffer;
           if (buf == null) continue;
 
@@ -253,52 +289,35 @@ class SceneManager implements Reassemblable {
               mouseX < layer.x + buf.width &&
               mouseY >= layer.y &&
               mouseY < layer.y + buf.height) {
-            hitLayer = layer;
-            break;
-          }
-        }
+            final isTL = mouseX == layer.x && mouseY == layer.y;
+            final isTR = mouseX == layer.x + buf.width - 1 && mouseY == layer.y;
+            final isBL =
+                mouseX == layer.x && mouseY == layer.y + buf.height - 1;
+            final isBR =
+                mouseX == layer.x + buf.width - 1 &&
+                mouseY == layer.y + buf.height - 1;
 
-        if (hitLayer != null) {
-          _capturedMouseLayer = hitLayer;
-          if (focusedLayer != hitLayer) {
-            focusedLayer = hitLayer;
-          }
-          final buf = hitLayer.renderer.currentBuffer;
-          final isTL = mouseX == hitLayer.x && mouseY == hitLayer.y;
-          final isTR =
-              mouseX == hitLayer.x + buf!.width - 1 && mouseY == hitLayer.y;
-          final isBL =
-              mouseX == hitLayer.x && mouseY == hitLayer.y + buf.height - 1;
-          final isBR =
-              mouseX == hitLayer.x + buf.width - 1 &&
-              mouseY == hitLayer.y + buf.height - 1;
+            if (layer.resizable && (isTL || isTR || isBL || isBR)) {
+              hitLayer = layer;
+              _resizingLayer = layer;
+              _resizeCorner = isTL
+                  ? 1
+                  : isTR
+                  ? 2
+                  : isBL
+                  ? 3
+                  : 4;
+              _dragStartX = event.x;
+              _dragStartY = event.y;
+              _layerStartX = layer.x;
+              _layerStartY = layer.y;
+              _layerStartWidth = layer.width ?? buf.width;
+              _layerStartHeight = layer.height ?? buf.height;
+              break;
+            }
 
-          if (hitLayer.resizable && (isTL || isTR || isBL || isBR)) {
-            _resizingLayer = hitLayer;
-            _resizeCorner = isTL
-                ? 1
-                : isTR
-                ? 2
-                : isBL
-                ? 3
-                : 4;
-            _dragStartX = event.x;
-            _dragStartY = event.y;
-            _layerStartX = hitLayer.x;
-            _layerStartY = hitLayer.y;
-            _layerStartWidth = hitLayer.width ?? buf.width;
-            _layerStartHeight = hitLayer.height ?? buf.height;
-          } else if (hitLayer.draggable) {
-            _draggingLayer = hitLayer;
-            _dragStartX = event.x;
-            _dragStartY = event.y;
-            _layerStartX = hitLayer.x;
-            _layerStartY = hitLayer.y;
-          }
-
-          if (_resizingLayer == null) {
-            final localX = mouseX - hitLayer.x;
-            final localY = mouseY - hitLayer.y;
+            final localX = mouseX - layer.x;
+            final localY = mouseY - layer.y;
             final localEvent = MouseEvent(
               x: localX + 1,
               y: localY + 1,
@@ -308,7 +327,26 @@ class SceneManager implements Reassemblable {
               type: event.type,
               modifiers: event.modifiers,
             );
-            hitLayer.renderer.handleMouseEvent(localEvent);
+
+            final handled = layer.renderer.handleMouseEvent(localEvent);
+            if (handled || layer.draggable) {
+              hitLayer = layer;
+              if (layer.draggable) {
+                _draggingLayer = layer;
+                _dragStartX = event.x;
+                _dragStartY = event.y;
+                _layerStartX = layer.x;
+                _layerStartY = layer.y;
+              }
+              break;
+            }
+          }
+        }
+
+        if (hitLayer != null) {
+          _capturedMouseLayer = hitLayer;
+          if (focusedLayer != hitLayer) {
+            focusedLayer = hitLayer;
           }
         }
       } else if (event.type == MouseEventType.drag) {
@@ -416,6 +454,8 @@ class SceneManager implements Reassemblable {
         SceneLayer? hitLayer;
 
         for (final layer in sortedLayers) {
+          if (!layer.hitTestable) continue;
+
           final buf = layer.renderer.currentBuffer;
           if (buf == null) continue;
 
@@ -435,8 +475,10 @@ class SceneManager implements Reassemblable {
               type: event.type,
               modifiers: event.modifiers,
             );
-            layer.renderer.handleMouseEvent(localEvent);
-            break;
+            final handled = layer.renderer.handleMouseEvent(localEvent);
+            if (handled) {
+              break;
+            }
           }
         }
 

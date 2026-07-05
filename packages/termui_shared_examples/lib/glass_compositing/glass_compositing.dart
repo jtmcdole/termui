@@ -9,11 +9,61 @@ import 'package:termui/termui.dart';
 
 // --- Shared State ---
 class FireConfig {
-  double flameHeight = 0.5;
-  double speed = 1.0;
-  double wind = 0.0;
-  int themeIndex = 0;
-  int fontIndex = 0;
+  final List<void Function()> _listeners = [];
+
+  void addListener(void Function() listener) {
+    _listeners.add(listener);
+  }
+
+  void removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
+
+  void _notifyListeners() {
+    for (final listener in _listeners) {
+      listener();
+    }
+  }
+
+  double _flameHeight = 0.5;
+  double get flameHeight => _flameHeight;
+  set flameHeight(double value) {
+    if (_flameHeight == value) return;
+    _flameHeight = value;
+    _notifyListeners();
+  }
+
+  double _speed = 1.0;
+  double get speed => _speed;
+  set speed(double value) {
+    if (_speed == value) return;
+    _speed = value;
+    _notifyListeners();
+  }
+
+  double _wind = 0.0;
+  double get wind => _wind;
+  set wind(double value) {
+    if (_wind == value) return;
+    _wind = value;
+    _notifyListeners();
+  }
+
+  int _themeIndex = 0;
+  int get themeIndex => _themeIndex;
+  set themeIndex(int value) {
+    if (_themeIndex == value) return;
+    _themeIndex = value;
+    _notifyListeners();
+  }
+
+  int _fontIndex = 0;
+  int get fontIndex => _fontIndex;
+  set fontIndex(int value) {
+    if (_fontIndex == value) return;
+    _fontIndex = value;
+    _notifyListeners();
+  }
 }
 
 // --- Fire Background Engine ---
@@ -554,7 +604,7 @@ class _SettingsAppState extends State<SettingsApp> {
   late final SelectionController<String> _fontCtrl;
 
   late final void Function() _listener;
-  Timer? _syncTimer;
+  late final void Function() _configListener;
 
   @override
   void initState() {
@@ -576,21 +626,22 @@ class _SettingsAppState extends State<SettingsApp> {
     _themeCtrl.addListener(_listener);
     _fontCtrl.addListener(_listener);
 
-    // Sync UI if config is changed externally (e.g. by font rotation timer)
-    _syncTimer = Timer.periodic(const Duration(milliseconds: 500), (t) {
+    _configListener = () {
       if (!mounted) return;
-      if (_fontCtrl.selectedIndex != widget.config.fontIndex ||
-          _themeCtrl.selectedIndex != widget.config.themeIndex) {
+      if (_fontCtrl.selectedIndex != widget.config.fontIndex) {
         _fontCtrl.selectedIndex = widget.config.fontIndex;
-        _themeCtrl.selectedIndex = widget.config.themeIndex;
-        setState(() {});
       }
-    });
+      if (_themeCtrl.selectedIndex != widget.config.themeIndex) {
+        _themeCtrl.selectedIndex = widget.config.themeIndex;
+      }
+      setState(() {});
+    };
+    widget.config.addListener(_configListener);
   }
 
   @override
   void dispose() {
-    _syncTimer?.cancel();
+    widget.config.removeListener(_configListener);
     _themeCtrl.removeListener(_listener);
     _fontCtrl.removeListener(_listener);
     super.dispose();

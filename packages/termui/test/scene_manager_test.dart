@@ -33,12 +33,13 @@ class MockSceneRenderer implements SceneRenderer {
   @override
   bool handleKeyEvent(KeyEvent event) {
     keyEvents.add(event);
-    return false;
+    return true;
   }
 
   @override
-  void handleMouseEvent(MouseEvent event) {
+  bool handleMouseEvent(MouseEvent event) {
     mouseEvents.add(event);
+    return true;
   }
 
   void render() {}

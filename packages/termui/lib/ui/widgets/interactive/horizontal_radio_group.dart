@@ -112,15 +112,12 @@ class HorizontalRadioGroupState extends State<HorizontalRadioGroup>
             (controller.focusedIndex + 1) % controller.options.length;
       });
       return true;
-    } else if (event.key == ' ' || event.key == 'space') {
+    } else if (event.baseKey == term.TermKey.space) {
       setState(() {
         controller.selectedIndex = controller.focusedIndex;
       });
       return true;
-    } else if (event.key == 'enter' ||
-        event.key == '\n' ||
-        event.key == '\r' ||
-        event.type == term.KeyType.enter) {
+    } else if (event.baseKey == term.TermKey.enter) {
       setState(() {
         controller.selectedIndex = controller.focusedIndex;
       });
