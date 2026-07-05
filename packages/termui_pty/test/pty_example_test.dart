@@ -1,19 +1,33 @@
+import 'dart:io';
 import 'package:termui/termui.dart';
 import 'package:termui_pty/termui_pty.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:test/test.dart';
 import 'package:pty2/pty2.dart';
 
+class MockPseudoTerminal implements PseudoTerminal {
+  @override
+  Stream<String> get out => const Stream.empty();
+  @override
+  void write(String data) {}
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) => true;
+  @override
+  Future<int> get exitCode => Future.value(0);
+  @override
+  void resize(int columns, int rows) {}
+  @override
+  void ackProcessed() {}
+  @override
+  void init() {}
+}
+
 void main() {
   test('PromptRunner debug toggles and draws cursor', () {
     final tester = TerminalTester();
 
     tester.run(() async {
-      final pty = PseudoTerminal.start(
-        'echo',
-        ['hello'],
-        environment: {'TERM': 'xterm-256color'},
-      );
+      final pty = MockPseudoTerminal();
 
       final runner = PromptRunner(
         terminal: tester.terminal,
