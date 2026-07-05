@@ -10,6 +10,33 @@ import 'package:pty2/src/pty_error.dart';
 import 'package:pty2/src/util/unix_const.dart';
 import 'package:pty2/src/util/unix_ffi.dart';
 
+@Native<Int32 Function(Pointer<Utf8>, Pointer<Pointer<Utf8>>, Pointer<Pointer<Utf8>>)>(symbol: 'execve', isLeaf: true)
+external int _native_execve(Pointer<Utf8> file, Pointer<Pointer<Utf8>> argv, Pointer<Pointer<Utf8>> envp);
+
+@Native<Int32 Function()>(symbol: 'getpid', isLeaf: true)
+external int _native_getpid();
+
+@Native<Int32 Function(Int32, Int32)>(symbol: 'kill', isLeaf: true)
+external int _native_kill(int pid, int sig);
+
+@Native<Int32 Function()>(symbol: 'fork', isLeaf: true)
+external int _native_fork();
+
+@Native<Int32 Function()>(symbol: 'setsid', isLeaf: true)
+external int _native_setsid();
+
+@Native<Int32 Function(Int32, Uint64, Pointer<Void>)>(symbol: 'ioctl', isLeaf: true)
+external int _native_ioctl(int fd, int request, Pointer<Void> argp);
+
+@Native<Int32 Function(Int32, Int32)>(symbol: 'dup2', isLeaf: true)
+external int _native_dup2(int oldfd, int newfd);
+
+@Native<Int32 Function(Pointer<Utf8>)>(symbol: 'chdir', isLeaf: true)
+external int _native_chdir(Pointer<Utf8> path);
+
+@Native<Int32 Function(Int32)>(symbol: 'close', isLeaf: true)
+external int _native_close(int fd);
+
 class PtyCoreUnix implements PtyCore, Finalizable {
   factory PtyCoreUnix.start(
     String executable,
@@ -83,56 +110,74 @@ class PtyCoreUnix implements PtyCore, Finalizable {
       }
 
       final pPtm = arena<Int32>();
-      pPtm.value = -1;
+      final pPts = arena<Int32>();
+      final name = arena<Int8>(256);
 
       final sz = arena<winsize>();
       sz.ref.ws_col = 80;
       sz.ref.ws_row = 20;
 
-      final isLinux = Platform.isLinux;
-      final hasCloseRange = unix.close_range != null;
-      final hasCloseFrom = unix.closefrom != null;
-      final closeRangeFunc = unix.close_range;
-      final closeFromFunc = unix.closefrom;
-      final closeFunc = unix.close;
-      final chdirFunc = unix.chdir;
-      final execveFunc = unix.execve;
-      final cExitFunc = unix.cExit;
-
-      final pid = unix.forkpty(pPtm, nullptr, nullptr, sz);
-
-      if (pid == 0) {
-        // Child process - strict async-signal-safe POSIX calls only
-        if (isLinux && hasCloseRange) {
-          final ret = closeRangeFunc!(3, 4294967295, 0); // ~0U is 4294967295
-          if (ret == -1) {
-            for (var fd = 3; fd < 1024; fd++) {
-              closeFunc(fd);
-            }
-          }
-        } else if (hasCloseFrom) {
-          closeFromFunc!(3);
-        } else {
-          for (var fd = 3; fd < 1024; fd++) {
-            closeFunc(fd);
-          }
-        }
-
-        if (nativeWorkDir != nullptr) {
-          chdirFunc(nativeWorkDir);
-        }
-
-        execveFunc(nativeExecutable, argv, env);
-        cExitFunc(1);
+      if (unix.openpty(pPtm, pPts, name, nullptr, sz) != 0) {
+        throw PtyException('openpty failed');
       }
 
       final ptm = pPtm.value;
+      final pts = pPts.value;
+
+      // sz is already initialized above
+
+      final isMacOS = Platform.isMacOS;
+      final nullPtr = nullptr;
+      final hasWorkDir = nativeWorkDir != nullptr;
+
+      // Eagerly resolve @Native functions BEFORE fork!
+      _native_execve(nullPtr.cast(), nullPtr.cast(), nullPtr.cast());
+      _native_getpid();
+      _native_kill(-1, 0);
+      _native_setsid();
+      _native_ioctl(-1, 0, nullPtr);
+      _native_dup2(-1, -1);
+      _native_close(-1);
+      _native_chdir(nativeExecutable); // safe, just returns error or changes to same
+
+      final pid = _native_fork();
+
+      if (pid == 0) {
+        // Child process - strict async-signal-safe POSIX calls only
+        // NO LOOPS ALLOWED (backward branches trigger safepoints and deadlock)
+        
+        // 1. setsid()
+        _native_setsid();
+
+        // 2. ioctl()
+        final tiocsctty = isMacOS ? 0x20007461 : 0x540E;
+        _native_ioctl(pts, tiocsctty, nullPtr);
+
+        // 3. dup2()
+        _native_dup2(pts, 0);
+        _native_dup2(pts, 1);
+        _native_dup2(pts, 2);
+
+        // 4. close FDs explicitly (no loop)
+        _native_close(ptm);
+        _native_close(pts);
+
+        if (hasWorkDir) {
+          _native_chdir(nativeWorkDir);
+        }
+
+        _native_execve(nativeExecutable, argv, env);
+        
+        // Exiting safely without deadlocks if execve fails
+        _native_kill(_native_getpid(), 9); // SIGKILL
+      }
+
+      unix.close(pts);
 
       if (pid < 0) {
+        unix.close(ptm);
         throw PtyException('fork failed.');
       } else {
-        unix.setsid();
-
         if (raw && unix.cfmakeraw != null) {
           final termp = arena<termios>();
           if (unix.tcgetattr(ptm, termp) != -1) {
