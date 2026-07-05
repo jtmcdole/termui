@@ -1,6 +1,6 @@
 name: termui_pty
 description: A custom ANSI terminal emulator and PTY view for termui.
-version: 0.2.0-wip
+version: 0.2.0
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_pty
 
 resolution: workspace
