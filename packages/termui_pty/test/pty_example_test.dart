@@ -18,7 +18,7 @@ void main() {
       final runner = PromptRunner(
         terminal: tester.terminal,
         alternateScreen: false,
-        widget: SizedBox.expand(child: PlatformView(pty: pty)),
+        widget: SizedBox.expand(child: PseudoTerminalView(pty: pty)),
       );
 
       final runFuture = runner.run();

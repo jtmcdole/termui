@@ -29,13 +29,13 @@ void main() async {
     config.flameHeight = 1.0;
     config.speed = 1.5;
 
-    // 1. Bottom Layer: PlatformView running 'top'
+    // 1. Bottom Layer: PseudoTerminalView running 'top'
     final ptyFocusNode = FocusNode(id: 'pty');
     final ptyRunner = PromptRunner(
       terminal: terminal,
       // Pass a custom default foreground (e.g. bright green) for a "hacker" theme look
       widget: SizedBox.expand(
-        child: PlatformView(
+        child: PseudoTerminalView(
           pty: pty,
           transparentBackground: true,
           defaultForeground: CharmColors.julep,

@@ -1,4 +1,3 @@
-
 /// Interface for receiving parsed ANSI terminal sequences.
 abstract class TerminalHandler {
   /// Print raw printable text.

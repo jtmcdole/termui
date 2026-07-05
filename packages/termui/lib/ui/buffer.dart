@@ -249,7 +249,7 @@ class Buffer {
             }
           }
 
-          final isWide = isWideGrapheme(char);
+          final isWide = isWideCodePoint(codeUnit);
           if (isWide && currentX == width - 1) {
             characters[idx] = ' ';
             final attrIdx = idx * 3;
@@ -733,8 +733,12 @@ class Compositor {
 /// we bypass the expensive grapheme cluster iterator/rune inspection and Unicode range checks entirely.
 bool isWideGrapheme(String grapheme) {
   if (grapheme.isEmpty) return false;
-  if (grapheme.codeUnitAt(0) < 128) return false;
-  final codePoint = grapheme.runes.first;
+  return isWideCodePoint(grapheme.runes.first);
+}
+
+/// Checks if a single code point represents a wide character.
+bool isWideCodePoint(int codePoint) {
+  if (codePoint < 128) return false;
 
   // CJK Unified Ideographs & Extension A
   if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return true;

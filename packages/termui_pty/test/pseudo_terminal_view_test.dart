@@ -45,12 +45,12 @@ void main() {
     FocusManager.instance.setPrimaryFocus(null);
   });
 
-  test('PlatformView renders PTY output and routes keys', () {
+  test('PseudoTerminalView renders PTY output and routes keys', () {
     final mockPty = MockPty();
     final tester = TerminalTester();
 
     tester.run(() async {
-      final platformView = PlatformView(pty: mockPty);
+      final platformView = PseudoTerminalView(pty: mockPty);
 
       await tester.pumpWidget(platformView);
       await tester.pump();
