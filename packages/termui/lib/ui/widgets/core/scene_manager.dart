@@ -682,6 +682,7 @@ class SceneManager implements Reassemblable {
     _eventsSubscription = null;
     _sizeSubscription?.cancel();
     _sizeSubscription = null;
+    _debugTouchTimer?.cancel();
 
     if (_lastShowsCursor == false) {
       terminal.showCursor();

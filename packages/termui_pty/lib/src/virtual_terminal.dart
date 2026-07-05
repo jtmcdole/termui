@@ -30,6 +30,35 @@ class VirtualTerminal implements TerminalHandler {
   /// The default foreground color applied to characters when no explicit color is set.
   final Color? defaultForeground;
 
+  /// Whether mouse tracking is enabled (set by DECSET 1000 or similar).
+  bool mouseTrackingEnabled = false;
+
+  /// Whether SGR mouse reporting mode is enabled (set by DECSET 1006).
+  bool sgrMouseMode = false;
+
+  final List<void Function()> _listeners = [];
+
+  /// Adds a listener to be notified when the terminal buffer changes.
+  void addListener(void Function() listener) {
+    _listeners.add(listener);
+  }
+
+  /// Removes a previously added listener.
+  void removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
+
+  /// Disposes of resources.
+  void dispose() {
+    _listeners.clear();
+  }
+
+  void _notifyListeners() {
+    for (final listener in _listeners) {
+      listener();
+    }
+  }
+
   /// Creates a new virtual terminal with the specified dimensions and settings.
   VirtualTerminal({
     this.width = 80,
@@ -72,6 +101,7 @@ class VirtualTerminal implements TerminalHandler {
   /// Feeds a chunk of data into the terminal.
   void write(List<int> chunk) {
     _parser.parse(String.fromCharCodes(chunk));
+    _notifyListeners();
   }
 
   void _scrollUp() {
@@ -165,6 +195,26 @@ class VirtualTerminal implements TerminalHandler {
   void csi(String command, List<int> params, {String? intermediate}) {
     final p1 = params.isNotEmpty && params[0] != 0 ? params[0] : 1;
     final p2 = params.length > 1 && params[1] != 0 ? params[1] : 1;
+
+    if (intermediate == '?') {
+      if (command == 'h') {
+        for (final param in params) {
+          if (param == 1000) mouseTrackingEnabled = true;
+          if (param == 1002) mouseTrackingEnabled = true;
+          if (param == 1003) mouseTrackingEnabled = true;
+          if (param == 1006) sgrMouseMode = true;
+        }
+        return;
+      } else if (command == 'l') {
+        for (final param in params) {
+          if (param == 1000) mouseTrackingEnabled = false;
+          if (param == 1002) mouseTrackingEnabled = false;
+          if (param == 1003) mouseTrackingEnabled = false;
+          if (param == 1006) sgrMouseMode = false;
+        }
+        return;
+      }
+    }
 
     switch (command) {
       case 'A': // Cursor Up

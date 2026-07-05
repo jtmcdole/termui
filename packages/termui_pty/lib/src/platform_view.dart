@@ -6,7 +6,7 @@ import 'input_encoder.dart';
 import 'package:termui/terminal/event.dart' as ev;
 
 /// A widget that renders a PTY subprocess and forwards terminal input events.
-class PlatformView extends StatefulWidget implements MouseEventHandler {
+class PlatformView extends StatefulWidget {
   /// The running pseudo-terminal process.
   final PseudoTerminal pty;
 
@@ -20,7 +20,7 @@ class PlatformView extends StatefulWidget implements MouseEventHandler {
   final FocusNode? focusNode;
 
   /// Creates a PlatformView that manages a virtual terminal connected to [pty].
-  PlatformView({
+  const PlatformView({
     super.key,
     required this.pty,
     this.transparentBackground = false,
@@ -28,23 +28,11 @@ class PlatformView extends StatefulWidget implements MouseEventHandler {
     this.focusNode,
   });
 
-  _PlatformViewState? _state;
-
   @override
-  void handleMouseEvent(ev.MouseEvent event, int localX, int localY) {
-    _state?.handleMouseEvent(event, localX, localY);
-  }
-
-  @override
-  State<PlatformView> createState() {
-    final state = _PlatformViewState();
-    _state = state;
-    return state;
-  }
+  State<PlatformView> createState() => _PlatformViewState();
 }
 
-class _PlatformViewState extends State<PlatformView>
-    implements MouseEventHandler {
+class _PlatformViewState extends State<PlatformView> {
   late VirtualTerminal _terminal;
   StreamSubscription? _outSubscription;
   late final FocusNode _focusNode;
@@ -69,13 +57,13 @@ class _PlatformViewState extends State<PlatformView>
     );
     _outSubscription = widget.pty.out.listen((data) {
       _terminal.write(data.codeUnits);
-      if (mounted) setState(() {});
     });
   }
 
   @override
   void dispose() {
     _outSubscription?.cancel();
+    _terminal.dispose();
     if (_ownsFocusNode) {
       _focusNode.dispose();
     }
@@ -96,28 +84,7 @@ class _PlatformViewState extends State<PlatformView>
   }
 
   @override
-  void handleMouseEvent(ev.MouseEvent event, int localX, int localY) {
-    _focusNode.requestFocus();
-
-    // Convert local coordinates back to 1-indexed VT100 coordinates
-    final translatedEvent = ev.MouseEvent(
-      x: localX + 1,
-      y: localY + 1,
-      globalX: event.globalX,
-      globalY: event.globalY,
-      button: event.button,
-      type: event.type,
-      modifiers: event.modifiers,
-    );
-    final str = InputEncoder.encode(translatedEvent);
-    if (str.isNotEmpty) {
-      widget.pty.write(str);
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    widget._state = this;
     return LayoutBuilder(
       builder: (context, constraints) {
         final width = constraints.maxWidth == BoxConstraints.infinity
@@ -140,7 +107,11 @@ class _PlatformViewState extends State<PlatformView>
             }
             return false;
           },
-          child: _RawTerminalBufferWidget(buffer: _terminal.buffer),
+          child: _RawTerminalBufferWidget(
+            terminal: _terminal,
+            pty: widget.pty,
+            focusNode: _focusNode,
+          ),
         );
       },
     );
@@ -148,53 +119,124 @@ class _PlatformViewState extends State<PlatformView>
 }
 
 class _RawTerminalBufferWidget extends Widget {
-  final Buffer buffer;
+  final VirtualTerminal terminal;
+  final PseudoTerminal pty;
+  final FocusNode focusNode;
 
-  const _RawTerminalBufferWidget({required this.buffer});
+  const _RawTerminalBufferWidget({
+    required this.terminal,
+    required this.pty,
+    required this.focusNode,
+  });
 
   @override
   Element createElement() => _RawTerminalBufferElement(this);
 
   @override
-  int getIntrinsicHeight(int width) => buffer.height;
+  int getIntrinsicHeight(int width) => terminal.height;
 
   @override
-  int getIntrinsicWidth(int height) => buffer.width;
+  int getIntrinsicWidth(int height) => terminal.width;
 }
 
-class _RawTerminalBufferElement extends LeafElement {
+class _RawTerminalBufferElement extends LeafElement implements MouseEventHandler {
   _RawTerminalBufferElement(_RawTerminalBufferWidget super.widget);
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    final w = widget as _RawTerminalBufferWidget;
+    w.terminal.addListener(markNeedsBuild);
+  }
+
+  @override
+  void unmount() {
+    final w = widget as _RawTerminalBufferWidget;
+    w.terminal.removeListener(markNeedsBuild);
+    super.unmount();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    final oldWidget = widget as _RawTerminalBufferWidget;
+    final newW = newWidget as _RawTerminalBufferWidget;
+    if (oldWidget.terminal != newW.terminal) {
+      oldWidget.terminal.removeListener(markNeedsBuild);
+      newW.terminal.addListener(markNeedsBuild);
+    }
+    super.update(newWidget);
+  }
 
   @override
   Size performLayout(BoxConstraints constraints) {
     final w = widget as _RawTerminalBufferWidget;
-    return constraints.constrain(Size(w.buffer.width, w.buffer.height));
+    return constraints.constrain(Size(w.terminal.width, w.terminal.height));
+  }
+
+  @override
+  void handleMouseEvent(ev.MouseEvent event, int localX, int localY) {
+    final w = widget as _RawTerminalBufferWidget;
+    w.focusNode.requestFocus();
+
+    if (!w.terminal.mouseTrackingEnabled) {
+      return;
+    }
+
+    // Convert local coordinates back to 1-indexed VT100 coordinates
+    final translatedEvent = ev.MouseEvent(
+      x: localX + 1,
+      y: localY + 1,
+      globalX: event.globalX,
+      globalY: event.globalY,
+      button: event.button,
+      type: event.type,
+      modifiers: event.modifiers,
+    );
+    final str = InputEncoder.encode(translatedEvent);
+    if (str.isNotEmpty) {
+      w.pty.write(str);
+    }
   }
 
   @override
   void performPaint(Buffer buffer, Offset offset) {
     final w = widget as _RawTerminalBufferWidget;
-    final source = w.buffer;
+    final source = w.terminal.buffer;
 
-    // We just composite the source buffer into the target buffer at offset
     final startX = offset.dx.toInt();
     final startY = offset.dy.toInt();
     final endX = (startX + source.width).clamp(0, buffer.width);
     final endY = (startY + source.height).clamp(0, buffer.height);
 
     if (startX < endX && startY < endY) {
+      final rowLength = endX - startX;
+      final transparent = w.terminal.transparentBackground;
+
       for (var ty = startY; ty < endY; ty++) {
         final sy = ty - startY;
-        for (var tx = startX; tx < endX; tx++) {
-          final sx = tx - startX;
+        final targetStartIdx = ty * buffer.width + startX;
+        final sourceStartIdx = sy * source.width;
 
-          final char = source.getCharacter(sx, sy);
-          final fg = source.getForeground(sx, sy);
-          final bg = source.getBackground(sx, sy);
-          final mod = source.getModifiers(sx, sy);
+        if (!transparent) {
+          // Fast path: block copy entire rows
+          buffer.characters.setRange(targetStartIdx, targetStartIdx + rowLength, source.characters, sourceStartIdx);
 
-          if ((mod & Modifier.transparent) == 0) {
-            buffer.setCell(tx, ty, char, fg, bg, mod);
+          final targetAttrStart = targetStartIdx * 3;
+          final sourceAttrStart = sourceStartIdx * 3;
+          buffer.attributes.setRange(targetAttrStart, targetAttrStart + rowLength * 3, source.attributes, sourceAttrStart);
+        } else {
+          // Slow path: skip transparent cells but use direct array access
+          var tIdx = targetStartIdx;
+          var sIdx = sourceStartIdx;
+          for (var i = 0; i < rowLength; i++, tIdx++, sIdx++) {
+            final sAttrIdx = sIdx * 3;
+            if ((source.attributes[sAttrIdx + 2] & Modifier.transparent) == 0) {
+              buffer.characters[tIdx] = source.characters[sIdx];
+              final tAttrIdx = tIdx * 3;
+              buffer.attributes[tAttrIdx + 0] = source.attributes[sAttrIdx + 0];
+              buffer.attributes[tAttrIdx + 1] = source.attributes[sAttrIdx + 1];
+              buffer.attributes[tAttrIdx + 2] = source.attributes[sAttrIdx + 2];
+            }
           }
         }
       }
