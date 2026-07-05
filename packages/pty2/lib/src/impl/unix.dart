@@ -89,31 +89,41 @@ class PtyCoreUnix implements PtyCore, Finalizable {
       sz.ref.ws_col = 80;
       sz.ref.ws_row = 20;
 
+      final isLinux = Platform.isLinux;
+      final hasCloseRange = unix.close_range != null;
+      final hasCloseFrom = unix.closefrom != null;
+      final closeRangeFunc = unix.close_range;
+      final closeFromFunc = unix.closefrom;
+      final closeFunc = unix.close;
+      final chdirFunc = unix.chdir;
+      final execveFunc = unix.execve;
+      final cExitFunc = unix.cExit;
+
       final pid = unix.forkpty(pPtm, nullptr, nullptr, sz);
 
       if (pid == 0) {
         // Child process - strict async-signal-safe POSIX calls only
-        if (Platform.isLinux && unix.close_range != null) {
-          final ret = unix.close_range!(3, 4294967295, 0); // ~0U is 4294967295
+        if (isLinux && hasCloseRange) {
+          final ret = closeRangeFunc!(3, 4294967295, 0); // ~0U is 4294967295
           if (ret == -1) {
             for (var fd = 3; fd < 1024; fd++) {
-              unix.close(fd);
+              closeFunc(fd);
             }
           }
-        } else if (unix.closefrom != null) {
-          unix.closefrom!(3);
+        } else if (hasCloseFrom) {
+          closeFromFunc!(3);
         } else {
           for (var fd = 3; fd < 1024; fd++) {
-            unix.close(fd);
+            closeFunc(fd);
           }
         }
 
         if (nativeWorkDir != nullptr) {
-          unix.chdir(nativeWorkDir);
+          chdirFunc(nativeWorkDir);
         }
 
-        unix.execve(nativeExecutable, argv, env);
-        unix.cExit(1);
+        execveFunc(nativeExecutable, argv, env);
+        cExitFunc(1);
       }
 
       final ptm = pPtm.value;
