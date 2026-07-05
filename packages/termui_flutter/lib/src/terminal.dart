@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui;
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide Color;
@@ -571,7 +572,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
 
   void _takeScreenshot() async {
     try {
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final timestamp = clock.now().millisecondsSinceEpoch;
       final fs = getDefaultFileSystem();
       String? screenshotBasename;
       String? atlasBasename;

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:clock/clock.dart';
 import 'package:file/file.dart';
 import 'fs_locator.dart';
 import 'tracer_sink.dart';
@@ -91,7 +92,7 @@ class Tracer {
     _activeBuffer.fillRange(0, _activeBuffer.length, 0);
 
     final fileSystem = fs ?? getDefaultFileSystem();
-    _baseEpochUs = DateTime.now().microsecondsSinceEpoch;
+    _baseEpochUs = clock.now().microsecondsSinceEpoch;
     _stopwatch.reset();
     _stopwatch.start();
 
