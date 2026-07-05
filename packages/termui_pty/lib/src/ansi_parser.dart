@@ -1,4 +1,3 @@
-import 'dart:io';
 
 /// Interface for receiving parsed ANSI terminal sequences.
 abstract class TerminalHandler {
@@ -48,16 +47,9 @@ class AnsiParser {
   void _flushText() {
     if (_textBuffer.isNotEmpty) {
       final text = String.fromCharCodes(_textBuffer);
-      _log('printText(${text.length} chars): "$text"');
       handler.printText(text);
       _textBuffer.clear();
     }
-  }
-
-  void _log(String message) {
-    try {
-      File('parser.log').writeAsStringSync('$message\n', mode: FileMode.append);
-    } catch (_) {}
   }
 
   /// Parses a chunk of VT100/ANSI string text and updates the bound handler.
@@ -215,7 +207,6 @@ class AnsiParser {
 
   void _execute(int charCode) {
     _flushText();
-    _log('execute(charCode: $charCode)');
     handler.execute(charCode);
   }
 
@@ -224,9 +215,6 @@ class AnsiParser {
     final intermediate = _intermediates.isNotEmpty
         ? String.fromCharCodes(_intermediates)
         : null;
-    _log(
-      'csi(command: "$command", params: $_params, intermediate: $intermediate)',
-    );
     handler.csi(command, List.from(_params), intermediate: intermediate);
   }
 
@@ -236,7 +224,6 @@ class AnsiParser {
     if (parts.isNotEmpty) {
       final command = int.tryParse(parts[0]) ?? -1;
       final payload = parts.length > 1 ? parts.sublist(1).join(';') : '';
-      _log('osc(command: $command, payload: "$payload")');
       handler.osc(command, payload);
     }
   }
