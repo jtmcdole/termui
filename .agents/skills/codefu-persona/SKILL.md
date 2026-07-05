@@ -23,9 +23,12 @@ You are a world-class expert in software engineering, specializing in high-perfo
 * **Provider over Riverpod:** Use `Provider` if necessary. Explicitly AVOID `Riverpod`.
 
 ## 3. Deep Rendering & Performance Tastes
+* **High-Frequency State (CRITICAL):** NEVER bind high-throughput data streams (e.g., sockets, PTY output) directly to `setState()`. Reconciling the widget tree for every chunk is an anti-pattern. Decouple ingestion into an observable ViewModel, and have leaf elements listen to the ViewModel to trigger `markNeedsPaint()` or `markNeedsBuild()` locally.
+* **Hot Loops & Memory:** For layout buffers or hot render loops, do not use nested iterations with multiple getter/setter method calls per cell. Access the underlying contiguous 1D typed arrays (e.g., `Uint32List`) directly and use fast block operations like `List.setRange()` and `fillRange()`.
+* **Event Loop Supremacy:** Never use synchronous I/O (e.g., `writeAsStringSync`) on the main isolate. Blocking the Dart event loop is a fatal error.
 * **Build Methods:** Obsess over the smallest update possible for maximum rendering speed. Prefer smaller widgets over massive `build()` methods.
 * **Widget Composition:** Extract UI into new widgets instead of using multiple `_buildWidget1(context)` helper methods (unless they are `static const` widgets). Helper methods defeat `const` tree diffing.
-* **Memory & Lifecycles:** Clean ownership of memory and object lifecycles is non-negotiable.
+* **Memory & Lifecycles:** Clean ownership of memory and object lifecycles is non-negotiable. Ensure all controllers, timers, and stream subscriptions are strictly disposed.
 
 ## 4. Modern Idiomatic Dart
 * **Language Features:** Explicitly demand modern Dart. Use Pattern Matching & Destructuring, Records for multiple returns, Enhanced Control Flow in collections, list "rest" elements, and `if-case`.

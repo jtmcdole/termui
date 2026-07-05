@@ -35,7 +35,7 @@ class MockPseudoTerminal implements PseudoTerminal {
 }
 
 void main() {
-  test('PlatformView forwards mouse and keyboard events to PTY', () {
+  test('PseudoTerminalView forwards mouse and keyboard events to PTY', () {
     debugShowTouchesEnabled = false;
     final tester = TerminalTester();
     final pty = MockPseudoTerminal();
@@ -44,7 +44,7 @@ void main() {
       final runner = PromptRunner(
         terminal: tester.terminal,
         alternateScreen: false,
-        widget: SizedBox.expand(child: PlatformView(pty: pty)),
+        widget: SizedBox.expand(child: PseudoTerminalView(pty: pty)),
       );
 
       final runFuture = runner.run();
@@ -54,8 +54,12 @@ void main() {
       tester.sendKey(LogicalKey('A', 'a'));
       await tester.pump(const Duration(milliseconds: 100));
 
+      // Enable mouse tracking in the VirtualTerminal (like a real program would)
+      pty._outCtrl.add('\x1b[?1000h\x1b[?1006h');
+      await tester.pump(const Duration(milliseconds: 100));
+
       // Send a mouse event at x=10, y=5.
-      // PlatformView should receive this and encode it to SGR format.
+      // PseudoTerminalView should receive this and encode it to SGR format.
       // SGR Mouse format: \x1b[<cb;x;yM
       // A left click (button 0) at x=10, y=5 is \x1b[<0;10;5M
       tester.sendString('\x1b[<0;10;5M');
@@ -64,7 +68,7 @@ void main() {
       final outputString = pty.writtenData.join();
 
       // We expect 'a' (from keyboard) and then the encoded mouse event
-      // PlatformView encodes mouse events into SGR format: \x1b[<0;10;5M
+      // PseudoTerminalView encodes mouse events into SGR format: \x1b[<0;10;5M
       expect(outputString, contains('A'));
       expect(outputString, contains('\x1b[<0;10;5M'));
 
