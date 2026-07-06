@@ -232,7 +232,7 @@ void main() {
             ),
             0,
             0,
-            const Rect(0, 0, 0, 0),
+            const Rect(0, 0, 9, 1),
           );
       expect(checkboxVal, isTrue);
 

@@ -67,7 +67,7 @@ void main() {
             ),
             0,
             0,
-            const Rect(0, 0, 0, 0),
+            const Rect(0, 0, 7, 1),
           );
       expect(checked, true);
     });

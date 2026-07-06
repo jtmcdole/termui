@@ -26,7 +26,8 @@ Future<SceneManager> runPtyGlassDemo(
   terminal.enableMouseTracking();
 
   final prefs = await SharedPreferences.getInstance();
-  final config = FireConfig(prefs);
+  final repository = SharedPreferencesSettingsRepository(prefs);
+  final config = FireConfig(repository);
   config.flameHeight = 1.0;
   config.speed = 1.5;
 
