@@ -2,7 +2,7 @@ import 'package:termui/termui.dart';
 import 'package:termui/terminal/event.dart' as evt;
 
 /// A widget that intercepts keyboard events when it or its children have focus.
-class KeyboardListener extends StatefulWidget {
+class KeyboardListener extends StatefulWidget implements Focusable {
   /// The widget below this widget in the tree.
   final Widget child;
 
@@ -22,20 +22,35 @@ class KeyboardListener extends StatefulWidget {
   });
 
   @override
+  bool get focused => focusNode.hasFocus;
+
+  @override
   State<KeyboardListener> createState() => _KeyboardListenerState();
 }
 
 class _KeyboardListenerState extends State<KeyboardListener>
-    with FocusableStateMixin<KeyboardListener>
     implements KeyEventHandler {
   @override
-  bool get isWidgetFocused => true; // Always participate in focus if focusNode is attached
+  void initState() {
+    super.initState();
+    widget.focusNode.onKeyEvent = widget.onKeyEvent;
+  }
 
   @override
-  FocusNode get focusNode => widget.focusNode;
+  void didUpdateWidget(KeyboardListener oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusNode != oldWidget.focusNode ||
+        widget.onKeyEvent != oldWidget.onKeyEvent) {
+      oldWidget.focusNode.onKeyEvent = null;
+      widget.focusNode.onKeyEvent = widget.onKeyEvent;
+    }
+  }
 
   @override
-  String get focusNodeIdPrefix => 'keyboard_listener';
+  void dispose() {
+    widget.focusNode.onKeyEvent = null;
+    super.dispose();
+  }
 
   @override
   bool handleKeyEvent(evt.KeyEvent event) {

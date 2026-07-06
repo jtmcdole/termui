@@ -54,6 +54,9 @@ class TuiAtlasPainter extends CustomPainter {
   /// Cache of individual [TextPainter] objects for glyphs absent in the main atlas.
   final Map<(String, bool, bool, Color), TextPainter> fallbackPainters;
 
+  /// Optional secondary atlas containing full-color raster emojis.
+  final GlyphAtlas? emojiAtlas;
+
   Float32List? _transformsBg;
   Float32List? _rectsBg;
   Int32List? _colorsBg;
@@ -62,10 +65,22 @@ class TuiAtlasPainter extends CustomPainter {
   Float32List? _rectsFg;
   Int32List? _colorsFg;
 
+  Float32List? _transformsEmoji;
+  Float32List? _rectsEmoji;
+
+  /// The primary font family used for rendering text.
+  final String fontFamily;
+
+  /// The fallback font families.
+  final List<String>? fontFamilyFallback;
+
   /// Constructs a [TuiAtlasPainter] targeting the supplied [buffer].
   TuiAtlasPainter({
     required this.buffer,
     required this.atlas,
+    this.emojiAtlas,
+    required this.fontFamily,
+    this.fontFamilyFallback,
     required this.fallbackPainters,
     this.onMissingGlyphs,
   });
@@ -75,7 +90,7 @@ class TuiAtlasPainter extends CustomPainter {
     ui.Image image,
     Float32List transforms,
     Float32List rects,
-    Int32List colors,
+    Int32List? colors,
     int totalSprites,
     Paint paint,
   ) {
@@ -94,14 +109,16 @@ class TuiAtlasPainter extends CustomPainter {
         i * 4,
         end * 4,
       );
-      final Int32List colorsSub = Int32List.sublistView(colors, i, end);
+      final Int32List? colorsSub = colors != null
+          ? Int32List.sublistView(colors, i, end)
+          : null;
 
       canvas.drawRawAtlas(
         image,
         transformsSub,
         rectsSub,
         colorsSub,
-        BlendMode.modulate,
+        colorsSub != null ? BlendMode.modulate : BlendMode.srcOver,
         null,
         paint,
       );
@@ -124,6 +141,9 @@ class TuiAtlasPainter extends CustomPainter {
       _transformsFg = Float32List(count * 4);
       _rectsFg = Float32List(count * 4);
       _colorsFg = Int32List(count);
+
+      _transformsEmoji = Float32List(count * 4);
+      _rectsEmoji = Float32List(count * 4);
     }
 
     final bgRect = atlas.charRects['\uFFFF']!;
@@ -133,6 +153,7 @@ class TuiAtlasPainter extends CustomPainter {
     final whiteH = bgRect.height;
 
     var fgSpriteCount = 0;
+    var emojiSpriteCount = 0;
     final fallbackCells = <_FallbackCell>[];
     final missingGlyphs = <String>[];
 
@@ -170,6 +191,7 @@ class TuiAtlasPainter extends CustomPainter {
         // Foreground
         if (char.isNotEmpty && char != ' ') {
           final sourceRect = atlas.charRects[char];
+          final emojiRect = emojiAtlas?.charRects[char];
 
           if (sourceRect != null) {
             final fgIdx = fgSpriteCount;
@@ -192,12 +214,28 @@ class TuiAtlasPainter extends CustomPainter {
                 ? (bgArgb == 0 ? null : bgArgb)
                 : (fgArgb == 0 ? null : fgArgb);
             _colorsFg![fgIdx] = fgCol ?? (isReverse ? 0xFF000000 : 0xFFFFFFFF);
+          } else if (emojiRect != null) {
+            final eIdx = emojiSpriteCount;
+            emojiSpriteCount++;
+
+            final eScale = cellWidth / emojiAtlas!.cellWidth;
+            _transformsEmoji![eIdx * 4 + 0] = eScale;
+            _transformsEmoji![eIdx * 4 + 1] = 0.0;
+            _transformsEmoji![eIdx * 4 + 2] = screenX;
+            _transformsEmoji![eIdx * 4 + 3] = screenY;
+
+            _rectsEmoji![eIdx * 4 + 0] = emojiRect.left;
+            _rectsEmoji![eIdx * 4 + 1] = emojiRect.top;
+            _rectsEmoji![eIdx * 4 + 2] = emojiRect.right;
+            _rectsEmoji![eIdx * 4 + 3] = emojiRect.bottom;
           } else {
             missingGlyphs.add(char);
 
             fallbackCells.add(
               _FallbackCell(
                 char: char,
+                fontFamily: fontFamily,
+                fontFamilyFallback: fontFamilyFallback,
                 modifiers: modifiers,
                 fgArgb: fgArgb,
                 bgArgb: bgArgb,
@@ -241,7 +279,19 @@ class TuiAtlasPainter extends CustomPainter {
       );
     }
 
-    if (!kIsWeb && fallbackCells.isNotEmpty) {
+    if (emojiSpriteCount > 0 && emojiAtlas != null) {
+      _drawRawAtlasInChunks(
+        canvas,
+        emojiAtlas!.image,
+        _transformsEmoji!,
+        _rectsEmoji!,
+        null,
+        emojiSpriteCount,
+        Paint(), // No ColorFilter, preserves native emoji colors!
+      );
+    }
+
+    if (fallbackCells.isNotEmpty) {
       for (final fc in fallbackCells) {
         final isReverse = Modifier.has(fc.modifiers, Modifier.reverse);
         final fgCol = isReverse
@@ -271,6 +321,8 @@ class TuiAtlasPainter extends CustomPainter {
 
 class _FallbackCell {
   final String char;
+  final String fontFamily;
+  final List<String>? fontFamilyFallback;
   final int modifiers;
   final int fgArgb;
   final int bgArgb;
@@ -281,6 +333,8 @@ class _FallbackCell {
 
   _FallbackCell({
     required this.char,
+    required this.fontFamily,
+    this.fontFamilyFallback,
     required this.modifiers,
     required this.fgArgb,
     required this.bgArgb,

@@ -13,3 +13,5 @@ debug.log
 **/coverage/
 *.py
 parser.log
+tmp/
+**/.flutter-plugins-dependencies

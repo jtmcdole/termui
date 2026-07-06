@@ -8,7 +8,17 @@ import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 
 // --- Shared State ---
+import 'package:shared_preferences/shared_preferences.dart';
+
 class FireConfig {
+  final SharedPreferences prefs;
+
+  FireConfig(this.prefs) {
+    _themeIndex = prefs.getInt('themeIndex') ?? 0;
+    _fontIndex = prefs.getInt('fontIndex') ?? 0;
+    _autoAnimate = prefs.getBool('autoAnimate') ?? true;
+  }
+
   final List<void Function()> _listeners = [];
 
   void addListener(void Function() listener) {
@@ -54,6 +64,7 @@ class FireConfig {
   set themeIndex(int value) {
     if (_themeIndex == value) return;
     _themeIndex = value;
+    prefs.setInt('themeIndex', value);
     _notifyListeners();
   }
 
@@ -62,6 +73,16 @@ class FireConfig {
   set fontIndex(int value) {
     if (_fontIndex == value) return;
     _fontIndex = value;
+    prefs.setInt('fontIndex', value);
+    _notifyListeners();
+  }
+
+  bool _autoAnimate = true;
+  bool get autoAnimate => _autoAnimate;
+  set autoAnimate(bool value) {
+    if (_autoAnimate == value) return;
+    _autoAnimate = value;
+    prefs.setBool('autoAnimate', value);
     _notifyListeners();
   }
 }
@@ -710,6 +731,19 @@ class _SettingsAppState extends State<SettingsApp> {
             ),
           ),
           const SizedBox(height: 1),
+          SizedBox(
+            height: 1,
+            child: Checkbox(
+              label: 'Auto Animate Style',
+              value: widget.config.autoAnimate,
+              onChanged: (v) {
+                setState(() {
+                  widget.config.autoAnimate = v == true;
+                });
+              },
+            ),
+          ),
+          const SizedBox(height: 1),
           const SizedBox(height: 1, child: Text('Theme')),
           Align(
             alignment: Alignment.centerLeft,
@@ -749,7 +783,8 @@ Future<void> runGlassCompositingShared(
     terminal.enableMouseTracking();
   }
 
-  final config = FireConfig();
+  final prefs = await SharedPreferences.getInstance();
+  final config = FireConfig(prefs);
   config.flameHeight = 1.0;
   config.speed = 1.5;
 
@@ -799,7 +834,7 @@ Future<void> runGlassCompositingShared(
     x: 2,
     y: 2,
     width: 42,
-    height: 18,
+    height: 20,
     zIndex: 30,
     draggable: false,
     resizable: false,
@@ -810,11 +845,15 @@ Future<void> runGlassCompositingShared(
   bool settingsVisible = false;
 
   final fontTimer = Timer.periodic(const Duration(seconds: 10), (t) {
-    config.fontIndex = (config.fontIndex + 1) % 5;
+    if (config.autoAnimate) {
+      config.fontIndex = (config.fontIndex + 1) % 5;
+    }
   });
 
   final themeTimer = Timer.periodic(const Duration(seconds: 15), (t) {
-    config.themeIndex = (config.themeIndex + 1) % 6;
+    if (config.autoAnimate) {
+      config.themeIndex = (config.themeIndex + 1) % 6;
+    }
   });
 
   final windTimer = Timer.periodic(const Duration(milliseconds: 100), (t) {
