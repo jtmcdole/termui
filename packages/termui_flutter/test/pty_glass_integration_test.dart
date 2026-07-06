@@ -1,10 +1,8 @@
 import 'package:termui/termui.dart';
 import 'package:termui_test/termui_test.dart';
-
-import 'package:termui_shared_examples/glass_compositing/pty_glass_runner.dart';
-import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:termui_shared_examples/glass_compositing/pty_glass_runner.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

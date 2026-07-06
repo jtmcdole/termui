@@ -29,5 +29,6 @@ dev_dependencies:
     sdk: flutter
   termui_test:
     path: ../termui_test
+  shared_preferences: ^2.2.0
   termui_shared_examples:
     path: ../termui_shared_examples
