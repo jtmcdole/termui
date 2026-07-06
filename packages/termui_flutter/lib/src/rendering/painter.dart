@@ -14,6 +14,16 @@ bool _isBlockCharacter(String char) {
   return false;
 }
 
+/// Determines if a given grapheme cluster character represents a color emoji.
+bool isColorEmoji(String char) {
+  if (char.isEmpty) return false;
+  final code = char.runes.first;
+  if (code >= 0x1F300 && code <= 0x1FAFF) return true;
+  if (code >= 0x2600 && code <= 0x27BF) return true;
+  if (char.runes.contains(0xFE0F)) return true;
+  return false;
+}
+
 /// A custom painter that renders a terminal buffer using a texture atlas.
 ///
 /// It draws both the cell backgrounds and foreground glyphs onto a Flutter
@@ -54,9 +64,6 @@ class TuiAtlasPainter extends CustomPainter {
   /// Cache of individual [TextPainter] objects for glyphs absent in the main atlas.
   final Map<(String, bool, bool, Color), TextPainter> fallbackPainters;
 
-  /// Optional secondary atlas containing full-color raster emojis.
-  final GlyphAtlas? emojiAtlas;
-
   Float32List? _transformsBg;
   Float32List? _rectsBg;
   Int32List? _colorsBg;
@@ -78,7 +85,6 @@ class TuiAtlasPainter extends CustomPainter {
   TuiAtlasPainter({
     required this.buffer,
     required this.atlas,
-    this.emojiAtlas,
     required this.fontFamily,
     this.fontFamilyFallback,
     required this.fallbackPainters,
@@ -191,9 +197,41 @@ class TuiAtlasPainter extends CustomPainter {
         // Foreground
         if (char.isNotEmpty && char != ' ') {
           final sourceRect = atlas.charRects[char];
-          final emojiRect = emojiAtlas?.charRects[char];
 
-          if (sourceRect != null) {
+          if (isColorEmoji(char)) {
+            if (sourceRect != null) {
+              final eIdx = emojiSpriteCount;
+              emojiSpriteCount++;
+
+              final eScale = cellWidth / atlas.cellWidth;
+              _transformsEmoji![eIdx * 4 + 0] = eScale;
+              _transformsEmoji![eIdx * 4 + 1] = 0.0;
+              _transformsEmoji![eIdx * 4 + 2] = screenX;
+              _transformsEmoji![eIdx * 4 + 3] = screenY;
+
+              _rectsEmoji![eIdx * 4 + 0] = sourceRect.left;
+              _rectsEmoji![eIdx * 4 + 1] = sourceRect.top;
+              _rectsEmoji![eIdx * 4 + 2] = sourceRect.right;
+              _rectsEmoji![eIdx * 4 + 3] = sourceRect.bottom;
+            } else {
+              missingGlyphs.add(char);
+
+              fallbackCells.add(
+                _FallbackCell(
+                  char: char,
+                  fontFamily: fontFamily,
+                  fontFamilyFallback: fontFamilyFallback,
+                  modifiers: modifiers,
+                  fgArgb: fgArgb,
+                  bgArgb: bgArgb,
+                  x: screenX,
+                  y: screenY,
+                  w: isWideGrapheme(char) ? 2 * cellWidth : cellWidth,
+                  h: cellHeight,
+                ),
+              );
+            }
+          } else if (sourceRect != null) {
             final fgIdx = fgSpriteCount;
             fgSpriteCount++;
 
@@ -214,20 +252,6 @@ class TuiAtlasPainter extends CustomPainter {
                 ? (bgArgb == 0 ? null : bgArgb)
                 : (fgArgb == 0 ? null : fgArgb);
             _colorsFg![fgIdx] = fgCol ?? (isReverse ? 0xFF000000 : 0xFFFFFFFF);
-          } else if (emojiRect != null) {
-            final eIdx = emojiSpriteCount;
-            emojiSpriteCount++;
-
-            final eScale = cellWidth / emojiAtlas!.cellWidth;
-            _transformsEmoji![eIdx * 4 + 0] = eScale;
-            _transformsEmoji![eIdx * 4 + 1] = 0.0;
-            _transformsEmoji![eIdx * 4 + 2] = screenX;
-            _transformsEmoji![eIdx * 4 + 3] = screenY;
-
-            _rectsEmoji![eIdx * 4 + 0] = emojiRect.left;
-            _rectsEmoji![eIdx * 4 + 1] = emojiRect.top;
-            _rectsEmoji![eIdx * 4 + 2] = emojiRect.right;
-            _rectsEmoji![eIdx * 4 + 3] = emojiRect.bottom;
           } else {
             missingGlyphs.add(char);
 
@@ -279,10 +303,10 @@ class TuiAtlasPainter extends CustomPainter {
       );
     }
 
-    if (emojiSpriteCount > 0 && emojiAtlas != null) {
+    if (emojiSpriteCount > 0) {
       _drawRawAtlasInChunks(
         canvas,
-        emojiAtlas!.image,
+        atlas.image,
         _transformsEmoji!,
         _rectsEmoji!,
         null,

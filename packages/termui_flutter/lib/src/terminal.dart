@@ -185,7 +185,6 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   final FocusNode _focusNode = FocusNode();
   final GlobalKey _boundaryKey = GlobalKey();
   GlyphAtlas? _atlas;
-  GlyphAtlas? _emojiAtlas;
   Buffer? _currentBuffer;
   StreamSubscription<String?>? _mouseCursorSubscription;
   MouseCursor _currentCursor = SystemMouseCursors.basic;
@@ -194,10 +193,6 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   final Set<String> _pendingGlyphs = {};
   final Set<String> _processingGlyphs = {};
   bool _isUpdatingAtlas = false;
-
-  final Set<String> _pendingEmojis = {};
-  final Set<String> _processingEmojis = {};
-  bool _isUpdatingEmojiAtlas = false;
 
   late double _fontSize;
   double get fontSize => _fontSize;
@@ -288,16 +283,11 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       fontFamily: widget.fontFamily,
       fontFamilyFallback: widget.fontFamilyFallback,
     );
-    final newEmojiAtlas = await GlyphAtlasGenerator.generateEmpty(
-      fontSize: _fontSize,
-      fontFamily: widget.fontFamily,
-      fontFamilyFallback: widget.fontFamilyFallback,
-    );
 
-    if (mounted && genId == _atlasGenerationId) {
+    if (!mounted) return;
+    if (genId == _atlasGenerationId) {
       setState(() {
         _atlas = newAtlas;
-        _emojiAtlas = newEmojiAtlas;
       });
     }
     Tracer.record(_traceRecreateAtlasId, Phase.end, TraceCategory.paint);
@@ -375,7 +365,6 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     final atlas = _atlas;
     if (atlas == null) return;
 
-    final cellHeight = atlas.cellHeight;
     final total = buffer.width * buffer.height;
     final width = buffer.width;
     for (var i = 0; i < total; i++) {
@@ -396,88 +385,32 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         final isBold = Modifier.has(mods, Modifier.bold);
         final isDim = Modifier.has(mods, Modifier.dim);
 
-        if (_isColorEmoji(char)) {
-          if (_emojiAtlas != null &&
-              !_emojiAtlas!.charRects.containsKey(char)) {
-            _pendingEmojis.add(char);
-          }
-          // We intentionally DO NOT continue here. We want to generate a TextPainter
-          // so the emoji is visible immediately for the first few frames while the
-          // async _emojiAtlas generation is happening in the background!
-        }
-
         final key = (char, isBold, isDim, color);
-        _fallbackPainters.putIfAbsent(key, () {
-          final paintColor = isDim ? color.withAlpha(128) : color;
-          final tp = TextPainter(
-            text: TextSpan(
-              text: char,
-              style: TextStyle(
-                fontSize: cellHeight * 0.8,
-                fontFamily: widget.fontFamily,
-                fontFamilyFallback: widget.fontFamilyFallback,
-                fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-                color: paintColor,
-              ),
-            ),
+        if (!_fallbackPainters.containsKey(key)) {
+          final textStyle = TextStyle(
+            fontFamily: widget.fontFamily,
+            fontFamilyFallback: widget.fontFamilyFallback,
+            fontSize: _fontSize,
+            color: color,
+            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+            height: 1.0,
+          );
+          final textSpan = TextSpan(text: char, style: textStyle);
+          final textPainter = TextPainter(
+            text: textSpan,
             textDirection: TextDirection.ltr,
           );
-          tp.layout();
-          return tp;
-        });
+          textPainter.layout();
+          _fallbackPainters[key] = textPainter;
+        }
       }
     }
-
-    if (_pendingEmojis.isNotEmpty && !_isUpdatingEmojiAtlas) {
-      _triggerEmojiAtlasUpdate();
-    }
-  }
-
-  void _triggerEmojiAtlasUpdate() {
-    if (_isUpdatingEmojiAtlas || _emojiAtlas == null) return;
-    _isUpdatingEmojiAtlas = true;
-    final batch = _pendingEmojis.take(50).toList();
-    _processingEmojis.addAll(batch);
-    _pendingEmojis.removeAll(batch);
-
-    final genId = _atlasGenerationId;
-    _emojiAtlas!
-        .addGlyphs(batch)
-        .then((newAtlas) {
-          if (!mounted) return;
-          if (genId == _atlasGenerationId) {
-            setState(() {
-              _emojiAtlas = newAtlas;
-            });
-          }
-        })
-        .catchError((_) {
-          // ignore
-        })
-        .whenComplete(() {
-          _processingEmojis.removeAll(batch);
-          _isUpdatingEmojiAtlas = false;
-          if (_pendingEmojis.isNotEmpty && genId == _atlasGenerationId) {
-            _triggerEmojiAtlasUpdate();
-          }
-        });
-  }
-
-  bool _isColorEmoji(String char) {
-    if (char.isEmpty) return false;
-    final code = char.runes.first;
-    if (code >= 0x1F300 && code <= 0x1FAFF) return true;
-    if (code >= 0x2600 && code <= 0x27BF) return true;
-    if (char.runes.contains(0xFE0F)) return true;
-    return false;
   }
 
   void _onMissingGlyphs(List<String> glyphs) {
     if (_atlas == null) return;
     var needsUpdate = false;
     for (final glyph in glyphs) {
-      if (_isColorEmoji(glyph)) continue;
-
       if (!_pendingGlyphs.contains(glyph) &&
           !_processingGlyphs.contains(glyph) &&
           !_atlas!.charRects.containsKey(glyph)) {
@@ -671,7 +604,6 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       final timestamp = clock.now().millisecondsSinceEpoch;
       String? screenshotBasename;
       String? atlasBasename;
-      String? emojiAtlasBasename;
       String? coordinatesBasename;
 
       final boundary =
@@ -697,20 +629,6 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         if (byteData != null) {
           final pngBytes = byteData.buffer.asUint8List();
           atlasBasename = await saveFile('atlas_$timestamp.png', pngBytes);
-        }
-      }
-
-      final eAtlas = _emojiAtlas;
-      if (eAtlas != null) {
-        final byteData = await eAtlas.image.toByteData(
-          format: ui.ImageByteFormat.png,
-        );
-        if (byteData != null) {
-          final pngBytes = byteData.buffer.asUint8List();
-          emojiAtlasBasename = await saveFile(
-            'emoji_atlas_$timestamp.png',
-            pngBytes,
-          );
         }
       }
 
@@ -772,7 +690,6 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         final savedFiles = <String?>[
           screenshotBasename,
           atlasBasename,
-          emojiAtlasBasename,
           coordinatesBasename,
         ].whereType<String>().toList();
 
@@ -936,7 +853,6 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
                               painter: TuiAtlasPainter(
                                 buffer: _currentBuffer!,
                                 atlas: _atlas!,
-                                emojiAtlas: _emojiAtlas,
                                 fontFamily: widget.fontFamily,
                                 fontFamilyFallback: widget.fontFamilyFallback,
                                 fallbackPainters: _fallbackPainters,
