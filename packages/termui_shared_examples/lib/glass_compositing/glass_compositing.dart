@@ -368,19 +368,27 @@ class MetallicTextRenderElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     final wWidget = widget as MetallicTextRender;
-    final lines = _getTextLines(wWidget.config.fontIndex);
+    final lines = _getTextLines(
+      wWidget.config.fontIndex,
+      constraints.maxWidth.toInt(),
+    );
     final h = lines.length;
     var w = 0;
     for (final line in lines) {
       if (line.length > w) w = line.length;
     }
-    return constraints.constrain(Size(w, h));
+    // Return max width available if it's smaller, else w
+    final width = constraints.maxWidth == BoxConstraints.infinity
+        ? w
+        : (w > constraints.maxWidth ? constraints.maxWidth : w);
+    return constraints.constrain(Size(width, h));
   }
 
-  List<String> _getTextLines(int fontIndex) {
+  List<String> _getTextLines(int fontIndex, int maxWidth) {
+    List<String> lines;
     switch (fontIndex) {
       case 1:
-        return [
+        lines = [
           r" ______   ______     ______     __    __     __  __     __   ",
           r"/\__  _\ /\  ___\   /\  == \   /\ '-./  \   /\ \/\ \   /\ \  ",
           r"\/_/\ \/ \ \  __\   \ \  __<   \ \ \-./\ \  \ \ \_\ \  \ \ \ ",
@@ -421,18 +429,35 @@ class MetallicTextRenderElement extends Element {
         ];
       case 0:
       default:
-        return [
+        lines = [
           r"_______ _______  ______ _______ _     _  _ ",
           r"   |    |______ |_____/ |  |  | |     |  | ",
           r"   |    |______ |    \_ |  |  | |_____|  | ",
         ];
     }
+
+    if (maxWidth <= 0 || maxWidth == BoxConstraints.infinity) return lines;
+
+    var w = 0;
+    for (final line in lines) {
+      if (line.length > w) w = line.length;
+    }
+
+    if (w <= maxWidth) return lines;
+
+    // Fallback based on width: Font 4 (76), Font 1 (61), Font 3 (49), Font 2 (46), Font 0 (41)
+    if (maxWidth >= 61 && fontIndex != 1) return _getTextLines(1, maxWidth);
+    if (maxWidth >= 49 && fontIndex != 3) return _getTextLines(3, maxWidth);
+    if (maxWidth >= 46 && fontIndex != 2) return _getTextLines(2, maxWidth);
+    if (fontIndex != 0) return _getTextLines(0, maxWidth);
+
+    return lines;
   }
 
   @override
   void performPaint(Buffer buffer, Offset offset) {
     final wWidget = widget as MetallicTextRender;
-    final lines = _getTextLines(wWidget.config.fontIndex);
+    final lines = _getTextLines(wWidget.config.fontIndex, size.width);
     const fgColor = CharmColors.zest; // Neon greenish yellow
 
     // Explicitly zero background for transparent compositor blending
@@ -524,10 +549,7 @@ class _GlassOverlayAppState extends State<GlassOverlayApp> {
 
   @override
   Widget build(BuildContext context) {
-    Widget content = Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: MetallicTextRender(config: widget.config),
-    );
+    Widget content = MetallicTextRender(config: widget.config);
 
     if (_isGlitching) {
       content = EffectWidget(
