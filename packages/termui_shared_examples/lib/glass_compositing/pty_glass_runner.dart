@@ -5,7 +5,6 @@ import 'package:termui/ui/termui_debug.dart' as dbg;
 import 'pty_glass_backend_stub.dart'
     if (dart.library.io) 'pty_glass_backend_io.dart';
 import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 /// Runs the PTY Glass Demo logic, injecting the given [terminal].
 Future<SceneManager> runPtyGlassDemo(
@@ -25,8 +24,7 @@ Future<SceneManager> runPtyGlassDemo(
   terminal.hideCursor();
   terminal.enableMouseTracking();
 
-  final prefs = await SharedPreferences.getInstance();
-  final repository = SharedPreferencesSettingsRepository(prefs);
+  final repository = InMemorySettingsRepository();
   final config = FireConfig(repository);
   config.flameHeight = 1.0;
   config.speed = 1.5;

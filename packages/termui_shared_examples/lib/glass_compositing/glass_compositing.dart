@@ -8,7 +8,6 @@ import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 
 // --- Shared State ---
-import 'package:shared_preferences/shared_preferences.dart';
 
 abstract interface class SettingsRepository {
   int get themeIndex;
@@ -19,34 +18,15 @@ abstract interface class SettingsRepository {
   set autoAnimate(bool value);
 }
 
-class SharedPreferencesSettingsRepository implements SettingsRepository {
-  final SharedPreferences _prefs;
-
-  SharedPreferencesSettingsRepository(this._prefs);
+class InMemorySettingsRepository implements SettingsRepository {
+  @override
+  int themeIndex = 0;
 
   @override
-  int get themeIndex => _prefs.getInt('themeIndex') ?? 0;
+  int fontIndex = 0;
 
   @override
-  set themeIndex(int value) {
-    _prefs.setInt('themeIndex', value);
-  }
-
-  @override
-  int get fontIndex => _prefs.getInt('fontIndex') ?? 0;
-
-  @override
-  set fontIndex(int value) {
-    _prefs.setInt('fontIndex', value);
-  }
-
-  @override
-  bool get autoAnimate => _prefs.getBool('autoAnimate') ?? true;
-
-  @override
-  set autoAnimate(bool value) {
-    _prefs.setBool('autoAnimate', value);
-  }
+  bool autoAnimate = true;
 }
 
 class FireConfig {
@@ -852,8 +832,7 @@ Future<void> runGlassCompositingShared(
     terminal.enableMouseTracking();
   }
 
-  final prefs = await SharedPreferences.getInstance();
-  final repository = SharedPreferencesSettingsRepository(prefs);
+  final repository = InMemorySettingsRepository();
   final config = FireConfig(repository);
   config.flameHeight = 1.0;
   config.speed = 1.5;
