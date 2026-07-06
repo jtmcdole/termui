@@ -630,6 +630,32 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           final pngBytes = byteData.buffer.asUint8List();
           atlasBasename = await saveFile('atlas_$timestamp.png', pngBytes);
         }
+
+        final rectsMap = atlas.charRects.map((key, value) {
+          return MapEntry(
+            key.runes
+                .map(
+                  (r) =>
+                      'U+${r.toRadixString(16).padLeft(4, '0').toUpperCase()}',
+                )
+                .join(' '),
+            {
+              'char': key,
+              'left': value.left,
+              'top': value.top,
+              'right': value.right,
+              'bottom': value.bottom,
+              'width': value.width,
+              'height': value.height,
+            },
+          );
+        });
+
+        final atlasJsonData = const JsonEncoder.withIndent(
+          '  ',
+        ).convert(rectsMap);
+        final atlasJsonBytes = utf8.encode(atlasJsonData);
+        await saveFile('atlas_table_$timestamp.json', atlasJsonBytes);
       }
 
       final buffer = _currentBuffer;
@@ -690,6 +716,9 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         final savedFiles = <String?>[
           screenshotBasename,
           atlasBasename,
+          atlasBasename
+              ?.replaceFirst('atlas_', 'atlas_table_')
+              .replaceAll('.png', '.json'),
           coordinatesBasename,
         ].whereType<String>().toList();
 
