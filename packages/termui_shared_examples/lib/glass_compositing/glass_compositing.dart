@@ -10,13 +10,52 @@ import 'package:termui/termui.dart';
 // --- Shared State ---
 import 'package:shared_preferences/shared_preferences.dart';
 
-class FireConfig {
-  final SharedPreferences prefs;
+abstract interface class SettingsRepository {
+  int get themeIndex;
+  set themeIndex(int value);
+  int get fontIndex;
+  set fontIndex(int value);
+  bool get autoAnimate;
+  set autoAnimate(bool value);
+}
 
-  FireConfig(this.prefs) {
-    _themeIndex = prefs.getInt('themeIndex') ?? 0;
-    _fontIndex = prefs.getInt('fontIndex') ?? 0;
-    _autoAnimate = prefs.getBool('autoAnimate') ?? true;
+class SharedPreferencesSettingsRepository implements SettingsRepository {
+  final SharedPreferences _prefs;
+
+  SharedPreferencesSettingsRepository(this._prefs);
+
+  @override
+  int get themeIndex => _prefs.getInt('themeIndex') ?? 0;
+
+  @override
+  set themeIndex(int value) {
+    _prefs.setInt('themeIndex', value);
+  }
+
+  @override
+  int get fontIndex => _prefs.getInt('fontIndex') ?? 0;
+
+  @override
+  set fontIndex(int value) {
+    _prefs.setInt('fontIndex', value);
+  }
+
+  @override
+  bool get autoAnimate => _prefs.getBool('autoAnimate') ?? true;
+
+  @override
+  set autoAnimate(bool value) {
+    _prefs.setBool('autoAnimate', value);
+  }
+}
+
+class FireConfig {
+  final SettingsRepository repository;
+
+  FireConfig(this.repository) {
+    _themeIndex = repository.themeIndex;
+    _fontIndex = repository.fontIndex;
+    _autoAnimate = repository.autoAnimate;
   }
 
   final List<void Function()> _listeners = [];
@@ -64,7 +103,7 @@ class FireConfig {
   set themeIndex(int value) {
     if (_themeIndex == value) return;
     _themeIndex = value;
-    prefs.setInt('themeIndex', value);
+    repository.themeIndex = value;
     _notifyListeners();
   }
 
@@ -73,7 +112,7 @@ class FireConfig {
   set fontIndex(int value) {
     if (_fontIndex == value) return;
     _fontIndex = value;
-    prefs.setInt('fontIndex', value);
+    repository.fontIndex = value;
     _notifyListeners();
   }
 
@@ -82,7 +121,7 @@ class FireConfig {
   set autoAnimate(bool value) {
     if (_autoAnimate == value) return;
     _autoAnimate = value;
-    prefs.setBool('autoAnimate', value);
+    repository.autoAnimate = value;
     _notifyListeners();
   }
 }
@@ -784,7 +823,8 @@ Future<void> runGlassCompositingShared(
   }
 
   final prefs = await SharedPreferences.getInstance();
-  final config = FireConfig(prefs);
+  final repository = SharedPreferencesSettingsRepository(prefs);
+  final config = FireConfig(repository);
   config.flameHeight = 1.0;
   config.speed = 1.5;
 
