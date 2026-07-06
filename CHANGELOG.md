@@ -11,6 +11,53 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.7.1`](#termui---v071)
+ - [`termui_flutter` - `v0.6.3`](#termui_flutter---v063)
+ - [`termui_pty` - `v0.3.1`](#termui_pty---v031)
+ - [`termui_recorder` - `v0.5.1+4`](#termui_recorder---v0514)
+ - [`termui_test` - `v0.2.2+5`](#termui_test---v0225)
+ - [`termui_hotreload` - `v0.6.4+1`](#termui_hotreload---v0641)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.5.1+4`
+ - `termui_test` - `v0.2.2+5`
+ - `termui_hotreload` - `v0.6.4+1`
+
+---
+
+#### `termui` - `v0.7.1`
+
+ - **REFACTOR**(core): improve hit-testing tests and MVVM compliance.
+ - **FEAT**(core): enhance emoji rendering, persistent settings, and interactive checkboxes.
+
+#### `termui_flutter` - `v0.6.3`
+
+ - **REFACTOR**(core): consolidate emoji and text glyphs into a unified texture atlas.
+ - **FIX**(flutter): prevent redundant background block generation in atlas.
+ - **FIX**: example not showing on web.
+ - **FEAT**(flutter): dump atlas table alongside screenshots.
+ - **FEAT**(core): enhance emoji rendering, persistent settings, and interactive checkboxes.
+
+#### `termui_pty` - `v0.3.1`
+
+ - **FEAT**(core): enhance emoji rendering, persistent settings, and interactive checkboxes.
+
+
+## 2026-07-05
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`termui` - `v0.7.0`](#termui---v070)
  - [`termui_pty` - `v0.3.0`](#termui_pty---v030)
 

@@ -1,3 +1,11 @@
+## 0.6.3
+
+ - **REFACTOR**(core): consolidate emoji and text glyphs into a unified texture atlas.
+ - **FIX**(flutter): prevent redundant background block generation in atlas.
+ - **FIX**: example not showing on web.
+ - **FEAT**(flutter): dump atlas table alongside screenshots.
+ - **FEAT**(core): enhance emoji rendering, persistent settings, and interactive checkboxes.
+
 ## 0.6.2
 
  - **FIX**(termui): migrate DateTime.now to clock for test determinism.

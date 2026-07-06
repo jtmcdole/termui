@@ -1,3 +1,8 @@
+## 0.7.1
+
+ - **REFACTOR**(core): improve hit-testing tests and MVVM compliance.
+ - **FEAT**(core): enhance emoji rendering, persistent settings, and interactive checkboxes.
+
 ## 0.7.0
 
 > Note: This release has breaking changes.

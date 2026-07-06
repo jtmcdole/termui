@@ -1,3 +1,7 @@
+## 0.3.1
+
+ - **FEAT**(core): enhance emoji rendering, persistent settings, and interactive checkboxes.
+
 ## 0.3.0
 
 > Note: This release has breaking changes.
