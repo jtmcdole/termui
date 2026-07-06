@@ -8,7 +8,7 @@ import 'package:termui_flutter/termui_flutter.dart';
 import 'widget_book.dart';
 
 import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
-import 'pty_glass_stub.dart' if (dart.library.io) 'pty_glass_io.dart';
+import 'package:termui_shared_examples/glass_compositing/pty_glass_runner.dart';
 
 enum TuiDemo {
   widgetBook('Widget Book'),
@@ -48,7 +48,18 @@ void main() async {
       final fontLoader = FontLoader('Cascadia Mono');
       fontLoader.addFont(rootBundle.load('fonts/CascadiaMonoPL.ttf'));
       await fontLoader.load();
-    } catch (_) {}
+      final fontLoader2 = FontLoader('MesloLGS NF');
+      fontLoader2.addFont(rootBundle.load('fonts/MesloLGS_NF_Regular.ttf'));
+      await fontLoader2.load();
+
+      final brailleLoader = FontLoader('Noto Sans Braille');
+      brailleLoader.addFont(
+        rootBundle.load('fonts/NotoSansBraille-Regular.ttf'),
+      );
+      await brailleLoader.load();
+    } catch (e) {
+      debugPrint('FONT LOADER ERROR: $e');
+    }
   }
   _log('main.dart: main() started');
   runApp(const MainApp());
@@ -203,26 +214,61 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
     );
   }
 
+  double _baseFontSize = 13.0;
+  double _currentFontSize = 13.0;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.black87,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.swap_horiz),
-            tooltip: 'Switch TUI App',
-            onPressed: () => _showSwitchDemoDialog(),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              onScaleStart: (details) {
+                _baseFontSize = _currentFontSize;
+              },
+              onScaleUpdate: (details) {
+                setState(() {
+                  _currentFontSize = (_baseFontSize * details.scale).clamp(
+                    4.0,
+                    72.0,
+                  );
+                  _terminal.setFontSize(_currentFontSize);
+                });
+              },
+              child: Terminal(
+                terminal: _terminal,
+                fontSize: _currentFontSize,
+                fontFamily: 'MesloLGS NF',
+                fontFamilyFallback: const [
+                  'Noto Color Emoji',
+                  'Noto Sans Braille',
+                ],
+                onRun: (terminal, drawFrame) async {
+                  _runTUI(drawFrame);
+                },
+              ),
+            ),
+          ),
+          Positioned(
+            top: 16.0,
+            right: 16.0,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withAlpha(150),
+                  borderRadius: BorderRadius.circular(8.0),
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.swap_horiz, color: Colors.white70),
+                  tooltip: 'Switch TUI App',
+                  onPressed: () => _showSwitchDemoDialog(),
+                ),
+              ),
+            ),
           ),
         ],
-      ),
-      body: Terminal(
-        terminal: _terminal,
-        fontSize: 13,
-        fontFamily: 'Cascadia Mono',
-        onRun: (terminal, drawFrame) async {
-          _runTUI(drawFrame);
-        },
       ),
     );
   }

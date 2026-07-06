@@ -184,6 +184,7 @@ class SceneManager implements Reassemblable {
         debugShowTouchesEnabled = !debugShowTouchesEnabled;
         debugPaintHoverEnabled = !debugPaintHoverEnabled;
         debugMouseCursorEnabled = !debugMouseCursorEnabled;
+        debugPaintLayerBordersEnabled = !debugPaintLayerBordersEnabled;
         scheduleRender();
         return;
       }
@@ -329,6 +330,10 @@ class SceneManager implements Reassemblable {
               modifiers: event.modifiers,
             );
 
+            final isTransparent =
+                (buf.getModifiers(localX, localY) & Modifier.transparent) != 0;
+            final isOpaque = !isTransparent;
+
             final handled = layer.renderer.handleMouseEvent(localEvent);
             if (handled || layer.draggable) {
               hitLayer = layer;
@@ -341,6 +346,13 @@ class SceneManager implements Reassemblable {
               }
               break;
             }
+
+            if (isOpaque) {
+              if (layer.mouseOpaque) {
+                hitLayer = layer;
+              }
+              break;
+            }
           }
         }
 
@@ -348,6 +360,8 @@ class SceneManager implements Reassemblable {
           _capturedMouseLayer = hitLayer;
           if (focusedLayer != hitLayer) {
             focusedLayer = hitLayer;
+            hitLayer.onFocus?.call();
+            scheduleRender();
           }
         }
       } else if (event.type == MouseEventType.drag) {
@@ -464,7 +478,6 @@ class SceneManager implements Reassemblable {
               mouseX < layer.x + buf.width &&
               mouseY >= layer.y &&
               mouseY < layer.y + buf.height) {
-            hitLayer = layer;
             final localX = mouseX - layer.x;
             final localY = mouseY - layer.y;
             final localEvent = MouseEvent(
@@ -476,8 +489,21 @@ class SceneManager implements Reassemblable {
               type: event.type,
               modifiers: event.modifiers,
             );
+
+            final isTransparent =
+                (buf.getModifiers(localX, localY) & Modifier.transparent) != 0;
+            final isOpaque = !isTransparent;
+
             final handled = layer.renderer.handleMouseEvent(localEvent);
             if (handled) {
+              hitLayer = layer;
+              break;
+            }
+
+            if (isOpaque) {
+              if (layer.mouseOpaque) {
+                hitLayer = layer;
+              }
               break;
             }
           }
@@ -566,12 +592,8 @@ class SceneManager implements Reassemblable {
             }
           }
 
-          var buffer = layer.renderer.currentBuffer;
+          final buffer = layer.renderer.currentBuffer;
           if (buffer == null) continue;
-
-          if (debugPaintLayerBordersEnabled) {
-            buffer = _cloneBufferWithBorder(buffer);
-          }
 
           layeredBuffers.add(
             LayeredBuffer(
@@ -581,6 +603,67 @@ class SceneManager implements Reassemblable {
               zIndex: layer.zIndex,
             ),
           );
+
+          if (debugPaintLayerBordersEnabled) {
+            final w = buffer.width;
+            final h = buffer.height;
+            final style = const Style(
+              foreground: Colors.yellow,
+              modifiers: Modifier.bold,
+            );
+
+            // Top border
+            final top = Buffer(w + 2, 1);
+            top.writeString(0, 0, '┌${'─' * w}┐', style);
+            layeredBuffers.add(
+              LayeredBuffer(
+                buffer: top,
+                x: layer.x - 1,
+                y: layer.y - 1,
+                zIndex: layer.zIndex,
+              ),
+            );
+
+            // Bottom border
+            final bottom = Buffer(w + 2, 1);
+            bottom.writeString(0, 0, '└${'─' * w}┘', style);
+            layeredBuffers.add(
+              LayeredBuffer(
+                buffer: bottom,
+                x: layer.x - 1,
+                y: layer.y + h,
+                zIndex: layer.zIndex,
+              ),
+            );
+
+            // Left border (height is h, not h+2, because corners are in top/bottom)
+            final left = Buffer(1, h);
+            for (var y = 0; y < h; y++) {
+              left.writeString(0, y, '│', style);
+            }
+            layeredBuffers.add(
+              LayeredBuffer(
+                buffer: left,
+                x: layer.x - 1,
+                y: layer.y,
+                zIndex: layer.zIndex,
+              ),
+            );
+
+            // Right border
+            final right = Buffer(1, h);
+            for (var y = 0; y < h; y++) {
+              right.writeString(0, y, '│', style);
+            }
+            layeredBuffers.add(
+              LayeredBuffer(
+                buffer: right,
+                x: layer.x + w,
+                y: layer.y,
+                zIndex: layer.zIndex,
+              ),
+            );
+          }
         }
 
         final target = _targetBuffer ??= Buffer(width, height);
@@ -871,6 +954,15 @@ class SceneManager implements Reassemblable {
   }
 
   void _renderDebugOverlays(Buffer target) {
+    if (debugPaintLayerBordersEnabled && focusedLayer != null) {
+      final fLayer = focusedLayer!;
+      final fBuf = fLayer.renderer.currentBuffer;
+      if (fBuf != null && fBuf.width >= 4) {
+        final style = const Style(foreground: Color(255, 255, 0));
+        target.writeString(fLayer.x + fBuf.width - 4, fLayer.y, '[🧐]', style);
+      }
+    }
+
     if (debugPaintHoverEnabled) {
       if (_globalMouseX != null && _globalMouseY != null) {
         final sorted = _getSortedLayers();
@@ -972,93 +1064,6 @@ class _TouchFeedback {
     required this.type,
     required this.startTime,
   });
-}
-
-Buffer _cloneBufferWithBorder(Buffer source) {
-  final copy = Buffer(source.width + 2, source.height + 2);
-  for (var y = 0; y < source.height; y++) {
-    for (var x = 0; x < source.width; x++) {
-      copy.setAttributes(
-        x + 1,
-        y + 1,
-        char: source.getCharacter(x, y),
-        fg: source.getForeground(x, y),
-        bg: source.getBackground(x, y),
-        modifiers: source.getModifiers(x, y),
-      );
-    }
-  }
-
-  final w = source.width;
-  final h = source.height;
-  if (w > 0 && h > 0) {
-    final borderStyle = const Style(
-      foreground: Colors.yellow,
-      modifiers: Modifier.bold,
-    );
-
-    final x2 = w - 1;
-    final y2 = h - 1;
-
-    void setBorderCell(int x, int y, String char) {
-      final cellChar = copy.getCharacter(x, y);
-      if (cellChar == '') {
-        if (x - 1 >= 0) {
-          final prevChar = copy.getCharacter(x - 1, y);
-          if (isWideGrapheme(prevChar)) {
-            copy.setAttributes(
-              x - 1,
-              y,
-              char: ' ',
-              fg: copy.getForeground(x - 1, y),
-              bg: copy.getBackground(x - 1, y),
-              modifiers: copy.getModifiers(x - 1, y),
-            );
-          }
-        }
-      } else if (isWideGrapheme(cellChar)) {
-        if (x + 1 < w) {
-          final nextChar = copy.getCharacter(x + 1, y);
-          if (nextChar == '') {
-            copy.setAttributes(
-              x + 1,
-              y,
-              char: ' ',
-              fg: copy.getForeground(x + 1, y),
-              bg: copy.getBackground(x + 1, y),
-              modifiers: copy.getModifiers(x + 1, y),
-            );
-          }
-        }
-      }
-      copy.setAttributes(
-        x,
-        y,
-        char: char,
-        fg: borderStyle.foreground?.argb ?? 0,
-        bg: borderStyle.background?.argb ?? 0,
-        modifiers: borderStyle.modifiers,
-      );
-    }
-
-    // Draw horizontal lines
-    for (var x = 0; x < w; x++) {
-      setBorderCell(x, 0, '─');
-      setBorderCell(x, y2, '─');
-    }
-    // Draw vertical lines
-    for (var y = 0; y < h; y++) {
-      setBorderCell(0, y, '│');
-      setBorderCell(x2, y, '│');
-    }
-    // Draw corners
-    setBorderCell(0, 0, '┌');
-    setBorderCell(x2, 0, '┐');
-    setBorderCell(0, y2, '└');
-    setBorderCell(x2, y2, '┘');
-  }
-
-  return copy;
 }
 
 class _SceneLayerList extends ListBase<SceneLayer> {

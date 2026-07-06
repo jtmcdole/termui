@@ -3,7 +3,8 @@ import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
 /// Undocumented public member.
-class Checkbox extends StatefulWidget implements Focusable {
+class Checkbox extends StatefulWidget
+    implements Focusable, MouseEventHandlerWithArea {
   /// The current check state (checked if true).
   final bool value;
 
@@ -34,16 +35,23 @@ class Checkbox extends StatefulWidget implements Focusable {
     this.focusedStyle = const Style(modifiers: Modifier.reverse),
   });
 
+  CheckboxState? _state;
+
+  @override
+  void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
+    _state?.handleMouseEvent(event, localX, localY, area);
+  }
+
   @override
   State<Checkbox> createState() {
-    return CheckboxState();
+    return _state = CheckboxState();
   }
 }
 
 /// Undocumented public member.
 class CheckboxState extends State<Checkbox>
     with FocusableStateMixin<Checkbox>
-    implements KeyEventHandler, MouseEventHandler {
+    implements KeyEventHandler, MouseEventHandlerWithArea {
   @override
   bool get isWidgetFocused => widget.focused;
 
@@ -52,7 +60,7 @@ class CheckboxState extends State<Checkbox>
 
   /// Handles mouse events for the checkbox.
   @override
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+  void handleMouseEvent(MouseEvent event, int localX, int localY, Rect area) {
     if (event.type == MouseEventType.press) {
       widget.onChanged(!widget.value);
       setState(() {});

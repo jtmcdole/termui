@@ -571,19 +571,19 @@ void main() {
         sceneManager.render();
 
         final target = sceneManager.renderer!.frontBuffer;
-        // Borders should be drawn at x: 2..6, y: 2..6.
+        // Borders should be drawn at x: 1..7, y: 1..7.
         // Corners:
-        // (2, 2) is '┌'
-        // (6, 2) is '┐'
-        // (2, 6) is '└'
-        // (6, 6) is '┘'
-        expect(target.getCharacter(2, 2), equals('┌'));
-        expect(target.getCharacter(6, 2), equals('┐'));
-        expect(target.getCharacter(2, 6), equals('└'));
-        expect(target.getCharacter(6, 6), equals('┘'));
+        // (1, 1) is '┌'
+        // (7, 1) is '┐'
+        // (1, 7) is '└'
+        // (7, 7) is '┘'
+        expect(target.getCharacter(1, 1), equals('┌'));
+        expect(target.getCharacter(7, 1), equals('┐'));
+        expect(target.getCharacter(1, 7), equals('└'));
+        expect(target.getCharacter(7, 7), equals('┘'));
 
         // The border style should have foreground yellow
-        expect(Color.argb(target.getForeground(2, 2)), equals(Colors.yellow));
+        expect(Color.argb(target.getForeground(1, 1)), equals(Colors.yellow));
 
         // Inside cell (e.g. 3, 3) should still be 'a' from layer buffer
         expect(target.getCharacter(3, 3), equals('a'));
@@ -777,14 +777,14 @@ void main() {
       sceneManager.render();
       final target = sceneManager.renderer!.frontBuffer;
 
-      // The border of layer1 at (9, 7) would normally draw vertical border line '│'.
-      // But layer2 is on top (zIndex 10) and covers (9, 7) with its interior content '2'.
-      // Therefore, the border of layer1 at (9, 7) must be occluded by layer2's content ('2').
-      expect(target.getCharacter(9, 7), equals('2'));
+      // The border of layer1 at (10, 7) would normally draw vertical border line '│'.
+      // But layer2 is on top (zIndex 10) and covers (10, 7) with its interior content '2'.
+      // Therefore, the border of layer1 at (10, 7) must be occluded by layer2's content ('2').
+      expect(target.getCharacter(10, 7), equals('2'));
 
-      // Also check a non-occluded border coordinate of layer1: e.g. (9, 0)
-      // Since it's not occluded, it should render as a border corner '┐'
-      expect(target.getCharacter(9, 0), equals('┐'));
+      // Also check a non-occluded border coordinate of layer1: e.g. (10, 0)
+      // Since it's not occluded, it should render as a border line '│'
+      expect(target.getCharacter(10, 0), equals('│'));
     });
   });
 }

@@ -702,6 +702,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
         debugShowTouchesEnabled = !debugShowTouchesEnabled;
         debugPaintHoverEnabled = !debugPaintHoverEnabled;
         debugMouseCursorEnabled = !debugMouseCursorEnabled;
+        debugPaintLayerBordersEnabled = !debugPaintLayerBordersEnabled;
 
         if (mode == ExecutionMode.standalone) {
           if (debugPaintHoverEnabled) {
@@ -1121,13 +1122,19 @@ class SceneLayer {
   /// Whether this layer receives mouse events. If false, mouse events pass through to layers below.
   bool hitTestable;
 
-  /// Optional callback invoked when the terminal is resized.
+  /// Whether visually opaque pixels in this layer explicitly intercept mouse clicks even if they aren't handled by widgets.
+  bool mouseOpaque;
+
+  /// Callback when the layer's size changes (typically for draggable/resizable).
   void Function(Point<int> newSize)? onResize;
+
+  /// Callback when the layer gains focus.
+  void Function()? onFocus;
 
   /// Creates a new [SceneLayer] with the given [renderer], [sizing], and placement parameters.
   SceneLayer({
     required this.renderer,
-    required this.sizing,
+    this.sizing = LayerSizing.fixed,
     this.x = 0,
     this.y = 0,
     this.width,
@@ -1136,7 +1143,9 @@ class SceneLayer {
     this.draggable = false,
     this.resizable = false,
     this.hitTestable = true,
+    this.mouseOpaque = false,
     this.onResize,
+    this.onFocus,
   }) {
     if (sizing == LayerSizing.fixed && width != null && height != null) {
       renderer.resize(width!, height!);

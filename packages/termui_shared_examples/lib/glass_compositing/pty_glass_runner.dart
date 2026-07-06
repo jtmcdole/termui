@@ -1,132 +1,41 @@
 import 'dart:async';
-import 'dart:math';
-import 'dart:convert';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/termui_debug.dart' as dbg;
+import 'pty_glass_backend_stub.dart'
+    if (dart.library.io) 'pty_glass_backend_io.dart';
 import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
-import 'package:termui_pty/termui_pty.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-class VirtualTerminalStubWidget extends StatefulWidget {
-  final FocusNode? focusNode;
-
-  const VirtualTerminalStubWidget({super.key, this.focusNode});
-
-  @override
-  State<VirtualTerminalStubWidget> createState() =>
-      _VirtualTerminalStubWidgetState();
-}
-
-class _VirtualTerminalStubWidgetState extends State<VirtualTerminalStubWidget> {
-  late VirtualTerminal _terminal;
-  late Timer _timer;
-  final Random _random = Random();
-  final List<Color> _colors = [
-    CharmColors.julep,
-    CharmColors.charple,
-    CharmColors.malibu,
-    CharmColors.mustard,
-    CharmColors.flamingo,
-  ];
-
-  final List<String> _messages = [
-    'Connection established',
-    'Handshake completed',
-    'Receiving packets...',
-    'PING',
-    'PONG',
-    'Buffer flush',
-    'Heartbeat OK',
-    'Analyzing telemetry',
-    'Re-routing traffic',
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    _terminal = VirtualTerminal(
-      width: 80,
-      height: 24,
-      transparentBackground: true,
-      defaultForeground: CharmColors.julep,
-    );
-
-    // We must rebuild when the terminal repaints, since VirtualTerminal works outside of element state tracking.
-    _terminal.addListener(() {
-      if (mounted) setState(() {});
-    });
-
-    _timer = Timer.periodic(const Duration(milliseconds: 500), (t) {
-      if (!mounted) return;
-      final color = _colors[_random.nextInt(_colors.length)];
-      final msg = _messages[_random.nextInt(_messages.length)];
-      final ip =
-          '${_random.nextInt(255)}.${_random.nextInt(255)}.${_random.nextInt(255)}.${_random.nextInt(255)}';
-
-      final fgCode = color.foregroundCode;
-      final resetCode = '\x1b[0m';
-      final timestamp = DateTime.now().toIso8601String().substring(11, 19);
-
-      final ansiString = '[$timestamp] $fgCode$ip$resetCode - $msg\r\n';
-      _terminal.write(utf8.encode(ansiString));
-    });
-  }
-
-  @override
-  void dispose() {
-    _timer.cancel();
-    _terminal.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final w = constraints.maxWidth == BoxConstraints.infinity
-            ? 80
-            : constraints.maxWidth.toInt();
-        final h = constraints.maxHeight == BoxConstraints.infinity
-            ? 24
-            : constraints.maxHeight.toInt();
-        _terminal.resize(w, h);
-        return TerminalView(
-          terminal: _terminal,
-          focusNode: widget.focusNode,
-          onInput: (_) {}, // dummy input handler
-        );
-      },
-    );
-  }
-}
-
-Future<void> runPtyGlassDemo(
-  dynamic terminal, {
+/// Runs the PTY Glass Demo logic, injecting the given [terminal].
+Future<SceneManager> runPtyGlassDemo(
+  term.Terminal terminal, {
   void Function(Buffer)? onFrameRedrawn,
 }) async {
-  final term.Terminal t = terminal as term.Terminal;
+  final backend = PtyBackend();
+
   final sceneManager = SceneManager(
-    t,
+    terminal,
     renderingMode: RenderingMode.alternateScreen,
   );
   sceneManager.enableMouseTracking = true;
   sceneManager.onFrameRedrawn = onFrameRedrawn;
 
-  t.enterAlternateScreen();
-  t.hideCursor();
-  t.enableMouseTracking();
+  terminal.enterAlternateScreen();
+  terminal.hideCursor();
+  terminal.enableMouseTracking();
 
-  final config = FireConfig();
+  final prefs = await SharedPreferences.getInstance();
+  final config = FireConfig(prefs);
   config.flameHeight = 1.0;
   config.speed = 1.5;
 
-  // 1. Bottom Layer: Virtual Terminal (instead of PTY)
+  // 1. Bottom Layer: PseudoTerminalView running 'top'
   final ptyFocusNode = FocusNode(id: 'pty');
   final ptyRunner = PromptRunner(
-    terminal: t,
-    widget: SizedBox.expand(
-      child: VirtualTerminalStubWidget(focusNode: ptyFocusNode),
-    ),
+    terminal: terminal,
+    // Pass a custom default foreground (e.g. bright green) for a "hacker" theme look
+    widget: SizedBox.expand(child: backend.buildView(ptyFocusNode)),
     alternateScreen: false,
     mode: ExecutionMode.managed,
     onFramePainted: (_) {
@@ -134,9 +43,9 @@ Future<void> runPtyGlassDemo(
     },
   );
 
-  final initialSize = t.backend.size;
-  int ptyWidth = 80;
-  int ptyHeight = 25;
+  final initialSize = terminal.backend.size;
+  int ptyWidth = 100;
+  int ptyHeight = 30;
   if (initialSize.x > 0 && ptyWidth > initialSize.x) {
     ptyWidth = initialSize.x - 4;
   }
@@ -166,7 +75,7 @@ Future<void> runPtyGlassDemo(
 
   // 1.5 Middle Layer: Fire Simulation
   final fireRunner = PromptRunner(
-    terminal: t,
+    terminal: terminal,
     widget: FireApp(config: config),
     alternateScreen: false,
     mode: ExecutionMode.managed,
@@ -184,21 +93,25 @@ Future<void> runPtyGlassDemo(
 
   bool settingsVisible = false;
   late final SceneLayer settingsLayer;
+  final settingsFocusNode = FocusNode(id: 'settings');
 
   // 2. Middle Layer: Glass Overlay Text (with Glitch)
   final glassFocusNode = FocusNode(id: 'glass');
   final glassRunner = PromptRunner(
-    terminal: t,
+    terminal: terminal,
     widget: KeyboardListener(
       focusNode: glassFocusNode,
       onKeyEvent: (event) {
-        if (event.baseKey == term.TermKey.s) {
+        if (event.baseKey == TermKey.s) {
           settingsVisible = !settingsVisible;
           if (settingsVisible) {
             sceneManager.layers.add(settingsLayer);
             sceneManager.focusedLayer = settingsLayer;
+            settingsFocusNode.requestFocus();
           } else {
             sceneManager.layers.remove(settingsLayer);
+            sceneManager.focusedLayer = ptyLayer;
+            ptyFocusNode.requestFocus();
           }
           sceneManager.scheduleRender();
           return true;
@@ -217,21 +130,27 @@ Future<void> runPtyGlassDemo(
     renderer: glassRunner,
     sizing: LayerSizing.fullscreen,
     zIndex: 20,
+    mouseOpaque: true,
+    onFocus: () => glassFocusNode.requestFocus(),
   );
   sceneManager.layers.add(glassLayer);
+  sceneManager.focusedLayer =
+      glassLayer; // Initially focus the glass layer so 's' works immediately
   glassRunner.run().catchError((_) {});
+  glassFocusNode.requestFocus();
   glassFocusNode.requestFocus();
 
   // 3. Top Layer: Settings Window
-  final settingsFocusNode = FocusNode(id: 'settings');
   final settingsRunner = PromptRunner(
-    terminal: t,
+    terminal: terminal,
     widget: KeyboardListener(
       focusNode: settingsFocusNode,
       onKeyEvent: (event) {
-        if (event.baseKey == term.TermKey.s) {
+        if (event.baseKey == TermKey.s) {
           settingsVisible = false;
           sceneManager.layers.remove(settingsLayer);
+          sceneManager.focusedLayer = ptyLayer;
+          ptyFocusNode.requestFocus();
           sceneManager.scheduleRender();
           return true;
         }
@@ -251,7 +170,7 @@ Future<void> runPtyGlassDemo(
     x: 2,
     y: 2,
     width: 42,
-    height: 18,
+    height: 20,
     zIndex: 100,
     draggable: true,
     resizable: true,
@@ -260,40 +179,46 @@ Future<void> runPtyGlassDemo(
 
   sceneManager.focusedLayer = ptyLayer;
 
-  final fontTimer = Timer.periodic(const Duration(seconds: 10), (time) {
-    config.fontIndex = (config.fontIndex + 1) % 5;
+  final fontTimer = Timer.periodic(const Duration(seconds: 10), (t) {
+    if (config.autoAnimate) {
+      config.fontIndex = (config.fontIndex + 1) % 5;
+    }
   });
-  final themeTimer = Timer.periodic(const Duration(seconds: 15), (time) {
-    config.themeIndex = (config.themeIndex + 1) % 6;
+  final themeTimer = Timer.periodic(const Duration(seconds: 15), (t) {
+    if (config.autoAnimate) {
+      config.themeIndex = (config.themeIndex + 1) % 6;
+    }
   });
 
   final completer = Completer<void>();
 
   sceneManager.onKeyEvent = (event) {
-    if (event.baseKey == term.TermKey.q ||
-        event.logicalKey == term.TermKey.controlC) {
+    if (event.baseKey == TermKey.q || event.logicalKey == TermKey.controlC) {
       completer.complete();
       return true;
     }
-    if (event.baseKey == term.TermKey.d) {
+    if (event.baseKey == TermKey.d) {
+      // Toggle debug overlays
       dbg.debugMouseCursorEnabled = !dbg.debugMouseCursorEnabled;
       dbg.debugShowTouchesEnabled = !dbg.debugShowTouchesEnabled;
       dbg.debugPaintHoverEnabled = !dbg.debugPaintHoverEnabled;
+      dbg.debugPaintLayerBordersEnabled = !dbg.debugPaintLayerBordersEnabled;
       sceneManager.scheduleRender();
       return true;
     }
-    if (event.logicalKey == term.TermKey.controlT) {
+    if (event.logicalKey == TermKey.controlT) {
+      // Ctrl+T to toggle focus
       if (sceneManager.focusedLayer == ptyLayer) {
-        sceneManager.focusedLayer = glassLayer;
+        sceneManager.focusedLayer = glassLayer; // defocus
         glassFocusNode.requestFocus();
       } else {
-        sceneManager.focusedLayer = ptyLayer;
+        sceneManager.focusedLayer = ptyLayer; // focus
         ptyFocusNode.requestFocus();
       }
       sceneManager.scheduleRender();
       return true;
     }
-    return false;
+    return false; // let SceneManager route the event
   };
 
   try {
@@ -301,11 +226,13 @@ Future<void> runPtyGlassDemo(
   } finally {
     fontTimer.cancel();
     themeTimer.cancel();
+    backend.kill();
     settingsRunner.abort();
     glassRunner.abort();
     fireRunner.abort();
     ptyRunner.abort();
     sceneManager.dispose();
-    t.exitAlternateScreen();
   }
+
+  return sceneManager;
 }

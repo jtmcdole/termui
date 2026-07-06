@@ -573,6 +573,7 @@ bool drawProceduralCharacter(
 /// | `cellHeight` | [double] | Standard monospaced row height. |
 /// | `fontSize` | [double] | Point size used to measure/render text. |
 /// | `fontFamily` | [String] | Typeface name used for font lookup. |
+/// | `fontFamilyFallback` | [List<String>?] | Fallback font families. |
 /// | `nextGridIndex` | [int] | The next free cell slot index in the grid. |
 ///
 /// ### Example Usage
@@ -600,6 +601,9 @@ class GlyphAtlas {
   /// Typeface name used for font lookup.
   final String fontFamily;
 
+  /// Fallback typeface names used for font lookup.
+  final List<String>? fontFamilyFallback;
+
   /// The next free cell slot index in the grid.
   final int nextGridIndex;
 
@@ -623,6 +627,7 @@ class GlyphAtlas {
     required this.cellHeight,
     required this.fontSize,
     required this.fontFamily,
+    this.fontFamilyFallback,
     required this.nextGridIndex,
   });
 
@@ -637,6 +642,7 @@ class GlyphAtlas {
           style: TextStyle(
             fontSize: fontSize,
             fontFamily: fontFamily,
+            fontFamilyFallback: fontFamilyFallback,
             color: Colors.white,
           ),
         ),
@@ -686,6 +692,7 @@ class GlyphAtlas {
         style: TextStyle(
           fontSize: fontSize,
           fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
           color: Colors.white,
         ),
       ),
@@ -762,6 +769,7 @@ class GlyphAtlas {
       cellHeight: cellHeight,
       fontSize: fontSize,
       fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
       nextGridIndex: totalGlyphs,
     );
   }
@@ -801,10 +809,11 @@ class GlyphAtlasGenerator {
   /// Blank padding added around each glyph.
   static const double padding = 2.0;
 
-  /// Generates a new standard [GlyphAtlas] texture by rendering characters.
-  static Future<GlyphAtlas> generate({
+  /// Generates an empty [GlyphAtlas].
+  static Future<GlyphAtlas> generateEmpty({
     required double fontSize,
     required String fontFamily,
+    List<String>? fontFamilyFallback,
   }) async {
     await Future.microtask(() {});
     final testPainter = TextPainter(
@@ -813,6 +822,53 @@ class GlyphAtlasGenerator {
         style: TextStyle(
           fontSize: fontSize,
           fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
+          color: Colors.white,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final cellWidth = testPainter.width.ceilToDouble();
+    final cellHeight = testPainter.height.ceilToDouble();
+
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+
+    // Draw a tiny 1x1 transparent image for the empty atlas
+    canvas.drawRect(
+      const Rect.fromLTWH(0, 0, 1, 1),
+      Paint()..color = const ui.Color(0x00000000),
+    );
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(1, 1);
+
+    return GlyphAtlas(
+      image: image,
+      charRects: {},
+      cellWidth: cellWidth,
+      cellHeight: cellHeight,
+      fontSize: fontSize,
+      fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
+      nextGridIndex: 0,
+    );
+  }
+
+  /// Generates a new standard [GlyphAtlas] texture by rendering characters.
+  static Future<GlyphAtlas> generate({
+    required double fontSize,
+    required String fontFamily,
+    List<String>? fontFamilyFallback,
+  }) async {
+    await Future.microtask(() {});
+    final testPainter = TextPainter(
+      text: TextSpan(
+        text: 'A',
+        style: TextStyle(
+          fontSize: fontSize,
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
           color: Colors.white,
         ),
       ),
@@ -855,11 +911,6 @@ class GlyphAtlasGenerator {
       0x25bc,
       0x25cb,
       0x25cf,
-      0x26a0,
-      0x2794,
-      0x1f354,
-      0x1f4d6,
-      0x1f534,
     ];
     glyphs.addAll(extraCodePoints);
 
@@ -876,6 +927,7 @@ class GlyphAtlasGenerator {
           style: TextStyle(
             fontSize: fontSize,
             fontFamily: fontFamily,
+            fontFamilyFallback: fontFamilyFallback,
             color: Colors.white,
           ),
         ),
@@ -975,6 +1027,7 @@ class GlyphAtlasGenerator {
       cellHeight: cellHeight,
       fontSize: fontSize,
       fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
       nextGridIndex: totalGlyphs,
     );
   }
