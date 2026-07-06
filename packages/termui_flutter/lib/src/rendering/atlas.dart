@@ -669,13 +669,6 @@ class GlyphAtlas {
       currentIdx += gm.isDouble ? 2 : 1;
     }
 
-    final whiteIdx = currentIdx;
-    final whiteCol = whiteIdx % numCols;
-    final whiteRow = whiteIdx ~/ numCols;
-    final whiteX = whiteCol * colWidth;
-    final whiteY = whiteRow * rowHeight;
-    currentIdx += 1;
-
     final totalGlyphs = currentIdx;
     final numRows = (totalGlyphs / numCols).ceil();
     final atlasWidth = (numCols * colWidth).ceil().toDouble();
@@ -739,20 +732,6 @@ class GlyphAtlas {
         cellHeight,
       );
     }
-
-    canvas.save();
-    canvas.clipRect(Rect.fromLTWH(whiteX, whiteY, colWidth, rowHeight));
-    canvas.drawRect(
-      Rect.fromLTWH(whiteX, whiteY, colWidth, rowHeight),
-      Paint()..color = Colors.white,
-    );
-    canvas.restore();
-    updatedRects['\uFFFF'] = Rect.fromLTWH(
-      whiteX + padding,
-      whiteY + padding,
-      cellWidth,
-      cellHeight,
-    );
 
     final picture = recorder.endRecording();
     final newImage = await picture.toImage(
