@@ -438,6 +438,14 @@ class MetallicTextRenderElement extends Element {
     // Explicitly zero background for transparent compositor blending
     final bgTransparent = 0;
 
+    var w = 0;
+    for (final line in lines) {
+      if (line.length > w) w = line.length;
+    }
+
+    // Center the text horizontally if it exceeds our layout size
+    final int startX = offset.dx.toInt() + ((size.width - w) ~/ 2);
+
     for (var y = 0; y < lines.length; y++) {
       final line = lines[y];
       for (var x = 0; x < line.length; x++) {
@@ -445,7 +453,7 @@ class MetallicTextRenderElement extends Element {
         if (char == ' ') continue; // Skip entirely, leave buffer untouched
 
         buffer.setAttributes(
-          offset.dx.toInt() + x,
+          startX + x,
           offset.dy.toInt() + y,
           char: char,
           fg: fgColor.argb,
