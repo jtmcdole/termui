@@ -19,7 +19,7 @@ workspace:
   - packages/termui_pty
 
 dev_dependencies:
-  melos: ^7.0.0
+  melos: ^8.1.0
 
 melos:
   command:
