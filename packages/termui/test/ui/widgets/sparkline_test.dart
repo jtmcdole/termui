@@ -41,7 +41,7 @@ void main() {
           max: 20,
           direction: ProgressDirection.bottomToTop,
           barType: ProgressBarType.braille,
-          colorBuilder: (index, values) => (
+          colorBuilder: (index, v0, [v1, v2, v3]) => (
             fg: [
               (color: const Color(255, 0, 0), stop: 0.0), // red bottom
               (color: const Color(0, 0, 255), stop: 1.0), // blue top

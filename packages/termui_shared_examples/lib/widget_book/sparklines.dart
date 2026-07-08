@@ -6,9 +6,11 @@ import 'example_base.dart';
 
 /// An example demonstrating network traffic sparklines (btop style).
 class SparklinesExample extends WidgetBookExample {
-  final List<double> _downloadData = [];
-  final List<double> _uploadData = [];
-  final List<double> _latencyData = []; // for vertical demo
+  final RingBuffer<double> _downloadData = RingBuffer<double>(500);
+  final RingBuffer<double> _uploadData = RingBuffer<double>(500);
+  final RingBuffer<double> _latencyData = RingBuffer<double>(
+    100,
+  ); // for vertical demo
   final Random _random = Random();
 
   double _downloadPhase = 0.0;
@@ -34,14 +36,6 @@ class SparklinesExample extends WidgetBookExample {
     _downloadData.add(down);
     _uploadData.add(up);
     _latencyData.add(lat);
-
-    if (_downloadData.length > 500) {
-      _downloadData.removeAt(0);
-      _uploadData.removeAt(0);
-    }
-    if (_latencyData.length > 100) {
-      _latencyData.removeAt(0);
-    }
 
     _downloadPhase += 0.1;
     _uploadPhase += 0.08;
@@ -114,7 +108,7 @@ class SparklinesExample extends WidgetBookExample {
                         max: maxDownload,
                         direction: ProgressDirection.bottomToTop,
                         barType: _barType,
-                        colorBuilder: (index, values) => (
+                        colorBuilder: (index, v0, [v1, v2, v3]) => (
                           fg: [
                             (color: const Color(80, 0, 180), stop: 0.0),
                             (color: const Color(200, 150, 255), stop: 1.0),
@@ -145,7 +139,7 @@ class SparklinesExample extends WidgetBookExample {
                         max: maxUpload,
                         direction: ProgressDirection.topToBottom,
                         barType: _barType,
-                        colorBuilder: (index, values) => (
+                        colorBuilder: (index, v0, [v1, v2, v3]) => (
                           fg: [
                             (color: const Color(150, 0, 50), stop: 0.0),
                             (color: const Color(255, 100, 150), stop: 1.0),
@@ -193,7 +187,7 @@ class SparklinesExample extends WidgetBookExample {
                         max: maxLatency,
                         direction: ProgressDirection.leftToRight,
                         barType: _barType,
-                        colorBuilder: (index, values) => (
+                        colorBuilder: (index, v0, [v1, v2, v3]) => (
                           fg: [
                             (
                               color: const Color(0, 255, 0),

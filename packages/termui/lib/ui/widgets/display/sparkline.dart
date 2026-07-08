@@ -16,7 +16,13 @@ class Sparkline extends Widget {
   final ProgressBarType barType;
 
   /// Optional dynamic coloring per cell.
-  final ProgressColors Function(int cellIndex, List<double> cellValues)?
+  final ProgressColors Function(
+    int cellIndex,
+    double v0, [
+    double? v1,
+    double? v2,
+    double? v3,
+  ])?
   colorBuilder;
 
   /// Fallback rendering style.
@@ -59,6 +65,27 @@ class SparklineElement extends Element {
     return constraints.constrain(Size(w.floor(), h.floor()));
   }
 
+  static Color? _interpolate(List<GradientStop>? stops, double t) {
+    if (stops == null || stops.isEmpty) return null;
+    if (stops.length == 1) return stops.first.color;
+    for (int i = 0; i < stops.length - 1; i++) {
+      final s1 = stops[i];
+      final s2 = stops[i + 1];
+      if (t >= s1.stop && t <= s2.stop) {
+        final range = s2.stop - s1.stop;
+        if (range == 0) return s2.color;
+        final localT = (t - s1.stop) / range;
+        final r = (s1.color.r + localT * (s2.color.r - s1.color.r)).round();
+        final g = (s1.color.g + localT * (s2.color.g - s1.color.g)).round();
+        final b = (s1.color.b + localT * (s2.color.b - s1.color.b)).round();
+        return Color(r, g, b);
+      }
+    }
+    if (t < stops.first.stop) return stops.first.color;
+    if (t > stops.last.stop) return stops.last.color;
+    return null;
+  }
+
   @override
   void performPaint(Buffer buffer, Offset offset) {
     final viewport = Viewport(
@@ -69,29 +96,16 @@ class SparklineElement extends Element {
 
     final sparkline = widget as Sparkline;
 
-    int subWidth = 1;
-    int subHeight = 1;
-    if (sparkline.barType == ProgressBarType.braille) {
-      subWidth = 2;
-      subHeight = 4;
-    } else if (sparkline.barType == ProgressBarType.quads) {
-      subWidth = 2;
-      subHeight = 2;
-    } else {
-      // blocks
-      final isHorizontal =
-          sparkline.direction == ProgressDirection.bottomToTop ||
-          sparkline.direction == ProgressDirection.topToBottom;
-      if (isHorizontal) {
-        // Bars grow vertically, subHeight = 8
-        subWidth = 1;
-        subHeight = 8;
-      } else {
-        // Bars grow horizontally, subWidth = 8
-        subWidth = 8;
-        subHeight = 1;
-      }
-    }
+    final (int subWidth, int subHeight) = switch (sparkline.barType) {
+      ProgressBarType.braille => (2, 4),
+      ProgressBarType.quads => (2, 2),
+      ProgressBarType.blocks => switch (sparkline.direction) {
+        ProgressDirection.bottomToTop ||
+        ProgressDirection.topToBottom => (1, 8),
+        ProgressDirection.leftToRight ||
+        ProgressDirection.rightToLeft => (8, 1),
+      },
+    };
 
     final timeFlowsHorizontally =
         sparkline.direction == ProgressDirection.bottomToTop ||
@@ -104,58 +118,38 @@ class SparklineElement extends Element {
         ? size.height * subHeight
         : size.width * subWidth;
 
-    final listData = sparkline.data.toList();
-    List<double> normalizedData;
+    final data = sparkline.data;
+    final dataLength = data.length;
+    final skipCount = dataLength > maxTimeLength
+        ? dataLength - maxTimeLength
+        : 0;
+    final paddingCount = maxTimeLength > dataLength
+        ? maxTimeLength - dataLength
+        : 0;
 
-    if (listData.length >= maxTimeLength) {
-      normalizedData = listData.sublist(listData.length - maxTimeLength);
-    } else {
-      normalizedData =
-          List.filled(maxTimeLength - listData.length, 0.0) + listData;
+    double getValue(int index) {
+      if (index < paddingCount) return 0.0;
+      return data.elementAt(index - paddingCount + skipCount);
     }
 
     bool isFilledDot(int x, int y, int dx, int dy) {
       int gx = x * subWidth + dx;
       int gy = y * subHeight + dy;
 
-      int timeIndex;
-      int crossIndex;
+      final timeIndex = timeFlowsHorizontally ? gx : gy;
 
-      if (timeFlowsHorizontally) {
-        timeIndex = gx; // time flows left to right
-        if (sparkline.direction == ProgressDirection.bottomToTop) {
-          crossIndex = (size.height * subHeight - 1) - gy;
-        } else {
-          crossIndex = gy;
-        }
-      } else {
-        timeIndex = gy; // time flows top to bottom
-        if (sparkline.direction == ProgressDirection.rightToLeft) {
-          crossIndex = (size.width * subWidth - 1) - gx;
-        } else {
-          crossIndex = gx;
-        }
-      }
+      final crossIndex = switch (sparkline.direction) {
+        ProgressDirection.bottomToTop => (size.height * subHeight - 1) - gy,
+        ProgressDirection.topToBottom => gy,
+        ProgressDirection.rightToLeft => (size.width * subWidth - 1) - gx,
+        ProgressDirection.leftToRight => gx,
+      };
 
-      double val = normalizedData[timeIndex];
+      double val = getValue(timeIndex);
       double fraction = sparkline.max <= 0 ? 0 : (val / sparkline.max);
       double filledCrossUnits = fraction * crossLength;
 
       return crossIndex < filledCrossUnits.round();
-    }
-
-    // Prepare cell values for colorBuilder
-    Map<int, List<double>> cellValuesMap = {};
-    if (sparkline.colorBuilder != null) {
-      for (int i = 0; i < maxTimeLength; i++) {
-        int cellIndex;
-        if (timeFlowsHorizontally) {
-          cellIndex = i ~/ subWidth;
-        } else {
-          cellIndex = i ~/ subHeight;
-        }
-        cellValuesMap.putIfAbsent(cellIndex, () => []).add(normalizedData[i]);
-      }
     }
 
     for (var y = 0; y < size.height; y++) {
@@ -165,51 +159,35 @@ class SparklineElement extends Element {
         Color? cellBg = sparkline.style.background;
 
         if (sparkline.colorBuilder != null) {
-          List<double> cellValues = cellValuesMap[cellIndex] ?? [];
-          final colors = sparkline.colorBuilder!(cellIndex, cellValues);
+          final baseTimeIndex = timeFlowsHorizontally
+              ? (x * subWidth)
+              : (y * subHeight);
+          final timeSubUnits = timeFlowsHorizontally ? subWidth : subHeight;
 
-          Color? interpolate(List<GradientStop>? stops, double t) {
-            if (stops == null || stops.isEmpty) return null;
-            if (stops.length == 1) return stops.first.color;
-            for (int i = 0; i < stops.length - 1; i++) {
-              final s1 = stops[i];
-              final s2 = stops[i + 1];
-              if (t >= s1.stop && t <= s2.stop) {
-                final range = s2.stop - s1.stop;
-                if (range == 0) return s2.color;
-                final localT = (t - s1.stop) / range;
-                final r = (s1.color.r + localT * (s2.color.r - s1.color.r))
-                    .round();
-                final g = (s1.color.g + localT * (s2.color.g - s1.color.g))
-                    .round();
-                final b = (s1.color.b + localT * (s2.color.b - s1.color.b))
-                    .round();
-                return Color(r, g, b);
-              }
-            }
-            if (t < stops.first.stop) return stops.first.color;
-            if (t > stops.last.stop) return stops.last.color;
-            return null;
-          }
+          final v0 = getValue(baseTimeIndex);
+          final v1 = timeSubUnits > 1 ? getValue(baseTimeIndex + 1) : null;
+          final v2 = timeSubUnits > 2 ? getValue(baseTimeIndex + 2) : null;
+          final v3 = timeSubUnits > 3 ? getValue(baseTimeIndex + 3) : null;
+
+          final colors = sparkline.colorBuilder!(cellIndex, v0, v1, v2, v3);
 
           double cellT = 0.0;
           if (size.height > 1 || size.width > 1) {
-            if (sparkline.direction == ProgressDirection.bottomToTop) {
-              cellT = (size.height - 1 - y) / (size.height - 1);
-            } else if (sparkline.direction == ProgressDirection.topToBottom) {
-              cellT = y / (size.height - 1);
-            } else if (sparkline.direction == ProgressDirection.leftToRight) {
-              cellT = x / (size.width - 1);
-            } else if (sparkline.direction == ProgressDirection.rightToLeft) {
-              cellT = (size.width - 1 - x) / (size.width - 1);
-            }
+            cellT = switch (sparkline.direction) {
+              ProgressDirection.bottomToTop =>
+                (size.height - 1 - y) / (size.height - 1),
+              ProgressDirection.topToBottom => y / (size.height - 1),
+              ProgressDirection.leftToRight => x / (size.width - 1),
+              ProgressDirection.rightToLeft =>
+                (size.width - 1 - x) / (size.width - 1),
+            };
           }
 
           if (colors.fg != null) {
-            cellFg = interpolate(colors.fg, cellT) ?? cellFg;
+            cellFg = _interpolate(colors.fg, cellT) ?? cellFg;
           }
           if (colors.bg != null) {
-            cellBg = interpolate(colors.bg, cellT) ?? cellBg;
+            cellBg = _interpolate(colors.bg, cellT) ?? cellBg;
           }
         }
 
@@ -258,7 +236,6 @@ class SparklineElement extends Element {
             }
           }
           if (subWidth > 1) {
-            // horizontal growth
             const blocksHorizontal = [
               ' ',
               '▏',
@@ -272,7 +249,6 @@ class SparklineElement extends Element {
             ];
             char = blocksHorizontal[filledCount.clamp(0, 8)];
           } else if (subHeight > 1) {
-            // vertical growth
             const blocksVertical = [
               ' ',
               '\u2581',
