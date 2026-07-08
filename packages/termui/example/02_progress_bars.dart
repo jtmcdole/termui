@@ -88,13 +88,20 @@ class _BuildDashboardState extends State<BuildDashboard> {
         // Task 3: Linking & Finalizing (10 - 15 seconds)
         const Text('[3/3] Linking binaries...'),
         // This LinearProgressIndicator showcases advanced features:
-        // It leverages smooth fractional blocks, interpolates a horizontal gradient
-        // between startColor and endColor, and uses an easing function to adjust progress speed.
+        // It leverages high-resolution precise cross-axis filling using Braille,
+        // interpolates a dynamic gradient using colorBuilder, and uses an easing function.
         LinearProgressIndicator(
           ((elapsed - 10000) / 5000).clamp(0.0, 1.0),
           smooth: true,
-          startColor: const Color.argb(0xFF00FFFF), // Cyan
-          endColor: const Color.argb(0xFF00FF00), // Green
+          barType: ProgressBarType.braille,
+          crossAxisFill: CrossAxisFill.precise,
+          colorBuilder: (fraction, fill) => (
+            fg: [
+              (color: const Color.argb(0xFF00FFFF), stop: 0.0),
+              (color: const Color.argb(0xFF00FF00), stop: 1.0),
+            ],
+            bg: null,
+          ),
           easing: Easing.easeOutQuad,
         ),
       ],
