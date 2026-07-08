@@ -61,7 +61,10 @@ enum DemoPage {
   mouseCursors('Mouse Cursors (OSC 22)'),
 
   /// 3D rotating isometric logo drawn via braille canvas.
-  mcdoleLogo('3D Isometric Logo');
+  mcdoleLogo('3D Isometric Logo'),
+
+  /// Btop-style network traffic sparklines.
+  sparklines('Sparklines');
 
   /// Display title of the demo page.
   final String title;
@@ -238,6 +241,7 @@ class _WidgetBookAppState extends State<WidgetBookApp>
     DemoPage.animations: AnimationsExample(),
     DemoPage.mouseCursors: MouseCursorsExample(),
     DemoPage.mcdoleLogo: McdoleLogoExample(),
+    DemoPage.sparklines: SparklinesExample(),
   };
 
   @override
