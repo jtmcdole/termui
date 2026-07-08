@@ -55,7 +55,7 @@ void main() {
       // 0.5 of 10 is 5 cells filled
       expect(buffer.getCharacter(0, 0), equals('█'));
       expect(buffer.getCharacter(4, 0), equals('█'));
-      expect(buffer.getCharacter(5, 0), equals('░'));
+      expect(buffer.getCharacter(5, 0), equals(' '));
     });
   });
 

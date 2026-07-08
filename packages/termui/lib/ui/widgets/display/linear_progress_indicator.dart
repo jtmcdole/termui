@@ -22,6 +22,9 @@ enum ProgressBarType {
 
   /// Uses braille characters (e.g., ⣿).
   braille,
+
+  /// Uses quad characters (e.g., ▚).
+  quads,
 }
 
 /// How to fill the cross axis for fractional steps.
@@ -207,6 +210,9 @@ class LinearProgressIndicatorElement extends Element {
     if (progress.barType == ProgressBarType.braille) {
       subWidth = 2;
       subHeight = 4;
+    } else if (progress.barType == ProgressBarType.quads) {
+      subWidth = 2;
+      subHeight = 2;
     } else if (progress.smooth) {
       if (progress.direction == ProgressDirection.leftToRight ||
           progress.direction == ProgressDirection.rightToLeft) {
@@ -342,6 +348,53 @@ class LinearProgressIndicatorElement extends Element {
             if (isFilledDot(x, y, 0, 3)) offset |= 64;
             if (isFilledDot(x, y, 1, 3)) offset |= 128;
             char = String.fromCharCode(0x2800 + offset);
+          } else if (progress.barType == ProgressBarType.quads) {
+            if (progress.crossAxisFill == CrossAxisFill.span &&
+                progress.smooth) {
+              final maxSteps = isHorizontal ? size.width * 4 : size.height * 4;
+              final filledSteps = (eased * maxSteps).round();
+              final cellSteps = isHorizontal
+                  ? (progress.direction == ProgressDirection.rightToLeft
+                        ? filledSteps - ((size.width - 1 - x) * 4)
+                        : filledSteps - (x * 4))
+                  : (progress.direction == ProgressDirection.bottomToTop
+                        ? filledSteps - ((size.height - 1 - y) * 4)
+                        : filledSteps - (y * 4));
+
+              final clamped = cellSteps.clamp(0, 4);
+              if (isHorizontal) {
+                const quadStepsH = [' ', '▖', '▌', '▙', '█'];
+                char = quadStepsH[clamped];
+              } else {
+                const quadStepsV = [' ', '▖', '▄', '▙', '█'];
+                char = quadStepsV[clamped];
+              }
+            } else {
+              int offset = 0;
+              if (isFilledDot(x, y, 0, 0)) offset |= 1;
+              if (isFilledDot(x, y, 1, 0)) offset |= 2;
+              if (isFilledDot(x, y, 0, 1)) offset |= 4;
+              if (isFilledDot(x, y, 1, 1)) offset |= 8;
+              const quads = [
+                ' ',
+                '▘',
+                '▝',
+                '▀',
+                '▖',
+                '▌',
+                '▞',
+                '▛',
+                '▗',
+                '▚',
+                '▐',
+                '▜',
+                '▄',
+                '▙',
+                '▟',
+                '█',
+              ];
+              char = quads[offset];
+            }
           } else {
             int filledCount = 0;
             for (int dy = 0; dy < subHeight; dy++) {

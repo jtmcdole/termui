@@ -62,6 +62,7 @@ export 'ui/widgets/display/seven_segment_display.dart';
 export 'ui/widgets/display/decorated_box.dart';
 export 'ui/widgets/display/left_border.dart';
 export 'ui/widgets/display/linear_progress_indicator.dart';
+export 'ui/widgets/display/sparkline.dart';
 export 'ui/widgets/display/spinner.dart';
 export 'ui/widgets/display/rich_text.dart';
 export 'ui/widgets/display/canvas.dart';

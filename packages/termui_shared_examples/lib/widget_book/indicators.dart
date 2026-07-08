@@ -74,76 +74,126 @@ class IndicatorsExample extends WidgetBookExample {
       ),
       const SizedBox(height: 1, child: Text('')),
 
-      // 1, 2, 3 wide braille and eighths
-      SizedBox(height: 1, child: Text('Braille Horizontal (1, 2, 3 high):')),
+      // 1, 2, 3 wide braille, quads, and eighths side-by-side
       SizedBox(
-        height: 1,
-        child: LinearProgressIndicator(
-          progressVal,
-          barType: ProgressBarType.braille,
-          crossAxisFill: fillMode,
-          showPercentage: false,
-        ),
-      ),
-      const SizedBox(height: 1, child: Text('')),
-      SizedBox(
-        height: 2,
-        child: LinearProgressIndicator(
-          progressVal,
-          barType: ProgressBarType.braille,
-          crossAxisFill: fillMode,
-          showPercentage: false,
-        ),
-      ),
-      const SizedBox(height: 1, child: Text('')),
-      SizedBox(
-        height: 3,
-        child: LinearProgressIndicator(
-          progressVal,
-          barType: ProgressBarType.braille,
-          crossAxisFill: fillMode,
-          showPercentage: true,
-        ),
-      ),
-      const SizedBox(height: 1, child: Text('')),
-
-      SizedBox(height: 1, child: Text('Eighths Horizontal (1, 2, 3 high):')),
-      SizedBox(
-        height: 1,
-        child: LinearProgressIndicator(
-          progressVal,
-          barType: ProgressBarType.blocks,
-          smooth: true,
-          crossAxisFill: fillMode,
-          showPercentage: false,
-        ),
-      ),
-      const SizedBox(height: 1, child: Text('')),
-      SizedBox(
-        height: 2,
-        child: LinearProgressIndicator(
-          progressVal,
-          barType: ProgressBarType.blocks,
-          smooth: true,
-          crossAxisFill: fillMode,
-          showPercentage: false,
-        ),
-      ),
-      const SizedBox(height: 1, child: Text('')),
-      SizedBox(
-        height: 3,
-        child: LinearProgressIndicator(
-          progressVal,
-          barType: ProgressBarType.blocks,
-          smooth: true,
-          crossAxisFill: fillMode,
-          showPercentage: true,
-        ),
+        height: 12,
+        child: Row([
+          Expanded(
+            child: Column([
+              SizedBox(height: 1, child: Text('Braille Horiz:')),
+              SizedBox(
+                height: 1,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.braille,
+                  crossAxisFill: fillMode,
+                  showPercentage: false,
+                ),
+              ),
+              const SizedBox(height: 1, child: Text('')),
+              SizedBox(
+                height: 2,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.braille,
+                  crossAxisFill: fillMode,
+                  showPercentage: false,
+                ),
+              ),
+              const SizedBox(height: 1, child: Text('')),
+              SizedBox(
+                height: 3,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.braille,
+                  crossAxisFill: fillMode,
+                  showPercentage: true,
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(width: 2, child: Text('')),
+          Expanded(
+            child: Column([
+              SizedBox(height: 1, child: Text('Quads Horiz:')),
+              SizedBox(
+                height: 1,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.quads,
+                  crossAxisFill: fillMode,
+                  showPercentage: false,
+                ),
+              ),
+              const SizedBox(height: 1, child: Text('')),
+              SizedBox(
+                height: 2,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.quads,
+                  crossAxisFill: fillMode,
+                  showPercentage: false,
+                ),
+              ),
+              const SizedBox(height: 1, child: Text('')),
+              SizedBox(
+                height: 3,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.quads,
+                  crossAxisFill: fillMode,
+                  showPercentage: true,
+                ),
+              ),
+            ]),
+          ),
+          const SizedBox(width: 2, child: Text('')),
+          Expanded(
+            child: Column([
+              SizedBox(height: 1, child: Text('Eighths Horiz:')),
+              SizedBox(
+                height: 1,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.blocks,
+                  smooth: true,
+                  crossAxisFill: fillMode,
+                  showPercentage: false,
+                ),
+              ),
+              const SizedBox(height: 1, child: Text('')),
+              SizedBox(
+                height: 2,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.blocks,
+                  smooth: true,
+                  crossAxisFill: fillMode,
+                  showPercentage: false,
+                ),
+              ),
+              const SizedBox(height: 1, child: Text('')),
+              SizedBox(
+                height: 3,
+                child: LinearProgressIndicator(
+                  progressVal,
+                  barType: ProgressBarType.blocks,
+                  smooth: true,
+                  crossAxisFill: fillMode,
+                  showPercentage: true,
+                ),
+              ),
+            ]),
+          ),
+        ]),
       ),
       const SizedBox(height: 1, child: Text('')),
 
       // Vertical Options
-      SizedBox(height: 1, child: Text('Vertical Options (Braille & Blocks):')),
+      SizedBox(
+        height: 1,
+        child: Text('Vertical Options (Braille, Blocks, & Quads):'),
+      ),
       SizedBox(
         height: 6,
         child: Row([
@@ -185,6 +235,27 @@ class IndicatorsExample extends WidgetBookExample {
                         background: CharmColors.iron,
                       ),
                       smooth: true,
+                      crossAxisFill: fillMode,
+                      showPercentage: false,
+                    ),
+                  ),
+                ]),
+              ),
+            ]),
+          ),
+          const SizedBox(width: 4, child: Text('')),
+          SizedBox(
+            width: 15,
+            child: Column([
+              const SizedBox(height: 1, child: Text('bottom to top (quads)')),
+              Expanded(
+                child: Row([
+                  SizedBox(
+                    width: 4,
+                    child: LinearProgressIndicator(
+                      progressVal,
+                      direction: ProgressDirection.bottomToTop,
+                      barType: ProgressBarType.quads,
                       crossAxisFill: fillMode,
                       showPercentage: false,
                     ),
