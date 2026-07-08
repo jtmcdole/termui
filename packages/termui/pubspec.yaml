@@ -1,6 +1,6 @@
 name: termui
 description: A high-performance terminal UI and windowing system for Dart featuring overlapping windows, double buffering, layouts, and sub-pixel vector graphics.
-version: 0.7.1
+version: 0.7.2
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui
 
 executables:

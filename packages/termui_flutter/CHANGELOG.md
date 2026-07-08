@@ -1,3 +1,7 @@
+## 0.6.4
+
+ - Update a dependency to the latest release.
+
 ## 0.6.3
 
  - **REFACTOR**(core): consolidate emoji and text glyphs into a unified texture atlas.

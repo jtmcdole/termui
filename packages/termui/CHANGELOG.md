@@ -1,3 +1,9 @@
+## 0.7.2
+
+ - **PERF**(widgets): eliminate render loop garbage and optimize progress bars.
+ - **FEAT**(ui): add Sparkline widget and quads progress bar.
+ - **FEAT**(ui): add 2D sub-unit layout and rich rendering to LinearProgressIndicator.
+
 ## 0.7.1
 
  - **REFACTOR**(core): improve hit-testing tests and MVVM compliance.

@@ -3,6 +3,44 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-08
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.7.2`](#termui---v072)
+ - [`termui_flutter` - `v0.6.4`](#termui_flutter---v064)
+ - [`termui_recorder` - `v0.5.2+5`](#termui_recorder---v0525)
+ - [`termui_test` - `v0.2.3+6`](#termui_test---v0236)
+ - [`termui_hotreload` - `v0.6.5+2`](#termui_hotreload---v0652)
+ - [`termui_pty` - `v0.3.2`](#termui_pty---v032)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.6.4`
+ - `termui_recorder` - `v0.5.2+5`
+ - `termui_test` - `v0.2.3+6`
+ - `termui_hotreload` - `v0.6.5+2`
+ - `termui_pty` - `v0.3.2`
+
+---
+
+#### `termui` - `v0.7.2`
+
+ - **PERF**(widgets): eliminate render loop garbage and optimize progress bars.
+ - **FEAT**(ui): add Sparkline widget and quads progress bar.
+ - **FEAT**(ui): add 2D sub-unit layout and rich rendering to LinearProgressIndicator.
+
+
 ## 2026-07-05
 
 ### Changes
