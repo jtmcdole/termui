@@ -44,6 +44,21 @@ class MockTerminal extends Terminal {
     super.disableMouseTracking();
   }
 
+  /// Whether bracketed paste mode is currently enabled.
+  bool pasteTrackingEnabled = false;
+
+  @override
+  void enableBracketedPaste() {
+    pasteTrackingEnabled = true;
+    super.enableBracketedPaste();
+  }
+
+  @override
+  void disableBracketedPaste() {
+    pasteTrackingEnabled = false;
+    super.disableBracketedPaste();
+  }
+
   /// Directly injects a structured [InputEvent] into the terminal event stream.
   void injectTestEvent(ui.InputEvent event) {
     _eventsController.add(event);

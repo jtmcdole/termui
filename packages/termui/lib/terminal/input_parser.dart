@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'event.dart';
 
 /// A reactive input parser that converts byte streams from stdin into high-level
@@ -22,12 +23,13 @@ class InputParser {
   List<InputEvent> parse(List<int> chunk) {
     _buffer.addAll(chunk);
     final events = <InputEvent>[];
+    int offset = 0;
 
-    while (_buffer.isNotEmpty) {
+    while (offset < _buffer.length) {
       if (_isPasting) {
         // Look for end of bracketed paste: \x1b[201~ (bytes: 27, 91, 50, 48, 49, 126)
         int endIdx = -1;
-        for (var i = 0; i <= _buffer.length - 6; i++) {
+        for (var i = offset; i <= _buffer.length - 6; i++) {
           if (_buffer[i] == 27 &&
               _buffer[i + 1] == 91 &&
               _buffer[i + 2] == 50 &&
@@ -40,24 +42,28 @@ class InputParser {
         }
 
         if (endIdx == -1) {
-          final safeLength = _buffer.length >= 6 ? _buffer.length - 5 : 0;
+          final safeLength = (_buffer.length - offset) >= 6
+              ? (_buffer.length - offset) - 5
+              : 0;
           if (safeLength > 0) {
-            _pasteBuffer.addAll(_buffer.sublist(0, safeLength));
-            _buffer.removeRange(0, safeLength);
+            _pasteBuffer.addAll(_buffer.getRange(offset, offset + safeLength));
+            offset += safeLength;
           }
           break;
         } else {
-          _pasteBuffer.addAll(_buffer.sublist(0, endIdx));
-          events.add(PasteEvent(String.fromCharCodes(_pasteBuffer)));
+          _pasteBuffer.addAll(_buffer.getRange(offset, endIdx));
+          events.add(
+            PasteEvent(utf8.decode(_pasteBuffer, allowMalformed: true)),
+          );
           _pasteBuffer.clear();
           _isPasting = false;
-          _buffer.removeRange(0, endIdx + 6);
+          offset = endIdx + 6;
         }
         continue;
       }
 
-      if (_buffer[0] != 27) {
-        final b = _buffer.removeAt(0);
+      if (_buffer[offset] != 27) {
+        final b = _buffer[offset++];
 
         if (b == 8 || b == 127) {
           if (!_backspaceDetected) {
@@ -94,17 +100,17 @@ class InputParser {
           events.add(KeyEvent(char, KeyType.character));
         }
       } else {
-        if (_buffer.length == 1) {
+        if (_buffer.length - offset == 1) {
           // Since TTY delivers full sequences together, a single ESC here means standalone ESC
-          _buffer.removeAt(0);
+          offset++;
           events.add(const KeyEvent('escape', KeyType.escape));
           break;
         }
 
-        final second = _buffer[1];
+        final second = _buffer[offset + 1];
         if (second == 91) {
           int termIdx = -1;
-          for (var i = 2; i < _buffer.length; i++) {
+          for (var i = offset + 2; i < _buffer.length; i++) {
             final b = _buffer[i];
             if (b >= 0x40 && b <= 0x7E) {
               termIdx = i;
@@ -116,39 +122,40 @@ class InputParser {
             break;
           }
 
-          final seqBytes = _buffer.sublist(0, termIdx + 1);
-          final termByte = seqBytes.last;
-          final seqStr = String.fromCharCodes(seqBytes);
+          final seqStr = String.fromCharCodes(
+            _buffer.getRange(offset, termIdx + 1),
+          );
+          final termByte = _buffer[termIdx];
 
           if (seqStr.startsWith('\x1b[<')) {
-            _buffer.removeRange(0, termIdx + 1);
+            offset = termIdx + 1;
             final mouseEvent = _parseSgrMouse(seqStr, termByte);
             if (mouseEvent != null) {
               events.add(mouseEvent);
             }
           } else if (seqStr.startsWith('\x1b[M')) {
-            if (_buffer.length < 6) {
+            if (_buffer.length - offset < 6) {
               break;
             }
-            final x10Bytes = _buffer.sublist(3, 6);
-            _buffer.removeRange(0, 6);
+            final x10Bytes = _buffer.sublist(offset + 3, offset + 6);
+            offset += 6;
             events.add(_parseX10Mouse(x10Bytes));
           } else {
-            _buffer.removeRange(0, termIdx + 1);
+            offset = termIdx + 1;
             final csiEvent = _parseCsiKey(seqStr, termByte);
             if (csiEvent != null) {
               events.add(csiEvent);
             }
           }
         } else if (second == 79) {
-          if (_buffer.length < 3) {
+          if (_buffer.length - offset < 3) {
             break;
           }
-          final term = _buffer[2];
-          _buffer.removeRange(0, 3);
+          final term = _buffer[offset + 2];
+          offset += 3;
           events.add(_parseSs3Key(term));
         } else {
-          _buffer.removeRange(0, 2);
+          offset += 2;
           final charStr = String.fromCharCode(second);
           events.add(
             KeyEvent(
@@ -159,6 +166,10 @@ class InputParser {
           );
         }
       }
+    }
+
+    if (offset > 0) {
+      _buffer.removeRange(0, offset);
     }
 
     return events;
