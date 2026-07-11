@@ -31,12 +31,25 @@ melos:
     analyze:
       run: dart run melos exec -c 1 -- "dart analyze"
       description: Run static analysis on all packages.
+
     test:dart:
-      run: dart run melos exec --dir-exists=test --no-flutter -- "dart test"
       description: Run unit tests for pure Dart packages.
+      exec:
+        command: dart test --reporter=expanded
+        failFast: true
+      packageFilters:
+        dirExists: test
+        flutter: false
+
     test:flutter:
-      run: dart run melos exec --dir-exists=test --flutter -- "flutter test"
       description: Run unit tests for Flutter packages.
+      exec:
+        command: flutter test --reporter=expanded
+        failFast: true
+      packageFilters:
+        dirExists: test
+        flutter: true
+
     test:all:
       steps:
         - melos run test:dart

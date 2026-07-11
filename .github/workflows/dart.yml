@@ -30,11 +30,12 @@ jobs:
       - name: Bootstrap workspace
         run: melos bootstrap
 
-      - name: Verify formatting
-        run: melos exec -c 1 -- "dart format --output=none --set-exit-if-changed ."
+      - parallel:
+        - name: Verify formatting
+          run: dart format --output=none --set-exit-if-changed .
 
-      - name: Analyze project source
-        run: melos run analyze
+        - name: Analyze project source
+          run: dart analyze --fatal-infos
 
-      - name: Run unit tests
-        run: melos run test:all
+        - name: Run unit tests
+          run: melos run test:all
