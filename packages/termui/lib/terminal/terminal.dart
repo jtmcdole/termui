@@ -205,6 +205,12 @@ class Terminal {
   /// Sequence to disable mouse click and drag tracking.
   static const String disableMouseTrackingSequence = '\x1b[?1003l\x1b[?1006l';
 
+  /// Sequence to enable bracketed paste mode.
+  static const String enableBracketedPasteSequence = '\x1b[?2004h';
+
+  /// Sequence to disable bracketed paste mode.
+  static const String disableBracketedPasteSequence = '\x1b[?2004l';
+
   /// Sequence to reset all text styling to defaults.
   static const String resetStyleSequence = '\x1b[0m';
 
@@ -225,6 +231,12 @@ class Terminal {
 
   /// Sends the sequence to disable mouse tracking.
   void disableMouseTracking() => backend.write(disableMouseTrackingSequence);
+
+  /// Sends the sequence to enable bracketed paste mode.
+  void enableBracketedPaste() => backend.write(enableBracketedPasteSequence);
+
+  /// Sends the sequence to disable bracketed paste mode.
+  void disableBracketedPaste() => backend.write(disableBracketedPasteSequence);
 
   /// Sends the sequence to reset all cell styling back to default.
   void resetStyle() => backend.write(resetStyleSequence);
