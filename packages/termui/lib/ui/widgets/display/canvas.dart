@@ -112,6 +112,10 @@ class Canvas extends Widget {
   /// Optional callback to check if a specific cell (col, row) is occluded by overlapping elements.
   bool Function(int col, int row)? isOccluded;
 
+  /// If true, the canvas will only paint its cells onto the target buffer where
+  /// the target buffer cell currently contains a space (' ').
+  final bool onlyDrawOnSpaces;
+
   /// Creates a canvas widget of given [width] and [height].
   Canvas(
     this.width,
@@ -119,6 +123,7 @@ class Canvas extends Widget {
     this.style = Style.empty,
     this.isOccluded,
     this.renderMode = CanvasRenderMode.braille,
+    this.onlyDrawOnSpaces = false,
   }) : _grid = Uint8List(width * height),
        _antiAliased = Uint8List(width * height),
        _styles = List<Style?>.filled(width * height, null);
@@ -1014,6 +1019,11 @@ class CanvasElement extends Element {
       for (var cx = 0; cx < drawWidth; cx++) {
         final tx = startX + cx;
         if (tx < 0 || tx >= targetWidth) continue;
+
+        if (canvas.onlyDrawOnSpaces &&
+            targetBuffer.getCharacter(tx.toInt(), ty.toInt()) != ' ') {
+          continue;
+        }
 
         if (canvas.isOccluded != null && canvas.isOccluded!(cx, cy)) continue;
 

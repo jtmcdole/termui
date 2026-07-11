@@ -18,5 +18,6 @@ export 'animations.dart';
 export 'mouse_cursors.dart';
 export 'mcdole_logo.dart';
 export 'sparklines.dart';
+export 'fruit_game.dart';
 export 'widget_book_platform.dart';
 export 'widget_book_runner.dart';
