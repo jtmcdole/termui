@@ -16,6 +16,9 @@ abstract class WidgetBookPlatform {
   /// Stops the active animation ticker loop.
   void stopTicker();
 
+  /// Returns the initial page to select, if any.
+  String? get initialPage;
+
   /// Processes platform-specific key events (like Flutter's font resizing shortcuts).
   /// Returns `true` if the event was handled and consumed.
   bool handleKeyEvent(Terminal terminal, ui.KeyEvent event);

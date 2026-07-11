@@ -35,6 +35,9 @@ class CliWidgetBookPlatform implements WidgetBookPlatform {
   }
 
   @override
+  String? get initialPage => null;
+
+  @override
   void onExit() {
     print('\nWidget Book exited cleanly.');
     exit(0);

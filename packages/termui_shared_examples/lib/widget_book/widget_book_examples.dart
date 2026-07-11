@@ -21,3 +21,4 @@ export 'sparklines.dart';
 export 'fruit_game.dart';
 export 'widget_book_platform.dart';
 export 'widget_book_runner.dart';
+export 'events.dart';
