@@ -6,6 +6,7 @@ import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_examples.dart';
 import 'package:termui_recorder/termui_recorder.dart';
+import 'package:core_bus/core_bus.dart';
 
 /// Pre-defined pages for the shared widget book.
 enum DemoPage {
@@ -248,9 +249,41 @@ class _WidgetBookAppState extends State<WidgetBookApp>
     DemoPage.fruitGame: FruitGameExample(),
   };
 
+  StreamSubscription? _pageSelectedSub;
+
   @override
   void initState() {
     super.initState();
+
+    final initPage = widget.platform.initialPage;
+    if (initPage != null) {
+      final page = DemoPage.values.firstWhere(
+        (p) => p.name == initPage,
+        orElse: () => DemoPage.textInputs,
+      );
+      _selectedPage = page;
+      _selectedPageIdx = DemoPage.values.indexOf(page);
+    }
+
+    _pageSelectedSub = pageSelectedEvent.on(widgetBookEventBus).listen((
+      pageName,
+    ) {
+      final page = DemoPage.values.firstWhere(
+        (p) => p.name == pageName,
+        orElse: () => DemoPage.textInputs,
+      );
+      final idx = DemoPage.values.indexOf(page);
+      if (idx != _selectedPageIdx) {
+        setState(() {
+          _selectedPageIdx = idx;
+          _selectedPage = page;
+          _hoveredPageIdx = null;
+          widget.terminal.resetMousePointer();
+        });
+        _updateTickerState();
+        pageChangedEvent.post(widgetBookEventBus, page.name);
+      }
+    });
 
     for (final example in examples.values) {
       example.attachTerminal(widget.terminal);
@@ -309,6 +342,7 @@ class _WidgetBookAppState extends State<WidgetBookApp>
 
   @override
   void dispose() {
+    _pageSelectedSub?.cancel();
     if (_tickerRunning) {
       widget.platform.stopTicker();
     }
@@ -483,6 +517,10 @@ class _WidgetBookAppState extends State<WidgetBookApp>
                       widget.terminal.resetMousePointer();
                     });
                     _updateTickerState();
+                    pageChangedEvent.post(
+                      widgetBookEventBus,
+                      _selectedPage.name,
+                    );
                   },
                   onHovered: (idx) {
                     setState(() {

@@ -32,6 +32,9 @@ class TestPlatform implements WidgetBookPlatform {
   bool handleKeyEvent(Terminal terminal, ui.KeyEvent event) => false;
 
   @override
+  String? get initialPage => null;
+
+  @override
   void onExit() {}
 }
 

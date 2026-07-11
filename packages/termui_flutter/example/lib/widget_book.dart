@@ -9,9 +9,10 @@ import 'package:termui_flutter/termui_flutter.dart';
 
 class FlutterWidgetBookPlatform implements WidgetBookPlatform {
   final void Function(Buffer)? _onFrameRedrawn;
+  final String? _initialPage;
   Ticker? _ticker;
 
-  FlutterWidgetBookPlatform(this._onFrameRedrawn);
+  FlutterWidgetBookPlatform(this._onFrameRedrawn, this._initialPage);
 
   @override
   bool get shouldRenderToTerminal => false;
@@ -33,6 +34,9 @@ class FlutterWidgetBookPlatform implements WidgetBookPlatform {
   void stopTicker() {
     _ticker?.dispose();
   }
+
+  @override
+  String? get initialPage => _initialPage;
 
   @override
   bool handleKeyEvent(term.Terminal terminal, ui.KeyEvent event) {
@@ -58,7 +62,8 @@ Future<void> runWidgetBook(
   term.Terminal terminal, {
   bool isInline = false,
   void Function(Buffer buffer)? onFrameRedrawn,
+  String? initialPage,
 }) async {
-  final platform = FlutterWidgetBookPlatform(onFrameRedrawn);
+  final platform = FlutterWidgetBookPlatform(onFrameRedrawn, initialPage);
   await runWidgetBookShared(terminal, platform, isInline: isInline);
 }

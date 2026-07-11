@@ -18,3 +18,4 @@ dependencies:
   pty2: ^0.5.1
   characters: ^1.4.0
   file: ^7.0.1
+  core_bus: ^1.0.1

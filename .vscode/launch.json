@@ -5,11 +5,15 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "bin/stream_cli.dart",
+            "name": "flutter_web_demo",
             "request": "launch",
-            "program": "bin/stream_cli.dart",
+            "program": "packages/termui_flutter/example/lib/main.dart",
             "type": "dart",
-            "console": "terminal",
+            "args": [
+                "-d",
+                "web-server",
+                "--wasm"
+            ]
         }
     ]
 }

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
@@ -9,14 +10,18 @@ import 'widget_book.dart';
 
 import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
 import 'package:termui_shared_examples/glass_compositing/pty_glass_runner.dart';
+import 'package:termui_shared_examples/widget_book/events.dart';
+import 'package:core_bus/core_bus.dart';
+import 'url_helper.dart';
 
 enum TuiDemo {
-  widgetBook('Widget Book'),
-  glassCompositing('Glass Compositing'),
-  ptyGlassCompositing('PTY Glass Compositing');
+  widgetBook('Widget Book', 'widgetbook'),
+  glassCompositing('Glass Compositing', 'glass'),
+  ptyGlassCompositing('PTY Glass Compositing', 'pty');
 
   final String label;
-  const TuiDemo(this.label);
+  final String queryName;
+  const TuiDemo(this.label, this.queryName);
 }
 
 void _log(String message) {
@@ -66,30 +71,35 @@ void main() async {
 }
 
 class MainApp extends StatelessWidget {
-  const MainApp({super.key});
+  final Map<String, String>? initialQuery;
+  const MainApp({super.key, this.initialQuery});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'TermUI Direct TuiView Demo',
       theme: ThemeData.dark(),
-      home: const TermUIWebHome(),
+      home: TermUIWebHome(initialQuery: initialQuery),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
 class TermUIWebHome extends StatefulWidget {
-  const TermUIWebHome({super.key});
+  final Map<String, String>? initialQuery;
+  const TermUIWebHome({super.key, this.initialQuery});
 
   @override
-  State<TermUIWebHome> createState() => _TermUIWebHomeState();
+  State<TermUIWebHome> createState() => TermUIWebHomeState();
 }
 
-class _TermUIWebHomeState extends State<TermUIWebHome> {
+class TermUIWebHomeState extends State<TermUIWebHome> {
   late final FlutterTerminal _terminal;
 
-  TuiDemo _currentDemo = TuiDemo.glassCompositing;
+  TuiDemo currentDemo = TuiDemo.glassCompositing;
+  String? initialPage;
+  StreamSubscription? _pageChangedSub;
+  StreamSubscription? _urlChangesSub;
   bool _switching = false;
   bool _tuiRunning = false;
   void Function(Buffer)? _onDrawFrame;
@@ -99,10 +109,54 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
     super.initState();
     _log('main.dart: initState() started');
     _terminal = FlutterTerminal();
+
+    final query = widget.initialQuery ?? getUrlParams();
+    final demoParam = query['demo'];
+    if (demoParam == 'widgetbook') {
+      currentDemo = TuiDemo.widgetBook;
+    } else if (demoParam == 'glass') {
+      currentDemo = TuiDemo.glassCompositing;
+    } else if (demoParam == 'pty') {
+      currentDemo = TuiDemo.ptyGlassCompositing;
+    }
+    initialPage = query['page'];
+
+    _pageChangedSub = pageChangedEvent.on(widgetBookEventBus).listen((
+      pageName,
+    ) {
+      initialPage = pageName;
+      updateUrlParams(demo: currentDemo.queryName, page: pageName);
+    });
+
+    _urlChangesSub = listenToUrlChanges((newQuery) {
+      final demoParam = newQuery['demo'];
+      TuiDemo? targetDemo;
+      if (demoParam == 'widgetbook') {
+        targetDemo = TuiDemo.widgetBook;
+      } else if (demoParam == 'glass') {
+        targetDemo = TuiDemo.glassCompositing;
+      } else if (demoParam == 'pty') {
+        targetDemo = TuiDemo.ptyGlassCompositing;
+      }
+
+      if (targetDemo != null && targetDemo != currentDemo) {
+        _switchDemo(targetDemo);
+      }
+
+      final pageParam = newQuery['page'];
+      if (pageParam != initialPage) {
+        initialPage = pageParam;
+        if (pageParam != null) {
+          pageSelectedEvent.post(widgetBookEventBus, pageParam);
+        }
+      }
+    });
   }
 
   @override
   void dispose() {
+    _pageChangedSub?.cancel();
+    _urlChangesSub?.cancel();
     _terminal.dispose();
     super.dispose();
   }
@@ -115,12 +169,16 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
 
     try {
       while (mounted) {
-        _log('main.dart: Loop iteration, demo: $_currentDemo');
-        if (_currentDemo == TuiDemo.widgetBook) {
+        _log('main.dart: Loop iteration, demo: $currentDemo');
+        if (currentDemo == TuiDemo.widgetBook) {
           _log('main.dart: Running WidgetBook');
-          await runWidgetBook(_terminal, onFrameRedrawn: onDrawFrame);
+          await runWidgetBook(
+            _terminal,
+            onFrameRedrawn: onDrawFrame,
+            initialPage: initialPage,
+          );
           _log('main.dart: WidgetBook returned');
-        } else if (_currentDemo == TuiDemo.glassCompositing) {
+        } else if (currentDemo == TuiDemo.glassCompositing) {
           _log('main.dart: Running Glass Compositing');
           await runGlassCompositingShared(
             _terminal,
@@ -128,7 +186,7 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
             onFrameRedrawn: onDrawFrame,
           );
           _log('main.dart: Glass Compositing returned');
-        } else if (_currentDemo == TuiDemo.ptyGlassCompositing) {
+        } else if (currentDemo == TuiDemo.ptyGlassCompositing) {
           _log('main.dart: Running PTY Glass Compositing');
           await runPtyGlassDemo(_terminal, onFrameRedrawn: onDrawFrame);
           _log('main.dart: PTY Glass Compositing returned');
@@ -158,10 +216,13 @@ class _TermUIWebHomeState extends State<TermUIWebHome> {
 
   void _switchDemo(TuiDemo target) {
     _log('main.dart: Switch demo requested to: ${target.label}');
-    if (_currentDemo == target && _tuiRunning) return;
+    if (currentDemo == target && _tuiRunning) return;
 
-    _currentDemo = target;
+    currentDemo = target;
+    initialPage = null;
     setState(() {});
+
+    updateUrlParams(demo: target.queryName, page: null);
 
     if (_tuiRunning) {
       _switching = true;
