@@ -1,3 +1,7 @@
+## 0.6.5
+
+ - **FEAT**(flutter): implement URL query parameter routing and sub-page deep linking.
+
 ## 0.6.4
 
  - Update a dependency to the latest release.
