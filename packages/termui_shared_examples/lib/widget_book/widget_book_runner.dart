@@ -64,7 +64,10 @@ enum DemoPage {
   mcdoleLogo('3D Isometric Logo'),
 
   /// Btop-style network traffic sparklines.
-  sparklines('Sparklines');
+  sparklines('Sparklines'),
+
+  /// Match-3 emoji puzzle drop game.
+  fruitGame('Fruit Drop Game');
 
   /// Display title of the demo page.
   final String title;
@@ -242,6 +245,7 @@ class _WidgetBookAppState extends State<WidgetBookApp>
     DemoPage.mouseCursors: MouseCursorsExample(),
     DemoPage.mcdoleLogo: McdoleLogoExample(),
     DemoPage.sparklines: SparklinesExample(),
+    DemoPage.fruitGame: FruitGameExample(),
   };
 
   @override

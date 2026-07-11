@@ -39,11 +39,12 @@ class SubpixelRippleManager {
     Point<int> position, {
     Color color = Colors.white,
     int durationMs = 500,
+    int? startTime,
   }) {
     _ripples.add(
       SubpixelRipple(
         center: position,
-        startTime: DateTime.now().millisecondsSinceEpoch,
+        startTime: startTime ?? DateTime.now().millisecondsSinceEpoch,
         color: color,
         durationMs: durationMs,
       ),
@@ -70,7 +71,7 @@ class SubpixelRippleManager {
     updateRipples(now);
     if (_ripples.isEmpty) return;
 
-    final canvas = Canvas(buffer.width, buffer.height);
+    final canvas = Canvas(buffer.width, buffer.height, onlyDrawOnSpaces: true);
     var hasPainted = false;
 
     for (final ripple in _ripples) {
@@ -150,7 +151,7 @@ class SubpixelRippleWidgetElement extends Element {
     manager.updateRipples(now);
     if (!manager.hasActiveRipples) return;
 
-    final canvas = Canvas(w, h);
+    final canvas = Canvas(w, h, onlyDrawOnSpaces: true);
     var hasPainted = false;
 
     for (final ripple in manager.ripples) {
