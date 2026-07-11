@@ -1,3 +1,7 @@
+## 0.2.4+7
+
+ - **FEAT**(terminal): add bracketed paste mode support and optimize UTF-8 decoding.
+
 ## 0.2.3+6
 
  - Update a dependency to the latest release.

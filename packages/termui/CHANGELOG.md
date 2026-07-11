@@ -1,3 +1,10 @@
+## 0.7.3
+
+ - **FEAT**(flutter): implement URL query parameter routing and sub-page deep linking.
+ - **FEAT**(animation): add onlyDrawOnSpaces canvas option and validate game logic tests.
+ - **FEAT**(termui): implement production drag-and-drop, generic sub-pixel ripples, and focused paste routing.
+ - **FEAT**(terminal): add bracketed paste mode support and optimize UTF-8 decoding.
+
 ## 0.7.2
 
  - **PERF**(widgets): eliminate render loop garbage and optimize progress bars.
