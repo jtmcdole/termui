@@ -274,5 +274,57 @@ void main() {
       // Relaxed strict CI performance assertion to avoid flakiness
       expect(minOptimizedUs, lessThan(minBaselineUs * 1.5));
     });
+
+    test('4. Canvas and Element Caching vs Re-allocation', () {
+      final buffer = Buffer(40, 20);
+
+      // Warm up
+      for (var w = 0; w < 100; w++) {
+        final canvas = Canvas(40, 20);
+        final el = canvas.createElement();
+        el.layout(BoxConstraints.tight(const Size(40, 20)));
+        el.paint(buffer, Offset.zero);
+        el.unmount();
+
+        final cachedCanvas = Canvas(40, 20);
+        final cachedEl = cachedCanvas.createElement();
+        cachedCanvas.clear();
+        cachedEl.layout(BoxConstraints.tight(const Size(40, 20)));
+        cachedEl.paint(buffer, Offset.zero);
+        cachedEl.unmount();
+      }
+
+      final swAlloc = Stopwatch()..start();
+      for (var i = 0; i < 5000; i++) {
+        final canvas = Canvas(40, 20);
+        final el = canvas.createElement();
+        el.layout(BoxConstraints.tight(const Size(40, 20)));
+        el.paint(buffer, Offset.zero);
+        el.unmount();
+      }
+      swAlloc.stop();
+
+      final swCached = Stopwatch()..start();
+      final cachedCanvas = Canvas(40, 20);
+      final cachedEl = cachedCanvas.createElement();
+      for (var i = 0; i < 5000; i++) {
+        cachedCanvas.clear();
+        cachedEl.layout(BoxConstraints.tight(const Size(40, 20)));
+        cachedEl.paint(buffer, Offset.zero);
+      }
+      cachedEl.unmount();
+      swCached.stop();
+
+      print('Benchmark 4 (5000 Canvas/Element rendering frames):');
+      print('  Fresh Allocations:           ${swAlloc.elapsedMilliseconds} ms');
+      print(
+        '  Cached & Cleared Canvas/El:  ${swCached.elapsedMilliseconds} ms',
+      );
+
+      expect(
+        swCached.elapsedMilliseconds,
+        lessThan(swAlloc.elapsedMilliseconds * 1.5),
+      );
+    });
   });
 }
