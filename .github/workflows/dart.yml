@@ -32,5 +32,9 @@ jobs:
       - name: Bootstrap workspace
         run: melos bootstrap
 
-      - name: Run unit tests
-        run: melos run test:all
+      - parallel:
+        - name: Run dart unit tests
+          run: melos run test:dart
+
+        - name: Run flutter unit tests
+          run: melos run test:flutter
