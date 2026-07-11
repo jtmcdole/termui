@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// Undocumented public member.
@@ -571,6 +572,32 @@ class ElementWidgetElement extends Element {
   int getIntrinsicWidth(int height) {
     final w = widget as ElementWidget;
     return w.internalElement?.getIntrinsicWidth(height) ?? 0;
+  }
+}
+
+/// Extension providing recursive spatial hit testing down the mounted Element tree.
+extension HitTestExtension on Element {
+  /// Recursively finds all elements containing the given global coordinate.
+  List<Element> hitTest(
+    Point<int> globalPosition, [
+    Offset parentOffset = Offset.zero,
+  ]) {
+    final absOffset = parentOffset + relativeOffset;
+    final sx = globalPosition.x - 1;
+    final sy = globalPosition.y - 1;
+    final inside =
+        sx >= absOffset.dx &&
+        sx < absOffset.dx + size.width &&
+        sy >= absOffset.dy &&
+        sy < absOffset.dy + size.height;
+    if (!inside) return [];
+
+    final results = <Element>[];
+    visitChildren((child) {
+      results.addAll(child.hitTest(globalPosition, absOffset));
+    });
+    results.add(this);
+    return results;
   }
 }
 

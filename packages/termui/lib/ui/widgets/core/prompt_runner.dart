@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
@@ -138,6 +139,9 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   /// An optional key event handler callback. Returns true if prompt is completed.
   final bool Function(term.KeyEvent event)? onKeyEvent;
 
+  /// An optional paste event handler callback.
+  final void Function(term.PasteEvent event)? onPasteEvent;
+
   /// An optional completion callback returning the final value of type [T].
   final T Function()? onComplete;
 
@@ -168,6 +172,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
 
   Completer<T?>? _completer;
   Element? _rootElement;
+
   bool _isDisposed = false;
   void Function()? _onNeedVisualUpdate;
 
@@ -186,6 +191,10 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   bool get hasScheduledFrame => _drawScheduled;
 
   Point<int>? _lastMousePosition;
+
+  /// The last known mouse position coordinate.
+  Point<int>? get lastMousePosition => _lastMousePosition;
+
   Element? _mouseCaptureElement;
   BuildOwner? _buildOwner;
   bool _drawScheduled = false;
@@ -232,6 +241,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     required Widget widget,
     Map<PromptExitTrigger, PromptExitAction>? exitConditions,
     this.onKeyEvent,
+    this.onPasteEvent,
     this.onComplete,
     this.alternateScreen = false,
     this.onFramePainted,
@@ -492,6 +502,8 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
               handleKeyEvent(event);
             } else if (event is term.MouseEvent) {
               handleMouseEvent(event);
+            } else if (event is term.PasteEvent) {
+              handlePasteEvent(event);
             }
           },
           onDone: () {
@@ -752,9 +764,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       final completer = _completer;
       if (completer == null || completer.isCompleted) return false;
 
-      if (debugPaintHoverEnabled) {
-        _lastMousePosition = Point<int>(event.x, event.y);
-      }
+      _lastMousePosition = Point<int>(event.x, event.y);
       var isDone = false;
       final rootElement = _rootElement;
       if (rootElement == null) return false;
@@ -785,6 +795,16 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       return isDone;
     } finally {
       Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
+    }
+  }
+
+  /// Handles bracketed paste events.
+  void handlePasteEvent(term.PasteEvent event) {
+    if (onPasteEvent != null) {
+      onPasteEvent!(event);
+    }
+    for (final char in event.text.characters) {
+      handleKeyEvent(term.KeyEvent(char, term.KeyType.character));
     }
   }
 }

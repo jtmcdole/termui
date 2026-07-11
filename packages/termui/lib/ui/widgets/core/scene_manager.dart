@@ -59,6 +59,10 @@ class SceneManager implements Reassemblable {
 
   final Compositor _compositor = Compositor();
   final List<_TouchFeedback> _activeTouches = [];
+
+  /// Exposes the sub-pixel ripple manager for composite drop effects and click feedback.
+  final SubpixelRippleManager rippleManager = SubpixelRippleManager();
+
   Timer? _debugTouchTimer;
   Renderer? _renderer;
   Buffer? _targetBuffer;
@@ -256,19 +260,7 @@ class SceneManager implements Reassemblable {
               startTime: clock.now().millisecondsSinceEpoch,
             ),
           );
-          if (_debugTouchTimer == null || !_debugTouchTimer!.isActive) {
-            _debugTouchTimer = Timer.periodic(
-              const Duration(milliseconds: 16),
-              (timer) {
-                final now = clock.now().millisecondsSinceEpoch;
-                _activeTouches.removeWhere((t) => now - t.startTime > 500);
-                scheduleRender();
-                if (_activeTouches.isEmpty) {
-                  timer.cancel();
-                }
-              },
-            );
-          }
+          addRipple(Point<int>(event.x, event.y));
         }
       }
 
@@ -530,6 +522,32 @@ class SceneManager implements Reassemblable {
     } finally {
       Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
     }
+  }
+
+  /// Spawns a new expanding touch ripple at [position] and triggers composite rendering.
+  void addRipple(
+    Point<int> position, {
+    Color color = Colors.white,
+    int durationMs = 500,
+  }) {
+    rippleManager.addRipple(position, color: color, durationMs: durationMs);
+    _startRippleTimer();
+  }
+
+  void _startRippleTimer() {
+    if (_debugTouchTimer != null && _debugTouchTimer!.isActive) return;
+    _debugTouchTimer = Timer.periodic(const Duration(milliseconds: 16), (
+      timer,
+    ) {
+      final now = clock.now().millisecondsSinceEpoch;
+      _activeTouches.removeWhere((t) => now - t.startTime > 500);
+      rippleManager.updateRipples(now);
+      scheduleRender();
+      if (_activeTouches.isEmpty && !rippleManager.hasActiveRipples) {
+        timer.cancel();
+        _debugTouchTimer = null;
+      }
+    });
   }
 
   void _handleInputEvent(InputEvent event) {
@@ -993,7 +1011,6 @@ class SceneManager implements Reassemblable {
     }
 
     if (debugShowTouchesEnabled && _activeTouches.isNotEmpty) {
-      final canvas = Canvas(target.width, target.height);
       final now = clock.now().millisecondsSinceEpoch;
 
       for (final touch in _activeTouches) {
@@ -1001,15 +1018,9 @@ class SceneManager implements Reassemblable {
         if (elapsed > 500) continue;
 
         final progress = elapsed / 500.0;
-        final radius = (progress * 20).round();
-
         final colorValue = (255 * (1.0 - progress)).round().clamp(0, 255);
         final color = Color(colorValue, colorValue, colorValue);
         final style = Style(foreground: color);
-
-        if (radius > 0) {
-          canvas.drawCircle(touch.x * 2, touch.y * 4, radius, cellStyle: style);
-        }
 
         String indicator = '';
         if (touch.type == MouseEventType.press) {
@@ -1042,11 +1053,9 @@ class SceneManager implements Reassemblable {
           target.writeString(touch.x, touch.y, indicator, style);
         }
       }
-
-      final el = canvas.createElement();
-      el.layout(BoxConstraints.tight(Size(target.width, target.height)));
-      el.paint(target, Offset.zero);
     }
+
+    rippleManager.paint(target);
   }
 }
 

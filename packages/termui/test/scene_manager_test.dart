@@ -786,5 +786,38 @@ void main() {
       // Since it's not occluded, it should render as a border line '│'
       expect(target.getCharacter(10, 0), equals('│'));
     });
+
+    test(
+      'addRipple schedules a touch timer and renders sub-pixel ripples on target buffer',
+      () async {
+        final backend = MockTerminalBackend();
+        final terminal = MockTerminal(backend);
+        final sceneManager = SceneManager(terminal);
+
+        expect(sceneManager.rippleManager.hasActiveRipples, isFalse);
+
+        sceneManager.addRipple(const Point<int>(5, 5), durationMs: 100);
+        expect(sceneManager.rippleManager.hasActiveRipples, isTrue);
+
+        sceneManager.render();
+
+        await Future.delayed(const Duration(milliseconds: 50));
+        sceneManager.render();
+
+        final front = sceneManager.renderer!.frontBuffer;
+        var hasRipples = false;
+        for (var y = 0; y < front.height; y++) {
+          for (var x = 0; x < front.width; x++) {
+            final char = front.getCharacter(x, y);
+            if (char != ' ' && char.codeUnitAt(0) >= 0x2800) {
+              hasRipples = true;
+            }
+          }
+        }
+        expect(hasRipples, isTrue);
+
+        sceneManager.dispose();
+      },
+    );
   });
 }
