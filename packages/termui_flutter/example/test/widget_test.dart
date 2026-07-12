@@ -1,15 +1,15 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:example_flutter/main.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_shared_examples/widget_book/events.dart';
 
 void main() {
-  testWidgets('App renders terminal view', (WidgetTester tester) async {
+  testWidgets('App renders Asciicast Player by default', (
+    WidgetTester tester,
+  ) async {
     await tester.pumpWidget(const MainApp());
     expect(find.byType(Terminal), findsOneWidget);
-    for (int i = 0; i < 50; i++) {
-      await tester.pump(const Duration(milliseconds: 16));
-    }
   });
 
   testWidgets(
@@ -22,7 +22,7 @@ void main() {
         ),
       );
 
-      // The app should immediately run the WidgetBook instead of GlassCompositing
+      // The app should immediately run the WidgetBook
       await tester.pump(const Duration(milliseconds: 100));
 
       final homeState = tester.state<TermUIWebHomeState>(
@@ -51,4 +51,30 @@ void main() {
     );
     expect(homeState.initialPage, equals('fruitGame'));
   });
+
+  testWidgets(
+    'Selecting asciicast player does not immediately pop up switch dialog',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const MainApp(initialQuery: {'demo': 'widgetbook'}),
+      );
+
+      // Let widget book load and start TUI loop
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // 1. Open the switch dialog
+      await tester.tap(find.byIcon(Icons.swap_horiz));
+      await tester.pumpAndSettle();
+
+      // 2. Select Asciicast Player
+      await tester.tap(find.text('Asciicast Player'));
+      await tester.pumpAndSettle();
+
+      // 3. Let TUI run loop iterations complete
+      await tester.pump(const Duration(milliseconds: 200));
+
+      // 4. Verify no dialog pops back up
+      expect(find.byType(AlertDialog), findsNothing);
+    },
+  );
 }

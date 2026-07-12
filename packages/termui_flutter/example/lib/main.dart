@@ -13,11 +13,16 @@ import 'package:termui_shared_examples/glass_compositing/pty_glass_runner.dart';
 import 'package:termui_shared_examples/widget_book/events.dart';
 import 'package:core_bus/core_bus.dart';
 import 'url_helper.dart';
+import 'package:file_selector/file_selector.dart';
+import 'src/tui_player/run_tui_player.dart';
+import 'src/tui_player/file_upload_zone.dart';
+import 'src/events.dart';
 
 enum TuiDemo {
   widgetBook('Widget Book', 'widgetbook'),
   glassCompositing('Glass Compositing', 'glass'),
-  ptyGlassCompositing('PTY Glass Compositing', 'pty');
+  ptyGlassCompositing('PTY Glass Compositing', 'pty'),
+  asciicastPlayer('Asciicast Player', 'player');
 
   final String label;
   final String queryName;
@@ -25,17 +30,19 @@ enum TuiDemo {
 }
 
 void _log(String message) {
-  if (kIsWeb) {
+  if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) {
     // ignore: avoid_print
     print('[TUI] $message');
-    return;
   }
+  if (kIsWeb) return;
   try {
     final file = File('tui_diagnostics.log');
-    file.writeAsStringSync(
-      '[${DateTime.now().toIso8601String()}] $message\n',
-      mode: FileMode.append,
-    );
+    file
+        .writeAsString(
+          '[${DateTime.now().toIso8601String()}] $message\n',
+          mode: FileMode.append,
+        )
+        .then((_) {}, onError: (_) {});
   } catch (_) {}
 }
 
@@ -96,10 +103,11 @@ class TermUIWebHome extends StatefulWidget {
 class TermUIWebHomeState extends State<TermUIWebHome> {
   late final FlutterTerminal _terminal;
 
-  TuiDemo currentDemo = TuiDemo.glassCompositing;
+  TuiDemo currentDemo = TuiDemo.asciicastPlayer;
   String? initialPage;
   StreamSubscription? _pageChangedSub;
   StreamSubscription? _urlChangesSub;
+  StreamSubscription? _uploadRequestedSub;
   bool _switching = false;
   bool _tuiRunning = false;
   void Function(Buffer)? _onDrawFrame;
@@ -111,14 +119,13 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     _terminal = FlutterTerminal();
 
     final query = widget.initialQuery ?? getUrlParams();
-    final demoParam = query['demo'];
-    if (demoParam == 'widgetbook') {
-      currentDemo = TuiDemo.widgetBook;
-    } else if (demoParam == 'glass') {
-      currentDemo = TuiDemo.glassCompositing;
-    } else if (demoParam == 'pty') {
-      currentDemo = TuiDemo.ptyGlassCompositing;
-    }
+    currentDemo = switch (query['demo']) {
+      'widgetbook' => TuiDemo.widgetBook,
+      'glass' => TuiDemo.glassCompositing,
+      'pty' => TuiDemo.ptyGlassCompositing,
+      'player' => TuiDemo.asciicastPlayer,
+      _ => TuiDemo.asciicastPlayer,
+    };
     initialPage = query['page'];
 
     _pageChangedSub = pageChangedEvent.on(widgetBookEventBus).listen((
@@ -129,15 +136,13 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     });
 
     _urlChangesSub = listenToUrlChanges((newQuery) {
-      final demoParam = newQuery['demo'];
-      TuiDemo? targetDemo;
-      if (demoParam == 'widgetbook') {
-        targetDemo = TuiDemo.widgetBook;
-      } else if (demoParam == 'glass') {
-        targetDemo = TuiDemo.glassCompositing;
-      } else if (demoParam == 'pty') {
-        targetDemo = TuiDemo.ptyGlassCompositing;
-      }
+      final targetDemo = switch (newQuery['demo']) {
+        'widgetbook' => TuiDemo.widgetBook,
+        'glass' => TuiDemo.glassCompositing,
+        'pty' => TuiDemo.ptyGlassCompositing,
+        'player' => TuiDemo.asciicastPlayer,
+        _ => null,
+      };
 
       if (targetDemo != null && targetDemo != currentDemo) {
         _switchDemo(targetDemo);
@@ -151,25 +156,60 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         }
       }
     });
+
+    _uploadRequestedSub = uploadCastRequestedEvent.on(playerEventBus).listen((
+      _,
+    ) async {
+      try {
+        const typeGroup = XTypeGroup(
+          label: 'Asciicasts',
+          extensions: ['cast', 'gz'],
+        );
+        final file = await openFile(acceptedTypeGroups: [typeGroup]);
+        if (file != null) {
+          final bytes = await file.readAsBytes();
+          castUploadedEvent.post(
+            playerEventBus,
+            UploadedCastData(file.name, bytes),
+          );
+        }
+      } catch (e) {
+        _log('main.dart: Error during file selection: $e');
+      }
+    });
   }
 
   @override
   void dispose() {
     _pageChangedSub?.cancel();
     _urlChangesSub?.cancel();
+    _uploadRequestedSub?.cancel();
+    if (_tuiRunning) {
+      _terminal.injectEvent(
+        const termui.KeyEvent(
+          'c',
+          termui.KeyType.character,
+          modifiers: {termui.Modifier.control},
+        ),
+      );
+    }
     _terminal.dispose();
     super.dispose();
   }
 
   void _runTUI(void Function(Buffer) onDrawFrame) async {
-    _log('main.dart: _runTUI() started, _tuiRunning: $_tuiRunning');
+    _log(
+      'main.dart: _runTUI() started, _tuiRunning: $_tuiRunning, State: $hashCode',
+    );
     _onDrawFrame = onDrawFrame;
     if (_tuiRunning) return;
     _tuiRunning = true;
 
     try {
       while (mounted) {
-        _log('main.dart: Loop iteration, demo: $currentDemo');
+        _log(
+          'main.dart: Loop iteration, demo: $currentDemo, State: $hashCode, mounted: $mounted',
+        );
         if (currentDemo == TuiDemo.widgetBook) {
           _log('main.dart: Running WidgetBook');
           await runWidgetBook(
@@ -177,7 +217,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
             onFrameRedrawn: onDrawFrame,
             initialPage: initialPage,
           );
-          _log('main.dart: WidgetBook returned');
+          _log(
+            'main.dart: WidgetBook returned, State: $hashCode, mounted: $mounted',
+          );
         } else if (currentDemo == TuiDemo.glassCompositing) {
           _log('main.dart: Running Glass Compositing');
           await runGlassCompositingShared(
@@ -190,6 +232,10 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           _log('main.dart: Running PTY Glass Compositing');
           await runPtyGlassDemo(_terminal, onFrameRedrawn: onDrawFrame);
           _log('main.dart: PTY Glass Compositing returned');
+        } else if (currentDemo == TuiDemo.asciicastPlayer) {
+          _log('main.dart: Running TUI Asciicast Player');
+          await runAsciicastPlayerTui(_terminal, onFrameRedrawn: onDrawFrame);
+          _log('main.dart: TUI Asciicast Player returned');
         }
 
         if (!mounted) {
@@ -252,6 +298,13 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
+              _switchDemo(TuiDemo.asciicastPlayer);
+            },
+            child: const Text('Asciicast Player'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
               _switchDemo(TuiDemo.widgetBook);
             },
             child: const Text('Widget Book'),
@@ -284,30 +337,54 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
       body: Stack(
         children: [
           Positioned.fill(
-            child: GestureDetector(
-              onScaleStart: (details) {
-                _baseFontSize = _currentFontSize;
+            child: FileUploadZone(
+              targetPath: 'Asciicast Player',
+              onFilesSelected: (files) async {
+                if (files.isNotEmpty) {
+                  final firstFile = files.values.first;
+                  try {
+                    final bytes = await firstFile.readAsBytes();
+                    _log(
+                      'main.dart: Processing dropped file: ${firstFile.name} (${bytes.length} bytes)',
+                    );
+                    if (currentDemo != TuiDemo.asciicastPlayer) {
+                      _switchDemo(TuiDemo.asciicastPlayer);
+                    }
+                    await Future.delayed(const Duration(milliseconds: 150));
+                    castUploadedEvent.post(
+                      playerEventBus,
+                      UploadedCastData(firstFile.name, bytes),
+                    );
+                  } catch (e) {
+                    _log('main.dart: Drag-and-drop error: $e');
+                  }
+                }
               },
-              onScaleUpdate: (details) {
-                setState(() {
-                  _currentFontSize = (_baseFontSize * details.scale).clamp(
-                    4.0,
-                    72.0,
-                  );
-                  _terminal.setFontSize(_currentFontSize);
-                });
-              },
-              child: Terminal(
-                terminal: _terminal,
-                fontSize: _currentFontSize,
-                fontFamily: 'MesloLGS NF',
-                fontFamilyFallback: const [
-                  'Noto Color Emoji',
-                  'Noto Sans Braille',
-                ],
-                onRun: (terminal, drawFrame) async {
-                  _runTUI(drawFrame);
+              child: GestureDetector(
+                onScaleStart: (details) {
+                  _baseFontSize = _currentFontSize;
                 },
+                onScaleUpdate: (details) {
+                  setState(() {
+                    _currentFontSize = (_baseFontSize * details.scale).clamp(
+                      4.0,
+                      72.0,
+                    );
+                    _terminal.setFontSize(_currentFontSize);
+                  });
+                },
+                child: Terminal(
+                  terminal: _terminal,
+                  fontSize: _currentFontSize,
+                  fontFamily: 'MesloLGS NF',
+                  fontFamilyFallback: const [
+                    'Noto Color Emoji',
+                    'Noto Sans Braille',
+                  ],
+                  onRun: (terminal, drawFrame) async {
+                    _runTUI(drawFrame);
+                  },
+                ),
               ),
             ),
           ),

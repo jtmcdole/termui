@@ -50,10 +50,17 @@ dependencies:
   pty2: ^0.5.1
   core_bus: ^1.0.1
   web: ^1.1.1
+  file_selector: ^1.0.0
+  archive: ^4.0.9
+  desktop_drop: ^0.7.1
+  cross_file: ^0.3.5+4
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+
+  termui_test:
+    path: ../../termui_test
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
