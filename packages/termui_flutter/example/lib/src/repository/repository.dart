@@ -1,0 +1,21 @@
+import 'repository_stub.dart'
+    if (dart.library.js_interop) 'repository_web.dart'
+    if (dart.library.io) 'repository_io.dart'
+    as impl;
+
+/// Cross-platform repository for saving, loading, listing, and deleting asciicasts.
+abstract class SavedCastsRepository {
+  factory SavedCastsRepository() => impl.createRepository();
+
+  /// Lists the names of all saved casts.
+  Future<List<String>> listCasts();
+
+  /// Loads the raw cast data string by name.
+  Future<String?> loadCast(String name);
+
+  /// Saves the raw cast data string by name.
+  Future<void> saveCast(String name, String content);
+
+  /// Deletes a saved cast by name.
+  Future<void> deleteCast(String name);
+}
