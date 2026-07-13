@@ -25,4 +25,7 @@ abstract class WidgetBookPlatform {
 
   /// Handles clean up and platform-specific exit logic.
   void onExit();
+
+  /// Saves a file, triggering a browser download on Web or writing to local FS.
+  Future<void> saveFile(String basename, List<int> bytes);
 }
