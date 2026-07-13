@@ -42,6 +42,9 @@ class CliWidgetBookPlatform implements WidgetBookPlatform {
     print('\nWidget Book exited cleanly.');
     exit(0);
   }
+
+  @override
+  Future<void> saveFile(String basename, List<int> bytes) async {}
 }
 
 void main(List<String> arguments) async {

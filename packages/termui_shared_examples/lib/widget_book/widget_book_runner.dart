@@ -220,6 +220,7 @@ class _WidgetBookAppState extends State<WidgetBookApp>
 
   AsciicastRecorder? castRecorder;
   bool _isRecordingCast = false;
+  String? _traceFilePath;
 
   Timer? _statusClearTimer;
   double _currentFps = 0.0;
@@ -410,8 +411,18 @@ class _WidgetBookAppState extends State<WidgetBookApp>
 
   Future<void> _toggleTracing() async {
     if (Tracer.isEnabled) {
+      final path = _traceFilePath;
       await Tracer.stop();
       _setStatus('Tracing stopped');
+      if (path != null) {
+        final fs = getDefaultFileSystem();
+        final file = fs.file(path);
+        if (file.existsSync()) {
+          final bytes = file.readAsBytesSync();
+          await widget.platform.saveFile(fs.path.basename(path), bytes);
+        }
+      }
+      _traceFilePath = null;
     } else {
       final fs = getDefaultFileSystem();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -419,6 +430,7 @@ class _WidgetBookAppState extends State<WidgetBookApp>
         fs.currentDirectory.path,
         'trace_$timestamp.json.gz',
       );
+      _traceFilePath = tracePath;
       await Tracer.start(tracePath, fs: fs);
       _setStatus('Tracing started: $tracePath');
     }
