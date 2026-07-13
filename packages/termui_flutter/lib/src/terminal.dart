@@ -193,6 +193,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   final Set<String> _pendingGlyphs = {};
   final Set<String> _processingGlyphs = {};
   bool _isUpdatingAtlas = false;
+  term.MouseEvent? _lastInjectedPointerEvent;
 
   late double _fontSize;
   double get fontSize => _fontSize;
@@ -813,15 +814,22 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       mods.add(term.Modifier.meta);
     }
 
-    widget.terminal.injectEvent(
-      term.MouseEvent(
-        x: clampedCol + 1,
-        y: clampedRow + 1,
-        button: termuiButton,
-        type: termuiType,
-        modifiers: mods,
-      ),
+    final termEvent = term.MouseEvent(
+      x: clampedCol + 1,
+      y: clampedRow + 1,
+      button: termuiButton,
+      type: termuiType,
+      modifiers: mods,
     );
+
+    if ((termuiType == term.MouseEventType.move ||
+            termuiType == term.MouseEventType.drag) &&
+        _lastInjectedPointerEvent == termEvent) {
+      return;
+    }
+
+    _lastInjectedPointerEvent = termEvent;
+    widget.terminal.injectEvent(termEvent);
   }
 
   @override

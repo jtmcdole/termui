@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'dart:js_interop';
 import 'package:web/web.dart' as web;
 import 'repository.dart';
@@ -120,6 +121,63 @@ class WebSavedCastsRepository implements SavedCastsRepository {
 
     request.onerror = (web.Event event) {
       completer.completeError(Exception('Failed to delete from IndexedDB'));
+    }.toJS;
+
+    return completer.future;
+  }
+
+  @override
+  Future<Uint8List?> loadBytes(String name) async {
+    try {
+      final db = await _openDb();
+      final completer = Completer<Uint8List?>();
+
+      final transaction = db.transaction([storeName.toJS].toJS, 'readonly');
+      final store = transaction.objectStore(storeName);
+      final request = store.get(name.toJS);
+
+      request.onsuccess = (web.Event event) {
+        final result = request.result;
+        if (result == null) {
+          completer.complete(null);
+        } else {
+          if (result.typeofEquals('string')) {
+            // Legacy fallback for strings
+            final str = (result as JSString).toDart;
+            completer.complete(Uint8List.fromList(str.codeUnits));
+          } else {
+            completer.complete((result as JSUint8Array).toDart);
+          }
+        }
+      }.toJS;
+
+      request.onerror = (web.Event event) {
+        completer.completeError(
+          Exception('Failed to load bytes from IndexedDB'),
+        );
+      }.toJS;
+
+      return completer.future;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> saveBytes(String name, Uint8List content) async {
+    final db = await _openDb();
+    final completer = Completer<void>();
+
+    final transaction = db.transaction([storeName.toJS].toJS, 'readwrite');
+    final store = transaction.objectStore(storeName);
+    final request = store.put(content.toJS, name.toJS);
+
+    request.onsuccess = (web.Event event) {
+      completer.complete();
+    }.toJS;
+
+    request.onerror = (web.Event event) {
+      completer.completeError(Exception('Failed to save bytes to IndexedDB'));
     }.toJS;
 
     return completer.future;

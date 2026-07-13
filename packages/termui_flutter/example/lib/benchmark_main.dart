@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:termui/perf/tracer.dart';
 import 'package:termui/perf/fs_locator.dart';
+import 'package:termui_flutter/termui_flutter.dart';
 
 void main() {
   runApp(const BenchmarkApp());
@@ -153,7 +154,16 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
 
   Future<void> _toggleTrace() async {
     if (_isRecordingTrace) {
+      final path = _traceFilePath;
       await Tracer.stop();
+      if (path.isNotEmpty) {
+        final fs = getDefaultFileSystem();
+        final file = fs.file(path);
+        if (file.existsSync()) {
+          final bytes = file.readAsBytesSync();
+          await saveFile(fs.path.basename(path), bytes);
+        }
+      }
       if (mounted) {
         setState(() {
           _isRecordingTrace = false;
@@ -211,6 +221,11 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
       if (framesRemaining <= 0) {
         timer.cancel();
         await Tracer.stop();
+        final file = fs.file(path);
+        if (file.existsSync()) {
+          final bytes = file.readAsBytesSync();
+          await saveFile(fs.path.basename(path), bytes);
+        }
         if (mounted) {
           setState(() {
             _isRecordingTrace = false;

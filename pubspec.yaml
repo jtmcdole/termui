@@ -57,3 +57,5 @@ melos:
       packageFilters:
         dirExists: test
       description: Run all tests in the monorepo.
+dependencies:
+  archive: ^4.0.9

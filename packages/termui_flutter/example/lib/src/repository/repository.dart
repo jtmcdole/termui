@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'repository_stub.dart'
     if (dart.library.js_interop) 'repository_web.dart'
     if (dart.library.io) 'repository_io.dart'
@@ -18,4 +19,10 @@ abstract class SavedCastsRepository {
 
   /// Deletes a saved cast by name.
   Future<void> deleteCast(String name);
+
+  /// Loads raw bytes by name.
+  Future<Uint8List?> loadBytes(String name);
+
+  /// Saves raw bytes by name.
+  Future<void> saveBytes(String name, Uint8List content);
 }
