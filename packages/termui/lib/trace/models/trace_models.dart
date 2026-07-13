@@ -10,6 +10,7 @@ class TraceEvent {
   final String phase;
   final String category;
   final int timestamp;
+  final int? dur;
   final int tid;
   final Map<String, String> args;
 
@@ -18,6 +19,7 @@ class TraceEvent {
     required this.phase,
     required this.category,
     required this.timestamp,
+    this.dur,
     required this.tid,
     required this.args,
   });
@@ -34,8 +36,9 @@ class TraceEvent {
       name: json['name'] as String? ?? 'Unknown',
       phase: json['ph'] as String? ?? 'i',
       category: json['cat'] as String? ?? 'TUI',
-      timestamp: json['ts'] as int? ?? 0,
-      tid: json['tid'] as int? ?? 0,
+      timestamp: (json['ts'] as num?)?.toInt() ?? 0,
+      dur: (json['dur'] as num?)?.toInt(),
+      tid: (json['tid'] as num?)?.toInt() ?? 0,
       args: parsedArgs,
     );
   }
@@ -179,6 +182,17 @@ List<TraceSpan> computeSpans(List<TraceEvent> events) {
           args: event.args,
         ),
       );
+    } else if (event.phase == 'X') {
+      spans.add(
+        TraceSpan(
+          name: event.name,
+          category: event.category,
+          startUs: event.timestamp,
+          endUs: event.timestamp + (event.dur ?? 1),
+          depth: stack.length,
+          args: event.args,
+        ),
+      );
     }
   }
   for (final tid in activeStacksByTid.keys) {
@@ -244,11 +258,20 @@ Future<Map<String, Object>?> parseTraceFile(String path) async {
     final mMinTs = computedSpans.map((s) => s.startUs).reduce(min);
     final mMaxTs = computedSpans.map((s) => s.endUs).reduce(max);
 
+    int mMaxDuration = 0;
+    for (final s in computedSpans) {
+      final dur = s.endUs - s.startUs;
+      if (dur > mMaxDuration) {
+        mMaxDuration = dur;
+      }
+    }
+
     return {
       'spans': computedSpans,
       'minTs': mMinTs,
       'maxTs': mMaxTs,
       'baseTime': baseTime,
+      'maxSpanDuration': mMaxDuration,
     };
   });
 }

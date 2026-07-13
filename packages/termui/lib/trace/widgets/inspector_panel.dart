@@ -92,7 +92,10 @@ Widget buildInspectorPanel(
         if (span.args.isNotEmpty) {
           lines.add('Args:');
           for (final entry in span.args.entries) {
-            final argStr = '  ${entry.key}: ${entry.value}';
+            var argStr = '  ${entry.key}: ${entry.value}';
+            if (argStr.length > 1000) {
+              argStr = '${argStr.substring(0, 1000)}... (truncated)';
+            }
             lines.addAll(wrapTraceText(argStr, maxWidth - 2));
           }
         }

@@ -38,9 +38,13 @@ Color hslToRgb(double h, double s, double l) {
   );
 }
 
+final Map<String, Style> _categoryStyleCache = {};
+
 Style getCategoryStyle(String category, String name) {
-  int h = fnv1aHash(name).abs() % 360;
-  return Style(foreground: hslToRgb(h.toDouble(), 0.75, 0.60));
+  return _categoryStyleCache.putIfAbsent(name, () {
+    int h = fnv1aHash(name).abs() % 360;
+    return Style(foreground: hslToRgb(h.toDouble(), 0.75, 0.60));
+  });
 }
 
 int fnv1aHash(String string) {

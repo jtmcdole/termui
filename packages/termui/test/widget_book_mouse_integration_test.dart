@@ -36,6 +36,9 @@ class TestPlatform implements WidgetBookPlatform {
 
   @override
   void onExit() {}
+
+  @override
+  Future<void> saveFile(String basename, List<int> bytes) async {}
 }
 
 void main() {
