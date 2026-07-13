@@ -59,6 +59,10 @@ const uploadCastRequestedEvent = Event<void>.broadcast(
   name: 'uploadCastRequested',
 );
 
+const uploadTraceRequestedEvent = Event<void>.broadcast(
+  name: 'uploadTraceRequested',
+);
+
 /// Payload containing details of a cast uploaded via native bridge.
 class UploadedCastData {
   final String filename;
@@ -69,4 +73,16 @@ class UploadedCastData {
 /// Dispatched when the native picker has retrieved a file.
 const castUploadedEvent = Event<UploadedCastData>.broadcast(
   name: 'castUploaded',
+);
+
+/// Payload containing details of a trace uploaded.
+class UploadedTraceData {
+  final String filename;
+  final Uint8List bytes;
+  const UploadedTraceData(this.filename, this.bytes);
+}
+
+/// Dispatched when a trace file is uploaded.
+const traceUploadedEvent = Event<UploadedTraceData>.broadcast(
+  name: 'traceUploaded',
 );

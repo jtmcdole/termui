@@ -133,14 +133,28 @@ class AsciicastPlayerViewModel {
 
   /// Loads a saved cast from repository by filename.
   Future<void> loadSavedCast(String filename) async {
-    final raw = await repository.loadCast(filename);
-    if (raw != null) {
+    final bytes = await repository.loadBytes(filename);
+    if (bytes != null) {
+      String raw;
+      try {
+        if (bytes case [0x1f, 0x8b, ...]) {
+          final decompressed = GZipDecoder().decodeBytes(bytes);
+          raw = utf8.decode(decompressed);
+        } else {
+          raw = utf8.decode(bytes);
+        }
+      } catch (e) {
+        raw = utf8.decode(bytes, allowMalformed: true);
+      }
       await loadCastData(filename, raw);
     }
   }
 
-  /// Saves a cast file to storage (decompressing if Gzipped).
+  /// Saves a cast file to storage (keeps Gzip intact for storage).
   Future<void> uploadCast(String filename, Uint8List bytes) async {
+    await repository.saveBytes(filename, bytes);
+    await refreshSavedCasts();
+
     String decoded;
     try {
       if (bytes case [0x1f, 0x8b, ...]) {
@@ -153,9 +167,6 @@ class AsciicastPlayerViewModel {
       decoded = utf8.decode(bytes, allowMalformed: true);
     }
 
-    // Save to storage
-    await repository.saveCast(filename, decoded);
-    await refreshSavedCasts();
     await loadCastData(filename, decoded);
   }
 

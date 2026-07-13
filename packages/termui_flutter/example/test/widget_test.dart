@@ -1,6 +1,9 @@
+import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:example_flutter/main.dart';
+import 'package:example_flutter/src/events.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_shared_examples/widget_book/events.dart';
 
@@ -77,4 +80,32 @@ void main() {
       expect(find.byType(AlertDialog), findsNothing);
     },
   );
+
+  testWidgets('App routes to Trace Viewer and processes uploaded trace file', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(const MainApp(initialQuery: {'demo': 'trace'}));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final homeState = tester.state<TermUIWebHomeState>(
+      find.byType(TermUIWebHome),
+    );
+    expect(homeState.currentDemo, equals(TuiDemo.traceViewer));
+
+    // Simulate a dropped trace file
+    final mockJson = jsonEncode([
+      {'name': 'test_span', 'ph': 'B', 'ts': 1000, 'tid': 1},
+      {'name': 'test_span', 'ph': 'E', 'ts': 2000, 'tid': 1},
+    ]);
+    final mockBytes = Uint8List.fromList(utf8.encode(mockJson));
+
+    traceUploadedEvent.post(
+      playerEventBus,
+      UploadedTraceData('test_trace.json', mockBytes),
+    );
+
+    await tester.pump(const Duration(milliseconds: 200));
+    // Re-pump to let async parse operations and microtasks complete
+    await tester.pump(const Duration(milliseconds: 100));
+  });
 }

@@ -56,6 +56,11 @@ class FlutterWidgetBookPlatform implements WidgetBookPlatform {
 
   @override
   void onExit() {}
+
+  @override
+  Future<void> saveFile(String basename, List<int> bytes) async {
+    await saveFile(basename, bytes);
+  }
 }
 
 Future<void> runWidgetBook(

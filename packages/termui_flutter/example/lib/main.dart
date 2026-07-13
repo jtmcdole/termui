@@ -15,6 +15,7 @@ import 'package:core_bus/core_bus.dart';
 import 'url_helper.dart';
 import 'package:file_selector/file_selector.dart';
 import 'src/tui_player/run_tui_player.dart';
+import 'src/tui_player/run_trace_viewer.dart';
 import 'src/tui_player/file_upload_zone.dart';
 import 'src/events.dart';
 
@@ -22,17 +23,20 @@ enum TuiDemo {
   widgetBook('Widget Book', 'widgetbook'),
   glassCompositing('Glass Compositing', 'glass'),
   ptyGlassCompositing('PTY Glass Compositing', 'pty'),
-  asciicastPlayer('Asciicast Player', 'player');
+  asciicastPlayer('Asciicast Player', 'player'),
+  traceViewer('Trace Viewer', 'trace');
 
   final String label;
   final String queryName;
   const TuiDemo(this.label, this.queryName);
 }
 
+final watch = Stopwatch()..start();
+
 void _log(String message) {
   if (kIsWeb || Platform.environment.containsKey('FLUTTER_TEST')) {
     // ignore: avoid_print
-    print('[TUI] $message');
+    print('${watch.elapsed} [TUI] $message');
   }
   if (kIsWeb) return;
   try {
@@ -108,9 +112,13 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
   StreamSubscription? _pageChangedSub;
   StreamSubscription? _urlChangesSub;
   StreamSubscription? _uploadRequestedSub;
+  StreamSubscription? _uploadTraceRequestedSub;
   bool _switching = false;
   bool _tuiRunning = false;
   void Function(Buffer)? _onDrawFrame;
+
+  Uint8List? _initialTraceBytes;
+  String? _initialTraceFilename;
 
   @override
   void initState() {
@@ -124,6 +132,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
       'glass' => TuiDemo.glassCompositing,
       'pty' => TuiDemo.ptyGlassCompositing,
       'player' => TuiDemo.asciicastPlayer,
+      'trace' => TuiDemo.traceViewer,
       _ => TuiDemo.asciicastPlayer,
     };
     initialPage = query['page'];
@@ -141,6 +150,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         'glass' => TuiDemo.glassCompositing,
         'pty' => TuiDemo.ptyGlassCompositing,
         'player' => TuiDemo.asciicastPlayer,
+        'trace' => TuiDemo.traceViewer,
         _ => null,
       };
 
@@ -177,6 +187,27 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         _log('main.dart: Error during file selection: $e');
       }
     });
+
+    _uploadTraceRequestedSub = uploadTraceRequestedEvent
+        .on(playerEventBus)
+        .listen((_) async {
+          try {
+            const typeGroup = XTypeGroup(
+              label: 'Traces',
+              extensions: ['json', 'gz'],
+            );
+            final file = await openFile(acceptedTypeGroups: [typeGroup]);
+            if (file != null) {
+              final bytes = await file.readAsBytes();
+              traceUploadedEvent.post(
+                playerEventBus,
+                UploadedTraceData(file.name, bytes),
+              );
+            }
+          } catch (e) {
+            _log('main.dart: Error during trace file selection: $e');
+          }
+        });
   }
 
   @override
@@ -184,6 +215,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     _pageChangedSub?.cancel();
     _urlChangesSub?.cancel();
     _uploadRequestedSub?.cancel();
+    _uploadTraceRequestedSub?.cancel();
     if (_tuiRunning) {
       _terminal.injectEvent(
         const termui.KeyEvent(
@@ -236,6 +268,17 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           _log('main.dart: Running TUI Asciicast Player');
           await runAsciicastPlayerTui(_terminal, onFrameRedrawn: onDrawFrame);
           _log('main.dart: TUI Asciicast Player returned');
+        } else if (currentDemo == TuiDemo.traceViewer) {
+          _log('main.dart: Running TUI Trace Viewer');
+          await runTraceViewerTui(
+            _terminal,
+            initialBytes: _initialTraceBytes,
+            initialFilename: _initialTraceFilename,
+            onFrameRedrawn: onDrawFrame,
+          );
+          _log('main.dart: TUI Trace Viewer returned');
+          _initialTraceBytes = null;
+          _initialTraceFilename = null;
         }
 
         if (!mounted) {
@@ -305,6 +348,13 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           TextButton(
             onPressed: () {
               Navigator.pop(context);
+              _switchDemo(TuiDemo.traceViewer);
+            },
+            child: const Text('Trace Viewer'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
               _switchDemo(TuiDemo.widgetBook);
             },
             child: const Text('Widget Book'),
@@ -338,7 +388,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         children: [
           Positioned.fill(
             child: FileUploadZone(
-              targetPath: 'Asciicast Player',
+              targetPath: currentDemo == TuiDemo.traceViewer
+                  ? 'Trace Viewer'
+                  : 'Asciicast Player',
               onFilesSelected: (files) async {
                 if (files.isNotEmpty) {
                   final firstFile = files.values.first;
@@ -347,14 +399,30 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                     _log(
                       'main.dart: Processing dropped file: ${firstFile.name} (${bytes.length} bytes)',
                     );
-                    if (currentDemo != TuiDemo.asciicastPlayer) {
-                      _switchDemo(TuiDemo.asciicastPlayer);
+                    if (firstFile.name.endsWith('.json') ||
+                        firstFile.name.endsWith('.json.gz')) {
+                      _initialTraceBytes = bytes;
+                      _initialTraceFilename = firstFile.name;
+
+                      if (currentDemo != TuiDemo.traceViewer) {
+                        _switchDemo(TuiDemo.traceViewer);
+                      } else {
+                        await Future.delayed(const Duration(milliseconds: 150));
+                        traceUploadedEvent.post(
+                          playerEventBus,
+                          UploadedTraceData(firstFile.name, bytes),
+                        );
+                      }
+                    } else {
+                      if (currentDemo != TuiDemo.asciicastPlayer) {
+                        _switchDemo(TuiDemo.asciicastPlayer);
+                      }
+                      await Future.delayed(const Duration(milliseconds: 150));
+                      castUploadedEvent.post(
+                        playerEventBus,
+                        UploadedCastData(firstFile.name, bytes),
+                      );
                     }
-                    await Future.delayed(const Duration(milliseconds: 150));
-                    castUploadedEvent.post(
-                      playerEventBus,
-                      UploadedCastData(firstFile.name, bytes),
-                    );
                   } catch (e) {
                     _log('main.dart: Drag-and-drop error: $e');
                   }

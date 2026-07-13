@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 import 'repository.dart';
 
 class IoSavedCastsRepository implements SavedCastsRepository {
@@ -60,6 +61,25 @@ class IoSavedCastsRepository implements SavedCastsRepository {
         await file.delete();
       }
     } catch (_) {}
+  }
+
+  @override
+  Future<Uint8List?> loadBytes(String name) async {
+    try {
+      await _ensureDir();
+      final file = File('${_dir.path}/$name');
+      if (await file.exists()) {
+        return await file.readAsBytes();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  @override
+  Future<void> saveBytes(String name, Uint8List content) async {
+    await _ensureDir();
+    final file = File('${_dir.path}/$name');
+    await file.writeAsBytes(content);
   }
 }
 
