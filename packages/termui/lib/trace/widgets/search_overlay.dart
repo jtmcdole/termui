@@ -2,6 +2,7 @@ import "package:termui/termui_trace.dart";
 import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
 import 'package:termui/ui/event.dart' as evt;
+import 'dart:math';
 
 class QueryToken {
   /// Whether this token should exclude matching events (starts with '-').
@@ -183,6 +184,7 @@ class SearchOverlay extends StatefulWidget {
 
 class SearchOverlayState extends State<SearchOverlay> {
   late TextEditingController searchController;
+  late FocusNode _focusNode;
   List<TraceSpan> filteredSpans = [];
   int selectedIndex = 0;
 
@@ -191,31 +193,45 @@ class SearchOverlayState extends State<SearchOverlay> {
     super.initState();
     searchController = TextEditingController(text: widget.initialQuery);
     searchController.addListener(_onSearchChanged);
+    _focusNode = FocusNode(id: 'search_overlay_input')..requestFocus();
     _onSearchChanged();
   }
 
   @override
   void dispose() {
     searchController.removeListener(_onSearchChanged);
+    _focusNode.dispose();
     super.dispose();
   }
+
+  int _searchVersion = 0;
 
   void _onSearchChanged() {
     final query = searchController.text;
     widget.onQueryChanged(query);
+    _performSearch(query);
+  }
+
+  Future<void> _performSearch(String query) async {
+    final version = ++_searchVersion;
 
     if (query.isEmpty) {
-      setState(() {
-        filteredSpans = [];
-        selectedIndex = 0;
-      });
+      if (mounted) {
+        setState(() {
+          filteredSpans = [];
+          selectedIndex = 0;
+        });
+      }
       return;
     }
 
     final tokens = QueryToken.parseQuery(query);
     final results = <TraceSpan>[];
+    int count = 0;
 
     for (final span in widget.spans) {
+      if (version != _searchVersion) return; // Abort stale search
+
       var allMatch = true;
       for (final token in tokens) {
         if (!token.matches(span)) {
@@ -226,12 +242,19 @@ class SearchOverlayState extends State<SearchOverlay> {
       if (allMatch) {
         results.add(span);
       }
+
+      // Yield to event loop every 5000 elements to keep UI perfectly responsive
+      if (++count % 5000 == 0) {
+        await Future.delayed(Duration.zero);
+      }
     }
 
-    setState(() {
-      filteredSpans = results;
-      selectedIndex = 0;
-    });
+    if (version == _searchVersion && mounted) {
+      setState(() {
+        filteredSpans = results;
+        selectedIndex = 0;
+      });
+    }
   }
 
   @override
@@ -248,7 +271,7 @@ class SearchOverlayState extends State<SearchOverlay> {
             setState(() {
               selectedIndex = (selectedIndex - 1).clamp(
                 0,
-                filteredSpans.length - 1,
+                min(filteredSpans.length, 1000) - 1,
               );
             });
           }
@@ -259,7 +282,7 @@ class SearchOverlayState extends State<SearchOverlay> {
             setState(() {
               selectedIndex = (selectedIndex + 1).clamp(
                 0,
-                filteredSpans.length - 1,
+                min(filteredSpans.length, 1000) - 1,
               );
             });
           }
@@ -310,7 +333,7 @@ class SearchOverlayState extends State<SearchOverlay> {
             Expanded(
               child: TextField(
                 controller: searchController,
-
+                focusNode: _focusNode,
                 style: const Style(foreground: Colors.white),
               ),
             ),
@@ -326,13 +349,22 @@ class SearchOverlayState extends State<SearchOverlay> {
             height: 1,
             child: Row([
               Text(
+                ' Syntax: "foo", "-bar", "cat:blink", "dur:>=16ms", "/regex/"',
+                style: const Style(foreground: Color(150, 150, 150)),
+              ),
+            ]),
+          ),
+          SizedBox(
+            height: 1,
+            child: Row([
+              Text(
                 ' Matches: ${filteredSpans.length} / ${searchController.text.isNotEmpty ? widget.spans.length : 0}',
                 style: const Style(foreground: Colors.green),
               ),
             ]),
           ),
           Expanded(
-            child: ListView(
+            child: ListView.raw(
               showScrollbar: true,
               selectedIndex: selectedIndex,
               onSelect: (index) {
@@ -341,17 +373,9 @@ class SearchOverlayState extends State<SearchOverlay> {
                 });
                 widget.onMatchSelected(filteredSpans[index]);
               },
-              children: filteredSpans
-                  .map((span) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 1),
-                      child: Text(
-                        ' • ${span.name} (${(span.endUs - span.startUs) / 1000.0}ms)',
-                      ),
-                    );
-                  })
-                  .toList()
-                  .cast<Widget>(),
+              lines: filteredSpans.take(1000).map((span) {
+                return ' • ${span.name} (${(span.endUs - span.startUs) / 1000.0}ms)';
+              }).toList(),
             ),
           ),
         ]),

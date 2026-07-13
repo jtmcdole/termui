@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import "package:file/file.dart";
 import "package:file/local.dart";
 import "package:termui/termui_trace.dart";
@@ -9,6 +10,7 @@ import 'dart:convert';
 
 import 'dart:math';
 import 'package:termui/ui/event.dart' as evt;
+import 'package:termui/trace/trace_logger.dart';
 
 late SceneManager globalSceneManager;
 
@@ -18,6 +20,8 @@ class TraceViewerApp extends StatefulWidget {
   final int? minTs;
   final int? maxTs;
   final FileSystem fileSystem;
+  final void Function(String filename, Uint8List bytes)? onExport;
+  final VoidCallback? onOpenFileRequested;
 
   const TraceViewerApp({
     super.key,
@@ -26,6 +30,8 @@ class TraceViewerApp extends StatefulWidget {
     this.minTs,
     this.maxTs,
     this.fileSystem = const LocalFileSystem(),
+    this.onExport,
+    this.onOpenFileRequested,
   });
 
   @override
@@ -56,10 +62,11 @@ class _TraceViewerAppState extends State<TraceViewerApp>
   int? minTs;
   int? maxTs;
   int? baseTime;
-
+  int maxSpanDuration = 0;
   late double offsetX;
   late double zoomLevel;
   int offsetY = 0;
+  TraceSpan? hoveredSpan;
   TimeDisplayMode timeDisplayMode = TimeDisplayMode.formatted;
   int? selectionStartUs;
   int? selectionEndUs;
@@ -181,11 +188,13 @@ class _TraceViewerAppState extends State<TraceViewerApp>
 
     final w = 50;
     final h = 10;
-    final termSize = globalSceneManager.terminal.backend.size;
-    final screenW = termSize.x > 0 ? termSize.x : 80;
-    final screenH = termSize.y > 0 ? termSize.y : 24;
-    final x = (screenW - w) ~/ 2;
-    final y = (screenH - h) ~/ 2;
+    final term = globalSceneManager.terminal;
+    final x = (term.backend.size.x - w) ~/ 2;
+    final y = (term.backend.size.y - h) ~/ 2;
+
+    print(
+      '[${DateTime.now().toIso8601String()}] [TraceViewerApp] Spawning layer with size: ${term.backend.size}, w=$w, h=$h, x=$x, y=$y',
+    );
 
     late PromptRunner<void> runner;
 
@@ -327,10 +336,8 @@ class _TraceViewerAppState extends State<TraceViewerApp>
   // Memoized search overlay state
   int _searchWindowW = 40;
   int _searchWindowH = 10;
-  int _searchWindowX = 2;
-  int _searchWindowY = 2;
   String _searchQuery = '';
-  TraceSpan? hoveredSpan;
+  HitGrid? _latestHitGrid;
 
   int? _dragStartX;
   double? _dragStartOffsetX;
@@ -471,17 +478,16 @@ class _TraceViewerAppState extends State<TraceViewerApp>
   void _spawnSearchOverlay() {
     if (_searchLayer != null) return;
 
-    final w = _searchWindowW;
-    final h = _searchWindowH;
-    final x = _searchWindowX;
-    final y = _searchWindowY;
+    final term = globalSceneManager.terminal;
+    final w = max(20, min(_searchWindowW, term.backend.size.x - 4));
+    final h = max(10, min(_searchWindowH, term.backend.size.y - 4));
+    final x = (term.backend.size.x - w) ~/ 2;
+    final y = (term.backend.size.y - h) ~/ 2;
 
     late PromptRunner<void> runner;
 
     void handleClose() {
       if (_searchLayer != null) {
-        _searchWindowX = _searchLayer!.x;
-        _searchWindowY = _searchLayer!.y;
         _searchWindowW = _searchLayer!.width ?? _searchWindowW;
         _searchWindowH = _searchLayer!.height ?? _searchWindowH;
         globalSceneManager.layers.remove(_searchLayer!);
@@ -531,7 +537,15 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     globalSceneManager.layers.add(_searchLayer!);
     globalSceneManager.focusedLayer = _searchLayer;
 
-    runner.run().ignore();
+    runner.resize(w, h);
+    runner
+        .run()
+        .then((_) {
+          TraceLogger.info('TraceViewerApp', 'runner.run() completed normally');
+        })
+        .catchError((e, s) {
+          TraceLogger.error('TraceViewerApp', 'runner.run() threw error', e, s);
+        });
   }
 
   bool isCaliperMode = false;
@@ -551,6 +565,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
       spans = widget.spans;
       minTs = widget.minTs;
       maxTs = widget.maxTs;
+      maxSpanDuration = 1000000000; // fallback if not loaded from json
       final duration = maxTs! - minTs!;
       zoomLevel = duration > 0 ? duration / 80.0 : 1.0;
       offsetX = minTs!.toDouble();
@@ -581,6 +596,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
             minTs = result['minTs'] as int;
             maxTs = result['maxTs'] as int;
             baseTime = result['baseTime'] as int;
+            maxSpanDuration = result['maxSpanDuration'] as int? ?? 1000000000;
             final duration = maxTs! - minTs!;
             zoomLevel = duration > 0 ? duration / 80.0 : 1.0;
             offsetX = minTs!.toDouble();
@@ -643,10 +659,16 @@ class _TraceViewerAppState extends State<TraceViewerApp>
       });
     }
 
+    final jsonString = jsonEncode(exportedEvents);
     final file = widget.fileSystem.file(filename);
-    file.writeAsStringSync(jsonEncode(exportedEvents));
+    file.writeAsStringSync(jsonString);
+
+    if (widget.onExport != null) {
+      widget.onExport!(filename, Uint8List.fromList(utf8.encode(jsonString)));
+    }
+
     _showExportMessage(
-      'Exported ${exportedEvents.length ~/ 2} spans to ${file.path}',
+      'Exported ${exportedEvents.length ~/ 2} spans to $filename',
     );
   }
 
@@ -804,6 +826,13 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     if (keyLower == '?' || keyLower == 'h') {
       _spawnHelpOverlay();
       return true;
+    }
+
+    if (keyLower == 'o') {
+      if (widget.onOpenFileRequested != null) {
+        widget.onOpenFileRequested!();
+        return true;
+      }
     }
 
     if (keyLower == 'a' || type == evt.KeyType.left) {
@@ -976,20 +1005,14 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     }
 
     // Hover detection
-    final H = (context as Element).size.height;
-    final hoveredTime = offsetX + (localX - 1) * zoomLevel;
     TraceSpan? hit;
 
-    final hoveredDepth = localY - 3 + offsetY;
-    if (localY >= 3 && localY <= H - 7 && hoveredDepth >= 0) {
-      for (final span in spans!) {
-        if (span.depth == hoveredDepth &&
-            hoveredTime >= span.startUs &&
-            hoveredTime <= span.endUs) {
-          hit = span;
-          break;
-        }
-      }
+    if (_latestHitGrid != null) {
+      final col =
+          localX -
+          2; // TimelineCanvas interior starts at X=2 (startX=0, then +1 for border)
+      final visualY = localY - 3;
+      hit = _latestHitGrid!.getHit(col, visualY);
     }
 
     setState(() {
@@ -997,14 +1020,18 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     });
   }
 
-  Widget buildHeader(String modeText) {
+  Widget buildHeader(String modeText, Style modeStyle) {
     final borderStyle = const Style(foreground: Color(120, 120, 120));
     return SizedBox(
       height: 1,
       child: Row(
         [
           Text('┌─ [ termui trace viewer ] ─', style: borderStyle),
-          Text('─ [ Mode: $modeText ] ─┐', style: borderStyle),
+          Row([
+            Text('─ [ Mode: ', style: borderStyle),
+            Text(' $modeText ', style: modeStyle),
+            Text(' ] ─┐', style: borderStyle),
+          ]),
         ],
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         backgroundChar: '─',
@@ -1117,9 +1144,20 @@ class _TraceViewerAppState extends State<TraceViewerApp>
       );
     }
 
-    final modeText = isCaliperMode ? 'Caliper' : 'Pan';
+    final modeText = isCaliperMode
+        ? 'Caliper'
+        : isBoxSelectMode
+        ? 'Box Zoom'
+        : 'Pan';
+
+    final modeStyle = isCaliperMode
+        ? const Style(foreground: Colors.black, background: Colors.yellow)
+        : isBoxSelectMode
+        ? const Style(foreground: Colors.white, background: Colors.blue)
+        : const Style(foreground: Colors.white, background: Color(60, 60, 60));
+
     return Column([
-      buildHeader(modeText),
+      buildHeader(modeText, modeStyle),
       buildRuler(),
       buildSeparator('Main Isolate'),
       Expanded(
@@ -1128,10 +1166,14 @@ class _TraceViewerAppState extends State<TraceViewerApp>
           offsetX: offsetX,
           offsetY: offsetY,
           zoomLevel: zoomLevel,
+          maxSpanDuration: maxSpanDuration,
           measureStartMs: measureStartMs,
           measureEndMs: measureEndMs,
           selectionStartUs: selectionStartUs,
           selectionEndUs: selectionEndUs,
+          onHitGridUpdated: (grid) {
+            _latestHitGrid = grid;
+          },
         ),
       ),
       buildInspectorPanel(

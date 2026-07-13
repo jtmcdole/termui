@@ -26,10 +26,11 @@ String _getFractionalBlock(double fraction) {
   return '█';
 }
 
-List<TraceSpan> _getCulledSpans(
+List<TraceSpan> getCulledSpans(
   List<TraceSpan> spans,
   double viewportStartUs,
   double viewportEndUs,
+  int maxSpanDuration,
 ) {
   if (spans.isEmpty) return [];
   int idx = 0;
@@ -47,8 +48,12 @@ List<TraceSpan> _getCulledSpans(
 
   final visibleSpans = <TraceSpan>[];
   for (int i = idx - 1; i >= 0; i--) {
-    if (spans[i].endUs >= viewportStartUs) {
-      visibleSpans.add(spans[i]);
+    final span = spans[i];
+    if (span.endUs >= viewportStartUs) {
+      visibleSpans.add(span);
+    }
+    if (span.startUs < viewportStartUs - maxSpanDuration) {
+      break;
     }
   }
   for (int i = idx; i < spans.length; i++) {
@@ -62,15 +67,39 @@ List<TraceSpan> _getCulledSpans(
 }
 
 /// An imperative canvas widget drawing the Main Isolate flame chart spans.
+class HitGrid {
+  final int width;
+  final int height;
+  final List<TraceSpan?> grid;
+
+  HitGrid(this.width, this.height)
+    : grid = List<TraceSpan?>.filled(width * height, null);
+
+  void setHit(int x, int y, TraceSpan span) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      grid[y * width + x] = span;
+    }
+  }
+
+  TraceSpan? getHit(int x, int y) {
+    if (x >= 0 && x < width && y >= 0 && y < height) {
+      return grid[y * width + x];
+    }
+    return null;
+  }
+}
+
 class TimelineCanvas extends Widget {
   final List<TraceSpan> spans;
   final double offsetX;
   final int offsetY;
   final double zoomLevel;
+  final int maxSpanDuration;
   final double? measureStartMs;
   final double? measureEndMs;
   final int? selectionStartUs;
   final int? selectionEndUs;
+  final void Function(HitGrid)? onHitGridUpdated;
 
   const TimelineCanvas({
     super.key,
@@ -78,6 +107,8 @@ class TimelineCanvas extends Widget {
     required this.offsetX,
     required this.offsetY,
     required this.zoomLevel,
+    required this.maxSpanDuration,
+    this.onHitGridUpdated,
     this.measureStartMs,
     this.measureEndMs,
     this.selectionStartUs,
@@ -126,6 +157,7 @@ class TimelineCanvasElement extends Element {
     }
 
     final borderStyle = const Style(foreground: Color(120, 120, 120));
+    final hitGrid = HitGrid(width, height);
 
     // Paint left/right borders
     for (var y = 0; y < height; y++) {
@@ -156,10 +188,11 @@ class TimelineCanvasElement extends Element {
 
     final viewportStartUs = w.offsetX;
     final viewportEndUs = w.offsetX + (width - 2) * w.zoomLevel;
-    final visibleSpans = _getCulledSpans(
+    final visibleSpans = getCulledSpans(
       w.spans,
       viewportStartUs,
       viewportEndUs,
+      w.maxSpanDuration,
     );
     final mainSpans = visibleSpans;
 
@@ -191,6 +224,7 @@ class TimelineCanvasElement extends Element {
         final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
         drawCell(x, y, '│', style.merge(Style(background: bg)));
         drawnCells.add(cellKey);
+        hitGrid.setHit(startCol, visualY, span);
         continue;
       }
 
@@ -213,6 +247,7 @@ class TimelineCanvasElement extends Element {
 
         final cov = _coverage(spanStartUs, spanEndUs, cellStart, cellEnd);
         if (cov > 0) {
+          hitGrid.setHit(col, visualY, span);
           String char;
           Style cellStyle = bgColStyle;
 
@@ -316,6 +351,10 @@ class TimelineCanvasElement extends Element {
           );
         }
       }
+    }
+
+    if (w.onHitGridUpdated != null) {
+      w.onHitGridUpdated!(hitGrid);
     }
   }
 }
