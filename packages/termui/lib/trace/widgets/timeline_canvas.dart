@@ -2,6 +2,7 @@ import "package:termui/termui_trace.dart";
 import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
 import 'dart:math';
+import 'package:termui/utils/bool_array.dart';
 
 void _safeSetCell(Buffer buffer, int x, int y, String char, Style style) {
   buffer.setAttributes(
@@ -90,6 +91,8 @@ class HitGrid {
 }
 
 class TimelineCanvas extends Widget {
+  static bool debugUseBoolArray = true;
+
   final List<TraceSpan> spans;
   final double offsetX;
   final int offsetY;
@@ -196,7 +199,12 @@ class TimelineCanvasElement extends Element {
     );
     final mainSpans = visibleSpans;
 
-    final Set<int> drawnCells = {};
+    final Set<int>? drawnCellsSet = TimelineCanvas.debugUseBoolArray
+        ? null
+        : {};
+    final BoolArray? drawnCellsArray = TimelineCanvas.debugUseBoolArray
+        ? BoolArray(width * height)
+        : null;
 
     for (final span in mainSpans) {
       final depth = span.depth;
@@ -218,12 +226,18 @@ class TimelineCanvasElement extends Element {
       if (spanStartUs == spanEndUs) {
         final x = startX + 1 + startCol;
         final cellKey = (x << 16) | y;
-        if (drawnCells.contains(cellKey)) continue;
+        if (TimelineCanvas.debugUseBoolArray) {
+          final idx = visualY * width + startCol;
+          if (drawnCellsArray![idx]) continue;
+          drawnCellsArray[idx] = true;
+        } else {
+          if (drawnCellsSet!.contains(cellKey)) continue;
+          drawnCellsSet.add(cellKey);
+        }
 
         final bgArgb = buffer.getBackground(x, y);
         final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
         drawCell(x, y, '│', style.merge(Style(background: bg)));
-        drawnCells.add(cellKey);
         hitGrid.setHit(startCol, visualY, span);
         continue;
       }
@@ -240,7 +254,14 @@ class TimelineCanvasElement extends Element {
       for (var col = startCol; col <= endCol; col++) {
         final x = startX + 1 + col;
         final cellKey = (x << 16) | y;
-        if (drawnCells.contains(cellKey)) continue;
+        if (TimelineCanvas.debugUseBoolArray) {
+          final idx = visualY * width + col;
+          if (drawnCellsArray![idx]) continue;
+          drawnCellsArray[idx] = true;
+        } else {
+          if (drawnCellsSet!.contains(cellKey)) continue;
+          drawnCellsSet.add(cellKey);
+        }
 
         final cellStart = w.offsetX + col * w.zoomLevel;
         final cellEnd = cellStart + w.zoomLevel;
@@ -260,7 +281,12 @@ class TimelineCanvasElement extends Element {
             } else {
               char = ' ';
             }
-            drawnCells.add(cellKey);
+            if (TimelineCanvas.debugUseBoolArray) {
+              final idx = visualY * width + col;
+              drawnCellsArray![idx] = true;
+            } else {
+              drawnCellsSet!.add(cellKey);
+            }
           } else {
             if (startCol == endCol) {
               char = cov <= 0.1 ? '│' : _getFractionalBlock(cov);
@@ -278,7 +304,12 @@ class TimelineCanvasElement extends Element {
               cellStyle = fallbackStyle;
             }
             if (char == '│' || char == '█') {
-              drawnCells.add(cellKey);
+              if (TimelineCanvas.debugUseBoolArray) {
+                final idx = visualY * width + col;
+                drawnCellsArray![idx] = true;
+              } else {
+                drawnCellsSet!.add(cellKey);
+              }
             }
           }
           drawCell(x, y, char, cellStyle);
