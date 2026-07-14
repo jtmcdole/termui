@@ -3,6 +3,52 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-13
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.7.4`](#termui---v074)
+ - [`termui_flutter` - `v0.6.6`](#termui_flutter---v066)
+ - [`termui_recorder` - `v0.5.4+7`](#termui_recorder---v0547)
+ - [`termui_test` - `v0.2.5+8`](#termui_test---v0258)
+ - [`termui_hotreload` - `v0.6.7+4`](#termui_hotreload---v0674)
+ - [`termui_pty` - `v0.3.4`](#termui_pty---v034)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.5.4+7`
+ - `termui_test` - `v0.2.5+8`
+ - `termui_hotreload` - `v0.6.7+4`
+ - `termui_pty` - `v0.3.4`
+
+---
+
+#### `termui` - `v0.7.4`
+
+ - **PERF**(termui): remove Map allocation from compositor pipeline.
+ - **PERF**(trace): optimize timeline canvas with BoolArray.
+ - **FEAT**(trace): add pulse animation to selected search matches.
+ - **FEAT**(termui_shared_examples): abstract platform save file capabilities.
+ - **FEAT**(termui): optimize Trace Viewer search and rendering pipeline.
+
+#### `termui_flutter` - `v0.6.6`
+
+ - **PERF**(termui_flutter): offload gzip decompression from main thread.
+ - **FIX**(test): revert default demo to glassCompositing and update test cleanup.
+ - **FEAT**(termui_flutter): add trace file decoding and platform hooks.
+ - **FEAT**(tui-player): implement pure termui asciicast player with drag-and-drop web support.
+
+
 ## 2026-07-11
 
 ### Changes

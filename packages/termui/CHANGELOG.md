@@ -1,3 +1,11 @@
+## 0.7.4
+
+ - **PERF**(termui): remove Map allocation from compositor pipeline.
+ - **PERF**(trace): optimize timeline canvas with BoolArray.
+ - **FEAT**(trace): add pulse animation to selected search matches.
+ - **FEAT**(termui_shared_examples): abstract platform save file capabilities.
+ - **FEAT**(termui): optimize Trace Viewer search and rendering pipeline.
+
 ## 0.7.3
 
  - **FEAT**(flutter): implement URL query parameter routing and sub-page deep linking.
