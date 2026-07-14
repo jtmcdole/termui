@@ -1,3 +1,10 @@
+## 0.6.6
+
+ - **PERF**(termui_flutter): offload gzip decompression from main thread.
+ - **FIX**(test): revert default demo to glassCompositing and update test cleanup.
+ - **FEAT**(termui_flutter): add trace file decoding and platform hooks.
+ - **FEAT**(tui-player): implement pure termui asciicast player with drag-and-drop web support.
+
 ## 0.6.5
 
  - **FEAT**(flutter): implement URL query parameter routing and sub-page deep linking.
