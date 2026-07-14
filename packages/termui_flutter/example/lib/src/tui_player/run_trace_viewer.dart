@@ -152,7 +152,7 @@ class TraceViewerViewModel {
   Future<void> refreshSavedTraces() async {
     final allKeys = await repository.listCasts();
     final traces = allKeys
-        .where((k) => k.endsWith('.json') || k.endsWith('.gz'))
+        .where((k) => k.endsWith('.json') || k.endsWith('.json.gz'))
         .toList();
     _savedTracesController.add(traces);
   }

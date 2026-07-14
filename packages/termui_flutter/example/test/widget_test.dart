@@ -116,5 +116,14 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     // Re-pump to let async parse operations and microtasks complete
     await tester.pump(const Duration(milliseconds: 100));
+
+    // Simulate dropping a second trace file with the same name
+    traceUploadedEvent.post(
+      playerEventBus,
+      UploadedTraceData('test_trace.json', mockBytes),
+    );
+
+    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(const Duration(milliseconds: 100));
   });
 }

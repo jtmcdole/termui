@@ -603,6 +603,27 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     }
   }
 
+  @override
+  void didUpdateWidget(TraceViewerApp oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.spans != oldWidget.spans ||
+        widget.minTs != oldWidget.minTs ||
+        widget.maxTs != oldWidget.maxTs) {
+      setState(() {
+        spans = widget.spans;
+        minTs = widget.minTs;
+        maxTs = widget.maxTs;
+        final duration = maxTs! - minTs!;
+        zoomLevel = duration > 0 ? duration / 80.0 : 1.0;
+        offsetX = minTs!.toDouble();
+        _undoStack.clear();
+        _redoStack.clear();
+        selectionStartUs = null;
+        selectionEndUs = null;
+      });
+    }
+  }
+
   Future<void> _loadTraceData() async {
     widget.fileSystem
         .file('debug.log')
