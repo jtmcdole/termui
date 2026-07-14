@@ -334,7 +334,10 @@ class SearchOverlayState extends State<SearchOverlay> {
               child: TextField(
                 controller: searchController,
                 focusNode: _focusNode,
-                style: const Style(foreground: Colors.white),
+                style: const Style(
+                  foreground: Colors.white,
+                  background: CharmColors.char,
+                ),
               ),
             ),
           ]),
