@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:archive/archive.dart';
+import 'package:example_flutter/src/tui_player/cast_parser.dart';
+import 'package:flutter/foundation.dart';
 import 'package:termui/termui.dart';
 import 'package:termui_pty/termui_pty.dart';
 import 'events.dart';
@@ -135,17 +136,7 @@ class AsciicastPlayerViewModel {
   Future<void> loadSavedCast(String filename) async {
     final bytes = await repository.loadBytes(filename);
     if (bytes != null) {
-      String raw;
-      try {
-        if (bytes case [0x1f, 0x8b, ...]) {
-          final decompressed = GZipDecoder().decodeBytes(bytes);
-          raw = utf8.decode(decompressed);
-        } else {
-          raw = utf8.decode(bytes);
-        }
-      } catch (e) {
-        raw = utf8.decode(bytes, allowMalformed: true);
-      }
+      final raw = await decompressCast(bytes, filename);
       await loadCastData(filename, raw);
     }
   }
@@ -155,17 +146,7 @@ class AsciicastPlayerViewModel {
     await repository.saveBytes(filename, bytes);
     await refreshSavedCasts();
 
-    String decoded;
-    try {
-      if (bytes case [0x1f, 0x8b, ...]) {
-        final decompressed = GZipDecoder().decodeBytes(bytes);
-        decoded = utf8.decode(decompressed);
-      } else {
-        decoded = utf8.decode(bytes);
-      }
-    } catch (e) {
-      decoded = utf8.decode(bytes, allowMalformed: true);
-    }
+    final decoded = await decompressCast(bytes, filename);
 
     await loadCastData(filename, decoded);
   }
