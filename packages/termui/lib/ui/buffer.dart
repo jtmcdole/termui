@@ -437,15 +437,13 @@ class Compositor {
       if (layers.isEmpty) return;
 
       // Stable sort in descending order (highest zIndex first)
-      final sortedLayers = List<LayeredBuffer>.from(layers);
-      final originalIndices = {
-        for (var i = 0; i < layers.length; i++) layers[i]: i,
-      };
-      sortedLayers.sort((a, b) {
-        final cmp = b.zIndex.compareTo(a.zIndex);
+      final indexedLayers = List.generate(layers.length, (i) => (i, layers[i]));
+      indexedLayers.sort((a, b) {
+        final cmp = b.$2.zIndex.compareTo(a.$2.zIndex);
         if (cmp != 0) return cmp;
-        return originalIndices[b]!.compareTo(originalIndices[a]!);
+        return b.$1.compareTo(a.$1);
       });
+      final sortedLayers = List.generate(indexedLayers.length, (i) => indexedLayers[i].$2);
 
       _poolIndex = 0;
       _compositeRecursive(target, sortedLayers, 0);
