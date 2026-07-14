@@ -443,7 +443,10 @@ class Compositor {
         if (cmp != 0) return cmp;
         return b.$1.compareTo(a.$1);
       });
-      final sortedLayers = List.generate(indexedLayers.length, (i) => indexedLayers[i].$2);
+      final sortedLayers = List.generate(
+        indexedLayers.length,
+        (i) => indexedLayers[i].$2,
+      );
 
       _poolIndex = 0;
       _compositeRecursive(target, sortedLayers, 0);
