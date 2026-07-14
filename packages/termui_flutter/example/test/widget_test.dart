@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:example_flutter/main.dart';
 import 'package:example_flutter/src/events.dart';
@@ -8,11 +9,19 @@ import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_shared_examples/widget_book/events.dart';
 
 void main() {
-  testWidgets('App renders Asciicast Player by default', (
+  testWidgets('App renders Glass Compositing by default', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(const MainApp());
     expect(find.byType(Terminal), findsOneWidget);
+
+    // Unmount MainApp to trigger dispose() which injects Ctrl+C and cleans up timers
+    await tester.pumpWidget(const SizedBox());
+
+    // Yield to the real event loop to allow the unawaited _runTUI Future to finish its finally block
+    await tester.runAsync(() async {
+      await Future.delayed(const Duration(milliseconds: 100));
+    });
   });
 
   testWidgets(
