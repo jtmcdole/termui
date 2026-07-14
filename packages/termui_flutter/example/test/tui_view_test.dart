@@ -168,39 +168,27 @@ void main() {
     await tester.runAsync(() async {
       await tester.sendKeyEvent(LogicalKeyboardKey.f12);
 
-      // Poll for files up to 2 seconds
-      for (var i = 0; i < 20; i++) {
-        final files = fs.currentDirectory.listSync();
-        foundScreenshot = false;
-        foundAtlas = false;
-        foundCoordinates = false;
-
-        for (final f in files) {
-          final name = fs.path.basename(f.path);
-          if (name.startsWith('screenshot_') && name.endsWith('.png')) {
-            foundScreenshot = true;
-          } else if (name.startsWith('atlas_') && name.endsWith('.png')) {
-            foundAtlas = true;
-          } else if (name.startsWith('coordinates_') &&
-              name.endsWith('.json')) {
-            foundCoordinates = true;
-          }
-        }
-
-        if (foundScreenshot && foundAtlas && foundCoordinates) {
+      // Wait for the SnackBar to appear, indicating that all real file I/O operations have successfully awaited and closed their file handles.
+      for (var i = 0; i < 40; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        await tester.pump();
+        if (find.byType(SnackBar).evaluate().isNotEmpty) {
           break;
         }
-        await Future.delayed(const Duration(milliseconds: 100));
       }
     });
 
-    // Clean up files
     final files = fs.currentDirectory.listSync();
     for (final f in files) {
       final name = fs.path.basename(f.path);
-      if ((name.startsWith('screenshot_') && name.endsWith('.png')) ||
-          (name.startsWith('atlas_') && name.endsWith('.png')) ||
-          (name.startsWith('coordinates_') && name.endsWith('.json'))) {
+      if (name.startsWith('screenshot_') && name.endsWith('.png')) {
+        foundScreenshot = true;
+        f.deleteSync();
+      } else if (name.startsWith('atlas_') && name.endsWith('.png')) {
+        foundAtlas = true;
+        f.deleteSync();
+      } else if (name.startsWith('coordinates_') && name.endsWith('.json')) {
+        foundCoordinates = true;
         f.deleteSync();
       }
     }
