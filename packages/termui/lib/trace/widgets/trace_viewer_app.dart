@@ -7,7 +7,6 @@ import "package:termui/termui.dart";
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
-
 import 'dart:math';
 import 'package:termui/ui/event.dart' as evt;
 import 'package:termui/trace/trace_logger.dart';
@@ -67,6 +66,9 @@ class _TraceViewerAppState extends State<TraceViewerApp>
   late double zoomLevel;
   int offsetY = 0;
   TraceSpan? hoveredSpan;
+  TraceSpan? _animatedSpan;
+  double _animationProgress = 0.0;
+  Timer? _animationTimer;
   TimeDisplayMode timeDisplayMode = TimeDisplayMode.formatted;
   int? selectionStartUs;
   int? selectionEndUs;
@@ -509,6 +511,28 @@ class _TraceViewerAppState extends State<TraceViewerApp>
           final centerCol = (w - 2) / 2.0;
           offsetX = span.startUs.toDouble() - centerCol * zoomLevel;
           hoveredSpan = span;
+          _animatedSpan = span;
+          _animationProgress = 1.0;
+        });
+
+        _animationTimer?.cancel();
+        _animationTimer = Timer.periodic(const Duration(milliseconds: 30), (
+          timer,
+        ) {
+          if (!mounted) {
+            timer.cancel();
+            return;
+          }
+          setState(() {
+            _animationProgress -= 0.033; // ~1 second total duration (30 ticks)
+            if (_animationProgress <= 0) {
+              _animationProgress = 0;
+              _animatedSpan = null;
+              timer.cancel();
+            }
+          });
+          // Ensure we repaint on tick
+          globalSceneManager.render();
         });
       },
       onClose: handleClose,
@@ -555,6 +579,12 @@ class _TraceViewerAppState extends State<TraceViewerApp>
 
   @override
   bool get focused => true;
+
+  @override
+  void dispose() {
+    _animationTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -1171,6 +1201,8 @@ class _TraceViewerAppState extends State<TraceViewerApp>
           measureEndMs: measureEndMs,
           selectionStartUs: selectionStartUs,
           selectionEndUs: selectionEndUs,
+          animatedSpan: _animatedSpan,
+          animationProgress: _animationProgress,
           onHitGridUpdated: (grid) {
             _latestHitGrid = grid;
           },

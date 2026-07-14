@@ -102,6 +102,8 @@ class TimelineCanvas extends Widget {
   final double? measureEndMs;
   final int? selectionStartUs;
   final int? selectionEndUs;
+  final TraceSpan? animatedSpan;
+  final double? animationProgress;
   final void Function(HitGrid)? onHitGridUpdated;
 
   const TimelineCanvas({
@@ -116,6 +118,8 @@ class TimelineCanvas extends Widget {
     this.measureEndMs,
     this.selectionStartUs,
     this.selectionEndUs,
+    this.animatedSpan,
+    this.animationProgress,
   });
 
   @override
@@ -221,7 +225,19 @@ class TimelineCanvasElement extends Element {
       final startCol = startColF.floor().clamp(0, width - 3);
       final endCol = endColF.floor().clamp(0, width - 3);
 
-      final style = getCategoryStyle(span.category, span.name);
+      var style = getCategoryStyle(span.category, span.name);
+
+      if (w.animatedSpan == span &&
+          w.animationProgress != null &&
+          w.animationProgress! > 0) {
+        final flashIntensity = (sin(w.animationProgress! * pi * 6).abs());
+        if (flashIntensity > 0.5) {
+          style = const Style(
+            foreground: Colors.black,
+            background: Colors.yellow,
+          );
+        }
+      }
 
       if (spanStartUs == spanEndUs) {
         final x = startX + 1 + startCol;
