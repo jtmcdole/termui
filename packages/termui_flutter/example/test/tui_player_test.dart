@@ -9,7 +9,7 @@ void main() {
   });
 
   group('TUI Player Integration Tests', () {
-    test('TUI Player starts, renders frame, and exits on Escape key', () async {
+    test('TUI Player starts, renders frame, and exits on Ctrl+C', () async {
       final backend = MockTerminalBackend();
       final terminal = Terminal(backend);
 
@@ -29,8 +29,8 @@ void main() {
         );
         expect(allWrites.contains('Space'), isTrue); // Hint text
 
-        // Inject Escape key to terminate the PromptRunner loop
-        backend.pushBytes('\x1b'.codeUnits);
+        // Inject Ctrl+C to terminate the PromptRunner loop
+        backend.pushBytes('\x03'.codeUnits);
         await Future.delayed(const Duration(milliseconds: 100));
       } finally {
         terminal.dispose();

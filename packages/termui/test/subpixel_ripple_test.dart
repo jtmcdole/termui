@@ -27,46 +27,54 @@ void main() {
       expect(manager.hasActiveRipples, isFalse);
     });
 
-    test(
-      'paint method writes sub-pixel circle characters onto buffer',
-      () async {
-        final buffer = Buffer(40, 20);
-        manager.addRipple(const Point<int>(20, 10), durationMs: 100);
+    test('paint method writes sub-pixel circle characters onto buffer', () {
+      final buffer = Buffer(40, 20);
+      final now = DateTime.now().millisecondsSinceEpoch;
 
-        // Verify buffer is empty
-        var bufferModified = false;
-        for (var y = 0; y < buffer.height; y++) {
-          for (var x = 0; x < buffer.width; x++) {
-            final char = buffer.getCharacter(x, y);
-            if (char != ' ') {
-              bufferModified = true;
-            }
+      // Inject a ripple that is exactly 50ms into its 100ms duration
+      manager.addRipple(
+        const Point<int>(20, 10),
+        durationMs: 100,
+        startTime: now - 50,
+      );
+
+      // Verify buffer is empty
+      var bufferModified = false;
+      for (var y = 0; y < buffer.height; y++) {
+        for (var x = 0; x < buffer.width; x++) {
+          final char = buffer.getCharacter(x, y);
+          if (char != ' ') {
+            bufferModified = true;
           }
         }
-        expect(bufferModified, isFalse);
+      }
+      expect(bufferModified, isFalse);
 
-        // Let some time pass so the ripple expands beyond 0 radius
-        await Future.delayed(const Duration(milliseconds: 50));
-        manager.paint(buffer);
+      // Paint the buffer, it will calculate elapsed as 50ms (or slightly more)
+      manager.paint(buffer);
 
-        // Verify the buffer now contains Braille character coordinates
-        for (var y = 0; y < buffer.height; y++) {
-          for (var x = 0; x < buffer.width; x++) {
-            final char = buffer.getCharacter(x, y);
-            if (char.isNotEmpty && char.codeUnitAt(0) >= 0x2800) {
-              bufferModified = true;
-            }
+      // Verify the buffer now contains Braille character coordinates
+      for (var y = 0; y < buffer.height; y++) {
+        for (var x = 0; x < buffer.width; x++) {
+          final char = buffer.getCharacter(x, y);
+          if (char.isNotEmpty && char.codeUnitAt(0) >= 0x2800) {
+            bufferModified = true;
           }
         }
-        expect(bufferModified, isTrue);
-      },
-    );
+      }
+      expect(bufferModified, isTrue);
+    });
 
     test(
       'SubpixelRippleWidget paints correctly through declarative element',
-      () async {
+      () {
         final manager = SubpixelRippleManager();
-        manager.addRipple(const Point<int>(15, 8), durationMs: 100);
+        final now = DateTime.now().millisecondsSinceEpoch;
+        manager.addRipple(
+          const Point<int>(15, 8),
+          durationMs: 100,
+          startTime: now - 50,
+        );
 
         final widget = SubpixelRippleWidget(manager: manager);
         final element = widget.createElement() as SubpixelRippleWidgetElement;
@@ -75,9 +83,6 @@ void main() {
         final size = element.layout(BoxConstraints.tight(const Size(40, 20)));
         expect(size.width, equals(40));
         expect(size.height, equals(20));
-
-        // Let some time pass to let ripple expand
-        await Future.delayed(const Duration(milliseconds: 50));
 
         final buffer = Buffer(40, 20);
         element.paint(buffer, Offset.zero);
