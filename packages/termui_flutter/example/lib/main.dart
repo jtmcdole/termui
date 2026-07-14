@@ -133,7 +133,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
       'pty' => TuiDemo.ptyGlassCompositing,
       'player' => TuiDemo.asciicastPlayer,
       'trace' => TuiDemo.traceViewer,
-      _ => TuiDemo.asciicastPlayer,
+      _ => TuiDemo.glassCompositing,
     };
     initialPage = query['page'];
 
