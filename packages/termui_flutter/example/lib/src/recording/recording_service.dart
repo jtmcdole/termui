@@ -4,7 +4,7 @@ import 'package:termui/perf/tracer.dart';
 import 'package:termui/perf/fs_locator.dart';
 import '../repository/repository.dart';
 import 'package:termui_flutter/termui_flutter.dart';
-import '../gzip_compress/gzip_compress.dart';
+import 'package:termui/utils/gzip_json.dart';
 
 class RecordingService {
   final SavedCastsRepository _repo;
