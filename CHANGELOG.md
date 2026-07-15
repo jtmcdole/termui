@@ -3,6 +3,52 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-15
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.7.5`](#termui---v075)
+ - [`termui_flutter` - `v0.6.7`](#termui_flutter---v067)
+ - [`termui_pty` - `v0.3.5`](#termui_pty---v035)
+ - [`termui_recorder` - `v0.5.5+8`](#termui_recorder---v0558)
+ - [`termui_test` - `v0.2.6+9`](#termui_test---v0269)
+ - [`termui_hotreload` - `v0.6.8+5`](#termui_hotreload---v0685)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.5.5+8`
+ - `termui_test` - `v0.2.6+9`
+ - `termui_hotreload` - `v0.6.8+5`
+
+---
+
+#### `termui` - `v0.7.5`
+
+ - **REFACTOR**(core): extract gzip_json compression logic into termui utilities.
+ - **FIX**: ensure trace viewer updates on new drops and filters asciicast files.
+ - **FEAT**: implement F7 and F8 keyboard shortcuts to record trace and asciicast in example app.
+
+#### `termui_flutter` - `v0.6.7`
+
+ - **REFACTOR**(core): extract gzip_json compression logic into termui utilities.
+ - **FIX**: ensure trace viewer updates on new drops and filters asciicast files.
+ - **FEAT**: implement F7 and F8 keyboard shortcuts to record trace and asciicast in example app.
+
+#### `termui_pty` - `v0.3.5`
+
+ - **FIX**(termui_pty): fix multi-byte emoji parsing in virtual terminal playback.
+
+
 ## 2026-07-13
 
 ### Changes
