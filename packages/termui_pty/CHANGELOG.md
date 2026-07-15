@@ -1,3 +1,7 @@
+## 0.3.5
+
+ - **FIX**(termui_pty): fix multi-byte emoji parsing in virtual terminal playback.
+
 ## 0.3.4
 
  - Update a dependency to the latest release.

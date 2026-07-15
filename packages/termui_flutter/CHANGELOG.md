@@ -1,3 +1,9 @@
+## 0.6.7
+
+ - **REFACTOR**(core): extract gzip_json compression logic into termui utilities.
+ - **FIX**: ensure trace viewer updates on new drops and filters asciicast files.
+ - **FEAT**: implement F7 and F8 keyboard shortcuts to record trace and asciicast in example app.
+
 ## 0.6.6
 
  - **PERF**(termui_flutter): offload gzip decompression from main thread.
