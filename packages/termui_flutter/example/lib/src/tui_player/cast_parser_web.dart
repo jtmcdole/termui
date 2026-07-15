@@ -3,15 +3,7 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
-@JS('DecompressionStream')
-extension type DecompressionStream._(JSObject _) implements JSObject {
-  external DecompressionStream(String format);
-}
-
-extension on web.ReadableStream {
-  @JS('pipeThrough')
-  external web.ReadableStream pipeThroughGzip(DecompressionStream stream);
-}
+import 'package:termui/utils/gzip_json.dart';
 
 Future<String> decompressCast(Uint8List bytes, String filename) async {
   final jsBytes = bytes.toJS;
@@ -27,11 +19,10 @@ Future<String> decompressCast(Uint8List bytes, String filename) async {
   }
 
   if (isGzip) {
-    final decompressionStream = DecompressionStream('gzip');
-    stream = stream.pipeThroughGzip(decompressionStream);
+    return await decompressString(bytes);
+  } else {
+    final responseFinal = web.Response(stream);
+    final jsString = await responseFinal.text().toDart;
+    return jsString.toDart;
   }
-
-  final responseFinal = web.Response(stream);
-  final jsString = await responseFinal.text().toDart;
-  return jsString.toDart;
 }

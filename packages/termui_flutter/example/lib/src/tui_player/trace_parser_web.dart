@@ -6,20 +6,12 @@ import 'package:web/web.dart' as web;
 import 'package:termui/trace/trace_logger.dart';
 import 'package:termui/trace/models/trace_models.dart';
 
-@JS('DecompressionStream')
-extension type DecompressionStream._(JSObject _) implements JSObject {
-  external DecompressionStream(String format);
-}
+import 'package:termui/utils/gzip_json.dart';
 
 @JS('TextDecoder')
 extension type TextDecoder._(JSObject _) implements JSObject {
   external TextDecoder(String encoding);
   external String decode(JSAny? buffer);
-}
-
-extension on web.ReadableStream {
-  @JS('pipeThrough')
-  external web.ReadableStream pipeThroughGzip(DecompressionStream stream);
 }
 
 final watch = Stopwatch();
@@ -31,24 +23,19 @@ Future<List<TraceEvent>> parseTraceEvents(
     ..reset()
     ..start();
 
-  // 1. Create a stream from compressed array buffer
-  final jsBytes = bytes.toJS;
-  final responseInitial = web.Response(jsBytes);
-  var stream = responseInitial.body;
-  if (stream == null) throw StateError('No body in Response');
-
-  // 2. Pipe it through gzip DecompressionStream if needed
+  // 1. Decompress if needed
   if (filename.endsWith('.gz')) {
-    final decompressionStream = DecompressionStream('gzip');
-    stream = stream.pipeThroughGzip(decompressionStream);
+    bytes = await decompressBytes(bytes);
   }
 
-  // 3. Parse JSON natively off the main thread!
+  // 2. Parse JSON natively off the main thread!
   TraceLogger.info(
     'trace',
     'Waiting for native JS response.json() pipeline...',
   );
-  final responseFinal = web.Response(stream);
+
+  final jsBytes = bytes.toJS;
+  final responseFinal = web.Response(jsBytes);
   final jsAny = await responseFinal.json().toDart;
   TraceLogger.info('trace', 'Native JSON parsed in ${watch.elapsed}');
 

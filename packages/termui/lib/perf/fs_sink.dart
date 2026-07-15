@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:file/file.dart';
+import '../utils/gzip_json.dart';
 import 'tracer.dart';
 import 'tracer_sink.dart';
 
@@ -74,6 +75,7 @@ class FileSystemSink implements TracerSink {
   Future<void> close() async {
     _buffer.write('\n]\n');
     final bytes = utf8.encode(_buffer.toString());
-    _file.writeAsBytesSync(bytes);
+    final compressed = await compressBytes(bytes);
+    _file.writeAsBytesSync(compressed);
   }
 }
