@@ -1,4 +1,5 @@
 import 'package:termui/termui.dart';
+import 'package:characters/characters.dart';
 import 'ansi_parser.dart';
 
 /// A virtual terminal that maintains a screen buffer and cursor state,
@@ -126,8 +127,7 @@ class VirtualTerminal implements TerminalHandler {
 
   @override
   void printText(String text) {
-    for (var i = 0; i < text.length; i++) {
-      final char = text[i];
+    for (final char in text.characters) {
       if (cursorX >= width) {
         cursorX = 0;
         cursorY++;
@@ -158,15 +158,43 @@ class VirtualTerminal implements TerminalHandler {
         fgArg = defaultForeground!.argb;
       }
 
-      _buffer.setAttributes(
-        cursorX,
-        cursorY,
-        char: char,
-        fg: fgArg,
-        bg: bgArg,
-        modifiers: modArg,
-      );
-      cursorX++;
+      final isWide = isWideGrapheme(char);
+      if (isWide && cursorX == width - 1) {
+        // Can't fit wide character in the last column, write a space instead
+        _buffer.setAttributes(
+          cursorX,
+          cursorY,
+          char: ' ',
+          fg: fgArg,
+          bg: bgArg,
+          modifiers: modArg,
+        );
+        cursorX++;
+      } else {
+        _buffer.setAttributes(
+          cursorX,
+          cursorY,
+          char: char,
+          fg: fgArg,
+          bg: bgArg,
+          modifiers: modArg,
+        );
+        if (isWide) {
+          if (cursorX + 1 < width) {
+            _buffer.setAttributes(
+              cursorX + 1,
+              cursorY,
+              char: '',
+              fg: fgArg,
+              bg: bgArg,
+              modifiers: modArg,
+            );
+          }
+          cursorX += 2;
+        } else {
+          cursorX++;
+        }
+      }
     }
   }
 
