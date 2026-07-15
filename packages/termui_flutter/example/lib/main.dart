@@ -18,6 +18,10 @@ import 'src/tui_player/run_tui_player.dart';
 import 'src/tui_player/run_trace_viewer.dart';
 import 'src/tui_player/file_upload_zone.dart';
 import 'src/events.dart';
+import 'src/recording/recording_service.dart';
+import 'src/recording/recording_view_model.dart';
+import 'src/repository/repository.dart';
+import 'package:termui/perf/tracer.dart';
 
 enum TuiDemo {
   widgetBook('Widget Book', 'widgetbook'),
@@ -52,6 +56,7 @@ void _log(String message) {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Tracer.initialize();
   if (!kIsWeb) {
     try {
       final file = File('tui_diagnostics.log');
@@ -120,9 +125,33 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
   Uint8List? _initialTraceBytes;
   String? _initialTraceFilename;
 
+  late final RecordingViewModel _recordingViewModel;
+
+  bool _handleGlobalKey(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (event.logicalKey == LogicalKeyboardKey.f7) {
+        _recordingViewModel.toggleTrace();
+        return true;
+      }
+      if (event.logicalKey == LogicalKeyboardKey.f8) {
+        _recordingViewModel.toggleAsciicast(_terminal);
+        return true;
+      }
+    }
+    return false;
+  }
+
   @override
   void initState() {
     super.initState();
+    _recordingViewModel = RecordingViewModel(
+      RecordingService(SavedCastsRepository()),
+      onLog: _log,
+    );
+    _recordingViewModel.addListener(() {
+      if (mounted) setState(() {});
+    });
+    HardwareKeyboard.instance.addHandler(_handleGlobalKey);
     _log('main.dart: initState() started');
     _terminal = FlutterTerminal();
 
@@ -212,6 +241,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleGlobalKey);
     _pageChangedSub?.cancel();
     _urlChangesSub?.cancel();
     _uploadRequestedSub?.cancel();
@@ -450,7 +480,14 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                     'Noto Sans Braille',
                   ],
                   onRun: (terminal, drawFrame) async {
-                    _runTUI(drawFrame);
+                    void wrappedDrawFrame(Buffer buf) {
+                      if (_recordingViewModel.asciicastRecorder != null) {
+                        _recordingViewModel.asciicastRecorder!.recordFrame(buf);
+                      }
+                      drawFrame(buf);
+                    }
+
+                    _runTUI(wrappedDrawFrame);
                   },
                 ),
               ),
@@ -474,6 +511,51 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
               ),
             ),
           ),
+          if (_recordingViewModel.isRecordingTrace ||
+              _recordingViewModel.isRecordingAsciicast)
+            Positioned(
+              top: 16.0,
+              left: 16.0,
+              child: Material(
+                color: Colors.transparent,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12.0,
+                    vertical: 8.0,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withAlpha(150),
+                    borderRadius: BorderRadius.circular(8.0),
+                    border: Border.all(color: Colors.redAccent.withAlpha(100)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 12,
+                        height: 12,
+                        decoration: const BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 8.0),
+                      Text(
+                        _recordingViewModel.isRecordingTrace
+                            ? 'Recording Trace [F7]'
+                            : 'Recording Asciicast [F8]',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: 'MesloLGS NF',
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
