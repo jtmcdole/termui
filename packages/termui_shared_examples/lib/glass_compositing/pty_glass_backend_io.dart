@@ -10,14 +10,10 @@ class PtyBackend {
   /// Starts the process and returns a [PseudoTerminalView].
   Widget buildView(FocusNode focusNode) {
     _pty = PseudoTerminal.start(
-      //      Platform.isWindows ? 'pwsh.exe' : '/opt/homebrew/bin/btop',
-      //      Platform.isWindows
-      //          ? ['-C', 'ping 127.0.0.1 -t']
-      //          : [], // Empty array for Mac/Linux
-      Platform.isWindows ? 'pwsh.exe' : 'zsh',
+      Platform.isWindows ? 'pwsh.exe' : '/opt/homebrew/bin/btop',
       Platform.isWindows
           ? ['-C', 'ping 127.0.0.1 -t']
-          : ['-i', '-c', '/opt/homebrew/bin/btop'],
+          : [], // Empty array for Mac/Linux
       environment: {...Platform.environment},
     );
     _pty!.resize(100, 30); // 100 columns, 30 rows
