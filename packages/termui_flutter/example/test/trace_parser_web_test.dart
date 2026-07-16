@@ -1,4 +1,6 @@
 @TestOn('chrome')
+library;
+
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
@@ -26,6 +28,7 @@ void main() {
     watch.stop();
 
     expect(parsed.length, 66000);
+    // ignore: avoid_print
     print('Parsed in \${watch.elapsedMilliseconds}ms');
     expect(
       watch.elapsedMilliseconds < 5000,
