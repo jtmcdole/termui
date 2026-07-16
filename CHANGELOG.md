@@ -15,6 +15,27 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - [`termui_flutter` - `v0.6.9`](#termui_flutter---v069)
+
+---
+
+#### `termui_flutter` - `v0.6.9`
+
+ - **REFACTOR**(flutter): extract TerminalService for MVVM screenshot handling.
+
+
+## 2026-07-15
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`termui` - `v0.7.6`](#termui---v076)
  - [`termui_flutter` - `v0.6.8`](#termui_flutter---v068)
  - [`termui_recorder` - `v0.5.6+9`](#termui_recorder---v0569)
