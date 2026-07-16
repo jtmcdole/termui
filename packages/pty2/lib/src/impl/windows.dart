@@ -34,11 +34,23 @@ class PtyCoreWindows implements PtyCore, Finalizable {
     return using<PtyCoreWindows>((arena) {
       // build command line
       final commandBuffer = StringBuffer();
-      commandBuffer.write(executable);
+      if (executable.contains(' ') && !executable.startsWith('"')) {
+        commandBuffer.write('"');
+        commandBuffer.write(executable);
+        commandBuffer.write('"');
+      } else {
+        commandBuffer.write(executable);
+      }
       if (arguments.isNotEmpty) {
         for (var argument in arguments) {
           commandBuffer.write(' ');
-          commandBuffer.write(argument);
+          if (argument.contains(' ') && !argument.startsWith('"')) {
+            commandBuffer.write('"');
+            commandBuffer.write(argument);
+            commandBuffer.write('"');
+          } else {
+            commandBuffer.write(argument);
+          }
         }
       }
 
@@ -69,7 +81,7 @@ class PtyCoreWindows implements PtyCore, Finalizable {
 
       var useConPTY = true;
       try {
-        if (!stdin.hasTerminal || forceLegacyForTesting) {
+        if (forceLegacyForTesting) {
           useConPTY = false;
         }
       } catch (_) {

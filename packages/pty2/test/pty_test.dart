@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:pty2/pty2.dart';
@@ -12,13 +13,10 @@ void main() {
   });
 
   test('Can read exit code', () async {
-    final pty = PseudoTerminal.start(_getShell(), []);
-
-    if (Platform.isWindows) {
-      pty.write('exit 3\r\n');
-    } else {
-      pty.write('exit 3\r');
-    }
+    final pty = PseudoTerminal.start(_getShell(), [
+      Platform.isWindows ? '/c' : '-c',
+      'exit 3',
+    ]);
 
     expect(
       await pty.exitCode,
@@ -28,6 +26,28 @@ void main() {
 
   test('echo test', () async {
     final pty = PseudoTerminal.start(_getShell(), []);
+    final output = <String>[];
+    final readyCompleter = Completer<void>();
+    final doneCompleter = Completer<void>();
+
+    final subscription = pty.out.listen(
+      (chunk) {
+        output.add(chunk);
+        if (Platform.isWindows && !readyCompleter.isCompleted) {
+          // ConPTY / cmd.exe banner/prompt has arrived on stdout; conhost.exe
+          // has finished its initial screen reset (\x1B[2J) and is ready for input.
+          readyCompleter.complete();
+        }
+      },
+      onDone: () {
+        if (!readyCompleter.isCompleted) readyCompleter.complete();
+        if (!doneCompleter.isCompleted) doneCompleter.complete();
+      },
+    );
+
+    if (Platform.isWindows) {
+      await readyCompleter.future;
+    }
 
     if (Platform.isWindows) {
       pty.write('echo hello world\r\n');
@@ -37,12 +57,11 @@ void main() {
       pty.write('exit 0\r');
     }
 
-    final output = await pty.out.toList();
-    final fullOutput = output.join('');
-
-    expect(fullOutput, contains('hello world'));
-
+    await doneCompleter.future;
     await pty.exitCode;
+    await subscription.cancel();
+
+    expect(output.join(''), contains('hello world'));
   });
 
   test('Resize terminal', () async {
