@@ -45,12 +45,6 @@ abstract class PseudoTerminal {
         environment: environment,
       );
     } else {
-      //add '-l' as argument for the shell to perform a login
-      arguments = List<String>.generate(
-        arguments.length + 1,
-        (index) => index == 0 ? '-l' : arguments[index - 1],
-      );
-
       core = PtyCoreUnix.start(
         executable,
         arguments,
