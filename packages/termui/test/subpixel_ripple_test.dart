@@ -1,4 +1,6 @@
 import 'dart:math';
+import 'package:clock/clock.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:termui/termui.dart';
 import 'package:test/test.dart';
 
@@ -18,18 +20,20 @@ void main() {
       expect(manager.ripples.first.center, equals(const Point<int>(5, 5)));
     });
 
-    test('updateRipples removes expired ripples', () async {
-      manager.addRipple(const Point<int>(10, 10), durationMs: 10);
-      expect(manager.hasActiveRipples, isTrue);
+    test('updateRipples removes expired ripples', () {
+      fakeAsync((async) {
+        manager.addRipple(const Point<int>(10, 10), durationMs: 10);
+        expect(manager.hasActiveRipples, isTrue);
 
-      await Future.delayed(const Duration(milliseconds: 20));
-      manager.updateRipples();
-      expect(manager.hasActiveRipples, isFalse);
+        async.elapse(const Duration(milliseconds: 20));
+        manager.updateRipples();
+        expect(manager.hasActiveRipples, isFalse);
+      });
     });
 
     test('paint method writes sub-pixel circle characters onto buffer', () {
       final buffer = Buffer(40, 20);
-      final now = DateTime.now().millisecondsSinceEpoch;
+      final now = clock.now().millisecondsSinceEpoch;
 
       // Inject a ripple that is exactly 50ms into its 100ms duration
       manager.addRipple(
@@ -69,7 +73,7 @@ void main() {
       'SubpixelRippleWidget paints correctly through declarative element',
       () {
         final manager = SubpixelRippleManager();
-        final now = DateTime.now().millisecondsSinceEpoch;
+        final now = clock.now().millisecondsSinceEpoch;
         manager.addRipple(
           const Point<int>(15, 8),
           durationMs: 100,

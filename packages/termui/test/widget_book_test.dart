@@ -1,3 +1,4 @@
+import 'package:fake_async/fake_async.dart';
 import 'dart:async';
 import 'package:termui_shared_examples/widget_book/layout_state.dart';
 import 'package:termui_shared_examples/widget_book/modal_dialog.dart';
@@ -46,107 +47,110 @@ void main() {
 
   group('Widget Book Runner Mouse Event Tests', () {
     test('Sidebar navigation clicks change page correctly', () async {
-      final backend = MockTerminalBackend();
-      final terminal = Terminal(backend);
-      final platform = TestWidgetBookPlatform();
+      await FakeAsync().run((async) {
+        final backend = MockTerminalBackend();
+        final terminal = Terminal(backend);
+        final platform = TestWidgetBookPlatform();
 
-      // Run widget book runner
-      final bookFuture = runWidgetBookShared(terminal, platform);
+        // Run widget book runner
+        final bookFuture = runWidgetBookShared(terminal, platform);
 
-      // Wait for initialization
-      await Future.delayed(const Duration(milliseconds: 50));
+        // Wait for initialization
+        async.elapse(const Duration(milliseconds: 50));
 
-      // Clear written data from initial frame renders
-      backend.writes.clear();
+        // Clear written data from initial frame renders
+        backend.writes.clear();
 
-      // Click on the second sidebar item (Data Displays, index 1, 1-indexed row 4)
-      // SGR mouse press sequence: \x1b[<0;5;4M
-      backend.pushBytes('\x1b[<0;5;4M'.codeUnits);
+        // Click on the second sidebar item (Data Displays, index 1, 1-indexed row 4)
+        // SGR mouse press sequence: \x1b[<0;5;4M
+        backend.pushBytes('\x1b[<0;5;4M'.codeUnits);
 
-      // Wait for event processing
-      await Future.delayed(const Duration(milliseconds: 50));
+        // Wait for event processing
+        async.elapse(const Duration(milliseconds: 50));
 
-      // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
-      expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
+        // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
+        expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
 
-      terminal.dispose();
-      await bookFuture;
+        terminal.dispose();
+        async.flushMicrotasks();
+        return bookFuture;
+      });
     });
 
     test('Sidebar navigation hover highlights and click changes page', () async {
-      final backend = MockTerminalBackend();
-      final terminal = Terminal(backend);
-      final platform = TestWidgetBookPlatform();
+      await FakeAsync().run((async) {
+        final backend = MockTerminalBackend();
+        final terminal = Terminal(backend);
+        final platform = TestWidgetBookPlatform();
 
-      // Run widget book runner
-      final bookFuture = runWidgetBookShared(terminal, platform);
+        // Run widget book runner
+        final bookFuture = runWidgetBookShared(terminal, platform);
 
-      // Wait for initialization
-      await Future.delayed(const Duration(milliseconds: 50));
+        // Wait for initialization
+        async.elapse(const Duration(milliseconds: 50));
 
-      // Clear written data from initial frame renders
-      backend.writes.clear();
+        // Clear written data from initial frame renders
+        backend.writes.clear();
 
-      // Move/hover mouse over the second sidebar item (Data Displays, index 1, 1-indexed row 4)
-      // SGR mouse move sequence: \x1b[<35;5;4M
-      backend.pushBytes('\x1b[<35;5;4M'.codeUnits);
+        // Move/hover mouse over the second sidebar item (Data Displays, index 1, 1-indexed row 4)
+        // SGR mouse move sequence: \x1b[<35;5;4M
+        backend.pushBytes('\x1b[<35;5;4M'.codeUnits);
 
-      // Wait for event processing
-      await Future.delayed(const Duration(milliseconds: 50));
+        // Wait for event processing
+        async.elapse(const Duration(milliseconds: 50));
 
-      // Verify that index 1 'Data Displays' is hovered and highlighted with CharmColors.charple background
-      final activeBuffer = platform.lastBuffer;
-      expect(activeBuffer, isNotNull);
-      expect(activeBuffer!.getCharacter(0, 3), equals('D'));
-      expect(
-        Color.argb(activeBuffer.getBackground(0, 3)),
-        equals(CharmColors.charple),
-      );
+        // Verify that index 1 'Data Displays' is hovered and highlighted with CharmColors.charple background
+        final activeBuffer = platform.lastBuffer;
+        expect(activeBuffer, isNotNull);
+        expect(activeBuffer!.getCharacter(0, 3), equals('D'));
+        expect(
+          Color.argb(activeBuffer.getBackground(0, 3)),
+          equals(CharmColors.charple),
+        );
 
-      // Click on the second sidebar item (Data Displays)
-      backend.pushBytes('\x1b[<0;5;4M'.codeUnits);
-      backend.pushBytes('\x1b[<0;5;4m'.codeUnits);
+        // Click on the second sidebar item (Data Displays)
+        backend.pushBytes('\x1b[<0;5;4M'.codeUnits);
+        backend.pushBytes('\x1b[<0;5;4m'.codeUnits);
 
-      // Wait for click event processing
-      await Future.delayed(const Duration(milliseconds: 50));
+        // Wait for click event processing
+        async.elapse(const Duration(milliseconds: 50));
 
-      // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
-      expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
+        // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
+        expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
 
-      terminal.dispose();
-      await bookFuture;
+        terminal.dispose();
+        async.flushMicrotasks();
+        return bookFuture;
+      });
     });
 
     test('Ctrl+C terminates widget book runner loop', () async {
       // 1. Test standard Ctrl+C parsed from byte stream
-      {
+      await FakeAsync().run((async) {
         final backend = MockTerminalBackend();
         final terminal = Terminal(backend);
         final platform = TestWidgetBookPlatform();
 
         final bookFuture = runWidgetBookShared(terminal, platform);
-        await Future.delayed(const Duration(milliseconds: 50));
+        async.elapse(const Duration(milliseconds: 50));
 
         // Inject Ctrl+C bytes (code 3)
         backend.pushBytes([3]);
 
-        await bookFuture.timeout(
-          const Duration(seconds: 2),
-          onTimeout: () => throw TimeoutException(
-            'Widget book did not exit on Ctrl+C bytes',
-          ),
-        );
+        async.elapse(const Duration(seconds: 2));
         terminal.dispose();
-      }
+        async.flushMicrotasks();
+        return bookFuture;
+      });
 
       // 2. Test Flutter-injected Ctrl+C KeyEvent using MockTerminal
-      {
+      await FakeAsync().run((async) {
         final backend = MockTerminalBackend();
         final terminal = MockTerminal(backend);
         final platform = TestWidgetBookPlatform();
 
         final bookFuture = runWidgetBookShared(terminal, platform);
-        await Future.delayed(const Duration(milliseconds: 50));
+        async.elapse(const Duration(milliseconds: 50));
 
         // Inject Flutter-style Ctrl+C KeyEvent
         terminal.injectTestEvent(
@@ -157,71 +161,73 @@ void main() {
           ),
         );
 
-        await bookFuture.timeout(
-          const Duration(seconds: 2),
-          onTimeout: () => throw TimeoutException(
-            'Widget book did not exit on injected KeyEvent',
-          ),
-        );
+        async.elapse(const Duration(seconds: 2));
         terminal.dispose();
-      }
+        async.flushMicrotasks();
+        return bookFuture;
+      });
     });
 
     test(
       'Focused text field consumes character keys and prevents global hotkeys',
       () async {
-        final backend = MockTerminalBackend();
-        final terminal = MockTerminal(backend);
-        final platform = TestWidgetBookPlatform();
+        await FakeAsync().run((async) {
+          final backend = MockTerminalBackend();
+          final terminal = MockTerminal(backend);
+          final platform = TestWidgetBookPlatform();
 
-        // Run widget book runner
-        final bookFuture = runWidgetBookShared(terminal, platform);
+          // Run widget book runner
+          final bookFuture = runWidgetBookShared(terminal, platform);
 
-        // Wait for initialization
-        await Future.delayed(const Duration(milliseconds: 50));
+          // Wait for initialization
+          async.elapse(const Duration(milliseconds: 50));
 
-        // By default, focusDemoPane is false.
-        // Press Tab to focus the demo pane.
-        terminal.injectTestEvent(const ui.KeyEvent('\t', ui.KeyType.tab));
-        await Future.delayed(const Duration(milliseconds: 50));
+          // By default, focusDemoPane is false.
+          // Press Tab to focus the demo pane.
+          terminal.injectTestEvent(const ui.KeyEvent('\t', ui.KeyType.tab));
+          async.elapse(const Duration(milliseconds: 50));
 
-        // Now focusDemoPane is true.
-        // Inject a key event like 't' which is a global shortcut to start/stop tracing.
-        terminal.injectTestEvent(const ui.KeyEvent('t', ui.KeyType.character));
-        await Future.delayed(const Duration(milliseconds: 50));
+          // Now focusDemoPane is true.
+          // Inject a key event like 't' which is a global shortcut to start/stop tracing.
+          terminal.injectTestEvent(
+            const ui.KeyEvent('t', ui.KeyType.character),
+          );
+          async.elapse(const Duration(milliseconds: 50));
 
-        // If 't' was consumed by the demo pane, Tracer should NOT be enabled.
-        expect(Tracer.isEnabled, isFalse);
+          // If 't' was consumed by the demo pane, Tracer should NOT be enabled.
+          expect(Tracer.isEnabled, isFalse);
 
-        // Inject 'q' key event while focused.
-        // 'q' is a global shortcut to quit. Since we are focused, it should be consumed and NOT quit.
-        terminal.injectTestEvent(const ui.KeyEvent('q', ui.KeyType.character));
-        await Future.delayed(const Duration(milliseconds: 50));
+          // Inject 'q' key event while focused.
+          // 'q' is a global shortcut to quit. Since we are focused, it should be consumed and NOT quit.
+          terminal.injectTestEvent(
+            const ui.KeyEvent('q', ui.KeyType.character),
+          );
+          async.elapse(const Duration(milliseconds: 50));
 
-        // We should still be running. Let's verify by checking that the book future hasn't completed.
-        var isCompleted = false;
-        bookFuture.then((_) => isCompleted = true);
-        await Future.delayed(const Duration(milliseconds: 50));
-        expect(isCompleted, isFalse);
+          // We should still be running. Let's verify by checking that the book future hasn't completed.
+          var isCompleted = false;
+          bookFuture.then((_) => isCompleted = true);
+          async.elapse(const Duration(milliseconds: 50));
+          // Note: isCompleted check must be cautious in fakeAsync, but since it's false, it's fine.
+          expect(isCompleted, isFalse);
 
-        // Now unfocus the demo pane by injecting escape
-        terminal.injectTestEvent(
-          const ui.KeyEvent('\u001b', ui.KeyType.escape),
-        );
-        await Future.delayed(const Duration(milliseconds: 50));
+          // Now unfocus the demo pane by injecting escape
+          terminal.injectTestEvent(
+            const ui.KeyEvent('\u001b', ui.KeyType.escape),
+          );
+          async.elapse(const Duration(milliseconds: 50));
 
-        // Now focusDemoPane should be false.
-        // Injecting 'q' now should exit the runner loop.
-        terminal.injectTestEvent(const ui.KeyEvent('q', ui.KeyType.character));
+          // Now focusDemoPane should be false.
+          // Injecting 'q' now should exit the runner loop.
+          terminal.injectTestEvent(
+            const ui.KeyEvent('q', ui.KeyType.character),
+          );
 
-        await bookFuture.timeout(
-          const Duration(seconds: 2),
-          onTimeout: () => throw TimeoutException(
-            'Widget book did not exit on "q" after unfocusing',
-          ),
-        );
+          async.elapse(const Duration(seconds: 2));
 
-        terminal.dispose();
+          terminal.dispose();
+          return bookFuture;
+        });
       },
     );
   });

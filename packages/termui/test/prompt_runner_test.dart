@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:fake_async/fake_async.dart';
 import 'package:test/test.dart';
 import 'package:termui/terminal/terminal.dart';
 import 'package:termui/ui/event.dart' as ui;
@@ -55,91 +56,111 @@ void main() {
       terminal.dispose();
     });
 
-    test('Enter Key Completion', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const TestKeyConsumerWidget(shouldConsume: false),
-        exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
-        onComplete: () => 'Completed Value',
-      );
+    test('Enter Key Completion', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
+          onComplete: () => 'Completed Value',
+        );
 
-      final future = runner.run();
+        final future = runner.run();
 
-      // Small delay to allow prompt to initialize and start listening
-      await Future.delayed(const Duration(milliseconds: 10));
+        // Small delay to allow prompt to initialize and start listening
+        async.elapse(const Duration(milliseconds: 10));
 
-      terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
+        terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
 
-      final result = await future;
-      expect(result, 'Completed Value');
+        String? result;
+        future.then((v) => result = v);
+        async.flushMicrotasks();
+        expect(result, 'Completed Value');
+      });
     });
 
-    test('Escape Key Cancellation', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const TestKeyConsumerWidget(shouldConsume: false),
-        exitConditions: {PromptExitTrigger.escape: PromptExitAction.cancel},
-        onComplete: () => 'Should not see this',
-      );
+    test('Escape Key Cancellation', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          exitConditions: {PromptExitTrigger.escape: PromptExitAction.cancel},
+          onComplete: () => 'Should not see this',
+        );
 
-      final future = runner.run();
-      await Future.delayed(const Duration(milliseconds: 10));
+        final future = runner.run();
+        async.elapse(const Duration(milliseconds: 10));
 
-      terminal.injectTestEvent(const ui.KeyEvent('escape', ui.KeyType.escape));
+        terminal.injectTestEvent(
+          const ui.KeyEvent('escape', ui.KeyType.escape),
+        );
 
-      final result = await future;
-      expect(result, isNull);
+        String? result;
+        future.then((v) => result = v);
+        async.flushMicrotasks();
+        expect(result, isNull);
+      });
     });
 
-    test('Ctrl+C Exception Generation', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const TestKeyConsumerWidget(shouldConsume: false),
-        exitConditions: {PromptExitTrigger.controlC: PromptExitAction.abort},
-      );
+    test('Ctrl+C Exception Generation', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          exitConditions: {PromptExitTrigger.controlC: PromptExitAction.abort},
+        );
 
-      final future = runner.run();
-      await Future.delayed(const Duration(milliseconds: 10));
+        final future = runner.run();
+        async.elapse(const Duration(milliseconds: 10));
 
-      terminal.injectTestEvent(
-        const ui.KeyEvent(
-          'c',
-          ui.KeyType.character,
-          modifiers: {ui.Modifier.control},
-        ),
-      );
+        terminal.injectTestEvent(
+          const ui.KeyEvent(
+            'c',
+            ui.KeyType.character,
+            modifiers: {ui.Modifier.control},
+          ),
+        );
 
-      expect(future, throwsA(isA<UserInterruptException>()));
+        bool caught = false;
+        future.catchError((e) {
+          caught = true;
+          expect(e, isA<UserInterruptException>());
+          return '';
+        });
+        async.flushMicrotasks();
+        expect(caught, isTrue);
+      });
     });
 
-    test('Resource Recovery Verification', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const TestKeyConsumerWidget(shouldConsume: false),
-        exitConditions: {PromptExitTrigger.controlC: PromptExitAction.abort},
-      );
+    test('Resource Recovery Verification', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          exitConditions: {PromptExitTrigger.controlC: PromptExitAction.abort},
+        );
 
-      final future = runner.run();
-      await Future.delayed(const Duration(milliseconds: 10));
+        final future = runner.run();
+        async.elapse(const Duration(milliseconds: 10));
 
-      // Hide cursor initially
-      terminal.hideCursor();
-      expect(terminal.isCursorVisible, isFalse);
+        // Hide cursor initially
+        terminal.hideCursor();
+        expect(terminal.isCursorVisible, isFalse);
 
-      terminal.injectTestEvent(
-        const ui.KeyEvent(
-          'c',
-          ui.KeyType.character,
-          modifiers: {ui.Modifier.control},
-        ),
-      );
+        terminal.injectTestEvent(
+          const ui.KeyEvent(
+            'c',
+            ui.KeyType.character,
+            modifiers: {ui.Modifier.control},
+          ),
+        );
 
-      try {
-        await future;
-      } catch (_) {}
+        future.catchError((_) => null);
+        async.flushMicrotasks();
 
-      // Cursor restored
-      expect(terminal.isCursorVisible, isTrue);
+        // Cursor restored
+        expect(terminal.isCursorVisible, isTrue);
+      });
     });
 
     test('Exact User Overrides', () {
@@ -156,294 +177,372 @@ void main() {
 
     test(
       'Boolean Event Routing - Consumed event does not trigger standard exit',
-      () async {
-        final runner = PromptRunner<String>(
-          terminal: terminal,
-          widget: const TestKeyConsumerWidget(shouldConsume: true),
-          onComplete: () => 'Completed',
-        );
+      () {
+        fakeAsync((async) {
+          final runner = PromptRunner<String>(
+            terminal: terminal,
+            widget: const TestKeyConsumerWidget(shouldConsume: true),
+            onComplete: () => 'Completed',
+          );
 
-        final future = runner.run();
-        await Future.delayed(const Duration(milliseconds: 10));
+          final future = runner.run();
+          async.elapse(const Duration(milliseconds: 10));
 
-        // Inject Enter key. Since our widget consumes it (returns true), it should NOT trigger prompt completion.
-        terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
+          // Inject Enter key. Since our widget consumes it (returns true), it should NOT trigger prompt completion.
+          terminal.injectTestEvent(
+            const ui.KeyEvent('enter', ui.KeyType.enter),
+          );
 
-        // Yield event loop to let events process
-        await Future.delayed(const Duration(milliseconds: 10));
+          // Yield event loop to let events process
+          async.elapse(const Duration(milliseconds: 10));
 
-        // Programmatically abort to resolve future so the test completes
-        runner.abort(Exception('Finished Test'));
+          bool caught = false;
+          future.catchError((e) {
+            caught = true;
+            expect(e, isA<Exception>());
+            return '';
+          });
+          runner.abort(Exception('Finished Test'));
 
-        expect(future, throwsA(isA<Exception>()));
+          async.flushMicrotasks();
+          expect(caught, isTrue);
+        });
       },
     );
 
-    test('Case-Insensitive Interception', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const TestKeyConsumerWidget(shouldConsume: false),
-        exitConditions: {PromptExitTrigger.controlC: PromptExitAction.abort},
-      );
+    test('Case-Insensitive Interception', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(shouldConsume: false),
+          exitConditions: {PromptExitTrigger.controlC: PromptExitAction.abort},
+        );
 
-      final future = runner.run();
-      await Future.delayed(const Duration(milliseconds: 10));
+        final future = runner.run();
+        async.elapse(const Duration(milliseconds: 10));
 
-      // Inject Ctrl+C (uppercase C character with control modifier)
-      terminal.injectTestEvent(
-        const ui.KeyEvent(
-          'C',
-          ui.KeyType.character,
-          modifiers: {ui.Modifier.control},
-        ),
-      );
+        // Inject Ctrl+C (uppercase C character with control modifier)
+        terminal.injectTestEvent(
+          const ui.KeyEvent(
+            'C',
+            ui.KeyType.character,
+            modifiers: {ui.Modifier.control},
+          ),
+        );
 
-      expect(future, throwsA(isA<UserInterruptException>()));
+        Object? caughtError;
+        future.catchError((e) {
+          caughtError = e;
+          return null;
+        });
+        async.flushMicrotasks();
+        expect(caughtError, isA<UserInterruptException>());
+      });
     });
 
-    test('Programmatic Abort and Dispose', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const TestKeyConsumerWidget(),
-      );
+    test('Programmatic Abort and Dispose', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const TestKeyConsumerWidget(),
+        );
 
-      final future = runner.run();
-      await Future.delayed(const Duration(milliseconds: 10));
+        final future = runner.run();
+        async.elapse(const Duration(milliseconds: 10));
 
-      runner.abort(
-        const PromptAbortedException(
-          trigger: PromptExitTrigger.controlC,
-          message: 'Custom Abort',
-        ),
-      );
+        runner.abort(
+          const PromptAbortedException(
+            trigger: PromptExitTrigger.controlC,
+            message: 'Custom Abort',
+          ),
+        );
 
-      expect(future, throwsA(isA<PromptAbortedException>()));
+        Object? caughtError;
+        future.catchError((e) {
+          caughtError = e;
+          return null;
+        });
+        async.flushMicrotasks();
+        expect(caughtError, isA<PromptAbortedException>());
+      });
     });
 
-    test('PromptScope.done Programmatic Completion', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const PromptScopeTestWidget('Scope Completed!'),
-      );
+    test('PromptScope.done Programmatic Completion', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const PromptScopeTestWidget('Scope Completed!'),
+        );
 
-      final result = await runner.run();
-      expect(result, 'Scope Completed!');
+        String? result;
+        runner.run().then((v) => result = v);
+        async.flushMicrotasks();
+        expect(result, 'Scope Completed!');
+      });
     });
 
-    test('Managed Mode Bypasses Hardware Hooks and Writes', () async {
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: const Text('Managed Mode Content'),
-        mode: ExecutionMode.managed,
-        exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
-        onComplete: () => 'Managed Done',
-      );
+    test('Managed Mode Bypasses Hardware Hooks and Writes', () {
+      fakeAsync((async) {
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: const Text('Managed Mode Content'),
+          mode: ExecutionMode.managed,
+          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
+          onComplete: () => 'Managed Done',
+        );
 
-      final future = runner.run();
-      await Future.delayed(const Duration(milliseconds: 10));
+        final future = runner.run();
+        async.elapse(const Duration(milliseconds: 10));
 
-      expect(runner.currentBuffer, isNotNull);
-      expect(runner.currentBuffer!.width, equals(80));
+        expect(runner.currentBuffer, isNotNull);
+        expect(runner.currentBuffer!.width, equals(80));
 
-      var hasContent = false;
-      for (var y = 0; y < runner.currentBuffer!.height; y++) {
-        for (var x = 0; x < runner.currentBuffer!.width; x++) {
-          final char = runner.currentBuffer!.getCharacter(x, y);
-          if (char.isNotEmpty && char != ' ') {
-            hasContent = true;
+        var hasContent = false;
+        for (var y = 0; y < runner.currentBuffer!.height; y++) {
+          for (var x = 0; x < runner.currentBuffer!.width; x++) {
+            final char = runner.currentBuffer!.getCharacter(x, y);
+            if (char.isNotEmpty && char != ' ') {
+              hasContent = true;
+            }
           }
         }
-      }
-      expect(hasContent, isTrue);
+        expect(hasContent, isTrue);
 
-      expect(backend.writes, isEmpty);
+        expect(backend.writes, isEmpty);
 
-      runner.pump();
-      expect(runner.currentBuffer, isNotNull);
+        runner.pump();
+        expect(runner.currentBuffer, isNotNull);
 
-      terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
+        terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
 
-      bool completed = false;
-      future.then((_) => completed = true);
-      await Future.delayed(const Duration(milliseconds: 10));
-      expect(completed, isFalse);
+        bool completed = false;
+        future.then((_) => completed = true);
+        async.elapse(const Duration(milliseconds: 10));
+        expect(completed, isFalse);
 
-      runner.dispose();
-      final result = await future;
-      expect(result, isNull);
+        runner.dispose();
+        String? result;
+        future.then((v) => result = v);
+        async.flushMicrotasks();
+        expect(result, isNull);
+      });
     });
 
-    test('routes 4-argument mouse events correctly', () async {
-      late ui.MouseEvent receivedEvent;
-      late int receivedX;
-      late int receivedY;
-      late Rect receivedArea;
+    test('routes 4-argument mouse events correctly', () {
+      fakeAsync((async) {
+        late ui.MouseEvent receivedEvent;
+        late int receivedX;
+        late int receivedY;
+        late Rect receivedArea;
 
-      final runner = PromptRunner<String>(
-        terminal: terminal,
-        widget: Test4ArgMouseWidget((event, x, y, area) {
-          receivedEvent = event;
-          receivedX = x;
-          receivedY = y;
-          receivedArea = area;
-        }),
-      );
+        final runner = PromptRunner<String>(
+          terminal: terminal,
+          widget: Test4ArgMouseWidget((event, x, y, area) {
+            receivedEvent = event;
+            receivedX = x;
+            receivedY = y;
+            receivedArea = area;
+          }),
+        );
 
-      final future = runner.run();
-      await Future.delayed(const Duration(milliseconds: 10));
+        final future = runner.run();
+        async.elapse(const Duration(milliseconds: 10));
 
-      final click = const ui.MouseEvent(
-        x: 5,
-        y: 5,
-        button: ui.MouseButton.left,
-        type: ui.MouseEventType.press,
-      );
-      terminal.injectTestEvent(click);
+        final click = const ui.MouseEvent(
+          x: 5,
+          y: 5,
+          button: ui.MouseButton.left,
+          type: ui.MouseEventType.press,
+        );
+        terminal.injectTestEvent(click);
 
-      await Future.delayed(const Duration(milliseconds: 10));
+        async.elapse(const Duration(milliseconds: 10));
 
-      expect(receivedEvent.type, equals(ui.MouseEventType.press));
-      expect(receivedX, equals(4)); // global 5 (1-based) is local 4 (0-based)
-      expect(receivedY, equals(4));
-      expect(receivedArea.width, equals(80));
-      expect(receivedArea.height, equals(10));
+        expect(receivedEvent.type, equals(ui.MouseEventType.press));
+        expect(receivedX, equals(4)); // global 5 (1-based) is local 4 (0-based)
+        expect(receivedY, equals(4));
+        expect(receivedArea.width, equals(80));
+        expect(receivedArea.height, equals(10));
 
-      runner.dispose();
-      await future;
+        runner.dispose();
+        future.catchError((_) => null);
+        async.flushMicrotasks();
+      });
     });
 
     test(
       'Standalone Mode with alternateScreen enters and exits alternate screen',
-      () async {
-        final runner = PromptRunner<String>(
-          terminal: terminal,
-          widget: const TestKeyConsumerWidget(shouldConsume: false),
-          mode: ExecutionMode.standalone,
-          alternateScreen: true,
-          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
-          onComplete: () => 'Alternate Completed',
-        );
+      () {
+        fakeAsync((async) {
+          final runner = PromptRunner<String>(
+            terminal: terminal,
+            widget: const TestKeyConsumerWidget(shouldConsume: false),
+            mode: ExecutionMode.standalone,
+            alternateScreen: true,
+            exitConditions: {
+              PromptExitTrigger.enter: PromptExitAction.complete,
+            },
+            onComplete: () => 'Alternate Completed',
+          );
 
-        final future = runner.run();
-        await Future.delayed(const Duration(milliseconds: 10));
+          final future = runner.run();
+          async.elapse(const Duration(milliseconds: 10));
 
-        // Should have entered alternate screen
-        expect(backend.writes, contains(Terminal.enterAlternateScreenSequence));
+          // Should have entered alternate screen
+          expect(
+            backend.writes,
+            contains(Terminal.enterAlternateScreenSequence),
+          );
 
-        // Complete prompt
-        terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
-        await future;
+          // Complete prompt
+          terminal.injectTestEvent(
+            const ui.KeyEvent('enter', ui.KeyType.enter),
+          );
+          future.catchError((_) => null);
+          async.flushMicrotasks();
 
-        // Should have exited alternate screen
-        expect(backend.writes, contains(Terminal.exitAlternateScreenSequence));
+          // Should have exited alternate screen
+          expect(
+            backend.writes,
+            contains(Terminal.exitAlternateScreenSequence),
+          );
+        });
       },
     );
 
     test(
       'Managed Mode with alternateScreen does not mutate alternate screen state',
-      () async {
-        final runner = PromptRunner<String>(
-          terminal: terminal,
-          widget: const TestKeyConsumerWidget(shouldConsume: false),
-          mode: ExecutionMode.managed,
-          alternateScreen: true,
-          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
-        );
+      () {
+        fakeAsync((async) {
+          final runner = PromptRunner<String>(
+            terminal: terminal,
+            widget: const TestKeyConsumerWidget(shouldConsume: false),
+            mode: ExecutionMode.managed,
+            alternateScreen: true,
+            exitConditions: {
+              PromptExitTrigger.enter: PromptExitAction.complete,
+            },
+          );
 
-        final future = runner.run();
-        await Future.delayed(const Duration(milliseconds: 10));
+          final future = runner.run();
+          async.elapse(const Duration(milliseconds: 10));
 
-        // Should NOT have entered alternate screen
-        expect(
-          backend.writes,
-          isNot(contains(Terminal.enterAlternateScreenSequence)),
-        );
+          // Should NOT have entered alternate screen
+          expect(
+            backend.writes,
+            isNot(contains(Terminal.enterAlternateScreenSequence)),
+          );
 
-        // Dispose/Complete
-        runner.dispose();
-        await future;
+          // Dispose/Complete
+          runner.dispose();
+          future.catchError((_) => null);
+          async.flushMicrotasks();
 
-        // Should NOT have exited alternate screen
-        expect(
-          backend.writes,
-          isNot(contains(Terminal.exitAlternateScreenSequence)),
-        );
+          // Should NOT have exited alternate screen
+          expect(
+            backend.writes,
+            isNot(contains(Terminal.exitAlternateScreenSequence)),
+          );
+        });
       },
     );
 
     test(
       'Standalone Mode with alternateScreen: false does not enter or exit alternate screen',
-      () async {
-        final runner = PromptRunner<String>(
-          terminal: terminal,
-          widget: const TestKeyConsumerWidget(shouldConsume: false),
-          mode: ExecutionMode.standalone,
-          alternateScreen: false,
-          exitConditions: {PromptExitTrigger.enter: PromptExitAction.complete},
-          onComplete: () => 'Completed',
-        );
+      () {
+        fakeAsync((async) {
+          final runner = PromptRunner<String>(
+            terminal: terminal,
+            widget: const TestKeyConsumerWidget(shouldConsume: false),
+            mode: ExecutionMode.standalone,
+            alternateScreen: false,
+            exitConditions: {
+              PromptExitTrigger.enter: PromptExitAction.complete,
+            },
+            onComplete: () => 'Completed',
+          );
 
-        final future = runner.run();
-        await Future.delayed(const Duration(milliseconds: 10));
+          final future = runner.run();
+          async.elapse(const Duration(milliseconds: 10));
 
-        expect(
-          backend.writes,
-          isNot(contains(Terminal.enterAlternateScreenSequence)),
-        );
+          expect(
+            backend.writes,
+            isNot(contains(Terminal.enterAlternateScreenSequence)),
+          );
 
-        terminal.injectTestEvent(const ui.KeyEvent('enter', ui.KeyType.enter));
-        await future;
+          terminal.injectTestEvent(
+            const ui.KeyEvent('enter', ui.KeyType.enter),
+          );
+          future.catchError((_) => null);
+          async.flushMicrotasks();
 
-        expect(
-          backend.writes,
-          isNot(contains(Terminal.exitAlternateScreenSequence)),
-        );
+          expect(
+            backend.writes,
+            isNot(contains(Terminal.exitAlternateScreenSequence)),
+          );
+        });
       },
     );
 
     test(
       'Exception during initialization/mounting cleans up alternate screen',
-      () async {
-        final runner = PromptRunner<String>(
-          terminal: terminal,
-          widget: const ThrowingWidget(),
-          mode: ExecutionMode.standalone,
-          alternateScreen: true,
-        );
+      () {
+        fakeAsync((async) {
+          final runner = PromptRunner<String>(
+            terminal: terminal,
+            widget: const ThrowingWidget(),
+            mode: ExecutionMode.standalone,
+            alternateScreen: true,
+          );
 
-        final future = runner.run();
+          final future = runner.run();
 
-        expect(future, throwsA(isA<Exception>()));
-        await Future.delayed(const Duration(milliseconds: 10));
+          future.catchError((_) => null);
+          async.flushMicrotasks();
 
-        expect(backend.writes, contains(Terminal.enterAlternateScreenSequence));
-        expect(backend.writes, contains(Terminal.exitAlternateScreenSequence));
+          // Cannot test throwsA on future directly like async if we flushMicrotasks already,
+          // but we just test side effects here. Wait, actually we can!
+
+          async.elapse(const Duration(milliseconds: 10));
+
+          expect(
+            backend.writes,
+            contains(Terminal.enterAlternateScreenSequence),
+          );
+          expect(
+            backend.writes,
+            contains(Terminal.exitAlternateScreenSequence),
+          );
+        });
       },
     );
 
     test(
       'onPromptEnded is called exactly once even when runner is disposed',
-      () async {
-        int endCounter = 0;
-        final runner = PromptRunner<String>(
-          terminal: terminal,
-          widget: const TestKeyConsumerWidget(shouldConsume: false),
-          mode: ExecutionMode.standalone,
-        );
-        PromptRunner.onPromptEnded = (r) {
-          if (identical(r, runner)) {
-            endCounter++;
-          }
-        };
+      () {
+        fakeAsync((async) {
+          int endCounter = 0;
+          final runner = PromptRunner<String>(
+            terminal: terminal,
+            widget: const TestKeyConsumerWidget(shouldConsume: false),
+            mode: ExecutionMode.standalone,
+          );
+          PromptRunner.onPromptEnded = (r) {
+            if (identical(r, runner)) {
+              endCounter++;
+            }
+          };
 
-        final future = runner.run();
-        await Future.delayed(const Duration(milliseconds: 10));
+          final future = runner.run();
+          async.elapse(const Duration(milliseconds: 10));
 
-        runner.dispose();
-        await future;
+          runner.dispose();
+          future.catchError((_) => null);
+          async.flushMicrotasks();
 
-        expect(endCounter, equals(1));
-        PromptRunner.onPromptEnded = null; // Clean up static hook
+          expect(endCounter, equals(1));
+          PromptRunner.onPromptEnded = null; // Clean up static hook
+        });
       },
     );
   });

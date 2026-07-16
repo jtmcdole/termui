@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 import 'package:test/test.dart';
+import 'package:fake_async/fake_async.dart';
 import 'package:termui/terminal/terminal.dart' hide Modifier;
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/widgets/core/prompt_runner.dart';
@@ -789,34 +790,36 @@ void main() {
 
     test(
       'addRipple schedules a touch timer and renders sub-pixel ripples on target buffer',
-      () async {
-        final backend = MockTerminalBackend();
-        final terminal = MockTerminal(backend);
-        final sceneManager = SceneManager(terminal);
+      () {
+        fakeAsync((async) {
+          final backend = MockTerminalBackend();
+          final terminal = MockTerminal(backend);
+          final sceneManager = SceneManager(terminal);
 
-        expect(sceneManager.rippleManager.hasActiveRipples, isFalse);
+          expect(sceneManager.rippleManager.hasActiveRipples, isFalse);
 
-        sceneManager.addRipple(const Point<int>(5, 5), durationMs: 100);
-        expect(sceneManager.rippleManager.hasActiveRipples, isTrue);
+          sceneManager.addRipple(const Point<int>(5, 5), durationMs: 100);
+          expect(sceneManager.rippleManager.hasActiveRipples, isTrue);
 
-        sceneManager.render();
+          sceneManager.render();
 
-        await Future.delayed(const Duration(milliseconds: 50));
-        sceneManager.render();
+          async.elapse(const Duration(milliseconds: 50));
+          sceneManager.render();
 
-        final front = sceneManager.renderer!.frontBuffer;
-        var hasRipples = false;
-        for (var y = 0; y < front.height; y++) {
-          for (var x = 0; x < front.width; x++) {
-            final char = front.getCharacter(x, y);
-            if (char != ' ' && char.codeUnitAt(0) >= 0x2800) {
-              hasRipples = true;
+          final front = sceneManager.renderer!.frontBuffer;
+          var hasRipples = false;
+          for (var y = 0; y < front.height; y++) {
+            for (var x = 0; x < front.width; x++) {
+              final char = front.getCharacter(x, y);
+              if (char != ' ' && char.codeUnitAt(0) >= 0x2800) {
+                hasRipples = true;
+              }
             }
           }
-        }
-        expect(hasRipples, isTrue);
+          expect(hasRipples, isTrue);
 
-        sceneManager.dispose();
+          sceneManager.dispose();
+        });
       },
     );
   });
