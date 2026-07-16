@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
+import 'package:termui/utils/interval_tree.dart';
 
 class TraceEvent {
   final String name;
@@ -45,13 +46,19 @@ class TraceEvent {
 }
 
 /// Interval representing a matched Begin/End trace event.
-class TraceSpan {
+class TraceSpan implements Interval<int> {
   final String name;
   final String category;
   final int startUs;
   final int endUs;
   final int depth;
   final Map<String, String> args;
+
+  @override
+  int get start => startUs;
+
+  @override
+  int get end => endUs;
 
   final String displayLabel;
 

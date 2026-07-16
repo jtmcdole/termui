@@ -27,46 +27,6 @@ String _getFractionalBlock(double fraction) {
   return '█';
 }
 
-void getCulledSpans(
-  List<TraceSpan> spans,
-  double viewportStartUs,
-  double viewportEndUs,
-  int maxSpanDuration,
-  void Function(TraceSpan) onSpan,
-) {
-  if (spans.isEmpty) return;
-  int idx = 0;
-  int low = 0;
-  int high = spans.length - 1;
-  while (low <= high) {
-    int mid = (low + high) ~/ 2;
-    if (spans[mid].startUs >= viewportStartUs) {
-      idx = mid;
-      high = mid - 1;
-    } else {
-      low = mid + 1;
-    }
-  }
-
-  final visibleSpans = <TraceSpan>[];
-  for (int i = idx - 1; i >= 0; i--) {
-    final span = spans[i];
-    if (span.endUs >= viewportStartUs) {
-      onSpan(span);
-    }
-    if (span.startUs < viewportStartUs - maxSpanDuration) {
-      break;
-    }
-  }
-  for (int i = idx; i < spans.length; i++) {
-    if (spans[i].startUs <= viewportEndUs) {
-      onSpan(spans[i]);
-    } else {
-      break;
-    }
-  }
-}
-
 /// An imperative canvas widget drawing the Main Isolate flame chart spans.
 class HitGrid {
   final int width;
@@ -130,29 +90,16 @@ class TimelineCanvas extends Widget {
 }
 
 class TimelineCanvasElement extends Element {
-  late List<List<TraceSpan>> _spanBuckets;
-  late final List<int> _bucketMaxDurations;
+  late IntervalTree<int> _spanTree;
 
   TimelineCanvasElement(super.widget) {
-    _bucketMaxDurations = [
-      100,
-      500,
-      2500,
-      10000,
-      50000,
-      250000,
-      1000000,
-      5000000,
-      25000000,
-      1000000000,
-    ];
-    _rebuildBuckets();
+    _rebuildTree();
   }
 
   @override
   void mount(Element? parent) {
     super.mount(parent);
-    _rebuildBuckets();
+    _rebuildTree();
   }
 
   @override
@@ -161,38 +108,14 @@ class TimelineCanvasElement extends Element {
     super.update(newWidget);
     final currentWidget = widget as TimelineCanvas;
     if (!identical(oldWidget.spans, currentWidget.spans)) {
-      _rebuildBuckets();
+      _rebuildTree();
     }
   }
 
-  void _rebuildBuckets() {
+  void _rebuildTree() {
     final w = widget as TimelineCanvas;
-    final buckets = List.generate(10, (_) => <TraceSpan>[]);
-    for (final span in w.spans) {
-      final dur = span.endUs - span.startUs;
-      if (dur < 100) {
-        buckets[0].add(span);
-      } else if (dur < 500) {
-        buckets[1].add(span);
-      } else if (dur < 2500) {
-        buckets[2].add(span);
-      } else if (dur < 10000) {
-        buckets[3].add(span);
-      } else if (dur < 50000) {
-        buckets[4].add(span);
-      } else if (dur < 250000) {
-        buckets[5].add(span);
-      } else if (dur < 1000000) {
-        buckets[6].add(span);
-      } else if (dur < 5000000) {
-        buckets[7].add(span);
-      } else if (dur < 25000000) {
-        buckets[8].add(span);
-      } else {
-        buckets[9].add(span);
-      }
-    }
-    _spanBuckets = buckets;
+    _spanTree = IntervalTree<int>();
+    _spanTree.insertAll(w.spans);
   }
 
   @override
@@ -283,14 +206,14 @@ class TimelineCanvasElement extends Element {
 
       bool isOccluded = true;
       if (spanStartUs == spanEndUs) {
-         if (TimelineCanvas.debugUseBoolArray) {
-           final idx = visualY * width + startCol;
-           if (!drawnCellsArray![idx]) isOccluded = false;
-         } else {
-           final x = startX + 1 + startCol;
-           final cellKey = (x << 16) | y;
-           if (!drawnCellsSet!.contains(cellKey)) isOccluded = false;
-         }
+        if (TimelineCanvas.debugUseBoolArray) {
+          final idx = visualY * width + startCol;
+          if (!drawnCellsArray![idx]) isOccluded = false;
+        } else {
+          final x = startX + 1 + startCol;
+          final cellKey = (x << 16) | y;
+          if (!drawnCellsSet!.contains(cellKey)) isOccluded = false;
+        }
       } else {
         for (var col = startCol; col <= endCol; col++) {
           if (TimelineCanvas.debugUseBoolArray) {
@@ -421,17 +344,11 @@ class TimelineCanvasElement extends Element {
       }
     }
 
-    for (var i = 0; i < _spanBuckets.length; i++) {
-      final bucket = _spanBuckets[i];
-      if (bucket.isEmpty) continue;
-      getCulledSpans(
-        bucket,
-        viewportStartUs,
-        viewportEndUs,
-        _bucketMaxDurations[i],
-        processSpan,
-      );
-    }
+    _spanTree.query(
+      viewportStartUs.floor(),
+      viewportEndUs.ceil(),
+      (interval) => processSpan(interval as TraceSpan),
+    );
 
     // Draw Caliper Overlay
     if (w.measureStartMs != null && w.measureEndMs != null) {
