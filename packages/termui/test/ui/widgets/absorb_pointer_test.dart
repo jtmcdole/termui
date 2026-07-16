@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'package:fake_async/fake_async.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/event.dart' as ui;
 import 'package:termui_test/termui_test.dart';
@@ -48,9 +48,8 @@ void main() {
       terminal.dispose();
     });
 
-    test(
-      'AbsorbPointer with absorbing: true absorbs mouse press event',
-      () async {
+    test('AbsorbPointer with absorbing: true absorbs mouse press event', () {
+      fakeAsync((async) {
         var clicked = false;
         final runner = PromptRunner<void>(
           terminal: terminal,
@@ -65,7 +64,7 @@ void main() {
         );
 
         final future = runner.run();
-        await Future.delayed(const Duration(milliseconds: 10));
+        async.elapse(const Duration(milliseconds: 10));
 
         // Inject press at x: 2, y: 2 (1-based, inside child widget)
         final click = const ui.MouseEvent(
@@ -75,48 +74,52 @@ void main() {
           type: ui.MouseEventType.press,
         );
         terminal.injectTestEvent(click);
-        await Future.delayed(const Duration(milliseconds: 10));
+        async.elapse(const Duration(milliseconds: 10));
 
         expect(clicked, isFalse);
 
         runner.dispose();
-        await future;
-      },
-    );
+        future.catchError((_) => null);
+        async.flushMicrotasks();
+      });
+    });
 
     test(
       'AbsorbPointer with absorbing: false propagates mouse press event',
-      () async {
-        var clicked = false;
-        final runner = PromptRunner<void>(
-          terminal: terminal,
-          widget: AbsorbPointer(
-            absorbing: false,
-            child: ClickableWidget(
-              onClick: () {
-                clicked = true;
-              },
+      () {
+        fakeAsync((async) {
+          var clicked = false;
+          final runner = PromptRunner<void>(
+            terminal: terminal,
+            widget: AbsorbPointer(
+              absorbing: false,
+              child: ClickableWidget(
+                onClick: () {
+                  clicked = true;
+                },
+              ),
             ),
-          ),
-        );
+          );
 
-        final future = runner.run();
-        await Future.delayed(const Duration(milliseconds: 10));
+          final future = runner.run();
+          async.elapse(const Duration(milliseconds: 10));
 
-        // Inject press at x: 2, y: 2
-        final click = const ui.MouseEvent(
-          x: 2,
-          y: 2,
-          button: ui.MouseButton.left,
-          type: ui.MouseEventType.press,
-        );
-        terminal.injectTestEvent(click);
-        await Future.delayed(const Duration(milliseconds: 10));
+          // Inject press at x: 2, y: 2
+          final click = const ui.MouseEvent(
+            x: 2,
+            y: 2,
+            button: ui.MouseButton.left,
+            type: ui.MouseEventType.press,
+          );
+          terminal.injectTestEvent(click);
+          async.elapse(const Duration(milliseconds: 10));
 
-        expect(clicked, isTrue);
+          expect(clicked, isTrue);
 
-        runner.dispose();
-        await future;
+          runner.dispose();
+          future.catchError((_) => null);
+          async.flushMicrotasks();
+        });
       },
     );
   });

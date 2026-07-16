@@ -1,4 +1,6 @@
 import 'dart:math';
+
+import 'package:clock/clock.dart';
 import 'package:termui/termui.dart';
 
 /// Represents a single sub-pixel touch/drop ripple animation state.
@@ -44,7 +46,7 @@ class SubpixelRippleManager {
     _ripples.add(
       SubpixelRipple(
         center: position,
-        startTime: startTime ?? DateTime.now().millisecondsSinceEpoch,
+        startTime: startTime ?? clock.now().millisecondsSinceEpoch,
         color: color,
         durationMs: durationMs,
       ),
@@ -55,7 +57,7 @@ class SubpixelRippleManager {
   ///
   /// Optionally accepts [now] to reuse a single timestamp across multiple calls.
   void updateRipples([int? now]) {
-    final current = now ?? DateTime.now().millisecondsSinceEpoch;
+    final current = now ?? clock.now().millisecondsSinceEpoch;
     _ripples.removeWhere((r) => current - r.startTime > r.durationMs);
   }
 
@@ -67,7 +69,7 @@ class SubpixelRippleManager {
   /// **NOTE**: Doing rendering directly within a manager violates MVVM boundaries.
   /// For production declarative layouts, place a [SubpixelRippleWidget] in your widget tree.
   void paint(Buffer buffer) {
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = clock.now().millisecondsSinceEpoch;
     updateRipples(now);
     if (_ripples.isEmpty) return;
 
@@ -147,7 +149,7 @@ class SubpixelRippleWidgetElement extends Element {
     final widget = this.widget as SubpixelRippleWidget;
     final manager = widget.manager;
 
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = clock.now().millisecondsSinceEpoch;
     manager.updateRipples(now);
     if (!manager.hasActiveRipples) return;
 

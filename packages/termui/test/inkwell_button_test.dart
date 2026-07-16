@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'package:fake_async/fake_async.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/widgets/core/widget.dart';
@@ -93,76 +93,78 @@ void main() {
 
     test(
       'Pressed State starts periodic animation, tracks ripple coordinates, and body remains stationary',
-      () async {
-        bool clicked = false;
-        final btn = InkwellButton(
-          text: 'Click',
-          onPressed: () {
-            clicked = true;
-          },
-          color1: Colors.red,
-          color2: Colors.yellow,
-        );
+      () {
+        fakeAsync((async) {
+          bool clicked = false;
+          final btn = InkwellButton(
+            text: 'Click',
+            onPressed: () {
+              clicked = true;
+            },
+            color1: Colors.red,
+            color2: Colors.yellow,
+          );
 
-        final tree = ElementWidget(btn);
-        final buffer = Buffer.blank(10, 4);
+          final tree = ElementWidget(btn);
+          final buffer = Buffer.blank(10, 4);
 
-        // Render first to mount
-        tree.layout(BoxConstraints.tight(const Size(10, 4)));
-        tree.paint(buffer, Offset.zero);
+          // Render first to mount
+          tree.layout(BoxConstraints.tight(const Size(10, 4)));
+          tree.paint(buffer, Offset.zero);
 
-        final state = tree.findState<InkwellButtonState>()!;
-        expect(state.isPressed, isFalse);
+          final state = tree.findState<InkwellButtonState>()!;
+          expect(state.isPressed, isFalse);
 
-        // Press mouse down on the button body (x=3, y=1)
-        btn.handleMouseEvent(
-          const MouseEvent(
-            x: 4,
-            y: 2,
-            button: MouseButton.left,
-            type: MouseEventType.press,
-          ),
-          3,
-          1,
-        );
+          // Press mouse down on the button body (x=3, y=1)
+          btn.handleMouseEvent(
+            const MouseEvent(
+              x: 4,
+              y: 2,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+            3,
+            1,
+          );
 
-        expect(state.isPressed, isTrue);
-        expect(state.isHovered, isFalse);
-        expect(state.rippleCenterX, equals(3.0));
-        expect(state.rippleCenterY, equals(1.0));
-        expect(state.rippleProgress, greaterThanOrEqualTo(0.0));
+          expect(state.isPressed, isTrue);
+          expect(state.isHovered, isFalse);
+          expect(state.rippleCenterX, equals(3.0));
+          expect(state.rippleCenterY, equals(1.0));
+          expect(state.rippleProgress, greaterThanOrEqualTo(0.0));
 
-        // Wait to verify timer triggers ticks and advances ripple progress
-        await Future.delayed(const Duration(milliseconds: 100));
-        expect(state.rippleProgress, greaterThan(0.0));
+          // Wait to verify timer triggers ticks and advances ripple progress
+          async.elapse(const Duration(milliseconds: 100));
+          expect(state.rippleProgress, greaterThan(0.0));
 
-        // Render pressed state
-        tree.layout(BoxConstraints.tight(const Size(10, 4)));
-        tree.paint(buffer, Offset.zero);
+          // Render pressed state
+          tree.layout(BoxConstraints.tight(const Size(10, 4)));
+          tree.paint(buffer, Offset.zero);
 
-        // Pressed body is at Rect(0, 0, 9, 3), same as normal
-        // No shadow should be present
-        expect(
-          Modifier.has(buffer.getModifiers(9, 1), Modifier.transparent),
-          isTrue,
-        );
+          // Pressed body is at Rect(0, 0, 9, 3), same as normal
+          // No shadow should be present
+          expect(
+            Modifier.has(buffer.getModifiers(9, 1), Modifier.transparent),
+            isTrue,
+          );
 
-        // Now release mouse inside bounds
-        btn.handleMouseEvent(
-          const MouseEvent(
-            x: 4,
-            y: 2,
-            button: MouseButton.left,
-            type: MouseEventType.release,
-          ),
-          3,
-          1,
-        );
+          // Now release mouse inside bounds
+          btn.handleMouseEvent(
+            const MouseEvent(
+              x: 4,
+              y: 2,
+              button: MouseButton.left,
+              type: MouseEventType.release,
+            ),
+            3,
+            1,
+          );
 
-        expect(clicked, isTrue);
-        expect(state.isPressed, isFalse);
-        expect(state.isHovered, isTrue);
-        expect(state.rippleProgress, equals(0.0));
+          expect(clicked, isTrue);
+          expect(state.isPressed, isFalse);
+          expect(state.isHovered, isTrue);
+          expect(state.rippleProgress, equals(0.0));
+        });
       },
     );
 
