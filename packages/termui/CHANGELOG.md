@@ -1,3 +1,7 @@
+## 0.7.6
+
+ - **FIX**(trace): resolve double-compression bug and decouple trace storage.
+
 ## 0.7.5
 
  - **REFACTOR**(core): extract gzip_json compression logic into termui utilities.

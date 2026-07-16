@@ -15,6 +15,45 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - [`termui` - `v0.7.6`](#termui---v076)
+ - [`termui_flutter` - `v0.6.8`](#termui_flutter---v068)
+ - [`termui_recorder` - `v0.5.6+9`](#termui_recorder---v0569)
+ - [`termui_test` - `v0.2.7+10`](#termui_test---v02710)
+ - [`termui_hotreload` - `v0.6.9+6`](#termui_hotreload---v0696)
+ - [`termui_pty` - `v0.3.6`](#termui_pty---v036)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.5.6+9`
+ - `termui_test` - `v0.2.7+10`
+ - `termui_hotreload` - `v0.6.9+6`
+ - `termui_pty` - `v0.3.6`
+
+---
+
+#### `termui` - `v0.7.6`
+
+ - **FIX**(trace): resolve double-compression bug and decouple trace storage.
+
+#### `termui_flutter` - `v0.6.8`
+
+ - **FIX**(trace): resolve double-compression bug and decouple trace storage.
+
+
+## 2026-07-15
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`termui` - `v0.7.5`](#termui---v075)
  - [`termui_flutter` - `v0.6.7`](#termui_flutter---v067)
  - [`termui_pty` - `v0.3.5`](#termui_pty---v035)
