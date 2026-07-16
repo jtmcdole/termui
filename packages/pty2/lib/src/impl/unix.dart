@@ -31,7 +31,7 @@ external int _nativeFork();
 @Native<Int32 Function()>(symbol: 'setsid', isLeaf: true)
 external int _nativeSetsid();
 
-@Native<Int32 Function(Int32, Uint64, Pointer<Void>)>(
+@Native<Int32 Function(Int32, Uint64, VarArgs<(Pointer<Void>,)>)>(
   symbol: 'ioctl',
   isLeaf: true,
 )

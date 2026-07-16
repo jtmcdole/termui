@@ -100,6 +100,30 @@ void main() {
       }
     });
   }
+
+  if (!Platform.isWindows) {
+    test('Resize sets exact winsize inside PTY child via ioctl', () async {
+      final pty = PseudoTerminal.start('zsh', [
+        '-c',
+        'python3 -c "import os, fcntl, struct, termios; res = fcntl.ioctl(0, termios.TIOCGWINSZ, b\'\\0\'*8); row, col, x, y = struct.unpack(\'HHHH\', res); print(f\'SIZE:{col}x{row}\', flush=True)"',
+      ]);
+      pty.resize(123, 45);
+      final output = await pty.out.join('');
+      expect(output.trim(), contains('SIZE:123x45'));
+    });
+
+    test(
+      'Non-shell executable can be started without -l flag injected',
+      () async {
+        final pty = PseudoTerminal.start('python3', [
+          '-c',
+          'print("HELLO_PYTHON")',
+        ]);
+        final output = await pty.out.join('');
+        expect(output.trim(), contains('HELLO_PYTHON'));
+      },
+    );
+  }
 }
 
 String _getShell() {

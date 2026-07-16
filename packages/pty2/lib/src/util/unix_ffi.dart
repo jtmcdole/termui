@@ -115,13 +115,14 @@ typedef _dart_kill = int Function(int pid, int sig);
 typedef _c_write = Int64 Function(Int32 fd, Pointer<Void> buf, Int32 n);
 typedef _dart_write = int Function(int fd, Pointer<Void> buf, int n);
 
-typedef _c_ioctl = Int32 Function(Int32 fd, Uint64 request, Pointer<Void> sz);
+typedef _c_ioctl =
+    Int32 Function(Int32 fd, Uint64 request, VarArgs<(Pointer<Void>,)>);
 typedef _dart_ioctl = int Function(int fd, int request, Pointer<Void> sz);
 
 typedef _c_fcntl = Int32 Function(Int32 fd, Int32 cmd);
 typedef _dart_fcntl = int Function(int fd, int cmd);
 
-typedef _c_fcntl3 = Int32 Function(Int32 fd, Int32 cmd, Int32 flags);
+typedef _c_fcntl3 = Int32 Function(Int32 fd, Int32 cmd, VarArgs<(Int32,)>);
 typedef _dart_fcntl3 = int Function(int fd, int cmd, int flags);
 
 typedef _c_perror = Void Function(Pointer<Utf8> s);
