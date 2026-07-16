@@ -93,6 +93,7 @@ export 'ui/scroll_controller.dart';
 export 'ui/widgets/core/focusable_state_mixin.dart';
 export 'ui/widgets/interactive/stream_builder.dart';
 export 'utils/ring_buffer.dart';
+export 'utils/interval_tree.dart';
 export 'terminal/path_utils.dart';
 export 'ui/animation/subpixel_ripple.dart';
 export 'ui/widgets/core/drag_drop_manager.dart';
