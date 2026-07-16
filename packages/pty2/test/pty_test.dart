@@ -101,29 +101,30 @@ void main() {
     });
   }
 
-  if (!Platform.isWindows) {
-    test('Resize sets exact winsize inside PTY child via ioctl', () async {
-      final pty = PseudoTerminal.start('zsh', [
-        '-c',
-        'python3 -c "import os, fcntl, struct, termios; res = fcntl.ioctl(0, termios.TIOCGWINSZ, b\'\\0\'*8); row, col, x, y = struct.unpack(\'HHHH\', res); print(f\'SIZE:{col}x{row}\', flush=True)"',
-      ]);
-      pty.resize(123, 45);
-      final output = await pty.out.join('');
-      expect(output.trim(), contains('SIZE:123x45'));
-    });
+  test('Resize sets exact winsize inside PTY child across platforms', () async {
+    final pty = PseudoTerminal.start(Platform.executable, [_getHelperPath()]);
+    pty.resize(123, 45);
+    final output = await pty.out.join('');
+    expect(output.trim(), contains('SIZE:123x45'));
+  });
 
-    test(
-      'Non-shell executable can be started without -l flag injected',
-      () async {
-        final pty = PseudoTerminal.start('python3', [
-          '-c',
-          'print("HELLO_PYTHON")',
-        ]);
-        final output = await pty.out.join('');
-        expect(output.trim(), contains('HELLO_PYTHON'));
-      },
-    );
-  }
+  test(
+    'Non-shell executable can be started without -l flag injected',
+    () async {
+      final pty = PseudoTerminal.start(Platform.executable, ['--version']);
+      final output = await pty.out.join('');
+      expect(output.trim(), contains('version'));
+    },
+  );
+}
+
+String _getHelperPath() {
+  final testDir = Directory.current.path.endsWith('test')
+      ? Directory.current.path
+      : Directory.current.path.endsWith('pty2')
+      ? '${Directory.current.path}/test'
+      : '${Directory.current.path}/packages/pty2/test';
+  return '$testDir/terminal_size_helper.dart';
 }
 
 String _getShell() {
