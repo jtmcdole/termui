@@ -8,11 +8,13 @@ import 'package:termui/utils/gzip_json.dart';
 
 class RecordingService {
   final SavedCastsRepository _repo;
+  final SavedCastsRepository _traceRepo;
   AsciicastRecorder? _asciicastRecorder;
   StringSinkAsciicastWriter? _asciicastWriter;
   StringBuffer? _asciicastBuffer;
 
-  RecordingService(this._repo);
+  RecordingService(this._repo, {SavedCastsRepository? traceRepo})
+    : _traceRepo = traceRepo ?? SavedCastsRepository(storeName: 'traces');
 
   AsciicastRecorder? get asciicastRecorder => _asciicastRecorder;
 
@@ -64,7 +66,7 @@ class RecordingService {
       final filename = 'trace_$timestamp.json.gz';
 
       await saveFile(filename, compressed);
-      await _repo.saveBytes(filename, compressed);
+      await _traceRepo.saveBytes(filename, compressed);
     }
   }
 }

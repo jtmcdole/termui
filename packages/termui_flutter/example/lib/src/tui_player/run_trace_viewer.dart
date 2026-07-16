@@ -92,7 +92,7 @@ class TraceViewerState {
 }
 
 class TraceViewerViewModel {
-  final SavedCastsRepository repository = SavedCastsRepository();
+  final SavedCastsRepository repository;
   List<TraceSpan>? _spans;
   int? _minTs;
   int? _maxTs;
@@ -105,11 +105,13 @@ class TraceViewerViewModel {
   Stream<List<String>> get savedTracesChanges => _savedTracesController.stream;
 
   TraceViewerViewModel({
+    SavedCastsRepository? repository,
     List<TraceSpan>? initialSpans,
     int? initialMinTs,
     int? initialMaxTs,
     String? initialFilename,
-  }) : _spans = initialSpans,
+  }) : repository = repository ?? SavedCastsRepository(storeName: 'traces'),
+       _spans = initialSpans,
        _minTs = initialMinTs,
        _maxTs = initialMaxTs,
        _filename = initialFilename;
@@ -268,62 +270,58 @@ class _TraceViewerTuiAppState extends State<TraceViewerTuiApp> {
 
   bool _handleKeyEvent(term.KeyEvent event) {
     if (_showFileSelector) {
-      if (event.type == term.KeyType.up) {
-        if (_savedTraces.isNotEmpty) {
-          setState(() {
-            _selectedFileIndex =
-                (_selectedFileIndex - 1 + _savedTraces.length) %
-                _savedTraces.length;
-          });
-        }
-        return true;
-      } else if (event.type == term.KeyType.down) {
-        if (_savedTraces.isNotEmpty) {
-          setState(() {
-            _selectedFileIndex = (_selectedFileIndex + 1) % _savedTraces.length;
-          });
-        }
-        return true;
-      } else if (event.type == term.KeyType.enter ||
-          event.key == '\n' ||
-          event.key == '\r') {
-        if (_savedTraces.isNotEmpty &&
-            _selectedFileIndex < _savedTraces.length) {
-          widget.viewModel.loadSavedTrace(_savedTraces[_selectedFileIndex]);
-          setState(() {
-            _showFileSelector = false;
-          });
-        }
-        return true;
-      } else if (event.key == 'd' || event.key == 'D') {
-        if (_savedTraces.isNotEmpty &&
-            _selectedFileIndex < _savedTraces.length) {
-          widget.viewModel.deleteTrace(_savedTraces[_selectedFileIndex]);
-        }
-        return true;
-      } else if (event.key == 'u' || event.key == 'U') {
-        uploadTraceRequestedEvent.post(playerEventBus, null);
-        return true;
-      } else if (event.key == 'escape' ||
-          event.type == term.KeyType.escape ||
-          event.key == 'o' ||
-          event.key == 'O') {
-        setState(() {
-          _showFileSelector = false;
-        });
-        return true;
+      switch (event) {
+        case term.KeyEvent(type: term.KeyType.up):
+          if (_savedTraces.isNotEmpty) {
+            setState(() {
+              _selectedFileIndex =
+                  (_selectedFileIndex - 1 + _savedTraces.length) %
+                  _savedTraces.length;
+            });
+          }
+          return true;
+        case term.KeyEvent(type: term.KeyType.down):
+          if (_savedTraces.isNotEmpty) {
+            setState(() {
+              _selectedFileIndex =
+                  (_selectedFileIndex + 1) % _savedTraces.length;
+            });
+          }
+          return true;
+        case term.KeyEvent(type: term.KeyType.enter) ||
+            term.KeyEvent(key: '\n' || '\r'):
+          if (_savedTraces.isNotEmpty &&
+              _selectedFileIndex < _savedTraces.length) {
+            widget.viewModel.loadSavedTrace(_savedTraces[_selectedFileIndex]);
+            setState(() => _showFileSelector = false);
+          }
+          return true;
+        case term.KeyEvent(key: 'd' || 'D'):
+          if (_savedTraces.isNotEmpty &&
+              _selectedFileIndex < _savedTraces.length) {
+            widget.viewModel.deleteTrace(_savedTraces[_selectedFileIndex]);
+          }
+          return true;
+        case term.KeyEvent(key: 'u' || 'U'):
+          uploadTraceRequestedEvent.post(playerEventBus, null);
+          return true;
+        case term.KeyEvent(type: term.KeyType.escape) ||
+            term.KeyEvent(key: 'escape' || 'o' || 'O'):
+          setState(() => _showFileSelector = false);
+          return true;
+        default:
+          return false;
       }
-      return false; // Let it bubble if unhandled, though usually we consume
     }
 
-    if (event.key == 'o' || event.key == 'O') {
-      setState(() {
-        _showFileSelector = true;
-      });
-      _rootFocusNode.requestFocus();
-      return true;
+    switch (event) {
+      case term.KeyEvent(key: 'o' || 'O'):
+        setState(() => _showFileSelector = true);
+        _rootFocusNode.requestFocus();
+        return true;
+      default:
+        return false;
     }
-    return false;
   }
 
   @override

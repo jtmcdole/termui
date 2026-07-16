@@ -6,7 +6,8 @@ import 'repository_stub.dart'
 
 /// Cross-platform repository for saving, loading, listing, and deleting asciicasts.
 abstract class SavedCastsRepository {
-  factory SavedCastsRepository() => impl.createRepository();
+  factory SavedCastsRepository({String storeName = 'casts'}) =>
+      impl.createRepository(storeName);
 
   /// Lists the names of all saved casts.
   Future<List<String>> listCasts();
