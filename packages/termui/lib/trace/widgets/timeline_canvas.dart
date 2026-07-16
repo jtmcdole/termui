@@ -201,6 +201,9 @@ class TimelineCanvasElement extends Element {
       final startColF = (spanStartUs - w.offsetX) / w.zoomLevel;
       final endColF = (spanEndUs - w.offsetX) / w.zoomLevel;
 
+      final isClippedLeft = startColF < 0;
+      final isClippedRight = endColF > (width - 3);
+
       final startCol = startColF.floor().clamp(0, width - 3);
       final endCol = endColF.floor().clamp(0, width - 3);
 
@@ -301,7 +304,11 @@ class TimelineCanvasElement extends Element {
 
           if (cov > 0.99) {
             final relativeCol = col - startCol;
-            if (spanColWidth >= nameWithPrefix.length &&
+            if (isClippedLeft && col == startCol) {
+              char = '◀';
+            } else if (isClippedRight && col == endCol) {
+              char = '▶';
+            } else if (spanColWidth >= nameWithPrefix.length &&
                 relativeCol >= 0 &&
                 relativeCol < nameWithPrefix.length) {
               char = nameWithPrefix[relativeCol];
