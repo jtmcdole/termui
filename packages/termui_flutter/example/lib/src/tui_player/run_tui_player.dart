@@ -3,13 +3,15 @@ import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 import '../viewmodel.dart';
 import 'tui_player_app.dart';
+import '../repository/repository.dart';
 
 /// Runs the Asciicast Player TUI application under [SceneManager] and [PromptRunner].
 Future<void> runAsciicastPlayerTui(
   term.Terminal terminal, {
   void Function(Buffer buffer)? onFrameRedrawn,
+  SavedCastsRepository? repository,
 }) async {
-  final viewModel = AsciicastPlayerViewModel();
+  final viewModel = AsciicastPlayerViewModel(repository: repository);
 
   final sceneManager = SceneManager(
     terminal,

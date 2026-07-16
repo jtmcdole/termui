@@ -4,10 +4,20 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_flutter/src/terminal.dart';
+import 'package:termui_flutter/src/service/terminal_service.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/terminal/terminal.dart' as term;
-import 'package:termui/perf/fs_locator.dart';
+
+class MockTerminalService implements TerminalService {
+  final Set<String> savedFiles = {};
+
+  @override
+  Future<String?> saveScreenshot(String basename, Uint8List bytes) async {
+    savedFiles.add(basename);
+    return basename;
+  }
+}
 
 void main() {
   test('FlutterTerminal size and events integration test', () async {
@@ -114,6 +124,7 @@ void main() {
   testWidgets('Terminal F12 screenshot and rendering validation', (
     WidgetTester tester,
   ) async {
+    final mockService = MockTerminalService();
     final terminal = FlutterTerminal();
     late void Function(Buffer) drawFrame;
 
@@ -125,6 +136,7 @@ void main() {
             height: 300,
             child: Terminal(
               terminal: terminal,
+              service: mockService,
               fontSize: 14,
               fontFamily: 'Cascadia Mono',
               onRun: (terminal, onDrawFrame) async {
@@ -160,36 +172,27 @@ void main() {
 
     // Verify fallback cells and painter do not crash
     // Now trigger F12 to take a screenshot and save the atlas/coordinates
-    final fs = getDefaultFileSystem();
-    var foundScreenshot = false;
-    var foundAtlas = false;
-    var foundCoordinates = false;
-
     await tester.runAsync(() async {
       await tester.sendKeyEvent(LogicalKeyboardKey.f12);
 
-      // Wait for the SnackBar to appear, indicating that all real file I/O operations have successfully awaited and closed their file handles.
-      for (var i = 0; i < 40; i++) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        await tester.pump();
-        if (find.byType(SnackBar).evaluate().isNotEmpty) {
-          break;
-        }
+      // Wait for the service to be called
+      for (var i = 0; i < 50; i++) {
+        if (mockService.savedFiles.length >= 3) break;
+        await Future.delayed(const Duration(milliseconds: 10));
       }
     });
 
-    final files = fs.currentDirectory.listSync();
-    for (final f in files) {
-      final name = fs.path.basename(f.path);
+    bool foundScreenshot = false;
+    bool foundAtlas = false;
+    bool foundCoordinates = false;
+
+    for (final name in mockService.savedFiles) {
       if (name.startsWith('screenshot_') && name.endsWith('.png')) {
         foundScreenshot = true;
-        f.deleteSync();
       } else if (name.startsWith('atlas_') && name.endsWith('.png')) {
         foundAtlas = true;
-        f.deleteSync();
       } else if (name.startsWith('coordinates_') && name.endsWith('.json')) {
         foundCoordinates = true;
-        f.deleteSync();
       }
     }
 
