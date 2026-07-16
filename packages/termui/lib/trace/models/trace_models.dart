@@ -117,8 +117,16 @@ class _StackEntry {
 
 /// Reconstructs TraceSpans from raw TraceEvents.
 List<TraceSpan> computeSpans(List<TraceEvent> events) {
-  final sorted = List<TraceEvent>.from(events)
-    ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+  final indexedEvents = List.generate(
+    events.length,
+    (i) => MapEntry(i, events[i]),
+  );
+  indexedEvents.sort((a, b) {
+    int cmp = a.value.timestamp.compareTo(b.value.timestamp);
+    if (cmp != 0) return cmp;
+    return a.key.compareTo(b.key);
+  });
+  final sorted = [for (var e in indexedEvents) e.value];
 
   final absoluteMaxTimestamp = sorted.isEmpty ? 0 : sorted.last.timestamp;
 
