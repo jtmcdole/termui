@@ -16,3 +16,4 @@ parser.log
 tmp/
 **/.flutter-plugins-dependencies
 **/atlas_table_*.json
+browser_trace*.json.gz

@@ -3,10 +3,23 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 import 'package:web/web.dart' as web;
+import 'dart:convert';
 import 'package:termui/trace/trace_logger.dart';
 import 'package:termui/trace/models/trace_models.dart';
 
 import 'package:termui/utils/gzip_json.dart';
+
+@JS()
+extension type JSTraceEvent._(JSObject _) implements JSObject {
+  external String? get name;
+  external String? get ph;
+  external String? get cat;
+  external num? get ts;
+  external num? get dur;
+  external num? get tid;
+  external JSAny? get args;
+  external JSAny? get metadata;
+}
 
 @JS('TextDecoder')
 extension type TextDecoder._(JSObject _) implements JSObject {
@@ -65,13 +78,30 @@ Future<List<TraceEvent>> parseTraceEvents(
 
   // 5. Chunk map to avoid blocking the Dart event loop
   for (int i = 0; i < total; i++) {
-    final item = list[i];
+    final item = list[i] as JSTraceEvent?;
     if (item != null) {
-      final dartObj = item.dartify();
-      if (dartObj is Map) {
-        final map = dartObj.cast<String, dynamic>();
-        events.add(TraceEvent.fromJson(map));
+      final argsAny = item.args ?? item.metadata;
+      final Map<String, String> parsedArgs = {};
+      if (argsAny != null) {
+        final dartArgs = argsAny.dartify();
+        if (dartArgs is Map) {
+          dartArgs.forEach((k, v) {
+            parsedArgs[k.toString()] = jsonEncode(v);
+          });
+        }
       }
+
+      events.add(
+        TraceEvent(
+          name: item.name ?? 'Unknown',
+          phase: item.ph ?? 'i',
+          category: item.cat ?? 'TUI',
+          timestamp: item.ts?.toInt() ?? 0,
+          dur: item.dur?.toInt(),
+          tid: item.tid?.toInt() ?? 0,
+          args: parsedArgs,
+        ),
+      );
     }
 
     // Yield to the event loop every 5000 items to keep UI at 60fps
