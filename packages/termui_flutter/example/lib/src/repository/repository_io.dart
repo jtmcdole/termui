@@ -4,7 +4,10 @@ import 'dart:typed_data';
 import 'repository.dart';
 
 class IoSavedCastsRepository implements SavedCastsRepository {
-  Directory get _dir => Directory('saved_casts');
+  final String storeName;
+  IoSavedCastsRepository(this.storeName);
+
+  Directory get _dir => Directory('saved_$storeName');
 
   Future<void> _ensureDir() async {
     if (!await _dir.exists()) {
@@ -21,6 +24,8 @@ class IoSavedCastsRepository implements SavedCastsRepository {
         if (entity is File &&
             (entity.path.endsWith('.cast') ||
                 entity.path.endsWith('.cast.gz') ||
+                entity.path.endsWith('.json') ||
+                entity.path.endsWith('.json.gz') ||
                 entity.path.endsWith('.gz'))) {
           list.add(entity.uri.pathSegments.last);
         }
@@ -83,4 +88,5 @@ class IoSavedCastsRepository implements SavedCastsRepository {
   }
 }
 
-SavedCastsRepository createRepository() => IoSavedCastsRepository();
+SavedCastsRepository createRepository([String storeName = 'casts']) =>
+    IoSavedCastsRepository(storeName);

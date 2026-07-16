@@ -6,8 +6,10 @@ import 'repository.dart';
 
 class WebSavedCastsRepository implements SavedCastsRepository {
   static const String dbName = 'termui_player_db';
-  static const int dbVersion = 1;
-  static const String storeName = 'casts';
+  static const int dbVersion = 2; // Bumped to 2 to add traces store
+  final String storeName;
+
+  WebSavedCastsRepository([this.storeName = 'casts']);
 
   Future<web.IDBDatabase> _openDb() {
     final completer = Completer<web.IDBDatabase>();
@@ -15,7 +17,12 @@ class WebSavedCastsRepository implements SavedCastsRepository {
 
     request.onupgradeneeded = (web.IDBVersionChangeEvent event) {
       final db = request.result as web.IDBDatabase;
-      db.createObjectStore(storeName);
+      if (!db.objectStoreNames.contains('casts')) {
+        db.createObjectStore('casts');
+      }
+      if (!db.objectStoreNames.contains('traces')) {
+        db.createObjectStore('traces');
+      }
     }.toJS;
 
     request.onsuccess = (web.Event event) {
@@ -184,4 +191,5 @@ class WebSavedCastsRepository implements SavedCastsRepository {
   }
 }
 
-SavedCastsRepository createRepository() => WebSavedCastsRepository();
+SavedCastsRepository createRepository([String storeName = 'casts']) =>
+    WebSavedCastsRepository(storeName);
