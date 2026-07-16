@@ -15,8 +15,8 @@ import 'package:termui/perf/tracer.dart';
 import 'backend.dart';
 import 'rendering/atlas.dart';
 import 'rendering/painter.dart';
-import 'util/file_saver.dart';
 import 'util/font_helper.dart';
+import 'service/terminal_service.dart';
 
 /// A widget that embeds a `termui` TUI application within Flutter.
 ///
@@ -71,6 +71,9 @@ class Terminal extends StatefulWidget {
   /// The background color of the terminal view.
   final Color backgroundColor;
 
+  /// The MVVM service used for external operations like saving screenshots.
+  final TerminalService service;
+
   /// Creates a [Terminal] view bounding the TUI app hierarchy.
   const Terminal({
     super.key,
@@ -80,6 +83,7 @@ class Terminal extends StatefulWidget {
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
     this.backgroundColor = Colors.black,
+    this.service = const DefaultTerminalService(),
   });
 
   @override
@@ -123,6 +127,7 @@ class _TerminalState extends State<Terminal> {
       fontFamily: widget.fontFamily,
       fontFamilyFallback: widget.fontFamilyFallback,
       backgroundColor: widget.backgroundColor,
+      service: widget.service,
       onInit: _startLoop,
     );
   }
@@ -166,11 +171,15 @@ class PrivateTuiView extends StatefulWidget {
   /// General terminal canvas background color filler.
   final Color backgroundColor;
 
+  /// The service for saving screenshots.
+  final TerminalService service;
+
   /// Internal widget constructor binding the terminal state to rendering hooks.
   const PrivateTuiView({
     super.key,
     required this.terminal,
     required this.onInit,
+    required this.service,
     this.fontSize = 13,
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
@@ -615,7 +624,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
         if (byteData != null) {
           final pngBytes = byteData.buffer.asUint8List();
-          screenshotBasename = await saveFile(
+          screenshotBasename = await widget.service.saveScreenshot(
             'screenshot_$timestamp.png',
             pngBytes,
           );
@@ -629,7 +638,10 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         );
         if (byteData != null) {
           final pngBytes = byteData.buffer.asUint8List();
-          atlasBasename = await saveFile('atlas_$timestamp.png', pngBytes);
+          atlasBasename = await widget.service.saveScreenshot(
+            'atlas_$timestamp.png',
+            pngBytes,
+          );
         }
 
         final rectsMap = atlas.charRects.map((key, value) {
@@ -652,11 +664,14 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           );
         });
 
-        final atlasJsonData = const JsonEncoder.withIndent(
+        final atlasJsonStr = const JsonEncoder.withIndent(
           '  ',
         ).convert(rectsMap);
-        final atlasJsonBytes = utf8.encode(atlasJsonData);
-        await saveFile('atlas_table_$timestamp.json', atlasJsonBytes);
+        final atlasJsonBytes = utf8.encode(atlasJsonStr);
+        await widget.service.saveScreenshot(
+          'atlas_table_$timestamp.json',
+          atlasJsonBytes,
+        );
       }
 
       final buffer = _currentBuffer;
@@ -705,11 +720,11 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
           }
         }
 
-        final jsonData = const JsonEncoder.withIndent('  ').convert(data);
-        final bytes = utf8.encode(jsonData);
-        coordinatesBasename = await saveFile(
+        final jsonStr = const JsonEncoder.withIndent('  ').convert(data);
+        final jsonBytes = utf8.encode(jsonStr);
+        coordinatesBasename = await widget.service.saveScreenshot(
           'coordinates_$timestamp.json',
-          bytes,
+          jsonBytes,
         );
       }
 
