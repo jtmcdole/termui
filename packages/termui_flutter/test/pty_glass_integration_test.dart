@@ -15,14 +15,15 @@ void main() {
     SceneManager? sceneManager;
     final future = runPtyGlassDemo(terminal).then((sm) => sceneManager = sm);
 
-    // Let initialization finish (wait for microtasks)
-    await Future.delayed(const Duration(milliseconds: 100));
+    // Wait until the first frame is rendered
+    await waitForCondition(
+      () => backend.stdout.isNotEmpty,
+      timeout: const Duration(seconds: 5),
+    );
 
     // 1. Initial State: the glass layer should be focused.
     // When we press 's', settings should pop up.
     backend.pushString('s');
-
-    await Future.delayed(const Duration(milliseconds: 50));
 
     // Test if 's' worked: It should have drawn the settings layer!
     // Since we don't have SceneManager handle easily available, we check if
@@ -30,7 +31,12 @@ void main() {
 
     // Toggle debug borders
     backend.pushString('d');
-    await Future.delayed(const Duration(milliseconds: 50));
+
+    // Ensure the condition is met by polling for the debug monocle
+    await waitForCondition(
+      () => backend.stdout.contains('🧐'),
+      timeout: const Duration(seconds: 5),
+    );
 
     // There should be a [🧐] on the screen now!
     final screenContents = backend.stdout;

@@ -1,7 +1,26 @@
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui/termui.dart';
+import 'package:termui/ui/event.dart' as ui;
 import 'package:example_flutter/src/tui_player/run_tui_player.dart';
+import 'package:example_flutter/src/repository/repository.dart';
+import 'dart:typed_data';
+
+class MockSavedCastsRepository implements SavedCastsRepository {
+  @override
+  Future<void> deleteCast(String name) async {}
+  @override
+  Future<List<String>> listCasts() async => [];
+  @override
+  Future<Uint8List?> loadBytes(String name) async => null;
+  @override
+  Future<String?> loadCast(String name) async => null;
+  @override
+  Future<void> saveBytes(String name, Uint8List content) async {}
+  @override
+  Future<void> saveCast(String name, String content) async {}
+}
 
 void main() {
   setUp(() {
@@ -9,16 +28,22 @@ void main() {
   });
 
   group('TUI Player Integration Tests', () {
-    test('TUI Player starts, renders frame, and exits on Ctrl+C', () async {
-      final backend = MockTerminalBackend();
-      final terminal = Terminal(backend);
+    test('TUI Player starts, renders frame, and exits on Ctrl+C', () {
+      FakeAsync().run((async) {
+        final backend = MockTerminalBackend();
+        final terminal = MockTerminal(backend);
+        final mockRepo = MockSavedCastsRepository();
 
-      // Start the TUI player in the mock backend
-      final playerFuture = runAsciicastPlayerTui(terminal);
+        var isDone = false;
 
-      try {
+        // Start the TUI player in the mock backend
+        runAsciicastPlayerTui(
+          terminal,
+          repository: mockRepo,
+        ).then((_) => isDone = true);
+
         // Let initial frame renders complete
-        await Future.delayed(const Duration(milliseconds: 100));
+        async.elapse(const Duration(milliseconds: 100));
 
         // Assert player has rendered header bar and control strings
         final allWrites = backend.writes.join('');
@@ -30,12 +55,18 @@ void main() {
         expect(allWrites.contains('Space'), isTrue); // Hint text
 
         // Inject Ctrl+C to terminate the PromptRunner loop
-        backend.pushBytes('\x03'.codeUnits);
-        await Future.delayed(const Duration(milliseconds: 100));
-      } finally {
+        terminal.injectTestEvent(
+          const ui.KeyEvent(
+            'c',
+            ui.KeyType.character,
+            modifiers: {ui.Modifier.control},
+          ),
+        );
+        async.flushMicrotasks();
+
         terminal.dispose();
-        await playerFuture;
-      }
+        expect(isDone, isTrue);
+      });
     });
   });
 }
