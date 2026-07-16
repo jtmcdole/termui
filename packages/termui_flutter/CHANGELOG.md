@@ -1,3 +1,7 @@
+## 0.6.9
+
+ - **REFACTOR**(flutter): extract TerminalService for MVVM screenshot handling.
+
 ## 0.6.8
 
  - **FIX**(trace): resolve double-compression bug and decouple trace storage.
