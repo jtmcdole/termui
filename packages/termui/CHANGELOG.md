@@ -1,3 +1,11 @@
+## 0.7.7
+
+ - **PERF**(trace): replace duration buckets with zero-allocation IntervalTree.
+ - **PERF**: buckets and callbacks to speed up rendering.
+ - **FIX**(pty2): quote Windows command line tokens and enable ConPTY inside automated tests.
+ - **FIX**(trace): add visual off-screen clipping indicators to TimelineCanvas.
+ - **FIX**: web trace removing dartify.
+
 ## 0.7.6
 
  - **FIX**(trace): resolve double-compression bug and decouple trace storage.

@@ -1,3 +1,8 @@
+## 0.6.10
+
+ - **FIX**(pty2): correct ioctl FFI varargs and remove automatic login shell flag.
+ - **FIX**: web trace removing dartify.
+
 ## 0.6.9
 
  - **REFACTOR**(flutter): extract TerminalService for MVVM screenshot handling.

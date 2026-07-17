@@ -10,6 +10,6 @@ resolution: workspace
 
 
 dependencies:
-  termui: ^0.7.6
+  termui: ^0.7.7
   termui_hotreload:
     path: ../
