@@ -148,6 +148,10 @@ class PtyCoreWindows implements PtyCore, Finalizable {
         // setup startup info for ConPTY
         final si = arena<win32.STARTUPINFOEX>();
         si.ref.StartupInfo.cb = sizeOf<win32.STARTUPINFOEX>();
+        si.ref.StartupInfo.dwFlags = win32.STARTF_USESTDHANDLES;
+        si.ref.StartupInfo.hStdInput = win32.HANDLE(nullptr);
+        si.ref.StartupInfo.hStdOutput = win32.HANDLE(nullptr);
+        si.ref.StartupInfo.hStdError = win32.HANDLE(nullptr);
 
         final bytesRequired = arena<IntPtr>();
         win32.InitializeProcThreadAttributeList(null, 1, bytesRequired);
@@ -180,7 +184,7 @@ class PtyCoreWindows implements PtyCore, Finalizable {
             pwstrCommandLine,
             null,
             null,
-            false, // <--- inherit handles is false!
+            false, // <--- Inherit handles must be FALSE
             win32.EXTENDED_STARTUPINFO_PRESENT |
                 win32.CREATE_UNICODE_ENVIRONMENT,
             pEnvironment,
@@ -220,11 +224,16 @@ class PtyCoreWindows implements PtyCore, Finalizable {
               outputReadHandle = win32.HANDLE(
                 Pointer.fromAddress(hOutReadPipe.value),
               );
-              inputReadHandle = win32.HANDLE(
-                Pointer.fromAddress(hInputReadPipe.value),
+
+              inputReadHandle = win32.HANDLE(nullptr);
+              outputWriteHandle = win32.HANDLE(nullptr);
+
+              // Close the child side handles in the parent process
+              win32.CloseHandle(
+                win32.HANDLE(Pointer.fromAddress(hInputReadPipe.value)),
               );
-              outputWriteHandle = win32.HANDLE(
-                Pointer.fromAddress(hOutWritePipe.value),
+              win32.CloseHandle(
+                win32.HANDLE(Pointer.fromAddress(hOutWritePipe.value)),
               );
             }
           } else {
