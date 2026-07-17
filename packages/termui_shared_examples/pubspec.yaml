@@ -15,7 +15,7 @@ dependencies:
     path: ../termui_recorder
   termui_pty:
     path: ../termui_pty
-  pty2: ^0.5.1
+  pty2: ^0.5.2
   characters: ^1.4.0
   file: ^7.0.1
   core_bus: ^1.0.1

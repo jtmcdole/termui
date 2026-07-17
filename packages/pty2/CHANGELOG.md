@@ -1,3 +1,9 @@
+## 0.5.2
+
+ - **FIX**(pty2): resolve ConPTY initialization failures and test hangs.
+ - **FIX**(pty2): quote Windows command line tokens and enable ConPTY inside automated tests.
+ - **FIX**(pty2): correct ioctl FFI varargs and remove automatic login shell flag.
+
 ## 0.5.1
 
  - **FIX**(tests): github actions exercised different pathways in the testing.

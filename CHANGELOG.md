@@ -3,6 +3,57 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-16
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`pty2` - `v0.5.2`](#pty2---v052)
+ - [`termui` - `v0.7.7`](#termui---v077)
+ - [`termui_flutter` - `v0.6.10`](#termui_flutter---v0610)
+ - [`termui_pty` - `v0.3.7`](#termui_pty---v037)
+ - [`termui_recorder` - `v0.5.7+10`](#termui_recorder---v05710)
+ - [`termui_test` - `v0.2.8+11`](#termui_test---v02811)
+ - [`termui_hotreload` - `v0.6.10+7`](#termui_hotreload---v06107)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_pty` - `v0.3.7`
+ - `termui_recorder` - `v0.5.7+10`
+ - `termui_test` - `v0.2.8+11`
+ - `termui_hotreload` - `v0.6.10+7`
+
+---
+
+#### `pty2` - `v0.5.2`
+
+ - **FIX**(pty2): resolve ConPTY initialization failures and test hangs.
+ - **FIX**(pty2): quote Windows command line tokens and enable ConPTY inside automated tests.
+ - **FIX**(pty2): correct ioctl FFI varargs and remove automatic login shell flag.
+
+#### `termui` - `v0.7.7`
+
+ - **PERF**(trace): replace duration buckets with zero-allocation IntervalTree.
+ - **PERF**: buckets and callbacks to speed up rendering.
+ - **FIX**(pty2): quote Windows command line tokens and enable ConPTY inside automated tests.
+ - **FIX**(trace): add visual off-screen clipping indicators to TimelineCanvas.
+ - **FIX**: web trace removing dartify.
+
+#### `termui_flutter` - `v0.6.10`
+
+ - **FIX**(pty2): correct ioctl FFI varargs and remove automatic login shell flag.
+ - **FIX**: web trace removing dartify.
+
+
 ## 2026-07-15
 
 ### Changes
