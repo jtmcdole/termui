@@ -27,7 +27,6 @@ dependencies:
 
 dev_dependencies:
   test: ">=1.24.0 <2.0.0"
+  termui_shared_examples: any
   termui_test: ^0.2.8+11
-  termui_shared_examples:
-    path: ../termui_shared_examples
   benchmark_harness: ^2.2.0
