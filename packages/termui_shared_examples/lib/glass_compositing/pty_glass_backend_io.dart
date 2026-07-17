@@ -10,7 +10,7 @@ class PtyBackend {
   /// Starts the process and returns a [PseudoTerminalView].
   Widget buildView(FocusNode focusNode) {
     _pty = PseudoTerminal.start(
-      Platform.isWindows ? 'pwsh.exe' : '/opt/homebrew/bin/btop',
+      Platform.isWindows ? 'pwsh.exe' : 'btop',
       Platform.isWindows
           ? ['-C', 'ping 127.0.0.1 -t']
           : [], // Empty array for Mac/Linux
