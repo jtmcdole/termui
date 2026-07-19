@@ -17,6 +17,7 @@ workspace:
   - packages/termui_hotreload/example
   - packages/pty2
   - packages/termui_pty
+  - packages/termui_audio
 
 dev_dependencies:
   melos: ^8.1.0
