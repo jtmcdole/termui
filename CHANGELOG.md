@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-18
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.6.11`](#termui_flutter---v0611)
+
+---
+
+#### `termui_flutter` - `v0.6.11`
+
+ - **FIX**(rendering): respect unicode variation selectors for color emojis.
+ - **FIX**: barrel export waitForFontsToLoad.
+
+
 ## 2026-07-16
 
 ### Changes

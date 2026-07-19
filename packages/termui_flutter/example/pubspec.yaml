@@ -38,7 +38,7 @@ dependencies:
   kterm: ^1.0.0
   file: ^7.0.0
   termui: any
-  termui_flutter: any
+  termui_flutter: ^0.6.11
   termui_shared_examples: any
   termui_recorder: any
   termui_pty: any
