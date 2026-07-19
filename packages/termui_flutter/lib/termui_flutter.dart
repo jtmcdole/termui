@@ -71,3 +71,4 @@ export 'src/backend.dart' show FlutterTerminal;
 export 'src/terminal.dart' show Terminal;
 export 'src/rendering/atlas.dart' show GlyphAtlas, GlyphAtlasGenerator;
 export 'src/util/file_saver.dart' show saveFile;
+export 'src/util/font_helper.dart' show waitForFontsToLoad;
