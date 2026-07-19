@@ -1,3 +1,8 @@
+## 0.6.11
+
+ - **FIX**(rendering): respect unicode variation selectors for color emojis.
+ - **FIX**: barrel export waitForFontsToLoad.
+
 ## 0.6.10
 
  - **FIX**(pty2): correct ioctl FFI varargs and remove automatic login shell flag.
