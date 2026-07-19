@@ -17,10 +17,10 @@ bool _isBlockCharacter(String char) {
 /// Determines if a given grapheme cluster character represents a color emoji.
 bool isColorEmoji(String char) {
   if (char.isEmpty) return false;
+  if (char.runes.contains(0xFE0E)) return false;
+  if (char.runes.contains(0xFE0F)) return true;
   final code = char.runes.first;
   if (code >= 0x1F300 && code <= 0x1FAFF) return true;
-  if (code >= 0x2600 && code <= 0x27BF) return true;
-  if (char.runes.contains(0xFE0F)) return true;
   return false;
 }
 
