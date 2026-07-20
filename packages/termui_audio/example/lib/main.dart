@@ -1,0 +1,104 @@
+// ignore_for_file: public_member_api_docs
+import 'dart:io';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:termui_flutter/termui_flutter.dart';
+import 'package:termui_audio/termui_audio.dart';
+import 'package:termui_audio_example/src/audio_player_app.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const MainApp());
+}
+
+class MainApp extends StatelessWidget {
+  const MainApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'TermUI Audio Cozy Player',
+      theme: ThemeData.dark(),
+      home: const AudioPlayerPage(),
+      debugShowCheckedModeBanner: false,
+    );
+  }
+}
+
+class AudioPlayerPage extends StatefulWidget {
+  const AudioPlayerPage({super.key});
+
+  @override
+  State<AudioPlayerPage> createState() => _AudioPlayerPageState();
+}
+
+class _AudioPlayerPageState extends State<AudioPlayerPage> {
+  late final FlutterTerminal _terminal;
+  AudioService? _audioService;
+
+  @override
+  void initState() {
+    super.initState();
+    _terminal = FlutterTerminal();
+  }
+
+  @override
+  void dispose() {
+    _terminal.dispose();
+    _audioService?.dispose();
+    super.dispose();
+  }
+
+  Future<SoundHandle> _flutterLoadAsset(String assetPath) async {
+    final service = _audioService;
+    if (service == null) {
+      throw Exception('Audio service not initialized');
+    }
+    if (kIsWeb) {
+      // In Flutter Web, the assets are served by the web server
+      return await service.loadSound(
+        'assets/assets/${assetPath.split('/').last}',
+      );
+    } else {
+      final byteData = await rootBundle.load(assetPath);
+      final tempDir = await getTemporaryDirectory();
+      final tempFile = File('${tempDir.path}/${assetPath.split('/').last}');
+      await tempFile.writeAsBytes(byteData.buffer.asUint8List());
+      return await service.loadSound(tempFile.absolute.path);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 800, maxHeight: 600),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.white24),
+            borderRadius: BorderRadius.circular(8.0),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Terminal(
+            terminal: _terminal,
+            fontSize: 16.0,
+            fontFamily: 'MesloLGS NF',
+            onRun: (terminal, drawFrame) async {
+              final service = TermuiAudio.instance;
+              _audioService = service;
+              await service.init();
+              await runAudioPlayerApp(
+                terminal,
+                service,
+                _flutterLoadAsset,
+                onFrameRedrawn: drawFrame,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
