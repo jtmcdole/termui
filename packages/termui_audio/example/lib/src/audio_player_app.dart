@@ -19,28 +19,149 @@ const Map<String, String> playlist = {
   'Swish 4': 'assets/fast_swish4.ogg',
 };
 
+class AudioPlayerViewModel {
+  final TermuiAudioEngine audioService;
+  final AssetLoader _loadAsset;
+
+  bool isLoading = true;
+  double loadProgress = 0.0;
+  String? loadError;
+  bool _startedLoading = false;
+
+  final List<AudioBuffer?> loadedSounds = List.filled(playlist.length, null);
+  final List<String> names = playlist.keys.toList();
+  final List<String> paths = playlist.values.toList();
+
+  final List<double> sourceX = [0.0, -5.0, 5.0, -5.0, 5.0];
+  final List<double> sourceY = [0.0, -5.0, -5.0, 5.0, 5.0];
+  final List<AudioVoice?> activeVoices = List.filled(5, null);
+
+  double bgmVolume = 1.0;
+  double sfxVolume = 1.0;
+
+  final List<void Function()> _listeners = [];
+
+  AudioPlayerViewModel({
+    required this.audioService,
+    required AssetLoader loadAsset,
+  }) : _loadAsset = loadAsset;
+
+  void addListener(void Function() listener) {
+    _listeners.add(listener);
+  }
+
+  void removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
+
+  void _notifyListeners() {
+    for (final listener in _listeners) {
+      listener();
+    }
+  }
+
+  Future<void> loadAll() async {
+    if (_startedLoading) return;
+    _startedLoading = true;
+
+    try {
+      for (int i = 0; i < paths.length; i++) {
+        final b = await _loadAsset(
+          paths[i],
+          onProgress: (p) {
+            loadProgress = (i + p) / paths.length;
+            _notifyListeners();
+          },
+        );
+        loadedSounds[i] = b;
+      }
+      isLoading = false;
+      loadProgress = 1.0;
+      _notifyListeners();
+    } catch (e, stack) {
+      loadError = '$e\n$stack';
+      _notifyListeners();
+    }
+  }
+
+  void togglePlay(int index) {
+    if (activeVoices[index] != null) {
+      audioService.stop(activeVoices[index]!);
+      activeVoices[index] = null;
+    } else {
+      activeVoices[index] = audioService.play3d(
+        loadedSounds[index]!,
+        sourceX[index],
+        sourceY[index],
+        0.0,
+      );
+      final vol = index == 0 ? bgmVolume : sfxVolume;
+      audioService.setVoiceVolume(activeVoices[index]!, vol);
+    }
+    _notifyListeners();
+  }
+
+  void setBgmVolume(double value) {
+    bgmVolume = value;
+    if (activeVoices[0] != null) {
+      audioService.setVoiceVolume(activeVoices[0]!, value);
+    }
+    _notifyListeners();
+  }
+
+  void setSfxVolume(double value) {
+    sfxVolume = value;
+    for (int i = 1; i < activeVoices.length; i++) {
+      if (activeVoices[i] != null) {
+        audioService.setVoiceVolume(activeVoices[i]!, value);
+      }
+    }
+    _notifyListeners();
+  }
+
+  void updatePos(int index, double nx, double ny) {
+    sourceX[index] = nx;
+    sourceY[index] = ny;
+    if (activeVoices[index] != null) {
+      audioService.set3dSourceParameters(
+        activeVoices[index]!,
+        sourceX[index],
+        sourceY[index],
+        0.0,
+      );
+    }
+    _notifyListeners();
+  }
+}
+
 Future<void> runAudioPlayerApp(
   term.Terminal terminal,
   TermuiAudioEngine audioService,
   AssetLoader loadAsset, {
   bool isFlutter = false,
+  void Function(Buffer)? onFrameRedrawn,
 }) async {
   final sceneManager = SceneManager(
     terminal,
     renderingMode: RenderingMode.alternateScreen,
   )..enableMouseTracking = true;
 
+  final viewModel = AudioPlayerViewModel(
+    audioService: audioService,
+    loadAsset: loadAsset,
+  );
+
+  // Decoupled loading: Start loading in the background before or during UI rendering.
+  viewModel.loadAll();
+
   final runner = PromptRunner<void>(
     terminal: terminal,
     alternateScreen: false,
     mode: ExecutionMode.managed,
     exitConditions: const {PromptExitTrigger.controlC: PromptExitAction.abort},
-    widget: AudioPlayerAppWidget(
-      terminal: terminal,
-      audioService: audioService,
-      loadAsset: loadAsset,
-    ),
+    widget: AudioPlayerAppWidget(viewModel: viewModel),
     onFramePainted: (buf) {
+      if (onFrameRedrawn != null) onFrameRedrawn(buf);
       sceneManager.render();
     },
   );
@@ -68,129 +189,54 @@ Future<void> runAudioPlayerApp(
 }
 
 class AudioPlayerAppWidget extends StatefulWidget {
-  final term.Terminal terminal;
-  final TermuiAudioEngine audioService;
-  final AssetLoader loadAsset;
+  final AudioPlayerViewModel viewModel;
 
-  const AudioPlayerAppWidget({
-    super.key,
-    required this.terminal,
-    required this.audioService,
-    required this.loadAsset,
-  });
+  const AudioPlayerAppWidget({super.key, required this.viewModel});
 
   @override
   State<AudioPlayerAppWidget> createState() => _AudioPlayerAppWidgetState();
 }
 
 class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
-  bool isLoading = true;
-  double loadProgress = 0.0;
-  bool _startedLoading = false;
-
-  late final List<AudioBuffer?> loadedSounds = List.filled(
-    playlist.length,
-    null,
-  );
-  late final List<String> names = playlist.keys.toList();
-  late final List<String> paths = playlist.values.toList();
-
-  final List<double> sourceX = [0.0, -5.0, 5.0, -5.0, 5.0];
-  final List<double> sourceY = [0.0, -5.0, -5.0, 5.0, 5.0];
-  final List<AudioVoice?> activeVoices = List.filled(5, null);
-
-  double bgmVolume = 1.0;
-  double sfxVolume = 1.0;
+  void _onStateChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    if (!_startedLoading) {
-      _startedLoading = true;
-      _loadAll();
-    }
+    widget.viewModel.addListener(_onStateChanged);
   }
 
-  Future<void> _loadAll() async {
-    for (int i = 0; i < paths.length; i++) {
-      final b = await widget.loadAsset(
-        paths[i],
-        onProgress: (p) {
-          if (mounted) {
-            setState(() {
-              loadProgress = (i + p) / paths.length;
-            });
-          }
-        },
-      );
-      loadedSounds[i] = b;
-    }
-    if (mounted) {
-      setState(() {
-        isLoading = false;
-        loadProgress = 1.0;
-      });
-    }
-  }
-
-  void _togglePlay(int index) {
-    if (activeVoices[index] != null) {
-      widget.audioService.stop(activeVoices[index]!);
-      activeVoices[index] = null;
-    } else {
-      activeVoices[index] = widget.audioService.play3d(
-        loadedSounds[index]!,
-        sourceX[index],
-        sourceY[index],
-        0.0,
-      );
-      // Apply initial volume
-      final vol = index == 0 ? bgmVolume : sfxVolume;
-      widget.audioService.setVoiceVolume(activeVoices[index]!, vol);
-    }
-    setState(() {});
-  }
-
-  void _setBgmVolume(double value) {
-    setState(() => bgmVolume = value);
-    if (activeVoices[0] != null) {
-      widget.audioService.setVoiceVolume(activeVoices[0]!, value);
-    }
-  }
-
-  void _setSfxVolume(double value) {
-    setState(() => sfxVolume = value);
-    for (int i = 1; i < activeVoices.length; i++) {
-      if (activeVoices[i] != null) {
-        widget.audioService.setVoiceVolume(activeVoices[i]!, value);
-      }
-    }
-  }
-
-  void _updatePos(int index, double nx, double ny) {
-    setState(() {
-      sourceX[index] = nx;
-      sourceY[index] = ny;
-    });
-    if (activeVoices[index] != null) {
-      widget.audioService.set3dSourceParameters(
-        activeVoices[index]!,
-        sourceX[index],
-        sourceY[index],
-        0.0,
-      );
-    }
+  @override
+  void dispose() {
+    widget.viewModel.removeListener(_onStateChanged);
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (isLoading) {
+    final vm = widget.viewModel;
+
+    if (vm.loadError != null) {
+      return Align(
+        alignment: Alignment.center,
+        child: Text(
+          'Error loading audio: ${vm.loadError}',
+          style: const Style(foreground: Colors.red),
+        ),
+      );
+    }
+
+    if (vm.isLoading) {
       return Align(
         alignment: Alignment.center,
         child: Column([
           const Text('Loading Audio Assets...'),
           const SizedBox(height: 1),
-          LinearProgressIndicator(loadProgress, showPercentage: true),
+          LinearProgressIndicator(vm.loadProgress, showPercentage: true),
         ]),
       );
     }
@@ -223,10 +269,12 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
           ),
           const SizedBox(height: 1),
           Row([
-            for (int i = 0; i < names.length; i++) ...[
+            for (int i = 0; i < vm.names.length; i++) ...[
               InkwellButton(
-                text: activeVoices[i] != null ? '>> ${names[i]}' : names[i],
-                onPressed: () => _togglePlay(i),
+                text: vm.activeVoices[i] != null
+                    ? '>> ${vm.names[i]}'
+                    : vm.names[i],
+                onPressed: () => vm.togglePlay(i),
                 color1: CharmColors.charple,
                 color2: CharmColors.hazy,
               ),
@@ -240,10 +288,10 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
               width: 20,
               height: 1,
               child: Slider(
-                value: bgmVolume,
+                value: vm.bgmVolume,
                 min: 0.0,
                 max: 1.0,
-                onChanged: _setBgmVolume,
+                onChanged: vm.setBgmVolume,
               ),
             ),
             const SizedBox(width: 4),
@@ -252,10 +300,10 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
               width: 20,
               height: 1,
               child: Slider(
-                value: sfxVolume,
+                value: vm.sfxVolume,
                 min: 0.0,
                 max: 1.0,
-                onChanged: _setSfxVolume,
+                onChanged: vm.setSfxVolume,
               ),
             ),
           ]),
@@ -263,9 +311,9 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
           SpatialGridArea(
             width: 50,
             height: 15,
-            sourceX: sourceX,
-            sourceY: sourceY,
-            onPositionChanged: _updatePos,
+            sourceX: vm.sourceX,
+            sourceY: vm.sourceY,
+            onPositionChanged: vm.updatePos,
           ),
         ]),
       ),
