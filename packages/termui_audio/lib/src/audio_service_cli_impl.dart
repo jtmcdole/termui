@@ -8,10 +8,11 @@ import 'soloud_cli.dart';
 /// The pure Dart CLI backend that directly interfaces with the compiled C++
 /// SoLoud library using FFI and Native Assets.
 class CliAudioService implements AudioService {
-  final Map<SoundHandle, int> _loadedHashes = {};
-  final Map<SoundHandle, List<int>> _playingVoices = {};
+  final Map<int, WeakReference<SoundHandle>> _loadedHandles = {};
+  final Map<int, List<int>> _playingVoices = {};
   int? _bgmVoice;
   bool _inited = false;
+  StreamSubscription<ProcessSignal>? _sigintSub;
 
   // Auto-Reclaiming Memory (NativeFinalizer)
   // Bind SoLoud_destroySound address to NativeFinalizer
@@ -27,7 +28,7 @@ class CliAudioService implements AudioService {
 
     // Hardware Release (ProcessSignal)
     try {
-      ProcessSignal.sigint.watch().listen((_) {
+      _sigintSub = ProcessSignal.sigint.watch().listen((_) {
         disposeEngine();
         exit(0);
       });
@@ -47,10 +48,10 @@ class CliAudioService implements AudioService {
     if (!_inited) throw Exception('Engine not initialized.');
 
     final file = File(path);
-    if (!file.existsSync()) {
+    if (!await file.exists()) {
       throw FileSystemException('Sound file not found', path);
     }
-    final bytes = file.readAsBytesSync();
+    final bytes = await file.readAsBytes();
 
     final namePtr = path.toNativeUtf8().cast<Char>();
     final bufferPtr = calloc<Uint8>(bytes.length);
@@ -64,7 +65,7 @@ class CliAudioService implements AudioService {
       }
       final hash = hashPtr.value;
       final handle = SoundHandle(hash);
-      _loadedHashes[handle] = hash;
+      _loadedHandles[hash] = WeakReference(handle);
 
       // Attach finalizer to the SoundHandle to auto-dispose memory
       // We pass the hash as an address pointer using Pointer.fromAddress(hash)
@@ -82,9 +83,7 @@ class CliAudioService implements AudioService {
   Future<void> playSound(SoundHandle handle, {bool loop = false}) async {
     if (!_inited) throw Exception('Engine not initialized.');
 
-    final hash = _loadedHashes[handle];
-    if (hash == null) return;
-
+    final hash = handle.id as int;
     final voicePtr = calloc<Uint32>();
     try {
       final res = play(hash, 0, 1.0, 0.0, false, loop, 0.0, voicePtr);
@@ -92,7 +91,7 @@ class CliAudioService implements AudioService {
         throw Exception('Failed to play sound. Error code: $res');
       }
       final voice = voicePtr.value;
-      _playingVoices.putIfAbsent(handle, () => []).add(voice);
+      _playingVoices.putIfAbsent(hash, () => []).add(voice);
       if (loop) {
         _bgmVoice = voice;
       }
@@ -105,7 +104,8 @@ class CliAudioService implements AudioService {
   Future<void> stopSound(SoundHandle handle) async {
     if (!_inited) return;
 
-    final voices = _playingVoices[handle];
+    final hash = handle.id as int;
+    final voices = _playingVoices[hash];
     if (voices != null) {
       for (final voice in voices) {
         stop(voice);
@@ -126,14 +126,20 @@ class CliAudioService implements AudioService {
   Future<void> dispose() async {
     if (!_inited) return;
 
+    await _sigintSub?.cancel();
+    _sigintSub = null;
+
     // Detach finalizer from all loaded handles as we are explicitly disposing
-    for (final handle in _loadedHashes.keys) {
-      _soundFinalizer.detach(handle);
-      disposeSound(_loadedHashes[handle]!);
+    for (final entry in _loadedHandles.entries) {
+      final handle = entry.value.target;
+      if (handle != null) {
+        _soundFinalizer.detach(handle);
+      }
+      disposeSound(entry.key);
     }
 
     disposeEngine();
-    _loadedHashes.clear();
+    _loadedHandles.clear();
     _playingVoices.clear();
     _bgmVoice = null;
     _inited = false;
