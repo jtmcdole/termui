@@ -1,0 +1,26 @@
+name: termui_audio_example
+description: Example application demonstrating termui_audio usage in CLI and Flutter.
+version: 0.1.0
+publish_to: 'none'
+
+resolution: workspace
+
+environment:
+  sdk: ">=3.11.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  termui: ^0.7.7
+  termui_flutter: ^0.6.11
+  termui_audio: ^0.1.0
+  path_provider: ^2.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  assets:
+    - assets/
