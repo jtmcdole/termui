@@ -60,3 +60,49 @@ external void disposeSound(int soundHash);
 
 @Native<Void Function(Pointer<Void>)>(symbol: 'SoLoud_destroySound')
 external void SoLoud_destroySound(Pointer<Void> handle);
+
+@Native<
+  Int32 Function(
+    Uint32,
+    Uint32,
+    Float,
+    Float,
+    Float,
+    Float,
+    Float,
+    Float,
+    Float,
+    Bool,
+    Bool,
+    Double,
+    Pointer<Uint32>,
+  )
+>(symbol: 'play3d')
+external int play3d(
+  int soundHash,
+  int busId,
+  double posX,
+  double posY,
+  double posZ,
+  double velX,
+  double velY,
+  double velZ,
+  double volume,
+  bool paused,
+  bool looping,
+  double loopingStartAt,
+  Pointer<Uint32> handle,
+);
+
+@Native<Void Function(Uint32, Float, Float, Float, Float, Float, Float)>(
+  symbol: 'set3dSourceParameters',
+)
+external void set3dSourceParameters(
+  int handle,
+  double posX,
+  double posY,
+  double posZ,
+  double velocityX,
+  double velocityY,
+  double velocityZ,
+);

@@ -7,7 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_audio/termui_audio.dart';
 // ignore: implementation_imports
-import 'package:termui_audio/src/audio_service_flutter_impl.dart';
+import 'package:termui_audio/src/impl/flutter/flutter_audio_engine.dart';
 import 'package:termui_audio_example/src/audio_player_app.dart';
 
 void main() {
@@ -18,7 +18,7 @@ void main() {
           Platform.isMacOS ||
           Platform.isAndroid ||
           Platform.isIOS)) {
-    TermuiAudio.instance = FlutterAudioService();
+    TermuiAudio.instance = FlutterAudioEngine();
   }
   runApp(const MainApp());
 }
@@ -46,7 +46,7 @@ class AudioPlayerPage extends StatefulWidget {
 
 class _AudioPlayerPageState extends State<AudioPlayerPage> {
   late final FlutterTerminal _terminal;
-  AudioService? _audioService;
+  TermuiAudioEngine? _audioService;
 
   @override
   void initState() {
@@ -61,14 +61,14 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
     super.dispose();
   }
 
-  Future<SoundHandle> _flutterLoadAsset(String assetPath) async {
+  Future<AudioBuffer> _flutterLoadAsset(String assetPath) async {
     final service = _audioService;
     if (service == null) {
       throw Exception('Audio service not initialized');
     }
     if (kIsWeb) {
       // In Flutter Web, the assets are served by the web server
-      return await service.loadSound(
+      return await service.loadUrl(
         'assets/assets/${assetPath.split('/').last}',
       );
     } else {
@@ -76,7 +76,7 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
       final tempDir = await getTemporaryDirectory();
       final tempFile = File('${tempDir.path}/${assetPath.split('/').last}');
       await tempFile.writeAsBytes(byteData.buffer.asUint8List());
-      return await service.loadSound(tempFile.absolute.path);
+      return await service.loadFile(tempFile.absolute.path);
     }
   }
 
