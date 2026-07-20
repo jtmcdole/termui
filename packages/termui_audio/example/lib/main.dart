@@ -61,6 +61,8 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
     super.dispose();
   }
 
+  static int _fileLoadCounter = 0;
+
   Future<AudioBuffer> _flutterLoadAsset(
     String assetPath, {
     LoadProgressCallback? onProgress,
@@ -78,7 +80,10 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
     } else {
       final byteData = await rootBundle.load(assetPath);
       final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/${assetPath.split('/').last}');
+      final timestamp = _fileLoadCounter++;
+      final tempFile = File(
+        '${tempDir.path}/${timestamp}_${assetPath.split('/').last}',
+      );
       await tempFile.writeAsBytes(byteData.buffer.asUint8List());
       return await service.loadFile(
         tempFile.absolute.path,
@@ -107,7 +112,12 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
               _audioService = service;
               print('TermuiAudio instance type: ${service.runtimeType}');
               await service.init();
-              await runAudioPlayerApp(terminal, service, _flutterLoadAsset);
+              await runAudioPlayerApp(
+                terminal,
+                service,
+                _flutterLoadAsset,
+                onFrameRedrawn: drawFrame,
+              );
             },
           ),
         ),
