@@ -97,7 +97,13 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   void stop(AudioVoice voice) {
-    _engine.stop(sol.SoundHandle(voice.id));
+    sol.SoLoud.instance.stop(sol.SoundHandle(voice.id));
+  }
+
+  @override
+  void setVoiceVolume(AudioVoice voice, double volume) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    sol.SoLoud.instance.setVolume(sol.SoundHandle(voice.id), volume);
   }
 
   @override

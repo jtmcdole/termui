@@ -23,6 +23,9 @@ abstract class TermuiAudioEngine {
   /// Stops a playing [voice].
   void stop(AudioVoice voice);
 
+  /// Sets the volume of a playing [voice].
+  void setVoiceVolume(AudioVoice voice, double volume);
+
   /// Plays a loaded [buffer] at a specific 3D location.
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z);
 
