@@ -8,10 +8,10 @@ typedef AssetLoader = Future<SoundHandle> Function(String assetPath);
 
 const Map<String, String> playlist = {
   'Clouds': 'assets/DontFallOffTheClouds.ogg',
-  'Sound 1': 'assets/sound1.ogg',
-  'Sound 2': 'assets/sound2.ogg',
-  'Sound 3': 'assets/sound3.ogg',
-  'Sound 4': 'assets/sound4.ogg',
+  'Swish 1': 'assets/fast_swish1.ogg',
+  'Swish 2': 'assets/fast_swish2.ogg',
+  'Swish 3': 'assets/fast_swish3.ogg',
+  'Swish 4': 'assets/fast_swish4.ogg',
 };
 
 Future<void> runAudioPlayerApp(
