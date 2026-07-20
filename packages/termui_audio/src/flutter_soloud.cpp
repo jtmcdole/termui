@@ -6,7 +6,9 @@
 /// SoLoud sources
 #define WITH_NULL
 #define WITH_NOSOUND
+#ifndef WITH_MINIAUDIO
 #define WITH_MINIAUDIO
+#endif
 
 #ifdef __APPLE__
 #include <AudioToolbox/AudioSession.h>
@@ -71,6 +73,9 @@
 
 // 	# wav
 #include "soloud/src/audiosource/wav/stb_vorbis.c"
+#undef L
+#undef C
+#undef R
 #include "soloud/src/audiosource/wav/dr_impl.cpp"
 #include "soloud/src/audiosource/wav/soloud_wav.cpp"
 #include "soloud/src/audiosource/wav/soloud_wavstream.cpp"
@@ -114,6 +119,7 @@
 #include "audiobuffer/opus_stream_decoder.cpp"
 #include "audiobuffer/vorbis_stream_decoder.cpp"
 #include "audiobuffer/mp3_stream_decoder.cpp"
+#include "audiobuffer/wav_stream_decoder.cpp"
 #include "pffft/pffft.c"
 #include "filters/filters.cpp"
 #include "filters/parametric_eq_filter.cpp"

@@ -303,7 +303,7 @@ PlayerErrors BufferStream::addData(const void *aData, unsigned int aDataLen,
   }
 
   size_t bytesWritten = 0;
-  bool allDataAdded = -1;
+  bool allDataAdded = false;
   int32_t bufferDataToAdd = 0;
 
   if (!dontAdd) {

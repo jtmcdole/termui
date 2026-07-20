@@ -20,181 +20,166 @@ Future<void> runAudioPlayerApp(
   AssetLoader loadAsset, {
   void Function(Buffer)? onFrameRedrawn,
 }) async {
-  final initialSize = await terminal.size;
-  int width = initialSize.x;
-  int height = initialSize.y;
-  var buffer = Buffer(width, height);
-  var renderer = Renderer(width, height, mode: RenderingMode.alternateScreen);
+  final sceneManager = SceneManager(
+    terminal,
+    renderingMode: RenderingMode.alternateScreen,
+  )..enableMouseTracking = true;
 
-  terminal.enterAlternateScreen();
-  terminal.hideCursor();
+  final runner = PromptRunner<void>(
+    terminal: terminal,
+    alternateScreen: false,
+    mode: ExecutionMode.managed,
+    exitConditions: const {PromptExitTrigger.controlC: PromptExitAction.abort},
+    widget: AudioPlayerAppWidget(
+      terminal: terminal,
+      audioService: audioService,
+      loadAsset: loadAsset,
+    ),
+    onFramePainted: (buf) {
+      if (onFrameRedrawn != null) onFrameRedrawn(buf);
+      sceneManager.render();
+    },
+  );
 
-  final names = playlist.keys.toList();
-  final paths = playlist.values.toList();
+  final mainLayer = SceneLayer(
+    renderer: runner,
+    sizing: LayerSizing.fullscreen,
+    x: 0,
+    y: 0,
+    zIndex: 0,
+  );
+
+  sceneManager.layers.add(mainLayer);
+  sceneManager.focusedLayer = mainLayer;
+
+  try {
+    await runner.run();
+  } on PromptAbortedException catch (e) {
+    if (e.trigger != PromptExitTrigger.controlC) {
+      rethrow;
+    }
+  } finally {
+    sceneManager.dispose();
+  }
+}
+
+class AudioPlayerAppWidget extends StatefulWidget {
+  final term.Terminal terminal;
+  final AudioService audioService;
+  final AssetLoader loadAsset;
+
+  const AudioPlayerAppWidget({
+    super.key,
+    required this.terminal,
+    required this.audioService,
+    required this.loadAsset,
+  });
+
+  @override
+  State<AudioPlayerAppWidget> createState() => _AudioPlayerAppWidgetState();
+}
+
+class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
   final int totalTracks = playlist.length;
+  late final List<SoundHandle?> loadedSounds = List.filled(totalTracks, null);
 
-  int selectedIndex = 0;
-  List<SoundHandle?> loadedSounds = List.filled(totalTracks, null);
-  List<bool> playingSounds = List.filled(totalTracks, false);
+  late final List<String> names = playlist.keys.toList();
+  late final List<String> paths = playlist.values.toList();
+
   String statusMessage =
       'Status: Idle. Use arrow keys/Tab to focus, Enter/Space to play.';
-
-  late final BuildOwner buildOwner;
-  late final ElementWidget elementWrapper;
-
-  void drawFrame() {
-    buffer.clear();
-    buffer.fillAttributes(char: ' ', fg: 0, bg: 0, modifiers: 0);
-    elementWrapper.layout(
-      BoxConstraints.tight(Size(width, height)),
-      buildOwner,
-    );
-    elementWrapper.paint(buffer, Offset.zero);
-
-    final sb = StringBuffer();
-    renderer.render(buffer, sb);
-    if (sb.isNotEmpty) {
-      if (onFrameRedrawn != null) {
-        onFrameRedrawn(buffer);
-      } else {
-        terminal.backend.write(sb.toString());
-      }
-    }
-  }
-
-  bool frameScheduled = false;
-  void scheduleRepaint() {
-    if (!frameScheduled) {
-      frameScheduled = true;
-      scheduleMicrotask(() {
-        drawFrame();
-        frameScheduled = false;
-      });
-    }
-  }
-
-  buildOwner = BuildOwner(onNeedVisualUpdate: scheduleRepaint);
 
   Future<void> triggerPlay(int index) async {
     final name = names[index];
     final path = paths[index];
-    statusMessage = 'Status: Preparing sound "$name"...';
-    scheduleRepaint();
+
+    if (!mounted) return;
+    setState(() {
+      statusMessage = 'Status: Preparing sound "$name"...';
+    });
+
     try {
       if (loadedSounds[index] == null) {
-        loadedSounds[index] = await loadAsset(path);
+        loadedSounds[index] = await widget.loadAsset(path);
       }
 
       final handle = loadedSounds[index];
       if (handle == null) {
         throw Exception('Failed to load sound');
       }
-      if (playingSounds[index]) {
-        await audioService.stopSound(handle);
-        playingSounds[index] = false;
-        statusMessage = 'Status: Stopped sound "$name".';
-      } else {
-        // Stop any other playing sound
-        for (int i = 0; i < totalTracks; i++) {
-          final s = loadedSounds[i];
-          if (playingSounds[i] && s != null) {
-            await audioService.stopSound(s);
-            playingSounds[i] = false;
-          }
-        }
-        await audioService.playSound(handle);
-        playingSounds[index] = true;
-        statusMessage = 'Status: Playing sound "$name"!';
-      }
+
+      if (!mounted) return;
+
+      setState(() {
+        widget.audioService.playSound(handle);
+        statusMessage = 'Status: Playing sound "${names[index]}"!';
+      });
     } catch (e) {
-      statusMessage = 'Status: Error: $e';
+      if (mounted) {
+        setState(() {
+          statusMessage = 'Status: Error: $e';
+        });
+      }
     }
-    scheduleRepaint();
   }
 
-  final appWidget = Align(
-    alignment: Alignment.center,
-    child: Column([
-      const Text(
-        '=== TERMUI AUDIO COZY PLAYER ===',
-        style: Style(foreground: CharmColors.julep, modifiers: Modifier.bold),
-      ),
-      const SizedBox(height: 1),
-      const Text('Use Arrow keys / Tab to navigate. Enter/Space to select.'),
-      Text(
-        "Or press keys 1-$totalTracks to play instantly. Press 'q' to quit.",
-      ),
-      const SizedBox(height: 1),
-      Row([
-        for (int i = 0; i < totalTracks; i++) ...[
-          Button(
-            text: playingSounds[i] ? 'Stop ${names[i]}' : 'Play ${names[i]}',
-            focused: selectedIndex == i,
-            onPressed: () => triggerPlay(i),
-          ),
-          const SizedBox(width: 2),
-        ],
-      ]),
-      const SizedBox(height: 1),
-      Text(statusMessage, style: const Style(foreground: Colors.yellow)),
-    ]),
-  );
-
-  elementWrapper = ElementWidget(appWidget);
-  drawFrame();
-
-  final sizeSubscription = terminal.watchSize().listen((size) {
-    width = size.x;
-    height = size.y;
-    buffer.resize(width, height);
-    renderer = Renderer(width, height, mode: RenderingMode.alternateScreen);
-    drawFrame();
-  });
-
-  try {
-    await for (final event in terminal.events) {
-      if (event is term.KeyEvent) {
-        final key = event.key;
-        if (key == 'q' ||
-            key == 'Q' ||
-            (key.length == 1 && key.codeUnits[0] == 3)) {
-          break; // Quit or Ctrl+C
-        }
-
-        // Arrow and layout navigation with Dart 3 pattern matching
-        switch (event.baseKey) {
-          case term.TermKey.right || term.TermKey.down:
-            selectedIndex = (selectedIndex + 1) % totalTracks;
-            scheduleRepaint();
-          case term.TermKey.left || term.TermKey.up:
-            selectedIndex = (selectedIndex - 1 + totalTracks) % totalTracks;
-            scheduleRepaint();
-          case term.TermKey.enter:
-            await triggerPlay(selectedIndex);
-          default:
-            if (key == '\t') {
-              selectedIndex = (selectedIndex + 1) % totalTracks;
-              scheduleRepaint();
-            } else if (key == ' ') {
-              await triggerPlay(selectedIndex);
-            } else if (key.length == 1) {
-              final codeUnit = key.codeUnits[0];
-              if (codeUnit >= 49 && codeUnit <= 57) {
-                final idx = codeUnit - 49;
-                if (idx < totalTracks) {
-                  selectedIndex = idx;
-                  await triggerPlay(idx);
-                }
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      autofocus: true,
+      onKeyEvent: (event) {
+        if (event.type == KeyType.character) {
+          final key = event.key;
+          if (key == 'q' || key == 'Q') {
+            PromptScope.of(context)?.done();
+            return true;
+          }
+          if (key.length == 1) {
+            final codeUnit = key.codeUnits[0];
+            if (codeUnit >= 49 && codeUnit <= 57) {
+              final idx = codeUnit - 49;
+              if (idx < totalTracks) {
+                triggerPlay(idx);
+                return true;
               }
             }
+          }
         }
-      }
-    }
-  } finally {
-    sizeSubscription.cancel();
-    elementWrapper.element?.unmount();
-    terminal.showCursor();
-    terminal.exitAlternateScreen();
-    terminal.resetStyle();
+        return false;
+      },
+      child: Align(
+        alignment: Alignment.center,
+        child: Column([
+          const Text(
+            '=== TERMUI AUDIO COZY PLAYER ===',
+            style: Style(
+              foreground: CharmColors.julep,
+              modifiers: Modifier.bold,
+            ),
+          ),
+          const SizedBox(height: 1),
+          const Text(
+            'Use Tab/Arrows to navigate. Enter/Space/Click to select.',
+          ),
+          Text(
+            "Or press keys 1-$totalTracks to play instantly. Press 'q' to quit.",
+          ),
+          const SizedBox(height: 1),
+          FocusScope(
+            child: Row([
+              for (int i = 0; i < totalTracks; i++) ...[
+                Button(
+                  text: 'Play ${names[i]}',
+                  onPressed: () => triggerPlay(i),
+                ),
+                const SizedBox(width: 2),
+              ],
+            ]),
+          ),
+          const SizedBox(height: 1),
+          Text(statusMessage, style: const Style(foreground: Colors.yellow)),
+        ]),
+      ),
+    );
   }
 }

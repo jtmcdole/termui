@@ -1,4 +1,4 @@
-// ignore_for_file: public_member_api_docs
+// ignore_for_file: public_member_api_docs, avoid_print
 import 'dart:io';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui_audio/termui_audio.dart';

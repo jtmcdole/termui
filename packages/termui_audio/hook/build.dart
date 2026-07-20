@@ -1,24 +1,21 @@
 // ignore_for_file: depend_on_referenced_packages
+import 'dart:io';
 import 'package:logging/logging.dart';
 import 'package:hooks/hooks.dart';
-import 'package:native_toolchain_c/native_toolchain_c.dart';
+import 'package:code_assets/code_assets.dart';
+import 'package:native_toolchain_cmake/native_toolchain_cmake.dart';
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
-    final cbuilder = CBuilder.library(
+    if (!input.config.buildCodeAssets) return;
+
+    final builder = CMakeBuilder.create(
       name: 'soloud_cli',
-      assetName: 'src/soloud_cli.dart',
-      sources: ['src/flutter_soloud.cpp'],
-      language: Language.cpp,
-      includes: ['src/soloud/include', 'src/soloud/src', 'src/pffft', 'src'],
-      defines: {
-        'WITH_MINIAUDIO': null,
-        'MA_NO_PULSEAUDIO': null,
-        'NO_XIPH_LIBS': null,
-      },
+      sourceDir: input.packageRoot,
+      defines: {'CMAKE_POLICY_VERSION_MINIMUM': '3.5'},
     );
 
-    await cbuilder.run(
+    await builder.run(
       input: input,
       output: output,
       logger: Logger('soloud_cli')
@@ -26,5 +23,49 @@ void main(List<String> args) async {
           print('${record.level.name}: ${record.time}: ${record.message}');
         }),
     );
+
+    final targetOS = input.config.code.targetOS;
+    final fileName = targetOS.dylibFileName('soloud_cli');
+
+    var dllPath = input.outputDirectory.resolve(fileName);
+    if (!File.fromUri(dllPath).existsSync()) {
+      dllPath = input.outputDirectory.resolve('Release/$fileName');
+    }
+
+    output.assets.code.add(
+      CodeAsset(
+        package: input.packageName,
+        name: 'src/soloud_cli.dart',
+        linkMode: DynamicLoadingBundled(),
+        file: dllPath,
+      ),
+    );
+
+    // If target OS is Windows, also register the dependent DLLs as code assets
+    if (targetOS == OS.windows) {
+      final xiphDlls = [
+        'ogg.dll',
+        'opus.dll',
+        'vorbis.dll',
+        'vorbisfile.dll',
+        'FLAC.dll',
+      ];
+      for (final dll in xiphDlls) {
+        var dllUri = input.outputDirectory.resolve(dll);
+        if (!File.fromUri(dllUri).existsSync()) {
+          dllUri = input.outputDirectory.resolve('Release/$dll');
+        }
+        if (File.fromUri(dllUri).existsSync()) {
+          output.assets.code.add(
+            CodeAsset(
+              package: input.packageName,
+              name: 'src/$dll',
+              linkMode: DynamicLoadingBundled(),
+              file: dllUri,
+            ),
+          );
+        }
+      }
+    }
   });
 }

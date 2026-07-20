@@ -173,9 +173,12 @@ namespace Waveform
 
 #if !defined(NO_XIPH_LIBS)
         // Create a static backend vtable to ensure it persists
-        static ma_decoding_backend_vtable* pCustomBackendVTables[] = {
-            ma_decoding_backend_libvorbis
-        };
+        int customBackendCount = 0;
+        static ma_decoding_backend_vtable* pCustomBackendVTables[1];
+        if (ma_decoding_backend_libvorbis != NULL) {
+            pCustomBackendVTables[0] = ma_decoding_backend_libvorbis;
+            customBackendCount = 1;
+        }
 #endif
 
         // Check if the file is an OGG file by reading the header
@@ -215,11 +218,11 @@ namespace Waveform
 #endif
 
 #if !defined(NO_XIPH_LIBS)
-        if (isOgg)
+        if (isOgg && customBackendCount > 0)
         {
             decoderConfig.pCustomBackendUserData = NULL;
             decoderConfig.ppCustomBackendVTables = pCustomBackendVTables;
-            decoderConfig.customBackendCount = sizeof(pCustomBackendVTables) / sizeof(pCustomBackendVTables[0]);
+            decoderConfig.customBackendCount = customBackendCount;
         }
 #endif
         
