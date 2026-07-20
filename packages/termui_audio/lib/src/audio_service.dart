@@ -1,6 +1,5 @@
 // ignore_for_file: public_member_api_docs
 import 'dart:async';
-import 'dart:ffi';
 
 /// The unified abstraction interface for multiplatform audio playback.
 abstract class AudioService {
@@ -24,7 +23,7 @@ abstract class AudioService {
 }
 
 /// A handle referencing a loaded sound.
-class SoundHandle implements Finalizable {
+class SoundHandle {
   /// The underlying platform-specific unique identifier.
   final dynamic id;
 

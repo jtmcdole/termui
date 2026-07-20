@@ -387,7 +387,10 @@ namespace SoLoud
         aSoloud->postinit_internal(aSamplerate, aBuffer, aFlags, aChannels);
 
         // Use safe default values for postinit
-        miniaudio_ensure_thread_device_started();
+        result threadStartedResult = miniaudio_ensure_thread_device_started();
+        if (threadStartedResult != 0) {
+            return threadStartedResult;
+        }
 
 #elif defined(MA_HAS_COREAUDIO)
         // Disable CoreAudio context
@@ -496,7 +499,8 @@ namespace SoLoud
         if (!gDeviceInitDeferred)
             return;
 
-        if (ma_device_init(NULL, &gDeferredConfig.config, &gDevice) == MA_SUCCESS)
+        ma_result initResult = ma_device_init(NULL, &gDeferredConfig.config, &gDevice);
+        if (initResult == MA_SUCCESS)
         {
             gDeviceInitialized = true;
             // Start the device after initialization
@@ -512,6 +516,11 @@ namespace SoLoud
             }
             gDeviceInitDeferred = false;
             gDeviceStartDeferred = false;
+        }
+        else
+        {
+            printf("soloud_miniaudio: ma_device_init failed with error %d\n", initResult);
+            fflush(stdout);
         }
     }
 

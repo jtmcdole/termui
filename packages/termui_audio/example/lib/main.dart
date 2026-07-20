@@ -1,4 +1,4 @@
-// ignore_for_file: public_member_api_docs
+// ignore_for_file: public_member_api_docs, avoid_print
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -6,10 +6,20 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_audio/termui_audio.dart';
+// ignore: implementation_imports
+import 'package:termui_audio/src/audio_service_flutter_impl.dart';
 import 'package:termui_audio_example/src/audio_player_app.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  if (!kIsWeb &&
+      (Platform.isWindows ||
+          Platform.isLinux ||
+          Platform.isMacOS ||
+          Platform.isAndroid ||
+          Platform.isIOS)) {
+    TermuiAudio.instance = FlutterAudioService();
+  }
   runApp(const MainApp());
 }
 
@@ -88,6 +98,7 @@ class _AudioPlayerPageState extends State<AudioPlayerPage> {
             onRun: (terminal, drawFrame) async {
               final service = TermuiAudio.instance;
               _audioService = service;
+              print('TermuiAudio instance type: ${service.runtimeType}');
               await service.init();
               await runAudioPlayerApp(
                 terminal,

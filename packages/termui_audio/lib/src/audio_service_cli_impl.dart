@@ -5,6 +5,12 @@ import 'package:ffi/ffi.dart';
 import 'audio_service.dart';
 import 'soloud_cli.dart';
 
+/// A Finalizable version of SoundHandle used by the CLI engine.
+class FinalizableSoundHandle extends SoundHandle implements Finalizable {
+  /// Creates a [FinalizableSoundHandle] wrapping the given ID.
+  const FinalizableSoundHandle(super.id);
+}
+
 /// The pure Dart CLI backend that directly interfaces with the compiled C++
 /// SoLoud library using FFI and Native Assets.
 class CliAudioService implements AudioService {
@@ -34,7 +40,7 @@ class CliAudioService implements AudioService {
       });
     } catch (_) {}
 
-    final res = initEngine(-1, 44100, 2048, 2, 1);
+    final res = initEngine(-1, 48000, 2048, 2, 0);
     if (res != 0) {
       throw Exception(
         'Failed to initialize SoLoud CLI Engine. Error code: $res',
@@ -64,7 +70,7 @@ class CliAudioService implements AudioService {
         throw Exception('Failed to load sound into memory. Error code: $res');
       }
       final hash = hashPtr.value;
-      final handle = SoundHandle(hash);
+      final handle = FinalizableSoundHandle(hash);
       _loadedHandles[hash] = WeakReference(handle);
 
       // Attach finalizer to the SoundHandle to auto-dispose memory
