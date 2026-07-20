@@ -4,7 +4,7 @@ import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 import 'package:termui_audio/termui_audio.dart';
 
-typedef AssetLoader = Future<SoundHandle> Function(String assetPath);
+typedef AssetLoader = Future<AudioBuffer> Function(String assetPath);
 
 const Map<String, String> playlist = {
   'Clouds': 'assets/DontFallOffTheClouds.ogg',
@@ -16,7 +16,7 @@ const Map<String, String> playlist = {
 
 Future<void> runAudioPlayerApp(
   term.Terminal terminal,
-  AudioService audioService,
+  TermuiAudioEngine audioService,
   AssetLoader loadAsset, {
   void Function(Buffer)? onFrameRedrawn,
 }) async {
@@ -65,7 +65,7 @@ Future<void> runAudioPlayerApp(
 
 class AudioPlayerAppWidget extends StatefulWidget {
   final term.Terminal terminal;
-  final AudioService audioService;
+  final TermuiAudioEngine audioService;
   final AssetLoader loadAsset;
 
   const AudioPlayerAppWidget({
@@ -81,7 +81,7 @@ class AudioPlayerAppWidget extends StatefulWidget {
 
 class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
   final int totalTracks = playlist.length;
-  late final List<SoundHandle?> loadedSounds = List.filled(totalTracks, null);
+  late final List<AudioBuffer?> loadedSounds = List.filled(totalTracks, null);
 
   late final List<String> names = playlist.keys.toList();
   late final List<String> paths = playlist.values.toList();
@@ -111,7 +111,7 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
       if (!mounted) return;
 
       setState(() {
-        widget.audioService.playSound(handle);
+        widget.audioService.play(handle);
         statusMessage = 'Status: Playing sound "${names[index]}"!';
       });
     } catch (e) {

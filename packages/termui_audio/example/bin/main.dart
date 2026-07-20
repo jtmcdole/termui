@@ -10,7 +10,7 @@ void main() async {
   await audioService.init();
 
   // Define asset loader for CLI targeting the local filesystem paths
-  Future<SoundHandle> cliLoadAsset(String assetPath) async {
+  Future<AudioBuffer> cliLoadAsset(String assetPath) async {
     var file = File(assetPath);
     if (!file.existsSync()) {
       file = File('example/$assetPath');
@@ -21,7 +21,7 @@ void main() async {
     if (!file.existsSync()) {
       throw Exception('Could not find audio asset at $assetPath');
     }
-    return await audioService.loadSound(file.absolute.path);
+    return await audioService.loadFile(file.absolute.path);
   }
 
   try {
