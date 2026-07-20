@@ -125,31 +125,18 @@ Future<void> runAudioPlayerApp(
         "Or press keys 1-$totalTracks to play instantly. Press 'q' to quit.",
       ),
       const SizedBox(height: 1),
-      StatefulBuilder(
-        builder: (context, setState) {
-          return Row([
-            for (int i = 0; i < totalTracks; i++) ...[
-              Button(
-                text: playingSounds[i]
-                    ? 'Stop ${names[i]}'
-                    : 'Play ${names[i]}',
-                focused: selectedIndex == i,
-                onPressed: () => triggerPlay(i),
-              ),
-              const SizedBox(width: 2),
-            ],
-          ]);
-        },
-      ),
+      Row([
+        for (int i = 0; i < totalTracks; i++) ...[
+          Button(
+            text: playingSounds[i] ? 'Stop ${names[i]}' : 'Play ${names[i]}',
+            focused: selectedIndex == i,
+            onPressed: () => triggerPlay(i),
+          ),
+          const SizedBox(width: 2),
+        ],
+      ]),
       const SizedBox(height: 1),
-      StatefulBuilder(
-        builder: (context, setState) {
-          return Text(
-            statusMessage,
-            style: const Style(foreground: Colors.yellow),
-          );
-        },
-      ),
+      Text(statusMessage, style: const Style(foreground: Colors.yellow)),
     ]),
   );
 
@@ -174,30 +161,32 @@ Future<void> runAudioPlayerApp(
           break; // Quit or Ctrl+C
         }
 
-        // Arrow navigation
-        if (event.baseKey == term.TermKey.right ||
-            event.baseKey == term.TermKey.down ||
-            key == '\t') {
-          selectedIndex = (selectedIndex + 1) % totalTracks;
-          scheduleRepaint();
-        } else if (event.baseKey == term.TermKey.left ||
-            event.baseKey == term.TermKey.up) {
-          selectedIndex = (selectedIndex - 1 + totalTracks) % totalTracks;
-          scheduleRepaint();
-        } else if (event.baseKey == term.TermKey.enter || key == ' ') {
-          await triggerPlay(selectedIndex);
-        } else {
-          // Dynamic numeric hotkeys '1' - '9'
-          if (key.length == 1) {
-            final codeUnit = key.codeUnits[0];
-            if (codeUnit >= 49 && codeUnit <= 57) {
-              final idx = codeUnit - 49;
-              if (idx < totalTracks) {
-                selectedIndex = idx;
-                await triggerPlay(idx);
+        // Arrow and layout navigation with Dart 3 pattern matching
+        switch (event.baseKey) {
+          case term.TermKey.right || term.TermKey.down:
+            selectedIndex = (selectedIndex + 1) % totalTracks;
+            scheduleRepaint();
+          case term.TermKey.left || term.TermKey.up:
+            selectedIndex = (selectedIndex - 1 + totalTracks) % totalTracks;
+            scheduleRepaint();
+          case term.TermKey.enter:
+            await triggerPlay(selectedIndex);
+          default:
+            if (key == '\t') {
+              selectedIndex = (selectedIndex + 1) % totalTracks;
+              scheduleRepaint();
+            } else if (key == ' ') {
+              await triggerPlay(selectedIndex);
+            } else if (key.length == 1) {
+              final codeUnit = key.codeUnits[0];
+              if (codeUnit >= 49 && codeUnit <= 57) {
+                final idx = codeUnit - 49;
+                if (idx < totalTracks) {
+                  selectedIndex = idx;
+                  await triggerPlay(idx);
+                }
               }
             }
-          }
         }
       }
     }

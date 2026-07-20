@@ -9,8 +9,8 @@ import 'audio_service.dart';
 /// and IndexedDB caching to a Web Worker (`worker.dart.js`), and plays audio
 /// using `flutter_soloud`'s WASM engine.
 class WebAudioService implements AudioService {
-  final Map<SoundHandle, sol.AudioSource> _loadedSources = {};
-  final Map<SoundHandle, List<sol.SoundHandle>> _playingVoices = {};
+  final Map<String, sol.AudioSource> _loadedSources = {};
+  final Map<String, List<sol.SoundHandle>> _playingVoices = {};
   final Map<String, Completer<SoundHandle>> _pendingLoads = {};
   sol.SoundHandle? _bgmVoice;
   web.Worker? _worker;
@@ -45,9 +45,8 @@ class WebAudioService implements AudioService {
             sol.SoLoud.instance
                 .loadMem(path, bytes)
                 .then((source) {
-                  final handle = SoundHandle(path);
-                  _loadedSources[handle] = source;
-                  completer.complete(handle);
+                  _loadedSources[path] = source;
+                  completer.complete(SoundHandle(path));
                 })
                 .catchError((e) {
                   completer.completeError(e);
@@ -71,9 +70,8 @@ class WebAudioService implements AudioService {
       throw Exception('Web worker not initialized.');
     }
 
-    final handle = SoundHandle(path);
-    if (_loadedSources.containsKey(handle)) {
-      return handle;
+    if (_loadedSources.containsKey(path)) {
+      return SoundHandle(path);
     }
 
     final completer = Completer<SoundHandle>();
@@ -87,10 +85,11 @@ class WebAudioService implements AudioService {
 
   @override
   Future<void> playSound(SoundHandle handle, {bool loop = false}) async {
-    final source = _loadedSources[handle];
+    final path = handle.id as String;
+    final source = _loadedSources[path];
     if (source == null) return;
     final voice = sol.SoLoud.instance.play(source, looping: loop);
-    _playingVoices.putIfAbsent(handle, () => []).add(voice);
+    _playingVoices.putIfAbsent(path, () => []).add(voice);
     if (loop) {
       _bgmVoice = voice;
     }
@@ -98,7 +97,8 @@ class WebAudioService implements AudioService {
 
   @override
   Future<void> stopSound(SoundHandle handle) async {
-    final voices = _playingVoices[handle];
+    final path = handle.id as String;
+    final voices = _playingVoices[path];
     if (voices != null) {
       for (final voice in voices) {
         if (sol.SoLoud.instance.getIsValidVoiceHandle(voice)) {
@@ -127,6 +127,13 @@ class WebAudioService implements AudioService {
     _loadedSources.clear();
     _playingVoices.clear();
     _bgmVoice = null;
+
+    // Resolve any hanging futures before disposing
+    for (final completer in _pendingLoads.values) {
+      if (!completer.isCompleted) {
+        completer.completeError(Exception('AudioService was disposed.'));
+      }
+    }
     _pendingLoads.clear();
   }
 }

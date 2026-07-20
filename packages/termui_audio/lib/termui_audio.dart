@@ -1,8 +1,8 @@
 import 'src/audio_service.dart';
 import 'src/audio_service_stub.dart'
     if (dart.library.js_interop) 'src/audio_service_web.dart'
-    if (dart.library.ui) 'src/audio_service_flutter.dart'
-    if (dart.library.io) 'src/audio_service_cli.dart';
+    if (dart.library.io) 'src/audio_service_cli.dart'
+    if (dart.library.ui) 'src/audio_service_flutter.dart';
 
 export 'src/audio_service.dart'
     show AudioService, SoundHandle, MockAudioService;
