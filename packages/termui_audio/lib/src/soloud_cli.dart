@@ -1,5 +1,6 @@
 // ignore_for_file: public_member_api_docs, non_constant_identifier_names
 import 'dart:ffi';
+import 'package:ffi/ffi.dart';
 
 @Native<Int32 Function(Int32, Uint32, Uint32, Uint32, Uint32)>(
   symbol: 'initEngine',
@@ -106,3 +107,34 @@ external void set3dSourceParameters(
   double velocityY,
   double velocityZ,
 );
+
+@Native<Int32 Function(Uint32, Float)>(symbol: 'seek')
+external int seek(int handle, double time);
+
+typedef DartVoiceEndedCallback = Void Function(Pointer<Uint32>);
+typedef DartFileLoadedCallback =
+    Void Function(
+      Pointer<Int32>,
+      Pointer<Utf8>,
+      Pointer<Uint32>,
+      Pointer<Uint64>,
+    );
+typedef DartStateChangedCallback = Void Function(Pointer<Int32>);
+
+@Native<
+  Void Function(
+    Pointer<NativeFunction<DartVoiceEndedCallback>>,
+    Pointer<NativeFunction<DartFileLoadedCallback>>,
+    Pointer<NativeFunction<DartStateChangedCallback>>,
+  )
+>(symbol: 'setDartEventCallback')
+external void setDartEventCallback(
+  Pointer<NativeFunction<DartVoiceEndedCallback>> voiceEnded,
+  Pointer<NativeFunction<DartFileLoadedCallback>> fileLoaded,
+  Pointer<NativeFunction<DartStateChangedCallback>> stateChanged,
+);
+@Native<Double Function(Uint32)>(symbol: 'getLength')
+external double getLength(int hash);
+
+@Native<Double Function(Uint32)>(symbol: 'getPosition')
+external double getPosition(int handle);

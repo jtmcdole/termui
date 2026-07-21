@@ -39,4 +39,13 @@ abstract class TermuiAudioEngine {
     double vy = 0.0,
     double vz = 0.0,
   });
+
+  /// Retrieves the total duration of a loaded audio buffer.
+  Duration getBufferDuration(AudioBuffer buffer);
+
+  /// Retrieves the current playhead position of a playing voice.
+  Duration getVoicePosition(AudioVoice voice);
+
+  /// Seeks a playing voice to a specific time position.
+  void seek(AudioVoice voice, Duration position);
 }

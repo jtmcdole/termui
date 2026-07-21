@@ -35,6 +35,13 @@ mixin TuiAnimatedStateMixin<T extends StatefulWidget> on State<T> {
     _ensureTickerRunning();
   }
 
+  /// Reverses an active effect.
+  void reverseEffect(TuiAnimationEffect effect) {
+    registerEffect(effect);
+    effect.reverse();
+    _ensureTickerRunning();
+  }
+
   /// The vsync interval used by the widget fallback.
   /// Resolves dynamically to [TuiAnimationConfig.vsyncInterval] to support user-tuned frame rates.
   Duration get vsyncInterval => TuiAnimationConfig.vsyncInterval;

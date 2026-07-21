@@ -37,7 +37,29 @@ class InkwellButton extends StatefulWidget implements MouseEventHandler {
     ),
     this.width,
     this.height,
+    this.focusNode,
+    this.autofocus = false,
+    this.highlightBackground,
+    this.highlightForeground,
+    this.onFocusChange,
   });
+
+  /// Called when the focus state of the button changes.
+  final void Function(bool)? onFocusChange;
+
+  /// The background color when the button is focused or hovered.
+  /// If null, a lighter or darker shade of [color1] will be computed automatically.
+  final Color? highlightBackground;
+
+  /// The foreground color when the button is focused or hovered.
+  /// If null, the default foreground color is used.
+  final Color? highlightForeground;
+
+  /// An optional external focus node.
+  final FocusNode? focusNode;
+
+  /// Automatically request focus on mount.
+  final bool autofocus;
 
   // Keep a reference to the active state.
   InkwellButtonState? _state;
@@ -58,9 +80,17 @@ class InkwellButton extends StatefulWidget implements MouseEventHandler {
 
 /// The state for an [InkwellButton].
 class InkwellButtonState extends State<InkwellButton>
-    with TuiAnimatedStateMixin<InkwellButton>
+    with
+        TuiAnimatedStateMixin<InkwellButton>,
+        FocusableStateMixin<InkwellButton>
     implements MouseEventHandler {
   late final InkwellRippleEffect _ripple;
+
+  @override
+  bool get isWidgetFocused => widget.autofocus;
+
+  @override
+  String get focusNodeIdPrefix => 'inkwell_btn';
 
   bool _isHovered = false;
   bool _isPressed = false;
@@ -92,6 +122,25 @@ class InkwellButtonState extends State<InkwellButton>
     );
 
     registerEffect(_ripple);
+
+    // Override the auto-created focus node if one was provided.
+    if (widget.focusNode != null) {
+      focusNode.dispose();
+      focusNode = widget.focusNode!;
+    }
+  }
+
+  @override
+  void didUpdateWidget(InkwellButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusNode != oldWidget.focusNode) {
+      if (oldWidget.focusNode == null) {
+        focusNode.dispose();
+      }
+      focusNode =
+          widget.focusNode ??
+          FocusNode(id: '${focusNodeIdPrefix}_${widget.hashCode}');
+    }
   }
 
   /// Handles mouse interactions.
@@ -110,7 +159,7 @@ class InkwellButtonState extends State<InkwellButton>
 
     if (event.type == MouseEventType.press) {
       if (inBounds) {
-        Focus.of(context)?.requestFocus();
+        focusNode.requestFocus();
         setState(() {
           _isPressed = true;
           _isHovered = false;
@@ -123,7 +172,7 @@ class InkwellButtonState extends State<InkwellButton>
       if (_isPressed) {
         setState(() {
           _isPressed = false;
-          _ripple.reset();
+          reverseEffect(_ripple);
           if (inBounds) {
             _isHovered = true;
             widget.onPressed();
@@ -150,6 +199,20 @@ class InkwellButtonState extends State<InkwellButton>
 
     if (W <= 0 || H <= 0) return;
 
+    final bool hasFocus = focusNode.hasFocus;
+    final bool isHighlighted = hasFocus || _isHovered;
+
+    Color resolvedHighlightBg =
+        widget.highlightBackground ?? _computeHighlightColor(widget.color1);
+    final Color effectiveBg = isHighlighted
+        ? resolvedHighlightBg
+        : widget.color1;
+    final Color effectiveFg =
+        isHighlighted && widget.highlightForeground != null
+        ? widget.highlightForeground!
+        : (widget.textStyle.foreground ?? Colors.white);
+    final baseStyle = Style(background: effectiveBg);
+
     // Clear rendering area with transparent cells first
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
@@ -173,19 +236,30 @@ class InkwellButtonState extends State<InkwellButton>
             y,
             char: ' ',
             fg: 0,
-            bg: widget.color1.argb,
+            bg: effectiveBg.argb,
             modifiers: Modifier.none,
           );
         }
       }
+
+      // Delegate overlay drawing to the animation mixin
+      paintEffects(buffer, Rect(0, 0, W, H), baseStyle);
+
       if (widget.text.isNotEmpty) {
         final textLen = widget.text.characters.length;
         final startX = max(0, (W - textLen) ~/ 2);
+
+        // Ensure text contrast against possibly animated background
+        final bgArgb = buffer.getBackground(startX, max(0, (H - 1) ~/ 2));
+        final bgColor = bgArgb != 0 ? Color.argb(bgArgb) : effectiveBg;
+
         buffer.writeString(
           startX,
           max(0, (H - 1) ~/ 2),
           widget.text,
-          widget.textStyle.merge(Style(background: widget.color1)),
+          widget.textStyle.merge(
+            Style(background: bgColor, foreground: effectiveFg),
+          ),
         );
       }
       return;
@@ -234,7 +308,6 @@ class InkwellButtonState extends State<InkwellButton>
     final textX = (bodyWidth - textLen) ~/ 2;
 
     // Paint baseline button cells (only spaces first)
-    final baseStyle = Style(background: widget.color1);
     for (var by = 0; by < bodyHeight; by++) {
       for (var bx = 0; bx < bodyWidth; bx++) {
         buffer.setAttributes(
@@ -255,6 +328,8 @@ class InkwellButtonState extends State<InkwellButton>
     for (var i = 0; i < textLen; i++) {
       final bx = textX + i;
       final by = textY;
+
+      String char = textChars[i];
       if (bx >= 0 && bx < bodyWidth && by >= 0 && by < bodyHeight) {
         final bgArgb = buffer.getBackground(bodyX + bx, bodyY + by);
         final bgR = bgArgb != 0
@@ -267,9 +342,11 @@ class InkwellButtonState extends State<InkwellButton>
             ? bgArgb & 0xFF
             : (baseStyle.background?.b ?? 0);
 
-        Style resolvedTextStyle = widget.textStyle;
-        if (widget.textStyle.foreground != null) {
-          final fgColor = widget.textStyle.foreground!;
+        Style resolvedTextStyle = widget.textStyle.merge(
+          Style(foreground: effectiveFg),
+        );
+        if (resolvedTextStyle.foreground != null) {
+          final fgColor = resolvedTextStyle.foreground!;
           final fgLuminance =
               0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
           final bgLuminance = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
@@ -302,7 +379,7 @@ class InkwellButtonState extends State<InkwellButton>
         buffer.setAttributes(
           bodyX + bx,
           bodyY + by,
-          char: textChars[i],
+          char: char,
           fg: resolvedTextStyle.foreground?.argb ?? oldFg,
           bg: resolvedTextStyle.background?.argb ?? bgArgb,
           modifiers: mergedModifiers,
@@ -314,7 +391,49 @@ class InkwellButtonState extends State<InkwellButton>
   @override
   Widget build(BuildContext context) {
     widget._state = this;
-    return _InkwellButtonRenderWidget(this);
+    return Focus(
+      focusNode: focusNode,
+      onKeyEvent: (event) {
+        if (event.type == KeyType.character &&
+            (event.key == ' ' || event.key == '\r' || event.key == '\n')) {
+          triggerEffect(
+            _ripple,
+            Point((widget.width ?? 10) ~/ 2, (widget.height ?? 3) ~/ 2),
+          );
+          Future.delayed(const Duration(milliseconds: 100), () {
+            if (mounted) {
+              reverseEffect(_ripple);
+              widget.onPressed();
+            }
+          });
+          return true;
+        }
+        return false;
+      },
+      onFocusChange: (focused) {
+        if (mounted) setState(() {});
+        widget.onFocusChange?.call(focused);
+      },
+      child: _InkwellButtonRenderWidget(this),
+    );
+  }
+
+  Color _computeHighlightColor(Color base) {
+    final luminance = 0.299 * base.r + 0.587 * base.g + 0.114 * base.b;
+    // If the base color is light, darken it. Otherwise, lighten it.
+    if (luminance > 128) {
+      return Color(
+        max(0, base.r - 40),
+        max(0, base.g - 40),
+        max(0, base.b - 40),
+      );
+    } else {
+      return Color(
+        min(255, base.r + 40),
+        min(255, base.g + 40),
+        min(255, base.b + 40),
+      );
+    }
   }
 }
 

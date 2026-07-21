@@ -47,7 +47,27 @@ class CliAudioEngine implements TermuiAudioEngine {
   bool _inited = false;
   StreamSubscription<ProcessSignal>? _sigintSub;
 
-  final Map<int, List<int>> _playingVoices = {};
+  static final Map<int, Completer<void>> _activeVoices = {};
+
+  static void _voiceEndedCallback(Pointer<Uint32> handlePtr) {
+    final handle = handlePtr.value;
+    final completer = _activeVoices.remove(handle);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete();
+    }
+  }
+
+  static void _fileLoadedCallback(
+    Pointer<Int32> a,
+    Pointer<Utf8> b,
+    Pointer<Uint32> c,
+    Pointer<Uint64> d,
+  ) {}
+  static void _stateChangedCallback(Pointer<Int32> a) {}
+
+  late final NativeCallable<ffi.DartVoiceEndedCallback> _voiceEndedCallable;
+  late final NativeCallable<ffi.DartFileLoadedCallback> _fileLoadedCallable;
+  late final NativeCallable<ffi.DartStateChangedCallback> _stateChangedCallable;
 
   // Auto-Reclaiming Memory (NativeFinalizer)
   late final NativeFinalizer _soundFinalizer = NativeFinalizer(
@@ -74,6 +94,24 @@ class CliAudioEngine implements TermuiAudioEngine {
         'Failed to initialize SoLoud CLI Engine. Error code: $res',
       );
     }
+
+    _voiceEndedCallable = NativeCallable<ffi.DartVoiceEndedCallback>.listener(
+      _voiceEndedCallback,
+    );
+    _fileLoadedCallable = NativeCallable<ffi.DartFileLoadedCallback>.listener(
+      _fileLoadedCallback,
+    );
+    _stateChangedCallable =
+        NativeCallable<ffi.DartStateChangedCallback>.listener(
+          _stateChangedCallback,
+        );
+
+    ffi.setDartEventCallback(
+      _voiceEndedCallable.nativeFunction,
+      _fileLoadedCallable.nativeFunction,
+      _stateChangedCallable.nativeFunction,
+    );
+
     _inited = true;
   }
 
@@ -85,8 +123,36 @@ class CliAudioEngine implements TermuiAudioEngine {
     _sigintSub = null;
 
     ffi.disposeEngine();
-    _playingVoices.clear();
+    for (final c in _activeVoices.values) {
+      if (!c.isCompleted) c.complete();
+    }
+    _activeVoices.clear();
+
+    _voiceEndedCallable.close();
+    _fileLoadedCallable.close();
+    _stateChangedCallable.close();
+
     _inited = false;
+  }
+
+  @override
+  Duration getBufferDuration(AudioBuffer buffer) {
+    if (!_inited) return Duration.zero;
+    final lengthSecs = ffi.getLength(buffer.hash);
+    return Duration(microseconds: (lengthSecs * 1000000).round());
+  }
+
+  @override
+  Duration getVoicePosition(AudioVoice voice) {
+    if (!_inited) return Duration.zero;
+    final posSecs = ffi.getPosition(voice.id);
+    return Duration(microseconds: (posSecs * 1000000).round());
+  }
+
+  @override
+  void seek(AudioVoice voice, Duration position) {
+    if (!_inited) return;
+    ffi.seek(voice.id, position.inMicroseconds / 1000000.0);
   }
 
   @override
@@ -182,8 +248,9 @@ class CliAudioEngine implements TermuiAudioEngine {
         throw Exception('Failed to play sound. Error code: $res');
       }
       final voiceId = voicePtr.value;
-      _playingVoices.putIfAbsent(hash, () => []).add(voiceId);
-      return AudioVoice(voiceId);
+      final completer = Completer<void>();
+      _activeVoices[voiceId] = completer;
+      return AudioVoice(voiceId, completer.future);
     } finally {
       calloc.free(voicePtr);
     }
@@ -221,8 +288,9 @@ class CliAudioEngine implements TermuiAudioEngine {
         throw Exception('Failed to play 3D sound. Error code: $res');
       }
       final voiceId = voicePtr.value;
-      _playingVoices.putIfAbsent(hash, () => []).add(voiceId);
-      return AudioVoice(voiceId);
+      final completer = Completer<void>();
+      _activeVoices[voiceId] = completer;
+      return AudioVoice(voiceId, completer.future);
     } finally {
       calloc.free(voicePtr);
     }
