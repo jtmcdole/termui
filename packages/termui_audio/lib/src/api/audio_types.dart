@@ -1,5 +1,14 @@
-/// Zero-cost handle for a playing sound.
-extension type AudioVoice(int id) {}
+/// A handle for a playing sound.
+class AudioVoice {
+  /// The unique native identifier for this voice.
+  final int id;
+
+  /// A future that completes when the voice finishes playing.
+  final Future<void> completed;
+
+  /// Creates a new voice handle.
+  const AudioVoice(this.id, this.completed);
+}
 
 /// Represents a loaded sound source.
 abstract class AudioBuffer {

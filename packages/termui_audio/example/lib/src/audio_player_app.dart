@@ -38,6 +38,11 @@ class AudioPlayerViewModel {
 
   double bgmVolume = 1.0;
   double sfxVolume = 1.0;
+  int activeRadarIndex = 0;
+
+  Duration currentBgmPosition = Duration.zero;
+  Duration bgmDuration = Duration.zero;
+  Timer? _positionTicker;
 
   final List<void Function()> _listeners = [];
 
@@ -45,6 +50,10 @@ class AudioPlayerViewModel {
     required this.audioService,
     required AssetLoader loadAsset,
   }) : _loadAsset = loadAsset;
+
+  void dispose() {
+    _positionTicker?.cancel();
+  }
 
   void addListener(void Function() listener) {
     _listeners.add(listener);
@@ -88,34 +97,78 @@ class AudioPlayerViewModel {
     if (activeVoices[index] != null) {
       audioService.stop(activeVoices[index]!);
       activeVoices[index] = null;
+      if (index == 0) {
+        _positionTicker?.cancel();
+        _positionTicker = null;
+        currentBgmPosition = Duration.zero;
+      }
     } else {
-      activeVoices[index] = audioService.play3d(
+      final voice = audioService.play3d(
         loadedSounds[index]!,
         sourceX[index],
         sourceY[index],
         0.0,
       );
+      activeVoices[index] = voice;
+      voice.completed.then((_) {
+        if (activeVoices[index] == voice) {
+          activeVoices[index] = null;
+          if (index == 0) {
+            _positionTicker?.cancel();
+            _positionTicker = null;
+            currentBgmPosition = Duration.zero;
+          }
+          _notifyListeners();
+        }
+      });
       final vol = index == 0 ? bgmVolume : sfxVolume;
       audioService.setVoiceVolume(activeVoices[index]!, vol);
+
+      if (index == 0) {
+        bgmDuration = audioService.getBufferDuration(loadedSounds[index]!);
+        _positionTicker?.cancel();
+        _positionTicker = Timer.periodic(TuiAnimationConfig.vsyncInterval, (_) {
+          if (activeVoices[0] != null) {
+            currentBgmPosition = audioService.getVoicePosition(
+              activeVoices[0]!,
+            );
+            _notifyListeners();
+          }
+        });
+      }
     }
     _notifyListeners();
   }
 
   void setBgmVolume(double value) {
-    bgmVolume = value;
+    bgmVolume = math.min(1.0, math.max(0.0, value));
     if (activeVoices[0] != null) {
-      audioService.setVoiceVolume(activeVoices[0]!, value);
+      audioService.setVoiceVolume(activeVoices[0]!, bgmVolume);
     }
     _notifyListeners();
   }
 
+  void changeBgmVolume(double delta) => setBgmVolume(bgmVolume + delta);
+
   void setSfxVolume(double value) {
-    sfxVolume = value;
+    sfxVolume = math.min(1.0, math.max(0.0, value));
     for (int i = 1; i < activeVoices.length; i++) {
       if (activeVoices[i] != null) {
-        audioService.setVoiceVolume(activeVoices[i]!, value);
+        audioService.setVoiceVolume(activeVoices[i]!, sfxVolume);
       }
     }
+    _notifyListeners();
+  }
+
+  void changeSfxVolume(double delta) => setSfxVolume(sfxVolume + delta);
+
+  void setRadarIndex(int index) {
+    activeRadarIndex = index % names.length;
+    _notifyListeners();
+  }
+
+  void cycleRadarIndex() {
+    activeRadarIndex = (activeRadarIndex + 1) % names.length;
     _notifyListeners();
   }
 
@@ -131,6 +184,25 @@ class AudioPlayerViewModel {
       );
     }
     _notifyListeners();
+  }
+
+  void seekBgm(double progress) {
+    if (activeVoices[0] != null && bgmDuration.inMilliseconds > 0) {
+      final position = Duration(
+        milliseconds: (progress * bgmDuration.inMilliseconds).round(),
+      );
+      audioService.seek(activeVoices[0]!, position);
+      currentBgmPosition = position;
+      _notifyListeners();
+    }
+  }
+
+  void moveRadarIndex(double dx, double dy) {
+    updatePos(
+      activeRadarIndex,
+      sourceX[activeRadarIndex] + dx,
+      sourceY[activeRadarIndex] + dy,
+    );
   }
 }
 
@@ -198,6 +270,8 @@ class AudioPlayerAppWidget extends StatefulWidget {
 }
 
 class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
+  late final List<FocusNode> _buttonNodes;
+
   void _onStateChanged() {
     if (mounted) {
       setState(() {});
@@ -207,12 +281,17 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
   @override
   void initState() {
     super.initState();
+    _buttonNodes = List.generate(5, (i) => FocusNode(id: 'audio_btn_$i'));
     widget.viewModel.addListener(_onStateChanged);
   }
 
   @override
   void dispose() {
+    for (final node in _buttonNodes) {
+      node.dispose();
+    }
     widget.viewModel.removeListener(_onStateChanged);
+    widget.viewModel.dispose();
     super.dispose();
   }
 
@@ -244,9 +323,49 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
     return Focus(
       autofocus: true,
       onKeyEvent: (event) {
-        if (event.type == KeyType.character && event.key.toLowerCase() == 'q') {
-          PromptScope.of(context)?.done();
+        if (event.type == KeyType.tab ||
+            event.type == KeyType.left ||
+            event.type == KeyType.right) {
+          int focusedIndex = _buttonNodes.indexWhere((n) => n.hasFocus);
+          if (focusedIndex == -1) focusedIndex = 0;
+          final nextIndex = event.type == KeyType.left
+              ? (focusedIndex - 1 + _buttonNodes.length) % _buttonNodes.length
+              : (focusedIndex + 1) % _buttonNodes.length;
+          _buttonNodes[nextIndex].requestFocus();
           return true;
+        } else if (event.type == KeyType.character) {
+          final k = event.key.toLowerCase();
+          if (k == 'q') {
+            PromptScope.of(context)?.done();
+            return true;
+          } else if (k == 'w') {
+            vm.moveRadarIndex(0, -1.0);
+            return true;
+          } else if (k == 's') {
+            vm.moveRadarIndex(0, 1.0);
+            return true;
+          } else if (k == 'a') {
+            vm.moveRadarIndex(-1.0, 0);
+            return true;
+          } else if (k == 'd') {
+            vm.moveRadarIndex(1.0, 0);
+            return true;
+          } else if (k == '=' || k == '+') {
+            vm.changeBgmVolume(0.05);
+            return true;
+          } else if (k == '-' || k == '_') {
+            vm.changeBgmVolume(-0.05);
+            return true;
+          } else if (k == ']') {
+            vm.changeSfxVolume(0.05);
+            return true;
+          } else if (k == '[') {
+            vm.changeSfxVolume(-0.05);
+            return true;
+          } else if (['1', '2', '3', '4', '5'].contains(k)) {
+            vm.togglePlay(int.parse(k) - 1);
+            return true;
+          }
         }
         return false;
       },
@@ -264,21 +383,33 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
           const Text('Click and drag the numbers 1-5 to move sound sources.'),
           const Text('The listener is positioned at the blue "X" (center).'),
           const Text(
-            'Press Q to quit.',
+            'Q: Quit | 1-5 / Space: Play | Tab / Arrow Keys: Select Button',
+            style: Style(foreground: Colors.white),
+          ),
+          const Text(
+            'WASD: Move Grid Focus',
+            style: Style(foreground: Colors.white),
+          ),
+          const Text(
+            '-/+: BGM Volume | [/]: SFX Volume',
             style: Style(foreground: Colors.white),
           ),
           const SizedBox(height: 1),
           Row([
             for (int i = 0; i < vm.names.length; i++) ...[
               InkwellButton(
+                focusNode: _buttonNodes[i],
                 text: vm.activeVoices[i] != null
                     ? '>> ${vm.names[i]}'
                     : vm.names[i],
                 onPressed: () => vm.togglePlay(i),
+                onFocusChange: (focused) {
+                  if (focused) vm.setRadarIndex(i);
+                },
                 color1: CharmColors.charple,
                 color2: CharmColors.hazy,
               ),
-              const SizedBox(width: 1),
+              const SizedBox(width: 2),
             ],
           ]),
           const SizedBox(height: 1),
@@ -308,11 +439,29 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
             ),
           ]),
           const SizedBox(height: 1),
+          Row([
+            const Text('BGM Progress: '),
+            SizedBox(
+              width: 45,
+              height: 1,
+              child: Slider(
+                value: vm.bgmDuration.inMilliseconds > 0
+                    ? vm.currentBgmPosition.inMilliseconds /
+                          vm.bgmDuration.inMilliseconds
+                    : 0.0,
+                min: 0.0,
+                max: 1.0,
+                onChanged: vm.seekBgm,
+              ),
+            ),
+          ]),
+          const SizedBox(height: 1),
           SpatialGridArea(
             width: 50,
             height: 15,
             sourceX: vm.sourceX,
             sourceY: vm.sourceY,
+            activeIndex: vm.activeRadarIndex,
             onPositionChanged: vm.updatePos,
           ),
         ]),
@@ -326,6 +475,7 @@ class SpatialGridArea extends Widget {
   final int height;
   final List<double> sourceX;
   final List<double> sourceY;
+  final int activeIndex;
   final void Function(int, double, double) onPositionChanged;
 
   const SpatialGridArea({
@@ -333,6 +483,7 @@ class SpatialGridArea extends Widget {
     required this.height,
     required this.sourceX,
     required this.sourceY,
+    required this.activeIndex,
     required this.onPositionChanged,
   });
 
@@ -441,11 +592,17 @@ class SpatialGridAreaElement extends LeafElement implements MouseEventHandler {
       final sy = ((widget.sourceY[i] + 10.0) / 20.0 * (widget.height - 1))
           .round()
           .clamp(0, widget.height - 1);
+      final isActive = i == widget.activeIndex;
       buffer.writeString(
         offset.dx + sx,
         offset.dy + sy,
         '${i + 1}',
-        const Style(foreground: Colors.green),
+        Style(
+          foreground: isActive ? Colors.yellow : Colors.green,
+          modifiers: isActive
+              ? Modifier.bold | Modifier.reverse
+              : Modifier.none,
+        ),
       );
     }
   }
