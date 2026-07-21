@@ -122,9 +122,31 @@ void main() {
 
   test('Resize sets exact winsize inside PTY child across platforms', () async {
     final pty = PseudoTerminal.start(Platform.executable, [_getHelperPath()]);
+    final output = <String>[];
+    final readyCompleter = Completer<void>();
+    final doneCompleter = Completer<void>();
+
+    final subscription = pty.out.listen(
+      (chunk) {
+        output.add(chunk);
+        if (chunk.contains('READY') && !readyCompleter.isCompleted) {
+          readyCompleter.complete();
+        }
+      },
+      onDone: () {
+        if (!readyCompleter.isCompleted) readyCompleter.complete();
+        doneCompleter.complete();
+      },
+    );
+
+    await readyCompleter.future;
     pty.resize(123, 45);
-    final output = await pty.out.join('');
-    expect(output.trim(), contains('SIZE:123x45'));
+
+    await doneCompleter.future;
+    await pty.exitCode;
+    await subscription.cancel();
+
+    expect(output.join(''), contains('SIZE:123x45'));
   });
 
   test(
