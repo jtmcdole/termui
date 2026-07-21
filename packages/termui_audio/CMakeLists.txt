@@ -54,7 +54,59 @@ if(WIN32)
     endforeach()
 
     set_target_properties(${PLUGIN_NAME} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+elseif(APPLE)
+    # Define directories for macOS precompiled headers and static libraries
+    set(LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/macos/libs")
+    set(INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/macos/include")
+
+    target_include_directories(${PLUGIN_NAME} PRIVATE "${INCLUDE_DIR}")
+
+    target_link_libraries(${PLUGIN_NAME} PRIVATE
+        "${LIBS_DIR}/libogg.a"
+        "${LIBS_DIR}/libopus.a"
+        "${LIBS_DIR}/libvorbis.a"
+        "${LIBS_DIR}/libvorbisfile.a"
+        "${LIBS_DIR}/libFLAC.a"
+        ${LINK_LIBRARIES}
+    )
 else()
-    # On other platforms, link normally to system/dynamic libraries
-    target_link_libraries(${PLUGIN_NAME} PRIVATE ogg opus vorbis vorbisfile FLAC ${LINK_LIBRARIES})
+    # Linux and other platforms
+    set(LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/linux/libs")
+    set(INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/linux/include")
+
+    target_include_directories(${PLUGIN_NAME} PRIVATE "${INCLUDE_DIR}")
+
+    target_link_libraries(${PLUGIN_NAME} PRIVATE
+        "${LIBS_DIR}/libogg.so"
+        "${LIBS_DIR}/libopus.so"
+        "${LIBS_DIR}/libvorbis.so"
+        "${LIBS_DIR}/libvorbisfile.so"
+        "${LIBS_DIR}/libFLAC.so"
+        ${LINK_LIBRARIES}
+    )
+
+    # Post-build copies of SOs next to the soloud_cli.so target
+    set(SO_FILES
+        "libogg.so"
+        "libogg.so.0"
+        "libogg.so.0.8.5"
+        "libopus.so"
+        "libopus.so.0"
+        "libopus.so.0.10.1"
+        "libvorbis.so"
+        "libvorbis.so.0.4.9"
+        "libvorbisfile.so"
+        "libvorbisfile.so.3.3.8"
+        "libFLAC.so"
+        "libFLAC.so.14"
+        "libFLAC.so.14.0.0"
+    )
+
+    foreach(SO_NAME ${SO_FILES})
+        add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${LIBS_DIR}/${SO_NAME}"
+            "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/${SO_NAME}"
+        )
+    endforeach()
 endif()
