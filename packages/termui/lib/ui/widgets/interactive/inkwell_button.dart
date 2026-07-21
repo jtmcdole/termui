@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
@@ -112,6 +113,8 @@ class InkwellButtonState extends State<InkwellButton>
   /// Exposed for testing
   double get rippleCenterY => _ripple.triggerPoint?.y.toDouble() ?? 0.0;
 
+  bool _isInternalFocusNode = true;
+
   @override
   void initState() {
     super.initState();
@@ -127,6 +130,7 @@ class InkwellButtonState extends State<InkwellButton>
     if (widget.focusNode != null) {
       focusNode.dispose();
       focusNode = widget.focusNode!;
+      _isInternalFocusNode = false;
     }
   }
 
@@ -134,13 +138,25 @@ class InkwellButtonState extends State<InkwellButton>
   void didUpdateWidget(InkwellButton oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.focusNode != oldWidget.focusNode) {
-      if (oldWidget.focusNode == null) {
+      if (_isInternalFocusNode) {
         focusNode.dispose();
       }
-      focusNode =
-          widget.focusNode ??
-          FocusNode(id: '${focusNodeIdPrefix}_${widget.hashCode}');
+      if (widget.focusNode != null) {
+        focusNode = widget.focusNode!;
+        _isInternalFocusNode = false;
+      } else {
+        focusNode = FocusNode(id: '${focusNodeIdPrefix}_${widget.hashCode}');
+        _isInternalFocusNode = true;
+      }
     }
+  }
+
+  @override
+  void dispose() {
+    if (_isInternalFocusNode) {
+      focusNode.dispose();
+    }
+    super.dispose();
   }
 
   /// Handles mouse interactions.
@@ -324,6 +340,17 @@ class InkwellButtonState extends State<InkwellButton>
     // Delegate overlay drawing to the animation mixin
     paintEffects(buffer, Rect(bodyX, bodyY, bodyWidth, bodyHeight), baseStyle);
 
+    // Precalculate foreground styling and luminance outside the loop
+    Style baseResolvedTextStyle = widget.textStyle.merge(
+      Style(foreground: effectiveFg),
+    );
+    double? baseFgLuminance;
+    if (baseResolvedTextStyle.foreground != null) {
+      final fgColor = baseResolvedTextStyle.foreground!;
+      baseFgLuminance =
+          0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
+    }
+
     // Now draw the text on top, adjusting foreground for contrast
     for (var i = 0; i < textLen; i++) {
       final bx = textX + i;
@@ -342,18 +369,12 @@ class InkwellButtonState extends State<InkwellButton>
             ? bgArgb & 0xFF
             : (baseStyle.background?.b ?? 0);
 
-        Style resolvedTextStyle = widget.textStyle.merge(
-          Style(foreground: effectiveFg),
-        );
-        if (resolvedTextStyle.foreground != null) {
-          final fgColor = resolvedTextStyle.foreground!;
-          final fgLuminance =
-              0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
+        Style resolvedTextStyle = baseResolvedTextStyle;
+        if (baseFgLuminance != null) {
           final bgLuminance = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
-
           // Check if contrast is too low (e.g. both dark or both light)
-          final bothDark = fgLuminance < 110 && bgLuminance < 110;
-          final bothLight = fgLuminance >= 110 && bgLuminance >= 110;
+          final bothDark = baseFgLuminance < 110 && bgLuminance < 110;
+          final bothLight = baseFgLuminance >= 110 && bgLuminance >= 110;
           if (bothDark) {
             final fg =
                 (widget.color1.r < 50 &&
@@ -400,10 +421,15 @@ class InkwellButtonState extends State<InkwellButton>
             _ripple,
             Point((widget.width ?? 10) ~/ 2, (widget.height ?? 3) ~/ 2),
           );
-          Future.delayed(const Duration(milliseconds: 100), () {
-            if (mounted) {
+          Timer.periodic(TuiAnimationConfig.vsyncInterval, (timer) {
+            if (!mounted) {
+              timer.cancel();
+              return;
+            }
+            if (_ripple.status == AnimationStatus.completed) {
               reverseEffect(_ripple);
               widget.onPressed();
+              timer.cancel();
             }
           });
           return true;

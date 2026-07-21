@@ -163,6 +163,10 @@ void main() {
           expect(clicked, isTrue);
           expect(state.isPressed, isFalse);
           expect(state.isHovered, isTrue);
+
+          // Wait for the reverse animation to finish
+          async.elapse(const Duration(milliseconds: 100));
+
           expect(state.rippleProgress, equals(0.0));
         });
       },

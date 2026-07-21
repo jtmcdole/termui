@@ -11,11 +11,15 @@ topics:
   - tui
   - terminal
   - console
+  - games
 
 platforms:
-  windows:
-  macos:
+  android:
+  ios:
   linux:
+  macos:
+  windows:
+  web:
 
 resolution: workspace
 
