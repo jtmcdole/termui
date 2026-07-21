@@ -22,6 +22,11 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Install ALSA library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+
       - name: Install Melos
         run: dart pub global activate melos
 

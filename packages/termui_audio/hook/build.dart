@@ -67,5 +67,40 @@ void main(List<String> args) async {
         }
       }
     }
+
+    // If target OS is Linux, also register the dependent SOs as code assets
+    if (targetOS == OS.linux) {
+      final xiphSos = [
+        'libogg.so',
+        'libogg.so.0',
+        'libogg.so.0.8.5',
+        'libopus.so',
+        'libopus.so.0',
+        'libopus.so.0.10.1',
+        'libvorbis.so',
+        'libvorbis.so.0.4.9',
+        'libvorbisfile.so',
+        'libvorbisfile.so.3.3.8',
+        'libFLAC.so',
+        'libFLAC.so.14',
+        'libFLAC.so.14.0.0',
+      ];
+      for (final so in xiphSos) {
+        var soUri = input.outputDirectory.resolve(so);
+        if (!File.fromUri(soUri).existsSync()) {
+          soUri = input.outputDirectory.resolve('Release/$so');
+        }
+        if (File.fromUri(soUri).existsSync()) {
+          output.assets.code.add(
+            CodeAsset(
+              package: input.packageName,
+              name: 'src/$so',
+              linkMode: DynamicLoadingBundled(),
+              file: soUri,
+            ),
+          );
+        }
+      }
+    }
   });
 }
