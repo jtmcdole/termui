@@ -6,6 +6,8 @@ void main() async {
     return;
   }
 
+  print('READY');
+
   // Poll up to 5 seconds for the parent process's pty.resize(123, 45) to take effect
   // inside the ConPTY / PTY child console buffer, ensuring 100% determinism on slow CI virtual machines.
   final stopwatch = Stopwatch()..start();
