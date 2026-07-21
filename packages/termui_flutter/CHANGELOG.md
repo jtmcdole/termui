@@ -1,3 +1,7 @@
+## 0.6.12
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+
 ## 0.6.11
 
  - **FIX**(rendering): respect unicode variation selectors for color emojis.

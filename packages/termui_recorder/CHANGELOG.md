@@ -1,3 +1,7 @@
+## 0.5.8+11
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+
 ## 0.5.7+10
 
  - Update a dependency to the latest release.

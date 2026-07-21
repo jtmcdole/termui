@@ -1,3 +1,8 @@
+## 0.5.3
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+ - **FIX**: racy test in pty2.
+
 ## 0.5.2
 
  - **FIX**(pty2): resolve ConPTY initialization failures and test hangs.
