@@ -309,4 +309,28 @@ class CliAudioEngine implements TermuiAudioEngine {
     if (!_inited) return;
     ffi.set3dSourceParameters(voice.id, x, y, z, vx, vy, vz);
   }
+
+  @override
+  void set3dSourceMinMaxDistance(
+    AudioVoice voice,
+    double minDistance,
+    double maxDistance,
+  ) {
+    if (!_inited) return;
+    ffi.set3dSourceMinMaxDistance(voice.id, minDistance, maxDistance);
+  }
+
+  @override
+  void set3dSourceAttenuation(
+    AudioVoice voice,
+    AttenuationModel attenuationModel,
+    double attenuationRolloffFactor,
+  ) {
+    if (!_inited) return;
+    ffi.set3dSourceAttenuation(
+      voice.id,
+      attenuationModel.index,
+      attenuationRolloffFactor,
+    );
+  }
 }
