@@ -175,50 +175,52 @@ void main() {
     test(
       'Release outside bounds resets state without triggering onPressed',
       () {
-        bool clicked = false;
-        final btn = InkwellButton(
-          text: 'Click',
-          onPressed: () {
-            clicked = true;
-          },
-        );
+        fakeAsync((async) {
+          bool clicked = false;
+          final btn = InkwellButton(
+            text: 'Click',
+            onPressed: () {
+              clicked = true;
+            },
+          );
 
-        final tree = ElementWidget(btn);
-        final buffer = Buffer.blank(10, 4);
+          final tree = ElementWidget(btn);
+          final buffer = Buffer.blank(10, 4);
 
-        tree.layout(BoxConstraints.tight(const Size(10, 4)));
-        tree.paint(buffer, Offset.zero);
-        final state = tree.findState<InkwellButtonState>()!;
+          tree.layout(BoxConstraints.tight(const Size(10, 4)));
+          tree.paint(buffer, Offset.zero);
+          final state = tree.findState<InkwellButtonState>()!;
 
-        // Press down inside
-        btn.handleMouseEvent(
-          const MouseEvent(
-            x: 3,
-            y: 2,
-            button: MouseButton.left,
-            type: MouseEventType.press,
-          ),
-          2,
-          1,
-        );
-        expect(state.isPressed, isTrue);
+          // Press down inside
+          btn.handleMouseEvent(
+            const MouseEvent(
+              x: 3,
+              y: 2,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+            2,
+            1,
+          );
+          expect(state.isPressed, isTrue);
 
-        // Release outside (x=11, y=5)
-        btn.handleMouseEvent(
-          const MouseEvent(
-            x: 12,
-            y: 6,
-            button: MouseButton.left,
-            type: MouseEventType.release,
-          ),
-          11,
-          5,
-        );
+          // Release outside (x=11, y=5)
+          btn.handleMouseEvent(
+            const MouseEvent(
+              x: 12,
+              y: 6,
+              button: MouseButton.left,
+              type: MouseEventType.release,
+            ),
+            11,
+            5,
+          );
 
-        expect(clicked, isFalse);
-        expect(state.isPressed, isFalse);
-        expect(state.isHovered, isFalse);
-        expect(state.rippleProgress, equals(0.0));
+          expect(clicked, isFalse);
+          expect(state.isPressed, isFalse);
+          expect(state.isHovered, isFalse);
+          expect(state.rippleProgress, equals(0.0));
+        });
       },
     );
 
