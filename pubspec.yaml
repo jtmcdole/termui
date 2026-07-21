@@ -6,6 +6,21 @@ publish_to: 'none'
 environment:
   sdk: ">=3.11.0 <4.0.0"
 
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+  web:
+
+topics:
+  - cli
+  - audio
+  - terminal
+  - console
+  - games
+
 workspace:
   - packages/termui
   - packages/termui_flutter

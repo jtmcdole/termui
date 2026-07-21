@@ -5,6 +5,21 @@ repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_recorde
 
 resolution: workspace
 
+topics:
+  - cli
+  - tui
+  - terminal
+  - development
+  - asciinema
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+  web:
+
 environment:
   sdk: ">=3.11.0 <4.0.0"
 

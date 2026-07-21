@@ -9,6 +9,17 @@ resolution: workspace
 environment:
   sdk: ">=3.11.0 <4.0.0"
 
+platforms:
+  linux:
+  macos:
+  windows:
+
+topics:
+  - cli
+  - pty
+  - terminal
+  - console
+
 dependencies:
   ffi: ^2.2.0
   lints: ^6.1.0

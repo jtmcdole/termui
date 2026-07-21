@@ -8,6 +8,21 @@ environment:
 
 resolution: workspace
 
+topics:
+  - cli
+  - tui
+  - terminal
+  - development
+  - testing
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+  web:
+
 dependencies:
   archive: ^4.0.9
   termui: ^0.7.7

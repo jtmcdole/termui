@@ -6,6 +6,21 @@ repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_hotrelo
 environment:
   sdk: ">=3.11.0 <4.0.0"
 
+topics:
+  - cli
+  - tui
+  - terminal
+  - development
+  - hotreload
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+  web:
+
 resolution: workspace
 
 dependencies:

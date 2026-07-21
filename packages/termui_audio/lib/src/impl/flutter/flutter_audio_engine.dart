@@ -125,14 +125,13 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) {
-    final flutterBuffer = buffer as FlutterAudioBuffer;
-    // final solBus = bus != null ? (bus as FlutterAudioBus)._bus : null;
+    if (bus != null) {
+      throw UnimplementedError(
+        'AudioBus is not yet supported in FlutterAudioEngine.play()',
+      );
+    }
 
-    // flutter_soloud doesn't directly take the bus in play() method, we'd need to play it on a specific bus,
-    // actually, flutter_soloud has play3d which doesn't seem to take a bus directly... wait, play() does.
-    // wait, we can just use _engine.play... wait, if there's no bus param in play, we can use play3d if we need a bus?
-    // let's just ignore bus for now, or check if _engine.play supports it.
-    // I'll omit bus param from _engine.play to get it to compile, or throw UnimplementedError.
+    final flutterBuffer = buffer as FlutterAudioBuffer;
     final voice = _engine.play(flutterBuffer._source, looping: loop);
     final completer = Completer<void>();
     flutterBuffer.registerVoice(voice.id, completer);

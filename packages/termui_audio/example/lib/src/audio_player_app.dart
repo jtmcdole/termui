@@ -42,7 +42,6 @@ class AudioPlayerViewModel {
 
   Duration currentBgmPosition = Duration.zero;
   Duration bgmDuration = Duration.zero;
-  Timer? _positionTicker;
 
   final List<void Function()> _listeners = [];
 
@@ -51,9 +50,7 @@ class AudioPlayerViewModel {
     required AssetLoader loadAsset,
   }) : _loadAsset = loadAsset;
 
-  void dispose() {
-    _positionTicker?.cancel();
-  }
+  void dispose() {}
 
   void addListener(void Function() listener) {
     _listeners.add(listener);
@@ -98,8 +95,6 @@ class AudioPlayerViewModel {
       audioService.stop(activeVoices[index]!);
       activeVoices[index] = null;
       if (index == 0) {
-        _positionTicker?.cancel();
-        _positionTicker = null;
         currentBgmPosition = Duration.zero;
       }
     } else {
@@ -114,8 +109,6 @@ class AudioPlayerViewModel {
         if (activeVoices[index] == voice) {
           activeVoices[index] = null;
           if (index == 0) {
-            _positionTicker?.cancel();
-            _positionTicker = null;
             currentBgmPosition = Duration.zero;
           }
           _notifyListeners();
@@ -126,15 +119,6 @@ class AudioPlayerViewModel {
 
       if (index == 0) {
         bgmDuration = audioService.getBufferDuration(loadedSounds[index]!);
-        _positionTicker?.cancel();
-        _positionTicker = Timer.periodic(TuiAnimationConfig.vsyncInterval, (_) {
-          if (activeVoices[0] != null) {
-            currentBgmPosition = audioService.getVoicePosition(
-              activeVoices[0]!,
-            );
-            _notifyListeners();
-          }
-        });
       }
     }
     _notifyListeners();
@@ -323,49 +307,54 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
     return Focus(
       autofocus: true,
       onKeyEvent: (event) {
-        if (event.type == KeyType.tab ||
-            event.type == KeyType.left ||
-            event.type == KeyType.right) {
-          int focusedIndex = _buttonNodes.indexWhere((n) => n.hasFocus);
-          if (focusedIndex == -1) focusedIndex = 0;
-          final nextIndex = event.type == KeyType.left
-              ? (focusedIndex - 1 + _buttonNodes.length) % _buttonNodes.length
-              : (focusedIndex + 1) % _buttonNodes.length;
-          _buttonNodes[nextIndex].requestFocus();
-          return true;
-        } else if (event.type == KeyType.character) {
-          final k = event.key.toLowerCase();
-          if (k == 'q') {
-            PromptScope.of(context)?.done();
+        switch (event.type) {
+          case KeyType.tab:
+          case KeyType.left:
+          case KeyType.right:
+            int focusedIndex = _buttonNodes.indexWhere((n) => n.hasFocus);
+            if (focusedIndex == -1) focusedIndex = 0;
+            final nextIndex = event.type == KeyType.left
+                ? (focusedIndex - 1 + _buttonNodes.length) % _buttonNodes.length
+                : (focusedIndex + 1) % _buttonNodes.length;
+            _buttonNodes[nextIndex].requestFocus();
             return true;
-          } else if (k == 'w') {
-            vm.moveRadarIndex(0, -1.0);
-            return true;
-          } else if (k == 's') {
-            vm.moveRadarIndex(0, 1.0);
-            return true;
-          } else if (k == 'a') {
-            vm.moveRadarIndex(-1.0, 0);
-            return true;
-          } else if (k == 'd') {
-            vm.moveRadarIndex(1.0, 0);
-            return true;
-          } else if (k == '=' || k == '+') {
-            vm.changeBgmVolume(0.05);
-            return true;
-          } else if (k == '-' || k == '_') {
-            vm.changeBgmVolume(-0.05);
-            return true;
-          } else if (k == ']') {
-            vm.changeSfxVolume(0.05);
-            return true;
-          } else if (k == '[') {
-            vm.changeSfxVolume(-0.05);
-            return true;
-          } else if (['1', '2', '3', '4', '5'].contains(k)) {
-            vm.togglePlay(int.parse(k) - 1);
-            return true;
-          }
+          case KeyType.character:
+            switch (event.key.toLowerCase()) {
+              case 'q':
+                PromptScope.of(context)?.done();
+                return true;
+              case 'w':
+                vm.moveRadarIndex(0, -1.0);
+                return true;
+              case 's':
+                vm.moveRadarIndex(0, 1.0);
+                return true;
+              case 'a':
+                vm.moveRadarIndex(-1.0, 0);
+                return true;
+              case 'd':
+                vm.moveRadarIndex(1.0, 0);
+                return true;
+              case '=' || '+':
+                vm.changeBgmVolume(0.05);
+                return true;
+              case '-' || '_':
+                vm.changeBgmVolume(-0.05);
+                return true;
+              case ']':
+                vm.changeSfxVolume(0.05);
+                return true;
+              case '[':
+                vm.changeSfxVolume(-0.05);
+                return true;
+              case '1' || '2' || '3' || '4' || '5':
+                vm.togglePlay(int.parse(event.key.toLowerCase()) - 1);
+                return true;
+              default:
+                break;
+            }
+          default:
+            break;
         }
         return false;
       },
@@ -396,12 +385,10 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
           ),
           const SizedBox(height: 1),
           Row([
-            for (int i = 0; i < vm.names.length; i++) ...[
+            for (final (i, name) in vm.names.indexed) ...[
               InkwellButton(
                 focusNode: _buttonNodes[i],
-                text: vm.activeVoices[i] != null
-                    ? '>> ${vm.names[i]}'
-                    : vm.names[i],
+                text: vm.activeVoices[i] != null ? '>> $name' : name,
                 onPressed: () => vm.togglePlay(i),
                 onFocusChange: (focused) {
                   if (focused) vm.setRadarIndex(i);
@@ -441,19 +428,7 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
           const SizedBox(height: 1),
           Row([
             const Text('BGM Progress: '),
-            SizedBox(
-              width: 45,
-              height: 1,
-              child: Slider(
-                value: vm.bgmDuration.inMilliseconds > 0
-                    ? vm.currentBgmPosition.inMilliseconds /
-                          vm.bgmDuration.inMilliseconds
-                    : 0.0,
-                min: 0.0,
-                max: 1.0,
-                onChanged: vm.seekBgm,
-              ),
-            ),
+            BgmProgressSliderWidget(viewModel: vm),
           ]),
           const SizedBox(height: 1),
           SpatialGridArea(
@@ -465,6 +440,67 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
             onPositionChanged: vm.updatePos,
           ),
         ]),
+      ),
+    );
+  }
+}
+
+class BgmProgressSliderWidget extends StatefulWidget {
+  final AudioPlayerViewModel viewModel;
+  const BgmProgressSliderWidget({super.key, required this.viewModel});
+
+  @override
+  State<BgmProgressSliderWidget> createState() =>
+      _BgmProgressSliderWidgetState();
+}
+
+class _BgmProgressSliderWidgetState extends State<BgmProgressSliderWidget> {
+  Timer? _positionTicker;
+  Duration _currentPosition = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _positionTicker = Timer.periodic(TuiAnimationConfig.vsyncInterval, (_) {
+      final voice = widget.viewModel.activeVoices[0];
+      if (voice != null) {
+        final pos = widget.viewModel.audioService.getVoicePosition(voice);
+        if (pos != _currentPosition && mounted) {
+          setState(() {
+            _currentPosition = pos;
+          });
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _positionTicker?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = widget.viewModel;
+    final durationMs = vm.bgmDuration.inMilliseconds;
+    return SizedBox(
+      width: 45,
+      height: 1,
+      child: Slider(
+        value: durationMs > 0
+            ? _currentPosition.inMilliseconds / durationMs
+            : 0.0,
+        min: 0.0,
+        max: 1.0,
+        onChanged: (val) {
+          vm.seekBgm(val);
+          setState(() {
+            _currentPosition = Duration(
+              milliseconds: (val * durationMs).round(),
+            );
+          });
+        },
       ),
     );
   }

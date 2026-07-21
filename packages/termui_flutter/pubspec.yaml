@@ -9,6 +9,14 @@ topics:
   - terminal
   - console
 
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+  web:
+
 resolution: workspace
 
 environment:
