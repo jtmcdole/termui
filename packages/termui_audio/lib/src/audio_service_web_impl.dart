@@ -32,7 +32,7 @@ class WebAudioService implements AudioService {
       (function() {
         if (window._audioContextAutoResumerInstalled) return;
         window._audioContextAutoResumerInstalled = true;
-        
+
         window._audioContexts = [];
         const OrigContext = window.AudioContext || window.webkitAudioContext;
         if (OrigContext) {
@@ -43,13 +43,13 @@ class WebAudioService implements AudioService {
           };
           window.AudioContext.prototype = OrigContext.prototype;
         }
-        
+
         window.resumeAllAudioContexts = () => {
           window._audioContexts.forEach(ctx => {
             if (ctx.state === 'suspended') ctx.resume();
           });
         };
-        
+
         window.addEventListener('click', window.resumeAllAudioContexts, { capture: true });
         window.addEventListener('keydown', window.resumeAllAudioContexts, { capture: true });
       })();

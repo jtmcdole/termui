@@ -1,6 +1,6 @@
 # termui_audio
 
-A multiplatform, low-latency game audio engine designed for the `termui` terminal windowing system. 
+A multiplatform, low-latency game audio engine designed for the `termui` terminal windowing system.
 
 `termui_audio` brings high-performance, spatial 3D audio, background music streaming, and sound effect mixing to standard TTY console environments, while seamlessly degrading or delegating to Flutter/Web engines when `termui` is embedded in a GUI or browser.
 
@@ -41,7 +41,7 @@ void main() async {
 
   // Play it!
   audioEngine.play(jumpSound);
-  
+
   // Clean up when done
   await audioEngine.dispose();
 }
@@ -58,8 +58,8 @@ final voice = audioEngine.play3d(engineLoop, 5.0, 0.0, 0.0);
 
 // Update its position and velocity dynamically
 audioEngine.set3dSourceParameters(
-  voice, 
-  x: 2.0, y: 0.0, z: -1.0, 
+  voice,
+  x: 2.0, y: 0.0, z: -1.0,
   vx: -5.0 // Velocity on the X axis (Doppler)
 );
 ```
