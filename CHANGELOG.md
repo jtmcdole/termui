@@ -3,6 +3,75 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-20
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`pty2` - `v0.5.3`](#pty2---v053)
+ - [`termui` - `v0.7.8`](#termui---v078)
+ - [`termui_audio` - `v0.1.1`](#termui_audio---v011)
+ - [`termui_flutter` - `v0.6.12`](#termui_flutter---v0612)
+ - [`termui_hotreload` - `v0.6.11+8`](#termui_hotreload---v06118)
+ - [`termui_pty` - `v0.3.8`](#termui_pty---v038)
+ - [`termui_recorder` - `v0.5.8+11`](#termui_recorder---v05811)
+ - [`termui_test` - `v0.2.9+12`](#termui_test---v02912)
+
+---
+
+#### `pty2` - `v0.5.3`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+ - **FIX**: racy test in pty2.
+
+#### `termui` - `v0.7.8`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+ - **FIX**: fakeAsync for inkwell test.
+ - **FEAT**(termui): add focus properties to InkwellButton and event-driven audio APIs.
+
+#### `termui_audio` - `v0.1.1`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+ - **REFACTOR**(audio): apply codefu-persona recommendations for performance and correctness.
+ - **FIX**: macos / linux missing libraries.
+ - **FIX**(audio_example): resolve loading hang during intrinsic measurements via MVVM refactor.
+ - **FEAT**(termui_audio): add 3D distance attenuation API.
+ - **FEAT**(termui): add focus properties to InkwellButton and event-driven audio APIs.
+ - **FEAT**: 3d audio and mixer volume sliders.
+ - **FEAT**(audio): implement engine-agnostic TermuiAudio API with 3D spatial FFI.
+ - **FEAT**(audio): enable full Ogg, Vorbis, FLAC, and Opus support on Windows CLI.
+ - **FEAT**(example): add interactive audio player example and update playlist mapping.
+ - **FEAT**(audio): add termui_audio package for multiplatform audio playback.
+
+#### `termui_flutter` - `v0.6.12`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+
+#### `termui_hotreload` - `v0.6.11+8`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+
+#### `termui_pty` - `v0.3.8`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+
+#### `termui_recorder` - `v0.5.8+11`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+
+#### `termui_test` - `v0.2.9+12`
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+
+
 ## 2026-07-18
 
 ### Changes

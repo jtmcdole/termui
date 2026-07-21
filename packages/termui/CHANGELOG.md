@@ -1,3 +1,9 @@
+## 0.7.8
+
+ - **REFACTOR**(core): optimize render loops and decouple audio state.
+ - **FIX**: fakeAsync for inkwell test.
+ - **FEAT**(termui): add focus properties to InkwellButton and event-driven audio APIs.
+
 ## 0.7.7
 
  - **PERF**(trace): replace duration buckets with zero-allocation IntervalTree.
