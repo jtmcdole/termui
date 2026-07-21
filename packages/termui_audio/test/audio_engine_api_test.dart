@@ -56,6 +56,20 @@ class MockAudioEngine extends TermuiAudioEngine {
   void setVoiceVolume(AudioVoice voice, double volume) {}
 
   @override
+  void set3dSourceMinMaxDistance(
+    AudioVoice voice,
+    double minDistance,
+    double maxDistance,
+  ) {}
+
+  @override
+  void set3dSourceAttenuation(
+    AudioVoice voice,
+    AttenuationModel attenuationModel,
+    double attenuationRolloffFactor,
+  ) {}
+
+  @override
   void stop(AudioVoice voice) {}
 
   @override
@@ -90,4 +104,17 @@ void main() {
       expect(pos, isNotNull);
     },
   );
+
+  test('TermuiAudioEngine API surface has distance attenuation methods', () {
+    final TermuiAudioEngine engine = MockAudioEngine();
+    final AudioVoice dummyVoice = AudioVoice(0, Completer<void>().future);
+
+    // Assert methods exist (analyzer will fail if they don't, or this will fail to run)
+    engine.set3dSourceMinMaxDistance(dummyVoice, 1.0, 10.0);
+    engine.set3dSourceAttenuation(
+      dummyVoice,
+      AttenuationModel.linearDistance,
+      1.0,
+    );
+  });
 }

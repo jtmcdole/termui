@@ -59,3 +59,18 @@ enum WaveForm {
 ///
 /// Progress is a value between 0.0 and 1.0.
 typedef LoadProgressCallback = void Function(double progress);
+
+/// The 3D audio distance attenuation model.
+enum AttenuationModel {
+  /// No attenuation based on distance.
+  none,
+
+  /// Inverse distance attenuation model.
+  inverseDistance,
+
+  /// Linear distance attenuation model.
+  linearDistance,
+
+  /// Exponential distance attenuation model.
+  exponentialDistance,
+}

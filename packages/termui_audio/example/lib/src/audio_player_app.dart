@@ -104,6 +104,15 @@ class AudioPlayerViewModel {
         sourceY[index],
         0.0,
       );
+
+      // Enable distance attenuation so the sound fades out as it moves away
+      audioService.set3dSourceMinMaxDistance(voice, 2.0, 20.0);
+      audioService.set3dSourceAttenuation(
+        voice,
+        AttenuationModel.linearDistance,
+        1.0,
+      );
+
       activeVoices[index] = voice;
       voice.completed.then((_) {
         if (activeVoices[index] == voice) {

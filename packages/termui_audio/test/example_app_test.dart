@@ -42,6 +42,18 @@ class MockAudioEngine implements TermuiAudioEngine {
     double vz = 0.0,
   }) {}
   @override
+  void set3dSourceMinMaxDistance(
+    AudioVoice voice,
+    double minDistance,
+    double maxDistance,
+  ) {}
+  @override
+  void set3dSourceAttenuation(
+    AudioVoice voice,
+    AttenuationModel attenuationModel,
+    double attenuationRolloffFactor,
+  ) {}
+  @override
   Duration getBufferDuration(AudioBuffer buffer) => Duration.zero;
   @override
   Duration getVoicePosition(AudioVoice voice) => Duration.zero;

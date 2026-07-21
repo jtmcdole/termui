@@ -56,6 +56,10 @@ void main() async {
 final engineLoop = await audioEngine.loadFile('assets/engine.ogg');
 final voice = audioEngine.play3d(engineLoop, 5.0, 0.0, 0.0);
 
+// Configure distance attenuation (volume falloff)
+audioEngine.set3dSourceMinMaxDistance(voice, 2.0, 20.0);
+audioEngine.set3dSourceAttenuation(voice, AttenuationModel.linearDistance, 1.0);
+
 // Update its position and velocity dynamically
 audioEngine.set3dSourceParameters(
   voice,

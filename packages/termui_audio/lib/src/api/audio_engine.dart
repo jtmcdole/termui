@@ -40,6 +40,20 @@ abstract class TermuiAudioEngine {
     double vz = 0.0,
   });
 
+  /// Sets the minimum and maximum distance parameters of a 3D audio source.
+  void set3dSourceMinMaxDistance(
+    AudioVoice voice,
+    double minDistance,
+    double maxDistance,
+  );
+
+  /// Sets the attenuation model and rolloff factor of a 3D audio source.
+  void set3dSourceAttenuation(
+    AudioVoice voice,
+    AttenuationModel attenuationModel,
+    double attenuationRolloffFactor,
+  );
+
   /// Retrieves the total duration of a loaded audio buffer.
   Duration getBufferDuration(AudioBuffer buffer);
 

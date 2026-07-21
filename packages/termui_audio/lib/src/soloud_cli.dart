@@ -108,6 +108,22 @@ external void set3dSourceParameters(
   double velocityZ,
 );
 
+@Native<Void Function(Uint32, Float, Float)>(
+  symbol: 'set3dSourceMinMaxDistance',
+)
+external void set3dSourceMinMaxDistance(
+  int handle,
+  double minDistance,
+  double maxDistance,
+);
+
+@Native<Void Function(Uint32, Uint32, Float)>(symbol: 'set3dSourceAttenuation')
+external void set3dSourceAttenuation(
+  int handle,
+  int attenuationModel,
+  double attenuationRolloffFactor,
+);
+
 @Native<Int32 Function(Uint32, Float)>(symbol: 'seek')
 external int seek(int handle, double time);
 

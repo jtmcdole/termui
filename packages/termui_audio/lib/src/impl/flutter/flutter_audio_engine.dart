@@ -178,4 +178,30 @@ class FlutterAudioEngine implements TermuiAudioEngine {
       vz,
     );
   }
+
+  @override
+  void set3dSourceMinMaxDistance(
+    AudioVoice voice,
+    double minDistance,
+    double maxDistance,
+  ) {
+    _engine.set3dSourceMinMaxDistance(
+      sol.SoundHandle(voice.id),
+      minDistance,
+      maxDistance,
+    );
+  }
+
+  @override
+  void set3dSourceAttenuation(
+    AudioVoice voice,
+    AttenuationModel attenuationModel,
+    double attenuationRolloffFactor,
+  ) {
+    _engine.set3dSourceAttenuation(
+      sol.SoundHandle(voice.id),
+      attenuationModel.index,
+      attenuationRolloffFactor,
+    );
+  }
 }
