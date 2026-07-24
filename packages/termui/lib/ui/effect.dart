@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// A mathematical mutator for 24-bit TrueColor cells.
@@ -168,11 +169,16 @@ extension EffectHelpers on Buffer {
   void fillForegroundStyle(Rect bounds, Style style, BlendOption blend) {
     final fgVal = style.foreground?.argb ?? 0;
     final styleMods = style.modifiers;
-    for (var y = bounds.y; y < bounds.y + bounds.height; y++) {
-      if (y < 0 || y >= height) continue;
+    final startY = max(0, bounds.y);
+    final endY = min(height, bounds.y + bounds.height);
+    final startX = max(0, bounds.x);
+    final endX = min(width, bounds.x + bounds.width);
+
+    if (startX >= endX || startY >= endY) return;
+
+    for (var y = startY; y < endY; y++) {
       final rowOffset = y * width;
-      for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
-        if (x < 0 || x >= width) continue;
+      for (var x = startX; x < endX; x++) {
         final idx = rowOffset + x;
         final attrIdx = idx * 3;
         if (blend == BlendOption.replace) {
@@ -194,11 +200,16 @@ extension EffectHelpers on Buffer {
   void fillBackgroundStyle(Rect bounds, Style style, BlendOption blend) {
     final bgVal = style.background?.argb ?? 0;
     final styleMods = style.modifiers;
-    for (var y = bounds.y; y < bounds.y + bounds.height; y++) {
-      if (y < 0 || y >= height) continue;
+    final startY = max(0, bounds.y);
+    final endY = min(height, bounds.y + bounds.height);
+    final startX = max(0, bounds.x);
+    final endX = min(width, bounds.x + bounds.width);
+
+    if (startX >= endX || startY >= endY) return;
+
+    for (var y = startY; y < endY; y++) {
       final rowOffset = y * width;
-      for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
-        if (x < 0 || x >= width) continue;
+      for (var x = startX; x < endX; x++) {
         final idx = rowOffset + x;
         final attrIdx = idx * 3;
         if (blend == BlendOption.replace) {
@@ -310,11 +321,16 @@ class DimmerEffect extends TerminalEffect {
   @override
   void applyEffect(Buffer target, Rect bounds) {
     final mutator = ColorMutator(scalar);
-    for (var y = bounds.y; y < bounds.y + bounds.height; y++) {
-      if (y < 0 || y >= target.height) continue;
+    final startY = max(0, bounds.y);
+    final endY = min(target.height, bounds.y + bounds.height);
+    final startX = max(0, bounds.x);
+    final endX = min(target.width, bounds.x + bounds.width);
+
+    if (startX >= endX || startY >= endY) return;
+
+    for (var y = startY; y < endY; y++) {
       final rowOffset = y * target.width;
-      for (var x = bounds.x; x < bounds.x + bounds.width; x++) {
-        if (x < 0 || x >= target.width) continue;
+      for (var x = startX; x < endX; x++) {
         final idx = rowOffset + x;
         final attrIdx = idx * 3;
         if ((target.attributes[attrIdx + 2] & Modifier.transparent) != 0) {

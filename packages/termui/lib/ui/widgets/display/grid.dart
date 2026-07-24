@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// A widget that renders a static 2D grid of customized [GridCell]s.
@@ -56,14 +57,19 @@ class GridElement extends Element {
     final w = size.width;
     final h = size.height;
 
-    for (var y = 0; y < grid.tiles.length; y++) {
-      if (y >= h) break;
+    final startY = max(0, -offset.dy);
+    final endY = min(h, buffer.height - offset.dy);
+    final startX = max(0, -offset.dx);
+    final endX = min(w, buffer.width - offset.dx);
+
+    if (startX >= endX || startY >= endY) return;
+
+    for (var y = startY; y < grid.tiles.length && y < endY; y++) {
       final row = grid.tiles[y];
-      for (var x = 0; x < row.length; x++) {
-        if (x >= w) break;
+      for (var x = startX; x < row.length && x < endX; x++) {
         buffer.setAttributes(
-          (offset.dx + x).toInt(),
-          (offset.dy + y).toInt(),
+          offset.dx + x,
+          offset.dy + y,
           char: row[x].char,
           fg: row[x].style.foreground?.argb,
           bg: row[x].style.background?.argb,

@@ -1012,16 +1012,24 @@ class CanvasElement extends Element {
     final drawWidth = min(w, canvas.width);
     final drawHeight = min(h, canvas.height);
 
-    for (var cy = 0; cy < drawHeight; cy++) {
-      final ty = startY + cy;
-      if (ty < 0 || ty >= targetHeight) continue;
+    final startXInt = startX.toInt();
+    final startYInt = startY.toInt();
 
-      for (var cx = 0; cx < drawWidth; cx++) {
-        final tx = startX + cx;
-        if (tx < 0 || tx >= targetWidth) continue;
+    final minCx = max(0, -startXInt);
+    final maxCx = min(drawWidth, targetWidth - startXInt);
+    final minCy = max(0, -startYInt);
+    final maxCy = min(drawHeight, targetHeight - startYInt);
+
+    if (minCx >= maxCx || minCy >= maxCy) return;
+
+    for (var cy = minCy; cy < maxCy; cy++) {
+      final ty = startYInt + cy;
+
+      for (var cx = minCx; cx < maxCx; cx++) {
+        final tx = startXInt + cx;
 
         if (canvas.onlyDrawOnSpaces &&
-            targetBuffer.getCharacter(tx.toInt(), ty.toInt()) != ' ') {
+            targetBuffer.getCharacter(tx, ty) != ' ') {
           continue;
         }
 
