@@ -1,3 +1,7 @@
+## 0.7.9
+
+ - **FIX**(ui): limit buffer drawing to 2D bounding box intersections to prevent row wrapping.
+
 ## 0.7.8
 
  - **REFACTOR**(core): optimize render loops and decouple audio state.
