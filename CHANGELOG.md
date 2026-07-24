@@ -15,6 +15,44 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - [`termui` - `v0.7.10`](#termui---v0710)
+ - [`termui_flutter` - `v0.6.14`](#termui_flutter---v0614)
+ - [`termui_recorder` - `v0.5.10+13`](#termui_recorder---v051013)
+ - [`termui_test` - `v0.2.11+14`](#termui_test---v021114)
+ - [`termui_hotreload` - `v0.6.13+10`](#termui_hotreload---v061310)
+ - [`termui_pty` - `v0.3.10`](#termui_pty---v0310)
+ - [`termui_audio` - `v0.1.3`](#termui_audio---v013)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.6.14`
+ - `termui_recorder` - `v0.5.10+13`
+ - `termui_test` - `v0.2.11+14`
+ - `termui_hotreload` - `v0.6.13+10`
+ - `termui_pty` - `v0.3.10`
+ - `termui_audio` - `v0.1.3`
+
+---
+
+#### `termui` - `v0.7.10`
+
+ - **FEAT**(buffer): add active clip stack and enforce 2D spatial canvas clipping (#90).
+
+
+## 2026-07-23
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`termui` - `v0.7.9`](#termui---v079)
  - [`termui_flutter` - `v0.6.13`](#termui_flutter---v0613)
  - [`termui_recorder` - `v0.5.9+12`](#termui_recorder---v05912)
