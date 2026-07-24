@@ -479,18 +479,25 @@ class DecoratedBoxElement extends SingleChildElement {
       final bgFg = bgStyle.foreground?.argb;
       final bgBg = bgStyle.background?.argb;
       final bgModifiers = bgStyle.modifiers;
-      // Fill background
-      for (var y = 0; y < area.height; y++) {
-        final drawY = area.y + y;
-        for (var x = 0; x < area.width; x++) {
-          buffer.setAttributes(
-            area.x + x,
-            drawY,
-            char: ' ',
-            fg: bgFg,
-            bg: bgBg,
-            modifiers: bgModifiers,
-          );
+
+      final startY = max(0, -area.y);
+      final endY = min(area.height, buffer.height - area.y);
+      final startX = max(0, -area.x);
+      final endX = min(area.width, buffer.width - area.x);
+
+      if (startX < endX && startY < endY) {
+        for (var y = startY; y < endY; y++) {
+          final drawY = area.y + y;
+          for (var x = startX; x < endX; x++) {
+            buffer.setAttributes(
+              area.x + x,
+              drawY,
+              char: ' ',
+              fg: bgFg,
+              bg: bgBg,
+              modifiers: bgModifiers,
+            );
+          }
         }
       }
     }
