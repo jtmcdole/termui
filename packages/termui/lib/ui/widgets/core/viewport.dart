@@ -51,6 +51,32 @@ class Viewport implements Buffer {
   );
 
   @override
+  Rect get activeClip => parent.activeClip;
+
+  @override
+  void pushClip(Rect clipRect) {
+    parent.pushClip(
+      Rect(
+        bounds.x + clipRect.x,
+        bounds.y + clipRect.y,
+        clipRect.width,
+        clipRect.height,
+      ),
+    );
+  }
+
+  @override
+  void popClip() {
+    parent.popClip();
+  }
+
+  @override
+  bool isCellValid(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return false;
+    return parent.isCellValid(bounds.x + x, bounds.y + y);
+  }
+
+  @override
   String getCharacter(int x, int y) {
     if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return ' ';
     return parent.getCharacter(bounds.x + x, bounds.y + y);

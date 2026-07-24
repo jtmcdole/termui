@@ -181,6 +181,34 @@ class Rect {
   /// Creates a new [Rect] with the specified [x], [y], [width], and [height].
   const Rect(this.x, this.y, this.width, this.height);
 
+  /// The left edge x-coordinate.
+  int get left => x;
+
+  /// The top edge y-coordinate.
+  int get top => y;
+
+  /// The right edge x-coordinate (exclusive).
+  int get right => x + width;
+
+  /// The bottom edge y-coordinate (exclusive).
+  int get bottom => y + height;
+
+  /// Whether ([cellX], [cellY]) is inside this rectangle.
+  bool contains(int cellX, int cellY) {
+    return cellX >= left && cellX < right && cellY >= top && cellY < bottom;
+  }
+
+  /// Calculates the intersection rectangle between this and [other].
+  Rect intersect(Rect other) {
+    final newLeft = left > other.left ? left : other.left;
+    final newTop = top > other.top ? top : other.top;
+    final newRight = right < other.right ? right : other.right;
+    final newBottom = bottom < other.bottom ? bottom : other.bottom;
+    final newWidth = (newRight - newLeft) < 0 ? 0 : newRight - newLeft;
+    final newHeight = (newBottom - newTop) < 0 ? 0 : newBottom - newTop;
+    return Rect(newLeft, newTop, newWidth, newHeight);
+  }
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||

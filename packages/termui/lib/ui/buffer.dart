@@ -43,27 +43,53 @@ class Buffer {
     : characters = List.filled(width * height, ' '),
       attributes = Uint32List(width * height * 3);
 
+  /// Stack of active canvas clip rectangles.
+  final List<Rect> _clipStack = [];
+
+  /// Returns the current active clip rectangle, defaulting to full buffer bounds if stack is empty.
+  Rect get activeClip =>
+      _clipStack.isEmpty ? Rect(0, 0, width, height) : _clipStack.last;
+
+  /// Pushes a new clip rectangle onto the stack, intersecting it with the current active clip.
+  void pushClip(Rect clipRect) {
+    _clipStack.add(activeClip.intersect(clipRect));
+  }
+
+  /// Pops the most recently pushed clip rectangle from the stack.
+  void popClip() {
+    if (_clipStack.isNotEmpty) {
+      _clipStack.removeLast();
+    }
+  }
+
+  /// Whether cell ([x], [y]) is valid and inside the current active clip bounds.
+  bool isCellValid(int x, int y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) return false;
+    if (_clipStack.isEmpty) return true;
+    return _clipStack.last.contains(x, y);
+  }
+
   /// Gets the character at ([x], [y]). Returns a space if coordinates are out of bounds.
   String getCharacter(int x, int y) {
-    if (x < 0 || x >= width || y < 0 || y >= height) return ' ';
+    if (!isCellValid(x, y)) return ' ';
     return characters[y * width + x];
   }
 
   /// Gets the foreground color at ([x], [y]). Returns 0 if coordinates are out of bounds.
   int getForeground(int x, int y) {
-    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+    if (!isCellValid(x, y)) return 0;
     return attributes[(y * width + x) * 3 + 0];
   }
 
   /// Gets the background color at ([x], [y]). Returns 0 if coordinates are out of bounds.
   int getBackground(int x, int y) {
-    if (x < 0 || x >= width || y < 0 || y >= height) return 0;
+    if (!isCellValid(x, y)) return 0;
     return attributes[(y * width + x) * 3 + 1];
   }
 
   /// Gets the modifiers at ([x], [y]). Returns transparent if coordinates are out of bounds.
   int getModifiers(int x, int y) {
-    if (x < 0 || x >= width || y < 0 || y >= height) {
+    if (!isCellValid(x, y)) {
       return Modifier.transparent;
     }
     return attributes[(y * width + x) * 3 + 2];
@@ -71,35 +97,35 @@ class Buffer {
 
   /// Sets character at coordinates.
   void setCharacter(int x, int y, String char) {
-    if (x >= 0 && x < width && y >= 0 && y < height) {
+    if (isCellValid(x, y)) {
       characters[y * width + x] = char;
     }
   }
 
   /// Sets foreground color at coordinates.
   void setForeground(int x, int y, int fg) {
-    if (x >= 0 && x < width && y >= 0 && y < height) {
+    if (isCellValid(x, y)) {
       attributes[(y * width + x) * 3 + 0] = fg;
     }
   }
 
   /// Sets background color at coordinates.
   void setBackground(int x, int y, int bg) {
-    if (x >= 0 && x < width && y >= 0 && y < height) {
+    if (isCellValid(x, y)) {
       attributes[(y * width + x) * 3 + 1] = bg;
     }
   }
 
   /// Sets modifiers at coordinates.
   void setModifiers(int x, int y, int mod) {
-    if (x >= 0 && x < width && y >= 0 && y < height) {
+    if (isCellValid(x, y)) {
       attributes[(y * width + x) * 3 + 2] = mod;
     }
   }
 
   /// Sets character, colors, and modifiers at coordinates.
   void setCell(int x, int y, String char, int fg, int bg, int mod) {
-    if (x >= 0 && x < width && y >= 0 && y < height) {
+    if (isCellValid(x, y)) {
       final idx = (y * width + x) * 3;
       characters[y * width + x] = char;
       attributes[idx + 0] = fg;
@@ -117,7 +143,7 @@ class Buffer {
     int? bg,
     int? modifiers,
   }) {
-    if (x < 0 || x >= width || y < 0 || y >= height) return;
+    if (!isCellValid(x, y)) return;
     final idx = (y * width + x) * 3;
     if (char != null) characters[y * width + x] = char;
     if (fg != null) attributes[idx + 0] = fg;
@@ -225,10 +251,7 @@ class Buffer {
           currentY++;
           continue;
         }
-        if (currentX >= 0 &&
-            currentX < width &&
-            currentY >= 0 &&
-            currentY < height) {
+        if (isCellValid(currentX, currentY)) {
           final idx = currentY * width + currentX;
           final char = String.fromCharCode(codeUnit);
 
@@ -305,10 +328,7 @@ class Buffer {
         currentY++;
         continue;
       }
-      if (currentX >= 0 &&
-          currentX < width &&
-          currentY >= 0 &&
-          currentY < height) {
+      if (isCellValid(currentX, currentY)) {
         final idx = currentY * width + currentX;
         // Clear potential wide char we are about to overwrite
         if (characters[idx] == '') {
