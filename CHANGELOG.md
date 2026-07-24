@@ -3,6 +3,44 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-23
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.7.9`](#termui---v079)
+ - [`termui_flutter` - `v0.6.13`](#termui_flutter---v0613)
+ - [`termui_recorder` - `v0.5.9+12`](#termui_recorder---v05912)
+ - [`termui_test` - `v0.2.10+13`](#termui_test---v021013)
+ - [`termui_hotreload` - `v0.6.12+9`](#termui_hotreload---v06129)
+ - [`termui_pty` - `v0.3.9`](#termui_pty---v039)
+ - [`termui_audio` - `v0.1.2`](#termui_audio---v012)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.6.13`
+ - `termui_recorder` - `v0.5.9+12`
+ - `termui_test` - `v0.2.10+13`
+ - `termui_hotreload` - `v0.6.12+9`
+ - `termui_pty` - `v0.3.9`
+ - `termui_audio` - `v0.1.2`
+
+---
+
+#### `termui` - `v0.7.9`
+
+ - **FIX**(ui): limit buffer drawing to 2D bounding box intersections to prevent row wrapping.
+
+
 ## 2026-07-20
 
 ### Changes
