@@ -1,3 +1,7 @@
+## 0.7.10
+
+ - **FEAT**(buffer): add active clip stack and enforce 2D spatial canvas clipping (#90).
+
 ## 0.7.9
 
  - **FIX**(ui): limit buffer drawing to 2D bounding box intersections to prevent row wrapping.
