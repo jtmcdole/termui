@@ -62,16 +62,18 @@ class StringSinkAsciicastWriter implements AsciicastWriter {
 /// into the Asciinema Asciicast v3 format.
 class AsciicastRecorder {
   /// The column width of the recorded terminal session.
-  final int width;
+  int width;
 
   /// The row height of the recorded terminal session.
-  final int height;
+  int height;
 
   final AsciicastWriter _writer;
   DateTime? _startTime;
   DateTime? _lastEventTime;
   late final Renderer _renderer;
   bool _headerWritten = false;
+  int? _lastRecordedWidth;
+  int? _lastRecordedHeight;
 
   /// Creates a new [AsciicastRecorder] writing to the specified [writer].
   AsciicastRecorder(
@@ -91,6 +93,8 @@ class AsciicastRecorder {
     };
     _writer.writeLine(jsonEncode(header));
     _headerWritten = true;
+    _lastRecordedWidth = width;
+    _lastRecordedHeight = height;
   }
 
   /// Records a frame change from the given [buffer] by diff-rendering it and
@@ -103,7 +107,26 @@ class AsciicastRecorder {
     _lastEventTime ??= now;
 
     if (!_headerWritten) {
+      width = buffer.width;
+      height = buffer.height;
       _writeHeader();
+    }
+
+    final elapsed = now.difference(_lastEventTime!);
+    final intervalSeconds = elapsed.inMicroseconds / 1000000.0;
+
+    if (_lastRecordedWidth != buffer.width || _lastRecordedHeight != buffer.height) {
+      width = buffer.width;
+      height = buffer.height;
+      _lastRecordedWidth = buffer.width;
+      _lastRecordedHeight = buffer.height;
+
+      final resizeRow = [
+        intervalSeconds,
+        'r',
+        {'cols': buffer.width, 'rows': buffer.height},
+      ];
+      _writer.writeLine(jsonEncode(resizeRow));
     }
 
     final frameOutput = StringBuffer();
@@ -112,8 +135,6 @@ class AsciicastRecorder {
     final deltaAnsi = frameOutput.toString();
     if (deltaAnsi.isEmpty) return; // No updates drawn
 
-    final elapsed = now.difference(_lastEventTime!);
-    final intervalSeconds = elapsed.inMicroseconds / 1000000.0;
     _lastEventTime = now;
 
     if (actions != null && actions.isNotEmpty) {
