@@ -3,6 +3,49 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-24
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.7.11`](#termui---v0711)
+ - [`termui_recorder` - `v0.5.11+14`](#termui_recorder---v051114)
+ - [`termui_flutter` - `v0.6.15`](#termui_flutter---v0615)
+ - [`termui_test` - `v0.2.12+15`](#termui_test---v021215)
+ - [`termui_hotreload` - `v0.6.14+11`](#termui_hotreload---v061411)
+ - [`termui_pty` - `v0.3.11`](#termui_pty---v0311)
+ - [`termui_audio` - `v0.1.4`](#termui_audio---v014)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.6.15`
+ - `termui_test` - `v0.2.12+15`
+ - `termui_hotreload` - `v0.6.14+11`
+ - `termui_pty` - `v0.3.11`
+ - `termui_audio` - `v0.1.4`
+
+---
+
+#### `termui` - `v0.7.11`
+
+ - **FIX**(termui): prevent hover debug overlay from overwriting edge elements.
+ - **FIX**: subpixel radar works above everything; asciicast plays fullscreen.
+
+#### `termui_recorder` - `v0.5.11+14`
+
+ - **FIX**(termui): prevent hover debug overlay from overwriting edge elements.
+ - **FIX**: subpixel radar works above everything; asciicast plays fullscreen.
+
+
 ## 2026-07-23
 
 ### Changes
