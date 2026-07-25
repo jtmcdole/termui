@@ -83,7 +83,8 @@ class AsciicastPlayer {
             time = accumulatedTime;
           }
           final type = array[1] as String;
-          final data = array[2] as String;
+          final rawData = array[2];
+          final String data = rawData is String ? rawData : jsonEncode(rawData);
           events.add(AsciicastEvent(time, type, data));
         }
       } catch (_) {
@@ -399,28 +400,22 @@ class AsciicastPlayer {
     final boxTopRow = row - 2;
     final boxContentRow = row - 1;
 
-    if (boxTopRow >= 1) {
-      if (metadataText.isNotEmpty) {
-        // Draw top border of the box
-        final title = ' Debug Metadata ';
-        final borderLen = termWidth - title.length - 2;
-        final topBorder = '┌─$title${'─' * (borderLen > 0 ? borderLen : 0)}┐';
-        sb.write('\x1b[$boxTopRow;1H\x1b[K$topBorder');
+    if (metadataText.isNotEmpty && boxTopRow >= 1) {
+      // Draw top border of the box
+      final title = ' Debug Metadata ';
+      final borderLen = termWidth - title.length - 2;
+      final topBorder = '┌─$title${'─' * (borderLen > 0 ? borderLen : 0)}┐';
+      sb.write('\x1b[$boxTopRow;1H\x1b[K$topBorder');
 
-        // Draw content of the box enclosed in vertical lines
-        final contentWidth = termWidth - 2;
-        var contentStr = metadataText;
-        if (contentStr.length > contentWidth) {
-          contentStr = contentStr.substring(0, contentWidth);
-        } else {
-          contentStr = contentStr.padRight(contentWidth);
-        }
-        sb.write('\x1b[$boxContentRow;1H\x1b[K│$contentStr│');
+      // Draw content of the box enclosed in vertical lines
+      final contentWidth = termWidth - 2;
+      var contentStr = metadataText;
+      if (contentStr.length > contentWidth) {
+        contentStr = contentStr.substring(0, contentWidth);
       } else {
-        // Clear the metadata box lines
-        sb.write('\x1b[$boxTopRow;1H\x1b[K');
-        sb.write('\x1b[$boxContentRow;1H\x1b[K');
+        contentStr = contentStr.padRight(contentWidth);
       }
+      sb.write('\x1b[$boxContentRow;1H\x1b[K│$contentStr│');
     }
 
     // We style the status bar with reverse video (black on white) for high visibility

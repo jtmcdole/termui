@@ -73,7 +73,7 @@ class SubpixelRippleManager {
     updateRipples(now);
     if (_ripples.isEmpty) return;
 
-    final canvas = Canvas(buffer.width, buffer.height, onlyDrawOnSpaces: true);
+    final canvas = Canvas(buffer.width, buffer.height, onlyDrawOnSpaces: false);
     var hasPainted = false;
 
     for (final ripple in _ripples) {
