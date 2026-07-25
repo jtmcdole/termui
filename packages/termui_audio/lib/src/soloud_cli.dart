@@ -154,3 +154,47 @@ external double getLength(int hash);
 
 @Native<Double Function(Uint32)>(symbol: 'getPosition')
 external double getPosition(int handle);
+
+@Native<Void Function(Uint32, Float)>(symbol: 'setRelativePlaySpeed')
+external void setRelativePlaySpeed(int handle, double speed);
+
+@Native<Int32 Function(Uint32, Float, Float)>(symbol: 'fadeRelativePlaySpeed')
+external int fadeRelativePlaySpeed(int handle, double to, double time);
+
+@Native<Int32 Function(Uint32, Float, Float)>(symbol: 'fadeVolume')
+external int fadeVolume(int handle, double to, double time);
+
+@Native<Int32 Function(Uint32, Uint32, Int32)>(symbol: 'addFilter')
+external int addFilter(int soundHash, int busId, int filterType);
+
+@Native<Int32 Function(Uint32, Uint32, Int32, Int32, Float)>(
+  symbol: 'setFilterParams',
+)
+external int setFilterParams(
+  int handle,
+  int busId,
+  int filterType,
+  int attributeId,
+  double value,
+);
+
+@Native<Int32 Function(Uint32, Uint32, Int32, Int32, Float, Float)>(
+  symbol: 'fadeFilterParameter',
+)
+external int fadeFilterParameter(
+  int handle,
+  int busId,
+  int filterType,
+  int attributeId,
+  double to,
+  double time,
+);
+
+@Native<Uint32 Function()>(symbol: 'createBus')
+external int createBus();
+
+@Native<Void Function(Uint32)>(symbol: 'destroyBus')
+external void destroyBus(int busId);
+
+@Native<Uint32 Function(Uint32, Float, Bool)>(symbol: 'busPlayOnEngine')
+external int busPlayOnEngine(int busId, double volume, bool paused);

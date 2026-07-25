@@ -125,14 +125,13 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) {
-    if (bus != null) {
-      throw UnimplementedError(
-        'AudioBus is not yet supported in FlutterAudioEngine.play()',
-      );
-    }
-
     final flutterBuffer = buffer as FlutterAudioBuffer;
-    final voice = _engine.play(flutterBuffer._source, looping: loop);
+    final busId = bus?.id ?? 0;
+    final voice = _engine.play(
+      flutterBuffer._source,
+      looping: loop,
+      busId: busId,
+    );
     final completer = Completer<void>();
     flutterBuffer.registerVoice(voice.id, completer);
     return AudioVoice(voice.id, completer.future);
@@ -203,5 +202,98 @@ class FlutterAudioEngine implements TermuiAudioEngine {
       attenuationModel.index,
       attenuationRolloffFactor,
     );
+  }
+
+  @override
+  void setRelativePlaySpeed(AudioVoice voice, double speed) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    _engine.setRelativePlaySpeed(sol.SoundHandle(voice.id), speed);
+  }
+
+  @override
+  void fadeRelativePlaySpeed(
+    AudioVoice voice,
+    double speed,
+    Duration duration,
+  ) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    _engine.fadeRelativePlaySpeed(sol.SoundHandle(voice.id), speed, duration);
+  }
+
+  @override
+  void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    _engine.fadeVolume(sol.SoundHandle(voice.id), targetVolume, duration);
+  }
+
+  @override
+  int createFilter(FilterType type) {
+    return type.index;
+  }
+
+  @override
+  void attachFilterToBus(AudioBus bus, int filterId) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    final solFilter = sol.FilterType.values[filterId];
+    // ignore: invalid_use_of_internal_member
+    solFilter.activate(null, bus.id);
+  }
+
+  @override
+  void setFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double value,
+  ) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    final solFilter = sol.FilterType.values[filterId];
+    // ignore: invalid_use_of_internal_member
+    solFilter.fadeFilterParameter(null, bus.id, paramId, value, Duration.zero);
+  }
+
+  @override
+  void fadeFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double targetValue,
+    Duration duration,
+  ) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    final solFilter = sol.FilterType.values[filterId];
+    // ignore: invalid_use_of_internal_member
+    solFilter.fadeFilterParameter(null, bus.id, paramId, targetValue, duration);
+  }
+
+  @override
+  AudioVoice playSprite(
+    AudioBuffer buffer, {
+    required Duration start,
+    required Duration duration,
+  }) {
+    final voice = play(buffer);
+    seek(voice, start);
+    Timer(duration, () {
+      try {
+        stop(voice);
+      } catch (_) {}
+    });
+    return voice;
+  }
+
+  @override
+  AudioBus createBus() {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    final solBus = sol.Bus();
+    solBus.playOnEngine();
+    return FlutterAudioBus(solBus);
+  }
+
+  @override
+  void destroyBus(AudioBus bus) {
+    if (!_engine.isInitialized) return;
+    final flutterBus = bus as FlutterAudioBus;
+    flutterBus._bus.dispose();
   }
 }

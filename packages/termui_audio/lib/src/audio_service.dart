@@ -18,6 +18,26 @@ abstract class AudioService {
   /// Sets the volume of the played sound (or background music).
   Future<void> setBgmVolume(double volume);
 
+  /// Sets the relative playback speed of a loaded sound identified by [handle].
+  Future<void> setRelativePlaySpeed(SoundHandle handle, double speed);
+
+  /// Fades the relative play speed of a loaded sound identified by [handle] over [duration].
+  Future<void> fadeRelativePlaySpeed(
+    SoundHandle handle,
+    double speed,
+    Duration duration,
+  );
+
+  /// Fades the volume of a loaded sound identified by [handle] over [duration].
+  Future<void> fadeVolume(
+    SoundHandle handle,
+    double targetVolume,
+    Duration duration,
+  );
+
+  /// Fades the background music volume over [duration].
+  Future<void> fadeBgmVolume(double targetVolume, Duration duration);
+
   /// Disposes of the audio engine and releases any held hardware/system resources.
   Future<void> dispose();
 }
@@ -79,6 +99,26 @@ class MockAudioService implements AudioService {
   Future<void> setBgmVolume(double volume) async {
     _bgmVolume = volume;
   }
+
+  @override
+  Future<void> setRelativePlaySpeed(SoundHandle handle, double speed) async {}
+
+  @override
+  Future<void> fadeRelativePlaySpeed(
+    SoundHandle handle,
+    double speed,
+    Duration duration,
+  ) async {}
+
+  @override
+  Future<void> fadeVolume(
+    SoundHandle handle,
+    double targetVolume,
+    Duration duration,
+  ) async {}
+
+  @override
+  Future<void> fadeBgmVolume(double targetVolume, Duration duration) async {}
 
   @override
   Future<void> dispose() async {

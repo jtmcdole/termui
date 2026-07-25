@@ -333,4 +333,108 @@ class CliAudioEngine implements TermuiAudioEngine {
       attenuationRolloffFactor,
     );
   }
+
+  @override
+  void setRelativePlaySpeed(AudioVoice voice, double speed) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.setRelativePlaySpeed(voice.id, speed);
+  }
+
+  @override
+  void fadeRelativePlaySpeed(
+    AudioVoice voice,
+    double speed,
+    Duration duration,
+  ) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.fadeRelativePlaySpeed(
+      voice.id,
+      speed,
+      duration.inMicroseconds / 1000000.0,
+    );
+  }
+
+  @override
+  void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.fadeVolume(voice.id, targetVolume, duration.inMicroseconds / 1000000.0);
+  }
+
+  @override
+  int createFilter(FilterType type) {
+    return type.index;
+  }
+
+  @override
+  void attachFilterToBus(AudioBus bus, int filterId) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    final res = ffi.addFilter(0, bus.id, filterId);
+    if (res != 0) {
+      throw Exception('Failed to attach filter to bus. Error code: $res');
+    }
+  }
+
+  @override
+  void setFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double value,
+  ) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.setFilterParams(0, bus.id, filterId, paramId, value);
+  }
+
+  @override
+  void fadeFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double targetValue,
+    Duration duration,
+  ) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.fadeFilterParameter(
+      0,
+      bus.id,
+      filterId,
+      paramId,
+      targetValue,
+      duration.inMicroseconds / 1000000.0,
+    );
+  }
+
+  @override
+  AudioVoice playSprite(
+    AudioBuffer buffer, {
+    required Duration start,
+    required Duration duration,
+  }) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    final voice = play(buffer);
+    seek(voice, start);
+    Timer(duration, () {
+      try {
+        stop(voice);
+      } catch (_) {}
+    });
+    return voice;
+  }
+
+  @override
+  AudioBus createBus() {
+    if (!_inited) throw Exception('Engine not initialized.');
+    final busId = ffi.createBus();
+    if (busId == 0) {
+      throw Exception('Failed to create native audio bus.');
+    }
+    ffi.busPlayOnEngine(busId, 1.0, false);
+    return CliAudioBus(busId);
+  }
+
+  @override
+  void destroyBus(AudioBus bus) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.destroyBus(bus.id);
+  }
 }

@@ -59,6 +59,46 @@ class MockAudioEngine implements TermuiAudioEngine {
   Duration getVoicePosition(AudioVoice voice) => Duration.zero;
   @override
   void seek(AudioVoice voice, Duration position) {}
+
+  @override
+  void setRelativePlaySpeed(AudioVoice voice, double speed) {}
+  @override
+  void fadeRelativePlaySpeed(
+    AudioVoice voice,
+    double speed,
+    Duration duration,
+  ) {}
+  @override
+  void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) {}
+  @override
+  int createFilter(FilterType type) => 0;
+  @override
+  void attachFilterToBus(AudioBus bus, int filterId) {}
+  @override
+  void setFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double value,
+  ) {}
+  @override
+  void fadeFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double targetValue,
+    Duration duration,
+  ) {}
+  @override
+  AudioVoice playSprite(
+    AudioBuffer buffer, {
+    required Duration start,
+    required Duration duration,
+  }) => throw UnimplementedError();
+  @override
+  AudioBus createBus() => throw UnimplementedError();
+  @override
+  void destroyBus(AudioBus bus) {}
 }
 
 void main() {
