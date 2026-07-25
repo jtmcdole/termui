@@ -1,3 +1,8 @@
+## 0.5.11+14
+
+ - **FIX**(termui): prevent hover debug overlay from overwriting edge elements.
+ - **FIX**: subpixel radar works above everything; asciicast plays fullscreen.
+
 ## 0.5.10+13
 
  - Update a dependency to the latest release.

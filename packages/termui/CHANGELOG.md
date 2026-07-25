@@ -1,3 +1,8 @@
+## 0.7.11
+
+ - **FIX**(termui): prevent hover debug overlay from overwriting edge elements.
+ - **FIX**: subpixel radar works above everything; asciicast plays fullscreen.
+
 ## 0.7.10
 
  - **FEAT**(buffer): add active clip stack and enforce 2D spatial canvas clipping (#90).
