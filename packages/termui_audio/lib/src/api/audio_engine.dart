@@ -62,4 +62,49 @@ abstract class TermuiAudioEngine {
 
   /// Seeks a playing voice to a specific time position.
   void seek(AudioVoice voice, Duration position);
+
+  /// Sets the relative playback speed multiplier for a playing [voice].
+  void setRelativePlaySpeed(AudioVoice voice, double speed);
+
+  /// Smoothly fades the relative play speed of a playing [voice] to [speed] over [duration].
+  void fadeRelativePlaySpeed(AudioVoice voice, double speed, Duration duration);
+
+  /// Smoothly fades the volume of a playing [voice] to [targetVolume] over [duration].
+  void fadeVolume(AudioVoice voice, double targetVolume, Duration duration);
+
+  /// Creates a filter instance of the given [type] and returns a filter identifier handle.
+  int createFilter(FilterType type);
+
+  /// Attaches a created filter [filterId] to a native mixing [bus].
+  void attachFilterToBus(AudioBus bus, int filterId);
+
+  /// Sets a specific parameter [paramId] on a filter attached to [bus] to [value].
+  void setFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double value,
+  );
+
+  /// Fades a parameter [paramId] on a filter attached to [bus] to [targetValue] over [duration].
+  void fadeFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double targetValue,
+    Duration duration,
+  );
+
+  /// Plays a segment/sprite of a loaded [buffer] starting at [start] for [duration].
+  AudioVoice playSprite(
+    AudioBuffer buffer, {
+    required Duration start,
+    required Duration duration,
+  });
+
+  /// Dynamically creates a new native mixing bus.
+  AudioBus createBus();
+
+  /// Destroys a native mixing bus [bus].
+  void destroyBus(AudioBus bus);
 }

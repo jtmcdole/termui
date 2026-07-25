@@ -57,6 +57,61 @@ class FlutterAudioService implements AudioService {
   }
 
   @override
+  Future<void> setRelativePlaySpeed(SoundHandle handle, double speed) async {
+    final path = handle.id as String;
+    final voices = _playingVoices[path];
+    if (voices != null) {
+      for (final voice in voices) {
+        if (sol.SoLoud.instance.getIsValidVoiceHandle(voice)) {
+          sol.SoLoud.instance.setRelativePlaySpeed(voice, speed);
+        }
+      }
+    }
+  }
+
+  @override
+  Future<void> fadeRelativePlaySpeed(
+    SoundHandle handle,
+    double speed,
+    Duration duration,
+  ) async {
+    final path = handle.id as String;
+    final voices = _playingVoices[path];
+    if (voices != null) {
+      for (final voice in voices) {
+        if (sol.SoLoud.instance.getIsValidVoiceHandle(voice)) {
+          sol.SoLoud.instance.fadeRelativePlaySpeed(voice, speed, duration);
+        }
+      }
+    }
+  }
+
+  @override
+  Future<void> fadeVolume(
+    SoundHandle handle,
+    double targetVolume,
+    Duration duration,
+  ) async {
+    final path = handle.id as String;
+    final voices = _playingVoices[path];
+    if (voices != null) {
+      for (final voice in voices) {
+        if (sol.SoLoud.instance.getIsValidVoiceHandle(voice)) {
+          sol.SoLoud.instance.fadeVolume(voice, targetVolume, duration);
+        }
+      }
+    }
+  }
+
+  @override
+  Future<void> fadeBgmVolume(double targetVolume, Duration duration) async {
+    if (_bgmVoice != null &&
+        sol.SoLoud.instance.getIsValidVoiceHandle(_bgmVoice!)) {
+      sol.SoLoud.instance.fadeVolume(_bgmVoice!, targetVolume, duration);
+    }
+  }
+
+  @override
   Future<void> dispose() async {
     if (sol.SoLoud.instance.isInitialized) {
       sol.SoLoud.instance.deinit();

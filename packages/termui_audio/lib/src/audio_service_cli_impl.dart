@@ -3,7 +3,8 @@ import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
 import 'audio_service.dart';
-import 'soloud_cli.dart';
+import 'soloud_cli.dart' as ffi;
+import 'soloud_cli.dart' show SoLoud_destroySound;
 
 /// A Finalizable version of SoundHandle used by the CLI engine.
 class FinalizableSoundHandle extends SoundHandle implements Finalizable {
@@ -35,12 +36,12 @@ class CliAudioService implements AudioService {
     // Hardware Release (ProcessSignal)
     try {
       _sigintSub = ProcessSignal.sigint.watch().listen((_) {
-        disposeEngine();
+        ffi.disposeEngine();
         exit(0);
       });
     } catch (_) {}
 
-    final res = initEngine(-1, 48000, 2048, 2, 0);
+    final res = ffi.initEngine(-1, 48000, 2048, 2, 0);
     if (res != 0) {
       throw Exception(
         'Failed to initialize SoLoud CLI Engine. Error code: $res',
@@ -65,7 +66,7 @@ class CliAudioService implements AudioService {
     final hashPtr = calloc<Uint32>();
 
     try {
-      final res = loadMem(namePtr, bufferPtr, bytes.length, 1, hashPtr);
+      final res = ffi.loadMem(namePtr, bufferPtr, bytes.length, 1, hashPtr);
       if (res != 0) {
         throw Exception('Failed to load sound into memory. Error code: $res');
       }
@@ -92,7 +93,7 @@ class CliAudioService implements AudioService {
     final hash = handle.id as int;
     final voicePtr = calloc<Uint32>();
     try {
-      final res = play(hash, 0, 1.0, 0.0, false, loop, 0.0, voicePtr);
+      final res = ffi.play(hash, 0, 1.0, 0.0, false, loop, 0.0, voicePtr);
       if (res != 0) {
         throw Exception('Failed to play sound. Error code: $res');
       }
@@ -114,7 +115,7 @@ class CliAudioService implements AudioService {
     final voices = _playingVoices[hash];
     if (voices != null) {
       for (final voice in voices) {
-        stop(voice);
+        ffi.stop(voice);
       }
       voices.clear();
     }
@@ -124,7 +125,71 @@ class CliAudioService implements AudioService {
   Future<void> setBgmVolume(double volume) async {
     if (!_inited) return;
     if (_bgmVoice != null) {
-      setVolume(_bgmVoice!, volume);
+      ffi.setVolume(_bgmVoice!, volume);
+    }
+  }
+
+  @override
+  Future<void> setRelativePlaySpeed(SoundHandle handle, double speed) async {
+    if (!_inited) return;
+    final hash = handle.id as int;
+    final voices = _playingVoices[hash];
+    if (voices != null) {
+      for (final voice in voices) {
+        ffi.setRelativePlaySpeed(voice, speed);
+      }
+    }
+  }
+
+  @override
+  Future<void> fadeRelativePlaySpeed(
+    SoundHandle handle,
+    double speed,
+    Duration duration,
+  ) async {
+    if (!_inited) return;
+    final hash = handle.id as int;
+    final voices = _playingVoices[hash];
+    if (voices != null) {
+      for (final voice in voices) {
+        ffi.fadeRelativePlaySpeed(
+          voice,
+          speed,
+          duration.inMicroseconds / 1000000.0,
+        );
+      }
+    }
+  }
+
+  @override
+  Future<void> fadeVolume(
+    SoundHandle handle,
+    double targetVolume,
+    Duration duration,
+  ) async {
+    if (!_inited) return;
+    final hash = handle.id as int;
+    final voices = _playingVoices[hash];
+    if (voices != null) {
+      for (final voice in voices) {
+        ffi.fadeVolume(
+          voice,
+          targetVolume,
+          duration.inMicroseconds / 1000000.0,
+        );
+      }
+    }
+  }
+
+  @override
+  Future<void> fadeBgmVolume(double targetVolume, Duration duration) async {
+    if (!_inited) return;
+    if (_bgmVoice != null) {
+      ffi.fadeVolume(
+        _bgmVoice!,
+        targetVolume,
+        duration.inMicroseconds / 1000000.0,
+      );
     }
   }
 
@@ -141,10 +206,10 @@ class CliAudioService implements AudioService {
       if (handle != null) {
         _soundFinalizer.detach(handle);
       }
-      disposeSound(entry.key);
+      ffi.disposeSound(entry.key);
     }
 
-    disposeEngine();
+    ffi.disposeEngine();
     _loadedHandles.clear();
     _playingVoices.clear();
     _bgmVoice = null;
