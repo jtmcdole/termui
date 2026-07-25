@@ -63,22 +63,22 @@ void main() {
           final activeBuffer = backend.buffer;
           expect(activeBuffer, isNotNull);
 
-          // Top-left corner of the hovered SizedBox is at (0, 1) due to expanded bounds
-          expect(activeBuffer!.getCharacter(0, 1), equals('┌'));
+          // Top-left corner of the hovered SizedBox is off-screen at x = -1; row y = 1 contains top border line '─'
+          expect(activeBuffer!.getCharacter(0, 1), equals('─'));
           expect(
             Color.argb(activeBuffer.getForeground(0, 1)),
             equals(const Color(255, 0, 255)),
           );
 
-          // The badge ' SizedBox ' should start at (1, 4) due to expanded bounds
-          // Check character 'S' at (2, 4)
-          expect(activeBuffer.getCharacter(2, 4), equals('S'));
+          // The badge ' SizedBox ' should start at (0, 4)
+          // Check character 'S' at (1, 4)
+          expect(activeBuffer.getCharacter(1, 4), equals('S'));
           expect(
-            Color.argb(activeBuffer.getForeground(2, 4)),
+            Color.argb(activeBuffer.getForeground(1, 4)),
             equals(const Color(255, 255, 255)),
           );
           expect(
-            Color.argb(activeBuffer.getBackground(2, 4)),
+            Color.argb(activeBuffer.getBackground(1, 4)),
             equals(const Color(255, 0, 255)),
           );
 
@@ -88,6 +88,57 @@ void main() {
           async.flushMicrotasks();
 
           expect(terminal.mouseTrackingEnabled, isFalse);
+        });
+      },
+    );
+
+    test(
+      'clips out-of-bounds hover border off-screen without overwriting edge element at (0,0)',
+      () {
+        fakeAsync((async) {
+          debugPaintHoverEnabled = true;
+
+          final runner = PromptRunner<void>(
+            terminal: terminal,
+            widget: Stack([
+              const Positioned(
+                left: 0,
+                top: 0,
+                child: SizedBox(width: 1, height: 1, child: Text('X')),
+              ),
+            ]),
+            alternateScreen: true,
+          );
+
+          final future = runner.run();
+          async.elapse(const Duration(milliseconds: 10));
+
+          // Hover over (x: 1, y: 1) -> 0-based (0, 0)
+          terminal.injectTestEvent(
+            ui.MouseEvent(
+              x: 1,
+              y: 1,
+              type: ui.MouseEventType.move,
+              button: ui.MouseButton.none,
+            ),
+          );
+
+          async.elapse(const Duration(milliseconds: 10));
+
+          final activeBuffer = backend.buffer;
+          expect(activeBuffer, isNotNull);
+
+          // Element content 'X' at (0, 0) MUST remain intact! (not overwritten with '┌')
+          expect(activeBuffer!.getCharacter(0, 0), equals('X'));
+
+          // Right border at (1, 0) is '│'
+          expect(activeBuffer.getCharacter(1, 0), equals('│'));
+          // Row y = 1 contains the badge ' TextElement '; character at (1, 1) is 'T'
+          expect(activeBuffer.getCharacter(1, 1), equals('T'));
+
+          runner.abort();
+          future.catchError((_) => null);
+          async.flushMicrotasks();
         });
       },
     );

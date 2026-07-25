@@ -115,7 +115,8 @@ class AsciicastRecorder {
     final elapsed = now.difference(_lastEventTime!);
     final intervalSeconds = elapsed.inMicroseconds / 1000000.0;
 
-    if (_lastRecordedWidth != buffer.width || _lastRecordedHeight != buffer.height) {
+    if (_lastRecordedWidth != buffer.width ||
+        _lastRecordedHeight != buffer.height) {
       width = buffer.width;
       height = buffer.height;
       _lastRecordedWidth = buffer.width;

@@ -957,16 +957,19 @@ Element? _findDeepestElementAt(
     return null;
   }
 
-  Element? deepestChild;
-  element.visitChildren((child) {
+  final children = <Element>[];
+  element.visitChildren(children.add);
+
+  for (var i = children.length - 1; i >= 0; i--) {
+    final child = children[i];
     final childOffset = absoluteOffset + child.relativeOffset;
     final childDeepest = _findDeepestElementAt(child, childOffset, mousePos);
     if (childDeepest != null) {
-      deepestChild = childDeepest;
+      return childDeepest;
     }
-  });
+  }
 
-  return deepestChild ?? element;
+  return children.isEmpty ? element : null;
 }
 
 Offset _getAbsoluteOffset(Element element) {
@@ -983,10 +986,10 @@ void _highlightHoveredElement(Buffer buffer, Element element) {
   if (element.size.width <= 0 || element.size.height <= 0) return;
   final offset = _getAbsoluteOffset(element);
 
-  final left = max(0, offset.dx - 1);
-  final top = max(0, offset.dy - 1);
-  final right = min(buffer.width - 1, offset.dx + element.size.width);
-  final bottom = min(buffer.height - 1, offset.dy + element.size.height);
+  final left = offset.dx - 1;
+  final top = offset.dy - 1;
+  final right = offset.dx + element.size.width;
+  final bottom = offset.dy + element.size.height;
 
   final expandedOffset = Offset(left, top);
   final expandedSize = Size(right - left + 1, bottom - top + 1);
@@ -1007,14 +1010,9 @@ void _highlightHoveredElement(Buffer buffer, Element element) {
     modifiers: Modifier.bold,
   );
 
-  final int badgeY;
-  if (bottom == buffer.height - 1) {
-    badgeY = top;
-  } else {
-    badgeY = bottom;
-  }
-
-  final badgeX = max(0, min(left + 1, buffer.width - label.length));
+  final badgeY = (bottom >= buffer.height - 1) ? max(0, top) : bottom;
+  final maxBadgeX = max(0, buffer.width - label.length);
+  final badgeX = (left + 1).clamp(0, maxBadgeX);
 
   buffer.writeString(badgeX, badgeY, label, labelStyle);
 }
