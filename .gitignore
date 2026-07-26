@@ -15,6 +15,9 @@ debug.log
 parser.log
 tmp/
 **/.flutter-plugins-dependencies
+**/ephemeral/
+**/generated_plugin_registrant.*
+**/generated_plugins.cmake
 **/atlas_table_*.json
 browser_trace*.json.gz
 **/.DS_Store
