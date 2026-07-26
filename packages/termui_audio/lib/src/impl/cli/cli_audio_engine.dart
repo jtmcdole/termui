@@ -299,6 +299,13 @@ class CliAudioEngine implements TermuiAudioEngine {
     bytes.setRange(36, 40, 'data'.codeUnits);
     bd.setUint32(40, pcmByteLength, Endian.little);
 
+    final attackSamples = (sampleRate * 0.005)
+        .round(); // 5ms smooth attack fade-in
+    final decaySamples = (sampleRate * 0.010)
+        .round(); // 10ms smooth decay fade-out
+    final attackStep = attackSamples > 0 ? math.pi / attackSamples : 0.0;
+    final decayStep = decaySamples > 0 ? math.pi / decaySamples : 0.0;
+
     for (int i = 0; i < numSamples; i++) {
       final t = i / sampleRate;
       final phase = (t * frequency) % 1.0;
@@ -306,8 +313,6 @@ class CliAudioEngine implements TermuiAudioEngine {
       switch (shape) {
         case WaveForm.sin:
           sample = math.sin(2.0 * math.pi * phase);
-        case WaveForm.square:
-          sample = phase < 0.5 ? 0.8 : -0.8;
         case WaveForm.triangle:
           sample = phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase);
         case WaveForm.saw || WaveForm.fsaw:
@@ -315,8 +320,19 @@ class CliAudioEngine implements TermuiAudioEngine {
         case WaveForm.bounce || WaveForm.jaws || WaveForm.humps:
           sample = (math.sin(2.0 * math.pi * phase)).abs() * 2.0 - 1.0;
         case WaveForm.square || WaveForm.fsquare:
-          sample = phase < 0.5 ? 0.8 : -0.8;
+          sample = phase < 0.5 ? 0.7 : -0.7;
       }
+
+      // Smooth cosine windowing at boundaries to prevent DC offset clicks/pops
+      if (i < attackSamples) {
+        final gain = 0.5 * (1.0 - math.cos(i * attackStep));
+        sample *= gain;
+      } else if (i >= numSamples - decaySamples) {
+        final rem = numSamples - 1 - i;
+        final gain = 0.5 * (1.0 - math.cos(rem * decayStep));
+        sample *= gain;
+      }
+
       final intSample = (sample * 32767.0).clamp(-32768.0, 32767.0).toInt();
       bd.setInt16(44 + i * 2, intSample, Endian.little);
     }

@@ -783,6 +783,9 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     term.MouseEventType termuiType = term.MouseEventType.move;
 
     if (event is PointerDownEvent) {
+      if (!_focusNode.hasFocus && _focusNode.canRequestFocus) {
+        _focusNode.requestFocus();
+      }
       if (event.buttons & kSecondaryMouseButton != 0) {
         termuiButton = term.MouseButton.right;
       } else if (event.buttons & kMiddleMouseButton != 0) {
