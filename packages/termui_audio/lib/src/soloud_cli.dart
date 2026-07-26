@@ -127,27 +127,23 @@ external void set3dSourceAttenuation(
 @Native<Int32 Function(Uint32, Float)>(symbol: 'seek')
 external int seek(int handle, double time);
 
-typedef DartVoiceEndedCallback = Void Function(Pointer<Uint32>);
-typedef DartFileLoadedCallback =
+typedef DartVoiceEndedFunction = Void Function(Pointer<Uint32>);
+typedef DartFileLoadedFunction =
     Void Function(
       Pointer<Int32>,
       Pointer<Utf8>,
       Pointer<Uint32>,
       Pointer<Uint64>,
     );
-typedef DartStateChangedCallback = Void Function(Pointer<Int32>);
+typedef DartStateChangedFunction = Void Function(Pointer<Int32>);
 
-@Native<
-  Void Function(
-    Pointer<NativeFunction<DartVoiceEndedCallback>>,
-    Pointer<NativeFunction<DartFileLoadedCallback>>,
-    Pointer<NativeFunction<DartStateChangedCallback>>,
-  )
->(symbol: 'setDartEventCallback')
+@Native<Void Function(Pointer<Void>, Pointer<Void>, Pointer<Void>)>(
+  symbol: 'setDartEventCallback',
+)
 external void setDartEventCallback(
-  Pointer<NativeFunction<DartVoiceEndedCallback>> voiceEnded,
-  Pointer<NativeFunction<DartFileLoadedCallback>> fileLoaded,
-  Pointer<NativeFunction<DartStateChangedCallback>> stateChanged,
+  Pointer<Void> voiceEnded,
+  Pointer<Void> fileLoaded,
+  Pointer<Void> stateChanged,
 );
 @Native<Double Function(Uint32)>(symbol: 'getLength')
 external double getLength(int hash);
@@ -198,3 +194,15 @@ external void destroyBus(int busId);
 
 @Native<Uint32 Function(Uint32, Float, Bool)>(symbol: 'busPlayOnEngine')
 external int busPlayOnEngine(int busId, double volume, bool paused);
+
+@Native<Pointer<Float> Function()>(symbol: 'Soloud_getWave')
+external Pointer<Float> getWave();
+
+@Native<Pointer<Float> Function(Uint32)>(symbol: 'Bus_getWave')
+external Pointer<Float> busGetWave(int busId);
+
+@Native<Float Function(Uint32)>(symbol: 'Soloud_getApproximateVolume')
+external double getApproximateVolume(int channel);
+
+@Native<Void Function(Pointer<Int16>, Uint32)>(symbol: 'Soloud_mixSigned16')
+external void mixSigned16(Pointer<Int16> buffer, int samples);

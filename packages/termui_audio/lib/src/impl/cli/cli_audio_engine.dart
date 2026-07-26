@@ -67,9 +67,9 @@ class CliAudioEngine implements TermuiAudioEngine {
   ) {}
   static void _stateChangedCallback(Pointer<Int32> a) {}
 
-  late final NativeCallable<ffi.DartVoiceEndedCallback> _voiceEndedCallable;
-  late final NativeCallable<ffi.DartFileLoadedCallback> _fileLoadedCallable;
-  late final NativeCallable<ffi.DartStateChangedCallback> _stateChangedCallable;
+  late final NativeCallable<ffi.DartVoiceEndedFunction> _voiceEndedCallable;
+  late final NativeCallable<ffi.DartFileLoadedFunction> _fileLoadedCallable;
+  late final NativeCallable<ffi.DartStateChangedFunction> _stateChangedCallable;
 
   // Auto-Reclaiming Memory (NativeFinalizer)
   late final NativeFinalizer _soundFinalizer = NativeFinalizer(
@@ -97,21 +97,21 @@ class CliAudioEngine implements TermuiAudioEngine {
       );
     }
 
-    _voiceEndedCallable = NativeCallable<ffi.DartVoiceEndedCallback>.listener(
+    _voiceEndedCallable = NativeCallable<ffi.DartVoiceEndedFunction>.listener(
       _voiceEndedCallback,
     );
-    _fileLoadedCallable = NativeCallable<ffi.DartFileLoadedCallback>.listener(
+    _fileLoadedCallable = NativeCallable<ffi.DartFileLoadedFunction>.listener(
       _fileLoadedCallback,
     );
     _stateChangedCallable =
-        NativeCallable<ffi.DartStateChangedCallback>.listener(
+        NativeCallable<ffi.DartStateChangedFunction>.listener(
           _stateChangedCallback,
         );
 
     ffi.setDartEventCallback(
-      _voiceEndedCallable.nativeFunction,
-      _fileLoadedCallable.nativeFunction,
-      _stateChangedCallable.nativeFunction,
+      _voiceEndedCallable.nativeFunction.cast(),
+      _fileLoadedCallable.nativeFunction.cast(),
+      _stateChangedCallable.nativeFunction.cast(),
     );
 
     _inited = true;
@@ -523,6 +523,74 @@ class CliAudioEngine implements TermuiAudioEngine {
       } catch (_) {}
     });
     return voice;
+  }
+
+  @override
+  void playSpriteSequence(
+    AudioBuffer buffer,
+    List<SpriteSegment> segments, {
+    AudioBus? bus,
+  }) {
+    if (!_inited || segments.isEmpty) return;
+
+    var totalDelay = Duration.zero;
+    for (final seg in segments) {
+      final segDelay = totalDelay;
+      totalDelay += seg.duration;
+
+      if (segDelay == Duration.zero) {
+        final voicePtr = calloc<Uint32>();
+        try {
+          final startSec = seg.start.inMicroseconds / 1000000.0;
+          final busId = bus?.id ?? 0;
+          final res = ffi.play(
+            buffer.hash,
+            busId,
+            1.0,
+            0.0,
+            false,
+            false,
+            startSec,
+            voicePtr,
+          );
+          if (res == 0) {
+            final voice = voicePtr.value;
+            final durationSec = seg.duration.inMicroseconds / 1000000.0;
+            ffi.fadeVolume(voice, 0.0, durationSec);
+          }
+        } finally {
+          calloc.free(voicePtr);
+        }
+      } else {
+        unawaited(
+          Future.delayed(segDelay, () {
+            if (!_inited) return;
+            final voicePtr = calloc<Uint32>();
+            try {
+              final startSec = seg.start.inMicroseconds / 1000000.0;
+              final busId = bus?.id ?? 0;
+              final res = ffi.play(
+                buffer.hash,
+                busId,
+                1.0,
+                0.0,
+                false,
+                false,
+                startSec,
+                voicePtr,
+              );
+              if (res == 0) {
+                final voice = voicePtr.value;
+                final durationSec = seg.duration.inMicroseconds / 1000000.0;
+                ffi.fadeVolume(voice, 0.0, durationSec);
+              }
+            } finally {
+              calloc.free(voicePtr);
+            }
+          }),
+        );
+      }
+    }
   }
 
   @override

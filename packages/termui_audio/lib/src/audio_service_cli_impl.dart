@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'audio_service.dart';
 import 'soloud_cli.dart' as ffi;
@@ -190,6 +191,139 @@ class CliAudioService implements AudioService {
         targetVolume,
         duration.inMicroseconds / 1000000.0,
       );
+    }
+  }
+
+  @override
+  Future<void> playSpriteSequence(
+    SoundHandle handle,
+    List<SpriteSegment> segments,
+  ) async {
+    if (!_inited || segments.isEmpty) return;
+    final hash = handle.id as int;
+
+    var totalDelay = Duration.zero;
+    for (final seg in segments) {
+      final segDelay = totalDelay;
+      totalDelay += seg.duration;
+
+      if (segDelay == Duration.zero) {
+        final voicePtr = calloc<Uint32>();
+        try {
+          final startSec = seg.start.inMicroseconds / 1000000.0;
+          final res = ffi.play(
+            hash,
+            0,
+            1.0,
+            0.0,
+            false,
+            false,
+            startSec,
+            voicePtr,
+          );
+          if (res == 0) {
+            final voice = voicePtr.value;
+            final durationSec = seg.duration.inMicroseconds / 1000000.0;
+            ffi.fadeVolume(voice, 0.0, durationSec);
+          }
+        } finally {
+          calloc.free(voicePtr);
+        }
+      } else {
+        unawaited(
+          Future.delayed(segDelay, () {
+            if (!_inited) return;
+            final voicePtr = calloc<Uint32>();
+            try {
+              final startSec = seg.start.inMicroseconds / 1000000.0;
+              final res = ffi.play(
+                hash,
+                0,
+                1.0,
+                0.0,
+                false,
+                false,
+                startSec,
+                voicePtr,
+              );
+              if (res == 0) {
+                final voice = voicePtr.value;
+                final durationSec = seg.duration.inMicroseconds / 1000000.0;
+                ffi.fadeVolume(voice, 0.0, durationSec);
+              }
+            } finally {
+              calloc.free(voicePtr);
+            }
+          }),
+        );
+      }
+    }
+  }
+
+  @override
+  Float32List getWaveform() {
+    if (!_inited) return Float32List(256);
+    final wavePtr = ffi.getWave();
+    if (wavePtr == nullptr) return Float32List(256);
+    final list = Float32List(256);
+    final nativeList = wavePtr.asTypedList(256);
+    list.setAll(0, nativeList);
+    return list;
+  }
+
+  @override
+  Uint8List renderWavGolden({
+    required Duration duration,
+    int sampleRate = 44100,
+  }) {
+    if (!_inited) return Uint8List(0);
+    final numSamples = (sampleRate * (duration.inMicroseconds / 1000000.0))
+        .round();
+    final pcmPtr = calloc<Int16>(numSamples);
+
+    try {
+      ffi.mixSigned16(pcmPtr, numSamples);
+      final pcmBytes = pcmPtr.cast<Uint8>().asTypedList(numSamples * 2);
+
+      final dataSize = numSamples * 2;
+      final fileSize = 36 + dataSize;
+      final header = ByteData(44);
+
+      // RIFF header
+      header.setUint8(0, 0x52); // R
+      header.setUint8(1, 0x49); // I
+      header.setUint8(2, 0x46); // F
+      header.setUint8(3, 0x46); // F
+      header.setUint32(4, fileSize, Endian.little);
+      header.setUint8(8, 0x57); // W
+      header.setUint8(9, 0x41); // A
+      header.setUint8(10, 0x56); // V
+      header.setUint8(11, 0x45); // E
+      // fmt subchunk
+      header.setUint8(12, 0x66); // f
+      header.setUint8(13, 0x6d); // m
+      header.setUint8(14, 0x74); // t
+      header.setUint8(15, 0x20); // ' '
+      header.setUint32(16, 16, Endian.little);
+      header.setUint16(20, 1, Endian.little);
+      header.setUint16(22, 1, Endian.little);
+      header.setUint32(24, sampleRate, Endian.little);
+      header.setUint32(28, sampleRate * 2, Endian.little);
+      header.setUint16(32, 2, Endian.little);
+      header.setUint16(34, 16, Endian.little);
+      // data subchunk
+      header.setUint8(36, 0x64); // d
+      header.setUint8(37, 0x61); // a
+      header.setUint8(38, 0x74); // t
+      header.setUint8(39, 0x61); // a
+      header.setUint32(40, dataSize, Endian.little);
+
+      final result = Uint8List(44 + dataSize);
+      result.setAll(0, header.buffer.asUint8List());
+      result.setAll(44, pcmBytes);
+      return result;
+    } finally {
+      calloc.free(pcmPtr);
     }
   }
 

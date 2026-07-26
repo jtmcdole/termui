@@ -283,6 +283,36 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  void playSpriteSequence(
+    AudioBuffer buffer,
+    List<SpriteSegment> segments, {
+    AudioBus? bus,
+  }) {
+    if (!_engine.isInitialized || segments.isEmpty) return;
+
+    var totalDelay = Duration.zero;
+    for (final seg in segments) {
+      final segDelay = totalDelay;
+      totalDelay += seg.duration;
+
+      if (segDelay == Duration.zero) {
+        final voice = play(buffer);
+        seek(voice, seg.start);
+        fadeVolume(voice, 0.0, seg.duration);
+      } else {
+        unawaited(
+          Future.delayed(segDelay, () {
+            if (!_engine.isInitialized) return;
+            final voice = play(buffer);
+            seek(voice, seg.start);
+            fadeVolume(voice, 0.0, seg.duration);
+          }),
+        );
+      }
+    }
+  }
+
+  @override
   AudioBus createBus() {
     if (!_engine.isInitialized) throw Exception('Engine not initialized.');
     final solBus = sol.Bus();

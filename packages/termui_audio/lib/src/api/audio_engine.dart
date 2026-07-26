@@ -102,6 +102,13 @@ abstract class TermuiAudioEngine {
     required Duration duration,
   });
 
+  /// Plays a sequence of audio sprite segments back-to-back in low-latency native audio memory.
+  void playSpriteSequence(
+    AudioBuffer buffer,
+    List<SpriteSegment> segments, {
+    AudioBus? bus,
+  });
+
   /// Dynamically creates a new native mixing bus.
   AudioBus createBus();
 
