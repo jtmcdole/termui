@@ -96,6 +96,12 @@ class MockAudioEngine implements TermuiAudioEngine {
     required Duration duration,
   }) => throw UnimplementedError();
   @override
+  void playSpriteSequence(
+    AudioBuffer buffer,
+    List<SpriteSegment> segments, {
+    AudioBus? bus,
+  }) {}
+  @override
   AudioBus createBus() => throw UnimplementedError();
   @override
   void destroyBus(AudioBus bus) {}

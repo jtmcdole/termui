@@ -196,6 +196,17 @@ class MockAudioEngine extends TermuiAudioEngine {
   }
 
   @override
+  void playSpriteSequence(
+    AudioBuffer buffer,
+    List<SpriteSegment> segments, {
+    AudioBus? bus,
+  }) {
+    callLog.add(
+      'playSpriteSequence(${buffer.hash}, count: ${segments.length})',
+    );
+  }
+
+  @override
   AudioBus createBus() {
     final busId = _nextBusId++;
     activeBuses.add(busId);

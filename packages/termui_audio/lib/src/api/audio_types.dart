@@ -113,3 +113,15 @@ enum FilterType {
   /// Parametric EQ filter (index 11).
   parametricEq,
 }
+
+/// Represents a timestamp offset and duration segment within an audio sprite sheet.
+class SpriteSegment {
+  /// The starting timestamp offset of this sprite segment within the source audio buffer.
+  final Duration start;
+
+  /// The playback duration of this sprite segment.
+  final Duration duration;
+
+  /// Creates a new [SpriteSegment] with the specified [start] offset and playback [duration].
+  const SpriteSegment({required this.start, required this.duration});
+}
