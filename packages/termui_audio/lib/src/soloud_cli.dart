@@ -29,6 +29,26 @@ external int loadMem(
 
 @Native<
   Int32 Function(
+    Int32,
+    Int32,
+    Float,
+    Float,
+    Pointer<Uint32>,
+  )
+>(symbol: 'loadWaveform')
+external int loadWaveform(
+  int waveform,
+  int superWave,
+  double scale,
+  double detune,
+  Pointer<Uint32> hash,
+);
+
+@Native<Void Function(Uint32, Float)>(symbol: 'setWaveformFreq')
+external void setWaveformFreq(int hash, double newFreq);
+
+@Native<
+  Int32 Function(
     Uint32,
     Uint32,
     Float,
@@ -159,6 +179,9 @@ external int fadeRelativePlaySpeed(int handle, double to, double time);
 
 @Native<Int32 Function(Uint32, Float, Float)>(symbol: 'fadeVolume')
 external int fadeVolume(int handle, double to, double time);
+
+@Native<Int32 Function(Uint32, Float)>(symbol: 'scheduleStop')
+external int scheduleStop(int handle, double time);
 
 @Native<Int32 Function(Uint32, Uint32, Int32)>(symbol: 'addFilter')
 external int addFilter(int soundHash, int busId, int filterType);

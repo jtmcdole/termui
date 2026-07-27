@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'audio_types.dart';
 
 /// The core engine service abstracting the audio backend.
@@ -15,7 +16,13 @@ abstract class TermuiAudioEngine {
   Future<AudioBuffer> loadUrl(String url, {LoadProgressCallback? onProgress});
 
   /// Loads a synthetic waveform generator.
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency);
+  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false});
+
+  /// Loads audio from memory bytes.
+  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes);
+
+  /// Disposes of the audio buffer, freeing native memory.
+  Future<void> disposeBuffer(AudioBuffer buffer);
 
   /// Plays a loaded [buffer].
   AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus});
@@ -72,6 +79,9 @@ abstract class TermuiAudioEngine {
   /// Smoothly fades the volume of a playing [voice] to [targetVolume] over [duration].
   void fadeVolume(AudioVoice voice, double targetVolume, Duration duration);
 
+  /// Schedules the specified [voice] to stop after [duration].
+  void scheduleStop(AudioVoice voice, Duration duration);
+
   /// Creates a filter instance of the given [type] and returns a filter identifier handle.
   int createFilter(FilterType type);
 
@@ -114,4 +124,7 @@ abstract class TermuiAudioEngine {
 
   /// Destroys a native mixing bus [bus].
   void destroyBus(AudioBus bus);
+
+  /// Retrieves a 256-element PCM audio waveform array currently outputting from the engine.
+  Float32List getWaveform();
 }

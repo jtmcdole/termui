@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import '../api/audio_engine.dart';
 import '../api/audio_types.dart';
 
@@ -18,8 +19,14 @@ class StubAudioEngine implements TermuiAudioEngine {
     LoadProgressCallback? onProgress,
   }) async => throw UnsupportedError('StubAudioEngine');
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency) async =>
-      throw UnsupportedError('StubAudioEngine');
+  Future<void> disposeBuffer(AudioBuffer buffer) async => throw UnsupportedError('StubAudioEngine');
+  @override
+  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) =>
+      throw UnsupportedError('No audio engine');
+
+  @override
+  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) =>
+      throw UnsupportedError('No audio engine');
   @override
   AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) =>
       throw UnsupportedError('StubAudioEngine');
@@ -76,6 +83,9 @@ class StubAudioEngine implements TermuiAudioEngine {
   void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) =>
       throw UnsupportedError('StubAudioEngine');
   @override
+  void scheduleStop(AudioVoice voice, Duration duration) =>
+      throw UnsupportedError('StubAudioEngine');
+  @override
   int createFilter(FilterType type) =>
       throw UnsupportedError('StubAudioEngine');
   @override
@@ -112,6 +122,8 @@ class StubAudioEngine implements TermuiAudioEngine {
   AudioBus createBus() => throw UnsupportedError('StubAudioEngine');
   @override
   void destroyBus(AudioBus bus) => throw UnsupportedError('StubAudioEngine');
+  @override
+  Float32List getWaveform() => Float32List(256);
 }
 
 /// Creates a new [TermuiAudioEngine] throwing an unsupported error.

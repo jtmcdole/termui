@@ -1,6 +1,7 @@
+import 'dart:async';
+import 'dart:typed_data';
 import 'package:termui_audio/termui_audio.dart';
 import 'package:test/test.dart';
-import 'dart:async';
 
 class MockAudioBus implements AudioBus {
   @override
@@ -37,6 +38,11 @@ class MockAudioEngine extends TermuiAudioEngine {
   Future<void> init() async {}
 
   @override
+  void scheduleStop(AudioVoice voice, Duration duration) {
+    callLog.add('scheduleStop(${voice.id})');
+  }
+
+  @override
   Future<AudioBuffer> loadFile(
     String path, {
     LoadProgressCallback? onProgress,
@@ -53,9 +59,12 @@ class MockAudioEngine extends TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency) async {
+  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) async {
     throw UnimplementedError();
   }
+
+  @override
+  Future<void> disposeBuffer(AudioBuffer buffer) async {}
 
   @override
   AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) {
@@ -219,6 +228,9 @@ class MockAudioEngine extends TermuiAudioEngine {
     callLog.add('destroyBus(${bus.id})');
     activeBuses.remove(bus.id);
   }
+
+  @override
+  Float32List getWaveform() => Float32List(256);
 }
 
 class MockAudioBuffer implements AudioBuffer {

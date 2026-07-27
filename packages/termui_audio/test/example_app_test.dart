@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_relative_lib_imports
+import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:termui_audio/termui_audio.dart';
 import '../example/lib/src/audio_player_app.dart';
@@ -19,8 +20,10 @@ class MockAudioEngine implements TermuiAudioEngine {
     LoadProgressCallback? onProgress,
   }) async => throw UnimplementedError();
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency) async =>
+  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) async =>
       throw UnimplementedError();
+  @override
+  Future<void> disposeBuffer(AudioBuffer buffer) async {}
   @override
   AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) =>
       throw UnimplementedError();
@@ -70,6 +73,9 @@ class MockAudioEngine implements TermuiAudioEngine {
   ) {}
   @override
   void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) {}
+
+  @override
+  void scheduleStop(AudioVoice voice, Duration duration) {}
   @override
   int createFilter(FilterType type) => 0;
   @override
@@ -105,6 +111,8 @@ class MockAudioEngine implements TermuiAudioEngine {
   AudioBus createBus() => throw UnimplementedError();
   @override
   void destroyBus(AudioBus bus) {}
+  @override
+  Float32List getWaveform() => Float32List(256);
 }
 
 void main() {

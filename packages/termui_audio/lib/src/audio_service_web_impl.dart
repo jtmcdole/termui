@@ -250,23 +250,35 @@ class WebAudioService implements AudioService {
       final segDelay = totalDelay;
       totalDelay += seg.duration;
 
-      if (segDelay == Duration.zero) {
+      void playSegment() {
+        if (!sol.SoLoud.instance.isInitialized) return;
         final voice = sol.SoLoud.instance.play(source, looping: false);
+        _playingVoices.putIfAbsent(path, () => []).add(voice);
         if (seg.start.inMicroseconds > 0) {
           sol.SoLoud.instance.seek(voice, seg.start);
         }
-        sol.SoLoud.instance.fadeVolume(voice, 0.0, seg.duration);
+        Timer(seg.duration, () {
+          try {
+            sol.SoLoud.instance.fadeVolume(
+              voice,
+              0.0,
+              const Duration(milliseconds: 10),
+            );
+            Timer(const Duration(milliseconds: 12), () {
+              try {
+                if (sol.SoLoud.instance.getIsValidVoiceHandle(voice)) {
+                  sol.SoLoud.instance.stop(voice);
+                }
+              } catch (_) {}
+            });
+          } catch (_) {}
+        });
+      }
+
+      if (segDelay == Duration.zero) {
+        playSegment();
       } else {
-        unawaited(
-          Future.delayed(segDelay, () {
-            if (!sol.SoLoud.instance.isInitialized) return;
-            final voice = sol.SoLoud.instance.play(source, looping: false);
-            if (seg.start.inMicroseconds > 0) {
-              sol.SoLoud.instance.seek(voice, seg.start);
-            }
-            sol.SoLoud.instance.fadeVolume(voice, 0.0, seg.duration);
-          }),
-        );
+        unawaited(Future.delayed(segDelay, playSegment));
       }
     }
   }
