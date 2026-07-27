@@ -221,6 +221,14 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  Future<void> disposeBuffer(AudioBuffer buffer) async {
+    if (buffer is CliAudioBuffer) {
+      _soundFinalizer.detach(buffer);
+      ffi.disposeSound(buffer.hash);
+    }
+  }
+
+  @override
   Future<AudioBuffer> loadUrl(
     String url, {
     LoadProgressCallback? onProgress,
@@ -231,8 +239,34 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency) async {
+  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) async {
     if (!_inited) throw Exception('Engine not initialized.');
+
+    if (!usePcmFallback) {
+      int solShape;
+      switch (shape) {
+        case WaveForm.square: solShape = 0; break;
+        case WaveForm.saw: solShape = 1; break;
+        case WaveForm.sin: solShape = 2; break;
+        case WaveForm.triangle: solShape = 3; break;
+        case WaveForm.bounce: solShape = 4; break;
+        case WaveForm.jaws: solShape = 5; break;
+        default: solShape = 2; break;
+      }
+      
+      final hashPtr = calloc<Uint32>();
+      try {
+        final res = ffi.loadWaveform(solShape, 1, 1.0, 0.0, hashPtr);
+        if (res != 0) {
+          throw Exception('Failed to load native waveform. Error code: $res');
+        }
+        final hash = hashPtr.value;
+        ffi.setWaveformFreq(hash, frequency);
+        return CliAudioBuffer(hash);
+      } finally {
+        calloc.free(hashPtr);
+      }
+    }
 
     final wavBytes = _generateWavBytes(shape, frequency);
     final length = wavBytes.length;
@@ -273,13 +307,10 @@ class CliAudioEngine implements TermuiAudioEngine {
     }
   }
 
-  Uint8List _generateWavBytes(
-    WaveForm shape,
-    double frequency, {
-    double durationSeconds = 0.25,
-    int sampleRate = 44100,
-  }) {
-    final numSamples = (sampleRate * durationSeconds).round();
+  Uint8List _generateWavBytes(WaveForm shape, double frequency) {
+    const sampleRate = 44100;
+    const duration = 0.25;
+    final numSamples = (sampleRate * duration).round();
     final pcmByteLength = numSamples * 2;
     final totalLength = 44 + pcmByteLength;
     final bytes = Uint8List(totalLength);
@@ -323,17 +354,15 @@ class CliAudioEngine implements TermuiAudioEngine {
           sample = phase < 0.5 ? 0.7 : -0.7;
       }
 
-      // Smooth cosine windowing at boundaries to prevent DC offset clicks/pops
+      double envelope = 1.0;
       if (i < attackSamples) {
-        final gain = 0.5 * (1.0 - math.cos(i * attackStep));
-        sample *= gain;
-      } else if (i >= numSamples - decaySamples) {
-        final rem = numSamples - 1 - i;
-        final gain = 0.5 * (1.0 - math.cos(rem * decayStep));
-        sample *= gain;
+        envelope = (1.0 - math.cos(i * attackStep)) / 2.0;
+      } else if (i > numSamples - decaySamples) {
+        final decayI = i - (numSamples - decaySamples);
+        envelope = (1.0 + math.cos(decayI * decayStep)) / 2.0;
       }
 
-      final intSample = (sample * 32767.0).clamp(-32768.0, 32767.0).toInt();
+      final intSample = (sample * envelope * 32767.0).clamp(-32768.0, 32767.0).toInt();
       bd.setInt16(44 + i * 2, intSample, Endian.little);
     }
     return bytes;
@@ -465,6 +494,12 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  void scheduleStop(AudioVoice voice, Duration duration) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.scheduleStop(voice.id, duration.inMicroseconds / 1000000.0);
+  }
+
+  @override
   int createFilter(FilterType type) {
     return type.index;
   }
@@ -538,7 +573,8 @@ class CliAudioEngine implements TermuiAudioEngine {
       final segDelay = totalDelay;
       totalDelay += seg.duration;
 
-      if (segDelay == Duration.zero) {
+      void playSegment() {
+        if (!_inited) return;
         final voicePtr = calloc<Uint32>();
         try {
           final startSec = seg.start.inMicroseconds / 1000000.0;
@@ -555,40 +591,26 @@ class CliAudioEngine implements TermuiAudioEngine {
           );
           if (res == 0) {
             final voice = voicePtr.value;
-            final durationSec = seg.duration.inMicroseconds / 1000000.0;
-            ffi.fadeVolume(voice, 0.0, durationSec);
+            Timer(seg.duration, () {
+              try {
+                ffi.fadeVolume(voice, 0.0, 0.010);
+                Timer(const Duration(milliseconds: 12), () {
+                  try {
+                    ffi.stop(voice);
+                  } catch (_) {}
+                });
+              } catch (_) {}
+            });
           }
         } finally {
           calloc.free(voicePtr);
         }
+      }
+
+      if (segDelay == Duration.zero) {
+        playSegment();
       } else {
-        unawaited(
-          Future.delayed(segDelay, () {
-            if (!_inited) return;
-            final voicePtr = calloc<Uint32>();
-            try {
-              final startSec = seg.start.inMicroseconds / 1000000.0;
-              final busId = bus?.id ?? 0;
-              final res = ffi.play(
-                buffer.hash,
-                busId,
-                1.0,
-                0.0,
-                false,
-                false,
-                startSec,
-                voicePtr,
-              );
-              if (res == 0) {
-                final voice = voicePtr.value;
-                final durationSec = seg.duration.inMicroseconds / 1000000.0;
-                ffi.fadeVolume(voice, 0.0, durationSec);
-              }
-            } finally {
-              calloc.free(voicePtr);
-            }
-          }),
-        );
+        unawaited(Future.delayed(segDelay, playSegment));
       }
     }
   }
@@ -608,5 +630,16 @@ class CliAudioEngine implements TermuiAudioEngine {
   void destroyBus(AudioBus bus) {
     if (!_inited) throw Exception('Engine not initialized.');
     ffi.destroyBus(bus.id);
+  }
+
+  @override
+  Float32List getWaveform() {
+    if (!_inited) return Float32List(256);
+    final wavePtr = ffi.getWave();
+    if (wavePtr == nullptr) return Float32List(256);
+    final list = Float32List(256);
+    final nativeList = wavePtr.asTypedList(256);
+    list.setAll(0, nativeList);
+    return list;
   }
 }
