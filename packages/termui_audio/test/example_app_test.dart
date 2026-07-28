@@ -4,9 +4,19 @@ import 'package:test/test.dart';
 import 'package:termui_audio/termui_audio.dart';
 import '../example/lib/src/audio_player_app.dart';
 
+class MockAudioBuffer implements AudioBuffer {
+  @override
+  int get hash => 12345;
+}
+
 class MockAudioEngine implements TermuiAudioEngine {
   @override
   Future<void> init() async {}
+  @override
+  Future<Uint8List> loadFileBytes(String path) async => Uint8List(0);
+  @override
+  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async =>
+      MockAudioBuffer();
   @override
   Future<void> dispose() async {}
   @override
@@ -20,8 +30,11 @@ class MockAudioEngine implements TermuiAudioEngine {
     LoadProgressCallback? onProgress,
   }) async => throw UnimplementedError();
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) async =>
-      throw UnimplementedError();
+  Future<AudioBuffer> loadWaveform(
+    WaveForm shape,
+    double frequency, {
+    bool usePcmFallback = false,
+  }) async => throw UnimplementedError();
   @override
   Future<void> disposeBuffer(AudioBuffer buffer) async {}
   @override

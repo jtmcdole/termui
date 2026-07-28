@@ -27,15 +27,9 @@ external int loadMem(
   Pointer<Uint32> hash,
 );
 
-@Native<
-  Int32 Function(
-    Int32,
-    Int32,
-    Float,
-    Float,
-    Pointer<Uint32>,
-  )
->(symbol: 'loadWaveform')
+@Native<Int32 Function(Int32, Int32, Float, Float, Pointer<Uint32>)>(
+  symbol: 'loadWaveform',
+)
 external int loadWaveform(
   int waveform,
   int superWave,

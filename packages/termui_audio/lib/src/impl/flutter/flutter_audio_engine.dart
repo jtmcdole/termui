@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:flutter/services.dart';
 import 'package:flutter_soloud/flutter_soloud.dart' as sol;
 import '../../api/audio_engine.dart';
 import '../../api/audio_types.dart';
@@ -19,8 +20,10 @@ class FlutterAudioBuffer implements AudioBuffer {
     });
   }
 
+  /// The underlying SoLoud audio source.
   sol.AudioSource get source => _source;
 
+  /// Disposes of the internal sound event listener subscription.
   void dispose() {
     _sub.cancel();
   }
@@ -117,6 +120,12 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  Future<Uint8List> loadFileBytes(String path) async {
+    final byteData = await rootBundle.load(path);
+    return Uint8List.sublistView(byteData);
+  }
+
+  @override
   Future<void> disposeBuffer(AudioBuffer buffer) async {
     if (buffer is FlutterAudioBuffer) {
       buffer.dispose();
@@ -169,7 +178,7 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     bytes.setUint32(40, pcmDataSize, Endian.little);
 
     final periodSamples = sampleRate / frequency;
-    
+
     final attackSamples = (sampleRate * 0.005).round(); // 5ms attack
     final decaySamples = (sampleRate * 0.010).round(); // 10ms decay
     final attackStep = attackSamples > 0 ? math.pi / attackSamples : 0.0;
@@ -177,23 +186,12 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
     for (int i = 0; i < numSamples; i++) {
       final t = (i % periodSamples) / periodSamples;
-      double sampleValue = 0.0;
-
-      switch (shape) {
-        case WaveForm.square:
-          sampleValue = t < 0.5 ? 0.8 : -0.8;
-          break;
-        case WaveForm.saw:
-          sampleValue = 2.0 * t - 1.0;
-          break;
-        case WaveForm.sin:
-          sampleValue = math.sin(2.0 * math.pi * t);
-          break;
-        case WaveForm.triangle:
-        default:
-          sampleValue = t < 0.5 ? (4.0 * t - 1.0) : (3.0 - 4.0 * t);
-          break;
-      }
+      final sampleValue = switch (shape) {
+        WaveForm.square => t < 0.5 ? 0.8 : -0.8,
+        WaveForm.saw => 2.0 * t - 1.0,
+        WaveForm.sin => math.sin(2.0 * math.pi * t),
+        WaveForm.triangle || _ => t < 0.5 ? (4.0 * t - 1.0) : (3.0 - 4.0 * t),
+      };
 
       double envelope = 1.0;
       if (i < attackSamples) {
@@ -213,9 +211,23 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) async {
+  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    final source = await _engine.loadMem(pathId, bytes);
+    return FlutterAudioBuffer(source, this);
+  }
+
+  @override
+  Future<AudioBuffer> loadWaveform(
+    WaveForm shape,
+    double frequency, {
+    bool usePcmFallback = false,
+  }) async {
     if (usePcmFallback) {
-      final pcmBytes = _generateWaveformPcmWav(shape: shape, frequency: frequency);
+      final pcmBytes = _generateWaveformPcmWav(
+        shape: shape,
+        frequency: frequency,
+      );
       final path = 'synthetic_${shape.name}_${frequency.toInt()}.wav';
       final source = await _engine.loadMem(path, pcmBytes);
       return FlutterAudioBuffer(source, this);

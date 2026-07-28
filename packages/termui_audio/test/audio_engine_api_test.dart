@@ -38,6 +38,13 @@ class MockAudioEngine extends TermuiAudioEngine {
   Future<void> init() async {}
 
   @override
+  Future<Uint8List> loadFileBytes(String path) async => Uint8List(0);
+
+  @override
+  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async =>
+      MockAudioBuffer();
+
+  @override
   void scheduleStop(AudioVoice voice, Duration duration) {
     callLog.add('scheduleStop(${voice.id})');
   }
@@ -59,7 +66,11 @@ class MockAudioEngine extends TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) async {
+  Future<AudioBuffer> loadWaveform(
+    WaveForm shape,
+    double frequency, {
+    bool usePcmFallback = false,
+  }) async {
     throw UnimplementedError();
   }
 

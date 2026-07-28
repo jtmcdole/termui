@@ -164,6 +164,15 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  Future<Uint8List> loadFileBytes(String path) async {
+    final file = fileSystem.file(path);
+    if (!await file.exists()) {
+      throw FileSystemException('Sound file not found', path);
+    }
+    return file.readAsBytes();
+  }
+
+  @override
   Future<AudioBuffer> loadFile(
     String path, {
     LoadProgressCallback? onProgress,
@@ -184,7 +193,7 @@ class CliAudioEngine implements TermuiAudioEngine {
     final bufferPtr = calloc<Uint8>(length);
 
     try {
-      bufferPtr.asTypedList(length).setAll(0, bytes);
+      bufferPtr.asTypedList(length).setRange(0, length, bytes);
       onProgress?.call(1.0);
 
       final extIndex = path.lastIndexOf('.');
@@ -193,7 +202,7 @@ class CliAudioEngine implements TermuiAudioEngine {
           ? '${path}_$uniqueId'
           : '${path.substring(0, extIndex)}_$uniqueId${path.substring(extIndex)}';
 
-      final namePtr = uniquePath.toNativeUtf8().cast<Char>();
+      final namePtr = uniquePath.toNativeUtf8(allocator: calloc).cast<Char>();
       final hashPtr = calloc<Uint32>();
 
       try {
@@ -239,21 +248,24 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) async {
+  Future<AudioBuffer> loadWaveform(
+    WaveForm shape,
+    double frequency, {
+    bool usePcmFallback = false,
+  }) async {
     if (!_inited) throw Exception('Engine not initialized.');
 
     if (!usePcmFallback) {
-      int solShape;
-      switch (shape) {
-        case WaveForm.square: solShape = 0; break;
-        case WaveForm.saw: solShape = 1; break;
-        case WaveForm.sin: solShape = 2; break;
-        case WaveForm.triangle: solShape = 3; break;
-        case WaveForm.bounce: solShape = 4; break;
-        case WaveForm.jaws: solShape = 5; break;
-        default: solShape = 2; break;
-      }
-      
+      final solShape = switch (shape) {
+        WaveForm.square => 0,
+        WaveForm.saw => 1,
+        WaveForm.sin => 2,
+        WaveForm.triangle => 3,
+        WaveForm.bounce => 4,
+        WaveForm.jaws => 5,
+        _ => 2,
+      };
+
       final hashPtr = calloc<Uint32>();
       try {
         final res = ffi.loadWaveform(solShape, 1, 1.0, 0.0, hashPtr);
@@ -273,13 +285,13 @@ class CliAudioEngine implements TermuiAudioEngine {
     final bufferPtr = calloc<Uint8>(length);
 
     try {
-      bufferPtr.asTypedList(length).setAll(0, wavBytes);
+      bufferPtr.asTypedList(length).setRange(0, length, wavBytes);
 
       final uniqueId = _fileLoadCounter++;
       final uniquePath =
           'waveform_${shape.name}_${frequency.toInt()}_$uniqueId.wav';
 
-      final namePtr = uniquePath.toNativeUtf8().cast<Char>();
+      final namePtr = uniquePath.toNativeUtf8(allocator: calloc).cast<Char>();
       final hashPtr = calloc<Uint32>();
 
       try {
@@ -287,6 +299,42 @@ class CliAudioEngine implements TermuiAudioEngine {
         if (res != 0) {
           throw Exception(
             'Failed to load synthetic waveform into memory. Error code: $res',
+          );
+        }
+        final hash = hashPtr.value;
+
+        final buffer = CliAudioBuffer(hash);
+        _soundFinalizer.attach(
+          buffer,
+          Pointer.fromAddress(hash),
+          detach: buffer,
+        );
+        return buffer;
+      } finally {
+        calloc.free(namePtr);
+        calloc.free(hashPtr);
+      }
+    } finally {
+      calloc.free(bufferPtr);
+    }
+  }
+
+  @override
+  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async {
+    if (!_inited) throw Exception('Engine not initialized.');
+    final length = bytes.length;
+    final bufferPtr = calloc<Uint8>(length);
+
+    try {
+      bufferPtr.asTypedList(length).setRange(0, length, bytes);
+      final namePtr = pathId.toNativeUtf8(allocator: calloc).cast<Char>();
+      final hashPtr = calloc<Uint32>();
+
+      try {
+        final res = ffi.loadMem(namePtr, bufferPtr, length, 1, hashPtr);
+        if (res != 0) {
+          throw Exception(
+            'Failed to load memory into SoLoud. Error code: $res',
           );
         }
         final hash = hashPtr.value;
@@ -362,7 +410,9 @@ class CliAudioEngine implements TermuiAudioEngine {
         envelope = (1.0 + math.cos(decayI * decayStep)) / 2.0;
       }
 
-      final intSample = (sample * envelope * 32767.0).clamp(-32768.0, 32767.0).toInt();
+      final intSample = (sample * envelope * 32767.0)
+          .clamp(-32768.0, 32767.0)
+          .toInt();
       bd.setInt16(44 + i * 2, intSample, Endian.little);
     }
     return bytes;
@@ -639,7 +689,7 @@ class CliAudioEngine implements TermuiAudioEngine {
     if (wavePtr == nullptr) return Float32List(256);
     final list = Float32List(256);
     final nativeList = wavePtr.asTypedList(256);
-    list.setAll(0, nativeList);
+    list.setRange(0, 256, nativeList);
     return list;
   }
 }

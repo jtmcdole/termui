@@ -9,14 +9,21 @@ abstract class TermuiAudioEngine {
   /// Disposes the audio engine and releases resources.
   Future<void> dispose();
 
-  /// Loads a sound file from the local file system.
+  /// Loads a sound file from the local file system or asset bundle.
   Future<AudioBuffer> loadFile(String path, {LoadProgressCallback? onProgress});
+
+  /// Reads a sound file into bytes.
+  Future<Uint8List> loadFileBytes(String path);
 
   /// Loads a sound file from a remote URL.
   Future<AudioBuffer> loadUrl(String url, {LoadProgressCallback? onProgress});
 
   /// Loads a synthetic waveform generator.
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false});
+  Future<AudioBuffer> loadWaveform(
+    WaveForm shape,
+    double frequency, {
+    bool usePcmFallback = false,
+  });
 
   /// Loads audio from memory bytes.
   Future<AudioBuffer> loadMem(String pathId, Uint8List bytes);
