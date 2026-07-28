@@ -19,13 +19,21 @@ class StubAudioEngine implements TermuiAudioEngine {
     LoadProgressCallback? onProgress,
   }) async => throw UnsupportedError('StubAudioEngine');
   @override
-  Future<void> disposeBuffer(AudioBuffer buffer) async => throw UnsupportedError('StubAudioEngine');
+  Future<void> disposeBuffer(AudioBuffer buffer) async =>
+      throw UnsupportedError('StubAudioEngine');
   @override
-  Future<AudioBuffer> loadWaveform(WaveForm shape, double frequency, {bool usePcmFallback = false}) =>
-      throw UnsupportedError('No audio engine');
+  Future<AudioBuffer> loadWaveform(
+    WaveForm shape,
+    double frequency, {
+    bool usePcmFallback = false,
+  }) => throw UnsupportedError('No audio engine');
 
   @override
   Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) =>
+      throw UnsupportedError('No audio engine');
+
+  @override
+  Future<Uint8List> loadFileBytes(String path) =>
       throw UnsupportedError('No audio engine');
   @override
   AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) =>
