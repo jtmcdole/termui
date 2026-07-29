@@ -78,7 +78,12 @@ class MockAudioEngine extends TermuiAudioEngine {
   Future<void> disposeBuffer(AudioBuffer buffer) async {}
 
   @override
-  AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) {
+  AudioVoice play(
+    AudioBuffer buffer, {
+    AudioBus? bus,
+    bool loop = false,
+    bool paused = false,
+  }) {
     final voiceId = _nextVoiceId++;
     callLog.add('play(${buffer.hash}, loop: $loop, bus: ${bus?.id})');
     return AudioVoice(voiceId, Completer<void>().future);
@@ -119,6 +124,8 @@ class MockAudioEngine extends TermuiAudioEngine {
     double attenuationRolloffFactor,
   ) {}
 
+  @override
+  void setPaused(AudioVoice voice, bool paused) {}
   @override
   void stop(AudioVoice voice) {
     callLog.add('stop(${voice.id})');
@@ -187,6 +194,12 @@ class MockAudioEngine extends TermuiAudioEngine {
   }
 
   @override
+  double getFilterParameter(AudioBus bus, int filterId, int paramId) {
+    callLog.add('getFilterParameter(${bus.id}, $filterId, $paramId)');
+    return filterParams['${bus.id}_${filterId}_$paramId'] ?? 0.0;
+  }
+
+  @override
   void fadeFilterParameter(
     AudioBus bus,
     int filterId,
@@ -203,6 +216,7 @@ class MockAudioEngine extends TermuiAudioEngine {
   @override
   AudioVoice playSprite(
     AudioBuffer buffer, {
+    AudioBus? bus,
     required Duration start,
     required Duration duration,
   }) {

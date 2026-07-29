@@ -38,8 +38,14 @@ class MockAudioEngine implements TermuiAudioEngine {
   @override
   Future<void> disposeBuffer(AudioBuffer buffer) async {}
   @override
-  AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) =>
-      throw UnimplementedError();
+  AudioVoice play(
+    AudioBuffer buffer, {
+    AudioBus? bus,
+    bool loop = false,
+    bool paused = false,
+  }) => throw UnimplementedError();
+  @override
+  void setPaused(AudioVoice voice, bool paused) {}
   @override
   void stop(AudioVoice voice) {}
   @override
@@ -101,6 +107,8 @@ class MockAudioEngine implements TermuiAudioEngine {
     double value,
   ) {}
   @override
+  double getFilterParameter(AudioBus bus, int filterId, int paramId) => 0.0;
+  @override
   void fadeFilterParameter(
     AudioBus bus,
     int filterId,
@@ -111,6 +119,7 @@ class MockAudioEngine implements TermuiAudioEngine {
   @override
   AudioVoice playSprite(
     AudioBuffer buffer, {
+    AudioBus? bus,
     required Duration start,
     required Duration duration,
   }) => throw UnimplementedError();

@@ -97,6 +97,8 @@ class CliAudioEngine implements TermuiAudioEngine {
       );
     }
 
+    ffi.setVisualizationEnabled(true);
+
     _voiceEndedCallable = NativeCallable<ffi.DartVoiceEndedFunction>.listener(
       _voiceEndedCallback,
     );
@@ -161,6 +163,11 @@ class CliAudioEngine implements TermuiAudioEngine {
   void setVoiceVolume(AudioVoice voice, double volume) {
     if (!_inited) throw Exception('Engine not initialized.');
     ffi.setVolume(voice.id, volume);
+  }
+
+  @override
+  void setPaused(AudioVoice voice, bool paused) {
+    // Unsupported in CLI stub
   }
 
   @override
@@ -419,7 +426,12 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) {
+  AudioVoice play(
+    AudioBuffer buffer, {
+    bool loop = false,
+    AudioBus? bus,
+    bool paused = false,
+  }) {
     if (!_inited) throw Exception('Engine not initialized.');
 
     final hash = buffer.hash;
@@ -575,6 +587,18 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  double getFilterParameter(AudioBus bus, int filterId, int paramId) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    final ptr = calloc<Float>();
+    try {
+      ffi.getFilterParams(0, bus.id, filterId, paramId, ptr);
+      return ptr.value;
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  @override
   void fadeFilterParameter(
     AudioBus bus,
     int filterId,
@@ -596,6 +620,7 @@ class CliAudioEngine implements TermuiAudioEngine {
   @override
   AudioVoice playSprite(
     AudioBuffer buffer, {
+    AudioBus? bus,
     required Duration start,
     required Duration duration,
   }) {
@@ -685,11 +710,19 @@ class CliAudioEngine implements TermuiAudioEngine {
   @override
   Float32List getWaveform() {
     if (!_inited) return Float32List(256);
-    final wavePtr = ffi.getWave();
-    if (wavePtr == nullptr) return Float32List(256);
-    final list = Float32List(256);
-    final nativeList = wavePtr.asTypedList(256);
-    list.setRange(0, 256, nativeList);
-    return list;
+    final wavePtr = calloc<Pointer<Float>>();
+    final isSamePtr = calloc<Bool>();
+    try {
+      ffi.getWave(wavePtr, isSamePtr);
+      final floats = Float32List(256);
+      if (wavePtr.value != nullptr) {
+        final view = wavePtr.value.asTypedList(256);
+        floats.setAll(0, view);
+      }
+      return floats;
+    } finally {
+      calloc.free(wavePtr);
+      calloc.free(isSamePtr);
+    }
   }
 }

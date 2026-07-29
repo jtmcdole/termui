@@ -3,6 +3,9 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter_soloud/flutter_soloud.dart' as sol;
+// ignore: implementation_imports
+import 'package:flutter_soloud/src/bindings/soloud_controller.dart'
+    as soloud_controller;
 import '../../api/audio_engine.dart';
 import '../../api/audio_types.dart';
 
@@ -55,6 +58,7 @@ class FlutterAudioBus implements AudioBus {
 class FlutterAudioEngine implements TermuiAudioEngine {
   final sol.SoLoud _engine = sol.SoLoud.instance;
   final Map<int, Completer<void>> _activeVoices = {};
+  sol.AudioData? _audioData;
 
   @override
   Duration getBufferDuration(AudioBuffer buffer) {
@@ -76,6 +80,8 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   Future<void> init() async {
     if (!_engine.isInitialized) {
       await _engine.init();
+      _engine.setVisualizationEnabled(true);
+      _audioData = sol.AudioData(sol.GetSamplesKind.wave);
     }
   }
 
@@ -92,6 +98,8 @@ class FlutterAudioEngine implements TermuiAudioEngine {
       if (!c.isCompleted) c.complete();
     }
     _activeVoices.clear();
+    _audioData?.dispose();
+    _audioData = null;
     if (_engine.isInitialized) {
       _engine.deinit();
     }
@@ -242,13 +250,19 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) {
+  AudioVoice play(
+    AudioBuffer buffer, {
+    bool loop = false,
+    AudioBus? bus,
+    bool paused = false,
+  }) {
     final flutterBuffer = buffer as FlutterAudioBuffer;
     final busId = bus?.id ?? 0;
     final voice = _engine.play(
       flutterBuffer._source,
       looping: loop,
       busId: busId,
+      paused: paused,
     );
     final completer = Completer<void>();
     _activeVoices[voice.id] = completer;
@@ -259,6 +273,12 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   void stop(AudioVoice voice) {
     sol.SoLoud.instance.stop(sol.SoundHandle(voice.id));
     _completeVoice(voice.id);
+  }
+
+  @override
+  void setPaused(AudioVoice voice, bool paused) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    sol.SoLoud.instance.setPause(sol.SoundHandle(voice.id), paused);
   }
 
   @override
@@ -374,7 +394,23 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     if (!_engine.isInitialized) throw Exception('Engine not initialized.');
     final solFilter = sol.FilterType.values[filterId];
     // ignore: invalid_use_of_internal_member
-    solFilter.fadeFilterParameter(null, bus.id, paramId, value, Duration.zero);
+    soloud_controller.SoLoudController().soLoudFFI.setFilterParams(
+      solFilter,
+      paramId,
+      value,
+      handle: null,
+      busId: bus.id,
+    );
+  }
+
+  @override
+  double getFilterParameter(AudioBus bus, int filterId, int paramId) {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    final solFilter = sol.FilterType.values[filterId];
+    // ignore: invalid_use_of_internal_member
+    final result = soloud_controller.SoLoudController().soLoudFFI
+        .getFilterParams(solFilter, paramId, busId: bus.id);
+    return result.value;
   }
 
   @override
@@ -387,23 +423,39 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   ) {
     if (!_engine.isInitialized) throw Exception('Engine not initialized.');
     final solFilter = sol.FilterType.values[filterId];
-    // ignore: invalid_use_of_internal_member
-    solFilter.fadeFilterParameter(null, bus.id, paramId, targetValue, duration);
+    if (duration == Duration.zero) {
+      soloud_controller.SoLoudController().soLoudFFI.setFilterParams(
+        solFilter,
+        paramId,
+        targetValue,
+        handle: null,
+        busId: bus.id,
+      );
+    } else {
+      // ignore: invalid_use_of_internal_member
+      solFilter.fadeFilterParameter(
+        null,
+        bus.id,
+        paramId,
+        targetValue,
+        duration,
+      );
+    }
   }
 
   @override
   AudioVoice playSprite(
     AudioBuffer buffer, {
+    AudioBus? bus,
     required Duration start,
     required Duration duration,
   }) {
-    final voice = play(buffer);
-    seek(voice, start);
-    Timer(duration, () {
-      try {
-        stop(voice);
-      } catch (_) {}
-    });
+    final voice = play(buffer, paused: true);
+    if (start > Duration.zero) {
+      seek(voice, start);
+    }
+    setPaused(voice, false);
+    scheduleStop(voice, duration);
     return voice;
   }
 
@@ -422,20 +474,14 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
       void playSegment() {
         if (!_engine.isInitialized) return;
-        final voice = play(buffer, bus: bus);
+        final voice = play(buffer, bus: bus, paused: true);
         if (seg.start > Duration.zero) {
           seek(voice, seg.start);
         }
-        Timer(seg.duration, () {
-          try {
-            fadeVolume(voice, 0.0, const Duration(milliseconds: 10));
-            Timer(const Duration(milliseconds: 12), () {
-              try {
-                stop(voice);
-              } catch (_) {}
-            });
-          } catch (_) {}
-        });
+
+        setPaused(voice, false);
+        // Eagerly schedule a stop exactly when the segment finishes on the C++ side
+        scheduleStop(voice, seg.duration);
       }
 
       if (segDelay == Duration.zero) {
@@ -463,6 +509,8 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   Float32List getWaveform() {
-    return Float32List(256);
+    if (_audioData == null) return Float32List(256);
+    _audioData!.updateSamples();
+    return _audioData!.getAudioData(alwaysReturnData: true);
   }
 }

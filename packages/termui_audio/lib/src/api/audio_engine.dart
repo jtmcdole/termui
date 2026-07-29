@@ -32,13 +32,21 @@ abstract class TermuiAudioEngine {
   Future<void> disposeBuffer(AudioBuffer buffer);
 
   /// Plays a loaded [buffer].
-  AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus});
+  AudioVoice play(
+    AudioBuffer buffer, {
+    bool loop = false,
+    AudioBus? bus,
+    bool paused = false,
+  });
 
   /// Stops a playing [voice].
   void stop(AudioVoice voice);
 
   /// Sets the volume of a playing [voice].
   void setVoiceVolume(AudioVoice voice, double volume);
+
+  /// Pauses or unpauses a playing [voice].
+  void setPaused(AudioVoice voice, bool paused);
 
   /// Plays a loaded [buffer] at a specific 3D location.
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z);
@@ -103,6 +111,9 @@ abstract class TermuiAudioEngine {
     double value,
   );
 
+  /// Retrieves a specific parameter [paramId] from a filter attached to [bus].
+  double getFilterParameter(AudioBus bus, int filterId, int paramId);
+
   /// Fades a parameter [paramId] on a filter attached to [bus] to [targetValue] over [duration].
   void fadeFilterParameter(
     AudioBus bus,
@@ -117,6 +128,7 @@ abstract class TermuiAudioEngine {
     AudioBuffer buffer, {
     required Duration start,
     required Duration duration,
+    AudioBus? bus,
   });
 
   /// Plays a sequence of audio sprite segments back-to-back in low-latency native audio memory.
