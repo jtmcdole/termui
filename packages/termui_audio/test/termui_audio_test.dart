@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:test/test.dart';
-import 'package:termui_audio/src/api/audio_types.dart';
+import 'package:termui_audio/termui_audio.dart';
 import 'package:termui_audio/src/impl/cli/cli_audio_engine.dart';
 
 Future<AudioBuffer> _loadBuffer(CliAudioEngine cli) async {
@@ -15,6 +15,13 @@ Future<AudioBuffer> _loadBuffer(CliAudioEngine cli) async {
 
 void main() {
   group('TermuiAudio Tests', () {
+    test('0. TermuiAudio singleton wrapper lifecycle', () async {
+      // ignore: void_checks
+      expect(TermuiAudio.instance, isNotNull);
+      await TermuiAudio.init();
+      await TermuiAudio.dispose();
+    });
+
     test(
       '1. CliAudioEngine lifecycle and FFI bindings integration test',
       () async {
@@ -232,6 +239,49 @@ void main() {
         expect(voice.id, greaterThan(0));
 
         cli.stop(voice);
+        await cli.dispose();
+      },
+    );
+
+    test(
+      '13. TS-12c: CliAudioEngine playSpriteSequence queues sequentially',
+      () async {
+        final cli = CliAudioEngine();
+        await cli.init();
+        final buffer = await _loadBuffer(cli);
+
+        final segments = [
+          const SpriteSegment(
+            start: Duration.zero,
+            duration: Duration(milliseconds: 50),
+          ),
+          const SpriteSegment(
+            start: Duration(milliseconds: 50),
+            duration: Duration(milliseconds: 50),
+          ),
+        ];
+
+        cli.playSpriteSequence(buffer, segments);
+
+        await Future.delayed(const Duration(milliseconds: 150));
+        await cli.dispose();
+      },
+    );
+
+    test(
+      '14. TF-04: CliAudioEngine loadWaveform with different shapes',
+      () async {
+        final cli = CliAudioEngine();
+        await cli.init();
+
+        // This exercises the `solShape = switch (shape)` branch inside `loadWaveform`
+        final b1 = await cli.loadWaveform(WaveForm.square, 440.0);
+        final b2 = await cli.loadWaveform(WaveForm.saw, 440.0);
+        final b3 = await cli.loadWaveform(WaveForm.triangle, 440.0);
+
+        expect(b1.hash, isNot(b2.hash));
+        expect(b2.hash, isNot(b3.hash));
+
         await cli.dispose();
       },
     );

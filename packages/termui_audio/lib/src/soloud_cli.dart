@@ -191,6 +191,17 @@ external int setFilterParams(
   double value,
 );
 
+@Native<Int32 Function(Uint32, Uint32, Int32, Int32, Pointer<Float>)>(
+  symbol: 'getFilterParams',
+)
+external int getFilterParams(
+  int handle,
+  int busId,
+  int filterType,
+  int attributeId,
+  Pointer<Float> filterValue,
+);
+
 @Native<Int32 Function(Uint32, Uint32, Int32, Int32, Float, Float)>(
   symbol: 'fadeFilterParameter',
 )
@@ -203,6 +214,17 @@ external int fadeFilterParameter(
   double time,
 );
 
+@Native<Void Function(Pointer<Pointer<Float>>, Pointer<Bool>)>(
+  symbol: 'getWave',
+)
+external void getWave(
+  Pointer<Pointer<Float>> wave,
+  Pointer<Bool> isTheSameAsBefore,
+);
+
+@Native<Void Function(Bool)>(symbol: 'setVisualizationEnabled')
+external void setVisualizationEnabled(bool enabled);
+
 @Native<Uint32 Function()>(symbol: 'createBus')
 external int createBus();
 
@@ -211,12 +233,6 @@ external void destroyBus(int busId);
 
 @Native<Uint32 Function(Uint32, Float, Bool)>(symbol: 'busPlayOnEngine')
 external int busPlayOnEngine(int busId, double volume, bool paused);
-
-@Native<Pointer<Float> Function()>(symbol: 'Soloud_getWave')
-external Pointer<Float> getWave();
-
-@Native<Pointer<Float> Function(Uint32)>(symbol: 'Bus_getWave')
-external Pointer<Float> busGetWave(int busId);
 
 @Native<Float Function(Uint32)>(symbol: 'Soloud_getApproximateVolume')
 external double getApproximateVolume(int channel);

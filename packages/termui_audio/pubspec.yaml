@@ -44,7 +44,3 @@ dependencies:
 dev_dependencies:
   test: ">=1.24.0 <2.0.0"
   build_runner: any
-
-flutter:
-  assets:
-    - web/worker.dart.js

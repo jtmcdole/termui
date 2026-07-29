@@ -36,10 +36,17 @@ class StubAudioEngine implements TermuiAudioEngine {
   Future<Uint8List> loadFileBytes(String path) =>
       throw UnsupportedError('No audio engine');
   @override
-  AudioVoice play(AudioBuffer buffer, {bool loop = false, AudioBus? bus}) =>
-      throw UnsupportedError('StubAudioEngine');
+  AudioVoice play(
+    AudioBuffer buffer, {
+    AudioBus? bus,
+    bool loop = false,
+    bool paused = false,
+  }) => throw UnsupportedError('StubAudioEngine');
   @override
   void stop(AudioVoice voice) => throw UnsupportedError('StubAudioEngine');
+  @override
+  void setPaused(AudioVoice voice, bool paused) =>
+      throw UnsupportedError('StubAudioEngine');
   @override
   void setVoiceVolume(AudioVoice voice, double volume) =>
       throw UnsupportedError('StubAudioEngine');
@@ -107,6 +114,9 @@ class StubAudioEngine implements TermuiAudioEngine {
     double value,
   ) => throw UnsupportedError('StubAudioEngine');
   @override
+  double getFilterParameter(AudioBus bus, int filterId, int paramId) =>
+      throw UnsupportedError('StubAudioEngine');
+  @override
   void fadeFilterParameter(
     AudioBus bus,
     int filterId,
@@ -117,6 +127,7 @@ class StubAudioEngine implements TermuiAudioEngine {
   @override
   AudioVoice playSprite(
     AudioBuffer buffer, {
+    AudioBus? bus,
     required Duration start,
     required Duration duration,
   }) => throw UnsupportedError('StubAudioEngine');
