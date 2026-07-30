@@ -57,13 +57,16 @@ class FlutterAudioBus implements AudioBus {
 /// The Flutter implementation of [TermuiAudioEngine].
 class FlutterAudioEngine implements TermuiAudioEngine {
   final sol.SoLoud _engine = sol.SoLoud.instance;
+  // TODO: Track potential memory leaks here if voiceEnded callbacks are missed (e.g. loops).
   final Map<int, Completer<void>> _activeVoices = {};
   sol.AudioData? _audioData;
 
   @override
   Duration getBufferDuration(AudioBuffer buffer) {
-    final flutterBuffer = buffer as FlutterAudioBuffer;
-    return _engine.getLength(flutterBuffer._source);
+    if (buffer case FlutterAudioBuffer(:final source)) {
+      return _engine.getLength(source);
+    }
+    return Duration.zero;
   }
 
   @override
@@ -77,10 +80,10 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Future<void> init() async {
+  Future<void> init({bool enableVisualization = true}) async {
     if (!_engine.isInitialized) {
       await _engine.init();
-      _engine.setVisualizationEnabled(true);
+      _engine.setVisualizationEnabled(enableVisualization);
       _audioData = sol.AudioData(sol.GetSamplesKind.wave);
     }
   }
@@ -135,9 +138,9 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   Future<void> disposeBuffer(AudioBuffer buffer) async {
-    if (buffer is FlutterAudioBuffer) {
-      buffer.dispose();
-      await _engine.disposeSource(buffer.source);
+    if (buffer case FlutterAudioBuffer b) {
+      b.dispose();
+      await _engine.disposeSource(b.source);
     }
   }
 
@@ -256,17 +259,19 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     AudioBus? bus,
     bool paused = false,
   }) {
-    final flutterBuffer = buffer as FlutterAudioBuffer;
-    final busId = bus?.id ?? 0;
-    final voice = _engine.play(
-      flutterBuffer._source,
-      looping: loop,
-      busId: busId,
-      paused: paused,
-    );
-    final completer = Completer<void>();
-    _activeVoices[voice.id] = completer;
-    return AudioVoice(voice.id, completer.future);
+    if (buffer case FlutterAudioBuffer(:final source)) {
+      final busId = bus?.id ?? 0;
+      final voice = _engine.play(
+        source,
+        looping: loop,
+        busId: busId,
+        paused: paused,
+      );
+      final completer = Completer<void>();
+      _activeVoices[voice.id] = completer;
+      return AudioVoice(voice.id, completer.future);
+    }
+    throw ArgumentError('Expected FlutterAudioBuffer');
   }
 
   @override
@@ -289,11 +294,13 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z) {
-    final flutterBuffer = buffer as FlutterAudioBuffer;
-    final voice = _engine.play3d(flutterBuffer._source, x, y, z);
-    final completer = Completer<void>();
-    _activeVoices[voice.id] = completer;
-    return AudioVoice(voice.id, completer.future);
+    if (buffer case FlutterAudioBuffer(:final source)) {
+      final voice = _engine.play3d(source, x, y, z);
+      final completer = Completer<void>();
+      _activeVoices[voice.id] = completer;
+      return AudioVoice(voice.id, completer.future);
+    }
+    throw ArgumentError('Expected FlutterAudioBuffer');
   }
 
   @override
@@ -503,14 +510,22 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   @override
   void destroyBus(AudioBus bus) {
     if (!_engine.isInitialized) return;
-    final flutterBus = bus as FlutterAudioBus;
-    flutterBus._bus.dispose();
+    if (bus case FlutterAudioBus b) {
+      b._bus.dispose();
+    }
   }
 
   @override
-  Float32List getWaveform() {
-    if (_audioData == null) return Float32List(256);
+  Float32List getWaveform([Float32List? outBuffer]) {
+    if (outBuffer != null && outBuffer.length < 256) {
+      throw ArgumentError('outBuffer must be at least 256 elements long.');
+    }
+    final buffer = outBuffer ?? Float32List(256);
+    if (_audioData == null) return buffer;
+
     _audioData!.updateSamples();
-    return _audioData!.getAudioData(alwaysReturnData: true);
+    final data = _audioData!.getAudioData(alwaysReturnData: true);
+    buffer.setAll(0, data);
+    return buffer;
   }
 }

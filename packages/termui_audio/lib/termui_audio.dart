@@ -17,7 +17,8 @@ class TermuiAudio {
   static set instance(TermuiAudioEngine value) => _instance = value;
 
   /// Initializes the audio engine.
-  static Future<void> init() => instance.init();
+  static Future<void> init({bool enableVisualization = true}) =>
+      instance.init(enableVisualization: enableVisualization);
 
   /// Disposes of the audio engine and releases any held hardware/system resources.
   static Future<void> dispose() => instance.dispose();

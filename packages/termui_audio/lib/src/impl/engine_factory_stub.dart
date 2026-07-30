@@ -5,7 +5,8 @@ import '../api/audio_types.dart';
 /// A stub implementation of [TermuiAudioEngine] for unsupported platforms.
 class StubAudioEngine implements TermuiAudioEngine {
   @override
-  Future<void> init() async => throw UnsupportedError('StubAudioEngine');
+  Future<void> init({bool enableVisualization = true}) async =>
+      throw UnsupportedError('StubAudioEngine');
   @override
   Future<void> dispose() async => throw UnsupportedError('StubAudioEngine');
   @override
@@ -142,7 +143,12 @@ class StubAudioEngine implements TermuiAudioEngine {
   @override
   void destroyBus(AudioBus bus) => throw UnsupportedError('StubAudioEngine');
   @override
-  Float32List getWaveform() => Float32List(256);
+  Float32List getWaveform([Float32List? outBuffer]) {
+    if (outBuffer != null && outBuffer.length < 256) {
+      throw ArgumentError('outBuffer must be at least 256 elements long.');
+    }
+    return outBuffer ?? Float32List(256);
+  }
 }
 
 /// Creates a new [TermuiAudioEngine] throwing an unsupported error.

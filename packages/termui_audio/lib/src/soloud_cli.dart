@@ -67,6 +67,9 @@ external int play(
 @Native<Void Function(Uint32)>(symbol: 'stop')
 external void stop(int handle);
 
+@Native<Void Function(Uint32, Bool)>(symbol: 'setPause')
+external void setPause(int handle, bool pause);
+
 @Native<Int32 Function(Uint32, Float)>(symbol: 'setVolume')
 external int setVolume(int handle, double volume);
 

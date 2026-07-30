@@ -35,7 +35,7 @@ class MockAudioEngine extends TermuiAudioEngine {
   Future<void> dispose() async {}
 
   @override
-  Future<void> init() async {}
+  Future<void> init({bool enableVisualization = true}) async {}
 
   @override
   Future<Uint8List> loadFileBytes(String path) async => Uint8List(0);
@@ -255,7 +255,8 @@ class MockAudioEngine extends TermuiAudioEngine {
   }
 
   @override
-  Float32List getWaveform() => Float32List(256);
+  Float32List getWaveform([Float32List? outBuffer]) =>
+      outBuffer ?? Float32List(256);
 }
 
 class MockAudioBuffer implements AudioBuffer {
