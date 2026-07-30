@@ -4,7 +4,7 @@ import 'audio_types.dart';
 /// The core engine service abstracting the audio backend.
 abstract class TermuiAudioEngine {
   /// Initializes the audio engine.
-  Future<void> init();
+  Future<void> init({bool enableVisualization = true});
 
   /// Disposes the audio engine and releases resources.
   Future<void> dispose();
@@ -132,6 +132,10 @@ abstract class TermuiAudioEngine {
   });
 
   /// Plays a sequence of audio sprite segments back-to-back in low-latency native audio memory.
+  ///
+  /// WARNING: This method currently relies on Dart timers for sequencing, which can be
+  /// brittle and lead to stuttering or gaps. Avoid relying on this for sample-accurate
+  /// sequencing until `playClocked` and `play3dClocked` are available from the underlying backend.
   void playSpriteSequence(
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
@@ -145,5 +149,8 @@ abstract class TermuiAudioEngine {
   void destroyBus(AudioBus bus);
 
   /// Retrieves a 256-element PCM audio waveform array currently outputting from the engine.
-  Float32List getWaveform();
+  ///
+  /// If [outBuffer] is provided, it must be at least 256 elements long and will be populated
+  /// and returned. Otherwise, a new [Float32List] is allocated.
+  Float32List getWaveform([Float32List? outBuffer]);
 }

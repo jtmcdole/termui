@@ -11,7 +11,7 @@ class MockAudioBuffer implements AudioBuffer {
 
 class MockAudioEngine implements TermuiAudioEngine {
   @override
-  Future<void> init() async {}
+  Future<void> init({bool enableVisualization = true}) async {}
   @override
   Future<Uint8List> loadFileBytes(String path) async => Uint8List(0);
   @override
@@ -134,7 +134,8 @@ class MockAudioEngine implements TermuiAudioEngine {
   @override
   void destroyBus(AudioBus bus) {}
   @override
-  Float32List getWaveform() => Float32List(256);
+  Float32List getWaveform([Float32List? outBuffer]) =>
+      outBuffer ?? Float32List(256);
 }
 
 void main() {

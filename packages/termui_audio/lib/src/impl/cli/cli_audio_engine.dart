@@ -49,6 +49,7 @@ class CliAudioEngine implements TermuiAudioEngine {
   bool _inited = false;
   StreamSubscription<ProcessSignal>? _sigintSub;
 
+  // TODO: Track potential memory leaks here if voiceEnded callbacks are missed (e.g. loops).
   static final Map<int, Completer<void>> _activeVoices = {};
 
   static void _voiceEndedCallback(Pointer<Uint32> handlePtr) {
@@ -79,7 +80,7 @@ class CliAudioEngine implements TermuiAudioEngine {
   );
 
   @override
-  Future<void> init() async {
+  Future<void> init({bool enableVisualization = true}) async {
     if (_inited) return;
 
     try {
@@ -97,7 +98,7 @@ class CliAudioEngine implements TermuiAudioEngine {
       );
     }
 
-    ffi.setVisualizationEnabled(true);
+    ffi.setVisualizationEnabled(enableVisualization);
 
     _voiceEndedCallable = NativeCallable<ffi.DartVoiceEndedFunction>.listener(
       _voiceEndedCallback,
@@ -167,7 +168,8 @@ class CliAudioEngine implements TermuiAudioEngine {
 
   @override
   void setPaused(AudioVoice voice, bool paused) {
-    // Unsupported in CLI stub
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.setPause(voice.id, paused);
   }
 
   @override
@@ -238,9 +240,9 @@ class CliAudioEngine implements TermuiAudioEngine {
 
   @override
   Future<void> disposeBuffer(AudioBuffer buffer) async {
-    if (buffer is CliAudioBuffer) {
-      _soundFinalizer.detach(buffer);
-      ffi.disposeSound(buffer.hash);
+    if (buffer case CliAudioBuffer b) {
+      _soundFinalizer.detach(b);
+      ffi.disposeSound(b.hash);
     }
   }
 
@@ -395,19 +397,16 @@ class CliAudioEngine implements TermuiAudioEngine {
     for (int i = 0; i < numSamples; i++) {
       final t = i / sampleRate;
       final phase = (t * frequency) % 1.0;
-      double sample;
-      switch (shape) {
-        case WaveForm.sin:
-          sample = math.sin(2.0 * math.pi * phase);
-        case WaveForm.triangle:
-          sample = phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase);
-        case WaveForm.saw || WaveForm.fsaw:
-          sample = 2.0 * phase - 1.0;
-        case WaveForm.bounce || WaveForm.jaws || WaveForm.humps:
-          sample = (math.sin(2.0 * math.pi * phase)).abs() * 2.0 - 1.0;
-        case WaveForm.square || WaveForm.fsquare:
-          sample = phase < 0.5 ? 0.7 : -0.7;
-      }
+      final sample = switch (shape) {
+        WaveForm.sin => math.sin(2.0 * math.pi * phase),
+        WaveForm.triangle =>
+          phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase),
+        WaveForm.saw || WaveForm.fsaw => 2.0 * phase - 1.0,
+        WaveForm.bounce ||
+        WaveForm.jaws ||
+        WaveForm.humps => (math.sin(2.0 * math.pi * phase)).abs() * 2.0 - 1.0,
+        WaveForm.square || WaveForm.fsquare => phase < 0.5 ? 0.7 : -0.7,
+      };
 
       double envelope = 1.0;
       if (i < attackSamples) {
@@ -708,18 +707,22 @@ class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Float32List getWaveform() {
-    if (!_inited) return Float32List(256);
+  Float32List getWaveform([Float32List? outBuffer]) {
+    if (outBuffer != null && outBuffer.length < 256) {
+      throw ArgumentError('outBuffer must be at least 256 elements long.');
+    }
+    final buffer = outBuffer ?? Float32List(256);
+    if (!_inited) return buffer;
+
     final wavePtr = calloc<Pointer<Float>>();
     final isSamePtr = calloc<Bool>();
     try {
       ffi.getWave(wavePtr, isSamePtr);
-      final floats = Float32List(256);
       if (wavePtr.value != nullptr) {
         final view = wavePtr.value.asTypedList(256);
-        floats.setAll(0, view);
+        buffer.setAll(0, view);
       }
-      return floats;
+      return buffer;
     } finally {
       calloc.free(wavePtr);
       calloc.free(isSamePtr);
