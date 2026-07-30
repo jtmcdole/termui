@@ -1,6 +1,6 @@
 name: termui_audio
 description: A multiplatform low-latency game audio engine for termui (VM CLI, Flutter, Web).
-version: 0.1.4
+version: 0.1.5
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_audio
 
 resolution: workspace
