@@ -1,3 +1,7 @@
+## 0.6.16
+
+ - **REFACTOR**(termui): optimize dsp loop, clean pattern match, and guard terminal focus.
+
 ## 0.6.15
 
  - Update a dependency to the latest release.

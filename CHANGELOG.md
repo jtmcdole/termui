@@ -3,6 +3,38 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-07-30
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui_audio` - `v0.1.5`](#termui_audio---v015)
+ - [`termui_flutter` - `v0.6.16`](#termui_flutter---v0616)
+
+---
+
+#### `termui_audio` - `v0.1.5`
+
+ - **REFACTOR**(audio): modernize control flow and implement setPaused.
+ - **REFACTOR**(audio): modernize TermuiAudioEngine API and purge dead code.
+ - **REFACTOR**(termui): optimize dsp loop, clean pattern match, and guard terminal focus.
+ - **FIX**(audio): address memory boundaries and FFI allocator mismatch.
+ - **FEAT**(audio): expose playSpriteSequence, waveform tapping, and golden WAV mixing.
+ - **FEAT**(audio): implement in-memory WAV waveform generator for loadWaveform on CLI.
+ - **FEAT**(audio): expose SoLoud pitch shifting, volume fading, DSP filter pipelines, audio sprite splicing, and bus management APIs.
+
+#### `termui_flutter` - `v0.6.16`
+
+ - **REFACTOR**(termui): optimize dsp loop, clean pattern match, and guard terminal focus.
+
+
 ## 2026-07-24
 
 ### Changes

@@ -1,3 +1,13 @@
+## 0.1.5
+
+ - **REFACTOR**(audio): modernize control flow and implement setPaused.
+ - **REFACTOR**(audio): modernize TermuiAudioEngine API and purge dead code.
+ - **REFACTOR**(termui): optimize dsp loop, clean pattern match, and guard terminal focus.
+ - **FIX**(audio): address memory boundaries and FFI allocator mismatch.
+ - **FEAT**(audio): expose playSpriteSequence, waveform tapping, and golden WAV mixing.
+ - **FEAT**(audio): implement in-memory WAV waveform generator for loadWaveform on CLI.
+ - **FEAT**(audio): expose SoLoud pitch shifting, volume fading, DSP filter pipelines, audio sprite splicing, and bus management APIs.
+
 ## 0.1.4
 
  - Update a dependency to the latest release.
