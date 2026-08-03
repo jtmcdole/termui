@@ -5,13 +5,13 @@ description: Guidelines for dealing with time in Dart. Explains why and how to u
 
 # Dart Time & Testability Guidelines
 
-When working with time-dependent logic in Dart (e.g., animations, physics updates, timeouts, or scheduling), you should **never** use the core library's `DateTime.now()`. 
+When working with time-dependent logic in Dart (e.g., animations, physics updates, timeouts, or scheduling), you should **never** use the core library's `DateTime.now()`.
 
 Instead, always use `clock.now()` from `package:clock`.
 
 ## Why `clock.now()` over `DateTime.now()`?
 
-Synchronous testing libraries (like `fake_async` and `package:test`) can intercept and mock Dart's event loops, microtasks, and `Timer` classes. However, they **cannot** mock the underlying system clock exposed by `DateTime.now()`. 
+Synchronous testing libraries (like `fake_async` and `package:test`) can intercept and mock Dart's event loops, microtasks, and `Timer` classes. However, they **cannot** mock the underlying system clock exposed by `DateTime.now()`.
 
 If your production code relies on `DateTime.now()`, any time manipulation in tests (e.g., `fakeAsync.elapse(Duration(seconds: 1))` or pumping the `TerminalTester`) will result in your code reading a delta of `0` milliseconds because the real-world wall-clock time hasn't changed.
 

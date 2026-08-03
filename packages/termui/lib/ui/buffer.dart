@@ -179,6 +179,69 @@ class Buffer {
     }
   }
 
+  /// Fills a rectangular region with the given character and attributes.
+  void fillRect(Rect rect, {String? char, int? fg, int? bg, int? modifiers}) {
+    final clipped = _clipStack.isEmpty ? rect : activeClip.intersect(rect);
+    if (clipped.width <= 0 || clipped.height <= 0) return;
+
+    final startX = max(0, clipped.left);
+    final startY = max(0, clipped.top);
+    final endX = min(width, clipped.right);
+    final endY = min(height, clipped.bottom);
+    if (startX >= endX || startY >= endY) return;
+
+    if (char != null) {
+      for (var y = startY; y < endY; y++) {
+        final rowStart = y * width + startX;
+        final rowEnd = y * width + endX;
+        characters.fillRange(rowStart, rowEnd, char);
+      }
+    }
+
+    if (fg != null || bg != null || modifiers != null) {
+      for (var y = startY; y < endY; y++) {
+        final rowOffset = y * width;
+        for (var x = startX; x < endX; x++) {
+          final idx = rowOffset + x;
+          final attrIdx = idx * 3;
+          if (fg != null) attributes[attrIdx + 0] = fg;
+          if (bg != null) attributes[attrIdx + 1] = bg;
+          if (modifiers != null) attributes[attrIdx + 2] = modifiers;
+        }
+      }
+    }
+  }
+
+  /// Draws a patterned caution tape in the specified rectangular bounds.
+  void drawCautionTape(Rect rect, int offsetX, int offsetY) {
+    final clipped = _clipStack.isEmpty ? rect : activeClip.intersect(rect);
+    if (clipped.width <= 0 || clipped.height <= 0) return;
+
+    final startX = max(0, clipped.left);
+    final startY = max(0, clipped.top);
+    final endX = min(width, clipped.right);
+    final endY = min(height, clipped.bottom);
+    if (startX >= endX || startY >= endY) return;
+
+    final yellow = 0xFFFCD116;
+    final charcoal = 0xFF36454F;
+
+    for (var y = startY; y < endY; y++) {
+      final ly = y - offsetY;
+      final rowOffset = y * width;
+      for (var x = startX; x < endX; x++) {
+        final lx = x - offsetX;
+        final mod = ((lx - ly) % 3 + 3) % 3;
+        final char = mod == 0 ? '\u259C' : (mod == 1 ? '\u2599' : ' ');
+        final idx = rowOffset + x;
+        characters[idx] = char;
+        final attrIdx = idx * 3;
+        attributes[attrIdx + 0] = yellow;
+        attributes[attrIdx + 1] = charcoal;
+      }
+    }
+  }
+
   /// Resizes the buffer to the new dimensions, preserving existing content where it fits.
   void resize(int newWidth, int newHeight) {
     Tracer.record(_traceResizeId, Phase.begin, TraceCategory.layout);

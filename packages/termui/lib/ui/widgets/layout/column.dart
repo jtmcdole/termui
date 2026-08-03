@@ -47,6 +47,10 @@ class ColumnElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
 
+  int _overflowAmount = 0;
+  int _overflowTop = 0;
+  int _overflowBottom = 0;
+
   /// Creates a column element for a [Column] widget.
   ColumnElement(Column super.widget);
 
@@ -127,6 +131,8 @@ class ColumnElement extends Element {
     );
 
     var totalHeight = 0;
+    var minChildY = 0;
+    var maxChildY = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
@@ -144,15 +150,76 @@ class ColumnElement extends Element {
       );
       childEl.relativeOffset = Offset(childArea.x, childArea.y);
       totalHeight += childSize.height;
+
+      if (childArea.y < minChildY) minChildY = childArea.y;
+      if (childArea.y + childSize.height > maxChildY) {
+        maxChildY = childArea.y + childSize.height;
+      }
     }
-    return Size(width, totalHeight);
+
+    final resolvedHeight = totalHeight.clamp(
+      constraints.minHeight,
+      constraints.maxHeight,
+    );
+    _overflowAmount = totalHeight - resolvedHeight;
+    _overflowTop = minChildY < 0 ? -minChildY : 0;
+    _overflowBottom = maxChildY > resolvedHeight
+        ? maxChildY - resolvedHeight
+        : 0;
+
+    // Fallback if elements aren't technically out of bounds but totalHeight exceeds
+    if (_overflowAmount > 0 && _overflowTop == 0 && _overflowBottom == 0) {
+      _overflowBottom = _overflowAmount;
+    }
+
+    if (_overflowAmount > 0) {
+      logError('Layout Overflow: Column overflowed by $_overflowAmount lines.');
+    }
+
+    return Size(width, resolvedHeight);
   }
 
   @override
   void performPaint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
+
+    final hasOverflow = _overflowTop > 0 || _overflowBottom > 0;
+    if (hasOverflow) {
+      buffer.pushClip(
+        Rect(offset.dx.toInt(), offset.dy.toInt(), size.width, size.height),
+      );
+    }
+
     for (final child in childElements) {
       child.paint(buffer, offset + child.relativeOffset);
+    }
+
+    if (_overflowTop > 0 || _overflowBottom > 0) {
+      final tapeHeight = size.height < 3 ? size.height : 3;
+
+      if (_overflowTop > 0) {
+        final bounds = Rect(
+          offset.dx.toInt(),
+          offset.dy.toInt(),
+          size.width,
+          tapeHeight,
+        );
+        buffer.drawCautionTape(bounds, offset.dx.toInt(), offset.dy.toInt());
+      }
+
+      if (_overflowBottom > 0) {
+        final bounds = Rect(
+          offset.dx.toInt(),
+          (offset.dy + size.height - tapeHeight).toInt(),
+          size.width,
+          tapeHeight,
+        );
+        buffer.drawCautionTape(bounds, offset.dx.toInt(), bounds.top);
+      }
+    }
+
+    if (hasOverflow) {
+      buffer.popClip();
     }
   }
 
