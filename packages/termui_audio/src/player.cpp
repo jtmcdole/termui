@@ -1721,7 +1721,13 @@ unsigned int Player::createBus() {
 }
 
 void Player::destroyBus(unsigned int busId) {
-    busMap.erase(busId);
+    auto it = busMap.find(busId);
+    if (it != busMap.end()) {
+        if (it->second.handle != 0) {
+            soloud.stop(it->second.handle);
+        }
+        busMap.erase(it);
+    }
 }
 
 unsigned int Player::busPlayOnEngine(unsigned int busId, float volume,
