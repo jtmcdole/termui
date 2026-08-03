@@ -65,6 +65,10 @@ class RowElement extends Element {
   /// The list of managed child elements.
   List<Element> childElements = [];
 
+  int _overflowAmount = 0;
+  int _overflowLeft = 0;
+  int _overflowRight = 0;
+
   /// Creates a row element for a [Row] widget.
   RowElement(Row super.widget);
 
@@ -145,6 +149,10 @@ class RowElement extends Element {
     );
 
     var maxChildHeight = 0;
+    var totalWidth = 0;
+
+    var minChildX = 0;
+    var maxChildX = 0;
 
     for (var i = 0; i < childElements.length; i++) {
       final childEl = childElements[i];
@@ -164,34 +172,88 @@ class RowElement extends Element {
       if (childSize.height > maxChildHeight) {
         maxChildHeight = childSize.height;
       }
+      totalWidth += childSize.width;
+
+      if (childArea.x < minChildX) minChildX = childArea.x;
+      if (childArea.x + childSize.width > maxChildX) {
+        maxChildX = childArea.x + childSize.width;
+      }
     }
-    return Size(width, maxChildHeight);
+
+    final resolvedWidth = totalWidth.clamp(
+      constraints.minWidth,
+      constraints.maxWidth,
+    );
+    _overflowAmount = totalWidth - resolvedWidth;
+    _overflowLeft = minChildX < 0 ? -minChildX : 0;
+    _overflowRight = maxChildX > resolvedWidth ? maxChildX - resolvedWidth : 0;
+
+    // Fallback if elements aren't technically out of bounds but totalWidth exceeds
+    if (_overflowAmount > 0 && _overflowLeft == 0 && _overflowRight == 0) {
+      _overflowRight = _overflowAmount;
+    }
+
+    if (_overflowAmount > 0) {
+      logError('Layout Overflow: Row overflowed by $_overflowAmount columns.');
+    }
+
+    return Size(resolvedWidth, maxChildHeight);
   }
 
   @override
   void performPaint(Buffer buffer, Offset offset) {
     if (size.width <= 0 || size.height <= 0) return;
+
+    final hasOverflow = _overflowLeft > 0 || _overflowRight > 0;
+    if (hasOverflow) {
+      buffer.pushClip(
+        Rect(offset.dx.toInt(), offset.dy.toInt(), size.width, size.height),
+      );
+    }
+
     final row = widget as Row;
     if (row.backgroundChar != null) {
       final char = row.backgroundChar!;
       final style = row.backgroundStyle ?? Style.empty;
-      final startX = offset.dx;
-      final startY = offset.dy;
-      for (var y = 0; y < size.height; y++) {
-        for (var x = 0; x < size.width; x++) {
-          buffer.setAttributes(
-            startX + x,
-            startY + y,
-            char: char,
-            fg: style.foreground?.argb ?? 0,
-            bg: style.background?.argb ?? 0,
-            modifiers: style.modifiers,
-          );
-        }
-      }
+      buffer.fillRect(
+        Rect(offset.dx.toInt(), offset.dy.toInt(), size.width, size.height),
+        char: char,
+        fg: style.foreground?.argb ?? 0,
+        bg: style.background?.argb ?? 0,
+        modifiers: style.modifiers,
+      );
     }
+
     for (final child in childElements) {
       child.paint(buffer, offset + child.relativeOffset);
+    }
+
+    if (_overflowLeft > 0 || _overflowRight > 0) {
+      final tapeWidth = size.width < 3 ? size.width : 3;
+
+      if (_overflowLeft > 0) {
+        final bounds = Rect(
+          offset.dx.toInt(),
+          offset.dy.toInt(),
+          tapeWidth,
+          size.height,
+        );
+        buffer.drawCautionTape(bounds, offset.dx.toInt(), offset.dy.toInt());
+      }
+
+      if (_overflowRight > 0) {
+        final bounds = Rect(
+          (offset.dx + size.width - tapeWidth).toInt(),
+          offset.dy.toInt(),
+          tapeWidth,
+          size.height,
+        );
+        buffer.drawCautionTape(bounds, bounds.left, offset.dy.toInt());
+      }
+    }
+
+    if (hasOverflow) {
+      buffer.popClip();
     }
   }
 

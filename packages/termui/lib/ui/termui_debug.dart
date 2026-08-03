@@ -1,4 +1,27 @@
 import 'package:termui/terminal/event.dart';
+import 'src/log_native.dart' if (dart.library.js_interop) 'src/log_web.dart';
+
+/// True if the current application is compiled to run on the web.
+const bool kIsWeb = identical(0, 0.0);
+
+/// True if the application is running in debug mode.
+/// Evaluated exactly once at startup.
+final bool kIsDebug = () {
+  var isDebug = false;
+  assert(() {
+    isDebug = true;
+    return true;
+  }());
+  return isDebug;
+}();
+
+/// Logs an error message.
+/// In release mode, this is a no-op.
+/// In debug mode, this writes to stderr natively, or uses print() on the web.
+void logError(String message) {
+  if (!kIsDebug) return;
+  platformLog(message);
+}
 
 /// Global configuration flags for visual debugging in termui.
 /// Highlight the deepest leaf node under the mouse pointer.

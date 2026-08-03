@@ -7,6 +7,8 @@
 *.iml
 *.cast
 *.cast.gz
+*.fail
+*.diff
 trace*.json
 trace*.json.gz
 debug.log

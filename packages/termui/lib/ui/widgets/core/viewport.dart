@@ -179,34 +179,44 @@ class Viewport implements Buffer {
 
   @override
   void clear() {
-    for (var y = 0; y < bounds.height; y++) {
-      for (var x = 0; x < bounds.width; x++) {
-        parent.setAttributes(
-          bounds.x + x,
-          bounds.y + y,
-          char: ' ',
-          modifiers: Modifier.transparent,
-          fg: 0,
-          bg: 0,
-        );
-      }
-    }
+    fillRect(
+      Rect(0, 0, bounds.width, bounds.height),
+      char: ' ',
+      modifiers: Modifier.transparent,
+      fg: 0,
+      bg: 0,
+    );
   }
 
   @override
   void fillAttributes({String? char, int? fg, int? bg, int? modifiers}) {
-    for (var y = 0; y < bounds.height; y++) {
-      for (var x = 0; x < bounds.width; x++) {
-        parent.setAttributes(
-          bounds.x + x,
-          bounds.y + y,
-          char: char,
-          fg: fg,
-          bg: bg,
-          modifiers: modifiers,
-        );
-      }
-    }
+    fillRect(
+      Rect(0, 0, bounds.width, bounds.height),
+      char: char,
+      fg: fg,
+      bg: bg,
+      modifiers: modifiers,
+    );
+  }
+
+  @override
+  void fillRect(Rect rect, {String? char, int? fg, int? bg, int? modifiers}) {
+    parent.fillRect(
+      Rect(bounds.x + rect.x, bounds.y + rect.y, rect.width, rect.height),
+      char: char,
+      fg: fg,
+      bg: bg,
+      modifiers: modifiers,
+    );
+  }
+
+  @override
+  void drawCautionTape(Rect rect, int offsetX, int offsetY) {
+    parent.drawCautionTape(
+      Rect(bounds.x + rect.x, bounds.y + rect.y, rect.width, rect.height),
+      bounds.x + offsetX,
+      bounds.y + offsetY,
+    );
   }
 
   @override

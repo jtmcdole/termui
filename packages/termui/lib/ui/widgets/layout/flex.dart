@@ -104,22 +104,10 @@ List<Rect> splitRect(
     usedSize += distributed;
   }
 
-  // 3. Scale down if used size exceeds total size
-  if (usedSize > totalSize) {
-    var currentSum = 0;
-    for (var i = 0; i < sizes.length; i++) {
-      sizes[i] = (sizes[i] * totalSize / usedSize).floor();
-      currentSum += sizes[i];
-    }
-    if (currentSum < totalSize) {
-      for (var i = sizes.length - 1; i >= 0; i--) {
-        if (sizes[i] > 0) {
-          sizes[i] += (totalSize - currentSum);
-          break;
-        }
-      }
-    }
-  }
+  // 3. (Removed: Scale down if used size exceeds total size)
+  // We no longer forcefully scale down rigid constraints. This allows layouts
+  // to correctly overflow their bounds so the rendering engine can detect it
+  // and display a visual warning, rather than silently hiding elements.
 
   // 4. Respect Max Constraints on MinMax
   for (var i = 0; i < constraints.length; i++) {
@@ -135,29 +123,24 @@ List<Rect> splitRect(
   final N = sizes.length;
   final remaining = totalSize - usedSize;
 
-  if (remaining <= 0 || N == 0) {
-    var offset = 0;
-    for (var i = 0; i < N; i++) {
-      final size = sizes[i];
-      if (direction == LayoutDirection.horizontal) {
-        rects.add(
-          Rect(clampedArea.x + offset, clampedArea.y, size, clampedArea.height),
-        );
-      } else {
-        rects.add(
-          Rect(clampedArea.x, clampedArea.y + offset, clampedArea.width, size),
-        );
-      }
-      offset += size;
-    }
-  } else {
-    // We have remaining space to distribute
-    final sumOfSizes = List<int>.filled(N + 1, 0);
-    for (var i = 0; i < N; i++) {
-      sumOfSizes[i + 1] = sumOfSizes[i] + sizes[i];
-    }
+  if (N == 0) return rects;
 
-    int getChildOffset(int i) => switch (mainAxisAlignment) {
+  final sumOfSizes = List<int>.filled(N + 1, 0);
+  for (var i = 0; i < N; i++) {
+    sumOfSizes[i + 1] = sumOfSizes[i] + sizes[i];
+  }
+
+  int getChildOffset(int i) {
+    if (remaining <= 0) {
+      return switch (mainAxisAlignment) {
+        MainAxisAlignment.start => sumOfSizes[i],
+        MainAxisAlignment.end => remaining + sumOfSizes[i],
+        MainAxisAlignment.center => (remaining ~/ 2) + sumOfSizes[i],
+        _ =>
+          sumOfSizes[i], // Fallback to start for spaced alignments when overflowing
+      };
+    }
+    return switch (mainAxisAlignment) {
       MainAxisAlignment.start => sumOfSizes[i],
       MainAxisAlignment.end => remaining + sumOfSizes[i],
       MainAxisAlignment.center => (remaining ~/ 2) + sumOfSizes[i],
@@ -168,19 +151,19 @@ List<Rect> splitRect(
       MainAxisAlignment.spaceEvenly =>
         (remaining * (i + 1) / (N + 1)).floor() + sumOfSizes[i],
     };
+  }
 
-    for (var i = 0; i < N; i++) {
-      final size = sizes[i];
-      final offset = getChildOffset(i);
-      if (direction == LayoutDirection.horizontal) {
-        rects.add(
-          Rect(clampedArea.x + offset, clampedArea.y, size, clampedArea.height),
-        );
-      } else {
-        rects.add(
-          Rect(clampedArea.x, clampedArea.y + offset, clampedArea.width, size),
-        );
-      }
+  for (var i = 0; i < N; i++) {
+    final size = sizes[i];
+    final offset = getChildOffset(i);
+    if (direction == LayoutDirection.horizontal) {
+      rects.add(
+        Rect(clampedArea.x + offset, clampedArea.y, size, clampedArea.height),
+      );
+    } else {
+      rects.add(
+        Rect(clampedArea.x, clampedArea.y + offset, clampedArea.width, size),
+      );
     }
   }
 

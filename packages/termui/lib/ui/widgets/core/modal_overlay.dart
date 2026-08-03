@@ -359,6 +359,15 @@ class ModalOverlayElement extends WindowElement {
       return;
     }
 
+    // Clear the entire modal area
+    buffer.fillRect(
+      Rect(dialogX.toInt(), dialogY.toInt(), dw, dh),
+      char: ' ',
+      fg: modal.backgroundStyle.foreground?.argb ?? 0,
+      bg: modal.backgroundStyle.background?.argb ?? 0,
+      modifiers: modal.backgroundStyle.modifiers,
+    );
+
     // Draw top border
     final topBorder =
         modal.borderChars[0] +
@@ -428,12 +437,6 @@ class ModalOverlayElement extends WindowElement {
     // Render child content viewport
     final contentArea = Rect(dialogX + 1, dialogY + 1, dw - 2, dh - 2);
     final contentViewport = Viewport(buffer, contentArea);
-    contentViewport.fillAttributes(
-      char: ' ',
-      fg: modal.backgroundStyle.foreground?.argb,
-      bg: modal.backgroundStyle.background?.argb,
-      modifiers: modal.backgroundStyle.modifiers,
-    );
 
     if (childElement != null) {
       childElement!.paint(contentViewport, Offset.zero);

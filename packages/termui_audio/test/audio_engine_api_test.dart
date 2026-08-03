@@ -354,7 +354,7 @@ void main() {
     );
 
     test(
-      'TS-10: playSprite invokes sprite playback and resolves completion',
+      'TS-03: playSprite invokes sprite playback and resolves completion',
       () async {
         final buffer = MockAudioBuffer();
         final spriteVoice = engine.playSprite(
