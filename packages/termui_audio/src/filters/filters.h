@@ -84,7 +84,7 @@ struct BusData {
   Filters filters;
 
   explicit BusData(unsigned int busId, SoLoud::Soloud *soloud)
-      : id(busId), filters(soloud, nullptr, this) {}
+      : id(busId), handle(0), filters(soloud, nullptr, this) {}
 };
 
 #endif // PLAYER_H
