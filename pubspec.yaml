@@ -61,7 +61,7 @@ melos:
     test:flutter:
       description: Run unit tests for Flutter packages.
       exec:
-        command: flutter test --reporter=expanded
+        command: flutter test --reporter=expanded -j 1
         failFast: true
       packageFilters:
         dirExists: test
