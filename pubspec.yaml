@@ -34,6 +34,7 @@ workspace:
   - packages/termui_pty
   - packages/termui_audio
   - packages/termui_audio/example
+  - packages/termui_tinpot
 
 dev_dependencies:
   melos: ^8.1.0
