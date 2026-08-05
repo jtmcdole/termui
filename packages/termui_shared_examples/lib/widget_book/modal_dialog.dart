@@ -102,7 +102,6 @@ class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
           ),
         ),
       ),
-      const SizedBox(height: 1, child: Text('')),
       SizedBox(
         height: 3,
         child: Text(
@@ -110,7 +109,6 @@ class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
           style: const Style(foreground: CharmColors.soda),
         ),
       ),
-      const SizedBox(height: 1, child: Text('')),
       SizedBox(
         height: 1,
         child: Text(
@@ -122,7 +120,6 @@ class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
           ),
         ),
       ),
-      const SizedBox(height: 1, child: Text('')),
       SizedBox(
         height: 1,
         child: Text(
@@ -142,7 +139,7 @@ class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
     }
 
     final dialogW = 44;
-    final dialogH = 8;
+    final dialogH = 9;
     final dialogX = (widget.width - dialogW) ~/ 2;
     final dialogY = (widget.height - dialogH) ~/ 2;
 

@@ -352,7 +352,7 @@ class SearchOverlayState extends State<SearchOverlay> {
             height: 1,
             child: Row([
               Text(
-                ' Syntax: "foo", "-bar", "cat:blink", "dur:>=16ms", "/regex/"',
+                ' Syntax: "foo", "-bar", "/regex/"',
                 style: const Style(foreground: Color(150, 150, 150)),
               ),
             ]),

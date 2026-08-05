@@ -42,6 +42,14 @@ class _TestBackgroundElement extends SingleChildElement {
 }
 
 void main() {
+  setUp(() {
+    debugLogError = (_) {};
+  });
+
+  tearDown(() {
+    debugLogError = null;
+  });
+
   test('Column layout constraint violation should render visible warning', () {
     final tester = TerminalTester();
     tester.run(() async {
