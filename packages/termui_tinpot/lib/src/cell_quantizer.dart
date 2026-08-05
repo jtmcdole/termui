@@ -132,24 +132,47 @@ class CellQuantizer {
       return x & 0x3f;
     }
 
+    int c1Din = useDin99d
+        ? ColorMath.rgbToDin99d((c1 >> 16) & 0xFF, (c1 >> 8) & 0xFF, c1 & 0xFF)
+        : 0;
+
+    // Precompute distances for each pixel to c1 and c2
+    final distC1 = List<int>.filled(64, 0);
+    final distC2 = List<int>.filled(64, 0);
+    for (int i = 0; i < 64; i++) {
+      if (useDin99d) {
+        distC1[i] = ColorMath.distanceSqDin99d(pixelsDin99d![i], c1Din);
+        distC2[i] = ColorMath.distanceSqDin99d(pixelsDin99d![i], c2Din);
+      } else {
+        distC1[i] = _distSqRgb(pixelsRgb[i], c1);
+        distC2[i] = _distSqRgb(pixelsRgb[i], c2);
+      }
+    }
+
     var scoredCandidates =
         <({SymbolCandidate candidate, int distance, bool inverted})>[
           for (final candidate in candidates)
             () {
               final cMaskHigh = candidate.bitmap >>> 32;
               final cMaskLow = candidate.bitmap & 0xFFFFFFFF;
+              
+              int errorNorm = 0;
+              int errorInv = 0;
+              
+              for (int i = 0; i < 32; i++) {
+                bool isFg = ((cMaskHigh >> (31 - i)) & 1) == 1;
+                errorNorm += isFg ? distC1[i] : distC2[i];
+                errorInv += isFg ? distC2[i] : distC1[i];
+              }
+              for (int i = 0; i < 32; i++) {
+                bool isFg = ((cMaskLow >> (31 - i)) & 1) == 1;
+                errorNorm += isFg ? distC1[32 + i] : distC2[32 + i];
+                errorInv += isFg ? distC2[32 + i] : distC1[32 + i];
+              }
 
-              final xorHigh1 = idealMaskHigh ^ cMaskHigh;
-              final xorLow1 = idealMaskLow ^ cMaskLow;
-              final dist1 = popcount32(xorHigh1) + popcount32(xorLow1);
-
-              final xorHigh2 = invMaskHigh ^ cMaskHigh;
-              final xorLow2 = invMaskLow ^ cMaskLow;
-              final dist2 = popcount32(xorHigh2) + popcount32(xorLow2);
-
-              return dist1 <= dist2
-                  ? (candidate: candidate, distance: dist1, inverted: false)
-                  : (candidate: candidate, distance: dist2, inverted: true);
+              return errorNorm <= errorInv
+                  ? (candidate: candidate, distance: errorNorm, inverted: false)
+                  : (candidate: candidate, distance: errorInv, inverted: true);
             }(),
         ];
 
