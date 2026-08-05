@@ -11,8 +11,10 @@ typedef TinpotOutputCell = ({
 
 class TermuiTinpot {
   final SymbolMap symbolMap;
+  final int workFactor;
 
-  TermuiTinpot({SymbolMap? symbolMap}) : symbolMap = symbolMap ?? SymbolMap();
+  TermuiTinpot({SymbolMap? symbolMap, this.workFactor = 5})
+      : symbolMap = symbolMap ?? SymbolMap();
 
   static const canonicalBlocks = {
     0x0020, // Space
@@ -59,7 +61,7 @@ class TermuiTinpot {
       interpolation: img.Interpolation.linear,
     );
 
-    final quantizer = CellQuantizer();
+    final quantizer = CellQuantizer(workFactor: workFactor);
     final pixelsRgb = Uint32List(64);
     
     final grid = <List<TinpotOutputCell>>[];
