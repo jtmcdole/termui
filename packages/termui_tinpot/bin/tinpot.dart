@@ -27,6 +27,11 @@ void main(List<String> arguments) async {
       help: 'Use median color extraction instead of average',
       defaultsTo: false,
     )
+    ..addOption(
+      'work',
+      help: 'Work factor for shape evaluation (1-9, defaults to 5)',
+      defaultsTo: '5',
+    )
     ..addFlag(
       'help',
       abbr: '?',
@@ -65,6 +70,9 @@ void main(List<String> arguments) async {
 
   final int maxColumns = int.parse(argResults['width'] as String);
   final int maxRows = int.parse(argResults['height'] as String);
+  int workFactor = int.tryParse(argResults['work'] as String) ?? 5;
+  if (workFactor < 1) workFactor = 1;
+  if (workFactor > 9) workFactor = 9;
 
   final double imageAspect = image.width / image.height;
 
@@ -85,7 +93,7 @@ void main(List<String> arguments) async {
   if (columns < 1) columns = 1;
   if (rows < 1) rows = 1;
 
-  final engine = TermuiTinpot();
+  final engine = TermuiTinpot(workFactor: workFactor);
   final grid = engine.convert(
     image,
     columns,

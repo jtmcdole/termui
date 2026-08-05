@@ -7,10 +7,15 @@ class CellQuantizer {
   final Int32List _pixelsDin99d = Int32List(64);
   final Int32List _deltaNorm = Int32List(64);
   final Int32List _deltaInv = Int32List(64);
-  static const int _workFactor = 5;
-  final List<SymbolCandidate?> _topCandidates = List.filled(_workFactor, null);
-  final Int32List _topDistances = Int32List(_workFactor);
-  final List<bool> _topInverted = List.filled(_workFactor, false);
+  final int workFactor;
+  final List<SymbolCandidate?> _topCandidates;
+  final Int32List _topDistances;
+  final List<bool> _topInverted;
+
+  CellQuantizer({this.workFactor = 5})
+      : _topCandidates = List.filled(workFactor, null),
+        _topDistances = Int32List(workFactor),
+        _topInverted = List.filled(workFactor, false);
   
   TinpotOutputCell quantize(
     Uint32List pixelsRgb,
@@ -125,9 +130,9 @@ class CellQuantizer {
       _deltaInv[i] = d2 - d1;
     }
 
-    _topDistances.fillRange(0, _workFactor, 0x7FFFFFFF);
-    _topCandidates.fillRange(0, _workFactor, null);
-    _topInverted.fillRange(0, _workFactor, false);
+    _topDistances.fillRange(0, workFactor, 0x7FFFFFFF);
+    _topCandidates.fillRange(0, workFactor, null);
+    _topInverted.fillRange(0, workFactor, false);
 
     for (final candidate in candidates) {
       final cMaskHigh = candidate.bitmap >>> 32;
@@ -150,8 +155,8 @@ class CellQuantizer {
       int dist = errorNorm <= errorInv ? errorNorm : errorInv;
       bool inverted = errorNorm > errorInv;
 
-      int insertIdx = _workFactor;
-      for (int k = 0; k < _workFactor; k++) {
+      int insertIdx = workFactor;
+      for (int k = 0; k < workFactor; k++) {
         int d = _topDistances[k];
         if (dist < d) {
           insertIdx = k;
@@ -179,8 +184,8 @@ class CellQuantizer {
         }
       }
 
-      if (insertIdx < _workFactor) {
-        for (int j = _workFactor - 1; j > insertIdx; j--) {
+      if (insertIdx < workFactor) {
+        for (int j = workFactor - 1; j > insertIdx; j--) {
           _topDistances[j] = _topDistances[j - 1];
           _topCandidates[j] = _topCandidates[j - 1];
           _topInverted[j] = _topInverted[j - 1];
@@ -196,7 +201,7 @@ class CellQuantizer {
     int bestFg = c2;
     int bestBg = c1;
 
-    for (int k = 0; k < _workFactor; k++) {
+    for (int k = 0; k < workFactor; k++) {
       final candidate = _topCandidates[k];
       if (candidate == null) break;
       final invert = _topInverted[k];
