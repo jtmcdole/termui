@@ -90,7 +90,7 @@ class ColorMath {
     int lA = (colorA >> 16) & 0xFF;
     int aA = (colorA >> 8) & 0xFF;
     int bA = colorA & 0xFF;
-    
+
     int lB = (colorB >> 16) & 0xFF;
     int aB = (colorB >> 8) & 0xFF;
     int bB = colorB & 0xFF;

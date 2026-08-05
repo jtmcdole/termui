@@ -13,10 +13,10 @@ class CellQuantizer {
   final List<bool> _topInverted;
 
   CellQuantizer({this.workFactor = 5})
-      : _topCandidates = List.filled(workFactor, null),
-        _topDistances = Int32List(workFactor),
-        _topInverted = List.filled(workFactor, false);
-  
+    : _topCandidates = List.filled(workFactor, null),
+      _topDistances = Int32List(workFactor),
+      _topInverted = List.filled(workFactor, false);
+
   TinpotOutputCell quantize(
     Uint32List pixelsRgb,
     List<SymbolCandidate> candidates, {

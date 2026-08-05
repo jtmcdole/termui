@@ -14,7 +14,7 @@ class TermuiTinpot {
   final int workFactor;
 
   TermuiTinpot({SymbolMap? symbolMap, this.workFactor = 5})
-      : symbolMap = symbolMap ?? SymbolMap();
+    : symbolMap = symbolMap ?? SymbolMap();
 
   static const canonicalBlocks = {
     0x0020, // Space
@@ -31,8 +31,10 @@ class TermuiTinpot {
             canonicalBlocks.contains(s.codePoint) ||
             (s.codePoint >= 0x2500 &&
                 s.codePoint <= 0x257F &&
-                !(s.codePoint >= 0x2504 && s.codePoint <= 0x250B) && // Exclude triple/quadruple dashes
-                !(s.codePoint >= 0x254C && s.codePoint <= 0x254F) && // Exclude double dashes
+                !(s.codePoint >= 0x2504 &&
+                    s.codePoint <= 0x250B) && // Exclude triple/quadruple dashes
+                !(s.codePoint >= 0x254C &&
+                    s.codePoint <= 0x254F) && // Exclude double dashes
                 !(s.codePoint >= 0x2574 && s.codePoint <= 0x257B)),
       ) // Exclude single/half dashes (TAG_DOT)
       .toList();
@@ -63,7 +65,7 @@ class TermuiTinpot {
 
     final quantizer = CellQuantizer(workFactor: workFactor);
     final pixelsRgb = Uint32List(64);
-    
+
     final grid = <List<TinpotOutputCell>>[];
 
     for (int cellY = 0; cellY < rows; cellY++) {
@@ -93,12 +95,14 @@ class TermuiTinpot {
         }
 
         // Quantize cell extracting average colors and exhaustively finding the best shape
-        row.add(quantizer.quantize(
-          pixelsRgb,
-          candidates,
-          useMedian: useMedian,
-          useDin99d: useDin99d,
-        ));
+        row.add(
+          quantizer.quantize(
+            pixelsRgb,
+            candidates,
+            useMedian: useMedian,
+            useDin99d: useDin99d,
+          ),
+        );
       }
       grid.add(row);
     }
