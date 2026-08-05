@@ -18,6 +18,16 @@ void main(List<String> arguments) async {
       defaultsTo: '40',
     )
     ..addFlag(
+      'din99d',
+      help: 'Use DIN99d perceptual color math instead of RGB',
+      defaultsTo: false,
+    )
+    ..addFlag(
+      'median',
+      help: 'Use median color extraction instead of average',
+      defaultsTo: false,
+    )
+    ..addFlag(
       'help',
       abbr: '?',
       negatable: false,
@@ -76,7 +86,13 @@ void main(List<String> arguments) async {
   if (rows < 1) rows = 1;
 
   final engine = TermuiTinpot();
-  final grid = engine.convert(image, columns, rows);
+  final grid = engine.convert(
+    image,
+    columns,
+    rows,
+    useDin99d: argResults['din99d'] as bool,
+    useMedian: argResults['median'] as bool,
+  );
 
   final buffer = StringBuffer();
 
