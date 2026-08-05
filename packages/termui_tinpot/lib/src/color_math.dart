@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 /// Utility class for perceptual color math using the DIN99d color space.
 class ColorMath {
@@ -15,10 +16,20 @@ class ColorMath {
     _ => (_xyzKappa * v + 16.0) / 116.0,
   };
 
+  static final _dinCacheKeys = Int32List(8192)..fillRange(0, 8192, -1);
+  static final _dinCacheValues = Int32List(8192);
+
   /// Converts RGB (0-255) to DIN99d color space.
   /// Returns a packed 32-bit integer where the bytes are DIN99d L, a, b, and original alpha.
   /// Packed format: (A << 24) | (L << 16) | (a << 8) | b
   static int rgbToDin99d(int r, int g, int b, [int a = 255]) {
+    final int key = (r << 16) | (g << 8) | b;
+    final int hash = (r ^ (g << 4) ^ (b << 8) ^ (r << 12)) & 0x1FFF;
+
+    if (_dinCacheKeys[hash] == key) {
+      return (a << 24) | _dinCacheValues[hash];
+    }
+
     double rF = _invertRgbChannelCompand(r / 255.0);
     double gF = _invertRgbChannelCompand(g / 255.0);
     double bF = _invertRgbChannelCompand(b / 255.0);
@@ -66,24 +77,27 @@ class ColorMath {
     int aDin = (c * math.cos(h) * 2.55 + 128.0).clamp(0.0, 255.0).toInt();
     int bDin = (c * math.sin(h) * 2.55 + 128.0).clamp(0.0, 255.0).toInt();
 
-    return (a << 24) | (lDin << 16) | (aDin << 8) | bDin;
+    int packed = (lDin << 16) | (aDin << 8) | bDin;
+    _dinCacheKeys[hash] = key;
+    _dinCacheValues[hash] = packed;
+
+    return (a << 24) | packed;
   }
 
   /// Calculates the squared Euclidean distance between two DIN99d packed colors.
   /// We use squared distance to avoid square root overhead in hot paths.
   static int distanceSqDin99d(int colorA, int colorB) {
-    final (lA, aA, bA) = (
-      (colorA >> 16) & 0xFF,
-      (colorA >> 8) & 0xFF,
-      colorA & 0xFF,
-    );
-    final (lB, aB, bB) = (
-      (colorB >> 16) & 0xFF,
-      (colorB >> 8) & 0xFF,
-      colorB & 0xFF,
-    );
+    int lA = (colorA >> 16) & 0xFF;
+    int aA = (colorA >> 8) & 0xFF;
+    int bA = colorA & 0xFF;
+    
+    int lB = (colorB >> 16) & 0xFF;
+    int aB = (colorB >> 8) & 0xFF;
+    int bB = colorB & 0xFF;
 
-    final (dl, da, db) = (lB - lA, aB - aA, bB - bA);
+    int dl = lB - lA;
+    int da = aB - aA;
+    int db = bB - bA;
 
     return (dl * dl) + (da * da) + (db * db);
   }
