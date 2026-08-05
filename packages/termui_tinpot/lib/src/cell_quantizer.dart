@@ -98,18 +98,28 @@ class CellQuantizer {
         ? ColorMath.rgbToDin99d((c1 >> 16) & 0xFF, (c1 >> 8) & 0xFF, c1 & 0xFF)
         : 0;
 
-    // Precompute distances for each pixel to c1 and c2
-    final distC1 = List<int>.filled(64, 0);
-    final distC2 = List<int>.filled(64, 0);
+    // Precompute distances and deltas
+    int baseErrorNorm = 0;
+    int baseErrorInv = 0;
+    final deltaNorm = List<int>.filled(64, 0);
+    final deltaInv = List<int>.filled(64, 0);
+
     final din99dArray = pixelsDin99d;
     for (int i = 0; i < 64; i++) {
+      int d1, d2;
       if (useDin99d && din99dArray != null) {
-        distC1[i] = ColorMath.distanceSqDin99d(din99dArray[i], c1Din);
-        distC2[i] = ColorMath.distanceSqDin99d(din99dArray[i], c2Din);
+        d1 = ColorMath.distanceSqDin99d(din99dArray[i], c1Din);
+        d2 = ColorMath.distanceSqDin99d(din99dArray[i], c2Din);
       } else {
-        distC1[i] = _distSqRgb(pixelsRgb[i], c1);
-        distC2[i] = _distSqRgb(pixelsRgb[i], c2);
+        d1 = _distSqRgb(pixelsRgb[i], c1);
+        d2 = _distSqRgb(pixelsRgb[i], c2);
       }
+
+      baseErrorNorm += d2;
+      deltaNorm[i] = d1 - d2;
+
+      baseErrorInv += d1;
+      deltaInv[i] = d2 - d1;
     }
 
     var scoredCandidates =
@@ -119,18 +129,18 @@ class CellQuantizer {
               final cMaskHigh = candidate.bitmap >>> 32;
               final cMaskLow = candidate.bitmap & 0xFFFFFFFF;
 
-              int errorNorm = 0;
-              int errorInv = 0;
+              int errorNorm = baseErrorNorm;
+              int errorInv = baseErrorInv;
 
               for (int i = 0; i < 32; i++) {
-                bool isFg = ((cMaskHigh >> (31 - i)) & 1) == 1;
-                errorNorm += isFg ? distC1[i] : distC2[i];
-                errorInv += isFg ? distC2[i] : distC1[i];
+                int bitHigh = (cMaskHigh >> (31 - i)) & 1;
+                errorNorm += deltaNorm[i] * bitHigh;
+                errorInv += deltaInv[i] * bitHigh;
               }
               for (int i = 0; i < 32; i++) {
-                bool isFg = ((cMaskLow >> (31 - i)) & 1) == 1;
-                errorNorm += isFg ? distC1[32 + i] : distC2[32 + i];
-                errorInv += isFg ? distC2[32 + i] : distC1[32 + i];
+                int bitLow = (cMaskLow >> (31 - i)) & 1;
+                errorNorm += deltaNorm[32 + i] * bitLow;
+                errorInv += deltaInv[32 + i] * bitLow;
               }
 
               return errorNorm <= errorInv
