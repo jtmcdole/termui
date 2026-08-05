@@ -3,13 +3,7 @@ import 'package:image/image.dart' as img;
 import 'package:termui_tinpot/termui_tinpot.dart';
 
 Future<void> main() async {
-  final scriptPath = [...Platform.script.pathSegments]..removeLast();
-  final assetUri = Uri(
-    scheme: 'file',
-    pathSegments: [...scriptPath, 'assets', 'omega_Gate.png'],
-  );
-
-  final bytes = await File.fromUri(assetUri).readAsBytes();
+  final bytes = await File('packages/termui_tinpot/test/assets/omega_Gate.png').readAsBytes();
   final image = img.decodeImage(bytes)!;
   final engine = TermuiTinpot();
 

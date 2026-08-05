@@ -4,7 +4,15 @@ import 'symbol_map.dart';
 import 'color_math.dart';
 
 class CellQuantizer {
-  static TinpotOutputCell quantize(
+  final Int32List _pixelsDin99d = Int32List(64);
+  final Int32List _deltaNorm = Int32List(64);
+  final Int32List _deltaInv = Int32List(64);
+  static const int _workFactor = 5;
+  final List<SymbolCandidate?> _topCandidates = List.filled(_workFactor, null);
+  final Int32List _topDistances = Int32List(_workFactor);
+  final List<bool> _topInverted = List.filled(_workFactor, false);
+  
+  TinpotOutputCell quantize(
     Uint32List pixelsRgb,
     List<SymbolCandidate> candidates, {
     bool useDin99d = false,
@@ -12,12 +20,10 @@ class CellQuantizer {
   }) {
     assert(pixelsRgb.length == 64);
 
-    List<int>? pixelsDin99d;
     if (useDin99d) {
-      pixelsDin99d = List<int>.filled(64, 0);
       for (int i = 0; i < 64; i++) {
         int p = pixelsRgb[i];
-        pixelsDin99d[i] = ColorMath.rgbToDin99d(
+        _pixelsDin99d[i] = ColorMath.rgbToDin99d(
           (p >> 16) & 0xFF,
           (p >> 8) & 0xFF,
           p & 0xFF,
@@ -101,31 +107,27 @@ class CellQuantizer {
     // Precompute distances and deltas
     int baseErrorNorm = 0;
     int baseErrorInv = 0;
-    final deltaNorm = List<int>.filled(64, 0);
-    final deltaInv = List<int>.filled(64, 0);
 
-    final din99dArray = pixelsDin99d;
     for (int i = 0; i < 64; i++) {
       int d1, d2;
-      if (useDin99d && din99dArray != null) {
-        d1 = ColorMath.distanceSqDin99d(din99dArray[i], c1Din);
-        d2 = ColorMath.distanceSqDin99d(din99dArray[i], c2Din);
+      if (useDin99d) {
+        d1 = ColorMath.distanceSqDin99d(_pixelsDin99d[i], c1Din);
+        d2 = ColorMath.distanceSqDin99d(_pixelsDin99d[i], c2Din);
       } else {
         d1 = _distSqRgb(pixelsRgb[i], c1);
         d2 = _distSqRgb(pixelsRgb[i], c2);
       }
 
       baseErrorNorm += d2;
-      deltaNorm[i] = d1 - d2;
+      _deltaNorm[i] = d1 - d2;
 
       baseErrorInv += d1;
-      deltaInv[i] = d2 - d1;
+      _deltaInv[i] = d2 - d1;
     }
 
-    final int workFactor = 5;
-    final topCandidates = List<SymbolCandidate?>.filled(workFactor, null);
-    final topDistances = List<int>.filled(workFactor, 0x7FFFFFFF);
-    final topInverted = List<bool>.filled(workFactor, false);
+    _topDistances.fillRange(0, _workFactor, 0x7FFFFFFF);
+    _topCandidates.fillRange(0, _workFactor, null);
+    _topInverted.fillRange(0, _workFactor, false);
 
     for (final candidate in candidates) {
       final cMaskHigh = candidate.bitmap >>> 32;
@@ -136,26 +138,26 @@ class CellQuantizer {
 
       for (int i = 0; i < 32; i++) {
         int bitHigh = (cMaskHigh >> (31 - i)) & 1;
-        errorNorm += deltaNorm[i] * bitHigh;
-        errorInv += deltaInv[i] * bitHigh;
+        errorNorm += _deltaNorm[i] * bitHigh;
+        errorInv += _deltaInv[i] * bitHigh;
       }
       for (int i = 0; i < 32; i++) {
         int bitLow = (cMaskLow >> (31 - i)) & 1;
-        errorNorm += deltaNorm[32 + i] * bitLow;
-        errorInv += deltaInv[32 + i] * bitLow;
+        errorNorm += _deltaNorm[32 + i] * bitLow;
+        errorInv += _deltaInv[32 + i] * bitLow;
       }
 
       int dist = errorNorm <= errorInv ? errorNorm : errorInv;
       bool inverted = errorNorm > errorInv;
 
-      int insertIdx = workFactor;
-      for (int k = 0; k < workFactor; k++) {
-        int d = topDistances[k];
+      int insertIdx = _workFactor;
+      for (int k = 0; k < _workFactor; k++) {
+        int d = _topDistances[k];
         if (dist < d) {
           insertIdx = k;
           break;
         } else if (dist == d) {
-          final topCandidate = topCandidates[k];
+          final topCandidate = _topCandidates[k];
           if (topCandidate == null) {
             insertIdx = k;
             break;
@@ -164,10 +166,10 @@ class CellQuantizer {
             insertIdx = k;
             break;
           } else if (candidate.popcount == topCandidate.popcount) {
-            if (!inverted && topInverted[k]) {
+            if (!inverted && _topInverted[k]) {
               insertIdx = k;
               break;
-            } else if (inverted == topInverted[k]) {
+            } else if (inverted == _topInverted[k]) {
               if (candidate.codePoint < topCandidate.codePoint) {
                 insertIdx = k;
                 break;
@@ -177,15 +179,15 @@ class CellQuantizer {
         }
       }
 
-      if (insertIdx < workFactor) {
-        for (int j = workFactor - 1; j > insertIdx; j--) {
-          topDistances[j] = topDistances[j - 1];
-          topCandidates[j] = topCandidates[j - 1];
-          topInverted[j] = topInverted[j - 1];
+      if (insertIdx < _workFactor) {
+        for (int j = _workFactor - 1; j > insertIdx; j--) {
+          _topDistances[j] = _topDistances[j - 1];
+          _topCandidates[j] = _topCandidates[j - 1];
+          _topInverted[j] = _topInverted[j - 1];
         }
-        topDistances[insertIdx] = dist;
-        topCandidates[insertIdx] = candidate;
-        topInverted[insertIdx] = inverted;
+        _topDistances[insertIdx] = dist;
+        _topCandidates[insertIdx] = candidate;
+        _topInverted[insertIdx] = inverted;
       }
     }
 
@@ -194,10 +196,10 @@ class CellQuantizer {
     int bestFg = c2;
     int bestBg = c1;
 
-    for (int k = 0; k < workFactor; k++) {
-      final candidate = topCandidates[k];
+    for (int k = 0; k < _workFactor; k++) {
+      final candidate = _topCandidates[k];
       if (candidate == null) break;
-      final invert = topInverted[k];
+      final invert = _topInverted[k];
 
       int cMaskHigh = candidate.bitmap >>> 32;
       int cMaskLow = candidate.bitmap & 0xFFFFFFFF;
@@ -323,7 +325,7 @@ class CellQuantizer {
         bool isFg = ((highBits >> (31 - i)) & 1) == 1;
         if (useDin99d) {
           int targetDin = isFg ? meanFgDin : meanBgDin;
-          error += ColorMath.distanceSqDin99d(pixelsDin99d![i], targetDin);
+          error += ColorMath.distanceSqDin99d(_pixelsDin99d[i], targetDin);
         } else {
           int targetMean = isFg ? meanFg : meanBg;
           error += _distSqRgb(pixelsRgb[i], targetMean);
@@ -333,7 +335,7 @@ class CellQuantizer {
         bool isFg = ((lowBits >> (31 - i)) & 1) == 1;
         if (useDin99d) {
           int targetDin = isFg ? meanFgDin : meanBgDin;
-          error += ColorMath.distanceSqDin99d(pixelsDin99d![32 + i], targetDin);
+          error += ColorMath.distanceSqDin99d(_pixelsDin99d[32 + i], targetDin);
         } else {
           int targetMean = isFg ? meanFg : meanBg;
           error += _distSqRgb(pixelsRgb[32 + i], targetMean);

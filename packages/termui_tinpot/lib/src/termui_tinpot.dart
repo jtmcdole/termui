@@ -63,46 +63,48 @@ class TermuiTinpot {
         ) // Exclude single/half dashes (TAG_DOT)
         .toList();
 
-    return [
-      for (int cellY = 0; cellY < rows; cellY++)
-        [
-          for (int cellX = 0; cellX < columns; cellX++)
-            () {
-              final pixelsRgb = Uint32List(64);
-              int pIdx = 0;
+    final quantizer = CellQuantizer();
+    final pixelsRgb = Uint32List(64);
+    
+    final grid = <List<TinpotOutputCell>>[];
 
-              for (int py = 0; py < 8; py++) {
-                for (int px = 0; px < 8; px++) {
-                  final pixel = scaled.getPixel(cellX * 8 + px, cellY * 8 + py);
+    for (int cellY = 0; cellY < rows; cellY++) {
+      final row = <TinpotOutputCell>[];
+      for (int cellX = 0; cellX < columns; cellX++) {
+        int pIdx = 0;
 
-                  var (a, r, g, b) = (
-                    (pixel.aNormalized * 255).toInt(),
-                    (pixel.rNormalized * 255).toInt(),
-                    (pixel.gNormalized * 255).toInt(),
-                    (pixel.bNormalized * 255).toInt(),
-                  );
+        for (int py = 0; py < 8; py++) {
+          for (int px = 0; px < 8; px++) {
+            final pixel = scaled.getPixel(cellX * 8 + px, cellY * 8 + py);
 
-                  // Alpha composite over black background (0, 0, 0)
-                  if (a < 255) {
-                    // Fast division by 255 using (val * 257) >> 16
-                    r = (r * a * 257) >> 16;
-                    g = (g * a * 257) >> 16;
-                    b = (b * a * 257) >> 16;
-                  }
+            var a = pixel.a.toInt();
+            var r = pixel.r.toInt();
+            var g = pixel.g.toInt();
+            var b = pixel.b.toInt();
 
-                  pixelsRgb[pIdx++] = (0xFF << 24) | (r << 16) | (g << 8) | b;
-                }
-              }
+            // Alpha composite over black background (0, 0, 0)
+            if (a < 255) {
+              // Fast division by 255 using (val * 257) >> 16
+              r = (r * a * 257) >> 16;
+              g = (g * a * 257) >> 16;
+              b = (b * a * 257) >> 16;
+            }
 
-              // Quantize cell extracting average colors and exhaustively finding the best shape
-              return CellQuantizer.quantize(
-                pixelsRgb,
-                candidates,
-                useMedian: useMedian,
-                useDin99d: useDin99d,
-              );
-            }(),
-        ],
-    ];
+            pixelsRgb[pIdx++] = (0xFF << 24) | (r << 16) | (g << 8) | b;
+          }
+        }
+
+        // Quantize cell extracting average colors and exhaustively finding the best shape
+        row.add(quantizer.quantize(
+          pixelsRgb,
+          candidates,
+          useMedian: useMedian,
+          useDin99d: useDin99d,
+        ));
+      }
+      grid.add(row);
+    }
+
+    return grid;
   }
 }
