@@ -49,12 +49,18 @@ class TermuiTinpot {
     };
 
     final candidates = symbolMap.blockSymbols
-        .where((s) => 
-             canonicalBlocks.contains(s.codePoint) || 
-             (s.codePoint >= 0x2500 && s.codePoint <= 0x257F && 
-              !(s.codePoint >= 0x2504 && s.codePoint <= 0x250B) && // Exclude triple/quadruple dashes
-              !(s.codePoint >= 0x254C && s.codePoint <= 0x254F) && // Exclude double dashes
-              !(s.codePoint >= 0x2574 && s.codePoint <= 0x257B)))  // Exclude single/half dashes (TAG_DOT)
+        .where(
+          (s) =>
+              canonicalBlocks.contains(s.codePoint) ||
+              (s.codePoint >= 0x2500 &&
+                  s.codePoint <= 0x257F &&
+                  !(s.codePoint >= 0x2504 &&
+                      s.codePoint <=
+                          0x250B) && // Exclude triple/quadruple dashes
+                  !(s.codePoint >= 0x254C &&
+                      s.codePoint <= 0x254F) && // Exclude double dashes
+                  !(s.codePoint >= 0x2574 && s.codePoint <= 0x257B)),
+        ) // Exclude single/half dashes (TAG_DOT)
         .toList();
 
     return [
