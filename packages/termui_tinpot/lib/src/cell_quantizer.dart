@@ -1,16 +1,30 @@
 import 'dart:typed_data';
 import 'termui_tinpot.dart';
 import 'symbol_map.dart';
+import 'color_math.dart';
 
 class CellQuantizer {
   static TinpotOutputCell quantize(
     Uint32List pixelsRgb,
-    List<SymbolCandidate> candidates,
-  ) {
+    List<SymbolCandidate> candidates, {
+    bool useDin99d = false,
+    bool useMedian = false,
+  }) {
     assert(pixelsRgb.length == 64);
 
-    // 1. Find min and max pixels (like Tinpot)
-    // Find the channel with the max range
+    List<int>? pixelsDin99d;
+    if (useDin99d) {
+      pixelsDin99d = List<int>.filled(64, 0);
+      for (int i = 0; i < 64; i++) {
+        int p = pixelsRgb[i];
+        pixelsDin99d[i] = ColorMath.rgbToDin99d(
+          (p >> 16) & 0xFF,
+          (p >> 8) & 0xFF,
+          p & 0xFF,
+        );
+      }
+    }
+
     int minR = 255, maxR = 0;
     int minG = 255, maxG = 0;
     int minB = 255, maxB = 0;
@@ -55,27 +69,47 @@ class CellQuantizer {
     int rangeR = maxR - minR;
     int rangeG = maxG - minG;
     int rangeB = maxB - minB;
+    int dominantChannel = 0;
+    if (rangeR >= rangeG && rangeR >= rangeB) {
+      dominantChannel = 0;
+    } else if (rangeG >= rangeR && rangeG >= rangeB) {
+      dominantChannel = 1;
+    } else {
+      dominantChannel = 2;
+    }
 
     final (c1, c2) = switch (null) {
-      _ when rangeR >= rangeG && rangeR >= rangeB => (
+      _ when dominantChannel == 0 => (
         pixelsRgb[minIndexR],
         pixelsRgb[maxIndexR],
       ),
-      _ when rangeG >= rangeR && rangeG >= rangeB => (
+      _ when dominantChannel == 1 => (
         pixelsRgb[minIndexG],
         pixelsRgb[maxIndexG],
       ),
       _ => (pixelsRgb[minIndexB], pixelsRgb[maxIndexB]),
     };
 
-    // 2. Generate ideal bitmap mask based on min/max colors
+    int c2Din = useDin99d
+        ? ColorMath.rgbToDin99d((c2 >> 16) & 0xFF, (c2 >> 8) & 0xFF, c2 & 0xFF)
+        : 0;
+
     int idealMaskHigh = 0;
     int idealMaskLow = 0;
     for (int i = 0; i < 64; i++) {
-      int d1 = _distSqRgb(pixelsRgb[i], c1);
-      int d2 = _distSqRgb(pixelsRgb[i], c2);
-      // Tie-break to c1 (background) if colors are exactly equal (e.g. solid color blocks)
-      // This ensures the ideal mask is all 0s, which cleanly matches the Space character (non-inverted).
+      int d1 = useDin99d
+          ? ColorMath.distanceSqDin99d(
+              pixelsDin99d![i],
+              ColorMath.rgbToDin99d(
+                (c1 >> 16) & 0xFF,
+                (c1 >> 8) & 0xFF,
+                c1 & 0xFF,
+              ),
+            )
+          : _distSqRgb(pixelsRgb[i], c1);
+      int d2 = useDin99d
+          ? ColorMath.distanceSqDin99d(pixelsDin99d![i], c2Din)
+          : _distSqRgb(pixelsRgb[i], c2);
       if (d2 < d1) {
         if (i < 32) {
           idealMaskHigh |= (1 << (31 - i));
@@ -119,17 +153,17 @@ class CellQuantizer {
             }(),
         ];
 
-    // Sort by Hamming distance to find the best structural matches, breaking ties predictably
     scoredCandidates.sort((a, b) {
       int cmp = a.distance.compareTo(b.distance);
       if (cmp != 0) return cmp;
+      int popCmp = a.candidate.popcount.compareTo(b.candidate.popcount);
+      if (popCmp != 0) return popCmp;
       if (a.inverted != b.inverted) {
         return a.inverted ? 1 : -1;
       }
       return a.candidate.codePoint.compareTo(b.candidate.codePoint);
     });
 
-    // Evaluate exact error for the top 5 structural candidates
     int workFactor = 5;
     if (scoredCandidates.length > workFactor) {
       scoredCandidates = scoredCandidates.sublist(0, workFactor);
@@ -149,73 +183,141 @@ class CellQuantizer {
       int highBits = invert ? (~cMaskHigh & 0xFFFFFFFF) : cMaskHigh;
       int lowBits = invert ? (~cMaskLow & 0xFFFFFFFF) : cMaskLow;
 
-      int sumrFg = 0, sumgFg = 0, sumbFg = 0, countFg = 0;
-      int sumrBg = 0, sumgBg = 0, sumbBg = 0, countBg = 0;
-
-      for (int i = 0; i < 32; i++) {
-        bool isFg = ((highBits >> (31 - i)) & 1) == 1;
-        int r = pixelsRgb[i];
-        if (isFg) {
-          sumrFg += (r >> 16) & 0xFF;
-          sumgFg += (r >> 8) & 0xFF;
-          sumbFg += r & 0xFF;
-          countFg++;
-        } else {
-          sumrBg += (r >> 16) & 0xFF;
-          sumgBg += (r >> 8) & 0xFF;
-          sumbBg += r & 0xFF;
-          countBg++;
-        }
-      }
-
-      for (int i = 0; i < 32; i++) {
-        bool isFg = ((lowBits >> (31 - i)) & 1) == 1;
-        int r = pixelsRgb[32 + i];
-        if (isFg) {
-          sumrFg += (r >> 16) & 0xFF;
-          sumgFg += (r >> 8) & 0xFF;
-          sumbFg += r & 0xFF;
-          countFg++;
-        } else {
-          sumrBg += (r >> 16) & 0xFF;
-          sumgBg += (r >> 8) & 0xFF;
-          sumbBg += r & 0xFF;
-          countBg++;
-        }
-      }
-
       int meanFg = c2;
-      if (countFg > 0) {
-        meanFg =
-            (0xFF << 24) |
-            ((sumrFg ~/ countFg) << 16) |
-            ((sumgFg ~/ countFg) << 8) |
-            (sumbFg ~/ countFg);
+      int meanBg = c1;
+
+      if (useMedian) {
+        List<int> pixelsFg = [];
+        List<int> pixelsBg = [];
+
+        for (int i = 0; i < 32; i++) {
+          bool isFg = ((highBits >> (31 - i)) & 1) == 1;
+          int p = pixelsRgb[i];
+          if (isFg) {
+            pixelsFg.add(p);
+          } else {
+            pixelsBg.add(p);
+          }
+        }
+        for (int i = 0; i < 32; i++) {
+          bool isFg = ((lowBits >> (31 - i)) & 1) == 1;
+          int p = pixelsRgb[32 + i];
+          if (isFg) {
+            pixelsFg.add(p);
+          } else {
+            pixelsBg.add(p);
+          }
+        }
+
+        int getMedian(List<int> pxs) {
+          if (pxs.isEmpty) return 0;
+          if (pxs.length == 1) return pxs[0];
+          if (dominantChannel == 0) {
+            pxs.sort((a, b) => ((a >> 16) & 0xFF).compareTo((b >> 16) & 0xFF));
+          } else if (dominantChannel == 1) {
+            pxs.sort((a, b) => ((a >> 8) & 0xFF).compareTo((b >> 8) & 0xFF));
+          } else {
+            pxs.sort((a, b) => (a & 0xFF).compareTo(b & 0xFF));
+          }
+          return pxs[pxs.length ~/ 2];
+        }
+
+        if (pixelsFg.isNotEmpty) {
+          meanFg = getMedian(pixelsFg);
+        }
+        if (pixelsBg.isNotEmpty) {
+          meanBg = getMedian(pixelsBg);
+        }
+      } else {
+        int sumrFg = 0, sumgFg = 0, sumbFg = 0, countFg = 0;
+        int sumrBg = 0, sumgBg = 0, sumbBg = 0, countBg = 0;
+
+        for (int i = 0; i < 32; i++) {
+          bool isFg = ((highBits >> (31 - i)) & 1) == 1;
+          int r = pixelsRgb[i];
+          if (isFg) {
+            sumrFg += (r >> 16) & 0xFF;
+            sumgFg += (r >> 8) & 0xFF;
+            sumbFg += r & 0xFF;
+            countFg++;
+          } else {
+            sumrBg += (r >> 16) & 0xFF;
+            sumgBg += (r >> 8) & 0xFF;
+            sumbBg += r & 0xFF;
+            countBg++;
+          }
+        }
+
+        for (int i = 0; i < 32; i++) {
+          bool isFg = ((lowBits >> (31 - i)) & 1) == 1;
+          int r = pixelsRgb[32 + i];
+          if (isFg) {
+            sumrFg += (r >> 16) & 0xFF;
+            sumgFg += (r >> 8) & 0xFF;
+            sumbFg += r & 0xFF;
+            countFg++;
+          } else {
+            sumrBg += (r >> 16) & 0xFF;
+            sumgBg += (r >> 8) & 0xFF;
+            sumbBg += r & 0xFF;
+            countBg++;
+          }
+        }
+
+        if (countFg > 0) {
+          meanFg =
+              (0xFF << 24) |
+              ((sumrFg ~/ countFg) << 16) |
+              ((sumgFg ~/ countFg) << 8) |
+              (sumbFg ~/ countFg);
+        }
+
+        if (countBg > 0) {
+          meanBg =
+              (0xFF << 24) |
+              ((sumrBg ~/ countBg) << 16) |
+              ((sumgBg ~/ countBg) << 8) |
+              (sumbBg ~/ countBg);
+        }
       }
 
-      int meanBg = c1;
-      if (countBg > 0) {
-        meanBg =
-            (0xFF << 24) |
-            ((sumrBg ~/ countBg) << 16) |
-            ((sumgBg ~/ countBg) << 8) |
-            (sumbBg ~/ countBg);
-      }
+      int meanFgDin = useDin99d
+          ? ColorMath.rgbToDin99d(
+              (meanFg >> 16) & 0xFF,
+              (meanFg >> 8) & 0xFF,
+              meanFg & 0xFF,
+            )
+          : 0;
+      int meanBgDin = useDin99d
+          ? ColorMath.rgbToDin99d(
+              (meanBg >> 16) & 0xFF,
+              (meanBg >> 8) & 0xFF,
+              meanBg & 0xFF,
+            )
+          : 0;
 
       int error = 0;
       for (int i = 0; i < 32; i++) {
         bool isFg = ((highBits >> (31 - i)) & 1) == 1;
-        int targetMean = isFg ? meanFg : meanBg;
-        error += _distSqRgb(pixelsRgb[i], targetMean);
+        if (useDin99d) {
+          int targetDin = isFg ? meanFgDin : meanBgDin;
+          error += ColorMath.distanceSqDin99d(pixelsDin99d![i], targetDin);
+        } else {
+          int targetMean = isFg ? meanFg : meanBg;
+          error += _distSqRgb(pixelsRgb[i], targetMean);
+        }
       }
       for (int i = 0; i < 32; i++) {
         bool isFg = ((lowBits >> (31 - i)) & 1) == 1;
-        int targetMean = isFg ? meanFg : meanBg;
-        error += _distSqRgb(pixelsRgb[32 + i], targetMean);
+        if (useDin99d) {
+          int targetDin = isFg ? meanFgDin : meanBgDin;
+          error += ColorMath.distanceSqDin99d(pixelsDin99d![32 + i], targetDin);
+        } else {
+          int targetMean = isFg ? meanFg : meanBg;
+          error += _distSqRgb(pixelsRgb[32 + i], targetMean);
+        }
       }
 
-      // If error is equal, pick the one with the better Hamming distance.
-      // Since candidates are already sorted by Hamming distance, the first one encountered is inherently preferred.
       if (bestError == -1 || error < bestError) {
         bestError = error;
         bestCandidate = candidate;
