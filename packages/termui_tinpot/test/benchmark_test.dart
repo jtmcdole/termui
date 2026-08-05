@@ -22,11 +22,11 @@ void main() {
     stopwatch.stop();
     final elapsed = stopwatch.elapsedMilliseconds;
     final fps = iterations / (elapsed / 1000);
-    
+
     print('Completed $iterations iterations in ${elapsed}ms');
     print('Average: ${elapsed / iterations}ms per frame');
     print('FPS: ${fps.toStringAsFixed(2)}');
-    
+
     // We expect it to be reasonable. Let's just ensure it passes.
     expect(fps, greaterThan(0));
   });
