@@ -39,12 +39,10 @@ class StatCard extends StatelessWidget {
               style: Style(foreground: color, modifiers: Modifier.bold),
             ),
           ),
-          const SizedBox(height: 1),
           SizedBox(
             height: 1,
             child: Text(value, style: const Style(modifiers: Modifier.bold)),
           ),
-          const SizedBox(height: 1),
           SizedBox(
             height: 1,
             child:

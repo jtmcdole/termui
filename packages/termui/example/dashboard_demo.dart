@@ -379,7 +379,7 @@ class _DashboardAppState extends State<DashboardApp> {
               ),
             ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
+              padding: const EdgeInsets.symmetric(horizontal: 2),
               child: Column([
                 SizedBox(
                   height: 1,

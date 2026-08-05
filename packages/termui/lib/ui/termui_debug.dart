@@ -15,12 +15,19 @@ final bool kIsDebug = () {
   return isDebug;
 }();
 
+/// Optional override for error logging (e.g., in test environments).
+void Function(String message)? debugLogError;
+
 /// Logs an error message.
 /// In release mode, this is a no-op.
 /// In debug mode, this writes to stderr natively, or uses print() on the web.
 void logError(String message) {
   if (!kIsDebug) return;
-  platformLog(message);
+  if (debugLogError != null) {
+    debugLogError!(message);
+  } else {
+    platformLog(message);
+  }
 }
 
 /// Global configuration flags for visual debugging in termui.

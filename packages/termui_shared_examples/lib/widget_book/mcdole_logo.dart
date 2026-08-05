@@ -353,37 +353,23 @@ class McdoleLogoExample extends WidgetBookExample {
     }
 
     return Column([
-      Row([
-        Text(
+      SizedBox(
+        height: 1,
+        child: Text(
           ' 3D Isometric Logo (Mcdole Heavy Industries) ',
           style: const Style(
             modifiers: Modifier.bold,
             foreground: CharmColors.mustard,
           ),
         ),
-        Text(
-          isSolid ? '[Solid Shaded]' : '[Wireframe]',
+      ),
+      SizedBox(
+        height: 1,
+        child: Text(
+          '${isSolid ? "[Solid]" : "[Wire]"} ${isAnimated ? "[Play]" : "[Pause]"} [${renderMode.name.toUpperCase()}] [${zoom.toStringAsFixed(1)}x]',
           style: const Style(foreground: CharmColors.smoke),
         ),
-        Text(
-          isAnimated ? ' [Running]' : ' [Paused]',
-          style: Style(
-            foreground: isAnimated ? CharmColors.guac : CharmColors.sriracha,
-          ),
-        ),
-        Text(
-          ' [Render: ${renderMode.name.toUpperCase()}]',
-          style: const Style(foreground: CharmColors.smoke),
-        ),
-        Text(
-          ' [Zoom: ${zoom.toStringAsFixed(1)}x]',
-          style: const Style(foreground: CharmColors.smoke),
-        ),
-        Text(
-          showBackfaces ? ' [Backfaces: Show]' : ' [Backfaces: Hide]',
-          style: const Style(foreground: CharmColors.smoke),
-        ),
-      ]),
+      ),
       const SizedBox(height: 1),
       Expanded(
         child: DecoratedBox(

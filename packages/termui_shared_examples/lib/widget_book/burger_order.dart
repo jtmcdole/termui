@@ -231,7 +231,9 @@ class BurgerOrderExample extends WidgetBookExample {
           ),
         ),
         const SizedBox(height: 1, child: Text('')),
-        Expanded(child: burgerForm1),
+        Expanded(
+          child: SingleChildScrollView(childLength: 20, child: burgerForm1),
+        ),
         const SizedBox(height: 1, child: Text('')),
         SizedBox(
           height: 1,
@@ -266,7 +268,9 @@ class BurgerOrderExample extends WidgetBookExample {
           ),
         ),
         const SizedBox(height: 1, child: Text('')),
-        Expanded(child: burgerForm2),
+        Expanded(
+          child: SingleChildScrollView(childLength: 15, child: burgerForm2),
+        ),
         const SizedBox(height: 1, child: Text('')),
         SizedBox(
           height: 1,
@@ -301,7 +305,9 @@ class BurgerOrderExample extends WidgetBookExample {
           ),
         ),
         const SizedBox(height: 1, child: Text('')),
-        Expanded(child: burgerForm3),
+        Expanded(
+          child: SingleChildScrollView(childLength: 15, child: burgerForm3),
+        ),
         const SizedBox(height: 1, child: Text('')),
         SizedBox(
           height: 1,

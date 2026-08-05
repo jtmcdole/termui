@@ -6,9 +6,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:example_flutter/main.dart';
 import 'package:example_flutter/src/events.dart';
 import 'package:termui_flutter/termui_flutter.dart';
+import 'package:termui/ui/termui_debug.dart';
 import 'package:termui_shared_examples/widget_book/events.dart';
 
 void main() {
+  setUp(() {
+    debugLogError = (_) {};
+  });
+
+  tearDown(() {
+    debugLogError = null;
+  });
+
   testWidgets('App renders Glass Compositing by default', (
     WidgetTester tester,
   ) async {

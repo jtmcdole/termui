@@ -94,7 +94,7 @@ class DemoContent extends StatelessWidget {
                 left: 1,
                 top: 1,
                 width: 35,
-                height: 8,
+                height: 4,
                 child: Align(
                   alignment: Alignment.topLeft,
                   child: Text(
@@ -105,9 +105,9 @@ class DemoContent extends StatelessWidget {
               ),
               Positioned(
                 left: 1,
-                top: 3,
+                top: 2,
                 width: 35,
-                height: 6,
+                height: 3,
                 child: const StatefulCounter(),
               ),
             ]),
