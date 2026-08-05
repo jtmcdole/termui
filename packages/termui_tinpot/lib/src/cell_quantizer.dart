@@ -122,47 +122,71 @@ class CellQuantizer {
       deltaInv[i] = d2 - d1;
     }
 
-    var scoredCandidates =
-        <({SymbolCandidate candidate, int distance, bool inverted})>[
-          for (final candidate in candidates)
-            () {
-              final cMaskHigh = candidate.bitmap >>> 32;
-              final cMaskLow = candidate.bitmap & 0xFFFFFFFF;
+    final int workFactor = 5;
+    final topCandidates = List<SymbolCandidate?>.filled(workFactor, null);
+    final topDistances = List<int>.filled(workFactor, 0x7FFFFFFF);
+    final topInverted = List<bool>.filled(workFactor, false);
 
-              int errorNorm = baseErrorNorm;
-              int errorInv = baseErrorInv;
-
-              for (int i = 0; i < 32; i++) {
-                int bitHigh = (cMaskHigh >> (31 - i)) & 1;
-                errorNorm += deltaNorm[i] * bitHigh;
-                errorInv += deltaInv[i] * bitHigh;
-              }
-              for (int i = 0; i < 32; i++) {
-                int bitLow = (cMaskLow >> (31 - i)) & 1;
-                errorNorm += deltaNorm[32 + i] * bitLow;
-                errorInv += deltaInv[32 + i] * bitLow;
-              }
-
-              return errorNorm <= errorInv
-                  ? (candidate: candidate, distance: errorNorm, inverted: false)
-                  : (candidate: candidate, distance: errorInv, inverted: true);
-            }(),
-        ];
-
-    scoredCandidates.sort((a, b) {
-      int cmp = a.distance.compareTo(b.distance);
-      if (cmp != 0) return cmp;
-      int popCmp = a.candidate.popcount.compareTo(b.candidate.popcount);
-      if (popCmp != 0) return popCmp;
-      if (a.inverted != b.inverted) {
-        return a.inverted ? 1 : -1;
+    for (final candidate in candidates) {
+      final cMaskHigh = candidate.bitmap >>> 32;
+      final cMaskLow = candidate.bitmap & 0xFFFFFFFF;
+      
+      int errorNorm = baseErrorNorm;
+      int errorInv = baseErrorInv;
+      
+      for (int i = 0; i < 32; i++) {
+        int bitHigh = (cMaskHigh >> (31 - i)) & 1;
+        errorNorm += deltaNorm[i] * bitHigh;
+        errorInv += deltaInv[i] * bitHigh;
       }
-      return a.candidate.codePoint.compareTo(b.candidate.codePoint);
-    });
+      for (int i = 0; i < 32; i++) {
+        int bitLow = (cMaskLow >> (31 - i)) & 1;
+        errorNorm += deltaNorm[32 + i] * bitLow;
+        errorInv += deltaInv[32 + i] * bitLow;
+      }
 
-    int workFactor = 5;
-    if (scoredCandidates.length > workFactor) {
-      scoredCandidates = scoredCandidates.sublist(0, workFactor);
+      int dist = errorNorm <= errorInv ? errorNorm : errorInv;
+      bool inverted = errorNorm > errorInv;
+
+      int insertIdx = workFactor;
+      for (int k = 0; k < workFactor; k++) {
+        int d = topDistances[k];
+        if (dist < d) {
+          insertIdx = k;
+          break;
+        } else if (dist == d) {
+          final topCandidate = topCandidates[k];
+          if (topCandidate == null) {
+            insertIdx = k;
+            break;
+          }
+          if (candidate.popcount < topCandidate.popcount) {
+            insertIdx = k;
+            break;
+          } else if (candidate.popcount == topCandidate.popcount) {
+            if (!inverted && topInverted[k]) {
+              insertIdx = k;
+              break;
+            } else if (inverted == topInverted[k]) {
+              if (candidate.codePoint < topCandidate.codePoint) {
+                insertIdx = k;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      if (insertIdx < workFactor) {
+        for (int j = workFactor - 1; j > insertIdx; j--) {
+          topDistances[j] = topDistances[j - 1];
+          topCandidates[j] = topCandidates[j - 1];
+          topInverted[j] = topInverted[j - 1];
+        }
+        topDistances[insertIdx] = dist;
+        topCandidates[insertIdx] = candidate;
+        topInverted[insertIdx] = inverted;
+      }
     }
 
     int bestError = -1;
@@ -170,8 +194,10 @@ class CellQuantizer {
     int bestFg = c2;
     int bestBg = c1;
 
-    for (final (:candidate, :inverted, distance: _) in scoredCandidates) {
-      final invert = inverted;
+    for (int k = 0; k < workFactor; k++) {
+      final candidate = topCandidates[k];
+      if (candidate == null) break;
+      final invert = topInverted[k];
 
       int cMaskHigh = candidate.bitmap >>> 32;
       int cMaskLow = candidate.bitmap & 0xFFFFFFFF;
