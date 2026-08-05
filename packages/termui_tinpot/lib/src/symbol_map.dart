@@ -2,784 +2,638 @@ class SymbolCandidate {
   final int codePoint;
   final int bitmap;
   final int popcount;
-  SymbolCandidate({
+  const SymbolCandidate({
     required this.codePoint,
     required this.bitmap,
     required this.popcount,
   });
 }
 
-final List<SymbolCandidate> _blockSymbols = [];
-bool _initialized = false;
-
-void initSymbolMap() {
-  if (_initialized) return;
-  _initialized = true;
-  _blockSymbols.clear();
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x0020, bitmap: 0x0, popcount: 0),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2500, bitmap: 0x00000000ff000000, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2501,
-      bitmap: 0x000000ffff000000,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2502, bitmap: 0x0808080808080808, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2503,
-      bitmap: 0x1818181818181818,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2504, bitmap: 0x00000000db000000, popcount: 6),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2505,
-      bitmap: 0x000000dbdb000000,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2506, bitmap: 0x0808000808000808, popcount: 6),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2507,
-      bitmap: 0x1818001818001818,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2508, bitmap: 0x00000000aa000000, popcount: 4),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2509, bitmap: 0x000000aaaa000000, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x250a, bitmap: 0x0800080008000800, popcount: 4),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x250b, bitmap: 0x1800180018001800, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x250c, bitmap: 0x000000000f080808, popcount: 7),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x250d,
-      bitmap: 0x0000000f0f080808,
-      popcount: 11,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x250e,
-      bitmap: 0x000000001f181818,
-      popcount: 11,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x250f,
-      bitmap: 0x0000001f1f181818,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2510, bitmap: 0x00000000f8080808, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2511,
-      bitmap: 0x000000f8f8080808,
-      popcount: 13,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2512,
-      bitmap: 0x00000000f8181818,
-      popcount: 11,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2513,
-      bitmap: 0x000000f8f8181818,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2514, bitmap: 0x080808080f000000, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2515,
-      bitmap: 0x0808080f0f000000,
-      popcount: 11,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2516,
-      bitmap: 0x181818181f000000,
-      popcount: 13,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2517,
-      bitmap: 0x1818181f1f000000,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2518, bitmap: 0x08080808f8000000, popcount: 9),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2519,
-      bitmap: 0x080808f8f8000000,
-      popcount: 13,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x251a,
-      bitmap: 0x18181818f8000000,
-      popcount: 13,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x251b,
-      bitmap: 0x181818f8f8000000,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x251c,
-      bitmap: 0x080808080f080808,
-      popcount: 11,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x251d,
-      bitmap: 0x0808080f0f080808,
-      popcount: 14,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x251e,
-      bitmap: 0x181818181f080808,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x251f,
-      bitmap: 0x080808081f181818,
-      popcount: 15,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2520,
-      bitmap: 0x181818181f181818,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2521,
-      bitmap: 0x1818181f1f080808,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2522,
-      bitmap: 0x0808081f1f181818,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2523,
-      bitmap: 0x1818181f1f181818,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2524,
-      bitmap: 0x08080808f8080808,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2525,
-      bitmap: 0x080808f8f8080808,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2526,
-      bitmap: 0x18181818f8080808,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2527,
-      bitmap: 0x08080808f8181818,
-      popcount: 15,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2528,
-      bitmap: 0x18181818f8181818,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2529,
-      bitmap: 0x181818f8f8080808,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x252a,
-      bitmap: 0x080808f8f8181818,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x252b,
-      bitmap: 0x181818f8f8181818,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x252c,
-      bitmap: 0x00000000ff080808,
-      popcount: 11,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x252d,
-      bitmap: 0x000000f8ff080808,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x252e,
-      bitmap: 0x0000000fff080808,
-      popcount: 15,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x252f,
-      bitmap: 0x000000ffff080808,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2530,
-      bitmap: 0x00000000ff181818,
-      popcount: 14,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2531,
-      bitmap: 0x000000f8ff181818,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2532,
-      bitmap: 0x0000001fff181818,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2533,
-      bitmap: 0x000000ffff181818,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2534,
-      bitmap: 0x08080808ff000000,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2535,
-      bitmap: 0x080808f8ff000000,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2536,
-      bitmap: 0x0808080fff000000,
-      popcount: 15,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2537,
-      bitmap: 0x080808ffff000000,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2538,
-      bitmap: 0x18181818ff000000,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2539,
-      bitmap: 0x181818f8ff000000,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x253a,
-      bitmap: 0x1818181fff000000,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x253b,
-      bitmap: 0x181818ffff000000,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x253c,
-      bitmap: 0x08080808ff080808,
-      popcount: 15,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x253d,
-      bitmap: 0x080808f8ff080808,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x253e,
-      bitmap: 0x0808080fff080808,
-      popcount: 18,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x253f,
-      bitmap: 0x080808ffff080808,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2540,
-      bitmap: 0x18181818ff080808,
-      popcount: 19,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2541,
-      bitmap: 0x08080808ff181818,
-      popcount: 18,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2542,
-      bitmap: 0x18181818ff181818,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2543,
-      bitmap: 0x181818f8ff080808,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2544,
-      bitmap: 0x1818181fff080808,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2545,
-      bitmap: 0x080808f8ff181818,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2546,
-      bitmap: 0x0808081fff181818,
-      popcount: 22,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2547,
-      bitmap: 0x181818ffff080808,
-      popcount: 25,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2548,
-      bitmap: 0x080808ffff181818,
-      popcount: 25,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2549,
-      bitmap: 0x181818f8ff181818,
-      popcount: 25,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x254a,
-      bitmap: 0x1818181fff181818,
-      popcount: 25,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x254b,
-      bitmap: 0x181818ffff181818,
-      popcount: 28,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x254c, bitmap: 0x00000000e7000000, popcount: 6),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x254d,
-      bitmap: 0x000000e7e7000000,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x254e, bitmap: 0x0808080000080808, popcount: 6),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x254f,
-      bitmap: 0x1818180000181818,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2571, bitmap: 0x0102040810204080, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2572, bitmap: 0x8040201008040201, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2573,
-      bitmap: 0x8142241818244281,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2574, bitmap: 0x00000000f0000000, popcount: 4),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2575, bitmap: 0x0808080800000000, popcount: 4),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2576, bitmap: 0x000000000f000000, popcount: 4),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2577, bitmap: 0x0000000008080808, popcount: 4),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2578, bitmap: 0x000000f0f0000000, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2579, bitmap: 0x1818181800000000, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x257a, bitmap: 0x0000000f0f000000, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x257b, bitmap: 0x0000000018181818, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x257c,
-      bitmap: 0x0000000fff000000,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x257d,
-      bitmap: 0x0808080818181818,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x257e,
-      bitmap: 0x000000f0ff000000,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x257f,
-      bitmap: 0x1818181808080808,
-      popcount: 12,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2580,
-      bitmap: 0xffffffff00000000,
-      popcount: 32,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2581, bitmap: 0x00000000000000ff, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2582,
-      bitmap: 0x000000000000ffff,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2583,
-      bitmap: 0x0000000000ffffff,
-      popcount: 24,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2584,
-      bitmap: 0x00000000ffffffff,
-      popcount: 32,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2585,
-      bitmap: 0x000000ffffffffff,
-      popcount: 40,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2586,
-      bitmap: 0x0000ffffffffffff,
-      popcount: 48,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2587,
-      bitmap: 0x00ffffffffffffff,
-      popcount: 56,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2588,
-      bitmap: 0xffffffffffffffff,
-      popcount: 64,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2589,
-      bitmap: 0xfefefefefefefefe,
-      popcount: 56,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x258a,
-      bitmap: 0xfcfcfcfcfcfcfcfc,
-      popcount: 48,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x258b,
-      bitmap: 0xf8f8f8f8f8f8f8f8,
-      popcount: 40,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x258c,
-      bitmap: 0xf0f0f0f0f0f0f0f0,
-      popcount: 32,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x258d,
-      bitmap: 0xe0e0e0e0e0e0e0e0,
-      popcount: 24,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x258e,
-      bitmap: 0xc0c0c0c0c0c0c0c0,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x258f, bitmap: 0x8080808080808080, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2590,
-      bitmap: 0x0f0f0f0f0f0f0f0f,
-      popcount: 32,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2594, bitmap: 0xff00000000000000, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(codePoint: 0x2595, bitmap: 0x0101010101010101, popcount: 8),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2596,
-      bitmap: 0x00000000f0f0f0f0,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2597,
-      bitmap: 0x000000000f0f0f0f,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2598,
-      bitmap: 0xf0f0f0f000000000,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x2599,
-      bitmap: 0xf0f0f0f0ffffffff,
-      popcount: 48,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x259a,
-      bitmap: 0xf0f0f0f00f0f0f0f,
-      popcount: 32,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x259b,
-      bitmap: 0xfffffffff0f0f0f0,
-      popcount: 48,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x259c,
-      bitmap: 0xffffffff0f0f0f0f,
-      popcount: 48,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x259d,
-      bitmap: 0x0f0f0f0f00000000,
-      popcount: 16,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x259e,
-      bitmap: 0x0f0f0f0ff0f0f0f0,
-      popcount: 32,
-    ),
-  );
-  _blockSymbols.add(
-    SymbolCandidate(
-      codePoint: 0x259f,
-      bitmap: 0x0f0f0f0fffffffff,
-      popcount: 48,
-    ),
-  );
-}
+const List<SymbolCandidate> _blockSymbols = [
+  SymbolCandidate(codePoint: 0x0020, bitmap: 0x0, popcount: 0),
+  SymbolCandidate(
+    codePoint: 0x2500,
+    bitmap: 0x00000000ff000000,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2501,
+    bitmap: 0x000000ffff000000,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2502,
+    bitmap: 0x0808080808080808,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2503,
+    bitmap: 0x1818181818181818,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2504,
+    bitmap: 0x00000000db000000,
+    popcount: 6,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2505,
+    bitmap: 0x000000dbdb000000,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2506,
+    bitmap: 0x0808000808000808,
+    popcount: 6,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2507,
+    bitmap: 0x1818001818001818,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2508,
+    bitmap: 0x00000000aa000000,
+    popcount: 4,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2509,
+    bitmap: 0x000000aaaa000000,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x250a,
+    bitmap: 0x0800080008000800,
+    popcount: 4,
+  ),
+  SymbolCandidate(
+    codePoint: 0x250b,
+    bitmap: 0x1800180018001800,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x250c,
+    bitmap: 0x000000000f080808,
+    popcount: 7,
+  ),
+  SymbolCandidate(
+    codePoint: 0x250d,
+    bitmap: 0x0000000f0f080808,
+    popcount: 11,
+  ),
+  SymbolCandidate(
+    codePoint: 0x250e,
+    bitmap: 0x000000001f181818,
+    popcount: 11,
+  ),
+  SymbolCandidate(
+    codePoint: 0x250f,
+    bitmap: 0x0000001f1f181818,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2510,
+    bitmap: 0x00000000f8080808,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2511,
+    bitmap: 0x000000f8f8080808,
+    popcount: 13,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2512,
+    bitmap: 0x00000000f8181818,
+    popcount: 11,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2513,
+    bitmap: 0x000000f8f8181818,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2514,
+    bitmap: 0x080808080f000000,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2515,
+    bitmap: 0x0808080f0f000000,
+    popcount: 11,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2516,
+    bitmap: 0x181818181f000000,
+    popcount: 13,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2517,
+    bitmap: 0x1818181f1f000000,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2518,
+    bitmap: 0x08080808f8000000,
+    popcount: 9,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2519,
+    bitmap: 0x080808f8f8000000,
+    popcount: 13,
+  ),
+  SymbolCandidate(
+    codePoint: 0x251a,
+    bitmap: 0x18181818f8000000,
+    popcount: 13,
+  ),
+  SymbolCandidate(
+    codePoint: 0x251b,
+    bitmap: 0x181818f8f8000000,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x251c,
+    bitmap: 0x080808080f080808,
+    popcount: 11,
+  ),
+  SymbolCandidate(
+    codePoint: 0x251d,
+    bitmap: 0x0808080f0f080808,
+    popcount: 14,
+  ),
+  SymbolCandidate(
+    codePoint: 0x251e,
+    bitmap: 0x181818181f080808,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x251f,
+    bitmap: 0x080808081f181818,
+    popcount: 15,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2520,
+    bitmap: 0x181818181f181818,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2521,
+    bitmap: 0x1818181f1f080808,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2522,
+    bitmap: 0x0808081f1f181818,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2523,
+    bitmap: 0x1818181f1f181818,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2524,
+    bitmap: 0x08080808f8080808,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2525,
+    bitmap: 0x080808f8f8080808,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2526,
+    bitmap: 0x18181818f8080808,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2527,
+    bitmap: 0x08080808f8181818,
+    popcount: 15,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2528,
+    bitmap: 0x18181818f8181818,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2529,
+    bitmap: 0x181818f8f8080808,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x252a,
+    bitmap: 0x080808f8f8181818,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x252b,
+    bitmap: 0x181818f8f8181818,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x252c,
+    bitmap: 0x00000000ff080808,
+    popcount: 11,
+  ),
+  SymbolCandidate(
+    codePoint: 0x252d,
+    bitmap: 0x000000f8ff080808,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x252e,
+    bitmap: 0x0000000fff080808,
+    popcount: 15,
+  ),
+  SymbolCandidate(
+    codePoint: 0x252f,
+    bitmap: 0x000000ffff080808,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2530,
+    bitmap: 0x00000000ff181818,
+    popcount: 14,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2531,
+    bitmap: 0x000000f8ff181818,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2532,
+    bitmap: 0x0000001fff181818,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2533,
+    bitmap: 0x000000ffff181818,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2534,
+    bitmap: 0x08080808ff000000,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2535,
+    bitmap: 0x080808f8ff000000,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2536,
+    bitmap: 0x0808080fff000000,
+    popcount: 15,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2537,
+    bitmap: 0x080808ffff000000,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2538,
+    bitmap: 0x18181818ff000000,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2539,
+    bitmap: 0x181818f8ff000000,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x253a,
+    bitmap: 0x1818181fff000000,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x253b,
+    bitmap: 0x181818ffff000000,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x253c,
+    bitmap: 0x08080808ff080808,
+    popcount: 15,
+  ),
+  SymbolCandidate(
+    codePoint: 0x253d,
+    bitmap: 0x080808f8ff080808,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x253e,
+    bitmap: 0x0808080fff080808,
+    popcount: 18,
+  ),
+  SymbolCandidate(
+    codePoint: 0x253f,
+    bitmap: 0x080808ffff080808,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2540,
+    bitmap: 0x18181818ff080808,
+    popcount: 19,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2541,
+    bitmap: 0x08080808ff181818,
+    popcount: 18,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2542,
+    bitmap: 0x18181818ff181818,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2543,
+    bitmap: 0x181818f8ff080808,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2544,
+    bitmap: 0x1818181fff080808,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2545,
+    bitmap: 0x080808f8ff181818,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2546,
+    bitmap: 0x0808081fff181818,
+    popcount: 22,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2547,
+    bitmap: 0x181818ffff080808,
+    popcount: 25,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2548,
+    bitmap: 0x080808ffff181818,
+    popcount: 25,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2549,
+    bitmap: 0x181818f8ff181818,
+    popcount: 25,
+  ),
+  SymbolCandidate(
+    codePoint: 0x254a,
+    bitmap: 0x1818181fff181818,
+    popcount: 25,
+  ),
+  SymbolCandidate(
+    codePoint: 0x254b,
+    bitmap: 0x181818ffff181818,
+    popcount: 28,
+  ),
+  SymbolCandidate(
+    codePoint: 0x254c,
+    bitmap: 0x00000000e7000000,
+    popcount: 6,
+  ),
+  SymbolCandidate(
+    codePoint: 0x254d,
+    bitmap: 0x000000e7e7000000,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x254e,
+    bitmap: 0x0808080000080808,
+    popcount: 6,
+  ),
+  SymbolCandidate(
+    codePoint: 0x254f,
+    bitmap: 0x1818180000181818,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2571,
+    bitmap: 0x0102040810204080,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2572,
+    bitmap: 0x8040201008040201,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2573,
+    bitmap: 0x8142241818244281,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2574,
+    bitmap: 0x00000000f0000000,
+    popcount: 4,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2575,
+    bitmap: 0x0808080800000000,
+    popcount: 4,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2576,
+    bitmap: 0x000000000f000000,
+    popcount: 4,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2577,
+    bitmap: 0x0000000008080808,
+    popcount: 4,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2578,
+    bitmap: 0x000000f0f0000000,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2579,
+    bitmap: 0x1818181800000000,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x257a,
+    bitmap: 0x0000000f0f000000,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x257b,
+    bitmap: 0x0000000018181818,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x257c,
+    bitmap: 0x0000000fff000000,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x257d,
+    bitmap: 0x0808080818181818,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x257e,
+    bitmap: 0x000000f0ff000000,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x257f,
+    bitmap: 0x1818181808080808,
+    popcount: 12,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2580,
+    bitmap: 0xffffffff00000000,
+    popcount: 32,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2581,
+    bitmap: 0x00000000000000ff,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2582,
+    bitmap: 0x000000000000ffff,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2583,
+    bitmap: 0x0000000000ffffff,
+    popcount: 24,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2584,
+    bitmap: 0x00000000ffffffff,
+    popcount: 32,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2585,
+    bitmap: 0x000000ffffffffff,
+    popcount: 40,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2586,
+    bitmap: 0x0000ffffffffffff,
+    popcount: 48,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2587,
+    bitmap: 0x00ffffffffffffff,
+    popcount: 56,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2588,
+    bitmap: 0xffffffffffffffff,
+    popcount: 64,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2589,
+    bitmap: 0xfefefefefefefefe,
+    popcount: 56,
+  ),
+  SymbolCandidate(
+    codePoint: 0x258a,
+    bitmap: 0xfcfcfcfcfcfcfcfc,
+    popcount: 48,
+  ),
+  SymbolCandidate(
+    codePoint: 0x258b,
+    bitmap: 0xf8f8f8f8f8f8f8f8,
+    popcount: 40,
+  ),
+  SymbolCandidate(
+    codePoint: 0x258c,
+    bitmap: 0xf0f0f0f0f0f0f0f0,
+    popcount: 32,
+  ),
+  SymbolCandidate(
+    codePoint: 0x258d,
+    bitmap: 0xe0e0e0e0e0e0e0e0,
+    popcount: 24,
+  ),
+  SymbolCandidate(
+    codePoint: 0x258e,
+    bitmap: 0xc0c0c0c0c0c0c0c0,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x258f,
+    bitmap: 0x8080808080808080,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2590,
+    bitmap: 0x0f0f0f0f0f0f0f0f,
+    popcount: 32,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2594,
+    bitmap: 0xff00000000000000,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2595,
+    bitmap: 0x0101010101010101,
+    popcount: 8,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2596,
+    bitmap: 0x00000000f0f0f0f0,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2597,
+    bitmap: 0x000000000f0f0f0f,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2598,
+    bitmap: 0xf0f0f0f000000000,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x2599,
+    bitmap: 0xf0f0f0f0ffffffff,
+    popcount: 48,
+  ),
+  SymbolCandidate(
+    codePoint: 0x259a,
+    bitmap: 0xf0f0f0f00f0f0f0f,
+    popcount: 32,
+  ),
+  SymbolCandidate(
+    codePoint: 0x259b,
+    bitmap: 0xfffffffff0f0f0f0,
+    popcount: 48,
+  ),
+  SymbolCandidate(
+    codePoint: 0x259c,
+    bitmap: 0xffffffff0f0f0f0f,
+    popcount: 48,
+  ),
+  SymbolCandidate(
+    codePoint: 0x259d,
+    bitmap: 0x0f0f0f0f00000000,
+    popcount: 16,
+  ),
+  SymbolCandidate(
+    codePoint: 0x259e,
+    bitmap: 0x0f0f0f0ff0f0f0f0,
+    popcount: 32,
+  ),
+  SymbolCandidate(
+    codePoint: 0x259f,
+    bitmap: 0x0f0f0f0fffffffff,
+    popcount: 48,
+  ),
+];
 
 class SymbolMap {
   List<SymbolCandidate> get blockSymbols => _blockSymbols;
-  SymbolMap() {
-    initSymbolMap();
-  }
+  const SymbolMap();
 }
