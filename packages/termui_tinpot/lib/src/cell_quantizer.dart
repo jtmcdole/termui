@@ -130,10 +130,10 @@ class CellQuantizer {
     for (final candidate in candidates) {
       final cMaskHigh = candidate.bitmap >>> 32;
       final cMaskLow = candidate.bitmap & 0xFFFFFFFF;
-      
+
       int errorNorm = baseErrorNorm;
       int errorInv = baseErrorInv;
-      
+
       for (int i = 0; i < 32; i++) {
         int bitHigh = (cMaskHigh >> (31 - i)) & 1;
         errorNorm += deltaNorm[i] * bitHigh;
