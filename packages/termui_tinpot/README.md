@@ -1,6 +1,6 @@
 # Tinpot
 
-A high-performance pure Dart engine for converting images to ANSI terminal text using structural symbols, inspired by [Chafa](https://hpjansson.org/chafa/). 
+A high-performance pure Dart engine for converting images to ANSI terminal text using structural symbols, inspired by [Chafa](https://hpjansson.org/chafa/).
 
 Tinpot is designed to integrate seamlessly with Dart CLI applications (like those built with `termui`), allowing you to render rich, colorful images directly into your terminal. By utilizing structural block symbols (such as ` `, `▀`, `▄`, `█`) and accurate DIN99d color space evaluation, it creates a fast, surprisingly high-fidelity approximation of images for standard TTY environments.
 
@@ -20,7 +20,7 @@ import 'package:termui_tinpot/termui_tinpot.dart';
 
 void main() {
   final image = img.decodeImage(File('image.png').readAsBytesSync())!;
-  
+
   // Converts image to a 2D array of terminal cells (60 columns, auto-scaled rows)
   final engine = TermuiTinpot();
   final grid = engine.convert(image, 60, (60 / (image.width / image.height) / 2).floor());

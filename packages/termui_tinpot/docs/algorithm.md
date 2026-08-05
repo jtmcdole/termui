@@ -3,7 +3,7 @@
 This document outlines the pipeline for converting a True Color (24-bit) image into an optimal set of ANSI terminal characters, mirroring the internal logic of the C `tinpot` library.
 
 ## 1. Aspect Ratio & Image Scaling
-Terminals render physical cells that are typically twice as tall as they are wide (a 1:2 aspect ratio). 
+Terminals render physical cells that are typically twice as tall as they are wide (a 1:2 aspect ratio).
 To preserve the image's proportions:
 1. The target grid width (in cells) is defined by the user (e.g., 85).
 2. The target grid height is calculated using the formula: `columns / (imageAspect * 2.0)`.
@@ -34,6 +34,6 @@ For the Top 5 structural candidates, we evaluate exactly how well they represent
 1. Using the candidate's specific 64-bit mask, we partition the original 64 pixels back into Foreground and Background sets.
 2. We calculate the true Arithmetic Mean (average) color for the foreground pixels, and the mean color for the background pixels.
 3. We compute the total error by summing the squared distance of each original pixel to its assigned mean.
-4. The candidate with the absolute lowest error is selected as the winner. Its calculated mean colors become the ANSI foreground and background colors printed to the terminal alongside the winning character. 
+4. The candidate with the absolute lowest error is selected as the winner. Its calculated mean colors become the ANSI foreground and background colors printed to the terminal alongside the winning character.
 
 *(Note: In the event of a tie—for example, if the cell is perfectly uniform, causing `Space` and `Inverted Solid Block` to both yield 0 error—we rely on a deterministic tie-breaker that prefers standard, non-inverted symbols like `Space` to keep the ANSI output clean.)*

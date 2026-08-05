@@ -94,44 +94,6 @@ class CellQuantizer {
         ? ColorMath.rgbToDin99d((c2 >> 16) & 0xFF, (c2 >> 8) & 0xFF, c2 & 0xFF)
         : 0;
 
-    int idealMaskHigh = 0;
-    int idealMaskLow = 0;
-    for (int i = 0; i < 64; i++) {
-      int d1 = useDin99d
-          ? ColorMath.distanceSqDin99d(
-              pixelsDin99d![i],
-              ColorMath.rgbToDin99d(
-                (c1 >> 16) & 0xFF,
-                (c1 >> 8) & 0xFF,
-                c1 & 0xFF,
-              ),
-            )
-          : _distSqRgb(pixelsRgb[i], c1);
-      int d2 = useDin99d
-          ? ColorMath.distanceSqDin99d(pixelsDin99d![i], c2Din)
-          : _distSqRgb(pixelsRgb[i], c2);
-      if (d2 < d1) {
-        if (i < 32) {
-          idealMaskHigh |= (1 << (31 - i));
-        } else {
-          idealMaskLow |= (1 << (31 - (i - 32)));
-        }
-      }
-    }
-
-    int invMaskHigh = (~idealMaskHigh) & 0xFFFFFFFF;
-    int invMaskLow = (~idealMaskLow) & 0xFFFFFFFF;
-
-    int popcount32(int x) {
-      x &= 0xFFFFFFFF;
-      x -= ((x >>> 1) & 0x55555555);
-      x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
-      x = (x + (x >>> 4)) & 0x0f0f0f0f;
-      x += (x >>> 8);
-      x += (x >>> 16);
-      return x & 0x3f;
-    }
-
     int c1Din = useDin99d
         ? ColorMath.rgbToDin99d((c1 >> 16) & 0xFF, (c1 >> 8) & 0xFF, c1 & 0xFF)
         : 0;
@@ -139,10 +101,11 @@ class CellQuantizer {
     // Precompute distances for each pixel to c1 and c2
     final distC1 = List<int>.filled(64, 0);
     final distC2 = List<int>.filled(64, 0);
+    final din99dArray = pixelsDin99d;
     for (int i = 0; i < 64; i++) {
-      if (useDin99d) {
-        distC1[i] = ColorMath.distanceSqDin99d(pixelsDin99d![i], c1Din);
-        distC2[i] = ColorMath.distanceSqDin99d(pixelsDin99d![i], c2Din);
+      if (useDin99d && din99dArray != null) {
+        distC1[i] = ColorMath.distanceSqDin99d(din99dArray[i], c1Din);
+        distC2[i] = ColorMath.distanceSqDin99d(din99dArray[i], c2Din);
       } else {
         distC1[i] = _distSqRgb(pixelsRgb[i], c1);
         distC2[i] = _distSqRgb(pixelsRgb[i], c2);
@@ -155,10 +118,10 @@ class CellQuantizer {
             () {
               final cMaskHigh = candidate.bitmap >>> 32;
               final cMaskLow = candidate.bitmap & 0xFFFFFFFF;
-              
+
               int errorNorm = 0;
               int errorInv = 0;
-              
+
               for (int i = 0; i < 32; i++) {
                 bool isFg = ((cMaskHigh >> (31 - i)) & 1) == 1;
                 errorNorm += isFg ? distC1[i] : distC2[i];
