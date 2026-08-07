@@ -1,0 +1,46 @@
+name: termui_tinpot_example
+description: Example application demonstrating termui_tinpot usage in CLI and Flutter.
+version: 0.1.0
+publish_to: 'none'
+
+resolution: workspace
+
+environment:
+  sdk: ">=3.11.0 <4.0.0"
+  flutter: ">=3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  termui: ^0.7.11
+  termui_flutter: ^0.6.16
+  termui_tinpot: ^0.1.0
+  image: ^4.5.4
+  desktop_drop: ^0.7.1
+  cross_file: ^0.3.5+4
+  clock: ^1.1.1
+  file: ^7.0.0
+  termui_recorder: ^0.5.11+14
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  termui_test: ^0.2.12+15
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - fonts/CascadiaMonoPL.ttf
+    - fonts/MesloLGS_NF_Regular.ttf
+    - fonts/NotoSansBraille-Regular.ttf
+  fonts:
+    - family: Cascadia Mono
+      fonts:
+        - asset: fonts/CascadiaMonoPL.ttf
+    - family: MesloLGS NF
+      fonts:
+        - asset: fonts/MesloLGS_NF_Regular.ttf
+    - family: Noto Sans Braille
+      fonts:
+        - asset: fonts/NotoSansBraille-Regular.ttf

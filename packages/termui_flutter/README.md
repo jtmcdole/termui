@@ -63,6 +63,11 @@ class Terminal extends StatefulWidget {
 }
 ```
 
+> [!WARNING]
+> **CRITICAL FONT REQUIREMENT**: You **must** bundle a strict 1:2 aspect-ratio CLI font (such as `Cascadia Mono` or `MesloLGS NF`) in your application's `pubspec.yaml` and pass it to the `fontFamily` property.
+>
+> If you fail to bundle the font asset, Flutter will silently fall back to a system font. Standard system fonts typically have non-1:2 aspect ratios (e.g., 9x15) which will stretch or squash your UI layout (turning circles into ovals). Furthermore, standard fonts do not properly tile block and box-drawing elements (`█`, `▄`, `▖`), which will cause 1-pixel horizontal and vertical "bleeding" seams to appear across your terminal grid.
+
 ### Lifecycle & Hosting Pipeline
 
 1. **Initialization (`initState`)**:

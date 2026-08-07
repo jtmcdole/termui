@@ -135,8 +135,8 @@ class CellQuantizer {
     _topInverted.fillRange(0, workFactor, false);
 
     for (final candidate in candidates) {
-      final cMaskHigh = candidate.bitmap >>> 32;
-      final cMaskLow = candidate.bitmap & 0xFFFFFFFF;
+      final cMaskHigh = candidate.bitmapHigh;
+      final cMaskLow = candidate.bitmapLow;
 
       int errorNorm = baseErrorNorm;
       int errorInv = baseErrorInv;
@@ -206,8 +206,8 @@ class CellQuantizer {
       if (candidate == null) break;
       final invert = _topInverted[k];
 
-      int cMaskHigh = candidate.bitmap >>> 32;
-      int cMaskLow = candidate.bitmap & 0xFFFFFFFF;
+      int cMaskHigh = candidate.bitmapHigh;
+      int cMaskLow = candidate.bitmapLow;
 
       int highBits = invert ? (~cMaskHigh & 0xFFFFFFFF) : cMaskHigh;
       int lowBits = invert ? (~cMaskLow & 0xFFFFFFFF) : cMaskLow;

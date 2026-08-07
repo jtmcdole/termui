@@ -1,7 +1,9 @@
-import 'package:image/image.dart' as img;
-import 'symbol_map.dart';
-import 'cell_quantizer.dart';
+import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:image/image.dart' as img;
+import 'package:termui/termui.dart';
+import 'cell_quantizer.dart';
+import 'symbol_map.dart';
 
 typedef TinpotOutputCell = ({
   String character,
@@ -13,22 +15,18 @@ class TermuiTinpot {
   final SymbolMap symbolMap;
   final int workFactor;
 
+  static final int _traceConvertId = Tracer.registerString('Tinpot:convert');
+  static final int _traceResizeId = Tracer.registerString('Tinpot:copyResize');
+  static final int _traceRowId = Tracer.registerString('Tinpot:quantizeRow');
+
   TermuiTinpot({SymbolMap? symbolMap, this.workFactor = 5})
     : symbolMap = symbolMap ?? SymbolMap();
-
-  static const canonicalBlocks = {
-    0x0020, // Space
-    0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, // Lower blocks
-    0x2589, 0x258a, 0x258b, 0x258c, 0x258d, 0x258e, 0x258f, // Left blocks
-    0x2596, 0x2597, 0x2598, 0x259d, // Quadrants
-    0x259A, // Quadrant upper left and lower right (▚)
-    0x259E, // Quadrant upper right and lower left (▞)
-  };
 
   late final List<SymbolCandidate> candidates = symbolMap.blockSymbols
       .where(
         (s) =>
-            canonicalBlocks.contains(s.codePoint) ||
+            s.codePoint == 0x0020 ||
+            (s.codePoint >= 0x2580 && s.codePoint <= 0x259F) ||
             (s.codePoint >= 0x2500 &&
                 s.codePoint <= 0x257F &&
                 !(s.codePoint >= 0x2504 &&
@@ -39,43 +37,51 @@ class TermuiTinpot {
       ) // Exclude single/half dashes (TAG_DOT)
       .toList();
 
-  /// Converts an image into a grid of terminal characters.
-  /// [columns] and [rows] define the size of the output grid.
-  /// Each character cell corresponds to an 8x8 pixel block internally.
-  List<List<TinpotOutputCell>> convert(
+  /// Converts an image directly into a native [Buffer] of [columns] by [rows].
+  /// If [targetBuffer] is provided, cell values are written into [targetBuffer].
+  Buffer convertBuffer(
     img.Image image,
     int columns,
     int rows, {
+    Buffer? targetBuffer,
     bool useMedian = false,
     bool useDin99d = false,
   }) {
-    if (columns <= 0 || rows <= 0) return [];
+    if (columns <= 0 || rows <= 0) return Buffer.blank(0, 0);
+
+    Tracer.record(_traceConvertId, Phase.begin, TraceCategory.paint);
 
     // 1. Scale the image to match the terminal aspect ratio and grid size.
     // Each terminal cell is 8x8 pixels.
     final targetWidth = columns * 8;
     final targetHeight = rows * 8;
 
+    Tracer.record(_traceResizeId, Phase.begin, TraceCategory.paint);
     final scaled = img.copyResize(
       image,
       width: targetWidth,
       height: targetHeight,
       interpolation: img.Interpolation.linear,
     );
+    Tracer.record(_traceResizeId, Phase.end, TraceCategory.paint);
 
     final quantizer = CellQuantizer(workFactor: workFactor);
     final pixelsRgb = Uint32List(64);
 
-    final grid = <List<TinpotOutputCell>>[];
+    final buffer = targetBuffer ?? Buffer.blank(columns, rows);
 
-    for (int cellY = 0; cellY < rows; cellY++) {
-      final row = <TinpotOutputCell>[];
-      for (int cellX = 0; cellX < columns; cellX++) {
+    final p = scaled.getPixel(0, 0);
+
+    final int paintRows = math.min(rows, buffer.height);
+    final int paintCols = math.min(columns, buffer.width);
+    for (int cellY = 0; cellY < paintRows; cellY++) {
+      Tracer.record(_traceRowId, Phase.begin, TraceCategory.paint);
+      for (int cellX = 0; cellX < paintCols; cellX++) {
         int pIdx = 0;
 
         for (int py = 0; py < 8; py++) {
           for (int px = 0; px < 8; px++) {
-            final pixel = scaled.getPixel(cellX * 8 + px, cellY * 8 + py);
+            final pixel = scaled.getPixel(cellX * 8 + px, cellY * 8 + py, p);
 
             var a = pixel.a.toInt();
             var r = pixel.r.toInt();
@@ -94,15 +100,56 @@ class TermuiTinpot {
           }
         }
 
-        // Quantize cell extracting average colors and exhaustively finding the best shape
-        row.add(
-          quantizer.quantize(
-            pixelsRgb,
-            candidates,
-            useMedian: useMedian,
-            useDin99d: useDin99d,
-          ),
+        // Quantize cell extracting average colors and finding the best block character
+        final cell = quantizer.quantize(
+          pixelsRgb,
+          candidates,
+          useMedian: useMedian,
+          useDin99d: useDin99d,
         );
+
+        buffer.setCell(
+          cellX,
+          cellY,
+          cell.character,
+          cell.fgColorArgb,
+          cell.bgColorArgb,
+          Modifier.transparent,
+        );
+      }
+      Tracer.record(_traceRowId, Phase.end, TraceCategory.paint);
+    }
+
+    Tracer.record(_traceConvertId, Phase.end, TraceCategory.paint);
+
+    return buffer;
+  }
+
+  /// Converts an image into a grid of [TinpotOutputCell].
+  List<List<TinpotOutputCell>> convert(
+    img.Image image,
+    int columns,
+    int rows, {
+    bool useMedian = false,
+    bool useDin99d = false,
+  }) {
+    final buffer = convertBuffer(
+      image,
+      columns,
+      rows,
+      useMedian: useMedian,
+      useDin99d: useDin99d,
+    );
+
+    final grid = <List<TinpotOutputCell>>[];
+    for (int y = 0; y < buffer.height; y++) {
+      final row = <TinpotOutputCell>[];
+      for (int x = 0; x < buffer.width; x++) {
+        row.add((
+          character: buffer.getCharacter(x, y),
+          fgColorArgb: buffer.getForeground(x, y),
+          bgColorArgb: buffer.getBackground(x, y),
+        ));
       }
       grid.add(row);
     }

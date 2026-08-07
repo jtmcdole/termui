@@ -1,3 +1,4 @@
+// ignore_for_file: avoid_print
 import 'package:file/local.dart';
 import 'package:image/image.dart' as img;
 import 'package:termui/ui/buffer.dart';

@@ -74,6 +74,7 @@ export 'ui/widgets/display/paginator.dart';
 export 'ui/widgets/display/table.dart';
 export 'ui/widgets/display/tree.dart';
 export 'ui/widgets/display/help.dart';
+export 'ui/widgets/display/buffer_widget.dart';
 export 'ui/widgets/core/modal_overlay.dart';
 export 'ui/widgets/core/builder.dart';
 export 'ui/widgets/core/overlay.dart';

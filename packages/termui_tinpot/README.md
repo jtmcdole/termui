@@ -29,3 +29,6 @@ void main() {
   // ...
 }
 ```
+
+> [!WARNING]
+> **Flutter Integration Note**: If you are rendering the generated ANSI grid using `termui_flutter`, you must ensure your Flutter app bundles and uses a strict 1:2 aspect ratio font (like `Cascadia Mono` or `MesloLGS NF`). Without it, the Flutter text renderer will skew the aspect ratio (squashing circular images into ovals) and introduce line gaps/bleeding between block character elements.
