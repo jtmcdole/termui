@@ -18,17 +18,20 @@ void main() {
     final candidates = [
       SymbolCandidate(
         codePoint: 0x2584,
-        bitmap: 0x00000000FFFFFFFF,
+        bitmapHigh: 0x00000000,
+        bitmapLow: 0xFFFFFFFF,
         popcount: 32,
       ), // Lower half block
       SymbolCandidate(
         codePoint: 0x2588,
-        bitmap: 0xFFFFFFFFFFFFFFFF,
+        bitmapHigh: 0xFFFFFFFF,
+        bitmapLow: 0xFFFFFFFF,
         popcount: 64,
       ), // Full block
       SymbolCandidate(
         codePoint: 0x0020,
-        bitmap: 0x0000000000000000,
+        bitmapHigh: 0x00000000,
+        bitmapLow: 0x00000000,
         popcount: 0,
       ), // Space
     ];

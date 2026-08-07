@@ -46,9 +46,10 @@ class Buffer {
   /// Stack of active canvas clip rectangles.
   final List<Rect> _clipStack = [];
 
+  late Rect _boundsClip = Rect(0, 0, width, height);
+
   /// Returns the current active clip rectangle, defaulting to full buffer bounds if stack is empty.
-  Rect get activeClip =>
-      _clipStack.isEmpty ? Rect(0, 0, width, height) : _clipStack.last;
+  Rect get activeClip => _clipStack.isEmpty ? _boundsClip : _clipStack.last;
 
   /// Pushes a new clip rectangle onto the stack, intersecting it with the current active clip.
   void pushClip(Rect clipRect) {
@@ -96,6 +97,13 @@ class Buffer {
   }
 
   /// Sets character at coordinates.
+  ///
+  /// **Performance Warning:**
+  /// Invoking individual property setters ([setCharacter], [setForeground], etc.)
+  /// inside a per-cell hot render loop causes severe thrashing due to redundant
+  /// bounds checking and method overhead. Prefer using [setCell] to write all
+  /// attributes at once. For massive regional updates, manipulate the raw 1D arrays
+  /// ([characters] and [attributes]) directly via `List.setRange()`.
   void setCharacter(int x, int y, String char) {
     if (isCellValid(x, y)) {
       characters[y * width + x] = char;
@@ -103,6 +111,13 @@ class Buffer {
   }
 
   /// Sets foreground color at coordinates.
+  ///
+  /// **Performance Warning:**
+  /// Invoking individual property setters ([setCharacter], [setForeground], etc.)
+  /// inside a per-cell hot render loop causes severe thrashing due to redundant
+  /// bounds checking and method overhead. Prefer using [setCell] to write all
+  /// attributes at once. For massive regional updates, manipulate the raw 1D arrays
+  /// ([characters] and [attributes]) directly via `List.setRange()`.
   void setForeground(int x, int y, int fg) {
     if (isCellValid(x, y)) {
       attributes[(y * width + x) * 3 + 0] = fg;
@@ -110,6 +125,13 @@ class Buffer {
   }
 
   /// Sets background color at coordinates.
+  ///
+  /// **Performance Warning:**
+  /// Invoking individual property setters ([setCharacter], [setForeground], etc.)
+  /// inside a per-cell hot render loop causes severe thrashing due to redundant
+  /// bounds checking and method overhead. Prefer using [setCell] to write all
+  /// attributes at once. For massive regional updates, manipulate the raw 1D arrays
+  /// ([characters] and [attributes]) directly via `List.setRange()`.
   void setBackground(int x, int y, int bg) {
     if (isCellValid(x, y)) {
       attributes[(y * width + x) * 3 + 1] = bg;
@@ -117,6 +139,13 @@ class Buffer {
   }
 
   /// Sets modifiers at coordinates.
+  ///
+  /// **Performance Warning:**
+  /// Invoking individual property setters ([setCharacter], [setForeground], etc.)
+  /// inside a per-cell hot render loop causes severe thrashing due to redundant
+  /// bounds checking and method overhead. Prefer using [setCell] to write all
+  /// attributes at once. For massive regional updates, manipulate the raw 1D arrays
+  /// ([characters] and [attributes]) directly via `List.setRange()`.
   void setModifiers(int x, int y, int mod) {
     if (isCellValid(x, y)) {
       attributes[(y * width + x) * 3 + 2] = mod;
@@ -284,6 +313,7 @@ class Buffer {
       height = newHeight;
       characters = newChars;
       attributes = newAttributes;
+      _boundsClip = Rect(0, 0, width, height);
     } finally {
       Tracer.record(_traceResizeId, Phase.end, TraceCategory.layout);
     }
@@ -856,4 +886,206 @@ bool isWideCodePoint(int codePoint) {
   if (codePoint >= 0x1F000 && codePoint <= 0x1F2FF) return true;
 
   return false;
+}
+
+/// Extensions for serializing [Buffer] to and from ANSI sequence strings.
+extension BufferAnsiSerialization on Buffer {
+  /// Parses an ANSI sequence string (supporting 24-bit SGR color codes) into a [Buffer].
+  static Buffer fromAnsi(String ansiText) {
+    final cells = <List<({String char, int fg, int bg})>>[];
+    var currentRow = <({String char, int fg, int bg})>[];
+
+    int currentFg = 0xFFFFFFFF;
+    int currentBg = 0xFF000000;
+
+    int idx = 0;
+    final len = ansiText.length;
+
+    while (idx < len) {
+      switch (ansiText.codeUnitAt(idx)) {
+        case 0x1B:
+          idx++;
+          if (idx < len && ansiText.codeUnitAt(idx) == 0x5B) {
+            idx++;
+            int start = idx;
+            while (idx < len && ansiText.codeUnitAt(idx) != 0x6D) {
+              idx++;
+            }
+            if (idx < len) {
+              final paramsStr = ansiText.substring(start, idx);
+              idx++;
+
+              if (paramsStr.isEmpty || paramsStr == '0') {
+                currentFg = 0xFFFFFFFF;
+                currentBg = 0xFF000000;
+              } else {
+                int pIdx = 0;
+                int nextSemi(int from) {
+                  int s = paramsStr.indexOf(';', from);
+                  return s == -1 ? paramsStr.length : s;
+                }
+
+                while (pIdx < paramsStr.length) {
+                  int semi = nextSemi(pIdx);
+                  int code = int.tryParse(paramsStr.substring(pIdx, semi)) ?? 0;
+
+                  switch (code) {
+                    case 0:
+                      currentFg = 0xFFFFFFFF;
+                      currentBg = 0xFF000000;
+                      pIdx = semi + 1;
+                    case 38:
+                      int s2 = nextSemi(semi + 1);
+                      int type =
+                          int.tryParse(paramsStr.substring(semi + 1, s2)) ?? 0;
+                      if (type == 2) {
+                        int s3 = nextSemi(s2 + 1);
+                        int r =
+                            int.tryParse(paramsStr.substring(s2 + 1, s3)) ?? 0;
+                        int s4 = nextSemi(s3 + 1);
+                        int g =
+                            int.tryParse(paramsStr.substring(s3 + 1, s4)) ?? 0;
+                        int s5 = nextSemi(s4 + 1);
+                        int b =
+                            int.tryParse(paramsStr.substring(s4 + 1, s5)) ?? 0;
+                        currentFg = (0xFF << 24) | (r << 16) | (g << 8) | b;
+                        pIdx = s5 + 1;
+                      } else {
+                        pIdx = s2 + 1;
+                      }
+                    case 48:
+                      int s2 = nextSemi(semi + 1);
+                      int type =
+                          int.tryParse(paramsStr.substring(semi + 1, s2)) ?? 0;
+                      if (type == 2) {
+                        int s3 = nextSemi(s2 + 1);
+                        int r =
+                            int.tryParse(paramsStr.substring(s2 + 1, s3)) ?? 0;
+                        int s4 = nextSemi(s3 + 1);
+                        int g =
+                            int.tryParse(paramsStr.substring(s3 + 1, s4)) ?? 0;
+                        int s5 = nextSemi(s4 + 1);
+                        int b =
+                            int.tryParse(paramsStr.substring(s4 + 1, s5)) ?? 0;
+                        currentBg = (0xFF << 24) | (r << 16) | (g << 8) | b;
+                        pIdx = s5 + 1;
+                      } else {
+                        pIdx = s2 + 1;
+                      }
+                    default:
+                      pIdx = semi + 1;
+                  }
+                }
+              }
+            }
+          }
+        case 0x0A:
+          cells.add(currentRow);
+          currentRow = <({String char, int fg, int bg})>[];
+          idx++;
+        case final cu:
+          String char;
+          if (cu < 128 && cu != 0x0D) {
+            char = String.fromCharCode(cu);
+            idx++;
+          } else {
+            final remain = ansiText.substring(idx);
+            if (remain.isEmpty) {
+              idx = len;
+              continue;
+            }
+            char = remain.characters.first;
+            idx += char.length;
+          }
+          if (char != '\r') {
+            currentRow.add((char: char, fg: currentFg, bg: currentBg));
+          }
+      }
+    }
+
+    if (currentRow.isNotEmpty ||
+        (ansiText.isNotEmpty &&
+            ansiText.codeUnitAt(ansiText.length - 1) != 0x0A)) {
+      cells.add(currentRow);
+    }
+
+    int maxCols = 0;
+    for (final row in cells) {
+      if (row.length > maxCols) maxCols = row.length;
+    }
+
+    final buffer = Buffer.blank(maxCols, cells.length);
+    final charsArray = buffer.characters;
+    final attrsArray = buffer.attributes;
+
+    for (int y = 0; y < cells.length; y++) {
+      final row = cells[y];
+      final rowOffset = y * maxCols;
+      for (int x = 0; x < row.length; x++) {
+        final cell = row[x];
+        final idx = rowOffset + x;
+        charsArray[idx] = cell.char;
+        final attrIdx = idx * 3;
+        attrsArray[attrIdx + 0] = cell.fg;
+        attrsArray[attrIdx + 1] = cell.bg;
+      }
+    }
+
+    return buffer;
+  }
+
+  /// Serializes this [Buffer] grid into an ANSI escape sequence string.
+  String toAnsiString() {
+    final sb = StringBuffer();
+    final chars = characters;
+    final attrs = attributes;
+    final w = width;
+    final h = height;
+
+    int lastFg = -1;
+    int lastBg = -1;
+
+    for (int y = 0; y < h; y++) {
+      final rowOffset = y * w;
+      for (int x = 0; x < w; x++) {
+        final idx = rowOffset + x;
+        final char = chars[idx];
+        final attrIdx = idx * 3;
+        final fg = attrs[attrIdx];
+        final bg = attrs[attrIdx + 1];
+
+        if (fg != lastFg) {
+          final fgR = (fg >> 16) & 0xFF;
+          final fgG = (fg >> 8) & 0xFF;
+          final fgB = fg & 0xFF;
+          sb.write('\x1B[38;2;');
+          sb.write(fgR);
+          sb.write(';');
+          sb.write(fgG);
+          sb.write(';');
+          sb.write(fgB);
+          sb.write('m');
+          lastFg = fg;
+        }
+        if (bg != lastBg) {
+          final bgR = (bg >> 16) & 0xFF;
+          final bgG = (bg >> 8) & 0xFF;
+          final bgB = bg & 0xFF;
+          sb.write('\x1B[48;2;');
+          sb.write(bgR);
+          sb.write(';');
+          sb.write(bgG);
+          sb.write(';');
+          sb.write(bgB);
+          sb.write('m');
+          lastBg = bg;
+        }
+        sb.write(char);
+      }
+      sb.write('\x1B[0m\n');
+      lastFg = -1;
+      lastBg = -1;
+    }
+    return sb.toString();
+  }
 }
