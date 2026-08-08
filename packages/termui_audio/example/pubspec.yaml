@@ -12,9 +12,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  termui: ^0.7.11
-  termui_flutter: ^0.6.16
-  termui_audio: ^0.1.5
+  termui: ^0.8.0
+  termui_flutter: ^0.7.0
+  termui_audio: ^0.1.6
   path_provider: ^2.1.2
 
 dev_dependencies:

@@ -1,3 +1,10 @@
+## 0.7.0
+
+> Note: This release has breaking changes.
+
+ - **PERF**(tinpot): optimize hot loop allocations and bitwise operations.
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
 ## 0.6.16
 
  - **REFACTOR**(termui): optimize dsp loop, clean pattern match, and guard terminal focus.

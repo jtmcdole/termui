@@ -1,3 +1,11 @@
+## 0.8.0
+
+> Note: This release has breaking changes.
+
+ - **PERF**(tinpot): optimize hot loop allocations and bitwise operations.
+ - **PERF**(core): optimize render loops and defer layout clipping.
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
 ## 0.7.11
 
  - **FIX**(termui): prevent hover debug overlay from overwriting edge elements.
