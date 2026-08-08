@@ -1,3 +1,7 @@
+## 0.3.1
+
+ - **PERF**(termui_flutter): optimize TUI rendering and fix sub-pixel sampling artifacts.
+
 ## 0.3.0
 
 > Note: This release has breaking changes.

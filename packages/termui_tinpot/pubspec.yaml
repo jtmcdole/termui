@@ -1,7 +1,7 @@
 name: termui_tinpot
 description: A high-performance pure Dart engine for converting images to ANSI terminal text using structural symbols, inspired by Chafa.
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_tinpot
-version: 0.3.0
+version: 0.3.1
 
 topics:
   - cli
