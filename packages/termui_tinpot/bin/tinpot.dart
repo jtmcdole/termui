@@ -94,7 +94,7 @@ void main(List<String> arguments) async {
   if (rows < 1) rows = 1;
 
   final engine = TermuiTinpot(workFactor: workFactor);
-  final grid = engine.convert(
+  final bufferGrid = engine.convertBuffer(
     image,
     columns,
     rows,
@@ -105,22 +105,24 @@ void main(List<String> arguments) async {
   final buffer = StringBuffer();
 
   // We map the RGB colors to ANSI 24-bit escape codes.
-  for (int y = 0; y < grid.length; y++) {
-    for (int x = 0; x < grid[y].length; x++) {
-      final cell = grid[y][x];
+  for (int y = 0; y < bufferGrid.height; y++) {
+    for (int x = 0; x < bufferGrid.width; x++) {
+      final fgColorArgb = bufferGrid.getForeground(x, y);
+      final bgColorArgb = bufferGrid.getBackground(x, y);
+      final character = bufferGrid.getCharacter(x, y);
 
-      final fgR = (cell.fgColorArgb >> 16) & 0xFF;
-      final fgG = (cell.fgColorArgb >> 8) & 0xFF;
-      final fgB = cell.fgColorArgb & 0xFF;
+      final fgR = (fgColorArgb >> 16) & 0xFF;
+      final fgG = (fgColorArgb >> 8) & 0xFF;
+      final fgB = fgColorArgb & 0xFF;
 
-      final bgR = (cell.bgColorArgb >> 16) & 0xFF;
-      final bgG = (cell.bgColorArgb >> 8) & 0xFF;
-      final bgB = cell.bgColorArgb & 0xFF;
+      final bgR = (bgColorArgb >> 16) & 0xFF;
+      final bgG = (bgColorArgb >> 8) & 0xFF;
+      final bgB = bgColorArgb & 0xFF;
 
       // Escape code: ESC[38;2;R;G;Bm for FG, ESC[48;2;R;G;Bm for BG
       buffer.write('\x1B[38;2;$fgR;$fgG;${fgB}m');
       buffer.write('\x1B[48;2;$bgR;$bgG;${bgB}m');
-      buffer.write(cell.character);
+      buffer.write(character);
     }
     // Reset formatting at the end of the line
     buffer.write('\x1B[0m\n');

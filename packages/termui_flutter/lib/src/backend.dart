@@ -110,7 +110,13 @@ class FlutterTerminalBackend implements TerminalBackend {
 /// terminal.increaseFontSize(2.0);
 /// ```
 class FlutterTerminal extends core.Terminal {
-  final _eventsController = StreamController<core_event.InputEvent>.broadcast();
+  // NOTE: This MUST be sync: true!
+  // Browsers enforce a strict security model blocking `input.click()` (used by file_selector_web)
+  // unless executed synchronously within a user-gesture (mouse click / key press) stack.
+  // Using an asynchronous stream defers execution to a microtask, causing the browser to silently block the file picker.
+  final _eventsController = StreamController<core_event.InputEvent>.broadcast(
+    sync: true,
+  );
   final _initialSizeCompleter = Completer<Point<int>>();
   final _fontSizeController = StreamController<double>.broadcast();
   double _fontSize;

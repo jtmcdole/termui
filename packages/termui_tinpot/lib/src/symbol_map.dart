@@ -3,15 +3,17 @@ class SymbolCandidate {
   final int bitmapHigh;
   final int bitmapLow;
   final int popcount;
-  const SymbolCandidate({
+  final String character;
+
+  SymbolCandidate({
     required this.codePoint,
     required this.bitmapHigh,
     required this.bitmapLow,
     required this.popcount,
-  });
+  }) : character = String.fromCharCode(codePoint);
 }
 
-const List<SymbolCandidate> _blockSymbols = [
+final List<SymbolCandidate> _blockSymbols = [
   SymbolCandidate(
     codePoint: 0x0020,
     bitmapHigh: 0x00000000,

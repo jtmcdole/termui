@@ -12,7 +12,19 @@ class AnsiScreenshot {
     Style activeStyle = Style.empty;
 
     for (var y = 0; y < buffer.height; y++) {
-      for (var x = 0; x < buffer.width; x++) {
+      var lastCol = buffer.width - 1;
+      while (lastCol >= 0) {
+        final char = buffer.getCharacter(lastCol, y);
+        final bg = buffer.getBackground(lastCol, y);
+        final mods = buffer.getModifiers(lastCol, y);
+        if ((char == ' ' || char == '') && bg == 0 && mods == 0) {
+          lastCol--;
+        } else {
+          break;
+        }
+      }
+
+      for (var x = 0; x <= lastCol; x++) {
         final char = buffer.getCharacter(x, y);
         // Do not skip transparent spaces; they are needed for alignment
 
