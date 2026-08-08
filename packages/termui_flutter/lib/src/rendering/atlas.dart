@@ -604,6 +604,9 @@ class GlyphAtlas {
   /// Fallback typeface names used for font lookup.
   final List<String>? fontFamilyFallback;
 
+  /// The device pixel ratio used for rendering the atlas.
+  final double devicePixelRatio;
+
   /// The next free cell slot index in the grid.
   final int nextGridIndex;
 
@@ -613,11 +616,16 @@ class GlyphAtlas {
   /// Blank padding added around each glyph to prevent texture bleed.
   static const double padding = 2.0;
 
+  /// The actual padding used, rounded to physical boundaries.
+  double get actualPadding =>
+      (GlyphAtlasGenerator.padding * devicePixelRatio).ceilToDouble() /
+      devicePixelRatio;
+
   /// Total width of a grid column, including padding.
-  double get colWidth => cellWidth + 2 * padding;
+  double get colWidth => cellWidth + 2 * actualPadding;
 
   /// Total height of a grid row, including padding.
-  double get rowHeight => cellHeight + 2 * padding;
+  double get rowHeight => cellHeight + 2 * actualPadding;
 
   /// Creates a new [GlyphAtlas] instance.
   GlyphAtlas({
@@ -628,6 +636,7 @@ class GlyphAtlas {
     required this.fontSize,
     required this.fontFamily,
     this.fontFamilyFallback,
+    this.devicePixelRatio = 1.0,
     required this.nextGridIndex,
   });
 
@@ -677,7 +686,14 @@ class GlyphAtlas {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
 
+    canvas.scale(devicePixelRatio);
+    // The canvas is scaled up by devicePixelRatio for crisp rendering on high-DPI displays (e.g., macOS Retina, Windows scaling).
+    // Because the existing atlas image is already sized in physical pixels, we temporarily inverse the scale
+    // to draw it 1:1 onto the logical canvas and prevent double scaling.
+    canvas.save();
+    canvas.scale(1.0 / devicePixelRatio);
     canvas.drawImage(image, Offset.zero, Paint());
+    canvas.restore();
 
     final testPainter = TextPainter(
       text: TextSpan(
@@ -706,11 +722,11 @@ class GlyphAtlas {
 
       bool drawn = drawProceduralCharacter(
         canvas,
-        x + padding,
-        y + padding,
+        x + actualPadding,
+        y + actualPadding,
         targetWidth,
         cellHeight,
-        padding,
+        actualPadding,
         pg.char,
         Paint()..color = Colors.white,
       );
@@ -721,22 +737,25 @@ class GlyphAtlas {
         );
         final dx = (targetWidth - pg.painter.width) / 2;
         final dy = standardBaseline - charBaseline;
-        pg.painter.paint(canvas, Offset(x + padding + dx, y + padding + dy));
+        pg.painter.paint(
+          canvas,
+          Offset(x + actualPadding + dx, y + actualPadding + dy),
+        );
       }
 
       canvas.restore();
       updatedRects[pg.char] = Rect.fromLTWH(
-        x + padding,
-        y + padding,
-        targetWidth,
-        cellHeight,
+        (x + actualPadding) * devicePixelRatio,
+        (y + actualPadding) * devicePixelRatio,
+        targetWidth * devicePixelRatio,
+        cellHeight * devicePixelRatio,
       );
     }
 
     final picture = recorder.endRecording();
     final newImage = await picture.toImage(
-      atlasWidth.toInt(),
-      atlasHeight.toInt(),
+      (atlasWidth * devicePixelRatio).ceil(),
+      (atlasHeight * devicePixelRatio).ceil(),
     );
 
     image.dispose();
@@ -749,6 +768,7 @@ class GlyphAtlas {
       fontSize: fontSize,
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
+      devicePixelRatio: devicePixelRatio,
       nextGridIndex: totalGlyphs,
     );
   }
@@ -793,6 +813,7 @@ class GlyphAtlasGenerator {
     required double fontSize,
     required String fontFamily,
     List<String>? fontFamilyFallback,
+    double devicePixelRatio = 1.0,
   }) async {
     await Future.microtask(() {});
     final testPainter = TextPainter(
@@ -830,6 +851,7 @@ class GlyphAtlasGenerator {
       fontSize: fontSize,
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
+      devicePixelRatio: devicePixelRatio,
       nextGridIndex: 0,
     );
   }
@@ -839,8 +861,10 @@ class GlyphAtlasGenerator {
     required double fontSize,
     required String fontFamily,
     List<String>? fontFamilyFallback,
+    double devicePixelRatio = 1.0,
   }) async {
     await Future.microtask(() {});
+
     final testPainter = TextPainter(
       text: TextSpan(
         text: 'A',
@@ -854,14 +878,24 @@ class GlyphAtlasGenerator {
       textDirection: TextDirection.ltr,
     )..layout();
 
-    final cellWidth = testPainter.width.ceilToDouble();
-    final cellHeight = testPainter.height.ceilToDouble();
+    final cellWidthPhysical = (testPainter.width * devicePixelRatio)
+        .ceilToDouble();
+    final cellHeightPhysical = (testPainter.height * devicePixelRatio)
+        .ceilToDouble();
+
+    final cellWidth = cellWidthPhysical / devicePixelRatio;
+    final cellHeight = cellHeightPhysical / devicePixelRatio;
+
     final standardBaseline = testPainter.computeDistanceToActualBaseline(
       TextBaseline.alphabetic,
     );
 
-    final colWidth = cellWidth + 2 * padding;
-    final rowHeight = cellHeight + 2 * padding;
+    // Ensure padding is a physical integer so sourceRects land on exact pixels
+    final paddingPhysical = (padding * devicePixelRatio).ceilToDouble();
+    final actualPadding = paddingPhysical / devicePixelRatio;
+
+    final colWidth = cellWidth + 2 * actualPadding;
+    final rowHeight = cellHeight + 2 * actualPadding;
 
     final glyphs = <int>[];
 
@@ -939,6 +973,7 @@ class GlyphAtlasGenerator {
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
+    canvas.scale(devicePixelRatio);
     final charRects = <String, Rect>{};
 
     for (final pg in placedGlyphs) {
@@ -952,11 +987,11 @@ class GlyphAtlasGenerator {
 
       bool drawn = drawProceduralCharacter(
         canvas,
-        x + padding,
-        y + padding,
+        x + actualPadding,
+        y + actualPadding,
         targetWidth,
         cellHeight,
-        padding,
+        actualPadding,
         pg.char,
         Paint()..color = Colors.white,
       );
@@ -967,46 +1002,48 @@ class GlyphAtlasGenerator {
         );
         final dx = (targetWidth - pg.painter.width) / 2;
         final dy = standardBaseline - charBaseline;
-        pg.painter.paint(canvas, Offset(x + padding + dx, y + padding + dy));
+        pg.painter.paint(
+          canvas,
+          Offset(x + actualPadding + dx, y + actualPadding + dy),
+        );
       }
 
       canvas.restore();
       charRects[pg.char] = Rect.fromLTWH(
-        x + padding,
-        y + padding,
-        targetWidth,
-        cellHeight,
+        (x + actualPadding) * devicePixelRatio,
+        (y + actualPadding) * devicePixelRatio,
+        targetWidth * devicePixelRatio,
+        cellHeight * devicePixelRatio,
       );
     }
 
-    canvas.save();
-    canvas.clipRect(Rect.fromLTWH(whiteX, whiteY, colWidth, rowHeight));
+    // Draw the white rect, bleeding into the padding space
     canvas.drawRect(
       Rect.fromLTWH(whiteX, whiteY, colWidth, rowHeight),
       Paint()..color = Colors.white,
     );
-    canvas.restore();
     charRects['\uFFFF'] = Rect.fromLTWH(
-      whiteX + padding,
-      whiteY + padding,
-      cellWidth,
-      cellHeight,
+      (whiteX + actualPadding) * devicePixelRatio,
+      (whiteY + actualPadding) * devicePixelRatio,
+      cellWidth * devicePixelRatio,
+      cellHeight * devicePixelRatio,
     );
 
     final picture = recorder.endRecording();
-    final image = await picture.toImage(
-      atlasWidth.toInt(),
-      atlasHeight.toInt(),
+    final newImage = await picture.toImage(
+      (atlasWidth * devicePixelRatio).ceil(),
+      (atlasHeight * devicePixelRatio).ceil(),
     );
 
     return GlyphAtlas(
-      image: image,
+      image: newImage,
       charRects: charRects,
       cellWidth: cellWidth,
       cellHeight: cellHeight,
       fontSize: fontSize,
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
+      devicePixelRatio: devicePixelRatio,
       nextGridIndex: totalGlyphs,
     );
   }

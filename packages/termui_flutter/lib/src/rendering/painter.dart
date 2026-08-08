@@ -81,14 +81,19 @@ class TuiAtlasPainter extends CustomPainter {
   /// The fallback font families.
   final List<String>? fontFamilyFallback;
 
+  /// Enables sub-pixel bleeding to prevent gaps during fractional transformations. Defaults to kIsWeb.
+  final bool enableBleed;
+
   /// Constructs a [TuiAtlasPainter] targeting the supplied [buffer].
+
   TuiAtlasPainter({
     required this.buffer,
     required this.atlas,
     required this.fontFamily,
     this.fontFamilyFallback,
     required this.fallbackPainters,
-    this.onMissingGlyphs,
+    required this.onMissingGlyphs,
+    this.enableBleed = kIsWeb,
   });
 
   void _drawRawAtlasInChunks(
@@ -163,7 +168,22 @@ class TuiAtlasPainter extends CustomPainter {
     final fallbackCells = <_FallbackCell>[];
     final missingGlyphs = <String>[];
 
-    const bleedBg = 0.5;
+    final bleedBgPhysical = enableBleed
+        ? (0.5 * atlas.devicePixelRatio).ceilToDouble()
+        : 0.0;
+    final bleedBgLogical = bleedBgPhysical * (cellWidth / whiteW);
+
+    final bleedFgPhysicalBlock = enableBleed
+        ? (0.5 * atlas.devicePixelRatio).ceilToDouble()
+        : 0.0;
+    final bleedFgLogicalBlock = bleedFgPhysicalBlock / atlas.devicePixelRatio;
+    final bgScaleBlock = cellWidth / whiteW;
+    final fgScaleBlock = (cellWidth / atlas.cellWidth) / atlas.devicePixelRatio;
+
+    final bgRect0 = whiteX - bleedBgPhysical;
+    final bgRect1 = whiteY - bleedBgPhysical;
+    final bgRect2 = whiteX + whiteW + bleedBgPhysical;
+    final bgRect3 = whiteY + whiteH + bleedBgPhysical;
 
     for (var y = 0; y < rows; y++) {
       for (var x = 0; x < cols; x++) {
@@ -177,16 +197,15 @@ class TuiAtlasPainter extends CustomPainter {
         final screenY = y * cellHeight;
 
         // Background
-        final bgScale = cellWidth / whiteW;
-        _transformsBg![idx * 4 + 0] = bgScale;
+        _transformsBg![idx * 4 + 0] = bgScaleBlock;
         _transformsBg![idx * 4 + 1] = 0.0;
-        _transformsBg![idx * 4 + 2] = screenX - bleedBg * bgScale;
-        _transformsBg![idx * 4 + 3] = screenY - bleedBg * bgScale;
+        _transformsBg![idx * 4 + 2] = screenX - bleedBgLogical;
+        _transformsBg![idx * 4 + 3] = screenY - bleedBgLogical;
 
-        _rectsBg![idx * 4 + 0] = whiteX - bleedBg;
-        _rectsBg![idx * 4 + 1] = whiteY - bleedBg;
-        _rectsBg![idx * 4 + 2] = whiteX + whiteW + bleedBg;
-        _rectsBg![idx * 4 + 3] = whiteY + whiteH + bleedBg;
+        _rectsBg![idx * 4 + 0] = bgRect0;
+        _rectsBg![idx * 4 + 1] = bgRect1;
+        _rectsBg![idx * 4 + 2] = bgRect2;
+        _rectsBg![idx * 4 + 3] = bgRect3;
 
         final isReverse = Modifier.has(modifiers, Modifier.reverse);
         final bgCol = isReverse
@@ -203,8 +222,7 @@ class TuiAtlasPainter extends CustomPainter {
               final eIdx = emojiSpriteCount;
               emojiSpriteCount++;
 
-              final eScale = cellWidth / atlas.cellWidth;
-              _transformsEmoji![eIdx * 4 + 0] = eScale;
+              _transformsEmoji![eIdx * 4 + 0] = fgScaleBlock;
               _transformsEmoji![eIdx * 4 + 1] = 0.0;
               _transformsEmoji![eIdx * 4 + 2] = screenX;
               _transformsEmoji![eIdx * 4 + 3] = screenY;
@@ -235,18 +253,19 @@ class TuiAtlasPainter extends CustomPainter {
             final fgIdx = fgSpriteCount;
             fgSpriteCount++;
 
-            final bleedFg = _isBlockCharacter(char) ? 0.5 : 0.0;
+            final isBlock = _isBlockCharacter(char);
+            final bleedFgPhysical = isBlock ? bleedFgPhysicalBlock : 0.0;
+            final bleedFgLogical = isBlock ? bleedFgLogicalBlock : 0.0;
 
-            final fgScale = cellWidth / atlas.cellWidth;
-            _transformsFg![fgIdx * 4 + 0] = fgScale;
+            _transformsFg![fgIdx * 4 + 0] = fgScaleBlock;
             _transformsFg![fgIdx * 4 + 1] = 0.0;
-            _transformsFg![fgIdx * 4 + 2] = screenX - bleedFg * fgScale;
-            _transformsFg![fgIdx * 4 + 3] = screenY - bleedFg * fgScale;
+            _transformsFg![fgIdx * 4 + 2] = screenX - bleedFgLogical;
+            _transformsFg![fgIdx * 4 + 3] = screenY - bleedFgLogical;
 
-            _rectsFg![fgIdx * 4 + 0] = sourceRect.left - bleedFg;
-            _rectsFg![fgIdx * 4 + 1] = sourceRect.top - bleedFg;
-            _rectsFg![fgIdx * 4 + 2] = sourceRect.right + bleedFg;
-            _rectsFg![fgIdx * 4 + 3] = sourceRect.bottom + bleedFg;
+            _rectsFg![fgIdx * 4 + 0] = sourceRect.left - bleedFgPhysical;
+            _rectsFg![fgIdx * 4 + 1] = sourceRect.top - bleedFgPhysical;
+            _rectsFg![fgIdx * 4 + 2] = sourceRect.right + bleedFgPhysical;
+            _rectsFg![fgIdx * 4 + 3] = sourceRect.bottom + bleedFgPhysical;
 
             final fgCol = isReverse
                 ? (bgArgb == 0 ? null : bgArgb)
@@ -287,7 +306,7 @@ class TuiAtlasPainter extends CustomPainter {
       _rectsBg!,
       _colorsBg!,
       count,
-      Paint()..filterQuality = kIsWeb ? FilterQuality.none : FilterQuality.low,
+      Paint()..filterQuality = FilterQuality.none,
     );
 
     if (fgSpriteCount > 0) {
@@ -298,8 +317,7 @@ class TuiAtlasPainter extends CustomPainter {
         _rectsFg!,
         _colorsFg!,
         fgSpriteCount,
-        Paint()
-          ..filterQuality = kIsWeb ? FilterQuality.none : FilterQuality.low,
+        Paint()..filterQuality = FilterQuality.none,
       );
     }
 
