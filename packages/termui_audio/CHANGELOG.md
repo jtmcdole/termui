@@ -1,3 +1,8 @@
+## 0.1.6
+
+ - **PERF**(core): optimize render loops and defer layout clipping.
+ - **FIX**(termui_audio): prevent native crash on invalid voice/bus handles.
+
 ## 0.1.5
 
  - **REFACTOR**(audio): modernize control flow and implement setPaused.

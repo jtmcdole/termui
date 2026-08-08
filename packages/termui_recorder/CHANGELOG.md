@@ -1,3 +1,9 @@
+## 0.6.0+15
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
 ## 0.5.11+14
 
  - **FIX**(termui): prevent hover debug overlay from overwriting edge elements.
