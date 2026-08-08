@@ -37,7 +37,8 @@ void main() {
     ];
 
     final quantizer = CellQuantizer();
-    final result = quantizer.quantize(pixels, candidates);
+    final result = QuantizeResult();
+    quantizer.quantize(pixels, candidates, result);
 
     expect(result.character, '▄');
   });

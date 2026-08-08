@@ -8,13 +8,13 @@ Future<void> main() async {
   final engine = TermuiTinpot();
 
   // Warmup
-  engine.convert(image, 85, 35, useDin99d: true);
+  engine.convertBuffer(image, 85, 35, useDin99d: true);
 
   final stopwatch = Stopwatch()..start();
   const iterations = 100;
 
   for (int i = 0; i < iterations; i++) {
-    engine.convert(image, 85, 35, useDin99d: true);
+    engine.convertBuffer(image, 85, 35, useDin99d: true);
   }
 
   stopwatch.stop();

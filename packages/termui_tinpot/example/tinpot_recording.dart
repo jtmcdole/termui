@@ -44,20 +44,19 @@ void main() async {
       }
     }
 
-    final grid = engine.convert(image, columns, rows, useDin99d: true);
+    final grid = engine.convertBuffer(image, columns, rows, useDin99d: true);
 
     int startX = (90 - columns) ~/ 2;
     int startY = (45 - rows) ~/ 2;
 
-    for (int y = 0; y < grid.length; y++) {
-      for (int x = 0; x < grid[y].length; x++) {
-        final cell = grid[y][x];
+    for (int y = 0; y < grid.height; y++) {
+      for (int x = 0; x < grid.width; x++) {
         int bx = startX + x;
         int by = startY + y;
         if (bx >= 0 && bx < 90 && by >= 0 && by < 45) {
-          buffer.setCharacter(bx, by, cell.character);
-          buffer.setForeground(bx, by, cell.fgColorArgb);
-          buffer.setBackground(bx, by, cell.bgColorArgb);
+          buffer.setCharacter(bx, by, grid.getCharacter(x, y));
+          buffer.setForeground(bx, by, grid.getForeground(x, y));
+          buffer.setBackground(bx, by, grid.getBackground(x, y));
           buffer.setModifiers(bx, by, 0);
         }
       }

@@ -1,12 +1,19 @@
 import 'dart:typed_data';
-import 'termui_tinpot.dart';
 import 'symbol_map.dart';
 import 'color_math.dart';
+
+class QuantizeResult {
+  String character = ' ';
+  int fgColorArgb = 0;
+  int bgColorArgb = 0;
+}
 
 class CellQuantizer {
   final Int32List _pixelsDin99d = Int32List(64);
   final Int32List _deltaNorm = Int32List(64);
   final Int32List _deltaInv = Int32List(64);
+  final Int32List _pixelsFg = Int32List(64);
+  final Int32List _pixelsBg = Int32List(64);
   final int workFactor;
   final List<SymbolCandidate?> _topCandidates;
   final Int32List _topDistances;
@@ -17,9 +24,10 @@ class CellQuantizer {
       _topDistances = Int32List(workFactor),
       _topInverted = List.filled(workFactor, false);
 
-  TinpotOutputCell quantize(
+  void quantize(
     Uint32List pixelsRgb,
-    List<SymbolCandidate> candidates, {
+    List<SymbolCandidate> candidates,
+    QuantizeResult result, {
     bool useDin99d = false,
     bool useMedian = false,
   }) {
@@ -89,15 +97,9 @@ class CellQuantizer {
       dominantChannel = 2;
     }
 
-    final (c1, c2) = switch (null) {
-      _ when dominantChannel == 0 => (
-        pixelsRgb[minIndexR],
-        pixelsRgb[maxIndexR],
-      ),
-      _ when dominantChannel == 1 => (
-        pixelsRgb[minIndexG],
-        pixelsRgb[maxIndexG],
-      ),
+    final (c1, c2) = switch (dominantChannel) {
+      0 => (pixelsRgb[minIndexR], pixelsRgb[maxIndexR]),
+      1 => (pixelsRgb[minIndexG], pixelsRgb[maxIndexG]),
       _ => (pixelsRgb[minIndexB], pixelsRgb[maxIndexB]),
     };
 
@@ -216,47 +218,62 @@ class CellQuantizer {
       int meanBg = c1;
 
       if (useMedian) {
-        List<int> pixelsFg = [];
-        List<int> pixelsBg = [];
+        int fgCount = 0;
+        int bgCount = 0;
 
         for (int i = 0; i < 32; i++) {
           bool isFg = ((highBits >> (31 - i)) & 1) == 1;
           int p = pixelsRgb[i];
           if (isFg) {
-            pixelsFg.add(p);
+            _pixelsFg[fgCount++] = p;
           } else {
-            pixelsBg.add(p);
+            _pixelsBg[bgCount++] = p;
           }
         }
         for (int i = 0; i < 32; i++) {
           bool isFg = ((lowBits >> (31 - i)) & 1) == 1;
           int p = pixelsRgb[32 + i];
           if (isFg) {
-            pixelsFg.add(p);
+            _pixelsFg[fgCount++] = p;
           } else {
-            pixelsBg.add(p);
+            _pixelsBg[bgCount++] = p;
           }
         }
 
-        int getMedian(List<int> pxs) {
-          if (pxs.isEmpty) return 0;
-          if (pxs.length == 1) return pxs[0];
-          if (dominantChannel == 0) {
-            pxs.sort((a, b) => ((a >> 16) & 0xFF).compareTo((b >> 16) & 0xFF));
-          } else if (dominantChannel == 1) {
-            pxs.sort((a, b) => ((a >> 8) & 0xFF).compareTo((b >> 8) & 0xFF));
-          } else {
-            pxs.sort((a, b) => (a & 0xFF).compareTo(b & 0xFF));
+        int getMedian(Int32List pxs, int count) {
+          if (count == 0) return 0;
+          if (count == 1) return pxs[0];
+
+          for (int i = 1; i < count; i++) {
+            int key = pxs[i];
+            int j = i - 1;
+
+            if (dominantChannel == 0) {
+              int keyVal = (key >> 16) & 0xFF;
+              while (j >= 0 && ((pxs[j] >> 16) & 0xFF) > keyVal) {
+                pxs[j + 1] = pxs[j];
+                j--;
+              }
+            } else if (dominantChannel == 1) {
+              int keyVal = (key >> 8) & 0xFF;
+              while (j >= 0 && ((pxs[j] >> 8) & 0xFF) > keyVal) {
+                pxs[j + 1] = pxs[j];
+                j--;
+              }
+            } else {
+              int keyVal = key & 0xFF;
+              while (j >= 0 && (pxs[j] & 0xFF) > keyVal) {
+                pxs[j + 1] = pxs[j];
+                j--;
+              }
+            }
+            pxs[j + 1] = key;
           }
-          return pxs[pxs.length ~/ 2];
+          return pxs[count ~/ 2];
         }
 
-        if (pixelsFg.isNotEmpty) {
-          meanFg = getMedian(pixelsFg);
-        }
-        if (pixelsBg.isNotEmpty) {
-          meanBg = getMedian(pixelsBg);
-        }
+        meanFg = getMedian(_pixelsFg, fgCount);
+        meanBg = getMedian(_pixelsBg, bgCount);
       } else {
         int sumrFg = 0, sumgFg = 0, sumbFg = 0, countFg = 0;
         int sumrBg = 0, sumgBg = 0, sumbBg = 0, countBg = 0;
@@ -361,11 +378,9 @@ class CellQuantizer {
       }
     }
 
-    return (
-      character: String.fromCharCode(bestCandidate?.codePoint ?? 0x20),
-      fgColorArgb: bestFg,
-      bgColorArgb: bestBg,
-    );
+    result.character = bestCandidate?.character ?? ' ';
+    result.fgColorArgb = bestFg;
+    result.bgColorArgb = bestBg;
   }
 
   static int _distSqRgb(int p1, int p2) {

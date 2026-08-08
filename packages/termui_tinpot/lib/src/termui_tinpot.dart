@@ -37,22 +37,11 @@ class TermuiTinpot {
       ) // Exclude single/half dashes (TAG_DOT)
       .toList();
 
-  /// Converts an image directly into a native [Buffer] of [columns] by [rows].
-  /// If [targetBuffer] is provided, cell values are written into [targetBuffer].
-  Buffer convertBuffer(
-    img.Image image,
-    int columns,
-    int rows, {
-    Buffer? targetBuffer,
-    bool useMedian = false,
-    bool useDin99d = false,
-  }) {
-    if (columns <= 0 || rows <= 0) return Buffer.blank(0, 0);
+  /// Scales the image to match the terminal aspect ratio and grid size.
+  /// Each terminal cell is 8x8 pixels.
+  img.Image scaleImage(img.Image image, int columns, int rows) {
+    if (columns <= 0 || rows <= 0) return img.Image(width: 0, height: 0);
 
-    Tracer.record(_traceConvertId, Phase.begin, TraceCategory.paint);
-
-    // 1. Scale the image to match the terminal aspect ratio and grid size.
-    // Each terminal cell is 8x8 pixels.
     final targetWidth = columns * 8;
     final targetHeight = rows * 8;
 
@@ -65,28 +54,52 @@ class TermuiTinpot {
     );
     Tracer.record(_traceResizeId, Phase.end, TraceCategory.paint);
 
+    return scaled;
+  }
+
+  /// Quantizes an already-scaled image (sized exactly to columns*8 x rows*8) into a Buffer.
+  Buffer quantizeScaledImage(
+    img.Image scaled,
+    int columns,
+    int rows, {
+    Buffer? targetBuffer,
+    bool useMedian = false,
+    bool useDin99d = false,
+  }) {
+    if (columns <= 0 || rows <= 0 || scaled.width == 0 || scaled.height == 0) {
+      return Buffer.blank(0, 0);
+    }
+
+    Tracer.record(_traceConvertId, Phase.begin, TraceCategory.paint);
+
     final quantizer = CellQuantizer(workFactor: workFactor);
     final pixelsRgb = Uint32List(64);
+    final quantizeResult = QuantizeResult();
 
     final buffer = targetBuffer ?? Buffer.blank(columns, rows);
 
-    final p = scaled.getPixel(0, 0);
-
     final int paintRows = math.min(rows, buffer.height);
     final int paintCols = math.min(columns, buffer.width);
+
+    final int imgWidth = scaled.width;
+    final Uint8List bytes = scaled.getBytes(order: img.ChannelOrder.rgba);
+
     for (int cellY = 0; cellY < paintRows; cellY++) {
       Tracer.record(_traceRowId, Phase.begin, TraceCategory.paint);
       for (int cellX = 0; cellX < paintCols; cellX++) {
         int pIdx = 0;
 
         for (int py = 0; py < 8; py++) {
-          for (int px = 0; px < 8; px++) {
-            final pixel = scaled.getPixel(cellX * 8 + px, cellY * 8 + py, p);
+          final int rowOffset = ((cellY * 8 + py) * imgWidth) * 4;
+          final int cellXOffset = (cellX * 8) * 4;
+          int rawIdx = rowOffset + cellXOffset;
 
-            var a = pixel.a.toInt();
-            var r = pixel.r.toInt();
-            var g = pixel.g.toInt();
-            var b = pixel.b.toInt();
+          for (int px = 0; px < 8; px++) {
+            var r = bytes[rawIdx];
+            var g = bytes[rawIdx + 1];
+            var b = bytes[rawIdx + 2];
+            var a = bytes[rawIdx + 3];
+            rawIdx += 4;
 
             // Alpha composite over black background (0, 0, 0)
             if (a < 255) {
@@ -101,9 +114,10 @@ class TermuiTinpot {
         }
 
         // Quantize cell extracting average colors and finding the best block character
-        final cell = quantizer.quantize(
+        quantizer.quantize(
           pixelsRgb,
           candidates,
+          quantizeResult,
           useMedian: useMedian,
           useDin99d: useDin99d,
         );
@@ -111,9 +125,9 @@ class TermuiTinpot {
         buffer.setCell(
           cellX,
           cellY,
-          cell.character,
-          cell.fgColorArgb,
-          cell.bgColorArgb,
+          quantizeResult.character,
+          quantizeResult.fgColorArgb,
+          quantizeResult.bgColorArgb,
           Modifier.transparent,
         );
       }
@@ -125,35 +139,24 @@ class TermuiTinpot {
     return buffer;
   }
 
-  /// Converts an image into a grid of [TinpotOutputCell].
-  List<List<TinpotOutputCell>> convert(
+  /// Converts an image directly into a native [Buffer] of [columns] by [rows].
+  /// If [targetBuffer] is provided, cell values are written into [targetBuffer].
+  Buffer convertBuffer(
     img.Image image,
     int columns,
     int rows, {
+    Buffer? targetBuffer,
     bool useMedian = false,
     bool useDin99d = false,
   }) {
-    final buffer = convertBuffer(
-      image,
+    final scaled = scaleImage(image, columns, rows);
+    return quantizeScaledImage(
+      scaled,
       columns,
       rows,
+      targetBuffer: targetBuffer,
       useMedian: useMedian,
       useDin99d: useDin99d,
     );
-
-    final grid = <List<TinpotOutputCell>>[];
-    for (int y = 0; y < buffer.height; y++) {
-      final row = <TinpotOutputCell>[];
-      for (int x = 0; x < buffer.width; x++) {
-        row.add((
-          character: buffer.getCharacter(x, y),
-          fgColorArgb: buffer.getForeground(x, y),
-          bgColorArgb: buffer.getBackground(x, y),
-        ));
-      }
-      grid.add(row);
-    }
-
-    return grid;
   }
 }
