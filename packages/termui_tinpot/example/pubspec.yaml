@@ -13,8 +13,8 @@ dependencies:
   flutter:
     sdk: flutter
   termui: ^0.9.0
-  termui_flutter: ^0.8.0
-  termui_tinpot: ^0.3.0
+  termui_flutter: ^0.8.1
+  termui_tinpot: ^0.3.1
   image: ^4.5.4
   desktop_drop: ^0.7.1
   cross_file: ^0.3.5+4

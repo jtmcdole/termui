@@ -13,7 +13,7 @@ dependencies:
   flutter:
     sdk: flutter
   termui: ^0.9.0
-  termui_flutter: ^0.8.0
+  termui_flutter: ^0.8.1
   termui_audio: ^0.1.7
   path_provider: ^2.1.2
 

@@ -3,6 +3,32 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-08-08
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.8.1`](#termui_flutter---v081)
+ - [`termui_tinpot` - `v0.3.1`](#termui_tinpot---v031)
+
+---
+
+#### `termui_flutter` - `v0.8.1`
+
+ - **PERF**(termui_flutter): optimize TUI rendering and fix sub-pixel sampling artifacts.
+
+#### `termui_tinpot` - `v0.3.1`
+
+ - **PERF**(termui_flutter): optimize TUI rendering and fix sub-pixel sampling artifacts.
+
+
 ## 2026-08-07
 
 ### Changes
