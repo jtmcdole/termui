@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui;
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/rendering.dart';
@@ -74,6 +75,9 @@ class Terminal extends StatefulWidget {
   /// The MVVM service used for external operations like saving screenshots.
   final TerminalService service;
 
+  /// Enables sub-pixel bleeding to prevent gaps during fractional transformations. Defaults to kIsWeb.
+  final bool enableBleed;
+
   /// Creates a [Terminal] view bounding the TUI app hierarchy.
   const Terminal({
     super.key,
@@ -84,6 +88,7 @@ class Terminal extends StatefulWidget {
     this.fontFamilyFallback,
     this.backgroundColor = Colors.black,
     this.service = const DefaultTerminalService(),
+    this.enableBleed = kIsWeb,
   });
 
   @override
@@ -128,6 +133,7 @@ class _TerminalState extends State<Terminal> {
       fontFamilyFallback: widget.fontFamilyFallback,
       backgroundColor: widget.backgroundColor,
       service: widget.service,
+      enableBleed: widget.enableBleed,
       onInit: _startLoop,
     );
   }
@@ -174,6 +180,9 @@ class PrivateTuiView extends StatefulWidget {
   /// The service for saving screenshots.
   final TerminalService service;
 
+  /// Enables sub-pixel bleeding to prevent gaps during fractional transformations. Defaults to kIsWeb.
+  final bool enableBleed;
+
   /// Internal widget constructor binding the terminal state to rendering hooks.
   const PrivateTuiView({
     super.key,
@@ -184,6 +193,7 @@ class PrivateTuiView extends StatefulWidget {
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
     this.backgroundColor = Colors.black,
+    this.enableBleed = kIsWeb,
   });
 
   @override
@@ -208,6 +218,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   double get fontSize => _fontSize;
   int _atlasGenerationId = 0;
   StreamSubscription<double>? _fontSizeSubscription;
+  double _devicePixelRatio = 1.0;
 
   static final int _traceRecreateAtlasId = Tracer.registerString(
     'TuiView:recreateAtlas',
@@ -257,6 +268,16 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     _initAtlasAndLoop();
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final dpr = MediaQuery.maybeDevicePixelRatioOf(context) ?? 1.0;
+    if (_devicePixelRatio != dpr) {
+      _devicePixelRatio = dpr;
+      _recreateAtlas();
+    }
+  }
+
   void _initAtlasAndLoop() async {
     await _recreateAtlas();
     if (mounted) {
@@ -292,6 +313,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       fontSize: _fontSize,
       fontFamily: widget.fontFamily,
       fontFamilyFallback: widget.fontFamilyFallback,
+      devicePixelRatio: _devicePixelRatio,
     );
 
     if (!mounted) return;
@@ -912,6 +934,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
                                 fontFamilyFallback: widget.fontFamilyFallback,
                                 fallbackPainters: _fallbackPainters,
                                 onMissingGlyphs: _onMissingGlyphs,
+                                enableBleed: widget.enableBleed,
                               ),
                             ),
                     ),
