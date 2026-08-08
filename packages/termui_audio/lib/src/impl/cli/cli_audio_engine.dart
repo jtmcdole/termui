@@ -35,6 +35,7 @@ class CliAudioBus implements AudioBus {
   /// Sets the volume for this bus.
   @override
   void setVolume(double volume) {
+    if (!CliAudioEngine._activeBuses.contains(id)) return;
     ffi.setVolume(id, volume);
   }
 }
@@ -51,6 +52,7 @@ class CliAudioEngine implements TermuiAudioEngine {
 
   // TODO: Track potential memory leaks here if voiceEnded callbacks are missed (e.g. loops).
   static final Map<int, Completer<void>> _activeVoices = {};
+  static final Set<int> _activeBuses = {};
 
   static void _voiceEndedCallback(Pointer<Uint32> handlePtr) {
     final handle = handlePtr.value;
@@ -132,6 +134,7 @@ class CliAudioEngine implements TermuiAudioEngine {
       if (!c.isCompleted) c.complete();
     }
     _activeVoices.clear();
+    _activeBuses.clear();
 
     _voiceEndedCallable.close();
     _fileLoadedCallable.close();
@@ -149,26 +152,28 @@ class CliAudioEngine implements TermuiAudioEngine {
 
   @override
   Duration getVoicePosition(AudioVoice voice) {
-    if (!_inited) return Duration.zero;
+    if (!_inited || !_activeVoices.containsKey(voice.id)) return Duration.zero;
     final posSecs = ffi.getPosition(voice.id);
     return Duration(microseconds: (posSecs * 1000000).round());
   }
 
   @override
   void seek(AudioVoice voice, Duration position) {
-    if (!_inited) return;
+    if (!_inited || !_activeVoices.containsKey(voice.id)) return;
     ffi.seek(voice.id, position.inMicroseconds / 1000000.0);
   }
 
   @override
   void setVoiceVolume(AudioVoice voice, double volume) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeVoices.containsKey(voice.id)) return;
     ffi.setVolume(voice.id, volume);
   }
 
   @override
   void setPaused(AudioVoice voice, bool paused) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeVoices.containsKey(voice.id)) return;
     ffi.setPause(voice.id, paused);
   }
 
@@ -452,7 +457,7 @@ class CliAudioEngine implements TermuiAudioEngine {
 
   @override
   void stop(AudioVoice voice) {
-    if (!_inited) return;
+    if (!_inited || !_activeVoices.containsKey(voice.id)) return;
     ffi.stop(voice.id);
   }
 
@@ -500,7 +505,7 @@ class CliAudioEngine implements TermuiAudioEngine {
     double vy = 0.0,
     double vz = 0.0,
   }) {
-    if (!_inited) return;
+    if (!_inited || !_activeVoices.containsKey(voice.id)) return;
     ffi.set3dSourceParameters(voice.id, x, y, z, vx, vy, vz);
   }
 
@@ -510,7 +515,7 @@ class CliAudioEngine implements TermuiAudioEngine {
     double minDistance,
     double maxDistance,
   ) {
-    if (!_inited) return;
+    if (!_inited || !_activeVoices.containsKey(voice.id)) return;
     ffi.set3dSourceMinMaxDistance(voice.id, minDistance, maxDistance);
   }
 
@@ -520,7 +525,7 @@ class CliAudioEngine implements TermuiAudioEngine {
     AttenuationModel attenuationModel,
     double attenuationRolloffFactor,
   ) {
-    if (!_inited) return;
+    if (!_inited || !_activeVoices.containsKey(voice.id)) return;
     ffi.set3dSourceAttenuation(
       voice.id,
       attenuationModel.index,
@@ -531,6 +536,7 @@ class CliAudioEngine implements TermuiAudioEngine {
   @override
   void setRelativePlaySpeed(AudioVoice voice, double speed) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeVoices.containsKey(voice.id)) return;
     ffi.setRelativePlaySpeed(voice.id, speed);
   }
 
@@ -541,6 +547,7 @@ class CliAudioEngine implements TermuiAudioEngine {
     Duration duration,
   ) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeVoices.containsKey(voice.id)) return;
     ffi.fadeRelativePlaySpeed(
       voice.id,
       speed,
@@ -551,12 +558,14 @@ class CliAudioEngine implements TermuiAudioEngine {
   @override
   void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeVoices.containsKey(voice.id)) return;
     ffi.fadeVolume(voice.id, targetVolume, duration.inMicroseconds / 1000000.0);
   }
 
   @override
   void scheduleStop(AudioVoice voice, Duration duration) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeVoices.containsKey(voice.id)) return;
     ffi.scheduleStop(voice.id, duration.inMicroseconds / 1000000.0);
   }
 
@@ -568,6 +577,9 @@ class CliAudioEngine implements TermuiAudioEngine {
   @override
   void attachFilterToBus(AudioBus bus, int filterId) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeBuses.contains(bus.id)) {
+      throw Exception('Failed to attach filter to bus. Error code: 31');
+    }
     final res = ffi.addFilter(0, bus.id, filterId);
     if (res != 0) {
       throw Exception('Failed to attach filter to bus. Error code: $res');
@@ -582,12 +594,14 @@ class CliAudioEngine implements TermuiAudioEngine {
     double value,
   ) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeBuses.contains(bus.id)) return;
     ffi.setFilterParams(0, bus.id, filterId, paramId, value);
   }
 
   @override
   double getFilterParameter(AudioBus bus, int filterId, int paramId) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeBuses.contains(bus.id)) return 0.0;
     final ptr = calloc<Float>();
     try {
       ffi.getFilterParams(0, bus.id, filterId, paramId, ptr);
@@ -606,6 +620,7 @@ class CliAudioEngine implements TermuiAudioEngine {
     Duration duration,
   ) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeBuses.contains(bus.id)) return;
     ffi.fadeFilterParameter(
       0,
       bus.id,
@@ -697,13 +712,16 @@ class CliAudioEngine implements TermuiAudioEngine {
       throw Exception('Failed to create native audio bus.');
     }
     ffi.busPlayOnEngine(busId, 1.0, false);
+    _activeBuses.add(busId);
     return CliAudioBus(busId);
   }
 
   @override
   void destroyBus(AudioBus bus) {
     if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeBuses.contains(bus.id)) return;
     ffi.destroyBus(bus.id);
+    _activeBuses.remove(bus.id);
   }
 
   @override
