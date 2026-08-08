@@ -11,6 +11,27 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui_hotreload` - `v0.6.17`](#termui_hotreload---v0617)
+
+---
+
+#### `termui_hotreload` - `v0.6.17`
+
+ - y
+
+
+## 2026-08-07
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`termui_recorder` - `v0.7.0`](#termui_recorder---v070)
  - [`termui` - `v0.9.0`](#termui---v090)
  - [`termui_flutter` - `v0.8.0`](#termui_flutter---v080)

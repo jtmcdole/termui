@@ -10,4 +10,4 @@ resolution: workspace
 
 dependencies:
   termui: ^0.9.0
-  termui_hotreload: ^0.6.16+13
+  termui_hotreload: ^0.6.17

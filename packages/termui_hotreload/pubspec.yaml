@@ -1,6 +1,6 @@
 name: termui_hotreload
 description: An optional companion package for termui that provides dead-simple automatic hot reloading during development.
-version: 0.6.16+13
+version: 0.6.17
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_hotreload
 
 environment:
