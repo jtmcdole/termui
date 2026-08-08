@@ -11,6 +11,75 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`termui_recorder` - `v0.7.0`](#termui_recorder---v070)
+ - [`termui` - `v0.9.0`](#termui---v090)
+ - [`termui_flutter` - `v0.8.0`](#termui_flutter---v080)
+ - [`termui_tinpot` - `v0.3.0`](#termui_tinpot---v030)
+
+Packages with other changes:
+
+ - [`termui_test` - `v0.2.14`](#termui_test---v0214)
+ - [`termui_audio` - `v0.1.7`](#termui_audio---v017)
+ - [`termui_hotreload` - `v0.6.16+13`](#termui_hotreload---v061613)
+ - [`termui_pty` - `v0.3.13`](#termui_pty---v0313)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_hotreload` - `v0.6.16+13`
+ - `termui_pty` - `v0.3.13`
+
+---
+
+#### `termui_recorder` - `v0.7.0`
+
+ - removing "+" revision
+
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
+#### `termui` - `v0.9.0`
+
+ - **PERF**(tinpot): optimize hot loop allocations and bitwise operations.
+ - **PERF**(core): optimize render loops and defer layout clipping.
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
+#### `termui_flutter` - `v0.8.0`
+
+ - **PERF**(tinpot): optimize hot loop allocations and bitwise operations.
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
+#### `termui_tinpot` - `v0.3.0`
+
+ - **PERF**(tinpot): optimize hot loop allocations and bitwise operations.
+ - **PERF**(tinpot): Make symbol candidates compile-time const and hoist block filtering.
+ - **PERF**(tinpot): Eliminate closures, unbox pixel getters, and add Din99d direct-mapped cache.
+ - **PERF**: math.
+ - **PERF**(tinpot): Replace record allocations and sorting with bounded insertion topK.
+ - **PERF**(tinpot): Implement branchless candidate scoring.
+ - **FIX**(tinpot): Use true color error for candidate shape evaluation.
+ - **FIX**(tinpot): Exclude TAG_DOT characters to prevent line breakage.
+ - **FEAT**(tinpot): Add --work CLI flag to control CellQuantizer shape evaluation effort.
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
+#### `termui_test` - `v0.2.14`
+
+ - removing "+" revision
+
+#### `termui_audio` - `v0.1.7`
+
+ - **PERF**(core): optimize render loops and defer layout clipping.
+ - **FIX**(termui_audio): prevent native crash on invalid voice/bus handles.
+
+
+## 2026-08-07
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`termui` - `v0.8.0`](#termui---v080)
  - [`termui_flutter` - `v0.7.0`](#termui_flutter---v070)
  - [`termui_recorder` - `v0.6.0+15`](#termui_recorder---v06015)

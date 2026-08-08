@@ -1,6 +1,6 @@
 name: termui_test
 description: Integration testing harness and utilities for the termui framework.
-version: 0.2.13+16
+version: 0.2.14
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_test
 
 environment:
@@ -25,12 +25,12 @@ platforms:
 
 dependencies:
   archive: ^4.0.9
-  termui: ^0.8.0
+  termui: ^0.9.0
   characters: ^1.4.0
   clock: ^1.1.2
   fake_async: ^1.3.3
   file: ^7.0.0
   meta: ^1.11.0
   test: ">=1.24.0 <2.0.0"
-  termui_recorder: ^0.6.0+15
+  termui_recorder: ^0.7.0
   test_api: ^0.7.11

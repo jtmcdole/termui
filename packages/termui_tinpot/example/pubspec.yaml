@@ -12,21 +12,21 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  termui: ^0.8.0
-  termui_flutter: ^0.7.0
-  termui_tinpot: ^0.2.0
+  termui: ^0.9.0
+  termui_flutter: ^0.8.0
+  termui_tinpot: ^0.3.0
   image: ^4.5.4
   desktop_drop: ^0.7.1
   cross_file: ^0.3.5+4
   file_selector: ^1.0.0
   clock: ^1.1.1
   file: ^7.0.0
-  termui_recorder: ^0.6.0+15
+  termui_recorder: ^0.7.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  termui_test: ^0.2.13+16
+  termui_test: ^0.2.14
 flutter:
   uses-material-design: true
 
