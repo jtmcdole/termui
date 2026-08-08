@@ -1,3 +1,11 @@
+## 0.7.0
+
+> Note: This release has breaking changes.
+
+ - removing "+" revision
+
+ - **BREAKING** **REFACTOR**(tinpot): optimize quantization render loop and fix ansi screenshot bloat.
+
 ## 0.6.0+15
 
 > Note: This release has breaking changes.

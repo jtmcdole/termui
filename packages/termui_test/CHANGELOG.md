@@ -1,3 +1,7 @@
+## 0.2.14
+
+ - removing "+" revision
+
 ## 0.2.13+16
 
  - Update a dependency to the latest release.
