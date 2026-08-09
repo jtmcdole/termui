@@ -368,6 +368,8 @@ class DecoratedBox extends Widget {
 
 /// Element for [DecoratedBox].
 class DecoratedBoxElement extends SingleChildElement {
+  bool _bordersDirty = true;
+
   int _cachedTopOffset = 0;
   int _cachedBottomOffset = 0;
   int _cachedLeftOffset = 0;
@@ -388,7 +390,14 @@ class DecoratedBoxElement extends SingleChildElement {
   Widget? get childWidget => (widget as DecoratedBox).child;
 
   @override
-  Size performLayout(BoxConstraints constraints) {
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    _bordersDirty = true;
+  }
+
+  void _computeBorderOffsets() {
+    if (!_bordersDirty) return;
+    _bordersDirty = false;
     final db = widget as DecoratedBox;
     final border = db.decoration.border;
 
@@ -422,18 +431,39 @@ class DecoratedBoxElement extends SingleChildElement {
         _cachedBottomOffset = 1;
       }
 
-      _cachedLeftOffset = [
+      _cachedLeftOffset = max(
         measureStringWidth(border.leftChar),
-        _topLeftCharWidth,
-        _bottomLeftCharWidth,
-      ].reduce(max);
+        max(_topLeftCharWidth, _bottomLeftCharWidth),
+      );
 
-      _cachedRightOffset = [
+      _cachedRightOffset = max(
         measureStringWidth(border.rightChar),
-        _topRightCharWidth,
-        _bottomRightCharWidth,
-      ].reduce(max);
+        max(_topRightCharWidth, _bottomRightCharWidth),
+      );
     }
+  }
+
+  @override
+  int getIntrinsicHeight(int width) {
+    _computeBorderOffsets();
+    final doubleWidth = _cachedLeftOffset + _cachedRightOffset;
+    final doubleHeight = _cachedTopOffset + _cachedBottomOffset;
+    final childWidth = max(0, width - doubleWidth);
+    return (childElement?.getIntrinsicHeight(childWidth) ?? 0) + doubleHeight;
+  }
+
+  @override
+  int getIntrinsicWidth(int height) {
+    _computeBorderOffsets();
+    final doubleWidth = _cachedLeftOffset + _cachedRightOffset;
+    final doubleHeight = _cachedTopOffset + _cachedBottomOffset;
+    final childHeight = max(0, height - doubleHeight);
+    return (childElement?.getIntrinsicWidth(childHeight) ?? 0) + doubleWidth;
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    _computeBorderOffsets();
 
     final doubleWidth = _cachedLeftOffset + _cachedRightOffset;
     final doubleHeight = _cachedTopOffset + _cachedBottomOffset;
