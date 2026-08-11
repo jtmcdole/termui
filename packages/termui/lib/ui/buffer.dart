@@ -508,6 +508,32 @@ class LayeredBuffer {
 
 /// Composites multiple layered buffers onto a single target buffer.
 class Compositor {
+  int _blendColor(int top, int bottom) {
+    if (bottom == 0) return top;
+    if (top == 0) return bottom;
+
+    final aTop = (top >> 24) & 0xFF;
+    final rTop = (top >> 16) & 0xFF;
+    final gTop = (top >> 8) & 0xFF;
+    final bTop = top & 0xFF;
+
+    final aBottom = (bottom >> 24) & 0xFF;
+    final rBottom = (bottom >> 16) & 0xFF;
+    final gBottom = (bottom >> 8) & 0xFF;
+    final bBottom = bottom & 0xFF;
+
+    final invAlpha = 255 - aTop;
+    final effectiveBottomA = (aBottom * invAlpha) ~/ 255;
+    final outA = aTop + effectiveBottomA;
+    if (outA == 0) return 0;
+
+    final outR = (rTop * aTop + rBottom * effectiveBottomA) ~/ outA;
+    final outG = (gTop * aTop + gBottom * effectiveBottomA) ~/ outA;
+    final outB = (bTop * aTop + bBottom * effectiveBottomA) ~/ outA;
+
+    return (outA << 24) | (outR << 16) | (outG << 8) | outB;
+  }
+
   static final int _traceCompositeId = Tracer.registerString(
     'Compositor:composite',
   );
@@ -583,7 +609,7 @@ class Compositor {
       final totalCells = target.width * target.height;
       final fgWritten = Uint32List((totalCells + 31) >> 5);
       final bgWritten = Uint32List((totalCells + 31) >> 5);
-      var remainingFg = totalCells;
+      final charWritten = Uint32List((totalCells + 31) >> 5);
       var remainingBg = totalCells;
 
       if (initializeMasksFromTarget) {
@@ -594,11 +620,21 @@ class Compositor {
           if (!isTransparent) {
             final word = i >> 5;
             final bit = i & 31;
-            // Foreground is considered written if the cell is not transparent
-            fgWritten[word] |= (1 << bit);
-            remainingFg--;
+            final char = target.characters[i];
+            final fg = target.attributes[i * 3 + 0];
+            final bg = target.attributes[i * 3 + 1];
 
-            if (target.attributes[i * 3 + 1] != 0) {
+            final bgAlpha = (bg >> 24) & 0xFF;
+            final fgAlpha = (fg >> 24) & 0xFF;
+
+            if (char != ' ' && char != '') {
+              charWritten[word] |= (1 << bit);
+            } else if (bgAlpha == 255) {
+              charWritten[word] |= (1 << bit);
+            }
+
+            if (fgAlpha == 255) fgWritten[word] |= (1 << bit);
+            if (bgAlpha == 255) {
               bgWritten[word] |= (1 << bit);
               remainingBg--;
             }
@@ -607,9 +643,7 @@ class Compositor {
       }
 
       for (var i = startIndex; i < sortedLayers.length; i++) {
-        if (remainingFg <= 0 && remainingBg <= 0) {
-          break; // Early exit: everything covered
-        }
+        if (remainingBg <= 0) break;
 
         final layer = sortedLayers[i];
 
@@ -650,17 +684,18 @@ class Compositor {
             }
           }
 
-          // Composite the mutated background onto our target (respecting occlusion)
+          // Composite the mutated background onto our target
           var targetIdx = 0;
           for (var ty = 0; ty < target.height; ty++) {
             for (var tx = 0; tx < target.width; tx++, targetIdx++) {
               final word = targetIdx >> 5;
               final bit = targetIdx & 31;
 
+              final charOccluded = (charWritten[word] & (1 << bit)) != 0;
               final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
               final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
 
-              if (fgOccluded && bgOccluded) continue; // Fully occluded
+              if (charOccluded && fgOccluded && bgOccluded) continue;
 
               final sourceAttrIdx = targetIdx * 3;
               final sourceIsTransparent =
@@ -669,34 +704,43 @@ class Compositor {
                   0;
               if (sourceIsTransparent) continue;
 
+              final sourceChar = tempBuffer.characters[targetIdx];
+              final sourceFg = tempBuffer.attributes[sourceAttrIdx + 0];
               final sourceBg = tempBuffer.attributes[sourceAttrIdx + 1];
+
+              final sourceBgAlpha = (sourceBg >> 24) & 0xFF;
               final targetAttrIdx = targetIdx * 3;
 
-              if (!fgOccluded && !bgOccluded && sourceBg != 0) {
-                target.characters[targetIdx] = tempBuffer.characters[targetIdx];
-                target.attributes[targetAttrIdx + 0] =
-                    tempBuffer.attributes[sourceAttrIdx + 0];
-                target.attributes[targetAttrIdx + 1] = sourceBg;
-                target.attributes[targetAttrIdx + 2] =
-                    tempBuffer.attributes[sourceAttrIdx + 2];
-                fgWritten[word] |= (1 << bit);
-                bgWritten[word] |= (1 << bit);
-                remainingFg--;
-                remainingBg--;
-              } else {
-                if (!fgOccluded) {
-                  target.characters[targetIdx] =
-                      tempBuffer.characters[targetIdx];
-                  target.attributes[targetAttrIdx + 0] =
-                      tempBuffer.attributes[sourceAttrIdx + 0];
+              if (!charOccluded) {
+                if (sourceChar != ' ' && sourceChar != '') {
+                  target.characters[targetIdx] = sourceChar;
                   target.attributes[targetAttrIdx + 2] =
                       tempBuffer.attributes[sourceAttrIdx + 2];
-                  fgWritten[word] |= (1 << bit);
-                  remainingFg--;
+                  charWritten[word] |= (1 << bit);
+                } else if (sourceBgAlpha == 255) {
+                  target.characters[targetIdx] = ' ';
+                  target.attributes[targetAttrIdx + 2] =
+                      tempBuffer.attributes[sourceAttrIdx + 2];
+                  charWritten[word] |= (1 << bit);
                 }
+              }
 
-                if (!bgOccluded && sourceBg != 0) {
-                  target.attributes[targetAttrIdx + 1] = sourceBg;
+              if (!fgOccluded) {
+                final currentFg = target.attributes[targetAttrIdx + 0];
+                final blendedFg = _blendColor(currentFg, sourceFg);
+                target.attributes[targetAttrIdx + 0] = blendedFg;
+                target.attributes[targetAttrIdx + 2] |=
+                    tempBuffer.attributes[sourceAttrIdx + 2];
+                if (((blendedFg >> 24) & 0xFF) == 255) {
+                  fgWritten[word] |= (1 << bit);
+                }
+              }
+
+              if (!bgOccluded) {
+                final currentBg = target.attributes[targetAttrIdx + 1];
+                final blendedBg = _blendColor(currentBg, sourceBg);
+                target.attributes[targetAttrIdx + 1] = blendedBg;
+                if (((blendedBg >> 24) & 0xFF) == 255) {
                   bgWritten[word] |= (1 << bit);
                   remainingBg--;
                 }
@@ -704,14 +748,13 @@ class Compositor {
             }
           }
 
-          // We have processed all remaining layers in the recursive call
+          _poolIndex--; // free tempBuffer
           break;
         } else {
           final buf = layer.buffer;
           final ox = layer.x;
           final oy = layer.y;
 
-          // No effects on this layer. Fast path: Composite directly to target with pre-calculated bounds.
           final startX = max(0, ox);
           final endX = min(target.width, ox + buf.width);
           final startY = max(0, oy);
@@ -726,10 +769,11 @@ class Compositor {
                 final word = targetIdx >> 5;
                 final bit = targetIdx & 31;
 
+                final charOccluded = (charWritten[word] & (1 << bit)) != 0;
                 final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
                 final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
 
-                if (fgOccluded && bgOccluded) continue; // Fully occluded
+                if (bgOccluded) continue;
 
                 final lx = tx - ox;
                 final sourceIdx = sourceRowOffset + lx;
@@ -740,35 +784,43 @@ class Compositor {
                     0;
                 if (sourceIsTransparent) continue;
 
+                final sourceChar = buf.characters[sourceIdx];
+                final sourceFg = buf.attributes[sourceAttrIdx + 0];
                 final sourceBg = buf.attributes[sourceAttrIdx + 1];
+
+                final sourceBgAlpha = (sourceBg >> 24) & 0xFF;
                 final targetAttrIdx = targetIdx * 3;
 
-                if (!fgOccluded && !bgOccluded && sourceBg != 0) {
-                  // Fast path: write both!
-                  target.characters[targetIdx] = buf.characters[sourceIdx];
-                  target.attributes[targetAttrIdx + 0] =
-                      buf.attributes[sourceAttrIdx + 0];
-                  target.attributes[targetAttrIdx + 1] = sourceBg;
-                  target.attributes[targetAttrIdx + 2] =
-                      buf.attributes[sourceAttrIdx + 2];
-                  fgWritten[word] |= (1 << bit);
-                  bgWritten[word] |= (1 << bit);
-                  remainingFg--;
-                  remainingBg--;
-                } else {
-                  // Slow path: independent foreground/background blending
-                  if (!fgOccluded) {
-                    target.characters[targetIdx] = buf.characters[sourceIdx];
-                    target.attributes[targetAttrIdx + 0] =
-                        buf.attributes[sourceAttrIdx + 0];
+                if (!charOccluded) {
+                  if (sourceChar != ' ' && sourceChar != '') {
+                    target.characters[targetIdx] = sourceChar;
                     target.attributes[targetAttrIdx + 2] =
                         buf.attributes[sourceAttrIdx + 2];
-                    fgWritten[word] |= (1 << bit);
-                    remainingFg--;
+                    charWritten[word] |= (1 << bit);
+                  } else if (sourceBgAlpha == 255) {
+                    target.characters[targetIdx] = ' ';
+                    target.attributes[targetAttrIdx + 2] =
+                        buf.attributes[sourceAttrIdx + 2];
+                    charWritten[word] |= (1 << bit);
                   }
+                }
 
-                  if (!bgOccluded && sourceBg != 0) {
-                    target.attributes[targetAttrIdx + 1] = sourceBg;
+                if (!fgOccluded) {
+                  final currentFg = target.attributes[targetAttrIdx + 0];
+                  final blendedFg = _blendColor(currentFg, sourceFg);
+                  target.attributes[targetAttrIdx + 0] = blendedFg;
+                  target.attributes[targetAttrIdx + 2] |=
+                      buf.attributes[sourceAttrIdx + 2];
+                  if (((blendedFg >> 24) & 0xFF) == 255) {
+                    fgWritten[word] |= (1 << bit);
+                  }
+                }
+
+                if (!bgOccluded) {
+                  final currentBg = target.attributes[targetAttrIdx + 1];
+                  final blendedBg = _blendColor(currentBg, sourceBg);
+                  target.attributes[targetAttrIdx + 1] = blendedBg;
+                  if (((blendedBg >> 24) & 0xFF) == 255) {
                     bgWritten[word] |= (1 << bit);
                     remainingBg--;
                   }
@@ -812,20 +864,48 @@ class Compositor {
             final lx = tx - ox;
             final sourceIdx = sourceRowOffset + lx;
             final sourceAttrIdx = sourceIdx * 3;
+
             final sourceIsTransparent =
                 (buf.attributes[sourceAttrIdx + 2] & Modifier.transparent) != 0;
             if (sourceIsTransparent) continue;
 
-            final bg = buf.attributes[sourceAttrIdx + 1];
+            final sourceChar = buf.characters[sourceIdx];
+            final sourceFg = buf.attributes[sourceAttrIdx + 0];
+            final sourceBg = buf.attributes[sourceAttrIdx + 1];
             final targetAttrIdx = targetIdx * 3;
-            target.characters[targetIdx] = buf.characters[sourceIdx];
-            target.attributes[targetAttrIdx + 0] =
-                buf.attributes[sourceAttrIdx + 0];
-            if (bg != 0) {
-              target.attributes[targetAttrIdx + 1] = bg;
+
+            final currentChar = target.characters[targetIdx];
+
+            if (sourceChar != ' ' && sourceChar != '') {
+              if (currentChar == ' ' || currentChar == '') {
+                target.characters[targetIdx] = sourceChar;
+                target.attributes[targetAttrIdx + 2] =
+                    buf.attributes[sourceAttrIdx + 2];
+              }
+            } else {
+              final bgAlpha = (sourceBg >> 24) & 0xFF;
+              if (bgAlpha == 255) {
+                if (currentChar == ' ' || currentChar == '') {
+                  target.characters[targetIdx] = ' ';
+                  target.attributes[targetAttrIdx + 2] =
+                      buf.attributes[sourceAttrIdx + 2];
+                }
+              }
             }
-            target.attributes[targetAttrIdx + 2] =
+
+            final currentFg = target.attributes[targetAttrIdx + 0];
+            target.attributes[targetAttrIdx + 0] = _blendColor(
+              currentFg,
+              sourceFg,
+            );
+            target.attributes[targetAttrIdx + 2] |=
                 buf.attributes[sourceAttrIdx + 2];
+
+            final currentBg = target.attributes[targetAttrIdx + 1];
+            target.attributes[targetAttrIdx + 1] = _blendColor(
+              currentBg,
+              sourceBg,
+            );
           }
         }
       }
