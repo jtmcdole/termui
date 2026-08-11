@@ -2,20 +2,54 @@ import 'dart:io';
 import 'package:args/args.dart';
 import 'package:image/image.dart' as img;
 import 'package:termui_tinpot/termui_tinpot.dart';
-import 'cli_utils.dart';
 
-Future<int> runTinpotCli(List<String> arguments, {StringSink? out, StringSink? err}) async {
+Future<int> runTinpotCli(
+  List<String> arguments, {
+  StringSink? out,
+  StringSink? err,
+}) async {
   out ??= stdout;
   err ??= stderr;
 
   final parser = ArgParser()
-    ..addOption('width', abbr: 'w', help: 'Output width in characters', defaultsTo: '80')
-    ..addOption('height', abbr: 'h', help: 'Output height in characters', defaultsTo: '40')
-    ..addOption('background', abbr: 'b', help: 'Background color for transparent pixels (e.g. FF000000 or 000000)')
-    ..addFlag('din99d', help: 'Use DIN99d perceptual color math instead of RGB', defaultsTo: false)
-    ..addFlag('median', help: 'Use median color extraction instead of average', defaultsTo: false)
-    ..addOption('work', help: 'Work factor for shape evaluation (1-9, defaults to 5)', defaultsTo: '5')
-    ..addFlag('help', abbr: '?', negatable: false, help: 'Print this usage information.');
+    ..addOption(
+      'width',
+      abbr: 'w',
+      help: 'Output width in characters',
+      defaultsTo: '80',
+    )
+    ..addOption(
+      'height',
+      abbr: 'h',
+      help: 'Output height in characters',
+      defaultsTo: '40',
+    )
+    ..addOption(
+      'background',
+      abbr: 'b',
+      help: 'Background color for transparent pixels (e.g. FF000000 or 000000)',
+    )
+    ..addFlag(
+      'din99d',
+      help: 'Use DIN99d perceptual color math instead of RGB',
+      defaultsTo: false,
+    )
+    ..addFlag(
+      'median',
+      help: 'Use median color extraction instead of average',
+      defaultsTo: false,
+    )
+    ..addOption(
+      'work',
+      help: 'Work factor for shape evaluation (1-9, defaults to 5)',
+      defaultsTo: '5',
+    )
+    ..addFlag(
+      'help',
+      abbr: '?',
+      negatable: false,
+      help: 'Print this usage information.',
+    );
 
   ArgResults argResults;
   int? backgroundColor;

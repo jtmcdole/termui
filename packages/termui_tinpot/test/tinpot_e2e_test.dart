@@ -33,16 +33,20 @@ void main() {
 
         final out = StringBuffer();
         final err = StringBuffer();
-        final exitCode = await runTinpotCli([
-          assetPath,
-          '--width',
-          '85',
-          '--background',
-          'FF000000',
-          '--work',
-          '9',
-          '--din99d',
-        ], out: out, err: err);
+        final exitCode = await runTinpotCli(
+          [
+            assetPath,
+            '--width',
+            '85',
+            '--background',
+            'FF000000',
+            '--work',
+            '9',
+            '--din99d',
+          ],
+          out: out,
+          err: err,
+        );
 
         expect(
           exitCode,
@@ -64,16 +68,20 @@ void main() {
       () async {
         final out = StringBuffer();
         final err = StringBuffer();
-        final exitCode = await runTinpotCli([
-          assetPath,
-          '--width',
-          '85',
-          '--background',
-          'FF00001F',
-          '--work',
-          '9',
-          '--din99d',
-        ], out: out, err: err);
+        final exitCode = await runTinpotCli(
+          [
+            assetPath,
+            '--width',
+            '85',
+            '--background',
+            'FF00001F',
+            '--work',
+            '9',
+            '--din99d',
+          ],
+          out: out,
+          err: err,
+        );
 
         expect(
           exitCode,
@@ -100,16 +108,20 @@ void main() {
       () async {
         final out = StringBuffer();
         final err = StringBuffer();
-        final exitCode = await runTinpotCli([
-          assetPath,
-          '--width',
-          '85',
-          '--background',
-          'FFFFFFFF',
-          '--work',
-          '9',
-          '--din99d',
-        ], out: out, err: err);
+        final exitCode = await runTinpotCli(
+          [
+            assetPath,
+            '--width',
+            '85',
+            '--background',
+            'FFFFFFFF',
+            '--work',
+            '9',
+            '--din99d',
+          ],
+          out: out,
+          err: err,
+        );
 
         expect(
           exitCode,
