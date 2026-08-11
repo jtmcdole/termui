@@ -17,19 +17,19 @@ void main() {
 
     final candidates = [
       SymbolCandidate(
-        codePoint: 0x2584,
+        character: '▄',
         bitmapHigh: 0x00000000,
         bitmapLow: 0xFFFFFFFF,
         popcount: 32,
       ), // Lower half block
       SymbolCandidate(
-        codePoint: 0x2588,
+        character: '█',
         bitmapHigh: 0xFFFFFFFF,
         bitmapLow: 0xFFFFFFFF,
         popcount: 64,
       ), // Full block
       SymbolCandidate(
-        codePoint: 0x0020,
+        character: ' ',
         bitmapHigh: 0x00000000,
         bitmapLow: 0x00000000,
         popcount: 0,
@@ -41,5 +41,15 @@ void main() {
     quantizer.quantize(pixels, candidates, result);
 
     expect(result.character, '▄');
+  });
+
+  test('SymbolCandidate supports direct character strings', () {
+    final candidate = SymbolCandidate(
+      character: '🞃',
+      bitmapHigh: 0xff7e3c18,
+      bitmapLow: 0x00000000,
+      popcount: 20,
+    );
+    expect(candidate.character, '🞃');
   });
 }

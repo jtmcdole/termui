@@ -6,19 +6,20 @@ class AsciiReconstructor {
   final Map<String, int> charToBitmap = {};
 
   AsciiReconstructor() {
-    final mapContent = File(
-      '/app/tinpot/packages/termui_tinpot/lib/src/symbol_map.dart',
-    ).readAsStringSync();
+    final mapContent = File('lib/src/symbol_map.dart').readAsStringSync();
     final regex = RegExp(
-      r"SymbolCandidate\(codePoint:\s*(0x[0-9a-fA-F]+),\s*bitmap:\s*(0x[0-9a-fA-F]+)",
+      r"SymbolCandidate\(\s*character:\s*'(.*?)',\s*bitmapHigh:\s*(0x[0-9a-fA-F]+),\s*bitmapLow:\s*(0x[0-9a-fA-F]+)",
     );
     for (final match in regex.allMatches(mapContent)) {
-      int code = int.parse(match.group(1)!.substring(2), radix: 16);
-      String char = String.fromCharCode(code);
-      final bitmap = BigInt.parse(
-        match.group(2)!.substring(2),
-        radix: 16,
-      ).toInt();
+      String char = switch (match.group(1)!) {
+        r"\'" => "'",
+        r"\\" => r"\",
+        final c => c,
+      };
+
+      int high = int.parse(match.group(2)!.substring(2), radix: 16);
+      int low = int.parse(match.group(3)!.substring(2), radix: 16);
+      final bitmap = (high << 32) | low;
       charToBitmap[char] = bitmap;
     }
     charToBitmap[' '] = 0; // Space
