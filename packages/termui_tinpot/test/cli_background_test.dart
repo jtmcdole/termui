@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:args/args.dart';
 import 'package:termui_tinpot/src/cli_runner.dart';
 import 'package:termui_tinpot/termui_tinpot.dart';
@@ -235,7 +234,11 @@ void main() {
         () async {
           final out = StringBuffer();
           final err = StringBuffer();
-          final exitCode = await runTinpotCli([assetPath, '--background', 'GGGGGG'], out: out, err: err);
+          final exitCode = await runTinpotCli(
+            [assetPath, '--background', 'GGGGGG'],
+            out: out,
+            err: err,
+          );
           expect(exitCode, equals(1));
           expect(err.toString(), contains('Error: Invalid'));
         },
@@ -246,7 +249,11 @@ void main() {
         () async {
           final out = StringBuffer();
           final err = StringBuffer();
-          final exitCode = await runTinpotCli([assetPath, '--background', '12345'], out: out, err: err);
+          final exitCode = await runTinpotCli(
+            [assetPath, '--background', '12345'],
+            out: out,
+            err: err,
+          );
           expect(exitCode, equals(1));
           expect(err.toString(), contains('Error: Invalid'));
         },
