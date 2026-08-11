@@ -26,4 +26,5 @@ dev_dependencies:
   lints: ^6.0.0
   clock: ^1.1.1
   file: ^7.0.0
+  path: ^1.8.0
   termui_recorder: ^0.7.0

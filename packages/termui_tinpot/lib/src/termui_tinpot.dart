@@ -65,6 +65,8 @@ class TermuiTinpot {
     Buffer? targetBuffer,
     bool useMedian = false,
     bool useDin99d = false,
+    int? backgroundColor,
+    int? backgroundColorArgb,
   }) {
     if (columns <= 0 || rows <= 0 || scaled.width == 0 || scaled.height == 0) {
       return Buffer.blank(0, 0);
@@ -84,10 +86,17 @@ class TermuiTinpot {
     final int imgWidth = scaled.width;
     final Uint8List bytes = scaled.getBytes(order: img.ChannelOrder.rgba);
 
+    final int effectiveBg =
+        backgroundColorArgb ?? backgroundColor ?? 0xFF000000;
+    final int bgR = (effectiveBg >> 16) & 0xFF;
+    final int bgG = (effectiveBg >> 8) & 0xFF;
+    final int bgB = effectiveBg & 0xFF;
+
     for (int cellY = 0; cellY < paintRows; cellY++) {
       Tracer.record(_traceRowId, Phase.begin, TraceCategory.paint);
       for (int cellX = 0; cellX < paintCols; cellX++) {
         int pIdx = 0;
+        int transparentCount = 0;
 
         for (int py = 0; py < 8; py++) {
           final int rowOffset = ((cellY * 8 + py) * imgWidth) * 4;
@@ -101,35 +110,50 @@ class TermuiTinpot {
             var a = bytes[rawIdx + 3];
             rawIdx += 4;
 
-            // Alpha composite over black background (0, 0, 0)
+            if (a == 0) {
+              transparentCount++;
+            }
+
+            // Alpha composite over background color
             if (a < 255) {
-              // Fast division by 255 using (val * 257) >> 16
-              r = (r * a * 257) >> 16;
-              g = (g * a * 257) >> 16;
-              b = (b * a * 257) >> 16;
+              final invA = 255 - a;
+              r = ((r * a + bgR * invA) * 257) >> 16;
+              g = ((g * a + bgG * invA) * 257) >> 16;
+              b = ((b * a + bgB * invA) * 257) >> 16;
             }
 
             pixelsRgb[pIdx++] = (0xFF << 24) | (r << 16) | (g << 8) | b;
           }
         }
 
-        // Quantize cell extracting average colors and finding the best block character
-        quantizer.quantize(
-          pixelsRgb,
-          candidates,
-          quantizeResult,
-          useMedian: useMedian,
-          useDin99d: useDin99d,
-        );
+        if (transparentCount == 64) {
+          buffer.setCell(
+            cellX,
+            cellY,
+            ' ',
+            effectiveBg,
+            effectiveBg,
+            Modifier.transparent,
+          );
+        } else {
+          // Quantize cell extracting average colors and finding the best block character
+          quantizer.quantize(
+            pixelsRgb,
+            candidates,
+            quantizeResult,
+            useMedian: useMedian,
+            useDin99d: useDin99d,
+          );
 
-        buffer.setCell(
-          cellX,
-          cellY,
-          quantizeResult.character,
-          quantizeResult.fgColorArgb,
-          quantizeResult.bgColorArgb,
-          Modifier.transparent,
-        );
+          buffer.setCell(
+            cellX,
+            cellY,
+            quantizeResult.character,
+            quantizeResult.fgColorArgb,
+            quantizeResult.bgColorArgb,
+            Modifier.transparent,
+          );
+        }
       }
       Tracer.record(_traceRowId, Phase.end, TraceCategory.paint);
     }
@@ -148,6 +172,8 @@ class TermuiTinpot {
     Buffer? targetBuffer,
     bool useMedian = false,
     bool useDin99d = false,
+    int? backgroundColor,
+    int? backgroundColorArgb,
   }) {
     final scaled = scaleImage(image, columns, rows);
     return quantizeScaledImage(
@@ -157,6 +183,8 @@ class TermuiTinpot {
       targetBuffer: targetBuffer,
       useMedian: useMedian,
       useDin99d: useDin99d,
+      backgroundColor: backgroundColor,
+      backgroundColorArgb: backgroundColorArgb,
     );
   }
 }

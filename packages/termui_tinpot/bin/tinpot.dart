@@ -17,6 +17,12 @@ void main(List<String> arguments) async {
       help: 'Output height in characters',
       defaultsTo: '40',
     )
+    ..addOption(
+      'background',
+      abbr: 'b',
+      help: 'Background color for transparent pixels (e.g. FF000000 or 000000)',
+      defaultsTo: null,
+    )
     ..addFlag(
       'din99d',
       help: 'Use DIN99d perceptual color math instead of RGB',
@@ -40,10 +46,16 @@ void main(List<String> arguments) async {
     );
 
   ArgResults argResults;
+  int? backgroundColor;
   try {
     argResults = parser.parse(arguments);
+    backgroundColor = parseBackgroundColor(argResults['background'] as String?);
+  } on FormatException catch (e) {
+    stderr.writeln('Error: ${e.message}');
+    print(parser.usage);
+    exit(1);
   } catch (e) {
-    print(e);
+    stderr.writeln(e);
     print(parser.usage);
     exit(1);
   }
@@ -100,6 +112,7 @@ void main(List<String> arguments) async {
     rows,
     useDin99d: argResults['din99d'] as bool,
     useMedian: argResults['median'] as bool,
+    backgroundColorArgb: backgroundColor,
   );
 
   final buffer = StringBuffer();
