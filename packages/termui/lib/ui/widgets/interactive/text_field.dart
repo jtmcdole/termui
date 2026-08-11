@@ -350,7 +350,7 @@ class TextField extends StatefulWidget implements Focusable {
     TextEditingController? controller,
     this.multiline = false,
     this.style = Style.empty,
-    this.cursorStyle = const Style(modifiers: Modifier.reverse),
+    this.cursorStyle = const Style(modifiers: Modifier.underline),
     this.placeholder = '',
     this.placeholderStyle = const Style(foreground: Color(128, 128, 128)),
     this.focused = true,
@@ -952,6 +952,17 @@ class _TextFieldRenderWidgetElement extends Element {
   /// Instantiates the rendering element for the given [_TextFieldRenderWidget].
   _TextFieldRenderWidgetElement(_TextFieldRenderWidget super.widget);
 
+  Style? _cachedMergedStyle;
+  TextField? _cachedTextField;
+
+  Style _getMergedStyle(TextField textField) {
+    if (_cachedTextField != textField) {
+      _cachedMergedStyle = textField.style.merge(textField.cursorStyle);
+      _cachedTextField = textField;
+    }
+    return _cachedMergedStyle!;
+  }
+
   @override
   Map<String, String>? get paintTraceMetadata {
     final renderWidget = widget as _TextFieldRenderWidget;
@@ -1004,6 +1015,10 @@ class _TextFieldRenderWidgetElement extends Element {
     final cursorLine = textField.cursorLine;
     final cursorColumn = textField.cursorColumn;
 
+    final mergedCursorStyle = textField.focused
+        ? _getMergedStyle(textField)
+        : textField.style;
+
     for (var y = 0; y < h; y++) {
       final lineIdx = textField.scrollOffset + y;
       if (lineIdx >= lines.length) break;
@@ -1019,7 +1034,7 @@ class _TextFieldRenderWidgetElement extends Element {
 
         final isCursor =
             textField.focused && lineIdx == cursorLine && x == cursorColumn;
-        final cellStyle = isCursor ? textField.cursorStyle : textField.style;
+        final cellStyle = isCursor ? mergedCursorStyle : textField.style;
         buffer.setAttributes(
           offset.dx + x,
           offset.dy + y,
@@ -1039,9 +1054,9 @@ class _TextFieldRenderWidgetElement extends Element {
           buffer.setAttributes(
             offset.dx + cursorX,
             offset.dy + y,
-            fg: textField.cursorStyle.foreground?.argb ?? 0,
-            bg: textField.cursorStyle.background?.argb ?? 0,
-            modifiers: textField.cursorStyle.modifiers,
+            fg: mergedCursorStyle.foreground?.argb ?? 0,
+            bg: mergedCursorStyle.background?.argb ?? 0,
+            modifiers: mergedCursorStyle.modifiers,
           );
         }
       }

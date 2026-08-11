@@ -608,7 +608,7 @@ class TextFormField extends FormField<String> {
     super.validator,
     super.focused = false,
     Style style = Style.empty,
-    Style cursorStyle = const Style(modifiers: Modifier.reverse),
+    Style cursorStyle = const Style(modifiers: Modifier.underline),
     String placeholder = '',
     Style placeholderStyle = const Style(foreground: Color(128, 128, 128)),
   }) : _input = TextField(
@@ -808,7 +808,7 @@ class TextAreaFormField extends FormField<String> {
     super.focused = false,
     this.fieldHeight = 3,
     Style style = Style.empty,
-    Style cursorStyle = const Style(modifiers: Modifier.reverse),
+    Style cursorStyle = const Style(modifiers: Modifier.underline),
     String placeholder = '',
     Style placeholderStyle = const Style(foreground: Color(128, 128, 128)),
   }) : _input = TextField(
