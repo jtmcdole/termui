@@ -1,16 +1,15 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:termui_tinpot/src/cli_runner.dart';
 import 'package:test/test.dart';
 
 void main() {
   group('tinpot CLI E2E Tests', () {
-    late String binPath;
     late String assetPath;
     late String goldenPath;
 
     setUpAll(() {
       final rootDir = Directory.current.path;
-      binPath = '$rootDir/bin/tinpot.dart';
       assetPath = '$rootDir/test/assets/omega_Gate.png';
 
       goldenPath = '$rootDir/test/assets/gate.main.ansi';
@@ -32,8 +31,9 @@ void main() {
 
         final goldenBytes = await File(goldenPath).readAsBytes();
 
-        final result = await Process.run(Platform.executable, [
-          binPath,
+        final out = StringBuffer();
+        final err = StringBuffer();
+        final exitCode = await runTinpotCli([
           assetPath,
           '--width',
           '85',
@@ -42,15 +42,15 @@ void main() {
           '--work',
           '9',
           '--din99d',
-        ]);
+        ], out: out, err: err);
 
         expect(
-          result.exitCode,
+          exitCode,
           equals(0),
-          reason: 'tinpot CLI should exit with 0. stderr: ${result.stderr}',
+          reason: 'tinpot CLI should exit with 0. stderr: $err',
         );
 
-        final outputBytes = utf8.encode(result.stdout as String);
+        final outputBytes = utf8.encode(out.toString());
         expect(
           outputBytes,
           equals(goldenBytes),
@@ -62,8 +62,9 @@ void main() {
     test(
       'AC2 Visual/Cell Verification: --background FF00001F (Dart blue) cell background verification',
       () async {
-        final result = await Process.run(Platform.executable, [
-          binPath,
+        final out = StringBuffer();
+        final err = StringBuffer();
+        final exitCode = await runTinpotCli([
           assetPath,
           '--width',
           '85',
@@ -72,15 +73,15 @@ void main() {
           '--work',
           '9',
           '--din99d',
-        ]);
+        ], out: out, err: err);
 
         expect(
-          result.exitCode,
+          exitCode,
           equals(0),
-          reason: 'tinpot CLI should exit with 0. stderr: ${result.stderr}',
+          reason: 'tinpot CLI should exit with 0. stderr: $err',
         );
 
-        final stdoutText = result.stdout as String;
+        final stdoutText = out.toString();
 
         // Dart blue is ARGB 0xFF00001F -> RGB (0, 0, 31).
         // Background ANSI sequence will be \x1B[48;2;0;0;31m.
@@ -97,8 +98,9 @@ void main() {
     test(
       'AC2 Visual/Cell Verification: --background FFFFFFFF (White) cell background verification',
       () async {
-        final result = await Process.run(Platform.executable, [
-          binPath,
+        final out = StringBuffer();
+        final err = StringBuffer();
+        final exitCode = await runTinpotCli([
           assetPath,
           '--width',
           '85',
@@ -107,15 +109,15 @@ void main() {
           '--work',
           '9',
           '--din99d',
-        ]);
+        ], out: out, err: err);
 
         expect(
-          result.exitCode,
+          exitCode,
           equals(0),
-          reason: 'tinpot CLI should exit with 0. stderr: ${result.stderr}',
+          reason: 'tinpot CLI should exit with 0. stderr: $err',
         );
 
-        final stdoutText = result.stdout as String;
+        final stdoutText = out.toString();
 
         // White is ARGB 0xFFFFFFFF -> RGB (255, 255, 255).
         // Background ANSI sequence will be \x1B[48;2;255;255;255m.

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:args/args.dart';
+import 'package:termui_tinpot/src/cli_runner.dart';
 import 'package:termui_tinpot/termui_tinpot.dart';
 import 'package:test/test.dart';
 
@@ -222,41 +223,32 @@ void main() {
       });
     });
 
-    group('CLI Process Execution for --background option', () {
-      late String binPath;
+    group('CLI Logic Execution for --background option', () {
       late String assetPath;
 
       setUpAll(() {
-        final rootDir = Directory.current.path;
-        binPath = '$rootDir/bin/tinpot.dart';
-        assetPath = '$rootDir/test/assets/omega_Gate.png';
+        assetPath = 'test/assets/omega_Gate.png';
       });
 
       test(
         'CLI exits with code 1 on malformed --background hex string',
         () async {
-          final result = await Process.run(Platform.executable, [
-            binPath,
-            assetPath,
-            '--background',
-            'GGGGGG',
-          ]);
-          expect(result.exitCode, equals(1));
-          expect(result.stderr.toString(), contains('Error: Invalid'));
+          final out = StringBuffer();
+          final err = StringBuffer();
+          final exitCode = await runTinpotCli([assetPath, '--background', 'GGGGGG'], out: out, err: err);
+          expect(exitCode, equals(1));
+          expect(err.toString(), contains('Error: Invalid'));
         },
       );
 
       test(
         'CLI exits with code 1 on invalid length --background hex string',
         () async {
-          final result = await Process.run(Platform.executable, [
-            binPath,
-            assetPath,
-            '--background',
-            '12345',
-          ]);
-          expect(result.exitCode, equals(1));
-          expect(result.stderr.toString(), contains('Error: Invalid'));
+          final out = StringBuffer();
+          final err = StringBuffer();
+          final exitCode = await runTinpotCli([assetPath, '--background', '12345'], out: out, err: err);
+          expect(exitCode, equals(1));
+          expect(err.toString(), contains('Error: Invalid'));
         },
       );
     });
