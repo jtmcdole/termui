@@ -20,6 +20,13 @@ abstract class Widget {
   Element createElement() => LeafElement(this);
 
   /// Computes the intrinsic height of this widget under the given [width] constraint.
+  ///
+  /// **Important:** When rendering layered widgets (like in `SceneManager` using
+  /// `LayerSizing.content`), `PromptRunner` sets its backing buffer size based
+  /// on the height returned by this method. It is highly recommended that custom
+  /// widgets which act as root elements in layers override this to return their
+  /// true height, otherwise the buffer may default to 1 line, causing drawing
+  /// operations to clip or fail silently.
   int getIntrinsicHeight(int width) {
     return 1;
   }
