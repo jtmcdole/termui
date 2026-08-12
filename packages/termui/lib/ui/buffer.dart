@@ -3,6 +3,35 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:characters/characters.dart';
 
+/// Blends two ARGB colors.
+int blendColor(int top, int bottom) {
+  if (bottom == 0) return top;
+  if (top == 0) return bottom;
+
+  final aTop = (top >> 24) & 0xFF;
+  if (aTop == 255) return top;
+
+  final rTop = (top >> 16) & 0xFF;
+  final gTop = (top >> 8) & 0xFF;
+  final bTop = top & 0xFF;
+
+  final aBottom = (bottom >> 24) & 0xFF;
+  final rBottom = (bottom >> 16) & 0xFF;
+  final gBottom = (bottom >> 8) & 0xFF;
+  final bBottom = bottom & 0xFF;
+
+  final invAlpha = 255 - aTop;
+  final effectiveBottomA = (aBottom * invAlpha) ~/ 255;
+  final outA = aTop + effectiveBottomA;
+  if (outA == 0) return 0;
+
+  final outR = (rTop * aTop + rBottom * effectiveBottomA) ~/ outA;
+  final outG = (gTop * aTop + gBottom * effectiveBottomA) ~/ outA;
+  final outB = (bTop * aTop + bBottom * effectiveBottomA) ~/ outA;
+
+  return (outA << 24) | (outR << 16) | (outG << 8) | outB;
+}
+
 /// A 2D grid of cell data stored in parallel flat lists.
 class Buffer {
   static final int _traceClearId = Tracer.registerString('Buffer:clear');
@@ -120,7 +149,10 @@ class Buffer {
   /// ([characters] and [attributes]) directly via `List.setRange()`.
   void setForeground(int x, int y, int fg) {
     if (isCellValid(x, y)) {
-      attributes[(y * width + x) * 3 + 0] = fg;
+      attributes[(y * width + x) * 3 + 0] = blendColor(
+        fg,
+        attributes[(y * width + x) * 3 + 0],
+      );
     }
   }
 
@@ -134,7 +166,10 @@ class Buffer {
   /// ([characters] and [attributes]) directly via `List.setRange()`.
   void setBackground(int x, int y, int bg) {
     if (isCellValid(x, y)) {
-      attributes[(y * width + x) * 3 + 1] = bg;
+      attributes[(y * width + x) * 3 + 1] = blendColor(
+        bg,
+        attributes[(y * width + x) * 3 + 1],
+      );
     }
   }
 
@@ -157,8 +192,8 @@ class Buffer {
     if (isCellValid(x, y)) {
       final idx = (y * width + x) * 3;
       characters[y * width + x] = char;
-      attributes[idx + 0] = fg;
-      attributes[idx + 1] = bg;
+      attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
+      attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
       attributes[idx + 2] = mod;
     }
   }
@@ -175,8 +210,8 @@ class Buffer {
     if (!isCellValid(x, y)) return;
     final idx = (y * width + x) * 3;
     if (char != null) characters[y * width + x] = char;
-    if (fg != null) attributes[idx + 0] = fg;
-    if (bg != null) attributes[idx + 1] = bg;
+    if (fg != null) attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
+    if (bg != null) attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
     if (modifiers != null) attributes[idx + 2] = modifiers;
   }
 
@@ -201,8 +236,12 @@ class Buffer {
     if (fg != null || bg != null || modifiers != null) {
       for (var i = 0; i < characters.length; i++) {
         final idx = i * 3;
-        if (fg != null) attributes[idx + 0] = fg;
-        if (bg != null) attributes[idx + 1] = bg;
+        if (fg != null) {
+          attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
+        }
+        if (bg != null) {
+          attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
+        }
         if (modifiers != null) attributes[idx + 2] = modifiers;
       }
     }
@@ -233,8 +272,12 @@ class Buffer {
         for (var x = startX; x < endX; x++) {
           final idx = rowOffset + x;
           final attrIdx = idx * 3;
-          if (fg != null) attributes[attrIdx + 0] = fg;
-          if (bg != null) attributes[attrIdx + 1] = bg;
+          if (fg != null) {
+            attributes[attrIdx + 0] = blendColor(fg, attributes[attrIdx + 0]);
+          }
+          if (bg != null) {
+            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
+          }
           if (modifiers != null) attributes[attrIdx + 2] = modifiers;
         }
       }
@@ -370,14 +413,18 @@ class Buffer {
             characters[idx] = ' ';
             final attrIdx = idx * 3;
             attributes[attrIdx + 0] = hasFg ? fg : 0;
-            if (hasBg) attributes[attrIdx + 1] = bg;
+            if (hasBg) {
+              attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
+            }
             attributes[attrIdx + 2] = modifiers;
             currentX += 1;
           } else {
             characters[idx] = char;
             final attrIdx = idx * 3;
             attributes[attrIdx + 0] = hasFg ? fg : 0;
-            if (hasBg) attributes[attrIdx + 1] = bg;
+            if (hasBg) {
+              attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
+            }
             attributes[attrIdx + 2] = modifiers;
             if (isWide) {
               if (currentX + 1 < width) {
@@ -446,14 +493,18 @@ class Buffer {
           characters[idx] = ' ';
           final attrIdx = idx * 3;
           attributes[attrIdx + 0] = hasFg ? fg : 0;
-          if (hasBg) attributes[attrIdx + 1] = bg;
+          if (hasBg) {
+            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
+          }
           attributes[attrIdx + 2] = modifiers;
           currentX += 1;
         } else {
           characters[idx] = char;
           final attrIdx = idx * 3;
           attributes[attrIdx + 0] = hasFg ? fg : 0;
-          if (hasBg) attributes[attrIdx + 1] = bg;
+          if (hasBg) {
+            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
+          }
           attributes[attrIdx + 2] = modifiers;
           if (isWide) {
             if (currentX + 1 < width) {
@@ -508,32 +559,6 @@ class LayeredBuffer {
 
 /// Composites multiple layered buffers onto a single target buffer.
 class Compositor {
-  int _blendColor(int top, int bottom) {
-    if (bottom == 0) return top;
-    if (top == 0) return bottom;
-
-    final aTop = (top >> 24) & 0xFF;
-    final rTop = (top >> 16) & 0xFF;
-    final gTop = (top >> 8) & 0xFF;
-    final bTop = top & 0xFF;
-
-    final aBottom = (bottom >> 24) & 0xFF;
-    final rBottom = (bottom >> 16) & 0xFF;
-    final gBottom = (bottom >> 8) & 0xFF;
-    final bBottom = bottom & 0xFF;
-
-    final invAlpha = 255 - aTop;
-    final effectiveBottomA = (aBottom * invAlpha) ~/ 255;
-    final outA = aTop + effectiveBottomA;
-    if (outA == 0) return 0;
-
-    final outR = (rTop * aTop + rBottom * effectiveBottomA) ~/ outA;
-    final outG = (gTop * aTop + gBottom * effectiveBottomA) ~/ outA;
-    final outB = (bTop * aTop + bBottom * effectiveBottomA) ~/ outA;
-
-    return (outA << 24) | (outR << 16) | (outG << 8) | outB;
-  }
-
   static final int _traceCompositeId = Tracer.registerString(
     'Compositor:composite',
   );
@@ -589,6 +614,21 @@ class Compositor {
 
       _poolIndex = 0;
       _compositeRecursive(target, sortedLayers, 0);
+
+      // Premultiply final alpha against black for any remaining transparent pixels.
+      final attrs = target.attributes;
+      final len = attrs.length;
+      const black = 0xFF000000;
+      for (var i = 0; i < len; i += 3) {
+        final fg = attrs[i];
+        if (fg != 0 && ((fg >> 24) & 0xFF) != 255) {
+          attrs[i] = blendColor(fg, black);
+        }
+        final bg = attrs[i + 1];
+        if (bg != 0 && ((bg >> 24) & 0xFF) != 255) {
+          attrs[i + 1] = blendColor(bg, black);
+        }
+      }
     } finally {
       Tracer.record(_traceCompositeId, Phase.end, TraceCategory.compositor);
     }
@@ -725,20 +765,30 @@ class Compositor {
                 }
               }
 
+              final sourceFgAlpha = (sourceFg >> 24) & 0xFF;
+
               if (!fgOccluded) {
                 final currentFg = target.attributes[targetAttrIdx + 0];
-                final blendedFg = _blendColor(currentFg, sourceFg);
+                final blendedFg = blendColor(currentFg, sourceFg);
                 target.attributes[targetAttrIdx + 0] = blendedFg;
                 target.attributes[targetAttrIdx + 2] |=
                     tempBuffer.attributes[sourceAttrIdx + 2];
                 if (((blendedFg >> 24) & 0xFF) == 255) {
                   fgWritten[word] |= (1 << bit);
                 }
+                if (sourceFgAlpha == 255) {
+                  fgWritten[word] |= (1 << bit);
+                }
               }
 
               if (!bgOccluded) {
                 final currentBg = target.attributes[targetAttrIdx + 1];
-                final blendedBg = _blendColor(currentBg, sourceBg);
+                final sourceBg = tempBuffer.attributes[sourceAttrIdx + 1];
+                final sourceBgAlpha = (sourceBg >> 24) & 0xFF;
+                if (sourceBgAlpha == 0 && !charOccluded) {
+                  continue;
+                }
+                final blendedBg = blendColor(currentBg, sourceBg);
                 target.attributes[targetAttrIdx + 1] = blendedBg;
                 if (((blendedBg >> 24) & 0xFF) == 255) {
                   bgWritten[word] |= (1 << bit);
@@ -773,7 +823,7 @@ class Compositor {
                 final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
                 final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
 
-                if (bgOccluded) continue;
+                if (bgOccluded && fgOccluded && charOccluded) continue;
 
                 final lx = tx - ox;
                 final sourceIdx = sourceRowOffset + lx;
@@ -782,12 +832,12 @@ class Compositor {
                     (buf.attributes[sourceAttrIdx + 2] &
                         Modifier.transparent) !=
                     0;
+
                 if (sourceIsTransparent) continue;
 
                 final sourceChar = buf.characters[sourceIdx];
                 final sourceFg = buf.attributes[sourceAttrIdx + 0];
                 final sourceBg = buf.attributes[sourceAttrIdx + 1];
-
                 final sourceBgAlpha = (sourceBg >> 24) & 0xFF;
                 final targetAttrIdx = targetIdx * 3;
 
@@ -805,20 +855,25 @@ class Compositor {
                   }
                 }
 
+                final sourceFgAlpha = (sourceFg >> 24) & 0xFF;
+
                 if (!fgOccluded) {
                   final currentFg = target.attributes[targetAttrIdx + 0];
-                  final blendedFg = _blendColor(currentFg, sourceFg);
+                  final blendedFg = blendColor(currentFg, sourceFg);
                   target.attributes[targetAttrIdx + 0] = blendedFg;
                   target.attributes[targetAttrIdx + 2] |=
                       buf.attributes[sourceAttrIdx + 2];
                   if (((blendedFg >> 24) & 0xFF) == 255) {
                     fgWritten[word] |= (1 << bit);
                   }
+                  if (sourceFgAlpha == 255) {
+                    fgWritten[word] |= (1 << bit);
+                  }
                 }
 
                 if (!bgOccluded) {
                   final currentBg = target.attributes[targetAttrIdx + 1];
-                  final blendedBg = _blendColor(currentBg, sourceBg);
+                  final blendedBg = blendColor(currentBg, sourceBg);
                   target.attributes[targetAttrIdx + 1] = blendedBg;
                   if (((blendedBg >> 24) & 0xFF) == 255) {
                     bgWritten[word] |= (1 << bit);
@@ -894,17 +949,17 @@ class Compositor {
             }
 
             final currentFg = target.attributes[targetAttrIdx + 0];
-            target.attributes[targetAttrIdx + 0] = _blendColor(
-              currentFg,
+            target.attributes[targetAttrIdx + 0] = blendColor(
               sourceFg,
+              currentFg,
             );
             target.attributes[targetAttrIdx + 2] |=
                 buf.attributes[sourceAttrIdx + 2];
 
             final currentBg = target.attributes[targetAttrIdx + 1];
-            target.attributes[targetAttrIdx + 1] = _blendColor(
-              currentBg,
+            target.attributes[targetAttrIdx + 1] = blendColor(
               sourceBg,
+              currentBg,
             );
           }
         }
