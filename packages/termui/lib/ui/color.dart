@@ -1,9 +1,6 @@
 /// Represents a 24-bit RGB color with 8-bit alpha, packed into a single 32-bit integer.
 /// Using a single final int field minimizes memory footprint for each Color instance.
-class Color {
-  /// The 32-bit integer representation of the color in ARGB format.
-  final int argb;
-
+extension type const Color._(int argb) implements int {
   /// Creates an opaque color from red, green, and blue components.
   const Color(int r, int g, int b)
     : argb = (255 << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
@@ -41,16 +38,6 @@ class Color {
 
   /// Returns the ANSI escape sequence for setting this color as background.
   String get backgroundCode => '\x1b[48;2;$r;$g;${b}m';
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) || other is Color && other.argb == argb;
-
-  @override
-  int get hashCode => argb.hashCode;
-
-  @override
-  String toString() => 'Color(a: $a, r: $r, g: $g, b: $b)';
 }
 
 /// Common standard colors.

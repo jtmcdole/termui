@@ -23,18 +23,19 @@ class TermuiTinpot {
     : symbolMap = symbolMap ?? SymbolMap();
 
   late final List<SymbolCandidate> candidates = symbolMap.blockSymbols
-      .where(
-        (s) =>
-            s.codePoint == 0x0020 ||
-            (s.codePoint >= 0x2580 && s.codePoint <= 0x259F) ||
-            (s.codePoint >= 0x2500 &&
-                s.codePoint <= 0x257F &&
-                !(s.codePoint >= 0x2504 &&
-                    s.codePoint <= 0x250B) && // Exclude triple/quadruple dashes
-                !(s.codePoint >= 0x254C &&
-                    s.codePoint <= 0x254F) && // Exclude double dashes
-                !(s.codePoint >= 0x2574 && s.codePoint <= 0x257B)),
-      ) // Exclude single/half dashes (TAG_DOT)
+      .where((s) {
+        if (s.character.runes.length > 1) return false;
+        final codePoint = s.character.runes.first;
+        return codePoint == 0x0020 ||
+            (codePoint >= 0x2580 && codePoint <= 0x259F) ||
+            (codePoint >= 0x2500 &&
+                codePoint <= 0x257F &&
+                !(codePoint >= 0x2504 &&
+                    codePoint <= 0x250B) && // Exclude triple/quadruple dashes
+                !(codePoint >= 0x254C &&
+                    codePoint <= 0x254F) && // Exclude double dashes
+                !(codePoint >= 0x2574 && codePoint <= 0x257B));
+      }) // Exclude single/half dashes (TAG_DOT)
       .toList();
 
   /// Scales the image to match the terminal aspect ratio and grid size.
