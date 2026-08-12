@@ -589,7 +589,7 @@ class _FruitGameWidgetState extends State<_FruitGameWidget> {
                   Draggable<DraggedFruit>(
                     data: DraggedFruit(ex.currentSlots[i], i),
                     child: SizedBox(
-                      width: 6,
+                      width: 8,
                       height: 1,
                       child: Text(' [ ${ex.currentSlots[i]} ] '),
                     ),
