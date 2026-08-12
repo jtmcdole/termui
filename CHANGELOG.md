@@ -3,6 +3,55 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-08-12
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.9.1`](#termui---v091)
+ - [`termui_tinpot` - `v0.3.2`](#termui_tinpot---v032)
+ - [`termui_flutter` - `v0.8.2`](#termui_flutter---v082)
+ - [`termui_recorder` - `v0.7.1`](#termui_recorder---v071)
+ - [`termui_test` - `v0.2.15`](#termui_test---v0215)
+ - [`termui_hotreload` - `v0.6.18`](#termui_hotreload---v0618)
+ - [`termui_pty` - `v0.3.14`](#termui_pty---v0314)
+ - [`termui_audio` - `v0.1.8`](#termui_audio---v018)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.8.2`
+ - `termui_recorder` - `v0.7.1`
+ - `termui_test` - `v0.2.15`
+ - `termui_hotreload` - `v0.6.18`
+ - `termui_pty` - `v0.3.14`
+ - `termui_audio` - `v0.1.8`
+
+---
+
+#### `termui` - `v0.9.1`
+
+ - **FIX**(core): resolve rendering bottlenecks and grapheme ghosting.
+ - **FIX**(core): fix wide grapheme clipping.
+ - **FIX**(core): Correct blendColor arguments and fgOccluded logic in Compositor and fix layer test buffer sizing.
+ - **FIX**(core): optimize compositing and remove text_field render allocation.
+ - **FIX**(layout): correctly calculate DecoratedBox intrinsic dimensions.
+
+#### `termui_tinpot` - `v0.3.2`
+
+ - **FIX**(core): resolve rendering bottlenecks and grapheme ghosting.
+ - **FEAT**(tinpot): add multi-byte sub-pixel mapping symbols.
+ - **FEAT**(cli): add --background flag for alpha compositing.
+
+
 ## 2026-08-08
 
 ### Changes

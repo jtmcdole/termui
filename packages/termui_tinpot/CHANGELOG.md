@@ -1,3 +1,9 @@
+## 0.3.2
+
+ - **FIX**(core): resolve rendering bottlenecks and grapheme ghosting.
+ - **FEAT**(tinpot): add multi-byte sub-pixel mapping symbols.
+ - **FEAT**(cli): add --background flag for alpha compositing.
+
 ## 0.3.1
 
  - **PERF**(termui_flutter): optimize TUI rendering and fix sub-pixel sampling artifacts.

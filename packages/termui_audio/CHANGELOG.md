@@ -1,3 +1,7 @@
+## 0.1.8
+
+ - Update a dependency to the latest release.
+
 ## 0.1.7
 
  - **PERF**(core): optimize render loops and defer layout clipping.
