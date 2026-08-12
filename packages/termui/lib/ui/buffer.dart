@@ -32,6 +32,16 @@ int blendColor(int top, int bottom) {
   return (outA << 24) | (outR << 16) | (outG << 8) | outB;
 }
 
+int _premultiplyBlack(int color) {
+  final a = (color >> 24) & 0xFF;
+  if (a == 255) return color;
+  if (a == 0) return 0xFF000000;
+  final r = ((color >> 16) & 0xFF) * a ~/ 255;
+  final g = ((color >> 8) & 0xFF) * a ~/ 255;
+  final b = (color & 0xFF) * a ~/ 255;
+  return 0xFF000000 | (r << 16) | (g << 8) | b;
+}
+
 /// A 2D grid of cell data stored in parallel flat lists.
 class Buffer {
   static final int _traceClearId = Tracer.registerString('Buffer:clear');
@@ -210,6 +220,7 @@ class Buffer {
     if (!isCellValid(x, y)) return;
     final charIdx = y * width + x;
     final idx = charIdx * 3;
+    final bool isWide = char != null && char != '' && isWideGrapheme(char);
     if (char != null) {
       if (char != '') {
         if (characters[charIdx] == '') {
@@ -217,6 +228,9 @@ class Buffer {
             final prevIdx = charIdx - 1;
             if (isWideGrapheme(characters[prevIdx])) {
               characters[prevIdx] = ' ';
+              attributes[prevIdx * 3 + 0] = 0;
+              attributes[prevIdx * 3 + 1] = 0;
+              attributes[prevIdx * 3 + 2] = Modifier.transparent;
             }
           }
         } else if (isWideGrapheme(characters[charIdx])) {
@@ -224,17 +238,23 @@ class Buffer {
             final nextIdx = charIdx + 1;
             if (characters[nextIdx] == '') {
               characters[nextIdx] = ' ';
+              attributes[nextIdx * 3 + 0] = 0;
+              attributes[nextIdx * 3 + 1] = 0;
+              attributes[nextIdx * 3 + 2] = Modifier.transparent;
             }
           }
         }
       }
       characters[charIdx] = char;
-      if (isWideGrapheme(char) && x + 1 < width) {
+      if (isWide && x + 1 < width) {
         final nextIdx = charIdx + 1;
         if (isWideGrapheme(characters[nextIdx]) && x + 2 < width) {
           final nextNextIdx = charIdx + 2;
           if (characters[nextNextIdx] == '') {
             characters[nextNextIdx] = ' ';
+            attributes[nextNextIdx * 3 + 0] = 0;
+            attributes[nextNextIdx * 3 + 1] = 0;
+            attributes[nextNextIdx * 3 + 2] = Modifier.transparent;
           }
         }
         characters[nextIdx] = '';
@@ -243,7 +263,7 @@ class Buffer {
     if (fg != null) attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
     if (bg != null) attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
     if (modifiers != null) attributes[idx + 2] = modifiers;
-    if (char != null && isWideGrapheme(char) && x + 1 < width) {
+    if (isWide && x + 1 < width) {
       final nextAttrIdx = (charIdx + 1) * 3;
       if (fg != null) {
         attributes[nextAttrIdx + 0] = blendColor(
@@ -664,15 +684,14 @@ class Compositor {
       // Premultiply final alpha against black for any remaining transparent pixels.
       final attrs = target.attributes;
       final len = attrs.length;
-      const black = 0xFF000000;
       for (var i = 0; i < len; i += 3) {
         final fg = attrs[i];
         if (fg != 0 && ((fg >> 24) & 0xFF) != 255) {
-          attrs[i] = blendColor(fg, black);
+          attrs[i] = _premultiplyBlack(fg);
         }
         final bg = attrs[i + 1];
         if (bg != 0 && ((bg >> 24) & 0xFF) != 255) {
-          attrs[i + 1] = blendColor(bg, black);
+          attrs[i + 1] = _premultiplyBlack(bg);
         }
       }
     } finally {

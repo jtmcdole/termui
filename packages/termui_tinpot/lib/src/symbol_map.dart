@@ -1,5 +1,4 @@
 class SymbolCandidate {
-  final int codePoint;
   final int bitmapHigh;
   final int bitmapLow;
   final int popcount;
@@ -10,7 +9,7 @@ class SymbolCandidate {
     required this.bitmapHigh,
     required this.bitmapLow,
     required this.popcount,
-  }) : codePoint = character.runes.first;
+  });
 }
 
 final List<SymbolCandidate> _blockSymbols = [

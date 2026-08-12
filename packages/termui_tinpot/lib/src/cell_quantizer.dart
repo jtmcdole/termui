@@ -177,7 +177,7 @@ class CellQuantizer {
               insertIdx = k;
               break;
             } else if (inverted == _topInverted[k]) {
-              if (candidate.codePoint < topCandidate.codePoint) {
+              if (candidate.character.compareTo(topCandidate.character) < 0) {
                 insertIdx = k;
                 break;
               }
