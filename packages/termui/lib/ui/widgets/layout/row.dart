@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// Undocumented public member.
@@ -180,10 +181,10 @@ class RowElement extends Element {
       }
     }
 
-    final resolvedWidth = totalWidth.clamp(
-      constraints.minWidth,
-      constraints.maxWidth,
-    );
+    final resolvedWidth = max(
+      totalWidth,
+      maxChildX,
+    ).clamp(constraints.minWidth, constraints.maxWidth);
     _overflowAmount = totalWidth - resolvedWidth;
     _overflowLeft = minChildX < 0 ? -minChildX : 0;
     _overflowRight = maxChildX > resolvedWidth ? maxChildX - resolvedWidth : 0;

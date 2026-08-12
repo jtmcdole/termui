@@ -1,3 +1,4 @@
+import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// Undocumented public member.
@@ -157,10 +158,10 @@ class ColumnElement extends Element {
       }
     }
 
-    final resolvedHeight = totalHeight.clamp(
-      constraints.minHeight,
-      constraints.maxHeight,
-    );
+    final resolvedHeight = max(
+      totalHeight,
+      maxChildY,
+    ).clamp(constraints.minHeight, constraints.maxHeight);
     _overflowAmount = totalHeight - resolvedHeight;
     _overflowTop = minChildY < 0 ? -minChildY : 0;
     _overflowBottom = maxChildY > resolvedHeight

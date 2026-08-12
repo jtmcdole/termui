@@ -208,11 +208,57 @@ class Buffer {
     int? modifiers,
   }) {
     if (!isCellValid(x, y)) return;
-    final idx = (y * width + x) * 3;
-    if (char != null) characters[y * width + x] = char;
+    final charIdx = y * width + x;
+    final idx = charIdx * 3;
+    if (char != null) {
+      if (char != '') {
+        if (characters[charIdx] == '') {
+          if (x - 1 >= 0) {
+            final prevIdx = charIdx - 1;
+            if (isWideGrapheme(characters[prevIdx])) {
+              characters[prevIdx] = ' ';
+            }
+          }
+        } else if (isWideGrapheme(characters[charIdx])) {
+          if (x + 1 < width) {
+            final nextIdx = charIdx + 1;
+            if (characters[nextIdx] == '') {
+              characters[nextIdx] = ' ';
+            }
+          }
+        }
+      }
+      characters[charIdx] = char;
+      if (isWideGrapheme(char) && x + 1 < width) {
+        final nextIdx = charIdx + 1;
+        if (isWideGrapheme(characters[nextIdx]) && x + 2 < width) {
+          final nextNextIdx = charIdx + 2;
+          if (characters[nextNextIdx] == '') {
+            characters[nextNextIdx] = ' ';
+          }
+        }
+        characters[nextIdx] = '';
+      }
+    }
     if (fg != null) attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
     if (bg != null) attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
     if (modifiers != null) attributes[idx + 2] = modifiers;
+    if (char != null && isWideGrapheme(char) && x + 1 < width) {
+      final nextAttrIdx = (charIdx + 1) * 3;
+      if (fg != null) {
+        attributes[nextAttrIdx + 0] = blendColor(
+          fg,
+          attributes[nextAttrIdx + 0],
+        );
+      }
+      if (bg != null) {
+        attributes[nextAttrIdx + 1] = blendColor(
+          bg,
+          attributes[nextAttrIdx + 1],
+        );
+      }
+      if (modifiers != null) attributes[nextAttrIdx + 2] = modifiers;
+    }
   }
 
   /// Resets all cells in the buffer to transparent empty cells.
@@ -752,7 +798,7 @@ class Compositor {
               final targetAttrIdx = targetIdx * 3;
 
               if (!charOccluded) {
-                if (sourceChar != ' ' && sourceChar != '') {
+                if (sourceChar != ' ') {
                   target.characters[targetIdx] = sourceChar;
                   target.attributes[targetAttrIdx + 2] =
                       tempBuffer.attributes[sourceAttrIdx + 2];
@@ -842,7 +888,7 @@ class Compositor {
                 final targetAttrIdx = targetIdx * 3;
 
                 if (!charOccluded) {
-                  if (sourceChar != ' ' && sourceChar != '') {
+                  if (sourceChar != ' ') {
                     target.characters[targetIdx] = sourceChar;
                     target.attributes[targetAttrIdx + 2] =
                         buf.attributes[sourceAttrIdx + 2];
@@ -931,7 +977,7 @@ class Compositor {
 
             final currentChar = target.characters[targetIdx];
 
-            if (sourceChar != ' ' && sourceChar != '') {
+            if (sourceChar != ' ') {
               if (currentChar == ' ' || currentChar == '') {
                 target.characters[targetIdx] = sourceChar;
                 target.attributes[targetAttrIdx + 2] =
