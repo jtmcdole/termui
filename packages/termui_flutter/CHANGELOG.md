@@ -1,3 +1,7 @@
+## 0.8.2
+
+ - Update a dependency to the latest release.
+
 ## 0.8.1
 
  - **PERF**(termui_flutter): optimize TUI rendering and fix sub-pixel sampling artifacts.

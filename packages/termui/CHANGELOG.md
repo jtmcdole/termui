@@ -1,3 +1,11 @@
+## 0.9.1
+
+ - **FIX**(core): resolve rendering bottlenecks and grapheme ghosting.
+ - **FIX**(core): fix wide grapheme clipping.
+ - **FIX**(core): Correct blendColor arguments and fgOccluded logic in Compositor and fix layer test buffer sizing.
+ - **FIX**(core): optimize compositing and remove text_field render allocation.
+ - **FIX**(layout): correctly calculate DecoratedBox intrinsic dimensions.
+
 ## 0.9.0
 
 > Note: This release has breaking changes.
