@@ -71,20 +71,20 @@ List<Rect> splitRect(
 
   // 1. Calculate fixed sizes, percentages, and min constraints
   for (var i = 0; i < constraints.length; i++) {
-    final c = constraints[i];
-    if (c is LengthConstraint) {
-      sizes[i] = c.length;
-      usedSize += c.length;
-    } else if (c is PercentageConstraint) {
-      final size = (totalSize * c.percentage / 100).round();
-      sizes[i] = size;
-      usedSize += size;
-    } else if (c is FlexConstraint) {
-      totalFlex += c.flex;
-      flexIndices.add(i);
-    } else if (c is MinMaxConstraint) {
-      sizes[i] = c.min;
-      usedSize += c.min;
+    switch (constraints[i]) {
+      case LengthConstraint(:final length):
+        sizes[i] = length;
+        usedSize += length;
+      case PercentageConstraint(:final percentage):
+        final size = (totalSize * percentage / 100).round();
+        sizes[i] = size;
+        usedSize += size;
+      case FlexConstraint(:final flex):
+        totalFlex += flex;
+        flexIndices.add(i);
+      case MinMaxConstraint(:final min):
+        sizes[i] = min;
+        usedSize += min;
     }
   }
 
@@ -111,9 +111,8 @@ List<Rect> splitRect(
 
   // 4. Respect Max Constraints on MinMax
   for (var i = 0; i < constraints.length; i++) {
-    final c = constraints[i];
-    if (c is MinMaxConstraint) {
-      sizes[i] = sizes[i].clamp(c.min, c.max);
+    if (constraints[i] case MinMaxConstraint(:final min, :final max)) {
+      sizes[i] = sizes[i].clamp(min, max);
     }
     sizes[i] = max(0, sizes[i]);
   }
@@ -133,23 +132,22 @@ List<Rect> splitRect(
   int getChildOffset(int i) {
     if (remaining <= 0) {
       return switch (mainAxisAlignment) {
-        MainAxisAlignment.start => sumOfSizes[i],
-        MainAxisAlignment.end => remaining + sumOfSizes[i],
-        MainAxisAlignment.center => (remaining ~/ 2) + sumOfSizes[i],
+        .start => sumOfSizes[i],
+        .end => remaining + sumOfSizes[i],
+        .center => (remaining ~/ 2) + sumOfSizes[i],
         _ =>
           sumOfSizes[i], // Fallback to start for spaced alignments when overflowing
       };
     }
     return switch (mainAxisAlignment) {
-      MainAxisAlignment.start => sumOfSizes[i],
-      MainAxisAlignment.end => remaining + sumOfSizes[i],
-      MainAxisAlignment.center => (remaining ~/ 2) + sumOfSizes[i],
-      MainAxisAlignment.spaceBetween =>
+      .start => sumOfSizes[i],
+      .end => remaining + sumOfSizes[i],
+      .center => (remaining ~/ 2) + sumOfSizes[i],
+      .spaceBetween =>
         N <= 1 ? sumOfSizes[i] : ((remaining * i) ~/ (N - 1)) + sumOfSizes[i],
-      MainAxisAlignment.spaceAround =>
+      .spaceAround =>
         (remaining * (i * 2 + 1) / (N * 2)).floor() + sumOfSizes[i],
-      MainAxisAlignment.spaceEvenly =>
-        (remaining * (i + 1) / (N + 1)).floor() + sumOfSizes[i],
+      .spaceEvenly => (remaining * (i + 1) / (N + 1)).floor() + sumOfSizes[i],
     };
   }
 

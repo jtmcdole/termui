@@ -3,7 +3,7 @@ import 'package:test/test.dart';
 import 'tester.dart';
 
 /// Base class for all widget query finders in the [termui] element tree.
-abstract class Finder {
+abstract base class Finder {
   /// Creates a [Finder].
   const Finder();
 
@@ -12,7 +12,7 @@ abstract class Finder {
 }
 
 /// Registry of common widget search patterns.
-class CommonFinders {
+final class CommonFinders {
   /// Creates a [CommonFinders] provider.
   const CommonFinders();
 
@@ -38,7 +38,7 @@ class CommonFinders {
 /// The global finder builder namespace.
 const CommonFinders find = CommonFinders();
 
-class _ByTypeFinder extends Finder {
+final class _ByTypeFinder extends Finder {
   final Type type;
   const _ByTypeFinder(this.type);
 
@@ -51,21 +51,19 @@ class _ByTypeFinder extends Finder {
   String toString() => 'widget with type $type';
 }
 
-class _ByTextFinder extends Finder {
+final class _ByTextFinder extends Finder {
   final Pattern pattern;
   const _ByTextFinder(this.pattern);
 
   bool _matches(String? data) {
-    if (data == null) return false;
-    if (pattern is String) {
-      // Enforce exact match for find.text() (or match any line in multi-line text)
-      if (data.contains('\n')) {
-        return data.split('\n').any((line) => line == pattern);
-      }
-      return data == pattern;
-    } else if (pattern is RegExp) {
-      // Enforce pattern match for find.textMatch()
-      return (pattern as RegExp).hasMatch(data);
+    if (data case final String d) {
+      return switch (pattern) {
+        final String p when d.contains('\n') =>
+          d.split('\n').any((line) => line == p),
+        final String p => d == p,
+        final RegExp r => r.hasMatch(d),
+        _ => false,
+      };
     }
     return false;
   }
@@ -89,15 +87,15 @@ class _ByTextFinder extends Finder {
         default:
           try {
             final dynamic dynWidget = widget;
-            final dynamic widgetText = dynWidget.text;
-            if (widgetText is String && _matches(widgetText)) {
+            if (dynWidget.text case final String widgetText
+                when _matches(widgetText)) {
               return true;
             }
           } catch (_) {}
           try {
             final dynamic dynWidget = widget;
-            final dynamic widgetLabel = dynWidget.label;
-            if (widgetLabel is String && _matches(widgetLabel)) {
+            if (dynWidget.label case final String widgetLabel
+                when _matches(widgetLabel)) {
               return true;
             }
           } catch (_) {}
@@ -108,21 +106,22 @@ class _ByTextFinder extends Finder {
 
   String _collectTextSpan(TextSpan span) {
     final sb = StringBuffer();
-    if (span.text != null) sb.write(span.text);
+    if (span.text case final text?) sb.write(text);
     for (final child in span.children) {
       sb.write(_collectTextSpan(child));
     }
-    return sb.toString();
+    return '$sb';
   }
 
   @override
-  String toString() {
-    if (pattern is String) return 'text "$pattern"';
-    return 'textMatch "${(pattern as RegExp).pattern}"';
-  }
+  String toString() => switch (pattern) {
+    final String p => 'text "$p"',
+    final RegExp r => 'textMatch "${r.pattern}"',
+    _ => 'textMatch "$pattern"',
+  };
 }
 
-class _ByKeyFinder extends Finder {
+final class _ByKeyFinder extends Finder {
   final Key key;
   const _ByKeyFinder(this.key);
 
@@ -161,7 +160,7 @@ const Matcher _findsOneWidget = _FinderMatcher(1, 1);
 /// Asserts that a [Finder] matches exactly [count] widgets in the tree.
 Matcher findsNWidgets(int count) => _FinderMatcher(count, count);
 
-class _FinderMatcher extends Matcher {
+final class _FinderMatcher extends Matcher {
   final int? min;
   final int? max;
 
@@ -191,24 +190,19 @@ class _FinderMatcher extends Matcher {
   }
 
   @override
-  Description describe(Description description) {
-    if (min == max) {
-      if (min == 0) {
-        return description.add('nothing');
-      }
-      if (min == 1) {
-        return description.add('exactly one widget');
-      }
-      return description.add('exactly $min widgets');
-    }
-    if (min != null && max != null) {
-      return description.add('between $min and $max widgets');
-    }
-    if (min != null) {
-      return description.add('at least $min widgets');
-    }
-    return description.add('at most $max widgets');
-  }
+  Description describe(Description description) => switch ((min, max)) {
+    (0, 0) => description.add('nothing'),
+    (1, 1) => description.add('exactly one widget'),
+    (final min, final max) when min == max => description.add(
+      'exactly $min widgets',
+    ),
+    (final min?, final max?) => description.add(
+      'between $min and $max widgets',
+    ),
+    (final min?, null) => description.add('at least $min widgets'),
+    (null, final max?) => description.add('at most $max widgets'),
+    _ => description,
+  };
 
   @override
   Description describeMismatch(
@@ -237,7 +231,7 @@ class _FinderMatcher extends Matcher {
   }
 }
 
-class _DescendantFinder extends Finder {
+final class _DescendantFinder extends Finder {
   final Finder of;
   final Finder matching;
   const _DescendantFinder(this.of, this.matching);

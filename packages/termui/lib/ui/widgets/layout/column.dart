@@ -16,8 +16,8 @@ class Column extends Widget {
   const Column(
     this.children, {
     super.key,
-    this.crossAxisAlignment = CrossAxisAlignment.start,
-    this.mainAxisAlignment = MainAxisAlignment.start,
+    this.crossAxisAlignment = .start,
+    this.mainAxisAlignment = .start,
   });
 
   @override
@@ -114,16 +114,10 @@ class ColumnElement extends Element {
     // Map directly over childElements to retrieve their widgets and calculate
     // constraints, avoiding index desyncs or out-of-bounds errors that could occur
     // if we relied on zip-indexing between column.children and childElements.
-    final columnConstraints = childElements
-        .map(
-          (el) => getConstraint(
-            el.widget,
-            LayoutDirection.vertical,
-            crossSize: width,
-            element: el,
-          ),
-        )
-        .toList();
+    final columnConstraints = [
+      for (final el in childElements)
+        getConstraint(el.widget, .vertical, crossSize: width, element: el),
+    ];
     final rects = splitRect(
       area,
       columnConstraints,

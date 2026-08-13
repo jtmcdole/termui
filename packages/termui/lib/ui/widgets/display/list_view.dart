@@ -61,7 +61,7 @@ class ListView extends Widget {
   }) {
     return ListView(
       key: key,
-      children: items.map((text) => Text(text)).toList(),
+      children: [for (final text in items) Text(text)],
       selectedIndex: selectedIndex,
       hoveredIndex: hoveredIndex,
       itemStyle: itemStyle,

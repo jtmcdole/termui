@@ -9,7 +9,7 @@ import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
-class MockTerminalService implements TerminalService {
+final class MockTerminalService implements TerminalService {
   final Set<String> savedFiles = {};
 
   @override
@@ -221,12 +221,15 @@ void main() {
               fontFamily: 'Cascadia Mono',
               onRun: (terminal, drawFrame) async {
                 await for (final event in terminal.events) {
-                  if (event is term.KeyEvent &&
-                      event.modifiers.contains(term.Modifier.control)) {
-                    if (event.key == '=' || event.key == '+') {
-                      terminal.increaseFontSize();
-                    } else if (event.key == '-') {
-                      terminal.decreaseFontSize();
+                  if (event case term.KeyEvent(
+                    :final modifiers,
+                    :final key,
+                  ) when modifiers.contains(term.Modifier.control)) {
+                    switch (key) {
+                      case '=' || '+':
+                        terminal.increaseFontSize();
+                      case '-':
+                        terminal.decreaseFontSize();
                     }
                   }
                 }

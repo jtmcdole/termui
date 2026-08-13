@@ -2,10 +2,11 @@ import 'dart:async';
 import 'dart:math';
 import 'package:termui/terminal/terminal.dart';
 import 'package:termui/ui/event.dart' as ui;
+import 'mock_backend.dart';
 
 /// A mock implementation of [Terminal] that allows direct event injection
 /// without going through ANSI byte parsing.
-class MockTerminal extends Terminal {
+final class MockTerminal extends Terminal {
   final _eventsController = StreamController<ui.InputEvent>.broadcast();
 
   /// Whether the cursor is currently visible.
@@ -66,9 +67,9 @@ class MockTerminal extends Terminal {
 
   /// Injects a terminal resize event.
   void injectResize(Point<int> newSize) {
-    try {
-      (backend as dynamic).size = newSize;
-    } catch (_) {}
+    if (backend case final MockTerminalBackend mockBackend) {
+      mockBackend.size = newSize;
+    }
   }
 
   @override

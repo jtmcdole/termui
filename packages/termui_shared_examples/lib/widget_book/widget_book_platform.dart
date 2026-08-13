@@ -2,7 +2,7 @@ import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as ui;
 
 /// Interface defining platform-specific behavior needed by the shared Widget Book.
-abstract class WidgetBookPlatform {
+abstract interface class WidgetBookPlatform {
   /// Invoked when a new frame is drawn to notify the host platform.
   void onFrameRedrawn(Buffer buffer);
 

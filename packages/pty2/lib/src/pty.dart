@@ -9,7 +9,7 @@ import 'dart:typed_data';
 import 'package:pty2/pty2.dart';
 import 'package:pty2/src/pty_core.dart';
 
-abstract class BasePseudoTerminal implements PseudoTerminal {
+abstract base class BasePseudoTerminal implements PseudoTerminal {
   BasePseudoTerminal(this._core);
 
   late final PtyCore _core;
@@ -39,7 +39,7 @@ abstract class BasePseudoTerminal implements PseudoTerminal {
 /// PollingPseudoTerminal and requires less resource. However this prevents
 /// flutter hot reload from working. Ideal for release builds. The underlying
 /// PtyCore must be blocking.
-class BlockingPseudoTerminal extends BasePseudoTerminal {
+final class BlockingPseudoTerminal extends BasePseudoTerminal {
   BlockingPseudoTerminal(super._core, this._syncProcessed);
 
   late SendPort _sendPort;

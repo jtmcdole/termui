@@ -7,7 +7,7 @@ import '../viewmodel.dart';
 import 'virtual_terminal_widget.dart';
 
 /// The TUI application for playing asciicasts, written purely in termui.
-class AsciicastPlayerTuiApp extends StatefulWidget {
+final class AsciicastPlayerTuiApp extends StatefulWidget {
   /// The ViewModel powering the player.
   final AsciicastPlayerViewModel viewModel;
 

@@ -5,7 +5,7 @@ import 'example_base.dart';
 import '../window_manager_demo/scenario_a_widgets.dart';
 
 /// Example demonstrating vector graphics drawing using [Canvas].
-class VectorGraphicsExample extends WidgetBookExample {
+final class VectorGraphicsExample extends WidgetBookExample {
   /// Whether anti-aliasing is enabled for drawing operations.
   bool antiAliased = false;
 
@@ -181,14 +181,12 @@ class VectorGraphicsExample extends WidgetBookExample {
       shapeAngle + 2 * pi / 3,
       shapeAngle + 4 * pi / 3,
     ];
-    final t1px = List.generate(
-      3,
-      (i) => (t1cx + rShape * cos(t1angles[i])).round(),
-    );
-    final t1py = List.generate(
-      3,
-      (i) => (t1cy + rShape * sin(t1angles[i])).round(),
-    );
+    final t1px = [
+      for (var i = 0; i < 3; i++) (t1cx + rShape * cos(t1angles[i])).round(),
+    ];
+    final t1py = [
+      for (var i = 0; i < 3; i++) (t1cy + rShape * sin(t1angles[i])).round(),
+    ];
     final colorsTriangle = [Colors.red, Colors.green, Colors.blue];
     for (var i = 0; i < 3; i++) {
       final next = (i + 1) % 3;
@@ -211,14 +209,12 @@ class VectorGraphicsExample extends WidgetBookExample {
       shapeAngle + 2 * pi / 3,
       shapeAngle + 4 * pi / 3,
     ];
-    final t2px = List.generate(
-      3,
-      (i) => (t2cx + rShape * cos(t2angles[i])).round(),
-    );
-    final t2py = List.generate(
-      3,
-      (i) => (t2cy + rShape * sin(t2angles[i])).round(),
-    );
+    final t2px = [
+      for (var i = 0; i < 3; i++) (t2cx + rShape * cos(t2angles[i])).round(),
+    ];
+    final t2py = [
+      for (var i = 0; i < 3; i++) (t2cy + rShape * sin(t2angles[i])).round(),
+    ];
     triangleCanvas!.fillTriangleColored(
       t2px[0],
       t2py[0],
@@ -245,14 +241,12 @@ class VectorGraphicsExample extends WidgetBookExample {
       shapeAngle + 5 * pi / 4,
       shapeAngle + 7 * pi / 4,
     ];
-    final s1px = List.generate(
-      4,
-      (i) => (s1cx + rShape * cos(s1angles[i])).round(),
-    );
-    final s1py = List.generate(
-      4,
-      (i) => (s1cy + rShape * sin(s1angles[i])).round(),
-    );
+    final s1px = [
+      for (var i = 0; i < 4; i++) (s1cx + rShape * cos(s1angles[i])).round(),
+    ];
+    final s1py = [
+      for (var i = 0; i < 4; i++) (s1cy + rShape * sin(s1angles[i])).round(),
+    ];
     final colorsSquare = [
       CharmColors.ice,
       CharmColors.flamingo,
@@ -281,14 +275,12 @@ class VectorGraphicsExample extends WidgetBookExample {
       shapeAngle + 5 * pi / 4,
       shapeAngle + 7 * pi / 4,
     ];
-    final s2px = List.generate(
-      4,
-      (i) => (s2cx + rShape * cos(s2angles[i])).round(),
-    );
-    final s2py = List.generate(
-      4,
-      (i) => (s2cy + rShape * sin(s2angles[i])).round(),
-    );
+    final s2px = [
+      for (var i = 0; i < 4; i++) (s2cx + rShape * cos(s2angles[i])).round(),
+    ];
+    final s2py = [
+      for (var i = 0; i < 4; i++) (s2cy + rShape * sin(s2angles[i])).round(),
+    ];
     squareCanvas!.fillQuadColored(
       s2px[0],
       s2py[0],
@@ -340,18 +332,20 @@ class VectorGraphicsExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
-    if (event.key == 'a' || event.key == 'A') {
-      antiAliased = !antiAliased;
-      return true;
-    } else if (event.key == 'm' || event.key == 'M') {
-      final nextIdx = (renderMode.index + 1) % CanvasRenderMode.values.length;
-      renderMode = CanvasRenderMode.values[nextIdx];
-      return true;
-    } else if (event.key == 'p' || event.key == 'P') {
-      vectorGraphicsPaused = !vectorGraphicsPaused;
-      return true;
+    switch (event.key) {
+      case 'a' || 'A':
+        antiAliased = !antiAliased;
+        return true;
+      case 'm' || 'M':
+        final nextIdx = (renderMode.index + 1) % CanvasRenderMode.values.length;
+        renderMode = CanvasRenderMode.values[nextIdx];
+        return true;
+      case 'p' || 'P':
+        vectorGraphicsPaused = !vectorGraphicsPaused;
+        return true;
+      default:
+        return false;
     }
-    return false;
   }
 
   @override

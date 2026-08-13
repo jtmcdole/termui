@@ -496,7 +496,7 @@ void main() async {
 
         if (el is StatefulElement) {
           final state = el.state;
-          final widgetType = state.widget.runtimeType.toString();
+          final widgetType = '${state.widget.runtimeType}';
           if (widgetType.startsWith('DropdownButton')) {
             final dState = state as dynamic;
             final bounds = dState.buttonBounds as Rect;
@@ -598,7 +598,7 @@ void main() async {
               if (overlayOpen) return;
               if (el is StatefulElement) {
                 final s = el.state;
-                final widgetType = s.widget.runtimeType.toString();
+                final widgetType = '${s.widget.runtimeType}';
                 if (widgetType.startsWith('DropdownButton') &&
                     (s as dynamic).isOpen) {
                   overlayOpen = true;
@@ -626,7 +626,7 @@ void main() async {
                   if (el is StatefulElement) {
                     final s = el.state;
                     final w = el.widget;
-                    final widgetType = w.runtimeType.toString();
+                    final widgetType = '${w.runtimeType}';
                     if (widgetType.startsWith('DropdownButton') &&
                         (w as dynamic).focused) {
                       (s as dynamic).handleKeyEvent(event);

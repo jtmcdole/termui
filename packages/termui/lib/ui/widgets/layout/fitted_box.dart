@@ -42,9 +42,9 @@ class FittedBox extends Widget {
   /// Creates a [FittedBox].
   const FittedBox({
     super.key,
-    this.fit = BoxFit.contain,
-    this.alignment = Alignment.center,
-    this.clipBehavior = Clip.none,
+    this.fit = .contain,
+    this.alignment = .center,
+    this.clipBehavior = .none,
     required this.child,
   });
 

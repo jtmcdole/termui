@@ -54,49 +54,47 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  final rest = results.rest;
-  if (rest.isEmpty) {
+  if (results.rest case [final filePath, ...]) {
+    final fs = LocalFileSystem();
+    final file = fs.file(filePath);
+    if (!file.existsSync()) {
+      print('Error: File does not exist at $filePath');
+      return;
+    }
+
+    final speedStr = results['speed'] as String;
+    final speed = double.tryParse(speedStr) ?? 1.0;
+    final interactive = !(results['non-interactive'] as bool);
+    final paused = results['paused'] as bool;
+    final noCloseAtEnd = results['keep-alive'] as bool;
+
+    final bytes = await file.readAsBytes();
+    String data;
+    try {
+      data = utf8.decode(GZipDecoder().decodeBytes(bytes));
+    } catch (_) {
+      // Fallback to plain text if not gzipped
+      data = utf8.decode(bytes);
+    }
+
+    final player = AsciicastPlayer(data);
+
+    try {
+      await player.play(
+        speedMultiplier: speed,
+        interactive: interactive,
+        paused: paused,
+        noCloseAtEnd: noCloseAtEnd,
+      );
+      exit(0);
+    } catch (e) {
+      print('Error during playback: $e');
+      exit(1);
+    }
+  } else {
     print('Error: Missing input .cast file path.');
     _printUsage(parser);
     return;
-  }
-
-  final filePath = rest[0];
-  final fs = LocalFileSystem();
-  final file = fs.file(filePath);
-  if (!file.existsSync()) {
-    print('Error: File does not exist at $filePath');
-    return;
-  }
-
-  final speedStr = results['speed'] as String;
-  final speed = double.tryParse(speedStr) ?? 1.0;
-  final interactive = !(results['non-interactive'] as bool);
-  final paused = results['paused'] as bool;
-  final noCloseAtEnd = results['keep-alive'] as bool;
-
-  final bytes = file.readAsBytesSync();
-  String data;
-  try {
-    data = utf8.decode(GZipDecoder().decodeBytes(bytes));
-  } catch (_) {
-    // Fallback to plain text if not gzipped
-    data = utf8.decode(bytes);
-  }
-
-  final player = AsciicastPlayer(data);
-
-  try {
-    await player.play(
-      speedMultiplier: speed,
-      interactive: interactive,
-      paused: paused,
-      noCloseAtEnd: noCloseAtEnd,
-    );
-    exit(0);
-  } catch (e) {
-    print('Error during playback: $e');
-    exit(1);
   }
 }
 

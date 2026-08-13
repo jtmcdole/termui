@@ -9,7 +9,7 @@ import 'package:termui/ui/widgets/core/widget.dart';
 import 'package:termui/ui/widgets/core/geometry.dart';
 import 'package:termui/ui/style.dart';
 
-class TestAnimationEffect extends TuiAnimationEffect {
+final class TestAnimationEffect extends TuiAnimationEffect {
   TestAnimationEffect({required super.duration});
 
   @override

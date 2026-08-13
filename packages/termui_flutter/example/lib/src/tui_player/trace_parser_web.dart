@@ -86,7 +86,7 @@ Future<List<TraceEvent>> parseTraceEvents(
         final dartArgs = argsAny.dartify();
         if (dartArgs is Map) {
           dartArgs.forEach((k, v) {
-            parsedArgs[k.toString()] = jsonEncode(v);
+            parsedArgs['$k'] = jsonEncode(v);
           });
         }
       }

@@ -12,7 +12,7 @@ const bool _kIsWeb =
     identical(0, 0.0);
 
 /// An example showcasing an interactive file tree view of the local project.
-class FileTreeExample extends WidgetBookExample {
+final class FileTreeExample extends WidgetBookExample {
   /// The root node of the file tree.
   late final TreeNode<FileSystemEntity> fileTreeRoot;
 

@@ -2,18 +2,14 @@ import 'package:termui/terminal/event.dart' as ev;
 
 /// Encodes high-level `termui` [ev.InputEvent] objects into raw ANSI/VT100 byte strings.
 /// These strings can be written to a PTY's `write()` method.
-class InputEncoder {
+abstract final class InputEncoder {
   /// Encodes a single event into an ANSI string.
-  static String encode(ev.InputEvent event) {
-    if (event is ev.KeyEvent) {
-      return _encodeKeyEvent(event);
-    } else if (event is ev.MouseEvent) {
-      return _encodeMouseEvent(event);
-    } else if (event is ev.PasteEvent) {
-      return event.text; // Pasted text is just sent raw
-    }
-    return '';
-  }
+  static String encode(ev.InputEvent event) => switch (event) {
+    ev.KeyEvent key => _encodeKeyEvent(key),
+    ev.MouseEvent mouse => _encodeMouseEvent(mouse),
+    ev.PasteEvent paste => paste.text,
+    _ => '',
+  };
 
   static String _encodeKeyEvent(ev.KeyEvent event) {
     if (event.type == ev.KeyType.character) {

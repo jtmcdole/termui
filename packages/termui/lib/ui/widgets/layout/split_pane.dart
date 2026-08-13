@@ -67,7 +67,7 @@ class SplitPane extends Widget {
     required this.child2,
     required this.constraint1,
     required this.constraint2,
-    this.direction = LayoutDirection.horizontal,
+    this.direction = .horizontal,
     this.dividerChar = '│',
     this.dividerStyle = Style.empty,
   });
@@ -111,7 +111,7 @@ class SplitPane extends Widget {
   int getIntrinsicHeight(int width) {
     final h1 = child1.getIntrinsicHeight(width);
     final h2 = child2.getIntrinsicHeight(width);
-    if (direction == LayoutDirection.vertical) {
+    if (direction == .vertical) {
       return h1 + h2 + 1;
     } else {
       return max(h1, h2);
@@ -333,19 +333,22 @@ class SplitPaneElement extends Element implements MouseEventHandler {
     final c1 = split.constraint1;
     final c2 = split.constraint2;
 
-    if (c1 is LengthConstraint) {
-      return c1.length.clamp(0, totalSize - 1);
-    } else if (c1 is PercentageConstraint) {
-      return (totalSize * c1.percentage / 100).round().clamp(0, totalSize - 1);
-    } else if (c1 is FlexConstraint) {
-      final flex2 = c2 is FlexConstraint ? c2.flex : 1;
-      final sum = c1.flex + flex2;
-      if (sum <= 0) return (totalSize / 2).floor();
-      return (totalSize * c1.flex / sum).round().clamp(0, totalSize - 1);
-    } else if (c1 is MinMaxConstraint) {
-      return c1.min.clamp(0, totalSize - 1);
+    switch (c1) {
+      case LengthConstraint(:final length):
+        return length.clamp(0, totalSize - 1);
+      case PercentageConstraint(:final percentage):
+        return (totalSize * percentage / 100).round().clamp(0, totalSize - 1);
+      case FlexConstraint(:final flex):
+        final flex2 = switch (c2) {
+          FlexConstraint(:final flex) => flex,
+          _ => 1,
+        };
+        final sum = flex + flex2;
+        if (sum <= 0) return (totalSize / 2).floor();
+        return (totalSize * flex / sum).round().clamp(0, totalSize - 1);
+      case MinMaxConstraint(:final min):
+        return min.clamp(0, totalSize - 1);
     }
-    return (totalSize / 2).floor().clamp(0, totalSize - 1);
   }
 
   /// Intercepts mouse drag/press events over the divider.

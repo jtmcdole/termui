@@ -86,7 +86,7 @@ void main() async {
   runApp(const MainApp());
 }
 
-class MainApp extends StatelessWidget {
+final class MainApp extends StatelessWidget {
   final Map<String, String>? initialQuery;
   const MainApp({super.key, this.initialQuery});
 
@@ -101,7 +101,7 @@ class MainApp extends StatelessWidget {
   }
 }
 
-class TermUIWebHome extends StatefulWidget {
+final class TermUIWebHome extends StatefulWidget {
   final Map<String, String>? initialQuery;
   const TermUIWebHome({super.key, this.initialQuery});
 
@@ -311,7 +311,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           _initialTraceFilename = null;
         }
 
-        if (!mounted) {
+        if (!mounted || !context.mounted) {
           _log('main.dart: Not mounted, exiting loop');
           break;
         }
@@ -335,6 +335,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
 
   void _switchDemo(TuiDemo target) {
     _log('main.dart: Switch demo requested to: ${target.label}');
+    if (!mounted || !context.mounted) return;
     if (currentDemo == target && _tuiRunning) return;
 
     currentDemo = target;
@@ -359,10 +360,11 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
   }
 
   void _showSwitchDemoDialog({String title = 'Switch TUI Application'}) {
+    if (!mounted || !context.mounted) return;
     showDialog(
       context: context,
       barrierDismissible: _tuiRunning,
-      builder: (context) => AlertDialog(
+      builder: (dialogContext) => AlertDialog(
         title: Text(title),
         content: const Text(
           'Select which TUI application to run in the terminal emulator:',
@@ -370,35 +372,35 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         actions: [
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
               _switchDemo(TuiDemo.asciicastPlayer);
             },
             child: const Text('Asciicast Player'),
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
               _switchDemo(TuiDemo.traceViewer);
             },
             child: const Text('Trace Viewer'),
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
               _switchDemo(TuiDemo.widgetBook);
             },
             child: const Text('Widget Book'),
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
               _switchDemo(TuiDemo.glassCompositing);
             },
             child: const Text('Glass Compositing'),
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(context);
+              if (dialogContext.mounted) Navigator.pop(dialogContext);
               _switchDemo(TuiDemo.ptyGlassCompositing);
             },
             child: const Text('PTY Glass Compositing'),

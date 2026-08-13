@@ -199,7 +199,7 @@ class ModalOverlay extends Window {
     if (titleChars.length > maxTitleLen) {
       final cutLen = w - 7;
       if (cutLen > 0) {
-        displayedTitle = ' ${titleChars.take(cutLen).toString()}... ';
+        displayedTitle = ' ${titleChars.take(cutLen)}... ';
       } else {
         displayedTitle = '';
       }
@@ -383,7 +383,7 @@ class ModalOverlayElement extends WindowElement {
       if (titleChars.length > maxTitleLen) {
         final cutLen = dw - 7;
         if (cutLen > 0) {
-          displayedTitle = ' ${titleChars.take(cutLen).toString()}... ';
+          displayedTitle = ' ${titleChars.take(cutLen)}... ';
         } else {
           displayedTitle = '';
         }

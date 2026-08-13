@@ -5,7 +5,7 @@ import 'example_base.dart';
 ///
 /// This example shows how to shift viewport boundaries to isolate child
 /// widgets and provide internal spacing.
-class LayoutPaddingExample extends WidgetBookExample {
+final class LayoutPaddingExample extends WidgetBookExample {
   /// The inner padded text content.
   final innerParagraph = Text(
     'This paragraph is padded inside a surrounding container. Padding shifts viewport boundaries to isolate child widgets.',

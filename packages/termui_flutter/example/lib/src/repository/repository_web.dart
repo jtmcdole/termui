@@ -4,7 +4,7 @@ import 'dart:js_interop';
 import 'package:web/web.dart' as web;
 import 'repository.dart';
 
-class WebSavedCastsRepository implements SavedCastsRepository {
+final class WebSavedCastsRepository implements SavedCastsRepository {
   static const String dbName = 'termui_player_db';
   static const int dbVersion = 2; // Bumped to 2 to add traces store
   final String storeName;
@@ -48,7 +48,7 @@ class WebSavedCastsRepository implements SavedCastsRepository {
 
       request.onsuccess = (web.Event event) {
         final jsArray = request.result as JSArray;
-        final keys = jsArray.toDart.map((e) => (e as JSString).toDart).toList();
+        final keys = [for (final e in jsArray.toDart) (e as JSString).toDart];
         completer.complete(keys);
       }.toJS;
 

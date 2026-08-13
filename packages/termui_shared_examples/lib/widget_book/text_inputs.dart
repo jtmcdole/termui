@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// An example showcasing single-line and multi-line text input fields.
-class TextInputsExample extends WidgetBookExample {
+final class TextInputsExample extends WidgetBookExample {
   /// The single-line text field controller.
   late final TextEditingController singleLineController =
       TextEditingController();
@@ -44,7 +44,7 @@ class TextInputsExample extends WidgetBookExample {
 }
 
 /// Stateful widget to manage index focus and field states.
-class TextInputsDemoWidget extends StatefulWidget {
+final class TextInputsDemoWidget extends StatefulWidget {
   /// The single-line controller.
   final TextEditingController singleLineController;
 
@@ -67,7 +67,7 @@ class TextInputsDemoWidget extends StatefulWidget {
 }
 
 /// The state for [TextInputsDemoWidget].
-class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
+final class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
   late final FocusNode _singleLineFocusNode = FocusNode(
     id: 'single_line_input',
   );

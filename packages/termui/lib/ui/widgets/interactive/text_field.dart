@@ -593,8 +593,8 @@ class TextField extends StatefulWidget implements Focusable {
         final lineIdx = cursorLine;
         final colIdx = cursorColumn;
         final current = lines[lineIdx].characters;
-        final prefix = current.take(colIdx).toString();
-        final suffix = current.skip(colIdx).toString();
+        final prefix = current.take(colIdx).string;
+        final suffix = current.skip(colIdx).string;
         lines[lineIdx] = prefix;
         lines.insert(lineIdx + 1, suffix);
 
@@ -629,9 +629,7 @@ class TextField extends StatefulWidget implements Focusable {
       final colIdx = cursorColumn;
       final current = lines[lineIdx].characters;
       lines[lineIdx] =
-          current.take(colIdx).toString() +
-          event.key +
-          current.skip(colIdx).toString();
+          '${current.take(colIdx).string}${event.key}${current.skip(colIdx).string}';
 
       final nextLine = lineIdx;
       final nextCol = colIdx + event.key.characters.length;
@@ -722,7 +720,7 @@ class TextField extends StatefulWidget implements Focusable {
         if (colIdx > 0) {
           controller.saveStateToHistory();
           lines[lineIdx] =
-              chars.take(colIdx - 1).toString() + chars.skip(colIdx).toString();
+              '${chars.take(colIdx - 1).string}${chars.skip(colIdx).string}';
           colIdx--;
         } else if (lineIdx > 0 && multiline) {
           controller.saveStateToHistory();
@@ -739,7 +737,7 @@ class TextField extends StatefulWidget implements Focusable {
         if (colIdx < chars.length) {
           controller.saveStateToHistory();
           lines[lineIdx] =
-              chars.take(colIdx).toString() + chars.skip(colIdx + 1).toString();
+              '${chars.take(colIdx).string}${chars.skip(colIdx + 1).string}';
         } else if (lineIdx < lines.length - 1 && multiline) {
           controller.saveStateToHistory();
           final currentLine = lines[lineIdx];
@@ -754,9 +752,8 @@ class TextField extends StatefulWidget implements Focusable {
           final start = _findWordBoundaryBackward(lines[lineIdx], colIdx);
           if (start < colIdx) {
             controller.saveStateToHistory();
-            final prefix = chars.take(start).toString();
-            final suffix = chars.skip(colIdx).toString();
-            lines[lineIdx] = prefix + suffix;
+            lines[lineIdx] =
+                '${chars.take(start).string}${chars.skip(colIdx).string}';
             colIdx = start;
           }
         } else if (lineIdx > 0 && multiline) {

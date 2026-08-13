@@ -510,11 +510,11 @@ void main() async {
             continue;
           } else if (event is MouseEvent) {
             // Modal wheel scroll
-            if (event.button == MouseButton.wheelDown) {
+            if (event.button == .wheelDown) {
               modalScrollController.scrollOffset++;
               drawFrame();
               continue;
-            } else if (event.button == MouseButton.wheelUp) {
+            } else if (event.button == .wheelUp) {
               modalScrollController.scrollOffset--;
               drawFrame();
               continue;

@@ -3,7 +3,7 @@ import 'package:termui/termui.dart';
 import 'package:termui_pty/termui_pty.dart';
 
 /// A custom termui Widget that renders cells from a [VirtualTerminal] onto the compositor [Buffer].
-class VirtualTerminalWidget extends Widget {
+final class VirtualTerminalWidget extends Widget {
   /// The virtual terminal instance containing the buffer to render.
   final VirtualTerminal virtualTerminal;
 
@@ -14,7 +14,7 @@ class VirtualTerminalWidget extends Widget {
   Element createElement() => _VirtualTerminalElement(this);
 }
 
-class _VirtualTerminalElement extends Element {
+final class _VirtualTerminalElement extends Element {
   _VirtualTerminalElement(VirtualTerminalWidget super.widget);
 
   void _handleTerminalUpdate() {

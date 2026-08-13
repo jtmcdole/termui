@@ -28,8 +28,10 @@ class BuildOwner {
     if (isDirtyElements.isEmpty) return;
     Tracer.record(_traceBuildScopeId, Phase.begin, TraceCategory.build);
     try {
-      final sorted = isDirtyElements.where((e) => e.mounted).toList()
-        ..sort((a, b) => a.treeDepth.compareTo(b.treeDepth));
+      final sorted = [
+        for (final e in isDirtyElements)
+          if (e.mounted) e,
+      ]..sort((a, b) => a.treeDepth.compareTo(b.treeDepth));
       isDirtyElements.clear();
       for (final element in sorted) {
         if (element.mounted && element.isDirty) {

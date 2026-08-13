@@ -181,7 +181,7 @@ Future<void> runWidgetBookShared(
 }
 
 /// The main widget for the Widget Book application.
-class WidgetBookApp extends StatefulWidget {
+final class WidgetBookApp extends StatefulWidget {
   /// The terminal instance.
   final term.Terminal terminal;
 
@@ -203,7 +203,7 @@ class WidgetBookApp extends StatefulWidget {
   State<WidgetBookApp> createState() => _WidgetBookAppState();
 }
 
-class _WidgetBookAppState extends State<WidgetBookApp>
+final class _WidgetBookAppState extends State<WidgetBookApp>
     implements MouseEventHandler {
   late final FocusScopeNode _rootScopeNode = FocusScopeNode(id: 'root_scope');
   late final FocusNode _sidebarFocusNode = FocusNode(id: 'sidebar');
@@ -517,7 +517,7 @@ class _WidgetBookAppState extends State<WidgetBookApp>
               ),
               Expanded(
                 child: SidebarWidget(
-                  items: DemoPage.values.map((p) => p.title).toList(),
+                  items: [for (final p in DemoPage.values) p.title],
                   selectedIndex: _selectedPageIdx,
                   hoveredIndex: _hoveredPageIdx,
                   focusNode: _sidebarFocusNode,
@@ -695,7 +695,7 @@ class _WidgetBookAppState extends State<WidgetBookApp>
 }
 
 /// A widget representing the sidebar containing all selectable example pages.
-class SidebarWidget extends StatefulWidget {
+final class SidebarWidget extends StatefulWidget {
   /// The list of items to display.
   final List<String> items;
 
@@ -729,7 +729,7 @@ class SidebarWidget extends StatefulWidget {
   State<SidebarWidget> createState() => _SidebarWidgetState();
 }
 
-class _SidebarWidgetState extends State<SidebarWidget> {
+final class _SidebarWidgetState extends State<SidebarWidget> {
   void handleMouseEvent(term.MouseEvent event, int localX, int localY) {
     // Scroll and hover handled by ListView directly
   }
@@ -765,29 +765,31 @@ class _SidebarWidgetState extends State<SidebarWidget> {
         setState(() {});
       },
       onKeyEvent: (event) {
-        if (event.type == KeyType.up) {
-          final newIdx = (widget.selectedIndex - 1).clamp(
-            0,
-            widget.items.length - 1,
-          );
-          widget.onSelected(newIdx);
-          return true;
-        } else if (event.type == KeyType.down) {
-          final newIdx = (widget.selectedIndex + 1).clamp(
-            0,
-            widget.items.length - 1,
-          );
-          widget.onSelected(newIdx);
-          return true;
+        switch (event.type) {
+          case KeyType.up:
+            final newIdx = (widget.selectedIndex - 1).clamp(
+              0,
+              widget.items.length - 1,
+            );
+            widget.onSelected(newIdx);
+            return true;
+          case KeyType.down:
+            final newIdx = (widget.selectedIndex + 1).clamp(
+              0,
+              widget.items.length - 1,
+            );
+            widget.onSelected(newIdx);
+            return true;
+          default:
+            return false;
         }
-        return false;
       },
       child: _SidebarRenderWidget(listWidget: listWidget),
     );
   }
 }
 
-class _SidebarRenderWidget extends Widget {
+final class _SidebarRenderWidget extends Widget {
   final ListView listWidget;
 
   const _SidebarRenderWidget({required this.listWidget});
@@ -796,7 +798,7 @@ class _SidebarRenderWidget extends Widget {
   Element createElement() => _SidebarRenderWidgetElement(this);
 }
 
-class _SidebarRenderWidgetElement extends Element {
+final class _SidebarRenderWidgetElement extends Element {
   Element? childElement;
 
   _SidebarRenderWidgetElement(_SidebarRenderWidget super.widget);
@@ -854,7 +856,7 @@ class _SidebarRenderWidgetElement extends Element {
 }
 
 /// A widget rendering the preview pane of the currently selected example.
-class PreviewPaneWidget extends Widget {
+final class PreviewPaneWidget extends Widget {
   /// The currently active example.
   final WidgetBookExample activeExample;
 
@@ -884,7 +886,7 @@ class PreviewPaneWidget extends Widget {
   Element createElement() => _PreviewPaneElement(this);
 }
 
-class _PreviewPaneElement extends Element implements MouseEventHandler {
+final class _PreviewPaneElement extends Element implements MouseEventHandler {
   Element? childElement;
 
   _PreviewPaneElement(PreviewPaneWidget super.widget);
@@ -976,7 +978,7 @@ class _PreviewPaneElement extends Element implements MouseEventHandler {
 }
 
 /// A overlay dialog displaying advanced text-editing shortcuts.
-class HelpDialog extends Widget {
+final class HelpDialog extends Widget {
   /// Creates a [HelpDialog] widget.
   const HelpDialog({super.key});
 
@@ -984,7 +986,7 @@ class HelpDialog extends Widget {
   Element createElement() => _HelpDialogElement(this);
 }
 
-class _HelpDialogElement extends Element {
+final class _HelpDialogElement extends Element {
   _HelpDialogElement(super.widget);
 
   @override
@@ -1079,7 +1081,7 @@ class _HelpDialogElement extends Element {
 }
 
 /// A full-screen widget that blocks clicks to widgets beneath it and dismisses the overlay on click.
-class ModalDismissBarrier extends Widget {
+final class ModalDismissBarrier extends Widget {
   /// The child widget.
   final Widget child;
 
@@ -1097,7 +1099,7 @@ class ModalDismissBarrier extends Widget {
   Element createElement() => _ModalDismissBarrierElement(this);
 }
 
-class _ModalDismissBarrierElement extends Element {
+final class _ModalDismissBarrierElement extends Element {
   Element? childElement;
 
   _ModalDismissBarrierElement(ModalDismissBarrier super.widget);

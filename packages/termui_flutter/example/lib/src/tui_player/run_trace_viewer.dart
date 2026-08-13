@@ -82,7 +82,7 @@ Future<Map<String, dynamic>> parseTraceBytes(
   };
 }
 
-class TraceViewerState {
+final class TraceViewerState {
   final List<TraceSpan>? spans;
   final int? minTs;
   final int? maxTs;
@@ -91,7 +91,7 @@ class TraceViewerState {
   const TraceViewerState({this.spans, this.minTs, this.maxTs, this.filename});
 }
 
-class TraceViewerViewModel {
+final class TraceViewerViewModel {
   final SavedCastsRepository repository;
   List<TraceSpan>? _spans;
   int? _minTs;
@@ -190,7 +190,7 @@ class TraceViewerViewModel {
   }
 }
 
-class TraceViewerTuiApp extends StatefulWidget {
+final class TraceViewerTuiApp extends StatefulWidget {
   final TraceViewerViewModel viewModel;
 
   const TraceViewerTuiApp({super.key, required this.viewModel});

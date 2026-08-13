@@ -30,7 +30,7 @@ class TraceEvent {
     final Map<String, String> parsedArgs = {};
     if (argsRaw is Map) {
       argsRaw.forEach((k, v) {
-        parsedArgs[k.toString()] = jsonEncode(v);
+        parsedArgs['$k'] = jsonEncode(v);
       });
     }
     return TraceEvent(
@@ -90,7 +90,7 @@ class TraceSpan implements Interval<int> {
         text = text.substring(1, text.length - 1);
       }
       final truncated = text.characters.length > 20
-          ? '${text.characters.take(17).toString()}...'
+          ? '${text.characters.take(17)}...'
           : text;
       if (truncated != widgetName) {
         metaPart = '[$truncated]';
@@ -245,9 +245,9 @@ Future<Map<String, Object>?> parseTraceFile(String path) async {
     }
 
     final jsonList = jsonDecode(content) as List<dynamic>;
-    final events = jsonList
-        .map((e) => TraceEvent.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final events = [
+      for (final e in jsonList) TraceEvent.fromJson(e as Map<String, dynamic>),
+    ];
 
     int baseTime = 0;
     if (events.isNotEmpty) {

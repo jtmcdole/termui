@@ -16,7 +16,7 @@ void updateUrlParams({String? demo, String? page}) {
     newParams.remove('page');
   }
   final newUri = uri.replace(queryParameters: newParams);
-  web.window.history.replaceState(null, '', newUri.toString());
+  web.window.history.replaceState(null, '', '$newUri');
 }
 
 /// Sets up a listener for browser popState/history changes (e.g. Back/Forward clicks).

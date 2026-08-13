@@ -13,7 +13,7 @@ export 'src/pty_error.dart';
 /// This class represents a pseudo-terminal (PTY), allowing you to interact
 /// with command-line applications programmatically as if they were running
 /// in a real terminal emulator.
-abstract class PseudoTerminal {
+abstract interface class PseudoTerminal {
   /// Internal testing flag to allow non-blocking PTY on Windows.
   /// If [blocking] is [true], the PseudoTerminal starts in blocking mode
   /// (better suited for flutter release mode), otherwise in polling mode

@@ -4,7 +4,7 @@ import 'dart:math' as math;
 import 'package:termui/terminal/terminal.dart';
 
 /// Represents a single event inside an Asciicast recording.
-class AsciicastEvent {
+final class AsciicastEvent {
   /// The timestamp of the event in seconds.
   final double time;
 
@@ -20,7 +20,7 @@ class AsciicastEvent {
 
 /// A player that reads Asciinema Asciicast v2 data (.cast) and plays it
 /// back in the terminal with interactive playback and time-travel controls.
-class AsciicastPlayer {
+final class AsciicastPlayer {
   /// The raw JSONL asciicast string data to play.
   final String asciicastData;
 
@@ -75,17 +75,20 @@ class AsciicastPlayer {
       final line = lines[i].trim();
       if (line.isEmpty) continue;
       try {
-        final array = jsonDecode(line) as List<dynamic>;
-        if (array.length == 3) {
-          var time = (array[0] as num).toDouble();
-          if (version == 3) {
-            accumulatedTime += time;
-            time = accumulatedTime;
+        if (jsonDecode(line) case [
+          final timestamp,
+          final eventType,
+          final data,
+        ]) {
+          if (timestamp is num && eventType is String) {
+            var time = timestamp.toDouble();
+            if (version == 3) {
+              accumulatedTime += time;
+              time = accumulatedTime;
+            }
+            final String dataStr = data is String ? data : jsonEncode(data);
+            events.add(AsciicastEvent(time, eventType, dataStr));
           }
-          final type = array[1] as String;
-          final rawData = array[2];
-          final String data = rawData is String ? rawData : jsonEncode(rawData);
-          events.add(AsciicastEvent(time, type, data));
         }
       } catch (_) {
         // Skip malformed lines
@@ -193,11 +196,11 @@ class AsciicastPlayer {
       }
 
       final keySubscription = terminal.events.listen((event) {
-        if (event is KeyEvent) {
-          if (event.key == 'q' || event.type == KeyType.escape) {
+        if (event case KeyEvent(:final key, :final type)) {
+          if (key == 'q' || type == .escape) {
             quit = true;
             currentSleep?.interrupt();
-          } else if (event.key == ' ') {
+          } else if (key == ' ') {
             isPaused = !isPaused;
             if (isPaused) {
               pauseStartMs = stopwatch.elapsedMilliseconds;
@@ -218,7 +221,7 @@ class AsciicastPlayer {
               currentIndex,
             );
             currentSleep?.interrupt();
-          } else if (event.key == '.') {
+          } else if (key == '.') {
             if (isPaused) {
               stepForward();
               if (currentIndex < events.length) {
@@ -234,7 +237,7 @@ class AsciicastPlayer {
                 currentIndex,
               );
             }
-          } else if (event.key == ',') {
+          } else if (key == ',') {
             if (isPaused) {
               stepBackward();
               if (currentIndex < events.length) {
@@ -250,7 +253,7 @@ class AsciicastPlayer {
                 currentIndex,
               );
             }
-          } else if (event.key == '+' || event.key == '=') {
+          } else if (key == '+' || key == '=') {
             final actualRealElapsedMs =
                 stopwatch.elapsedMilliseconds - totalPausedMs;
             recordedTimeAtLastSpeedChange =
@@ -271,7 +274,7 @@ class AsciicastPlayer {
               currentIndex,
             );
             currentSleep?.interrupt();
-          } else if (event.key == '-' || event.key == '_') {
+          } else if (key == '-' || key == '_') {
             final actualRealElapsedMs =
                 stopwatch.elapsedMilliseconds - totalPausedMs;
             recordedTimeAtLastSpeedChange =
@@ -426,7 +429,7 @@ class AsciicastPlayer {
   }
 }
 
-class _InterruptibleSleep {
+final class _InterruptibleSleep {
   Timer? _timer;
   Completer<void>? _completer;
 

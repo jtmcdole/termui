@@ -49,7 +49,7 @@ import 'service/terminal_service.dart';
 /// | `fontSize` | [double] | The text rendering font size. Defaults to `13.0`. |
 /// | `fontFamily` | [String] | Monospaced font family for rendering cells. |
 /// | `backgroundColor` | [Color] | The background color of the terminal view. |
-class Terminal extends StatefulWidget {
+final class Terminal extends StatefulWidget {
   /// Optional custom terminal instance.
   final FlutterTerminal? terminal;
 
@@ -158,7 +158,7 @@ class _TerminalState extends State<Terminal> {
 /// | `fontSize` | [double] | Monospaced font height scaling factor. |
 /// | `fontFamily` | [String] | Active typeface family. |
 /// | `backgroundColor` | [Color] | Backdrop style filling the grid viewport. |
-class PrivateTuiView extends StatefulWidget {
+final class PrivateTuiView extends StatefulWidget {
   /// The internal terminal logic controller backing the UI events.
   final FlutterTerminal terminal;
 
@@ -513,120 +513,64 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         mods.add(term.Modifier.meta);
       }
 
-      term.InputEvent? termEvent;
-
-      if (key == LogicalKeyboardKey.arrowUp) {
-        termEvent = term.KeyEvent('up', term.KeyType.up, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.arrowDown) {
-        termEvent = term.KeyEvent('down', term.KeyType.down, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.arrowLeft) {
-        termEvent = term.KeyEvent('left', term.KeyType.left, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.arrowRight) {
-        termEvent = term.KeyEvent('right', term.KeyType.right, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.home) {
-        termEvent = term.KeyEvent('home', term.KeyType.home, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.end) {
-        termEvent = term.KeyEvent('end', term.KeyType.end, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.delete) {
-        termEvent = term.KeyEvent(
-          'delete',
-          term.KeyType.delete,
-          modifiers: mods,
-        );
-      } else if (key == LogicalKeyboardKey.backspace) {
-        termEvent = term.KeyEvent(
-          'backspace',
-          term.KeyType.backspace,
-          modifiers: mods,
-        );
-      } else if (key == LogicalKeyboardKey.pageUp) {
-        termEvent = term.KeyEvent(
-          'pageUp',
-          term.KeyType.pageUp,
-          modifiers: mods,
-        );
-      } else if (key == LogicalKeyboardKey.pageDown) {
-        termEvent = term.KeyEvent(
-          'pageDown',
-          term.KeyType.pageDown,
-          modifiers: mods,
-        );
-      } else if (key == LogicalKeyboardKey.escape) {
-        termEvent = term.KeyEvent(
-          'escape',
-          term.KeyType.escape,
-          modifiers: mods,
-        );
-      } else if (key == LogicalKeyboardKey.enter ||
-          key == LogicalKeyboardKey.numpadEnter) {
-        termEvent = term.KeyEvent('\n', term.KeyType.enter, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.tab) {
-        if (mods.contains(term.Modifier.shift)) {
-          termEvent = term.KeyEvent(
-            'backtab',
-            term.KeyType.tab,
-            modifiers: mods,
-          );
-        } else {
-          termEvent = term.KeyEvent('\t', term.KeyType.tab, modifiers: mods);
-        }
-      } else if (key == LogicalKeyboardKey.f1) {
-        termEvent = term.KeyEvent('f1', term.KeyType.f1, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f2) {
-        termEvent = term.KeyEvent('f2', term.KeyType.f2, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f3) {
-        termEvent = term.KeyEvent('f3', term.KeyType.f3, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f4) {
-        termEvent = term.KeyEvent('f4', term.KeyType.f4, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f5) {
-        termEvent = term.KeyEvent('f5', term.KeyType.f5, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f6) {
-        termEvent = term.KeyEvent('f6', term.KeyType.f6, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f7) {
-        termEvent = term.KeyEvent('f7', term.KeyType.f7, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f8) {
-        termEvent = term.KeyEvent('f8', term.KeyType.f8, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f9) {
-        termEvent = term.KeyEvent('f9', term.KeyType.f9, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f10) {
-        termEvent = term.KeyEvent('f10', term.KeyType.f10, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.f11) {
-        termEvent = term.KeyEvent('f11', term.KeyType.f11, modifiers: mods);
-      } else if (key == LogicalKeyboardKey.equal ||
-          key == LogicalKeyboardKey.numpadAdd) {
-        termEvent = term.KeyEvent(
+      final (termKey, termType) = switch (key) {
+        LogicalKeyboardKey.arrowUp => ('up', term.KeyType.up),
+        LogicalKeyboardKey.arrowDown => ('down', term.KeyType.down),
+        LogicalKeyboardKey.arrowLeft => ('left', term.KeyType.left),
+        LogicalKeyboardKey.arrowRight => ('right', term.KeyType.right),
+        LogicalKeyboardKey.home => ('home', term.KeyType.home),
+        LogicalKeyboardKey.end => ('end', term.KeyType.end),
+        LogicalKeyboardKey.delete => ('delete', term.KeyType.delete),
+        LogicalKeyboardKey.backspace => ('backspace', term.KeyType.backspace),
+        LogicalKeyboardKey.pageUp => ('pageUp', term.KeyType.pageUp),
+        LogicalKeyboardKey.pageDown => ('pageDown', term.KeyType.pageDown),
+        LogicalKeyboardKey.escape => ('escape', term.KeyType.escape),
+        LogicalKeyboardKey.enter ||
+        LogicalKeyboardKey.numpadEnter => ('\n', term.KeyType.enter),
+        LogicalKeyboardKey.tab => (
+          mods.contains(term.Modifier.shift) ? 'backtab' : '\t',
+          term.KeyType.tab,
+        ),
+        LogicalKeyboardKey.f1 => ('f1', term.KeyType.f1),
+        LogicalKeyboardKey.f2 => ('f2', term.KeyType.f2),
+        LogicalKeyboardKey.f3 => ('f3', term.KeyType.f3),
+        LogicalKeyboardKey.f4 => ('f4', term.KeyType.f4),
+        LogicalKeyboardKey.f5 => ('f5', term.KeyType.f5),
+        LogicalKeyboardKey.f6 => ('f6', term.KeyType.f6),
+        LogicalKeyboardKey.f7 => ('f7', term.KeyType.f7),
+        LogicalKeyboardKey.f8 => ('f8', term.KeyType.f8),
+        LogicalKeyboardKey.f9 => ('f9', term.KeyType.f9),
+        LogicalKeyboardKey.f10 => ('f10', term.KeyType.f10),
+        LogicalKeyboardKey.f11 => ('f11', term.KeyType.f11),
+        LogicalKeyboardKey.equal || LogicalKeyboardKey.numpadAdd => (
           key == LogicalKeyboardKey.numpadAdd ? '+' : '=',
           term.KeyType.character,
-          modifiers: mods,
-        );
-      } else if (key == LogicalKeyboardKey.minus ||
-          key == LogicalKeyboardKey.numpadSubtract) {
-        termEvent = term.KeyEvent(
-          key == LogicalKeyboardKey.numpadSubtract ? '-' : '-',
-          term.KeyType.character,
-          modifiers: mods,
-        );
-      } else if (event.character != null && event.character!.isNotEmpty) {
-        final char = event.character!;
-        if (char == '\n' || char == '\r' || char == '\r\n') {
-          termEvent = term.KeyEvent('\n', term.KeyType.enter, modifiers: mods);
-        } else {
-          termEvent = term.KeyEvent(
-            char,
-            term.KeyType.character,
-            modifiers: mods,
-          );
-        }
-      } else if (key.keyLabel.length == 1) {
-        termEvent = term.KeyEvent(
+        ),
+        LogicalKeyboardKey.minus ||
+        LogicalKeyboardKey.numpadSubtract => ('-', term.KeyType.character),
+        _ when event.character != null && event.character!.isNotEmpty => (
+          (event.character == '\n' ||
+                  event.character == '\r' ||
+                  event.character == '\r\n')
+              ? '\n'
+              : event.character!,
+          (event.character == '\n' ||
+                  event.character == '\r' ||
+                  event.character == '\r\n')
+              ? term.KeyType.enter
+              : term.KeyType.character,
+        ),
+        _ when key.keyLabel.length == 1 => (
           key.keyLabel.toLowerCase(),
           term.KeyType.character,
-          modifiers: mods,
-        );
-      }
+        ),
+        _ => (null, null),
+      };
 
-      if (termEvent != null) {
-        widget.terminal.injectEvent(termEvent);
+      if (termKey != null && termType != null) {
+        widget.terminal.injectEvent(
+          term.KeyEvent(termKey, termType, modifiers: mods),
+        );
       }
     }
   }
@@ -751,14 +695,15 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       }
 
       if (mounted) {
-        final savedFiles = <String?>[
-          screenshotBasename,
-          atlasBasename,
-          atlasBasename
-              ?.replaceFirst('atlas_', 'atlas_table_')
-              .replaceAll('.png', '.json'),
-          coordinatesBasename,
-        ].whereType<String>().toList();
+        final savedFiles = <String>[
+          ?screenshotBasename,
+          ?atlasBasename,
+          if (atlasBasename != null)
+            atlasBasename
+                .replaceFirst('atlas_', 'atlas_table_')
+                .replaceAll('.png', '.json'),
+          ?coordinatesBasename,
+        ];
 
         final String message;
         if (savedFiles.isNotEmpty) {
@@ -801,44 +746,39 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     final clampedCol = col.clamp(0, maxCol - 1);
     final clampedRow = row.clamp(0, maxRow - 1);
 
-    term.MouseButton termuiButton = term.MouseButton.none;
-    term.MouseEventType termuiType = term.MouseEventType.move;
-
-    if (event is PointerDownEvent) {
-      if (!_focusNode.hasFocus && _focusNode.canRequestFocus) {
-        _focusNode.requestFocus();
-      }
-      if (event.buttons & kSecondaryMouseButton != 0) {
-        termuiButton = term.MouseButton.right;
-      } else if (event.buttons & kMiddleMouseButton != 0) {
-        termuiButton = term.MouseButton.middle;
-      } else {
-        termuiButton = term.MouseButton.left;
-      }
-      termuiType = term.MouseEventType.press;
-    } else if (event is PointerMoveEvent) {
-      if (event.down) {
-        if (event.buttons & kSecondaryMouseButton != 0) {
-          termuiButton = term.MouseButton.right;
-        } else if (event.buttons & kMiddleMouseButton != 0) {
-          termuiButton = term.MouseButton.middle;
-        } else {
-          termuiButton = term.MouseButton.left;
-        }
-        termuiType = term.MouseEventType.drag;
-      } else {
-        termuiButton = term.MouseButton.none;
-        termuiType = term.MouseEventType.move;
-      }
-    } else if (event is PointerUpEvent) {
-      termuiButton = term.MouseButton.left;
-      termuiType = term.MouseEventType.release;
-    } else if (event is PointerScrollEvent) {
-      termuiButton = event.scrollDelta.dy < 0
-          ? term.MouseButton.wheelUp
-          : term.MouseButton.wheelDown;
-      termuiType = term.MouseEventType.press;
+    if (event is PointerDownEvent &&
+        !_focusNode.hasFocus &&
+        _focusNode.canRequestFocus) {
+      _focusNode.requestFocus();
     }
+
+    final (termuiButton, termuiType) = switch (event) {
+      PointerDownEvent(:final buttons) => (
+        (buttons & kSecondaryMouseButton != 0)
+            ? term.MouseButton.right
+            : (buttons & kMiddleMouseButton != 0)
+            ? term.MouseButton.middle
+            : term.MouseButton.left,
+        term.MouseEventType.press,
+      ),
+      PointerMoveEvent(:final down, :final buttons) when down => (
+        (buttons & kSecondaryMouseButton != 0)
+            ? term.MouseButton.right
+            : (buttons & kMiddleMouseButton != 0)
+            ? term.MouseButton.middle
+            : term.MouseButton.left,
+        term.MouseEventType.drag,
+      ),
+      PointerMoveEvent() => (term.MouseButton.none, term.MouseEventType.move),
+      PointerUpEvent() => (term.MouseButton.left, term.MouseEventType.release),
+      PointerScrollEvent(:final scrollDelta) => (
+        scrollDelta.dy < 0
+            ? term.MouseButton.wheelUp
+            : term.MouseButton.wheelDown,
+        term.MouseEventType.press,
+      ),
+      _ => (term.MouseButton.none, term.MouseEventType.move),
+    };
 
     final mods = <term.Modifier>{};
     if (HardwareKeyboard.instance.isShiftPressed) {
@@ -915,7 +855,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
                     onPointerHover: (e) => _handlePointerEvent(e, layoutSize),
                     onPointerUp: (e) => _handlePointerEvent(e, layoutSize),
                     onPointerSignal: (signal) {
-                      if (signal is PointerScrollEvent) {
+                      if (signal case PointerScrollEvent()) {
                         _handlePointerEvent(signal, layoutSize);
                       }
                     },

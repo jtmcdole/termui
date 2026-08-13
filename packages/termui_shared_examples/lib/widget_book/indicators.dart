@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// Example demonstrating various progress indicators and spinners.
-class IndicatorsExample extends WidgetBookExample {
+final class IndicatorsExample extends WidgetBookExample {
   /// The current progress value (0.0 to 1.0).
   double progressVal = 0.0;
 
@@ -11,7 +11,7 @@ class IndicatorsExample extends WidgetBookExample {
   int frameCount = 0;
 
   /// The active cross axis fill mode, toggleable via 'p'.
-  CrossAxisFill fillMode = CrossAxisFill.span;
+  CrossAxisFill fillMode = .span;
 
   /// Whether progress incrementing is paused, toggleable via spacebar.
   bool isPaused = false;
@@ -31,16 +31,18 @@ class IndicatorsExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
-    if (event.key == 'p') {
-      fillMode = fillMode == CrossAxisFill.span
-          ? CrossAxisFill.precise
-          : CrossAxisFill.span;
-      return true;
-    } else if (event.key == ' ') {
-      isPaused = !isPaused;
-      return true;
+    switch (event.key) {
+      case 'p':
+        fillMode = fillMode == CrossAxisFill.span
+            ? CrossAxisFill.precise
+            : CrossAxisFill.span;
+        return true;
+      case ' ':
+        isPaused = !isPaused;
+        return true;
+      default:
+        return false;
     }
-    return false;
   }
 
   @override

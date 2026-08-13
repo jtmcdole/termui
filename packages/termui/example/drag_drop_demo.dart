@@ -400,7 +400,7 @@ class DragDropDemoState extends State<DragDropDemo> {
       child: const Padding(
         padding: EdgeInsets.symmetric(horizontal: 2, vertical: 1),
         child: Align(
-          alignment: Alignment.center,
+          alignment: .center,
           child: Text(
             'DRAG & DROP TUI PROTOTYPE DEMO',
             style: Style(modifiers: Modifier.bold, foreground: Colors.white),
@@ -537,12 +537,10 @@ class DragDropDemoState extends State<DragDropDemo> {
               style: Style(foreground: Colors.black),
             ),
           ]
-        : logs
-              .map(
-                (log) =>
-                    Text(log, style: const Style(foreground: Colors.black)),
-              )
-              .toList();
+        : [
+            for (final log in logs)
+              Text(log, style: const Style(foreground: Colors.black)),
+          ];
 
     final logPanel = DecoratedBox(
       decoration: const BoxDecoration(
@@ -658,7 +656,7 @@ void main() async {
             buffer.writeString(
               sx,
               sy,
-              session.data.toString(),
+              '${session.data}',
               Style(
                 foreground: Colors.yellow,
                 modifiers: buffer.getModifiers(sx, sy) | Modifier.bold,

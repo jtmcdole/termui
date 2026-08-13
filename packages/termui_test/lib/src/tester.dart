@@ -1,6 +1,7 @@
 import "package:termui/perf/fs_locator.dart";
 import 'dart:async';
 import 'dart:math';
+import 'package:characters/characters.dart';
 import 'package:file/file.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:test_api/hooks.dart';
@@ -11,7 +12,7 @@ import 'finders.dart';
 import 'utils.dart' as utils;
 
 /// Representation of standard terminal keys for simulation.
-class LogicalKey {
+final class LogicalKey {
   /// The raw escape sequence string.
   final String escapeSequence;
 
@@ -109,7 +110,7 @@ class LogicalKey {
 }
 
 /// The integration testing binding and execution wrapper.
-class TerminalTester {
+final class TerminalTester {
   final bool _isWindows;
   final Point<int>? _size;
 
@@ -351,7 +352,7 @@ class TerminalTester {
 
   /// Helper function to simulate typing a string
   void typeText(String text) {
-    for (final char in text.split('')) {
+    for (final char in text.characters) {
       sendKey(LogicalKey.character(char));
     }
   }
@@ -366,8 +367,7 @@ class TerminalTester {
     // Write to the terminal's actual backend (which is terminal.backend)
     // Wait, the tester is initialized with terminal, which has its own backend.
     // So we should write to terminal.backend!
-    final b = terminal.backend;
-    if (b is MockTerminalBackend) {
+    if (terminal.backend case final MockTerminalBackend b) {
       b.pushString(value);
     }
     _fakeAsync?.flushMicrotasks();
@@ -382,23 +382,20 @@ class TerminalTester {
     bool alt = false,
   }) {
     _actionLog.add('Key: ${key.debugName}');
-    // Explicitly trap Enter
-    if (key == LogicalKey.enter) {
-      _sendStringRaw('\n');
-      return;
-    }
-
-    // Explicitly trap Shift+Tab (Back Tab)
-    if (key == LogicalKey.tab && shift && !control && !alt) {
-      sendString('\x1b[Z');
-      return;
-    }
-
-    // Explicitly trap Control+Backspace
-    if (key == LogicalKey.backspace && control && !alt && !shift) {
-      // \x1b[ = CSI, 127 = Backspace, 5 = Control modifier, u = Kitty protocol
-      _sendStringRaw('\x1b[127;5u');
-      return;
+    // Explicitly trap key shortcuts with pattern matching
+    switch ((key, shift, control, alt)) {
+      case (LogicalKey.enter, _, _, _):
+        _sendStringRaw('\n');
+        return;
+      case (LogicalKey.tab, true, false, false):
+        sendString('\x1b[Z');
+        return;
+      case (LogicalKey.backspace, false, true, false):
+        // \x1b[ = CSI, 127 = Backspace, 5 = Control modifier, u = Kitty protocol
+        _sendStringRaw('\x1b[127;5u');
+        return;
+      default:
+        break;
     }
 
     final baseSeq = key.escapeSequence;
@@ -525,8 +522,7 @@ class TerminalTester {
   /// test buffer if in [pumpWidget] mode, and triggers a layout/paint pass.
   Future<void> simulateResize(Size newSize) async {
     _actionLog.add('Resize: $newSize');
-    final b = terminal.backend;
-    if (b is MockTerminalBackend) {
+    if (terminal.backend case final MockTerminalBackend b) {
       b.size = Point<int>(newSize.width, newSize.height);
     }
     if (_rootElement != null && _testBuffer != null) {

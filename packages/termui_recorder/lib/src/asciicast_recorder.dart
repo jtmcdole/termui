@@ -15,7 +15,7 @@ abstract interface class AsciicastWriter {
 }
 
 /// A writer that sends Asciicast lines to a standard [File] using synchronous I/O.
-class FileAsciicastWriter implements AsciicastWriter {
+final class FileAsciicastWriter implements AsciicastWriter {
   final File _file;
   final StringBuffer _buffer = StringBuffer();
 
@@ -41,7 +41,7 @@ class FileAsciicastWriter implements AsciicastWriter {
 }
 
 /// A writer that sends Asciicast lines to a [StringSink].
-class StringSinkAsciicastWriter implements AsciicastWriter {
+final class StringSinkAsciicastWriter implements AsciicastWriter {
   final StringSink _sink;
 
   /// Creates a [StringSinkAsciicastWriter] wrapping the given [sink].
@@ -60,7 +60,7 @@ class StringSinkAsciicastWriter implements AsciicastWriter {
 
 /// A recorder that captures terminal frame states and serializes them
 /// into the Asciinema Asciicast v3 format.
-class AsciicastRecorder {
+final class AsciicastRecorder {
   /// The column width of the recorded terminal session.
   int width;
 
@@ -81,7 +81,7 @@ class AsciicastRecorder {
     required this.width,
     required this.height,
   }) : _writer = writer {
-    _renderer = Renderer(width, height, mode: RenderingMode.alternateScreen);
+    _renderer = Renderer(width, height, mode: .alternateScreen);
   }
 
   /// Writes the Asciicast header chunk in v3 format.
@@ -138,7 +138,7 @@ class AsciicastRecorder {
 
     _lastEventTime = now;
 
-    if (actions != null && actions.isNotEmpty) {
+    if (actions case final actions? when actions.isNotEmpty) {
       final joinedActions = actions.join(', ');
       final actionRow = [
         0.0, // Attach metadata exactly at the same tick (0.0 interval from the previous event)

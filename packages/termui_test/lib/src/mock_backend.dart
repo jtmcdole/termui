@@ -6,7 +6,7 @@ import 'package:termui/termui.dart';
 ///
 /// It intercepts stdout writes, stores them in a buffer, and allows pushing
 /// raw ANSI/SGR escape sequences into the stdin/rawInput stream.
-class MockTerminalBackend implements BufferedTerminalBackend {
+final class MockTerminalBackend implements BufferedTerminalBackend {
   @override
   final bool isWindows;
 
@@ -62,7 +62,7 @@ class MockTerminalBackend implements BufferedTerminalBackend {
   }
 
   /// The accumulated string written to stdout.
-  String get stdout => _stdoutBuffer.toString();
+  String get stdout => '$_stdoutBuffer';
 
   /// The individual chunks written to stdout.
   List<String> get writes => _writes;

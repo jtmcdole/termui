@@ -1,5 +1,5 @@
 /// Abstract class representing a target sink for event tracing data.
-abstract class TracerSink {
+abstract interface class TracerSink {
   /// Send a buffer of event data and list of newly registered strings to the sink.
   void add(
     List<int> buffer,

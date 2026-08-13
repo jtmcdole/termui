@@ -1,7 +1,7 @@
 import 'package:termui/termui.dart';
 
 /// A widget that displays a value as a linear or semi-circular meter.
-class Gauge extends Widget {
+final class Gauge extends Widget {
   /// The current value to display.
   final double value;
 
@@ -16,7 +16,8 @@ class Gauge extends Widget {
   final List<(double, Color)> thresholds;
 
   /// Creates a gauge widget.
-  Gauge({
+  const Gauge({
+    super.key,
     required this.value,
     required this.min,
     required this.max,
@@ -27,7 +28,7 @@ class Gauge extends Widget {
   Element createElement() => _GaugeElement(this);
 }
 
-class _GaugeElement extends Element {
+final class _GaugeElement extends Element {
   _GaugeElement(super.widget);
 
   @override
@@ -54,9 +55,9 @@ class _GaugeElement extends Element {
       Color activeColor = gauge.thresholds.isNotEmpty
           ? gauge.thresholds.first.$2
           : Colors.white;
-      for (final threshold in gauge.thresholds) {
-        if (posPercent >= threshold.$1) {
-          activeColor = threshold.$2;
+      for (final (thresholdPos, color) in gauge.thresholds) {
+        if (posPercent >= thresholdPos) {
+          activeColor = color;
         }
       }
 

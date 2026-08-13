@@ -3,13 +3,13 @@ import 'package:termui/ui/style.dart';
 import 'package:termui/ui/color.dart';
 
 /// A utility class to serialize a [Buffer] into a styled ANSI string representation.
-class AnsiScreenshot {
+abstract final class AnsiScreenshot {
   /// Converts the given [Buffer] to a styled ANSI string representation.
   ///
   /// Set [resetLineEndings] to true to output `\x1b[0m` at the end of every row.
   static String capture(Buffer buffer, {bool resetLineEndings = true}) {
     final sb = StringBuffer();
-    Style activeStyle = Style.empty;
+    Style activeStyle = .empty;
 
     for (var y = 0; y < buffer.height; y++) {
       var lastCol = buffer.width - 1;
@@ -45,15 +45,15 @@ class AnsiScreenshot {
         sb.write(char);
       }
 
-      if (resetLineEndings && activeStyle != Style.empty) {
+      if (resetLineEndings && activeStyle != .empty) {
         sb.write('\x1b[0m');
-        activeStyle = Style.empty;
+        activeStyle = .empty;
       }
       sb.write('\n');
     }
 
     // Ensure final reset
-    if (activeStyle != Style.empty) {
+    if (activeStyle != .empty) {
       sb.write('\x1b[0m');
     }
 
@@ -67,9 +67,9 @@ class AnsiScreenshot {
   ) {
     if (current == target) return current;
 
-    if (target == Style.empty) {
+    if (target == .empty) {
       sb.write('\x1b[0m');
-      return Style.empty;
+      return .empty;
     }
 
     final colorCleared =
@@ -89,7 +89,7 @@ class AnsiScreenshot {
     var effectiveCurrent = current;
     if (colorCleared || modifierTurnedOff) {
       sb.write('\x1b[0m');
-      effectiveCurrent = Style.empty;
+      effectiveCurrent = .empty;
     }
 
     final codeBuilder = StringBuffer();

@@ -4,15 +4,17 @@ import 'package:web/web.dart' as web;
 
 /// Saves the given [bytes] to a file with the specified [basename].
 Future<String?> saveFile(String basename, List<int> bytes) async {
-  final uint8Bytes = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
-  String mimeType = 'application/octet-stream';
-  if (basename.endsWith('.png')) {
-    mimeType = 'image/png';
-  } else if (basename.endsWith('.json') || basename.endsWith('.jsonl')) {
-    mimeType = 'application/json';
-  } else if (basename.endsWith('.cast')) {
-    mimeType = 'text/plain';
-  }
+  final uint8Bytes = switch (bytes) {
+    Uint8List u => u,
+    _ => Uint8List.fromList(bytes),
+  };
+  final mimeType = switch (basename) {
+    _ when basename.endsWith('.png') => 'image/png',
+    _ when basename.endsWith('.json') || basename.endsWith('.jsonl') =>
+      'application/json',
+    _ when basename.endsWith('.cast') => 'text/plain',
+    _ => 'application/octet-stream',
+  };
 
   // Convert Dart Uint8List to JS Uint8Array
   final jsBytes = uint8Bytes.toJS;

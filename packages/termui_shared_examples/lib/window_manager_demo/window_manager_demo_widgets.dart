@@ -2,7 +2,7 @@ import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// A widget that displays instructions and the currently focused window.
-class InfoWidget extends Widget {
+final class InfoWidget extends Widget {
   /// The title of the currently focused window.
   String focusedWindow = 'None';
 
@@ -13,7 +13,7 @@ class InfoWidget extends Widget {
   Element createElement() => _InfoElement(this);
 }
 
-class _InfoElement extends Element {
+final class _InfoElement extends Element {
   _InfoElement(super.widget);
 
   @override
@@ -39,14 +39,17 @@ class _InfoElement extends Element {
     buffer.writeString(
       offset.dx,
       offset.dy + 6,
-      'Win 1 Keys: ${w.keys.map((k) => k == '\r' || k == '\n' ? 'Enter' : k).join(" ")}',
+      'Win 1 Keys: ${[for (final k in w.keys) switch (k) {
+          '\r' || '\n' => 'Enter',
+          _ => k,
+        }].join(' ')}',
       const Style(foreground: Colors.green, modifiers: Modifier.bold),
     );
   }
 }
 
 /// A widget that tracks and displays mouse events and cursor position.
-class MouseTrackerWidget extends Widget {
+final class MouseTrackerWidget extends Widget {
   /// The current X coordinate of the mouse.
   int mouseX = 0;
 
@@ -66,7 +69,7 @@ class MouseTrackerWidget extends Widget {
   Element createElement() => _MouseTrackerElement(this);
 }
 
-class _MouseTrackerElement extends Element {
+final class _MouseTrackerElement extends Element {
   _MouseTrackerElement(super.widget);
 
   @override
@@ -105,18 +108,18 @@ class _MouseTrackerElement extends Element {
 }
 
 /// A widget that displays the bounds (width and height) of a window.
-class SizeWidget extends Widget {
+final class SizeWidget extends Widget {
   /// A function that returns the window to measure.
   final Window Function() windowFn;
 
   /// Creates a new instance of [SizeWidget].
-  SizeWidget(this.windowFn);
+  const SizeWidget(this.windowFn, {super.key});
 
   @override
   Element createElement() => _SizeElement(this);
 }
 
-class _SizeElement extends Element {
+final class _SizeElement extends Element {
   _SizeElement(super.widget);
 
   @override
@@ -140,7 +143,7 @@ class _SizeElement extends Element {
 }
 
 /// A widget that renders an animated graphic on a Braille canvas.
-class BrailleCanvasWidget extends Widget {
+final class BrailleCanvasWidget extends Widget {
   /// The current frame of the animation.
   int frame = 0;
 
@@ -148,7 +151,7 @@ class BrailleCanvasWidget extends Widget {
   Element createElement() => _BrailleCanvasElement(this);
 }
 
-class _BrailleCanvasElement extends Element {
+final class _BrailleCanvasElement extends Element {
   _BrailleCanvasElement(super.widget);
 
   @override

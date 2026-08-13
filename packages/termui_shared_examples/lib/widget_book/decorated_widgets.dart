@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// An example showcasing decorated widgets like number selectors and bordered boxes.
-class DecoratedWidgetsExample extends WidgetBookExample {
+final class DecoratedWidgetsExample extends WidgetBookExample {
   /// The submarine speed value controlled by the first selector.
   int speed = 3;
 
@@ -197,35 +197,30 @@ class DecoratedWidgetsExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
-    // Up/Down changes active selector
-    if (event.type == ui.KeyType.up) {
-      activeSelectorIndex = (activeSelectorIndex - 1 + 2) % 2;
-      return true;
-    } else if (event.type == ui.KeyType.down) {
-      activeSelectorIndex = (activeSelectorIndex + 1) % 2;
-      return true;
+    switch (event.type) {
+      case ui.KeyType.up:
+        activeSelectorIndex = (activeSelectorIndex - 1 + 2) % 2;
+        return true;
+      case ui.KeyType.down:
+        activeSelectorIndex = (activeSelectorIndex + 1) % 2;
+        return true;
+      case ui.KeyType.left:
+        if (activeSelectorIndex == 0) {
+          if (speed > 0) speed--;
+        } else {
+          if (depth > 0) depth--;
+        }
+        return true;
+      case ui.KeyType.right:
+        if (activeSelectorIndex == 0) {
+          if (speed < 10) speed++;
+        } else {
+          if (depth < 200) depth++;
+        }
+        return true;
+      default:
+        return false;
     }
-
-    // Left/Right changes selected values
-    if (activeSelectorIndex == 0) {
-      if (event.type == ui.KeyType.left) {
-        if (speed > 0) speed--;
-        return true;
-      } else if (event.type == ui.KeyType.right) {
-        if (speed < 10) speed++;
-        return true;
-      }
-    } else {
-      if (event.type == ui.KeyType.left) {
-        if (depth > 0) depth--;
-        return true;
-      } else if (event.type == ui.KeyType.right) {
-        if (depth < 200) depth++;
-        return true;
-      }
-    }
-
-    return false;
   }
 
   @override

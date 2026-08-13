@@ -376,9 +376,10 @@ class SearchOverlayState extends State<SearchOverlay> {
                 });
                 widget.onMatchSelected(filteredSpans[index]);
               },
-              lines: filteredSpans.take(1000).map((span) {
-                return ' • ${span.name} (${(span.endUs - span.startUs) / 1000.0}ms)';
-              }).toList(),
+              lines: [
+                for (final span in filteredSpans.take(1000))
+                  ' • ${span.name} (${(span.endUs - span.startUs) / 1000.0}ms)',
+              ],
             ),
           ),
         ]),

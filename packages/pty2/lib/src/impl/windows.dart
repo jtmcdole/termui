@@ -20,7 +20,7 @@ import 'package:win32/win32.dart' as win32;
 ///   in an extension type over `Pointer`. Therefore, integer handles (like those
 ///   returned by `CreatePipe` in a struct) must be artificially boxed back into
 ///   pointers via `win32.HANDLE(Pointer.fromAddress(val))` to satisfy FFI.
-class PtyCoreWindows implements PtyCore, Finalizable {
+final class PtyCoreWindows implements PtyCore, Finalizable {
   /// Internal testing flag to force the legacy fallback.
   static bool forceLegacyForTesting = false;
 
@@ -578,7 +578,7 @@ class PtyCoreWindows implements PtyCore, Finalizable {
   }
 }
 
-class PtyCoreWindowsWorker implements PtyCoreWorker {
+final class PtyCoreWindowsWorker implements PtyCoreWorker {
   final win32.HANDLE outputReadSide;
   final win32.HANDLE hProcess;
   final Pointer<Uint8> buffer;
@@ -644,7 +644,7 @@ typedef FreeEnvironmentStringsNative =
 typedef FreeEnvironmentStringsDart =
     int Function(Pointer<Utf16> lpszEnvironmentBlock);
 
-class WinEnv {
+final class WinEnv {
   static final kernel32 = DynamicLibrary.open('kernel32.dll');
 
   static final getEnvironmentStringsW = kernel32

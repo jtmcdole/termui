@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// Example demonstrating a lazily-rendered table with a large number of items.
-class LazyScrollingExample extends WidgetBookExample {
+final class LazyScrollingExample extends WidgetBookExample {
   /// The current scroll offset of the table.
   int lazyTableOffset = 0;
 
@@ -65,32 +65,34 @@ class LazyScrollingExample extends WidgetBookExample {
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
     final usableHeight = _lastHeight - 2;
-    if (event.type == ui.KeyType.up) {
-      lazyTableSelected = (lazyTableSelected - 1).clamp(0, 999999);
-      lazyTableDemo.selectedRowIndex = lazyTableSelected;
-      lazyTableDemo.adjustScroll(usableHeight);
-      lazyTableOffset = lazyTableDemo.scrollOffset;
-      return true;
-    } else if (event.type == ui.KeyType.down) {
-      lazyTableSelected = (lazyTableSelected + 1).clamp(0, 999999);
-      lazyTableDemo.selectedRowIndex = lazyTableSelected;
-      lazyTableDemo.adjustScroll(usableHeight);
-      lazyTableOffset = lazyTableDemo.scrollOffset;
-      return true;
-    } else if (event.type == ui.KeyType.pageUp) {
-      lazyTableSelected = (lazyTableSelected - usableHeight).clamp(0, 999999);
-      lazyTableDemo.selectedRowIndex = lazyTableSelected;
-      lazyTableDemo.adjustScroll(usableHeight);
-      lazyTableOffset = lazyTableDemo.scrollOffset;
-      return true;
-    } else if (event.type == ui.KeyType.pageDown) {
-      lazyTableSelected = (lazyTableSelected + usableHeight).clamp(0, 999999);
-      lazyTableDemo.selectedRowIndex = lazyTableSelected;
-      lazyTableDemo.adjustScroll(usableHeight);
-      lazyTableOffset = lazyTableDemo.scrollOffset;
-      return true;
+    switch (event.type) {
+      case ui.KeyType.up:
+        lazyTableSelected = (lazyTableSelected - 1).clamp(0, 999999);
+        lazyTableDemo.selectedRowIndex = lazyTableSelected;
+        lazyTableDemo.adjustScroll(usableHeight);
+        lazyTableOffset = lazyTableDemo.scrollOffset;
+        return true;
+      case ui.KeyType.down:
+        lazyTableSelected = (lazyTableSelected + 1).clamp(0, 999999);
+        lazyTableDemo.selectedRowIndex = lazyTableSelected;
+        lazyTableDemo.adjustScroll(usableHeight);
+        lazyTableOffset = lazyTableDemo.scrollOffset;
+        return true;
+      case ui.KeyType.pageUp:
+        lazyTableSelected = (lazyTableSelected - usableHeight).clamp(0, 999999);
+        lazyTableDemo.selectedRowIndex = lazyTableSelected;
+        lazyTableDemo.adjustScroll(usableHeight);
+        lazyTableOffset = lazyTableDemo.scrollOffset;
+        return true;
+      case ui.KeyType.pageDown:
+        lazyTableSelected = (lazyTableSelected + usableHeight).clamp(0, 999999);
+        lazyTableDemo.selectedRowIndex = lazyTableSelected;
+        lazyTableDemo.adjustScroll(usableHeight);
+        lazyTableOffset = lazyTableDemo.scrollOffset;
+        return true;
+      default:
+        return false;
     }
-    return false;
   }
 
   @override

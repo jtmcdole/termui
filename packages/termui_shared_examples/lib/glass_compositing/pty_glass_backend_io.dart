@@ -4,7 +4,7 @@ import 'package:termui_pty/termui_pty.dart';
 import 'package:pty2/pty2.dart';
 
 /// An IO-based backend that spawns a real local process via [PseudoTerminal].
-class PtyBackend {
+final class PtyBackend {
   PseudoTerminal? _pty;
 
   /// Starts the process and returns a [PseudoTerminalView].

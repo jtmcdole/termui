@@ -232,7 +232,7 @@ class SceneManager implements Reassemblable {
       'pos': '${event.x},${event.y}',
     };
     if (event.modifiers.isNotEmpty) {
-      meta['modifiers'] = event.modifiers.map((m) => m.name).join('+');
+      meta['modifiers'] = [for (final m in event.modifiers) m.name].join('+');
     }
 
     Tracer.record(
@@ -557,6 +557,11 @@ class SceneManager implements Reassemblable {
         handleKeyEvent(e);
       case final MouseEvent e:
         handleMouseEvent(e);
+      case PasteEvent():
+      case FocusInEvent():
+      case FocusOutEvent():
+      case CursorPositionReportEvent():
+        break;
     }
   }
 
@@ -1120,8 +1125,8 @@ class _SceneLayerList extends ListBase<SceneLayer> {
 
   @override
   bool remove(Object? element) {
-    if (element is SceneLayer) {
-      final index = _inner.indexOf(element);
+    if (element case SceneLayer layer) {
+      final index = _inner.indexOf(layer);
       if (index != -1) {
         removeAt(index);
         return true;
@@ -1215,7 +1220,10 @@ class _SceneLayerList extends ListBase<SceneLayer> {
 
   @override
   void removeWhere(bool Function(SceneLayer element) test) {
-    final removed = _inner.where(test).toList();
+    final removed = [
+      for (final layer in _inner)
+        if (test(layer)) layer,
+    ];
     _inner.removeWhere(test);
     for (final layer in removed) {
       _manager._onLayerRemoved(layer);
@@ -1225,7 +1233,10 @@ class _SceneLayerList extends ListBase<SceneLayer> {
 
   @override
   void retainWhere(bool Function(SceneLayer element) test) {
-    final removed = _inner.where((e) => !test(e)).toList();
+    final removed = [
+      for (final layer in _inner)
+        if (!test(layer)) layer,
+    ];
     _inner.retainWhere(test);
     for (final layer in removed) {
       _manager._onLayerRemoved(layer);

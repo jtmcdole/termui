@@ -113,9 +113,9 @@ class Terminal {
       (List<int> chunk) {
         final parsed = _parser.parse(chunk);
         for (final event in parsed) {
-          if (event is CursorPositionReportEvent) {
+          if (event case CursorPositionReportEvent(:final x, :final y)) {
             if (_cursorCallback != null && !_cursorCallback!.isCompleted) {
-              _cursorCallback!.complete(Point<int>(event.x, event.y));
+              _cursorCallback!.complete(Point<int>(x, y));
             }
             _cursorCallback = null;
           } else {

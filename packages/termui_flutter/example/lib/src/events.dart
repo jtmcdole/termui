@@ -5,7 +5,7 @@ import 'package:core_bus/core_bus.dart';
 final playerEventBus = EventBus();
 
 /// Reusable class encapsulating playback metrics.
-class PlaybackState {
+final class PlaybackState {
   final double currentTime;
   final double totalDuration;
   final bool isPlaying;
@@ -33,7 +33,7 @@ const playbackStateEvent = Event<PlaybackState>.broadcast(
 );
 
 /// Dispatched when a new cast is successfully loaded.
-class LoadedCastInfo {
+final class LoadedCastInfo {
   final String filename;
   final int cols;
   final int rows;
@@ -64,7 +64,7 @@ const uploadTraceRequestedEvent = Event<void>.broadcast(
 );
 
 /// Payload containing details of a cast uploaded via native bridge.
-class UploadedCastData {
+final class UploadedCastData {
   final String filename;
   final Uint8List bytes;
   const UploadedCastData(this.filename, this.bytes);
@@ -76,7 +76,7 @@ const castUploadedEvent = Event<UploadedCastData>.broadcast(
 );
 
 /// Payload containing details of a trace uploaded.
-class UploadedTraceData {
+final class UploadedTraceData {
   final String filename;
   final Uint8List bytes;
   const UploadedTraceData(this.filename, this.bytes);

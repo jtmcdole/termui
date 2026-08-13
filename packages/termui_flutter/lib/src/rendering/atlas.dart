@@ -582,7 +582,7 @@ bool drawProceduralCharacter(
 /// final newAtlas = await atlas.addGlyphs(['🍔', '🍕']);
 /// final sourceRect = newAtlas.charRects['🍔'];
 /// ```
-class GlyphAtlas {
+final class GlyphAtlas {
   /// The composite texture containing all rasterized characters.
   final ui.Image image;
 
@@ -774,14 +774,14 @@ class GlyphAtlas {
   }
 }
 
-class _GlyphMeasure {
+final class _GlyphMeasure {
   final String char;
   final TextPainter painter;
   final bool isDouble;
   _GlyphMeasure(this.char, this.painter, this.isDouble);
 }
 
-class _PlacedGlyph {
+final class _PlacedGlyph {
   final String char;
   final TextPainter painter;
   final bool isDouble;
@@ -804,7 +804,7 @@ class _PlacedGlyph {
 ///   fontFamily: 'Roboto Mono',
 /// );
 /// ```
-class GlyphAtlasGenerator {
+abstract final class GlyphAtlasGenerator {
   /// Blank padding added around each glyph.
   static const double padding = 2.0;
 
@@ -897,25 +897,11 @@ class GlyphAtlasGenerator {
     final colWidth = cellWidth + 2 * actualPadding;
     final rowHeight = cellHeight + 2 * actualPadding;
 
-    final glyphs = <int>[];
-
-    for (var i = 32; i <= 126; i++) {
-      glyphs.add(i);
-    }
-
-    for (var i = 0x2500; i <= 0x257F; i++) {
-      glyphs.add(i);
-    }
-
-    for (var i = 0x2580; i <= 0x259F; i++) {
-      glyphs.add(i);
-    }
-
-    for (var i = 0x2800; i <= 0x28FF; i++) {
-      glyphs.add(i);
-    }
-
-    final extraCodePoints = [
+    final glyphs = <int>[
+      for (var i = 32; i <= 126; i++) i,
+      for (var i = 0x2500; i <= 0x257F; i++) i,
+      for (var i = 0x2580; i <= 0x259F; i++) i,
+      for (var i = 0x2800; i <= 0x28FF; i++) i,
       0xf1,
       0x2019,
       0x2022,
@@ -925,7 +911,6 @@ class GlyphAtlasGenerator {
       0x25cb,
       0x25cf,
     ];
-    glyphs.addAll(extraCodePoints);
 
     final numCols = 32;
     final List<_PlacedGlyph> placedGlyphs = [];

@@ -4,7 +4,7 @@ import 'ansi_parser.dart';
 
 /// A virtual terminal that maintains a screen buffer and cursor state,
 /// mutating them in response to ANSI escape sequences.
-class VirtualTerminal implements TerminalHandler {
+final class VirtualTerminal implements TerminalHandler {
   /// The width of the virtual terminal in columns.
   int width;
 

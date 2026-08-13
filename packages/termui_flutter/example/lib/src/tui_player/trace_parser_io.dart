@@ -19,9 +19,7 @@ List<TraceEvent> _parseWorker(_ParseArgs args) {
   final list = jsonList is Map
       ? jsonList['traceEvents'] as List
       : jsonList as List;
-  return list
-      .map((e) => TraceEvent.fromJson(e as Map<String, dynamic>))
-      .toList();
+  return [for (final e in list) TraceEvent.fromJson(e as Map<String, dynamic>)];
 }
 
 Future<List<TraceEvent>> parseTraceEvents(

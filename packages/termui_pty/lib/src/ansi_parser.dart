@@ -1,5 +1,5 @@
 /// Interface for receiving parsed ANSI terminal sequences.
-abstract class TerminalHandler {
+abstract interface class TerminalHandler {
   /// Print raw printable text.
   void printText(String text);
 
@@ -28,7 +28,7 @@ enum _ParserState {
 }
 
 /// A highly optimized VT100/ANSI state machine parser.
-class AnsiParser {
+final class AnsiParser {
   /// The terminal handler that processes parsed escape sequences.
   final TerminalHandler handler;
 

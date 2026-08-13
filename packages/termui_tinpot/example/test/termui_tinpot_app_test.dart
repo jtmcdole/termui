@@ -7,7 +7,7 @@ import 'package:flutter_test/flutter_test.dart'
     hide find, Finder, findsOneWidget;
 import 'package:termui_tinpot_example/termui_tinpot_app.dart';
 
-class _FirstFinder extends Finder {
+final class _FirstFinder extends Finder {
   final Finder finder;
   const _FirstFinder(this.finder);
   @override

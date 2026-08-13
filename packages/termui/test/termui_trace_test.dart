@@ -68,16 +68,17 @@ void main() {
       ];
 
       final baseTime = rawEvents.map((e) => e.timestamp).reduce(min);
-      final events = rawEvents.map((e) {
-        return TraceEvent(
-          name: e.name,
-          phase: e.phase,
-          category: e.category,
-          timestamp: e.timestamp - baseTime,
-          tid: e.tid,
-          args: e.args,
-        );
-      }).toList();
+      final events = [
+        for (final e in rawEvents)
+          TraceEvent(
+            name: e.name,
+            phase: e.phase,
+            category: e.category,
+            timestamp: e.timestamp - baseTime,
+            tid: e.tid,
+            args: e.args,
+          ),
+      ];
 
       spans = computeSpans(events);
       minTs = spans.map((s) => s.startUs).reduce(min);
