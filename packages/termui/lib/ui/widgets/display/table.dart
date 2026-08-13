@@ -165,7 +165,7 @@ class TableElement extends Element {
       }
       for (var c = 0; c < table.headers.length; c++) {
         final cellData = c < rowData.length ? rowData[c] : '';
-        if (cellData is Widget) {
+        if (cellData case Widget _) {
           Element? cellEl = cellElements[r][c];
           if (cellEl != null &&
               cellEl.widget.runtimeType == cellData.runtimeType) {
@@ -298,7 +298,7 @@ class TableElement extends Element {
         );
         final vp = Viewport(buffer, cellRect);
 
-        if (cellData is Widget) {
+        if (cellData case Widget _) {
           vp.fillAttributes(
             char: ' ',
             fg: currentStyle.foreground?.argb ?? 0,
@@ -310,7 +310,7 @@ class TableElement extends Element {
             cellEl.paint(vp, Offset.zero);
           }
         } else {
-          final cellText = cellData.toString();
+          final cellText = '$cellData';
           final padded = padOrTruncate(cellText, colWidth);
           vp.writeString(0, 0, padded, currentStyle);
         }

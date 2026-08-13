@@ -5,7 +5,7 @@ import '../../ui/buffer.dart';
 ///
 /// Provides methods to interact with the console, such as enabling raw mode,
 /// reading input, and querying the terminal size.
-abstract class TerminalBackend {
+abstract interface class TerminalBackend {
   /// Whether the host platform is Windows.
   bool get isWindows;
 

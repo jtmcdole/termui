@@ -6,7 +6,7 @@ import 'example_base.dart';
 /// This widget book example demonstrates the primary palette, gradient ramps,
 /// semantic pairings (additions/deletions), neutral gradients, and warm
 /// highlights that can be used for text foreground and background styles.
-class CharmColorsExample extends WidgetBookExample {
+final class CharmColorsExample extends WidgetBookExample {
   @override
   Widget build({
     required bool focusDemoPane,

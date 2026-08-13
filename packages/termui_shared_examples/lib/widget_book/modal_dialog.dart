@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// Example demonstrating a modal dialog overlay with a focus trap.
-class ModalDialogExample extends WidgetBookExample {
+final class ModalDialogExample extends WidgetBookExample {
   /// Whether the modal dialog is currently visible.
   bool showModalDemo = false;
 
@@ -61,7 +61,7 @@ class ModalDialogExample extends WidgetBookExample {
 }
 
 /// A demo widget presenting the modal dialog layout, styling, and key interaction.
-class ModalDialogDemoWidget extends StatefulWidget {
+final class ModalDialogDemoWidget extends StatefulWidget {
   /// The parent example instance containing state and focus node definitions.
   final ModalDialogExample example;
 
@@ -73,6 +73,7 @@ class ModalDialogDemoWidget extends StatefulWidget {
 
   /// Creates a [ModalDialogDemoWidget].
   const ModalDialogDemoWidget({
+    super.key,
     required this.example,
     required this.width,
     required this.height,
@@ -82,7 +83,7 @@ class ModalDialogDemoWidget extends StatefulWidget {
   State<ModalDialogDemoWidget> createState() => _ModalDialogDemoWidgetState();
 }
 
-class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
+final class _ModalDialogDemoWidgetState extends State<ModalDialogDemoWidget> {
   void _onFocusChange(bool hasFocus) {
     if (mounted) {
       setState(() {});

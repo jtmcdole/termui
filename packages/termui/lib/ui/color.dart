@@ -41,7 +41,7 @@ extension type const Color._(int argb) implements int {
 }
 
 /// Common standard colors.
-abstract class Colors {
+abstract final class Colors {
   /// The `red` color from the CharmTone palette.
   static const Color red = Color(255, 0, 0);
 
@@ -65,7 +65,7 @@ abstract class Colors {
 }
 
 /// The official CharmTone color palette from the Charm/Bubble Tea ecosystem.
-abstract class CharmColors {
+abstract final class CharmColors {
   // --- Warm Colors ---
   /// The `cumin` color from the CharmTone palette.
   static const Color cumin = Color(0xBF, 0x97, 0x6F);

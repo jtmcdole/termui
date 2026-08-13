@@ -13,10 +13,7 @@ Future<SceneManager> runPtyGlassDemo(
 }) async {
   final backend = PtyBackend();
 
-  final sceneManager = SceneManager(
-    terminal,
-    renderingMode: RenderingMode.alternateScreen,
-  );
+  final sceneManager = SceneManager(terminal, renderingMode: .alternateScreen);
   sceneManager.enableMouseTracking = true;
   sceneManager.onFrameRedrawn = onFrameRedrawn;
 
@@ -36,7 +33,7 @@ Future<SceneManager> runPtyGlassDemo(
     // Pass a custom default foreground (e.g. bright green) for a "hacker" theme look
     widget: SizedBox.expand(child: backend.buildView(ptyFocusNode)),
     alternateScreen: false,
-    mode: ExecutionMode.managed,
+    mode: .managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
     },
@@ -54,7 +51,7 @@ Future<SceneManager> runPtyGlassDemo(
 
   final ptyLayer = SceneLayer(
     renderer: ptyRunner,
-    sizing: LayerSizing.fixed,
+    sizing: .fixed,
     width: ptyWidth,
     height: ptyHeight,
     x: (initialSize.x > 0 ? (initialSize.x - ptyWidth) ~/ 2 : 10),
@@ -77,14 +74,14 @@ Future<SceneManager> runPtyGlassDemo(
     terminal: terminal,
     widget: FireApp(config: config),
     alternateScreen: false,
-    mode: ExecutionMode.managed,
+    mode: .managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
     },
   );
   final fireLayer = SceneLayer(
     renderer: fireRunner,
-    sizing: LayerSizing.fullscreen,
+    sizing: .fullscreen,
     zIndex: 10,
   );
   sceneManager.layers.add(fireLayer);
@@ -120,14 +117,14 @@ Future<SceneManager> runPtyGlassDemo(
       child: GlassOverlayApp(config: config),
     ),
     alternateScreen: false,
-    mode: ExecutionMode.managed,
+    mode: .managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
     },
   );
   final glassLayer = SceneLayer(
     renderer: glassRunner,
-    sizing: LayerSizing.fullscreen,
+    sizing: .fullscreen,
     zIndex: 20,
     mouseOpaque: true,
     onFocus: () => glassFocusNode.requestFocus(),
@@ -158,14 +155,14 @@ Future<SceneManager> runPtyGlassDemo(
       child: SettingsApp(config: config),
     ),
     alternateScreen: false,
-    mode: ExecutionMode.managed,
+    mode: .managed,
     onFramePainted: (_) {
       sceneManager.scheduleRender();
     },
   );
   settingsLayer = SceneLayer(
     renderer: settingsRunner,
-    sizing: LayerSizing.fixed,
+    sizing: .fixed,
     x: 2,
     y: 2,
     width: 42,
@@ -192,32 +189,31 @@ Future<SceneManager> runPtyGlassDemo(
   final completer = Completer<void>();
 
   sceneManager.onKeyEvent = (event) {
-    if (event.baseKey == TermKey.q || event.logicalKey == TermKey.controlC) {
-      completer.complete();
-      return true;
+    switch (event) {
+      case term.KeyEvent(baseKey: TermKey.q) ||
+          term.KeyEvent(logicalKey: TermKey.controlC):
+        completer.complete();
+        return true;
+      case term.KeyEvent(baseKey: TermKey.d):
+        dbg.debugMouseCursorEnabled = !dbg.debugMouseCursorEnabled;
+        dbg.debugShowTouchesEnabled = !dbg.debugShowTouchesEnabled;
+        dbg.debugPaintHoverEnabled = !dbg.debugPaintHoverEnabled;
+        dbg.debugPaintLayerBordersEnabled = !dbg.debugPaintLayerBordersEnabled;
+        sceneManager.scheduleRender();
+        return true;
+      case term.KeyEvent(logicalKey: TermKey.controlT):
+        if (sceneManager.focusedLayer == ptyLayer) {
+          sceneManager.focusedLayer = glassLayer;
+          glassFocusNode.requestFocus();
+        } else {
+          sceneManager.focusedLayer = ptyLayer;
+          ptyFocusNode.requestFocus();
+        }
+        sceneManager.scheduleRender();
+        return true;
+      default:
+        return false;
     }
-    if (event.baseKey == TermKey.d) {
-      // Toggle debug overlays
-      dbg.debugMouseCursorEnabled = !dbg.debugMouseCursorEnabled;
-      dbg.debugShowTouchesEnabled = !dbg.debugShowTouchesEnabled;
-      dbg.debugPaintHoverEnabled = !dbg.debugPaintHoverEnabled;
-      dbg.debugPaintLayerBordersEnabled = !dbg.debugPaintLayerBordersEnabled;
-      sceneManager.scheduleRender();
-      return true;
-    }
-    if (event.logicalKey == TermKey.controlT) {
-      // Ctrl+T to toggle focus
-      if (sceneManager.focusedLayer == ptyLayer) {
-        sceneManager.focusedLayer = glassLayer; // defocus
-        glassFocusNode.requestFocus();
-      } else {
-        sceneManager.focusedLayer = ptyLayer; // focus
-        ptyFocusNode.requestFocus();
-      }
-      sceneManager.scheduleRender();
-      return true;
-    }
-    return false; // let SceneManager route the event
   };
 
   try {

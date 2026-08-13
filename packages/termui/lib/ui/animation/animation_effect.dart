@@ -26,7 +26,7 @@ class TuiAnimationConfig {
 }
 
 /// Base abstract class for all terminal user interface (TUI) animation effects.
-abstract class TuiAnimationEffect {
+abstract base class TuiAnimationEffect {
   /// Total duration of the animation lifecycle.
   final Duration duration;
 

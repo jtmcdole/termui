@@ -17,8 +17,8 @@ void main() {
       file.writeAsStringSync('Hello\r\nWorld\r\n');
 
       final buffer = Buffer.blank(5, 2);
-      buffer.writeString(0, 0, 'Hello', Style());
-      buffer.writeString(0, 1, 'World', Style());
+      buffer.writeString(0, 0, 'Hello', const Style());
+      buffer.writeString(0, 1, 'World', const Style());
 
       // matchesAnsiGolden normally uses matches(dynamic item, Map matchState)
       final matcher = matchesAnsiGolden(goldenPath);

@@ -46,7 +46,7 @@ class SingleChildScrollView extends StatefulWidget {
   /// Creates a new [SingleChildScrollView].
   const SingleChildScrollView({
     required this.child,
-    this.scrollDirection = LayoutDirection.vertical,
+    this.scrollDirection = .vertical,
     this.controller,
     required this.childLength,
   });

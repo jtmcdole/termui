@@ -100,9 +100,10 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     if (_undoStack.length > 50) _undoStack.removeAt(0);
     _redoStack.clear();
 
-    final newSpans = spans!
-        .where((s) => s.startUs <= end && s.endUs >= start)
-        .toList();
+    final newSpans = [
+      for (final s in spans!)
+        if (s.startUs <= end && s.endUs >= start) s,
+    ];
     if (newSpans.isEmpty) return; // Don't crop if it results in an empty trace
 
     int newMinTs = newSpans.map((s) => s.startUs).reduce(min);
@@ -184,9 +185,10 @@ class _TraceViewerAppState extends State<TraceViewerApp>
 
     final start = selectionStartUs ?? minTs!;
     final end = selectionEndUs ?? maxTs!;
-    final overlappingSpans = spans!
-        .where((s) => s.startUs <= end && s.endUs >= start)
-        .toList();
+    final overlappingSpans = [
+      for (final s in spans!)
+        if (s.startUs <= end && s.endUs >= start) s,
+    ];
 
     final w = 50;
     final h = 10;

@@ -2,7 +2,7 @@ import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// A radial expanding ripple effect that radiates from a click coordinate.
-class InkwellRippleEffect extends TuiAnimationEffect {
+final class InkwellRippleEffect extends TuiAnimationEffect {
   /// The color of the ripple wave.
   final Color rippleColor;
 
@@ -75,7 +75,7 @@ class InkwellRippleEffect extends TuiAnimationEffect {
 }
 
 /// A particle-based sparkle effect that flashes bright icons inside the widget bounds.
-class SparkleEffect extends TuiAnimationEffect {
+final class SparkleEffect extends TuiAnimationEffect {
   /// The number of particle generation attempts per frame.
   final int density;
 
@@ -158,7 +158,7 @@ class SparkleEffect extends TuiAnimationEffect {
   }
 }
 
-class _SparkleParticle {
+final class _SparkleParticle {
   final int x;
   final int y;
   final String char;
@@ -177,7 +177,7 @@ class _SparkleParticle {
 }
 
 /// A full-widget background flash pulsation.
-class FlashEffect extends TuiAnimationEffect {
+final class FlashEffect extends TuiAnimationEffect {
   /// The color to flash the background cells with.
   final Color flashColor;
 

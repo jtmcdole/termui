@@ -2,13 +2,13 @@ import 'dart:typed_data';
 import 'symbol_map.dart';
 import 'color_math.dart';
 
-class QuantizeResult {
+final class QuantizeResult {
   String character = ' ';
   int fgColorArgb = 0;
   int bgColorArgb = 0;
 }
 
-class CellQuantizer {
+final class CellQuantizer {
   final Int32List _pixelsDin99d = Int32List(64);
   final Int32List _deltaNorm = Int32List(64);
   final Int32List _deltaInv = Int32List(64);

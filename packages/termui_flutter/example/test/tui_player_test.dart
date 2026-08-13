@@ -7,7 +7,7 @@ import 'package:example_flutter/src/tui_player/run_tui_player.dart';
 import 'package:example_flutter/src/repository/repository.dart';
 import 'dart:typed_data';
 
-class MockSavedCastsRepository implements SavedCastsRepository {
+final class MockSavedCastsRepository implements SavedCastsRepository {
   @override
   Future<void> deleteCast(String name) async {}
   @override

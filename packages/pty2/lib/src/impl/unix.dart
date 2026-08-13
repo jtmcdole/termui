@@ -46,7 +46,7 @@ external int _nativeChdir(Pointer<Utf8> path);
 @Native<Int32 Function(Int32)>(symbol: 'close', isLeaf: true)
 external int _nativeClose(int fd);
 
-class PtyCoreUnix implements PtyCore, Finalizable {
+final class PtyCoreUnix implements PtyCore, Finalizable {
   factory PtyCoreUnix.start(
     String executable,
     List<String> arguments, {
@@ -335,7 +335,7 @@ class PtyCoreUnix implements PtyCore, Finalizable {
   }
 }
 
-class PtyCoreUnixWorker implements PtyCoreWorker {
+final class PtyCoreUnixWorker implements PtyCoreWorker {
   final int ptm;
   final int pid;
   final Pointer<Int8> buffer;

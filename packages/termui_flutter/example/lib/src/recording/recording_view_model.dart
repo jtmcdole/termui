@@ -3,7 +3,7 @@ import 'package:termui/termui.dart' as termui;
 import 'package:termui_recorder/termui_recorder.dart';
 import 'recording_service.dart';
 
-class RecordingViewModel extends ChangeNotifier {
+final class RecordingViewModel extends ChangeNotifier {
   final RecordingService _service;
   final void Function(String)? onLog;
 

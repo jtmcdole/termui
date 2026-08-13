@@ -26,7 +26,7 @@ import 'dart:math';
 ///
 /// backend.updateSize(const Point(120, 40));
 /// ```
-class FlutterTerminalBackend implements TerminalBackend {
+final class FlutterTerminalBackend implements TerminalBackend {
   Point<int> _size = const Point(80, 24);
   final _sizeController = StreamController<Point<int>>.broadcast();
   final _mouseCursorController = StreamController<String?>.broadcast();
@@ -48,8 +48,7 @@ class FlutterTerminalBackend implements TerminalBackend {
   @override
   void write(String data) {
     final matches = _osc22Regex.allMatches(data);
-    if (matches.isNotEmpty) {
-      final lastMatch = matches.last;
+    if (matches.lastOrNull case final lastMatch?) {
       final cursorName = lastMatch.group(1);
       _mouseCursorController.add(cursorName == '' ? null : cursorName);
     }
@@ -109,7 +108,7 @@ class FlutterTerminalBackend implements TerminalBackend {
 ///
 /// terminal.increaseFontSize(2.0);
 /// ```
-class FlutterTerminal extends core.Terminal {
+final class FlutterTerminal extends core.Terminal {
   // NOTE: This MUST be sync: true!
   // Browsers enforce a strict security model blocking `input.click()` (used by file_selector_web)
   // unless executed synchronously within a user-gesture (mouse click / key press) stack.

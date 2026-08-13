@@ -5,7 +5,7 @@ import 'package:termui/termui.dart';
 import 'package:termui_pty/termui_pty.dart';
 
 /// A stub backend for rendering a PTY-like interface on the web using a VirtualTerminal.
-class PtyBackend {
+final class PtyBackend {
   VirtualTerminal? _terminal;
   Timer? _timer;
 
@@ -65,7 +65,7 @@ class PtyBackend {
   }
 }
 
-class _VirtualTerminalWrapper extends StatefulWidget {
+final class _VirtualTerminalWrapper extends StatefulWidget {
   final VirtualTerminal terminal;
   final FocusNode focusNode;
 
@@ -79,7 +79,8 @@ class _VirtualTerminalWrapper extends StatefulWidget {
       _VirtualTerminalWrapperState();
 }
 
-class _VirtualTerminalWrapperState extends State<_VirtualTerminalWrapper> {
+final class _VirtualTerminalWrapperState
+    extends State<_VirtualTerminalWrapper> {
   @override
   void initState() {
     super.initState();

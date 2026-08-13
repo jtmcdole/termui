@@ -498,12 +498,17 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
 
         subscription = terminal.events.listen(
           (event) {
-            if (event is term.KeyEvent) {
-              handleKeyEvent(event);
-            } else if (event is term.MouseEvent) {
-              handleMouseEvent(event);
-            } else if (event is term.PasteEvent) {
-              handlePasteEvent(event);
+            switch (event) {
+              case term.KeyEvent keyEvent:
+                handleKeyEvent(keyEvent);
+              case term.MouseEvent mouseEvent:
+                handleMouseEvent(mouseEvent);
+              case term.PasteEvent pasteEvent:
+                handlePasteEvent(pasteEvent);
+              case term.FocusInEvent() ||
+                  term.FocusOutEvent() ||
+                  term.CursorPositionReportEvent():
+                break;
             }
           },
           onDone: () {
@@ -1001,7 +1006,7 @@ void _highlightHoveredElement(Buffer buffer, Element element) {
 
   _drawBoxOutline(buffer, expandedOffset, expandedSize, style);
 
-  final typeName = element.widget.runtimeType.toString();
+  final typeName = '${element.widget.runtimeType}';
   final label = ' $typeName ';
 
   const labelStyle = Style(

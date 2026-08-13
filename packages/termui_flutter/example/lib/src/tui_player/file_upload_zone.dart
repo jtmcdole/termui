@@ -11,7 +11,7 @@ import 'file_upload_zone_stub.dart'
     as web_impl;
 
 /// A widget that handles file drag-and-drop and manual selection.
-class FileUploadZone extends StatefulWidget {
+final class FileUploadZone extends StatefulWidget {
   /// Creates a [FileUploadZone].
   const FileUploadZone({
     super.key,

@@ -11,7 +11,7 @@ import 'repository/repository.dart';
 typedef AsciicastHeader = ({int version, int width, int height});
 typedef AsciicastEvent = ({double time, String type, String data});
 
-class AsciicastPlayerViewModel {
+final class AsciicastPlayerViewModel {
   final SavedCastsRepository repository;
   final VirtualTerminal virtualTerminal = VirtualTerminal(
     width: 80,

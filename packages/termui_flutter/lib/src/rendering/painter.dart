@@ -10,8 +10,7 @@ import 'atlas.dart';
 bool _isBlockCharacter(String char) {
   if (char.isEmpty) return false;
   final code = char.codeUnitAt(0);
-  if (code >= 0x2580 && code <= 0x2590) return true;
-  return false;
+  return code >= 0x2580 && code <= 0x2590;
 }
 
 /// Determines if a given grapheme cluster character represents a color emoji.
@@ -51,7 +50,7 @@ bool isColorEmoji(String char) {
 ///   ),
 /// )
 /// ```
-class TuiAtlasPainter extends CustomPainter {
+final class TuiAtlasPainter extends CustomPainter {
   /// The buffer containing the current layout state to paint.
   final Buffer buffer;
 
@@ -361,7 +360,7 @@ class TuiAtlasPainter extends CustomPainter {
   bool shouldRepaint(covariant TuiAtlasPainter oldDelegate) => true;
 }
 
-class _FallbackCell {
+final class _FallbackCell {
   final String char;
   final String fontFamily;
   final List<String>? fontFamilyFallback;

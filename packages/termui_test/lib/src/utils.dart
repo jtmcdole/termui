@@ -1,3 +1,4 @@
+import 'package:clock/clock.dart';
 import 'package:termui/termui.dart';
 
 /// Prints the [element] and its children to the stdout.
@@ -6,10 +7,10 @@ void debugDumpTree(Element? element, [int depth = 0]) {
   final indent = '  ' * depth;
   // Prints the runtime type and any readable text data
   final widget = element.widget;
-  String info = widget.runtimeType.toString();
-
-  if (widget is Text) info += '("${widget.data}")';
-  // Add other widget types as needed...
+  final info = switch (widget) {
+    Text(:final data) => '${widget.runtimeType}("$data")',
+    final w => '${w.runtimeType}',
+  };
 
   print('$indent- $info');
   element.visitChildren((child) => debugDumpTree(child, depth + 1));
@@ -20,9 +21,9 @@ Future<void> waitForCondition(
   bool Function() condition, {
   Duration timeout = const Duration(seconds: 2),
 }) async {
-  final deadline = DateTime.now().add(timeout);
+  final deadline = clock.now().add(timeout);
   while (!condition()) {
-    if (DateTime.now().isAfter(deadline)) {
+    if (clock.now().isAfter(deadline)) {
       throw StateError('Condition not met within $timeout');
     }
     await Future.delayed(Duration.zero);

@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'dart:typed_data';
 
-abstract class PtyCore {
+abstract interface class PtyCore {
   Uint8List? read();
 
   int? exitCodeNonBlocking();
@@ -22,7 +22,7 @@ abstract class PtyCore {
   PtyCoreWorker get worker;
 }
 
-abstract class PtyCoreWorker {
+abstract interface class PtyCoreWorker {
   Uint8List? read();
   int exitCodeBlocking();
   void free();

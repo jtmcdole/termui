@@ -7,7 +7,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'package:termui_shared_examples/widget_book/widget_book_examples.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
-class FlutterWidgetBookPlatform implements WidgetBookPlatform {
+final class FlutterWidgetBookPlatform implements WidgetBookPlatform {
   final void Function(Buffer)? _onFrameRedrawn;
   final String? _initialPage;
   Ticker? _ticker;
@@ -40,15 +40,15 @@ class FlutterWidgetBookPlatform implements WidgetBookPlatform {
 
   @override
   bool handleKeyEvent(term.Terminal terminal, ui.KeyEvent event) {
-    if (event.modifiers.contains(ui.Modifier.control)) {
-      if (terminal is FlutterTerminal) {
-        if (event.key == '=' || event.key == '+') {
+    if (event.modifiers.contains(ui.Modifier.control) &&
+        terminal is FlutterTerminal) {
+      switch (event.key) {
+        case '=' || '+':
           terminal.increaseFontSize();
           return true;
-        } else if (event.key == '-') {
+        case '-':
           terminal.decreaseFontSize();
           return true;
-        }
       }
     }
     return false;

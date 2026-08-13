@@ -22,7 +22,7 @@ class TermuiBinding {
   /// Triggers a hot reload reassemble across all active scene managers and runners.
   static void reassembleAll() {
     // Convert to list to avoid concurrent modification during iteration
-    final targets = _activeTargets.toList();
+    final targets = [..._activeTargets];
     for (final target in targets) {
       target.reassemble();
     }

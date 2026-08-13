@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// Example demonstrating a complex multi-page form.
-class BurgerOrderExample extends WidgetBookExample {
+final class BurgerOrderExample extends WidgetBookExample {
   /// The current stage of the burger order form.
   int burgerStage = 0;
 
@@ -539,93 +539,94 @@ class BurgerOrderExample extends WidgetBookExample {
       return false; // Toggle sidebar/demo focus globally
     }
 
-    if (burgerStage == 0) {
-      if (isEnter || event.key == ' ' || keyType == ui.KeyType.right) {
-        burgerStage = 1;
-        _focusFirstField(burgerForm1);
-        return true;
-      }
-    } else if (burgerStage == 1) {
-      if (keyType == ui.KeyType.left) {
-        burgerStage = 0;
-        return true;
-      } else if (keyType == ui.KeyType.right) {
-        if (burgerForm1.validate()) {
-          burgerStage = 2;
-          _focusFirstField(burgerForm2);
+    switch (burgerStage) {
+      case 0:
+        if (isEnter || event.key == ' ' || keyType == ui.KeyType.right) {
+          burgerStage = 1;
+          _focusFirstField(burgerForm1);
+          return true;
         }
-        return true;
-      } else if (isEnter) {
-        if (burgerForm1.activeFieldIndex < burgerForm1.fields.length - 1) {
-          _focusNextField(burgerForm1);
-        } else {
+      case 1:
+        if (keyType == ui.KeyType.left) {
+          burgerStage = 0;
+          return true;
+        } else if (keyType == ui.KeyType.right) {
           if (burgerForm1.validate()) {
             burgerStage = 2;
             _focusFirstField(burgerForm2);
           }
-        }
-        return true;
-      } else {
-        burgerForm1.handleKeyEvent(event);
-        return true;
-      }
-    } else if (burgerStage == 2) {
-      if (keyType == ui.KeyType.left) {
-        burgerStage = 1;
-        _focusFirstField(burgerForm1);
-        return true;
-      } else if (keyType == ui.KeyType.right) {
-        if (burgerForm2.validate()) {
-          burgerStage = 3;
-          _focusFirstField(burgerForm3);
-        }
-        return true;
-      } else if (isEnter) {
-        if (burgerForm2.activeFieldIndex < burgerForm2.fields.length - 1) {
-          _focusNextField(burgerForm2);
+          return true;
+        } else if (isEnter) {
+          if (burgerForm1.activeFieldIndex < burgerForm1.fields.length - 1) {
+            _focusNextField(burgerForm1);
+          } else {
+            if (burgerForm1.validate()) {
+              burgerStage = 2;
+              _focusFirstField(burgerForm2);
+            }
+          }
+          return true;
         } else {
+          burgerForm1.handleKeyEvent(event);
+          return true;
+        }
+      case 2:
+        if (keyType == ui.KeyType.left) {
+          burgerStage = 1;
+          _focusFirstField(burgerForm1);
+          return true;
+        } else if (keyType == ui.KeyType.right) {
           if (burgerForm2.validate()) {
             burgerStage = 3;
             _focusFirstField(burgerForm3);
           }
-        }
-        return true;
-      } else {
-        burgerForm2.handleKeyEvent(event);
-        return true;
-      }
-    } else if (burgerStage == 3) {
-      if (keyType == ui.KeyType.left &&
-          burgerForm3.activeFieldIndex == 0 &&
-          (burgerForm3.fields[0].value as String? ?? '').isEmpty) {
-        burgerStage = 2;
-        _focusFirstField(burgerForm2);
-        return true;
-      } else if (isEnter) {
-        if (burgerForm3.activeFieldIndex < burgerForm3.fields.length - 1) {
-          _focusNextField(burgerForm3);
-        } else {
-          if (burgerForm3.validate()) {
-            burgerStage = 4;
+          return true;
+        } else if (isEnter) {
+          if (burgerForm2.activeFieldIndex < burgerForm2.fields.length - 1) {
+            _focusNextField(burgerForm2);
+          } else {
+            if (burgerForm2.validate()) {
+              burgerStage = 3;
+              _focusFirstField(burgerForm3);
+            }
           }
+          return true;
+        } else {
+          burgerForm2.handleKeyEvent(event);
+          return true;
         }
-        return true;
-      } else {
-        burgerForm3.handleKeyEvent(event);
-        return true;
-      }
-    } else if (burgerStage == 4) {
-      if (isEnter || event.key == ' ') {
-        initBurgerForms();
-        burgerStage = 0;
-        return true;
-      } else if (event.key == 'backspace' ||
-          event.key == 'backtab' ||
-          keyType == ui.KeyType.left) {
-        burgerStage = 3;
-        _focusLastField(burgerForm3);
-        return true;
-      }
+      case 3:
+        if (keyType == ui.KeyType.left &&
+            burgerForm3.activeFieldIndex == 0 &&
+            (burgerForm3.fields[0].value as String? ?? '').isEmpty) {
+          burgerStage = 2;
+          _focusFirstField(burgerForm2);
+          return true;
+        } else if (isEnter) {
+          if (burgerForm3.activeFieldIndex < burgerForm3.fields.length - 1) {
+            _focusNextField(burgerForm3);
+          } else {
+            if (burgerForm3.validate()) {
+              burgerStage = 4;
+            }
+          }
+          return true;
+        } else {
+          burgerForm3.handleKeyEvent(event);
+          return true;
+        }
+      case 4:
+        if (isEnter || event.key == ' ') {
+          initBurgerForms();
+          burgerStage = 0;
+          return true;
+        } else if (event.key == 'backspace' ||
+            event.key == 'backtab' ||
+            keyType == ui.KeyType.left) {
+          burgerStage = 3;
+          _focusLastField(burgerForm3);
+          return true;
+        }
     }
     return false;
   }

@@ -2,7 +2,7 @@ import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// A blip on the radar screen.
-class RadarBlip {
+final class RadarBlip {
   /// Distance from the center (0.0 to 1.0).
   final double distance;
 
@@ -13,7 +13,7 @@ class RadarBlip {
   final Color color;
 
   /// Creates a new [RadarBlip].
-  RadarBlip({
+  const RadarBlip({
     required this.distance,
     required this.angle,
     this.color = Colors.green,
@@ -21,7 +21,7 @@ class RadarBlip {
 }
 
 /// A widget that draws a circular radar or sonar screen.
-class Radar extends Widget {
+final class Radar extends Widget {
   /// The list of blips to display.
   final List<RadarBlip> blips;
 
@@ -32,7 +32,8 @@ class Radar extends Widget {
   final Style gridStyle;
 
   /// Creates a new [Radar] widget.
-  Radar({
+  const Radar({
+    super.key,
     this.blips = const [],
     this.scannerAngle = 0.0,
     this.gridStyle = const Style(foreground: Color(0, 100, 0)),
@@ -42,7 +43,7 @@ class Radar extends Widget {
   Element createElement() => _RadarElement(this);
 }
 
-class _RadarElement extends Element {
+final class _RadarElement extends Element {
   _RadarElement(super.widget);
 
   @override

@@ -105,9 +105,9 @@ void main() {
         );
 
         tester.terminal.events.listen((event) {
-          if (event is MouseEvent) {
-            clickX = event.x;
-            clickY = event.y;
+          if (event case final MouseEvent mouseEvent) {
+            clickX = mouseEvent.x;
+            clickY = mouseEvent.y;
             runner.dispose();
           }
         });
@@ -145,8 +145,8 @@ void main() {
         );
 
         tester.terminal.events.listen((event) {
-          if (event is MouseEvent) {
-            events.add(event);
+          if (event case final MouseEvent mouseEvent) {
+            events.add(mouseEvent);
           }
         });
 
@@ -241,8 +241,8 @@ void main() {
         );
 
         tester.terminal.events.listen((event) {
-          if (event is MouseEvent) {
-            events.add(event);
+          if (event case final MouseEvent mouseEvent) {
+            events.add(mouseEvent);
           }
         });
 
@@ -354,10 +354,9 @@ void main() {
         for (final line in lines) {
           if (line.trim().isEmpty) continue;
           try {
-            final row = jsonDecode(line) as List<dynamic>;
-            if (row.length == 3 && row[1] == 'd') {
+            if (jsonDecode(line) case [_, 'd', final String actionStr]) {
               expect(
-                row[2],
+                actionStr,
                 equals(
                   'Actions: Type: Hello, Key: arrowDown, Tap: key ValueKey(widget), Resize: Size(100, 30)',
                 ),

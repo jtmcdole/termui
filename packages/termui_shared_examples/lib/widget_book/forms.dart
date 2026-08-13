@@ -6,7 +6,7 @@ import 'example_base.dart';
 ///
 /// Showcases [TextFormField], [SelectFormField], and [ConfirmFormField]
 /// with validation logic, placeholder texts, and keyboard navigation.
-class FormsExample extends WidgetBookExample {
+final class FormsExample extends WidgetBookExample {
   /// The form layout containing text, select, and confirm fields.
   final formDemo = Form(
     fields: [

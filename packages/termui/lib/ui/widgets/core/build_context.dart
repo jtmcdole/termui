@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:termui/termui.dart';
 
 /// Undocumented public member.
-abstract class BuildContext {
+abstract interface class BuildContext {
   /// The widget associated with this context.
   Widget get widget;
 

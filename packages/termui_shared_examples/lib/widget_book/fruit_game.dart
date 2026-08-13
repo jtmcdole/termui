@@ -16,7 +16,7 @@ enum GameState {
 }
 
 /// Represents an emoji fruit currently in free-fall.
-class FallingEmoji {
+final class FallingEmoji {
   /// The emoji character representation.
   final String emoji;
 
@@ -31,7 +31,7 @@ class FallingEmoji {
 }
 
 /// The payload metadata for dragging.
-class DraggedFruit {
+final class DraggedFruit {
   /// The emoji being dragged.
   final String emoji;
 
@@ -39,11 +39,11 @@ class DraggedFruit {
   final int slotIndex;
 
   /// Creates a [DraggedFruit].
-  DraggedFruit(this.emoji, this.slotIndex);
+  const DraggedFruit(this.emoji, this.slotIndex);
 }
 
 /// A custom bordered box widget that renders a title centered on the top border.
-class BorderWidget extends Widget {
+final class BorderWidget extends Widget {
   /// The title text to display on the top border line.
   final String title;
 
@@ -66,7 +66,7 @@ class BorderWidget extends Widget {
 }
 
 /// Backing element for [BorderWidget].
-class BorderWidgetElement extends SingleChildElement {
+final class BorderWidgetElement extends SingleChildElement {
   /// Creates a [BorderWidgetElement].
   BorderWidgetElement(BorderWidget super.widget);
 
@@ -208,7 +208,7 @@ class BorderWidgetElement extends SingleChildElement {
 
 /// A fully productionized puzzle game demonstrating Draggable, DragTarget,
 /// subpixel ripples, custom rendering performance, and TUI game loops.
-class FruitGameExample extends WidgetBookExample {
+final class FruitGameExample extends WidgetBookExample {
   /// The library of fruit emojis available in the game.
   static const List<String> fruits = [
     '🍇',
@@ -520,7 +520,7 @@ class FruitGameExample extends WidgetBookExample {
   Map<String, String> get helpBindings => {'R': 'Reset Fruit Game'};
 }
 
-class _FruitGameWidget extends StatefulWidget {
+final class _FruitGameWidget extends StatefulWidget {
   final FruitGameExample example;
 
   const _FruitGameWidget({required this.example});
@@ -529,7 +529,7 @@ class _FruitGameWidget extends StatefulWidget {
   State<_FruitGameWidget> createState() => _FruitGameWidgetState();
 }
 
-class _FruitGameWidgetState extends State<_FruitGameWidget> {
+final class _FruitGameWidgetState extends State<_FruitGameWidget> {
   final GlobalKey _gridKey = GlobalKey();
 
   Offset _findAbsoluteOffset(BuildContext context) {
@@ -663,7 +663,7 @@ class _FruitGameWidgetState extends State<_FruitGameWidget> {
 }
 
 /// A performant custom rendering widget for the game grid.
-class FruitGameGridWidget extends Widget {
+final class FruitGameGridWidget extends Widget {
   /// The game example.
   final FruitGameExample example;
 
@@ -686,7 +686,7 @@ class FruitGameGridWidget extends Widget {
 }
 
 /// The element that draws the game board without standard widget reconciliation overhead.
-class FruitGameGridWidgetElement extends Element {
+final class FruitGameGridWidgetElement extends Element {
   /// Creates a [FruitGameGridWidgetElement].
   FruitGameGridWidgetElement(FruitGameGridWidget super.widget);
 

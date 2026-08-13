@@ -1,5 +1,5 @@
 /// Undocumented public member.
-class Size {
+final class Size {
   /// The horizontal dimension.
   final int width;
 
@@ -25,7 +25,7 @@ class Size {
 }
 
 /// Represents an offset on the terminal cell grid coordinate space.
-class Offset {
+final class Offset {
   /// The horizontal offset.
   final int dx;
 
@@ -57,7 +57,7 @@ class Offset {
 }
 
 /// Defines layout boundaries inside terminal cell limits.
-class BoxConstraints {
+final class BoxConstraints {
   /// The minimum width allowed.
   final int minWidth;
 
@@ -165,7 +165,7 @@ class BoxConstraints {
 }
 
 /// A 2D rectangle representing bounds in terminal space.
-class Rect {
+final class Rect {
   /// The horizontal x-coordinate of the rectangle's top-left corner.
   final int x;
 
@@ -226,7 +226,7 @@ class Rect {
 }
 
 /// An immutable set of offsets in each of the four cardinal directions in terminal space.
-class EdgeInsets {
+final class EdgeInsets {
   /// The left edge offset.
   final int left;
 
@@ -269,13 +269,13 @@ class EdgeInsets {
 }
 
 /// Abstract base class for all layout constraints.
-class Constraint {
+sealed class Constraint {
   /// Creates a new constraint.
   const Constraint();
 }
 
 /// A fixed length layout constraint.
-class LengthConstraint extends Constraint {
+final class LengthConstraint extends Constraint {
   /// The fixed layout length.
   final int length;
 
@@ -284,7 +284,7 @@ class LengthConstraint extends Constraint {
 }
 
 /// A percentage-based layout constraint relative to parent size.
-class PercentageConstraint extends Constraint {
+final class PercentageConstraint extends Constraint {
   /// The percentage of the parent size (0 to 100).
   final int percentage;
 
@@ -293,7 +293,7 @@ class PercentageConstraint extends Constraint {
 }
 
 /// A proportional flexible space constraint.
-class FlexConstraint extends Constraint {
+final class FlexConstraint extends Constraint {
   /// The flex factor to determine the proportional size.
   final int flex;
 
@@ -302,7 +302,7 @@ class FlexConstraint extends Constraint {
 }
 
 /// A constraint with min and max bounds.
-class MinMaxConstraint extends Constraint {
+final class MinMaxConstraint extends Constraint {
   /// The minimum size bound.
   final int min;
 
@@ -314,7 +314,7 @@ class MinMaxConstraint extends Constraint {
 }
 
 /// A handle to a location in the widget tree.
-class Alignment {
+final class Alignment {
   /// The distance fraction in the horizontal direction.
   final double x;
 

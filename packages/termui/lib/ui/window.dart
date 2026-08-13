@@ -195,7 +195,10 @@ class FocusNode {
     if (hasFocus) {
       FocusNode? nextTarget = parent;
       if (parent != null) {
-        final siblings = parent!.children.where((c) => c != this).toList();
+        final siblings = [
+          for (final c in parent!.children)
+            if (c != this) c,
+        ];
         if (siblings.isNotEmpty) {
           nextTarget = siblings.first;
         }
@@ -332,7 +335,7 @@ class Window extends Widget {
     if (titleChars.length > maxTitleLen) {
       final cutLen = w - 7;
       if (cutLen > 0) {
-        displayedTitle = ' ${titleChars.take(cutLen).toString()}... ';
+        displayedTitle = ' ${titleChars.take(cutLen)}... ';
       } else {
         displayedTitle = '';
       }
@@ -467,7 +470,7 @@ class WindowElement extends Element implements MouseEventHandler {
       if (titleChars.length > maxTitleLen) {
         final cutLen = w - 7;
         if (cutLen > 0) {
-          displayedTitle = ' ${titleChars.take(cutLen).toString()}... ';
+          displayedTitle = ' ${titleChars.take(cutLen)}... ';
         } else {
           displayedTitle = '';
         }

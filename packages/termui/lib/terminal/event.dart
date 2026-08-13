@@ -1,5 +1,5 @@
 /// Base class for all input events.
-abstract class InputEvent {
+sealed class InputEvent {
   /// Creates an [InputEvent].
   const InputEvent();
 
@@ -116,7 +116,7 @@ enum KeyType {
 }
 
 /// A keyboard event.
-class KeyEvent extends InputEvent {
+final class KeyEvent extends InputEvent {
   @override
   final String key;
 
@@ -172,7 +172,7 @@ class KeyEvent extends InputEvent {
 /// Constants for common key string representations (baseKey and logicalKey).
 /// These can be used in switch statements to pattern match on [KeyEvent.baseKey]
 /// or [KeyEvent.logicalKey].
-class TermKey {
+abstract final class TermKey {
   const TermKey._();
 
   // Letters
@@ -464,7 +464,7 @@ enum MouseEventType {
 }
 
 /// A mouse event.
-class MouseEvent extends InputEvent {
+final class MouseEvent extends InputEvent {
   /// Whether a button is actively pressed or dragging.
   bool get pressed =>
       type == MouseEventType.press || type == MouseEventType.drag;
@@ -532,7 +532,7 @@ class MouseEvent extends InputEvent {
 }
 
 /// A bracketed paste event.
-class PasteEvent extends InputEvent {
+final class PasteEvent extends InputEvent {
   /// The pasted text.
   final String text;
 
@@ -553,7 +553,7 @@ class PasteEvent extends InputEvent {
 }
 
 /// Event fired when terminal receives focus.
-class FocusInEvent extends InputEvent {
+final class FocusInEvent extends InputEvent {
   /// Creates a [FocusInEvent].
   const FocusInEvent();
 
@@ -568,7 +568,7 @@ class FocusInEvent extends InputEvent {
 }
 
 /// Event fired when terminal loses focus.
-class FocusOutEvent extends InputEvent {
+final class FocusOutEvent extends InputEvent {
   /// Creates a [FocusOutEvent].
   const FocusOutEvent();
 
@@ -583,7 +583,7 @@ class FocusOutEvent extends InputEvent {
 }
 
 /// Event representing cursor position report.
-class CursorPositionReportEvent extends InputEvent {
+final class CursorPositionReportEvent extends InputEvent {
   /// X coordinate.
   final int x;
 

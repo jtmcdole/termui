@@ -4,7 +4,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// 3D Vector coordinate representation.
-class Vec3 {
+final class Vec3 {
   /// The X component.
   final double x;
 
@@ -26,7 +26,7 @@ class Vec3 {
 }
 
 /// A rotating, shaded 3D isometric representation of the McDole Heavy Industries logo.
-class McdoleLogoExample extends WidgetBookExample {
+final class McdoleLogoExample extends WidgetBookExample {
   /// Toggle for solid filled rendering vs. wireframe
   bool isSolid = true;
 
@@ -91,39 +91,32 @@ class McdoleLogoExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
-    if (event.key == ' ' ||
-        event.key == 'Space' ||
-        event.key == 'p' ||
-        event.key == 'P') {
-      isAnimated = !isAnimated;
-      return true;
+    switch (event.key) {
+      case ' ' || 'Space' || 'p' || 'P':
+        isAnimated = !isAnimated;
+        return true;
+      case 'f' || 'F':
+        isSolid = !isSolid;
+        return true;
+      case 'b' || 'B':
+        showBackfaces = !showBackfaces;
+        return true;
+      case 'c' || 'C':
+        colorMode = (colorMode + 1) % 3;
+        return true;
+      case 'm' || 'M':
+        final nextIdx = (renderMode.index + 1) % CanvasRenderMode.values.length;
+        renderMode = CanvasRenderMode.values[nextIdx];
+        return true;
+      case '+' || '=':
+        zoom = (zoom + 0.1).clamp(0.1, 4.0);
+        return true;
+      case '-':
+        zoom = (zoom - 0.1).clamp(0.1, 4.0);
+        return true;
+      default:
+        return false;
     }
-    if (event.key == 'f' || event.key == 'F') {
-      isSolid = !isSolid;
-      return true;
-    }
-    if (event.key == 'b' || event.key == 'B') {
-      showBackfaces = !showBackfaces;
-      return true;
-    }
-    if (event.key == 'c' || event.key == 'C') {
-      colorMode = (colorMode + 1) % 3;
-      return true;
-    }
-    if (event.key == 'm' || event.key == 'M') {
-      final nextIdx = (renderMode.index + 1) % CanvasRenderMode.values.length;
-      renderMode = CanvasRenderMode.values[nextIdx];
-      return true;
-    }
-    if (event.key == '+' || event.key == '=') {
-      zoom = (zoom + 0.1).clamp(0.1, 4.0);
-      return true;
-    }
-    if (event.key == '-') {
-      zoom = (zoom - 0.1).clamp(0.1, 4.0);
-      return true;
-    }
-    return false;
   }
 
   @override

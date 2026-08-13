@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 /// Utility class for perceptual color math using the DIN99d color space.
-class ColorMath {
+abstract final class ColorMath {
   static const double _xyzEpsilon = 216.0 / 24389.0;
   static const double _xyzKappa = 24389.0 / 27.0;
 

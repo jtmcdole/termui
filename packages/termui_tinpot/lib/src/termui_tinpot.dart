@@ -11,7 +11,7 @@ typedef TinpotOutputCell = ({
   int bgColorArgb,
 });
 
-class TermuiTinpot {
+final class TermuiTinpot {
   final SymbolMap symbolMap;
   final int workFactor;
 
@@ -22,21 +22,20 @@ class TermuiTinpot {
   TermuiTinpot({SymbolMap? symbolMap, this.workFactor = 5})
     : symbolMap = symbolMap ?? SymbolMap();
 
-  late final List<SymbolCandidate> candidates = symbolMap.blockSymbols
-      .where((s) {
-        if (s.character.runes.length > 1) return false;
-        final codePoint = s.character.runes.first;
-        return codePoint == 0x0020 ||
-            (codePoint >= 0x2580 && codePoint <= 0x259F) ||
-            (codePoint >= 0x2500 &&
-                codePoint <= 0x257F &&
-                !(codePoint >= 0x2504 &&
-                    codePoint <= 0x250B) && // Exclude triple/quadruple dashes
-                !(codePoint >= 0x254C &&
-                    codePoint <= 0x254F) && // Exclude double dashes
-                !(codePoint >= 0x2574 && codePoint <= 0x257B));
-      }) // Exclude single/half dashes (TAG_DOT)
-      .toList();
+  late final List<SymbolCandidate> candidates = [
+    for (final s in symbolMap.blockSymbols)
+      if (s.character.runes.singleOrNull case final codePoint?)
+        if (switch (codePoint) {
+          0x0020 => true,
+          >= 0x2580 && <= 0x259F => true,
+          >= 0x2504 && <= 0x250B => false,
+          >= 0x254C && <= 0x254F => false,
+          >= 0x2574 && <= 0x257B => false,
+          >= 0x2500 && <= 0x257F => true,
+          _ => false,
+        })
+          s,
+  ];
 
   /// Scales the image to match the terminal aspect ratio and grid size.
   /// Each terminal cell is 8x8 pixels.

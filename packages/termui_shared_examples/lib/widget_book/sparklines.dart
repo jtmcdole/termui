@@ -5,7 +5,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// An example demonstrating network traffic sparklines (btop style).
-class SparklinesExample extends WidgetBookExample {
+final class SparklinesExample extends WidgetBookExample {
   final RingBuffer<double> _downloadData = RingBuffer<double>(500);
   final RingBuffer<double> _uploadData = RingBuffer<double>(500);
   final RingBuffer<double> _latencyData = RingBuffer<double>(
@@ -17,7 +17,7 @@ class SparklinesExample extends WidgetBookExample {
   double _uploadPhase = 0.0;
   double _latencyPhase = 0.0;
 
-  ProgressBarType _barType = ProgressBarType.braille;
+  ProgressBarType _barType = .braille;
 
   /// Creates a new [SparklinesExample].
   SparklinesExample() {

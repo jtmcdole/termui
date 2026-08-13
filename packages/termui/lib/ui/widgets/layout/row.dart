@@ -22,8 +22,8 @@ class Row extends Widget {
   const Row(
     this.children, {
     super.key,
-    this.crossAxisAlignment = CrossAxisAlignment.start,
-    this.mainAxisAlignment = MainAxisAlignment.start,
+    this.crossAxisAlignment = .start,
+    this.mainAxisAlignment = .start,
     this.backgroundChar,
     this.backgroundStyle,
   });
@@ -34,9 +34,9 @@ class Row extends Widget {
   @override
   int getIntrinsicHeight(int width) {
     if (children.isEmpty) return 0;
-    final rowConstraints = children
-        .map((c) => getConstraint(c, LayoutDirection.horizontal, crossSize: 0))
-        .toList();
+    final rowConstraints = [
+      for (final c in children) getConstraint(c, .horizontal, crossSize: 0),
+    ];
     final rects = splitRect(
       Rect(0, 0, width, 1),
       rowConstraints,
@@ -132,16 +132,10 @@ class RowElement extends Element {
     // Map directly over childElements to retrieve their widgets and calculate
     // constraints, avoiding index desyncs or out-of-bounds errors that could occur
     // if we relied on zip-indexing between row.children and childElements.
-    final rowConstraints = childElements
-        .map(
-          (el) => getConstraint(
-            el.widget,
-            LayoutDirection.horizontal,
-            crossSize: height,
-            element: el,
-          ),
-        )
-        .toList();
+    final rowConstraints = [
+      for (final el in childElements)
+        getConstraint(el.widget, .horizontal, crossSize: height, element: el),
+    ];
     final rects = splitRect(
       area,
       rowConstraints,

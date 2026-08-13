@@ -2,7 +2,7 @@ import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// A mathematical mutator for 24-bit TrueColor cells.
-class ColorMutator {
+final class ColorMutator {
   /// The scalar to multiply each RGB channel by.
   final double scalar;
 
@@ -30,7 +30,7 @@ class ColorMutator {
 }
 
 /// A post-paint mutation applied to the composite terminal buffer.
-abstract class TerminalEffect {
+abstract base class TerminalEffect {
   /// Creates a terminal effect.
   const TerminalEffect();
 
@@ -39,7 +39,7 @@ abstract class TerminalEffect {
 }
 
 /// An effect registered with its layout bounds and stacking order.
-class RegisteredEffect {
+final class RegisteredEffect {
   /// The effect to apply.
   final TerminalEffect effect;
 
@@ -310,8 +310,8 @@ class EffectWidgetElement extends SingleChildElement {
 }
 
 /// Element for [EffectWidget] that absorbs pointer events.
-/// An effect that dims the colors beneath it.
-class DimmerEffect extends TerminalEffect {
+/// A terminal effect that dims the colors of all cells in its bounds.
+final class DimmerEffect extends TerminalEffect {
   /// The scalar to dim colors by.
   final double scalar;
 
@@ -351,8 +351,8 @@ class DimmerEffect extends TerminalEffect {
   }
 }
 
-/// An effect that glitches the runes horizontally.
-class GlitchEffect extends TerminalEffect {
+/// A terminal effect that randomly shifts horizontal character rows within bounds.
+final class GlitchEffect extends TerminalEffect {
   /// A function that returns a random offset for each row.
   final int Function() randomOffset;
 

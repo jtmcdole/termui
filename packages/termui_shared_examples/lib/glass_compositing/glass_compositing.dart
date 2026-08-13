@@ -18,7 +18,7 @@ abstract interface class SettingsRepository {
   set autoAnimate(bool value);
 }
 
-class InMemorySettingsRepository implements SettingsRepository {
+final class InMemorySettingsRepository implements SettingsRepository {
   @override
   int themeIndex = 0;
 
@@ -29,7 +29,7 @@ class InMemorySettingsRepository implements SettingsRepository {
   bool autoAnimate = true;
 }
 
-class FireConfig {
+final class FireConfig {
   final SettingsRepository repository;
 
   FireConfig(this.repository) {
@@ -107,7 +107,7 @@ class FireConfig {
 }
 
 // --- Fire Background Engine ---
-class FireEngine {
+final class FireEngine {
   int width;
   int height;
   List<double> heatGrid;
@@ -181,7 +181,7 @@ class FireEngine {
   }
 }
 
-class FireRender extends Widget {
+final class FireRender extends Widget {
   final FireEngine engine;
   final FireConfig config;
   const FireRender(this.engine, this.config, {super.key});
@@ -189,7 +189,7 @@ class FireRender extends Widget {
   Element createElement() => FireRenderElement(this);
 }
 
-class FireRenderElement extends Element {
+final class FireRenderElement extends Element {
   FireRenderElement(FireRender super.widget);
 
   @override
@@ -210,57 +210,56 @@ class FireRenderElement extends Element {
 
     const chars = [' ', '⠄', '⠂', '⠃', '⠪', '░', '▒', '▓', '█'];
 
-    Color heatColor(double h, int theme) {
-      if (theme == 0) {
-        // Classic
-        if (h > 0.8) return const Color(255, 255, 200);
-        if (h > 0.6) return const Color(255, 200, 0);
-        if (h > 0.4) return const Color(255, 100, 0);
-        if (h > 0.2) return const Color(200, 0, 0);
-        if (h > 0.05) return const Color(50, 0, 50);
-        return Colors.black;
-      } else if (theme == 1) {
-        // Toxic
-        if (h > 0.8) return const Color(200, 255, 200);
-        if (h > 0.6) return const Color(0, 255, 0);
-        if (h > 0.4) return const Color(0, 200, 0);
-        if (h > 0.2) return const Color(0, 100, 50);
-        if (h > 0.05) return const Color(0, 50, 0);
-        return Colors.black;
-      } else if (theme == 2) {
-        // Ice
-        if (h > 0.8) return const Color(200, 255, 255);
-        if (h > 0.6) return const Color(0, 200, 255);
-        if (h > 0.4) return const Color(0, 100, 255);
-        if (h > 0.2) return const Color(0, 0, 200);
-        if (h > 0.05) return const Color(0, 0, 50);
-        return Colors.black;
-      } else if (theme == 3) {
-        // Arcane
-        if (h > 0.8) return const Color(255, 200, 255);
-        if (h > 0.6) return const Color(200, 50, 255);
-        if (h > 0.4) return const Color(150, 0, 200);
-        if (h > 0.2) return const Color(100, 0, 150);
-        if (h > 0.05) return const Color(50, 0, 100);
-        return Colors.black;
-      } else if (theme == 4) {
-        // Neon
-        if (h > 0.8) return const Color(255, 255, 255);
-        if (h > 0.6) return const Color(255, 0, 255);
-        if (h > 0.4) return const Color(0, 255, 255);
-        if (h > 0.2) return const Color(0, 150, 255);
-        if (h > 0.05) return const Color(0, 50, 100);
-        return Colors.black;
-      } else {
-        // Ghost
-        if (h > 0.8) return const Color(255, 255, 255);
-        if (h > 0.6) return const Color(200, 255, 220);
-        if (h > 0.4) return const Color(150, 200, 180);
-        if (h > 0.2) return const Color(100, 150, 120);
-        if (h > 0.05) return const Color(50, 80, 70);
-        return Colors.black;
-      }
-    }
+    Color heatColor(double h, int theme) => switch (theme) {
+      0 => switch (h) {
+        > 0.8 => const Color(255, 255, 200),
+        > 0.6 => const Color(255, 200, 0),
+        > 0.4 => const Color(255, 100, 0),
+        > 0.2 => const Color(200, 0, 0),
+        > 0.05 => const Color(50, 0, 50),
+        _ => Colors.black,
+      },
+      1 => switch (h) {
+        > 0.8 => const Color(200, 255, 200),
+        > 0.6 => const Color(0, 255, 0),
+        > 0.4 => const Color(0, 200, 0),
+        > 0.2 => const Color(0, 100, 50),
+        > 0.05 => const Color(0, 50, 0),
+        _ => Colors.black,
+      },
+      2 => switch (h) {
+        > 0.8 => const Color(200, 255, 255),
+        > 0.6 => const Color(0, 200, 255),
+        > 0.4 => const Color(0, 100, 255),
+        > 0.2 => const Color(0, 0, 200),
+        > 0.05 => const Color(0, 0, 50),
+        _ => Colors.black,
+      },
+      3 => switch (h) {
+        > 0.8 => const Color(255, 200, 255),
+        > 0.6 => const Color(200, 50, 255),
+        > 0.4 => const Color(150, 0, 200),
+        > 0.2 => const Color(100, 0, 150),
+        > 0.05 => const Color(50, 0, 100),
+        _ => Colors.black,
+      },
+      4 => switch (h) {
+        > 0.8 => const Color(255, 255, 255),
+        > 0.6 => const Color(255, 0, 255),
+        > 0.4 => const Color(0, 255, 255),
+        > 0.2 => const Color(0, 150, 255),
+        > 0.05 => const Color(0, 50, 100),
+        _ => Colors.black,
+      },
+      _ => switch (h) {
+        > 0.8 => const Color(255, 255, 255),
+        > 0.6 => const Color(200, 255, 220),
+        > 0.4 => const Color(150, 200, 180),
+        > 0.2 => const Color(100, 150, 120),
+        > 0.05 => const Color(50, 80, 70),
+        _ => Colors.black,
+      },
+    };
 
     for (var y = 0; y < areaHeight; y++) {
       for (var x = 0; x < areaWidth; x++) {
@@ -284,14 +283,14 @@ class FireRenderElement extends Element {
   }
 }
 
-class FireApp extends StatefulWidget {
+final class FireApp extends StatefulWidget {
   final FireConfig config;
   const FireApp({super.key, required this.config});
   @override
   State<FireApp> createState() => _FireAppState();
 }
 
-class _FireAppState extends State<FireApp> {
+final class _FireAppState extends State<FireApp> {
   late final FireEngine engine;
   Timer? _timer;
   double _accumulator = 0.0;
@@ -335,14 +334,14 @@ class _FireAppState extends State<FireApp> {
 
 // --- Foreground 3D Text Widget ---
 
-class MetallicTextRender extends Widget {
+final class MetallicTextRender extends Widget {
   final FireConfig config;
   const MetallicTextRender({super.key, required this.config});
   @override
   Element createElement() => MetallicTextRenderElement(this);
 }
 
-class MetallicTextRenderElement extends Element {
+final class MetallicTextRenderElement extends Element {
   MetallicTextRenderElement(MetallicTextRender super.widget);
 
   @override
@@ -416,7 +415,9 @@ class MetallicTextRenderElement extends Element {
         ];
     }
 
-    if (maxWidth <= 0 || maxWidth == BoxConstraints.infinity) return lines;
+    if (maxWidth <= 0 || maxWidth == BoxConstraints.infinity.toInt()) {
+      return lines;
+    }
 
     var w = 0;
     for (final line in lines) {
@@ -437,7 +438,7 @@ class MetallicTextRenderElement extends Element {
   @override
   void performPaint(Buffer buffer, Offset offset) {
     final wWidget = widget as MetallicTextRender;
-    final lines = _getTextLines(wWidget.config.fontIndex, size.width);
+    final lines = _getTextLines(wWidget.config.fontIndex, size.width.toInt());
     const fgColor = CharmColors.zest; // Neon greenish yellow
 
     // Explicitly zero background for transparent compositor blending
@@ -470,7 +471,7 @@ class MetallicTextRenderElement extends Element {
   }
 }
 
-class GlassOverlayApp extends StatefulWidget {
+final class GlassOverlayApp extends StatefulWidget {
   final FireConfig config;
   const GlassOverlayApp({super.key, required this.config});
 
@@ -478,7 +479,7 @@ class GlassOverlayApp extends StatefulWidget {
   State<GlassOverlayApp> createState() => _GlassOverlayAppState();
 }
 
-class _GlassOverlayAppState extends State<GlassOverlayApp> {
+final class _GlassOverlayAppState extends State<GlassOverlayApp> {
   Timer? _timer;
   bool _isGlitching = false;
   late final Stopwatch _stopwatch;
@@ -552,7 +553,7 @@ class _GlassOverlayAppState extends State<GlassOverlayApp> {
 
 // --- Carousel Selector ---
 
-class CarouselSelector extends StatefulWidget implements Focusable {
+final class CarouselSelector extends StatefulWidget implements Focusable {
   final SelectionController<String> controller;
   @override
   final bool focused;
@@ -567,7 +568,7 @@ class CarouselSelector extends StatefulWidget implements Focusable {
   State<CarouselSelector> createState() => _CarouselSelectorState();
 }
 
-class _CarouselSelectorState extends State<CarouselSelector> {
+final class _CarouselSelectorState extends State<CarouselSelector> {
   late final FocusNode _focusNode;
   late final void Function() _listener;
 
@@ -602,14 +603,16 @@ class _CarouselSelectorState extends State<CarouselSelector> {
   }
 
   bool handleKeyEvent(term.KeyEvent event) {
-    if (event.type == term.KeyType.left || event.key == 'h') {
-      _prev();
-      return true;
-    } else if (event.type == term.KeyType.right || event.key == 'l') {
-      _next();
-      return true;
+    switch (event) {
+      case term.KeyEvent(type: term.KeyType.left) || term.KeyEvent(key: 'h'):
+        _prev();
+        return true;
+      case term.KeyEvent(type: term.KeyType.right) || term.KeyEvent(key: 'l'):
+        _next();
+        return true;
+      default:
+        return false;
     }
-    return false;
   }
 
   @override
@@ -662,14 +665,14 @@ class _CarouselSelectorState extends State<CarouselSelector> {
 
 // --- Settings UI Layer ---
 
-class SettingsApp extends StatefulWidget {
+final class SettingsApp extends StatefulWidget {
   final FireConfig config;
   const SettingsApp({super.key, required this.config});
   @override
   State<SettingsApp> createState() => _SettingsAppState();
 }
 
-class _SettingsAppState extends State<SettingsApp> {
+final class _SettingsAppState extends State<SettingsApp> {
   late final SelectionController<String> _themeCtrl;
   late final SelectionController<String> _fontCtrl;
 
@@ -911,23 +914,23 @@ Future<void> runGlassCompositingShared(
 
   try {
     await for (final event in terminal.events) {
-      if (event is term.KeyEvent) {
-        if (event.key == 'q' ||
-            event.key == 'Q' ||
-            event.key == '\x03' ||
-            event.logicalKey == term.TermKey.controlC) {
-          break;
-        }
-        if (event.key == 's' || event.key == 'S') {
-          settingsVisible = !settingsVisible;
-          if (settingsVisible) {
-            sceneManager.layers.add(settingsLayer);
-            sceneManager.focusedLayer = settingsLayer;
-          } else {
-            sceneManager.layers.remove(settingsLayer);
-            sceneManager.focusedLayer = glassLayer;
-          }
-          sceneManager.scheduleRender();
+      if (event case term.KeyEvent()) {
+        switch (event) {
+          case term.KeyEvent(key: 'q' || 'Q' || '\x03') ||
+              term.KeyEvent(logicalKey: term.TermKey.controlC):
+            break;
+          case term.KeyEvent(key: 's' || 'S'):
+            settingsVisible = !settingsVisible;
+            if (settingsVisible) {
+              sceneManager.layers.add(settingsLayer);
+              sceneManager.focusedLayer = settingsLayer;
+            } else {
+              sceneManager.layers.remove(settingsLayer);
+              sceneManager.focusedLayer = glassLayer;
+            }
+            sceneManager.scheduleRender();
+          default:
+            break;
         }
       }
     }

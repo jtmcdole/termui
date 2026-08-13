@@ -136,67 +136,67 @@ void _serializerEntryPoint(_SerializerConfig config) {
   final List<String> stringTable = ['Unknown'];
 
   receivePort.listen((message) async {
-    if (message is _StringTableSync) {
-      stringTable.addAll(message.newStrings);
-    } else if (message is _TraceData) {
-      final byteBuffer = message.buffer.materialize();
-      final buffer = byteBuffer.asInt64List();
-      final numEvents = buffer.length ~/ 2;
+    switch (message) {
+      case _StringTableSync(:final newStrings):
+        stringTable.addAll(newStrings);
+      case _TraceData(:final buffer, :final metadataBytes):
+        final byteBuffer = buffer.materialize();
+        final bufferList = byteBuffer.asInt64List();
+        final numEvents = bufferList.length ~/ 2;
 
-      Map<int, String> metadata = {};
-      final metaBytes = message.metadataBytes;
-      if (metaBytes != null) {
-        var offset = 0;
-        final byteData = ByteData.sublistView(metaBytes);
-        while (offset < metaBytes.length) {
-          final idx = byteData.getInt32(offset, Endian.host);
-          final len = byteData.getInt32(offset + 4, Endian.host);
-          offset += 8;
-          final strBytes = Uint8List.sublistView(
-            metaBytes,
-            offset,
-            offset + len,
+        Map<int, String> metadata = {};
+        if (metadataBytes != null) {
+          var offset = 0;
+          final byteData = ByteData.sublistView(metadataBytes);
+          while (offset < metadataBytes.length) {
+            final idx = byteData.getInt32(offset, Endian.host);
+            final len = byteData.getInt32(offset + 4, Endian.host);
+            offset += 8;
+            final strBytes = Uint8List.sublistView(
+              metadataBytes,
+              offset,
+              offset + len,
+            );
+            metadata[idx] = utf8.decode(strBytes);
+            offset += len;
+          }
+        }
+
+        for (int i = 0; i < numEvents; i++) {
+          final word0 = bufferList[i * 2];
+          final ts = bufferList[i * 2 + 1];
+
+          final phaseVal = word0 & 0xFF;
+          final isolateId = (word0 >> 8) & 0xFFFFFF;
+          final stringId = (word0 >> 32) & 0xFFFFFFFF;
+
+          final name = (stringId < stringTable.length)
+              ? stringTable[stringId]
+              : 'Unknown';
+          final ph = (phaseVal == Phase.begin)
+              ? 'B'
+              : (phaseVal == Phase.end ? 'E' : 'i');
+
+          final realTs = config.baseEpochUs + ts;
+
+          if (!isFirst) {
+            ios.write(',\n');
+          } else {
+            isFirst = false;
+          }
+
+          final meta = metadata[i];
+          final metaStr = meta != null ? ', "args": $meta' : '';
+          final escapedName = jsonEncode(name);
+          ios.write(
+            '  {"name": $escapedName, "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId$metaStr}',
           );
-          metadata[idx] = utf8.decode(strBytes);
-          offset += len;
         }
-      }
-
-      for (int i = 0; i < numEvents; i++) {
-        final word0 = buffer[i * 2];
-        final ts = buffer[i * 2 + 1];
-
-        final phaseVal = word0 & 0xFF;
-        final isolateId = (word0 >> 8) & 0xFFFFFF;
-        final stringId = (word0 >> 32) & 0xFFFFFFFF;
-
-        final name = (stringId < stringTable.length)
-            ? stringTable[stringId]
-            : 'Unknown';
-        final ph = (phaseVal == Phase.begin)
-            ? 'B'
-            : (phaseVal == Phase.end ? 'E' : 'i');
-
-        final realTs = config.baseEpochUs + ts;
-
-        if (!isFirst) {
-          ios.write(',\n');
-        } else {
-          isFirst = false;
-        }
-
-        final meta = metadata[i];
-        final metaStr = meta != null ? ', "args": $meta' : '';
-        final escapedName = jsonEncode(name);
-        ios.write(
-          '  {"name": $escapedName, "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId$metaStr}',
-        );
-      }
-    } else if (message is _TerminateSignal) {
-      ios.write('\n]\n');
-      await ios.flush();
-      await ios.close();
-      message.replyPort.send(null);
+      case _TerminateSignal(:final replyPort):
+        ios.write('\n]\n');
+        await ios.flush();
+        await ios.close();
+        replyPort.send(null);
     }
   });
 }

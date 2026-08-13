@@ -3,7 +3,7 @@ import 'package:hotreloader/hotreloader.dart';
 
 /// An optional helper class that provides a dead-simple way to enable
 /// Dart VM Hot Reload for a `termui` application.
-class TermuiHotReload {
+final class TermuiHotReload {
   final HotReloader _reloader;
 
   TermuiHotReload._(this._reloader);

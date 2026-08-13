@@ -6,7 +6,7 @@ import '../repository/repository.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui/utils/gzip_json.dart';
 
-class RecordingService {
+final class RecordingService {
   final SavedCastsRepository _repo;
   final SavedCastsRepository _traceRepo;
   AsciicastRecorder? _asciicastRecorder;

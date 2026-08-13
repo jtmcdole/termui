@@ -270,9 +270,10 @@ class InputParser {
 
   InputEvent? _parseCsiKey(String seq, int termByte) {
     final paramsStr = seq.substring(2, seq.length - 1);
-    final params = paramsStr.isEmpty
-        ? <int>[]
-        : paramsStr.split(';').map(int.parse).toList();
+    final params = [
+      if (paramsStr.isNotEmpty)
+        for (final p in paramsStr.split(';')) int.parse(p),
+    ];
 
     final mods = <Modifier>{};
     if (params.length >= 2) {

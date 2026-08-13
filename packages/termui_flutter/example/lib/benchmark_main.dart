@@ -376,24 +376,24 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
                 const SizedBox(height: 4),
                 Wrap(
                   spacing: 8,
-                  children: RenderMode.values.map((mode) {
-                    final isSelected = _currentMode == mode;
-                    return ChoiceChip(
-                      label: Text(mode.name),
-                      selected: isSelected,
-                      selectedColor: Theme.of(context).colorScheme.primary,
-                      onSelected: (selected) {
-                        if (selected) {
-                          setState(() {
-                            _currentMode = mode;
-                            _frameCount = 0;
-                            _lastFpsTimestamp =
-                                DateTime.now().millisecondsSinceEpoch;
-                          });
-                        }
-                      },
-                    );
-                  }).toList(),
+                  children: [
+                    for (final mode in RenderMode.values)
+                      ChoiceChip(
+                        label: Text(mode.name),
+                        selected: _currentMode == mode,
+                        selectedColor: Theme.of(context).colorScheme.primary,
+                        onSelected: (selected) {
+                          if (selected) {
+                            setState(() {
+                              _currentMode = mode;
+                              _frameCount = 0;
+                              _lastFpsTimestamp =
+                                  DateTime.now().millisecondsSinceEpoch;
+                            });
+                          }
+                        },
+                      ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 Text(

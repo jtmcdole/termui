@@ -16,7 +16,7 @@ class Align extends Widget {
 
   /// Creates an alignment widget.
   const Align({
-    this.alignment = Alignment.center,
+    this.alignment = .center,
     this.widthFactor,
     this.heightFactor,
     required this.child,
@@ -131,7 +131,7 @@ class AlignElement extends SingleChildElement {
 class Center extends Align {
   /// Creates a widget that centers its child.
   const Center({super.widthFactor, super.heightFactor, required super.child})
-    : super(alignment: Alignment.center);
+    : super(alignment: .center);
 }
 
 /// A bridge widget that maintains a persistent [Element] tree for its child.

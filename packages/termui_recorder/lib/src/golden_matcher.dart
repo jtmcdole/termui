@@ -21,7 +21,7 @@ Matcher matchesAnsiGolden(
   return _AnsiGoldenMatcher(goldenPath, environment: environment);
 }
 
-class _AnsiGoldenMatcher extends Matcher {
+final class _AnsiGoldenMatcher extends Matcher {
   final String goldenPath;
   final Map<String, String> _environment;
   final _fs = const LocalFileSystem();

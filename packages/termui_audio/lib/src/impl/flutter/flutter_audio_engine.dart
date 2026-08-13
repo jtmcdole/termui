@@ -10,7 +10,7 @@ import '../../api/audio_engine.dart';
 import '../../api/audio_types.dart';
 
 /// An audio buffer loaded into the Flutter backend.
-class FlutterAudioBuffer implements AudioBuffer {
+final class FlutterAudioBuffer implements AudioBuffer {
   final sol.AudioSource _source;
   late final StreamSubscription<sol.StreamSoundEvent> _sub;
 
@@ -37,7 +37,7 @@ class FlutterAudioBuffer implements AudioBuffer {
 }
 
 /// A mixing bus for grouping audio voices in the Flutter backend.
-class FlutterAudioBus implements AudioBus {
+final class FlutterAudioBus implements AudioBus {
   final sol.Bus _bus;
 
   /// Creates a new Flutter audio bus.
@@ -55,7 +55,7 @@ class FlutterAudioBus implements AudioBus {
 }
 
 /// The Flutter implementation of [TermuiAudioEngine].
-class FlutterAudioEngine implements TermuiAudioEngine {
+final class FlutterAudioEngine implements TermuiAudioEngine {
   final sol.SoLoud _engine = sol.SoLoud.instance;
   // TODO: Track potential memory leaks here if voiceEnded callbacks are missed (e.g. loops).
   final Map<int, Completer<void>> _activeVoices = {};

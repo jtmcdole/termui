@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'package:termui/terminal/terminal.dart' as core;
 
 /// Base class for a single page example within the Widget Book.
-abstract class WidgetBookExample {
+abstract base class WidgetBookExample {
   /// The terminal instance.
   core.Terminal? terminal;
 

@@ -5,7 +5,7 @@ import 'example_base.dart';
 
 /// An interactive grid that displays available OSC 22 mouse pointers.
 /// Hovering over different cells sets the terminal mouse cursor shape accordingly.
-class MouseCursorsExample extends WidgetBookExample {
+final class MouseCursorsExample extends WidgetBookExample {
   int? _hoveredIndex;
 
   static const List<core.MousePointer> _pointers = [

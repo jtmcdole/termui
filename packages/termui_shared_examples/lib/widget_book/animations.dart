@@ -6,7 +6,7 @@ import 'example_base.dart';
 
 /// Example showcasing the new TUI Animation Framework effects
 /// (Inkwell Ripple, Sparkle Particles, and Background Flash).
-class AnimationsExample extends WidgetBookExample {
+final class AnimationsExample extends WidgetBookExample {
   /// The click count of the inkwell ripple button.
   int inkwellClicks = 0;
 
@@ -220,7 +220,7 @@ class AnimationsExample extends WidgetBookExample {
 }
 
 /// A button that showcases the sparkle animation effect.
-class SparkleButton extends StatefulWidget {
+final class SparkleButton extends StatefulWidget {
   /// The button label text.
   final String text;
 
@@ -228,7 +228,7 @@ class SparkleButton extends StatefulWidget {
   final void Function() onPressed;
 
   /// Creates a [SparkleButton].
-  SparkleButton({required this.text, required this.onPressed});
+  SparkleButton({super.key, required this.text, required this.onPressed});
 
   // Keep a reference to the active state.
   SparkleButtonState? _state;
@@ -247,7 +247,7 @@ class SparkleButton extends StatefulWidget {
 }
 
 /// The state for [SparkleButton].
-class SparkleButtonState extends State<SparkleButton>
+final class SparkleButtonState extends State<SparkleButton>
     with TuiAnimatedStateMixin<SparkleButton> {
   late final SparkleEffect _sparkles;
   bool _isHovered = false;
@@ -314,7 +314,7 @@ class SparkleButtonState extends State<SparkleButton>
   }
 }
 
-class _SparkleButtonRenderWidget extends Widget {
+final class _SparkleButtonRenderWidget extends Widget {
   final SparkleButtonState state;
   const _SparkleButtonRenderWidget(this.state);
 
@@ -322,7 +322,7 @@ class _SparkleButtonRenderWidget extends Widget {
   Element createElement() => _SparkleButtonRenderElement(this);
 }
 
-class _SparkleButtonRenderElement extends Element {
+final class _SparkleButtonRenderElement extends Element {
   _SparkleButtonRenderElement(super.widget);
 
   @override
@@ -425,7 +425,7 @@ class _SparkleButtonRenderElement extends Element {
 }
 
 /// A button that showcases the background flash animation effect.
-class FlashButton extends StatefulWidget {
+final class FlashButton extends StatefulWidget {
   /// The button label text.
   final String text;
 
@@ -433,7 +433,7 @@ class FlashButton extends StatefulWidget {
   final void Function() onPressed;
 
   /// Creates a [FlashButton].
-  FlashButton({required this.text, required this.onPressed});
+  FlashButton({super.key, required this.text, required this.onPressed});
 
   // Keep a reference to the active state.
   FlashButtonState? _state;
@@ -452,7 +452,7 @@ class FlashButton extends StatefulWidget {
 }
 
 /// The state for [FlashButton].
-class FlashButtonState extends State<FlashButton>
+final class FlashButtonState extends State<FlashButton>
     with TuiAnimatedStateMixin<FlashButton> {
   late final FlashEffect _flash;
   bool _isHovered = false;
@@ -520,7 +520,7 @@ class FlashButtonState extends State<FlashButton>
   }
 }
 
-class _FlashButtonRenderWidget extends Widget {
+final class _FlashButtonRenderWidget extends Widget {
   final FlashButtonState state;
   const _FlashButtonRenderWidget(this.state);
 
@@ -528,7 +528,7 @@ class _FlashButtonRenderWidget extends Widget {
   Element createElement() => _FlashButtonRenderElement(this);
 }
 
-class _FlashButtonRenderElement extends Element {
+final class _FlashButtonRenderElement extends Element {
   _FlashButtonRenderElement(super.widget);
 
   @override

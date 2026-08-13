@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// Example demonstrating stateful widgets, inherited widgets, and nested layouts.
-class LayoutStateExample extends WidgetBookExample {
+final class LayoutStateExample extends WidgetBookExample {
   /// The root element wrapper for the example that provides the context.
   late final ElementWidget elementWrapper;
 
@@ -48,7 +48,7 @@ class LayoutStateExample extends WidgetBookExample {
 }
 
 /// A stateless widget that lays out the main demo content.
-class DemoContent extends StatelessWidget {
+final class DemoContent extends StatelessWidget {
   /// Creates a new [DemoContent] widget.
   const DemoContent();
 
@@ -119,15 +119,15 @@ class DemoContent extends StatelessWidget {
 }
 
 /// A stateful widget that displays a counter and a button state.
-class StatefulCounter extends StatefulWidget {
+final class StatefulCounter extends StatefulWidget {
   /// Creates a new [StatefulCounter] widget.
-  const StatefulCounter();
+  const StatefulCounter({super.key});
 
   @override
-  State createState() => _StatefulCounterState();
+  State<StatefulCounter> createState() => _StatefulCounterState();
 }
 
-class _StatefulCounterState extends State<StatefulCounter> {
+final class _StatefulCounterState extends State<StatefulCounter> {
   int count = 0;
   bool isPressed = false;
 
@@ -180,7 +180,7 @@ class _StatefulCounterState extends State<StatefulCounter> {
 }
 
 /// An inherited widget that provides the theme style to its descendants.
-class AppTheme extends InheritedWidget {
+final class AppTheme extends InheritedWidget {
   /// The style used for title text.
   final Style titleStyle;
 
@@ -207,18 +207,18 @@ class AppTheme extends InheritedWidget {
 }
 
 /// A widget that renders a vertical divider line.
-class VerticalDivider extends Widget {
+final class VerticalDivider extends Widget {
   /// The style used to render the divider.
   final Style style;
 
   /// Creates a new [VerticalDivider] with an optional [style].
-  const VerticalDivider({this.style = Style.empty});
+  const VerticalDivider({super.key, this.style = Style.empty});
 
   @override
   Element createElement() => _VerticalDividerElement(this);
 }
 
-class _VerticalDividerElement extends Element {
+final class _VerticalDividerElement extends Element {
   _VerticalDividerElement(super.widget);
 
   @override

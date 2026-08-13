@@ -2,7 +2,7 @@ import 'dart:math';
 import 'package:termui/termui.dart';
 
 /// A widget that displays instructions and mock diagnostic data.
-class SystemDiagnosticsWidget extends Widget {
+final class SystemDiagnosticsWidget extends Widget {
   /// Current diagnostics progress value.
   double progress = 0.0;
 
@@ -19,7 +19,7 @@ class SystemDiagnosticsWidget extends Widget {
   Element createElement() => _SystemDiagnosticsElement(this);
 }
 
-class _SystemDiagnosticsElement extends Element {
+final class _SystemDiagnosticsElement extends Element {
   _SystemDiagnosticsElement(super.widget);
 
   @override
@@ -102,7 +102,7 @@ class _SystemDiagnosticsElement extends Element {
 }
 
 /// A widget displaying a scanning radar sweep using sub-pixel Braille canvas.
-class RadarWidget extends Widget {
+final class RadarWidget extends Widget {
   /// Current animation frame of the radar sweep.
   int frame = 0;
 
@@ -120,16 +120,17 @@ class RadarWidget extends Widget {
 
   /// Construct the Radar simulation widget.
   RadarWidget({
-    this.renderMode = CanvasRenderMode.braille,
+    super.key,
+    this.renderMode = .braille,
     this.antiAliased = false,
-    this.style = Style.empty,
+    this.style = .empty,
   });
 
   @override
   Element createElement() => _RadarElement(this);
 }
 
-class _RadarElement extends Element {
+final class _RadarElement extends Element {
   _RadarElement(super.widget);
 
   @override
@@ -272,7 +273,7 @@ class _RadarElement extends Element {
 }
 
 /// A widget displaying a spinning 3D wireframe cube using Quadrants mode.
-class SpinningCubeWidget extends Widget {
+final class SpinningCubeWidget extends Widget {
   /// Rotation angle around X axis.
   double rotX = 0.0;
 
@@ -289,7 +290,7 @@ class SpinningCubeWidget extends Widget {
   final Style style;
 
   /// Construct a spinning 3D cube widget.
-  SpinningCubeWidget({this.style = Style.empty});
+  SpinningCubeWidget({super.key, this.style = .empty});
 
   /// Advance the rotation angles for the next frame simulation.
   void update() {
@@ -302,7 +303,7 @@ class SpinningCubeWidget extends Widget {
   Element createElement() => _SpinningCubeElement(this);
 }
 
-class _SpinningCubeElement extends Element {
+final class _SpinningCubeElement extends Element {
   _SpinningCubeElement(super.widget);
 
   @override
@@ -320,12 +321,7 @@ class _SpinningCubeElement extends Element {
     if (cube.canvas == null ||
         cube.canvas!.width != w ||
         cube.canvas!.height != h) {
-      cube.canvas = Canvas(
-        w,
-        h,
-        renderMode: CanvasRenderMode.quadrants,
-        style: cube.style,
-      );
+      cube.canvas = Canvas(w, h, renderMode: .quadrants, style: cube.style);
     } else {
       cube.canvas!.clear();
     }
@@ -356,11 +352,7 @@ class _SpinningCubeElement extends Element {
     final scale = min(w, h * 2) * 0.65;
 
     // Rotate and project vertices
-    for (final v in vertices) {
-      final x = v[0];
-      final y = v[1];
-      final z = v[2];
-
+    for (final [x, y, z] in vertices) {
       // Rotate X
       final y1 = y * cos(cube.rotX) - z * sin(cube.rotX);
       final z1 = y * sin(cube.rotX) + z * cos(cube.rotX);
@@ -380,9 +372,9 @@ class _SpinningCubeElement extends Element {
 
     // Draw edges
     final edgeStyle = const Style(foreground: Color(255, 0, 255));
-    for (final edge in edges) {
-      final p1 = projected[edge[0]];
-      final p2 = projected[edge[1]];
+    for (final [p1Idx, p2Idx] in edges) {
+      final p1 = projected[p1Idx];
+      final p2 = projected[p2Idx];
       cube.canvas!.drawLine(p1.x, p1.y, p2.x, p2.y, cellStyle: edgeStyle);
     }
 

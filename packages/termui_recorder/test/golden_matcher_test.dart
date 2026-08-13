@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/style.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 
 void main() {
@@ -22,7 +21,7 @@ void main() {
 
     test('fails when golden file does not exist', () {
       final buffer = Buffer.blank(5, 1);
-      buffer.writeString(0, 0, 'Test', Style.empty);
+      buffer.writeString(0, 0, 'Test', .empty);
 
       final goldenPath = '${tempDir.path}/non_existent.ansi';
 
@@ -33,7 +32,7 @@ void main() {
 
     test('creates golden file automatically when GENERATE_GOLDENS is true', () {
       final buffer = Buffer.blank(5, 1);
-      buffer.writeString(0, 0, 'Test', Style.empty);
+      buffer.writeString(0, 0, 'Test', .empty);
 
       final goldenPath = '${tempDir.path}/auto_created.ansi';
 
@@ -54,7 +53,7 @@ void main() {
       'matches correctly when golden file exists and content is identical',
       () {
         final buffer = Buffer.blank(5, 1);
-        buffer.writeString(0, 0, 'Test', Style.empty);
+        buffer.writeString(0, 0, 'Test', .empty);
 
         final goldenPath = '${tempDir.path}/existing.ansi';
         final file = File(goldenPath)..createSync(recursive: true);
@@ -68,7 +67,7 @@ void main() {
       'fails when golden file content differs and generates fail/diff/cast outputs',
       () {
         final buffer = Buffer.blank(5, 1);
-        buffer.writeString(0, 0, 'Test', Style.empty);
+        buffer.writeString(0, 0, 'Test', .empty);
 
         final goldenPath = '${tempDir.path}/diff.ansi';
         final file = File(goldenPath)..createSync(recursive: true);

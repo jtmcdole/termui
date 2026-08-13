@@ -4,7 +4,7 @@ import 'package:termui_recorder/termui_recorder.dart';
 import 'package:termui_test/termui_test.dart';
 import 'dart:math';
 
-class ProgressiveGlitchEffect extends TerminalEffect {
+final class ProgressiveGlitchEffect extends TerminalEffect {
   const ProgressiveGlitchEffect();
 
   @override

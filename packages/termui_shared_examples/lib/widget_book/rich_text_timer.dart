@@ -5,7 +5,7 @@ import 'example_base.dart';
 ///
 /// Demonstrates mixed styling within a single line, multi-line wrapped
 /// rich text, and a custom interactive countdown timer layout.
-class RichTextTimerExample extends WidgetBookExample {
+final class RichTextTimerExample extends WidgetBookExample {
   /// The active countdown timer widget instance.
   final timerWidget = TimerWidget(
     duration: const Duration(seconds: 120),

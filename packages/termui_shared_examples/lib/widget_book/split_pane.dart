@@ -6,7 +6,7 @@ import 'example_base.dart';
 ///
 /// Features a draggable divider that dynamically updates child constraints
 /// (percentage or length) in real-time based on mouse interactions.
-class SplitPaneExample extends WidgetBookExample {
+final class SplitPaneExample extends WidgetBookExample {
   /// The interactive split pane layout.
   late final ElementWidget splitPaneWrapper;
 

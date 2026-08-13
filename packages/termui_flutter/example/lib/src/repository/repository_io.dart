@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'repository.dart';
 
-class IoSavedCastsRepository implements SavedCastsRepository {
+final class IoSavedCastsRepository implements SavedCastsRepository {
   final String storeName;
   IoSavedCastsRepository(this.storeName);
 

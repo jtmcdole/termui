@@ -1,5 +1,5 @@
 /// A handle for a playing sound.
-class AudioVoice {
+final class AudioVoice {
   /// The unique native identifier for this voice.
   final int id;
 
@@ -11,13 +11,13 @@ class AudioVoice {
 }
 
 /// Represents a loaded sound source.
-abstract class AudioBuffer {
+abstract interface class AudioBuffer {
   /// Unique hash identifier for this buffer.
   int get hash;
 }
 
 /// Represents a mixing bus.
-abstract class AudioBus {
+abstract interface class AudioBus {
   /// Unique identifier for this bus.
   int get id;
 
@@ -115,7 +115,7 @@ enum FilterType {
 }
 
 /// Represents a timestamp offset and duration segment within an audio sprite sheet.
-class SpriteSegment {
+final class SpriteSegment {
   /// The starting timestamp offset of this sprite segment within the source audio buffer.
   final Duration start;
 

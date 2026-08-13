@@ -4,7 +4,7 @@ import 'package:termui/ui/color.dart';
 import 'package:termui/ui/style.dart';
 
 /// A simple parser that reconstructs a [Buffer] from a styled ANSI string or stream.
-class AnsiParser {
+abstract final class AnsiParser {
   /// Parses a styled ANSI string back into a [Buffer].
   ///
   /// If [width] or [height] are not specified, they are computed from the ANSI content.
@@ -31,7 +31,7 @@ class AnsiParser {
 
     var x = 0;
     var y = 0;
-    var currentStyle = Style.empty;
+    Style currentStyle = .empty;
 
     final chars = ansi.characters;
     final iterator = chars.iterator;
@@ -85,7 +85,7 @@ class AnsiParser {
     Buffer buffer, {
     int cursorX = 0,
     int cursorY = 0,
-    Style currentStyle = Style.empty,
+    Style currentStyle = .empty,
   }) {
     var x = cursorX;
     var y = cursorY;
@@ -121,36 +121,34 @@ class AnsiParser {
           }
 
           final params = paramBuffer.toString();
-          if (command == 'm') {
-            style = _applyAnsiCodes(style, params);
-          } else if (command == 'H') {
-            if (params.isEmpty) {
-              x = 0;
-              y = 0;
-            } else {
-              final parts = params.split(';');
-              if (parts.length == 2) {
-                y = (int.tryParse(parts[0]) ?? 1) - 1;
-                x = (int.tryParse(parts[1]) ?? 1) - 1;
+          switch (command) {
+            case 'm':
+              style = _applyAnsiCodes(style, params);
+            case 'H':
+              if (params.isEmpty) {
+                x = 0;
+                y = 0;
+              } else if (params.split(';') case [final rStr, final cStr]) {
+                y = (int.tryParse(rStr) ?? 1) - 1;
+                x = (int.tryParse(cStr) ?? 1) - 1;
               }
-            }
-          } else if (command == 'A') {
-            final n = int.tryParse(params) ?? 1;
-            y -= n;
-          } else if (command == 'C') {
-            final n = int.tryParse(params) ?? 1;
-            x += n;
-          } else if (command == 'D') {
-            final n = int.tryParse(params) ?? 1;
-            x -= n;
-          } else if (command == 'F') {
-            final n = int.tryParse(params) ?? 1;
-            y -= n;
-            x = 0;
-          } else if (command == 'J') {
-            if (params == '2') {
-              buffer.clear();
-            }
+            case 'A':
+              final n = int.tryParse(params) ?? 1;
+              y -= n;
+            case 'C':
+              final n = int.tryParse(params) ?? 1;
+              x += n;
+            case 'D':
+              final n = int.tryParse(params) ?? 1;
+              x -= n;
+            case 'F':
+              final n = int.tryParse(params) ?? 1;
+              y -= n;
+              x = 0;
+            case 'J':
+              if (params == '2') {
+                buffer.clear();
+              }
           }
         }
         continue;
@@ -186,13 +184,12 @@ class AnsiParser {
 
   static Style _applyAnsiCodes(Style current, String paramString) {
     if (paramString.isEmpty || paramString == '0') {
-      return Style.empty;
+      return .empty;
     }
 
-    final codes = paramString
-        .split(';')
-        .map((s) => int.tryParse(s) ?? 0)
-        .toList();
+    final codes = [
+      for (final s in paramString.split(';')) int.tryParse(s) ?? 0,
+    ];
     var foreground = current.foreground;
     var background = current.background;
     var modifiers = current.modifiers;
@@ -200,50 +197,50 @@ class AnsiParser {
     var i = 0;
     while (i < codes.length) {
       final code = codes[i];
-      if (code == 0) {
-        foreground = null;
-        background = null;
-        modifiers = Modifier.none;
-        i++;
-      } else if (code == 1) {
-        modifiers |= Modifier.bold;
-        i++;
-      } else if (code == 2) {
-        modifiers |= Modifier.dim;
-        i++;
-      } else if (code == 3) {
-        modifiers |= Modifier.italic;
-        i++;
-      } else if (code == 4) {
-        modifiers |= Modifier.underline;
-        i++;
-      } else if (code == 5) {
-        modifiers |= Modifier.blink;
-        i++;
-      } else if (code == 7) {
-        modifiers |= Modifier.reverse;
-        i++;
-      } else if (code == 8) {
-        modifiers |= Modifier.hidden;
-        i++;
-      } else if (code == 9) {
-        modifiers |= Modifier.crossedOut;
-        i++;
-      } else if (code == 38 && i + 4 < codes.length && codes[i + 1] == 2) {
-        final r = codes[i + 2];
-        final g = codes[i + 3];
-        final b = codes[i + 4];
-        foreground = Color(r, g, b);
-        i += 5;
-      } else if (code == 48 && i + 4 < codes.length && codes[i + 1] == 2) {
-        final r = codes[i + 2];
-        final g = codes[i + 3];
-        final b = codes[i + 4];
-        background = Color(r, g, b);
-        i += 5;
-      } else {
-        // Unknown code, skip
-        i++;
+      switch (code) {
+        case 0:
+          foreground = null;
+          background = null;
+          modifiers = Modifier.none;
+          i++;
+        case 1:
+          modifiers |= Modifier.bold;
+          i++;
+        case 2:
+          modifiers |= Modifier.dim;
+          i++;
+        case 3:
+          modifiers |= Modifier.italic;
+          i++;
+        case 4:
+          modifiers |= Modifier.underline;
+          i++;
+        case 5:
+          modifiers |= Modifier.blink;
+          i++;
+        case 7:
+          modifiers |= Modifier.reverse;
+          i++;
+        case 8:
+          modifiers |= Modifier.hidden;
+          i++;
+        case 9:
+          modifiers |= Modifier.crossedOut;
+          i++;
+        case 38 when i + 4 < codes.length && codes[i + 1] == 2:
+          final r = codes[i + 2];
+          final g = codes[i + 3];
+          final b = codes[i + 4];
+          foreground = Color(r, g, b);
+          i += 5;
+        case 48 when i + 4 < codes.length && codes[i + 1] == 2:
+          final r = codes[i + 2];
+          final g = codes[i + 3];
+          final b = codes[i + 4];
+          background = Color(r, g, b);
+          i += 5;
+        default:
+          i++;
       }
     }
 

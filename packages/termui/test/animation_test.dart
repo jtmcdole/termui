@@ -12,7 +12,7 @@ import 'package:termui/ui/event.dart' hide Modifier;
 import 'package:termui/ui/widget_toolkit.dart';
 
 /// A test animation effect implementation for validating lifecycles and ticks.
-class TestEffect extends TuiAnimationEffect {
+final class TestEffect extends TuiAnimationEffect {
   /// True if the paint method was called.
   bool painted = false;
 

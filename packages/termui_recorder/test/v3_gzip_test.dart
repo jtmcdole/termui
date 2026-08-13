@@ -3,12 +3,11 @@ import 'package:file/local.dart';
 import 'package:archive/archive.dart';
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/style.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 
 void main() {
   test('v3 Asciicast GZipped Export', () {
-    final fs = LocalFileSystem();
+    final fs = const LocalFileSystem();
     final tempDir = fs.systemTempDirectory.createTempSync(
       'termui_recorder_test_v3',
     );
@@ -19,11 +18,11 @@ void main() {
     final recorder = AsciicastRecorder(writer, width: 10, height: 5);
 
     final buffer1 = Buffer(10, 5);
-    buffer1.writeString(0, 0, 'Hello', Style.empty);
+    buffer1.writeString(0, 0, 'Hello', .empty);
     recorder.recordFrame(buffer1);
 
     final buffer2 = Buffer(10, 5);
-    buffer2.writeString(0, 0, 'World', Style.empty);
+    buffer2.writeString(0, 0, 'World', .empty);
     recorder.recordFrame(buffer2);
 
     recorder.close();

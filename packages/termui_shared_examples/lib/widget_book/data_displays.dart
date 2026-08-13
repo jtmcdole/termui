@@ -3,7 +3,7 @@ import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
 
 /// An example showcasing data display widgets like Tables and Paginators.
-class DataDisplaysExample extends WidgetBookExample {
+final class DataDisplaysExample extends WidgetBookExample {
   /// The table widget used to display task data.
   final table = Table(
     headers: const ['ID', 'Task Name', 'Status'],
@@ -54,26 +54,28 @@ class DataDisplaysExample extends WidgetBookExample {
 
   @override
   bool handleKeyEvent(ui.KeyEvent event) {
-    if (event.type == ui.KeyType.up) {
-      table.selectedRowIndex = (table.selectedRowIndex - 1).clamp(
-        0,
-        table.rows.length - 1,
-      );
-      return true;
-    } else if (event.type == ui.KeyType.down) {
-      table.selectedRowIndex = (table.selectedRowIndex + 1).clamp(
-        0,
-        table.rows.length - 1,
-      );
-      return true;
-    } else if (event.type == ui.KeyType.left) {
-      paginatorPage = (paginatorPage - 1).clamp(0, 4);
-      return true;
-    } else if (event.type == ui.KeyType.right) {
-      paginatorPage = (paginatorPage + 1).clamp(0, 4);
-      return true;
+    switch (event.type) {
+      case ui.KeyType.up:
+        table.selectedRowIndex = (table.selectedRowIndex - 1).clamp(
+          0,
+          table.rows.length - 1,
+        );
+        return true;
+      case ui.KeyType.down:
+        table.selectedRowIndex = (table.selectedRowIndex + 1).clamp(
+          0,
+          table.rows.length - 1,
+        );
+        return true;
+      case ui.KeyType.left:
+        paginatorPage = (paginatorPage - 1).clamp(0, 4);
+        return true;
+      case ui.KeyType.right:
+        paginatorPage = (paginatorPage + 1).clamp(0, 4);
+        return true;
+      default:
+        return false;
     }
-    return false;
   }
 
   @override

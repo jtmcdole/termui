@@ -1,4 +1,4 @@
-class SymbolCandidate {
+final class SymbolCandidate {
   final int bitmapHigh;
   final int bitmapLow;
   final int popcount;
@@ -981,7 +981,7 @@ final List<SymbolCandidate> _blockSymbols = [
   ),
 ];
 
-class SymbolMap {
+final class SymbolMap {
   List<SymbolCandidate> get blockSymbols => _blockSymbols;
   const SymbolMap();
 }
