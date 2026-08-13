@@ -58,7 +58,7 @@ final class WebSavedCastsRepository implements SavedCastsRepository {
         );
       }.toJS;
 
-      return completer.future;
+      return await completer.future;
     } catch (e) {
       return [];
     }
@@ -87,7 +87,7 @@ final class WebSavedCastsRepository implements SavedCastsRepository {
         completer.completeError(Exception('Failed to load from IndexedDB'));
       }.toJS;
 
-      return completer.future;
+      return await completer.future;
     } catch (e) {
       return null;
     }
@@ -164,7 +164,7 @@ final class WebSavedCastsRepository implements SavedCastsRepository {
         );
       }.toJS;
 
-      return completer.future;
+      return await completer.future;
     } catch (e) {
       return null;
     }
