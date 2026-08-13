@@ -1,4 +1,5 @@
 import "package:termui/termui.dart";
+
 // ignore_for_file: public_member_api_docs
 
 Color hslToRgb(double h, double s, double l) {
