@@ -16,7 +16,7 @@ dependencies:
   termui_flutter: ^0.8.2
   termui_tinpot: ^0.3.2
   image: ^4.5.4
-  desktop_drop: ^0.7.1
+  desktop_drop: ^0.8.2
   cross_file: ^0.3.5+4
   file_selector: ^1.0.0
   clock: ^1.1.1

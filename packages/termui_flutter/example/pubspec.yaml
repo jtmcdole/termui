@@ -47,7 +47,7 @@ dependencies:
   web: ^1.1.1
   file_selector: ^1.0.0
   archive: ^4.0.9
-  desktop_drop: ^0.7.1
+  desktop_drop: ^0.8.2
   cross_file: ^0.3.5+4
 
 dev_dependencies:
