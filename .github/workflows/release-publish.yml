@@ -2,7 +2,7 @@ name: Publish packages
 on:  
   push:  
     tags:  
-      - '*'  
+      - '*-v*'  
   workflow_dispatch:
 jobs:
   publish-packages:
@@ -20,5 +20,5 @@ jobs:
       - uses: bluefireteam/melos-action@v3
         with:
           publish: true
-          # Create a GitHub release with notes from the package's CHANGELOG.md
           create-release: true
+          dart-version: none # Explicitly bypasses the crashing internal setup
