@@ -1,1 +1,3 @@
 !test/fixtures/golden_mismatch_demo.ansi.cast
+!test/fixtures/golden_mismatch_demo.ansi.fail
+!test/fixtures/golden_mismatch_demo.ansi.diff
