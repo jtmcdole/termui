@@ -1,3 +1,7 @@
+## 0.3.3
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
 ## 0.3.2
 
  - **FIX**(core): resolve rendering bottlenecks and grapheme ghosting.

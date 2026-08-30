@@ -3,6 +3,67 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-08-30
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`pty2` - `v0.5.4`](#pty2---v054)
+ - [`termui` - `v0.9.2`](#termui---v092)
+ - [`termui_audio` - `v0.1.9`](#termui_audio---v019)
+ - [`termui_flutter` - `v0.8.3`](#termui_flutter---v083)
+ - [`termui_hotreload` - `v0.6.19`](#termui_hotreload---v0619)
+ - [`termui_pty` - `v0.3.15`](#termui_pty---v0315)
+ - [`termui_recorder` - `v0.7.2`](#termui_recorder---v072)
+ - [`termui_test` - `v0.2.16`](#termui_test---v0216)
+ - [`termui_tinpot` - `v0.3.3`](#termui_tinpot---v033)
+
+---
+
+#### `pty2` - `v0.5.4`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui` - `v0.9.2`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui_audio` - `v0.1.9`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui_flutter` - `v0.8.3`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui_hotreload` - `v0.6.19`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui_pty` - `v0.3.15`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui_recorder` - `v0.7.2`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui_test` - `v0.2.16`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+#### `termui_tinpot` - `v0.3.3`
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
+
 ## 2026-08-12
 
 ### Changes

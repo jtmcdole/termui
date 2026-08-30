@@ -1,3 +1,7 @@
+## 0.5.4
+
+ - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
+
 ## 0.5.3
 
  - **REFACTOR**(core): optimize render loops and decouple audio state.
