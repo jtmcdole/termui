@@ -437,8 +437,18 @@ class Buffer {
     var currentX = x;
     var currentY = y;
 
-    if (text.runes.length == text.length) {
-      final len = text.length;
+    // Fast-path for pure ASCII text: no wide characters, no variation selectors,
+    // and no multi-code-unit grapheme clusters.
+    var isAscii = true;
+    final len = text.length;
+    for (var i = 0; i < len; i++) {
+      if (text.codeUnitAt(i) >= 128) {
+        isAscii = false;
+        break;
+      }
+    }
+
+    if (isAscii) {
       final fg = style.foreground?.argb ?? 0;
       final bg = style.background?.argb ?? 0;
       final modifiers = style.modifiers;
@@ -474,46 +484,14 @@ class Buffer {
             }
           }
 
-          final isWide = isWideCodePoint(codeUnit);
-          if (isWide && currentX == width - 1) {
-            characters[idx] = ' ';
-            final attrIdx = idx * 3;
-            attributes[attrIdx + 0] = hasFg ? fg : 0;
-            if (hasBg) {
-              attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
-            }
-            attributes[attrIdx + 2] = modifiers;
-            currentX += 1;
-          } else {
-            characters[idx] = char;
-            final attrIdx = idx * 3;
-            attributes[attrIdx + 0] = hasFg ? fg : 0;
-            if (hasBg) {
-              attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
-            }
-            attributes[attrIdx + 2] = modifiers;
-            if (isWide) {
-              if (currentX + 1 < width) {
-                final nextIdx = idx + 1;
-                // Clear potential wide char we are overwriting in the next cell
-                if (isWideGrapheme(characters[nextIdx]) &&
-                    currentX + 2 < width) {
-                  final nextNextIdx = idx + 2;
-                  if (characters[nextNextIdx] == '') {
-                    characters[nextNextIdx] = ' ';
-                  }
-                }
-                characters[nextIdx] = '';
-                final nextAttrIdx = nextIdx * 3;
-                attributes[nextAttrIdx + 0] = hasFg ? fg : 0;
-                if (hasBg) attributes[nextAttrIdx + 1] = bg;
-                attributes[nextAttrIdx + 2] = modifiers;
-              }
-              currentX += 2;
-            } else {
-              currentX += 1;
-            }
+          characters[idx] = char;
+          final attrIdx = idx * 3;
+          attributes[attrIdx + 0] = hasFg ? fg : 0;
+          if (hasBg) {
+            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
           }
+          attributes[attrIdx + 2] = modifiers;
+          currentX += 1;
         } else {
           currentX += 1;
         }
@@ -1041,20 +1019,49 @@ class Compositor {
 
 /// Returns true if the given grapheme cluster is a double-width (wide) character.
 ///
-/// [Optimization Note - ASCII Fast-Path]:
-/// Since the overwhelming majority of characters in typical TUI applications are standard ASCII
-/// (alphanumeric characters, punctuation, spaces), we check the first codeUnit. If it is < 128,
-/// we bypass the expensive grapheme cluster iterator/rune inspection and Unicode range checks entirely.
+/// [Optimization Note - Zero-Allocation Fast-Path]:
+/// 1. For single BMP characters (length == 1), checks if the code unit is >= 0x1100
+///    (the lowest wide character in Unicode is Hangul Jamo U+1100). If < 0x1100,
+///    exits in a single CPU comparison without any heap allocations.
+/// 2. For multi-code-unit graphemes, scans code units directly for Variation Selector-16
+///    (0xFE0F) or Combining Enclosing Keycap (0x20E3), which force 2-column emoji presentation.
+/// 3. For SMP characters (surrogate pairs), decodes the first code point via bitwise math.
+/// This implementation achieves zero Runes/Iterator allocations in hot render loops.
 bool isWideGrapheme(String grapheme) {
-  if (grapheme.isEmpty) return false;
-  return isWideCodePoint(grapheme.runes.first);
+  final len = grapheme.length;
+  if (len == 0) return false;
+
+  final cu0 = grapheme.codeUnitAt(0);
+  // Fast-path: single BMP character
+  if (len == 1) {
+    return cu0 >= 0x1100 && isWideCodePoint(cu0);
+  }
+
+  // Multi-code-unit cluster: scan for VS16 (0xFE0F) or Keycap (0x20E3)
+  for (var i = 1; i < len; i++) {
+    final cu = grapheme.codeUnitAt(i);
+    if (cu == 0xFE0F || cu == 0x20E3) return true;
+  }
+
+  // Extract first code point (decode surrogate pair if SMP)
+  var firstRune = cu0;
+  if (cu0 >= 0xD800 && cu0 <= 0xDBFF && len >= 2) {
+    final cu1 = grapheme.codeUnitAt(1);
+    if (cu1 >= 0xDC00 && cu1 <= 0xDFFF) {
+      firstRune = 0x10000 + ((cu0 & 0x3FF) << 10) + (cu1 & 0x3FF);
+    }
+  }
+
+  return isWideCodePoint(firstRune);
 }
 
 /// Checks if a single code point represents a wide character.
 bool isWideCodePoint(int codePoint) {
-  if (codePoint < 128) return false;
+  // Lowest wide character in Unicode is Hangul Jamo (0x1100).
+  // Everything below 0x1100 (ASCII, Latin Extended, Cyrillic, Greek, Hebrew, Arabic) is 1 cell.
+  if (codePoint < 0x1100) return false;
 
-  // CJK Unified Ideographs & Extension A
+  // CJK Unified Ideographs & Extension A (most frequent wide characters in i18n text)
   if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return true;
   if (codePoint >= 0x3400 && codePoint <= 0x4DBF) return true;
 
@@ -1064,13 +1071,48 @@ bool isWideCodePoint(int codePoint) {
   // CJK Symbols and Punctuation, Hiragana, Katakana, Hangul Compatibility Jamo, etc.
   if (codePoint >= 0x3000 && codePoint <= 0x31FF) return true;
 
+  // Emojis & Miscellaneous Symbols and Pictographs (SMP)
+  if (codePoint >= 0x1F300 && codePoint <= 0x1F9FF) return true;
+  if (codePoint >= 0x1FA00 && codePoint <= 0x1FAFF) return true;
+
   // Fullwidth Forms
   if (codePoint >= 0xFF01 && codePoint <= 0xFF60) return true;
   if (codePoint >= 0xFFE0 && codePoint <= 0xFFE6) return true;
 
-  // Emojis & Miscellaneous Symbols and Pictographs
-  if (codePoint >= 0x1F300 && codePoint <= 0x1F9FF) return true;
-  if (codePoint >= 0x1FA00 && codePoint <= 0x1FAFF) return true;
+  // Miscellaneous Technical with Emoji_Presentation=Yes (⌚..⌛, ⏩..⏳, ⏰, ⏱, ⏲, ⏸..⏺)
+  if (codePoint == 0x231A || codePoint == 0x231B) return true;
+  if (codePoint >= 0x23E9 && codePoint <= 0x23F3) return true;
+  if (codePoint >= 0x23F8 && codePoint <= 0x23FA) return true;
+
+  // Miscellaneous Symbols & Dingbats with Emoji_Presentation=Yes (⚡, ⚪, ⚫, ✅, ❌, etc.)
+  if (codePoint == 0x2614 || codePoint == 0x2615) return true;
+  if (codePoint >= 0x2648 && codePoint <= 0x2653) return true;
+  if (codePoint == 0x267F || codePoint == 0x2693 || codePoint == 0x26A1) {
+    return true;
+  }
+  if (codePoint == 0x26AA || codePoint == 0x26AB) return true;
+  if (codePoint == 0x26BD || codePoint == 0x26BE) return true;
+  if (codePoint == 0x26C4 || codePoint == 0x26C5 || codePoint == 0x26CE) {
+    return true;
+  }
+  if (codePoint == 0x26D4 || codePoint == 0x26EA) return true;
+  if (codePoint == 0x26F2 || codePoint == 0x26F3 || codePoint == 0x26F5) {
+    return true;
+  }
+  if (codePoint == 0x26FA || codePoint == 0x26FD) return true;
+  if (codePoint == 0x2705 || codePoint == 0x270A || codePoint == 0x270B) {
+    return true;
+  }
+  if (codePoint == 0x2728 || codePoint == 0x274C || codePoint == 0x274E) {
+    return true;
+  }
+  if (codePoint >= 0x2753 && codePoint <= 0x2755) return true;
+  if (codePoint == 0x2757) return true;
+  if (codePoint >= 0x2795 && codePoint <= 0x2797) return true;
+  if (codePoint == 0x27B0 || codePoint == 0x27BF) return true;
+
+  // Additional symbols with Emoji_Presentation=Yes (⭐ U+2B50, ⭕ U+2B55)
+  if (codePoint == 0x2B50 || codePoint == 0x2B55) return true;
 
   // CJK Unified Ideographs Extension B-F
   if (codePoint >= 0x20000 && codePoint <= 0x2EBEF) return true;

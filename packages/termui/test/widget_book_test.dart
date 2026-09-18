@@ -1123,7 +1123,6 @@ void main() {
             tester.backend.buffer,
             matchesAnsiGolden(
               'test/goldens/widget_book_modal_before_navigation.ansi',
-              environment: {'GENERATE_GOLDENS': 'true'},
             ),
           );
 
@@ -1152,7 +1151,6 @@ void main() {
             tester.backend.buffer,
             matchesAnsiGolden(
               'test/goldens/widget_book_modal_after_navigation.ansi',
-              environment: {'GENERATE_GOLDENS': 'true'},
             ),
           );
 
