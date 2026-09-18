@@ -3,6 +3,49 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-09-18
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.9.3`](#termui---v093)
+ - [`termui_audio` - `v0.1.10`](#termui_audio---v0110)
+ - [`termui_flutter` - `v0.8.4`](#termui_flutter---v084)
+ - [`termui_recorder` - `v0.7.3`](#termui_recorder---v073)
+ - [`termui_test` - `v0.2.17`](#termui_test---v0217)
+ - [`termui_hotreload` - `v0.6.20`](#termui_hotreload---v0620)
+ - [`termui_pty` - `v0.3.16`](#termui_pty---v0316)
+ - [`termui_tinpot` - `v0.3.4`](#termui_tinpot---v034)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.8.4`
+ - `termui_recorder` - `v0.7.3`
+ - `termui_test` - `v0.2.17`
+ - `termui_hotreload` - `v0.6.20`
+ - `termui_pty` - `v0.3.16`
+ - `termui_tinpot` - `v0.3.4`
+
+---
+
+#### `termui` - `v0.9.3`
+
+ - **FIX**(buffer): support wide BMP emojis and variation selectors.
+
+#### `termui_audio` - `v0.1.10`
+
+ - **FIX**(buffer): support wide BMP emojis and variation selectors.
+
+
 ## 2026-08-30
 
 ### Changes

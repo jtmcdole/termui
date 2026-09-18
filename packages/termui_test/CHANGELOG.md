@@ -1,3 +1,7 @@
+## 0.2.17
+
+ - Update a dependency to the latest release.
+
 ## 0.2.16
 
  - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
