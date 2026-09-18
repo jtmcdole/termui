@@ -150,7 +150,7 @@ class ScrollBarElement extends Element {
 
     final total = sb._totalExtent;
     final view = sb._viewportExtent;
-    if (total <= 0) {
+    if (total <= 0 || trackHeight <= 0) {
       thumbHeight = 0;
       thumbPos = 0;
     } else {
