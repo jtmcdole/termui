@@ -1,3 +1,7 @@
+## 0.9.3
+
+ - **FIX**(buffer): support wide BMP emojis and variation selectors.
+
 ## 0.9.2
 
  - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
