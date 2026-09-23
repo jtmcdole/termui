@@ -1,3 +1,7 @@
+## 0.1.11
+
+ - Update a dependency to the latest release.
+
 ## 0.1.10
 
  - **FIX**(buffer): support wide BMP emojis and variation selectors.

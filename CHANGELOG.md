@@ -3,6 +3,46 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-09-23
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.9.4`](#termui---v094)
+ - [`termui_flutter` - `v0.8.5`](#termui_flutter---v085)
+ - [`termui_recorder` - `v0.7.4`](#termui_recorder---v074)
+ - [`termui_test` - `v0.2.18`](#termui_test---v0218)
+ - [`termui_hotreload` - `v0.6.21`](#termui_hotreload---v0621)
+ - [`termui_pty` - `v0.3.17`](#termui_pty---v0317)
+ - [`termui_audio` - `v0.1.11`](#termui_audio---v0111)
+ - [`termui_tinpot` - `v0.3.5`](#termui_tinpot---v035)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.8.5`
+ - `termui_recorder` - `v0.7.4`
+ - `termui_test` - `v0.2.18`
+ - `termui_hotreload` - `v0.6.21`
+ - `termui_pty` - `v0.3.17`
+ - `termui_audio` - `v0.1.11`
+ - `termui_tinpot` - `v0.3.5`
+
+---
+
+#### `termui` - `v0.9.4`
+
+ - **FIX**(wide characters): zerowidth, wide, etc.
+
+
 ## 2026-09-18
 
 ### Changes
