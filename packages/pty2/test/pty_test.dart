@@ -33,9 +33,9 @@ void main() {
     final subscription = pty.out.listen(
       (chunk) {
         output.add(chunk);
-        if (Platform.isWindows && !readyCompleter.isCompleted) {
-          // ConPTY / cmd.exe banner/prompt has arrived on stdout; conhost.exe
-          // has finished its initial screen reset (\x1B[2J) and is ready for input.
+        if (!readyCompleter.isCompleted) {
+          // Shell banner/prompt has arrived on stdout; shell has initialized
+          // and is ready for input.
           readyCompleter.complete();
         }
       },
@@ -45,16 +45,14 @@ void main() {
       },
     );
 
-    if (Platform.isWindows) {
-      await readyCompleter.future;
-    }
+    await readyCompleter.future;
 
     if (Platform.isWindows) {
       pty.write('echo hello world\r\n');
       pty.write('exit 0\r\n');
     } else {
-      pty.write('echo hello world\r');
-      pty.write('exit 0\r');
+      pty.write('echo hello world\n');
+      pty.write('exit 0\n');
     }
 
     await doneCompleter.future;
