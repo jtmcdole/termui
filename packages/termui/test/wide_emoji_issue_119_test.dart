@@ -18,9 +18,14 @@ void main() {
           reason: 'U+231B Hourglass Done should be wide (2 cells)',
         );
         expect(
-          isWideGrapheme('⏭'),
+          isWideGrapheme('⏭️'),
           isTrue,
-          reason: 'U+23ED Next Track should be wide (2 cells)',
+          reason: 'U+23ED + VS16 Next Track should be wide (2 cells)',
+        );
+        expect(
+          isWideGrapheme('⏭'),
+          isFalse,
+          reason: 'U+23ED Next Track without VS16 should be narrow (1 cell)',
         );
         expect(
           isWideGrapheme('⏩'),

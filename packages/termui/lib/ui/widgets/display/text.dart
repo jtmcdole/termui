@@ -23,7 +23,7 @@ int measureStringWidth(String text) {
   if (text.isEmpty) return 0;
   var width = 0;
   for (final char in text.characters) {
-    width += isWideGrapheme(char) ? 2 : 1;
+    width += graphemeWidth(char);
   }
   return width;
 }
@@ -58,7 +58,11 @@ String padOrTruncate(String text, int width) {
   var currentWidth = 0;
   final sb = StringBuffer();
   for (final char in text.characters) {
-    final charWidth = isWideGrapheme(char) ? 2 : 1;
+    final charWidth = graphemeWidth(char);
+    if (charWidth == 0) {
+      sb.write(char);
+      continue;
+    }
     if (currentWidth + charWidth > width) break;
     sb.write(char);
     currentWidth += charWidth;

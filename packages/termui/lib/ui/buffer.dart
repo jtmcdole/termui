@@ -512,6 +512,10 @@ class Buffer {
         currentY++;
         continue;
       }
+      final charWidth = graphemeWidth(char);
+      if (charWidth == 0) {
+        continue;
+      }
       if (isCellValid(currentX, currentY)) {
         final idx = currentY * width + currentX;
         // Clear potential wide char we are about to overwrite
@@ -531,7 +535,7 @@ class Buffer {
           }
         }
 
-        final isWide = isWideGrapheme(char);
+        final isWide = charWidth == 2;
         if (isWide && currentX == width - 1) {
           // Can't fit wide character in the last column, write a space instead
           characters[idx] = ' ';
@@ -572,7 +576,7 @@ class Buffer {
           }
         }
       } else {
-        currentX += 1;
+        currentX += charWidth;
       }
     }
   }
@@ -1017,6 +1021,75 @@ class Compositor {
   }
 }
 
+/// Returns the physical terminal column width of [grapheme] (0, 1, or 2).
+int graphemeWidth(String grapheme) {
+  if (grapheme.isEmpty) return 0;
+  if (isZeroWidthGrapheme(grapheme)) return 0;
+  if (isWideGrapheme(grapheme)) return 2;
+  return 1;
+}
+
+/// Returns true if the grapheme cluster represents a zero-width character
+/// (non-spacing marks, format controls, zero-width spaces, or soft hyphens).
+bool isZeroWidthGrapheme(String grapheme) {
+  final len = grapheme.length;
+  if (len == 0) return true;
+
+  if (len == 1) {
+    final cu = grapheme.codeUnitAt(0);
+    return isZeroWidthCodePoint(cu);
+  }
+
+  // If the cluster starts with a zero-width code point and contains no visible base char
+  final cu0 = grapheme.codeUnitAt(0);
+  if (isZeroWidthCodePoint(cu0)) {
+    for (var i = 1; i < len; i++) {
+      if (!isZeroWidthCodePoint(grapheme.codeUnitAt(i))) return false;
+    }
+    return true;
+  }
+
+  return false;
+}
+
+/// Returns true if the given code point occupies 0 terminal cells.
+bool isZeroWidthCodePoint(int codePoint) {
+  if (codePoint == 0) return true;
+  // C0 and C1 control characters (except tab/newline/carriage return)
+  if ((codePoint >= 0x01 && codePoint <= 0x1F) ||
+      (codePoint >= 0x7F && codePoint <= 0x9F)) {
+    return true;
+  }
+  // Soft Hyphen
+  if (codePoint == 0x00AD) return true;
+  // Combining Diacritical Marks
+  if (codePoint >= 0x0300 && codePoint <= 0x036F) return true;
+  if (codePoint >= 0x0483 && codePoint <= 0x0489) {
+    return true; // Cyrillic combining
+  }
+  if (codePoint >= 0x0591 && codePoint <= 0x05BD) {
+    return true; // Hebrew combining
+  }
+  // Hangul Jamo medial vowels & trailing consonants when isolated
+  if (codePoint >= 0x1160 && codePoint <= 0x11FF) return true;
+  // General Punctuation format controls: ZWSP, ZWNJ, ZWJ, LTR, RTL, etc.
+  if (codePoint >= 0x200B && codePoint <= 0x200F) return true;
+  // BiDi controls (LRE, RLE, PDF, LRO, RLO, etc.)
+  if (codePoint >= 0x202A && codePoint <= 0x202E) return true;
+  // Word joiner & Invisible operators
+  if (codePoint >= 0x2060 && codePoint <= 0x206F) return true;
+  // Standalone Variation Selectors 1..16
+  if (codePoint >= 0xFE00 && codePoint <= 0xFE0F) return true;
+  // Byte Order Mark / Zero Width No-Break Space
+  if (codePoint == 0xFEFF) return true;
+  // Interlinear annotation
+  if (codePoint >= 0xFFF9 && codePoint <= 0xFFFB) return true;
+  // Tags (Plane 14 language tag characters)
+  if (codePoint >= 0xE0000 && codePoint <= 0xE007F) return true;
+
+  return false;
+}
+
 /// Returns true if the given grapheme cluster is a double-width (wide) character.
 ///
 /// [Optimization Note - Zero-Allocation Fast-Path]:
@@ -1024,7 +1097,8 @@ class Compositor {
 ///    (the lowest wide character in Unicode is Hangul Jamo U+1100). If < 0x1100,
 ///    exits in a single CPU comparison without any heap allocations.
 /// 2. For multi-code-unit graphemes, scans code units directly for Variation Selector-16
-///    (0xFE0F) or Combining Enclosing Keycap (0x20E3), which force 2-column emoji presentation.
+///    (0xFE0F), Combining Enclosing Keycap (0x20E3), or Zero-Width Joiner (0x200D),
+///    which force 2-column emoji presentation.
 /// 3. For SMP characters (surrogate pairs), decodes the first code point via bitwise math.
 /// This implementation achieves zero Runes/Iterator allocations in hot render loops.
 bool isWideGrapheme(String grapheme) {
@@ -1037,12 +1111,6 @@ bool isWideGrapheme(String grapheme) {
     return cu0 >= 0x1100 && isWideCodePoint(cu0);
   }
 
-  // Multi-code-unit cluster: scan for VS16 (0xFE0F) or Keycap (0x20E3)
-  for (var i = 1; i < len; i++) {
-    final cu = grapheme.codeUnitAt(i);
-    if (cu == 0xFE0F || cu == 0x20E3) return true;
-  }
-
   // Extract first code point (decode surrogate pair if SMP)
   var firstRune = cu0;
   if (cu0 >= 0xD800 && cu0 <= 0xDBFF && len >= 2) {
@@ -1052,8 +1120,279 @@ bool isWideGrapheme(String grapheme) {
     }
   }
 
+  // Multi-code-unit cluster:
+  // 1. Combining Enclosing Keycap (0x20E3): makes keycap sequences (e.g. 1️⃣, #️⃣) wide (2 cells).
+  // 2. Variation Selector-16 (0xFE0F): forces emoji presentation (wide) for symbols/pictographs (firstRune >= 0x2000).
+  // 3. Zero-Width Joiner (0x200D): joins emoji sequences (e.g. 👩‍💻, 👨‍👩‍👧‍👦, 🐱‍👤) into a single wide emoji.
+  //    Only applies to emoji sequences where firstRune >= 0x2000 (not Latin letters with ZWJ).
+  for (var i = 1; i < len; i++) {
+    final cu = grapheme.codeUnitAt(i);
+    if (cu == 0x20E3) return true;
+    if ((cu == 0xFE0F || cu == 0x200D) && firstRune >= 0x2000) return true;
+  }
+
   return isWideCodePoint(firstRune);
 }
+
+/// The 126 contiguous Unicode 16.0 ranges for Wide (W), Fullwidth (F),
+/// and Emoji_Presentation=Yes code points.
+final Uint32List _wideRangeStarts = Uint32List.fromList([
+  0x1100,
+  0x231A,
+  0x2329,
+  0x23E9,
+  0x23F0,
+  0x23F3,
+  0x25FD,
+  0x2614,
+  0x2630,
+  0x2648,
+  0x267F,
+  0x268A,
+  0x2693,
+  0x26A1,
+  0x26AA,
+  0x26BD,
+  0x26C4,
+  0x26CE,
+  0x26D4,
+  0x26EA,
+  0x26F2,
+  0x26F5,
+  0x26FA,
+  0x26FD,
+  0x2705,
+  0x270A,
+  0x2728,
+  0x274C,
+  0x274E,
+  0x2753,
+  0x2757,
+  0x2795,
+  0x27B0,
+  0x27BF,
+  0x2B1B,
+  0x2B50,
+  0x2B55,
+  0x2E80,
+  0x2E9B,
+  0x2F00,
+  0x2FF0,
+  0x3041,
+  0x3099,
+  0x3105,
+  0x3131,
+  0x3190,
+  0x31EF,
+  0x3220,
+  0x3250,
+  0xA490,
+  0xA960,
+  0xAC00,
+  0xF900,
+  0xFE10,
+  0xFE30,
+  0xFE54,
+  0xFE68,
+  0xFF01,
+  0xFFE0,
+  0x16FE0,
+  0x16FF0,
+  0x17000,
+  0x18CFF,
+  0x18D80,
+  0x18E00,
+  0x191A0,
+  0x1AFF0,
+  0x1AFF5,
+  0x1AFFD,
+  0x1B000,
+  0x1B132,
+  0x1B150,
+  0x1B155,
+  0x1B164,
+  0x1B170,
+  0x1D300,
+  0x1D360,
+  0x1F004,
+  0x1F0CF,
+  0x1F18E,
+  0x1F191,
+  0x1F1AE,
+  0x1F1E6,
+  0x1F210,
+  0x1F240,
+  0x1F250,
+  0x1F260,
+  0x1F300,
+  0x1F32D,
+  0x1F337,
+  0x1F37E,
+  0x1F3A0,
+  0x1F3CF,
+  0x1F3E0,
+  0x1F3F4,
+  0x1F3F8,
+  0x1F440,
+  0x1F442,
+  0x1F4FF,
+  0x1F54B,
+  0x1F550,
+  0x1F57A,
+  0x1F595,
+  0x1F5A4,
+  0x1F5FB,
+  0x1F680,
+  0x1F6CC,
+  0x1F6D0,
+  0x1F6D5,
+  0x1F6DC,
+  0x1F6EB,
+  0x1F6F4,
+  0x1F7DA,
+  0x1F7E0,
+  0x1F7F0,
+  0x1F90C,
+  0x1F93C,
+  0x1F947,
+  0x1FA70,
+  0x1FA80,
+  0x1FAC8,
+  0x1FACC,
+  0x1FADF,
+  0x1FAEF,
+  0x20000,
+  0x30000,
+]);
+
+final Uint32List _wideRangeEnds = Uint32List.fromList([
+  0x115F,
+  0x231B,
+  0x232A,
+  0x23EC,
+  0x23F0,
+  0x23F3,
+  0x25FE,
+  0x2615,
+  0x2637,
+  0x2653,
+  0x267F,
+  0x268F,
+  0x2693,
+  0x26A1,
+  0x26AB,
+  0x26BE,
+  0x26C5,
+  0x26CE,
+  0x26D4,
+  0x26EA,
+  0x26F3,
+  0x26F5,
+  0x26FA,
+  0x26FD,
+  0x2705,
+  0x270B,
+  0x2728,
+  0x274C,
+  0x274E,
+  0x2755,
+  0x2757,
+  0x2797,
+  0x27B0,
+  0x27BF,
+  0x2B1C,
+  0x2B50,
+  0x2B55,
+  0x2E99,
+  0x2EF3,
+  0x2FD5,
+  0x303E,
+  0x3096,
+  0x30FF,
+  0x312F,
+  0x318E,
+  0x31E5,
+  0x321E,
+  0x3247,
+  0xA48C,
+  0xA4C6,
+  0xA97C,
+  0xD7A3,
+  0xFAFF,
+  0xFE19,
+  0xFE52,
+  0xFE66,
+  0xFE6B,
+  0xFF60,
+  0xFFE6,
+  0x16FE4,
+  0x16FF6,
+  0x18CDA,
+  0x18D20,
+  0x18DF2,
+  0x19191,
+  0x191D2,
+  0x1AFF3,
+  0x1AFFB,
+  0x1AFFE,
+  0x1B128,
+  0x1B132,
+  0x1B152,
+  0x1B155,
+  0x1B168,
+  0x1B2FB,
+  0x1D356,
+  0x1D376,
+  0x1F004,
+  0x1F0CF,
+  0x1F18E,
+  0x1F19A,
+  0x1F1AE,
+  0x1F202,
+  0x1F23B,
+  0x1F248,
+  0x1F251,
+  0x1F265,
+  0x1F320,
+  0x1F335,
+  0x1F37C,
+  0x1F393,
+  0x1F3CA,
+  0x1F3D3,
+  0x1F3F0,
+  0x1F3F4,
+  0x1F43E,
+  0x1F440,
+  0x1F4FC,
+  0x1F53D,
+  0x1F54E,
+  0x1F567,
+  0x1F57A,
+  0x1F596,
+  0x1F5A4,
+  0x1F64F,
+  0x1F6C5,
+  0x1F6CC,
+  0x1F6D2,
+  0x1F6D9,
+  0x1F6DF,
+  0x1F6EC,
+  0x1F6FC,
+  0x1F7DA,
+  0x1F7EB,
+  0x1F7F0,
+  0x1F93A,
+  0x1F945,
+  0x1F9FF,
+  0x1FA7C,
+  0x1FAC6,
+  0x1FAC8,
+  0x1FADD,
+  0x1FAEB,
+  0x1FAFA,
+  0x2FFFD,
+  0x3FFFD,
+]);
 
 /// Checks if a single code point represents a wide character.
 bool isWideCodePoint(int codePoint) {
@@ -1061,71 +1400,31 @@ bool isWideCodePoint(int codePoint) {
   // Everything below 0x1100 (ASCII, Latin Extended, Cyrillic, Greek, Hebrew, Arabic) is 1 cell.
   if (codePoint < 0x1100) return false;
 
-  // CJK Unified Ideographs & Extension A (most frequent wide characters in i18n text)
-  if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return true;
-  if (codePoint >= 0x3400 && codePoint <= 0x4DBF) return true;
-
-  // Hangul Syllables
-  if (codePoint >= 0xAC00 && codePoint <= 0xD7AF) return true;
-
-  // CJK Symbols and Punctuation, Hiragana, Katakana, Hangul Compatibility Jamo, etc.
-  if (codePoint >= 0x3000 && codePoint <= 0x31FF) return true;
-
-  // Emojis & Miscellaneous Symbols and Pictographs (SMP)
-  if (codePoint >= 0x1F300 && codePoint <= 0x1F9FF) return true;
-  if (codePoint >= 0x1FA00 && codePoint <= 0x1FAFF) return true;
-
-  // Fullwidth Forms
-  if (codePoint >= 0xFF01 && codePoint <= 0xFF60) return true;
-  if (codePoint >= 0xFFE0 && codePoint <= 0xFFE6) return true;
-
-  // Miscellaneous Technical with Emoji_Presentation=Yes (⌚..⌛, ⏩..⏳, ⏰, ⏱, ⏲, ⏸..⏺)
-  if (codePoint == 0x231A || codePoint == 0x231B) return true;
-  if (codePoint >= 0x23E9 && codePoint <= 0x23F3) return true;
-  if (codePoint >= 0x23F8 && codePoint <= 0x23FA) return true;
-
-  // Miscellaneous Symbols & Dingbats with Emoji_Presentation=Yes (⚡, ⚪, ⚫, ✅, ❌, etc.)
-  if (codePoint == 0x2614 || codePoint == 0x2615) return true;
-  if (codePoint >= 0x2648 && codePoint <= 0x2653) return true;
-  if (codePoint == 0x267F || codePoint == 0x2693 || codePoint == 0x26A1) {
-    return true;
+  // Ultra-fast paths for high-frequency CJK and Hangul text (99% of wide characters in real text)
+  if (codePoint >= 0x4E00 && codePoint <= 0x9FFF) return true; // CJK Main
+  if (codePoint >= 0xAC00 && codePoint <= 0xD7A3) {
+    return true; // Hangul Syllables
   }
-  if (codePoint == 0x26AA || codePoint == 0x26AB) return true;
-  if (codePoint == 0x26BD || codePoint == 0x26BE) return true;
-  if (codePoint == 0x26C4 || codePoint == 0x26C5 || codePoint == 0x26CE) {
-    return true;
+  if (codePoint >= 0x20000 && codePoint <= 0x2FFFD) {
+    return true; // Plane 2 (Ext B..F, I)
   }
-  if (codePoint == 0x26D4 || codePoint == 0x26EA) return true;
-  if (codePoint == 0x26F2 || codePoint == 0x26F3 || codePoint == 0x26F5) {
-    return true;
+  if (codePoint >= 0x30000 && codePoint <= 0x3FFFD) {
+    return true; // Plane 3 (Ext G..H)
   }
-  if (codePoint == 0x26FA || codePoint == 0x26FD) return true;
-  if (codePoint == 0x2705 || codePoint == 0x270A || codePoint == 0x270B) {
-    return true;
-  }
-  if (codePoint == 0x2728 || codePoint == 0x274C || codePoint == 0x274E) {
-    return true;
-  }
-  if (codePoint >= 0x2753 && codePoint <= 0x2755) return true;
-  if (codePoint == 0x2757) return true;
-  if (codePoint >= 0x2795 && codePoint <= 0x2797) return true;
-  if (codePoint == 0x27B0 || codePoint == 0x27BF) return true;
 
-  // Additional symbols with Emoji_Presentation=Yes (⭐ U+2B50, ⭕ U+2B55)
-  if (codePoint == 0x2B50 || codePoint == 0x2B55) return true;
-
-  // CJK Unified Ideographs Extension B-F
-  if (codePoint >= 0x20000 && codePoint <= 0x2EBEF) return true;
-
-  // CJK Compatibility Ideographs
-  if (codePoint >= 0xF900 && codePoint <= 0xFAFF) return true;
-
-  // Additional CJK/Emoji ranges:
-  if (codePoint >= 0x1100 && codePoint <= 0x11FF) return true; // Hangul Jamo
-  if (codePoint >= 0x2E80 && codePoint <= 0x2FFF) {
-    return true; // CJK Radicals Supplement & Kangxi Radicals etc
+  // Binary search over remaining Unicode 16.0 wide intervals (max 7 iterations)
+  int low = 0;
+  int high = _wideRangeStarts.length - 1;
+  while (low <= high) {
+    final mid = (low + high) >> 1;
+    if (codePoint < _wideRangeStarts[mid]) {
+      high = mid - 1;
+    } else if (codePoint > _wideRangeEnds[mid]) {
+      low = mid + 1;
+    } else {
+      return true;
+    }
   }
-  if (codePoint >= 0x1F000 && codePoint <= 0x1F2FF) return true;
 
   return false;
 }
