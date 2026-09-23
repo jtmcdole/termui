@@ -166,6 +166,26 @@ class Terminal {
     }
   }
 
+  /// Detects whether the active terminal emulator renders East Asian Ambiguous
+  /// characters as wide (2 cells) or narrow (1 cell) by querying cursor advance.
+  ///
+  /// Probes character '§' (U+00A7 Section Sign, an East Asian Ambiguous character).
+  /// If the cursor advances by 2 or more columns, returns true (CJK wide mode).
+  /// If the cursor advances by 1 column (Western default), returns false.
+  Future<bool> detectAmbiguousWidth() async {
+    try {
+      final startPos = await cursorPosition();
+      backend.write('§\x1b[6n');
+      final endPos = await cursorPosition();
+      backend.write(
+        '\x1b[${startPos.y};${startPos.x}H \x1b[${startPos.y};${startPos.x}H',
+      );
+      return (endPos.x - startPos.x) >= 2;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Clears the entire terminal screen.
   void clear() {
     backend.write('\x1b[2J');
