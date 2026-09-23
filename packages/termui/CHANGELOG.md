@@ -1,3 +1,7 @@
+## 0.9.4
+
+ - **FIX**(wide characters): zerowidth, wide, etc.
+
 ## 0.9.3
 
  - **FIX**(buffer): support wide BMP emojis and variation selectors.
