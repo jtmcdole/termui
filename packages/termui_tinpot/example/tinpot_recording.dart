@@ -57,7 +57,7 @@ void main() async {
           buffer.setCharacter(bx, by, grid.getCharacter(x, y));
           buffer.setForeground(bx, by, grid.getForeground(x, y));
           buffer.setBackground(bx, by, grid.getBackground(x, y));
-          buffer.setModifiers(bx, by, 0);
+          buffer.setModifiers(bx, by, grid.getModifiers(x, y));
         }
       }
     }

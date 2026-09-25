@@ -52,7 +52,12 @@ final class _AnsiGoldenMatcher extends Matcher {
       failedFile.createSync(recursive: true);
       failedFile.writeAsStringSync(currentAnsi);
       matchState['failure'] =
-          'Golden file does not exist at $goldenPath - see $failPath';
+          'Golden file does not exist at $goldenPath - see $failPath\n'
+          'To generate golden files, run with the UPDATE_GOLDENS environment variable:\n'
+          '  Dart:       UPDATE_GOLDENS=true dart test\n'
+          '  PowerShell: \$env:UPDATE_GOLDENS="true"; dart test\n'
+          '  Flutter:    UPDATE_GOLDENS=true flutter test\n'
+          '  PowerShell: \$env:UPDATE_GOLDENS="true"; flutter test';
       return false;
     }
 
@@ -154,7 +159,12 @@ final class _AnsiGoldenMatcher extends Matcher {
           '  - Highlighted diff saved to: $diffPath\n'
           '  - Play comparison slideshow cast with:\n'
           '    dart run termui_recorder:termui_play --paused --keep-alive $castPath\n'
-          '    (Use [Space] to pause/play, [Right Arrow] to step forwards, [Left Arrow] to step backwards)\n\n'
+          '    (Use [Space] to pause/play, [Right Arrow] to step forwards, [Left Arrow] to step backwards)\n'
+          '  - To update golden files, run with the UPDATE_GOLDENS environment variable:\n'
+          '    Dart:       UPDATE_GOLDENS=true dart test\n'
+          '    PowerShell: \$env:UPDATE_GOLDENS="true"; dart test\n'
+          '    Flutter:    UPDATE_GOLDENS=true flutter test\n'
+          '    PowerShell: \$env:UPDATE_GOLDENS="true"; flutter test\n\n'
           'Diff:\n${_getDiff(expectedAnsi, currentAnsi)}';
 
       return false;

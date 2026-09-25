@@ -1,8 +1,9 @@
 import 'dart:typed_data';
 import 'package:image/image.dart' as img;
-import 'package:termui_tinpot/src/termui_tinpot.dart';
+import 'package:termui/termui.dart';
 import 'package:termui_tinpot/src/cell_quantizer.dart';
 import 'package:termui_tinpot/src/symbol_map.dart';
+import 'package:termui_tinpot/src/termui_tinpot.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -42,6 +43,39 @@ void main() {
       );
       expect(buffer.width, 2);
       expect(buffer.height, 2);
+    });
+
+    test('non-transparent cells do not have Modifier.transparent', () {
+      final image = img.Image(width: 16, height: 16);
+      for (final p in image) {
+        p.setRgba(255, 0, 0, 255);
+      }
+
+      final buffer = tinpot.convertBuffer(image, 2, 2);
+
+      // Verify modifiers on non-transparent cells:
+      expect(buffer.getModifiers(0, 0), equals(Modifier.none));
+
+      // Verify compositor does not skip non-transparent cells:
+      final target = Buffer.blank(2, 2);
+      Compositor().composite(
+        target: target,
+        layers: [LayeredBuffer(buffer: buffer, x: 0, y: 0, zIndex: 0)],
+      );
+
+      expect(target.getBackground(0, 0), isNot(equals(0)));
+      expect(target.getModifiers(0, 0) & Modifier.transparent, equals(0));
+    });
+
+    test('fully transparent cells have Modifier.transparent', () {
+      final image = img.Image(width: 16, height: 16, numChannels: 4);
+      for (final p in image) {
+        p.setRgba(0, 0, 0, 0);
+      }
+
+      final buffer = tinpot.convertBuffer(image, 2, 2);
+
+      expect(buffer.getModifiers(0, 0), equals(Modifier.transparent));
     });
   });
 
