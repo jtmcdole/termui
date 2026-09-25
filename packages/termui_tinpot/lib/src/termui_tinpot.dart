@@ -151,7 +151,7 @@ final class TermuiTinpot {
             quantizeResult.character,
             quantizeResult.fgColorArgb,
             quantizeResult.bgColorArgb,
-            Modifier.transparent,
+            Modifier.none,
           );
         }
       }

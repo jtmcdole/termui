@@ -25,9 +25,18 @@ void main() {
 
       final goldenPath = '${tempDir.path}/non_existent.ansi';
 
-      expect(() {
+      TestFailure? failure;
+      try {
         expect(buffer, matchesAnsiGolden(goldenPath, environment: {}));
-      }, throwsA(isA<TestFailure>()));
+      } on TestFailure catch (e) {
+        failure = e;
+      }
+
+      expect(failure, isNotNull);
+      expect(failure!.message, contains('Golden file does not exist at'));
+      expect(failure.message, contains('UPDATE_GOLDENS'));
+      expect(failure.message, contains('dart test'));
+      expect(failure.message, contains('flutter test'));
     });
 
     test('creates golden file automatically when GENERATE_GOLDENS is true', () {
