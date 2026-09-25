@@ -44,7 +44,7 @@ dev_dependencies:
   test: ">=1.24.0 <2.0.0"
   lints: ^6.0.0
   termui_shared_examples: any
-  termui_recorder: ^0.7.4
-  termui_test: ^0.2.18
+  termui_recorder: ^0.7.5
+  termui_test: ^0.2.19
   fake_async: ^1.3.3
   coverage: ^1.15.1

@@ -10,7 +10,7 @@ environment:
 
 dependencies:
   termui: ^0.9.4
-  termui_recorder: ^0.7.4
+  termui_recorder: ^0.7.5
   termui_pty: ^0.3.17
   pty2: ^0.5.4
   characters: ^1.4.0

@@ -31,5 +31,5 @@ dependencies:
 dev_dependencies:
   test: ">=1.24.0 <2.0.0"
   termui_shared_examples: any
-  termui_test: ^0.2.18
+  termui_test: ^0.2.19
   benchmark_harness: ^2.2.0

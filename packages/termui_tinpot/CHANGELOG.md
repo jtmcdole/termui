@@ -1,3 +1,7 @@
+## 0.3.6
+
+ - **FIX**(tinpot): use `Modifier.none` for non-transparent quantized cells.
+
 ## 0.3.5
 
  - Update a dependency to the latest release.
