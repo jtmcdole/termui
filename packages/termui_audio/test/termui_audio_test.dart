@@ -325,5 +325,38 @@ void main() {
         await cli.dispose();
       },
     );
+
+    test(
+      '15. TP-01: CliAudioEngine play with paused: true starts in paused state and unpauses cleanly',
+      () async {
+        final cli = CliAudioEngine();
+        await cli.init();
+        try {
+          final buffer = await _loadBuffer(cli);
+
+          final voice = cli.play(buffer, paused: true);
+          expect(voice, isNotNull);
+
+          await Future.delayed(const Duration(milliseconds: 150));
+          expect(
+            cli.getVoicePosition(voice),
+            equals(Duration.zero),
+            reason: 'Paused voice should not advance its playhead position',
+          );
+
+          cli.setPaused(voice, false);
+          await Future.delayed(const Duration(milliseconds: 150));
+          expect(
+            cli.getVoicePosition(voice),
+            greaterThan(Duration.zero),
+            reason: 'Unpaused voice should advance playhead position',
+          );
+
+          cli.stop(voice);
+        } finally {
+          await cli.dispose();
+        }
+      },
+    );
   });
 }
