@@ -442,7 +442,7 @@ final class CliAudioEngine implements TermuiAudioEngine {
     final voicePtr = calloc<Uint32>();
     try {
       final busId = bus?.id ?? 0;
-      final res = ffi.play(hash, busId, 1.0, 0.0, false, loop, 0.0, voicePtr);
+      final res = ffi.play(hash, busId, 1.0, 0.0, paused, loop, 0.0, voicePtr);
       if (res != 0) {
         throw Exception('Failed to play sound. Error code: $res');
       }
