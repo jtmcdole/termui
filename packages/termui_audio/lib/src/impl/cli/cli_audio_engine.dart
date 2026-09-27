@@ -675,10 +675,19 @@ final class CliAudioEngine implements TermuiAudioEngine {
     if (!_inited) throw Exception('Engine not initialized.');
     if (!_activeVoices.containsKey(voice.id)) return;
     if (preservePitch && speed > 0.0) {
-      // Attribute 1 is SHIFT in PitchShiftFilter:
-      // Transpose factor = 1.0 / speed compensates for SoLoud resampler pitch change
-      final shift = (1.0 / speed).clamp(0.25, 4.0);
-      ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 1, shift);
+      if ((speed - 1.0).abs() > 0.001) {
+        // Transpose factor = 1.0 / speed compensates for SoLoud resampler pitch change
+        final shift = (1.0 / speed).clamp(0.125, 8.0);
+        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 0, 1.0);
+        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 1, shift);
+      } else {
+        // At 1.0x speed, bypass pitch shift filter to avoid processing or delay
+        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 0, 0.0);
+        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 1, 1.0);
+      }
+    } else {
+      // preservePitch is false: turn off wet mix
+      ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 0, 0.0);
     }
     ffi.setRelativePlaySpeed(voice.id, speed);
   }

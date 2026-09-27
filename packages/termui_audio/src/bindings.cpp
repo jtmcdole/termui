@@ -1574,7 +1574,7 @@ FFI_PLUGIN_EXPORT enum PlayerErrors getFilterParams(unsigned int handle,
       } else {
         *filterValue =
             busFilters->filters.getFilterParams(handle > 0 ? handle : busFilters->handle, filterType, attributeId);
-        if (!(isnormal(*filterValue) || isnan(*filterValue)))
+        if (!std::isfinite(*filterValue))
           return filterParameterGetError;
         if (*filterValue == 9999.0f)
           return filterNotFound;
@@ -1587,7 +1587,7 @@ FFI_PLUGIN_EXPORT enum PlayerErrors getFilterParams(unsigned int handle,
       else {
         *filterValue =
             s->filters.get()->getFilterParams(handle, filterType, attributeId);
-      if (!(isnormal(*filterValue) || isnan(*filterValue)))
+      if (!std::isfinite(*filterValue))
         return filterParameterGetError;
       if (*filterValue == 9999.0f)
         return filterNotFound;

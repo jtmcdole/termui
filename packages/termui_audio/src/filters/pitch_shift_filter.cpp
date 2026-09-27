@@ -29,6 +29,11 @@ void PitchShiftInstance::filter(float *aBuffer, unsigned int aSamples,
   const float dryRatio = 1.0f - mParam[PitchShift::WET];
   const float wetRatio = mParam[PitchShift::WET];
 
+  // If wet mix is zero (or negligible), bypass Signalsmith Stretch completely
+  if (wetRatio <= 0.0001f) {
+    return;
+  }
+
   // SignalSmith expects channel-separated buffers (float**)
   // SoLoud provides data where each channel's samples are contiguous.
   // I'd prefer using this way instead of using per channel stretcher
@@ -140,7 +145,7 @@ float PitchShift::getParamMax(unsigned int aParamIndex) {
   case WET:
     return 1.f;
   case SHIFT:
-    return 3.f;
+    return 8.f;
   case SEMITONES:
     return 36.f;
   }
@@ -152,7 +157,7 @@ float PitchShift::getParamMin(unsigned int aParamIndex) {
   case WET:
     return 0.f;
   case SHIFT:
-    return 0.1f;
+    return 0.125f;
   case SEMITONES:
     return -36.f;
   }
