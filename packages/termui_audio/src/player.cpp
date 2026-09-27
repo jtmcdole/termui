@@ -50,21 +50,40 @@ bool readFileBytes(const std::string &filePath,
     return file.gcount() == fileSize;
 }
 
-bool isOggXiphBytes(const std::vector<unsigned char> &bytes)
+bool readFileHeaderBytes(const std::string &filePath,
+                         std::vector<unsigned char> &headerBytes,
+                         size_t maxBytes = 64 * 1024)
 {
-    if (bytes.size() < 35 || std::memcmp(bytes.data(), "OggS", 4) != 0) {
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file.good()) {
+        return false;
+    }
+
+    headerBytes.resize(maxBytes);
+    file.read(reinterpret_cast<char *>(headerBytes.data()), maxBytes);
+    const std::streamsize bytesRead = file.gcount();
+    if (bytesRead <= 0) {
+        return false;
+    }
+    headerBytes.resize(static_cast<size_t>(bytesRead));
+    return true;
+}
+
+bool isOggXiphBytes(const unsigned char *data, size_t length)
+{
+    if (data == nullptr || length < 35 || std::memcmp(data, "OggS", 4) != 0) {
         return false;
     }
 
     size_t scanOffset = 0;
-    const size_t scanLimit = std::min(bytes.size(), static_cast<size_t>(64 * 1024));
+    const size_t scanLimit = std::min(length, static_cast<size_t>(64 * 1024));
     while (scanOffset + 27 < scanLimit) {
-        if (std::memcmp(bytes.data() + scanOffset, "OggS", 4) != 0) {
+        if (std::memcmp(data + scanOffset, "OggS", 4) != 0) {
             ++scanOffset;
             continue;
         }
 
-        const uint8_t segmentCount = bytes[scanOffset + 26];
+        const uint8_t segmentCount = data[scanOffset + 26];
         const size_t segmentTableOffset = scanOffset + 27;
         if (segmentTableOffset + segmentCount > scanLimit) {
             return false;
@@ -72,22 +91,22 @@ bool isOggXiphBytes(const std::vector<unsigned char> &bytes)
 
         size_t payloadSize = 0;
         for (uint8_t i = 0; i < segmentCount; ++i) {
-            payloadSize += bytes[segmentTableOffset + i];
+            payloadSize += data[segmentTableOffset + i];
         }
 
         const size_t payloadOffset = segmentTableOffset + segmentCount;
-        if (payloadOffset + payloadSize > bytes.size()) {
+        if (payloadOffset + payloadSize > length) {
             return false;
         }
 
         if (payloadSize >= 8 &&
-            std::memcmp(bytes.data() + payloadOffset, "OpusHead", 8) == 0) {
+            std::memcmp(data + payloadOffset, "OpusHead", 8) == 0) {
             return true;
         }
 
         if (payloadSize >= 13 &&
-            std::memcmp(bytes.data() + payloadOffset + 1, "FLAC", 4) == 0 &&
-            std::memcmp(bytes.data() + payloadOffset + 9, "fLaC", 4) == 0) {
+            std::memcmp(data + payloadOffset + 1, "FLAC", 4) == 0 &&
+            std::memcmp(data + payloadOffset + 9, "fLaC", 4) == 0) {
             return true;
         }
 
@@ -99,9 +118,10 @@ bool isOggXiphBytes(const std::vector<unsigned char> &bytes)
 
 PlayerErrors loadOggXiphBufferStream(Player *player,
                                      ActiveSound *activeSound,
-                                     const std::vector<unsigned char> &bytes)
+                                     const unsigned char *data,
+                                     size_t length)
 {
-    if (player == nullptr || activeSound == nullptr || bytes.empty()) {
+    if (player == nullptr || activeSound == nullptr || data == nullptr || length == 0) {
         return invalidParameter;
     }
 
@@ -121,8 +141,8 @@ PlayerErrors loadOggXiphBufferStream(Player *player,
         return error;
     }
 
-    error = bufferStream->addData(bytes.data(),
-                                  static_cast<unsigned int>(bytes.size()));
+    error = bufferStream->addData(data,
+                                  static_cast<unsigned int>(length));
     if (error != noError) {
         return error;
     }
@@ -430,28 +450,40 @@ PlayerErrors Player::loadFile(
     *hash = newHash;
     newSound.get()->soundHash = newHash;
 
-    SoLoud::result result;
-    // This function is never called when running on the Web, but [__WEB__] is checked for consistency with [loadMem].
-    if (loadIntoMem || __WEB__)
+    PlayerErrors loadError = noError;
+    std::vector<unsigned char> headerBytes;
+    const bool isXiph = readFileHeaderBytes(completeFileName, headerBytes) &&
+                        isOggXiphBytes(headerBytes.data(), headerBytes.size());
+
+    if (isXiph)
     {
-        newSound.get()->sound = std::make_unique<SoLoud::Wav>();
-        newSound.get()->soundType = TYPE_WAV;
-        result = static_cast<SoLoud::Wav *>(newSound.get()->sound.get())->load(completeFileName.c_str());
+        std::vector<unsigned char> fullBytes;
+        if (readFileBytes(completeFileName, fullBytes))
+        {
+            loadError = loadOggXiphBufferStream(this, newSound.get(), fullBytes.data(), fullBytes.size());
+        }
+        else
+        {
+            loadError = fileNotFound;
+        }
     }
     else
     {
-        newSound.get()->sound = std::make_unique<SoLoud::WavStream>();
-        newSound.get()->soundType = TYPE_WAVSTREAM;
-        result = static_cast<SoLoud::WavStream *>(newSound.get()->sound.get())->load(completeFileName.c_str());
-    }
-
-    PlayerErrors loadError = static_cast<PlayerErrors>(result);
-    if (result != SoLoud::SO_NO_ERROR)
-    {
-        std::vector<unsigned char> bytes;
-        if (readFileBytes(completeFileName, bytes) && isOggXiphBytes(bytes)) {
-            loadError = loadOggXiphBufferStream(this, newSound.get(), bytes);
+        SoLoud::result result;
+        // This function is never called when running on the Web, but [__WEB__] is checked for consistency with [loadMem].
+        if (loadIntoMem || __WEB__)
+        {
+            newSound.get()->sound = std::make_unique<SoLoud::Wav>();
+            newSound.get()->soundType = TYPE_WAV;
+            result = static_cast<SoLoud::Wav *>(newSound.get()->sound.get())->load(completeFileName.c_str());
         }
+        else
+        {
+            newSound.get()->sound = std::make_unique<SoLoud::WavStream>();
+            newSound.get()->soundType = TYPE_WAVSTREAM;
+            result = static_cast<SoLoud::WavStream *>(newSound.get()->sound.get())->load(completeFileName.c_str());
+        }
+        loadError = static_cast<PlayerErrors>(result);
     }
 
     if (loadError != noError)
@@ -507,27 +539,30 @@ PlayerErrors Player::loadMem(
     newSound.get()->completeFileName = std::string(uniqueName);
     hash = newHash;
     newSound.get()->soundHash = newHash;
-    SoLoud::result result;
-    if (loadIntoMem || __WEB__)
+    PlayerErrors loadError = noError;
+
+    const bool isXiph = (mem != nullptr && length > 0) &&
+                        isOggXiphBytes(mem, static_cast<size_t>(length));
+    if (isXiph)
     {
-        newSound.get()->sound = std::make_unique<SoLoud::Wav>();
-        newSound.get()->soundType = TYPE_WAV;
-        result = static_cast<SoLoud::Wav *>(newSound.get()->sound.get())->loadMem(mem, length, true, true);
+        loadError = loadOggXiphBufferStream(this, newSound.get(), mem, static_cast<size_t>(length));
     }
     else
     {
-        newSound.get()->sound = std::make_unique<SoLoud::WavStream>();
-        newSound.get()->soundType = TYPE_WAVSTREAM;
-        result = static_cast<SoLoud::WavStream *>(newSound.get()->sound.get())->loadMem(mem, length, true, true);
-    }
-
-    PlayerErrors loadError = static_cast<PlayerErrors>(result);
-    if (result != SoLoud::SO_NO_ERROR && mem != nullptr && length > 0)
-    {
-        std::vector<unsigned char> bytes(mem, mem + length);
-        if (isOggXiphBytes(bytes)) {
-            loadError = loadOggXiphBufferStream(this, newSound.get(), bytes);
+        SoLoud::result result;
+        if (loadIntoMem || __WEB__)
+        {
+            newSound.get()->sound = std::make_unique<SoLoud::Wav>();
+            newSound.get()->soundType = TYPE_WAV;
+            result = static_cast<SoLoud::Wav *>(newSound.get()->sound.get())->loadMem(mem, length, true, true);
         }
+        else
+        {
+            newSound.get()->sound = std::make_unique<SoLoud::WavStream>();
+            newSound.get()->soundType = TYPE_WAVSTREAM;
+            result = static_cast<SoLoud::WavStream *>(newSound.get()->sound.get())->loadMem(mem, length, true, true);
+        }
+        loadError = static_cast<PlayerErrors>(result);
     }
 
     if (loadError == noError)

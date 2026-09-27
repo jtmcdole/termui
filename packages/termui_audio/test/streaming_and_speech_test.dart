@@ -263,5 +263,57 @@ void main() {
         await cli.disposeBuffer(buffer);
       },
     );
+
+    test(
+      'TS-STR10: In-memory Opus streaming with loadMem(stream: true)',
+      () async {
+        final opusPath = _resolveAudioPath('example/assets/test_opus_ch7.opus');
+        final bytes = await File(opusPath).readAsBytes();
+
+        // Load Opus stream into memory
+        final buffer = await cli.loadMem(
+          'test_opus_ch7_mem',
+          bytes,
+          stream: true,
+        );
+        expect(buffer, isNotNull);
+        expect(buffer.hash, isNonZero);
+
+        // Verify duration is valid and non-zero
+        final duration = cli.getBufferDuration(buffer);
+        expect(duration.inSeconds, greaterThan(60));
+
+        // Play stream
+        final voice = cli.play(buffer);
+        expect(voice, isNotNull);
+        expect(voice.id, isNonZero);
+
+        // Verify position reading works without crashing
+        final pos = cli.getVoicePosition(voice);
+        expect(pos, isNotNull);
+
+        cli.stop(voice);
+        await cli.disposeBuffer(buffer);
+      },
+    );
+
+    test('TS-STR11: Disk Opus streaming with loadFile(stream: true)', () async {
+      final opusPath = _resolveAudioPath('example/assets/test_opus_ch7.opus');
+
+      // Load Opus file via disk streaming (header sniffed via readFileHeaderBytes)
+      final buffer = await cli.loadFile(opusPath, stream: true);
+      expect(buffer, isNotNull);
+      expect(buffer.hash, isNonZero);
+
+      final duration = cli.getBufferDuration(buffer);
+      expect(duration.inSeconds, greaterThan(60));
+
+      final voice = cli.play(buffer);
+      expect(voice, isNotNull);
+      expect(voice.id, isNonZero);
+
+      cli.stop(voice);
+      await cli.disposeBuffer(buffer);
+    });
   });
 }
