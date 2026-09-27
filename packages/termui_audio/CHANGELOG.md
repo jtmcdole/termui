@@ -1,3 +1,10 @@
+## 0.1.12
+
+ - **FIX**(audio): dynamically attach PitchShiftFilter to active voices and bypass at 1.0x.
+ - **FIX**(audio): route Opus streams to BufferStream and optimize format sniffing.
+ - **FIX**(audio): forward paused parameter in CliAudioEngine.play.
+ - **FEAT**(audio): add chunk & buffer streaming, pitch-preserved speed, and playhead streams.
+
 ## 0.1.11
 
  - Update a dependency to the latest release.
