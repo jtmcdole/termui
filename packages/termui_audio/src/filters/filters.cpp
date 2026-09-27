@@ -182,6 +182,17 @@ PlayerErrors Filters::addFilter(FilterType filterType) {
     mSoloud->setGlobalFilter(filtersSize, newFilter);
   } else if (mSound != nullptr) {
     mSound->sound.get()->setFilter(filtersSize, newFilter);
+    mSoloud->lockAudioMutex_internal();
+    for (const auto &h : mSound->handle) {
+      int ch = mSoloud->getVoiceFromHandle_internal(h.handle);
+      if (ch >= 0 && mSoloud->mVoice[ch] != nullptr) {
+        if (mSoloud->mVoice[ch]->mFilter[filtersSize] != nullptr) {
+          delete mSoloud->mVoice[ch]->mFilter[filtersSize];
+        }
+        mSoloud->mVoice[ch]->mFilter[filtersSize] = newFilter->createInstance();
+      }
+    }
+    mSoloud->unlockAudioMutex_internal();
   } else {
     mBusData->bus.setFilter(filtersSize, newFilter);
   }
@@ -204,6 +215,15 @@ bool Filters::removeFilter(FilterType filterType) {
     mSoloud->setGlobalFilter(index, 0);
   } else if (mSound != nullptr) {
     mSound->sound.get()->setFilter(index, 0);
+    mSoloud->lockAudioMutex_internal();
+    for (const auto &h : mSound->handle) {
+      int ch = mSoloud->getVoiceFromHandle_internal(h.handle);
+      if (ch >= 0 && mSoloud->mVoice[ch] != nullptr) {
+        delete mSoloud->mVoice[ch]->mFilter[index];
+        mSoloud->mVoice[ch]->mFilter[index] = nullptr;
+      }
+    }
+    mSoloud->unlockAudioMutex_internal();
   } else {
     mBusData->bus.setFilter(index, 0);
   }
@@ -211,11 +231,20 @@ bool Filters::removeFilter(FilterType filterType) {
   filters[index].get()->filter.reset();
 
   /// shift filters down by 1 from [index]
-  for (int i = index; i < filters.size() - 1; i++) {
+  for (int i = index; i < (int)filters.size() - 1; i++) {
     if (mSound == nullptr && mBusData == nullptr) {
       mSoloud->setGlobalFilter(i + 1, 0);
     } else if (mSound != nullptr) {
       mSound->sound.get()->setFilter(i + 1, 0);
+      mSoloud->lockAudioMutex_internal();
+      for (const auto &h : mSound->handle) {
+        int ch = mSoloud->getVoiceFromHandle_internal(h.handle);
+        if (ch >= 0 && mSoloud->mVoice[ch] != nullptr) {
+          mSoloud->mVoice[ch]->mFilter[i] = mSoloud->mVoice[ch]->mFilter[i + 1];
+          mSoloud->mVoice[ch]->mFilter[i + 1] = nullptr;
+        }
+      }
+      mSoloud->unlockAudioMutex_internal();
     } else {
       mBusData->bus.setFilter(i + 1, 0);
     }
@@ -236,8 +265,13 @@ bool Filters::removeFilter(FilterType filterType) {
 void Filters::setFilterParams(SoLoud::handle handle, FilterType filterType,
                               int attributeId, float value) {
   int index = isFilterActive(filterType);
-  if (index < 0)
-    return;
+  if (index < 0) {
+    if (addFilter(filterType) != noError)
+      return;
+    index = isFilterActive(filterType);
+    if (index < 0)
+      return;
+  }
   if (mBusData != nullptr) {
     /// bus filter
     mSoloud->setFilterParameter(mBusData->handle, index, attributeId, value);

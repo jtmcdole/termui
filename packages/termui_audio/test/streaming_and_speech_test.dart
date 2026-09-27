@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:ffi';
 import 'dart:io';
+import 'package:ffi/ffi.dart';
 import 'package:termui_audio/termui_audio.dart';
 import 'package:termui_audio/src/impl/cli/cli_audio_engine.dart';
+import 'package:termui_audio/src/soloud_cli.dart' as ffi;
 import 'package:test/test.dart';
 
 String _resolveAudioPath(String relativePath) {
@@ -90,13 +93,56 @@ void main() {
       final buffer = await cli.loadFile(soundPath, stream: true);
       final voice = cli.play(buffer);
 
+      double getFilterParam(int attributeId) {
+        final ptr = calloc<Float>();
+        try {
+          final res = ffi.getFilterParams(
+            voice.id,
+            0,
+            FilterType.pitchShift.index,
+            attributeId,
+            ptr,
+          );
+          expect(res, equals(0), reason: 'getFilterParams should succeed');
+          return ptr.value;
+        } finally {
+          calloc.free(ptr);
+        }
+      }
+
       // Test multiple playback rates with pitch preservation enabled
-      for (final rate in [0.75, 1.0, 1.25, 1.5, 2.0]) {
+      for (final rate in [0.75, 1.25, 1.5, 2.0]) {
         expect(
           () => cli.setRelativePlaySpeed(voice, rate, preservePitch: true),
           returnsNormally,
         );
+        expect(
+          getFilterParam(0),
+          closeTo(1.0, 0.001),
+          reason: 'WET parameter must be 1.0 when pitch preservation is active',
+        );
+        expect(
+          getFilterParam(1),
+          closeTo(1.0 / rate, 0.01),
+          reason: 'SHIFT parameter must be 1.0 / rate ($rate -> ${1.0 / rate})',
+        );
       }
+
+      // Test rate = 1.0x (bypasses filter: WET = 0.0)
+      cli.setRelativePlaySpeed(voice, 1.0, preservePitch: true);
+      expect(
+        getFilterParam(0),
+        closeTo(0.0, 0.001),
+        reason: 'WET parameter must be 0.0 at 1.0x speed',
+      );
+
+      // Test preservePitch: false (bypasses filter: WET = 0.0)
+      cli.setRelativePlaySpeed(voice, 1.5, preservePitch: false);
+      expect(
+        getFilterParam(0),
+        closeTo(0.0, 0.001),
+        reason: 'WET parameter must be 0.0 when preservePitch is false',
+      );
 
       cli.stop(voice);
       await cli.disposeBuffer(buffer);
