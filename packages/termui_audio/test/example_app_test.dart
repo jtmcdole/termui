@@ -15,13 +15,29 @@ class MockAudioEngine implements TermuiAudioEngine {
   @override
   Future<Uint8List> loadFileBytes(String path) async => Uint8List(0);
   @override
-  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async =>
-      MockAudioBuffer();
+  Future<AudioBuffer> loadMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  }) async => MockAudioBuffer();
+  @override
+  Future<AudioBuffer> createBufferStream({
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  }) async => MockAudioBuffer();
+  @override
+  void addStreamData(AudioBuffer buffer, Uint8List chunk) {}
+  @override
+  void setStreamEnded(AudioBuffer buffer) {}
   @override
   Future<void> dispose() async {}
   @override
   Future<AudioBuffer> loadFile(
     String path, {
+    bool stream = false,
     LoadProgressCallback? onProgress,
   }) async => throw UnimplementedError();
   @override
@@ -80,10 +96,19 @@ class MockAudioEngine implements TermuiAudioEngine {
   @override
   Duration getVoicePosition(AudioVoice voice) => Duration.zero;
   @override
+  Stream<Duration> getVoicePositionStream(
+    AudioVoice voice, {
+    Duration interval = const Duration(milliseconds: 50),
+  }) => Stream.value(Duration.zero);
+  @override
   void seek(AudioVoice voice, Duration position) {}
 
   @override
-  void setRelativePlaySpeed(AudioVoice voice, double speed) {}
+  void setRelativePlaySpeed(
+    AudioVoice voice,
+    double speed, {
+    bool preservePitch = false,
+  }) {}
   @override
   void fadeRelativePlaySpeed(
     AudioVoice voice,

@@ -27,6 +27,48 @@ external int loadMem(
   Pointer<Uint32> hash,
 );
 
+@Native<Int32 Function(Pointer<Utf8>, Int32, Pointer<Uint32>)>(
+  symbol: 'loadFileSync',
+)
+external int loadFileSync(
+  Pointer<Utf8> completeFileName,
+  int loadIntoMem,
+  Pointer<Uint32> hash,
+);
+
+@Native<
+  Int32 Function(
+    Pointer<Uint32>,
+    UintPtr,
+    Int32,
+    Double,
+    Uint32,
+    Uint32,
+    Int32,
+    Pointer<Void>,
+    Pointer<Void>,
+  )
+>(symbol: 'setBufferStream')
+external int setBufferStream(
+  Pointer<Uint32> hash,
+  int maxBufferSize,
+  int bufferingType,
+  double bufferingTimeNeeds,
+  int sampleRate,
+  int channels,
+  int format,
+  Pointer<Void> onBufferingCallback,
+  Pointer<Void> onMetadataCallback,
+);
+
+@Native<Int32 Function(Uint32, Pointer<Uint8>, Uint32)>(
+  symbol: 'addAudioDataStream',
+)
+external int addAudioDataStream(int hash, Pointer<Uint8> data, int aDataLen);
+
+@Native<Int32 Function(Uint32)>(symbol: 'setDataIsEnded')
+external int setDataIsEnded(int hash);
+
 @Native<Int32 Function(Int32, Int32, Float, Float, Pointer<Uint32>)>(
   symbol: 'loadWaveform',
 )

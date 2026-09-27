@@ -12,6 +12,7 @@ class StubAudioEngine implements TermuiAudioEngine {
   @override
   Future<AudioBuffer> loadFile(
     String path, {
+    bool stream = false,
     LoadProgressCallback? onProgress,
   }) async => throw UnsupportedError('StubAudioEngine');
   @override
@@ -30,8 +31,28 @@ class StubAudioEngine implements TermuiAudioEngine {
   }) => throw UnsupportedError('No audio engine');
 
   @override
-  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) =>
-      throw UnsupportedError('No audio engine');
+  Future<AudioBuffer> loadMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  }) => throw UnsupportedError('No audio engine');
+
+  @override
+  Future<AudioBuffer> createBufferStream({
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  }) => throw UnsupportedError('StubAudioEngine');
+
+  @override
+  void addStreamData(AudioBuffer buffer, Uint8List chunk) =>
+      throw UnsupportedError('StubAudioEngine');
+
+  @override
+  void setStreamEnded(AudioBuffer buffer) =>
+      throw UnsupportedError('StubAudioEngine');
 
   @override
   Future<Uint8List> loadFileBytes(String path) =>
@@ -83,12 +104,20 @@ class StubAudioEngine implements TermuiAudioEngine {
   Duration getVoicePosition(AudioVoice voice) =>
       throw UnsupportedError('StubAudioEngine');
   @override
+  Stream<Duration> getVoicePositionStream(
+    AudioVoice voice, {
+    Duration interval = const Duration(milliseconds: 50),
+  }) => throw UnsupportedError('StubAudioEngine');
+  @override
   void seek(AudioVoice voice, Duration position) =>
       throw UnsupportedError('StubAudioEngine');
 
   @override
-  void setRelativePlaySpeed(AudioVoice voice, double speed) =>
-      throw UnsupportedError('StubAudioEngine');
+  void setRelativePlaySpeed(
+    AudioVoice voice,
+    double speed, {
+    bool preservePitch = false,
+  }) => throw UnsupportedError('StubAudioEngine');
   @override
   void fadeRelativePlaySpeed(
     AudioVoice voice,

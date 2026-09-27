@@ -75,6 +75,44 @@ final class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  Stream<Duration> getVoicePositionStream(
+    AudioVoice voice, {
+    Duration interval = const Duration(milliseconds: 50),
+  }) {
+    if (!_activeVoices.containsKey(voice.id)) {
+      return const Stream.empty();
+    }
+    late final StreamController<Duration> controller;
+    Timer? ticker;
+
+    controller = StreamController<Duration>.broadcast(
+      onListen: () {
+        ticker = Timer.periodic(interval, (_) {
+          if (!_activeVoices.containsKey(voice.id)) {
+            controller.close();
+            ticker?.cancel();
+            return;
+          }
+          controller.add(getVoicePosition(voice));
+        });
+      },
+      onCancel: () {
+        ticker?.cancel();
+      },
+    );
+
+    voice.completed.then((_) {
+      if (!controller.isClosed) {
+        controller.add(getVoicePosition(voice));
+        controller.close();
+        ticker?.cancel();
+      }
+    });
+
+    return controller.stream;
+  }
+
+  @override
   void seek(AudioVoice voice, Duration position) {
     _engine.seek(sol.SoundHandle(voice.id), position);
   }
@@ -111,10 +149,14 @@ final class FlutterAudioEngine implements TermuiAudioEngine {
   @override
   Future<AudioBuffer> loadFile(
     String path, {
+    bool stream = false,
     LoadProgressCallback? onProgress,
   }) async {
     onProgress?.call(0.1);
-    final source = await _engine.loadFile(path);
+    final source = await _engine.loadFile(
+      path,
+      mode: stream ? sol.LoadMode.disk : sol.LoadMode.memory,
+    );
     onProgress?.call(1.0);
     return FlutterAudioBuffer(source, this);
   }
@@ -222,10 +264,54 @@ final class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async {
+  Future<AudioBuffer> loadMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  }) async {
     if (!_engine.isInitialized) throw Exception('Engine not initialized.');
-    final source = await _engine.loadMem(pathId, bytes);
+    final source = await _engine.loadMem(
+      pathId,
+      bytes,
+      mode: stream ? sol.LoadMode.disk : sol.LoadMode.memory,
+    );
     return FlutterAudioBuffer(source, this);
+  }
+
+  @override
+  Future<AudioBuffer> createBufferStream({
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  }) async {
+    if (!_engine.isInitialized) throw Exception('Engine not initialized.');
+    final source = _engine.setBufferStream(
+      maxBufferSizeBytes: maxBufferSize,
+      bufferingType: releaseConsumed
+          ? sol.BufferingType.released
+          : sol.BufferingType.preserved,
+      bufferingTimeNeeds: bufferingTimeNeeds.inMicroseconds / 1000000.0,
+      sampleRate: sampleRate,
+      channels: channels == 1 ? sol.Channels.mono : sol.Channels.stereo,
+      format: sol.BufferType.auto,
+    );
+    return FlutterAudioBuffer(source, this);
+  }
+
+  @override
+  void addStreamData(AudioBuffer buffer, Uint8List chunk) {
+    if (buffer case FlutterAudioBuffer b) {
+      _engine.addAudioDataStream(b.source, chunk);
+    }
+  }
+
+  @override
+  void setStreamEnded(AudioBuffer buffer) {
+    if (buffer case FlutterAudioBuffer b) {
+      _engine.setDataIsEnded(b.source);
+    }
   }
 
   @override
@@ -351,7 +437,11 @@ final class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  void setRelativePlaySpeed(AudioVoice voice, double speed) {
+  void setRelativePlaySpeed(
+    AudioVoice voice,
+    double speed, {
+    bool preservePitch = false,
+  }) {
     if (!_engine.isInitialized) throw Exception('Engine not initialized.');
     _engine.setRelativePlaySpeed(sol.SoundHandle(voice.id), speed);
   }

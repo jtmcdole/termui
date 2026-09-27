@@ -10,7 +10,14 @@ abstract class TermuiAudioEngine {
   Future<void> dispose();
 
   /// Loads a sound file from the local file system or asset bundle.
-  Future<AudioBuffer> loadFile(String path, {LoadProgressCallback? onProgress});
+  ///
+  /// When [stream] is true, the audio is streamed on-the-fly rather than
+  /// fully decompressed into resident memory.
+  Future<AudioBuffer> loadFile(
+    String path, {
+    bool stream = false,
+    LoadProgressCallback? onProgress,
+  });
 
   /// Reads a sound file into bytes.
   Future<Uint8List> loadFileBytes(String path);
@@ -26,7 +33,33 @@ abstract class TermuiAudioEngine {
   });
 
   /// Loads audio from memory bytes.
-  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes);
+  ///
+  /// When [stream] is true, the audio is decoded on-the-fly using a sliding window.
+  Future<AudioBuffer> loadMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  });
+
+  /// Creates an in-memory streaming audio buffer for progressive chunk loading
+  /// (e.g. loading segments of large audio files).
+  ///
+  /// When [releaseConsumed] is true, consumed audio samples are discarded from the
+  /// circular buffer, keeping resident memory capped at [maxBufferSize].
+  Future<AudioBuffer> createBufferStream({
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  });
+
+  /// Appends an audio data chunk (e.g. from an HTTP range response or package slice)
+  /// to an active buffer stream.
+  void addStreamData(AudioBuffer buffer, Uint8List chunk);
+
+  /// Signals that all audio chunks have been added to the stream buffer.
+  void setStreamEnded(AudioBuffer buffer);
 
   /// Disposes of the audio buffer, freeing native memory.
   Future<void> disposeBuffer(AudioBuffer buffer);
@@ -86,7 +119,23 @@ abstract class TermuiAudioEngine {
   void seek(AudioVoice voice, Duration position);
 
   /// Sets the relative playback speed multiplier for a playing [voice].
-  void setRelativePlaySpeed(AudioVoice voice, double speed);
+  ///
+  /// When [preservePitch] is true, speech pitch is preserved using DSP time-stretching
+  /// without producing chipmunk or slow groaning effects.
+  void setRelativePlaySpeed(
+    AudioVoice voice,
+    double speed, {
+    bool preservePitch = false,
+  });
+
+  /// Retrieves a stream emitting real-time playhead updates for [voice].
+  ///
+  /// The stream emits at the specified [interval] and completes automatically
+  /// when the voice finishes or stops.
+  Stream<Duration> getVoicePositionStream(
+    AudioVoice voice, {
+    Duration interval = const Duration(milliseconds: 50),
+  });
 
   /// Smoothly fades the relative play speed of a playing [voice] to [speed] over [duration].
   void fadeRelativePlaySpeed(AudioVoice voice, double speed, Duration duration);
