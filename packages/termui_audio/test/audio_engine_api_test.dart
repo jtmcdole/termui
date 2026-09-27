@@ -41,8 +41,38 @@ class MockAudioEngine extends TermuiAudioEngine {
   Future<Uint8List> loadFileBytes(String path) async => Uint8List(0);
 
   @override
-  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async =>
-      MockAudioBuffer();
+  Future<AudioBuffer> loadMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  }) async {
+    callLog.add('loadMem($pathId, stream: $stream)');
+    return MockAudioBuffer();
+  }
+
+  @override
+  Future<AudioBuffer> createBufferStream({
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  }) async {
+    callLog.add(
+      'createBufferStream(maxBuffer: $maxBufferSize, releaseConsumed: $releaseConsumed)',
+    );
+    return MockAudioBuffer();
+  }
+
+  @override
+  void addStreamData(AudioBuffer buffer, Uint8List chunk) {
+    callLog.add('addStreamData(${buffer.hash}, bytes: ${chunk.length})');
+  }
+
+  @override
+  void setStreamEnded(AudioBuffer buffer) {
+    callLog.add('setStreamEnded(${buffer.hash})');
+  }
 
   @override
   void scheduleStop(AudioVoice voice, Duration duration) {
@@ -52,9 +82,11 @@ class MockAudioEngine extends TermuiAudioEngine {
   @override
   Future<AudioBuffer> loadFile(
     String path, {
+    bool stream = false,
     LoadProgressCallback? onProgress,
   }) async {
-    throw UnimplementedError();
+    callLog.add('loadFile($path, stream: $stream)');
+    return MockAudioBuffer();
   }
 
   @override
@@ -138,13 +170,29 @@ class MockAudioEngine extends TermuiAudioEngine {
   Duration getVoicePosition(AudioVoice voice) => Duration.zero;
 
   @override
+  Stream<Duration> getVoicePositionStream(
+    AudioVoice voice, {
+    Duration interval = const Duration(milliseconds: 50),
+  }) {
+    callLog.add(
+      'getVoicePositionStream(${voice.id}, ${interval.inMilliseconds}ms)',
+    );
+    return Stream.value(getVoicePosition(voice));
+  }
+
+  @override
   void seek(AudioVoice voice, Duration position) {
     callLog.add('seek(${voice.id}, ${position.inMilliseconds}ms)');
   }
 
   @override
-  void setRelativePlaySpeed(AudioVoice voice, double speed) {
-    callLog.add('setRelativePlaySpeed(${voice.id}, $speed)');
+  void setRelativePlaySpeed(
+    AudioVoice voice,
+    double speed, {
+    bool preservePitch = false,
+  }) {
+    final suffix = preservePitch ? ', preservePitch: true' : '';
+    callLog.add('setRelativePlaySpeed(${voice.id}, $speed$suffix)');
     voiceSpeeds[voice.id] = speed;
   }
 
@@ -377,5 +425,31 @@ void main() {
       engine.destroyBus(bus);
       expect(engine.activeBuses, isNot(contains(bus.id)));
     });
+
+    test(
+      'TS-STR09: Engine API buffer streaming interface verification',
+      () async {
+        final buffer = await engine.createBufferStream(
+          maxBufferSize: 4 * 1024 * 1024,
+          releaseConsumed: true,
+        );
+        expect(
+          engine.callLog,
+          contains(
+            'createBufferStream(maxBuffer: 4194304, releaseConsumed: true)',
+          ),
+        );
+
+        final chunk = Uint8List.fromList([1, 2, 3, 4]);
+        engine.addStreamData(buffer, chunk);
+        expect(
+          engine.callLog,
+          contains('addStreamData(${buffer.hash}, bytes: 4)'),
+        );
+
+        engine.setStreamEnded(buffer);
+        expect(engine.callLog, contains('setStreamEnded(${buffer.hash})'));
+      },
+    );
   });
 }

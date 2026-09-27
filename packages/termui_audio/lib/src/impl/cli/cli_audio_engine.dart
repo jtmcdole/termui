@@ -158,6 +158,44 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  Stream<Duration> getVoicePositionStream(
+    AudioVoice voice, {
+    Duration interval = const Duration(milliseconds: 50),
+  }) {
+    if (!_activeVoices.containsKey(voice.id)) {
+      return const Stream.empty();
+    }
+    late final StreamController<Duration> controller;
+    Timer? ticker;
+
+    controller = StreamController<Duration>.broadcast(
+      onListen: () {
+        ticker = Timer.periodic(interval, (_) {
+          if (!_activeVoices.containsKey(voice.id)) {
+            controller.close();
+            ticker?.cancel();
+            return;
+          }
+          controller.add(getVoicePosition(voice));
+        });
+      },
+      onCancel: () {
+        ticker?.cancel();
+      },
+    );
+
+    voice.completed.then((_) {
+      if (!controller.isClosed) {
+        controller.add(getVoicePosition(voice));
+        controller.close();
+        ticker?.cancel();
+      }
+    });
+
+    return controller.stream;
+  }
+
+  @override
   void seek(AudioVoice voice, Duration position) {
     if (!_inited || !_activeVoices.containsKey(voice.id)) return;
     ffi.seek(voice.id, position.inMicroseconds / 1000000.0);
@@ -189,6 +227,7 @@ final class CliAudioEngine implements TermuiAudioEngine {
   @override
   Future<AudioBuffer> loadFile(
     String path, {
+    bool stream = false,
     LoadProgressCallback? onProgress,
   }) async {
     if (!_inited) throw Exception('Engine not initialized.');
@@ -196,6 +235,31 @@ final class CliAudioEngine implements TermuiAudioEngine {
     final file = fileSystem.file(path);
     if (!await file.exists()) {
       throw FileSystemException('Sound file not found', path);
+    }
+
+    if (stream) {
+      onProgress?.call(0.1);
+      final namePtr = path.toNativeUtf8(allocator: calloc);
+      final hashPtr = calloc<Uint32>();
+      try {
+        final res = ffi.loadFileSync(namePtr, 0, hashPtr);
+        if (res != 0) {
+          throw Exception('Failed to stream sound from disk. Error code: $res');
+        }
+        final hash = hashPtr.value;
+        onProgress?.call(1.0);
+
+        final buffer = CliAudioBuffer(hash);
+        _soundFinalizer.attach(
+          buffer,
+          Pointer.fromAddress(hash),
+          detach: buffer,
+        );
+        return buffer;
+      } finally {
+        calloc.free(namePtr);
+        calloc.free(hashPtr);
+      }
     }
 
     final bytes = await file.readAsBytes();
@@ -334,7 +398,11 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadMem(String pathId, Uint8List bytes) async {
+  Future<AudioBuffer> loadMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  }) async {
     if (!_inited) throw Exception('Engine not initialized.');
     final length = bytes.length;
     final bufferPtr = calloc<Uint8>(length);
@@ -345,7 +413,13 @@ final class CliAudioEngine implements TermuiAudioEngine {
       final hashPtr = calloc<Uint32>();
 
       try {
-        final res = ffi.loadMem(namePtr, bufferPtr, length, 1, hashPtr);
+        final res = ffi.loadMem(
+          namePtr,
+          bufferPtr,
+          length,
+          stream ? 0 : 1,
+          hashPtr,
+        );
         if (res != 0) {
           throw Exception(
             'Failed to load memory into SoLoud. Error code: $res',
@@ -367,6 +441,65 @@ final class CliAudioEngine implements TermuiAudioEngine {
     } finally {
       calloc.free(bufferPtr);
     }
+  }
+
+  @override
+  Future<AudioBuffer> createBufferStream({
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  }) async {
+    if (!_inited) throw Exception('Engine not initialized.');
+
+    final hashPtr = calloc<Uint32>();
+    try {
+      final res = ffi.setBufferStream(
+        hashPtr,
+        maxBufferSize,
+        releaseConsumed ? 1 : 0,
+        bufferingTimeNeeds.inMicroseconds / 1000000.0,
+        sampleRate,
+        channels,
+        0, // 0 = BufferType.AUTO (MP3, Opus, Vorbis, FLAC, WAV)
+        nullptr,
+        nullptr,
+      );
+      if (res != 0) {
+        throw Exception('Failed to create buffer stream. Error code: $res');
+      }
+      final hash = hashPtr.value;
+      final buffer = CliAudioBuffer(hash);
+      _soundFinalizer.attach(buffer, Pointer.fromAddress(hash), detach: buffer);
+      return buffer;
+    } finally {
+      calloc.free(hashPtr);
+    }
+  }
+
+  @override
+  void addStreamData(AudioBuffer buffer, Uint8List chunk) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    final length = chunk.length;
+    if (length == 0) return;
+
+    final ptr = calloc<Uint8>(length);
+    try {
+      ptr.asTypedList(length).setRange(0, length, chunk);
+      final res = ffi.addAudioDataStream(buffer.hash, ptr, length);
+      if (res != 0) {
+        throw Exception('Failed to add audio stream data. Error code: $res');
+      }
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  @override
+  void setStreamEnded(AudioBuffer buffer) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    ffi.setDataIsEnded(buffer.hash);
   }
 
   Uint8List _generateWavBytes(WaveForm shape, double frequency) {
@@ -534,9 +667,19 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  void setRelativePlaySpeed(AudioVoice voice, double speed) {
+  void setRelativePlaySpeed(
+    AudioVoice voice,
+    double speed, {
+    bool preservePitch = false,
+  }) {
     if (!_inited) throw Exception('Engine not initialized.');
     if (!_activeVoices.containsKey(voice.id)) return;
+    if (preservePitch && speed > 0.0) {
+      // Attribute 1 is SHIFT in PitchShiftFilter:
+      // Transpose factor = 1.0 / speed compensates for SoLoud resampler pitch change
+      final shift = (1.0 / speed).clamp(0.25, 4.0);
+      ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 1, shift);
+    }
     ffi.setRelativePlaySpeed(voice.id, speed);
   }
 

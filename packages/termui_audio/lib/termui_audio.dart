@@ -1,4 +1,5 @@
 import 'src/api/audio_engine.dart';
+import 'src/api/audio_types.dart';
 import 'src/impl/engine_factory_stub.dart'
     if (dart.library.io) 'src/impl/engine_factory_cli.dart'
     if (dart.library.ui) 'src/impl/engine_factory_flutter.dart';
@@ -22,4 +23,18 @@ class TermuiAudio {
 
   /// Disposes of the audio engine and releases any held hardware/system resources.
   static Future<void> dispose() => instance.dispose();
+}
+
+/// Convenient playhead tracking extension on [AudioVoice].
+extension AudioVoicePlayhead on AudioVoice {
+  /// Emits real-time playhead updates directly from the audio engine.
+  Stream<Duration> positionStream({
+    TermuiAudioEngine? engine,
+    Duration interval = const Duration(milliseconds: 50),
+  }) {
+    return (engine ?? TermuiAudio.instance).getVoicePositionStream(
+      this,
+      interval: interval,
+    );
+  }
 }

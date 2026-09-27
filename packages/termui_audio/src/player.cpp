@@ -518,7 +518,7 @@ PlayerErrors Player::loadMem(
     {
         newSound.get()->sound = std::make_unique<SoLoud::WavStream>();
         newSound.get()->soundType = TYPE_WAVSTREAM;
-        result = static_cast<SoLoud::WavStream *>(newSound.get()->sound.get())->loadMem(mem, length, false, true);
+        result = static_cast<SoLoud::WavStream *>(newSound.get()->sound.get())->loadMem(mem, length, true, true);
     }
 
     PlayerErrors loadError = static_cast<PlayerErrors>(result);

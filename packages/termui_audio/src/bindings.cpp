@@ -379,6 +379,32 @@ FFI_PLUGIN_EXPORT int isInited() {
         // loadThread.join();
     }
 
+    /// Synchronously load a sound file.
+    ///
+    /// If loadIntoMem is true (1), Soloud::wav will be used (all audio data decompressed into RAM).
+    /// If loadIntoMem is false (0), Soloud::wavStream will be used and audio data is streamed from disk.
+    FFI_PLUGIN_EXPORT enum PlayerErrors loadFileSync(
+        const char *completeFileName,
+        int loadIntoMem,
+        unsigned int *hash)
+    {
+        std::lock_guard<std::mutex> guard_init(init_deinit_mutex);
+        std::lock_guard<std::mutex> guard_load(loadMutex);
+
+        Player *p = player.get();
+        if (p == nullptr || !p->isInited()) {
+            printf("WARNING (from SoLoud C++ binding code): the player has "
+                   "not yet been initialized.\n");
+            return backendNotInited;
+        }
+
+        PlayerErrors error = p->loadFile(completeFileName, loadIntoMem != 0, hash);
+        if (error == fileAlreadyLoaded) {
+            return noError;
+        }
+        return error;
+    }
+
 /// Load a new sound stored into [buffer] to be played once or multiple times
 /// later. Mainly used on web because the browsers are not allowed to read files
 /// directly.
