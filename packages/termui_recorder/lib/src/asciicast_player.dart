@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart';
 
 /// Represents a single event inside an Asciicast recording.
@@ -100,12 +101,13 @@ final class AsciicastPlayer {
     if (!interactive) {
       // Non-interactive playback: just delay and write directly to stdout
       final out = _stdoutOverride;
-      final stopwatch = Stopwatch()..start();
+      final speed = speedMultiplier <= 0 ? 1.0 : speedMultiplier;
+      final stopwatch = clock.stopwatch()..start();
       for (final event in events) {
         if (event.type != 'o') {
           continue;
         }
-        final targetRealElapsedMs = event.time * 1000.0 / speedMultiplier;
+        final targetRealElapsedMs = event.time * 1000.0 / speed;
         final actualRealElapsedMs = stopwatch.elapsedMilliseconds;
         final sleepMs = (targetRealElapsedMs - actualRealElapsedMs).round();
         if (sleepMs > 0) {
@@ -134,7 +136,7 @@ final class AsciicastPlayer {
       var hasSteppedWhilePaused = false;
 
       // Synchronization variables for drift-free absolute timing
-      final stopwatch = Stopwatch()..start();
+      final stopwatch = clock.stopwatch()..start();
       var totalPausedMs = 0;
       var pauseStartMs = 0;
 
