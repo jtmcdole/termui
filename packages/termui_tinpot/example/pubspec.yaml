@@ -21,12 +21,12 @@ dependencies:
   file_selector: ^1.0.0
   clock: ^1.1.1
   file: ^7.0.0
-  termui_recorder: ^0.7.5
+  termui_recorder: ^0.7.6
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  termui_test: ^0.2.19
+  termui_test: ^0.2.20
 flutter:
   uses-material-design: true
 

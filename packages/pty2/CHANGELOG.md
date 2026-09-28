@@ -1,3 +1,7 @@
+## 0.5.5
+
+ - **FIX**(pty2): prevent premature handle closure and output loss on process exit.
+
 ## 0.5.4
 
  - **REFACTOR**: modernize codebase to Dart 3.x language idioms across monorepo.
