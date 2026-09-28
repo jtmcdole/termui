@@ -24,6 +24,24 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   /// Internal testing flag to force the legacy fallback.
   static bool forceLegacyForTesting = false;
 
+  static void _closePseudoConsoleOnce(Pointer<IntPtr> pHPty) {
+    if (pHPty.address == 0) return;
+    final hPty = pHPty.value;
+    if (hPty != 0) {
+      pHPty.value = 0;
+      win32.ClosePseudoConsole(win32.HPCON(hPty));
+    }
+  }
+
+  static void _closeReadSideOnce(Pointer<IntPtr> pOutputReadSide) {
+    if (pOutputReadSide.address == 0) return;
+    final handle = pOutputReadSide.value;
+    if (handle != 0) {
+      pOutputReadSide.value = 0;
+      win32.CloseHandle(win32.HANDLE(Pointer.fromAddress(handle)));
+    }
+  }
+
   factory PtyCoreWindows.start(
     String executable,
     List<String> arguments, {
@@ -382,9 +400,15 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     final readBuffer = calloc<Uint8>(_bufferSize + 1);
     final pReadlen = calloc<Uint32>();
 
+    final pHPty = calloc<IntPtr>()..value = _hPty ?? 0;
+    final pOutputReadSide = calloc<IntPtr>()..value = _outputReadSide.address;
+    _pHPty = pHPty;
+    _pOutputReadSide = pOutputReadSide;
+
     _worker = PtyCoreWindowsWorker(
-      outputReadSide: _outputReadSide,
+      pOutputReadSide: pOutputReadSide,
       hProcess: _hProcess,
+      pHPty: pHPty,
       buffer: readBuffer,
       pReadlen: pReadlen,
       bufferSize: _bufferSize,
@@ -393,32 +417,13 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 
     _finalizer.attach(this, _writeBuffer.cast(), detach: this);
     _finalizer.attach(this, _pWritten.cast(), detach: this);
+    _finalizer.attach(this, _pHPty.cast(), detach: this);
+    _finalizer.attach(this, _pOutputReadSide.cast(), detach: this);
 
-    if (_hPty != null) {
-      _closePseudoConsoleFinalizer.attach(
-        this,
-        Pointer.fromAddress(_hPty),
-        detach: this,
-      );
-    }
-    if (_hProcess.address != 0) {
-      _closeHandleFinalizer.attach(
-        this,
-        Pointer.fromAddress(_hProcess.address),
-        detach: this,
-      );
-    }
     if (_inputWriteSide.address != 0) {
       _closeHandleFinalizer.attach(
         this,
         Pointer.fromAddress(_inputWriteSide.address),
-        detach: this,
-      );
-    }
-    if (_outputReadSide.address != 0) {
-      _closeHandleFinalizer.attach(
-        this,
-        Pointer.fromAddress(_outputReadSide.address),
         detach: this,
       );
     }
@@ -448,9 +453,12 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       _failed = true {
     _writeBuffer = nullptr;
     _pWritten = nullptr;
+    _pHPty = nullptr;
+    _pOutputReadSide = nullptr;
     _worker = PtyCoreWindowsWorker(
-      outputReadSide: win32.HANDLE(nullptr),
+      pOutputReadSide: null,
       hProcess: win32.HANDLE(nullptr),
+      pHPty: null,
       buffer: nullptr,
       pReadlen: nullptr,
       bufferSize: 0,
@@ -465,6 +473,9 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   final win32.HPCON? _hPty;
   final win32.HANDLE _hProcess;
   final bool _failed;
+
+  late final Pointer<IntPtr> _pHPty;
+  late final Pointer<IntPtr> _pOutputReadSide;
 
   static const _bufferSize = 4096;
   late final Pointer<Uint8> _writeBuffer;
@@ -482,12 +493,6 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   static final _closeHandleFinalizer = NativeFinalizer(
     _kernel32.lookup<NativeFunction<Void Function(Pointer<Void>)>>(
       'CloseHandle',
-    ),
-  );
-
-  static final _closePseudoConsoleFinalizer = NativeFinalizer(
-    _kernel32.lookup<NativeFunction<Void Function(Pointer<Void>)>>(
-      'ClosePseudoConsole',
     ),
   );
 
@@ -525,16 +530,14 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 
     _finalizer.detach(this);
     _closeHandleFinalizer.detach(this);
-    _closePseudoConsoleFinalizer.detach(this);
 
     final ret = win32.TerminateProcess(_hProcess, 0);
-    if (_hPty != null) {
-      win32.ClosePseudoConsole(_hPty);
-    }
+    _closePseudoConsoleOnce(_pHPty);
+
     if (_inputReadSide.address != 0) win32.CloseHandle(_inputReadSide);
     if (_outputWriteSide.address != 0) win32.CloseHandle(_outputWriteSide);
     if (_inputWriteSide.address != 0) win32.CloseHandle(_inputWriteSide);
-    if (_outputReadSide.address != 0) win32.CloseHandle(_outputReadSide);
+    _closeReadSideOnce(_pOutputReadSide);
     return ret.value;
   }
 
@@ -579,16 +582,18 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 }
 
 final class PtyCoreWindowsWorker implements PtyCoreWorker {
-  final win32.HANDLE outputReadSide;
   final win32.HANDLE hProcess;
+  final Pointer<IntPtr>? pOutputReadSide;
+  final Pointer<IntPtr>? pHPty;
   final Pointer<Uint8> buffer;
   final Pointer<Uint32> pReadlen;
   final int bufferSize;
   final bool failed;
 
   PtyCoreWindowsWorker({
-    required this.outputReadSide,
     required this.hProcess,
+    required this.pOutputReadSide,
+    required this.pHPty,
     required this.buffer,
     required this.pReadlen,
     required this.bufferSize,
@@ -598,9 +603,14 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
   @override
   Uint8List? read() {
     if (failed) return null;
+    final pOutput = pOutputReadSide;
+    if (pOutput == null || pOutput.address == 0) return null;
+
+    final handleAddress = pOutput.value;
+    if (handleAddress == 0) return null;
 
     final ret = win32.ReadFile(
-      outputReadSide,
+      win32.HANDLE(Pointer.fromAddress(handleAddress)),
       buffer,
       bufferSize,
       pReadlen,
@@ -622,18 +632,38 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
     const infinite = 0xFFFFFFFF;
     win32.WaitForSingleObject(hProcess, infinite);
 
-    return using((arena) {
+    final exitCode = using((arena) {
       final exitCodePtr = arena<Uint32>();
       win32.GetExitCodeProcess(hProcess, exitCodePtr);
       if (hProcess.address != 0) win32.CloseHandle(hProcess);
       return exitCodePtr.value;
     });
+
+    // Close the pseudoconsole so ConPTY flushes remaining output and
+    // closes the output write pipe. The reader isolate will then read
+    // the flushed data and hit ERROR_BROKEN_PIPE (EOF) naturally.
+    final pHPtyPtr = pHPty;
+    if (pHPtyPtr != null) {
+      PtyCoreWindows._closePseudoConsoleOnce(pHPtyPtr);
+    }
+
+    return exitCode;
   }
 
   @override
   void free() {
     if (buffer != nullptr) calloc.free(buffer);
     if (pReadlen != nullptr) calloc.free(pReadlen);
+
+    final pOutput = pOutputReadSide;
+    if (pOutput != null && pOutput.address != 0) {
+      PtyCoreWindows._closeReadSideOnce(pOutput);
+    }
+
+    final pPty = pHPty;
+    if (pPty != null && pPty.address != 0) {
+      PtyCoreWindows._closePseudoConsoleOnce(pPty);
+    }
   }
 }
 
