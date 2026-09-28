@@ -40,9 +40,9 @@ dependencies:
   termui: ^0.9.4
   termui_flutter: ^0.8.5
   termui_shared_examples: any
-  termui_recorder: ^0.7.5
-  termui_pty: ^0.3.17
-  pty2: ^0.5.4
+  termui_recorder: ^0.7.6
+  termui_pty: ^0.3.18
+  pty2: ^0.5.5
   core_bus: ^1.0.1
   web: ^1.1.1
   file_selector: ^1.0.0
@@ -54,7 +54,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  termui_test: ^0.2.19
+  termui_test: ^0.2.20
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

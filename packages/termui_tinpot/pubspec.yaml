@@ -27,5 +27,5 @@ dev_dependencies:
   clock: ^1.1.1
   file: ^7.0.0
   path: ^1.8.0
-  termui_recorder: ^0.7.5
-  termui_test: ^0.2.19
+  termui_recorder: ^0.7.6
+  termui_test: ^0.2.20

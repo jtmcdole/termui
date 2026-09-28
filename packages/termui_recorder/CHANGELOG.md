@@ -1,3 +1,7 @@
+## 0.7.6
+
+ - **FIX**(clocks): use package:clock in asciicast_player.dart.
+
 ## 0.7.5
 
  - **FIX**(tinpot): use `Modifier.none` for non-transparent quantized cells.
