@@ -60,7 +60,6 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
     );
     _exitCodeFuture = exitPort.first.then((value) {
       exitPort.close();
-      _core.kill();
       return value as int;
     });
 
