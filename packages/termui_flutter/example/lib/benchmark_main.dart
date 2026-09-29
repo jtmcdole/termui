@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:developer' as dev;
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:termui/perf/tracer.dart';
@@ -90,12 +91,12 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
 
     // Create benchmark assets
     _setupAtlases().then((_) {
-      _lastFpsTimestamp = DateTime.now().millisecondsSinceEpoch;
+      _lastFpsTimestamp = clock.now().millisecondsSinceEpoch;
       _ticker = createTicker((_) {
         if (mounted) {
           setState(() {
             _frameCount++;
-            final now = DateTime.now().millisecondsSinceEpoch;
+            final now = clock.now().millisecondsSinceEpoch;
             final elapsed = now - _lastFpsTimestamp;
             if (elapsed >= 500) {
               _fps = (_frameCount * 1000.0) / elapsed;
@@ -178,7 +179,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
       }
     } else {
       final fs = getDefaultFileSystem();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final timestamp = clock.now().millisecondsSinceEpoch;
       final path = fs.path.join(
         fs.currentDirectory.path,
         'benchmark_trace_$timestamp.json.gz',
@@ -197,7 +198,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
     if (_isRecordingTrace) return;
 
     final fs = getDefaultFileSystem();
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final timestamp = clock.now().millisecondsSinceEpoch;
     final path = fs.path.join(
       fs.currentDirectory.path,
       'auto_benchmark_trace_$timestamp.json.gz',
@@ -387,8 +388,9 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
                             setState(() {
                               _currentMode = mode;
                               _frameCount = 0;
-                              _lastFpsTimestamp =
-                                  DateTime.now().millisecondsSinceEpoch;
+                              _lastFpsTimestamp = clock
+                                  .now()
+                                  .millisecondsSinceEpoch;
                             });
                           }
                         },

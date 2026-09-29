@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 
@@ -302,7 +303,7 @@ final class _FireAppState extends State<FireApp> {
   void initState() {
     super.initState();
     engine = FireEngine(80, 24);
-    _stopwatch = Stopwatch()..start();
+    _stopwatch = clock.stopwatch()..start();
     _timer = Timer.periodic(const Duration(milliseconds: 16), (t) {
       final now = _stopwatch.elapsedMilliseconds / 1000.0;
       final dt = now - _lastTime;
@@ -490,7 +491,7 @@ final class _GlassOverlayAppState extends State<GlassOverlayApp> {
   @override
   void initState() {
     super.initState();
-    _stopwatch = Stopwatch()..start();
+    _stopwatch = clock.stopwatch()..start();
     _timer = Timer.periodic(const Duration(milliseconds: 16), (t) {
       final now = _stopwatch.elapsedMilliseconds / 1000.0;
       final dt = now - _lastTime;

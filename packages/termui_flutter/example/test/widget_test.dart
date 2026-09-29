@@ -24,12 +24,17 @@ void main() {
     await tester.pumpWidget(const MainApp());
     expect(find.byType(Terminal), findsOneWidget);
 
+    final homeState = tester.state<TermUIWebHomeState>(
+      find.byType(TermUIWebHome),
+    );
+    final tuiFuture = homeState.tuiFuture;
+
     // Unmount MainApp to trigger dispose() which injects Ctrl+C and cleans up timers
     await tester.pumpWidget(const SizedBox());
 
-    // Yield to the real event loop to allow the unawaited _runTUI Future to finish its finally block
+    // Await the _runTUI Future to finish its finally block
     await tester.runAsync(() async {
-      await Future.delayed(const Duration(milliseconds: 100));
+      await tuiFuture?.timeout(const Duration(seconds: 2));
     });
   });
 

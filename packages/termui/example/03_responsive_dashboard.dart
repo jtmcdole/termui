@@ -5,6 +5,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:characters/characters.dart';
+import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 
@@ -63,7 +64,7 @@ class SystemInfoPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uptime = DateTime.now().difference(bootTime);
+    final uptime = clock.now().difference(bootTime);
     final days = uptime.inDays;
     final hours = uptime.inHours % 24;
     final minutes = uptime.inMinutes % 60;
@@ -76,7 +77,7 @@ class SystemInfoPanel extends StatelessWidget {
       '${seconds}s',
     ].join(' ');
 
-    final timeStr = DateTime.now().toIso8601String().substring(11, 19);
+    final timeStr = clock.now().toIso8601String().substring(11, 19);
 
     return Column([
       const SizedBox(
@@ -298,7 +299,7 @@ class _DashboardAppState extends State<DashboardApp> {
   @override
   void initState() {
     super.initState();
-    bootTime = DateTime.now();
+    bootTime = clock.now();
     _startSimulationTimers();
   }
 
@@ -347,7 +348,7 @@ class _DashboardAppState extends State<DashboardApp> {
         'System updated: packages security patches applied',
         'Connected to redis instance at 127.0.0.1:6379',
       ];
-      final timestamp = DateTime.now().toIso8601String().substring(11, 19);
+      final timestamp = clock.now().toIso8601String().substring(11, 19);
       final newLog =
           '[$timestamp] ${templates[random.nextInt(templates.length)]}';
 

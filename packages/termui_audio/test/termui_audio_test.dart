@@ -261,9 +261,9 @@ void main() {
           ),
         ];
 
-        cli.playSpriteSequence(buffer, segments);
-
-        await Future.delayed(const Duration(milliseconds: 150));
+        await cli
+            .playSpriteSequence(buffer, segments)
+            .timeout(const Duration(seconds: 2));
         await cli.dispose();
       },
     );
@@ -337,7 +337,6 @@ void main() {
           final voice = cli.play(buffer, paused: true);
           expect(voice, isNotNull);
 
-          await Future.delayed(const Duration(milliseconds: 150));
           expect(
             cli.getVoicePosition(voice),
             equals(Duration.zero),
@@ -345,9 +344,15 @@ void main() {
           );
 
           cli.setPaused(voice, false);
-          await Future.delayed(const Duration(milliseconds: 150));
+          final unpausedPos = await cli
+              .getVoicePositionStream(
+                voice,
+                interval: const Duration(milliseconds: 20),
+              )
+              .firstWhere((pos) => pos > Duration.zero)
+              .timeout(const Duration(seconds: 2));
           expect(
-            cli.getVoicePosition(voice),
+            unpausedPos,
             greaterThan(Duration.zero),
             reason: 'Unpaused voice should advance playhead position',
           );

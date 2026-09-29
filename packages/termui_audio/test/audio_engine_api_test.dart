@@ -278,11 +278,11 @@ class MockAudioEngine extends TermuiAudioEngine {
   }
 
   @override
-  void playSpriteSequence(
+  Future<void> playSpriteSequence(
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
     AudioBus? bus,
-  }) {
+  }) async {
     callLog.add(
       'playSpriteSequence(${buffer.hash}, count: ${segments.length})',
     );

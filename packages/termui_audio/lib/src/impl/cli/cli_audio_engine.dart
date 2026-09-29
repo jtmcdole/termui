@@ -802,20 +802,33 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  void playSpriteSequence(
+  Future<void> playSpriteSequence(
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
     AudioBus? bus,
-  }) {
+  }) async {
     if (!_inited || segments.isEmpty) return;
 
+    final completer = Completer<void>();
+    var remaining = segments.length;
     var totalDelay = Duration.zero;
+
+    void onSegmentEnded() {
+      remaining--;
+      if (remaining <= 0 && !completer.isCompleted) {
+        completer.complete();
+      }
+    }
+
     for (final seg in segments) {
       final segDelay = totalDelay;
       totalDelay += seg.duration;
 
       void playSegment() {
-        if (!_inited) return;
+        if (!_inited) {
+          onSegmentEnded();
+          return;
+        }
         final voicePtr = calloc<Uint32>();
         try {
           final startSec = seg.start.inMicroseconds / 1000000.0;
@@ -839,9 +852,14 @@ final class CliAudioEngine implements TermuiAudioEngine {
                   try {
                     ffi.stop(voice);
                   } catch (_) {}
+                  onSegmentEnded();
                 });
-              } catch (_) {}
+              } catch (_) {
+                onSegmentEnded();
+              }
             });
+          } else {
+            onSegmentEnded();
           }
         } finally {
           calloc.free(voicePtr);
@@ -854,6 +872,8 @@ final class CliAudioEngine implements TermuiAudioEngine {
         unawaited(Future.delayed(segDelay, playSegment));
       }
     }
+
+    return completer.future;
   }
 
   @override

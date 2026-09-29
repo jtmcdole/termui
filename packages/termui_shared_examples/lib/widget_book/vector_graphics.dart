@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:clock/clock.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
@@ -116,7 +117,7 @@ final class VectorGraphicsExample extends WidgetBookExample {
     final rClock1 = (min(clockCanvas!.width, clockCanvas!.height * 2) - 3)
         .clamp(8, 25);
 
-    final now = DateTime.now();
+    final now = clock.now();
     final secAngle =
         (now.second + now.millisecond / 1000.0) * (2 * pi / 60) - pi / 2;
     final minAngle = (now.minute + now.second / 60.0) * (2 * pi / 60) - pi / 2;

@@ -557,20 +557,33 @@ final class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  void playSpriteSequence(
+  Future<void> playSpriteSequence(
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
     AudioBus? bus,
-  }) {
+  }) async {
     if (!_engine.isInitialized || segments.isEmpty) return;
 
+    final completer = Completer<void>();
+    var remaining = segments.length;
     var totalDelay = Duration.zero;
+
+    void onSegmentEnded() {
+      remaining--;
+      if (remaining <= 0 && !completer.isCompleted) {
+        completer.complete();
+      }
+    }
+
     for (final seg in segments) {
       final segDelay = totalDelay;
       totalDelay += seg.duration;
 
       void playSegment() {
-        if (!_engine.isInitialized) return;
+        if (!_engine.isInitialized) {
+          onSegmentEnded();
+          return;
+        }
         final voice = play(buffer, bus: bus, paused: true);
         if (seg.start > Duration.zero) {
           seek(voice, seg.start);
@@ -579,6 +592,7 @@ final class FlutterAudioEngine implements TermuiAudioEngine {
         setPaused(voice, false);
         // Eagerly schedule a stop exactly when the segment finishes on the C++ side
         scheduleStop(voice, seg.duration);
+        voice.completed.whenComplete(onSegmentEnded);
       }
 
       if (segDelay == Duration.zero) {
@@ -587,6 +601,8 @@ final class FlutterAudioEngine implements TermuiAudioEngine {
         unawaited(Future.delayed(segDelay, playSegment));
       }
     }
+
+    return completer.future;
   }
 
   @override

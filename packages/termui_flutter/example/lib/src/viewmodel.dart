@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:clock/clock.dart';
 import 'package:example_flutter/src/tui_player/cast_parser.dart';
 import 'package:flutter/foundation.dart';
 import 'package:termui/termui.dart';
@@ -34,7 +35,7 @@ final class AsciicastPlayerViewModel {
   // Internals for chronological optimization
   int _lastPlayedIndex = 0;
   Timer? _playbackTimer;
-  DateTime _lastTickTime = DateTime.now();
+  DateTime _lastTickTime = clock.now();
 
   bool _isDisposed = false;
 
@@ -296,13 +297,13 @@ final class AsciicastPlayerViewModel {
 
   void _startTimer() {
     _playbackTimer?.cancel();
-    _lastTickTime = DateTime.now();
+    _lastTickTime = clock.now();
     _playbackTimer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
       if (!_isPlaying) {
         timer.cancel();
         return;
       }
-      final now = DateTime.now();
+      final now = clock.now();
       final elapsedMs = now.difference(_lastTickTime).inMilliseconds;
       _lastTickTime = now;
 

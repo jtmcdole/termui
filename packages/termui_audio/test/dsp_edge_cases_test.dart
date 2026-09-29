@@ -114,8 +114,8 @@ void main() {
         );
         expect(voice, isNotNull);
         expect(voice.id, greaterThan(0));
-        // Wait for 0ms timer callback execution
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        // Wait for 0ms timer callback execution and voice to complete
+        await voice.completed.timeout(const Duration(seconds: 2));
       },
     );
   });

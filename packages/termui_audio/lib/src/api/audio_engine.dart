@@ -185,7 +185,7 @@ abstract class TermuiAudioEngine {
   /// WARNING: This method currently relies on Dart timers for sequencing, which can be
   /// brittle and lead to stuttering or gaps. Avoid relying on this for sample-accurate
   /// sequencing until `playClocked` and `play3dClocked` are available from the underlying backend.
-  void playSpriteSequence(
+  Future<void> playSpriteSequence(
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
     AudioBus? bus,

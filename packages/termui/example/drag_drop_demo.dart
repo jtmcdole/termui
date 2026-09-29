@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 
@@ -342,7 +343,7 @@ class DragDropDemoState extends State<DragDropDemo> {
 
   void logEvent(String msg) {
     setState(() {
-      logs.add('[${DateTime.now().toIso8601String().substring(11, 19)}] $msg');
+      logs.add('[${clock.now().toIso8601String().substring(11, 19)}] $msg');
       if (logs.length > 5) {
         logs.removeAt(0);
       }
@@ -355,7 +356,7 @@ class DragDropDemoState extends State<DragDropDemo> {
 
   void addRipple(Point<int> pos) {
     setState(() {
-      activeRipples.add(DropRipple(pos, DateTime.now().millisecondsSinceEpoch));
+      activeRipples.add(DropRipple(pos, clock.now().millisecondsSinceEpoch));
     });
     _startAnimationTimer();
   }
@@ -363,7 +364,7 @@ class DragDropDemoState extends State<DragDropDemo> {
   void _startAnimationTimer() {
     if (animationTimer != null) return;
     animationTimer = Timer.periodic(const Duration(milliseconds: 30), (timer) {
-      final now = DateTime.now().millisecondsSinceEpoch;
+      final now = clock.now().millisecondsSinceEpoch;
       setState(() {
         activeRipples.removeWhere((ripple) => now - ripple.startTime > 500);
       });
@@ -669,7 +670,7 @@ void main() async {
         final state = DragDropManager.demoState;
         if (state != null && state.activeRipples.isNotEmpty) {
           final canvas = Canvas(buffer.width, buffer.height);
-          final now = DateTime.now().millisecondsSinceEpoch;
+          final now = clock.now().millisecondsSinceEpoch;
           var hasPainted = false;
 
           for (final ripple in state.activeRipples) {

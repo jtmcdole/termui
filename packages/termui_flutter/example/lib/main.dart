@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:clock/clock.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -47,7 +48,7 @@ void _log(String message) {
     final file = File('tui_diagnostics.log');
     file
         .writeAsString(
-          '[${DateTime.now().toIso8601String()}] $message\n',
+          '[${clock.now().toIso8601String()}] $message\n',
           mode: FileMode.append,
         )
         .then((_) {}, onError: (_) {});
@@ -259,7 +260,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     super.dispose();
   }
 
-  void _runTUI(void Function(Buffer) onDrawFrame) async {
+  Future<void>? tuiFuture;
+
+  Future<void> _runTUI(void Function(Buffer) onDrawFrame) async {
     _log(
       'main.dart: _runTUI() started, _tuiRunning: $_tuiRunning, State: $hashCode',
     );
@@ -355,7 +358,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         ),
       );
     } else if (_onDrawFrame != null) {
-      _runTUI(_onDrawFrame!);
+      tuiFuture = _runTUI(_onDrawFrame!);
     }
   }
 
@@ -489,7 +492,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                       drawFrame(buf);
                     }
 
-                    _runTUI(wrappedDrawFrame);
+                    tuiFuture = _runTUI(wrappedDrawFrame);
                   },
                 ),
               ),

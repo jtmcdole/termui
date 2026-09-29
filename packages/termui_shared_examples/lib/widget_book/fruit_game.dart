@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:clock/clock.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as ui;
 import 'example_base.dart';
@@ -360,7 +361,7 @@ final class FruitGameExample extends WidgetBookExample {
     final matched = List.generate(13, (_) => List.filled(17, false));
     final visited = List.generate(13, (_) => List.filled(17, false));
     var maxDelayMs = 0;
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = clock.now().millisecondsSinceEpoch;
     var hasMatches = false;
 
     for (var r = 0; r < 13; r++) {

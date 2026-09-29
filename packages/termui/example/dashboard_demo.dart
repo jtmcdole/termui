@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math';
+import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
@@ -346,7 +347,7 @@ class _DashboardAppState extends State<DashboardApp> {
               SizedBox(
                 width: 15,
                 child: Text(
-                  'Time: ${DateTime.now().toIso8601String().substring(11, 19)}',
+                  'Time: ${clock.now().toIso8601String().substring(11, 19)}',
                   style: textStyle,
                 ),
               ),
