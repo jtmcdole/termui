@@ -125,6 +125,10 @@ typedef _dart_fcntl = int Function(int fd, int cmd);
 typedef _c_fcntl3 = Int32 Function(Int32 fd, Int32 cmd, VarArgs<(Int32,)>);
 typedef _dart_fcntl3 = int Function(int fd, int cmd, int flags);
 
+typedef _c_poll =
+    Int32 Function(Pointer<pollfd> fds, IntPtr nfds, Int32 timeout);
+typedef _dart_poll = int Function(Pointer<pollfd> fds, int nfds, int timeout);
+
 typedef _c_perror = Void Function(Pointer<Utf8> s);
 typedef _dart_perror = void Function(Pointer<Utf8> s);
 
@@ -197,6 +201,7 @@ class Unix {
     fcntl3 = lib.lookupFunction<_c_fcntl3, _dart_fcntl3>('fcntl');
     perror = lib.lookupFunction<_c_perror, _dart_perror>('perror');
     close = lib.lookupFunction<_c_close, _dart_close>('close', isLeaf: true);
+    poll = lib.lookupFunction<_c_poll, _dart_poll>('poll');
 
     try {
       close_range = lib.lookupFunction<_c_close_range, _dart_close_range>(
@@ -255,6 +260,7 @@ class Unix {
   late final _dart_fcntl3 fcntl3;
   late final _dart_perror perror;
   late final _dart_close close;
+  late final _dart_poll poll;
   _dart_close_range? close_range;
   _dart_closefrom? closefrom;
   late final _dart_putenv putenv;
@@ -359,4 +365,15 @@ final class winsize extends Struct {
 
   @Uint16()
   external int ws_ypixel;
+}
+
+final class pollfd extends Struct {
+  @Int32()
+  external int fd;
+
+  @Int16()
+  external int events;
+
+  @Int16()
+  external int revents;
 }
