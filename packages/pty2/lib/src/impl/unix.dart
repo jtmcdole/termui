@@ -133,6 +133,9 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
       final ptm = pPtm.value;
       final pts = pPts.value;
 
+      unix.fcntl3(ptm, consts.F_SETFD, consts.FD_CLOEXEC);
+      unix.fcntl3(pts, consts.F_SETFD, consts.FD_CLOEXEC);
+
       // sz is already initialized above
 
       final isMacOS = Platform.isMacOS;
@@ -202,33 +205,49 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
     });
   }
 
-  PtyCoreUnix._(this._pid, this._ptm) {
+  PtyCoreUnix._(this._pid, int ptm) {
+    _pPtm = calloc<Int32>()..value = ptm;
+    _pExited = calloc<Uint8>()..value = 0;
+    final pPollFd = calloc<pollfd>();
     _writeBuffer = calloc<Uint8>(_bufferSize + 1);
     final buffer = calloc<Int8>(_bufferSize + 1);
     _worker = PtyCoreUnixWorker(
-      ptm: _ptm,
+      pPtm: _pPtm,
       pid: _pid,
       buffer: buffer,
       bufferSize: _bufferSize,
+      pExited: _pExited,
+      pPollFd: pPollFd,
     );
 
-    _closeFinalizer.attach(this, Pointer.fromAddress(_ptm), detach: this);
     _finalizer.attach(this, _writeBuffer.cast(), detach: this);
+    _finalizer.attach(this, _pPtm.cast(), detach: this);
+    _finalizer.attach(this, _pExited.cast(), detach: this);
   }
 
   final int _pid;
-  final int _ptm;
+  late final Pointer<Int32> _pPtm;
+  late final Pointer<Uint8> _pExited;
   static const _bufferSize = 81920;
 
   late final Pointer<Uint8> _writeBuffer;
   static final _finalizer = NativeFinalizer(calloc.nativeFree);
 
-  static final _libc = DynamicLibrary.process();
-  static final _closeFinalizer = NativeFinalizer(
-    _libc.lookup<NativeFunction<Void Function(Pointer<Void>)>>('close'),
-  );
-
   late final PtyCoreUnixWorker _worker;
+
+  static void _closePtmOnce(Pointer<Int32> pPtm) {
+    if (pPtm.address == 0) return;
+    final fd = pPtm.value;
+    if (fd >= 0) {
+      pPtm.value = -1;
+      unix.close(fd);
+    }
+  }
+
+  static bool _isProcessDead(int pid) {
+    if (pid <= 0) return true;
+    return unix.kill(pid, 0) != 0;
+  }
 
   @override
   PtyCoreUnixWorker get worker => _worker;
@@ -247,6 +266,7 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
     if (pid == 0) {
       return null;
     }
+    _pExited.value = 1;
     if (pid < 0) {
       // ECHILD: VM reaped the status
       final isDead = unix.kill(_pid, 0) != 0;
@@ -273,13 +293,13 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
     if (_killed) return false;
     _killed = true;
 
-    _closeFinalizer.detach(this);
+    _pExited.value = 1;
     final sigNum = _mapSignal(signal);
     final ret = unix.kill(_pid, sigNum) == 0;
     // Explicitly send SIGHUP to force child to exit and break the blocked read()
     // because closing a file descriptor on Linux does not interrupt a blocking read.
     unix.kill(_pid, 1);
-    unix.close(_ptm);
+    _closePtmOnce(_pPtm);
     return ret;
   }
 
@@ -295,11 +315,13 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
   @override
   void resize(int width, int height) {
+    final ptm = _pPtm.value;
+    if (ptm < 0) return;
     final sz = calloc<winsize>();
     sz.ref.ws_col = width;
     sz.ref.ws_row = height;
 
-    final ret = unix.ioctl(_ptm, consts.TIOCSWINSZ, sz.cast<Void>());
+    final ret = unix.ioctl(ptm, consts.TIOCSWINSZ, sz.cast<Void>());
     calloc.free(sz);
 
     if (ret == -1) {
@@ -316,6 +338,8 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
   @override
   void write(List<int> data) {
+    final ptm = _pPtm.value;
+    if (ptm < 0) return;
     var offset = 0;
     while (offset < data.length) {
       final chunkLen = (data.length - offset > _bufferSize)
@@ -329,32 +353,66 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
           dest[i] = data[offset + i];
         }
       }
-      unix.write(_ptm, _writeBuffer.cast(), chunkLen);
+      unix.write(ptm, _writeBuffer.cast(), chunkLen);
       offset += chunkLen;
     }
   }
 }
 
 final class PtyCoreUnixWorker implements PtyCoreWorker {
-  final int ptm;
+  final Pointer<Int32> pPtm;
   final int pid;
   final Pointer<Int8> buffer;
   final int bufferSize;
+  final Pointer<Uint8> pExited;
+  final Pointer<pollfd> pPollFd;
 
   PtyCoreUnixWorker({
-    required this.ptm,
+    required this.pPtm,
     required this.pid,
     required this.buffer,
     required this.bufferSize,
+    required this.pExited,
+    required this.pPollFd,
   });
 
   @override
   Uint8List? read() {
-    final readlen = unix.read(ptm, buffer.cast(), bufferSize);
-    if (readlen <= 0) {
-      return null;
+    while (true) {
+      final currentPtm = pPtm.value;
+      if (currentPtm < 0) return null;
+
+      final pfd = pPollFd;
+      pfd.ref.fd = currentPtm;
+      pfd.ref.events = consts.POLLIN;
+      pfd.ref.revents = 0;
+
+      final ret = unix.poll(pfd, 1, 100);
+      if (ret > 0) {
+        final revents = pfd.ref.revents;
+        if ((revents & consts.POLLIN) != 0) {
+          final readlen = unix.read(currentPtm, buffer.cast(), bufferSize);
+          if (readlen <= 0) {
+            return null;
+          }
+          return Uint8List.fromList(buffer.cast<Uint8>().asTypedList(readlen));
+        }
+
+        if ((revents & (consts.POLLHUP | consts.POLLERR | consts.POLLNVAL)) !=
+            0) {
+          return null;
+        }
+      } else if (ret == 0) {
+        if (pExited.value != 0 || PtyCoreUnix._isProcessDead(pid)) {
+          return null;
+        }
+      } else {
+        if (unix.errno != null && unix.errno!.value == consts.EINTR) {
+          continue;
+        }
+        return null;
+      }
     }
-    return Uint8List.fromList(buffer.cast<Uint8>().asTypedList(readlen));
   }
 
   @override
@@ -364,6 +422,8 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
 
     final status = statusPointer.value;
     calloc.free(statusPointer);
+
+    pExited.value = 1;
 
     if (pidResult < 0) {
       // ECHILD: VM reaped it
@@ -381,6 +441,9 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
 
   @override
   void free() {
-    calloc.free(buffer);
+    pExited.value = 1;
+    PtyCoreUnix._closePtmOnce(pPtm);
+    if (buffer != nullptr) calloc.free(buffer);
+    if (pPollFd != nullptr) calloc.free(pPollFd);
   }
 }

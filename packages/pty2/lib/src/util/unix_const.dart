@@ -62,6 +62,16 @@ class LinuxConst implements BsdConst {
   final F_SETFD = 2;
   final F_GETFL = 3;
   final F_SETFL = 4;
+  final FD_CLOEXEC = 1;
+
+  final POLLIN = 1;
+  final POLLPRI = 2;
+  final POLLOUT = 4;
+  final POLLERR = 8;
+  final POLLHUP = 16;
+  final POLLNVAL = 32;
+
+  final EINTR = 4;
 
   final O_ACCMODE = 3;
   final O_RDONLY = 0;
@@ -132,6 +142,16 @@ class BsdConst {
   final F_SETFD = 2;
   final F_GETFL = 3;
   final F_SETFL = 4;
+  final FD_CLOEXEC = 1;
+
+  final POLLIN = 1;
+  final POLLPRI = 2;
+  final POLLOUT = 4;
+  final POLLERR = 8;
+  final POLLHUP = 16;
+  final POLLNVAL = 32;
+
+  final EINTR = 4;
 
   final O_ACCMODE = 3;
   final O_RDONLY = 0;
