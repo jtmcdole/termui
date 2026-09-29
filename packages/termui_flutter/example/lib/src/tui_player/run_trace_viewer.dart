@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:clock/clock.dart';
 import 'package:termui/trace/trace_logger.dart';
 import 'dart:async';
 import 'dart:typed_data';
@@ -251,7 +252,7 @@ class _TraceViewerTuiAppState extends State<TraceViewerTuiApp> {
       } catch (e) {
         // ignore: avoid_print
         print(
-          '[${DateTime.now().toIso8601String()}] [TraceViewerTuiApp] Error loading uploaded trace: $e',
+          '[${clock.now().toIso8601String()}] [TraceViewerTuiApp] Error loading uploaded trace: $e',
         );
       }
     });

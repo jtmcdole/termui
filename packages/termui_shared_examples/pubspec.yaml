@@ -14,5 +14,6 @@ dependencies:
   termui_pty: ^0.3.18
   pty2: ^0.5.5
   characters: ^1.4.0
+  clock: ^1.1.2
   file: ^7.0.1
   core_bus: ^1.0.1

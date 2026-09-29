@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'package:clock/clock.dart';
 import "package:file/file.dart";
 import "package:file/local.dart";
 import "package:termui/termui_trace.dart";
@@ -197,7 +198,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     final y = (term.backend.size.y - h) ~/ 2;
 
     print(
-      '[${DateTime.now().toIso8601String()}] [TraceViewerApp] Spawning layer with size: ${term.backend.size}, w=$w, h=$h, x=$x, y=$y',
+      '[${clock.now().toIso8601String()}] [TraceViewerApp] Spawning layer with size: ${term.backend.size}, w=$w, h=$h, x=$x, y=$y',
     );
 
     late PromptRunner<void> runner;

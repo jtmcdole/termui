@@ -1,3 +1,4 @@
+import 'package:clock/clock.dart';
 import 'package:termui/termui.dart' as termui;
 import 'package:termui_recorder/termui_recorder.dart';
 import 'package:termui/perf/tracer.dart';
@@ -36,7 +37,7 @@ final class RecordingService {
       if (_asciicastBuffer != null) {
         final rawString = _asciicastBuffer!.toString();
         final compressed = await compressString(rawString);
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
+        final timestamp = clock.now().millisecondsSinceEpoch;
         final filename = 'cast_$timestamp.cast.gz';
 
         await saveFile(filename, compressed);
@@ -62,7 +63,7 @@ final class RecordingService {
       final bytes = await file.readAsBytes();
       final compressed = await compressBytes(bytes);
 
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final timestamp = clock.now().millisecondsSinceEpoch;
       final filename = 'trace_$timestamp.json.gz';
 
       await saveFile(filename, compressed);

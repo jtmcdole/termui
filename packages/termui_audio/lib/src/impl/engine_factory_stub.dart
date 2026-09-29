@@ -162,7 +162,7 @@ class StubAudioEngine implements TermuiAudioEngine {
     required Duration duration,
   }) => throw UnsupportedError('StubAudioEngine');
   @override
-  void playSpriteSequence(
+  Future<void> playSpriteSequence(
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
     AudioBus? bus,

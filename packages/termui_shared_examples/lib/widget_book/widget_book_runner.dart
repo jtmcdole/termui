@@ -2,6 +2,7 @@ import "package:termui/perf/fs_locator.dart";
 import 'dart:async';
 import 'dart:math';
 
+import 'package:clock/clock.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 import 'package:termui_shared_examples/widget_book/widget_book_examples.dart';
@@ -307,7 +308,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     }
 
     fpsFrameCount++;
-    final currentMs = DateTime.now().millisecondsSinceEpoch;
+    final currentMs = clock.now().millisecondsSinceEpoch;
     if (lastFpsMs == 0) {
       lastFpsMs = currentMs;
     } else if (currentMs - lastFpsMs >= 500) {
@@ -388,7 +389,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
       final w = element.size.width;
       final h = element.size.height;
       final fs = getDefaultFileSystem();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final timestamp = clock.now().millisecondsSinceEpoch;
       final path = fs.path.join(
         fs.currentDirectory.path,
         'recording_$timestamp.cast.gz',
@@ -425,7 +426,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
       _traceFilePath = null;
     } else {
       final fs = getDefaultFileSystem();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final timestamp = clock.now().millisecondsSinceEpoch;
       final tracePath = fs.path.join(
         fs.currentDirectory.path,
         'trace_$timestamp.json.gz',

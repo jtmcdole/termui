@@ -149,11 +149,11 @@ class MockAudioEngine implements TermuiAudioEngine {
     required Duration duration,
   }) => throw UnimplementedError();
   @override
-  void playSpriteSequence(
+  Future<void> playSpriteSequence(
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
     AudioBus? bus,
-  }) {}
+  }) async {}
   @override
   AudioBus createBus() => throw UnimplementedError();
   @override

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'package:clock/clock.dart';
 import 'package:termui/termui.dart';
 import 'package:termui_pty/termui_pty.dart';
 
@@ -48,7 +49,7 @@ final class PtyBackend {
 
       final fgCode = color.foregroundCode;
       const resetCode = '\x1b[0m';
-      final timestamp = DateTime.now().toIso8601String().substring(11, 19);
+      final timestamp = clock.now().toIso8601String().substring(11, 19);
 
       final ansiString = '[$timestamp] $fgCode$ip$resetCode - $msg\r\n';
       _terminal!.write(utf8.encode(ansiString));
