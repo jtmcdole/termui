@@ -9,10 +9,10 @@ environment:
   sdk: ">=3.11.0 <4.0.0"
 
 dependencies:
-  termui: ^0.9.4
-  termui_recorder: ^0.7.6
-  termui_pty: ^0.3.18
-  pty2: ^0.5.5
+  termui: ^0.9.5
+  termui_recorder: ^0.7.7
+  termui_pty: ^0.3.19
+  pty2: ^0.5.6
   characters: ^1.4.0
   clock: ^1.1.2
   file: ^7.0.1

@@ -1,3 +1,7 @@
+## 0.5.6
+
+ - **FIX**(pty2): resolve unix reader isolate hang on process exit.
+
 ## 0.5.5
 
  - **FIX**(pty2): prevent premature handle closure and output loss on process exit.
