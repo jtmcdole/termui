@@ -1,3 +1,7 @@
+## 0.8.6
+
+ - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
+
 ## 0.8.5
 
  - Update a dependency to the latest release.

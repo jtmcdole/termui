@@ -1,3 +1,7 @@
+## 0.9.5
+
+ - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
+
 ## 0.9.4
 
  - **FIX**(wide characters): zerowidth, wide, etc.

@@ -1,3 +1,7 @@
+## 0.1.13
+
+ - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
+
 ## 0.1.12
 
  - **FIX**(audio): dynamically attach PitchShiftFilter to active voices and bypass at 1.0x.

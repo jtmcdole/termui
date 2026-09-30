@@ -3,6 +3,57 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-09-30
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`pty2` - `v0.5.6`](#pty2---v056)
+ - [`termui` - `v0.9.5`](#termui---v095)
+ - [`termui_audio` - `v0.1.13`](#termui_audio---v0113)
+ - [`termui_flutter` - `v0.8.6`](#termui_flutter---v086)
+ - [`termui_pty` - `v0.3.19`](#termui_pty---v0319)
+ - [`termui_recorder` - `v0.7.7`](#termui_recorder---v077)
+ - [`termui_test` - `v0.2.21`](#termui_test---v0221)
+ - [`termui_hotreload` - `v0.6.22`](#termui_hotreload---v0622)
+ - [`termui_tinpot` - `v0.3.7`](#termui_tinpot---v037)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_pty` - `v0.3.19`
+ - `termui_recorder` - `v0.7.7`
+ - `termui_test` - `v0.2.21`
+ - `termui_hotreload` - `v0.6.22`
+ - `termui_tinpot` - `v0.3.7`
+
+---
+
+#### `pty2` - `v0.5.6`
+
+ - **FIX**(pty2): resolve unix reader isolate hang on process exit.
+
+#### `termui` - `v0.9.5`
+
+ - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
+
+#### `termui_audio` - `v0.1.13`
+
+ - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
+
+#### `termui_flutter` - `v0.8.6`
+
+ - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
+
+
 ## 2026-09-28
 
 ### Changes
