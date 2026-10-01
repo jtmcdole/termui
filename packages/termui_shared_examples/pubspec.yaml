@@ -11,8 +11,8 @@ environment:
 dependencies:
   termui: ^0.9.5
   termui_recorder: ^0.7.7
-  termui_pty: ^0.3.19
-  pty2: ^0.5.6
+  termui_pty: ^0.3.20
+  pty2: ^0.5.7
   characters: ^1.4.0
   clock: ^1.1.2
   file: ^7.0.1
