@@ -3,6 +3,34 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-10-01
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`pty2` - `v0.5.7`](#pty2---v057)
+ - [`termui_pty` - `v0.3.20`](#termui_pty---v0320)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_pty` - `v0.3.20`
+
+---
+
+#### `pty2` - `v0.5.7`
+
+ - **FIX**(pty2): eliminate cross-isolate heap corruption and refactor unix spawn helpers.
+
+
 ## 2026-09-30
 
 ### Changes
