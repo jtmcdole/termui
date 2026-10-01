@@ -12,7 +12,7 @@ import 'package:pty2/src/pty_core.dart';
 abstract base class BasePseudoTerminal implements PseudoTerminal {
   BasePseudoTerminal(this._core);
 
-  late final PtyCore _core;
+  final PtyCore _core;
 
   @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
@@ -34,6 +34,9 @@ abstract base class BasePseudoTerminal implements PseudoTerminal {
     _core.resize(width, height);
   }
 }
+
+@pragma('vm:never-inline')
+void _keepAlive(Object? o) {}
 
 /// An isolate based PseudoTerminal implementation. Performs better than
 /// PollingPseudoTerminal and requires less resource. However this prevents
@@ -60,6 +63,7 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
     );
     _exitCodeFuture = exitPort.first.then((value) {
       exitPort.close();
+      _keepAlive(_core);
       return value as int;
     });
 
@@ -69,6 +73,7 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
       if (msg == null) {
         receivePort.close();
         _outStreamController.close();
+        _keepAlive(_core);
         return;
       }
       if (first) {
@@ -167,7 +172,7 @@ void _readUntilExit(_IsolateArgs<PtyCoreWorker> ctx) async {
   } finally {
     ctx.arg.free();
     rp.close();
+    await loopController.close();
+    ctx.sendPort.send(null);
   }
-  await loopController.close();
-  ctx.sendPort.send(null);
 }
