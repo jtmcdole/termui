@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:termui/termui.dart';
 import 'package:termui_pty/src/virtual_terminal.dart';
 import 'package:test/test.dart';
@@ -40,4 +42,36 @@ void main() {
     expect(buffer.characters[1], equals('')); // Spacer cell
     expect(buffer.characters[2], equals(' ')); // Rest of the row is empty space
   });
+
+  test('VirtualTerminal.write decodes UTF-8 multi-byte sequences', () {
+    final terminal = VirtualTerminal(width: 10, height: 5);
+    terminal.write(utf8.encode('🍎'));
+    expect(terminal.buffer.getCharacter(0, 0), equals('🍎'));
+    expect(terminal.buffer.getCharacter(1, 0), equals(''));
+  });
+
+  test('VirtualTerminal handles horizontal tab stops (\\t)', () {
+    final terminal = VirtualTerminal(width: 20, height: 5);
+    terminal.write(utf8.encode('A\tB\tC'));
+    expect(terminal.buffer.getCharacter(0, 0), equals('A'));
+    expect(terminal.buffer.getCharacter(8, 0), equals('B'));
+    expect(terminal.buffer.getCharacter(16, 0), equals('C'));
+
+    // Tab near right edge clamps to width - 1
+    terminal.write(utf8.encode('\tZ'));
+    expect(terminal.buffer.getCharacter(19, 0), equals('Z'));
+  });
+
+  test(
+    'VirtualTerminal.resize(0, 0) guards against non-positive dimensions',
+    () {
+      final terminal = VirtualTerminal(width: 10, height: 5);
+      terminal.write(utf8.encode('Hello'));
+      expect(() => terminal.resize(0, 0), returnsNormally);
+      expect(terminal.width, greaterThanOrEqualTo(1));
+      expect(terminal.height, greaterThanOrEqualTo(1));
+      expect(terminal.cursorX, inInclusiveRange(0, terminal.width - 1));
+      expect(terminal.cursorY, inInclusiveRange(0, terminal.height - 1));
+    },
+  );
 }

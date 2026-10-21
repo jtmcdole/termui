@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:math' as math;
+
 import 'package:termui/termui.dart';
 import 'package:characters/characters.dart';
 import 'ansi_parser.dart';
@@ -24,6 +27,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   Style _currentStyle = Style.empty;
   late final AnsiParser _parser;
+  late final ByteConversionSink _utf8Sink;
 
   /// Whether the terminal background should be rendered as transparent.
   final bool transparentBackground;
@@ -51,6 +55,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   /// Disposes of resources.
   void dispose() {
+    _utf8Sink.close();
     _listeners.clear();
   }
 
@@ -76,15 +81,20 @@ final class VirtualTerminal implements TerminalHandler {
       );
     }
     _parser = AnsiParser(this);
+    _utf8Sink = const Utf8Decoder(
+      allowMalformed: true,
+    ).startChunkedConversion(_ParserStringSink(_parser.parse));
   }
 
   /// Resizes the virtual terminal to the new [newWidth] and [newHeight].
   void resize(int newWidth, int newHeight) {
-    if (newWidth == width && newHeight == height) return;
-    _buffer.resize(newWidth, newHeight);
+    final clampedWidth = math.max(1, newWidth);
+    final clampedHeight = math.max(1, newHeight);
+    if (clampedWidth == width && clampedHeight == height) return;
+    _buffer.resize(clampedWidth, clampedHeight);
 
     if (transparentBackground) {
-      final size = newWidth * newHeight;
+      final size = clampedWidth * clampedHeight;
       for (var i = 0; i < size; i++) {
         if (_buffer.characters[i] == ' ' &&
             _buffer.attributes[i * 3 + 1] == 0) {
@@ -93,15 +103,19 @@ final class VirtualTerminal implements TerminalHandler {
       }
     }
 
-    width = newWidth;
-    height = newHeight;
+    width = clampedWidth;
+    height = clampedHeight;
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
   }
 
   /// Feeds a chunk of data into the terminal.
   void write(List<int> chunk) {
-    _parser.parse(String.fromCharCodes(chunk));
+    if (chunk.any((b) => b > 0xFF)) {
+      _parser.parse(String.fromCharCodes(chunk));
+    } else {
+      _utf8Sink.add(chunk);
+    }
     _notifyListeners();
   }
 
@@ -203,6 +217,11 @@ final class VirtualTerminal implements TerminalHandler {
     switch (charCode) {
       case 8: // Backspace
         if (cursorX > 0) cursorX--;
+        break;
+      case 9: // Horizontal tab
+        if (width > 0) {
+          cursorX = (((cursorX ~/ 8) + 1) * 8).clamp(0, width - 1);
+        }
         break;
       case 10: // Line feed
       case 11: // Vertical tab
@@ -585,4 +604,20 @@ final class VirtualTerminal implements TerminalHandler {
     final gray = (code - 232) * 10 + 8;
     return Color(gray, gray, gray);
   }
+}
+
+final class _ParserStringSink extends StringConversionSinkBase {
+  final void Function(String) _onChunk;
+
+  _ParserStringSink(this._onChunk);
+
+  @override
+  void addSlice(String str, int start, int end, bool isLast) {
+    if (start < end) {
+      _onChunk(str.substring(start, end));
+    }
+  }
+
+  @override
+  void close() {}
 }
