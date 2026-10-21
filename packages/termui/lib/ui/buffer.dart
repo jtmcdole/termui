@@ -536,8 +536,9 @@ class Buffer {
         }
 
         final isWide = charWidth == 2;
-        if (isWide && currentX == width - 1) {
-          // Can't fit wide character in the last column, write a space instead
+        if (isWide &&
+            (currentX == width - 1 || !isCellValid(currentX + 1, currentY))) {
+          // Can't fit wide character in the last column or clip edge, write a space instead
           characters[idx] = ' ';
           final attrIdx = idx * 3;
           attributes[attrIdx + 0] = hasFg ? fg : 0;
@@ -545,7 +546,7 @@ class Buffer {
             attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
           }
           attributes[attrIdx + 2] = modifiers;
-          currentX += 1;
+          currentX += charWidth;
         } else {
           characters[idx] = char;
           final attrIdx = idx * 3;
@@ -567,7 +568,12 @@ class Buffer {
               characters[nextIdx] = '';
               final nextAttrIdx = nextIdx * 3;
               attributes[nextAttrIdx + 0] = hasFg ? fg : 0;
-              if (hasBg) attributes[nextAttrIdx + 1] = bg;
+              if (hasBg) {
+                attributes[nextAttrIdx + 1] = blendColor(
+                  bg,
+                  attributes[nextAttrIdx + 1],
+                );
+              }
               attributes[nextAttrIdx + 2] = modifiers;
             }
             currentX += 2;
@@ -720,7 +726,7 @@ class Compositor {
               charWritten[word] |= (1 << bit);
             }
 
-            if (fgAlpha == 255) fgWritten[word] |= (1 << bit);
+            if (fgAlpha == 255 || bgAlpha == 255) fgWritten[word] |= (1 << bit);
             if (bgAlpha == 255) {
               bgWritten[word] |= (1 << bit);
               remainingBg--;
@@ -779,7 +785,7 @@ class Compositor {
               final bit = targetIdx & 31;
 
               final charOccluded = (charWritten[word] & (1 << bit)) != 0;
-              final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
+              var fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
               final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
 
               if (charOccluded && fgOccluded && bgOccluded) continue;
@@ -809,6 +815,10 @@ class Compositor {
                   target.attributes[targetAttrIdx + 2] =
                       tempBuffer.attributes[sourceAttrIdx + 2];
                   charWritten[word] |= (1 << bit);
+                  if (!fgOccluded && sourceFg == 0) {
+                    fgWritten[word] |= (1 << bit);
+                    fgOccluded = true;
+                  }
                 }
               }
 
@@ -867,7 +877,7 @@ class Compositor {
                 final bit = targetIdx & 31;
 
                 final charOccluded = (charWritten[word] & (1 << bit)) != 0;
-                final fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
+                var fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
                 final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
 
                 if (bgOccluded && fgOccluded && charOccluded) continue;
@@ -899,6 +909,10 @@ class Compositor {
                     target.attributes[targetAttrIdx + 2] =
                         buf.attributes[sourceAttrIdx + 2];
                     charWritten[word] |= (1 << bit);
+                    if (!fgOccluded && sourceFg == 0) {
+                      fgWritten[word] |= (1 << bit);
+                      fgOccluded = true;
+                    }
                   }
                 }
 
@@ -1476,16 +1490,32 @@ extension BufferAnsiSerialization on Buffer {
                       currentBg = 0xFF000000;
                       pIdx = semi + 1;
                     case 38:
+                      if (semi + 1 >= paramsStr.length) {
+                        pIdx = paramsStr.length;
+                        break;
+                      }
                       int s2 = nextSemi(semi + 1);
                       int type =
                           int.tryParse(paramsStr.substring(semi + 1, s2)) ?? 0;
                       if (type == 2) {
+                        if (s2 + 1 >= paramsStr.length) {
+                          pIdx = paramsStr.length;
+                          break;
+                        }
                         int s3 = nextSemi(s2 + 1);
                         int r =
                             int.tryParse(paramsStr.substring(s2 + 1, s3)) ?? 0;
+                        if (s3 + 1 >= paramsStr.length) {
+                          pIdx = paramsStr.length;
+                          break;
+                        }
                         int s4 = nextSemi(s3 + 1);
                         int g =
                             int.tryParse(paramsStr.substring(s3 + 1, s4)) ?? 0;
+                        if (s4 + 1 >= paramsStr.length) {
+                          pIdx = paramsStr.length;
+                          break;
+                        }
                         int s5 = nextSemi(s4 + 1);
                         int b =
                             int.tryParse(paramsStr.substring(s4 + 1, s5)) ?? 0;
@@ -1495,16 +1525,32 @@ extension BufferAnsiSerialization on Buffer {
                         pIdx = s2 + 1;
                       }
                     case 48:
+                      if (semi + 1 >= paramsStr.length) {
+                        pIdx = paramsStr.length;
+                        break;
+                      }
                       int s2 = nextSemi(semi + 1);
                       int type =
                           int.tryParse(paramsStr.substring(semi + 1, s2)) ?? 0;
                       if (type == 2) {
+                        if (s2 + 1 >= paramsStr.length) {
+                          pIdx = paramsStr.length;
+                          break;
+                        }
                         int s3 = nextSemi(s2 + 1);
                         int r =
                             int.tryParse(paramsStr.substring(s2 + 1, s3)) ?? 0;
+                        if (s3 + 1 >= paramsStr.length) {
+                          pIdx = paramsStr.length;
+                          break;
+                        }
                         int s4 = nextSemi(s3 + 1);
                         int g =
                             int.tryParse(paramsStr.substring(s3 + 1, s4)) ?? 0;
+                        if (s4 + 1 >= paramsStr.length) {
+                          pIdx = paramsStr.length;
+                          break;
+                        }
                         int s5 = nextSemi(s4 + 1);
                         int b =
                             int.tryParse(paramsStr.substring(s4 + 1, s5)) ?? 0;

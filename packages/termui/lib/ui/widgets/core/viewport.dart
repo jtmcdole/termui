@@ -279,30 +279,22 @@ class Viewport implements Buffer {
         final isWide = isWideGrapheme(char);
         if (isWide && currentX == bounds.width - 1) {
           // Can't fit wide character in the last column, write a space instead
-          final currentBg = parent.getBackground(
-            bounds.x + currentX,
-            bounds.y + currentY,
-          );
           parent.setAttributes(
             bounds.x + currentX,
             bounds.y + currentY,
             char: ' ',
             fg: style.foreground?.argb ?? 0,
-            bg: style.background?.argb ?? currentBg,
+            bg: style.background?.argb,
             modifiers: style.modifiers,
           );
           currentX += 1;
         } else {
-          final currentBg = parent.getBackground(
-            bounds.x + currentX,
-            bounds.y + currentY,
-          );
           parent.setAttributes(
             bounds.x + currentX,
             bounds.y + currentY,
             char: char,
             fg: style.foreground?.argb ?? 0,
-            bg: style.background?.argb ?? currentBg,
+            bg: style.background?.argb,
             modifiers: style.modifiers,
           );
           if (isWide) {
@@ -325,16 +317,12 @@ class Viewport implements Buffer {
                   );
                 }
               }
-              final nextBg = parent.getBackground(
-                bounds.x + currentX + 1,
-                bounds.y + currentY,
-              );
               parent.setAttributes(
                 bounds.x + currentX + 1,
                 bounds.y + currentY,
                 char: '',
                 fg: style.foreground?.argb ?? 0,
-                bg: style.background?.argb ?? nextBg,
+                bg: style.background?.argb,
                 modifiers: style.modifiers,
               );
             }

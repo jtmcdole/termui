@@ -996,15 +996,22 @@ class CanvasElement extends Element {
     var currentBuffer = buffer;
     var startX = offset.dx;
     var startY = offset.dy;
+    var clipRect = Rect(0, 0, buffer.width, buffer.height);
     while (currentBuffer is Viewport) {
-      startX += currentBuffer.bounds.x;
-      startY += currentBuffer.bounds.y;
+      final b = currentBuffer.bounds;
+      clipRect = Rect(
+        b.x + clipRect.x,
+        b.y + clipRect.y,
+        clipRect.width,
+        clipRect.height,
+      ).intersect(b);
+      startX += b.x;
+      startY += b.y;
       currentBuffer = currentBuffer.parent;
     }
     final targetBuffer = currentBuffer;
-
     final targetWidth = targetBuffer.width;
-    final targetHeight = targetBuffer.height;
+    clipRect = clipRect.intersect(targetBuffer.activeClip);
 
     final w = size.width;
     final h = size.height;
@@ -1015,10 +1022,10 @@ class CanvasElement extends Element {
     final startXInt = startX.toInt();
     final startYInt = startY.toInt();
 
-    final minCx = max(0, -startXInt);
-    final maxCx = min(drawWidth, targetWidth - startXInt);
-    final minCy = max(0, -startYInt);
-    final maxCy = min(drawHeight, targetHeight - startYInt);
+    final minCx = max(0, clipRect.x - startXInt);
+    final maxCx = min(drawWidth, clipRect.x + clipRect.width - startXInt);
+    final minCy = max(0, clipRect.y - startYInt);
+    final maxCy = min(drawHeight, clipRect.y + clipRect.height - startYInt);
 
     if (minCx >= maxCx || minCy >= maxCy) return;
 
