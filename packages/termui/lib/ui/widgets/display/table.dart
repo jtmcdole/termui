@@ -167,8 +167,7 @@ class TableElement extends Element {
         final cellData = c < rowData.length ? rowData[c] : '';
         if (cellData case Widget _) {
           Element? cellEl = cellElements[r][c];
-          if (cellEl != null &&
-              cellEl.widget.runtimeType == cellData.runtimeType) {
+          if (cellEl != null && Widget.canUpdate(cellEl.widget, cellData)) {
             cellEl.update(cellData);
           } else {
             cellEl?.unmount();

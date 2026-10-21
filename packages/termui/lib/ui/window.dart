@@ -213,6 +213,10 @@ class FocusNode {
       }
       parent = null;
     }
+    for (final child in children) {
+      child.parent = null;
+    }
+    children.clear();
   }
 }
 
@@ -386,7 +390,7 @@ class WindowElement extends Element implements MouseEventHandler {
   void rebuild() {
     final win = widget as Window;
     if (childElement != null &&
-        childElement!.widget.runtimeType == win.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, win.child)) {
       childElement!.update(win.child);
     } else {
       childElement?.unmount();

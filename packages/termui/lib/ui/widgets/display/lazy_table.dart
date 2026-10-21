@@ -76,7 +76,7 @@ class LazyListElement extends Element {
       final childWidget = lazy.itemBuilder(index);
       final currentChild = childElements[i];
       if (currentChild != null &&
-          currentChild.widget.runtimeType == childWidget.runtimeType) {
+          Widget.canUpdate(currentChild.widget, childWidget)) {
         currentChild.update(childWidget);
       } else {
         currentChild?.unmount();
