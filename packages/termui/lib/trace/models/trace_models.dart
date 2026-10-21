@@ -259,6 +259,7 @@ Future<Map<String, Object>?> parseTraceFile(String path) async {
           phase: ev.phase,
           category: ev.category,
           timestamp: ev.timestamp - baseTime,
+          dur: ev.dur,
           tid: ev.tid,
           args: ev.args,
         );

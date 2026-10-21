@@ -1,5 +1,4 @@
 import 'dart:typed_data';
-import 'package:clock/clock.dart';
 import "package:file/file.dart";
 import "package:file/local.dart";
 import "package:termui/termui_trace.dart";
@@ -196,10 +195,6 @@ class _TraceViewerAppState extends State<TraceViewerApp>
     final term = globalSceneManager.terminal;
     final x = (term.backend.size.x - w) ~/ 2;
     final y = (term.backend.size.y - h) ~/ 2;
-
-    print(
-      '[${clock.now().toIso8601String()}] [TraceViewerApp] Spawning layer with size: ${term.backend.size}, w=$w, h=$h, x=$x, y=$y',
-    );
 
     late PromptRunner<void> runner;
 
@@ -628,20 +623,8 @@ class _TraceViewerAppState extends State<TraceViewerApp>
   }
 
   Future<void> _loadTraceData() async {
-    widget.fileSystem
-        .file('debug.log')
-        .writeAsStringSync(
-          'Started loading trace data\n',
-          mode: FileMode.append,
-        );
     try {
       final result = await parseTraceFile(widget.filePath!);
-      widget.fileSystem
-          .file('debug.log')
-          .writeAsStringSync(
-            'Finished parseTraceFile\n',
-            mode: FileMode.append,
-          );
 
       if (mounted) {
         if (result != null) {
