@@ -13,6 +13,8 @@ class AndroidConst extends BsdConst {
   int get TIOCSWINSZ => 0x5414;
   @override
   int get O_NONBLOCK => 4000;
+  @override
+  int get EAGAIN => 11;
 }
 
 class LinuxConst implements BsdConst {
@@ -72,6 +74,7 @@ class LinuxConst implements BsdConst {
   final POLLNVAL = 32;
 
   final EINTR = 4;
+  final EAGAIN = 11;
 
   final O_ACCMODE = 3;
   final O_RDONLY = 0;
@@ -152,6 +155,7 @@ class BsdConst {
   final POLLNVAL = 32;
 
   final EINTR = 4;
+  final EAGAIN = 35;
 
   final O_ACCMODE = 3;
   final O_RDONLY = 0;
