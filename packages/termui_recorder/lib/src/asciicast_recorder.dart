@@ -113,7 +113,7 @@ final class AsciicastRecorder {
     }
 
     final elapsed = now.difference(_lastEventTime!);
-    final intervalSeconds = elapsed.inMicroseconds / 1000000.0;
+    var intervalSeconds = elapsed.inMicroseconds / 1000000.0;
 
     if (_lastRecordedWidth != buffer.width ||
         _lastRecordedHeight != buffer.height) {
@@ -128,6 +128,8 @@ final class AsciicastRecorder {
         {'cols': buffer.width, 'rows': buffer.height},
       ];
       _writer.writeLine(jsonEncode(resizeRow));
+      _lastEventTime = now;
+      intervalSeconds = 0.0;
     }
 
     final frameOutput = StringBuffer();

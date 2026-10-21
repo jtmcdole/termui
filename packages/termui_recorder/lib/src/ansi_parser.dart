@@ -18,7 +18,12 @@ abstract final class AnsiParser {
     var computedWidth = 0;
 
     for (final line in lines) {
-      final plainLength = _stripAnsi(line).characters.length;
+      var plainLength = 0;
+      for (final ch in _stripAnsi(line).characters) {
+        if (ch != '\r') {
+          plainLength += graphemeWidth(ch);
+        }
+      }
       if (plainLength > computedWidth) {
         computedWidth = plainLength;
       }
@@ -39,9 +44,13 @@ abstract final class AnsiParser {
     while (iterator.moveNext()) {
       final char = iterator.current;
 
-      if (char == '\n') {
+      if (char == '\n' || char == '\r\n') {
         x = 0;
         y++;
+        continue;
+      }
+      if (char == '\r') {
+        x = 0;
         continue;
       }
 
@@ -61,6 +70,8 @@ abstract final class AnsiParser {
         continue;
       }
 
+      final w = graphemeWidth(char);
+      if (w == 0) continue;
       if (y < targetHeight && x < targetWidth) {
         buffer.setAttributes(
           x,
@@ -70,7 +81,7 @@ abstract final class AnsiParser {
           bg: currentStyle.background?.argb ?? 0,
           modifiers: currentStyle.modifiers,
         );
-        x++;
+        x += w;
       }
     }
 
@@ -97,7 +108,7 @@ abstract final class AnsiParser {
     while (iterator.moveNext()) {
       final char = iterator.current;
 
-      if (char == '\n') {
+      if (char == '\n' || char == '\r\n') {
         x = 0;
         y++;
         continue;
@@ -154,6 +165,8 @@ abstract final class AnsiParser {
         continue;
       }
 
+      final w = graphemeWidth(char);
+      if (w == 0) continue;
       // Normal character: write it
       if (y >= 0 && y < buffer.height && x >= 0 && x < buffer.width) {
         buffer.setAttributes(
@@ -164,7 +177,7 @@ abstract final class AnsiParser {
           bg: style.background?.argb ?? 0,
           modifiers: style.modifiers,
         );
-        x++;
+        x += w;
       }
     }
 
@@ -174,7 +187,7 @@ abstract final class AnsiParser {
   static bool _isAnsiTerminator(String char) {
     if (char.isEmpty) return false;
     final code = char.codeUnitAt(0);
-    return (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    return code >= 0x40 && code <= 0x7E;
   }
 
   static String _stripAnsi(String input) {

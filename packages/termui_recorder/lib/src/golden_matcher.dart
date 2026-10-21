@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:clock/clock.dart';
 import 'package:file/local.dart';
-import 'package:test/test.dart';
+import 'package:matcher/matcher.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/style.dart';
