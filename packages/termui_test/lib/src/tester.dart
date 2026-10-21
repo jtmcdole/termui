@@ -251,6 +251,9 @@ final class TerminalTester {
         } finally {
           PromptRunner.onPromptStarted = oldOnPromptStarted;
           PromptRunner.onPromptEnded = oldOnPromptEnded;
+          _rootElement?.unmount();
+          _rootElement = null;
+          _terminal?.dispose();
           _backend?.dispose();
           _active = null;
         }
@@ -322,14 +325,14 @@ final class TerminalTester {
     Duration duration = const Duration(milliseconds: 10),
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    final watch = Stopwatch()..start();
+    var elapsed = Duration.zero;
     var count = 0;
 
     await pump();
     count++;
 
     while (_fakeAsync != null) {
-      if (watch.elapsed > timeout) {
+      if (elapsed > timeout) {
         throw TimeoutException('pumpAndSettle timed out');
       }
 
@@ -345,6 +348,7 @@ final class TerminalTester {
       }
 
       await pump(duration);
+      elapsed += duration;
       count++;
     }
     return count;
