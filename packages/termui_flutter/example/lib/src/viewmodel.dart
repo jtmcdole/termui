@@ -233,7 +233,7 @@ final class AsciicastPlayerViewModel {
 
     if (_currentTime >= _totalDuration) {
       _currentTime = _totalDuration;
-      if (_isLooping) {
+      if (_isLooping && _totalDuration > 0) {
         seek(0.0);
       } else {
         pause();
