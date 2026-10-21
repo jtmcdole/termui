@@ -157,7 +157,7 @@ class SplitPaneElement extends Element implements MouseEventHandler {
   void rebuild() {
     final split = widget as SplitPane;
     if (childElement1 != null &&
-        childElement1!.widget.runtimeType == split.child1.runtimeType) {
+        Widget.canUpdate(childElement1!.widget, split.child1)) {
       childElement1!.update(split.child1);
     } else {
       childElement1?.unmount();
@@ -166,7 +166,7 @@ class SplitPaneElement extends Element implements MouseEventHandler {
     }
 
     if (childElement2 != null &&
-        childElement2!.widget.runtimeType == split.child2.runtimeType) {
+        Widget.canUpdate(childElement2!.widget, split.child2)) {
       childElement2!.update(split.child2);
     } else {
       childElement2?.unmount();
@@ -224,6 +224,10 @@ class SplitPaneElement extends Element implements MouseEventHandler {
 
     split._initLimits();
     final totalSize = split.direction == LayoutDirection.horizontal ? w : h;
+    if (totalSize <= 0) {
+      split._dividerX = 0;
+      return Size(w, h);
+    }
 
     int dividerPos = _calculateDividerPos(totalSize);
 

@@ -74,7 +74,7 @@ class ColumnElement extends Element {
     for (var i = 0; i < column.children.length; i++) {
       final childWidget = column.children[i];
       if (i < childElements.length &&
-          childElements[i].widget.runtimeType == childWidget.runtimeType) {
+          Widget.canUpdate(childElements[i].widget, childWidget)) {
         childElements[i].update(childWidget);
         newElements.add(childElements[i]);
       } else {
@@ -143,7 +143,14 @@ class ColumnElement extends Element {
           maxHeight: childArea.height,
         ),
       );
-      childEl.relativeOffset = Offset(childArea.x, childArea.y);
+      final dx = switch (column.crossAxisAlignment) {
+        CrossAxisAlignment.start || CrossAxisAlignment.stretch => childArea.x,
+        CrossAxisAlignment.center =>
+          childArea.x + max<int>(0, (width - childSize.width) ~/ 2),
+        CrossAxisAlignment.end =>
+          childArea.x + max<int>(0, width - childSize.width),
+      };
+      childEl.relativeOffset = Offset(dx, childArea.y);
       totalHeight += childSize.height;
 
       if (childArea.y < minChildY) minChildY = childArea.y;

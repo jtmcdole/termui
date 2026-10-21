@@ -92,7 +92,7 @@ class RowElement extends Element {
     for (var i = 0; i < row.children.length; i++) {
       final childWidget = row.children[i];
       if (i < childElements.length &&
-          childElements[i].widget.runtimeType == childWidget.runtimeType) {
+          Widget.canUpdate(childElements[i].widget, childWidget)) {
         childElements[i].update(childWidget);
         newElements.add(childElements[i]);
       } else {
@@ -163,7 +163,14 @@ class RowElement extends Element {
           maxHeight: height,
         ),
       );
-      childEl.relativeOffset = Offset(childArea.x, childArea.y);
+      final dy = switch (row.crossAxisAlignment) {
+        CrossAxisAlignment.start || CrossAxisAlignment.stretch => childArea.y,
+        CrossAxisAlignment.center =>
+          childArea.y + max<int>(0, (height - childSize.height) ~/ 2),
+        CrossAxisAlignment.end =>
+          childArea.y + max<int>(0, height - childSize.height),
+      };
+      childEl.relativeOffset = Offset(childArea.x, dy);
       if (childSize.height > maxChildHeight) {
         maxChildHeight = childSize.height;
       }

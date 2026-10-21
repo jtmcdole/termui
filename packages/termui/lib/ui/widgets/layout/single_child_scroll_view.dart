@@ -137,7 +137,7 @@ class _ScrollViewRenderProxyElement extends Element {
   void rebuild() {
     final proxyWidget = widget as _ScrollViewRenderProxy;
     if (childElement != null &&
-        childElement!.widget.runtimeType == proxyWidget.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, proxyWidget.child)) {
       childElement!.update(proxyWidget.child);
     } else {
       childElement?.unmount();
@@ -243,7 +243,10 @@ class _ScrollViewRenderProxyElement extends Element {
         for (var x = 0; x < w; x++) {
           final srcX = scrollOffset + x;
           if (srcX >= childWidth) break;
-          final char = virtualBuffer.getCharacter(srcX, y);
+          var char = virtualBuffer.getCharacter(srcX, y);
+          if ((x == 0 && char == '') || (x == w - 1 && isWideGrapheme(char))) {
+            char = ' ';
+          }
           final vFg = virtualBuffer.getForeground(srcX, y);
           final vBg = virtualBuffer.getBackground(srcX, y);
           final vMod = virtualBuffer.getModifiers(srcX, y);
@@ -264,6 +267,34 @@ class _ScrollViewRenderProxyElement extends Element {
             fg: vFg != 0 ? vFg : targetFg,
             bg: vBg != 0 ? vBg : targetBg,
             modifiers: mergedMod,
+          );
+        }
+      }
+    }
+
+    if (virtualBuffer.effects.isNotEmpty) {
+      final viewportClip = Rect(offset.dx, offset.dy, w, h);
+      final scrollDx = proxyWidget.scrollDirection == LayoutDirection.horizontal
+          ? scrollOffset
+          : 0;
+      final scrollDy = proxyWidget.scrollDirection == LayoutDirection.vertical
+          ? scrollOffset
+          : 0;
+      for (final reg in virtualBuffer.effects) {
+        final translated = Rect(
+          offset.dx + reg.bounds.x - scrollDx,
+          offset.dy + reg.bounds.y - scrollDy,
+          reg.bounds.width,
+          reg.bounds.height,
+        ).intersect(viewportClip);
+        if (translated.width > 0 && translated.height > 0) {
+          buffer.addEffect(
+            RegisteredEffect(
+              reg.effect,
+              translated,
+              reg.zIndex,
+              reg.originalIndex,
+            ),
           );
         }
       }
