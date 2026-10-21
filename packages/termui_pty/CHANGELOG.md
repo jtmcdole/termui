@@ -1,3 +1,10 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(termui_pty): decode streaming UTF-8, keep CSI params, and cancel timer.
+ - **BREAKING** **REFACTOR**(examples): move shared example runners and tests to termui_shared_examples.
+
 ## 0.3.19
 
  - Update a dependency to the latest release.

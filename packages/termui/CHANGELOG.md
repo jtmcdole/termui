@@ -1,3 +1,24 @@
+## 0.10.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(animation): offset effect painting by area origin and guard ticker setState.
+ - **FIX**(layout): apply minimum constraints in Row and Column, preserve scroll effects, and guard SplitPane.
+ - **FIX**(overlay): guard empty DropdownButton and PopupMenuButton items and handle clicks.
+ - **FIX**(core): deduplicate key bubbling and forward paste events in SceneManager.
+ - **FIX**(buffer): clip wide graphemes, guard truncated SGR, and route Canvas through Viewport.
+ - **FIX**(core): reconcile child elements with Widget.canUpdate instead of runtimeType.
+ - **FIX**(terminal): decode multi-byte UTF-8 input, advance Alt+[, and parse CSI R.
+ - **BREAKING** **TEST**(termui): remove hardcoded GENERATE_GOLDENS environment overrides.
+ - **BREAKING** **REFACTOR**(examples): move shared example runners and tests to termui_shared_examples.
+ - **BREAKING** **FIX**(widgets): fix Sparkline 1-row gradient, TabPanel unmount, and widget state guards.
+ - **BREAKING** **FIX**(compositor): occlude lower-layer foregrounds and modifiers under opaque spaces.
+ - **BREAKING** **FIX**(focus): detach children on dispose and preserve external FocusNodes.
+ - **BREAKING** **FIX**(core): notify InheritedWidget dependents, fix unmount order, and guard intrinsics.
+ - **BREAKING** **FIX**(trace): preserve complete-event duration, remove debug I/O, and fix RingBuffer.
+ - **BREAKING** **FIX**(perf): use background isolate for file sink and guard close.
+ - **BREAKING** **FIX**(terminal): fix Linux TermIOS struct ABI, c_ispeed restore, and Windows bitmask.
+
 ## 0.9.5
 
  - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.

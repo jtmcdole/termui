@@ -1,3 +1,7 @@
+## 0.8.7
+
+ - **FIX**(termui_flutter): dispose GPU atlas resources, add white tile, and guard bounds.
+
 ## 0.8.6
 
  - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
