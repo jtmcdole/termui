@@ -15,7 +15,7 @@ class FileSystemSink implements TracerSink {
   /// The base epoch timestamp in microseconds for the trace.
   final int baseEpochUs;
   late final File _file;
-  final StringBuffer _buffer = StringBuffer();
+  late final IOSink _sink;
   bool _isFirst = true;
   final List<String> _stringTable = ['Unknown'];
 
@@ -25,7 +25,8 @@ class FileSystemSink implements TracerSink {
     if (!_file.parent.existsSync()) {
       _file.parent.createSync(recursive: true);
     }
-    _buffer.write('[\n');
+    _sink = _file.openWrite();
+    _sink.write('[\n');
   }
 
   @override
@@ -36,6 +37,7 @@ class FileSystemSink implements TracerSink {
   ]) {
     _stringTable.addAll(newStrings);
 
+    final chunk = StringBuffer();
     final numEvents = buffer.length ~/ 2;
     for (int i = 0; i < numEvents; i++) {
       final word0 = buffer[i * 2];
@@ -55,7 +57,7 @@ class FileSystemSink implements TracerSink {
       final realTs = baseEpochUs + ts;
 
       if (!_isFirst) {
-        _buffer.write(',\n');
+        chunk.write(',\n');
       } else {
         _isFirst = false;
       }
@@ -64,16 +66,19 @@ class FileSystemSink implements TracerSink {
           ? ', "args": ${jsonEncode(metadata[i])}'
           : '';
       final escapedName = jsonEncode(name);
-      _buffer.write(
+      chunk.write(
         '  {"name": $escapedName, "cat": "TUI", "ph": "$ph", "ts": $realTs, "pid": 1, "tid": $isolateId$metaStr}',
       );
+    }
+    if (chunk.isNotEmpty) {
+      _sink.write(chunk.toString());
     }
   }
 
   @override
   Future<void> close() async {
-    _buffer.write('\n]\n');
-    final bytes = utf8.encode(_buffer.toString());
-    _file.writeAsBytesSync(bytes);
+    _sink.write('\n]\n');
+    await _sink.flush();
+    await _sink.close();
   }
 }

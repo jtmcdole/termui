@@ -17,6 +17,7 @@ class IsolateSink implements TracerSink {
   late final Isolate _serializerIsolate;
   bool _initialized = false;
   final Completer<void> _initCompleter = Completer<void>();
+  final List<void Function()> _pendingSends = [];
 
   /// Creates a new [IsolateSink] writing to [path].
   IsolateSink(this.path, this.baseEpochUs) {
@@ -31,6 +32,10 @@ class IsolateSink implements TracerSink {
     );
     _serializerPort = await receivePort.first as SendPort;
     _initialized = true;
+    for (final pending in _pendingSends) {
+      pending();
+    }
+    _pendingSends.clear();
     _initCompleter.complete();
   }
 
@@ -41,8 +46,11 @@ class IsolateSink implements TracerSink {
     Map<int, Map<String, String>> metadata = const {},
   ]) {
     if (!_initialized) {
-      _initCompleter.future.then((_) {
-        _sendData(buffer, newStrings, metadata);
+      final bufferCopy = Int64List.fromList(buffer);
+      final stringsCopy = List<String>.from(newStrings);
+      final metadataCopy = Map<int, Map<String, String>>.from(metadata);
+      _pendingSends.add(() {
+        _sendData(bufferCopy, stringsCopy, metadataCopy);
       });
     } else {
       _sendData(buffer, newStrings, metadata);
