@@ -79,7 +79,7 @@ class PositionedElement extends Element {
   void rebuild() {
     final pos = widget as Positioned;
     if (childElement != null &&
-        childElement!.widget.runtimeType == pos.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, pos.child)) {
       childElement!.update(pos.child);
     } else {
       childElement?.unmount();

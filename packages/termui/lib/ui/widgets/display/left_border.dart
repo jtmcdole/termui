@@ -55,7 +55,7 @@ class LeftBorderElement extends Element {
   void rebuild() {
     final borderWidget = widget as LeftBorder;
     if (childElement != null &&
-        childElement!.widget.runtimeType == borderWidget.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, borderWidget.child)) {
       childElement!.update(borderWidget.child);
     } else {
       childElement?.unmount();

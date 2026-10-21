@@ -92,8 +92,7 @@ class LayoutBuilderElement extends Element {
     if (constraints != null) {
       final builderWidget = widget as LayoutBuilder;
       final childWidget = builderWidget.builder(this, constraints!);
-      if (_child != null &&
-          _child!.widget.runtimeType == childWidget.runtimeType) {
+      if (_child != null && Widget.canUpdate(_child!.widget, childWidget)) {
         _child!.update(childWidget);
       } else {
         _child?.unmount();
@@ -112,8 +111,7 @@ class LayoutBuilderElement extends Element {
     final childWidget = builderWidget.builder(this, constraints);
 
     // 2. Reconciliation Phase: Mount or update child element
-    if (_child != null &&
-        _child!.widget.runtimeType == childWidget.runtimeType) {
+    if (_child != null && Widget.canUpdate(_child!.widget, childWidget)) {
       _child!.update(childWidget);
     } else {
       _child?.unmount();

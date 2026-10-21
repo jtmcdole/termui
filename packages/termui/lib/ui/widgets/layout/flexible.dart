@@ -44,7 +44,7 @@ class FlexibleElement extends Element {
   void rebuild() {
     final flex = widget as Flexible;
     if (childElement != null &&
-        childElement!.widget.runtimeType == flex.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, flex.child)) {
       childElement!.update(flex.child);
     } else {
       childElement?.unmount();

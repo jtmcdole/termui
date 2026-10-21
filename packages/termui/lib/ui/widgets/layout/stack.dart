@@ -59,7 +59,7 @@ class StackElement extends Element {
     for (var i = 0; i < stack.children.length; i++) {
       final childWidget = stack.children[i];
       if (i < childElements.length &&
-          childElements[i].widget.runtimeType == childWidget.runtimeType) {
+          Widget.canUpdate(childElements[i].widget, childWidget)) {
         childElements[i].update(childWidget);
         newElements.add(childElements[i]);
       } else {

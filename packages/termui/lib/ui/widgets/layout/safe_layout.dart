@@ -77,7 +77,7 @@ class SafeLayoutElement extends Element {
         );
 
     if (fallbackElement != null &&
-        fallbackElement!.widget.runtimeType == fallbackWidget.runtimeType) {
+        Widget.canUpdate(fallbackElement!.widget, fallbackWidget)) {
       fallbackElement!.update(fallbackWidget);
     } else {
       fallbackElement?.unmount();
@@ -86,7 +86,7 @@ class SafeLayoutElement extends Element {
     }
 
     if (childElement != null &&
-        childElement!.widget.runtimeType == sl.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, sl.child)) {
       childElement!.update(sl.child);
     } else {
       childElement?.unmount();
