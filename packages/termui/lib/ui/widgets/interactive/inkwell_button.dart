@@ -114,6 +114,7 @@ class InkwellButtonState extends State<InkwellButton>
   double get rippleCenterY => _ripple.triggerPoint?.y.toDouble() ?? 0.0;
 
   bool _isInternalFocusNode = true;
+  Timer? _keyboardActivationTimer;
 
   @override
   void initState() {
@@ -131,6 +132,7 @@ class InkwellButtonState extends State<InkwellButton>
       focusNode.dispose();
       focusNode = widget.focusNode!;
       _isInternalFocusNode = false;
+      ownsFocusNode = false;
     }
   }
 
@@ -144,18 +146,19 @@ class InkwellButtonState extends State<InkwellButton>
       if (widget.focusNode != null) {
         focusNode = widget.focusNode!;
         _isInternalFocusNode = false;
+        ownsFocusNode = false;
       } else {
         focusNode = FocusNode(id: '${focusNodeIdPrefix}_${widget.hashCode}');
         _isInternalFocusNode = true;
+        ownsFocusNode = true;
       }
     }
   }
 
   @override
   void dispose() {
-    if (_isInternalFocusNode) {
-      focusNode.dispose();
-    }
+    _keyboardActivationTimer?.cancel();
+    _keyboardActivationTimer = null;
     super.dispose();
   }
 
@@ -421,17 +424,26 @@ class InkwellButtonState extends State<InkwellButton>
             _ripple,
             Point((widget.width ?? 10) ~/ 2, (widget.height ?? 3) ~/ 2),
           );
-          Timer.periodic(TuiAnimationConfig.vsyncInterval, (timer) {
-            if (!mounted) {
-              timer.cancel();
-              return;
-            }
-            if (_ripple.status == AnimationStatus.completed) {
-              reverseEffect(_ripple);
-              widget.onPressed();
-              timer.cancel();
-            }
-          });
+          _keyboardActivationTimer?.cancel();
+          _keyboardActivationTimer = Timer.periodic(
+            TuiAnimationConfig.vsyncInterval,
+            (timer) {
+              if (!mounted) {
+                timer.cancel();
+                return;
+              }
+              if (_ripple.status == AnimationStatus.completed) {
+                reverseEffect(_ripple);
+                widget.onPressed();
+                timer.cancel();
+                _keyboardActivationTimer = null;
+              } else if (!_ripple.isAnimating &&
+                  _ripple.status != AnimationStatus.forward) {
+                timer.cancel();
+                _keyboardActivationTimer = null;
+              }
+            },
+          );
           return true;
         }
         return false;

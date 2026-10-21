@@ -862,7 +862,9 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
   late FocusNode _focusNode;
 
   void _onControllerChanged() {
-    setState(() {});
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   void _updateListener() {
@@ -923,7 +925,9 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
       onFocusChange: (hasFocus) {
         widget.focused = hasFocus;
         widget.onFocusChange?.call(hasFocus);
-        setState(() {}); // Redraw cursor highlight
+        if (mounted) {
+          setState(() {}); // Redraw cursor highlight
+        }
       },
       onKeyEvent: (event) {
         return widget.handleKeyEvent(event);

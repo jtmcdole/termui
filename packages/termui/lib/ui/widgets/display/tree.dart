@@ -272,7 +272,9 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
       onFocusChange: (hasFocus) {
         if (_isFocused != hasFocus) {
           _isFocused = hasFocus;
-          setState(() {});
+          if (mounted) {
+            setState(() {});
+          }
         }
       },
       onKeyEvent: (event) {

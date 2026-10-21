@@ -168,7 +168,7 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
     for (var i = 0; i < listView.children.length; i++) {
       final childWidget = listView.children[i];
       if (i < childElements.length &&
-          childElements[i].widget.runtimeType == childWidget.runtimeType) {
+          Widget.canUpdate(childElements[i].widget, childWidget)) {
         childElements[i].update(childWidget);
         newElements.add(childElements[i]);
       } else {
@@ -332,7 +332,7 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
       if (selectedIndex >= scrollOffset + size.height.toInt()) {
         selectedIndex = scrollOffset + size.height.toInt() - 1;
       }
-      rebuild();
+      markNeedsBuild();
     } else if (event.button == MouseButton.wheelDown) {
       scrollOffset = min(
         max(0, listView.children.length - size.height.toInt()),
@@ -341,14 +341,14 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
       if (selectedIndex < scrollOffset) {
         selectedIndex = scrollOffset;
       }
-      rebuild();
+      markNeedsBuild();
     } else if (event.type == MouseEventType.press &&
         event.button == MouseButton.left) {
       final clickedIndex = scrollOffset + localY;
       if (clickedIndex >= 0 && clickedIndex < listView.children.length) {
         selectedIndex = clickedIndex;
         listView.onSelect?.call(clickedIndex);
-        rebuild();
+        markNeedsBuild();
       }
     } else if (event.type == MouseEventType.move ||
         event.type == MouseEventType.drag) {
@@ -362,13 +362,13 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
         if (hoveredIndex != hoveredIdx) {
           hoveredIndex = hoveredIdx;
           listView.onHover?.call(hoveredIdx);
-          rebuild();
+          markNeedsBuild();
         }
       } else {
         if (hoveredIndex != null) {
           hoveredIndex = null;
           listView.onHover?.call(null);
-          rebuild();
+          markNeedsBuild();
         }
       }
     }
@@ -526,7 +526,7 @@ class _RawListWidgetElement extends LeafElement
       if (selectedIndex >= scrollOffset + size.height.toInt()) {
         selectedIndex = scrollOffset + size.height.toInt() - 1;
       }
-      rebuild();
+      markNeedsBuild();
     } else if (event.button == MouseButton.wheelDown) {
       scrollOffset = min(
         max(0, rawWidget.lines.length - size.height.toInt()),
@@ -535,14 +535,14 @@ class _RawListWidgetElement extends LeafElement
       if (selectedIndex < scrollOffset) {
         selectedIndex = scrollOffset;
       }
-      rebuild();
+      markNeedsBuild();
     } else if (event.type == MouseEventType.press &&
         event.button == MouseButton.left) {
       final clickedIndex = scrollOffset + localY;
       if (clickedIndex >= 0 && clickedIndex < rawWidget.lines.length) {
         selectedIndex = clickedIndex;
         rawWidget.onSelect?.call(clickedIndex);
-        rebuild();
+        markNeedsBuild();
       }
     } else if (event.type == MouseEventType.move ||
         event.type == MouseEventType.drag) {
@@ -556,13 +556,13 @@ class _RawListWidgetElement extends LeafElement
         if (hoveredIndex != hoveredIdx) {
           hoveredIndex = hoveredIdx;
           rawWidget.onHover?.call(hoveredIdx);
-          rebuild();
+          markNeedsBuild();
         }
       } else {
         if (hoveredIndex != null) {
           hoveredIndex = null;
           rawWidget.onHover?.call(null);
-          rebuild();
+          markNeedsBuild();
         }
       }
     }

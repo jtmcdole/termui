@@ -118,11 +118,13 @@ class _StreamBuilderState<T> extends State<StreamBuilder<T>> {
     if (widget.stream != null) {
       _subscription = widget.stream!.listen(
         (data) {
+          if (!mounted) return;
           setState(() {
             _summary = AsyncSnapshot<T>.withData(ConnectionState.active, data);
           });
         },
         onError: (Object error) {
+          if (!mounted) return;
           setState(() {
             _summary = AsyncSnapshot<T>.withError(
               ConnectionState.active,
@@ -131,6 +133,7 @@ class _StreamBuilderState<T> extends State<StreamBuilder<T>> {
           });
         },
         onDone: () {
+          if (!mounted) return;
           setState(() {
             _summary = _summary.inState(ConnectionState.done);
           });

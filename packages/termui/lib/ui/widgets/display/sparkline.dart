@@ -172,16 +172,16 @@ class SparklineElement extends Element {
           final colors = sparkline.colorBuilder!(cellIndex, v0, v1, v2, v3);
 
           double cellT = 0.0;
-          if (size.height > 1 || size.width > 1) {
-            cellT = switch (sparkline.direction) {
-              ProgressDirection.bottomToTop =>
-                (size.height - 1 - y) / (size.height - 1),
-              ProgressDirection.topToBottom => y / (size.height - 1),
-              ProgressDirection.leftToRight => x / (size.width - 1),
-              ProgressDirection.rightToLeft =>
-                (size.width - 1 - x) / (size.width - 1),
-            };
-          }
+          cellT = switch (sparkline.direction) {
+            ProgressDirection.bottomToTop =>
+              size.height > 1 ? (size.height - 1 - y) / (size.height - 1) : 0.0,
+            ProgressDirection.topToBottom =>
+              size.height > 1 ? y / (size.height - 1) : 0.0,
+            ProgressDirection.leftToRight =>
+              size.width > 1 ? x / (size.width - 1) : 0.0,
+            ProgressDirection.rightToLeft =>
+              size.width > 1 ? (size.width - 1 - x) / (size.width - 1) : 0.0,
+          };
 
           if (colors.fg != null) {
             cellFg = _interpolate(colors.fg, cellT) ?? cellFg;
