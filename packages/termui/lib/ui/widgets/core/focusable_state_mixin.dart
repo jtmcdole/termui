@@ -6,6 +6,9 @@ mixin FocusableStateMixin<T extends StatefulWidget> on State<T> {
   /// The underlying focus node.
   late FocusNode focusNode;
 
+  /// Whether [focusNode] is owned and should be disposed by this mixin.
+  bool ownsFocusNode = true;
+
   late bool _wasFocused;
 
   /// Subclasses must override this to return the widget's focus property.
@@ -19,7 +22,7 @@ mixin FocusableStateMixin<T extends StatefulWidget> on State<T> {
     super.initState();
     _wasFocused = isWidgetFocused;
     focusNode = FocusNode(id: '${focusNodeIdPrefix}_${widget.hashCode}');
-    if (isWidgetFocused) {
+    if (isWidgetFocused && Zone.current[#isMeasuringIntrinsics] != true) {
       scheduleMicrotask(() {
         if (mounted) focusNode.requestFocus();
       });
@@ -36,6 +39,7 @@ mixin FocusableStateMixin<T extends StatefulWidget> on State<T> {
 
   /// Updates focus node request state if the widget focus changed.
   void updateFocusIfNeeded(bool wasFocused, bool isFocused) {
+    if (Zone.current[#isMeasuringIntrinsics] == true) return;
     if (wasFocused != isFocused) {
       if (isFocused) {
         focusNode.requestFocus();
@@ -47,7 +51,9 @@ mixin FocusableStateMixin<T extends StatefulWidget> on State<T> {
 
   @override
   void dispose() {
-    focusNode.dispose();
+    if (ownsFocusNode) {
+      focusNode.dispose();
+    }
     super.dispose();
   }
 }

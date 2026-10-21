@@ -41,6 +41,7 @@ class Focus extends StatefulWidget {
 /// The state for a [Focus] widget.
 class FocusState extends State<Focus> {
   late FocusNode _focusNode;
+  FocusNode? _attachedParent;
 
   /// The underlying [FocusNode] managed by this state.
   FocusNode get focusNode => _focusNode;
@@ -53,6 +54,10 @@ class FocusState extends State<Focus> {
   @override
   void initState() {
     super.initState();
+    if (Zone.current[#isMeasuringIntrinsics] == true) {
+      _focusNode = createFocusNode();
+      return;
+    }
     _focusNode = widget.focusNode ?? createFocusNode();
     _updateNodeProperties();
     if (widget.autofocus) {
@@ -66,45 +71,42 @@ class FocusState extends State<Focus> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (Zone.current[#isMeasuringIntrinsics] == true) return;
     final parentScope = Focus.of(context);
-    if (_focusNode.parent != parentScope) {
-      final p = _focusNode.parent;
-      if (parentScope != null) {
+    if (parentScope != null) {
+      if (_focusNode.parent != parentScope) {
         parentScope.addChild(_focusNode);
-      } else if (p != null) {
-        // Clean up parenting relationship via removeChild instead of directly
-        // mutating the parent's children list, which would bypass state propagation
-        // and leave the parent node in an inconsistent state if this child had focus.
-        p.removeChild(_focusNode);
-      } else if (_focusNode.hasFocus) {
-        _focusNode.unfocus();
       }
+      _attachedParent = parentScope;
+    } else if (_attachedParent != null) {
+      if (_focusNode.parent == _attachedParent) {
+        _attachedParent!.removeChild(_focusNode);
+      }
+      _attachedParent = null;
     }
   }
 
   @override
   void didUpdateWidget(Focus oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (Zone.current[#isMeasuringIntrinsics] == true) return;
     if (widget.focusNode != oldWidget.focusNode) {
       final hadPrimaryFocus = FocusManager.instance.primaryFocus == _focusNode;
       if (oldWidget.focusNode == null) {
         _focusNode.dispose();
-      } else {
-        final p = _focusNode.parent;
-        if (p != null) {
-          // Clean up parenting relationship via removeChild instead of directly
-          // mutating the parent's children list, which would bypass state propagation
-          // and leave the parent node in an inconsistent state if this child had focus.
-          p.removeChild(_focusNode);
-        } else if (_focusNode.hasFocus) {
-          _focusNode.unfocus();
-        }
+      } else if (_attachedParent != null &&
+          _focusNode.parent == _attachedParent) {
+        _attachedParent!.removeChild(_focusNode);
+      } else if (_focusNode.hasFocus) {
+        _focusNode.unfocus();
       }
+      _attachedParent = null;
       _focusNode = widget.focusNode ?? createFocusNode();
       _updateNodeProperties();
       final parentScope = Focus.of(context);
       if (parentScope != null) {
         parentScope.addChild(_focusNode);
+        _attachedParent = parentScope;
       }
       if (hadPrimaryFocus) {
         _focusNode.requestFocus();
@@ -115,24 +117,29 @@ class FocusState extends State<Focus> {
   }
 
   void _updateNodeProperties() {
-    _focusNode.onKeyEvent = widget.onKeyEvent;
-    _focusNode.onFocusChange = widget.onFocusChange;
+    if (widget.onKeyEvent != null || widget.focusNode == null) {
+      _focusNode.onKeyEvent = widget.onKeyEvent;
+    }
+    if (widget.onFocusChange != null || widget.focusNode == null) {
+      _focusNode.onFocusChange = widget.onFocusChange;
+    }
   }
 
   @override
   void dispose() {
-    final p = _focusNode.parent;
-    if (p != null) {
-      // Clean up parenting relationship via removeChild instead of directly
-      // mutating the parent's children list, which would bypass state propagation
-      // and leave the parent node in an inconsistent state if this child had focus.
-      p.removeChild(_focusNode);
-    } else if (_focusNode.hasFocus) {
-      _focusNode.unfocus();
+    if (Zone.current[#isMeasuringIntrinsics] == true) {
+      super.dispose();
+      return;
     }
     if (widget.focusNode == null) {
       _focusNode.dispose();
+    } else if (_attachedParent != null &&
+        _focusNode.parent == _attachedParent) {
+      _attachedParent!.removeChild(_focusNode);
+    } else if (_focusNode.hasFocus) {
+      _focusNode.unfocus();
     }
+    _attachedParent = null;
     super.dispose();
   }
 
