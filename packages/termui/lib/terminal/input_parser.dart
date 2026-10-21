@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:characters/characters.dart';
 import 'event.dart';
 
 /// A reactive input parser that converts byte streams from stdin into high-level
@@ -95,6 +96,42 @@ class InputParser {
               modifiers: const {Modifier.control},
             ),
           );
+        } else if (b >= 0x80) {
+          // Decode multi-byte UTF-8 sequence(s)
+          offset--; // step back to include leading byte b
+          int utf8End = offset;
+          bool incomplete = false;
+          while (utf8End < _buffer.length && _buffer[utf8End] >= 0x80) {
+            final lead = _buffer[utf8End];
+            final int seqLen;
+            if ((lead & 0xE0) == 0xC0) {
+              seqLen = 2;
+            } else if ((lead & 0xF0) == 0xE0) {
+              seqLen = 3;
+            } else if ((lead & 0xF8) == 0xF0) {
+              seqLen = 4;
+            } else {
+              seqLen = 1;
+            }
+            if (utf8End + seqLen > _buffer.length) {
+              incomplete = true;
+              break;
+            }
+            utf8End += seqLen;
+          }
+          if (utf8End > offset) {
+            final decoded = utf8.decode(
+              _buffer.sublist(offset, utf8End),
+              allowMalformed: true,
+            );
+            for (final grapheme in decoded.characters) {
+              events.add(KeyEvent(grapheme, KeyType.character));
+            }
+            offset = utf8End;
+          }
+          if (incomplete) {
+            break;
+          }
         } else {
           final char = String.fromCharCode(b);
           events.add(KeyEvent(char, KeyType.character));
@@ -109,6 +146,13 @@ class InputParser {
 
         final second = _buffer[offset + 1];
         if (second == 91) {
+          if (_buffer.length - offset == 2) {
+            offset += 2;
+            events.add(
+              const KeyEvent('[', KeyType.character, modifiers: {Modifier.alt}),
+            );
+            break;
+          }
           int termIdx = -1;
           for (var i = offset + 2; i < _buffer.length; i++) {
             final b = _buffer[i];
@@ -148,6 +192,13 @@ class InputParser {
             }
           }
         } else if (second == 79) {
+          if (_buffer.length - offset == 2) {
+            offset += 2;
+            events.add(
+              const KeyEvent('O', KeyType.character, modifiers: {Modifier.alt}),
+            );
+            break;
+          }
           if (_buffer.length - offset < 3) {
             break;
           }
@@ -307,6 +358,11 @@ class InputParser {
         return KeyEvent('home', KeyType.home, modifiers: mods);
       case 70:
         return KeyEvent('end', KeyType.end, modifiers: mods);
+      case 82: // 'R' - Cursor Position Report (\x1b[row;colR)
+        if (params.length >= 2) {
+          return CursorPositionReportEvent(params[1], params[0]);
+        }
+        break;
       case 117: // 'u' - Kitty / CSI u keyboard protocol
         if (params.isNotEmpty) {
           final keyNum = params[0];
