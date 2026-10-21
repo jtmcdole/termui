@@ -176,10 +176,7 @@ void main() {
           // Golden match for the save modal
           await expectLater(
             tester.backend.buffer,
-            matchesAnsiGolden(
-              'test/goldens/trace_viewer_save_modal.ansi',
-              environment: {'GENERATE_GOLDENS': 'true'},
-            ),
+            matchesAnsiGolden('test/goldens/trace_viewer_save_modal.ansi'),
           );
 
           // Focus should be in TextField, send enter
@@ -364,7 +361,6 @@ void main() {
               tester.backend.buffer,
               matchesAnsiGolden(
                 'test/goldens/trace_viewer_save_modal_after_crop.ansi',
-                environment: {'GENERATE_GOLDENS': 'true'},
               ),
             );
 

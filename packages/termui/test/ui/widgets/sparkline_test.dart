@@ -25,10 +25,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/sparkline_braille_bottomToTop.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/sparkline_braille_bottomToTop.ansi'),
       );
     });
 
@@ -59,7 +56,6 @@ void main() {
         buffer,
         matchesAnsiGolden(
           'test/goldens/sparkline_braille_bottomToTop_gradient.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
         ),
       );
     });

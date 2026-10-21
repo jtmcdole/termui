@@ -193,10 +193,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/dynamic_form_field1_focused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/dynamic_form_field1_focused.ansi'),
       );
 
       // Press Tab to move focus to Field 2
@@ -209,10 +206,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/dynamic_form_field2_focused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/dynamic_form_field2_focused.ansi'),
       );
     });
 

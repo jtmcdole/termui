@@ -104,13 +104,7 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(50, 10)))
         ..paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/stack_blend_single.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/stack_blend_single.ansi'));
     });
 
     test('blends foreground and background of two boxes', () {
@@ -153,13 +147,7 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(50, 10)))
         ..paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/stack_blend_double.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/stack_blend_double.ansi'));
     });
   });
 }

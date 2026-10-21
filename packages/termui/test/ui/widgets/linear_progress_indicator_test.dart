@@ -26,7 +26,6 @@ void main() {
         buffer,
         matchesAnsiGolden(
           'test/goldens/linear_progress_indicator_precise.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
         ),
       );
     });
@@ -46,7 +45,6 @@ void main() {
         buffer,
         matchesAnsiGolden(
           'test/goldens/linear_progress_indicator_directions.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
         ),
       );
     });
@@ -105,7 +103,6 @@ void main() {
         buffer,
         matchesAnsiGolden(
           'test/goldens/linear_progress_indicator_gradient.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
         ),
       );
     });

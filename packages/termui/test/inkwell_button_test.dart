@@ -39,10 +39,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/inkwell_button_normal.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/inkwell_button_normal.ansi'),
       );
     });
 
@@ -84,10 +81,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/inkwell_button_hover.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/inkwell_button_hover.ansi'),
       );
     });
 
@@ -242,10 +236,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/inkwell_button_custom_size.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/inkwell_button_custom_size.ansi'),
       );
     });
   });

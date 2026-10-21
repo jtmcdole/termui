@@ -89,13 +89,7 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(21, 5)))
         ..paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/split_pane.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/split_pane.ansi'));
     });
 
     test(

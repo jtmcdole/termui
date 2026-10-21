@@ -268,13 +268,7 @@ void main() {
       element.layout(BoxConstraints.tight(const Size(21, 5)));
       element.paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/slider_horizontal.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/slider_horizontal.ansi'));
     });
 
     test('renders vertical golden correctly', () {
@@ -291,13 +285,7 @@ void main() {
       element.layout(BoxConstraints.tight(const Size(5, 11)));
       element.paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/slider_vertical.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/slider_vertical.ansi'));
     });
     test('delegates events from widget correctly and handles lifecycle', () {
       final widget = Slider(value: 50, min: 0, max: 100);

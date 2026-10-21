@@ -380,10 +380,7 @@ void main() {
           // Assert the golden representation of the screen buffer, ensuring dimming barrier renders correctly
           expect(
             tester.backend.buffer,
-            matchesAnsiGolden(
-              'test/goldens/scene_manager_dialog_modal.ansi',
-              environment: {'GENERATE_GOLDENS': 'true'},
-            ),
+            matchesAnsiGolden('test/goldens/scene_manager_dialog_modal.ansi'),
           );
 
           // Dismiss dialog

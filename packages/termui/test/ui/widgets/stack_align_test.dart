@@ -183,13 +183,7 @@ void main() {
       element.layout(BoxConstraints.tight(Size(width, height)));
       element.paint(buffer, const Offset(1, 1));
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          goldenPath,
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden(goldenPath));
     }
 
     test('renders centered positioned widget with description', () {
