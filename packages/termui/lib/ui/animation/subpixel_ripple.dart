@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:clock/clock.dart';
@@ -32,6 +33,24 @@ class SubpixelRipple {
 /// For rendering in a declarative UI tree, use [SubpixelRippleWidget] with this manager.
 class SubpixelRippleManager {
   final List<SubpixelRipple> _ripples = [];
+  final List<void Function()> _listeners = [];
+
+  /// Registers a callback to be notified when ripples are added.
+  void addListener(void Function() listener) {
+    _listeners.add(listener);
+  }
+
+  /// Removes a previously registered listener.
+  void removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
+
+  /// Notifies all registered listeners.
+  void notifyListeners() {
+    for (final listener in List<void Function()>.of(_listeners)) {
+      listener();
+    }
+  }
 
   /// Exposes the list of active ripples.
   List<SubpixelRipple> get ripples => _ripples;
@@ -51,6 +70,7 @@ class SubpixelRippleManager {
         durationMs: durationMs,
       ),
     );
+    notifyListeners();
   }
 
   /// Prunes completed ripples.
@@ -130,8 +150,70 @@ class SubpixelRippleWidget extends Widget {
 
 /// The backing Element for [SubpixelRippleWidget] that handles layout and paint caching.
 class SubpixelRippleWidgetElement extends Element {
+  Timer? _ticker;
+  SubpixelRippleManager? _subscribedManager;
+
   /// Creates a [SubpixelRippleWidgetElement].
   SubpixelRippleWidgetElement(SubpixelRippleWidget super.widget);
+
+  void _onManagerChanged() {
+    if (!mounted) return;
+    _ensureTicker();
+    markNeedsBuild();
+  }
+
+  void _ensureTicker() {
+    final manager = (widget as SubpixelRippleWidget).manager;
+    if (manager.hasActiveRipples) {
+      _ticker ??= Timer.periodic(const Duration(milliseconds: 16), (_) {
+        if (!mounted) {
+          _stopTicker();
+          return;
+        }
+        manager.updateRipples();
+        markNeedsBuild();
+        if (!manager.hasActiveRipples) {
+          _stopTicker();
+        }
+      });
+    } else {
+      _stopTicker();
+    }
+  }
+
+  void _stopTicker() {
+    _ticker?.cancel();
+    _ticker = null;
+  }
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    _subscribedManager = (widget as SubpixelRippleWidget).manager;
+    _subscribedManager?.addListener(_onManagerChanged);
+    _ensureTicker();
+  }
+
+  @override
+  void update(Widget newWidget) {
+    final oldManager = _subscribedManager;
+    final newManager = (newWidget as SubpixelRippleWidget).manager;
+    super.update(newWidget);
+    if (oldManager != newManager) {
+      oldManager?.removeListener(_onManagerChanged);
+      _subscribedManager = newManager;
+      _subscribedManager?.addListener(_onManagerChanged);
+    }
+    _ensureTicker();
+  }
+
+  @override
+  void unmount() {
+    _stopTicker();
+    _subscribedManager?.removeListener(_onManagerChanged);
+    _subscribedManager = null;
+    super.unmount();
+  }
 
   @override
   Size performLayout(BoxConstraints constraints) {
