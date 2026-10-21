@@ -710,6 +710,7 @@ final class GlyphAtlas {
     final standardBaseline = testPainter.computeDistanceToActualBaseline(
       TextBaseline.alphabetic,
     );
+    testPainter.dispose();
 
     for (final pg in placedGlyphs) {
       final x = pg.col * colWidth;
@@ -743,6 +744,7 @@ final class GlyphAtlas {
         );
       }
 
+      pg.painter.dispose();
       canvas.restore();
       updatedRects[pg.char] = Rect.fromLTWH(
         (x + actualPadding) * devicePixelRatio,
@@ -757,8 +759,7 @@ final class GlyphAtlas {
       (atlasWidth * devicePixelRatio).ceil(),
       (atlasHeight * devicePixelRatio).ceil(),
     );
-
-    image.dispose();
+    picture.dispose();
 
     return GlyphAtlas(
       image: newImage,
@@ -829,30 +830,56 @@ abstract final class GlyphAtlasGenerator {
       textDirection: TextDirection.ltr,
     )..layout();
 
-    final cellWidth = testPainter.width.ceilToDouble();
-    final cellHeight = testPainter.height.ceilToDouble();
+    final cellWidthPhysical = (testPainter.width * devicePixelRatio)
+        .ceilToDouble();
+    final cellHeightPhysical = (testPainter.height * devicePixelRatio)
+        .ceilToDouble();
+
+    final cellWidth = cellWidthPhysical / devicePixelRatio;
+    final cellHeight = cellHeightPhysical / devicePixelRatio;
+    testPainter.dispose();
+
+    final paddingPhysical = (padding * devicePixelRatio).ceilToDouble();
+    final actualPadding = paddingPhysical / devicePixelRatio;
+
+    final colWidth = cellWidth + 2 * actualPadding;
+    final rowHeight = cellHeight + 2 * actualPadding;
 
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
+    canvas.scale(devicePixelRatio);
 
-    // Draw a tiny 1x1 transparent image for the empty atlas
+    // Draw the white rect, bleeding into the padding space
     canvas.drawRect(
-      const Rect.fromLTWH(0, 0, 1, 1),
-      Paint()..color = const ui.Color(0x00000000),
+      Rect.fromLTWH(0, 0, colWidth, rowHeight),
+      Paint()..color = Colors.white,
     );
+    final charRects = <String, Rect>{
+      '\uFFFF': Rect.fromLTWH(
+        actualPadding * devicePixelRatio,
+        actualPadding * devicePixelRatio,
+        cellWidth * devicePixelRatio,
+        cellHeight * devicePixelRatio,
+      ),
+    };
+
     final picture = recorder.endRecording();
-    final image = await picture.toImage(1, 1);
+    final image = await picture.toImage(
+      (colWidth * devicePixelRatio).ceil(),
+      (rowHeight * devicePixelRatio).ceil(),
+    );
+    picture.dispose();
 
     return GlyphAtlas(
       image: image,
-      charRects: {},
+      charRects: charRects,
       cellWidth: cellWidth,
       cellHeight: cellHeight,
       fontSize: fontSize,
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
       devicePixelRatio: devicePixelRatio,
-      nextGridIndex: 0,
+      nextGridIndex: 1,
     );
   }
 
@@ -889,6 +916,7 @@ abstract final class GlyphAtlasGenerator {
     final standardBaseline = testPainter.computeDistanceToActualBaseline(
       TextBaseline.alphabetic,
     );
+    testPainter.dispose();
 
     // Ensure padding is a physical integer so sourceRects land on exact pixels
     final paddingPhysical = (padding * devicePixelRatio).ceilToDouble();
@@ -993,6 +1021,7 @@ abstract final class GlyphAtlasGenerator {
         );
       }
 
+      pg.painter.dispose();
       canvas.restore();
       charRects[pg.char] = Rect.fromLTWH(
         (x + actualPadding) * devicePixelRatio,
@@ -1019,6 +1048,7 @@ abstract final class GlyphAtlasGenerator {
       (atlasWidth * devicePixelRatio).ceil(),
       (atlasHeight * devicePixelRatio).ceil(),
     );
+    picture.dispose();
 
     return GlyphAtlas(
       image: newImage,

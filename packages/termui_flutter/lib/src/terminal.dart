@@ -304,6 +304,9 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   Future<void> _recreateAtlas() async {
     final genId = ++_atlasGenerationId;
     Tracer.record(_traceRecreateAtlasId, Phase.begin, TraceCategory.paint);
+    for (final painter in _fallbackPainters.values) {
+      painter.dispose();
+    }
     _fallbackPainters.clear();
     _pendingGlyphs.clear();
     _processingGlyphs.clear();
@@ -316,11 +319,20 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       devicePixelRatio: _devicePixelRatio,
     );
 
-    if (!mounted) return;
-    if (genId == _atlasGenerationId) {
-      setState(() {
-        _atlas = newAtlas;
-      });
+    if (!mounted || genId != _atlasGenerationId) {
+      newAtlas.image.dispose();
+      Tracer.record(_traceRecreateAtlasId, Phase.end, TraceCategory.paint);
+      return;
+    }
+    final oldAtlas = _atlas;
+    setState(() {
+      _atlas = newAtlas;
+      if (_currentBuffer != null) {
+        _updateFallbackPainters(_currentBuffer!);
+      }
+    });
+    if (oldAtlas != null && !identical(oldAtlas.image, newAtlas.image)) {
+      oldAtlas.image.dispose();
     }
     Tracer.record(_traceRecreateAtlasId, Phase.end, TraceCategory.paint);
   }
@@ -359,6 +371,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.terminal != widget.terminal) {
       _fontSizeSubscription?.cancel();
+      _mouseCursorSubscription?.cancel();
       _fontSize = widget.terminal.fontSize;
       _fontSizeSubscription = widget.terminal.watchFontSize().listen((newSize) {
         if (mounted) {
@@ -371,6 +384,15 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
             _fontSize = newSize;
           });
           _recreateAtlas();
+        }
+      });
+      _mouseCursorSubscription = widget.terminal.mouseCursorChanges.listen((
+        cursorName,
+      ) {
+        if (mounted) {
+          setState(() {
+            _currentCursor = _mapOsc22ToSystemCursor(cursorName);
+          });
         }
       });
       _recreateAtlas();
@@ -389,6 +411,11 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
     );
     _fontSizeSubscription?.cancel();
     _mouseCursorSubscription?.cancel();
+    for (final painter in _fallbackPainters.values) {
+      painter.dispose();
+    }
+    _fallbackPainters.clear();
+    _atlas?.image.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -469,17 +496,25 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
       await Future.microtask(() {});
       if (!mounted || genId != _atlasGenerationId) return;
 
-      final newAtlas = await _atlas!.addGlyphs(batch);
-      if (mounted && genId == _atlasGenerationId) {
-        setState(() {
-          _atlas = newAtlas;
-        });
+      final oldAtlas = _atlas;
+      final newAtlas = await oldAtlas!.addGlyphs(batch);
+      if (!mounted || genId != _atlasGenerationId) {
+        newAtlas.image.dispose();
+        return;
+      }
+      setState(() {
+        _atlas = newAtlas;
+      });
+      if (!identical(oldAtlas.image, newAtlas.image)) {
+        oldAtlas.image.dispose();
       }
     } finally {
       _processingGlyphs.removeAll(batch);
-      _isUpdatingAtlas = false;
+      if (genId == _atlasGenerationId) {
+        _isUpdatingAtlas = false;
+      }
       Tracer.record(_traceTriggerAtlasUpdateId, Phase.end, TraceCategory.paint);
-      if (_pendingGlyphs.isNotEmpty && genId == _atlasGenerationId) {
+      if (mounted && _pendingGlyphs.isNotEmpty && genId == _atlasGenerationId) {
         _triggerAtlasUpdate();
       }
     }
@@ -742,6 +777,7 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
 
     final maxCol = (layoutSize.width / cellWidth).floor();
     final maxRow = (layoutSize.height / cellHeight).floor();
+    if (maxCol <= 0 || maxRow <= 0) return;
 
     final clampedCol = col.clamp(0, maxCol - 1);
     final clampedRow = row.clamp(0, maxRow - 1);
@@ -826,12 +862,25 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
         final cellWidth = _atlas!.cellWidth;
         final cellHeight = _atlas!.cellHeight;
 
-        final cols = (constraints.maxWidth / cellWidth).floor();
-        final rows = (constraints.maxHeight / cellHeight).floor();
+        final fallbackSize = MediaQuery.maybeSizeOf(context);
+        final availableWidth = constraints.hasBoundedWidth
+            ? constraints.maxWidth
+            : (fallbackSize?.width ??
+                  widget.terminal.backend.size.x * cellWidth);
+        final availableHeight = constraints.hasBoundedHeight
+            ? constraints.maxHeight
+            : (fallbackSize?.height ??
+                  widget.terminal.backend.size.y * cellHeight);
 
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          widget.terminal.updateSize(Point(cols, rows));
-        });
+        final cols = (availableWidth / cellWidth).floor();
+        final rows = (availableHeight / cellHeight).floor();
+
+        if (cols > 0 && rows > 0) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            widget.terminal.updateSize(Point(cols, rows));
+          });
+        }
 
         final layoutSize = Size(cols * cellWidth, rows * cellHeight);
 
