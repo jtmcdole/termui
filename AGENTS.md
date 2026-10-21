@@ -62,7 +62,7 @@ When writing or modifying code in this repository:
 
 ## 6. Testing & Golden Suites
 
-All test files are located in [packages/termui/test](/packages/termui/test).
+Core testing utilities (`TerminalTester`, `MockTerminalBackend`, `find`) are located in [packages/termui_test](/packages/termui_test), and each package maintains its own test suite under `packages/<package>/test`.
 
 ### Testing Practices
 * **Stateful Rebuilds**: Unlike running applications which schedule frame updates on the microtask queue, tests run synchronously. You must call `element.rebuild()`, followed by `element.layout(...)` and `element.paint(...)` to force widgets to redraw after focus or state changes.
@@ -92,10 +92,10 @@ Run the following commands inside `/app/packages/termui`:
 
 ## 7. Example Gallery & Links
 
-Check out the interactive examples in `packages/termui/example/`:
+Check out the interactive examples in `packages/termui/example/` and `packages/termui_shared_examples/example/`:
 * **[01_questionnaire_example.dart](/packages/termui/example/01_questionnaire_example.dart)**: A simple terminal form collecting user answers.
 * **[02_progress_bars.dart](/packages/termui/example/02_progress_bars.dart)**: Demonstrates linear and spinner progression indicators.
 * **[03_responsive_dashboard.dart](/packages/termui/example/03_responsive_dashboard.dart)**: Grid-aligned terminal dashboard that reflows on resize.
 * **[04_multi_pane_settings.dart](/packages/termui/example/04_multi_pane_settings.dart)**: Dual-pane settings panel displaying list-to-detail sibling traversal and text inputs.
 * **[braille_canvas.dart](/packages/termui/example/braille_canvas.dart)**: Demonstrates vector graphics mapping on a braille sub-pixel layout.
-* **[widget_book.dart](/packages/termui/example/widget_book.dart)**: Interactive widget component book with custom page routes.
+* **[widget_book.dart](/packages/termui_shared_examples/example/widget_book.dart)**: Interactive widget component book with custom page routes.
