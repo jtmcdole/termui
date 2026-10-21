@@ -43,6 +43,19 @@ class RingBuffer<T> extends ListBase<T> {
     return value;
   }
 
+  /// Removes and returns the newest element from the buffer without changing capacity.
+  @override
+  T removeLast() {
+    if (isEmpty) {
+      throw StateError('Cannot remove from an empty RingBuffer');
+    }
+    _tail = (_tail - 1 + _capacity) % _capacity;
+    final value = _buffer[_tail] as T;
+    _buffer[_tail] = null;
+    _isFull = false;
+    return value;
+  }
+
   @override
   int get length => _isFull
       ? _capacity
@@ -56,6 +69,11 @@ class RingBuffer<T> extends ListBase<T> {
     final currentLength = length;
     if (newLength == currentLength) {
       return;
+    }
+    if (newLength > currentLength && null is! T) {
+      throw UnsupportedError(
+        'Cannot increase length of non-nullable RingBuffer from $currentLength to $newLength',
+      );
     }
 
     if (newLength == 0) {
