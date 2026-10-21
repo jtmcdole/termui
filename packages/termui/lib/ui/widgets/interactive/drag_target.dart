@@ -120,7 +120,8 @@ class DragTargetElement<T> extends SingleChildElement {
     final data = session.data;
     if (data is T) {
       final castedData = data as T;
-      if (dragTarget.onAccept != null) {
+      final willAccept = dragTarget.onWillAccept?.call(castedData) ?? true;
+      if (willAccept && dragTarget.onAccept != null) {
         dragTarget.onAccept!(castedData);
       }
     }

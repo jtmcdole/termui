@@ -189,7 +189,9 @@ class SliderState extends State<Slider>
     return Focus(
       focusNode: _focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) {
+          setState(() {});
+        }
       },
       onKeyEvent: (event) {
         return handleKeyEvent(event);

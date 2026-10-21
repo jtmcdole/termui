@@ -107,6 +107,33 @@ class TabBarElement extends Element {
   /// Creates a [TabBarElement] for the given [widget].
   TabBarElement(TabBar super.widget);
 
+  void _onControllerChanged() {
+    markNeedsBuild();
+  }
+
+  @override
+  void mount(Element? parent) {
+    super.mount(parent);
+    (widget as TabBar).controller.addListener(_onControllerChanged);
+  }
+
+  @override
+  void update(Widget newWidget) {
+    final oldWidget = widget as TabBar;
+    final updated = newWidget as TabBar;
+    if (oldWidget.controller != updated.controller) {
+      oldWidget.controller.removeListener(_onControllerChanged);
+      updated.controller.addListener(_onControllerChanged);
+    }
+    super.update(newWidget);
+  }
+
+  @override
+  void unmount() {
+    (widget as TabBar).controller.removeListener(_onControllerChanged);
+    super.unmount();
+  }
+
   @override
   Size performLayout(BoxConstraints constraints) {
     final tabBar = widget as TabBar;
@@ -184,16 +211,36 @@ class TabPanelElement extends Element {
   /// Creates a [TabPanelElement] for the given [widget].
   TabPanelElement(TabPanel super.widget);
 
+  void _onControllerChanged() {
+    markNeedsBuild();
+  }
+
   @override
   void mount(Element? parent) {
     super.mount(parent);
+    (widget as TabPanel).controller.addListener(_onControllerChanged);
     rebuild();
   }
 
   @override
   void update(Widget newWidget) {
+    final oldPanel = widget as TabPanel;
+    final newPanel = newWidget as TabPanel;
+    oldPanel.controller.removeListener(oldPanel._handleTabChange);
+    oldPanel.controller.removeListener(_onControllerChanged);
+    newPanel.controller.addListener(_onControllerChanged);
     super.update(newWidget);
     rebuild();
+  }
+
+  @override
+  void unmount() {
+    final panel = widget as TabPanel;
+    panel.controller.removeListener(panel._handleTabChange);
+    panel.controller.removeListener(_onControllerChanged);
+    _activeChildElement?.unmount();
+    _activeChildElement = null;
+    super.unmount();
   }
 
   @override
@@ -204,7 +251,7 @@ class TabPanelElement extends Element {
 
     if (_activeChildElement != null &&
         _lastActiveIndex == activeIndex &&
-        _activeChildElement!.widget.runtimeType == activeWidget.runtimeType) {
+        Widget.canUpdate(_activeChildElement!.widget, activeWidget)) {
       _activeChildElement!.update(activeWidget);
     } else {
       _activeChildElement?.unmount();
