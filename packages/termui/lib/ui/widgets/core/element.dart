@@ -108,6 +108,7 @@ abstract class Element implements BuildContext {
     widget = newWidget;
     _rebuildTraceId = null;
     _paintTraceId = null;
+    _layoutTraceId = null;
   }
 
   /// Performs the actual rebuild and clears the dirty flag.
@@ -215,6 +216,10 @@ abstract class Element implements BuildContext {
   T? dependOnInheritedWidgetOfExactType<T extends InheritedWidget>() {
     var ancestor = parent;
     while (ancestor != null) {
+      if (ancestor is InheritedElement && ancestor.widget is T) {
+        ancestor._dependents.add(this);
+        return ancestor.widget as T;
+      }
       if (ancestor.widget is T) {
         return ancestor.widget as T;
       }
@@ -362,9 +367,9 @@ class StatefulElement extends Element {
   @override
   /// Removes this element and disposes of the state.
   void unmount() {
+    childElement?.unmount();
     state.dispose();
     state.internalContext = null;
-    childElement?.unmount();
     super.unmount();
   }
 
@@ -439,6 +444,8 @@ class InheritedElement extends Element {
   /// The element corresponding to the built child widget.
   Element? childElement;
 
+  final Set<Element> _dependents = {};
+
   /// Creates an element to manage an [InheritedWidget].
   InheritedElement(InheritedWidget super.widget);
 
@@ -467,12 +474,34 @@ class InheritedElement extends Element {
 
   @override
   void update(Widget newWidget) {
+    final oldWidget = widget as InheritedWidget;
     super.update(newWidget);
+    final updatedWidget = newWidget as InheritedWidget;
+    final shouldNotify = updatedWidget.updateShouldNotify(oldWidget);
+    final childWasIdentical =
+        childElement != null &&
+        identical(childElement!.widget, updatedWidget.child);
     rebuild();
+    if (shouldNotify) {
+      for (final dependent in _dependents.toList()) {
+        if (!dependent.mounted) {
+          _dependents.remove(dependent);
+          continue;
+        }
+        if (dependent == childElement && !childWasIdentical) {
+          continue;
+        }
+        if (dependent is StatefulElement) {
+          dependent.state.didChangeDependencies();
+        }
+        dependent.markNeedsBuild();
+      }
+    }
   }
 
   @override
   void unmount() {
+    _dependents.clear();
     childElement?.unmount();
     super.unmount();
   }
@@ -522,9 +551,17 @@ class ElementWidgetElement extends Element {
 
   @override
   void update(Widget newWidget) {
+    final oldWidget = widget as ElementWidget;
     super.update(newWidget);
     final w = widget as ElementWidget;
-    w.internalElement?.update(w.child);
+    final currentEl = oldWidget.internalElement;
+    if (currentEl != null && Widget.canUpdate(currentEl.widget, w.child)) {
+      w.internalElement = currentEl;
+      currentEl.update(w.child);
+    } else {
+      currentEl?.unmount();
+      w.internalElement = w.child.createElement()..mount(this);
+    }
   }
 
   @override
