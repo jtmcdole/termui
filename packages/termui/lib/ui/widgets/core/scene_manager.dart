@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:characters/characters.dart';
 import 'package:clock/clock.dart';
 import 'dart:collection';
 import 'dart:math';
@@ -56,6 +57,7 @@ class SceneManager implements Reassemblable {
   late final void Function() _handleLayerVisualUpdate = scheduleRender;
   final Map<SceneRenderer, Point<int>> _lastRequestedSizes = {};
   bool _isRendering = false;
+  bool _renderRequestedWhileRendering = false;
 
   final Compositor _compositor = Compositor();
   final List<_TouchFeedback> _activeTouches = [];
@@ -557,7 +559,15 @@ class SceneManager implements Reassemblable {
         handleKeyEvent(e);
       case final MouseEvent e:
         handleMouseEvent(e);
-      case PasteEvent():
+      case final PasteEvent e:
+        final r = focusedLayer?.renderer;
+        if (r is PromptRunner) {
+          r.handlePasteEvent(e);
+        } else if (r != null) {
+          for (final char in e.text.characters) {
+            r.handleKeyEvent(KeyEvent(char, KeyType.character));
+          }
+        }
       case FocusInEvent():
       case FocusOutEvent():
       case CursorPositionReportEvent():
@@ -778,6 +788,10 @@ class SceneManager implements Reassemblable {
       }
     } finally {
       _isRendering = false;
+      if (_renderRequestedWhileRendering) {
+        _renderRequestedWhileRendering = false;
+        scheduleRender();
+      }
     }
   }
 
@@ -814,7 +828,10 @@ class SceneManager implements Reassemblable {
 
   /// Schedules a render pass to recomposite layers, coalescing multiple requests.
   void scheduleRender() {
-    if (_isRendering) return;
+    if (_isRendering) {
+      _renderRequestedWhileRendering = true;
+      return;
+    }
     if (_isDisposed || _renderScheduled) return;
     _renderScheduled = true;
     scheduleMicrotask(() {
@@ -900,7 +917,6 @@ class SceneManager implements Reassemblable {
       widget: barrierWidget,
       alternateScreen: false,
       mode: ExecutionMode.managed,
-      onFramePainted: (_) => render(),
     );
 
     final dialogWidget = Builder(builder: builder);
@@ -912,7 +928,6 @@ class SceneManager implements Reassemblable {
       widget: dialogWidget,
       alternateScreen: false,
       mode: ExecutionMode.managed,
-      onFramePainted: (_) => render(),
     );
 
     final baseZIndex = 1000 + layers.length * 2;
@@ -945,7 +960,6 @@ class SceneManager implements Reassemblable {
     layers.add(barrierLayer);
     layers.add(dialogLayer);
     focusedLayer = dialogLayer;
-    render();
 
     barrierRunner.run();
     runner
@@ -973,6 +987,7 @@ class SceneManager implements Reassemblable {
           render();
         });
 
+    render();
     return completer.future;
   }
 
