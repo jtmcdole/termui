@@ -55,7 +55,7 @@ abstract class StatelessWidget extends Widget {
     // GlobalKey registry.
     return runZoned(() {
       final rootContext = StatelessElement(this)..mount(null);
-      final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
+      final h = rootContext.childElement?.getIntrinsicHeight(width) ?? 0;
       rootContext.unmount();
       return h;
     }, zoneValues: {#isMeasuringIntrinsics: true});
@@ -68,7 +68,7 @@ abstract class StatelessWidget extends Widget {
     // GlobalKey registry.
     return runZoned(() {
       final rootContext = StatelessElement(this)..mount(null);
-      final w = rootContext.childElement?.widget.getIntrinsicWidth(height) ?? 0;
+      final w = rootContext.childElement?.getIntrinsicWidth(height) ?? 0;
       rootContext.unmount();
       return w;
     }, zoneValues: {#isMeasuringIntrinsics: true});
@@ -93,7 +93,7 @@ abstract class StatefulWidget extends Widget {
     // GlobalKey registry.
     return runZoned(() {
       final rootContext = StatefulElement(this)..mount(null);
-      final h = rootContext.childElement?.widget.getIntrinsicHeight(width) ?? 0;
+      final h = rootContext.childElement?.getIntrinsicHeight(width) ?? 0;
       rootContext.unmount();
       return h;
     }, zoneValues: {#isMeasuringIntrinsics: true});
@@ -106,7 +106,7 @@ abstract class StatefulWidget extends Widget {
     // GlobalKey registry.
     return runZoned(() {
       final rootContext = StatefulElement(this)..mount(null);
-      final w = rootContext.childElement?.widget.getIntrinsicWidth(height) ?? 0;
+      final w = rootContext.childElement?.getIntrinsicWidth(height) ?? 0;
       rootContext.unmount();
       return w;
     }, zoneValues: {#isMeasuringIntrinsics: true});
