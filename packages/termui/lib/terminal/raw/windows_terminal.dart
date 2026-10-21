@@ -17,44 +17,61 @@ class WindowsTerminal implements Terminal {
 
   late final HANDLE inputHandle;
   late final HANDLE outputHandle;
+  int? _origInputMode;
+  int? _origOutputMode;
 
   @override
   void enableRawMode() {
-    final dwMode =
-        (~ENABLE_ECHO_INPUT) &
-        (~ENABLE_PROCESSED_INPUT) &
-        (~ENABLE_LINE_INPUT) &
-        (~ENABLE_WINDOW_INPUT);
-    SetConsoleMode(
-      inputHandle,
-      CONSOLE_MODE(dwMode | ENABLE_VIRTUAL_TERMINAL_INPUT),
-    );
+    final pInMode = calloc<Uint32>();
+    final pOutMode = calloc<Uint32>();
+    try {
+      if (GetConsoleMode(inputHandle, pInMode).value) {
+        _origInputMode ??= pInMode.value;
+        final dwInMode =
+            (pInMode.value &
+                ~(ENABLE_ECHO_INPUT |
+                    ENABLE_PROCESSED_INPUT |
+                    ENABLE_LINE_INPUT |
+                    ENABLE_WINDOW_INPUT)) |
+            ENABLE_VIRTUAL_TERMINAL_INPUT;
+        SetConsoleMode(inputHandle, CONSOLE_MODE(dwInMode));
+      }
+      if (GetConsoleMode(outputHandle, pOutMode).value) {
+        _origOutputMode ??= pOutMode.value;
+        final dwOutMode = pOutMode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(outputHandle, CONSOLE_MODE(dwOutMode));
+      }
+    } finally {
+      calloc.free(pInMode);
+      calloc.free(pOutMode);
+    }
   }
 
   @override
   void disableRawMode() {
-    final dwMode =
-        ENABLE_ECHO_INPUT |
-        ENABLE_EXTENDED_FLAGS |
-        ENABLE_INSERT_MODE |
-        ENABLE_LINE_INPUT |
-        ENABLE_MOUSE_INPUT |
-        ENABLE_PROCESSED_INPUT |
-        ENABLE_QUICK_EDIT_MODE |
-        ENABLE_VIRTUAL_TERMINAL_INPUT;
-    SetConsoleMode(inputHandle, CONSOLE_MODE(dwMode));
+    if (_origInputMode != null) {
+      SetConsoleMode(inputHandle, CONSOLE_MODE(_origInputMode!));
+      _origInputMode = null;
+    }
+    if (_origOutputMode != null) {
+      SetConsoleMode(outputHandle, CONSOLE_MODE(_origOutputMode!));
+      _origOutputMode = null;
+    }
   }
 
   @override
   Point<int> getScreenBufferSize() {
     final buff = calloc<CONSOLE_SCREEN_BUFFER_INFO>();
-    GetConsoleScreenBufferInfo(outputHandle, buff);
-
-    final size = Point(
-      buff.ref.srWindow.Right - buff.ref.srWindow.Left + 1,
-      buff.ref.srWindow.Bottom - buff.ref.srWindow.Top + 1,
-    );
-    free(buff);
-    return size;
+    try {
+      if (!GetConsoleScreenBufferInfo(outputHandle, buff).value) {
+        return const Point(-1, -1);
+      }
+      return Point(
+        buff.ref.srWindow.Right - buff.ref.srWindow.Left + 1,
+        buff.ref.srWindow.Bottom - buff.ref.srWindow.Top + 1,
+      );
+    } finally {
+      calloc.free(buff);
+    }
   }
 }
