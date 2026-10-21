@@ -80,8 +80,14 @@ final class TermuiTinpot {
 
     final buffer = targetBuffer ?? Buffer.blank(columns, rows);
 
-    final int paintRows = math.min(rows, buffer.height);
-    final int paintCols = math.min(columns, buffer.width);
+    final int paintRows = math.min(
+      math.min(rows, buffer.height),
+      scaled.height ~/ 8,
+    );
+    final int paintCols = math.min(
+      math.min(columns, buffer.width),
+      scaled.width ~/ 8,
+    );
 
     final int imgWidth = scaled.width;
     final Uint8List bytes = scaled.getBytes(order: img.ChannelOrder.rgba);
