@@ -11,7 +11,6 @@ final class QuantizeResult {
 final class CellQuantizer {
   final Int32List _pixelsDin99d = Int32List(64);
   final Int32List _deltaNorm = Int32List(64);
-  final Int32List _deltaInv = Int32List(64);
   final Int32List _pixelsFg = Int32List(64);
   final Int32List _pixelsBg = Int32List(64);
   final int workFactor;
@@ -129,7 +128,6 @@ final class CellQuantizer {
       _deltaNorm[i] = d1 - d2;
 
       baseErrorInv += d1;
-      _deltaInv[i] = d2 - d1;
     }
 
     _topDistances.fillRange(0, workFactor, 0x7FFFFFFF);
@@ -140,19 +138,19 @@ final class CellQuantizer {
       final cMaskHigh = candidate.bitmapHigh;
       final cMaskLow = candidate.bitmapLow;
 
-      int errorNorm = baseErrorNorm;
-      int errorInv = baseErrorInv;
+      int deltaSum = 0;
 
       for (int i = 0; i < 32; i++) {
         int bitHigh = (cMaskHigh >> (31 - i)) & 1;
-        errorNorm += _deltaNorm[i] * bitHigh;
-        errorInv += _deltaInv[i] * bitHigh;
+        deltaSum += _deltaNorm[i] * bitHigh;
       }
       for (int i = 0; i < 32; i++) {
         int bitLow = (cMaskLow >> (31 - i)) & 1;
-        errorNorm += _deltaNorm[32 + i] * bitLow;
-        errorInv += _deltaInv[32 + i] * bitLow;
+        deltaSum += _deltaNorm[32 + i] * bitLow;
       }
+
+      int errorNorm = baseErrorNorm + deltaSum;
+      int errorInv = baseErrorInv - deltaSum;
 
       int dist = errorNorm <= errorInv ? errorNorm : errorInv;
       bool inverted = errorNorm > errorInv;
