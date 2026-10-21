@@ -914,12 +914,13 @@ Future<void> runGlassCompositingShared(
   });
 
   try {
+    eventLoop:
     await for (final event in terminal.events) {
       if (event case term.KeyEvent()) {
         switch (event) {
           case term.KeyEvent(key: 'q' || 'Q' || '\x03') ||
               term.KeyEvent(logicalKey: term.TermKey.controlC):
-            break;
+            break eventLoop;
           case term.KeyEvent(key: 's' || 'S'):
             settingsVisible = !settingsVisible;
             if (settingsVisible) {

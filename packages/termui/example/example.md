@@ -10,8 +10,8 @@ You can run any of the examples directly using the Dart SDK:
 # Run the main interactive layout and state dashboard example
 dart run example/state.dart
 
-# Run the interactive widget catalog
-dart run example/widget_book.dart
+# Run the interactive widget catalog (from packages/termui_shared_examples)
+dart run ../termui_shared_examples/example/widget_book.dart
 
 # Run the overlapping window manager demo
 dart run example/window_manager_interactive.dart
@@ -37,7 +37,7 @@ The primary entrypoint example showcasing the new Flutter-aligned layout box, ge
 * **Inherited Widgets:** App-wide properties (styling and colors) propagated down the element tree via an inherited `AppTheme` context.
 * **Live Event Processing:** Resizing triggers terminal size watches, adjusting viewports, and keyboard inputs drive counter changes instantly.
 
-### 1. [Widget Book (example/widget_book.dart)](file:///app/example/widget_book.dart)
+### 1. [Widget Book (packages/termui_shared_examples/example/widget_book.dart)](file:///app/packages/termui_shared_examples/example/widget_book.dart)
 A comprehensive catalog showing off the entire interactive widget toolkit. It showcases:
 * **Interactive Inputs:** Text inputs, multi-line text areas, spinner numeric selectors, checkbox-style confirm fields, and selection dropdowns.
 * **Complex Containers:** Nested `SplitPane` layout containers (which support mouse dragging to resize), data tables with paginators, scrollbars, and modal overlays.

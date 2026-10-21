@@ -28,7 +28,7 @@ final class _SystemDiagnosticsElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = size.width;
     final h = size.height;
     if (w <= 0 || h <= 0) return;
@@ -106,9 +106,6 @@ final class RadarWidget extends Widget {
   /// Current animation frame of the radar sweep.
   int frame = 0;
 
-  /// Internal sub-pixel Braille canvas cache.
-  Canvas? canvas;
-
   /// Render mode.
   CanvasRenderMode renderMode;
 
@@ -139,47 +136,39 @@ final class _RadarElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = size.width;
     final h = size.height;
     if (w <= 0 || h <= 0) return;
     final radar = widget as RadarWidget;
 
-    if (radar.canvas == null ||
-        radar.canvas!.width != w ||
-        radar.canvas!.height != h) {
-      radar.canvas = Canvas(
-        w,
-        h,
-        renderMode: radar.renderMode,
-        style: radar.style,
-      );
-    } else {
-      radar.canvas!.clear();
-    }
-
-    radar.canvas!.renderMode = radar.renderMode;
+    final canvas = Canvas(
+      w,
+      h,
+      renderMode: radar.renderMode,
+      style: radar.style,
+    );
 
     final cx = w;
     final cy = h * 2;
     final r = (min(w, h * 2) - 3).clamp(8, 25);
 
     // Draw static radar face cross-hairs and concentric circles
-    radar.canvas!.drawCircle(
+    canvas.drawCircle(
       cx,
       cy,
       r,
       antiAliased: false,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
-    radar.canvas!.drawCircle(
+    canvas.drawCircle(
       cx,
       cy,
       (r * 0.66).round(),
       antiAliased: false,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
-    radar.canvas!.drawCircle(
+    canvas.drawCircle(
       cx,
       cy,
       (r * 0.33).round(),
@@ -188,14 +177,14 @@ final class _RadarElement extends Element {
     );
 
     // Draw static axes
-    radar.canvas!.drawLine(
+    canvas.drawLine(
       cx - r,
       cy,
       cx + r,
       cy,
       cellStyle: const Style(foreground: CharmColors.spinach),
     );
-    radar.canvas!.drawLine(
+    canvas.drawLine(
       cx,
       cy - r,
       cx,
@@ -207,7 +196,7 @@ final class _RadarElement extends Element {
     final sweepAngle = radar.frame * 0.05;
     final sx = (cx + r * cos(sweepAngle)).round();
     final sy = (cy + r * sin(sweepAngle)).round();
-    radar.canvas!.drawLine(
+    canvas.drawLine(
       cx,
       cy,
       sx,
@@ -222,7 +211,7 @@ final class _RadarElement extends Element {
       final ex = (cx + r * cos(angle)).round();
       final ey = (cy + r * sin(angle)).round();
       final greenFadeVal = (120 - (i * 7)).clamp(30, 255);
-      radar.canvas!.drawLine(
+      canvas.drawLine(
         cx,
         cy,
         ex,
@@ -241,7 +230,7 @@ final class _RadarElement extends Element {
           0,
           255,
         );
-        radar.canvas!.fillCircle(
+        canvas.fillCircle(
           bx,
           by,
           1,
@@ -265,7 +254,7 @@ final class _RadarElement extends Element {
     drawBlip(blipDistance2.round(), blipAngle2);
     drawBlip(blipDistance3.round(), blipAngle3);
 
-    final canvasEl = radar.canvas!.createElement()..mount(null);
+    final canvasEl = canvas.createElement()..mount(null);
     canvasEl.layout(BoxConstraints.tight(Size(w, h)));
     canvasEl.paint(buffer, offset);
     canvasEl.unmount();
@@ -282,9 +271,6 @@ final class SpinningCubeWidget extends Widget {
 
   /// Rotation angle around Z axis.
   double rotZ = 0.0;
-
-  /// Internal canvas cache.
-  Canvas? canvas;
 
   /// Widget style.
   final Style style;
@@ -312,19 +298,13 @@ final class _SpinningCubeElement extends Element {
   }
 
   @override
-  void paint(Buffer buffer, Offset offset) {
+  void performPaint(Buffer buffer, Offset offset) {
     final w = size.width;
     final h = size.height;
     if (w <= 0 || h <= 0) return;
     final cube = widget as SpinningCubeWidget;
 
-    if (cube.canvas == null ||
-        cube.canvas!.width != w ||
-        cube.canvas!.height != h) {
-      cube.canvas = Canvas(w, h, renderMode: .quadrants, style: cube.style);
-    } else {
-      cube.canvas!.clear();
-    }
+    final canvas = Canvas(w, h, renderMode: .quadrants, style: cube.style);
 
     // 8 vertices of a 3D cube
     const vertices = [
@@ -375,10 +355,10 @@ final class _SpinningCubeElement extends Element {
     for (final [p1Idx, p2Idx] in edges) {
       final p1 = projected[p1Idx];
       final p2 = projected[p2Idx];
-      cube.canvas!.drawLine(p1.x, p1.y, p2.x, p2.y, cellStyle: edgeStyle);
+      canvas.drawLine(p1.x, p1.y, p2.x, p2.y, cellStyle: edgeStyle);
     }
 
-    final canvasEl = cube.canvas!.createElement()..mount(null);
+    final canvasEl = canvas.createElement()..mount(null);
     canvasEl.layout(BoxConstraints.tight(Size(w, h)));
     canvasEl.paint(buffer, offset);
     canvasEl.unmount();
