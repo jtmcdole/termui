@@ -42,6 +42,15 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     }
   }
 
+  static void _closeProcessOnce(Pointer<IntPtr> pHProcess) {
+    if (pHProcess.address == 0) return;
+    final handle = pHProcess.value;
+    if (handle != 0) {
+      pHProcess.value = 0;
+      win32.CloseHandle(win32.HANDLE(Pointer.fromAddress(handle)));
+    }
+  }
+
   factory PtyCoreWindows.start(
     String executable,
     List<String> arguments, {
@@ -402,12 +411,14 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 
     final pHPty = calloc<IntPtr>()..value = _hPty ?? 0;
     final pOutputReadSide = calloc<IntPtr>()..value = _outputReadSide.address;
+    final pHProcess = calloc<IntPtr>()..value = _hProcess.address;
     _pHPty = pHPty;
     _pOutputReadSide = pOutputReadSide;
+    _pHProcess = pHProcess;
 
     _worker = PtyCoreWindowsWorker(
       pOutputReadSide: pOutputReadSide,
-      hProcess: _hProcess,
+      pHProcess: pHProcess,
       pHPty: pHPty,
       buffer: readBuffer,
       pReadlen: pReadlen,
@@ -415,10 +426,11 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       failed: false,
     );
 
-    _finalizer.attach(this, _writeBuffer.cast(), detach: this);
-    _finalizer.attach(this, _pWritten.cast(), detach: this);
+    _finalizer.attach(this, _writeBuffer.cast(), detach: _writeDetachToken);
+    _finalizer.attach(this, _pWritten.cast(), detach: _writeDetachToken);
     _finalizer.attach(this, _pHPty.cast(), detach: this);
     _finalizer.attach(this, _pOutputReadSide.cast(), detach: this);
+    _finalizer.attach(this, _pHProcess.cast(), detach: this);
 
     if (_inputWriteSide.address != 0) {
       _closeHandleFinalizer.attach(
@@ -455,9 +467,10 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     _pWritten = nullptr;
     _pHPty = nullptr;
     _pOutputReadSide = nullptr;
+    _pHProcess = nullptr;
     _worker = PtyCoreWindowsWorker(
       pOutputReadSide: null,
-      hProcess: win32.HANDLE(nullptr),
+      pHProcess: null,
       pHPty: null,
       buffer: nullptr,
       pReadlen: nullptr,
@@ -466,20 +479,22 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     );
   }
 
-  final win32.HANDLE _inputWriteSide;
+  win32.HANDLE _inputWriteSide;
   final win32.HANDLE _outputReadSide;
-  final win32.HANDLE _inputReadSide;
-  final win32.HANDLE _outputWriteSide;
+  win32.HANDLE _inputReadSide;
+  win32.HANDLE _outputWriteSide;
   final win32.HPCON? _hPty;
-  final win32.HANDLE _hProcess;
+  win32.HANDLE _hProcess;
   final bool _failed;
+  final Object _writeDetachToken = Object();
 
   late final Pointer<IntPtr> _pHPty;
   late final Pointer<IntPtr> _pOutputReadSide;
+  late final Pointer<IntPtr> _pHProcess;
 
   static const _bufferSize = 4096;
-  late final Pointer<Uint8> _writeBuffer;
-  late final Pointer<Uint32> _pWritten;
+  late Pointer<Uint8> _writeBuffer;
+  late Pointer<Uint32> _pWritten;
 
   late final PtyCoreWindowsWorker _worker;
 
@@ -502,9 +517,12 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   @override
   int? exitCodeNonBlocking() {
     if (_failed) return 1;
+    final hProcAddress = _pHProcess.address != 0 ? _pHProcess.value : 0;
+    if (hProcAddress == 0) return null;
+    final hProc = win32.HANDLE(Pointer.fromAddress(hProcAddress));
     return using((arena) {
       final exitCodePtr = arena<Uint32>();
-      final ret = win32.GetExitCodeProcess(_hProcess, exitCodePtr);
+      final ret = win32.GetExitCodeProcess(hProc, exitCodePtr);
 
       final exitCode = exitCodePtr.value;
 
@@ -513,7 +531,8 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
         return null;
       }
 
-      if (_hProcess.address != 0) win32.CloseHandle(_hProcess);
+      _closeProcessOnce(_pHProcess);
+      _hProcess = win32.HANDLE(nullptr);
       return exitCode;
     });
   }
@@ -528,22 +547,45 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     if (_failed || _killed) return true;
     _killed = true;
 
-    _finalizer.detach(this);
+    if (_writeBuffer != nullptr) {
+      calloc.free(_writeBuffer);
+      _writeBuffer = nullptr;
+    }
+    if (_pWritten != nullptr) {
+      calloc.free(_pWritten);
+      _pWritten = nullptr;
+    }
+    _finalizer.detach(_writeDetachToken);
     _closeHandleFinalizer.detach(this);
 
-    final ret = win32.TerminateProcess(_hProcess, 0);
+    final hProcAddress = _pHProcess.address != 0 ? _pHProcess.value : 0;
+    final ret =
+        hProcAddress == 0 ||
+        win32.TerminateProcess(
+          win32.HANDLE(Pointer.fromAddress(hProcAddress)),
+          0,
+        ).value;
     _closePseudoConsoleOnce(_pHPty);
 
-    if (_inputReadSide.address != 0) win32.CloseHandle(_inputReadSide);
-    if (_outputWriteSide.address != 0) win32.CloseHandle(_outputWriteSide);
-    if (_inputWriteSide.address != 0) win32.CloseHandle(_inputWriteSide);
+    if (_inputReadSide.address != 0) {
+      win32.CloseHandle(_inputReadSide);
+      _inputReadSide = win32.HANDLE(nullptr);
+    }
+    if (_outputWriteSide.address != 0) {
+      win32.CloseHandle(_outputWriteSide);
+      _outputWriteSide = win32.HANDLE(nullptr);
+    }
+    if (_inputWriteSide.address != 0) {
+      win32.CloseHandle(_inputWriteSide);
+      _inputWriteSide = win32.HANDLE(nullptr);
+    }
     _closeReadSideOnce(_pOutputReadSide);
-    return ret.value;
+    return ret;
   }
 
   @override
   void resize(int width, int height) {
-    if (_failed) return;
+    if (_failed || _killed) return;
     if (_hPty == null) return;
     using((arena) {
       final size = arena<win32.COORD>();
@@ -560,7 +602,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 
   @override
   void write(List<int> data) {
-    if (_failed) return;
+    if (_failed || _killed || _writeBuffer == nullptr) return;
     var offset = 0;
     while (offset < data.length) {
       final chunkLen = (data.length - offset > _bufferSize)
@@ -582,7 +624,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
 }
 
 final class PtyCoreWindowsWorker implements PtyCoreWorker {
-  final win32.HANDLE hProcess;
+  final Pointer<IntPtr>? pHProcess;
   final Pointer<IntPtr>? pOutputReadSide;
   final Pointer<IntPtr>? pHPty;
   final Pointer<Uint8> buffer;
@@ -591,7 +633,7 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
   final bool failed;
 
   PtyCoreWindowsWorker({
-    required this.hProcess,
+    required this.pHProcess,
     required this.pOutputReadSide,
     required this.pHPty,
     required this.buffer,
@@ -629,13 +671,19 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
   @override
   int exitCodeBlocking() {
     if (failed) return 1;
+    final pProc = pHProcess;
+    if (pProc == null || pProc.address == 0) return 1;
+    final handleAddress = pProc.value;
+    if (handleAddress == 0) return 1;
+    final hProc = win32.HANDLE(Pointer.fromAddress(handleAddress));
+
     const infinite = 0xFFFFFFFF;
-    win32.WaitForSingleObject(hProcess, infinite);
+    win32.WaitForSingleObject(hProc, infinite);
 
     final exitCode = using((arena) {
       final exitCodePtr = arena<Uint32>();
-      win32.GetExitCodeProcess(hProcess, exitCodePtr);
-      if (hProcess.address != 0) win32.CloseHandle(hProcess);
+      win32.GetExitCodeProcess(hProc, exitCodePtr);
+      PtyCoreWindows._closeProcessOnce(pProc);
       return exitCodePtr.value;
     });
 
@@ -663,6 +711,11 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
     final pPty = pHPty;
     if (pPty != null && pPty.address != 0) {
       PtyCoreWindows._closePseudoConsoleOnce(pPty);
+    }
+
+    final pProc = pHProcess;
+    if (pProc != null && pProc.address != 0) {
+      PtyCoreWindows._closeProcessOnce(pProc);
     }
   }
 }
