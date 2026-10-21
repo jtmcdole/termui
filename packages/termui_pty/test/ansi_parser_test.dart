@@ -1,6 +1,32 @@
 import 'package:termui/termui.dart';
+import 'package:termui_pty/src/ansi_parser.dart';
 import 'package:termui_pty/src/virtual_terminal.dart';
 import 'package:test/test.dart';
+
+class _TestTerminalHandler implements TerminalHandler {
+  String? lastCsiCommand;
+  List<int>? lastCsiParams;
+  String? lastCsiIntermediate;
+
+  @override
+  void csi(String command, List<int> params, {String? intermediate}) {
+    lastCsiCommand = command;
+    lastCsiParams = params;
+    lastCsiIntermediate = intermediate;
+  }
+
+  @override
+  void esc(String command) {}
+
+  @override
+  void execute(int charCode) {}
+
+  @override
+  void osc(int command, String payload) {}
+
+  @override
+  void printText(String text) {}
+}
 
 void main() {
   group('VirtualTerminal SGR', () {
@@ -131,5 +157,20 @@ void main() {
       expect(terminal.buffer.getCharacter(4, 4), ' ');
       expect(terminal.buffer.getCharacter(1, 2), 'X');
     });
+  });
+
+  group('AnsiParser CSI Intermediates', () {
+    test(
+      'Retains CSI parameters before intermediate bytes (e.g. \\x1b[2 q)',
+      () {
+        final handler = _TestTerminalHandler();
+        final parser = AnsiParser(handler);
+
+        parser.parse('\x1b[2 q');
+        expect(handler.lastCsiCommand, equals('q'));
+        expect(handler.lastCsiParams, equals([2]));
+        expect(handler.lastCsiIntermediate, equals(' '));
+      },
+    );
   });
 }

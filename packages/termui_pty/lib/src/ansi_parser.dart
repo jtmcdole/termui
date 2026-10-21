@@ -138,6 +138,11 @@ final class AnsiParser {
             _intermediates.add(c);
             _state = _ParserState.csiParam;
           } else if (c >= 0x20 && c <= 0x2F) {
+            if (_hasParam) {
+              _params.add(_currentParam);
+              _currentParam = 0;
+              _hasParam = false;
+            }
             _intermediates.add(c);
             _state = _ParserState.csiIntermediate;
           } else if (c >= 0x40 && c <= 0x7E) {
@@ -156,6 +161,11 @@ final class AnsiParser {
             _currentParam = 0;
             _hasParam = false;
           } else if (c >= 0x20 && c <= 0x2F) {
+            if (_hasParam) {
+              _params.add(_currentParam);
+              _currentParam = 0;
+              _hasParam = false;
+            }
             _intermediates.add(c);
             _state = _ParserState.csiIntermediate;
           } else if (c >= 0x40 && c <= 0x7E) {

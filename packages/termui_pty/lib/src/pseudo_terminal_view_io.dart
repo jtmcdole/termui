@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:termui/termui.dart';
 import 'package:pty2/pty2.dart';
 import 'virtual_terminal.dart';
@@ -55,7 +56,7 @@ class _PseudoTerminalViewState extends State<PseudoTerminalView> {
       defaultForeground: widget.defaultForeground,
     );
     _outSubscription = widget.pty.out.listen((data) {
-      _terminal.write(data.codeUnits);
+      _terminal.write(utf8.encode(data));
     });
   }
 
