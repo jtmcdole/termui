@@ -574,13 +574,6 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
 
   /// Recursively walks the element tree to find the focused element and route the key event.
   bool _routeKeyEvent(Element element, term.KeyEvent event) {
-    final primaryFocus = FocusManager.instance.primaryFocus;
-    if (primaryFocus != null) {
-      if (primaryFocus.bubbleKeyEvent(event)) {
-        return true;
-      }
-    }
-
     final elWidget = element.widget;
     bool isFocused = false;
     if (elWidget is Focusable) {
@@ -740,7 +733,12 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
 
       // Step 2: Widget Event Routing
       if (!isDone) {
-        isDone = _routeKeyEvent(rootElement, event);
+        final primaryFocus = FocusManager.instance.primaryFocus;
+        if (primaryFocus != null && primaryFocus.bubbleKeyEvent(event)) {
+          isDone = true;
+        } else {
+          isDone = _routeKeyEvent(rootElement, event);
+        }
       }
 
       // Step 3: Standard & System Exit Evaluation
