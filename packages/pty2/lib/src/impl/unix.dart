@@ -28,8 +28,22 @@ external int _nativeKill(int pid, int sig);
 @Native<Int32 Function()>(symbol: 'fork', isLeaf: true)
 external int _nativeFork();
 
-@Native<Int32 Function()>(symbol: 'setsid', isLeaf: true)
-external int _nativeSetsid();
+@Native<
+  Pointer<Void> Function(
+    Pointer<Void>,
+    Pointer<Void>,
+    IntPtr,
+    IntPtr,
+    Pointer<Void>,
+  )
+>(symbol: 'bsearch', isLeaf: true)
+external Pointer<Void> _nativeBsearch(
+  Pointer<Void> key,
+  Pointer<Void> base,
+  int nmemb,
+  int size,
+  Pointer<Void> compar,
+);
 
 @Native<Int32 Function(Int32, Uint64, VarArgs<(Pointer<Void>,)>)>(
   symbol: 'ioctl',
@@ -46,6 +60,10 @@ external int _nativeChdir(Pointer<Utf8> path);
 @Native<Int32 Function(Int32)>(symbol: 'close', isLeaf: true)
 external int _nativeClose(int fd);
 
+final Pointer<Void> _setsidPtr = DynamicLibrary.process()
+    .lookup<NativeFunction<Int32 Function()>>('setsid')
+    .cast();
+
 Map<String, String> _buildUnixEnvironment(
   Map<String, String>? customEnvironment,
 ) {
@@ -53,7 +71,7 @@ Map<String, String> _buildUnixEnvironment(
     'LOGNAME',
     'USER',
     'DISPLAY',
-    'LC_TYPE',
+    'LC_CTYPE',
     'HOME',
     'PATH',
   };
@@ -146,23 +164,26 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
       final isMacOS = Platform.isMacOS;
       final nullPtr = nullptr;
       final hasWorkDir = nativeWorkDir != nullptr;
+      final setsidPtr = _setsidPtr;
+      final dummyPtr = name.cast<Void>();
 
-      // Eagerly resolve @Native functions BEFORE fork!
+      // Pre-warm FFI trampolines with no-op invalid descriptors/pointers
+      // before fork so the child never enters the VM runtime on safepoints.
+      _nativeBsearch(nullPtr, nullPtr, 0, 1, setsidPtr);
       _nativeExecve(nullPtr.cast(), nullPtr.cast(), nullPtr.cast());
       _nativeGetpid();
-      _nativeKill(-1, 0);
-      _nativeSetsid();
+      _nativeKill(0, -1);
       _nativeIoctl(-1, 0, nullPtr);
       _nativeDup2(-1, -1);
       _nativeClose(-1);
-      _nativeChdir(nativeExecutable);
+      _nativeChdir(nullPtr.cast());
 
       final pid = _nativeFork();
 
       if (pid == 0) {
         // Child process - strict async-signal-safe POSIX calls only
         // NO LOOPS ALLOWED (backward branches trigger safepoints and deadlock)
-        _nativeSetsid();
+        _nativeBsearch(dummyPtr, dummyPtr, 1, 1, setsidPtr);
 
         final tiocsctty = isMacOS ? 0x20007461 : 0x540E;
         _nativeIoctl(pts, tiocsctty, nullPtr);
@@ -207,9 +228,6 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
     _worker = PtyCoreUnixWorker(ptm: _ptm, pid: _pid);
 
     _finalizer.attach(this, _writeBuffer.cast(), detach: this);
-    if (_ptm >= 0) {
-      _closeFinalizer.attach(this, Pointer.fromAddress(_ptm), detach: this);
-    }
   }
 
   final int _pid;
@@ -218,19 +236,12 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
   late final Pointer<Uint8> _writeBuffer;
   static final _finalizer = NativeFinalizer(calloc.nativeFree);
-  static final _libc = DynamicLibrary.process();
-  static final _closeFinalizer = NativeFinalizer(
-    _libc.lookup<NativeFunction<Void Function(Pointer<Void>)>>('close'),
-  );
 
   late final PtyCoreUnixWorker _worker;
 
   void _closePtm() {
     if (_ptm >= 0) {
-      final fd = _ptm;
       _ptm = -1;
-      _closeFinalizer.detach(this);
-      unix.close(fd);
     }
   }
 
@@ -339,7 +350,38 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
           dest[i] = data[offset + i];
         }
       }
-      unix.write(_ptm, _writeBuffer.cast(), chunkLen);
+      var chunkOffset = 0;
+      while (chunkOffset < chunkLen) {
+        if (_ptm < 0) return;
+        final written = unix.write(
+          _ptm,
+          (_writeBuffer + chunkOffset).cast(),
+          chunkLen - chunkOffset,
+        );
+        if (written > 0) {
+          chunkOffset += written;
+        } else if (written < 0) {
+          final err = unix.errno?.value ?? 0;
+          if (err == consts.EINTR) {
+            continue;
+          }
+          if (err == consts.EAGAIN) {
+            final pfd = calloc<pollfd>();
+            try {
+              pfd.ref.fd = _ptm;
+              pfd.ref.events = consts.POLLOUT;
+              pfd.ref.revents = 0;
+              unix.poll(pfd, 1, 100);
+            } finally {
+              calloc.free(pfd);
+            }
+            continue;
+          }
+          return;
+        } else {
+          return;
+        }
+      }
       offset += chunkLen;
     }
   }
@@ -350,14 +392,22 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
   final int pid;
   static const _bufferSize = 81920;
 
+  bool _ptmClosed = false;
   Pointer<Int8>? _buffer;
   Pointer<pollfd>? _pPollFd;
 
   PtyCoreUnixWorker({required this.ptm, required this.pid});
 
+  void _closePtm() {
+    if (!_ptmClosed && ptm >= 0) {
+      _ptmClosed = true;
+      unix.close(ptm);
+    }
+  }
+
   @override
   Uint8List? read() {
-    if (ptm < 0) return null;
+    if (_ptmClosed || ptm < 0) return null;
     _buffer ??= calloc<Int8>(_bufferSize + 1);
     _pPollFd ??= calloc<pollfd>();
     final pfd = _pPollFd!;
@@ -420,6 +470,7 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
 
   @override
   void free() {
+    _closePtm();
     if (_buffer != null && _buffer != nullptr) {
       calloc.free(_buffer!);
       _buffer = null;
