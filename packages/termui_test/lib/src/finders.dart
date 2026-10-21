@@ -59,7 +59,7 @@ final class _ByTextFinder extends Finder {
     if (data case final String d) {
       return switch (pattern) {
         final String p when d.contains('\n') =>
-          d.split('\n').any((line) => line == p),
+          d == p || d.split('\n').any((line) => line == p),
         final String p => d == p,
         final RegExp r => r.hasMatch(d),
         _ => false,
