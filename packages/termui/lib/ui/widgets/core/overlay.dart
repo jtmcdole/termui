@@ -275,6 +275,7 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
 
   /// Opens the dropdown menu.
   void openDropdown() {
+    if (widget.items.isEmpty) return;
     final overlay = Overlay.of(context);
     if (overlay == null) return;
 
@@ -297,6 +298,7 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
                   child: widget.items[i].child,
                   selected: i == selectedIndex,
                   style: widget.dropdownStyle,
+                  onTap: () => selectItem(i),
                 ),
               ),
           ]),
@@ -335,6 +337,7 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
   /// Handles incoming keyboard events to navigate and interact with the menu.
   @override
   bool handleKeyEvent(term.KeyEvent event) {
+    if (widget.items.isEmpty) return false;
     if (!isOpen) {
       if (event.baseKey == term.TermKey.space ||
           event.baseKey == term.TermKey.enter ||
@@ -375,12 +378,14 @@ class DropdownButtonState<T> extends State<DropdownButton<T>>
       updateSelectedIndex();
     }
 
-    final currentItem = widget.items.firstWhere(
-      (item) => item.value == widget.value,
-      orElse: () => widget.items.first,
-    );
+    final DropdownMenuItem<T>? currentItem = widget.items.isEmpty
+        ? null
+        : widget.items.firstWhere(
+            (item) => item.value == widget.value,
+            orElse: () => widget.items.first,
+          );
 
-    final displayWidget = widget.value != null
+    final displayWidget = (widget.value != null && currentItem != null)
         ? currentItem.child
         : (widget.hint ?? const Text('Select...'));
 
@@ -476,8 +481,7 @@ class _DropdownButtonRenderWidgetElement extends Element {
   void rebuild() {
     final dButton = widget as _DropdownButtonRenderWidget;
     if (displayWidgetElement != null &&
-        displayWidgetElement!.widget.runtimeType ==
-            dButton.displayWidget.runtimeType) {
+        Widget.canUpdate(displayWidgetElement!.widget, dButton.displayWidget)) {
       displayWidgetElement!.update(dButton.displayWidget);
     } else {
       displayWidgetElement?.unmount();
@@ -560,19 +564,29 @@ class _DropdownButtonRenderWidgetElement extends Element {
   }
 }
 
-class _DropdownMenuItemWidget extends Widget {
+class _DropdownMenuItemWidget extends Widget implements MouseEventHandler {
   final Widget child;
   final bool selected;
   final Style style;
+  final void Function()? onTap;
 
   const _DropdownMenuItemWidget({
     required this.child,
     required this.selected,
     required this.style,
+    this.onTap,
   });
 
   @override
   Element createElement() => _DropdownMenuItemWidgetElement(this);
+
+  @override
+  void handleMouseEvent(MouseEvent event, int localX, int localY) {
+    if (event.type == MouseEventType.press &&
+        event.button == MouseButton.left) {
+      onTap?.call();
+    }
+  }
 }
 
 class _DropdownMenuItemWidgetElement extends Element {
@@ -602,7 +616,7 @@ class _DropdownMenuItemWidgetElement extends Element {
   void rebuild() {
     final item = widget as _DropdownMenuItemWidget;
     if (childElement != null &&
-        childElement!.widget.runtimeType == item.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, item.child)) {
       childElement!.update(item.child);
     } else {
       childElement?.unmount();
@@ -807,6 +821,7 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
 
   /// Opens the popup menu.
   void openMenu() {
+    if (widget.items.isEmpty) return;
     final overlay = Overlay.of(context);
     if (overlay == null) return;
 
@@ -830,6 +845,7 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
                   child: widget.items[i].child,
                   selected: i == selectedIndex,
                   style: widget.dropdownStyle,
+                  onTap: () => selectItem(i),
                 ),
               ),
           ]),
@@ -870,6 +886,7 @@ class PopupMenuButtonState<T> extends State<PopupMenuButton<T>>
   /// Handles incoming keyboard events to navigate and interact with the menu.
   @override
   bool handleKeyEvent(term.KeyEvent event) {
+    if (widget.items.isEmpty) return false;
     if (!isOpen) {
       if (event.baseKey == term.TermKey.space ||
           event.baseKey == term.TermKey.enter ||
@@ -984,7 +1001,7 @@ class ModalDismissBarrierElement extends Element implements MouseEventHandler {
   void rebuild() {
     final w = widget as ModalDismissBarrier;
     if (childElement != null &&
-        childElement!.widget.runtimeType == w.child.runtimeType) {
+        Widget.canUpdate(childElement!.widget, w.child)) {
       childElement!.update(w.child);
     } else {
       childElement?.unmount();
