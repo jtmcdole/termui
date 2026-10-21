@@ -1,3 +1,7 @@
+## 0.3.8
+
+ - **FIX**(termui_tinpot): clamp cell bounds, simplify inner loop, and rename benchmark.
+
 ## 0.3.7
 
  - Update a dependency to the latest release.

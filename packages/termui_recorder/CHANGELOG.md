@@ -1,3 +1,9 @@
+## 0.8.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_recorder): drop runtime test dependency and fix ANSI width and resize delay.
+
 ## 0.7.7
 
  - Update a dependency to the latest release.

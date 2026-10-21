@@ -1,3 +1,9 @@
+## 0.5.7
+
+ - **FIX**(pty2): release ConPTY handles and OVERLAPPED buffers on kill.
+ - **FIX**(pty2): remove parent syscalls, close ptm on exit, and finish partial writes.
+ - **FIX**(pty2): eliminate cross-isolate heap corruption and refactor unix spawn helpers.
+
 ## 0.5.6
 
  - **FIX**(pty2): resolve unix reader isolate hang on process exit.

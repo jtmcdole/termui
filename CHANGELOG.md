@@ -3,6 +3,86 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-10-21
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.10.0`](#termui---v0100)
+ - [`termui_audio` - `v0.2.0`](#termui_audio---v020)
+ - [`termui_pty` - `v0.4.0`](#termui_pty---v040)
+ - [`termui_recorder` - `v0.8.0`](#termui_recorder---v080)
+
+Packages with other changes:
+
+ - [`pty2` - `v0.5.7`](#pty2---v057)
+ - [`termui_flutter` - `v0.8.7`](#termui_flutter---v087)
+ - [`termui_test` - `v0.2.22`](#termui_test---v0222)
+ - [`termui_tinpot` - `v0.3.8`](#termui_tinpot---v038)
+ - [`termui_hotreload` - `v0.6.23`](#termui_hotreload---v0623)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_hotreload` - `v0.6.23`
+
+---
+
+#### `termui` - `v0.10.0`
+
+ - **FIX**(animation): offset effect painting by area origin and guard ticker setState.
+ - **FIX**(layout): apply minimum constraints in Row and Column, preserve scroll effects, and guard SplitPane.
+ - **FIX**(overlay): guard empty DropdownButton and PopupMenuButton items and handle clicks.
+ - **FIX**(core): deduplicate key bubbling and forward paste events in SceneManager.
+ - **FIX**(buffer): clip wide graphemes, guard truncated SGR, and route Canvas through Viewport.
+ - **FIX**(core): reconcile child elements with Widget.canUpdate instead of runtimeType.
+ - **FIX**(terminal): decode multi-byte UTF-8 input, advance Alt+[, and parse CSI R.
+ - **BREAKING** **TEST**(termui): remove hardcoded GENERATE_GOLDENS environment overrides.
+ - **BREAKING** **REFACTOR**(examples): move shared example runners and tests to termui_shared_examples.
+ - **BREAKING** **FIX**(widgets): fix Sparkline 1-row gradient, TabPanel unmount, and widget state guards.
+ - **BREAKING** **FIX**(compositor): occlude lower-layer foregrounds and modifiers under opaque spaces.
+ - **BREAKING** **FIX**(focus): detach children on dispose and preserve external FocusNodes.
+ - **BREAKING** **FIX**(core): notify InheritedWidget dependents, fix unmount order, and guard intrinsics.
+ - **BREAKING** **FIX**(trace): preserve complete-event duration, remove debug I/O, and fix RingBuffer.
+ - **BREAKING** **FIX**(perf): use background isolate for file sink and guard close.
+ - **BREAKING** **FIX**(terminal): fix Linux TermIOS struct ABI, c_ispeed restore, and Windows bitmask.
+
+#### `termui_audio` - `v0.2.0`
+
+ - **BREAKING** **FIX**(termui_audio): fix stream format, FFI pointer leaks, and C++ player bugs.
+
+#### `termui_pty` - `v0.4.0`
+
+ - **FIX**(termui_pty): decode streaming UTF-8, keep CSI params, and cancel timer.
+ - **BREAKING** **REFACTOR**(examples): move shared example runners and tests to termui_shared_examples.
+
+#### `termui_recorder` - `v0.8.0`
+
+ - **BREAKING** **FIX**(termui_recorder): drop runtime test dependency and fix ANSI width and resize delay.
+
+#### `pty2` - `v0.5.7`
+
+ - **FIX**(pty2): release ConPTY handles and OVERLAPPED buffers on kill.
+ - **FIX**(pty2): remove parent syscalls, close ptm on exit, and finish partial writes.
+ - **FIX**(pty2): eliminate cross-isolate heap corruption and refactor unix spawn helpers.
+
+#### `termui_flutter` - `v0.8.7`
+
+ - **FIX**(termui_flutter): dispose GPU atlas resources, add white tile, and guard bounds.
+
+#### `termui_test` - `v0.2.22`
+
+ - **FIX**(termui_test): match multiline text, track virtual time, and unmount on exit.
+
+#### `termui_tinpot` - `v0.3.8`
+
+ - **FIX**(termui_tinpot): clamp cell bounds, simplify inner loop, and rename benchmark.
+
+
 ## 2026-09-30
 
 ### Changes

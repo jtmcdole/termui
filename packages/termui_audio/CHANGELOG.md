@@ -1,3 +1,9 @@
+## 0.2.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_audio): fix stream format, FFI pointer leaks, and C++ player bugs.
+
 ## 0.1.13
 
  - **FIX**(testing): eliminate naked waits and migrate time sources to package:clock.
