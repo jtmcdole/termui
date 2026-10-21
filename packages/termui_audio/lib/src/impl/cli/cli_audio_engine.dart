@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:ffi';
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'package:file/file.dart';
@@ -48,14 +47,15 @@ final class CliAudioEngine implements TermuiAudioEngine {
   /// Creates a new CLI audio engine.
   CliAudioEngine({this.fileSystem = const LocalFileSystem()});
   bool _inited = false;
-  StreamSubscription<ProcessSignal>? _sigintSub;
 
   // TODO: Track potential memory leaks here if voiceEnded callbacks are missed (e.g. loops).
   static final Map<int, Completer<void>> _activeVoices = {};
   static final Set<int> _activeBuses = {};
 
   static void _voiceEndedCallback(Pointer<Uint32> handlePtr) {
+    if (handlePtr == nullptr) return;
     final handle = handlePtr.value;
+    malloc.free(handlePtr);
     final completer = _activeVoices.remove(handle);
     if (completer != null && !completer.isCompleted) {
       completer.complete();
@@ -63,12 +63,20 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }
 
   static void _fileLoadedCallback(
-    Pointer<Int32> a,
-    Pointer<Utf8> b,
-    Pointer<Uint32> c,
-    Pointer<Uint64> d,
-  ) {}
-  static void _stateChangedCallback(Pointer<Int32> a) {}
+    Pointer<Int32> error,
+    Pointer<Utf8> completeFileName,
+    Pointer<Uint32> hash,
+    Pointer<Uint64> timeSpent,
+  ) {
+    if (error != nullptr) malloc.free(error);
+    if (completeFileName != nullptr) malloc.free(completeFileName);
+    if (hash != nullptr) malloc.free(hash);
+    if (timeSpent != nullptr) malloc.free(timeSpent);
+  }
+
+  static void _stateChangedCallback(Pointer<Int32> state) {
+    if (state != nullptr) malloc.free(state);
+  }
 
   late final NativeCallable<ffi.DartVoiceEndedFunction> _voiceEndedCallable;
   late final NativeCallable<ffi.DartFileLoadedFunction> _fileLoadedCallable;
@@ -84,14 +92,6 @@ final class CliAudioEngine implements TermuiAudioEngine {
   @override
   Future<void> init({bool enableVisualization = true}) async {
     if (_inited) return;
-
-    try {
-      // ProcessSignal isn't easily mockable, but we only attach it safely
-      _sigintSub = ProcessSignal.sigint.watch().listen((_) {
-        ffi.disposeEngine();
-        exit(0);
-      });
-    } catch (_) {}
 
     final res = ffi.initEngine(-1, 48000, 2048, 2, 0);
     if (res != 0) {
@@ -125,9 +125,6 @@ final class CliAudioEngine implements TermuiAudioEngine {
   @override
   Future<void> dispose() async {
     if (!_inited) return;
-
-    await _sigintSub?.cancel();
-    _sigintSub = null;
 
     ffi.disposeEngine();
     for (final c in _activeVoices.values) {
@@ -352,7 +349,13 @@ final class CliAudioEngine implements TermuiAudioEngine {
         }
         final hash = hashPtr.value;
         ffi.setWaveformFreq(hash, frequency);
-        return CliAudioBuffer(hash);
+        final buffer = CliAudioBuffer(hash);
+        _soundFinalizer.attach(
+          buffer,
+          Pointer.fromAddress(hash),
+          detach: buffer,
+        );
+        return buffer;
       } finally {
         calloc.free(hashPtr);
       }
@@ -462,7 +465,7 @@ final class CliAudioEngine implements TermuiAudioEngine {
         bufferingTimeNeeds.inMicroseconds / 1000000.0,
         sampleRate,
         channels,
-        0, // 0 = BufferType.AUTO (MP3, Opus, Vorbis, FLAC, WAV)
+        5, // 5 = BufferType.AUTO (MP3, Opus, Vorbis, FLAC, WAV)
         nullptr,
         nullptr,
       );
@@ -568,6 +571,8 @@ final class CliAudioEngine implements TermuiAudioEngine {
     bool loop = false,
     AudioBus? bus,
     bool paused = false,
+    double volume = 1.0,
+    double? from,
   }) {
     if (!_inited) throw Exception('Engine not initialized.');
 
@@ -575,11 +580,23 @@ final class CliAudioEngine implements TermuiAudioEngine {
     final voicePtr = calloc<Uint32>();
     try {
       final busId = bus?.id ?? 0;
-      final res = ffi.play(hash, busId, 1.0, 0.0, paused, loop, 0.0, voicePtr);
+      final res = ffi.play(
+        hash,
+        busId,
+        volume,
+        0.0,
+        paused,
+        loop,
+        from ?? 0.0,
+        voicePtr,
+      );
       if (res != 0) {
         throw Exception('Failed to play sound. Error code: $res');
       }
       final voiceId = voicePtr.value;
+      if (from != null && from > 0) {
+        ffi.seek(voiceId, from);
+      }
       final completer = Completer<void>();
       _activeVoices[voiceId] = completer;
       return AudioVoice(voiceId, completer.future);
@@ -829,40 +846,30 @@ final class CliAudioEngine implements TermuiAudioEngine {
           onSegmentEnded();
           return;
         }
-        final voicePtr = calloc<Uint32>();
         try {
           final startSec = seg.start.inMicroseconds / 1000000.0;
-          final busId = bus?.id ?? 0;
-          final res = ffi.play(
-            buffer.hash,
-            busId,
-            1.0,
-            0.0,
-            false,
-            false,
-            startSec,
-            voicePtr,
+          final voice = play(
+            buffer,
+            bus: bus,
+            volume: 1.0,
+            loop: false,
+            from: startSec,
           );
-          if (res == 0) {
-            final voice = voicePtr.value;
-            Timer(seg.duration, () {
-              try {
-                ffi.fadeVolume(voice, 0.0, 0.010);
-                Timer(const Duration(milliseconds: 12), () {
-                  try {
-                    ffi.stop(voice);
-                  } catch (_) {}
-                  onSegmentEnded();
-                });
-              } catch (_) {
+          Timer(seg.duration, () {
+            try {
+              ffi.fadeVolume(voice.id, 0.0, 0.010);
+              Timer(const Duration(milliseconds: 12), () {
+                try {
+                  stop(voice);
+                } catch (_) {}
                 onSegmentEnded();
-              }
-            });
-          } else {
-            onSegmentEnded();
-          }
-        } finally {
-          calloc.free(voicePtr);
+              });
+            } catch (_) {
+              onSegmentEnded();
+            }
+          });
+        } catch (_) {
+          onSegmentEnded();
         }
       }
 

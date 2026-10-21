@@ -1421,18 +1421,18 @@ isFilterActive(unsigned int soundHash, unsigned int busId, enum FilterType filte
 /// Returns [PlayerErrors.noError] if no errors and the list of param names.
 FFI_PLUGIN_EXPORT enum PlayerErrors
 getFilterParamNames(enum FilterType filterType, int *paramsCount,
-                    char **names) {
+                    char ***names) {
   *paramsCount = 0;
   if (player.get() == nullptr || !player.get()->isInited())
     return backendNotInited;
   std::vector<std::string> pNames =
       player.get()->mFilters.getFilterParamNames(filterType);
   *paramsCount = static_cast<int>(pNames.size());
-  *names = (char *)malloc(sizeof(char *) * *paramsCount);
+  *names = (char **)malloc(sizeof(char *) * *paramsCount);
   // printf("C  paramsCount: %p  **names: %p\n", paramsCount, names);
   for (int i = 0; i < *paramsCount; i++) {
-    names[i] = strdup(pNames[i].c_str());
-    printf("C  i: %d  names[i]: %s  names[i]: %p\n", i, names[i], names[i]);
+    (*names)[i] = strdup(pNames[i].c_str());
+    printf("C  i: %d  (*names)[i]: %s  (*names)[i]: %p\n", i, (*names)[i], (*names)[i]);
   }
   return noError;
 }
