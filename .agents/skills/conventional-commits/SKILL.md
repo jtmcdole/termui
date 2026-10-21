@@ -54,6 +54,22 @@ A scope may be provided to a commit's type, to provide additional contextual
 information and is contained within parenthesis, e.g., `feat(parser): add
 ability to parse arrays`.
 
+## Repository Policy: Auditing & Marking Breaking Changes
+
+Before finalizing any commit message, audit the staged diff for both **surface API breaks** and **observable side-effect changes**:
+
+1. **Surface API Breaks**: Removed or renamed public classes/methods/fields, modified parameter or typedef types, moved example/bin entrypoints, or runtime `dependencies` moved to `dev_dependencies`.
+2. **Behavioral & Side-Effect Breaks**:
+   - Resource ownership or disposal changes (e.g., callers must now call `dispose()` on external nodes or engines).
+   - Lifecycle ordering changes (e.g., bottom-up vs. top-down unmount, unmounting inactive tabs instead of retaining state).
+   - Execution model shifts (e.g., synchronous file I/O moved to an async background isolate requiring `await close()`).
+   - Signal handling or process exit changes (e.g., removing automatic `SIGINT` handlers).
+   - Stricter validation or error throwing (e.g., throwing `UnsupportedError` on invalid state transitions).
+
+When **any** of the above apply, you MUST include **both**:
+- `!` immediately before `:` on the first line: `<type>(<scope>)!: <description>`
+- `BREAKING CHANGE: <explanation of what breaks and what callers must do>` as the final footer paragraph.
+
 ## Examples
 
 ### Commit message with description and breaking change footer
