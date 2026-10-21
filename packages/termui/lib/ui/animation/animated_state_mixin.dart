@@ -30,7 +30,9 @@ mixin TuiAnimatedStateMixin<T extends StatefulWidget> on State<T> {
   void triggerEffect(TuiAnimationEffect effect, Point<int> clickPoint) {
     registerEffect(effect);
     effect.start(clickPoint, () {
-      setState(() {});
+      if (mounted) {
+        setState(() {});
+      }
     });
     _ensureTickerRunning();
   }

@@ -57,7 +57,9 @@ final class InkwellRippleEffect extends TuiAnimationEffect {
           );
           final fadeFactor = radialFactor * (1.0 - p) + p;
 
-          final bgArgb = buffer.getBackground(x, y);
+          final targetX = area.x + x;
+          final targetY = area.y + y;
+          final bgArgb = buffer.getBackground(targetX, targetY);
           final originalBg = bgArgb == 0
               ? (baseStyle.background ?? Colors.black)
               : Color.argb(bgArgb);
@@ -67,7 +69,7 @@ final class InkwellRippleEffect extends TuiAnimationEffect {
             rippleColor,
             fadeFactor,
           );
-          buffer.setAttributes(x, y, bg: blendedBg.argb);
+          buffer.setAttributes(targetX, targetY, bg: blendedBg.argb);
         }
       }
     }
@@ -137,10 +139,12 @@ final class SparkleEffect extends TuiAnimationEffect {
         // Dim the character color as life decays
         final dimmedColor = interpolateColor(Colors.black, p.color, p.life);
 
-        final currentModifiers = buffer.getModifiers(p.x, p.y);
+        final targetX = area.x + p.x;
+        final targetY = area.y + p.y;
+        final currentModifiers = buffer.getModifiers(targetX, targetY);
         buffer.setAttributes(
-          p.x,
-          p.y,
+          targetX,
+          targetY,
           char: p.char,
           fg: dimmedColor.argb,
           modifiers: currentModifiers | Modifier.bold,
@@ -206,7 +210,9 @@ final class FlashEffect extends TuiAnimationEffect {
 
     for (var y = 0; y < H; y++) {
       for (var x = 0; x < W; x++) {
-        final bgArgb = buffer.getBackground(x, y);
+        final targetX = area.x + x;
+        final targetY = area.y + y;
+        final bgArgb = buffer.getBackground(targetX, targetY);
         final originalBg = bgArgb == 0
             ? (baseStyle.background ?? Colors.black)
             : Color.argb(bgArgb);
@@ -218,7 +224,7 @@ final class FlashEffect extends TuiAnimationEffect {
           intensity * 0.6,
         );
 
-        buffer.setAttributes(x, y, bg: blendedBg.argb);
+        buffer.setAttributes(targetX, targetY, bg: blendedBg.argb);
       }
     }
   }
