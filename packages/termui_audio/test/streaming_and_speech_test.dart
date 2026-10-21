@@ -286,7 +286,7 @@ void main() {
         final fileBytes = await File(soundPath).readAsBytes();
 
         final buffer = await cli.createBufferStream(
-          maxBufferSize: 2 * 1024 * 1024,
+          maxBufferSize: 4 * 1024 * 1024,
           releaseConsumed: true,
           bufferingTimeNeeds: const Duration(milliseconds: 100),
         );
