@@ -9,6 +9,36 @@ void main(List<String> args) async {
   await build(args, (input, output) async {
     if (!input.config.buildCodeAssets) return;
 
+    final cmakeCacheFile = File.fromUri(
+      input.outputDirectory.resolve('CMakeCache.txt'),
+    );
+    if (cmakeCacheFile.existsSync()) {
+      final expectedHome = input.packageRoot.toFilePath().replaceAll(
+        RegExp(r'[\\/]+$'),
+        '',
+      );
+      final cacheContents = cmakeCacheFile.readAsStringSync();
+      final match = RegExp(
+        r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.+)$',
+        multiLine: true,
+      ).firstMatch(cacheContents);
+      if (match != null) {
+        final cachedHome = match
+            .group(1)!
+            .trim()
+            .replaceAll(RegExp(r'[\\/]+$'), '');
+        if (cachedHome != expectedHome) {
+          cmakeCacheFile.deleteSync();
+          final cmakeFilesDir = Directory.fromUri(
+            input.outputDirectory.resolve('CMakeFiles'),
+          );
+          if (cmakeFilesDir.existsSync()) {
+            cmakeFilesDir.deleteSync(recursive: true);
+          }
+        }
+      }
+    }
+
     final builder = CMakeBuilder.create(
       name: 'soloud_cli',
       sourceDir: input.packageRoot,

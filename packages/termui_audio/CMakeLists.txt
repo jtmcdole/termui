@@ -109,4 +109,9 @@ else()
             "$<TARGET_FILE_DIR:${PLUGIN_NAME}>/${SO_NAME}"
         )
     endforeach()
+
+    set_target_properties(${PLUGIN_NAME} PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+    )
 endif()
