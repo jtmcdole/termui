@@ -22,10 +22,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/paragraph_standard_wrap.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/paragraph_standard_wrap.ansi'),
       );
 
       // Clean buffer
@@ -39,10 +36,7 @@ void main() {
         ..paint(buffer, Offset.zero);
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/paragraph_forced_wrap.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/paragraph_forced_wrap.ansi'),
       );
     });
   });
@@ -103,13 +97,7 @@ void main() {
       ElementWidget(input)
         ..layout(BoxConstraints.tight(const Size(5, 1)))
         ..paint(buffer, Offset.zero);
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/textfield_focused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/textfield_focused.ansi'));
 
       // Reset buffer and set focused = false
       buffer.clear();
@@ -119,10 +107,7 @@ void main() {
         ..paint(buffer, Offset.zero);
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/textfield_unfocused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/textfield_unfocused.ansi'),
       );
     });
 
@@ -147,10 +132,7 @@ void main() {
 
         expect(
           buffer,
-          matchesAnsiGolden(
-            'test/goldens/textfield_placeholder_cursor.ansi',
-            environment: {'GENERATE_GOLDENS': 'true'},
-          ),
+          matchesAnsiGolden('test/goldens/textfield_placeholder_cursor.ansi'),
         );
       },
     );
@@ -166,10 +148,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/progress_indicator_50_percent.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/progress_indicator_50_percent.ansi'),
       );
     });
   });
@@ -669,10 +648,7 @@ void main() {
         ..paint(buffer, Offset.zero);
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/multiline_textfield_focused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/multiline_textfield_focused.ansi'),
       );
 
       // Reset buffer and set focused = false
@@ -683,10 +659,7 @@ void main() {
         ..paint(buffer, Offset.zero);
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/multiline_textfield_unfocused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/multiline_textfield_unfocused.ansi'),
       );
     });
 
@@ -713,10 +686,7 @@ void main() {
           ..paint(buffer, Offset.zero);
         expect(
           buffer,
-          matchesAnsiGolden(
-            'test/goldens/multiline_placeholder_empty.ansi',
-            environment: {'GENERATE_GOLDENS': 'true'},
-          ),
+          matchesAnsiGolden('test/goldens/multiline_placeholder_empty.ansi'),
         );
 
         // 2. Add text: placeholder should go away
@@ -729,7 +699,6 @@ void main() {
           buffer,
           matchesAnsiGolden(
             'test/goldens/multiline_placeholder_with_text.ansi',
-            environment: {'GENERATE_GOLDENS': 'true'},
           ),
         );
 
@@ -741,10 +710,7 @@ void main() {
           ..paint(buffer, Offset.zero);
         expect(
           buffer,
-          matchesAnsiGolden(
-            'test/goldens/multiline_placeholder_empty.ansi',
-            environment: {'GENERATE_GOLDENS': 'true'},
-          ),
+          matchesAnsiGolden('test/goldens/multiline_placeholder_empty.ansi'),
         );
       },
     );
@@ -762,13 +728,7 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(20, 2)))
         ..paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/help_widget.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/help_widget.ansi'));
     });
   });
 
@@ -804,13 +764,7 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(15, 4)))
         ..paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/table_widget.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/table_widget.ansi'));
     });
   });
 
@@ -828,13 +782,7 @@ void main() {
       ElementWidget(paginator)
         ..layout(BoxConstraints.tight(const Size(10, 1)))
         ..paint(buffer, Offset.zero);
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/paginator_widget.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/paginator_widget.ansi'));
     });
   });
 
@@ -980,13 +928,7 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(20, 10)))
         ..paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/form_focused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/form_focused.ansi'));
 
       // 2. Unfocused case: unfocus all fields
       f1.focused = false;
@@ -996,13 +938,7 @@ void main() {
         ..layout(BoxConstraints.tight(const Size(20, 10)))
         ..paint(buffer2, Offset.zero);
 
-      expect(
-        buffer2,
-        matchesAnsiGolden(
-          'test/goldens/form_unfocused.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer2, matchesAnsiGolden('test/goldens/form_unfocused.ansi'));
     });
   });
 
@@ -1093,10 +1029,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/tree_widget_rendering.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/tree_widget_rendering.ansi'),
       );
     });
 
@@ -1164,10 +1097,7 @@ void main() {
         ..paint(bufferFocused, Offset.zero);
       expect(
         bufferFocused,
-        matchesAnsiGolden(
-          'test/goldens/tree_focused_styling.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/tree_focused_styling.ansi'),
       );
 
       // Set focused to false
@@ -1187,10 +1117,7 @@ void main() {
         ..paint(bufferUnfocused, Offset.zero);
       expect(
         bufferUnfocused,
-        matchesAnsiGolden(
-          'test/goldens/tree_unfocused_styling.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/tree_unfocused_styling.ansi'),
       );
     });
   });

@@ -37,10 +37,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/rich_text_label_clipping.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/rich_text_label_clipping.ansi'),
       );
     });
 
@@ -76,10 +73,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/rich_text_paragraph_wrap.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/rich_text_paragraph_wrap.ansi'),
       );
     });
   });
@@ -118,10 +112,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/timer_widget_rendering.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/timer_widget_rendering.ansi'),
       );
     });
   });

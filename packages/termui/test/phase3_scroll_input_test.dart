@@ -118,10 +118,7 @@ void main() {
 
       expect(
         buffer,
-        matchesAnsiGolden(
-          'test/goldens/scrollview_clipping.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/scrollview_clipping.ansi'),
       );
     });
   });
@@ -214,10 +211,7 @@ void main() {
       await tester.pumpWidget(getCheckbox(focused: false));
       expect(
         tester.buffer,
-        matchesAnsiGolden(
-          'test/goldens/checkbox_unselected.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/checkbox_unselected.ansi'),
       );
 
       // Handle click
@@ -239,10 +233,7 @@ void main() {
       await tester.pumpWidget(getCheckbox(focused: false));
       expect(
         tester.buffer,
-        matchesAnsiGolden(
-          'test/goldens/checkbox_selected.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/checkbox_selected.ansi'),
       );
 
       // Handle Key Space
@@ -266,10 +257,7 @@ void main() {
       await tester.pumpWidget(getRadio('B', focused: false));
       expect(
         tester.buffer,
-        matchesAnsiGolden(
-          'test/goldens/radio_unselected.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/radio_unselected.ansi'),
       );
 
       // Press Enter
@@ -281,10 +269,7 @@ void main() {
       await tester.pumpWidget(getRadio('B', focused: false));
       expect(
         tester.buffer,
-        matchesAnsiGolden(
-          'test/goldens/radio_selected.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/radio_selected.ansi'),
       );
     });
 
@@ -301,10 +286,7 @@ void main() {
       await tester.pumpWidget(getSwitch(focused: false));
       expect(
         tester.buffer,
-        matchesAnsiGolden(
-          'test/goldens/switch_unselected.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/switch_unselected.ansi'),
       );
 
       await tester.pumpWidget(getSwitch(focused: true));
@@ -324,10 +306,7 @@ void main() {
       await tester.pumpWidget(getSwitch(focused: false));
       expect(
         tester.buffer,
-        matchesAnsiGolden(
-          'test/goldens/switch_selected.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
+        matchesAnsiGolden('test/goldens/switch_selected.ansi'),
       );
     });
 

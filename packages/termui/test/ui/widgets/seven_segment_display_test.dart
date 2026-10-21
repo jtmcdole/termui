@@ -61,13 +61,7 @@ void main() {
       element.layout(BoxConstraints.tight(const Size(5, 5)));
       element.paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/seven_segment_8.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/seven_segment_8.ansi'));
     });
 
     test('renders golden correctly for 42', () {
@@ -80,13 +74,7 @@ void main() {
       element.layout(BoxConstraints.tight(const Size(11, 5)));
       element.paint(buffer, Offset.zero);
 
-      expect(
-        buffer,
-        matchesAnsiGolden(
-          'test/goldens/seven_segment_42.ansi',
-          environment: {'GENERATE_GOLDENS': 'true'},
-        ),
-      );
+      expect(buffer, matchesAnsiGolden('test/goldens/seven_segment_42.ansi'));
     });
   });
 }
