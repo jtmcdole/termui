@@ -1,3 +1,9 @@
+## 0.5.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(pty): complete enclosing PromptScope when PTY process exits.
+
 ## 0.4.0
 
 > Note: This release has breaking changes.
