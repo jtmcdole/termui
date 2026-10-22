@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:termui/termui.dart';
 import 'package:termui_pty/termui_pty.dart';
@@ -6,14 +7,24 @@ import 'package:test/test.dart';
 import 'package:pty2/pty2.dart';
 
 class MockPseudoTerminal implements PseudoTerminal {
+  final _outCtrl = StreamController<String>.broadcast();
+  final _exitCompleter = Completer<int>();
+
   @override
-  Stream<String> get out => const Stream.empty();
+  Stream<String> get out => _outCtrl.stream;
   @override
   void write(String data) {}
   @override
-  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) => true;
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    if (!_exitCompleter.isCompleted) {
+      _exitCompleter.complete(0);
+    }
+    _outCtrl.close();
+    return true;
+  }
+
   @override
-  Future<int> get exitCode => Future.value(0);
+  Future<int> get exitCode => _exitCompleter.future;
   @override
   void resize(int columns, int rows) {}
   @override
