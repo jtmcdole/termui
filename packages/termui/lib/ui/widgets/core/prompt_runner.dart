@@ -114,10 +114,14 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
         onDone: (result) {
           final comp = _completer;
           if (comp != null && !comp.isCompleted) {
-            comp.complete(result as T?);
+            comp.complete(result is T? ? result : null);
           }
         },
-        child: FocusScope(autofocus: true, child: _widget),
+        child: FocusScope(
+          focusNode: _focusScopeNode,
+          autofocus: mode == ExecutionMode.standalone,
+          child: _widget,
+        ),
       );
       rootElement.update(scopedWidget);
 
@@ -170,11 +174,40 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   /// Static hook called when a prompt runner ends/disposes.
   static void Function(PromptRunner<dynamic> runner)? onPromptEnded;
 
+  static final Set<FocusScopeNode> _activeRootScopes = {};
+
+  FocusScopeNode _focusScopeNode = FocusScopeNode(id: 'prompt_runner_scope');
+
   Completer<T?>? _completer;
   Element? _rootElement;
 
   bool _isDisposed = false;
   void Function()? _onNeedVisualUpdate;
+
+  /// Requests keyboard focus for this runner's root focus scope.
+  void requestFocus() {
+    if (_isDisposed) return;
+    _focusScopeNode.requestFocus();
+    scheduleMicrotask(() {
+      if (_isDisposed) return;
+      final primary = FocusManager.instance.primaryFocus;
+      if (primary == null ||
+          primary == _focusScopeNode ||
+          _belongsToOtherRunnerScope(primary)) {
+        _focusScopeNode.requestFocus();
+      }
+    });
+  }
+
+  bool _belongsToOtherRunnerScope(FocusNode node) {
+    FocusNode? current = node;
+    while (current != null) {
+      if (current == _focusScopeNode) return false;
+      if (_activeRootScopes.contains(current)) return true;
+      current = current.parent;
+    }
+    return false;
+  }
 
   @override
   void Function()? get onNeedVisualUpdate => _onNeedVisualUpdate;
@@ -200,9 +233,10 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   bool _drawScheduled = false;
 
   void _scheduleRender() {
-    if (_drawScheduled) return;
+    if (_isDisposed || _drawScheduled) return;
     _drawScheduled = true;
     scheduleMicrotask(() {
+      if (_isDisposed || !_drawScheduled) return;
       _drawScheduled = false;
       render();
     });
@@ -253,6 +287,10 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   void abort([Object? exception]) {
     if (_isDisposed) return;
     _isDisposed = true;
+    _activeRootScopes.remove(_focusScopeNode);
+    _rootElement?.unmount();
+    _rootElement = null;
+    _focusScopeNode.dispose();
     final activeCompleter = _completer;
     if (activeCompleter != null && !activeCompleter.isCompleted) {
       activeCompleter.completeError(
@@ -270,6 +308,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   void dispose() {
     if (_isDisposed) return;
     _isDisposed = true;
+    _activeRootScopes.remove(_focusScopeNode);
     if (mode == ExecutionMode.standalone) {
       TermuiBinding.unregister(this);
     }
@@ -278,6 +317,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     // Unmount element tree so focus nodes and states can clean up
     _rootElement?.unmount();
     _rootElement = null;
+    _focusScopeNode.dispose();
 
     final activeCompleter = _completer;
     if (activeCompleter != null && !activeCompleter.isCompleted) {
@@ -348,6 +388,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   @override
   void render() {
     if (_isDisposed) return;
+    _drawScheduled = false;
     final rootElement = _rootElement;
     final buffer = _currentBuffer;
     if (rootElement == null || buffer == null) return;
@@ -436,6 +477,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
 
     StreamSubscription<Point<int>>? sizeSubscription;
     StreamSubscription<term.InputEvent>? subscription;
+    final runScope = FocusScopeNode(id: 'prompt_runner_scope');
 
     try {
       // Create a temporary buffer and inline renderer.
@@ -451,15 +493,21 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       final completer = Completer<T?>();
       _completer = completer;
       _isDisposed = false;
+      _focusScopeNode = runScope;
+      _activeRootScopes.add(runScope);
 
       // Wrap the widget tree in a PromptScope to expose the clean completion API
       final scopedWidget = PromptScope(
         onDone: (result) {
           if (!completer.isCompleted) {
-            completer.complete(result as T?);
+            completer.complete(result is T? ? result : null);
           }
         },
-        child: FocusScope(autofocus: true, child: widget),
+        child: FocusScope(
+          focusNode: runScope,
+          autofocus: mode == ExecutionMode.standalone,
+          child: widget,
+        ),
       );
 
       _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleRender);
@@ -548,6 +596,8 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       }
       _rootElement?.unmount();
       _rootElement = null;
+      _activeRootScopes.remove(runScope);
+      runScope.dispose();
     }
   }
 
@@ -733,8 +783,16 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
 
       // Step 2: Widget Event Routing
       if (!isDone) {
-        final primaryFocus = FocusManager.instance.primaryFocus;
-        if (primaryFocus != null && primaryFocus.bubbleKeyEvent(event)) {
+        var primaryFocus = FocusManager.instance.primaryFocus;
+        if (primaryFocus != null && _belongsToOtherRunnerScope(primaryFocus)) {
+          _focusScopeNode.requestFocus();
+          primaryFocus = FocusManager.instance.primaryFocus;
+        }
+        final focusTarget =
+            (primaryFocus != null && !_belongsToOtherRunnerScope(primaryFocus))
+            ? primaryFocus
+            : _focusScopeNode;
+        if (focusTarget.bubbleKeyEvent(event)) {
           isDone = true;
         } else {
           isDone = _routeKeyEvent(rootElement, event);

@@ -38,6 +38,9 @@ class SceneManager implements Reassemblable {
     if (layer != null) {
       _focusStack.remove(layer);
       _focusStack.add(layer);
+      if (layer.renderer case final PromptRunner<dynamic> runner) {
+        runner.requestFocus();
+      }
     }
   }
 
@@ -147,6 +150,9 @@ class SceneManager implements Reassemblable {
         final candidate = _focusStack.last;
         if (layers.contains(candidate)) {
           _focusedLayer = candidate;
+          if (candidate.renderer case final PromptRunner<dynamic> runner) {
+            runner.requestFocus();
+          }
           break;
         } else {
           _focusStack.removeLast();
@@ -578,6 +584,11 @@ class SceneManager implements Reassemblable {
   /// Composites all active layers into a single flattened terminal output
   /// and writes it to the terminal.
   void render() {
+    if (_isDisposed) return;
+    if (_isRendering) {
+      _renderRequestedWhileRendering = true;
+      return;
+    }
     _isRendering = true;
     try {
       _renderScheduled = false;
@@ -704,6 +715,10 @@ class SceneManager implements Reassemblable {
           target.resize(width, height);
         }
         target.clear();
+
+        // Any scheduleRender() calls triggered synchronously by r.render() or
+        // _resizeRenderer() above are satisfied by the composite pass below.
+        _renderRequestedWhileRendering = false;
 
         // The Compositor natively handles occlusion culling and off-screen
         // effect layer resolution using recursive saveLayer/backdrop filter patterns.

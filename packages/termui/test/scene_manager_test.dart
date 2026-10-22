@@ -2,14 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:fake_async/fake_async.dart';
-import 'package:termui/terminal/terminal.dart' hide Modifier;
-import 'package:termui/ui/buffer.dart';
-import 'package:termui/ui/widgets/core/prompt_runner.dart';
-import 'package:termui/ui/widgets/core/scene_manager.dart';
-import 'package:termui/ui/style.dart';
-import 'package:termui/ui/color.dart';
-import 'package:termui/ui/termui_debug.dart';
-
+import 'package:termui/termui.dart';
 import 'package:termui_test/termui_test.dart';
 
 class MockSceneRenderer implements SceneRenderer {
@@ -817,6 +810,151 @@ void main() {
             }
           }
           expect(hasRipples, isTrue);
+
+          sceneManager.dispose();
+        });
+      },
+    );
+
+    test(
+      'SceneManager isolates key events to focusedLayer and does not leak to unfocused layer primaryFocus',
+      () {
+        fakeAsync((async) {
+          final backend = MockTerminalBackend();
+          final terminal = MockTerminal(backend);
+          final sceneManager = SceneManager(terminal);
+
+          var layer1Keys = 0;
+          var layer2Keys = 0;
+
+          final runner1 = PromptRunner(
+            terminal: terminal,
+            mode: ExecutionMode.managed,
+            exitConditions: const {},
+            widget: Focus(
+              autofocus: true,
+              onKeyEvent: (event) {
+                layer1Keys++;
+                return true;
+              },
+              child: const Text('Layer 1'),
+            ),
+          );
+
+          final runner2 = PromptRunner(
+            terminal: terminal,
+            mode: ExecutionMode.managed,
+            exitConditions: const {},
+            widget: Focus(
+              autofocus: true,
+              onKeyEvent: (event) {
+                layer2Keys++;
+                return true;
+              },
+              child: const Text('Layer 2'),
+            ),
+          );
+
+          final layer1 = SceneLayer(
+            renderer: runner1,
+            sizing: LayerSizing.fullscreen,
+            zIndex: 10,
+          );
+          final layer2 = SceneLayer(
+            renderer: runner2,
+            sizing: LayerSizing.fullscreen,
+            zIndex: 20,
+          );
+
+          sceneManager.layers.add(layer1);
+          runner1.run().catchError((_) {});
+          // runner2 is started after runner1 (like settingsRunner in glass_compositing),
+          // so its autofocus microtask runs second, even though layer1 is focusedLayer!
+          runner2.run().catchError((_) {});
+          sceneManager.focusedLayer = layer1;
+
+          async.flushMicrotasks();
+
+          terminal.injectTestEvent(const KeyEvent('a', KeyType.character));
+          async.flushMicrotasks();
+
+          expect(layer1Keys, equals(1));
+          expect(layer2Keys, equals(0));
+
+          // Now add and focus layer2, and synchronously focus a nested leaf node
+          // right after setting focusedLayer; the requestFocus microtask must not
+          // clobber the explicit nested leaf focus.
+          final nestedNode = FocusNode(id: 'nested_leaf');
+          runner2.widget = Focus(
+            autofocus: true,
+            onKeyEvent: (_) => false,
+            child: Focus(
+              focusNode: nestedNode,
+              onKeyEvent: (event) {
+                layer2Keys++;
+                return true;
+              },
+              child: const Text('Layer 2 Nested'),
+            ),
+          );
+          sceneManager.layers.add(layer2);
+          sceneManager.focusedLayer = layer2;
+          nestedNode.requestFocus();
+          async.flushMicrotasks();
+          expect(FocusManager.instance.primaryFocus, same(nestedNode));
+
+          terminal.injectTestEvent(const KeyEvent('b', KeyType.character));
+          async.flushMicrotasks();
+          expect(layer1Keys, equals(1));
+          expect(layer2Keys, equals(1));
+
+          sceneManager.layers.remove(layer2);
+          async.flushMicrotasks();
+
+          terminal.injectTestEvent(const KeyEvent('c', KeyType.character));
+          async.flushMicrotasks();
+          expect(layer1Keys, equals(2));
+          expect(layer2Keys, equals(1));
+
+          runner2.dispose();
+          sceneManager.dispose();
+        });
+      },
+    );
+
+    test(
+      'SceneManager.render does not schedule redundant second render from pre-composite layer resize or dirty flush',
+      () {
+        fakeAsync((async) {
+          final backend = MockTerminalBackend();
+          final terminal = MockTerminal(backend);
+          final sceneManager = SceneManager(terminal);
+
+          var framesRedrawn = 0;
+          sceneManager.onFrameRedrawn = (_) {
+            framesRedrawn++;
+          };
+
+          final runner = PromptRunner(
+            terminal: terminal,
+            mode: ExecutionMode.managed,
+            exitConditions: const {},
+            onFramePainted: (_) => sceneManager.scheduleRender(),
+            widget: const Text('Hello'),
+          );
+          final layer = SceneLayer(
+            renderer: runner,
+            sizing: LayerSizing.fullscreen,
+          );
+          sceneManager.layers.add(layer);
+          runner.run().catchError((_) {});
+
+          framesRedrawn = 0;
+          // Trigger a single render that resizes the fullscreen layer before compositing.
+          sceneManager.render();
+          async.flushMicrotasks();
+
+          expect(framesRedrawn, equals(1));
 
           sceneManager.dispose();
         });
