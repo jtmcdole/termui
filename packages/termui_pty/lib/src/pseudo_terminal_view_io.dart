@@ -19,6 +19,9 @@ class PseudoTerminalView extends StatefulWidget {
   /// Optional focus node for managing keyboard focus.
   final FocusNode? focusNode;
 
+  /// Optional callback invoked when the underlying PTY process exits.
+  final void Function(int exitCode)? onExit;
+
   /// Creates a PseudoTerminalView that wires a [VirtualTerminal] to [pty].
   const PseudoTerminalView({
     super.key,
@@ -26,6 +29,7 @@ class PseudoTerminalView extends StatefulWidget {
     this.transparentBackground = false,
     this.defaultForeground,
     this.focusNode,
+    this.onExit,
   });
 
   @override
@@ -37,8 +41,19 @@ class _PseudoTerminalViewState extends State<PseudoTerminalView> {
   StreamSubscription? _outSubscription;
   late final FocusNode _focusNode;
   bool _ownsFocusNode = false;
+  bool _exited = false;
   int _lastWidth = 0;
   int _lastHeight = 0;
+
+  void _notifyExit(int exitCode) {
+    if (_exited || !mounted) return;
+    _exited = true;
+    if (widget.onExit != null) {
+      widget.onExit!(exitCode);
+    } else {
+      PromptScope.of(context)?.done(exitCode);
+    }
+  }
 
   @override
   void initState() {
@@ -55,9 +70,18 @@ class _PseudoTerminalViewState extends State<PseudoTerminalView> {
       transparentBackground: widget.transparentBackground,
       defaultForeground: widget.defaultForeground,
     );
-    _outSubscription = widget.pty.out.listen((data) {
+    final pty = widget.pty;
+    _outSubscription = pty.out.listen((data) {
       _terminal.write(utf8.encode(data));
     });
+    pty.exitCode.then(
+      (code) {
+        if (mounted && widget.pty == pty) _notifyExit(code);
+      },
+      onError: (_) {
+        if (mounted && widget.pty == pty) _notifyExit(-1);
+      },
+    );
   }
 
   @override

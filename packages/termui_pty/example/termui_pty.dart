@@ -23,12 +23,9 @@ void main() async {
         widget: SizedBox.expand(child: PseudoTerminalView(pty: pty)),
       );
 
-      // Run until the user types 'q' in top, which exits top and closes the pty?
-      // Wait, top exits when you type 'q'. If the pty process exits, we should exit.
-      // But PromptRunner runs until `abort` is called or focus is lost.
-      // Let's just run it.
       await runner.run();
     } finally {
+      pty.kill();
       terminal.showCursor();
       terminal.exitAlternateScreen();
     }

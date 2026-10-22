@@ -14,6 +14,9 @@ class PseudoTerminalView extends StatelessWidget {
   /// Optional focus node.
   final FocusNode? focusNode;
 
+  /// Optional callback invoked when the underlying PTY process exits.
+  final void Function(int exitCode)? onExit;
+
   /// Creates a stubbed [PseudoTerminalView].
   const PseudoTerminalView({
     super.key,
@@ -21,6 +24,7 @@ class PseudoTerminalView extends StatelessWidget {
     this.transparentBackground = false,
     this.defaultForeground,
     this.focusNode,
+    this.onExit,
   });
 
   @override

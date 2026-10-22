@@ -8,6 +8,7 @@ import 'package:pty2/pty2.dart';
 
 class MockPseudoTerminal implements PseudoTerminal {
   final _outCtrl = StreamController<String>.broadcast();
+  final _exitCompleter = Completer<int>();
   final writtenData = <String>[];
 
   @override
@@ -19,10 +20,16 @@ class MockPseudoTerminal implements PseudoTerminal {
   }
 
   @override
-  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) => true;
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    if (!_exitCompleter.isCompleted) {
+      _exitCompleter.complete(0);
+    }
+    _outCtrl.close();
+    return true;
+  }
 
   @override
-  Future<int> get exitCode => Future.value(0);
+  Future<int> get exitCode => _exitCompleter.future;
 
   @override
   void resize(int columns, int rows) {}
