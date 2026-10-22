@@ -1,3 +1,7 @@
+## 0.2.23
+
+ - Update a dependency to the latest release.
+
 ## 0.2.22
 
  - **FIX**(termui_test): match multiline text, track virtual time, and unmount on exit.

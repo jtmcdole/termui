@@ -3,6 +3,48 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-10-22
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.11.0`](#termui---v0110)
+ - [`termui_pty` - `v0.5.0`](#termui_pty---v050)
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.8.8`](#termui_flutter---v088)
+ - [`termui_recorder` - `v0.8.1`](#termui_recorder---v081)
+ - [`termui_test` - `v0.2.23`](#termui_test---v0223)
+ - [`termui_hotreload` - `v0.6.24`](#termui_hotreload---v0624)
+ - [`termui_audio` - `v0.2.1`](#termui_audio---v021)
+ - [`termui_tinpot` - `v0.3.9`](#termui_tinpot---v039)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.8.8`
+ - `termui_recorder` - `v0.8.1`
+ - `termui_test` - `v0.2.23`
+ - `termui_hotreload` - `v0.6.24`
+ - `termui_audio` - `v0.2.1`
+ - `termui_tinpot` - `v0.3.9`
+
+---
+
+#### `termui` - `v0.11.0`
+
+ - **BREAKING** **FIX**(core): isolate SceneManager layer focus and synchronously unmount on PromptRunner.abort.
+
+#### `termui_pty` - `v0.5.0`
+
+ - **BREAKING** **FIX**(pty): complete enclosing PromptScope when PTY process exits.
+
+
 ## 2026-10-21
 
 ### Changes

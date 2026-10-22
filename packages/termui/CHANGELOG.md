@@ -1,3 +1,9 @@
+## 0.11.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(core): isolate SceneManager layer focus and synchronously unmount on PromptRunner.abort.
+
 ## 0.10.0
 
 > Note: This release has breaking changes.
