@@ -1,3 +1,7 @@
+## 0.8.8
+
+ - Update a dependency to the latest release.
+
 ## 0.8.7
 
  - **FIX**(termui_flutter): dispose GPU atlas resources, add white tile, and guard bounds.
