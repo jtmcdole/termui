@@ -847,6 +847,7 @@ Future<void> runGlassCompositingShared(
     widget: FireApp(config: config),
     alternateScreen: false,
     mode: ExecutionMode.managed,
+    exitConditions: const {},
     onFramePainted: (_) => sceneManager.scheduleRender(),
   );
   final fireLayer = SceneLayer(
@@ -863,6 +864,7 @@ Future<void> runGlassCompositingShared(
     widget: GlassOverlayApp(config: config),
     alternateScreen: false,
     mode: ExecutionMode.managed,
+    exitConditions: const {},
     onFramePainted: (_) => sceneManager.scheduleRender(),
   );
   final glassLayer = SceneLayer(
@@ -879,6 +881,7 @@ Future<void> runGlassCompositingShared(
     widget: SettingsApp(config: config),
     alternateScreen: false,
     mode: ExecutionMode.managed,
+    exitConditions: const {},
     onFramePainted: (_) => sceneManager.scheduleRender(),
   );
   final settingsLayer = SceneLayer(
@@ -913,30 +916,45 @@ Future<void> runGlassCompositingShared(
     config.wind = sin(t.tick / 20.0);
   });
 
-  try {
-    eventLoop:
-    await for (final event in terminal.events) {
-      if (event case term.KeyEvent()) {
-        switch (event) {
-          case term.KeyEvent(key: 'q' || 'Q' || '\x03') ||
-              term.KeyEvent(logicalKey: term.TermKey.controlC):
-            break eventLoop;
-          case term.KeyEvent(key: 's' || 'S'):
-            settingsVisible = !settingsVisible;
-            if (settingsVisible) {
-              sceneManager.layers.add(settingsLayer);
-              sceneManager.focusedLayer = settingsLayer;
-            } else {
-              sceneManager.layers.remove(settingsLayer);
-              sceneManager.focusedLayer = glassLayer;
-            }
-            sceneManager.scheduleRender();
-          default:
-            break;
+  final completer = Completer<void>();
+
+  sceneManager.onKeyEvent = (event) {
+    switch (event) {
+      case term.KeyEvent(key: 'q' || 'Q' || '\x03') ||
+          term.KeyEvent(logicalKey: term.TermKey.controlC):
+        if (!completer.isCompleted) {
+          completer.complete();
         }
-      }
+        return true;
+      case term.KeyEvent(key: 's' || 'S'):
+        settingsVisible = !settingsVisible;
+        if (settingsVisible) {
+          sceneManager.layers.add(settingsLayer);
+          sceneManager.focusedLayer = settingsLayer;
+        } else {
+          sceneManager.layers.remove(settingsLayer);
+          sceneManager.focusedLayer = glassLayer;
+        }
+        sceneManager.scheduleRender();
+        return true;
+      default:
+        return false;
     }
+  };
+
+  final eventsSub = terminal.events.listen(
+    null,
+    onDone: () {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    },
+  );
+
+  try {
+    await completer.future;
   } finally {
+    unawaited(eventsSub.cancel());
     fontTimer.cancel();
     themeTimer.cancel();
     windTimer.cancel();

@@ -40,7 +40,6 @@ class CliWidgetBookPlatform implements WidgetBookPlatform {
   @override
   void onExit() {
     print('\nWidget Book exited cleanly.');
-    exit(0);
   }
 
   @override
@@ -78,4 +77,5 @@ void main(List<String> arguments) async {
     final platform = CliWidgetBookPlatform();
     await runWidgetBookShared(terminal, platform, isInline: isInline);
   });
+  exit(0);
 }
