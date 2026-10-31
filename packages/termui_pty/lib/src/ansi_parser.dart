@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 /// Interface for receiving parsed ANSI terminal sequences.
 abstract interface class TerminalHandler {
   /// Print raw printable text.
@@ -124,7 +126,7 @@ final class AnsiParser {
         case _ParserState.csiEntry:
           if (c >= 0x30 && c <= 0x39) {
             // 0-9
-            _currentParam = (_currentParam * 10) + (c - 0x30);
+            _currentParam = math.min(0xFFFF, (_currentParam * 10) + (c - 0x30));
             _hasParam = true;
             _state = _ParserState.csiParam;
           } else if (c == 0x3B) {
@@ -153,7 +155,7 @@ final class AnsiParser {
 
         case _ParserState.csiParam:
           if (c >= 0x30 && c <= 0x39) {
-            _currentParam = (_currentParam * 10) + (c - 0x30);
+            _currentParam = math.min(0xFFFF, (_currentParam * 10) + (c - 0x30));
             _hasParam = true;
           } else if (c == 0x3B) {
             // ';'

@@ -214,5 +214,62 @@ void main() {
       expect(parsedBuffer.getForeground(2, 0), equals(0));
       expect(parsedBuffer.getBackground(2, 0), equals(0));
     });
+
+    test(
+      'parse replaces stale colors on carriage-return overwrites and SGR 39/49',
+      () {
+        const red = 0xFFFF0000;
+        const blue = 0xFF0000FF;
+        const ansi =
+            '\x1b[1;38;2;255;0;0;48;2;0;0;255mABCD'
+            '\r\x1b[39mX\x1b[49mY\x1b[0mZ\n';
+
+        final parsed = AnsiParser.parse(ansi, width: 4, height: 1);
+
+        expect(parsed.getCharacter(0, 0), equals('X'));
+        expect(parsed.getForeground(0, 0), equals(0));
+        expect(parsed.getBackground(0, 0), equals(blue));
+        expect(parsed.getModifiers(0, 0), equals(Modifier.bold));
+
+        expect(parsed.getCharacter(1, 0), equals('Y'));
+        expect(parsed.getForeground(1, 0), equals(0));
+        expect(parsed.getBackground(1, 0), equals(0));
+        expect(parsed.getModifiers(1, 0), equals(Modifier.bold));
+
+        expect(parsed.getCharacter(2, 0), equals('Z'));
+        expect(parsed.getForeground(2, 0), equals(0));
+        expect(parsed.getBackground(2, 0), equals(0));
+        expect(parsed.getModifiers(2, 0), equals(Modifier.none));
+
+        expect(parsed.getCharacter(3, 0), equals('D'));
+        expect(parsed.getForeground(3, 0), equals(red));
+        expect(parsed.getBackground(3, 0), equals(blue));
+      },
+    );
+
+    test('parseStream clears stale colors on unstyled overwrites', () {
+      final buffer = Buffer.blank(4, 1);
+      var state = AnsiParser.parseStream(
+        '\x1b[38;2;255;0;0;48;2;0;255;0mABCD',
+        buffer,
+      );
+      state = AnsiParser.parseStream(
+        '\x1b[1;1H\x1b[0mXY',
+        buffer,
+        cursorX: state.$1,
+        cursorY: state.$2,
+        currentStyle: state.$3,
+      );
+
+      expect(buffer.getCharacter(0, 0), equals('X'));
+      expect(buffer.getForeground(0, 0), equals(0));
+      expect(buffer.getBackground(0, 0), equals(0));
+      expect(buffer.getCharacter(1, 0), equals('Y'));
+      expect(buffer.getForeground(1, 0), equals(0));
+      expect(buffer.getBackground(1, 0), equals(0));
+      expect(buffer.getCharacter(2, 0), equals('C'));
+      expect(buffer.getForeground(2, 0), equals(0xFFFF0000));
+      expect(buffer.getBackground(2, 0), equals(0xFF00FF00));
+    });
   });
 }

@@ -1,5 +1,6 @@
 import 'package:test/test.dart';
 import 'package:termui/ui/buffer.dart';
+import 'package:termui/ui/renderer.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/widgets/layout/row.dart';
 import 'package:termui/ui/widgets/layout/column.dart';
@@ -179,6 +180,151 @@ void main() {
           expect(root.getCharacter(x, y), ' ');
         }
       }
+    });
+  });
+
+  group('Buffer and Viewport blend, clipping, and wide-grapheme clearing', () {
+    test('defaultBlend and per-call blend control color replacement', () {
+      const red = 0xFFFF0000;
+      const blue = 0xFF0000FF;
+      const halfGreen = 0x8000FF00;
+
+      // Default buffer blends 0 as transparent no-op unless blend: false.
+      final blending = Buffer.blank(4, 2);
+      blending.setCell(0, 0, 'A', red, blue, Modifier.bold);
+      blending.setCell(0, 0, 'B', 0, 0, Modifier.none);
+      expect(blending.getForeground(0, 0), red);
+      expect(blending.getBackground(0, 0), blue);
+
+      blending.setCell(0, 0, 'C', 0, 0, Modifier.none, blend: false);
+      expect(blending.getForeground(0, 0), 0);
+      expect(blending.getBackground(0, 0), 0);
+
+      // defaultBlend: false replaces colors by default across all write APIs,
+      // while blend: true still opts into alpha compositing.
+      final replacing = Buffer.blank(4, 2, defaultBlend: false);
+      expect(replacing.defaultBlend, isFalse);
+
+      replacing.setAttributes(
+        0,
+        0,
+        char: '🍎',
+        fg: red,
+        bg: blue,
+        modifiers: Modifier.bold,
+      );
+      replacing.setAttributes(
+        0,
+        0,
+        char: '🍎',
+        fg: 0,
+        bg: 0,
+        modifiers: Modifier.none,
+      );
+      expect(replacing.getForeground(0, 0), 0);
+      expect(replacing.getBackground(0, 0), 0);
+      expect(replacing.getForeground(1, 0), 0);
+      expect(replacing.getBackground(1, 0), 0);
+
+      replacing.setAttributes(2, 0, char: 'X', bg: blue);
+      replacing.setAttributes(2, 0, bg: halfGreen, blend: true);
+      expect(replacing.getBackground(2, 0), blendColor(halfGreen, blue));
+
+      replacing.fillAttributes(fg: red, bg: blue);
+      replacing.fillAttributes(fg: 0, bg: 0);
+      expect(replacing.getForeground(3, 1), 0);
+      expect(replacing.getBackground(3, 1), 0);
+
+      replacing.fillRect(const Rect(0, 0, 2, 2), fg: red, bg: blue);
+      replacing.fillRect(const Rect(0, 0, 2, 2), fg: 0, bg: 0);
+      expect(replacing.getForeground(1, 1), 0);
+      expect(replacing.getBackground(1, 1), 0);
+    });
+
+    test(
+      'Buffer.blank preserves opaque Modifier.none on wide split and resize',
+      () {
+        final opaque = Buffer.blank(4, 1);
+        opaque.setAttributes(1, 0, char: '🍎');
+        opaque.setAttributes(1, 0, char: 'X');
+        expect(opaque.getModifiers(2, 0), Modifier.none);
+
+        opaque.setAttributes(1, 0, char: '🍎');
+        opaque.setAttributes(2, 0, char: 'Y');
+        expect(opaque.getModifiers(1, 0), Modifier.none);
+
+        opaque.resize(6, 2);
+        expect(opaque.getModifiers(5, 1), Modifier.none);
+      },
+    );
+
+    test('Viewport clips fillRect to bounds and resets colors on clear()', () {
+      const red = 0xFFFF0000;
+      const blue = 0xFF0000FF;
+      final root = Buffer.blank(6, 4);
+      root.fillAttributes(char: '#', fg: red, bg: blue);
+
+      final viewport = Viewport(root, const Rect(1, 1, 3, 2));
+      expect(viewport.defaultBlend, isTrue);
+
+      // Overflowing fillRect must stay strictly inside [1..4) x [1..3).
+      viewport.fillRect(
+        const Rect(-2, -1, 10, 10),
+        char: '.',
+        fg: 0,
+        bg: 0,
+        blend: false,
+      );
+      expect(root.getCharacter(0, 1), '#');
+      expect(root.getBackground(0, 1), blue);
+      expect(root.getCharacter(4, 1), '#');
+      expect(root.getBackground(4, 1), blue);
+      expect(root.getCharacter(1, 3), '#');
+      expect(root.getCharacter(2, 1), '.');
+      expect(root.getForeground(2, 1), 0);
+      expect(root.getBackground(2, 1), 0);
+
+      // Restore colors inside viewport and verify clear() zeroes fg/bg.
+      viewport.fillAttributes(char: 'Z', fg: red, bg: blue);
+      viewport.clear();
+      for (var y = 1; y < 3; y++) {
+        for (var x = 1; x < 4; x++) {
+          expect(root.getCharacter(x, y), ' ');
+          expect(root.getForeground(x, y), 0);
+          expect(root.getBackground(x, y), 0);
+          expect(root.getModifiers(x, y), Modifier.transparent);
+        }
+      }
+      expect(root.getBackground(0, 1), blue);
+    });
+
+    test('Viewport.clear splits wide graphemes straddling viewport edges', () {
+      final root = Buffer.blank(6, 1);
+      // Place wide emojis straddling left edge (cols 0..1) and right edge (cols 3..4),
+      // plus 'Z' at col 5 to verify terminal column alignment.
+      root.setAttributes(0, 0, char: '🍎');
+      root.setAttributes(3, 0, char: '🍊');
+      root.setAttributes(5, 0, char: 'Z');
+
+      final viewport = Viewport(root, const Rect(1, 0, 3, 1));
+      viewport.clear();
+
+      expect(root.getCharacter(0, 0), ' ');
+      expect(root.getModifiers(0, 0), Modifier.none);
+      expect(root.getCharacter(1, 0), ' ');
+      expect(root.getCharacter(3, 0), ' ');
+      expect(root.getCharacter(4, 0), ' ');
+      expect(root.getModifiers(4, 0), Modifier.none);
+      expect(root.getCharacter(5, 0), 'Z');
+
+      // Renderer must emit exactly 5 spaces before 'Z' with no column drift.
+      final out = StringBuffer();
+      Renderer(6, 1).render(root, out);
+      final stripped = out.toString().replaceAll(
+        RegExp(r'\x1b\[[0-9;?]*[A-Za-z]'),
+        '',
+      );
+      expect(stripped, '     Z');
     });
   });
 }
