@@ -246,4 +246,133 @@ void main() {
       expect(terminal.cursorY, equals(2));
     });
   });
+
+  group('VirtualTerminal resets, DECSC/DECRC, CHA/VPA/ECH, and CSI guards', () {
+    test(
+      'CHA (G), VPA (d), and ECH (X) handle BCE, wide splits, and pending wrap',
+      () {
+        final terminal = VirtualTerminal(width: 6, height: 3);
+        final blue = const Color(0, 0, 170).argb;
+
+        // Fill row 0 so cursorX == 6 (pending wrap), then VPA to row 2 (1-indexed).
+        terminal.write(utf8.encode('ABCDEF\x1b[2d'));
+        expect(terminal.cursorX, equals(5));
+        expect(terminal.cursorY, equals(1));
+
+        // CHA to col 2 (1-indexed), write wide emoji at cols 1..2, then CHA col 1
+        // and ECH 2 chars with blue BCE background (splitting '🍎' cleanly).
+        terminal.write(
+          utf8.encode('\x1b[1;1H\x1b[2G🍎Z\x1b[1G\x1b[44m\x1b[2X'),
+        );
+        expect(terminal.cursorX, equals(0));
+        expect(terminal.buffer.getCharacter(0, 0), equals(' '));
+        expect(terminal.buffer.getBackground(0, 0), equals(blue));
+        expect(terminal.buffer.getCharacter(1, 0), equals(' '));
+        expect(terminal.buffer.getBackground(1, 0), equals(blue));
+        // Split right half of '🍎' at col 2 must be reset to ' ' instead of ''.
+        expect(terminal.buffer.getCharacter(2, 0), equals(' '));
+        expect(terminal.buffer.getCharacter(3, 0), equals('Z'));
+
+        // Pending-wrap ECH clamps cursorX to width - 1 and erases the last cell,
+        // and huge ECH counts do not overflow 64-bit signed arithmetic.
+        terminal.write(utf8.encode('\x1b[0m\x1b[1;1H123456'));
+        expect(terminal.cursorX, equals(6));
+        terminal.write(utf8.encode('\x1b[99999999999999999999X'));
+        expect(terminal.cursorX, equals(5));
+        expect(terminal.buffer.getCharacter(4, 0), equals('5'));
+        expect(terminal.buffer.getCharacter(5, 0), equals(' '));
+      },
+    );
+
+    test(
+      'private and intermediate CSI sequences do not leak into standard SGR',
+      () {
+        final terminal = VirtualTerminal(width: 6, height: 2);
+
+        // DECSET / DECRST mouse tracking modes.
+        terminal.write(utf8.encode('\x1b[?1002;1006h'));
+        expect(terminal.mouseTrackingEnabled, isTrue);
+        expect(terminal.sgrMouseMode, isTrue);
+        terminal.write(utf8.encode('\x1b[?1002;1006l'));
+        expect(terminal.mouseTrackingEnabled, isFalse);
+        expect(terminal.sgrMouseMode, isFalse);
+
+        // modifyOtherKeys (\x1b[>4;2m), XTQMODKEYS (\x1b[?4m), and DECSCUSR (\x1b[2 q)
+        // must not apply SGR 4 (underline) or SGR 2 (dim).
+        terminal.write(utf8.encode('\x1b[>4;2m\x1b[?4m\x1b[2 qA'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('A'));
+        expect(terminal.buffer.getModifiers(0, 0), equals(Modifier.none));
+      },
+    );
+
+    test(
+      'DECSC (ESC 7) and DECRC (ESC 8) save and restore style and pending wrap',
+      () {
+        final terminal = VirtualTerminal(width: 4, height: 2);
+        final red = const Color(170, 0, 0).argb;
+
+        // Save cursor in pending-wrap state (cursorX == 4) with red bold style.
+        terminal.write(utf8.encode('\x1b[1;31mABCD\x1b7'));
+        expect(terminal.cursorX, equals(4));
+
+        // Move elsewhere and reset SGR, then restore and print 'Z' (wraps to row 1 col 0).
+        terminal.write(utf8.encode('\x1b[2;2H\x1b[0mX\x1b8Z'));
+        expect(terminal.buffer.getCharacter(0, 1), equals('Z'));
+        expect(terminal.buffer.getForeground(0, 1), equals(red));
+        expect(terminal.buffer.getModifiers(0, 1), equals(Modifier.bold));
+      },
+    );
+
+    test(
+      'RIS (ESC c), DECSTR (CSI ! p), and reset() clear stale state and partial streams',
+      () {
+        final terminal = VirtualTerminal(width: 6, height: 2);
+        var notifications = 0;
+        terminal.addListener(() => notifications++);
+
+        // DECSTR (soft reset) resets SGR, saved cursor, mouse modes, and pending wrap
+        // without erasing existing screen text.
+        terminal.write(
+          utf8.encode('\x1b[?1000;1006h\x1b[1;31;44mABCDEF\x1b7\x1b[!p'),
+        );
+        expect(terminal.mouseTrackingEnabled, isFalse);
+        expect(terminal.sgrMouseMode, isFalse);
+        expect(terminal.cursorX, equals(5));
+        expect(terminal.buffer.getCharacter(0, 0), equals('A'));
+        terminal.write(utf8.encode('\rX'));
+        expect(terminal.buffer.getForeground(0, 0), equals(0));
+        expect(terminal.buffer.getBackground(0, 0), equals(0));
+        expect(terminal.buffer.getModifiers(0, 0), equals(Modifier.none));
+
+        // RIS (ESC c) mid-chunk resets screen and prints trailing text cleanly at (0, 0).
+        terminal.write(utf8.encode('\x1b[31;44mDIRTY\x1bcClean'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('C'));
+        expect(terminal.buffer.getCharacter(4, 0), equals('n'));
+        expect(terminal.buffer.getForeground(0, 0), equals(0));
+        expect(terminal.buffer.getBackground(0, 0), equals(0));
+
+        // reset() recovers from mid-OSC, mid-CSI, and split multi-byte UTF-8 bytes.
+        terminal.write(utf8.encode('\x1b]0;unterminated title'));
+        final beforeReset = notifications;
+        terminal.reset();
+        expect(notifications, equals(beforeReset + 1));
+        terminal.write(utf8.encode('Ok'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('O'));
+        expect(terminal.buffer.getCharacter(1, 0), equals('k'));
+
+        terminal.write(utf8.encode('\x1b[31'));
+        terminal.reset();
+        terminal.write(utf8.encode('Hi'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('H'));
+        expect(terminal.buffer.getForeground(0, 0), equals(0));
+
+        // First 2 bytes of 4-byte UTF-8 '🍎' ([0xF0, 0x9F, 0x8D, 0x8E]), then reset().
+        terminal.write(const [0xF0, 0x9F]);
+        terminal.reset();
+        terminal.write(utf8.encode('Plain'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('P'));
+        expect(terminal.buffer.getCharacter(1, 0), equals('l'));
+      },
+    );
+  });
 }
