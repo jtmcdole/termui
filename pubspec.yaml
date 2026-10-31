@@ -54,6 +54,7 @@ melos:
     test:dart:
       description: Run unit tests for pure Dart packages.
       exec:
+        concurrency: 1
         command: dart test --reporter=expanded
         failFast: true
       packageFilters:
@@ -63,6 +64,7 @@ melos:
     test:flutter:
       description: Run unit tests for Flutter packages.
       exec:
+        concurrency: 1
         command: flutter test --reporter=expanded -j 1
         failFast: true
       packageFilters:

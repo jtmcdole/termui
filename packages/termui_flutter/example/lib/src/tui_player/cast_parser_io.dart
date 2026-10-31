@@ -1,16 +1,16 @@
 import 'dart:convert';
-import 'package:archive/archive.dart';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 String _decompressTask(Uint8List bytes) {
   try {
     if (bytes case [0x1f, 0x8b, ...]) {
-      final decompressed = GZipDecoder().decodeBytes(bytes);
+      final decompressed = gzip.decode(bytes);
       return utf8.decode(decompressed, allowMalformed: true);
     } else {
       return utf8.decode(bytes, allowMalformed: true);
     }
-  } catch (e) {
+  } catch (_) {
     return utf8.decode(bytes, allowMalformed: true);
   }
 }

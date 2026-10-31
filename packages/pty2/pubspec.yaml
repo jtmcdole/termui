@@ -21,8 +21,11 @@ topics:
   - console
 
 dependencies:
+  code_assets: ^2.1.0
   ffi: ^2.2.0
+  hooks: ^2.2.0
   lints: ^6.1.0
+  native_toolchain_c: ^0.19.5
   win32: ^6.0.0
 
 dev_dependencies:
