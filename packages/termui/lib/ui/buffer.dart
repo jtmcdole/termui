@@ -63,14 +63,21 @@ class Buffer {
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
 
+  /// Whether cell attribute writes alpha-blend colors over existing cells when
+  /// a per-call `blend` argument is omitted.
+  final bool defaultBlend;
+
+  final int _emptyModifiers;
+
   /// Adds a terminal effect to this buffer.
   void addEffect(RegisteredEffect effect) {
     effects.add(effect);
   }
 
   /// Creates a new buffer of [width] by [height] initialized with transparent empty cell data.
-  Buffer(this.width, this.height)
-    : characters = List.filled(width * height, ' '),
+  Buffer(this.width, this.height, {this.defaultBlend = true})
+    : _emptyModifiers = Modifier.transparent,
+      characters = List.filled(width * height, ' '),
       attributes = Uint32List(width * height * 3) {
     for (var i = 2; i < attributes.length; i += 3) {
       attributes[i] = Modifier.transparent;
@@ -78,8 +85,9 @@ class Buffer {
   }
 
   /// Creates a new buffer of [width] by [height] initialized with solid blank cell data.
-  Buffer.blank(this.width, this.height)
-    : characters = List.filled(width * height, ' '),
+  Buffer.blank(this.width, this.height, {this.defaultBlend = true})
+    : _emptyModifiers = Modifier.none,
+      characters = List.filled(width * height, ' '),
       attributes = Uint32List(width * height * 3);
 
   /// Stack of active canvas clip rectangles.
@@ -197,13 +205,73 @@ class Buffer {
     }
   }
 
+  @pragma('vm:prefer-inline')
+  void _resetCell(int cellIdx) {
+    characters[cellIdx] = ' ';
+    final attrIdx = cellIdx * 3;
+    attributes[attrIdx + 0] = 0;
+    attributes[attrIdx + 1] = 0;
+    attributes[attrIdx + 2] = _emptyModifiers;
+  }
+
+  @pragma('vm:prefer-inline')
+  void _writeCellAttributes(
+    int attrIdx, {
+    int? fg,
+    int? bg,
+    int? modifiers,
+    required bool blend,
+  }) {
+    if (fg != null) {
+      attributes[attrIdx + 0] = blend
+          ? blendColor(fg, attributes[attrIdx + 0])
+          : fg;
+    }
+    if (bg != null) {
+      attributes[attrIdx + 1] = blend
+          ? blendColor(bg, attributes[attrIdx + 1])
+          : bg;
+    }
+    if (modifiers != null) {
+      attributes[attrIdx + 2] = modifiers;
+    }
+  }
+
+  @pragma('vm:prefer-inline')
+  void _clearSplitWideEdges(int rowOffset, int startX, int endX, String char) {
+    if (char == '') return;
+    final rowStart = rowOffset + startX;
+    if (startX > 0 &&
+        characters[rowStart] == '' &&
+        isWideGrapheme(characters[rowStart - 1])) {
+      _resetCell(rowStart - 1);
+    }
+    final rowEnd = rowOffset + endX;
+    if (endX < width && characters[rowEnd] == '') {
+      _resetCell(rowEnd);
+    }
+  }
+
   /// Sets character, colors, and modifiers at coordinates.
-  void setCell(int x, int y, String char, int fg, int bg, int mod) {
+  ///
+  /// When [blend] is `true` (or omitted when [defaultBlend] is `true`), [fg]
+  /// and [bg] are alpha-blended over existing cell colors. When `false`, they
+  /// replace existing colors directly so `0` resets to the terminal default.
+  void setCell(
+    int x,
+    int y,
+    String char,
+    int fg,
+    int bg,
+    int mod, {
+    bool? blend,
+  }) {
     if (isCellValid(x, y)) {
+      final useBlend = blend ?? defaultBlend;
       final idx = (y * width + x) * 3;
       characters[y * width + x] = char;
-      attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
-      attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
+      attributes[idx + 0] = useBlend ? blendColor(fg, attributes[idx + 0]) : fg;
+      attributes[idx + 1] = useBlend ? blendColor(bg, attributes[idx + 1]) : bg;
       attributes[idx + 2] = mod;
     }
   }
@@ -216,68 +284,51 @@ class Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    bool? blend,
   }) {
     if (!isCellValid(x, y)) return;
+    final useBlend = blend ?? defaultBlend;
     final charIdx = y * width + x;
     final idx = charIdx * 3;
-    final bool isWide = char != null && char != '' && isWideGrapheme(char);
+    final isWide = char != null && char != '' && isWideGrapheme(char);
     if (char != null) {
       if (char != '') {
         if (characters[charIdx] == '') {
-          if (x - 1 >= 0) {
-            final prevIdx = charIdx - 1;
-            if (isWideGrapheme(characters[prevIdx])) {
-              characters[prevIdx] = ' ';
-              attributes[prevIdx * 3 + 0] = 0;
-              attributes[prevIdx * 3 + 1] = 0;
-              attributes[prevIdx * 3 + 2] = Modifier.transparent;
-            }
+          if (x - 1 >= 0 && isWideGrapheme(characters[charIdx - 1])) {
+            _resetCell(charIdx - 1);
           }
         } else if (isWideGrapheme(characters[charIdx])) {
-          if (x + 1 < width) {
-            final nextIdx = charIdx + 1;
-            if (characters[nextIdx] == '') {
-              characters[nextIdx] = ' ';
-              attributes[nextIdx * 3 + 0] = 0;
-              attributes[nextIdx * 3 + 1] = 0;
-              attributes[nextIdx * 3 + 2] = Modifier.transparent;
-            }
+          if (x + 1 < width && characters[charIdx + 1] == '') {
+            _resetCell(charIdx + 1);
           }
         }
       }
       characters[charIdx] = char;
       if (isWide && x + 1 < width) {
         final nextIdx = charIdx + 1;
-        if (isWideGrapheme(characters[nextIdx]) && x + 2 < width) {
-          final nextNextIdx = charIdx + 2;
-          if (characters[nextNextIdx] == '') {
-            characters[nextNextIdx] = ' ';
-            attributes[nextNextIdx * 3 + 0] = 0;
-            attributes[nextNextIdx * 3 + 1] = 0;
-            attributes[nextNextIdx * 3 + 2] = Modifier.transparent;
-          }
+        if (isWideGrapheme(characters[nextIdx]) &&
+            x + 2 < width &&
+            characters[charIdx + 2] == '') {
+          _resetCell(charIdx + 2);
         }
         characters[nextIdx] = '';
       }
     }
-    if (fg != null) attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
-    if (bg != null) attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
-    if (modifiers != null) attributes[idx + 2] = modifiers;
+    _writeCellAttributes(
+      idx,
+      fg: fg,
+      bg: bg,
+      modifiers: modifiers,
+      blend: useBlend,
+    );
     if (isWide && x + 1 < width) {
-      final nextAttrIdx = (charIdx + 1) * 3;
-      if (fg != null) {
-        attributes[nextAttrIdx + 0] = blendColor(
-          fg,
-          attributes[nextAttrIdx + 0],
-        );
-      }
-      if (bg != null) {
-        attributes[nextAttrIdx + 1] = blendColor(
-          bg,
-          attributes[nextAttrIdx + 1],
-        );
-      }
-      if (modifiers != null) attributes[nextAttrIdx + 2] = modifiers;
+      _writeCellAttributes(
+        (charIdx + 1) * 3,
+        fg: fg,
+        bg: bg,
+        modifiers: modifiers,
+        blend: useBlend,
+      );
     }
   }
 
@@ -297,24 +348,36 @@ class Buffer {
   }
 
   /// Fills the entire buffer with the specified attributes.
-  void fillAttributes({String? char, int? fg, int? bg, int? modifiers}) {
+  void fillAttributes({
+    String? char,
+    int? fg,
+    int? bg,
+    int? modifiers,
+    bool? blend,
+  }) {
     if (char != null) characters.fillRange(0, characters.length, char);
-    if (fg != null || bg != null || modifiers != null) {
-      for (var i = 0; i < characters.length; i++) {
-        final idx = i * 3;
-        if (fg != null) {
-          attributes[idx + 0] = blendColor(fg, attributes[idx + 0]);
-        }
-        if (bg != null) {
-          attributes[idx + 1] = blendColor(bg, attributes[idx + 1]);
-        }
-        if (modifiers != null) attributes[idx + 2] = modifiers;
-      }
+    if (fg == null && bg == null && modifiers == null) return;
+    final useBlend = blend ?? defaultBlend;
+    for (var i = 0; i < characters.length; i++) {
+      _writeCellAttributes(
+        i * 3,
+        fg: fg,
+        bg: bg,
+        modifiers: modifiers,
+        blend: useBlend,
+      );
     }
   }
 
   /// Fills a rectangular region with the given character and attributes.
-  void fillRect(Rect rect, {String? char, int? fg, int? bg, int? modifiers}) {
+  void fillRect(
+    Rect rect, {
+    String? char,
+    int? fg,
+    int? bg,
+    int? modifiers,
+    bool? blend,
+  }) {
     final clipped = _clipStack.isEmpty ? rect : activeClip.intersect(rect);
     if (clipped.width <= 0 || clipped.height <= 0) return;
 
@@ -326,26 +389,24 @@ class Buffer {
 
     if (char != null) {
       for (var y = startY; y < endY; y++) {
-        final rowStart = y * width + startX;
-        final rowEnd = y * width + endX;
-        characters.fillRange(rowStart, rowEnd, char);
+        final rowOffset = y * width;
+        _clearSplitWideEdges(rowOffset, startX, endX, char);
+        characters.fillRange(rowOffset + startX, rowOffset + endX, char);
       }
     }
 
-    if (fg != null || bg != null || modifiers != null) {
-      for (var y = startY; y < endY; y++) {
-        final rowOffset = y * width;
-        for (var x = startX; x < endX; x++) {
-          final idx = rowOffset + x;
-          final attrIdx = idx * 3;
-          if (fg != null) {
-            attributes[attrIdx + 0] = blendColor(fg, attributes[attrIdx + 0]);
-          }
-          if (bg != null) {
-            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
-          }
-          if (modifiers != null) attributes[attrIdx + 2] = modifiers;
-        }
+    if (fg == null && bg == null && modifiers == null) return;
+    final useBlend = blend ?? defaultBlend;
+    for (var y = startY; y < endY; y++) {
+      final rowOffset = y * width;
+      for (var x = startX; x < endX; x++) {
+        _writeCellAttributes(
+          (rowOffset + x) * 3,
+          fg: fg,
+          bg: bg,
+          modifiers: modifiers,
+          blend: useBlend,
+        );
       }
     }
   }
@@ -389,8 +450,10 @@ class Buffer {
       final newChars = List.filled(newWidth * newHeight, ' ');
       final newAttributes = Uint32List(newWidth * newHeight * 3);
 
-      for (var i = 2; i < newAttributes.length; i += 3) {
-        newAttributes[i] = Modifier.transparent;
+      if (_emptyModifiers != 0) {
+        for (var i = 2; i < newAttributes.length; i += 3) {
+          newAttributes[i] = _emptyModifiers;
+        }
       }
 
       final overlapWidth = min(width, newWidth);

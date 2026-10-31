@@ -32,7 +32,7 @@ abstract final class AnsiParser {
     final targetWidth = width ?? computedWidth;
     final targetHeight = height ?? computedHeight;
 
-    final buffer = Buffer.blank(targetWidth, targetHeight);
+    final buffer = Buffer.blank(targetWidth, targetHeight, defaultBlend: false);
 
     var x = 0;
     var y = 0;
@@ -176,6 +176,7 @@ abstract final class AnsiParser {
           fg: style.foreground?.argb ?? 0,
           bg: style.background?.argb ?? 0,
           modifiers: style.modifiers,
+          blend: false,
         );
         x += w;
       }
@@ -246,12 +247,18 @@ abstract final class AnsiParser {
           final b = codes[i + 4];
           foreground = Color(r, g, b);
           i += 5;
+        case 39:
+          foreground = null;
+          i++;
         case 48 when i + 4 < codes.length && codes[i + 1] == 2:
           final r = codes[i + 2];
           final g = codes[i + 3];
           final b = codes[i + 4];
           background = Color(r, g, b);
           i += 5;
+        case 49:
+          background = null;
+          i++;
         default:
           i++;
       }

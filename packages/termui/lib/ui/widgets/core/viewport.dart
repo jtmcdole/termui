@@ -3,7 +3,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A clipped view into a rectangular region of a parent [Buffer].
 class Viewport implements Buffer {
   /// The underlying parent buffer.
   final Buffer parent;
@@ -19,6 +19,9 @@ class Viewport implements Buffer {
         max(0, bounds.width),
         max(0, bounds.height),
       );
+
+  @override
+  bool get defaultBlend => parent.defaultBlend;
 
   @override
   int get width => bounds.width;
@@ -151,9 +154,25 @@ class Viewport implements Buffer {
   }
 
   @override
-  void setCell(int x, int y, String char, int fg, int bg, int mod) {
+  void setCell(
+    int x,
+    int y,
+    String char,
+    int fg,
+    int bg,
+    int mod, {
+    bool? blend,
+  }) {
     if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
-      parent.setCell(bounds.x + x, bounds.y + y, char, fg, bg, mod);
+      parent.setCell(
+        bounds.x + x,
+        bounds.y + y,
+        char,
+        fg,
+        bg,
+        mod,
+        blend: blend,
+      );
     }
   }
 
@@ -165,6 +184,7 @@ class Viewport implements Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    bool? blend,
   }) {
     if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return;
     parent.setAttributes(
@@ -174,6 +194,7 @@ class Viewport implements Buffer {
       fg: fg,
       bg: bg,
       modifiers: modifiers,
+      blend: blend,
     );
   }
 
@@ -185,28 +206,49 @@ class Viewport implements Buffer {
       modifiers: Modifier.transparent,
       fg: 0,
       bg: 0,
+      blend: false,
     );
   }
 
   @override
-  void fillAttributes({String? char, int? fg, int? bg, int? modifiers}) {
+  void fillAttributes({
+    String? char,
+    int? fg,
+    int? bg,
+    int? modifiers,
+    bool? blend,
+  }) {
     fillRect(
       Rect(0, 0, bounds.width, bounds.height),
       char: char,
       fg: fg,
       bg: bg,
       modifiers: modifiers,
+      blend: blend,
     );
   }
 
   @override
-  void fillRect(Rect rect, {String? char, int? fg, int? bg, int? modifiers}) {
-    parent.fillRect(
+  void fillRect(
+    Rect rect, {
+    String? char,
+    int? fg,
+    int? bg,
+    int? modifiers,
+    bool? blend,
+  }) {
+    if (rect.width <= 0 || rect.height <= 0) return;
+    final clipped = bounds.intersect(
       Rect(bounds.x + rect.x, bounds.y + rect.y, rect.width, rect.height),
+    );
+    if (clipped.width <= 0 || clipped.height <= 0) return;
+    parent.fillRect(
+      clipped,
       char: char,
       fg: fg,
       bg: bg,
       modifiers: modifiers,
+      blend: blend,
     );
   }
 

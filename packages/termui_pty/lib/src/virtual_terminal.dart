@@ -25,7 +25,7 @@ final class VirtualTerminal implements TerminalHandler {
   /// The 0-indexed Y coordinate of the cursor.
   int cursorY = 0;
 
-  Style _currentStyle = Style.empty;
+  Style _currentStyle = .empty;
   late final AnsiParser _parser;
   late final ByteConversionSink _utf8Sink;
 
@@ -71,15 +71,9 @@ final class VirtualTerminal implements TerminalHandler {
     this.height = 24,
     this.transparentBackground = false,
     this.defaultForeground,
-  }) : _buffer = Buffer.blank(width, height) {
-    if (transparentBackground) {
-      _buffer.fillAttributes(
-        char: ' ',
-        fg: 0,
-        bg: 0,
-        modifiers: Modifier.transparent,
-      );
-    }
+  }) : _buffer = transparentBackground
+           ? Buffer(width, height, defaultBlend: false)
+           : Buffer.blank(width, height, defaultBlend: false) {
     _parser = AnsiParser(this);
     _utf8Sink = const Utf8Decoder(
       allowMalformed: true,
@@ -92,17 +86,6 @@ final class VirtualTerminal implements TerminalHandler {
     final clampedHeight = math.max(1, newHeight);
     if (clampedWidth == width && clampedHeight == height) return;
     _buffer.resize(clampedWidth, clampedHeight);
-
-    if (transparentBackground) {
-      final size = clampedWidth * clampedHeight;
-      for (var i = 0; i < size; i++) {
-        if (_buffer.characters[i] == ' ' &&
-            _buffer.attributes[i * 3 + 1] == 0) {
-          _buffer.attributes[i * 3 + 2] |= Modifier.transparent;
-        }
-      }
-    }
-
     width = clampedWidth;
     height = clampedHeight;
     cursorX = cursorX.clamp(0, width - 1);
@@ -119,6 +102,77 @@ final class VirtualTerminal implements TerminalHandler {
     _notifyListeners();
   }
 
+  (int fg, int bg, int mod) _eraseAttributes() {
+    final bgArg = _currentStyle.background?.argb ?? 0;
+    if (transparentBackground && (bgArg == 0 || bgArg == 0xFF000000)) {
+      return (0, 0, Modifier.transparent);
+    }
+    return (0, bgArg, Modifier.none);
+  }
+
+  void _eraseRowSpan(int y, int startX, int endX) {
+    if (startX >= endX || y < 0 || y >= height) return;
+    final (fg, bg, mod) = _eraseAttributes();
+    _buffer.fillRect(
+      Rect(startX, y, endX - startX, 1),
+      char: ' ',
+      fg: fg,
+      bg: bg,
+      modifiers: mod,
+    );
+  }
+
+  void _eraseInDisplay(int mode) {
+    switch (mode) {
+      case 0: // Cursor (inclusive) to end of screen
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _eraseRowSpan(cursorY, cursorX, width);
+        if (cursorY + 1 < height) {
+          final (fg, bg, mod) = _eraseAttributes();
+          _buffer.fillRect(
+            Rect(0, cursorY + 1, width, height - (cursorY + 1)),
+            char: ' ',
+            fg: fg,
+            bg: bg,
+            modifiers: mod,
+          );
+        }
+      case 1: // Start of screen to cursor (inclusive)
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        if (cursorY > 0) {
+          final (fg, bg, mod) = _eraseAttributes();
+          _buffer.fillRect(
+            Rect(0, 0, width, cursorY),
+            char: ' ',
+            fg: fg,
+            bg: bg,
+            modifiers: mod,
+          );
+        }
+        _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
+      case 2: // Entire screen
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        final (fg, bg, mod) = _eraseAttributes();
+        _buffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
+      case 3: // Saved scrollback lines only (no-op without scrollback buffer)
+        break;
+    }
+  }
+
+  void _eraseInLine(int mode) {
+    switch (mode) {
+      case 0: // Cursor (inclusive) to end of line
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _eraseRowSpan(cursorY, cursorX, width);
+      case 1: // Start of line to cursor (inclusive)
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
+      case 2: // Entire line
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _eraseRowSpan(cursorY, 0, width);
+    }
+  }
+
   void _scrollUp() {
     final chars = _buffer.characters;
     final attrs = _buffer.attributes;
@@ -131,11 +185,11 @@ final class VirtualTerminal implements TerminalHandler {
     final attrCount = rowCount * 3;
     attrs.setRange(0, attrs.length - attrCount, attrs, attrCount);
 
-    // Fill bottom row with empty/transparent
+    final (fg, bg, mod) = _eraseAttributes();
     for (var i = attrs.length - attrCount; i < attrs.length; i += 3) {
-      attrs[i] = 0; // fg
-      attrs[i + 1] = 0; // bg
-      attrs[i + 2] = Modifier.transparent; // mod
+      attrs[i] = fg;
+      attrs[i + 1] = bg;
+      attrs[i + 2] = mod;
     }
   }
 
@@ -181,7 +235,7 @@ final class VirtualTerminal implements TerminalHandler {
           char: ' ',
           fg: fgArg,
           bg: bgArg,
-          modifiers: modArg,
+          modifiers: isBgTransparent ? (modArg | Modifier.transparent) : modArg,
         );
         cursorX++;
       } else {
@@ -193,21 +247,7 @@ final class VirtualTerminal implements TerminalHandler {
           bg: bgArg,
           modifiers: modArg,
         );
-        if (isWide) {
-          if (cursorX + 1 < width) {
-            _buffer.setAttributes(
-              cursorX + 1,
-              cursorY,
-              char: '',
-              fg: fgArg,
-              bg: bgArg,
-              modifiers: modArg,
-            );
-          }
-          cursorX += 2;
-        } else {
-          cursorX++;
-        }
+        cursorX += isWide ? 2 : 1;
       }
     }
   }
@@ -217,31 +257,29 @@ final class VirtualTerminal implements TerminalHandler {
     switch (charCode) {
       case 8: // Backspace
         if (cursorX > 0) cursorX--;
-        break;
       case 9: // Horizontal tab
         if (width > 0) {
           cursorX = (((cursorX ~/ 8) + 1) * 8).clamp(0, width - 1);
         }
-        break;
-      case 10: // Line feed
-      case 11: // Vertical tab
-      case 12: // Form feed
+      case 10 || 11 || 12: // Line feed, vertical tab, form feed
         cursorY++;
         if (cursorY >= height) {
           _scrollUp();
           cursorY = height - 1;
         }
-        break;
       case 13: // Carriage return
         cursorX = 0;
-        break;
     }
   }
 
   @override
   void csi(String command, List<int> params, {String? intermediate}) {
-    final p1 = params.isNotEmpty && params[0] != 0 ? params[0] : 1;
-    final p2 = params.length > 1 && params[1] != 0 ? params[1] : 1;
+    final p1 = params.isNotEmpty && params[0] > 0
+        ? math.min(params[0], 0xFFFF)
+        : 1;
+    final p2 = params.length > 1 && params[1] > 0
+        ? math.min(params[1], 0xFFFF)
+        : 1;
 
     if (intermediate == '?') {
       if (command == 'h') {
@@ -267,114 +305,29 @@ final class VirtualTerminal implements TerminalHandler {
       case 'A': // Cursor Up
         cursorY -= p1;
         if (cursorY < 0) cursorY = 0;
-        break;
       case 'B': // Cursor Down
         cursorY += p1;
         if (cursorY >= height) cursorY = height - 1;
-        break;
       case 'C': // Cursor Forward
         cursorX += p1;
         if (cursorX >= width) cursorX = width - 1;
-        break;
       case 'D': // Cursor Back
         cursorX -= p1;
         if (cursorX < 0) cursorX = 0;
-        break;
-      case 'H': // Cursor Position
-      case 'f':
+      case 'H' || 'f': // Cursor Position
         cursorY = p1 - 1;
         cursorX = p2 - 1;
         if (cursorX < 0) cursorX = 0;
         if (cursorY < 0) cursorY = 0;
         if (cursorX >= width) cursorX = width - 1;
         if (cursorY >= height) cursorY = height - 1;
-        break;
       case 'J': // Erase in Display
-        final param = params.isEmpty ? 0 : params[0];
-        final eraseMod = transparentBackground
-            ? Modifier.transparent
-            : Modifier.none;
-        if (param == 0) {
-          // Below
-          for (var y = cursorY; y < height; y++) {
-            final startX = (y == cursorY) ? cursorX : 0;
-            for (var x = startX; x < width; x++) {
-              _buffer.setAttributes(
-                x,
-                y,
-                char: ' ',
-                fg: 0,
-                bg: 0,
-                modifiers: eraseMod,
-              );
-            }
-          }
-        } else if (param == 1) {
-          // Above
-          for (var y = 0; y <= cursorY; y++) {
-            final endX = (y == cursorY) ? cursorX : width - 1;
-            for (var x = 0; x <= endX; x++) {
-              _buffer.setAttributes(
-                x,
-                y,
-                char: ' ',
-                fg: 0,
-                bg: 0,
-                modifiers: eraseMod,
-              );
-            }
-          }
-        } else if (param == 2 || param == 3) {
-          // All
-          _buffer.fillAttributes(char: ' ', fg: 0, bg: 0, modifiers: eraseMod);
-        }
-        break;
+        _eraseInDisplay(params.isEmpty ? 0 : params[0]);
       case 'K': // Erase in Line
-        final param = params.isEmpty ? 0 : params[0];
-        final eraseMod = transparentBackground
-            ? Modifier.transparent
-            : Modifier.none;
-        if (param == 0) {
-          // Right
-          for (var x = cursorX; x < width; x++) {
-            _buffer.setAttributes(
-              x,
-              cursorY,
-              char: ' ',
-              fg: 0,
-              bg: 0,
-              modifiers: eraseMod,
-            );
-          }
-        } else if (param == 1) {
-          // Left
-          for (var x = 0; x <= cursorX; x++) {
-            _buffer.setAttributes(
-              x,
-              cursorY,
-              char: ' ',
-              fg: 0,
-              bg: 0,
-              modifiers: eraseMod,
-            );
-          }
-        } else if (param == 2) {
-          // All
-          for (var x = 0; x < width; x++) {
-            _buffer.setAttributes(
-              x,
-              cursorY,
-              char: ' ',
-              fg: 0,
-              bg: 0,
-              modifiers: eraseMod,
-            );
-          }
-        }
-        break;
+        _eraseInLine(params.isEmpty ? 0 : params[0]);
       case 'm': // SGR (Select Graphic Rendition)
         if (params.isEmpty) {
-          _currentStyle = Style.empty;
+          _currentStyle = .empty;
         } else {
           var i = 0;
           while (i < params.length) {
@@ -434,43 +387,35 @@ final class VirtualTerminal implements TerminalHandler {
             // Standard SGR Codes
             switch (code) {
               case 0:
-                _currentStyle = Style.empty;
-                break;
+                _currentStyle = .empty;
               case 1:
                 _currentStyle = _currentStyle.merge(
                   const Style(modifiers: Modifier.bold),
                 );
-                break;
               case 2:
                 _currentStyle = _currentStyle.merge(
                   const Style(modifiers: Modifier.dim),
                 );
-                break;
               case 3:
                 _currentStyle = _currentStyle.merge(
                   const Style(modifiers: Modifier.italic),
                 );
-                break;
               case 4:
                 _currentStyle = _currentStyle.merge(
                   const Style(modifiers: Modifier.underline),
                 );
-                break;
               case 7:
                 _currentStyle = _currentStyle.merge(
                   const Style(modifiers: Modifier.reverse),
                 );
-                break;
               case 8:
                 _currentStyle = _currentStyle.merge(
                   const Style(modifiers: Modifier.hidden),
                 );
-                break;
               case 9:
                 _currentStyle = _currentStyle.merge(
                   const Style(modifiers: Modifier.crossedOut),
                 );
-                break;
               case 22:
                 _currentStyle = Style(
                   foreground: _currentStyle.foreground,
@@ -478,52 +423,48 @@ final class VirtualTerminal implements TerminalHandler {
                   modifiers:
                       _currentStyle.modifiers & ~(Modifier.bold | Modifier.dim),
                 );
-                break;
               case 23:
                 _currentStyle = Style(
                   foreground: _currentStyle.foreground,
                   background: _currentStyle.background,
                   modifiers: _currentStyle.modifiers & ~Modifier.italic,
                 );
-                break;
               case 24:
                 _currentStyle = Style(
                   foreground: _currentStyle.foreground,
                   background: _currentStyle.background,
                   modifiers: _currentStyle.modifiers & ~Modifier.underline,
                 );
-                break;
               case 27:
                 _currentStyle = Style(
                   foreground: _currentStyle.foreground,
                   background: _currentStyle.background,
                   modifiers: _currentStyle.modifiers & ~Modifier.reverse,
                 );
-                break;
               case 28:
                 _currentStyle = Style(
                   foreground: _currentStyle.foreground,
                   background: _currentStyle.background,
                   modifiers: _currentStyle.modifiers & ~Modifier.hidden,
                 );
-                break;
               case 29:
                 _currentStyle = Style(
                   foreground: _currentStyle.foreground,
                   background: _currentStyle.background,
                   modifiers: _currentStyle.modifiers & ~Modifier.crossedOut,
                 );
-                break;
               case 39: // Default Foreground
-                _currentStyle = _currentStyle.merge(
-                  const Style(foreground: null),
+                _currentStyle = Style(
+                  foreground: null,
+                  background: _currentStyle.background,
+                  modifiers: _currentStyle.modifiers,
                 );
-                break;
               case 49: // Default Background
-                _currentStyle = _currentStyle.merge(
-                  const Style(background: null),
+                _currentStyle = Style(
+                  foreground: _currentStyle.foreground,
+                  background: null,
+                  modifiers: _currentStyle.modifiers,
                 );
-                break;
               default:
                 if (code >= 30 && code <= 37) {
                   _currentStyle = _currentStyle.merge(
@@ -542,12 +483,10 @@ final class VirtualTerminal implements TerminalHandler {
                     Style(background: _colorFromAnsi256(code - 100 + 8)),
                   );
                 }
-                break;
             }
             i++;
           }
         }
-        break;
     }
   }
 
