@@ -1,14 +1,17 @@
+@Timeout(Duration(seconds: 30))
+library;
+
 import 'dart:io';
-import 'package:test/test.dart';
 import 'package:pty2/pty2.dart';
+import 'package:test/test.dart';
 
 void main() {
   test('PseudoTerminal exits with non-zero code on failure', () async {
-    // If the process exits with a non-zero code, the PTY should return it
     final pty = PseudoTerminal.start(
       Platform.isWindows ? 'cmd.exe' : 'sh',
       Platform.isWindows ? ['/c', 'exit 42'] : ['-c', 'exit 42'],
     );
+    addTearDown(() => pty.kill(ProcessSignal.sigkill));
 
     final exitCode = await pty.exitCode;
     expect(
@@ -22,12 +25,12 @@ void main() {
   test(
     'PseudoTerminal handles multiple instances without leaking native handles',
     () async {
-      // Spawn and kill 10 PTYs to stress test FFI cleanup and handles
-      for (int i = 0; i < 10; i++) {
+      for (var i = 0; i < 10; i++) {
         final pty = PseudoTerminal.start(
           Platform.isWindows ? 'cmd.exe' : 'true',
           [],
         );
+        addTearDown(() => pty.kill(ProcessSignal.sigkill));
         pty.kill();
         await pty.exitCode;
       }

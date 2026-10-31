@@ -10,7 +10,9 @@ jobs:
   test:
     name: Build and Test
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         sdk: [stable]
@@ -38,9 +40,8 @@ jobs:
       - name: Bootstrap workspace
         run: melos bootstrap
 
-      - parallel:
-        - name: Run dart unit tests
-          run: melos run test:dart
+      - name: Run dart unit tests
+        run: melos run test:dart
 
-        - name: Run flutter unit tests
-          run: melos run test:flutter
+      - name: Run flutter unit tests
+        run: melos run test:flutter
