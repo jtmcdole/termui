@@ -26,8 +26,12 @@ final class VirtualTerminal implements TerminalHandler {
   int cursorY = 0;
 
   Style _currentStyle = .empty;
-  late final AnsiParser _parser;
-  late final ByteConversionSink _utf8Sink;
+  int _savedCursorX = 0;
+  int _savedCursorY = 0;
+  bool _savedPendingWrap = false;
+  Style _savedStyle = .empty;
+  late AnsiParser _parser;
+  late ByteConversionSink _utf8Sink;
 
   /// Whether the terminal background should be rendered as transparent.
   final bool transparentBackground;
@@ -74,10 +78,42 @@ final class VirtualTerminal implements TerminalHandler {
   }) : _buffer = transparentBackground
            ? Buffer(width, height, defaultBlend: false)
            : Buffer.blank(width, height, defaultBlend: false) {
+    _initParser();
+  }
+
+  void _initParser() {
     _parser = AnsiParser(this);
     _utf8Sink = const Utf8Decoder(
       allowMalformed: true,
     ).startChunkedConversion(_ParserStringSink(_parser.parse));
+  }
+
+  /// Resets the terminal to its initial power-on state, clearing the screen,
+  /// resetting cursor/SGR/mouse state, and discarding partial UTF-8 or escape
+  /// sequences.
+  void reset() {
+    _utf8Sink.close();
+    _initParser();
+    _resetState(clearScreen: true);
+    _notifyListeners();
+  }
+
+  void _resetState({required bool clearScreen}) {
+    _currentStyle = .empty;
+    _savedStyle = .empty;
+    _savedCursorX = 0;
+    _savedCursorY = 0;
+    _savedPendingWrap = false;
+    mouseTrackingEnabled = false;
+    sgrMouseMode = false;
+    if (clearScreen) {
+      cursorX = 0;
+      cursorY = 0;
+      final (fg, bg, mod) = _eraseAttributes();
+      _buffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
+    } else if (cursorX >= width) {
+      cursorX = math.max(0, width - 1);
+    }
   }
 
   /// Resizes the virtual terminal to the new [newWidth] and [newHeight].
@@ -272,6 +308,19 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
+  void _handleDecPrivateMode(String command, List<int> params) {
+    if (command != 'h' && command != 'l') return;
+    final enable = command == 'h';
+    for (final param in params) {
+      switch (param) {
+        case 1000 || 1002 || 1003:
+          mouseTrackingEnabled = enable;
+        case 1006:
+          sgrMouseMode = enable;
+      }
+    }
+  }
+
   @override
   void csi(String command, List<int> params, {String? intermediate}) {
     final p1 = params.isNotEmpty && params[0] > 0
@@ -281,24 +330,13 @@ final class VirtualTerminal implements TerminalHandler {
         ? math.min(params[1], 0xFFFF)
         : 1;
 
-    if (intermediate == '?') {
-      if (command == 'h') {
-        for (final param in params) {
-          if (param == 1000) mouseTrackingEnabled = true;
-          if (param == 1002) mouseTrackingEnabled = true;
-          if (param == 1003) mouseTrackingEnabled = true;
-          if (param == 1006) sgrMouseMode = true;
-        }
-        return;
-      } else if (command == 'l') {
-        for (final param in params) {
-          if (param == 1000) mouseTrackingEnabled = false;
-          if (param == 1002) mouseTrackingEnabled = false;
-          if (param == 1003) mouseTrackingEnabled = false;
-          if (param == 1006) sgrMouseMode = false;
-        }
-        return;
+    if (intermediate != null) {
+      if (intermediate == '?') {
+        _handleDecPrivateMode(command, params);
+      } else if (intermediate == '!' && command == 'p') {
+        _resetState(clearScreen: false);
       }
+      return;
     }
 
     switch (command) {
@@ -314,6 +352,11 @@ final class VirtualTerminal implements TerminalHandler {
       case 'D': // Cursor Back
         cursorX -= p1;
         if (cursorX < 0) cursorX = 0;
+      case 'G': // Cursor Character Absolute (CHA, 1-indexed column)
+        cursorX = math.max(0, math.min(width - 1, p1 - 1));
+      case 'd': // Line Position Absolute (VPA, 1-indexed row)
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        cursorY = math.max(0, math.min(height - 1, p1 - 1));
       case 'H' || 'f': // Cursor Position
         cursorY = p1 - 1;
         cursorX = p2 - 1;
@@ -325,6 +368,9 @@ final class VirtualTerminal implements TerminalHandler {
         _eraseInDisplay(params.isEmpty ? 0 : params[0]);
       case 'K': // Erase in Line
         _eraseInLine(params.isEmpty ? 0 : params[0]);
+      case 'X': // Erase Character (ECH, cursor does not move)
+        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _eraseRowSpan(cursorY, cursorX, math.min(width, cursorX + p1));
       case 'm': // SGR (Select Graphic Rendition)
         if (params.isEmpty) {
           _currentStyle = .empty;
@@ -497,7 +543,22 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void esc(String command) {
-    // Handling sequences like ESC M (Reverse Index) could be added here
+    switch (command) {
+      case 'c': // RIS (Reset to Initial State)
+        _resetState(clearScreen: true);
+      case '7': // DECSC (Save Cursor)
+        _savedPendingWrap = cursorX >= width;
+        _savedCursorX = math.max(0, math.min(width - 1, cursorX));
+        _savedCursorY = math.max(0, math.min(height - 1, cursorY));
+        _savedStyle = _currentStyle;
+      case '8': // DECRC (Restore Cursor)
+        final restoredX = math.max(0, math.min(width - 1, _savedCursorX));
+        cursorX = (_savedPendingWrap && restoredX == width - 1)
+            ? width
+            : restoredX;
+        cursorY = math.max(0, math.min(height - 1, _savedCursorY));
+        _currentStyle = _savedStyle;
+    }
   }
 
   Color _colorFromAnsi256(int code) {
