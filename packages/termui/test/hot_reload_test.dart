@@ -41,7 +41,7 @@ void main() {
       );
 
       runner.run();
-      await Future.delayed(Duration.zero); // Let the first frame render
+      await Future<void>.delayed(Duration.zero); // Let the first frame render
 
       final rootElement = runner.rootElement!;
       final statefulElement = findElement<StatefulElement>(
@@ -57,7 +57,7 @@ void main() {
 
       // Trigger hot reload reassemble
       runner.reassemble();
-      await Future.delayed(
+      await Future<void>.delayed(
         Duration.zero,
       ); // Allow microtask to process scheduleRender
 

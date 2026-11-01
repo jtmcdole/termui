@@ -16,15 +16,14 @@ void main() {
       element.mount(null);
       element.layout(const BoxConstraints(maxWidth: 50, maxHeight: 10));
 
+      final handler = (element as StatefulElement).state as KeyEventHandler;
       // Right arrow moves selection
-      (element as dynamic).state.handleKeyEvent(
+      handler.handleKeyEvent(
         const evt.KeyEvent('right', evt.KeyType.character),
       );
       expect(controller.focusedIndex, 1);
 
-      (element as dynamic).state.handleKeyEvent(
-        const evt.KeyEvent('left', evt.KeyType.character),
-      );
+      handler.handleKeyEvent(const evt.KeyEvent('left', evt.KeyType.character));
       expect(controller.focusedIndex, 0);
     });
   });

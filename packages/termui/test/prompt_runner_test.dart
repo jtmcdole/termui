@@ -122,7 +122,7 @@ void main() {
         );
 
         bool caught = false;
-        future.catchError((e) {
+        future.catchError((Object e) {
           caught = true;
           expect(e, isA<UserInterruptException>());
           return '';
@@ -197,7 +197,7 @@ void main() {
           async.elapse(const Duration(milliseconds: 10));
 
           bool caught = false;
-          future.catchError((e) {
+          future.catchError((Object e) {
             caught = true;
             expect(e, isA<Exception>());
             return '';
@@ -231,7 +231,7 @@ void main() {
         );
 
         Object? caughtError;
-        future.catchError((e) {
+        future.catchError((Object e) {
           caughtError = e;
           return null;
         });
@@ -258,7 +258,7 @@ void main() {
         );
 
         Object? caughtError;
-        future.catchError((e) {
+        future.catchError((Object e) {
           caughtError = e;
           return null;
         });

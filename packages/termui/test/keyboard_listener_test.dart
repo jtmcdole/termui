@@ -25,7 +25,7 @@ void main() {
       final backend = MockTerminalBackend();
       final terminal = Terminal(backend);
 
-      final runner = PromptRunner(
+      final runner = PromptRunner<void>(
         terminal: terminal,
         widget: widget,
         alternateScreen: false,

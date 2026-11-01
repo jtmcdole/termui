@@ -56,7 +56,7 @@ class DragSession {
 /// Global coordinator for drag and drop interactions.
 class DragDropManager {
   static DragSession? _activeSession;
-  static DragTargetElement? _lastHoveredTarget;
+  static DragTargetElement<Object?>? _lastHoveredTarget;
   static DragDropDemoState? demoState;
 
   static DragSession? get activeSession => _activeSession;
@@ -90,9 +90,9 @@ class DragDropManager {
     if (root == null) return;
 
     final hitElements = _hitTest(root, mousePosition);
-    DragTargetElement? hoveredTarget;
+    DragTargetElement<Object?>? hoveredTarget;
     for (final element in hitElements) {
-      if (element is DragTargetElement) {
+      if (element is DragTargetElement<Object?>) {
         hoveredTarget = element;
         break;
       }
@@ -169,10 +169,10 @@ class Draggable<T> extends Widget {
 }
 
 class DraggableElement extends SingleChildElement implements MouseEventHandler {
-  DraggableElement(Draggable super.widget);
+  DraggableElement(Draggable<Object?> super.widget);
 
   @override
-  Widget? get childWidget => (widget as Draggable).child;
+  Widget? get childWidget => (widget as Draggable<Object?>).child;
 
   @override
   Size performLayout(BoxConstraints constraints) {
@@ -187,7 +187,7 @@ class DraggableElement extends SingleChildElement implements MouseEventHandler {
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       final session = DragSession(
-        data: (widget as Draggable).data as Object,
+        data: (widget as Draggable<Object?>).data as Object,
         draggableElement: this,
         startMousePosition: Point<int>(event.x, event.y),
         currentMousePosition: Point<int>(event.x, event.y),
@@ -206,7 +206,7 @@ class DragTarget<T> extends Widget {
   final Widget Function(
     BuildContext context,
     List<T> candidateData,
-    List<dynamic> rejectedData,
+    List<Object?> rejectedData,
   )
   builder;
   final bool Function(T data)? onWillAccept;
@@ -239,7 +239,7 @@ class DragTarget<T> extends Widget {
 
 class DragTargetElement<T> extends SingleChildElement {
   final List<T> _candidateData = [];
-  final List<dynamic> _rejectedData = [];
+  final List<Object?> _rejectedData = [];
 
   DragTargetElement(DragTarget<T> super.widget);
 
@@ -594,8 +594,8 @@ void main() async {
     terminal.enableBracketedPaste();
 
     final demo = const DragDropDemo();
-    late final PromptRunner runner;
-    runner = PromptRunner(
+    late final PromptRunner<void> runner;
+    runner = PromptRunner<void>(
       terminal: terminal,
       widget: demo,
       alternateScreen: true,
@@ -619,9 +619,9 @@ void main() async {
           final root = runner.rootElement;
           if (root != null) {
             final hitElements = DragDropManager._hitTest(root, pos);
-            DragTargetElement? hoveredTarget;
+            DragTargetElement<Object?>? hoveredTarget;
             for (final element in hitElements) {
-              if (element is DragTargetElement) {
+              if (element is DragTargetElement<Object?>) {
                 hoveredTarget = element;
                 break;
               }

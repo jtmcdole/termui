@@ -36,7 +36,7 @@ void main() {
           (_) {
             completed = true;
           },
-          onError: (e) {
+          onError: (Object e) {
             error = e;
           },
         );

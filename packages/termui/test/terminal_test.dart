@@ -34,7 +34,7 @@ void main() {
         expect(size.y, greaterThan(0));
 
         final sizeStream = terminal.watchSize();
-        expect(sizeStream, isA<Stream>());
+        expect(sizeStream, isA<Stream<Object?>>());
         terminal.dispose();
       },
     );

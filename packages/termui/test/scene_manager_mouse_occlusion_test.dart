@@ -98,7 +98,7 @@ void main() {
 
           bool buttonHovered = false;
 
-          final bottomRunner = PromptRunner(
+          final bottomRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: TestButton(
               onPressed: () {},
@@ -114,7 +114,7 @@ void main() {
             zIndex: 1,
           );
 
-          final topRunner = PromptRunner(
+          final topRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: const VisualOccluder(transparent: false),
             mode: ExecutionMode.managed,
@@ -165,7 +165,7 @@ void main() {
 
           bool buttonClicked = false;
 
-          final bottomRunner = PromptRunner(
+          final bottomRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: TestButton(onPressed: () => buttonClicked = true),
             mode: ExecutionMode.managed,
@@ -178,7 +178,7 @@ void main() {
             zIndex: 1,
           );
 
-          final topRunner = PromptRunner(
+          final topRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: const VisualOccluder(transparent: false),
             mode: ExecutionMode.managed,
@@ -232,7 +232,7 @@ void main() {
 
           bool buttonClicked = false;
 
-          final bottomRunner = PromptRunner(
+          final bottomRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: TestButton(onPressed: () => buttonClicked = true),
             mode: ExecutionMode.managed,
@@ -245,7 +245,7 @@ void main() {
             zIndex: 1,
           );
 
-          final topRunner = PromptRunner(
+          final topRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: const VisualOccluder(transparent: false),
             mode: ExecutionMode.managed,
@@ -296,7 +296,7 @@ void main() {
 
           bool buttonHovered = false;
 
-          final bottomRunner = PromptRunner(
+          final bottomRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: TestButton(
               onPressed: () {},
@@ -312,7 +312,7 @@ void main() {
             zIndex: 1,
           );
 
-          final topRunner = PromptRunner(
+          final topRunner = PromptRunner<void>(
             terminal: tester.terminal,
             widget: const VisualOccluder(transparent: true),
             mode: ExecutionMode.managed,
@@ -361,7 +361,7 @@ void main() {
 
         bool buttonClicked = false;
 
-        final bottomRunner = PromptRunner(
+        final bottomRunner = PromptRunner<void>(
           terminal: tester.terminal,
           widget: TestButton(onPressed: () => buttonClicked = true),
           mode: ExecutionMode.managed,
@@ -374,7 +374,7 @@ void main() {
           zIndex: 1,
         );
 
-        final topRunner = PromptRunner(
+        final topRunner = PromptRunner<void>(
           terminal: tester.terminal,
           widget: const VisualOccluder(transparent: true),
           mode: ExecutionMode.managed,

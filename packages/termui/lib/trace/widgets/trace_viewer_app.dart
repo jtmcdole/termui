@@ -34,7 +34,7 @@ class TraceViewerApp extends StatefulWidget {
   });
 
   @override
-  State<TraceViewerApp> createState() => _TraceViewerAppState();
+  State<TraceViewerApp> createState() => TraceViewerAppState();
 }
 
 class _TraceViewState {
@@ -55,7 +55,7 @@ class _TraceViewState {
 
 enum TimeDisplayMode { formatted, rawRelative, rawAbsolute }
 
-class _TraceViewerAppState extends State<TraceViewerApp>
+class TraceViewerAppState extends State<TraceViewerApp>
     implements evt.KeyEventHandler, evt.MouseEventHandler, evt.Focusable {
   List<TraceSpan>? spans;
   int? minTs;

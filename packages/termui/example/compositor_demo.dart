@@ -165,7 +165,7 @@ void main() async {
     unawaited(fgRunner.run());
 
     // Allow a brief moment for size futures and tree mount initialization
-    await Future.delayed(const Duration(milliseconds: 20));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
 
     // 4. Boot Sequence: Force initial resizing to draw layouts to layer buffers
     final termSize = await terminal.size;

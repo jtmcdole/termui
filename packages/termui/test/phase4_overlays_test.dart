@@ -197,7 +197,7 @@ void main() {
       final columnEl = posEl.childElement! as ColumnElement;
       final flexEl = columnEl.childElements[0] as SizedBoxElement; // SizedBox
       final dropEl = flexEl.childElement! as StatefulElement; // DropdownButton
-      final dropState = dropEl.state as dynamic;
+      final dropState = dropEl.state as DropdownButtonState<String>;
 
       // Open dropdown
       dropState.handleKeyEvent(const KeyEvent(' ', KeyType.character));
@@ -252,7 +252,7 @@ void main() {
       final columnEl = posEl.childElement! as ColumnElement;
       final flexEl = columnEl.childElements[0] as SizedBoxElement; // SizedBox
       final menuEl = flexEl.childElement! as StatefulElement; // PopupMenuButton
-      final menuState = menuEl.state as dynamic;
+      final menuState = menuEl.state as PopupMenuButtonState<String>;
 
       // Open menu
       menuState.handleKeyEvent(const KeyEvent(' ', KeyType.character));

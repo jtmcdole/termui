@@ -52,7 +52,7 @@ void main() {
 
       // Emit new value
       controller.add(42);
-      await Future.delayed(Duration.zero); // yield for stream to process
+      await Future<void>.delayed(Duration.zero); // yield for stream to process
 
       element.rebuild();
       element.layout(BoxConstraints.loose(const Size(50, 5)));
@@ -85,7 +85,7 @@ void main() {
 
       // Emit error
       controller.addError('Something went wrong');
-      await Future.delayed(Duration.zero); // yield for stream to process
+      await Future<void>.delayed(Duration.zero); // yield for stream to process
 
       element.rebuild();
       element.layout(BoxConstraints.loose(const Size(50, 5)));

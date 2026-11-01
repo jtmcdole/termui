@@ -124,7 +124,7 @@ void main() async {
       // PromptScope.done() once the compilation simulation finishes.
       // Inline rendering means the final build output remains visible in the
       // terminal's scrollback history after the application exits!
-      await PromptRunner(
+      await PromptRunner<void>(
         terminal: terminal,
         widget: const BuildDashboard(totalDurationMs: 15000),
       ).run();
