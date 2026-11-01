@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui/termui.dart';
 import 'package:termui_pty/termui_pty.dart';
 import 'package:termui_test/termui_test.dart';
@@ -81,6 +82,208 @@ void main() {
 
       runner.abort();
       await runFuture.catchError((_) => null);
+    });
+  });
+
+  group('InputEncoder', () {
+    test('encodes Tab, Shift+Tab, and backtab', () {
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            'Tab',
+            ev.KeyType.tab,
+            modifiers: {ev.Modifier.shift},
+          ),
+        ),
+        '\x1b[Z',
+      );
+      expect(
+        InputEncoder.encode(const ev.KeyEvent('backtab', ev.KeyType.tab)),
+        '\x1b[Z',
+      );
+      expect(
+        InputEncoder.encode(const ev.KeyEvent('Tab', ev.KeyType.tab)),
+        '\t',
+      );
+    });
+
+    test('encodes C0 control punctuation with Ctrl modifier', () {
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '@',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x00',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            ' ',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x00',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '[',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1b',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            r'\',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1c',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            ']',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1d',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '^',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1e',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '6',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1e',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '_',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1f',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '-',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1f',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '?',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x7f',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '2',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x00',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '/',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        ),
+        '\x1f',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            'c',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control, ev.Modifier.alt},
+          ),
+        ),
+        '\x1b\x03',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            '[',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.control, ev.Modifier.alt},
+          ),
+        ),
+        '\x1b\x1b',
+      );
+    });
+
+    test('guards out-of-bounds mouse coordinates', () {
+      expect(
+        InputEncoder.encode(
+          const ev.MouseEvent(
+            x: -1,
+            y: -1,
+            button: ev.MouseButton.none,
+            type: ev.MouseEventType.move,
+          ),
+        ),
+        isEmpty,
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.MouseEvent(
+            x: 0,
+            y: 1,
+            button: ev.MouseButton.left,
+            type: ev.MouseEventType.press,
+          ),
+        ),
+        isEmpty,
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.MouseEvent(
+            x: 1,
+            y: 1,
+            button: ev.MouseButton.left,
+            type: ev.MouseEventType.press,
+          ),
+        ),
+        '\x1b[<0;1;1M',
+      );
     });
   });
 }
