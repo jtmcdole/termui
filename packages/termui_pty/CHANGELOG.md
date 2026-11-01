@@ -1,3 +1,15 @@
+## 0.6.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(pty): decompose VirtualTerminal helpers and fix SGR 5/25 and 38/48.
+ - **FIX**(pty): support RIS/DECSTR resets, DECSC/DECRC, CHA/VPA/ECH, and CSI intermediate guards.
+ - **FEAT**(pty): add DECSTBM scroll regions and line/character editing.
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(buffer): replace stale cell colors on unstyled writes and BCE erases.
+ - **BREAKING** **FEAT**(pty): add alternate screen buffers (?47, ?1047, ?1048, ?1049).
+ - **BREAKING** **FEAT**(pty): add DECTCEM (?25), DECAWM (?7), and right-margin wrap fixes.
+
 ## 0.5.0
 
 > Note: This release has breaking changes.

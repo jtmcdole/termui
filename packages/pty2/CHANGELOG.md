@@ -1,3 +1,10 @@
+## 0.6.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(pty2): spawn Unix PTYs in C native asset to stop fork deadlocks.
+
 ## 0.5.7
 
  - **FIX**(pty2): release ConPTY handles and OVERLAPPED buffers on kill.

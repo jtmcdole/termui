@@ -1,3 +1,10 @@
+## 0.9.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(buffer): replace stale cell colors on unstyled writes and BCE erases.
+
 ## 0.8.1
 
  - Update a dependency to the latest release.
