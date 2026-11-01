@@ -9,7 +9,7 @@ void updateUrlParams({String? demo, String? page}) {
 }
 
 /// Listens for browser back/forward page navigation popState changes.
-StreamSubscription? listenToUrlChanges(
+StreamSubscription<Object?>? listenToUrlChanges(
   void Function(Map<String, String> query) onQueryChanged,
 ) {
   return impl.listenToUrlChanges(onQueryChanged);

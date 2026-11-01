@@ -20,7 +20,7 @@ void updateUrlParams({String? demo, String? page}) {
 }
 
 /// Sets up a listener for browser popState/history changes (e.g. Back/Forward clicks).
-StreamSubscription? listenToUrlChanges(
+StreamSubscription<Object?>? listenToUrlChanges(
   void Function(Map<String, String> query) onQueryChanged,
 ) {
   return web.window.onPopState.listen((_) {

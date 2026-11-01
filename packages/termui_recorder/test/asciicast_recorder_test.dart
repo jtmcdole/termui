@@ -31,13 +31,14 @@ void main() {
       expect(lines, isNotEmpty);
 
       // Verify header format (Line 0)
-      final header = jsonDecode(lines[0]) as Map<String, dynamic>;
+      final header = jsonDecode(lines[0]) as Map<String, Object?>;
       expect(header['version'], equals(3));
-      expect(header['term']['cols'], equals(80));
-      expect(header['term']['rows'], equals(24));
+      final term = header['term'] as Map<String, Object?>;
+      expect(term['cols'], equals(80));
+      expect(term['rows'], equals(24));
 
       // Verify first frame event format (Line 1)
-      final event = jsonDecode(lines[1]) as List<dynamic>;
+      final event = jsonDecode(lines[1]) as List<Object?>;
       expect(event.length, equals(3));
       expect(event[0], isA<double>()); // timestamp
       expect(event[1], equals('o')); // output type

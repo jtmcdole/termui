@@ -178,7 +178,7 @@ void main() {
       // Wait for the service to be called
       for (var i = 0; i < 50; i++) {
         if (mockService.savedFiles.length >= 3) break;
-        await Future.delayed(const Duration(milliseconds: 10));
+        await Future<void>.delayed(const Duration(milliseconds: 10));
       }
     });
 
@@ -242,18 +242,19 @@ void main() {
 
     await tester.pumpAndSettle();
 
-    final state = tester.state(find.byType(PrivateTuiView));
-    final dynamicViewState = state as dynamic;
-    expect(dynamicViewState.fontSize, equals(currentFontSize));
+    final viewState = tester.state<PrivateTuiViewState>(
+      find.byType(PrivateTuiView),
+    );
+    expect(viewState.fontSize, equals(currentFontSize));
 
     // Test direct API calls
     terminal.increaseFontSize(2.0);
     await tester.pumpAndSettle();
-    expect(dynamicViewState.fontSize, equals(currentFontSize + 2.0));
+    expect(viewState.fontSize, equals(currentFontSize + 2.0));
 
     terminal.decreaseFontSize(1.0);
     await tester.pumpAndSettle();
-    expect(dynamicViewState.fontSize, equals(currentFontSize + 1.0));
+    expect(viewState.fontSize, equals(currentFontSize + 1.0));
 
     // Reset back to base for key event testing
     terminal.setFontSize(currentFontSize);
@@ -274,7 +275,7 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
     await tester.pumpAndSettle();
 
-    expect(dynamicViewState.fontSize, equals(currentFontSize + 1.0));
+    expect(viewState.fontSize, equals(currentFontSize + 1.0));
 
     // Press Ctrl + Minus (Ctrl + "-") twice
     await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
@@ -283,7 +284,7 @@ void main() {
     await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
     await tester.pumpAndSettle();
 
-    expect(dynamicViewState.fontSize, equals(currentFontSize - 1.0));
+    expect(viewState.fontSize, equals(currentFontSize - 1.0));
 
     terminal.dispose();
   });

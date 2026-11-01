@@ -76,10 +76,10 @@ final class AsciicastPlayerViewModel {
     try {
       final firstLine = lines[0].trim();
       if (firstLine.isNotEmpty) {
-        final parsedHeader = jsonDecode(firstLine) as Map<String, dynamic>;
+        final parsedHeader = jsonDecode(firstLine) as Map<String, Object?>;
         version = parsedHeader['version'] as int? ?? 2;
         if (version == 3) {
-          final term = parsedHeader['term'] as Map<String, dynamic>?;
+          final term = parsedHeader['term'] as Map<String, Object?>?;
           castWidth = term?['cols'] as int? ?? 80;
           castHeight = term?['rows'] as int? ?? 24;
         } else {

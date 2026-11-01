@@ -30,7 +30,7 @@ final class _AnsiGoldenMatcher extends Matcher {
     : _environment = environment ?? Platform.environment;
 
   @override
-  bool matches(dynamic item, Map matchState) {
+  bool matches(Object? item, Map<Object?, Object?> matchState) {
     if (item is! Buffer) return false;
 
     final currentAnsi = AnsiScreenshot.capture(item);
@@ -179,9 +179,9 @@ final class _AnsiGoldenMatcher extends Matcher {
 
   @override
   Description describeMismatch(
-    dynamic item,
+    Object? item,
     Description mismatchDescription,
-    Map matchState,
+    Map<Object?, Object?> matchState,
     bool verbose,
   ) {
     return mismatchDescription.add(

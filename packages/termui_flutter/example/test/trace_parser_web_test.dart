@@ -8,7 +8,7 @@ import 'package:example_flutter/src/tui_player/trace_parser_web.dart';
 
 void main() {
   test('Parses large trace without hanging', () async {
-    final events = [];
+    final events = <Map<String, Object?>>[];
     for (int i = 0; i < 66000; i++) {
       events.add({
         "name": "swapper",

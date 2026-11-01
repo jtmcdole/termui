@@ -7,7 +7,7 @@ import 'dart:async';
 void updateUrlParams({String? demo, String? page}) {}
 
 /// Registers a listener for browser popState URL history changes. No-op on VM/Desktop.
-StreamSubscription? listenToUrlChanges(
+StreamSubscription<Object?>? listenToUrlChanges(
   void Function(Map<String, String> query) onQueryChanged,
 ) => null;
 

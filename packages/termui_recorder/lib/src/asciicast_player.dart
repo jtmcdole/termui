@@ -55,10 +55,10 @@ final class AsciicastPlayer {
     var castHeight = 24;
     var version = 2;
     try {
-      final header = jsonDecode(lines[0]) as Map<String, dynamic>;
+      final header = jsonDecode(lines[0]) as Map<String, Object?>;
       version = header['version'] as int? ?? 2;
       if (version == 3) {
-        final term = header['term'] as Map<String, dynamic>?;
+        final term = header['term'] as Map<String, Object?>?;
         castWidth = term?['cols'] as int? ?? 80;
         castHeight = term?['rows'] as int? ?? 24;
       } else {

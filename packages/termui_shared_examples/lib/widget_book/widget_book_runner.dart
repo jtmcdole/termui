@@ -251,7 +251,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     DemoPage.fruitGame: FruitGameExample(),
   };
 
-  StreamSubscription? _pageSelectedSub;
+  StreamSubscription<String>? _pageSelectedSub;
 
   @override
   void initState() {

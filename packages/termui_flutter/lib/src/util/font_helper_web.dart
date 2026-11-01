@@ -8,6 +8,6 @@ Future<void> waitForFontsToLoad() async {
     await readyPromise.toDart;
   } catch (_) {
     // Fallback if fonts API is unavailable
-    await Future.delayed(const Duration(milliseconds: 1000));
+    await Future<void>.delayed(const Duration(milliseconds: 1000));
   }
 }

@@ -106,7 +106,7 @@ Future<List<TraceEvent>> parseTraceEvents(
 
     // Yield to the event loop every 5000 items to keep UI at 60fps
     if (i % 5000 == 0) {
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
     }
   }
 

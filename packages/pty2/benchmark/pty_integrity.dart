@@ -72,10 +72,10 @@ void main() async {
         sentNumber++;
       }
       pty.write(sb.toString());
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
     }
 
-    await Future.delayed(Duration(seconds: 2));
+    await Future<void>.delayed(const Duration(seconds: 2));
     pty.kill();
     await pty.exitCode;
 

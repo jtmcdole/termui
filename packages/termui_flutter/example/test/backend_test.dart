@@ -10,7 +10,7 @@ void main() {
       backend.mouseCursorChanges.listen((c) => capturedCursor = c);
 
       backend.write('\x1b]22;pointer\x1b\\');
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
       expect(capturedCursor, equals('pointer'));
     },
   );
@@ -23,7 +23,7 @@ void main() {
       backend.mouseCursorChanges.listen((c) => capturedCursor = c);
 
       backend.write('\x1b]22;crosshair\x07');
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
       expect(capturedCursor, equals('crosshair'));
     },
   );
@@ -36,7 +36,7 @@ void main() {
       backend.mouseCursorChanges.listen((c) => capturedCursor = c);
 
       backend.write('\x1b]22;\x1b\\');
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
       expect(capturedCursor, isNull);
     },
   );
