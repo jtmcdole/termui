@@ -17,9 +17,8 @@ void main() {
       final tester = TerminalTester();
       await tester.pumpWidget(btn);
 
-      ((tester.rootElement as StatefulElement).state as dynamic).handleKeyEvent(
-        const evt.KeyEvent(' ', evt.KeyType.character),
-      );
+      ((tester.rootElement as StatefulElement).state as KeyEventHandler)
+          .handleKeyEvent(const evt.KeyEvent(' ', evt.KeyType.character));
       expect(pressed, true);
 
       pressed = false;
@@ -51,9 +50,8 @@ void main() {
       final tester = TerminalTester();
       await tester.pumpWidget(chk);
 
-      ((tester.rootElement as StatefulElement).state as dynamic).handleKeyEvent(
-        const evt.KeyEvent(' ', evt.KeyType.character),
-      );
+      ((tester.rootElement as StatefulElement).state as KeyEventHandler)
+          .handleKeyEvent(const evt.KeyEvent(' ', evt.KeyType.character));
       expect(checked, true);
 
       ((tester.rootElement as StatefulElement).state as CheckboxState)
@@ -86,9 +84,8 @@ void main() {
       final tester = TerminalTester();
       await tester.pumpWidget(rad);
 
-      ((tester.rootElement as StatefulElement).state as dynamic).handleKeyEvent(
-        const evt.KeyEvent(' ', evt.KeyType.character),
-      );
+      ((tester.rootElement as StatefulElement).state as KeyEventHandler)
+          .handleKeyEvent(const evt.KeyEvent(' ', evt.KeyType.character));
       expect(selected, true);
 
       selected = false;
@@ -120,9 +117,8 @@ void main() {
       final tester = TerminalTester();
       await tester.pumpWidget(sw);
 
-      ((tester.rootElement as StatefulElement).state as dynamic).handleKeyEvent(
-        const evt.KeyEvent(' ', evt.KeyType.character),
-      );
+      ((tester.rootElement as StatefulElement).state as KeyEventHandler)
+          .handleKeyEvent(const evt.KeyEvent(' ', evt.KeyType.character));
       expect(switched, true);
 
       ((tester.rootElement as StatefulElement).state as SwitchState)

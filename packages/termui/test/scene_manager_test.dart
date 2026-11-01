@@ -278,7 +278,7 @@ void main() {
       // Inject terminal resize event
       terminal.injectResize(const Point(90, 30));
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       // Fullscreen layer should be moved to (0,0) and resized
       expect(bgLayer.x, equals(0));
@@ -316,7 +316,7 @@ void main() {
       final keyEvent1 = const KeyEvent('a', KeyType.character);
       terminal.injectTestEvent(keyEvent1);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       expect(bgRenderer.keyEvents, contains(keyEvent1));
       expect(fgRenderer.keyEvents, isEmpty);
@@ -326,7 +326,7 @@ void main() {
       final keyEvent2 = const KeyEvent('b', KeyType.character);
       terminal.injectTestEvent(keyEvent2);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       expect(bgRenderer.keyEvents, hasLength(1));
       expect(fgRenderer.keyEvents, contains(keyEvent2));
@@ -367,7 +367,7 @@ void main() {
       );
       terminal.injectTestEvent(clickBg);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       expect(sceneManager.focusedLayer, equals(bgLayer));
 
@@ -389,7 +389,7 @@ void main() {
       );
       terminal.injectTestEvent(clickFg);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       expect(sceneManager.focusedLayer, equals(fgLayer));
 
@@ -421,7 +421,7 @@ void main() {
       );
       terminal.injectTestEvent(pressEvent);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       // 2. Drag to global 1-based (15, 17) -> dx = 3, dy = 5
       final dragEvent = const MouseEvent(
@@ -432,7 +432,7 @@ void main() {
       );
       terminal.injectTestEvent(dragEvent);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       // Layer position should be updated: x = 10 + 3 = 13, y = 10 + 5 = 15
       expect(layer.x, equals(13));
@@ -447,7 +447,7 @@ void main() {
       );
       terminal.injectTestEvent(releaseEvent);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       // Dragging should be cleared: subsequent drag should do nothing
       final dragEvent2 = const MouseEvent(
@@ -458,7 +458,7 @@ void main() {
       );
       terminal.injectTestEvent(dragEvent2);
 
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       expect(layer.x, equals(13));
       expect(layer.y, equals(15));
@@ -487,7 +487,7 @@ void main() {
             type: MouseEventType.press,
           ),
         );
-        await Future.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
 
         // Drag to global 1-based (5, 5) -> outside layer
         terminal.injectTestEvent(
@@ -498,7 +498,7 @@ void main() {
             type: MouseEventType.drag,
           ),
         );
-        await Future.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
 
         // Release at global 1-based (6, 6) -> outside layer
         terminal.injectTestEvent(
@@ -509,7 +509,7 @@ void main() {
             type: MouseEventType.release,
           ),
         );
-        await Future.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
 
         // Verify all 3 events routed to the layer
         expect(renderer.mouseEvents, hasLength(3));
@@ -613,7 +613,7 @@ void main() {
             type: MouseEventType.press,
           ),
         );
-        await Future.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
 
         var target = sceneManager.renderer!.frontBuffer;
         // Cell at (4, 4) should be '⦿' with bright red color (since button is down)
@@ -632,7 +632,7 @@ void main() {
             type: MouseEventType.move,
           ),
         );
-        await Future.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
 
         target = sceneManager.renderer!.frontBuffer;
         // Cell at (7, 7) should be '⦿' with bright cyan color (since button is up)
@@ -720,7 +720,7 @@ void main() {
           type: MouseEventType.press,
         ),
       );
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       expect(sceneManager.focusedLayer, equals(layer));
 
@@ -827,7 +827,7 @@ void main() {
           var layer1Keys = 0;
           var layer2Keys = 0;
 
-          final runner1 = PromptRunner(
+          final runner1 = PromptRunner<void>(
             terminal: terminal,
             mode: ExecutionMode.managed,
             exitConditions: const {},
@@ -841,7 +841,7 @@ void main() {
             ),
           );
 
-          final runner2 = PromptRunner(
+          final runner2 = PromptRunner<void>(
             terminal: terminal,
             mode: ExecutionMode.managed,
             exitConditions: const {},
@@ -935,7 +935,7 @@ void main() {
             framesRedrawn++;
           };
 
-          final runner = PromptRunner(
+          final runner = PromptRunner<void>(
             terminal: terminal,
             mode: ExecutionMode.managed,
             exitConditions: const {},

@@ -27,10 +27,10 @@ class DashboardApp extends StatefulWidget {
   const DashboardApp({required this.width, required this.height});
 
   @override
-  State<DashboardApp> createState() => _DashboardAppState();
+  State<DashboardApp> createState() => DashboardAppState();
 }
 
-class _DashboardAppState extends State<DashboardApp> {
+class DashboardAppState extends State<DashboardApp> {
   // Task state
   late List<double> progressValues;
   late List<String> taskStatuses;
@@ -473,7 +473,7 @@ void main() async {
     final animationTimer = Timer.periodic(const Duration(milliseconds: 33), (
       timer,
     ) {
-      final state = elementWrapper.findState<_DashboardAppState>();
+      final state = elementWrapper.findState<DashboardAppState>();
       state?.updateProgress();
       drawFrame();
     });
@@ -496,75 +496,66 @@ void main() async {
         if (handled) return;
 
         if (el is StatefulElement) {
-          final state = el.state;
-          final widgetType = '${state.widget.runtimeType}';
-          if (widgetType.startsWith('DropdownButton')) {
-            final dState = state as dynamic;
-            final bounds = dState.buttonBounds as Rect;
-
-            if (sx >= bounds.x &&
-                sx < bounds.x + bounds.width &&
-                sy >= bounds.y &&
-                sy < bounds.y + bounds.height) {
-              if (event.type == ui.MouseEventType.press) {
-                dState.toggleDropdown();
-                drawFrame();
-              }
-              handled = true;
-              return;
-            }
-
-            if (dState.isOpen && dState.overlayEntry != null) {
-              final itemX = bounds.x;
-              final itemYStart = bounds.y + bounds.height;
-              final itemYEnd = itemYStart + dState.widget.items.length;
-              if (sx >= itemX &&
-                  sx < itemX + bounds.width &&
-                  sy >= itemYStart &&
-                  sy < itemYEnd) {
+          switch (el.state) {
+            case final DropdownButtonState<Object?> dState:
+              final bounds = dState.buttonBounds;
+              if (sx >= bounds.x &&
+                  sx < bounds.x + bounds.width &&
+                  sy >= bounds.y &&
+                  sy < bounds.y + bounds.height) {
                 if (event.type == ui.MouseEventType.press) {
-                  final clickedItemIdx = sy - itemYStart;
-                  dState.selectItem(clickedItemIdx);
+                  dState.toggleDropdown();
                   drawFrame();
                 }
                 handled = true;
                 return;
               }
-            }
-          } else if (widgetType.startsWith('PopupMenuButton')) {
-            final pState = state as dynamic;
-            final bounds = pState.buttonBounds as Rect;
-
-            if (sx >= bounds.x &&
-                sx < bounds.x + bounds.width &&
-                sy >= bounds.y &&
-                sy < bounds.y + bounds.height) {
-              if (event.type == ui.MouseEventType.press) {
-                pState.toggleMenu();
-                drawFrame();
+              if (dState.isOpen && dState.overlayEntry != null) {
+                final itemX = bounds.x;
+                final itemYStart = bounds.y + bounds.height;
+                final itemYEnd = itemYStart + dState.widget.items.length;
+                if (sx >= itemX &&
+                    sx < itemX + bounds.width &&
+                    sy >= itemYStart &&
+                    sy < itemYEnd) {
+                  if (event.type == ui.MouseEventType.press) {
+                    dState.selectItem(sy - itemYStart);
+                    drawFrame();
+                  }
+                  handled = true;
+                  return;
+                }
               }
-              handled = true;
-              return;
-            }
-
-            if (pState.isOpen && pState.overlayEntry != null) {
-              final menuWidth = max(12, bounds.width);
-              final itemX = bounds.x;
-              final itemYStart = bounds.y + bounds.height;
-              final itemYEnd = itemYStart + pState.widget.items.length;
-              if (sx >= itemX &&
-                  sx < itemX + menuWidth &&
-                  sy >= itemYStart &&
-                  sy < itemYEnd) {
+            case final PopupMenuButtonState<Object?> pState:
+              final bounds = pState.buttonBounds;
+              if (sx >= bounds.x &&
+                  sx < bounds.x + bounds.width &&
+                  sy >= bounds.y &&
+                  sy < bounds.y + bounds.height) {
                 if (event.type == ui.MouseEventType.press) {
-                  final clickedItemIdx = sy - itemYStart;
-                  pState.selectItem(clickedItemIdx);
+                  pState.toggleMenu();
                   drawFrame();
                 }
                 handled = true;
                 return;
               }
-            }
+              if (pState.isOpen && pState.overlayEntry != null) {
+                final menuWidth = max(12, bounds.width);
+                final itemX = bounds.x;
+                final itemYStart = bounds.y + bounds.height;
+                final itemYEnd = itemYStart + pState.widget.items.length;
+                if (sx >= itemX &&
+                    sx < itemX + menuWidth &&
+                    sy >= itemYStart &&
+                    sy < itemYEnd) {
+                  if (event.type == ui.MouseEventType.press) {
+                    pState.selectItem(sy - itemYStart);
+                    drawFrame();
+                  }
+                  handled = true;
+                  return;
+                }
+              }
           }
         }
         el.visitChildren(traverse);
@@ -589,25 +580,19 @@ void main() async {
           }
         } else if (event is ui.KeyEvent) {
           // Route keyboard events
-          final state = elementWrapper.findState<_DashboardAppState>();
+          final state = elementWrapper.findState<DashboardAppState>();
           if (state != null) {
             // Check if action overlay is open and intercept key events
-            bool overlayOpen = false;
-            dynamic openOverlayState;
+            ui.KeyEventHandler? openOverlayState;
 
             void traverseForOpenOverlay(Element el) {
-              if (overlayOpen) return;
+              if (openOverlayState != null) return;
               if (el is StatefulElement) {
-                final s = el.state;
-                final widgetType = '${s.widget.runtimeType}';
-                if (widgetType.startsWith('DropdownButton') &&
-                    (s as dynamic).isOpen) {
-                  overlayOpen = true;
-                  openOverlayState = s;
-                } else if (widgetType.startsWith('PopupMenuButton') &&
-                    (s as dynamic).isOpen) {
-                  overlayOpen = true;
-                  openOverlayState = s;
+                switch (el.state) {
+                  case final DropdownButtonState<Object?> s when s.isOpen:
+                    openOverlayState = s;
+                  case final PopupMenuButtonState<Object?> s when s.isOpen:
+                    openOverlayState = s;
                 }
               }
               el.visitChildren(traverseForOpenOverlay);
@@ -617,23 +602,20 @@ void main() async {
               traverseForOpenOverlay(elementWrapper.element!);
             }
 
-            if (overlayOpen && openOverlayState != null) {
-              openOverlayState.handleKeyEvent(event);
+            if (openOverlayState != null) {
+              openOverlayState!.handleKeyEvent(event);
               drawFrame();
             } else {
               // Direct key events to either form/selection state or to the focused action button
               if (state.isActionFocused) {
                 void traverseForFocusedAction(Element el) {
                   if (el is StatefulElement) {
-                    final s = el.state;
-                    final w = el.widget;
-                    final widgetType = '${w.runtimeType}';
-                    if (widgetType.startsWith('DropdownButton') &&
-                        (w as dynamic).focused) {
-                      (s as dynamic).handleKeyEvent(event);
-                    } else if (widgetType.startsWith('PopupMenuButton') &&
-                        (w as dynamic).focused) {
-                      (s as dynamic).handleKeyEvent(event);
+                    if ((el.widget, el.state) case (
+                      DropdownButton<Object?>(focused: true) ||
+                          PopupMenuButton<Object?>(focused: true),
+                      final ui.KeyEventHandler handler,
+                    )) {
+                      handler.handleKeyEvent(event);
                     }
                   }
                   el.visitChildren(traverseForFocusedAction);

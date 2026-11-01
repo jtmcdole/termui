@@ -69,7 +69,7 @@ void main() {
       element.layout(BoxConstraints.tight(const Size(10, 10)));
       // Center of 10x10 is 4x4 for a 2x2 child.
       expect(
-        (element as dynamic).childElement.relativeOffset,
+        (element as AlignElement).childElement!.relativeOffset,
         const Offset(4, 4),
       );
     });
@@ -84,7 +84,7 @@ void main() {
       element.layout(BoxConstraints.tight(const Size(10, 10)));
       // Bottom right is 8x8.
       expect(
-        (element as dynamic).childElement.relativeOffset,
+        (element as AlignElement).childElement!.relativeOffset,
         const Offset(8, 8),
       );
     });

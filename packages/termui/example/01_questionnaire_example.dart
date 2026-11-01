@@ -38,7 +38,7 @@ Future<void> runQuestionnaire(term.Terminal terminal) async {
     // the entered text state without needing GlobalKeys or Builder wrappers.
     final nameCtrl = TextEditingController(text: '');
 
-    await PromptRunner(
+    await PromptRunner<void>(
       terminal: terminal,
       // Notice: No hardcoded 'height' required! The framework calculates it dynamically
       // using the widget tree's intrinsic height.
@@ -68,7 +68,7 @@ Future<void> runQuestionnaire(term.Terminal terminal) async {
       initialIndex: 0,
     );
 
-    await PromptRunner(
+    await PromptRunner<void>(
       terminal: terminal,
       widget: Column([
         const Text(
@@ -92,7 +92,7 @@ Future<void> runQuestionnaire(term.Terminal terminal) async {
       initialIndex: 0,
     );
 
-    await PromptRunner(
+    await PromptRunner<void>(
       terminal: terminal,
       widget: Column([
         const Text(

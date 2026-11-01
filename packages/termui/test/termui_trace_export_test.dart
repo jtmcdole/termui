@@ -71,16 +71,13 @@ void main() {
       maxTs = spans.map((s) => s.endUs).reduce(max);
     });
 
-    dynamic findTraceViewerState(Element root) {
-      dynamic found;
+    TraceViewerAppState findTraceViewerState(Element root) {
+      TraceViewerAppState? found;
       void find(Element el) {
         if (found != null) return;
-        if (el is StatefulElement) {
-          final state = el.state;
-          if (state.runtimeType.toString().contains('TraceViewerAppState')) {
-            found = state;
-            return;
-          }
+        if (el case StatefulElement(state: final TraceViewerAppState s)) {
+          found = s;
+          return;
         }
         el.visitChildren(find);
       }

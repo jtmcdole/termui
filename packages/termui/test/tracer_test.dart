@@ -52,7 +52,10 @@ void main() {
       expect(contents, endsWith('\n]\n'));
 
       // Parse as JSON
-      final jsonList = jsonDecode(contents) as List<dynamic>;
+      final jsonList = [
+        for (final e in jsonDecode(contents) as List<Object?>)
+          e as Map<String, Object?>,
+      ];
       expect(jsonList.length, equals(3));
 
       // Verify first event (drawFrame begin)
@@ -83,8 +86,12 @@ void main() {
       final file = File(traceFilePath);
       expect(await file.exists(), isTrue);
 
-      final jsonList =
-          jsonDecode(utf8.decode(await file.readAsBytes())) as List<dynamic>;
+      final jsonList = [
+        for (final e
+            in jsonDecode(utf8.decode(await file.readAsBytes()))
+                as List<Object?>)
+          e as Map<String, Object?>,
+      ];
       expect(jsonList.length, equals(2));
       expect(jsonList[0]['name'], equals('dynamicEvent'));
       expect(jsonList[0]['ph'], equals('B'));
@@ -108,7 +115,10 @@ void main() {
       expect(contents, startsWith('[\n'));
       expect(contents, endsWith('\n]\n'));
 
-      final jsonList = jsonDecode(contents) as List<dynamic>;
+      final jsonList = [
+        for (final e in jsonDecode(contents) as List<Object?>)
+          e as Map<String, Object?>,
+      ];
       expect(jsonList.length, equals(2));
       expect(jsonList[0]['name'], equals('memEvent'));
       expect(jsonList[0]['ph'], equals('B'));
@@ -130,11 +140,15 @@ void main() {
         final localFile = File(traceFilePath);
         expect(await localFile.exists(), isTrue);
         final localContents = utf8.decode(await localFile.readAsBytes());
-        final localJsonList = jsonDecode(localContents) as List<dynamic>;
+        final localJsonList = [
+          for (final e in jsonDecode(localContents) as List<Object?>)
+            e as Map<String, Object?>,
+        ];
         expect(localJsonList.length, equals(1));
         expect(localJsonList[0]['name'], equals('localEvent'));
-        expect(localJsonList[0]['args'], isNotNull);
-        expect(localJsonList[0]['args']['key'], equals('value'));
+        final localArgs = localJsonList[0]['args'] as Map<String, Object?>?;
+        expect(localArgs, isNotNull);
+        expect(localArgs!['key'], equals('value'));
       },
     );
 
@@ -156,11 +170,15 @@ void main() {
         final memFile = memoryFs.file(memTracePath);
         expect(memFile.existsSync(), isTrue);
         final memContents = utf8.decode(memFile.readAsBytesSync());
-        final memJsonList = jsonDecode(memContents) as List<dynamic>;
+        final memJsonList = [
+          for (final e in jsonDecode(memContents) as List<Object?>)
+            e as Map<String, Object?>,
+        ];
         expect(memJsonList.length, equals(1));
         expect(memJsonList[0]['name'], equals('memEvent'));
-        expect(memJsonList[0]['args'], isNotNull);
-        expect(memJsonList[0]['args']['foo'], equals('bar'));
+        final memArgs = memJsonList[0]['args'] as Map<String, Object?>?;
+        expect(memArgs, isNotNull);
+        expect(memArgs!['foo'], equals('bar'));
       },
     );
 

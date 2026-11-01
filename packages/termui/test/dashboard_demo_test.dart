@@ -29,7 +29,7 @@ void main() {
 
     findDashboardElement(rootEl);
     expect(dashboardEl, isNotNull);
-    final appState = dashboardEl!.state as dynamic;
+    final appState = dashboardEl!.state as DashboardAppState;
 
     expect(appState, isNotNull);
     expect(appState.selectedRow, equals(0));
@@ -44,14 +44,10 @@ void main() {
     // Find the DropdownButton element and verify it is focused
     bool foundFocusedDropdown = false;
     void findFocusedDropdown(Element el) {
-      if (el is StatefulElement) {
-        final w = el.widget;
-        if (w.runtimeType.toString().startsWith('DropdownButton')) {
-          final focused = (w as dynamic).focused;
-          if (focused) {
-            foundFocusedDropdown = true;
-          }
-        }
+      if (el case StatefulElement(
+        widget: DropdownButton<Object?>(focused: true),
+      )) {
+        foundFocusedDropdown = true;
       }
       el.visitChildren(findFocusedDropdown);
     }
@@ -60,44 +56,32 @@ void main() {
     expect(foundFocusedDropdown, isTrue);
 
     // Verify if there is an open overlay. It should be closed initially.
-    bool overlayOpen = false;
-    dynamic openOverlayState;
+    DropdownButtonState<Object?>? openOverlayState;
     void traverseForOpenOverlay(Element el) {
-      if (el is StatefulElement) {
-        final s = el.state;
-        if (s.widget.runtimeType.toString().startsWith('DropdownButton') &&
-            (s as dynamic).isOpen) {
-          overlayOpen = true;
-          openOverlayState = s;
-        }
+      if (el case StatefulElement(
+        state: final DropdownButtonState<Object?> s,
+      ) when s.isOpen) {
+        openOverlayState = s;
       }
       el.visitChildren(traverseForOpenOverlay);
     }
 
     traverseForOpenOverlay(rootEl);
-    expect(overlayOpen, isFalse);
+    expect(openOverlayState, isNull);
 
     // 2. Simulate pressing Space to open the dropdown
     // Let's call the outer event loop logic in dashboard_demo.dart:
     void simulateGlobalKey(ui.KeyEvent event) {
-      // Check if action overlay is open and intercept key events
-      bool isOverlayOpen = false;
-      dynamic activeOverlayState;
+      ui.KeyEventHandler? activeOverlayState;
 
       void checkOverlay(Element el) {
-        if (isOverlayOpen) return;
+        if (activeOverlayState != null) return;
         if (el is StatefulElement) {
-          final s = el.state;
-          if (s.widget.runtimeType.toString().startsWith('DropdownButton') &&
-              (s as dynamic).isOpen) {
-            isOverlayOpen = true;
-            activeOverlayState = s;
-          } else if (s.widget.runtimeType.toString().startsWith(
-                'PopupMenuButton',
-              ) &&
-              (s as dynamic).isOpen) {
-            isOverlayOpen = true;
-            activeOverlayState = s;
+          switch (el.state) {
+            case final DropdownButtonState<Object?> s when s.isOpen:
+              activeOverlayState = s;
+            case final PopupMenuButtonState<Object?> s when s.isOpen:
+              activeOverlayState = s;
           }
         }
         el.visitChildren(checkOverlay);
@@ -105,22 +89,18 @@ void main() {
 
       checkOverlay(rootEl);
 
-      if (isOverlayOpen && activeOverlayState != null) {
-        activeOverlayState.handleKeyEvent(event);
+      if (activeOverlayState != null) {
+        activeOverlayState!.handleKeyEvent(event);
       } else {
         if (appState.isActionFocused) {
           void traverseForFocusedAction(Element el) {
             if (el is StatefulElement) {
-              final s = el.state;
-              final w = el.widget;
-              if (w.runtimeType.toString().startsWith('DropdownButton') &&
-                  (w as dynamic).focused) {
-                (s as dynamic).handleKeyEvent(event);
-              } else if (w.runtimeType.toString().startsWith(
-                    'PopupMenuButton',
-                  ) &&
-                  (w as dynamic).focused) {
-                (s as dynamic).handleKeyEvent(event);
+              if ((el.widget, el.state) case (
+                DropdownButton<Object?>(focused: true) ||
+                    PopupMenuButton<Object?>(focused: true),
+                final ui.KeyEventHandler handler,
+              )) {
+                handler.handleKeyEvent(event);
               }
             }
             el.visitChildren(traverseForFocusedAction);
@@ -137,16 +117,15 @@ void main() {
     rootEl.paint(buffer, Offset.zero);
 
     // Verify dropdown is now open
-    overlayOpen = false;
+    openOverlayState = null;
     traverseForOpenOverlay(rootEl);
-    expect(overlayOpen, isTrue);
     expect(openOverlayState, isNotNull);
 
     // 3. Move selection down to 'Paused' (index 1)
     simulateGlobalKey(const ui.KeyEvent('down', ui.KeyType.down));
     rootEl.layout(BoxConstraints.tight(const Size(80, 20)));
     rootEl.paint(buffer, Offset.zero);
-    expect(openOverlayState.selectedIndex, equals(1));
+    expect(openOverlayState!.selectedIndex, equals(1));
 
     // 4. Confirm selection using 'enter'
     simulateGlobalKey(const ui.KeyEvent('\n', ui.KeyType.enter));
@@ -154,9 +133,9 @@ void main() {
     rootEl.paint(buffer, Offset.zero);
 
     // Verify dropdown is closed and value changed
-    overlayOpen = false;
+    openOverlayState = null;
     traverseForOpenOverlay(rootEl);
-    expect(overlayOpen, isFalse);
+    expect(openOverlayState, isNull);
     expect(appState.dropdownValues[0], equals('paused'));
   });
 }

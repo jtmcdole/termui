@@ -20,7 +20,7 @@ void main() {
 
       // Initial fraction 0.5 -> splitter at x=10
       // drag splitter
-      (element as dynamic).handleMouseEvent(
+      (element as SplitPaneElement).handleMouseEvent(
         evt.MouseEvent(
           x: 10,
           y: 5,
@@ -32,7 +32,7 @@ void main() {
         5,
       );
 
-      (element as dynamic).handleMouseEvent(
+      element.handleMouseEvent(
         evt.MouseEvent(
           x: 15,
           y: 5,
@@ -44,7 +44,7 @@ void main() {
         5,
       );
 
-      (element as dynamic).handleMouseEvent(
+      element.handleMouseEvent(
         evt.MouseEvent(
           x: 15,
           y: 5,
@@ -74,7 +74,7 @@ void main() {
       element.layout(BoxConstraints.tight(const Size(10, 20)));
 
       // splitter at y=10
-      (element as dynamic).handleMouseEvent(
+      (element as SplitPaneElement).handleMouseEvent(
         evt.MouseEvent(
           x: 5,
           y: 10,
@@ -86,7 +86,7 @@ void main() {
         10,
       );
 
-      (element as dynamic).handleMouseEvent(
+      element.handleMouseEvent(
         evt.MouseEvent(
           x: 5,
           y: 15,
