@@ -33,7 +33,6 @@ flutter:
   assets:
     - fonts/CascadiaMonoPL.ttf
     - fonts/MesloLGS_NF_Regular.ttf
-    - fonts/NotoSansBraille-Regular.ttf
   fonts:
     - family: Cascadia Mono
       fonts:
@@ -41,6 +40,3 @@ flutter:
     - family: MesloLGS NF
       fonts:
         - asset: fonts/MesloLGS_NF_Regular.ttf
-    - family: Noto Sans Braille
-      fonts:
-        - asset: fonts/NotoSansBraille-Regular.ttf
