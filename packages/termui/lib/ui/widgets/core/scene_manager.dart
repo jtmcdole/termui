@@ -632,7 +632,7 @@ class SceneManager implements Reassemblable {
         handleMouseEvent(e);
       case final PasteEvent e:
         final r = focusedLayer?.renderer;
-        if (r is PromptRunner) {
+        if (r is PromptRunner<Object?>) {
           r.handlePasteEvent(e);
         } else if (r != null) {
           for (final char in e.text.characters) {
@@ -1045,11 +1045,11 @@ class SceneManager implements Reassemblable {
         .then((result) {
           completer.complete(result);
         })
-        .catchError((err) {
+        .catchError((Object err, StackTrace stack) {
           if (err is PromptAbortedException) {
             completer.complete(null);
           } else {
-            completer.completeError(err);
+            completer.completeError(err, stack);
           }
         })
         .whenComplete(() {

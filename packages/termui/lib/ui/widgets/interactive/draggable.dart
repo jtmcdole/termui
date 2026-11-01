@@ -25,10 +25,10 @@ class Draggable<T> extends Widget {
 /// The element that coordinates and intercepts mouse drag events for [Draggable].
 class DraggableElement extends SingleChildElement implements MouseEventHandler {
   /// Creates a [DraggableElement].
-  DraggableElement(Draggable super.widget);
+  DraggableElement(Draggable<Object?> super.widget);
 
   @override
-  Widget? get childWidget => (widget as Draggable).child;
+  Widget? get childWidget => (widget as Draggable<Object?>).child;
 
   @override
   Size performLayout(BoxConstraints constraints) {
@@ -48,7 +48,7 @@ class DraggableElement extends SingleChildElement implements MouseEventHandler {
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     if (event.type == MouseEventType.press) {
       final session = DragSession(
-        data: (widget as Draggable).data as Object,
+        data: (widget as Draggable<Object?>).data as Object,
         sourceElement: this,
         startMousePosition: Point<int>(event.x, event.y),
         currentMousePosition: Point<int>(event.x, event.y),

@@ -27,7 +27,7 @@ class DragSession {
 /// Global coordinator for handling in-terminal drag and drop sessions.
 class DragDropManager {
   static DragSession? _activeSession;
-  static DragTargetElement? _lastHoveredTarget;
+  static DragTargetElement<Object?>? _lastHoveredTarget;
 
   /// Hook triggered whenever the active drag session changes.
   static void Function(DragSession? session)? onDragSessionChanged;
@@ -72,7 +72,7 @@ class DragDropManager {
 
     final hitElements = root.hitTest(mousePosition);
     final hoveredTarget = hitElements
-        .whereType<DragTargetElement>()
+        .whereType<DragTargetElement<Object?>>()
         .firstOrNull;
 
     if (hoveredTarget != _lastHoveredTarget) {
@@ -106,7 +106,7 @@ class DragDropManager {
   }
 
   /// Clears references to the given target element if it is currently tracked.
-  static void unregisterTarget(DragTargetElement target) {
+  static void unregisterTarget(DragTargetElement<Object?> target) {
     if (_lastHoveredTarget == target) {
       _lastHoveredTarget = null;
     }

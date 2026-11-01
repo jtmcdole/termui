@@ -227,7 +227,7 @@ class Form extends StatefulWidget implements Focusable {
   final Widget? child;
 
   /// A flat list of form fields. Used in Legacy Mode.
-  final List<FormField> fields;
+  final List<FormField<Object?>> fields;
 
   FormState? _state;
 
@@ -323,7 +323,7 @@ class Form extends StatefulWidget implements Focusable {
   }
 
   @override
-  State createState() => FormState();
+  State<Form> createState() => FormState();
 
   /// Retrieves the closest ancestor [FormState] in the tree.
   static FormState? of(BuildContext context) {
@@ -334,18 +334,18 @@ class Form extends StatefulWidget implements Focusable {
 
 /// The mutable state of a [Form].
 class FormState extends State<Form> implements KeyEventHandler {
-  final Set<FormFieldState> _fields = {};
+  final Set<FormFieldState<Object?>> _fields = {};
 
   /// Retrieves the list of currently registered form field states.
-  Iterable<FormFieldState> get fields => _fields;
+  Iterable<FormFieldState<Object?>> get fields => _fields;
 
   /// Registers a [FormFieldState] dynamically with this form.
-  void registerField(FormFieldState field) {
+  void registerField(FormFieldState<Object?> field) {
     _fields.add(field);
   }
 
   /// Unregisters a [FormFieldState] from this form.
-  void unregisterField(FormFieldState field) {
+  void unregisterField(FormFieldState<Object?> field) {
     _fields.remove(field);
   }
 

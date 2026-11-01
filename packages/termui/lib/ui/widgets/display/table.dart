@@ -44,7 +44,7 @@ class Table extends Widget {
   final List<String> headers;
 
   /// The rows of data, containing text or widget elements.
-  final List<List<dynamic>> rows;
+  final List<List<Object?>> rows;
 
   /// The defined widths for each column, in character cells.
   final List<int> columnWidths;
