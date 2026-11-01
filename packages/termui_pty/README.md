@@ -8,7 +8,7 @@ A high-performance virtual terminal emulator and PTY embedding widget for the `t
 
 * **High-Performance Rendering:** Bypasses standard object-heavy string manipulation in favor of fast 1D array block memory operations (`List.setRange`) and integer-based grapheme boundaries, reducing GC pressure during heavy I/O.
 * **Strict MVVM Boundaries:** The UI (`TerminalView`) is entirely decoupled from the state and I/O streams (`VirtualTerminal`).
-* **Protocol Support:** Full parsing for standard CSI sequences, VT100 cursor manipulation, and DECSET/DECRST routing (including `1000` and `1006` SGR mouse tracking).
+* **Protocol Support:** Parses standard CSI, `DECSTBM` scroll regions, line/char editing, and alternate screen (`?1049`). Also tracks `DECTCEM` cursor visibility, `DECAWM` auto-wrap, and `1000`/`1002`/`1003`/`1006` mouse modes.
 * **Transport Agnostic:** The core `TerminalView` does not care where your bytes come from. You can feed it local pseudo-terminals, remote SSH streams, or mock data for testing.
 * **`pty2` Integration:** Includes a convenience widget (`PseudoTerminalView`) to instantly mount a `package:pty2` subprocess directly into your `termui` widget tree.
 
