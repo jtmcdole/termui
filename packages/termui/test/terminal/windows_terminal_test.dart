@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:ffi/ffi.dart';
@@ -24,14 +25,17 @@ import 'package:win32/win32.dart'
         ENABLE_QUICK_EDIT_MODE,
         ENABLE_VIRTUAL_TERMINAL_INPUT,
         ENABLE_WINDOW_INPUT,
+        E_ACCESSDENIED,
         FOCUS_EVENT,
+        HANDLE,
         INPUT_RECORD,
         INPUT_RECORD_0_Extension,
         KEY_EVENT,
         KEY_EVENT_RECORD_0_Extension,
         MOUSE_EVENT,
         VK_MENU,
-        WINDOW_BUFFER_SIZE_EVENT;
+        WINDOW_BUFFER_SIZE_EVENT,
+        WindowsException;
 
 final class _FakeRawTerminal implements raw.Terminal {
   _FakeRawTerminal(this.log, this._openStream);
@@ -316,6 +320,169 @@ void main() {
       } finally {
         calloc.free(records);
       }
+    });
+  });
+
+  group('WindowsConsoleInputSession lifecycle', () {
+    final inputHandle = HANDLE(Pointer.fromAddress(0x100));
+    final stopHandle = HANDLE(Pointer.fromAddress(0x200));
+
+    test('propagates spawnReader failures via addError and closes stopEvent '
+        'once', () async {
+      final closedHandles = <int>[];
+      final backend = IoTerminalBackend(
+        rawTerminal: _FakeRawTerminal(
+          <String>[],
+          () => WindowsConsoleInputSession(
+            inputHandle,
+            hasConsole: (_) => true,
+            createStopEvent: () => stopHandle,
+            signalStopEvent: (_) {},
+            closeStopEvent: (h) => closedHandles.add(h.address),
+            spawnReader: (_, _, _, _) async {
+              await Future<void>.value();
+              throw StateError('Isolate.spawn failed');
+            },
+          ).stream,
+        ),
+      );
+
+      final errors = <Object>[];
+      final done = Completer<void>();
+      backend.rawInput.listen(
+        (_) {},
+        onError: errors.add,
+        onDone: done.complete,
+      );
+
+      await done.future;
+      expect(errors, contains(isA<StateError>()));
+      expect(closedHandles, equals([stopHandle.address]));
+      backend.dispose();
+    });
+
+    test('propagates createStopEvent failures and closes without leaking '
+        'handles', () async {
+      var closedCount = 0;
+      final session = WindowsConsoleInputSession(
+        inputHandle,
+        hasConsole: (_) => true,
+        createStopEvent: () => throw const WindowsException(
+          E_ACCESSDENIED,
+          message: 'CreateEvent failed',
+        ),
+        signalStopEvent: (_) {},
+        closeStopEvent: (_) => closedCount++,
+        spawnReader: (_, _, _, _) => fail('spawnReader must not run'),
+      );
+
+      final errors = <Object>[];
+      final done = Completer<void>();
+      session.stream.listen((_) {}, onError: errors.add, onDone: done.complete);
+
+      await done.future;
+      expect(errors, contains(isA<WindowsException>()));
+      expect(closedCount, equals(0));
+    });
+
+    test('closes stream immediately when handle is not a console', () async {
+      final session = WindowsConsoleInputSession(
+        inputHandle,
+        hasConsole: (_) => false,
+        createStopEvent: () => fail('createStopEvent must not run'),
+        signalStopEvent: (_) {},
+        closeStopEvent: (_) {},
+        spawnReader: (_, _, _, _) => fail('spawnReader must not run'),
+      );
+
+      expect(await session.stream.toList(), isEmpty);
+    });
+
+    test('delivers byte chunks, closes on null EOF, and releases stopEvent '
+        'when reader exits', () async {
+      final events = <String>[];
+      late SendPort capturedDataPort;
+      late SendPort capturedExitPort;
+      final spawned = Completer<void>();
+
+      final session = WindowsConsoleInputSession(
+        inputHandle,
+        hasConsole: (_) => true,
+        createStopEvent: () => stopHandle,
+        signalStopEvent: (_) => events.add('signal'),
+        closeStopEvent: (_) => events.add('close'),
+        spawnReader: (inAddr, stopAddr, dataPort, exitPort) async {
+          expect(inAddr, equals(inputHandle.address));
+          expect(stopAddr, equals(stopHandle.address));
+          capturedDataPort = dataPort;
+          capturedExitPort = exitPort;
+          spawned.complete();
+        },
+      );
+
+      final chunks = <List<int>>[];
+      final done = Completer<void>();
+      session.stream.listen(chunks.add, onDone: done.complete);
+      await spawned.future;
+
+      capturedDataPort
+        ..send(const [0x61, 0x62])
+        ..send(const [0x63])
+        ..send(null);
+      await Future<void>.delayed(Duration.zero);
+      // onDone waits until exitPort confirms the worker isolate exited and
+      // stopEvent is closed.
+      expect(done.isCompleted, isFalse);
+
+      capturedExitPort.send(null);
+      await done.future;
+      expect(
+        chunks,
+        equals([
+          const [0x61, 0x62],
+          const [0x63],
+        ]),
+      );
+      expect(events, contains('close'));
+    });
+
+    test('defers closeStopEvent until exitPort fires when cancelled '
+        'mid-spawn', () async {
+      final events = <String>[];
+      late SendPort capturedExitPort;
+      final spawnGate = Completer<void>();
+
+      final session = WindowsConsoleInputSession(
+        inputHandle,
+        hasConsole: (_) => true,
+        createStopEvent: () => stopHandle,
+        signalStopEvent: (_) => events.add('signal'),
+        closeStopEvent: (_) => events.add('close'),
+        spawnReader: (_, _, _, exitPort) async {
+          capturedExitPort = exitPort;
+          await spawnGate.future;
+        },
+      );
+
+      final sub = session.stream.listen((_) {});
+      var cancelCompleted = false;
+      final cancelFuture = sub.cancel().then((_) {
+        cancelCompleted = true;
+      });
+
+      // Cancel signals stopEvent immediately, but must NOT close it while the
+      // worker isolate may still enter WaitForMultipleObjects.
+      expect(events, equals(['signal']));
+      expect(cancelCompleted, isFalse);
+
+      spawnGate.complete();
+      await Future<void>.delayed(Duration.zero);
+      expect(events, equals(['signal']));
+
+      capturedExitPort.send(null);
+      await cancelFuture;
+      expect(cancelCompleted, isTrue);
+      expect(events, equals(['signal', 'close']));
     });
   });
 

@@ -3,7 +3,6 @@
 
 import 'dart:async';
 import 'dart:ffi';
-import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
@@ -14,10 +13,36 @@ import 'package:win32/win32.dart';
 
 import 'terminal.dart';
 
+bool _hasConsoleInputHandle(HANDLE handle) {
+  if (handle == INVALID_HANDLE_VALUE || handle == nullptr) return false;
+  final modePtr = calloc<Uint32>();
+  try {
+    return GetConsoleMode(handle, modePtr).value;
+  } finally {
+    calloc.free(modePtr);
+  }
+}
+
+HANDLE _createManualResetEvent() {
+  final Win32Result(value: stopEvent, :error) = CreateEvent(
+    null,
+    true,
+    false,
+    null,
+  );
+  if (stopEvent == nullptr || stopEvent == INVALID_HANDLE_VALUE) {
+    throw WindowsException(error.toHRESULT());
+  }
+  return stopEvent;
+}
+
 const int _inputRecordBatchSize = 64;
+const WAIT_EVENT _stopSignaled = WAIT_OBJECT_0;
+const WAIT_EVENT _inputSignaled = WAIT_EVENT(1);
 
 bool _drainWindowsConsoleBatch(
   HANDLE inputHandle,
+  HANDLE stopEvent,
   Pointer<INPUT_RECORD> records,
   Pointer<Uint32> countPtr,
   WindowsConsoleInputDecoder decoder,
@@ -40,6 +65,9 @@ bool _drainWindowsConsoleBatch(
     final read = countPtr.value;
     if (read == 0) break;
     batch.add(decoder.decode(records, read));
+    if (WaitForSingleObject(stopEvent, 0).value == _stopSignaled) {
+      return true;
+    }
   }
   if (batch.isNotEmpty) {
     sendPort.send(batch.takeBytes());
@@ -47,25 +75,27 @@ bool _drainWindowsConsoleBatch(
   return ok;
 }
 
-void _windowsInputReaderEntry((int, SendPort) args) {
-  final (inputAddress, sendPort) = args;
+void _windowsInputReaderEntry((int, int, SendPort) args) {
+  final (inputAddress, stopAddress, sendPort) = args;
   final inputHandle = HANDLE(Pointer.fromAddress(inputAddress));
+  final stopEvent = HANDLE(Pointer.fromAddress(stopAddress));
   final decoder = WindowsConsoleInputDecoder();
   final arena = Arena();
 
   try {
+    final handles = arena<Pointer>(2)
+      ..[0] = stopEvent
+      ..[1] = inputHandle;
     final records = arena<INPUT_RECORD>(_inputRecordBatchSize);
     final countPtr = arena<Uint32>();
 
     while (true) {
-      final wait = WaitForSingleObject(inputHandle, 20).value;
-      if (wait == WAIT_TIMEOUT) {
-        sleep(const Duration(milliseconds: 10));
-        continue;
-      }
-      if (wait != WAIT_OBJECT_0) break;
+      final wait = WaitForMultipleObjects(2, handles, false, INFINITE).value;
+      if (wait == _stopSignaled) return;
+      if (wait != _inputSignaled) break;
       if (!_drainWindowsConsoleBatch(
         inputHandle,
+        stopEvent,
         records,
         countPtr,
         decoder,
@@ -97,34 +127,19 @@ class WindowsTerminal implements Terminal {
   int? _origOutputMode;
 
   @override
-  Stream<List<int>> openInputStream() {
-    ReceivePort? receivePort;
-    Isolate? isolate;
-    late final StreamController<List<int>> controller;
-    controller = StreamController<List<int>>(
-      onListen: () async {
-        final port = ReceivePort();
-        receivePort = port;
-        port.listen((message) {
-          if (message == null) {
-            port.close();
-            unawaited(controller.close());
-          } else if (message is List<int>) {
-            controller.add(message);
-          }
-        }, onDone: controller.close);
-        isolate = await Isolate.spawn(_windowsInputReaderEntry, (
-          inputHandle.address,
-          port.sendPort,
-        ));
-      },
-      onCancel: () {
-        receivePort?.close();
-        isolate?.kill(priority: Isolate.immediate);
-      },
-    );
-    return controller.stream;
-  }
+  Stream<List<int>> openInputStream() => WindowsConsoleInputSession(
+    inputHandle,
+    hasConsole: _hasConsoleInputHandle,
+    createStopEvent: _createManualResetEvent,
+    signalStopEvent: SetEvent,
+    closeStopEvent: CloseHandle,
+    spawnReader: (inputAddress, stopAddress, dataPort, exitPort) =>
+        Isolate.spawn(_windowsInputReaderEntry, (
+          inputAddress,
+          stopAddress,
+          dataPort,
+        ), onExit: exitPort),
+  ).stream;
 
   @override
   void enableRawMode() {
