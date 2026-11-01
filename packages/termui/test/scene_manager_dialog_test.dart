@@ -43,6 +43,77 @@ class _TestButtonElement extends Element implements MouseEventHandler {
   }
 }
 
+String _bufferText(Buffer buffer) => [
+  for (var y = 0; y < buffer.height; y++)
+    [for (var x = 0; x < buffer.width; x++) buffer.getCharacter(x, y)].join(),
+].join('\n');
+
+typedef _SingleLayerSceneBody =
+    Future<void> Function(
+      TerminalTester tester,
+      SceneManager sceneManager,
+      SceneLayer baseLayer,
+    );
+
+void _runSingleLayerScene({
+  Widget baseWidget = const SizedBox(width: 10, height: 1, child: Text('Base')),
+  void Function()? onBaseFocus,
+  required _SingleLayerSceneBody body,
+}) {
+  final tester = TerminalTester(size: const Point(60, 20));
+  tester.run(() async {
+    final sceneManager = SceneManager(
+      tester.terminal,
+      renderingMode: .alternateScreen,
+    );
+    final baseRunner = PromptRunner<void>(
+      terminal: tester.terminal,
+      widget: baseWidget,
+      alternateScreen: false,
+      mode: .managed,
+      onFramePainted: (_) => sceneManager.render(),
+    );
+    final baseLayer = SceneLayer(
+      renderer: baseRunner,
+      sizing: .fullscreen,
+      onFocus: onBaseFocus,
+    );
+    sceneManager.layers.add(baseLayer);
+    sceneManager.focusedLayer = baseLayer;
+
+    try {
+      await tester.runPrompt(baseRunner, () async {
+        try {
+          await tester.pump();
+          await body(tester, sceneManager, baseLayer);
+        } finally {
+          baseRunner.dispose();
+        }
+      });
+    } finally {
+      sceneManager.dispose();
+    }
+  });
+}
+
+Widget _buildEscapeSubmenuDialog({required void Function() onConsumeFirst}) {
+  var submenuOpen = true;
+  return StatefulBuilder(
+    builder: (_, setState) => Focus(
+      autofocus: true,
+      onKeyEvent: (event) {
+        if (event.type == .escape && submenuOpen) {
+          setState(() => submenuOpen = false);
+          onConsumeFirst();
+          return true;
+        }
+        return false;
+      },
+      child: Text(submenuOpen ? 'Submenu Open' : 'Dialog Ready'),
+    ),
+  );
+}
+
 typedef _TwoLayerSceneBody =
     Future<void> Function(
       TerminalTester tester,
@@ -911,6 +982,310 @@ void main() {
             expect(layerBFocused, isFalse);
             expect(layerB.x, equals(0));
             expect(layerB.y, equals(2));
+          },
+        );
+      },
+    );
+
+    test(
+      'showDialog routes Escape to focused child first, then cancels on unhandled Escape and keeps barrier non-focusable',
+      () {
+        final baseFocusNode = FocusNode(id: 'base_escape_listener');
+        addTearDown(baseFocusNode.dispose);
+        final baseKeys = <String>[];
+        var baseFocusCalls = 0;
+
+        _runSingleLayerScene(
+          baseWidget: KeyboardListener(
+            focusNode: baseFocusNode,
+            onKeyEvent: (event) {
+              if (event.type == .character) {
+                baseKeys.add(event.key);
+                return true;
+              }
+              return false;
+            },
+            child: const SizedBox(
+              width: 12,
+              height: 1,
+              child: Text('Base Screen'),
+            ),
+          ),
+          onBaseFocus: () {
+            baseFocusCalls++;
+            baseFocusNode.requestFocus();
+          },
+          body: (tester, sceneManager, baseLayer) async {
+            var childConsumed = 0;
+            String? dialogResult = 'sentinel';
+            final dialogFuture = sceneManager
+                .showDialog<String>(
+                  width: 28,
+                  height: 5,
+                  builder: (_) => _buildEscapeSubmenuDialog(
+                    onConsumeFirst: () => childConsumed++,
+                  ),
+                )
+                .then((value) => dialogResult = value);
+
+            await tester.pump();
+            expect(sceneManager.layers, hasLength(3));
+            expect(
+              _bufferText(tester.backend.buffer!),
+              contains('Submenu Open'),
+            );
+
+            // First Escape is consumed by the focused child inside the dialog.
+            tester.sendKey(.escape);
+            await tester.pump();
+            expect(childConsumed, equals(1));
+            expect(dialogResult, equals('sentinel'));
+            expect(sceneManager.layers, hasLength(3));
+            expect(
+              _bufferText(tester.backend.buffer!),
+              contains('Dialog Ready'),
+            );
+
+            // Second Escape is unhandled by children and cancels the dialog.
+            tester.sendKey(.escape);
+            await tester.pump();
+            await dialogFuture;
+            expect(dialogResult, isNull);
+            expect(sceneManager.layers, [baseLayer]);
+            expect(sceneManager.focusedLayer, same(baseLayer));
+            expect(baseFocusCalls, equals(1));
+            expect(
+              _bufferText(tester.backend.buffer!),
+              isNot(contains('Dialog Ready')),
+            );
+            expect(
+              _bufferText(tester.backend.buffer!),
+              contains('Base Screen'),
+            );
+
+            tester.sendString('z');
+            await tester.pump();
+            expect(baseKeys, ['z']);
+
+            // Dismissible barrier press never focuses barrierLayer or re-fires dialogLayer.onFocus.
+            var dialogOnFocusCalls = 0;
+            final barrierDismissFuture = sceneManager.showDialog<String>(
+              width: 24,
+              height: 5,
+              builder: (_) => const Text('Click Outside'),
+            );
+            await tester.pump();
+            final clickDialogLayer = sceneManager.layers.last
+              ..onFocus = () => dialogOnFocusCalls++;
+
+            sceneManager.handleMouseEvent(
+              const MouseEvent(x: 1, y: 1, button: .left, type: .press),
+            );
+            expect(sceneManager.focusedLayer, same(clickDialogLayer));
+            sceneManager.handleMouseEvent(
+              const MouseEvent(x: 1, y: 1, button: .left, type: .release),
+            );
+            await tester.pump();
+            expect(await barrierDismissFuture, isNull);
+            expect(dialogOnFocusCalls, equals(0));
+            expect(sceneManager.focusedLayer, same(baseLayer));
+            expect(baseFocusCalls, equals(2));
+          },
+        );
+      },
+    );
+
+    test(
+      'showDialog with barrierDismissible: false ignores Escape and keeps barrier out of _focusStack',
+      () {
+        final modalController = TextEditingController();
+        var baseClicks = 0;
+
+        _runSingleLayerScene(
+          baseWidget: Button(text: 'Base Btn', onPressed: () => baseClicks++),
+          body: (tester, sceneManager, baseLayer) async {
+            var lockedCompleted = false;
+            final future = sceneManager
+                .showDialog<void>(
+                  barrierDismissible: false,
+                  width: 24,
+                  height: 5,
+                  builder: (_) => Column([
+                    const Text('Locked Modal'),
+                    TextField(controller: modalController, focused: true),
+                  ]),
+                )
+                .then((_) => lockedCompleted = true);
+
+            await tester.pump();
+            expect(sceneManager.layers, hasLength(3));
+            final dialogLayer = sceneManager.layers.last;
+            expect(sceneManager.focusedLayer, same(dialogLayer));
+            expect(
+              _bufferText(tester.backend.buffer!),
+              contains('Locked Modal'),
+            );
+
+            // Escape must be ignored when barrierDismissible is false.
+            tester.sendKey(.escape);
+            await tester.pump();
+            expect(lockedCompleted, isFalse);
+            expect(sceneManager.layers, hasLength(3));
+            expect(
+              _bufferText(tester.backend.buffer!),
+              contains('Locked Modal'),
+            );
+
+            // Clicking the barrier over Base Btn (1, 1) must not dismiss,
+            // leak to Base Btn, or steal keyboard focus from dialogLayer.
+            tester.mouseDown(1, 1);
+            tester.mouseUp(1, 1);
+            await tester.pump();
+            expect(baseClicks, equals(0));
+            expect(lockedCompleted, isFalse);
+            expect(sceneManager.focusedLayer, same(dialogLayer));
+
+            tester.sendKey(.escape);
+            tester.sendString('ok');
+            await tester.pump();
+            expect(lockedCompleted, isFalse);
+            expect(modalController.value.text, equals('ok'));
+
+            // Enter completes the locked dialog and restores baseLayer.
+            tester.sendKey(.enter);
+            await tester.pump();
+            expect(lockedCompleted, isTrue);
+            await future;
+            expect(sceneManager.layers, [baseLayer]);
+            expect(sceneManager.focusedLayer, same(baseLayer));
+            expect(baseClicks, equals(0));
+
+            // Removing dialogLayer after a locked barrier click restores baseLayer, never barrierLayer.
+            final secondFuture = sceneManager.showDialog<void>(
+              barrierDismissible: false,
+              width: 24,
+              height: 5,
+              builder: (_) => const Text('Manual Remove'),
+            );
+            await tester.pump();
+            final secondBarrier = sceneManager.layers[1];
+            final secondDialog = sceneManager.layers.last;
+
+            tester.mouseDown(1, 1);
+            tester.mouseUp(1, 1);
+            await tester.pump();
+            sceneManager.layers.remove(secondDialog);
+            expect(sceneManager.focusedLayer, same(baseLayer));
+
+            (secondDialog.renderer as PromptRunner<Object?>).dispose();
+            await secondFuture;
+            expect(sceneManager.layers.contains(secondBarrier), isFalse);
+          },
+        );
+      },
+    );
+
+    test(
+      'stacked showDialog isolates Escape and barrier clicks to the topmost modal in both dismissal orders',
+      () {
+        final lowerController = TextEditingController();
+
+        _runSingleLayerScene(
+          body: (tester, sceneManager, baseLayer) async {
+            // Order 1: dismissible top modal above non-dismissible lower modal.
+            var lowerCompleted = false;
+            final lowerFuture = sceneManager
+                .showDialog<void>(
+                  barrierDismissible: false,
+                  width: 28,
+                  height: 5,
+                  builder: (_) => Column([
+                    const Text('Lower Locked'),
+                    TextField(controller: lowerController, focused: true),
+                  ]),
+                )
+                .then((_) => lowerCompleted = true);
+            await tester.pump();
+            final lowerDialogLayer = sceneManager.layers.last;
+
+            String? topResult = 'sentinel';
+            final topFuture = sceneManager
+                .showDialog<String>(
+                  width: 20,
+                  height: 4,
+                  builder: (_) => const Text('Top Dismissible'),
+                )
+                .then((value) => topResult = value);
+            await tester.pump();
+            expect(sceneManager.layers, hasLength(5));
+
+            tester.sendKey(.escape);
+            await tester.pump();
+            await topFuture;
+            expect(topResult, isNull);
+            expect(lowerCompleted, isFalse);
+            expect(sceneManager.layers, hasLength(3));
+            expect(sceneManager.focusedLayer, same(lowerDialogLayer));
+
+            tester.sendKey(.escape);
+            tester.sendString('hi');
+            await tester.pump();
+            expect(lowerCompleted, isFalse);
+            expect(lowerController.value.text, equals('hi'));
+
+            tester.sendKey(.enter);
+            await tester.pump();
+            expect(lowerCompleted, isTrue);
+            await lowerFuture;
+            expect(sceneManager.layers, [baseLayer]);
+            expect(sceneManager.focusedLayer, same(baseLayer));
+
+            // Order 2 (reverse stack): locked top modal shields dismissible lower modal.
+            String? reverseLowerResult = 'sentinel';
+            final reverseLowerFuture = sceneManager
+                .showDialog<String>(
+                  width: 28,
+                  height: 5,
+                  builder: (_) => const Text('Lower Dismissible'),
+                )
+                .then((value) => reverseLowerResult = value);
+            await tester.pump();
+            final reverseLowerLayer = sceneManager.layers.last;
+
+            var reverseTopCompleted = false;
+            final reverseTopFuture = sceneManager
+                .showDialog<void>(
+                  barrierDismissible: false,
+                  width: 20,
+                  height: 4,
+                  builder: (_) => const Text('Top Locked'),
+                )
+                .then((_) => reverseTopCompleted = true);
+            await tester.pump();
+            final reverseTopLayer = sceneManager.layers.last;
+            expect(sceneManager.layers, hasLength(5));
+
+            tester.sendKey(.escape);
+            tester.mouseDown(1, 1);
+            tester.mouseUp(1, 1);
+            await tester.pump();
+            expect(reverseTopCompleted, isFalse);
+            expect(reverseLowerResult, equals('sentinel'));
+            expect(sceneManager.layers, hasLength(5));
+            expect(sceneManager.focusedLayer, same(reverseTopLayer));
+
+            tester.sendKey(.enter);
+            await tester.pump();
+            await reverseTopFuture;
+            expect(sceneManager.layers, hasLength(3));
+            expect(sceneManager.focusedLayer, same(reverseLowerLayer));
+
+            tester.sendKey(.escape);
+            await tester.pump();
+            await reverseLowerFuture;
+            expect(reverseLowerResult, isNull);
+            expect(sceneManager.layers, [baseLayer]);
+            expect(sceneManager.focusedLayer, same(baseLayer));
           },
         );
       },

@@ -29,6 +29,7 @@ class SceneManager implements Reassemblable {
 
   SceneLayer? _focusedLayer;
   final List<SceneLayer> _focusStack = [];
+  final Set<SceneLayer> _nonFocusableLayers = {};
   int _focusEpoch = 0;
 
   void _requestRunnerFocus(SceneLayer layer) {
@@ -148,6 +149,7 @@ class SceneManager implements Reassemblable {
 
   void _onLayerRemoved(SceneLayer layer) {
     _lastRequestedSizes.remove(layer.renderer);
+    _nonFocusableLayers.remove(layer);
     _focusStack.remove(layer);
 
     SceneLayer? restoredLayer;
@@ -568,6 +570,10 @@ class SceneManager implements Reassemblable {
       _cancelPressCapture(null, button);
       return;
     }
+    if (_nonFocusableLayers.contains(hitLayer)) {
+      _capturedMouseLayer = hitLayer;
+      return;
+    }
 
     final focusChanged =
         _focusEpoch != focusEpochBeforePress && focusedLayer != hitLayer;
@@ -896,6 +902,7 @@ class SceneManager implements Reassemblable {
     }
     layers.clear();
     _lastRequestedSizes.clear();
+    _nonFocusableLayers.clear();
     focusedLayer = null;
     _draggingLayer = null;
     _capturedMouseLayer = null;
@@ -956,7 +963,10 @@ class SceneManager implements Reassemblable {
   }
 
   /// Displays a modal dialog by adding it as a higher layer.
-  /// Returns a Future that completes when the dialog is dismissed/completed.
+  ///
+  /// Returns a [Future] that completes with the dialog result, or `null` if
+  /// [barrierDismissible] is `true` and the user clicks the barrier or presses
+  /// unhandled `Escape`.
   Future<T?> showDialog<T>({
     required WidgetBuilder builder,
     bool barrierDismissible = true,
@@ -966,7 +976,16 @@ class SceneManager implements Reassemblable {
   }) {
     final completer = Completer<T?>();
 
-    late final PromptRunner<T> runner;
+    final runner = PromptRunner<T>(
+      terminal: terminal,
+      widget: Builder(builder: builder),
+      exitConditions: {
+        ...PromptRunner.defaultExitConditions,
+        if (barrierDismissible) .escape: .cancel,
+      },
+      alternateScreen: false,
+      mode: .managed,
+    );
 
     final barrierWidget = Stack([
       Positioned(
@@ -976,45 +995,35 @@ class SceneManager implements Reassemblable {
         bottom: 0,
         child: DimmingBarrier(scalar: barrierScalar),
       ),
-      Positioned(
-        left: 0,
-        top: 0,
-        right: 0,
-        bottom: 0,
-        child: ModalDismissBarrier(
-          onDismiss: () {
-            if (barrierDismissible) {
-              runner.abort();
-            }
-          },
-          child: const SizedBox.expand(),
+      if (barrierDismissible)
+        Positioned(
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          child: ModalDismissBarrier(
+            onDismiss: runner.abort,
+            child: const SizedBox.expand(),
+          ),
         ),
-      ),
     ]);
 
     final barrierRunner = PromptRunner<void>(
       terminal: terminal,
       widget: barrierWidget,
+      exitConditions: const {},
       alternateScreen: false,
-      mode: ExecutionMode.managed,
-    );
-
-    final dialogWidget = Builder(builder: builder);
-
-    runner = PromptRunner<T>(
-      terminal: terminal,
-      widget: dialogWidget,
-      alternateScreen: false,
-      mode: ExecutionMode.managed,
+      mode: .managed,
     );
 
     final baseZIndex = 1000 + layers.length * 2;
 
     final barrierLayer = SceneLayer(
       renderer: barrierRunner,
-      sizing: LayerSizing.fullscreen,
+      sizing: .fullscreen,
       zIndex: baseZIndex,
     );
+    _nonFocusableLayers.add(barrierLayer);
 
     final terminalSize = terminal.backend.size;
     final x = max(0, (terminalSize.x - width) ~/ 2);
@@ -1023,7 +1032,7 @@ class SceneManager implements Reassemblable {
     late final SceneLayer dialogLayer;
     dialogLayer = SceneLayer(
       renderer: runner,
-      sizing: LayerSizing.fixed,
+      sizing: .fixed,
       x: x,
       y: y,
       width: width,
