@@ -375,4 +375,80 @@ void main() {
       },
     );
   });
+
+  group('VirtualTerminal extended SGR and stream edge cases', () {
+    test(
+      'supports extended SGR (256-color, truecolor, modifiers, bright palette), transparentBackground, codeUnits, OSC, and dispose',
+      () {
+        final terminal = VirtualTerminal(
+          width: 8,
+          height: 2,
+          transparentBackground: true,
+          defaultForeground: const Color(0x11, 0x22, 0x33),
+        );
+        var notified = 0;
+        void listener() => notified++;
+        terminal.addListener(listener);
+
+        // Transparent space + defaultForeground + 256-color (basic, cube, grayscale) + 24-bit RGB + modifiers + bright palette.
+        terminal.write(
+          utf8.encode(
+            '\x1b]0;title\x07 '
+            '\x1b[38;5;2;48;5;196;2;3;4;5;7;8;9mA'
+            '\x1b[22;23;24;25;27;28;29;38;5;240;48;2;10;20;30mB'
+            '\x1b[38;2;40;50;60;91;104mC',
+          ),
+        );
+        expect(
+          terminal.buffer.getModifiers(0, 0) & Modifier.transparent,
+          isNot(0),
+        );
+        expect(terminal.buffer.getForeground(0, 0), equals(0xFF112233));
+        expect(terminal.buffer.getCharacter(1, 0), equals('A'));
+        expect(
+          terminal.buffer.getModifiers(1, 0),
+          equals(
+            Modifier.dim |
+                Modifier.italic |
+                Modifier.underline |
+                Modifier.blink |
+                Modifier.reverse |
+                Modifier.hidden |
+                Modifier.crossedOut,
+          ),
+        );
+        expect(terminal.buffer.getModifiers(2, 0), equals(Modifier.none));
+        expect(terminal.buffer.getBackground(2, 0), equals(0xFF0A141E));
+        expect(terminal.buffer.getCharacter(3, 0), equals('C'));
+        expect(
+          terminal.buffer.getForeground(3, 0),
+          equals(const Color(255, 85, 85).argb),
+        );
+        expect(
+          terminal.buffer.getBackground(3, 0),
+          equals(const Color(85, 85, 255).argb),
+        );
+
+        // Truncated or unknown extended SGR sequences consume sub-params without resetting active bold/fg.
+        terminal.write(
+          utf8.encode(
+            '\x1b[2;1H\x1b[1;31m\x1b[38;2;10;0m\x1b[38;5m\x1b[38;9mD',
+          ),
+        );
+        expect(terminal.buffer.getModifiers(0, 1), equals(Modifier.bold));
+        expect(
+          terminal.buffer.getForeground(0, 1),
+          equals(const Color(170, 0, 0).argb),
+        );
+
+        // Non-byte UTF-16 code units (> 0xFF) and dispose() cleanup.
+        terminal.write('🚀'.codeUnits);
+        expect(terminal.buffer.getCharacter(1, 1), equals('🚀'));
+        expect(notified, equals(3));
+
+        terminal.removeListener(listener);
+        terminal.dispose();
+      },
+    );
+  });
 }
