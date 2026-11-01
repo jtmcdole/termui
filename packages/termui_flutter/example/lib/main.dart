@@ -73,12 +73,6 @@ void main() async {
       final fontLoader2 = FontLoader('MesloLGS NF');
       fontLoader2.addFont(rootBundle.load('fonts/MesloLGS_NF_Regular.ttf'));
       await fontLoader2.load();
-
-      final brailleLoader = FontLoader('Noto Sans Braille');
-      brailleLoader.addFont(
-        rootBundle.load('fonts/NotoSansBraille-Regular.ttf'),
-      );
-      await brailleLoader.load();
     } catch (e) {
       debugPrint('FONT LOADER ERROR: $e');
     }
@@ -486,7 +480,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                   fontFamily: 'MesloLGS NF',
                   fontFamilyFallback: const [
                     'Noto Color Emoji',
-                    'Noto Sans Braille',
+                    'Cascadia Mono',
                   ],
                   onRun: (terminal, drawFrame) async {
                     void wrappedDrawFrame(Buffer buf) {
