@@ -48,11 +48,22 @@ final class VirtualTerminal implements TerminalHandler {
   /// The underlying screen buffer of this terminal.
   Buffer get buffer => _buffer;
 
-  /// The 0-indexed X coordinate of the cursor.
+  /// The 0-indexed X coordinate of the cursor (`cursorX == width` indicates
+  /// right-margin pending wrap when [autoWrapMode] is `true`).
   int cursorX = 0;
 
   /// The 0-indexed Y coordinate of the cursor.
   int cursorY = 0;
+
+  bool _cursorVisible = true;
+
+  /// Whether the cursor is visible (`DECTCEM` `?25h` / `?25l`).
+  bool get cursorVisible => _cursorVisible;
+
+  bool _autoWrap = true;
+
+  /// Whether right-margin auto-wrap (`DECAWM` `?7h` / `?7l`) is enabled.
+  bool get autoWrapMode => _autoWrap;
 
   Style _currentStyle = .empty;
   _SavedCursor _savedCursor = _initialSavedCursor;
@@ -75,13 +86,15 @@ final class VirtualTerminal implements TerminalHandler {
 
   /// Creates a new virtual terminal with the specified dimensions and settings.
   VirtualTerminal({
-    this.width = 80,
-    this.height = 24,
+    int width = 80,
+    int height = 24,
     this.transparentBackground = false,
     this.defaultForeground,
-  }) : _buffer = _createBuffer(
-         width,
-         height,
+  }) : width = math.max(1, width),
+       height = math.max(1, height),
+       _buffer = _createBuffer(
+         math.max(1, width),
+         math.max(1, height),
          transparent: transparentBackground,
        ) {
     _initParser();
@@ -133,6 +146,8 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _resetState({required bool clearScreen}) {
     _currentStyle = .empty;
+    _cursorVisible = true;
+    _autoWrap = true;
     _savedCursor = _initialSavedCursor;
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
@@ -244,6 +259,15 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
+  void _indexDown() {
+    if (cursorY >= height - 1) {
+      _scrollUp();
+      cursorY = height - 1;
+    } else {
+      cursorY++;
+    }
+  }
+
   void _scrollUp() {
     final chars = _buffer.characters;
     final attrs = _buffer.attributes;
@@ -272,12 +296,12 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _printGrapheme(String char) {
     if (cursorX >= width) {
-      cursorX = 0;
-      cursorY++;
-    }
-    if (cursorY >= height) {
-      _scrollUp();
-      cursorY = height - 1;
+      if (_autoWrap) {
+        cursorX = 0;
+        _indexDown();
+      } else {
+        cursorX = width - 1;
+      }
     }
 
     final (fgArg, bgArg, modArg, isBgTransparent) = _resolvePrintAttributes(
@@ -295,7 +319,7 @@ final class VirtualTerminal implements TerminalHandler {
       bg: bgArg,
       modifiers: modArg,
     );
-    cursorX++;
+    _advanceCursorAfterPrint(1);
   }
 
   (int fg, int bg, int mod, bool bgTransparent) _resolvePrintAttributes(
@@ -333,8 +357,12 @@ final class VirtualTerminal implements TerminalHandler {
         bg: bgArg,
         modifiers: bgTransparent ? (modArg | Modifier.transparent) : modArg,
       );
-      cursorX++;
-      return;
+      if (width == 1 || !_autoWrap) {
+        cursorX = (width == 1 && _autoWrap) ? 1 : width - 1;
+        return;
+      }
+      cursorX = 0;
+      _indexDown();
     }
     buffer.setAttributes(
       cursorX,
@@ -344,24 +372,30 @@ final class VirtualTerminal implements TerminalHandler {
       bg: bgArg,
       modifiers: modArg,
     );
-    cursorX += 2;
+    _advanceCursorAfterPrint(2);
+  }
+
+  void _advanceCursorAfterPrint(int step) {
+    final nextX = cursorX + step;
+    if (nextX >= width) {
+      cursorX = _autoWrap ? width : width - 1;
+    } else {
+      cursorX = nextX;
+    }
   }
 
   @override
   void execute(int charCode) {
     switch (charCode) {
       case 8: // Backspace
+        _clampPendingWrap();
         if (cursorX > 0) cursorX--;
       case 9: // Horizontal tab
-        if (width > 0) {
-          cursorX = (((cursorX ~/ 8) + 1) * 8).clamp(0, width - 1);
-        }
+        _clampPendingWrap();
+        cursorX = (((cursorX ~/ 8) + 1) * 8).clamp(0, width - 1);
       case 10 || 11 || 12: // Line feed, vertical tab, form feed
-        cursorY++;
-        if (cursorY >= height) {
-          _scrollUp();
-          cursorY = height - 1;
-        }
+        _clampPendingWrap();
+        _indexDown();
       case 13: // Carriage return
         cursorX = 0;
     }
@@ -377,6 +411,11 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _applyDecPrivateModeParam(int param, bool enable) {
     switch (param) {
+      case 7: // DECAWM (Auto-Wrap Mode)
+        _autoWrap = enable;
+        if (!enable) _clampPendingWrap();
+      case 25: // DECTCEM (Text Cursor Enable Mode)
+        _cursorVisible = enable;
       case 1000 || 1002 || 1003:
         mouseTrackingEnabled = enable;
       case 1006:
@@ -395,7 +434,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _restoreCursor() {
     final restoredX = _savedCursor.x.clamp(0, width - 1);
-    cursorX = (_savedCursor.pendingWrap && restoredX == width - 1)
+    cursorX = (_savedCursor.pendingWrap && _autoWrap && restoredX == width - 1)
         ? width
         : restoredX;
     cursorY = _savedCursor.y.clamp(0, height - 1);
@@ -427,12 +466,16 @@ final class VirtualTerminal implements TerminalHandler {
   bool _tryHandleCursorCsi(String command, int p1, int p2) {
     switch (command) {
       case 'A': // Cursor Up (CUU)
+        _clampPendingWrap();
         cursorY = math.max(0, cursorY - p1);
       case 'B': // Cursor Down (CUD)
+        _clampPendingWrap();
         cursorY = math.min(height - 1, cursorY + p1);
       case 'C': // Cursor Forward (CUF)
+        _clampPendingWrap();
         cursorX = math.min(width - 1, cursorX + p1);
       case 'D': // Cursor Back (CUB)
+        _clampPendingWrap();
         cursorX = math.max(0, cursorX - p1);
       case 'G': // Cursor Character Absolute (CHA)
         cursorX = (p1 - 1).clamp(0, width - 1);

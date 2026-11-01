@@ -376,7 +376,81 @@ void main() {
     );
   });
 
-  group('VirtualTerminal extended SGR and stream edge cases', () {
+  group('VirtualTerminal DECTCEM, DECAWM, and extended SGR', () {
+    test(
+      'tracks DECTCEM (?25h / ?25l) cursorVisible and restores visibility on DECSTR, RIS, and reset()',
+      () {
+        final terminal = VirtualTerminal(width: 6, height: 2);
+        expect(terminal.cursorVisible, isTrue);
+
+        terminal.write(utf8.encode('\x1b[?25l'));
+        expect(terminal.cursorVisible, isFalse);
+
+        terminal.write(utf8.encode('\x1b[?25h'));
+        expect(terminal.cursorVisible, isTrue);
+
+        terminal.write(utf8.encode('\x1b[?25l\x1b[!p'));
+        expect(terminal.cursorVisible, isTrue);
+
+        terminal.write(utf8.encode('\x1b[?25l\x1bc'));
+        expect(terminal.cursorVisible, isTrue);
+
+        terminal.write(utf8.encode('\x1b[?25l'));
+        terminal.reset();
+        expect(terminal.cursorVisible, isTrue);
+      },
+    );
+
+    test(
+      'handles DECAWM (?7h / ?7l), clears pending wrap on cursor moves and controls, and wraps wide graphemes at right margin',
+      () {
+        final terminal = VirtualTerminal(width: 4, height: 3);
+        expect(terminal.autoWrapMode, isTrue);
+
+        // Pending wrap after 4 chars on row 1, then CSI A (Cursor Up) must clear pending wrap
+        // and print at (3, 0) instead of wrapping back down to row 1!
+        terminal.write(utf8.encode('\x1b[2;1HABCD'));
+        expect(terminal.cursorX, equals(4));
+        terminal.write(utf8.encode('\x1b[1AX'));
+        expect(terminal.cursorX, equals(4));
+        expect(terminal.cursorY, equals(0));
+        expect(terminal.buffer.getCharacter(3, 0), equals('X'));
+        expect(terminal.buffer.getCharacter(0, 1), equals('A'));
+
+        // CUB (CSI D) and BS (\b) from pending wrap step left from width - 1 (col 3 -> col 2).
+        terminal.write(utf8.encode('\x1b[2;1HABCD\x1b[1DY'));
+        expect(terminal.buffer.getCharacter(2, 1), equals('Y'));
+        terminal.write(utf8.encode('\x1b[2;1HABCD\bZ'));
+        expect(terminal.buffer.getCharacter(2, 1), equals('Z'));
+
+        // Raw LF (\n without \r) from pending wrap moves down once to (3, 2) without double-wrapping.
+        terminal.write(utf8.encode('\x1b[2;1HABCD\nW'));
+        expect(terminal.buffer.getCharacter(3, 2), equals('W'));
+
+        // Wide grapheme at col width - 1 wraps cleanly to col 0 of next row when autoWrapMode is true.
+        terminal.write(utf8.encode('\x1b[2J\x1b[1;4H🚀'));
+        expect(terminal.buffer.getCharacter(3, 0), equals(' '));
+        expect(terminal.buffer.getCharacter(0, 1), equals('🚀'));
+        expect(terminal.buffer.getCharacter(1, 1), equals(''));
+
+        // DECAWM off (\x1b[?7l) clamps at right margin and overwrites last column in place without wrapping.
+        terminal.write(utf8.encode('\x1b[2J\x1b[1;1H\x1b[?7lABCDEF'));
+        expect(terminal.autoWrapMode, isFalse);
+        expect(terminal.cursorX, equals(3));
+        expect(terminal.cursorY, equals(0));
+        expect(terminal.buffer.getCharacter(0, 0), equals('A'));
+        expect(terminal.buffer.getCharacter(2, 0), equals('C'));
+        expect(terminal.buffer.getCharacter(3, 0), equals('F'));
+        expect(terminal.buffer.getCharacter(0, 1), equals(' '));
+
+        // Wide grapheme at right margin with DECAWM off writes space in last column without wrapping.
+        terminal.write(utf8.encode('🚀'));
+        expect(terminal.cursorY, equals(0));
+        expect(terminal.buffer.getCharacter(3, 0), equals(' '));
+        expect(terminal.buffer.getCharacter(0, 1), equals(' '));
+      },
+    );
+
     test(
       'supports extended SGR (256-color, truecolor, modifiers, bright palette), transparentBackground, codeUnits, OSC, and dispose',
       () {
