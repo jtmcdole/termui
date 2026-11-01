@@ -48,7 +48,7 @@ void main() {
     final pty = MockPseudoTerminal();
 
     tester.run(() async {
-      final runner = PromptRunner(
+      final runner = PromptRunner<Object?>(
         terminal: tester.terminal,
         alternateScreen: false,
         widget: SizedBox.expand(child: PseudoTerminalView(pty: pty)),
@@ -80,7 +80,7 @@ void main() {
       expect(outputString, contains('\x1b[<0;10;5M'));
 
       runner.abort();
-      await runFuture.catchError((_) {});
+      await runFuture.catchError((_) => null);
     });
   });
 }

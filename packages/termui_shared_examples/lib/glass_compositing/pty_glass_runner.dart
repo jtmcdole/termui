@@ -28,7 +28,7 @@ Future<SceneManager> runPtyGlassDemo(
 
   // 1. Bottom Layer: PseudoTerminalView running 'top'
   final ptyFocusNode = FocusNode(id: 'pty');
-  final ptyRunner = PromptRunner(
+  final ptyRunner = PromptRunner<Object?>(
     terminal: terminal,
     // Pass a custom default foreground (e.g. bright green) for a "hacker" theme look
     widget: SizedBox.expand(child: backend.buildView(ptyFocusNode)),
@@ -67,10 +67,10 @@ Future<SceneManager> runPtyGlassDemo(
   };
 
   sceneManager.layers.add(ptyLayer);
-  ptyRunner.run().catchError((_) {});
+  ptyRunner.run().catchError((_) => null);
 
   // 1.5 Middle Layer: Fire Simulation
-  final fireRunner = PromptRunner(
+  final fireRunner = PromptRunner<void>(
     terminal: terminal,
     widget: FireApp(config: config),
     alternateScreen: false,
@@ -93,7 +93,7 @@ Future<SceneManager> runPtyGlassDemo(
 
   // 2. Middle Layer: Glass Overlay Text (with Glitch)
   final glassFocusNode = FocusNode(id: 'glass');
-  final glassRunner = PromptRunner(
+  final glassRunner = PromptRunner<void>(
     terminal: terminal,
     widget: KeyboardListener(
       focusNode: glassFocusNode,
@@ -137,7 +137,7 @@ Future<SceneManager> runPtyGlassDemo(
   glassFocusNode.requestFocus();
 
   // 3. Top Layer: Settings Window
-  final settingsRunner = PromptRunner(
+  final settingsRunner = PromptRunner<void>(
     terminal: terminal,
     widget: KeyboardListener(
       focusNode: settingsFocusNode,

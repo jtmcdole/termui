@@ -142,7 +142,7 @@ final class TerminalTester {
         'TerminalTester must be run using tester.run(...) before accessing terminal',
       ));
 
-  PromptRunner? _runner;
+  PromptRunner<Object?>? _runner;
   FakeAsync? _fakeAsync;
   Element? _rootElement;
   Buffer? _testBuffer;

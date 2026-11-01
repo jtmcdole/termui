@@ -171,21 +171,21 @@ void main() {
     );
 
     // Assert that activeRadarIndex exists and defaults to 0
-    expect((vm as dynamic).activeRadarIndex, equals(0));
+    expect(vm.activeRadarIndex, equals(0));
 
     // Assert that cycleRadarIndex wraps around
-    (vm as dynamic).cycleRadarIndex();
-    expect((vm as dynamic).activeRadarIndex, equals(1));
+    vm.cycleRadarIndex();
+    expect(vm.activeRadarIndex, equals(1));
 
     // Assert moveRadarIndex updates sourceX/sourceY for the active index
     final initialX = vm.sourceX[1];
-    (vm as dynamic).moveRadarIndex(2.0, -1.0);
+    vm.moveRadarIndex(2.0, -1.0);
     expect(vm.sourceX[1], equals(initialX + 2.0));
 
     // Assert volume bounding
-    (vm as dynamic).changeBgmVolume(0.5);
+    vm.changeBgmVolume(0.5);
     expect(vm.bgmVolume, equals(1.0)); // bounded to 1.0 max
-    (vm as dynamic).changeSfxVolume(-2.0);
+    vm.changeSfxVolume(-2.0);
     expect(vm.sfxVolume, equals(0.0)); // bounded to 0.0 min
   });
 }

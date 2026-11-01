@@ -26,9 +26,9 @@ class _AsciicastPlayerTuiAppState extends State<AsciicastPlayerTuiApp> {
   bool _showFileSelector = false;
   int _selectedFileIndex = 0;
 
-  StreamSubscription? _playbackStateSub;
-  StreamSubscription? _savedCastsSub;
-  StreamSubscription? _uploadSub;
+  StreamSubscription<PlaybackState>? _playbackStateSub;
+  StreamSubscription<List<String>>? _savedCastsSub;
+  StreamSubscription<UploadedCastData>? _uploadSub;
 
   @override
   void initState() {

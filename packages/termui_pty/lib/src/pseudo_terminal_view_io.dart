@@ -38,7 +38,7 @@ class PseudoTerminalView extends StatefulWidget {
 
 class _PseudoTerminalViewState extends State<PseudoTerminalView> {
   late VirtualTerminal _terminal;
-  StreamSubscription? _outSubscription;
+  StreamSubscription<String>? _outSubscription;
   late final FocusNode _focusNode;
   bool _ownsFocusNode = false;
   bool _exited = false;

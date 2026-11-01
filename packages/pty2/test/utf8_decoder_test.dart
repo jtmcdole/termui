@@ -27,7 +27,7 @@ void main() {
       // Send the first half of the emoji
       controller.add(chunk1);
       // Allow event loop to process
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
 
       // The decoder should NOT emit anything yet, because it's waiting for the rest of the sequence
       expect(

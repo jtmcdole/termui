@@ -36,11 +36,11 @@ void main() async {
 
     while (running) {
       pty.write(chunk);
-      await Future.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
     }
 
     // Give it a tiny bit of time to flush the final buffers
-    await Future.delayed(const Duration(milliseconds: 200));
+    await Future<void>.delayed(const Duration(milliseconds: 200));
 
     stopwatch.stop();
     pty.kill();

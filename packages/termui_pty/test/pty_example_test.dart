@@ -40,7 +40,7 @@ void main() {
     tester.run(() async {
       final pty = MockPseudoTerminal();
 
-      final runner = PromptRunner(
+      final runner = PromptRunner<Object?>(
         terminal: tester.terminal,
         alternateScreen: false,
         widget: SizedBox.expand(child: PseudoTerminalView(pty: pty)),
@@ -80,7 +80,7 @@ void main() {
       expect(found, isTrue);
 
       runner.abort();
-      await runFuture.catchError((_) {});
+      await runFuture.catchError((_) => null);
     });
   });
 }

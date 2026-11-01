@@ -17,7 +17,7 @@ void main() async {
     terminal.hideCursor();
 
     try {
-      final runner = PromptRunner(
+      final runner = PromptRunner<Object?>(
         terminal: terminal,
         alternateScreen: true,
         widget: SizedBox.expand(child: PseudoTerminalView(pty: pty)),

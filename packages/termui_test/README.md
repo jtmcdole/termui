@@ -148,7 +148,7 @@ A registry namespace exposed as a global constant `const CommonFinders find = Co
 * `Finder byType<T extends Widget>()`
   Matches widgets of the specified runtime type `T`.
 * `Finder text(String text)`
-  Matches widgets containing the exact text. For multi-line text (containing `\n`), it splits the text and matches if any line equals the specified string. Evaluates `Text.data`, `RichText.text`, `TextField.controller.text`, and dynamic properties named `text` or `label` via reflection fallback.
+  Matches widgets containing the exact text. For multi-line text (containing `\n`), it splits the text and matches if any line equals the specified string. Evaluates `Text.data`, `RichText.text`, `TextField.controller.text`, `Button.text`, `AnimatedButton.text`, `InkwellButton.text`, `Checkbox.label`, `Radio.label`, `Switch.label`, `NumberSelector.label`, and `FormField.label`.
 * `Finder textPattern(String regExpPattern, {bool caseSensitive = true})`
   Matches widgets whose text data matches the given Regular Expression pattern.
 * `Finder byKey(Key key)`

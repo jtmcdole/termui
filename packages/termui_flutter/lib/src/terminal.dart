@@ -197,10 +197,11 @@ final class PrivateTuiView extends StatefulWidget {
   });
 
   @override
-  State<PrivateTuiView> createState() => _PrivateTuiViewState();
+  State<PrivateTuiView> createState() => PrivateTuiViewState();
 }
 
-class _PrivateTuiViewState extends State<PrivateTuiView> {
+/// Internal state for [PrivateTuiView], exposed for widget tests.
+class PrivateTuiViewState extends State<PrivateTuiView> {
   final FocusNode _focusNode = FocusNode();
   final GlobalKey _boundaryKey = GlobalKey();
   GlyphAtlas? _atlas;
@@ -215,6 +216,8 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
   term.MouseEvent? _lastInjectedPointerEvent;
 
   late double _fontSize;
+
+  /// Current font size rendered by the terminal view.
   double get fontSize => _fontSize;
   int _atlasGenerationId = 0;
   StreamSubscription<double>? _fontSizeSubscription;
@@ -677,16 +680,16 @@ class _PrivateTuiViewState extends State<PrivateTuiView> {
 
       final buffer = _currentBuffer;
       if (buffer != null && atlas != null) {
-        final Map<String, dynamic> data = {
+        final cellsList = <Map<String, Object?>>[];
+        final data = <String, Object?>{
           'timestamp': timestamp,
           'cols': buffer.width,
           'rows': buffer.height,
           'cellWidth': atlas.cellWidth,
           'cellHeight': atlas.cellHeight,
-          'cells': [],
+          'cells': cellsList,
         };
 
-        final cellsList = data['cells'] as List;
         for (var y = 0; y < buffer.height; y++) {
           final rowOffset = y * buffer.width;
           for (var x = 0; x < buffer.width; x++) {

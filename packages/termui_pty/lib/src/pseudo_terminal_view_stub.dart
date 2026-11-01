@@ -2,8 +2,8 @@ import 'package:termui/termui.dart';
 
 /// A stub for PseudoTerminalView on platforms that do not support dart:ffi (like web).
 class PseudoTerminalView extends StatelessWidget {
-  /// The running pseudo-terminal process (dynamic to avoid importing pty2).
-  final dynamic pty;
+  /// The running pseudo-terminal process (typed as [Object?] to avoid importing `pty2` on web).
+  final Object? pty;
 
   /// If true, the terminal will use a transparent background.
   final bool transparentBackground;

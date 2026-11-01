@@ -13,10 +13,15 @@ import '../events.dart';
 import '../repository/repository.dart';
 import 'trace_parser.dart';
 
-Future<Map<String, dynamic>> parseTraceBytes(
-  Uint8List bytes,
-  String filename,
-) async {
+typedef ParsedTrace = ({
+  List<TraceSpan> spans,
+  int minTs,
+  int maxTs,
+  int baseTime,
+  int maxSpanDuration,
+});
+
+Future<ParsedTrace> parseTraceBytes(Uint8List bytes, String filename) async {
   final watch = Stopwatch()..start();
   void traceLog(String msg) {
     TraceLogger.info('trace', '$msg (elapsed: ${watch.elapsed})');
@@ -50,14 +55,14 @@ Future<Map<String, dynamic>> parseTraceBytes(
       );
     }
   }
-  await Future.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
   traceLog('TraceEvent normalization');
 
   final computedSpans = computeSpans(events);
   if (computedSpans.isEmpty) {
     throw StateError("Parsed 0 spans");
   }
-  await Future.delayed(Duration.zero);
+  await Future<void>.delayed(Duration.zero);
   traceLog('computed spans');
 
   computedSpans.sort((a, b) => a.startUs.compareTo(b.startUs));
@@ -74,13 +79,13 @@ Future<Map<String, dynamic>> parseTraceBytes(
     }
   }
 
-  return {
-    'spans': computedSpans,
-    'minTs': mMinTs,
-    'maxTs': mMaxTs,
-    'baseTime': baseTime,
-    'maxSpanDuration': mMaxDuration,
-  };
+  return (
+    spans: computedSpans,
+    minTs: mMinTs,
+    maxTs: mMaxTs,
+    baseTime: baseTime,
+    maxSpanDuration: mMaxDuration,
+  );
 }
 
 final class TraceViewerState {
@@ -144,12 +149,7 @@ final class TraceViewerViewModel {
 
   Future<void> loadTraceBytes(Uint8List bytes, String filename) async {
     final parsed = await parseTraceBytes(bytes, filename);
-    updateTrace(
-      parsed['spans'] as List<TraceSpan>,
-      parsed['minTs'] as int,
-      parsed['maxTs'] as int,
-      filename,
-    );
+    updateTrace(parsed.spans, parsed.minTs, parsed.maxTs, filename);
   }
 
   Future<void> refreshSavedTraces() async {
@@ -205,9 +205,9 @@ class _TraceViewerTuiAppState extends State<TraceViewerTuiApp> {
   int? _minTs;
   int? _maxTs;
   String? _filename;
-  StreamSubscription? _stateSub;
-  StreamSubscription? _uploadSub;
-  StreamSubscription? _savedTracesSub;
+  StreamSubscription<TraceViewerState>? _stateSub;
+  StreamSubscription<UploadedTraceData>? _uploadSub;
+  StreamSubscription<List<String>>? _savedTracesSub;
 
   bool _showFileSelector = false;
   int _selectedFileIndex = 0;

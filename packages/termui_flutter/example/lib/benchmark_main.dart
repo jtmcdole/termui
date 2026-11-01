@@ -492,7 +492,7 @@ class GridBenchmarkPainter extends CustomPainter {
   final ui.Image glyphAtlas;
   final int cols;
   final int rows;
-  final Function(double) onMeasure;
+  final void Function(double) onMeasure;
 
   // Pre-allocated arrays for zero-GC drawRawAtlas
   late final Float32List transformsBg;

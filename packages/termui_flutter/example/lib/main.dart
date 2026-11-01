@@ -115,10 +115,10 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
 
   TuiDemo currentDemo = TuiDemo.asciicastPlayer;
   String? initialPage;
-  StreamSubscription? _pageChangedSub;
-  StreamSubscription? _urlChangesSub;
-  StreamSubscription? _uploadRequestedSub;
-  StreamSubscription? _uploadTraceRequestedSub;
+  StreamSubscription<String>? _pageChangedSub;
+  StreamSubscription<Object?>? _urlChangesSub;
+  StreamSubscription<void>? _uploadRequestedSub;
+  StreamSubscription<void>? _uploadTraceRequestedSub;
   bool _switching = false;
   bool _tuiRunning = false;
   void Function(Buffer)? _onDrawFrame;
@@ -364,7 +364,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
 
   void _showSwitchDemoDialog({String title = 'Switch TUI Application'}) {
     if (!mounted || !context.mounted) return;
-    showDialog(
+    showDialog<void>(
       context: context,
       barrierDismissible: _tuiRunning,
       builder: (dialogContext) => AlertDialog(
@@ -442,7 +442,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                       if (currentDemo != TuiDemo.traceViewer) {
                         _switchDemo(TuiDemo.traceViewer);
                       } else {
-                        await Future.delayed(const Duration(milliseconds: 150));
+                        await Future<void>.delayed(
+                          const Duration(milliseconds: 150),
+                        );
                         traceUploadedEvent.post(
                           playerEventBus,
                           UploadedTraceData(firstFile.name, bytes),
@@ -452,7 +454,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                       if (currentDemo != TuiDemo.asciicastPlayer) {
                         _switchDemo(TuiDemo.asciicastPlayer);
                       }
-                      await Future.delayed(const Duration(milliseconds: 150));
+                      await Future<void>.delayed(
+                        const Duration(milliseconds: 150),
+                      );
                       castUploadedEvent.post(
                         playerEventBus,
                         UploadedCastData(firstFile.name, bytes),

@@ -40,6 +40,33 @@ void main() {
       });
     });
 
+    test('find.text matches interactive widgets by text and label', () {
+      final tester = TerminalTester();
+      tester.run(() async {
+        await tester.pumpWidget(
+          Column([
+            Button(text: 'Submit', onPressed: () {}),
+            Checkbox(value: true, label: 'Remember me', onChanged: (_) {}),
+            Radio<String>(
+              value: 'a',
+              groupValue: 'a',
+              label: 'Option A',
+              onChanged: (_) {},
+            ),
+            Switch(value: false, label: 'Dark mode', onChanged: (_) {}),
+            NumberSelector(label: 'Volume', value: 5, min: 0, max: 10),
+          ]),
+          size: const Size(80, 10),
+        );
+
+        expect(find.text('Submit'), findsOneWidget);
+        expect(find.text('Remember me'), findsOneWidget);
+        expect(find.text('Option A'), findsOneWidget);
+        expect(find.text('Dark mode'), findsOneWidget);
+        expect(find.text('Volume'), findsOneWidget);
+      });
+    });
+
     test('sendKey and raw input injection work', () {
       final tester = TerminalTester();
 

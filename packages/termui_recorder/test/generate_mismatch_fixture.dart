@@ -35,7 +35,7 @@ void main() {
 
   // Run the matcher, it will fail and write the files
   final matcher = matchesAnsiGolden(goldenPath);
-  final state = {};
+  final state = <Object?, Object?>{};
   final matched = matcher.matches(actualBuffer, state);
   print('Matched: $matched');
   print('Failure output:\n${state['failure']}');

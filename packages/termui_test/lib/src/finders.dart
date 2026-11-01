@@ -84,21 +84,17 @@ final class _ByTextFinder extends Finder {
             final RegExp r => r.hasMatch(txt),
             _ => false,
           };
+        case Button(text: final text) ||
+            AnimatedButton(text: final text) ||
+            InkwellButton(text: final text):
+          return _matches(text);
+        case Checkbox(label: final label) ||
+            Radio<Object?>(label: final label) ||
+            Switch(label: final label) ||
+            NumberSelector(label: final label) ||
+            FormField<Object?>(label: final label):
+          return _matches(label);
         default:
-          try {
-            final dynamic dynWidget = widget;
-            if (dynWidget.text case final String widgetText
-                when _matches(widgetText)) {
-              return true;
-            }
-          } catch (_) {}
-          try {
-            final dynamic dynWidget = widget;
-            if (dynWidget.label case final String widgetLabel
-                when _matches(widgetLabel)) {
-              return true;
-            }
-          } catch (_) {}
           return false;
       }
     });
@@ -167,7 +163,7 @@ final class _FinderMatcher extends Matcher {
   const _FinderMatcher(this.min, this.max);
 
   @override
-  bool matches(Object? item, Map matchState) {
+  bool matches(Object? item, Map<Object?, Object?> matchState) {
     if (item is! Finder) {
       return false;
     }
@@ -206,9 +202,9 @@ final class _FinderMatcher extends Matcher {
 
   @override
   Description describeMismatch(
-    dynamic item,
+    Object? item,
     Description mismatchDescription,
-    Map matchState,
+    Map<Object?, Object?> matchState,
     bool verbose,
   ) {
     if (matchState.containsKey('error')) {

@@ -26,6 +26,6 @@ Future<void> waitForCondition(
     if (clock.now().isAfter(deadline)) {
       throw StateError('Condition not met within $timeout');
     }
-    await Future.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
   }
 }

@@ -38,17 +38,18 @@ void main() {
     final lines = text.trim().split('\n');
     expect(lines.length, greaterThanOrEqualTo(3)); // header + 2 frames
 
-    final header = jsonDecode(lines[0]);
+    final header = jsonDecode(lines[0]) as Map<String, Object?>;
     expect(header['version'], 3);
-    expect(header['term']['cols'], 10);
-    expect(header['term']['rows'], 5);
+    final term = header['term'] as Map<String, Object?>;
+    expect(term['cols'], 10);
+    expect(term['rows'], 5);
 
-    final frame1 = jsonDecode(lines[1]);
+    final frame1 = jsonDecode(lines[1]) as List<Object?>;
     expect(frame1[0], greaterThanOrEqualTo(0.0));
     expect(frame1[1], 'o');
     expect(frame1[2], contains('Hello'));
 
-    final frame2 = jsonDecode(lines[2]);
+    final frame2 = jsonDecode(lines[2]) as List<Object?>;
     expect(frame2[0], greaterThanOrEqualTo(0.0));
     expect(frame2[1], 'o');
     expect(frame2[2], contains('Wor'));

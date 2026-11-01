@@ -842,7 +842,7 @@ Future<void> runGlassCompositingShared(
   config.speed = 1.5;
 
   // 1. Bottom Layer: Fire
-  final fireRunner = PromptRunner(
+  final fireRunner = PromptRunner<void>(
     terminal: terminal,
     widget: FireApp(config: config),
     alternateScreen: false,
@@ -859,7 +859,7 @@ Future<void> runGlassCompositingShared(
   fireRunner.run().catchError((_) {});
 
   // 2. Middle Layer: Glass Overlay Text
-  final glassRunner = PromptRunner(
+  final glassRunner = PromptRunner<void>(
     terminal: terminal,
     widget: GlassOverlayApp(config: config),
     alternateScreen: false,
@@ -876,7 +876,7 @@ Future<void> runGlassCompositingShared(
   glassRunner.run().catchError((_) {});
 
   // 3. Top Layer: Settings Window
-  final settingsRunner = PromptRunner(
+  final settingsRunner = PromptRunner<void>(
     terminal: terminal,
     widget: SettingsApp(config: config),
     alternateScreen: false,

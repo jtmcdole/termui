@@ -132,13 +132,14 @@ void main() {
           greaterThanOrEqualTo(4),
         ); // Header + 3 frames + optional action events
 
-        final headerJson = jsonDecode(castLines[0]) as Map<String, dynamic>;
+        final headerJson = jsonDecode(castLines[0]) as Map<String, Object?>;
         expect(headerJson['version'], equals(3));
-        expect(headerJson['term']['cols'], equals(5));
-        expect(headerJson['term']['rows'], equals(1));
+        final termJson = headerJson['term'] as Map<String, Object?>;
+        expect(termJson['cols'], equals(5));
+        expect(termJson['rows'], equals(1));
 
         // The last line should represent the final frame output event
-        final lastLineJson = jsonDecode(castLines.last) as List<dynamic>;
+        final lastLineJson = jsonDecode(castLines.last) as List<Object?>;
         expect(lastLineJson[1], equals('o')); // output sequence
       },
     );

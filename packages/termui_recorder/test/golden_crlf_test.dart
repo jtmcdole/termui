@@ -20,9 +20,9 @@ void main() {
       buffer.writeString(0, 0, 'Hello', const Style());
       buffer.writeString(0, 1, 'World', const Style());
 
-      // matchesAnsiGolden normally uses matches(dynamic item, Map matchState)
+      // matchesAnsiGolden uses matches(Object? item, Map<Object?, Object?> matchState)
       final matcher = matchesAnsiGolden(goldenPath);
-      final matchState = {};
+      final matchState = <Object?, Object?>{};
       final matches = matcher.matches(buffer, matchState);
 
       // The bug is fixed, matches should return true

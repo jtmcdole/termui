@@ -66,7 +66,7 @@ void main() {
         final terminal = Terminal(backend);
         final config = FireConfig(InMemorySettingsRepository());
 
-        final runner = PromptRunner(
+        final runner = PromptRunner<void>(
           terminal: terminal,
           widget: FireApp(config: config),
           alternateScreen: false,

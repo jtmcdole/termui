@@ -145,7 +145,9 @@ void _readUntilExit(_IsolateArgs<PtyCoreWorker> ctx) async {
 
   if (ctx.syncProcessed) {
     rp.listen((message) {
-      loopController.sink.add(message);
+      if (message is bool) {
+        loopController.sink.add(message);
+      }
     });
   }
   loopController.sink.add(true); //enable the first iteration
