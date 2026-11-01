@@ -304,6 +304,8 @@ class TextEditingController {
 /// | `cursorStyle` | [Style] | Highlighting style for the cursor cell. |
 /// | `placeholder` | [String] | Ghost hint text displayed when field is empty. |
 /// | `placeholderStyle`| [Style] | Style of the placeholder hint text. |
+/// | `obscureText` | [bool] | Masks text characters for passwords/secrets. |
+/// | `obscuringCharacter` | [String] | Single grapheme character used for masking. |
 /// | `focused` | [bool] | Determines if cursor is drawn and keys are processed. |
 /// | `customShortcuts` | [Map]? | Custom key mappings for input actions. |
 class TextField extends StatefulWidget implements Focusable {
@@ -312,6 +314,12 @@ class TextField extends StatefulWidget implements Focusable {
 
   /// Whether the field supports multiple lines.
   final bool multiline;
+
+  /// Whether to obscure text input (e.g. for passwords).
+  final bool obscureText;
+
+  /// Single grapheme cluster character used to obscure text.
+  final String obscuringCharacter;
 
   /// Formatting attributes for the input text.
   Style style;
@@ -349,6 +357,8 @@ class TextField extends StatefulWidget implements Focusable {
     int? cursorPosition,
     TextEditingController? controller,
     this.multiline = false,
+    this.obscureText = false,
+    this.obscuringCharacter = '*',
     this.style = Style.empty,
     this.cursorStyle = const Style(modifiers: Modifier.underline),
     this.placeholder = '',
@@ -359,6 +369,28 @@ class TextField extends StatefulWidget implements Focusable {
     this.onFocusChange,
   }) : controller =
            controller ?? TextEditingController(text: value ?? initialText) {
+    if (obscureText && multiline) {
+      throw ArgumentError(
+        'obscureText cannot be enabled on a multiline TextField.',
+      );
+    }
+    _validateObscuredText(this.controller.text);
+    if (obscuringCharacter.characters.length != 1) {
+      throw ArgumentError(
+        'obscuringCharacter must be a single grapheme cluster.',
+      );
+    }
+    if (obscuringCharacter.contains('\n') ||
+        obscuringCharacter.contains('\r')) {
+      throw ArgumentError(
+        'obscuringCharacter cannot be a newline or carriage return.',
+      );
+    }
+    if (graphemeWidth(obscuringCharacter) != 1) {
+      throw ArgumentError(
+        'obscuringCharacter must have a terminal column display width of exactly 1.',
+      );
+    }
     if (cursorPosition != null && controller == null) {
       final text = value ?? initialText;
       final clampedPos = cursorPosition.clamp(0, text.characters.length);
@@ -455,7 +487,16 @@ class TextField extends StatefulWidget implements Focusable {
 
   /// Sets the complete value of the text field.
   set value(String text) {
+    _validateObscuredText(text);
     controller.text = text;
+  }
+
+  void _validateObscuredText(String text) {
+    if (obscureText && (text.contains('\n') || text.contains('\r'))) {
+      throw ArgumentError(
+        'obscureText TextField cannot contain newline or carriage return characters.',
+      );
+    }
   }
 
   /// Gets the cursor column.
@@ -507,6 +548,7 @@ class TextField extends StatefulWidget implements Focusable {
   }
 
   int _findWordBoundaryBackward(String line, int colIdx) {
+    if (obscureText) return 0;
     final charsList = line.characters.toList();
     int i = colIdx - 1;
     while (i >= 0 && charsList[i] == ' ') {
@@ -519,6 +561,7 @@ class TextField extends StatefulWidget implements Focusable {
   }
 
   int _findWordBoundaryForward(String line, int colIdx) {
+    if (obscureText) return line.characters.length;
     final charsList = line.characters.toList();
     int i = colIdx;
     while (i < charsList.length && charsList[i] == ' ') {
@@ -541,114 +584,110 @@ class TextField extends StatefulWidget implements Focusable {
     return offset + column;
   }
 
+  TextFieldAction? _matchShortcutAction(KeyEvent event) {
+    final shortcuts = customShortcuts ?? defaultShortcuts;
+    for (final entry in shortcuts.entries) {
+      if (entry.key.matches(event)) return entry.value;
+    }
+    return null;
+  }
+
+  bool _canExecuteVerticalMove(TextFieldAction action) {
+    if (action == TextFieldAction.moveUp) {
+      return multiline && cursorLine > 0;
+    }
+    if (action == TextFieldAction.moveDown) {
+      return multiline && cursorLine < controller.value.lines.length - 1;
+    }
+    return true;
+  }
+
+  void _insertNewline() {
+    controller.saveStateToHistory();
+    final lines = [...controller.value.lines];
+    final lineIdx = cursorLine;
+    final colIdx = cursorColumn;
+    final current = lines[lineIdx].characters;
+    final prefix = current.take(colIdx).string;
+    final suffix = current.skip(colIdx).string;
+    lines[lineIdx] = prefix;
+    lines.insert(lineIdx + 1, suffix);
+
+    final nextLine = lineIdx + 1;
+    const nextCol = 0;
+    final nextText = lines.join('\n');
+    final nextOffset = _getOffsetFromLineColumn(nextText, nextLine, nextCol);
+
+    controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection(
+        baseOffset: nextOffset,
+        extentOffset: nextOffset,
+        cursorLine: nextLine,
+        cursorColumn: nextCol,
+      ),
+    );
+  }
+
+  void _insertCharacterKey(String key) {
+    if (key == '\n' || key == '\r' || key == '\r\n') {
+      if (multiline) _insertNewline();
+      return;
+    }
+    final sanitized = multiline
+        ? key
+        : key.replaceAll('\r', '').replaceAll('\n', '');
+    if (sanitized.isEmpty) return;
+
+    controller.saveStateToHistory();
+    final lines = [...controller.value.lines];
+    final lineIdx = cursorLine;
+    final colIdx = cursorColumn;
+    final current = lines[lineIdx].characters;
+    lines[lineIdx] =
+        '${current.take(colIdx).string}$sanitized${current.skip(colIdx).string}';
+
+    final nextCol = colIdx + sanitized.characters.length;
+    final nextText = lines.join('\n');
+    final nextOffset = _getOffsetFromLineColumn(nextText, lineIdx, nextCol);
+
+    controller.value = TextEditingValue(
+      text: nextText,
+      selection: TextSelection(
+        baseOffset: nextOffset,
+        extentOffset: nextOffset,
+        cursorLine: lineIdx,
+        cursorColumn: nextCol,
+      ),
+    );
+  }
+
   /// Handles key events to update the text area value and cursor position.
   bool handleKeyEvent(KeyEvent event) {
-    if (event.type == KeyType.tab ||
-        event == const term.KeyEvent('\t', term.KeyType.tab) ||
-        event ==
-            const term.KeyEvent(
-              '\t',
-              term.KeyType.tab,
-              modifiers: {term.Modifier.shift},
-            )) {
-      return false;
-    }
-    // Determine the mapped action
-    TextFieldAction? action;
-    final shortcuts = customShortcuts ?? defaultShortcuts;
+    if (event.type == KeyType.tab) return false;
 
-    for (final entry in shortcuts.entries) {
-      if (entry.key.matches(event)) {
-        action = entry.value;
-        break;
-      }
-    }
-
-    if (action != null) {
-      if (action == TextFieldAction.moveUp) {
-        if (!multiline || cursorLine == 0) {
-          return false;
-        }
-      } else if (action == TextFieldAction.moveDown) {
-        if (!multiline || cursorLine == controller.value.lines.length - 1) {
-          return false;
-        }
-      }
+    if (_matchShortcutAction(event) case final action?) {
+      if (!_canExecuteVerticalMove(action)) return false;
       _executeAction(action);
       return true;
     }
 
-    // Default character inserts
+    if (event.type == KeyType.enter) {
+      if (!multiline) return false;
+      _insertNewline();
+      return true;
+    }
+
     final hasControlOrAltOrMeta =
         event.modifiers.contains(ev.Modifier.control) ||
         event.modifiers.contains(ev.Modifier.alt) ||
         event.modifiers.contains(ev.Modifier.meta);
-
-    if (event.type == KeyType.enter ||
-        (event.type == KeyType.character &&
-            (event.type == term.KeyType.enter))) {
-      if (multiline) {
-        controller.saveStateToHistory();
-        final lines = List<String>.from(controller.value.lines);
-        final lineIdx = cursorLine;
-        final colIdx = cursorColumn;
-        final current = lines[lineIdx].characters;
-        final prefix = current.take(colIdx).string;
-        final suffix = current.skip(colIdx).string;
-        lines[lineIdx] = prefix;
-        lines.insert(lineIdx + 1, suffix);
-
-        final nextLine = lineIdx + 1;
-        final nextCol = 0;
-        final nextText = lines.join('\n');
-        final nextOffset = _getOffsetFromLineColumn(
-          nextText,
-          nextLine,
-          nextCol,
-        );
-
-        controller.value = TextEditingValue(
-          text: nextText,
-          selection: TextSelection(
-            baseOffset: nextOffset,
-            extentOffset: nextOffset,
-            cursorLine: nextLine,
-            cursorColumn: nextCol,
-          ),
-        );
-        return true;
-      }
+    if (event.type != KeyType.character || hasControlOrAltOrMeta) {
       return false;
     }
 
-    if (event.type == KeyType.character && !hasControlOrAltOrMeta) {
-      if (event == const term.KeyEvent('\t', term.KeyType.tab)) return false;
-      controller.saveStateToHistory();
-      final lines = List<String>.from(controller.value.lines);
-      final lineIdx = cursorLine;
-      final colIdx = cursorColumn;
-      final current = lines[lineIdx].characters;
-      lines[lineIdx] =
-          '${current.take(colIdx).string}${event.key}${current.skip(colIdx).string}';
-
-      final nextLine = lineIdx;
-      final nextCol = colIdx + event.key.characters.length;
-      final nextText = lines.join('\n');
-      final nextOffset = _getOffsetFromLineColumn(nextText, nextLine, nextCol);
-
-      controller.value = TextEditingValue(
-        text: nextText,
-        selection: TextSelection(
-          baseOffset: nextOffset,
-          extentOffset: nextOffset,
-          cursorLine: nextLine,
-          cursorColumn: nextCol,
-        ),
-      );
-      return true;
-    }
-
-    return false;
+    _insertCharacterKey(event.key);
+    return true;
   }
 
   void _executeAction(TextFieldAction action) {
@@ -967,7 +1006,11 @@ class _TextFieldRenderWidgetElement extends Element {
   @override
   Map<String, String>? get paintTraceMetadata {
     final renderWidget = widget as _TextFieldRenderWidget;
-    return {'text': renderWidget.textFieldWidget.value};
+    final textField = renderWidget.textFieldWidget;
+    if (textField.obscureText) {
+      return null;
+    }
+    return {'length': '${textField.value.characters.length}'};
   }
 
   @override
@@ -992,12 +1035,11 @@ class _TextFieldRenderWidgetElement extends Element {
     final h = size.height;
     if (w <= 0 || h <= 0) return;
 
-    final textToRender = textField.value.isEmpty ? textField.placeholder : '';
-    if (textToRender.isNotEmpty) {
+    if (textField.value.isEmpty && textField.placeholder.isNotEmpty) {
       buffer.writeString(
         offset.dx,
         offset.dy,
-        textToRender,
+        textField.placeholder,
         textField.placeholderStyle,
       );
       if (textField.focused) {
@@ -1014,8 +1056,6 @@ class _TextFieldRenderWidgetElement extends Element {
 
     final lines = textField.controller.value.lines;
     final cursorLine = textField.cursorLine;
-    final cursorColumn = textField.cursorColumn;
-
     final mergedCursorStyle = textField.focused
         ? _getMergedStyle(textField)
         : textField.style;
@@ -1023,44 +1063,60 @@ class _TextFieldRenderWidgetElement extends Element {
     for (var y = 0; y < h; y++) {
       final lineIdx = textField.scrollOffset + y;
       if (lineIdx >= lines.length) break;
+      _paintLine(
+        buffer,
+        Offset(offset.dx, offset.dy + y),
+        w,
+        lines[lineIdx],
+        textField,
+        mergedCursorStyle,
+        isCursorLine: textField.focused && lineIdx == cursorLine,
+      );
+    }
+  }
 
-      final line = lines[lineIdx];
-      final charIter = line.characters.iterator;
-      var lineLen = 0;
+  void _paintLine(
+    Buffer buffer,
+    Offset rowOffset,
+    int width,
+    String line,
+    TextField textField,
+    Style mergedCursorStyle, {
+    required bool isCursorLine,
+  }) {
+    final charIter = line.characters.iterator;
+    var lineLen = 0;
 
-      for (var x = 0; x < w; x++) {
-        final hasChar = charIter.moveNext();
-        final char = hasChar ? charIter.current : ' ';
-        if (hasChar) lineLen++;
-
-        final isCursor =
-            textField.focused && lineIdx == cursorLine && x == cursorColumn;
-        final cellStyle = isCursor ? mergedCursorStyle : textField.style;
-        buffer.setAttributes(
-          offset.dx + x,
-          offset.dy + y,
-          char: char,
-          fg: cellStyle.foreground?.argb ?? 0,
-          bg: cellStyle.background?.argb ?? 0,
-          modifiers: cellStyle.modifiers,
-        );
+    for (var x = 0; x < width; x++) {
+      var char = ' ';
+      if (charIter.moveNext()) {
+        lineLen++;
+        char = textField.obscureText
+            ? textField.obscuringCharacter
+            : charIter.current;
       }
 
-      // Render cursor at end of line if needed
-      if (textField.focused &&
-          lineIdx == cursorLine &&
-          cursorColumn >= lineLen) {
-        final cursorX = lineLen;
-        if (cursorX < w) {
-          buffer.setAttributes(
-            offset.dx + cursorX,
-            offset.dy + y,
-            fg: mergedCursorStyle.foreground?.argb ?? 0,
-            bg: mergedCursorStyle.background?.argb ?? 0,
-            modifiers: mergedCursorStyle.modifiers,
-          );
-        }
-      }
+      final isCursor = isCursorLine && x == textField.cursorColumn;
+      final cellStyle = isCursor ? mergedCursorStyle : textField.style;
+      buffer.setAttributes(
+        rowOffset.dx + x,
+        rowOffset.dy,
+        char: char,
+        fg: cellStyle.foreground?.argb ?? 0,
+        bg: cellStyle.background?.argb ?? 0,
+        modifiers: cellStyle.modifiers,
+      );
+    }
+
+    // Render cursor at end of line if needed
+    if (isCursorLine && textField.cursorColumn >= lineLen && lineLen < width) {
+      buffer.setAttributes(
+        rowOffset.dx + lineLen,
+        rowOffset.dy,
+        fg: mergedCursorStyle.foreground?.argb ?? 0,
+        bg: mergedCursorStyle.background?.argb ?? 0,
+        modifiers: mergedCursorStyle.modifiers,
+      );
     }
   }
 }
