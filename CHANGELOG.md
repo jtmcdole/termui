@@ -11,6 +11,48 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`termui` - `v0.13.0`](#termui---v0130)
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.9.2`](#termui_flutter---v092)
+ - [`termui_recorder` - `v0.9.1`](#termui_recorder---v091)
+ - [`termui_test` - `v0.3.1`](#termui_test---v031)
+ - [`termui_hotreload` - `v0.6.26`](#termui_hotreload---v0626)
+ - [`termui_pty` - `v0.6.2`](#termui_pty---v062)
+ - [`termui_audio` - `v0.3.1`](#termui_audio---v031)
+ - [`termui_tinpot` - `v0.3.12`](#termui_tinpot---v0312)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_flutter` - `v0.9.2`
+ - `termui_recorder` - `v0.9.1`
+ - `termui_test` - `v0.3.1`
+ - `termui_hotreload` - `v0.6.26`
+ - `termui_pty` - `v0.6.2`
+ - `termui_audio` - `v0.3.1`
+ - `termui_tinpot` - `v0.3.12`
+
+---
+
+#### `termui` - `v0.13.0`
+
+ - **FIX**(termui): replace Windows console polling with event-driven reader session.
+ - **FIX**(termui): decode Windows console INPUT_RECORD batches into UTF-8.
+ - **FIX**(termui): disable QuickEdit and restore extended flags in Windows raw mode.
+ - **BREAKING** **FIX**(termui): start raw input lazily behind Terminal.openInputStream.
+
+
+## 2026-11-01
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - There are no breaking changes in this release.
 
 Packages with other changes:

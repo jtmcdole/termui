@@ -1,3 +1,12 @@
+## 0.13.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(termui): replace Windows console polling with event-driven reader session.
+ - **FIX**(termui): decode Windows console INPUT_RECORD batches into UTF-8.
+ - **FIX**(termui): disable QuickEdit and restore extended flags in Windows raw mode.
+ - **BREAKING** **FIX**(termui): start raw input lazily behind Terminal.openInputStream.
+
 ## 0.12.0
 
 > Note: This release has breaking changes.

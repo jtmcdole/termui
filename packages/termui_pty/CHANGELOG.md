@@ -1,3 +1,7 @@
+## 0.6.2
+
+ - Update a dependency to the latest release.
+
 ## 0.6.1
 
  - **FEAT**(termui_pty): encode Shift+Tab, C0 punctuation, and mouse bounds in InputEncoder.
