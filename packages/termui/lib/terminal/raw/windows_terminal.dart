@@ -1,7 +1,10 @@
 // coverage:ignore-file
 // ignore_for_file: public_member_api_docs
 
+import 'dart:async';
 import 'dart:ffi';
+import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:ffi/ffi.dart';
@@ -9,6 +12,30 @@ import 'package:termui/src/terminal/windows_console_input.dart';
 import 'package:win32/win32.dart';
 
 import 'terminal.dart';
+
+void _windowsInputReaderEntry((int, SendPort) args) {
+  final (inputAddress, sendPort) = args;
+  final inputHandle = HANDLE(Pointer.fromAddress(inputAddress));
+  final buffer = calloc<Uint16>(256);
+  final numRead = calloc<Uint32>();
+
+  try {
+    while (true) {
+      final waitResult = WaitForSingleObject(inputHandle, 20);
+      if (waitResult.value != WAIT_OBJECT_0) {
+        sleep(const Duration(milliseconds: 10));
+        continue;
+      }
+      final result = ReadConsole(inputHandle, buffer, 256, numRead, nullptr);
+      if (result.value && numRead.value > 0) {
+        sendPort.send([for (var i = 0; i < numRead.value; i++) buffer[i]]);
+      }
+    }
+  } finally {
+    calloc.free(buffer);
+    calloc.free(numRead);
+  }
+}
 
 class WindowsTerminal implements Terminal {
   WindowsTerminal() {
@@ -20,6 +47,33 @@ class WindowsTerminal implements Terminal {
   late final HANDLE outputHandle;
   int? _origInputMode;
   int? _origOutputMode;
+
+  @override
+  Stream<List<int>> openInputStream() {
+    ReceivePort? receivePort;
+    Isolate? isolate;
+    late final StreamController<List<int>> controller;
+    controller = StreamController<List<int>>(
+      onListen: () async {
+        final port = ReceivePort();
+        receivePort = port;
+        port.listen((message) {
+          if (message is List<int>) {
+            controller.add(message);
+          }
+        }, onDone: controller.close);
+        isolate = await Isolate.spawn(_windowsInputReaderEntry, (
+          inputHandle.address,
+          port.sendPort,
+        ));
+      },
+      onCancel: () {
+        receivePort?.close();
+        isolate?.kill(priority: Isolate.immediate);
+      },
+    );
+    return controller.stream;
+  }
 
   @override
   void enableRawMode() {

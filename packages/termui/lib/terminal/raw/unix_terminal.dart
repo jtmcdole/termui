@@ -10,6 +10,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:ffi/ffi.dart';
+import 'package:termui/src/terminal/reusable_input_stream.dart';
+
 import 'terminal.dart';
 
 class UnixTerminal implements Terminal {
@@ -82,6 +84,13 @@ class UnixTerminal implements Terminal {
       calloc.free(newTermIOSPointer);
     }
   }
+
+  static final Stream<List<int>> _stdinBroadcast = shareReusableInputStream(
+    stdin,
+  );
+
+  @override
+  Stream<List<int>> openInputStream() => _stdinBroadcast;
 
   @override
   void disableRawMode() {
