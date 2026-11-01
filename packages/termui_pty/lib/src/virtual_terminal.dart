@@ -65,6 +65,8 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether right-margin auto-wrap (`DECAWM` `?7h` / `?7l`) is enabled.
   bool get autoWrapMode => _autoWrap;
 
+  int _scrollTop = 0;
+  int _scrollBottom;
   Style _currentStyle = .empty;
   _SavedCursor _savedCursor = _initialSavedCursor;
   late AnsiParser _parser;
@@ -92,6 +94,7 @@ final class VirtualTerminal implements TerminalHandler {
     this.defaultForeground,
   }) : width = math.max(1, width),
        height = math.max(1, height),
+       _scrollBottom = math.max(1, height) - 1,
        _buffer = _createBuffer(
          math.max(1, width),
          math.max(1, height),
@@ -151,6 +154,8 @@ final class VirtualTerminal implements TerminalHandler {
     _savedCursor = _initialSavedCursor;
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
+    _scrollTop = 0;
+    _scrollBottom = height - 1;
     if (clearScreen) {
       cursorX = 0;
       cursorY = 0;
@@ -175,8 +180,20 @@ final class VirtualTerminal implements TerminalHandler {
     _buffer.resize(clampedWidth, clampedHeight);
     width = clampedWidth;
     height = clampedHeight;
+    _scrollTop = 0;
+    _scrollBottom = height - 1;
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
+  }
+
+  void _resetSplitCell(Buffer buf, int cellIdx) {
+    buf.characters[cellIdx] = ' ';
+    final attrIdx = cellIdx * 3;
+    buf.attributes[attrIdx] = 0;
+    buf.attributes[attrIdx + 1] = 0;
+    buf.attributes[attrIdx + 2] = transparentBackground
+        ? Modifier.transparent
+        : Modifier.none;
   }
 
   /// Feeds a chunk of data into the terminal.
@@ -260,30 +277,73 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _indexDown() {
-    if (cursorY >= height - 1) {
-      _scrollUp();
-      cursorY = height - 1;
-    } else {
+    if (cursorY == _scrollBottom) {
+      _scrollRegion(_scrollTop, _scrollBottom, 1, up: true);
+    } else if (cursorY < height - 1) {
       cursorY++;
     }
   }
 
-  void _scrollUp() {
-    final chars = _buffer.characters;
-    final attrs = _buffer.attributes;
-    final rowCount = width;
+  void _reverseIndex() {
+    _clampPendingWrap();
+    if (cursorY == _scrollTop) {
+      _scrollRegion(_scrollTop, _scrollBottom, 1, up: false);
+    } else if (cursorY > 0) {
+      cursorY--;
+    }
+  }
 
-    chars.setRange(0, chars.length - rowCount, chars, rowCount);
-    chars.fillRange(chars.length - rowCount, chars.length, ' ');
+  void _scrollRegion(int top, int bottom, int count, {required bool up}) {
+    if (top < 0 || bottom >= height || top > bottom || count <= 0) return;
+    final regionRows = bottom - top + 1;
+    final shift = math.min(count, regionRows);
+    final keepRows = regionRows - shift;
+    final active = buffer;
+    if (keepRows > 0) {
+      final dstRow = up ? top : top + shift;
+      final srcRow = up ? top + shift : top;
+      _copyCellSpan(active, dstRow * width, srcRow * width, keepRows * width);
+    }
+    final fillStart = up ? bottom - shift + 1 : top;
+    final fillEnd = up ? bottom + 1 : top + shift;
+    _fillRowsWithEraseAttributes(active, fillStart, fillEnd);
+  }
 
-    final attrCount = rowCount * 3;
-    attrs.setRange(0, attrs.length - attrCount, attrs, attrCount);
+  static void _copyCellSpan(
+    Buffer buf,
+    int dstCell,
+    int srcCell,
+    int cellCount,
+  ) {
+    if (cellCount <= 0) return;
+    buf.characters.setRange(
+      dstCell,
+      dstCell + cellCount,
+      buf.characters,
+      srcCell,
+    );
+    buf.attributes.setRange(
+      dstCell * 3,
+      (dstCell + cellCount) * 3,
+      buf.attributes,
+      srcCell * 3,
+    );
+  }
 
+  void _fillRowsWithEraseAttributes(
+    Buffer buf,
+    int startRow,
+    int endRowExclusive,
+  ) {
+    final startCell = startRow * width;
+    final endCell = endRowExclusive * width;
+    if (startCell >= endCell) return;
+    buf.characters.fillRange(startCell, endCell, ' ');
     final (fg, bg, mod) = _eraseAttributes();
-    for (var i = attrs.length - attrCount; i < attrs.length; i += 3) {
-      attrs[i] = fg;
-      attrs[i + 1] = bg;
-      attrs[i + 2] = mod;
+    for (var i = startCell * 3; i < endCell * 3; i += 3) {
+      buf.attributes[i] = fg;
+      buf.attributes[i + 1] = bg;
+      buf.attributes[i + 2] = mod;
     }
   }
 
@@ -477,7 +537,13 @@ final class VirtualTerminal implements TerminalHandler {
       case 'D': // Cursor Back (CUB)
         _clampPendingWrap();
         cursorX = math.max(0, cursorX - p1);
-      case 'G': // Cursor Character Absolute (CHA)
+      case 'E': // Cursor Next Line (CNL)
+        cursorX = 0;
+        cursorY = math.min(height - 1, cursorY + p1);
+      case 'F': // Cursor Preceding Line (CPL)
+        cursorX = 0;
+        cursorY = math.max(0, cursorY - p1);
+      case 'G' || '`': // Cursor Character Absolute (CHA / HPA)
         cursorX = (p1 - 1).clamp(0, width - 1);
       case 'd': // Line Position Absolute (VPA)
         _clampPendingWrap();
@@ -500,9 +566,93 @@ final class VirtualTerminal implements TerminalHandler {
       case 'X':
         _clampPendingWrap();
         _eraseRowSpan(cursorY, cursorX, math.min(width, cursorX + p1));
+      case 'P':
+        _deleteChars(p1);
+      case '@':
+        _insertBlankChars(p1);
+      case 'L':
+        _insertLines(p1);
+      case 'M':
+        _deleteLines(p1);
+      case 'S':
+        _scrollRegion(_scrollTop, _scrollBottom, p1, up: true);
+      case 'T':
+        _scrollRegion(_scrollTop, _scrollBottom, p1, up: false);
+      case 'r':
+        _setScrollRegion(params);
+      case 's':
+        if (params.isEmpty) _saveCursor();
+      case 'u':
+        _restoreCursor();
       case 'm':
         _applySgr(params);
     }
+  }
+
+  void _setScrollRegion(List<int> params) {
+    final rawTop = _clampedPositiveParam(params, 0);
+    final rawBottom = params.length > 1 && params[1] > 0
+        ? math.min(params[1], 0xFFFF)
+        : height;
+    if (rawTop > rawBottom) return;
+    final top = (rawTop - 1).clamp(0, height - 1);
+    final bottom = (rawBottom - 1).clamp(0, height - 1);
+    if (top < bottom || (height == 1 && rawTop == 1)) {
+      _scrollTop = top;
+      _scrollBottom = bottom;
+      cursorX = 0;
+      cursorY = 0;
+    }
+  }
+
+  void _insertLines(int count) {
+    _clampPendingWrap();
+    if (cursorY < _scrollTop || cursorY > _scrollBottom) return;
+    _scrollRegion(cursorY, _scrollBottom, count, up: false);
+  }
+
+  void _deleteLines(int count) {
+    _clampPendingWrap();
+    if (cursorY < _scrollTop || cursorY > _scrollBottom) return;
+    _scrollRegion(cursorY, _scrollBottom, count, up: true);
+  }
+
+  void _deleteChars(int count) {
+    _clampPendingWrap();
+    final active = buffer;
+    final rowBase = cursorY * width;
+    if (cursorX > 0 && active.characters[rowBase + cursorX] == '') {
+      _resetSplitCell(active, rowBase + cursorX - 1);
+    }
+    final remaining = width - cursorX;
+    final del = math.min(count, remaining);
+    final srcEnd = cursorX + del;
+    if (srcEnd < width && active.characters[rowBase + srcEnd] == '') {
+      _resetSplitCell(active, rowBase + srcEnd);
+    }
+    _copyCellSpan(active, rowBase + cursorX, rowBase + srcEnd, remaining - del);
+    _eraseRowSpan(cursorY, width - del, width);
+  }
+
+  void _insertBlankChars(int count) {
+    _clampPendingWrap();
+    final active = buffer;
+    final rowBase = cursorY * width;
+    if (cursorX > 0 && active.characters[rowBase + cursorX] == '') {
+      _resetSplitCell(active, rowBase + cursorX - 1);
+      _resetSplitCell(active, rowBase + cursorX);
+    }
+    final remaining = width - cursorX;
+    final ins = math.min(count, remaining);
+    final shiftCols = remaining - ins;
+    if (shiftCols > 0) {
+      final src = rowBase + cursorX;
+      if (isWideGrapheme(active.characters[src + shiftCols - 1])) {
+        _resetSplitCell(active, src + shiftCols - 1);
+      }
+      _copyCellSpan(active, src + ins, src, shiftCols);
+    }
+    _eraseRowSpan(cursorY, cursorX, cursorX + ins);
   }
 
   void _applySgr(List<int> params) {
@@ -637,6 +787,14 @@ final class VirtualTerminal implements TerminalHandler {
         _saveCursor();
       case '8': // DECRC (Restore Cursor)
         _restoreCursor();
+      case 'D': // IND (Index)
+        _clampPendingWrap();
+        _indexDown();
+      case 'E': // NEL (Next Line)
+        cursorX = 0;
+        _indexDown();
+      case 'M': // RI (Reverse Index)
+        _reverseIndex();
     }
   }
 

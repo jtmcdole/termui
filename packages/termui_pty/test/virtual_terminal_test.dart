@@ -376,7 +376,7 @@ void main() {
     );
   });
 
-  group('VirtualTerminal DECTCEM, DECAWM, and extended SGR', () {
+  group('VirtualTerminal DECTCEM, DECSTBM, DECAWM, and extended SGR', () {
     test(
       'tracks DECTCEM (?25h / ?25l) cursorVisible and restores visibility on DECSTR, RIS, and reset()',
       () {
@@ -398,6 +398,95 @@ void main() {
         terminal.write(utf8.encode('\x1b[?25l'));
         terminal.reset();
         expect(terminal.cursorVisible, isTrue);
+      },
+    );
+
+    test(
+      'supports DECSTBM (CSI r), RI (ESC M), IND/NEL, IL/DL (CSI L/M), SU/SD (CSI S/T), and ICH/DCH (CSI @/P)',
+      () {
+        final terminal = VirtualTerminal(width: 6, height: 5);
+        final green = const Color(0, 170, 0).argb;
+
+        // Paint 5 rows (TOP, R1, R2, R3, BOT) and pin rows 1..3 via DECSTBM (\x1b[2;4r).
+        terminal.write(
+          utf8.encode('TOP---\r\nR1----\r\nR2----\r\nR3----\r\nBOT---'),
+        );
+        terminal.write(utf8.encode('\x1b[2;4r'));
+        expect(terminal.cursorX, equals(0));
+        expect(terminal.cursorY, equals(0));
+
+        // Invalid margin (\x1b[4;2r or \x1b[1;1r) is ignored without moving cursor.
+        terminal.write(utf8.encode('\x1b[4;1H\x1b[4;2r\x1b[1;1r'));
+        expect(terminal.cursorY, equals(3));
+
+        // LF at bottom of scroll region (row 3) scrolls only rows 1..3 with BCE; TOP and BOT stay pinned!
+        terminal.write(utf8.encode('\x1b[42m\n\x1b[0m'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('T'));
+        expect(terminal.buffer.getCharacter(1, 1), equals('2'));
+        expect(terminal.buffer.getCharacter(1, 2), equals('3'));
+        expect(terminal.buffer.getCharacter(0, 3), equals(' '));
+        expect(terminal.buffer.getBackground(0, 3), equals(green));
+        expect(terminal.buffer.getCharacter(0, 4), equals('B'));
+
+        // RI (ESC M) at top of scroll region (row 1) shifts rows 1..3 down while preserving TOP and BOT.
+        terminal.write(utf8.encode('\x1b[2;1H\x1bMNEW1'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('T'));
+        expect(terminal.buffer.getCharacter(0, 1), equals('N'));
+        expect(terminal.buffer.getCharacter(1, 2), equals('2'));
+        expect(terminal.buffer.getCharacter(1, 3), equals('3'));
+        expect(terminal.buffer.getCharacter(0, 4), equals('B'));
+
+        // IL (CSI L) and DL (CSI M) are ignored outside scroll region and shift within scroll region.
+        terminal.write(utf8.encode('\x1b[1;1H\x1b[L\x1b[M'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('T'));
+        terminal.write(utf8.encode('\x1b[3;1H\x1b[LINS\x1b[M'));
+        expect(terminal.buffer.getCharacter(1, 2), equals('2'));
+
+        // SU (CSI S), SD (CSI T), IND (ESC D), NEL (ESC E), CNL (CSI E), CPL (CSI F), HPA (`), SCOSC/SCORC (s/u).
+        terminal.write(
+          utf8.encode('\x1b[S\x1b[T\x1b[2;3H\x1b[s\x1bE\x1bD\x1b[u'),
+        );
+        expect(terminal.cursorX, equals(2));
+        expect(terminal.cursorY, equals(1));
+        terminal.write(utf8.encode('\x1b[1E\x1b[1F\x1b[4`'));
+        expect(terminal.cursorX, equals(3));
+        expect(terminal.cursorY, equals(1));
+        // RI (ESC M) below scrollTop steps cursorY up without scrolling.
+        terminal.write(utf8.encode('\x1b[3;2H\x1bM'));
+        expect(terminal.cursorY, equals(1));
+        terminal.write(utf8.encode('\x1b[1C'));
+        expect(terminal.cursorX, equals(2));
+
+        // Reset scroll margins (\x1b[r), then test ICH (CSI @) and DCH (CSI P) with wide-grapheme healing.
+        terminal.write(utf8.encode('\x1b[r\x1b[2JABCDEF\x1b[1;3H\x1b[2@12'));
+        final row0AfterIch = [
+          for (var x = 0; x < 6; x++) terminal.buffer.getCharacter(x, 0),
+        ].join();
+        expect(row0AfterIch, equals('AB12CD'));
+
+        terminal.write(utf8.encode('\x1b[1;3H\x1b[2P'));
+        final row0AfterDch = [
+          for (var x = 0; x < 6; x++) terminal.buffer.getCharacter(x, 0),
+        ].join();
+        expect(row0AfterDch, equals('ABCD  '));
+
+        // ICH shifts a wide emoji intact when it fits, then heals the orphaned
+        // leading half when a second ICH pushes its trailing cell off the right edge.
+        terminal.write(utf8.encode('\x1b[2;4H🚀\x1b[2;1H\x1b[1@'));
+        expect(terminal.buffer.getCharacter(4, 1), equals('🚀'));
+        expect(terminal.buffer.getCharacter(5, 1), equals(''));
+        terminal.write(utf8.encode('\x1b[2;1H\x1b[1@'));
+        expect(terminal.buffer.getCharacter(5, 1), equals(' '));
+        // ICH and DCH starting directly on a wide emoji's trailing cell heal the leading half.
+        terminal.write(utf8.encode('\x1b[2;2H🚀Z\x1b[2;3H\x1b[1@'));
+        expect(terminal.buffer.getCharacter(1, 1), equals(' '));
+        terminal.write(utf8.encode('\x1b[2;2H🚀Z\x1b[2;3H\x1b[1P'));
+        expect(terminal.buffer.getCharacter(1, 1), equals(' '));
+        expect(terminal.buffer.getCharacter(2, 1), equals('Z'));
+        // DCH splitting the leading half of a wide emoji heals the trailing half.
+        terminal.write(utf8.encode('\x1b[2;2H🚀Z\x1b[2;2H\x1b[1P'));
+        expect(terminal.buffer.getCharacter(1, 1), equals(' '));
+        expect(terminal.buffer.getCharacter(2, 1), equals('Z'));
       },
     );
 
