@@ -64,6 +64,8 @@ When writing or modifying code in this repository:
 7. **Consider Terminal Emulator/Muxer Hotkey Conflicts**: When assigning keyboard shortcuts for the TUI, always consider conflicts with common terminal multiplexers (tmux, byobu) and emulators (iTerm2, Windows Terminal, PowerShell). For example, `Ctrl+S` is often intercepted by flow control (XOFF) or tmux prefixes, and `Ctrl+W` or `Ctrl+T` are common tab-management shortcuts. Always report potential conflicts to the developer and offer alternative/fallback bindings (e.g., providing `Alt+S` as an alternative to `Ctrl+S`).
 8. **Finalizing Tasks (Format & Analyze)**: Always run `dart format .` and then `dart analyze --fatal-infos` when completing tasks. The `dart analyze` check must complete cleanly with no reported issues before you finish your task.
 9. **Avoid Unnecessary Caching / Prefer Generational GC**: In Dart, generational GC is highly optimized for short-lived nursery objects. Avoid caching objects (like `Canvas` or `Element` render trees) and manually calling `clear()` or `reset()` on every frame, as the O(N) list-clearing overhead often exceeds the cost of a fresh bump-pointer allocation. Rely on microbenchmarks to justify caching/pooling.
+10. **Ban `dynamic` and `<dynamic>`**: Never use `dynamic`, `<dynamic>`, `Map<String, dynamic>`, `List<dynamic>`, or `as dynamic` in production, example, or test code. Always use `Object?`, `<Object?>`, concrete static types, or Dart 3 pattern matching. Workspace `analysis_options.yaml` files enforce `strict-casts`, `strict-inference`, `strict-raw-types`, `avoid_annotating_with_dynamic`, and `avoid_dynamic_calls`, and CI rejects explicit `<dynamic>` and `as dynamic` tokens.
+11. **Keep Cognitive Complexity Low**: Keep production functions at or below a SonarSource cognitive complexity score of 15. Prefer flat guard clauses over nested conditionals, and avoid single-caller pass-through helpers.
 
 ---
 
@@ -75,6 +77,8 @@ Core testing utilities (`TerminalTester`, `MockTerminalBackend`, `find`) are loc
 * **Stateful Rebuilds**: Unlike running applications which schedule frame updates on the microtask queue, tests run synchronously. You must call `element.rebuild()`, followed by `element.layout(...)` and `element.paint(...)` to force widgets to redraw after focus or state changes.
 * **Focus Singleton Cleanup**: Since `FocusManager` is a singleton, focus state persists across tests. You must call `FocusManager.instance.setPrimaryFocus(null)` in `setUp()` to ensure a clean slate.
 * **Golden Tests**: Uses `fake_async` and mock recorders to output Golden ANSI files under `test/goldens/` and verifies pixel-perfect compliance.
+* **User-Observable Assertions**: Assert rendered `Buffer` cells, keyboard event routing, pointer drag or resize positions, and lifecycle callbacks rather than internal flags alone.
+* **Diff Coverage Gate**: Maintain at least 90% LCOV line coverage on modified production lines (`dart test --coverage=coverage` followed by `dart run coverage:format_coverage --lcov`). Remove temporary `coverage/` directories before committing.
 
 ### Commands
 Run the following commands inside `/app/packages/termui`:
