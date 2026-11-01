@@ -1,13 +1,42 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'package:termui/termui.dart';
 import 'package:characters/characters.dart';
+import 'package:termui/termui.dart';
+
 import 'ansi_parser.dart';
+
+typedef _SavedCursor = ({int x, int y, Style style, bool pendingWrap});
 
 /// A virtual terminal that maintains a screen buffer and cursor state,
 /// mutating them in response to ANSI escape sequences.
 final class VirtualTerminal implements TerminalHandler {
+  static const List<int> _ansi16Rgb = [
+    0x000000,
+    0xAA0000,
+    0x00AA00,
+    0xAAAA00,
+    0x0000AA,
+    0xAA00AA,
+    0x00AAAA,
+    0xAAAAAA,
+    0x555555,
+    0xFF5555,
+    0x55FF55,
+    0xFFFF55,
+    0x5555FF,
+    0xFF55FF,
+    0x55FFFF,
+    0xFFFFFF,
+  ];
+
+  static const _SavedCursor _initialSavedCursor = (
+    x: 0,
+    y: 0,
+    style: .empty,
+    pendingWrap: false,
+  );
+
   /// The width of the virtual terminal in columns.
   int width;
 
@@ -26,10 +55,7 @@ final class VirtualTerminal implements TerminalHandler {
   int cursorY = 0;
 
   Style _currentStyle = .empty;
-  int _savedCursorX = 0;
-  int _savedCursorY = 0;
-  bool _savedPendingWrap = false;
-  Style _savedStyle = .empty;
+  _SavedCursor _savedCursor = _initialSavedCursor;
   late AnsiParser _parser;
   late ByteConversionSink _utf8Sink;
 
@@ -39,13 +65,39 @@ final class VirtualTerminal implements TerminalHandler {
   /// The default foreground color applied to characters when no explicit color is set.
   final Color? defaultForeground;
 
-  /// Whether mouse tracking is enabled (set by DECSET 1000 or similar).
+  /// Whether mouse tracking is enabled (set by DECSET `1000`, `1002`, or `1003`).
   bool mouseTrackingEnabled = false;
 
-  /// Whether SGR mouse reporting mode is enabled (set by DECSET 1006).
+  /// Whether SGR mouse reporting mode is enabled (set by DECSET `1006`).
   bool sgrMouseMode = false;
 
   final List<void Function()> _listeners = [];
+
+  /// Creates a new virtual terminal with the specified dimensions and settings.
+  VirtualTerminal({
+    this.width = 80,
+    this.height = 24,
+    this.transparentBackground = false,
+    this.defaultForeground,
+  }) : _buffer = _createBuffer(
+         width,
+         height,
+         transparent: transparentBackground,
+       ) {
+    _initParser();
+  }
+
+  static Buffer _createBuffer(int w, int h, {required bool transparent}) =>
+      transparent
+      ? Buffer(w, h, defaultBlend: false)
+      : Buffer.blank(w, h, defaultBlend: false);
+
+  void _initParser() {
+    _parser = AnsiParser(this);
+    _utf8Sink = const Utf8Decoder(
+      allowMalformed: true,
+    ).startChunkedConversion(_ParserStringSink(_parser.parse));
+  }
 
   /// Adds a listener to be notified when the terminal buffer changes.
   void addListener(void Function() listener) {
@@ -69,25 +121,6 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
-  /// Creates a new virtual terminal with the specified dimensions and settings.
-  VirtualTerminal({
-    this.width = 80,
-    this.height = 24,
-    this.transparentBackground = false,
-    this.defaultForeground,
-  }) : _buffer = transparentBackground
-           ? Buffer(width, height, defaultBlend: false)
-           : Buffer.blank(width, height, defaultBlend: false) {
-    _initParser();
-  }
-
-  void _initParser() {
-    _parser = AnsiParser(this);
-    _utf8Sink = const Utf8Decoder(
-      allowMalformed: true,
-    ).startChunkedConversion(_ParserStringSink(_parser.parse));
-  }
-
   /// Resets the terminal to its initial power-on state, clearing the screen,
   /// resetting cursor/SGR/mouse state, and discarding partial UTF-8 or escape
   /// sequences.
@@ -100,10 +133,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _resetState({required bool clearScreen}) {
     _currentStyle = .empty;
-    _savedStyle = .empty;
-    _savedCursorX = 0;
-    _savedCursorY = 0;
-    _savedPendingWrap = false;
+    _savedCursor = _initialSavedCursor;
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
     if (clearScreen) {
@@ -111,7 +141,13 @@ final class VirtualTerminal implements TerminalHandler {
       cursorY = 0;
       final (fg, bg, mod) = _eraseAttributes();
       _buffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
-    } else if (cursorX >= width) {
+    } else {
+      _clampPendingWrap();
+    }
+  }
+
+  void _clampPendingWrap() {
+    if (cursorX >= width) {
       cursorX = math.max(0, width - 1);
     }
   }
@@ -149,7 +185,7 @@ final class VirtualTerminal implements TerminalHandler {
   void _eraseRowSpan(int y, int startX, int endX) {
     if (startX >= endX || y < 0 || y >= height) return;
     final (fg, bg, mod) = _eraseAttributes();
-    _buffer.fillRect(
+    buffer.fillRect(
       Rect(startX, y, endX - startX, 1),
       char: ' ',
       fg: fg,
@@ -159,13 +195,14 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _eraseInDisplay(int mode) {
+    final active = buffer;
     switch (mode) {
       case 0: // Cursor (inclusive) to end of screen
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _clampPendingWrap();
         _eraseRowSpan(cursorY, cursorX, width);
         if (cursorY + 1 < height) {
           final (fg, bg, mod) = _eraseAttributes();
-          _buffer.fillRect(
+          active.fillRect(
             Rect(0, cursorY + 1, width, height - (cursorY + 1)),
             char: ' ',
             fg: fg,
@@ -174,10 +211,10 @@ final class VirtualTerminal implements TerminalHandler {
           );
         }
       case 1: // Start of screen to cursor (inclusive)
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _clampPendingWrap();
         if (cursorY > 0) {
           final (fg, bg, mod) = _eraseAttributes();
-          _buffer.fillRect(
+          active.fillRect(
             Rect(0, 0, width, cursorY),
             char: ' ',
             fg: fg,
@@ -187,24 +224,22 @@ final class VirtualTerminal implements TerminalHandler {
         }
         _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
       case 2: // Entire screen
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
+        _clampPendingWrap();
         final (fg, bg, mod) = _eraseAttributes();
-        _buffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
+        active.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
       case 3: // Saved scrollback lines only (no-op without scrollback buffer)
         break;
     }
   }
 
   void _eraseInLine(int mode) {
+    _clampPendingWrap();
     switch (mode) {
       case 0: // Cursor (inclusive) to end of line
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
         _eraseRowSpan(cursorY, cursorX, width);
       case 1: // Start of line to cursor (inclusive)
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
         _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
       case 2: // Entire line
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
         _eraseRowSpan(cursorY, 0, width);
     }
   }
@@ -214,7 +249,6 @@ final class VirtualTerminal implements TerminalHandler {
     final attrs = _buffer.attributes;
     final rowCount = width;
 
-    // Shift up by 1 row
     chars.setRange(0, chars.length - rowCount, chars, rowCount);
     chars.fillRange(chars.length - rowCount, chars.length, ' ');
 
@@ -232,60 +266,85 @@ final class VirtualTerminal implements TerminalHandler {
   @override
   void printText(String text) {
     for (final char in text.characters) {
-      if (cursorX >= width) {
-        cursorX = 0;
-        cursorY++;
-      }
-      if (cursorY >= height) {
-        _scrollUp();
-        cursorY = height - 1;
-      }
-
-      int fgArg = _currentStyle.foreground?.argb ?? 0;
-      int bgArg = _currentStyle.background?.argb ?? 0;
-      int modArg = _currentStyle.modifiers;
-
-      final isBgTransparent =
-          transparentBackground && (bgArg == 0 || bgArg == 0xFF000000);
-      if (isBgTransparent) {
-        bgArg = 0;
-        if (fgArg == 0) {
-          fgArg =
-              defaultForeground?.argb ??
-              0xFFFFFFFF; // Use defaultForeground if provided, otherwise white
-        }
-        if (char == ' ') {
-          modArg |= Modifier.transparent;
-        }
-      } else if (fgArg == 0 && defaultForeground != null) {
-        // Even if not transparent, apply default foreground to empty styles if configured
-        fgArg = defaultForeground!.argb;
-      }
-
-      final isWide = isWideGrapheme(char);
-      if (isWide && cursorX == width - 1) {
-        // Can't fit wide character in the last column, write a space instead
-        _buffer.setAttributes(
-          cursorX,
-          cursorY,
-          char: ' ',
-          fg: fgArg,
-          bg: bgArg,
-          modifiers: isBgTransparent ? (modArg | Modifier.transparent) : modArg,
-        );
-        cursorX++;
-      } else {
-        _buffer.setAttributes(
-          cursorX,
-          cursorY,
-          char: char,
-          fg: fgArg,
-          bg: bgArg,
-          modifiers: modArg,
-        );
-        cursorX += isWide ? 2 : 1;
-      }
+      _printGrapheme(char);
     }
+  }
+
+  void _printGrapheme(String char) {
+    if (cursorX >= width) {
+      cursorX = 0;
+      cursorY++;
+    }
+    if (cursorY >= height) {
+      _scrollUp();
+      cursorY = height - 1;
+    }
+
+    final (fgArg, bgArg, modArg, isBgTransparent) = _resolvePrintAttributes(
+      char,
+    );
+    if (isWideGrapheme(char)) {
+      _printWideGrapheme(char, fgArg, bgArg, modArg, isBgTransparent);
+      return;
+    }
+    buffer.setAttributes(
+      cursorX,
+      cursorY,
+      char: char,
+      fg: fgArg,
+      bg: bgArg,
+      modifiers: modArg,
+    );
+    cursorX++;
+  }
+
+  (int fg, int bg, int mod, bool bgTransparent) _resolvePrintAttributes(
+    String char,
+  ) {
+    var fgArg = _currentStyle.foreground?.argb ?? 0;
+    var bgArg = _currentStyle.background?.argb ?? 0;
+    var modArg = _currentStyle.modifiers;
+
+    final bgTransparent =
+        transparentBackground && (bgArg == 0 || bgArg == 0xFF000000);
+    if (bgTransparent) {
+      bgArg = 0;
+      if (fgArg == 0) fgArg = defaultForeground?.argb ?? 0xFFFFFFFF;
+      if (char == ' ') modArg |= Modifier.transparent;
+    } else if (fgArg == 0 && defaultForeground != null) {
+      fgArg = defaultForeground!.argb;
+    }
+    return (fgArg, bgArg, modArg, bgTransparent);
+  }
+
+  void _printWideGrapheme(
+    String char,
+    int fgArg,
+    int bgArg,
+    int modArg,
+    bool bgTransparent,
+  ) {
+    if (cursorX == width - 1) {
+      buffer.setAttributes(
+        cursorX,
+        cursorY,
+        char: ' ',
+        fg: fgArg,
+        bg: bgArg,
+        modifiers: bgTransparent ? (modArg | Modifier.transparent) : modArg,
+      );
+      cursorX++;
+      return;
+    }
+    buffer.setAttributes(
+      cursorX,
+      cursorY,
+      char: char,
+      fg: fgArg,
+      bg: bgArg,
+      modifiers: modArg,
+    );
+    cursorX += 2;
   }
 
   @override
@@ -312,24 +371,39 @@ final class VirtualTerminal implements TerminalHandler {
     if (command != 'h' && command != 'l') return;
     final enable = command == 'h';
     for (final param in params) {
-      switch (param) {
-        case 1000 || 1002 || 1003:
-          mouseTrackingEnabled = enable;
-        case 1006:
-          sgrMouseMode = enable;
-      }
+      _applyDecPrivateModeParam(param, enable);
     }
+  }
+
+  void _applyDecPrivateModeParam(int param, bool enable) {
+    switch (param) {
+      case 1000 || 1002 || 1003:
+        mouseTrackingEnabled = enable;
+      case 1006:
+        sgrMouseMode = enable;
+    }
+  }
+
+  void _saveCursor() {
+    _savedCursor = (
+      x: cursorX.clamp(0, width - 1),
+      y: cursorY.clamp(0, height - 1),
+      style: _currentStyle,
+      pendingWrap: cursorX >= width,
+    );
+  }
+
+  void _restoreCursor() {
+    final restoredX = _savedCursor.x.clamp(0, width - 1);
+    cursorX = (_savedCursor.pendingWrap && restoredX == width - 1)
+        ? width
+        : restoredX;
+    cursorY = _savedCursor.y.clamp(0, height - 1);
+    _currentStyle = _savedCursor.style;
   }
 
   @override
   void csi(String command, List<int> params, {String? intermediate}) {
-    final p1 = params.isNotEmpty && params[0] > 0
-        ? math.min(params[0], 0xFFFF)
-        : 1;
-    final p2 = params.length > 1 && params[1] > 0
-        ? math.min(params[1], 0xFFFF)
-        : 1;
-
     if (intermediate != null) {
       if (intermediate == '?') {
         _handleDecPrivateMode(command, params);
@@ -339,200 +413,170 @@ final class VirtualTerminal implements TerminalHandler {
       return;
     }
 
+    final p1 = _clampedPositiveParam(params, 0);
+    final p2 = _clampedPositiveParam(params, 1);
+    if (_tryHandleCursorCsi(command, p1, p2)) return;
+    _handleEditingOrModeCsi(command, params, p1);
+  }
+
+  static int _clampedPositiveParam(List<int> params, int index) {
+    if (index >= params.length || params[index] <= 0) return 1;
+    return math.min(params[index], 0xFFFF);
+  }
+
+  bool _tryHandleCursorCsi(String command, int p1, int p2) {
     switch (command) {
-      case 'A': // Cursor Up
-        cursorY -= p1;
-        if (cursorY < 0) cursorY = 0;
-      case 'B': // Cursor Down
-        cursorY += p1;
-        if (cursorY >= height) cursorY = height - 1;
-      case 'C': // Cursor Forward
-        cursorX += p1;
-        if (cursorX >= width) cursorX = width - 1;
-      case 'D': // Cursor Back
-        cursorX -= p1;
-        if (cursorX < 0) cursorX = 0;
-      case 'G': // Cursor Character Absolute (CHA, 1-indexed column)
-        cursorX = math.max(0, math.min(width - 1, p1 - 1));
-      case 'd': // Line Position Absolute (VPA, 1-indexed row)
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
-        cursorY = math.max(0, math.min(height - 1, p1 - 1));
-      case 'H' || 'f': // Cursor Position
-        cursorY = p1 - 1;
-        cursorX = p2 - 1;
-        if (cursorX < 0) cursorX = 0;
-        if (cursorY < 0) cursorY = 0;
-        if (cursorX >= width) cursorX = width - 1;
-        if (cursorY >= height) cursorY = height - 1;
-      case 'J': // Erase in Display
+      case 'A': // Cursor Up (CUU)
+        cursorY = math.max(0, cursorY - p1);
+      case 'B': // Cursor Down (CUD)
+        cursorY = math.min(height - 1, cursorY + p1);
+      case 'C': // Cursor Forward (CUF)
+        cursorX = math.min(width - 1, cursorX + p1);
+      case 'D': // Cursor Back (CUB)
+        cursorX = math.max(0, cursorX - p1);
+      case 'G': // Cursor Character Absolute (CHA)
+        cursorX = (p1 - 1).clamp(0, width - 1);
+      case 'd': // Line Position Absolute (VPA)
+        _clampPendingWrap();
+        cursorY = (p1 - 1).clamp(0, height - 1);
+      case 'H' || 'f': // Cursor Position (CUP / HVP)
+        cursorX = (p2 - 1).clamp(0, width - 1);
+        cursorY = (p1 - 1).clamp(0, height - 1);
+      default:
+        return false;
+    }
+    return true;
+  }
+
+  void _handleEditingOrModeCsi(String command, List<int> params, int p1) {
+    switch (command) {
+      case 'J':
         _eraseInDisplay(params.isEmpty ? 0 : params[0]);
-      case 'K': // Erase in Line
+      case 'K':
         _eraseInLine(params.isEmpty ? 0 : params[0]);
-      case 'X': // Erase Character (ECH, cursor does not move)
-        if (cursorX >= width) cursorX = math.max(0, width - 1);
+      case 'X':
+        _clampPendingWrap();
         _eraseRowSpan(cursorY, cursorX, math.min(width, cursorX + p1));
-      case 'm': // SGR (Select Graphic Rendition)
-        if (params.isEmpty) {
-          _currentStyle = .empty;
-        } else {
-          var i = 0;
-          while (i < params.length) {
-            final code = params[i];
+      case 'm':
+        _applySgr(params);
+    }
+  }
 
-            // True color & 256 color for Foreground
-            if (code == 38) {
-              if (i + 1 < params.length) {
-                final mode = params[i + 1];
-                if (mode == 5 && i + 2 < params.length) {
-                  // 256 color
-                  final colorIdx = params[i + 2];
-                  _currentStyle = _currentStyle.merge(
-                    Style(foreground: _colorFromAnsi256(colorIdx)),
-                  );
-                  i += 3;
-                  continue;
-                } else if (mode == 2 && i + 4 < params.length) {
-                  // True color (RGB)
-                  final r = params[i + 2];
-                  final g = params[i + 3];
-                  final b = params[i + 4];
-                  _currentStyle = _currentStyle.merge(
-                    Style(foreground: Color(r, g, b)),
-                  );
-                  i += 5;
-                  continue;
-                }
-              }
-            }
-            // True color & 256 color for Background
-            else if (code == 48) {
-              if (i + 1 < params.length) {
-                final mode = params[i + 1];
-                if (mode == 5 && i + 2 < params.length) {
-                  // 256 color
-                  final colorIdx = params[i + 2];
-                  _currentStyle = _currentStyle.merge(
-                    Style(background: _colorFromAnsi256(colorIdx)),
-                  );
-                  i += 3;
-                  continue;
-                } else if (mode == 2 && i + 4 < params.length) {
-                  // True color (RGB)
-                  final r = params[i + 2];
-                  final g = params[i + 3];
-                  final b = params[i + 4];
-                  _currentStyle = _currentStyle.merge(
-                    Style(background: Color(r, g, b)),
-                  );
-                  i += 5;
-                  continue;
-                }
-              }
-            }
-
-            // Standard SGR Codes
-            switch (code) {
-              case 0:
-                _currentStyle = .empty;
-              case 1:
-                _currentStyle = _currentStyle.merge(
-                  const Style(modifiers: Modifier.bold),
-                );
-              case 2:
-                _currentStyle = _currentStyle.merge(
-                  const Style(modifiers: Modifier.dim),
-                );
-              case 3:
-                _currentStyle = _currentStyle.merge(
-                  const Style(modifiers: Modifier.italic),
-                );
-              case 4:
-                _currentStyle = _currentStyle.merge(
-                  const Style(modifiers: Modifier.underline),
-                );
-              case 7:
-                _currentStyle = _currentStyle.merge(
-                  const Style(modifiers: Modifier.reverse),
-                );
-              case 8:
-                _currentStyle = _currentStyle.merge(
-                  const Style(modifiers: Modifier.hidden),
-                );
-              case 9:
-                _currentStyle = _currentStyle.merge(
-                  const Style(modifiers: Modifier.crossedOut),
-                );
-              case 22:
-                _currentStyle = Style(
-                  foreground: _currentStyle.foreground,
-                  background: _currentStyle.background,
-                  modifiers:
-                      _currentStyle.modifiers & ~(Modifier.bold | Modifier.dim),
-                );
-              case 23:
-                _currentStyle = Style(
-                  foreground: _currentStyle.foreground,
-                  background: _currentStyle.background,
-                  modifiers: _currentStyle.modifiers & ~Modifier.italic,
-                );
-              case 24:
-                _currentStyle = Style(
-                  foreground: _currentStyle.foreground,
-                  background: _currentStyle.background,
-                  modifiers: _currentStyle.modifiers & ~Modifier.underline,
-                );
-              case 27:
-                _currentStyle = Style(
-                  foreground: _currentStyle.foreground,
-                  background: _currentStyle.background,
-                  modifiers: _currentStyle.modifiers & ~Modifier.reverse,
-                );
-              case 28:
-                _currentStyle = Style(
-                  foreground: _currentStyle.foreground,
-                  background: _currentStyle.background,
-                  modifiers: _currentStyle.modifiers & ~Modifier.hidden,
-                );
-              case 29:
-                _currentStyle = Style(
-                  foreground: _currentStyle.foreground,
-                  background: _currentStyle.background,
-                  modifiers: _currentStyle.modifiers & ~Modifier.crossedOut,
-                );
-              case 39: // Default Foreground
-                _currentStyle = Style(
-                  foreground: null,
-                  background: _currentStyle.background,
-                  modifiers: _currentStyle.modifiers,
-                );
-              case 49: // Default Background
-                _currentStyle = Style(
-                  foreground: _currentStyle.foreground,
-                  background: null,
-                  modifiers: _currentStyle.modifiers,
-                );
-              default:
-                if (code >= 30 && code <= 37) {
-                  _currentStyle = _currentStyle.merge(
-                    Style(foreground: _colorFromAnsi256(code - 30)),
-                  );
-                } else if (code >= 90 && code <= 97) {
-                  _currentStyle = _currentStyle.merge(
-                    Style(foreground: _colorFromAnsi256(code - 90 + 8)),
-                  );
-                } else if (code >= 40 && code <= 47) {
-                  _currentStyle = _currentStyle.merge(
-                    Style(background: _colorFromAnsi256(code - 40)),
-                  );
-                } else if (code >= 100 && code <= 107) {
-                  _currentStyle = _currentStyle.merge(
-                    Style(background: _colorFromAnsi256(code - 100 + 8)),
-                  );
-                }
-            }
-            i++;
-          }
+  void _applySgr(List<int> params) {
+    if (params.isEmpty) {
+      _currentStyle = .empty;
+      return;
+    }
+    var i = 0;
+    while (i < params.length) {
+      final code = params[i];
+      if (code == 38 || code == 48) {
+        final (color, consumed) = _parseExtendedColor(params, i);
+        if (color != null) {
+          _currentStyle = code == 38
+              ? _currentStyle.merge(Style(foreground: color))
+              : _currentStyle.merge(Style(background: color));
         }
+        i += consumed;
+        continue;
+      }
+      _applySingleSgrCode(code);
+      i++;
+    }
+  }
+
+  (Color?, int) _parseExtendedColor(List<int> params, int index) {
+    if (index + 1 >= params.length) return (null, 1);
+    final mode = params[index + 1];
+    if (mode == 5) {
+      if (index + 2 >= params.length) return (null, params.length - index);
+      return (_colorFromAnsi256(params[index + 2]), 3);
+    }
+    if (mode == 2) {
+      if (index + 4 >= params.length) return (null, params.length - index);
+      final r = params[index + 2].clamp(0, 255);
+      final g = params[index + 3].clamp(0, 255);
+      final b = params[index + 4].clamp(0, 255);
+      return (Color(r, g, b), 5);
+    }
+    return (null, 2);
+  }
+
+  void _applySingleSgrCode(int code) {
+    switch (code) {
+      case 0:
+        _currentStyle = .empty;
+      case 1 || 2 || 3 || 4 || 5 || 7 || 8 || 9:
+        _setModifier(_modifierBitForSet(code), enable: true);
+      case 22:
+        _setModifier(Modifier.bold | Modifier.dim, enable: false);
+      case 23 || 24 || 25 || 27 || 28 || 29:
+        _setModifier(_modifierBitForReset(code), enable: false);
+      case 39:
+        _currentStyle = Style(
+          background: _currentStyle.background,
+          modifiers: _currentStyle.modifiers,
+        );
+      case 49:
+        _currentStyle = Style(
+          foreground: _currentStyle.foreground,
+          modifiers: _currentStyle.modifiers,
+        );
+      default:
+        _applyBasicPaletteCode(code);
+    }
+  }
+
+  static int _modifierBitForSet(int code) => switch (code) {
+    1 => Modifier.bold,
+    2 => Modifier.dim,
+    3 => Modifier.italic,
+    4 => Modifier.underline,
+    5 => Modifier.blink,
+    7 => Modifier.reverse,
+    8 => Modifier.hidden,
+    9 => Modifier.crossedOut,
+    _ => Modifier.none,
+  };
+
+  static int _modifierBitForReset(int code) => switch (code) {
+    23 => Modifier.italic,
+    24 => Modifier.underline,
+    25 => Modifier.blink,
+    27 => Modifier.reverse,
+    28 => Modifier.hidden,
+    29 => Modifier.crossedOut,
+    _ => Modifier.none,
+  };
+
+  void _setModifier(int mask, {required bool enable}) {
+    final nextModifiers = enable
+        ? (_currentStyle.modifiers | mask)
+        : (_currentStyle.modifiers & ~mask);
+    _currentStyle = Style(
+      foreground: _currentStyle.foreground,
+      background: _currentStyle.background,
+      modifiers: nextModifiers,
+    );
+  }
+
+  void _applyBasicPaletteCode(int code) {
+    if (code >= 30 && code <= 37) {
+      _currentStyle = _currentStyle.merge(
+        Style(foreground: _colorFromAnsi256(code - 30)),
+      );
+    } else if (code >= 90 && code <= 97) {
+      _currentStyle = _currentStyle.merge(
+        Style(foreground: _colorFromAnsi256(code - 90 + 8)),
+      );
+    } else if (code >= 40 && code <= 47) {
+      _currentStyle = _currentStyle.merge(
+        Style(background: _colorFromAnsi256(code - 40)),
+      );
+    } else if (code >= 100 && code <= 107) {
+      _currentStyle = _currentStyle.merge(
+        Style(background: _colorFromAnsi256(code - 100 + 8)),
+      );
     }
   }
 
@@ -547,60 +591,29 @@ final class VirtualTerminal implements TerminalHandler {
       case 'c': // RIS (Reset to Initial State)
         _resetState(clearScreen: true);
       case '7': // DECSC (Save Cursor)
-        _savedPendingWrap = cursorX >= width;
-        _savedCursorX = math.max(0, math.min(width - 1, cursorX));
-        _savedCursorY = math.max(0, math.min(height - 1, cursorY));
-        _savedStyle = _currentStyle;
+        _saveCursor();
       case '8': // DECRC (Restore Cursor)
-        final restoredX = math.max(0, math.min(width - 1, _savedCursorX));
-        cursorX = (_savedPendingWrap && restoredX == width - 1)
-            ? width
-            : restoredX;
-        cursorY = math.max(0, math.min(height - 1, _savedCursorY));
-        _currentStyle = _savedStyle;
+        _restoreCursor();
     }
   }
 
   Color _colorFromAnsi256(int code) {
     if (code < 0 || code > 255) return Colors.white;
-
-    // Standard 16 colors (0-15)
     if (code < 16) {
-      const List<int> standard = [
-        0x000000,
-        0xAA0000,
-        0x00AA00,
-        0xAAAA00,
-        0x0000AA,
-        0xAA00AA,
-        0x00AAAA,
-        0xAAAAAA,
-        0x555555,
-        0xFF5555,
-        0x55FF55,
-        0xFFFF55,
-        0x5555FF,
-        0xFF55FF,
-        0x55FFFF,
-        0xFFFFFF,
-      ];
-      final rgb = standard[code];
+      final rgb = _ansi16Rgb[code];
       return Color((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
     }
-
-    // 6x6x6 color cube (16-231)
     if (code < 232) {
-      code -= 16;
-      final b = code % 6;
-      final g = (code ~/ 6) % 6;
-      final r = (code ~/ 36) % 6;
-      final rVal = r == 0 ? 0 : r * 40 + 55;
-      final gVal = g == 0 ? 0 : g * 40 + 55;
-      final bVal = b == 0 ? 0 : b * 40 + 55;
-      return Color(rVal, gVal, bVal);
+      final cube = code - 16;
+      final r = (cube ~/ 36) % 6;
+      final g = (cube ~/ 6) % 6;
+      final b = cube % 6;
+      return Color(
+        r == 0 ? 0 : r * 40 + 55,
+        g == 0 ? 0 : g * 40 + 55,
+        b == 0 ? 0 : b * 40 + 55,
+      );
     }
-
-    // Grayscale ramp (232-255)
     final gray = (code - 232) * 10 + 8;
     return Color(gray, gray, gray);
   }
