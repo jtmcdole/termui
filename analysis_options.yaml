@@ -12,6 +12,10 @@
 # The core lints are also what is used by pub.dev for scoring packages.
 
 analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
   exclude:
     - build/**
     - android/**
@@ -26,6 +30,8 @@ include: package:lints/recommended.yaml
 
 linter:
   rules:
+    - avoid_annotating_with_dynamic
+    - avoid_dynamic_calls
     - public_member_api_docs
 
 # analyzer:

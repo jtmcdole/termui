@@ -37,5 +37,12 @@ jobs:
       - name: Verify formatting
         run: dart format --output=none --set-exit-if-changed .
 
+      - name: Ban explicit dynamic types and casts
+        run: |
+          if git grep -n -E '<dynamic>|,[[:space:]]*dynamic>|(^|[^[:alnum:]_])as[[:space:]]+dynamic([^[:alnum:]_]|$)' -- ':(glob)packages/**/*.dart'; then
+            echo "::error::Explicit dynamic type arguments or casts are banned. Use Object? or concrete types."
+            exit 1
+          fi
+
       - name: Analyze project source
         run: dart analyze --fatal-infos
