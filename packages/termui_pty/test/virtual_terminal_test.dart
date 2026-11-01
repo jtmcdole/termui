@@ -376,7 +376,75 @@ void main() {
     );
   });
 
-  group('VirtualTerminal DECTCEM, DECSTBM, DECAWM, and extended SGR', () {
+  group('VirtualTerminal TUI modes: alt screen, DECTCEM, DECSTBM, and DECAWM', () {
+    test(
+      'switches primary and alternate screens (?1049, ?1047, ?47) with independent saved cursors, resize, and resets',
+      () {
+        final terminal = VirtualTerminal(width: 8, height: 3);
+        final red = const Color(170, 0, 0).argb;
+
+        expect(terminal.isUsingAlternateScreen, isFalse);
+
+        // Save primary cursor at (2, 0) with red style, then print more text to (6, 0).
+        terminal.write(utf8.encode('\x1b[31mHI\x1b7\x1b[0m_PRI'));
+        expect(terminal.cursorX, equals(6));
+
+        // Enter ?1049h: saves primary cursor (6, 0), switches to blank alt screen at (0, 0).
+        terminal.write(utf8.encode('\x1b[?1049h'));
+        expect(terminal.isUsingAlternateScreen, isTrue);
+        expect(terminal.cursorX, equals(0));
+        expect(terminal.cursorY, equals(0));
+        expect(terminal.buffer.getCharacter(0, 0), equals(' '));
+
+        // DECSC/DECRC, ?1048h/?1048l, DECSTR, and redundant ?1049h inside alt screen
+        // must not clobber primary saved cursor or wipe active alt buffer.
+        terminal.write(utf8.encode('ALT\x1b[?1048h_MORE\x1b[?1048l'));
+        expect(terminal.cursorX, equals(3));
+        terminal.write(utf8.encode('\x1b[!p\x1b[?1049h'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('A'));
+
+        // Resize while in alt screen resizes both primary and alt buffers and heals clipped wide chars.
+        terminal.write(utf8.encode('\x1b[2;5H🚀'));
+        terminal.resize(5, 4);
+        expect(terminal.buffer.width, equals(5));
+        expect(terminal.buffer.height, equals(4));
+        expect(terminal.buffer.getCharacter(4, 1), equals(' '));
+
+        // Exit ?1049l: restores primary buffer ("HI_PRI") and clamps restored cursor (6 -> 4).
+        terminal.write(utf8.encode('\x1b[?1049l'));
+        expect(terminal.isUsingAlternateScreen, isFalse);
+        expect(terminal.buffer.width, equals(5));
+        expect(terminal.buffer.getCharacter(0, 0), equals('H'));
+        expect(terminal.buffer.getForeground(0, 0), equals(red));
+        expect(terminal.buffer.getCharacter(4, 0), equals('R'));
+        expect(terminal.cursorX, equals(4));
+
+        // ?47h / ?47l and ?1047h / ?1047l switch buffers without saving/restoring cursor,
+        // and RIS (ESC c) inside alt screen returns to cleared primary screen.
+        terminal.write(utf8.encode('\x1b[2;3H\x1b[?47hTUI\x1b[?47l'));
+        expect(terminal.isUsingAlternateScreen, isFalse);
+        expect(terminal.buffer.getCharacter(0, 0), equals('H'));
+
+        terminal.write(utf8.encode('\x1b[?1047hALT2\x1bc'));
+        expect(terminal.isUsingAlternateScreen, isFalse);
+        expect(terminal.buffer.getCharacter(0, 0), equals(' '));
+
+        // Transparent terminal keeps Modifier.transparent on alternate screen too,
+        // and inverted DECSTBM on a 1-row terminal is rejected without homing cursor.
+        final transparent = VirtualTerminal(
+          width: 4,
+          height: 1,
+          transparentBackground: true,
+        );
+        transparent.write(utf8.encode('\x1b[?1049hAB\x1b[4;2r'));
+        expect(transparent.cursorX, equals(2));
+        expect(
+          transparent.buffer.getModifiers(3, 0),
+          equals(Modifier.transparent),
+        );
+      },
+    );
+
     test(
       'tracks DECTCEM (?25h / ?25l) cursorVisible and restores visibility on DECSTR, RIS, and reset()',
       () {

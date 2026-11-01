@@ -8,8 +8,9 @@ import 'ansi_parser.dart';
 
 typedef _SavedCursor = ({int x, int y, Style style, bool pendingWrap});
 
-/// A virtual terminal that maintains a screen buffer and cursor state,
-/// mutating them in response to ANSI escape sequences.
+/// A virtual terminal that maintains primary and alternate screen buffers,
+/// cursor state, scroll margins, and terminal modes in response to ANSI/VT100
+/// escape sequences.
 final class VirtualTerminal implements TerminalHandler {
   static const List<int> _ansi16Rgb = [
     0x000000,
@@ -43,10 +44,20 @@ final class VirtualTerminal implements TerminalHandler {
   /// The height of the virtual terminal in rows.
   int height;
 
-  final Buffer _buffer;
+  final Buffer _primaryBuffer;
+  Buffer? _altBuffer;
+  bool _usingAltScreen = false;
 
-  /// The underlying screen buffer of this terminal.
-  Buffer get buffer => _buffer;
+  /// The active screen buffer (primary or alternate screen).
+  ///
+  /// The returned [Buffer] switches between the primary and alternate buffers
+  /// across `?47`, `?1047`, and `?1049` transitions, so callers should read
+  /// [buffer] on each frame rather than caching it across writes.
+  Buffer get buffer =>
+      _usingAltScreen ? (_altBuffer ?? _primaryBuffer) : _primaryBuffer;
+
+  /// Whether the alternate screen buffer (`?47`, `?1047`, or `?1049`) is active.
+  bool get isUsingAlternateScreen => _usingAltScreen;
 
   /// The 0-indexed X coordinate of the cursor (`cursorX == width` indicates
   /// right-margin pending wrap when [autoWrapMode] is `true`).
@@ -68,7 +79,8 @@ final class VirtualTerminal implements TerminalHandler {
   int _scrollTop = 0;
   int _scrollBottom;
   Style _currentStyle = .empty;
-  _SavedCursor _savedCursor = _initialSavedCursor;
+  _SavedCursor _savedPrimary = _initialSavedCursor;
+  _SavedCursor _savedAlt = _initialSavedCursor;
   late AnsiParser _parser;
   late ByteConversionSink _utf8Sink;
 
@@ -95,7 +107,7 @@ final class VirtualTerminal implements TerminalHandler {
   }) : width = math.max(1, width),
        height = math.max(1, height),
        _scrollBottom = math.max(1, height) - 1,
-       _buffer = _createBuffer(
+       _primaryBuffer = _createBuffer(
          math.max(1, width),
          math.max(1, height),
          transparent: transparentBackground,
@@ -107,6 +119,9 @@ final class VirtualTerminal implements TerminalHandler {
       transparent
       ? Buffer(w, h, defaultBlend: false)
       : Buffer.blank(w, h, defaultBlend: false);
+
+  Buffer _newBuffer(int w, int h) =>
+      _createBuffer(w, h, transparent: transparentBackground);
 
   void _initParser() {
     _parser = AnsiParser(this);
@@ -137,31 +152,39 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
-  /// Resets the terminal to its initial power-on state, clearing the screen,
-  /// resetting cursor/SGR/mouse state, and discarding partial UTF-8 or escape
-  /// sequences.
+  /// Resets the terminal to its initial power-on state, exiting alternate
+  /// screen, clearing the primary screen, resetting cursor/SGR/mode state, and
+  /// discarding partial UTF-8 or escape sequences.
   void reset() {
     _utf8Sink.close();
     _initParser();
-    _resetState(clearScreen: true);
+    _resetState(fullReset: true);
     _notifyListeners();
   }
 
-  void _resetState({required bool clearScreen}) {
+  void _resetState({required bool fullReset}) {
     _currentStyle = .empty;
     _cursorVisible = true;
     _autoWrap = true;
-    _savedCursor = _initialSavedCursor;
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
     _scrollTop = 0;
     _scrollBottom = height - 1;
-    if (clearScreen) {
+    if (fullReset) {
+      _savedPrimary = _initialSavedCursor;
+      _savedAlt = _initialSavedCursor;
+      _usingAltScreen = false;
+      _altBuffer = null;
       cursorX = 0;
       cursorY = 0;
       final (fg, bg, mod) = _eraseAttributes();
-      _buffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
+      _primaryBuffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
     } else {
+      if (_usingAltScreen) {
+        _savedAlt = _initialSavedCursor;
+      } else {
+        _savedPrimary = _initialSavedCursor;
+      }
       _clampPendingWrap();
     }
   }
@@ -172,18 +195,36 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
-  /// Resizes the virtual terminal to the new [newWidth] and [newHeight].
+  /// Resizes the virtual terminal (both primary and active alternate buffers)
+  /// to [newWidth] by [newHeight].
   void resize(int newWidth, int newHeight) {
     final clampedWidth = math.max(1, newWidth);
     final clampedHeight = math.max(1, newHeight);
     if (clampedWidth == width && clampedHeight == height) return;
-    _buffer.resize(clampedWidth, clampedHeight);
+    final shrunkHorizontally = clampedWidth < width;
+    _primaryBuffer.resize(clampedWidth, clampedHeight);
+    if (shrunkHorizontally) _healRightEdgeWideGraphemes(_primaryBuffer);
+    final alt = _altBuffer;
+    if (alt != null) {
+      alt.resize(clampedWidth, clampedHeight);
+      if (shrunkHorizontally) _healRightEdgeWideGraphemes(alt);
+    }
     width = clampedWidth;
     height = clampedHeight;
     _scrollTop = 0;
     _scrollBottom = height - 1;
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
+  }
+
+  void _healRightEdgeWideGraphemes(Buffer buf) {
+    final rightCol = buf.width - 1;
+    for (var y = 0; y < buf.height; y++) {
+      final cellIdx = y * buf.width + rightCol;
+      if (isWideGrapheme(buf.characters[cellIdx])) {
+        _resetSplitCell(buf, cellIdx);
+      }
+    }
   }
 
   void _resetSplitCell(Buffer buf, int cellIdx) {
@@ -476,6 +517,12 @@ final class VirtualTerminal implements TerminalHandler {
         if (!enable) _clampPendingWrap();
       case 25: // DECTCEM (Text Cursor Enable Mode)
         _cursorVisible = enable;
+      case 47 || 1047: // Alternate Screen Buffer
+        _switchAlternateScreen(enable, saveRestoreCursor: false);
+      case 1048: // Save / Restore Cursor (DECSC / DECRC)
+        enable ? _saveCursor() : _restoreCursor();
+      case 1049: // Save Cursor + Alternate Screen Buffer
+        _switchAlternateScreen(enable, saveRestoreCursor: true);
       case 1000 || 1002 || 1003:
         mouseTrackingEnabled = enable;
       case 1006:
@@ -483,22 +530,56 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
+  void _switchAlternateScreen(bool enable, {required bool saveRestoreCursor}) {
+    if (enable && !_usingAltScreen) {
+      if (saveRestoreCursor) _saveCursor();
+      _altBuffer = _newBuffer(width, height);
+      _usingAltScreen = true;
+      _scrollTop = 0;
+      _scrollBottom = height - 1;
+      if (saveRestoreCursor) {
+        cursorX = 0;
+        cursorY = 0;
+      } else {
+        _clampPendingWrap();
+      }
+      return;
+    }
+    if (!enable && _usingAltScreen) {
+      _usingAltScreen = false;
+      _altBuffer = null;
+      _scrollTop = 0;
+      _scrollBottom = height - 1;
+      if (saveRestoreCursor) {
+        _restoreCursor();
+      } else {
+        _clampPendingWrap();
+      }
+    }
+  }
+
   void _saveCursor() {
-    _savedCursor = (
+    final snapshot = (
       x: cursorX.clamp(0, width - 1),
       y: cursorY.clamp(0, height - 1),
       style: _currentStyle,
       pendingWrap: cursorX >= width,
     );
+    if (_usingAltScreen) {
+      _savedAlt = snapshot;
+    } else {
+      _savedPrimary = snapshot;
+    }
   }
 
   void _restoreCursor() {
-    final restoredX = _savedCursor.x.clamp(0, width - 1);
-    cursorX = (_savedCursor.pendingWrap && _autoWrap && restoredX == width - 1)
+    final saved = _usingAltScreen ? _savedAlt : _savedPrimary;
+    final restoredX = saved.x.clamp(0, width - 1);
+    cursorX = (saved.pendingWrap && _autoWrap && restoredX == width - 1)
         ? width
         : restoredX;
-    cursorY = _savedCursor.y.clamp(0, height - 1);
-    _currentStyle = _savedCursor.style;
+    cursorY = saved.y.clamp(0, height - 1);
+    _currentStyle = saved.style;
   }
 
   @override
@@ -507,7 +588,7 @@ final class VirtualTerminal implements TerminalHandler {
       if (intermediate == '?') {
         _handleDecPrivateMode(command, params);
       } else if (intermediate == '!' && command == 'p') {
-        _resetState(clearScreen: false);
+        _resetState(fullReset: false);
       }
       return;
     }
@@ -782,7 +863,7 @@ final class VirtualTerminal implements TerminalHandler {
   void esc(String command) {
     switch (command) {
       case 'c': // RIS (Reset to Initial State)
-        _resetState(clearScreen: true);
+        _resetState(fullReset: true);
       case '7': // DECSC (Save Cursor)
         _saveCursor();
       case '8': // DECRC (Restore Cursor)
