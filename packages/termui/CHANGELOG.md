@@ -1,3 +1,15 @@
+## 0.12.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**(termui): remove `dynamic` casts and raw types in examples and tests.
+ - **BREAKING** **REFACTOR**(termui): replace `dynamic` with `Object?` across core library.
+ - **BREAKING** **FIX**(core): cancel dismissible showDialog on Escape and keep barrier unfocused.
+ - **BREAKING** **FIX**(core): preserve modal focus and cancel pointer capture on mouse press.
+ - **BREAKING** **FIX**(buffer): replace stale cell colors on unstyled writes and BCE erases.
+ - **BREAKING** **FIX**(pty2): spawn Unix PTYs in C native asset to stop fork deadlocks.
+ - **BREAKING** **FEAT**(termui): add TextField.obscureText and redact character traces.
+
 ## 0.11.0
 
 > Note: This release has breaking changes.

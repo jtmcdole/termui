@@ -1,3 +1,9 @@
+## 0.3.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+
 ## 0.2.1
 
  - Update a dependency to the latest release.

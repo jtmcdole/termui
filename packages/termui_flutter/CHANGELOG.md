@@ -1,3 +1,10 @@
+## 0.9.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(pty2): spawn Unix PTYs in C native asset to stop fork deadlocks.
+
 ## 0.8.8
 
  - Update a dependency to the latest release.

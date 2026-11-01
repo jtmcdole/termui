@@ -3,6 +3,80 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-01
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`pty2` - `v0.6.0`](#pty2---v060)
+ - [`termui` - `v0.12.0`](#termui---v0120)
+ - [`termui_audio` - `v0.3.0`](#termui_audio---v030)
+ - [`termui_flutter` - `v0.9.0`](#termui_flutter---v090)
+ - [`termui_pty` - `v0.6.0`](#termui_pty---v060)
+ - [`termui_recorder` - `v0.9.0`](#termui_recorder---v090)
+ - [`termui_test` - `v0.3.0`](#termui_test---v030)
+
+Packages with other changes:
+
+ - [`termui_hotreload` - `v0.6.25`](#termui_hotreload---v0625)
+ - [`termui_tinpot` - `v0.3.10`](#termui_tinpot---v0310)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_hotreload` - `v0.6.25`
+ - `termui_tinpot` - `v0.3.10`
+
+---
+
+#### `pty2` - `v0.6.0`
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(pty2): spawn Unix PTYs in C native asset to stop fork deadlocks.
+
+#### `termui` - `v0.12.0`
+
+ - **REFACTOR**(termui): remove `dynamic` casts and raw types in examples and tests.
+ - **BREAKING** **REFACTOR**(termui): replace `dynamic` with `Object?` across core library.
+ - **BREAKING** **FIX**(core): cancel dismissible showDialog on Escape and keep barrier unfocused.
+ - **BREAKING** **FIX**(core): preserve modal focus and cancel pointer capture on mouse press.
+ - **BREAKING** **FIX**(buffer): replace stale cell colors on unstyled writes and BCE erases.
+ - **BREAKING** **FIX**(pty2): spawn Unix PTYs in C native asset to stop fork deadlocks.
+ - **BREAKING** **FEAT**(termui): add TextField.obscureText and redact character traces.
+
+#### `termui_audio` - `v0.3.0`
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+
+#### `termui_flutter` - `v0.9.0`
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(pty2): spawn Unix PTYs in C native asset to stop fork deadlocks.
+
+#### `termui_pty` - `v0.6.0`
+
+ - **FIX**(pty): decompose VirtualTerminal helpers and fix SGR 5/25 and 38/48.
+ - **FIX**(pty): support RIS/DECSTR resets, DECSC/DECRC, CHA/VPA/ECH, and CSI intermediate guards.
+ - **FEAT**(pty): add DECSTBM scroll regions and line/character editing.
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(buffer): replace stale cell colors on unstyled writes and BCE erases.
+ - **BREAKING** **FEAT**(pty): add alternate screen buffers (?47, ?1047, ?1048, ?1049).
+ - **BREAKING** **FEAT**(pty): add DECTCEM (?25), DECAWM (?7), and right-margin wrap fixes.
+
+#### `termui_recorder` - `v0.9.0`
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+ - **BREAKING** **FIX**(buffer): replace stale cell colors on unstyled writes and BCE erases.
+
+#### `termui_test` - `v0.3.0`
+
+ - **BREAKING** **REFACTOR**: replace `dynamic` and raw types across workspace packages.
+
+
 ## 2026-10-22
 
 ### Changes
