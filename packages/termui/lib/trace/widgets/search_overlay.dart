@@ -245,7 +245,7 @@ class SearchOverlayState extends State<SearchOverlay> {
 
       // Yield to event loop every 5000 elements to keep UI perfectly responsive
       if (++count % 5000 == 0) {
-        await Future.delayed(Duration.zero);
+        await Future<void>.delayed(Duration.zero);
       }
     }
 

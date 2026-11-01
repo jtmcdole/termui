@@ -169,10 +169,10 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
       };
 
   /// Static hook called when a prompt runner starts running.
-  static void Function(PromptRunner<dynamic> runner)? onPromptStarted;
+  static void Function(PromptRunner<Object?> runner)? onPromptStarted;
 
   /// Static hook called when a prompt runner ends/disposes.
-  static void Function(PromptRunner<dynamic> runner)? onPromptEnded;
+  static void Function(PromptRunner<Object?> runner)? onPromptEnded;
 
   static final Set<FocusScopeNode> _activeRootScopes = {};
 
@@ -564,7 +564,7 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
               completer.complete(null);
             }
           },
-          onError: (e, stack) {
+          onError: (Object e, StackTrace stack) {
             if (!completer.isCompleted) {
               completer.completeError(e, stack);
             }

@@ -15,7 +15,7 @@ class DragTarget<T> extends Widget {
   final Widget Function(
     BuildContext context,
     List<T> candidateData,
-    List<dynamic> rejectedData,
+    List<Object?> rejectedData,
   )
   builder;
 
@@ -56,7 +56,7 @@ class DragTarget<T> extends Widget {
 /// The element that manages the candidate list and lifecycle hooks for [DragTarget].
 class DragTargetElement<T> extends SingleChildElement {
   final List<T> _candidateData = [];
-  final List<dynamic> _rejectedData = [];
+  final List<Object?> _rejectedData = [];
 
   /// Creates a [DragTargetElement].
   DragTargetElement(DragTarget<T> super.widget);

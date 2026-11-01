@@ -23,11 +23,14 @@ class MenuItem extends Interactive {
   /// The local position of this menu item within the menu.
   Point<int> position;
 
-  final Function()? _onEnter;
+  final void Function()? _onEnter;
 
   /// Creates a new [MenuItem].
-  MenuItem({required this.item, required this.position, Function()? onActivate})
-    : _onEnter = onActivate;
+  MenuItem({
+    required this.item,
+    required this.position,
+    void Function()? onActivate,
+  }) : _onEnter = onActivate;
 
   @override
   void onActive() {}

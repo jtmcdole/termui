@@ -25,10 +25,10 @@ class TraceEvent {
     required this.args,
   });
 
-  factory TraceEvent.fromJson(Map<String, dynamic> json) {
+  factory TraceEvent.fromJson(Map<String, Object?> json) {
     final argsRaw = json['args'] ?? json['metadata'];
     final Map<String, String> parsedArgs = {};
-    if (argsRaw is Map) {
+    if (argsRaw is Map<Object?, Object?>) {
       argsRaw.forEach((k, v) {
         parsedArgs['$k'] = jsonEncode(v);
       });
@@ -244,9 +244,9 @@ Future<Map<String, Object>?> parseTraceFile(String path) async {
       content = file.readAsStringSync();
     }
 
-    final jsonList = jsonDecode(content) as List<dynamic>;
+    final jsonList = jsonDecode(content) as List<Object?>;
     final events = [
-      for (final e in jsonList) TraceEvent.fromJson(e as Map<String, dynamic>),
+      for (final e in jsonList) TraceEvent.fromJson(e as Map<String, Object?>),
     ];
 
     int baseTime = 0;

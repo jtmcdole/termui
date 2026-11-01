@@ -290,8 +290,8 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
 }
 
 class _TreeWidgetRenderWidget extends Widget {
-  final TreeWidget widget;
-  final TreeWidgetState state;
+  final TreeWidget<Object?> widget;
+  final TreeWidgetState<Object?> state;
   final bool focused;
 
   const _TreeWidgetRenderWidget({

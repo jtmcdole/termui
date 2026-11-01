@@ -565,7 +565,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
         .then((_) {
           TraceLogger.info('TraceViewerApp', 'runner.run() completed normally');
         })
-        .catchError((e, s) {
+        .catchError((Object e, StackTrace s) {
           TraceLogger.error('TraceViewerApp', 'runner.run() threw error', e, s);
         });
   }
@@ -675,7 +675,7 @@ class _TraceViewerAppState extends State<TraceViewerApp>
   }
 
   void _exportSelection(String filename, List<TraceSpan> overlappingSpans) {
-    final exportedEvents = <Map<String, dynamic>>[];
+    final exportedEvents = <Map<String, Object?>>[];
     for (final span in overlappingSpans) {
       // Emit Begin Event
       exportedEvents.add({

@@ -81,7 +81,7 @@ class IoTerminalBackend implements TerminalBackend {
   Stream<Point<int>> watchSize() {
     late StreamController<Point<int>> controller;
     Timer? timer;
-    StreamSubscription? sigwinchSubscription;
+    StreamSubscription<ProcessSignal>? sigwinchSubscription;
 
     controller = StreamController<Point<int>>(
       onListen: () {

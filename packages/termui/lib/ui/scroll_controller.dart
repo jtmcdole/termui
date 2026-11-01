@@ -64,7 +64,7 @@ class DiscreteScrollController {
 
   /// Notify all registered listeners.
   void notifyListeners() {
-    for (final listener in List.from(_listeners)) {
+    for (final listener in [..._listeners]) {
       listener();
     }
   }
