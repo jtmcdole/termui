@@ -5,9 +5,10 @@ import 'dart:ffi';
 import 'dart:math';
 
 import 'package:ffi/ffi.dart';
+import 'package:termui/src/terminal/windows_console_input.dart';
+import 'package:win32/win32.dart';
 
 import 'terminal.dart';
-import 'package:win32/win32.dart';
 
 class WindowsTerminal implements Terminal {
   WindowsTerminal() {
@@ -27,14 +28,8 @@ class WindowsTerminal implements Terminal {
     try {
       if (GetConsoleMode(inputHandle, pInMode).value) {
         _origInputMode ??= pInMode.value;
-        final dwInMode =
-            (pInMode.value &
-                ~(ENABLE_ECHO_INPUT |
-                    ENABLE_PROCESSED_INPUT |
-                    ENABLE_LINE_INPUT |
-                    ENABLE_WINDOW_INPUT)) |
-            ENABLE_VIRTUAL_TERMINAL_INPUT;
-        SetConsoleMode(inputHandle, CONSOLE_MODE(dwInMode));
+        final dwInMode = configureWindowsRawInputMode(pInMode.value);
+        SetConsoleMode(inputHandle, dwInMode);
       }
       if (GetConsoleMode(outputHandle, pOutMode).value) {
         _origOutputMode ??= pOutMode.value;
@@ -49,12 +44,13 @@ class WindowsTerminal implements Terminal {
 
   @override
   void disableRawMode() {
-    if (_origInputMode != null) {
-      SetConsoleMode(inputHandle, CONSOLE_MODE(_origInputMode!));
+    if (_origInputMode case final origInputMode?) {
+      final restoreMode = configureWindowsRestoreInputMode(origInputMode);
+      SetConsoleMode(inputHandle, restoreMode);
       _origInputMode = null;
     }
-    if (_origOutputMode != null) {
-      SetConsoleMode(outputHandle, CONSOLE_MODE(_origOutputMode!));
+    if (_origOutputMode case final origOutputMode?) {
+      SetConsoleMode(outputHandle, CONSOLE_MODE(origOutputMode));
       _origOutputMode = null;
     }
   }
