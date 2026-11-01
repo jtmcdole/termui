@@ -197,7 +197,7 @@ class SceneManager implements Reassemblable {
       _traceKeyEventId,
       Phase.begin,
       TraceCategory.events,
-      metadata: {'key': event.logicalKey},
+      metadata: {'key': event.traceKey},
     );
     try {
       if (debugToggleKey != null && event == debugToggleKey) {

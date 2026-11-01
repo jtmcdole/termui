@@ -165,6 +165,21 @@ final class KeyEvent extends InputEvent {
     return '${mods.join('+')}+$baseKey';
   }
 
+  /// Returns a redacted key label safe for performance trace metadata.
+  ///
+  /// Redacts [KeyType.character] events without [Modifier.control],
+  /// [Modifier.alt], or [Modifier.meta] as `'Character'` so typed or pasted
+  /// text is never persisted into trace logs.
+  String get traceKey {
+    if (type == KeyType.character &&
+        !modifiers.contains(Modifier.control) &&
+        !modifiers.contains(Modifier.alt) &&
+        !modifiers.contains(Modifier.meta)) {
+      return 'Character';
+    }
+    return logicalKey;
+  }
+
   @override
   String toString() => 'KeyEvent($key, type: $type, modifiers: $modifiers)';
 }
