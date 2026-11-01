@@ -1,3 +1,7 @@
+## 0.9.1
+
+ - **FIX**(examples): remove corrupt 404 HTML NotoSansBraille-Regular.ttf asset.
+
 ## 0.9.0
 
 > Note: This release has breaking changes.

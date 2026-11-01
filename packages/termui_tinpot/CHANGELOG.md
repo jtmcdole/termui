@@ -1,3 +1,7 @@
+## 0.3.11
+
+ - **FIX**(examples): remove corrupt 404 HTML NotoSansBraille-Regular.ttf asset.
+
 ## 0.3.10
 
  - Update a dependency to the latest release.

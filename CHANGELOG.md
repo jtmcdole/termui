@@ -11,6 +11,37 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.9.1`](#termui_flutter---v091)
+ - [`termui_pty` - `v0.6.1`](#termui_pty---v061)
+ - [`termui_tinpot` - `v0.3.11`](#termui_tinpot---v0311)
+
+---
+
+#### `termui_flutter` - `v0.9.1`
+
+ - **FIX**(examples): remove corrupt 404 HTML NotoSansBraille-Regular.ttf asset.
+
+#### `termui_pty` - `v0.6.1`
+
+ - **FEAT**(termui_pty): encode Shift+Tab, C0 punctuation, and mouse bounds in InputEncoder.
+
+#### `termui_tinpot` - `v0.3.11`
+
+ - **FIX**(examples): remove corrupt 404 HTML NotoSansBraille-Regular.ttf asset.
+
+
+## 2026-11-01
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`pty2` - `v0.6.0`](#pty2---v060)
  - [`termui` - `v0.12.0`](#termui---v0120)
  - [`termui_audio` - `v0.3.0`](#termui_audio---v030)

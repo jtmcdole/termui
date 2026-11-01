@@ -1,3 +1,7 @@
+## 0.6.1
+
+ - **FEAT**(termui_pty): encode Shift+Tab, C0 punctuation, and mouse bounds in InputEncoder.
+
 ## 0.6.0
 
 > Note: This release has breaking changes.
