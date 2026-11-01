@@ -11,126 +11,91 @@ abstract final class InputEncoder {
     _ => '',
   };
 
-  static String _encodeKeyEvent(ev.KeyEvent event) {
-    if (event.type == ev.KeyType.character) {
-      var char = event.key;
+  static String _encodeKeyEvent(ev.KeyEvent event) => switch (event.type) {
+    ev.KeyType.character => _encodeCharacterKey(event),
+    ev.KeyType.up => '\x1b[A',
+    ev.KeyType.down => '\x1b[B',
+    ev.KeyType.right => '\x1b[C',
+    ev.KeyType.left => '\x1b[D',
+    ev.KeyType.enter => '\r',
+    ev.KeyType.backspace => '\x7f',
+    ev.KeyType.tab
+        when event.modifiers.contains(ev.Modifier.shift) ||
+            event.key == 'backtab' =>
+      '\x1b[Z',
+    ev.KeyType.tab => '\t',
+    ev.KeyType.escape => '\x1b',
+    ev.KeyType.home => '\x1b[H',
+    ev.KeyType.end => '\x1b[F',
+    ev.KeyType.pageUp => '\x1b[5~',
+    ev.KeyType.pageDown => '\x1b[6~',
+    ev.KeyType.delete => '\x1b[3~',
+    ev.KeyType.insert => '\x1b[2~',
+    ev.KeyType.f1 => '\x1bOP',
+    ev.KeyType.f2 => '\x1bOQ',
+    ev.KeyType.f3 => '\x1bOR',
+    ev.KeyType.f4 => '\x1bOS',
+    ev.KeyType.f5 => '\x1b[15~',
+    ev.KeyType.f6 => '\x1b[17~',
+    ev.KeyType.f7 => '\x1b[18~',
+    ev.KeyType.f8 => '\x1b[19~',
+    ev.KeyType.f9 => '\x1b[20~',
+    ev.KeyType.f10 => '\x1b[21~',
+    ev.KeyType.f11 => '\x1b[23~',
+    ev.KeyType.f12 => '\x1b[24~',
+  };
 
-      if (event.modifiers.contains(ev.Modifier.control)) {
-        if (char.isNotEmpty) {
-          final code = char.codeUnitAt(0);
-          // Map a-z (97-122) to ^A-^Z (1-26)
-          if (code >= 97 && code <= 122) {
-            return String.fromCharCode(code - 96);
-          }
-          // Map A-Z (65-90) to ^A-^Z (1-26)
-          if (code >= 65 && code <= 90) {
-            return String.fromCharCode(code - 64);
-          }
-        }
-      }
-
-      if (event.modifiers.contains(ev.Modifier.alt)) {
-        // Alt prefixes with ESC
-        return '\x1b$char';
-      }
-
-      return char;
+  static String _encodeCharacterKey(ev.KeyEvent event) {
+    var out = event.key;
+    if (event.modifiers.contains(ev.Modifier.control) && out.length == 1) {
+      out = _encodeControlChar(out) ?? out;
     }
-
-    switch (event.type) {
-      case ev.KeyType.up:
-        return '\x1b[A';
-      case ev.KeyType.down:
-        return '\x1b[B';
-      case ev.KeyType.right:
-        return '\x1b[C';
-      case ev.KeyType.left:
-        return '\x1b[D';
-      case ev.KeyType.enter:
-        return '\r';
-      case ev.KeyType.backspace:
-        return '\x7f';
-      case ev.KeyType.tab:
-        return '\t';
-      case ev.KeyType.escape:
-        return '\x1b';
-      case ev.KeyType.home:
-        return '\x1b[H';
-      case ev.KeyType.end:
-        return '\x1b[F';
-      case ev.KeyType.pageUp:
-        return '\x1b[5~';
-      case ev.KeyType.pageDown:
-        return '\x1b[6~';
-      case ev.KeyType.delete:
-        return '\x1b[3~';
-      case ev.KeyType.insert:
-        return '\x1b[2~';
-      case ev.KeyType.f1:
-        return '\x1bOP';
-      case ev.KeyType.f2:
-        return '\x1bOQ';
-      case ev.KeyType.f3:
-        return '\x1bOR';
-      case ev.KeyType.f4:
-        return '\x1bOS';
-      case ev.KeyType.f5:
-        return '\x1b[15~';
-      case ev.KeyType.f6:
-        return '\x1b[17~';
-      case ev.KeyType.f7:
-        return '\x1b[18~';
-      case ev.KeyType.f8:
-        return '\x1b[19~';
-      case ev.KeyType.f9:
-        return '\x1b[20~';
-      case ev.KeyType.f10:
-        return '\x1b[21~';
-      case ev.KeyType.f11:
-        return '\x1b[23~';
-      case ev.KeyType.f12:
-        return '\x1b[24~';
-      default:
-        return '';
+    if (event.modifiers.contains(ev.Modifier.alt) && out.isNotEmpty) {
+      return '\x1b$out';
     }
+    return out;
+  }
+
+  static String? _encodeControlChar(String char) {
+    final code = char.codeUnitAt(0);
+    if (code >= 97 && code <= 122) return String.fromCharCode(code - 96);
+    if (code >= 65 && code <= 90) return String.fromCharCode(code - 64);
+    return switch (char) {
+      '@' || '2' || ' ' => '\x00',
+      '[' => '\x1b',
+      r'\' => '\x1c',
+      ']' => '\x1d',
+      '^' || '6' => '\x1e',
+      '_' || '-' || '/' => '\x1f',
+      '?' => '\x7f',
+      _ => null,
+    };
   }
 
   static String _encodeMouseEvent(ev.MouseEvent event) {
-    int cb = 0;
+    if (event.x < 1 || event.y < 1) return '';
 
-    // Mouse movement adds 32
+    var cb = switch (event.button) {
+      ev.MouseButton.left => 0,
+      ev.MouseButton.middle => 1,
+      ev.MouseButton.right => 2,
+      ev.MouseButton.none => 3,
+      ev.MouseButton.wheelUp => 64,
+      ev.MouseButton.wheelDown => 65,
+    };
+
     if (event.type == ev.MouseEventType.move ||
         event.type == ev.MouseEventType.drag) {
       cb |= 32;
     }
-
-    switch (event.button) {
-      case ev.MouseButton.left:
-        break;
-      case ev.MouseButton.middle:
-        cb |= 1;
-        break;
-      case ev.MouseButton.right:
-        cb |= 2;
-        break;
-      case ev.MouseButton.none:
-        cb |= 3;
-        break;
-      case ev.MouseButton.wheelUp:
-        cb |= 64;
-        break;
-      case ev.MouseButton.wheelDown:
-        cb |= 65;
-        break;
-    }
-
     if (event.modifiers.contains(ev.Modifier.shift)) cb |= 4;
-    if (event.modifiers.contains(ev.Modifier.meta)) cb |= 8;
+    if (event.modifiers.contains(ev.Modifier.alt) ||
+        event.modifiers.contains(ev.Modifier.meta)) {
+      cb |= 8;
+    }
     if (event.modifiers.contains(ev.Modifier.control)) cb |= 16;
 
     final release = event.type == ev.MouseEventType.release ? 'm' : 'M';
-
-    // SGR Mouse format
     return '\x1b[<$cb;${event.x};${event.y}$release';
   }
 }
