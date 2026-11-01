@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:termui/termui.dart';
@@ -40,6 +41,95 @@ class _TestButtonElement extends Element implements MouseEventHandler {
       (widget as TestButton).onPressed();
     }
   }
+}
+
+typedef _TwoLayerSceneBody =
+    Future<void> Function(
+      TerminalTester tester,
+      SceneManager sceneManager,
+      SceneLayer layerA,
+      SceneLayer layerB,
+    );
+
+void _runTwoLayerScene({
+  required Widget Function(
+    SceneManager sceneManager,
+    SceneLayer Function() getLayerB,
+  )
+  buildLayerB,
+  required _TwoLayerSceneBody body,
+  bool layerBInitiallyFocused = false,
+  bool layerBDraggable = false,
+  bool layerBResizable = false,
+  int layerBWidth = 14,
+  int layerBHeight = 1,
+  void Function()? onLayerAFocus,
+  void Function(SceneManager sceneManager, SceneLayer layerB)? onLayerBFocus,
+}) {
+  final tester = TerminalTester(size: const Point(60, 20));
+  tester.run(() async {
+    final sceneManager = SceneManager(
+      tester.terminal,
+      renderingMode: .alternateScreen,
+    );
+    addTearDown(sceneManager.dispose);
+
+    late final SceneLayer layerB;
+    final runnerA = PromptRunner<void>(
+      terminal: tester.terminal,
+      widget: const SizedBox(width: 12, height: 1, child: Text('Layer A')),
+      alternateScreen: false,
+      mode: .managed,
+      onFramePainted: (_) => sceneManager.render(),
+    );
+    final runnerB = PromptRunner<void>(
+      terminal: tester.terminal,
+      widget: buildLayerB(sceneManager, () => layerB),
+      alternateScreen: false,
+      mode: .managed,
+      onFramePainted: (_) => sceneManager.render(),
+    );
+
+    final layerA = SceneLayer(
+      renderer: runnerA,
+      sizing: .fixed,
+      x: 0,
+      y: 0,
+      width: 12,
+      height: 1,
+      onFocus: onLayerAFocus,
+    );
+    layerB = SceneLayer(
+      renderer: runnerB,
+      sizing: .fixed,
+      x: 0,
+      y: 2,
+      width: layerBWidth,
+      height: layerBHeight,
+      draggable: layerBDraggable,
+      resizable: layerBResizable,
+      onFocus: onLayerBFocus == null
+          ? null
+          : () => onLayerBFocus(sceneManager, layerB),
+    );
+    sceneManager.layers.add(layerA);
+    sceneManager.layers.add(layerB);
+    sceneManager.focusedLayer = layerA;
+    if (layerBInitiallyFocused) {
+      sceneManager.focusedLayer = layerB;
+    }
+
+    unawaited(runnerA.run());
+    await tester.runPrompt(runnerB, () async {
+      try {
+        await tester.pump();
+        await body(tester, sceneManager, layerA, layerB);
+      } finally {
+        runnerA.dispose();
+        runnerB.dispose();
+      }
+    });
+  });
 }
 
 void main() {
@@ -478,6 +568,351 @@ void main() {
 
           sceneManager.dispose();
         });
+      },
+    );
+
+    test(
+      'showDialog opened inside unfocused layer press focuses modal, defers onFocus until dismissal, and restores keyboard delivery',
+      () {
+        final modalController = TextEditingController();
+        final layerBFocusNode = FocusNode(id: 'layer_b_focus');
+        addTearDown(layerBFocusNode.dispose);
+        final layerBKeys = <String>[];
+        var layerAFocusCalls = 0;
+        var layerBFocusCalls = 0;
+
+        _runTwoLayerScene(
+          layerBDraggable: true,
+          onLayerAFocus: () => layerAFocusCalls++,
+          onLayerBFocus: (_, _) {
+            layerBFocusCalls++;
+            layerBFocusNode.requestFocus();
+          },
+          buildLayerB: (sceneManager, _) => KeyboardListener(
+            focusNode: layerBFocusNode,
+            onKeyEvent: (event) {
+              if (event.type == .character) {
+                layerBKeys.add(event.key);
+                return true;
+              }
+              return false;
+            },
+            child: Button(
+              text: 'Open Modal',
+              onPressed: () {
+                unawaited(
+                  sceneManager.showDialog<String>(
+                    width: 30,
+                    height: 6,
+                    builder: (_) =>
+                        TextField(controller: modalController, focused: true),
+                  ),
+                );
+              },
+            ),
+          ),
+          body: (tester, sceneManager, layerA, layerB) async {
+            expect(sceneManager.focusedLayer, same(layerA));
+
+            tester.mouseDown(2, 3);
+            tester.mouseMove(6, 5);
+            tester.mouseUp(6, 5);
+            await tester.pump();
+
+            expect(sceneManager.layers, hasLength(4));
+            final dialogLayer = sceneManager.layers.last;
+            expect(sceneManager.focusedLayer, same(dialogLayer));
+            expect(layerB.x, equals(0));
+            expect(layerB.y, equals(2));
+            expect(layerBFocusCalls, equals(0));
+
+            tester.sendString('ok');
+            await tester.pump();
+            expect(modalController.value.text, equals('ok'));
+            expect(layerBKeys, isEmpty);
+
+            // Dismiss via barrier click; layerB regains focus and receives onFocus + keys.
+            tester.mouseDown(1, 1);
+            tester.mouseUp(1, 1);
+            await tester.pump();
+            expect(sceneManager.layers, [layerA, layerB]);
+            expect(sceneManager.focusedLayer, same(layerB));
+            expect(layerBFocusCalls, equals(1));
+
+            tester.sendString('b');
+            await tester.pump();
+            expect(layerBKeys, ['b']);
+
+            // Removing layerB restores layerA from _focusStack and triggers its onFocus.
+            sceneManager.layers.remove(layerB);
+            expect(sceneManager.focusedLayer, same(layerA));
+            expect(layerAFocusCalls, equals(1));
+          },
+        );
+      },
+    );
+
+    test(
+      'showDialog opened from already-focused layer press retains modal focus and fires onFocus on restoration',
+      () {
+        final layerBFocusNode = FocusNode(id: 'focused_layer_b');
+        addTearDown(layerBFocusNode.dispose);
+        final layerBKeys = <String>[];
+        var layerBFocusCalls = 0;
+        Future<String?>? dialogFuture;
+
+        _runTwoLayerScene(
+          layerBInitiallyFocused: true,
+          onLayerBFocus: (_, _) {
+            layerBFocusCalls++;
+            layerBFocusNode.requestFocus();
+          },
+          buildLayerB: (sceneManager, _) => KeyboardListener(
+            focusNode: layerBFocusNode,
+            onKeyEvent: (event) {
+              if (event.type == .character) {
+                layerBKeys.add(event.key);
+                return true;
+              }
+              return false;
+            },
+            child: Button(
+              text: 'Open Modal',
+              onPressed: () {
+                dialogFuture = sceneManager.showDialog<String>(
+                  width: 30,
+                  height: 6,
+                  builder: (ctx) => Focus(
+                    autofocus: true,
+                    onKeyEvent: (event) {
+                      if (event.type == .enter) {
+                        PromptScope.of(ctx)?.done('submitted');
+                        return true;
+                      }
+                      return false;
+                    },
+                    child: const Text('Press Enter'),
+                  ),
+                );
+              },
+            ),
+          ),
+          body: (tester, sceneManager, layerA, layerB) async {
+            expect(sceneManager.focusedLayer, same(layerB));
+
+            tester.mouseDown(2, 3);
+            tester.mouseUp(2, 3);
+            await tester.pump();
+
+            final dialogLayer = sceneManager.layers.last;
+            expect(sceneManager.focusedLayer, same(dialogLayer));
+            expect(layerBFocusCalls, equals(0));
+
+            tester.sendKey(.enter);
+            await tester.pump();
+
+            expect(await dialogFuture, equals('submitted'));
+            expect(sceneManager.layers, [layerA, layerB]);
+            expect(sceneManager.focusedLayer, same(layerB));
+            expect(layerBFocusCalls, equals(1));
+
+            tester.sendString('k');
+            await tester.pump();
+            expect(layerBKeys, ['k']);
+          },
+        );
+      },
+    );
+
+    test(
+      'draggable layer whose press handler explicitly focuses itself still drags and fires onFocus',
+      () {
+        var layerBFocusCalls = 0;
+
+        _runTwoLayerScene(
+          layerBDraggable: true,
+          onLayerBFocus: (_, _) => layerBFocusCalls++,
+          buildLayerB: (sceneManager, getLayerB) => Button(
+            text: 'Self Focus',
+            onPressed: () {
+              sceneManager.focusedLayer = getLayerB();
+            },
+          ),
+          body: (tester, sceneManager, _, layerB) async {
+            tester.mouseDown(2, 3);
+            tester.mouseMove(7, 6);
+            tester.mouseUp(7, 6);
+            await tester.pump();
+
+            expect(sceneManager.focusedLayer, same(layerB));
+            expect(layerBFocusCalls, equals(1));
+            expect(layerB.x, equals(5));
+            expect(layerB.y, equals(5));
+          },
+        );
+      },
+    );
+
+    test(
+      'pointer capture inside background Slider is cancelled when press opens showDialog',
+      () {
+        var sliderValue = 0.0;
+        var modalOpened = false;
+
+        _runTwoLayerScene(
+          layerBWidth: 11,
+          buildLayerB: (sceneManager, _) => StatefulBuilder(
+            builder: (_, setState) => SizedBox(
+              width: 11,
+              height: 1,
+              child: Slider(
+                value: sliderValue,
+                min: 0.0,
+                max: 1.0,
+                onChanged: (next) {
+                  setState(() => sliderValue = next);
+                  if (!modalOpened) {
+                    modalOpened = true;
+                    unawaited(
+                      sceneManager.showDialog<void>(
+                        width: 24,
+                        height: 5,
+                        builder: (_) => const Text('Confirm change'),
+                      ),
+                    );
+                  }
+                },
+              ),
+            ),
+          ),
+          body: (tester, sceneManager, _, _) async {
+            // Press slider at localX = 2 (20% of 11-cell track -> 0.2), which opens modal.
+            tester.mouseDown(3, 3);
+            await tester.pump();
+            expect(sliderValue, closeTo(0.2, 0.01));
+            expect(sceneManager.layers, hasLength(4));
+
+            // Drag to the far right while modal is open; cancelled capture must ignore drag.
+            tester.mouseMove(11, 3);
+            tester.mouseUp(11, 3);
+            await tester.pump();
+
+            expect(sliderValue, closeTo(0.2, 0.01));
+
+            tester.mouseDown(1, 1);
+            tester.mouseUp(1, 1);
+            await tester.pump();
+          },
+        );
+      },
+    );
+
+    test(
+      'showDialog opened synchronously inside SceneLayer.onFocus cancels drag and resize capture',
+      () {
+        _runTwoLayerScene(
+          layerBDraggable: true,
+          layerBResizable: true,
+          layerBWidth: 14,
+          layerBHeight: 5,
+          onLayerBFocus: (sceneManager, _) {
+            unawaited(
+              sceneManager.showDialog<void>(
+                width: 24,
+                height: 5,
+                builder: (_) => const Text('Focus Modal'),
+              ),
+            );
+          },
+          buildLayerB: (_, _) =>
+              const SizedBox(width: 14, height: 5, child: Text('Panel')),
+          body: (tester, sceneManager, _, layerB) async {
+            // Press bottom-right resize corner of layerB: 0-indexed (13, 6) -> 1-indexed (14, 7).
+            tester.mouseDown(14, 7);
+            tester.mouseMove(24, 12);
+            tester.mouseUp(24, 12);
+            await tester.pump();
+
+            expect(sceneManager.layers, hasLength(4));
+            expect(sceneManager.focusedLayer, same(sceneManager.layers.last));
+            expect(layerB.width, equals(14));
+            expect(layerB.height, equals(5));
+            expect(layerB.x, equals(0));
+            expect(layerB.y, equals(2));
+
+            tester.mouseDown(1, 1);
+            tester.mouseUp(1, 1);
+            await tester.pump();
+          },
+        );
+      },
+    );
+
+    test(
+      'press handler overriding focusedLayer to another layer or null is preserved without dragging',
+      () {
+        var clearFocus = false;
+
+        _runTwoLayerScene(
+          layerBDraggable: true,
+          buildLayerB: (sceneManager, _) => Button(
+            text: 'Toolbar',
+            onPressed: () {
+              sceneManager.focusedLayer = clearFocus
+                  ? null
+                  : sceneManager.layers.first;
+            },
+          ),
+          body: (tester, sceneManager, layerA, layerB) async {
+            // Keep focus on layerA when clicking floating toolbar layerB.
+            tester.mouseDown(2, 3);
+            tester.mouseMove(8, 7);
+            tester.mouseUp(8, 7);
+            await tester.pump();
+
+            expect(sceneManager.focusedLayer, same(layerA));
+            expect(layerB.x, equals(0));
+            expect(layerB.y, equals(2));
+
+            // Clear focus explicitly on press.
+            clearFocus = true;
+            tester.mouseDown(2, 3);
+            tester.mouseUp(2, 3);
+            await tester.pump();
+
+            expect(sceneManager.focusedLayer, isNull);
+          },
+        );
+      },
+    );
+
+    test(
+      'handleMouseEvent does not resurrect or drag a layer removed synchronously inside onPress',
+      () {
+        var layerBFocused = false;
+
+        _runTwoLayerScene(
+          layerBDraggable: true,
+          onLayerBFocus: (_, _) => layerBFocused = true,
+          buildLayerB: (sceneManager, getLayerB) => Button(
+            text: 'Close Self',
+            onPressed: () {
+              sceneManager.layers.remove(getLayerB());
+            },
+          ),
+          body: (tester, sceneManager, layerA, layerB) async {
+            tester.mouseDown(2, 3);
+            tester.mouseMove(8, 8);
+            tester.mouseUp(8, 8);
+            await tester.pump();
+
+            expect(sceneManager.layers, [layerA]);
+            expect(sceneManager.focusedLayer, same(layerA));
+            expect(layerBFocused, isFalse);
+            expect(layerB.x, equals(0));
+            expect(layerB.y, equals(2));
+          },
+        );
       },
     );
   });
