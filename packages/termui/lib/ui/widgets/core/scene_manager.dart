@@ -29,18 +29,24 @@ class SceneManager implements Reassemblable {
 
   SceneLayer? _focusedLayer;
   final List<SceneLayer> _focusStack = [];
+  int _focusEpoch = 0;
+
+  void _requestRunnerFocus(SceneLayer layer) {
+    if (layer.renderer case final PromptRunner<Object?> runner) {
+      runner.requestFocus();
+    }
+  }
 
   /// The currently focused layer, if any. Used to sync hardware state.
   SceneLayer? get focusedLayer => _focusedLayer;
   set focusedLayer(SceneLayer? layer) {
+    _focusEpoch++;
     if (_focusedLayer == layer) return;
     _focusedLayer = layer;
     if (layer != null) {
       _focusStack.remove(layer);
       _focusStack.add(layer);
-      if (layer.renderer case final PromptRunner<dynamic> runner) {
-        runner.requestFocus();
-      }
+      _requestRunnerFocus(layer);
     }
   }
 
@@ -144,19 +150,18 @@ class SceneManager implements Reassemblable {
     _lastRequestedSizes.remove(layer.renderer);
     _focusStack.remove(layer);
 
+    SceneLayer? restoredLayer;
     if (focusedLayer == layer) {
       _focusedLayer = null; // Bypass setter to prevent redundant stack changes
       while (_focusStack.isNotEmpty) {
         final candidate = _focusStack.last;
         if (layers.contains(candidate)) {
           _focusedLayer = candidate;
-          if (candidate.renderer case final PromptRunner<dynamic> runner) {
-            runner.requestFocus();
-          }
+          _requestRunnerFocus(candidate);
+          restoredLayer = candidate;
           break;
-        } else {
-          _focusStack.removeLast();
         }
+        _focusStack.removeLast();
       }
     }
 
@@ -167,6 +172,7 @@ class SceneManager implements Reassemblable {
       _resizeCorner = 0;
     }
     _syncLayerListeners();
+    restoredLayer?.onFocus?.call();
   }
 
   List<SceneLayer> _getSortedLayers() {
@@ -277,7 +283,8 @@ class SceneManager implements Reassemblable {
       if (event.type == MouseEventType.press) {
         final mouseX = event.x - 1;
         final mouseY = event.y - 1;
-
+        final focusBeforePress = focusedLayer;
+        final focusEpochBeforePress = _focusEpoch;
         final sortedLayers = _getSortedLayers();
 
         SceneLayer? hitLayer;
@@ -337,7 +344,7 @@ class SceneManager implements Reassemblable {
             final handled = layer.renderer.handleMouseEvent(localEvent);
             if (handled || layer.draggable) {
               hitLayer = layer;
-              if (layer.draggable) {
+              if (layer.draggable && layers.contains(layer)) {
                 _draggingLayer = layer;
                 _dragStartX = event.x;
                 _dragStartY = event.y;
@@ -356,14 +363,12 @@ class SceneManager implements Reassemblable {
           }
         }
 
-        if (hitLayer != null) {
-          _capturedMouseLayer = hitLayer;
-          if (focusedLayer != hitLayer) {
-            focusedLayer = hitLayer;
-            hitLayer.onFocus?.call();
-            scheduleRender();
-          }
-        }
+        _reconcilePressHit(
+          hitLayer: hitLayer,
+          button: event.button,
+          focusBeforePress: focusBeforePress,
+          focusEpochBeforePress: focusEpochBeforePress,
+        );
       } else if (event.type == MouseEventType.drag) {
         if (_resizingLayer != null) {
           int dx = event.x - _dragStartX;
@@ -530,6 +535,66 @@ class SceneManager implements Reassemblable {
     } finally {
       Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
     }
+  }
+
+  void _cancelPressCapture(SceneLayer? layer, MouseButton button) {
+    _draggingLayer = null;
+    _resizingLayer = null;
+    _resizeCorner = 0;
+    _capturedMouseLayer = null;
+    DragDropManager.cancelDrag();
+    if (layer != null && layers.contains(layer)) {
+      layer.renderer.handleMouseEvent(
+        MouseEvent(
+          x: -1,
+          y: -1,
+          globalX: -1,
+          globalY: -1,
+          button: button,
+          type: MouseEventType.release,
+          modifiers: const {},
+        ),
+      );
+    }
+  }
+
+  void _reconcilePressHit({
+    required SceneLayer? hitLayer,
+    required MouseButton button,
+    required SceneLayer? focusBeforePress,
+    required int focusEpochBeforePress,
+  }) {
+    if (hitLayer == null || !layers.contains(hitLayer)) {
+      _cancelPressCapture(null, button);
+      return;
+    }
+
+    final focusChanged =
+        _focusEpoch != focusEpochBeforePress && focusedLayer != hitLayer;
+    if (focusChanged) {
+      _cancelPressCapture(hitLayer, button);
+      if (focusedLayer != null && focusBeforePress != hitLayer) {
+        _focusStack.remove(hitLayer);
+        _focusStack.insert(_focusStack.length - 1, hitLayer);
+      }
+      return;
+    }
+
+    _capturedMouseLayer = hitLayer;
+    if (focusedLayer != hitLayer) {
+      focusedLayer = hitLayer;
+    }
+    if (focusBeforePress == hitLayer) return;
+
+    final epochBeforeOnFocus = _focusEpoch;
+    hitLayer.onFocus?.call();
+    final lostFocusInCallback =
+        _focusEpoch != epochBeforeOnFocus && focusedLayer != hitLayer;
+    if (!layers.contains(hitLayer) || lostFocusInCallback) {
+      _cancelPressCapture(hitLayer, button);
+      return;
+    }
+    scheduleRender();
   }
 
   /// Spawns a new expanding touch ripple at [position] and triggers composite rendering.
@@ -936,8 +1001,6 @@ class SceneManager implements Reassemblable {
 
     final dialogWidget = Builder(builder: builder);
 
-    final previousFocusedLayer = focusedLayer;
-
     runner = PromptRunner<T>(
       terminal: terminal,
       widget: dialogWidget,
@@ -994,11 +1057,6 @@ class SceneManager implements Reassemblable {
           layers.remove(barrierLayer);
           runner.dispose();
           barrierRunner.dispose();
-          if (focusedLayer == dialogLayer || focusedLayer == barrierLayer) {
-            focusedLayer =
-                previousFocusedLayer ??
-                (layers.isNotEmpty ? layers.last : null);
-          }
           render();
         });
 
