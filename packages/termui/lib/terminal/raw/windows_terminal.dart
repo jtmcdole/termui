@@ -6,6 +6,7 @@ import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 import 'package:termui/src/terminal/windows_console_input.dart';
@@ -13,27 +14,74 @@ import 'package:win32/win32.dart';
 
 import 'terminal.dart';
 
+const int _inputRecordBatchSize = 64;
+
+bool _drainWindowsConsoleBatch(
+  HANDLE inputHandle,
+  Pointer<INPUT_RECORD> records,
+  Pointer<Uint32> countPtr,
+  WindowsConsoleInputDecoder decoder,
+  SendPort sendPort,
+) {
+  final batch = BytesBuilder(copy: false);
+  var ok = true;
+  while (true) {
+    if (!GetNumberOfConsoleInputEvents(inputHandle, countPtr).value) {
+      ok = false;
+      break;
+    }
+    final available = countPtr.value;
+    if (available == 0) break;
+    final toRead = min(available, _inputRecordBatchSize);
+    if (!ReadConsoleInput(inputHandle, records, toRead, countPtr).value) {
+      ok = false;
+      break;
+    }
+    final read = countPtr.value;
+    if (read == 0) break;
+    batch.add(decoder.decode(records, read));
+  }
+  if (batch.isNotEmpty) {
+    sendPort.send(batch.takeBytes());
+  }
+  return ok;
+}
+
 void _windowsInputReaderEntry((int, SendPort) args) {
   final (inputAddress, sendPort) = args;
   final inputHandle = HANDLE(Pointer.fromAddress(inputAddress));
-  final buffer = calloc<Uint16>(256);
-  final numRead = calloc<Uint32>();
+  final decoder = WindowsConsoleInputDecoder();
+  final arena = Arena();
 
   try {
+    final records = arena<INPUT_RECORD>(_inputRecordBatchSize);
+    final countPtr = arena<Uint32>();
+
     while (true) {
-      final waitResult = WaitForSingleObject(inputHandle, 20);
-      if (waitResult.value != WAIT_OBJECT_0) {
+      final wait = WaitForSingleObject(inputHandle, 20).value;
+      if (wait == WAIT_TIMEOUT) {
         sleep(const Duration(milliseconds: 10));
         continue;
       }
-      final result = ReadConsole(inputHandle, buffer, 256, numRead, nullptr);
-      if (result.value && numRead.value > 0) {
-        sendPort.send([for (var i = 0; i < numRead.value; i++) buffer[i]]);
+      if (wait != WAIT_OBJECT_0) break;
+      if (!_drainWindowsConsoleBatch(
+        inputHandle,
+        records,
+        countPtr,
+        decoder,
+        sendPort,
+      )) {
+        break;
       }
     }
+
+    final trailing = decoder.flush();
+    if (trailing.isNotEmpty) {
+      sendPort.send(trailing);
+    }
+    sendPort.send(null);
   } finally {
-    calloc.free(buffer);
-    calloc.free(numRead);
+    arena.releaseAll();
   }
 }
 
@@ -58,7 +106,10 @@ class WindowsTerminal implements Terminal {
         final port = ReceivePort();
         receivePort = port;
         port.listen((message) {
-          if (message is List<int>) {
+          if (message == null) {
+            port.close();
+            unawaited(controller.close());
+          } else if (message is List<int>) {
             controller.add(message);
           }
         }, onDone: controller.close);
