@@ -1,14 +1,10 @@
 import 'dart:async';
-import 'dart:ffi';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:math';
 
-import 'package:ffi/ffi.dart';
-import 'package:win32/win32.dart';
+import 'package:termui/terminal/raw/terminal.dart' as raw;
 
 import 'terminal_backend.dart';
-import 'package:termui/terminal/raw/terminal.dart' as raw;
 
 /// Returns the platform-specific terminal backend for Dart VM (IO).
 TerminalBackend getPlatformBackend() => IoTerminalBackend();
@@ -19,48 +15,25 @@ class IoTerminalBackend implements TerminalBackend {
   bool get isWindows => Platform.isWindows;
 
   /// The low-level raw terminal instance.
-  final rawTerminal = raw.Terminal();
-  final _rawInputController = StreamController<List<int>>.broadcast();
+  final raw.Terminal rawTerminal;
+  late final StreamController<List<int>> _rawInputController =
+      StreamController<List<int>>.broadcast(onListen: _ensureInputStarted);
 
-  StreamSubscription<List<int>>? _stdinSubscription;
-  ReceivePort? _windowsReceivePort;
-  Isolate? _windowsInputIsolate;
-
-  static Stream<List<int>>? _stdinBroadcast;
-  static Stream<List<int>> get _stdinStream =>
-      _stdinBroadcast ??= stdin.asBroadcastStream();
+  StreamSubscription<List<int>>? _inputSubscription;
 
   /// Creates a new IO terminal backend.
-  IoTerminalBackend() {
-    if (Platform.isWindows) {
-      _startWindowsInputReader();
-    } else {
-      _stdinSubscription = _stdinStream.listen(
-        (List<int> chunk) {
-          _rawInputController.add(chunk);
-        },
-        onDone: () {
-          _rawInputController.close();
-        },
-      );
-    }
-  }
+  ///
+  /// An optional [rawTerminal] override supports hermetic testing without
+  /// touching process `stdin` or OS console handles.
+  IoTerminalBackend({raw.Terminal? rawTerminal})
+    : rawTerminal = rawTerminal ?? raw.Terminal();
 
-  void _startWindowsInputReader() async {
-    _windowsReceivePort = ReceivePort();
-    _windowsInputIsolate = await Isolate.spawn(
-      _windowsInputReaderEntry,
-      _windowsReceivePort!.sendPort,
-    );
-    _windowsReceivePort!.listen(
-      (message) {
-        if (message is List<int>) {
-          _rawInputController.add(message);
-        }
-      },
-      onDone: () {
-        _rawInputController.close();
-      },
+  void _ensureInputStarted() {
+    if (_inputSubscription != null || _rawInputController.isClosed) return;
+    _inputSubscription = rawTerminal.openInputStream().listen(
+      _rawInputController.add,
+      onError: _rawInputController.addError,
+      onDone: _rawInputController.close,
     );
   }
 
@@ -126,41 +99,8 @@ class IoTerminalBackend implements TerminalBackend {
 
   @override
   void dispose() {
-    _stdinSubscription?.cancel();
-    _windowsReceivePort?.close();
-    _windowsInputIsolate?.kill(priority: Isolate.immediate);
+    _inputSubscription?.cancel();
+    _inputSubscription = null;
     _rawInputController.close();
-  }
-}
-
-void _windowsInputReaderEntry(SendPort sendPort) {
-  final inputHandle = GetStdHandle(STD_INPUT_HANDLE).value;
-  final buffer = calloc<Uint16>(256);
-  final numRead = calloc<Uint32>();
-
-  try {
-    while (true) {
-      // Wait for input to be available on stdin with a timeout of 20ms
-      final waitResult = WaitForSingleObject(inputHandle, 20);
-      if (waitResult.value == WAIT_OBJECT_0) {
-        final result = ReadConsole(inputHandle, buffer, 256, numRead, nullptr);
-
-        if (result.value && numRead.value > 0) {
-          final chars = <int>[];
-          for (var i = 0; i < numRead.value; i++) {
-            chars.add(buffer[i]);
-          }
-          sendPort.send(chars);
-        }
-      } else {
-        // Sleep briefly to yield CPU and let event loop process isolate signals
-        sleep(const Duration(milliseconds: 10));
-      }
-    }
-  } catch (_) {
-    // Ignore errors on exit
-  } finally {
-    free(buffer);
-    free(numRead);
   }
 }

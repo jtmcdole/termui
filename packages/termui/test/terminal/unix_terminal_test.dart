@@ -1,8 +1,15 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:ffi/ffi.dart';
+import 'package:termui/src/terminal/reusable_input_stream.dart';
+import 'package:termui/terminal/backend/io_backend.dart';
+import 'package:termui/terminal/raw/terminal.dart' as raw;
 import 'package:termui/terminal/raw/unix_terminal.dart';
+import 'package:termui/terminal/terminal.dart';
 import 'package:test/test.dart';
 
 typedef _OpenPtyNative =
@@ -24,6 +31,24 @@ typedef _OpenPtyDart =
 
 typedef _CloseNative = Int32 Function(Int32 fd);
 typedef _CloseDart = int Function(int fd);
+
+final class _FakeUnixRawTerminal implements raw.Terminal {
+  _FakeUnixRawTerminal(this._sharedInput);
+
+  final Stream<List<int>> _sharedInput;
+
+  @override
+  void enableRawMode() {}
+
+  @override
+  void disableRawMode() {}
+
+  @override
+  Point<int> getScreenBufferSize() => const Point(80, 24);
+
+  @override
+  Stream<List<int>> openInputStream() => _sharedInput;
+}
 
 void main() {
   group('UnixTerminal & TermIOS ABI (P0-1)', () {
@@ -195,5 +220,43 @@ void main() {
         }
       },
     );
+  });
+
+  group('shareReusableInputStream across Terminal sessions', () {
+    test('pauses underlying stdin stream on dispose so keystrokes between '
+        'sessions are preserved for the next session', () async {
+      final fakeStdin = StreamController<List<int>>();
+      final shared = shareReusableInputStream(fakeStdin.stream);
+
+      final term1 = Terminal(
+        IoTerminalBackend(rawTerminal: _FakeUnixRawTerminal(shared)),
+      );
+      expect(fakeStdin.hasListener, isTrue);
+      expect(fakeStdin.isPaused, isFalse);
+
+      final firstEventFuture = term1.events.first;
+      fakeStdin.add(utf8.encode('a'));
+      final firstEvent = await firstEventFuture;
+      expect(firstEvent, isA<KeyEvent>().having((e) => e.key, 'key', 'a'));
+
+      term1.dispose();
+      expect(fakeStdin.isPaused, isTrue);
+
+      // Typeahead arriving while no Terminal session is active must stay
+      // buffered on the paused source stream instead of being dropped.
+      fakeStdin.add(utf8.encode('b'));
+
+      final term2 = Terminal(
+        IoTerminalBackend(rawTerminal: _FakeUnixRawTerminal(shared)),
+      );
+      final secondEventFuture = term2.events.first;
+      final secondEvent = await secondEventFuture;
+      expect(secondEvent, isA<KeyEvent>().having((e) => e.key, 'key', 'b'));
+      expect(fakeStdin.isPaused, isFalse);
+
+      term2.dispose();
+      expect(fakeStdin.isPaused, isTrue);
+      unawaited(fakeStdin.close());
+    });
   });
 }

@@ -21,4 +21,7 @@ abstract class Terminal {
   /// Returns the current size of the terminal screen buffer as a [Point],
   /// where `x` is the number of columns and `y` is the number of rows.
   Point<int> getScreenBufferSize();
+
+  /// Opens the raw input byte stream for this platform terminal.
+  Stream<List<int>> openInputStream();
 }
