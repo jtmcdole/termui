@@ -61,20 +61,36 @@ melos:
         dirExists: test
         flutter: false
 
-    test:flutter:
-      description: Run unit tests for Flutter packages.
+    test:flutter:audio:
+      description: Run native audio engine tests sequentially (-j 1).
       exec:
         concurrency: 1
-        command: flutter test --reporter=expanded -j 1
+        command: flutter test --no-pub --reporter=expanded -j 1
+        failFast: true
+      packageFilters:
+        scope: termui_audio
+
+    test:flutter:packages:
+      description: Run Flutter UI package tests with multi-core suite concurrency.
+      exec:
+        concurrency: 1
+        command: flutter test --no-pub --reporter=expanded
         failFast: true
       packageFilters:
         dirExists: test
         flutter: true
+        ignore: termui_audio
+
+    test:flutter:
+      description: Run unit tests for all Flutter packages.
+      steps:
+        - test:flutter:audio
+        - test:flutter:packages
 
     test:all:
       steps:
-        - melos run test:dart
-        - melos run test:flutter
+        - test:dart
+        - test:flutter
       packageFilters:
         dirExists: test
       description: Run all tests in the monorepo.

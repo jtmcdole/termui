@@ -43,6 +43,7 @@ void main(List<String> args) async {
       name: 'soloud_cli',
       sourceDir: input.packageRoot,
       defines: {'CMAKE_POLICY_VERSION_MINIMUM': '3.5'},
+      parallelUseAllProcessors: true,
     );
 
     await builder.run(

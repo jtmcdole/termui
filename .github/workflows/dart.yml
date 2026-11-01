@@ -6,42 +6,96 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
-    name: Build and Test
+    name: Build and Test (${{ matrix.os }}, ${{ matrix.suite }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        sdk: [stable]
+        suite: [dart, flutter]
 
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - name: Set up Flutter
+      - name: Configure Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "D:\"
+          Add-MpPreference -ExclusionProcess "tar.exe", "unzip.exe", "zstd.exe", "dart.exe", "flutter_tester.exe", "cl.exe", "link.exe"
+
+      - name: Set up Dart (pure Dart lane)
+        if: matrix.suite == 'dart'
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Bootstrap pure Dart workspace
+        if: matrix.suite == 'dart'
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            "PUB_CACHE=D:\pub-cache" | Out-File -FilePath $env:GITHUB_ENV -Append
+            $env:PUB_CACHE = "D:\pub-cache"
+          }
+          Remove-Item -Recurse -Force packages/termui_flutter, packages/termui_audio, packages/termui_tinpot/example
+          (Get-Content pubspec.yaml) |
+            Where-Object { $_ -notmatch '^\s*-\s+packages/(termui_flutter|termui_audio|termui_tinpot/example)(/|\s*$)' } |
+            Set-Content pubspec.yaml
+          dart pub get
+
+      - name: Set up Flutter (Flutter lane)
+        if: matrix.suite == 'flutter'
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: true
+          pub-cache: false
+          cache-path: ${{ runner.os == 'Windows' && 'D:/flutter-sdk/:channel:-:version:-:arch:' || '' }}
+          cache-key: ${{ runner.os == 'Windows' && 'flutter-:os:-:channel:-:version:-:arch:-:hash:-d1' || '' }}
+          pub-cache-path: ${{ runner.os == 'Windows' && 'D:/pub-cache' || 'default' }}
 
-      - name: Install ALSA library (Linux)
-        if: matrix.os == 'ubuntu-latest'
+      - name: Install ALSA library (Linux Flutter lane)
+        if: matrix.os == 'ubuntu-latest' && matrix.suite == 'flutter'
         run: |
           sudo apt-get update
           sudo apt-get install -y libasound2-dev
 
-      - name: Install Melos
-        run: dart pub global activate melos
+      - name: Bootstrap Flutter workspace
+        if: matrix.suite == 'flutter'
+        run: flutter pub get
 
-      - name: Bootstrap workspace
-        run: melos bootstrap
+      - name: Normalize SoLoud source timestamps for CMake cache
+        if: matrix.suite == 'flutter'
+        shell: pwsh
+        run: |
+          "IMAGE_VERSION=$($env:ImageVersion)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $epoch = [datetime]'2020-01-01T00:00:00Z'
+          @(Get-Item packages/termui_audio/CMakeLists.txt) + @(
+            Get-ChildItem -Path packages/termui_audio/src, packages/termui_audio/windows/include, packages/termui_audio/windows/libs, packages/termui_audio/macos/include, packages/termui_audio/macos/libs, packages/termui_audio/linux/include, packages/termui_audio/linux/libs -Recurse -File
+          ) | ForEach-Object { $_.LastWriteTimeUtc = $epoch }
 
-      - name: Run dart unit tests
-        run: melos run test:dart
+      - name: Cache SoLoud CMake native assets
+        if: matrix.suite == 'flutter'
+        uses: actions/cache@v5
+        with:
+          path: .dart_tool/hooks_runner/shared/termui_audio/build
+          key: ${{ runner.os }}-${{ env.IMAGE_VERSION }}-soloud-cmake-${{ hashFiles('pubspec.lock', 'packages/termui_audio/pubspec.yaml', 'packages/termui_audio/CMakeLists.txt', 'packages/termui_audio/src/**', 'packages/termui_audio/hook/**', 'packages/termui_audio/windows/include/**', 'packages/termui_audio/windows/libs/**', 'packages/termui_audio/macos/include/**', 'packages/termui_audio/macos/libs/**', 'packages/termui_audio/linux/include/**', 'packages/termui_audio/linux/libs/**') }}
 
-      - name: Run flutter unit tests
-        run: melos run test:flutter
+      - name: Run ${{ matrix.suite }} unit tests
+        shell: pwsh
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: dart run melos run "test:$env:SUITE" --no-select
