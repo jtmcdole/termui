@@ -27,11 +27,13 @@ enum _ParserState {
   csiIntermediate,
   csiIgnore,
   oscString,
+  oscEscape,
 }
 
 /// A highly optimized VT100/ANSI state machine parser.
 final class AnsiParser {
   static const int _maxOscLength = 8192;
+  static const int _maxOsc52Length = 1_400_000;
 
   /// The terminal handler that processes parsed escape sequences.
   final TerminalHandler handler;
@@ -43,6 +45,7 @@ final class AnsiParser {
   bool _hasParam = false;
   final List<int> _intermediates = [];
   final List<int> _oscBuffer = [];
+  bool _oscOverflowed = false;
 
   /// Creates a new [AnsiParser] instance bound to the given [handler].
   AnsiParser(this.handler);
@@ -70,6 +73,10 @@ final class AnsiParser {
   }
 
   void _handleC0Control(int c) {
+    if (_state == _ParserState.oscEscape) {
+      _resetOsc();
+      _state = _ParserState.ground;
+    }
     if (c == 0x1B) {
       _flushText();
       _state = _ParserState.escape;
@@ -102,6 +109,8 @@ final class AnsiParser {
         }
       case _ParserState.oscString:
         _handleOscChar(c);
+      case _ParserState.oscEscape:
+        _handleOscEscape(c);
     }
   }
 
@@ -120,7 +129,7 @@ final class AnsiParser {
       return;
     }
     if (c == 0x5D) {
-      _oscBuffer.clear();
+      _resetOsc();
       _state = _ParserState.oscString;
       return;
     }
@@ -206,18 +215,55 @@ final class AnsiParser {
   void _handleOscChar(int c) {
     if (c == 0x07) {
       _state = _ParserState.ground;
-      _dispatchOsc();
+      _finishOsc();
     } else if (c == 0x1B) {
-      _state = _ParserState.escape;
-      _dispatchOsc();
+      _state = _ParserState.oscEscape;
+    } else if (c == 0x18 || c == 0x1A) {
+      _resetOsc();
+      _state = _ParserState.ground;
     } else if (c >= 0x20) {
-      if (_oscBuffer.length >= _maxOscLength) {
-        _oscBuffer.clear();
-        _state = _ParserState.ground;
-      } else {
-        _oscBuffer.add(c);
-      }
+      _appendOscChar(c);
     }
+  }
+
+  void _handleOscEscape(int c) {
+    if (c == 0x5C) {
+      _state = _ParserState.ground;
+      _finishOsc();
+      return;
+    }
+    _resetOsc();
+    _intermediates.clear();
+    _handleEscape(c);
+  }
+
+  void _appendOscChar(int c) {
+    if (_oscOverflowed) return;
+    final limit = _isOsc52Prefix() ? _maxOsc52Length : _maxOscLength;
+    if (_oscBuffer.length < limit) {
+      _oscBuffer.add(c);
+    } else {
+      _oscBuffer.clear();
+      _oscOverflowed = true;
+    }
+  }
+
+  bool _isOsc52Prefix() =>
+      _oscBuffer.length >= 3 &&
+      _oscBuffer[0] == 0x35 &&
+      _oscBuffer[1] == 0x32 &&
+      _oscBuffer[2] == 0x3B;
+
+  void _finishOsc() {
+    if (!_oscOverflowed) {
+      _dispatchOsc();
+    }
+    _resetOsc();
+  }
+
+  void _resetOsc() {
+    _oscBuffer.clear();
+    _oscOverflowed = false;
   }
 
   void _execute(int charCode) {
@@ -235,11 +281,10 @@ final class AnsiParser {
 
   void _dispatchOsc() {
     final oscString = String.fromCharCodes(_oscBuffer);
-    final parts = oscString.split(';');
-    if (parts.isNotEmpty) {
-      final command = int.tryParse(parts[0]) ?? -1;
-      final payload = parts.length > 1 ? parts.sublist(1).join(';') : '';
-      handler.osc(command, payload);
-    }
+    final semi = oscString.indexOf(';');
+    final command =
+        int.tryParse(semi < 0 ? oscString : oscString.substring(0, semi)) ?? -1;
+    final payload = semi < 0 ? '' : oscString.substring(semi + 1);
+    handler.osc(command, payload);
   }
 }

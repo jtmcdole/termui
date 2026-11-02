@@ -731,6 +731,94 @@ void main() {
     );
 
     test(
+      'decodes OSC 52 clipboard writes and reports blocked OSC 52 read queries',
+      () {
+        final terminal = VirtualTerminal(width: 20, height: 5);
+        final writes = <(String, String)>[];
+        final blockedReads = <String>[];
+        terminal.onClipboardWrite = (selection, text) {
+          writes.add((selection, text));
+        };
+        terminal.onClipboardReadBlocked = blockedReads.add;
+
+        final b64Hello = base64.encode(utf8.encode('hello tmux 🚀'));
+        terminal.write(utf8.encode('\x1b]52;c;$b64Hello\x07'));
+        expect(writes, equals([('c', 'hello tmux 🚀')]));
+
+        // Empty selection target defaults to 'c', and whitespace in base64 is stripped.
+        final b64Split =
+            '${b64Hello.substring(0, 4)}\n${b64Hello.substring(4)}';
+        terminal.write(utf8.encode('\x1b]52;;$b64Split\x1b\\'));
+        expect(
+          writes,
+          equals([('c', 'hello tmux 🚀'), ('c', 'hello tmux 🚀')]),
+        );
+
+        // Read queries ('?') are blocked and reported to onClipboardReadBlocked.
+        terminal.write(utf8.encode('\x1b]52;c;?\x07'));
+        terminal.write(utf8.encode('\x1b]52;p; ? \x1b\\'));
+        expect(blockedReads, equals(['c', 'p']));
+        expect(writes, hasLength(2));
+
+        // Malformed base64 or unrelated OSC commands are ignored safely.
+        terminal.write(utf8.encode('\x1b]52;c;!!!not-base64!!!\x07'));
+        terminal.write(utf8.encode('\x1b]0;window title\x07'));
+        expect(writes, hasLength(2));
+        expect(blockedReads, hasLength(2));
+
+        // Unpadded base64 OSC 52 payload ('aGk' -> 'hi') is accepted.
+        terminal.write(utf8.encode('\x1b]52;c;aGk\x07'));
+        expect(writes.last, equals(('c', 'hi')));
+      },
+    );
+
+    test('handles OSC CAN/SUB aborts, >1.4M OSC overflow, and 1 MiB OSC 52 bounds', () {
+      final terminal = VirtualTerminal(width: 20, height: 5);
+      final writes = <(String, String)>[];
+      terminal.onClipboardWrite = (selection, text) {
+        writes.add((selection, text));
+      };
+
+      // CAN (0x18) and SUB (0x1A) abort OSC without dispatching and resume ground text.
+      terminal.write(utf8.encode('\x1b]52;c;aGk=\x18OK'));
+      terminal.write(utf8.encode('\x1b]52;c;aGk=\x1a!'));
+      expect(writes, isEmpty);
+      expect(terminal.buffer.getCharacter(0, 0), equals('O'));
+      expect(terminal.buffer.getCharacter(1, 0), equals('K'));
+      expect(terminal.buffer.getCharacter(2, 0), equals('!'));
+
+      // > 96 KiB up to exact 1 MiB (1,048,576 bytes) OSC 52 write succeeds.
+      final oneMiBText = 'A' * 1048576;
+      final oneMiBB64 = base64.encode(utf8.encode(oneMiBText));
+      terminal.write(utf8.encode('\x1b]52;c;$oneMiBB64\x07'));
+      expect(writes, hasLength(1));
+      expect(writes.single.$2.length, equals(1048576));
+
+      // > 1 MiB decoded bytes (1,048,577 bytes, base64 len 1,398,104 <= 1.4M) is rejected.
+      writes.clear();
+      final overOneMiBB64 = base64.encode(List<int>.filled(1048577, 0x41));
+      terminal.write(utf8.encode('\x1b]52;c;$overOneMiBB64\x07'));
+      expect(writes, isEmpty);
+
+      // Malformed UTF-8 bytes whose U+FFFD expansion exceeds 1 MiB UTF-8 is rejected.
+      final malformedExpansionB64 = base64.encode(
+        List<int>.filled(500000, 0xFF),
+      );
+      terminal.write(utf8.encode('\x1b]52;c;$malformedExpansionB64\x07'));
+      expect(writes, isEmpty);
+
+      // > 1.4M OSC sequence overflows safely without crash or dispatch, then recovers.
+      final giantOsc = '\x1b]52;c;${'A' * 1450000}\x07After';
+      terminal.write(utf8.encode(giantOsc));
+      expect(writes, isEmpty);
+      expect(terminal.buffer.getCharacter(3, 0), equals('A'));
+      expect(terminal.buffer.getCharacter(7, 0), equals('r'));
+
+      terminal.write(utf8.encode('\x1b]52;c;aGk=\x07'));
+      expect(writes, equals([('c', 'hi')]));
+    });
+
+    test(
       'ignores DEL (0x7F) and C1 control code units in ground state without polluting Buffer',
       () {
         final terminal = VirtualTerminal(width: 4, height: 2);
