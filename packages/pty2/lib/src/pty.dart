@@ -72,6 +72,7 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
     receivePort.listen((msg) {
       if (msg == null) {
         receivePort.close();
+        _core.onReaderClosed();
         _outStreamController.close();
         _keepAlive(_core);
         return;

@@ -4,11 +4,14 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
+#include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -144,4 +147,101 @@ PTY2_EXPORT int32_t pty2_spawn_unix(
   close(pts);
   *out_ptm = (int32_t)ptm;
   return (int32_t)pid;
+}
+
+PTY2_EXPORT int32_t pty2_dup_cloexec(int32_t fd) {
+  int nfd = dup((int)fd);
+  if (nfd < 0) {
+    return errno > 0 ? -(int32_t)errno : -1;
+  }
+  if (fcntl(nfd, F_SETFD, FD_CLOEXEC) < 0) {
+    int err = errno;
+    close(nfd);
+    return err > 0 ? -(int32_t)err : -1;
+  }
+  return (int32_t)nfd;
+}
+
+PTY2_EXPORT intptr_t pty2_read(int32_t fd, void* buf, uintptr_t count) {
+  ssize_t n;
+  do {
+    n = read((int)fd, buf, (size_t)count);
+  } while (n < 0 && errno == EINTR);
+  if (n < 0) {
+    return errno > 0 ? -(intptr_t)errno : -1;
+  }
+  return (intptr_t)n;
+}
+
+PTY2_EXPORT intptr_t pty2_write(int32_t fd, const void* buf, uintptr_t count) {
+  ssize_t n = write((int)fd, buf, (size_t)count);
+  if (n < 0) {
+    return errno > 0 ? -(intptr_t)errno : -1;
+  }
+  return (intptr_t)n;
+}
+
+PTY2_EXPORT int32_t pty2_poll(void* fds, uintptr_t nfds, int32_t timeout_ms) {
+  int ret = poll((struct pollfd*)fds, (nfds_t)nfds, (int)timeout_ms);
+  if (ret < 0) {
+    return errno > 0 ? -(int32_t)errno : -1;
+  }
+  return (int32_t)ret;
+}
+
+PTY2_EXPORT int32_t pty2_waitpid(
+    int32_t pid,
+    int32_t* out_status,
+    int32_t options) {
+  if (out_status != NULL) {
+    *out_status = 0;
+  }
+  int status = 0;
+  pid_t ret;
+  do {
+    ret = waitpid((pid_t)pid, &status, (int)options);
+  } while (ret < 0 && errno == EINTR && (options & WNOHANG) == 0);
+
+  if (ret < 0) {
+    return errno > 0 ? -(int32_t)errno : -1;
+  }
+  if (out_status != NULL && ret > 0) {
+    *out_status = (int32_t)status;
+  }
+  return (int32_t)ret;
+}
+
+PTY2_EXPORT int32_t pty2_resize(int32_t fd, uint16_t cols, uint16_t rows) {
+  struct winsize ws;
+  ws.ws_col = cols;
+  ws.ws_row = rows;
+  ws.ws_xpixel = 0;
+  ws.ws_ypixel = 0;
+  if (ioctl((int)fd, TIOCSWINSZ, &ws) < 0) {
+    return errno > 0 ? -(int32_t)errno : -1;
+  }
+  return 0;
+}
+
+PTY2_EXPORT void* pty2_alloc_main_state(uintptr_t buf_size) {
+  uint8_t* mem = (uint8_t*)calloc(1, 8U + (size_t)buf_size);
+  if (mem != NULL) {
+    *(int32_t*)mem = -1;
+  }
+  return mem;
+}
+
+PTY2_EXPORT void pty2_dispose_main_state(void* ptr) {
+  if (ptr == NULL) {
+    return;
+  }
+  uint8_t* mem = (uint8_t*)ptr;
+  mem[4] = 1;
+  int32_t* p_ptm = (int32_t*)mem;
+  int32_t ptm = *p_ptm;
+  if (ptm >= 0) {
+    *p_ptm = -1;
+    close((int)ptm);
+  }
+  free(ptr);
 }

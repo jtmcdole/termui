@@ -168,11 +168,6 @@ class Unix {
   Unix(DynamicLibrary lib) {
     final utilsLib = tryOpen('libutil.so') ?? tryOpen('libutil.so.1');
 
-    if (!Platform.isAndroid) {
-      // this line will crash on android
-      errno = lib.lookup<Int32>('errno');
-    } else {}
-
     open = lib.lookupFunction<_c_open, _dart_open>('open');
     grantpt = lib.lookupFunction<_c_grantpt, _dart_grantpt>('grantpt');
     unlockpt = lib.lookupFunction<_c_unlockpt, _dart_unlockpt>('unlockpt');
@@ -234,8 +229,6 @@ class Unix {
       openpty = lib.lookupFunction<_c_openpty, _dart_openpty>('openpty');
     }
   }
-
-  Pointer<Int32>? errno;
 
   late final _dart_open open;
   late final _dart_grantpt grantpt;

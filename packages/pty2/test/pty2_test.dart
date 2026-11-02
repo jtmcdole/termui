@@ -10,8 +10,6 @@ void main() {
   test(
     'Spawning 5 short-lived processes does not leak file descriptors on Linux',
     () async {
-      if (!Platform.isLinux) return;
-
       int countPtmxFds() {
         var count = 0;
         for (final entry in Directory(
@@ -60,5 +58,6 @@ void main() {
         reason: 'Natural child exit must close master PTY fd without leaking',
       );
     },
+    testOn: 'linux',
   );
 }

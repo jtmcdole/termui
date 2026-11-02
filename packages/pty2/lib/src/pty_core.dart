@@ -19,6 +19,8 @@ abstract interface class PtyCore {
 
   void write(List<int> data);
 
+  void onReaderClosed();
+
   PtyCoreWorker get worker;
 }
 

@@ -33,6 +33,30 @@ external int _pty2SpawnUnix(
   Pointer<Int32> outPtm,
 );
 
+@Native<Int32 Function(Int32)>(symbol: 'pty2_dup_cloexec')
+external int _pty2DupCloexec(int fd);
+
+@Native<IntPtr Function(Int32, Pointer<Void>, UintPtr)>(symbol: 'pty2_read')
+external int _pty2Read(int fd, Pointer<Void> buf, int count);
+
+@Native<IntPtr Function(Int32, Pointer<Void>, UintPtr)>(symbol: 'pty2_write')
+external int _pty2Write(int fd, Pointer<Void> buf, int count);
+
+@Native<Int32 Function(Pointer<Void>, UintPtr, Int32)>(symbol: 'pty2_poll')
+external int _pty2Poll(Pointer<Void> fds, int nfds, int timeoutMs);
+
+@Native<Int32 Function(Int32, Pointer<Int32>, Int32)>(symbol: 'pty2_waitpid')
+external int _pty2Waitpid(int pid, Pointer<Int32> outStatus, int options);
+
+@Native<Int32 Function(Int32, Uint16, Uint16)>(symbol: 'pty2_resize')
+external int _pty2Resize(int fd, int cols, int rows);
+
+@Native<Pointer<Uint8> Function(UintPtr)>(symbol: 'pty2_alloc_main_state')
+external Pointer<Uint8> _pty2AllocMainState(int bufSize);
+
+@Native<Void Function(Pointer<Void>)>(symbol: 'pty2_dispose_main_state')
+external void _pty2DisposeMainState(Pointer<Void> ptr);
+
 Map<String, String> _buildUnixEnvironment(
   Map<String, String>? customEnvironment,
 ) {
@@ -80,6 +104,13 @@ Pointer<Pointer<Utf8>> _allocateNativeStringArray(
   }
 
   return array;
+}
+
+int _decodeWaitStatus(int status) {
+  if ((status & 0x7F) != 0) {
+    return 128 + (status & 0x7F);
+  }
+  return (status & 0xFF00) >> 8;
 }
 
 final class PtyCoreUnix implements PtyCore, Finalizable {
@@ -131,16 +162,32 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
         throw PtyException('fork failed.');
       }
 
-      return PtyCoreUnix._(pid, pPtm.value);
+      final ptm = pPtm.value;
+      final workerPtm = _pty2DupCloexec(ptm);
+      if (workerPtm < 0) {
+        unix.close(ptm);
+        unix.kill(pid, 9);
+        _pty2Waitpid(pid, arena<Int32>(), 0);
+        throw PtyException('dup failed');
+      }
+
+      return PtyCoreUnix._(pid, ptm, workerPtm);
     });
   }
 
-  PtyCoreUnix._(this._pid, this._ptm) {
-    _nativeMem = calloc<Uint8>(_bufferSize + 8);
-    _stopFlag = _nativeMem;
-    _writeBuffer = _nativeMem + 8;
+  PtyCoreUnix._(this._pid, int mainPtm, int workerPtm) {
+    final nativeMem = _pty2AllocMainState(_bufferSize);
+    if (nativeMem == nullptr) {
+      unix.close(mainPtm);
+      unix.close(workerPtm);
+      throw PtyException('alloc failed');
+    }
+    _nativeMem = nativeMem;
+    _pMainPtm = nativeMem.cast<Int32>()..value = mainPtm;
+    _stopFlag = nativeMem + 4;
+    _writeBuffer = nativeMem + 8;
     _worker = PtyCoreUnixWorker(
-      ptm: _ptm,
+      ptm: workerPtm,
       pid: _pid,
       stopFlagAddress: _stopFlag.address,
     );
@@ -149,20 +196,26 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
   }
 
   final int _pid;
-  int _ptm;
   static const _bufferSize = 81920;
 
   late final Pointer<Uint8> _nativeMem;
+  late final Pointer<Int32> _pMainPtm;
   late final Pointer<Uint8> _stopFlag;
   late final Pointer<Uint8> _writeBuffer;
-  static final _finalizer = NativeFinalizer(calloc.nativeFree);
+  static final _finalizer = NativeFinalizer(
+    Native.addressOf<NativeFunction<Void Function(Pointer<Void>)>>(
+      _pty2DisposeMainState,
+    ),
+  );
 
   late final PtyCoreUnixWorker _worker;
 
   void _closePtm() {
     _stopFlag.value = 1;
-    if (_ptm >= 0) {
-      _ptm = -1;
+    final ptm = _pMainPtm.value;
+    if (ptm >= 0) {
+      _pMainPtm.value = -1;
+      unix.close(ptm);
     }
   }
 
@@ -178,32 +231,29 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
   Uint8List? read() => _worker.read();
 
   @override
+  void onReaderClosed() {
+    _closePtm();
+  }
+
+  @override
   int? exitCodeNonBlocking() {
-    final statusPointer = calloc<Int32>();
-    final pid = unix.waitpid(_pid, statusPointer, consts.WNOHANG);
-
-    final status = statusPointer.value;
-    calloc.free(statusPointer);
-
-    if (pid == 0) {
-      return null;
-    }
-    if (pid < 0) {
-      // ECHILD: VM reaped the status
-      final isDead = unix.kill(_pid, 0) != 0;
-      if (isDead) {
-        _reaped = true;
-        return -1;
+    return using((arena) {
+      final statusPointer = arena<Int32>();
+      final pid = _pty2Waitpid(_pid, statusPointer, consts.WNOHANG);
+      if (pid == 0) {
+        return null;
       }
-      return null;
-    }
+      if (pid < 0) {
+        if (_isProcessDead(_pid)) {
+          _reaped = true;
+          return -1;
+        }
+        return null;
+      }
 
-    _reaped = true;
-    if ((status & 0x7F) != 0) {
-      // killed by signal
-      return 128 + (status & 0x7F);
-    }
-    return (status & 0xFF00) >> 8;
+      _reaped = true;
+      return _decodeWaitStatus(statusPointer.value);
+    });
   }
 
   @override
@@ -255,76 +305,59 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
   @override
   void resize(int width, int height) {
-    if (_ptm < 0) return;
-    final sz = calloc<winsize>();
-    sz.ref.ws_col = width;
-    sz.ref.ws_row = height;
-
-    final ret = unix.ioctl(_ptm, consts.TIOCSWINSZ, sz.cast<Void>());
-    calloc.free(sz);
-
-    if (ret == -1) {
-      // print(_ptm);
-      // print(unix.errno.value);
-      unix.perror(nullptr);
-    }
+    final ptm = _pMainPtm.value;
+    if (ptm < 0) return;
+    _pty2Resize(ptm, width, height);
   }
-
-  // @override
-  // int get pid {
-  //   return _pid;
-  // }
 
   @override
   void write(List<int> data) {
-    if (_ptm < 0) return;
+    if (_pMainPtm.value < 0) return;
     var offset = 0;
     while (offset < data.length) {
-      final chunkLen = (data.length - offset > _bufferSize)
-          ? _bufferSize
-          : (data.length - offset);
-      final dest = _writeBuffer.cast<Uint8>().asTypedList(chunkLen);
-      if (data is Uint8List) {
-        dest.setRange(0, chunkLen, data, offset);
-      } else {
-        for (var i = 0; i < chunkLen; i++) {
-          dest[i] = data[offset + i];
-        }
-      }
-      var chunkOffset = 0;
-      while (chunkOffset < chunkLen) {
-        if (_ptm < 0) return;
-        final written = unix.write(
-          _ptm,
-          (_writeBuffer + chunkOffset).cast(),
-          chunkLen - chunkOffset,
-        );
-        if (written > 0) {
-          chunkOffset += written;
-        } else if (written < 0) {
-          final err = unix.errno?.value ?? 0;
-          if (err == consts.EINTR) {
-            continue;
-          }
-          if (err == consts.EAGAIN) {
-            final pfd = calloc<pollfd>();
-            try {
-              pfd.ref.fd = _ptm;
-              pfd.ref.events = consts.POLLOUT;
-              pfd.ref.revents = 0;
-              unix.poll(pfd, 1, 100);
-            } finally {
-              calloc.free(pfd);
-            }
-            continue;
-          }
-          return;
-        } else {
-          return;
-        }
-      }
+      final remaining = data.length - offset;
+      final chunkLen = remaining > _bufferSize ? _bufferSize : remaining;
+      _writeBuffer.asTypedList(chunkLen).setRange(0, chunkLen, data, offset);
+      if (!_writeChunk(chunkLen)) return;
       offset += chunkLen;
     }
+  }
+
+  bool _writeChunk(int chunkLen) {
+    var chunkOffset = 0;
+    while (chunkOffset < chunkLen) {
+      final ptm = _pMainPtm.value;
+      if (ptm < 0) return false;
+      final written = _pty2Write(
+        ptm,
+        (_writeBuffer + chunkOffset).cast(),
+        chunkLen - chunkOffset,
+      );
+      if (written > 0) {
+        chunkOffset += written;
+        continue;
+      }
+      if (written == -consts.EINTR) {
+        continue;
+      }
+      if (written == -consts.EAGAIN) {
+        _pollWritable(ptm);
+        continue;
+      }
+      return false;
+    }
+    return true;
+  }
+
+  void _pollWritable(int ptm) {
+    using((arena) {
+      final pfd = arena<pollfd>();
+      pfd.ref
+        ..fd = ptm
+        ..events = consts.POLLOUT
+        ..revents = 0;
+      _pty2Poll(pfd.cast(), 1, 100);
+    });
   }
 }
 
@@ -358,75 +391,45 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
   @override
   Uint8List? read() {
     if (_ptmClosed || ptm < 0 || _isStopped) return null;
-    _buffer ??= calloc<Int8>(_bufferSize + 1);
-    _pPollFd ??= calloc<pollfd>();
-    final pfd = _pPollFd!;
-    final buf = _buffer!;
+    final buf = _buffer ??= calloc<Int8>(_bufferSize + 1);
+    final pfd = _pPollFd ??= calloc<pollfd>();
+    if (!_waitForReadable(pfd)) return null;
 
+    final readlen = _pty2Read(ptm, buf.cast(), _bufferSize);
+    if (readlen <= 0) return null;
+    return Uint8List.fromList(buf.cast<Uint8>().asTypedList(readlen));
+  }
+
+  bool _waitForReadable(Pointer<pollfd> pfd) {
+    final hangupMask = consts.POLLHUP | consts.POLLERR | consts.POLLNVAL;
     while (!_isStopped) {
-      pfd.ref.fd = ptm;
-      pfd.ref.events = consts.POLLIN;
-      pfd.ref.revents = 0;
+      pfd.ref
+        ..fd = ptm
+        ..events = consts.POLLIN
+        ..revents = 0;
 
-      final ret = unix.poll(pfd, 1, 50);
-      if (ret > 0) {
-        final revents = pfd.ref.revents;
-        if ((revents & consts.POLLIN) != 0) {
-          final readlen = unix.read(ptm, buf.cast(), _bufferSize);
-          if (readlen <= 0) {
-            return null;
-          }
-          return Uint8List.fromList(buf.cast<Uint8>().asTypedList(readlen));
-        }
+      final ret = _pty2Poll(pfd.cast(), 1, 50);
+      if (ret == -consts.EINTR) continue;
+      if (ret == 0 && !PtyCoreUnix._isProcessDead(pid)) continue;
+      if (ret <= 0) return false;
 
-        if ((revents & (consts.POLLHUP | consts.POLLERR | consts.POLLNVAL)) !=
-            0) {
-          return null;
-        }
-      } else if (ret == 0) {
-        if (PtyCoreUnix._isProcessDead(pid)) {
-          return null;
-        }
-      } else {
-        if (unix.errno != null && unix.errno!.value == consts.EINTR) {
-          continue;
-        }
-        return null;
-      }
+      final revents = pfd.ref.revents;
+      if ((revents & consts.POLLIN) != 0) return true;
+      if ((revents & hangupMask) != 0) return false;
     }
-    return null;
+    return false;
   }
 
   @override
   int exitCodeBlocking() {
-    final statusPointer = calloc<Int32>();
-    var pidResult = -1;
-    while (true) {
-      pidResult = unix.waitpid(pid, statusPointer, 0);
-      if (pidResult < 0 &&
-          unix.errno != null &&
-          unix.errno!.value == consts.EINTR) {
-        continue;
-      }
-      break;
-    }
-
-    final status = statusPointer.value;
-    calloc.free(statusPointer);
-
-    if (pidResult < 0) {
-      // ECHILD: VM reaped it
-      final isDead = unix.kill(pid, 0) != 0;
-      if (isDead) {
+    return using((arena) {
+      final statusPointer = arena<Int32>();
+      final pidResult = _pty2Waitpid(pid, statusPointer, 0);
+      if (pidResult < 0) {
         return -1;
       }
-      return -1;
-    }
-
-    if ((status & 0x7F) != 0) {
-      return 128 + (status & 0x7F);
-    }
-    return (status & 0xFF00) >> 8;
+      return _decodeWaitStatus(statusPointer.value);
+    });
   }
 
   @override
