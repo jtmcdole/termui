@@ -61,6 +61,10 @@ class SceneManager implements Reassemblable {
   /// If this returns true, the event is consumed and not propagated.
   bool Function(KeyEvent event)? onKeyEvent;
 
+  /// Optional callback to intercept paste events before they are routed to the focused layer.
+  /// If this returns true, the event is consumed and not propagated.
+  bool Function(PasteEvent event)? onPasteEvent;
+
   bool _isDisposed = false;
   bool _renderScheduled = false;
   final Set<ListenableSceneRenderer> _activeRenderers = {};
@@ -631,6 +635,19 @@ class SceneManager implements Reassemblable {
     });
   }
 
+  /// Handles a paste event and routes it to the focused layer.
+  void handlePasteEvent(PasteEvent event) {
+    if (onPasteEvent?.call(event) ?? false) {
+      return;
+    }
+    final r = focusedLayer?.renderer;
+    if (r != null && !r.handlePasteEvent(event)) {
+      for (final char in event.text.characters) {
+        r.handleKeyEvent(KeyEvent(char, KeyType.character));
+      }
+    }
+  }
+
   void _handleInputEvent(InputEvent event) {
     _cleanOrphanedLayers();
     switch (event) {
@@ -639,14 +656,7 @@ class SceneManager implements Reassemblable {
       case final MouseEvent e:
         handleMouseEvent(e);
       case final PasteEvent e:
-        final r = focusedLayer?.renderer;
-        if (r is PromptRunner<Object?>) {
-          r.handlePasteEvent(e);
-        } else if (r != null) {
-          for (final char in e.text.characters) {
-            r.handleKeyEvent(KeyEvent(char, KeyType.character));
-          }
-        }
+        handlePasteEvent(e);
       case FocusInEvent():
       case FocusOutEvent():
       case CursorPositionReportEvent():

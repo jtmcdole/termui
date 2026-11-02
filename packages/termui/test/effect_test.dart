@@ -37,6 +37,8 @@ class MockRenderer implements SceneRenderer {
   @override
   bool handleMouseEvent(MouseEvent event) => false;
   @override
+  bool handlePasteEvent(PasteEvent event) => false;
+  @override
   void resize(int width, int height) {}
   @override
   void dispose() {}

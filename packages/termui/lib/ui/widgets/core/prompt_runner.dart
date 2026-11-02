@@ -860,13 +860,15 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   }
 
   /// Handles bracketed paste events.
-  void handlePasteEvent(term.PasteEvent event) {
+  @override
+  bool handlePasteEvent(term.PasteEvent event) {
     if (onPasteEvent != null) {
       onPasteEvent!(event);
     }
     for (final char in event.text.characters) {
       handleKeyEvent(term.KeyEvent(char, term.KeyType.character));
     }
+    return true;
   }
 }
 
@@ -1148,6 +1150,12 @@ abstract interface class SceneRenderer implements TerminalStateRequest {
 
   /// Handles mouse events routed to this renderer. Returns true if the event was consumed.
   bool handleMouseEvent(term.MouseEvent event);
+
+  /// Handles paste events routed to this renderer. Returns true if the event was consumed.
+  ///
+  /// Native bracketed pastes exceeding [term.InputParser.maxPasteBytes] arrive
+  /// as consecutive UTF-8 character-aligned [term.PasteEvent] chunks.
+  bool handlePasteEvent(term.PasteEvent event);
 
   /// Resizes the renderer viewport and updates layout/buffers.
   void resize(int width, int height);
