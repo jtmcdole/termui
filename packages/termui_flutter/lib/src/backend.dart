@@ -30,6 +30,8 @@ final class FlutterTerminalBackend implements TerminalBackend {
   Point<int> _size = const Point(80, 24);
   final _sizeController = StreamController<Point<int>>.broadcast();
   final _mouseCursorController = StreamController<String?>.broadcast();
+  final _clipboardController = StreamController<String>.broadcast(sync: true);
+  final _pasteRequestController = StreamController<void>.broadcast(sync: true);
 
   static const _esc = '\x1b';
   static const _bel = '\x07';
@@ -54,6 +56,20 @@ final class FlutterTerminalBackend implements TerminalBackend {
     }
   }
 
+  /// Emits [text] directly to [clipboardChanges] listeners when open.
+  void emitClipboardWrite(String text) {
+    if (!_clipboardController.isClosed) {
+      _clipboardController.add(text);
+    }
+  }
+
+  /// Emits a paste request directly to [pasteRequests] listeners when open.
+  void emitPasteRequest() {
+    if (!_pasteRequestController.isClosed) {
+      _pasteRequestController.add(null);
+    }
+  }
+
   @override
   Point<int> get size => _size;
 
@@ -62,6 +78,12 @@ final class FlutterTerminalBackend implements TerminalBackend {
 
   /// Stream emitting the active OSC 22 mouse cursor name requested by the TUI.
   Stream<String?> get mouseCursorChanges => _mouseCursorController.stream;
+
+  /// Stream emitting clipboard write text requested via [FlutterTerminal.setClipboard].
+  Stream<String> get clipboardChanges => _clipboardController.stream;
+
+  /// Stream emitting events when the TUI requests a clipboard paste via [FlutterTerminal.requestPaste].
+  Stream<void> get pasteRequests => _pasteRequestController.stream;
 
   /// Updates the terminal size and notifies listeners via [watchSize].
   ///
@@ -85,6 +107,8 @@ final class FlutterTerminalBackend implements TerminalBackend {
   void dispose() {
     _sizeController.close();
     _mouseCursorController.close();
+    _clipboardController.close();
+    _pasteRequestController.close();
   }
 }
 
@@ -122,6 +146,12 @@ final class FlutterTerminal extends core.Terminal {
 
   /// Stream emitting changes to the TUI's requested mouse cursor.
   Stream<String?> get mouseCursorChanges => _flutterBackend.mouseCursorChanges;
+
+  /// Stream emitting clipboard text written synchronously via [setClipboard].
+  Stream<String> get clipboardChanges => _flutterBackend.clipboardChanges;
+
+  /// Stream emitting events when a paste is requested synchronously via [requestPaste].
+  Stream<void> get pasteRequests => _flutterBackend.pasteRequests;
 
   static final int _traceSetFontSizeId = Tracer.registerString(
     'FlutterTerminal:setFontSize',
@@ -229,6 +259,16 @@ final class FlutterTerminal extends core.Terminal {
     if (!_eventsController.isClosed) {
       _eventsController.add(event);
     }
+  }
+
+  @override
+  void setClipboard(String text) {
+    _flutterBackend.emitClipboardWrite(text);
+  }
+
+  @override
+  void requestPaste() {
+    _flutterBackend.emitPasteRequest();
   }
 
   @override

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/services.dart';
@@ -11,11 +12,29 @@ import 'package:termui/terminal/terminal.dart' as term;
 
 final class MockTerminalService implements TerminalService {
   final Set<String> savedFiles = {};
+  String? clipboardText;
+  int getClipboardCalls = 0;
+  int setClipboardCalls = 0;
+  Object? clipboardError;
 
   @override
   Future<String?> saveScreenshot(String basename, Uint8List bytes) async {
     savedFiles.add(basename);
     return basename;
+  }
+
+  @override
+  Future<void> setClipboard(String text) async {
+    setClipboardCalls++;
+    if (clipboardError case final error?) throw error;
+    clipboardText = text;
+  }
+
+  @override
+  Future<String?> getClipboard() async {
+    getClipboardCalls++;
+    if (clipboardError case final error?) throw error;
+    return clipboardText;
   }
 }
 
@@ -320,6 +339,141 @@ void main() {
       mouseRegion = tester.widget<MouseRegion>(mouseRegionFinder);
       expect(mouseRegion.cursor, equals(SystemMouseCursors.click));
 
+      terminal.dispose();
+    },
+  );
+
+  testWidgets(
+    'TuiView bridges OSC 52 clipboard writes/paste requests and paste/copy shortcuts',
+    (WidgetTester tester) async {
+      final terminal = FlutterTerminal();
+      final service = MockTerminalService()..clipboardText = 'from clipboard';
+      final receivedEvents = <term.InputEvent>[];
+      final sub = terminal.events.listen(receivedEvents.add);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: SizedBox(
+              width: 400,
+              height: 300,
+              child: Terminal(
+                terminal: terminal,
+                service: service,
+                fontSize: 14,
+                fontFamily: 'Cascadia Mono',
+                onRun: (term, drawFrame) async {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final focusFinder = find.descendant(
+        of: find.byType(Terminal),
+        matching: find.byType(Focus),
+      );
+      expect(focusFinder, findsOneWidget);
+      tester.widget<Focus>(focusFinder).focusNode?.requestFocus();
+      await tester.pump();
+
+      // 1. terminal.setClipboard writes to TerminalService.setClipboard.
+      terminal.setClipboard('copied via OSC 52');
+      await tester.pump();
+      expect(service.clipboardText, equals('copied via OSC 52'));
+
+      // 2. terminal.requestPaste reads from TerminalService.getClipboard and injects PasteEvent.
+      service.clipboardText = 'pasted via OSC 52';
+      terminal.requestPaste();
+      await tester.pump();
+      expect(
+        receivedEvents.whereType<term.PasteEvent>().map((e) => e.text),
+        equals(['pasted via OSC 52']),
+      );
+
+      // 3. Cmd+V (Meta + V) injects PasteEvent.
+      receivedEvents.clear();
+      service.clipboardText = 'cmd-v paste';
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+      await tester.pump();
+      expect(
+        receivedEvents.whereType<term.PasteEvent>().map((e) => e.text),
+        equals(['cmd-v paste']),
+      );
+
+      // 4. Ctrl+Shift+C injects clean 'c' KeyEvent with control+shift modifiers.
+      receivedEvents.clear();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      final keyEvents = receivedEvents.whereType<term.KeyEvent>().toList();
+      expect(keyEvents, isNotEmpty);
+      expect(keyEvents.last.key, equals('c'));
+      expect(
+        keyEvents.last.modifiers,
+        containsAll([term.Modifier.control, term.Modifier.shift]),
+      );
+
+      // 5. Shift+Insert pastes from clipboard.
+      receivedEvents.clear();
+      service.clipboardText = 'shift-insert paste';
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.insert);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.pump();
+      expect(
+        receivedEvents.whereType<term.PasteEvent>().map((e) => e.text),
+        equals(['shift-insert paste']),
+      );
+
+      // 6. Ctrl+Shift+/ preserves shifted '?' character instead of overriding with '/'.
+      receivedEvents.clear();
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+      await simulateKeyDownEvent(
+        LogicalKeyboardKey.slash,
+        physicalKey: PhysicalKeyboardKey.slash,
+        character: '?',
+      );
+      await simulateKeyUpEvent(
+        LogicalKeyboardKey.slash,
+        physicalKey: PhysicalKeyboardKey.slash,
+      );
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      final slashEvents = receivedEvents.whereType<term.KeyEvent>().toList();
+      expect(slashEvents, isNotEmpty);
+      expect(slashEvents.last.key, equals('?'));
+      expect(
+        slashEvents.last.modifiers,
+        containsAll([term.Modifier.control, term.Modifier.shift]),
+      );
+
+      // 7. Writing raw OSC 52 sequences to terminal.backend.write does NOT trigger clipboard I/O.
+      final callsBeforeRawWrite =
+          service.getClipboardCalls + service.setClipboardCalls;
+      terminal.backend.write('\x1b]52;c;?\x07\x1b]52;c;aGk=\x07');
+      await tester.pump();
+      expect(
+        service.getClipboardCalls + service.setClipboardCalls,
+        equals(callsBeforeRawWrite),
+      );
+
+      // 8. PlatformException from clipboard service is caught without uncaught exceptions.
+      service.clipboardError = PlatformException(code: 'CLIPBOARD_DENIED');
+      terminal.setClipboard('denied write');
+      terminal.requestPaste();
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+
+      unawaited(sub.cancel());
       terminal.dispose();
     },
   );
