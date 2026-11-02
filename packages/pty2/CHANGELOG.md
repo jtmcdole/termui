@@ -1,3 +1,9 @@
+## 0.7.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(pty2): harden native handle lifecycle, quoting, and isolate fd management.
+
 ## 0.6.0
 
 > Note: This release has breaking changes.

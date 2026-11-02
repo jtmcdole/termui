@@ -1,3 +1,9 @@
+## 0.10.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_recorder): consolidate ANSI screenshot parser, sanitize asciicast player, and harden CLI.
+
 ## 0.9.0
 
 > Note: This release has breaking changes.

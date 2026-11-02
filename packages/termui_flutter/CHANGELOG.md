@@ -1,3 +1,10 @@
+## 0.10.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_flutter): refactor painter complexity, validate file paths, and update TUI player.
+ - **BREAKING** **FEAT**(termui_flutter): bridge system clipboard and paste shortcuts.
+
 ## 0.9.1
 
  - **FIX**(examples): remove corrupt 404 HTML NotoSansBraille-Regular.ttf asset.

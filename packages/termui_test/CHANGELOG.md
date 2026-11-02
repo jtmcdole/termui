@@ -1,3 +1,9 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(audio): split pure-Dart termui_audio and termui_audio_flutter package.
+
 ## 0.3.0
 
 > Note: This release has breaking changes.

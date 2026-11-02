@@ -3,6 +3,87 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-02
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`pty2` - `v0.7.0`](#pty2---v070)
+ - [`termui` - `v0.13.0`](#termui---v0130)
+ - [`termui_audio` - `v0.4.0`](#termui_audio---v040)
+ - [`termui_audio_flutter` - `v0.2.0`](#termui_audio_flutter---v020)
+ - [`termui_flutter` - `v0.10.0`](#termui_flutter---v0100)
+ - [`termui_pty` - `v0.7.0`](#termui_pty---v070)
+ - [`termui_recorder` - `v0.10.0`](#termui_recorder---v0100)
+ - [`termui_test` - `v0.4.0`](#termui_test---v040)
+ - [`termui_tinpot` - `v0.4.0`](#termui_tinpot---v040)
+
+Packages with other changes:
+
+ - [`termui_hotreload` - `v0.6.26`](#termui_hotreload---v0626)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_hotreload` - `v0.6.26`
+
+---
+
+#### `pty2` - `v0.7.0`
+
+ - **BREAKING** **FIX**(pty2): harden native handle lifecycle, quoting, and isolate fd management.
+
+#### `termui` - `v0.13.0`
+
+ - **FIX**(termui): consolidate static Buffer ANSI codec, wide graphemes, and compositor safety.
+ - **FIX**(termui): validate CSI parsing bounds, add Alt fallbacks, and harden raw mode cleanup.
+ - **FIX**(termui): replace Windows console polling with event-driven reader session.
+ - **FIX**(termui): decode Windows console INPUT_RECORD batches into UTF-8.
+ - **FIX**(termui): disable QuickEdit and restore extended flags in Windows raw mode.
+ - **FEAT**(termui): add OSC 52 clipboard API and reply parsing.
+ - **DOCS**(termui): restore dartdoc comments across core layout and interactive widgets.
+ - **BREAKING** **FIX**(termui): fix AnimatedButton constness and refactor widget complexity.
+ - **BREAKING** **FIX**(termui): support web-safe trace viewer models, bounded gzip, and isolate tracer protection.
+ - **BREAKING** **FIX**(termui): start raw input lazily behind Terminal.openInputStream.
+ - **BREAKING** **FEAT**(termui): route PasteEvent through SceneManager and SceneRenderer.
+ - **BREAKING** **FEAT**(audio): split pure-Dart termui_audio and termui_audio_flutter package.
+
+#### `termui_audio` - `v0.4.0`
+
+ - **BREAKING** **FEAT**(audio): split pure-Dart termui_audio and termui_audio_flutter package.
+
+#### `termui_audio_flutter` - `v0.2.0`
+
+ - **BREAKING** **FEAT**(audio): split pure-Dart termui_audio and termui_audio_flutter package.
+
+#### `termui_flutter` - `v0.10.0`
+
+ - **BREAKING** **FIX**(termui_flutter): refactor painter complexity, validate file paths, and update TUI player.
+ - **BREAKING** **FEAT**(termui_flutter): bridge system clipboard and paste shortcuts.
+
+#### `termui_pty` - `v0.7.0`
+
+ - **BREAKING** **FIX**(termui_pty): handle wide graphemes, bounds, and lifecycle in VirtualTerminal.
+ - **BREAKING** **FEAT**(termui_pty): parse OSC 52 clipboard writes and bound OSC buffer.
+ - **BREAKING** **FEAT**(termui_pty): add DECSET 2004 bracketed paste and Meta key guard.
+
+#### `termui_recorder` - `v0.10.0`
+
+ - **BREAKING** **FIX**(termui_recorder): consolidate ANSI screenshot parser, sanitize asciicast player, and harden CLI.
+
+#### `termui_test` - `v0.4.0`
+
+ - **BREAKING** **FEAT**(audio): split pure-Dart termui_audio and termui_audio_flutter package.
+
+#### `termui_tinpot` - `v0.4.0`
+
+ - **BREAKING** **FIX**(termui_tinpot): refactor quantizer complexity, validate CLI dimensions, and offload processing via compute.
+
+
 ## 2026-11-01
 
 ### Changes

@@ -1,3 +1,20 @@
+## 0.13.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(termui): consolidate static Buffer ANSI codec, wide graphemes, and compositor safety.
+ - **FIX**(termui): validate CSI parsing bounds, add Alt fallbacks, and harden raw mode cleanup.
+ - **FIX**(termui): replace Windows console polling with event-driven reader session.
+ - **FIX**(termui): decode Windows console INPUT_RECORD batches into UTF-8.
+ - **FIX**(termui): disable QuickEdit and restore extended flags in Windows raw mode.
+ - **FEAT**(termui): add OSC 52 clipboard API and reply parsing.
+ - **DOCS**(termui): restore dartdoc comments across core layout and interactive widgets.
+ - **BREAKING** **FIX**(termui): fix AnimatedButton constness and refactor widget complexity.
+ - **BREAKING** **FIX**(termui): support web-safe trace viewer models, bounded gzip, and isolate tracer protection.
+ - **BREAKING** **FIX**(termui): start raw input lazily behind Terminal.openInputStream.
+ - **BREAKING** **FEAT**(termui): route PasteEvent through SceneManager and SceneRenderer.
+ - **BREAKING** **FEAT**(audio): split pure-Dart termui_audio and termui_audio_flutter package.
+
 ## 0.12.0
 
 > Note: This release has breaking changes.
