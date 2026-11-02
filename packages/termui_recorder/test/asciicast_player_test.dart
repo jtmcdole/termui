@@ -83,5 +83,31 @@ void main() {
         expect(sb.toString(), equals('Zero Speed Safe'));
       });
     });
+
+    test(
+      'strips OSC 52, DCS, PM, APC, and device-attribute CSI sequences during playback while preserving SGR',
+      () {
+        fakeAsync((async) {
+          final castContent =
+              '{"version": 2, "width": 80, "height": 24}\n'
+              '[0.1, "o", "\\u001b]52;c;SGVsbG8=\\u0007\\u001b[31mSafe\\u001b[0m"]\n'
+              '[0.2, "o", "\\u001b]52;c;ZXZpbA==\\u001b\\\\\\u001bP+q544e\\u001b\\\\\\u001b^pm\\u001b\\\\\\u001b_apc\\u001b\\\\\\u001b[?1;2c\\u001b[>0;95;0c Text"]\n';
+
+          final sb = StringBuffer();
+          final player = AsciicastPlayer(castContent, stdout: sb);
+
+          player.play(speedMultiplier: 10.0, interactive: false);
+          async.elapse(const Duration(milliseconds: 30));
+
+          final output = sb.toString();
+          expect(output, isNot(contains('52;c;')));
+          expect(output, isNot(contains('SGVsbG8=')));
+          expect(output, isNot(contains('+q544e')));
+          expect(output, isNot(contains('\x1b[?1;2c')));
+          expect(output, isNot(contains('\x1b[>0;95;0c')));
+          expect(output, equals('\x1b[31mSafe\x1b[0m Text'));
+        });
+      },
+    );
   });
 }

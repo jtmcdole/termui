@@ -8,85 +8,8 @@ abstract final class AnsiParser {
   /// Parses a styled ANSI string back into a [Buffer].
   ///
   /// If [width] or [height] are not specified, they are computed from the ANSI content.
-  static Buffer parse(String ansi, {int? width, int? height}) {
-    // Determine dimensions first
-    final lines = ansi.endsWith('\n')
-        ? ansi.substring(0, ansi.length - 1).split('\n')
-        : ansi.split('\n');
-
-    final computedHeight = lines.length;
-    var computedWidth = 0;
-
-    for (final line in lines) {
-      var plainLength = 0;
-      for (final ch in _stripAnsi(line).characters) {
-        if (ch != '\r') {
-          plainLength += graphemeWidth(ch);
-        }
-      }
-      if (plainLength > computedWidth) {
-        computedWidth = plainLength;
-      }
-    }
-
-    final targetWidth = width ?? computedWidth;
-    final targetHeight = height ?? computedHeight;
-
-    final buffer = Buffer.blank(targetWidth, targetHeight, defaultBlend: false);
-
-    var x = 0;
-    var y = 0;
-    Style currentStyle = .empty;
-
-    final chars = ansi.characters;
-    final iterator = chars.iterator;
-
-    while (iterator.moveNext()) {
-      final char = iterator.current;
-
-      if (char == '\n' || char == '\r\n') {
-        x = 0;
-        y++;
-        continue;
-      }
-      if (char == '\r') {
-        x = 0;
-        continue;
-      }
-
-      if (char == '\x1b') {
-        // Parse escape sequence
-        if (iterator.moveNext() && iterator.current == '[') {
-          final paramBuffer = StringBuffer();
-          while (iterator.moveNext()) {
-            final nextChar = iterator.current;
-            if (nextChar == 'm') {
-              break;
-            }
-            paramBuffer.write(nextChar);
-          }
-          currentStyle = _applyAnsiCodes(currentStyle, paramBuffer.toString());
-        }
-        continue;
-      }
-
-      final w = graphemeWidth(char);
-      if (w == 0) continue;
-      if (y < targetHeight && x < targetWidth) {
-        buffer.setAttributes(
-          x,
-          y,
-          char: char,
-          fg: currentStyle.foreground?.argb ?? 0,
-          bg: currentStyle.background?.argb ?? 0,
-          modifiers: currentStyle.modifiers,
-        );
-        x += w;
-      }
-    }
-
-    return buffer;
-  }
+  static Buffer parse(String ansi, {int? width, int? height}) =>
+      BufferAnsiSerialization.fromAnsi(ansi, width: width, height: height);
 
   /// Applies a sequence of streaming ANSI delta commands to an existing [Buffer].
   ///
@@ -102,98 +25,116 @@ abstract final class AnsiParser {
     var y = cursorY;
     var style = currentStyle;
 
-    final chars = ansiStream.characters;
-    final iterator = chars.iterator;
-
+    final iterator = ansiStream.characters.iterator;
     while (iterator.moveNext()) {
       final char = iterator.current;
-
       if (char == '\n' || char == '\r\n') {
         x = 0;
         y++;
-        continue;
-      }
-      if (char == '\r') {
+      } else if (char == '\r') {
         x = 0;
-        continue;
-      }
-
-      if (char == '\x1b') {
-        if (iterator.moveNext() && iterator.current == '[') {
-          final paramBuffer = StringBuffer();
-          var command = '';
-          while (iterator.moveNext()) {
-            final nextChar = iterator.current;
-            if (_isAnsiTerminator(nextChar)) {
-              command = nextChar;
-              break;
-            }
-            paramBuffer.write(nextChar);
-          }
-
-          final params = paramBuffer.toString();
-          switch (command) {
-            case 'm':
-              style = _applyAnsiCodes(style, params);
-            case 'H':
-              if (params.isEmpty) {
-                x = 0;
-                y = 0;
-              } else if (params.split(';') case [final rStr, final cStr]) {
-                y = (int.tryParse(rStr) ?? 1) - 1;
-                x = (int.tryParse(cStr) ?? 1) - 1;
-              }
-            case 'A':
-              final n = int.tryParse(params) ?? 1;
-              y -= n;
-            case 'C':
-              final n = int.tryParse(params) ?? 1;
-              x += n;
-            case 'D':
-              final n = int.tryParse(params) ?? 1;
-              x -= n;
-            case 'F':
-              final n = int.tryParse(params) ?? 1;
-              y -= n;
-              x = 0;
-            case 'J':
-              if (params == '2') {
-                buffer.clear();
-              }
-          }
+      } else if (char == '\x1b') {
+        if (_consumeCsiSequence(iterator) case (final command, final params)) {
+          (x, y, style) = _applyCsiCommand(
+            command,
+            params,
+            buffer,
+            x,
+            y,
+            style,
+          );
         }
-        continue;
-      }
-
-      final w = graphemeWidth(char);
-      if (w == 0) continue;
-      // Normal character: write it
-      if (y >= 0 && y < buffer.height && x >= 0 && x < buffer.width) {
-        buffer.setAttributes(
-          x,
-          y,
-          char: char,
-          fg: style.foreground?.argb ?? 0,
-          bg: style.background?.argb ?? 0,
-          modifiers: style.modifiers,
-          blend: false,
-        );
-        x += w;
+      } else {
+        x = _writeStreamGrapheme(buffer, x, y, char, style);
       }
     }
 
     return (x, y, style);
   }
 
+  static (String command, String params)? _consumeCsiSequence(
+    Iterator<String> iterator,
+  ) {
+    if (!iterator.moveNext() || iterator.current != '[') return null;
+    final paramBuffer = StringBuffer();
+    while (iterator.moveNext()) {
+      final nextChar = iterator.current;
+      if (_isAnsiTerminator(nextChar)) {
+        return (nextChar, paramBuffer.toString());
+      }
+      paramBuffer.write(nextChar);
+    }
+    return null;
+  }
+
+  static (int x, int y, Style style) _applyCsiCommand(
+    String command,
+    String params,
+    Buffer buffer,
+    int x,
+    int y,
+    Style style,
+  ) => switch (command) {
+    'm' => (x, y, _applyAnsiCodes(style, params)),
+    'H' => _moveCursorToPosition(params, x, y, style),
+    'A' => (x, y - (int.tryParse(params) ?? 1), style),
+    'C' => (x + (int.tryParse(params) ?? 1), y, style),
+    'D' => (x - (int.tryParse(params) ?? 1), y, style),
+    'F' => (0, y - (int.tryParse(params) ?? 1), style),
+    'J' => (x, y, _clearIfFullErase(buffer, params, style)),
+    _ => (x, y, style),
+  };
+
+  static (int x, int y, Style style) _moveCursorToPosition(
+    String params,
+    int fallbackX,
+    int fallbackY,
+    Style style,
+  ) {
+    if (params.isEmpty) return (0, 0, style);
+    if (params.split(';') case [final rStr, final cStr]) {
+      return (
+        (int.tryParse(cStr) ?? 1) - 1,
+        (int.tryParse(rStr) ?? 1) - 1,
+        style,
+      );
+    }
+    return (fallbackX, fallbackY, style);
+  }
+
+  static Style _clearIfFullErase(Buffer buffer, String params, Style style) {
+    if (params == '2') buffer.clear();
+    return style;
+  }
+
+  static int _writeStreamGrapheme(
+    Buffer buffer,
+    int x,
+    int y,
+    String char,
+    Style style,
+  ) {
+    final w = graphemeWidth(char);
+    if (w == 0) return x;
+    if (y >= 0 && y < buffer.height && x >= 0 && x < buffer.width) {
+      buffer.setAttributes(
+        x,
+        y,
+        char: char,
+        fg: style.foreground?.argb ?? 0,
+        bg: style.background?.argb ?? 0,
+        modifiers: style.modifiers,
+        blend: false,
+      );
+      return x + w;
+    }
+    return x;
+  }
+
   static bool _isAnsiTerminator(String char) {
     if (char.isEmpty) return false;
     final code = char.codeUnitAt(0);
     return code >= 0x40 && code <= 0x7E;
-  }
-
-  static String _stripAnsi(String input) {
-    final ansiRegex = RegExp(r'\x1b\[[0-9;]*m');
-    return input.replaceAll(ansiRegex, '');
   }
 
   static Style _applyAnsiCodes(Style current, String paramString) {
@@ -204,70 +145,123 @@ abstract final class AnsiParser {
     final codes = [
       for (final s in paramString.split(';')) int.tryParse(s) ?? 0,
     ];
-    var foreground = current.foreground;
-    var background = current.background;
-    var modifiers = current.modifiers;
-
+    var style = current;
     var i = 0;
+
     while (i < codes.length) {
       final code = codes[i];
-      switch (code) {
-        case 0:
-          foreground = null;
-          background = null;
-          modifiers = Modifier.none;
-          i++;
-        case 1:
-          modifiers |= Modifier.bold;
-          i++;
-        case 2:
-          modifiers |= Modifier.dim;
-          i++;
-        case 3:
-          modifiers |= Modifier.italic;
-          i++;
-        case 4:
-          modifiers |= Modifier.underline;
-          i++;
-        case 5:
-          modifiers |= Modifier.blink;
-          i++;
-        case 7:
-          modifiers |= Modifier.reverse;
-          i++;
-        case 8:
-          modifiers |= Modifier.hidden;
-          i++;
-        case 9:
-          modifiers |= Modifier.crossedOut;
-          i++;
-        case 38 when i + 4 < codes.length && codes[i + 1] == 2:
-          final r = codes[i + 2];
-          final g = codes[i + 3];
-          final b = codes[i + 4];
-          foreground = Color(r, g, b);
-          i += 5;
-        case 39:
-          foreground = null;
-          i++;
-        case 48 when i + 4 < codes.length && codes[i + 1] == 2:
-          final r = codes[i + 2];
-          final g = codes[i + 3];
-          final b = codes[i + 4];
-          background = Color(r, g, b);
-          i += 5;
-        case 49:
-          background = null;
-          i++;
-        default:
-          i++;
+      if ((code == 38 || code == 48) &&
+          i + 4 < codes.length &&
+          codes[i + 1] == 2) {
+        final color = Color(codes[i + 2], codes[i + 3], codes[i + 4]);
+        style = code == 38
+            ? Style(
+                foreground: color,
+                background: style.background,
+                modifiers: style.modifiers,
+              )
+            : Style(
+                foreground: style.foreground,
+                background: color,
+                modifiers: style.modifiers,
+              );
+        i += 5;
+      } else {
+        style = _applySingleAnsiCode(style, code);
+        i++;
       }
     }
 
-    return Style(
-      foreground: foreground,
-      background: background,
-      modifiers: modifiers,
-    );
+    return style;
   }
+
+  static Style _applySingleAnsiCode(Style s, int code) => switch (code) {
+    0 => .empty,
+    1 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.bold,
+    ),
+    2 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.dim,
+    ),
+    3 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.italic,
+    ),
+    4 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.underline,
+    ),
+    5 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.blink,
+    ),
+    7 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.reverse,
+    ),
+    8 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.hidden,
+    ),
+    9 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers | Modifier.crossedOut,
+    ),
+    22 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers & ~(Modifier.bold | Modifier.dim),
+    ),
+    23 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers & ~Modifier.italic,
+    ),
+    24 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers & ~Modifier.underline,
+    ),
+    25 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers & ~Modifier.blink,
+    ),
+    27 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers & ~Modifier.reverse,
+    ),
+    28 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers & ~Modifier.hidden,
+    ),
+    29 => Style(
+      foreground: s.foreground,
+      background: s.background,
+      modifiers: s.modifiers & ~Modifier.crossedOut,
+    ),
+    39 => Style(
+      foreground: null,
+      background: s.background,
+      modifiers: s.modifiers,
+    ),
+    49 => Style(
+      foreground: s.foreground,
+      background: null,
+      modifiers: s.modifiers,
+    ),
+    _ => s,
+  };
 }
