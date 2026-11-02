@@ -1,3 +1,4 @@
+import 'package:characters/characters.dart';
 import "package:termui/termui_trace.dart";
 import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
@@ -136,297 +137,463 @@ class TimelineCanvasElement extends Element {
     final w = widget as TimelineCanvas;
     final width = size.width;
     final height = size.height;
-
     final startX = offset.dx;
     final startY = offset.dy;
 
-    void drawCell(int cx, int cy, String char, Style style) {
-      if (cx >= startX &&
-          cx < startX + width &&
-          cy >= startY &&
-          cy < startY + height) {
-        _safeSetCell(buffer, cx, cy, char, style);
-      }
-    }
-
-    final borderStyle = const Style(foreground: Color(120, 120, 120));
+    const borderStyle = Style(foreground: Color(120, 120, 120));
     final hitGrid = HitGrid(width, height);
 
-    // Paint left/right borders
-    for (var y = 0; y < height; y++) {
-      drawCell(startX, startY + y, '│', borderStyle);
-      drawCell(startX + width - 1, startY + y, '│', borderStyle);
-    }
-
-    if (w.selectionStartUs != null && w.selectionEndUs != null) {
-      final startUs = w.selectionStartUs!.toDouble();
-      final endUs = w.selectionEndUs!.toDouble();
-
-      final startColF = (startUs - w.offsetX) / w.zoomLevel;
-      final endColF = (endUs - w.offsetX) / w.zoomLevel;
-
-      final startCol = startColF.floor().clamp(0, width - 3);
-      final endCol = endColF.floor().clamp(0, width - 3);
-
-      if (endCol >= 0 && startCol < width - 2) {
-        final highlightStyle = const Style(background: Color(40, 40, 80));
-        for (var col = startCol; col <= endCol; col++) {
-          final x = startX + 1 + col;
-          for (var cy = startY; cy < startY + height; cy++) {
-            _safeSetCell(buffer, x, cy, ' ', highlightStyle);
-          }
-        }
-      }
-    }
-
-    final viewportStartUs = w.offsetX;
-    final viewportEndUs = w.offsetX + (width - 2) * w.zoomLevel;
-
-    final Set<int>? drawnCellsSet = TimelineCanvas.debugUseBoolArray
-        ? null
-        : {};
-    final BoolArray? drawnCellsArray = TimelineCanvas.debugUseBoolArray
-        ? BoolArray(width * height)
-        : null;
-
-    void processSpan(TraceSpan span) {
-      final depth = span.depth;
-      final visualY = depth - w.offsetY;
-      if (visualY < 0 || visualY >= height) return;
-      final y = startY + visualY;
-
-      final spanStartUs = span.startUs.toDouble();
-      final spanEndUs = span.endUs.toDouble();
-
-      final startColF = (spanStartUs - w.offsetX) / w.zoomLevel;
-      final endColF = (spanEndUs - w.offsetX) / w.zoomLevel;
-
-      final isClippedLeft = startColF < 0;
-      final isClippedRight = endColF > (width - 3);
-
-      final startCol = startColF.floor().clamp(0, width - 3);
-      final endCol = endColF.floor().clamp(0, width - 3);
-
-      bool isOccluded = true;
-      if (spanStartUs == spanEndUs) {
-        if (TimelineCanvas.debugUseBoolArray) {
-          final idx = visualY * width + startCol;
-          if (!drawnCellsArray![idx]) isOccluded = false;
-        } else {
-          final x = startX + 1 + startCol;
-          final cellKey = (x << 16) | y;
-          if (!drawnCellsSet!.contains(cellKey)) isOccluded = false;
-        }
-      } else {
-        for (var col = startCol; col <= endCol; col++) {
-          if (TimelineCanvas.debugUseBoolArray) {
-            final idx = visualY * width + col;
-            if (!drawnCellsArray![idx]) {
-              isOccluded = false;
-              break;
-            }
-          } else {
-            final x = startX + 1 + col;
-            final cellKey = (x << 16) | y;
-            if (!drawnCellsSet!.contains(cellKey)) {
-              isOccluded = false;
-              break;
-            }
-          }
-        }
-      }
-      if (isOccluded) return;
-
-      var style = getCategoryStyle(span.category, span.name);
-
-      if (w.animatedSpan == span &&
-          w.animationProgress != null &&
-          w.animationProgress! > 0) {
-        final flashIntensity = (sin(w.animationProgress! * pi * 6).abs());
-        if (flashIntensity > 0.5) {
-          style = const Style(
-            foreground: Colors.black,
-            background: Colors.yellow,
+    if (width >= 1) {
+      for (var y = 0; y < height; y++) {
+        _drawClippedCell(buffer, offset, startX, startY + y, '│', borderStyle);
+        if (width >= 2) {
+          _drawClippedCell(
+            buffer,
+            offset,
+            startX + width - 1,
+            startY + y,
+            '│',
+            borderStyle,
           );
         }
       }
-
-      if (spanStartUs == spanEndUs) {
-        final x = startX + 1 + startCol;
-        final cellKey = (x << 16) | y;
-        if (TimelineCanvas.debugUseBoolArray) {
-          final idx = visualY * width + startCol;
-          if (drawnCellsArray![idx]) return;
-        } else {
-          if (drawnCellsSet!.contains(cellKey)) return;
-        }
-
-        final bgArgb = buffer.getBackground(x, y);
-        final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
-        drawCell(x, y, '│', style.merge(Style(background: bg)));
-        if (TimelineCanvas.debugUseBoolArray) {
-          final idx = visualY * width + startCol;
-          drawnCellsArray![idx] = true;
-        } else {
-          drawnCellsSet!.add(cellKey);
-        }
-        hitGrid.setHit(startCol, visualY, span);
-        return;
-      }
-
-      final bgColStyle = Style(
-        background: style.foreground,
-        foreground: Colors.white,
-      );
-      final fallbackStyle = style;
-
-      final nameWithPrefix = '▼ ${span.displayLabel}';
-      final spanColWidth = endCol - startCol + 1;
-
-      for (var col = startCol; col <= endCol; col++) {
-        final x = startX + 1 + col;
-        final cellKey = (x << 16) | y;
-        if (TimelineCanvas.debugUseBoolArray) {
-          final idx = visualY * width + col;
-          if (drawnCellsArray![idx]) continue;
-        } else {
-          if (drawnCellsSet!.contains(cellKey)) continue;
-        }
-
-        final cellStart = w.offsetX + col * w.zoomLevel;
-        final cellEnd = cellStart + w.zoomLevel;
-
-        final cov = _coverage(spanStartUs, spanEndUs, cellStart, cellEnd);
-        if (cov > 0) {
-          hitGrid.setHit(col, visualY, span);
-          String char;
-          Style cellStyle = bgColStyle;
-
-          if (cov > 0.99) {
-            final relativeCol = col - startCol;
-            if (isClippedLeft && col == startCol) {
-              char = '◀';
-            } else if (isClippedRight && col == endCol) {
-              char = '▶';
-            } else if (spanColWidth >= nameWithPrefix.length &&
-                relativeCol >= 0 &&
-                relativeCol < nameWithPrefix.length) {
-              char = nameWithPrefix[relativeCol];
-            } else {
-              char = ' ';
-            }
-            if (TimelineCanvas.debugUseBoolArray) {
-              final idx = visualY * width + col;
-              drawnCellsArray![idx] = true;
-            } else {
-              drawnCellsSet!.add(cellKey);
-            }
-          } else {
-            if (startCol == endCol) {
-              char = cov <= 0.1 ? '│' : _getFractionalBlock(cov);
-              cellStyle = fallbackStyle;
-            } else if (col == startCol) {
-              char = _getFractionalBlock(1.0 - cov);
-              cellStyle = style.merge(
-                Style(
-                  foreground: null,
-                  background: style.foreground ?? const Color(255, 255, 255),
-                ),
-              );
-            } else {
-              char = _getFractionalBlock(cov);
-              cellStyle = fallbackStyle;
-            }
-            if (char == '│' || char == '█') {
-              if (TimelineCanvas.debugUseBoolArray) {
-                final idx = visualY * width + col;
-                drawnCellsArray![idx] = true;
-              } else {
-                drawnCellsSet!.add(cellKey);
-              }
-            }
-          }
-          drawCell(x, y, char, cellStyle);
-        }
-      }
     }
+
+    if (width <= 2 || height <= 0) {
+      w.onHitGridUpdated?.call(hitGrid);
+      return;
+    }
+
+    _paintSelectionHighlight(buffer, offset, w);
+
+    final viewportStartUs = w.offsetX;
+    final viewportEndUs = w.offsetX + (width - 2) * w.zoomLevel;
+    final tracker = _CellDrawTracker(
+      width: width,
+      height: height,
+      useBoolArray: TimelineCanvas.debugUseBoolArray,
+    );
 
     _spanTree.query(
       viewportStartUs.floor(),
       viewportEndUs.ceil(),
-      (interval) => processSpan(interval as TraceSpan),
+      (interval) => _processSpan(
+        buffer,
+        offset,
+        w,
+        interval as TraceSpan,
+        tracker,
+        hitGrid,
+      ),
     );
 
-    // Draw Caliper Overlay
-    if (w.measureStartMs != null && w.measureEndMs != null) {
-      final startUs = w.measureStartMs! * 1000.0;
-      final endUs = w.measureEndMs! * 1000.0;
-      final col1 = ((startUs - w.offsetX) / w.zoomLevel).round();
-      final col2 = ((endUs - w.offsetX) / w.zoomLevel).round();
-      final leftCol = min(col1, col2).clamp(0, width - 3) + 1;
-      final rightCol = max(col1, col2).clamp(0, width - 3) + 1;
-      final spanWidth = rightCol - leftCol + 1;
-      final durationMs = (endUs - startUs).abs() / 1000.0;
-      final text = ' ${durationMs.toStringAsFixed(1)}ms ';
-      String caliperStr;
-      if (spanWidth >= text.length + 4) {
-        final dashes = spanWidth - 2 - text.length;
-        final leftDashes = dashes ~/ 2;
-        final rightDashes = dashes - leftDashes;
-        caliperStr = '├${'─' * leftDashes}$text${'─' * rightDashes}┤';
-      } else if (spanWidth >= 2) {
-        caliperStr = '├${'─' * (spanWidth - 2)}┤';
-      } else {
-        caliperStr = '│';
-      }
+    _paintCaliperOverlay(buffer, offset, w);
+    w.onHitGridUpdated?.call(hitGrid);
+  }
 
-      final caliperStyle = const Style(
-        foreground: Color(0, 255, 255),
-        modifiers: Modifier.bold,
+  void _drawClippedCell(
+    Buffer buffer,
+    Offset offset,
+    int cx,
+    int cy,
+    String char,
+    Style style,
+  ) {
+    final startX = offset.dx;
+    final startY = offset.dy;
+    if (cx >= startX &&
+        cx < startX + size.width &&
+        cy >= startY &&
+        cy < startY + size.height) {
+      _safeSetCell(buffer, cx, cy, char, style);
+    }
+  }
+
+  void _paintSelectionHighlight(
+    Buffer buffer,
+    Offset offset,
+    TimelineCanvas w,
+  ) {
+    final selStart = w.selectionStartUs;
+    final selEnd = w.selectionEndUs;
+    if (selStart == null || selEnd == null) return;
+
+    final width = size.width;
+    final height = size.height;
+    final startCol = ((selStart - w.offsetX) / w.zoomLevel).floor().clamp(
+      0,
+      width - 3,
+    );
+    final endCol = ((selEnd - w.offsetX) / w.zoomLevel).floor().clamp(
+      0,
+      width - 3,
+    );
+
+    if (endCol < 0 || startCol >= width - 2) return;
+    const highlightStyle = Style(background: Color(40, 40, 80));
+    for (var col = startCol; col <= endCol; col++) {
+      final x = offset.dx + 1 + col;
+      for (var cy = offset.dy; cy < offset.dy + height; cy++) {
+        _safeSetCell(buffer, x, cy, ' ', highlightStyle);
+      }
+    }
+  }
+
+  void _processSpan(
+    Buffer buffer,
+    Offset offset,
+    TimelineCanvas w,
+    TraceSpan span,
+    _CellDrawTracker tracker,
+    HitGrid hitGrid,
+  ) {
+    final visualY = span.depth - w.offsetY;
+    if (visualY < 0 || visualY >= size.height) return;
+
+    final width = size.width;
+    final y = offset.dy + visualY;
+    final spanStartUs = span.startUs.toDouble();
+    final spanEndUs = span.endUs.toDouble();
+    final startColF = (spanStartUs - w.offsetX) / w.zoomLevel;
+    final endColF = (spanEndUs - w.offsetX) / w.zoomLevel;
+    final startCol = startColF.floor().clamp(0, width - 3);
+    final endCol = endColF.floor().clamp(0, width - 3);
+
+    if (tracker.isSpanOccluded(
+      offset.dx,
+      y,
+      visualY,
+      startCol,
+      spanStartUs == spanEndUs ? startCol : endCol,
+    )) {
+      return;
+    }
+
+    final style = _resolveSpanStyle(w, span);
+    if (spanStartUs == spanEndUs) {
+      _paintPointSpan(
+        buffer,
+        offset,
+        span,
+        style,
+        tracker,
+        hitGrid,
+        startCol,
+        visualY,
+        y,
       );
-      final caliperRow = startY - 1;
-      // We draw directly into the buffer for startY - 1, bypassing drawCell's cy >= startY check
-      for (var i = 0; i < caliperStr.length; i++) {
-        final cx = startX + leftCol + i;
-        if (cx >= startX && cx < startX + width) {
-          final bgArgb = buffer.getBackground(cx, caliperRow);
-          final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
-          _safeSetCell(
-            buffer,
-            cx,
-            caliperRow,
-            caliperStr[i],
-            caliperStyle.merge(Style(background: bg)),
-          );
-        }
-      }
+      return;
+    }
 
-      for (var y = caliperRow + 1; y < startY + height; y++) {
-        final bgArgb1 = buffer.getBackground(startX + leftCol, y);
-        final bg1 = bgArgb1 == 0 ? null : Color.argb(bgArgb1);
-        drawCell(
-          startX + leftCol,
-          y,
-          '│',
-          caliperStyle.merge(Style(background: bg1)),
+    _paintRangeSpan(
+      buffer: buffer,
+      offset: offset,
+      w: w,
+      span: span,
+      style: style,
+      tracker: tracker,
+      hitGrid: hitGrid,
+      visualY: visualY,
+      y: y,
+      startCol: startCol,
+      endCol: endCol,
+      isClippedLeft: startColF < 0,
+      isClippedRight: endColF > (width - 3),
+    );
+  }
+
+  Style _resolveSpanStyle(TimelineCanvas w, TraceSpan span) {
+    final baseStyle = getCategoryStyle(span.category, span.name);
+    final progress = w.animationProgress;
+    if (w.animatedSpan == span && progress != null && progress > 0) {
+      if (sin(progress * pi * 6).abs() > 0.5) {
+        return const Style(foreground: Colors.black, background: Colors.yellow);
+      }
+    }
+    return baseStyle;
+  }
+
+  void _paintPointSpan(
+    Buffer buffer,
+    Offset offset,
+    TraceSpan span,
+    Style style,
+    _CellDrawTracker tracker,
+    HitGrid hitGrid,
+    int startCol,
+    int visualY,
+    int y,
+  ) {
+    final x = offset.dx + 1 + startCol;
+    if (tracker.isDrawn(x, y, startCol, visualY)) return;
+    final bgArgb = buffer.getBackground(x, y);
+    final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
+    _drawClippedCell(
+      buffer,
+      offset,
+      x,
+      y,
+      '│',
+      style.merge(Style(background: bg)),
+    );
+    tracker.markDrawn(x, y, startCol, visualY);
+    hitGrid.setHit(startCol, visualY, span);
+  }
+
+  void _paintRangeSpan({
+    required Buffer buffer,
+    required Offset offset,
+    required TimelineCanvas w,
+    required TraceSpan span,
+    required Style style,
+    required _CellDrawTracker tracker,
+    required HitGrid hitGrid,
+    required int visualY,
+    required int y,
+    required int startCol,
+    required int endCol,
+    required bool isClippedLeft,
+    required bool isClippedRight,
+  }) {
+    final bgColStyle = Style(
+      background: style.foreground,
+      foreground: Colors.white,
+    );
+    final spanStartUs = span.startUs.toDouble();
+    final spanEndUs = span.endUs.toDouble();
+    final labelCells = _buildLabelCells('▼ ${span.displayLabel}');
+    final spanColWidth = endCol - startCol + 1;
+
+    for (var col = startCol; col <= endCol; col++) {
+      final x = offset.dx + 1 + col;
+      if (tracker.isDrawn(x, y, col, visualY)) continue;
+
+      final cellStart = w.offsetX + col * w.zoomLevel;
+      final cov = _coverage(
+        spanStartUs,
+        spanEndUs,
+        cellStart,
+        cellStart + w.zoomLevel,
+      );
+      if (cov <= 0) continue;
+
+      hitGrid.setHit(col, visualY, span);
+      if (cov > 0.99) {
+        final char = _resolveFullCoverageChar(
+          labelCells: labelCells,
+          spanColWidth: spanColWidth,
+          col: col,
+          startCol: startCol,
+          endCol: endCol,
+          isClippedLeft: isClippedLeft,
+          isClippedRight: isClippedRight,
         );
-
-        if (rightCol > leftCol) {
-          final bgArgb2 = buffer.getBackground(startX + rightCol, y);
-          final bg2 = bgArgb2 == 0 ? null : Color.argb(bgArgb2);
-          drawCell(
-            startX + rightCol,
-            y,
-            '│',
-            caliperStyle.merge(Style(background: bg2)),
-          );
+        tracker.markDrawn(x, y, col, visualY);
+        if (char != null) {
+          _drawClippedCell(buffer, offset, x, y, char, bgColStyle);
         }
+      } else {
+        final (char, cellStyle) = _resolvePartialCoverageCell(
+          cov: cov,
+          col: col,
+          startCol: startCol,
+          endCol: endCol,
+          style: style,
+        );
+        if (char == '│' || char == '█') {
+          tracker.markDrawn(x, y, col, visualY);
+        }
+        _drawClippedCell(buffer, offset, x, y, char, cellStyle);
       }
     }
+  }
 
-    if (w.onHitGridUpdated != null) {
-      w.onHitGridUpdated!(hitGrid);
+  static List<String?> _buildLabelCells(String text) {
+    final cells = <String?>[];
+    for (final grapheme in text.characters) {
+      final w = graphemeWidth(grapheme);
+      if (w <= 0) continue;
+      cells.add(grapheme);
+      for (var c = 1; c < w; c++) {
+        cells.add(null);
+      }
     }
+    return cells;
+  }
+
+  static String? _resolveFullCoverageChar({
+    required List<String?> labelCells,
+    required int spanColWidth,
+    required int col,
+    required int startCol,
+    required int endCol,
+    required bool isClippedLeft,
+    required bool isClippedRight,
+  }) {
+    if (isClippedLeft && col == startCol) return '◀';
+    if (isClippedRight && col == endCol) return '▶';
+    final relativeCol = col - startCol;
+    if (spanColWidth < labelCells.length ||
+        relativeCol < 0 ||
+        relativeCol >= labelCells.length) {
+      return ' ';
+    }
+    final entry = labelCells[relativeCol];
+    if (entry == null) return null;
+    if (isClippedRight &&
+        col == endCol - 1 &&
+        relativeCol + 1 < labelCells.length &&
+        labelCells[relativeCol + 1] == null) {
+      return ' ';
+    }
+    return entry;
+  }
+
+  static (String, Style) _resolvePartialCoverageCell({
+    required double cov,
+    required int col,
+    required int startCol,
+    required int endCol,
+    required Style style,
+  }) {
+    if (startCol == endCol) {
+      return (cov <= 0.1 ? '│' : _getFractionalBlock(cov), style);
+    }
+    if (col == startCol) {
+      return (
+        _getFractionalBlock(1.0 - cov),
+        style.merge(
+          Style(
+            foreground: null,
+            background: style.foreground ?? const Color(255, 255, 255),
+          ),
+        ),
+      );
+    }
+    return (_getFractionalBlock(cov), style);
+  }
+
+  void _paintCaliperOverlay(Buffer buffer, Offset offset, TimelineCanvas w) {
+    final mStart = w.measureStartMs;
+    final mEnd = w.measureEndMs;
+    if (mStart == null || mEnd == null) return;
+
+    final width = size.width;
+    final height = size.height;
+    final startX = offset.dx;
+    final startY = offset.dy;
+    final startUs = mStart * 1000.0;
+    final endUs = mEnd * 1000.0;
+    final col1 = ((startUs - w.offsetX) / w.zoomLevel).round();
+    final col2 = ((endUs - w.offsetX) / w.zoomLevel).round();
+    final leftCol = min(col1, col2).clamp(0, width - 3) + 1;
+    final rightCol = max(col1, col2).clamp(0, width - 3) + 1;
+    final spanWidth = rightCol - leftCol + 1;
+    final durationMs = (endUs - startUs).abs() / 1000.0;
+    final text = ' ${durationMs.toStringAsFixed(1)}ms ';
+    final textLen = text.characters.length;
+    final String caliperStr;
+    if (spanWidth >= textLen + 4) {
+      final dashes = spanWidth - 2 - textLen;
+      final leftDashes = dashes ~/ 2;
+      final rightDashes = dashes - leftDashes;
+      caliperStr = '├${'─' * leftDashes}$text${'─' * rightDashes}┤';
+    } else if (spanWidth >= 2) {
+      caliperStr = '├${'─' * (spanWidth - 2)}┤';
+    } else {
+      caliperStr = '│';
+    }
+
+    const caliperStyle = Style(
+      foreground: Color(0, 255, 255),
+      modifiers: Modifier.bold,
+    );
+    final caliperRow = startY - 1;
+    var colOffset = 0;
+    for (final grapheme in caliperStr.characters) {
+      final cx = startX + leftCol + colOffset;
+      if (cx >= startX && cx < startX + width && caliperRow >= 0) {
+        final bgArgb = buffer.getBackground(cx, caliperRow);
+        final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
+        _safeSetCell(
+          buffer,
+          cx,
+          caliperRow,
+          grapheme,
+          caliperStyle.merge(Style(background: bg)),
+        );
+      }
+      colOffset += graphemeWidth(grapheme);
+    }
+
+    for (var y = caliperRow + 1; y < startY + height; y++) {
+      _paintCaliperStem(buffer, offset, startX + leftCol, y, caliperStyle);
+      if (rightCol > leftCol) {
+        _paintCaliperStem(buffer, offset, startX + rightCol, y, caliperStyle);
+      }
+    }
+  }
+
+  void _paintCaliperStem(
+    Buffer buffer,
+    Offset offset,
+    int cx,
+    int y,
+    Style caliperStyle,
+  ) {
+    final bgArgb = buffer.getBackground(cx, y);
+    final bg = bgArgb == 0 ? null : Color.argb(bgArgb);
+    _drawClippedCell(
+      buffer,
+      offset,
+      cx,
+      y,
+      '│',
+      caliperStyle.merge(Style(background: bg)),
+    );
+  }
+}
+
+final class _CellDrawTracker {
+  final int width;
+  final BoolArray? _array;
+  final Set<int>? _set;
+
+  _CellDrawTracker({
+    required this.width,
+    required int height,
+    required bool useBoolArray,
+  }) : _array = useBoolArray ? BoolArray(width * height) : null,
+       _set = useBoolArray ? null : <int>{};
+
+  bool isDrawn(int x, int y, int col, int visualY) {
+    if (_array case final array?) {
+      return array[visualY * width + col];
+    }
+    return _set!.contains((x << 16) | y);
+  }
+
+  void markDrawn(int x, int y, int col, int visualY) {
+    if (_array case final array?) {
+      array[visualY * width + col] = true;
+    } else {
+      _set!.add((x << 16) | y);
+    }
+  }
+
+  bool isSpanOccluded(
+    int startX,
+    int y,
+    int visualY,
+    int startCol,
+    int endCol,
+  ) {
+    for (var col = startCol; col <= endCol; col++) {
+      if (!isDrawn(startX + 1 + col, y, col, visualY)) {
+        return false;
+      }
+    }
+    return true;
   }
 }
 

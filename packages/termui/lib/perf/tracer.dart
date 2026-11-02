@@ -39,7 +39,7 @@ class Phase {
 /// A high-performance, low-overhead event tracer.
 class Tracer {
   /// Active configuration of trace categories to record.
-  static Set<TraceCategory> activeCategories = TraceCategory.values.toSet();
+  static Set<TraceCategory> activeCategories = {...TraceCategory.values};
 
   /// Whether the tracer is currently enabled and recording events.
   static bool isEnabled = false;
@@ -49,9 +49,9 @@ class Tracer {
   static const int _bufferLength = _bufferSize * _eventSize;
   static const int _bufferMask = _bufferLength - 1;
 
-  static late List<int> _activeBuffer;
+  static List<int> _activeBuffer = _createBuffer(_bufferLength);
   static Map<int, Map<String, String>> _activeMetadata = {};
-  static late List<int> _backupBuffer;
+  static List<int> _backupBuffer = _createBuffer(_bufferLength);
   static int _writeIndex = 0;
 
   static final Map<String, int> _stringTable = {};
@@ -60,7 +60,7 @@ class Tracer {
 
   static final Stopwatch _stopwatch = Stopwatch();
   static int _baseEpochUs = 0;
-  static int _isolateId = 0;
+  static int _isolateId = 1;
 
   static TracerSink? _sink;
 

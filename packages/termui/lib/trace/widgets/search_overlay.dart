@@ -27,7 +27,12 @@ class QueryToken {
   /// Optimization: whether [value] contains any uppercase letters (Smart Case).
   final bool isSmartCase;
 
+  final String _valueLower;
+
   static final RegExp _smartCaseDetector = RegExp(r'[A-Z]');
+  static final RegExp _tokenPattern = RegExp(
+    r'(-?)(?:([a-zA-Z0-9_]+):)?([<>=]+)?(?:\"([^\"]*)\"|([^\s]+))',
+  );
 
   /// Creates a [QueryToken] representing a single search requirement.
   ///
@@ -41,7 +46,8 @@ class QueryToken {
     required this.value,
   }) : regex = _parseRegex(value),
        durationUs = _parseDuration(field, value),
-       isSmartCase = value.contains(_smartCaseDetector);
+       isSmartCase = value.contains(_smartCaseDetector),
+       _valueLower = value.toLowerCase();
 
   static RegExp? _parseRegex(String value) {
     if (value.length >= 2 && value.startsWith('/') && value.endsWith('/')) {
@@ -77,73 +83,48 @@ class QueryToken {
 
   /// Evaluates whether the given [span] satisfies this query token.
   bool matches(TraceSpan span) {
-    var match = false;
-
-    if (field == 'dur' || field == 'duration') {
-      if (durationUs != null) {
-        final spanDur = (span.endUs - span.startUs).toDouble();
-        match = switch (operator) {
-          '>' => spanDur > durationUs!,
-          '<' => spanDur < durationUs!,
-          '>=' => spanDur >= durationUs!,
-          '<=' => spanDur <= durationUs!,
-          _ => spanDur == durationUs!,
-        };
-      }
-    } else {
-      final searchTargets = <String>[];
-
-      switch (field) {
-        case 'name':
-          searchTargets.add(span.name);
-        case 'cat':
-        case 'category':
-          searchTargets.add(span.category);
-        case String f:
-          if (span.args.containsKey(f)) {
-            searchTargets.add(span.args[f]!);
-          }
-        case null:
-          searchTargets.add(span.name);
-          searchTargets.add(span.category);
-          searchTargets.addAll(span.args.values);
-      }
-
-      for (final target in searchTargets) {
-        if (regex != null) {
-          if (regex!.hasMatch(target)) {
-            match = true;
-            break;
-          }
-        } else {
-          final targetLower = target.toLowerCase();
-          final valLower = value.toLowerCase();
-
-          if (isSmartCase) {
-            if (target.contains(value)) {
-              match = true;
-              break;
-            }
-          } else {
-            if (targetLower.contains(valLower)) {
-              match = true;
-              break;
-            }
-          }
-        }
-      }
-    }
-
+    final match = (field == 'dur' || field == 'duration')
+        ? _matchesDuration(span)
+        : _collectSearchTargets(span).any(_matchesTarget);
     return isExclusion ? !match : match;
+  }
+
+  bool _matchesDuration(TraceSpan span) {
+    final threshold = durationUs;
+    if (threshold == null) return false;
+    final spanDur = (span.endUs - span.startUs).toDouble();
+    return switch (operator) {
+      '>' => spanDur > threshold,
+      '<' => spanDur < threshold,
+      '>=' => spanDur >= threshold,
+      '<=' => spanDur <= threshold,
+      _ => spanDur == threshold,
+    };
+  }
+
+  List<String> _collectSearchTargets(TraceSpan span) {
+    return switch (field) {
+      'name' => [span.name],
+      'cat' || 'category' => [span.category],
+      final String f => [?span.args[f]],
+      null => [span.name, span.category, ...span.args.values],
+    };
+  }
+
+  bool _matchesTarget(String target) {
+    if (regex case final pattern?) {
+      return pattern.hasMatch(target);
+    }
+    if (isSmartCase) {
+      return target.contains(value);
+    }
+    return target.toLowerCase().contains(_valueLower);
   }
 
   static List<QueryToken> parseQuery(String query) {
     final tokens = <QueryToken>[];
-    final regex = RegExp(
-      r'(-?)(?:([a-zA-Z0-9_]+):)?([<>=]+)?(?:\"([^\"]*)\"|([^\s]+))',
-    );
 
-    for (final match in regex.allMatches(query)) {
+    for (final match in _tokenPattern.allMatches(query)) {
       final isExcl = match.group(1) == '-';
       final field = match.group(2);
       final op = match.group(3);

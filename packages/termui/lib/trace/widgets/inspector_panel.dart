@@ -1,3 +1,4 @@
+import 'package:characters/characters.dart';
 import "package:termui/termui_trace.dart";
 import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
@@ -15,26 +16,81 @@ String formatDuration(double ms) {
 
 List<String> wrapTraceText(String text, int maxWidth) {
   if (maxWidth <= 0) return [];
-  if (text.length <= maxWidth) return [text];
+  if (text.characters.length <= maxWidth) return [text];
 
   final words = text.split(' ');
   final lines = <String>[];
   var currentLine = '';
+  var currentLen = 0;
 
   for (final word in words) {
     if (word.isEmpty) continue;
+    final wordLen = word.characters.length;
 
     if (currentLine.isEmpty) {
       currentLine = word;
-    } else if (currentLine.length + 1 + word.length <= maxWidth) {
-      currentLine += ' $word';
+      currentLen = wordLen;
+    } else if (currentLen + 1 + wordLen <= maxWidth) {
+      currentLine = '$currentLine $word';
+      currentLen += 1 + wordLen;
     } else {
       lines.add(currentLine);
       currentLine = '  $word'; // Indent wrapped lines
+      currentLen = 2 + wordLen;
     }
   }
   if (currentLine.isNotEmpty) {
     lines.add(currentLine);
+  }
+  return lines;
+}
+
+String _truncateInspectorLine(String text, int maxWidth) {
+  final available = maxWidth - 2;
+  if (available <= 0) return '';
+  final chars = text.characters;
+  if (chars.length <= available) return text;
+  if (maxWidth < 5) {
+    return chars.take(available).toString();
+  }
+  return '${chars.take(maxWidth - 5)}...';
+}
+
+List<String> _buildHoveredSpanLines(
+  TraceSpan span,
+  int maxWidth,
+  TimeDisplayMode timeDisplayMode,
+  int? baseTime,
+) {
+  final durMs = (span.endUs - span.startUs) / 1000.0;
+  final startMs = span.startUs / 1000.0;
+  final endMs = span.endUs / 1000.0;
+
+  final timingLine = switch (timeDisplayMode) {
+    TimeDisplayMode.formatted =>
+      'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}',
+    TimeDisplayMode.rawRelative =>
+      'Start: ${span.startUs}  |  End: ${span.endUs}  |  Duration: ${formatDuration(durMs)}',
+    TimeDisplayMode.rawAbsolute =>
+      'Start: ${span.startUs + (baseTime ?? 0)}  |  End: ${span.endUs + (baseTime ?? 0)}  |  Duration: ${formatDuration(durMs)}',
+  };
+
+  final lines = <String>[
+    _truncateInspectorLine('[Hovered] ${span.displayLabel}', maxWidth),
+    _truncateInspectorLine(timingLine, maxWidth),
+  ];
+
+  if (span.args.isNotEmpty) {
+    lines.add('Args:');
+    final wrapWidth = max(0, maxWidth - 2);
+    for (final MapEntry(:key, :value) in span.args.entries) {
+      var argStr = '  $key: $value';
+      final argChars = argStr.characters;
+      if (argChars.length > 1000) {
+        argStr = '${argChars.take(1000)}... (truncated)';
+      }
+      lines.addAll(wrapTraceText(argStr, wrapWidth));
+    }
   }
   return lines;
 }
@@ -63,43 +119,12 @@ Widget buildInspectorPanel(
           style: const Style(foreground: Colors.white),
         );
       } else {
-        final span = hoveredSpan;
-        final durMs = (span.endUs - span.startUs) / 1000.0;
-        final startMs = span.startUs / 1000.0;
-        final endMs = span.endUs / 1000.0;
-
-        final lines = <String>[];
-
-        String titleLine = '[Hovered] ${span.displayLabel}';
-        if (titleLine.length > maxWidth - 2) {
-          titleLine = '${titleLine.substring(0, maxWidth - 5)}...';
-        }
-        lines.add(titleLine);
-
-        var timingLine = switch (timeDisplayMode) {
-          TimeDisplayMode.formatted =>
-            'Start: ${formatDuration(startMs)}  |  End: ${formatDuration(endMs)}  |  Duration: ${formatDuration(durMs)}',
-          TimeDisplayMode.rawRelative =>
-            'Start: ${span.startUs}  |  End: ${span.endUs}  |  Duration: ${formatDuration(durMs)}',
-          TimeDisplayMode.rawAbsolute =>
-            'Start: ${span.startUs + (baseTime ?? 0)}  |  End: ${span.endUs + (baseTime ?? 0)}  |  Duration: ${formatDuration(durMs)}',
-        };
-        if (timingLine.length > maxWidth - 2) {
-          timingLine = '${timingLine.substring(0, maxWidth - 5)}...';
-        }
-        lines.add(timingLine);
-
-        if (span.args.isNotEmpty) {
-          lines.add('Args:');
-          for (final entry in span.args.entries) {
-            var argStr = '  ${entry.key}: ${entry.value}';
-            if (argStr.length > 1000) {
-              argStr = '${argStr.substring(0, 1000)}... (truncated)';
-            }
-            lines.addAll(wrapTraceText(argStr, maxWidth - 2));
-          }
-        }
-
+        final lines = _buildHoveredSpanLines(
+          hoveredSpan,
+          maxWidth,
+          timeDisplayMode,
+          baseTime,
+        );
         final totalLines = lines.length;
         contentHeight = min(totalLines, 12);
 
