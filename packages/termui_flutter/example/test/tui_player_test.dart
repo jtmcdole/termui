@@ -68,5 +68,25 @@ void main() {
         expect(isDone, isTrue);
       });
     });
+
+    test('IoSavedCastsRepository rejects invalid file names', () async {
+      final repo = SavedCastsRepository(storeName: 'test_validation');
+      for (final invalid in [
+        '',
+        '.',
+        '..',
+        '../escape.cast',
+        r'..\escape.cast',
+      ]) {
+        await expectLater(repo.loadCast(invalid), throwsArgumentError);
+        await expectLater(repo.saveCast(invalid, 'x'), throwsArgumentError);
+        await expectLater(repo.deleteCast(invalid), throwsArgumentError);
+        await expectLater(repo.loadBytes(invalid), throwsArgumentError);
+        await expectLater(
+          repo.saveBytes(invalid, Uint8List(0)),
+          throwsArgumentError,
+        );
+      }
+    });
   });
 }

@@ -5,9 +5,34 @@ import 'repository.dart';
 
 final class IoSavedCastsRepository implements SavedCastsRepository {
   final String storeName;
-  IoSavedCastsRepository(this.storeName);
+
+  IoSavedCastsRepository(this.storeName) {
+    _validateFileName(storeName, 'storeName');
+  }
 
   Directory get _dir => Directory('saved_$storeName');
+
+  static void _validateFileName(String name, [String paramName = 'name']) {
+    if (name.isEmpty ||
+        name == '.' ||
+        name == '..' ||
+        name.contains('/') ||
+        name.contains(r'\')) {
+      throw ArgumentError.value(name, paramName, 'Invalid file name');
+    }
+  }
+
+  static bool _isSupportedCastPath(String path) =>
+      path.endsWith('.cast') ||
+      path.endsWith('.cast.gz') ||
+      path.endsWith('.json') ||
+      path.endsWith('.json.gz') ||
+      path.endsWith('.gz');
+
+  File _resolveFile(String name) {
+    _validateFileName(name);
+    return File('${_dir.path}/$name');
+  }
 
   Future<void> _ensureDir() async {
     if (!await _dir.exists()) {
@@ -17,73 +42,65 @@ final class IoSavedCastsRepository implements SavedCastsRepository {
 
   @override
   Future<List<String>> listCasts() async {
+    if (!await _dir.exists()) return [];
     try {
-      await _ensureDir();
       final list = <String>[];
       await for (final entity in _dir.list()) {
-        if (entity is File &&
-            (entity.path.endsWith('.cast') ||
-                entity.path.endsWith('.cast.gz') ||
-                entity.path.endsWith('.json') ||
-                entity.path.endsWith('.json.gz') ||
-                entity.path.endsWith('.gz'))) {
+        if (entity is File && _isSupportedCastPath(entity.path)) {
           list.add(entity.uri.pathSegments.last);
         }
       }
-      // Sort alphabetically
       list.sort();
       return list;
-    } catch (_) {
+    } on PathNotFoundException {
       return [];
     }
   }
 
   @override
   Future<String?> loadCast(String name) async {
+    final file = _resolveFile(name);
+    if (!await file.exists()) return null;
     try {
-      await _ensureDir();
-      final file = File('${_dir.path}/$name');
-      if (await file.exists()) {
-        return await file.readAsString();
-      }
-    } catch (_) {}
-    return null;
+      return await file.readAsString();
+    } on PathNotFoundException {
+      return null;
+    }
   }
 
   @override
   Future<void> saveCast(String name, String content) async {
+    final file = _resolveFile(name);
     await _ensureDir();
-    final file = File('${_dir.path}/$name');
     await file.writeAsString(content);
   }
 
   @override
   Future<void> deleteCast(String name) async {
+    final file = _resolveFile(name);
+    if (!await file.exists()) return;
     try {
-      await _ensureDir();
-      final file = File('${_dir.path}/$name');
-      if (await file.exists()) {
-        await file.delete();
-      }
-    } catch (_) {}
+      await file.delete();
+    } on PathNotFoundException {
+      // Already deleted concurrently.
+    }
   }
 
   @override
   Future<Uint8List?> loadBytes(String name) async {
+    final file = _resolveFile(name);
+    if (!await file.exists()) return null;
     try {
-      await _ensureDir();
-      final file = File('${_dir.path}/$name');
-      if (await file.exists()) {
-        return await file.readAsBytes();
-      }
-    } catch (_) {}
-    return null;
+      return await file.readAsBytes();
+    } on PathNotFoundException {
+      return null;
+    }
   }
 
   @override
   Future<void> saveBytes(String name, Uint8List content) async {
+    final file = _resolveFile(name);
     await _ensureDir();
-    final file = File('${_dir.path}/$name');
     await file.writeAsBytes(content);
   }
 }

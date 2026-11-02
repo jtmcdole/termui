@@ -224,7 +224,7 @@ final class AsciicastPlayerViewModel {
         events[_lastPlayedIndex].time <= targetTime) {
       final event = events[_lastPlayedIndex];
       if (event.type == 'o') {
-        virtualTerminal.write(event.data.codeUnits);
+        virtualTerminal.writeString(event.data);
       }
       _lastPlayedIndex++;
     }
@@ -253,7 +253,7 @@ final class AsciicastPlayerViewModel {
     while (index < events.length && !found) {
       final event = events[index];
       if (event.type == 'o') {
-        virtualTerminal.write(event.data.codeUnits);
+        virtualTerminal.writeString(event.data);
         _currentTime = event.time;
         found = true;
       }
