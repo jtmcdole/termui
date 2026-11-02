@@ -10,6 +10,7 @@ class _TestTerminalHandler implements TerminalHandler {
   int oscCallCount = 0;
   int? lastOscCommand;
   String? lastOscPayload;
+  final List<String> escCommands = [];
   final StringBuffer printedText = StringBuffer();
 
   @override
@@ -20,7 +21,9 @@ class _TestTerminalHandler implements TerminalHandler {
   }
 
   @override
-  void esc(String command) {}
+  void esc(String command) {
+    escCommands.add(command);
+  }
 
   @override
   void execute(int charCode) {}
@@ -184,20 +187,57 @@ void main() {
     );
 
     test(
-      'Aborts unbounded OSC payload exceeding 8192 bytes back to ground state',
+      'Aborts unterminated or oversized OSC payloads without leaking to ground text',
       () {
         final handler = _TestTerminalHandler();
         final parser = AnsiParser(handler);
 
-        // Unterminated OSC exceeding 8192 chars aborts without dispatching osc.
-        parser.parse('\x1b]0;${'A' * 8200}');
+        // Non-52 OSC exceeding 8192 chars overflows and discards tail until BEL/ST.
+        parser.parse('\x1b]0;${'A' * 8200}\x07');
         expect(handler.oscCallCount, equals(0));
+        expect(handler.printedText.toString(), isEmpty);
+
+        // Oversized OSC 52 (> 1.4M chars) discards tail without printing garbage to ground.
+        parser.parse('\x1b]52;c;${'A' * 1450000}\x07');
+        expect(handler.oscCallCount, equals(0));
+        expect(handler.printedText.toString(), isEmpty);
 
         // Subsequent valid OSC within cap still parses cleanly.
         parser.parse('\x1b]2;ok-title\x07');
         expect(handler.oscCallCount, equals(1));
         expect(handler.lastOscCommand, equals(2));
         expect(handler.lastOscPayload, equals('ok-title'));
+      },
+    );
+
+    test(
+      'Handles split ST, non-ST ESC aborts, and C0 inside oscEscape cleanly',
+      () {
+        final handler = _TestTerminalHandler();
+        final parser = AnsiParser(handler);
+
+        // Split ST (\x1b then \\) dispatches OSC without leaking esc('\\').
+        parser.parse('\x1b]52;c;aGk=\x1b');
+        expect(handler.oscCallCount, equals(0));
+        parser.parse('\\Z');
+        expect(handler.oscCallCount, equals(1));
+        expect(handler.lastOscCommand, equals(52));
+        expect(handler.lastOscPayload, equals('c;aGk='));
+        expect(handler.escCommands, isEmpty);
+        expect(handler.printedText.toString(), equals('Z'));
+
+        // Unterminated OSC followed by ESC [ (non-ST) aborts OSC and executes CSI.
+        handler.printedText.clear();
+        parser.parse('\x1b]0;unterminated\x1b[2 q');
+        expect(handler.oscCallCount, equals(1));
+        expect(handler.lastCsiCommand, equals('q'));
+        expect(handler.lastCsiParams, equals([2]));
+        expect(handler.lastCsiIntermediate, equals(' '));
+
+        // C0 control inside oscEscape (\x1b\n\\) resets to ground without phantom osc(-1, '').
+        parser.parse('\x1b]52;c;aGk=\x1b\n\\');
+        expect(handler.oscCallCount, equals(1));
+        expect(handler.printedText.toString(), equals(r'\'));
       },
     );
   });

@@ -38,6 +38,10 @@ final class VirtualTerminal implements TerminalHandler {
     pendingWrap: false,
   );
 
+  static final RegExp _whitespaceRegex = RegExp(r'\s+');
+  static const int _maxOsc52PayloadLength = 1_400_000;
+  static const int _maxOsc52DecodedBytes = 1_048_576;
+
   /// The width of the virtual terminal in columns.
   int width;
 
@@ -98,6 +102,16 @@ final class VirtualTerminal implements TerminalHandler {
 
   /// Whether bracketed paste mode (`DECSET 2004`, `?2004h` / `?2004l`) is enabled.
   bool bracketedPasteMode = false;
+
+  /// Callback invoked when an `OSC 52` clipboard write sequence is decoded.
+  ///
+  /// The `selection` parameter is the target selection buffer (e.g. `'c'` for
+  /// clipboard or `'p'` for primary), and `text` is the decoded UTF-8 string.
+  void Function(String selection, String text)? onClipboardWrite;
+
+  /// Callback invoked when a remote application sends an `OSC 52` clipboard
+  /// read query (`\x1b]52;<selection>;?\x07`), which is blocked for security.
+  void Function(String selection)? onClipboardReadBlocked;
 
   final List<void Function()> _listeners = [];
 
@@ -875,7 +889,41 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void osc(int command, String payload) {
-    // Ignore OSC for now
+    if (command == 52) {
+      _handleOsc52(payload);
+    }
+  }
+
+  void _handleOsc52(String payload) {
+    if (payload.length > _maxOsc52PayloadLength) return;
+    final semi = payload.indexOf(';');
+    if (semi < 0) return;
+    final rawSelection = payload.substring(0, semi);
+    final selection = rawSelection.isEmpty ? 'c' : rawSelection;
+    final body = payload.substring(semi + 1).trim();
+    if (body == '?') {
+      onClipboardReadBlocked?.call(selection);
+      return;
+    }
+    final writer = onClipboardWrite;
+    if (writer == null) return;
+    final text = _decodeOsc52Payload(body);
+    if (text != null) {
+      writer(selection, text);
+    }
+  }
+
+  static String? _decodeOsc52Payload(String body) {
+    final cleaned = body.replaceAll(_whitespaceRegex, '');
+    try {
+      final decodedBytes = base64.decode(base64.normalize(cleaned));
+      if (decodedBytes.length > _maxOsc52DecodedBytes) return null;
+      final text = utf8.decode(decodedBytes, allowMalformed: true);
+      if (utf8.encode(text).length > _maxOsc52DecodedBytes) return null;
+      return text;
+    } on FormatException {
+      return null;
+    }
   }
 
   @override
