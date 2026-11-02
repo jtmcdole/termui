@@ -23,6 +23,8 @@ class MockSceneRenderer implements SceneRenderer {
 
   final List<KeyEvent> keyEvents = [];
   final List<MouseEvent> mouseEvents = [];
+  final List<PasteEvent> pasteEvents = [];
+  bool consumePaste = false;
 
   @override
   bool handleKeyEvent(KeyEvent event) {
@@ -34,6 +36,12 @@ class MockSceneRenderer implements SceneRenderer {
   bool handleMouseEvent(MouseEvent event) {
     mouseEvents.add(event);
     return true;
+  }
+
+  @override
+  bool handlePasteEvent(PasteEvent event) {
+    pasteEvents.add(event);
+    return consumePaste;
   }
 
   void render() {}
@@ -955,6 +963,49 @@ void main() {
           async.flushMicrotasks();
 
           expect(framesRedrawn, equals(1));
+
+          sceneManager.dispose();
+        });
+      },
+    );
+
+    test(
+      'SceneManager routes PasteEvent to onPasteEvent, SceneRenderer.handlePasteEvent, or per-char fallback',
+      () {
+        fakeAsync((async) {
+          final backend = MockTerminalBackend();
+          final terminal = MockTerminal(backend);
+          final sceneManager = SceneManager(terminal);
+
+          final renderer = MockSceneRenderer()..currentBuffer = Buffer(20, 5);
+          final layer = SceneLayer(renderer: renderer, width: 20, height: 5);
+          sceneManager.layers.add(layer);
+          sceneManager.focusedLayer = layer;
+
+          // 1. When renderer.consumePaste is false, falls back to per-character KeyEvents.
+          terminal.injectTestEvent(const PasteEvent('ab'));
+          async.flushMicrotasks();
+          expect(renderer.pasteEvents, hasLength(1));
+          expect(renderer.keyEvents.map((e) => e.key), equals(['a', 'b']));
+
+          // 2. When renderer.consumePaste is true, consumes PasteEvent without char fallback.
+          renderer.keyEvents.clear();
+          renderer.consumePaste = true;
+          terminal.injectTestEvent(const PasteEvent('xyz'));
+          async.flushMicrotasks();
+          expect(renderer.pasteEvents, hasLength(2));
+          expect(renderer.keyEvents, isEmpty);
+
+          // 3. When sceneManager.onPasteEvent returns true, intercepts before layer.
+          final intercepted = <String>[];
+          sceneManager.onPasteEvent = (e) {
+            intercepted.add(e.text);
+            return true;
+          };
+          terminal.injectTestEvent(const PasteEvent('global'));
+          async.flushMicrotasks();
+          expect(intercepted, equals(['global']));
+          expect(renderer.pasteEvents, hasLength(2));
 
           sceneManager.dispose();
         });

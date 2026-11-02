@@ -1269,6 +1269,9 @@ class MarqueeRenderer implements SceneRenderer {
   @override
   bool handleMouseEvent(evt.MouseEvent event) => false;
 
+  @override
+  bool handlePasteEvent(evt.PasteEvent event) => false;
+
   void render() {}
 
   @override
