@@ -237,13 +237,15 @@ final class VirtualTerminal implements TerminalHandler {
         : Modifier.none;
   }
 
-  /// Feeds a chunk of data into the terminal.
+  /// Feeds a chunk of UTF-8 encoded bytes into the terminal.
   void write(List<int> chunk) {
-    if (chunk.any((b) => b > 0xFF)) {
-      _parser.parse(String.fromCharCodes(chunk));
-    } else {
-      _utf8Sink.add(chunk);
-    }
+    _utf8Sink.add(chunk);
+    _notifyListeners();
+  }
+
+  /// Feeds an already-decoded Dart string directly into the terminal.
+  void writeString(String text) {
+    _parser.parse(text);
     _notifyListeners();
   }
 

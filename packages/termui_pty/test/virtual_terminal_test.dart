@@ -28,6 +28,33 @@ void main() {
       expect(terminal.buffer.getCharacter(2, 0), equals(' '));
     });
 
+    test(
+      'writeString and write(utf8.encode) both render non-ASCII Latin-1 chars like © without U+FFFD',
+      () {
+        final fromString = VirtualTerminal(width: 10, height: 1);
+        fromString.writeString('© 2026');
+        expect(fromString.buffer.getCharacter(0, 0), equals('©'));
+        expect(fromString.buffer.getCharacter(0, 0), isNot(equals('\uFFFD')));
+        expect(
+          [
+            for (var x = 0; x < 6; x++) fromString.buffer.getCharacter(x, 0),
+          ].join(),
+          equals('© 2026'),
+        );
+
+        final fromUtf8 = VirtualTerminal(width: 10, height: 1);
+        fromUtf8.write(utf8.encode('© 2026'));
+        expect(fromUtf8.buffer.getCharacter(0, 0), equals('©'));
+        expect(fromUtf8.buffer.getCharacter(0, 0), isNot(equals('\uFFFD')));
+        expect(
+          [
+            for (var x = 0; x < 6; x++) fromUtf8.buffer.getCharacter(x, 0),
+          ].join(),
+          equals('© 2026'),
+        );
+      },
+    );
+
     test('handles horizontal tab stops (\\t)', () {
       final terminal = VirtualTerminal(width: 20, height: 5);
       terminal.write(utf8.encode('A\tB\tC'));
@@ -672,8 +699,8 @@ void main() {
           equals(const Color(170, 0, 0).argb),
         );
 
-        // Non-byte UTF-16 code units (> 0xFF) and dispose() cleanup.
-        terminal.write('🚀'.codeUnits);
+        // Decoded string via writeString and dispose() cleanup.
+        terminal.writeString('🚀');
         expect(terminal.buffer.getCharacter(1, 1), equals('🚀'));
         expect(notified, equals(3));
 

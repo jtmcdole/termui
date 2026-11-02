@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:termui/termui.dart';
 import 'package:pty2/pty2.dart';
 import 'virtual_terminal.dart';
@@ -39,7 +38,7 @@ class PseudoTerminalView extends StatefulWidget {
 class _PseudoTerminalViewState extends State<PseudoTerminalView> {
   late VirtualTerminal _terminal;
   StreamSubscription<String>? _outSubscription;
-  late final FocusNode _focusNode;
+  late FocusNode _focusNode;
   bool _ownsFocusNode = false;
   bool _exited = false;
   int _lastWidth = 0;
@@ -55,25 +54,19 @@ class _PseudoTerminalViewState extends State<PseudoTerminalView> {
     }
   }
 
-  @override
-  void initState() {
-    super.initState();
-    if (widget.focusNode != null) {
-      _focusNode = widget.focusNode!;
+  void _bindFocusNode(FocusNode? externalNode) {
+    if (externalNode != null) {
+      _focusNode = externalNode;
+      _ownsFocusNode = false;
     } else {
       _focusNode = FocusNode(id: 'pseudo_terminal_view');
       _ownsFocusNode = true;
     }
-    _terminal = VirtualTerminal(
-      width: 80,
-      height: 24,
-      transparentBackground: widget.transparentBackground,
-      defaultForeground: widget.defaultForeground,
-    );
-    final pty = widget.pty;
-    _outSubscription = pty.out.listen((data) {
-      _terminal.write(utf8.encode(data));
-    });
+  }
+
+  void _subscribeToPty(PseudoTerminal pty) {
+    _exited = false;
+    _outSubscription = pty.out.listen(_terminal.writeString);
     pty.exitCode.then(
       (code) {
         if (mounted && widget.pty == pty) _notifyExit(code);
@@ -82,6 +75,41 @@ class _PseudoTerminalViewState extends State<PseudoTerminalView> {
         if (mounted && widget.pty == pty) _notifyExit(-1);
       },
     );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _bindFocusNode(widget.focusNode);
+    _terminal = VirtualTerminal(
+      width: 80,
+      height: 24,
+      transparentBackground: widget.transparentBackground,
+      defaultForeground: widget.defaultForeground,
+    );
+    _subscribeToPty(widget.pty);
+  }
+
+  @override
+  void didUpdateWidget(PseudoTerminalView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focusNode != oldWidget.focusNode) {
+      if (_ownsFocusNode) {
+        _focusNode.dispose();
+      }
+      _bindFocusNode(widget.focusNode);
+    }
+    if (widget.pty != oldWidget.pty) {
+      _outSubscription?.cancel();
+      _subscribeToPty(widget.pty);
+      if (_lastWidth > 0 && _lastHeight > 0) {
+        try {
+          widget.pty.resize(_lastWidth, _lastHeight);
+        } catch (_) {
+          // Ignore unsupported platforms
+        }
+      }
+    }
   }
 
   @override

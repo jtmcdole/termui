@@ -117,4 +117,106 @@ void main() {
       });
     },
   );
+
+  test(
+    'PseudoTerminalView didUpdateWidget swaps pty subscription and focusNode cleanly',
+    () {
+      final tester = TerminalTester();
+
+      tester.run(() async {
+        final pty1 = MockPty();
+        final pty2 = MockPty();
+        final externalFocus = FocusNode(id: 'external_pty_focus');
+        addTearDown(externalFocus.dispose);
+
+        late void Function(PseudoTerminal, FocusNode?) updateChild;
+
+        final runner = PromptRunner<int>(
+          terminal: tester.terminal,
+          alternateScreen: false,
+          widget: _PtyHostSwitcher(
+            initialPty: pty1,
+            onReady: (updater) => updateChild = updater,
+          ),
+        );
+        addTearDown(runner.abort);
+
+        final runFuture = runner.run();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        final backend = tester.terminal.backend as MockTerminalBackend;
+        pty1.simulateOutput('\x1b[1;1HFirstPty©');
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(backend.writes.join(), contains('FirstPty©'));
+
+        tester.sendKey(LogicalKey('a', 'a'));
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(pty1.written, contains('a'));
+
+        // Swap to pty2 and an external FocusNode via didUpdateWidget
+        updateChild(pty2, externalFocus);
+        await tester.pump(const Duration(milliseconds: 50));
+        externalFocus.requestFocus();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        // Output from old pty1 must no longer be subscribed
+        pty1.written.clear();
+        backend.writes.clear();
+        pty1.simulateOutput('\x1b[2;1HStaleOutput');
+        pty2.simulateOutput('\x1b[2;1HSecondPty');
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(backend.writes.join(), isNot(contains('StaleOutput')));
+        expect(backend.writes.join(), contains('SecondPty'));
+
+        tester.sendKey(LogicalKey('z', 'z'));
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(pty2.written, contains('z'));
+        expect(pty1.written, isEmpty);
+
+        // Swap back to null focusNode (internally owned) without disposing externalFocus
+        updateChild(pty2, null);
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(() => externalFocus.requestFocus(), returnsNormally);
+
+        pty2.simulateExit(7);
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(await runFuture, equals(7));
+      });
+    },
+  );
+}
+
+class _PtyHostSwitcher extends StatefulWidget {
+  final PseudoTerminal initialPty;
+  final void Function(void Function(PseudoTerminal, FocusNode?) updater)
+  onReady;
+
+  const _PtyHostSwitcher({required this.initialPty, required this.onReady});
+
+  @override
+  State<_PtyHostSwitcher> createState() => _PtyHostSwitcherState();
+}
+
+class _PtyHostSwitcherState extends State<_PtyHostSwitcher> {
+  late PseudoTerminal _pty = widget.initialPty;
+  FocusNode? _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.onReady((nextPty, nextFocus) {
+      if (!mounted) return;
+      setState(() {
+        _pty = nextPty;
+        _focusNode = nextFocus;
+      });
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.expand(
+      child: PseudoTerminalView(pty: _pty, focusNode: _focusNode),
+    );
+  }
 }
