@@ -4,7 +4,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 /// A button widget featuring multiple layered custom animation effects.
-class AnimatedButton extends StatefulWidget implements MouseEventHandler {
+class AnimatedButton extends StatefulWidget {
   /// The text label displayed on the button.
   final String text;
 
@@ -21,7 +21,8 @@ class AnimatedButton extends StatefulWidget implements MouseEventHandler {
   final int? height;
 
   /// Creates an [AnimatedButton] with custom properties.
-  AnimatedButton({
+  const AnimatedButton({
+    super.key,
     required this.text,
     required this.onPressed,
     this.style = const Style(
@@ -32,25 +33,14 @@ class AnimatedButton extends StatefulWidget implements MouseEventHandler {
     this.height,
   });
 
-  AnimatedButtonState? _state;
-
-  /// Internal mouse event handler delegated from parent event loop.
   @override
-  void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    _state?.handleMouseEvent(event, localX, localY);
-  }
-
-  @override
-  State<AnimatedButton> createState() {
-    final state = AnimatedButtonState();
-    _state = state;
-    return state;
-  }
+  State<AnimatedButton> createState() => AnimatedButtonState();
 }
 
 /// The mutable state for [AnimatedButton], mixing in the TUI animation ticker capability.
 class AnimatedButtonState extends State<AnimatedButton>
-    with TuiAnimatedStateMixin<AnimatedButton> {
+    with TuiAnimatedStateMixin<AnimatedButton>
+    implements MouseEventHandler {
   late final InkwellRippleEffect _ripple;
   late final SparkleEffect _sparkles;
   late final FlashEffect _flash;
@@ -94,9 +84,10 @@ class AnimatedButtonState extends State<AnimatedButton>
   }
 
   /// Handles mouse movement, press, and release within this button's bounds.
+  @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
-    final resolvedWidth = widget.width ?? _lastWidth;
-    final resolvedHeight = widget.height ?? _lastHeight;
+    final resolvedWidth = _lastWidth > 0 ? _lastWidth : (widget.width ?? 0);
+    final resolvedHeight = _lastHeight > 0 ? _lastHeight : (widget.height ?? 0);
     if (resolvedWidth <= 0 || resolvedHeight <= 0) return;
 
     final inBounds =
@@ -105,44 +96,49 @@ class AnimatedButtonState extends State<AnimatedButton>
         localY >= 0 &&
         localY < resolvedHeight;
 
-    if (event.type == MouseEventType.press && inBounds) {
-      setState(() {
-        _isPressed = true;
-        _isHovered = false;
-
-        final clickPoint = Point(localX, localY);
-        // Trigger both the radial ripple and the sparkle trail on the click coordinates
-        triggerEffect(_ripple, clickPoint);
-        triggerEffect(_sparkles, clickPoint);
-      });
-    } else if (event.type == MouseEventType.release) {
-      if (_isPressed) {
+    switch (event.type) {
+      case MouseEventType.press when inBounds:
+        _handlePress(localX, localY);
+      case MouseEventType.release when _isPressed:
+        _handleRelease(localX, localY, inBounds);
+      case MouseEventType.move || MouseEventType.drag:
         setState(() {
-          _isPressed = false;
-          _ripple.reset();
-          _sparkles.reset();
-          if (inBounds) {
-            _isHovered = true;
-
-            // Trigger a full layout flash upon successful button activation
-            triggerEffect(_flash, Point(localX, localY));
-            widget.onPressed();
-          }
+          _isHovered = inBounds && !_isPressed;
         });
-      }
-    } else if (event.type == MouseEventType.move ||
-        event.type == MouseEventType.drag) {
-      setState(() {
-        _isHovered = inBounds && !_isPressed;
-      });
+      default:
+        break;
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    widget._state = this;
-    return _AnimatedButtonRenderWidget(this);
+  void _handlePress(int localX, int localY) {
+    setState(() {
+      _isPressed = true;
+      _isHovered = false;
+
+      final clickPoint = Point(localX, localY);
+      // Trigger both the radial ripple and the sparkle trail on the click coordinates
+      triggerEffect(_ripple, clickPoint);
+      triggerEffect(_sparkles, clickPoint);
+    });
   }
+
+  void _handleRelease(int localX, int localY, bool inBounds) {
+    setState(() {
+      _isPressed = false;
+      _ripple.reset();
+      _sparkles.reset();
+      if (inBounds) {
+        _isHovered = true;
+
+        // Trigger a full layout flash upon successful button activation
+        triggerEffect(_flash, Point(localX, localY));
+        widget.onPressed();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => _AnimatedButtonRenderWidget(this);
 }
 
 class _AnimatedButtonRenderWidget extends Widget {
@@ -170,9 +166,10 @@ class _AnimatedButtonElement extends Element {
         (constraints.maxHeight == BoxConstraints.infinity
             ? 0
             : constraints.maxHeight);
-    state._lastWidth = w;
-    state._lastHeight = h;
-    return constraints.constrain(Size(w, h));
+    final constrainedSize = constraints.constrain(Size(w, h));
+    state._lastWidth = constrainedSize.width;
+    state._lastHeight = constrainedSize.height;
+    return constrainedSize;
   }
 
   @override

@@ -246,10 +246,9 @@ class SceneManager implements Reassemblable {
       'button': event.button.name,
       'type': event.type.name,
       'pos': '${event.x},${event.y}',
+      if (event.modifiers.isNotEmpty)
+        'modifiers': [for (final m in event.modifiers) m.name].join('+'),
     };
-    if (event.modifiers.isNotEmpty) {
-      meta['modifiers'] = [for (final m in event.modifiers) m.name].join('+');
-    }
 
     Tracer.record(
       _traceMouseEventId,
@@ -263,273 +262,14 @@ class SceneManager implements Reassemblable {
       _isGlobalMouseDown =
           event.type == MouseEventType.press ||
           event.type == MouseEventType.drag;
+      _recordDebugTouch(event);
 
-      if (debugShowTouchesEnabled) {
-        if (event.type == MouseEventType.press ||
-            event.type == MouseEventType.release) {
-          _activeTouches.add(
-            _TouchFeedback(
-              x: _globalMouseX!,
-              y: _globalMouseY!,
-              button: event.button,
-              type: event.type,
-              startTime: clock.now().millisecondsSinceEpoch,
-            ),
-          );
-          addRipple(Point<int>(event.x, event.y));
-        }
-      }
-
-      var didRender = false;
-
-      if (event.type == MouseEventType.press) {
-        final mouseX = event.x - 1;
-        final mouseY = event.y - 1;
-        final focusBeforePress = focusedLayer;
-        final focusEpochBeforePress = _focusEpoch;
-        final sortedLayers = _getSortedLayers();
-
-        SceneLayer? hitLayer;
-        for (final layer in sortedLayers) {
-          if (!layer.hitTestable) continue;
-
-          final buf = layer.renderer.currentBuffer;
-          if (buf == null) continue;
-
-          if (mouseX >= layer.x &&
-              mouseX < layer.x + buf.width &&
-              mouseY >= layer.y &&
-              mouseY < layer.y + buf.height) {
-            final isTL = mouseX == layer.x && mouseY == layer.y;
-            final isTR = mouseX == layer.x + buf.width - 1 && mouseY == layer.y;
-            final isBL =
-                mouseX == layer.x && mouseY == layer.y + buf.height - 1;
-            final isBR =
-                mouseX == layer.x + buf.width - 1 &&
-                mouseY == layer.y + buf.height - 1;
-
-            if (layer.resizable && (isTL || isTR || isBL || isBR)) {
-              hitLayer = layer;
-              _resizingLayer = layer;
-              _resizeCorner = isTL
-                  ? 1
-                  : isTR
-                  ? 2
-                  : isBL
-                  ? 3
-                  : 4;
-              _dragStartX = event.x;
-              _dragStartY = event.y;
-              _layerStartX = layer.x;
-              _layerStartY = layer.y;
-              _layerStartWidth = layer.width ?? buf.width;
-              _layerStartHeight = layer.height ?? buf.height;
-              break;
-            }
-
-            final localX = mouseX - layer.x;
-            final localY = mouseY - layer.y;
-            final localEvent = MouseEvent(
-              x: localX + 1,
-              y: localY + 1,
-              globalX: event.globalX ?? event.x,
-              globalY: event.globalY ?? event.y,
-              button: event.button,
-              type: event.type,
-              modifiers: event.modifiers,
-            );
-
-            final isTransparent =
-                (buf.getModifiers(localX, localY) & Modifier.transparent) != 0;
-            final isOpaque = !isTransparent;
-
-            final handled = layer.renderer.handleMouseEvent(localEvent);
-            if (handled || layer.draggable) {
-              hitLayer = layer;
-              if (layer.draggable && layers.contains(layer)) {
-                _draggingLayer = layer;
-                _dragStartX = event.x;
-                _dragStartY = event.y;
-                _layerStartX = layer.x;
-                _layerStartY = layer.y;
-              }
-              break;
-            }
-
-            if (isOpaque) {
-              if (layer.mouseOpaque) {
-                hitLayer = layer;
-              }
-              break;
-            }
-          }
-        }
-
-        _reconcilePressHit(
-          hitLayer: hitLayer,
-          button: event.button,
-          focusBeforePress: focusBeforePress,
-          focusEpochBeforePress: focusEpochBeforePress,
-        );
-      } else if (event.type == MouseEventType.drag) {
-        if (_resizingLayer != null) {
-          int dx = event.x - _dragStartX;
-          int dy = event.y - _dragStartY;
-
-          if (_resizeCorner == 1 || _resizeCorner == 3) {
-            if (_layerStartWidth - dx < 10) dx = _layerStartWidth - 10;
-          } else {
-            if (_layerStartWidth + dx < 10) dx = 10 - _layerStartWidth;
-          }
-
-          if (_resizeCorner == 1 || _resizeCorner == 2) {
-            if (_layerStartHeight - dy < 5) dy = _layerStartHeight - 5;
-          } else {
-            if (_layerStartHeight + dy < 5) dy = 5 - _layerStartHeight;
-          }
-
-          var newX = _layerStartX;
-          var newY = _layerStartY;
-          var newW = _layerStartWidth;
-          var newH = _layerStartHeight;
-
-          if (_resizeCorner == 1) {
-            newX += dx;
-            newY += dy;
-            newW -= dx;
-            newH -= dy;
-          } else if (_resizeCorner == 2) {
-            newY += dy;
-            newW += dx;
-            newH -= dy;
-          } else if (_resizeCorner == 3) {
-            newX += dx;
-            newW -= dx;
-            newH += dy;
-          } else if (_resizeCorner == 4) {
-            newW += dx;
-            newH += dy;
-          }
-
-          _resizingLayer!.x = newX;
-          _resizingLayer!.y = newY;
-          _resizingLayer!.width = newW;
-          _resizingLayer!.height = newH;
-          _resizeRenderer(_resizingLayer!.renderer, newW, newH);
-          render();
-          didRender = true;
-        } else if (_draggingLayer != null) {
-          final dx = event.x - _dragStartX;
-          final dy = event.y - _dragStartY;
-          _draggingLayer!.x = _layerStartX + dx;
-          _draggingLayer!.y = _layerStartY + dy;
-          render();
-          didRender = true;
-        } else if (_capturedMouseLayer != null) {
-          final mouseX = event.x - 1;
-          final mouseY = event.y - 1;
-          final localX = mouseX - _capturedMouseLayer!.x;
-          final localY = mouseY - _capturedMouseLayer!.y;
-          final localEvent = MouseEvent(
-            x: localX + 1,
-            y: localY + 1,
-            globalX: event.globalX ?? event.x,
-            globalY: event.globalY ?? event.y,
-            button: event.button,
-            type: event.type,
-            modifiers: event.modifiers,
-          );
-          _capturedMouseLayer!.renderer.handleMouseEvent(localEvent);
-        }
-      } else if (event.type == MouseEventType.release) {
-        if (_resizingLayer != null) {
-          _resizingLayer = null;
-          _resizeCorner = 0;
-          _capturedMouseLayer = null;
-        } else {
-          final targetLayer = _draggingLayer ?? _capturedMouseLayer;
-          if (targetLayer != null) {
-            final mouseX = event.x - 1;
-            final mouseY = event.y - 1;
-            final localX = mouseX - targetLayer.x;
-            final localY = mouseY - targetLayer.y;
-            final localEvent = MouseEvent(
-              x: localX + 1,
-              y: localY + 1,
-              globalX: event.globalX ?? event.x,
-              globalY: event.globalY ?? event.y,
-              button: event.button,
-              type: event.type,
-              modifiers: event.modifiers,
-            );
-            targetLayer.renderer.handleMouseEvent(localEvent);
-          }
-          _draggingLayer = null;
-          _capturedMouseLayer = null;
-        }
-      } else {
-        // For hover (move) events, perform hit-test and route
-        final mouseX = event.x - 1;
-        final mouseY = event.y - 1;
-
-        final sortedLayers = _getSortedLayers();
-        SceneLayer? hitLayer;
-
-        for (final layer in sortedLayers) {
-          if (!layer.hitTestable) continue;
-
-          final buf = layer.renderer.currentBuffer;
-          if (buf == null) continue;
-
-          if (mouseX >= layer.x &&
-              mouseX < layer.x + buf.width &&
-              mouseY >= layer.y &&
-              mouseY < layer.y + buf.height) {
-            final localX = mouseX - layer.x;
-            final localY = mouseY - layer.y;
-            final localEvent = MouseEvent(
-              x: localX + 1,
-              y: localY + 1,
-              globalX: event.globalX ?? event.x,
-              globalY: event.globalY ?? event.y,
-              button: event.button,
-              type: event.type,
-              modifiers: event.modifiers,
-            );
-
-            final isTransparent =
-                (buf.getModifiers(localX, localY) & Modifier.transparent) != 0;
-            final isOpaque = !isTransparent;
-
-            final handled = layer.renderer.handleMouseEvent(localEvent);
-            if (handled) {
-              hitLayer = layer;
-              break;
-            }
-
-            if (isOpaque) {
-              if (layer.mouseOpaque) {
-                hitLayer = layer;
-              }
-              break;
-            }
-          }
-        }
-
-        if (_lastHoveredLayer != null && _lastHoveredLayer != hitLayer) {
-          final localEvent = MouseEvent(
-            x: -1,
-            y: -1,
-            globalX: event.globalX ?? event.x,
-            globalY: event.globalY ?? event.y,
-            button: event.button,
-            type: event.type,
-            modifiers: event.modifiers,
-          );
-          _lastHoveredLayer!.renderer.handleMouseEvent(localEvent);
-        }
-        _lastHoveredLayer = hitLayer;
-      }
+      final didRender = switch (event.type) {
+        MouseEventType.press => _handleMousePress(event),
+        MouseEventType.drag => _handleMouseDrag(event),
+        MouseEventType.release => _handleMouseRelease(event),
+        _ => _handleMouseHover(event),
+      };
 
       if (debugMouseCursorEnabled && !didRender) {
         render();
@@ -537,6 +277,268 @@ class SceneManager implements Reassemblable {
     } finally {
       Tracer.record(_traceMouseEventId, Phase.end, TraceCategory.events);
     }
+  }
+
+  void _recordDebugTouch(MouseEvent event) {
+    if (!debugShowTouchesEnabled) return;
+    if (event.type != MouseEventType.press &&
+        event.type != MouseEventType.release) {
+      return;
+    }
+    _activeTouches.add(
+      _TouchFeedback(
+        x: _globalMouseX!,
+        y: _globalMouseY!,
+        button: event.button,
+        type: event.type,
+        startTime: clock.now().millisecondsSinceEpoch,
+      ),
+    );
+    addRipple(Point<int>(event.x, event.y));
+  }
+
+  MouseEvent _toLocalMouseEvent(SceneLayer layer, MouseEvent event) =>
+      MouseEvent(
+        x: event.x - layer.x,
+        y: event.y - layer.y,
+        globalX: event.globalX ?? event.x,
+        globalY: event.globalY ?? event.y,
+        button: event.button,
+        type: event.type,
+        modifiers: event.modifiers,
+      );
+
+  static bool _containsLayerPoint(
+    SceneLayer layer,
+    Buffer buf,
+    int mouseX,
+    int mouseY,
+  ) =>
+      mouseX >= layer.x &&
+      mouseX < layer.x + buf.width &&
+      mouseY >= layer.y &&
+      mouseY < layer.y + buf.height;
+
+  static int _detectResizeCorner(
+    SceneLayer layer,
+    Buffer buf,
+    int mouseX,
+    int mouseY,
+  ) {
+    final onLeft = mouseX == layer.x;
+    final onRight = mouseX == layer.x + buf.width - 1;
+    final onTop = mouseY == layer.y;
+    final onBottom = mouseY == layer.y + buf.height - 1;
+    if (onLeft && onTop) return 1;
+    if (onRight && onTop) return 2;
+    if (onLeft && onBottom) return 3;
+    if (onRight && onBottom) return 4;
+    return 0;
+  }
+
+  bool _handleMousePress(MouseEvent event) {
+    final mouseX = event.x - 1;
+    final mouseY = event.y - 1;
+    final focusBeforePress = focusedLayer;
+    final focusEpochBeforePress = _focusEpoch;
+
+    SceneLayer? hitLayer;
+    for (final layer in _getSortedLayers()) {
+      final (stop, candidate) = _probeLayerPress(layer, mouseX, mouseY, event);
+      if (stop) {
+        hitLayer = candidate;
+        break;
+      }
+    }
+
+    _reconcilePressHit(
+      hitLayer: hitLayer,
+      button: event.button,
+      focusBeforePress: focusBeforePress,
+      focusEpochBeforePress: focusEpochBeforePress,
+    );
+    return false;
+  }
+
+  (bool stop, SceneLayer? hitLayer) _probeLayerPress(
+    SceneLayer layer,
+    int mouseX,
+    int mouseY,
+    MouseEvent event,
+  ) {
+    if (!layer.hitTestable) return (false, null);
+    final buf = layer.renderer.currentBuffer;
+    if (buf == null || !_containsLayerPoint(layer, buf, mouseX, mouseY)) {
+      return (false, null);
+    }
+
+    final corner = layer.resizable
+        ? _detectResizeCorner(layer, buf, mouseX, mouseY)
+        : 0;
+    if (corner != 0) {
+      _beginLayerResize(layer, buf, corner, event);
+      return (true, layer);
+    }
+
+    final localX = mouseX - layer.x;
+    final localY = mouseY - layer.y;
+    final isOpaque =
+        (buf.getModifiers(localX, localY) & Modifier.transparent) == 0;
+    final handled = layer.renderer.handleMouseEvent(
+      _toLocalMouseEvent(layer, event),
+    );
+    if (handled || layer.draggable) {
+      if (layer.draggable && layers.contains(layer)) {
+        _beginLayerDrag(layer, event);
+      }
+      return (true, layer);
+    }
+    if (isOpaque) {
+      return (true, layer.mouseOpaque ? layer : null);
+    }
+    return (false, null);
+  }
+
+  void _beginLayerResize(
+    SceneLayer layer,
+    Buffer buf,
+    int corner,
+    MouseEvent event,
+  ) {
+    _resizingLayer = layer;
+    _resizeCorner = corner;
+    _dragStartX = event.x;
+    _dragStartY = event.y;
+    _layerStartX = layer.x;
+    _layerStartY = layer.y;
+    _layerStartWidth = layer.width ?? buf.width;
+    _layerStartHeight = layer.height ?? buf.height;
+  }
+
+  void _beginLayerDrag(SceneLayer layer, MouseEvent event) {
+    _draggingLayer = layer;
+    _dragStartX = event.x;
+    _dragStartY = event.y;
+    _layerStartX = layer.x;
+    _layerStartY = layer.y;
+  }
+
+  bool _handleMouseDrag(MouseEvent event) {
+    if (_resizingLayer != null) {
+      _performLayerResize(event);
+      return true;
+    }
+    if (_draggingLayer != null) {
+      _draggingLayer!.x = _layerStartX + (event.x - _dragStartX);
+      _draggingLayer!.y = _layerStartY + (event.y - _dragStartY);
+      render();
+      return true;
+    }
+    if (_capturedMouseLayer case final captured?) {
+      captured.renderer.handleMouseEvent(_toLocalMouseEvent(captured, event));
+    }
+    return false;
+  }
+
+  void _performLayerResize(MouseEvent event) {
+    final movesLeft = _resizeCorner == 1 || _resizeCorner == 3;
+    final movesTop = _resizeCorner == 1 || _resizeCorner == 2;
+    final dx = _clampResizeDelta(
+      event.x - _dragStartX,
+      _layerStartWidth,
+      10,
+      movesStartEdge: movesLeft,
+    );
+    final dy = _clampResizeDelta(
+      event.y - _dragStartY,
+      _layerStartHeight,
+      5,
+      movesStartEdge: movesTop,
+    );
+
+    final newX = movesLeft ? _layerStartX + dx : _layerStartX;
+    final newY = movesTop ? _layerStartY + dy : _layerStartY;
+    final newW = movesLeft ? _layerStartWidth - dx : _layerStartWidth + dx;
+    final newH = movesTop ? _layerStartHeight - dy : _layerStartHeight + dy;
+
+    final layer = _resizingLayer!;
+    layer.x = newX;
+    layer.y = newY;
+    layer.width = newW;
+    layer.height = newH;
+    _resizeRenderer(layer.renderer, newW, newH);
+    render();
+  }
+
+  static int _clampResizeDelta(
+    int delta,
+    int startSize,
+    int minSize, {
+    required bool movesStartEdge,
+  }) {
+    if (movesStartEdge) {
+      return startSize - delta < minSize ? startSize - minSize : delta;
+    }
+    return startSize + delta < minSize ? minSize - startSize : delta;
+  }
+
+  bool _handleMouseRelease(MouseEvent event) {
+    if (_resizingLayer != null) {
+      _resizingLayer = null;
+      _resizeCorner = 0;
+      _capturedMouseLayer = null;
+      return false;
+    }
+    final targetLayer = _draggingLayer ?? _capturedMouseLayer;
+    if (targetLayer != null) {
+      targetLayer.renderer.handleMouseEvent(
+        _toLocalMouseEvent(targetLayer, event),
+      );
+    }
+    _draggingLayer = null;
+    _capturedMouseLayer = null;
+    return false;
+  }
+
+  bool _handleMouseHover(MouseEvent event) {
+    final hitLayer = _findHoveredLayer(event.x - 1, event.y - 1, event);
+    if (_lastHoveredLayer != null && _lastHoveredLayer != hitLayer) {
+      _lastHoveredLayer!.renderer.handleMouseEvent(
+        MouseEvent(
+          x: -1,
+          y: -1,
+          globalX: event.globalX ?? event.x,
+          globalY: event.globalY ?? event.y,
+          button: event.button,
+          type: event.type,
+          modifiers: event.modifiers,
+        ),
+      );
+    }
+    _lastHoveredLayer = hitLayer;
+    return false;
+  }
+
+  SceneLayer? _findHoveredLayer(int mouseX, int mouseY, MouseEvent event) {
+    for (final layer in _getSortedLayers()) {
+      if (!layer.hitTestable) continue;
+      final buf = layer.renderer.currentBuffer;
+      if (buf == null || !_containsLayerPoint(layer, buf, mouseX, mouseY)) {
+        continue;
+      }
+
+      final localX = mouseX - layer.x;
+      final localY = mouseY - layer.y;
+      final isOpaque =
+          (buf.getModifiers(localX, localY) & Modifier.transparent) == 0;
+      if (layer.renderer.handleMouseEvent(_toLocalMouseEvent(layer, event))) {
+        return layer;
+      }
+      if (isOpaque) {
+        return layer.mouseOpaque ? layer : null;
+      }
+    }
+    return null;
   }
 
   void _cancelPressCapture(SceneLayer? layer, MouseButton button) {
@@ -665,210 +667,7 @@ class SceneManager implements Reassemblable {
       _renderScheduled = false;
       Tracer.record(_traceRenderId, Phase.begin, TraceCategory.compositor);
       try {
-        _cleanOrphanedLayers();
-
-        for (final layer in layers) {
-          final r = layer.renderer;
-          if (r is ListenableSceneRenderer && r.isDirty) {
-            r.render();
-          }
-        }
-
-        final size = terminal.backend.size;
-        var width = size.x;
-        var height = size.y;
-        if (width <= 0 || height <= 0) {
-          width = 80;
-          height = 24;
-        }
-
-        final renderer = _renderer ??= Renderer(
-          width,
-          height,
-          mode: renderingMode,
-        );
-
-        final layeredBuffers = <LayeredBuffer>[];
-        for (final layer in layers) {
-          if (layer.sizing == LayerSizing.fullscreen) {
-            if (layer.width != width || layer.height != height) {
-              layer.width = width;
-              layer.height = height;
-              _resizeRenderer(layer.renderer, width, height);
-            }
-          } else {
-            final buf = layer.renderer.currentBuffer;
-            if (buf == null ||
-                buf.width != layer.width ||
-                buf.height != layer.height) {
-              if (layer.width != null && layer.height != null) {
-                _resizeRenderer(layer.renderer, layer.width!, layer.height!);
-              }
-            }
-          }
-
-          final buffer = layer.renderer.currentBuffer;
-          if (buffer == null) continue;
-
-          layeredBuffers.add(
-            LayeredBuffer(
-              buffer: buffer,
-              x: layer.x,
-              y: layer.y,
-              zIndex: layer.zIndex,
-            ),
-          );
-
-          if (debugPaintLayerBordersEnabled) {
-            final w = buffer.width;
-            final h = buffer.height;
-            final style = const Style(
-              foreground: Colors.yellow,
-              modifiers: Modifier.bold,
-            );
-
-            // Top border
-            final top = Buffer(w + 2, 1);
-            top.writeString(0, 0, '┌${'─' * w}┐', style);
-            layeredBuffers.add(
-              LayeredBuffer(
-                buffer: top,
-                x: layer.x - 1,
-                y: layer.y - 1,
-                zIndex: layer.zIndex,
-              ),
-            );
-
-            // Bottom border
-            final bottom = Buffer(w + 2, 1);
-            bottom.writeString(0, 0, '└${'─' * w}┘', style);
-            layeredBuffers.add(
-              LayeredBuffer(
-                buffer: bottom,
-                x: layer.x - 1,
-                y: layer.y + h,
-                zIndex: layer.zIndex,
-              ),
-            );
-
-            // Left border (height is h, not h+2, because corners are in top/bottom)
-            final left = Buffer(1, h);
-            for (var y = 0; y < h; y++) {
-              left.writeString(0, y, '│', style);
-            }
-            layeredBuffers.add(
-              LayeredBuffer(
-                buffer: left,
-                x: layer.x - 1,
-                y: layer.y,
-                zIndex: layer.zIndex,
-              ),
-            );
-
-            // Right border
-            final right = Buffer(1, h);
-            for (var y = 0; y < h; y++) {
-              right.writeString(0, y, '│', style);
-            }
-            layeredBuffers.add(
-              LayeredBuffer(
-                buffer: right,
-                x: layer.x + w,
-                y: layer.y,
-                zIndex: layer.zIndex,
-              ),
-            );
-          }
-        }
-
-        final target = _targetBuffer ??= Buffer(width, height);
-        if (target.width != width || target.height != height) {
-          target.resize(width, height);
-        }
-        target.clear();
-
-        // Any scheduleRender() calls triggered synchronously by r.render() or
-        // _resizeRenderer() above are satisfied by the composite pass below.
-        _renderRequestedWhileRendering = false;
-
-        // The Compositor natively handles occlusion culling and off-screen
-        // effect layer resolution using recursive saveLayer/backdrop filter patterns.
-        _compositor.composite(target: target, layers: layeredBuffers);
-
-        final globalMouseX = _globalMouseX;
-        final globalMouseY = _globalMouseY;
-        if (debugMouseCursorEnabled &&
-            globalMouseX != null &&
-            globalMouseY != null) {
-          final cursorStyle = Style(
-            foreground: _isGlobalMouseDown
-                ? const Color(255, 0, 0)
-                : const Color(0, 255, 255),
-            modifiers: Modifier.bold,
-          );
-          target.writeString(globalMouseX, globalMouseY, '⦿', cursorStyle);
-        }
-
-        _renderDebugOverlays(target);
-
-        final sb = StringBuffer();
-        renderer.render(target, sb);
-        final backend = terminal.backend;
-        if (backend is BufferedTerminalBackend) {
-          backend.buffer = target;
-        }
-        backend.write(sb.toString());
-        onFrameRedrawn?.call(target);
-
-        // Hardware state sync based on focused layer's requests.
-        final focused = focusedLayer;
-        final req = focused?.renderer;
-
-        final showsCursor = req?.showsCursor ?? false;
-        final wantsMouseTracking =
-            enableMouseTracking ||
-            (req?.wantsMouseTracking ?? false) ||
-            layers.any((layer) => layer.draggable) ||
-            debugMouseCursorEnabled;
-
-        var effectiveShowsCursor = showsCursor;
-        int? absX;
-        int? absY;
-
-        if (showsCursor) {
-          final pos = req?.requestedCursorPosition;
-          if (pos != null) {
-            absX = (focused?.x ?? 0) + pos.x;
-            absY = (focused?.y ?? 0) + pos.y;
-            if (absX < 0 || absX >= width || absY < 0 || absY >= height) {
-              effectiveShowsCursor = false;
-            }
-          } else {
-            effectiveShowsCursor = false;
-          }
-        }
-
-        if (effectiveShowsCursor != _lastShowsCursor) {
-          if (effectiveShowsCursor) {
-            terminal.showCursor();
-          } else {
-            terminal.hideCursor();
-          }
-          _lastShowsCursor = effectiveShowsCursor;
-        }
-
-        if (wantsMouseTracking != _lastWantsMouseTracking) {
-          if (wantsMouseTracking) {
-            terminal.enableMouseTracking();
-          } else {
-            terminal.disableMouseTracking();
-          }
-          _lastWantsMouseTracking = wantsMouseTracking;
-        }
-
-        if (effectiveShowsCursor && absX != null && absY != null) {
-          terminal.goto(x: absX + 1, y: absY + 1);
-        }
+        _renderFrame();
       } finally {
         Tracer.record(_traceRenderId, Phase.end, TraceCategory.compositor);
       }
@@ -879,6 +678,216 @@ class SceneManager implements Reassemblable {
         scheduleRender();
       }
     }
+  }
+
+  void _renderFrame() {
+    _cleanOrphanedLayers();
+    _renderDirtyLayers();
+
+    final (width, height) = _resolveViewportSize();
+    final renderer = _renderer ??= Renderer(width, height, mode: renderingMode);
+    final layeredBuffers = _collectLayeredBuffers(width, height);
+    final target = _prepareTargetBuffer(width, height);
+
+    // Any scheduleRender() calls triggered synchronously by r.render() or
+    // _resizeRenderer() above are satisfied by the composite pass below.
+    _renderRequestedWhileRendering = false;
+
+    // The Compositor natively handles occlusion culling and off-screen
+    // effect layer resolution using recursive saveLayer/backdrop filter patterns.
+    _compositor.composite(target: target, layers: layeredBuffers);
+    _paintDebugMouseCursor(target);
+    _renderDebugOverlays(target);
+    _flushRenderedFrame(renderer, target);
+    _syncHardwareState(width, height);
+  }
+
+  void _renderDirtyLayers() {
+    for (final layer in layers) {
+      final r = layer.renderer;
+      if (r is ListenableSceneRenderer && r.isDirty) {
+        r.render();
+      }
+    }
+  }
+
+  (int width, int height) _resolveViewportSize() {
+    final size = terminal.backend.size;
+    if (size.x <= 0 || size.y <= 0) return (80, 24);
+    return (size.x, size.y);
+  }
+
+  Buffer _prepareTargetBuffer(int width, int height) {
+    final target = _targetBuffer ??= Buffer(width, height);
+    if (target.width != width || target.height != height) {
+      target.resize(width, height);
+    }
+    target.clear();
+    return target;
+  }
+
+  List<LayeredBuffer> _collectLayeredBuffers(int width, int height) {
+    final layeredBuffers = <LayeredBuffer>[];
+    for (final layer in layers) {
+      _syncLayerSize(layer, width, height);
+      final buffer = layer.renderer.currentBuffer;
+      if (buffer == null) continue;
+
+      layeredBuffers.add(
+        LayeredBuffer(
+          buffer: buffer,
+          x: layer.x,
+          y: layer.y,
+          zIndex: layer.zIndex,
+        ),
+      );
+      if (debugPaintLayerBordersEnabled) {
+        _appendDebugLayerBorders(layeredBuffers, layer, buffer);
+      }
+    }
+    return layeredBuffers;
+  }
+
+  void _syncLayerSize(SceneLayer layer, int width, int height) {
+    if (layer.sizing == LayerSizing.fullscreen) {
+      if (layer.width != width || layer.height != height) {
+        layer.width = width;
+        layer.height = height;
+        _resizeRenderer(layer.renderer, width, height);
+      }
+      return;
+    }
+    final layerW = layer.width;
+    final layerH = layer.height;
+    if (layerW == null || layerH == null) return;
+    final buf = layer.renderer.currentBuffer;
+    if (buf == null || buf.width != layerW || buf.height != layerH) {
+      _resizeRenderer(layer.renderer, layerW, layerH);
+    }
+  }
+
+  static void _appendDebugLayerBorders(
+    List<LayeredBuffer> layeredBuffers,
+    SceneLayer layer,
+    Buffer buffer,
+  ) {
+    final w = buffer.width;
+    final h = buffer.height;
+    const style = Style(foreground: Colors.yellow, modifiers: Modifier.bold);
+
+    final top = Buffer(w + 2, 1)..writeString(0, 0, '┌${'─' * w}┐', style);
+    final bottom = Buffer(w + 2, 1)..writeString(0, 0, '└${'─' * w}┘', style);
+    final left = Buffer(1, h);
+    final right = Buffer(1, h);
+    for (var y = 0; y < h; y++) {
+      left.writeString(0, y, '│', style);
+      right.writeString(0, y, '│', style);
+    }
+
+    layeredBuffers.addAll([
+      LayeredBuffer(
+        buffer: top,
+        x: layer.x - 1,
+        y: layer.y - 1,
+        zIndex: layer.zIndex,
+      ),
+      LayeredBuffer(
+        buffer: bottom,
+        x: layer.x - 1,
+        y: layer.y + h,
+        zIndex: layer.zIndex,
+      ),
+      LayeredBuffer(
+        buffer: left,
+        x: layer.x - 1,
+        y: layer.y,
+        zIndex: layer.zIndex,
+      ),
+      LayeredBuffer(
+        buffer: right,
+        x: layer.x + w,
+        y: layer.y,
+        zIndex: layer.zIndex,
+      ),
+    ]);
+  }
+
+  void _paintDebugMouseCursor(Buffer target) {
+    final globalMouseX = _globalMouseX;
+    final globalMouseY = _globalMouseY;
+    if (!debugMouseCursorEnabled ||
+        globalMouseX == null ||
+        globalMouseY == null) {
+      return;
+    }
+    final cursorStyle = Style(
+      foreground: _isGlobalMouseDown
+          ? const Color(255, 0, 0)
+          : const Color(0, 255, 255),
+      modifiers: Modifier.bold,
+    );
+    target.writeString(globalMouseX, globalMouseY, '⦿', cursorStyle);
+  }
+
+  void _flushRenderedFrame(Renderer renderer, Buffer target) {
+    final sb = StringBuffer();
+    renderer.render(target, sb);
+    final backend = terminal.backend;
+    if (backend is BufferedTerminalBackend) {
+      backend.buffer = target;
+    }
+    backend.write(sb.toString());
+    onFrameRedrawn?.call(target);
+  }
+
+  void _syncHardwareState(int width, int height) {
+    final focused = focusedLayer;
+    final req = focused?.renderer;
+    final wantsMouseTracking =
+        enableMouseTracking ||
+        (req?.wantsMouseTracking ?? false) ||
+        layers.any((layer) => layer.draggable) ||
+        debugMouseCursorEnabled;
+
+    final cursorPos = _resolveVisibleCursor(focused, width, height);
+    final effectiveShowsCursor = cursorPos != null;
+
+    if (effectiveShowsCursor != _lastShowsCursor) {
+      if (effectiveShowsCursor) {
+        terminal.showCursor();
+      } else {
+        terminal.hideCursor();
+      }
+      _lastShowsCursor = effectiveShowsCursor;
+    }
+
+    if (wantsMouseTracking != _lastWantsMouseTracking) {
+      if (wantsMouseTracking) {
+        terminal.enableMouseTracking();
+      } else {
+        terminal.disableMouseTracking();
+      }
+      _lastWantsMouseTracking = wantsMouseTracking;
+    }
+
+    if (cursorPos != null) {
+      terminal.goto(x: cursorPos.x + 1, y: cursorPos.y + 1);
+    }
+  }
+
+  static Point<int>? _resolveVisibleCursor(
+    SceneLayer? focused,
+    int width,
+    int height,
+  ) {
+    final req = focused?.renderer;
+    if (req == null || !req.showsCursor) return null;
+    final pos = req.requestedCursorPosition;
+    if (pos == null) return null;
+    final absX = (focused?.x ?? 0) + pos.x;
+    final absY = (focused?.y ?? 0) + pos.y;
+    if (absX < 0 || absX >= width || absY < 0 || absY >= height) return null;
+    return Point<int>(absX, absY);
   }
 
   /// Clears resources and restores terminal hardware state if modified.
@@ -1074,91 +1083,76 @@ class SceneManager implements Reassemblable {
   }
 
   void _renderDebugOverlays(Buffer target) {
-    if (debugPaintLayerBordersEnabled && focusedLayer != null) {
-      final fLayer = focusedLayer!;
-      final fBuf = fLayer.renderer.currentBuffer;
-      if (fBuf != null && fBuf.width >= 4) {
-        final style = const Style(foreground: Color(255, 255, 0));
-        target.writeString(fLayer.x + fBuf.width - 4, fLayer.y, '[🧐]', style);
-      }
-    }
-
-    if (debugPaintHoverEnabled) {
-      if (_globalMouseX != null && _globalMouseY != null) {
-        final sorted = _getSortedLayers();
-        for (final layer in sorted) {
-          final buf = layer.renderer.currentBuffer;
-          if (buf == null) continue;
-          if (_globalMouseX! >= layer.x &&
-              _globalMouseX! < layer.x + buf.width &&
-              _globalMouseY! >= layer.y &&
-              _globalMouseY! < layer.y + buf.height) {
-            final style = const Style(
-              foreground: Color(255, 0, 255),
-              background: Color(255, 0, 255),
-            );
-            target.writeString(layer.x, layer.y, '╔', style);
-            target.writeString(layer.x + buf.width - 1, layer.y, '╗', style);
-            target.writeString(layer.x, layer.y + buf.height - 1, '╚', style);
-            target.writeString(
-              layer.x + buf.width - 1,
-              layer.y + buf.height - 1,
-              '╝',
-              style,
-            );
-            break;
-          }
-        }
-      }
-    }
-
-    if (debugShowTouchesEnabled && _activeTouches.isNotEmpty) {
-      final now = clock.now().millisecondsSinceEpoch;
-
-      for (final touch in _activeTouches) {
-        final elapsed = now - touch.startTime;
-        if (elapsed > 500) continue;
-
-        final progress = elapsed / 500.0;
-        final colorValue = (255 * (1.0 - progress)).round().clamp(0, 255);
-        final color = Color(colorValue, colorValue, colorValue);
-        final style = Style(foreground: color);
-
-        String indicator = '';
-        if (touch.type == MouseEventType.press) {
-          if (touch.button == MouseButton.left) {
-            indicator = '❶';
-          } else if (touch.button == MouseButton.middle) {
-            indicator = '❷';
-          } else if (touch.button == MouseButton.right) {
-            indicator = '❸';
-          } else if (touch.button == MouseButton.wheelUp) {
-            indicator = '↑';
-          } else if (touch.button == MouseButton.wheelDown) {
-            indicator = '↓';
-          } else {
-            indicator = '❶';
-          }
-        } else if (touch.type == MouseEventType.release) {
-          if (touch.button == MouseButton.left) {
-            indicator = '①';
-          } else if (touch.button == MouseButton.middle) {
-            indicator = '②';
-          } else if (touch.button == MouseButton.right) {
-            indicator = '③';
-          } else {
-            indicator = '①';
-          }
-        }
-
-        if (indicator.isNotEmpty) {
-          target.writeString(touch.x, touch.y, indicator, style);
-        }
-      }
-    }
-
+    _paintFocusedLayerBadge(target);
+    _paintHoverDebugOutline(target);
+    _paintTouchIndicators(target);
     rippleManager.paint(target);
   }
+
+  void _paintFocusedLayerBadge(Buffer target) {
+    final fLayer = focusedLayer;
+    if (!debugPaintLayerBordersEnabled || fLayer == null) return;
+    final fBuf = fLayer.renderer.currentBuffer;
+    if (fBuf == null || fBuf.width < 4) return;
+    const style = Style(foreground: Color(255, 255, 0));
+    target.writeString(fLayer.x + fBuf.width - 4, fLayer.y, '[🧐]', style);
+  }
+
+  void _paintHoverDebugOutline(Buffer target) {
+    final mx = _globalMouseX;
+    final my = _globalMouseY;
+    if (!debugPaintHoverEnabled || mx == null || my == null) return;
+
+    const style = Style(
+      foreground: Color(255, 0, 255),
+      background: Color(255, 0, 255),
+    );
+    for (final layer in _getSortedLayers()) {
+      final buf = layer.renderer.currentBuffer;
+      if (buf == null || !_containsLayerPoint(layer, buf, mx, my)) continue;
+      target.writeString(layer.x, layer.y, '╔', style);
+      target.writeString(layer.x + buf.width - 1, layer.y, '╗', style);
+      target.writeString(layer.x, layer.y + buf.height - 1, '╚', style);
+      target.writeString(
+        layer.x + buf.width - 1,
+        layer.y + buf.height - 1,
+        '╝',
+        style,
+      );
+      return;
+    }
+  }
+
+  void _paintTouchIndicators(Buffer target) {
+    if (!debugShowTouchesEnabled || _activeTouches.isEmpty) return;
+    final now = clock.now().millisecondsSinceEpoch;
+
+    for (final touch in _activeTouches) {
+      final elapsed = now - touch.startTime;
+      if (elapsed > 500) continue;
+      final indicator = _touchIndicatorGlyph(touch);
+      if (indicator.isEmpty) continue;
+
+      final colorValue = (255 * (1.0 - elapsed / 500.0)).round().clamp(0, 255);
+      final style = Style(
+        foreground: Color(colorValue, colorValue, colorValue),
+      );
+      target.writeString(touch.x, touch.y, indicator, style);
+    }
+  }
+
+  static String _touchIndicatorGlyph(_TouchFeedback touch) =>
+      switch ((touch.type, touch.button)) {
+        (MouseEventType.press, MouseButton.middle) => '❷',
+        (MouseEventType.press, MouseButton.right) => '❸',
+        (MouseEventType.press, MouseButton.wheelUp) => '↑',
+        (MouseEventType.press, MouseButton.wheelDown) => '↓',
+        (MouseEventType.press, _) => '❶',
+        (MouseEventType.release, MouseButton.middle) => '②',
+        (MouseEventType.release, MouseButton.right) => '③',
+        (MouseEventType.release, _) => '①',
+        _ => '',
+      };
 }
 
 class _TouchFeedback {

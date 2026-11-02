@@ -21,7 +21,7 @@ void main() {
       expect(controller.index, 2);
     });
 
-    test('TabBar paints correctly and handles clicks', () async {
+    test('TabBar paints correctly and updates active tab highlight', () async {
       final controller = TabController(length: 2);
 
       final bar = TabBar(
@@ -32,15 +32,29 @@ void main() {
       final tester = TerminalTester();
       await tester.pumpWidget(bar);
 
-      // Should paint 'Tab 1'
-      expect(true, true);
+      final row0 = [
+        for (var x = 0; x < tester.buffer!.width; x++)
+          tester.buffer!.getCharacter(x, 0),
+      ].join();
+      expect(row0, contains('Tab 1'));
+      expect(row0, contains('Tab 2'));
 
-      // Now let's trigger a click on Tab 2 to see if it changes index
-      // But we can't easily dispatch to element state, so let's just trigger the callback
-      // wait, we can dispatch using tester? Let's just find the element!
-      // In termui_test we don't have tester.tap, but TabBar has elements.
-      // At least we mount it to get coverage on the build and layout methods!
-      expect(true, true);
+      final tab1Col = row0.indexOf('Tab 1');
+      final tab2Col = row0.indexOf('Tab 2');
+      final initialTab1Fg = tester.buffer!.getForeground(tab1Col, 0);
+      final initialTab2Fg = tester.buffer!.getForeground(tab2Col, 0);
+      final initialTab1Mods = tester.buffer!.getModifiers(tab1Col, 0);
+      final initialTab2Mods = tester.buffer!.getModifiers(tab2Col, 0);
+      expect(
+        initialTab1Fg != initialTab2Fg || initialTab1Mods != initialTab2Mods,
+        isTrue,
+      );
+
+      controller.index = 1;
+      await tester.pump();
+
+      expect(tester.buffer!.getForeground(tab2Col, 0), equals(initialTab1Fg));
+      expect(tester.buffer!.getModifiers(tab2Col, 0), equals(initialTab1Mods));
     });
 
     test('TabPanel displays correct child', () async {

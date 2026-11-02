@@ -1,3 +1,4 @@
+import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 /// The direction the progress bar fills.
@@ -144,9 +145,71 @@ class LinearProgressIndicator extends Widget {
     '▇', // 7/8
     '█', // 8/8
   ];
+  static const List<String> _quads = [
+    ' ',
+    '▘',
+    '▝',
+    '▀',
+    '▖',
+    '▌',
+    '▞',
+    '▛',
+    '▗',
+    '▚',
+    '▐',
+    '▜',
+    '▄',
+    '▙',
+    '▟',
+    '█',
+  ];
+  static const List<String> _quadStepsHorizontal = [' ', '▖', '▌', '▙', '█'];
+  static const List<String> _quadStepsVertical = [' ', '▖', '▄', '▙', '█'];
 
   @override
   Element createElement() => LinearProgressIndicatorElement(this);
+}
+
+typedef _PercentageOverlay = ({List<String> chars, int startX, int y});
+
+final class _ProgressPaintPlan {
+  final LinearProgressIndicator progress;
+  final int width;
+  final int height;
+  final int subWidth;
+  final int subHeight;
+  final bool isHorizontal;
+  final bool isSpan;
+  final int mainAxisCells;
+  final int gridW;
+  final int gridH;
+  final int gridCrossAxis;
+  final int totalFilledSpan;
+  final int totalFilledPrecise;
+  final double eased;
+  final _PercentageOverlay? pctOverlay;
+  final List<GradientStop>? fgStops;
+  final List<GradientStop>? bgStops;
+
+  const _ProgressPaintPlan({
+    required this.progress,
+    required this.width,
+    required this.height,
+    required this.subWidth,
+    required this.subHeight,
+    required this.isHorizontal,
+    required this.isSpan,
+    required this.mainAxisCells,
+    required this.gridW,
+    required this.gridH,
+    required this.gridCrossAxis,
+    required this.totalFilledSpan,
+    required this.totalFilledPrecise,
+    required this.eased,
+    required this.pctOverlay,
+    required this.fgStops,
+    required this.bgStops,
+  });
 }
 
 /// An element that manages the rendering of a [LinearProgressIndicator] widget.
@@ -157,25 +220,27 @@ class LinearProgressIndicatorElement extends Element {
   @override
   Size performLayout(BoxConstraints constraints) {
     final progress = widget as LinearProgressIndicator;
-    final isHorizontal =
-        progress.direction == ProgressDirection.leftToRight ||
-        progress.direction == ProgressDirection.rightToLeft;
+    final isHorizontal = _isHorizontalDirection(progress.direction);
 
-    double w = constraints.maxWidth == BoxConstraints.infinity
+    final w = constraints.maxWidth == BoxConstraints.infinity
         ? (isHorizontal ? 20 : 1)
-        : constraints.maxWidth.toDouble();
-    double h = constraints.maxHeight == BoxConstraints.infinity
+        : constraints.maxWidth;
+    final h = constraints.maxHeight == BoxConstraints.infinity
         ? (isHorizontal ? 1 : 20)
-        : constraints.maxHeight.toDouble();
+        : constraints.maxHeight;
 
-    return constraints.constrain(Size(w.floor(), h.floor()));
+    return constraints.constrain(Size(w, h));
   }
+
+  static bool _isHorizontalDirection(ProgressDirection direction) =>
+      direction == ProgressDirection.leftToRight ||
+      direction == ProgressDirection.rightToLeft;
 
   Color? _interpolateColor(List<GradientStop>? stops, double t) {
     if (stops == null || stops.isEmpty) return null;
     if (stops.length == 1) return stops.first.color;
 
-    for (int i = 0; i < stops.length - 1; i++) {
+    for (var i = 0; i < stops.length - 1; i++) {
       final s1 = stops[i];
       final s2 = stops[i + 1];
       if (t >= s1.stop && t <= s2.stop) {
@@ -195,348 +260,404 @@ class LinearProgressIndicatorElement extends Element {
 
   @override
   void performPaint(Buffer buffer, Offset offset) {
+    if (size.width <= 0 || size.height <= 0) return;
     final viewport = Viewport(
       buffer,
       Rect(offset.dx, offset.dy, size.width, size.height),
     );
     final progress = widget as LinearProgressIndicator;
-    if (size.width <= 0 || size.height <= 0) return;
+    final plan = _buildPaintPlan(progress);
 
+    for (var y = 0; y < plan.height; y++) {
+      for (var x = 0; x < plan.width; x++) {
+        _paintCell(viewport, plan, x, y);
+      }
+    }
+  }
+
+  _ProgressPaintPlan _buildPaintPlan(LinearProgressIndicator progress) {
     final clamped = progress.fraction.clamp(0.0, 1.0);
     final eased = progress.easing(clamped);
+    final isHorizontal = _isHorizontalDirection(progress.direction);
+    final (subWidth, subHeight) = _computeSubGrid(
+      progress.barType,
+      progress.smooth,
+      isHorizontal,
+    );
 
-    final (int subWidth, int subHeight) = switch (progress.barType) {
-      ProgressBarType.braille => (2, 4),
-      ProgressBarType.quads => (2, 2),
-      ProgressBarType.blocks =>
-        progress.smooth
-            ? switch (progress.direction) {
-                ProgressDirection.leftToRight ||
-                ProgressDirection.rightToLeft => (8, 1),
-                ProgressDirection.topToBottom ||
-                ProgressDirection.bottomToTop => (1, 8),
-              }
-            : (1, 1),
-    };
-
-    final isHorizontal =
-        progress.direction == ProgressDirection.leftToRight ||
-        progress.direction == ProgressDirection.rightToLeft;
     final mainAxisCells = isHorizontal ? size.width : size.height;
     final crossAxisCells = isHorizontal ? size.height : size.width;
     final mainSubunitsPerCell = isHorizontal ? subWidth : subHeight;
     final crossSubunitsPerCell = isHorizontal ? subHeight : subWidth;
-
     final gridMainAxis = mainAxisCells * mainSubunitsPerCell;
     final gridCrossAxis = crossAxisCells * crossSubunitsPerCell;
+    final (fgStops, bgStops) = _resolveColorStops(progress, clamped, eased);
 
-    final totalFilledSpan = (eased * gridMainAxis).round();
-    final totalFilledPrecise = (eased * (gridMainAxis * gridCrossAxis)).round();
-
-    String? pctText;
-    int? pctStartX;
-    int? pctY;
-    if (progress.showPercentage) {
-      pctText = '${(eased * 100).toInt().clamp(0, 100)}%';
-      if (pctText.length <= size.width) {
-        pctStartX = ((size.width - pctText.length) / 2).floor();
-        pctY = size.height ~/ 2;
-      } else {
-        pctText = null;
-      }
-    }
-
-    final colors = progress.colorBuilder?.call(clamped, eased);
-    List<GradientStop>? fgStops = colors?.fg;
-    List<GradientStop>? bgStops = colors?.bg;
-
-    // ignore: deprecated_member_use_from_same_package
-    if (progress.colorBuilder == null &&
-        (progress.startColor != null || progress.endColor != null)) {
-      // ignore: deprecated_member_use_from_same_package
-      final start =
-          progress.startColor ??
-          progress.style.foreground ??
-          const Color(255, 255, 255);
-      // ignore: deprecated_member_use_from_same_package
-      final end =
-          progress.endColor ??
-          progress.style.foreground ??
-          const Color(255, 255, 255);
-      fgStops = [(color: start, stop: 0.0), (color: end, stop: 1.0)];
-    }
-
-    for (var y = 0; y < size.height; y++) {
-      for (var x = 0; x < size.width; x++) {
-        double cellT = 0.0;
-        if (mainAxisCells > 1) {
-          final mainCellIndex = switch (progress.direction) {
-            ProgressDirection.leftToRight => x,
-            ProgressDirection.rightToLeft => size.width - 1 - x,
-            ProgressDirection.topToBottom => y,
-            ProgressDirection.bottomToTop => size.height - 1 - y,
-          };
-          cellT = mainCellIndex / (mainAxisCells - 1);
-        }
-
-        final cellFg =
-            _interpolateColor(fgStops, cellT) ?? progress.style.foreground;
-        final cellBg =
-            _interpolateColor(bgStops, cellT) ?? progress.style.background;
-
-        bool invertColors = false;
-
-        String char = ' ';
-        if (pctText != null &&
-            y == pctY &&
-            x >= pctStartX! &&
-            x < pctStartX + pctText.length) {
-          char = pctText[x - pctStartX];
-        } else {
-          final baseGx = x * subWidth;
-          final baseGy = y * subHeight;
-          final isSpan = progress.crossAxisFill == CrossAxisFill.span;
-          final gridW = size.width * subWidth;
-          final gridH = size.height * subHeight;
-
-          final threshold = isSpan
-              ? switch (progress.direction) {
-                  ProgressDirection.leftToRight => totalFilledSpan - baseGx,
-                  ProgressDirection.rightToLeft =>
-                    (gridW - 1) - baseGx - totalFilledSpan,
-                  ProgressDirection.topToBottom => totalFilledSpan - baseGy,
-                  ProgressDirection.bottomToTop =>
-                    (gridH - 1) - baseGy - totalFilledSpan,
-                }
-              : switch (progress.direction) {
-                  ProgressDirection.leftToRight =>
-                    totalFilledPrecise - (baseGx * gridCrossAxis + baseGy),
-                  ProgressDirection.rightToLeft =>
-                    totalFilledPrecise -
-                        ((gridW - 1 - baseGx) * gridCrossAxis + baseGy),
-                  ProgressDirection.topToBottom =>
-                    totalFilledPrecise - (baseGy * gridCrossAxis + baseGx),
-                  ProgressDirection.bottomToTop =>
-                    totalFilledPrecise -
-                        ((gridH - 1 - baseGy) * gridCrossAxis + baseGx),
-                };
-
-          if (progress.barType == ProgressBarType.braille) {
-            int offset = 0;
-            if (isSpan) {
-              switch (progress.direction) {
-                case ProgressDirection.leftToRight:
-                  if (0 < threshold) offset |= 71; // 1 | 2 | 4 | 64
-                  if (1 < threshold) offset |= 184; // 8 | 16 | 32 | 128
-                case ProgressDirection.rightToLeft:
-                  if (0 > threshold) offset |= 71;
-                  if (1 > threshold) offset |= 184;
-                case ProgressDirection.topToBottom:
-                  if (0 < threshold) offset |= 9; // dy=0: 1 | 8
-                  if (1 < threshold) offset |= 18; // dy=1: 2 | 16
-                  if (2 < threshold) offset |= 36; // dy=2: 4 | 32
-                  if (3 < threshold) offset |= 192; // dy=3: 64 | 128
-                case ProgressDirection.bottomToTop:
-                  if (0 > threshold) offset |= 9;
-                  if (1 > threshold) offset |= 18;
-                  if (2 > threshold) offset |= 36;
-                  if (3 > threshold) offset |= 192;
-              }
-            } else {
-              switch (progress.direction) {
-                case ProgressDirection.leftToRight:
-                  if (0 < threshold) offset |= 1;
-                  if (1 < threshold) offset |= 2;
-                  if (2 < threshold) offset |= 4;
-                  if (gridCrossAxis < threshold) offset |= 8;
-                  if (gridCrossAxis + 1 < threshold) offset |= 16;
-                  if (gridCrossAxis + 2 < threshold) offset |= 32;
-                  if (3 < threshold) offset |= 64;
-                  if (gridCrossAxis + 3 < threshold) offset |= 128;
-                case ProgressDirection.rightToLeft:
-                  if (0 < threshold) offset |= 1;
-                  if (1 < threshold) offset |= 2;
-                  if (2 < threshold) offset |= 4;
-                  if (-gridCrossAxis < threshold) offset |= 8;
-                  if (1 - gridCrossAxis < threshold) offset |= 16;
-                  if (2 - gridCrossAxis < threshold) offset |= 32;
-                  if (3 < threshold) offset |= 64;
-                  if (3 - gridCrossAxis < threshold) offset |= 128;
-                case ProgressDirection.topToBottom:
-                  if (0 < threshold) offset |= 1;
-                  if (gridCrossAxis < threshold) offset |= 2;
-                  if (2 * gridCrossAxis < threshold) offset |= 4;
-                  if (1 < threshold) offset |= 8;
-                  if (gridCrossAxis + 1 < threshold) offset |= 16;
-                  if (2 * gridCrossAxis + 1 < threshold) offset |= 32;
-                  if (3 * gridCrossAxis < threshold) offset |= 64;
-                  if (3 * gridCrossAxis + 1 < threshold) offset |= 128;
-                case ProgressDirection.bottomToTop:
-                  if (0 < threshold) offset |= 1;
-                  if (-gridCrossAxis < threshold) offset |= 2;
-                  if (-2 * gridCrossAxis < threshold) offset |= 4;
-                  if (1 < threshold) offset |= 8;
-                  if (1 - gridCrossAxis < threshold) offset |= 16;
-                  if (1 - 2 * gridCrossAxis < threshold) offset |= 32;
-                  if (-3 * gridCrossAxis < threshold) offset |= 64;
-                  if (1 - 3 * gridCrossAxis < threshold) offset |= 128;
-              }
-            }
-            char = String.fromCharCode(0x2800 + offset);
-          } else if (progress.barType == ProgressBarType.quads) {
-            if (progress.crossAxisFill == CrossAxisFill.span &&
-                progress.smooth) {
-              final maxSteps = isHorizontal ? size.width * 4 : size.height * 4;
-              final filledSteps = (eased * maxSteps).round();
-              final cellSteps = switch (progress.direction) {
-                ProgressDirection.leftToRight => filledSteps - (x * 4),
-                ProgressDirection.rightToLeft =>
-                  filledSteps - ((size.width - 1 - x) * 4),
-                ProgressDirection.topToBottom => filledSteps - (y * 4),
-                ProgressDirection.bottomToTop =>
-                  filledSteps - ((size.height - 1 - y) * 4),
-              };
-
-              final clamped = cellSteps.clamp(0, 4);
-              if (isHorizontal) {
-                const quadStepsH = [' ', '▖', '▌', '▙', '█'];
-                char = quadStepsH[clamped];
-              } else {
-                const quadStepsV = [' ', '▖', '▄', '▙', '█'];
-                char = quadStepsV[clamped];
-              }
-            } else {
-              int offset = 0;
-              if (isSpan) {
-                switch (progress.direction) {
-                  case ProgressDirection.leftToRight:
-                    if (0 < threshold) offset |= 5; // dx=0: 1 | 4
-                    if (1 < threshold) offset |= 10; // dx=1: 2 | 8
-                  case ProgressDirection.rightToLeft:
-                    if (0 > threshold) offset |= 5;
-                    if (1 > threshold) offset |= 10;
-                  case ProgressDirection.topToBottom:
-                    if (0 < threshold) offset |= 3; // dy=0: 1 | 2
-                    if (1 < threshold) offset |= 12; // dy=1: 4 | 8
-                  case ProgressDirection.bottomToTop:
-                    if (0 > threshold) offset |= 3;
-                    if (1 > threshold) offset |= 12;
-                }
-              } else {
-                switch (progress.direction) {
-                  case ProgressDirection.leftToRight:
-                    if (0 < threshold) offset |= 1;
-                    if (1 < threshold) offset |= 4;
-                    if (gridCrossAxis < threshold) offset |= 2;
-                    if (gridCrossAxis + 1 < threshold) offset |= 8;
-                  case ProgressDirection.rightToLeft:
-                    if (0 < threshold) offset |= 1;
-                    if (1 < threshold) offset |= 4;
-                    if (-gridCrossAxis < threshold) offset |= 2;
-                    if (1 - gridCrossAxis < threshold) offset |= 8;
-                  case ProgressDirection.topToBottom:
-                    if (0 < threshold) offset |= 1;
-                    if (1 < threshold) offset |= 2;
-                    if (gridCrossAxis < threshold) offset |= 4;
-                    if (gridCrossAxis + 1 < threshold) offset |= 8;
-                  case ProgressDirection.bottomToTop:
-                    if (0 < threshold) offset |= 1;
-                    if (1 < threshold) offset |= 2;
-                    if (-gridCrossAxis < threshold) offset |= 4;
-                    if (1 - gridCrossAxis < threshold) offset |= 8;
-                }
-              }
-              const quads = [
-                ' ',
-                '▘',
-                '▝',
-                '▀',
-                '▖',
-                '▌',
-                '▞',
-                '▛',
-                '▗',
-                '▚',
-                '▐',
-                '▜',
-                '▄',
-                '▙',
-                '▟',
-                '█',
-              ];
-              char = quads[offset];
-            }
-          } else {
-            int filledCount = 0;
-            if (isSpan) {
-              switch (progress.direction) {
-                case ProgressDirection.leftToRight:
-                  filledCount = threshold.clamp(0, subWidth);
-                case ProgressDirection.rightToLeft:
-                  filledCount = subWidth - (threshold + 1).clamp(0, subWidth);
-                case ProgressDirection.topToBottom:
-                  filledCount = threshold.clamp(0, subHeight);
-                case ProgressDirection.bottomToTop:
-                  filledCount = subHeight - (threshold + 1).clamp(0, subHeight);
-              }
-            } else {
-              for (int dy = 0; dy < subHeight; dy++) {
-                for (int dx = 0; dx < subWidth; dx++) {
-                  final val = switch (progress.direction) {
-                    ProgressDirection.leftToRight => dx * gridCrossAxis + dy,
-                    ProgressDirection.rightToLeft => dy - dx * gridCrossAxis,
-                    ProgressDirection.topToBottom => dy * gridCrossAxis + dx,
-                    ProgressDirection.bottomToTop => dx - dy * gridCrossAxis,
-                  };
-                  if (val < threshold) filledCount++;
-                }
-              }
-            }
-
-            bool canInvert = cellBg != null;
-
-            if (subWidth > 1) {
-              if (progress.direction == ProgressDirection.rightToLeft &&
-                  canInvert &&
-                  filledCount > 0 &&
-                  filledCount < 8) {
-                char = LinearProgressIndicator
-                    ._blocksHorizontal[(8 - filledCount).clamp(0, 8)];
-                invertColors = true;
-              } else {
-                char = LinearProgressIndicator
-                    ._blocksHorizontal[filledCount.clamp(0, 8)];
-              }
-            } else if (subHeight > 1) {
-              if (progress.direction == ProgressDirection.topToBottom &&
-                  canInvert &&
-                  filledCount > 0 &&
-                  filledCount < 8) {
-                char = LinearProgressIndicator
-                    ._blocksVertical[(8 - filledCount).clamp(0, 8)];
-                invertColors = true;
-              } else {
-                char = LinearProgressIndicator
-                    ._blocksVertical[filledCount.clamp(0, 8)];
-              }
-            } else {
-              char = filledCount > 0 ? '█' : ' ';
-            }
-          }
-        }
-
-        final renderFg = invertColors ? cellBg : cellFg;
-        final renderBg = invertColors ? cellFg : cellBg;
-
-        viewport.setAttributes(
-          x,
-          y,
-          char: char,
-          fg: renderFg?.argb,
-          bg: renderBg?.argb,
-          modifiers: progress.style.modifiers,
-        );
-      }
-    }
+    return _ProgressPaintPlan(
+      progress: progress,
+      width: size.width,
+      height: size.height,
+      subWidth: subWidth,
+      subHeight: subHeight,
+      isHorizontal: isHorizontal,
+      isSpan: progress.crossAxisFill == CrossAxisFill.span,
+      mainAxisCells: mainAxisCells,
+      gridW: size.width * subWidth,
+      gridH: size.height * subHeight,
+      gridCrossAxis: gridCrossAxis,
+      totalFilledSpan: (eased * gridMainAxis).round(),
+      totalFilledPrecise: (eased * (gridMainAxis * gridCrossAxis)).round(),
+      eased: eased,
+      pctOverlay: _resolvePercentageOverlay(progress, eased),
+      fgStops: fgStops,
+      bgStops: bgStops,
+    );
   }
+
+  static (int subWidth, int subHeight) _computeSubGrid(
+    ProgressBarType barType,
+    bool smooth,
+    bool isHorizontal,
+  ) => switch (barType) {
+    ProgressBarType.braille => (2, 4),
+    ProgressBarType.quads => (2, 2),
+    ProgressBarType.blocks when !smooth => (1, 1),
+    ProgressBarType.blocks => isHorizontal ? (8, 1) : (1, 8),
+  };
+
+  _PercentageOverlay? _resolvePercentageOverlay(
+    LinearProgressIndicator progress,
+    double eased,
+  ) {
+    if (!progress.showPercentage) return null;
+    final text = '${(eased * 100).toInt().clamp(0, 100)}%';
+    final chars = [...text.characters];
+    if (chars.length > size.width) return null;
+    return (
+      chars: chars,
+      startX: ((size.width - chars.length) / 2).floor(),
+      y: size.height ~/ 2,
+    );
+  }
+
+  static (List<GradientStop>?, List<GradientStop>?) _resolveColorStops(
+    LinearProgressIndicator progress,
+    double clamped,
+    double eased,
+  ) {
+    final colors = progress.colorBuilder?.call(clamped, eased);
+    // ignore: deprecated_member_use_from_same_package
+    final hasLegacyColors =
+        // ignore: deprecated_member_use_from_same_package
+        progress.startColor != null || progress.endColor != null;
+    if (progress.colorBuilder != null || !hasLegacyColors) {
+      return (colors?.fg, colors?.bg);
+    }
+    final fallback = progress.style.foreground ?? const Color(255, 255, 255);
+    // ignore: deprecated_member_use_from_same_package
+    final start = progress.startColor ?? fallback;
+    // ignore: deprecated_member_use_from_same_package
+    final end = progress.endColor ?? fallback;
+    return ([(color: start, stop: 0.0), (color: end, stop: 1.0)], colors?.bg);
+  }
+
+  void _paintCell(Viewport viewport, _ProgressPaintPlan plan, int x, int y) {
+    final cellT = _computeCellT(plan, x, y);
+    final style = plan.progress.style;
+    final cellFg = _interpolateColor(plan.fgStops, cellT) ?? style.foreground;
+    final cellBg = _interpolateColor(plan.bgStops, cellT) ?? style.background;
+
+    final pctChar = _percentageCharAt(plan.pctOverlay, x, y);
+    final (char, invertColors) = pctChar != null
+        ? (pctChar, false)
+        : _resolveBarGlyph(plan, x, y, canInvert: cellBg != null);
+
+    final renderFg = invertColors ? cellBg : cellFg;
+    final renderBg = invertColors ? cellFg : cellBg;
+    viewport.setAttributes(
+      x,
+      y,
+      char: char,
+      fg: renderFg?.argb,
+      bg: renderBg?.argb,
+      modifiers: style.modifiers,
+    );
+  }
+
+  static double _computeCellT(_ProgressPaintPlan plan, int x, int y) {
+    if (plan.mainAxisCells <= 1) return 0.0;
+    final mainCellIndex = switch (plan.progress.direction) {
+      ProgressDirection.leftToRight => x,
+      ProgressDirection.rightToLeft => plan.width - 1 - x,
+      ProgressDirection.topToBottom => y,
+      ProgressDirection.bottomToTop => plan.height - 1 - y,
+    };
+    return mainCellIndex / (plan.mainAxisCells - 1);
+  }
+
+  static String? _percentageCharAt(_PercentageOverlay? overlay, int x, int y) {
+    if (overlay == null || y != overlay.y) return null;
+    final localIdx = x - overlay.startX;
+    if (localIdx < 0 || localIdx >= overlay.chars.length) return null;
+    return overlay.chars[localIdx];
+  }
+
+  (String char, bool invertColors) _resolveBarGlyph(
+    _ProgressPaintPlan plan,
+    int x,
+    int y, {
+    required bool canInvert,
+  }) {
+    final threshold = _computeCellThreshold(plan, x, y);
+    return switch (plan.progress.barType) {
+      ProgressBarType.braille => (_paintBrailleCell(plan, threshold), false),
+      ProgressBarType.quads => (
+        _paintQuadrantCell(plan, x, y, threshold),
+        false,
+      ),
+      ProgressBarType.blocks => _paintBlockCell(
+        plan,
+        threshold,
+        canInvert: canInvert,
+      ),
+    };
+  }
+
+  static int _computeCellThreshold(_ProgressPaintPlan plan, int x, int y) {
+    final baseGx = x * plan.subWidth;
+    final baseGy = y * plan.subHeight;
+    if (plan.isSpan) {
+      return switch (plan.progress.direction) {
+        ProgressDirection.leftToRight => plan.totalFilledSpan - baseGx,
+        ProgressDirection.rightToLeft =>
+          (plan.gridW - 1) - baseGx - plan.totalFilledSpan,
+        ProgressDirection.topToBottom => plan.totalFilledSpan - baseGy,
+        ProgressDirection.bottomToTop =>
+          (plan.gridH - 1) - baseGy - plan.totalFilledSpan,
+      };
+    }
+    final c = plan.gridCrossAxis;
+    return switch (plan.progress.direction) {
+      ProgressDirection.leftToRight =>
+        plan.totalFilledPrecise - (baseGx * c + baseGy),
+      ProgressDirection.rightToLeft =>
+        plan.totalFilledPrecise - ((plan.gridW - 1 - baseGx) * c + baseGy),
+      ProgressDirection.topToBottom =>
+        plan.totalFilledPrecise - (baseGy * c + baseGx),
+      ProgressDirection.bottomToTop =>
+        plan.totalFilledPrecise - ((plan.gridH - 1 - baseGy) * c + baseGx),
+    };
+  }
+
+  static String _paintBrailleCell(_ProgressPaintPlan plan, int threshold) {
+    final offset = plan.isSpan
+        ? _brailleSpanOffset(plan.progress.direction, threshold)
+        : _braillePreciseOffset(
+            plan.progress.direction,
+            plan.gridCrossAxis,
+            threshold,
+          );
+    return String.fromCharCode(0x2800 + offset);
+  }
+
+  static int _brailleSpanOffset(ProgressDirection direction, int threshold) =>
+      switch (direction) {
+        ProgressDirection.leftToRight =>
+          _bitIfLess(0, threshold, 71) | _bitIfLess(1, threshold, 184),
+        ProgressDirection.rightToLeft =>
+          _bitIfGreater(0, threshold, 71) | _bitIfGreater(1, threshold, 184),
+        ProgressDirection.topToBottom =>
+          _bitIfLess(0, threshold, 9) |
+              _bitIfLess(1, threshold, 18) |
+              _bitIfLess(2, threshold, 36) |
+              _bitIfLess(3, threshold, 192),
+        ProgressDirection.bottomToTop =>
+          _bitIfGreater(0, threshold, 9) |
+              _bitIfGreater(1, threshold, 18) |
+              _bitIfGreater(2, threshold, 36) |
+              _bitIfGreater(3, threshold, 192),
+      };
+
+  static int _braillePreciseOffset(
+    ProgressDirection direction,
+    int c,
+    int threshold,
+  ) => switch (direction) {
+    ProgressDirection.leftToRight =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(1, threshold, 2) |
+          _bitIfLess(2, threshold, 4) |
+          _bitIfLess(c, threshold, 8) |
+          _bitIfLess(c + 1, threshold, 16) |
+          _bitIfLess(c + 2, threshold, 32) |
+          _bitIfLess(3, threshold, 64) |
+          _bitIfLess(c + 3, threshold, 128),
+    ProgressDirection.rightToLeft =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(1, threshold, 2) |
+          _bitIfLess(2, threshold, 4) |
+          _bitIfLess(-c, threshold, 8) |
+          _bitIfLess(1 - c, threshold, 16) |
+          _bitIfLess(2 - c, threshold, 32) |
+          _bitIfLess(3, threshold, 64) |
+          _bitIfLess(3 - c, threshold, 128),
+    ProgressDirection.topToBottom =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(c, threshold, 2) |
+          _bitIfLess(2 * c, threshold, 4) |
+          _bitIfLess(1, threshold, 8) |
+          _bitIfLess(c + 1, threshold, 16) |
+          _bitIfLess(2 * c + 1, threshold, 32) |
+          _bitIfLess(3 * c, threshold, 64) |
+          _bitIfLess(3 * c + 1, threshold, 128),
+    ProgressDirection.bottomToTop =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(-c, threshold, 2) |
+          _bitIfLess(-2 * c, threshold, 4) |
+          _bitIfLess(1, threshold, 8) |
+          _bitIfLess(1 - c, threshold, 16) |
+          _bitIfLess(1 - 2 * c, threshold, 32) |
+          _bitIfLess(-3 * c, threshold, 64) |
+          _bitIfLess(1 - 3 * c, threshold, 128),
+  };
+
+  static String _paintQuadrantCell(
+    _ProgressPaintPlan plan,
+    int x,
+    int y,
+    int threshold,
+  ) {
+    if (plan.isSpan && plan.progress.smooth) {
+      return _quadSmoothSpanChar(plan, x, y);
+    }
+    final offset = plan.isSpan
+        ? _quadSpanOffset(plan.progress.direction, threshold)
+        : _quadPreciseOffset(
+            plan.progress.direction,
+            plan.gridCrossAxis,
+            threshold,
+          );
+    return LinearProgressIndicator._quads[offset];
+  }
+
+  static String _quadSmoothSpanChar(_ProgressPaintPlan plan, int x, int y) {
+    final maxSteps = plan.mainAxisCells * 4;
+    final filledSteps = (plan.eased * maxSteps).round();
+    final cellSteps = switch (plan.progress.direction) {
+      ProgressDirection.leftToRight => filledSteps - (x * 4),
+      ProgressDirection.rightToLeft => filledSteps - ((plan.width - 1 - x) * 4),
+      ProgressDirection.topToBottom => filledSteps - (y * 4),
+      ProgressDirection.bottomToTop =>
+        filledSteps - ((plan.height - 1 - y) * 4),
+    };
+    final step = cellSteps.clamp(0, 4);
+    return plan.isHorizontal
+        ? LinearProgressIndicator._quadStepsHorizontal[step]
+        : LinearProgressIndicator._quadStepsVertical[step];
+  }
+
+  static int _quadSpanOffset(ProgressDirection direction, int threshold) =>
+      switch (direction) {
+        ProgressDirection.leftToRight =>
+          _bitIfLess(0, threshold, 5) | _bitIfLess(1, threshold, 10),
+        ProgressDirection.rightToLeft =>
+          _bitIfGreater(0, threshold, 5) | _bitIfGreater(1, threshold, 10),
+        ProgressDirection.topToBottom =>
+          _bitIfLess(0, threshold, 3) | _bitIfLess(1, threshold, 12),
+        ProgressDirection.bottomToTop =>
+          _bitIfGreater(0, threshold, 3) | _bitIfGreater(1, threshold, 12),
+      };
+
+  static int _quadPreciseOffset(
+    ProgressDirection direction,
+    int c,
+    int threshold,
+  ) => switch (direction) {
+    ProgressDirection.leftToRight =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(1, threshold, 4) |
+          _bitIfLess(c, threshold, 2) |
+          _bitIfLess(c + 1, threshold, 8),
+    ProgressDirection.rightToLeft =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(1, threshold, 4) |
+          _bitIfLess(-c, threshold, 2) |
+          _bitIfLess(1 - c, threshold, 8),
+    ProgressDirection.topToBottom =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(1, threshold, 2) |
+          _bitIfLess(c, threshold, 4) |
+          _bitIfLess(c + 1, threshold, 8),
+    ProgressDirection.bottomToTop =>
+      _bitIfLess(0, threshold, 1) |
+          _bitIfLess(1, threshold, 2) |
+          _bitIfLess(-c, threshold, 4) |
+          _bitIfLess(1 - c, threshold, 8),
+  };
+
+  static (String char, bool invertColors) _paintBlockCell(
+    _ProgressPaintPlan plan,
+    int threshold, {
+    required bool canInvert,
+  }) {
+    final filledCount = plan.isSpan
+        ? _blockSpanFilledCount(plan, threshold)
+        : _blockPreciseFilledCount(plan, threshold);
+
+    if (plan.subWidth > 1) {
+      final shouldInvert =
+          plan.progress.direction == ProgressDirection.rightToLeft &&
+          canInvert &&
+          filledCount > 0 &&
+          filledCount < 8;
+      final idx = (shouldInvert ? 8 - filledCount : filledCount).clamp(0, 8);
+      return (LinearProgressIndicator._blocksHorizontal[idx], shouldInvert);
+    }
+    if (plan.subHeight > 1) {
+      final shouldInvert =
+          plan.progress.direction == ProgressDirection.topToBottom &&
+          canInvert &&
+          filledCount > 0 &&
+          filledCount < 8;
+      final idx = (shouldInvert ? 8 - filledCount : filledCount).clamp(0, 8);
+      return (LinearProgressIndicator._blocksVertical[idx], shouldInvert);
+    }
+    return (filledCount > 0 ? '█' : ' ', false);
+  }
+
+  static int _blockSpanFilledCount(_ProgressPaintPlan plan, int threshold) =>
+      switch (plan.progress.direction) {
+        ProgressDirection.leftToRight => threshold.clamp(0, plan.subWidth),
+        ProgressDirection.rightToLeft =>
+          plan.subWidth - (threshold + 1).clamp(0, plan.subWidth),
+        ProgressDirection.topToBottom => threshold.clamp(0, plan.subHeight),
+        ProgressDirection.bottomToTop =>
+          plan.subHeight - (threshold + 1).clamp(0, plan.subHeight),
+      };
+
+  static int _blockPreciseFilledCount(_ProgressPaintPlan plan, int threshold) {
+    var filledCount = 0;
+    final c = plan.gridCrossAxis;
+    final dir = plan.progress.direction;
+    for (var dy = 0; dy < plan.subHeight; dy++) {
+      for (var dx = 0; dx < plan.subWidth; dx++) {
+        final val = switch (dir) {
+          ProgressDirection.leftToRight => dx * c + dy,
+          ProgressDirection.rightToLeft => dy - dx * c,
+          ProgressDirection.topToBottom => dy * c + dx,
+          ProgressDirection.bottomToTop => dx - dy * c,
+        };
+        if (val < threshold) filledCount++;
+      }
+    }
+    return filledCount;
+  }
+
+  @pragma('vm:prefer-inline')
+  static int _bitIfLess(int val, int threshold, int bit) =>
+      val < threshold ? bit : 0;
+
+  @pragma('vm:prefer-inline')
+  static int _bitIfGreater(int val, int threshold, int bit) =>
+      val > threshold ? bit : 0;
 }

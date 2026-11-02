@@ -15,8 +15,11 @@ void main() {
 
       final buffer = Buffer.blank(10, 10);
       element.paint(buffer, Offset.zero);
-      // It paints both.
-      expect(true, true);
+      // Top child ('Fr') overwrites the first two cells of bottom child ('Back').
+      expect(buffer.getCharacter(0, 0), 'F');
+      expect(buffer.getCharacter(1, 0), 'r');
+      expect(buffer.getCharacter(2, 0), 'c');
+      expect(buffer.getCharacter(3, 0), 'k');
     });
 
     test('Stack respects positioning constraints', () {

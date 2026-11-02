@@ -14,40 +14,24 @@ class FileTreeHelper {
     final entity = fs.isDirectorySync(path)
         ? fs.directory(path)
         : fs.file(path);
-    final node = _buildNode(fs, entity);
+    final node = _buildNode(entity);
     if (expandRoot) {
       node.isExpanded = true;
     }
     return node;
   }
 
-  static TreeNode<FileSystemEntity> _buildNode(
-    FileSystem fs,
-    FileSystemEntity entity,
-  ) {
-    final name = entity.uri.pathSegments.isNotEmpty
-        ? (entity.uri.pathSegments.last.isEmpty
-              ? entity.uri.pathSegments[entity.uri.pathSegments.length - 2]
-              : entity.uri.pathSegments.last)
-        : entity.path;
-
+  static TreeNode<FileSystemEntity> _buildNode(FileSystemEntity entity) {
+    final name = _entityName(entity);
     final children = <TreeNode<FileSystemEntity>>[];
+
     if (entity is Directory) {
       try {
-        final list = entity.listSync().toList();
-        // Sort: directories first, then files alphabetically
-        list.sort((a, b) {
-          final aIsDir = fs.isDirectorySync(a.path);
-          final bIsDir = fs.isDirectorySync(b.path);
-          if (aIsDir && !bIsDir) return -1;
-          if (!aIsDir && bIsDir) return 1;
-          return a.path.compareTo(b.path);
-        });
-
+        final list = entity.listSync()..sort(_compareEntities);
         for (final child in list) {
-          children.add(_buildNode(fs, child));
+          children.add(_buildNode(child));
         }
-      } catch (_) {
+      } on FileSystemException {
         // Suppress listing errors for unreadable paths
       }
     }
@@ -57,5 +41,20 @@ class FileTreeHelper {
       value: entity,
       children: children,
     );
+  }
+
+  static String _entityName(FileSystemEntity entity) {
+    final segments = entity.uri.pathSegments;
+    if (segments.isEmpty) return entity.path;
+    if (segments.last.isNotEmpty) return segments.last;
+    return segments.length >= 2 ? segments[segments.length - 2] : entity.path;
+  }
+
+  static int _compareEntities(FileSystemEntity a, FileSystemEntity b) {
+    final aIsDir = a is Directory;
+    final bIsDir = b is Directory;
+    if (aIsDir && !bIsDir) return -1;
+    if (!aIsDir && bIsDir) return 1;
+    return a.path.compareTo(b.path);
   }
 }
