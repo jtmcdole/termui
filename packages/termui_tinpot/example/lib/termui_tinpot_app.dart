@@ -1,10 +1,194 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/termui.dart';
 import 'package:termui_tinpot/termui_tinpot.dart';
+
+final class _TinpotComputeRequest {
+  final Uint8List? encodedBytes;
+  final Uint8List? decodedRgba;
+  final int decodedWidth;
+  final int decodedHeight;
+  final Uint8List? scaledRgba;
+  final int scaledWidth;
+  final int scaledHeight;
+  final int columns;
+  final int workFactor;
+  final int? priorDecodeMs;
+  final int? priorScaleMs;
+
+  const _TinpotComputeRequest({
+    this.encodedBytes,
+    this.decodedRgba,
+    this.decodedWidth = 0,
+    this.decodedHeight = 0,
+    this.scaledRgba,
+    this.scaledWidth = 0,
+    this.scaledHeight = 0,
+    required this.columns,
+    required this.workFactor,
+    this.priorDecodeMs,
+    this.priorScaleMs,
+  });
+}
+
+final class _TinpotComputeResponse {
+  final bool decodeFailed;
+  final Uint8List? decodedRgba;
+  final int decodedWidth;
+  final int decodedHeight;
+  final Uint8List? scaledRgba;
+  final int scaledWidth;
+  final int scaledHeight;
+  final int columns;
+  final int rows;
+  final List<String> characters;
+  final Uint32List attributes;
+  final Map<String, int> heatmap;
+  final int? decodeMs;
+  final int? scaleMs;
+  final int quantMs;
+
+  const _TinpotComputeResponse({
+    this.decodeFailed = false,
+    this.decodedRgba,
+    this.decodedWidth = 0,
+    this.decodedHeight = 0,
+    this.scaledRgba,
+    this.scaledWidth = 0,
+    this.scaledHeight = 0,
+    this.columns = 0,
+    this.rows = 0,
+    required this.characters,
+    required this.attributes,
+    required this.heatmap,
+    this.decodeMs,
+    this.scaleMs,
+    this.quantMs = 0,
+  });
+
+  factory _TinpotComputeResponse.decodeFailure() => _TinpotComputeResponse(
+    decodeFailed: true,
+    characters: const [],
+    attributes: Uint32List(0),
+    heatmap: const {},
+  );
+}
+
+_TinpotComputeResponse _runTinpotCompute(_TinpotComputeRequest req) {
+  final decodedInfo = _resolveDecodedImage(req);
+  if (decodedInfo == null) {
+    return _TinpotComputeResponse.decodeFailure();
+  }
+
+  final (decodedImg, decodedRgba, decodedWidth, decodedHeight, decodeMs) =
+      decodedInfo;
+  final imageAspect = decodedWidth / decodedHeight;
+  final rows = math.max(1, (req.columns / (imageAspect * 2.0)).round());
+
+  final engine = TermuiTinpot(workFactor: req.workFactor);
+  final (scaledImg, scaledRgba, scaledWidth, scaledHeight, scaleMs) =
+      _resolveScaledImage(req, engine, decodedImg, rows);
+
+  final quantWatch = Stopwatch()..start();
+  final convertedBuffer = engine.quantizeScaledImage(
+    scaledImg,
+    req.columns,
+    rows,
+    useDin99d: true,
+  );
+  final heatmap = _computeBufferHeatmap(convertedBuffer);
+  quantWatch.stop();
+
+  return _TinpotComputeResponse(
+    decodedRgba: decodedRgba,
+    decodedWidth: decodedWidth,
+    decodedHeight: decodedHeight,
+    scaledRgba: scaledRgba,
+    scaledWidth: scaledWidth,
+    scaledHeight: scaledHeight,
+    columns: req.columns,
+    rows: rows,
+    characters: convertedBuffer.characters,
+    attributes: convertedBuffer.attributes,
+    heatmap: heatmap,
+    decodeMs: decodeMs,
+    scaleMs: scaleMs,
+    quantMs: quantWatch.elapsedMilliseconds,
+  );
+}
+
+(img.Image?, Uint8List, int, int, int?)? _resolveDecodedImage(
+  _TinpotComputeRequest req,
+) {
+  if (req.encodedBytes != null) {
+    final sw = Stopwatch()..start();
+    final image = img.decodeImage(req.encodedBytes!);
+    sw.stop();
+    if (image == null) return null;
+    final rgba = image.getBytes(order: img.ChannelOrder.rgba);
+    return (image, rgba, image.width, image.height, sw.elapsedMilliseconds);
+  }
+
+  final rgba = req.decodedRgba!;
+  final image = req.scaledRgba != null
+      ? null
+      : _rgbaToImage(rgba, req.decodedWidth, req.decodedHeight);
+  return (image, rgba, req.decodedWidth, req.decodedHeight, req.priorDecodeMs);
+}
+
+(img.Image, Uint8List, int, int, int?) _resolveScaledImage(
+  _TinpotComputeRequest req,
+  TermuiTinpot engine,
+  img.Image? decodedImg,
+  int rows,
+) {
+  if (req.scaledRgba != null) {
+    final scaled = _rgbaToImage(
+      req.scaledRgba!,
+      req.scaledWidth,
+      req.scaledHeight,
+    );
+    return (
+      scaled,
+      req.scaledRgba!,
+      req.scaledWidth,
+      req.scaledHeight,
+      req.priorScaleMs,
+    );
+  }
+
+  final sw = Stopwatch()..start();
+  final scaled = engine.scaleImage(decodedImg!, req.columns, rows);
+  sw.stop();
+  final rgba = scaled.getBytes(order: img.ChannelOrder.rgba);
+  return (scaled, rgba, scaled.width, scaled.height, sw.elapsedMilliseconds);
+}
+
+img.Image _rgbaToImage(Uint8List rgba, int width, int height) =>
+    img.Image.fromBytes(
+      width: width,
+      height: height,
+      bytes: rgba.buffer,
+      bytesOffset: rgba.offsetInBytes,
+      numChannels: 4,
+      order: img.ChannelOrder.rgba,
+    );
+
+Map<String, int> _computeBufferHeatmap(Buffer buffer) {
+  final counts = <String, int>{};
+  for (var y = 0; y < buffer.height; y++) {
+    for (var x = 0; x < buffer.width; x++) {
+      final char = buffer.getCharacter(x, y);
+      counts[char] = (counts[char] ?? 0) + 1;
+    }
+  }
+  return counts;
+}
 
 /// Controller for communicating events (such as file drops or byte payloads) to [TinpotApp].
 class TinpotAppController {
@@ -130,22 +314,25 @@ class TinpotViewModel {
   Stream<TinpotState> get stateStream => _stateController.stream;
   TinpotState get state => _state;
 
-  img.Image? _decodedImage;
-  img.Image? _scaledImage;
-  final Stopwatch _stopwatch = Stopwatch();
+  Uint8List? _decodedRgba;
+  int _decodedWidth = 0;
+  int _decodedHeight = 0;
+  Uint8List? _scaledRgba;
+  int _scaledWidth = 0;
+  int _scaledHeight = 0;
+  bool _isDisposed = false;
 
   static final int _traceAppConvertId = Tracer.registerString(
     'TinpotApp:_convertImage',
   );
-  static final int _traceAppDecodeId = Tracer.registerString(
-    'TinpotApp:decodeImage',
-  );
 
   void dispose() {
+    _isDisposed = true;
     _stateController.close();
   }
 
   void _emit(TinpotState newState) {
+    if (_isDisposed) return;
     _state = newState;
     if (!_stateController.isClosed) {
       _stateController.add(_state);
@@ -153,16 +340,20 @@ class TinpotViewModel {
   }
 
   void setWidth(int w) {
-    _emit(_state.copyWith(width: w));
-    if (!_state.isProcessing && _decodedImage != null) {
+    if (!_state.isProcessing && _decodedRgba != null) {
+      _state = _state.copyWith(width: w);
       _reprocess();
+    } else {
+      _emit(_state.copyWith(width: w));
     }
   }
 
   void setWorkFactor(int wf) {
-    _emit(_state.copyWith(workFactor: wf));
-    if (!_state.isProcessing && _scaledImage != null) {
+    if (!_state.isProcessing && _scaledRgba != null) {
+      _state = _state.copyWith(workFactor: wf);
       _requantize();
+    } else {
+      _emit(_state.copyWith(workFactor: wf));
     }
   }
 
@@ -170,75 +361,89 @@ class TinpotViewModel {
     _emit(_state.copyWith(imagePath: path));
   }
 
-  Map<String, int> _generateHeatmap(Buffer buffer) {
-    final counts = <String, int>{};
-    for (int y = 0; y < buffer.height; y++) {
-      for (int x = 0; x < buffer.width; x++) {
-        final char = buffer.getCharacter(x, y);
-        counts[char] = (counts[char] ?? 0) + 1;
-      }
-    }
-    return counts;
+  Future<void> _requantize({int? decodeMs, int? scaleMs}) async {
+    if (_scaledRgba == null || _decodedRgba == null) return;
+    _emit(_state.copyWith(isProcessing: true, status: 'Re-quantizing...'));
+
+    final response = await compute(
+      _runTinpotCompute,
+      _TinpotComputeRequest(
+        decodedRgba: _decodedRgba,
+        decodedWidth: _decodedWidth,
+        decodedHeight: _decodedHeight,
+        scaledRgba: _scaledRgba,
+        scaledWidth: _scaledWidth,
+        scaledHeight: _scaledHeight,
+        columns: _state.width,
+        workFactor: _state.workFactor,
+        priorDecodeMs: decodeMs,
+        priorScaleMs: scaleMs,
+      ),
+    );
+    _applyComputeSuccess(response);
   }
 
-  Future<void> _requantize({int? decodeMs, int? scaleMs}) async {
-    if (_scaledImage == null || _decodedImage == null) return;
-    _emit(_state.copyWith(isProcessing: true, status: 'Re-quantizing...'));
-    await Future<void>.delayed(Duration.zero);
+  Future<void> _reprocess({int? decodeMs}) async {
+    if (_decodedRgba == null) return;
+    _emit(_state.copyWith(isProcessing: true, status: 'Re-scaling...'));
 
-    _stopwatch.reset();
-    _stopwatch.start();
-
-    final columns = _state.width;
-    final double imageAspect = _decodedImage!.width / _decodedImage!.height;
-    int rows = (columns / (imageAspect * 2.0)).round();
-    if (rows < 1) rows = 1;
-
-    final engine = TermuiTinpot(workFactor: _state.workFactor);
-    final convertedBuffer = engine.quantizeScaledImage(
-      _scaledImage!,
-      columns,
-      rows,
-      useDin99d: true,
+    final response = await compute(
+      _runTinpotCompute,
+      _TinpotComputeRequest(
+        decodedRgba: _decodedRgba,
+        decodedWidth: _decodedWidth,
+        decodedHeight: _decodedHeight,
+        columns: _state.width,
+        workFactor: _state.workFactor,
+        priorDecodeMs: decodeMs,
+      ),
     );
+    _applyComputeSuccess(response);
+  }
 
-    final heatmap = _generateHeatmap(convertedBuffer);
-    final quantMs = _stopwatch.elapsedMilliseconds;
-    _stopwatch.stop();
+  void _applyComputeSuccess(_TinpotComputeResponse response) {
+    if (_isDisposed) return;
 
-    String timingText = 'Quant: ${quantMs}ms';
-    if (scaleMs != null) timingText = 'Scale: ${scaleMs}ms, $timingText';
-    if (decodeMs != null) timingText = 'Decode: ${decodeMs}ms, $timingText';
+    _decodedRgba = response.decodedRgba;
+    _decodedWidth = response.decodedWidth;
+    _decodedHeight = response.decodedHeight;
+    _scaledRgba = response.scaledRgba;
+    _scaledWidth = response.scaledWidth;
+    _scaledHeight = response.scaledHeight;
+
+    final convertedBuffer = Buffer.blank(response.columns, response.rows);
+    convertedBuffer.characters.setAll(0, response.characters);
+    convertedBuffer.attributes.setAll(0, response.attributes);
+
+    final timingText = _formatTimings(
+      decodeMs: response.decodeMs,
+      scaleMs: response.scaleMs,
+      quantMs: response.quantMs,
+    );
 
     _emit(
       _state.copyWith(
         imageBuffer: convertedBuffer,
-        heatmap: heatmap,
-        totalChars: columns * rows,
+        heatmap: response.heatmap,
+        totalChars: response.columns * response.rows,
         isProcessing: false,
-        status: 'Success! $columns x $rows grid. ($timingText)',
+        status:
+            'Success! ${response.columns} x ${response.rows} grid. ($timingText)',
       ),
     );
   }
 
-  Future<void> _reprocess({int? decodeMs}) async {
-    if (_decodedImage == null) return;
-    _emit(_state.copyWith(isProcessing: true, status: 'Re-scaling...'));
-    await Future<void>.delayed(Duration.zero);
-
-    _stopwatch.reset();
-    _stopwatch.start();
-
-    final columns = _state.width;
-    final double imageAspect = _decodedImage!.width / _decodedImage!.height;
-    int rows = (columns / (imageAspect * 2.0)).round();
-    if (rows < 1) rows = 1;
-
-    final engine = TermuiTinpot(workFactor: _state.workFactor);
-    _scaledImage = engine.scaleImage(_decodedImage!, columns, rows);
-    final scaleMs = _stopwatch.elapsedMilliseconds;
-
-    await _requantize(decodeMs: decodeMs, scaleMs: scaleMs);
+  static String _formatTimings({
+    int? decodeMs,
+    int? scaleMs,
+    required int quantMs,
+  }) {
+    final parts = <String>[
+      if (decodeMs != null) 'Decode: ${decodeMs}ms',
+      if (scaleMs != null) 'Scale: ${scaleMs}ms',
+      'Quant: ${quantMs}ms',
+    ];
+    return parts.join(', ');
   }
 
   Future<void> convertImageBytes(
@@ -258,16 +463,16 @@ class TinpotViewModel {
       ),
     );
 
-    await Future<void>.delayed(const Duration(milliseconds: 16));
+    final response = await compute(
+      _runTinpotCompute,
+      _TinpotComputeRequest(
+        encodedBytes: imageBytes,
+        columns: _state.width,
+        workFactor: _state.workFactor,
+      ),
+    );
 
-    _stopwatch.reset();
-    _stopwatch.start();
-    Tracer.record(_traceAppDecodeId, Phase.begin, TraceCategory.paint);
-    final image = img.decodeImage(imageBytes);
-    Tracer.record(_traceAppDecodeId, Phase.end, TraceCategory.paint);
-    final decodeMs = _stopwatch.elapsedMilliseconds;
-
-    if (image == null) {
+    if (response.decodeFailed) {
       _emit(
         _state.copyWith(
           isProcessing: false,
@@ -278,10 +483,7 @@ class TinpotViewModel {
       return;
     }
 
-    _decodedImage = image;
-    _scaledImage = null;
-
-    await _reprocess(decodeMs: decodeMs);
+    _applyComputeSuccess(response);
     Tracer.record(_traceAppConvertId, Phase.end, TraceCategory.paint);
   }
 
@@ -309,8 +511,6 @@ class TinpotViewModel {
       ),
     );
 
-    await Future<void>.delayed(const Duration(milliseconds: 16));
-
     final Uint8List imageBytes;
     try {
       imageBytes = await file.readAsBytes();
@@ -334,7 +534,6 @@ class TinpotViewModel {
     }
 
     _emit(_state.copyWith(status: 'Saving output.ascii...'));
-    await Future<void>.delayed(const Duration(milliseconds: 16));
 
     const outPath = 'output.ascii';
     try {
@@ -448,6 +647,84 @@ class TinpotControlPanel extends StatelessWidget {
     required this.pathController,
   });
 
+  static Color _statusColor(TinpotState state) {
+    if (state.status.startsWith('Error')) return const Color(255, 100, 100);
+    if (state.isProcessing) return const Color(0, 255, 255);
+    if (state.status.startsWith('Success')) return const Color(100, 255, 100);
+    return const Color(255, 255, 0);
+  }
+
+  Widget _buildStateSection(TinpotState state) {
+    return Column([
+      Row([
+        Text('Width: ${state.width} '),
+        Expanded(
+          child: Slider(
+            value: state.width.toDouble(),
+            min: 10,
+            max: 200,
+            onChanged: state.isProcessing
+                ? null
+                : (v) => viewModel.setWidth(v.toInt()),
+          ),
+        ),
+      ]),
+      Row([
+        Text('Work Factor: ${state.workFactor} '),
+        Expanded(
+          child: Slider(
+            value: state.workFactor.toDouble(),
+            min: 1,
+            max: 9,
+            onChanged: state.isProcessing
+                ? null
+                : (v) => viewModel.setWorkFactor(v.toInt()),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 1),
+      _buildActionButtons(state),
+      const SizedBox(height: 1),
+      Text(
+        'Status: ${state.status}',
+        style: Style(foreground: _statusColor(state)),
+      ),
+      const SizedBox(height: 1),
+      const Text('--- Statistics ---'),
+      Text('Total Characters: ${state.totalChars}'),
+      Text(
+        'Size: ${state.imageBuffer?.width ?? 0}x${state.imageBuffer?.height ?? 0}',
+      ),
+      const SizedBox(height: 1),
+      const Text('Top Characters:'),
+      for (final MapEntry(:key, :value) in state.topCharacters)
+        Text('"$key": $value'),
+    ]);
+  }
+
+  Widget _buildActionButtons(TinpotState state) {
+    return Row([
+      Button(
+        onPressed: () {
+          if (!state.isProcessing) {
+            viewModel.setImagePath(pathController.text);
+            viewModel.convertImage();
+          }
+        },
+        text: state.isProcessing ? 'Converting...' : 'Convert Image',
+      ),
+      const SizedBox(width: 2),
+      Button(
+        onPressed: () {
+          if (!state.isProcessing) {
+            viewModel.saveAscii();
+          }
+        },
+        text: 'Save',
+      ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) {
     return SizedBox(
@@ -470,89 +747,7 @@ class TinpotControlPanel extends StatelessWidget {
         StreamBuilder<TinpotState>(
           initialData: viewModel.state,
           stream: viewModel.stateStream,
-          builder: (context, snapshot) {
-            final state = snapshot.data!;
-            Color getStatusColor() {
-              return switch (state) {
-                _ when state.status.startsWith('Error') => const Color(
-                  255,
-                  100,
-                  100,
-                ),
-                _ when state.isProcessing => const Color(0, 255, 255),
-                _ when state.status.startsWith('Success') => const Color(
-                  100,
-                  255,
-                  100,
-                ),
-                _ => const Color(255, 255, 0),
-              };
-            }
-
-            return Column([
-              Row([
-                Text('Width: ${state.width} '),
-                Expanded(
-                  child: Slider(
-                    value: state.width.toDouble(),
-                    min: 10,
-                    max: 200,
-                    onChanged: state.isProcessing
-                        ? null
-                        : (v) => viewModel.setWidth(v.toInt()),
-                  ),
-                ),
-              ]),
-              Row([
-                Text('Work Factor: ${state.workFactor} '),
-                Expanded(
-                  child: Slider(
-                    value: state.workFactor.toDouble(),
-                    min: 1,
-                    max: 9,
-                    onChanged: state.isProcessing
-                        ? null
-                        : (v) => viewModel.setWorkFactor(v.toInt()),
-                  ),
-                ),
-              ]),
-              const SizedBox(height: 1),
-              Row([
-                Button(
-                  onPressed: () {
-                    if (!state.isProcessing) {
-                      viewModel.setImagePath(pathController.text);
-                      viewModel.convertImage();
-                    }
-                  },
-                  text: state.isProcessing ? 'Converting...' : 'Convert Image',
-                ),
-                const SizedBox(width: 2),
-                Button(
-                  onPressed: () {
-                    if (!state.isProcessing) {
-                      viewModel.saveAscii();
-                    }
-                  },
-                  text: 'Save',
-                ),
-              ]),
-              const SizedBox(height: 1),
-              Text(
-                'Status: ${state.status}',
-                style: Style(foreground: getStatusColor()),
-              ),
-              const SizedBox(height: 1),
-              const Text('--- Statistics ---'),
-              Text('Total Characters: ${state.totalChars}'),
-              Text(
-                'Size: ${state.imageBuffer?.width ?? 0}x${state.imageBuffer?.height ?? 0}',
-              ),
-              const SizedBox(height: 1),
-              const Text('Top Characters:'),
-              ...state.topCharacters.map((e) => Text('"${e.key}": ${e.value}')),
-            ]);
-          },
+          builder: (context, snapshot) => _buildStateSection(snapshot.data!),
         ),
       ]),
     );
