@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:termui/direction.dart';
@@ -332,6 +333,19 @@ class Terminal {
   void resetMousePointer() {
     const terminator = '\x1b\\';
     backend.write('\x1b]22;$terminator');
+  }
+
+  /// Writes [text] to the host terminal clipboard using the `OSC 52` sequence.
+  void setClipboard(String text) {
+    if (_disposed) return;
+    final encoded = base64.encode(utf8.encode(text));
+    backend.write('\x1b]52;c;$encoded\x1b\\');
+  }
+
+  /// Requests a clipboard paste from the host terminal backend using `OSC 52`.
+  void requestPaste() {
+    if (_disposed) return;
+    backend.write('\x1b]52;c;?\x1b\\');
   }
 }
 

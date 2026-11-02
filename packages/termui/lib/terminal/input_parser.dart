@@ -12,14 +12,20 @@ class InputParser {
   /// Maximum length of a single CSI escape sequence before discarding as malformed.
   static const int maxCsiBytes = 256;
 
+  static const int _maxOscBytes = 1_400_000;
+
   static final RegExp _sgrMouseRegex = RegExp(
     r'^\x1b\[<(\d+);(\d+);(\d+)[Mm]$',
   );
+  static final RegExp _whitespaceRegex = RegExp(r'\s+');
 
   final List<int> _buffer = [];
   bool _isPasting = false;
   bool _pasteFlushed = false;
   final List<int> _pasteBuffer = [];
+  bool _isReadingOsc = false;
+  bool _oscOverflowed = false;
+  final List<int> _oscBuffer = [];
 
   /// Indicates if the parser is running in a Windows environment.
   final bool isWindows;
@@ -40,6 +46,8 @@ class InputParser {
     while (offset < _buffer.length) {
       final step = _isPasting
           ? _consumeBracketedPaste(offset, events)
+          : _isReadingOsc
+          ? _consumeOscSequence(offset, events)
           : _buffer[offset] == 27
           ? _consumeEscapeSequence(offset, events)
           : _consumeNonEscapeByte(offset, events);
@@ -101,11 +109,31 @@ class InputParser {
       _pasteBuffer.addAll(_buffer.getRange(cur, cur + take));
       cur += take;
       if (_pasteBuffer.length >= maxPasteBytes) {
-        events.add(PasteEvent(utf8.decode(_pasteBuffer, allowMalformed: true)));
-        _pasteBuffer.clear();
+        final flushEnd = _safeUtf8FlushEnd(_pasteBuffer);
+        events.add(
+          PasteEvent(
+            utf8.decode(
+              _pasteBuffer.sublist(0, flushEnd),
+              allowMalformed: true,
+            ),
+          ),
+        );
+        _pasteBuffer.removeRange(0, flushEnd);
         _pasteFlushed = true;
       }
     }
+  }
+
+  static int _safeUtf8FlushEnd(List<int> buf) {
+    final len = buf.length;
+    if (len == 0 || buf[len - 1] < 0x80) return len;
+    var leadIdx = len - 1;
+    while (leadIdx > 0 && len - leadIdx < 4 && (buf[leadIdx] & 0xC0) == 0x80) {
+      leadIdx--;
+    }
+    if ((buf[leadIdx] & 0xC0) == 0x80) return len;
+    final expected = _utf8ByteLength(buf[leadIdx]);
+    return (len - leadIdx < expected) ? leadIdx : len;
   }
 
   ({int offset, bool stop}) _consumeNonEscapeByte(
@@ -200,6 +228,9 @@ class InputParser {
     }
     if (second == 79) {
       return _consumeSs3Sequence(offset, events);
+    }
+    if (second == 93) {
+      return _consumeOscStart(offset, events);
     }
 
     events.add(
@@ -494,4 +525,109 @@ class InputParser {
     83 => const KeyEvent('f4', KeyType.f4),
     _ => KeyEvent(String.fromCharCode(term), KeyType.character),
   };
+
+  ({int offset, bool stop}) _consumeOscStart(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    final remaining = _buffer.length - offset;
+    if (remaining == 2) {
+      events.add(
+        const KeyEvent(']', KeyType.character, modifiers: {Modifier.alt}),
+      );
+      return (offset: offset + 2, stop: true);
+    }
+    final third = _buffer[offset + 2];
+    if (third < 0x30 || third > 0x39) {
+      events.add(
+        const KeyEvent(']', KeyType.character, modifiers: {Modifier.alt}),
+      );
+      return (offset: offset + 2, stop: false);
+    }
+    _isReadingOsc = true;
+    _oscOverflowed = false;
+    _oscBuffer.clear();
+    return (offset: offset + 2, stop: false);
+  }
+
+  ({int offset, bool stop}) _consumeOscSequence(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    for (var i = offset; i < _buffer.length; i++) {
+      final b = _buffer[i];
+      if (b == 0x07) {
+        _finishOsc(events);
+        return (offset: i + 1, stop: false);
+      }
+      if (b == 0x18 || b == 0x1A) {
+        _resetOsc();
+        return (offset: i + 1, stop: false);
+      }
+      if (b == 0x1B) {
+        return _handleOscEscape(i, events);
+      }
+      _appendOscByte(b);
+    }
+    return (offset: _buffer.length, stop: true);
+  }
+
+  ({int offset, bool stop}) _handleOscEscape(
+    int escIndex,
+    List<InputEvent> events,
+  ) {
+    if (escIndex + 1 >= _buffer.length) {
+      return (offset: escIndex, stop: true);
+    }
+    if (_buffer[escIndex + 1] == 0x5C) {
+      _finishOsc(events);
+      return (offset: escIndex + 2, stop: false);
+    }
+    _resetOsc();
+    return (offset: escIndex, stop: false);
+  }
+
+  void _appendOscByte(int byte) {
+    if (_oscOverflowed) return;
+    if (_oscBuffer.length < _maxOscBytes) {
+      _oscBuffer.add(byte);
+    } else {
+      _oscBuffer.clear();
+      _oscOverflowed = true;
+    }
+  }
+
+  void _finishOsc(List<InputEvent> events) {
+    if (!_oscOverflowed) {
+      final paste = _decodeOsc52();
+      if (paste != null) events.add(paste);
+    }
+    _resetOsc();
+  }
+
+  void _resetOsc() {
+    _isReadingOsc = false;
+    _oscOverflowed = false;
+    _oscBuffer.clear();
+  }
+
+  PasteEvent? _decodeOsc52() {
+    final payload = utf8.decode(_oscBuffer, allowMalformed: true);
+    if (!payload.startsWith('52;')) return null;
+    final semi = payload.indexOf(';', 3);
+    if (semi < 0) return null;
+    final cleaned = payload
+        .substring(semi + 1)
+        .replaceAll(_whitespaceRegex, '');
+    if (cleaned.isEmpty || cleaned == '?') return null;
+    try {
+      final bytes = base64.decode(base64.normalize(cleaned));
+      if (bytes.length > maxPasteBytes) return null;
+      final text = utf8.decode(bytes, allowMalformed: true);
+      if (utf8.encode(text).length > maxPasteBytes) return null;
+      return PasteEvent(text);
+    } on FormatException {
+      return null;
+    }
+  }
 }
