@@ -19,8 +19,7 @@ A multiplatform, low-latency game audio engine designed for the `termui` termina
 
 * **`TermuiAudioEngine`:** The core abstract API contract.
 * **`CliAudioEngine`:** Uses `dart:ffi` and Native Assets to link against `libsoloud`.
-* **`FlutterAudioEngine`:** Wraps the excellent `flutter_soloud` package.
-* **`WebAudioService`:** Coordinates an asynchronous JS Interop Web Worker for asset fetching.
+* **`termui_audio_flutter`:** Companion package (`TermuiAudioFlutter.register()`) wrapping `flutter_soloud` for Flutter Desktop, Mobile, and Web.
 
 ## Usage
 

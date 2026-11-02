@@ -315,58 +315,7 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
 
     return Focus(
       autofocus: true,
-      onKeyEvent: (event) {
-        switch (event.type) {
-          case KeyType.tab:
-          case KeyType.left:
-          case KeyType.right:
-            int focusedIndex = _buttonNodes.indexWhere((n) => n.hasFocus);
-            if (focusedIndex == -1) focusedIndex = 0;
-            final nextIndex = event.type == KeyType.left
-                ? (focusedIndex - 1 + _buttonNodes.length) % _buttonNodes.length
-                : (focusedIndex + 1) % _buttonNodes.length;
-            _buttonNodes[nextIndex].requestFocus();
-            return true;
-          case KeyType.character:
-            switch (event.key.toLowerCase()) {
-              case 'q':
-                PromptScope.of(context)?.done();
-                return true;
-              case 'w':
-                vm.moveRadarIndex(0, -1.0);
-                return true;
-              case 's':
-                vm.moveRadarIndex(0, 1.0);
-                return true;
-              case 'a':
-                vm.moveRadarIndex(-1.0, 0);
-                return true;
-              case 'd':
-                vm.moveRadarIndex(1.0, 0);
-                return true;
-              case '=' || '+':
-                vm.changeBgmVolume(0.05);
-                return true;
-              case '-' || '_':
-                vm.changeBgmVolume(-0.05);
-                return true;
-              case ']':
-                vm.changeSfxVolume(0.05);
-                return true;
-              case '[':
-                vm.changeSfxVolume(-0.05);
-                return true;
-              case '1' || '2' || '3' || '4' || '5':
-                vm.togglePlay(int.parse(event.key.toLowerCase()) - 1);
-                return true;
-              default:
-                break;
-            }
-          default:
-            break;
-        }
-        return false;
-      },
+      onKeyEvent: (event) => _handleKeyEvent(context, event),
       child: Align(
         alignment: Alignment.center,
         child: Column([
@@ -452,6 +401,63 @@ class _AudioPlayerAppWidgetState extends State<AudioPlayerAppWidget> {
       ),
     );
   }
+
+  bool _handleKeyEvent(BuildContext context, KeyEvent event) {
+    switch (event.type) {
+      case KeyType.tab:
+      case KeyType.left:
+      case KeyType.right:
+        var focusedIndex = _buttonNodes.indexWhere((n) => n.hasFocus);
+        if (focusedIndex == -1) focusedIndex = 0;
+        final nextIndex = event.type == KeyType.left
+            ? (focusedIndex - 1 + _buttonNodes.length) % _buttonNodes.length
+            : (focusedIndex + 1) % _buttonNodes.length;
+        _buttonNodes[nextIndex].requestFocus();
+        return true;
+      case KeyType.character:
+        return _handleCharacterKey(context, event.key.toLowerCase());
+      default:
+        return false;
+    }
+  }
+
+  bool _handleCharacterKey(BuildContext context, String key) {
+    final vm = widget.viewModel;
+    switch (key) {
+      case 'q':
+        PromptScope.of(context)?.done();
+        return true;
+      case 'w':
+        vm.moveRadarIndex(0, -1.0);
+        return true;
+      case 's':
+        vm.moveRadarIndex(0, 1.0);
+        return true;
+      case 'a':
+        vm.moveRadarIndex(-1.0, 0);
+        return true;
+      case 'd':
+        vm.moveRadarIndex(1.0, 0);
+        return true;
+      case '=' || '+':
+        vm.changeBgmVolume(0.05);
+        return true;
+      case '-' || '_':
+        vm.changeBgmVolume(-0.05);
+        return true;
+      case ']':
+        vm.changeSfxVolume(0.05);
+        return true;
+      case '[':
+        vm.changeSfxVolume(-0.05);
+        return true;
+      case '1' || '2' || '3' || '4' || '5':
+        vm.togglePlay(int.parse(key) - 1);
+        return true;
+      default:
+        return false;
+    }
+  }
 }
 
 class BgmProgressSliderWidget extends StatefulWidget {
@@ -470,22 +476,44 @@ class _BgmProgressSliderWidgetState extends State<BgmProgressSliderWidget> {
   @override
   void initState() {
     super.initState();
-    _positionTicker = Timer.periodic(TuiAnimationConfig.vsyncInterval, (_) {
-      final voice = widget.viewModel.activeVoices[0];
-      if (voice != null) {
-        final pos = widget.viewModel.audioService.getVoicePosition(voice);
-        if (pos != _currentPosition && mounted) {
-          setState(() {
-            _currentPosition = pos;
-          });
-        }
-      }
-    });
+    widget.viewModel.addListener(_syncTicker);
+    _syncTicker();
+  }
+
+  void _syncTicker() {
+    if (widget.viewModel.activeVoices[0] == null) {
+      _stopTicker();
+      return;
+    }
+    _positionTicker ??= Timer.periodic(
+      TuiAnimationConfig.vsyncInterval,
+      (_) => _pollPosition(),
+    );
+  }
+
+  void _pollPosition() {
+    final voice = widget.viewModel.activeVoices[0];
+    if (voice == null) {
+      _stopTicker();
+      return;
+    }
+    final pos = widget.viewModel.audioService.getVoicePosition(voice);
+    if (pos != _currentPosition && mounted) {
+      setState(() {
+        _currentPosition = pos;
+      });
+    }
+  }
+
+  void _stopTicker() {
+    _positionTicker?.cancel();
+    _positionTicker = null;
   }
 
   @override
   void dispose() {
-    _positionTicker?.cancel();
+    widget.viewModel.removeListener(_syncTicker);
+    _stopTicker();
     super.dispose();
   }
 

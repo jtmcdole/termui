@@ -16,6 +16,12 @@ external int initEngine(
 @Native<Void Function()>(symbol: 'dispose')
 external void disposeEngine();
 
+@Native<Uint32 Function()>(symbol: 'getEngineEpoch')
+external int getEngineEpoch();
+
+@Native<Void Function(Pointer<Void>)>(symbol: 'nativeFree')
+external void nativeFree(Pointer<Void> pointer);
+
 @Native<
   Int32 Function(Pointer<Char>, Pointer<Uint8>, Int32, Int32, Pointer<Uint32>)
 >(symbol: 'loadMem')
@@ -187,14 +193,6 @@ external void set3dSourceAttenuation(
 external int seek(int handle, double time);
 
 typedef DartVoiceEndedFunction = Void Function(Pointer<Uint32>);
-typedef DartFileLoadedFunction =
-    Void Function(
-      Pointer<Int32>,
-      Pointer<Utf8>,
-      Pointer<Uint32>,
-      Pointer<Uint64>,
-    );
-typedef DartStateChangedFunction = Void Function(Pointer<Int32>);
 
 @Native<Void Function(Pointer<Void>, Pointer<Void>, Pointer<Void>)>(
   symbol: 'setDartEventCallback',

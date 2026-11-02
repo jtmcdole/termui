@@ -27,17 +27,13 @@ environment:
   sdk: ">=3.11.0 <4.0.0"
 
 dependencies:
-  ansicolor: ^2.0.3
-  archive: ^4.0.9
   args: ^2.7.0
   characters: ^1.4.0
   clock: ^1.1.2
-  emoji_regex: ^0.0.5
   ffi: ^2.2.0
   file: ^7.0.0
   web: ^1.1.1
   path: ^1.9.0
-  quiver: ^3.2.2
   win32: ^6.0.0
 
 dev_dependencies:

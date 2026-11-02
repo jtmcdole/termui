@@ -1,0 +1,13 @@
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+  exclude:
+    - build/**
+
+linter:
+  rules:
+    - avoid_annotating_with_dynamic
+    - avoid_dynamic_calls
+    - implementation_imports

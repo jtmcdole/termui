@@ -36,6 +36,12 @@ jobs:
           Add-MpPreference -ExclusionPath "D:\"
           Add-MpPreference -ExclusionProcess "tar.exe", "unzip.exe", "zstd.exe", "dart.exe", "flutter_tester.exe", "cl.exe", "link.exe"
 
+      - name: Install ALSA library (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+
       - name: Set up Dart (pure Dart lane)
         if: matrix.suite == 'dart'
         uses: dart-lang/setup-dart@v1
@@ -50,9 +56,12 @@ jobs:
             "PUB_CACHE=D:\pub-cache" | Out-File -FilePath $env:GITHUB_ENV -Append
             $env:PUB_CACHE = "D:\pub-cache"
           }
-          Remove-Item -Recurse -Force packages/termui_flutter, packages/termui_audio, packages/termui_tinpot/example
+          Remove-Item -Recurse -Force packages/termui_flutter, packages/termui_audio_flutter, packages/termui_tinpot/example
+          Get-ChildItem -Path packages/termui_audio/example -Force |
+            Where-Object { $_.Name -ne 'assets' } |
+            Remove-Item -Recurse -Force
           (Get-Content pubspec.yaml) |
-            Where-Object { $_ -notmatch '^\s*-\s+packages/(termui_flutter|termui_audio|termui_tinpot/example)(/|\s*$)' } |
+            Where-Object { $_ -notmatch '^\s*-\s+packages/(termui_flutter|termui_audio_flutter|termui_audio/example|termui_tinpot/example)(/|\s*$)' } |
             Set-Content pubspec.yaml
           dart pub get
 
@@ -67,18 +76,11 @@ jobs:
           cache-key: ${{ runner.os == 'Windows' && 'flutter-:os:-:channel:-:version:-:arch:-:hash:-d1' || '' }}
           pub-cache-path: ${{ runner.os == 'Windows' && 'D:/pub-cache' || 'default' }}
 
-      - name: Install ALSA library (Linux Flutter lane)
-        if: matrix.os == 'ubuntu-latest' && matrix.suite == 'flutter'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev
-
       - name: Bootstrap Flutter workspace
         if: matrix.suite == 'flutter'
         run: flutter pub get
 
       - name: Normalize SoLoud source timestamps for CMake cache
-        if: matrix.suite == 'flutter'
         shell: pwsh
         run: |
           "IMAGE_VERSION=$($env:ImageVersion)" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -88,7 +90,6 @@ jobs:
           ) | ForEach-Object { $_.LastWriteTimeUtc = $epoch }
 
       - name: Cache SoLoud CMake native assets
-        if: matrix.suite == 'flutter'
         uses: actions/cache@v5
         with:
           path: .dart_tool/hooks_runner/shared/termui_audio/build

@@ -1,7 +1,10 @@
+import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:termui_audio/termui_audio.dart';
 import 'package:termui_audio/src/impl/cli/cli_audio_engine.dart';
+import 'package:termui_audio/src/soloud_cli.dart' as ffi;
 
 Future<AudioBuffer> _loadBuffer(CliAudioEngine cli) async {
   const soundPath = 'src/filters/signalsmith-stretch/web/demo/loop.mp3';
@@ -357,6 +360,111 @@ void main() {
             reason: 'Unpaused voice should advance playhead position',
           );
 
+          cli.stop(voice);
+        } finally {
+          await cli.dispose();
+        }
+      },
+    );
+
+    test(
+      '16. TS-12d: CliAudioEngine.playSprite routes through muted bus with 0.0 peak waveform amplitude',
+      () async {
+        final cli = CliAudioEngine();
+        await cli.init(enableVisualization: true);
+        try {
+          final wavBytes = generateWaveformPcmWav(
+            shape: WaveForm.sin,
+            frequency: 440.0,
+            duration: const Duration(milliseconds: 600),
+          );
+          final buffer = await cli.loadMem('muted_sprite_test.wav', wavBytes);
+          final mutedBus = cli.createBus();
+          mutedBus.setVolume(0.0);
+
+          final voice = cli.playSprite(
+            buffer,
+            bus: mutedBus,
+            start: const Duration(milliseconds: 20),
+            duration: const Duration(milliseconds: 350),
+          );
+
+          await cli
+              .getVoicePositionStream(
+                voice,
+                interval: const Duration(milliseconds: 10),
+              )
+              .firstWhere((pos) => pos > const Duration(milliseconds: 80))
+              .timeout(const Duration(seconds: 2));
+
+          final waveform = cli.getWaveform();
+          var peak = 0.0;
+          for (final sample in waveform) {
+            final absVal = sample.abs();
+            if (absVal > peak) peak = absVal;
+          }
+          expect(
+            peak,
+            equals(0.0),
+            reason:
+                'Sprite routed through a muted AudioBus must produce 0.0 peak waveform amplitude',
+          );
+
+          cli.stop(voice);
+          cli.destroyBus(mutedBus);
+        } finally {
+          await cli.dispose();
+        }
+      },
+    );
+
+    test(
+      '17. TE-01: CliAudioEngine re-init after dispose preserves new buffer across stale-epoch finalizer and GC',
+      () async {
+        final cli = CliAudioEngine();
+        final wavBytes = generateWaveformPcmWav(
+          shape: WaveForm.triangle,
+          frequency: 330.0,
+        );
+        const sharedPathId = 'epoch_collision_sound.wav';
+
+        await cli.init();
+        final epoch1 = ffi.getEngineEpoch();
+        Future<int> loadTransientBuffer() async {
+          final b = await cli.loadMem(sharedPathId, wavBytes);
+          return b.hash;
+        }
+
+        final hash1 = await loadTransientBuffer();
+        await cli.dispose();
+
+        await cli.init();
+        try {
+          final epoch2 = ffi.getEngineEpoch();
+          expect(epoch2, isNot(equals(epoch1)));
+
+          final buffer2 = await cli.loadMem(sharedPathId, wavBytes);
+          expect(
+            buffer2.hash,
+            equals(hash1),
+            reason: 'Identical pathId produces colliding sound hash',
+          );
+
+          // Simulate late NativeFinalizer callback from epoch1 plus GC pressure.
+          if (sizeOf<IntPtr>() >= 8) {
+            final staleToken = Pointer<Void>.fromAddress(
+              ((epoch1 & 0xFFFFFFFF) << 32) | (hash1 & 0xFFFFFFFF),
+            );
+            ffi.SoLoud_destroySound(staleToken);
+          }
+          for (var i = 0; i < 64; i++) {
+            Uint8List(256 * 1024);
+          }
+          await Future<void>.delayed(Duration.zero);
+
+          expect(cli.getBufferDuration(buffer2), greaterThan(Duration.zero));
+          final voice = cli.play(buffer2);
+          expect(voice.id, greaterThan(0));
           cli.stop(voice);
         } finally {
           await cli.dispose();
