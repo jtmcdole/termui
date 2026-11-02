@@ -95,6 +95,29 @@ void main() {
       expect(input3.cursorPosition, equals(0));
     });
 
+    test('Delete word backward with Alt+Backspace and Alt+W fallbacks', () {
+      final inputAltBackspace = TextField(
+        value: 'hello world',
+        cursorPosition: 11,
+      );
+      inputAltBackspace.handleKeyEvent(
+        const KeyEvent(
+          'backspace',
+          KeyType.backspace,
+          modifiers: {Modifier.alt},
+        ),
+      );
+      expect(inputAltBackspace.value, equals('hello '));
+      expect(inputAltBackspace.cursorPosition, equals(6));
+
+      final inputAltW = TextField(value: 'hello world', cursorPosition: 11);
+      inputAltW.handleKeyEvent(
+        const KeyEvent('w', KeyType.character, modifiers: {Modifier.alt}),
+      );
+      expect(inputAltW.value, equals('hello '));
+      expect(inputAltW.cursorPosition, equals(6));
+    });
+
     test('Delete word forward (Ctrl+Delete / Ctrl+D) on word and spaces', () {
       // 1. "thisisaword" with cursor in the middle (Ctrl+D)
       final input1 = TextField(

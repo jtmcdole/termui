@@ -10,6 +10,8 @@ import 'package:termui/ui/widget_toolkit.dart';
 
 void main() {
   group('Declarative Focus Tree Tests', () {
+    setUp(() => FocusManager.instance.setPrimaryFocus(null));
+
     test('Focus nodes mount and parent automatically in widget tree', () {
       final rootScope = FocusScopeNode(id: 'root');
       final childNode1 = FocusNode(id: 'child1');

@@ -14,7 +14,7 @@ import 'package:termui/src/terminal/reusable_input_stream.dart';
 
 import 'terminal.dart';
 
-class UnixTerminal implements Terminal {
+class UnixTerminal implements Terminal, Finalizable {
   UnixTerminal({int fd = _STDIN_FILENO}) : _fd = fd {
     _lib = Platform.isMacOS
         ? DynamicLibrary.open('/usr/lib/libSystem.dylib')
@@ -30,6 +30,8 @@ class UnixTerminal implements Terminal {
     _captureOrigTermIOS();
   }
 
+  static final NativeFinalizer _finalizer = NativeFinalizer(calloc.nativeFree);
+
   final int _fd;
   late final DynamicLibrary _lib;
   Pointer<Void> _origTermIOSPointer = nullptr;
@@ -38,15 +40,15 @@ class UnixTerminal implements Terminal {
 
   void _captureOrigTermIOS() {
     if (_origTermIOSPointer != nullptr) return;
-    if (Platform.isMacOS) {
-      final ptr = calloc<DarwinTermIOS>();
-      _tcgetattr(_fd, ptr.cast());
-      _origTermIOSPointer = ptr.cast();
-    } else {
-      final ptr = calloc<LinuxTermIOS>();
-      _tcgetattr(_fd, ptr.cast());
-      _origTermIOSPointer = ptr.cast();
+    final Pointer<Void> ptr = Platform.isMacOS
+        ? calloc<DarwinTermIOS>().cast()
+        : calloc<LinuxTermIOS>().cast();
+    if (_tcgetattr(_fd, ptr) != 0) {
+      calloc.free(ptr);
+      return;
     }
+    _origTermIOSPointer = ptr;
+    _finalizer.attach(this, ptr, detach: this);
   }
 
   @override
@@ -69,6 +71,7 @@ class UnixTerminal implements Terminal {
     if (_origTermIOSPointer == nullptr) {
       _captureOrigTermIOS();
     }
+    if (_origTermIOSPointer == nullptr) return;
 
     if (Platform.isMacOS) {
       final origTermIOS = _origTermIOSPointer.cast<DarwinTermIOS>().ref;
@@ -94,10 +97,12 @@ class UnixTerminal implements Terminal {
 
   @override
   void disableRawMode() {
-    if (_origTermIOSPointer == nullptr) return;
-    _tcsetattr(_fd, _TCSANOW, _origTermIOSPointer);
-    calloc.free(_origTermIOSPointer);
+    final orig = _origTermIOSPointer;
+    if (orig == nullptr) return;
     _origTermIOSPointer = nullptr;
+    _tcsetattr(_fd, _TCSANOW, orig);
+    _finalizer.detach(this);
+    calloc.free(orig);
   }
 }
 
