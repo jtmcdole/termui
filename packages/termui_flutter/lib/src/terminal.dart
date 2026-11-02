@@ -207,6 +207,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   GlyphAtlas? _atlas;
   Buffer? _currentBuffer;
   StreamSubscription<String?>? _mouseCursorSubscription;
+  StreamSubscription<String>? _clipboardSubscription;
+  StreamSubscription<void>? _pasteRequestSubscription;
   MouseCursor _currentCursor = SystemMouseCursors.basic;
 
   final Map<(String, bool, bool, Color), TextPainter> _fallbackPainters = {};
@@ -267,8 +269,43 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
         });
       }
     });
+    _bindClipboardStreams();
 
     _initAtlasAndLoop();
+  }
+
+  void _bindClipboardStreams() {
+    _clipboardSubscription?.cancel();
+    _pasteRequestSubscription?.cancel();
+    _clipboardSubscription = widget.terminal.clipboardChanges.listen((text) {
+      if (mounted) {
+        unawaited(_writeToClipboard(text));
+      }
+    });
+    _pasteRequestSubscription = widget.terminal.pasteRequests.listen((_) {
+      if (mounted) {
+        unawaited(_pasteFromClipboard());
+      }
+    });
+  }
+
+  Future<void> _writeToClipboard(String text) async {
+    try {
+      await widget.service.setClipboard(text);
+    } on Object catch (_) {
+      // Ignore platform or browser clipboard rejections.
+    }
+  }
+
+  Future<void> _pasteFromClipboard() async {
+    final String? text;
+    try {
+      text = await widget.service.getClipboard();
+    } on Object catch (_) {
+      return;
+    }
+    if (!mounted || text == null || text.isEmpty) return;
+    widget.terminal.injectEvent(term.PasteEvent(text));
   }
 
   @override
@@ -398,6 +435,7 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
           });
         }
       });
+      _bindClipboardStreams();
       _recreateAtlas();
     } else if (oldWidget.fontSize != widget.fontSize) {
       widget.terminal.setFontSize(widget.fontSize);
@@ -414,6 +452,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     );
     _fontSizeSubscription?.cancel();
     _mouseCursorSubscription?.cancel();
+    _clipboardSubscription?.cancel();
+    _pasteRequestSubscription?.cancel();
     for (final painter in _fallbackPainters.values) {
       painter.dispose();
     }
@@ -524,94 +564,137 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   }
 
   void _handleKeyEvent(KeyEvent event) {
-    if (event is KeyDownEvent || event is KeyRepeatEvent) {
-      final key = event.logicalKey;
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return;
+    final key = event.logicalKey;
 
-      if (key == LogicalKeyboardKey.f12) {
-        if (HardwareKeyboard.instance.isShiftPressed) {
-          _recreateAtlas();
-        } else {
-          _takeScreenshot();
-        }
-        return;
-      }
-
-      final mods = <term.Modifier>{};
-
+    if (key == LogicalKeyboardKey.f12) {
       if (HardwareKeyboard.instance.isShiftPressed) {
-        mods.add(term.Modifier.shift);
+        _recreateAtlas();
+      } else {
+        _takeScreenshot();
       }
-      if (HardwareKeyboard.instance.isAltPressed) {
-        mods.add(term.Modifier.alt);
-      }
-      if (HardwareKeyboard.instance.isControlPressed) {
-        mods.add(term.Modifier.control);
-      }
-      if (HardwareKeyboard.instance.isMetaPressed) {
-        mods.add(term.Modifier.meta);
-      }
+      return;
+    }
 
-      final (termKey, termType) = switch (key) {
-        LogicalKeyboardKey.arrowUp => ('up', term.KeyType.up),
-        LogicalKeyboardKey.arrowDown => ('down', term.KeyType.down),
-        LogicalKeyboardKey.arrowLeft => ('left', term.KeyType.left),
-        LogicalKeyboardKey.arrowRight => ('right', term.KeyType.right),
-        LogicalKeyboardKey.home => ('home', term.KeyType.home),
-        LogicalKeyboardKey.end => ('end', term.KeyType.end),
-        LogicalKeyboardKey.delete => ('delete', term.KeyType.delete),
-        LogicalKeyboardKey.backspace => ('backspace', term.KeyType.backspace),
-        LogicalKeyboardKey.pageUp => ('pageUp', term.KeyType.pageUp),
-        LogicalKeyboardKey.pageDown => ('pageDown', term.KeyType.pageDown),
-        LogicalKeyboardKey.escape => ('escape', term.KeyType.escape),
-        LogicalKeyboardKey.enter ||
-        LogicalKeyboardKey.numpadEnter => ('\n', term.KeyType.enter),
-        LogicalKeyboardKey.tab => (
-          mods.contains(term.Modifier.shift) ? 'backtab' : '\t',
-          term.KeyType.tab,
-        ),
-        LogicalKeyboardKey.f1 => ('f1', term.KeyType.f1),
-        LogicalKeyboardKey.f2 => ('f2', term.KeyType.f2),
-        LogicalKeyboardKey.f3 => ('f3', term.KeyType.f3),
-        LogicalKeyboardKey.f4 => ('f4', term.KeyType.f4),
-        LogicalKeyboardKey.f5 => ('f5', term.KeyType.f5),
-        LogicalKeyboardKey.f6 => ('f6', term.KeyType.f6),
-        LogicalKeyboardKey.f7 => ('f7', term.KeyType.f7),
-        LogicalKeyboardKey.f8 => ('f8', term.KeyType.f8),
-        LogicalKeyboardKey.f9 => ('f9', term.KeyType.f9),
-        LogicalKeyboardKey.f10 => ('f10', term.KeyType.f10),
-        LogicalKeyboardKey.f11 => ('f11', term.KeyType.f11),
-        LogicalKeyboardKey.equal || LogicalKeyboardKey.numpadAdd => (
-          key == LogicalKeyboardKey.numpadAdd ? '+' : '=',
-          term.KeyType.character,
-        ),
-        LogicalKeyboardKey.minus ||
-        LogicalKeyboardKey.numpadSubtract => ('-', term.KeyType.character),
-        _ when event.character != null && event.character!.isNotEmpty => (
-          (event.character == '\n' ||
-                  event.character == '\r' ||
-                  event.character == '\r\n')
-              ? '\n'
-              : event.character!,
-          (event.character == '\n' ||
-                  event.character == '\r' ||
-                  event.character == '\r\n')
-              ? term.KeyType.enter
-              : term.KeyType.character,
-        ),
-        _ when key.keyLabel.length == 1 => (
-          key.keyLabel.toLowerCase(),
-          term.KeyType.character,
-        ),
-        _ => (null, null),
-      };
+    final mods = _collectHardwareModifiers();
+    if (_isPasteShortcut(key, mods)) {
+      unawaited(_pasteFromClipboard());
+      return;
+    }
 
-      if (termKey != null && termType != null) {
-        widget.terminal.injectEvent(
-          term.KeyEvent(termKey, termType, modifiers: mods),
-        );
-      }
+    final resolved = _resolveKeyEvent(event, mods);
+    if (resolved != null) {
+      widget.terminal.injectEvent(resolved);
     }
   }
+
+  static Set<term.Modifier> _collectHardwareModifiers() {
+    final kb = HardwareKeyboard.instance;
+    return {
+      if (kb.isShiftPressed) term.Modifier.shift,
+      if (kb.isAltPressed) term.Modifier.alt,
+      if (kb.isControlPressed) term.Modifier.control,
+      if (kb.isMetaPressed) term.Modifier.meta,
+    };
+  }
+
+  static term.KeyEvent? _resolveKeyEvent(
+    KeyEvent event,
+    Set<term.Modifier> mods,
+  ) {
+    final key = event.logicalKey;
+    final (termKey, termType) = switch (key) {
+      LogicalKeyboardKey.arrowUp => ('up', term.KeyType.up),
+      LogicalKeyboardKey.arrowDown => ('down', term.KeyType.down),
+      LogicalKeyboardKey.arrowLeft => ('left', term.KeyType.left),
+      LogicalKeyboardKey.arrowRight => ('right', term.KeyType.right),
+      LogicalKeyboardKey.home => ('home', term.KeyType.home),
+      LogicalKeyboardKey.end => ('end', term.KeyType.end),
+      LogicalKeyboardKey.delete => ('delete', term.KeyType.delete),
+      LogicalKeyboardKey.insert => ('insert', term.KeyType.insert),
+      LogicalKeyboardKey.backspace => ('backspace', term.KeyType.backspace),
+      LogicalKeyboardKey.pageUp => ('pageUp', term.KeyType.pageUp),
+      LogicalKeyboardKey.pageDown => ('pageDown', term.KeyType.pageDown),
+      LogicalKeyboardKey.escape => ('escape', term.KeyType.escape),
+      LogicalKeyboardKey.enter ||
+      LogicalKeyboardKey.numpadEnter => ('\n', term.KeyType.enter),
+      LogicalKeyboardKey.tab => (
+        mods.contains(term.Modifier.shift) ? 'backtab' : '\t',
+        term.KeyType.tab,
+      ),
+      LogicalKeyboardKey.f1 => ('f1', term.KeyType.f1),
+      LogicalKeyboardKey.f2 => ('f2', term.KeyType.f2),
+      LogicalKeyboardKey.f3 => ('f3', term.KeyType.f3),
+      LogicalKeyboardKey.f4 => ('f4', term.KeyType.f4),
+      LogicalKeyboardKey.f5 => ('f5', term.KeyType.f5),
+      LogicalKeyboardKey.f6 => ('f6', term.KeyType.f6),
+      LogicalKeyboardKey.f7 => ('f7', term.KeyType.f7),
+      LogicalKeyboardKey.f8 => ('f8', term.KeyType.f8),
+      LogicalKeyboardKey.f9 => ('f9', term.KeyType.f9),
+      LogicalKeyboardKey.f10 => ('f10', term.KeyType.f10),
+      LogicalKeyboardKey.f11 => ('f11', term.KeyType.f11),
+      LogicalKeyboardKey.equal => ('=', term.KeyType.character),
+      LogicalKeyboardKey.numpadAdd => ('+', term.KeyType.character),
+      LogicalKeyboardKey.minus ||
+      LogicalKeyboardKey.numpadSubtract => ('-', term.KeyType.character),
+      _ when _isCtrlShiftLetter(key, mods) => (
+        key.keyLabel.toLowerCase(),
+        term.KeyType.character,
+      ),
+      _ when event.character != null && event.character!.isNotEmpty =>
+        _resolveCharacterKey(event.character!),
+      _ when key.keyLabel.length == 1 => (
+        key.keyLabel.toLowerCase(),
+        term.KeyType.character,
+      ),
+      _ => (null, null),
+    };
+    if (termKey == null || termType == null) return null;
+    return term.KeyEvent(termKey, termType, modifiers: mods);
+  }
+
+  static bool _isCtrlShiftLetter(
+    LogicalKeyboardKey key,
+    Set<term.Modifier> mods,
+  ) =>
+      mods.contains(term.Modifier.control) &&
+      mods.contains(term.Modifier.shift) &&
+      _isAsciiLetterKey(key) &&
+      key.keyLabel.length == 1;
+
+  static (String, term.KeyType) _resolveCharacterKey(String ch) =>
+      (ch == '\n' || ch == '\r' || ch == '\r\n')
+      ? ('\n', term.KeyType.enter)
+      : (ch, term.KeyType.character);
+
+  static bool _isPasteShortcut(
+    LogicalKeyboardKey key,
+    Set<term.Modifier> mods,
+  ) {
+    if (key == LogicalKeyboardKey.keyV) {
+      final isCmdV =
+          mods.contains(term.Modifier.meta) &&
+          !mods.contains(term.Modifier.control) &&
+          !mods.contains(term.Modifier.alt);
+      final isCtrlShiftV =
+          mods.contains(term.Modifier.control) &&
+          mods.contains(term.Modifier.shift) &&
+          !mods.contains(term.Modifier.meta) &&
+          !mods.contains(term.Modifier.alt);
+      return isCmdV || isCtrlShiftV;
+    }
+    if (key == LogicalKeyboardKey.insert) {
+      return mods.contains(term.Modifier.shift) &&
+          !mods.contains(term.Modifier.control) &&
+          !mods.contains(term.Modifier.alt) &&
+          !mods.contains(term.Modifier.meta);
+    }
+    return false;
+  }
+
+  static bool _isAsciiLetterKey(LogicalKeyboardKey key) =>
+      key.keyId >= LogicalKeyboardKey.keyA.keyId &&
+      key.keyId <= LogicalKeyboardKey.keyZ.keyId;
 
   void _takeScreenshot() async {
     try {

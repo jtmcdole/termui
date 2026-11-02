@@ -1,13 +1,20 @@
-import 'dart:typed_data';
+import 'package:flutter/services.dart';
 import '../util/file_saver.dart';
 
-/// MVVM Service for Terminal tasks like saving screenshots.
+/// MVVM Service for Terminal tasks like saving screenshots and accessing the clipboard.
 abstract interface class TerminalService {
   /// Saves a screenshot to storage.
   Future<String?> saveScreenshot(String basename, Uint8List bytes);
+
+  /// Writes [text] to the system/browser clipboard.
+  Future<void> setClipboard(String text);
+
+  /// Reads plain text from the system/browser clipboard.
+  Future<String?> getClipboard();
 }
 
-/// Default implementation of [TerminalService] that uses the top-level saveFile function.
+/// Default implementation of [TerminalService] that uses the top-level saveFile function
+/// and Flutter's [Clipboard] service.
 final class DefaultTerminalService implements TerminalService {
   /// Creates a default terminal service.
   const DefaultTerminalService();
@@ -15,4 +22,14 @@ final class DefaultTerminalService implements TerminalService {
   @override
   Future<String?> saveScreenshot(String basename, Uint8List bytes) =>
       saveFile(basename, bytes);
+
+  @override
+  Future<void> setClipboard(String text) =>
+      Clipboard.setData(ClipboardData(text: text));
+
+  @override
+  Future<String?> getClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    return data?.text;
+  }
 }
