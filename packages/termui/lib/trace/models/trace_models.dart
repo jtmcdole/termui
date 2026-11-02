@@ -1,9 +1,10 @@
 import 'package:characters/characters.dart';
 // ignore_for_file: public_member_api_docs
 import 'dart:convert';
-import 'dart:io';
-import 'dart:isolate';
 import 'dart:math';
+import 'package:file/file.dart';
+import 'package:termui/perf/fs_locator.dart';
+import 'package:termui/utils/gzip_json.dart';
 import 'package:termui/utils/interval_tree.dart';
 
 class TraceEvent {
@@ -229,65 +230,79 @@ List<TraceSpan> computeSpans(List<TraceEvent> events) {
   return spans;
 }
 
-Future<Map<String, Object>?> parseTraceFile(String path) async {
-  return await Isolate.run(() {
-    final file = File(path);
-    if (!file.existsSync()) return null;
+Future<Map<String, Object>?> parseTraceFile(
+  String path, {
+  FileSystem? fileSystem,
+}) async {
+  final fs = fileSystem ?? getDefaultFileSystem();
+  final file = fs.file(path);
+  if (!await file.exists()) return null;
 
-    String content;
-    if (path.endsWith('.gz')) {
-      final bytes = file.readAsBytesSync();
-      // dart:io gzip decoder
-      final decompressed = gzip.decode(bytes);
-      content = utf8.decode(decompressed);
-    } else {
-      content = file.readAsStringSync();
-    }
+  final String content;
+  if (path.endsWith('.gz')) {
+    final bytes = await file.readAsBytes();
+    final decompressed = await decompressGzip(bytes);
+    content = utf8.decode(decompressed);
+  } else {
+    content = await file.readAsString();
+  }
 
-    final jsonList = jsonDecode(content) as List<Object?>;
-    final events = [
-      for (final e in jsonList) TraceEvent.fromJson(e as Map<String, Object?>),
-    ];
+  return _parseTraceJsonContent(content);
+}
 
-    int baseTime = 0;
-    if (events.isNotEmpty) {
-      baseTime = events.map((e) => e.timestamp).reduce(min);
-      for (var i = 0; i < events.length; i++) {
-        final ev = events[i];
-        events[i] = TraceEvent(
-          name: ev.name,
-          phase: ev.phase,
-          category: ev.category,
-          timestamp: ev.timestamp - baseTime,
-          dur: ev.dur,
-          tid: ev.tid,
-          args: ev.args,
-        );
-      }
-    }
+Map<String, Object>? _parseTraceJsonContent(String content) {
+  final jsonList = jsonDecode(content) as List<Object?>;
+  final events = [
+    for (final e in jsonList) TraceEvent.fromJson(e as Map<String, Object?>),
+  ];
 
-    final computedSpans = computeSpans(events);
-    if (computedSpans.isEmpty) return null;
+  final baseTime = _normalizeEventTimestamps(events);
+  final computedSpans = computeSpans(events);
+  if (computedSpans.isEmpty) return null;
 
-    computedSpans.sort((a, b) => a.startUs.compareTo(b.startUs));
+  computedSpans.sort((a, b) => a.startUs.compareTo(b.startUs));
+  final (mMinTs, mMaxTs, mMaxDuration) = _computeSpanBounds(computedSpans);
 
-    final mMinTs = computedSpans.map((s) => s.startUs).reduce(min);
-    final mMaxTs = computedSpans.map((s) => s.endUs).reduce(max);
+  return {
+    'spans': computedSpans,
+    'minTs': mMinTs,
+    'maxTs': mMaxTs,
+    'baseTime': baseTime,
+    'maxSpanDuration': mMaxDuration,
+  };
+}
 
-    int mMaxDuration = 0;
-    for (final s in computedSpans) {
-      final dur = s.endUs - s.startUs;
-      if (dur > mMaxDuration) {
-        mMaxDuration = dur;
-      }
-    }
+int _normalizeEventTimestamps(List<TraceEvent> events) {
+  if (events.isEmpty) return 0;
+  var baseTime = events.first.timestamp;
+  for (var i = 1; i < events.length; i++) {
+    baseTime = min(baseTime, events[i].timestamp);
+  }
+  for (var i = 0; i < events.length; i++) {
+    final ev = events[i];
+    events[i] = TraceEvent(
+      name: ev.name,
+      phase: ev.phase,
+      category: ev.category,
+      timestamp: ev.timestamp - baseTime,
+      dur: ev.dur,
+      tid: ev.tid,
+      args: ev.args,
+    );
+  }
+  return baseTime;
+}
 
-    return {
-      'spans': computedSpans,
-      'minTs': mMinTs,
-      'maxTs': mMaxTs,
-      'baseTime': baseTime,
-      'maxSpanDuration': mMaxDuration,
-    };
-  });
+(int minTs, int maxTs, int maxDuration) _computeSpanBounds(
+  List<TraceSpan> spans,
+) {
+  var mMinTs = spans.first.startUs;
+  var mMaxTs = spans.first.endUs;
+  var mMaxDuration = 0;
+  for (final s in spans) {
+    mMinTs = min(mMinTs, s.startUs);
+    mMaxTs = max(mMaxTs, s.endUs);
+    mMaxDuration = max(mMaxDuration, s.endUs - s.startUs);
+  }
+  return (mMinTs, mMaxTs, mMaxDuration);
 }

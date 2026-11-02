@@ -1,11 +1,10 @@
 import 'dart:typed_data';
 import "package:file/file.dart";
-import "package:file/local.dart";
+import 'package:termui/perf/fs_locator.dart';
 import "package:termui/termui_trace.dart";
 import "package:termui/termui.dart";
 // ignore_for_file: public_member_api_docs
 import 'dart:async';
-import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
 import 'package:termui/ui/event.dart' as evt;
@@ -22,16 +21,16 @@ class TraceViewerApp extends StatefulWidget {
   final void Function(String filename, Uint8List bytes)? onExport;
   final VoidCallback? onOpenFileRequested;
 
-  const TraceViewerApp({
+  TraceViewerApp({
     super.key,
     this.filePath,
     this.spans,
     this.minTs,
     this.maxTs,
-    this.fileSystem = const LocalFileSystem(),
+    FileSystem? fileSystem,
     this.onExport,
     this.onOpenFileRequested,
-  });
+  }) : fileSystem = fileSystem ?? getDefaultFileSystem();
 
   @override
   State<TraceViewerApp> createState() => TraceViewerAppState();
@@ -197,12 +196,14 @@ class TraceViewerAppState extends State<TraceViewerApp>
     final y = (term.backend.size.y - h) ~/ 2;
 
     late PromptRunner<void> runner;
+    final inputFocusNode = FocusNode(id: 'save_input')..requestFocus();
 
     void handleClose() {
       if (_saveLayer != null) {
         globalSceneManager.layers.remove(_saveLayer!);
         globalSceneManager.focusedLayer = globalSceneManager.layers.first;
         _saveLayer = null;
+        inputFocusNode.dispose();
         // Since we closed a focus-stealing layer, we must clear the primary focus
         // so that the TraceViewerApp (which relies on `focused == true` without a node)
         // can receive fallback key events again.
@@ -211,23 +212,69 @@ class TraceViewerAppState extends State<TraceViewerApp>
       }
     }
 
-    final originalName =
-        widget.filePath?.split(Platform.pathSeparator).last ?? 'trace.json';
+    final originalName = widget.filePath != null
+        ? widget.fileSystem.path.basename(widget.filePath!)
+        : 'trace.json';
     final defaultExportName =
         '${originalName.replaceAll('.json', '')}_cropped.json';
     final textController = TextEditingController(text: defaultExportName);
 
-    final overlay = Focus(
+    final overlay = _buildSaveModalOverlay(
+      textController: textController,
+      inputFocusNode: inputFocusNode,
+      onCancel: () {
+        handleClose();
+        runner.dispose();
+      },
+      onSubmit: () {
+        unawaited(_exportSelection(textController.text, overlappingSpans));
+        handleClose();
+        runner.dispose();
+      },
+    );
+
+    runner = PromptRunner<void>(
+      widget: overlay,
+      terminal: globalSceneManager.terminal,
+      alternateScreen: false,
+      mode: ExecutionMode.managed,
+      onFramePainted: (_) => globalSceneManager.render(),
+    );
+
+    _saveLayer = SceneLayer(
+      renderer: runner,
+      sizing: LayerSizing.fixed,
+      x: x,
+      y: y,
+      width: w,
+      height: h,
+      zIndex: 110,
+    );
+
+    globalSceneManager.layers.add(_saveLayer!);
+    globalSceneManager.focusedLayer = _saveLayer;
+
+    // We don't await runner.run() because we want to return immediately
+    // so the main app continues rendering.
+    runner.run().catchError((_) {
+      // Ignore unhandled prompt aborts (e.g. from Ctrl+C)
+    });
+  }
+
+  Widget _buildSaveModalOverlay({
+    required TextEditingController textController,
+    required FocusNode inputFocusNode,
+    required VoidCallback onCancel,
+    required VoidCallback onSubmit,
+  }) {
+    return Focus(
       onKeyEvent: (event) {
         if (event.type == evt.KeyType.escape) {
-          handleClose();
-          runner.dispose();
+          onCancel();
           return true;
         }
         if (event.baseKey == TermKey.enter) {
-          _exportSelection(textController.text, overlappingSpans);
-          handleClose();
-          runner.dispose();
+          onSubmit();
           return true;
         }
         return false;
@@ -261,10 +308,7 @@ class TraceViewerAppState extends State<TraceViewerApp>
                 width: 5,
                 child: InkwellButton(
                   width: 5,
-                  onPressed: () {
-                    handleClose();
-                    runner.dispose();
-                  },
+                  onPressed: onCancel,
                   text: '[x]',
                   textStyle: const Style(foreground: Colors.white),
                 ),
@@ -293,7 +337,7 @@ class TraceViewerAppState extends State<TraceViewerApp>
               height: 1,
               child: TextField(
                 controller: textController,
-                focusNode: FocusNode(id: 'save_input')..requestFocus(),
+                focusNode: inputFocusNode,
                 style: const Style(
                   foreground: Colors.black,
                   background: Colors.white,
@@ -304,33 +348,6 @@ class TraceViewerAppState extends State<TraceViewerApp>
         ]),
       ),
     );
-
-    runner = PromptRunner<void>(
-      widget: overlay,
-      terminal: globalSceneManager.terminal,
-      alternateScreen: false,
-      mode: ExecutionMode.managed,
-      onFramePainted: (_) => globalSceneManager.render(),
-    );
-
-    _saveLayer = SceneLayer(
-      renderer: runner,
-      sizing: LayerSizing.fixed,
-      x: x,
-      y: y,
-      width: w,
-      height: h,
-      zIndex: 110,
-    );
-
-    globalSceneManager.layers.add(_saveLayer!);
-    globalSceneManager.focusedLayer = _saveLayer;
-
-    // We don't await runner.run() because we want to return immediately
-    // so the main app continues rendering.
-    runner.run().catchError((_) {
-      // Ignore unhandled prompt aborts (e.g. from Ctrl+C)
-    });
   }
 
   // Memoized search overlay state
@@ -581,6 +598,7 @@ class TraceViewerAppState extends State<TraceViewerApp>
   @override
   void dispose() {
     _animationTimer?.cancel();
+    _exportMessageTimer?.cancel();
     super.dispose();
   }
 
@@ -624,7 +642,10 @@ class TraceViewerAppState extends State<TraceViewerApp>
 
   Future<void> _loadTraceData() async {
     try {
-      final result = await parseTraceFile(widget.filePath!);
+      final result = await parseTraceFile(
+        widget.filePath!,
+        fileSystem: widget.fileSystem,
+      );
 
       if (mounted) {
         if (result != null) {
@@ -674,39 +695,43 @@ class TraceViewerAppState extends State<TraceViewerApp>
     });
   }
 
-  void _exportSelection(String filename, List<TraceSpan> overlappingSpans) {
-    final exportedEvents = <Map<String, Object?>>[];
-    for (final span in overlappingSpans) {
-      // Emit Begin Event
-      exportedEvents.add({
-        'name': span.name,
-        'ph': 'B',
-        'ts': span.startUs,
-        'pid': 1,
-        'tid': 1,
-        'args': span.args,
-      });
-      // Emit End Event
-      exportedEvents.add({
-        'name': span.name,
-        'ph': 'E',
-        'ts': span.endUs,
-        'pid': 1,
-        'tid': 1,
-      });
-    }
+  Future<void> _exportSelection(
+    String filename,
+    List<TraceSpan> overlappingSpans,
+  ) async {
+    final exportedEvents = <Map<String, Object?>>[
+      for (final span in overlappingSpans) ...[
+        {
+          'name': span.name,
+          'ph': 'B',
+          'ts': span.startUs,
+          'pid': 1,
+          'tid': 1,
+          'args': span.args,
+        },
+        {'name': span.name, 'ph': 'E', 'ts': span.endUs, 'pid': 1, 'tid': 1},
+      ],
+    ];
 
     final jsonString = jsonEncode(exportedEvents);
-    final file = widget.fileSystem.file(filename);
-    file.writeAsStringSync(jsonString);
-
-    if (widget.onExport != null) {
-      widget.onExport!(filename, Uint8List.fromList(utf8.encode(jsonString)));
+    final bytes = utf8.encode(jsonString);
+    try {
+      await widget.fileSystem.file(filename).writeAsBytes(bytes);
+      widget.onExport?.call(filename, bytes);
+      if (!mounted) return;
+      _showExportMessage(
+        'Exported ${exportedEvents.length ~/ 2} spans to $filename',
+      );
+      globalSceneManager.render();
+    } on FileSystemException catch (e) {
+      if (!mounted) return;
+      _showExportMessage('Export failed: ${e.message}');
+      globalSceneManager.render();
+    } on Object catch (e) {
+      if (!mounted) return;
+      _showExportMessage('Export failed: $e');
+      globalSceneManager.render();
     }
-
-    _showExportMessage(
-      'Exported ${exportedEvents.length ~/ 2} spans to $filename',
-    );
   }
 
   @override
@@ -729,62 +754,81 @@ class TraceViewerAppState extends State<TraceViewerApp>
       return true;
     }
 
+    if (_handleSelectionBracketKey(event)) return true;
+    if (_handleModifiedShortcut(event, keyLower)) return true;
+    if (_handleModeOrOverlayKey(keyLower, type)) return true;
+    return _handleNavigationOrZoomKey(keyLower, type);
+  }
+
+  bool _handleSelectionBracketKey(evt.KeyEvent event) {
     if (event.baseKey == TermKey.openSquareBracket) {
-      if (hoveredSpan != null) {
-        setState(() {
-          selectionStartUs = hoveredSpan!.startUs;
-          if (selectionEndUs != null && selectionStartUs! > selectionEndUs!) {
-            final temp = selectionStartUs;
-            selectionStartUs = selectionEndUs;
-            selectionEndUs = temp;
-          }
-          exportMessage = null;
-        });
-      }
+      _setSelectionEndpoint(isStart: true);
       return true;
     }
-
     if (event.baseKey == TermKey.closingSquareBracket) {
-      if (hoveredSpan != null) {
-        setState(() {
-          selectionEndUs = hoveredSpan!.endUs;
-          if (selectionStartUs != null && selectionStartUs! > selectionEndUs!) {
-            final temp = selectionStartUs;
-            selectionStartUs = selectionEndUs;
-            selectionEndUs = temp;
-          }
-          exportMessage = null;
-        });
-      }
+      _setSelectionEndpoint(isStart: false);
       return true;
     }
+    return false;
+  }
 
+  void _setSelectionEndpoint({required bool isStart}) {
+    final hovered = hoveredSpan;
+    if (hovered == null) return;
+    setState(() {
+      if (isStart) {
+        selectionStartUs = hovered.startUs;
+      } else {
+        selectionEndUs = hovered.endUs;
+      }
+      if (selectionStartUs != null &&
+          selectionEndUs != null &&
+          selectionStartUs! > selectionEndUs!) {
+        final temp = selectionStartUs;
+        selectionStartUs = selectionEndUs;
+        selectionEndUs = temp;
+      }
+      exportMessage = null;
+    });
+  }
+
+  bool _handleModifiedShortcut(evt.KeyEvent event, String keyLower) {
     final hasCtrlOrMeta =
         event.modifiers.contains(evt.Modifier.control) ||
         event.modifiers.contains(evt.Modifier.meta);
     final hasAlt = event.modifiers.contains(evt.Modifier.alt);
+    if (!hasCtrlOrMeta && !hasAlt) return false;
 
-    if (keyLower == 'x' && hasCtrlOrMeta) {
-      _cropSelection();
-      return true;
+    switch (keyLower) {
+      case 'x':
+        _cropSelection();
+        return true;
+      case 's':
+        _spawnSaveModal();
+        return true;
+      case 'z':
+        _undo();
+        return true;
+      case 'y':
+        _redo();
+        return true;
+      default:
+        return false;
     }
+  }
 
-    if (keyLower == 's' && (hasCtrlOrMeta || hasAlt)) {
-      _spawnSaveModal();
-      return true;
+  void _clearMarqueeLayer() {
+    if (_marqueeLayer != null) {
+      globalSceneManager.layers.remove(_marqueeLayer);
+      _marqueeLayer = null;
+      globalSceneManager.render();
     }
+    _marqueeStartX = null;
+    _marqueeStartY = null;
+  }
 
-    if (keyLower == 'z' && (hasCtrlOrMeta || hasAlt)) {
-      _undo();
-      return true;
-    }
-
-    if (keyLower == 'y' && (hasCtrlOrMeta || hasAlt)) {
-      _redo();
-      return true;
-    }
-
-    if (type == evt.KeyType.escape) {
+  bool _handleModeOrOverlayKey(String keyLower, evt.KeyType type) {
+    if (type == evt.KeyType.escape || keyLower == 'escape') {
       if (selectionStartUs != null || selectionEndUs != null) {
         setState(() {
           selectionStartUs = null;
@@ -793,85 +837,56 @@ class TraceViewerAppState extends State<TraceViewerApp>
         });
         return true;
       }
-    }
-
-    if (keyLower == 'z' && !hasCtrlOrMeta && !hasAlt) {
-      setState(() {
-        isBoxSelectMode = !isBoxSelectMode;
-        if (isBoxSelectMode) {
-          isCaliperMode = false;
-          measureStartMs = null;
-          measureEndMs = null;
-        }
-        if (!isBoxSelectMode) {
-          if (_marqueeLayer != null) {
-            globalSceneManager.layers.remove(_marqueeLayer);
-            _marqueeLayer = null;
-            globalSceneManager.render();
-          }
-          _marqueeStartX = null;
-          _marqueeStartY = null;
-        }
-      });
-      return true;
-    }
-
-    if (keyLower == 'm') {
-      setState(() {
-        isCaliperMode = !isCaliperMode;
-        if (isCaliperMode) {
-          isBoxSelectMode = false;
-          if (_marqueeLayer != null) {
-            globalSceneManager.layers.remove(_marqueeLayer);
-            _marqueeLayer = null;
-            globalSceneManager.render();
-          }
-          _marqueeStartX = null;
-          _marqueeStartY = null;
-        }
-        if (!isCaliperMode) {
-          measureStartMs = null;
-          measureEndMs = null;
-        }
-      });
-      return true;
-    }
-
-    if (keyLower == 'escape' || type == evt.KeyType.escape) {
       setState(() {
         isCaliperMode = false;
         isBoxSelectMode = false;
-        if (_marqueeLayer != null) {
-          globalSceneManager.layers.remove(_marqueeLayer);
-          _marqueeLayer = null;
-          globalSceneManager.render();
-        }
-        _marqueeStartX = null;
-        _marqueeStartY = null;
-
+        _clearMarqueeLayer();
         measureStartMs = null;
         measureEndMs = null;
       });
       return true;
     }
 
-    if (keyLower == '/') {
-      _spawnSearchOverlay();
-      return true;
-    }
-
-    if (keyLower == '?' || keyLower == 'h') {
-      _spawnHelpOverlay();
-      return true;
-    }
-
-    if (keyLower == 'o') {
-      if (widget.onOpenFileRequested != null) {
+    switch (keyLower) {
+      case 'z':
+        setState(() {
+          isBoxSelectMode = !isBoxSelectMode;
+          if (isBoxSelectMode) {
+            isCaliperMode = false;
+            measureStartMs = null;
+            measureEndMs = null;
+          } else {
+            _clearMarqueeLayer();
+          }
+        });
+        return true;
+      case 'm':
+        setState(() {
+          isCaliperMode = !isCaliperMode;
+          if (isCaliperMode) {
+            isBoxSelectMode = false;
+            _clearMarqueeLayer();
+          } else {
+            measureStartMs = null;
+            measureEndMs = null;
+          }
+        });
+        return true;
+      case '/':
+        _spawnSearchOverlay();
+        return true;
+      case '?' || 'h':
+        _spawnHelpOverlay();
+        return true;
+      case 'o' when widget.onOpenFileRequested != null:
         widget.onOpenFileRequested!();
         return true;
-      }
+      default:
+        return false;
     }
+  }
 
+  bool _handleNavigationOrZoomKey(String keyLower, evt.KeyType type) {
     if (keyLower == 'a' || type == evt.KeyType.left) {
       setState(() {
         offsetX = max(minTs!.toDouble() - 1000000.0, offsetX - 10 * zoomLevel);
@@ -884,7 +899,6 @@ class TraceViewerAppState extends State<TraceViewerApp>
       });
       return true;
     }
-
     if (keyLower == 'w' || type == evt.KeyType.up) {
       setState(() {
         offsetY = max(0, offsetY - 1);
@@ -897,31 +911,26 @@ class TraceViewerAppState extends State<TraceViewerApp>
       });
       return true;
     }
-
     if (keyLower == '=' || keyLower == '+') {
-      final width = ((context as Element).size.width).toDouble();
-      final centerCol = (width - 2) / 2.0;
-      final focusTime = offsetX + centerCol * zoomLevel;
-      final newZoom = max(0.001, zoomLevel * 0.9);
-      setState(() {
-        zoomLevel = newZoom;
-        offsetX = focusTime - centerCol * newZoom;
-      });
+      _zoomAroundCenter(0.9);
       return true;
     }
     if (keyLower == '-') {
-      final width = ((context as Element).size.width).toDouble();
-      final centerCol = (width - 2) / 2.0;
-      final focusTime = offsetX + centerCol * zoomLevel;
-      final newZoom = min(1000000.0, zoomLevel * 1.1);
-      setState(() {
-        zoomLevel = newZoom;
-        offsetX = focusTime - centerCol * newZoom;
-      });
+      _zoomAroundCenter(1.1);
       return true;
     }
-
     return false;
+  }
+
+  void _zoomAroundCenter(double factor) {
+    final width = ((context as Element).size.width).toDouble();
+    final centerCol = (width - 2) / 2.0;
+    final focusTime = offsetX + centerCol * zoomLevel;
+    final newZoom = (zoomLevel * factor).clamp(0.001, 1000000.0);
+    setState(() {
+      zoomLevel = newZoom;
+      offsetX = focusTime - centerCol * newZoom;
+    });
   }
 
   @override
@@ -930,131 +939,141 @@ class TraceViewerAppState extends State<TraceViewerApp>
     final isBoxSelect =
         isBoxSelectMode || event.modifiers.contains(evt.Modifier.control);
 
-    if (event.type == evt.MouseEventType.press) {
-      if (isBoxSelect) {
-        _marqueeStartX = event.globalX ?? localX;
-        _marqueeStartY = event.globalY ?? localY;
-        setState(() {
-          measureStartMs = null;
-          measureEndMs = null;
-          _dragStartX = null;
-          _dragStartOffsetX = null;
-        });
-      } else if (isCaliperMode) {
-        final timeMs = (offsetX + (localX - 1) * zoomLevel) / 1000.0;
-        setState(() {
-          measureStartMs = timeMs;
-          measureEndMs = timeMs;
-        });
-      } else {
-        _dragStartX = localX;
-        _dragStartOffsetX = offsetX;
-        setState(() {
-          measureStartMs = null;
-          measureEndMs = null;
-        });
-      }
-    } else if (event.type == evt.MouseEventType.drag) {
-      if (isBoxSelect && _marqueeStartX != null) {
-        if (_marqueeLayer == null) {
-          final renderer = MarqueeRenderer();
-          _marqueeLayer = SceneLayer(
-            renderer: renderer,
-            sizing: LayerSizing.fixed,
-            zIndex: 1000,
-          );
-          globalSceneManager.layers.add(_marqueeLayer!);
-        }
-
-        final currX = event.globalX ?? localX;
-        final currY = event.globalY ?? localY;
-
-        final minX = min(_marqueeStartX!, currX);
-        final w = (currX - _marqueeStartX!).abs() + 1;
-        final minY = min(_marqueeStartY!, currY);
-        final h = (currY - _marqueeStartY!).abs() + 1;
-
-        _marqueeLayer!.x = minX - 1;
-        _marqueeLayer!.y = minY - 1;
-        _marqueeLayer!.renderer.resize(w, h);
-
-        globalSceneManager.render();
-      } else if (isCaliperMode && measureStartMs != null) {
-        final timeMs = (offsetX + (localX - 1) * zoomLevel) / 1000.0;
-        setState(() {
-          measureEndMs = timeMs;
-        });
-      } else if (_dragStartX != null &&
-          _dragStartOffsetX != null &&
-          !isBoxSelect) {
-        final dx = localX - _dragStartX!;
-        setState(() {
-          offsetX = _dragStartOffsetX! - (dx * zoomLevel);
-        });
-      }
-    } else if (event.type == evt.MouseEventType.release) {
-      if (_marqueeLayer != null) {
-        final currX = event.globalX ?? localX;
-        final minX = min(_marqueeStartX!, currX);
-        final w = (currX - _marqueeStartX!).abs() + 1;
-
-        final startUs = offsetX + (minX - 1) * zoomLevel;
-        final durationUs = w * zoomLevel;
-
-        if (durationUs > 0) {
-          final width = ((context as Element).size.width).toDouble();
-          final newZoom = durationUs / max(1.0, width - 2);
-          setState(() {
-            zoomLevel = max(0.001, newZoom);
-            offsetX = startUs;
-          });
-        }
-
-        globalSceneManager.layers.remove(_marqueeLayer);
-        _marqueeLayer = null;
-        globalSceneManager.render();
-      }
-      _marqueeStartX = null;
-      _marqueeStartY = null;
-      _dragStartX = null;
-      _dragStartOffsetX = null;
+    switch (event.type) {
+      case evt.MouseEventType.press:
+        _handleMousePress(event, localX, localY, isBoxSelect);
+      case evt.MouseEventType.drag:
+        _handleMouseDrag(event, localX, localY, isBoxSelect);
+      case evt.MouseEventType.release:
+        _handleMouseRelease(event, localX);
+      default:
+        break;
     }
 
-    // Scroll zooming
-    if (event.button == evt.MouseButton.wheelUp) {
-      final col = (localX - 1).toDouble();
-      final focusTime = offsetX + col * zoomLevel;
-      final newZoom = max(0.001, zoomLevel * 0.9);
+    if (_handleWheelZoom(event.button, localX)) return;
+
+    final hit = _latestHitGrid?.getHit(localX - 2, localY - 3);
+    if (hoveredSpan != hit) {
       setState(() {
-        zoomLevel = newZoom;
-        offsetX = focusTime - col * newZoom;
+        hoveredSpan = hit;
       });
-      return;
-    } else if (event.button == evt.MouseButton.wheelDown) {
-      final col = (localX - 1).toDouble();
-      final focusTime = offsetX + col * zoomLevel;
-      final newZoom = min(1000000.0, zoomLevel * 1.1);
+    }
+  }
+
+  void _handleMousePress(
+    evt.MouseEvent event,
+    int localX,
+    int localY,
+    bool isBoxSelect,
+  ) {
+    if (isBoxSelect) {
+      _marqueeStartX = event.globalX ?? localX;
+      _marqueeStartY = event.globalY ?? localY;
       setState(() {
-        zoomLevel = newZoom;
-        offsetX = focusTime - col * newZoom;
+        measureStartMs = null;
+        measureEndMs = null;
+        _dragStartX = null;
+        _dragStartOffsetX = null;
       });
-      return;
+    } else if (isCaliperMode) {
+      final timeMs = (offsetX + (localX - 1) * zoomLevel) / 1000.0;
+      setState(() {
+        measureStartMs = timeMs;
+        measureEndMs = timeMs;
+      });
+    } else {
+      _dragStartX = localX;
+      _dragStartOffsetX = offsetX;
+      setState(() {
+        measureStartMs = null;
+        measureEndMs = null;
+      });
     }
+  }
 
-    // Hover detection
-    TraceSpan? hit;
-
-    if (_latestHitGrid != null) {
-      final col =
-          localX -
-          2; // TimelineCanvas interior starts at X=2 (startX=0, then +1 for border)
-      final visualY = localY - 3;
-      hit = _latestHitGrid!.getHit(col, visualY);
+  void _handleMouseDrag(
+    evt.MouseEvent event,
+    int localX,
+    int localY,
+    bool isBoxSelect,
+  ) {
+    if (isBoxSelect && _marqueeStartX != null) {
+      _updateMarqueeDrag(event.globalX ?? localX, event.globalY ?? localY);
+    } else if (isCaliperMode && measureStartMs != null) {
+      final timeMs = (offsetX + (localX - 1) * zoomLevel) / 1000.0;
+      setState(() {
+        measureEndMs = timeMs;
+      });
+    } else if (_dragStartX != null &&
+        _dragStartOffsetX != null &&
+        !isBoxSelect) {
+      final dx = localX - _dragStartX!;
+      setState(() {
+        offsetX = _dragStartOffsetX! - (dx * zoomLevel);
+      });
     }
+  }
 
+  void _updateMarqueeDrag(int currX, int currY) {
+    if (_marqueeLayer == null) {
+      _marqueeLayer = SceneLayer(
+        renderer: MarqueeRenderer(),
+        sizing: LayerSizing.fixed,
+        zIndex: 1000,
+      );
+      globalSceneManager.layers.add(_marqueeLayer!);
+    }
+    final minX = min(_marqueeStartX!, currX);
+    final w = (currX - _marqueeStartX!).abs() + 1;
+    final minY = min(_marqueeStartY!, currY);
+    final h = (currY - _marqueeStartY!).abs() + 1;
+
+    _marqueeLayer!.x = minX - 1;
+    _marqueeLayer!.y = minY - 1;
+    _marqueeLayer!.renderer.resize(w, h);
+    globalSceneManager.render();
+  }
+
+  void _handleMouseRelease(evt.MouseEvent event, int localX) {
+    if (_marqueeLayer != null) {
+      final currX = event.globalX ?? localX;
+      final minX = min(_marqueeStartX!, currX);
+      final w = (currX - _marqueeStartX!).abs() + 1;
+      final startUs = offsetX + (minX - 1) * zoomLevel;
+      final durationUs = w * zoomLevel;
+
+      if (durationUs > 0) {
+        final width = ((context as Element).size.width).toDouble();
+        final newZoom = durationUs / max(1.0, width - 2);
+        setState(() {
+          zoomLevel = max(0.001, newZoom);
+          offsetX = startUs;
+        });
+      }
+      globalSceneManager.layers.remove(_marqueeLayer);
+      _marqueeLayer = null;
+      globalSceneManager.render();
+    }
+    _marqueeStartX = null;
+    _marqueeStartY = null;
+    _dragStartX = null;
+    _dragStartOffsetX = null;
+  }
+
+  bool _handleWheelZoom(evt.MouseButton button, int localX) {
+    if (button != evt.MouseButton.wheelUp &&
+        button != evt.MouseButton.wheelDown) {
+      return false;
+    }
+    final col = (localX - 1).toDouble();
+    final focusTime = offsetX + col * zoomLevel;
+    final factor = button == evt.MouseButton.wheelUp ? 0.9 : 1.1;
+    final newZoom = (zoomLevel * factor).clamp(0.001, 1000000.0);
     setState(() {
-      hoveredSpan = hit;
+      zoomLevel = newZoom;
+      offsetX = focusTime - col * newZoom;
     });
+    return true;
   }
 
   Widget buildHeader(String modeText, Style modeStyle) {
@@ -1110,10 +1129,9 @@ class TraceViewerAppState extends State<TraceViewerApp>
             final tickTimeMs = (offsetX + col * zoomLevel) / 1000.0;
             final label = switch (timeDisplayMode) {
               TimeDisplayMode.formatted => formatDuration(tickTimeMs),
-              TimeDisplayMode.rawRelative =>
-                (tickTimeMs * 1000).round().toString(),
+              TimeDisplayMode.rawRelative => '${(tickTimeMs * 1000).round()}',
               TimeDisplayMode.rawAbsolute =>
-                ((tickTimeMs * 1000).round() + (baseTime ?? 0)).toString(),
+                '${(tickTimeMs * 1000).round() + (baseTime ?? 0)}',
             };
 
             children.add(

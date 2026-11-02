@@ -3,9 +3,79 @@ import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:file/memory.dart';
+import 'package:termui/perf/isolate_sink.dart';
 import 'package:termui/perf/tracer.dart';
 
 void main() {
+  group('Tracer Cold Start & IsolateSink Error Resilience', () {
+    test('Tracer.start works without prior Tracer.initialize()', () async {
+      final memoryFs = MemoryFileSystem();
+      const coldTracePath = '/cold/trace.json';
+      final eventId = Tracer.registerString('coldStartEvent');
+
+      await Tracer.start(coldTracePath, fs: memoryFs);
+      Tracer.record(eventId, Phase.begin, TraceCategory.paint);
+      Tracer.record(eventId, Phase.end, TraceCategory.paint);
+      await Tracer.stop();
+
+      final contents = utf8.decode(
+        memoryFs.file(coldTracePath).readAsBytesSync(),
+      );
+      final jsonList = [
+        for (final e in jsonDecode(contents) as List<Object?>)
+          e as Map<String, Object?>,
+      ];
+      expect(jsonList, hasLength(2));
+      expect(jsonList[0]['name'], equals('coldStartEvent'));
+      expect(jsonList[0]['ph'], equals('B'));
+      expect(jsonList[1]['ph'], equals('E'));
+    });
+
+    test(
+      'IsolateSink closes cleanly without hanging when opening target path fails',
+      () async {
+        // Passing an existing directory path as the file path forces openSync to fail.
+        final sink = IsolateSink(Directory.systemTemp.path, 0);
+        final word0 = (1 << 32) | (1 << 8) | Phase.begin;
+        sink.add([word0, 42], ['FailedOpenEvent']);
+
+        await expectLater(
+          sink.close().timeout(const Duration(seconds: 5)),
+          completes,
+        );
+      },
+    );
+
+    test(
+      'IsolateSink accepts non-TypedData List<int> buffers after initialization',
+      () async {
+        final tempPath =
+            '${Directory.systemTemp.path}${Platform.pathSeparator}isolate_list_${Random().nextInt(10000000)}.json';
+        final sink = IsolateSink(tempPath, 0);
+        try {
+          // Allow background isolate initialization to complete so _sendData runs directly.
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          final word0 = (1 << 32) | (1 << 8) | Phase.instant;
+          sink.add(<int>[word0, 100], ['PlainListEvent']);
+          await sink.close();
+
+          final contents = utf8.decode(await File(tempPath).readAsBytes());
+          final jsonList = [
+            for (final e in jsonDecode(contents) as List<Object?>)
+              e as Map<String, Object?>,
+          ];
+          expect(jsonList, hasLength(1));
+          expect(jsonList[0]['name'], equals('PlainListEvent'));
+        } finally {
+          final f = File(tempPath);
+          if (await f.exists()) {
+            await f.delete();
+          }
+        }
+      },
+    );
+  });
+
   group('Tracer Tests', () {
     late String traceFilePath;
 

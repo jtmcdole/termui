@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+const int _defaultMaxDecompressedBytes = 256 * 1024 * 1024;
+
 /// Compresses a string into a GZip compressed byte array.
 Future<Uint8List> compressString(String input) async {
   throw UnsupportedError('Cannot compress on this platform');
@@ -11,11 +13,25 @@ Future<Uint8List> compressBytes(Uint8List input) async {
 }
 
 /// Decompresses a GZip compressed byte array into a string.
-Future<String> decompressString(Uint8List input) async {
+Future<String> decompressString(
+  Uint8List input, {
+  int maxDecompressedBytes = _defaultMaxDecompressedBytes,
+}) async {
   throw UnsupportedError('Cannot decompress on this platform');
 }
 
 /// Decompresses a GZip compressed byte array into a byte array.
-Future<Uint8List> decompressBytes(Uint8List input) async {
+Future<Uint8List> decompressBytes(
+  Uint8List input, {
+  int maxDecompressedBytes = _defaultMaxDecompressedBytes,
+}) async {
+  throw UnsupportedError('Cannot decompress on this platform');
+}
+
+/// Decompresses a GZip compressed byte array with a maximum output size cap.
+Future<Uint8List> decompressGzip(
+  Uint8List input, {
+  int maxDecompressedBytes = _defaultMaxDecompressedBytes,
+}) async {
   throw UnsupportedError('Cannot decompress on this platform');
 }

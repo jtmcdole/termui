@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:math';
+import 'package:file/memory.dart';
 import 'package:test/test.dart';
 import 'package:termui_test/termui_test.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/termui_trace.dart';
+import 'package:termui/utils/gzip_json.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 
 void main() {
@@ -357,5 +360,111 @@ void main() {
         await runnerFuture;
       });
     });
+
+    test(
+      'decompressGzip enforces maxDecompressedBytes cap and parseTraceFile supports MemoryFileSystem',
+      () async {
+        final payload = jsonEncode([
+          {
+            'name': 'FramePaint',
+            'ph': 'X',
+            'cat': 'tui',
+            'ts': 100,
+            'dur': 250,
+            'tid': 1,
+          },
+        ]);
+        final compressed = await compressString(payload);
+
+        final decoded = await decompressGzip(
+          compressed,
+          maxDecompressedBytes: 1024,
+        );
+        expect(utf8.decode(decoded), equals(payload));
+
+        await expectLater(
+          decompressGzip(compressed, maxDecompressedBytes: 8),
+          throwsFormatException,
+        );
+
+        final fs = MemoryFileSystem();
+        final traceFile = fs.file('/virtual/trace.json.gz')
+          ..createSync(recursive: true);
+        await traceFile.writeAsBytes(compressed);
+        final parsed = await parseTraceFile(
+          '/virtual/trace.json.gz',
+          fileSystem: fs,
+        );
+        expect(parsed, isNotNull);
+        final parsedSpans = parsed!['spans'] as List<TraceSpan>;
+        expect(parsedSpans, hasLength(1));
+        expect(parsedSpans.single.name, equals('FramePaint'));
+      },
+    );
+
+    test(
+      'Inspector panel and TimelineCanvas handle maxWidth = 3 and emoji span labels without RangeError',
+      () {
+        final emojiSpan = TraceSpan(
+          name: '🚀 Launch 👨‍👩‍👧‍👦',
+          category: 'tui',
+          startUs: 0,
+          endUs: 1000,
+          depth: 0,
+          args: {'note': '🍎🍊🍋🍇🍓🍒🍑🍍'},
+        );
+
+        expect(wrapTraceText('🚀 🍎 🍊', 3), isNotEmpty);
+
+        // Narrow maxWidth = 3 must not throw RangeError in inspector or timeline.
+        final narrowBuffer = Buffer.blank(3, 8);
+        final inspectorEl =
+            buildInspectorPanel(
+                null,
+                emojiSpan,
+                TimeDisplayMode.formatted,
+                0,
+              ).createElement()
+              ..mount(null)
+              ..layout(BoxConstraints.tight(const Size(3, 8)))
+              ..paint(narrowBuffer, Offset.zero);
+        addTearDown(inspectorEl.unmount);
+
+        final narrowTimelineBuffer = Buffer.blank(3, 4);
+        final narrowTimelineEl =
+            TimelineCanvas(
+                spans: [emojiSpan],
+                offsetX: 0,
+                offsetY: 0,
+                zoomLevel: 100,
+                maxSpanDuration: 1000,
+              ).createElement()
+              ..mount(null)
+              ..layout(BoxConstraints.tight(const Size(3, 4)))
+              ..paint(narrowTimelineBuffer, Offset.zero);
+        addTearDown(narrowTimelineEl.unmount);
+
+        // Wide enough timeline renders emoji grapheme intact without surrogate splitting.
+        final wideBuffer = Buffer.blank(30, 3);
+        final wideTimelineEl =
+            TimelineCanvas(
+                spans: [emojiSpan],
+                offsetX: 0,
+                offsetY: 0,
+                zoomLevel: 40,
+                maxSpanDuration: 1000,
+              ).createElement()
+              ..mount(null)
+              ..layout(BoxConstraints.tight(const Size(30, 3)))
+              ..paint(wideBuffer, Offset.zero);
+        addTearDown(wideTimelineEl.unmount);
+
+        final row0 = [
+          for (var x = 0; x < 30; x++) wideBuffer.getCharacter(x, 0),
+        ];
+        expect(row0, contains('🚀'));
+        expect(row0, contains('👨‍👩‍👧‍👦'));
+      },
+    );
   });
 }
