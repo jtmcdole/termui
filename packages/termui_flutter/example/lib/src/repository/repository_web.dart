@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:js_interop';
 import 'package:web/web.dart' as web;
@@ -151,7 +152,7 @@ final class WebSavedCastsRepository implements SavedCastsRepository {
           if (result.typeofEquals('string')) {
             // Legacy fallback for strings
             final str = (result as JSString).toDart;
-            completer.complete(Uint8List.fromList(str.codeUnits));
+            completer.complete(utf8.encode(str));
           } else {
             completer.complete((result as JSUint8Array).toDart);
           }
