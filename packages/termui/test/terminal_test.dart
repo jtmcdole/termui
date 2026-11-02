@@ -239,6 +239,26 @@ void main() {
       expect(terminal.pasteTrackingEnabled, isFalse);
     });
 
+    test(
+      'setClipboard and requestPaste emit OSC 52 sequences and respect dispose',
+      () {
+        final backend = MockTerminalBackend();
+        final terminal = MockTerminal(backend);
+
+        terminal.setClipboard('hi');
+        expect(backend.writes.last, equals('\x1b]52;c;aGk=\x1b\\'));
+
+        terminal.requestPaste();
+        expect(backend.writes.last, equals('\x1b]52;c;?\x1b\\'));
+
+        final countBeforeDispose = backend.writes.length;
+        terminal.dispose();
+        terminal.setClipboard('ignored');
+        terminal.requestPaste();
+        expect(backend.writes, hasLength(countBeforeDispose));
+      },
+    );
+
     test('InputParser decodes UTF-8 pastes correctly', () {
       final parser = InputParser();
       // Start paste
@@ -290,5 +310,141 @@ void main() {
       expect((events[4] as KeyEvent).key, equals('r'));
       expect((events[5] as KeyEvent).key, equals('a'));
     });
+
+    test(
+      'InputParser decodes OSC 52 replies (BEL, ST, and chunked) as PasteEvent',
+      () {
+        final parser = InputParser();
+
+        final b64Bel = base64.encode(utf8.encode('clip bel 🚀'));
+        final belEvents = parser.parse(utf8.encode('\x1b]52;c;$b64Bel\x07'));
+        expect(belEvents, hasLength(1));
+        expect(
+          belEvents.single,
+          isA<PasteEvent>().having((e) => e.text, 'text', 'clip bel 🚀'),
+        );
+
+        // Unpadded base64 and ST (\x1b\\) terminator.
+        final stEvents = parser.parse(utf8.encode('\x1b]52;p;aGk\x1b\\'));
+        expect(stEvents, hasLength(1));
+        expect(
+          stEvents.single,
+          isA<PasteEvent>().having((e) => e.text, 'text', 'hi'),
+        );
+
+        // Chunked across multiple parse() calls, including split ST (\x1b then \\) + trailing key.
+        expect(parser.parse(utf8.encode('\x1b]5')), isEmpty);
+        expect(parser.parse(utf8.encode('2;c;SGVs')), isEmpty);
+        expect(parser.parse(utf8.encode('bG8=\x1b')), isEmpty);
+        final chunkedEvents = parser.parse(utf8.encode('\\Z'));
+        expect(chunkedEvents, hasLength(2));
+        expect(
+          chunkedEvents[0],
+          isA<PasteEvent>().having((e) => e.text, 'text', 'Hello'),
+        );
+        expect(
+          chunkedEvents[1],
+          isA<KeyEvent>().having((e) => e.key, 'key', 'Z'),
+        );
+      },
+    );
+
+    test(
+      'InputParser handles standalone ESC ], CAN/SUB OSC aborts, non-52 OSC, and >1.4M overflow',
+      () {
+        final parser = InputParser();
+
+        // Standalone ESC ] -> Alt+], and coalesced ESC ] + non-digit bytes emit Alt+] + keys.
+        final altBracket = parser.parse('\x1b]'.codeUnits);
+        expect(altBracket, hasLength(1));
+        expect(
+          altBracket.single,
+          isA<KeyEvent>().having((e) => e.key, 'key', ']').having(
+            (e) => e.modifiers,
+            'modifiers',
+            {Modifier.alt},
+          ),
+        );
+
+        final coalescedAltBracket = parser.parse(utf8.encode('\x1b]ls\r'));
+        expect(coalescedAltBracket, hasLength(4));
+        expect(
+          coalescedAltBracket[0],
+          isA<KeyEvent>().having((e) => e.key, 'key', ']').having(
+            (e) => e.modifiers,
+            'modifiers',
+            {Modifier.alt},
+          ),
+        );
+        expect((coalescedAltBracket[1] as KeyEvent).key, equals('l'));
+        expect((coalescedAltBracket[2] as KeyEvent).key, equals('s'));
+        expect(
+          (coalescedAltBracket[3] as KeyEvent).type,
+          equals(KeyType.enter),
+        );
+
+        // CAN (0x18) and SUB (0x1A) abort OSC without leaking base64 as keystrokes.
+        final canEvents = parser.parse('\x1b]52;c;aGk=\x18k'.codeUnits);
+        expect(canEvents, hasLength(1));
+        expect(
+          canEvents.single,
+          isA<KeyEvent>().having((e) => e.key, 'key', 'k'),
+        );
+
+        final subEvents = parser.parse('\x1b]52;c;aGk=\x1am'.codeUnits);
+        expect(subEvents, hasLength(1));
+        expect(
+          subEvents.single,
+          isA<KeyEvent>().having((e) => e.key, 'key', 'm'),
+        );
+
+        // Non-52 OSC, '?' query, empty payload, and invalid base64 are silently dropped.
+        expect(parser.parse('\x1b]0;window title\x07'.codeUnits), isEmpty);
+        expect(
+          parser.parse('\x1b]11;rgb:0000/0000/0000\x1b\\'.codeUnits),
+          isEmpty,
+        );
+        expect(parser.parse('\x1b]52;c;?\x07'.codeUnits), isEmpty);
+        expect(parser.parse('\x1b]52;c;\x07'.codeUnits), isEmpty);
+        expect(parser.parse('\x1b]52;c;!!!\x07'.codeUnits), isEmpty);
+
+        // > 1 MiB decoded OSC 52 bytes or U+FFFD expansion > 1 MiB is rejected.
+        final overOneMiBB64 = base64.encode(List<int>.filled(1048577, 0x41));
+        expect(
+          parser.parse(utf8.encode('\x1b]52;c;$overOneMiBB64\x07')),
+          isEmpty,
+        );
+        final expansionB64 = base64.encode(List<int>.filled(500000, 0xFF));
+        expect(
+          parser.parse(utf8.encode('\x1b]52;c;$expansionB64\x07')),
+          isEmpty,
+        );
+
+        // > 1.4M byte OSC sequence across chunks is discarded without OOM or keystroke leak.
+        expect(parser.parse('\x1b]52;c;'.codeUnits), isEmpty);
+        final halfChunk = List<int>.filled(800000, 0x41);
+        expect(parser.parse(halfChunk), isEmpty);
+        expect(parser.parse(halfChunk), isEmpty);
+        final afterOverflow = parser.parse('\x07q'.codeUnits);
+        expect(afterOverflow, hasLength(1));
+        expect(
+          afterOverflow.single,
+          isA<KeyEvent>().having((e) => e.key, 'key', 'q'),
+        );
+
+        // > 1 MiB multi-byte UTF-8 bracketed paste splits cleanly on UTF-8 boundaries.
+        final largeMultibyte = 'x${'é' * 600000}';
+        final pasteEvents = parser.parse(
+          utf8.encode('\x1b[200~$largeMultibyte\x1b[201~'),
+        );
+        expect(pasteEvents, hasLength(2));
+        final rejoined = pasteEvents
+            .cast<PasteEvent>()
+            .map((e) => e.text)
+            .join();
+        expect(rejoined, equals(largeMultibyte));
+        expect(rejoined.contains('\uFFFD'), isFalse);
+      },
+    );
   });
 }
