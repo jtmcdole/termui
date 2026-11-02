@@ -708,5 +708,45 @@ void main() {
         terminal.dispose();
       },
     );
+
+    test(
+      'tracks DECSET 2004 bracketed paste mode and resets on RIS/DECSTR',
+      () {
+        final terminal = VirtualTerminal(width: 20, height: 5);
+        expect(terminal.bracketedPasteMode, isFalse);
+
+        terminal.write(utf8.encode('\x1b[?2004h'));
+        expect(terminal.bracketedPasteMode, isTrue);
+
+        terminal.write(utf8.encode('\x1b[?2004l'));
+        expect(terminal.bracketedPasteMode, isFalse);
+
+        terminal.write(utf8.encode('\x1b[?2004h\x1b[!p'));
+        expect(terminal.bracketedPasteMode, isFalse);
+
+        terminal.write(utf8.encode('\x1b[?2004h'));
+        terminal.reset();
+        expect(terminal.bracketedPasteMode, isFalse);
+      },
+    );
+
+    test(
+      'ignores DEL (0x7F) and C1 control code units in ground state without polluting Buffer',
+      () {
+        final terminal = VirtualTerminal(width: 4, height: 2);
+        terminal.write(utf8.encode('A\x7fB'));
+        terminal.printText('\x80\x85\x9b\x9fC');
+
+        expect(terminal.buffer.getCharacter(0, 0), equals('A'));
+        expect(terminal.buffer.getCharacter(1, 0), equals('B'));
+        expect(terminal.buffer.getCharacter(2, 0), equals('C'));
+        expect(terminal.cursorX, equals(3));
+
+        // DEL at pending-wrap margin must not wrap to next row.
+        terminal.write(utf8.encode('D\x7f'));
+        expect(terminal.cursorX, equals(4));
+        expect(terminal.cursorY, equals(0));
+      },
+    );
   });
 }

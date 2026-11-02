@@ -3,13 +3,35 @@ import 'package:termui/terminal/event.dart' as ev;
 /// Encodes high-level `termui` [ev.InputEvent] objects into raw ANSI/VT100 byte strings.
 /// These strings can be written to a PTY's `write()` method.
 abstract final class InputEncoder {
+  // matches c0 controls (except \t, \n, \r), del (0x7f), and c1 controls (0x80-0x9f).
+  static final RegExp _unsafePasteControls = RegExp(
+    r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]',
+  );
+
   /// Encodes a single event into an ANSI string.
-  static String encode(ev.InputEvent event) => switch (event) {
-    ev.KeyEvent key => _encodeKeyEvent(key),
-    ev.MouseEvent mouse => _encodeMouseEvent(mouse),
-    ev.PasteEvent paste => paste.text,
-    _ => '',
-  };
+  static String encode(ev.InputEvent event, {bool bracketedPaste = false}) =>
+      switch (event) {
+        ev.KeyEvent key => _encodeKeyEvent(key),
+        ev.MouseEvent mouse => _encodeMouseEvent(mouse),
+        ev.PasteEvent paste => _encodePasteEvent(
+          paste,
+          bracketedPaste: bracketedPaste,
+        ),
+        _ => '',
+      };
+
+  static String _encodePasteEvent(
+    ev.PasteEvent event, {
+    required bool bracketedPaste,
+  }) {
+    if (!bracketedPaste) return event.text;
+    var safe = event.text.replaceAll('\x9b', '\x1b[');
+    while (safe.contains('\x1b[201~') || safe.contains('\x1b[200~')) {
+      safe = safe.replaceAll('\x1b[201~', '').replaceAll('\x1b[200~', '');
+    }
+    safe = safe.replaceAll(_unsafePasteControls, '');
+    return '\x1b[200~$safe\x1b[201~';
+  }
 
   static String _encodeKeyEvent(ev.KeyEvent event) => switch (event.type) {
     ev.KeyType.character => _encodeCharacterKey(event),
@@ -46,6 +68,9 @@ abstract final class InputEncoder {
   };
 
   static String _encodeCharacterKey(ev.KeyEvent event) {
+    if (event.modifiers.contains(ev.Modifier.meta)) {
+      return '';
+    }
     var out = event.key;
     if (event.modifiers.contains(ev.Modifier.control) && out.length == 1) {
       out = _encodeControlChar(out) ?? out;
