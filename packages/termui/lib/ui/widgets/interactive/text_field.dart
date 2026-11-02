@@ -273,7 +273,7 @@ class TextEditingController {
 ///
 /// | Keyboard Shortcut | Action | Description |
 /// | :--- | :--- | :--- |
-/// | `Ctrl + W` | `deleteWordLeft` | Delete the word behind the cursor. |
+/// | `Ctrl + W` / `Alt + W` / `Alt + Backspace` | `deleteWordLeft` | Delete the word behind the cursor. |
 /// | `Ctrl + D` / `Ctrl + Del` | `deleteWordRight`| Delete the word in front of the cursor. |
 /// | `Ctrl + Z` / `Alt + Z` | `undo` | Revert the last text mutation. |
 /// | `Ctrl + Y` / `Alt + Y` | `redo` | Reapply a previously reverted mutation. |
@@ -439,6 +439,15 @@ class TextField extends StatefulWidget implements Focusable {
       type: KeyType.character,
       key: 'w',
       modifiers: {ev.Modifier.control},
+    ): TextFieldAction.deleteWordLeft,
+    const TextFieldShortcut(
+      type: KeyType.character,
+      key: 'w',
+      modifiers: {ev.Modifier.alt},
+    ): TextFieldAction.deleteWordLeft,
+    const TextFieldShortcut(
+      type: KeyType.backspace,
+      modifiers: {ev.Modifier.alt},
     ): TextFieldAction.deleteWordLeft,
     const TextFieldShortcut(
       type: KeyType.character,

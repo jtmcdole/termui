@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A handle to the location of a [Widget] in the element tree.
 abstract interface class BuildContext {
   /// The widget associated with this context.
   Widget get widget;
@@ -13,5 +13,3 @@ abstract interface class BuildContext {
   static BuildContext? get current =>
       Zone.current[#buildContext] as BuildContext?;
 }
-
-/// A unique identifier for [Widget] configurations.

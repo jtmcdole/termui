@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A layout widget that arranges its children horizontally.
 class Row extends Widget {
   /// The children widgets to align horizontally.
   final List<Widget> children;
@@ -278,5 +278,3 @@ class RowElement extends Element {
   int getIntrinsicWidth(int height) =>
       childElements.fold(0, (sum, el) => sum + el.getIntrinsicWidth(height));
 }
-
-/// A layout widget that arranges its children vertically.

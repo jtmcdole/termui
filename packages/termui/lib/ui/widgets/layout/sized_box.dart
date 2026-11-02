@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A box with a specified [width] and [height] that tightens child constraints.
 class SizedBox extends Widget {
   /// The constrained width.
   final int? width;
@@ -85,5 +85,3 @@ class SizedBoxElement extends SingleChildElement {
     return childElement?.getIntrinsicWidth(sb.height ?? height) ?? 0;
   }
 }
-
-/// A widget that imposes [BoxConstraints] on its child.

@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A unique identifier for [Widget] configurations.
 abstract class Key {
   /// Initializes a key.
   const Key();
@@ -10,7 +10,7 @@ abstract class Key {
 /// Global keys allow widgets to be uniquely identified and retrieved from
 /// the registry.
 class GlobalKey<T extends State<StatefulWidget>> extends Key {
-  /// Undocumented public member.
+  /// Active mapping of mounted [GlobalKey] instances to their [Element]s.
   static final Map<GlobalKey, Element> registry = {};
 
   /// Initializes a global key.
@@ -52,5 +52,3 @@ class ValueKey<T> extends Key {
   @override
   String toString() => 'ValueKey($value)';
 }
-
-/// Abstract base class for all renderable widgets.

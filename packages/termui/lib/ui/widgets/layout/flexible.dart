@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// Controls how a child of a [Row] or [Column] flexes along the main axis.
 class Flexible extends Widget {
   /// The flex factor to use for this child.
   final int flex;
@@ -87,5 +87,3 @@ class Expanded extends Flexible {
   /// Creates an expanded widget.
   const Expanded({super.flex = 1, required super.child});
 }
-
-/// Represents a relative alignment in 2D space.

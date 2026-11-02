@@ -1,4 +1,4 @@
-/// Undocumented public member.
+/// Holds an integer 2D grid size in terminal columns and rows.
 final class Size {
   /// The horizontal dimension.
   final int width;
@@ -313,7 +313,7 @@ final class MinMaxConstraint extends Constraint {
   const MinMaxConstraint({this.min = 0, this.max = 999999});
 }
 
-/// A handle to a location in the widget tree.
+/// Represents a relative 2D alignment within a rectangular box.
 final class Alignment {
   /// The distance fraction in the horizontal direction.
   final double x;
@@ -351,5 +351,3 @@ final class Alignment {
   /// The bottom right corner.
   static const Alignment bottomRight = Alignment(1.0, 1.0);
 }
-
-/// A widget that aligns its child within itself.

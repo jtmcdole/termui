@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A widget that imposes additional [BoxConstraints] on its [child].
 class ConstrainedBox extends Widget {
   /// The additional constraints to impose on the child.
   final BoxConstraints constraints;
@@ -77,5 +77,3 @@ class ConstrainedBoxElement extends SingleChildElement {
     return w.clamp(cb.constraints.minWidth, cb.constraints.maxWidth);
   }
 }
-
-/// Controls how a child widget of a [Row] or [Column] scales.

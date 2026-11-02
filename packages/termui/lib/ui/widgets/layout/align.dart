@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A widget that aligns its [child] within itself.
 class Align extends Widget {
   /// How to align the child.
   final Alignment alignment;
@@ -133,8 +133,3 @@ class Center extends Align {
   const Center({super.widthFactor, super.heightFactor, required super.child})
     : super(alignment: .center);
 }
-
-/// A bridge widget that maintains a persistent [Element] tree for its child.
-///
-/// Use this to embed reactive widgets (like [StatefulWidget]s or [InheritedWidget]s)
-/// inside immediate-mode rendering loops that reconstruct the widget tree on every frame.

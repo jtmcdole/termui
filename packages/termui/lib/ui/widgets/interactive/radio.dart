@@ -2,7 +2,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
-/// Undocumented public member.
+/// Single-selection option button within a mutually exclusive radio group.
 class Radio<T> extends StatefulWidget implements Focusable {
   /// The specific value represented by this radio button.
   final T value;
@@ -44,7 +44,7 @@ class Radio<T> extends StatefulWidget implements Focusable {
   }
 }
 
-/// Undocumented public member.
+/// Mutable [State] managing focus and selection events for [Radio].
 class RadioState<T> extends State<Radio<T>>
     with FocusableStateMixin<Radio<T>>
     implements KeyEventHandler, MouseEventHandler {
