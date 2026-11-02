@@ -276,6 +276,30 @@ class Buffer {
     }
   }
 
+  @pragma('vm:prefer-inline')
+  void _resetOverwrittenWideAt(int x, int charIdx) {
+    if (characters[charIdx] == '') {
+      if (x > 0 && isWideGrapheme(characters[charIdx - 1])) {
+        _resetCell(charIdx - 1);
+      }
+    } else if (isWideGrapheme(characters[charIdx])) {
+      if (x + 1 < width && characters[charIdx + 1] == '') {
+        _resetCell(charIdx + 1);
+      }
+    }
+  }
+
+  @pragma('vm:prefer-inline')
+  void _placeWideContinuationAt(int x, int charIdx) {
+    final nextIdx = charIdx + 1;
+    if (isWideGrapheme(characters[nextIdx]) &&
+        x + 2 < width &&
+        characters[charIdx + 2] == '') {
+      _resetCell(charIdx + 2);
+    }
+    characters[nextIdx] = '';
+  }
+
   /// Sets the cell attributes at ([x], [y]). Does nothing if coordinates are out of bounds.
   void setAttributes(
     int x,
@@ -289,33 +313,14 @@ class Buffer {
     if (!isCellValid(x, y)) return;
     final useBlend = blend ?? defaultBlend;
     final charIdx = y * width + x;
-    final idx = charIdx * 3;
     final isWide = char != null && char != '' && isWideGrapheme(char);
     if (char != null) {
-      if (char != '') {
-        if (characters[charIdx] == '') {
-          if (x - 1 >= 0 && isWideGrapheme(characters[charIdx - 1])) {
-            _resetCell(charIdx - 1);
-          }
-        } else if (isWideGrapheme(characters[charIdx])) {
-          if (x + 1 < width && characters[charIdx + 1] == '') {
-            _resetCell(charIdx + 1);
-          }
-        }
-      }
+      if (char != '') _resetOverwrittenWideAt(x, charIdx);
       characters[charIdx] = char;
-      if (isWide && x + 1 < width) {
-        final nextIdx = charIdx + 1;
-        if (isWideGrapheme(characters[nextIdx]) &&
-            x + 2 < width &&
-            characters[charIdx + 2] == '') {
-          _resetCell(charIdx + 2);
-        }
-        characters[nextIdx] = '';
-      }
+      if (isWide && x + 1 < width) _placeWideContinuationAt(x, charIdx);
     }
     _writeCellAttributes(
-      idx,
+      charIdx * 3,
       fg: fg,
       bg: bg,
       modifiers: modifiers,
@@ -491,162 +496,152 @@ class Buffer {
     }
   }
 
+  @pragma('vm:prefer-inline')
+  static bool _isPureAscii(String text) {
+    final len = text.length;
+    for (var i = 0; i < len; i++) {
+      if (text.codeUnitAt(i) >= 128) return false;
+    }
+    return true;
+  }
+
+  @pragma('vm:prefer-inline')
+  void _clearOverwrittenWideChar(int currentX, int idx) {
+    if (characters[idx] == '') {
+      if (currentX > 0 && isWideGrapheme(characters[idx - 1])) {
+        characters[idx - 1] = ' ';
+      }
+    } else if (isWideGrapheme(characters[idx])) {
+      if (currentX + 1 < width && characters[idx + 1] == '') {
+        characters[idx + 1] = ' ';
+      }
+    }
+  }
+
+  @pragma('vm:prefer-inline')
+  void _writeStyledCellRaw(
+    int idx,
+    String char,
+    int fg,
+    int bg,
+    int modifiers,
+    bool hasFg,
+    bool hasBg,
+  ) {
+    characters[idx] = char;
+    final attrIdx = idx * 3;
+    attributes[attrIdx + 0] = hasFg ? fg : 0;
+    if (hasBg) {
+      attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
+    }
+    attributes[attrIdx + 2] = modifiers;
+  }
+
+  void _writeAsciiString(int x, int y, String text, Style style) {
+    var currentX = x;
+    var currentY = y;
+    final fg = style.foreground?.argb ?? 0;
+    final bg = style.background?.argb ?? 0;
+    final modifiers = style.modifiers;
+    final hasFg = style.foreground != null;
+    final hasBg = style.background != null;
+    final len = text.length;
+
+    for (var i = 0; i < len; i++) {
+      final codeUnit = text.codeUnitAt(i);
+      if (codeUnit == 10) {
+        currentX = x;
+        currentY++;
+        continue;
+      }
+      if (isCellValid(currentX, currentY)) {
+        final idx = currentY * width + currentX;
+        _clearOverwrittenWideChar(currentX, idx);
+        _writeStyledCellRaw(
+          idx,
+          String.fromCharCode(codeUnit),
+          fg,
+          bg,
+          modifiers,
+          hasFg,
+          hasBg,
+        );
+      }
+      currentX++;
+    }
+  }
+
+  void _writeGraphemeAt(
+    int currentX,
+    int currentY,
+    String char,
+    bool isWide,
+    int fg,
+    int bg,
+    int modifiers,
+    bool hasFg,
+    bool hasBg,
+  ) {
+    if (!isCellValid(currentX, currentY)) return;
+    final idx = currentY * width + currentX;
+    _clearOverwrittenWideChar(currentX, idx);
+    if (isWide &&
+        (currentX == width - 1 || !isCellValid(currentX + 1, currentY))) {
+      // Can't fit wide character in the last column or clip edge, write a space instead
+      _writeStyledCellRaw(idx, ' ', fg, bg, modifiers, hasFg, hasBg);
+      return;
+    }
+    _writeStyledCellRaw(idx, char, fg, bg, modifiers, hasFg, hasBg);
+    if (!isWide || currentX + 1 >= width) return;
+    final nextIdx = idx + 1;
+    if (isWideGrapheme(characters[nextIdx]) &&
+        currentX + 2 < width &&
+        characters[idx + 2] == '') {
+      characters[idx + 2] = ' ';
+    }
+    _writeStyledCellRaw(nextIdx, '', fg, bg, modifiers, hasFg, hasBg);
+  }
+
   /// Writes styled [text] to the buffer starting at ([x], [y]).
   ///
   /// Newlines (`\n`) will wrap to [y] + 1 at the starting column [x].
   /// Any characters that fall out of bounds are clipped.
   void writeString(int x, int y, String text, Style style) {
-    final startX = x;
-    var currentX = x;
-    var currentY = y;
-
     // Fast-path for pure ASCII text: no wide characters, no variation selectors,
     // and no multi-code-unit grapheme clusters.
-    var isAscii = true;
-    final len = text.length;
-    for (var i = 0; i < len; i++) {
-      if (text.codeUnitAt(i) >= 128) {
-        isAscii = false;
-        break;
-      }
-    }
-
-    if (isAscii) {
-      final fg = style.foreground?.argb ?? 0;
-      final bg = style.background?.argb ?? 0;
-      final modifiers = style.modifiers;
-      final hasFg = style.foreground != null;
-      final hasBg = style.background != null;
-
-      for (var i = 0; i < len; i++) {
-        final codeUnit = text.codeUnitAt(i);
-        if (codeUnit == 10) {
-          // '\n'
-          currentX = startX;
-          currentY++;
-          continue;
-        }
-        if (isCellValid(currentX, currentY)) {
-          final idx = currentY * width + currentX;
-          final char = String.fromCharCode(codeUnit);
-
-          // Clear potential wide char we are about to overwrite
-          if (characters[idx] == '') {
-            if (currentX - 1 >= 0) {
-              final prevIdx = idx - 1;
-              if (isWideGrapheme(characters[prevIdx])) {
-                characters[prevIdx] = ' ';
-              }
-            }
-          } else if (isWideGrapheme(characters[idx])) {
-            if (currentX + 1 < width) {
-              final nextIdx = idx + 1;
-              if (characters[nextIdx] == '') {
-                characters[nextIdx] = ' ';
-              }
-            }
-          }
-
-          characters[idx] = char;
-          final attrIdx = idx * 3;
-          attributes[attrIdx + 0] = hasFg ? fg : 0;
-          if (hasBg) {
-            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
-          }
-          attributes[attrIdx + 2] = modifiers;
-          currentX += 1;
-        } else {
-          currentX += 1;
-        }
-      }
+    if (_isPureAscii(text)) {
+      _writeAsciiString(x, y, text, style);
       return;
     }
 
-    final chars = text.characters;
+    var currentX = x;
+    var currentY = y;
     final fg = style.foreground?.argb ?? 0;
     final bg = style.background?.argb ?? 0;
     final modifiers = style.modifiers;
     final hasFg = style.foreground != null;
     final hasBg = style.background != null;
 
-    for (final char in chars) {
+    for (final char in text.characters) {
       if (char == '\n') {
-        currentX = startX;
+        currentX = x;
         currentY++;
         continue;
       }
       final charWidth = graphemeWidth(char);
-      if (charWidth == 0) {
-        continue;
-      }
-      if (isCellValid(currentX, currentY)) {
-        final idx = currentY * width + currentX;
-        // Clear potential wide char we are about to overwrite
-        if (characters[idx] == '') {
-          if (currentX - 1 >= 0) {
-            final prevIdx = idx - 1;
-            if (isWideGrapheme(characters[prevIdx])) {
-              characters[prevIdx] = ' ';
-            }
-          }
-        } else if (isWideGrapheme(characters[idx])) {
-          if (currentX + 1 < width) {
-            final nextIdx = idx + 1;
-            if (characters[nextIdx] == '') {
-              characters[nextIdx] = ' ';
-            }
-          }
-        }
-
-        final isWide = charWidth == 2;
-        if (isWide &&
-            (currentX == width - 1 || !isCellValid(currentX + 1, currentY))) {
-          // Can't fit wide character in the last column or clip edge, write a space instead
-          characters[idx] = ' ';
-          final attrIdx = idx * 3;
-          attributes[attrIdx + 0] = hasFg ? fg : 0;
-          if (hasBg) {
-            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
-          }
-          attributes[attrIdx + 2] = modifiers;
-          currentX += charWidth;
-        } else {
-          characters[idx] = char;
-          final attrIdx = idx * 3;
-          attributes[attrIdx + 0] = hasFg ? fg : 0;
-          if (hasBg) {
-            attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
-          }
-          attributes[attrIdx + 2] = modifiers;
-          if (isWide) {
-            if (currentX + 1 < width) {
-              final nextIdx = idx + 1;
-              // Clear potential wide char we are overwriting in the next cell
-              if (isWideGrapheme(characters[nextIdx]) && currentX + 2 < width) {
-                final nextNextIdx = idx + 2;
-                if (characters[nextNextIdx] == '') {
-                  characters[nextNextIdx] = ' ';
-                }
-              }
-              characters[nextIdx] = '';
-              final nextAttrIdx = nextIdx * 3;
-              attributes[nextAttrIdx + 0] = hasFg ? fg : 0;
-              if (hasBg) {
-                attributes[nextAttrIdx + 1] = blendColor(
-                  bg,
-                  attributes[nextAttrIdx + 1],
-                );
-              }
-              attributes[nextAttrIdx + 2] = modifiers;
-            }
-            currentX += 2;
-          } else {
-            currentX += 1;
-          }
-        }
-      } else {
-        currentX += charWidth;
-      }
+      if (charWidth == 0) continue;
+      _writeGraphemeAt(
+        currentX,
+        currentY,
+        char,
+        charWidth == 2,
+        fg,
+        bg,
+        modifiers,
+        hasFg,
+        hasBg,
+      );
+      currentX += charWidth;
     }
   }
 }
@@ -762,252 +757,19 @@ class Compositor {
       TraceCategory.compositor,
     );
     try {
-      final totalCells = target.width * target.height;
-      final fgWritten = Uint32List((totalCells + 31) >> 5);
-      final bgWritten = Uint32List((totalCells + 31) >> 5);
-      final charWritten = Uint32List((totalCells + 31) >> 5);
-      var remainingBg = totalCells;
-
+      final masks = _CompositeMasks(target.width * target.height);
       if (initializeMasksFromTarget) {
-        // Initialize masks based on existing target content (e.g. from pre-filled effect layers)
-        for (var i = 0; i < totalCells; i++) {
-          final isTransparent =
-              (target.attributes[i * 3 + 2] & Modifier.transparent) != 0;
-          if (!isTransparent) {
-            final word = i >> 5;
-            final bit = i & 31;
-            final char = target.characters[i];
-            final fg = target.attributes[i * 3 + 0];
-            final bg = target.attributes[i * 3 + 1];
-
-            final bgAlpha = (bg >> 24) & 0xFF;
-            final fgAlpha = (fg >> 24) & 0xFF;
-
-            if (char != ' ' && char != '') {
-              charWritten[word] |= (1 << bit);
-            } else if (bgAlpha == 255) {
-              charWritten[word] |= (1 << bit);
-            }
-
-            if (fgAlpha == 255 || bgAlpha == 255) fgWritten[word] |= (1 << bit);
-            if (bgAlpha == 255) {
-              bgWritten[word] |= (1 << bit);
-              remainingBg--;
-            }
-          }
-        }
+        _initMasksFromTarget(target, masks);
       }
 
       for (var i = startIndex; i < sortedLayers.length; i++) {
-        if (remainingBg <= 0) break;
-
+        if (masks.remainingBg <= 0) break;
         final layer = sortedLayers[i];
-
         if (layer.buffer.effects.isNotEmpty) {
-          final tempBuffer = _rentBuffer(target.width, target.height);
-
-          // 1. Composite this layer's content onto tempBuffer
-          _compositeOpaqueContent(tempBuffer, layer);
-
-          // 2. Recurse to resolve the remaining lower layers into tempBuffer
-          if (i + 1 < sortedLayers.length) {
-            _compositeRecursive(
-              tempBuffer,
-              sortedLayers,
-              i + 1,
-              initializeMasksFromTarget: true,
-            );
-          }
-
-          // 3. Apply this layer's effects to the resolved background
-          for (final effect in layer.buffer.effects) {
-            final effectTraceId = Tracer.registerString(
-              'Compositor:applyEffect:${effect.effect.runtimeType}',
-            );
-            Tracer.record(effectTraceId, Phase.begin, TraceCategory.compositor);
-            try {
-              effect.effect.applyEffect(
-                tempBuffer,
-                Rect(
-                  layer.x + effect.bounds.x,
-                  layer.y + effect.bounds.y,
-                  effect.bounds.width,
-                  effect.bounds.height,
-                ),
-              );
-            } finally {
-              Tracer.record(effectTraceId, Phase.end, TraceCategory.compositor);
-            }
-          }
-
-          // Composite the mutated background onto our target
-          var targetIdx = 0;
-          for (var ty = 0; ty < target.height; ty++) {
-            for (var tx = 0; tx < target.width; tx++, targetIdx++) {
-              final word = targetIdx >> 5;
-              final bit = targetIdx & 31;
-
-              final charOccluded = (charWritten[word] & (1 << bit)) != 0;
-              var fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
-              final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
-
-              if (charOccluded && fgOccluded && bgOccluded) continue;
-
-              final sourceAttrIdx = targetIdx * 3;
-              final sourceIsTransparent =
-                  (tempBuffer.attributes[sourceAttrIdx + 2] &
-                      Modifier.transparent) !=
-                  0;
-              if (sourceIsTransparent) continue;
-
-              final sourceChar = tempBuffer.characters[targetIdx];
-              final sourceFg = tempBuffer.attributes[sourceAttrIdx + 0];
-              final sourceBg = tempBuffer.attributes[sourceAttrIdx + 1];
-
-              final sourceBgAlpha = (sourceBg >> 24) & 0xFF;
-              final targetAttrIdx = targetIdx * 3;
-
-              if (!charOccluded) {
-                if (sourceChar != ' ') {
-                  target.characters[targetIdx] = sourceChar;
-                  target.attributes[targetAttrIdx + 2] =
-                      tempBuffer.attributes[sourceAttrIdx + 2];
-                  charWritten[word] |= (1 << bit);
-                } else if (sourceBgAlpha == 255) {
-                  target.characters[targetIdx] = ' ';
-                  target.attributes[targetAttrIdx + 2] =
-                      tempBuffer.attributes[sourceAttrIdx + 2];
-                  charWritten[word] |= (1 << bit);
-                  if (!fgOccluded && sourceFg == 0) {
-                    fgWritten[word] |= (1 << bit);
-                    fgOccluded = true;
-                  }
-                }
-              }
-
-              final sourceFgAlpha = (sourceFg >> 24) & 0xFF;
-
-              if (!fgOccluded) {
-                final currentFg = target.attributes[targetAttrIdx + 0];
-                final blendedFg = blendColor(currentFg, sourceFg);
-                target.attributes[targetAttrIdx + 0] = blendedFg;
-                target.attributes[targetAttrIdx + 2] |=
-                    tempBuffer.attributes[sourceAttrIdx + 2];
-                if (((blendedFg >> 24) & 0xFF) == 255) {
-                  fgWritten[word] |= (1 << bit);
-                }
-                if (sourceFgAlpha == 255) {
-                  fgWritten[word] |= (1 << bit);
-                }
-              }
-
-              if (!bgOccluded) {
-                final currentBg = target.attributes[targetAttrIdx + 1];
-                final sourceBg = tempBuffer.attributes[sourceAttrIdx + 1];
-                final sourceBgAlpha = (sourceBg >> 24) & 0xFF;
-                if (sourceBgAlpha == 0 && !charOccluded) {
-                  continue;
-                }
-                final blendedBg = blendColor(currentBg, sourceBg);
-                target.attributes[targetAttrIdx + 1] = blendedBg;
-                if (((blendedBg >> 24) & 0xFF) == 255) {
-                  bgWritten[word] |= (1 << bit);
-                  remainingBg--;
-                }
-              }
-            }
-          }
-
-          _poolIndex--; // free tempBuffer
+          _compositeEffectLayer(target, sortedLayers, i, masks);
           break;
-        } else {
-          final buf = layer.buffer;
-          final ox = layer.x;
-          final oy = layer.y;
-
-          final startX = max(0, ox);
-          final endX = min(target.width, ox + buf.width);
-          final startY = max(0, oy);
-          final endY = min(target.height, oy + buf.height);
-
-          if (startX < endX && startY < endY) {
-            for (var ty = startY; ty < endY; ty++) {
-              final ly = ty - oy;
-              final sourceRowOffset = ly * buf.width;
-              var targetIdx = ty * target.width + startX;
-              for (var tx = startX; tx < endX; tx++, targetIdx++) {
-                final word = targetIdx >> 5;
-                final bit = targetIdx & 31;
-
-                final charOccluded = (charWritten[word] & (1 << bit)) != 0;
-                var fgOccluded = (fgWritten[word] & (1 << bit)) != 0;
-                final bgOccluded = (bgWritten[word] & (1 << bit)) != 0;
-
-                if (bgOccluded && fgOccluded && charOccluded) continue;
-
-                final lx = tx - ox;
-                final sourceIdx = sourceRowOffset + lx;
-                final sourceAttrIdx = sourceIdx * 3;
-                final sourceIsTransparent =
-                    (buf.attributes[sourceAttrIdx + 2] &
-                        Modifier.transparent) !=
-                    0;
-
-                if (sourceIsTransparent) continue;
-
-                final sourceChar = buf.characters[sourceIdx];
-                final sourceFg = buf.attributes[sourceAttrIdx + 0];
-                final sourceBg = buf.attributes[sourceAttrIdx + 1];
-                final sourceBgAlpha = (sourceBg >> 24) & 0xFF;
-                final targetAttrIdx = targetIdx * 3;
-
-                if (!charOccluded) {
-                  if (sourceChar != ' ') {
-                    target.characters[targetIdx] = sourceChar;
-                    target.attributes[targetAttrIdx + 2] =
-                        buf.attributes[sourceAttrIdx + 2];
-                    charWritten[word] |= (1 << bit);
-                  } else if (sourceBgAlpha == 255) {
-                    target.characters[targetIdx] = ' ';
-                    target.attributes[targetAttrIdx + 2] =
-                        buf.attributes[sourceAttrIdx + 2];
-                    charWritten[word] |= (1 << bit);
-                    if (!fgOccluded && sourceFg == 0) {
-                      fgWritten[word] |= (1 << bit);
-                      fgOccluded = true;
-                    }
-                  }
-                }
-
-                final sourceFgAlpha = (sourceFg >> 24) & 0xFF;
-
-                if (!fgOccluded) {
-                  final currentFg = target.attributes[targetAttrIdx + 0];
-                  final blendedFg = blendColor(currentFg, sourceFg);
-                  target.attributes[targetAttrIdx + 0] = blendedFg;
-                  target.attributes[targetAttrIdx + 2] |=
-                      buf.attributes[sourceAttrIdx + 2];
-                  if (((blendedFg >> 24) & 0xFF) == 255) {
-                    fgWritten[word] |= (1 << bit);
-                  }
-                  if (sourceFgAlpha == 255) {
-                    fgWritten[word] |= (1 << bit);
-                  }
-                }
-
-                if (!bgOccluded) {
-                  final currentBg = target.attributes[targetAttrIdx + 1];
-                  final blendedBg = blendColor(currentBg, sourceBg);
-                  target.attributes[targetAttrIdx + 1] = blendedBg;
-                  if (((blendedBg >> 24) & 0xFF) == 255) {
-                    bgWritten[word] |= (1 << bit);
-                    remainingBg--;
-                  }
-                }
-              }
-            }
-          }
         }
+        _blendRegionIntoTarget(target, layer.buffer, layer.x, layer.y, masks);
       }
     } finally {
       Tracer.record(
@@ -1015,6 +777,251 @@ class Compositor {
         Phase.end,
         TraceCategory.compositor,
       );
+    }
+  }
+
+  static void _initMasksFromTarget(Buffer target, _CompositeMasks masks) {
+    final totalCells = target.width * target.height;
+    for (var i = 0; i < totalCells; i++) {
+      final attrIdx = i * 3;
+      if ((target.attributes[attrIdx + 2] & Modifier.transparent) != 0) {
+        continue;
+      }
+      final maskBit = 1 << (i & 31);
+      final word = i >> 5;
+      final char = target.characters[i];
+      final fgAlpha = (target.attributes[attrIdx] >> 24) & 0xFF;
+      final bgAlpha = (target.attributes[attrIdx + 1] >> 24) & 0xFF;
+
+      if ((char != ' ' && char != '') || bgAlpha == 255) {
+        masks.charWritten[word] |= maskBit;
+      }
+      if (fgAlpha == 255 || bgAlpha == 255) {
+        masks.fgWritten[word] |= maskBit;
+      }
+      if (bgAlpha == 255) {
+        masks.bgWritten[word] |= maskBit;
+        masks.remainingBg--;
+      }
+    }
+  }
+
+  void _compositeEffectLayer(
+    Buffer target,
+    List<LayeredBuffer> sortedLayers,
+    int index,
+    _CompositeMasks masks,
+  ) {
+    final layer = sortedLayers[index];
+    final tempBuffer = _rentBuffer(target.width, target.height);
+    try {
+      _compositeOpaqueContent(tempBuffer, layer);
+      if (index + 1 < sortedLayers.length) {
+        _compositeRecursive(
+          tempBuffer,
+          sortedLayers,
+          index + 1,
+          initializeMasksFromTarget: true,
+        );
+      }
+      _applyLayerEffects(tempBuffer, layer);
+      _blendRegionIntoTarget(
+        target,
+        tempBuffer,
+        0,
+        0,
+        masks,
+        skipZeroBgWhenCharUnoccluded: true,
+      );
+    } finally {
+      _poolIndex--;
+    }
+  }
+
+  static void _applyLayerEffects(Buffer tempBuffer, LayeredBuffer layer) {
+    for (final effect in layer.buffer.effects) {
+      final effectTraceId = Tracer.registerString(
+        'Compositor:applyEffect:${effect.effect.runtimeType}',
+      );
+      Tracer.record(effectTraceId, Phase.begin, TraceCategory.compositor);
+      try {
+        effect.effect.applyEffect(
+          tempBuffer,
+          Rect(
+            layer.x + effect.bounds.x,
+            layer.y + effect.bounds.y,
+            effect.bounds.width,
+            effect.bounds.height,
+          ),
+        );
+      } finally {
+        Tracer.record(effectTraceId, Phase.end, TraceCategory.compositor);
+      }
+    }
+  }
+
+  static void _blendRegionIntoTarget(
+    Buffer target,
+    Buffer source,
+    int ox,
+    int oy,
+    _CompositeMasks masks, {
+    bool skipZeroBgWhenCharUnoccluded = false,
+  }) {
+    final startX = max(0, ox);
+    final endX = min(target.width, ox + source.width);
+    final startY = max(0, oy);
+    final endY = min(target.height, oy + source.height);
+    if (startX >= endX || startY >= endY) return;
+
+    for (var ty = startY; ty < endY; ty++) {
+      final sourceRowOffset = (ty - oy) * source.width;
+      var targetIdx = ty * target.width + startX;
+      for (var tx = startX; tx < endX; tx++, targetIdx++) {
+        _blendCellIntoTarget(
+          target,
+          targetIdx,
+          source,
+          sourceRowOffset + (tx - ox),
+          masks,
+          skipZeroBgWhenCharUnoccluded: skipZeroBgWhenCharUnoccluded,
+        );
+      }
+    }
+  }
+
+  @pragma('vm:prefer-inline')
+  static void _blendCellIntoTarget(
+    Buffer target,
+    int targetIdx,
+    Buffer source,
+    int sourceIdx,
+    _CompositeMasks masks, {
+    required bool skipZeroBgWhenCharUnoccluded,
+  }) {
+    final word = targetIdx >> 5;
+    final maskBit = 1 << (targetIdx & 31);
+    final charOccluded = (masks.charWritten[word] & maskBit) != 0;
+    var fgOccluded = (masks.fgWritten[word] & maskBit) != 0;
+    final bgOccluded = (masks.bgWritten[word] & maskBit) != 0;
+    if (charOccluded && fgOccluded && bgOccluded) return;
+
+    final sourceAttrIdx = sourceIdx * 3;
+    final sourceMods = source.attributes[sourceAttrIdx + 2];
+    if ((sourceMods & Modifier.transparent) != 0) return;
+
+    final sourceFg = source.attributes[sourceAttrIdx];
+    final sourceBg = source.attributes[sourceAttrIdx + 1];
+    final targetAttrIdx = targetIdx * 3;
+
+    if (!charOccluded) {
+      fgOccluded = _applyCompositeChar(
+        target,
+        targetIdx,
+        targetAttrIdx,
+        source.characters[sourceIdx],
+        sourceFg,
+        sourceBg,
+        sourceMods,
+        masks,
+        word,
+        maskBit,
+        fgOccluded,
+      );
+    }
+    if (!fgOccluded) {
+      _applyCompositeFg(
+        target,
+        targetAttrIdx,
+        sourceFg,
+        sourceMods,
+        masks,
+        word,
+        maskBit,
+      );
+    }
+    if (!bgOccluded) {
+      _applyCompositeBg(
+        target,
+        targetAttrIdx,
+        sourceBg,
+        masks,
+        word,
+        maskBit,
+        skipZeroBg: skipZeroBgWhenCharUnoccluded && !charOccluded,
+      );
+    }
+  }
+
+  @pragma('vm:prefer-inline')
+  static bool _applyCompositeChar(
+    Buffer target,
+    int targetIdx,
+    int targetAttrIdx,
+    String sourceChar,
+    int sourceFg,
+    int sourceBg,
+    int sourceMods,
+    _CompositeMasks masks,
+    int word,
+    int maskBit,
+    bool fgOccluded,
+  ) {
+    if (sourceChar != ' ') {
+      target.characters[targetIdx] = sourceChar;
+      target.attributes[targetAttrIdx + 2] = sourceMods;
+      masks.charWritten[word] |= maskBit;
+      return fgOccluded;
+    }
+    if (((sourceBg >> 24) & 0xFF) == 255) {
+      target.characters[targetIdx] = ' ';
+      target.attributes[targetAttrIdx + 2] = sourceMods;
+      masks.charWritten[word] |= maskBit;
+      if (!fgOccluded && sourceFg == 0) {
+        masks.fgWritten[word] |= maskBit;
+        return true;
+      }
+    }
+    return fgOccluded;
+  }
+
+  @pragma('vm:prefer-inline')
+  static void _applyCompositeFg(
+    Buffer target,
+    int targetAttrIdx,
+    int sourceFg,
+    int sourceMods,
+    _CompositeMasks masks,
+    int word,
+    int maskBit,
+  ) {
+    final blendedFg = blendColor(target.attributes[targetAttrIdx], sourceFg);
+    target.attributes[targetAttrIdx] = blendedFg;
+    target.attributes[targetAttrIdx + 2] |= sourceMods;
+    if (((blendedFg >> 24) & 0xFF) == 255 || ((sourceFg >> 24) & 0xFF) == 255) {
+      masks.fgWritten[word] |= maskBit;
+    }
+  }
+
+  @pragma('vm:prefer-inline')
+  static void _applyCompositeBg(
+    Buffer target,
+    int targetAttrIdx,
+    int sourceBg,
+    _CompositeMasks masks,
+    int word,
+    int maskBit, {
+    required bool skipZeroBg,
+  }) {
+    if (skipZeroBg && ((sourceBg >> 24) & 0xFF) == 0) return;
+    final blendedBg = blendColor(
+      target.attributes[targetAttrIdx + 1],
+      sourceBg,
+    );
+    target.attributes[targetAttrIdx + 1] = blendedBg;
+    if (((blendedBg >> 24) & 0xFF) == 255) {
+      masks.bgWritten[word] |= maskBit;
+      masks.remainingBg--;
     }
   }
 
@@ -1033,59 +1040,13 @@ class Compositor {
       final endX = min(target.width, ox + buf.width);
       final startY = max(0, oy);
       final endY = min(target.height, oy + buf.height);
+      if (startX >= endX || startY >= endY) return;
 
-      if (startX < endX && startY < endY) {
-        for (var ty = startY; ty < endY; ty++) {
-          final ly = ty - oy;
-          final sourceRowOffset = ly * buf.width;
-          var targetIdx = ty * target.width + startX;
-          for (var tx = startX; tx < endX; tx++, targetIdx++) {
-            final lx = tx - ox;
-            final sourceIdx = sourceRowOffset + lx;
-            final sourceAttrIdx = sourceIdx * 3;
-
-            final sourceIsTransparent =
-                (buf.attributes[sourceAttrIdx + 2] & Modifier.transparent) != 0;
-            if (sourceIsTransparent) continue;
-
-            final sourceChar = buf.characters[sourceIdx];
-            final sourceFg = buf.attributes[sourceAttrIdx + 0];
-            final sourceBg = buf.attributes[sourceAttrIdx + 1];
-            final targetAttrIdx = targetIdx * 3;
-
-            final currentChar = target.characters[targetIdx];
-
-            if (sourceChar != ' ') {
-              if (currentChar == ' ' || currentChar == '') {
-                target.characters[targetIdx] = sourceChar;
-                target.attributes[targetAttrIdx + 2] =
-                    buf.attributes[sourceAttrIdx + 2];
-              }
-            } else {
-              final bgAlpha = (sourceBg >> 24) & 0xFF;
-              if (bgAlpha == 255) {
-                if (currentChar == ' ' || currentChar == '') {
-                  target.characters[targetIdx] = ' ';
-                  target.attributes[targetAttrIdx + 2] =
-                      buf.attributes[sourceAttrIdx + 2];
-                }
-              }
-            }
-
-            final currentFg = target.attributes[targetAttrIdx + 0];
-            target.attributes[targetAttrIdx + 0] = blendColor(
-              sourceFg,
-              currentFg,
-            );
-            target.attributes[targetAttrIdx + 2] |=
-                buf.attributes[sourceAttrIdx + 2];
-
-            final currentBg = target.attributes[targetAttrIdx + 1];
-            target.attributes[targetAttrIdx + 1] = blendColor(
-              sourceBg,
-              currentBg,
-            );
-          }
+      for (var ty = startY; ty < endY; ty++) {
+        final sourceRowOffset = (ty - oy) * buf.width;
+        var targetIdx = ty * target.width + startX;
+        for (var tx = startX; tx < endX; tx++, targetIdx++) {
+          _blendOpaqueCell(target, targetIdx, buf, sourceRowOffset + (tx - ox));
         }
       }
     } finally {
@@ -1096,6 +1057,54 @@ class Compositor {
       );
     }
   }
+
+  @pragma('vm:prefer-inline')
+  static void _blendOpaqueCell(
+    Buffer target,
+    int targetIdx,
+    Buffer buf,
+    int sourceIdx,
+  ) {
+    final sourceAttrIdx = sourceIdx * 3;
+    final sourceMods = buf.attributes[sourceAttrIdx + 2];
+    if ((sourceMods & Modifier.transparent) != 0) return;
+
+    final sourceChar = buf.characters[sourceIdx];
+    final sourceFg = buf.attributes[sourceAttrIdx];
+    final sourceBg = buf.attributes[sourceAttrIdx + 1];
+    final targetAttrIdx = targetIdx * 3;
+    final currentChar = target.characters[targetIdx];
+    final targetIsEmptyChar = currentChar == ' ' || currentChar == '';
+
+    if (targetIsEmptyChar &&
+        (sourceChar != ' ' || ((sourceBg >> 24) & 0xFF) == 255)) {
+      target.characters[targetIdx] = sourceChar;
+      target.attributes[targetAttrIdx + 2] = sourceMods;
+    }
+
+    target.attributes[targetAttrIdx] = blendColor(
+      sourceFg,
+      target.attributes[targetAttrIdx],
+    );
+    target.attributes[targetAttrIdx + 2] |= sourceMods;
+    target.attributes[targetAttrIdx + 1] = blendColor(
+      sourceBg,
+      target.attributes[targetAttrIdx + 1],
+    );
+  }
+}
+
+final class _CompositeMasks {
+  final Uint32List fgWritten;
+  final Uint32List bgWritten;
+  final Uint32List charWritten;
+  int remainingBg;
+
+  _CompositeMasks(int totalCells)
+    : fgWritten = Uint32List((totalCells + 31) >> 5),
+      bgWritten = Uint32List((totalCells + 31) >> 5),
+      charWritten = Uint32List((totalCells + 31) >> 5),
+      remainingBg = totalCells;
 }
 
 /// Returns the physical terminal column width of [grapheme] (0, 1, or 2).
@@ -1131,40 +1140,32 @@ bool isZeroWidthGrapheme(String grapheme) {
 
 /// Returns true if the given code point occupies 0 terminal cells.
 bool isZeroWidthCodePoint(int codePoint) {
-  if (codePoint == 0) return true;
-  // C0 and C1 control characters (except tab/newline/carriage return)
-  if ((codePoint >= 0x01 && codePoint <= 0x1F) ||
-      (codePoint >= 0x7F && codePoint <= 0x9F)) {
-    return true;
-  }
-  // Soft Hyphen
-  if (codePoint == 0x00AD) return true;
-  // Combining Diacritical Marks
-  if (codePoint >= 0x0300 && codePoint <= 0x036F) return true;
-  if (codePoint >= 0x0483 && codePoint <= 0x0489) {
-    return true; // Cyrillic combining
-  }
-  if (codePoint >= 0x0591 && codePoint <= 0x05BD) {
-    return true; // Hebrew combining
-  }
-  // Hangul Jamo medial vowels & trailing consonants when isolated
-  if (codePoint >= 0x1160 && codePoint <= 0x11FF) return true;
-  // General Punctuation format controls: ZWSP, ZWNJ, ZWJ, LTR, RTL, etc.
-  if (codePoint >= 0x200B && codePoint <= 0x200F) return true;
-  // BiDi controls (LRE, RLE, PDF, LRO, RLO, etc.)
-  if (codePoint >= 0x202A && codePoint <= 0x202E) return true;
-  // Word joiner & Invisible operators
-  if (codePoint >= 0x2060 && codePoint <= 0x206F) return true;
-  // Standalone Variation Selectors 1..16
-  if (codePoint >= 0xFE00 && codePoint <= 0xFE0F) return true;
-  // Byte Order Mark / Zero Width No-Break Space
-  if (codePoint == 0xFEFF) return true;
-  // Interlinear annotation
-  if (codePoint >= 0xFFF9 && codePoint <= 0xFFFB) return true;
-  // Tags (Plane 14 language tag characters)
-  if (codePoint >= 0xE0000 && codePoint <= 0xE007F) return true;
+  if (codePoint <= 0x1F) return codePoint >= 0;
+  if (codePoint < 0x7F) return false;
+  return codePoint < 0x2000
+      ? _isZeroWidthBelow2000(codePoint)
+      : _isZeroWidthFrom2000(codePoint);
+}
 
-  return false;
+bool _isZeroWidthBelow2000(int codePoint) {
+  // C1 control characters (0x7F..0x9F) and Soft Hyphen (0x00AD)
+  if (codePoint <= 0x9F || codePoint == 0x00AD) return true;
+  // Combining Diacritical Marks, Cyrillic, Hebrew, and isolated Hangul Jamo
+  if (codePoint >= 0x0300 && codePoint <= 0x036F) return true;
+  if (codePoint >= 0x0483 && codePoint <= 0x0489) return true;
+  if (codePoint >= 0x0591 && codePoint <= 0x05BD) return true;
+  return codePoint >= 0x1160 && codePoint <= 0x11FF;
+}
+
+bool _isZeroWidthFrom2000(int codePoint) {
+  // Format controls, BiDi controls, word joiners, variation selectors, BOM, tags
+  if (codePoint >= 0x200B && codePoint <= 0x200F) return true;
+  if (codePoint >= 0x202A && codePoint <= 0x202E) return true;
+  if (codePoint >= 0x2060 && codePoint <= 0x206F) return true;
+  if (codePoint >= 0xFE00 && codePoint <= 0xFE0F) return true;
+  if (codePoint == 0xFEFF) return true;
+  if (codePoint >= 0xFFF9 && codePoint <= 0xFFFB) return true;
+  return codePoint >= 0xE0000 && codePoint <= 0xE007F;
 }
 
 /// Returns true if the given grapheme cluster is a double-width (wide) character.
@@ -1506,236 +1507,425 @@ bool isWideCodePoint(int codePoint) {
   return false;
 }
 
+typedef _AnsiStyle = ({int fg, int bg, int mods});
+typedef _ParsedAnsiCell = ({String char, int fg, int bg, int mods});
+
+const _AnsiStyle _defaultAnsiStyle = (fg: 0, bg: 0, mods: Modifier.none);
+const _ParsedAnsiCell _blankParsedCell = (
+  char: ' ',
+  fg: 0,
+  bg: 0,
+  mods: Modifier.none,
+);
+
+const List<(int bit, int setCode)> _ansiModifierSetCodes = [
+  (Modifier.bold, 1),
+  (Modifier.dim, 2),
+  (Modifier.italic, 3),
+  (Modifier.underline, 4),
+  (Modifier.blink, 5),
+  (Modifier.reverse, 7),
+  (Modifier.hidden, 8),
+  (Modifier.crossedOut, 9),
+];
+
 /// Extensions for serializing [Buffer] to and from ANSI sequence strings.
 extension BufferAnsiSerialization on Buffer {
-  /// Parses an ANSI sequence string (supporting 24-bit SGR color codes) into a [Buffer].
-  static Buffer fromAnsi(String ansiText) {
-    final cells = <List<({String char, int fg, int bg})>>[];
-    var currentRow = <({String char, int fg, int bg})>[];
+  /// Parses an ANSI sequence string (supporting 24-bit SGR color codes,
+  /// modifiers, and `\r` carriage returns) into a [Buffer].
+  ///
+  /// When [width] or [height] are provided, the returned [Buffer] is sized to
+  /// those dimensions and cells beyond the target bounds are clipped.
+  static Buffer fromAnsi(String ansiText, {int? width, int? height}) {
+    final rows = <List<_ParsedAnsiCell>>[];
+    var currentRow = <_ParsedAnsiCell>[];
+    var col = 0;
+    var hasLineContent = false;
+    var style = _defaultAnsiStyle;
 
-    int currentFg = 0xFFFFFFFF;
-    int currentBg = 0xFF000000;
-
-    int idx = 0;
+    var idx = 0;
     final len = ansiText.length;
 
     while (idx < len) {
-      switch (ansiText.codeUnitAt(idx)) {
-        case 0x1B:
-          idx++;
-          if (idx < len && ansiText.codeUnitAt(idx) == 0x5B) {
-            idx++;
-            int start = idx;
-            while (idx < len && ansiText.codeUnitAt(idx) != 0x6D) {
-              idx++;
-            }
-            if (idx < len) {
-              final paramsStr = ansiText.substring(start, idx);
-              idx++;
-
-              if (paramsStr.isEmpty || paramsStr == '0') {
-                currentFg = 0xFFFFFFFF;
-                currentBg = 0xFF000000;
-              } else {
-                int pIdx = 0;
-                int nextSemi(int from) {
-                  int s = paramsStr.indexOf(';', from);
-                  return s == -1 ? paramsStr.length : s;
-                }
-
-                while (pIdx < paramsStr.length) {
-                  int semi = nextSemi(pIdx);
-                  int code = int.tryParse(paramsStr.substring(pIdx, semi)) ?? 0;
-
-                  switch (code) {
-                    case 0:
-                      currentFg = 0xFFFFFFFF;
-                      currentBg = 0xFF000000;
-                      pIdx = semi + 1;
-                    case 38:
-                      if (semi + 1 >= paramsStr.length) {
-                        pIdx = paramsStr.length;
-                        break;
-                      }
-                      int s2 = nextSemi(semi + 1);
-                      int type =
-                          int.tryParse(paramsStr.substring(semi + 1, s2)) ?? 0;
-                      if (type == 2) {
-                        if (s2 + 1 >= paramsStr.length) {
-                          pIdx = paramsStr.length;
-                          break;
-                        }
-                        int s3 = nextSemi(s2 + 1);
-                        int r =
-                            int.tryParse(paramsStr.substring(s2 + 1, s3)) ?? 0;
-                        if (s3 + 1 >= paramsStr.length) {
-                          pIdx = paramsStr.length;
-                          break;
-                        }
-                        int s4 = nextSemi(s3 + 1);
-                        int g =
-                            int.tryParse(paramsStr.substring(s3 + 1, s4)) ?? 0;
-                        if (s4 + 1 >= paramsStr.length) {
-                          pIdx = paramsStr.length;
-                          break;
-                        }
-                        int s5 = nextSemi(s4 + 1);
-                        int b =
-                            int.tryParse(paramsStr.substring(s4 + 1, s5)) ?? 0;
-                        currentFg = (0xFF << 24) | (r << 16) | (g << 8) | b;
-                        pIdx = s5 + 1;
-                      } else {
-                        pIdx = s2 + 1;
-                      }
-                    case 48:
-                      if (semi + 1 >= paramsStr.length) {
-                        pIdx = paramsStr.length;
-                        break;
-                      }
-                      int s2 = nextSemi(semi + 1);
-                      int type =
-                          int.tryParse(paramsStr.substring(semi + 1, s2)) ?? 0;
-                      if (type == 2) {
-                        if (s2 + 1 >= paramsStr.length) {
-                          pIdx = paramsStr.length;
-                          break;
-                        }
-                        int s3 = nextSemi(s2 + 1);
-                        int r =
-                            int.tryParse(paramsStr.substring(s2 + 1, s3)) ?? 0;
-                        if (s3 + 1 >= paramsStr.length) {
-                          pIdx = paramsStr.length;
-                          break;
-                        }
-                        int s4 = nextSemi(s3 + 1);
-                        int g =
-                            int.tryParse(paramsStr.substring(s3 + 1, s4)) ?? 0;
-                        if (s4 + 1 >= paramsStr.length) {
-                          pIdx = paramsStr.length;
-                          break;
-                        }
-                        int s5 = nextSemi(s4 + 1);
-                        int b =
-                            int.tryParse(paramsStr.substring(s4 + 1, s5)) ?? 0;
-                        currentBg = (0xFF << 24) | (r << 16) | (g << 8) | b;
-                        pIdx = s5 + 1;
-                      } else {
-                        pIdx = s2 + 1;
-                      }
-                    default:
-                      pIdx = semi + 1;
-                  }
-                }
-              }
-            }
-          }
-        case 0x0A:
-          cells.add(currentRow);
-          currentRow = <({String char, int fg, int bg})>[];
-          idx++;
-        case final cu:
-          String char;
-          if (cu < 128 && cu != 0x0D) {
-            char = String.fromCharCode(cu);
-            idx++;
-          } else {
-            final remain = ansiText.substring(idx);
-            if (remain.isEmpty) {
-              idx = len;
-              continue;
-            }
-            char = remain.characters.first;
-            idx += char.length;
-          }
-          if (char != '\r') {
-            currentRow.add((char: char, fg: currentFg, bg: currentBg));
-          }
+      final cu = ansiText.codeUnitAt(idx);
+      if (cu == 0x1B) {
+        final escaped = _consumeAnsiEscape(ansiText, idx, style);
+        idx = escaped.nextIdx;
+        style = escaped.style;
+      } else if (_isStandaloneCarriageReturn(ansiText, idx, cu)) {
+        col = 0;
+        hasLineContent = true;
+        idx++;
+      } else if (cu == 0x0D || cu == 0x0A) {
+        rows.add(currentRow);
+        currentRow = <_ParsedAnsiCell>[];
+        col = 0;
+        hasLineContent = false;
+        idx += cu == 0x0D ? 2 : 1;
+      } else {
+        final step = _readNextGrapheme(ansiText, idx, cu);
+        if (step == null) break;
+        col = _writeParsedGrapheme(currentRow, col, step.char, style);
+        hasLineContent = true;
+        idx = step.nextIdx;
       }
     }
 
-    if (currentRow.isNotEmpty ||
-        (ansiText.isNotEmpty &&
-            ansiText.codeUnitAt(ansiText.length - 1) != 0x0A)) {
-      cells.add(currentRow);
+    if (currentRow.isNotEmpty || hasLineContent) {
+      rows.add(currentRow);
     }
 
-    int maxCols = 0;
-    for (final row in cells) {
+    return _materializeParsedRows(rows, width: width, height: height);
+  }
+
+  static bool _isStandaloneCarriageReturn(String text, int idx, int cu) =>
+      cu == 0x0D &&
+      (idx + 1 >= text.length || text.codeUnitAt(idx + 1) != 0x0A);
+
+  static ({int nextIdx, _AnsiStyle style}) _consumeAnsiEscape(
+    String ansiText,
+    int escIdx,
+    _AnsiStyle style,
+  ) {
+    final len = ansiText.length;
+    var idx = escIdx + 1;
+    if (idx >= len || ansiText.codeUnitAt(idx) != 0x5B) {
+      return (nextIdx: idx, style: style);
+    }
+    idx++;
+    final start = idx;
+    while (idx < len && !_isCsiFinalByte(ansiText.codeUnitAt(idx))) {
+      idx++;
+    }
+    if (idx >= len) {
+      return (nextIdx: idx, style: style);
+    }
+    final command = ansiText.codeUnitAt(idx);
+    final nextStyle = command == 0x6D
+        ? _applySgrParams(ansiText.substring(start, idx), style)
+        : style;
+    return (nextIdx: idx + 1, style: nextStyle);
+  }
+
+  static bool _isCsiFinalByte(int byte) => byte >= 0x40 && byte <= 0x7E;
+
+  static _AnsiStyle _applySgrParams(String paramsStr, _AnsiStyle initial) {
+    if (paramsStr.isEmpty || paramsStr == '0') {
+      return _defaultAnsiStyle;
+    }
+    var style = initial;
+    var pIdx = 0;
+    while (pIdx < paramsStr.length) {
+      final semi = _nextSemicolon(paramsStr, pIdx);
+      final code = int.tryParse(paramsStr.substring(pIdx, semi)) ?? 0;
+      if (code == 38 || code == 48) {
+        final parsedColor = _parseTrueColorSgr(paramsStr, semi + 1);
+        pIdx = parsedColor.nextIdx;
+        if (parsedColor.argb != null) {
+          style = code == 38
+              ? (fg: parsedColor.argb!, bg: style.bg, mods: style.mods)
+              : (fg: style.fg, bg: parsedColor.argb!, mods: style.mods);
+        }
+      } else {
+        style = _applySingleSgrCode(code, style);
+        pIdx = semi + 1;
+      }
+    }
+    return style;
+  }
+
+  static int _nextSemicolon(String s, int from) {
+    final idx = s.indexOf(';', from);
+    return idx == -1 ? s.length : idx;
+  }
+
+  static ({int? argb, int nextIdx}) _parseTrueColorSgr(
+    String paramsStr,
+    int typeStart,
+  ) {
+    if (typeStart >= paramsStr.length) {
+      return (argb: null, nextIdx: paramsStr.length);
+    }
+    final s2 = _nextSemicolon(paramsStr, typeStart);
+    final type = int.tryParse(paramsStr.substring(typeStart, s2)) ?? 0;
+    if (type != 2) {
+      return (argb: null, nextIdx: s2 + 1);
+    }
+
+    var cursor = s2 + 1;
+    final channels = <int>[];
+    for (var i = 0; i < 3; i++) {
+      if (cursor >= paramsStr.length) {
+        return (argb: null, nextIdx: paramsStr.length);
+      }
+      final next = _nextSemicolon(paramsStr, cursor);
+      channels.add(int.tryParse(paramsStr.substring(cursor, next)) ?? 0);
+      cursor = next + 1;
+    }
+    final argb =
+        (0xFF << 24) |
+        ((channels[0] & 0xFF) << 16) |
+        ((channels[1] & 0xFF) << 8) |
+        (channels[2] & 0xFF);
+    return (argb: argb, nextIdx: cursor);
+  }
+
+  static _AnsiStyle _applySingleSgrCode(int code, _AnsiStyle s) =>
+      switch (code) {
+        0 => _defaultAnsiStyle,
+        1 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.bold),
+        2 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.dim),
+        3 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.italic),
+        4 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.underline),
+        5 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.blink),
+        7 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.reverse),
+        8 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.hidden),
+        9 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.crossedOut),
+        22 => (
+          fg: s.fg,
+          bg: s.bg,
+          mods: s.mods & ~(Modifier.bold | Modifier.dim),
+        ),
+        23 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.italic),
+        24 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.underline),
+        25 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.blink),
+        27 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.reverse),
+        28 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.hidden),
+        29 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.crossedOut),
+        39 => (fg: 0, bg: s.bg, mods: s.mods),
+        49 => (fg: s.fg, bg: 0, mods: s.mods),
+        _ => s,
+      };
+
+  static ({String char, int nextIdx})? _readNextGrapheme(
+    String ansiText,
+    int idx,
+    int codeUnit,
+  ) {
+    if (codeUnit < 128) {
+      return (char: String.fromCharCode(codeUnit), nextIdx: idx + 1);
+    }
+    final range = CharacterRange.at(ansiText, idx);
+    if (!range.moveNext()) return null;
+    final grapheme = range.current;
+    return (char: grapheme, nextIdx: idx + grapheme.length);
+  }
+
+  static int _writeParsedGrapheme(
+    List<_ParsedAnsiCell> row,
+    int col,
+    String char,
+    _AnsiStyle style,
+  ) {
+    final w = graphemeWidth(char);
+    if (w == 0) return col;
+    _clearSplitParsedWideAt(row, col);
+    _putParsedCell(row, col, (
+      char: char,
+      fg: style.fg,
+      bg: style.bg,
+      mods: style.mods,
+    ));
+    if (w == 2) {
+      _clearSplitParsedWideAt(row, col + 1);
+      _putParsedCell(row, col + 1, (
+        char: '',
+        fg: style.fg,
+        bg: style.bg,
+        mods: style.mods,
+      ));
+    }
+    return col + w;
+  }
+
+  static void _clearSplitParsedWideAt(List<_ParsedAnsiCell> row, int col) {
+    if (col >= row.length) return;
+    if (row[col].char == '' && col > 0 && isWideGrapheme(row[col - 1].char)) {
+      row[col - 1] = _blankParsedCell;
+    } else if (isWideGrapheme(row[col].char) &&
+        col + 1 < row.length &&
+        row[col + 1].char == '') {
+      row[col + 1] = _blankParsedCell;
+    }
+  }
+
+  static void _putParsedCell(
+    List<_ParsedAnsiCell> row,
+    int col,
+    _ParsedAnsiCell cell,
+  ) {
+    while (row.length < col) {
+      row.add(_blankParsedCell);
+    }
+    if (col < row.length) {
+      row[col] = cell;
+    } else {
+      row.add(cell);
+    }
+  }
+
+  static Buffer _materializeParsedRows(
+    List<List<_ParsedAnsiCell>> rows, {
+    int? width,
+    int? height,
+  }) {
+    var maxCols = 0;
+    for (final row in rows) {
       if (row.length > maxCols) maxCols = row.length;
     }
 
-    final buffer = Buffer.blank(maxCols, cells.length);
-    final charsArray = buffer.characters;
-    final attrsArray = buffer.attributes;
+    final targetWidth = width != null ? max(0, width) : maxCols;
+    final targetHeight = height != null ? max(0, height) : rows.length;
+    final buffer = Buffer.blank(targetWidth, targetHeight);
+    final rowLimit = min(rows.length, targetHeight);
 
-    for (int y = 0; y < cells.length; y++) {
-      final row = cells[y];
-      final rowOffset = y * maxCols;
-      for (int x = 0; x < row.length; x++) {
-        final cell = row[x];
-        final idx = rowOffset + x;
-        charsArray[idx] = cell.char;
-        final attrIdx = idx * 3;
-        attrsArray[attrIdx + 0] = cell.fg;
-        attrsArray[attrIdx + 1] = cell.bg;
-      }
+    for (var y = 0; y < rowLimit; y++) {
+      _copyParsedRow(buffer, y, rows[y], targetWidth);
     }
-
     return buffer;
   }
 
+  static void _copyParsedRow(
+    Buffer buffer,
+    int y,
+    List<_ParsedAnsiCell> row,
+    int targetWidth,
+  ) {
+    final charsArray = buffer.characters;
+    final attrsArray = buffer.attributes;
+    final rowOffset = y * targetWidth;
+    final colLimit = min(row.length, targetWidth);
+
+    for (var x = 0; x < colLimit; x++) {
+      final cell = row[x];
+      final idx = rowOffset + x;
+      final clippedWide =
+          x + 1 >= targetWidth && cell.char != '' && isWideGrapheme(cell.char);
+      charsArray[idx] = clippedWide ? ' ' : cell.char;
+      final attrIdx = idx * 3;
+      attrsArray[attrIdx] = cell.fg;
+      attrsArray[attrIdx + 1] = cell.bg;
+      attrsArray[attrIdx + 2] = cell.mods;
+    }
+  }
+
   /// Serializes this [Buffer] grid into an ANSI escape sequence string.
-  String toAnsiString() {
+  ///
+  /// When [trimTrailingSpaces] is `true` (default), unstyled trailing blank and
+  /// wide-padding cells (`bg == 0 && mods == 0`) are trimmed on each row.
+  /// When [resetLineEndings] is `true`, `\x1b[0m` is emitted before `\n` on any
+  /// row where an SGR style is active.
+  String toAnsiString({
+    bool trimTrailingSpaces = true,
+    bool resetLineEndings = false,
+  }) {
     final sb = StringBuffer();
-    final chars = characters;
-    final attrs = attributes;
-    final w = width;
-    final h = height;
+    var activeStyle = _defaultAnsiStyle;
 
-    int lastFg = -1;
-    int lastBg = -1;
-
-    for (int y = 0; y < h; y++) {
-      final rowOffset = y * w;
-      for (int x = 0; x < w; x++) {
-        final idx = rowOffset + x;
-        final char = chars[idx];
-        final attrIdx = idx * 3;
-        final fg = attrs[attrIdx];
-        final bg = attrs[attrIdx + 1];
-
-        if (fg != lastFg) {
-          final fgR = (fg >> 16) & 0xFF;
-          final fgG = (fg >> 8) & 0xFF;
-          final fgB = fg & 0xFF;
-          sb.write('\x1B[38;2;');
-          sb.write(fgR);
-          sb.write(';');
-          sb.write(fgG);
-          sb.write(';');
-          sb.write(fgB);
-          sb.write('m');
-          lastFg = fg;
-        }
-        if (bg != lastBg) {
-          final bgR = (bg >> 16) & 0xFF;
-          final bgG = (bg >> 8) & 0xFF;
-          final bgB = bg & 0xFF;
-          sb.write('\x1B[48;2;');
-          sb.write(bgR);
-          sb.write(';');
-          sb.write(bgG);
-          sb.write(';');
-          sb.write(bgB);
-          sb.write('m');
-          lastBg = bg;
-        }
-        sb.write(char);
+    for (var y = 0; y < height; y++) {
+      final lastCol = trimTrailingSpaces ? _lastContentCol(y) : width - 1;
+      activeStyle = _writeAnsiRowCells(sb, y, lastCol, activeStyle);
+      if (resetLineEndings && activeStyle != _defaultAnsiStyle) {
+        sb.write('\x1b[0m');
+        activeStyle = _defaultAnsiStyle;
       }
-      sb.write('\x1B[0m\n');
-      lastFg = -1;
-      lastBg = -1;
+      sb.write('\n');
+    }
+
+    if (activeStyle != _defaultAnsiStyle) {
+      sb.write('\x1b[0m');
     }
     return sb.toString();
   }
+
+  int _lastContentCol(int y) {
+    final rowOffset = y * width;
+    for (var x = width - 1; x >= 0; x--) {
+      final idx = rowOffset + x;
+      final char = characters[idx];
+      final attrIdx = idx * 3;
+      final isBlankUnstyled =
+          (char == ' ' || char == '') &&
+          attributes[attrIdx + 1] == 0 &&
+          attributes[attrIdx + 2] == 0;
+      if (!isBlankUnstyled) return x;
+    }
+    return -1;
+  }
+
+  _AnsiStyle _writeAnsiRowCells(
+    StringBuffer sb,
+    int y,
+    int lastCol,
+    _AnsiStyle initialStyle,
+  ) {
+    var activeStyle = initialStyle;
+    final rowOffset = y * width;
+
+    for (var x = 0; x <= lastCol; x++) {
+      final idx = rowOffset + x;
+      final char = characters[idx];
+      // Wide character padding cells are represented by empty strings. Skip them.
+      if (char == '') continue;
+
+      final attrIdx = idx * 3;
+      final cellStyle = (
+        fg: attributes[attrIdx],
+        bg: attributes[attrIdx + 1],
+        mods: attributes[attrIdx + 2],
+      );
+      activeStyle = _writeAnsiStyleTransition(sb, activeStyle, cellStyle);
+      sb.write(char);
+    }
+    return activeStyle;
+  }
+
+  static _AnsiStyle _writeAnsiStyleTransition(
+    StringBuffer sb,
+    _AnsiStyle current,
+    _AnsiStyle target,
+  ) {
+    if (current == target) return current;
+    if (target == _defaultAnsiStyle) {
+      sb.write('\x1b[0m');
+      return _defaultAnsiStyle;
+    }
+
+    final effective = _needsFullSgrReset(current, target)
+        ? _emitFullSgrReset(sb)
+        : current;
+
+    final codes = <String>[
+      if (target.fg != effective.fg && target.fg != 0)
+        _rgbSgrSegment(38, target.fg),
+      if (target.bg != effective.bg && target.bg != 0)
+        _rgbSgrSegment(48, target.bg),
+      for (final (bit, code) in _ansiModifierSetCodes)
+        if ((target.mods & bit) != 0 && (effective.mods & bit) == 0) '$code',
+    ];
+
+    if (codes.isNotEmpty) {
+      sb
+        ..write('\x1b[')
+        ..write(codes.join(';'))
+        ..write('m');
+    }
+    return target;
+  }
+
+  static bool _needsFullSgrReset(_AnsiStyle current, _AnsiStyle target) {
+    final colorCleared =
+        (current.fg != 0 && target.fg == 0) ||
+        (current.bg != 0 && target.bg == 0);
+    final modCleared = ((current.mods & 0xFF) & ~(target.mods & 0xFF)) != 0;
+    return colorCleared || modCleared;
+  }
+
+  static _AnsiStyle _emitFullSgrReset(StringBuffer sb) {
+    sb.write('\x1b[0m');
+    return _defaultAnsiStyle;
+  }
+
+  static String _rgbSgrSegment(int prefix, int argb) =>
+      '$prefix;2;${(argb >> 16) & 0xFF};${(argb >> 8) & 0xFF};${argb & 0xFF}';
 }
