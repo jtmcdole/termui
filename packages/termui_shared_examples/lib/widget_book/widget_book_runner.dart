@@ -763,7 +763,9 @@ final class _SidebarWidgetState extends State<SidebarWidget> {
     return Focus(
       focusNode: widget.focusNode,
       onFocusChange: (hasFocus) {
-        setState(() {});
+        if (mounted) {
+          setState(() {});
+        }
       },
       onKeyEvent: (event) {
         switch (event.type) {

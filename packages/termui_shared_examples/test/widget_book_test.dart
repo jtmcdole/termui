@@ -69,7 +69,7 @@ void main() {
         async.elapse(const Duration(milliseconds: 50));
 
         // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
-        expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
+        expect(backend.writes, contains(contains('\x1b]22;\x1b\\')));
 
         terminal.dispose();
         async.flushMicrotasks();
@@ -116,7 +116,7 @@ void main() {
         async.elapse(const Duration(milliseconds: 50));
 
         // Changing page should trigger terminal.resetMousePointer() which writes '\x1b]22;\x1b\\'
-        expect(backend.writes.any((s) => s.contains('\x1b]22;\x1b\\')), isTrue);
+        expect(backend.writes, contains(contains('\x1b]22;\x1b\\')));
 
         terminal.dispose();
         async.flushMicrotasks();
