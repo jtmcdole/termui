@@ -258,6 +258,56 @@ void main() {
           expect(err.toString(), contains('Error: Invalid'));
         },
       );
+
+      test(
+        'CLI exits with code 64 and usage error on non-integer --width',
+        () async {
+          final out = StringBuffer();
+          final err = StringBuffer();
+          final exitCode = await runTinpotCli(
+            [assetPath, '--width', 'not-a-number'],
+            out: out,
+            err: err,
+          );
+          expect(exitCode, equals(64));
+          expect(err.toString(), contains('Invalid --width'));
+          expect(err.toString(), contains('Usage: tinpot'));
+        },
+      );
+
+      test(
+        'CLI exits with code 64 and usage error on zero or negative --width',
+        () async {
+          for (final badWidth in ['0', '-12']) {
+            final out = StringBuffer();
+            final err = StringBuffer();
+            final exitCode = await runTinpotCli(
+              [assetPath, '--width', badWidth],
+              out: out,
+              err: err,
+            );
+            expect(exitCode, equals(64));
+            expect(err.toString(), contains('Invalid --width'));
+          }
+        },
+      );
+
+      test(
+        'CLI exits with code 64 and usage error on invalid --height',
+        () async {
+          for (final badHeight in ['abc', '0', '-5']) {
+            final out = StringBuffer();
+            final err = StringBuffer();
+            final exitCode = await runTinpotCli(
+              [assetPath, '--height', badHeight],
+              out: out,
+              err: err,
+            );
+            expect(exitCode, equals(64));
+            expect(err.toString(), contains('Invalid --height'));
+          }
+        },
+      );
     });
   });
 }
