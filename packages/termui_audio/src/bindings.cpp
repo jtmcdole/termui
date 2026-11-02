@@ -15,6 +15,7 @@
 #endif
 
 #include <atomic>
+#include <cstdint>
 #include <map>
 #include <memory.h>
 #include <memory>
@@ -30,6 +31,13 @@ std::mutex init_deinit_mutex;
 /// mutex to lock the loading audio methods and make safe operations on
 /// player.sounds list.
 std::mutex loadMutex;
+
+static uint32_t g_engine_epoch = 1;
+
+FFI_PLUGIN_EXPORT unsigned int getEngineEpoch() {
+  std::lock_guard<std::mutex> guard(init_deinit_mutex);
+  return g_engine_epoch;
+}
 
 std::unique_ptr<Player> player = std::make_unique<Player>();
 std::unique_ptr<Analyzer> analyzer = std::make_unique<Analyzer>(256);
@@ -314,17 +322,19 @@ FFI_PLUGIN_EXPORT void freeListPlaybackDevices(char **devicesName,
 /// app
 ///
 FFI_PLUGIN_EXPORT void dispose() {
-  if (player.get() == nullptr)
-    return;
-  player.get()->disposeAllSound();
   std::lock_guard<std::mutex> guard(init_deinit_mutex);
   std::lock_guard<std::mutex> guard_load(loadMutex);
+  if (++g_engine_epoch == 0) {
+    g_engine_epoch = 1;
+  }
   dartVoiceEndedCallback = nullptr;
   dartFileLoadedCallback = nullptr;
   dartStateChangedCallback = nullptr;
-  player.get()->dispose();
+  if (player.get() != nullptr) {
+    player.get()->disposeAllSound();
+    player.get()->dispose();
+  }
   player.reset();
-  player = nullptr;
   player = std::make_unique<Player>();
   analyzer.reset();
   analyzer = std::make_unique<Analyzer>(256);
@@ -2019,7 +2029,16 @@ FFI_PLUGIN_EXPORT unsigned int busGetActiveVoiceCount(unsigned int busId) {
 }
 
 FFI_PLUGIN_EXPORT void SoLoud_destroySound(void* handle) {
-  unsigned int soundHash = (unsigned int)(uintptr_t)handle;
+  std::lock_guard<std::mutex> guard(init_deinit_mutex);
+  std::lock_guard<std::mutex> guard_load(loadMutex);
+  const uintptr_t raw = reinterpret_cast<uintptr_t>(handle);
+#if INTPTR_MAX == INT64_MAX
+  const uint32_t tokenEpoch = static_cast<uint32_t>(raw >> 32);
+  if (tokenEpoch != 0 && tokenEpoch != g_engine_epoch) {
+    return;
+  }
+#endif
+  const unsigned int soundHash = static_cast<unsigned int>(raw & 0xFFFFFFFFu);
   if (player.get() != nullptr && player.get()->isInited()) {
     player.get()->disposeSound(soundHash);
   }

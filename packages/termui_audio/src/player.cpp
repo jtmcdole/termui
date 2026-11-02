@@ -1357,6 +1357,18 @@ float Player::getVolume(SoLoud::handle handle)
 
 void Player::setVolume(SoLoud::handle handle, float volume)
 {
+    for (auto &entry : busMap)
+    {
+        if (entry.second.handle == handle &&
+            entry.second.bus.getActiveVoiceCount() == 0 &&
+            !soloud.getPause(handle))
+        {
+            soloud.setPause(handle, true);
+            soloud.setVolume(handle, volume);
+            soloud.setPause(handle, false);
+            return;
+        }
+    }
     return soloud.setVolume(handle, volume);
 }
 
@@ -1813,11 +1825,15 @@ unsigned int Player::busPlayOnEngine(unsigned int busId, float volume,
     auto it = busMap.find(busId);
     if (it == busMap.end())
         return 0;
-    SoLoud::handle handle = soloud.play(it->second.bus, volume, 0.0f, paused);
+    SoLoud::handle handle = soloud.play(it->second.bus, volume, 0.0f, true);
     it->second.handle = handle;
     // Playing a sound inside a bus decreases the volume compared to playing it directly.
     // https://github.com/jarikomppa/soloud/issues/395#issuecomment-4148675275
     soloud.setPanAbsolute(handle, 1.0f, 1.0f);
+    soloud.setVolume(handle, volume);
+    if (!paused) {
+        soloud.setPause(handle, false);
+    }
     return handle;
 }
 

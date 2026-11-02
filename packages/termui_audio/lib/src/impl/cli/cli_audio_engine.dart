@@ -1,16 +1,16 @@
 import 'dart:async';
 import 'dart:ffi';
-import 'dart:math' as math;
 import 'dart:typed_data';
+
+import 'package:ffi/ffi.dart';
 import 'package:file/file.dart';
 import 'package:file/local.dart';
-import 'package:ffi/ffi.dart';
+
 import '../../api/audio_engine.dart';
 import '../../api/audio_types.dart';
 import '../../soloud_cli.dart' as ffi;
 import '../../soloud_cli.dart' show SoLoud_destroySound;
-
-int _fileLoadCounter = 0;
+import '../../utils/audio_dsp_utils.dart';
 
 /// An audio buffer loaded into the CLI backend.
 final class CliAudioBuffer implements AudioBuffer, Finalizable {
@@ -18,8 +18,11 @@ final class CliAudioBuffer implements AudioBuffer, Finalizable {
   @override
   final int hash;
 
+  /// The engine epoch in which this buffer was created (`0` if unspecified).
+  final int epoch;
+
   /// Creates a new CLI audio buffer.
-  const CliAudioBuffer(this.hash);
+  const CliAudioBuffer(this.hash, [this.epoch = 0]);
 }
 
 /// A mixing bus for grouping audio voices in the CLI backend.
@@ -28,15 +31,14 @@ final class CliAudioBus implements AudioBus {
   @override
   final int id;
 
+  final void Function(double)? _onSetVolume;
+
   /// Creates a new CLI audio bus.
-  const CliAudioBus(this.id);
+  const CliAudioBus(this.id, [this._onSetVolume]);
 
   /// Sets the volume for this bus.
   @override
-  void setVolume(double volume) {
-    if (!CliAudioEngine._activeBuses.contains(id)) return;
-    ffi.setVolume(id, volume);
-  }
+  void setVolume(double volume) => _onSetVolume?.call(volume);
 }
 
 /// The CLI implementation of [TermuiAudioEngine].
@@ -46,41 +48,17 @@ final class CliAudioEngine implements TermuiAudioEngine {
 
   /// Creates a new CLI audio engine.
   CliAudioEngine({this.fileSystem = const LocalFileSystem()});
+
   bool _inited = false;
+  int _epoch = 0;
+  int _fileLoadCounter = 0;
 
   // TODO: Track potential memory leaks here if voiceEnded callbacks are missed (e.g. loops).
-  static final Map<int, Completer<void>> _activeVoices = {};
-  static final Set<int> _activeBuses = {};
+  final Map<int, Completer<void>> _activeVoices = {};
+  final Map<int, int> _activeBuses = {};
+  final Set<Timer> _activeTimers = {};
 
-  static void _voiceEndedCallback(Pointer<Uint32> handlePtr) {
-    if (handlePtr == nullptr) return;
-    final handle = handlePtr.value;
-    malloc.free(handlePtr);
-    final completer = _activeVoices.remove(handle);
-    if (completer != null && !completer.isCompleted) {
-      completer.complete();
-    }
-  }
-
-  static void _fileLoadedCallback(
-    Pointer<Int32> error,
-    Pointer<Utf8> completeFileName,
-    Pointer<Uint32> hash,
-    Pointer<Uint64> timeSpent,
-  ) {
-    if (error != nullptr) malloc.free(error);
-    if (completeFileName != nullptr) malloc.free(completeFileName);
-    if (hash != nullptr) malloc.free(hash);
-    if (timeSpent != nullptr) malloc.free(timeSpent);
-  }
-
-  static void _stateChangedCallback(Pointer<Int32> state) {
-    if (state != nullptr) malloc.free(state);
-  }
-
-  late final NativeCallable<ffi.DartVoiceEndedFunction> _voiceEndedCallable;
-  late final NativeCallable<ffi.DartFileLoadedFunction> _fileLoadedCallable;
-  late final NativeCallable<ffi.DartStateChangedFunction> _stateChangedCallable;
+  NativeCallable<ffi.DartVoiceEndedFunction>? _voiceEndedCallable;
 
   // Auto-Reclaiming Memory (NativeFinalizer)
   late final NativeFinalizer _soundFinalizer = NativeFinalizer(
@@ -88,6 +66,39 @@ final class CliAudioEngine implements TermuiAudioEngine {
       SoLoud_destroySound,
     ),
   );
+
+  Pointer<Void> _finalizerToken(int hash) {
+    final address = sizeOf<IntPtr>() >= 8
+        ? ((_epoch & 0xFFFFFFFF) << 32) | (hash & 0xFFFFFFFF)
+        : (hash & 0xFFFFFFFF);
+    return Pointer.fromAddress(address);
+  }
+
+  CliAudioBuffer _registerBuffer(int hash) {
+    final buffer = CliAudioBuffer(hash, _epoch);
+    _soundFinalizer.attach(buffer, _finalizerToken(hash), detach: buffer);
+    return buffer;
+  }
+
+  Timer _scheduleTimer(Duration duration, void Function() callback) {
+    late final Timer timer;
+    timer = Timer(duration, () {
+      _activeTimers.remove(timer);
+      callback();
+    });
+    _activeTimers.add(timer);
+    return timer;
+  }
+
+  void _onVoiceEnded(Pointer<Uint32> handlePtr) {
+    if (handlePtr == nullptr) return;
+    final handle = handlePtr.value;
+    ffi.nativeFree(handlePtr.cast());
+    final completer = _activeVoices.remove(handle);
+    if (completer != null && !completer.isCompleted) {
+      completer.complete();
+    }
+  }
 
   @override
   Future<void> init({bool enableVisualization = true}) async {
@@ -100,24 +111,15 @@ final class CliAudioEngine implements TermuiAudioEngine {
       );
     }
 
+    _epoch = ffi.getEngineEpoch();
     ffi.setVisualizationEnabled(enableVisualization);
 
-    _voiceEndedCallable = NativeCallable<ffi.DartVoiceEndedFunction>.listener(
-      _voiceEndedCallback,
+    final callable = NativeCallable<ffi.DartVoiceEndedFunction>.listener(
+      _onVoiceEnded,
     );
-    _fileLoadedCallable = NativeCallable<ffi.DartFileLoadedFunction>.listener(
-      _fileLoadedCallback,
-    );
-    _stateChangedCallable =
-        NativeCallable<ffi.DartStateChangedFunction>.listener(
-          _stateChangedCallback,
-        );
+    _voiceEndedCallable = callable;
 
-    ffi.setDartEventCallback(
-      _voiceEndedCallable.nativeFunction.cast(),
-      _fileLoadedCallable.nativeFunction.cast(),
-      _stateChangedCallable.nativeFunction.cast(),
-    );
+    ffi.setDartEventCallback(callable.nativeFunction.cast(), nullptr, nullptr);
 
     _inited = true;
   }
@@ -126,6 +128,11 @@ final class CliAudioEngine implements TermuiAudioEngine {
   Future<void> dispose() async {
     if (!_inited) return;
 
+    for (final timer in _activeTimers) {
+      timer.cancel();
+    }
+    _activeTimers.clear();
+
     ffi.disposeEngine();
     for (final c in _activeVoices.values) {
       if (!c.isCompleted) c.complete();
@@ -133,10 +140,9 @@ final class CliAudioEngine implements TermuiAudioEngine {
     _activeVoices.clear();
     _activeBuses.clear();
 
-    _voiceEndedCallable.close();
-    _fileLoadedCallable.close();
-    _stateChangedCallable.close();
-
+    _voiceEndedCallable?.close();
+    _voiceEndedCallable = null;
+    _epoch = 0;
     _inited = false;
   }
 
@@ -158,39 +164,12 @@ final class CliAudioEngine implements TermuiAudioEngine {
   Stream<Duration> getVoicePositionStream(
     AudioVoice voice, {
     Duration interval = const Duration(milliseconds: 50),
-  }) {
-    if (!_activeVoices.containsKey(voice.id)) {
-      return const Stream.empty();
-    }
-    late final StreamController<Duration> controller;
-    Timer? ticker;
-
-    controller = StreamController<Duration>.broadcast(
-      onListen: () {
-        ticker = Timer.periodic(interval, (_) {
-          if (!_activeVoices.containsKey(voice.id)) {
-            controller.close();
-            ticker?.cancel();
-            return;
-          }
-          controller.add(getVoicePosition(voice));
-        });
-      },
-      onCancel: () {
-        ticker?.cancel();
-      },
-    );
-
-    voice.completed.then((_) {
-      if (!controller.isClosed) {
-        controller.add(getVoicePosition(voice));
-        controller.close();
-        ticker?.cancel();
-      }
-    });
-
-    return controller.stream;
-  }
+  }) => createVoicePositionStream(
+    voice: voice,
+    isVoiceActive: (id) => _inited && _activeVoices.containsKey(id),
+    getPosition: getVoicePosition,
+    interval: interval,
+  );
 
   @override
   void seek(AudioVoice voice, Duration position) {
@@ -235,71 +214,76 @@ final class CliAudioEngine implements TermuiAudioEngine {
     }
 
     if (stream) {
-      onProgress?.call(0.1);
-      final namePtr = path.toNativeUtf8(allocator: calloc);
-      final hashPtr = calloc<Uint32>();
-      try {
-        final res = ffi.loadFileSync(namePtr, 0, hashPtr);
-        if (res != 0) {
-          throw Exception('Failed to stream sound from disk. Error code: $res');
-        }
-        final hash = hashPtr.value;
-        onProgress?.call(1.0);
-
-        final buffer = CliAudioBuffer(hash);
-        _soundFinalizer.attach(
-          buffer,
-          Pointer.fromAddress(hash),
-          detach: buffer,
-        );
-        return buffer;
-      } finally {
-        calloc.free(namePtr);
-        calloc.free(hashPtr);
-      }
+      return _loadStreamFromDisk(path, onProgress);
     }
 
     final bytes = await file.readAsBytes();
-    final length = bytes.length;
-    if (length == 0) {
+    if (bytes.isEmpty) {
       throw FileSystemException('Sound file is empty', path);
     }
 
-    final bufferPtr = calloc<Uint8>(length);
+    final extIndex = path.lastIndexOf('.');
+    final uniqueId = _fileLoadCounter++;
+    final uniquePath = extIndex == -1
+        ? '${path}_$uniqueId'
+        : '${path.substring(0, extIndex)}_$uniqueId${path.substring(extIndex)}';
 
+    final buffer = _loadBytesIntoEngine(
+      uniquePath,
+      bytes,
+      errorPrefix: 'Failed to load sound into memory',
+    );
+    onProgress?.call(1.0);
+    return buffer;
+  }
+
+  CliAudioBuffer _loadStreamFromDisk(
+    String path,
+    LoadProgressCallback? onProgress,
+  ) {
+    onProgress?.call(0.1);
+    final namePtr = path.toNativeUtf8(allocator: calloc);
+    final hashPtr = calloc<Uint32>();
+    try {
+      final res = ffi.loadFileSync(namePtr, 0, hashPtr);
+      if (res != 0) {
+        throw Exception('Failed to stream sound from disk. Error code: $res');
+      }
+      final hash = hashPtr.value;
+      onProgress?.call(1.0);
+      return _registerBuffer(hash);
+    } finally {
+      calloc.free(namePtr);
+      calloc.free(hashPtr);
+    }
+  }
+
+  CliAudioBuffer _loadBytesIntoEngine(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+    String errorPrefix = 'Failed to load memory into SoLoud',
+  }) {
+    final length = bytes.length;
+    final bufferPtr = calloc<Uint8>(length);
+    final namePtr = pathId.toNativeUtf8(allocator: calloc).cast<Char>();
+    final hashPtr = calloc<Uint32>();
     try {
       bufferPtr.asTypedList(length).setRange(0, length, bytes);
-      onProgress?.call(1.0);
-
-      final extIndex = path.lastIndexOf('.');
-      final uniqueId = _fileLoadCounter++;
-      final uniquePath = extIndex == -1
-          ? '${path}_$uniqueId'
-          : '${path.substring(0, extIndex)}_$uniqueId${path.substring(extIndex)}';
-
-      final namePtr = uniquePath.toNativeUtf8(allocator: calloc).cast<Char>();
-      final hashPtr = calloc<Uint32>();
-
-      try {
-        final res = ffi.loadMem(namePtr, bufferPtr, length, 1, hashPtr);
-        if (res != 0) {
-          throw Exception('Failed to load sound into memory. Error code: $res');
-        }
-        final hash = hashPtr.value;
-        onProgress?.call(1.0);
-
-        final buffer = CliAudioBuffer(hash);
-        _soundFinalizer.attach(
-          buffer,
-          Pointer.fromAddress(hash),
-          detach: buffer,
-        );
-        return buffer;
-      } finally {
-        calloc.free(namePtr);
-        calloc.free(hashPtr);
+      final res = ffi.loadMem(
+        namePtr,
+        bufferPtr,
+        length,
+        stream ? 0 : 1,
+        hashPtr,
+      );
+      if (res != 0) {
+        throw Exception('$errorPrefix. Error code: $res');
       }
+      return _registerBuffer(hashPtr.value);
     } finally {
+      calloc.free(namePtr);
+      calloc.free(hashPtr);
       calloc.free(bufferPtr);
     }
   }
@@ -308,6 +292,8 @@ final class CliAudioEngine implements TermuiAudioEngine {
   Future<void> disposeBuffer(AudioBuffer buffer) async {
     if (buffer case CliAudioBuffer b) {
       _soundFinalizer.detach(b);
+      if (!_inited) return;
+      if (b.epoch != 0 && b.epoch != _epoch) return;
       ffi.disposeSound(b.hash);
     }
   }
@@ -331,72 +317,42 @@ final class CliAudioEngine implements TermuiAudioEngine {
     if (!_inited) throw Exception('Engine not initialized.');
 
     if (!usePcmFallback) {
-      final solShape = switch (shape) {
-        WaveForm.square => 0,
-        WaveForm.saw => 1,
-        WaveForm.sin => 2,
-        WaveForm.triangle => 3,
-        WaveForm.bounce => 4,
-        WaveForm.jaws => 5,
-        _ => 2,
-      };
-
-      final hashPtr = calloc<Uint32>();
-      try {
-        final res = ffi.loadWaveform(solShape, 1, 1.0, 0.0, hashPtr);
-        if (res != 0) {
-          throw Exception('Failed to load native waveform. Error code: $res');
-        }
-        final hash = hashPtr.value;
-        ffi.setWaveformFreq(hash, frequency);
-        final buffer = CliAudioBuffer(hash);
-        _soundFinalizer.attach(
-          buffer,
-          Pointer.fromAddress(hash),
-          detach: buffer,
-        );
-        return buffer;
-      } finally {
-        calloc.free(hashPtr);
-      }
+      return _loadNativeWaveform(shape, frequency);
     }
 
-    final wavBytes = _generateWavBytes(shape, frequency);
-    final length = wavBytes.length;
-    final bufferPtr = calloc<Uint8>(length);
+    final wavBytes = generateWaveformPcmWav(shape: shape, frequency: frequency);
+    final uniqueId = _fileLoadCounter++;
+    final uniquePath =
+        'waveform_${shape.name}_${frequency.toInt()}_$uniqueId.wav';
+    return _loadBytesIntoEngine(
+      uniquePath,
+      wavBytes,
+      errorPrefix: 'Failed to load synthetic waveform into memory',
+    );
+  }
 
+  CliAudioBuffer _loadNativeWaveform(WaveForm shape, double frequency) {
+    final solShape = switch (shape) {
+      WaveForm.square => 0,
+      WaveForm.saw => 1,
+      WaveForm.sin => 2,
+      WaveForm.triangle => 3,
+      WaveForm.bounce => 4,
+      WaveForm.jaws => 5,
+      _ => 2,
+    };
+
+    final hashPtr = calloc<Uint32>();
     try {
-      bufferPtr.asTypedList(length).setRange(0, length, wavBytes);
-
-      final uniqueId = _fileLoadCounter++;
-      final uniquePath =
-          'waveform_${shape.name}_${frequency.toInt()}_$uniqueId.wav';
-
-      final namePtr = uniquePath.toNativeUtf8(allocator: calloc).cast<Char>();
-      final hashPtr = calloc<Uint32>();
-
-      try {
-        final res = ffi.loadMem(namePtr, bufferPtr, length, 1, hashPtr);
-        if (res != 0) {
-          throw Exception(
-            'Failed to load synthetic waveform into memory. Error code: $res',
-          );
-        }
-        final hash = hashPtr.value;
-
-        final buffer = CliAudioBuffer(hash);
-        _soundFinalizer.attach(
-          buffer,
-          Pointer.fromAddress(hash),
-          detach: buffer,
-        );
-        return buffer;
-      } finally {
-        calloc.free(namePtr);
-        calloc.free(hashPtr);
+      final res = ffi.loadWaveform(solShape, 1, 1.0, 0.0, hashPtr);
+      if (res != 0) {
+        throw Exception('Failed to load native waveform. Error code: $res');
       }
+      final hash = hashPtr.value;
+      ffi.setWaveformFreq(hash, frequency);
+      return _registerBuffer(hash);
     } finally {
-      calloc.free(bufferPtr);
+      calloc.free(hashPtr);
     }
   }
 
@@ -407,43 +363,7 @@ final class CliAudioEngine implements TermuiAudioEngine {
     bool stream = false,
   }) async {
     if (!_inited) throw Exception('Engine not initialized.');
-    final length = bytes.length;
-    final bufferPtr = calloc<Uint8>(length);
-
-    try {
-      bufferPtr.asTypedList(length).setRange(0, length, bytes);
-      final namePtr = pathId.toNativeUtf8(allocator: calloc).cast<Char>();
-      final hashPtr = calloc<Uint32>();
-
-      try {
-        final res = ffi.loadMem(
-          namePtr,
-          bufferPtr,
-          length,
-          stream ? 0 : 1,
-          hashPtr,
-        );
-        if (res != 0) {
-          throw Exception(
-            'Failed to load memory into SoLoud. Error code: $res',
-          );
-        }
-        final hash = hashPtr.value;
-
-        final buffer = CliAudioBuffer(hash);
-        _soundFinalizer.attach(
-          buffer,
-          Pointer.fromAddress(hash),
-          detach: buffer,
-        );
-        return buffer;
-      } finally {
-        calloc.free(namePtr);
-        calloc.free(hashPtr);
-      }
-    } finally {
-      calloc.free(bufferPtr);
-    }
+    return _loadBytesIntoEngine(pathId, bytes, stream: stream);
   }
 
   @override
@@ -472,10 +392,7 @@ final class CliAudioEngine implements TermuiAudioEngine {
       if (res != 0) {
         throw Exception('Failed to create buffer stream. Error code: $res');
       }
-      final hash = hashPtr.value;
-      final buffer = CliAudioBuffer(hash);
-      _soundFinalizer.attach(buffer, Pointer.fromAddress(hash), detach: buffer);
-      return buffer;
+      return _registerBuffer(hashPtr.value);
     } finally {
       calloc.free(hashPtr);
     }
@@ -503,66 +420,6 @@ final class CliAudioEngine implements TermuiAudioEngine {
   void setStreamEnded(AudioBuffer buffer) {
     if (!_inited) throw Exception('Engine not initialized.');
     ffi.setDataIsEnded(buffer.hash);
-  }
-
-  Uint8List _generateWavBytes(WaveForm shape, double frequency) {
-    const sampleRate = 44100;
-    const duration = 0.25;
-    final numSamples = (sampleRate * duration).round();
-    final pcmByteLength = numSamples * 2;
-    final totalLength = 44 + pcmByteLength;
-    final bytes = Uint8List(totalLength);
-    final bd = ByteData.sublistView(bytes);
-
-    bytes.setRange(0, 4, 'RIFF'.codeUnits);
-    bd.setUint32(4, totalLength - 8, Endian.little);
-    bytes.setRange(8, 12, 'WAVE'.codeUnits);
-    bytes.setRange(12, 16, 'fmt '.codeUnits);
-    bd.setUint32(16, 16, Endian.little);
-    bd.setUint16(20, 1, Endian.little);
-    bd.setUint16(22, 1, Endian.little);
-    bd.setUint32(24, sampleRate, Endian.little);
-    bd.setUint32(28, sampleRate * 2, Endian.little);
-    bd.setUint16(32, 2, Endian.little);
-    bd.setUint16(34, 16, Endian.little);
-    bytes.setRange(36, 40, 'data'.codeUnits);
-    bd.setUint32(40, pcmByteLength, Endian.little);
-
-    final attackSamples = (sampleRate * 0.005)
-        .round(); // 5ms smooth attack fade-in
-    final decaySamples = (sampleRate * 0.010)
-        .round(); // 10ms smooth decay fade-out
-    final attackStep = attackSamples > 0 ? math.pi / attackSamples : 0.0;
-    final decayStep = decaySamples > 0 ? math.pi / decaySamples : 0.0;
-
-    for (int i = 0; i < numSamples; i++) {
-      final t = i / sampleRate;
-      final phase = (t * frequency) % 1.0;
-      final sample = switch (shape) {
-        WaveForm.sin => math.sin(2.0 * math.pi * phase),
-        WaveForm.triangle =>
-          phase < 0.5 ? (4.0 * phase - 1.0) : (3.0 - 4.0 * phase),
-        WaveForm.saw || WaveForm.fsaw => 2.0 * phase - 1.0,
-        WaveForm.bounce ||
-        WaveForm.jaws ||
-        WaveForm.humps => (math.sin(2.0 * math.pi * phase)).abs() * 2.0 - 1.0,
-        WaveForm.square || WaveForm.fsquare => phase < 0.5 ? 0.7 : -0.7,
-      };
-
-      double envelope = 1.0;
-      if (i < attackSamples) {
-        envelope = (1.0 - math.cos(i * attackStep)) / 2.0;
-      } else if (i > numSamples - decaySamples) {
-        final decayI = i - (numSamples - decaySamples);
-        envelope = (1.0 + math.cos(decayI * decayStep)) / 2.0;
-      }
-
-      final intSample = (sample * envelope * 32767.0)
-          .clamp(-32768.0, 32767.0)
-          .toInt();
-      bd.setInt16(44 + i * 2, intSample, Endian.little);
-    }
-    return bytes;
   }
 
   @override
@@ -691,22 +548,30 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }) {
     if (!_inited) throw Exception('Engine not initialized.');
     if (!_activeVoices.containsKey(voice.id)) return;
-    if (preservePitch && speed > 0.0) {
-      if ((speed - 1.0).abs() > 0.001) {
-        // Transpose factor = 1.0 / speed compensates for SoLoud resampler pitch change
-        final shift = (1.0 / speed).clamp(0.125, 8.0);
-        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 0, 1.0);
-        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 1, shift);
-      } else {
-        // At 1.0x speed, bypass pitch shift filter to avoid processing or delay
-        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 0, 0.0);
-        ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 1, 1.0);
-      }
-    } else {
-      // preservePitch is false: turn off wet mix
-      ffi.setFilterParams(voice.id, 0, FilterType.pitchShift.index, 0, 0.0);
-    }
+    _configureVoicePitchShift(voice.id, speed, preservePitch: preservePitch);
     ffi.setRelativePlaySpeed(voice.id, speed);
+  }
+
+  void _configureVoicePitchShift(
+    int voiceId,
+    double speed, {
+    required bool preservePitch,
+  }) {
+    final filterIndex = FilterType.pitchShift.index;
+    if (!preservePitch || speed <= 0.0) {
+      ffi.setFilterParams(voiceId, 0, filterIndex, 0, 0.0);
+      return;
+    }
+    if ((speed - 1.0).abs() <= 0.001) {
+      // At 1.0x speed, bypass pitch shift filter to avoid processing or delay
+      ffi.setFilterParams(voiceId, 0, filterIndex, 0, 0.0);
+      ffi.setFilterParams(voiceId, 0, filterIndex, 1, 1.0);
+      return;
+    }
+    // Transpose factor = 1.0 / speed compensates for SoLoud resampler pitch change
+    final shift = (1.0 / speed).clamp(0.125, 8.0);
+    ffi.setFilterParams(voiceId, 0, filterIndex, 0, 1.0);
+    ffi.setFilterParams(voiceId, 0, filterIndex, 1, shift);
   }
 
   @override
@@ -739,14 +604,12 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  int createFilter(FilterType type) {
-    return type.index;
-  }
+  int createFilter(FilterType type) => type.index;
 
   @override
   void attachFilterToBus(AudioBus bus, int filterId) {
     if (!_inited) throw Exception('Engine not initialized.');
-    if (!_activeBuses.contains(bus.id)) {
+    if (!_activeBuses.containsKey(bus.id)) {
       throw Exception('Failed to attach filter to bus. Error code: 31');
     }
     final res = ffi.addFilter(0, bus.id, filterId);
@@ -763,14 +626,14 @@ final class CliAudioEngine implements TermuiAudioEngine {
     double value,
   ) {
     if (!_inited) throw Exception('Engine not initialized.');
-    if (!_activeBuses.contains(bus.id)) return;
+    if (!_activeBuses.containsKey(bus.id)) return;
     ffi.setFilterParams(0, bus.id, filterId, paramId, value);
   }
 
   @override
   double getFilterParameter(AudioBus bus, int filterId, int paramId) {
     if (!_inited) throw Exception('Engine not initialized.');
-    if (!_activeBuses.contains(bus.id)) return 0.0;
+    if (!_activeBuses.containsKey(bus.id)) return 0.0;
     final ptr = calloc<Float>();
     try {
       ffi.getFilterParams(0, bus.id, filterId, paramId, ptr);
@@ -789,7 +652,7 @@ final class CliAudioEngine implements TermuiAudioEngine {
     Duration duration,
   ) {
     if (!_inited) throw Exception('Engine not initialized.');
-    if (!_activeBuses.contains(bus.id)) return;
+    if (!_activeBuses.containsKey(bus.id)) return;
     ffi.fadeFilterParameter(
       0,
       bus.id,
@@ -808,9 +671,9 @@ final class CliAudioEngine implements TermuiAudioEngine {
     required Duration duration,
   }) {
     if (!_inited) throw Exception('Engine not initialized.');
-    final voice = play(buffer);
+    final voice = play(buffer, bus: bus);
     seek(voice, start);
-    Timer(duration, () {
+    _scheduleTimer(duration, () {
       try {
         stop(voice);
       } catch (_) {}
@@ -823,16 +686,15 @@ final class CliAudioEngine implements TermuiAudioEngine {
     AudioBuffer buffer,
     List<SpriteSegment> segments, {
     AudioBus? bus,
-  }) async {
-    if (!_inited || segments.isEmpty) return;
+  }) {
+    if (!_inited || segments.isEmpty) return Future<void>.value();
 
     final completer = Completer<void>();
     var remaining = segments.length;
     var totalDelay = Duration.zero;
 
     void onSegmentEnded() {
-      remaining--;
-      if (remaining <= 0 && !completer.isCompleted) {
+      if (--remaining <= 0 && !completer.isCompleted) {
         completer.complete();
       }
     }
@@ -840,47 +702,55 @@ final class CliAudioEngine implements TermuiAudioEngine {
     for (final seg in segments) {
       final segDelay = totalDelay;
       totalDelay += seg.duration;
-
-      void playSegment() {
-        if (!_inited) {
-          onSegmentEnded();
-          return;
-        }
-        try {
-          final startSec = seg.start.inMicroseconds / 1000000.0;
-          final voice = play(
-            buffer,
-            bus: bus,
-            volume: 1.0,
-            loop: false,
-            from: startSec,
-          );
-          Timer(seg.duration, () {
-            try {
-              ffi.fadeVolume(voice.id, 0.0, 0.010);
-              Timer(const Duration(milliseconds: 12), () {
-                try {
-                  stop(voice);
-                } catch (_) {}
-                onSegmentEnded();
-              });
-            } catch (_) {
-              onSegmentEnded();
-            }
-          });
-        } catch (_) {
-          onSegmentEnded();
-        }
-      }
-
+      void startSegment() =>
+          _playSpriteSegment(buffer, seg, bus, onSegmentEnded);
       if (segDelay == Duration.zero) {
-        playSegment();
+        startSegment();
       } else {
-        unawaited(Future.delayed(segDelay, playSegment));
+        _scheduleTimer(segDelay, startSegment);
       }
     }
 
     return completer.future;
+  }
+
+  void _playSpriteSegment(
+    AudioBuffer buffer,
+    SpriteSegment seg,
+    AudioBus? bus,
+    void Function() onSegmentEnded,
+  ) {
+    if (!_inited) {
+      onSegmentEnded();
+      return;
+    }
+    final startSec = seg.start.inMicroseconds / 1000000.0;
+    final AudioVoice voice;
+    try {
+      voice = play(buffer, bus: bus, from: startSec);
+    } catch (_) {
+      onSegmentEnded();
+      return;
+    }
+    _scheduleTimer(seg.duration, () => _fadeOutSegment(voice, onSegmentEnded));
+  }
+
+  void _fadeOutSegment(AudioVoice voice, void Function() onSegmentEnded) {
+    if (!_inited) {
+      onSegmentEnded();
+      return;
+    }
+    ffi.fadeVolume(voice.id, 0.0, 0.010);
+    _scheduleTimer(const Duration(milliseconds: 12), () {
+      stop(voice);
+      onSegmentEnded();
+    });
+  }
+
+  void _setBusVolume(int busId, double volume) {
+    final busHandle = _activeBuses[busId];
+    if (!_inited || busHandle == null || busHandle == 0) return;
+    ffi.setVolume(busHandle, volume);
   }
 
   @override
@@ -890,15 +760,15 @@ final class CliAudioEngine implements TermuiAudioEngine {
     if (busId == 0) {
       throw Exception('Failed to create native audio bus.');
     }
-    ffi.busPlayOnEngine(busId, 1.0, false);
-    _activeBuses.add(busId);
-    return CliAudioBus(busId);
+    final busHandle = ffi.busPlayOnEngine(busId, 1.0, false);
+    _activeBuses[busId] = busHandle;
+    return CliAudioBus(busId, (volume) => _setBusVolume(busId, volume));
   }
 
   @override
   void destroyBus(AudioBus bus) {
     if (!_inited) throw Exception('Engine not initialized.');
-    if (!_activeBuses.contains(bus.id)) return;
+    if (!_activeBuses.containsKey(bus.id)) return;
     ffi.destroyBus(bus.id);
     _activeBuses.remove(bus.id);
   }

@@ -33,6 +33,7 @@ workspace:
   - packages/pty2
   - packages/termui_pty
   - packages/termui_audio
+  - packages/termui_audio_flutter
   - packages/termui_audio/example
   - packages/termui_tinpot
   - packages/termui_tinpot/example
@@ -61,17 +62,8 @@ melos:
         dirExists: test
         flutter: false
 
-    test:flutter:audio:
-      description: Run native audio engine tests sequentially (-j 1).
-      exec:
-        concurrency: 1
-        command: flutter test --no-pub --reporter=expanded -j 1
-        failFast: true
-      packageFilters:
-        scope: termui_audio
-
-    test:flutter:packages:
-      description: Run Flutter UI package tests with multi-core suite concurrency.
+    test:flutter:
+      description: Run unit tests for all Flutter packages.
       exec:
         concurrency: 1
         command: flutter test --no-pub --reporter=expanded
@@ -79,13 +71,6 @@ melos:
       packageFilters:
         dirExists: test
         flutter: true
-        ignore: termui_audio
-
-    test:flutter:
-      description: Run unit tests for all Flutter packages.
-      steps:
-        - test:flutter:audio
-        - test:flutter:packages
 
     test:all:
       steps:
@@ -94,5 +79,3 @@ melos:
       packageFilters:
         dirExists: test
       description: Run all tests in the monorepo.
-dependencies:
-  archive: ^4.0.9

@@ -1,8 +1,8 @@
-// ignore_for_file: avoid_relative_lib_imports
 import 'dart:typed_data';
-import 'package:test/test.dart';
+
+import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_audio/termui_audio.dart';
-import '../example/lib/src/audio_player_app.dart';
+import 'package:termui_audio_example/src/audio_player_app.dart';
 
 class MockAudioBuffer implements AudioBuffer {
   @override
