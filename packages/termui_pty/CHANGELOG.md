@@ -1,3 +1,11 @@
+## 0.7.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_pty): handle wide graphemes, bounds, and lifecycle in VirtualTerminal.
+ - **BREAKING** **FEAT**(termui_pty): parse OSC 52 clipboard writes and bound OSC buffer.
+ - **BREAKING** **FEAT**(termui_pty): add DECSET 2004 bracketed paste and Meta key guard.
+
 ## 0.6.1
 
  - **FEAT**(termui_pty): encode Shift+Tab, C0 punctuation, and mouse bounds in InputEncoder.

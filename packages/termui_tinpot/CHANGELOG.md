@@ -1,3 +1,9 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_tinpot): refactor quantizer complexity, validate CLI dimensions, and offload processing via compute.
+
 ## 0.3.11
 
  - **FIX**(examples): remove corrupt 404 HTML NotoSansBraille-Regular.ttf asset.
