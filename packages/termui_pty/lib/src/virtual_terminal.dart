@@ -96,6 +96,9 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether SGR mouse reporting mode is enabled (set by DECSET `1006`).
   bool sgrMouseMode = false;
 
+  /// Whether bracketed paste mode (`DECSET 2004`, `?2004h` / `?2004l`) is enabled.
+  bool bracketedPasteMode = false;
+
   final List<void Function()> _listeners = [];
 
   /// Creates a new virtual terminal with the specified dimensions and settings.
@@ -168,6 +171,7 @@ final class VirtualTerminal implements TerminalHandler {
     _autoWrap = true;
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
+    bracketedPasteMode = false;
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
@@ -398,6 +402,7 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _printGrapheme(String char) {
+    if (char.isEmpty || _containsControlCodeUnit(char)) return;
     if (cursorX >= width) {
       if (_autoWrap) {
         cursorX = 0;
@@ -423,6 +428,16 @@ final class VirtualTerminal implements TerminalHandler {
       modifiers: modArg,
     );
     _advanceCursorAfterPrint(1);
+  }
+
+  static bool _containsControlCodeUnit(String grapheme) {
+    for (var i = 0; i < grapheme.length; i++) {
+      final codeUnit = grapheme.codeUnitAt(i);
+      if (codeUnit <= 0x1F || (codeUnit >= 0x7F && codeUnit <= 0x9F)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   (int fg, int bg, int mod, bool bgTransparent) _resolvePrintAttributes(
@@ -529,6 +544,8 @@ final class VirtualTerminal implements TerminalHandler {
         mouseTrackingEnabled = enable;
       case 1006:
         sgrMouseMode = enable;
+      case 2004:
+        bracketedPasteMode = enable;
     }
   }
 

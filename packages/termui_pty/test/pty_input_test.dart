@@ -285,5 +285,74 @@ void main() {
         '\x1b[<0;1;1M',
       );
     });
+
+    test(
+      'wraps PasteEvent in bracketed paste markers when enabled and sanitizes markers',
+      () {
+        const paste = ev.PasteEvent('line1\nline2\x1b[201~injected\x1b[200~');
+        expect(
+          InputEncoder.encode(paste),
+          'line1\nline2\x1b[201~injected\x1b[200~',
+        );
+        expect(
+          InputEncoder.encode(paste, bracketedPaste: true),
+          '\x1b[200~line1\nline2injected\x1b[201~',
+        );
+      },
+    );
+
+    test(
+      'strips nested markers, 8-bit C1 CSI markers, and unsafe controls in bracketed paste',
+      () {
+        const nestedClose = ev.PasteEvent('x\x1b[20\x1b[201~1~\rcmd\r');
+        expect(
+          InputEncoder.encode(nestedClose, bracketedPaste: true),
+          '\x1b[200~x\rcmd\r\x1b[201~',
+        );
+
+        const nestedCross = ev.PasteEvent('x\x1b[201\x1b[200~~\rcmd\r');
+        expect(
+          InputEncoder.encode(nestedCross, bracketedPaste: true),
+          '\x1b[200~x\rcmd\r\x1b[201~',
+        );
+
+        const c1Markers = ev.PasteEvent('a\x9b201~b\x9b20\x9b200~0~c');
+        expect(
+          InputEncoder.encode(c1Markers, bracketedPaste: true),
+          '\x1b[200~abc\x1b[201~',
+        );
+
+        const rawControls = ev.PasteEvent(
+          'ok\t\n\r🚀\x00\x03\x04\x07\x08\x0b\x0c\x1b[31m\x7f\x80\x9bA\x9f!',
+        );
+        expect(
+          InputEncoder.encode(rawControls, bracketedPaste: true),
+          '\x1b[200~ok\t\n\r🚀[31m[A!\x1b[201~',
+        );
+      },
+    );
+
+    test('ignores character keys when Modifier.meta is pressed', () {
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            'v',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.meta},
+          ),
+        ),
+        isEmpty,
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            'c',
+            ev.KeyType.character,
+            modifiers: {ev.Modifier.meta},
+          ),
+        ),
+        isEmpty,
+      );
+    });
   });
 }
