@@ -1,34 +1,137 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 import 'package:test/test.dart';
 import 'package:termui/terminal/terminal.dart';
 import 'package:termui/terminal/input_parser.dart';
 import 'package:termui_test/termui_test.dart';
 
+class _OrderTrackingBackend implements TerminalBackend {
+  final List<String> log = [];
+  final StreamController<List<int>> _input =
+      StreamController<List<int>>.broadcast();
+  bool disposed = false;
+
+  @override
+  bool get isWindows => false;
+
+  @override
+  Point<int> get size => const Point(80, 24);
+
+  @override
+  Stream<Point<int>> watchSize() => const Stream.empty();
+
+  @override
+  Stream<List<int>> get rawInput => _input.stream;
+
+  @override
+  void enableRawMode() {
+    log.add('enableRawMode');
+  }
+
+  @override
+  void disableRawMode() {
+    log.add('disableRawMode');
+  }
+
+  @override
+  void write(String text) {
+    if (disposed) {
+      throw StateError('write called after backend.dispose(): $text');
+    }
+    log.add('write:$text');
+  }
+
+  @override
+  void dispose() {
+    disposed = true;
+    log.add('dispose');
+    _input.close();
+  }
+}
+
 void main() {
-  group('Terminal.runGuarded Tests', () {
+  group('Terminal.runGuarded & dispose Tests', () {
     test('runGuarded executes body and cleans up on success', () async {
       var executed = false;
+      final backend = _OrderTrackingBackend();
       final result = await Terminal.runGuarded((terminal) {
         executed = true;
         return 42;
-      });
+      }, backend: backend);
       expect(executed, isTrue);
       expect(result, 42);
+      expect(backend.disposed, isTrue);
     });
 
     test('runGuarded cleans up and rethrows on exception', () async {
-      expect(
+      final backend = _OrderTrackingBackend();
+      await expectLater(
         Terminal.runGuarded((terminal) {
           throw Exception('Test Crash');
-        }),
+        }, backend: backend),
         throwsA(isA<Exception>()),
       );
+      expect(backend.disposed, isTrue);
     });
+
+    test(
+      'Terminal.dispose resets active modes before disabling raw mode and guards double-dispose',
+      () {
+        final backend = _OrderTrackingBackend();
+        final terminal = Terminal(backend);
+        terminal.enterAlternateScreen();
+        terminal.enableMouseTracking();
+        terminal.enableBracketedPaste();
+        terminal.hideCursor();
+        backend.log.clear();
+
+        terminal.dispose();
+        terminal.dispose(); // Second call must be a no-op.
+
+        expect(backend.log, [
+          'write:${Terminal.disableBracketedPasteSequence}',
+          'write:${Terminal.disableMouseTrackingSequence}',
+          'write:${Terminal.exitAlternateScreenSequence}',
+          'write:${Terminal.showCursorSequence}',
+          'disableRawMode',
+          'dispose',
+        ]);
+      },
+    );
+
+    test(
+      'Terminal.runGuarded resets active modes before backend.dispose when callback throws',
+      () async {
+        final backend = _OrderTrackingBackend();
+        await expectLater(
+          Terminal.runGuarded((terminal) async {
+            terminal.enterAlternateScreen();
+            terminal.enableMouseTracking();
+            terminal.enableBracketedPaste();
+            terminal.hideCursor();
+            backend.log.clear();
+            throw StateError('Callback failure');
+          }, backend: backend),
+          throwsA(isA<StateError>()),
+        );
+
+        expect(backend.log, [
+          'write:${Terminal.disableBracketedPasteSequence}',
+          'write:${Terminal.disableMouseTrackingSequence}',
+          'write:${Terminal.exitAlternateScreenSequence}',
+          'write:${Terminal.showCursorSequence}',
+          'disableRawMode',
+          'dispose',
+        ]);
+      },
+    );
 
     test(
       'Terminal size and watchSize do not throw and return correct types',
       () async {
-        final terminal = Terminal();
+        final backend = MockTerminalBackend();
+        final terminal = Terminal(backend);
         final size = await terminal.size;
         expect(size.x, greaterThan(0));
         expect(size.y, greaterThan(0));
@@ -38,6 +141,84 @@ void main() {
         terminal.dispose();
       },
     );
+  });
+
+  group('CSI Resilience & Overflow Tests', () {
+    test(
+      'ignores private DEC/Kitty CSI responses and parses empty/Kitty subparams cleanly',
+      () {
+        final parser = InputParser();
+
+        // Private device attribute / Kitty responses (?, >, =, <).
+        expect(
+          parser.parse('\x1b[?1;2c\x1b[>0;276;0c\x1b[=1u\x1b[<1u'.codeUnits),
+          isEmpty,
+        );
+
+        // Empty param \x1b[;5A (Ctrl+Up) followed by Kitty subparam \x1b[97;1:3u and normal 'k'.
+        final events = parser.parse('\x1b[;5A\x1b[97;1:3uk'.codeUnits);
+        expect(events, hasLength(3));
+        expect(events[0], isA<KeyEvent>());
+        final up = events[0] as KeyEvent;
+        expect(up.type, KeyType.up);
+        expect(up.modifiers, contains(Modifier.control));
+
+        expect(events[1], isA<KeyEvent>());
+        expect(events[2], isA<KeyEvent>());
+        expect((events[2] as KeyEvent).key, 'k');
+      },
+    );
+
+    test(
+      'discards runaway CSI sequences exceeding maxCsiBytes without wedging',
+      () {
+        final parser = InputParser();
+
+        // Incomplete runaway CSI (> maxCsiBytes with no terminator), then normal keystroke.
+        final runawayIncomplete =
+            '\x1b[${'0' * (InputParser.maxCsiBytes + 50)}';
+        expect(parser.parse(runawayIncomplete.codeUnits), isEmpty);
+
+        final afterIncomplete = parser.parse('z'.codeUnits);
+        expect(afterIncomplete, hasLength(1));
+        expect((afterIncomplete.first as KeyEvent).key, 'z');
+
+        // Terminated oversized CSI in a single chunk followed immediately by 'q'.
+        final runawayTerminated = '\x1b[${'1;' * (InputParser.maxCsiBytes)}Aq';
+        final events = parser.parse(runawayTerminated.codeUnits);
+        expect(events, hasLength(1));
+        expect((events.first as KeyEvent).key, 'q');
+      },
+    );
+
+    test('caps/flushes oversized bracketed paste without unbounded growth', () {
+      final parser = InputParser();
+      expect(parser.parse('\x1b[200~'.codeUnits), isEmpty);
+
+      final halfChunk = List<int>.filled(
+        (InputParser.maxPasteBytes ~/ 2) + 64,
+        97,
+      );
+      final firstEvents = parser.parse(halfChunk);
+      expect(firstEvents, isEmpty);
+
+      // Pushing past maxPasteBytes flushes a bounded PasteEvent chunk immediately.
+      final secondEvents = parser.parse(halfChunk);
+      expect(secondEvents, hasLength(1));
+      expect(secondEvents.first, isA<PasteEvent>());
+      expect(
+        (secondEvents.first as PasteEvent).text.length,
+        InputParser.maxPasteBytes,
+      );
+
+      // Closing paste emits the remaining tail and resumes normal key parsing.
+      final tailEvents = parser.parse('\x1b[201~x'.codeUnits);
+      expect(tailEvents, hasLength(2));
+      expect(tailEvents[0], isA<PasteEvent>());
+      expect((tailEvents[0] as PasteEvent).text.length, 128);
+      expect(tailEvents[1], isA<KeyEvent>());
+      expect((tailEvents[1] as KeyEvent).key, 'x');
+    });
   });
 
   group('Bracketed Paste Tests', () {

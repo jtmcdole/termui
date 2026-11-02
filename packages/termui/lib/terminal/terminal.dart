@@ -63,6 +63,12 @@ class Terminal {
 
   StreamSubscription<List<int>>? _stdinSubscription;
 
+  bool _inAlternateScreen = false;
+  bool _mouseTrackingEnabled = false;
+  bool _bracketedPasteEnabled = false;
+  bool _cursorHidden = false;
+  bool _disposed = false;
+
   /// Runs a function with a raw terminal, ensuring raw mode is disabled and the
   /// terminal is restored if the program encounters an uncaught exception.
   static Future<T> runGuarded<T>(
@@ -86,8 +92,8 @@ class Terminal {
         }
       },
       (error, stackTrace) {
+        terminal._resetActiveModes();
         terminal.dispose();
-        terminal.showCursor(); // Re-enable cursor
         if (!completer.isCompleted) {
           completer.completeError(error, stackTrace);
         }
@@ -97,8 +103,8 @@ class Terminal {
     try {
       return await completer.future;
     } finally {
+      terminal._resetActiveModes();
       terminal.dispose();
-      terminal.showCursor(); // Re-enable cursor
     }
   }
 
@@ -129,9 +135,29 @@ class Terminal {
     );
   }
 
+  void _resetActiveModes() {
+    if (_disposed) return;
+    if (_bracketedPasteEnabled) {
+      disableBracketedPaste();
+    }
+    if (_mouseTrackingEnabled) {
+      disableMouseTracking();
+    }
+    if (_inAlternateScreen) {
+      exitAlternateScreen();
+    }
+    if (_cursorHidden) {
+      showCursor();
+    }
+  }
+
   /// Disposes of the terminal resources and disables raw mode.
   void dispose() {
+    if (_disposed) return;
+    _resetActiveModes();
+    _disposed = true;
     _stdinSubscription?.cancel();
+    _stdinSubscription = null;
     _events.close();
     backend.disableRawMode();
     backend.dispose();
@@ -235,28 +261,60 @@ class Terminal {
   static const String resetStyleSequence = '\x1b[0m';
 
   /// Sends the sequence to hide the terminal cursor.
-  void hideCursor() => backend.write(hideCursorSequence);
+  void hideCursor() {
+    if (_disposed) return;
+    _cursorHidden = true;
+    backend.write(hideCursorSequence);
+  }
 
   /// Sends the sequence to show the terminal cursor.
-  void showCursor() => backend.write(showCursorSequence);
+  void showCursor() {
+    if (_disposed) return;
+    _cursorHidden = false;
+    backend.write(showCursorSequence);
+  }
 
   /// Sends the sequence to enter the alternate screen buffer.
-  void enterAlternateScreen() => backend.write(enterAlternateScreenSequence);
+  void enterAlternateScreen() {
+    if (_disposed) return;
+    _inAlternateScreen = true;
+    backend.write(enterAlternateScreenSequence);
+  }
 
   /// Sends the sequence to exit the alternate screen buffer.
-  void exitAlternateScreen() => backend.write(exitAlternateScreenSequence);
+  void exitAlternateScreen() {
+    if (_disposed) return;
+    _inAlternateScreen = false;
+    backend.write(exitAlternateScreenSequence);
+  }
 
   /// Sends the sequence to enable mouse tracking.
-  void enableMouseTracking() => backend.write(enableMouseTrackingSequence);
+  void enableMouseTracking() {
+    if (_disposed) return;
+    _mouseTrackingEnabled = true;
+    backend.write(enableMouseTrackingSequence);
+  }
 
   /// Sends the sequence to disable mouse tracking.
-  void disableMouseTracking() => backend.write(disableMouseTrackingSequence);
+  void disableMouseTracking() {
+    if (_disposed) return;
+    _mouseTrackingEnabled = false;
+    backend.write(disableMouseTrackingSequence);
+  }
 
   /// Sends the sequence to enable bracketed paste mode.
-  void enableBracketedPaste() => backend.write(enableBracketedPasteSequence);
+  void enableBracketedPaste() {
+    if (_disposed) return;
+    _bracketedPasteEnabled = true;
+    backend.write(enableBracketedPasteSequence);
+  }
 
   /// Sends the sequence to disable bracketed paste mode.
-  void disableBracketedPaste() => backend.write(disableBracketedPasteSequence);
+  void disableBracketedPaste() {
+    if (_disposed) return;
+    _bracketedPasteEnabled = false;
+    backend.write(disableBracketedPasteSequence);
+  }
 
   /// Sends the sequence to reset all cell styling back to default.
   void resetStyle() => backend.write(resetStyleSequence);
