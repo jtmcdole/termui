@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// Abstract base class for all renderable widget configurations.
 abstract class Widget {
   /// The optional key for this widget.
   final Key? key;
@@ -37,7 +37,7 @@ abstract class Widget {
   }
 }
 
-/// Instantiated element in the widget tree that keeps track of widget updates and state.
+/// A [Widget] that builds a subtree without holding mutable state.
 abstract class StatelessWidget extends Widget {
   /// Initializes a stateless widget.
   const StatelessWidget({super.key});
@@ -75,7 +75,7 @@ abstract class StatelessWidget extends Widget {
   }
 }
 
-/// An element that manages a [StatelessWidget].
+/// A [Widget] that creates and associates mutable [State] in the tree.
 abstract class StatefulWidget extends Widget {
   /// Initializes a stateful widget.
   const StatefulWidget({super.key});
@@ -118,13 +118,13 @@ typedef VoidCallback = void Function();
 
 /// The logic and internal state for a [StatefulWidget].
 abstract class State<T extends StatefulWidget> {
-  /// Undocumented public member.
+  /// Framework-managed reference to the current [StatefulWidget] configuration.
   T? internalWidget;
 
   /// The current configuration.
   T get widget => internalWidget!;
 
-  /// Undocumented public member.
+  /// Framework-managed reference to the [BuildContext] hosting this state.
   BuildContext? internalContext;
 
   /// The location in the tree where this widget builds.
@@ -160,7 +160,7 @@ abstract class State<T extends StatefulWidget> {
   Widget build(BuildContext context);
 }
 
-/// An element that manages a [StatefulWidget] and its [State].
+/// Base class for widgets that efficiently propagate data down the tree.
 abstract class InheritedWidget extends Widget {
   /// The widget below this widget in the tree.
   final Widget child;
@@ -185,14 +185,14 @@ abstract class InheritedWidget extends Widget {
   bool updateShouldNotify(covariant InheritedWidget oldWidget);
 }
 
-/// An element that manages an [InheritedWidget].
+/// A bridge widget that maintains a persistent [Element] tree for its [child].
 class ElementWidget extends Widget {
   static final int _tracePaintId = Tracer.registerString('ElementWidget:paint');
 
   /// The child widget.
   final Widget child;
 
-  /// Undocumented public member.
+  /// Backing root [Element] managed across frames by this bridge widget.
   Element? internalElement;
 
   /// Creates an element widget bridging the tree.
@@ -251,5 +251,3 @@ class ElementWidget extends Widget {
     return found;
   }
 }
-
-/// Element for [ElementWidget] that delegates layout, painting, and child lifecycle management.

@@ -2,7 +2,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
-/// Undocumented public member.
+/// Interactive boolean toggle box with an accompanying text [label].
 class Checkbox extends StatefulWidget
     implements Focusable, MouseEventHandlerWithArea {
   /// The current check state (checked if true).
@@ -48,7 +48,7 @@ class Checkbox extends StatefulWidget
   }
 }
 
-/// Undocumented public member.
+/// Mutable [State] managing focus and toggle input for [Checkbox].
 class CheckboxState extends State<Checkbox>
     with FocusableStateMixin<Checkbox>
     implements KeyEventHandler, MouseEventHandlerWithArea {

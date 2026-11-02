@@ -2,7 +2,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
-/// Undocumented public member.
+/// Interactive sliding on/off toggle control with a text [label].
 class Switch extends StatefulWidget implements Focusable {
   /// The switch toggle state (on/off).
   final bool value;
@@ -40,7 +40,7 @@ class Switch extends StatefulWidget implements Focusable {
   }
 }
 
-/// Undocumented public member.
+/// Mutable [State] managing focus and toggle events for [Switch].
 class SwitchState extends State<Switch>
     with FocusableStateMixin<Switch>
     implements KeyEventHandler, MouseEventHandler {

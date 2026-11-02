@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// Places a [child] widget inside a [Stack] at explicit edge offsets.
 class Positioned extends Widget {
   /// The distance from the left edge.
   final int? left;
@@ -116,5 +116,3 @@ class PositionedElement extends Element {
     if (childElement != null) visitor(childElement!);
   }
 }
-
-/// A widget that imposes tight constraints on its child.

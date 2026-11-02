@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A layout widget that stacks its children on top of each other.
 class Stack extends Widget {
   /// The children widgets to stack.
   final List<Widget> children;
@@ -248,5 +248,3 @@ class StackElement extends Element {
     return maxW;
   }
 }
-
-/// Places a widget inside a [Stack] at specific coordinate offsets.

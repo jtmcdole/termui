@@ -2,7 +2,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
-/// Undocumented public member.
+/// Focusable push button widget activated by keyboard or mouse press.
 class Button extends StatefulWidget implements Focusable {
   /// The text label displayed on the button.
   final String text;
@@ -36,7 +36,7 @@ class Button extends StatefulWidget implements Focusable {
   }
 }
 
-/// Undocumented public member.
+/// Mutable [State] managing focus and input handling for [Button].
 class ButtonState extends State<Button>
     with FocusableStateMixin<Button>
     implements KeyEventHandler, MouseEventHandler {

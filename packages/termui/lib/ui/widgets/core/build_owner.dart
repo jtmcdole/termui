@@ -1,6 +1,6 @@
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// Manages the build lifecycle and schedules dirty [Element] rebuilds.
 class BuildOwner {
   static final int _traceBuildScopeId = Tracer.registerString(
     'BuildOwner:buildScope',
@@ -9,7 +9,7 @@ class BuildOwner {
   /// Callback triggered when a visual update (rebuild) is needed.
   final void Function()? onNeedVisualUpdate;
 
-  /// Undocumented public member.
+  /// Elements currently marked dirty and awaiting rebuild in [buildScope].
   final Set<Element> isDirtyElements = {};
 
   /// Creates a new [BuildOwner] with an optional [onNeedVisualUpdate] callback.

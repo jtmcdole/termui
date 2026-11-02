@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// How children are aligned along the cross axis in a flex layout.
 enum CrossAxisAlignment {
   /// Align children to the start of the cross axis.
   start,
@@ -46,8 +46,7 @@ enum LayoutDirection {
   vertical,
 }
 
-/// A Viewport wraps a parent buffer, translating and clipping drawing operations
-/// to a relative local coordinate space within [bounds].
+/// Partitions [area] along [direction] according to [constraints].
 List<Rect> splitRect(
   Rect area,
   List<Constraint> constraints,
@@ -168,8 +167,6 @@ List<Rect> splitRect(
   return rects;
 }
 
-/// Undocumented public member.
-///
 /// Retrieves the layout constraint for the given [widget].
 /// If the optional [element] parameter is provided, we query its intrinsic
 /// size by calling the element's polymorphic layout getters.
@@ -207,5 +204,3 @@ Constraint getConstraint(
   }
   return const FlexConstraint(1);
 }
-
-/// A layout widget that arranges its children horizontally.

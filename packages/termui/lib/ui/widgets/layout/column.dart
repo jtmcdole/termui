@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// A layout widget that arranges its children vertically.
 class Column extends Widget {
   /// The children widgets to align vertically.
   final List<Widget> children;
@@ -244,5 +244,3 @@ class ColumnElement extends Element {
     return maxW;
   }
 }
-
-/// A layout widget that stacks its children on top of each other.

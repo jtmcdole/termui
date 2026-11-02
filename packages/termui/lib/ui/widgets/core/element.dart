@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'package:termui/termui.dart';
 
-/// Undocumented public member.
+/// An instantiation of a [Widget] at a particular location in the tree.
 abstract class Element implements BuildContext {
   @override
   /// The widget that this element represents.
@@ -28,14 +28,14 @@ abstract class Element implements BuildContext {
   /// Whether this element is currently mounted in the tree.
   bool get mounted => _mounted;
 
-  /// Undocumented public member.
+  /// Zero-based depth of this element from the root of the element tree.
   int treeDepth = 0;
 
   /// The depth of this element in the widget tree.
   int get depth => treeDepth;
   set depth(int value) => treeDepth = value;
 
-  /// Undocumented public member.
+  /// Whether this element is scheduled to rebuild in the next build pass.
   bool isDirty = false;
 
   BuildOwner? _owner;
@@ -264,7 +264,7 @@ class LeafElement extends Element {
   void performPaint(Buffer buffer, Offset offset) {}
 }
 
-/// A widget that has configuration but delegates rendering to its built child.
+/// An [Element] that uses a [StatelessWidget] as its configuration.
 class StatelessElement extends Element {
   /// The element corresponding to the built child widget.
   Element? childElement;
@@ -341,7 +341,7 @@ class StatelessElement extends Element {
       childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
-/// A widget that has mutable state.
+/// An [Element] that manages a [StatefulWidget] and its [State].
 class StatefulElement extends Element {
   /// The state associated with this element.
   late final State state;
@@ -439,7 +439,7 @@ class StatefulElement extends Element {
       childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
-/// A widget that propagates information down the tree.
+/// An [Element] that uses an [InheritedWidget] to propagate data down the tree.
 class InheritedElement extends Element {
   /// The element corresponding to the built child widget.
   Element? childElement;
@@ -536,7 +536,7 @@ class InheritedElement extends Element {
       childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
-/// How children are aligned along the cross axis.
+/// Element for [ElementWidget] that delegates layout, painting, and lifecycle.
 class ElementWidgetElement extends Element {
   /// Creates a new [ElementWidgetElement].
   ElementWidgetElement(ElementWidget super.widget);
@@ -637,5 +637,3 @@ extension HitTestExtension on Element {
     return results;
   }
 }
-
-/// Manages the build lifecycle and dirty element queue.
