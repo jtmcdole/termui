@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:pty2/pty2.dart';
@@ -175,6 +176,130 @@ void main() {
       expect(output.trim(), contains('version'));
     },
   );
+
+  test(
+    'PseudoTerminal.start emits zero print lines to parent stdout',
+    () async {
+      final printedLines = <String>[];
+      await runZoned(
+        () async {
+          final pty = _startTrackedPty(_getShell(), []);
+          pty.kill();
+          await pty.exitCode.timeout(const Duration(seconds: 5));
+        },
+        zoneSpecification: ZoneSpecification(
+          print: (self, parent, zone, line) {
+            printedLines.add(line);
+          },
+        ),
+      );
+      expect(printedLines, isEmpty);
+    },
+  );
+
+  test('Resize after natural child exit returns normally', () async {
+    final pty = _startTrackedPty(_getShell(), [
+      Platform.isWindows ? '/c' : '-c',
+      'exit 0',
+    ]);
+    await pty.exitCode.timeout(const Duration(seconds: 5));
+    expect(() => pty.resize(50, 120), returnsNormally);
+    await pty.out.drain<void>().timeout(const Duration(seconds: 5));
+    expect(() => pty.resize(50, 120), returnsNormally);
+  });
+
+  test(
+    'PseudoTerminal.start preserves tricky arguments across platforms',
+    () async {
+      final tempDir = Directory.systemTemp.createTempSync('pty2_arg_quote_');
+      addTearDown(() {
+        try {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        } on FileSystemException {
+          // Ignore transient Windows file lock during teardown.
+        }
+      });
+
+      final scriptFile = File('${tempDir.path}/print_args.dart')
+        ..writeAsStringSync('''
+import 'dart:convert';
+
+void main(List<String> args) {
+  print('ARGS_START\${jsonEncode(args)}ARGS_END');
+}
+''');
+
+      const expectedArgs = ['a"b', r'C:\dir with space\', 'x\ty', ''];
+      final pty = _startTrackedPty(Platform.executable, [
+        scriptFile.path,
+        ...expectedArgs,
+      ]);
+
+      final fullOutput = await pty.out.join().timeout(
+        const Duration(seconds: 15),
+      );
+      await pty.exitCode.timeout(const Duration(seconds: 5));
+
+      final match = RegExp(
+        r'ARGS_START(.*?)ARGS_END',
+        dotAll: true,
+      ).firstMatch(fullOutput);
+      expect(match, isNotNull, reason: 'Unexpected PTY output: $fullOutput');
+
+      final rawJson = match!
+          .group(1)!
+          .replaceAll('\r', '')
+          .replaceAll('\n', '');
+      final Object? decoded = jsonDecode(rawJson);
+      expect(decoded, equals(expectedArgs));
+    },
+  );
+
+  group('PtyCoreWindows.buildWindowsCommandLine', () {
+    test('leaves simple executable and arguments unquoted', () {
+      expect(
+        PtyCoreWindows.buildWindowsCommandLine('cmd.exe', [
+          '/c',
+          r'C:\plain\path\',
+        ]),
+        r'cmd.exe /c C:\plain\path\',
+      );
+    });
+
+    test('quotes empty strings and arguments with spaces or tabs', () {
+      expect(
+        PtyCoreWindows.buildWindowsCommandLine(
+          r'C:\Program Files\Dart\dart.exe',
+          ['', 'hello world', 'x\ty'],
+        ),
+        '"C:\\Program Files\\Dart\\dart.exe" "" "hello world" "x\ty"',
+      );
+    });
+
+    test('escapes embedded quotes and preceding backslashes', () {
+      expect(
+        PtyCoreWindows.buildWindowsCommandLine('app.exe', [
+          'a"b',
+          r'a\"b',
+          r'a\\"b',
+        ]),
+        r'app.exe "a\"b" "a\\\"b" "a\\\\\"b"',
+      );
+    });
+
+    test('doubles trailing backslashes only when quoting is required', () {
+      expect(
+        PtyCoreWindows.buildWindowsCommandLine('app.exe', [
+          r'C:\dir with space\',
+          r'C:\dir with space\\',
+          r'C:\no_space\',
+        ]),
+        r'app.exe "C:\dir with space\\" "C:\dir with space\\\\" C:\no_space\',
+      );
+    });
+  });
 }
 
 String _getHelperPath() {
