@@ -6,10 +6,14 @@ import 'package:termui/ui/widgets/core/widget.dart';
 import 'package:termui/ui/widgets/core/element.dart';
 import 'package:termui/ui/widgets/core/build_context.dart';
 import 'package:termui/ui/widgets/core/geometry.dart';
+import 'package:termui/termui.dart' show PromptRunner, Row, StatefulBuilder;
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/event.dart' hide Modifier;
 import 'package:termui/ui/widget_toolkit.dart';
+import 'package:termui_test/termui_test.dart';
+
+void _noop() {}
 
 /// A test animation effect implementation for validating lifecycles and ticks.
 final class TestEffect extends TuiAnimationEffect {
@@ -441,7 +445,7 @@ void main() {
       expect(buffer.getCharacter(7, 1), equals('e'));
 
       // Move mouse inside: Hover should activate
-      btn.handleMouseEvent(
+      state.handleMouseEvent(
         const MouseEvent(
           x: 5,
           y: 2,
@@ -455,7 +459,7 @@ void main() {
       expect(state.isPressed, isFalse);
 
       // Press mouse down: Pressed activates, Hover deactivates, animations start
-      btn.handleMouseEvent(
+      state.handleMouseEvent(
         const MouseEvent(
           x: 5,
           y: 2,
@@ -473,7 +477,7 @@ void main() {
       tree.paint(buffer, Offset.zero);
 
       // Release mouse inside: Pressed deactivates, Hover activates, onPressed called
-      btn.handleMouseEvent(
+      state.handleMouseEvent(
         const MouseEvent(
           x: 5,
           y: 2,
@@ -487,5 +491,104 @@ void main() {
       expect(state.isPressed, isFalse);
       expect(state.isHovered, isTrue);
     });
+
+    test(
+      'shared const AnimatedButton mounted twice in Row routes press only to target slot',
+      () {
+        final tester = TerminalTester(size: const Point(40, 10));
+        tester.run(() async {
+          const sharedBtn = AnimatedButton(
+            text: 'Shared',
+            onPressed: _noop,
+            width: 10,
+            height: 3,
+          );
+          final runner = PromptRunner<void>(
+            terminal: tester.terminal,
+            widget: const Row([sharedBtn, sharedBtn]),
+            alternateScreen: true,
+          );
+
+          await tester.runPrompt(runner, () async {
+            await tester.pump();
+
+            final states = <AnimatedButtonState>[];
+            void collectStates(Element element) {
+              if (element is StatefulElement &&
+                  element.state is AnimatedButtonState) {
+                states.add(element.state as AnimatedButtonState);
+              }
+              element.visitChildren(collectStates);
+            }
+
+            collectStates(runner.rootElement!);
+            expect(states, hasLength(2));
+            expect(identical(states[0], states[1]), isFalse);
+
+            // Press slot 0 (1-indexed terminal coordinates x=2, y=2).
+            tester.mouseDown(2, 2);
+            await tester.pump();
+
+            expect(states[0].isPressed, isTrue);
+            expect(states[1].isPressed, isFalse);
+
+            tester.mouseUp(2, 2);
+            await tester.pump();
+            runner.dispose();
+          });
+        });
+      },
+    );
+
+    test(
+      'tester.tap(find.byType<AnimatedButton>()) under tight root constraints invokes onPressed across parent setState rebuilds',
+      () {
+        final tester = TerminalTester(size: const Point(40, 10));
+        tester.run(() async {
+          var tapCount = 0;
+          var rebuildCount = 0;
+          late void Function() triggerRebuild;
+
+          final runner = PromptRunner<void>(
+            terminal: tester.terminal,
+            alternateScreen: true,
+            widget: StatefulBuilder(
+              builder: (context, setParentState) {
+                triggerRebuild = () {
+                  setParentState(() {
+                    rebuildCount++;
+                  });
+                };
+                return AnimatedButton(
+                  text: 'Tap $rebuildCount',
+                  onPressed: () {
+                    tapCount++;
+                  },
+                  width: 10,
+                  height: 3,
+                );
+              },
+            ),
+          );
+
+          await tester.runPrompt(runner, () async {
+            await tester.pump();
+
+            tester.tap(find.byType<AnimatedButton>());
+            await tester.pump();
+            expect(tapCount, equals(1));
+
+            triggerRebuild();
+            await tester.pump();
+
+            tester.tap(find.byType<AnimatedButton>());
+            await tester.pump();
+            expect(tapCount, equals(2));
+
+            runner.dispose();
+          });
+        });
+      },
+    );
   });
 }
