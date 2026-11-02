@@ -7,6 +7,10 @@ class _TestTerminalHandler implements TerminalHandler {
   String? lastCsiCommand;
   List<int>? lastCsiParams;
   String? lastCsiIntermediate;
+  int oscCallCount = 0;
+  int? lastOscCommand;
+  String? lastOscPayload;
+  final StringBuffer printedText = StringBuffer();
 
   @override
   void csi(String command, List<int> params, {String? intermediate}) {
@@ -22,10 +26,16 @@ class _TestTerminalHandler implements TerminalHandler {
   void execute(int charCode) {}
 
   @override
-  void osc(int command, String payload) {}
+  void osc(int command, String payload) {
+    oscCallCount++;
+    lastOscCommand = command;
+    lastOscPayload = payload;
+  }
 
   @override
-  void printText(String text) {}
+  void printText(String text) {
+    printedText.write(text);
+  }
 }
 
 void main() {
@@ -170,6 +180,24 @@ void main() {
         expect(handler.lastCsiCommand, equals('q'));
         expect(handler.lastCsiParams, equals([2]));
         expect(handler.lastCsiIntermediate, equals(' '));
+      },
+    );
+
+    test(
+      'Aborts unbounded OSC payload exceeding 8192 bytes back to ground state',
+      () {
+        final handler = _TestTerminalHandler();
+        final parser = AnsiParser(handler);
+
+        // Unterminated OSC exceeding 8192 chars aborts without dispatching osc.
+        parser.parse('\x1b]0;${'A' * 8200}');
+        expect(handler.oscCallCount, equals(0));
+
+        // Subsequent valid OSC within cap still parses cleanly.
+        parser.parse('\x1b]2;ok-title\x07');
+        expect(handler.oscCallCount, equals(1));
+        expect(handler.lastOscCommand, equals(2));
+        expect(handler.lastOscPayload, equals('ok-title'));
       },
     );
   });
