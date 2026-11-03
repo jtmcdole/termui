@@ -5,6 +5,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 import 'ansi_parser.dart';
+import 'scrollback_buffer.dart';
 
 typedef _SavedCursor = ({int x, int y, Style style, bool pendingWrap});
 
@@ -49,8 +50,25 @@ final class VirtualTerminal implements TerminalHandler {
   int height;
 
   final Buffer _primaryBuffer;
+  final ScrollbackBuffer _scrollback;
+  List<bool> _primaryWrapped;
+  bool _wrappingNextIndexDown = false;
   Buffer? _altBuffer;
   bool _usingAltScreen = false;
+
+  /// Primary-screen scrollback ring buffer (`maxLines == 0` disables retention).
+  ScrollbackBuffer get scrollback => _scrollback;
+
+  /// Returns whether visible row [row] (`0 <= row < height`) began via
+  /// right-margin auto-wrap from the preceding row (`scrollback[totalLines - 1]`
+  /// when `row == 0`).
+  ///
+  /// Always returns `false` while [isUsingAlternateScreen] is `true` or when
+  /// [row] is out of bounds.
+  bool isRowWrapped(int row) {
+    if (_usingAltScreen || row < 0 || row >= height) return false;
+    return _primaryWrapped[row];
+  }
 
   /// The active screen buffer (primary or alternate screen).
   ///
@@ -131,9 +149,12 @@ final class VirtualTerminal implements TerminalHandler {
     int height = 24,
     this.transparentBackground = false,
     this.defaultForeground,
+    int maxScrollbackLines = 0,
   }) : width = math.max(1, width),
        height = math.max(1, height),
        _scrollBottom = math.max(1, height) - 1,
+       _scrollback = ScrollbackBuffer(maxLines: maxScrollbackLines),
+       _primaryWrapped = List<bool>.filled(math.max(1, height), false),
        _primaryBuffer = _createBuffer(
          math.max(1, width),
          math.max(1, height),
@@ -207,6 +228,8 @@ final class VirtualTerminal implements TerminalHandler {
       _altBuffer = null;
       cursorX = 0;
       cursorY = 0;
+      _primaryWrapped.fillRange(0, height, false);
+      _scrollback.clear();
       final (fg, bg, mod) = _eraseAttributes();
       _primaryBuffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
     } else {
@@ -231,6 +254,7 @@ final class VirtualTerminal implements TerminalHandler {
     final clampedWidth = math.max(1, newWidth);
     final clampedHeight = math.max(1, newHeight);
     if (clampedWidth == width && clampedHeight == height) return;
+    _evictOverflowBeforeShrink(clampedHeight);
     final shrunkHorizontally = clampedWidth < width;
     _primaryBuffer.resize(clampedWidth, clampedHeight);
     if (shrunkHorizontally) _healRightEdgeWideGraphemes(_primaryBuffer);
@@ -239,12 +263,51 @@ final class VirtualTerminal implements TerminalHandler {
       alt.resize(clampedWidth, clampedHeight);
       if (shrunkHorizontally) _healRightEdgeWideGraphemes(alt);
     }
+    final nextWrapped = List<bool>.filled(clampedHeight, false);
+    final copyWrapped = math.min(_primaryWrapped.length, clampedHeight);
+    nextWrapped.setRange(0, copyWrapped, _primaryWrapped);
+    _primaryWrapped = nextWrapped;
     width = clampedWidth;
     height = clampedHeight;
     _scrollTop = 0;
     _scrollBottom = height - 1;
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
+  }
+
+  void _evictOverflowBeforeShrink(int clampedHeight) {
+    final targetY = math.min(
+      height - 1,
+      _usingAltScreen ? _savedPrimary.y : cursorY,
+    );
+    if (clampedHeight >= height || targetY < clampedHeight) return;
+
+    final evictCount = targetY - clampedHeight + 1;
+    if (_scrollback.maxLines > 0) {
+      for (var r = 0; r < evictCount; r++) {
+        _scrollback.push(
+          ScrollbackLine.fromBufferRow(
+            _primaryBuffer,
+            r,
+            isWrapped: _primaryWrapped[r],
+          ),
+        );
+      }
+    }
+    final keepRows = height - evictCount;
+    _copyCellSpan(_primaryBuffer, 0, evictCount * width, keepRows * width);
+    _primaryWrapped.setRange(0, keepRows, _primaryWrapped, evictCount);
+    _primaryWrapped.fillRange(keepRows, height, false);
+    if (_usingAltScreen) {
+      _savedPrimary = (
+        x: _savedPrimary.x,
+        y: math.max(0, targetY - evictCount),
+        style: _savedPrimary.style,
+        pendingWrap: _savedPrimary.pendingWrap,
+      );
+    } else {
+      cursorY = math.max(0, cursorY - evictCount);
+    }
   }
 
   void _healRightEdgeWideGraphemes(Buffer buf) {
@@ -305,6 +368,7 @@ final class VirtualTerminal implements TerminalHandler {
       case 0: // Cursor (inclusive) to end of screen
         _clampPendingWrap();
         _eraseRowSpan(cursorY, cursorX, width);
+        _clearLineWrapOnErase(clearStart: cursorX == 0, clearEnd: true);
         if (cursorY + 1 < height) {
           final (fg, bg, mod) = _eraseAttributes();
           active.fillRect(
@@ -314,6 +378,7 @@ final class VirtualTerminal implements TerminalHandler {
             bg: bg,
             modifiers: mod,
           );
+          _clearWrappedRange(cursorY + 1, height);
         }
       case 1: // Start of screen to cursor (inclusive)
         _clampPendingWrap();
@@ -328,12 +393,14 @@ final class VirtualTerminal implements TerminalHandler {
           );
         }
         _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
+        _clearWrappedRange(0, cursorY + 1);
       case 2: // Entire screen
         _clampPendingWrap();
         final (fg, bg, mod) = _eraseAttributes();
         active.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
-      case 3: // Saved scrollback lines only (no-op without scrollback buffer)
-        break;
+        _clearWrappedRange(0, height);
+      case 3: // Saved scrollback lines only
+        if (!_usingAltScreen) _scrollback.clear();
     }
   }
 
@@ -342,18 +409,43 @@ final class VirtualTerminal implements TerminalHandler {
     switch (mode) {
       case 0: // Cursor (inclusive) to end of line
         _eraseRowSpan(cursorY, cursorX, width);
+        _clearLineWrapOnErase(clearStart: cursorX == 0, clearEnd: true);
       case 1: // Start of line to cursor (inclusive)
         _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
+        _clearLineWrapOnErase(clearStart: true, clearEnd: false);
       case 2: // Entire line
         _eraseRowSpan(cursorY, 0, width);
+        _clearLineWrapOnErase(clearStart: true, clearEnd: true);
     }
   }
 
+  void _clearWrappedRange(int start, int end) {
+    if (_usingAltScreen || start >= end) return;
+    _primaryWrapped.fillRange(start, end, false);
+  }
+
+  void _clearLineWrapOnErase({
+    required bool clearStart,
+    required bool clearEnd,
+  }) {
+    if (_usingAltScreen) return;
+    if (clearStart) _primaryWrapped[cursorY] = false;
+    if (clearEnd && cursorY + 1 < height) _primaryWrapped[cursorY + 1] = false;
+  }
+
   void _indexDown() {
+    final wrapped = _wrappingNextIndexDown;
+    _wrappingNextIndexDown = false;
+    var advanced = false;
     if (cursorY == _scrollBottom) {
-      _scrollRegion(_scrollTop, _scrollBottom, 1, up: true);
+      _scrollRegion(_scrollTop, _scrollBottom, 1, up: true, evictTop: true);
+      advanced = true;
     } else if (cursorY < height - 1) {
       cursorY++;
+      advanced = true;
+    }
+    if (wrapped && advanced && !_usingAltScreen) {
+      _primaryWrapped[cursorY] = true;
     }
   }
 
@@ -366,20 +458,60 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
-  void _scrollRegion(int top, int bottom, int count, {required bool up}) {
+  void _scrollRegion(
+    int top,
+    int bottom,
+    int count, {
+    required bool up,
+    bool evictTop = false,
+  }) {
     if (top < 0 || bottom >= height || top > bottom || count <= 0) return;
     final regionRows = bottom - top + 1;
     final shift = math.min(count, regionRows);
+    _evictTopRowsToScrollback(top, shift, up: up, evictTop: evictTop);
     final keepRows = regionRows - shift;
     final active = buffer;
     if (keepRows > 0) {
       final dstRow = up ? top : top + shift;
       final srcRow = up ? top + shift : top;
       _copyCellSpan(active, dstRow * width, srcRow * width, keepRows * width);
+      if (!_usingAltScreen) {
+        _primaryWrapped.setRange(
+          dstRow,
+          dstRow + keepRows,
+          _primaryWrapped,
+          srcRow,
+        );
+      }
     }
     final fillStart = up ? bottom - shift + 1 : top;
     final fillEnd = up ? bottom + 1 : top + shift;
     _fillRowsWithEraseAttributes(active, fillStart, fillEnd);
+    _clearWrappedRange(fillStart, fillEnd);
+  }
+
+  void _evictTopRowsToScrollback(
+    int top,
+    int shift, {
+    required bool up,
+    required bool evictTop,
+  }) {
+    if (!evictTop ||
+        !up ||
+        _usingAltScreen ||
+        top != 0 ||
+        _scrollback.maxLines <= 0) {
+      return;
+    }
+    for (var r = 0; r < shift; r++) {
+      _scrollback.push(
+        ScrollbackLine.fromBufferRow(
+          _primaryBuffer,
+          r,
+          isWrapped: _primaryWrapped[r],
+        ),
+      );
+    }
   }
 
   static void _copyCellSpan(
@@ -427,12 +559,18 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
+  void _wrapLineDown() {
+    cursorX = 0;
+    _wrappingNextIndexDown = true;
+    _indexDown();
+    _wrappingNextIndexDown = false;
+  }
+
   void _printGrapheme(String char) {
     if (char.isEmpty || _containsControlCodeUnit(char)) return;
     if (cursorX >= width) {
       if (_autoWrap) {
-        cursorX = 0;
-        _indexDown();
+        _wrapLineDown();
       } else {
         cursorX = width - 1;
       }
@@ -505,8 +643,7 @@ final class VirtualTerminal implements TerminalHandler {
         cursorX = (width == 1 && _autoWrap) ? 1 : width - 1;
         return;
       }
-      cursorX = 0;
-      _indexDown();
+      _wrapLineDown();
     }
     buffer.setAttributes(
       cursorX,
@@ -705,7 +842,7 @@ final class VirtualTerminal implements TerminalHandler {
       case 'M':
         _deleteLines(p1);
       case 'S':
-        _scrollRegion(_scrollTop, _scrollBottom, p1, up: true);
+        _scrollRegion(_scrollTop, _scrollBottom, p1, up: true, evictTop: true);
       case 'T':
         _scrollRegion(_scrollTop, _scrollBottom, p1, up: false);
       case 'r':
