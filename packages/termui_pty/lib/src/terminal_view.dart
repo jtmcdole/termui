@@ -32,7 +32,11 @@ class TerminalView extends StatelessWidget {
       focusNode: focusNode,
       autofocus: autofocus,
       onKeyEvent: (event) {
-        final str = InputEncoder.encode(event);
+        final str = InputEncoder.encode(
+          event,
+          bracketedPaste: terminal.bracketedPasteMode,
+          applicationCursorKeys: terminal.applicationCursorKeys,
+        );
         if (str.isNotEmpty) {
           onInput?.call(str);
           return true;
@@ -107,8 +111,18 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
   void handleMouseEvent(ev.MouseEvent event, int localX, int localY) {
     final w = widget as _TerminalBufferWidget;
     w.focusNode?.requestFocus();
+    final vt = w.terminal;
 
-    if (!w.terminal.mouseTrackingEnabled) {
+    if (!vt.mouseTrackingEnabled) {
+      if (vt.isUsingAlternateScreen &&
+          vt.alternateScrollMode &&
+          event.type == ev.MouseEventType.press) {
+        final seq = InputEncoder.encodeAlternateScroll(
+          event.button,
+          applicationCursorKeys: vt.applicationCursorKeys,
+        );
+        if (seq.isNotEmpty) w.onInput?.call(seq);
+      }
       return;
     }
 
@@ -122,7 +136,7 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
       type: event.type,
       modifiers: event.modifiers,
     );
-    final str = InputEncoder.encode(translatedEvent);
+    final str = InputEncoder.encode(translatedEvent, sgrMouse: vt.sgrMouseMode);
     if (str.isNotEmpty) {
       w.onInput?.call(str);
     }

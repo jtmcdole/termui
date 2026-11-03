@@ -435,6 +435,98 @@ void main() {
         isEmpty,
       );
     });
+
+    test('encodes X10 mouse fallback when sgrMouse is false', () {
+      const press = ev.MouseEvent(
+        x: 10,
+        y: 5,
+        button: ev.MouseButton.left,
+        type: ev.MouseEventType.press,
+      );
+      expect(
+        InputEncoder.encode(press, sgrMouse: false),
+        String.fromCharCodes([0x1B, 0x5B, 0x4D, 32, 42, 37]),
+      );
+
+      // Release sets low button bits to 3 while preserving modifier bits.
+      const shiftRelease = ev.MouseEvent(
+        x: 10,
+        y: 5,
+        button: ev.MouseButton.right,
+        type: ev.MouseEventType.release,
+        modifiers: {ev.Modifier.shift},
+      );
+      expect(
+        InputEncoder.encode(shiftRelease, sgrMouse: false),
+        String.fromCharCodes([0x1B, 0x5B, 0x4D, 32 + (4 | 3), 42, 37]),
+      );
+
+      // Drag adds motion +32 and modifier bits up to max coordinate 223.
+      const ctrlDragAtMax = ev.MouseEvent(
+        x: 223,
+        y: 223,
+        button: ev.MouseButton.middle,
+        type: ev.MouseEventType.drag,
+        modifiers: {ev.Modifier.control, ev.Modifier.alt},
+      );
+      expect(
+        InputEncoder.encode(ctrlDragAtMax, sgrMouse: false),
+        String.fromCharCodes([
+          0x1B,
+          0x5B,
+          0x4D,
+          32 + (1 | 32 | 8 | 16),
+          255,
+          255,
+        ]),
+      );
+
+      // Out-of-range (> 223) and buttonless hover (move) are dropped in X10 mode.
+      const outOfBounds = ev.MouseEvent(
+        x: 224,
+        y: 1,
+        button: ev.MouseButton.left,
+        type: ev.MouseEventType.press,
+      );
+      expect(InputEncoder.encode(outOfBounds, sgrMouse: false), isEmpty);
+
+      const hover = ev.MouseEvent(
+        x: 10,
+        y: 5,
+        button: ev.MouseButton.none,
+        type: ev.MouseEventType.move,
+      );
+      expect(InputEncoder.encode(hover, sgrMouse: false), isEmpty);
+    });
+
+    test('suppresses non-press wheel events in both SGR and X10 modes', () {
+      for (final button in [ev.MouseButton.wheelUp, ev.MouseButton.wheelDown]) {
+        for (final type in [
+          ev.MouseEventType.release,
+          ev.MouseEventType.drag,
+          ev.MouseEventType.move,
+        ]) {
+          final event = ev.MouseEvent(x: 4, y: 3, button: button, type: type);
+          expect(InputEncoder.encode(event, sgrMouse: true), isEmpty);
+          expect(InputEncoder.encode(event, sgrMouse: false), isEmpty);
+        }
+      }
+
+      const wheelUpPress = ev.MouseEvent(
+        x: 4,
+        y: 3,
+        button: ev.MouseButton.wheelUp,
+        type: ev.MouseEventType.press,
+      );
+      expect(
+        InputEncoder.encode(wheelUpPress, sgrMouse: true),
+        '\x1b[<64;4;3M',
+      );
+      expect(
+        InputEncoder.encode(wheelUpPress, sgrMouse: false),
+        String.fromCharCodes([0x1B, 0x5B, 0x4D, 96, 36, 35]),
+      );
+    });
   });
 
   test('VirtualTerminal tracks DECCKM (?1) and Alternate Scroll (?1007)', () {
@@ -460,4 +552,79 @@ void main() {
     expect(vt.applicationCursorKeys, isFalse);
     expect(vt.alternateScrollMode, isTrue);
   });
+
+  test(
+    'TerminalView forwards DECCKM, X10/SGR mouse, and alternate scroll modes',
+    () {
+      debugShowTouchesEnabled = false;
+      FocusManager.instance.setPrimaryFocus(null);
+      final tester = TerminalTester();
+      final vt = VirtualTerminal(width: 20, height: 10);
+      final written = <String>[];
+
+      tester.run(() async {
+        final runner = PromptRunner<Object?>(
+          terminal: tester.terminal,
+          alternateScreen: false,
+          widget: SizedBox.expand(
+            child: TerminalView(terminal: vt, onInput: written.add),
+          ),
+        );
+
+        final runFuture = runner.run();
+        await tester.pump(const Duration(milliseconds: 50));
+
+        // 1. DECCKM (?1h vs ?1l) cursor key forwarding.
+        tester.sendKey(LogicalKey.arrowUp);
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, ['\x1b[A']);
+        written.clear();
+
+        vt.writeString('\x1b[?1h');
+        tester.sendKey(LogicalKey.arrowUp);
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, ['\x1bOA']);
+        written.clear();
+
+        // 2. Alternate scroll on ?1049h when mouse tracking is disabled.
+        tester.sendString('\x1b[<64;3;2M');
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, isEmpty);
+
+        vt.writeString('\x1b[?1049h');
+        tester.sendString('\x1b[<64;3;2M\x1b[<65;3;2M');
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, ['\x1bOA', '\x1bOB']);
+        written.clear();
+
+        vt.writeString('\x1b[?1l');
+        tester.sendString('\x1b[<64;3;2M');
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, ['\x1b[A']);
+        written.clear();
+
+        vt.writeString('\x1b[?1007l');
+        tester.sendString('\x1b[<64;3;2M');
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, isEmpty);
+
+        // 3. Mouse tracking: ?1000h without ?1006h encodes X10; adding ?1006h encodes SGR.
+        vt.writeString('\x1b[?1049l\x1b[?1000h');
+        tester.sendString('\x1b[<0;10;5M');
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, [
+          String.fromCharCodes([0x1B, 0x5B, 0x4D, 32, 42, 37]),
+        ]);
+        written.clear();
+
+        vt.writeString('\x1b[?1006h');
+        tester.sendString('\x1b[<0;10;5M');
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(written, ['\x1b[<0;10;5M']);
+
+        runner.abort();
+        await runFuture.catchError((_) => null);
+      });
+    },
+  );
 }
