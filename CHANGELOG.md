@@ -3,6 +3,35 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-03
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui_pty` - `v0.8.0`](#termui_pty---v080)
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.10.1`](#termui_flutter---v0101)
+
+---
+
+#### `termui_pty` - `v0.8.0`
+
+ - **FEAT**(termui_pty): integrate primary scrollback and row wrap tracking in VirtualTerminal.
+ - **FEAT**(termui_pty): add ScrollbackBuffer ring data structure.
+ - **FEAT**(termui_pty): add non-SGR X10 mouse encoding and wire TerminalView modes.
+ - **FEAT**(termui_pty): track DECCKM/DECSET 1007 modes and encode alternate scroll.
+ - **BREAKING** **FIX**(termui_pty): consume SGR 58 underline colors and parse colon subparameters.
+
+#### `termui_flutter` - `v0.10.1`
+
+ - **FIX**(termui_flutter): quantize trackpad scroll deltas and ignore zero-dy swipes.
+
+
 ## 2026-11-02
 
 ### Changes

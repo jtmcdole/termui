@@ -1,3 +1,7 @@
+## 0.10.1
+
+ - **FIX**(termui_flutter): quantize trackpad scroll deltas and ignore zero-dy swipes.
+
 ## 0.10.0
 
 > Note: This release has breaking changes.
