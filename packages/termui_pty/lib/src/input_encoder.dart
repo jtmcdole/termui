@@ -9,16 +9,40 @@ abstract final class InputEncoder {
   );
 
   /// Encodes a single event into an ANSI string.
-  static String encode(ev.InputEvent event, {bool bracketedPaste = false}) =>
-      switch (event) {
-        ev.KeyEvent key => _encodeKeyEvent(key),
-        ev.MouseEvent mouse => _encodeMouseEvent(mouse),
-        ev.PasteEvent paste => _encodePasteEvent(
-          paste,
-          bracketedPaste: bracketedPaste,
-        ),
-        _ => '',
-      };
+  static String encode(
+    ev.InputEvent event, {
+    bool bracketedPaste = false,
+    bool applicationCursorKeys = false,
+  }) => switch (event) {
+    ev.KeyEvent key =>
+      (applicationCursorKeys && key.modifiers.isEmpty
+              ? _encodeApplicationCursorKey(key.type)
+              : null) ??
+          _encodeKeyEvent(key),
+    ev.MouseEvent mouse => _encodeMouseEvent(mouse),
+    ev.PasteEvent paste => _encodePasteEvent(
+      paste,
+      bracketedPaste: bracketedPaste,
+    ),
+    _ => '',
+  };
+
+  /// Encodes mouse wheel events for Alternate Scroll mode (`DECSET 1007`).
+  static String encodeAlternateScroll(
+    ev.MouseButton button, {
+    int lines = 1,
+    bool applicationCursorKeys = false,
+  }) {
+    if (lines <= 0) return '';
+    final seq = switch ((button, applicationCursorKeys)) {
+      (ev.MouseButton.wheelUp, true) => '\x1bOA',
+      (ev.MouseButton.wheelUp, false) => '\x1b[A',
+      (ev.MouseButton.wheelDown, true) => '\x1bOB',
+      (ev.MouseButton.wheelDown, false) => '\x1b[B',
+      _ => '',
+    };
+    return seq.isEmpty ? '' : seq * lines;
+  }
 
   static String _encodePasteEvent(
     ev.PasteEvent event, {
@@ -32,6 +56,16 @@ abstract final class InputEncoder {
     safe = safe.replaceAll(_unsafePasteControls, '');
     return '\x1b[200~$safe\x1b[201~';
   }
+
+  static String? _encodeApplicationCursorKey(ev.KeyType type) => switch (type) {
+    ev.KeyType.up => '\x1bOA',
+    ev.KeyType.down => '\x1bOB',
+    ev.KeyType.right => '\x1bOC',
+    ev.KeyType.left => '\x1bOD',
+    ev.KeyType.home => '\x1bOH',
+    ev.KeyType.end => '\x1bOF',
+    _ => null,
+  };
 
   static String _encodeKeyEvent(ev.KeyEvent event) => switch (event.type) {
     ev.KeyType.character => _encodeCharacterKey(event),

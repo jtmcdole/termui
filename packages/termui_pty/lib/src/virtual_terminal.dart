@@ -103,6 +103,16 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether bracketed paste mode (`DECSET 2004`, `?2004h` / `?2004l`) is enabled.
   bool bracketedPasteMode = false;
 
+  bool _applicationCursorKeys = false;
+
+  /// Whether application cursor keys mode (`DECCKM`, `?1h` / `?1l`) is enabled.
+  bool get applicationCursorKeys => _applicationCursorKeys;
+
+  bool _alternateScrollMode = true;
+
+  /// Whether alternate scroll mode (`DECSET 1007`, `?1007h` / `?1007l`) is enabled.
+  bool get alternateScrollMode => _alternateScrollMode;
+
   /// Callback invoked when an `OSC 52` clipboard write sequence is decoded.
   ///
   /// The `selection` parameter is the target selection buffer (e.g. `'c'` for
@@ -186,6 +196,8 @@ final class VirtualTerminal implements TerminalHandler {
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
     bracketedPasteMode = false;
+    _applicationCursorKeys = false;
+    _alternateScrollMode = true;
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
@@ -543,6 +555,8 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _applyDecPrivateModeParam(int param, bool enable) {
     switch (param) {
+      case 1: // DECCKM (Application Cursor Keys)
+        _applicationCursorKeys = enable;
       case 7: // DECAWM (Auto-Wrap Mode)
         _autoWrap = enable;
         if (!enable) _clampPendingWrap();
@@ -558,6 +572,8 @@ final class VirtualTerminal implements TerminalHandler {
         mouseTrackingEnabled = enable;
       case 1006:
         sgrMouseMode = enable;
+      case 1007: // Alternate Scroll Mode
+        _alternateScrollMode = enable;
       case 2004:
         bracketedPasteMode = enable;
     }
