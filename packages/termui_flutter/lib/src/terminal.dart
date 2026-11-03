@@ -851,6 +851,71 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     }
   }
 
+  static const int _maxWheelStepsPerEvent = 32;
+  static const Duration _scrollIdleReset = Duration(milliseconds: 250);
+
+  double _scrollRemainderDy = 0.0;
+  DateTime? _lastScrollAt;
+
+  void _resetScrollAccumulator() {
+    _scrollRemainderDy = 0.0;
+    _lastScrollAt = null;
+  }
+
+  void _accumulateScrollDy(double dy) {
+    final now = clock.now();
+    final lastAt = _lastScrollAt;
+    if (lastAt != null && now.difference(lastAt) > _scrollIdleReset) {
+      _scrollRemainderDy = 0.0;
+    } else if (_scrollRemainderDy * dy < 0) {
+      _scrollRemainderDy = 0.0;
+    }
+    _lastScrollAt = now;
+    _scrollRemainderDy += dy;
+  }
+
+  void _handleScrollDelta(PointerEvent event, double dy, Size layoutSize) {
+    if (dy == 0.0 || !dy.isFinite) return;
+    final cellWidth = _atlas!.cellWidth;
+    final cellHeight = _atlas!.cellHeight;
+    if (cellWidth <= 0 || cellHeight <= 0) return;
+
+    final maxCol = (layoutSize.width / cellWidth).floor();
+    final maxRow = (layoutSize.height / cellHeight).floor();
+    if (maxCol <= 0 || maxRow <= 0) return;
+
+    _accumulateScrollDy(dy);
+    final rawSteps = (_scrollRemainderDy / cellHeight).truncate();
+    if (rawSteps == 0) return;
+    _scrollRemainderDy -= rawSteps * cellHeight;
+
+    final col = (event.localPosition.dx / cellWidth).floor().clamp(
+      0,
+      maxCol - 1,
+    );
+    final row = (event.localPosition.dy / cellHeight).floor().clamp(
+      0,
+      maxRow - 1,
+    );
+    final steps = rawSteps.abs().clamp(1, _maxWheelStepsPerEvent);
+    final button = rawSteps < 0
+        ? term.MouseButton.wheelUp
+        : term.MouseButton.wheelDown;
+    final mods = _collectHardwareModifiers();
+
+    for (var i = 0; i < steps; i++) {
+      final termEvent = term.MouseEvent(
+        x: col + 1,
+        y: row + 1,
+        button: button,
+        type: term.MouseEventType.press,
+        modifiers: mods,
+      );
+      _lastInjectedPointerEvent = termEvent;
+      widget.terminal.injectEvent(termEvent);
+    }
+  }
+
   void _handlePointerEvent(PointerEvent event, Size layoutSize) {
     final cellWidth = _atlas!.cellWidth;
     final cellHeight = _atlas!.cellHeight;
@@ -893,12 +958,6 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       ),
       PointerMoveEvent() => (term.MouseButton.none, term.MouseEventType.move),
       PointerUpEvent() => (term.MouseButton.left, term.MouseEventType.release),
-      PointerScrollEvent(:final scrollDelta) => (
-        scrollDelta.dy < 0
-            ? term.MouseButton.wheelUp
-            : term.MouseButton.wheelDown,
-        term.MouseEventType.press,
-      ),
       _ => (term.MouseButton.none, term.MouseEventType.move),
     };
 
@@ -989,11 +1048,19 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
                     onPointerMove: (e) => _handlePointerEvent(e, layoutSize),
                     onPointerHover: (e) => _handlePointerEvent(e, layoutSize),
                     onPointerUp: (e) => _handlePointerEvent(e, layoutSize),
+                    onPointerCancel: (_) => _resetScrollAccumulator(),
                     onPointerSignal: (signal) {
-                      if (signal case PointerScrollEvent()) {
-                        _handlePointerEvent(signal, layoutSize);
+                      if (signal case PointerScrollEvent(:final scrollDelta)) {
+                        _handleScrollDelta(signal, scrollDelta.dy, layoutSize);
                       }
                     },
+                    onPointerPanZoomStart: (_) => _resetScrollAccumulator(),
+                    onPointerPanZoomUpdate: (event) => _handleScrollDelta(
+                      event,
+                      -event.panDelta.dy,
+                      layoutSize,
+                    ),
+                    onPointerPanZoomEnd: (_) => _resetScrollAccumulator(),
                     child: Container(
                       width: layoutSize.width,
                       height: layoutSize.height,
