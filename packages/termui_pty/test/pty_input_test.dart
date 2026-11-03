@@ -354,5 +354,110 @@ void main() {
         isEmpty,
       );
     });
+
+    test('encodes SS3 cursor keys when applicationCursorKeys is enabled', () {
+      const keys = [
+        (ev.KeyType.up, '\x1bOA', '\x1b[A'),
+        (ev.KeyType.down, '\x1bOB', '\x1b[B'),
+        (ev.KeyType.right, '\x1bOC', '\x1b[C'),
+        (ev.KeyType.left, '\x1bOD', '\x1b[D'),
+        (ev.KeyType.home, '\x1bOH', '\x1b[H'),
+        (ev.KeyType.end, '\x1bOF', '\x1b[F'),
+      ];
+      for (final (keyType, appSeq, normalSeq) in keys) {
+        expect(
+          InputEncoder.encode(
+            ev.KeyEvent('', keyType),
+            applicationCursorKeys: true,
+          ),
+          appSeq,
+        );
+        expect(InputEncoder.encode(ev.KeyEvent('', keyType)), normalSeq);
+        for (final mod in [
+          ev.Modifier.shift,
+          ev.Modifier.alt,
+          ev.Modifier.control,
+        ]) {
+          expect(
+            InputEncoder.encode(
+              ev.KeyEvent('', keyType, modifiers: {mod}),
+              applicationCursorKeys: true,
+            ),
+            normalSeq,
+          );
+        }
+      }
+      // Non-cursor keys remain unchanged when applicationCursorKeys is true.
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent('', ev.KeyType.pageUp),
+          applicationCursorKeys: true,
+        ),
+        '\x1b[5~',
+      );
+    });
+
+    test('encodes alternate scroll wheel sequences', () {
+      expect(
+        InputEncoder.encodeAlternateScroll(ev.MouseButton.wheelUp),
+        '\x1b[A',
+      );
+      expect(
+        InputEncoder.encodeAlternateScroll(ev.MouseButton.wheelUp, lines: 2),
+        '\x1b[A\x1b[A',
+      );
+      expect(
+        InputEncoder.encodeAlternateScroll(
+          ev.MouseButton.wheelUp,
+          applicationCursorKeys: true,
+        ),
+        '\x1bOA',
+      );
+      expect(
+        InputEncoder.encodeAlternateScroll(ev.MouseButton.wheelDown),
+        '\x1b[B',
+      );
+      expect(
+        InputEncoder.encodeAlternateScroll(
+          ev.MouseButton.wheelDown,
+          lines: 3,
+          applicationCursorKeys: true,
+        ),
+        '\x1bOB\x1bOB\x1bOB',
+      );
+      expect(InputEncoder.encodeAlternateScroll(ev.MouseButton.left), isEmpty);
+      expect(
+        InputEncoder.encodeAlternateScroll(ev.MouseButton.wheelUp, lines: 0),
+        isEmpty,
+      );
+      expect(
+        InputEncoder.encodeAlternateScroll(ev.MouseButton.wheelDown, lines: -1),
+        isEmpty,
+      );
+    });
+  });
+
+  test('VirtualTerminal tracks DECCKM (?1) and Alternate Scroll (?1007)', () {
+    final vt = VirtualTerminal(width: 20, height: 5);
+    expect(vt.applicationCursorKeys, isFalse);
+    expect(vt.alternateScrollMode, isTrue);
+
+    vt.writeString('\x1b[?1h\x1b[?1007l');
+    expect(vt.applicationCursorKeys, isTrue);
+    expect(vt.alternateScrollMode, isFalse);
+
+    vt.writeString('\x1b[?1l\x1b[?1007h');
+    expect(vt.applicationCursorKeys, isFalse);
+    expect(vt.alternateScrollMode, isTrue);
+
+    // DECSTR (!p) soft reset restores defaults.
+    vt.writeString('\x1b[?1h\x1b[?1007l\x1b[!p');
+    expect(vt.applicationCursorKeys, isFalse);
+    expect(vt.alternateScrollMode, isTrue);
+
+    // RIS (ESC c) full reset restores defaults.
+    vt.writeString('\x1b[?1h\x1b[?1007l\x1bc');
+    expect(vt.applicationCursorKeys, isFalse);
+    expect(vt.alternateScrollMode, isTrue);
   });
 }
