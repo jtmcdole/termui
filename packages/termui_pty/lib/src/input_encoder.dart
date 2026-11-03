@@ -13,13 +13,14 @@ abstract final class InputEncoder {
     ev.InputEvent event, {
     bool bracketedPaste = false,
     bool applicationCursorKeys = false,
+    bool sgrMouse = true,
   }) => switch (event) {
     ev.KeyEvent key =>
       (applicationCursorKeys && key.modifiers.isEmpty
               ? _encodeApplicationCursorKey(key.type)
               : null) ??
           _encodeKeyEvent(key),
-    ev.MouseEvent mouse => _encodeMouseEvent(mouse),
+    ev.MouseEvent mouse => _encodeMouseEvent(mouse, sgrMouse: sgrMouse),
     ev.PasteEvent paste => _encodePasteEvent(
       paste,
       bracketedPaste: bracketedPaste,
@@ -131,8 +132,13 @@ abstract final class InputEncoder {
     };
   }
 
-  static String _encodeMouseEvent(ev.MouseEvent event) {
-    if (event.x < 1 || event.y < 1) return '';
+  static bool _isNonPressWheel(ev.MouseEvent event) =>
+      (event.button == ev.MouseButton.wheelUp ||
+          event.button == ev.MouseButton.wheelDown) &&
+      event.type != ev.MouseEventType.press;
+
+  static String _encodeMouseEvent(ev.MouseEvent event, {bool sgrMouse = true}) {
+    if (event.x < 1 || event.y < 1 || _isNonPressWheel(event)) return '';
 
     var cb = switch (event.button) {
       ev.MouseButton.left => 0,
@@ -154,7 +160,28 @@ abstract final class InputEncoder {
     }
     if (event.modifiers.contains(ev.Modifier.control)) cb |= 16;
 
+    if (!sgrMouse) return _encodeX10Mouse(event, cb);
+
     final release = event.type == ev.MouseEventType.release ? 'm' : 'M';
     return '\x1b[<$cb;${event.x};${event.y}$release';
+  }
+
+  static String _encodeX10Mouse(ev.MouseEvent event, int cb) {
+    if (event.x > 223 ||
+        event.y > 223 ||
+        event.type == ev.MouseEventType.move) {
+      return '';
+    }
+    final wireCb = event.type == ev.MouseEventType.release
+        ? (cb & ~0x03) | 3
+        : cb;
+    return String.fromCharCodes([
+      0x1B,
+      0x5B,
+      0x4D,
+      32 + wireCb,
+      32 + event.x,
+      32 + event.y,
+    ]);
   }
 }
