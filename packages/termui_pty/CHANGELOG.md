@@ -1,3 +1,13 @@
+## 0.8.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(termui_pty): integrate primary scrollback and row wrap tracking in VirtualTerminal.
+ - **FEAT**(termui_pty): add ScrollbackBuffer ring data structure.
+ - **FEAT**(termui_pty): add non-SGR X10 mouse encoding and wire TerminalView modes.
+ - **FEAT**(termui_pty): track DECCKM/DECSET 1007 modes and encode alternate scroll.
+ - **BREAKING** **FIX**(termui_pty): consume SGR 58 underline colors and parse colon subparameters.
+
 ## 0.7.0
 
 > Note: This release has breaking changes.
