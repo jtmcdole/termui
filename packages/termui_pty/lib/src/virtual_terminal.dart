@@ -769,7 +769,17 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   @override
-  void csi(String command, List<int> params, {String? intermediate}) {
+  void csi(
+    String command,
+    List<int> params, {
+    String? intermediate,
+    List<List<int>?>? subparams,
+  }) {
+    if (intermediate == null && command == 'm') {
+      _applySgr(params, subparams: subparams);
+      return;
+    }
+    if (subparams != null) return;
     if (intermediate != null) {
       if (intermediate == '?') {
         _handleDecPrivateMode(command, params);
@@ -851,8 +861,6 @@ final class VirtualTerminal implements TerminalHandler {
         if (params.isEmpty) _saveCursor();
       case 'u':
         _restoreCursor();
-      case 'm':
-        _applySgr(params);
     }
   }
 
@@ -922,7 +930,7 @@ final class VirtualTerminal implements TerminalHandler {
     _eraseRowSpan(cursorY, cursorX, cursorX + ins);
   }
 
-  void _applySgr(List<int> params) {
+  void _applySgr(List<int> params, {List<List<int>?>? subparams}) {
     if (params.isEmpty) {
       _currentStyle = .empty;
       return;
@@ -930,13 +938,21 @@ final class VirtualTerminal implements TerminalHandler {
     var i = 0;
     while (i < params.length) {
       final code = params[i];
-      if (code == 38 || code == 48) {
-        final (color, consumed) = _parseExtendedColor(params, i);
-        if (color != null) {
-          _currentStyle = code == 38
-              ? _currentStyle.merge(Style(foreground: color))
-              : _currentStyle.merge(Style(background: color));
-        }
+      final sub = (subparams != null && i < subparams.length)
+          ? subparams[i]
+          : null;
+      if (sub != null) {
+        _applyColonSgr(code, sub);
+        i++;
+        continue;
+      }
+      if (code == 38 || code == 48 || code == 58) {
+        final (color, consumed) = _parseExtendedColor(
+          params,
+          i,
+          subparams: subparams,
+        );
+        _applyExtendedSgrColor(code, color);
         i += consumed;
         continue;
       }
@@ -945,15 +961,59 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
-  (Color?, int) _parseExtendedColor(List<int> params, int index) {
-    if (index + 1 >= params.length) return (null, 1);
+  void _applyColonSgr(int code, List<int> sub) {
+    switch ((code, sub)) {
+      case (4, [0, ...]):
+        _setModifier(Modifier.underline, enable: false);
+      case (4, [>= 1 && <= 5, ...]):
+        _setModifier(Modifier.underline, enable: true);
+      case (38 || 48, _):
+        _applyExtendedSgrColor(code, _parseColonExtendedColor(sub));
+    }
+  }
+
+  void _applyExtendedSgrColor(int code, Color? color) {
+    if (color == null || code == 58) return;
+    _currentStyle = code == 38
+        ? _currentStyle.merge(Style(foreground: color))
+        : _currentStyle.merge(Style(background: color));
+  }
+
+  Color? _parseColonExtendedColor(List<int> sub) => switch (sub) {
+    [5, final index, ...] => _colorFromAnsi256(index),
+    [2, _, final r, final g, final b, ...] || [2, final r, final g, final b] =>
+      Color(r.clamp(0, 255), g.clamp(0, 255), b.clamp(0, 255)),
+    _ => null,
+  };
+
+  static int _semicolonSpanEnd(
+    List<int> params,
+    List<List<int>?>? subparams,
+    int index,
+  ) {
+    final limit = math.min(params.length, index + 5);
+    if (subparams == null) return limit;
+    var end = index + 1;
+    while (end < limit && (end >= subparams.length || subparams[end] == null)) {
+      end++;
+    }
+    return end;
+  }
+
+  (Color?, int) _parseExtendedColor(
+    List<int> params,
+    int index, {
+    List<List<int>?>? subparams,
+  }) {
+    final end = _semicolonSpanEnd(params, subparams, index);
+    if (index + 1 >= end) return (null, 1);
     final mode = params[index + 1];
     if (mode == 5) {
-      if (index + 2 >= params.length) return (null, params.length - index);
+      if (index + 2 >= end) return (null, end - index);
       return (_colorFromAnsi256(params[index + 2]), 3);
     }
     if (mode == 2) {
-      if (index + 4 >= params.length) return (null, params.length - index);
+      if (index + 4 >= end) return (null, end - index);
       final r = params[index + 2].clamp(0, 255);
       final g = params[index + 3].clamp(0, 255);
       final b = params[index + 4].clamp(0, 255);
