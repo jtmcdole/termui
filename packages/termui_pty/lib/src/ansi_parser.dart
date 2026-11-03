@@ -9,7 +9,18 @@ abstract interface class TerminalHandler {
   void execute(int charCode);
 
   /// Execute a CSI (Control Sequence Introducer) command.
-  void csi(String command, List<int> params, {String? intermediate});
+  ///
+  /// When any parameter contains colon-delimited ITU-T T.416 subparameters
+  /// (e.g. `38:2::66:133:244` or `4:3`), [subparams] has the same length as
+  /// [params], with `subparams[i]` holding the values after the first `:` for
+  /// parameter `i` (or `null` when parameter `i` had no `:`). When no `:`
+  /// appears in the sequence, [subparams] is `null`.
+  void csi(
+    String command,
+    List<int> params, {
+    String? intermediate,
+    List<List<int>?>? subparams,
+  });
 
   /// Execute an OSC (Operating System Command).
   void osc(int command, String payload);
@@ -34,6 +45,8 @@ enum _ParserState {
 final class AnsiParser {
   static const int _maxOscLength = 8192;
   static const int _maxOsc52Length = 1_400_000;
+  static const int _maxCsiParams = 64;
+  static const int _maxCsiSubparams = 16;
 
   /// The terminal handler that processes parsed escape sequences.
   final TerminalHandler handler;
@@ -41,6 +54,8 @@ final class AnsiParser {
   _ParserState _state = _ParserState.ground;
   final List<int> _textBuffer = [];
   final List<int> _params = [];
+  final List<List<int>?> _subparams = [];
+  List<int>? _currentSubparams;
   int _currentParam = 0;
   bool _hasParam = false;
   final List<int> _intermediates = [];
@@ -84,7 +99,8 @@ final class AnsiParser {
       return;
     }
     if (c == 0x18 || c == 0x1A) {
-      _state = _ParserState.ground;
+      _resetCsi();
+      _state = .ground;
     }
     _execute(c);
   }
@@ -121,10 +137,7 @@ final class AnsiParser {
       return;
     }
     if (c == 0x5B) {
-      _params.clear();
-      _currentParam = 0;
-      _hasParam = false;
-      _intermediates.clear();
+      _resetCsi();
       _state = _ParserState.csiEntry;
       return;
     }
@@ -150,33 +163,64 @@ final class AnsiParser {
     }
   }
 
+  void _resetCsi() {
+    _params.clear();
+    _subparams.clear();
+    _currentSubparams = null;
+    _currentParam = 0;
+    _hasParam = false;
+    _intermediates.clear();
+  }
+
   void _handleCsiEntry(int c) {
-    if (c >= 0x30 && c <= 0x39) {
-      _currentParam = math.min(0xFFFF, (_currentParam * 10) + (c - 0x30));
-      _hasParam = true;
-      _state = _ParserState.csiParam;
-    } else if (c == 0x3B) {
-      _params.add(0);
-      _currentParam = 0;
-      _hasParam = false;
-      _state = _ParserState.csiParam;
-    } else if (c >= 0x3C && c <= 0x3F) {
+    if (c >= 0x3C && c <= 0x3F) {
       _intermediates.add(c);
-      _state = _ParserState.csiParam;
-    } else if (c >= 0x20 && c <= 0x2F) {
-      _intermediates.add(c);
-      _state = _ParserState.csiIntermediate;
-    } else if (c >= 0x40 && c <= 0x7E) {
-      _state = _ParserState.ground;
-      _dispatchCsi(c);
+      _state = .csiParam;
+    } else if (c >= 0x20 && c <= 0x7E) {
+      _state = .csiParam;
+      _handleCsiParam(c);
     }
   }
 
+  void _finishParamSlot() {
+    final value = _hasParam ? _currentParam : 0;
+    if (_currentSubparams case final subparams?) {
+      if (subparams.length < _maxCsiSubparams) {
+        subparams.add(value);
+      }
+      _currentSubparams = null;
+    } else if (_params.length < _maxCsiParams) {
+      _params.add(value);
+      if (_subparams.isNotEmpty) {
+        _subparams.add(null);
+      }
+    }
+    _currentParam = 0;
+    _hasParam = false;
+  }
+
+  void _advanceSubparam() {
+    final value = _hasParam ? _currentParam : 0;
+    if (_currentSubparams case final subparams?) {
+      if (subparams.length < _maxCsiSubparams) {
+        subparams.add(value);
+      }
+    } else if (_params.length < _maxCsiParams) {
+      while (_subparams.length < _params.length) {
+        _subparams.add(null);
+      }
+      _params.add(value);
+      final list = <int>[];
+      _currentSubparams = list;
+      _subparams.add(list);
+    }
+    _currentParam = 0;
+    _hasParam = false;
+  }
+
   void _flushCurrentParam() {
-    if (_hasParam) {
-      _params.add(_currentParam);
-      _currentParam = 0;
-      _hasParam = false;
+    if (_currentSubparams != null || _hasParam || _params.isNotEmpty) {
+      _finishParamSlot();
     }
   }
 
@@ -185,19 +229,20 @@ final class AnsiParser {
       _currentParam = math.min(0xFFFF, (_currentParam * 10) + (c - 0x30));
       _hasParam = true;
     } else if (c == 0x3B) {
-      _params.add(_hasParam ? _currentParam : 0);
-      _currentParam = 0;
-      _hasParam = false;
+      _finishParamSlot();
+    } else if (c == 0x3A) {
+      _advanceSubparam();
     } else if (c >= 0x20 && c <= 0x2F) {
       _flushCurrentParam();
       _intermediates.add(c);
-      _state = _ParserState.csiIntermediate;
+      _state = .csiIntermediate;
     } else if (c >= 0x40 && c <= 0x7E) {
       _flushCurrentParam();
-      _state = _ParserState.ground;
+      _state = .ground;
       _dispatchCsi(c);
-    } else if (c == 0x3A || (c >= 0x3C && c <= 0x3F)) {
-      _state = _ParserState.csiIgnore;
+    } else if (c >= 0x3C && c <= 0x3F) {
+      _resetCsi();
+      _state = .csiIgnore;
     }
   }
 
@@ -205,10 +250,11 @@ final class AnsiParser {
     if (c >= 0x20 && c <= 0x2F) {
       _intermediates.add(c);
     } else if (c >= 0x40 && c <= 0x7E) {
-      _state = _ParserState.ground;
+      _state = .ground;
       _dispatchCsi(c);
     } else if (c >= 0x30 && c <= 0x3F) {
-      _state = _ParserState.csiIgnore;
+      _resetCsi();
+      _state = .csiIgnore;
     }
   }
 
@@ -276,7 +322,15 @@ final class AnsiParser {
     final intermediate = _intermediates.isNotEmpty
         ? String.fromCharCodes(_intermediates)
         : null;
-    handler.csi(command, List.from(_params), intermediate: intermediate);
+    final params = [..._params];
+    final subparams = _subparams.isNotEmpty ? [..._subparams] : null;
+    _resetCsi();
+    handler.csi(
+      command,
+      params,
+      intermediate: intermediate,
+      subparams: subparams,
+    );
   }
 
   void _dispatchOsc() {

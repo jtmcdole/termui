@@ -836,5 +836,166 @@ void main() {
         expect(terminal.cursorY, equals(0));
       },
     );
+
+    test(
+      'consumes SGR 58/59 underline color without corrupting foreground, background, or modifiers',
+      () {
+        const banner = "Love Jetski CLI? We're hiring SWEs!";
+        final terminal = VirtualTerminal(width: 40, height: 2);
+        final payload = StringBuffer();
+        final expectedFg = <int>[];
+        for (var i = 0; i < banner.length; i++) {
+          final r = (66 + (242 - 66) * i / (banner.length - 1)).round();
+          final g = (133 + (82 - 133) * i / (banner.length - 1)).round();
+          final b = (244 + (90 - 244) * i / (banner.length - 1)).round();
+          expectedFg.add(Color(r, g, b).argb);
+          payload.write('\x1b[4;38;2;$r;$g;$b;58;2;$r;$g;${b}m${banner[i]}');
+        }
+        payload.write('\x1b[59;24;39m\r\n\x1b[38;5;196;58;5;103mX\x1b[0m');
+        terminal.write(utf8.encode('$payload'));
+
+        for (var i = 0; i < banner.length; i++) {
+          expect(
+            terminal.buffer.getCharacter(i, 0),
+            equals(banner[i]),
+            reason: 'char at column $i',
+          );
+          expect(
+            terminal.buffer.getForeground(i, 0),
+            equals(expectedFg[i]),
+            reason: 'foreground at column $i (${banner[i]})',
+          );
+          expect(
+            terminal.buffer.getBackground(i, 0),
+            equals(0),
+            reason: 'background at column $i (${banner[i]})',
+          );
+          expect(
+            terminal.buffer.getModifiers(i, 0),
+            equals(Modifier.underline),
+            reason: 'modifiers at column $i (${banner[i]})',
+          );
+        }
+
+        // SGR 58;5;103 must not leak 5 (blink) or 103 (bright yellow bg).
+        expect(terminal.buffer.getCharacter(0, 1), equals('X'));
+        expect(
+          terminal.buffer.getForeground(0, 1),
+          equals(const Color(255, 0, 0).argb),
+        );
+        expect(terminal.buffer.getBackground(0, 1), equals(0));
+        expect(terminal.buffer.getModifiers(0, 1), equals(Modifier.none));
+
+        // Truncated/unknown semicolon 58 forms must not leak modifiers or swallow tail codes.
+        terminal.write(
+          utf8.encode(
+            '\x1b[0;58m\x1b[58;5m\x1b[58;2;4m\x1b[58;2;10;31m\x1b[58;9;31mY',
+          ),
+        );
+        expect(terminal.buffer.getCharacter(1, 1), equals('Y'));
+        expect(
+          terminal.buffer.getForeground(1, 1),
+          equals(const Color(170, 0, 0).argb),
+        );
+        expect(terminal.buffer.getModifiers(1, 1), equals(Modifier.none));
+      },
+    );
+
+    test(
+      'parses ITU-T T.416 colon-delimited SGR subparameters for extended colors and styled underlines',
+      () {
+        final terminal = VirtualTerminal(width: 12, height: 2);
+
+        // 4:3 (curly underline), 38:2::r:g:b::tol:cs (tolerance form),
+        // 48:2:r:g:b (4-part RGB), and 58:2::r:g:b (underline RGB ignored cleanly).
+        terminal.write(
+          utf8.encode(
+            '\x1b[4:3;38:2::66:133:244::50:0;48:2:10:20:30;58:2::92:103:100mA',
+          ),
+        );
+        expect(
+          terminal.buffer.getForeground(0, 0),
+          equals(const Color(66, 133, 244).argb),
+        );
+        expect(
+          terminal.buffer.getBackground(0, 0),
+          equals(const Color(10, 20, 30).argb),
+        );
+        expect(terminal.buffer.getModifiers(0, 0), equals(Modifier.underline));
+
+        // 38:5:n, 48:5:n, 58:5:n, and 4:0 (underline off).
+        terminal.write(utf8.encode('\x1b[38:5:196;48:5:46;58:5:103;4:0mB'));
+        expect(
+          terminal.buffer.getForeground(1, 0),
+          equals(const Color(255, 0, 0).argb),
+        );
+        expect(
+          terminal.buffer.getBackground(1, 0),
+          equals(const Color(0, 255, 0).argb),
+        );
+        expect(terminal.buffer.getModifiers(1, 0), equals(Modifier.none));
+
+        // Non-SGR and DEC private CSI with colons are ignored without flipping modes or erasing.
+        terminal.write(
+          utf8.encode(
+            '\x1b[0m\x1b[>4:2m\x1b[?1049:1h\x1b[?25:0l\x1b[2:0J'
+            '\x1b[1;4:1;38;2;12;34;56;58:2::97:107:100mC',
+          ),
+        );
+        expect(terminal.isUsingAlternateScreen, isFalse);
+        expect(terminal.cursorVisible, isTrue);
+        expect(terminal.buffer.getCharacter(0, 0), equals('A'));
+        expect(
+          terminal.buffer.getForeground(2, 0),
+          equals(const Color(12, 34, 56).argb),
+        );
+        expect(terminal.buffer.getBackground(2, 0), equals(0));
+        expect(
+          terminal.buffer.getModifiers(2, 0),
+          equals(Modifier.bold | Modifier.underline),
+        );
+
+        // Mixed `;`/`:` lookahead boundaries, trailing `;` reset, negative subparam,
+        // out-of-range `4:6`, trailing-colon `4:`, and short colon colors.
+        terminal.write(utf8.encode('\x1b[0;38;2;10;20;4:3mD'));
+        expect(terminal.buffer.getForeground(3, 0), equals(0));
+        expect(terminal.buffer.getModifiers(3, 0), equals(Modifier.underline));
+
+        terminal.write(utf8.encode('\x1b[0;38;2:10:20:30;4;31;42mE'));
+        expect(
+          terminal.buffer.getForeground(4, 0),
+          equals(const Color(170, 0, 0).argb),
+        );
+        expect(
+          terminal.buffer.getBackground(4, 0),
+          equals(const Color(0, 170, 0).argb),
+        );
+        expect(terminal.buffer.getModifiers(4, 0), equals(Modifier.underline));
+
+        terminal.write(utf8.encode('\x1b[4:3;mF'));
+        expect(terminal.buffer.getModifiers(5, 0), equals(Modifier.none));
+
+        terminal.csi(
+          'm',
+          [4],
+          subparams: [
+            [-1],
+          ],
+        );
+        expect(terminal.buffer.getModifiers(5, 0), equals(Modifier.none));
+        terminal.write(
+          utf8.encode(
+            'G\x1b[4m\x1b[4:6mH\x1b[4:m\x1b[1:2;4:6;38:2:10:20;38:5;38:9:10;32mI',
+          ),
+        );
+        expect(terminal.buffer.getModifiers(6, 0), equals(Modifier.none));
+        expect(terminal.buffer.getModifiers(7, 0), equals(Modifier.underline));
+        expect(terminal.buffer.getModifiers(8, 0), equals(Modifier.none));
+        expect(
+          terminal.buffer.getForeground(8, 0),
+          equals(const Color(0, 170, 0).argb),
+        );
+      },
+    );
   });
 }

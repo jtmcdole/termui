@@ -7,6 +7,7 @@ class _TestTerminalHandler implements TerminalHandler {
   String? lastCsiCommand;
   List<int>? lastCsiParams;
   String? lastCsiIntermediate;
+  List<List<int>?>? lastCsiSubparams;
   int oscCallCount = 0;
   int? lastOscCommand;
   String? lastOscPayload;
@@ -14,10 +15,16 @@ class _TestTerminalHandler implements TerminalHandler {
   final StringBuffer printedText = StringBuffer();
 
   @override
-  void csi(String command, List<int> params, {String? intermediate}) {
+  void csi(
+    String command,
+    List<int> params, {
+    String? intermediate,
+    List<List<int>?>? subparams,
+  }) {
     lastCsiCommand = command;
     lastCsiParams = params;
     lastCsiIntermediate = intermediate;
+    lastCsiSubparams = subparams;
   }
 
   @override
@@ -238,6 +245,100 @@ void main() {
         parser.parse('\x1b]52;c;aGk=\x1b\n\\');
         expect(handler.oscCallCount, equals(1));
         expect(handler.printedText.toString(), equals(r'\'));
+      },
+    );
+
+    test(
+      'Parses colon-delimited subparameters while keeping pure semicolon sequences subparams-free',
+      () {
+        final handler = _TestTerminalHandler();
+        final parser = AnsiParser(handler);
+
+        // Pure semicolon sequence keeps subparams null.
+        parser.parse('\x1b[1;38;2;10;20;30m');
+        expect(handler.lastCsiCommand, equals('m'));
+        expect(handler.lastCsiParams, equals([1, 38, 2, 10, 20, 30]));
+        expect(handler.lastCsiSubparams, isNull);
+
+        // Mixed semicolon + colon sequence aligns subparams length with params.
+        parser.parse('\x1b[1;4:3;38:2::66:133:244;49m');
+        expect(handler.lastCsiCommand, equals('m'));
+        expect(handler.lastCsiParams, equals([1, 4, 38, 49]));
+        expect(
+          handler.lastCsiSubparams,
+          equals([
+            null,
+            [3],
+            [2, 0, 66, 133, 244],
+            null,
+          ]),
+        );
+
+        // Leading/trailing semicolons and trailing colons align params/subparams.
+        parser.parse('\x1b[;4:3m');
+        expect(handler.lastCsiParams, equals([0, 4]));
+        expect(
+          handler.lastCsiSubparams,
+          equals([
+            null,
+            [3],
+          ]),
+        );
+
+        parser.parse('\x1b[4:3;m');
+        expect(handler.lastCsiParams, equals([4, 0]));
+        expect(
+          handler.lastCsiSubparams,
+          equals([
+            [3],
+            null,
+          ]),
+        );
+
+        parser.parse('\x1b[4:;1:m');
+        expect(handler.lastCsiParams, equals([4, 1]));
+        expect(
+          handler.lastCsiSubparams,
+          equals([
+            [0],
+            [0],
+          ]),
+        );
+
+        // Leading colon at CSI entry (\x1b[:2m) and DEL ignored before '?' marker.
+        parser.parse('\x1b[:2m');
+        expect(handler.lastCsiParams, equals([0]));
+        expect(
+          handler.lastCsiSubparams,
+          equals([
+            [2],
+          ]),
+        );
+
+        parser.parse('\x1b[\x7f?25h');
+        expect(handler.lastCsiCommand, equals('h'));
+        expect(handler.lastCsiIntermediate, equals('?'));
+        expect(handler.lastCsiParams, equals([25]));
+        expect(handler.lastCsiSubparams, isNull);
+
+        // Caps both subparams per slot (16) and total CSI parameter slots (64).
+        parser.parse('\x1b[38${':7' * 25}m');
+        expect(handler.lastCsiParams, equals([38]));
+        expect(handler.lastCsiSubparams, equals([List.filled(16, 7)]));
+
+        parser.parse('\x1b[${'1:2;' * 80}m');
+        expect(handler.lastCsiParams, equals(List.filled(64, 1)));
+        expect(
+          handler.lastCsiSubparams,
+          equals(List<List<int>?>.filled(64, const [2])),
+        );
+
+        // Malformed private marker mid-param (\x1b[38?2m), digit after intermediate
+        // (\x1b[38:2 0q), and CAN abort (\x1b[1:2\x18) reset CSI state cleanly.
+        handler.lastCsiCommand = null;
+        parser.parse('\x1b[38?2m\x1b[38:2 0q\x1b[1:2\x18OK');
+        expect(handler.lastCsiCommand, isNull);
+        expect('${handler.printedText}', equals('OK'));
       },
     );
   });
