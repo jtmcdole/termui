@@ -34,6 +34,36 @@ abstract interface class PseudoTerminal {
     return path;
   }
 
+  /// Ensures the Windows ConPTY redistributable (`conpty.dll` +
+  /// `OpenConsole.exe` from `Microsoft.Windows.Console.ConPTY`) is available
+  /// before calling [start].
+  ///
+  /// By default (`download: false`), no network download is performed. When
+  /// [download] is `true` and no local or cached sidecar is present, downloads
+  /// the pinned `Microsoft.Windows.Console.ConPTY` NuGet package over HTTPS,
+  /// verifies its SHA-256 digest, and atomically stages `conpty.dll` and
+  /// `OpenConsole.exe`.
+  static Future<String?> ensureConPtyReady({
+    bool download = false,
+    Map<String, String>? environment,
+    Uri? downloadUri,
+    void Function(String message)? onWarning,
+  }) async {
+    if (!Platform.isWindows && environment == null && downloadUri == null) {
+      return null;
+    }
+    final path = await ConPtyBundle.ensureReady(
+      download: download,
+      environment: environment,
+      downloadUri: downloadUri,
+      onWarning: onWarning,
+    );
+    if (path != null) {
+      PtyCoreWindows.resetConPtyProbeIfUnbound();
+    }
+    return path;
+  }
+
   /// Internal testing flag to allow non-blocking PTY on Windows.
   /// If [blocking] is [true], the PseudoTerminal starts in blocking mode
   /// (better suited for flutter release mode), otherwise in polling mode

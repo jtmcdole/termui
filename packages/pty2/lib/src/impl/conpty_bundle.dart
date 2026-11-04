@@ -69,9 +69,17 @@ abstract final class ConPtyBundle {
   /// Pinned `Microsoft.Windows.Console.ConPTY` NuGet release version.
   static const String version = '1.25.260930003';
 
+  /// NuGet v3 flat-container download URL for [version].
+  static final Uri nupkgUri = Uri.parse(
+    'https://api.nuget.org/v3-flatcontainer/microsoft.windows.console.conpty/$version/microsoft.windows.console.conpty.$version.nupkg',
+  );
+
   /// Expected lowercase hex SHA-256 digest of the `.nupkg` archive.
   static const String nupkgSha256 =
       '02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee';
+
+  /// Maximum allowed `.nupkg` response payload size (8 MiB).
+  static const int maxNupkgBytes = 8 * 1024 * 1024;
 
   static const int _maxEntryBytes = 2 * 1024 * 1024;
 
@@ -245,6 +253,106 @@ abstract final class ConPtyBundle {
       customSpecs: customSpecs,
     );
     return p.join(cacheDir.path, 'conpty.dll');
+  }
+
+  /// Ensures `conpty.dll` + `OpenConsole.exe` are staged and returns the path
+  /// to `conpty.dll`, or `null` if unavailable.
+  ///
+  /// When [download] is `true` (default `false` for offline safety) and no
+  /// local or cached binary is present, downloads the pinned NuGet package from
+  /// [downloadUri] (defaults to [nupkgUri]), verifies its SHA-256 digest, and
+  /// stages the binaries into the per-user cache via [stageFromNupkgBytes].
+  static Future<String?> ensureReady({
+    ConPtyArch? arch,
+    Map<String, String>? environment,
+    String? resolvedExecutablePath,
+    bool download = false,
+    Uri? downloadUri,
+    String? expectedNupkgSha256,
+    Map<ConPtyArch, ConPtyArchSpec>? customSpecs,
+    int maxBytes = maxNupkgBytes,
+    void Function(String message)? onWarning,
+  }) async {
+    final env = environment ?? Platform.environment;
+    final activeArch = arch ?? hostArch();
+    final existing = resolveConPtyDllPath(
+      arch: activeArch,
+      environment: env,
+      resolvedExecutablePath: resolvedExecutablePath,
+      customSpecs: customSpecs,
+    );
+    if (existing != null || !download) {
+      return existing;
+    }
+
+    final cacheDir = defaultCacheDirectory(arch: activeArch, environment: env);
+    if (cacheDir == null) {
+      return null;
+    }
+
+    try {
+      final nupkgBytes = await _downloadNupkgBytes(
+        downloadUri ?? nupkgUri,
+        maxBytes: maxBytes,
+      );
+      stageFromNupkgBytes(
+        nupkgBytes,
+        arch: activeArch,
+        targetDir: cacheDir,
+        expectedNupkgSha256: expectedNupkgSha256,
+        customSpecs: customSpecs,
+      );
+      return resolveConPtyDllPath(
+        arch: activeArch,
+        environment: env,
+        resolvedExecutablePath: resolvedExecutablePath,
+        customSpecs: customSpecs,
+      );
+    } on Object catch (e) {
+      onWarning?.call('ConPTY NuGet download/staging failed: $e');
+      return null;
+    }
+  }
+
+  static Future<Uint8List> _downloadNupkgBytes(
+    Uri uri, {
+    required int maxBytes,
+  }) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 15);
+    try {
+      final request = await client
+          .getUrl(uri)
+          .timeout(const Duration(seconds: 15));
+      final response = await request.close().timeout(
+        const Duration(seconds: 30),
+      );
+      if (response.statusCode != HttpStatus.ok) {
+        await response.drain<void>();
+        throw HttpException(
+          'Unexpected HTTP ${response.statusCode} fetching ConPTY NuGet package',
+          uri: uri,
+        );
+      }
+      if (response.contentLength > maxBytes) {
+        await response.drain<void>();
+        throw FormatException(
+          'ConPTY NuGet content-length ${response.contentLength} exceeds $maxBytes bytes',
+        );
+      }
+      final builder = BytesBuilder(copy: false);
+      await for (final chunk in response.timeout(const Duration(seconds: 30))) {
+        if (builder.length + chunk.length > maxBytes) {
+          throw FormatException(
+            'ConPTY NuGet stream exceeded $maxBytes bytes limit',
+          );
+        }
+        builder.add(chunk);
+      }
+      return builder.takeBytes();
+    } finally {
+      client.close(force: true);
+    }
   }
 
   /// Verifies [nupkgBytes] against [nupkgSha256], extracts `conpty.dll` and
