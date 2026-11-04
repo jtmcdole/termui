@@ -316,6 +316,119 @@ void main() {
         );
       },
     );
+
+    test(
+      'ensureReady downloads and verifies via loopback HttpServer and enforces maxBytes',
+      () async {
+        final dllBytes = utf8.encode('http-conpty-dll-x64');
+        final exeBytes = utf8.encode('http-OpenConsole-exe-x64');
+        final nupkgBytes = _buildZipArchive([
+          _entry('runtimes/win-x64/native/conpty.dll', dllBytes, method: 8),
+          _entry(
+            'build/native/runtimes/x64/OpenConsole.exe',
+            exeBytes,
+            method: 8,
+          ),
+        ]);
+        final nupkgSha = ConPtyBundle.sha256Hex(nupkgBytes);
+        final customSpecs = <ConPtyArch, ConPtyArchSpec>{
+          .x64: ConPtyArchSpec(
+            arch: .x64,
+            dllEntryPath: 'runtimes/win-x64/native/conpty.dll',
+            dllSha256: ConPtyBundle.sha256Hex(dllBytes),
+            dllSize: dllBytes.length,
+            exeEntryPath: 'build/native/runtimes/x64/OpenConsole.exe',
+            exeSha256: ConPtyBundle.sha256Hex(exeBytes),
+            exeSize: exeBytes.length,
+          ),
+        };
+
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((request) async {
+          if (request.uri.path == '/valid.nupkg') {
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..contentLength = nupkgBytes.length
+              ..add(nupkgBytes);
+          } else {
+            request.response.statusCode = HttpStatus.notFound;
+          }
+          await request.response.close();
+        });
+
+        final baseUri = Uri.parse('http://127.0.0.1:${server.port}');
+        final env = {'LOCALAPPDATA': p.join(tempRoot.path, 'http_appdata')};
+        final noneExe = p.join(tempRoot.path, 'none', 'app.exe');
+
+        // Default download: false does not hit network.
+        expect(
+          await ConPtyBundle.ensureReady(
+            arch: .x64,
+            environment: env,
+            resolvedExecutablePath: noneExe,
+            downloadUri: baseUri.resolve('/valid.nupkg'),
+            expectedNupkgSha256: nupkgSha,
+            customSpecs: customSpecs,
+          ),
+          isNull,
+        );
+
+        // Exceeding maxBytes reports warning and returns null.
+        final warnings = <String>[];
+        expect(
+          await ConPtyBundle.ensureReady(
+            arch: .x64,
+            environment: env,
+            resolvedExecutablePath: noneExe,
+            download: true,
+            downloadUri: baseUri.resolve('/valid.nupkg'),
+            expectedNupkgSha256: nupkgSha,
+            customSpecs: customSpecs,
+            maxBytes: 10,
+            onWarning: warnings.add,
+          ),
+          isNull,
+        );
+        expect(warnings.single, contains('exceeds 10 bytes'));
+
+        // HTTP 404 reports warning and returns null.
+        warnings.clear();
+        expect(
+          await ConPtyBundle.ensureReady(
+            arch: .x64,
+            environment: env,
+            resolvedExecutablePath: noneExe,
+            download: true,
+            downloadUri: baseUri.resolve('/missing.nupkg'),
+            expectedNupkgSha256: nupkgSha,
+            customSpecs: customSpecs,
+            onWarning: warnings.add,
+          ),
+          isNull,
+        );
+        expect(warnings.single, contains('HTTP 404'));
+
+        // Valid download stages and verifies both binaries.
+        final resolved = await ConPtyBundle.ensureReady(
+          arch: .x64,
+          environment: env,
+          resolvedExecutablePath: noneExe,
+          download: true,
+          downloadUri: baseUri.resolve('/valid.nupkg'),
+          expectedNupkgSha256: nupkgSha,
+          customSpecs: customSpecs,
+        );
+        final cacheDir = ConPtyBundle.defaultCacheDirectory(
+          arch: .x64,
+          environment: env,
+        )!;
+        expect(resolved, p.join(cacheDir.path, 'conpty.dll'));
+        if (!Platform.isWindows) {
+          expect(await PseudoTerminal.ensureConPtyReady(), isNull);
+        }
+      },
+    );
   });
 
   test(
