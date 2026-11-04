@@ -276,38 +276,50 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _evictOverflowBeforeShrink(int clampedHeight) {
-    final targetY = math.min(
+    if (clampedHeight >= height) return;
+    final baseCursorY = (_usingAltScreen ? _savedPrimary.y : cursorY).clamp(
+      0,
       height - 1,
-      _usingAltScreen ? _savedPrimary.y : cursorY,
     );
-    if (clampedHeight >= height || targetY < clampedHeight) return;
+    final targetY = _lastNonBlankPrimaryRow(baseCursorY);
+    final evictCount = math.min(targetY - clampedHeight + 1, baseCursorY);
+    if (evictCount <= 0) return;
 
-    final evictCount = targetY - clampedHeight + 1;
-    if (_scrollback.maxLines > 0) {
-      for (var r = 0; r < evictCount; r++) {
-        _scrollback.push(
-          ScrollbackLine.fromBufferRow(
-            _primaryBuffer,
-            r,
-            isWrapped: _primaryWrapped[r],
-          ),
-        );
+    _pushPrimaryRowsToScrollback(evictCount);
+    _copyCellSpan(_primaryBuffer, 0, evictCount * width, clampedHeight * width);
+    _primaryWrapped.setRange(0, clampedHeight, _primaryWrapped, evictCount);
+    _savedPrimary = (
+      x: _savedPrimary.x,
+      y: math.max(0, _savedPrimary.y.clamp(0, height - 1) - evictCount),
+      style: _savedPrimary.style,
+      pendingWrap: _savedPrimary.pendingWrap,
+    );
+    if (!_usingAltScreen) {
+      cursorY = baseCursorY - evictCount;
+    }
+  }
+
+  int _lastNonBlankPrimaryRow(int minRow) {
+    for (var r = height - 1; r > minRow; r--) {
+      if (_primaryWrapped[r] || _rowHasVisibleContent(_primaryBuffer, r)) {
+        return r;
       }
     }
-    final keepRows = height - evictCount;
-    _copyCellSpan(_primaryBuffer, 0, evictCount * width, keepRows * width);
-    _primaryWrapped.setRange(0, keepRows, _primaryWrapped, evictCount);
-    _primaryWrapped.fillRange(keepRows, height, false);
-    if (_usingAltScreen) {
-      _savedPrimary = (
-        x: _savedPrimary.x,
-        y: math.max(0, targetY - evictCount),
-        style: _savedPrimary.style,
-        pendingWrap: _savedPrimary.pendingWrap,
-      );
-    } else {
-      cursorY = math.max(0, cursorY - evictCount);
+    return minRow;
+  }
+
+  static bool _rowHasVisibleContent(Buffer buf, int row) {
+    final rowStart = row * buf.width;
+    final rowEnd = rowStart + buf.width;
+    for (var cell = rowStart; cell < rowEnd; cell++) {
+      if (buf.characters[cell] != ' ') return true;
+      final attrIdx = cell * 3;
+      if (buf.attributes[attrIdx + 1] != 0 ||
+          (buf.attributes[attrIdx + 2] & ~Modifier.transparent) != 0) {
+        return true;
+      }
     }
+    return false;
   }
 
   void _healRightEdgeWideGraphemes(Buffer buf) {
@@ -496,14 +508,13 @@ final class VirtualTerminal implements TerminalHandler {
     required bool up,
     required bool evictTop,
   }) {
-    if (!evictTop ||
-        !up ||
-        _usingAltScreen ||
-        top != 0 ||
-        _scrollback.maxLines <= 0) {
-      return;
-    }
-    for (var r = 0; r < shift; r++) {
+    if (!evictTop || !up || _usingAltScreen || top != 0) return;
+    _pushPrimaryRowsToScrollback(shift);
+  }
+
+  void _pushPrimaryRowsToScrollback(int count) {
+    if (_scrollback.maxLines <= 0) return;
+    for (var r = 0; r < count; r++) {
       _scrollback.push(
         ScrollbackLine.fromBufferRow(
           _primaryBuffer,
