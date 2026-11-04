@@ -39,7 +39,11 @@ enum _ParserState {
   csiIgnore,
   oscString,
   oscEscape,
+  dcsString,
+  dcsEscape,
 }
+
+enum _TmuxInner { ignored, payload, pendingSt, terminated }
 
 /// A highly optimized VT100/ANSI state machine parser.
 final class AnsiParser {
@@ -47,6 +51,16 @@ final class AnsiParser {
   static const int _maxOsc52Length = 1_400_000;
   static const int _maxCsiParams = 64;
   static const int _maxCsiSubparams = 16;
+  static const int _tmuxHeaderLength = 5;
+  static const List<int> _tmuxOscPrefix = [
+    0x74, // t
+    0x6D, // m
+    0x75, // u
+    0x78, // x
+    0x3B, // ;
+    0x1B, // ESC
+    0x5D, // ]
+  ];
 
   /// The terminal handler that processes parsed escape sequences.
   final TerminalHandler handler;
@@ -61,6 +75,8 @@ final class AnsiParser {
   final List<int> _intermediates = [];
   final List<int> _oscBuffer = [];
   bool _oscOverflowed = false;
+  int _dcsPrefixLen = -1;
+  _TmuxInner _tmuxInner = .ignored;
 
   /// Creates a new [AnsiParser] instance bound to the given [handler].
   AnsiParser(this.handler);
@@ -73,12 +89,17 @@ final class AnsiParser {
     }
   }
 
+  bool _consumesRawControl(int c) =>
+      _state == .oscString ||
+      _state == .dcsString ||
+      (_state == .dcsEscape && c == 0x1B && _dcsPrefixLen >= _tmuxHeaderLength);
+
   /// Parses a chunk of VT100/ANSI string text and updates the bound handler.
   void parse(String chunk) {
     final len = chunk.length;
     for (var i = 0; i < len; i++) {
       final c = chunk.codeUnitAt(i);
-      if (c >= 0x00 && c <= 0x1F && _state != _ParserState.oscString) {
+      if (c >= 0x00 && c <= 0x1F && !_consumesRawControl(c)) {
         _handleC0Control(c);
         continue;
       }
@@ -88,9 +109,9 @@ final class AnsiParser {
   }
 
   void _handleC0Control(int c) {
-    if (_state == _ParserState.oscEscape) {
-      _resetOsc();
-      _state = _ParserState.ground;
+    if (_state == .oscEscape || _state == .dcsEscape) {
+      _resetDcs();
+      _state = .ground;
     }
     if (c == 0x1B) {
       _flushText();
@@ -127,8 +148,15 @@ final class AnsiParser {
         _handleOscChar(c);
       case _ParserState.oscEscape:
         _handleOscEscape(c);
+      case .dcsString:
+        _handleDcsChar(c);
+      case .dcsEscape:
+        _handleDcsEscape(c);
     }
   }
+
+  static bool _isControlStringIntroducer(int c) =>
+      c == 0x50 || c == 0x58 || c == 0x5E || c == 0x5F;
 
   void _handleEscape(int c) {
     if (c >= 0x20 && c <= 0x2F) {
@@ -144,6 +172,10 @@ final class AnsiParser {
     if (c == 0x5D) {
       _resetOsc();
       _state = _ParserState.oscString;
+      return;
+    }
+    if (_isControlStringIntroducer(c)) {
+      _enterDcs(allowTmuxPassthrough: c == 0x50);
       return;
     }
     _state = _ParserState.ground;
@@ -310,6 +342,83 @@ final class AnsiParser {
   void _resetOsc() {
     _oscBuffer.clear();
     _oscOverflowed = false;
+  }
+
+  void _enterDcs({required bool allowTmuxPassthrough}) {
+    _resetOsc();
+    _dcsPrefixLen = allowTmuxPassthrough ? 0 : -1;
+    _tmuxInner = allowTmuxPassthrough ? .payload : .ignored;
+    _state = .dcsString;
+  }
+
+  void _handleDcsChar(int c) {
+    switch (c) {
+      case 0x1B:
+        _state = .dcsEscape;
+      case 0x9C:
+        _state = .ground;
+        _finishDcs();
+      case 0x18 || 0x1A:
+        _resetDcs();
+        _state = .ground;
+      default:
+        _appendDcsChar(c);
+    }
+  }
+
+  void _handleDcsEscape(int c) {
+    if (c == 0x5C) {
+      _state = .ground;
+      _finishDcs();
+      return;
+    }
+    if (c == 0x1B && _dcsPrefixLen >= _tmuxHeaderLength) {
+      _state = .dcsString;
+      _appendDcsChar(0x1B);
+      return;
+    }
+    _resetDcs();
+    _intermediates.clear();
+    _handleEscape(c);
+  }
+
+  void _appendDcsChar(int c) {
+    if (_dcsPrefixLen < 0 || _tmuxInner == .ignored) return;
+    if (_dcsPrefixLen < _tmuxOscPrefix.length) {
+      _advanceTmuxOscPrefix(c);
+      return;
+    }
+    _tmuxInner = switch (_tmuxInner) {
+      .payload when c == 0x07 => .terminated,
+      .payload when c == 0x1B => .pendingSt,
+      .pendingSt => c == 0x5C ? .terminated : .ignored,
+      final state => state,
+    };
+    if (_tmuxInner == .payload && c >= 0x20) {
+      _appendOscChar(c);
+    }
+  }
+
+  void _advanceTmuxOscPrefix(int c) {
+    if (c == _tmuxOscPrefix[_dcsPrefixLen]) {
+      _dcsPrefixLen++;
+      return;
+    }
+    if (_dcsPrefixLen < _tmuxHeaderLength) _dcsPrefixLen = -1;
+    _tmuxInner = .ignored;
+  }
+
+  void _finishDcs() {
+    if (_tmuxInner == .terminated) {
+      _finishOsc();
+    }
+    _resetDcs();
+  }
+
+  void _resetDcs() {
+    _resetOsc();
+    _dcsPrefixLen = -1;
+    _tmuxInner = .ignored;
   }
 
   void _execute(int charCode) {
