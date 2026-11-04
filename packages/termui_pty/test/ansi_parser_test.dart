@@ -341,5 +341,61 @@ void main() {
         expect('${handler.printedText}', equals('OK'));
       },
     );
+
+    test(
+      'Consumes DCS, SOS, PM, and APC control strings and unwraps tmux OSC passthrough without leaking to ground text',
+      () {
+        final handler = _TestTerminalHandler();
+        final parser = AnsiParser(handler);
+
+        // tmux DCS passthrough wrapping OSC 52 with inner BEL (\x07) and outer ST (\x1b\\).
+        parser.parse('\x1bPtmux;\x1b\x1b]52;c;aGk=\x07\x1b\\');
+        expect(handler.oscCallCount, equals(1));
+        expect(handler.lastOscCommand, equals(52));
+        expect(handler.lastOscPayload, equals('c;aGk='));
+        expect('${handler.printedText}', isEmpty);
+        expect(handler.escCommands, isEmpty);
+
+        // tmux DCS passthrough wrapping OSC 52 with doubled inner ST (\x1b\x1b\\) and outer ST (\x1b\\),
+        // fed one character at a time across split escape boundaries.
+        const chunkedInput = '\x1bPtmux;\x1b\x1b]52;p;eHl6\x1b\x1b\\\x1b\\';
+        for (var i = 0; i < chunkedInput.length; i++) {
+          parser.parse(chunkedInput[i]);
+        }
+        expect(handler.oscCallCount, equals(2));
+        expect(handler.lastOscCommand, equals(52));
+        expect(handler.lastOscPayload, equals('p;eHl6'));
+        expect('${handler.printedText}', isEmpty);
+
+        // Non-OSC tmux passthrough (e.g. inner DCS with doubled ST), standard DCS, SOS, PM, APC, and 0x9C ST.
+        parser.parse(
+          '\x1bPtmux;\x1b\x1bP+q544e\x1b\x1b\\\x1b\\'
+          '\x1bPq#0;2;0;0;0\r\n\x1b\\'
+          '\x1bXsos-payload\x1b\\'
+          '\x1b^pm-payload\x9c'
+          '\x1b_Gi=31;AAAA\x1b\\Done',
+        );
+        expect(handler.oscCallCount, equals(2));
+        expect(handler.escCommands, isEmpty);
+        expect('${handler.printedText}', equals('Done'));
+
+        // Unterminated inner OSC, inner OSC aborted by CSI/ESC, CAN (0x18), SUB (0x1A),
+        // C0 in dcsEscape, and non-ST ESC [ abort DCS cleanly without dispatching OSC.
+        handler.printedText.clear();
+        parser.parse(
+          '\x1bPtmux;\x1b\x1b]52;c;aGk=\x1b\\'
+          '\x1bPtmux;\x1b\x1b]52;c;aGk=\x1b\x1b[2 q\x1b\\'
+          '\x1bPtmux;\x1b\x1b]52;c;aGk=\x1b\x1b\x1b\\'
+          '\x1bPtmux;\x1b\x1b]52;c;aGk=\x18'
+          '\x1bPtmux;\x1b\x1b]52;c;aGk=\x1a'
+          '\x1bPfoo\x1b\n'
+          '\x1bPbar\x1b[3 qA',
+        );
+        expect(handler.oscCallCount, equals(2));
+        expect(handler.lastCsiCommand, equals('q'));
+        expect(handler.lastCsiParams, equals([3]));
+        expect('${handler.printedText}', equals('A'));
+      },
+    );
   });
 }

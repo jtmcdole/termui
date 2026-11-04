@@ -769,6 +769,22 @@ void main() {
         // Unpadded base64 OSC 52 payload ('aGk' -> 'hi') is accepted.
         terminal.write(utf8.encode('\x1b]52;c;aGk\x07'));
         expect(writes.last, equals(('c', 'hi')));
+
+        // tmux DCS passthrough (\x1bPtmux;\x1b\x1b]52;...) dispatches OSC 52
+        // without printing literal "tmux;" into the terminal screen buffer.
+        terminal.write(
+          utf8.encode('\x1bPtmux;\x1b\x1b]52;c;$b64Hello\x07\x1b\\'),
+        );
+        terminal.write(
+          utf8.encode('\x1bPtmux;\x1b\x1b]52;p;$b64Hello\x1b\x1b\\\x1b\\'),
+        );
+        expect(writes.sublist(writes.length - 2), [
+          ('c', 'hello tmux 🚀'),
+          ('p', 'hello tmux 🚀'),
+        ]);
+        expect(terminal.cursorX, equals(0));
+        expect(terminal.cursorY, equals(0));
+        expect(terminal.buffer.getCharacter(0, 0), equals(' '));
       },
     );
 
