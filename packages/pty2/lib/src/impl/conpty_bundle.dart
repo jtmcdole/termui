@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -54,8 +55,9 @@ final class ConPtyArchSpec {
   });
 }
 
-/// Resolves and verifies Microsoft's redistributable `conpty.dll` +
-/// `OpenConsole.exe` (`Microsoft.Windows.Console.ConPTY`) side-by-side pair.
+/// Manages cryptographic SHA-256 verification, ZIP extraction, atomic cache
+/// staging, and runtime resolution of Microsoft's redistributable `conpty.dll`
+/// + `OpenConsole.exe` (`Microsoft.Windows.Console.ConPTY`).
 ///
 /// Inbox `C:\Windows\System32\conhost.exe` (spawned by
 /// `kernel32.dll!CreatePseudoConsole`) uses the legacy `VtEngine` screen
@@ -66,6 +68,12 @@ final class ConPtyArchSpec {
 abstract final class ConPtyBundle {
   /// Pinned `Microsoft.Windows.Console.ConPTY` NuGet release version.
   static const String version = '1.25.260930003';
+
+  /// Expected lowercase hex SHA-256 digest of the `.nupkg` archive.
+  static const String nupkgSha256 =
+      '02b07b349af66d801159bdf9e440d4a1ce78bb951f37fc8609731665afdae7ee';
+
+  static const int _maxEntryBytes = 2 * 1024 * 1024;
 
   /// Per-architecture binary specifications for [version].
   static const Map<ConPtyArch, ConPtyArchSpec> specs = {
@@ -207,6 +215,197 @@ abstract final class ConPtyBundle {
     }
 
     return null;
+  }
+
+  /// Reads [nupkg], verifies its SHA-256 digest, and atomically stages
+  /// `conpty.dll` and `OpenConsole.exe` into the per-user cache directory.
+  static Future<String> installFromNupkgFile(
+    File nupkg, {
+    ConPtyArch? arch,
+    Map<String, String>? environment,
+    String? expectedNupkgSha256,
+    Map<ConPtyArch, ConPtyArchSpec>? customSpecs,
+  }) async {
+    final activeArch = arch ?? hostArch();
+    final cacheDir = defaultCacheDirectory(
+      arch: activeArch,
+      environment: environment,
+    );
+    if (cacheDir == null) {
+      throw StateError(
+        'Cannot resolve ConPTY cache directory: neither LOCALAPPDATA nor USERPROFILE is set',
+      );
+    }
+    final bytes = await nupkg.readAsBytes();
+    stageFromNupkgBytes(
+      bytes,
+      arch: activeArch,
+      targetDir: cacheDir,
+      expectedNupkgSha256: expectedNupkgSha256,
+      customSpecs: customSpecs,
+    );
+    return p.join(cacheDir.path, 'conpty.dll');
+  }
+
+  /// Verifies [nupkgBytes] against [nupkgSha256], extracts `conpty.dll` and
+  /// `OpenConsole.exe` for [arch], verifies their SHA-256 digests and sizes,
+  /// and writes them atomically to [targetDir].
+  static void stageFromNupkgBytes(
+    Uint8List nupkgBytes, {
+    required ConPtyArch arch,
+    required Directory targetDir,
+    String? expectedNupkgSha256,
+    Map<ConPtyArch, ConPtyArchSpec>? customSpecs,
+  }) {
+    final spec = (customSpecs ?? specs)[arch]!;
+    final expectedHash = expectedNupkgSha256 ?? nupkgSha256;
+    final actualHash = sha256Hex(nupkgBytes);
+    if (actualHash != expectedHash) {
+      throw FormatException(
+        'ConPTY NuGet SHA-256 mismatch: expected $expectedHash, got $actualHash',
+      );
+    }
+
+    final extracted = extractZipEntries(nupkgBytes, {
+      spec.dllEntryPath,
+      spec.exeEntryPath,
+    });
+    final dll = extracted[spec.dllEntryPath];
+    final exe = extracted[spec.exeEntryPath];
+    if (dll == null || exe == null) {
+      throw FormatException(
+        'ConPTY NuGet archive missing ${spec.dllEntryPath} or ${spec.exeEntryPath}',
+      );
+    }
+    _verifyEntry(
+      'conpty.dll (${arch.name})',
+      dll,
+      spec.dllSize,
+      spec.dllSha256,
+    );
+    _verifyEntry(
+      'OpenConsole.exe (${arch.name})',
+      exe,
+      spec.exeSize,
+      spec.exeSha256,
+    );
+
+    targetDir.createSync(recursive: true);
+    // Write OpenConsole.exe before conpty.dll so conpty.dll never observes a
+    // directory without OpenConsole.exe alongside it.
+    _writeFileAtomically(
+      p.join(targetDir.path, 'OpenConsole.exe'),
+      exe,
+      spec.exeSha256,
+    );
+    _writeFileAtomically(
+      p.join(targetDir.path, 'conpty.dll'),
+      dll,
+      spec.dllSha256,
+    );
+  }
+
+  static void _verifyEntry(String label, Uint8List b, int size, String sha) {
+    final actual = sha256Hex(b);
+    if (b.length != size || actual != sha) {
+      throw FormatException(
+        '$label SHA-256 mismatch: expected $sha, got $actual',
+      );
+    }
+  }
+
+  static bool _matchesDigest(File file, int length, String sha) {
+    try {
+      return file.existsSync() &&
+          file.lengthSync() == length &&
+          sha256Hex(file.readAsBytesSync()) == sha;
+    } on FileSystemException {
+      return false;
+    }
+  }
+
+  static void _writeFileAtomically(String path, Uint8List bytes, String sha) {
+    final target = File(path);
+    if (_matchesDigest(target, bytes.length, sha)) return;
+    final tmp = File(
+      '$path.tmp.${pid}_${DateTime.now().microsecondsSinceEpoch}',
+    );
+    try {
+      tmp.writeAsBytesSync(bytes, flush: true);
+      tmp.renameSync(path);
+    } on FileSystemException {
+      try {
+        if (tmp.existsSync()) tmp.deleteSync();
+      } on FileSystemException {
+        // Best-effort cleanup.
+      }
+      if (!_matchesDigest(target, bytes.length, sha)) rethrow;
+    }
+  }
+
+  /// Extracts [wantedEntries] from a standard ZIP archive ([zipBytes]).
+  static Map<String, Uint8List> extractZipEntries(
+    Uint8List zipBytes,
+    Set<String> wantedEntries,
+  ) {
+    final view = ByteData.sublistView(zipBytes);
+    final results = <String, Uint8List>{};
+    var offset = 0;
+
+    while (offset + 30 <= zipBytes.length &&
+        results.length < wantedEntries.length) {
+      if (view.getUint32(offset, Endian.little) != 0x04034b50) break;
+      if ((view.getUint16(offset + 6, Endian.little) & 0x0008) != 0) {
+        throw const FormatException(
+          'ZIP data descriptor streaming flag (bit 3) is not supported',
+        );
+      }
+      final method = view.getUint16(offset + 8, Endian.little);
+      final compSize = view.getUint32(offset + 18, Endian.little);
+      final uncompSize = view.getUint32(offset + 22, Endian.little);
+      final nameLen = view.getUint16(offset + 26, Endian.little);
+      final extraLen = view.getUint16(offset + 28, Endian.little);
+      final nameStart = offset + 30;
+      final dataStart = nameStart + nameLen + extraLen;
+      final dataEnd = dataStart + compSize;
+      if (dataEnd > zipBytes.length) {
+        throw const FormatException('Truncated ZIP entry payload');
+      }
+      final name = utf8
+          .decode(
+            Uint8List.sublistView(zipBytes, nameStart, nameStart + nameLen),
+            allowMalformed: true,
+          )
+          .replaceAll(r'\', '/');
+      if (wantedEntries.contains(name)) {
+        results[name] = _decodeZipPayload(
+          Uint8List.sublistView(zipBytes, dataStart, dataEnd),
+          method,
+          uncompSize,
+        );
+      }
+      offset = dataEnd;
+    }
+    return results;
+  }
+
+  static Uint8List _decodeZipPayload(Uint8List data, int method, int size) {
+    if (size > _maxEntryBytes) {
+      throw FormatException(
+        'ZIP entry uncompressed size $size exceeds $_maxEntryBytes',
+      );
+    }
+    final out = switch (method) {
+      0 => Uint8List.fromList(data),
+      8 => Uint8List.fromList(ZLibCodec(raw: true).decode(data)),
+      _ => throw FormatException('Unsupported ZIP compression method $method'),
+    };
+    if (out.length != size) {
+      throw FormatException(
+        'Uncompressed size mismatch: expected $size, got ${out.length}',
+      );
+    }
+    return out;
   }
 
   /// Computes the lowercase hexadecimal FIPS 180-4 SHA-256 digest of [data].
