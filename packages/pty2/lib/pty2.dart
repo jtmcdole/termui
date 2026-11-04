@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:pty2/src/impl/conpty_bundle.dart';
 import 'package:pty2/src/impl/unix.dart';
 import 'package:pty2/src/impl/windows.dart';
 import 'package:pty2/src/pty.dart';
@@ -14,6 +15,25 @@ export 'src/pty_error.dart';
 /// with command-line applications programmatically as if they were running
 /// in a real terminal emulator.
 abstract interface class PseudoTerminal {
+  /// Installs the Windows ConPTY redistributable (`conpty.dll` +
+  /// `OpenConsole.exe`) into the per-user cache from a local [nupkg] archive.
+  ///
+  /// Verifies the archive and per-entry SHA-256 digests before atomically
+  /// staging both files, and resets the cached ConPTY probe so subsequent
+  /// [start] calls use the staged binaries. Throws [FormatException] on any
+  /// SHA-256 or ZIP structure mismatch.
+  static Future<String> installConPty(
+    File nupkg, {
+    Map<String, String>? environment,
+  }) async {
+    final path = await ConPtyBundle.installFromNupkgFile(
+      nupkg,
+      environment: environment,
+    );
+    PtyCoreWindows.resetConPtyProbeIfUnbound();
+    return path;
+  }
+
   /// Internal testing flag to allow non-blocking PTY on Windows.
   /// If [blocking] is [true], the PseudoTerminal starts in blocking mode
   /// (better suited for flutter release mode), otherwise in polling mode

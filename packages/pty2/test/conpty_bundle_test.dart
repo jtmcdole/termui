@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:pty2/pty2.dart';
@@ -7,12 +8,112 @@ import 'package:pty2/src/impl/conpty_bundle.dart';
 import 'package:pty2/src/impl/windows.dart' if (dart.library.html) '';
 import 'package:test/test.dart';
 
+typedef _ZipSpec = ({
+  String name,
+  Uint8List data,
+  int method,
+  int flags,
+  int? fakeSize,
+});
+
+_ZipSpec _entry(
+  String name,
+  List<int> data, {
+  int method = 0,
+  int flags = 0,
+  int? fakeSize,
+}) => (
+  name: name,
+  data: data is Uint8List ? data : Uint8List.fromList(data),
+  method: method,
+  flags: flags,
+  fakeSize: fakeSize,
+);
+
+Matcher _throwsFormat(String fragment) => throwsA(
+  isA<FormatException>().having((e) => e.message, 'msg', contains(fragment)),
+);
+
+Uint8List _buildZipArchive(List<_ZipSpec> entries) {
+  final out = BytesBuilder(copy: false);
+  final rawZlib = ZLibCodec(raw: true);
+  for (final e in entries) {
+    final nameBytes = utf8.encode(e.name);
+    final compressed = switch (e.method) {
+      8 => Uint8List.fromList(rawZlib.encode(e.data)),
+      _ => e.data,
+    };
+    final header = ByteData(30)
+      ..setUint32(0, 0x04034b50, Endian.little)
+      ..setUint16(4, 20, Endian.little)
+      ..setUint16(6, e.flags, Endian.little)
+      ..setUint16(8, e.method, Endian.little)
+      ..setUint32(18, compressed.length, Endian.little)
+      ..setUint32(22, e.fakeSize ?? e.data.length, Endian.little)
+      ..setUint16(26, nameBytes.length, Endian.little)
+      ..setUint16(28, 0, Endian.little);
+    out
+      ..add(header.buffer.asUint8List())
+      ..add(nameBytes)
+      ..add(compressed);
+  }
+  final centralSig = ByteData(4)..setUint32(0, 0x02014b50, Endian.little);
+  out.add(centralSig.buffer.asUint8List());
+  return out.takeBytes();
+}
+
 void main() {
   group('ConPtyBundle.sha256Hex', () {
     test('computes lowercase hex SHA-256 digest via package:crypto', () {
       expect(
         ConPtyBundle.sha256Hex(utf8.encode('abc')),
         'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      );
+    });
+  });
+
+  group('ConPtyBundle.extractZipEntries', () {
+    test('extracts stored, raw-DEFLATE, and rejects malformed headers', () {
+      final dllPayload = Uint8List.fromList(
+        List<int>.generate(256, (i) => i & 0xff),
+      );
+      final exePayload = utf8.encode('OpenConsole-binary-payload-' * 20);
+      final zip = _buildZipArchive([
+        _entry(r'runtimes\win-x64\native\conpty.dll', dllPayload, method: 8),
+        _entry('unused/readme.txt', utf8.encode('skip me')),
+        _entry('build/native/runtimes/x64/OpenConsole.exe', exePayload),
+      ]);
+      final extracted = ConPtyBundle.extractZipEntries(zip, {
+        'runtimes/win-x64/native/conpty.dll',
+        'build/native/runtimes/x64/OpenConsole.exe',
+      });
+      expect(extracted['runtimes/win-x64/native/conpty.dll'], dllPayload);
+      expect(
+        extracted['build/native/runtimes/x64/OpenConsole.exe'],
+        exePayload,
+      );
+
+      for (final (spec, msg) in [
+        (_entry('a.bin', [1, 2], flags: 0x0008), 'bit 3'),
+        (_entry('a.bin', [1, 2], method: 99), 'compression method 99'),
+        (_entry('a.bin', [1, 2], fakeSize: 999), 'Uncompressed size mismatch'),
+      ]) {
+        expect(
+          () => ConPtyBundle.extractZipEntries(_buildZipArchive([spec]), {
+            'a.bin',
+          }),
+          _throwsFormat(msg),
+        );
+      }
+      final valid = _buildZipArchive([
+        _entry('a.bin', [1, 2, 3]),
+      ]);
+      expect(
+        () => ConPtyBundle.extractZipEntries(
+          Uint8List.sublistView(valid, 0, valid.length - 5),
+          {'a.bin'},
+        ),
+        _throwsFormat('Truncated ZIP entry payload'),
       );
     });
   });
@@ -109,7 +210,7 @@ void main() {
 
     test(
       'resolves verified per-user cache and rejects size or SHA-256 mismatches',
-      () {
+      () async {
         expect(
           ConPtyBundle.defaultCacheDirectory(arch: .x64, environment: const {}),
           isNull,
@@ -177,6 +278,41 @@ void main() {
             customSpecs: customSpecs,
           ),
           isNull,
+        );
+
+        // Explicit installConPty / installFromNupkgFile heals corrupt cache.
+        final nupkg = _buildZipArchive([
+          _entry('runtimes/win-x64/native/conpty.dll', dllBytes, method: 8),
+          _entry(
+            'build/native/runtimes/x64/OpenConsole.exe',
+            exeBytes,
+            method: 8,
+          ),
+        ]);
+        final nupkgFile = File(p.join(tempRoot.path, 'conpty.nupkg'))
+          ..writeAsBytesSync(nupkg);
+        await expectLater(
+          () => PseudoTerminal.installConPty(nupkgFile, environment: env),
+          _throwsFormat('ConPTY NuGet SHA-256 mismatch'),
+        );
+        expect(
+          await ConPtyBundle.installFromNupkgFile(
+            nupkgFile,
+            arch: .x64,
+            environment: env,
+            expectedNupkgSha256: ConPtyBundle.sha256Hex(nupkg),
+            customSpecs: customSpecs,
+          ),
+          dllFile.path,
+        );
+        expect(
+          ConPtyBundle.resolveConPtyDllPath(
+            arch: .x64,
+            environment: env,
+            resolvedExecutablePath: p.join(tempRoot.path, 'none', 'app.exe'),
+            customSpecs: customSpecs,
+          ),
+          dllFile.path,
         );
       },
     );
