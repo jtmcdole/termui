@@ -252,6 +252,64 @@ void main() {
     );
 
     test(
+      'height shrink preserves non-blank status rows below cursorY by evicting top rows and shifting cursorY up',
+      () {
+        final vt = VirtualTerminal(
+          width: 10,
+          height: 4,
+          maxScrollbackLines: 10,
+        );
+        // Inline TUI layout: row 0 = history, row 1 = top border,
+        // row 2 = "> input" (where cursorY rests), row 3 = "no images" footer.
+        vt.writeString('HIST0\r\n╭────────╮\r\n> hello\r\nno images\x1b[3;8H');
+        expect(vt.cursorY, equals(2));
+        expect(vt.cursorX, equals(7));
+
+        // Shrinking height 4 -> 3 (e.g. showing docked top bar) must evict HIST0
+        // and shift cursorY 2 -> 1 so "no images" stays 1 row below "> hello".
+        vt.resize(10, 3);
+        expect(vt.scrollback.length, equals(1));
+        expect(_lineText(vt.scrollback[0]!), equals('HIST0'));
+        expect(vt.cursorY, equals(1));
+        expect(vt.cursorX, equals(7));
+        expect(vt.buffer.getCharacter(0, 1), equals('>'));
+        expect(vt.buffer.getCharacter(2, 1), equals('h'));
+        expect(vt.buffer.getCharacter(0, 2), equals('n'));
+        expect(vt.buffer.getCharacter(3, 2), equals('i'));
+
+        // Styled blank row below cursor (cursorY == 1) counts as visible content,
+        // evicts row 0 ('╭────────╮'), and shifts DECSC saved cursor with it;
+        // shrinking again at cursorY == 0 caps eviction at cursorY.
+        vt.writeString('\x1b[3;1H\x1b[44m          \x1b[0m\x1b[2;8H\x1b7');
+        expect(vt.cursorY, equals(1));
+        vt.resize(10, 2);
+        expect(vt.cursorY, equals(0));
+        expect(vt.scrollback.length, equals(2));
+        expect(vt.buffer.getBackground(0, 1), isNot(equals(0)));
+        vt.writeString('\x1b8');
+        expect(vt.cursorY, equals(0));
+
+        vt.resize(10, 1);
+        expect(vt.cursorY, equals(0));
+        expect(vt.scrollback.length, equals(2));
+
+        // Height shrink inside ?1049h alt-screen keeps primary footer below saved cursor.
+        final altVt = VirtualTerminal(
+          width: 10,
+          height: 4,
+          maxScrollbackLines: 10,
+        );
+        altVt.writeString('H0\r\nH1\r\n> in\r\nfooter\x1b[3;3H\x1b[?1049h');
+        altVt.resize(10, 3);
+        altVt.writeString('\x1b[?1049l');
+        expect(altVt.scrollback.length, equals(1));
+        expect(altVt.cursorY, equals(1));
+        expect(altVt.buffer.getCharacter(0, 1), equals('>'));
+        expect(altVt.buffer.getCharacter(0, 2), equals('f'));
+      },
+    );
+
+    test(
       'isRowWrapped reports live wraps including row 0 seam and clears broken seams on CSI 0/1/2 K',
       () {
         final vt = VirtualTerminal(width: 5, height: 4, maxScrollbackLines: 10);
