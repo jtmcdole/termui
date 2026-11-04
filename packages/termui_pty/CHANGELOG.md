@@ -1,3 +1,8 @@
+## 0.8.2
+
+ - **FIX**(termui_pty): preserve non-blank rows below cursorY on height shrink.
+ - **FIX**(termui_pty): consume DCS/SOS/PM/APC control strings and unwrap tmux OSC passthrough.
+
 ## 0.8.1
 
  - Update a dependency to the latest release.
