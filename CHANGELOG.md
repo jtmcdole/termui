@@ -11,6 +11,28 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui_pty` - `v0.8.2`](#termui_pty---v082)
+
+---
+
+#### `termui_pty` - `v0.8.2`
+
+ - **FIX**(termui_pty): preserve non-blank rows below cursorY on height shrink.
+ - **FIX**(termui_pty): consume DCS/SOS/PM/APC control strings and unwrap tmux OSC passthrough.
+
+
+## 2026-11-04
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`pty2` - `v0.8.0`](#pty2---v080)
 
 Packages with other changes:
