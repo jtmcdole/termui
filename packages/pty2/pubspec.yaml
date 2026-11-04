@@ -25,6 +25,7 @@ dependencies:
   ffi: ^2.2.0
   hooks: ^2.2.0
   native_toolchain_c: ^0.19.5
+  path: ^1.9.0
   win32: ^6.0.0
 
 dev_dependencies:

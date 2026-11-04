@@ -5,8 +5,83 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:pty2/src/impl/conpty_bundle.dart';
 import 'package:pty2/src/pty_core.dart';
 import 'package:win32/win32.dart' as win32;
+
+typedef _CreatePseudoConsoleNative =
+    Int32 Function(
+      win32.COORD size,
+      Pointer hInput,
+      Pointer hOutput,
+      Uint32 dwFlags,
+      Pointer<IntPtr> phPC,
+    );
+typedef _CreatePseudoConsoleDart =
+    int Function(
+      win32.COORD size,
+      Pointer hInput,
+      Pointer hOutput,
+      int dwFlags,
+      Pointer<IntPtr> phPC,
+    );
+
+typedef _ResizePseudoConsoleNative =
+    Int32 Function(IntPtr hPC, win32.COORD size);
+typedef _ResizePseudoConsoleDart = int Function(int hPC, win32.COORD size);
+
+typedef _ClosePseudoConsoleNative = Void Function(IntPtr hPC);
+typedef _ClosePseudoConsoleDart = void Function(int hPC);
+
+final class _PseudoConsoleBindings {
+  final _CreatePseudoConsoleDart _create;
+  final _ResizePseudoConsoleDart _resize;
+  final Pointer<NativeFunction<_ClosePseudoConsoleNative>> closePtr;
+
+  const _PseudoConsoleBindings._(this._create, this._resize, this.closePtr);
+
+  static _PseudoConsoleBindings? tryLoad() {
+    final dllPath = ConPtyBundle.resolveConPtyDllPath();
+    if (dllPath == null) return null;
+    try {
+      final lib = DynamicLibrary.open(dllPath);
+      return _PseudoConsoleBindings._(
+        lib.lookupFunction<
+          _CreatePseudoConsoleNative,
+          _CreatePseudoConsoleDart
+        >('ConptyCreatePseudoConsole'),
+        lib.lookupFunction<
+          _ResizePseudoConsoleNative,
+          _ResizePseudoConsoleDart
+        >('ConptyResizePseudoConsole'),
+        lib.lookup<NativeFunction<_ClosePseudoConsoleNative>>(
+          'ConptyClosePseudoConsole',
+        ),
+      );
+    } on Object {
+      return null;
+    }
+  }
+
+  win32.HPCON? create(
+    Arena arena,
+    win32.COORD size,
+    win32.HANDLE hInput,
+    win32.HANDLE hOutput,
+    int dwFlags,
+  ) {
+    final phPC = arena<IntPtr>();
+    final hr = win32.HRESULT(_create(size, hInput, hOutput, dwFlags, phPC));
+    if (hr.isError) return null;
+    final handle = win32.HPCON(phPC.value);
+    return handle.isValid ? handle : null;
+  }
+
+  void resize(win32.HPCON hPC, win32.COORD size) {
+    final hr = win32.HRESULT(_resize(hPC, size));
+    if (hr.isError) throw win32.WindowsException(hr);
+  }
+}
 
 /// The Windows implementation of PtyCore.
 ///
@@ -23,6 +98,40 @@ import 'package:win32/win32.dart' as win32;
 final class PtyCoreWindows implements PtyCore, Finalizable {
   /// Internal testing flag to force the legacy fallback.
   static bool forceLegacyForTesting = false;
+
+  static _PseudoConsoleBindings? _cachedConPtyBindings;
+  static bool _conPtyProbed = false;
+
+  static _PseudoConsoleBindings? get _activeConPtyBindings {
+    if (!_conPtyProbed) {
+      _conPtyProbed = true;
+      _cachedConPtyBindings = _PseudoConsoleBindings.tryLoad();
+    }
+    return _cachedConPtyBindings;
+  }
+
+  /// Resets a cached negative ConPTY lookup so a newly staged sidecar is
+  /// picked up on the next [start] call.
+  static void resetConPtyProbeIfUnbound() {
+    if (_cachedConPtyBindings == null) {
+      _conPtyProbed = false;
+    }
+  }
+
+  /// Whether [PtyCoreWindows] is backed by the redistributable `conpty.dll` +
+  /// `OpenConsole.exe` sidecar rather than inbox `kernel32.dll`.
+  static bool get isUsingBundledConPty => _activeConPtyBindings != null;
+
+  static void _closePseudoConsole(
+    win32.HPCON hPty,
+    Pointer<NativeFunction<_ClosePseudoConsoleNative>>? closePtyPtr,
+  ) {
+    if (closePtyPtr != null) {
+      closePtyPtr.asFunction<_ClosePseudoConsoleDart>()(hPty);
+    } else {
+      win32.ClosePseudoConsole(hPty);
+    }
+  }
 
   /// Formats [executable] and [arguments] into a Windows command-line string
   /// conforming to `CommandLineToArgvW` backslash-and-quote escaping rules.
@@ -82,13 +191,14 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   static void _closePseudoConsoleOnce(
     Pointer<IntPtr> pLock,
     Pointer<IntPtr> pHPty,
+    Pointer<NativeFunction<_ClosePseudoConsoleNative>>? closePtyPtr,
   ) {
     if (pHPty.address == 0) return;
     _withLock(pLock, () {
       final hPty = pHPty.value;
       if (hPty != 0) {
         pHPty.value = 0;
-        win32.ClosePseudoConsole(win32.HPCON(hPty));
+        _closePseudoConsole(win32.HPCON(hPty), closePtyPtr);
       }
     });
   }
@@ -145,22 +255,23 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     return '$buffer'.toNativeUtf16(allocator: arena);
   }
 
-  static win32.HPCON? _createConPtyHandle(
-    Arena arena,
-    int inputReadAddress,
-    int outWriteAddress,
-  ) {
+  static ({win32.HPCON handle, _PseudoConsoleBindings? bindings})?
+  _createConPtyHandle(Arena arena, int inputReadAddress, int outWriteAddress) {
     final size = arena<win32.COORD>().ref
       ..X = 80
       ..Y = 25;
+    final hInput = win32.HANDLE(Pointer.fromAddress(inputReadAddress));
+    final hOutput = win32.HANDLE(Pointer.fromAddress(outWriteAddress));
+    final bindings = _activeConPtyBindings;
+    if (bindings != null) {
+      final ptyHandle = bindings.create(arena, size, hInput, hOutput, 0);
+      if (ptyHandle != null) {
+        return (handle: ptyHandle, bindings: bindings);
+      }
+    }
     try {
-      final ptyHandle = win32.CreatePseudoConsole(
-        size,
-        win32.HANDLE(Pointer.fromAddress(inputReadAddress)),
-        win32.HANDLE(Pointer.fromAddress(outWriteAddress)),
-        0,
-      );
-      return ptyHandle.isValid ? ptyHandle : null;
+      final ptyHandle = win32.CreatePseudoConsole(size, hInput, hOutput, 0);
+      return ptyHandle.isValid ? (handle: ptyHandle, bindings: null) : null;
     } catch (_) {
       return null;
     }
@@ -239,15 +350,17 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       return null;
     }
 
-    final hpConPty = _createConPtyHandle(
+    final created = _createConPtyHandle(
       arena,
       hInputReadPipe.value,
       hOutWritePipe.value,
     );
-    if (hpConPty == null) {
+    if (created == null) {
       closeConPtyPipes();
       return null;
     }
+    final (handle: hpConPty, :bindings) = created;
+    final closePtyPtr = bindings?.closePtr;
 
     final si = _initConPtyStartupInfo(arena, hpConPty);
     final pi = arena<win32.PROCESS_INFORMATION>();
@@ -267,7 +380,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
         ).value;
 
     if (!spawned) {
-      win32.ClosePseudoConsole(hpConPty);
+      _closePseudoConsole(hpConPty, closePtyPtr);
       closeConPtyPipes();
       return null;
     }
@@ -280,7 +393,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       // 0xC0000142 STATUS_DLL_INIT_FAILED
       win32.CloseHandle(pi.ref.hProcess);
       win32.CloseHandle(pi.ref.hThread);
-      win32.ClosePseudoConsole(hpConPty);
+      _closePseudoConsole(hpConPty, closePtyPtr);
       closeConPtyPipes();
       return null;
     }
@@ -297,6 +410,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       win32.HANDLE(nullptr),
       hpConPty,
       hProcess,
+      conPtyBindings: bindings,
     );
   }
 
@@ -429,8 +543,10 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     this._inputReadSide,
     this._outputWriteSide,
     win32.HPCON? hPty,
-    win32.HANDLE hProcess,
-  ) : _failed = false {
+    win32.HANDLE hProcess, {
+    _PseudoConsoleBindings? conPtyBindings,
+  }) : _conPtyBindings = conPtyBindings,
+       _failed = false {
     _writeBuffer = calloc<Uint8>(_bufferSize + 1);
     _pWritten = calloc<Uint32>();
 
@@ -451,6 +567,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       pOutputReadSide: pOutputReadSide,
       pHProcess: pHProcess,
       pHPty: pHPty,
+      closePtyPtr: conPtyBindings?.closePtr,
       buffer: readBuffer,
       pReadlen: pReadlen,
       bufferSize: _bufferSize,
@@ -483,6 +600,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
     : _inputWriteSide = win32.HANDLE(nullptr),
       _inputReadSide = win32.HANDLE(nullptr),
       _outputWriteSide = win32.HANDLE(nullptr),
+      _conPtyBindings = null,
       _failed = true {
     _writeBuffer = nullptr;
     _pWritten = nullptr;
@@ -495,6 +613,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       pOutputReadSide: null,
       pHProcess: null,
       pHPty: null,
+      closePtyPtr: null,
       buffer: nullptr,
       pReadlen: nullptr,
       bufferSize: 0,
@@ -505,6 +624,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   win32.HANDLE _inputWriteSide;
   win32.HANDLE _inputReadSide;
   win32.HANDLE _outputWriteSide;
+  final _PseudoConsoleBindings? _conPtyBindings;
   final bool _failed;
   final Object _writeDetachToken = Object();
 
@@ -604,7 +724,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
             0,
           ).value;
     });
-    _closePseudoConsoleOnce(_pLock, _pHPty);
+    _closePseudoConsoleOnce(_pLock, _pHPty, _conPtyBindings?.closePtr);
 
     _closeRawHandle(_inputReadSide.address);
     _inputReadSide = win32.HANDLE(nullptr);
@@ -619,6 +739,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   @override
   void resize(int width, int height) {
     if (_failed || _killed || _pHPty == nullptr) return;
+    final bindings = _conPtyBindings;
     using((arena) {
       final size = arena<win32.COORD>();
       size.ref.X = width;
@@ -627,7 +748,11 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
         final hPty = _pHPty.value;
         if (hPty == 0) return;
         try {
-          win32.ResizePseudoConsole(win32.HPCON(hPty), size.ref);
+          if (bindings != null) {
+            bindings.resize(win32.HPCON(hPty), size.ref);
+          } else {
+            win32.ResizePseudoConsole(win32.HPCON(hPty), size.ref);
+          }
         } on win32.WindowsException {
           // Child exited naturally before or during resize.
         }
@@ -660,6 +785,7 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
   final Pointer<IntPtr>? pHProcess;
   final Pointer<IntPtr>? pOutputReadSide;
   final Pointer<IntPtr>? pHPty;
+  final Pointer<NativeFunction<Void Function(IntPtr)>>? closePtyPtr;
   final Pointer<Uint8> buffer;
   final Pointer<Uint32> pReadlen;
   final int bufferSize;
@@ -670,6 +796,7 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
     required this.pOutputReadSide,
     required this.pHProcess,
     required this.pHPty,
+    required this.closePtyPtr,
     required this.buffer,
     required this.pReadlen,
     required this.bufferSize,
@@ -730,7 +857,7 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
     // the flushed data and hit ERROR_BROKEN_PIPE (EOF) naturally.
     final pHPtyPtr = pHPty;
     if (pHPtyPtr != null) {
-      PtyCoreWindows._closePseudoConsoleOnce(pLock, pHPtyPtr);
+      PtyCoreWindows._closePseudoConsoleOnce(pLock, pHPtyPtr, closePtyPtr);
     }
 
     return exitCode;
@@ -748,7 +875,7 @@ final class PtyCoreWindowsWorker implements PtyCoreWorker {
 
     final pPty = pHPty;
     if (pPty != null) {
-      PtyCoreWindows._closePseudoConsoleOnce(pLock, pPty);
+      PtyCoreWindows._closePseudoConsoleOnce(pLock, pPty, closePtyPtr);
     }
 
     final pProc = pHProcess;
