@@ -1,3 +1,12 @@
+## 0.8.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(pty2): add opt-in ConPTY NuGet download and ensureConPtyReady.
+ - **FEAT**(pty2): add ConPTY NuGet ZIP extraction and installConPty.
+ - **FEAT**(pty2): resolve SHA-256-verified ConPTY pair from per-user cache.
+ - **BREAKING** **FEAT**(pty2): load side-by-side conpty.dll and OpenConsole.exe on Windows.
+
 ## 0.7.0
 
 > Note: This release has breaking changes.

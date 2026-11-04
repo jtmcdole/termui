@@ -3,6 +3,36 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-04
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`pty2` - `v0.8.0`](#pty2---v080)
+
+Packages with other changes:
+
+ - [`termui_pty` - `v0.8.1`](#termui_pty---v081)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_pty` - `v0.8.1`
+
+---
+
+#### `pty2` - `v0.8.0`
+
+ - **FEAT**(pty2): add opt-in ConPTY NuGet download and ensureConPtyReady.
+ - **FEAT**(pty2): add ConPTY NuGet ZIP extraction and installConPty.
+ - **FEAT**(pty2): resolve SHA-256-verified ConPTY pair from per-user cache.
+ - **BREAKING** **FEAT**(pty2): load side-by-side conpty.dll and OpenConsole.exe on Windows.
+
+
 ## 2026-11-03
 
 ### Changes
