@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -7,7 +8,16 @@ import 'package:pty2/src/impl/windows.dart' if (dart.library.html) '';
 import 'package:test/test.dart';
 
 void main() {
-  group('ConPtyBundle side-by-side resolution', () {
+  group('ConPtyBundle.sha256Hex', () {
+    test('computes lowercase hex SHA-256 digest via package:crypto', () {
+      expect(
+        ConPtyBundle.sha256Hex(utf8.encode('abc')),
+        'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      );
+    });
+  });
+
+  group('ConPtyBundle side-by-side & verified cache resolution', () {
     late Directory tempRoot;
 
     setUp(() {
@@ -30,6 +40,7 @@ void main() {
       expect(ConPtyBundle.hasValidPair(dir), isFalse);
       expect(
         ConPtyBundle.resolveConPtyDllPath(
+          arch: .x64,
           environment: {'PTY2_CONPTY_DIR': dir.path},
           resolvedExecutablePath: p.join(tempRoot.path, 'none', 'dart'),
         ),
@@ -45,10 +56,20 @@ void main() {
       expect(ConPtyBundle.hasValidPair(dir), isTrue);
       expect(
         ConPtyBundle.resolveConPtyDllPath(
+          arch: .x64,
           environment: {'PTY2_CONPTY_DIR': dir.path},
           resolvedExecutablePath: p.join(tempRoot.path, 'none', 'dart'),
         ),
         dllFile.path,
+      );
+
+      // Verification against ConPtyArchSpec rejects dummy non-matching files.
+      expect(
+        ConPtyBundle.hasValidPair(
+          dir,
+          verifySpec: ConPtyBundle.specs[ConPtyArch.x64],
+        ),
+        isFalse,
       );
     });
 
@@ -61,6 +82,7 @@ void main() {
 
         expect(
           ConPtyBundle.resolveConPtyDllPath(
+            arch: .x64,
             environment: const {},
             resolvedExecutablePath: p.join(exeDir.path, 'termui_cast.exe'),
           ),
@@ -76,10 +98,85 @@ void main() {
 
         expect(
           ConPtyBundle.resolveConPtyDllPath(
+            arch: .x64,
             environment: {'PTY2_CONPTY_DIR': overrideDir.path},
             resolvedExecutablePath: p.join(exeDir.path, 'termui_cast.exe'),
           ),
           p.join(overrideDir.path, 'conpty.dll'),
+        );
+      },
+    );
+
+    test(
+      'resolves verified per-user cache and rejects size or SHA-256 mismatches',
+      () {
+        expect(
+          ConPtyBundle.defaultCacheDirectory(arch: .x64, environment: const {}),
+          isNull,
+        );
+
+        final profileEnv = {'USERPROFILE': p.join(tempRoot.path, 'profile')};
+        final profileCache = ConPtyBundle.defaultCacheDirectory(
+          arch: .arm64,
+          environment: profileEnv,
+        );
+        expect(
+          profileCache?.path,
+          p.join(
+            tempRoot.path,
+            'profile',
+            'AppData',
+            'Local',
+            'pty2',
+            'conpty',
+            ConPtyBundle.version,
+            'arm64',
+          ),
+        );
+
+        final dllBytes = utf8.encode('verified-conpty-dll-x64');
+        final exeBytes = utf8.encode('verified-OpenConsole-exe-x64');
+        final customSpec = ConPtyArchSpec(
+          arch: .x64,
+          dllEntryPath: 'runtimes/win-x64/native/conpty.dll',
+          dllSha256: ConPtyBundle.sha256Hex(dllBytes),
+          dllSize: dllBytes.length,
+          exeEntryPath: 'build/native/runtimes/x64/OpenConsole.exe',
+          exeSha256: ConPtyBundle.sha256Hex(exeBytes),
+          exeSize: exeBytes.length,
+        );
+        final customSpecs = <ConPtyArch, ConPtyArchSpec>{.x64: customSpec};
+        final env = {'LOCALAPPDATA': p.join(tempRoot.path, 'localappdata')};
+        final cacheDir = ConPtyBundle.defaultCacheDirectory(
+          arch: .x64,
+          environment: env,
+        )!..createSync(recursive: true);
+
+        final dllFile = File(p.join(cacheDir.path, 'conpty.dll'))
+          ..writeAsBytesSync(dllBytes);
+        final exeFile = File(p.join(cacheDir.path, 'OpenConsole.exe'))
+          ..writeAsBytesSync(exeBytes);
+
+        expect(
+          ConPtyBundle.resolveConPtyDllPath(
+            arch: .x64,
+            environment: env,
+            resolvedExecutablePath: p.join(tempRoot.path, 'none', 'app.exe'),
+            customSpecs: customSpecs,
+          ),
+          dllFile.path,
+        );
+
+        // Same-length corrupted OpenConsole.exe is rejected by SHA-256 check.
+        exeFile.writeAsBytesSync(utf8.encode('tampered-OpenConsole-exe-x64'));
+        expect(
+          ConPtyBundle.resolveConPtyDllPath(
+            arch: .x64,
+            environment: env,
+            resolvedExecutablePath: p.join(tempRoot.path, 'none', 'app.exe'),
+            customSpecs: customSpecs,
+          ),
+          isNull,
         );
       },
     );
