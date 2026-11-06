@@ -13,6 +13,9 @@ typedef _SavedCursor = ({
   Style style,
   bool pendingWrap,
   bool originMode,
+  bool g0DecGraphics,
+  bool g1DecGraphics,
+  bool useG1,
 });
 
 /// A virtual terminal that maintains primary and alternate screen buffers,
@@ -44,7 +47,45 @@ final class VirtualTerminal implements TerminalHandler {
     style: .empty,
     pendingWrap: false,
     originMode: false,
+    g0DecGraphics: false,
+    g1DecGraphics: false,
+    useG1: false,
   );
+
+  static const List<String> _decSpecialGraphics = [
+    ' ',
+    '◆',
+    '▒',
+    '␉',
+    '␌',
+    '␍',
+    '␊',
+    '°',
+    '±',
+    '␤',
+    '␋',
+    '┘',
+    '┐',
+    '┌',
+    '└',
+    '┼',
+    '⎺',
+    '⎻',
+    '─',
+    '⎼',
+    '⎽',
+    '├',
+    '┤',
+    '┴',
+    '┬',
+    '│',
+    '≤',
+    '≥',
+    'π',
+    '≠',
+    '£',
+    '·',
+  ];
 
   static final RegExp _whitespaceRegex = RegExp(r'\s+');
   static const int _maxOsc52PayloadLength = 1_400_000;
@@ -119,6 +160,9 @@ final class VirtualTerminal implements TerminalHandler {
   int _scrollBottom;
   Style _currentStyle = .empty;
   String? _lastPrintedGrapheme;
+  bool _g0DecGraphics = false;
+  bool _g1DecGraphics = false;
+  bool _useG1 = false;
   _SavedCursor _savedPrimary = _initialSavedCursor;
   _SavedCursor _savedAlt = _initialSavedCursor;
   late AnsiParser _parser;
@@ -231,6 +275,9 @@ final class VirtualTerminal implements TerminalHandler {
   void _resetState({required bool fullReset}) {
     _currentStyle = .empty;
     _lastPrintedGrapheme = null;
+    _g0DecGraphics = false;
+    _g1DecGraphics = false;
+    _useG1 = false;
     _cursorVisible = true;
     _autoWrap = true;
     _insertMode = false;
@@ -315,6 +362,9 @@ final class VirtualTerminal implements TerminalHandler {
       style: _savedPrimary.style,
       pendingWrap: _savedPrimary.pendingWrap,
       originMode: _savedPrimary.originMode,
+      g0DecGraphics: _savedPrimary.g0DecGraphics,
+      g1DecGraphics: _savedPrimary.g1DecGraphics,
+      useG1: _savedPrimary.useG1,
     );
     if (!_usingAltScreen) {
       cursorY = baseCursorY - evictCount;
@@ -599,8 +649,9 @@ final class VirtualTerminal implements TerminalHandler {
     _wrappingNextIndexDown = false;
   }
 
-  void _printGrapheme(String char) {
-    if (char.isEmpty || _containsControlCodeUnit(char)) return;
+  void _printGrapheme(String rawChar, {bool translateCharset = true}) {
+    if (rawChar.isEmpty || _containsControlCodeUnit(rawChar)) return;
+    final char = translateCharset ? _translateCharset(rawChar) : rawChar;
     _lastPrintedGrapheme = char;
     if (cursorX >= width) {
       if (_autoWrap) {
@@ -627,6 +678,15 @@ final class VirtualTerminal implements TerminalHandler {
       modifiers: modArg,
     );
     _advanceCursorAfterPrint(1);
+  }
+
+  String _translateCharset(String char) {
+    if (!(_useG1 ? _g1DecGraphics : _g0DecGraphics) || char.length != 1) {
+      return char;
+    }
+    final code = char.codeUnitAt(0);
+    if (code < 0x5F || code > 0x7E) return char;
+    return _decSpecialGraphics[code - 0x5F];
   }
 
   static bool _containsControlCodeUnit(String grapheme) {
@@ -715,6 +775,10 @@ final class VirtualTerminal implements TerminalHandler {
         _indexDown();
       case 13: // Carriage return
         cursorX = 0;
+      case 14: // Shift Out (SO -> G1)
+        _useG1 = true;
+      case 15: // Shift In (SI -> G0)
+        _useG1 = false;
     }
   }
 
@@ -797,6 +861,9 @@ final class VirtualTerminal implements TerminalHandler {
       style: _currentStyle,
       pendingWrap: cursorX >= width,
       originMode: _originMode,
+      g0DecGraphics: _g0DecGraphics,
+      g1DecGraphics: _g1DecGraphics,
+      useG1: _useG1,
     );
     if (_usingAltScreen) {
       _savedAlt = snapshot;
@@ -816,6 +883,9 @@ final class VirtualTerminal implements TerminalHandler {
         ? saved.y.clamp(_scrollTop, _scrollBottom)
         : saved.y.clamp(0, height - 1);
     _currentStyle = saved.style;
+    _g0DecGraphics = saved.g0DecGraphics;
+    _g1DecGraphics = saved.g1DecGraphics;
+    _useG1 = saved.useG1;
   }
 
   @override
@@ -950,7 +1020,7 @@ final class VirtualTerminal implements TerminalHandler {
     if (last == null) return;
     final limit = math.min(count, width * height);
     for (var i = 0; i < limit; i++) {
-      _printGrapheme(last);
+      _printGrapheme(last, translateCharset: false);
     }
   }
 
@@ -1248,6 +1318,14 @@ final class VirtualTerminal implements TerminalHandler {
         _indexDown();
       case 'M': // RI (Reverse Index)
         _reverseIndex();
+      case '(0': // Designate G0 as DEC Special Graphics
+        _g0DecGraphics = true;
+      case _ when command.startsWith('('): // Designate G0 as ASCII / non-DEC
+        _g0DecGraphics = false;
+      case ')0': // Designate G1 as DEC Special Graphics
+        _g1DecGraphics = true;
+      case _ when command.startsWith(')'): // Designate G1 as ASCII / non-DEC
+        _g1DecGraphics = false;
     }
   }
 
