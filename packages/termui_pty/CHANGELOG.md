@@ -1,3 +1,17 @@
+## 0.8.3
+
+ - **FIX**(termui_pty): support SGR 6/21 and DECSED/DECSEL selective erase.
+ - **FIX**(termui_pty): reset cursorX on IL/DL, guard CSI T/u, and support HPR/VPR.
+ - **FIX**(termui_pty): support REP (CSI b) repeat preceding graphic character.
+ - **FIX**(termui_pty): support CHT (CSI I) and CBT (CSI Z) tab-stop cursor motion.
+ - **FEAT**(termui_pty): track independent mouse modes, focus reporting (?1004), and DECSCUSR.
+ - **FEAT**(termui_pty): support custom tab stops via HTS (ESC H), TBC (CSI g), and DECST8C.
+ - **FEAT**(termui_pty): answer DSR, CPR, DA1, DA2, DECRQM, and XTWINOPS 18t queries via onReply.
+ - **FEAT**(termui_pty): track DECSET 2026 synchronizedOutput and 2027 graphemeClusterMode.
+ - **FEAT**(termui_pty): support DEC Special Graphics G0/G1 charsets and SO/SI.
+ - **FEAT**(termui_pty): clamp CUU/CUD/CNL/CPL at scroll margins and support DECOM (?6h/l).
+ - **FEAT**(termui_pty): support ANSI IRM insert/replace mode (CSI 4 h/l).
+
 ## 0.8.2
 
  - **FIX**(termui_pty): preserve non-blank rows below cursorY on height shrink.

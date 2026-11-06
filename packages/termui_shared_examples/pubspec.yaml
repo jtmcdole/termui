@@ -12,7 +12,7 @@ dependencies:
   args: ^2.7.0
   termui: ^0.13.0
   termui_recorder: ^0.10.0
-  termui_pty: ^0.8.2
+  termui_pty: ^0.8.3
   pty2: ^0.8.0
   characters: ^1.4.0
   clock: ^1.1.2
