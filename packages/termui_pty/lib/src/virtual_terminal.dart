@@ -7,7 +7,13 @@ import 'package:termui/termui.dart';
 import 'ansi_parser.dart';
 import 'scrollback_buffer.dart';
 
-typedef _SavedCursor = ({int x, int y, Style style, bool pendingWrap});
+typedef _SavedCursor = ({
+  int x,
+  int y,
+  Style style,
+  bool pendingWrap,
+  bool originMode,
+});
 
 /// A virtual terminal that maintains primary and alternate screen buffers,
 /// cursor state, scroll margins, and terminal modes in response to ANSI/VT100
@@ -37,6 +43,7 @@ final class VirtualTerminal implements TerminalHandler {
     y: 0,
     style: .empty,
     pendingWrap: false,
+    originMode: false,
   );
 
   static final RegExp _whitespaceRegex = RegExp(r'\s+');
@@ -102,6 +109,11 @@ final class VirtualTerminal implements TerminalHandler {
 
   /// Whether ANSI Insert/Replace Mode (`IRM`, `CSI 4 h` / `CSI 4 l`) is enabled.
   bool get insertMode => _insertMode;
+
+  bool _originMode = false;
+
+  /// Whether Origin Mode (`DECOM`, `?6h` / `?6l`) is enabled.
+  bool get originMode => _originMode;
 
   int _scrollTop = 0;
   int _scrollBottom;
@@ -222,6 +234,7 @@ final class VirtualTerminal implements TerminalHandler {
     _cursorVisible = true;
     _autoWrap = true;
     _insertMode = false;
+    _originMode = false;
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
     bracketedPasteMode = false;
@@ -301,6 +314,7 @@ final class VirtualTerminal implements TerminalHandler {
       y: math.max(0, _savedPrimary.y.clamp(0, height - 1) - evictCount),
       style: _savedPrimary.style,
       pendingWrap: _savedPrimary.pendingWrap,
+      originMode: _savedPrimary.originMode,
     );
     if (!_usingAltScreen) {
       cursorY = baseCursorY - evictCount;
@@ -722,6 +736,10 @@ final class VirtualTerminal implements TerminalHandler {
     switch (param) {
       case 1: // DECCKM (Application Cursor Keys)
         _applicationCursorKeys = enable;
+      case 6: // DECOM (Origin Mode)
+        _originMode = enable;
+        cursorX = 0;
+        cursorY = enable ? _scrollTop : 0;
       case 7: // DECAWM (Auto-Wrap Mode)
         _autoWrap = enable;
         if (!enable) _clampPendingWrap();
@@ -778,6 +796,7 @@ final class VirtualTerminal implements TerminalHandler {
       y: cursorY.clamp(0, height - 1),
       style: _currentStyle,
       pendingWrap: cursorX >= width,
+      originMode: _originMode,
     );
     if (_usingAltScreen) {
       _savedAlt = snapshot;
@@ -792,7 +811,10 @@ final class VirtualTerminal implements TerminalHandler {
     cursorX = (saved.pendingWrap && _autoWrap && restoredX == width - 1)
         ? width
         : restoredX;
-    cursorY = saved.y.clamp(0, height - 1);
+    _originMode = saved.originMode;
+    cursorY = _originMode
+        ? saved.y.clamp(_scrollTop, _scrollBottom)
+        : saved.y.clamp(0, height - 1);
     _currentStyle = saved.style;
   }
 
@@ -828,14 +850,26 @@ final class VirtualTerminal implements TerminalHandler {
     return math.min(params[index], 0xFFFF);
   }
 
+  int _moveCursorUp(int rows) =>
+      math.max(cursorY >= _scrollTop ? _scrollTop : 0, cursorY - rows);
+
+  int _moveCursorDown(int rows) => math.min(
+    cursorY <= _scrollBottom ? _scrollBottom : height - 1,
+    cursorY + rows,
+  );
+
+  int _resolveAbsoluteRow(int oneBasedRow) => _originMode
+      ? (_scrollTop + oneBasedRow - 1).clamp(_scrollTop, _scrollBottom)
+      : (oneBasedRow - 1).clamp(0, height - 1);
+
   bool _tryHandleCursorCsi(String command, int p1, int p2) {
     switch (command) {
       case 'A': // Cursor Up (CUU)
         _clampPendingWrap();
-        cursorY = math.max(0, cursorY - p1);
+        cursorY = _moveCursorUp(p1);
       case 'B' || 'e': // Cursor Down (CUD) / Line Position Relative (VPR)
         _clampPendingWrap();
-        cursorY = math.min(height - 1, cursorY + p1);
+        cursorY = _moveCursorDown(p1);
       case 'C' ||
           'a': // Cursor Forward (CUF) / Character Position Relative (HPR)
         _clampPendingWrap();
@@ -845,10 +879,10 @@ final class VirtualTerminal implements TerminalHandler {
         cursorX = math.max(0, cursorX - p1);
       case 'E': // Cursor Next Line (CNL)
         cursorX = 0;
-        cursorY = math.min(height - 1, cursorY + p1);
+        cursorY = _moveCursorDown(p1);
       case 'F': // Cursor Preceding Line (CPL)
         cursorX = 0;
-        cursorY = math.max(0, cursorY - p1);
+        cursorY = _moveCursorUp(p1);
       case 'G' || '`': // Cursor Character Absolute (CHA / HPA)
         cursorX = (p1 - 1).clamp(0, width - 1);
       case 'I': // Cursor Horizontal Forward Tabulation (CHT)
@@ -859,10 +893,10 @@ final class VirtualTerminal implements TerminalHandler {
         cursorX = math.max(0, (((cursorX - 1) >> 3) - (p1 - 1)) * 8);
       case 'd': // Line Position Absolute (VPA)
         _clampPendingWrap();
-        cursorY = (p1 - 1).clamp(0, height - 1);
+        cursorY = _resolveAbsoluteRow(p1);
       case 'H' || 'f': // Cursor Position (CUP / HVP)
         cursorX = (p2 - 1).clamp(0, width - 1);
-        cursorY = (p1 - 1).clamp(0, height - 1);
+        cursorY = _resolveAbsoluteRow(p1);
       default:
         return false;
     }
@@ -932,7 +966,7 @@ final class VirtualTerminal implements TerminalHandler {
       _scrollTop = top;
       _scrollBottom = bottom;
       cursorX = 0;
-      cursorY = 0;
+      cursorY = _originMode ? _scrollTop : 0;
     }
   }
 
