@@ -1362,5 +1362,41 @@ void main() {
         );
       },
     );
+
+    test(
+      'supports custom tab stops via HTS (ESC H), TBC (CSI 0/3 g), and DECST8C (CSI ? 5 W)',
+      () {
+        final terminal = VirtualTerminal(width: 24, height: 2);
+
+        // Clear all tab stops (CSI 3 g), set custom stops at cols 3 and 10 (ESC H).
+        terminal.write(utf8.encode('\x1b[3g\x1b[1;4H\x1bH\x1b[1;11H\x1bH'));
+        terminal.write(utf8.encode('\r\t'));
+        expect(terminal.cursorX, equals(3));
+        terminal.write(utf8.encode('\t'));
+        expect(terminal.cursorX, equals(10));
+        terminal.write(utf8.encode('\t'));
+        expect(terminal.cursorX, equals(23));
+
+        // CBT (CSI Z) and CHT (CSI I) step through custom tab stops.
+        terminal.write(utf8.encode('\x1b[2Z'));
+        expect(terminal.cursorX, equals(3));
+        terminal.write(utf8.encode('\x1b[1I'));
+        expect(terminal.cursorX, equals(10));
+
+        // TBC (CSI 0 g / CSI g) clears only the tab stop at cursorX (10).
+        terminal.write(utf8.encode('\x1b[0g\r\t\t'));
+        expect(terminal.cursorX, equals(23));
+
+        // DECSTR (CSI ! p) preserves custom tab stops, while RIS (ESC c) and DECST8C (CSI ? 5 W) restore 8-column stops.
+        terminal.write(utf8.encode('\x1b[!p\r\t'));
+        expect(terminal.cursorX, equals(3));
+        terminal.write(utf8.encode('\x1bc\r\t'));
+        expect(terminal.cursorX, equals(8));
+        terminal.write(utf8.encode('\x1b[3g\x1b[?5W\r\t'));
+        expect(terminal.cursorX, equals(8));
+        terminal.write(utf8.encode('\t'));
+        expect(terminal.cursorX, equals(16));
+      },
+    );
   });
 }
