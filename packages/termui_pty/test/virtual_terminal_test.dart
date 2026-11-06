@@ -1013,5 +1013,48 @@ void main() {
         );
       },
     );
+
+    test(
+      'handles CBT (CSI Z) and CHT (CSI I) without prompt-selection wrap corruption',
+      () {
+        final terminal = VirtualTerminal(width: 191, height: 3);
+        const prompt =
+            '> /tmp/termui_cast_uploads_AMSNOH/cast-1793982141855523/assign-rfc-number.yml ';
+        final border = '─' * 191;
+
+        terminal.write(
+          utf8.encode(
+            '\x1b[1;1H$border\x1b[2;1H$prompt\x1b[3;1H$border'
+            '\x1b[1;73H\x1b[48;2;138;180;248m${'─' * 119}\x1b[0m\x1b[2;79H'
+            '\x1bM\x1b[Z${'─' * 119}\r\n$prompt'
+            '\x1b[Z\x1b[48;2;138;180;248mr.ym\x1b[0ml\b\b\b\b\b',
+          ),
+        );
+
+        for (var x = 72; x < 78; x++) {
+          expect(terminal.buffer.getCharacter(x, 0), equals('─'));
+          expect(terminal.buffer.getBackground(x, 0), equals(0));
+        }
+        expect(
+          [
+            for (var x = 0; x < 5; x++) terminal.buffer.getCharacter(x, 1),
+          ].join(),
+          equals('> /tm'),
+        );
+        expect(
+          [
+            for (var x = 72; x < 77; x++) terminal.buffer.getCharacter(x, 1),
+          ].join(),
+          equals('r.yml'),
+        );
+        expect(terminal.buffer.getCharacter(78, 1), equals(' '));
+        expect((terminal.cursorX, terminal.cursorY), equals((72, 1)));
+        expect(terminal.buffer.getCharacter(0, 2), equals('─'));
+
+        terminal.write(utf8.encode('\x1b[2J\x1b[1;1H\x1b[3IX\x1b[3ZY'));
+        expect(terminal.buffer.getCharacter(24, 0), equals('X'));
+        expect(terminal.buffer.getCharacter(8, 0), equals('Y'));
+      },
+    );
   });
 }

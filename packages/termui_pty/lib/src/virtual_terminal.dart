@@ -833,6 +833,12 @@ final class VirtualTerminal implements TerminalHandler {
         cursorY = math.max(0, cursorY - p1);
       case 'G' || '`': // Cursor Character Absolute (CHA / HPA)
         cursorX = (p1 - 1).clamp(0, width - 1);
+      case 'I': // Cursor Horizontal Forward Tabulation (CHT)
+        _clampPendingWrap();
+        cursorX = (((cursorX ~/ 8) + p1) * 8).clamp(0, width - 1);
+      case 'Z': // Cursor Backward Tabulation (CBT)
+        _clampPendingWrap();
+        cursorX = math.max(0, (((cursorX - 1) >> 3) - (p1 - 1)) * 8);
       case 'd': // Line Position Absolute (VPA)
         _clampPendingWrap();
         cursorY = (p1 - 1).clamp(0, height - 1);
