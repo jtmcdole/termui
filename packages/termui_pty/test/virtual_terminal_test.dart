@@ -1056,5 +1056,20 @@ void main() {
         expect(terminal.buffer.getCharacter(8, 0), equals('Y'));
       },
     );
+
+    test(
+      'handles REP (CSI b) repeat preceding graphic character and clears on reset',
+      () {
+        final terminal = VirtualTerminal(width: 8, height: 1);
+        terminal.write(utf8.encode('\x1b[3bY\x1b[4b\x1b[!p\x1b[2b'));
+        expect(
+          [
+            for (var x = 0; x < 6; x++) terminal.buffer.getCharacter(x, 0),
+          ].join(),
+          equals('YYYYY '),
+        );
+        expect(terminal.cursorX, equals(5));
+      },
+    );
   });
 }
