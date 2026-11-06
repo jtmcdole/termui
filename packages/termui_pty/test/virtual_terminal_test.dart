@@ -1226,5 +1226,47 @@ void main() {
         expect(terminal.originMode, isFalse);
       },
     );
+
+    test(
+      'supports DEC Special Graphics line drawing via ESC ( 0 / ESC ) 0 and SO/SI (0x0E/0x0F)',
+      () {
+        final terminal = VirtualTerminal(width: 12, height: 2);
+
+        // G0 DEC Special Graphics (\x1b(0) translates l, q, k, x, m, j and restores ASCII on \x1b(B.
+        terminal.write(utf8.encode('\x1b(0lqqk\x1b(Blqqk'));
+        expect(
+          [
+            for (var x = 0; x < 8; x++) terminal.buffer.getCharacter(x, 0),
+          ].join(),
+          equals('┌──┐lqqk'),
+        );
+
+        // G1 DEC Special Graphics (\x1b)0) activated by SO (\x0e) and deactivated by SI (\x0f).
+        terminal.write(utf8.encode('\r\n\x1b)0\x0emjntuvwx`a~\x0fx'));
+        expect(
+          [
+            for (var x = 0; x < 12; x++) terminal.buffer.getCharacter(x, 1),
+          ].join(),
+          equals('└┘┼├┤┴┬│◆▒·x'),
+        );
+
+        // DECSC / DECRC saves and restores charset state, and DECSTR / RIS reset to ASCII.
+        terminal.write(
+          utf8.encode('\x1b[1;1H\x1b(0\x1b7\x1b(Bq\x1b8\x1b[1;2Hq\x1b[!pq'),
+        );
+        expect(terminal.buffer.getCharacter(0, 0), equals('q'));
+        expect(terminal.buffer.getCharacter(1, 0), equals('─'));
+        expect(terminal.buffer.getCharacter(2, 0), equals('q'));
+
+        // 0x5F (_) maps to blank under ESC ( 0, and REP (\x1b[b) does not re-translate prior ASCII.
+        terminal.write(utf8.encode('\x1b[1;1H\x1b(0_\x1b(Bq\x1b(0\x1b[2b'));
+        expect(
+          [
+            for (var x = 0; x < 4; x++) terminal.buffer.getCharacter(x, 0),
+          ].join(),
+          equals(' qqq'),
+        );
+      },
+    );
   });
 }
