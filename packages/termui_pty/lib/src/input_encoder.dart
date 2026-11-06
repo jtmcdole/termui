@@ -28,6 +28,11 @@ abstract final class InputEncoder {
     _ => '',
   };
 
+  /// Encodes terminal focus-in (`\x1b[I`) or focus-out (`\x1b[O`) events for
+  /// `DECSET 1004` focus reporting mode.
+  static String encodeFocus({required bool focused}) =>
+      focused ? '\x1b[I' : '\x1b[O';
+
   /// Encodes mouse wheel events for Alternate Scroll mode (`DECSET 1007`).
   static String encodeAlternateScroll(
     ev.MouseButton button, {
