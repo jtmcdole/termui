@@ -86,6 +86,9 @@ class _PseudoTerminalViewState extends State<PseudoTerminalView> {
       height: 24,
       transparentBackground: widget.transparentBackground,
       defaultForeground: widget.defaultForeground,
+      onReply: (reply) {
+        if (mounted && !_exited) widget.pty.write(reply);
+      },
     );
     _subscribeToPty(widget.pty);
   }

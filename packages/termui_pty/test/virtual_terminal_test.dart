@@ -1298,5 +1298,69 @@ void main() {
         expect(terminal.synchronizedOutput, isFalse);
       },
     );
+
+    test(
+      'emits onReply responses for DSR (5n), CPR (6n/?6n), DA1, DA2, DECRQM, and XTWINOPS (18t)',
+      () {
+        final replies = <String>[];
+        final terminal = VirtualTerminal(
+          width: 80,
+          height: 24,
+          onReply: replies.add,
+        );
+
+        // DSR 5n, CPR 6n, DECXCPR ?6n (including clamping at right-margin pending wrap).
+        terminal.write(
+          utf8.encode('\x1b[5n\x1b[3;10H\x1b[6n\x1b[?6n\x1b[1;80HZ\x1b[6n'),
+        );
+        expect(
+          replies,
+          equals(['\x1b[0n', '\x1b[3;10R', '\x1b[?3;10;1R', '\x1b[1;80R']),
+        );
+
+        // CPR in DECOM (?6h) reports row relative to _scrollTop.
+        replies.clear();
+        terminal.write(
+          utf8.encode('\x1b[5;20r\x1b[?6h\x1b[2;4H\x1b[6n\x1b[?6n'),
+        );
+        expect(replies, equals(['\x1b[2;4R', '\x1b[?2;4;1R']));
+        terminal.write(utf8.encode('\x1b[?6l\x1b[r'));
+
+        // DA1 (CSI c / CSI 0 c), DA2 (CSI > c / CSI > 0 c), and XTWINOPS 18t.
+        replies.clear();
+        terminal.write(utf8.encode('\x1b[c\x1b[0c\x1b[>c\x1b[>0c\x1b[18t'));
+        expect(
+          replies,
+          equals([
+            '\x1b[?62;22c',
+            '\x1b[?62;22c',
+            '\x1b[>1;10;0c',
+            '\x1b[>1;10;0c',
+            '\x1b[8;24;80t',
+          ]),
+        );
+
+        // DECRQM for DEC private modes (?2026$p, ?2027$p, ?9999$p) and ANSI mode (4$p, 99$p).
+        replies.clear();
+        terminal.write(
+          utf8.encode(
+            '\x1b[?2026\$p\x1b[?2026h\x1b[?2026\$p\x1b[?2027\$p\x1b[?9999\$p'
+            '\x1b[4\$p\x1b[4h\x1b[4\$p\x1b[99\$p',
+          ),
+        );
+        expect(
+          replies,
+          equals([
+            '\x1b[?2026;2\$y',
+            '\x1b[?2026;1\$y',
+            '\x1b[?2027;2\$y',
+            '\x1b[?9999;0\$y',
+            '\x1b[4;2\$y',
+            '\x1b[4;1\$y',
+            '\x1b[99;0\$y',
+          ]),
+        );
+      },
+    );
   });
 }
