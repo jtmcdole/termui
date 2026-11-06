@@ -101,6 +101,7 @@ final class VirtualTerminal implements TerminalHandler {
   int _scrollTop = 0;
   int _scrollBottom;
   Style _currentStyle = .empty;
+  String? _lastPrintedGrapheme;
   _SavedCursor _savedPrimary = _initialSavedCursor;
   _SavedCursor _savedAlt = _initialSavedCursor;
   late AnsiParser _parser;
@@ -212,6 +213,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _resetState({required bool fullReset}) {
     _currentStyle = .empty;
+    _lastPrintedGrapheme = null;
     _cursorVisible = true;
     _autoWrap = true;
     mouseTrackingEnabled = false;
@@ -579,6 +581,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _printGrapheme(String char) {
     if (char.isEmpty || _containsControlCodeUnit(char)) return;
+    _lastPrintedGrapheme = char;
     if (cursorX >= width) {
       if (_autoWrap) {
         _wrapLineDown();
@@ -874,10 +877,21 @@ final class VirtualTerminal implements TerminalHandler {
         _scrollRegion(_scrollTop, _scrollBottom, p1, up: false);
       case 'r':
         _setScrollRegion(params);
+      case 'b':
+        _repeatLastGrapheme(p1);
       case 's':
         if (params.isEmpty) _saveCursor();
       case 'u':
         _restoreCursor();
+    }
+  }
+
+  void _repeatLastGrapheme(int count) {
+    final last = _lastPrintedGrapheme;
+    if (last == null) return;
+    final limit = math.min(count, width * height);
+    for (var i = 0; i < limit; i++) {
+      _printGrapheme(last);
     }
   }
 
