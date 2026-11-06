@@ -1164,5 +1164,67 @@ void main() {
         expect(terminal.insertMode, isFalse);
       },
     );
+
+    test(
+      'clamps CUU/CUD/CNL/CPL at DECSTBM margins and supports DECOM (?6h / ?6l) origin mode',
+      () {
+        final terminal = VirtualTerminal(width: 8, height: 6);
+        expect(terminal.originMode, isFalse);
+
+        // Set scroll region rows 3..4 (0-indexed 2..3).
+        terminal.write(utf8.encode('\x1b[3;4r'));
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 0)));
+
+        // Starting inside scroll region (row 2), CUU/CPL stop at _scrollTop (2) and CUD/CNL stop at _scrollBottom (3).
+        terminal.write(utf8.encode('\x1b[3;3H\x1b[5A'));
+        expect((terminal.cursorX, terminal.cursorY), equals((2, 2)));
+        terminal.write(utf8.encode('\x1b[5B'));
+        expect((terminal.cursorX, terminal.cursorY), equals((2, 3)));
+        terminal.write(utf8.encode('\x1b[5F'));
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 2)));
+        terminal.write(utf8.encode('\x1b[5E'));
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 3)));
+
+        // Starting outside scroll region, CUU from above (row 1) reaches 0 and CUD from below (row 4) reaches height - 1 (5).
+        terminal.write(utf8.encode('\x1b[2;1H\x1b[5A'));
+        expect(terminal.cursorY, equals(0));
+        terminal.write(utf8.encode('\x1b[5;1H\x1b[5B'));
+        expect(terminal.cursorY, equals(5));
+
+        // DECOM (?6h) homes cursor to (0, _scrollTop) and offsets/clamps CUP, HVP, VPA, and DECSTBM.
+        terminal.write(utf8.encode('\x1b[?6h'));
+        expect(terminal.originMode, isTrue);
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 2)));
+
+        terminal.write(utf8.encode('\x1b[2;4H'));
+        expect((terminal.cursorX, terminal.cursorY), equals((3, 3)));
+        terminal.write(utf8.encode('\x1b[99;99f'));
+        expect((terminal.cursorX, terminal.cursorY), equals((7, 3)));
+        terminal.write(utf8.encode('\x1b[1d'));
+        expect(terminal.cursorY, equals(2));
+        terminal.write(utf8.encode('\x1b[99d'));
+        expect(terminal.cursorY, equals(3));
+
+        // DECSC / DECRC saves and restores originMode, and ?6l homes to (0, 0).
+        terminal.write(utf8.encode('\x1b7\x1b[?6l'));
+        expect(terminal.originMode, isFalse);
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 0)));
+        terminal.write(utf8.encode('\x1b8'));
+        expect(terminal.originMode, isTrue);
+        expect((terminal.cursorX, terminal.cursorY), equals((7, 3)));
+
+        // Changing DECSTBM while DECOM is active homes to new _scrollTop.
+        terminal.write(utf8.encode('\x1b[2;5r'));
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 1)));
+
+        // DECRC under DECOM clamps saved cursorY into narrowed _scrollTop.._scrollBottom.
+        terminal.write(utf8.encode('\x1b7\x1b[3;4r\x1b8'));
+        expect(terminal.originMode, isTrue);
+        expect(terminal.cursorY, equals(2));
+
+        terminal.write(utf8.encode('\x1b[!p'));
+        expect(terminal.originMode, isFalse);
+      },
+    );
   });
 }
