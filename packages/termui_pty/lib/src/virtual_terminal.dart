@@ -819,10 +819,11 @@ final class VirtualTerminal implements TerminalHandler {
       case 'A': // Cursor Up (CUU)
         _clampPendingWrap();
         cursorY = math.max(0, cursorY - p1);
-      case 'B': // Cursor Down (CUD)
+      case 'B' || 'e': // Cursor Down (CUD) / Line Position Relative (VPR)
         _clampPendingWrap();
         cursorY = math.min(height - 1, cursorY + p1);
-      case 'C': // Cursor Forward (CUF)
+      case 'C' ||
+          'a': // Cursor Forward (CUF) / Character Position Relative (HPR)
         _clampPendingWrap();
         cursorX = math.min(width - 1, cursorX + p1);
       case 'D': // Cursor Back (CUB)
@@ -874,7 +875,9 @@ final class VirtualTerminal implements TerminalHandler {
       case 'S':
         _scrollRegion(_scrollTop, _scrollBottom, p1, up: true, evictTop: true);
       case 'T':
-        _scrollRegion(_scrollTop, _scrollBottom, p1, up: false);
+        if (params.length <= 1) {
+          _scrollRegion(_scrollTop, _scrollBottom, p1, up: false);
+        }
       case 'r':
         _setScrollRegion(params);
       case 'b':
@@ -882,7 +885,7 @@ final class VirtualTerminal implements TerminalHandler {
       case 's':
         if (params.isEmpty) _saveCursor();
       case 'u':
-        _restoreCursor();
+        if (params.isEmpty) _restoreCursor();
     }
   }
 
@@ -914,12 +917,14 @@ final class VirtualTerminal implements TerminalHandler {
   void _insertLines(int count) {
     _clampPendingWrap();
     if (cursorY < _scrollTop || cursorY > _scrollBottom) return;
+    cursorX = 0;
     _scrollRegion(cursorY, _scrollBottom, count, up: false);
   }
 
   void _deleteLines(int count) {
     _clampPendingWrap();
     if (cursorY < _scrollTop || cursorY > _scrollBottom) return;
+    cursorX = 0;
     _scrollRegion(cursorY, _scrollBottom, count, up: true);
   }
 
