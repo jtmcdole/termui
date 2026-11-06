@@ -7,6 +7,30 @@ import 'package:termui/termui.dart';
 import 'ansi_parser.dart';
 import 'scrollback_buffer.dart';
 
+/// Cursor visual style selected by `DECSCUSR` (`CSI Ps SP q`).
+enum TerminalCursorShape {
+  /// Terminal default cursor style (`Ps = 0`).
+  defaultShape,
+
+  /// Blinking block cursor (`Ps = 1`).
+  blinkingBlock,
+
+  /// Steady block cursor (`Ps = 2`).
+  steadyBlock,
+
+  /// Blinking underline cursor (`Ps = 3`).
+  blinkingUnderline,
+
+  /// Steady underline cursor (`Ps = 4`).
+  steadyUnderline,
+
+  /// Blinking vertical bar cursor (`Ps = 5`).
+  blinkingBar,
+
+  /// Steady vertical bar cursor (`Ps = 6`).
+  steadyBar,
+}
+
 typedef _SavedCursor = ({
   int x,
   int y,
@@ -175,11 +199,29 @@ final class VirtualTerminal implements TerminalHandler {
   /// The default foreground color applied to characters when no explicit color is set.
   final Color? defaultForeground;
 
-  /// Whether mouse tracking is enabled (set by DECSET `1000`, `1002`, or `1003`).
-  bool mouseTrackingEnabled = false;
+  int _mouseTrackingMask = 0;
+
+  /// Whether mouse tracking is enabled (set by DECSET `9`, `1000`, `1002`, or `1003`).
+  bool get mouseTrackingEnabled => _mouseTrackingMask != 0;
+
+  set mouseTrackingEnabled(bool value) {
+    _mouseTrackingMask = value
+        ? (_mouseTrackingMask == 0 ? _mouseModeBit(1000) : _mouseTrackingMask)
+        : 0;
+  }
 
   /// Whether SGR mouse reporting mode is enabled (set by DECSET `1006`).
   bool sgrMouseMode = false;
+
+  bool _focusReporting = false;
+
+  /// Whether focus reporting (`DECSET 1004`, `?1004h` / `?1004l`) is enabled.
+  bool get focusReportingEnabled => _focusReporting;
+
+  TerminalCursorShape _cursorShape = .defaultShape;
+
+  /// The active cursor visual style set via `DECSCUSR` (`CSI Ps SP q`).
+  TerminalCursorShape get cursorShape => _cursorShape;
 
   /// Whether bracketed paste mode (`DECSET 2004`, `?2004h` / `?2004l`) is enabled.
   bool bracketedPasteMode = false;
@@ -303,8 +345,10 @@ final class VirtualTerminal implements TerminalHandler {
     _autoWrap = true;
     _insertMode = false;
     _originMode = false;
-    mouseTrackingEnabled = false;
+    _mouseTrackingMask = 0;
     sgrMouseMode = false;
+    _focusReporting = false;
+    _cursorShape = .defaultShape;
     bracketedPasteMode = false;
     _applicationCursorKeys = false;
     _alternateScrollMode = true;
@@ -855,8 +899,13 @@ final class VirtualTerminal implements TerminalHandler {
         enable ? _saveCursor() : _restoreCursor();
       case 1049: // Save Cursor + Alternate Screen Buffer
         _switchAlternateScreen(enable, saveRestoreCursor: true);
-      case 1000 || 1002 || 1003:
-        mouseTrackingEnabled = enable;
+      case 9 || 1000 || 1002 || 1003:
+        final bit = _mouseModeBit(param);
+        _mouseTrackingMask = enable
+            ? (_mouseTrackingMask | bit)
+            : (_mouseTrackingMask & ~bit);
+      case 1004: // Focus Reporting
+        _focusReporting = enable;
       case 1006:
         sgrMouseMode = enable;
       case 1007: // Alternate Scroll Mode
@@ -972,7 +1021,33 @@ final class VirtualTerminal implements TerminalHandler {
         _replyDecrqm(params, decPrivate: true);
       case (r'$', 'p'):
         _replyDecrqm(params, decPrivate: false);
+      case (' ', 'q'):
+        _setCursorShape(params);
     }
+  }
+
+  static int _mouseModeBit(int mode) => switch (mode) {
+    9 => 1 << 0,
+    1000 => 1 << 1,
+    1002 => 1 << 2,
+    1003 => 1 << 3,
+    _ => 0,
+  };
+
+  void _setCursorShape(List<int> params) {
+    if (params.length > 1) return;
+    final code = params.isEmpty ? 0 : params[0];
+    final shape = switch (code) {
+      0 => TerminalCursorShape.defaultShape,
+      1 => TerminalCursorShape.blinkingBlock,
+      2 => TerminalCursorShape.steadyBlock,
+      3 => TerminalCursorShape.blinkingUnderline,
+      4 => TerminalCursorShape.steadyUnderline,
+      5 => TerminalCursorShape.blinkingBar,
+      6 => TerminalCursorShape.steadyBar,
+      _ => null,
+    };
+    if (shape != null) _cursorShape = shape;
   }
 
   static bool _isZeroOrEmptyParam(List<int> params) =>
@@ -1026,7 +1101,11 @@ final class VirtualTerminal implements TerminalHandler {
       7 => _autoWrap,
       25 => _cursorVisible,
       47 || 1047 || 1049 => _usingAltScreen,
-      1000 || 1002 || 1003 => mouseTrackingEnabled,
+      9 ||
+      1000 ||
+      1002 ||
+      1003 => (_mouseTrackingMask & _mouseModeBit(mode)) != 0,
+      1004 => _focusReporting,
       1006 => sgrMouseMode,
       1007 => _alternateScrollMode,
       1048 => false,

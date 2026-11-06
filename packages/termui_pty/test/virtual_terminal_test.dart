@@ -1398,5 +1398,57 @@ void main() {
         expect(terminal.cursorX, equals(16));
       },
     );
+
+    test(
+      'tracks independent mouse modes (?9/?1000/?1002/?1003), focus reporting (?1004), and DECSCUSR (CSI Ps SP q)',
+      () {
+        final replies = <String>[];
+        final terminal = VirtualTerminal(
+          width: 8,
+          height: 2,
+          onReply: replies.add,
+        );
+
+        // Enabling ?1000h and ?1003h then disabling ?1003l keeps mouseTrackingEnabled true until ?1000l.
+        terminal.write(utf8.encode('\x1b[?1000h\x1b[?1003h\x1b[?1003l'));
+        expect(terminal.mouseTrackingEnabled, isTrue);
+        terminal.write(utf8.encode('\x1b[?1000\$p\x1b[?1003\$p'));
+        expect(replies, equals(['\x1b[?1000;1\$y', '\x1b[?1003;2\$y']));
+        terminal.write(utf8.encode('\x1b[?1000l'));
+        expect(terminal.mouseTrackingEnabled, isFalse);
+
+        // ?9h X10 mouse mode is also tracked in bitmask, and setting mouseTrackingEnabled = true preserves active bits.
+        terminal.write(utf8.encode('\x1b[?9h\x1b[?1003h'));
+        terminal.mouseTrackingEnabled = true;
+        expect(terminal.mouseTrackingEnabled, isTrue);
+        replies.clear();
+        terminal.write(utf8.encode('\x1b[?1003\$p'));
+        expect(replies, equals(['\x1b[?1003;1\$y']));
+
+        // DECSET 1004 focus reporting and InputEncoder.encodeFocus.
+        expect(terminal.focusReportingEnabled, isFalse);
+        terminal.write(utf8.encode('\x1b[?1004h'));
+        expect(terminal.focusReportingEnabled, isTrue);
+        replies.clear();
+        terminal.write(utf8.encode('\x1b[?1004\$p'));
+        expect(replies, equals(['\x1b[?1004;1\$y']));
+        terminal.write(utf8.encode('\x1b[?1004l'));
+        expect(terminal.focusReportingEnabled, isFalse);
+        expect(InputEncoder.encodeFocus(focused: true), equals('\x1b[I'));
+        expect(InputEncoder.encodeFocus(focused: false), equals('\x1b[O'));
+
+        // DECSCUSR (CSI Ps SP q) updates cursorShape and resets on DECSTR / RIS.
+        expect(terminal.cursorShape, equals(TerminalCursorShape.defaultShape));
+        terminal.write(utf8.encode('\x1b[5 q'));
+        expect(terminal.cursorShape, equals(TerminalCursorShape.blinkingBar));
+        terminal.write(utf8.encode('\x1b[2 q'));
+        expect(terminal.cursorShape, equals(TerminalCursorShape.steadyBlock));
+        terminal.write(utf8.encode('\x1b[ q'));
+        expect(terminal.cursorShape, equals(TerminalCursorShape.defaultShape));
+        terminal.write(utf8.encode('\x1b[6 q\x1b[!p'));
+        expect(terminal.cursorShape, equals(TerminalCursorShape.defaultShape));
+        expect(terminal.mouseTrackingEnabled, isFalse);
+      },
+    );
   });
 }
