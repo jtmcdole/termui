@@ -211,6 +211,10 @@ final class VirtualTerminal implements TerminalHandler {
   /// read query (`\x1b]52;<selection>;?\x07`), which is blocked for security.
   void Function(String selection)? onClipboardReadBlocked;
 
+  /// Callback invoked when the terminal generates an escape sequence reply to a
+  /// terminal query (`DSR`, `CPR`, `DECXCPR`, `DA1`, `DA2`, `DECRQM`, or `XTWINOPS 18t`).
+  void Function(String reply)? onReply;
+
   final List<void Function()> _listeners = [];
 
   /// Creates a new virtual terminal with the specified dimensions and settings.
@@ -220,6 +224,7 @@ final class VirtualTerminal implements TerminalHandler {
     this.transparentBackground = false,
     this.defaultForeground,
     int maxScrollbackLines = 0,
+    this.onReply,
   }) : width = math.max(1, width),
        height = math.max(1, height),
        _scrollBottom = math.max(1, height) - 1,
@@ -798,6 +803,10 @@ final class VirtualTerminal implements TerminalHandler {
         _eraseInDisplay(params.isEmpty ? 0 : params[0]);
       case 'K':
         _eraseInLine(params.isEmpty ? 0 : params[0]);
+      case 'n':
+        if (params.length == 1 && params[0] == 6) {
+          _replyCursorPosition(extended: true);
+        }
       case 'h' || 'l':
         final enable = command == 'h';
         for (final param in params) {
@@ -915,18 +924,98 @@ final class VirtualTerminal implements TerminalHandler {
     }
     if (subparams != null) return;
     if (intermediate != null) {
-      if (intermediate == '?') {
-        _handleDecPrivateMode(command, params);
-      } else if (intermediate == '!' && command == 'p') {
-        _resetState(fullReset: false);
-      }
+      _handleIntermediateCsi(intermediate, command, params);
       return;
     }
 
     final p1 = _clampedPositiveParam(params, 0);
     final p2 = _clampedPositiveParam(params, 1);
     if (_tryHandleCursorCsi(command, p1, p2)) return;
+    if (_tryHandleQueryCsi(command, params)) return;
     _handleEditingOrModeCsi(command, params, p1);
+  }
+
+  void _handleIntermediateCsi(
+    String intermediate,
+    String command,
+    List<int> params,
+  ) {
+    switch ((intermediate, command)) {
+      case ('?', _):
+        _handleDecPrivateMode(command, params);
+      case ('!', 'p'):
+        _resetState(fullReset: false);
+      case ('>', 'c'):
+        if (_isZeroOrEmptyParam(params)) onReply?.call('\x1b[>1;10;0c');
+      case (r'?$', 'p'):
+        _replyDecrqm(params, decPrivate: true);
+      case (r'$', 'p'):
+        _replyDecrqm(params, decPrivate: false);
+    }
+  }
+
+  static bool _isZeroOrEmptyParam(List<int> params) =>
+      params.isEmpty || (params.length == 1 && params[0] == 0);
+
+  bool _tryHandleQueryCsi(String command, List<int> params) {
+    switch (command) {
+      case 'c':
+        if (_isZeroOrEmptyParam(params)) onReply?.call('\x1b[?62;22c');
+      case 'n':
+        if (params.length == 1 && params[0] == 5) {
+          onReply?.call('\x1b[0n');
+        } else if (params.length == 1 && params[0] == 6) {
+          _replyCursorPosition(extended: false);
+        }
+      case 't':
+        if (params.length == 1 && params[0] == 18) {
+          onReply?.call('\x1b[8;$height;${width}t');
+        }
+      default:
+        return false;
+    }
+    return true;
+  }
+
+  void _replyCursorPosition({required bool extended}) {
+    final reply = onReply;
+    if (reply == null) return;
+    final row = _originMode
+        ? cursorY.clamp(_scrollTop, _scrollBottom) - _scrollTop + 1
+        : cursorY.clamp(0, height - 1) + 1;
+    final col = cursorX.clamp(0, width - 1) + 1;
+    reply(extended ? '\x1b[?$row;$col;1R' : '\x1b[$row;${col}R');
+  }
+
+  void _replyDecrqm(List<int> params, {required bool decPrivate}) {
+    final reply = onReply;
+    if (reply == null || params.length != 1) return;
+    final mode = params[0];
+    final pm = decPrivate
+        ? _decPrivateModeStatus(mode)
+        : (mode == 4 ? (_insertMode ? 1 : 2) : 0);
+    final prefix = decPrivate ? '?' : '';
+    reply('\x1b[$prefix$mode;$pm\$y');
+  }
+
+  int _decPrivateModeStatus(int mode) {
+    final enabled = switch (mode) {
+      1 => _applicationCursorKeys,
+      6 => _originMode,
+      7 => _autoWrap,
+      25 => _cursorVisible,
+      47 || 1047 || 1049 => _usingAltScreen,
+      1000 || 1002 || 1003 => mouseTrackingEnabled,
+      1006 => sgrMouseMode,
+      1007 => _alternateScrollMode,
+      1048 => false,
+      2004 => bracketedPasteMode,
+      2026 => synchronizedOutput,
+      2027 => _graphemeClusterMode,
+      _ => null,
+    };
+    if (enabled == null) return 0;
+    return enabled ? 1 : 2;
   }
 
   static int _clampedPositiveParam(List<int> params, int index) {

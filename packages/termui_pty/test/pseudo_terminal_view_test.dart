@@ -57,10 +57,10 @@ void main() {
   });
 
   test('PseudoTerminalView renders PTY output and routes keys', () {
-    final mockPty = MockPty();
     final tester = TerminalTester();
 
     tester.run(() async {
+      final mockPty = MockPty();
       final platformView = PseudoTerminalView(pty: mockPty);
 
       await tester.pumpWidget(platformView);
@@ -72,6 +72,18 @@ void main() {
 
       // Assert it prints Hello
       expect(tester.buffer!.characters.join(''), contains('Hello'));
+
+      // Terminal query replies (e.g. DSR 5n) are written back to the PTY while active,
+      // and suppressed once exitCode completes.
+      mockPty.simulateOutput('\x1b[5n');
+      await tester.pump();
+      expect(mockPty.written, contains('\x1b[0n'));
+      mockPty.written.clear();
+      mockPty.kill();
+      await tester.pump(const Duration(milliseconds: 1));
+      mockPty.simulateOutput('\x1b[5n');
+      await tester.pump();
+      expect(mockPty.written, isEmpty);
 
       // Unmount the widget so Focus bindings detach and don't leave timers
       await tester.pumpWidget(const SizedBox());
