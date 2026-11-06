@@ -193,6 +193,14 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether alternate scroll mode (`DECSET 1007`, `?1007h` / `?1007l`) is enabled.
   bool get alternateScrollMode => _alternateScrollMode;
 
+  /// Whether synchronized output mode (`DECSET 2026`, `?2026h` / `?2026l`) is enabled.
+  bool synchronizedOutput = false;
+
+  bool _graphemeClusterMode = false;
+
+  /// Whether Unicode grapheme clustering mode (`DECSET 2027`, `?2027h` / `?2027l`) is enabled.
+  bool get graphemeClusterMode => _graphemeClusterMode;
+
   /// Callback invoked when an `OSC 52` clipboard write sequence is decoded.
   ///
   /// The `selection` parameter is the target selection buffer (e.g. `'c'` for
@@ -287,6 +295,8 @@ final class VirtualTerminal implements TerminalHandler {
     bracketedPasteMode = false;
     _applicationCursorKeys = false;
     _alternateScrollMode = true;
+    synchronizedOutput = false;
+    _graphemeClusterMode = false;
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
@@ -823,6 +833,10 @@ final class VirtualTerminal implements TerminalHandler {
         _alternateScrollMode = enable;
       case 2004:
         bracketedPasteMode = enable;
+      case 2026:
+        synchronizedOutput = enable;
+      case 2027:
+        _graphemeClusterMode = enable;
     }
   }
 

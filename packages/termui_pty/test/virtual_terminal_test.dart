@@ -1268,5 +1268,35 @@ void main() {
         );
       },
     );
+
+    test(
+      'tracks DECSET 2026 synchronizedOutput and DECSET 2027 graphemeClusterMode and resets on RIS/DECSTR',
+      () {
+        final terminal = VirtualTerminal(width: 8, height: 2);
+        expect(terminal.synchronizedOutput, isFalse);
+        expect(terminal.graphemeClusterMode, isFalse);
+
+        terminal.write(utf8.encode('\x1b[?2026;2027h'));
+        expect(terminal.synchronizedOutput, isTrue);
+        expect(terminal.graphemeClusterMode, isTrue);
+
+        terminal.write(utf8.encode('\x1b[?2026l'));
+        expect(terminal.synchronizedOutput, isFalse);
+        expect(terminal.graphemeClusterMode, isTrue);
+
+        terminal.write(utf8.encode('\x1b[?2026h\x1b[!p'));
+        expect(terminal.synchronizedOutput, isFalse);
+        expect(terminal.graphemeClusterMode, isFalse);
+
+        terminal.write(utf8.encode('\x1b[?2026;2027h\x1bc'));
+        expect(terminal.synchronizedOutput, isFalse);
+        expect(terminal.graphemeClusterMode, isFalse);
+
+        terminal.write(utf8.encode('\x1b[?2026h'));
+        expect(terminal.synchronizedOutput, isTrue);
+        terminal.synchronizedOutput = false;
+        expect(terminal.synchronizedOutput, isFalse);
+      },
+    );
   });
 }
