@@ -1071,5 +1071,41 @@ void main() {
         expect(terminal.cursorX, equals(5));
       },
     );
+
+    test(
+      'resets cursorX on IL/DL, guards multi-param CSI T and CSI u, and supports HPR/VPR (CSI a/e)',
+      () {
+        final terminal = VirtualTerminal(width: 8, height: 4);
+        terminal.write(utf8.encode('R0_TEXT\r\nR1_TEXT\r\nR2_TEXT\r\nR3_TEXT'));
+
+        // IL (CSI L) and DL (CSI M) inside scroll region reset cursorX to 0.
+        terminal.write(utf8.encode('\x1b[2;5H\x1b[L'));
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 1)));
+        terminal.write(utf8.encode('\x1b[2;6H\x1b[M'));
+        expect((terminal.cursorX, terminal.cursorY), equals((0, 1)));
+
+        // Outside scroll region, IL/DL are ignored and preserve cursorX.
+        terminal.write(utf8.encode('\x1b[2;4r\x1b[1;5H\x1b[L\x1b[M'));
+        expect((terminal.cursorX, terminal.cursorY), equals((4, 0)));
+        terminal.write(utf8.encode('\x1b[r'));
+
+        // 5-param xterm mouse highlight initiate (CSI Ps;Ps;Ps;Ps;Ps T) must not scroll down.
+        expect(terminal.buffer.getCharacter(0, 0), equals('R'));
+        terminal.write(utf8.encode('\x1b[1;1;1;1;1T'));
+        expect(terminal.buffer.getCharacter(0, 0), equals('R'));
+
+        // Parameterized CSI 1 u and private CSI > 1 u must not restore saved cursor.
+        terminal.write(utf8.encode('\x1b[1;2H\x1b[s\x1b[3;6H\x1b[1u\x1b[>1u'));
+        expect((terminal.cursorX, terminal.cursorY), equals((5, 2)));
+        terminal.write(utf8.encode('\x1b[u'));
+        expect((terminal.cursorX, terminal.cursorY), equals((1, 0)));
+
+        // HPR (CSI a) and VPR (CSI e) advance cursorX and cursorY with bounds clamping.
+        terminal.write(utf8.encode('\x1b[1;1H\x1b[3a\x1b[2e'));
+        expect((terminal.cursorX, terminal.cursorY), equals((3, 2)));
+        terminal.write(utf8.encode('\x1b[99a\x1b[99e'));
+        expect((terminal.cursorX, terminal.cursorY), equals((7, 3)));
+      },
+    );
   });
 }
