@@ -163,6 +163,7 @@ final class VirtualTerminal implements TerminalHandler {
   bool _g0DecGraphics = false;
   bool _g1DecGraphics = false;
   bool _useG1 = false;
+  final Set<int> _tabStops = {};
   _SavedCursor _savedPrimary = _initialSavedCursor;
   _SavedCursor _savedAlt = _initialSavedCursor;
   late AnsiParser _parser;
@@ -235,7 +236,14 @@ final class VirtualTerminal implements TerminalHandler {
          math.max(1, height),
          transparent: transparentBackground,
        ) {
+    _resetDefaultTabStops();
     _initParser();
+  }
+
+  void _resetDefaultTabStops() {
+    _tabStops
+      ..clear()
+      ..addAll([for (var col = 8; col < width; col += 8) col]);
   }
 
   static Buffer _createBuffer(int w, int h, {required bool transparent}) =>
@@ -305,6 +313,7 @@ final class VirtualTerminal implements TerminalHandler {
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
+      _resetDefaultTabStops();
       _savedPrimary = _initialSavedCursor;
       _savedAlt = _initialSavedCursor;
       _usingAltScreen = false;
@@ -350,12 +359,23 @@ final class VirtualTerminal implements TerminalHandler {
     final copyWrapped = math.min(_primaryWrapped.length, clampedHeight);
     nextWrapped.setRange(0, copyWrapped, _primaryWrapped);
     _primaryWrapped = nextWrapped;
+    _resizeTabStops(clampedWidth);
     width = clampedWidth;
     height = clampedHeight;
     _scrollTop = 0;
     _scrollBottom = height - 1;
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
+  }
+
+  void _resizeTabStops(int newWidth) {
+    if (newWidth < width) {
+      _tabStops.removeWhere((col) => col >= newWidth);
+      return;
+    }
+    for (var col = ((width + 7) ~/ 8) * 8; col < newWidth; col += 8) {
+      if (col > 0) _tabStops.add(col);
+    }
   }
 
   void _evictOverflowBeforeShrink(int clampedHeight) {
@@ -783,8 +803,7 @@ final class VirtualTerminal implements TerminalHandler {
         _clampPendingWrap();
         if (cursorX > 0) cursorX--;
       case 9: // Horizontal tab
-        _clampPendingWrap();
-        cursorX = (((cursorX ~/ 8) + 1) * 8).clamp(0, width - 1);
+        _advanceTabStops(1);
       case 10 || 11 || 12: // Line feed, vertical tab, form feed
         _clampPendingWrap();
         _indexDown();
@@ -807,6 +826,8 @@ final class VirtualTerminal implements TerminalHandler {
         if (params.length == 1 && params[0] == 6) {
           _replyCursorPosition(extended: true);
         }
+      case 'W':
+        if (params.length == 1 && params[0] == 5) _resetDefaultTabStops();
       case 'h' || 'l':
         final enable = command == 'h';
         for (final param in params) {
@@ -1059,11 +1080,9 @@ final class VirtualTerminal implements TerminalHandler {
       case 'G' || '`': // Cursor Character Absolute (CHA / HPA)
         cursorX = (p1 - 1).clamp(0, width - 1);
       case 'I': // Cursor Horizontal Forward Tabulation (CHT)
-        _clampPendingWrap();
-        cursorX = (((cursorX ~/ 8) + p1) * 8).clamp(0, width - 1);
+        _advanceTabStops(p1);
       case 'Z': // Cursor Backward Tabulation (CBT)
-        _clampPendingWrap();
-        cursorX = math.max(0, (((cursorX - 1) >> 3) - (p1 - 1)) * 8);
+        _retreatTabStops(p1);
       case 'd': // Line Position Absolute (VPA)
         _clampPendingWrap();
         cursorY = _resolveAbsoluteRow(p1);
@@ -1109,6 +1128,46 @@ final class VirtualTerminal implements TerminalHandler {
         if (params.isEmpty) _restoreCursor();
       case 'h' || 'l':
         _setAnsiMode(params, command == 'h');
+      case 'g':
+        _clearTabStop(params.isEmpty ? 0 : params[0]);
+    }
+  }
+
+  void _clearTabStop(int mode) {
+    if (mode == 0) {
+      _tabStops.remove(cursorX.clamp(0, width - 1));
+    } else if (mode == 3) {
+      _tabStops.clear();
+    }
+  }
+
+  int _nextTabStopAfter(int x) {
+    var best = width - 1;
+    for (final stop in _tabStops) {
+      if (stop > x && stop < best) best = stop;
+    }
+    return best;
+  }
+
+  int _prevTabStopBefore(int x) {
+    var best = 0;
+    for (final stop in _tabStops) {
+      if (stop < x && stop > best) best = stop;
+    }
+    return best;
+  }
+
+  void _advanceTabStops(int count) {
+    _clampPendingWrap();
+    for (var i = 0; i < count && cursorX < width - 1; i++) {
+      cursorX = _nextTabStopAfter(cursorX);
+    }
+  }
+
+  void _retreatTabStops(int count) {
+    _clampPendingWrap();
+    for (var i = 0; i < count && cursorX > 0; i++) {
+      cursorX = _prevTabStopBefore(cursorX);
     }
   }
 
@@ -1421,6 +1480,8 @@ final class VirtualTerminal implements TerminalHandler {
         _indexDown();
       case 'M': // RI (Reverse Index)
         _reverseIndex();
+      case 'H': // HTS (Horizontal Tab Set)
+        _tabStops.add(cursorX.clamp(0, width - 1));
       case '(0': // Designate G0 as DEC Special Graphics
         _g0DecGraphics = true;
       case _ when command.startsWith('('): // Designate G0 as ASCII / non-DEC
