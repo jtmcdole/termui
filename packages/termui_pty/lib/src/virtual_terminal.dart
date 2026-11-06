@@ -697,10 +697,16 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _handleDecPrivateMode(String command, List<int> params) {
-    if (command != 'h' && command != 'l') return;
-    final enable = command == 'h';
-    for (final param in params) {
-      _applyDecPrivateModeParam(param, enable);
+    switch (command) {
+      case 'J':
+        _eraseInDisplay(params.isEmpty ? 0 : params[0]);
+      case 'K':
+        _eraseInLine(params.isEmpty ? 0 : params[0]);
+      case 'h' || 'l':
+        final enable = command == 'h';
+        for (final param in params) {
+          _applyDecPrivateModeParam(param, enable);
+        }
     }
   }
 
@@ -1062,7 +1068,7 @@ final class VirtualTerminal implements TerminalHandler {
     switch (code) {
       case 0:
         _currentStyle = .empty;
-      case 1 || 2 || 3 || 4 || 5 || 7 || 8 || 9:
+      case 1 || 2 || 3 || 4 || 5 || 6 || 7 || 8 || 9 || 21:
         _setModifier(_modifierBitForSet(code), enable: true);
       case 22:
         _setModifier(Modifier.bold | Modifier.dim, enable: false);
@@ -1087,8 +1093,8 @@ final class VirtualTerminal implements TerminalHandler {
     1 => Modifier.bold,
     2 => Modifier.dim,
     3 => Modifier.italic,
-    4 => Modifier.underline,
-    5 => Modifier.blink,
+    4 || 21 => Modifier.underline,
+    5 || 6 => Modifier.blink,
     7 => Modifier.reverse,
     8 => Modifier.hidden,
     9 => Modifier.crossedOut,

@@ -1107,5 +1107,32 @@ void main() {
         expect((terminal.cursorX, terminal.cursorY), equals((7, 3)));
       },
     );
+
+    test(
+      'supports SGR 6 (rapid blink), SGR 21 (double underline), and DECSED/DECSEL (CSI ? J / CSI ? K)',
+      () {
+        final terminal = VirtualTerminal(width: 6, height: 2);
+        terminal.write(utf8.encode('\x1b[6;21mA\x1b[25mB\x1b[24mC'));
+        expect(
+          terminal.buffer.getModifiers(0, 0),
+          equals(Modifier.blink | Modifier.underline),
+        );
+        expect(terminal.buffer.getModifiers(1, 0), equals(Modifier.underline));
+        expect(terminal.buffer.getModifiers(2, 0), equals(Modifier.none));
+
+        // DECSEL (CSI ? K) and DECSED (CSI ? J) erase line and display spans.
+        terminal.write(utf8.encode('\x1b[1;1HABCDEF\r\nUVWXYZ'));
+        terminal.write(utf8.encode('\x1b[1;4H\x1b[?K'));
+        expect(
+          [
+            for (var x = 0; x < 6; x++) terminal.buffer.getCharacter(x, 0),
+          ].join(),
+          equals('ABC   '),
+        );
+        terminal.write(utf8.encode('\x1b[?2J'));
+        expect(terminal.buffer.getCharacter(0, 0), equals(' '));
+        expect(terminal.buffer.getCharacter(0, 1), equals(' '));
+      },
+    );
   });
 }
