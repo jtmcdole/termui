@@ -98,6 +98,11 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether right-margin auto-wrap (`DECAWM` `?7h` / `?7l`) is enabled.
   bool get autoWrapMode => _autoWrap;
 
+  bool _insertMode = false;
+
+  /// Whether ANSI Insert/Replace Mode (`IRM`, `CSI 4 h` / `CSI 4 l`) is enabled.
+  bool get insertMode => _insertMode;
+
   int _scrollTop = 0;
   int _scrollBottom;
   Style _currentStyle = .empty;
@@ -216,6 +221,7 @@ final class VirtualTerminal implements TerminalHandler {
     _lastPrintedGrapheme = null;
     _cursorVisible = true;
     _autoWrap = true;
+    _insertMode = false;
     mouseTrackingEnabled = false;
     sgrMouseMode = false;
     bracketedPasteMode = false;
@@ -597,6 +603,7 @@ final class VirtualTerminal implements TerminalHandler {
       _printWideGrapheme(char, fgArg, bgArg, modArg, isBgTransparent);
       return;
     }
+    if (_insertMode) _insertBlankChars(1);
     buffer.setAttributes(
       cursorX,
       cursorY,
@@ -659,6 +666,7 @@ final class VirtualTerminal implements TerminalHandler {
       }
       _wrapLineDown();
     }
+    if (_insertMode) _insertBlankChars(2);
     buffer.setAttributes(
       cursorX,
       cursorY,
@@ -892,6 +900,14 @@ final class VirtualTerminal implements TerminalHandler {
         if (params.isEmpty) _saveCursor();
       case 'u':
         if (params.isEmpty) _restoreCursor();
+      case 'h' || 'l':
+        _setAnsiMode(params, command == 'h');
+    }
+  }
+
+  void _setAnsiMode(List<int> params, bool enable) {
+    for (final param in params) {
+      if (param == 4) _insertMode = enable;
     }
   }
 
