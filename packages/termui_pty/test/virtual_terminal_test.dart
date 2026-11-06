@@ -1134,5 +1134,35 @@ void main() {
         expect(terminal.buffer.getCharacter(0, 1), equals(' '));
       },
     );
+
+    test(
+      'supports ANSI IRM insert/replace mode (CSI 4 h / CSI 4 l) for single-width and wide graphemes',
+      () {
+        final terminal = VirtualTerminal(width: 8, height: 2);
+        expect(terminal.insertMode, isFalse);
+
+        terminal.write(utf8.encode('abcdef\x1b[1;1H\x1b[4hXY\x1b[4lZ'));
+        expect(terminal.insertMode, isFalse);
+        expect(
+          [
+            for (var x = 0; x < 8; x++) terminal.buffer.getCharacter(x, 0),
+          ].join(),
+          equals('XYZbcdef'),
+        );
+
+        // Wide grapheme insertion shifts row by 2 cells, and RIS / DECSTR reset insertMode.
+        terminal.write(utf8.encode('\x1b[2;1H123456\x1b[2;2H\x1b[4h🚀'));
+        expect(terminal.insertMode, isTrue);
+        expect(terminal.buffer.getCharacter(0, 1), equals('1'));
+        expect(terminal.buffer.getCharacter(1, 1), equals('🚀'));
+        expect(terminal.buffer.getCharacter(3, 1), equals('2'));
+        expect(terminal.buffer.getCharacter(7, 1), equals('6'));
+
+        terminal.write(utf8.encode('\x1b[!p'));
+        expect(terminal.insertMode, isFalse);
+        terminal.write(utf8.encode('\x1b[4h\x1bc'));
+        expect(terminal.insertMode, isFalse);
+      },
+    );
   });
 }
