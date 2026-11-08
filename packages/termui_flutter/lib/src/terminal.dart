@@ -10,6 +10,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
+import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/perf/tracer.dart';
 
@@ -210,8 +211,25 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   StreamSubscription<String>? _clipboardSubscription;
   StreamSubscription<void>? _pasteRequestSubscription;
   MouseCursor _currentCursor = SystemMouseCursors.basic;
+  String? _hoveredUri;
+  bool _isLinkModifierActive = false;
+  Point<int>? _selectionAnchor;
+  Point<int>? _selectionFocus;
+  (int, int)? _selectionColBounds;
+  bool _selectionBoxMode = false;
+  bool _isSelecting = false;
+
+  MouseCursor get _effectiveCursor =>
+      (_hoveredUri != null &&
+          _isLinkModifierActive &&
+          _currentCursor == SystemMouseCursors.basic)
+      ? SystemMouseCursors.click
+      : _currentCursor;
 
   final Map<(String, bool, bool, Color), TextPainter> _fallbackPainters = {};
+  static const int _maxKittyGpuImages = 64;
+  final Map<KittyImageData, ui.Image> _kittyGpuImages = {};
+  final Set<KittyImageData> _decodingKittyImages = {};
   final Set<String> _pendingGlyphs = {};
   final Set<String> _processingGlyphs = {};
   bool _isUpdatingAtlas = false;
@@ -458,6 +476,11 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       painter.dispose();
     }
     _fallbackPainters.clear();
+    for (final image in _kittyGpuImages.values) {
+      image.dispose();
+    }
+    _kittyGpuImages.clear();
+    _decodingKittyImages.clear();
     _atlas?.image.dispose();
     _focusNode.dispose();
     super.dispose();
@@ -471,41 +494,110 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     final width = buffer.width;
     for (var i = 0; i < total; i++) {
       final char = buffer.characters[i];
-      if (char.isNotEmpty &&
-          char != ' ' &&
-          !atlas.charRects.containsKey(char)) {
-        final x = i % width;
-        final y = i ~/ width;
-        final mods = buffer.getModifiers(x, y);
-        final isReverse = Modifier.has(mods, Modifier.reverse);
-        final fgVal = isReverse
-            ? buffer.getBackground(x, y)
-            : buffer.getForeground(x, y);
-        final color = fgVal != 0
-            ? Color(fgVal)
-            : (isReverse ? Colors.black : Colors.white);
-        final isBold = Modifier.has(mods, Modifier.bold);
-        final isDim = Modifier.has(mods, Modifier.dim);
-
-        final key = (char, isBold, isDim, color);
-        if (!_fallbackPainters.containsKey(key)) {
-          final textStyle = TextStyle(
-            fontFamily: widget.fontFamily,
-            fontFamilyFallback: widget.fontFamilyFallback,
-            fontSize: _fontSize,
-            color: color,
-            fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-            height: 1.0,
-          );
-          final textSpan = TextSpan(text: char, style: textStyle);
-          final textPainter = TextPainter(
-            text: textSpan,
-            textDirection: TextDirection.ltr,
-          );
-          textPainter.layout();
-          _fallbackPainters[key] = textPainter;
-        }
+      if (char.isEmpty || char == ' ' || atlas.charRects.containsKey(char)) {
+        continue;
       }
+      final x = i % width;
+      final y = i ~/ width;
+      final mods = buffer.getModifiers(x, y);
+      if (Modifier.has(mods, Modifier.kittyPlaceholder) ||
+          char.startsWith(kittyPlaceholderChar)) {
+        final msb = parseKittyPlaceholderCell(char)?.imageIdMsb ?? 0;
+        final imageId =
+            ((msb & 0xFF) << 24) | (buffer.getForeground(x, y) & 0xFFFFFF);
+        final data = buffer.lookupKittyImage(x, y, imageId);
+        if (data != null) _ensureKittyGpuImage(data);
+        continue;
+      }
+      _ensureFallbackPainterForCell(buffer, x, y, char, mods);
+    }
+  }
+
+  void _ensureFallbackPainterForCell(
+    Buffer buffer,
+    int x,
+    int y,
+    String char,
+    int mods,
+  ) {
+    final isReverse = Modifier.has(mods, Modifier.reverse);
+    final fgVal = isReverse
+        ? buffer.getBackground(x, y)
+        : buffer.getForeground(x, y);
+    final color = fgVal != 0
+        ? Color(fgVal)
+        : (isReverse ? Colors.black : Colors.white);
+    final isBold = Modifier.has(mods, Modifier.bold);
+    final isDim = Modifier.has(mods, Modifier.dim);
+
+    final key = (char, isBold, isDim, color);
+    if (_fallbackPainters.containsKey(key)) return;
+    final textStyle = TextStyle(
+      fontFamily: widget.fontFamily,
+      fontFamilyFallback: widget.fontFamilyFallback,
+      fontSize: _fontSize,
+      color: color,
+      fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+      height: 1.0,
+    );
+    _fallbackPainters[key] = TextPainter(
+      text: TextSpan(text: char, style: textStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+  }
+
+  void _ensureKittyGpuImage(KittyImageData data) {
+    final existing = _kittyGpuImages.remove(data);
+    if (existing != null) {
+      _kittyGpuImages[data] = existing;
+      return;
+    }
+    if (data.rgbaPixels.isEmpty) return;
+    if (data.format == 100) {
+      if (!_decodingKittyImages.add(data)) return;
+      unawaited(_decodeKittyPngImage(data));
+      return;
+    }
+    if (data.pixelWidth <= 0 || data.pixelHeight <= 0) return;
+    if (!_decodingKittyImages.add(data)) return;
+    ui.decodeImageFromPixels(
+      data.rgbaPixels,
+      data.pixelWidth,
+      data.pixelHeight,
+      ui.PixelFormat.rgba8888,
+      (decoded) => _onKittyGpuImageDecoded(data, decoded),
+    );
+  }
+
+  Future<void> _decodeKittyPngImage(KittyImageData data) async {
+    ui.Codec? codec;
+    try {
+      codec = await ui.instantiateImageCodec(data.rgbaPixels);
+      final frame = await codec.getNextFrame();
+      _onKittyGpuImageDecoded(data, frame.image);
+    } on Object catch (_) {
+      _decodingKittyImages.remove(data);
+    } finally {
+      codec?.dispose();
+    }
+  }
+
+  void _onKittyGpuImageDecoded(KittyImageData data, ui.Image decoded) {
+    _decodingKittyImages.remove(data);
+    if (!mounted) {
+      decoded.dispose();
+      return;
+    }
+    while (_kittyGpuImages.length >= _maxKittyGpuImages) {
+      final oldestKey = _kittyGpuImages.keys.first;
+      _kittyGpuImages.remove(oldestKey)?.dispose();
+    }
+    final old = _kittyGpuImages[data];
+    setState(() {
+      _kittyGpuImages[data] = decoded;
+    });
+    if (old != null && !identical(old, decoded)) {
+      old.dispose();
     }
   }
 
@@ -563,7 +655,23 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     }
   }
 
+  static bool _isLinkOpenModifierPressed() {
+    final kb = HardwareKeyboard.instance;
+    return kb.isControlPressed || kb.isMetaPressed;
+  }
+
+  void _syncLinkModifierState() {
+    final pressed = _isLinkOpenModifierPressed();
+    if (pressed != _isLinkModifierActive) {
+      _isLinkModifierActive = pressed;
+      if (_hoveredUri != null && mounted) {
+        setState(() {});
+      }
+    }
+  }
+
   void _handleKeyEvent(KeyEvent event) {
+    _syncLinkModifierState();
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return;
     final key = event.logicalKey;
 
@@ -916,22 +1024,250 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     }
   }
 
+  static term.MouseButton _resolveMouseButton(int buttons) {
+    if ((buttons & kSecondaryMouseButton) != 0) return term.MouseButton.right;
+    if ((buttons & kMiddleMouseButton) != 0) return term.MouseButton.middle;
+    return term.MouseButton.left;
+  }
+
+  static (term.MouseButton, term.MouseEventType) _classifyPointerEvent(
+    PointerEvent event,
+  ) => switch (event) {
+    PointerDownEvent(:final buttons) => (
+      _resolveMouseButton(buttons),
+      term.MouseEventType.press,
+    ),
+    PointerMoveEvent(:final down, :final buttons) when down => (
+      _resolveMouseButton(buttons),
+      term.MouseEventType.drag,
+    ),
+    PointerUpEvent() => (term.MouseButton.left, term.MouseEventType.release),
+    _ => (term.MouseButton.none, term.MouseEventType.move),
+  };
+
+  void _updateSelectionAndUri(
+    int col,
+    int row,
+    term.MouseButton button,
+    term.MouseEventType type,
+  ) {
+    final nextUri = _currentBuffer?.getUri(col, row);
+    final linkMod = _isLinkOpenModifierPressed();
+    var rebuild = nextUri != _hoveredUri || linkMod != _isLinkModifierActive;
+    _hoveredUri = nextUri;
+    _isLinkModifierActive = linkMod;
+
+    if (type == term.MouseEventType.press && button == term.MouseButton.left) {
+      if (_selectionFocus != null) rebuild = true;
+      _startSelectionAt(col, row);
+    } else if (type == term.MouseEventType.drag && _isSelecting) {
+      rebuild = _updateActiveDragSelection(col, row) || rebuild;
+    } else if (type == term.MouseEventType.release) {
+      _finishPointerRelease(col, row, nextUri);
+    }
+
+    if (rebuild && mounted) {
+      setState(() {});
+    }
+  }
+
+  void _startSelectionAt(int col, int row) {
+    final buf = _currentBuffer;
+    final colBounds = _resolveRegionColBounds(buf, col, row);
+    if (_isGraphicCanvasPress(buf, row, colBounds)) {
+      _selectionAnchor = null;
+      _selectionFocus = null;
+      _selectionColBounds = null;
+      _isSelecting = false;
+      return;
+    }
+    _selectionAnchor = Point(col, row);
+    _selectionFocus = null;
+    _selectionColBounds = colBounds;
+    _selectionBoxMode = HardwareKeyboard.instance.isAltPressed;
+    _isSelecting = true;
+  }
+
+  bool _updateActiveDragSelection(int col, int row) {
+    final anchor = _selectionAnchor;
+    if (anchor == null) return false;
+    final boxMode = HardwareKeyboard.instance.isAltPressed;
+    final bounds = _selectionColBounds;
+    final clampedX = (!boxMode && bounds != null)
+        ? col.clamp(bounds.$1, bounds.$2)
+        : col;
+    final pt = Point(clampedX, row);
+    if ((pt != anchor || _selectionFocus != null) &&
+        (_selectionFocus != pt || _selectionBoxMode != boxMode)) {
+      _selectionFocus = pt;
+      _selectionBoxMode = boxMode;
+      return true;
+    }
+    return false;
+  }
+
+  static (int, int)? _resolveRegionColBounds(Buffer? buf, int col, int row) {
+    if (buf == null || buf.width <= 0 || buf.height <= 0) return null;
+    var minCol = 0;
+    for (var x = col - 1; x >= 0; x--) {
+      if (_isVerticalPaneDivider(buf, x, row)) {
+        minCol = x + 1;
+        break;
+      }
+    }
+    var maxCol = buf.width - 1;
+    for (var x = col + 1; x < buf.width; x++) {
+      if (_isVerticalPaneDivider(buf, x, row)) {
+        maxCol = x - 1;
+        break;
+      }
+    }
+    return minCol <= maxCol ? (minCol, maxCol) : (0, buf.width - 1);
+  }
+
+  static bool _isVerticalPaneDivider(Buffer buf, int x, int row) {
+    if (!_isVerticalBoxChar(buf.getCharacter(x, row))) return false;
+    final minSpan = max(3, buf.height ~/ 2);
+    var span = 1;
+    for (
+      var y = row - 1;
+      y >= 0 && _isVerticalBoxChar(buf.getCharacter(x, y));
+      y--
+    ) {
+      span++;
+    }
+    for (
+      var y = row + 1;
+      y < buf.height && _isVerticalBoxChar(buf.getCharacter(x, y));
+      y++
+    ) {
+      span++;
+    }
+    return span >= minSpan;
+  }
+
+  static bool _isVerticalBoxChar(String ch) =>
+      ch == '│' || ch == '┃' || ch == '║';
+
+  static bool _isGraphicCanvasPress(
+    Buffer? buf,
+    int row,
+    (int, int)? colBounds,
+  ) {
+    if (buf == null || row < 0 || row >= buf.height) return false;
+    final minCol = colBounds?.$1 ?? 0;
+    final maxCol = colBounds?.$2 ?? (buf.width - 1);
+    var halfBlocks = 0;
+    for (var x = minCol; x <= maxCol; x++) {
+      if (Modifier.has(buf.getModifiers(x, row), Modifier.kittyPlaceholder)) {
+        return true;
+      }
+      final ch = buf.getCharacter(x, row);
+      if (ch == '▀' || ch == '▄') {
+        halfBlocks++;
+        if (halfBlocks >= 8) return true;
+      }
+    }
+    return false;
+  }
+
+  void _finishPointerRelease(int col, int row, String? uri) {
+    final wasDragging = _isSelecting && _selectionFocus != null;
+    final clickedSameCell =
+        _isSelecting &&
+        _selectionFocus == null &&
+        _selectionAnchor == Point(col, row);
+    _isSelecting = false;
+    if (wasDragging) {
+      final selectedText = _extractSelectedText();
+      if (selectedText.isNotEmpty) {
+        unawaited(_writeToClipboard(selectedText));
+      }
+      return;
+    }
+    _selectionAnchor = null;
+    if (clickedSameCell &&
+        uri != null &&
+        uri.isNotEmpty &&
+        _isLinkOpenModifierPressed()) {
+      unawaited(widget.service.openUrl(uri));
+    }
+  }
+
+  String _extractSelectedText() {
+    final buf = _currentBuffer;
+    final a = _selectionAnchor;
+    final b = _selectionFocus;
+    if (buf == null || a == null || b == null || buf.width <= 0) return '';
+    final (start, end) = (a.y < b.y || (a.y == b.y && a.x <= b.x))
+        ? (a, b)
+        : (b, a);
+    final minCol = _selectionColBounds?.$1 ?? 0;
+    final maxCol = _selectionColBounds?.$2 ?? (buf.width - 1);
+    final lines = <String>[];
+    for (var y = start.y; y <= end.y; y++) {
+      final (rowStart, rowEnd) = _selectedRowSpan(
+        y,
+        start,
+        end,
+        minCol,
+        maxCol,
+      );
+      lines.add(_extractRowSlice(buf, y, rowStart, rowEnd));
+    }
+    return lines.join('\n');
+  }
+
+  (int, int) _selectedRowSpan(
+    int y,
+    Point<int> start,
+    Point<int> end,
+    int minCol,
+    int maxCol,
+  ) {
+    if (_selectionBoxMode || start.y == end.y) {
+      return (min(start.x, end.x), max(start.x, end.x));
+    }
+    if (y == start.y) return (max(minCol, start.x), maxCol);
+    if (y == end.y) return (minCol, min(maxCol, end.x));
+    return (minCol, maxCol);
+  }
+
+  static String _extractRowSlice(Buffer buf, int y, int x0, int x1) {
+    if (y < 0 || y >= buf.height || x0 > x1) return '';
+    final sb = StringBuffer();
+    final rowBase = y * buf.width;
+    final endX = x1.clamp(0, buf.width - 1);
+    for (var x = x0.clamp(0, buf.width - 1); x <= endX; x++) {
+      final idx = rowBase + x;
+      final char = buf.characters[idx];
+      if (char.isEmpty) continue;
+      if (Modifier.has(
+        buf.attributes[idx * 3 + 2],
+        Modifier.kittyPlaceholder,
+      )) {
+        continue;
+      }
+      sb.write(char);
+    }
+    return sb.toString().replaceFirst(RegExp(r' +$'), '');
+  }
+
   void _handlePointerEvent(PointerEvent event, Size layoutSize) {
     final cellWidth = _atlas!.cellWidth;
     final cellHeight = _atlas!.cellHeight;
-
-    final double xPos = event.localPosition.dx;
-    final double yPos = event.localPosition.dy;
-
-    final col = (xPos / cellWidth).floor();
-    final row = (yPos / cellHeight).floor();
-
     final maxCol = (layoutSize.width / cellWidth).floor();
     final maxRow = (layoutSize.height / cellHeight).floor();
     if (maxCol <= 0 || maxRow <= 0) return;
 
-    final clampedCol = col.clamp(0, maxCol - 1);
-    final clampedRow = row.clamp(0, maxRow - 1);
+    final clampedCol = (event.localPosition.dx / cellWidth).floor().clamp(
+      0,
+      maxCol - 1,
+    );
+    final clampedRow = (event.localPosition.dy / cellHeight).floor().clamp(
+      0,
+      maxRow - 1,
+    );
 
     if (event is PointerDownEvent &&
         !_focusNode.hasFocus &&
@@ -939,48 +1275,15 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       _focusNode.requestFocus();
     }
 
-    final (termuiButton, termuiType) = switch (event) {
-      PointerDownEvent(:final buttons) => (
-        (buttons & kSecondaryMouseButton != 0)
-            ? term.MouseButton.right
-            : (buttons & kMiddleMouseButton != 0)
-            ? term.MouseButton.middle
-            : term.MouseButton.left,
-        term.MouseEventType.press,
-      ),
-      PointerMoveEvent(:final down, :final buttons) when down => (
-        (buttons & kSecondaryMouseButton != 0)
-            ? term.MouseButton.right
-            : (buttons & kMiddleMouseButton != 0)
-            ? term.MouseButton.middle
-            : term.MouseButton.left,
-        term.MouseEventType.drag,
-      ),
-      PointerMoveEvent() => (term.MouseButton.none, term.MouseEventType.move),
-      PointerUpEvent() => (term.MouseButton.left, term.MouseEventType.release),
-      _ => (term.MouseButton.none, term.MouseEventType.move),
-    };
-
-    final mods = <term.Modifier>{};
-    if (HardwareKeyboard.instance.isShiftPressed) {
-      mods.add(term.Modifier.shift);
-    }
-    if (HardwareKeyboard.instance.isAltPressed) {
-      mods.add(term.Modifier.alt);
-    }
-    if (HardwareKeyboard.instance.isControlPressed) {
-      mods.add(term.Modifier.control);
-    }
-    if (HardwareKeyboard.instance.isMetaPressed) {
-      mods.add(term.Modifier.meta);
-    }
+    final (termuiButton, termuiType) = _classifyPointerEvent(event);
+    _updateSelectionAndUri(clampedCol, clampedRow, termuiButton, termuiType);
 
     final termEvent = term.MouseEvent(
       x: clampedCol + 1,
       y: clampedRow + 1,
       button: termuiButton,
       type: termuiType,
-      modifiers: mods,
+      modifiers: _collectHardwareModifiers(),
     );
 
     if ((termuiType == term.MouseEventType.move ||
@@ -1042,7 +1345,7 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
               child: RepaintBoundary(
                 key: _boundaryKey,
                 child: MouseRegion(
-                  cursor: _currentCursor,
+                  cursor: _effectiveCursor,
                   child: Listener(
                     onPointerDown: (e) => _handlePointerEvent(e, layoutSize),
                     onPointerMove: (e) => _handlePointerEvent(e, layoutSize),
@@ -1077,6 +1380,13 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
                                 fallbackPainters: _fallbackPainters,
                                 onMissingGlyphs: _onMissingGlyphs,
                                 enableBleed: widget.enableBleed,
+                                selectionStart: _selectionFocus != null
+                                    ? _selectionAnchor
+                                    : null,
+                                selectionEnd: _selectionFocus,
+                                selectionColBounds: _selectionColBounds,
+                                selectionBoxMode: _selectionBoxMode,
+                                kittyImages: _kittyGpuImages,
                               ),
                             ),
                     ),

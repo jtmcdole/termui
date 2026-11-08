@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart' hide Color;
@@ -276,6 +277,47 @@ void main() {
         isFalse,
         reason:
             'Modifier.hidden must suppress underline, overline, and strikethrough decorations',
+      );
+
+      // When Col 3 ('█' with Modifier.hidden) is selected via selectionStart/selectionEnd,
+      // TuiAtlasPainter highlights the cell and reveals the hidden glyph in white.
+      final selectedRecorder = ui.PictureRecorder();
+      final selectedCanvas = Canvas(selectedRecorder);
+      TuiAtlasPainter(
+        buffer: buffer,
+        atlas: atlas,
+        fontFamily: 'Roboto Mono',
+        fallbackPainters: const {},
+        onMissingGlyphs: null,
+        selectionStart: const math.Point(3, 0),
+        selectionEnd: const math.Point(3, 0),
+      ).paint(selectedCanvas, Size(12 * atlas.cellWidth, 2 * atlas.cellHeight));
+      final selectedPic = selectedRecorder.endRecording();
+      final selectedImg = await selectedPic.toImage(width, height);
+      selectedPic.dispose();
+      addTearDown(selectedImg.dispose);
+      final selectedData = (await selectedImg.toByteData())!.buffer
+          .asUint8List();
+
+      var foundRevealedWhite = false;
+      final startX = (3 * atlas.cellWidth).floor();
+      final endX = (4 * atlas.cellWidth).ceil().clamp(0, width);
+      final endY = atlas.cellHeight.ceil().clamp(0, height);
+      for (var y = 0; y < endY; y++) {
+        for (var x = startX; x < endX; x++) {
+          final idx = (y * width + x) * 4;
+          if (selectedData[idx] == 255 &&
+              selectedData[idx + 1] == 255 &&
+              selectedData[idx + 2] == 255 &&
+              selectedData[idx + 3] > 0) {
+            foundRevealedWhite = true;
+          }
+        }
+      }
+      expect(
+        foundRevealedWhite,
+        isTrue,
+        reason: 'Selecting a Modifier.hidden cell must reveal its glyph',
       );
     },
   );
