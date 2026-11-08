@@ -14,6 +14,12 @@ final class ScrollbackLine {
   /// Packed `[fg, bg, modifiers]` attributes (`length == characters.length * 3`).
   final Uint32List attributes;
 
+  /// Optional per-cell SGR 58 underline colors (`null` when all `0`).
+  final Uint32List? underlineColors;
+
+  /// Optional per-cell OSC 8 hyperlink URIs (`null` when all `null`).
+  final List<String?>? uris;
+
   /// Whether this row began via right-margin auto-wrap from the preceding row.
   final bool isWrapped;
 
@@ -22,6 +28,8 @@ final class ScrollbackLine {
     required this.width,
     required this.characters,
     required this.attributes,
+    this.underlineColors,
+    this.uris,
     this.isWrapped = false,
   }) : assert(attributes.length == characters.length * 3);
 
@@ -52,10 +60,13 @@ final class ScrollbackLine {
       rowStart * 3,
       (rowStart + trimmedLen) * 3,
     );
+    final rowEnd = rowStart + trimmedLen;
     return ScrollbackLine(
       width: rowWidth,
       characters: chars,
       attributes: attrs,
+      underlineColors: buffer.sliceUnderlineColors(rowStart, rowEnd),
+      uris: buffer.sliceUris(rowStart, rowEnd),
       isWrapped: isWrapped,
     );
   }
@@ -71,6 +82,10 @@ final class ScrollbackLine {
 
   static bool _isDefaultBlankCell(Buffer buffer, int cellIdx) {
     if (buffer.characters[cellIdx] != ' ') return false;
+    if (buffer.getUnderlineColorAt(cellIdx) != 0 ||
+        buffer.getUriAt(cellIdx) != null) {
+      return false;
+    }
     final attrIdx = cellIdx * 3;
     final mod = buffer.attributes[attrIdx + 2];
     return buffer.attributes[attrIdx] == 0 &&
@@ -111,6 +126,15 @@ final class ScrollbackBuffer {
 
   /// Whether no lines are currently retained.
   bool get isEmpty => _count == 0;
+
+  /// Advances line counters by [count] discarded rows when `maxLines == 0`.
+  void advanceDiscarded(int count) {
+    if (count <= 0) return;
+    _totalLines += count;
+    if (maxLines == 0) {
+      _oldestLine = _totalLines;
+    }
+  }
 
   /// Appends [line] to the ring, evicting the oldest line when full.
   void push(ScrollbackLine line) {

@@ -191,6 +191,138 @@ final class VirtualTerminal implements TerminalHandler {
   /// Primary-screen scrollback ring buffer (`maxLines == 0` disables retention).
   ScrollbackBuffer get scrollback => _scrollback;
 
+  int _viewportOffset = 0;
+
+  /// Current scrollback viewport offset (0 = active screen; >0 = scrolled
+  /// back into history by N lines, clamped to `0..scrollback.retainedLines`).
+  int get viewportOffset => _viewportOffset;
+  set viewportOffset(int value) {
+    final clamped = value.clamp(0, _scrollback.retainedLines);
+    if (_viewportOffset != clamped) {
+      _viewportOffset = clamped;
+      _notifyListeners();
+    }
+  }
+
+  final List<int> _promptLineIndices = [];
+
+  /// The absolute line positions of semantic shell prompts (`OSC 133;A`).
+  List<int> get promptLineIndices => List.unmodifiable(_promptLineIndices);
+
+  /// Scrolls the scrollback viewport by [delta] lines.
+  ///
+  /// Positive [delta] scrolls further back into history, while negative [delta]
+  /// scrolls forward towards the active screen. Clamped to `0..scrollback.retainedLines`.
+  void scrollViewport(int delta) {
+    _viewportOffset = (_viewportOffset + delta).clamp(
+      0,
+      _scrollback.retainedLines,
+    );
+    _notifyListeners();
+  }
+
+  /// Resets the scrollback viewport to the active screen (`viewportOffset = 0`).
+  void resetViewport() {
+    _viewportOffset = 0;
+    _notifyListeners();
+  }
+
+  /// Jumps to the previous (`direction < 0` or `backward: true`) or next
+  /// (`direction > 0` or `backward: false`) semantic shell prompt (`OSC 133;A`),
+  /// returning `true` iff [viewportOffset] changed.
+  bool jumpToPrompt({int? direction, bool? backward}) {
+    final dir = direction ?? (backward == null ? -1 : (backward ? -1 : 1));
+    if (dir == 0 || _promptLineIndices.isEmpty) return false;
+    final isBackward = dir < 0;
+    final currentTopLine = _scrollback.totalLines - _viewportOffset;
+    final targetLine = isBackward
+        ? _findPreviousPromptLine(currentTopLine)
+        : _findNextPromptLine(currentTopLine);
+
+    final maxOffset = _scrollback.retainedLines;
+    final targetOffset = targetLine != null
+        ? (_scrollback.totalLines - targetLine).clamp(0, maxOffset)
+        : (isBackward ? _viewportOffset : 0);
+
+    if (targetOffset == _viewportOffset) return false;
+    _viewportOffset = targetOffset;
+    _notifyListeners();
+    return true;
+  }
+
+  int? _findPreviousPromptLine(int currentTopLine) {
+    var low = 0;
+    var high = _promptLineIndices.length - 1;
+    int? result;
+    while (low <= high) {
+      final mid = (low + high) >>> 1;
+      final line = _promptLineIndices[mid];
+      if (line < currentTopLine) {
+        result = line;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return result;
+  }
+
+  int? _findNextPromptLine(int currentTopLine) {
+    var low = 0;
+    var high = _promptLineIndices.length - 1;
+    int? result;
+    while (low <= high) {
+      final mid = (low + high) >>> 1;
+      final line = _promptLineIndices[mid];
+      if (line > currentTopLine) {
+        result = line;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return result;
+  }
+
+  int _lowerBoundPrompt(int targetLine) {
+    var low = 0;
+    var high = _promptLineIndices.length;
+    while (low < high) {
+      final mid = (low + high) >>> 1;
+      if (_promptLineIndices[mid] < targetLine) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  void _recordPromptLine() {
+    if (_usingAltScreen) return;
+    final absLine = _scrollback.totalLines + cursorY;
+    if (_promptLineIndices.isEmpty || _promptLineIndices.last < absLine) {
+      _promptLineIndices.add(absLine);
+      return;
+    }
+    if (_promptLineIndices.last == absLine) return;
+    final idx = _lowerBoundPrompt(absLine);
+    if (idx < _promptLineIndices.length && _promptLineIndices[idx] == absLine) {
+      return;
+    }
+    _promptLineIndices.insert(idx, absLine);
+  }
+
+  void _pruneEvictedPromptLines() {
+    final minLine = _scrollback.maxLines <= 0
+        ? _scrollback.totalLines
+        : _scrollback.oldestLine;
+    if (minLine <= 0 || _promptLineIndices.isEmpty) return;
+    if (_promptLineIndices.first >= minLine) return;
+    final keepIdx = _lowerBoundPrompt(minLine);
+    _promptLineIndices.removeRange(0, keepIdx);
+  }
+
   /// Returns whether visible row [row] (`0 <= row < height`) began via
   /// right-margin auto-wrap from the preceding row (`scrollback[totalLines - 1]`
   /// when `row == 0`).
@@ -210,8 +342,8 @@ final class VirtualTerminal implements TerminalHandler {
   Buffer get buffer =>
       _usingAltScreen ? (_altBuffer ?? _primaryBuffer) : _primaryBuffer;
 
-  /// Renders the visible screen into [target] (or a new [Buffer]) and registers
-  /// [imageRegistry].
+  /// Renders the visible viewport (including scrollback when [viewportOffset] > 0)
+  /// into [target] (or a new [Buffer]) and registers [imageRegistry].
   Buffer renderBuffer([Buffer? target]) {
     final buf =
         target ??
@@ -219,26 +351,60 @@ final class VirtualTerminal implements TerminalHandler {
     final copyW = math.min(width, buf.width);
     final copyH = math.min(height, buf.height);
     final src = buffer;
+    final vOffset = _usingAltScreen ? 0 : _viewportOffset;
 
     for (var y = 0; y < copyH; y++) {
       final dstStart = y * buf.width;
-      final srcStart = y * src.width;
-      buf.characters.setRange(
-        dstStart,
-        dstStart + copyW,
-        src.characters,
-        srcStart,
-      );
-      buf.attributes.setRange(
-        dstStart * 3,
-        (dstStart + copyW) * 3,
-        src.attributes,
-        srcStart * 3,
-      );
-      buf.copyCellAuxRangeFrom(src, dstStart, srcStart, copyW);
+      if (vOffset > 0 && y < vOffset) {
+        final sbLine = _scrollback[_scrollback.totalLines - vOffset + y];
+        _copyScrollbackRowToBuffer(buf, dstStart, copyW, sbLine);
+      } else {
+        final srcRow = vOffset > 0 ? y - vOffset : y;
+        final srcStart = srcRow * src.width;
+        buf.characters.setRange(
+          dstStart,
+          dstStart + copyW,
+          src.characters,
+          srcStart,
+        );
+        buf.attributes.setRange(
+          dstStart * 3,
+          (dstStart + copyW) * 3,
+          src.attributes,
+          srcStart * 3,
+        );
+        buf.copyCellAuxRangeFrom(src, dstStart, srcStart, copyW);
+      }
     }
     buf.registerKittyRegistry(Rect(0, 0, width, height), imageRegistry);
     return buf;
+  }
+
+  static void _copyScrollbackRowToBuffer(
+    Buffer buf,
+    int dstStart,
+    int copyW,
+    ScrollbackLine? sbLine,
+  ) {
+    if (sbLine == null) {
+      buf.clearCellAuxRange(dstStart, dstStart + copyW);
+      return;
+    }
+    buf.writeCellAuxSlices(
+      dstStart,
+      copyW,
+      underlineColors: sbLine.underlineColors,
+      uris: sbLine.uris,
+    );
+    final n = math.min(sbLine.characters.length, copyW);
+    if (n <= 0) return;
+    buf.characters.setRange(dstStart, dstStart + n, sbLine.characters, 0);
+    buf.attributes.setRange(
+      dstStart * 3,
+      (dstStart + n) * 3,
+      sbLine.attributes,
+      0,
+    );
   }
 
   int _cellPixelWidth;
@@ -697,6 +863,8 @@ final class VirtualTerminal implements TerminalHandler {
     lastCommandExitCode = null;
     _primaryWrapped.fillRange(0, height, false);
     _scrollback.clear();
+    _viewportOffset = 0;
+    _promptLineIndices.clear();
     final (fg, bg, mod) = _eraseAttributes();
     _primaryBuffer.fillAttributes(
       char: ' ',
@@ -757,6 +925,7 @@ final class VirtualTerminal implements TerminalHandler {
     _scrollBottom = height - 1;
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
+    _viewportOffset = _viewportOffset.clamp(0, _scrollback.retainedLines);
   }
 
   void _resizeTabStops(int newWidth) {
@@ -928,7 +1097,11 @@ final class VirtualTerminal implements TerminalHandler {
         );
         _clearWrappedRange(0, height);
       case 3: // Saved scrollback lines only
-        if (!_usingAltScreen) _scrollback.clear();
+        if (!_usingAltScreen) {
+          _scrollback.clear();
+          _viewportOffset = 0;
+          _promptLineIndices.clear();
+        }
     }
   }
 
@@ -1029,7 +1202,11 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _pushPrimaryRowsToScrollback(int count) {
-    if (_scrollback.maxLines <= 0) return;
+    if (_scrollback.maxLines <= 0) {
+      _scrollback.advanceDiscarded(count);
+      _pruneEvictedPromptLines();
+      return;
+    }
     for (var r = 0; r < count; r++) {
       _scrollback.push(
         ScrollbackLine.fromBufferRow(
@@ -1039,6 +1216,13 @@ final class VirtualTerminal implements TerminalHandler {
         ),
       );
     }
+    if (_viewportOffset > 0) {
+      _viewportOffset = (_viewportOffset + count).clamp(
+        0,
+        _scrollback.retainedLines,
+      );
+    }
+    _pruneEvictedPromptLines();
   }
 
   static void _copyCellSpan(
@@ -2231,6 +2415,7 @@ final class VirtualTerminal implements TerminalHandler {
     switch (marker) {
       case 'A':
         promptZone = .prompt;
+        _recordPromptLine();
         onShellIntegration?.call(.prompt);
       case 'B':
         promptZone = .commandInput;

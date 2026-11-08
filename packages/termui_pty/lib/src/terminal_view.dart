@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/event.dart' as ev;
 import 'virtual_terminal.dart';
+import 'scrollback_buffer.dart';
 import 'input_encoder.dart';
 
 /// A pure UI widget that renders a VirtualTerminal and emits input events.
@@ -44,8 +45,14 @@ class TerminalView extends StatelessWidget {
   @override
   int getIntrinsicWidth(int height) => terminal.width;
 
-  /// Encodes and forwards keyboard input to [onInput].
+  /// Handles keyboard shortcuts for scrollback navigation and forwards input.
   bool handleKeyEvent(ev.KeyEvent event) {
+    if (!terminal.isUsingAlternateScreen &&
+        event.eventType != ev.KeyEventType.release &&
+        _tryHandleViewportShortcut(event)) {
+      return true;
+    }
+
     final str = InputEncoder.encode(
       event,
       bracketedPaste: terminal.bracketedPasteMode,
@@ -53,8 +60,45 @@ class TerminalView extends StatelessWidget {
       kittyKeyboardFlags: terminal.kittyKeyboardFlags,
     );
     if (str.isEmpty) return false;
+
+    if (terminal.viewportOffset > 0 &&
+        event.eventType != ev.KeyEventType.release) {
+      terminal.resetViewport();
+    }
     onInput?.call(str);
     return true;
+  }
+
+  bool _tryHandleViewportShortcut(ev.KeyEvent event) {
+    final mods = event.modifiers;
+    final shiftOnly = mods.length == 1 && mods.contains(ev.Modifier.shift);
+    if (shiftOnly) {
+      final halfPage = math.max(1, terminal.height ~/ 2);
+      if (event.type == ev.KeyType.pageUp) {
+        terminal.scrollViewport(halfPage);
+        return true;
+      }
+      if (event.type == ev.KeyType.pageDown) {
+        terminal.scrollViewport(-halfPage);
+        return true;
+      }
+      return false;
+    }
+
+    final ctrlShiftOnly =
+        mods.length == 2 &&
+        mods.contains(ev.Modifier.control) &&
+        mods.contains(ev.Modifier.shift);
+    if (!ctrlShiftOnly) return false;
+    if (event.type == ev.KeyType.up) {
+      terminal.jumpToPrompt(direction: -1);
+      return true;
+    }
+    if (event.type == ev.KeyType.down) {
+      terminal.jumpToPrompt(direction: 1);
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -196,7 +240,15 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
     ev.MouseEvent event,
   ) {
     if (event.type != ev.MouseEventType.press) return;
-    if (!vt.isUsingAlternateScreen || !vt.alternateScrollMode) return;
+    if (!vt.isUsingAlternateScreen) {
+      if (event.button == ev.MouseButton.wheelUp) {
+        vt.scrollViewport(3);
+      } else if (event.button == ev.MouseButton.wheelDown) {
+        vt.scrollViewport(-3);
+      }
+      return;
+    }
+    if (!vt.alternateScrollMode) return;
     final seq = InputEncoder.encodeAlternateScroll(
       event.button,
       applicationCursorKeys: vt.applicationCursorKeys,
@@ -243,19 +295,133 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
     );
 
     final transparent = w.terminal.transparentBackground;
+    final vOffset = w.terminal.viewportOffset;
 
     for (var ty = startY; ty < endY; ty++) {
       final sy = ty - startY;
       final targetStartIdx = ty * buffer.width + startX;
-      final sourceStartIdx = sy * source.width;
-      _paintBufferRow(
-        buffer,
-        source,
+
+      if (vOffset > 0 && sy < vOffset) {
+        final sbIndex = w.terminal.scrollback.totalLines - vOffset + sy;
+        final sbLine = w.terminal.scrollback[sbIndex];
+        _paintScrollbackRow(
+          buffer,
+          targetStartIdx,
+          rowLength,
+          sbLine,
+          transparent: transparent,
+        );
+      } else {
+        final bufRow = vOffset > 0 ? sy - vOffset : sy;
+        final sourceStartIdx = bufRow * source.width;
+        _paintBufferRow(
+          buffer,
+          source,
+          targetStartIdx,
+          sourceStartIdx,
+          rowLength,
+          transparent: transparent,
+        );
+      }
+    }
+  }
+
+  static void _paintScrollbackRow(
+    Buffer buffer,
+    int targetStartIdx,
+    int rowLength,
+    ScrollbackLine? sbLine, {
+    required bool transparent,
+  }) {
+    if (sbLine == null) {
+      if (!transparent) {
+        _fillBlankRow(buffer, targetStartIdx, rowLength);
+      }
+      return;
+    }
+    if (!transparent) {
+      _paintScrollbackOpaque(buffer, targetStartIdx, rowLength, sbLine);
+    } else {
+      _paintScrollbackTransparent(buffer, targetStartIdx, rowLength, sbLine);
+    }
+  }
+
+  static void _fillBlankRow(Buffer buffer, int targetStartIdx, int rowLength) {
+    buffer.characters.fillRange(
+      targetStartIdx,
+      targetStartIdx + rowLength,
+      ' ',
+    );
+    buffer.attributes.fillRange(
+      targetStartIdx * 3,
+      (targetStartIdx + rowLength) * 3,
+      0,
+    );
+    buffer.clearCellAuxRange(targetStartIdx, targetStartIdx + rowLength);
+  }
+
+  static void _paintScrollbackOpaque(
+    Buffer buffer,
+    int targetStartIdx,
+    int rowLength,
+    ScrollbackLine sbLine,
+  ) {
+    final chars = sbLine.characters;
+    final copyLen = math.min(chars.length, rowLength);
+    if (copyLen > 0) {
+      buffer.characters.setRange(
         targetStartIdx,
-        sourceStartIdx,
-        rowLength,
-        transparent: transparent,
+        targetStartIdx + copyLen,
+        chars,
+        0,
       );
+      buffer.attributes.setRange(
+        targetStartIdx * 3,
+        (targetStartIdx + copyLen) * 3,
+        sbLine.attributes,
+        0,
+      );
+    }
+    if (copyLen < rowLength) {
+      buffer.characters.fillRange(
+        targetStartIdx + copyLen,
+        targetStartIdx + rowLength,
+        ' ',
+      );
+      buffer.attributes.fillRange(
+        (targetStartIdx + copyLen) * 3,
+        (targetStartIdx + rowLength) * 3,
+        0,
+      );
+    }
+    buffer.writeCellAuxSlices(
+      targetStartIdx,
+      rowLength,
+      underlineColors: sbLine.underlineColors,
+      uris: sbLine.uris,
+    );
+  }
+
+  static void _paintScrollbackTransparent(
+    Buffer buffer,
+    int targetStartIdx,
+    int rowLength,
+    ScrollbackLine sbLine,
+  ) {
+    final chars = sbLine.characters;
+    final copyLen = math.min(chars.length, rowLength);
+    var tIdx = targetStartIdx;
+    for (var i = 0; i < copyLen; i++, tIdx++) {
+      final sAttrIdx = i * 3;
+      if ((sbLine.attributes[sAttrIdx + 2] & Modifier.transparent) == 0) {
+        buffer.characters[tIdx] = chars[i];
+        final tAttrIdx = tIdx * 3;
+        buffer.attributes[tAttrIdx + 0] = sbLine.attributes[sAttrIdx + 0];
+        buffer.attributes[tAttrIdx + 1] = sbLine.attributes[sAttrIdx + 1];
+        buffer.attributes[tAttrIdx + 2] = sbLine.attributes[sAttrIdx + 2];
+        buffer.setUnderlineColorAt(tIdx, sbLine.underlineColors?[i] ?? 0);
+        buffer.setUriAt(tIdx, sbLine.uris?[i]);
+      }
     }
   }
 
