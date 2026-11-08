@@ -6,6 +6,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
+import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 import 'atlas.dart';
 
 bool _isBlockCharacter(String char) {
@@ -84,14 +85,38 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Enables sub-pixel bleeding to prevent gaps during fractional transformations. Defaults to kIsWeb.
   final bool enableBleed;
 
+  /// Optional controller managing active text selection state.
+  final TerminalSelectionController? selectionController;
+
+  final math.Point<int>? _selectionStart;
+  final math.Point<int>? _selectionEnd;
+  final (int, int)? _selectionColBounds;
+
   /// Optional inclusive start coordinate `(col, row)` of an active mouse text selection.
-  final math.Point<int>? selectionStart;
+  math.Point<int>? get selectionStart {
+    if (_selectionStart != null) return _selectionStart;
+    final anchor = selectionController?.anchor;
+    final focus = selectionController?.focus;
+    if (anchor == null || focus == null) return null;
+    return math.Point<int>(anchor.col, anchor.row);
+  }
 
   /// Optional inclusive end coordinate `(col, row)` of an active mouse text selection.
-  final math.Point<int>? selectionEnd;
+  math.Point<int>? get selectionEnd {
+    if (_selectionEnd != null) return _selectionEnd;
+    final anchor = selectionController?.anchor;
+    final focus = selectionController?.focus;
+    if (anchor == null || focus == null) return null;
+    return math.Point<int>(focus.col, focus.row);
+  }
 
   /// Optional inclusive `(minCol, maxCol)` horizontal bounds of the active selection region.
-  final (int, int)? selectionColBounds;
+  (int, int)? get selectionColBounds {
+    if (_selectionColBounds != null) return _selectionColBounds;
+    final region = selectionController?.region;
+    if (region == null) return null;
+    return (region.minCol, region.maxCol);
+  }
 
   /// Whether the active selection uses rectangular box mode (`Alt+Drag`).
   final bool selectionBoxMode;
@@ -110,12 +135,15 @@ final class TuiAtlasPainter extends CustomPainter {
     required this.fallbackPainters,
     required this.onMissingGlyphs,
     this.enableBleed = kIsWeb,
-    this.selectionStart,
-    this.selectionEnd,
-    this.selectionColBounds,
+    this.selectionController,
+    math.Point<int>? selectionStart,
+    math.Point<int>? selectionEnd,
+    (int, int)? selectionColBounds,
     this.selectionBoxMode = false,
     this.kittyImages = const {},
-  });
+  }) : _selectionStart = selectionStart,
+       _selectionEnd = selectionEnd,
+       _selectionColBounds = selectionColBounds;
 
   void _drawRawAtlasInChunks(
     Canvas canvas,
@@ -249,6 +277,9 @@ final class TuiAtlasPainter extends CustomPainter {
       Modifier.underline | Modifier.crossedOut | Modifier.overline;
 
   bool _isCellSelected(int x, int y) {
+    if (selectionController != null) {
+      return selectionController!.isCellSelected(x, y);
+    }
     final a = selectionStart;
     final b = selectionEnd;
     if (a == null || b == null) return false;
