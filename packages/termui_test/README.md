@@ -26,7 +26,7 @@ Tests are run inside a controlled, synchronous time-slice zone provided by `pack
 
 ##### Key Methods:
 * `void run(Future<void> Function() callback)`
-  Runs the provided testing callback in a `FakeAsync` zone. It instantiates the `MockTerminalBackend` and `Terminal`, redirects global prompt events, and repeatedly calls `elapse(const Duration(milliseconds: 1))` until the callback resolves or throws an error. It manages cleanup of mock channels upon termination.
+  Runs the provided testing callback in a `FakeAsync` zone. It instantiates the `MockTerminalBackend` and `Terminal`, redirects global prompt events, and flushes pending microtasks (`async.flushMicrotasks()`) in a loop until the callback completes (throwing a `StateError` if a timer remains pending without being advanced via `pump`). It cleans up mock channels upon termination.
 * `Future<T?> runPrompt<T>(PromptRunner<T> runner, Future<void> Function() callback)`
   Runs an interactive `PromptRunner` within the tester context. This allows simulating keys and clicks directly targeting the running interactive prompt.
 * `Future<void> pumpWidget(Widget widget, {Size size = const Size(80, 24)})`
@@ -107,7 +107,7 @@ Terminal coordinates are 1-indexed (column 1, row 1 is top-left). `TerminalTeste
 ### Mock Interfaces
 
 #### `MockTerminalBackend`
-Implements `TerminalBackend` for in-memory TTY interactions.
+Implements `BufferedTerminalBackend` for in-memory TTY interactions.
 * **Fields**:
   * `bool isWindows`: OS configuration flag.
   * `Buffer? buffer`: Current painted screen buffer.
@@ -127,7 +127,7 @@ Subclasses `Terminal` to allow direct event injection bypassing the parsing stag
 * **Methods**:
   * `void injectTestEvent(InputEvent event)`: Manually dispatches an input event (e.g. `MouseEvent`, `KeyEvent`).
   * `void injectResize(Point<int> newSize)`: Manually updates terminal size.
-  * Tracks internal states `bool isCursorVisible` and `bool mouseTrackingEnabled`.
+  * Tracks internal states `bool isCursorVisible`, `bool mouseTrackingEnabled`, and `bool pasteTrackingEnabled`.
 
 ---
 
@@ -194,5 +194,6 @@ Matcher matchesAnsiGolden(
 2. **Golden Updates**: Checks if `GENERATE_GOLDENS` or `UPDATE_GOLDENS` is set to `'true'` in the execution environment (or specified map). If so, it writes the captured ANSI output directly to `goldenPath` and automatically returns `true`.
 3. **Missing Goldens**: If the golden file does not exist, it writes the actual output to a `.fail` file (at `$goldenPath.fail`) and returns `false`, recording a failure message detailing the location of the actual output.
 4. **Layout Verification & Diffing**: If the file exists, it performs an exact string comparison. On mismatch:
+   * It writes `$goldenPath.fail`, a red-highlighted visual diff (`$goldenPath.diff`), and a 3-frame Asciicast comparison recording (`$goldenPath.cast`).
    * It logs a line-by-line diff comparing expected lines (from the golden file) and actual lines.
    * It returns `false` and records a detailed failure description.
