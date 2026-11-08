@@ -152,68 +152,81 @@ class _FittedBoxElement extends Element {
       // their reported layout size, and Clip.hardEdge MUST intercept them.
       final virtualBuffer = Buffer.blank(size.width, size.height);
       _childElement!.paint(virtualBuffer, Offset(dx, dy));
-
-      for (var y = 0; y < size.height; y++) {
-        for (var x = 0; x < size.width; x++) {
-          final char = virtualBuffer.getCharacter(x, y);
-          final modifiers = virtualBuffer.getModifiers(x, y);
-          final isTransparent = (modifiers & Modifier.transparent) != 0;
-          if (char != ' ' || !isTransparent) {
-            final targetFg = buffer.getForeground(offset.dx + x, offset.dy + y);
-            final targetBg = buffer.getBackground(offset.dx + x, offset.dy + y);
-            final targetModifiers = buffer.getModifiers(
-              offset.dx + x,
-              offset.dy + y,
-            );
-
-            final vFg = virtualBuffer.getForeground(x, y);
-            final vBg = virtualBuffer.getBackground(x, y);
-
-            var nextModifiers = targetModifiers | modifiers;
-            if ((modifiers & Modifier.transparent) == 0) {
-              nextModifiers &= ~Modifier.transparent;
-            }
-
-            buffer.setAttributes(
-              offset.dx + x,
-              offset.dy + y,
-              char: char,
-              fg: vFg != 0 ? vFg : targetFg,
-              bg: vBg != 0 ? vBg : targetBg,
-              modifiers: nextModifiers,
-            );
-          }
-        }
-      }
-
-      for (final e in virtualBuffer.effects) {
-        // Intersect the effect bounds with the clipping boundaries of the FittedBox
-        final int ix = e.bounds.x < 0 ? 0 : e.bounds.x;
-        final int iy = e.bounds.y < 0 ? 0 : e.bounds.y;
-
-        final int right = e.bounds.x + e.bounds.width;
-        final int bottom = e.bounds.y + e.bounds.height;
-
-        final int iright = right > size.width ? size.width : right;
-        final int ibottom = bottom > size.height ? size.height : bottom;
-
-        final int iw = iright - ix;
-        final int ih = ibottom - iy;
-
-        if (iw > 0 && ih > 0) {
-          buffer.addEffect(
-            RegisteredEffect(
-              e.effect,
-              Rect(offset.dx + ix, offset.dy + iy, iw, ih),
-              e.zIndex,
-              e.originalIndex,
-            ),
-          );
-        }
-      }
+      _blitHardEdgeBuffer(
+        buffer,
+        virtualBuffer,
+        offset,
+        size.width,
+        size.height,
+      );
+      buffer.propagateMetadataFrom(
+        virtualBuffer,
+        dx: offset.dx,
+        dy: offset.dy,
+        clip: Rect(offset.dx, offset.dy, size.width, size.height),
+      );
     } else {
       _childElement!.paint(buffer, offset + _childElement!.relativeOffset);
     }
+  }
+
+  static void _blitHardEdgeBuffer(
+    Buffer buffer,
+    Buffer virtualBuffer,
+    Offset offset,
+    int w,
+    int h,
+  ) {
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        _mergeHardEdgeCell(
+          buffer,
+          virtualBuffer,
+          x,
+          y,
+          offset.dx + x,
+          offset.dy + y,
+        );
+      }
+    }
+  }
+
+  static void _mergeHardEdgeCell(
+    Buffer buffer,
+    Buffer virtualBuffer,
+    int x,
+    int y,
+    int dstX,
+    int dstY,
+  ) {
+    final char = virtualBuffer.getCharacter(x, y);
+    final modifiers = virtualBuffer.getModifiers(x, y);
+    final isTransparent = (modifiers & Modifier.transparent) != 0;
+    if (char == ' ' && isTransparent) return;
+
+    final targetFg = buffer.getForeground(dstX, dstY);
+    final targetBg = buffer.getBackground(dstX, dstY);
+    final targetModifiers = buffer.getModifiers(dstX, dstY);
+    final vFg = virtualBuffer.getForeground(x, y);
+    final vBg = virtualBuffer.getBackground(x, y);
+    final vUl = virtualBuffer.getUnderlineColor(x, y);
+    final vUri = virtualBuffer.getUri(x, y);
+
+    var nextModifiers = Modifier.mergeLayered(modifiers, targetModifiers);
+    if (!isTransparent) {
+      nextModifiers &= ~Modifier.transparent;
+    }
+
+    buffer.setAttributes(
+      dstX,
+      dstY,
+      char: char,
+      fg: vFg != 0 ? vFg : targetFg,
+      bg: vBg != 0 ? vBg : targetBg,
+      modifiers: nextModifiers,
+      underlineColor: vUl != 0 ? vUl : buffer.getUnderlineColor(dstX, dstY),
+      uri: vUri ?? buffer.getUri(dstX, dstY),
+    );
   }
 
   @override

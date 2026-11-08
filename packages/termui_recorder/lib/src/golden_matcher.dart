@@ -86,36 +86,25 @@ final class _AnsiGoldenMatcher extends Matcher {
       for (var y = 0; y < item.height; y++) {
         for (var x = 0; x < item.width; x++) {
           final actChar = item.getCharacter(x, y);
-          final actFg = item.getForeground(x, y);
-          final actBg = item.getBackground(x, y);
-          final actModifiers = item.getModifiers(x, y);
-
-          final expChar = expectedBuffer.getCharacter(x, y);
-          final expFg = expectedBuffer.getForeground(x, y);
-          final expBg = expectedBuffer.getBackground(x, y);
-          final expModifiers = expectedBuffer.getModifiers(x, y);
-
-          final isMatch =
-              actChar == expChar &&
-              actFg == expFg &&
-              actBg == expBg &&
-              actModifiers == expModifiers;
+          final isMatch = item.cellsEqual(x, y, expectedBuffer, x, y);
 
           if (isMatch) {
             diffBuffer.setAttributes(
               x,
               y,
               char: actChar,
-              fg: actFg,
-              bg: actBg,
-              modifiers: actModifiers,
+              fg: item.getForeground(x, y),
+              bg: item.getBackground(x, y),
+              modifiers: item.getModifiers(x, y),
+              underlineColor: item.getUnderlineColor(x, y),
+              uri: item.getUri(x, y),
             );
           } else {
             // Highlight mismatched cell with red background
             diffBuffer.setAttributes(
               x,
               y,
-              char: actChar.isEmpty || actChar == '' ? ' ' : actChar,
+              char: actChar.isEmpty ? ' ' : actChar,
               fg: Colors.white.argb,
               bg: const Color(128, 0, 0).argb,
               modifiers: Modifier.none,

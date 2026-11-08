@@ -33,6 +33,11 @@ class BufferWidgetElement extends Element {
     final ox = offset.dx;
     final oy = offset.dy;
 
+    if (buffer is Viewport) {
+      _paintIntoViewport(src, buffer, ox, oy);
+      return;
+    }
+
     final clip = buffer.activeClip;
     final minX = max(0, clip.left - ox);
     final maxX = min(src.width, clip.right - ox);
@@ -47,29 +52,46 @@ class BufferWidgetElement extends Element {
     final dstAttrs = buffer.attributes;
     final srcWidth = src.width;
     final dstWidth = buffer.width;
+    final count = maxX - minX;
 
-    for (int y = minY; y < maxY; y++) {
-      final srcRowOffset = y * srcWidth;
-      final dstRowOffset = (oy + y) * dstWidth;
-
-      final srcStart = srcRowOffset + minX;
-      final srcEnd = srcRowOffset + maxX;
-      final dstStart = dstRowOffset + ox + minX;
-      final count = maxX - minX;
+    for (var y = minY; y < maxY; y++) {
+      final srcStart = y * srcWidth + minX;
+      final dstStart = (oy + y) * dstWidth + ox + minX;
 
       dstChars.setRange(dstStart, dstStart + count, srcChars, srcStart);
-
-      final srcAttrStart = srcStart * 3;
-      final srcAttrEnd = srcEnd * 3;
-      final dstAttrStart = dstStart * 3;
-      final attrCount = (srcAttrEnd - srcAttrStart);
-
       dstAttrs.setRange(
-        dstAttrStart,
-        dstAttrStart + attrCount,
+        dstStart * 3,
+        (dstStart + count) * 3,
         srcAttrs,
-        srcAttrStart,
+        srcStart * 3,
       );
+      buffer.copyCellAuxRangeFrom(src, dstStart, srcStart, count);
     }
+    buffer.propagateMetadataFrom(src, dx: ox, dy: oy, clip: clip);
+  }
+
+  void _paintIntoViewport(Buffer src, Viewport vp, int ox, int oy) {
+    final minX = max(0, -ox);
+    final maxX = min(src.width, vp.width - ox);
+    final minY = max(0, -oy);
+    final maxY = min(src.height, vp.height - oy);
+    if (minX >= maxX || minY >= maxY) return;
+
+    for (var y = minY; y < maxY; y++) {
+      for (var x = minX; x < maxX; x++) {
+        vp.setCell(
+          ox + x,
+          oy + y,
+          src.getCharacter(x, y),
+          src.getForeground(x, y),
+          src.getBackground(x, y),
+          src.getModifiers(x, y),
+          blend: false,
+          underlineColor: src.getUnderlineColor(x, y),
+          uri: src.getUri(x, y),
+        );
+      }
+    }
+    vp.propagateMetadataFrom(src, dx: ox, dy: oy);
   }
 }

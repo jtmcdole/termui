@@ -271,25 +271,11 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
       // But we can optimize to only merge if the style isn't empty!
       if (style != Style.empty) {
         for (var col = 0; col < w; col++) {
-          final targetX = offset.dx.toInt() + col;
-          final targetY = offset.dy.toInt() + i;
-
-          final fg = buffer.getForeground(targetX, targetY);
-          final bg = buffer.getBackground(targetX, targetY);
-          final mods = buffer.getModifiers(targetX, targetY);
-          final currentStyle = Style(
-            foreground: fg != 0 ? Color.argb(fg) : null,
-            background: bg != 0 ? Color.argb(bg) : null,
-            modifiers: mods,
-          );
-
-          final newStyle = style.merge(currentStyle);
-          buffer.setAttributes(
-            targetX,
-            targetY,
-            fg: newStyle.foreground?.argb,
-            bg: newStyle.background?.argb,
-            modifiers: newStyle.modifiers,
+          _applyRowItemStyle(
+            buffer,
+            offset.dx.toInt() + col,
+            offset.dy.toInt() + i,
+            style,
           );
         }
       }
@@ -317,6 +303,34 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
         }
       }
     }
+  }
+
+  static void _applyRowItemStyle(
+    Buffer buffer,
+    int targetX,
+    int targetY,
+    Style style,
+  ) {
+    final fg = buffer.getForeground(targetX, targetY);
+    final bg = buffer.getBackground(targetX, targetY);
+    final ul = buffer.getUnderlineColor(targetX, targetY);
+    final currentStyle = Style(
+      foreground: fg != 0 ? Color.argb(fg) : null,
+      background: bg != 0 ? Color.argb(bg) : null,
+      underlineColor: ul != 0 ? Color.argb(ul) : null,
+      uri: buffer.getUri(targetX, targetY),
+      modifiers: buffer.getModifiers(targetX, targetY),
+    );
+    final newStyle = style.merge(currentStyle);
+    buffer.setAttributes(
+      targetX,
+      targetY,
+      fg: newStyle.foreground?.argb,
+      bg: newStyle.background?.argb,
+      modifiers: newStyle.modifiers,
+      underlineColor: newStyle.underlineColor?.argb,
+      uri: newStyle.uri,
+    );
   }
 
   @override

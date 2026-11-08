@@ -210,94 +210,130 @@ class _ScrollViewRenderProxyElement extends Element {
     childElement!.paint(virtualBuffer, Offset.zero);
 
     if (proxyWidget.scrollDirection == LayoutDirection.vertical) {
-      for (var y = 0; y < h; y++) {
-        final srcY = scrollOffset + y;
-        if (srcY >= childHeight) break;
-        for (var x = 0; x < w; x++) {
-          final char = virtualBuffer.getCharacter(x, srcY);
-          final vFg = virtualBuffer.getForeground(x, srcY);
-          final vBg = virtualBuffer.getBackground(x, srcY);
-          final vMod = virtualBuffer.getModifiers(x, srcY);
-
-          final targetFg = buffer.getForeground(offset.dx + x, offset.dy + y);
-          final targetBg = buffer.getBackground(offset.dx + x, offset.dy + y);
-          final targetMod = buffer.getModifiers(offset.dx + x, offset.dy + y);
-
-          var mergedMod = targetMod | vMod;
-          if ((vMod & Modifier.transparent) == 0) {
-            mergedMod &= ~Modifier.transparent;
-          }
-
-          buffer.setAttributes(
-            offset.dx + x,
-            offset.dy + y,
-            char: char,
-            fg: vFg != 0 ? vFg : targetFg,
-            bg: vBg != 0 ? vBg : targetBg,
-            modifiers: mergedMod,
-          );
-        }
-      }
+      _blitVerticalScroll(
+        buffer,
+        virtualBuffer,
+        offset,
+        w,
+        h,
+        childHeight,
+        scrollOffset,
+      );
     } else {
-      for (var y = 0; y < h; y++) {
-        for (var x = 0; x < w; x++) {
-          final srcX = scrollOffset + x;
-          if (srcX >= childWidth) break;
-          var char = virtualBuffer.getCharacter(srcX, y);
-          if ((x == 0 && char == '') || (x == w - 1 && isWideGrapheme(char))) {
-            char = ' ';
-          }
-          final vFg = virtualBuffer.getForeground(srcX, y);
-          final vBg = virtualBuffer.getBackground(srcX, y);
-          final vMod = virtualBuffer.getModifiers(srcX, y);
-
-          final targetFg = buffer.getForeground(offset.dx + x, offset.dy + y);
-          final targetBg = buffer.getBackground(offset.dx + x, offset.dy + y);
-          final targetMod = buffer.getModifiers(offset.dx + x, offset.dy + y);
-
-          var mergedMod = targetMod | vMod;
-          if ((vMod & Modifier.transparent) == 0) {
-            mergedMod &= ~Modifier.transparent;
-          }
-
-          buffer.setAttributes(
-            offset.dx + x,
-            offset.dy + y,
-            char: char,
-            fg: vFg != 0 ? vFg : targetFg,
-            bg: vBg != 0 ? vBg : targetBg,
-            modifiers: mergedMod,
-          );
-        }
-      }
+      _blitHorizontalScroll(
+        buffer,
+        virtualBuffer,
+        offset,
+        w,
+        h,
+        childWidth,
+        scrollOffset,
+      );
     }
 
-    if (virtualBuffer.effects.isNotEmpty) {
-      final viewportClip = Rect(offset.dx, offset.dy, w, h);
-      final scrollDx = proxyWidget.scrollDirection == LayoutDirection.horizontal
-          ? scrollOffset
-          : 0;
-      final scrollDy = proxyWidget.scrollDirection == LayoutDirection.vertical
-          ? scrollOffset
-          : 0;
-      for (final reg in virtualBuffer.effects) {
-        final translated = Rect(
-          offset.dx + reg.bounds.x - scrollDx,
-          offset.dy + reg.bounds.y - scrollDy,
-          reg.bounds.width,
-          reg.bounds.height,
-        ).intersect(viewportClip);
-        if (translated.width > 0 && translated.height > 0) {
-          buffer.addEffect(
-            RegisteredEffect(
-              reg.effect,
-              translated,
-              reg.zIndex,
-              reg.originalIndex,
-            ),
-          );
-        }
+    final scrollDx = proxyWidget.scrollDirection == LayoutDirection.horizontal
+        ? scrollOffset
+        : 0;
+    final scrollDy = proxyWidget.scrollDirection == LayoutDirection.vertical
+        ? scrollOffset
+        : 0;
+    buffer.propagateMetadataFrom(
+      virtualBuffer,
+      dx: offset.dx - scrollDx,
+      dy: offset.dy - scrollDy,
+      clip: Rect(offset.dx, offset.dy, w, h),
+    );
+  }
+
+  static void _blitVerticalScroll(
+    Buffer buffer,
+    Buffer virtualBuffer,
+    Offset offset,
+    int w,
+    int h,
+    int childHeight,
+    int scrollOffset,
+  ) {
+    for (var y = 0; y < h; y++) {
+      final srcY = scrollOffset + y;
+      if (srcY >= childHeight) break;
+      for (var x = 0; x < w; x++) {
+        _mergeVirtualCell(
+          buffer,
+          virtualBuffer,
+          x,
+          srcY,
+          offset.dx + x,
+          offset.dy + y,
+          virtualBuffer.getCharacter(x, srcY),
+        );
       }
     }
+  }
+
+  static void _blitHorizontalScroll(
+    Buffer buffer,
+    Buffer virtualBuffer,
+    Offset offset,
+    int w,
+    int h,
+    int childWidth,
+    int scrollOffset,
+  ) {
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        final srcX = scrollOffset + x;
+        if (srcX >= childWidth) break;
+        var char = virtualBuffer.getCharacter(srcX, y);
+        if ((x == 0 && char == '') || (x == w - 1 && isWideGrapheme(char))) {
+          char = ' ';
+        }
+        _mergeVirtualCell(
+          buffer,
+          virtualBuffer,
+          srcX,
+          y,
+          offset.dx + x,
+          offset.dy + y,
+          char,
+        );
+      }
+    }
+  }
+
+  static void _mergeVirtualCell(
+    Buffer buffer,
+    Buffer virtualBuffer,
+    int srcX,
+    int srcY,
+    int dstX,
+    int dstY,
+    String char,
+  ) {
+    final vFg = virtualBuffer.getForeground(srcX, srcY);
+    final vBg = virtualBuffer.getBackground(srcX, srcY);
+    final vMod = virtualBuffer.getModifiers(srcX, srcY);
+    final vUl = virtualBuffer.getUnderlineColor(srcX, srcY);
+    final vUri = virtualBuffer.getUri(srcX, srcY);
+
+    final targetFg = buffer.getForeground(dstX, dstY);
+    final targetBg = buffer.getBackground(dstX, dstY);
+    final targetMod = buffer.getModifiers(dstX, dstY);
+
+    var mergedMod = Modifier.mergeLayered(vMod, targetMod);
+    if ((vMod & Modifier.transparent) == 0) {
+      mergedMod &= ~Modifier.transparent;
+    }
+
+    buffer.setAttributes(
+      dstX,
+      dstY,
+      char: char,
+      fg: vFg != 0 ? vFg : targetFg,
+      bg: vBg != 0 ? vBg : targetBg,
+      modifiers: mergedMod,
+      underlineColor: vUl != 0 ? vUl : buffer.getUnderlineColor(dstX, dstY),
+      uri: vUri ?? buffer.getUri(dstX, dstY),
+    );
   }
 }

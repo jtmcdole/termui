@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:archive/archive.dart';
 import 'package:test/test.dart';
-import 'package:termui/ui/buffer.dart';
+import 'package:termui/termui.dart';
 import 'package:termui_recorder/termui_recorder.dart';
 
 void main() {
@@ -141,6 +141,48 @@ void main() {
         // The last line should represent the final frame output event
         final lastLineJson = jsonDecode(castLines.last) as List<Object?>;
         expect(lastLineJson[1], equals('o')); // output sequence
+      },
+    );
+
+    test(
+      'highlights cells differing only in SGR 58 underlineColor or OSC 8 uri in .diff output',
+      () {
+        final expected = Buffer.blank(5, 1)
+          ..writeString(
+            0,
+            0,
+            'Link!',
+            const Style(
+              underlineStyle: UnderlineStyle.curly,
+              underlineColor: Color(10, 20, 30),
+              uri: 'https://expected.dev',
+            ),
+          );
+        final actual = Buffer.blank(5, 1)
+          ..writeString(
+            0,
+            0,
+            'Link!',
+            const Style(
+              underlineStyle: UnderlineStyle.curly,
+              underlineColor: Color(99, 88, 77),
+              uri: 'https://actual.dev',
+            ),
+          );
+
+        final goldenPath = '${tempDir.path}/aux_diff.ansi';
+        File(goldenPath)
+          ..createSync(recursive: true)
+          ..writeAsStringSync(AnsiScreenshot.capture(expected));
+
+        expect(
+          () => expect(actual, matchesAnsiGolden(goldenPath)),
+          throwsA(isA<TestFailure>()),
+        );
+        expect(
+          File('$goldenPath.diff').readAsStringSync(),
+          contains('48;2;128;0;0m'),
+        );
       },
     );
   });

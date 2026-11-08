@@ -27,6 +27,9 @@ class Viewport implements Buffer {
   bool get hasUnderlineColors => parent.hasUnderlineColors;
 
   @override
+  bool get hasUris => parent.hasUris;
+
+  @override
   int get width => bounds.width;
   @override
   set width(int val) =>
@@ -122,6 +125,81 @@ class Viewport implements Buffer {
   }
 
   @override
+  String? getUri(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return null;
+    return parent.getUri(bounds.x + x, bounds.y + y);
+  }
+
+  @override
+  void setUri(int x, int y, String? uri) {
+    if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
+      parent.setUri(bounds.x + x, bounds.y + y, uri);
+    }
+  }
+
+  @override
+  int getUnderlineColorAt(int cellIdx) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
+  void setUnderlineColorAt(int cellIdx, int ulColor) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
+  String? getUriAt(int cellIdx) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
+  void setUriAt(int cellIdx, String? uri) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
+  void copyCellAuxAt(Buffer source, int dstIdx, int srcIdx) =>
+      throw UnsupportedError(
+        'Flat cell index access not supported on Viewport',
+      );
+
+  @override
+  void clearCellAuxRange(int start, int end) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
+  void copyCellAuxRangeFrom(
+    Buffer source,
+    int dstStart,
+    int srcStart,
+    int count,
+  ) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
+  Uint32List? sliceUnderlineColors(int start, int end) =>
+      throw UnsupportedError(
+        'Flat cell index access not supported on Viewport',
+      );
+
+  @override
+  List<String?>? sliceUris(int start, int end) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
+  void writeCellAuxSlices(
+    int dstStart,
+    int count, {
+    Uint32List? underlineColors,
+    List<String?>? uris,
+  }) => throw UnsupportedError(
+    'Flat cell index access not supported on Viewport',
+  );
+
+  @override
   List<RegisteredEffect> get effects => parent.effects;
 
   @override
@@ -148,6 +226,36 @@ class Viewport implements Buffer {
     if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return null;
     return parent.lookupKittyImage(bounds.x + x, bounds.y + y, imageId);
   }
+
+  @override
+  void propagateMetadataFrom(
+    Buffer source, {
+    int dx = 0,
+    int dy = 0,
+    Rect? clip,
+  }) {
+    final vpClip = clip == null
+        ? bounds
+        : bounds.intersect(
+            Rect(bounds.x + clip.x, bounds.y + clip.y, clip.width, clip.height),
+          );
+    if (vpClip.width <= 0 || vpClip.height <= 0) return;
+    parent.propagateMetadataFrom(
+      source,
+      dx: bounds.x + dx,
+      dy: bounds.y + dy,
+      clip: vpClip,
+    );
+  }
+
+  @override
+  bool cellsEqual(int x, int y, Buffer other, int ox, int oy) =>
+      getCharacter(x, y) == other.getCharacter(ox, oy) &&
+      getForeground(x, y) == other.getForeground(ox, oy) &&
+      getBackground(x, y) == other.getBackground(ox, oy) &&
+      getModifiers(x, y) == other.getModifiers(ox, oy) &&
+      getUnderlineColor(x, y) == other.getUnderlineColor(ox, oy) &&
+      getUri(x, y) == other.getUri(ox, oy);
 
   @override
   void addEffect(RegisteredEffect effect) {
@@ -204,6 +312,7 @@ class Viewport implements Buffer {
     int mod, {
     bool? blend,
     int underlineColor = 0,
+    String? uri,
   }) {
     if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
       parent.setCell(
@@ -215,6 +324,7 @@ class Viewport implements Buffer {
         mod,
         blend: blend,
         underlineColor: underlineColor,
+        uri: uri,
       );
     }
   }
@@ -228,6 +338,7 @@ class Viewport implements Buffer {
     int? bg,
     int? modifiers,
     int? underlineColor,
+    String? uri,
     bool? blend,
   }) {
     if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return;
@@ -239,6 +350,7 @@ class Viewport implements Buffer {
       bg: bg,
       modifiers: modifiers,
       underlineColor: underlineColor,
+      uri: uri,
       blend: blend,
     );
   }
@@ -252,6 +364,7 @@ class Viewport implements Buffer {
       fg: 0,
       bg: 0,
       underlineColor: 0,
+      uri: '',
       blend: false,
     );
   }
@@ -263,6 +376,7 @@ class Viewport implements Buffer {
     int? bg,
     int? modifiers,
     int? underlineColor,
+    String? uri,
     bool? blend,
   }) {
     fillRect(
@@ -272,6 +386,7 @@ class Viewport implements Buffer {
       bg: bg,
       modifiers: modifiers,
       underlineColor: underlineColor,
+      uri: uri,
       blend: blend,
     );
   }
@@ -284,6 +399,7 @@ class Viewport implements Buffer {
     int? bg,
     int? modifiers,
     int? underlineColor,
+    String? uri,
     bool? blend,
   }) {
     if (rect.width <= 0 || rect.height <= 0) return;
@@ -298,6 +414,7 @@ class Viewport implements Buffer {
       bg: bg,
       modifiers: modifiers,
       underlineColor: underlineColor,
+      uri: uri,
       blend: blend,
     );
   }
@@ -319,114 +436,100 @@ class Viewport implements Buffer {
   @override
   void writeString(int x, int y, String text, Style style) {
     final startX = x;
-    final chars = text.characters;
     var currentX = x;
     var currentY = y;
 
-    for (final char in chars) {
+    for (final char in text.characters) {
       if (char == '\n') {
         currentX = startX;
         currentY++;
         continue;
       }
-      if (currentX >= 0 &&
-          currentX < bounds.width &&
-          currentY >= 0 &&
-          currentY < bounds.height) {
-        // Clear potential wide char we are about to overwrite
-        final currentChar = parent.getCharacter(
-          bounds.x + currentX,
-          bounds.y + currentY,
-        );
-        if (currentChar == '') {
-          if (currentX - 1 >= 0) {
-            final prevChar = parent.getCharacter(
-              bounds.x + currentX - 1,
-              bounds.y + currentY,
-            );
-            if (isWideGrapheme(prevChar)) {
-              parent.setAttributes(
-                bounds.x + currentX - 1,
-                bounds.y + currentY,
-                char: ' ',
-              );
-            }
-          }
-        } else if (isWideGrapheme(currentChar)) {
-          if (currentX + 1 < bounds.width) {
-            final nextChar = parent.getCharacter(
-              bounds.x + currentX + 1,
-              bounds.y + currentY,
-            );
-            if (nextChar == '') {
-              parent.setAttributes(
-                bounds.x + currentX + 1,
-                bounds.y + currentY,
-                char: ' ',
-              );
-            }
-          }
-        }
-
-        final isWide = isWideGrapheme(char);
-        if (isWide && currentX == bounds.width - 1) {
-          // Can't fit wide character in the last column, write a space instead
-          parent.setAttributes(
-            bounds.x + currentX,
-            bounds.y + currentY,
-            char: ' ',
-            fg: style.foreground?.argb ?? 0,
-            bg: style.background?.argb,
-            modifiers: style.modifiers,
-          );
-          currentX += 1;
-        } else {
-          parent.setAttributes(
-            bounds.x + currentX,
-            bounds.y + currentY,
-            char: char,
-            fg: style.foreground?.argb ?? 0,
-            bg: style.background?.argb,
-            modifiers: style.modifiers,
-          );
-          if (isWide) {
-            if (currentX + 1 < bounds.width) {
-              // Clear potential wide char we are overwriting in the next cell
-              final nextChar = parent.getCharacter(
-                bounds.x + currentX + 1,
-                bounds.y + currentY,
-              );
-              if (isWideGrapheme(nextChar) && currentX + 2 < bounds.width) {
-                final nextNextChar = parent.getCharacter(
-                  bounds.x + currentX + 2,
-                  bounds.y + currentY,
-                );
-                if (nextNextChar == '') {
-                  parent.setAttributes(
-                    bounds.x + currentX + 2,
-                    bounds.y + currentY,
-                    char: ' ',
-                  );
-                }
-              }
-              parent.setAttributes(
-                bounds.x + currentX + 1,
-                bounds.y + currentY,
-                char: '',
-                fg: style.foreground?.argb ?? 0,
-                bg: style.background?.argb,
-                modifiers: style.modifiers,
-              );
-            }
-            currentX += 2;
-          } else {
-            currentX += 1;
-          }
-        }
+      if (_isInBounds(currentX, currentY)) {
+        currentX += _writeCharInBounds(currentX, currentY, char, style);
       } else {
         currentX += 1;
       }
     }
+  }
+
+  bool _isInBounds(int x, int y) =>
+      x >= 0 && x < bounds.width && y >= 0 && y < bounds.height;
+
+  void _clearOverwrittenWideChar(int x, int y) {
+    final currentChar = parent.getCharacter(bounds.x + x, bounds.y + y);
+    if (currentChar == '' && x - 1 >= 0) {
+      final prevChar = parent.getCharacter(bounds.x + x - 1, bounds.y + y);
+      if (isWideGrapheme(prevChar)) {
+        parent.setAttributes(bounds.x + x - 1, bounds.y + y, char: ' ');
+      }
+    } else if (isWideGrapheme(currentChar) && x + 1 < bounds.width) {
+      final nextChar = parent.getCharacter(bounds.x + x + 1, bounds.y + y);
+      if (nextChar == '') {
+        parent.setAttributes(bounds.x + x + 1, bounds.y + y, char: ' ');
+      }
+    }
+  }
+
+  void _clearNextWideFollower(int x, int y) {
+    final nextChar = parent.getCharacter(bounds.x + x + 1, bounds.y + y);
+    if (isWideGrapheme(nextChar) && x + 2 < bounds.width) {
+      final nextNextChar = parent.getCharacter(bounds.x + x + 2, bounds.y + y);
+      if (nextNextChar == '') {
+        parent.setAttributes(bounds.x + x + 2, bounds.y + y, char: ' ');
+      }
+    }
+  }
+
+  int _writeCharInBounds(int x, int y, String char, Style style) {
+    _clearOverwrittenWideChar(x, y);
+    final isWide = isWideGrapheme(char);
+    final fg = style.foreground?.argb ?? 0;
+    final bg = style.background?.argb;
+    final mod = style.modifiers;
+    final ulColor = style.underlineColor?.argb ?? 0;
+    final uri = style.uri ?? '';
+
+    if (isWide && x == bounds.width - 1) {
+      parent.setAttributes(
+        bounds.x + x,
+        bounds.y + y,
+        char: ' ',
+        fg: fg,
+        bg: bg,
+        modifiers: mod,
+        underlineColor: ulColor,
+        uri: uri,
+      );
+      return 1;
+    }
+
+    parent.setAttributes(
+      bounds.x + x,
+      bounds.y + y,
+      char: char,
+      fg: fg,
+      bg: bg,
+      modifiers: mod,
+      underlineColor: ulColor,
+      uri: uri,
+    );
+    if (!isWide) return 1;
+
+    if (x + 1 < bounds.width) {
+      _clearNextWideFollower(x, y);
+      parent.setAttributes(
+        bounds.x + x + 1,
+        bounds.y + y,
+        char: '',
+        fg: fg,
+        bg: bg,
+        modifiers: mod,
+        underlineColor: ulColor,
+        uri: uri,
+      );
+    }
+    return 2;
   }
 }
 

@@ -88,30 +88,11 @@ extension EffectHelpers on Buffer {
   }
 
   void _reverseRow(int startX, int y, int start, int end) {
-    final rowOffset = y * width;
     while (start < end) {
       final cx1 = startX + start;
       final cx2 = startX + end;
       if (cx1 >= 0 && cx1 < width && cx2 >= 0 && cx2 < width) {
-        final idx1 = rowOffset + cx1;
-        final idx2 = rowOffset + cx2;
-        final idx1Attr = idx1 * 3;
-        final idx2Attr = idx2 * 3;
-
-        final tempChar = characters[idx1];
-        final tempFg = attributes[idx1Attr + 0];
-        final tempBg = attributes[idx1Attr + 1];
-        final tempMod = attributes[idx1Attr + 2];
-
-        characters[idx1] = characters[idx2];
-        attributes[idx1Attr + 0] = attributes[idx2Attr + 0];
-        attributes[idx1Attr + 1] = attributes[idx2Attr + 1];
-        attributes[idx1Attr + 2] = attributes[idx2Attr + 2];
-
-        characters[idx2] = tempChar;
-        attributes[idx2Attr + 0] = tempFg;
-        attributes[idx2Attr + 1] = tempBg;
-        attributes[idx2Attr + 2] = tempMod;
+        _swapCells(cx1, y, cx2, y);
       }
       start++;
       end--;
@@ -140,28 +121,43 @@ extension EffectHelpers on Buffer {
       final cy1 = startY + start;
       final cy2 = startY + end;
       if (cy1 >= 0 && cy1 < height && cy2 >= 0 && cy2 < height) {
-        final idx1 = cy1 * width + x;
-        final idx2 = cy2 * width + x;
-        final idx1Attr = idx1 * 3;
-        final idx2Attr = idx2 * 3;
-
-        final tempChar = characters[idx1];
-        final tempFg = attributes[idx1Attr + 0];
-        final tempBg = attributes[idx1Attr + 1];
-        final tempMod = attributes[idx1Attr + 2];
-
-        characters[idx1] = characters[idx2];
-        attributes[idx1Attr + 0] = attributes[idx2Attr + 0];
-        attributes[idx1Attr + 1] = attributes[idx2Attr + 1];
-        attributes[idx1Attr + 2] = attributes[idx2Attr + 2];
-
-        characters[idx2] = tempChar;
-        attributes[idx2Attr + 0] = tempFg;
-        attributes[idx2Attr + 1] = tempBg;
-        attributes[idx2Attr + 2] = tempMod;
+        _swapCells(x, cy1, x, cy2);
       }
       start++;
       end--;
+    }
+  }
+
+  void _swapCells(int x1, int y1, int x2, int y2) {
+    final idx1 = y1 * width + x1;
+    final idx2 = y2 * width + x2;
+    final idx1Attr = idx1 * 3;
+    final idx2Attr = idx2 * 3;
+
+    final tempChar = characters[idx1];
+    final tempFg = attributes[idx1Attr + 0];
+    final tempBg = attributes[idx1Attr + 1];
+    final tempMod = attributes[idx1Attr + 2];
+
+    characters[idx1] = characters[idx2];
+    attributes[idx1Attr + 0] = attributes[idx2Attr + 0];
+    attributes[idx1Attr + 1] = attributes[idx2Attr + 1];
+    attributes[idx1Attr + 2] = attributes[idx2Attr + 2];
+
+    characters[idx2] = tempChar;
+    attributes[idx2Attr + 0] = tempFg;
+    attributes[idx2Attr + 1] = tempBg;
+    attributes[idx2Attr + 2] = tempMod;
+
+    if (hasUnderlineColors) {
+      final tempUl = getUnderlineColor(x1, y1);
+      setUnderlineColor(x1, y1, getUnderlineColor(x2, y2));
+      setUnderlineColor(x2, y2, tempUl);
+    }
+    if (hasUris) {
+      final tempUri = getUri(x1, y1);
+      setUri(x1, y1, getUri(x2, y2));
+      setUri(x2, y2, tempUri);
     }
   }
 
@@ -190,7 +186,10 @@ extension EffectHelpers on Buffer {
             attributes[attrIdx + 0] = fgVal;
           }
         } else if (blend == BlendOption.addModifiers) {
-          attributes[attrIdx + 2] |= styleMods;
+          attributes[attrIdx + 2] = Modifier.mergeLayered(
+            styleMods,
+            attributes[attrIdx + 2],
+          );
         }
       }
     }
@@ -221,7 +220,10 @@ extension EffectHelpers on Buffer {
             attributes[attrIdx + 1] = bgVal;
           }
         } else if (blend == BlendOption.addModifiers) {
-          attributes[attrIdx + 2] |= styleMods;
+          attributes[attrIdx + 2] = Modifier.mergeLayered(
+            styleMods,
+            attributes[attrIdx + 2],
+          );
         }
       }
     }
