@@ -24,6 +24,9 @@ class Viewport implements Buffer {
   bool get defaultBlend => parent.defaultBlend;
 
   @override
+  bool get hasUnderlineColors => parent.hasUnderlineColors;
+
+  @override
   int get width => bounds.width;
   @override
   set width(int val) =>
@@ -106,6 +109,19 @@ class Viewport implements Buffer {
   }
 
   @override
+  int getUnderlineColor(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return 0;
+    return parent.getUnderlineColor(bounds.x + x, bounds.y + y);
+  }
+
+  @override
+  void setUnderlineColor(int x, int y, int ulColor) {
+    if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
+      parent.setUnderlineColor(bounds.x + x, bounds.y + y, ulColor);
+    }
+  }
+
+  @override
   List<RegisteredEffect> get effects => parent.effects;
 
   @override
@@ -162,6 +178,7 @@ class Viewport implements Buffer {
     int bg,
     int mod, {
     bool? blend,
+    int underlineColor = 0,
   }) {
     if (x >= 0 && x < bounds.width && y >= 0 && y < bounds.height) {
       parent.setCell(
@@ -172,6 +189,7 @@ class Viewport implements Buffer {
         bg,
         mod,
         blend: blend,
+        underlineColor: underlineColor,
       );
     }
   }
@@ -184,6 +202,7 @@ class Viewport implements Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    int? underlineColor,
     bool? blend,
   }) {
     if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return;
@@ -194,6 +213,7 @@ class Viewport implements Buffer {
       fg: fg,
       bg: bg,
       modifiers: modifiers,
+      underlineColor: underlineColor,
       blend: blend,
     );
   }
@@ -206,6 +226,7 @@ class Viewport implements Buffer {
       modifiers: Modifier.transparent,
       fg: 0,
       bg: 0,
+      underlineColor: 0,
       blend: false,
     );
   }
@@ -216,6 +237,7 @@ class Viewport implements Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    int? underlineColor,
     bool? blend,
   }) {
     fillRect(
@@ -224,6 +246,7 @@ class Viewport implements Buffer {
       fg: fg,
       bg: bg,
       modifiers: modifiers,
+      underlineColor: underlineColor,
       blend: blend,
     );
   }
@@ -235,6 +258,7 @@ class Viewport implements Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    int? underlineColor,
     bool? blend,
   }) {
     if (rect.width <= 0 || rect.height <= 0) return;
@@ -248,6 +272,7 @@ class Viewport implements Buffer {
       fg: fg,
       bg: bg,
       modifiers: modifiers,
+      underlineColor: underlineColor,
       blend: blend,
     );
   }

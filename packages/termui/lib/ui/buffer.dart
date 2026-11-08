@@ -60,6 +60,12 @@ class Buffer {
   /// layout: [fg, bg, mod, fg, bg, mod...]
   Uint32List attributes;
 
+  /// Lazily allocated array of per-cell SGR 58 underline colors (`0` = default foreground).
+  Uint32List? _underlineColors;
+
+  /// Whether any cell in this buffer has a non-zero custom underline color.
+  bool get hasUnderlineColors => _underlineColors != null;
+
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
 
@@ -143,6 +149,25 @@ class Buffer {
     return attributes[(y * width + x) * 3 + 2];
   }
 
+  /// Gets the SGR 58 underline color at ([x], [y]), or `0` when using the foreground color.
+  int getUnderlineColor(int x, int y) {
+    final ul = _underlineColors;
+    if (ul == null || !isCellValid(x, y)) return 0;
+    return ul[y * width + x];
+  }
+
+  /// Sets the SGR 58 underline color at ([x], [y]) (`0` resets to default foreground).
+  void setUnderlineColor(int x, int y, int ulColor) {
+    if (!isCellValid(x, y)) return;
+    _setUnderlineColorAt(y * width + x, ulColor);
+  }
+
+  @pragma('vm:prefer-inline')
+  void _setUnderlineColorAt(int cellIdx, int ulColor) {
+    if (ulColor == 0 && _underlineColors == null) return;
+    (_underlineColors ??= Uint32List(width * height))[cellIdx] = ulColor;
+  }
+
   /// Sets character at coordinates.
   ///
   /// **Performance Warning:**
@@ -212,6 +237,7 @@ class Buffer {
     attributes[attrIdx + 0] = 0;
     attributes[attrIdx + 1] = 0;
     attributes[attrIdx + 2] = _emptyModifiers;
+    _underlineColors?[cellIdx] = 0;
   }
 
   @pragma('vm:prefer-inline')
@@ -220,6 +246,7 @@ class Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    int? underlineColor,
     required bool blend,
   }) {
     if (fg != null) {
@@ -234,6 +261,11 @@ class Buffer {
     }
     if (modifiers != null) {
       attributes[attrIdx + 2] = modifiers;
+    }
+    if (underlineColor != null &&
+        (underlineColor != 0 || _underlineColors != null)) {
+      (_underlineColors ??= Uint32List(width * height))[attrIdx ~/ 3] =
+          underlineColor;
     }
   }
 
@@ -265,14 +297,20 @@ class Buffer {
     int bg,
     int mod, {
     bool? blend,
+    int underlineColor = 0,
   }) {
     if (isCellValid(x, y)) {
       final useBlend = blend ?? defaultBlend;
-      final idx = (y * width + x) * 3;
-      characters[y * width + x] = char;
+      final cellIdx = y * width + x;
+      final idx = cellIdx * 3;
+      characters[cellIdx] = char;
       attributes[idx + 0] = useBlend ? blendColor(fg, attributes[idx + 0]) : fg;
       attributes[idx + 1] = useBlend ? blendColor(bg, attributes[idx + 1]) : bg;
       attributes[idx + 2] = mod;
+      if (underlineColor != 0 || _underlineColors != null) {
+        (_underlineColors ??= Uint32List(width * height))[cellIdx] =
+            underlineColor;
+      }
     }
   }
 
@@ -308,6 +346,7 @@ class Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    int? underlineColor,
     bool? blend,
   }) {
     if (!isCellValid(x, y)) return;
@@ -324,6 +363,7 @@ class Buffer {
       fg: fg,
       bg: bg,
       modifiers: modifiers,
+      underlineColor: underlineColor,
       blend: useBlend,
     );
     if (isWide && x + 1 < width) {
@@ -332,6 +372,7 @@ class Buffer {
         fg: fg,
         bg: bg,
         modifiers: modifiers,
+        underlineColor: underlineColor,
         blend: useBlend,
       );
     }
@@ -343,6 +384,7 @@ class Buffer {
     try {
       characters.fillRange(0, characters.length, ' ');
       attributes.fillRange(0, attributes.length, 0);
+      _underlineColors?.fillRange(0, _underlineColors!.length, 0);
       for (var i = 2; i < attributes.length; i += 3) {
         attributes[i] = Modifier.transparent;
       }
@@ -358,10 +400,16 @@ class Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    int? underlineColor,
     bool? blend,
   }) {
     if (char != null) characters.fillRange(0, characters.length, char);
-    if (fg == null && bg == null && modifiers == null) return;
+    if (fg == null &&
+        bg == null &&
+        modifiers == null &&
+        underlineColor == null) {
+      return;
+    }
     final useBlend = blend ?? defaultBlend;
     for (var i = 0; i < characters.length; i++) {
       _writeCellAttributes(
@@ -369,6 +417,7 @@ class Buffer {
         fg: fg,
         bg: bg,
         modifiers: modifiers,
+        underlineColor: underlineColor,
         blend: useBlend,
       );
     }
@@ -381,6 +430,7 @@ class Buffer {
     int? fg,
     int? bg,
     int? modifiers,
+    int? underlineColor,
     bool? blend,
   }) {
     final clipped = _clipStack.isEmpty ? rect : activeClip.intersect(rect);
@@ -400,7 +450,12 @@ class Buffer {
       }
     }
 
-    if (fg == null && bg == null && modifiers == null) return;
+    if (fg == null &&
+        bg == null &&
+        modifiers == null &&
+        underlineColor == null) {
+      return;
+    }
     final useBlend = blend ?? defaultBlend;
     for (var y = startY; y < endY; y++) {
       final rowOffset = y * width;
@@ -410,6 +465,7 @@ class Buffer {
           fg: fg,
           bg: bg,
           modifiers: modifiers,
+          underlineColor: underlineColor,
           blend: useBlend,
         );
       }
@@ -454,6 +510,8 @@ class Buffer {
       newHeight = max(0, newHeight);
       final newChars = List.filled(newWidth * newHeight, ' ');
       final newAttributes = Uint32List(newWidth * newHeight * 3);
+      final oldUl = _underlineColors;
+      final newUl = oldUl != null ? Uint32List(newWidth * newHeight) : null;
 
       if (_emptyModifiers != 0) {
         for (var i = 2; i < newAttributes.length; i += 3) {
@@ -474,6 +532,14 @@ class Buffer {
             characters,
             sourceCharStart,
           );
+          if (newUl != null && oldUl != null) {
+            newUl.setRange(
+              targetCharStart,
+              targetCharStart + overlapWidth,
+              oldUl,
+              sourceCharStart,
+            );
+          }
 
           final targetAttrStart = y * newWidth * 3;
           final sourceAttrStart = y * width * 3;
@@ -490,6 +556,7 @@ class Buffer {
       height = newHeight;
       characters = newChars;
       attributes = newAttributes;
+      _underlineColors = newUl;
       _boundsClip = Rect(0, 0, width, height);
     } finally {
       Tracer.record(_traceResizeId, Phase.end, TraceCategory.layout);
@@ -525,6 +592,7 @@ class Buffer {
     int fg,
     int bg,
     int modifiers,
+    int ulColor,
     bool hasFg,
     bool hasBg,
   ) {
@@ -535,6 +603,9 @@ class Buffer {
       attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
     }
     attributes[attrIdx + 2] = modifiers;
+    if (ulColor != 0 || _underlineColors != null) {
+      (_underlineColors ??= Uint32List(width * height))[idx] = ulColor;
+    }
   }
 
   void _writeAsciiString(int x, int y, String text, Style style) {
@@ -542,6 +613,7 @@ class Buffer {
     var currentY = y;
     final fg = style.foreground?.argb ?? 0;
     final bg = style.background?.argb ?? 0;
+    final ulColor = style.underlineColor?.argb ?? 0;
     final modifiers = style.modifiers;
     final hasFg = style.foreground != null;
     final hasBg = style.background != null;
@@ -563,6 +635,7 @@ class Buffer {
           fg,
           bg,
           modifiers,
+          ulColor,
           hasFg,
           hasBg,
         );
@@ -579,6 +652,7 @@ class Buffer {
     int fg,
     int bg,
     int modifiers,
+    int ulColor,
     bool hasFg,
     bool hasBg,
   ) {
@@ -588,10 +662,10 @@ class Buffer {
     if (isWide &&
         (currentX == width - 1 || !isCellValid(currentX + 1, currentY))) {
       // Can't fit wide character in the last column or clip edge, write a space instead
-      _writeStyledCellRaw(idx, ' ', fg, bg, modifiers, hasFg, hasBg);
+      _writeStyledCellRaw(idx, ' ', fg, bg, modifiers, ulColor, hasFg, hasBg);
       return;
     }
-    _writeStyledCellRaw(idx, char, fg, bg, modifiers, hasFg, hasBg);
+    _writeStyledCellRaw(idx, char, fg, bg, modifiers, ulColor, hasFg, hasBg);
     if (!isWide || currentX + 1 >= width) return;
     final nextIdx = idx + 1;
     if (isWideGrapheme(characters[nextIdx]) &&
@@ -599,7 +673,7 @@ class Buffer {
         characters[idx + 2] == '') {
       characters[idx + 2] = ' ';
     }
-    _writeStyledCellRaw(nextIdx, '', fg, bg, modifiers, hasFg, hasBg);
+    _writeStyledCellRaw(nextIdx, '', fg, bg, modifiers, ulColor, hasFg, hasBg);
   }
 
   /// Writes styled [text] to the buffer starting at ([x], [y]).
@@ -618,6 +692,7 @@ class Buffer {
     var currentY = y;
     final fg = style.foreground?.argb ?? 0;
     final bg = style.background?.argb ?? 0;
+    final ulColor = style.underlineColor?.argb ?? 0;
     final modifiers = style.modifiers;
     final hasFg = style.foreground != null;
     final hasBg = style.background != null;
@@ -638,6 +713,7 @@ class Buffer {
         fg,
         bg,
         modifiers,
+        ulColor,
         hasFg,
         hasBg,
       );
@@ -923,6 +999,7 @@ class Compositor {
         sourceFg,
         sourceBg,
         sourceMods,
+        source._underlineColors?[sourceIdx] ?? 0,
         masks,
         word,
         maskBit,
@@ -962,6 +1039,7 @@ class Compositor {
     int sourceFg,
     int sourceBg,
     int sourceMods,
+    int sourceUlColor,
     _CompositeMasks masks,
     int word,
     int maskBit,
@@ -970,12 +1048,14 @@ class Compositor {
     if (sourceChar != ' ') {
       target.characters[targetIdx] = sourceChar;
       target.attributes[targetAttrIdx + 2] = sourceMods;
+      target._setUnderlineColorAt(targetIdx, sourceUlColor);
       masks.charWritten[word] |= maskBit;
       return fgOccluded;
     }
     if (((sourceBg >> 24) & 0xFF) == 255) {
       target.characters[targetIdx] = ' ';
       target.attributes[targetAttrIdx + 2] = sourceMods;
+      target._setUnderlineColorAt(targetIdx, sourceUlColor);
       masks.charWritten[word] |= maskBit;
       if (!fgOccluded && sourceFg == 0) {
         masks.fgWritten[word] |= maskBit;
@@ -1080,6 +1160,10 @@ class Compositor {
         (sourceChar != ' ' || ((sourceBg >> 24) & 0xFF) == 255)) {
       target.characters[targetIdx] = sourceChar;
       target.attributes[targetAttrIdx + 2] = sourceMods;
+      target._setUnderlineColorAt(
+        targetIdx,
+        buf._underlineColors?[sourceIdx] ?? 0,
+      );
     }
 
     target.attributes[targetAttrIdx] = blendColor(

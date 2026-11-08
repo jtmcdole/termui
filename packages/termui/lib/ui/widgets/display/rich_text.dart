@@ -192,7 +192,35 @@ class RichText extends Widget {
     if (maxWidth <= 0) return [];
     if (allChars.isEmpty) return [[]];
 
-    // Tokenize characters into words, spaces, and newlines
+    final tokens = _tokenizeStyledChars(allChars);
+    final lines = <List<StyledChar>>[];
+    var currentLine = <StyledChar>[];
+
+    for (final token in tokens) {
+      if (token.isNewline) {
+        lines.add(currentLine);
+        currentLine = <StyledChar>[];
+      } else if (token.isWhitespace) {
+        currentLine = _appendWhitespaceToken(
+          lines,
+          currentLine,
+          token,
+          maxWidth,
+        );
+      } else {
+        currentLine = _appendWordToken(lines, currentLine, token, maxWidth);
+      }
+    }
+
+    if (currentLine.isNotEmpty) {
+      _trimTrailingSpaces(currentLine);
+      lines.add(currentLine);
+    }
+
+    return lines;
+  }
+
+  static List<StyledToken> _tokenizeStyledChars(List<StyledChar> allChars) {
     final tokens = <StyledToken>[];
     var i = 0;
     while (i < allChars.length) {
@@ -201,98 +229,77 @@ class RichText extends Widget {
         tokens.add(StyledToken([allChars[i]], isNewline: true));
         i++;
       } else if (char == ' ') {
-        final spaces = <StyledChar>[];
-        while (i < allChars.length && allChars[i].char == ' ') {
-          spaces.add(allChars[i]);
-          i++;
-        }
-        tokens.add(StyledToken(spaces, isWhitespace: true));
+        final end = _scanRunEnd(allChars, i, whitespace: true);
+        tokens.add(StyledToken(allChars.sublist(i, end), isWhitespace: true));
+        i = end;
       } else {
-        final word = <StyledChar>[];
-        while (i < allChars.length &&
-            allChars[i].char != ' ' &&
-            allChars[i].char != '\n') {
-          word.add(allChars[i]);
-          i++;
-        }
-        tokens.add(StyledToken(word));
+        final end = _scanRunEnd(allChars, i, whitespace: false);
+        tokens.add(StyledToken(allChars.sublist(i, end)));
+        i = end;
       }
     }
+    return tokens;
+  }
 
-    // Wrap tokens into lines
-    final lines = <List<StyledChar>>[];
-    var currentLine = <StyledChar>[];
-
-    for (final token in tokens) {
-      if (token.isNewline) {
-        lines.add(currentLine);
-        currentLine = <StyledChar>[];
-        continue;
-      }
-
-      if (token.isWhitespace) {
-        if (currentLine.isEmpty) {
-          // Skip leading whitespace on a new line
-          continue;
-        }
-        if (currentLine.length + token.length <= maxWidth) {
-          currentLine.addAll(token.chars);
-        } else {
-          // Commit line, drop trailing whitespace
-          lines.add(currentLine);
-          currentLine = <StyledChar>[];
-        }
-        continue;
-      }
-
-      // It's a word token
-      if (currentLine.isEmpty) {
-        if (token.length <= maxWidth) {
-          currentLine.addAll(token.chars);
-        } else {
-          // Force split long word
-          var remainingChars = token.chars;
-          while (remainingChars.length > maxWidth) {
-            lines.add(remainingChars.sublist(0, maxWidth));
-            remainingChars = remainingChars.sublist(maxWidth);
-          }
-          currentLine.addAll(remainingChars);
-        }
-      } else {
-        if (currentLine.length + token.length <= maxWidth) {
-          currentLine.addAll(token.chars);
-        } else {
-          // Remove any trailing whitespace from the line before committing
-          while (currentLine.isNotEmpty && currentLine.last.char == ' ') {
-            currentLine.removeLast();
-          }
-          lines.add(currentLine);
-          currentLine = <StyledChar>[];
-
-          if (token.length <= maxWidth) {
-            currentLine.addAll(token.chars);
-          } else {
-            // Force split long word
-            var remainingChars = token.chars;
-            while (remainingChars.length > maxWidth) {
-              lines.add(remainingChars.sublist(0, maxWidth));
-              remainingChars = remainingChars.sublist(maxWidth);
-            }
-            currentLine.addAll(remainingChars);
-          }
-        }
-      }
+  static int _scanRunEnd(
+    List<StyledChar> allChars,
+    int start, {
+    required bool whitespace,
+  }) {
+    var i = start;
+    while (i < allChars.length) {
+      final c = allChars[i].char;
+      if (c == '\n' || (c == ' ') != whitespace) break;
+      i++;
     }
+    return i;
+  }
 
-    if (currentLine.isNotEmpty) {
-      // Remove trailing whitespace before committing last line
-      while (currentLine.isNotEmpty && currentLine.last.char == ' ') {
-        currentLine.removeLast();
-      }
-      lines.add(currentLine);
+  static List<StyledChar> _appendWhitespaceToken(
+    List<List<StyledChar>> lines,
+    List<StyledChar> currentLine,
+    StyledToken token,
+    int maxWidth,
+  ) {
+    if (currentLine.isEmpty) return currentLine;
+    if (currentLine.length + token.length <= maxWidth) {
+      currentLine.addAll(token.chars);
+      return currentLine;
     }
+    lines.add(currentLine);
+    return <StyledChar>[];
+  }
 
-    return lines;
+  static List<StyledChar> _appendWordToken(
+    List<List<StyledChar>> lines,
+    List<StyledChar> currentLine,
+    StyledToken token,
+    int maxWidth,
+  ) {
+    if (currentLine.isNotEmpty &&
+        currentLine.length + token.length <= maxWidth) {
+      currentLine.addAll(token.chars);
+      return currentLine;
+    }
+    var targetLine = currentLine;
+    if (targetLine.isNotEmpty) {
+      _trimTrailingSpaces(targetLine);
+      lines.add(targetLine);
+      targetLine = <StyledChar>[];
+    }
+    var remaining = token.chars;
+    while (remaining.length > maxWidth) {
+      lines.add(remaining.sublist(0, maxWidth));
+      remaining = remaining.sublist(maxWidth);
+    }
+    targetLine.addAll(remaining);
+    return targetLine;
+  }
+
+  static void _trimTrailingSpaces(List<StyledChar> line) {
+    while (line.isNotEmpty && line.last.char == ' ') {
+      line.removeLast();
+    }
   }
 }
 
@@ -363,6 +370,7 @@ class RichTextElement extends Element {
           fg: line[x].style.foreground?.argb ?? 0,
           bg: line[x].style.background?.argb ?? 0,
           modifiers: line[x].style.modifiers,
+          underlineColor: line[x].style.underlineColor?.argb ?? 0,
         );
       }
     }
