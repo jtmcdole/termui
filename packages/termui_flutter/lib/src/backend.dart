@@ -32,14 +32,34 @@ final class FlutterTerminalBackend implements TerminalBackend {
   final _mouseCursorController = StreamController<String?>.broadcast();
   final _clipboardController = StreamController<String>.broadcast(sync: true);
   final _pasteRequestController = StreamController<void>.broadcast(sync: true);
+  int _kittyKeyboardFlags = 0;
+  final List<int> _kittyKeyboardStack = [];
+  bool _sgrPixelsMouseMode = false;
 
   static const _esc = '\x1b';
   static const _bel = '\x07';
+  static const int _maxKittyKeyboardStackDepth = 16;
 
   /// Matches OSC 22 sequences. Capture Group 1 extracts the cursor shape name.
   static final RegExp _osc22Regex = RegExp(
     '$_esc\\]22;([^$_esc$_bel]*)(?:$_esc\\\\|$_bel)',
   );
+
+  /// Matches Kitty keyboard protocol push (`>`), pop (`<`), and set (`=`) CSI u sequences.
+  static final RegExp _kittyKeyboardRegex = RegExp(
+    '$_esc\\[(?:>(\\d*)|<(\\d*)|=(\\d+)(?:;(\\d+))?)u',
+  );
+
+  /// Matches DEC private mode set (`h`) and reset (`l`) CSI sequences.
+  static final RegExp _decPrivateModeRegex = RegExp(
+    '$_esc\\[\\?([0-9;]+)([hl])',
+  );
+
+  /// Active Kitty keyboard protocol progressive enhancement flags.
+  int get kittyKeyboardFlags => _kittyKeyboardFlags;
+
+  /// Whether DEC private mode `1016` (SGR-Pixels mouse reporting) is active.
+  bool get sgrPixelsMouseMode => _sgrPixelsMouseMode;
 
   @override
   bool get isWindows => false;
@@ -49,10 +69,96 @@ final class FlutterTerminalBackend implements TerminalBackend {
 
   @override
   void write(String data) {
+    _parseOsc22(data);
+    _parseKittyKeyboard(data);
+    _parseDecPrivateModes(data);
+  }
+
+  void _parseDecPrivateModes(String data) {
+    if (data.contains('${_esc}c') || data.contains('$_esc[!p')) {
+      _sgrPixelsMouseMode = false;
+    }
+    if (!data.contains('$_esc[?')) return;
+    for (final match in _decPrivateModeRegex.allMatches(data)) {
+      _applyDecPrivateModeMatch(match.group(1)!, match.group(2) == 'h');
+    }
+  }
+
+  void _applyDecPrivateModeMatch(String params, bool enable) {
+    for (final part in params.split(';')) {
+      if (part == '1016') {
+        _sgrPixelsMouseMode = enable;
+      }
+    }
+  }
+
+  void _parseOsc22(String data) {
+    if (!data.contains('$_esc]22;')) return;
     final matches = _osc22Regex.allMatches(data);
     if (matches.lastOrNull case final lastMatch?) {
       final cursorName = lastMatch.group(1);
       _mouseCursorController.add(cursorName == '' ? null : cursorName);
+    }
+  }
+
+  void _parseKittyKeyboard(String data) {
+    if (data.contains('${_esc}c') || data.contains('$_esc[!p')) {
+      _kittyKeyboardFlags = 0;
+      _kittyKeyboardStack.clear();
+    }
+    if (!data.contains('$_esc[')) return;
+    for (final match in _kittyKeyboardRegex.allMatches(data)) {
+      _applyKittyKeyboardMatch(match);
+    }
+  }
+
+  void _applyKittyKeyboardMatch(RegExpMatch match) {
+    if (match.group(1) case final pushGroup?) {
+      _pushKittyKeyboardFlags(int.tryParse(pushGroup) ?? 0);
+      return;
+    }
+    if (match.group(2) case final popGroup?) {
+      _popKittyKeyboardFlags(
+        popGroup.isEmpty ? 1 : (int.tryParse(popGroup) ?? 1),
+      );
+      return;
+    }
+    if (match.group(3) case final setGroup?) {
+      final flags = int.tryParse(setGroup) ?? 0;
+      final mode = int.tryParse(match.group(4) ?? '') ?? 1;
+      _setKittyKeyboardFlags(flags, mode);
+    }
+  }
+
+  void _pushKittyKeyboardFlags(int flags) {
+    if (_kittyKeyboardStack.length >= _maxKittyKeyboardStackDepth) {
+      _kittyKeyboardStack.removeAt(0);
+    }
+    _kittyKeyboardStack.add(_kittyKeyboardFlags);
+    _kittyKeyboardFlags = flags & 0x1F;
+  }
+
+  void _popKittyKeyboardFlags(int rawCount) {
+    final count = rawCount <= 0 ? 1 : rawCount;
+    if (count > _kittyKeyboardStack.length) {
+      _kittyKeyboardStack.clear();
+      _kittyKeyboardFlags = 0;
+      return;
+    }
+    for (var i = 0; i < count; i++) {
+      _kittyKeyboardFlags = _kittyKeyboardStack.removeLast();
+    }
+  }
+
+  void _setKittyKeyboardFlags(int flags, int mode) {
+    final masked = flags & 0x1F;
+    switch (mode) {
+      case 1:
+        _kittyKeyboardFlags = masked;
+      case 2:
+        _kittyKeyboardFlags = (_kittyKeyboardFlags | masked) & 0x1F;
+      case 3:
+        _kittyKeyboardFlags = (_kittyKeyboardFlags & ~masked) & 0x1F;
     }
   }
 
@@ -142,7 +248,13 @@ final class FlutterTerminal extends core.Terminal {
   );
   final _initialSizeCompleter = Completer<Point<int>>();
   final _fontSizeController = StreamController<double>.broadcast();
+  final _enableLigaturesController = StreamController<bool>.broadcast();
+  final _cellPixelSizeController = StreamController<(int, int)>.broadcast();
   double _fontSize;
+  bool _enableLigatures;
+  (int, int) _cellPixelSize = (9, 18);
+  bool _explicitReportKeyRelease = false;
+  bool _explicitReportPixelMouse = false;
 
   /// Stream emitting changes to the TUI's requested mouse cursor.
   Stream<String?> get mouseCursorChanges => _flutterBackend.mouseCursorChanges;
@@ -168,8 +280,10 @@ final class FlutterTerminal extends core.Terminal {
   /// | Parameter | Type | Description |
   /// | :--- | :--- | :--- |
   /// | `initialFontSize` | [double] | The starting font size. Defaults to `13.0`. |
-  FlutterTerminal({double initialFontSize = 13.0})
+  /// | `enableLigatures` | [bool] | Whether multi-cell ligatures are enabled. Defaults to `false`. |
+  FlutterTerminal({double initialFontSize = 13.0, bool enableLigatures = false})
     : _fontSize = initialFontSize,
+      _enableLigatures = enableLigatures,
       super(FlutterTerminalBackend());
 
   FlutterTerminalBackend get _flutterBackend =>
@@ -178,8 +292,70 @@ final class FlutterTerminal extends core.Terminal {
   /// Returns the current font size used to render the terminal.
   double get fontSize => _fontSize;
 
+  /// Whether multi-cell ligatures are currently enabled for rendering.
+  bool get enableLigatures => _enableLigatures;
+
+  /// Active Kitty keyboard protocol progressive enhancement flags (`0..31`).
+  int get kittyKeyboardFlags => _flutterBackend.kittyKeyboardFlags;
+
+  /// Whether `KeyUpEvent` transitions should be reported as [core_event.KeyEventType.release].
+  ///
+  /// Enabled when Kitty keyboard protocol bit `2` (`CSI > 2 u` / `CSI = 2 u`) is active
+  /// or when explicitly requested via [setReportKeyReleaseEvents].
+  bool get reportKeyReleaseEvents =>
+      (_flutterBackend.kittyKeyboardFlags & 2) != 0 ||
+      _explicitReportKeyRelease;
+
+  /// Explicitly enables or disables reporting key release events regardless of Kitty flags.
+  void setReportKeyReleaseEvents(bool enabled) {
+    _explicitReportKeyRelease = enabled;
+  }
+
+  /// Whether sub-cell pointer moves should be reported with pixel precision (`?1016` SGR-Pixels).
+  ///
+  /// Enabled when DEC private mode `1016` (`\x1b[?1016h`) is active or when explicitly
+  /// requested via [setReportPixelMouseEvents].
+  bool get reportPixelMouseEvents =>
+      _flutterBackend.sgrPixelsMouseMode || _explicitReportPixelMouse;
+
+  /// Explicitly enables or disables reporting sub-cell pixel pointer motion regardless of `?1016`.
+  void setReportPixelMouseEvents(bool enabled) {
+    _explicitReportPixelMouse = enabled;
+  }
+
   /// A stream that emits the font size whenever it changes.
   Stream<double> watchFontSize() => _fontSizeController.stream;
+
+  /// A stream that emits whether ligatures are enabled whenever changed.
+  Stream<bool> watchEnableLigatures() => _enableLigaturesController.stream;
+
+  /// Current logical pixel dimensions `(width, height)` of a single terminal cell.
+  (int, int) get cellPixelSize => _cellPixelSize;
+
+  /// A stream that emits `(width, height)` cell pixel dimensions whenever the font atlas changes.
+  Stream<(int, int)> watchCellPixelSize() => _cellPixelSizeController.stream;
+
+  /// Updates the logical pixel dimensions of a single terminal cell (`>= 1`).
+  void updateCellPixelSize(int width, int height) {
+    final next = (max(1, width), max(1, height));
+    if (_cellPixelSize != next) {
+      _cellPixelSize = next;
+      if (!_cellPixelSizeController.isClosed) {
+        _cellPixelSizeController.add(next);
+      }
+    }
+  }
+
+  /// Enables or disables multi-cell font ligatures.
+  void setEnableLigatures(bool enabled) {
+    if (_enableLigatures != enabled) {
+      _enableLigatures = enabled;
+      _enableLigaturesController.add(enabled);
+    }
+  }
+
+  /// Toggles multi-cell font ligatures between enabled and disabled.
+  void toggleLigatures() => setEnableLigatures(!_enableLigatures);
 
   /// Sets the rendering font size, clamped between `4.0` and `72.0`.
   ///
@@ -275,6 +451,8 @@ final class FlutterTerminal extends core.Terminal {
   void dispose() {
     _eventsController.close();
     _fontSizeController.close();
+    _enableLigaturesController.close();
+    _cellPixelSizeController.close();
     _flutterBackend.dispose();
     super.dispose();
   }
