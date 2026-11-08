@@ -32,6 +32,12 @@ class PseudoTerminalView extends StatefulWidget {
   });
 
   @override
+  int getIntrinsicHeight(int width) => 24;
+
+  @override
+  int getIntrinsicWidth(int height) => 80;
+
+  @override
   State<PseudoTerminalView> createState() => _PseudoTerminalViewState();
 }
 
@@ -65,6 +71,7 @@ class _PseudoTerminalViewState extends State<PseudoTerminalView> {
   }
 
   void _subscribeToPty(PseudoTerminal pty) {
+    if (Zone.current[#isMeasuringIntrinsics] == true) return;
     _exited = false;
     _outSubscription = pty.out.listen(_terminal.writeString);
     pty.exitCode.then(

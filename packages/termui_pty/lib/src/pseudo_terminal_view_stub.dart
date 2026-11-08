@@ -28,6 +28,12 @@ class PseudoTerminalView extends StatelessWidget {
   });
 
   @override
+  int getIntrinsicHeight(int width) => 24;
+
+  @override
+  int getIntrinsicWidth(int height) => 80;
+
+  @override
   Widget build(BuildContext context) {
     return const SizedBox();
   }
