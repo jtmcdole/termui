@@ -16,18 +16,34 @@ Tinpot is designed to integrate seamlessly with Dart CLI applications (like thos
 ```dart
 import 'dart:io';
 import 'package:image/image.dart' as img;
+import 'package:termui/termui.dart';
 import 'package:termui_tinpot/termui_tinpot.dart';
 
 void main() {
   final image = img.decodeImage(File('image.png').readAsBytesSync())!;
 
-  // Converts image to a 2D array of terminal cells (60 columns, auto-scaled rows)
-  final engine = TermuiTinpot();
-  final grid = engine.convert(image, 60, (60 / (image.width / image.height) / 2).floor());
+  // Converts image to a termui Buffer of terminal cells (60 columns, auto-scaled rows)
+  final engine = TermuiTinpot(workFactor: 5);
+  final rows = (60 / (image.width / image.height) / 2).floor();
+  final buffer = engine.convertBuffer(
+    image,
+    60,
+    rows,
+    useDin99d: true,
+    useMedian: false,
+  );
 
-  // Use Termui or iterate manually to emit standard ANSI color codes
-  // ...
+  // Render inside a termui widget tree via BufferWidget(buffer: buffer)
+  final widget = BufferWidget(buffer: buffer);
 }
+```
+
+## CLI Usage
+
+You can also run the command-line image converter directly via `bin/tinpot.dart`:
+
+```bash
+dart run termui_tinpot:tinpot [options] <image_path>
 ```
 
 > [!WARNING]
