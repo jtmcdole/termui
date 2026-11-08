@@ -154,6 +154,10 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
 
     if (startX < endX && startY < endY) {
       final rowLength = endX - startX;
+      buffer.registerKittyRegistry(
+        Rect(startX, startY, rowLength, endY - startY),
+        w.terminal.imageRegistry,
+      );
       final transparent = w.terminal.transparentBackground;
 
       for (var ty = startY; ty < endY; ty++) {

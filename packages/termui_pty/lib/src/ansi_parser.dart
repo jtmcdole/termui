@@ -25,6 +25,9 @@ abstract interface class TerminalHandler {
   /// Execute an OSC (Operating System Command).
   void osc(int command, String payload);
 
+  /// Execute an APC (Application Program Command).
+  void apc(String payload);
+
   /// Execute a standard Escape sequence.
   void esc(String command);
 }
@@ -41,6 +44,8 @@ enum _ParserState {
   oscEscape,
   dcsString,
   dcsEscape,
+  apcString,
+  apcEscape,
 }
 
 enum _TmuxInner { ignored, payload, pendingSt, terminated }
@@ -49,6 +54,7 @@ enum _TmuxInner { ignored, payload, pendingSt, terminated }
 final class AnsiParser {
   static const int _maxOscLength = 8192;
   static const int _maxOsc52Length = 1_400_000;
+  static const int _maxApcLength = 1_400_000;
   static const int _maxCsiParams = 64;
   static const int _maxCsiSubparams = 16;
   static const int _tmuxHeaderLength = 5;
@@ -75,8 +81,11 @@ final class AnsiParser {
   final List<int> _intermediates = [];
   final List<int> _oscBuffer = [];
   bool _oscOverflowed = false;
+  final List<int> _apcBuffer = [];
+  bool _apcOverflowed = false;
   int _dcsPrefixLen = -1;
   _TmuxInner _tmuxInner = .ignored;
+  bool _tmuxIsApc = false;
 
   /// Creates a new [AnsiParser] instance bound to the given [handler].
   AnsiParser(this.handler);
@@ -92,6 +101,7 @@ final class AnsiParser {
   bool _consumesRawControl(int c) =>
       _state == .oscString ||
       _state == .dcsString ||
+      _state == .apcString ||
       (_state == .dcsEscape && c == 0x1B && _dcsPrefixLen >= _tmuxHeaderLength);
 
   /// Parses a chunk of VT100/ANSI string text and updates the bound handler.
@@ -109,8 +119,9 @@ final class AnsiParser {
   }
 
   void _handleC0Control(int c) {
-    if (_state == .oscEscape || _state == .dcsEscape) {
+    if (_state == .oscEscape || _state == .dcsEscape || _state == .apcEscape) {
       _resetDcs();
+      _resetApc();
       _state = .ground;
     }
     if (c == 0x1B) {
@@ -129,7 +140,7 @@ final class AnsiParser {
   void _dispatchStateChar(int c) {
     switch (_state) {
       case _ParserState.ground:
-        _textBuffer.add(c);
+        _handleGroundChar(c);
       case _ParserState.escape:
         _handleEscape(c);
       case _ParserState.escapeIntermediate:
@@ -152,11 +163,25 @@ final class AnsiParser {
         _handleDcsChar(c);
       case .dcsEscape:
         _handleDcsEscape(c);
+      case _ParserState.apcString:
+        _handleApcChar(c);
+      case _ParserState.apcEscape:
+        _handleApcEscape(c);
     }
   }
 
+  void _handleGroundChar(int c) {
+    if (c == 0x9F) {
+      _flushText();
+      _resetApc();
+      _state = .apcString;
+      return;
+    }
+    _textBuffer.add(c);
+  }
+
   static bool _isControlStringIntroducer(int c) =>
-      c == 0x50 || c == 0x58 || c == 0x5E || c == 0x5F;
+      c == 0x50 || c == 0x58 || c == 0x5E;
 
   void _handleEscape(int c) {
     if (c >= 0x20 && c <= 0x2F) {
@@ -172,6 +197,11 @@ final class AnsiParser {
     if (c == 0x5D) {
       _resetOsc();
       _state = _ParserState.oscString;
+      return;
+    }
+    if (c == 0x5F) {
+      _resetApc();
+      _state = _ParserState.apcString;
       return;
     }
     if (_isControlStringIntroducer(c)) {
@@ -382,10 +412,58 @@ final class AnsiParser {
     _handleEscape(c);
   }
 
+  void _handleApcChar(int c) {
+    switch (c) {
+      case 0x07 || 0x9C:
+        _state = _ParserState.ground;
+        _finishApc();
+      case 0x1B:
+        _state = _ParserState.apcEscape;
+      case 0x18 || 0x1A:
+        _resetApc();
+        _state = _ParserState.ground;
+      default:
+        _appendApcChar(c);
+    }
+  }
+
+  void _handleApcEscape(int c) {
+    if (c == 0x5C) {
+      _state = _ParserState.ground;
+      _finishApc();
+      return;
+    }
+    _resetApc();
+    _intermediates.clear();
+    _handleEscape(c);
+  }
+
+  void _appendApcChar(int c) {
+    if (_apcOverflowed) return;
+    if (_apcBuffer.length >= _maxApcLength) {
+      _apcBuffer.clear();
+      _apcOverflowed = true;
+      return;
+    }
+    _apcBuffer.add(c);
+  }
+
+  void _finishApc() {
+    if (!_apcOverflowed && _apcBuffer.isNotEmpty) {
+      handler.apc(String.fromCharCodes(_apcBuffer));
+    }
+    _resetApc();
+  }
+
+  void _resetApc() {
+    _apcBuffer.clear();
+    _apcOverflowed = false;
+  }
+
   void _appendDcsChar(int c) {
     if (_dcsPrefixLen < 0 || _tmuxInner == .ignored) return;
     if (_dcsPrefixLen < _tmuxOscPrefix.length) {
-      _advanceTmuxOscPrefix(c);
+      _advanceTmuxPrefix(c);
       return;
     }
     _tmuxInner = switch (_tmuxInner) {
@@ -395,28 +473,60 @@ final class AnsiParser {
       final state => state,
     };
     if (_tmuxInner == .payload && c >= 0x20) {
-      _appendOscChar(c);
+      if (_tmuxIsApc) {
+        _appendApcChar(c);
+      } else {
+        _appendOscChar(c);
+      }
     }
   }
 
-  void _advanceTmuxOscPrefix(int c) {
-    if (c == _tmuxOscPrefix[_dcsPrefixLen]) {
-      _dcsPrefixLen++;
+  void _advanceTmuxPrefix(int c) {
+    if (_dcsPrefixLen < _tmuxHeaderLength) {
+      if (c == _tmuxOscPrefix[_dcsPrefixLen]) {
+        _dcsPrefixLen++;
+        return;
+      }
+      _dcsPrefixLen = -1;
+      _tmuxInner = .ignored;
       return;
     }
-    if (_dcsPrefixLen < _tmuxHeaderLength) _dcsPrefixLen = -1;
+    if (_dcsPrefixLen == 5) {
+      if (c == 0x1B) {
+        _dcsPrefixLen++;
+        return;
+      }
+    } else if (_dcsPrefixLen == 6) {
+      if (c == 0x5D) {
+        _dcsPrefixLen++;
+        _tmuxIsApc = false;
+        return;
+      }
+      if (c == 0x5F) {
+        _dcsPrefixLen++;
+        _tmuxIsApc = true;
+        _resetApc();
+        return;
+      }
+    }
     _tmuxInner = .ignored;
   }
 
   void _finishDcs() {
     if (_tmuxInner == .terminated) {
-      _finishOsc();
+      if (_tmuxIsApc) {
+        _finishApc();
+      } else {
+        _finishOsc();
+      }
     }
     _resetDcs();
   }
 
   void _resetDcs() {
     _resetOsc();
+    _resetApc();
+    _tmuxIsApc = false;
     _dcsPrefixLen = -1;
     _tmuxInner = .ignored;
   }
