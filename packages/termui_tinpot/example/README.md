@@ -1,17 +1,19 @@
-# termui_tinpot_example
+# termui_tinpot Example
 
-A new Flutter project.
+Interactive image-to-ANSI quantizer showcase for `termui_tinpot`.
 
-## Getting Started
+## Running the Example
 
-This project is a starting point for a Flutter application.
+### 1. Native CLI Terminal Mode
+Run from `packages/termui_tinpot/example`:
 
-A few resources to get you started if this is your first Flutter project:
+```bash
+dart run bin/termui_tinpot.dart [options] [image_path]
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+### 2. Flutter Desktop / Web Mode
+Run the interactive Tinpot UI inside Flutter via `termui_flutter`:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+flutter run
+```

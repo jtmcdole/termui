@@ -27,13 +27,13 @@ Instead of evaluating the visual error of every possible Unicode character (whic
 1. We maintain a precomputed library of Unicode Block and Border elements (e.g., `▀`, `▖`, `╱`), where each character is represented by its own 64-bit shape mask.
 2. We compute the **Hamming Distance** between our cell's Ideal Mask and every symbol mask in the library. This is done using an XOR and popcount operation: `popcount(idealMask ^ symbolMask)`.
 3. Because the colors can be swapped, we also check the inverted distance: `popcount(~idealMask ^ symbolMask)`.
-4. We sort the library by the lowest Hamming distance to find the shapes that most closely match the cell's binary structure. We take the **Top 5** candidates for precise error evaluation.
+4. We sort the library by the lowest Hamming distance to find the shapes that most closely match the cell's binary structure. We take the **Top N** candidates (configurable via `workFactor` from `1` to `9`, defaulting to `5`) for precise error evaluation.
 
-## 5. Precise Error Evaluation (K-Means)
-For the Top 5 structural candidates, we evaluate exactly how well they represent the cell's original colors:
+## 5. Precise Error Evaluation (Mean / Median & DIN99d)
+For the candidate symbols, we evaluate how well they represent the cell's original colors:
 1. Using the candidate's specific 64-bit mask, we partition the original 64 pixels back into Foreground and Background sets.
-2. We calculate the true Arithmetic Mean (average) color for the foreground pixels, and the mean color for the background pixels.
-3. We compute the total error by summing the squared distance of each original pixel to its assigned mean.
-4. The candidate with the absolute lowest error is selected as the winner. Its calculated mean colors become the ANSI foreground and background colors printed to the terminal alongside the winning character.
+2. We calculate the cluster color for the foreground pixels and background pixels using either the **Arithmetic Mean** (default) or the per-channel **Median** (`useMedian: true` / `--median`).
+3. We compute the total error by summing the squared distance of each original pixel to its assigned cluster color, operating either in fast sRGB space or in the perceptual **DIN99d** color space (`useDin99d: true` / `--din99d`).
+4. The candidate with the absolute lowest error is selected as the winner. Its calculated cluster colors become the ANSI foreground and background colors printed to the terminal alongside the winning character.
 
 *(Note: In the event of a tie—for example, if the cell is perfectly uniform, causing `Space` and `Inverted Solid Block` to both yield 0 error—we rely on a deterministic tie-breaker that prefers standard, non-inverted symbols like `Space` to keep the ANSI output clean.)*
