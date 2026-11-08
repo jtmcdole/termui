@@ -1,17 +1,19 @@
-# termui_audio_example
+# termui_audio Example
 
-A new Flutter project.
+Interactive audio player and synthesizer example for `termui_audio` and `termui_audio_flutter`.
 
-## Getting Started
+## Running the Example
 
-This project is a starting point for a Flutter application.
+### 1. Native CLI Terminal Mode
+Run from `packages/termui_audio/example` using the Dart VM and `CliAudioEngine` (`dart:ffi` + SoLoud):
 
-A few resources to get you started if this is your first Flutter project:
+```bash
+dart run bin/main.dart
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+### 2. Flutter Desktop / Web Mode
+Run using `FlutterAudioEngine` (`termui_audio_flutter`) and `termui_flutter`:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+flutter run
+```
