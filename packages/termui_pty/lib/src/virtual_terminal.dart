@@ -114,6 +114,7 @@ final class VirtualTerminal implements TerminalHandler {
   static final RegExp _whitespaceRegex = RegExp(r'\s+');
   static const int _maxOsc52PayloadLength = 1_400_000;
   static const int _maxOsc52DecodedBytes = 1_048_576;
+  static const int _maxTitleStackDepth = 20;
 
   /// The width of the virtual terminal in columns.
   int width;
@@ -244,6 +245,18 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether Unicode grapheme clustering mode (`DECSET 2027`, `?2027h` / `?2027l`) is enabled.
   bool get graphemeClusterMode => _graphemeClusterMode;
 
+  /// Current window title set via `OSC 0` or `OSC 2` and restored via `CSI 23 t`.
+  String windowTitle = '';
+
+  /// Current icon / tab title set via `OSC 0` or `OSC 1` and restored via `CSI 23 t`.
+  String iconTitle = '';
+
+  final List<String> _windowTitleStack = [];
+  final List<String> _iconTitleStack = [];
+
+  /// Callback invoked when [windowTitle] changes via `OSC 0`, `OSC 2`, or `CSI 23 t`.
+  void Function(String title)? onTitleChanged;
+
   /// Callback invoked when an `OSC 52` clipboard write sequence is decoded.
   ///
   /// The `selection` parameter is the target selection buffer (e.g. `'c'` for
@@ -364,6 +377,10 @@ final class VirtualTerminal implements TerminalHandler {
       _altBuffer = null;
       cursorX = 0;
       cursorY = 0;
+      windowTitle = '';
+      iconTitle = '';
+      _windowTitleStack.clear();
+      _iconTitleStack.clear();
       _primaryWrapped.fillRange(0, height, false);
       _scrollback.clear();
       final (fg, bg, mod) = _eraseAttributes();
@@ -1064,13 +1081,49 @@ final class VirtualTerminal implements TerminalHandler {
           _replyCursorPosition(extended: false);
         }
       case 't':
-        if (params.length == 1 && params[0] == 18) {
-          onReply?.call('\x1b[8;$height;${width}t');
-        }
+        _handleWindowManipulationCsi(params);
       default:
         return false;
     }
     return true;
+  }
+
+  void _handleWindowManipulationCsi(List<int> params) {
+    if (params.isEmpty) return;
+    final op = params[0];
+    final target = params.length > 1 ? params[1] : 0;
+    if (op == 18 && params.length == 1) {
+      onReply?.call('\x1b[8;$height;${width}t');
+    } else if (op == 22) {
+      _pushTitleStack(target);
+    } else if (op == 23) {
+      _popTitleStack(target);
+    }
+  }
+
+  void _pushTitleStack(int target) {
+    if (target == 0 || target == 1) {
+      if (_iconTitleStack.length >= _maxTitleStackDepth) {
+        _iconTitleStack.removeAt(0);
+      }
+      _iconTitleStack.add(iconTitle);
+    }
+    if (target == 0 || target == 2) {
+      if (_windowTitleStack.length >= _maxTitleStackDepth) {
+        _windowTitleStack.removeAt(0);
+      }
+      _windowTitleStack.add(windowTitle);
+    }
+  }
+
+  void _popTitleStack(int target) {
+    if ((target == 0 || target == 1) && _iconTitleStack.isNotEmpty) {
+      iconTitle = _iconTitleStack.removeLast();
+    }
+    if ((target == 0 || target == 2) && _windowTitleStack.isNotEmpty) {
+      windowTitle = _windowTitleStack.removeLast();
+      onTitleChanged?.call(windowTitle);
+    }
   }
 
   void _replyCursorPosition({required bool extended}) {
@@ -1505,8 +1558,18 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void osc(int command, String payload) {
-    if (command == 52) {
-      _handleOsc52(payload);
+    switch (command) {
+      case 0:
+        iconTitle = payload;
+        windowTitle = payload;
+        onTitleChanged?.call(payload);
+      case 1:
+        iconTitle = payload;
+      case 2:
+        windowTitle = payload;
+        onTitleChanged?.call(payload);
+      case 52:
+        _handleOsc52(payload);
     }
   }
 
