@@ -52,7 +52,13 @@ void main() async {
 To allow the application to hot reload, you must run your Dart application with the VM service enabled:
 
 ```sh
-dart --enable-vm-service bin/main.dart
+dart --enable-vm-service example/lib/main.dart
+```
+
+You can also run the MVVM hot-reload example:
+
+```sh
+dart --enable-vm-service example/lib/main_mvvm.dart
 ```
 
 Now modify your widget code, save the file, and watch the terminal UI update instantly without losing state!
