@@ -26,6 +26,7 @@ import 'package:termui/perf/tracer.dart';
 
 enum TuiDemo {
   widgetBook('Widget Book', 'widgetbook'),
+  kittyProtocol('Kitty Protocol (KTTY)', 'ktty'),
   glassCompositing('Glass Compositing', 'glass'),
   ptyGlassCompositing('PTY Glass Compositing', 'pty'),
   asciicastPlayer('Asciicast Player', 'player'),
@@ -34,6 +35,16 @@ enum TuiDemo {
   final String label;
   final String queryName;
   const TuiDemo(this.label, this.queryName);
+
+  static TuiDemo? fromQuery(String? value) => switch (value) {
+    'widgetbook' => TuiDemo.widgetBook,
+    'ktty' => TuiDemo.kittyProtocol,
+    'glass' => TuiDemo.glassCompositing,
+    'pty' => TuiDemo.ptyGlassCompositing,
+    'player' => TuiDemo.asciicastPlayer,
+    'trace' => TuiDemo.traceViewer,
+    _ => null,
+  };
 }
 
 final watch = Stopwatch()..start();
@@ -143,95 +154,86 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
       RecordingService(SavedCastsRepository()),
       onLog: _log,
     );
-    _recordingViewModel.addListener(() {
-      if (mounted) setState(() {});
-    });
+    _recordingViewModel.addListener(_onRecordingStateChanged);
     HardwareKeyboard.instance.addHandler(_handleGlobalKey);
     _log('main.dart: initState() started');
     _terminal = FlutterTerminal();
 
     final query = widget.initialQuery ?? getUrlParams();
-    currentDemo = switch (query['demo']) {
-      'widgetbook' => TuiDemo.widgetBook,
-      'glass' => TuiDemo.glassCompositing,
-      'pty' => TuiDemo.ptyGlassCompositing,
-      'player' => TuiDemo.asciicastPlayer,
-      'trace' => TuiDemo.traceViewer,
-      _ => TuiDemo.glassCompositing,
-    };
-    initialPage = query['page'];
+    currentDemo = TuiDemo.fromQuery(query['demo']) ?? TuiDemo.glassCompositing;
+    initialPage = currentDemo == TuiDemo.kittyProtocol
+        ? 'kittyProtocol'
+        : query['page'];
 
-    _pageChangedSub = pageChangedEvent.on(widgetBookEventBus).listen((
-      pageName,
-    ) {
-      initialPage = pageName;
-      updateUrlParams(demo: currentDemo.queryName, page: pageName);
-    });
-
-    _urlChangesSub = listenToUrlChanges((newQuery) {
-      final targetDemo = switch (newQuery['demo']) {
-        'widgetbook' => TuiDemo.widgetBook,
-        'glass' => TuiDemo.glassCompositing,
-        'pty' => TuiDemo.ptyGlassCompositing,
-        'player' => TuiDemo.asciicastPlayer,
-        'trace' => TuiDemo.traceViewer,
-        _ => null,
-      };
-
-      if (targetDemo != null && targetDemo != currentDemo) {
-        _switchDemo(targetDemo);
-      }
-
-      final pageParam = newQuery['page'];
-      if (pageParam != initialPage) {
-        initialPage = pageParam;
-        if (pageParam != null) {
-          pageSelectedEvent.post(widgetBookEventBus, pageParam);
-        }
-      }
-    });
-
-    _uploadRequestedSub = uploadCastRequestedEvent.on(playerEventBus).listen((
-      _,
-    ) async {
-      try {
-        const typeGroup = XTypeGroup(
-          label: 'Asciicasts',
-          extensions: ['cast', 'gz'],
-        );
-        final file = await openFile(acceptedTypeGroups: [typeGroup]);
-        if (file != null) {
-          final bytes = await file.readAsBytes();
-          castUploadedEvent.post(
-            playerEventBus,
-            UploadedCastData(file.name, bytes),
-          );
-        }
-      } catch (e) {
-        _log('main.dart: Error during file selection: $e');
-      }
-    });
-
+    _pageChangedSub = pageChangedEvent
+        .on(widgetBookEventBus)
+        .listen(_onPageChanged);
+    _urlChangesSub = listenToUrlChanges(_onUrlQueryChanged);
+    _uploadRequestedSub = uploadCastRequestedEvent
+        .on(playerEventBus)
+        .listen((_) => _pickAndPostCastFile());
     _uploadTraceRequestedSub = uploadTraceRequestedEvent
         .on(playerEventBus)
-        .listen((_) async {
-          try {
-            const typeGroup = XTypeGroup(
-              label: 'Traces',
-              extensions: ['json', 'gz'],
-            );
-            final file = await openFile(acceptedTypeGroups: [typeGroup]);
-            if (file != null) {
-              final bytes = await file.readAsBytes();
-              traceUploadedEvent.post(
-                playerEventBus,
-                UploadedTraceData(file.name, bytes),
-              );
-            }
-          } catch (e) {
-            _log('main.dart: Error during trace file selection: $e');
-          }
-        });
+        .listen((_) => _pickAndPostTraceFile());
+  }
+
+  void _onRecordingStateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _onPageChanged(String pageName) {
+    initialPage = pageName;
+    updateUrlParams(demo: currentDemo.queryName, page: pageName);
+  }
+
+  void _onUrlQueryChanged(Map<String, String> newQuery) {
+    final targetDemo = TuiDemo.fromQuery(newQuery['demo']);
+    if (targetDemo != null && targetDemo != currentDemo) {
+      _switchDemo(targetDemo);
+    }
+
+    final pageParam = newQuery['page'];
+    if (pageParam != initialPage) {
+      initialPage = pageParam;
+      if (pageParam != null) {
+        pageSelectedEvent.post(widgetBookEventBus, pageParam);
+      }
+    }
+  }
+
+  Future<void> _pickAndPostCastFile() async {
+    try {
+      const typeGroup = XTypeGroup(
+        label: 'Asciicasts',
+        extensions: ['cast', 'gz'],
+      );
+      final file = await openFile(acceptedTypeGroups: [typeGroup]);
+      if (file != null) {
+        final bytes = await file.readAsBytes();
+        castUploadedEvent.post(
+          playerEventBus,
+          UploadedCastData(file.name, bytes),
+        );
+      }
+    } catch (e) {
+      _log('main.dart: Error during file selection: $e');
+    }
+  }
+
+  Future<void> _pickAndPostTraceFile() async {
+    try {
+      const typeGroup = XTypeGroup(label: 'Traces', extensions: ['json', 'gz']);
+      final file = await openFile(acceptedTypeGroups: [typeGroup]);
+      if (file != null) {
+        final bytes = await file.readAsBytes();
+        traceUploadedEvent.post(
+          playerEventBus,
+          UploadedTraceData(file.name, bytes),
+        );
+      }
+    } catch (e) {
+      _log('main.dart: Error during trace file selection: $e');
+    }
   }
 
   @override
@@ -256,6 +258,48 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
 
   Future<void>? tuiFuture;
 
+  Future<void> _executeCurrentDemo(void Function(Buffer) onDrawFrame) async {
+    switch (currentDemo) {
+      case TuiDemo.widgetBook:
+        _log('main.dart: Running WidgetBook');
+        await runWidgetBook(
+          _terminal,
+          onFrameRedrawn: onDrawFrame,
+          initialPage: initialPage,
+        );
+      case TuiDemo.kittyProtocol:
+        _log('main.dart: Running Kitty Protocol Demo');
+        await runWidgetBook(
+          _terminal,
+          onFrameRedrawn: onDrawFrame,
+          initialPage: 'kittyProtocol',
+        );
+      case TuiDemo.glassCompositing:
+        _log('main.dart: Running Glass Compositing');
+        await runGlassCompositingShared(
+          _terminal,
+          isInline: false,
+          onFrameRedrawn: onDrawFrame,
+        );
+      case TuiDemo.ptyGlassCompositing:
+        _log('main.dart: Running PTY Glass Compositing');
+        await runPtyGlassDemo(_terminal, onFrameRedrawn: onDrawFrame);
+      case TuiDemo.asciicastPlayer:
+        _log('main.dart: Running TUI Asciicast Player');
+        await runAsciicastPlayerTui(_terminal, onFrameRedrawn: onDrawFrame);
+      case TuiDemo.traceViewer:
+        _log('main.dart: Running TUI Trace Viewer');
+        await runTraceViewerTui(
+          _terminal,
+          initialBytes: _initialTraceBytes,
+          initialFilename: _initialTraceFilename,
+          onFrameRedrawn: onDrawFrame,
+        );
+        _initialTraceBytes = null;
+        _initialTraceFilename = null;
+    }
+  }
+
   Future<void> _runTUI(void Function(Buffer) onDrawFrame) async {
     _log(
       'main.dart: _runTUI() started, _tuiRunning: $_tuiRunning, State: $hashCode',
@@ -269,44 +313,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         _log(
           'main.dart: Loop iteration, demo: $currentDemo, State: $hashCode, mounted: $mounted',
         );
-        if (currentDemo == TuiDemo.widgetBook) {
-          _log('main.dart: Running WidgetBook');
-          await runWidgetBook(
-            _terminal,
-            onFrameRedrawn: onDrawFrame,
-            initialPage: initialPage,
-          );
-          _log(
-            'main.dart: WidgetBook returned, State: $hashCode, mounted: $mounted',
-          );
-        } else if (currentDemo == TuiDemo.glassCompositing) {
-          _log('main.dart: Running Glass Compositing');
-          await runGlassCompositingShared(
-            _terminal,
-            isInline: false,
-            onFrameRedrawn: onDrawFrame,
-          );
-          _log('main.dart: Glass Compositing returned');
-        } else if (currentDemo == TuiDemo.ptyGlassCompositing) {
-          _log('main.dart: Running PTY Glass Compositing');
-          await runPtyGlassDemo(_terminal, onFrameRedrawn: onDrawFrame);
-          _log('main.dart: PTY Glass Compositing returned');
-        } else if (currentDemo == TuiDemo.asciicastPlayer) {
-          _log('main.dart: Running TUI Asciicast Player');
-          await runAsciicastPlayerTui(_terminal, onFrameRedrawn: onDrawFrame);
-          _log('main.dart: TUI Asciicast Player returned');
-        } else if (currentDemo == TuiDemo.traceViewer) {
-          _log('main.dart: Running TUI Trace Viewer');
-          await runTraceViewerTui(
-            _terminal,
-            initialBytes: _initialTraceBytes,
-            initialFilename: _initialTraceFilename,
-            onFrameRedrawn: onDrawFrame,
-          );
-          _log('main.dart: TUI Trace Viewer returned');
-          _initialTraceBytes = null;
-          _initialTraceFilename = null;
-        }
+        await _executeCurrentDemo(onDrawFrame);
 
         if (!mounted || !context.mounted) {
           _log('main.dart: Not mounted, exiting loop');
@@ -316,10 +323,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           _log('main.dart: Exited loop without switching, showing dialog');
           _showSwitchDemoDialog(title: 'TUI Application Exited');
           break;
-        } else {
-          _log('main.dart: Exited loop due to switching');
-          _switching = false;
         }
+        _log('main.dart: Exited loop due to switching');
+        _switching = false;
       }
     } catch (e, stack) {
       _log('main.dart: ERROR in _runTUI loop: $e\n$stack');
@@ -336,10 +342,10 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     if (currentDemo == target && _tuiRunning) return;
 
     currentDemo = target;
-    initialPage = null;
+    initialPage = target == TuiDemo.kittyProtocol ? 'kittyProtocol' : null;
     setState(() {});
 
-    updateUrlParams(demo: target.queryName, page: null);
+    updateUrlParams(demo: target.queryName, page: initialPage);
 
     if (_tuiRunning) {
       _switching = true;
@@ -356,6 +362,16 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     }
   }
 
+  Widget _buildDemoDialogButton(BuildContext dialogContext, TuiDemo demo) {
+    return TextButton(
+      onPressed: () {
+        if (dialogContext.mounted) Navigator.pop(dialogContext);
+        _switchDemo(demo);
+      },
+      child: Text(demo.label),
+    );
+  }
+
   void _showSwitchDemoDialog({String title = 'Switch TUI Application'}) {
     if (!mounted || !context.mounted) return;
     showDialog<void>(
@@ -367,41 +383,12 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           'Select which TUI application to run in the terminal emulator:',
         ),
         actions: [
-          TextButton(
-            onPressed: () {
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-              _switchDemo(TuiDemo.asciicastPlayer);
-            },
-            child: const Text('Asciicast Player'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-              _switchDemo(TuiDemo.traceViewer);
-            },
-            child: const Text('Trace Viewer'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-              _switchDemo(TuiDemo.widgetBook);
-            },
-            child: const Text('Widget Book'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-              _switchDemo(TuiDemo.glassCompositing);
-            },
-            child: const Text('Glass Compositing'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (dialogContext.mounted) Navigator.pop(dialogContext);
-              _switchDemo(TuiDemo.ptyGlassCompositing);
-            },
-            child: const Text('PTY Glass Compositing'),
-          ),
+          _buildDemoDialogButton(dialogContext, TuiDemo.asciicastPlayer),
+          _buildDemoDialogButton(dialogContext, TuiDemo.traceViewer),
+          _buildDemoDialogButton(dialogContext, TuiDemo.widgetBook),
+          _buildDemoDialogButton(dialogContext, TuiDemo.kittyProtocol),
+          _buildDemoDialogButton(dialogContext, TuiDemo.glassCompositing),
+          _buildDemoDialogButton(dialogContext, TuiDemo.ptyGlassCompositing),
         ],
       ),
     );
@@ -410,69 +397,134 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
   double _baseFontSize = 13.0;
   double _currentFontSize = 13.0;
 
+  Future<void> _handleDroppedFiles(Map<String, XFile> files) async {
+    if (files.isEmpty) return;
+    final firstFile = files.values.first;
+    try {
+      final bytes = await firstFile.readAsBytes();
+      _log(
+        'main.dart: Processing dropped file: ${firstFile.name} (${bytes.length} bytes)',
+      );
+      final isTrace =
+          firstFile.name.endsWith('.json') ||
+          firstFile.name.endsWith('.json.gz');
+      if (isTrace) {
+        await _loadDroppedTrace(firstFile.name, bytes);
+      } else {
+        await _loadDroppedCast(firstFile.name, bytes);
+      }
+    } catch (e) {
+      _log('main.dart: Drag-and-drop error: $e');
+    }
+  }
+
+  Future<void> _loadDroppedTrace(String name, Uint8List bytes) async {
+    _initialTraceBytes = bytes;
+    _initialTraceFilename = name;
+    if (currentDemo != TuiDemo.traceViewer) {
+      _switchDemo(TuiDemo.traceViewer);
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    traceUploadedEvent.post(playerEventBus, UploadedTraceData(name, bytes));
+  }
+
+  Future<void> _loadDroppedCast(String name, Uint8List bytes) async {
+    if (currentDemo != TuiDemo.asciicastPlayer) {
+      _switchDemo(TuiDemo.asciicastPlayer);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    castUploadedEvent.post(playerEventBus, UploadedCastData(name, bytes));
+  }
+
+  Future<void> _onTerminalRun(
+    FlutterTerminal terminal,
+    void Function(Buffer) drawFrame,
+  ) async {
+    void wrappedDrawFrame(Buffer buf) {
+      _recordingViewModel.asciicastRecorder?.recordFrame(buf);
+      drawFrame(buf);
+    }
+
+    tuiFuture = _runTUI(wrappedDrawFrame);
+  }
+
+  Widget _buildRecordingBadge() {
+    final label = _recordingViewModel.isRecordingTrace
+        ? 'Recording Trace [F7]'
+        : 'Recording Asciicast [F8]';
+    return Positioned(
+      top: 16.0,
+      left: 16.0,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
+          decoration: BoxDecoration(
+            color: Colors.black.withAlpha(150),
+            borderRadius: BorderRadius.circular(8.0),
+            border: Border.all(color: Colors.redAccent.withAlpha(100)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 12,
+                height: 12,
+                decoration: const BoxDecoration(
+                  color: Colors.redAccent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 8.0),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: 'MesloLGS NF',
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isRecording =
+        _recordingViewModel.isRecordingTrace ||
+        _recordingViewModel.isRecordingAsciicast;
+    final targetPath = currentDemo == TuiDemo.traceViewer
+        ? 'Trace Viewer'
+        : 'Asciicast Player';
+
     return Scaffold(
       body: Stack(
         children: [
           Positioned.fill(
             child: FileUploadZone(
-              targetPath: currentDemo == TuiDemo.traceViewer
-                  ? 'Trace Viewer'
-                  : 'Asciicast Player',
-              onFilesSelected: (files) async {
-                if (files.isNotEmpty) {
-                  final firstFile = files.values.first;
-                  try {
-                    final bytes = await firstFile.readAsBytes();
-                    _log(
-                      'main.dart: Processing dropped file: ${firstFile.name} (${bytes.length} bytes)',
-                    );
-                    if (firstFile.name.endsWith('.json') ||
-                        firstFile.name.endsWith('.json.gz')) {
-                      _initialTraceBytes = bytes;
-                      _initialTraceFilename = firstFile.name;
-
-                      if (currentDemo != TuiDemo.traceViewer) {
-                        _switchDemo(TuiDemo.traceViewer);
-                      } else {
-                        await Future<void>.delayed(
-                          const Duration(milliseconds: 150),
-                        );
-                        traceUploadedEvent.post(
-                          playerEventBus,
-                          UploadedTraceData(firstFile.name, bytes),
-                        );
-                      }
-                    } else {
-                      if (currentDemo != TuiDemo.asciicastPlayer) {
-                        _switchDemo(TuiDemo.asciicastPlayer);
-                      }
-                      await Future<void>.delayed(
-                        const Duration(milliseconds: 150),
-                      );
-                      castUploadedEvent.post(
-                        playerEventBus,
-                        UploadedCastData(firstFile.name, bytes),
-                      );
-                    }
-                  } catch (e) {
-                    _log('main.dart: Drag-and-drop error: $e');
-                  }
-                }
-              },
+              targetPath: targetPath,
+              onFilesSelected: _handleDroppedFiles,
               child: GestureDetector(
-                onScaleStart: (details) {
+                onScaleStart: (_) {
                   _baseFontSize = _currentFontSize;
                 },
                 onScaleUpdate: (details) {
-                  setState(() {
-                    _currentFontSize = (_baseFontSize * details.scale).clamp(
-                      4.0,
-                      72.0,
-                    );
-                    _terminal.setFontSize(_currentFontSize);
-                  });
+                  if (details.scale == 1.0) return;
+                  final nextSize = (_baseFontSize * details.scale).clamp(
+                    4.0,
+                    72.0,
+                  );
+                  if (nextSize != _currentFontSize) {
+                    setState(() {
+                      _currentFontSize = nextSize;
+                      _terminal.setFontSize(_currentFontSize);
+                    });
+                  }
                 },
                 child: Terminal(
                   terminal: _terminal,
@@ -482,16 +534,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                     'Noto Color Emoji',
                     'Cascadia Mono',
                   ],
-                  onRun: (terminal, drawFrame) async {
-                    void wrappedDrawFrame(Buffer buf) {
-                      if (_recordingViewModel.asciicastRecorder != null) {
-                        _recordingViewModel.asciicastRecorder!.recordFrame(buf);
-                      }
-                      drawFrame(buf);
-                    }
-
-                    tuiFuture = _runTUI(wrappedDrawFrame);
-                  },
+                  onRun: _onTerminalRun,
                 ),
               ),
             ),
@@ -509,56 +552,12 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                 child: IconButton(
                   icon: const Icon(Icons.swap_horiz, color: Colors.white70),
                   tooltip: 'Switch TUI App',
-                  onPressed: () => _showSwitchDemoDialog(),
+                  onPressed: _showSwitchDemoDialog,
                 ),
               ),
             ),
           ),
-          if (_recordingViewModel.isRecordingTrace ||
-              _recordingViewModel.isRecordingAsciicast)
-            Positioned(
-              top: 16.0,
-              left: 16.0,
-              child: Material(
-                color: Colors.transparent,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12.0,
-                    vertical: 8.0,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withAlpha(150),
-                    borderRadius: BorderRadius.circular(8.0),
-                    border: Border.all(color: Colors.redAccent.withAlpha(100)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: const BoxDecoration(
-                          color: Colors.redAccent,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8.0),
-                      Text(
-                        _recordingViewModel.isRecordingTrace
-                            ? 'Recording Trace [F7]'
-                            : 'Recording Asciicast [F8]',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'MesloLGS NF',
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          if (isRecording) _buildRecordingBadge(),
         ],
       ),
     );
