@@ -14,7 +14,11 @@ final class PtyBackend {
       Platform.isWindows
           ? ['-C', 'ping 127.0.0.1 -t']
           : [], // Empty array for Mac/Linux
-      environment: {...Platform.environment},
+      environment: {
+        ...Platform.environment,
+        'TERM': 'xterm-256color',
+        'COLORTERM': 'truecolor',
+      },
     );
     _pty!.resize(100, 30); // 100 columns, 30 rows
 
