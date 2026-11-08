@@ -13,11 +13,13 @@ class InputParser {
   static const int maxCsiBytes = 256;
 
   static const int _maxOscBytes = 1_400_000;
+  static const int _maxApcBytes = 1_400_000;
 
   static final RegExp _sgrMouseRegex = RegExp(
     r'^\x1b\[<(\d+);(\d+);(\d+)[Mm]$',
   );
   static final RegExp _whitespaceRegex = RegExp(r'\s+');
+  static final RegExp _kittyIdRegex = RegExp(r'i=(\d+)');
 
   final List<int> _buffer = [];
   bool _isPasting = false;
@@ -26,6 +28,9 @@ class InputParser {
   bool _isReadingOsc = false;
   bool _oscOverflowed = false;
   final List<int> _oscBuffer = [];
+  bool _isReadingApc = false;
+  bool _apcOverflowed = false;
+  final List<int> _apcBuffer = [];
 
   /// Indicates if the parser is running in a Windows environment.
   final bool isWindows;
@@ -44,13 +49,7 @@ class InputParser {
     var offset = 0;
 
     while (offset < _buffer.length) {
-      final step = _isPasting
-          ? _consumeBracketedPaste(offset, events)
-          : _isReadingOsc
-          ? _consumeOscSequence(offset, events)
-          : _buffer[offset] == 27
-          ? _consumeEscapeSequence(offset, events)
-          : _consumeNonEscapeByte(offset, events);
+      final step = _consumeStep(offset, events);
       offset = step.offset;
       if (step.stop) break;
     }
@@ -60,6 +59,14 @@ class InputParser {
     }
 
     return events;
+  }
+
+  ({int offset, bool stop}) _consumeStep(int offset, List<InputEvent> events) {
+    if (_isPasting) return _consumeBracketedPaste(offset, events);
+    if (_isReadingOsc) return _consumeOscSequence(offset, events);
+    if (_isReadingApc) return _consumeApcSequence(offset, events);
+    if (_buffer[offset] == 27) return _consumeEscapeSequence(offset, events);
+    return _consumeNonEscapeByte(offset, events);
   }
 
   ({int offset, bool stop}) _consumeBracketedPaste(
@@ -232,6 +239,9 @@ class InputParser {
     if (second == 93) {
       return _consumeOscStart(offset, events);
     }
+    if (second == 0x5F) {
+      return _consumeApcStart(offset, events);
+    }
 
     events.add(
       KeyEvent(
@@ -241,6 +251,105 @@ class InputParser {
       ),
     );
     return (offset: offset + 2, stop: false);
+  }
+
+  ({int offset, bool stop}) _consumeApcStart(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    final remaining = _buffer.length - offset;
+    if (remaining == 2 || _buffer[offset + 2] != 0x47) {
+      events.add(
+        const KeyEvent('_', KeyType.character, modifiers: {Modifier.alt}),
+      );
+      return (offset: offset + 2, stop: false);
+    }
+    _isReadingApc = true;
+    _apcOverflowed = false;
+    _apcBuffer.clear();
+    return (offset: offset + 2, stop: false);
+  }
+
+  ({int offset, bool stop}) _consumeApcSequence(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    for (var i = offset; i < _buffer.length; i++) {
+      final b = _buffer[i];
+      if (b == 0x07) {
+        _finishApc(events);
+        return (offset: i + 1, stop: false);
+      }
+      if (b == 0x18 || b == 0x1A) {
+        _resetApc();
+        return (offset: i + 1, stop: false);
+      }
+      if (b == 0x1B) {
+        return _handleApcEscape(i, events);
+      }
+      _appendApcByte(b);
+    }
+    return (offset: _buffer.length, stop: true);
+  }
+
+  ({int offset, bool stop}) _handleApcEscape(
+    int escIndex,
+    List<InputEvent> events,
+  ) {
+    if (escIndex + 1 >= _buffer.length) {
+      return (offset: escIndex, stop: true);
+    }
+    if (_buffer[escIndex + 1] == 0x5C) {
+      _finishApc(events);
+      return (offset: escIndex + 2, stop: false);
+    }
+    _resetApc();
+    return (offset: escIndex, stop: false);
+  }
+
+  void _appendApcByte(int byte) {
+    if (_apcOverflowed) return;
+    if (_apcBuffer.length < _maxApcBytes) {
+      _apcBuffer.add(byte);
+    } else {
+      _apcBuffer.clear();
+      _apcOverflowed = true;
+    }
+  }
+
+  void _finishApc(List<InputEvent> events) {
+    if (!_apcOverflowed) {
+      _dispatchApcPayload(_apcBuffer, events);
+    }
+    _resetApc();
+  }
+
+  void _resetApc() {
+    _isReadingApc = false;
+    _apcOverflowed = false;
+    _apcBuffer.clear();
+  }
+
+  void _dispatchApcPayload(List<int> bytes, List<InputEvent> events) {
+    final payload = String.fromCharCodes(bytes);
+    if (!payload.startsWith('G') && !payload.startsWith('_G')) return;
+    // Expected format: Gi=<id>;<status> or G<key>=<val>...;<status>
+    final semi = payload.indexOf(';');
+    final controlPart = semi >= 0 ? payload.substring(0, semi) : payload;
+    final statusPart = semi >= 0 ? payload.substring(semi + 1) : '';
+
+    final idMatch = _kittyIdRegex.firstMatch(controlPart);
+    final imageId = idMatch != null ? int.tryParse(idMatch.group(1)!) : null;
+
+    if (imageId != null || statusPart.isNotEmpty) {
+      events.add(
+        KittyGraphicsEvent(
+          imageId: imageId ?? 0,
+          supported: statusPart.toUpperCase() == 'OK',
+          message: statusPart,
+        ),
+      );
+    }
   }
 
   ({int offset, bool stop}) _consumeSs3Sequence(
@@ -411,39 +520,78 @@ class InputParser {
     final paramsStr = seq.substring(2, seq.length - 1);
     if (paramsStr.isNotEmpty) {
       final prefix = paramsStr.codeUnitAt(0);
-      // Ignore DEC/Kitty private/device CSI responses ('<', '=', '>', '?').
       if (prefix >= 0x3C && prefix <= 0x3F) {
-        return null;
+        return _parsePrivateCsi(paramsStr, prefix, termByte);
       }
     }
+    if (termByte == 117) return _parseKittyKey(seq, paramsStr);
 
-    final params = [
-      if (paramsStr.isNotEmpty)
-        for (final p in paramsStr.split(';'))
-          int.tryParse(p.split(':').first) ?? 1,
-    ];
+    final params = _parseCsiMainParams(paramsStr);
     final mods = _decodeCsiModifiers(params);
+    final evType = _extractCsiEventType(paramsStr);
 
     return switch (termByte) {
       90 => KeyEvent(
         'backtab',
         KeyType.tab,
         modifiers: mods.isEmpty ? const {Modifier.shift} : mods,
+        eventType: evType,
       ),
       73 => const FocusInEvent(),
       79 => const FocusOutEvent(),
-      65 => KeyEvent('up', KeyType.up, modifiers: mods),
-      66 => KeyEvent('down', KeyType.down, modifiers: mods),
-      67 => KeyEvent('right', KeyType.right, modifiers: mods),
-      68 => KeyEvent('left', KeyType.left, modifiers: mods),
-      72 => KeyEvent('home', KeyType.home, modifiers: mods),
-      70 => KeyEvent('end', KeyType.end, modifiers: mods),
-      82 => _parseCursorPositionReport(seq, params),
-      117 => _parseKittyKey(seq, params, mods),
-      126 => _parseCsiTildeKey(seq, params, mods),
+      65 => KeyEvent('up', KeyType.up, modifiers: mods, eventType: evType),
+      66 => KeyEvent('down', KeyType.down, modifiers: mods, eventType: evType),
+      67 => KeyEvent(
+        'right',
+        KeyType.right,
+        modifiers: mods,
+        eventType: evType,
+      ),
+      68 => KeyEvent('left', KeyType.left, modifiers: mods, eventType: evType),
+      72 => KeyEvent('home', KeyType.home, modifiers: mods, eventType: evType),
+      70 => KeyEvent('end', KeyType.end, modifiers: mods, eventType: evType),
+      80 => KeyEvent('f1', KeyType.f1, modifiers: mods, eventType: evType),
+      81 => KeyEvent('f2', KeyType.f2, modifiers: mods, eventType: evType),
+      83 => KeyEvent('f4', KeyType.f4, modifiers: mods, eventType: evType),
+      82 => _parseRSequence(paramsStr, params, mods, evType),
+      126 => _parseCsiTildeKey(seq, params, mods, evType),
       _ => KeyEvent(seq, KeyType.character),
     };
   }
+
+  static InputEvent? _parsePrivateCsi(
+    String paramsStr,
+    int prefix,
+    int termByte,
+  ) {
+    if (prefix == 0x3F && termByte == 117) {
+      final rawFlags = paramsStr.substring(1).split(';').first;
+      final flags = int.tryParse(rawFlags);
+      if (flags != null) return KittyKeyboardEvent(flags: flags);
+    }
+    return null;
+  }
+
+  static List<int> _parseCsiMainParams(String paramsStr) => [
+    if (paramsStr.isNotEmpty)
+      for (final p in paramsStr.split(';'))
+        int.tryParse(p.split(':').first) ?? 1,
+  ];
+
+  static KeyEventType _extractCsiEventType(String paramsStr) {
+    if (!paramsStr.contains(':')) return KeyEventType.press;
+    final parts = paramsStr.split(';');
+    final target = parts.length >= 2 ? parts[1] : parts[0];
+    final sub = target.split(':');
+    if (sub.length < 2) return KeyEventType.press;
+    return _decodeEventTypeCode(int.tryParse(sub[1]) ?? 1);
+  }
+
+  static KeyEventType _decodeEventTypeCode(int code) => switch (code) {
+    2 => KeyEventType.repeat,
+    3 => KeyEventType.release,
+    _ => KeyEventType.press,
+  };
 
   static Set<Modifier> _decodeCsiModifiers(List<int> params) {
     if (params.length < 2) return <Modifier>{};
@@ -456,28 +604,116 @@ class InputParser {
     };
   }
 
-  static InputEvent _parseCursorPositionReport(String seq, List<int> params) {
-    if (params.length >= 2) {
-      return CursorPositionReportEvent(params[1], params[0]);
-    }
-    return KeyEvent(seq, KeyType.character);
-  }
-
-  static InputEvent _parseKittyKey(
-    String seq,
+  static InputEvent _parseRSequence(
+    String paramsStr,
     List<int> params,
     Set<Modifier> mods,
+    KeyEventType eventType,
   ) {
-    if (params.isNotEmpty && (params[0] == 127 || params[0] == 8)) {
-      return KeyEvent('backspace', KeyType.backspace, modifiers: mods);
+    if (params.length >= 2 && !paramsStr.contains(':')) {
+      return CursorPositionReportEvent(params[1], params[0]);
     }
-    return KeyEvent(seq, KeyType.character);
+    return KeyEvent('f3', KeyType.f3, modifiers: mods, eventType: eventType);
   }
+
+  static InputEvent _parseKittyKey(String seq, String paramsStr) {
+    if (paramsStr.isEmpty) return KeyEvent(seq, KeyType.character);
+    final parts = paramsStr.split(';');
+    final (codepoint, shifted, baseLayout) = _parseKittyCodepoints(parts[0]);
+    final (mods, eventType) = _decodeKittyModifiersAndEvent(parts);
+    final (keyName, keyType) = _resolveKittyKey(codepoint);
+    return KeyEvent(
+      keyName,
+      keyType,
+      modifiers: mods,
+      eventType: eventType,
+      shiftedCodepoint: shifted,
+      baseLayoutCodepoint: baseLayout,
+    );
+  }
+
+  static (int, int?, int?) _parseKittyCodepoints(String codePart) {
+    final sub = codePart.split(':');
+    final codepoint = int.tryParse(sub[0]) ?? 0;
+    final shifted = sub.length >= 2 && sub[1].isNotEmpty
+        ? int.tryParse(sub[1])
+        : null;
+    final baseLayout = sub.length >= 3 && sub[2].isNotEmpty
+        ? int.tryParse(sub[2])
+        : null;
+    return (codepoint, shifted, baseLayout);
+  }
+
+  static (Set<Modifier>, KeyEventType) _decodeKittyModifiersAndEvent(
+    List<String> parts,
+  ) {
+    var modNum = 1;
+    var eventType = KeyEventType.press;
+    if (parts.length >= 2) {
+      final modSub = parts[1].split(':');
+      modNum = int.tryParse(modSub[0]) ?? 1;
+      if (modSub.length >= 2) {
+        eventType = _decodeEventTypeCode(int.tryParse(modSub[1]) ?? 1);
+      }
+    }
+    final modVal = modNum - 1;
+    final mods = <Modifier>{
+      if ((modVal & 1) != 0) Modifier.shift,
+      if ((modVal & 2) != 0) Modifier.alt,
+      if ((modVal & 4) != 0) Modifier.control,
+      if ((modVal & 8) != 0 || (modVal & 32) != 0) Modifier.meta,
+    };
+    return (mods, eventType);
+  }
+
+  static (String, KeyType) _resolveKittyKey(int codepoint) {
+    final mapped = _kittyKeyMap[codepoint];
+    if (mapped != null) return mapped;
+    if (codepoint > 0) {
+      return (String.fromCharCode(codepoint), KeyType.character);
+    }
+    return ('', KeyType.character);
+  }
+
+  static const Map<int, (String, KeyType)> _kittyKeyMap = {
+    13: ('enter', KeyType.enter),
+    27: ('escape', KeyType.escape),
+    9: ('tab', KeyType.tab),
+    127: ('backspace', KeyType.backspace),
+    8: ('backspace', KeyType.backspace),
+    57344: ('\x1b', KeyType.escape),
+    57345: ('\r', KeyType.enter),
+    57346: ('\t', KeyType.tab),
+    57347: ('\x7f', KeyType.backspace),
+    57348: ('', KeyType.insert),
+    57349: ('', KeyType.delete),
+    57350: ('', KeyType.arrowLeft),
+    57351: ('', KeyType.arrowRight),
+    57352: ('', KeyType.arrowUp),
+    57353: ('', KeyType.arrowDown),
+    57354: ('', KeyType.pageUp),
+    57355: ('', KeyType.pageDown),
+    57356: ('', KeyType.home),
+    57357: ('', KeyType.end),
+    57364: ('', KeyType.f1),
+    57365: ('', KeyType.f2),
+    57366: ('', KeyType.f3),
+    57367: ('', KeyType.f4),
+    57368: ('', KeyType.f5),
+    57369: ('', KeyType.f6),
+    57370: ('', KeyType.f7),
+    57371: ('', KeyType.f8),
+    57372: ('', KeyType.f9),
+    57373: ('', KeyType.f10),
+    57374: ('', KeyType.f11),
+    57375: ('', KeyType.f12),
+  };
 
   InputEvent? _parseCsiTildeKey(
     String seq,
     List<int> params,
     Set<Modifier> mods,
+    KeyEventType eventType,
   ) {
     if (params.isEmpty) return const KeyEvent('~', KeyType.character);
     final keyNum = params[0];
@@ -489,7 +725,12 @@ class InputParser {
     }
     final mapped = _tildeKeyMap[keyNum];
     if (mapped != null) {
-      return KeyEvent(mapped.$1, mapped.$2, modifiers: mods);
+      return KeyEvent(
+        mapped.$1,
+        mapped.$2,
+        modifiers: mods,
+        eventType: eventType,
+      );
     }
     return KeyEvent(seq, KeyType.character);
   }

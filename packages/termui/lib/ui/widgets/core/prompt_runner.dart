@@ -109,35 +109,44 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     if (_widget == value) return;
     _widget = value;
     final rootElement = _rootElement;
-    if (rootElement != null) {
-      final scopedWidget = PromptScope(
-        onDone: (result) {
-          final comp = _completer;
-          if (comp != null && !comp.isCompleted) {
-            comp.complete(result is T? ? result : null);
-          }
-        },
-        child: FocusScope(
-          focusNode: _focusScopeNode,
-          autofocus: mode == ExecutionMode.standalone,
-          child: _widget,
-        ),
-      );
-      rootElement.update(scopedWidget);
+    if (rootElement == null) return;
 
-      if (!alternateScreen && mode == ExecutionMode.standalone) {
-        _computedHeight = _widget.getIntrinsicHeight(_width);
-        _currentBuffer?.resize(_width, _computedHeight);
-        _renderer = Renderer(
-          _width,
-          _computedHeight,
-          mode: alternateScreen
-              ? RenderingMode.alternateScreen
-              : RenderingMode.inline,
-        );
-      }
-      render();
+    rootElement.update(_buildScopedWidget(_focusScopeNode, _completer));
+    if (!alternateScreen && mode == ExecutionMode.standalone) {
+      _computedHeight = _resolveInlineHeight(
+        _width,
+        fallbackHeight: terminal.backend.size.y,
+      );
+      _currentBuffer?.resize(_width, _computedHeight);
+      _renderer = Renderer(_width, _computedHeight, mode: _renderingMode);
     }
+    render();
+  }
+
+  int _resolveInlineHeight(int width, {required int fallbackHeight}) {
+    final intrinsic = _widget.getIntrinsicHeight(width);
+    return intrinsic >= BoxConstraints.infinity ? fallbackHeight : intrinsic;
+  }
+
+  RenderingMode get _renderingMode =>
+      alternateScreen ? RenderingMode.alternateScreen : RenderingMode.inline;
+
+  Widget _buildScopedWidget(
+    FocusScopeNode scopeNode,
+    Completer<T?>? completer,
+  ) {
+    return PromptScope(
+      onDone: (result) {
+        if (completer != null && !completer.isCompleted) {
+          completer.complete(result is T? ? result : null);
+        }
+      },
+      child: FocusScope(
+        focusNode: scopeNode,
+        autofocus: mode == ExecutionMode.standalone,
+        child: _widget,
+      ),
+    );
   }
 
   /// An optional key event handler callback. Returns true if prompt is completed.
@@ -400,39 +409,43 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     // Render the rebuilt element tree on our double buffer canvas.
     rootElement.layout(BoxConstraints.tight(Size(_width, _computedHeight)));
     rootElement.paint(buffer, Offset.zero);
-
-    if (debugPaintHoverEnabled && _lastMousePosition != null) {
-      final hovered = _findHoveredElement(rootElement, _lastMousePosition);
-      if (hovered != null) {
-        _highlightHoveredElement(buffer, hovered);
-      }
-    }
-
-    if (mode == ExecutionMode.standalone) {
-      if (debugMouseCursorEnabled && _lastMousePosition != null) {
-        final pos = _lastMousePosition!;
-        final cursorStyle = Style(
-          foreground: const Color(0, 255, 255),
-          modifiers: Modifier.bold,
-        );
-        buffer.writeString(pos.x - 1, pos.y - 1, '⦿', cursorStyle);
-      }
-    }
+    _paintDebugOverlays(buffer, rootElement);
 
     onFramePainted?.call(buffer);
     onNeedVisualUpdate?.call();
 
     if (mode == ExecutionMode.standalone) {
-      final b = terminal.backend;
-      if (b is BufferedTerminalBackend) {
-        b.buffer = buffer;
-      }
+      _flushStandaloneBuffer(buffer);
+    }
+  }
 
-      final sb = StringBuffer();
-      _renderer?.render(buffer, sb);
-      if (sb.isNotEmpty) {
-        b.write(sb.toString());
+  void _paintDebugOverlays(Buffer buffer, Element rootElement) {
+    final pos = _lastMousePosition;
+    if (pos == null) return;
+    if (debugPaintHoverEnabled) {
+      final hovered = _findHoveredElement(rootElement, pos);
+      if (hovered != null) {
+        _highlightHoveredElement(buffer, hovered);
       }
+    }
+    if (mode == ExecutionMode.standalone && debugMouseCursorEnabled) {
+      const cursorStyle = Style(
+        foreground: Color(0, 255, 255),
+        modifiers: Modifier.bold,
+      );
+      buffer.writeString(pos.x - 1, pos.y - 1, '⦿', cursorStyle);
+    }
+  }
+
+  void _flushStandaloneBuffer(Buffer buffer) {
+    final b = terminal.backend;
+    if (b is BufferedTerminalBackend) {
+      b.buffer = buffer;
+    }
+    final sb = StringBuffer();
+    _renderer?.render(buffer, sb);
+    if (sb.isNotEmpty) {
+      b.write(sb.toString());
     }
   }
 
@@ -455,24 +468,10 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   /// Starts the inline prompt loop and returns a Future containing the final result.
   Future<T?> run() async {
     onPromptStarted?.call(this);
-
     if (mode == ExecutionMode.standalone) {
-      TermuiBinding.register(this);
-      final termSize = await terminal.size;
-      _width = termSize.x;
-      _computedHeight = alternateScreen
-          ? termSize.y
-          : widget.getIntrinsicHeight(_width);
-      if (alternateScreen) {
-        terminal.enterAlternateScreen();
-      }
+      await _initStandaloneViewport();
     } else {
-      if (_width <= 0) {
-        _width = 80;
-      }
-      if (_computedHeight <= 0) {
-        _computedHeight = widget.getIntrinsicHeight(_width);
-      }
+      _initManagedViewport();
     }
 
     StreamSubscription<Point<int>>? sizeSubscription;
@@ -480,125 +479,130 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     final runScope = FocusScopeNode(id: 'prompt_runner_scope');
 
     try {
-      // Create a temporary buffer and inline renderer.
-      _currentBuffer = Buffer.blank(_width, _computedHeight);
-      _renderer = Renderer(
-        _width,
-        _computedHeight,
-        mode: alternateScreen
-            ? RenderingMode.alternateScreen
-            : RenderingMode.inline,
-      );
-
       final completer = Completer<T?>();
-      _completer = completer;
-      _isDisposed = false;
-      _focusScopeNode = runScope;
-      _activeRootScopes.add(runScope);
-
-      // Wrap the widget tree in a PromptScope to expose the clean completion API
-      final scopedWidget = PromptScope(
-        onDone: (result) {
-          if (!completer.isCompleted) {
-            completer.complete(result is T? ? result : null);
-          }
-        },
-        child: FocusScope(
-          focusNode: runScope,
-          autofocus: mode == ExecutionMode.standalone,
-          child: widget,
-        ),
-      );
-
-      _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleRender);
-
-      final rootElement = scopedWidget.createElement();
-      rootElement.owner = _buildOwner;
-      rootElement.mount(null);
-      _rootElement = rootElement;
-
-      if (mode == ExecutionMode.standalone && debugPaintHoverEnabled) {
-        terminal.enableMouseTracking();
-      }
-
-      // Initial frame draw
-      rootElement.markNeedsBuild();
-      render();
-
+      final rootElement = _mountRunTree(runScope, completer);
       if (mode == ExecutionMode.standalone) {
-        sizeSubscription = terminal.watchSize().listen((size) {
-          if (_isDisposed) return;
-          _width = size.x;
-          _computedHeight = alternateScreen
-              ? size.y
-              : widget.getIntrinsicHeight(_width);
-          _currentBuffer?.resize(_width, _computedHeight);
-          _renderer = Renderer(
-            _width,
-            _computedHeight,
-            mode: alternateScreen
-                ? RenderingMode.alternateScreen
-                : RenderingMode.inline,
-          );
-          rootElement.markNeedsBuild();
-          render();
-        });
-
-        subscription = terminal.events.listen(
-          (event) {
-            switch (event) {
-              case term.KeyEvent keyEvent:
-                handleKeyEvent(keyEvent);
-              case term.MouseEvent mouseEvent:
-                handleMouseEvent(mouseEvent);
-              case term.PasteEvent pasteEvent:
-                handlePasteEvent(pasteEvent);
-              case term.FocusInEvent() ||
-                  term.FocusOutEvent() ||
-                  term.CursorPositionReportEvent():
-                break;
-            }
-          },
-          onDone: () {
-            if (!completer.isCompleted) {
-              completer.complete(null);
-            }
-          },
-          onError: (Object e, StackTrace stack) {
-            if (!completer.isCompleted) {
-              completer.completeError(e, stack);
-            }
-          },
+        (sizeSubscription, subscription) = _attachStandaloneStreams(
+          rootElement,
+          completer,
         );
       }
-
       return await completer.future;
     } finally {
-      if (mode == ExecutionMode.standalone) {
-        TermuiBinding.unregister(this);
-      }
-      final wasDisposedBefore = _isDisposed;
-      _isDisposed = true;
-      if (!wasDisposedBefore) {
-        onPromptEnded?.call(this);
-      }
-      sizeSubscription?.cancel();
-      subscription?.cancel();
-      // Restore cursor visibility
-      if (mode == ExecutionMode.standalone) {
-        if (alternateScreen) {
-          terminal.exitAlternateScreen();
-        }
-        terminal.showCursor();
-        if (debugPaintHoverEnabled) {
-          terminal.disableMouseTracking();
-        }
-      }
-      _rootElement?.unmount();
-      _rootElement = null;
-      _activeRootScopes.remove(runScope);
-      runScope.dispose();
+      _teardownRun(runScope, sizeSubscription, subscription);
     }
+  }
+
+  Future<void> _initStandaloneViewport() async {
+    TermuiBinding.register(this);
+    final termSize = await terminal.size;
+    _width = termSize.x;
+    _computedHeight = alternateScreen
+        ? termSize.y
+        : _resolveInlineHeight(_width, fallbackHeight: termSize.y);
+    if (alternateScreen) {
+      terminal.enterAlternateScreen();
+    }
+  }
+
+  void _initManagedViewport() {
+    if (_width <= 0) _width = 80;
+    if (_computedHeight <= 0) {
+      _computedHeight = _resolveInlineHeight(_width, fallbackHeight: 24);
+    }
+  }
+
+  Element _mountRunTree(FocusScopeNode runScope, Completer<T?> completer) {
+    _currentBuffer = Buffer.blank(_width, _computedHeight);
+    _renderer = Renderer(_width, _computedHeight, mode: _renderingMode);
+    _completer = completer;
+    _isDisposed = false;
+    _focusScopeNode = runScope;
+    _activeRootScopes.add(runScope);
+
+    final scopedWidget = _buildScopedWidget(runScope, completer);
+    _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleRender);
+
+    final rootElement = scopedWidget.createElement()
+      ..owner = _buildOwner
+      ..mount(null);
+    _rootElement = rootElement;
+
+    if (mode == ExecutionMode.standalone && debugPaintHoverEnabled) {
+      terminal.enableMouseTracking();
+    }
+    rootElement.markNeedsBuild();
+    render();
+    return rootElement;
+  }
+
+  (StreamSubscription<Point<int>>, StreamSubscription<term.InputEvent>)
+  _attachStandaloneStreams(Element rootElement, Completer<T?> completer) {
+    final sizeSub = terminal.watchSize().listen((size) {
+      if (_isDisposed) return;
+      _width = size.x;
+      _computedHeight = alternateScreen
+          ? size.y
+          : _resolveInlineHeight(_width, fallbackHeight: size.y);
+      _currentBuffer?.resize(_width, _computedHeight);
+      _renderer = Renderer(_width, _computedHeight, mode: _renderingMode);
+      rootElement.markNeedsBuild();
+      render();
+    });
+
+    final eventSub = terminal.events.listen(
+      _handleStandaloneInput,
+      onDone: () {
+        if (!completer.isCompleted) completer.complete(null);
+      },
+      onError: (Object e, StackTrace stack) {
+        if (!completer.isCompleted) completer.completeError(e, stack);
+      },
+    );
+    return (sizeSub, eventSub);
+  }
+
+  void _handleStandaloneInput(term.InputEvent event) {
+    switch (event) {
+      case final term.KeyEvent keyEvent:
+        handleKeyEvent(keyEvent);
+      case final term.MouseEvent mouseEvent:
+        handleMouseEvent(mouseEvent);
+      case final term.PasteEvent pasteEvent:
+        handlePasteEvent(pasteEvent);
+      case term.FocusInEvent() ||
+          term.FocusOutEvent() ||
+          term.CursorPositionReportEvent() ||
+          term.KittyGraphicsEvent() ||
+          term.KittyKeyboardEvent():
+        break;
+    }
+  }
+
+  void _teardownRun(
+    FocusScopeNode runScope,
+    StreamSubscription<Point<int>>? sizeSubscription,
+    StreamSubscription<term.InputEvent>? subscription,
+  ) {
+    if (mode == ExecutionMode.standalone) {
+      TermuiBinding.unregister(this);
+    }
+    final wasDisposedBefore = _isDisposed;
+    _isDisposed = true;
+    if (!wasDisposedBefore) {
+      onPromptEnded?.call(this);
+    }
+    sizeSubscription?.cancel();
+    subscription?.cancel();
+    if (mode == ExecutionMode.standalone) {
+      if (alternateScreen) terminal.exitAlternateScreen();
+      terminal.showCursor();
+      if (debugPaintHoverEnabled) terminal.disableMouseTracking();
+    }
+    _rootElement?.unmount();
+    _rootElement = null;
+    _activeRootScopes.remove(runScope);
+    runScope.dispose();
   }
 
   /// Programmatically resizes the runner viewport and updates layout/buffers.
@@ -624,51 +628,80 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
 
   /// Recursively walks the element tree to find the focused element and route the key event.
   bool _routeKeyEvent(Element element, term.KeyEvent event) {
-    final elWidget = element.widget;
-    bool isFocused = false;
-    if (elWidget is Focusable) {
-      isFocused = (elWidget as Focusable).focused;
+    if (event.eventType == term.KeyEventType.release) {
+      return _routeKeyReleaseEvent(element, event);
+    }
+    if (_isElementFocused(element) &&
+        _invokeElementKeyHandler(element, event)) {
+      return true;
     }
 
-    if (element is StatefulElement) {
-      final state = element.state;
-      if (state is Focusable) {
-        isFocused = isFocused || (state as Focusable).focused;
-      }
-    }
-
-    bool consumed = false;
-
-    if (isFocused) {
-      var handledByState = false;
-      if (element is StatefulElement) {
-        final state = element.state;
-        if (state is KeyEventHandler) {
-          if ((state as KeyEventHandler).handleKeyEvent(event)) {
-            consumed = true;
-          }
-          handledByState = true;
-        }
-      }
-      if (!handledByState) {
-        if (elWidget is KeyEventHandler) {
-          if ((elWidget as KeyEventHandler).handleKeyEvent(event)) {
-            consumed = true;
-          }
-        }
-      }
-    }
-
-    if (consumed) return true;
-
-    bool childConsumed = false;
+    var childConsumed = false;
     element.visitChildren((child) {
       if (!childConsumed) {
         childConsumed = _routeKeyEvent(child, event);
       }
     });
-
     return childConsumed;
+  }
+
+  bool _routeKeyReleaseEvent(Element rootElement, term.KeyEvent event) =>
+      _routeReleaseToFocusTree(rootElement, event) ||
+      _routeReleaseToLegacyHandlers(rootElement, event);
+
+  bool _routeReleaseToFocusTree(Element element, term.KeyEvent event) {
+    var childConsumed = false;
+    element.visitChildren((child) {
+      if (!childConsumed) {
+        childConsumed = _routeReleaseToFocusTree(child, event);
+      }
+    });
+    if (childConsumed) return true;
+    if (!_elementWantsKeyRelease(element)) return false;
+    if (element case StatefulElement(state: final FocusState focusState)) {
+      return focusState.focusNode.hasFocus &&
+          (focusState.focusNode.onKeyEvent?.call(event) ?? false);
+    }
+    return false;
+  }
+
+  bool _routeReleaseToLegacyHandlers(Element element, term.KeyEvent event) {
+    if (_elementWantsKeyRelease(element) &&
+        _isElementFocused(element) &&
+        _invokeElementKeyHandler(element, event)) {
+      return true;
+    }
+    var childConsumed = false;
+    element.visitChildren((child) {
+      if (!childConsumed) {
+        childConsumed = _routeReleaseToLegacyHandlers(child, event);
+      }
+    });
+    return childConsumed;
+  }
+
+  static bool _elementWantsKeyRelease(Element element) =>
+      element.widget.wantsKeyReleaseEvents ||
+      (element.parent?.widget.wantsKeyReleaseEvents ?? false);
+
+  static bool _isElementFocused(Element element) {
+    if (element.widget case final Focusable focusable when focusable.focused) {
+      return true;
+    }
+    if (element case StatefulElement(state: final Focusable focusable)) {
+      return focusable.focused;
+    }
+    return false;
+  }
+
+  static bool _invokeElementKeyHandler(Element element, term.KeyEvent event) {
+    if (element case StatefulElement(state: final KeyEventHandler handler)) {
+      return handler.handleKeyEvent(event);
+    }
+    if (element.widget case final KeyEventHandler handler) {
+      return handler.handleKeyEvent(event);
+    }
+    return false;
   }
 
   /// Recursively walks the element tree to route a mouse event spatially.
@@ -680,65 +713,67 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     final absOffset = parentOffset + element.relativeOffset;
     final sx = event.x - 1;
     final sy = event.y - 1;
+    final inside = _isInsideElement(sx, sy, absOffset, element.size);
+    final broadcast = _isBroadcastMouseType(event.type);
+    if (!inside && !broadcast) return false;
 
-    // Check if the mouse is within the element's bounding box
-    final inside =
-        sx >= absOffset.dx &&
-        sx < absOffset.dx + element.size.width &&
-        sy >= absOffset.dy &&
-        sy < absOffset.dy + element.size.height;
-
-    final isMoveOrDragOrRelease =
-        event.type == term.MouseEventType.move ||
-        event.type == term.MouseEventType.drag ||
-        event.type == term.MouseEventType.release;
-
-    if (!inside && !isMoveOrDragOrRelease) {
-      return false;
-    }
-
-    if (element is AbsorbPointerElement &&
-        (element.widget as AbsorbPointer).absorbing &&
-        inside) {
-      final localX = sx - absOffset.dx.toInt();
-      final localY = sy - absOffset.dy.toInt();
+    final localX = sx - absOffset.dx;
+    final localY = sy - absOffset.dy;
+    if (_absorbsPointer(element, inside)) {
       _routeToElement(element, event, localX, localY);
       return true;
     }
 
-    // Traverse children in reverse order (topmost first, e.g. Stack children at the end are on top)
-    final children = <Element>[];
-    element.visitChildren((child) {
-      children.add(child);
-    });
+    final childConsumed = _routeMouseToChildren(
+      element,
+      event,
+      absOffset,
+      broadcast: broadcast,
+    );
+    if (childConsumed && inside) return true;
 
-    bool childConsumed = false;
-    for (final child in children.reversed) {
-      final consumed = _routeMouseEvent(child, event, absOffset);
-      if (consumed) {
-        childConsumed = true;
-        if (!isMoveOrDragOrRelease) {
-          break;
-        }
-      }
-    }
-
-    if (childConsumed && inside) {
-      return true;
-    }
-
-    final localX = sx - absOffset.dx.toInt();
-    final localY = sy - absOffset.dy.toInt();
-
-    final handled = _routeToElement(element, event, localX, localY);
-    if (handled) {
+    if (_routeToElement(element, event, localX, localY)) {
       if (event.type == term.MouseEventType.press) {
         _mouseCaptureElement = element;
       }
       return inside;
     }
+    return false;
+  }
 
-    return childConsumed && inside;
+  static bool _isInsideElement(int sx, int sy, Offset offset, Size size) =>
+      sx >= offset.dx &&
+      sx < offset.dx + size.width &&
+      sy >= offset.dy &&
+      sy < offset.dy + size.height;
+
+  static bool _isBroadcastMouseType(term.MouseEventType type) =>
+      type == term.MouseEventType.move ||
+      type == term.MouseEventType.drag ||
+      type == term.MouseEventType.release;
+
+  static bool _absorbsPointer(Element element, bool inside) =>
+      inside &&
+      element is AbsorbPointerElement &&
+      (element.widget as AbsorbPointer).absorbing;
+
+  bool _routeMouseToChildren(
+    Element element,
+    term.MouseEvent event,
+    Offset absOffset, {
+    required bool broadcast,
+  }) {
+    final children = <Element>[];
+    element.visitChildren(children.add);
+
+    var childConsumed = false;
+    for (final child in children.reversed) {
+      if (_routeMouseEvent(child, event, absOffset)) {
+        childConsumed = true;
+        if (!broadcast) break;
+      }
+    }
+    return childConsumed;
   }
 
   @override
@@ -751,64 +786,25 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     );
     try {
       final completer = _completer;
-      if (completer == null || completer.isCompleted) return false;
-
-      var isDone = false;
       final rootElement = _rootElement;
-      if (rootElement == null) return false;
+      if (completer == null || completer.isCompleted || rootElement == null) {
+        return false;
+      }
 
-      // Step 0: Debug Overlay Toggle
-      if (debugToggleKey != null && event == debugToggleKey) {
-        debugShowTouchesEnabled = !debugShowTouchesEnabled;
-        debugPaintHoverEnabled = !debugPaintHoverEnabled;
-        debugMouseCursorEnabled = !debugMouseCursorEnabled;
-        debugPaintLayerBordersEnabled = !debugPaintLayerBordersEnabled;
+      if (event.eventType == term.KeyEventType.release) {
+        final handled = _routeKeyReleaseEvent(rootElement, event);
+        if (handled) rootElement.markNeedsBuild();
+        return handled;
+      }
 
-        if (mode == ExecutionMode.standalone) {
-          if (debugPaintHoverEnabled) {
-            terminal.enableMouseTracking();
-          } else {
-            terminal.disableMouseTracking();
-          }
-        }
+      if (_handleDebugToggle(event)) return true;
 
-        _scheduleRender();
+      final isDone =
+          (onKeyEvent?.call(event) ?? false) ||
+          _dispatchKeyToFocusedTree(rootElement, event);
+      if (!isDone && _evaluateExitTrigger(event)) {
         return true;
       }
-
-      // Step 1: Custom Interceptor
-      if (onKeyEvent != null) {
-        isDone = onKeyEvent!(event);
-      }
-
-      // Step 2: Widget Event Routing
-      if (!isDone) {
-        var primaryFocus = FocusManager.instance.primaryFocus;
-        if (primaryFocus != null && _belongsToOtherRunnerScope(primaryFocus)) {
-          _focusScopeNode.requestFocus();
-          primaryFocus = FocusManager.instance.primaryFocus;
-        }
-        final focusTarget =
-            (primaryFocus != null && !_belongsToOtherRunnerScope(primaryFocus))
-            ? primaryFocus
-            : _focusScopeNode;
-        if (focusTarget.bubbleKeyEvent(event)) {
-          isDone = true;
-        } else {
-          isDone = _routeKeyEvent(rootElement, event);
-        }
-      }
-
-      // Step 3: Standard & System Exit Evaluation
-      if (!isDone) {
-        if (_detectTrigger(event) case final trigger?) {
-          if (exitConditions.containsKey(trigger)) {
-            _handleAction(trigger, event);
-            return true;
-          }
-        }
-      }
-
       if (isDone) {
         rootElement.markNeedsBuild();
       }
@@ -816,6 +812,45 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     } finally {
       Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
     }
+  }
+
+  bool _handleDebugToggle(term.KeyEvent event) {
+    if (debugToggleKey == null || event != debugToggleKey) return false;
+    debugShowTouchesEnabled = !debugShowTouchesEnabled;
+    debugPaintHoverEnabled = !debugPaintHoverEnabled;
+    debugMouseCursorEnabled = !debugMouseCursorEnabled;
+    debugPaintLayerBordersEnabled = !debugPaintLayerBordersEnabled;
+
+    if (mode == ExecutionMode.standalone) {
+      if (debugPaintHoverEnabled) {
+        terminal.enableMouseTracking();
+      } else {
+        terminal.disableMouseTracking();
+      }
+    }
+    _scheduleRender();
+    return true;
+  }
+
+  bool _dispatchKeyToFocusedTree(Element rootElement, term.KeyEvent event) {
+    var primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus != null && _belongsToOtherRunnerScope(primaryFocus)) {
+      _focusScopeNode.requestFocus();
+      primaryFocus = FocusManager.instance.primaryFocus;
+    }
+    final focusTarget =
+        (primaryFocus != null && !_belongsToOtherRunnerScope(primaryFocus))
+        ? primaryFocus
+        : _focusScopeNode;
+    return focusTarget.bubbleKeyEvent(event) ||
+        _routeKeyEvent(rootElement, event);
+  }
+
+  bool _evaluateExitTrigger(term.KeyEvent event) {
+    final trigger = _detectTrigger(event);
+    if (trigger == null || !exitConditions.containsKey(trigger)) return false;
+    _handleAction(trigger, event);
+    return true;
   }
 
   @override

@@ -112,7 +112,31 @@ enum KeyType {
   f11,
 
   /// F12 key.
-  f12,
+  f12;
+
+  /// Alias for [left] matching Kitty functional key naming.
+  static const KeyType arrowLeft = left;
+
+  /// Alias for [right] matching Kitty functional key naming.
+  static const KeyType arrowRight = right;
+
+  /// Alias for [up] matching Kitty functional key naming.
+  static const KeyType arrowUp = up;
+
+  /// Alias for [down] matching Kitty functional key naming.
+  static const KeyType arrowDown = down;
+}
+
+/// The transition type of a key event.
+enum KeyEventType {
+  /// Initial key press.
+  press,
+
+  /// Key held down (auto-repeat).
+  repeat,
+
+  /// Key release.
+  release,
 }
 
 /// A keyboard event.
@@ -125,8 +149,24 @@ final class KeyEvent extends InputEvent {
   @override
   final Set<Modifier> modifiers;
 
+  /// The transition type (press, repeat, or release).
+  final KeyEventType eventType;
+
+  /// Optional shifted Unicode codepoint reported by Kitty keyboard protocol.
+  final int? shiftedCodepoint;
+
+  /// Optional base-layout Unicode codepoint reported by Kitty keyboard protocol.
+  final int? baseLayoutCodepoint;
+
   /// Creates a [KeyEvent].
-  const KeyEvent(this.key, this.type, {this.modifiers = const <Modifier>{}});
+  const KeyEvent(
+    this.key,
+    this.type, {
+    this.modifiers = const <Modifier>{},
+    this.eventType = KeyEventType.press,
+    this.shiftedCodepoint,
+    this.baseLayoutCodepoint,
+  });
 
   @override
   bool operator ==(Object other) {
@@ -134,11 +174,21 @@ final class KeyEvent extends InputEvent {
     return other is KeyEvent &&
         other.key == key &&
         other.type == type &&
+        other.eventType == eventType &&
+        other.shiftedCodepoint == shiftedCodepoint &&
+        other.baseLayoutCodepoint == baseLayoutCodepoint &&
         _setEquals(other.modifiers, modifiers);
   }
 
   @override
-  int get hashCode => Object.hash(key, type, Object.hashAll(modifiers));
+  int get hashCode => Object.hash(
+    key,
+    type,
+    eventType,
+    shiftedCodepoint,
+    baseLayoutCodepoint,
+    Object.hashAll(modifiers),
+  );
 
   /// Returns a normalized key string (e.g., 'Enter', 'Escape', 'S', 'Tab')
   /// stripping out all modifiers.
@@ -181,7 +231,16 @@ final class KeyEvent extends InputEvent {
   }
 
   @override
-  String toString() => 'KeyEvent($key, type: $type, modifiers: $modifiers)';
+  String toString() {
+    final shifted = shiftedCodepoint != null
+        ? ', shiftedCodepoint: $shiftedCodepoint'
+        : '';
+    final base = baseLayoutCodepoint != null
+        ? ', baseLayoutCodepoint: $baseLayoutCodepoint'
+        : '';
+    return 'KeyEvent($key, type: $type, modifiers: $modifiers, '
+        'eventType: $eventType$shifted$base)';
+  }
 }
 
 /// Constants for common key string representations (baseKey and logicalKey).
@@ -496,6 +555,12 @@ final class MouseEvent extends InputEvent {
   /// Optional global Y coordinate (1-indexed terminal coordinate).
   final int? globalY;
 
+  /// Optional horizontal pixel coordinate within the terminal viewport.
+  final int? pixelX;
+
+  /// Optional vertical pixel coordinate within the terminal viewport.
+  final int? pixelY;
+
   /// Which button was pressed.
   final MouseButton button;
 
@@ -511,6 +576,8 @@ final class MouseEvent extends InputEvent {
     required this.y,
     this.globalX,
     this.globalY,
+    this.pixelX,
+    this.pixelY,
     required this.button,
     required this.type,
     this.modifiers = const <Modifier>{},
@@ -524,6 +591,8 @@ final class MouseEvent extends InputEvent {
         other.y == y &&
         other.globalX == globalX &&
         other.globalY == globalY &&
+        other.pixelX == pixelX &&
+        other.pixelY == pixelY &&
         other.button == button &&
         other.type == type &&
         _setEquals(other.modifiers, modifiers);
@@ -535,6 +604,8 @@ final class MouseEvent extends InputEvent {
     y,
     globalX,
     globalY,
+    pixelX,
+    pixelY,
     button,
     type,
     Object.hashAll(modifiers),
@@ -542,7 +613,10 @@ final class MouseEvent extends InputEvent {
 
   @override
   String toString() {
-    return 'MouseEvent(x: $x, y: $y, globalX: $globalX, globalY: $globalY, button: $button, type: $type, modifiers: $modifiers)';
+    final px = pixelX != null ? ', pixelX: $pixelX' : '';
+    final py = pixelY != null ? ', pixelY: $pixelY' : '';
+    return 'MouseEvent(x: $x, y: $y, globalX: $globalX, globalY: $globalY'
+        '$px$py, button: $button, type: $type, modifiers: $modifiers)';
   }
 }
 
@@ -618,4 +692,58 @@ final class CursorPositionReportEvent extends InputEvent {
 
   @override
   String toString() => 'CursorPositionReportEvent(x: $x, y: $y)';
+}
+
+/// Event representing a Kitty Graphics response (e.g. from capability query `a=q`).
+final class KittyGraphicsEvent extends InputEvent {
+  /// The image or query identifier.
+  final int imageId;
+
+  /// Whether the query or operation succeeded.
+  final bool supported;
+
+  /// Message or status string returned by the terminal (e.g. 'OK').
+  final String message;
+
+  /// Creates a [KittyGraphicsEvent].
+  const KittyGraphicsEvent({
+    required this.imageId,
+    required this.supported,
+    required this.message,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is KittyGraphicsEvent &&
+          other.imageId == imageId &&
+          other.supported == supported &&
+          other.message == message;
+
+  @override
+  int get hashCode => Object.hash(imageId, supported, message);
+
+  @override
+  String toString() =>
+      'KittyGraphicsEvent(imageId: $imageId, supported: $supported, message: $message)';
+}
+
+/// Event representing a Kitty Keyboard Protocol flags response (`CSI ? flags u`).
+final class KittyKeyboardEvent extends InputEvent {
+  /// Active progressive enhancement flags reported by the terminal.
+  final int flags;
+
+  /// Creates a [KittyKeyboardEvent].
+  const KittyKeyboardEvent({required this.flags});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is KittyKeyboardEvent && other.flags == flags;
+
+  @override
+  int get hashCode => flags.hashCode;
+
+  @override
+  String toString() => 'KittyKeyboardEvent(flags: $flags)';
 }

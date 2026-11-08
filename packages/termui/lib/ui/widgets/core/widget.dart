@@ -35,6 +35,12 @@ abstract class Widget {
   int getIntrinsicWidth(int height) {
     return 0;
   }
+
+  /// Whether this widget opts in to receiving [KeyEventType.release] events.
+  ///
+  /// Defaults to `false` so standard controls, global shortcuts, and dialog
+  /// dismissal handlers only react to key presses and repeats.
+  bool get wantsKeyReleaseEvents => false;
 }
 
 /// A [Widget] that builds a subtree without holding mutable state.
