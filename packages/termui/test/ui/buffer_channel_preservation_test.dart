@@ -54,6 +54,7 @@ void main() {
           );
         final src = Buffer.blank(6, 2)
           ..writeString(0, 0, 'LINK', richLinkStyle)
+          ..registerSelectableRegion(const Rect(1, 0, 4, 2))
           ..registerKittyRegistry(const Rect(0, 0, 6, 2), scopedReg);
 
         final dst = Buffer.blank(12, 4);
@@ -67,6 +68,7 @@ void main() {
         expect(dst.getUnderlineColor(3, 1), const Color(255, 64, 128).argb);
         expect(dst.getUri(3, 1), equals('https://example.dev/spec'));
         expect(dst.lookupKittyRegistry(4, 1), same(scopedReg));
+        expect(dst.selectableRegions, contains(const Rect(4, 1, 4, 2)));
 
         // Also verify painting BufferWidget into a Viewport never throws and preserves all channels.
         final vpParent = Buffer.blank(12, 4);

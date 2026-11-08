@@ -75,6 +75,11 @@ class Buffer {
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
 
+  /// Selectable sub-regions registered during the current paint pass.
+  final List<Rect> selectableRegions = [];
+
+  final List<int> _selectableRegionZIndices = [];
+
   final List<({Rect bounds, KittyImageRegistry registry})>
   _scopedKittyRegistries = [];
 
@@ -88,6 +93,27 @@ class Buffer {
   void addEffect(RegisteredEffect effect) {
     effects.add(effect);
   }
+
+  /// Registers a selectable rectangular [region] in buffer coordinates with optional [zIndex].
+  void registerSelectableRegion(Rect region, {int zIndex = 0}) {
+    final clipped = _boundsClip.intersect(region);
+    if (clipped.width <= 0 || clipped.height <= 0) return;
+    final existingIdx = selectableRegions.indexOf(clipped);
+    if (existingIdx >= 0) {
+      if (zIndex > _selectableRegionZIndices[existingIdx]) {
+        _selectableRegionZIndices[existingIdx] = zIndex;
+      }
+      return;
+    }
+    selectableRegions.add(clipped);
+    _selectableRegionZIndices.add(zIndex);
+  }
+
+  /// Layer z-index recorded for `selectableRegions[index]` (`0` by default).
+  int selectableRegionZIndexAt(int index) =>
+      index >= 0 && index < _selectableRegionZIndices.length
+      ? _selectableRegionZIndices[index]
+      : 0;
 
   /// Registers a pane-scoped [KittyImageRegistry] for cells within [bounds].
   void registerKittyRegistry(Rect bounds, KittyImageRegistry registry) {
@@ -113,18 +139,46 @@ class Buffer {
   KittyImageData? lookupKittyImage(int x, int y, int imageId) =>
       lookupKittyRegistry(x, y).lookupImage(imageId);
 
-  /// Propagates region metadata (`effects` and scoped [KittyImageRegistry] bounds)
-  /// from [source] translated by ([dx], [dy]) and clipped to [clip] (or [activeClip]).
+  /// Propagates region metadata (`effects`, `selectableRegions`, and scoped
+  /// [KittyImageRegistry] bounds) from [source] translated by ([dx], [dy]) and
+  /// clipped to [clip] (or [activeClip]).
   void propagateMetadataFrom(
     Buffer source, {
     int dx = 0,
     int dy = 0,
     Rect? clip,
+    int? zIndex,
   }) {
     final effectiveClip = _boundsClip.intersect(clip ?? activeClip);
     if (effectiveClip.width <= 0 || effectiveClip.height <= 0) return;
     _propagateEffectsFrom(source, dx, dy, effectiveClip);
+    _propagateSelectableRegionsFrom(source, dx, dy, effectiveClip, zIndex);
     _propagateRegistriesFrom(source, dx, dy, effectiveClip);
+  }
+
+  void _propagateSelectableRegionsFrom(
+    Buffer source,
+    int dx,
+    int dy,
+    Rect clip,
+    int? zIndexOverride,
+  ) {
+    final regions = source.selectableRegions;
+    for (var i = 0; i < regions.length; i++) {
+      final reg = regions[i];
+      final translated = Rect(
+        dx + reg.x,
+        dy + reg.y,
+        reg.width,
+        reg.height,
+      ).intersect(clip);
+      if (translated.width > 0 && translated.height > 0) {
+        registerSelectableRegion(
+          translated,
+          zIndex: zIndexOverride ?? source.selectableRegionZIndexAt(i),
+        );
+      }
+    }
   }
 
   void _propagateEffectsFrom(Buffer source, int dx, int dy, Rect clip) {
@@ -617,6 +671,8 @@ class Buffer {
         attributes[i] = Modifier.transparent;
       }
       effects.clear();
+      selectableRegions.clear();
+      _selectableRegionZIndices.clear();
       _scopedKittyRegistries.clear();
     } finally {
       Tracer.record(_traceClearId, Phase.end, TraceCategory.paint);
@@ -1108,7 +1164,7 @@ class Compositor {
       );
 
       _poolIndex = 0;
-      _propagateScopedKittyRegistries(target, sortedLayers);
+      _propagateLayerMetadata(target, sortedLayers);
       _compositeRecursive(target, sortedLayers, 0);
 
       // Premultiply final alpha against black for any remaining transparent pixels.
@@ -1129,23 +1185,40 @@ class Compositor {
     }
   }
 
-  static void _propagateScopedKittyRegistries(
+  static void _propagateLayerMetadata(
     Buffer target,
     List<LayeredBuffer> sortedLayers,
   ) {
     for (var i = sortedLayers.length - 1; i >= 0; i--) {
       final layer = sortedLayers[i];
-      for (final entry in layer.buffer._scopedKittyRegistries) {
-        target.registerKittyRegistry(
-          Rect(
-            layer.x + entry.bounds.x,
-            layer.y + entry.bounds.y,
-            entry.bounds.width,
-            entry.bounds.height,
-          ),
-          entry.registry,
-        );
-      }
+      _propagateLayerRegistries(target, layer);
+      _propagateLayerSelectableRegions(target, layer);
+    }
+  }
+
+  static void _propagateLayerRegistries(Buffer target, LayeredBuffer layer) {
+    for (final entry in layer.buffer._scopedKittyRegistries) {
+      target.registerKittyRegistry(
+        Rect(
+          layer.x + entry.bounds.x,
+          layer.y + entry.bounds.y,
+          entry.bounds.width,
+          entry.bounds.height,
+        ),
+        entry.registry,
+      );
+    }
+  }
+
+  static void _propagateLayerSelectableRegions(
+    Buffer target,
+    LayeredBuffer layer,
+  ) {
+    for (final reg in layer.buffer.selectableRegions) {
+      target.registerSelectableRegion(
+        Rect(layer.x + reg.x, layer.y + reg.y, reg.width, reg.height),
+        zIndex: layer.zIndex,
+      );
     }
   }
 

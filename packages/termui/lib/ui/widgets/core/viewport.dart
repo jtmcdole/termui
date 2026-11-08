@@ -18,7 +18,11 @@ class Viewport implements Buffer {
         bounds.y,
         max(0, bounds.width),
         max(0, bounds.height),
-      );
+      ) {
+    if (this.bounds.width > 0 && this.bounds.height > 0) {
+      parent.registerSelectableRegion(this.bounds);
+    }
+  }
 
   @override
   bool get defaultBlend => parent.defaultBlend;
@@ -203,6 +207,29 @@ class Viewport implements Buffer {
   List<RegisteredEffect> get effects => parent.effects;
 
   @override
+  List<Rect> get selectableRegions => parent.selectableRegions;
+
+  @override
+  void registerSelectableRegion(Rect region, {int zIndex = 0}) {
+    if (region.width <= 0 || region.height <= 0) return;
+    final clipped = bounds.intersect(
+      Rect(
+        bounds.x + region.x,
+        bounds.y + region.y,
+        region.width,
+        region.height,
+      ),
+    );
+    if (clipped.width > 0 && clipped.height > 0) {
+      parent.registerSelectableRegion(clipped, zIndex: zIndex);
+    }
+  }
+
+  @override
+  int selectableRegionZIndexAt(int index) =>
+      parent.selectableRegionZIndexAt(index);
+
+  @override
   void registerKittyRegistry(Rect rect, KittyImageRegistry registry) {
     if (rect.width <= 0 || rect.height <= 0) return;
     final clipped = bounds.intersect(
@@ -233,6 +260,7 @@ class Viewport implements Buffer {
     int dx = 0,
     int dy = 0,
     Rect? clip,
+    int? zIndex,
   }) {
     final vpClip = clip == null
         ? bounds
@@ -245,6 +273,7 @@ class Viewport implements Buffer {
       dx: bounds.x + dx,
       dy: bounds.y + dy,
       clip: vpClip,
+      zIndex: zIndex,
     );
   }
 
