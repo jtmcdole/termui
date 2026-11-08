@@ -6,20 +6,20 @@ A multiplatform, low-latency game audio engine designed for the `termui` termina
 
 ## Features
 
-* **Multiplatform Factory:** Uses a factory pattern (`createAudioEngine()`) to automatically resolve the best audio backend for the current platform (Dart VM/CLI, Flutter Desktop/Mobile, or Web).
-* **High-Performance CLI Audio:** Directly integrates with [SoLoud](https://soloud-audio.com/) via `dart:ffi` to deliver zero-latency C++ audio mixing in headless/CLI Dart applications.
-* **Web Audio Support:** Offloads asset loading and caching to a dedicated Web Worker (using `idb_shim` for IndexedDB) to prevent main-thread blocking, driving audio via WASM.
-* **3D Spatial Audio:** Fully supports positioning sound sources in 3D space (`x`, `y`, `z`) with velocity vectors for Doppler effects.
-* **Waveform Synthesis:** Procedurally generate sine, square, sawtooth, and bounce waves without external assets.
-* **Buses & Grouping:** Group audio voices for global volume ducking or effects (e.g., separating BGM from SFX).
+* **CLI Factory:** Provides `createAudioEngine()` to construct the native `CliAudioEngine` on Dart VM/CLI platforms (via `dart:ffi`), alongside `FlutterAudioEngine` in `termui_audio_flutter` for Flutter Desktop, Mobile, and Web.
+* **High-Performance CLI Audio:** Directly integrates with [SoLoud](https://soloud-audio.com/) via `dart:ffi` and Native Assets to deliver low-latency C++ audio mixing in headless and CLI Dart applications.
+* **Flutter & Web Audio Support:** Companion package `termui_audio_flutter` wraps `flutter_soloud` for Flutter Desktop, Mobile, and Web targets.
+* **3D Spatial Audio:** Supports positioning sound sources in 3D space (`x`, `y`, `z`) with velocity vectors for Doppler effects and distance attenuation models.
+* **Waveform Synthesis & Visualization:** Procedurally generate sine, square, sawtooth, and triangle/bounce waves without external assets, and query real-time PCM output frames (`getWaveform`).
+* **Buses, DSP Filters & Audio Sprites:** Group audio voices into buses (`AudioBus`), attach DSP filters (`FilterType.biquadResonant`, `echo`, `freeverb`, `bassboost`, `flanger`), play sub-segment sprites (`playSprite`, `playSpriteSequence`), stream PCM buffers (`createBufferStream`), and adjust playback speed with pitch preservation (`setRelativePlaySpeed(..., preservePitch: true)`).
 
 ## Architecture
 
-`termui_audio` isolates the rendering environment from the audio mixing engine, ensuring terminal UI event loops are never blocked by synchronous audio decoding:
+`termui_audio` isolates the rendering environment from the audio mixing engine so terminal UI event loops are not blocked by synchronous audio decoding:
 
 * **`TermuiAudioEngine`:** The core abstract API contract.
-* **`CliAudioEngine`:** Uses `dart:ffi` and Native Assets to link against `libsoloud`.
-* **`termui_audio_flutter`:** Companion package (`TermuiAudioFlutter.register()`) wrapping `flutter_soloud` for Flutter Desktop, Mobile, and Web.
+* **`CliAudioEngine`:** Uses `dart:ffi` and Native Assets to link against `libsoloud` (returned by `createAudioEngine()` on Dart VM/CLI).
+* **`termui_audio_flutter`:** Companion package providing `FlutterAudioEngine` (`package:termui_audio_flutter/termui_audio_flutter.dart`) wrapping `flutter_soloud` for Flutter Desktop, Mobile, and Web.
 
 ## Usage
 
@@ -59,11 +59,13 @@ final voice = audioEngine.play3d(engineLoop, 5.0, 0.0, 0.0);
 audioEngine.set3dSourceMinMaxDistance(voice, 2.0, 20.0);
 audioEngine.set3dSourceAttenuation(voice, AttenuationModel.linearDistance, 1.0);
 
-// Update its position and velocity dynamically
+// Update its position (x, y, z) and velocity dynamically
 audioEngine.set3dSourceParameters(
   voice,
-  x: 2.0, y: 0.0, z: -1.0,
-  vx: -5.0 // Velocity on the X axis (Doppler)
+  2.0,
+  0.0,
+  -1.0,
+  vx: -5.0, // Velocity on the X axis (Doppler)
 );
 ```
 
@@ -93,4 +95,4 @@ SizedBox(
 ## Examples
 
 Check out the interactive example located in `example/`:
-* Run `dart run example/bin/main.dart` to experience the CLI audio backend with a 3D spatial grid UI.
+* From `packages/termui_audio/example`, run `dart run bin/main.dart` for the CLI TUI audio player or `flutter run` for the Flutter GUI/Web target.
