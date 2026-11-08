@@ -43,7 +43,7 @@ To host a `termui` TUI application in a graphical environment (e.g. within a Flu
 To use it, wrap your application initialization with `TermuiHotReload` and execute your Dart script with the VM service enabled:
 
 ```bash
-dart --enable-vm-service bin/main.dart
+dart --enable-vm-service example/widget_book.dart
 ```
 
 **Implementation Snapshot:**
@@ -135,6 +135,7 @@ The `Compositor` flattens overlapping, out-of-order layers onto a single 2D targ
   * For each layer, it computes target coordinates. If a coordinate is already marked in `written`, that pixel is occluded by a higher layer, and writing is skipped.
   * Cell drawing is skipped if the cell is marked as transparent (`sourceCell.isTransparent`).
   * If a layer's opaque cells cover the target screen completely, `remainingTargetCells` reaches 0, and the loop breaks early (early-exit optimization).
+  * After flattening layers, `Compositor` executes registered post-processing `TerminalEffect`s (such as `DimmerEffect` and `GlitchEffect` from `EffectWidget` and `DimmingBarrier`) over their target screen regions.
 
 ### Renderer (`lib/ui/renderer.dart`)
 The `Renderer` writes minimal ANSI escape sequences by comparing the new screen state with the previous state.
@@ -303,8 +304,12 @@ Widgets in `termui` are organized into four functional categories.
 ### A. Layout Widgets
 These widgets configure constraints and position child widgets in 2D space:
 * `Align`: Aligns a child within itself.
+* `Center`: Centers a child within itself.
 * `Column`: Arranges children vertically.
 * `ConstrainedBox`: Imposes explicit constraints on a child.
+* `Expanded`: Expands a child of a `Row`, `Column`, or `Flex` to fill available space.
+* `FittedBox`: Scales and positions its child within itself according to `BoxFit`.
+* `Flex`: Arranges children along a configurable horizontal or vertical axis.
 * `Flexible`: Controls child sizing relative to sibling flex ratios.
 * `LayoutBuilder`: Builds a widget tree dynamically based on parent constraints.
 * `Padding`: Adds margins around its child.
@@ -321,21 +326,29 @@ These widgets capture keyboard and mouse events:
 * `AnimatedButton`: A button that plays transition effects when selected.
 * `Button`: Standard clickable button.
 * `Checkbox`: A toggle widget for boolean values.
+* `Draggable`: Makes a child widget draggable via mouse gestures.
+* `DragTarget`: Receives data dropped by a `Draggable` widget.
+* `DropdownButton`: Displays a button that opens a floating selection menu when activated.
 * `Focus`: Wraps a subtree and manages a `FocusNode`.
-* `Form`: A container that groups input fields.
+* `FocusScope`: Groups focusable descendants inside a `FocusScopeNode`.
+* `Form`: A container that groups and validates input fields.
 * `HorizontalRadioGroup`: Horizontal list of mutually exclusive options.
 * `InkwellButton`: Button that displays selection indicators.
+* `KeyboardListener`: Listens to keyboard events on a focused subtree.
 * `NumberSelector`: Incremental/decremental input selector.
+* `PopupMenuButton`: Displays a popup menu overlay when triggered.
 * `Radio`: An individual option button inside a radio group.
 * `ScrollBar`: Interactive scrollbar overlay.
 * `Slider`: Numeric input slider.
 * `StatefulBuilder`: Exposes a local builder callback to trigger widget rebuilds.
+* `StreamBuilder`: Rebuilds its subtree in response to `Stream` snapshots.
 * `Switch`: Horizontal toggle switch.
 * `TabBar`: Navigation tab selector.
 * `TextField`: Multi-line or single-line text input field.
 
 ### C. Display Widgets
 These widgets render static or dynamic visual elements:
+* `BufferWidget`: Paints a pre-rendered `Buffer` directly into the widget tree.
 * `Canvas`: Vector drawing canvas utilizing sub-pixel Braille dot mapping.
 * `DecoratedBox`: Draws borders and backgrounds around its child.
 * `Grid`: A tile-aligned layout grid.
@@ -347,14 +360,19 @@ These widgets render static or dynamic visual elements:
 * `Paginator`: Pagination controls for structured lists.
 * `RichText`: Displays text with mixed style configurations.
 * `SevenSegmentDisplay`: Renders numerical digits in a seven-segment style.
+* `Sparkline`: Renders a compact inline bar chart for numeric series.
 * `Spinner`: Displays a rotating character to indicate loading status.
 * `Table`: Renders grid-aligned tabular datasets.
 * `Text`: Standard text wrapper.
 * `TimerWidget`: A counting timer that updates periodically.
 * `TreeWidget`: Collapsible tree node hierarchy.
 
-### D. Core/Scaffold Widgets
-These widgets handle screen overlays and modal dialog systems:
+### D. Core/Scaffold & Effect Widgets
+These widgets handle screen overlays, pointer interception, post-processing effects, and modal dialog systems:
+* `AbsorbPointer`: Intercepts pointer events to prevent them from reaching descendants or underlying layers.
+* `Builder`: Obtains a `BuildContext` via a closure callback.
+* `DimmingBarrier`: Dims underlying content and blocks pointer events behind modals.
+* `EffectWidget`: Applies a `TerminalEffect` (such as `DimmerEffect` or `GlitchEffect`) to its region.
 * `ModalOverlay`: Displays an overlay box that intercepts background events.
 * `Overlay`: Manages stacked independent overlay panels.
 * `Window`: A floating, draggable panel with titles, borders, and controls.
@@ -366,7 +384,11 @@ These widgets handle screen overlays and modal dialog systems:
 The performance tracing framework profiling tools are located in `lib/perf` and `lib/trace`.
 
 ### Tracer (`lib/perf/tracer.dart`)
-A high-performance, low-overhead event tracer that writes to a binary log file.
+A low-overhead event tracer that buffers events in a binary ring buffer and flushes Chrome Trace Event Format JSON files (e.g., `compositor_trace.json`). You can inspect recorded traces in the terminal using the `termui_trace` CLI executable (`bin/termui_trace.dart`):
+
+```bash
+dart run termui:termui_trace <path_to_trace.json>
+```
 * **Recording Categories (`TraceCategory`)**:
   * `build`: Widget construction events.
   * `layout`: Sizing and layout events.
@@ -389,7 +411,7 @@ A high-performance, low-overhead event tracer that writes to a binary log file.
 The profiling visualizer uses a split-screen dashboard:
 
 * **TraceViewerApp (`lib/trace/widgets/trace_viewer_app.dart`)**:
-  * Provides the primary interface for loading and exploring binary trace outputs.
+  * Provides the primary interface for loading and exploring JSON trace outputs.
   * Supports zoom and pan controls.
   * Manages an undo/redo crop history stack (`_undoStack`/`_redoStack`) to isolate and inspect specific time ranges.
 
