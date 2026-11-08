@@ -22,16 +22,22 @@ Welcome to the **termui** codebase. This document serves as a comprehensive deve
 
 The project is managed as a Melos monorepo with the following workspace packages:
 
-1. **[termui](/packages/termui)** (Core package): Implements the layout engine, widgets, elements, focus management, and ANSI rendering pipeline.
-2. **[termui_flutter](/packages/termui_flutter)** (Core package): Performant Flutter renderer.
-3. **[termui_test](/packages/termui_test)** (Core package): Fakes, Mocks, Integration testing, Matchers, Goldent testing.
-4. **[termui_shared_examples](/packages/termui_shared_examples)**: Contains example interfaces and reusable scenario layouts.
-5. **[termui_recorder](/packages/termui_recorder)**: Asciicast v3 recording and playback, screenshots.
+1. **[termui](/packages/termui)** (Core package): Implements the layout engine, widgets, elements, focus management, performance tracing, and ANSI rendering pipeline.
+2. **[termui_flutter](/packages/termui_flutter)** (Core package): Hardware-accelerated Flutter and Web glyph atlas renderer.
+3. **[termui_test](/packages/termui_test)** (Core package): Fakes, mocks, headless integration testing (`TerminalTester`), finders, and golden testing.
+4. **[termui_shared_examples](/packages/termui_shared_examples)**: Shared example interfaces, Widget Book catalog, and reusable glass/PTY scenario layouts.
+5. **[termui_recorder](/packages/termui_recorder)**: Asciicast v2/v3 recording, interactive playback (`termui_play`), ANSI screenshots, and golden matchers.
+6. **[pty2](/packages/pty2)**: Cross-platform native pseudo-terminal (PTY) bindings using Unix `openpty`/`fork` and Windows `ConPTY`.
+7. **[termui_pty](/packages/termui_pty)**: Streaming ANSI/VT virtual terminal emulator (`VirtualTerminal`) and `TerminalView` / `PseudoTerminalView` widgets.
+8. **[termui_hotreload](/packages/termui_hotreload)**: Dart VM service hot reload integration for `termui` applications.
+9. **[termui_audio](/packages/termui_audio)**: Multiplatform 3D spatial audio, waveform synthesis, and bus filtering engine backed by SoLoud FFI on CLI.
+10. **[termui_audio_flutter](/packages/termui_audio_flutter)**: Flutter Desktop, Mobile, and Web SoLoud backend (`FlutterAudioEngine`) for `termui_audio`.
+11. **[termui_tinpot](/packages/termui_tinpot)**: Chafa-inspired Unicode block and DIN99d perceptual image-to-ANSI quantizer.
 
 ### Dependencies & Platforms
 * **Dart SDK**: Target environment is `sdk: ">=3.11.0 <4.0.0"`.
-* **Platform APIs**: Interacts with libc APIs on Linux/Unix using `dart:ffi` and Windows APIs using [win32](/pubspec.yaml#L17) (`^6.0.0`) to configure TTY raw mode and query screen sizing.
-* **Unicode / Wide Characters**: Uses [characters](/pubspec.yaml#L12) (`^1.4.0`) to correctly measure and slice grapheme clusters (correctly handling multi-byte characters, ZWJ sequences, and emojis).
+* **Platform APIs**: Interacts with libc APIs on Linux/Unix using `dart:ffi` and Windows APIs using [win32](/packages/termui/pubspec.yaml#L37) (`^6.0.0`) to configure TTY raw mode and query screen sizing.
+* **Unicode / Wide Characters**: Uses [characters](/packages/termui/pubspec.yaml#L31) (`^1.4.0`) to correctly measure and slice grapheme clusters (correctly handling multi-byte characters, ZWJ sequences, and emojis).
 
 ---
 
@@ -51,7 +57,7 @@ When writing or modifying code in this repository:
      }
    };
    ```
-4. **Propagate InheritedWidget Updates**: Ensure [InheritedElement.update](/packages/termui/lib/ui/layout.dart#L734) always calls `rebuild()` to ensure that children configurations get updated downstream when the parent rebuilds.
+4. **Propagate InheritedWidget Updates**: Ensure [InheritedElement.update](/packages/termui/lib/ui/widgets/core/element.dart#L476) always calls `rebuild()` to ensure that children configurations get updated downstream when the parent rebuilds.
 5. **Conventional Commits & Breaking Changes**: Write structured commit messages conforming to Conventional Commits 1.0.0 (e.g. `feat(core): ...`, `fix(focus): ...`). Before committing, audit every diff for both **public API breaks** (removed/renamed symbols, changed signatures, removed runtime dependencies, moved files/entrypoints) and **behavioral or side-effect changes** (lifecycle/unmount order, ownership/disposal rules, sync-to-async shifts, signal handling, stricter exceptions, or rendering occlusion). Every breaking or side-effecting commit MUST include **both** `!` in the header (`fix(scope)!: summary`) and a `BREAKING CHANGE: <reason>` footer on the final line:
    ```text
    fix(focus)!: detach children on dispose and preserve external FocusNodes
@@ -69,7 +75,7 @@ When writing or modifying code in this repository:
 
 ---
 
-## 6. Testing & Golden Suites
+## 4. Testing & Golden Suites
 
 Core testing utilities (`TerminalTester`, `MockTerminalBackend`, `find`) are located in [packages/termui_test](/packages/termui_test), and each package maintains its own test suite under `packages/<package>/test`.
 
@@ -81,18 +87,18 @@ Core testing utilities (`TerminalTester`, `MockTerminalBackend`, `find`) are loc
 * **Diff Coverage Gate**: Maintain at least 90% LCOV line coverage on modified production lines (`dart test --coverage=coverage` followed by `dart run coverage:format_coverage --lcov`). Remove temporary `coverage/` directories before committing.
 
 ### Commands
-Run the following commands inside `/app/packages/termui`:
+Run the following commands inside `packages/termui` (or at the workspace root):
 * Run all unit and integration tests:
   ```bash
   dart test
   ```
 * Run specific test suites:
   ```bash
-  dart test test/multi_pane_settings_test.dart
+  dart test test/compositor_demo_test.dart
   ```
 * Verify static analysis (returns zero warnings):
   ```bash
-  dart analyze
+  dart analyze --fatal-infos
   ```
 * Format codebase:
   ```bash
@@ -101,12 +107,20 @@ Run the following commands inside `/app/packages/termui`:
 
 ---
 
-## 7. Example Gallery & Links
+## 5. Example Gallery & Links
 
 Check out the interactive examples in `packages/termui/example/` and `packages/termui_shared_examples/example/`:
 * **[01_questionnaire_example.dart](/packages/termui/example/01_questionnaire_example.dart)**: A simple terminal form collecting user answers.
 * **[02_progress_bars.dart](/packages/termui/example/02_progress_bars.dart)**: Demonstrates linear and spinner progression indicators.
 * **[03_responsive_dashboard.dart](/packages/termui/example/03_responsive_dashboard.dart)**: Grid-aligned terminal dashboard that reflows on resize.
-* **[04_multi_pane_settings.dart](/packages/termui/example/04_multi_pane_settings.dart)**: Dual-pane settings panel displaying list-to-detail sibling traversal and text inputs.
 * **[braille_canvas.dart](/packages/termui/example/braille_canvas.dart)**: Demonstrates vector graphics mapping on a braille sub-pixel layout.
-* **[widget_book.dart](/packages/termui_shared_examples/example/widget_book.dart)**: Interactive widget component book with custom page routes.
+* **[compositor_demo.dart](/packages/termui/example/compositor_demo.dart)**: Overlapping floating windows with z-index layering, occlusion culling, and tracing.
+* **[dashboard_demo.dart](/packages/termui/example/dashboard_demo.dart)**: Data tables with embedded animated widgets and floating dropdown overlays.
+* **[drag_drop_demo.dart](/packages/termui/example/drag_drop_demo.dart)**: Interactive mouse drag-and-drop between `Draggable` items and `DragTarget` zones.
+* **[layout_demo.dart](/packages/termui/example/layout_demo.dart)**: Static flex and box constraint layout demonstration.
+* **[scroll_input_demo.dart](/packages/termui/example/scroll_input_demo.dart)**: Scrollable form controls and modal overlay dialog.
+* **[state.dart](/packages/termui/example/state.dart)**: Reactive `StatefulWidget` and `InheritedWidget` layout and counter showcase.
+* **[theme_decoration_demo.dart](/packages/termui/example/theme_decoration_demo.dart)**: Custom themes, border decorations, and dynamic styling.
+* **[widget_book.dart](/packages/termui_shared_examples/example/widget_book.dart)**: Interactive 20-page widget component catalog with alternate and inline screen modes.
+* **[06_glass_compositing.dart](/packages/termui_shared_examples/example/06_glass_compositing.dart)**: Semi-transparent glass window compositing with blur/tint effects.
+* **[pty_glass_example.dart](/packages/termui_shared_examples/example/pty_glass_example.dart)**: Live subprocess PTY rendered beneath translucent glass TUI windows.
