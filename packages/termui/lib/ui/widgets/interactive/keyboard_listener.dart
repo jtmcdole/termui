@@ -13,12 +13,16 @@ class KeyboardListener extends StatefulWidget implements Focusable {
   /// If it returns true, the event is considered handled.
   final bool Function(evt.KeyEvent event)? onKeyEvent;
 
+  @override
+  final bool wantsKeyReleaseEvents;
+
   /// Creates a new keyboard listener widget.
   const KeyboardListener({
     super.key,
     required this.child,
     required this.focusNode,
     this.onKeyEvent,
+    this.wantsKeyReleaseEvents = false,
   });
 
   @override

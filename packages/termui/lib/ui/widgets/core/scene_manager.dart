@@ -204,25 +204,34 @@ class SceneManager implements Reassemblable {
       metadata: {'key': event.traceKey},
     );
     try {
-      if (debugToggleKey != null && event == debugToggleKey) {
-        debugShowTouchesEnabled = !debugShowTouchesEnabled;
-        debugPaintHoverEnabled = !debugPaintHoverEnabled;
-        debugMouseCursorEnabled = !debugMouseCursorEnabled;
-        debugPaintLayerBordersEnabled = !debugPaintLayerBordersEnabled;
-        scheduleRender();
-        return;
-      }
-
-      if (onKeyEvent?.call(event) ?? false) {
-        return;
-      }
-
-      final handled = focusedLayer?.renderer.handleKeyEvent(event) ?? false;
-      if (!handled) {
-        _clearHoverState();
-      }
+      _routeKeyEvent(event);
     } finally {
       Tracer.record(_traceKeyEventId, Phase.end, TraceCategory.events);
+    }
+  }
+
+  void _routeKeyEvent(KeyEvent event) {
+    if (event.eventType == KeyEventType.release) {
+      focusedLayer?.renderer.handleKeyEvent(event);
+      return;
+    }
+
+    if (debugToggleKey != null && event == debugToggleKey) {
+      debugShowTouchesEnabled = !debugShowTouchesEnabled;
+      debugPaintHoverEnabled = !debugPaintHoverEnabled;
+      debugMouseCursorEnabled = !debugMouseCursorEnabled;
+      debugPaintLayerBordersEnabled = !debugPaintLayerBordersEnabled;
+      scheduleRender();
+      return;
+    }
+
+    if (onKeyEvent?.call(event) ?? false) {
+      return;
+    }
+
+    final handled = focusedLayer?.renderer.handleKeyEvent(event) ?? false;
+    if (!handled) {
+      _clearHoverState();
     }
   }
 
@@ -307,6 +316,8 @@ class SceneManager implements Reassemblable {
         y: event.y - layer.y,
         globalX: event.globalX ?? event.x,
         globalY: event.globalY ?? event.y,
+        pixelX: event.pixelX,
+        pixelY: event.pixelY,
         button: event.button,
         type: event.type,
         modifiers: event.modifiers,
@@ -660,6 +671,8 @@ class SceneManager implements Reassemblable {
       case FocusInEvent():
       case FocusOutEvent():
       case CursorPositionReportEvent():
+      case KittyGraphicsEvent():
+      case KittyKeyboardEvent():
         break;
     }
   }

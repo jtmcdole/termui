@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+import 'package:termui/terminal/event.dart' as ev;
+import 'package:termui/terminal/input_parser.dart';
 import 'package:termui/termui.dart';
 import 'package:test/test.dart';
 
@@ -394,11 +396,6 @@ void main() {
       },
     );
 
-    test('buildCapabilityQuery formats APC query and DA1 fallback', () {
-      final query = KittyImageData.buildCapabilityQuery(queryId: 99);
-      expect(query, equals('\x1b_Gi=99,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c'));
-    });
-
     test(
       'KittyImageRegistry preserves KittyImageData identity across unchanged repaints and updates on mutation',
       () {
@@ -539,6 +536,80 @@ void main() {
           fullscreenTarget.lookupKittyImage(2, 1, 0x000099)?.rgbaPixels,
           same(pxGlobal),
         );
+      },
+    );
+
+    test(
+      'InputParser handles Alt+_ without stalling, streaming APC bounds, CAN/SUB abort, and ESC recovery',
+      () {
+        final query = KittyImageData.buildCapabilityQuery(queryId: 99);
+        expect(
+          query,
+          equals('\x1b_Gi=99,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c'),
+        );
+
+        final parser = InputParser();
+
+        // 1. Bare ESC _ -> Alt+_ immediately without stalling!
+        final bareAltUnderscore = parser.parse('\x1b_'.codeUnits);
+        expect(
+          bareAltUnderscore,
+          equals([
+            const KeyEvent(
+              '_',
+              KeyType.character,
+              modifiers: {ev.Modifier.alt},
+            ),
+          ]),
+        );
+
+        // 2. ESC _ followed by non-'G' -> Alt+_ plus trailing char!
+        final altUnderscorePlusKey = parser.parse('\x1b_z'.codeUnits);
+        expect(
+          altUnderscorePlusKey,
+          equals([
+            const KeyEvent(
+              '_',
+              KeyType.character,
+              modifiers: {ev.Modifier.alt},
+            ),
+            const KeyEvent('z', KeyType.character),
+          ]),
+        );
+
+        // 3. Chunked valid Kitty APC response (split across chunks including split ST)
+        expect(parser.parse('\x1b_Gi=9'.codeUnits), isEmpty);
+        expect(parser.parse('9;OK\x1b'.codeUnits), isEmpty);
+        final events = parser.parse('\\'.codeUnits);
+        expect(
+          events,
+          equals([
+            const KittyGraphicsEvent(
+              imageId: 99,
+              supported: true,
+              message: 'OK',
+            ),
+          ]),
+        );
+
+        // 4. CAN (0x18) and SUB (0x1A) abort malformed APC cleanly
+        final afterCan = parser.parse('\x1b_Gi=1;BROKEN\x18k'.codeUnits);
+        expect(afterCan, equals([const KeyEvent('k', KeyType.character)]));
+
+        final afterSub = parser.parse('\x1b_Gi=1;BROKEN\x1am'.codeUnits);
+        expect(afterSub, equals([const KeyEvent('m', KeyType.character)]));
+
+        // 5. ESC followed by non-'\' aborts APC and re-processes from that ESC!
+        final escRecovery = parser.parse('\x1b_Gi=1;UNCLOSED\x1b[A'.codeUnits);
+        expect(escRecovery, equals([const KeyEvent('up', KeyType.up)]));
+
+        // 6. > 1.4MB APC overflow is discarded without OOM or keystroke leak
+        expect(parser.parse('\x1b_Gi=7;'.codeUnits), isEmpty);
+        final bigChunk = List<int>.filled(800000, 0x41);
+        expect(parser.parse(bigChunk), isEmpty);
+        expect(parser.parse(bigChunk), isEmpty);
+        final postOverflow = parser.parse('\x1b\\q'.codeUnits);
+        expect(postOverflow, equals([const KeyEvent('q', KeyType.character)]));
       },
     );
   });

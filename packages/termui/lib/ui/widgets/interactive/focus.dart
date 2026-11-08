@@ -18,6 +18,9 @@ class Focus extends StatefulWidget {
   /// Callback executed when this focus node gains or loses focus.
   final void Function(bool hasFocus)? onFocusChange;
 
+  @override
+  final bool wantsKeyReleaseEvents;
+
   /// Creates a new [Focus] widget.
   const Focus({
     super.key,
@@ -26,6 +29,7 @@ class Focus extends StatefulWidget {
     this.autofocus = false,
     this.onKeyEvent,
     this.onFocusChange,
+    this.wantsKeyReleaseEvents = false,
   });
 
   @override
@@ -159,6 +163,7 @@ class FocusScope extends Focus {
     super.autofocus,
     super.onKeyEvent,
     super.onFocusChange,
+    super.wantsKeyReleaseEvents,
   });
 
   @override
