@@ -35,7 +35,6 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
-  kterm: ^1.0.0
   file: ^7.0.0
   termui: ^0.13.0
   termui_flutter: ^0.10.1
