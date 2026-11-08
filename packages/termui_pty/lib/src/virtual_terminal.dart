@@ -31,6 +31,21 @@ enum TerminalCursorShape {
   steadyBar,
 }
 
+/// Semantic shell prompt region reported via `OSC 133` (`A`/`B`/`C`/`D`).
+enum ShellPromptZone {
+  /// Outside of an active prompt/command cycle (`OSC 133;D` or initial state).
+  none,
+
+  /// Inside the shell prompt (`OSC 133;A`).
+  prompt,
+
+  /// Inside the user command input line (`OSC 133;B`).
+  commandInput,
+
+  /// Inside the executing command's output (`OSC 133;C`).
+  commandOutput,
+}
+
 typedef _SavedCursor = ({
   int x,
   int y,
@@ -257,6 +272,21 @@ final class VirtualTerminal implements TerminalHandler {
   /// Callback invoked when [windowTitle] changes via `OSC 0`, `OSC 2`, or `CSI 23 t`.
   void Function(String title)? onTitleChanged;
 
+  /// Current working directory reported via `OSC 7` (`file://hostname/path`).
+  String? workingDirectory;
+
+  /// Active semantic shell prompt zone reported via `OSC 133`.
+  ShellPromptZone promptZone = .none;
+
+  /// Exit status reported by the most recent `OSC 133;D;<exitCode>` sequence.
+  int? lastCommandExitCode;
+
+  /// Callback invoked when [workingDirectory] is updated via `OSC 7`.
+  void Function(String directory)? onWorkingDirectoryChanged;
+
+  /// Callback invoked when an `OSC 133` semantic prompt transition occurs.
+  void Function(ShellPromptZone zone, {int? exitCode})? onShellIntegration;
+
   /// Callback invoked when an `OSC 52` clipboard write sequence is decoded.
   ///
   /// The `selection` parameter is the target selection buffer (e.g. `'c'` for
@@ -381,6 +411,9 @@ final class VirtualTerminal implements TerminalHandler {
       iconTitle = '';
       _windowTitleStack.clear();
       _iconTitleStack.clear();
+      workingDirectory = null;
+      promptZone = .none;
+      lastCommandExitCode = null;
       _primaryWrapped.fillRange(0, height, false);
       _scrollback.clear();
       final (fg, bg, mod) = _eraseAttributes();
@@ -1568,9 +1601,58 @@ final class VirtualTerminal implements TerminalHandler {
       case 2:
         windowTitle = payload;
         onTitleChanged?.call(payload);
+      case 7:
+        _handleOsc7(payload);
       case 52:
         _handleOsc52(payload);
+      case 133:
+        _handleOsc133(payload);
     }
+  }
+
+  void _handleOsc7(String payload) {
+    final trimmed = payload.trim();
+    if (trimmed.isEmpty) return;
+    final uri = Uri.tryParse(trimmed);
+    final rawPath = (uri != null && uri.scheme == 'file') ? uri.path : trimmed;
+    if (rawPath.isEmpty) return;
+    String decoded;
+    try {
+      decoded = Uri.decodeFull(rawPath);
+    } on ArgumentError {
+      decoded = rawPath;
+    }
+    workingDirectory = decoded;
+    onWorkingDirectoryChanged?.call(decoded);
+  }
+
+  void _handleOsc133(String payload) {
+    if (payload.isEmpty) return;
+    final marker = payload[0];
+    switch (marker) {
+      case 'A':
+        promptZone = .prompt;
+        onShellIntegration?.call(.prompt);
+      case 'B':
+        promptZone = .commandInput;
+        onShellIntegration?.call(.commandInput);
+      case 'C':
+        promptZone = .commandOutput;
+        onShellIntegration?.call(.commandOutput);
+      case 'D':
+        final exitCode = _parseOsc133ExitCode(payload);
+        lastCommandExitCode = exitCode;
+        promptZone = .none;
+        onShellIntegration?.call(.none, exitCode: exitCode);
+    }
+  }
+
+  static int? _parseOsc133ExitCode(String payload) {
+    if (payload.length < 3 || payload.codeUnitAt(1) != 0x3B) return null;
+    final rest = payload.substring(2);
+    final semi = rest.indexOf(';');
+    final token = semi < 0 ? rest : rest.substring(0, semi);
+    return int.tryParse(token);
   }
 
   void _handleOsc52(String payload) {
