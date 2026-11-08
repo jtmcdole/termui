@@ -11,8 +11,16 @@ class _TestTerminalHandler implements TerminalHandler {
   int oscCallCount = 0;
   int? lastOscCommand;
   String? lastOscPayload;
+  int apcCallCount = 0;
+  String? lastApcPayload;
   final List<String> escCommands = [];
   final StringBuffer printedText = StringBuffer();
+
+  @override
+  void apc(String payload) {
+    apcCallCount++;
+    lastApcPayload = payload;
+  }
 
   @override
   void csi(
@@ -376,6 +384,8 @@ void main() {
           '\x1b_Gi=31;AAAA\x1b\\Done',
         );
         expect(handler.oscCallCount, equals(2));
+        expect(handler.apcCallCount, equals(1));
+        expect(handler.lastApcPayload, equals('Gi=31;AAAA'));
         expect(handler.escCommands, isEmpty);
         expect('${handler.printedText}', equals('Done'));
 
@@ -395,6 +405,45 @@ void main() {
         expect(handler.lastCsiCommand, equals('q'));
         expect(handler.lastCsiParams, equals([3]));
         expect('${handler.printedText}', equals('A'));
+      },
+    );
+
+    test(
+      'Unwraps DCS tmux APC passthrough, parses 0x9F C1 APC, and drops oversized APC payloads',
+      () {
+        final handler = _TestTerminalHandler();
+        final parser = AnsiParser(handler);
+
+        // 1. DCS tmux passthrough wrapping APC with doubled inner ST, fed char-by-char.
+        const tmuxApc = '\x1bPtmux;\x1b\x1b_Gi=77,a=q;AAAA\x1b\x1b\\\x1b\\';
+        for (var i = 0; i < tmuxApc.length; i++) {
+          parser.parse(tmuxApc[i]);
+        }
+        expect(handler.apcCallCount, equals(1));
+        expect(handler.lastApcPayload, equals('Gi=77,a=q;AAAA'));
+        expect('${handler.printedText}', isEmpty);
+
+        // 2. DCS tmux passthrough wrapping BEL-terminated APC.
+        parser.parse('\x1bPtmux;\x1b\x1b_Gi=78;BBBB\x07\x1b\\');
+        expect(handler.apcCallCount, equals(2));
+        expect(handler.lastApcPayload, equals('Gi=78;BBBB'));
+
+        // 3. 8-bit C1 APC (0x9F) terminated by C1 ST (0x9C) and 7-bit ST (ESC \).
+        parser.parse('\x9fGi=79;CCCC\x9c\x9fGi=80;DDDD\x1b\\Tail');
+        expect(handler.apcCallCount, equals(4));
+        expect(handler.lastApcPayload, equals('Gi=80;DDDD'));
+        expect('${handler.printedText}', equals('Tail'));
+
+        // 4. Oversized APC (> _maxApcLength = 1,400,000) overflows cleanly without dispatching.
+        handler.printedText.clear();
+        parser.parse('\x1b_Gi=99;${'A' * 1400050}\x1b\\Ok');
+        expect(handler.apcCallCount, equals(4));
+        expect('${handler.printedText}', equals('Ok'));
+
+        // Subsequent valid APC still dispatches.
+        parser.parse('\x1b_Gi=100;ZZZZ\x07');
+        expect(handler.apcCallCount, equals(5));
+        expect(handler.lastApcPayload, equals('Gi=100;ZZZZ'));
       },
     );
   });

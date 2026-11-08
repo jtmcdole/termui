@@ -5,6 +5,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 import 'ansi_parser.dart';
+import 'kitty_apc_handler.dart';
 import 'scrollback_buffer.dart';
 
 /// Cursor visual style selected by `DECSCUSR` (`CSI Ps SP q`).
@@ -137,6 +138,9 @@ final class VirtualTerminal implements TerminalHandler {
   /// The height of the virtual terminal in rows.
   int height;
 
+  /// Scoped Kitty Graphics image registry owned by this terminal instance.
+  final KittyImageRegistry imageRegistry = KittyImageRegistry();
+
   final Buffer _primaryBuffer;
   final ScrollbackBuffer _scrollback;
   List<bool> _primaryWrapped;
@@ -165,6 +169,36 @@ final class VirtualTerminal implements TerminalHandler {
   /// [buffer] on each frame rather than caching it across writes.
   Buffer get buffer =>
       _usingAltScreen ? (_altBuffer ?? _primaryBuffer) : _primaryBuffer;
+
+  /// Renders the visible screen into [target] (or a new [Buffer]) and registers
+  /// [imageRegistry].
+  Buffer renderBuffer([Buffer? target]) {
+    final buf =
+        target ??
+        _createBuffer(width, height, transparent: transparentBackground);
+    final copyW = math.min(width, buf.width);
+    final copyH = math.min(height, buf.height);
+    final src = buffer;
+
+    for (var y = 0; y < copyH; y++) {
+      final dstStart = y * buf.width;
+      final srcStart = y * src.width;
+      buf.characters.setRange(
+        dstStart,
+        dstStart + copyW,
+        src.characters,
+        srcStart,
+      );
+      buf.attributes.setRange(
+        dstStart * 3,
+        (dstStart + copyW) * 3,
+        src.attributes,
+        srcStart * 3,
+      );
+    }
+    buf.registerKittyRegistry(Rect(0, 0, width, height), imageRegistry);
+    return buf;
+  }
 
   /// Whether the alternate screen buffer (`?47`, `?1047`, or `?1049`) is active.
   bool get isUsingAlternateScreen => _usingAltScreen;
@@ -303,6 +337,12 @@ final class VirtualTerminal implements TerminalHandler {
   /// terminal query (`DSR`, `CPR`, `DECXCPR`, `DA1`, `DA2`, `DECRQM`, or `XTWINOPS 18t`).
   void Function(String reply)? onReply;
 
+  late final KittyApcHandler _kittyApcHandler = KittyApcHandler(
+    registry: imageRegistry,
+    onReply: (reply) => onReply?.call(reply),
+    onPlaceVirtual: _placeVirtualImage,
+  );
+
   final List<void Function()> _listeners = [];
 
   /// Creates a new virtual terminal with the specified dimensions and settings.
@@ -323,6 +363,10 @@ final class VirtualTerminal implements TerminalHandler {
          math.max(1, height),
          transparent: transparentBackground,
        ) {
+    _primaryBuffer.registerKittyRegistry(
+      Rect(0, 0, this.width, this.height),
+      imageRegistry,
+    );
     _resetDefaultTabStops();
     _initParser();
   }
@@ -333,13 +377,46 @@ final class VirtualTerminal implements TerminalHandler {
       ..addAll([for (var col = 8; col < width; col += 8) col]);
   }
 
+  void _placeVirtualImage(int cols, int rows, int imageId, bool advanceCursor) {
+    final maskedId = imageId & 0xFFFFFFFF;
+    final startX = cursorX.clamp(0, width - 1);
+    final startY = cursorY.clamp(0, height - 1);
+    final validCols = math.max(1, math.min(cols, width - startX));
+    final validRows = math.max(1, math.min(rows, height - startY));
+    final fgArgb = 0xFF000000 | (maskedId & 0xFFFFFF);
+    final imageIdMsb = (maskedId >> 24) & 0xFF;
+
+    for (var r = 0; r < validRows; r++) {
+      final y = startY + r;
+      for (var c = 0; c < validCols; c++) {
+        final x = startX + c;
+        final cell = kittyPlaceholderCell(r, c, imageIdMsb: imageIdMsb);
+        buffer.setAttributes(
+          x,
+          y,
+          char: cell,
+          fg: fgArgb,
+          bg: 0,
+          modifiers: Modifier.kittyPlaceholder,
+          underlineColor: 0,
+          uri: '',
+          blend: false,
+        );
+      }
+    }
+    if (advanceCursor) {
+      cursorX = (startX + validCols).clamp(0, width - 1);
+    }
+  }
+
   static Buffer _createBuffer(int w, int h, {required bool transparent}) =>
       transparent
       ? Buffer(w, h, defaultBlend: false)
       : Buffer.blank(w, h, defaultBlend: false);
 
   Buffer _newBuffer(int w, int h) =>
-      _createBuffer(w, h, transparent: transparentBackground);
+      _createBuffer(w, h, transparent: transparentBackground)
+        ..registerKittyRegistry(Rect(0, 0, w, h), imageRegistry);
 
   void _initParser() {
     _parser = AnsiParser(this);
@@ -360,6 +437,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   /// Disposes of resources.
   void dispose() {
+    _kittyApcHandler.reset();
     _utf8Sink.close();
     _listeners.clear();
   }
@@ -402,6 +480,7 @@ final class VirtualTerminal implements TerminalHandler {
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
+      _kittyApcHandler.reset();
       _resetDefaultTabStops();
       _savedPrimary = _initialSavedCursor;
       _savedAlt = _initialSavedCursor;
@@ -452,10 +531,18 @@ final class VirtualTerminal implements TerminalHandler {
     _evictOverflowBeforeShrink(clampedHeight);
     final shrunkHorizontally = clampedWidth < width;
     _primaryBuffer.resize(clampedWidth, clampedHeight);
+    _primaryBuffer.registerKittyRegistry(
+      Rect(0, 0, clampedWidth, clampedHeight),
+      imageRegistry,
+    );
     if (shrunkHorizontally) _healRightEdgeWideGraphemes(_primaryBuffer);
     final alt = _altBuffer;
     if (alt != null) {
       alt.resize(clampedWidth, clampedHeight);
+      alt.registerKittyRegistry(
+        Rect(0, 0, clampedWidth, clampedHeight),
+        imageRegistry,
+      );
       if (shrunkHorizontally) _healRightEdgeWideGraphemes(alt);
     }
     final nextWrapped = List<bool>.filled(clampedHeight, false);
@@ -861,6 +948,9 @@ final class VirtualTerminal implements TerminalHandler {
     var fgArg = _currentStyle.foreground?.argb ?? 0;
     var bgArg = _currentStyle.background?.argb ?? 0;
     var modArg = _currentStyle.modifiers;
+    if (char.startsWith(kittyPlaceholderChar)) {
+      modArg |= Modifier.kittyPlaceholder;
+    }
 
     final bgTransparent =
         transparentBackground && (bgArg == 0 || bgArg == 0xFF000000);
@@ -1634,6 +1724,11 @@ final class VirtualTerminal implements TerminalHandler {
         Style(background: _colorFromAnsi256(code - 100 + 8)),
       );
     }
+  }
+
+  @override
+  void apc(String payload) {
+    _kittyApcHandler.handleApc(payload);
   }
 
   @override
