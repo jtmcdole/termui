@@ -668,7 +668,7 @@ void main() {
           equals(
             Modifier.dim |
                 Modifier.italic |
-                Modifier.underline |
+                Modifier.underlineSingle |
                 Modifier.blink |
                 Modifier.reverse |
                 Modifier.hidden |
@@ -888,7 +888,7 @@ void main() {
           );
           expect(
             terminal.buffer.getModifiers(i, 0),
-            equals(Modifier.underline),
+            equals(Modifier.underlineSingle),
             reason: 'modifiers at column $i (${banner[i]})',
           );
         }
@@ -937,7 +937,10 @@ void main() {
           terminal.buffer.getBackground(0, 0),
           equals(const Color(10, 20, 30).argb),
         );
-        expect(terminal.buffer.getModifiers(0, 0), equals(Modifier.underline));
+        expect(
+          terminal.buffer.getModifiers(0, 0),
+          equals(Modifier.underlineCurly),
+        );
 
         // 38:5:n, 48:5:n, 58:5:n, and 4:0 (underline off).
         terminal.write(utf8.encode('\x1b[38:5:196;48:5:46;58:5:103;4:0mB'));
@@ -968,14 +971,17 @@ void main() {
         expect(terminal.buffer.getBackground(2, 0), equals(0));
         expect(
           terminal.buffer.getModifiers(2, 0),
-          equals(Modifier.bold | Modifier.underline),
+          equals(Modifier.bold | Modifier.underlineSingle),
         );
 
         // Mixed `;`/`:` lookahead boundaries, trailing `;` reset, negative subparam,
         // out-of-range `4:6`, trailing-colon `4:`, and short colon colors.
         terminal.write(utf8.encode('\x1b[0;38;2;10;20;4:3mD'));
         expect(terminal.buffer.getForeground(3, 0), equals(0));
-        expect(terminal.buffer.getModifiers(3, 0), equals(Modifier.underline));
+        expect(
+          terminal.buffer.getModifiers(3, 0),
+          equals(Modifier.underlineCurly),
+        );
 
         terminal.write(utf8.encode('\x1b[0;38;2:10:20:30;4;31;42mE'));
         expect(
@@ -986,7 +992,10 @@ void main() {
           terminal.buffer.getBackground(4, 0),
           equals(const Color(0, 170, 0).argb),
         );
-        expect(terminal.buffer.getModifiers(4, 0), equals(Modifier.underline));
+        expect(
+          terminal.buffer.getModifiers(4, 0),
+          equals(Modifier.underlineSingle),
+        );
 
         terminal.write(utf8.encode('\x1b[4:3;mF'));
         expect(terminal.buffer.getModifiers(5, 0), equals(Modifier.none));
@@ -1005,7 +1014,10 @@ void main() {
           ),
         );
         expect(terminal.buffer.getModifiers(6, 0), equals(Modifier.none));
-        expect(terminal.buffer.getModifiers(7, 0), equals(Modifier.underline));
+        expect(
+          terminal.buffer.getModifiers(7, 0),
+          equals(Modifier.underlineSingle),
+        );
         expect(terminal.buffer.getModifiers(8, 0), equals(Modifier.none));
         expect(
           terminal.buffer.getForeground(8, 0),
@@ -1115,9 +1127,12 @@ void main() {
         terminal.write(utf8.encode('\x1b[6;21mA\x1b[25mB\x1b[24mC'));
         expect(
           terminal.buffer.getModifiers(0, 0),
-          equals(Modifier.blink | Modifier.underline),
+          equals(Modifier.blink | Modifier.underlineDouble),
         );
-        expect(terminal.buffer.getModifiers(1, 0), equals(Modifier.underline));
+        expect(
+          terminal.buffer.getModifiers(1, 0),
+          equals(Modifier.underlineDouble),
+        );
         expect(terminal.buffer.getModifiers(2, 0), equals(Modifier.none));
 
         // DECSEL (CSI ? K) and DECSED (CSI ? J) erase line and display spans.

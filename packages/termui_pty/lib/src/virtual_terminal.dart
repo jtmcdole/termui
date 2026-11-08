@@ -275,6 +275,8 @@ final class VirtualTerminal implements TerminalHandler {
   /// Current working directory reported via `OSC 7` (`file://hostname/path`).
   String? workingDirectory;
 
+  String? _activeUri;
+
   /// Active semantic shell prompt zone reported via `OSC 133`.
   ShellPromptZone promptZone = .none;
 
@@ -417,7 +419,14 @@ final class VirtualTerminal implements TerminalHandler {
       _primaryWrapped.fillRange(0, height, false);
       _scrollback.clear();
       final (fg, bg, mod) = _eraseAttributes();
-      _primaryBuffer.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
+      _primaryBuffer.fillAttributes(
+        char: ' ',
+        fg: fg,
+        bg: bg,
+        modifiers: mod,
+        underlineColor: 0,
+        uri: '',
+      );
     } else {
       if (_usingAltScreen) {
         _savedAlt = _initialSavedCursor;
@@ -541,6 +550,7 @@ final class VirtualTerminal implements TerminalHandler {
     buf.attributes[attrIdx + 2] = transparentBackground
         ? Modifier.transparent
         : Modifier.none;
+    buf.clearCellAuxRange(cellIdx, cellIdx + 1);
   }
 
   /// Feeds a chunk of UTF-8 encoded bytes into the terminal.
@@ -572,6 +582,8 @@ final class VirtualTerminal implements TerminalHandler {
       fg: fg,
       bg: bg,
       modifiers: mod,
+      underlineColor: 0,
+      uri: '',
     );
   }
 
@@ -590,6 +602,8 @@ final class VirtualTerminal implements TerminalHandler {
             fg: fg,
             bg: bg,
             modifiers: mod,
+            underlineColor: 0,
+            uri: '',
           );
           _clearWrappedRange(cursorY + 1, height);
         }
@@ -603,6 +617,8 @@ final class VirtualTerminal implements TerminalHandler {
             fg: fg,
             bg: bg,
             modifiers: mod,
+            underlineColor: 0,
+            uri: '',
           );
         }
         _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
@@ -610,7 +626,14 @@ final class VirtualTerminal implements TerminalHandler {
       case 2: // Entire screen
         _clampPendingWrap();
         final (fg, bg, mod) = _eraseAttributes();
-        active.fillAttributes(char: ' ', fg: fg, bg: bg, modifiers: mod);
+        active.fillAttributes(
+          char: ' ',
+          fg: fg,
+          bg: bg,
+          modifiers: mod,
+          underlineColor: 0,
+          uri: '',
+        );
         _clearWrappedRange(0, height);
       case 3: // Saved scrollback lines only
         if (!_usingAltScreen) _scrollback.clear();
@@ -745,6 +768,7 @@ final class VirtualTerminal implements TerminalHandler {
       buf.attributes,
       srcCell * 3,
     );
+    buf.copyCellAuxRangeFrom(buf, dstCell, srcCell, cellCount);
   }
 
   void _fillRowsWithEraseAttributes(
@@ -762,6 +786,7 @@ final class VirtualTerminal implements TerminalHandler {
       buf.attributes[i + 1] = bg;
       buf.attributes[i + 2] = mod;
     }
+    buf.clearCellAuxRange(startCell, endCell);
   }
 
   @override
@@ -805,6 +830,8 @@ final class VirtualTerminal implements TerminalHandler {
       fg: fgArg,
       bg: bgArg,
       modifiers: modArg,
+      underlineColor: _currentStyle.underlineColor?.argb ?? 0,
+      uri: _activeUri ?? '',
     );
     _advanceCursorAfterPrint(1);
   }
@@ -877,6 +904,8 @@ final class VirtualTerminal implements TerminalHandler {
       fg: fgArg,
       bg: bgArg,
       modifiers: modArg,
+      underlineColor: _currentStyle.underlineColor?.argb ?? 0,
+      uri: _activeUri ?? '',
     );
     _advanceCursorAfterPrint(2);
   }
@@ -1452,20 +1481,21 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _applyColonSgr(int code, List<int> sub) {
     switch ((code, sub)) {
-      case (4, [0, ...]):
-        _setModifier(Modifier.underline, enable: false);
-      case (4, [>= 1 && <= 5, ...]):
-        _setModifier(Modifier.underline, enable: true);
-      case (38 || 48, _):
+      case (4, [final variant, ...]) when variant >= 0 && variant <= 5:
+        _setUnderlineStyle(UnderlineStyle.values[variant]);
+      case (38 || 48 || 58, _):
         _applyExtendedSgrColor(code, _parseColonExtendedColor(sub));
     }
   }
 
   void _applyExtendedSgrColor(int code, Color? color) {
-    if (color == null || code == 58) return;
-    _currentStyle = code == 38
-        ? _currentStyle.merge(Style(foreground: color))
-        : _currentStyle.merge(Style(background: color));
+    if (color == null) return;
+    _currentStyle = switch (code) {
+      38 => _currentStyle.merge(Style(foreground: color)),
+      48 => _currentStyle.merge(Style(background: color)),
+      58 => _currentStyle.merge(Style(underlineColor: color)),
+      _ => _currentStyle,
+    };
   }
 
   Color? _parseColonExtendedColor(List<int> sub) => switch (sub) {
@@ -1515,46 +1545,62 @@ final class VirtualTerminal implements TerminalHandler {
     switch (code) {
       case 0:
         _currentStyle = .empty;
-      case 1 || 2 || 3 || 4 || 5 || 6 || 7 || 8 || 9 || 21:
+      case 4:
+        _setUnderlineStyle(UnderlineStyle.single);
+      case 21:
+        _setUnderlineStyle(UnderlineStyle.doubleLine);
+      case 24:
+        _setUnderlineStyle(UnderlineStyle.none);
+      case 1 || 2 || 3 || 5 || 6 || 7 || 8 || 9 || 53:
         _setModifier(_modifierBitForSet(code), enable: true);
       case 22:
         _setModifier(Modifier.bold | Modifier.dim, enable: false);
-      case 23 || 24 || 25 || 27 || 28 || 29:
+      case 23 || 25 || 27 || 28 || 29 || 55:
         _setModifier(_modifierBitForReset(code), enable: false);
-      case 39:
-        _currentStyle = Style(
-          background: _currentStyle.background,
-          modifiers: _currentStyle.modifiers,
-        );
-      case 49:
-        _currentStyle = Style(
-          foreground: _currentStyle.foreground,
-          modifiers: _currentStyle.modifiers,
-        );
+      case 39 || 49 || 59:
+        _resetColorChannel(code);
       default:
         _applyBasicPaletteCode(code);
     }
+  }
+
+  void _setUnderlineStyle(UnderlineStyle style) {
+    _currentStyle = Style(
+      foreground: _currentStyle.foreground,
+      background: _currentStyle.background,
+      underlineColor: _currentStyle.underlineColor,
+      modifiers: Modifier.withUnderlineStyle(_currentStyle.modifiers, style),
+    );
+  }
+
+  void _resetColorChannel(int code) {
+    _currentStyle = Style(
+      foreground: code == 39 ? null : _currentStyle.foreground,
+      background: code == 49 ? null : _currentStyle.background,
+      underlineColor: code == 59 ? null : _currentStyle.underlineColor,
+      modifiers: _currentStyle.modifiers,
+    );
   }
 
   static int _modifierBitForSet(int code) => switch (code) {
     1 => Modifier.bold,
     2 => Modifier.dim,
     3 => Modifier.italic,
-    4 || 21 => Modifier.underline,
     5 || 6 => Modifier.blink,
     7 => Modifier.reverse,
     8 => Modifier.hidden,
     9 => Modifier.crossedOut,
+    53 => Modifier.overline,
     _ => Modifier.none,
   };
 
   static int _modifierBitForReset(int code) => switch (code) {
     23 => Modifier.italic,
-    24 => Modifier.underline,
     25 => Modifier.blink,
     27 => Modifier.reverse,
     28 => Modifier.hidden,
     29 => Modifier.crossedOut,
+    55 => Modifier.overline,
     _ => Modifier.none,
   };
 
@@ -1565,6 +1611,7 @@ final class VirtualTerminal implements TerminalHandler {
     _currentStyle = Style(
       foreground: _currentStyle.foreground,
       background: _currentStyle.background,
+      underlineColor: _currentStyle.underlineColor,
       modifiers: nextModifiers,
     );
   }
@@ -1603,11 +1650,20 @@ final class VirtualTerminal implements TerminalHandler {
         onTitleChanged?.call(payload);
       case 7:
         _handleOsc7(payload);
+      case 8:
+        _handleOsc8(payload);
       case 52:
         _handleOsc52(payload);
       case 133:
         _handleOsc133(payload);
     }
+  }
+
+  void _handleOsc8(String payload) {
+    final semi = payload.indexOf(';');
+    if (semi == -1) return;
+    final uri = sanitizeOsc8Uri(payload.substring(semi + 1));
+    _activeUri = uri.isEmpty ? null : uri;
   }
 
   void _handleOsc7(String payload) {

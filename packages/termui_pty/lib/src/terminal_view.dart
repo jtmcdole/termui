@@ -178,6 +178,12 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
             source.attributes,
             sourceAttrStart,
           );
+          buffer.copyCellAuxRangeFrom(
+            source,
+            targetStartIdx,
+            sourceStartIdx,
+            rowLength,
+          );
         } else {
           // Slow path: skip transparent cells but use direct array access
           var tIdx = targetStartIdx;
@@ -190,6 +196,7 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
               buffer.attributes[tAttrIdx + 0] = source.attributes[sAttrIdx + 0];
               buffer.attributes[tAttrIdx + 1] = source.attributes[sAttrIdx + 1];
               buffer.attributes[tAttrIdx + 2] = source.attributes[sAttrIdx + 2];
+              buffer.copyCellAuxAt(source, tIdx, sIdx);
             }
           }
         }
