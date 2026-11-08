@@ -16,7 +16,7 @@ Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  pty2: ^0.5.0
+  pty2: ^0.8.0
 ```
 
 ## Usage
