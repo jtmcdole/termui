@@ -4,6 +4,7 @@ import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_flutter/termui_flutter.dart';
+import 'package:termui_flutter/src/rendering/painter.dart';
 import 'package:termui_flutter/src/terminal.dart';
 import 'package:termui_flutter/src/service/terminal_service.dart';
 import 'package:termui/ui/buffer.dart';
@@ -12,6 +13,7 @@ import 'package:termui/terminal/terminal.dart' as term;
 
 final class MockTerminalService implements TerminalService {
   final Set<String> savedFiles = {};
+  final List<String> openedUrls = [];
   String? clipboardText;
   int getClipboardCalls = 0;
   int setClipboardCalls = 0;
@@ -35,6 +37,12 @@ final class MockTerminalService implements TerminalService {
     getClipboardCalls++;
     if (clipboardError case final error?) throw error;
     return clipboardText;
+  }
+
+  @override
+  Future<bool> openUrl(String url) async {
+    openedUrls.add(url);
+    return true;
   }
 }
 
@@ -474,6 +482,109 @@ void main() {
       expect(tester.takeException(), isNull);
 
       unawaited(sub.cancel());
+      terminal.dispose();
+    },
+  );
+
+  testWidgets(
+    'TuiView opens OSC 8 URLs on Ctrl+click and supports region-bounded drag selection of hidden text',
+    (WidgetTester tester) async {
+      final terminal = FlutterTerminal();
+      final service = MockTerminalService();
+      late void Function(Buffer) drawFrame;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: SizedBox(
+              width: 400,
+              height: 300,
+              child: Terminal(
+                terminal: terminal,
+                service: service,
+                fontSize: 14,
+                fontFamily: 'Cascadia Mono',
+                onRun: (term, onDrawFrame) async {
+                  drawFrame = onDrawFrame;
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final size = await terminal.size;
+      final buffer = Buffer.blank(size.x, size.y);
+      // Draw a vertical sidebar divider at col 5 spanning all rows.
+      for (var y = 0; y < size.y; y++) {
+        buffer.writeString(0, y, 'SIDE│', const Style());
+      }
+      buffer.writeString(
+        6,
+        0,
+        'https://github.com/jtmcdole/termui',
+        const Style(
+          underlineStyle: UnderlineStyle.single,
+          uri: 'https://github.com/jtmcdole/termui',
+        ),
+      );
+      buffer.writeString(6, 1, 'Pass:', const Style());
+      buffer.writeString(
+        6,
+        2,
+        'hunter2',
+        const Style(modifiers: Modifier.hidden),
+      );
+      drawFrame(buffer);
+      await tester.pumpAndSettle();
+
+      final customPaintFinder = find.descendant(
+        of: find.byType(PrivateTuiView),
+        matching: find.byType(CustomPaint),
+      );
+      final topLeft = tester.getTopLeft(customPaintFinder);
+      final painter =
+          tester.widget<CustomPaint>(customPaintFinder).painter!
+              as TuiAtlasPainter;
+      final cw = painter.atlas.cellWidth;
+      final ch = painter.atlas.cellHeight;
+
+      // 1. Plain click on row 0 col 7 (OSC 8 link) without Ctrl -> does NOT open URL.
+      final linkPos = topLeft + Offset(cw * 7.5, ch * 0.5);
+      await tester.tapAt(linkPos);
+      await tester.pump();
+      expect(service.openedUrls, isEmpty);
+
+      // 2. Ctrl+click on row 0 col 7 -> opens URL via TerminalService.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.tapAt(linkPos);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump();
+      expect(
+        service.openedUrls,
+        equals(['https://github.com/jtmcdole/termui']),
+      );
+
+      // 3. Multi-line drag inside right region (row 1 col 6 -> row 2 col 12)
+      // reveals Modifier.hidden 'hunter2' and clamps to col >= 5 (excludes 'SIDE│').
+      final dragStart = topLeft + Offset(cw * 6.5, ch * 1.5);
+      final dragEnd = topLeft + Offset(cw * 12.5, ch * 2.5);
+      final gesture = await tester.startGesture(dragStart);
+      await tester.pump();
+      await gesture.moveTo(dragEnd);
+      await tester.pump();
+      final activePainter =
+          tester.widget<CustomPaint>(customPaintFinder).painter!
+              as TuiAtlasPainter;
+      expect(activePainter.selectionStart, equals(const Point(6, 1)));
+      expect(activePainter.selectionEnd, equals(const Point(12, 2)));
+      expect(activePainter.selectionColBounds?.$1, equals(5));
+
+      await gesture.up();
+      await tester.pump();
+      expect(service.clipboardText, equals('Pass:\n hunter2'));
+
       terminal.dispose();
     },
   );

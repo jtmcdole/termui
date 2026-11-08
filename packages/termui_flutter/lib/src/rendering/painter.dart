@@ -84,6 +84,23 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Enables sub-pixel bleeding to prevent gaps during fractional transformations. Defaults to kIsWeb.
   final bool enableBleed;
 
+  /// Optional inclusive start coordinate `(col, row)` of an active mouse text selection.
+  final math.Point<int>? selectionStart;
+
+  /// Optional inclusive end coordinate `(col, row)` of an active mouse text selection.
+  final math.Point<int>? selectionEnd;
+
+  /// Optional inclusive `(minCol, maxCol)` horizontal bounds of the active selection region.
+  final (int, int)? selectionColBounds;
+
+  /// Whether the active selection uses rectangular box mode (`Alt+Drag`).
+  final bool selectionBoxMode;
+
+  /// Optional pre-decoded GPU textures keyed by [KittyImageData] identity.
+  final Map<KittyImageData, ui.Image> kittyImages;
+
+  static const int _selectionBgArgb = 0xFF264F78;
+
   /// Constructs a [TuiAtlasPainter] targeting the supplied [buffer].
   TuiAtlasPainter({
     required this.buffer,
@@ -93,6 +110,11 @@ final class TuiAtlasPainter extends CustomPainter {
     required this.fallbackPainters,
     required this.onMissingGlyphs,
     this.enableBleed = kIsWeb,
+    this.selectionStart,
+    this.selectionEnd,
+    this.selectionColBounds,
+    this.selectionBoxMode = false,
+    this.kittyImages = const {},
   });
 
   void _drawRawAtlasInChunks(
@@ -226,6 +248,25 @@ final class TuiAtlasPainter extends CustomPainter {
   static const int _decorationMask =
       Modifier.underline | Modifier.crossedOut | Modifier.overline;
 
+  bool _isCellSelected(int x, int y) {
+    final a = selectionStart;
+    final b = selectionEnd;
+    if (a == null || b == null) return false;
+    final (start, end) = (a.y < b.y || (a.y == b.y && a.x <= b.x))
+        ? (a, b)
+        : (b, a);
+    if (y < start.y || y > end.y) return false;
+    if (selectionBoxMode || start.y == end.y) {
+      return x >= math.min(start.x, end.x) && x <= math.max(start.x, end.x);
+    }
+    final minCol = selectionColBounds?.$1 ?? 0;
+    final maxCol = selectionColBounds?.$2 ?? (buffer.width - 1);
+    if (x < minCol || x > maxCol) return false;
+    if (y == start.y) return x >= start.x;
+    if (y == end.y) return x <= end.x;
+    return true;
+  }
+
   (int, int) _stageGridCells(
     _AtlasGeometry geo,
     List<_FallbackCell> fallbackCells,
@@ -248,13 +289,20 @@ final class TuiAtlasPainter extends CustomPainter {
         final isReverse = Modifier.has(modifiers, Modifier.reverse);
 
         final idx = y * cols + x;
+        final isSelected =
+            !_isKittyCell(char, modifiers) && _isCellSelected(x, y);
         final screenX = x * geo.cellWidth;
 
         _stageBackgroundSprite(
           idx,
           screenX,
           screenY,
-          _resolveBgColor(bgArgb, fgArgb, isReverse: isReverse),
+          _resolveBgColor(
+            bgArgb,
+            fgArgb,
+            isReverse: isReverse,
+            isSelected: isSelected,
+          ),
           geo,
         );
 
@@ -263,9 +311,10 @@ final class TuiAtlasPainter extends CustomPainter {
           bgArgb,
           modifiers: modifiers,
           isReverse: isReverse,
+          isSelected: isSelected,
         );
 
-        if (Modifier.has(modifiers, Modifier.hidden)) {
+        if (Modifier.has(modifiers, Modifier.hidden) && !isSelected) {
           continue;
         }
 
@@ -553,40 +602,52 @@ final class TuiAtlasPainter extends CustomPainter {
   }
 
   void _paintFallbackCells(Canvas canvas, List<_FallbackCell> fallbackCells) {
-    final kittyPaint = Paint()..style = PaintingStyle.fill;
-    for (final fc in fallbackCells) {
+    final kittyPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..filterQuality = FilterQuality.medium;
+    var i = 0;
+    while (i < fallbackCells.length) {
+      final fc = fallbackCells[i];
       if (_isKittyCell(fc.char, fc.modifiers)) {
-        _paintKittyPlaceholderCell(canvas, kittyPaint, fc);
+        i = _paintKittyCellOrRun(canvas, kittyPaint, fallbackCells, i);
         continue;
       }
-      final isReverse = Modifier.has(fc.modifiers, Modifier.reverse);
-      final color = Color(
-        _resolveFgColor(
-          fc.fgArgb,
-          fc.bgArgb,
-          modifiers: fc.modifiers,
-          isReverse: isReverse,
-        ),
-      );
-      final isBold = Modifier.has(fc.modifiers, Modifier.bold);
-      final isDim = Modifier.has(fc.modifiers, Modifier.dim);
-
-      final tp = fallbackPainters[(fc.char, isBold, isDim, color)];
-      if (tp != null) {
-        final offsetX = (fc.w - tp.width) / 2;
-        final offsetY = (fc.h - tp.height) / 2;
-        tp.paint(canvas, Offset(fc.x + offsetX, fc.y + offsetY));
-      }
+      _paintSingleFallbackGlyph(canvas, fc);
+      i++;
     }
   }
 
-  void _paintKittyPlaceholderCell(
+  void _paintSingleFallbackGlyph(Canvas canvas, _FallbackCell fc) {
+    final isReverse = Modifier.has(fc.modifiers, Modifier.reverse);
+    final color = Color(
+      _resolveFgColor(
+        fc.fgArgb,
+        fc.bgArgb,
+        modifiers: fc.modifiers,
+        isReverse: isReverse,
+      ),
+    );
+    final isBold = Modifier.has(fc.modifiers, Modifier.bold);
+    final isDim = Modifier.has(fc.modifiers, Modifier.dim);
+
+    final tp = fallbackPainters[(fc.char, isBold, isDim, color)];
+    if (tp != null) {
+      final offsetX = (fc.w - tp.width) / 2;
+      final offsetY = (fc.h - tp.height) / 2;
+      tp.paint(canvas, Offset(fc.x + offsetX, fc.y + offsetY));
+    }
+  }
+
+  int _paintKittyCellOrRun(
     Canvas canvas,
     Paint paint,
-    _FallbackCell fc,
+    List<_FallbackCell> cells,
+    int index,
   ) {
+    final fc = cells[index];
     final coords = parseKittyPlaceholderCell(fc.char);
-    if (coords == null) return;
+    if (coords == null) return index + 1;
+
     final imageId =
         (((coords.imageIdMsb ?? 0) & 0xFF) << 24) | (fc.fgArgb & 0xFFFFFF);
     final data = buffer.lookupKittyImage(fc.gridCol, fc.gridRow, imageId);
@@ -595,9 +656,77 @@ final class TuiAtlasPainter extends CustomPainter {
         data.gridRows <= 0 ||
         coords.row >= data.gridRows ||
         coords.col >= data.gridCols) {
-      return;
+      return index + 1;
     }
-    _paintKittySubpixels(canvas, paint, fc, data, coords.row, coords.col);
+
+    final gpuImage = kittyImages[data];
+    if (gpuImage == null) {
+      _paintKittySubpixels(canvas, paint, fc, data, coords.row, coords.col);
+      return index + 1;
+    }
+
+    var endIdx = index + 1;
+    var lastTileCol = coords.col;
+    var lastGridCol = fc.gridCol;
+    while (endIdx < cells.length &&
+        _isNextKittyRunCell(
+          cells[endIdx],
+          data: data,
+          imageId: imageId,
+          expectedGridRow: fc.gridRow,
+          expectedGridCol: lastGridCol + 1,
+          expectedTileRow: coords.row,
+          expectedTileCol: lastTileCol + 1,
+        )) {
+      lastTileCol++;
+      lastGridCol++;
+      endIdx++;
+    }
+    final runCols = lastTileCol - coords.col + 1;
+    final tileW = gpuImage.width / data.gridCols;
+    final tileH = gpuImage.height / data.gridRows;
+    canvas.drawImageRect(
+      gpuImage,
+      Rect.fromLTWH(
+        coords.col * tileW,
+        coords.row * tileH,
+        runCols * tileW,
+        tileH,
+      ),
+      Rect.fromLTWH(fc.x, fc.y, runCols * fc.w + 0.25, fc.h + 0.25),
+      paint,
+    );
+    return endIdx;
+  }
+
+  bool _isNextKittyRunCell(
+    _FallbackCell next, {
+    required KittyImageData data,
+    required int imageId,
+    required int expectedGridRow,
+    required int expectedGridCol,
+    required int expectedTileRow,
+    required int expectedTileCol,
+  }) {
+    if (!_isKittyCell(next.char, next.modifiers)) return false;
+    if (next.gridRow != expectedGridRow || next.gridCol != expectedGridCol) {
+      return false;
+    }
+    final coords = parseKittyPlaceholderCell(next.char);
+    if (coords == null ||
+        coords.row != expectedTileRow ||
+        coords.col != expectedTileCol) {
+      return false;
+    }
+    final nextId =
+        (((coords.imageIdMsb ?? 0) & 0xFF) << 24) | (next.fgArgb & 0xFFFFFF);
+    if (nextId != imageId) return false;
+    final nextData = buffer.lookupKittyImage(
+      next.gridCol,
+      next.gridRow,
+      nextId,
+    );
+    return identical(nextData, data);
   }
 
   void _paintKittySubpixels(
@@ -610,11 +739,11 @@ final class TuiAtlasPainter extends CustomPainter {
   ) {
     if (data.format == 100) return;
     final stepsX = math.min(
-      4,
+      2,
       math.max(1, data.pixelWidth ~/ math.max(1, data.gridCols)),
     );
     final stepsY = math.min(
-      8,
+      4,
       math.max(1, data.pixelHeight ~/ math.max(1, data.gridRows)),
     );
     final subW = fc.w / stepsX;
@@ -827,7 +956,9 @@ final class TuiAtlasPainter extends CustomPainter {
     int bgArgb,
     int fgArgb, {
     required bool isReverse,
+    bool isSelected = false,
   }) {
+    if (isSelected) return _selectionBgArgb;
     if (isReverse) {
       return fgArgb == 0 ? 0xFFFFFFFF : fgArgb;
     }
@@ -839,7 +970,11 @@ final class TuiAtlasPainter extends CustomPainter {
     int bgArgb, {
     required int modifiers,
     required bool isReverse,
+    bool isSelected = false,
   }) {
+    if (isSelected && Modifier.has(modifiers, Modifier.hidden)) {
+      return 0xFFFFFFFF;
+    }
     final raw = isReverse
         ? (bgArgb == 0 ? 0xFF000000 : bgArgb)
         : (fgArgb == 0 ? 0xFFFFFFFF : fgArgb);
