@@ -134,7 +134,6 @@ Future<SceneManager> runPtyGlassDemo(
       glassLayer; // Initially focus the glass layer so 's' works immediately
   glassRunner.run().catchError((_) {});
   glassFocusNode.requestFocus();
-  glassFocusNode.requestFocus();
 
   // 3. Top Layer: Settings Window
   final settingsRunner = PromptRunner<void>(
@@ -227,6 +226,10 @@ Future<SceneManager> runPtyGlassDemo(
     fireRunner.abort();
     ptyRunner.abort();
     sceneManager.dispose();
+    terminal.exitAlternateScreen();
+    terminal.showCursor();
+    terminal.disableMouseTracking();
+    terminal.resetStyle();
   }
 
   return sceneManager;
