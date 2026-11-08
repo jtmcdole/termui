@@ -1,17 +1,22 @@
-# example_web
+# termui_flutter Example (`example_flutter`)
 
-A new Flutter project.
+Interactive Flutter Desktop and Web host applications for `termui`, `termui_shared_examples`, `termui_pty`, and `termui_recorder`.
 
-## Getting Started
+## Entrypoints
 
-This project is a starting point for a Flutter application.
+Run from `packages/termui_flutter/example`:
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+* **Main Demo Launcher (`lib/main.dart`)**:
+  ```bash
+  flutter run -t lib/main.dart
+  ```
+* **Interactive Widget Book (`lib/widget_book.dart`)**:
+  ```bash
+  flutter run -t lib/widget_book.dart
+  ```
+* **Rendering Benchmark (`lib/benchmark_main.dart`)**:
+  ```bash
+  flutter run -t lib/benchmark_main.dart
+  ```
+* **Asciicast Player & Trace Viewer**:
+  Located under `lib/src/tui_player/`, supporting `.cast` / `.cast.gz` playback and JSON performance trace inspection in Flutter and Web.

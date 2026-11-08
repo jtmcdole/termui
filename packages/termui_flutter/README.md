@@ -2,7 +2,7 @@
 
 `termui_flutter` is the Flutter GUI embedding and rendering layer for the `termui` terminal user interface library. It enables standard, reactive terminal applications to be hosted seamlessly inside a Flutter application widget hierarchy.
 
-Rather than printing ANSI sequences to standard terminal streams (`stdout`), `termui_flutter` translates TUI cell grid updates into hardware-accelerated texture paint commands using Flutter's custom painter capabilities, and bridges mouse/keyboard event loops between Flutter's event system and `termui`.term
+Rather than printing ANSI sequences to standard terminal streams (`stdout`), `termui_flutter` translates TUI cell grid updates into hardware-accelerated texture paint commands using Flutter's custom painter capabilities, and bridges mouse/keyboard event loops between Flutter's event system and `termui`.
 
 <video src="https://github.com/user-attachments/assets/a92129b8-1bbb-4d74-8983-6c8de75a1962" width="100%" autoplay loop muted controls></video>
 
@@ -39,7 +39,7 @@ The entrypoint widget for hosting a TUI application inside a Flutter layout tree
 The `Terminal` class is a `StatefulWidget` configured via the following properties:
 
 ```dart
-class Terminal extends StatefulWidget {
+final class Terminal extends StatefulWidget {
   final FlutterTerminal? terminal;
   final Future<void> Function(
     FlutterTerminal terminal,
@@ -47,7 +47,10 @@ class Terminal extends StatefulWidget {
   ) onRun;
   final double fontSize;
   final String fontFamily;
+  final List<String>? fontFamilyFallback;
   final Color backgroundColor;
+  final TerminalService service;
+  final bool enableBleed;
 
   const Terminal({
     super.key,
@@ -55,7 +58,10 @@ class Terminal extends StatefulWidget {
     required this.onRun,
     this.fontSize = 13.0,
     this.fontFamily = 'Cascadia Mono',
+    this.fontFamilyFallback,
     this.backgroundColor = Colors.black,
+    this.service = const DefaultTerminalService(),
+    this.enableBleed = kIsWeb,
   });
 
   @override
@@ -88,7 +94,7 @@ class Terminal extends StatefulWidget {
 
 ## 2. Event Bridging
 
-Keyboard focus, keystrokes, pointer interactions, and mouse scroll signals are managed by the internal widget **`PrivateTuiView`** and its state class **`_PrivateTuiViewState`** (`lib/src/terminal.dart`).
+Keyboard focus, keystrokes, pointer interactions, and mouse scroll signals are managed by the internal widget **`PrivateTuiView`** and its state class **`PrivateTuiViewState`** (`lib/src/terminal.dart`).
 
 ```mermaid
 sequenceDiagram
@@ -127,8 +133,9 @@ Hardware events matching `KeyDownEvent` or `KeyRepeatEvent` are translated into 
    - **Arrow keys**: `LogicalKeyboardKey.arrowUp` $\rightarrow$ `'up'`, `arrowDown` $\rightarrow$ `'down'`, `arrowLeft` $\rightarrow$ `'left'`, `arrowRight` $\rightarrow$ `'right'`.
    - **Editing keys**: `home`, `end`, `delete`, `backspace`, `pageUp`, `pageDown`.
    - **Navigation & Control**: `escape`, `enter`/`numpadEnter` (mapped to `'\n'`), `tab` (mapped to `'\t'`), and `Shift+Tab` (mapped to `'backtab'`).
-   - **Function keys**: `f1` through `f11`.
-   - **Mathematical symbols**: `equal`/`numpadAdd` (mapped to `'+'` / `'='`), `minus`/`numpadSubtract` (mapped to `'-'`).
+   - **Function keys**: `f1` through `f11` (`f12` captures diagnostics and `Shift+F12` rebuilds the glyph atlas).
+   - **Clipboard Paste Shortcuts**: `Ctrl+Shift+V`, `Cmd+V`, and `Shift+Insert` read from the system clipboard via `TerminalService` and inject a `PasteEvent`.
+   - **Mathematical symbols**: `equal` (mapped to `'='`), `numpadAdd` (mapped to `'+'`), `minus`/`numpadSubtract` (mapped to `'-'`).
 3. **Character extraction**: If the hardware event contains printable text (`event.character != null`), it maps the character directly. If the key label is a single character, it extracts its lowercase label.
 4. **Injection**: Constructs a `term.KeyEvent(keyString, keyType, modifiers: mods)` and delivers it to the TUI via `widget.terminal.injectEvent(termEvent)`.
 
@@ -160,12 +167,13 @@ Hardware events matching `KeyDownEvent` or `KeyRepeatEvent` are translated into 
 - The sequence converts text commands (like `text`, `pointer`, `crosshair`, `grab`, `grabbing`, `none`, etc.) into Flutter's native **`SystemMouseCursors`** values (e.g. `SystemMouseCursors.click` for pointer).
 - Updates the active cursor applied on the viewport wrapper **`MouseRegion`** widget.
 
-### Diagnostics & Screenshots (F12 Key)
+### Diagnostics & Screenshots (`F12` & `Shift+F12`)
 
-Pressing the `F12` key triggers a private function `_takeScreenshot()` that saves structural visual snapshots of the active terminal session to the current working directory:
+Pressing `Shift+F12` forces a full glyph atlas recreation (`_recreateAtlas()`). Pressing `F12` triggers `_takeScreenshot()` via `TerminalService` (saving files to the working directory on desktop/IO or triggering browser downloads on Web):
 1. **PNG Screen Shot**: Resolves the `RenderRepaintBoundary` key (`_boundaryKey`) and exports the rasterized canvas pixels as `screenshot_[timestamp].png`.
 2. **PNG Glyph Atlas**: Saves the backing texture of the active `GlyphAtlas` as `atlas_[timestamp].png`.
-3. **JSON Layout Map**: Serializes the dimensions, column/row sizes, character grid contents, cell colors, style modifiers, and exact texture source rect positions as `coordinates_[timestamp].json`.
+3. **JSON Atlas Table**: Exports the character-to-rect lookup table as `atlas_table_[timestamp].json`.
+4. **JSON Layout Map**: Serializes the dimensions, column/row sizes, character grid contents, cell colors, style modifiers, and exact texture source rect positions as `coordinates_[timestamp].json`.
 
 ---
 
@@ -226,9 +234,10 @@ Drawing hundreds of individual cells using distinct canvas paint calls (like `dr
    - **`Float32List transforms`**: Formatted as groups of 4 values per sprite: `[scCos, scSin, tx, ty]`. `scCos` holds the horizontal cell scale, `scSin` is `0.0` (no rotation), and `tx`, `ty` specify the screen offset coordinates.
    - **`Float32List rects`**: Bounding boxes mapping the sprite coordinates inside the glyph atlas image: `[left, top, right, bottom]`.
    - **`Int32List colors`**: The ARGB color value to blend onto the sprite texture.
-3. **Double-Pass Composition**:
+3. **Three-Pass Composition**:
    - **Pass 1 (Backgrounds)**: Fills the arrays for every cell using the coordinate of `'\uFFFF'` to lay down solid background color cells.
-   - **Pass 2 (Foregrounds)**: Iterates over non-empty cells. If a cell contains a character present in the atlas, it adds its transform, source rect, and foreground color arrays to the foreground buffers.
+   - **Pass 2 (Monochrome Foregrounds)**: Iterates over non-empty cells present in the primary monochrome atlas, tinting each glyph with its foreground color via `BlendMode.modulate`.
+   - **Pass 3 (Color Emojis)**: Draws color emojis from the emoji atlas with `BlendMode.srcOver` and `null` color tinting so native glyph colors are preserved.
 4. **GPU Chunking Optimization**:
    To prevent GPU buffer limits from dropping frames on complex grids, `_drawRawAtlasInChunks` partitions the drawing arrays into chunks of **500 sprites** before passing them to the GPU:
    ```dart
@@ -288,11 +297,10 @@ To avoid typical anti-aliasing artifacts, line seams, and misalignment errors wh
   - Draws the existing image at coordinates `Offset.zero`.
   - Loops over the new glyph characters, measuring them, testing baseline offsets (against character `'A'` to prevent alignment vertical jitter), and drawing them. Wide characters (like CJK and Emojis) are detected via `isWideGrapheme` and allocated 2 coordinate columns.
   - Generates a new `ui.Image` composite texture and **disposes of the old image memory** to prevent leaks.
-- **Immediate Fallback Painting**: While the atlas is regenerating asynchronously, the painter falls back to painting characters using individual standard `TextPainter` widgets stored in the `fallbackPainters` cache (non-web only).
+- **Immediate Fallback Painting**: While the atlas is regenerating asynchronously, the painter falls back to painting characters using individual standard `TextPainter` instances stored in the `fallbackPainters` cache.
 
 ### Bleed Mitigation & Seamless Cells
 
 - **Texture Bleeding Prevention**: To prevent GPU rendering interpolation from sampling neighboring glyph pixels on the atlas sheet, each glyph in the atlas is framed with a margin of `2.0` pixels padding.
-- **Cell Seam Prevention**: Due to floating-point scaling rounding, minor black line gaps (seams) can appear between adjacent backgrounds or block characters.
-  - Background cells are inflated during coordinates calculation using an overlap value: `const bleedBg = 0.5;`
-  - Block characters (detected via `_isBlockCharacter`) are expanded in coordinates by `bleedFg = 0.5` pixels to overlap slightly, resulting in continuous blocks and borders.
+- **Cell Seam Prevention**: Due to floating-point scaling rounding, minor black line gaps (seams) can appear between adjacent backgrounds or block characters (primarily on Web canvases).
+  - When `enableBleed` is true (default on Web), `_AtlasGeometry.fromAtlas` computes `bleed = (0.5 * atlas.devicePixelRatio).ceilToDouble()` in physical pixels and expands background cells and procedural block characters by `bleed` to eliminate sub-pixel seams.
