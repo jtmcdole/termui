@@ -338,7 +338,8 @@ final class DimmerEffect extends TerminalEffect {
         }
 
         final fg = target.attributes[attrIdx + 0];
-        if (fg != 0) {
+        if (fg != 0 &&
+            (target.attributes[attrIdx + 2] & Modifier.kittyPlaceholder) == 0) {
           target.attributes[attrIdx + 0] = mutator.dimPacked(fg);
         }
 

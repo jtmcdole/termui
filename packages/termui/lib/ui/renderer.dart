@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:termui/termui.dart';
 
 /// The target mode for terminal rendering.
@@ -24,6 +25,18 @@ class Renderer {
   final RenderingMode mode;
   int _lastHeight = 0;
   bool _firstFrame = true;
+  final Map<
+    int,
+    ({
+      int cols,
+      int rows,
+      int pixelWidth,
+      int pixelHeight,
+      int version,
+      Uint8List pixels,
+    })
+  >
+  _uploadedKittyImages = {};
 
   /// Creates a renderer with an initial screen size.
   Renderer(int width, int height, {this.mode = RenderingMode.alternateScreen})
@@ -85,126 +98,223 @@ class Renderer {
         _frontBuffer.getUnderlineColor(x, y);
   }
 
+  void _emitPendingKittyImages(Buffer backBuffer, StringSink out) {
+    final attrs = backBuffer.attributes;
+    final chars = backBuffer.characters;
+    final width = backBuffer.width;
+    if (width <= 0) return;
+    final cellCount = chars.length;
+    for (var cellIdx = 0; cellIdx < cellCount; cellIdx++) {
+      final attrIdx = cellIdx * 3;
+      if ((attrs[attrIdx + 2] & Modifier.kittyPlaceholder) == 0) continue;
+      final imageId = _extractKittyImageId(chars[cellIdx], attrs[attrIdx]);
+      final data = backBuffer.lookupKittyImage(
+        cellIdx % width,
+        cellIdx ~/ width,
+        imageId,
+      );
+      if (data == null || _isKittyImageUploaded(imageId, data)) continue;
+      _recordUploadedKittyImage(imageId, data);
+      out.write(data.toApcSequence());
+    }
+  }
+
+  static int _extractKittyImageId(String cellChar, int fgAttr) {
+    final low24 = fgAttr & 0xFFFFFF;
+    if (cellChar.length < 5) return low24;
+    final msb = parseKittyPlaceholderCell(cellChar)?.imageIdMsb ?? 0;
+    return ((msb & 0xFF) << 24) | low24;
+  }
+
+  bool _isKittyImageUploaded(int imageId, KittyImageData data) {
+    final prev = _uploadedKittyImages[imageId];
+    return prev != null &&
+        prev.cols == data.gridCols &&
+        prev.rows == data.gridRows &&
+        prev.pixelWidth == data.pixelWidth &&
+        prev.pixelHeight == data.pixelHeight &&
+        prev.version == data.version &&
+        identical(prev.pixels, data.rgbaPixels);
+  }
+
+  void _recordUploadedKittyImage(int imageId, KittyImageData data) {
+    _uploadedKittyImages[imageId] = (
+      cols: data.gridCols,
+      rows: data.gridRows,
+      pixelWidth: data.pixelWidth,
+      pixelHeight: data.pixelHeight,
+      version: data.version,
+      pixels: data.rgbaPixels,
+    );
+  }
+
+  int _findChangedRunEnd(
+    Buffer backBuffer,
+    int y,
+    int rowOffset,
+    int startX, {
+    required bool sizeChanged,
+  }) {
+    final width = backBuffer.width;
+    var runEnd = startX + 1;
+    while (runEnd < width) {
+      final ridx = rowOffset + runEnd;
+      if (!_isCellChanged(
+        backBuffer,
+        runEnd,
+        y,
+        ridx,
+        ridx * 3,
+        sizeChanged: sizeChanged,
+      )) {
+        break;
+      }
+      runEnd++;
+    }
+    return runEnd;
+  }
+
+  void _syncFrontCell(
+    int rx,
+    int y,
+    int rxIdx,
+    int rxAttrIdx,
+    String char,
+    int cellFg,
+    int cellBg,
+    int cellMod,
+    int cellUlColor,
+  ) {
+    _frontBuffer.characters[rxIdx] = char;
+    final frontAttr = _frontBuffer.attributes;
+    frontAttr[rxAttrIdx + 0] = cellFg;
+    frontAttr[rxAttrIdx + 1] = cellBg;
+    frontAttr[rxAttrIdx + 2] = cellMod;
+    if (cellUlColor != 0 || _frontBuffer.hasUnderlineColors) {
+      _frontBuffer.setUnderlineColor(rx, y, cellUlColor);
+    }
+  }
+
   /// Diffs [backBuffer] against [_frontBuffer] and writes minimal ANSI escape sequences to [out].
   void render(Buffer backBuffer, StringSink out) {
     Tracer.record(_traceRenderId, Phase.begin, TraceCategory.paint);
     try {
       final sizeChanged = _prepareFrame(backBuffer, out);
+      if (sizeChanged) _uploadedKittyImages.clear();
+      _emitPendingKittyImages(backBuffer, out);
 
-      int activeFg = 0;
-      int activeBg = 0;
-      int activeMod = 0;
-      int activeUlColor = 0;
-      int cursorX = 0;
-      int cursorY = 0;
-
+      var state = _RenderCursorState();
       final width = backBuffer.width;
       final height = backBuffer.height;
-      final backChars = backBuffer.characters;
-      final backAttr = backBuffer.attributes;
-      final frontChars = _frontBuffer.characters;
-      final frontAttr = _frontBuffer.attributes;
 
       for (var y = 0; y < height; y++) {
         var x = 0;
         final rowOffset = y * width;
         while (x < width) {
           final idx = rowOffset + x;
-          final attrIdx = idx * 3;
-
           if (!_isCellChanged(
             backBuffer,
             x,
             y,
             idx,
-            attrIdx,
+            idx * 3,
             sizeChanged: sizeChanged,
           )) {
             x++;
             continue;
           }
-
-          final runStart = x;
-          var runEnd = x + 1;
-          while (runEnd < width) {
-            final ridx = rowOffset + runEnd;
-            if (_isCellChanged(
-              backBuffer,
-              runEnd,
-              y,
-              ridx,
-              ridx * 3,
-              sizeChanged: sizeChanged,
-            )) {
-              runEnd++;
-            } else {
-              break;
-            }
-          }
-
-          if (mode == RenderingMode.inline) {
-            _moveCursorRelative(out, cursorX, cursorY, runStart, y);
-            cursorX = runStart;
-            cursorY = y;
-          } else {
-            out.write('\x1b[${y + 1};${runStart + 1}H');
-          }
-
-          for (var rx = runStart; rx < runEnd; rx++) {
-            final rxIdx = rowOffset + rx;
-            final rxAttrIdx = rxIdx * 3;
-            final cellFg = backAttr[rxAttrIdx + 0];
-            final cellBg = backAttr[rxAttrIdx + 1];
-            final cellMod = backAttr[rxAttrIdx + 2];
-            final cellUlColor = backBuffer.getUnderlineColor(rx, y);
-
-            _writeStyleTransitionPrims(
-              out,
-              activeFg,
-              activeBg,
-              activeMod,
-              activeUlColor,
-              cellFg,
-              cellBg,
-              cellMod,
-              cellUlColor,
-            );
-            activeFg = cellFg;
-            activeBg = cellBg;
-            activeMod = cellMod;
-            activeUlColor = cellUlColor;
-
-            out.write(backChars[rxIdx]);
-
-            frontChars[rxIdx] = backChars[rxIdx];
-            frontAttr[rxAttrIdx + 0] = cellFg;
-            frontAttr[rxAttrIdx + 1] = cellBg;
-            frontAttr[rxAttrIdx + 2] = cellMod;
-            if (cellUlColor != 0 || _frontBuffer.hasUnderlineColors) {
-              _frontBuffer.setUnderlineColor(rx, y, cellUlColor);
-            }
-
-            if (mode == RenderingMode.inline) {
-              cursorX++;
-            }
-          }
+          final runEnd = _findChangedRunEnd(
+            backBuffer,
+            y,
+            rowOffset,
+            x,
+            sizeChanged: sizeChanged,
+          );
+          _emitRun(backBuffer, out, state, y, rowOffset, x, runEnd);
           x = runEnd;
         }
       }
 
-      if (activeFg != 0 ||
-          activeBg != 0 ||
-          activeMod != 0 ||
-          activeUlColor != 0) {
+      if (state.hasActiveStyle) {
         out.write('\x1b[0m');
       }
 
       if (mode == RenderingMode.inline) {
-        _moveCursorRelative(out, cursorX, cursorY, 0, backBuffer.height);
+        _moveCursorRelative(
+          out,
+          state.cursorX,
+          state.cursorY,
+          0,
+          backBuffer.height,
+        );
         _lastHeight = backBuffer.height;
       }
     } finally {
       Tracer.record(_traceRenderId, Phase.end, TraceCategory.paint);
+    }
+  }
+
+  void _emitRun(
+    Buffer backBuffer,
+    StringSink out,
+    _RenderCursorState state,
+    int y,
+    int rowOffset,
+    int runStart,
+    int runEnd,
+  ) {
+    if (mode == RenderingMode.inline) {
+      _moveCursorRelative(out, state.cursorX, state.cursorY, runStart, y);
+      state.cursorX = runStart;
+      state.cursorY = y;
+    } else {
+      out.write('\x1b[${y + 1};${runStart + 1}H');
+    }
+
+    final backChars = backBuffer.characters;
+    final backAttr = backBuffer.attributes;
+
+    for (var rx = runStart; rx < runEnd; rx++) {
+      final rxIdx = rowOffset + rx;
+      final rxAttrIdx = rxIdx * 3;
+      final cellFg = backAttr[rxAttrIdx + 0];
+      final cellBg = backAttr[rxAttrIdx + 1];
+      final cellMod = backAttr[rxAttrIdx + 2];
+      final cellUlColor = backBuffer.getUnderlineColor(rx, y);
+
+      _writeStyleTransitionPrims(
+        out,
+        state.activeFg,
+        state.activeBg,
+        state.activeMod,
+        state.activeUlColor,
+        cellFg,
+        cellBg,
+        cellMod,
+        cellUlColor,
+      );
+      state.activeFg = cellFg;
+      state.activeBg = cellBg;
+      state.activeMod = cellMod;
+      state.activeUlColor = cellUlColor;
+
+      final char = backChars[rxIdx];
+      out.write(char);
+      _syncFrontCell(
+        rx,
+        y,
+        rxIdx,
+        rxAttrIdx,
+        char,
+        cellFg,
+        cellBg,
+        cellMod,
+        cellUlColor,
+      );
+
+      if (mode == RenderingMode.inline) {
+        state.cursorX++;
+      }
     }
   }
 
@@ -271,6 +381,39 @@ class Renderer {
     if ((addedMods & Modifier.overline) != 0) sb.write('53;');
   }
 
+  bool _shouldResetStyle(
+    int curFg,
+    int curBg,
+    int curMod,
+    int curUlColor,
+    int tgtFg,
+    int tgtBg,
+    int tgtMod,
+    int tgtUlColor,
+  ) {
+    final colorCleared =
+        (curFg != 0 && tgtFg == 0) ||
+        (curBg != 0 && tgtBg == 0) ||
+        (curUlColor != 0 && tgtUlColor == 0);
+    return colorCleared || (curMod & ~tgtMod) != 0;
+  }
+
+  void _appendColorTransitions(
+    StringBuffer sb,
+    int effectiveFg,
+    int effectiveBg,
+    int effectiveUlColor,
+    int tgtFg,
+    int tgtBg,
+    int tgtUlColor,
+  ) {
+    if (tgtFg != effectiveFg && tgtFg != 0) _appendRgbSgr(sb, 38, tgtFg);
+    if (tgtBg != effectiveBg && tgtBg != 0) _appendRgbSgr(sb, 48, tgtBg);
+    if (tgtUlColor != effectiveUlColor && tgtUlColor != 0) {
+      _appendRgbSgr(sb, 58, tgtUlColor);
+    }
+  }
+
   /// Writes the ANSI style transitions between the current style state and the target state.
   void _writeStyleTransitionPrims(
     StringSink out,
@@ -290,23 +433,25 @@ class Renderer {
       return;
     }
 
-    if (tgtFg == 0 && tgtBg == 0 && tgtMod == 0 && tgtUlColor == 0) {
+    if ((tgtFg | tgtBg | tgtMod | tgtUlColor) == 0) {
       out.write('\x1b[0m');
       return;
     }
-
-    final colorCleared =
-        (curFg != 0 && tgtFg == 0) ||
-        (curBg != 0 && tgtBg == 0) ||
-        (curUlColor != 0 && tgtUlColor == 0);
-    final modifierTurnedOff = (curMod & ~tgtMod) != 0;
 
     var effectiveFg = curFg;
     var effectiveBg = curBg;
     var effectiveMod = curMod;
     var effectiveUlColor = curUlColor;
-
-    if (colorCleared || modifierTurnedOff) {
+    if (_shouldResetStyle(
+      curFg,
+      curBg,
+      curMod,
+      curUlColor,
+      tgtFg,
+      tgtBg,
+      tgtMod,
+      tgtUlColor,
+    )) {
       out.write('\x1b[0m');
       effectiveFg = 0;
       effectiveBg = 0;
@@ -315,27 +460,34 @@ class Renderer {
     }
 
     final sb = StringBuffer();
-    if (tgtFg != effectiveFg && tgtFg != 0) {
-      _appendRgbSgr(sb, 38, tgtFg);
-    }
-    if (tgtBg != effectiveBg && tgtBg != 0) {
-      _appendRgbSgr(sb, 48, tgtBg);
-    }
-    if (tgtUlColor != effectiveUlColor && tgtUlColor != 0) {
-      _appendRgbSgr(sb, 58, tgtUlColor);
-    }
+    _appendColorTransitions(
+      sb,
+      effectiveFg,
+      effectiveBg,
+      effectiveUlColor,
+      tgtFg,
+      tgtBg,
+      tgtUlColor,
+    );
 
     final addedMods = tgtMod & ~effectiveMod;
-    if (addedMods != 0) {
-      _appendAddedModifiers(sb, addedMods, tgtMod);
-    }
+    if (addedMods != 0) _appendAddedModifiers(sb, addedMods, tgtMod);
 
-    var s = sb.toString();
+    final s = sb.toString();
     if (s.isNotEmpty) {
-      if (s.endsWith(';')) {
-        s = s.substring(0, s.length - 1);
-      }
-      out.write('\x1b[${s}m');
+      out.write('\x1b[${s.substring(0, s.length - 1)}m');
     }
   }
+}
+
+final class _RenderCursorState {
+  int activeFg = 0;
+  int activeBg = 0;
+  int activeMod = 0;
+  int activeUlColor = 0;
+  int cursorX = 0;
+  int cursorY = 0;
+
+  bool get hasActiveStyle =>
+      activeFg != 0 || activeBg != 0 || activeMod != 0 || activeUlColor != 0;
 }

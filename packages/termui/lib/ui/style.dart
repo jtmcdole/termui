@@ -82,6 +82,9 @@ abstract class Modifier {
   /// Dashed underline modifier (`SGR 4:5`).
   static const int underlineDashed = underline | (5 << underlineStyleShift);
 
+  /// Kitty Graphics Unicode placeholder cell (`U+10EEEE`, `fg` holds 24-bit `imageId`).
+  static const int kittyPlaceholder = 1 << 13;
+
   /// Returns true if [modifier] is active in [mask].
   static bool has(int mask, int modifier) => (mask & modifier) != 0;
 

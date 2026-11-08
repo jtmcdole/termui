@@ -69,6 +69,9 @@ class Buffer {
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
 
+  final List<({Rect bounds, KittyImageRegistry registry})>
+  _scopedKittyRegistries = [];
+
   /// Whether cell attribute writes alpha-blend colors over existing cells when
   /// a per-call `blend` argument is omitted.
   final bool defaultBlend;
@@ -79,6 +82,30 @@ class Buffer {
   void addEffect(RegisteredEffect effect) {
     effects.add(effect);
   }
+
+  /// Registers a pane-scoped [KittyImageRegistry] for cells within [bounds].
+  void registerKittyRegistry(Rect bounds, KittyImageRegistry registry) {
+    final clipped = _boundsClip.intersect(bounds);
+    if (clipped.width <= 0 || clipped.height <= 0) return;
+    _scopedKittyRegistries.add((bounds: clipped, registry: registry));
+  }
+
+  /// Resolves the active [KittyImageRegistry] covering ([x], [y]), falling back
+  /// to [KittyImageRegistry.global] outside scoped regions.
+  KittyImageRegistry lookupKittyRegistry(int x, int y) {
+    for (var i = _scopedKittyRegistries.length - 1; i >= 0; i--) {
+      final entry = _scopedKittyRegistries[i];
+      if (entry.bounds.contains(x, y)) {
+        return entry.registry;
+      }
+    }
+    return KittyImageRegistry.global;
+  }
+
+  /// Looks up [imageId] using any scoped [KittyImageRegistry] covering ([x], [y]),
+  /// falling back to [KittyImageRegistry.global] only outside scoped regions.
+  KittyImageData? lookupKittyImage(int x, int y, int imageId) =>
+      lookupKittyRegistry(x, y).lookupImage(imageId);
 
   /// Creates a new buffer of [width] by [height] initialized with transparent empty cell data.
   Buffer(this.width, this.height, {this.defaultBlend = true})
@@ -389,6 +416,7 @@ class Buffer {
         attributes[i] = Modifier.transparent;
       }
       effects.clear();
+      _scopedKittyRegistries.clear();
     } finally {
       Tracer.record(_traceClearId, Phase.end, TraceCategory.paint);
     }
@@ -801,6 +829,7 @@ class Compositor {
       );
 
       _poolIndex = 0;
+      _propagateScopedKittyRegistries(target, sortedLayers);
       _compositeRecursive(target, sortedLayers, 0);
 
       // Premultiply final alpha against black for any remaining transparent pixels.
@@ -818,6 +847,26 @@ class Compositor {
       }
     } finally {
       Tracer.record(_traceCompositeId, Phase.end, TraceCategory.compositor);
+    }
+  }
+
+  static void _propagateScopedKittyRegistries(
+    Buffer target,
+    List<LayeredBuffer> sortedLayers,
+  ) {
+    for (var i = sortedLayers.length - 1; i >= 0; i--) {
+      final layer = sortedLayers[i];
+      for (final entry in layer.buffer._scopedKittyRegistries) {
+        target.registerKittyRegistry(
+          Rect(
+            layer.x + entry.bounds.x,
+            layer.y + entry.bounds.y,
+            entry.bounds.width,
+            entry.bounds.height,
+          ),
+          entry.registry,
+        );
+      }
     }
   }
 
@@ -1006,7 +1055,8 @@ class Compositor {
         fgOccluded,
       );
     }
-    if (!fgOccluded) {
+    if (!fgOccluded &&
+        !(charOccluded && (sourceMods & Modifier.kittyPlaceholder) != 0)) {
       _applyCompositeFg(
         target,
         targetAttrIdx,
@@ -1050,6 +1100,11 @@ class Compositor {
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
       masks.charWritten[word] |= maskBit;
+      if ((sourceMods & Modifier.kittyPlaceholder) != 0) {
+        target.attributes[targetAttrIdx] = sourceFg;
+        masks.fgWritten[word] |= maskBit;
+        return true;
+      }
       return fgOccluded;
     }
     if (((sourceBg >> 24) & 0xFF) == 255) {
@@ -1166,11 +1221,13 @@ class Compositor {
       );
     }
 
-    target.attributes[targetAttrIdx] = blendColor(
-      sourceFg,
-      target.attributes[targetAttrIdx],
-    );
-    target.attributes[targetAttrIdx + 2] |= sourceMods;
+    if (targetIsEmptyChar || (sourceMods & Modifier.kittyPlaceholder) == 0) {
+      target.attributes[targetAttrIdx] = blendColor(
+        sourceFg,
+        target.attributes[targetAttrIdx],
+      );
+      target.attributes[targetAttrIdx + 2] |= sourceMods;
+    }
     target.attributes[targetAttrIdx + 1] = blendColor(
       sourceBg,
       target.attributes[targetAttrIdx + 1],

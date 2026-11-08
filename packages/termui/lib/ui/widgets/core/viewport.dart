@@ -125,6 +125,31 @@ class Viewport implements Buffer {
   List<RegisteredEffect> get effects => parent.effects;
 
   @override
+  void registerKittyRegistry(Rect rect, KittyImageRegistry registry) {
+    if (rect.width <= 0 || rect.height <= 0) return;
+    final clipped = bounds.intersect(
+      Rect(bounds.x + rect.x, bounds.y + rect.y, rect.width, rect.height),
+    );
+    if (clipped.width > 0 && clipped.height > 0) {
+      parent.registerKittyRegistry(clipped, registry);
+    }
+  }
+
+  @override
+  KittyImageRegistry lookupKittyRegistry(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) {
+      return KittyImageRegistry.global;
+    }
+    return parent.lookupKittyRegistry(bounds.x + x, bounds.y + y);
+  }
+
+  @override
+  KittyImageData? lookupKittyImage(int x, int y, int imageId) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return null;
+    return parent.lookupKittyImage(bounds.x + x, bounds.y + y, imageId);
+  }
+
+  @override
   void addEffect(RegisteredEffect effect) {
     parent.addEffect(
       RegisteredEffect(
