@@ -1,5 +1,6 @@
 import 'package:fake_async/fake_async.dart';
 import 'dart:async';
+import 'package:termui_shared_examples/widget_book/kitty_protocol_demo.dart';
 import 'package:termui_shared_examples/widget_book/layout_state.dart';
 import 'package:termui_shared_examples/widget_book/modal_dialog.dart';
 import 'package:test/test.dart';
@@ -12,6 +13,10 @@ import 'package:termui/termui.dart';
 
 class TestWidgetBookPlatform implements WidgetBookPlatform {
   Buffer? lastBuffer;
+  @override
+  final String? initialPage;
+
+  TestWidgetBookPlatform({this.initialPage});
 
   @override
   bool get shouldRenderToTerminal => false;
@@ -29,9 +34,6 @@ class TestWidgetBookPlatform implements WidgetBookPlatform {
 
   @override
   bool handleKeyEvent(Terminal terminal, ui.KeyEvent event) => false;
-
-  @override
-  String? get initialPage => null;
 
   @override
   void onExit() {}
@@ -1292,5 +1294,87 @@ void main() {
         await runnerFuture;
       });
     });
+
+    test(
+      'RichTextTimer and KittyProtocolDemo Golden Screen & Integration Tests',
+      () {
+        final tester = TerminalTester();
+        tester.run(() async {
+          final app = WidgetBookApp(
+            terminal: tester.terminal,
+            platform: TestWidgetBookPlatform(initialPage: 'richTextTimer'),
+            isInline: false,
+          );
+          final runner = PromptRunner<void>(
+            terminal: tester.terminal,
+            widget: app,
+            alternateScreen: true,
+          );
+
+          final runnerFuture = tester.runPrompt(runner, () async {
+            await tester.pump();
+
+            expect(
+              find.textPattern(r'Rich Text & Timer Preview'),
+              findsOneWidget,
+            );
+            expect(
+              tester.backend.buffer,
+              matchesAnsiGolden(
+                'test/goldens/widget_book_rich_text_styling.ansi',
+              ),
+            );
+
+            // Navigate to Kitty Protocol (KTTY) page
+            tester.tap(find.text('Kitty Protocol (KTTY)'));
+            await tester.pump();
+
+            expect(
+              find.textPattern(r'Kitty Protocol \(KTTY\) Preview'),
+              findsOneWidget,
+            );
+            expect(find.byType<KittyImage>(), findsOneWidget);
+            expect(
+              KittyImageRegistry.lookup(KittyProtocolExample.kDemoImageId),
+              isNotNull,
+            );
+            expect(
+              tester.backend.buffer,
+              matchesAnsiGolden(
+                'test/goldens/widget_book_kitty_protocol_placeholders.ansi',
+              ),
+            );
+
+            // Focus the demo pane and toggle Mosaic mode with 'm'
+            tester.sendKey(LogicalKey.tab);
+            await tester.pump();
+            tester.sendKey(LogicalKey.character('m'));
+            await tester.pump();
+            expect(find.byType<KittyImage>(), findsNothing);
+            expect(
+              tester.backend.buffer,
+              matchesAnsiGolden(
+                'test/goldens/widget_book_kitty_protocol_mosaic.ansi',
+              ),
+            );
+
+            // Toggle back to KittyImage mode with 'm', and toggle occlusion window with 'o'
+            tester.sendKey(LogicalKey.character('m'));
+            await tester.pump();
+            expect(find.byType<KittyImage>(), findsOneWidget);
+            tester.sendKey(LogicalKey.character('o'));
+            await tester.pump();
+
+            // Clean exit
+            tester.sendKey(LogicalKey.escape);
+            await tester.pump();
+            tester.sendKey(LogicalKey.character('q'));
+            await tester.pump();
+          });
+
+          await runnerFuture;
+        });
+      },
+    );
   });
 }

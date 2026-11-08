@@ -69,7 +69,10 @@ enum DemoPage {
   sparklines('Sparklines'),
 
   /// Match-3 emoji puzzle drop game.
-  fruitGame('Fruit Drop Game');
+  fruitGame('Fruit Drop Game'),
+
+  /// Kitty Graphics (U+10EEEE Placeholders), cell occlusion, and KTTY inspector.
+  kittyProtocol('Kitty Protocol (KTTY)');
 
   /// Display title of the demo page.
   final String title;
@@ -249,6 +252,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     DemoPage.mcdoleLogo: McdoleLogoExample(),
     DemoPage.sparklines: SparklinesExample(),
     DemoPage.fruitGame: FruitGameExample(),
+    DemoPage.kittyProtocol: KittyProtocolExample(),
   };
 
   StreamSubscription<String>? _pageSelectedSub;
@@ -290,6 +294,9 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     for (final example in examples.values) {
       example.attachTerminal(widget.terminal);
       example.init();
+    }
+    if (examples[DemoPage.kittyProtocol] case final KittyProtocolExample ktty) {
+      ktty.enableKittyPassthrough = !widget.platform.shouldRenderToTerminal;
     }
 
     _rootScopeNode.addChild(_sidebarFocusNode);
