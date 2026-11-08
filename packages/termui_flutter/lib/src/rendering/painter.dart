@@ -15,6 +15,31 @@ bool _isBlockCharacter(String char) {
   return code >= 0x2580 && code <= 0x2590;
 }
 
+const Set<String> _knownLigatures = {
+  // 4-character
+  '<!--', '->>>', '<<<-', '<==>', '<-->',
+  // 3-character
+  '===', '!==', '=/=', '=>>', '==>', '<==', '<=>', '<->',
+  '<--', '-->', '<<-', '->>', '...', '..<', ':::',
+  '///', '/**', '***', '<|>', '<*>', '<+>', r'<$>',
+  // 2-character
+  '->', '<-', '=>', '<=', '>=', '==', '!=', ':=',
+  '::', '..', '??', '?.', '||', '&&', '++', '--',
+  '**', '~~', '~>', '~=', '<>', '</', '/>', '/*',
+  '*/', '//', '<|', '|>', '[|', '|]', '{|', '|}',
+  '##', '%%', '@@', '!!',
+};
+
+bool _isLigatureChar(String ch) {
+  if (ch.length != 1) return false;
+  final c = ch.codeUnitAt(0);
+  return (c >= 0x21 && c <= 0x2F) ||
+      (c >= 0x3A && c <= 0x40) ||
+      (c >= 0x5B && c <= 0x5E) ||
+      c == 0x5F ||
+      (c >= 0x7B && c <= 0x7E);
+}
+
 /// Determines if a given grapheme cluster character represents a color emoji.
 bool isColorEmoji(String char) {
   if (char.isEmpty) return false;
@@ -62,8 +87,11 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Optional callback invoked when unrecognized glyphs are requested.
   final void Function(List<String>)? onMissingGlyphs;
 
+  /// Optional callback invoked with exact `(char, GlyphStyleVariant)` pairs for lazy dynamic rasterization.
+  final void Function(List<(String, GlyphStyleVariant)>)? onMissingStyledGlyphs;
+
   /// Cache of individual [TextPainter] objects for glyphs absent in the main atlas.
-  final Map<(String, bool, bool, Color), TextPainter> fallbackPainters;
+  final Map<(String, bool, bool, bool, Color), TextPainter> fallbackPainters;
 
   Float32List? _transformsBg;
   Float32List? _rectsBg;
@@ -121,8 +149,20 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Whether the active selection uses rectangular box mode (`Alt+Drag`).
   final bool selectionBoxMode;
 
-  /// Optional pre-decoded GPU textures keyed by [KittyImageData] identity.
+  /// Optional pre-decoded GPU textures for registered [KittyImageData] entries.
   final Map<KittyImageData, ui.Image> kittyImages;
+
+  /// Optional pre-decoded GPU textures keyed by `(KittyImageRegistry, imageId)` so resized or updated placements keep rendering on GPU within the same pane without leaking across panes.
+  final Map<(KittyImageRegistry, int), ui.Image> kittyImagesById;
+
+  /// Enables multi-cell ligatures. Defaults to false.
+  final bool enableLigatures;
+
+  /// Cache of individual [TextPainter] objects for multi-cell ligatures.
+  final Map<(String, bool, bool, Color), TextPainter> ligaturePainters;
+
+  /// Maximum entries retained in [ligaturePainters] before LRU eviction.
+  static const int maxLigaturePainters = 128;
 
   static const int _selectionBgArgb = 0xFF264F78;
 
@@ -134,16 +174,22 @@ final class TuiAtlasPainter extends CustomPainter {
     this.fontFamilyFallback,
     required this.fallbackPainters,
     required this.onMissingGlyphs,
+    this.onMissingStyledGlyphs,
     this.enableBleed = kIsWeb,
+    this.enableLigatures = false,
+    Map<(String, bool, bool, Color), TextPainter>? ligaturePainters,
     this.selectionController,
     math.Point<int>? selectionStart,
     math.Point<int>? selectionEnd,
     (int, int)? selectionColBounds,
     this.selectionBoxMode = false,
     this.kittyImages = const {},
+    this.kittyImagesById = const {},
   }) : _selectionStart = selectionStart,
        _selectionEnd = selectionEnd,
-       _selectionColBounds = selectionColBounds;
+       _selectionColBounds = selectionColBounds,
+       ligaturePainters =
+           ligaturePainters ?? <(String, bool, bool, Color), TextPainter>{};
 
   void _drawRawAtlasInChunks(
     Canvas canvas,
@@ -194,21 +240,21 @@ final class TuiAtlasPainter extends CustomPainter {
     final fallbackCells = <_FallbackCell>[];
     final italicCells = <_ItalicAtlasCell>[];
     final decorations = <_CellDecoration>[];
+    final ligatureCells = <_LigatureCell>[];
     final missingGlyphs = <String>[];
+    final missingStyledGlyphs = <(String, GlyphStyleVariant)>[];
 
     final (fgSpriteCount, emojiSpriteCount) = _stageGridCells(
       geo,
       fallbackCells,
       italicCells,
       decorations,
+      ligatureCells,
       missingGlyphs,
+      missingStyledGlyphs,
     );
 
-    if (missingGlyphs.isNotEmpty && onMissingGlyphs != null) {
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        onMissingGlyphs!(missingGlyphs);
-      });
-    }
+    _scheduleMissingGlyphCallbacks(missingGlyphs, missingStyledGlyphs);
 
     _drawRawAtlasInChunks(
       canvas,
@@ -252,9 +298,27 @@ final class TuiAtlasPainter extends CustomPainter {
       _paintFallbackCells(canvas, fallbackCells);
     }
 
+    if (ligatureCells.isNotEmpty) {
+      _paintLigatureCells(canvas, ligatureCells, geo);
+    }
+
     if (decorations.isNotEmpty) {
       _paintDecorations(canvas, decorations);
     }
+  }
+
+  void _scheduleMissingGlyphCallbacks(
+    List<String> missingGlyphs,
+    List<(String, GlyphStyleVariant)> missingStyledGlyphs,
+  ) {
+    final notifyPlain = missingGlyphs.isNotEmpty && onMissingGlyphs != null;
+    final notifyStyled =
+        missingStyledGlyphs.isNotEmpty && onMissingStyledGlyphs != null;
+    if (!notifyPlain && !notifyStyled) return;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      if (notifyPlain) onMissingGlyphs!(missingGlyphs);
+      if (notifyStyled) onMissingStyledGlyphs!(missingStyledGlyphs);
+    });
   }
 
   void _ensureBatchBuffers(int count) {
@@ -303,7 +367,9 @@ final class TuiAtlasPainter extends CustomPainter {
     List<_FallbackCell> fallbackCells,
     List<_ItalicAtlasCell> italicCells,
     List<_CellDecoration> decorations,
+    List<_LigatureCell> ligatureCells,
     List<String> missingGlyphs,
+    List<(String, GlyphStyleVariant)> missingStyledGlyphs,
   ) {
     final cols = buffer.width;
     final rows = buffer.height;
@@ -312,80 +378,333 @@ final class TuiAtlasPainter extends CustomPainter {
 
     for (var y = 0; y < rows; y++) {
       final screenY = y * geo.cellHeight;
-      for (var x = 0; x < cols; x++) {
-        final char = buffer.getCharacter(x, y);
-        final bgArgb = buffer.getBackground(x, y);
-        final fgArgb = buffer.getForeground(x, y);
-        final modifiers = buffer.getModifiers(x, y);
-        final isReverse = Modifier.has(modifiers, Modifier.reverse);
+      var x = 0;
+      while (x < cols) {
+        if (enableLigatures) {
+          final lig = _detectLigature(x, y, cols);
+          if (lig != null) {
+            fgSpriteCount = _stageLigatureRun(
+              lig.$1,
+              lig.$2,
+              x,
+              y,
+              screenY,
+              geo,
+              decorations,
+              ligatureCells,
+              fgSpriteCount,
+            );
+            x += lig.$2;
+            continue;
+          }
+        }
 
-        final idx = y * cols + x;
-        final isSelected =
-            !_isKittyCell(char, modifiers) && _isCellSelected(x, y);
-        final screenX = x * geo.cellWidth;
-
-        _stageBackgroundSprite(
-          idx,
-          screenX,
+        (fgSpriteCount, emojiSpriteCount) = _stageSingleCell(
+          x,
+          y,
           screenY,
-          _resolveBgColor(
-            bgArgb,
-            fgArgb,
-            isReverse: isReverse,
-            isSelected: isSelected,
-          ),
           geo,
-        );
-
-        final resolvedFg = _resolveFgColor(
-          fgArgb,
-          bgArgb,
-          modifiers: modifiers,
-          isReverse: isReverse,
-          isSelected: isSelected,
-        );
-
-        if (Modifier.has(modifiers, Modifier.hidden) && !isSelected) {
-          continue;
-        }
-
-        _maybeStageDecoration(
           decorations,
-          char: char,
-          x: x,
-          y: y,
-          screenX: screenX,
-          screenY: screenY,
-          modifiers: modifiers,
-          resolvedFg: resolvedFg,
-          geo: geo,
+          fallbackCells,
+          italicCells,
+          missingGlyphs,
+          missingStyledGlyphs,
+          fgSpriteCount,
+          emojiSpriteCount,
         );
-
-        if (char.isEmpty || char == ' ') {
-          continue;
-        }
-
-        (fgSpriteCount, emojiSpriteCount) = _stageForegroundCell(
-          char: char,
-          gridCol: x,
-          gridRow: y,
-          modifiers: modifiers,
-          fgArgb: fgArgb,
-          bgArgb: bgArgb,
-          resolvedFg: resolvedFg,
-          screenX: screenX,
-          screenY: screenY,
-          fgSpriteCount: fgSpriteCount,
-          emojiSpriteCount: emojiSpriteCount,
-          geo: geo,
-          fallbackCells: fallbackCells,
-          italicCells: italicCells,
-          missingGlyphs: missingGlyphs,
-        );
+        x++;
       }
     }
 
     return (fgSpriteCount, emojiSpriteCount);
+  }
+
+  (int, int) _stageSingleCell(
+    int x,
+    int y,
+    double screenY,
+    _AtlasGeometry geo,
+    List<_CellDecoration> decorations,
+    List<_FallbackCell> fallbackCells,
+    List<_ItalicAtlasCell> italicCells,
+    List<String> missingGlyphs,
+    List<(String, GlyphStyleVariant)> missingStyledGlyphs,
+    int fgSpriteCount,
+    int emojiSpriteCount,
+  ) {
+    final char = buffer.getCharacter(x, y);
+    final bgArgb = buffer.getBackground(x, y);
+    final fgArgb = buffer.getForeground(x, y);
+    final modifiers = buffer.getModifiers(x, y);
+    final isReverse = Modifier.has(modifiers, Modifier.reverse);
+
+    final idx = y * buffer.width + x;
+    final isSelected = !_isKittyCell(char, modifiers) && _isCellSelected(x, y);
+    final screenX = x * geo.cellWidth;
+
+    _stageBackgroundSprite(
+      idx,
+      screenX,
+      screenY,
+      _resolveBgColor(
+        bgArgb,
+        fgArgb,
+        isReverse: isReverse,
+        isSelected: isSelected,
+      ),
+      geo,
+    );
+
+    final resolvedFg = _resolveFgColor(
+      fgArgb,
+      bgArgb,
+      modifiers: modifiers,
+      isReverse: isReverse,
+      isSelected: isSelected,
+    );
+
+    if (Modifier.has(modifiers, Modifier.hidden) && !isSelected) {
+      return (fgSpriteCount, emojiSpriteCount);
+    }
+
+    _maybeStageDecoration(
+      decorations,
+      char: char,
+      x: x,
+      y: y,
+      screenX: screenX,
+      screenY: screenY,
+      modifiers: modifiers,
+      resolvedFg: resolvedFg,
+      geo: geo,
+    );
+
+    if (char.isEmpty || char == ' ') {
+      return (fgSpriteCount, emojiSpriteCount);
+    }
+
+    return _stageForegroundCell(
+      char: char,
+      gridCol: x,
+      gridRow: y,
+      modifiers: modifiers,
+      fgArgb: fgArgb,
+      bgArgb: bgArgb,
+      resolvedFg: resolvedFg,
+      screenX: screenX,
+      screenY: screenY,
+      fgSpriteCount: fgSpriteCount,
+      emojiSpriteCount: emojiSpriteCount,
+      geo: geo,
+      fallbackCells: fallbackCells,
+      italicCells: italicCells,
+      missingGlyphs: missingGlyphs,
+      missingStyledGlyphs: missingStyledGlyphs,
+    );
+  }
+
+  (String, int)? _detectLigature(int startX, int y, int cols) {
+    if (startX + 1 >= cols) return null;
+    final maxLen = math.min(4, cols - startX);
+    for (var len = maxLen; len >= 2; len--) {
+      final match = _checkLigatureCandidate(startX, y, len);
+      if (match != null) return (match, len);
+    }
+    return null;
+  }
+
+  String? _checkLigatureCandidate(int startX, int y, int len) {
+    final firstChar = buffer.getCharacter(startX, y);
+    if (!_isLigatureChar(firstChar)) return null;
+
+    final firstMods = buffer.getModifiers(startX, y);
+    final firstSelected = _isCellSelected(startX, y);
+    if (Modifier.has(firstMods, Modifier.hidden) && !firstSelected) {
+      return null;
+    }
+
+    final firstFg = buffer.getForeground(startX, y);
+    final firstBg = buffer.getBackground(startX, y);
+    final firstUl = buffer.getUnderlineColor(startX, y);
+    final firstUri = buffer.getUri(startX, y);
+
+    final sb = StringBuffer(firstChar);
+    for (var i = 1; i < len; i++) {
+      final curX = startX + i;
+      final ch = buffer.getCharacter(curX, y);
+      if (!_isLigatureChar(ch) ||
+          !_cellMatchesLigatureRun(
+            curX,
+            y,
+            firstFg,
+            firstBg,
+            firstMods,
+            firstUl,
+            firstUri,
+            firstSelected,
+          )) {
+        return null;
+      }
+      sb.write(ch);
+    }
+    final text = sb.toString();
+    return _knownLigatures.contains(text) ? text : null;
+  }
+
+  bool _cellMatchesLigatureRun(
+    int x,
+    int y,
+    int fg,
+    int bg,
+    int mods,
+    int underlineColor,
+    String? uri,
+    bool selected,
+  ) =>
+      buffer.getForeground(x, y) == fg &&
+      buffer.getBackground(x, y) == bg &&
+      buffer.getModifiers(x, y) == mods &&
+      buffer.getUnderlineColor(x, y) == underlineColor &&
+      buffer.getUri(x, y) == uri &&
+      _isCellSelected(x, y) == selected;
+
+  int _stageLigatureRun(
+    String text,
+    int len,
+    int startX,
+    int y,
+    double screenY,
+    _AtlasGeometry geo,
+    List<_CellDecoration> decorations,
+    List<_LigatureCell> ligatureCells,
+    int fgSpriteCount,
+  ) {
+    final firstFg = buffer.getForeground(startX, y);
+    final firstBg = buffer.getBackground(startX, y);
+    final firstMods = buffer.getModifiers(startX, y);
+    final isReverse = Modifier.has(firstMods, Modifier.reverse);
+    final isSelected = _isCellSelected(startX, y);
+
+    final resolvedBg = _resolveBgColor(
+      firstBg,
+      firstFg,
+      isReverse: isReverse,
+      isSelected: isSelected,
+    );
+    final isHiddenUnselected =
+        Modifier.has(firstMods, Modifier.hidden) && !isSelected;
+
+    if (isHiddenUnselected) {
+      for (var i = 0; i < len; i++) {
+        final x = startX + i;
+        final idx = y * buffer.width + x;
+        _stageBackgroundSprite(
+          idx,
+          x * geo.cellWidth,
+          screenY,
+          resolvedBg,
+          geo,
+        );
+      }
+      return fgSpriteCount;
+    }
+
+    final resolvedFg = _resolveFgColor(
+      firstFg,
+      firstBg,
+      modifiers: firstMods,
+      isReverse: isReverse,
+      isSelected: isSelected,
+    );
+
+    for (var i = 0; i < len; i++) {
+      final x = startX + i;
+      final idx = y * buffer.width + x;
+      final screenX = x * geo.cellWidth;
+      _stageBackgroundSprite(idx, screenX, screenY, resolvedBg, geo);
+      _maybeStageDecoration(
+        decorations,
+        char: buffer.getCharacter(x, y),
+        x: x,
+        y: y,
+        screenX: screenX,
+        screenY: screenY,
+        modifiers: firstMods,
+        resolvedFg: resolvedFg,
+        geo: geo,
+      );
+    }
+
+    final isBold = Modifier.has(firstMods, Modifier.bold);
+    final isItalic = Modifier.has(firstMods, Modifier.italic);
+    final atlasRect = atlas.rectFor(text, isBold: isBold, isItalic: isItalic);
+    if (atlasRect != null) {
+      _stageTextSprite(
+        fgSpriteCount,
+        text,
+        startX * geo.cellWidth,
+        screenY,
+        atlasRect,
+        resolvedFg,
+        geo,
+      );
+      return fgSpriteCount + 1;
+    }
+
+    final tp = _getLigaturePainter(text, isBold, isItalic, Color(resolvedFg));
+    ligatureCells.add(
+      _LigatureCell(
+        text: text,
+        painter: tp,
+        x: startX * geo.cellWidth,
+        y: screenY,
+        w: len * geo.cellWidth,
+        h: geo.cellHeight,
+      ),
+    );
+    return fgSpriteCount;
+  }
+
+  TextPainter _getLigaturePainter(
+    String text,
+    bool isBold,
+    bool isItalic,
+    Color color,
+  ) {
+    final key = (text, isBold, isItalic, color);
+    final existing = ligaturePainters.remove(key);
+    if (existing != null) {
+      ligaturePainters[key] = existing;
+      return existing;
+    }
+    while (ligaturePainters.length >= maxLigaturePainters) {
+      final oldestKey = ligaturePainters.keys.first;
+      ligaturePainters.remove(oldestKey)?.dispose();
+    }
+
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
+          fontFeatures: const [
+            ui.FontFeature.enable('liga'),
+            ui.FontFeature.enable('calt'),
+            ui.FontFeature.enable('dlig'),
+          ],
+          fontSize: atlas.fontSize,
+          color: color,
+          fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+          fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
+          letterSpacing: 0.0,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    ligaturePainters[key] = painter;
+    return painter;
   }
 
   void _maybeStageDecoration(
@@ -451,13 +770,22 @@ final class TuiAtlasPainter extends CustomPainter {
     required List<_FallbackCell> fallbackCells,
     required List<_ItalicAtlasCell> italicCells,
     required List<String> missingGlyphs,
+    required List<(String, GlyphStyleVariant)> missingStyledGlyphs,
   }) {
-    final sourceRect = atlas.charRects[char];
+    final isBold = Modifier.has(modifiers, Modifier.bold);
+    final isItalic = Modifier.has(modifiers, Modifier.italic);
+    final variant = GlyphStyleVariant.fromFlags(
+      isBold: isBold,
+      isItalic: isItalic,
+    );
+    final sourceRect = atlas.rectFor(char, isBold: isBold, isItalic: isItalic);
     if (sourceRect == null) {
       _stageFallbackCell(
         missingGlyphs,
+        missingStyledGlyphs,
         fallbackCells,
         char: char,
+        variant: variant,
         gridCol: gridCol,
         gridRow: gridRow,
         modifiers: modifiers,
@@ -476,14 +804,22 @@ final class TuiAtlasPainter extends CustomPainter {
     }
 
     final isBlock = _isBlockCharacter(char);
-    if (!isBlock && Modifier.has(modifiers, Modifier.italic)) {
+    final hasNativeStyle =
+        variant == GlyphStyleVariant.regular ||
+        atlas.styledCharRects.containsKey((char, variant)) ||
+        atlas.styleRects.containsKey((char, isBold, isItalic));
+    if (!isBlock && !hasNativeStyle) {
+      missingStyledGlyphs.add((char, variant));
+    }
+
+    if (!isBlock && isItalic && !hasNativeStyle) {
       italicCells.add(
         _ItalicAtlasCell(
           sourceRect: sourceRect,
           x: screenX,
           y: screenY,
           color: resolvedFg,
-          isBold: Modifier.has(modifiers, Modifier.bold),
+          isBold: isBold,
         ),
       );
       return (fgSpriteCount, emojiSpriteCount);
@@ -499,7 +835,7 @@ final class TuiAtlasPainter extends CustomPainter {
       geo,
     );
     var nextFgCount = fgSpriteCount + 1;
-    if (!isBlock && Modifier.has(modifiers, Modifier.bold)) {
+    if (!isBlock && isBold && !hasNativeStyle) {
       _stageTextSprite(
         nextFgCount,
         char,
@@ -566,8 +902,10 @@ final class TuiAtlasPainter extends CustomPainter {
 
   void _stageFallbackCell(
     List<String> missingGlyphs,
+    List<(String, GlyphStyleVariant)> missingStyledGlyphs,
     List<_FallbackCell> fallbackCells, {
     required String char,
+    required GlyphStyleVariant variant,
     required int gridCol,
     required int gridRow,
     required int modifiers,
@@ -580,6 +918,7 @@ final class TuiAtlasPainter extends CustomPainter {
     final isKitty = _isKittyCell(char, modifiers);
     if (!isKitty) {
       missingGlyphs.add(char);
+      missingStyledGlyphs.add((char, variant));
     }
     fallbackCells.add(
       _FallbackCell(
@@ -635,7 +974,7 @@ final class TuiAtlasPainter extends CustomPainter {
   void _paintFallbackCells(Canvas canvas, List<_FallbackCell> fallbackCells) {
     final kittyPaint = Paint()
       ..style = PaintingStyle.fill
-      ..filterQuality = FilterQuality.medium;
+      ..filterQuality = FilterQuality.low;
     var i = 0;
     while (i < fallbackCells.length) {
       final fc = fallbackCells[i];
@@ -645,6 +984,18 @@ final class TuiAtlasPainter extends CustomPainter {
       }
       _paintSingleFallbackGlyph(canvas, fc);
       i++;
+    }
+  }
+
+  void _paintLigatureCells(
+    Canvas canvas,
+    List<_LigatureCell> cells,
+    _AtlasGeometry geo,
+  ) {
+    for (final lc in cells) {
+      final offsetX = (lc.w - lc.painter.width) / 2;
+      final offsetY = (lc.h - lc.painter.height) / 2;
+      lc.painter.paint(canvas, Offset(lc.x + offsetX, lc.y + offsetY));
     }
   }
 
@@ -659,9 +1010,10 @@ final class TuiAtlasPainter extends CustomPainter {
       ),
     );
     final isBold = Modifier.has(fc.modifiers, Modifier.bold);
+    final isItalic = Modifier.has(fc.modifiers, Modifier.italic);
     final isDim = Modifier.has(fc.modifiers, Modifier.dim);
 
-    final tp = fallbackPainters[(fc.char, isBold, isDim, color)];
+    final tp = fallbackPainters[(fc.char, isBold, isItalic, isDim, color)];
     if (tp != null) {
       final offsetX = (fc.w - tp.width) / 2;
       final offsetY = (fc.h - tp.height) / 2;
@@ -681,7 +1033,8 @@ final class TuiAtlasPainter extends CustomPainter {
 
     final imageId =
         (((coords.imageIdMsb ?? 0) & 0xFF) << 24) | (fc.fgArgb & 0xFFFFFF);
-    final data = buffer.lookupKittyImage(fc.gridCol, fc.gridRow, imageId);
+    final registry = buffer.lookupKittyRegistry(fc.gridCol, fc.gridRow);
+    final data = registry.lookupImage(imageId);
     if (data == null ||
         data.gridCols <= 0 ||
         data.gridRows <= 0 ||
@@ -690,7 +1043,7 @@ final class TuiAtlasPainter extends CustomPainter {
       return index + 1;
     }
 
-    final gpuImage = kittyImages[data];
+    final gpuImage = kittyImages[data] ?? kittyImagesById[(registry, imageId)];
     if (gpuImage == null) {
       _paintKittySubpixels(canvas, paint, fc, data, coords.row, coords.col);
       return index + 1;
@@ -1142,6 +1495,24 @@ final class _FallbackCell {
     required this.modifiers,
     required this.fgArgb,
     required this.bgArgb,
+    required this.x,
+    required this.y,
+    required this.w,
+    required this.h,
+  });
+}
+
+final class _LigatureCell {
+  final String text;
+  final TextPainter painter;
+  final double x;
+  final double y;
+  final double w;
+  final double h;
+
+  const _LigatureCell({
+    required this.text,
+    required this.painter,
     required this.x,
     required this.y,
     required this.w,

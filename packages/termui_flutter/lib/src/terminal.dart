@@ -8,18 +8,18 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:termui/perf/tracer.dart';
+import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui/ui/widgets/interactive/selection_controller.dart';
-import 'package:termui/terminal/terminal.dart' as term;
-import 'package:termui/perf/tracer.dart';
 
 import 'backend.dart';
 import 'rendering/atlas.dart';
 import 'rendering/painter.dart';
-import 'util/font_helper.dart';
 import 'service/terminal_service.dart';
+import 'util/font_helper.dart';
 
 /// A widget that embeds a `termui` TUI application within Flutter.
 ///
@@ -80,6 +80,9 @@ final class Terminal extends StatefulWidget {
   /// Enables sub-pixel bleeding to prevent gaps during fractional transformations. Defaults to kIsWeb.
   final bool enableBleed;
 
+  /// Enables multi-cell font ligatures. Defaults to false.
+  final bool enableLigatures;
+
   /// Optional controller managing interactive text selection state.
   final TerminalSelectionController? selectionController;
 
@@ -94,6 +97,7 @@ final class Terminal extends StatefulWidget {
     this.backgroundColor = Colors.black,
     this.service = const DefaultTerminalService(),
     this.enableBleed = kIsWeb,
+    this.enableLigatures = false,
     this.selectionController,
   });
 
@@ -102,21 +106,45 @@ final class Terminal extends StatefulWidget {
 }
 
 class _TerminalState extends State<Terminal> {
-  late final FlutterTerminal _terminal;
+  FlutterTerminal? _internalTerminal;
   bool _isRunning = false;
+
+  FlutterTerminal get _terminal => widget.terminal ?? _internalTerminal!;
 
   @override
   void initState() {
     super.initState();
-    _terminal =
-        widget.terminal ?? FlutterTerminal(initialFontSize: widget.fontSize);
+    if (widget.terminal == null) {
+      _internalTerminal = FlutterTerminal(
+        initialFontSize: widget.fontSize,
+        enableLigatures: widget.enableLigatures,
+      )..setEnableLigatures(widget.enableLigatures);
+    }
+  }
+
+  @override
+  void didUpdateWidget(Terminal oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.terminal != widget.terminal) {
+      if (oldWidget.terminal == null) {
+        _internalTerminal?.dispose();
+        _internalTerminal = null;
+      }
+      if (widget.terminal == null) {
+        _internalTerminal = FlutterTerminal(
+          initialFontSize: widget.fontSize,
+          enableLigatures: widget.enableLigatures,
+        );
+      }
+    } else if (widget.terminal == null &&
+        oldWidget.enableLigatures != widget.enableLigatures) {
+      _internalTerminal?.setEnableLigatures(widget.enableLigatures);
+    }
   }
 
   @override
   void dispose() {
-    if (widget.terminal == null) {
-      _terminal.dispose();
-    }
+    _internalTerminal?.dispose();
     super.dispose();
   }
 
@@ -140,6 +168,7 @@ class _TerminalState extends State<Terminal> {
       backgroundColor: widget.backgroundColor,
       service: widget.service,
       enableBleed: widget.enableBleed,
+      enableLigatures: widget.enableLigatures,
       selectionController: widget.selectionController,
       onInit: _startLoop,
     );
@@ -190,6 +219,9 @@ final class PrivateTuiView extends StatefulWidget {
   /// Enables sub-pixel bleeding to prevent gaps during fractional transformations. Defaults to kIsWeb.
   final bool enableBleed;
 
+  /// Enables multi-cell font ligatures. Defaults to false.
+  final bool enableLigatures;
+
   /// Optional controller managing interactive text selection state.
   final TerminalSelectionController? selectionController;
 
@@ -204,6 +236,7 @@ final class PrivateTuiView extends StatefulWidget {
     this.fontFamilyFallback,
     this.backgroundColor = Colors.black,
     this.enableBleed = kIsWeb,
+    this.enableLigatures = false,
     this.selectionController,
   });
 
@@ -220,6 +253,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   StreamSubscription<String?>? _mouseCursorSubscription;
   StreamSubscription<String>? _clipboardSubscription;
   StreamSubscription<void>? _pasteRequestSubscription;
+  StreamSubscription<bool>? _ligaturesSubscription;
+  late bool _enableLigatures;
   MouseCursor _currentCursor = SystemMouseCursors.basic;
   String? _hoveredUri;
   bool _isLinkModifierActive = false;
@@ -227,7 +262,7 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   ({int col, int row})? _selectionAnchor;
   bool _isSelecting = false;
 
-  /// Active selection controller backing this terminal view.
+  /// The active selection controller for this terminal view.
   TerminalSelectionController get selectionController => _selectionController;
 
   MouseCursor get _effectiveCursor =>
@@ -237,12 +272,16 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       ? SystemMouseCursors.click
       : _currentCursor;
 
-  final Map<(String, bool, bool, Color), TextPainter> _fallbackPainters = {};
-  static const int _maxKittyGpuImages = 64;
+  final Map<(String, bool, bool, bool, Color), TextPainter> _fallbackPainters =
+      {};
+  final Map<(String, bool, bool, Color), TextPainter> _ligaturePainters = {};
   final Map<KittyImageData, ui.Image> _kittyGpuImages = {};
-  final Set<KittyImageData> _decodingKittyImages = {};
-  final Set<String> _pendingGlyphs = {};
-  final Set<String> _processingGlyphs = {};
+  final Map<(KittyImageRegistry, int), ui.Image> _kittyGpuImagesById = {};
+  final Set<KittyImageData> _decodingKittyImages = Set.identity();
+  final Set<(String, GlyphStyleVariant)> _pendingGlyphs = {};
+  final Set<(String, GlyphStyleVariant)> _processingGlyphs = {};
+  static const int _maxKittyGpuImages = 64;
+  static const int _maxFallbackPainters = 256;
   bool _isUpdatingAtlas = false;
   term.MouseEvent? _lastInjectedPointerEvent;
 
@@ -250,6 +289,19 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
 
   /// Current font size rendered by the terminal view.
   double get fontSize => _fontSize;
+
+  /// Active fallback [TextPainter] cache keys for unit and widget tests.
+  @visibleForTesting
+  Set<(String, bool, bool, bool, Color)> get debugFallbackPainterKeys =>
+      Set.unmodifiable(_fallbackPainters.keys);
+
+  /// Active [GlyphAtlas] instance for unit and widget tests.
+  @visibleForTesting
+  GlyphAtlas? get debugAtlas => _atlas;
+
+  /// Triggers the F12 screenshot pipeline and returns when saving completes.
+  @visibleForTesting
+  Future<void> debugTakeScreenshot() => _performTakeScreenshot();
   int _atlasGenerationId = 0;
   StreamSubscription<double>? _fontSizeSubscription;
   double _devicePixelRatio = 1.0;
@@ -275,35 +327,50 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     super.initState();
     PaintingBinding.instance.systemFonts.addListener(_handleSystemFontsChange);
     _fontSize = widget.terminal.fontSize;
-    _fontSizeSubscription = widget.terminal.watchFontSize().listen((newSize) {
-      if (mounted) {
-        Tracer.record(
-          _traceFontSizeChangedId,
-          Phase.instant,
-          TraceCategory.layout,
-        );
-        setState(() {
-          _fontSize = newSize;
-        });
-        _recreateAtlas();
-      }
-    });
+    _enableLigatures =
+        widget.enableLigatures || widget.terminal.enableLigatures;
+    _bindTerminalStreams();
 
-    _mouseCursorSubscription = widget.terminal.mouseCursorChanges.listen((
-      cursorName,
-    ) {
-      if (mounted) {
-        setState(() {
-          _currentCursor = _mapOsc22ToSystemCursor(cursorName);
-        });
-      }
-    });
-    _bindClipboardStreams();
     _selectionController =
         widget.selectionController ?? TerminalSelectionController();
     _selectionController.addListener(_onSelectionChanged);
 
     _initAtlasAndLoop();
+  }
+
+  void _bindTerminalStreams() {
+    _fontSizeSubscription?.cancel();
+    _mouseCursorSubscription?.cancel();
+    _ligaturesSubscription?.cancel();
+    _fontSizeSubscription = widget.terminal.watchFontSize().listen((newSize) {
+      if (!mounted) return;
+      Tracer.record(
+        _traceFontSizeChangedId,
+        Phase.instant,
+        TraceCategory.layout,
+      );
+      setState(() {
+        _fontSize = newSize;
+      });
+      _recreateAtlas();
+    });
+    _mouseCursorSubscription = widget.terminal.mouseCursorChanges.listen((
+      cursorName,
+    ) {
+      if (!mounted) return;
+      setState(() {
+        _currentCursor = _mapOsc22ToSystemCursor(cursorName);
+      });
+    });
+    _ligaturesSubscription = widget.terminal.watchEnableLigatures().listen((
+      enabled,
+    ) {
+      if (!mounted) return;
+      setState(() {
+        _enableLigatures = enabled;
+      });
+    });
+    _bindClipboardStreams();
   }
 
   void _onSelectionChanged() {
@@ -382,10 +449,7 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   Future<void> _recreateAtlas() async {
     final genId = ++_atlasGenerationId;
     Tracer.record(_traceRecreateAtlasId, Phase.begin, TraceCategory.paint);
-    for (final painter in _fallbackPainters.values) {
-      painter.dispose();
-    }
-    _fallbackPainters.clear();
+    _disposePainterCaches();
     _pendingGlyphs.clear();
     _processingGlyphs.clear();
     _isUpdatingAtlas = false;
@@ -398,11 +462,15 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     );
 
     if (!mounted || genId != _atlasGenerationId) {
-      newAtlas.image.dispose();
+      newAtlas.dispose();
       Tracer.record(_traceRecreateAtlasId, Phase.end, TraceCategory.paint);
       return;
     }
     final oldAtlas = _atlas;
+    widget.terminal.updateCellPixelSize(
+      newAtlas.cellWidth.round(),
+      newAtlas.cellHeight.round(),
+    );
     setState(() {
       _atlas = newAtlas;
       if (_currentBuffer != null) {
@@ -410,9 +478,20 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       }
     });
     if (oldAtlas != null && !identical(oldAtlas.image, newAtlas.image)) {
-      oldAtlas.image.dispose();
+      oldAtlas.dispose();
     }
     Tracer.record(_traceRecreateAtlasId, Phase.end, TraceCategory.paint);
+  }
+
+  void _disposePainterCaches() {
+    for (final painter in _fallbackPainters.values) {
+      painter.dispose();
+    }
+    _fallbackPainters.clear();
+    for (final painter in _ligaturePainters.values) {
+      painter.dispose();
+    }
+    _ligaturePainters.clear();
   }
 
   MouseCursor _mapOsc22ToSystemCursor(String? cursorName) {
@@ -447,36 +526,23 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   @override
   void didUpdateWidget(PrivateTuiView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _syncSelectionController(oldWidget);
     if (oldWidget.terminal != widget.terminal) {
-      _fontSizeSubscription?.cancel();
-      _mouseCursorSubscription?.cancel();
       _fontSize = widget.terminal.fontSize;
-      _fontSizeSubscription = widget.terminal.watchFontSize().listen((newSize) {
-        if (mounted) {
-          Tracer.record(
-            _traceFontSizeChangedId,
-            Phase.instant,
-            TraceCategory.layout,
-          );
-          setState(() {
-            _fontSize = newSize;
-          });
-          _recreateAtlas();
-        }
-      });
-      _mouseCursorSubscription = widget.terminal.mouseCursorChanges.listen((
-        cursorName,
-      ) {
-        if (mounted) {
-          setState(() {
-            _currentCursor = _mapOsc22ToSystemCursor(cursorName);
-          });
-        }
-      });
-      _bindClipboardStreams();
+      _enableLigatures =
+          widget.enableLigatures || widget.terminal.enableLigatures;
+      _bindTerminalStreams();
       _recreateAtlas();
-    } else if (oldWidget.fontSize != widget.fontSize) {
+    } else {
+      _syncFontConfig(oldWidget);
+      if (oldWidget.enableLigatures != widget.enableLigatures) {
+        _enableLigatures = widget.enableLigatures;
+      }
+    }
+    _syncSelectionController(oldWidget);
+  }
+
+  void _syncFontConfig(PrivateTuiView oldWidget) {
+    if (oldWidget.fontSize != widget.fontSize) {
       widget.terminal.setFontSize(widget.fontSize);
     } else if (oldWidget.fontFamily != widget.fontFamily ||
         oldWidget.fontFamilyFallback != widget.fontFamilyFallback) {
@@ -508,16 +574,16 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     _mouseCursorSubscription?.cancel();
     _clipboardSubscription?.cancel();
     _pasteRequestSubscription?.cancel();
-    for (final painter in _fallbackPainters.values) {
-      painter.dispose();
-    }
-    _fallbackPainters.clear();
+    _ligaturesSubscription?.cancel();
+    _disposePainterCaches();
+    _kittyGpuImagesById.clear();
     for (final image in _kittyGpuImages.values) {
       image.dispose();
     }
     _kittyGpuImages.clear();
     _decodingKittyImages.clear();
-    _atlas?.image.dispose();
+    _atlasGenerationId++;
+    _atlas?.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -528,25 +594,60 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
 
     final total = buffer.width * buffer.height;
     final width = buffer.width;
+    KittyImageData? lastKittyData;
     for (var i = 0; i < total; i++) {
       final char = buffer.characters[i];
-      if (char.isEmpty || char == ' ' || atlas.charRects.containsKey(char)) {
-        continue;
-      }
+      if (char.isEmpty || char == ' ') continue;
       final x = i % width;
       final y = i ~/ width;
       final mods = buffer.getModifiers(x, y);
       if (Modifier.has(mods, Modifier.kittyPlaceholder) ||
           char.startsWith(kittyPlaceholderChar)) {
-        final msb = parseKittyPlaceholderCell(char)?.imageIdMsb ?? 0;
-        final imageId =
-            ((msb & 0xFF) << 24) | (buffer.getForeground(x, y) & 0xFFFFFF);
-        final data = buffer.lookupKittyImage(x, y, imageId);
-        if (data != null) _ensureKittyGpuImage(data);
+        lastKittyData = _resolveAndEnsureKittyGpuImage(
+          buffer,
+          x,
+          y,
+          char,
+          lastKittyData,
+        );
         continue;
       }
-      _ensureFallbackPainterForCell(buffer, x, y, char, mods);
+      _ensureGlyphFallbackIfMissing(atlas, buffer, x, y, char, mods);
     }
+  }
+
+  void _ensureGlyphFallbackIfMissing(
+    GlyphAtlas atlas,
+    Buffer buffer,
+    int x,
+    int y,
+    String char,
+    int mods,
+  ) {
+    final isBold = Modifier.has(mods, Modifier.bold);
+    final isItalic = Modifier.has(mods, Modifier.italic);
+    if (atlas.rectFor(char, isBold: isBold, isItalic: isItalic) != null) {
+      return;
+    }
+    _ensureFallbackPainterForCell(buffer, x, y, char, mods);
+  }
+
+  KittyImageData? _resolveAndEnsureKittyGpuImage(
+    Buffer buffer,
+    int x,
+    int y,
+    String char,
+    KittyImageData? lastKittyData,
+  ) {
+    final imageId = extractKittyCellImageId(char, buffer.getForeground(x, y));
+    if (imageId == 0) return lastKittyData;
+    final registry = buffer.lookupKittyRegistry(x, y);
+    final data = registry.lookupImage(imageId);
+    if (data != null && !identical(data, lastKittyData)) {
+      _ensureKittyGpuImage(registry, data);
+      return data;
+    }
+    return lastKittyData;
   }
 
   void _ensureFallbackPainterForCell(
@@ -564,16 +665,22 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
         ? Color(fgVal)
         : (isReverse ? Colors.black : Colors.white);
     final isBold = Modifier.has(mods, Modifier.bold);
+    final isItalic = Modifier.has(mods, Modifier.italic);
     final isDim = Modifier.has(mods, Modifier.dim);
 
-    final key = (char, isBold, isDim, color);
+    final key = (char, isBold, isItalic, isDim, color);
     if (_fallbackPainters.containsKey(key)) return;
+    while (_fallbackPainters.length >= _maxFallbackPainters) {
+      final oldest = _fallbackPainters.keys.first;
+      _fallbackPainters.remove(oldest)?.dispose();
+    }
     final textStyle = TextStyle(
       fontFamily: widget.fontFamily,
       fontFamilyFallback: widget.fontFamilyFallback,
       fontSize: _fontSize,
       color: color,
       fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+      fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
       height: 1.0,
     );
     _fallbackPainters[key] = TextPainter(
@@ -582,16 +689,40 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     )..layout();
   }
 
-  void _ensureKittyGpuImage(KittyImageData data) {
+  void _evictBakedFallbackPainters(List<(String, GlyphStyleVariant)> baked) {
+    if (_fallbackPainters.isEmpty) return;
+    final bakedSet = <(String, bool, bool)>{
+      for (final (char, variant) in baked)
+        (
+          char,
+          variant == GlyphStyleVariant.bold ||
+              variant == GlyphStyleVariant.boldItalic,
+          variant == GlyphStyleVariant.italic ||
+              variant == GlyphStyleVariant.boldItalic,
+        ),
+    };
+    final toRemove = <(String, bool, bool, bool, Color)>[];
+    for (final key in _fallbackPainters.keys) {
+      if (bakedSet.contains((key.$1, key.$2, key.$3))) {
+        toRemove.add(key);
+      }
+    }
+    for (final key in toRemove) {
+      _fallbackPainters.remove(key)?.dispose();
+    }
+  }
+
+  void _ensureKittyGpuImage(KittyImageRegistry registry, KittyImageData data) {
     final existing = _kittyGpuImages.remove(data);
     if (existing != null) {
       _kittyGpuImages[data] = existing;
+      _kittyGpuImagesById[(registry, data.imageId)] = existing;
       return;
     }
     if (data.rgbaPixels.isEmpty) return;
     if (data.format == 100) {
       if (!_decodingKittyImages.add(data)) return;
-      unawaited(_decodeKittyPngImage(data));
+      unawaited(_decodeKittyPngImage(registry, data));
       return;
     }
     if (data.pixelWidth <= 0 || data.pixelHeight <= 0) return;
@@ -601,16 +732,19 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       data.pixelWidth,
       data.pixelHeight,
       ui.PixelFormat.rgba8888,
-      (decoded) => _onKittyGpuImageDecoded(data, decoded),
+      (decoded) => _onKittyGpuImageDecoded(registry, data, decoded),
     );
   }
 
-  Future<void> _decodeKittyPngImage(KittyImageData data) async {
+  Future<void> _decodeKittyPngImage(
+    KittyImageRegistry registry,
+    KittyImageData data,
+  ) async {
     ui.Codec? codec;
     try {
       codec = await ui.instantiateImageCodec(data.rgbaPixels);
       final frame = await codec.getNextFrame();
-      _onKittyGpuImageDecoded(data, frame.image);
+      _onKittyGpuImageDecoded(registry, data, frame.image);
     } on Object catch (_) {
       _decodingKittyImages.remove(data);
     } finally {
@@ -618,33 +752,46 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     }
   }
 
-  void _onKittyGpuImageDecoded(KittyImageData data, ui.Image decoded) {
+  void _evictOldestKittyGpuImage() {
+    final oldestKey = _kittyGpuImages.keys.first;
+    final evicted = _kittyGpuImages.remove(oldestKey);
+    if (evicted == null) return;
+    _kittyGpuImagesById.removeWhere((_, img) => identical(img, evicted));
+    evicted.dispose();
+  }
+
+  void _onKittyGpuImageDecoded(
+    KittyImageRegistry registry,
+    KittyImageData data,
+    ui.Image decoded,
+  ) {
     _decodingKittyImages.remove(data);
     if (!mounted) {
       decoded.dispose();
       return;
     }
-    while (_kittyGpuImages.length >= _maxKittyGpuImages) {
-      final oldestKey = _kittyGpuImages.keys.first;
-      _kittyGpuImages.remove(oldestKey)?.dispose();
+    while (_kittyGpuImages.length >= _maxKittyGpuImages &&
+        !_kittyGpuImages.containsKey(data)) {
+      _evictOldestKittyGpuImage();
     }
     final old = _kittyGpuImages[data];
     setState(() {
       _kittyGpuImages[data] = decoded;
+      _kittyGpuImagesById[(registry, data.imageId)] = decoded;
     });
     if (old != null && !identical(old, decoded)) {
       old.dispose();
     }
   }
 
-  void _onMissingGlyphs(List<String> glyphs) {
+  void _onMissingStyledGlyphs(List<(String, GlyphStyleVariant)> glyphs) {
     if (_atlas == null) return;
     var needsUpdate = false;
-    for (final glyph in glyphs) {
-      if (!_pendingGlyphs.contains(glyph) &&
-          !_processingGlyphs.contains(glyph) &&
-          !_atlas!.charRects.containsKey(glyph)) {
-        _pendingGlyphs.add(glyph);
+    for (final entry in glyphs) {
+      if (!_pendingGlyphs.contains(entry) &&
+          !_processingGlyphs.contains(entry) &&
+          !_atlas!.styledCharRects.containsKey(entry)) {
+        _pendingGlyphs.add(entry);
         needsUpdate = true;
       }
     }
@@ -668,16 +815,19 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       if (!mounted || genId != _atlasGenerationId) return;
 
       final oldAtlas = _atlas;
-      final newAtlas = await oldAtlas!.addGlyphs(batch);
-      if (!mounted || genId != _atlasGenerationId) {
-        newAtlas.image.dispose();
+      final newAtlas = await oldAtlas!.addStyledGlyphs(batch);
+      if (!mounted || genId != _atlasGenerationId || newAtlas.isDisposed) {
+        if (!identical(oldAtlas.image, newAtlas.image)) {
+          newAtlas.dispose();
+        }
         return;
       }
       setState(() {
         _atlas = newAtlas;
+        _evictBakedFallbackPainters(batch);
       });
       if (!identical(oldAtlas.image, newAtlas.image)) {
-        oldAtlas.image.dispose();
+        oldAtlas.dispose();
       }
     } finally {
       _processingGlyphs.removeAll(batch);
@@ -706,30 +856,56 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     }
   }
 
-  void _handleKeyEvent(KeyEvent event) {
+  KeyEventResult _handleKeyEvent(KeyEvent event) {
     _syncLinkModifierState();
-    if (event is! KeyDownEvent && event is! KeyRepeatEvent) return;
-    final key = event.logicalKey;
+    if (event is KeyUpEvent) {
+      if (!widget.terminal.reportKeyReleaseEvents) {
+        return KeyEventResult.ignored;
+      }
+      return _injectResolvedKeyEvent(
+        event,
+        eventType: term.KeyEventType.release,
+      );
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    if (_handleHostKeyShortcut(event.logicalKey)) {
+      return KeyEventResult.handled;
+    }
+    final eventType = event is KeyRepeatEvent
+        ? term.KeyEventType.repeat
+        : term.KeyEventType.press;
+    return _injectResolvedKeyEvent(event, eventType: eventType);
+  }
 
+  bool _handleHostKeyShortcut(LogicalKeyboardKey key) {
     if (key == LogicalKeyboardKey.f12) {
       if (HardwareKeyboard.instance.isShiftPressed) {
         _recreateAtlas();
       } else {
         _takeScreenshot();
       }
-      return;
+      return true;
     }
-
     final mods = _collectHardwareModifiers();
     if (_isPasteShortcut(key, mods)) {
       unawaited(_pasteFromClipboard());
-      return;
+      return true;
     }
+    return false;
+  }
 
-    final resolved = _resolveKeyEvent(event, mods);
+  KeyEventResult _injectResolvedKeyEvent(
+    KeyEvent event, {
+    required term.KeyEventType eventType,
+  }) {
+    final mods = _collectHardwareModifiers();
+    final resolved = _resolveKeyEvent(event, mods, eventType: eventType);
     if (resolved != null) {
       widget.terminal.injectEvent(resolved);
     }
+    return KeyEventResult.handled;
   }
 
   static Set<term.Modifier> _collectHardwareModifiers() {
@@ -744,8 +920,9 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
 
   static term.KeyEvent? _resolveKeyEvent(
     KeyEvent event,
-    Set<term.Modifier> mods,
-  ) {
+    Set<term.Modifier> mods, {
+    term.KeyEventType eventType = term.KeyEventType.press,
+  }) {
     final key = event.logicalKey;
     final (termKey, termType) = switch (key) {
       LogicalKeyboardKey.arrowUp => ('up', term.KeyType.up),
@@ -794,7 +971,12 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       _ => (null, null),
     };
     if (termKey == null || termType == null) return null;
-    return term.KeyEvent(termKey, termType, modifiers: mods);
+    return term.KeyEvent(
+      termKey,
+      termType,
+      modifiers: mods,
+      eventType: eventType,
+    );
   }
 
   static bool _isCtrlShiftLetter(
@@ -840,159 +1022,185 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       key.keyId >= LogicalKeyboardKey.keyA.keyId &&
       key.keyId <= LogicalKeyboardKey.keyZ.keyId;
 
-  void _takeScreenshot() async {
+  void _takeScreenshot() {
+    unawaited(_performTakeScreenshot());
+  }
+
+  Future<void> _performTakeScreenshot() async {
     try {
       final timestamp = clock.now().millisecondsSinceEpoch;
-      String? screenshotBasename;
-      String? atlasBasename;
-      String? coordinatesBasename;
-
-      final boundary =
-          _boundaryKey.currentContext?.findRenderObject()
-              as RenderRepaintBoundary?;
-      if (boundary != null) {
-        final image = await boundary.toImage(pixelRatio: 2.0);
-        final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-        if (byteData != null) {
-          final pngBytes = byteData.buffer.asUint8List();
-          screenshotBasename = await widget.service.saveScreenshot(
-            'screenshot_$timestamp.png',
-            pngBytes,
-          );
-        }
-      }
-
+      final screenshotBasename = await _saveRepaintBoundaryScreenshot(
+        timestamp,
+      );
       final atlas = _atlas;
+      final atlasBasename = atlas != null
+          ? await _saveAtlasScreenshot(atlas, timestamp)
+          : null;
       if (atlas != null) {
-        final byteData = await atlas.image.toByteData(
-          format: ui.ImageByteFormat.png,
-        );
-        if (byteData != null) {
-          final pngBytes = byteData.buffer.asUint8List();
-          atlasBasename = await widget.service.saveScreenshot(
-            'atlas_$timestamp.png',
-            pngBytes,
-          );
-        }
-
-        final rectsMap = atlas.charRects.map((key, value) {
-          return MapEntry(
-            key.runes
-                .map(
-                  (r) =>
-                      'U+${r.toRadixString(16).padLeft(4, '0').toUpperCase()}',
-                )
-                .join(' '),
-            {
-              'char': key,
-              'left': value.left,
-              'top': value.top,
-              'right': value.right,
-              'bottom': value.bottom,
-              'width': value.width,
-              'height': value.height,
-            },
-          );
-        });
-
-        final atlasJsonStr = const JsonEncoder.withIndent(
-          '  ',
-        ).convert(rectsMap);
-        final atlasJsonBytes = utf8.encode(atlasJsonStr);
-        await widget.service.saveScreenshot(
-          'atlas_table_$timestamp.json',
-          atlasJsonBytes,
-        );
+        await _saveAtlasTable(atlas, timestamp);
       }
-
       final buffer = _currentBuffer;
-      if (buffer != null && atlas != null) {
-        final cellsList = <Map<String, Object?>>[];
-        final data = <String, Object?>{
-          'timestamp': timestamp,
-          'cols': buffer.width,
-          'rows': buffer.height,
-          'cellWidth': atlas.cellWidth,
-          'cellHeight': atlas.cellHeight,
-          'cells': cellsList,
-        };
+      final coordinatesBasename = (buffer != null && atlas != null)
+          ? await _saveCoordinatesScreenshot(buffer, atlas, timestamp)
+          : null;
 
-        for (var y = 0; y < buffer.height; y++) {
-          final rowOffset = y * buffer.width;
-          for (var x = 0; x < buffer.width; x++) {
-            final idx = rowOffset + x;
-            final char = buffer.characters[idx];
-            final fg = buffer.getForeground(x, y);
-            final bg = buffer.getBackground(x, y);
-            final mods = buffer.getModifiers(x, y);
-
-            final rect = atlas.charRects[char];
-            final cellData = {
-              'x': x,
-              'y': y,
-              'char': char,
-              'fg': fg != 0
-                  ? '0x${fg.toRadixString(16).padLeft(8, '0').toUpperCase()}'
-                  : null,
-              'bg': bg != 0
-                  ? '0x${bg.toRadixString(16).padLeft(8, '0').toUpperCase()}'
-                  : null,
-              'modifiers': mods,
-            };
-            if (rect != null) {
-              cellData['atlasRect'] = {
-                'left': rect.left,
-                'top': rect.top,
-                'right': rect.right,
-                'bottom': rect.bottom,
-              };
-            }
-            cellsList.add(cellData);
-          }
-        }
-
-        final jsonStr = const JsonEncoder.withIndent('  ').convert(data);
-        final jsonBytes = utf8.encode(jsonStr);
-        coordinatesBasename = await widget.service.saveScreenshot(
-          'coordinates_$timestamp.json',
-          jsonBytes,
-        );
-      }
-
-      if (mounted) {
-        final savedFiles = <String>[
-          ?screenshotBasename,
-          ?atlasBasename,
-          if (atlasBasename != null)
-            atlasBasename
-                .replaceFirst('atlas_', 'atlas_table_')
-                .replaceAll('.png', '.json'),
-          ?coordinatesBasename,
-        ];
-
-        final String message;
-        if (savedFiles.isNotEmpty) {
-          message = 'Saved: ${savedFiles.join(', ')}';
-        } else {
-          message = 'No files saved.';
-        }
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(message),
-            duration: const Duration(seconds: 4),
-          ),
-        );
-      }
+      final savedFiles = <String>[
+        ?screenshotBasename,
+        ?atlasBasename,
+        if (atlasBasename != null)
+          atlasBasename
+              .replaceFirst('atlas_', 'atlas_table_')
+              .replaceAll('.png', '.json'),
+        ?coordinatesBasename,
+      ];
+      _showScreenshotSnackBar(savedFiles);
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error saving screenshot/atlas/coordinates: $e'),
-          ),
-        );
+      _showScreenshotErrorSnackBar(e);
+    }
+  }
+
+  Future<String?> _saveRepaintBoundaryScreenshot(int timestamp) async {
+    final boundary =
+        _boundaryKey.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+    if (boundary == null) return null;
+    final image = await boundary.toImage(pixelRatio: 2.0);
+    final ByteData? byteData;
+    try {
+      byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    } finally {
+      image.dispose();
+    }
+    if (byteData == null) return null;
+    return widget.service.saveScreenshot(
+      'screenshot_$timestamp.png',
+      byteData.buffer.asUint8List(),
+    );
+  }
+
+  Future<String?> _saveAtlasScreenshot(GlyphAtlas atlas, int timestamp) async {
+    final byteData = await atlas.image.toByteData(
+      format: ui.ImageByteFormat.png,
+    );
+    if (byteData == null) return null;
+    return widget.service.saveScreenshot(
+      'atlas_$timestamp.png',
+      byteData.buffer.asUint8List(),
+    );
+  }
+
+  Future<String?> _saveAtlasTable(GlyphAtlas atlas, int timestamp) async {
+    final rectsMap = atlas.charRects.map((key, value) {
+      final codePoints = key.runes
+          .map((r) => 'U+${r.toRadixString(16).padLeft(4, '0').toUpperCase()}')
+          .join(' ');
+      return MapEntry(codePoints, {
+        'char': key,
+        'left': value.left,
+        'top': value.top,
+        'right': value.right,
+        'bottom': value.bottom,
+        'width': value.width,
+        'height': value.height,
+      });
+    });
+    final jsonStr = const JsonEncoder.withIndent('  ').convert(rectsMap);
+    return widget.service.saveScreenshot(
+      'atlas_table_$timestamp.json',
+      utf8.encode(jsonStr),
+    );
+  }
+
+  Future<String?> _saveCoordinatesScreenshot(
+    Buffer buffer,
+    GlyphAtlas atlas,
+    int timestamp,
+  ) async {
+    final cellsList = _serializeBufferCells(buffer, atlas);
+    final data = <String, Object?>{
+      'timestamp': timestamp,
+      'cols': buffer.width,
+      'rows': buffer.height,
+      'cellWidth': atlas.cellWidth,
+      'cellHeight': atlas.cellHeight,
+      'cells': cellsList,
+    };
+    final jsonStr = const JsonEncoder.withIndent('  ').convert(data);
+    return widget.service.saveScreenshot(
+      'coordinates_$timestamp.json',
+      utf8.encode(jsonStr),
+    );
+  }
+
+  List<Map<String, Object?>> _serializeBufferCells(
+    Buffer buffer,
+    GlyphAtlas atlas,
+  ) {
+    final cellsList = <Map<String, Object?>>[];
+    for (var y = 0; y < buffer.height; y++) {
+      final rowOffset = y * buffer.width;
+      for (var x = 0; x < buffer.width; x++) {
+        cellsList.add(_serializeCell(buffer, x, y, rowOffset + x, atlas));
       }
     }
+    return cellsList;
+  }
+
+  Map<String, Object?> _serializeCell(
+    Buffer buffer,
+    int x,
+    int y,
+    int idx,
+    GlyphAtlas atlas,
+  ) {
+    final char = buffer.characters[idx];
+    final fg = buffer.getForeground(x, y);
+    final bg = buffer.getBackground(x, y);
+    final ul = buffer.getUnderlineColor(x, y);
+    final uri = buffer.getUri(x, y);
+    final mods = buffer.getModifiers(x, y);
+    final rect = atlas.charRects[char];
+
+    return {
+      'x': x,
+      'y': y,
+      'char': char,
+      'fg': _formatHexColorOrNull(fg),
+      'bg': _formatHexColorOrNull(bg),
+      if (ul != 0) 'underlineColor': _formatHexColorOrNull(ul),
+      'uri': ?uri,
+      'modifiers': mods,
+      if (rect != null)
+        'atlasRect': {
+          'left': rect.left,
+          'top': rect.top,
+          'right': rect.right,
+          'bottom': rect.bottom,
+        },
+    };
+  }
+
+  static String? _formatHexColorOrNull(int argb) => argb != 0
+      ? '0x${argb.toRadixString(16).padLeft(8, '0').toUpperCase()}'
+      : null;
+
+  void _showScreenshotSnackBar(List<String> files) {
+    if (!mounted) return;
+    final message = files.isNotEmpty
+        ? 'Saved: ${files.join(', ')}'
+        : 'No files saved.';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
+    );
+  }
+
+  void _showScreenshotErrorSnackBar(Object error) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Error saving screenshot/atlas/coordinates: $error'),
+      ),
+    );
   }
 
   static const int _maxWheelStepsPerEvent = 32;
@@ -1041,6 +1249,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       0,
       maxRow - 1,
     );
+    final pixelX = event.localPosition.dx.floor().clamp(0, 100000) + 1;
+    final pixelY = event.localPosition.dy.floor().clamp(0, 100000) + 1;
     final steps = rawSteps.abs().clamp(1, _maxWheelStepsPerEvent);
     final button = rawSteps < 0
         ? term.MouseButton.wheelUp
@@ -1051,6 +1261,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       final termEvent = term.MouseEvent(
         x: col + 1,
         y: row + 1,
+        pixelX: pixelX,
+        pixelY: pixelY,
         button: button,
         type: term.MouseEventType.press,
         modifiers: mods,
@@ -1212,17 +1424,19 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     final (termuiButton, termuiType) = _classifyPointerEvent(event);
     _updateSelectionAndUri(clampedCol, clampedRow, termuiButton, termuiType);
 
+    final pixelX = event.localPosition.dx.floor().clamp(0, 100000) + 1;
+    final pixelY = event.localPosition.dy.floor().clamp(0, 100000) + 1;
     final termEvent = term.MouseEvent(
       x: clampedCol + 1,
       y: clampedRow + 1,
+      pixelX: pixelX,
+      pixelY: pixelY,
       button: termuiButton,
       type: termuiType,
       modifiers: _collectHardwareModifiers(),
     );
 
-    if ((termuiType == term.MouseEventType.move ||
-            termuiType == term.MouseEventType.drag) &&
-        _lastInjectedPointerEvent == termEvent) {
+    if (_isDuplicatePointerMotion(termEvent)) {
       return;
     }
 
@@ -1230,102 +1444,134 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     widget.terminal.injectEvent(termEvent);
   }
 
+  bool _isDuplicatePointerMotion(term.MouseEvent event) {
+    if (event.type != term.MouseEventType.move &&
+        event.type != term.MouseEventType.drag) {
+      return false;
+    }
+    final prev = _lastInjectedPointerEvent;
+    if (prev == null) return false;
+    if (widget.terminal.reportPixelMouseEvents) {
+      return prev == event;
+    }
+    return prev.x == event.x &&
+        prev.y == event.y &&
+        prev.button == event.button &&
+        prev.type == event.type &&
+        setEquals(prev.modifiers, event.modifiers);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_atlas == null) {
-      return Scaffold(
-        backgroundColor: widget.backgroundColor,
-        body: const Center(child: CircularProgressIndicator()),
-      );
+      return _buildLoadingIndicator();
     }
+    return LayoutBuilder(builder: _buildTerminalBody);
+  }
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final cellWidth = _atlas!.cellWidth;
-        final cellHeight = _atlas!.cellHeight;
+  Widget _buildLoadingIndicator() => Scaffold(
+    backgroundColor: widget.backgroundColor,
+    body: const Center(child: CircularProgressIndicator()),
+  );
 
-        final fallbackSize = MediaQuery.maybeSizeOf(context);
-        final availableWidth = constraints.hasBoundedWidth
-            ? constraints.maxWidth
-            : (fallbackSize?.width ??
-                  widget.terminal.backend.size.x * cellWidth);
-        final availableHeight = constraints.hasBoundedHeight
-            ? constraints.maxHeight
-            : (fallbackSize?.height ??
-                  widget.terminal.backend.size.y * cellHeight);
+  Widget _buildTerminalBody(BuildContext context, BoxConstraints constraints) {
+    final atlas = _atlas!;
+    final (cols, rows) = _calculateGridDimensions(
+      constraints,
+      MediaQuery.maybeSizeOf(context),
+      atlas.cellWidth,
+      atlas.cellHeight,
+    );
+    _syncTerminalSize(cols, rows);
 
-        final cols = (availableWidth / cellWidth).floor();
-        final rows = (availableHeight / cellHeight).floor();
-
-        if (cols > 0 && rows > 0) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (!mounted) return;
-            widget.terminal.updateSize(Point(cols, rows));
-          });
-        }
-
-        final layoutSize = Size(cols * cellWidth, rows * cellHeight);
-
-        return Scaffold(
-          backgroundColor: widget.backgroundColor,
-          body: Focus(
-            focusNode: _focusNode,
-            autofocus: true,
-            onKeyEvent: (node, event) {
-              _handleKeyEvent(event);
-              return KeyEventResult.handled;
-            },
-            child: Center(
-              child: RepaintBoundary(
-                key: _boundaryKey,
-                child: MouseRegion(
-                  cursor: _effectiveCursor,
-                  child: Listener(
-                    onPointerDown: (e) => _handlePointerEvent(e, layoutSize),
-                    onPointerMove: (e) => _handlePointerEvent(e, layoutSize),
-                    onPointerHover: (e) => _handlePointerEvent(e, layoutSize),
-                    onPointerUp: (e) => _handlePointerEvent(e, layoutSize),
-                    onPointerCancel: (_) => _resetScrollAccumulator(),
-                    onPointerSignal: (signal) {
-                      if (signal case PointerScrollEvent(:final scrollDelta)) {
-                        _handleScrollDelta(signal, scrollDelta.dy, layoutSize);
-                      }
-                    },
-                    onPointerPanZoomStart: (_) => _resetScrollAccumulator(),
-                    onPointerPanZoomUpdate: (event) => _handleScrollDelta(
-                      event,
-                      -event.panDelta.dy,
-                      layoutSize,
-                    ),
-                    onPointerPanZoomEnd: (_) => _resetScrollAccumulator(),
-                    child: Container(
-                      width: layoutSize.width,
-                      height: layoutSize.height,
-                      color: widget.backgroundColor,
-                      child: _currentBuffer == null
-                          ? const SizedBox()
-                          : CustomPaint(
-                              size: layoutSize,
-                              painter: TuiAtlasPainter(
-                                buffer: _currentBuffer!,
-                                atlas: _atlas!,
-                                fontFamily: widget.fontFamily,
-                                fontFamilyFallback: widget.fontFamilyFallback,
-                                fallbackPainters: _fallbackPainters,
-                                onMissingGlyphs: _onMissingGlyphs,
-                                enableBleed: widget.enableBleed,
-                                selectionController: _selectionController,
-                                kittyImages: _kittyGpuImages,
-                              ),
-                            ),
-                    ),
-                  ),
-                ),
-              ),
+    final layoutSize = Size(cols * atlas.cellWidth, rows * atlas.cellHeight);
+    return Scaffold(
+      backgroundColor: widget.backgroundColor,
+      body: Focus(
+        focusNode: _focusNode,
+        autofocus: true,
+        onKeyEvent: (node, event) => _handleKeyEvent(event),
+        child: Center(
+          child: RepaintBoundary(
+            key: _boundaryKey,
+            child: MouseRegion(
+              cursor: _effectiveCursor,
+              child: _buildPointerListener(layoutSize),
             ),
           ),
-        );
-      },
+        ),
+      ),
+    );
+  }
+
+  (int, int) _calculateGridDimensions(
+    BoxConstraints constraints,
+    Size? fallbackSize,
+    double cellW,
+    double cellH,
+  ) {
+    final availW = constraints.hasBoundedWidth
+        ? constraints.maxWidth
+        : (fallbackSize?.width ?? widget.terminal.backend.size.x * cellW);
+    final availH = constraints.hasBoundedHeight
+        ? constraints.maxHeight
+        : (fallbackSize?.height ?? widget.terminal.backend.size.y * cellH);
+    return ((availW / cellW).floor(), (availH / cellH).floor());
+  }
+
+  void _syncTerminalSize(int cols, int rows) {
+    if (cols <= 0 || rows <= 0) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        widget.terminal.updateSize(Point(cols, rows));
+      }
+    });
+  }
+
+  Widget _buildPointerListener(Size layoutSize) => Listener(
+    onPointerDown: (e) => _handlePointerEvent(e, layoutSize),
+    onPointerMove: (e) => _handlePointerEvent(e, layoutSize),
+    onPointerHover: (e) => _handlePointerEvent(e, layoutSize),
+    onPointerUp: (e) => _handlePointerEvent(e, layoutSize),
+    onPointerCancel: (_) => _resetScrollAccumulator(),
+    onPointerSignal: (signal) {
+      if (signal case PointerScrollEvent(:final scrollDelta)) {
+        _handleScrollDelta(signal, scrollDelta.dy, layoutSize);
+      }
+    },
+    onPointerPanZoomStart: (_) => _resetScrollAccumulator(),
+    onPointerPanZoomUpdate: (event) =>
+        _handleScrollDelta(event, -event.panDelta.dy, layoutSize),
+    onPointerPanZoomEnd: (_) => _resetScrollAccumulator(),
+    child: _buildCanvasContainer(layoutSize),
+  );
+
+  Widget _buildCanvasContainer(Size layoutSize) {
+    final buf = _currentBuffer;
+    return Container(
+      width: layoutSize.width,
+      height: layoutSize.height,
+      color: widget.backgroundColor,
+      child: buf == null
+          ? const SizedBox()
+          : CustomPaint(
+              size: layoutSize,
+              painter: TuiAtlasPainter(
+                buffer: buf,
+                atlas: _atlas!,
+                fontFamily: widget.fontFamily,
+                fontFamilyFallback: widget.fontFamilyFallback,
+                fallbackPainters: _fallbackPainters,
+                onMissingGlyphs: null,
+                onMissingStyledGlyphs: _onMissingStyledGlyphs,
+                enableBleed: widget.enableBleed,
+                enableLigatures: _enableLigatures,
+                ligaturePainters: _ligaturePainters,
+                selectionController: _selectionController,
+                kittyImages: _kittyGpuImages,
+                kittyImagesById: _kittyGpuImagesById,
+              ),
+            ),
     );
   }
 }
