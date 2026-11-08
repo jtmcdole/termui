@@ -105,7 +105,20 @@ abstract class Modifier {
     }
     return UnderlineStyle.values[raw];
   }
+
+  /// Merges [lower] modifiers into [upper], preserving [upper]'s [UnderlineStyle]
+  /// when [upper] has [underline] set instead of bitwise-ORing the 3-bit enum field.
+  static int mergeLayered(int upper, int lower) {
+    if (!has(upper, underline)) return upper | lower;
+    return upper | (lower & ~(underline | underlineStyleMask));
+  }
 }
+
+final RegExp _oscControlChars = RegExp(r'[\x00-\x1f\x7f-\x9f]');
+
+/// Strips C0, DEL, and C1 control characters from an `OSC 8` hyperlink [uri]
+/// so untrusted link targets cannot terminate the escape sequence early.
+String sanitizeOsc8Uri(String uri) => uri.replaceAll(_oscControlChars, '');
 
 /// A class representing style attributes for terminal output.
 class Style {
@@ -118,14 +131,18 @@ class Style {
   /// Optional SGR 58 custom underline color. When null, the foreground color is used.
   final Color? underlineColor;
 
+  /// Optional OSC 8 hyperlink target URI (`\x1b]8;;<uri>\x1b\\`).
+  final String? uri;
+
   /// A bitmask of style modifiers applied to the cell.
   final int modifiers;
 
-  /// Creates a style with the specified colors, modifiers, and optional [underlineStyle].
+  /// Creates a style with the specified colors, modifiers, optional [underlineStyle], and [uri].
   const Style({
     this.foreground,
     this.background,
     this.underlineColor,
+    this.uri,
     int modifiers = Modifier.none,
     UnderlineStyle? underlineStyle,
   }) : modifiers = underlineStyle == null
@@ -171,6 +188,7 @@ class Style {
       foreground: other.foreground ?? foreground,
       background: other.background ?? background,
       underlineColor: other.underlineColor ?? underlineColor,
+      uri: other.uri ?? uri,
       modifiers: nextModifiers,
     );
   }
@@ -182,17 +200,18 @@ class Style {
         other.foreground == foreground &&
         other.background == background &&
         other.underlineColor == underlineColor &&
+        other.uri == uri &&
         other.modifiers == modifiers;
   }
 
   @override
   int get hashCode =>
-      Object.hash(foreground, background, underlineColor, modifiers);
+      Object.hash(foreground, background, underlineColor, uri, modifiers);
 
   @override
   String toString() {
-    if (underlineColor != null) {
-      return 'Style(fg: $foreground, bg: $background, ul: $underlineColor, mod: $modifiers)';
+    if (underlineColor != null || uri != null) {
+      return 'Style(fg: $foreground, bg: $background, ul: $underlineColor, uri: $uri, mod: $modifiers)';
     }
     return 'Style(fg: $foreground, bg: $background, mod: $modifiers)';
   }

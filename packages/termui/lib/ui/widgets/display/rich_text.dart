@@ -371,6 +371,7 @@ class RichTextElement extends Element {
           bg: line[x].style.background?.argb ?? 0,
           modifiers: line[x].style.modifiers,
           underlineColor: line[x].style.underlineColor?.argb ?? 0,
+          uri: line[x].style.uri,
         );
       }
     }

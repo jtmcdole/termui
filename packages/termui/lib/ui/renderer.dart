@@ -91,11 +91,13 @@ class Renderer {
         backAttr[attrIdx + 2] != frontAttr[attrIdx + 2]) {
       return true;
     }
-    if (!backBuffer.hasUnderlineColors && !_frontBuffer.hasUnderlineColors) {
-      return false;
+    if ((backBuffer.hasUnderlineColors || _frontBuffer.hasUnderlineColors) &&
+        backBuffer.getUnderlineColor(x, y) !=
+            _frontBuffer.getUnderlineColor(x, y)) {
+      return true;
     }
-    return backBuffer.getUnderlineColor(x, y) !=
-        _frontBuffer.getUnderlineColor(x, y);
+    if (!backBuffer.hasUris && !_frontBuffer.hasUris) return false;
+    return backBuffer.getUri(x, y) != _frontBuffer.getUri(x, y);
   }
 
   void _emitPendingKittyImages(Buffer backBuffer, StringSink out) {
@@ -184,6 +186,7 @@ class Renderer {
     int cellBg,
     int cellMod,
     int cellUlColor,
+    String? cellUri,
   ) {
     _frontBuffer.characters[rxIdx] = char;
     final frontAttr = _frontBuffer.attributes;
@@ -192,6 +195,9 @@ class Renderer {
     frontAttr[rxAttrIdx + 2] = cellMod;
     if (cellUlColor != 0 || _frontBuffer.hasUnderlineColors) {
       _frontBuffer.setUnderlineColor(rx, y, cellUlColor);
+    }
+    if (cellUri != null || _frontBuffer.hasUris) {
+      _frontBuffer.setUri(rx, y, cellUri);
     }
   }
 
@@ -281,6 +287,12 @@ class Renderer {
       final cellBg = backAttr[rxAttrIdx + 1];
       final cellMod = backAttr[rxAttrIdx + 2];
       final cellUlColor = backBuffer.getUnderlineColor(rx, y);
+      final cellUri = backBuffer.getUri(rx, y);
+
+      if (cellUri != state.activeUri) {
+        out.write('\x1b]8;;${sanitizeOsc8Uri(cellUri ?? '')}\x1b\\');
+        state.activeUri = cellUri;
+      }
 
       _writeStyleTransitionPrims(
         out,
@@ -310,11 +322,17 @@ class Renderer {
         cellBg,
         cellMod,
         cellUlColor,
+        cellUri,
       );
 
       if (mode == RenderingMode.inline) {
         state.cursorX++;
       }
+    }
+
+    if (state.activeUri != null) {
+      out.write('\x1b]8;;\x1b\\');
+      state.activeUri = null;
     }
   }
 
@@ -363,22 +381,39 @@ class Renderer {
     if ((addedMods & Modifier.dim) != 0) sb.write('2;');
     if ((addedMods & Modifier.italic) != 0) sb.write('3;');
     if ((addedMods & (Modifier.underline | Modifier.underlineStyleMask)) != 0 &&
-        Modifier.has(tgtMod, Modifier.underline)) {
-      final ulStyle = Modifier.getUnderlineStyle(tgtMod);
-      final ulCode = switch (ulStyle) {
-        UnderlineStyle.none || UnderlineStyle.single => '4',
-        UnderlineStyle.doubleLine => '4:2',
-        UnderlineStyle.curly => '4:3',
-        UnderlineStyle.dotted => '4:4',
-        UnderlineStyle.dashed => '4:5',
-      };
-      sb.write('$ulCode;');
+        Modifier.getUnderlineStyle(tgtMod) == UnderlineStyle.single) {
+      sb.write('4;');
     }
     if ((addedMods & Modifier.blink) != 0) sb.write('5;');
     if ((addedMods & Modifier.reverse) != 0) sb.write('7;');
     if ((addedMods & Modifier.hidden) != 0) sb.write('8;');
     if ((addedMods & Modifier.crossedOut) != 0) sb.write('9;');
     if ((addedMods & Modifier.overline) != 0) sb.write('53;');
+  }
+
+  void _emitColonUnderlineSequences(
+    StringSink out,
+    int effectiveUlColor,
+    int tgtUlColor,
+    int addedMods,
+    int tgtMod,
+  ) {
+    if ((addedMods & (Modifier.underline | Modifier.underlineStyleMask)) != 0) {
+      final ulCode = switch (Modifier.getUnderlineStyle(tgtMod)) {
+        UnderlineStyle.none || UnderlineStyle.single => null,
+        UnderlineStyle.doubleLine => '4:2',
+        UnderlineStyle.curly => '4:3',
+        UnderlineStyle.dotted => '4:4',
+        UnderlineStyle.dashed => '4:5',
+      };
+      if (ulCode != null) out.write('\x1b[${ulCode}m');
+    }
+    if (tgtUlColor != effectiveUlColor && tgtUlColor != 0) {
+      final r = (tgtUlColor >> 16) & 0xFF;
+      final g = (tgtUlColor >> 8) & 0xFF;
+      final b = tgtUlColor & 0xFF;
+      out.write('\x1b[58:2::$r:$g:${b}m');
+    }
   }
 
   bool _shouldResetStyle(
@@ -402,16 +437,11 @@ class Renderer {
     StringBuffer sb,
     int effectiveFg,
     int effectiveBg,
-    int effectiveUlColor,
     int tgtFg,
     int tgtBg,
-    int tgtUlColor,
   ) {
     if (tgtFg != effectiveFg && tgtFg != 0) _appendRgbSgr(sb, 38, tgtFg);
     if (tgtBg != effectiveBg && tgtBg != 0) _appendRgbSgr(sb, 48, tgtBg);
-    if (tgtUlColor != effectiveUlColor && tgtUlColor != 0) {
-      _appendRgbSgr(sb, 58, tgtUlColor);
-    }
   }
 
   /// Writes the ANSI style transitions between the current style state and the target state.
@@ -460,15 +490,7 @@ class Renderer {
     }
 
     final sb = StringBuffer();
-    _appendColorTransitions(
-      sb,
-      effectiveFg,
-      effectiveBg,
-      effectiveUlColor,
-      tgtFg,
-      tgtBg,
-      tgtUlColor,
-    );
+    _appendColorTransitions(sb, effectiveFg, effectiveBg, tgtFg, tgtBg);
 
     final addedMods = tgtMod & ~effectiveMod;
     if (addedMods != 0) _appendAddedModifiers(sb, addedMods, tgtMod);
@@ -477,6 +499,14 @@ class Renderer {
     if (s.isNotEmpty) {
       out.write('\x1b[${s.substring(0, s.length - 1)}m');
     }
+
+    _emitColonUnderlineSequences(
+      out,
+      effectiveUlColor,
+      tgtUlColor,
+      addedMods,
+      tgtMod,
+    );
   }
 }
 
@@ -485,6 +515,7 @@ final class _RenderCursorState {
   int activeBg = 0;
   int activeMod = 0;
   int activeUlColor = 0;
+  String? activeUri;
   int cursorX = 0;
   int cursorY = 0;
 

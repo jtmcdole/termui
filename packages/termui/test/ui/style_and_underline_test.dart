@@ -79,9 +79,55 @@ void main() {
         renderer.render(buffer, out);
         final ansi = out.toString();
 
-        expect(ansi, contains('58;2;255;0;128'));
-        expect(ansi, contains('4:3'));
+        expect(ansi, contains('\x1b[58:2::255:0:128m'));
+        expect(ansi, contains('\x1b[4:3m'));
         expect(ansi, contains('53'));
+      },
+    );
+
+    test(
+      'RichText, Compositor, and Renderer preserve and emit OSC 8 hyperlinks',
+      () {
+        const widget = RichText(
+          text: TextSpan(
+            children: [
+              TextSpan(
+                text: 'Docs',
+                style: Style(
+                  foreground: Color(0, 200, 255),
+                  underlineStyle: UnderlineStyle.single,
+                  uri: 'https://github.com/ termui',
+                ),
+              ),
+              TextSpan(text: '!'),
+            ],
+          ),
+        );
+        final element = widget.createElement()..mount(null);
+        element.layout(const BoxConstraints(maxWidth: 10, maxHeight: 1));
+
+        final layerBuf = Buffer(10, 1);
+        element.paint(layerBuf, Offset.zero);
+        expect(layerBuf.hasUris, isTrue);
+        expect(layerBuf.getUri(0, 0), equals('https://github.com/ termui'));
+        expect(layerBuf.getUri(4, 0), isNull);
+
+        final target = Buffer.blank(10, 1);
+        Compositor().composite(
+          target: target,
+          layers: [LayeredBuffer(buffer: layerBuf, x: 0, y: 0, zIndex: 0)],
+        );
+        expect(target.getUri(0, 0), equals('https://github.com/ termui'));
+        expect(target.getUri(3, 0), equals('https://github.com/ termui'));
+        expect(target.getUri(4, 0), isNull);
+
+        final renderer = Renderer(10, 1);
+        final out = StringBuffer();
+        renderer.render(target, out);
+        final ansi = out.toString();
+
+        expect(ansi, contains('\x1b]8;;https://github.com/ termui\x1b\\'));
+        expect(ansi, contains('\x1b]8;;\x1b\\'));
       },
     );
 
@@ -121,6 +167,138 @@ void main() {
           Modifier.getUnderlineStyle(target.getModifiers(0, 0)),
           equals(UnderlineStyle.curly),
         );
+      },
+    );
+
+    test(
+      'sanitizeOsc8Uri strips control characters in Renderer and toAnsiString',
+      () {
+        final buffer = Buffer.blank(5, 1);
+        buffer.writeString(
+          0,
+          0,
+          'Link',
+          const Style(uri: 'https://example.com\x1b\\INJECTED\x07'),
+        );
+
+        final renderer = Renderer(5, 1);
+        final out = StringBuffer();
+        renderer.render(buffer, out);
+        expect(
+          out.toString(),
+          contains('\x1b]8;;https://example.com\\INJECTED\x1b\\'),
+        );
+        expect(out.toString(), isNot(contains('example.com\x1b\\INJECTED')));
+
+        final serialized = buffer.toAnsiString();
+        expect(
+          serialized,
+          contains('\x1b]8;;https://example.com\\INJECTED\x1b\\'),
+        );
+      },
+    );
+
+    test(
+      'setAttributes preserves existing URI on color-only updates and clears on empty string',
+      () {
+        final buffer = Buffer.blank(5, 1);
+        buffer.writeString(
+          0,
+          0,
+          'Click',
+          const Style(uri: 'https://flutter.dev'),
+        );
+        expect(buffer.getUri(0, 0), equals('https://flutter.dev'));
+
+        buffer.setAttributes(0, 0, bg: const Color(20, 40, 60).argb);
+        expect(buffer.getUri(0, 0), equals('https://flutter.dev'));
+
+        buffer.setAttributes(0, 0, uri: '');
+        expect(buffer.getUri(0, 0), isNull);
+      },
+    );
+
+    test(
+      'BufferAnsiSerialization.fromAnsi round-trips 4:x, 53, 58:2, and OSC 8',
+      () {
+        final original = Buffer.blank(6, 1);
+        original.writeString(
+          0,
+          0,
+          'Styled',
+          const Style(
+            foreground: Color(10, 20, 30),
+            underlineStyle: UnderlineStyle.curly,
+            underlineColor: Color(200, 100, 50),
+            modifiers: Modifier.overline,
+            uri: 'https://dart.dev',
+          ),
+        );
+
+        final ansi = original.toAnsiString();
+        final parsed = BufferAnsiSerialization.fromAnsi(
+          ansi,
+          width: 6,
+          height: 1,
+        );
+
+        for (var x = 0; x < 6; x++) {
+          expect(
+            Modifier.getUnderlineStyle(parsed.getModifiers(x, 0)),
+            equals(UnderlineStyle.curly),
+          );
+          expect(
+            Modifier.has(parsed.getModifiers(x, 0), Modifier.overline),
+            isTrue,
+          );
+          expect(
+            parsed.getUnderlineColor(x, 0),
+            equals(const Color(200, 100, 50).argb),
+          );
+          expect(parsed.getUri(x, 0), equals('https://dart.dev'));
+        }
+      },
+    );
+
+    test(
+      'Modifier.mergeLayered preserves upper UnderlineStyle and Viewport resets underlineColor',
+      () {
+        final upper = Modifier.withUnderlineStyle(
+          Modifier.bold,
+          UnderlineStyle.single,
+        );
+        final lower = Modifier.withUnderlineStyle(
+          Modifier.italic,
+          UnderlineStyle.dotted,
+        );
+        final merged = Modifier.mergeLayered(upper, lower);
+        expect(Modifier.has(merged, Modifier.bold), isTrue);
+        expect(Modifier.has(merged, Modifier.italic), isTrue);
+        expect(
+          Modifier.getUnderlineStyle(merged),
+          equals(UnderlineStyle.single),
+        );
+
+        final buf = Buffer.blank(4, 1);
+        final vp = Viewport(buf, const Rect(0, 0, 4, 1));
+        vp.writeString(
+          0,
+          0,
+          'ABCD',
+          const Style(
+            underlineStyle: UnderlineStyle.single,
+            underlineColor: Color(255, 0, 0),
+            uri: 'https://a.example',
+          ),
+        );
+        vp.writeString(0, 0, 'XY', const Style(foreground: Colors.white));
+        expect(buf.getUnderlineColor(0, 0), equals(0));
+        expect(buf.getUri(0, 0), isNull);
+        expect(
+          buf.getUnderlineColor(2, 0),
+          equals(const Color(255, 0, 0).argb),
+        );
+        expect(buf.getUri(2, 0), equals('https://a.example'));
       },
     );
   });

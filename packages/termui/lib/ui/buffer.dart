@@ -66,6 +66,12 @@ class Buffer {
   /// Whether any cell in this buffer has a non-zero custom underline color.
   bool get hasUnderlineColors => _underlineColors != null;
 
+  /// Lazily allocated array of per-cell OSC 8 hyperlink URIs (`null` = no link).
+  List<String?>? _uris;
+
+  /// Whether any cell in this buffer has a non-null OSC 8 hyperlink URI.
+  bool get hasUris => _uris != null;
+
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
 
@@ -106,6 +112,66 @@ class Buffer {
   /// falling back to [KittyImageRegistry.global] only outside scoped regions.
   KittyImageData? lookupKittyImage(int x, int y, int imageId) =>
       lookupKittyRegistry(x, y).lookupImage(imageId);
+
+  /// Propagates region metadata (`effects` and scoped [KittyImageRegistry] bounds)
+  /// from [source] translated by ([dx], [dy]) and clipped to [clip] (or [activeClip]).
+  void propagateMetadataFrom(
+    Buffer source, {
+    int dx = 0,
+    int dy = 0,
+    Rect? clip,
+  }) {
+    final effectiveClip = _boundsClip.intersect(clip ?? activeClip);
+    if (effectiveClip.width <= 0 || effectiveClip.height <= 0) return;
+    _propagateEffectsFrom(source, dx, dy, effectiveClip);
+    _propagateRegistriesFrom(source, dx, dy, effectiveClip);
+  }
+
+  void _propagateEffectsFrom(Buffer source, int dx, int dy, Rect clip) {
+    for (final reg in source.effects) {
+      final translated = Rect(
+        dx + reg.bounds.x,
+        dy + reg.bounds.y,
+        reg.bounds.width,
+        reg.bounds.height,
+      ).intersect(clip);
+      if (translated.width > 0 && translated.height > 0) {
+        addEffect(
+          RegisteredEffect(
+            reg.effect,
+            translated,
+            reg.zIndex,
+            reg.originalIndex,
+          ),
+        );
+      }
+    }
+  }
+
+  void _propagateRegistriesFrom(Buffer source, int dx, int dy, Rect clip) {
+    if (source is Viewport) return;
+    for (final entry in source._scopedKittyRegistries) {
+      final translated = Rect(
+        dx + entry.bounds.x,
+        dy + entry.bounds.y,
+        entry.bounds.width,
+        entry.bounds.height,
+      ).intersect(clip);
+      if (translated.width > 0 && translated.height > 0) {
+        registerKittyRegistry(translated, entry.registry);
+      }
+    }
+  }
+
+  /// Whether all cell channels (`char`, `fg`, `bg`, `modifiers`, `underlineColor`, `uri`)
+  /// at ([x], [y]) match [other] at ([ox], [oy]).
+  bool cellsEqual(int x, int y, Buffer other, int ox, int oy) =>
+      getCharacter(x, y) == other.getCharacter(ox, oy) &&
+      getForeground(x, y) == other.getForeground(ox, oy) &&
+      getBackground(x, y) == other.getBackground(ox, oy) &&
+      getModifiers(x, y) == other.getModifiers(ox, oy) &&
+      getUnderlineColor(x, y) == other.getUnderlineColor(ox, oy) &&
+      getUri(x, y) == other.getUri(ox, oy);
 
   /// Creates a new buffer of [width] by [height] initialized with transparent empty cell data.
   Buffer(this.width, this.height, {this.defaultBlend = true})
@@ -195,6 +261,138 @@ class Buffer {
     (_underlineColors ??= Uint32List(width * height))[cellIdx] = ulColor;
   }
 
+  /// Gets the OSC 8 hyperlink URI at ([x], [y]), or `null` when no link is set.
+  String? getUri(int x, int y) {
+    final uris = _uris;
+    if (uris == null || !isCellValid(x, y)) return null;
+    return uris[y * width + x];
+  }
+
+  /// Sets the OSC 8 hyperlink URI at ([x], [y]) (`null` clears the link).
+  void setUri(int x, int y, String? uri) {
+    if (!isCellValid(x, y)) return;
+    _setUriAt(y * width + x, uri);
+  }
+
+  @pragma('vm:prefer-inline')
+  void _setUriAt(int cellIdx, String? uri) {
+    if ((uri == null || uri.isEmpty) && _uris == null) return;
+    (_uris ??= List<String?>.filled(width * height, null))[cellIdx] =
+        (uri != null && uri.isEmpty) ? null : uri;
+  }
+
+  /// Gets the SGR 58 underline color at flat index [cellIdx] (`0` when unset).
+  @pragma('vm:prefer-inline')
+  int getUnderlineColorAt(int cellIdx) => _underlineColors?[cellIdx] ?? 0;
+
+  /// Sets the SGR 58 underline color at flat index [cellIdx].
+  @pragma('vm:prefer-inline')
+  void setUnderlineColorAt(int cellIdx, int ulColor) =>
+      _setUnderlineColorAt(cellIdx, ulColor);
+
+  /// Gets the OSC 8 hyperlink URI at flat index [cellIdx] (`null` when unset).
+  @pragma('vm:prefer-inline')
+  String? getUriAt(int cellIdx) => _uris?[cellIdx];
+
+  /// Sets the OSC 8 hyperlink URI at flat index [cellIdx].
+  @pragma('vm:prefer-inline')
+  void setUriAt(int cellIdx, String? uri) => _setUriAt(cellIdx, uri);
+
+  /// Copies SGR 58 underline color and OSC 8 URI from [source] at [srcIdx] to [dstIdx].
+  @pragma('vm:prefer-inline')
+  void copyCellAuxAt(Buffer source, int dstIdx, int srcIdx) {
+    _setUnderlineColorAt(dstIdx, source.getUnderlineColorAt(srcIdx));
+    _setUriAt(dstIdx, source.getUriAt(srcIdx));
+  }
+
+  /// Clears SGR 58 underline colors and OSC 8 URIs across `[start, end)`.
+  void clearCellAuxRange(int start, int end) {
+    if (start >= end) return;
+    _underlineColors?.fillRange(start, end, 0);
+    _uris?.fillRange(start, end, null);
+  }
+
+  /// Copies `[srcStart, srcStart + count)` auxiliary attributes from [source] to `[dstStart, dstStart + count)`.
+  void copyCellAuxRangeFrom(
+    Buffer source,
+    int dstStart,
+    int srcStart,
+    int count,
+  ) {
+    if (count <= 0) return;
+    final srcUl = source._underlineColors;
+    if (srcUl != null) {
+      (_underlineColors ??= Uint32List(
+        width * height,
+      )).setRange(dstStart, dstStart + count, srcUl, srcStart);
+    } else {
+      _underlineColors?.fillRange(dstStart, dstStart + count, 0);
+    }
+    final srcUris = source._uris;
+    if (srcUris != null) {
+      (_uris ??= List<String?>.filled(
+        width * height,
+        null,
+      )).setRange(dstStart, dstStart + count, srcUris, srcStart);
+    } else {
+      _uris?.fillRange(dstStart, dstStart + count, null);
+    }
+  }
+
+  /// Copies non-empty SGR 58 underline colors across `[start, end)`, or `null` if all `0`.
+  Uint32List? sliceUnderlineColors(int start, int end) {
+    final ul = _underlineColors;
+    if (ul == null || start >= end) return null;
+    for (var i = start; i < end; i++) {
+      if (ul[i] != 0) return ul.sublist(start, end);
+    }
+    return null;
+  }
+
+  /// Copies non-empty OSC 8 URIs across `[start, end)`, or `null` if all `null`.
+  List<String?>? sliceUris(int start, int end) {
+    final uris = _uris;
+    if (uris == null || start >= end) return null;
+    for (var i = start; i < end; i++) {
+      if (uris[i] != null) return uris.sublist(start, end);
+    }
+    return null;
+  }
+
+  /// Writes optional [underlineColors] and [uris] slices into `[dstStart, dstStart + count)`.
+  void writeCellAuxSlices(
+    int dstStart,
+    int count, {
+    Uint32List? underlineColors,
+    List<String?>? uris,
+  }) {
+    if (count <= 0) return;
+    _writeUnderlineColorSlice(dstStart, count, underlineColors);
+    _writeUriSlice(dstStart, count, uris);
+  }
+
+  void _writeUnderlineColorSlice(int dstStart, int count, Uint32List? slice) {
+    if (slice == null || slice.isEmpty) {
+      _underlineColors?.fillRange(dstStart, dstStart + count, 0);
+      return;
+    }
+    final dst = _underlineColors ??= Uint32List(width * height);
+    final n = min(count, slice.length);
+    dst.setRange(dstStart, dstStart + n, slice, 0);
+    if (n < count) dst.fillRange(dstStart + n, dstStart + count, 0);
+  }
+
+  void _writeUriSlice(int dstStart, int count, List<String?>? slice) {
+    if (slice == null || slice.isEmpty) {
+      _uris?.fillRange(dstStart, dstStart + count, null);
+      return;
+    }
+    final dst = _uris ??= List<String?>.filled(width * height, null);
+    final n = min(count, slice.length);
+    dst.setRange(dstStart, dstStart + n, slice, 0);
+    if (n < count) dst.fillRange(dstStart + n, dstStart + count, null);
+  }
+
   /// Sets character at coordinates.
   ///
   /// **Performance Warning:**
@@ -265,6 +463,7 @@ class Buffer {
     attributes[attrIdx + 1] = 0;
     attributes[attrIdx + 2] = _emptyModifiers;
     _underlineColors?[cellIdx] = 0;
+    _uris?[cellIdx] = null;
   }
 
   @pragma('vm:prefer-inline')
@@ -274,6 +473,7 @@ class Buffer {
     int? bg,
     int? modifiers,
     int? underlineColor,
+    String? uri,
     required bool blend,
   }) {
     if (fg != null) {
@@ -289,11 +489,9 @@ class Buffer {
     if (modifiers != null) {
       attributes[attrIdx + 2] = modifiers;
     }
-    if (underlineColor != null &&
-        (underlineColor != 0 || _underlineColors != null)) {
-      (_underlineColors ??= Uint32List(width * height))[attrIdx ~/ 3] =
-          underlineColor;
-    }
+    final cellIdx = attrIdx ~/ 3;
+    if (underlineColor != null) _setUnderlineColorAt(cellIdx, underlineColor);
+    if (uri != null) _setUriAt(cellIdx, uri);
   }
 
   @pragma('vm:prefer-inline')
@@ -325,6 +523,7 @@ class Buffer {
     int mod, {
     bool? blend,
     int underlineColor = 0,
+    String? uri,
   }) {
     if (isCellValid(x, y)) {
       final useBlend = blend ?? defaultBlend;
@@ -334,10 +533,8 @@ class Buffer {
       attributes[idx + 0] = useBlend ? blendColor(fg, attributes[idx + 0]) : fg;
       attributes[idx + 1] = useBlend ? blendColor(bg, attributes[idx + 1]) : bg;
       attributes[idx + 2] = mod;
-      if (underlineColor != 0 || _underlineColors != null) {
-        (_underlineColors ??= Uint32List(width * height))[cellIdx] =
-            underlineColor;
-      }
+      _setUnderlineColorAt(cellIdx, underlineColor);
+      _setUriAt(cellIdx, uri);
     }
   }
 
@@ -374,6 +571,7 @@ class Buffer {
     int? bg,
     int? modifiers,
     int? underlineColor,
+    String? uri,
     bool? blend,
   }) {
     if (!isCellValid(x, y)) return;
@@ -391,6 +589,7 @@ class Buffer {
       bg: bg,
       modifiers: modifiers,
       underlineColor: underlineColor,
+      uri: uri,
       blend: useBlend,
     );
     if (isWide && x + 1 < width) {
@@ -400,6 +599,7 @@ class Buffer {
         bg: bg,
         modifiers: modifiers,
         underlineColor: underlineColor,
+        uri: uri,
         blend: useBlend,
       );
     }
@@ -412,6 +612,7 @@ class Buffer {
       characters.fillRange(0, characters.length, ' ');
       attributes.fillRange(0, attributes.length, 0);
       _underlineColors?.fillRange(0, _underlineColors!.length, 0);
+      _uris?.fillRange(0, _uris!.length, null);
       for (var i = 2; i < attributes.length; i += 3) {
         attributes[i] = Modifier.transparent;
       }
@@ -429,13 +630,15 @@ class Buffer {
     int? bg,
     int? modifiers,
     int? underlineColor,
+    String? uri,
     bool? blend,
   }) {
     if (char != null) characters.fillRange(0, characters.length, char);
     if (fg == null &&
         bg == null &&
         modifiers == null &&
-        underlineColor == null) {
+        underlineColor == null &&
+        uri == null) {
       return;
     }
     final useBlend = blend ?? defaultBlend;
@@ -446,6 +649,7 @@ class Buffer {
         bg: bg,
         modifiers: modifiers,
         underlineColor: underlineColor,
+        uri: uri,
         blend: useBlend,
       );
     }
@@ -459,6 +663,7 @@ class Buffer {
     int? bg,
     int? modifiers,
     int? underlineColor,
+    String? uri,
     bool? blend,
   }) {
     final clipped = _clipStack.isEmpty ? rect : activeClip.intersect(rect);
@@ -481,7 +686,8 @@ class Buffer {
     if (fg == null &&
         bg == null &&
         modifiers == null &&
-        underlineColor == null) {
+        underlineColor == null &&
+        uri == null) {
       return;
     }
     final useBlend = blend ?? defaultBlend;
@@ -494,6 +700,7 @@ class Buffer {
           bg: bg,
           modifiers: modifiers,
           underlineColor: underlineColor,
+          uri: uri,
           blend: useBlend,
         );
       }
@@ -511,22 +718,70 @@ class Buffer {
     final endY = min(height, clipped.bottom);
     if (startX >= endX || startY >= endY) return;
 
-    final yellow = 0xFFFCD116;
-    final charcoal = 0xFF36454F;
+    const yellow = 0xFFFCD116;
+    const charcoal = 0xFF36454F;
 
     for (var y = startY; y < endY; y++) {
       final ly = y - offsetY;
       final rowOffset = y * width;
       for (var x = startX; x < endX; x++) {
-        final lx = x - offsetX;
-        final mod = ((lx - ly) % 3 + 3) % 3;
-        final char = mod == 0 ? '\u259C' : (mod == 1 ? '\u2599' : ' ');
         final idx = rowOffset + x;
-        characters[idx] = char;
+        characters[idx] = _cautionChar(x - offsetX, ly);
         final attrIdx = idx * 3;
         attributes[attrIdx + 0] = yellow;
         attributes[attrIdx + 1] = charcoal;
+        attributes[attrIdx + 2] = Modifier.none;
+        _setUnderlineColorAt(idx, 0);
+        _setUriAt(idx, null);
       }
+    }
+  }
+
+  static String _cautionChar(int lx, int ly) =>
+      switch (((lx - ly) % 3 + 3) % 3) {
+        0 => '\u259C',
+        1 => '\u2599',
+        _ => ' ',
+      };
+
+  void _copyOverlappingRows(
+    int newWidth,
+    int overlapWidth,
+    int overlapHeight,
+    List<String> newChars,
+    Uint32List newAttributes,
+    Uint32List? oldUl,
+    Uint32List? newUl,
+    List<String?>? oldUris,
+    List<String?>? newUris,
+  ) {
+    for (var y = 0; y < overlapHeight; y++) {
+      final targetCharStart = y * newWidth;
+      final sourceCharStart = y * width;
+      newChars.setRange(
+        targetCharStart,
+        targetCharStart + overlapWidth,
+        characters,
+        sourceCharStart,
+      );
+      newUl?.setRange(
+        targetCharStart,
+        targetCharStart + overlapWidth,
+        oldUl!,
+        sourceCharStart,
+      );
+      newUris?.setRange(
+        targetCharStart,
+        targetCharStart + overlapWidth,
+        oldUris!,
+        sourceCharStart,
+      );
+      newAttributes.setRange(
+        y * newWidth * 3,
+        y * newWidth * 3 + overlapWidth * 3,
+        attributes,
+        y * width * 3,
+      );
     }
   }
 
@@ -540,6 +795,10 @@ class Buffer {
       final newAttributes = Uint32List(newWidth * newHeight * 3);
       final oldUl = _underlineColors;
       final newUl = oldUl != null ? Uint32List(newWidth * newHeight) : null;
+      final oldUris = _uris;
+      final newUris = oldUris != null
+          ? List<String?>.filled(newWidth * newHeight, null)
+          : null;
 
       if (_emptyModifiers != 0) {
         for (var i = 2; i < newAttributes.length; i += 3) {
@@ -551,33 +810,17 @@ class Buffer {
       final overlapHeight = min(height, newHeight);
 
       if (overlapWidth > 0 && overlapHeight > 0) {
-        for (var y = 0; y < overlapHeight; y++) {
-          final targetCharStart = y * newWidth;
-          final sourceCharStart = y * width;
-          newChars.setRange(
-            targetCharStart,
-            targetCharStart + overlapWidth,
-            characters,
-            sourceCharStart,
-          );
-          if (newUl != null && oldUl != null) {
-            newUl.setRange(
-              targetCharStart,
-              targetCharStart + overlapWidth,
-              oldUl,
-              sourceCharStart,
-            );
-          }
-
-          final targetAttrStart = y * newWidth * 3;
-          final sourceAttrStart = y * width * 3;
-          newAttributes.setRange(
-            targetAttrStart,
-            targetAttrStart + overlapWidth * 3,
-            attributes,
-            sourceAttrStart,
-          );
-        }
+        _copyOverlappingRows(
+          newWidth,
+          overlapWidth,
+          overlapHeight,
+          newChars,
+          newAttributes,
+          oldUl,
+          newUl,
+          oldUris,
+          newUris,
+        );
       }
 
       width = newWidth;
@@ -585,6 +828,7 @@ class Buffer {
       characters = newChars;
       attributes = newAttributes;
       _underlineColors = newUl;
+      _uris = newUris;
       _boundsClip = Rect(0, 0, width, height);
     } finally {
       Tracer.record(_traceResizeId, Phase.end, TraceCategory.layout);
@@ -604,11 +848,11 @@ class Buffer {
   void _clearOverwrittenWideChar(int currentX, int idx) {
     if (characters[idx] == '') {
       if (currentX > 0 && isWideGrapheme(characters[idx - 1])) {
-        characters[idx - 1] = ' ';
+        _resetCell(idx - 1);
       }
     } else if (isWideGrapheme(characters[idx])) {
       if (currentX + 1 < width && characters[idx + 1] == '') {
-        characters[idx + 1] = ' ';
+        _resetCell(idx + 1);
       }
     }
   }
@@ -621,6 +865,7 @@ class Buffer {
     int bg,
     int modifiers,
     int ulColor,
+    String? uri,
     bool hasFg,
     bool hasBg,
   ) {
@@ -631,9 +876,8 @@ class Buffer {
       attributes[attrIdx + 1] = blendColor(bg, attributes[attrIdx + 1]);
     }
     attributes[attrIdx + 2] = modifiers;
-    if (ulColor != 0 || _underlineColors != null) {
-      (_underlineColors ??= Uint32List(width * height))[idx] = ulColor;
-    }
+    _setUnderlineColorAt(idx, ulColor);
+    _setUriAt(idx, uri);
   }
 
   void _writeAsciiString(int x, int y, String text, Style style) {
@@ -642,6 +886,7 @@ class Buffer {
     final fg = style.foreground?.argb ?? 0;
     final bg = style.background?.argb ?? 0;
     final ulColor = style.underlineColor?.argb ?? 0;
+    final uri = style.uri;
     final modifiers = style.modifiers;
     final hasFg = style.foreground != null;
     final hasBg = style.background != null;
@@ -664,6 +909,7 @@ class Buffer {
           bg,
           modifiers,
           ulColor,
+          uri,
           hasFg,
           hasBg,
         );
@@ -681,6 +927,7 @@ class Buffer {
     int bg,
     int modifiers,
     int ulColor,
+    String? uri,
     bool hasFg,
     bool hasBg,
   ) {
@@ -690,18 +937,48 @@ class Buffer {
     if (isWide &&
         (currentX == width - 1 || !isCellValid(currentX + 1, currentY))) {
       // Can't fit wide character in the last column or clip edge, write a space instead
-      _writeStyledCellRaw(idx, ' ', fg, bg, modifiers, ulColor, hasFg, hasBg);
+      _writeStyledCellRaw(
+        idx,
+        ' ',
+        fg,
+        bg,
+        modifiers,
+        ulColor,
+        uri,
+        hasFg,
+        hasBg,
+      );
       return;
     }
-    _writeStyledCellRaw(idx, char, fg, bg, modifiers, ulColor, hasFg, hasBg);
+    _writeStyledCellRaw(
+      idx,
+      char,
+      fg,
+      bg,
+      modifiers,
+      ulColor,
+      uri,
+      hasFg,
+      hasBg,
+    );
     if (!isWide || currentX + 1 >= width) return;
     final nextIdx = idx + 1;
     if (isWideGrapheme(characters[nextIdx]) &&
         currentX + 2 < width &&
         characters[idx + 2] == '') {
-      characters[idx + 2] = ' ';
+      _resetCell(idx + 2);
     }
-    _writeStyledCellRaw(nextIdx, '', fg, bg, modifiers, ulColor, hasFg, hasBg);
+    _writeStyledCellRaw(
+      nextIdx,
+      '',
+      fg,
+      bg,
+      modifiers,
+      ulColor,
+      uri,
+      hasFg,
+      hasBg,
+    );
   }
 
   /// Writes styled [text] to the buffer starting at ([x], [y]).
@@ -721,6 +998,7 @@ class Buffer {
     final fg = style.foreground?.argb ?? 0;
     final bg = style.background?.argb ?? 0;
     final ulColor = style.underlineColor?.argb ?? 0;
+    final uri = style.uri;
     final modifiers = style.modifiers;
     final hasFg = style.foreground != null;
     final hasBg = style.background != null;
@@ -742,6 +1020,7 @@ class Buffer {
         bg,
         modifiers,
         ulColor,
+        uri,
         hasFg,
         hasBg,
       );
@@ -1049,6 +1328,7 @@ class Compositor {
         sourceBg,
         sourceMods,
         source._underlineColors?[sourceIdx] ?? 0,
+        source._uris?[sourceIdx],
         masks,
         word,
         maskBit,
@@ -1090,6 +1370,7 @@ class Compositor {
     int sourceBg,
     int sourceMods,
     int sourceUlColor,
+    String? sourceUri,
     _CompositeMasks masks,
     int word,
     int maskBit,
@@ -1099,6 +1380,7 @@ class Compositor {
       target.characters[targetIdx] = sourceChar;
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
+      target._setUriAt(targetIdx, sourceUri);
       masks.charWritten[word] |= maskBit;
       if ((sourceMods & Modifier.kittyPlaceholder) != 0) {
         target.attributes[targetAttrIdx] = sourceFg;
@@ -1111,6 +1393,7 @@ class Compositor {
       target.characters[targetIdx] = ' ';
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
+      target._setUriAt(targetIdx, sourceUri);
       masks.charWritten[word] |= maskBit;
       if (!fgOccluded && sourceFg == 0) {
         masks.fgWritten[word] |= maskBit;
@@ -1132,7 +1415,10 @@ class Compositor {
   ) {
     final blendedFg = blendColor(target.attributes[targetAttrIdx], sourceFg);
     target.attributes[targetAttrIdx] = blendedFg;
-    target.attributes[targetAttrIdx + 2] |= sourceMods;
+    target.attributes[targetAttrIdx + 2] = Modifier.mergeLayered(
+      target.attributes[targetAttrIdx + 2],
+      sourceMods,
+    );
     if (((blendedFg >> 24) & 0xFF) == 255 || ((sourceFg >> 24) & 0xFF) == 255) {
       masks.fgWritten[word] |= maskBit;
     }
@@ -1219,6 +1505,7 @@ class Compositor {
         targetIdx,
         buf._underlineColors?[sourceIdx] ?? 0,
       );
+      target._setUriAt(targetIdx, buf._uris?[sourceIdx]);
     }
 
     if (targetIsEmptyChar || (sourceMods & Modifier.kittyPlaceholder) == 0) {
@@ -1226,7 +1513,10 @@ class Compositor {
         sourceFg,
         target.attributes[targetAttrIdx],
       );
-      target.attributes[targetAttrIdx + 2] |= sourceMods;
+      target.attributes[targetAttrIdx + 2] = Modifier.mergeLayered(
+        target.attributes[targetAttrIdx + 2],
+        sourceMods,
+      );
     }
     target.attributes[targetAttrIdx + 1] = blendColor(
       sourceBg,
@@ -1648,15 +1938,32 @@ bool isWideCodePoint(int codePoint) {
   return false;
 }
 
-typedef _AnsiStyle = ({int fg, int bg, int mods});
-typedef _ParsedAnsiCell = ({String char, int fg, int bg, int mods});
+typedef _AnsiStyle = ({int fg, int bg, int mods, int ulColor, String? uri});
+typedef _ToAnsiStyle = _AnsiStyle;
+typedef _ParsedAnsiCell = ({
+  String char,
+  int fg,
+  int bg,
+  int mods,
+  int ulColor,
+  String? uri,
+});
 
-const _AnsiStyle _defaultAnsiStyle = (fg: 0, bg: 0, mods: Modifier.none);
+const _AnsiStyle _defaultAnsiStyle = (
+  fg: 0,
+  bg: 0,
+  mods: Modifier.none,
+  ulColor: 0,
+  uri: null,
+);
+const _ToAnsiStyle _defaultToAnsiStyle = _defaultAnsiStyle;
 const _ParsedAnsiCell _blankParsedCell = (
   char: ' ',
   fg: 0,
   bg: 0,
   mods: Modifier.none,
+  ulColor: 0,
+  uri: null,
 );
 
 const List<(int bit, int setCode)> _ansiModifierSetCodes = [
@@ -1668,6 +1975,7 @@ const List<(int bit, int setCode)> _ansiModifierSetCodes = [
   (Modifier.reverse, 7),
   (Modifier.hidden, 8),
   (Modifier.crossedOut, 9),
+  (Modifier.overline, 53),
 ];
 
 /// Extensions for serializing [Buffer] to and from ANSI sequence strings.
@@ -1729,12 +2037,64 @@ extension BufferAnsiSerialization on Buffer {
     _AnsiStyle style,
   ) {
     final len = ansiText.length;
-    var idx = escIdx + 1;
-    if (idx >= len || ansiText.codeUnitAt(idx) != 0x5B) {
+    final idx = escIdx + 1;
+    if (idx >= len) return (nextIdx: idx, style: style);
+    final introducer = ansiText.codeUnitAt(idx);
+    if (introducer == 0x5D) {
+      return _consumeOscEscape(ansiText, idx + 1, style);
+    }
+    if (introducer != 0x5B) {
       return (nextIdx: idx, style: style);
     }
-    idx++;
-    final start = idx;
+    return _consumeCsiEscape(ansiText, idx + 1, style);
+  }
+
+  static ({int nextIdx, _AnsiStyle style}) _consumeOscEscape(
+    String ansiText,
+    int start,
+    _AnsiStyle style,
+  ) {
+    final end = _findOscPayloadEnd(ansiText, start);
+    if (end.payloadEnd < 0) return (nextIdx: ansiText.length, style: style);
+    final payload = ansiText.substring(start, end.payloadEnd);
+    return (nextIdx: end.nextIdx, style: _applyOscPayload(payload, style));
+  }
+
+  static ({int payloadEnd, int nextIdx}) _findOscPayloadEnd(
+    String text,
+    int start,
+  ) {
+    for (var i = start; i < text.length; i++) {
+      final cu = text.codeUnitAt(i);
+      if (cu == 0x07) return (payloadEnd: i, nextIdx: i + 1);
+      if (cu == 0x1B && i + 1 < text.length && text.codeUnitAt(i + 1) == 0x5C) {
+        return (payloadEnd: i, nextIdx: i + 2);
+      }
+    }
+    return (payloadEnd: -1, nextIdx: text.length);
+  }
+
+  static _AnsiStyle _applyOscPayload(String payload, _AnsiStyle style) {
+    if (!payload.startsWith('8;')) return style;
+    final secondSemi = payload.indexOf(';', 2);
+    if (secondSemi == -1) return style;
+    final uri = payload.substring(secondSemi + 1);
+    return (
+      fg: style.fg,
+      bg: style.bg,
+      mods: style.mods,
+      ulColor: style.ulColor,
+      uri: uri.isEmpty ? null : uri,
+    );
+  }
+
+  static ({int nextIdx, _AnsiStyle style}) _consumeCsiEscape(
+    String ansiText,
+    int start,
+    _AnsiStyle style,
+  ) {
+    final len = ansiText.length;
+    var idx = start;
     while (idx < len && !_isCsiFinalByte(ansiText.codeUnitAt(idx))) {
       idx++;
     }
@@ -1750,22 +2110,29 @@ extension BufferAnsiSerialization on Buffer {
 
   static bool _isCsiFinalByte(int byte) => byte >= 0x40 && byte <= 0x7E;
 
+  static _AnsiStyle _resetSgrKeepingUri(_AnsiStyle s) =>
+      (fg: 0, bg: 0, mods: Modifier.none, ulColor: 0, uri: s.uri);
+
   static _AnsiStyle _applySgrParams(String paramsStr, _AnsiStyle initial) {
     if (paramsStr.isEmpty || paramsStr == '0') {
-      return _defaultAnsiStyle;
+      return _resetSgrKeepingUri(initial);
     }
     var style = initial;
     var pIdx = 0;
     while (pIdx < paramsStr.length) {
       final semi = _nextSemicolon(paramsStr, pIdx);
-      final code = int.tryParse(paramsStr.substring(pIdx, semi)) ?? 0;
-      if (code == 38 || code == 48) {
+      final token = paramsStr.substring(pIdx, semi);
+      if (token.contains(':')) {
+        style = _applyColonSgrToken(token, style);
+        pIdx = semi + 1;
+        continue;
+      }
+      final code = int.tryParse(token) ?? 0;
+      if (code == 38 || code == 48 || code == 58) {
         final parsedColor = _parseTrueColorSgr(paramsStr, semi + 1);
         pIdx = parsedColor.nextIdx;
         if (parsedColor.argb != null) {
-          style = code == 38
-              ? (fg: parsedColor.argb!, bg: style.bg, mods: style.mods)
-              : (fg: style.fg, bg: parsedColor.argb!, mods: style.mods);
+          style = _applyExtendedColorCode(code, parsedColor.argb!, style);
         }
       } else {
         style = _applySingleSgrCode(code, style);
@@ -1773,6 +2140,59 @@ extension BufferAnsiSerialization on Buffer {
       }
     }
     return style;
+  }
+
+  static _AnsiStyle _applyExtendedColorCode(
+    int code,
+    int argb,
+    _AnsiStyle s,
+  ) => switch (code) {
+    38 => (fg: argb, bg: s.bg, mods: s.mods, ulColor: s.ulColor, uri: s.uri),
+    48 => (fg: s.fg, bg: argb, mods: s.mods, ulColor: s.ulColor, uri: s.uri),
+    58 => (fg: s.fg, bg: s.bg, mods: s.mods, ulColor: argb, uri: s.uri),
+    _ => s,
+  };
+
+  static _AnsiStyle _applyColonSgrToken(String token, _AnsiStyle s) {
+    final parts = token.split(':');
+    final head = int.tryParse(parts[0]) ?? -1;
+    if (head == 4 && parts.length >= 2) {
+      final sub = int.tryParse(parts[1]) ?? 0;
+      if (sub <= 0 || sub >= UnderlineStyle.values.length) {
+        final cleared =
+            s.mods & ~(Modifier.underline | Modifier.underlineStyleMask);
+        return (
+          fg: s.fg,
+          bg: s.bg,
+          mods: cleared,
+          ulColor: s.ulColor,
+          uri: s.uri,
+        );
+      }
+      final nextMods = Modifier.withUnderlineStyle(
+        s.mods,
+        UnderlineStyle.values[sub],
+      );
+      return (
+        fg: s.fg,
+        bg: s.bg,
+        mods: nextMods,
+        ulColor: s.ulColor,
+        uri: s.uri,
+      );
+    }
+    if ((head == 38 || head == 48 || head == 58) &&
+        parts.length >= 5 &&
+        parts[1] == '2') {
+      final n = parts.length;
+      final r = int.tryParse(parts[n - 3]) ?? 0;
+      final g = int.tryParse(parts[n - 2]) ?? 0;
+      final b = int.tryParse(parts[n - 1]) ?? 0;
+      final argb =
+          (0xFF << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
+      return _applyExtendedColorCode(head, argb, s);
+    }
+    return s;
   }
 
   static int _nextSemicolon(String s, int from) {
@@ -1811,30 +2231,42 @@ extension BufferAnsiSerialization on Buffer {
     return (argb: argb, nextIdx: cursor);
   }
 
+  static _AnsiStyle _withMods(_AnsiStyle s, int mods) =>
+      (fg: s.fg, bg: s.bg, mods: mods, ulColor: s.ulColor, uri: s.uri);
+
   static _AnsiStyle _applySingleSgrCode(int code, _AnsiStyle s) =>
       switch (code) {
-        0 => _defaultAnsiStyle,
-        1 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.bold),
-        2 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.dim),
-        3 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.italic),
-        4 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.underline),
-        5 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.blink),
-        7 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.reverse),
-        8 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.hidden),
-        9 => (fg: s.fg, bg: s.bg, mods: s.mods | Modifier.crossedOut),
-        22 => (
-          fg: s.fg,
-          bg: s.bg,
-          mods: s.mods & ~(Modifier.bold | Modifier.dim),
+        0 => _resetSgrKeepingUri(s),
+        1 => _withMods(s, s.mods | Modifier.bold),
+        2 => _withMods(s, s.mods | Modifier.dim),
+        3 => _withMods(s, s.mods | Modifier.italic),
+        4 => _withMods(
+          s,
+          (s.mods & ~Modifier.underlineStyleMask) | Modifier.underline,
         ),
-        23 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.italic),
-        24 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.underline),
-        25 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.blink),
-        27 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.reverse),
-        28 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.hidden),
-        29 => (fg: s.fg, bg: s.bg, mods: s.mods & ~Modifier.crossedOut),
-        39 => (fg: 0, bg: s.bg, mods: s.mods),
-        49 => (fg: s.fg, bg: 0, mods: s.mods),
+        5 => _withMods(s, s.mods | Modifier.blink),
+        7 => _withMods(s, s.mods | Modifier.reverse),
+        8 => _withMods(s, s.mods | Modifier.hidden),
+        9 => _withMods(s, s.mods | Modifier.crossedOut),
+        21 => _withMods(
+          s,
+          Modifier.withUnderlineStyle(s.mods, UnderlineStyle.doubleLine),
+        ),
+        22 => _withMods(s, s.mods & ~(Modifier.bold | Modifier.dim)),
+        23 => _withMods(s, s.mods & ~Modifier.italic),
+        24 => _withMods(
+          s,
+          s.mods & ~(Modifier.underline | Modifier.underlineStyleMask),
+        ),
+        25 => _withMods(s, s.mods & ~Modifier.blink),
+        27 => _withMods(s, s.mods & ~Modifier.reverse),
+        28 => _withMods(s, s.mods & ~Modifier.hidden),
+        29 => _withMods(s, s.mods & ~Modifier.crossedOut),
+        39 => (fg: 0, bg: s.bg, mods: s.mods, ulColor: s.ulColor, uri: s.uri),
+        49 => (fg: s.fg, bg: 0, mods: s.mods, ulColor: s.ulColor, uri: s.uri),
+        53 => _withMods(s, s.mods | Modifier.overline),
+        55 => _withMods(s, s.mods & ~Modifier.overline),
+        59 => (fg: s.fg, bg: s.bg, mods: s.mods, ulColor: 0, uri: s.uri),
         _ => s,
       };
 
@@ -1866,6 +2298,8 @@ extension BufferAnsiSerialization on Buffer {
       fg: style.fg,
       bg: style.bg,
       mods: style.mods,
+      ulColor: style.ulColor,
+      uri: style.uri,
     ));
     if (w == 2) {
       _clearSplitParsedWideAt(row, col + 1);
@@ -1874,6 +2308,8 @@ extension BufferAnsiSerialization on Buffer {
         fg: style.fg,
         bg: style.bg,
         mods: style.mods,
+        ulColor: style.ulColor,
+        uri: style.uri,
       ));
     }
     return col + w;
@@ -1947,6 +2383,8 @@ extension BufferAnsiSerialization on Buffer {
       attrsArray[attrIdx] = cell.fg;
       attrsArray[attrIdx + 1] = cell.bg;
       attrsArray[attrIdx + 2] = cell.mods;
+      if (cell.ulColor != 0) buffer._setUnderlineColorAt(idx, cell.ulColor);
+      if (cell.uri != null) buffer._setUriAt(idx, cell.uri);
     }
   }
 
@@ -1961,22 +2399,37 @@ extension BufferAnsiSerialization on Buffer {
     bool resetLineEndings = false,
   }) {
     final sb = StringBuffer();
-    var activeStyle = _defaultAnsiStyle;
+    var activeStyle = _defaultToAnsiStyle;
 
     for (var y = 0; y < height; y++) {
       final lastCol = trimTrailingSpaces ? _lastContentCol(y) : width - 1;
       activeStyle = _writeAnsiRowCells(sb, y, lastCol, activeStyle);
-      if (resetLineEndings && activeStyle != _defaultAnsiStyle) {
-        sb.write('\x1b[0m');
-        activeStyle = _defaultAnsiStyle;
+      if (resetLineEndings && activeStyle != _defaultToAnsiStyle) {
+        activeStyle = _resetToDefaultAnsiStyle(sb, activeStyle);
       }
       sb.write('\n');
     }
 
-    if (activeStyle != _defaultAnsiStyle) {
-      sb.write('\x1b[0m');
+    if (activeStyle != _defaultToAnsiStyle) {
+      _resetToDefaultAnsiStyle(sb, activeStyle);
     }
     return sb.toString();
+  }
+
+  static _ToAnsiStyle _resetToDefaultAnsiStyle(
+    StringBuffer sb,
+    _ToAnsiStyle current,
+  ) {
+    if (current.uri != null) {
+      sb.write('\x1b]8;;\x1b\\');
+    }
+    if (current.fg != 0 ||
+        current.bg != 0 ||
+        current.mods != 0 ||
+        current.ulColor != 0) {
+      sb.write('\x1b[0m');
+    }
+    return _defaultToAnsiStyle;
   }
 
   int _lastContentCol(int y) {
@@ -1988,17 +2441,18 @@ extension BufferAnsiSerialization on Buffer {
       final isBlankUnstyled =
           (char == ' ' || char == '') &&
           attributes[attrIdx + 1] == 0 &&
-          attributes[attrIdx + 2] == 0;
+          attributes[attrIdx + 2] == 0 &&
+          (_uris == null || _uris![idx] == null);
       if (!isBlankUnstyled) return x;
     }
     return -1;
   }
 
-  _AnsiStyle _writeAnsiRowCells(
+  _ToAnsiStyle _writeAnsiRowCells(
     StringBuffer sb,
     int y,
     int lastCol,
-    _AnsiStyle initialStyle,
+    _ToAnsiStyle initialStyle,
   ) {
     var activeStyle = initialStyle;
     final rowOffset = y * width;
@@ -2014,6 +2468,8 @@ extension BufferAnsiSerialization on Buffer {
         fg: attributes[attrIdx],
         bg: attributes[attrIdx + 1],
         mods: attributes[attrIdx + 2],
+        ulColor: _underlineColors == null ? 0 : _underlineColors![idx],
+        uri: _uris == null ? null : _uris![idx],
       );
       activeStyle = _writeAnsiStyleTransition(sb, activeStyle, cellStyle);
       sb.write(char);
@@ -2021,19 +2477,22 @@ extension BufferAnsiSerialization on Buffer {
     return activeStyle;
   }
 
-  static _AnsiStyle _writeAnsiStyleTransition(
+  static _ToAnsiStyle _writeAnsiStyleTransition(
     StringBuffer sb,
-    _AnsiStyle current,
-    _AnsiStyle target,
+    _ToAnsiStyle current,
+    _ToAnsiStyle target,
   ) {
     if (current == target) return current;
-    if (target == _defaultAnsiStyle) {
-      sb.write('\x1b[0m');
-      return _defaultAnsiStyle;
+    if (current.uri != target.uri) {
+      sb.write('\x1b]8;;${sanitizeOsc8Uri(target.uri ?? '')}\x1b\\');
+    }
+    if (_isDefaultSgr(target)) {
+      if (!_isDefaultSgr(current)) sb.write('\x1b[0m');
+      return target;
     }
 
     final effective = _needsFullSgrReset(current, target)
-        ? _emitFullSgrReset(sb)
+        ? _emitFullSgrReset(sb, target.uri)
         : current;
 
     final codes = <String>[
@@ -2041,8 +2500,7 @@ extension BufferAnsiSerialization on Buffer {
         _rgbSgrSegment(38, target.fg),
       if (target.bg != effective.bg && target.bg != 0)
         _rgbSgrSegment(48, target.bg),
-      for (final (bit, code) in _ansiModifierSetCodes)
-        if ((target.mods & bit) != 0 && (effective.mods & bit) == 0) '$code',
+      ..._collectModifierCodes(effective.mods, target.mods),
     ];
 
     if (codes.isNotEmpty) {
@@ -2051,20 +2509,56 @@ extension BufferAnsiSerialization on Buffer {
         ..write(codes.join(';'))
         ..write('m');
     }
+    _emitColonSgrIfNeeded(sb, effective, target);
     return target;
   }
 
-  static bool _needsFullSgrReset(_AnsiStyle current, _AnsiStyle target) {
+  static bool _isDefaultSgr(_ToAnsiStyle s) =>
+      s.fg == 0 && s.bg == 0 && s.mods == Modifier.none && s.ulColor == 0;
+
+  static List<String> _collectModifierCodes(int effMods, int tgtMods) {
+    final tgtUl = Modifier.getUnderlineStyle(tgtMods);
+    return [
+      for (final (bit, code) in _ansiModifierSetCodes)
+        if ((tgtMods & bit) != 0 &&
+            (effMods & bit) == 0 &&
+            (bit != Modifier.underline || tgtUl == UnderlineStyle.single))
+          '$code',
+    ];
+  }
+
+  static void _emitColonSgrIfNeeded(
+    StringBuffer sb,
+    _ToAnsiStyle effective,
+    _ToAnsiStyle target,
+  ) {
+    final effUl = Modifier.getUnderlineStyle(effective.mods);
+    final tgtUl = Modifier.getUnderlineStyle(target.mods);
+    if (tgtUl != effUl && tgtUl.index >= 2) {
+      sb.write('\x1b[4:${tgtUl.index}m');
+    }
+    if (target.ulColor != effective.ulColor && target.ulColor != 0) {
+      final r = (target.ulColor >> 16) & 0xFF;
+      final g = (target.ulColor >> 8) & 0xFF;
+      final b = target.ulColor & 0xFF;
+      sb.write('\x1b[58:2::$r:$g:${b}m');
+    }
+  }
+
+  static bool _needsFullSgrReset(_ToAnsiStyle current, _ToAnsiStyle target) {
+    const styleMask = 0xFF | Modifier.overline | Modifier.underlineStyleMask;
     final colorCleared =
         (current.fg != 0 && target.fg == 0) ||
-        (current.bg != 0 && target.bg == 0);
-    final modCleared = ((current.mods & 0xFF) & ~(target.mods & 0xFF)) != 0;
+        (current.bg != 0 && target.bg == 0) ||
+        (current.ulColor != 0 && target.ulColor == 0);
+    final modCleared =
+        ((current.mods & styleMask) & ~(target.mods & styleMask)) != 0;
     return colorCleared || modCleared;
   }
 
-  static _AnsiStyle _emitFullSgrReset(StringBuffer sb) {
+  static _ToAnsiStyle _emitFullSgrReset(StringBuffer sb, String? uri) {
     sb.write('\x1b[0m');
-    return _defaultAnsiStyle;
+    return (fg: 0, bg: 0, mods: Modifier.none, ulColor: 0, uri: uri);
   }
 
   static String _rgbSgrSegment(int prefix, int argb) =>
