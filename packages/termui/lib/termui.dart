@@ -52,6 +52,7 @@ export 'ui/widgets/interactive/inkwell_button.dart';
 export 'ui/widgets/interactive/horizontal_radio_group.dart';
 export 'ui/widgets/interactive/number_selector.dart';
 export 'ui/widgets/interactive/selection_controller.dart';
+export 'ui/widgets/interactive/terminal_selection_controller.dart';
 export 'ui/widgets/interactive/scroll_bar.dart';
 export 'ui/widgets/interactive/stateful_builder.dart';
 export 'ui/widgets/interactive/tab_bar.dart';

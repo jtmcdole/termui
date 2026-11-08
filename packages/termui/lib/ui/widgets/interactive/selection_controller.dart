@@ -1,5 +1,8 @@
+import 'terminal_selection_controller.dart';
+export 'terminal_selection_controller.dart';
+
 /// A controller that manages selection state for selection-based widgets.
-class SelectionController<T> {
+class SelectionController<T> implements TerminalListenable {
   /// The options available for selection.
   final List<T> options;
 
@@ -39,10 +42,10 @@ class SelectionController<T> {
     }
   }
 
-  /// Adds a listener to be notified of selection changes.
+  @override
   void addListener(void Function() listener) => _listeners.add(listener);
 
-  /// Removes a previously registered listener.
+  @override
   void removeListener(void Function() listener) => _listeners.remove(listener);
 
   void _notify() {
