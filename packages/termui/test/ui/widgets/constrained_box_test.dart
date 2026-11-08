@@ -65,5 +65,25 @@ void main() {
       });
       expect(visited, true);
     });
+
+    test(
+      'SizedBox.expand delegates intrinsic dimensions instead of infinity',
+      () {
+        const expandedChild = SizedBox.expand(
+          child: SizedBox(width: 18, height: 6),
+        );
+        expect(expandedChild.getIntrinsicHeight(80), 6);
+        expect(expandedChild.getIntrinsicWidth(24), 18);
+
+        final mounted = expandedChild.createElement()..mount(null);
+        addTearDown(mounted.unmount);
+        expect(mounted.getIntrinsicHeight(80), 6);
+        expect(mounted.getIntrinsicWidth(24), 18);
+
+        const emptyExpanded = SizedBox.expand();
+        expect(emptyExpanded.getIntrinsicHeight(80), 0);
+        expect(emptyExpanded.getIntrinsicWidth(24), 0);
+      },
+    );
   });
 }
