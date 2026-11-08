@@ -1,66 +1,96 @@
 # Examples
 
-This package contains several examples demonstrating the capabilities of `termui`, ranging from basic layout constraints to complex interactive window systems.
+This directory contains runnable examples demonstrating `termui` layouts, widgets, animations, overlapping windows, and event handling.
 
-# Running the Examples
+## Running the Examples
 
-You can run any of the examples directly using the Dart SDK:
+Run any example from `packages/termui`:
 
 ```bash
-# Run the main interactive layout and state dashboard example
+# Interactive layout and state dashboard
 dart run example/state.dart
 
-# Run the interactive widget catalog (from packages/termui_shared_examples)
+# Interactive widget catalog (from packages/termui_shared_examples)
 dart run ../termui_shared_examples/example/widget_book.dart
 
-# Run the overlapping window manager demo
-dart run example/window_manager_interactive.dart
+# Overlapping window compositor demo
+dart run example/compositor_demo.dart
 
-# Run the high-performance sub-pixel braille drawing demo
+# Sub-pixel Braille canvas demo
 dart run example/braille_canvas.dart
 
-# Run the simple constraints layout demo
+# Box constraints and flex layout demo
 dart run example/layout_demo.dart
 
-# Run the data dashboard & overlays showcase
+# Data dashboard and overlay menus showcase
 dart run example/dashboard_demo.dart
+
+# Questionnaire form prompt
+dart run example/01_questionnaire_example.dart
+
+# Linear progress bars and spinners
+dart run example/02_progress_bars.dart
+
+# Responsive dashboard that reflows on terminal resize
+dart run example/03_responsive_dashboard.dart
+
+# Mouse drag-and-drop demo
+dart run example/drag_drop_demo.dart
+
+# Scrollable form controls and modal dialog
+dart run example/scroll_input_demo.dart
+
+# Custom themes and border decorations
+dart run example/theme_decoration_demo.dart
 ```
 
 ---
 
 ## Example Directory
 
-### 0. [State & Layout Example (example/state.dart)](file:///app/packages/termui/example/state.dart)
-The primary entrypoint example showcasing the new Flutter-aligned layout box, geometry, and state management systems. Features:
-* **Declarative Layouts:** Nested compositions using `Row`, `Column`, `Stack`, `Positioned`, `SizedBox`, `Expanded`, `Flexible`, `Center`, and `Align`.
-* **State Management:** Reactive `StatefulWidget` updates calling `setState()` to dynamically schedule partial subtree updates.
-* **Inherited Widgets:** App-wide properties (styling and colors) propagated down the element tree via an inherited `AppTheme` context.
-* **Live Event Processing:** Resizing triggers terminal size watches, adjusting viewports, and keyboard inputs drive counter changes instantly.
+### 1. [State & Layout Example (`state.dart`)](state.dart)
+Showcases the Flutter-inspired layout box, geometry, and reactive state management systems:
+* Nested compositions using `Row`, `Column`, `Stack`, `Positioned`, `SizedBox`, `Expanded`, `Flexible`, `Center`, and `Align`.
+* Reactive `StatefulWidget` updates calling `setState()` to schedule subtree rebuilds.
+* App-wide theme properties propagated down the element tree via an `InheritedWidget` (`AppTheme`).
+* Live terminal resize handling and keyboard counter controls.
 
-### 1. [Widget Book (packages/termui_shared_examples/example/widget_book.dart)](file:///app/packages/termui_shared_examples/example/widget_book.dart)
-A comprehensive catalog showing off the entire interactive widget toolkit. It showcases:
-* **Interactive Inputs:** Text inputs, multi-line text areas, spinner numeric selectors, checkbox-style confirm fields, and selection dropdowns.
-* **Complex Containers:** Nested `SplitPane` layout containers (which support mouse dragging to resize), data tables with paginators, scrollbars, and modal overlays.
-* **Vector Graphics:** A real-time rendering clock and radar utilizing sub-pixel Braille canvas calculations.
-* **Form Validation:** Traversable forms with focus rings, real-time input validation, and submission handlers.
-* **Alternate and Inline Screen Modes:** Can be run in standard alternate screen mode (full TUI) or inline mode (rendering relative to the terminal cursor without clearing scroll history).
+### 2. [Widget Book (`../termui_shared_examples/example/widget_book.dart`)](../../termui_shared_examples/example/widget_book.dart)
+A 20-page interactive catalog covering the widget toolkit:
+* Text inputs, multi-line text areas, number selectors, checkboxes, radio groups, switches, sliders, and dropdowns.
+* Resizable `SplitPane` containers, data tables with paginators, scrollbars, trees, and modal overlays.
+* Real-time vector rendering using the sub-pixel Braille `Canvas`.
+* Runs in either alternate screen mode or inline cursor-relative mode (`--inline`).
 
-### 2. [Overlapping Window Manager (example/window_manager_interactive.dart)](file:///app/example/window_manager_interactive.dart)
-Demonates the floating desktop-like window manager system. Features include:
-* **Interactive Windows:** Windows can be dragged to move, and resized from the bottom-right corner using mouse drag events.
-* **Layering & Z-Order:** Click-to-focus brings clicked windows to the front, executing early-exit occlusion calculations to only redraw visible cells.
-* **Keyboard Focus Routing:** Seamless traversal of key events down the focus node hierarchy to the active window's widgets.
+### 3. [Overlapping Window Compositor (`compositor_demo.dart`)](compositor_demo.dart)
+Demonstrates floating desktop-style window management via `SceneManager`:
+* Floating `Window` layers that can be dragged by their title bar and resized from their bottom-right corner.
+* Click-to-focus z-order promotion and bit-packed occlusion culling in `Compositor`.
+* Keyboard focus traversal scoped to the active window.
 
-### 3. [Braille Canvas Animation (example/braille_canvas.dart)](file:///app/example/braille_canvas.dart)
-Demonstrates drawing high-resolution vector lines and math formulas using 2D Unicode Braille rendering:
-* Morphing circle geometries and moving noise waves rendered at up to 60 FPS.
-* Double-buffered diff calculations to prevent terminal flickering during rapid updates.
+### 4. [Braille Canvas Animation (`braille_canvas.dart`)](braille_canvas.dart)
+Demonstrates drawing high-resolution vector lines and shapes using 2x4 Unicode Braille sub-pixel rendering (`Canvas`).
 
-### 4. [Layout Demo (example/layout_demo.dart)](file:///app/example/layout_demo.dart)
-A basic, non-interactive layout model demonstration that splits the terminal workspace into clean rectangular grids:
-* Aligning sidebars and main content frames using percentage-based (`PercentageConstraint`), fixed-width (`LengthConstraint`), and proportional flex layouts (`FlexConstraint`).
+### 5. [Layout Demo (`layout_demo.dart`)](layout_demo.dart)
+A non-interactive layout demonstration splitting the terminal into panels using `Column`, `Row`, `Expanded`, `Flexible`, and `SizedBox`.
 
-### 5. [Data Dashboard & Overlays (example/dashboard_demo.dart)](file:///app/packages/termui/example/dashboard_demo.dart)
-Showcases advanced data layout, time-driven animations, and the overlay menu system. Features:
-* **Arbitrary Widgets in Table Cells:** Spawning live-updating progress indicators and clock-driven animation spinners inside a `Table` widget.
-* **Floating Dropdowns & Menus:** Triggers overlay dropdown items and popup options that float on top of the main layout, with support for mouse clicks and keyboard selection/cancellation.
+### 6. [Data Dashboard & Overlays (`dashboard_demo.dart`)](dashboard_demo.dart)
+Showcases data tables containing live-updating progress bars and spinners alongside floating `Overlay` dropdown menus.
+
+### 7. [Questionnaire Prompt (`01_questionnaire_example.dart`)](01_questionnaire_example.dart)
+An inline interactive form that collects user text input, radio choices, and confirmation using `PromptRunner`.
+
+### 8. [Progress Bars & Spinners (`02_progress_bars.dart`)](02_progress_bars.dart)
+Demonstrates determinate and indeterminate `LinearProgressIndicator` and `Spinner` widgets.
+
+### 9. [Responsive Dashboard (`03_responsive_dashboard.dart`)](03_responsive_dashboard.dart)
+Uses `LayoutBuilder` and flex widgets to adapt panel arrangements dynamically when the terminal is resized.
+
+### 10. [Drag and Drop (`drag_drop_demo.dart`)](drag_drop_demo.dart)
+Demonstrates mouse drag-and-drop interactions between `Draggable` items and `DragTarget` drop zones.
+
+### 11. [Scrollable Inputs & Modal (`scroll_input_demo.dart`)](scroll_input_demo.dart)
+Demonstrates a scrollable form with `SingleChildScrollView`, `ScrollBar`, and a `ModalOverlay` dialog.
+
+### 12. [Themes & Decorations (`theme_decoration_demo.dart`)](theme_decoration_demo.dart)
+Demonstrates `DecoratedBox` border styles, background fills, and dynamic theme switching.
