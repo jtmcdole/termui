@@ -77,6 +77,64 @@ void main() {
 
       expect(buffer.getModifiers(0, 0), equals(Modifier.transparent));
     });
+
+    test(
+      'enableKittyPassthrough emits U+10EEEE placeholder cells and KittyImage widget',
+      () {
+        final kittyTinpot = TermuiTinpot(
+          workFactor: 1,
+          enableKittyPassthrough: true,
+        );
+        final image = img.Image(width: 16, height: 16, numChannels: 4);
+        for (final p in image) {
+          p.setRgba(12, 34, 56, 255);
+        }
+
+        final buffer = kittyTinpot.convertBuffer(
+          image,
+          3,
+          2,
+          kittyImageId: 101,
+        );
+        expect(buffer.width, 3);
+        expect(buffer.height, 2);
+        expect(buffer.getCharacter(0, 0), equals(kittyPlaceholderCell(0, 0)));
+        expect(buffer.getCharacter(2, 1), equals(kittyPlaceholderCell(1, 2)));
+        expect(
+          Modifier.has(buffer.getModifiers(0, 0), Modifier.kittyPlaceholder),
+          isTrue,
+        );
+        expect(KittyImageRegistry.lookup(101), isNotNull);
+
+        // Compositing tinpot Kitty buffer at higher zIndex over a fullscreen scoped registry
+        // must resolve KittyImageRegistry.global rather than getting shadowed by the lower registry.
+        final lowerScoped = Buffer.blank(6, 4)
+          ..registerKittyRegistry(const Rect(0, 0, 6, 4), KittyImageRegistry());
+        final compositeTarget = Buffer.blank(6, 4);
+        Compositor().composite(
+          target: compositeTarget,
+          layers: [
+            LayeredBuffer(buffer: lowerScoped, x: 0, y: 0, zIndex: 1),
+            LayeredBuffer(buffer: buffer, x: 1, y: 1, zIndex: 10),
+          ],
+        );
+        expect(
+          compositeTarget.lookupKittyRegistry(2, 1),
+          same(KittyImageRegistry.global),
+        );
+        expect(compositeTarget.lookupKittyImage(2, 1, 101), isNotNull);
+
+        final widget = kittyTinpot.buildWidget(image, 3, 2, kittyImageId: 102);
+        expect(widget, isA<KittyImage>());
+        final fallbackWidget = kittyTinpot.buildWidget(
+          image,
+          1,
+          1,
+          enableKittyPassthrough: false,
+        );
+        expect(fallbackWidget, isA<BufferWidget>());
+      },
+    );
   });
 
   group('CellQuantizer edge cases', () {
