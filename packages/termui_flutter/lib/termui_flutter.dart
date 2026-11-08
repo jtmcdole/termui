@@ -72,3 +72,5 @@ export 'src/terminal.dart' show Terminal;
 export 'src/rendering/atlas.dart' show GlyphAtlas, GlyphAtlasGenerator;
 export 'src/util/file_saver.dart' show saveFile;
 export 'src/util/font_helper.dart' show waitForFontsToLoad;
+export 'package:termui/ui/widgets/interactive/selection_controller.dart'
+    show TerminalSelectionController, SelectionMode, SelectionRegion;
