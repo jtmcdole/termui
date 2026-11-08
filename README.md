@@ -16,12 +16,15 @@ This library shifts away from naive command-line printing (which causes terminal
 ## Features
 
 - **Overlapping Window Management**: Supports floating, draggable, and resizable window frames with titles, custom borders, and dynamic Z-index layering.
-- **Double Buffering**: Eliminates terminal flickering by maintaining an in-memory frame buffer of what is visible on-screen and comparing it with a previous frame to compute delta updates.
-- **Minimal ANSI Diffing**: Emits the shortest possible terminal sequences (cursor jumps and style transitions) to repaint only the modified cells.
-- **Layout Solver**: Flexible constraints layout system featuring fixed size, percentage, flex (proportional), and min-max boundaries.
+- **Double Buffering & Minimal ANSI Diffing**: Eliminates terminal flickering by maintaining an in-memory frame buffer and emitting the shortest possible cursor jumps and style transitions for modified cells.
+- **Layout Solver**: Flexible box constraints layout system featuring fixed size, flex (`Expanded`/`Flexible`), alignment, split panes, and viewport boundaries.
 - **Hierarchical Input & Focus System**: Translates raw ANSI byte streams from `stdin` into high-level event objects (keys, mouse clicks/scrolls/drags, paste segments) and dispatches them down a keyboard focus node tree.
-- **Vector Graphics & Braille Canvas**: Features a 2D sub-pixel braille-based grid canvas with antialiasing controls, filled polygons (triangles, rectangles), RGB coloring, and transformations.
-- **Modular Widget Toolkit**: Standard widgets including paragraphs, lists, text inputs, text areas with cursors, progress bars, tables, paginators, spinners, and trees.
+- **Vector Graphics, Braille Canvas & Image Quantization**: Features a 2D sub-pixel braille canvas (`Canvas`) and a Chafa-inspired Unicode/DIN99d image-to-ANSI quantizer (`termui_tinpot`).
+- **Modular Widget Toolkit**: Standard widgets including paragraphs, lists, text inputs, text areas with cursors, progress bars, tables, paginators, spinners, sparklines, and trees.
+- **Embedded PTY & Virtual Terminal Emulator**: Spawn native OS shells via `pty2` (Unix `openpty` and Windows `ConPTY`) and embed interactive terminal views inside TUI windows via `termui_pty`.
+- **Flutter & Web GPU Renderer**: Render `termui` applications inside Flutter desktop, mobile, and web apps using a batched `drawRawAtlas` glyph texture atlas (`termui_flutter`).
+- **3D Spatial Audio & Synthesis**: Play spatial audio, synthesized waveforms, and filtered audio buses in CLI and Flutter apps (`termui_audio`, `termui_audio_flutter`).
+- **Recording, Golden Testing & Performance Tracing**: Capture Asciicast v3 sessions, run headless deterministic tests (`termui_recorder`, `termui_test`), hot-reload TUI code (`termui_hotreload`), and inspect flame charts (`termui_trace`).
 
 ---
 
@@ -52,6 +55,8 @@ graph TD
   style termui stroke:#3c0db3
   termui_audio["termui_audio"]
   style termui_audio stroke:#4144b1
+  termui_audio_flutter["termui_audio_flutter"]
+  style termui_audio_flutter stroke:#5c6bc0
   termui_audio_example["termui_audio_example"]
   style termui_audio_example stroke:#470d74
   termui_flutter["termui_flutter"]
@@ -83,9 +88,11 @@ graph TD
   termui -.-> termui_recorder
   termui -.-> termui_test
   termui_audio --> termui
+  termui_audio_flutter --> termui_audio
   termui_audio_example --> termui
   termui_audio_example --> termui_flutter
   termui_audio_example --> termui_audio
+  termui_audio_example --> termui_audio_flutter
   termui_flutter --> termui
   termui_flutter -.-> termui_shared_examples
   termui_flutter -.-> termui_test
@@ -114,6 +121,7 @@ graph TD
     pty2
     termui
     termui_audio
+    termui_audio_flutter
     termui_flutter
     termui_hotreload
     termui_pty
