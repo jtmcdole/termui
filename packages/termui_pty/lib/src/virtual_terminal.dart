@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
@@ -47,6 +48,15 @@ enum ShellPromptZone {
   commandOutput,
 }
 
+/// Structured Kitty `OSC 99` desktop notification payload and callback flags.
+typedef Osc99Notification = ({
+  String id,
+  String title,
+  String body,
+  bool reportActivation,
+  bool reportClose,
+});
+
 typedef _SavedCursor = ({
   int x,
   int y,
@@ -57,6 +67,32 @@ typedef _SavedCursor = ({
   bool g1DecGraphics,
   bool useG1,
 });
+
+final class _PendingOsc99 {
+  final StringBuffer title = StringBuffer();
+  final StringBuffer body = StringBuffer();
+  int totalLength = 0;
+  bool reportActivation = false;
+  bool reportClose = false;
+
+  void append(String content, {required bool isBody, required int maxChars}) {
+    final remaining = maxChars - totalLength;
+    if (remaining <= 0 || content.isEmpty) return;
+    var sliceLen = math.min(content.length, remaining);
+    if (sliceLen < content.length) {
+      final lastUnit = content.codeUnitAt(sliceLen - 1);
+      if (lastUnit >= 0xD800 && lastUnit <= 0xDBFF) {
+        sliceLen--;
+      }
+    }
+    if (sliceLen <= 0) return;
+    final slice = sliceLen == content.length
+        ? content
+        : content.substring(0, sliceLen);
+    (isBody ? body : title).write(slice);
+    totalLength += slice.length;
+  }
+}
 
 /// A virtual terminal that maintains primary and alternate screen buffers,
 /// cursor state, scroll margins, and terminal modes in response to ANSI/VT100
@@ -128,9 +164,13 @@ final class VirtualTerminal implements TerminalHandler {
   ];
 
   static final RegExp _whitespaceRegex = RegExp(r'\s+');
+  static final RegExp _conEmuOsc9Regex = RegExp(r'^\d+;');
   static const int _maxOsc52PayloadLength = 1_400_000;
   static const int _maxOsc52DecodedBytes = 1_048_576;
   static const int _maxTitleStackDepth = 20;
+  static const int _maxKittyKbStackDepth = 16;
+  static const int _maxOsc99Chars = 16 * 1024;
+  static const int _maxPendingOsc99 = 32;
 
   /// The width of the virtual terminal in columns.
   int width;
@@ -195,9 +235,29 @@ final class VirtualTerminal implements TerminalHandler {
         src.attributes,
         srcStart * 3,
       );
+      buf.copyCellAuxRangeFrom(src, dstStart, srcStart, copyW);
     }
     buf.registerKittyRegistry(Rect(0, 0, width, height), imageRegistry);
     return buf;
+  }
+
+  int _cellPixelWidth;
+  int _cellPixelHeight;
+
+  /// Width of a single character cell in pixels (reported via `CSI 16 t` and `CSI 14 t`).
+  int get cellPixelWidth => _cellPixelWidth;
+
+  /// Height of a single character cell in pixels (reported via `CSI 16 t` and `CSI 14 t`).
+  int get cellPixelHeight => _cellPixelHeight;
+
+  /// Updates the cell pixel dimensions (`>= 1`) used for `XTWINOPS` (`14t`/`16t`) and `?1016` mouse scaling.
+  void setCellPixelSize(int pixelWidth, int pixelHeight) {
+    final nextW = math.max(1, pixelWidth);
+    final nextH = math.max(1, pixelHeight);
+    if (_cellPixelWidth == nextW && _cellPixelHeight == nextH) return;
+    _cellPixelWidth = nextW;
+    _cellPixelHeight = nextH;
+    _notifyListeners();
   }
 
   /// Whether the alternate screen buffer (`?47`, `?1047`, or `?1049`) is active.
@@ -263,6 +323,9 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether SGR mouse reporting mode is enabled (set by DECSET `1006`).
   bool sgrMouseMode = false;
 
+  /// Whether SGR-Pixels mouse reporting mode is enabled (set by DECSET `1016`).
+  bool sgrPixelsMouseMode = false;
+
   bool _focusReporting = false;
 
   /// Whether focus reporting (`DECSET 1004`, `?1004h` / `?1004l`) is enabled.
@@ -286,13 +349,48 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether alternate scroll mode (`DECSET 1007`, `?1007h` / `?1007l`) is enabled.
   bool get alternateScrollMode => _alternateScrollMode;
 
+  static const Duration _syncSafetyTimeout = Duration(milliseconds: 100);
+  static const int _maxSyncBatchCount = 100;
+
+  bool _inSyncUpdate = false;
+  Timer? _syncSafetyTimer;
+  int _syncBatchCount = 0;
+  bool _pendingSyncNotify = false;
+  bool _dirtySinceLastNotify = false;
+
   /// Whether synchronized output mode (`DECSET 2026`, `?2026h` / `?2026l`) is enabled.
-  bool synchronizedOutput = false;
+  bool get synchronizedOutput => _inSyncUpdate;
+
+  set synchronizedOutput(bool value) {
+    if (_inSyncUpdate == value) return;
+    _setSynchronizedOutput(value);
+  }
 
   bool _graphemeClusterMode = false;
 
   /// Whether Unicode grapheme clustering mode (`DECSET 2027`, `?2027h` / `?2027l`) is enabled.
   bool get graphemeClusterMode => _graphemeClusterMode;
+
+  int _primaryKittyKbFlags = 0;
+  final List<int> _primaryKittyKbStack = [];
+  int _altKittyKbFlags = 0;
+  final List<int> _altKittyKbStack = [];
+
+  /// Active Kitty keyboard protocol progressive enhancement flags for the active screen.
+  int get kittyKeyboardFlags =>
+      _usingAltScreen ? _altKittyKbFlags : _primaryKittyKbFlags;
+
+  set kittyKeyboardFlags(int value) {
+    final masked = value & 0x1F;
+    if (_usingAltScreen) {
+      _altKittyKbFlags = masked;
+    } else {
+      _primaryKittyKbFlags = masked;
+    }
+  }
+
+  List<int> get _activeKittyKbStack =>
+      _usingAltScreen ? _altKittyKbStack : _primaryKittyKbStack;
 
   /// Current window title set via `OSC 0` or `OSC 2` and restored via `CSI 23 t`.
   String windowTitle = '';
@@ -337,6 +435,31 @@ final class VirtualTerminal implements TerminalHandler {
   /// terminal query (`DSR`, `CPR`, `DECXCPR`, `DA1`, `DA2`, `DECRQM`, or `XTWINOPS 18t`).
   void Function(String reply)? onReply;
 
+  /// The default background color applied when querying background color via OSC 11.
+  final Color? defaultBackground;
+
+  /// Callback invoked when an `OSC 9` or `OSC 99` desktop notification is received.
+  void Function(String title, String message)? onNotification;
+
+  /// Callback invoked with full Kitty `OSC 99` metadata (`id`, `a=report`, `c=1`).
+  void Function(Osc99Notification notification)? onOsc99Notification;
+
+  static final RegExp _osc99UnsafeIdChars = RegExp(r'[^a-zA-Z0-9_.\-]');
+
+  /// Emits a Kitty `OSC 99` activation event reply (`\x1b]99;i=<id>;\x1b\\`) via [onReply].
+  void reportNotificationActivated(String id) {
+    final safeId = id.replaceAll(_osc99UnsafeIdChars, '');
+    onReply?.call('\x1b]99;i=$safeId;\x1b\\');
+  }
+
+  /// Emits a Kitty `OSC 99` close event reply (`\x1b]99;i=<id>:p=close;\x1b\\`) via [onReply].
+  void reportNotificationClosed(String id) {
+    final safeId = id.replaceAll(_osc99UnsafeIdChars, '');
+    onReply?.call('\x1b]99;i=$safeId:p=close;\x1b\\');
+  }
+
+  final Map<String, _PendingOsc99> _pendingOsc99 = {};
+
   late final KittyApcHandler _kittyApcHandler = KittyApcHandler(
     registry: imageRegistry,
     onReply: (reply) => onReply?.call(reply),
@@ -349,12 +472,18 @@ final class VirtualTerminal implements TerminalHandler {
   VirtualTerminal({
     int width = 80,
     int height = 24,
+    int cellPixelWidth = 8,
+    int cellPixelHeight = 16,
     this.transparentBackground = false,
     this.defaultForeground,
+    this.defaultBackground,
     int maxScrollbackLines = 0,
     this.onReply,
+    this.onNotification,
   }) : width = math.max(1, width),
        height = math.max(1, height),
+       _cellPixelWidth = math.max(1, cellPixelWidth),
+       _cellPixelHeight = math.max(1, cellPixelHeight),
        _scrollBottom = math.max(1, height) - 1,
        _scrollback = ScrollbackBuffer(maxLines: maxScrollbackLines),
        _primaryWrapped = List<bool>.filled(math.max(1, height), false),
@@ -437,14 +566,66 @@ final class VirtualTerminal implements TerminalHandler {
 
   /// Disposes of resources.
   void dispose() {
+    _syncSafetyTimer?.cancel();
+    _syncSafetyTimer = null;
+    _pendingOsc99.clear();
     _kittyApcHandler.reset();
     _utf8Sink.close();
     _listeners.clear();
   }
 
-  void _notifyListeners() {
+  void _dispatchListeners() {
     for (final listener in _listeners) {
       listener();
+    }
+  }
+
+  void _notifyListeners() {
+    if (_inSyncUpdate) {
+      _pendingSyncNotify = true;
+      _syncBatchCount++;
+      if (_syncBatchCount >= _maxSyncBatchCount) {
+        _onSyncSafetyTimeout();
+      }
+      return;
+    }
+    _dirtySinceLastNotify = false;
+    _dispatchListeners();
+  }
+
+  void _setSynchronizedOutput(bool enable) {
+    if (enable) {
+      _inSyncUpdate = true;
+      _syncBatchCount = 0;
+      _syncSafetyTimer?.cancel();
+      _syncSafetyTimer = Timer(_syncSafetyTimeout, _onSyncSafetyTimeout);
+      return;
+    }
+    _syncSafetyTimer?.cancel();
+    _syncSafetyTimer = null;
+    _syncBatchCount = 0;
+    _inSyncUpdate = false;
+    if (_pendingSyncNotify || _dirtySinceLastNotify) {
+      _pendingSyncNotify = false;
+      _notifyListeners();
+    }
+  }
+
+  void _onSyncSafetyTimeout() {
+    _syncSafetyTimer?.cancel();
+    _syncSafetyTimer = null;
+    _syncBatchCount = 0;
+    _inSyncUpdate = false;
+    if (_pendingSyncNotify || _dirtySinceLastNotify) {
+      _pendingSyncNotify = false;
+      _notifyListeners();
+    }
+  }
+
+  void _markDirty() {
+    _dirtySinceLastNotify = true;
+    if (_inSyncUpdate) {
+      _pendingSyncNotify = true;
     }
   }
 
@@ -455,7 +636,8 @@ final class VirtualTerminal implements TerminalHandler {
     _utf8Sink.close();
     _initParser();
     _resetState(fullReset: true);
-    _notifyListeners();
+    _dirtySinceLastNotify = false;
+    _dispatchListeners();
   }
 
   void _resetState({required bool fullReset}) {
@@ -470,50 +652,69 @@ final class VirtualTerminal implements TerminalHandler {
     _originMode = false;
     _mouseTrackingMask = 0;
     sgrMouseMode = false;
+    sgrPixelsMouseMode = false;
     _focusReporting = false;
     _cursorShape = .defaultShape;
     bracketedPasteMode = false;
     _applicationCursorKeys = false;
     _alternateScrollMode = true;
-    synchronizedOutput = false;
+    _inSyncUpdate = false;
+    _pendingSyncNotify = false;
+    _syncBatchCount = 0;
+    _syncSafetyTimer?.cancel();
+    _syncSafetyTimer = null;
+    _pendingOsc99.clear();
     _graphemeClusterMode = false;
+    _primaryKittyKbFlags = 0;
+    _primaryKittyKbStack.clear();
+    _altKittyKbFlags = 0;
+    _altKittyKbStack.clear();
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
-      _kittyApcHandler.reset();
-      _resetDefaultTabStops();
-      _savedPrimary = _initialSavedCursor;
-      _savedAlt = _initialSavedCursor;
-      _usingAltScreen = false;
-      _altBuffer = null;
-      cursorX = 0;
-      cursorY = 0;
-      windowTitle = '';
-      iconTitle = '';
-      _windowTitleStack.clear();
-      _iconTitleStack.clear();
-      workingDirectory = null;
-      promptZone = .none;
-      lastCommandExitCode = null;
-      _primaryWrapped.fillRange(0, height, false);
-      _scrollback.clear();
-      final (fg, bg, mod) = _eraseAttributes();
-      _primaryBuffer.fillAttributes(
-        char: ' ',
-        fg: fg,
-        bg: bg,
-        modifiers: mod,
-        underlineColor: 0,
-        uri: '',
-      );
+      _resetFullScreenState();
     } else {
-      if (_usingAltScreen) {
-        _savedAlt = _initialSavedCursor;
-      } else {
-        _savedPrimary = _initialSavedCursor;
-      }
-      _clampPendingWrap();
+      _resetSavedCursorOnly();
     }
+  }
+
+  void _resetFullScreenState() {
+    _kittyApcHandler.reset();
+    _resetDefaultTabStops();
+    _savedPrimary = _initialSavedCursor;
+    _savedAlt = _initialSavedCursor;
+    _usingAltScreen = false;
+    _altBuffer = null;
+    cursorX = 0;
+    cursorY = 0;
+    windowTitle = '';
+    iconTitle = '';
+    _windowTitleStack.clear();
+    _iconTitleStack.clear();
+    workingDirectory = null;
+    _activeUri = null;
+    promptZone = .none;
+    lastCommandExitCode = null;
+    _primaryWrapped.fillRange(0, height, false);
+    _scrollback.clear();
+    final (fg, bg, mod) = _eraseAttributes();
+    _primaryBuffer.fillAttributes(
+      char: ' ',
+      fg: fg,
+      bg: bg,
+      modifiers: mod,
+      underlineColor: 0,
+      uri: '',
+    );
+  }
+
+  void _resetSavedCursorOnly() {
+    if (_usingAltScreen) {
+      _savedAlt = _initialSavedCursor;
+    } else {
+      _savedPrimary = _initialSavedCursor;
+    }
+    _clampPendingWrap();
   }
 
   void _clampPendingWrap() {
@@ -643,13 +844,17 @@ final class VirtualTerminal implements TerminalHandler {
   /// Feeds a chunk of UTF-8 encoded bytes into the terminal.
   void write(List<int> chunk) {
     _utf8Sink.add(chunk);
-    _notifyListeners();
+    if (_dirtySinceLastNotify) {
+      _notifyListeners();
+    }
   }
 
   /// Feeds an already-decoded Dart string directly into the terminal.
   void writeString(String text) {
     _parser.parse(text);
-    _notifyListeners();
+    if (_dirtySinceLastNotify) {
+      _notifyListeners();
+    }
   }
 
   (int fg, int bg, int mod) _eraseAttributes() {
@@ -878,6 +1083,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void printText(String text) {
+    if (text.isNotEmpty) _markDirty();
     for (final char in text.characters) {
       _printGrapheme(char);
     }
@@ -1011,6 +1217,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void execute(int charCode) {
+    _markDirty();
     switch (charCode) {
       case 8: // Backspace
         _clampPendingWrap();
@@ -1032,15 +1239,20 @@ final class VirtualTerminal implements TerminalHandler {
   void _handleDecPrivateMode(String command, List<int> params) {
     switch (command) {
       case 'J':
+        _markDirty();
         _eraseInDisplay(params.isEmpty ? 0 : params[0]);
       case 'K':
+        _markDirty();
         _eraseInLine(params.isEmpty ? 0 : params[0]);
       case 'n':
         if (params.length == 1 && params[0] == 6) {
           _replyCursorPosition(extended: true);
         }
       case 'W':
-        if (params.length == 1 && params[0] == 5) _resetDefaultTabStops();
+        if (params.length == 1 && params[0] == 5) {
+          _markDirty();
+          _resetDefaultTabStops();
+        }
       case 'h' || 'l':
         final enable = command == 'h';
         for (final param in params) {
@@ -1050,6 +1262,11 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _applyDecPrivateModeParam(int param, bool enable) {
+    if (param == 2026) {
+      synchronizedOutput = enable;
+      return;
+    }
+    _markDirty();
     switch (param) {
       case 1: // DECCKM (Application Cursor Keys)
         _applicationCursorKeys = enable;
@@ -1079,10 +1296,10 @@ final class VirtualTerminal implements TerminalHandler {
         sgrMouseMode = enable;
       case 1007: // Alternate Scroll Mode
         _alternateScrollMode = enable;
+      case 1016:
+        sgrPixelsMouseMode = enable;
       case 2004:
         bracketedPasteMode = enable;
-      case 2026:
-        synchronizedOutput = enable;
       case 2027:
         _graphemeClusterMode = enable;
     }
@@ -1158,6 +1375,7 @@ final class VirtualTerminal implements TerminalHandler {
     List<List<int>?>? subparams,
   }) {
     if (intermediate == null && command == 'm') {
+      _markDirty();
       _applySgr(params, subparams: subparams);
       return;
     }
@@ -1166,11 +1384,12 @@ final class VirtualTerminal implements TerminalHandler {
       _handleIntermediateCsi(intermediate, command, params);
       return;
     }
+    if (_tryHandleQueryCsi(command, params)) return;
+    _markDirty();
 
     final p1 = _clampedPositiveParam(params, 0);
     final p2 = _clampedPositiveParam(params, 1);
     if (_tryHandleCursorCsi(command, p1, p2)) return;
-    if (_tryHandleQueryCsi(command, params)) return;
     _handleEditingOrModeCsi(command, params, p1);
   }
 
@@ -1180,18 +1399,70 @@ final class VirtualTerminal implements TerminalHandler {
     List<int> params,
   ) {
     switch ((intermediate, command)) {
+      case ('?', 'u'):
+        onReply?.call('\x1b[?${kittyKeyboardFlags}u');
+      case ('>', 'u'):
+        _markDirty();
+        _pushKittyKeyboard(params);
+      case ('<', 'u'):
+        _markDirty();
+        _popKittyKeyboard(params);
+      case ('=', 'u'):
+        _markDirty();
+        _setKittyKeyboard(params);
       case ('?', _):
         _handleDecPrivateMode(command, params);
       case ('!', 'p'):
+        _markDirty();
         _resetState(fullReset: false);
       case ('>', 'c'):
         if (_isZeroOrEmptyParam(params)) onReply?.call('\x1b[>1;10;0c');
+      case ('>', 'q'):
+        if (_isZeroOrEmptyParam(params)) {
+          onReply?.call('\x1bP>|termui(0.8.3)\x1b\\');
+        }
       case (r'?$', 'p'):
         _replyDecrqm(params, decPrivate: true);
       case (r'$', 'p'):
         _replyDecrqm(params, decPrivate: false);
       case (' ', 'q'):
+        _markDirty();
         _setCursorShape(params);
+    }
+  }
+
+  void _pushKittyKeyboard(List<int> params) {
+    final stack = _activeKittyKbStack;
+    if (stack.length >= _maxKittyKbStackDepth) {
+      stack.removeAt(0);
+    }
+    stack.add(kittyKeyboardFlags);
+    final flags = params.isNotEmpty ? (params[0] & 0x1F) : 0;
+    kittyKeyboardFlags = flags;
+  }
+
+  void _popKittyKeyboard(List<int> params) {
+    final count = (params.isEmpty || params[0] <= 0) ? 1 : params[0];
+    final stack = _activeKittyKbStack;
+    if (count > stack.length) {
+      stack.clear();
+      kittyKeyboardFlags = 0;
+      return;
+    }
+    for (var i = 0; i < count; i++) {
+      kittyKeyboardFlags = stack.removeLast();
+    }
+  }
+
+  void _setKittyKeyboard(List<int> params) {
+    final flags = (params.isNotEmpty ? params[0] : 0) & 0x1F;
+    final mode = (params.length >= 2 && params[1] > 0) ? params[1] : 1;
+    if (mode == 1) {
+      kittyKeyboardFlags = flags;
+    } else if (mode == 2) {
+      kittyKeyboardFlags = kittyKeyboardFlags | flags;
+    } else if (mode == 3) {
+      kittyKeyboardFlags = kittyKeyboardFlags & ~flags;
     }
   }
 
@@ -1244,7 +1515,13 @@ final class VirtualTerminal implements TerminalHandler {
     if (params.isEmpty) return;
     final op = params[0];
     final target = params.length > 1 ? params[1] : 0;
-    if (op == 18 && params.length == 1) {
+    if (op == 14 && params.length == 1) {
+      onReply?.call(
+        '\x1b[4;${height * _cellPixelHeight};${width * _cellPixelWidth}t',
+      );
+    } else if (op == 16 && params.length == 1) {
+      onReply?.call('\x1b[6;$_cellPixelHeight;${_cellPixelWidth}t');
+    } else if (op == 18 && params.length == 1) {
       onReply?.call('\x1b[8;$height;${width}t');
     } else if (op == 22) {
       _pushTitleStack(target);
@@ -1313,6 +1590,7 @@ final class VirtualTerminal implements TerminalHandler {
       1004 => _focusReporting,
       1006 => sgrMouseMode,
       1007 => _alternateScrollMode,
+      1016 => sgrPixelsMouseMode,
       1048 => false,
       2004 => bracketedPasteMode,
       2026 => synchronizedOutput,
@@ -1728,6 +2006,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void apc(String payload) {
+    _markDirty();
     _kittyApcHandler.handleApc(payload);
   }
 
@@ -1735,22 +2014,191 @@ final class VirtualTerminal implements TerminalHandler {
   void osc(int command, String payload) {
     switch (command) {
       case 0:
+        _markDirty();
         iconTitle = payload;
         windowTitle = payload;
         onTitleChanged?.call(payload);
       case 1:
+        _markDirty();
         iconTitle = payload;
       case 2:
+        _markDirty();
         windowTitle = payload;
         onTitleChanged?.call(payload);
       case 7:
+        _markDirty();
         _handleOsc7(payload);
       case 8:
+        _markDirty();
         _handleOsc8(payload);
+      case 9:
+        _handleOsc9(payload);
+      case 10:
+        _handleOsc10(payload);
+      case 11:
+        _handleOsc11(payload);
       case 52:
         _handleOsc52(payload);
+      case 99:
+        _handleOsc99(payload);
       case 133:
+        _markDirty();
         _handleOsc133(payload);
+      default:
+        _handleOscUnknown(command, payload);
+    }
+  }
+
+  static String _formatX11Rgb(Color color) {
+    final r = (color.r * 0x101).toRadixString(16).padLeft(4, '0');
+    final g = (color.g * 0x101).toRadixString(16).padLeft(4, '0');
+    final b = (color.b * 0x101).toRadixString(16).padLeft(4, '0');
+    return 'rgb:$r/$g/$b';
+  }
+
+  void _handleOsc9(String payload) {
+    if (_conEmuOsc9Regex.hasMatch(payload)) return;
+    onNotification?.call('', payload);
+  }
+
+  void _handleOsc10(String payload) {
+    if (payload == '?' || payload.startsWith('?')) {
+      final fg = defaultForeground ?? const Color(255, 255, 255);
+      onReply?.call('\x1b]10;${_formatX11Rgb(fg)}\x1b\\');
+    }
+  }
+
+  void _handleOsc11(String payload) {
+    if (payload == '?' || payload.startsWith('?')) {
+      final bg = defaultBackground ?? const Color(0, 0, 0);
+      onReply?.call('\x1b]11;${_formatX11Rgb(bg)}\x1b\\');
+    }
+  }
+
+  void _handleOsc99(String payload) {
+    final semi = payload.indexOf(';');
+    if (semi < 0) {
+      if (payload.contains('=')) {
+        _processKittyOsc99(payload, '');
+      } else if (payload.isNotEmpty) {
+        onNotification?.call('', payload);
+      }
+      return;
+    }
+    final metaPart = payload.substring(0, semi);
+    final bodyPart = payload.substring(semi + 1);
+    if (!metaPart.contains('=') && metaPart.isNotEmpty) {
+      onNotification?.call(metaPart, bodyPart);
+      return;
+    }
+    _processKittyOsc99(metaPart, bodyPart);
+  }
+
+  void _processKittyOsc99(String metaPart, String bodyPart) {
+    final meta = _parseOsc99Meta(metaPart);
+    if (meta.payloadType == 'close') {
+      _pendingOsc99.remove(meta.id);
+      return;
+    }
+    if (meta.payloadType != '' &&
+        meta.payloadType != 'title' &&
+        meta.payloadType != 'body') {
+      return;
+    }
+
+    if (!_pendingOsc99.containsKey(meta.id) &&
+        _pendingOsc99.length >= _maxPendingOsc99) {
+      _pendingOsc99.remove(_pendingOsc99.keys.first);
+    }
+    final pending = _pendingOsc99.putIfAbsent(meta.id, _PendingOsc99.new);
+    if (meta.reportActivation) pending.reportActivation = true;
+    if (meta.reportClose) pending.reportClose = true;
+    final content = _decodeOsc99Payload(bodyPart, isBase64: meta.isBase64);
+    pending.append(
+      content,
+      isBody: meta.payloadType == 'body',
+      maxChars: _maxOsc99Chars,
+    );
+
+    if (meta.done) {
+      _pendingOsc99.remove(meta.id);
+      final titleStr = pending.title.toString();
+      final bodyStr = pending.body.toString();
+      onNotification?.call(titleStr, bodyStr);
+      onOsc99Notification?.call((
+        id: meta.id,
+        title: titleStr,
+        body: bodyStr,
+        reportActivation: pending.reportActivation,
+        reportClose: pending.reportClose,
+      ));
+    }
+  }
+
+  ({
+    String id,
+    String payloadType,
+    bool done,
+    bool isBase64,
+    bool reportActivation,
+    bool reportClose,
+  })
+  _parseOsc99Meta(String metaPart) {
+    var id = '';
+    var payloadType = '';
+    var done = true;
+    var isBase64 = false;
+    var reportActivation = false;
+    var reportClose = false;
+
+    for (final entry in metaPart.split(':')) {
+      final eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      final k = entry.substring(0, eq).trim();
+      final v = entry.substring(eq + 1).trim();
+      switch (k) {
+        case 'i':
+          id = v;
+        case 'p':
+          payloadType = v.toLowerCase();
+        case 'd':
+          done = v != '0';
+        case 'e':
+          isBase64 = v == '1';
+        case 'a':
+          reportActivation = v.split(',').contains('report');
+        case 'c':
+          reportClose = v == '1';
+      }
+    }
+    return (
+      id: id,
+      payloadType: payloadType,
+      done: done,
+      isBase64: isBase64,
+      reportActivation: reportActivation,
+      reportClose: reportClose,
+    );
+  }
+
+  String _decodeOsc99Payload(String body, {required bool isBase64}) {
+    if (!isBase64) return body;
+    try {
+      final cleaned = body.replaceAll(_whitespaceRegex, '');
+      final bytes = base64.decode(base64.normalize(cleaned));
+      return utf8.decode(bytes, allowMalformed: true);
+    } on Exception {
+      return body;
+    }
+  }
+
+  void _handleOscUnknown(int command, String payload) {
+    if (command == -1) {
+      if (payload.startsWith('10;?')) {
+        _handleOsc10('?');
+      } else if (payload.startsWith('11;?')) {
+        _handleOsc11('?');
+      }
     }
   }
 
@@ -1840,6 +2288,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void esc(String command) {
+    _markDirty();
     switch (command) {
       case 'c': // RIS (Reset to Initial State)
         _resetState(fullReset: true);
