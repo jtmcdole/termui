@@ -130,8 +130,10 @@ class LayoutBuilderElement extends Element {
   }
 
   @override
-  int getIntrinsicHeight(int width) => _child?.getIntrinsicHeight(width) ?? 0;
+  int getIntrinsicHeight(int width) =>
+      _child?.getIntrinsicHeight(width) ?? widget.getIntrinsicHeight(width);
 
   @override
-  int getIntrinsicWidth(int height) => _child?.getIntrinsicWidth(height) ?? 0;
+  int getIntrinsicWidth(int height) =>
+      _child?.getIntrinsicWidth(height) ?? widget.getIntrinsicWidth(height);
 }

@@ -27,18 +27,26 @@ class SizedBox extends Widget {
 
   @override
   int getIntrinsicHeight(int width) {
-    if (height != null) return height!;
-    if (child != null) {
-      return child!.getIntrinsicHeight(this.width ?? width);
+    if (height case final h? when h < BoxConstraints.infinity) return h;
+    if (child case final c?) {
+      final childWidth = switch (this.width) {
+        final w? when w < BoxConstraints.infinity => w,
+        _ => width,
+      };
+      return c.getIntrinsicHeight(childWidth);
     }
     return 0;
   }
 
   @override
   int getIntrinsicWidth(int height) {
-    if (width != null) return width!;
-    if (child != null) {
-      return child!.getIntrinsicWidth(this.height ?? height);
+    if (width case final w? when w < BoxConstraints.infinity) return w;
+    if (child case final c?) {
+      final childHeight = switch (this.height) {
+        final h? when h < BoxConstraints.infinity => h,
+        _ => height,
+      };
+      return c.getIntrinsicWidth(childHeight);
     }
     return 0;
   }
@@ -74,14 +82,22 @@ class SizedBoxElement extends SingleChildElement {
   @override
   int getIntrinsicHeight(int width) {
     final sb = widget as SizedBox;
-    if (sb.height != null) return sb.height!;
-    return childElement?.getIntrinsicHeight(sb.width ?? width) ?? 0;
+    if (sb.height case final h? when h < BoxConstraints.infinity) return h;
+    final childWidth = switch (sb.width) {
+      final w? when w < BoxConstraints.infinity => w,
+      _ => width,
+    };
+    return childElement?.getIntrinsicHeight(childWidth) ?? 0;
   }
 
   @override
   int getIntrinsicWidth(int height) {
     final sb = widget as SizedBox;
-    if (sb.width != null) return sb.width!;
-    return childElement?.getIntrinsicWidth(sb.height ?? height) ?? 0;
+    if (sb.width case final w? when w < BoxConstraints.infinity) return w;
+    final childHeight = switch (sb.height) {
+      final h? when h < BoxConstraints.infinity => h,
+      _ => height,
+    };
+    return childElement?.getIntrinsicWidth(childHeight) ?? 0;
   }
 }
