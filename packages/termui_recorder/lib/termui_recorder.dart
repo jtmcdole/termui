@@ -1,5 +1,5 @@
 /// Testing and recording utilities for termui, supporting ANSI screenshots,
-/// PNG rendering, Asciinema v2 formats, and Animated PNGs.
+/// Asciicast v2/v3 recording and playback, and golden visual matchers.
 library;
 
 export 'src/ansi_parser.dart';

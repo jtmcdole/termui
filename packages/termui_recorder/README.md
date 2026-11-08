@@ -19,18 +19,18 @@ class AnsiScreenshot {
 ```
 
 ### Capturing Mechanism
-`AnsiScreenshot.capture` processes the input `Buffer` cell-by-cell, traversing the coordinates row-by-row (`y` index from `0` to `height - 1`) and column-by-column (`x` index from `0` to `width - 1`).
+`AnsiScreenshot.capture` delegates to `BufferAnsiSerialization(buffer).toAnsiString(trimTrailingSpaces: true, resetLineEndings: resetLineEndings)`, traversing the `Buffer` row-by-row (`y` from `0` to `height - 1`) and column-by-column (`x` from `0` to `width - 1`).
 
 1. **Cell Retrieval & Character Skipping**:
-   * It calls `buffer.getCell(x, y)` to retrieve the `Cell` at the current coordinates.
-   * If the cell is `null` or its character is empty (`cell.char == ''`), it is skipped. This naturally handles wide character padding cells (which are represented by empty strings to prevent double rendering of the second half of a wide character/emoji).
+   * It reads each cell's grapheme string via `buffer.getCharacter(x, y)` and attributes via `buffer.getForeground(x, y)`, `buffer.getBackground(x, y)`, and `buffer.getModifiers(x, y)`.
+   * Empty continuation cells (`char == ''`) are skipped so wide characters and emojis are not emitted twice.
+   * Trailing unstyled spaces at the end of a row are trimmed unless styled with a non-transparent background or underline/strikethrough/reverse modifier.
 2. **Style Transition Tracking**:
    * It maintains a running state of the active style, initialized to `Style.empty`.
-   * For each valid cell, it determines the styling transition from the current active style to the cell's style by calling the internal `_writeStyleTransition` method.
-   * It appends the resulting ANSI escape sequences to the output `StringBuffer` and then writes the character cluster (`cell.char`).
+   * For each rendered cell, it emits the ANSI SGR transition from the active style to the cell's style and appends the grapheme string.
 3. **Line Endings & Final Reset**:
-   * If `resetLineEndings` is `true` and the active style at the end of a row is not `Style.empty`, it appends `\x1b[0m` to reset cell formatting before appending a newline (`\n`). This ensures style leaking does not occur across line breaks in standard text viewports.
-   * After completing the loop, a final check is run: if the active style is not empty, it appends a final `\x1b[0m` reset code to ensure the terminal output stream is left clean.
+   * If `resetLineEndings` is `true` and the active style at the end of a row is not `Style.empty`, it appends `\x1b[0m` before the newline (`\n`).
+   * After completing the loop, if the active style is not empty, it appends a final `\x1b[0m` reset sequence.
 
 ### Style Transition Generation (`_writeStyleTransition`)
 The transition logic is optimized to write the shortest possible style modifiers. If the current style matches the target style, it returns immediately without writing anything.
@@ -92,8 +92,8 @@ The `AsciicastRecorder` tracks terminal frame updates and formats them as a stre
 
 ```dart
 class AsciicastRecorder {
-  final int width;
-  final int height;
+  int width;
+  int height;
 
   AsciicastRecorder(
     AsciicastWriter writer, {
@@ -141,6 +141,19 @@ class AsciicastRecorder {
 ## 3. Asciicast Playback (`AsciicastPlayer`)
 
 The `AsciicastPlayer` reads an Asciinema Asciicast recording and reproduces the terminal states inside a physical or mock terminal. It supports variable playback speeds and interactive time-travel controls in standard terminal raw modes.
+
+### CLI Playback Tool (`bin/termui_play.dart`)
+You can play back `.cast` and compressed `.cast.gz` files directly from the command line:
+
+```bash
+dart run termui_recorder:termui_play [options] <file.cast|file.cast.gz>
+```
+
+Supported CLI flags:
+* `-s`, `--speed`: Playback speed multiplier (default `1.0`).
+* `-n`, `--no-interactive`: Disable interactive raw-mode time-travel controls.
+* `-p`, `--paused`: Start playback in a paused state.
+* `-k`, `--keep-alive`: Keep the player open when the recording finishes instead of exiting.
 
 ### API Signature
 ```dart
@@ -263,3 +276,4 @@ A test matcher used for visual regression testing of TUI layouts.
   * If the environment variable `GENERATE_GOLDENS` or `UPDATE_GOLDENS` is set to `'true'`, it creates or updates the target golden file on disk with the current buffer output and returns `true`.
   * Otherwise, it reads the expected ANSI representation from the golden file and performs an exact string comparison.
   * If the golden file does not exist, it writes the current output to a `.fail` file adjacent to the expected path for visual debugging.
+  * On a mismatch, it writes a `.fail` file, a red-highlighted visual diff file (`$goldenPath.diff`), and a 3-frame Asciicast comparison slideshow (`$goldenPath.cast` containing Expected, Actual, and Diff frames).
