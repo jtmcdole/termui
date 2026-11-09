@@ -1,10 +1,28 @@
+import 'dart:typed_data';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/termui.dart' as termui;
+import 'package:termui_flutter/src/rendering/painter.dart';
 import 'package:termui_flutter/src/service/terminal_service.dart';
+import 'package:termui_flutter/src/terminal.dart' show PrivateTuiView;
 import 'package:termui_flutter/termui_flutter.dart';
+
+Uint8List _pngIhdrHeader(int width, int height) {
+  final header = BytesBuilder()
+    ..add(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    ..add(const [0x00, 0x00, 0x00, 0x0D])
+    ..add(const [0x49, 0x48, 0x44, 0x52]);
+  final dims = ByteData(8)
+    ..setUint32(0, width)
+    ..setUint32(4, height);
+  header
+    ..add(dims.buffer.asUint8List())
+    ..add(const [0x08, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+  return header.toBytes();
+}
 
 class FakeTerminalService implements TerminalService {
   String? clipboardText;
@@ -307,6 +325,227 @@ void main() {
         // Extracted text should only contain left pane text
         expect(service.clipboardText, isNotNull);
         expect(service.clipboardText, isNot(contains('Right Pane')));
+      },
+    );
+
+    testWidgets(
+      'enableBuiltinSelection: false and enableBuiltinLinkOpen: false delegate pointer handling to host',
+      (tester) async {
+        final buffer = termui.Buffer(40, 10);
+        buffer.writeString(0, 0, 'Delegated Link Text', const termui.Style());
+        for (var x = 0; x < 19; x++) {
+          buffer.setUri(x, 0, 'https://example.com/delegated');
+        }
+
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        final injectedEvents = <termui.MouseEvent>[];
+        final sub = terminal.events.listen((event) {
+          if (event is termui.MouseEvent) {
+            injectedEvents.add(event);
+          }
+        });
+        addTearDown(sub.cancel);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Terminal(
+              terminal: terminal,
+              service: service,
+              selectionController: selectionController,
+              enableBuiltinSelection: false,
+              enableBuiltinLinkOpen: false,
+              fontSize: 14.0,
+              onRun: (_, drawFrame) async {
+                drawFrame(buffer);
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final customPaintFinder = find.byType(CustomPaint).last;
+        final topLeft = tester.getTopLeft(customPaintFinder);
+        final p1 = topLeft + const Offset(10.0, 5.0);
+        final p2 = topLeft + const Offset(120.0, 5.0);
+
+        // Dragging does not activate built-in selection or copy to clipboard.
+        final drag = await tester.startGesture(
+          p1,
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await drag.moveTo(p2);
+        await tester.pump();
+        await drag.up();
+        await tester.pump();
+
+        expect(selectionController.isSelecting, isFalse);
+        expect(selectionController.hasSelection, isFalse);
+        expect(service.clipboardText, isNull);
+        expect(injectedEvents, isNotEmpty);
+
+        // Ctrl+Click does not open URL via built-in handler.
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+        final click = await tester.startGesture(
+          p1,
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await click.up();
+        await tester.pump();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+
+        expect(service.openedUrl, isNull);
+      },
+    );
+
+    testWidgets(
+      'runtime setEnableBuiltinSelection/LinkOpen, exactCellPixelSize, paste KeyUpEvent suppression, and PNG IHDR guard work end-to-end',
+      (tester) async {
+        final buffer = termui.Buffer(40, 10);
+        buffer.writeString(0, 0, 'Runtime Link Text', const termui.Style());
+        for (var x = 0; x < 17; x++) {
+          buffer.setUri(x, 0, 'https://example.com/runtime');
+        }
+
+        // Register a mismatched/oversized PNG (pixelWidth=2, IHDR=20000x20000) to verify decode guard.
+        final registry = termui.KittyImageRegistry();
+        final bombData = termui.KittyImageData.fromPng(
+          imageId: 99,
+          pixelWidth: 2,
+          pixelHeight: 2,
+          pngBytes: _pngIhdrHeader(20000, 20000),
+          gridCols: 1,
+          gridRows: 1,
+        );
+        registry.registerImage(bombData);
+        buffer
+          ..registerKittyRegistry(const termui.Rect(0, 0, 40, 10), registry)
+          ..setAttributes(
+            0,
+            2,
+            char: termui.kittyPlaceholderCell(0, 0),
+            fg: 0xFF000063,
+            bg: 0xFF000000,
+            modifiers: termui.Modifier.kittyPlaceholder,
+          );
+
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        final exactEmissions = <(double, double)>[];
+        final exactSub = terminal.watchExactCellPixelSize().listen(
+          exactEmissions.add,
+        );
+        addTearDown(exactSub.cancel);
+        final keyEvents = <termui.KeyEvent>[];
+        final eventSub = terminal.events.listen((event) {
+          if (event is termui.KeyEvent) keyEvents.add(event);
+        });
+        addTearDown(eventSub.cancel);
+
+        service.clipboardText = 'pasted';
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Terminal(
+              terminal: terminal,
+              service: service,
+              selectionController: selectionController,
+              fontSize: 13.5,
+              onRun: (_, drawFrame) async {
+                drawFrame(buffer);
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // 1. exactCellPixelSize reports finite > 0 metrics alongside rounded cellPixelSize.
+        expect(terminal.exactCellPixelSize.$1, greaterThan(0.0));
+        expect(terminal.exactCellPixelSize.$2, greaterThan(0.0));
+        expect(
+          terminal.cellPixelSize,
+          equals((
+            terminal.exactCellPixelSize.$1.round(),
+            terminal.exactCellPixelSize.$2.round(),
+          )),
+        );
+        terminal.setFontSize(17.25);
+        await tester.pumpAndSettle();
+        expect(exactEmissions, isNotEmpty);
+
+        // 2. Mismatched/oversized PNG IHDR is rejected before instantiateImageCodec allocates GPU texture.
+        final paintWidget = tester.widget<CustomPaint>(
+          find.descendant(
+            of: find.byType(PrivateTuiView),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        final painter = paintWidget.painter! as TuiAtlasPainter;
+        expect(painter.kittyImages.containsKey(bombData), isFalse);
+
+        // 3. Runtime setEnableBuiltinSelection(false) clears active selection and stops auto-copy.
+        selectionController
+          ..startSelection(0, 0)
+          ..updateSelection(5, 0);
+        expect(selectionController.hasSelection, isTrue);
+        service.clipboardText = null;
+        terminal
+          ..setEnableBuiltinSelection(false)
+          ..setEnableBuiltinLinkOpen(false);
+        await tester.pump();
+        expect(selectionController.hasSelection, isFalse);
+
+        final topLeft = tester.getTopLeft(find.byType(CustomPaint).last);
+        final drag = await tester.startGesture(
+          topLeft + const Offset(10.0, 5.0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await drag.moveTo(topLeft + const Offset(90.0, 5.0));
+        await tester.pump();
+        await drag.up();
+        await tester.pump();
+        expect(selectionController.hasSelection, isFalse);
+        expect(service.clipboardText, isNull);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+        final click = await tester.startGesture(
+          topLeft + const Offset(10.0, 5.0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await click.up();
+        await tester.pump();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+        expect(service.openedUrl, isNull);
+
+        // 4. Host paste shortcut (Cmd+V) suppresses orphan KeyUpEvent for 'v' when reportKeyReleaseEvents is enabled.
+        service.clipboardText = 'clip';
+        terminal.setReportKeyReleaseEvents(true);
+        keyEvents.clear();
+        final focusFinder = find.descendant(
+          of: find.byType(PrivateTuiView),
+          matching: find.byType(Focus),
+        );
+        tester.widget<Focus>(focusFinder).focusNode?.requestFocus();
+        await tester.pump();
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyV);
+        await tester.pump();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump();
+
+        expect(
+          keyEvents.where((e) => e.key == 'v' || e.baseKey == 'v'),
+          isEmpty,
+        );
       },
     );
   });
