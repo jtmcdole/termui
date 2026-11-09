@@ -73,5 +73,7 @@ export 'src/rendering/atlas.dart'
     show GlyphAtlas, GlyphAtlasGenerator, GlyphStyleVariant;
 export 'src/util/file_saver.dart' show saveFile;
 export 'src/util/font_helper.dart' show waitForFontsToLoad;
+export 'src/util/url_launcher.dart'
+    show isAllowedExternalUrl, parseAllowedExternalUri;
 export 'package:termui/ui/widgets/interactive/selection_controller.dart'
     show TerminalSelectionController, SelectionMode, SelectionRegion;
