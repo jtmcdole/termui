@@ -3,6 +3,9 @@ description: Shared example widgets and screens for termui and termui_flutter.
 version: 0.0.1
 publish_to: none
 
+executables:
+  ktty_probe:
+
 resolution: workspace
 
 environment:
