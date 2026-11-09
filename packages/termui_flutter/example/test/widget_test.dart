@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -140,4 +139,84 @@ void main() {
     await tester.pump(const Duration(milliseconds: 200));
     await tester.pump(const Duration(milliseconds: 100));
   });
+
+  testWidgets(
+    'App routes to KTTY Probe wrapped in VirtualTerminal and cleans up on unmount',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const MainApp(initialQuery: {'demo': 'ktty-probe'}),
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+
+      final homeState = tester.state<TermUIWebHomeState>(
+        find.byType(TermUIWebHome),
+      );
+      expect(homeState.currentDemo, equals(TuiDemo.kttyProbe));
+
+      // Verify KTTY Probe (VirtualTerminal) appears in the Switch Demo dialog.
+      await tester.tap(find.byIcon(Icons.swap_horiz));
+      await tester.pumpAndSettle();
+      expect(find.text('KTTY Probe (VirtualTerminal)'), findsOneWidget);
+
+      final tuiFuture = homeState.tuiFuture;
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() async {
+        await tuiFuture?.timeout(const Duration(seconds: 2));
+      });
+    },
+  );
+
+  testWidgets(
+    'No floating Ligatures button is shown on any page; F9 toggles multi-cell ligatures and Cascadia Code font',
+    (WidgetTester tester) async {
+      await tester.pumpWidget(
+        const MainApp(initialQuery: {'demo': 'ktty-probe'}),
+      );
+      await tester.pump(const Duration(milliseconds: 150));
+
+      Terminal termWidget() => tester.widget<Terminal>(find.byType(Terminal));
+      // Floating Ligatures button must not appear on ktty-probe or any other page.
+      expect(find.textContaining('Ligatures:'), findsNothing);
+      expect(find.byIcon(Icons.code), findsNothing);
+      expect(termWidget().enableLigatures, isTrue);
+      expect(termWidget().fontFamily, equals('Cascadia Code'));
+      // Kitty keyboard flags (0x0b) synced from VirtualTerminal drive key-release reporting.
+      expect(termWidget().terminal!.kittyKeyboardFlags, equals(0x0b));
+      expect(termWidget().terminal!.reportKeyReleaseEvents, isTrue);
+
+      // Press F9 -> OFF + MesloLGS NF.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.f9);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.f9);
+      await tester.pump();
+      expect(termWidget().enableLigatures, isFalse);
+      expect(termWidget().fontFamily, equals('MesloLGS NF'));
+
+      // Press F9 -> ON + Cascadia Code.
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.f9);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.f9);
+      await tester.pump();
+      expect(termWidget().enableLigatures, isTrue);
+      expect(termWidget().fontFamily, equals('Cascadia Code'));
+
+      // Switch demo to Widget Book; manual F9 ligature choice must be preserved on exit,
+      // and no floating Ligatures button appears on Widget Book either.
+      await tester.tap(find.byIcon(Icons.swap_horiz));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Widget Book'));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.textContaining('Ligatures:'), findsNothing);
+      expect(termWidget().enableLigatures, isTrue);
+      expect(termWidget().terminal!.kittyKeyboardFlags, equals(0));
+      expect(termWidget().terminal!.reportKeyReleaseEvents, isFalse);
+
+      final homeState = tester.state<TermUIWebHomeState>(
+        find.byType(TermUIWebHome),
+      );
+      final tuiFuture = homeState.tuiFuture;
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() async {
+        await tuiFuture?.timeout(const Duration(seconds: 2));
+      });
+    },
+  );
 }

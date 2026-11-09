@@ -11,6 +11,7 @@ import 'widget_book.dart';
 
 import 'package:termui_shared_examples/glass_compositing/glass_compositing.dart';
 import 'package:termui_shared_examples/glass_compositing/pty_glass_runner.dart';
+import 'package:termui_shared_examples/ktty_probe/ktty_probe.dart';
 import 'package:termui_shared_examples/widget_book/events.dart';
 import 'package:core_bus/core_bus.dart';
 import 'url_helper.dart';
@@ -27,6 +28,7 @@ import 'package:termui/perf/tracer.dart';
 enum TuiDemo {
   widgetBook('Widget Book', 'widgetbook'),
   kittyProtocol('Kitty Protocol (KTTY)', 'ktty'),
+  kttyProbe('KTTY Probe (VirtualTerminal)', 'ktty-probe'),
   glassCompositing('Glass Compositing', 'glass'),
   ptyGlassCompositing('PTY Glass Compositing', 'pty'),
   asciicastPlayer('Asciicast Player', 'player'),
@@ -39,6 +41,7 @@ enum TuiDemo {
   static TuiDemo? fromQuery(String? value) => switch (value) {
     'widgetbook' => TuiDemo.widgetBook,
     'ktty' => TuiDemo.kittyProtocol,
+    'ktty-probe' => TuiDemo.kttyProbe,
     'glass' => TuiDemo.glassCompositing,
     'pty' => TuiDemo.ptyGlassCompositing,
     'player' => TuiDemo.asciicastPlayer,
@@ -116,6 +119,18 @@ final class TermUIWebHome extends StatefulWidget {
 }
 
 class TermUIWebHomeState extends State<TermUIWebHome> {
+  static const List<String> _defaultFontFallback = [
+    'Noto Color Emoji',
+    'Cascadia Mono',
+  ];
+  static const List<String> _ligatureFontFallback = [
+    'Fira Code',
+    'JetBrains Mono',
+    'MesloLGS NF',
+    'Noto Color Emoji',
+    'Cascadia Mono',
+  ];
+
   late final FlutterTerminal _terminal;
 
   TuiDemo currentDemo = TuiDemo.asciicastPlayer;
@@ -124,6 +139,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
   StreamSubscription<Object?>? _urlChangesSub;
   StreamSubscription<void>? _uploadRequestedSub;
   StreamSubscription<void>? _uploadTraceRequestedSub;
+  StreamSubscription<bool>? _ligaturesSub;
+  bool _ligaturesEnabled = false;
+  bool _userToggledLigatures = false;
   bool _switching = false;
   bool _tuiRunning = false;
   void Function(Buffer)? _onDrawFrame;
@@ -143,8 +161,17 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         _recordingViewModel.toggleAsciicast(_terminal);
         return true;
       }
+      if (event.logicalKey == LogicalKeyboardKey.f9) {
+        _toggleUserLigatures();
+        return true;
+      }
     }
     return false;
+  }
+
+  void _toggleUserLigatures() {
+    _userToggledLigatures = true;
+    _terminal.toggleLigatures();
   }
 
   @override
@@ -158,6 +185,10 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     HardwareKeyboard.instance.addHandler(_handleGlobalKey);
     _log('main.dart: initState() started');
     _terminal = FlutterTerminal();
+    _ligaturesEnabled = _terminal.enableLigatures;
+    _ligaturesSub = _terminal.watchEnableLigatures().listen(
+      _onLigaturesChanged,
+    );
 
     final query = widget.initialQuery ?? getUrlParams();
     currentDemo = TuiDemo.fromQuery(query['demo']) ?? TuiDemo.glassCompositing;
@@ -179,6 +210,13 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
 
   void _onRecordingStateChanged() {
     if (mounted) setState(() {});
+  }
+
+  void _onLigaturesChanged(bool enabled) {
+    if (!mounted || _ligaturesEnabled == enabled) return;
+    setState(() {
+      _ligaturesEnabled = enabled;
+    });
   }
 
   void _onPageChanged(String pageName) {
@@ -243,6 +281,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
     _urlChangesSub?.cancel();
     _uploadRequestedSub?.cancel();
     _uploadTraceRequestedSub?.cancel();
+    _ligaturesSub?.cancel();
     if (_tuiRunning) {
       _terminal.injectEvent(
         const termui.KeyEvent(
@@ -274,6 +313,9 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           onFrameRedrawn: onDrawFrame,
           initialPage: 'kittyProtocol',
         );
+      case TuiDemo.kttyProbe:
+        _log('main.dart: Running KTTY Probe inside VirtualTerminal');
+        await _runKttyProbeDemo(onDrawFrame);
       case TuiDemo.glassCompositing:
         _log('main.dart: Running Glass Compositing');
         await runGlassCompositingShared(
@@ -297,6 +339,27 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
         );
         _initialTraceBytes = null;
         _initialTraceFilename = null;
+    }
+  }
+
+  Future<void> _runKttyProbeDemo(void Function(Buffer) onDrawFrame) async {
+    final prevLigatures = _terminal.enableLigatures;
+    if (!_userToggledLigatures) {
+      _terminal.setEnableLigatures(true);
+    }
+    final (cellPxW, cellPxH) = _terminal.cellPixelSize;
+    try {
+      await runVirtualTerminalKttyProbe(
+        _terminal,
+        onFrameRedrawn: onDrawFrame,
+        cellPixelWidth: cellPxW,
+        cellPixelHeight: cellPxH,
+        cellPixelSizeChanges: _terminal.watchCellPixelSize(),
+      );
+    } finally {
+      if (mounted && !_userToggledLigatures) {
+        _terminal.setEnableLigatures(prevLigatures);
+      }
     }
   }
 
@@ -387,6 +450,7 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
           _buildDemoDialogButton(dialogContext, TuiDemo.traceViewer),
           _buildDemoDialogButton(dialogContext, TuiDemo.widgetBook),
           _buildDemoDialogButton(dialogContext, TuiDemo.kittyProtocol),
+          _buildDemoDialogButton(dialogContext, TuiDemo.kttyProbe),
           _buildDemoDialogButton(dialogContext, TuiDemo.glassCompositing),
           _buildDemoDialogButton(dialogContext, TuiDemo.ptyGlassCompositing),
         ],
@@ -529,36 +593,42 @@ class TermUIWebHomeState extends State<TermUIWebHome> {
                 child: Terminal(
                   terminal: _terminal,
                   fontSize: _currentFontSize,
-                  fontFamily: 'MesloLGS NF',
-                  fontFamilyFallback: const [
-                    'Noto Color Emoji',
-                    'Cascadia Mono',
-                  ],
+                  enableLigatures: _ligaturesEnabled,
+                  fontFamily: _ligaturesEnabled
+                      ? 'Cascadia Code'
+                      : 'MesloLGS NF',
+                  fontFamilyFallback: _ligaturesEnabled
+                      ? _ligatureFontFallback
+                      : _defaultFontFallback,
                   onRun: _onTerminalRun,
                 ),
               ),
             ),
           ),
-          Positioned(
-            top: 16.0,
-            right: 16.0,
-            child: Material(
-              color: Colors.transparent,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.black.withAlpha(150),
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-                child: IconButton(
-                  icon: const Icon(Icons.swap_horiz, color: Colors.white70),
-                  tooltip: 'Switch TUI App',
-                  onPressed: _showSwitchDemoDialog,
-                ),
-              ),
-            ),
-          ),
+          _buildTopRightControls(),
           if (isRecording) _buildRecordingBadge(),
         ],
+      ),
+    );
+  }
+
+  Widget _buildTopRightControls() {
+    return Positioned(
+      top: 16.0,
+      right: 16.0,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.black.withAlpha(150),
+            borderRadius: BorderRadius.circular(8.0),
+          ),
+          child: IconButton(
+            icon: const Icon(Icons.swap_horiz, color: Colors.white70),
+            tooltip: 'Switch TUI App',
+            onPressed: _showSwitchDemoDialog,
+          ),
+        ),
       ),
     );
   }
