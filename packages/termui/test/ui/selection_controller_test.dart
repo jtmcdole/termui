@@ -31,6 +31,7 @@ void main() {
     test(
       'exports match across termui, selection_controller, and terminal_selection_controller',
       () {
+        expect(SelectionMode.normal, same(SelectionMode.character));
         expect(SelectionMode.stream, same(SelectionMode.character));
         expect(SelectionMode.box, same(SelectionMode.block));
         expect(
@@ -431,6 +432,174 @@ void main() {
         controller.startSelection(3, 3);
         expect(notifyCount, equals(3));
       });
+    });
+
+    group('Virtual offsets, wide snapping, and resolveLinkSpanAt', () {
+      test(
+        'visibleRowSpans and extractVirtualText handle scrollback offsets, soft wraps, and wide graphemes',
+        () {
+          final lines = <VirtualLineSlice>[
+            (
+              isWrapped: false,
+              characters: ['A', '🔥', '', 'B', 'Z'],
+              uris: null,
+            ),
+            (
+              isWrapped: true,
+              characters: ['C', 'D', ' ', ' ', ' '],
+              uris: null,
+            ),
+            (
+              isWrapped: false,
+              characters: ['E', 'F', ' ', ' ', ' '],
+              uris: null,
+            ),
+          ];
+          VirtualLineSlice? lookup(int y) =>
+              y >= 0 && y < lines.length ? lines[y] : null;
+
+          // Select from right-half continuation of '🔥' (col 2, row 0) through (col 1, row 2).
+          controller.startSelection(2, 0, mode: SelectionMode.normal);
+          controller.updateSelection(1, 2);
+          expect(controller.extractVirtualText(lookup, cols: 5), '🔥BZCD\nEF');
+
+          // Viewport showing virtual rows 0..1:
+          final viewport = Buffer.blank(5, 2)
+            ..writeString(0, 0, 'A🔥BZ', const Style())
+            ..writeString(0, 1, 'CD', const Style());
+          expect(
+            controller.visibleRowSpans(viewport, topVirtualRow: 0),
+            equals([(0, 1, 4), (1, 0, 4)]),
+          );
+          expect(controller.containsCell(2, 0, topVirtualRow: 0), isTrue);
+          expect(controller.containsCell(0, 0, topVirtualRow: 1), isTrue);
+        },
+      );
+
+      test(
+        'resolveLinkSpanAt resolves contiguous OSC 8 spans across wraps before plain-text https and mailto',
+        () {
+          final lines = <VirtualLineSlice>[
+            (
+              isWrapped: false,
+              characters: 'See Click'.split(''),
+              uris: [
+                null,
+                null,
+                null,
+                null,
+                ...List<String?>.filled(5, 'https://dart.dev/docs'),
+              ],
+            ),
+            (
+              isWrapped: true,
+              characters: ' Here mailto:dev@dart.dev!'.split(''),
+              uris: [
+                ...List<String?>.filled(5, 'https://dart.dev/docs'),
+                ...List<String?>.filled(21, null),
+              ],
+            ),
+            (
+              isWrapped: false,
+              characters: 'Evil https://safe.example/ok'.split(''),
+              uris: [
+                ...List<String?>.filled(4, 'javascript:alert(1)'),
+                ...List<String?>.filled(24, null),
+              ],
+            ),
+          ];
+          VirtualLineSlice? lookup(int y) =>
+              y >= 0 && y < lines.length ? lines[y] : null;
+
+          // 1. Multi-row wrapped OSC 8 span resolves full start..end across rows 0..1.
+          final osc8Span = TerminalSelectionController.resolveLinkSpanAt(
+            lookup: lookup,
+            col: 2,
+            virtualRow: 1,
+          );
+          expect(
+            osc8Span,
+            equals((
+              uri: 'https://dart.dev/docs',
+              startCol: 4,
+              startRow: 0,
+              endCol: 4,
+              endRow: 1,
+            )),
+          );
+
+          // 2. Plain-text mailto: fallback strips trailing '!'.
+          final mailtoSpan = TerminalSelectionController.resolveLinkSpanAt(
+            lookup: lookup,
+            col: 12,
+            virtualRow: 1,
+          );
+          expect(
+            mailtoSpan,
+            equals((
+              uri: 'mailto:dev@dart.dev',
+              startCol: 6,
+              startRow: 1,
+              endCol: 24,
+              endRow: 1,
+            )),
+          );
+
+          // 3. Hostile javascript: OSC 8 URI is rejected, while plain https:// works.
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: lookup,
+              col: 1,
+              virtualRow: 2,
+            ),
+            isNull,
+          );
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: lookup,
+              col: 10,
+              virtualRow: 2,
+            )?.uri,
+            equals('https://safe.example/ok'),
+          );
+        },
+      );
+
+      test(
+        'extractVirtualText preserves newlines across split-pane rows even when line.isWrapped is true',
+        () {
+          final lines = <VirtualLineSlice>[
+            (
+              isWrapped: false,
+              characters: 'Left0│Right0'.split(''),
+              uris: null,
+            ),
+            (isWrapped: true, characters: 'Left1│Right1'.split(''), uris: null),
+            (isWrapped: true, characters: 'Left2│Right2'.split(''), uris: null),
+          ];
+          VirtualLineSlice? lookup(int y) =>
+              y >= 0 && y < lines.length ? lines[y] : null;
+
+          controller
+            ..startSelection(
+              0,
+              0,
+              mode: SelectionMode.normal,
+              region: const SelectionRegion(
+                minCol: 0,
+                maxCol: 4,
+                minRow: 0,
+                maxRow: 2,
+              ),
+            )
+            ..updateSelection(4, 2);
+
+          expect(
+            controller.extractVirtualText(lookup, cols: 12),
+            equals('Left0\nLeft1\nLeft2'),
+          );
+        },
+      );
     });
   });
 }
