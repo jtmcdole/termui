@@ -181,6 +181,10 @@ final class VirtualTerminal implements TerminalHandler {
   /// Scoped Kitty Graphics image registry owned by this terminal instance.
   final KittyImageRegistry imageRegistry = KittyImageRegistry();
 
+  /// Monotonically increasing revision of [imageRegistry], incremented on
+  /// `APC G` image mutations and terminal resets.
+  int get imageRegistryRevision => imageRegistry.revision;
+
   final Buffer _primaryBuffer;
   final ScrollbackBuffer _scrollback;
   List<bool> _primaryWrapped;
@@ -515,9 +519,10 @@ final class VirtualTerminal implements TerminalHandler {
   /// Whether alternate scroll mode (`DECSET 1007`, `?1007h` / `?1007l`) is enabled.
   bool get alternateScrollMode => _alternateScrollMode;
 
-  static const Duration _syncSafetyTimeout = Duration(milliseconds: 100);
+  static const Duration _defaultSyncSafetyTimeout = Duration(milliseconds: 100);
   static const int _maxSyncBatchCount = 100;
 
+  final Duration? _syncSafetyTimeout;
   bool _inSyncUpdate = false;
   Timer? _syncSafetyTimer;
   int _syncBatchCount = 0;
@@ -644,6 +649,7 @@ final class VirtualTerminal implements TerminalHandler {
     this.defaultForeground,
     this.defaultBackground,
     int maxScrollbackLines = 0,
+    Duration? syncSafetyTimeout = _defaultSyncSafetyTimeout,
     this.onReply,
     this.onNotification,
   }) : width = math.max(1, width),
@@ -652,6 +658,7 @@ final class VirtualTerminal implements TerminalHandler {
        _cellPixelHeight = math.max(1, cellPixelHeight),
        _scrollBottom = math.max(1, height) - 1,
        _scrollback = ScrollbackBuffer(maxLines: maxScrollbackLines),
+       _syncSafetyTimeout = syncSafetyTimeout,
        _primaryWrapped = List<bool>.filled(math.max(1, height), false),
        _primaryBuffer = _createBuffer(
          math.max(1, width),
@@ -764,7 +771,10 @@ final class VirtualTerminal implements TerminalHandler {
       _inSyncUpdate = true;
       _syncBatchCount = 0;
       _syncSafetyTimer?.cancel();
-      _syncSafetyTimer = Timer(_syncSafetyTimeout, _onSyncSafetyTimeout);
+      final timeout = _syncSafetyTimeout;
+      _syncSafetyTimer = timeout != null
+          ? Timer(timeout, _onSyncSafetyTimeout)
+          : null;
       return;
     }
     _syncSafetyTimer?.cancel();

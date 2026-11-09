@@ -322,7 +322,11 @@ final class KittyApcHandler {
 
     try {
       final rawBytes = _decodePayloadBytes(pending);
-      final imageData = _buildImageData(pending, rawBytes);
+      final existing = registry.lookupImage(pending.imageId);
+      final rawData = _buildImageData(pending, rawBytes);
+      final imageData = existing != null
+          ? rawData.copyWith(version: existing.version + 1)
+          : rawData;
       registry.registerImage(imageData);
       if (pending.action == 'T' && !pending.virtual) {
         onPlaceVirtual(
@@ -395,16 +399,18 @@ final class KittyApcHandler {
     Uint8List rawBytes,
   ) {
     final (ihdrWidth, ihdrHeight) = _extractPngDimensions(rawBytes);
-    final width = pending.width > 0 ? pending.width : ihdrWidth;
-    final height = pending.height > 0 ? pending.height : ihdrHeight;
-    if (!_isValidDimensions(width, height)) {
+    if (!_isValidDimensions(ihdrWidth, ihdrHeight)) {
       throw const _InvalidPayloadException();
     }
-    final (cols, rows) = _resolveUploadGrid(pending, width, height);
+    if ((pending.width > 0 && pending.width != ihdrWidth) ||
+        (pending.height > 0 && pending.height != ihdrHeight)) {
+      throw const _InvalidPayloadException();
+    }
+    final (cols, rows) = _resolveUploadGrid(pending, ihdrWidth, ihdrHeight);
     return KittyImageData.fromPng(
       imageId: pending.imageId,
-      pixelWidth: width,
-      pixelHeight: height,
+      pixelWidth: ihdrWidth,
+      pixelHeight: ihdrHeight,
       pngBytes: rawBytes,
       gridCols: cols,
       gridRows: rows,
@@ -412,20 +418,24 @@ final class KittyApcHandler {
   }
 
   static (int width, int height) _extractPngDimensions(Uint8List bytes) {
-    if (bytes.length < 24) throw const _InvalidPayloadException();
-    for (var i = 0; i < _pngSignature.length; i++) {
-      if (bytes[i] != _pngSignature[i]) {
-        throw const _InvalidPayloadException();
-      }
-    }
-    if (bytes[12] != 0x49 ||
-        bytes[13] != 0x48 ||
-        bytes[14] != 0x44 ||
-        bytes[15] != 0x52) {
+    if (bytes.length < 24 || !_hasValidPngIhdrMagic(bytes)) {
       throw const _InvalidPayloadException();
     }
     final view = ByteData.sublistView(bytes);
+    if (view.getUint32(8) != 13) {
+      throw const _InvalidPayloadException();
+    }
     return (view.getUint32(16), view.getUint32(20));
+  }
+
+  static bool _hasValidPngIhdrMagic(Uint8List bytes) {
+    for (var i = 0; i < _pngSignature.length; i++) {
+      if (bytes[i] != _pngSignature[i]) return false;
+    }
+    return bytes[12] == 0x49 &&
+        bytes[13] == 0x48 &&
+        bytes[14] == 0x44 &&
+        bytes[15] == 0x52;
   }
 
   static KittyImageData _buildRgb24ImageData(
@@ -520,7 +530,15 @@ final class KittyApcHandler {
         : data.gridRows;
     final isVirtual = (int.tryParse(control['U'] ?? '0') ?? 0) == 1;
     if (isVirtual) {
-      registry.registerImage(data.copyWith(gridCols: cols, gridRows: rows));
+      if (cols != data.gridCols || rows != data.gridRows) {
+        registry.registerImage(
+          data.copyWith(
+            gridCols: cols,
+            gridRows: rows,
+            version: data.version + 1,
+          ),
+        );
+      }
       _replyOk(imageId, hasExplicit, quiet);
       return;
     }
