@@ -249,10 +249,17 @@ final class FlutterTerminal extends core.Terminal {
   final _initialSizeCompleter = Completer<Point<int>>();
   final _fontSizeController = StreamController<double>.broadcast();
   final _enableLigaturesController = StreamController<bool>.broadcast();
+  final _enableBuiltinSelectionController = StreamController<bool>.broadcast();
+  final _enableBuiltinLinkOpenController = StreamController<bool>.broadcast();
   final _cellPixelSizeController = StreamController<(int, int)>.broadcast();
+  final _exactCellPixelSizeController =
+      StreamController<(double, double)>.broadcast();
   double _fontSize;
   bool _enableLigatures;
+  bool _enableBuiltinSelection;
+  bool _enableBuiltinLinkOpen;
   (int, int) _cellPixelSize = (9, 18);
+  (double, double) _exactCellPixelSize = (9.0, 18.0);
   bool _explicitReportKeyRelease = false;
   bool _explicitReportPixelMouse = false;
 
@@ -281,10 +288,18 @@ final class FlutterTerminal extends core.Terminal {
   /// | :--- | :--- | :--- |
   /// | `initialFontSize` | [double] | The starting font size. Defaults to `13.0`. |
   /// | `enableLigatures` | [bool] | Whether multi-cell ligatures are enabled. Defaults to `false`. |
-  FlutterTerminal({double initialFontSize = 13.0, bool enableLigatures = false})
-    : _fontSize = initialFontSize,
-      _enableLigatures = enableLigatures,
-      super(FlutterTerminalBackend());
+  /// | `enableBuiltinSelection` | [bool] | Whether built-in viewport selection is enabled. Defaults to `true`. |
+  /// | `enableBuiltinLinkOpen` | [bool] | Whether built-in `OSC 8` link opening is enabled. Defaults to `true`. |
+  FlutterTerminal({
+    double initialFontSize = 13.0,
+    bool enableLigatures = false,
+    bool enableBuiltinSelection = true,
+    bool enableBuiltinLinkOpen = true,
+  }) : _fontSize = initialFontSize,
+       _enableLigatures = enableLigatures,
+       _enableBuiltinSelection = enableBuiltinSelection,
+       _enableBuiltinLinkOpen = enableBuiltinLinkOpen,
+       super(FlutterTerminalBackend());
 
   FlutterTerminalBackend get _flutterBackend =>
       backend as FlutterTerminalBackend;
@@ -294,6 +309,38 @@ final class FlutterTerminal extends core.Terminal {
 
   /// Whether multi-cell ligatures are currently enabled for rendering.
   bool get enableLigatures => _enableLigatures;
+
+  /// Whether built-in viewport text selection and auto-copy are enabled.
+  bool get enableBuiltinSelection => _enableBuiltinSelection;
+
+  /// Stream emitting updates when [enableBuiltinSelection] changes.
+  Stream<bool> watchEnableBuiltinSelection() =>
+      _enableBuiltinSelectionController.stream;
+
+  /// Updates whether built-in viewport text selection and auto-copy are enabled.
+  void setEnableBuiltinSelection(bool enabled) {
+    if (_enableBuiltinSelection == enabled) return;
+    _enableBuiltinSelection = enabled;
+    if (!_enableBuiltinSelectionController.isClosed) {
+      _enableBuiltinSelectionController.add(enabled);
+    }
+  }
+
+  /// Whether built-in `OSC 8` link hover cursor and click launch are enabled.
+  bool get enableBuiltinLinkOpen => _enableBuiltinLinkOpen;
+
+  /// Stream emitting updates when [enableBuiltinLinkOpen] changes.
+  Stream<bool> watchEnableBuiltinLinkOpen() =>
+      _enableBuiltinLinkOpenController.stream;
+
+  /// Updates whether built-in `OSC 8` link hover cursor and click launch are enabled.
+  void setEnableBuiltinLinkOpen(bool enabled) {
+    if (_enableBuiltinLinkOpen == enabled) return;
+    _enableBuiltinLinkOpen = enabled;
+    if (!_enableBuiltinLinkOpenController.isClosed) {
+      _enableBuiltinLinkOpenController.add(enabled);
+    }
+  }
 
   /// Active Kitty keyboard protocol progressive enhancement flags (`0..31`).
   int get kittyKeyboardFlags => _flutterBackend.kittyKeyboardFlags;
@@ -329,19 +376,39 @@ final class FlutterTerminal extends core.Terminal {
   /// A stream that emits whether ligatures are enabled whenever changed.
   Stream<bool> watchEnableLigatures() => _enableLigaturesController.stream;
 
-  /// Current logical pixel dimensions `(width, height)` of a single terminal cell.
+  /// Current rounded logical pixel dimensions `(width, height)` of a single terminal cell (`CSI 16 t`).
   (int, int) get cellPixelSize => _cellPixelSize;
 
-  /// A stream that emits `(width, height)` cell pixel dimensions whenever the font atlas changes.
+  /// A stream that emits rounded `(width, height)` cell pixel dimensions whenever the font atlas changes.
   Stream<(int, int)> watchCellPixelSize() => _cellPixelSizeController.stream;
 
-  /// Updates the logical pixel dimensions of a single terminal cell (`>= 1`).
+  /// Current exact unrounded logical pixel dimensions `(width, height)` of a single terminal cell.
+  (double, double) get exactCellPixelSize => _exactCellPixelSize;
+
+  /// A stream that emits exact unrounded `(width, height)` cell pixel dimensions whenever the font atlas changes.
+  Stream<(double, double)> watchExactCellPixelSize() =>
+      _exactCellPixelSizeController.stream;
+
+  /// Updates the rounded logical pixel dimensions of a single terminal cell (`>= 1`).
   void updateCellPixelSize(int width, int height) {
     final next = (max(1, width), max(1, height));
     if (_cellPixelSize != next) {
       _cellPixelSize = next;
       if (!_cellPixelSizeController.isClosed) {
         _cellPixelSizeController.add(next);
+      }
+    }
+  }
+
+  /// Updates the exact unrounded logical pixel dimensions of a single terminal cell (`>= 1.0`).
+  void updateExactCellPixelSize(double width, double height) {
+    final safeW = width.isFinite && width > 1.0 ? width : 1.0;
+    final safeH = height.isFinite && height > 1.0 ? height : 1.0;
+    final next = (safeW, safeH);
+    if (_exactCellPixelSize != next) {
+      _exactCellPixelSize = next;
+      if (!_exactCellPixelSizeController.isClosed) {
+        _exactCellPixelSizeController.add(next);
       }
     }
   }
@@ -452,7 +519,10 @@ final class FlutterTerminal extends core.Terminal {
     _eventsController.close();
     _fontSizeController.close();
     _enableLigaturesController.close();
+    _enableBuiltinSelectionController.close();
+    _enableBuiltinLinkOpenController.close();
     _cellPixelSizeController.close();
+    _exactCellPixelSizeController.close();
     _flutterBackend.dispose();
     super.dispose();
   }

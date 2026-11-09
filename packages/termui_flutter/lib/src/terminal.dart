@@ -86,6 +86,12 @@ final class Terminal extends StatefulWidget {
   /// Optional controller managing interactive text selection state.
   final TerminalSelectionController? selectionController;
 
+  /// Whether built-in viewport mouse selection and auto-copy are enabled. Defaults to `true`.
+  final bool enableBuiltinSelection;
+
+  /// Whether built-in `OSC 8` link cursor and click opening are enabled. Defaults to `true`.
+  final bool enableBuiltinLinkOpen;
+
   /// Creates a [Terminal] view bounding the TUI app hierarchy.
   const Terminal({
     super.key,
@@ -99,6 +105,8 @@ final class Terminal extends StatefulWidget {
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
     this.selectionController,
+    this.enableBuiltinSelection = true,
+    this.enableBuiltinLinkOpen = true,
   });
 
   @override
@@ -118,6 +126,8 @@ class _TerminalState extends State<Terminal> {
       _internalTerminal = FlutterTerminal(
         initialFontSize: widget.fontSize,
         enableLigatures: widget.enableLigatures,
+        enableBuiltinSelection: widget.enableBuiltinSelection,
+        enableBuiltinLinkOpen: widget.enableBuiltinLinkOpen,
       )..setEnableLigatures(widget.enableLigatures);
     }
   }
@@ -134,11 +144,24 @@ class _TerminalState extends State<Terminal> {
         _internalTerminal = FlutterTerminal(
           initialFontSize: widget.fontSize,
           enableLigatures: widget.enableLigatures,
+          enableBuiltinSelection: widget.enableBuiltinSelection,
+          enableBuiltinLinkOpen: widget.enableBuiltinLinkOpen,
         );
       }
-    } else if (widget.terminal == null &&
-        oldWidget.enableLigatures != widget.enableLigatures) {
-      _internalTerminal?.setEnableLigatures(widget.enableLigatures);
+    } else if (widget.terminal == null) {
+      if (oldWidget.enableLigatures != widget.enableLigatures) {
+        _internalTerminal?.setEnableLigatures(widget.enableLigatures);
+      }
+      if (oldWidget.enableBuiltinSelection != widget.enableBuiltinSelection) {
+        _internalTerminal?.setEnableBuiltinSelection(
+          widget.enableBuiltinSelection,
+        );
+      }
+      if (oldWidget.enableBuiltinLinkOpen != widget.enableBuiltinLinkOpen) {
+        _internalTerminal?.setEnableBuiltinLinkOpen(
+          widget.enableBuiltinLinkOpen,
+        );
+      }
     }
   }
 
@@ -170,6 +193,10 @@ class _TerminalState extends State<Terminal> {
       enableBleed: widget.enableBleed,
       enableLigatures: widget.enableLigatures,
       selectionController: widget.selectionController,
+      enableBuiltinSelection:
+          widget.enableBuiltinSelection && _terminal.enableBuiltinSelection,
+      enableBuiltinLinkOpen:
+          widget.enableBuiltinLinkOpen && _terminal.enableBuiltinLinkOpen,
       onInit: _startLoop,
     );
   }
@@ -225,6 +252,12 @@ final class PrivateTuiView extends StatefulWidget {
   /// Optional controller managing interactive text selection state.
   final TerminalSelectionController? selectionController;
 
+  /// Whether built-in viewport mouse selection and auto-copy are enabled. Defaults to `true`.
+  final bool enableBuiltinSelection;
+
+  /// Whether built-in `OSC 8` link cursor and click opening are enabled. Defaults to `true`.
+  final bool enableBuiltinLinkOpen;
+
   /// Internal widget constructor binding the terminal state to rendering hooks.
   const PrivateTuiView({
     super.key,
@@ -238,6 +271,8 @@ final class PrivateTuiView extends StatefulWidget {
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
     this.selectionController,
+    this.enableBuiltinSelection = true,
+    this.enableBuiltinLinkOpen = true,
   });
 
   @override
@@ -254,19 +289,31 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   StreamSubscription<String>? _clipboardSubscription;
   StreamSubscription<void>? _pasteRequestSubscription;
   StreamSubscription<bool>? _ligaturesSubscription;
+  StreamSubscription<bool>? _builtinSelectionSubscription;
+  StreamSubscription<bool>? _builtinLinkOpenSubscription;
   late bool _enableLigatures;
+  late bool _terminalBuiltinSelection;
+  late bool _terminalBuiltinLinkOpen;
+  final Set<LogicalKeyboardKey> _suppressedHostShortcutKeys = {};
   MouseCursor _currentCursor = SystemMouseCursors.basic;
   String? _hoveredUri;
   bool _isLinkModifierActive = false;
   late TerminalSelectionController _selectionController;
-  ({int col, int row})? _selectionAnchor;
+  ({int col, int row})? _linkPressCell;
   bool _isSelecting = false;
+
+  bool get _builtinSelectionEnabled =>
+      widget.enableBuiltinSelection && _terminalBuiltinSelection;
+
+  bool get _builtinLinkOpenEnabled =>
+      widget.enableBuiltinLinkOpen && _terminalBuiltinLinkOpen;
 
   /// The active selection controller for this terminal view.
   TerminalSelectionController get selectionController => _selectionController;
 
   MouseCursor get _effectiveCursor =>
-      (_hoveredUri != null &&
+      (_builtinLinkOpenEnabled &&
+          _hoveredUri != null &&
           _isLinkModifierActive &&
           _currentCursor == SystemMouseCursors.basic)
       ? SystemMouseCursors.click
@@ -329,6 +376,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     _fontSize = widget.terminal.fontSize;
     _enableLigatures =
         widget.enableLigatures || widget.terminal.enableLigatures;
+    _terminalBuiltinSelection = widget.terminal.enableBuiltinSelection;
+    _terminalBuiltinLinkOpen = widget.terminal.enableBuiltinLinkOpen;
     _bindTerminalStreams();
 
     _selectionController =
@@ -342,6 +391,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     _fontSizeSubscription?.cancel();
     _mouseCursorSubscription?.cancel();
     _ligaturesSubscription?.cancel();
+    _builtinSelectionSubscription?.cancel();
+    _builtinLinkOpenSubscription?.cancel();
     _fontSizeSubscription = widget.terminal.watchFontSize().listen((newSize) {
       if (!mounted) return;
       Tracer.record(
@@ -370,7 +421,36 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
         _enableLigatures = enabled;
       });
     });
+    _builtinSelectionSubscription = widget.terminal
+        .watchEnableBuiltinSelection()
+        .listen(_onTerminalBuiltinSelectionChanged);
+    _builtinLinkOpenSubscription = widget.terminal
+        .watchEnableBuiltinLinkOpen()
+        .listen(_onTerminalBuiltinLinkOpenChanged);
     _bindClipboardStreams();
+  }
+
+  void _onTerminalBuiltinSelectionChanged(bool enabled) {
+    if (!mounted) return;
+    if (!enabled) {
+      _isSelecting = false;
+      _selectionController.clearSelection();
+    }
+    setState(() {
+      _terminalBuiltinSelection = enabled;
+    });
+  }
+
+  void _onTerminalBuiltinLinkOpenChanged(bool enabled) {
+    if (!mounted) return;
+    if (!enabled) {
+      _hoveredUri = null;
+      _isLinkModifierActive = false;
+      _linkPressCell = null;
+    }
+    setState(() {
+      _terminalBuiltinLinkOpen = enabled;
+    });
   }
 
   void _onSelectionChanged() {
@@ -467,10 +547,12 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       return;
     }
     final oldAtlas = _atlas;
-    widget.terminal.updateCellPixelSize(
-      newAtlas.cellWidth.round(),
-      newAtlas.cellHeight.round(),
-    );
+    widget.terminal
+      ..updateExactCellPixelSize(newAtlas.cellWidth, newAtlas.cellHeight)
+      ..updateCellPixelSize(
+        newAtlas.cellWidth.round(),
+        newAtlas.cellHeight.round(),
+      );
     setState(() {
       _atlas = newAtlas;
       if (_currentBuffer != null) {
@@ -530,6 +612,9 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       _fontSize = widget.terminal.fontSize;
       _enableLigatures =
           widget.enableLigatures || widget.terminal.enableLigatures;
+      _terminalBuiltinSelection = widget.terminal.enableBuiltinSelection;
+      _terminalBuiltinLinkOpen = widget.terminal.enableBuiltinLinkOpen;
+      _suppressedHostShortcutKeys.clear();
       _bindTerminalStreams();
       _recreateAtlas();
     } else {
@@ -537,6 +622,15 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       if (oldWidget.enableLigatures != widget.enableLigatures) {
         _enableLigatures = widget.enableLigatures;
       }
+    }
+    if (oldWidget.enableBuiltinSelection && !widget.enableBuiltinSelection) {
+      _isSelecting = false;
+      _selectionController.clearSelection();
+    }
+    if (oldWidget.enableBuiltinLinkOpen && !widget.enableBuiltinLinkOpen) {
+      _hoveredUri = null;
+      _isLinkModifierActive = false;
+      _linkPressCell = null;
     }
     _syncSelectionController(oldWidget);
   }
@@ -575,6 +669,9 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     _clipboardSubscription?.cancel();
     _pasteRequestSubscription?.cancel();
     _ligaturesSubscription?.cancel();
+    _builtinSelectionSubscription?.cancel();
+    _builtinLinkOpenSubscription?.cancel();
+    _suppressedHostShortcutKeys.clear();
     _disposePainterCaches();
     _kittyGpuImagesById.clear();
     for (final image in _kittyGpuImages.values) {
@@ -736,13 +833,56 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     );
   }
 
+  static const List<int> _pngMagic = [
+    0x89,
+    0x50,
+    0x4E,
+    0x47,
+    0x0D,
+    0x0A,
+    0x1A,
+    0x0A,
+  ];
+
+  static bool _isValidKittyPngPayload(KittyImageData data) {
+    final w = data.pixelWidth;
+    final h = data.pixelHeight;
+    if (w <= 0 || w > 4096 || h <= 0 || h > 4096 || w * h > 4194304) {
+      return false;
+    }
+    final bytes = data.rgbaPixels;
+    if (bytes.length < 24 || !_hasPngIhdrMagic(bytes)) return false;
+    final view = ByteData.sublistView(bytes);
+    return view.getUint32(8) == 13 &&
+        view.getUint32(16) == w &&
+        view.getUint32(20) == h;
+  }
+
+  static bool _hasPngIhdrMagic(Uint8List bytes) {
+    for (var i = 0; i < _pngMagic.length; i++) {
+      if (bytes[i] != _pngMagic[i]) return false;
+    }
+    return bytes[12] == 0x49 &&
+        bytes[13] == 0x48 &&
+        bytes[14] == 0x44 &&
+        bytes[15] == 0x52;
+  }
+
   Future<void> _decodeKittyPngImage(
     KittyImageRegistry registry,
     KittyImageData data,
   ) async {
+    if (!_isValidKittyPngPayload(data)) {
+      _decodingKittyImages.remove(data);
+      return;
+    }
     ui.Codec? codec;
     try {
-      codec = await ui.instantiateImageCodec(data.rgbaPixels);
+      codec = await ui.instantiateImageCodec(
+        data.rgbaPixels,
+        targetWidth: data.pixelWidth,
+        targetHeight: data.pixelHeight,
+      );
       final frame = await codec.getNextFrame();
       _onKittyGpuImageDecoded(registry, data, frame.image);
     } on Object catch (_) {
@@ -847,6 +987,7 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   }
 
   void _syncLinkModifierState() {
+    if (!_builtinLinkOpenEnabled) return;
     final pressed = _isLinkOpenModifierPressed();
     if (pressed != _isLinkModifierActive) {
       _isLinkModifierActive = pressed;
@@ -860,7 +1001,11 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     _syncLinkModifierState();
     if (event is KeyUpEvent) {
       if (!widget.terminal.reportKeyReleaseEvents) {
+        _suppressedHostShortcutKeys.clear();
         return KeyEventResult.ignored;
+      }
+      if (_suppressedHostShortcutKeys.remove(event.logicalKey)) {
+        return KeyEventResult.handled;
       }
       return _injectResolvedKeyEvent(
         event,
@@ -890,6 +1035,9 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     }
     final mods = _collectHardwareModifiers();
     if (_isPasteShortcut(key, mods)) {
+      if (widget.terminal.reportKeyReleaseEvents) {
+        _suppressedHostShortcutKeys.add(key);
+      }
       unawaited(_pasteFromClipboard());
       return true;
     }
@@ -1299,25 +1447,45 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     term.MouseButton button,
     term.MouseEventType type,
   ) {
-    final nextUri = _currentBuffer?.getUri(col, row);
-    final linkMod = _isLinkOpenModifierPressed();
-    final uriChanged =
-        nextUri != _hoveredUri || linkMod != _isLinkModifierActive;
-    _hoveredUri = nextUri;
-    _isLinkModifierActive = linkMod;
-
+    final (nextUri, uriChanged) = _updateHoveredLinkCell(col, row);
     if (type == term.MouseEventType.press && button == term.MouseButton.left) {
-      _startSelectionAt(col, row);
-    } else if (type == term.MouseEventType.drag && _isSelecting) {
-      final isBlock = HardwareKeyboard.instance.isAltPressed;
-      final mode = isBlock ? SelectionMode.block : SelectionMode.stream;
-      _selectionController.updateSelection(col, row, mode: mode);
+      _handleLeftPointerPress(col, row);
+    } else if (type == term.MouseEventType.drag) {
+      _handlePointerDrag(col, row);
     } else if (type == term.MouseEventType.release) {
       _finishPointerRelease(col, row, nextUri);
     }
 
     if (uriChanged && mounted) {
       setState(() {});
+    }
+  }
+
+  (String?, bool) _updateHoveredLinkCell(int col, int row) {
+    if (!_builtinLinkOpenEnabled) return (null, false);
+    final nextUri = _currentBuffer?.getUri(col, row);
+    final linkMod = _isLinkOpenModifierPressed();
+    final changed = nextUri != _hoveredUri || linkMod != _isLinkModifierActive;
+    _hoveredUri = nextUri;
+    _isLinkModifierActive = linkMod;
+    return (nextUri, changed);
+  }
+
+  void _handleLeftPointerPress(int col, int row) {
+    _linkPressCell = _builtinLinkOpenEnabled ? (col: col, row: row) : null;
+    if (_builtinSelectionEnabled) {
+      _startSelectionAt(col, row);
+    }
+  }
+
+  void _handlePointerDrag(int col, int row) {
+    if (_linkPressCell != null && _linkPressCell != (col: col, row: row)) {
+      _linkPressCell = null;
+    }
+    if (_builtinSelectionEnabled && _isSelecting) {
+      final isBlock = HardwareKeyboard.instance.isAltPressed;
+      final mode = isBlock ? SelectionMode.block : SelectionMode.stream;
+      _selectionController.updateSelection(col, row, mode: mode);
     }
   }
 
@@ -1334,12 +1502,10 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
           )
         : null;
     if (_isGraphicCanvasPress(buf, row, region)) {
-      _selectionAnchor = null;
       _selectionController.clearSelection();
       _isSelecting = false;
       return;
     }
-    _selectionAnchor = (col: col, row: row);
     _selectionController.startSelection(col, row, mode: mode, region: region);
     _isSelecting = true;
   }
@@ -1367,35 +1533,37 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   }
 
   void _finishPointerRelease(int col, int row, String? uri) {
-    final wasDragging = _isSelecting && _selectionController.hasSelection;
-    final clickedSameCell =
-        _isSelecting &&
-        !_selectionController.hasSelection &&
-        _selectionAnchor == (col: col, row: row);
-    _isSelecting = false;
+    final clickedLinkCell = _linkPressCell == (col: col, row: row);
+    _linkPressCell = null;
 
-    if (wasDragging) {
-      final buf = _currentBuffer;
-      if (buf != null) {
-        final selectedText = _selectionController.extractText(
-          buf,
-          includeHidden: true,
-        );
-        if (selectedText.isNotEmpty) {
-          unawaited(_writeToClipboard(selectedText));
-        }
+    if (_builtinSelectionEnabled) {
+      final wasDragging = _isSelecting && _selectionController.hasSelection;
+      _isSelecting = false;
+      if (wasDragging) {
+        _copySelectedBufferText();
+        return;
       }
-      return;
+      _selectionController.clearSelection();
     }
 
-    _selectionAnchor = null;
-    _selectionController.clearSelection();
-
-    if (clickedSameCell &&
+    if (_builtinLinkOpenEnabled &&
+        clickedLinkCell &&
         uri != null &&
         uri.isNotEmpty &&
         _isLinkOpenModifierPressed()) {
       unawaited(widget.service.openUrl(uri));
+    }
+  }
+
+  void _copySelectedBufferText() {
+    final buf = _currentBuffer;
+    if (buf == null) return;
+    final selectedText = _selectionController.extractText(
+      buf,
+      includeHidden: true,
+    );
+    if (selectedText.isNotEmpty) {
+      unawaited(_writeToClipboard(selectedText));
     }
   }
 
@@ -1567,7 +1735,9 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
                 enableBleed: widget.enableBleed,
                 enableLigatures: _enableLigatures,
                 ligaturePainters: _ligaturePainters,
-                selectionController: _selectionController,
+                selectionController: _builtinSelectionEnabled
+                    ? _selectionController
+                    : null,
                 kittyImages: _kittyGpuImages,
                 kittyImagesById: _kittyGpuImagesById,
               ),

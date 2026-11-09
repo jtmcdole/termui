@@ -13,7 +13,7 @@ abstract interface class TerminalService {
   /// Reads plain text from the system/browser clipboard.
   Future<String?> getClipboard();
 
-  /// Opens an external `http` or `https` [url] in the host OS or browser.
+  /// Opens an external `http`, `https`, or `mailto` [url] in the host OS or browser.
   Future<bool> openUrl(String url);
 }
 
