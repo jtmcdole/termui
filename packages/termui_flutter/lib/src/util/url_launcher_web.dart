@@ -1,11 +1,14 @@
 import 'package:web/web.dart' as web;
 
-/// Launches an external `http` or `https` [url] in a new browser tab.
-Future<bool> launchExternalUrl(String url) async {
-  final uri = Uri.tryParse(url.trim());
-  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
-    return false;
-  }
-  web.window.open(uri.toString(), '_blank', 'noopener,noreferrer');
+bool _isAllowedUri(Uri uri) => switch (uri.scheme.toLowerCase()) {
+  'http' || 'https' => uri.hasAuthority && uri.host.isNotEmpty,
+  'mailto' => !uri.hasAuthority && uri.path.isNotEmpty,
+  _ => false,
+};
+
+/// Launches a validated `http`, `https`, or `mailto` [uri] in a new browser tab.
+Future<bool> launchPlatformExternalUri(Uri uri) async {
+  if (!_isAllowedUri(uri)) return false;
+  web.window.open('$uri', '_blank', 'noopener,noreferrer');
   return true;
 }

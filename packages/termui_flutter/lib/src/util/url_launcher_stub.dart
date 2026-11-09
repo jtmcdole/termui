@@ -1,2 +1,2 @@
-/// Stub implementation for launching external URLs.
-Future<bool> launchExternalUrl(String url) async => false;
+/// Stub implementation for launching validated external URIs.
+Future<bool> launchPlatformExternalUri(Uri uri) async => false;

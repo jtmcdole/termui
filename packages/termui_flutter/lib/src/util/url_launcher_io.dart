@@ -1,12 +1,15 @@
 import 'dart:io';
 
-/// Launches an external `http` or `https` [url] in the system browser.
-Future<bool> launchExternalUrl(String url) async {
-  final uri = Uri.tryParse(url.trim());
-  if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
-    return false;
-  }
-  final normalized = uri.toString();
+bool _isAllowedUri(Uri uri) => switch (uri.scheme.toLowerCase()) {
+  'http' || 'https' => uri.hasAuthority && uri.host.isNotEmpty,
+  'mailto' => !uri.hasAuthority && uri.path.isNotEmpty,
+  _ => false,
+};
+
+/// Launches a validated `http`, `https`, or `mailto` [uri] in the system handler.
+Future<bool> launchPlatformExternalUri(Uri uri) async {
+  if (!_isAllowedUri(uri)) return false;
+  final normalized = '$uri';
   try {
     final ProcessResult result;
     if (Platform.isWindows) {
