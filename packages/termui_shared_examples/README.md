@@ -18,3 +18,9 @@ Run from `packages/termui_shared_examples`:
   ```bash
   dart run example/pty_glass_example.dart
   ```
+* **[ktty_probe.dart](bin/ktty_probe.dart)**: Standalone Kitty & VT capability probe and interactive diagnostic suite (`APC` graphics `a=q`/`f=32`/`o=z`/`f=100`, 32-bit `U+10EEEE` placeholders, `CSI ? u` Kitty keyboard, `XTVERSION`, `DECRQM` `?2026`/`?1016`/`?2027`/`?2004`/`?1004`/`?1006`, `OSC 10/11`, `OSC 52`, `OSC 99`, `OSC 133`, extended `SGR 4:1..5` + `58:2` + `53`).
+  ```bash
+  dart run bin/ktty_probe.dart
+  dart run bin/ktty_probe.dart --report
+  dart run bin/ktty_probe.dart --self-test
+  ```
