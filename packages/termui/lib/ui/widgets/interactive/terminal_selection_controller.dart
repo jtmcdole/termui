@@ -3,6 +3,26 @@ import 'dart:math';
 import '../../buffer.dart';
 import '../../style.dart';
 import '../core/geometry.dart';
+import '../display/kitty_image.dart';
+
+/// Soft-wrap metadata, grapheme cells, and optional `OSC 8` URIs for a virtual row.
+typedef VirtualLineSlice = ({
+  bool isWrapped,
+  List<String> characters,
+  List<String?>? uris,
+});
+
+/// Callback returning cell data for [virtualRow], or `null` when out of bounds.
+typedef VirtualLineLookup = VirtualLineSlice? Function(int virtualRow);
+
+/// Resolved hyperlink URI and its inclusive virtual-buffer cell span.
+typedef ResolvedTerminalLink = ({
+  String uri,
+  int startCol,
+  int startRow,
+  int endCol,
+  int endRow,
+});
 
 /// An interface for objects that provide change notifications to listeners.
 abstract interface class TerminalListenable {
@@ -26,6 +46,9 @@ enum SelectionMode {
 
   /// Rectangular block/box selection across a 2D cell coordinate rectangle.
   block;
+
+  /// Alias for [character] stream selection.
+  static const SelectionMode normal = character;
 
   /// Alias for [character] stream selection.
   static const SelectionMode stream = character;
@@ -97,6 +120,17 @@ final class SelectionRegion {
   bool contains(int col, int row) =>
       col >= minCol && col <= maxCol && row >= minRow && row <= maxRow;
 
+  /// Returns a copy of this region translated by ([dCol], [dRow]).
+  SelectionRegion translate({int dCol = 0, int dRow = 0}) =>
+      (dCol == 0 && dRow == 0)
+      ? this
+      : SelectionRegion(
+          minCol: minCol + dCol,
+          maxCol: maxCol + dCol,
+          minRow: minRow + dRow,
+          maxRow: maxRow + dRow,
+        );
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -117,12 +151,23 @@ final class SelectionRegion {
 
 /// A controller that manages terminal cell selection state, supporting character/stream,
 /// word, line, and rectangular block/box selection modes, pane region clamping,
-/// and clipboard text extraction.
+/// virtual-scrollback coordinate offsets, wide-grapheme boundary snapping,
+/// unified `OSC 8` + plain-text link resolution, and clipboard text extraction.
 class TerminalSelectionController implements TerminalListenable {
+  static const int _maxLinkWrapRows = 16;
+  static const String _urlExcludedChars =
+      r'\s<>"`\\\u0000-\u001F\u007F-\u009F\u00AB\u00BB\u2018-\u201F\u2026\u2500-\u259F\[\]'
+      "'";
   static final RegExp _trailingSpaces = RegExp(r' +$');
   static final RegExp _wordCharPattern = RegExp(
     r'[\p{L}\p{N}_]',
     unicode: true,
+  );
+
+  // Matches plain-text http://, https://, and mailto: candidates up to excluded delimiters.
+  static final RegExp _plainLinkCandidatePattern = RegExp(
+    '(?:https?://|mailto:)(?:\\[[^$_urlExcludedChars]*\\]|[^$_urlExcludedChars])+',
+    caseSensitive: false,
   );
 
   final List<void Function()> _listeners = [];
@@ -173,11 +218,12 @@ class TerminalSelectionController implements TerminalListenable {
   /// Updates the selection endpoint to `(col, row)`.
   void updateSelection(int col, int row, {SelectionMode? mode}) {
     if (_anchor == null) return;
-    if (mode != null) {
+    final modeChanged = mode != null && _mode != mode;
+    if (modeChanged) {
       _mode = mode;
     }
     final newFocus = _clampPoint(col, row, _region);
-    if (_focus == newFocus) return;
+    if (_focus == newFocus && !modeChanged) return;
     _focus = newFocus;
     notifyListeners();
   }
@@ -251,24 +297,148 @@ class TerminalSelectionController implements TerminalListenable {
     notifyListeners();
   }
 
-  /// Returns whether the cell at `(col, row)` is currently selected.
-  bool containsCell(int col, int row) => isCellSelected(col, row);
+  /// Returns whether the viewport cell at `(col, row)` (offset by [topVirtualRow]
+  /// and [leftVirtualCol]) is currently selected.
+  bool containsCell(
+    int col,
+    int row, {
+    int topVirtualRow = 0,
+    int leftVirtualCol = 0,
+  }) => isCellSelected(
+    col,
+    row,
+    topVirtualRow: topVirtualRow,
+    leftVirtualCol: leftVirtualCol,
+  );
 
-  /// Returns whether the cell at `([x], [y])` is currently selected.
-  bool isCellSelected(int x, int y) {
+  /// Returns whether the viewport cell at `([x], [y])` (offset by [topVirtualRow]
+  /// and [leftVirtualCol]) is currently selected.
+  bool isCellSelected(
+    int x,
+    int y, {
+    int topVirtualRow = 0,
+    int leftVirtualCol = 0,
+  }) {
     final a = _anchor;
     final b = _focus;
-    if (a == null || b == null) return false;
+    if (a == null || b == null || x < 0 || y < 0) return false;
+
+    final vx = x + leftVirtualCol;
+    final vy = y + topVirtualRow;
+    if (vx < 0) return false;
 
     final r = _region;
-    if (r != null && !r.contains(x, y)) return false;
+    if (r != null && !r.contains(vx, vy)) return false;
 
     return switch (_mode) {
-      SelectionMode.block => _isCellInBlock(a, b, x, y),
-      SelectionMode.line => y >= min(a.row, b.row) && y <= max(a.row, b.row),
+      SelectionMode.block => _isCellInBlock(a, b, vx, vy),
+      SelectionMode.line => vy >= min(a.row, b.row) && vy <= max(a.row, b.row),
       SelectionMode.character ||
-      SelectionMode.word => _isCellInStream(a, b, x, y, r),
+      SelectionMode.word => _isCellInStream(a, b, vx, vy, r),
     };
+  }
+
+  /// Intersects the active selection with [buffer]'s `0..width-1` by
+  /// `0..height-1` viewport (starting at [topVirtualRow] and [leftVirtualCol])
+  /// and snaps wide-grapheme continuation (`""`) boundaries.
+  List<(int y, int colStart, int colEnd)> visibleRowSpans(
+    Buffer buffer, {
+    int topVirtualRow = 0,
+    int leftVirtualCol = 0,
+  }) {
+    final a = _anchor;
+    final b = _focus;
+    final width = buffer.width;
+    final height = buffer.height;
+    if (a == null || b == null || width <= 0 || height <= 0) return const [];
+
+    final r = _region;
+    final minVRow = r != null
+        ? max(min(a.row, b.row), r.minRow)
+        : min(a.row, b.row);
+    final maxVRow = r != null
+        ? min(max(a.row, b.row), r.maxRow)
+        : max(a.row, b.row);
+    final minScreenY = max(0, minVRow - topVirtualRow);
+    final maxScreenY = min(height - 1, maxVRow - topVirtualRow);
+    if (minScreenY > maxScreenY) return const [];
+
+    final virtualMaxCol = r?.maxCol ?? (max(0, leftVirtualCol) + width - 1);
+    final virtualMinCol = r?.minCol ?? 0;
+    final (start, end) = _orderPoints(a, b);
+
+    final spans = <(int y, int colStart, int colEnd)>[];
+    for (var screenY = minScreenY; screenY <= maxScreenY; screenY++) {
+      final virtualY = topVirtualRow + screenY;
+      final (vStart, vEnd) = _virtualRowBounds(
+        virtualY,
+        a,
+        b,
+        start,
+        end,
+        virtualMinCol,
+        virtualMaxCol,
+      );
+      final rawStart = vStart - leftVirtualCol;
+      final rawEnd = vEnd - leftVirtualCol;
+      if (rawStart >= width || rawEnd < 0 || rawStart > rawEnd) continue;
+      final minScreenCol = max(0, virtualMinCol - leftVirtualCol);
+      final maxScreenCol = min(width - 1, virtualMaxCol - leftVirtualCol);
+      if (minScreenCol > maxScreenCol) continue;
+      final (colStart, colEnd) = snapWideBounds(
+        buffer.characters,
+        screenY * width,
+        max(minScreenCol, rawStart),
+        min(maxScreenCol, rawEnd),
+        minCol: minScreenCol,
+        maxCol: maxScreenCol,
+      );
+      spans.add((screenY, colStart, colEnd));
+    }
+    return spans;
+  }
+
+  (int, int) _virtualRowBounds(
+    int virtualY,
+    SelectionPoint a,
+    SelectionPoint b,
+    SelectionPoint start,
+    SelectionPoint end,
+    int minBound,
+    int maxBound,
+  ) => switch (_mode) {
+    SelectionMode.block => (
+      max(minBound, min(a.col, b.col)),
+      min(maxBound, max(a.col, b.col)),
+    ),
+    SelectionMode.line => (minBound, maxBound),
+    SelectionMode.character || SelectionMode.word => _streamRowColBounds(
+      virtualY,
+      start,
+      end,
+      minBound,
+      maxBound,
+    ),
+  };
+
+  /// Snaps `(colStart, colEnd)` outward across wide-grapheme continuation (`""`)
+  /// cells within `[minCol, maxCol]`.
+  static (int, int) snapWideBounds(
+    List<String> chars,
+    int rowOffset,
+    int colStart,
+    int colEnd, {
+    int minCol = 0,
+    required int maxCol,
+  }) {
+    final snappedStart =
+        colStart > minCol && chars[rowOffset + colStart].isEmpty
+        ? colStart - 1
+        : colStart;
+    final snappedEnd = colEnd < maxCol && chars[rowOffset + colEnd + 1].isEmpty
+        ? colEnd + 1
+        : colEnd;
+    return (snappedStart, snappedEnd);
   }
 
   static bool _isCellInBlock(
@@ -293,16 +463,15 @@ class TerminalSelectionController implements TerminalListenable {
     if (row < start.row || row > end.row) return false;
     if (start.row == end.row) return col >= start.col && col <= end.col;
 
-    final minBound = r?.minCol;
+    final minBound = r?.minCol ?? 0;
     final maxBound = r?.maxCol;
     if (row == start.row) {
       return col >= start.col && (maxBound == null || col <= maxBound);
     }
     if (row == end.row) {
-      return col <= end.col && (minBound == null || col >= minBound);
+      return col <= end.col && col >= minBound;
     }
-    return (minBound == null || col >= minBound) &&
-        (maxBound == null || col <= maxBound);
+    return col >= minBound && (maxBound == null || col <= maxBound);
   }
 
   static (SelectionPoint, SelectionPoint) _orderPoints(
@@ -314,11 +483,24 @@ class TerminalSelectionController implements TerminalListenable {
   ///
   /// If [includeHidden] is `true` (the default), characters styled with
   /// [Modifier.hidden] are included in the extracted text.
-  String extractSelectedText(Buffer buffer, {bool includeHidden = true}) {
+  String extractSelectedText(
+    Buffer buffer, {
+    bool includeHidden = true,
+    int topVirtualRow = 0,
+    int leftVirtualCol = 0,
+  }) {
     final a = _anchor;
     final b = _focus;
     if (a == null || b == null || buffer.width <= 0 || buffer.height <= 0) {
       return '';
+    }
+    if (topVirtualRow != 0 || leftVirtualCol != 0) {
+      return _extractOffsetBufferText(
+        buffer,
+        includeHidden: includeHidden,
+        topVirtualRow: topVirtualRow,
+        leftVirtualCol: leftVirtualCol,
+      );
     }
 
     return switch (_mode) {
@@ -341,8 +523,140 @@ class TerminalSelectionController implements TerminalListenable {
   }
 
   /// Alias for [extractSelectedText].
-  String extractText(Buffer buffer, {bool includeHidden = true}) =>
-      extractSelectedText(buffer, includeHidden: includeHidden);
+  String extractText(
+    Buffer buffer, {
+    bool includeHidden = true,
+    int topVirtualRow = 0,
+    int leftVirtualCol = 0,
+  }) => extractSelectedText(
+    buffer,
+    includeHidden: includeHidden,
+    topVirtualRow: topVirtualRow,
+    leftVirtualCol: leftVirtualCol,
+  );
+
+  String _extractOffsetBufferText(
+    Buffer buffer, {
+    required bool includeHidden,
+    required int topVirtualRow,
+    required int leftVirtualCol,
+  }) {
+    final spans = visibleRowSpans(
+      buffer,
+      topVirtualRow: topVirtualRow,
+      leftVirtualCol: leftVirtualCol,
+    );
+    if (spans.isEmpty) return '';
+    final maxBound =
+        (_region?.maxCol ?? (leftVirtualCol + buffer.width - 1)) -
+        leftVirtualCol;
+    final lines = <String>[
+      for (final (y, colStart, colEnd) in spans)
+        _extractRowSlice(
+          buffer,
+          y,
+          colStart,
+          colEnd,
+          includeHidden,
+          trimTrailing: _mode != SelectionMode.block && colEnd >= maxBound,
+        ),
+    ];
+    return lines.join('\n');
+  }
+
+  /// Extracts selected text across [lookup], joining soft-wrapped rows
+  /// (`isWrapped == true`) without `\n` unless [mode] is [SelectionMode.block].
+  String extractVirtualText(VirtualLineLookup lookup, {required int cols}) {
+    final a = _anchor;
+    final b = _focus;
+    if (a == null || b == null || cols <= 0) return '';
+
+    final r = _region;
+    final firstRow = r != null
+        ? max(min(a.row, b.row), r.minRow)
+        : min(a.row, b.row);
+    final lastRow = r != null
+        ? min(max(a.row, b.row), r.maxRow)
+        : max(a.row, b.row);
+    if (firstRow > lastRow) return '';
+
+    final (start, end) = _orderPoints(a, b);
+    final out = StringBuffer();
+    var isFirstRow = true;
+
+    for (var virtualY = firstRow; virtualY <= lastRow; virtualY++) {
+      final line = lookup(virtualY);
+      if (line == null) continue;
+      final rowWidth = max(cols, line.characters.length);
+      final minBound = r?.minCol ?? 0;
+      final maxBound = r?.maxCol ?? (rowWidth - 1);
+      final (rawStart, rawEnd) = _virtualRowBounds(
+        virtualY,
+        a,
+        b,
+        start,
+        end,
+        minBound,
+        maxBound,
+      );
+      if (rawStart >= rowWidth || rawEnd < 0 || rawStart > rawEnd) continue;
+      final rowText = _extractVirtualLineSlice(
+        line.characters,
+        rawStart,
+        rawEnd,
+        minBound: minBound,
+        maxBound: maxBound,
+        stripTrailingSpaces: !_isFollowedBySoftWrap(lookup, virtualY),
+      );
+      if (!isFirstRow && _shouldInsertVirtualNewline(line)) {
+        out.write('\n');
+      }
+      isFirstRow = false;
+      out.write(rowText);
+    }
+    return '$out';
+  }
+
+  bool _shouldInsertVirtualNewline(VirtualLineSlice line) =>
+      _mode == SelectionMode.block || _region != null || !line.isWrapped;
+
+  bool _isFollowedBySoftWrap(VirtualLineLookup lookup, int virtualY) =>
+      _mode != SelectionMode.block &&
+      _region == null &&
+      (lookup(virtualY + 1)?.isWrapped ?? false);
+
+  static String _extractVirtualLineSlice(
+    List<String> chars,
+    int rawStart,
+    int rawEnd, {
+    required int minBound,
+    required int maxBound,
+    required bool stripTrailingSpaces,
+  }) {
+    if (chars.isEmpty) return '';
+    final clampMin = max(0, minBound);
+    final clampMax = min(chars.length - 1, maxBound);
+    if (clampMin > clampMax) return '';
+    final clampedStart = max(clampMin, rawStart);
+    final clampedEnd = min(clampMax, rawEnd);
+    if (clampedStart > clampedEnd) return '';
+    final (colStart, colEnd) = snapWideBounds(
+      chars,
+      0,
+      clampedStart,
+      clampedEnd,
+      minCol: clampMin,
+      maxCol: clampMax,
+    );
+    final rowBuf = StringBuffer();
+    for (var x = colStart; x <= colEnd; x++) {
+      final cell = chars[x];
+      if (cell.isEmpty || cell.startsWith(kittyPlaceholderChar)) continue;
+      rowBuf.write(cell);
+    }
+    final text = '$rowBuf';
+    return stripTrailingSpaces ? text.replaceFirst(_trailingSpaces, '') : text;
+  }
 
   static String _extractBlockText(
     Buffer buffer,
@@ -354,6 +668,7 @@ class TerminalSelectionController implements TerminalListenable {
     final maxC = max(a.col, b.col);
     final minR = max(0, min(a.row, b.row));
     final maxR = min(buffer.height - 1, max(a.row, b.row));
+    if (minC >= buffer.width || maxC < 0 || minR > maxR) return '';
 
     final lines = <String>[
       for (var y = minR; y <= maxR; y++)
@@ -416,6 +731,7 @@ class TerminalSelectionController implements TerminalListenable {
         minBound,
         maxBound,
       );
+      if (col0 > maxBound || col1 < minBound || col0 > col1) continue;
       lines.add(
         _extractRowSlice(
           buffer,
@@ -423,6 +739,8 @@ class TerminalSelectionController implements TerminalListenable {
           col0,
           col1,
           includeHidden,
+          minCol: minBound,
+          maxCol: maxBound,
           trimTrailing: col1 >= maxBound,
         ),
       );
@@ -451,12 +769,23 @@ class TerminalSelectionController implements TerminalListenable {
     int col0,
     int col1,
     bool includeHidden, {
+    int? minCol,
+    int? maxCol,
     required bool trimTrailing,
   }) {
     if (col0 > col1) return '';
     final sb = StringBuffer();
-    final startX = col0.clamp(0, buffer.width - 1);
-    final endX = col1.clamp(0, buffer.width - 1);
+    final minX = (minCol ?? 0).clamp(0, buffer.width - 1);
+    final maxX = (maxCol ?? (buffer.width - 1)).clamp(0, buffer.width - 1);
+    if (minX > maxX || col0 > maxX || col1 < minX) return '';
+    final (startX, endX) = snapWideBounds(
+      buffer.characters,
+      y * buffer.width,
+      col0.clamp(minX, maxX),
+      col1.clamp(minX, maxX),
+      minCol: minX,
+      maxCol: maxX,
+    );
 
     for (var x = startX; x <= endX; x++) {
       final char = buffer.getCharacter(x, y);
@@ -466,8 +795,350 @@ class TerminalSelectionController implements TerminalListenable {
       if (!includeHidden && Modifier.has(mods, Modifier.hidden)) continue;
       sb.write(char);
     }
-    final result = sb.toString();
+    final result = '$sb';
     return trimTrailing ? result.replaceFirst(_trailingSpaces, '') : result;
+  }
+
+  /// Resolves a hyperlink span at `([col], [virtualRow])` across soft-wrapped
+  /// rows in [lookup], preferring contiguous `OSC 8` `uris` spans first and
+  /// falling back to plain-text `http://`, `https://`, and `mailto:` tokens.
+  static ResolvedTerminalLink? resolveLinkSpanAt({
+    required VirtualLineLookup lookup,
+    required int col,
+    required int virtualRow,
+  }) {
+    if (col < 0 || virtualRow < 0) return null;
+    final clickedLine = lookup(virtualRow);
+    if (clickedLine == null || col >= clickedLine.characters.length) {
+      return null;
+    }
+
+    final snappedCol = col > 0 && clickedLine.characters[col].isEmpty
+        ? col - 1
+        : col;
+    final (wrapStart, wrapEnd) = _softWrapBounds(lookup, virtualRow);
+    final osc8Uri = _supportedOsc8UriAt(clickedLine, snappedCol);
+    if (osc8Uri != null) {
+      return _expandOsc8Span(
+        lookup,
+        osc8Uri,
+        snappedCol,
+        virtualRow,
+        wrapStart,
+        wrapEnd,
+      );
+    }
+
+    if (clickedLine.characters[snappedCol].isEmpty) return null;
+    return _matchPlainLinkSpan(
+      lookup,
+      snappedCol,
+      virtualRow,
+      wrapStart,
+      wrapEnd,
+    );
+  }
+
+  static String? _supportedOsc8UriAt(VirtualLineSlice line, int col) {
+    final uris = line.uris;
+    if (uris == null || col < 0 || col >= uris.length) return null;
+    final raw = uris[col];
+    if (raw == null || raw.isEmpty) return null;
+    final sanitized = sanitizeOsc8Uri(raw);
+    return _isSupportedOsc8Target(sanitized) ? sanitized : null;
+  }
+
+  static bool _isSupportedOsc8Target(String raw) {
+    if (raw.isEmpty) return false;
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return false;
+    return switch (uri.scheme.toLowerCase()) {
+      'http' || 'https' => uri.hasAuthority && uri.host.isNotEmpty,
+      'mailto' => !uri.hasAuthority && uri.path.isNotEmpty,
+      'file' => uri.path.isNotEmpty,
+      _ => false,
+    };
+  }
+
+  static ResolvedTerminalLink _expandOsc8Span(
+    VirtualLineLookup lookup,
+    String targetUri,
+    int col,
+    int row,
+    int wrapStart,
+    int wrapEnd,
+  ) {
+    final (startCol, startRow) = _walkOsc8Start(
+      lookup,
+      targetUri,
+      col,
+      row,
+      wrapStart,
+      wrapEnd,
+    );
+    final (endCol, endRow) = _walkOsc8End(lookup, targetUri, col, row, wrapEnd);
+    return (
+      uri: targetUri,
+      startCol: startCol,
+      startRow: startRow,
+      endCol: endCol,
+      endRow: endRow,
+    );
+  }
+
+  static (int col, int row) _walkOsc8Start(
+    VirtualLineLookup lookup,
+    String targetUri,
+    int col,
+    int row,
+    int wrapStart,
+    int wrapEnd,
+  ) {
+    var curRow = row;
+    var curCol = col;
+    while (true) {
+      final curLine = lookup(curRow);
+      if (curLine == null) break;
+      while (curCol > 0 &&
+          _supportedOsc8UriAt(curLine, curCol - 1) == targetUri) {
+        curCol--;
+      }
+      if (curCol > 0 || curRow <= wrapStart) break;
+      final prevLine = lookup(curRow - 1);
+      if (prevLine == null) break;
+      final prevLen = _rowContentLength(
+        lookup,
+        prevLine.characters,
+        curRow - 1,
+        wrapEnd,
+      );
+      if (prevLen <= 0 ||
+          _supportedOsc8UriAt(prevLine, prevLen - 1) != targetUri) {
+        break;
+      }
+      curRow--;
+      curCol = prevLen - 1;
+    }
+    return (curCol, curRow);
+  }
+
+  static (int col, int row) _walkOsc8End(
+    VirtualLineLookup lookup,
+    String targetUri,
+    int col,
+    int row,
+    int wrapEnd,
+  ) {
+    var curRow = row;
+    var curCol = col;
+    while (true) {
+      final curLine = lookup(curRow);
+      if (curLine == null) break;
+      final chars = curLine.characters;
+      while (curCol + 1 < chars.length &&
+          _supportedOsc8UriAt(curLine, curCol + 1) == targetUri) {
+        curCol++;
+      }
+      if (curCol + 1 < chars.length && chars[curCol + 1].isEmpty) {
+        curCol++;
+      }
+      final curLen = _rowContentLength(lookup, chars, curRow, wrapEnd);
+      if (curRow >= wrapEnd || curCol < curLen - 1) break;
+      final nextLine = lookup(curRow + 1);
+      if (nextLine == null ||
+          nextLine.characters.isEmpty ||
+          _supportedOsc8UriAt(nextLine, 0) != targetUri) {
+        break;
+      }
+      curRow++;
+      curCol = 0;
+    }
+    return (curCol, curRow);
+  }
+
+  static ResolvedTerminalLink? _matchPlainLinkSpan(
+    VirtualLineLookup lookup,
+    int snappedCol,
+    int virtualRow,
+    int wrapStart,
+    int wrapEnd,
+  ) {
+    final (logicalText, clickedOffset, cellByOffset) = _buildLogicalLine(
+      lookup,
+      wrapStart,
+      wrapEnd,
+      targetRow: virtualRow,
+      targetCol: snappedCol,
+    );
+    if (clickedOffset < 0) return null;
+    final match = _matchPlainUrlAtOffset(
+      logicalText,
+      clickedOffset,
+      cellByOffset,
+    );
+    if (match == null) return null;
+    final endChars = lookup(match.endRow)?.characters;
+    if (endChars == null ||
+        match.endCol + 1 >= endChars.length ||
+        endChars[match.endCol + 1].isNotEmpty) {
+      return match;
+    }
+    return (
+      uri: match.uri,
+      startCol: match.startCol,
+      startRow: match.startRow,
+      endCol: match.endCol + 1,
+      endRow: match.endRow,
+    );
+  }
+
+  static (int startRow, int endRow) _softWrapBounds(
+    VirtualLineLookup lookup,
+    int virtualY,
+  ) {
+    var startRow = virtualY;
+    while (virtualY - startRow < _maxLinkWrapRows &&
+        startRow > 0 &&
+        (lookup(startRow)?.isWrapped ?? false)) {
+      startRow--;
+    }
+    var endRow = virtualY;
+    while (endRow - virtualY < _maxLinkWrapRows &&
+        (lookup(endRow + 1)?.isWrapped ?? false)) {
+      endRow++;
+    }
+    return (startRow, endRow);
+  }
+
+  static (String text, int clickedOffset, List<SelectionPoint> cellByOffset)
+  _buildLogicalLine(
+    VirtualLineLookup lookup,
+    int startRow,
+    int endRow, {
+    required int targetRow,
+    required int targetCol,
+  }) {
+    final sb = StringBuffer();
+    final cellByOffset = <SelectionPoint>[];
+    var clickedOffset = -1;
+    for (var row = startRow; row <= endRow; row++) {
+      final chars = lookup(row)?.characters ?? const <String>[];
+      final limit = _rowContentLength(lookup, chars, row, endRow);
+      final rowOffset = _appendLogicalRow(
+        sb,
+        cellByOffset,
+        chars,
+        row,
+        limit,
+        row == targetRow ? targetCol : null,
+      );
+      if (rowOffset != null) clickedOffset = rowOffset;
+    }
+    return ('$sb', clickedOffset, cellByOffset);
+  }
+
+  static int _rowContentLength(
+    VirtualLineLookup lookup,
+    List<String> chars,
+    int row,
+    int endRow,
+  ) {
+    if (row >= endRow || chars.isEmpty || chars.last != ' ') {
+      return chars.length;
+    }
+    final next = lookup(row + 1)?.characters;
+    final nextStartsWide =
+        next != null &&
+        next.length > 1 &&
+        next[0].isNotEmpty &&
+        next[1].isEmpty;
+    return nextStartsWide ? chars.length - 1 : chars.length;
+  }
+
+  static int? _appendLogicalRow(
+    StringBuffer sb,
+    List<SelectionPoint> cellByOffset,
+    List<String> chars,
+    int row,
+    int limit,
+    int? targetCol,
+  ) {
+    int? clickedOffset;
+    for (var col = 0; col < limit; col++) {
+      final cell = chars[col];
+      if (col == targetCol && !cell.startsWith(kittyPlaceholderChar)) {
+        clickedOffset = sb.length;
+      }
+      if (cell.isEmpty) continue;
+      final normalized = cell.startsWith(kittyPlaceholderChar) ? ' ' : cell;
+      sb.write(normalized);
+      final pt = SelectionPoint(col, row);
+      for (var i = 0; i < normalized.length; i++) {
+        cellByOffset.add(pt);
+      }
+    }
+    return clickedOffset;
+  }
+
+  static ResolvedTerminalLink? _matchPlainUrlAtOffset(
+    String text,
+    int clickedOffset,
+    List<SelectionPoint> cellByOffset,
+  ) {
+    for (final match in _plainLinkCandidatePattern.allMatches(text)) {
+      if (clickedOffset < match.start || clickedOffset >= match.end) continue;
+      final trimmed = _trimTrailingUrlPunctuation(match.group(0)!);
+      final endOffset = match.start + trimmed.length;
+      if (clickedOffset >= endOffset) return null;
+      final uri = _parsePlainExternalUri(trimmed);
+      if (uri == null) return null;
+      final startPt = cellByOffset[match.start];
+      final endPt = cellByOffset[endOffset - 1];
+      return (
+        uri: '$uri',
+        startCol: startPt.col,
+        startRow: startPt.row,
+        endCol: endPt.col,
+        endRow: endPt.row,
+      );
+    }
+    return null;
+  }
+
+  static Uri? _parsePlainExternalUri(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return null;
+    return switch (uri.scheme.toLowerCase()) {
+      'http' || 'https' when uri.hasAuthority && uri.host.isNotEmpty => uri,
+      'mailto' when !uri.hasAuthority && uri.path.isNotEmpty => uri,
+      _ => null,
+    };
+  }
+
+  static String _trimTrailingUrlPunctuation(String raw) {
+    var end = raw.length;
+    while (end > 0 && _shouldStripTrailingChar(raw, end)) {
+      end--;
+    }
+    return end == raw.length ? raw : raw.substring(0, end);
+  }
+
+  static bool _shouldStripTrailingChar(String raw, int end) =>
+      switch (raw[end - 1]) {
+        '.' || ',' || ';' || ':' || '!' || '?' => true,
+        ')' => _countChar(raw, end, ')') > _countChar(raw, end, '('),
+        ']' => _countChar(raw, end, ']') > _countChar(raw, end, '['),
+        '}' => _countChar(raw, end, '}') > _countChar(raw, end, '{'),
+        _ => false,
+      };
+
+  static int _countChar(String text, int limit, String target) {
+    final code = target.codeUnitAt(0);
+    var count = 0;
+    for (var i = 0; i < limit; i++) {
+      if (text.codeUnitAt(i) == code) count++;
+    }
+    return count;
   }
 
   /// Resolves the confining [SelectionRegion] for a pointer gesture starting at
