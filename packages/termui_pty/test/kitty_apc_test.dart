@@ -253,6 +253,21 @@ void main() {
         terminal.writeString('\x1b_Gi=302,a=t,f=100,q=1;$badPng\x1b\\');
         expect(terminal.imageRegistry.lookupImage(302), isNull);
         expect(replies, equals(['\x1b_Gi=302;EINVAL:invalid payload\x1b\\']));
+
+        // Reject PNG decompression bomb with oversized IHDR even if s=1,v=1 are small!
+        replies.clear();
+        final bombPng = base64Encode(_minimalPngBytes(20000, 20000));
+        terminal.writeString(
+          '\x1b_Gi=303,s=1,v=1,a=t,f=100,q=1;$bombPng\x1b\\',
+        );
+        expect(terminal.imageRegistry.lookupImage(303), isNull);
+        expect(replies, equals(['\x1b_Gi=303;EINVAL:invalid payload\x1b\\']));
+
+        // Reject explicit s=/v= that disagree with valid PNG IHDR dimensions!
+        replies.clear();
+        terminal.writeString('\x1b_Gi=304,s=8,v=8,a=t,f=100,q=1;$b64\x1b\\');
+        expect(terminal.imageRegistry.lookupImage(304), isNull);
+        expect(replies, equals(['\x1b_Gi=304;EINVAL:invalid payload\x1b\\']));
       },
     );
 
@@ -342,6 +357,39 @@ void main() {
         );
         expect(terminal.imageRegistry.lookupImage(600), isNull);
         expect(replies, equals(['\x1b_Gi=600;EFBIG:payload too large\x1b\\']));
+      },
+    );
+
+    test(
+      'imageRegistryRevision increments on upload, overwrite, delete, and reset while bumping version on overwrite',
+      () {
+        final terminal = VirtualTerminal(width: 10, height: 5);
+        expect(terminal.imageRegistryRevision, equals(0));
+
+        // Query alone does not mutate registry revision.
+        terminal.writeString('\x1b_Gi=1,s=1,v=1,a=q,f=32;AAAA\x1b\\');
+        expect(terminal.imageRegistryRevision, equals(0));
+
+        final px1 = base64Encode(Uint8List.fromList([255, 0, 0, 255]));
+        terminal.writeString('\x1b_Gi=7,s=1,v=1,a=t,f=32;$px1\x1b\\');
+        final revAfterUpload = terminal.imageRegistryRevision;
+        expect(revAfterUpload, greaterThan(0));
+        expect(terminal.imageRegistry.lookupImage(7)?.version, equals(0));
+
+        // Overwriting same imageId bumps both imageRegistryRevision and image version.
+        final px2 = base64Encode(Uint8List.fromList([0, 255, 0, 255]));
+        terminal.writeString('\x1b_Gi=7,s=1,v=1,a=t,f=32;$px2\x1b\\');
+        expect(terminal.imageRegistryRevision, greaterThan(revAfterUpload));
+        expect(terminal.imageRegistry.lookupImage(7)?.version, equals(1));
+
+        final revBeforeDelete = terminal.imageRegistryRevision;
+        terminal.writeString('\x1b_Ga=d,d=i,i=7\x1b\\');
+        expect(terminal.imageRegistryRevision, greaterThan(revBeforeDelete));
+        expect(terminal.imageRegistry.lookupImage(7), isNull);
+
+        final revBeforeReset = terminal.imageRegistryRevision;
+        terminal.reset();
+        expect(terminal.imageRegistryRevision, greaterThan(revBeforeReset));
       },
     );
   });

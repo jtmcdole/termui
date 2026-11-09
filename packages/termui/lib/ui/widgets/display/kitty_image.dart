@@ -513,9 +513,14 @@ class KittyImageRegistry {
   static final KittyImageRegistry global = KittyImageRegistry();
 
   final Map<int, KittyImageData> _images = {};
+  int _revision = 0;
 
   /// Creates an empty [KittyImageRegistry].
   KittyImageRegistry();
+
+  /// Monotonically increasing revision counter incremented whenever images are
+  /// registered, updated, unregistered, or cleared.
+  int get revision => _revision;
 
   /// Registers or updates [data] in this registry under its 32-bit `imageId`.
   ///
@@ -529,6 +534,7 @@ class KittyImageRegistry {
       return;
     }
     _images[key] = data;
+    _revision++;
   }
 
   /// Looks up the [KittyImageData] for [imageId] in this registry, or `null`.
@@ -536,11 +542,16 @@ class KittyImageRegistry {
 
   /// Removes the registered [KittyImageData] for [imageId] from this registry.
   void unregisterImage(int imageId) {
-    _images.remove(imageId & 0xFFFFFFFF);
+    if (_images.remove(imageId & 0xFFFFFFFF) != null) {
+      _revision++;
+    }
   }
 
   /// Removes all images from this registry.
-  void clearImages() => _images.clear();
+  void clearImages() {
+    _images.clear();
+    _revision++;
+  }
 
   /// Returns all 32-bit image IDs currently stored in this registry.
   Iterable<int> get registeredImageIds => _images.keys;
