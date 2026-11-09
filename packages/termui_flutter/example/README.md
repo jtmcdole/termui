@@ -10,6 +10,7 @@ Run from `packages/termui_flutter/example`:
   ```bash
   flutter run -t lib/main.dart
   ```
+  Includes the **KTTY Probe (`VirtualTerminal`)** demo (`?demo=ktty-probe`), which runs the standalone wire-protocol KTTY capability probe inside an in-memory `termui_pty` `VirtualTerminal` + `TerminalView`. Press `F9` to toggle programming font ligatures (uses host system `Cascadia Code` / `Fira Code` / `JetBrains Mono` when installed, falling back to bundled `MesloLGS NF` / `Cascadia Mono`).
 * **Interactive Widget Book (`lib/widget_book.dart`)**:
   ```bash
   flutter run -t lib/widget_book.dart
