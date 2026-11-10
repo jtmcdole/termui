@@ -203,6 +203,91 @@ void main() {
         await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
         await tester.pump();
         expect(service.getClipboardCount - beforePasteCount, equals(1));
+
+        // Unshifted Control+O across C0 ('\x0f'), CapsLock ('O'), and lowercase ('o')
+        // emits normalized KeyEvent('o', modifiers: {control}); Control+Shift+O populates shiftedCodepoint 79.
+        terminal.backend.write('\x1b[=0;1u');
+        for (final ch in const ['\x0f', 'O', 'o']) {
+          events.clear();
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+          await tester.sendKeyEvent(LogicalKeyboardKey.keyO, character: ch);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+          await tester.pump();
+          expect(
+            events.whereType<term.KeyEvent>().single,
+            equals(
+              const term.KeyEvent(
+                'o',
+                term.KeyType.character,
+                modifiers: {term.Modifier.control},
+              ),
+            ),
+          );
+        }
+
+        events.clear();
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyO, character: '\x0f');
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+        expect(
+          events.whereType<term.KeyEvent>().single,
+          equals(
+            const term.KeyEvent(
+              'o',
+              term.KeyType.character,
+              modifiers: {term.Modifier.control, term.Modifier.shift},
+              shiftedCodepoint: 79,
+            ),
+          ),
+        );
+
+        // AltGr (Control+Alt) composed characters must NOT be overwritten by keyLabel.
+        for (final (key, composed) in const [
+          (LogicalKeyboardKey.keyQ, '@'),
+          (LogicalKeyboardKey.keyO, 'ó'),
+        ]) {
+          events.clear();
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.altRight);
+          await tester.sendKeyEvent(key, character: composed);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.altRight);
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+          await tester.pump();
+          expect(
+            events.whereType<term.KeyEvent>().single,
+            equals(
+              term.KeyEvent(
+                composed,
+                term.KeyType.character,
+                modifiers: const {term.Modifier.control, term.Modifier.alt},
+              ),
+            ),
+          );
+        }
+
+        // Shift+<letter> release (KeyUpEvent has null character) keeps shiftedCodepoint.
+        terminal.backend.write('\x1b[=2;1u');
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyO, character: 'O');
+        events.clear();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyO);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.pump();
+        expect(
+          events.whereType<term.KeyEvent>().single,
+          equals(
+            const term.KeyEvent(
+              'o',
+              term.KeyType.character,
+              modifiers: {term.Modifier.shift},
+              eventType: term.KeyEventType.release,
+              shiftedCodepoint: 79,
+            ),
+          ),
+        );
       },
     );
   });
