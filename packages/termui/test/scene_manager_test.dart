@@ -1011,5 +1011,59 @@ void main() {
         });
       },
     );
+
+    test(
+      'enableDebugToggleKey = false forwards debugToggleKey (Ctrl+O) to focusedLayer and managed dialogs without toggling overlays',
+      () async {
+        FocusManager.instance.setPrimaryFocus(null);
+        sceneManager.enableDebugToggleKey = false;
+        final focusNode = FocusNode(id: 'dialog_keys');
+        addTearDown(() {
+          FocusManager.instance.setPrimaryFocus(null);
+          focusNode.dispose();
+          sceneManager.dispose();
+          debugShowTouchesEnabled = false;
+          debugPaintHoverEnabled = false;
+          debugMouseCursorEnabled = false;
+          debugPaintLayerBordersEnabled = false;
+        });
+
+        final renderer = MockSceneRenderer()..currentBuffer = Buffer(20, 5);
+        final layer = SceneLayer(renderer: renderer, width: 20, height: 5);
+        sceneManager.layers.add(layer);
+        sceneManager.focusedLayer = layer;
+
+        const ctrlO = KeyEvent('o', .character, modifiers: {.control});
+        expect(debugToggleKey, equals(ctrlO));
+        sceneManager.handleKeyEvent(ctrlO);
+
+        expect(debugPaintLayerBordersEnabled, isFalse);
+        expect(renderer.keyEvents, equals(const [ctrlO]));
+
+        // Managed dialogs (PromptRunner(mode: .managed)) must also ignore global debugToggleKey.
+        final dialogKeys = <KeyEvent>[];
+        final dialogFuture = sceneManager.showDialog<void>(
+          builder: (context) => KeyboardListener(
+            focusNode: focusNode,
+            onKeyEvent: (event) {
+              if (event != ctrlO) return false;
+              dialogKeys.add(event);
+              return true;
+            },
+            child: const Text('Dialog'),
+          ),
+        );
+        await pumpEventQueue();
+        focusNode.requestFocus();
+
+        sceneManager.handleKeyEvent(ctrlO);
+        expect(debugPaintLayerBordersEnabled, isFalse);
+        expect(dialogKeys, equals(const [ctrlO]));
+
+        // Dismiss dialog via Escape so no timers/runners leak after test ends.
+        sceneManager.handleKeyEvent(const KeyEvent('escape', .escape));
+        await dialogFuture;
+      },
+    );
   });
 }
