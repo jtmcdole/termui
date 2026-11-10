@@ -1,3 +1,8 @@
+## 0.4.1
+
+ - **FEAT**(termui_tinpot): add enableKittyPassthrough option to TermuiTinpot.
+ - **DOCS**(termui_tinpot): fix convertBuffer snippet and document CLI and DIN99d options.
+
 ## 0.4.0
 
 > Note: This release has breaking changes.

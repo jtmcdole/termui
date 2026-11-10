@@ -1,6 +1,6 @@
 name: termui_recorder
 description: Testing and recording utilities for termui, supporting ANSI screenshots, Asciicast v2/v3 recording, and interactive playback.
-version: 0.10.0
+version: 0.10.1
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_recorder
 
 resolution: workspace
@@ -24,7 +24,7 @@ environment:
   sdk: ">=3.11.0 <4.0.0"
 
 dependencies:
-  termui: ^0.13.0
+  termui: ^0.14.0
   characters: ^1.4.0
   args: ^2.7.0
   matcher: ^0.12.16

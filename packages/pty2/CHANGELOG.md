@@ -1,3 +1,8 @@
+## 0.8.1
+
+ - **FIX**(pty2): fall back to gcc on Linux and suppress Visual Studio warning.
+ - **DOCS**(pty2): update installation snippet version to ^0.8.0.
+
 ## 0.8.0
 
 > Note: This release has breaking changes.
