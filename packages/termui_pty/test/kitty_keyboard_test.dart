@@ -251,6 +251,79 @@ void main() {
           InputEncoder.encode(layoutCtrl, kittyKeyboardFlags: 5),
           equals('\x1b[1092::97;5u'),
         );
+
+        // C0 control character (`\x0f` with or without Modifier.control) and
+        // unshifted CapsLock uppercase ('O' with Modifier.control) normalize to
+        // base codepoint 111 ('o') in KTTY and raw 0x0f in legacy mode!
+        for (final ctrlO in const [
+          ev.KeyEvent('\x0f', ev.KeyType.character, modifiers: {.control}),
+          ev.KeyEvent('\x0f', ev.KeyType.character),
+          ev.KeyEvent('O', ev.KeyType.character, modifiers: {.control}),
+        ]) {
+          expect(
+            InputEncoder.encode(ctrlO, kittyKeyboardFlags: 1),
+            equals('\x1b[111;5u'),
+          );
+          expect(
+            InputEncoder.encode(ctrlO, kittyKeyboardFlags: 0),
+            equals('\x0f'),
+          );
+        }
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent(
+              'O',
+              ev.KeyType.character,
+              modifiers: {.control},
+              eventType: .release,
+            ),
+            kittyKeyboardFlags: 3,
+          ),
+          equals('\x1b[111;5:3u'),
+        );
+        // Control+Shift with lowercase 'o' or C0 '\x0f' and null shiftedCodepoint
+        // synthesizes shifted 'O' (79) when alternate keys (flag 4) are requested.
+        for (final ctrlShiftO in const [
+          ev.KeyEvent('o', ev.KeyType.character, modifiers: {.control, .shift}),
+          ev.KeyEvent(
+            '\x0f',
+            ev.KeyType.character,
+            modifiers: {.control, .shift},
+          ),
+        ]) {
+          expect(
+            InputEncoder.encode(ctrlShiftO, kittyKeyboardFlags: 5),
+            equals('\x1b[111:79;6u'),
+          );
+        }
+        expect(
+          [
+            for (final ch in const ['\x00', '\x1c', '\x1d', '\x1e', '\x1f'])
+              InputEncoder.encode(
+                ev.KeyEvent(
+                  ch,
+                  ev.KeyType.character,
+                  modifiers: const {.control},
+                ),
+                kittyKeyboardFlags: 1,
+              ),
+          ],
+          equals(const [
+            '\x1b[32;5u',
+            '\x1b[92;5u',
+            '\x1b[93;5u',
+            '\x1b[94;5u',
+            '\x1b[95;5u',
+          ]),
+        );
+        // Raw '\t', '\n', '\r', and '\x1b' character payloads remain untouched.
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent('\t', ev.KeyType.character),
+            kittyKeyboardFlags: 0,
+          ),
+          equals('\t'),
+        );
       },
     );
 
