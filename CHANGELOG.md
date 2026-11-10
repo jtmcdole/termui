@@ -3,6 +3,90 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-10
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.14.0`](#termui---v0140)
+ - [`termui_pty` - `v0.9.0`](#termui_pty---v090)
+
+Packages with other changes:
+
+ - [`pty2` - `v0.8.1`](#pty2---v081)
+ - [`termui_flutter` - `v0.10.2`](#termui_flutter---v0102)
+ - [`termui_recorder` - `v0.10.1`](#termui_recorder---v0101)
+ - [`termui_tinpot` - `v0.4.1`](#termui_tinpot---v041)
+ - [`termui_test` - `v0.4.1`](#termui_test---v041)
+ - [`termui_hotreload` - `v0.6.27`](#termui_hotreload---v0627)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_test` - `v0.4.1`
+ - `termui_hotreload` - `v0.6.27`
+
+---
+
+#### `termui` - `v0.14.0`
+
+ - **FIX**(termui,termui_pty): validate Kitty PNG IHDR bounds and track registry revision.
+ - **FIX**(termui): delegate intrinsic sizing in LayoutBuilder and SizedBox.expand.
+ - **FIX**(termui): refactor scroll_input_demo onto PromptRunner and add integration test.
+ - **FIX**(termui): use official drag-and-drop widgets and remove log file side effect in drag_drop_demo.
+ - **FEAT**(termui): support virtual scrollback selection and OSC 8 link spans.
+ - **FEAT**(termui): add region-aware TerminalSelectionController and Viewport selectable regions.
+ - **FEAT**(termui): add OSC 8 hyperlink support and extended SGR round-tripping in fromAnsi.
+ - **FEAT**(termui): add KittyImage widget and U+10EEEE Unicode placeholder rendering.
+ - **FEAT**(termui): support Overline, UnderlineStyle variants, and SGR 58 underlineColor.
+ - **DOCS**(termui): fix broken container links and document all 12 examples.
+ - **DOCS**(termui): update widget taxonomy, compositor effects, and termui_trace docs.
+ - **BREAKING** **FEAT**(termui): support Kitty Keyboard protocol, streaming APC responses, and SGR-Pixels mouse events.
+
+#### `termui_pty` - `v0.9.0`
+
+ - **FIX**(termui,termui_pty): validate Kitty PNG IHDR bounds and track registry revision.
+ - **FIX**(termui_pty): guard PseudoTerminalView against PTY subscription during intrinsic measurement.
+ - **FEAT**(termui_pty): add scrollback viewport navigation and OSC 133 jumpToPrompt.
+ - **FEAT**(termui_pty): support Kitty Keyboard, synchronized output, extended queries, OSC 9/99, and SGR-Pixels.
+ - **FEAT**(termui_pty): parse SGR 4:x underline variants, overline, SGR 58/59 underline color, and OSC 8.
+ - **FEAT**(termui_pty): support OSC 7 working directory and OSC 133 shell integration.
+ - **FEAT**(termui_pty): support OSC 0/1/2 window titles and XTWINOPS 22t/23t title stack.
+ - **DOCS**(termui_pty): replace invalid runApp and testWidgets snippets with PromptRunner and TerminalTester.
+ - **BREAKING** **FEAT**(termui_pty): support Kitty Graphics APC ingestion and placements.
+
+#### `pty2` - `v0.8.1`
+
+ - **FIX**(pty2): fall back to gcc on Linux and suppress Visual Studio warning.
+ - **DOCS**(pty2): update installation snippet version to ^0.8.0.
+
+#### `termui_flutter` - `v0.10.2`
+
+ - **FEAT**(termui_flutter): add selection/link delegation, exact cell metrics, and KTTY guards.
+ - **FEAT**(termui_flutter): allow mailto URLs in external link launcher.
+ - **FEAT**(example-flutter): add VirtualTerminal-wrapped KTTY probe demo.
+ - **FEAT**(termui_flutter): add multi-style GlyphAtlas, ligatures, Kitty keyboard, and SGR-Pixels.
+ - **FEAT**(termui_flutter): integrate TerminalSelectionController into Terminal and TuiAtlasPainter.
+ - **FEAT**(example_flutter): add Kitty Protocol demo tab to termui_flutter example.
+ - **FEAT**(termui_flutter): support Ctrl+click OSC 8 URLs, region/box selection, and GPU KittyImage caching.
+ - **FEAT**(termui_flutter): render extended SGR styles and KittyImage U+10EEEE placeholder tiles.
+ - **DOCS**(termui_flutter): update Terminal constructor, 3-pass painter, and example README.
+
+#### `termui_recorder` - `v0.10.1`
+
+ - **FEAT**(termui): add OSC 8 hyperlink support and extended SGR round-tripping in fromAnsi.
+ - **DOCS**(termui_recorder): document termui_play CLI and remove unimplemented PNG claims.
+
+#### `termui_tinpot` - `v0.4.1`
+
+ - **FEAT**(termui_tinpot): add enableKittyPassthrough option to TermuiTinpot.
+ - **DOCS**(termui_tinpot): fix convertBuffer snippet and document CLI and DIN99d options.
+
+
 ## 2026-11-06
 
 ### Changes

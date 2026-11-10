@@ -1,3 +1,15 @@
+## 0.10.2
+
+ - **FEAT**(termui_flutter): add selection/link delegation, exact cell metrics, and KTTY guards.
+ - **FEAT**(termui_flutter): allow mailto URLs in external link launcher.
+ - **FEAT**(example-flutter): add VirtualTerminal-wrapped KTTY probe demo.
+ - **FEAT**(termui_flutter): add multi-style GlyphAtlas, ligatures, Kitty keyboard, and SGR-Pixels.
+ - **FEAT**(termui_flutter): integrate TerminalSelectionController into Terminal and TuiAtlasPainter.
+ - **FEAT**(example_flutter): add Kitty Protocol demo tab to termui_flutter example.
+ - **FEAT**(termui_flutter): support Ctrl+click OSC 8 URLs, region/box selection, and GPU KittyImage caching.
+ - **FEAT**(termui_flutter): render extended SGR styles and KittyImage U+10EEEE placeholder tiles.
+ - **DOCS**(termui_flutter): update Terminal constructor, 3-pass painter, and example README.
+
 ## 0.10.1
 
  - **FIX**(termui_flutter): quantize trackpad scroll deltas and ignore zero-dy swipes.

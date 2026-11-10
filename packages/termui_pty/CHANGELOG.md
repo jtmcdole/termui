@@ -1,3 +1,17 @@
+## 0.9.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(termui,termui_pty): validate Kitty PNG IHDR bounds and track registry revision.
+ - **FIX**(termui_pty): guard PseudoTerminalView against PTY subscription during intrinsic measurement.
+ - **FEAT**(termui_pty): add scrollback viewport navigation and OSC 133 jumpToPrompt.
+ - **FEAT**(termui_pty): support Kitty Keyboard, synchronized output, extended queries, OSC 9/99, and SGR-Pixels.
+ - **FEAT**(termui_pty): parse SGR 4:x underline variants, overline, SGR 58/59 underline color, and OSC 8.
+ - **FEAT**(termui_pty): support OSC 7 working directory and OSC 133 shell integration.
+ - **FEAT**(termui_pty): support OSC 0/1/2 window titles and XTWINOPS 22t/23t title stack.
+ - **DOCS**(termui_pty): replace invalid runApp and testWidgets snippets with PromptRunner and TerminalTester.
+ - **BREAKING** **FEAT**(termui_pty): support Kitty Graphics APC ingestion and placements.
+
 ## 0.8.3
 
  - **FIX**(termui_pty): support SGR 6/21 and DECSED/DECSEL selective erase.

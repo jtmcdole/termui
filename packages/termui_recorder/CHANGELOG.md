@@ -1,3 +1,8 @@
+## 0.10.1
+
+ - **FEAT**(termui): add OSC 8 hyperlink support and extended SGR round-tripping in fromAnsi.
+ - **DOCS**(termui_recorder): document termui_play CLI and remove unimplemented PNG claims.
+
 ## 0.10.0
 
 > Note: This release has breaking changes.

@@ -36,12 +36,12 @@ dependencies:
 
   cupertino_icons: ^1.0.8
   file: ^7.0.0
-  termui: ^0.13.0
-  termui_flutter: ^0.10.1
+  termui: ^0.14.0
+  termui_flutter: ^0.10.2
   termui_shared_examples: any
-  termui_recorder: ^0.10.0
-  termui_pty: ^0.8.3
-  pty2: ^0.8.0
+  termui_recorder: ^0.10.1
+  termui_pty: ^0.9.0
+  pty2: ^0.8.1
   core_bus: ^1.0.1
   clock: ^1.1.2
   web: ^1.1.1
@@ -54,7 +54,7 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
-  termui_test: ^0.4.0
+  termui_test: ^0.4.1
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

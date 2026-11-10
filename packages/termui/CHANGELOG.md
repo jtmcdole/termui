@@ -1,3 +1,20 @@
+## 0.14.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(termui,termui_pty): validate Kitty PNG IHDR bounds and track registry revision.
+ - **FIX**(termui): delegate intrinsic sizing in LayoutBuilder and SizedBox.expand.
+ - **FIX**(termui): refactor scroll_input_demo onto PromptRunner and add integration test.
+ - **FIX**(termui): use official drag-and-drop widgets and remove log file side effect in drag_drop_demo.
+ - **FEAT**(termui): support virtual scrollback selection and OSC 8 link spans.
+ - **FEAT**(termui): add region-aware TerminalSelectionController and Viewport selectable regions.
+ - **FEAT**(termui): add OSC 8 hyperlink support and extended SGR round-tripping in fromAnsi.
+ - **FEAT**(termui): add KittyImage widget and U+10EEEE Unicode placeholder rendering.
+ - **FEAT**(termui): support Overline, UnderlineStyle variants, and SGR 58 underlineColor.
+ - **DOCS**(termui): fix broken container links and document all 12 examples.
+ - **DOCS**(termui): update widget taxonomy, compositor effects, and termui_trace docs.
+ - **BREAKING** **FEAT**(termui): support Kitty Keyboard protocol, streaming APC responses, and SGR-Pixels mouse events.
+
 ## 0.13.0
 
 > Note: This release has breaking changes.
