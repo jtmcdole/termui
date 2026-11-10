@@ -815,18 +815,20 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
   }
 
   bool _handleDebugToggle(term.KeyEvent event) {
-    if (debugToggleKey == null || event != debugToggleKey) return false;
+    if (mode != .standalone ||
+        debugToggleKey == null ||
+        event != debugToggleKey) {
+      return false;
+    }
     debugShowTouchesEnabled = !debugShowTouchesEnabled;
     debugPaintHoverEnabled = !debugPaintHoverEnabled;
     debugMouseCursorEnabled = !debugMouseCursorEnabled;
     debugPaintLayerBordersEnabled = !debugPaintLayerBordersEnabled;
 
-    if (mode == ExecutionMode.standalone) {
-      if (debugPaintHoverEnabled) {
-        terminal.enableMouseTracking();
-      } else {
-        terminal.disableMouseTracking();
-      }
+    if (debugPaintHoverEnabled) {
+      terminal.enableMouseTracking();
+    } else {
+      terminal.disableMouseTracking();
     }
     _scheduleRender();
     return true;

@@ -54,6 +54,9 @@ class SceneManager implements Reassemblable {
   /// Whether mouse tracking is explicitly forced/enabled.
   bool enableMouseTracking = false;
 
+  /// Whether [debugToggleKey] toggles visual debug overlays for this scene.
+  bool enableDebugToggleKey = true;
+
   /// Optional callback invoked whenever a composited frame is completely rendered.
   void Function(Buffer buffer)? onFrameRedrawn;
 
@@ -216,7 +219,9 @@ class SceneManager implements Reassemblable {
       return;
     }
 
-    if (debugToggleKey != null && event == debugToggleKey) {
+    if (enableDebugToggleKey &&
+        debugToggleKey != null &&
+        event == debugToggleKey) {
       debugShowTouchesEnabled = !debugShowTouchesEnabled;
       debugPaintHoverEnabled = !debugPaintHoverEnabled;
       debugMouseCursorEnabled = !debugMouseCursorEnabled;
