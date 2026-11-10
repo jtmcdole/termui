@@ -1106,7 +1106,7 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       LogicalKeyboardKey.numpadAdd => ('+', term.KeyType.character),
       LogicalKeyboardKey.minus ||
       LogicalKeyboardKey.numpadSubtract => ('-', term.KeyType.character),
-      _ when _isCtrlShiftLetter(key, mods) => (
+      _ when _isCtrlLetter(key, mods, event.character) => (
         key.keyLabel.toLowerCase(),
         term.KeyType.character,
       ),
@@ -1119,22 +1119,47 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
       _ => (null, null),
     };
     if (termKey == null || termType == null) return null;
+    final shiftedCodepoint = _resolveShiftedCodepoint(key, mods, termKey);
     return term.KeyEvent(
       termKey,
       termType,
       modifiers: mods,
       eventType: eventType,
+      shiftedCodepoint: shiftedCodepoint,
     );
   }
 
-  static bool _isCtrlShiftLetter(
+  static bool _isCtrlLetter(
     LogicalKeyboardKey key,
     Set<term.Modifier> mods,
-  ) =>
-      mods.contains(term.Modifier.control) &&
-      mods.contains(term.Modifier.shift) &&
-      _isAsciiLetterKey(key) &&
-      key.keyLabel.length == 1;
+    String? character,
+  ) {
+    if (!mods.contains(term.Modifier.control) ||
+        !_isAsciiLetterKey(key) ||
+        key.keyLabel.length != 1) {
+      return false;
+    }
+    if (character == null || character.isEmpty) return true;
+    final unit = character.codeUnitAt(0);
+    if (character.length == 1 && (unit <= 0x1F || unit == 0x7F)) {
+      return true;
+    }
+    return character.toLowerCase() == key.keyLabel.toLowerCase();
+  }
+
+  static int? _resolveShiftedCodepoint(
+    LogicalKeyboardKey key,
+    Set<term.Modifier> mods,
+    String termKey,
+  ) {
+    if (!mods.contains(term.Modifier.shift) ||
+        !_isAsciiLetterKey(key) ||
+        key.keyLabel.length != 1) {
+      return null;
+    }
+    final lower = key.keyLabel.toLowerCase();
+    return termKey == lower ? lower.toUpperCase().codeUnitAt(0) : null;
+  }
 
   static (String, term.KeyType) _resolveCharacterKey(String ch) =>
       (ch == '\n' || ch == '\r' || ch == '\r\n')
