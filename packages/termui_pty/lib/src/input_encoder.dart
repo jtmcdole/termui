@@ -55,12 +55,60 @@ abstract final class InputEncoder {
         (kittyKeyboardFlags & 2) == 0) {
       return '';
     }
-    return _encodeKittyKeyEvent(key, kittyKeyboardFlags) ??
-        (applicationCursorKeys && key.modifiers.isEmpty
-            ? _encodeApplicationCursorKey(key.type)
+    final normalized = _normalizeControlKey(key);
+    return _encodeKittyKeyEvent(normalized, kittyKeyboardFlags) ??
+        (applicationCursorKeys && normalized.modifiers.isEmpty
+            ? _encodeApplicationCursorKey(normalized.type)
             : null) ??
-        _encodeKeyEvent(key);
+        _encodeKeyEvent(normalized);
   }
+
+  static ev.KeyEvent _normalizeControlKey(ev.KeyEvent event) {
+    if (event.type != .character || event.key.length != 1) return event;
+    final code = event.key.codeUnitAt(0);
+    if (_c0ControlBaseChar(code) case final baseChar?) {
+      return _withNormalizedKey(
+        event,
+        baseChar,
+        modifiers: {...event.modifiers, .control},
+      );
+    }
+    if (code >= 0x41 &&
+        code <= 0x5A &&
+        event.modifiers.contains(ev.Modifier.control) &&
+        !event.modifiers.contains(ev.Modifier.shift)) {
+      return _withNormalizedKey(event, String.fromCharCode(code + 0x20));
+    }
+    return event;
+  }
+
+  static String? _c0ControlBaseChar(int code) {
+    if (code == 0x09 || code == 0x0A || code == 0x0D || code == 0x1B) {
+      return null;
+    }
+    if (code >= 0x01 && code <= 0x1A) return String.fromCharCode(code + 0x60);
+    return switch (code) {
+      0x00 => ' ',
+      0x1C => r'\',
+      0x1D => ']',
+      0x1E => '^',
+      0x1F => '_',
+      _ => null,
+    };
+  }
+
+  static ev.KeyEvent _withNormalizedKey(
+    ev.KeyEvent event,
+    String key, {
+    Set<ev.Modifier>? modifiers,
+  }) => ev.KeyEvent(
+    key,
+    event.type,
+    modifiers: modifiers ?? event.modifiers,
+    eventType: event.eventType,
+    shiftedCodepoint: event.shiftedCodepoint,
+    baseLayoutCodepoint: event.baseLayoutCodepoint,
+  );
 
   /// Encodes terminal focus-in (`\x1b[I`) or focus-out (`\x1b[O`) events for
   /// `DECSET 1004` focus reporting mode.
@@ -322,9 +370,12 @@ abstract final class InputEncoder {
     final baseCodepoint = isAsciiUpper ? rune + 32 : rune;
     if (!reportAlternates) return '$baseCodepoint';
 
-    final rawShifted = isAsciiUpper
-        ? (key.shiftedCodepoint ?? rune)
-        : (isShifted ? key.shiftedCodepoint : null);
+    final rawShifted = _resolveShiftedCodepoint(
+      key,
+      rune: rune,
+      isShifted: isShifted,
+      isAsciiUpper: isAsciiUpper,
+    );
     final shifted = (rawShifted != null && rawShifted != baseCodepoint)
         ? rawShifted
         : null;
@@ -339,6 +390,19 @@ abstract final class InputEncoder {
       (null, final b?) => '$baseCodepoint::$b',
       (null, null) => '$baseCodepoint',
     };
+  }
+
+  static int? _resolveShiftedCodepoint(
+    ev.KeyEvent key, {
+    required int rune,
+    required bool isShifted,
+    required bool isAsciiUpper,
+  }) {
+    if (!isShifted) return null;
+    if (key.shiftedCodepoint != null) return key.shiftedCodepoint;
+    if (isAsciiUpper) return rune;
+    if (key.key.length == 1 && rune >= 97 && rune <= 122) return rune - 32;
+    return null;
   }
 
   static int _encodeKittyModifierBits(ev.KeyEvent key) {
