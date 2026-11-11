@@ -1,16 +1,19 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/rendering.dart' hide Color;
+import 'package:flutter/material.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/style.dart';
+import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
-// ignore: implementation_imports
-import 'package:termui_flutter/src/rendering/atlas.dart';
+import 'package:termui_flutter/termui_flutter.dart';
 // ignore: implementation_imports
 import 'package:termui_flutter/src/rendering/painter.dart';
+// ignore: implementation_imports
+import 'package:termui_flutter/src/terminal.dart'
+    show PrivateTuiView, PrivateTuiViewState;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -424,4 +427,316 @@ void main() {
       );
     },
   );
+
+  _defineThemePalettePainterTests();
+}
+
+void _defineThemePalettePainterTests() {
+  group('Theme palette, default colors, faintOpacity, and live updates', () {
+    test(
+      'resolveCellForegroundArgb & resolveCellBackgroundArgb honor theme, reverse, and faintOpacity',
+      _testResolveCellColors,
+    );
+    test(
+      'TuiAtlasPainter renders custom defaultBg, SGR 58;5;n underline, and fallback CJK faintOpacity',
+      _testUnderlineAndFallbackPaint,
+    );
+    testWidgets(
+      'PrivateTuiView updates fallbackPainters & TuiAtlasPainter when theme changes',
+      _testLiveThemeUpdate,
+    );
+  });
+}
+
+void _testResolveCellColors() {
+  const theme = TerminalColorTheme.solarizedLight;
+  final defBg = theme.background.argb;
+  final defFg = theme.foreground.argb;
+
+  expect(
+    TuiAtlasPainter.resolveCellBackgroundArgb(
+      0,
+      0,
+      isReverse: false,
+      defaultForegroundArgb: defFg,
+      defaultBackgroundArgb: defBg,
+      palette: theme,
+    ),
+    equals(defBg),
+  );
+  expect(
+    TuiAtlasPainter.resolveCellForegroundArgb(
+      const Color.ansi(4).argb,
+      0,
+      modifiers: Modifier.none,
+      isReverse: false,
+      defaultForegroundArgb: defFg,
+      defaultBackgroundArgb: defBg,
+      faintOpacity: 0.75,
+      palette: theme,
+    ),
+    equals(theme.ansi[4].argb),
+  );
+
+  final revBg = TuiAtlasPainter.resolveCellBackgroundArgb(
+    0,
+    const Color.ansi(1).argb,
+    isReverse: true,
+    defaultForegroundArgb: defFg,
+    defaultBackgroundArgb: defBg,
+    palette: theme,
+  );
+  expect(revBg, equals(theme.ansi[1].argb));
+
+  final dimFg = TuiAtlasPainter.resolveCellForegroundArgb(
+    const Color.ansi(4).argb,
+    0,
+    modifiers: Modifier.dim,
+    isReverse: false,
+    defaultForegroundArgb: defFg,
+    defaultBackgroundArgb: defBg,
+    faintOpacity: 0.75,
+    palette: theme,
+  );
+  expect((dimFg >> 24) & 0xFF, equals((255 * 0.75).round()));
+  expect(dimFg & 0x00FFFFFF, equals(theme.ansi[4].argb & 0x00FFFFFF));
+}
+
+int _countMatchingRgbPixels(
+  ByteData bytes,
+  int strideWidth, {
+  required int x0,
+  required int x1,
+  required int y0,
+  required int y1,
+  required Color target,
+}) {
+  var matches = 0;
+  for (var y = y0; y < y1; y++) {
+    for (var x = x0; x < x1; x++) {
+      final idx = (y * strideWidth + x) * 4;
+      if (bytes.getUint8(idx) == target.r &&
+          bytes.getUint8(idx + 1) == target.g &&
+          bytes.getUint8(idx + 2) == target.b) {
+        matches++;
+      }
+    }
+  }
+  return matches;
+}
+
+Future<void> _testUnderlineAndFallbackPaint() async {
+  final atlas = await GlyphAtlasGenerator.generateEmpty(
+    fontSize: 13.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(() => atlas.image.dispose());
+
+  const theme = TerminalColorTheme.solarizedLight;
+  final buffer = Buffer(4, 2)
+    ..writeString(
+      0,
+      0,
+      'A',
+      const Style(
+        foreground: Color.ansi(4),
+        underlineColor: Color.ansi(1),
+        modifiers: Modifier.underline,
+      ),
+    )
+    ..writeString(
+      2,
+      0,
+      '漢',
+      const Style(foreground: Color.ansi(2), modifiers: Modifier.dim),
+    );
+
+  final fallbackColor = ui.Color(
+    ((255 * 0.75).round() << 24) | (theme.ansi[2].argb & 0x00FFFFFF),
+  );
+  final fallbackKey = ('漢', false, false, true, fallbackColor);
+  final fallbackTp = TextPainter(
+    text: TextSpan(
+      text: '漢',
+      style: TextStyle(fontSize: 13.0, color: fallbackColor),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
+  addTearDown(fallbackTp.dispose);
+
+  final w = (4 * atlas.cellWidth).ceil();
+  final h = (2 * atlas.cellHeight).ceil();
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  TuiAtlasPainter(
+    buffer: buffer,
+    atlas: atlas,
+    fontFamily: 'Roboto Mono',
+    fallbackPainters: {fallbackKey: fallbackTp},
+    onMissingGlyphs: null,
+    defaultForegroundArgb: theme.foreground.argb,
+    defaultBackgroundArgb: theme.background.argb,
+    faintOpacity: 0.75,
+    palette: theme,
+  ).paint(canvas, Size(w.toDouble(), h.toDouble()));
+
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(w, h);
+  addTearDown(() {
+    picture.dispose();
+    image.dispose();
+  });
+  final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+  expect(byteData, isNotNull);
+  final bytes = byteData!;
+
+  // Empty Col 1 uses theme.background (#FDF6E3).
+  final sampleX = (1.5 * atlas.cellWidth).floor();
+  final sampleY = (0.5 * atlas.cellHeight).floor();
+  final bgIdx = (sampleY * w + sampleX) * 4;
+  expect(bytes.getUint8(bgIdx), equals(0xFD));
+  expect(bytes.getUint8(bgIdx + 1), equals(0xF6));
+  expect(bytes.getUint8(bgIdx + 2), equals(0xE3));
+
+  // Col 0 underline uses resolved theme.ansi[1] (#DC322F).
+  final matchingUnderlinePixels = _countMatchingRgbPixels(
+    bytes,
+    w,
+    x0: 0,
+    x1: atlas.cellWidth.ceil().clamp(0, w),
+    y0: (atlas.cellHeight * 0.75).floor(),
+    y1: atlas.cellHeight.ceil().clamp(0, h),
+    target: theme.ansi[1],
+  );
+  expect(matchingUnderlinePixels, greaterThan(0));
+}
+
+Future<void> _pumpUntilReady(
+  WidgetTester tester,
+  bool Function() isReady,
+) async {
+  for (var i = 0; i < 40 && !isReady(); i++) {
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await tester.pump();
+  }
+}
+
+Matcher _matchesFallbackKey(String glyph, int expectedArgb) =>
+    predicate<(String, bool, bool, bool, ui.Color)>(
+      (k) => k.$1 == glyph && k.$4 && k.$5.toARGB32() == expectedArgb,
+      'fallback painter for "$glyph" with ARGB $expectedArgb',
+    );
+
+Matcher _matchesLigatureKey(String ligature, int expectedArgb) =>
+    predicate<(String, bool, bool, ui.Color)>(
+      (k) => k.$1 == ligature && k.$4.toARGB32() == expectedArgb,
+      'ligature painter for "$ligature" with ARGB $expectedArgb',
+    );
+
+Future<void> _testLiveThemeUpdate(WidgetTester tester) async {
+  final terminal = FlutterTerminal(
+    initialFontSize: 13.0,
+    enableLigatures: true,
+  );
+  addTearDown(terminal.dispose);
+  void Function(Buffer)? drawFrame;
+
+  Widget buildWithTheme(TerminalColorTheme theme, double faintOpacity) {
+    return MaterialApp(
+      home: SizedBox(
+        width: 320,
+        height: 200,
+        child: Terminal(
+          terminal: terminal,
+          enableLigatures: true,
+          backgroundColor: ui.Color(theme.background.argb),
+          foregroundColor: ui.Color(theme.foreground.argb),
+          faintOpacity: faintOpacity,
+          palette: theme,
+          onRun: (_, onDraw) async {
+            drawFrame = onDraw;
+          },
+        ),
+      ),
+    );
+  }
+
+  await tester.runAsync(() async {
+    await tester.pumpWidget(
+      buildWithTheme(TerminalColorTheme.termuiDark, 0.55),
+    );
+    final state = tester.state<PrivateTuiViewState>(
+      find.byType(PrivateTuiView),
+    );
+    await _pumpUntilReady(
+      tester,
+      () => state.debugAtlas != null && drawFrame != null,
+    );
+    expect(state.debugAtlas, isNotNull);
+    expect(drawFrame, isNotNull);
+
+    final buf = Buffer(16, 2)
+      ..writeString(0, 0, 'Ж', const Style(modifiers: Modifier.dim))
+      ..writeString(2, 0, '<!--', const Style(modifiers: Modifier.dim));
+    drawFrame!(buf);
+    await Future<void>.microtask(() {});
+
+    final expectedDarkColor =
+        ((255 * 0.55).round() << 24) |
+        (TerminalColorTheme.termuiDark.foreground.argb & 0x00FFFFFF);
+    expect(
+      state.debugFallbackPainterKeys,
+      contains(_matchesFallbackKey('Ж', expectedDarkColor)),
+    );
+    await tester.pump();
+
+    CustomPaint paintWidget() => tester.widget<CustomPaint>(
+      find.descendant(
+        of: find.byType(PrivateTuiView),
+        matching: find.byType(CustomPaint),
+      ),
+    );
+
+    final darkPainter = paintWidget().painter! as TuiAtlasPainter;
+    expect(darkPainter.palette.id, equals(TerminalColorTheme.termuiDark.id));
+    expect(
+      darkPainter.ligaturePainters.keys,
+      contains(_matchesLigatureKey('<!--', expectedDarkColor)),
+    );
+
+    await tester.pumpWidget(
+      buildWithTheme(TerminalColorTheme.solarizedLight, 0.8),
+    );
+    await tester.pump();
+
+    final lightPainter = paintWidget().painter! as TuiAtlasPainter;
+    expect(
+      lightPainter.palette.id,
+      equals(TerminalColorTheme.solarizedLight.id),
+    );
+    expect(
+      lightPainter.defaultBackgroundArgb,
+      equals(TerminalColorTheme.solarizedLight.background.argb),
+    );
+    expect(lightPainter.faintOpacity, equals(0.8));
+    final expectedLightColor =
+        ((255 * 0.8).round() << 24) |
+        (TerminalColorTheme.solarizedLight.foreground.argb & 0x00FFFFFF);
+    expect(
+      lightPainter.ligaturePainters.keys,
+      contains(_matchesLigatureKey('<!--', expectedLightColor)),
+    );
+    expect(
+      lightPainter.ligaturePainters.keys,
+      isNot(
+        contains(
+          predicate<(String, bool, bool, ui.Color)>(
+            (k) => k.$4.toARGB32() == expectedDarkColor,
+            'ligature painter retaining previous dark theme color',
+          ),
+        ),
+      ),
+    );
+    expect(lightPainter.shouldRepaint(darkPainter), isTrue);
+  });
 }

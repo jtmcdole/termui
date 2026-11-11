@@ -12,6 +12,7 @@ import 'package:termui/perf/tracer.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
+import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 
@@ -74,6 +75,15 @@ final class Terminal extends StatefulWidget {
   /// The background color of the terminal view.
   final Color backgroundColor;
 
+  /// Default foreground color substituted when cells use `fg == 0`.
+  final Color foregroundColor;
+
+  /// Opacity multiplier in `(0.0, 1.0]` applied to `Modifier.dim` cells.
+  final double faintOpacity;
+
+  /// Palette used to resolve indexed ANSI cell colors.
+  final TerminalColorTheme palette;
+
   /// The MVVM service used for external operations like saving screenshots.
   final TerminalService service;
 
@@ -101,6 +111,9 @@ final class Terminal extends StatefulWidget {
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
     this.backgroundColor = Colors.black,
+    this.foregroundColor = Colors.white,
+    this.faintOpacity = 140 / 255,
+    this.palette = TerminalColorTheme.termuiDark,
     this.service = const DefaultTerminalService(),
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
@@ -189,6 +202,9 @@ class _TerminalState extends State<Terminal> {
       fontFamily: widget.fontFamily,
       fontFamilyFallback: widget.fontFamilyFallback,
       backgroundColor: widget.backgroundColor,
+      foregroundColor: widget.foregroundColor,
+      faintOpacity: widget.faintOpacity,
+      palette: widget.palette,
       service: widget.service,
       enableBleed: widget.enableBleed,
       enableLigatures: widget.enableLigatures,
@@ -240,6 +256,15 @@ final class PrivateTuiView extends StatefulWidget {
   /// General terminal canvas background color filler.
   final Color backgroundColor;
 
+  /// Default foreground color substituted when cells use `fg == 0`.
+  final Color foregroundColor;
+
+  /// Opacity multiplier in `(0.0, 1.0]` applied to `Modifier.dim` cells.
+  final double faintOpacity;
+
+  /// Palette used to resolve indexed ANSI cell colors.
+  final TerminalColorTheme palette;
+
   /// The service for saving screenshots.
   final TerminalService service;
 
@@ -268,6 +293,9 @@ final class PrivateTuiView extends StatefulWidget {
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
     this.backgroundColor = Colors.black,
+    this.foregroundColor = Colors.white,
+    this.faintOpacity = 140 / 255,
+    this.palette = TerminalColorTheme.termuiDark,
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
     this.selectionController,
@@ -623,6 +651,15 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
         _enableLigatures = widget.enableLigatures;
       }
     }
+    if (oldWidget.backgroundColor != widget.backgroundColor ||
+        oldWidget.foregroundColor != widget.foregroundColor ||
+        oldWidget.faintOpacity != widget.faintOpacity ||
+        oldWidget.palette != widget.palette) {
+      _disposePainterCaches();
+      if (_currentBuffer != null) {
+        _updateFallbackPainters(_currentBuffer!);
+      }
+    }
     if (oldWidget.enableBuiltinSelection && !widget.enableBuiltinSelection) {
       _isSelecting = false;
       _selectionController.clearSelection();
@@ -755,12 +792,18 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     int mods,
   ) {
     final isReverse = Modifier.has(mods, Modifier.reverse);
-    final fgVal = isReverse
-        ? buffer.getBackground(x, y)
-        : buffer.getForeground(x, y);
-    final color = fgVal != 0
-        ? Color(fgVal)
-        : (isReverse ? Colors.black : Colors.white);
+    final color = Color(
+      TuiAtlasPainter.resolveCellForegroundArgb(
+        buffer.getForeground(x, y),
+        buffer.getBackground(x, y),
+        modifiers: mods,
+        isReverse: isReverse,
+        defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+        defaultBackgroundArgb: widget.backgroundColor.toARGB32(),
+        faintOpacity: widget.faintOpacity,
+        palette: widget.palette,
+      ),
+    );
     final isBold = Modifier.has(mods, Modifier.bold);
     final isItalic = Modifier.has(mods, Modifier.italic);
     final isDim = Modifier.has(mods, Modifier.dim);
@@ -1765,6 +1808,10 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
                     : null,
                 kittyImages: _kittyGpuImages,
                 kittyImagesById: _kittyGpuImagesById,
+                defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+                defaultBackgroundArgb: widget.backgroundColor.toARGB32(),
+                faintOpacity: widget.faintOpacity,
+                palette: widget.palette,
               ),
             ),
     );

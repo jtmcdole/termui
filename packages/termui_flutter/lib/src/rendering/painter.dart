@@ -4,7 +4,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:termui/ui/buffer.dart';
+import 'package:termui/ui/color.dart' show ColorIntExtension;
 import 'package:termui/ui/style.dart';
+import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 import 'atlas.dart';
@@ -185,11 +187,27 @@ final class TuiAtlasPainter extends CustomPainter {
     this.selectionBoxMode = false,
     this.kittyImages = const {},
     this.kittyImagesById = const {},
+    this.defaultForegroundArgb = 0xFFFFFFFF,
+    this.defaultBackgroundArgb = 0xFF000000,
+    this.faintOpacity = 140 / 255,
+    this.palette = TerminalColorTheme.termuiDark,
   }) : _selectionStart = selectionStart,
        _selectionEnd = selectionEnd,
        _selectionColBounds = selectionColBounds,
        ligaturePainters =
            ligaturePainters ?? <(String, bool, bool, Color), TextPainter>{};
+
+  /// Default ARGB foreground color substituted when a cell has `fg == 0`.
+  final int defaultForegroundArgb;
+
+  /// Default ARGB background color substituted when a cell has `bg == 0`.
+  final int defaultBackgroundArgb;
+
+  /// Opacity multiplier in `(0.0, 1.0]` applied to `Modifier.dim` cells.
+  final double faintOpacity;
+
+  /// Palette used to resolve [ColorIntExtension.isAnsiIndexed] cell colors.
+  final TerminalColorTheme palette;
 
   void _drawRawAtlasInChunks(
     Canvas canvas,
@@ -720,6 +738,9 @@ final class TuiAtlasPainter extends CustomPainter {
   }) {
     if (char.isEmpty || (modifiers & _decorationMask) == 0) return;
     final ulArgb = buffer.getUnderlineColor(x, y);
+    final resolvedUl = ulArgb != 0
+        ? palette.resolvePackedColor(ulArgb)
+        : resolvedFg;
     decorations.add(
       _CellDecoration(
         x: screenX,
@@ -728,7 +749,7 @@ final class TuiAtlasPainter extends CustomPainter {
         h: geo.cellHeight,
         modifiers: modifiers,
         fgColor: resolvedFg,
-        ulColor: ulArgb != 0 ? ulArgb : resolvedFg,
+        ulColor: resolvedUl,
       ),
     );
   }
@@ -1336,40 +1357,89 @@ final class TuiAtlasPainter extends CustomPainter {
     }
   }
 
-  static int _resolveBgColor(
+  /// Resolves the effective ARGB background for a cell.
+  static int resolveCellBackgroundArgb(
     int bgArgb,
     int fgArgb, {
     required bool isReverse,
     bool isSelected = false,
+    int defaultForegroundArgb = 0xFFFFFFFF,
+    int defaultBackgroundArgb = 0xFF000000,
+    TerminalColorTheme palette = TerminalColorTheme.termuiDark,
   }) {
     if (isSelected) return _selectionBgArgb;
-    if (isReverse) {
-      return fgArgb == 0 ? 0xFFFFFFFF : fgArgb;
+    final raw = isReverse ? fgArgb : bgArgb;
+    if (raw == 0) {
+      return isReverse ? defaultForegroundArgb : defaultBackgroundArgb;
     }
-    return bgArgb == 0 ? 0xFF000000 : bgArgb;
+    return palette.resolvePackedColor(raw);
   }
 
-  static int _resolveFgColor(
+  /// Resolves the effective ARGB foreground for a cell, applying
+  /// [Modifier.dim] with [faintOpacity].
+  static int resolveCellForegroundArgb(
     int fgArgb,
     int bgArgb, {
     required int modifiers,
     required bool isReverse,
     bool isSelected = false,
+    int defaultForegroundArgb = 0xFFFFFFFF,
+    int defaultBackgroundArgb = 0xFF000000,
+    double faintOpacity = 140 / 255,
+    TerminalColorTheme palette = TerminalColorTheme.termuiDark,
   }) {
     if (isSelected && Modifier.has(modifiers, Modifier.hidden)) {
-      return 0xFFFFFFFF;
+      return defaultForegroundArgb;
     }
-    final raw = isReverse
-        ? (bgArgb == 0 ? 0xFF000000 : bgArgb)
-        : (fgArgb == 0 ? 0xFFFFFFFF : fgArgb);
+    final raw = isReverse ? bgArgb : fgArgb;
+    final resolved = raw == 0
+        ? (isReverse ? defaultBackgroundArgb : defaultForegroundArgb)
+        : palette.resolvePackedColor(raw);
     if (Modifier.has(modifiers, Modifier.dim)) {
-      final a = (((raw >> 24) & 0xFF) * 140) ~/ 255;
-      return (a << 24) | (raw & 0x00FFFFFF);
+      final a = (((resolved >> 24) & 0xFF) * faintOpacity).round().clamp(
+        0,
+        255,
+      );
+      return (a << 24) | (resolved & 0x00FFFFFF);
     }
-    return raw;
+    return resolved;
   }
 
+  int _resolveBgColor(
+    int bgArgb,
+    int fgArgb, {
+    required bool isReverse,
+    bool isSelected = false,
+  }) => resolveCellBackgroundArgb(
+    bgArgb,
+    fgArgb,
+    isReverse: isReverse,
+    isSelected: isSelected,
+    defaultForegroundArgb: defaultForegroundArgb,
+    defaultBackgroundArgb: defaultBackgroundArgb,
+    palette: palette,
+  );
+
+  int _resolveFgColor(
+    int fgArgb,
+    int bgArgb, {
+    required int modifiers,
+    required bool isReverse,
+    bool isSelected = false,
+  }) => resolveCellForegroundArgb(
+    fgArgb,
+    bgArgb,
+    modifiers: modifiers,
+    isReverse: isReverse,
+    isSelected: isSelected,
+    defaultForegroundArgb: defaultForegroundArgb,
+    defaultBackgroundArgb: defaultBackgroundArgb,
+    faintOpacity: faintOpacity,
+    palette: palette,
+  );
+
   @override
+  // Buffer cells mutate in place across frames without changing identity.
   bool shouldRepaint(covariant TuiAtlasPainter oldDelegate) => true;
 }
 
