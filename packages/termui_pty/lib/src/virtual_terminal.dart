@@ -609,6 +609,23 @@ final class VirtualTerminal implements TerminalHandler {
   /// The default background color applied when querying background color via OSC 11.
   final Color? defaultBackground;
 
+  /// Emits [Color.ansi] values instead of eager RGB for palette SGR codes.
+  final bool emitIndexedColors;
+
+  /// Optional theme palette used to answer `OSC 4`, `OSC 10/11/12`, and
+  /// `CSI ? 996 n` queries when explicit overrides are not set.
+  final TerminalColorTheme? theme;
+
+  /// The default cursor color reported by `OSC 12 ; ?`.
+  final Color? defaultCursorColor;
+
+  final Map<int, Color> _osc4Overrides = <int, Color>{};
+  Color? _osc10Override;
+  Color? _osc11Override;
+  Color? _osc12Override;
+  TerminalBrightness _colorScheme;
+  bool _colorSchemeReporting = false;
+
   /// Callback invoked when an `OSC 9` or `OSC 99` desktop notification is received.
   void Function(String title, String message)? onNotification;
 
@@ -648,11 +665,17 @@ final class VirtualTerminal implements TerminalHandler {
     this.transparentBackground = false,
     this.defaultForeground,
     this.defaultBackground,
+    this.emitIndexedColors = false,
+    this.theme,
+    this.defaultCursorColor,
+    TerminalBrightness? colorScheme,
     int maxScrollbackLines = 0,
     Duration? syncSafetyTimeout = _defaultSyncSafetyTimeout,
     this.onReply,
     this.onNotification,
   }) : width = math.max(1, width),
+       _colorScheme =
+           colorScheme ?? theme?.brightness ?? TerminalBrightness.dark,
        height = math.max(1, height),
        _cellPixelWidth = math.max(1, cellPixelWidth),
        _cellPixelHeight = math.max(1, cellPixelHeight),
@@ -848,6 +871,11 @@ final class VirtualTerminal implements TerminalHandler {
     _scrollTop = 0;
     _scrollBottom = height - 1;
     if (fullReset) {
+      _osc4Overrides.clear();
+      _osc10Override = null;
+      _osc11Override = null;
+      _osc12Override = null;
+      _colorSchemeReporting = false;
       _resetFullScreenState();
     } else {
       _resetSavedCursorOnly();
@@ -1036,9 +1064,19 @@ final class VirtualTerminal implements TerminalHandler {
     }
   }
 
+  int _resolveOscColorArg(Color? color, Color? dynamicOverride) {
+    if (color == null) return dynamicOverride?.argb ?? 0;
+    if (color.isAnsiIndexed) {
+      return _osc4Overrides[color.ansiIndex]?.argb ?? color.argb;
+    }
+    return color.argb;
+  }
+
   (int fg, int bg, int mod) _eraseAttributes() {
-    final bgArg = _currentStyle.background?.argb ?? 0;
-    if (transparentBackground && (bgArg == 0 || bgArg == 0xFF000000)) {
+    final bgArg = _resolveOscColorArg(_currentStyle.background, _osc11Override);
+    if (transparentBackground &&
+        _osc11Override == null &&
+        (bgArg == 0 || bgArg == 0xFF000000)) {
       return (0, 0, Modifier.transparent);
     }
     return (0, bgArg, Modifier.none);
@@ -1317,7 +1355,7 @@ final class VirtualTerminal implements TerminalHandler {
       fg: fgArg,
       bg: bgArg,
       modifiers: modArg,
-      underlineColor: _currentStyle.underlineColor?.argb ?? 0,
+      underlineColor: _resolveOscColorArg(_currentStyle.underlineColor, null),
       uri: _activeUri ?? '',
     );
     _advanceCursorAfterPrint(1);
@@ -1345,15 +1383,17 @@ final class VirtualTerminal implements TerminalHandler {
   (int fg, int bg, int mod, bool bgTransparent) _resolvePrintAttributes(
     String char,
   ) {
-    var fgArg = _currentStyle.foreground?.argb ?? 0;
-    var bgArg = _currentStyle.background?.argb ?? 0;
+    var fgArg = _resolveOscColorArg(_currentStyle.foreground, _osc10Override);
+    var bgArg = _resolveOscColorArg(_currentStyle.background, _osc11Override);
     var modArg = _currentStyle.modifiers;
     if (char.startsWith(kittyPlaceholderChar)) {
       modArg |= Modifier.kittyPlaceholder;
     }
 
     final bgTransparent =
-        transparentBackground && (bgArg == 0 || bgArg == 0xFF000000);
+        transparentBackground &&
+        _osc11Override == null &&
+        (bgArg == 0 || bgArg == 0xFF000000);
     if (bgTransparent) {
       bgArg = 0;
       if (fgArg == 0) fgArg = defaultForeground?.argb ?? 0xFFFFFFFF;
@@ -1394,7 +1434,7 @@ final class VirtualTerminal implements TerminalHandler {
       fg: fgArg,
       bg: bgArg,
       modifiers: modArg,
-      underlineColor: _currentStyle.underlineColor?.argb ?? 0,
+      underlineColor: _resolveOscColorArg(_currentStyle.underlineColor, null),
       uri: _activeUri ?? '',
     );
     _advanceCursorAfterPrint(2);
@@ -1439,9 +1479,7 @@ final class VirtualTerminal implements TerminalHandler {
         _markDirty();
         _eraseInLine(params.isEmpty ? 0 : params[0]);
       case 'n':
-        if (params.length == 1 && params[0] == 6) {
-          _replyCursorPosition(extended: true);
-        }
+        _handleDecPrivateDsr(params);
       case 'W':
         if (params.length == 1 && params[0] == 5) {
           _markDirty();
@@ -1453,6 +1491,21 @@ final class VirtualTerminal implements TerminalHandler {
           _applyDecPrivateModeParam(param, enable);
         }
     }
+  }
+
+  void _handleDecPrivateDsr(List<int> params) {
+    if (params.length != 1) return;
+    switch (params[0]) {
+      case 6:
+        _replyCursorPosition(extended: true);
+      case 996:
+        _replyColorScheme();
+    }
+  }
+
+  void _replyColorScheme() {
+    final mode = _colorScheme == .light ? 2 : 1;
+    onReply?.call('\x1b[?997;${mode}n');
   }
 
   void _applyDecPrivateModeParam(int param, bool enable) {
@@ -1496,6 +1549,8 @@ final class VirtualTerminal implements TerminalHandler {
         bracketedPasteMode = enable;
       case 2027:
         _graphemeClusterMode = enable;
+      case 2031:
+        _colorSchemeReporting = enable;
     }
   }
 
@@ -1789,6 +1844,7 @@ final class VirtualTerminal implements TerminalHandler {
       2004 => bracketedPasteMode,
       2026 => synchronizedOutput,
       2027 => _graphemeClusterMode,
+      2031 => _colorSchemeReporting,
       _ => null,
     };
     if (enabled == null) return 0;
@@ -2225,16 +2281,33 @@ final class VirtualTerminal implements TerminalHandler {
       case 8:
         _markDirty();
         _handleOsc8(payload);
+      case 4:
+        _handleOsc4(payload);
       case 9:
         _handleOsc9(payload);
-      case 10:
-        _handleOsc10(payload);
-      case 11:
-        _handleOsc11(payload);
+      case 10 || 11 || 12:
+        _handleDynamicColorOsc(command, payload);
       case 52:
         _handleOsc52(payload);
       case 99:
         _handleOsc99(payload);
+      case 104:
+        _handleOsc104(payload);
+      case 110:
+        if (_osc10Override != null) {
+          _osc10Override = null;
+          _markDirty();
+        }
+      case 111:
+        if (_osc11Override != null) {
+          _osc11Override = null;
+          _markDirty();
+        }
+      case 112:
+        if (_osc12Override != null) {
+          _osc12Override = null;
+          _markDirty();
+        }
       case 133:
         _markDirty();
         _handleOsc133(payload);
@@ -2255,18 +2328,156 @@ final class VirtualTerminal implements TerminalHandler {
     onNotification?.call('', payload);
   }
 
-  void _handleOsc10(String payload) {
-    if (payload == '?' || payload.startsWith('?')) {
-      final fg = defaultForeground ?? const Color(255, 255, 255);
-      onReply?.call('\x1b]10;${_formatX11Rgb(fg)}\x1b\\');
+  /// Active terminal color scheme used for `CSI ? 996 n` and `DECSET 2031`.
+  TerminalBrightness get colorScheme => _colorScheme;
+
+  /// Updates [colorScheme] and notifies subscribers if mode `2031` is enabled.
+  void setColorScheme(TerminalBrightness scheme) {
+    if (_colorScheme == scheme) return;
+    _colorScheme = scheme;
+    if (_colorSchemeReporting) {
+      _replyColorScheme();
     }
   }
 
-  void _handleOsc11(String payload) {
-    if (payload == '?' || payload.startsWith('?')) {
-      final bg = defaultBackground ?? const Color(0, 0, 0);
-      onReply?.call('\x1b]11;${_formatX11Rgb(bg)}\x1b\\');
+  Color _resolveIndexedColor(int index) {
+    final override = _osc4Overrides[index];
+    if (override != null) return override;
+    if (theme case final t?) return t.resolveAnsi256(index);
+    return _legacyColorFromAnsi256(index);
+  }
+
+  Color _effectiveDynamicColor(int oscCode) => switch (oscCode) {
+    10 =>
+      _osc10Override ??
+          defaultForeground ??
+          theme?.foreground ??
+          const Color(255, 255, 255),
+    11 =>
+      _osc11Override ??
+          defaultBackground ??
+          theme?.background ??
+          const Color(0, 0, 0),
+    12 =>
+      _osc12Override ??
+          defaultCursorColor ??
+          theme?.cursorColor ??
+          _osc10Override ??
+          defaultForeground ??
+          theme?.foreground ??
+          const Color(255, 255, 255),
+    _ => const Color(255, 255, 255),
+  };
+
+  void _handleOsc4(String payload) {
+    final parts = payload.split(';');
+    for (var i = 0; i + 1 < parts.length; i += 2) {
+      final index = int.tryParse(parts[i].trim());
+      if (index == null || index < 0 || index > 255) continue;
+      final spec = parts[i + 1].trim();
+      if (spec == '?') {
+        final color = _resolveIndexedColor(index);
+        onReply?.call('\x1b]4;$index;${_formatX11Rgb(color)}\x1b\\');
+        continue;
+      }
+      final parsed = _parseX11Color(spec);
+      if (parsed != null) {
+        _osc4Overrides[index] = parsed;
+        _markDirty();
+      }
     }
+  }
+
+  void _handleOsc104(String payload) {
+    final trimmed = payload.trim();
+    if (trimmed.isEmpty) {
+      if (_osc4Overrides.isNotEmpty) {
+        _osc4Overrides.clear();
+        _markDirty();
+      }
+      return;
+    }
+    for (final part in trimmed.split(';')) {
+      final index = int.tryParse(part.trim());
+      if (index != null &&
+          index >= 0 &&
+          index <= 255 &&
+          _osc4Overrides.remove(index) != null) {
+        _markDirty();
+      }
+    }
+  }
+
+  void _handleDynamicColorOsc(int startCode, String payload) {
+    final parts = payload.split(';');
+    for (var i = 0; i < parts.length; i++) {
+      final code = startCode + i;
+      if (code > 12) break;
+      final spec = parts[i].trim();
+      if (spec == '?') {
+        final color = _effectiveDynamicColor(code);
+        onReply?.call('\x1b]$code;${_formatX11Rgb(color)}\x1b\\');
+        continue;
+      }
+      final parsed = _parseX11Color(spec);
+      if (parsed == null) continue;
+      switch (code) {
+        case 10:
+          _osc10Override = parsed;
+        case 11:
+          _osc11Override = parsed;
+        case 12:
+          _osc12Override = parsed;
+      }
+      _markDirty();
+    }
+  }
+
+  static Color? _parseX11Color(String spec) {
+    final trimmed = spec.trim();
+    if (trimmed.startsWith('#')) {
+      final hex = trimmed.substring(1);
+      final channelWidth = switch (hex.length) {
+        3 => 1,
+        6 => 2,
+        9 => 3,
+        12 => 4,
+        _ => 0,
+      };
+      if (channelWidth == 0) return null;
+      final r = _parseScaledHexChannel(hex.substring(0, channelWidth));
+      final g = _parseScaledHexChannel(
+        hex.substring(channelWidth, channelWidth * 2),
+      );
+      final b = _parseScaledHexChannel(
+        hex.substring(channelWidth * 2, channelWidth * 3),
+      );
+      if (r == null || g == null || b == null) return null;
+      return Color(r, g, b);
+    }
+    if (trimmed.toLowerCase().startsWith('rgb:')) {
+      final channels = trimmed.substring(4).split('/');
+      if (channels.length != 3) return null;
+      final r = _parseScaledHexChannel(channels[0]);
+      final g = _parseScaledHexChannel(channels[1]);
+      final b = _parseScaledHexChannel(channels[2]);
+      if (r == null || g == null || b == null) return null;
+      return Color(r, g, b);
+    }
+    return null;
+  }
+
+  static int? _parseScaledHexChannel(String hex) {
+    if (hex.isEmpty || hex.length > 4) return null;
+    final value = int.tryParse(hex, radix: 16);
+    if (value == null || value < 0) return null;
+    return switch (hex.length) {
+      1 => (value * 255) ~/ 15,
+      2 => value,
+      3 => value >> 4,
+      4 => value >> 8,
+      _ => null,
+    };
   }
 
   void _handleOsc99(String payload) {
@@ -2389,9 +2600,9 @@ final class VirtualTerminal implements TerminalHandler {
   void _handleOscUnknown(int command, String payload) {
     if (command == -1) {
       if (payload.startsWith('10;?')) {
-        _handleOsc10('?');
+        _handleDynamicColorOsc(10, '?');
       } else if (payload.startsWith('11;?')) {
-        _handleOsc11('?');
+        _handleDynamicColorOsc(11, '?');
       }
     }
   }
@@ -2513,6 +2724,12 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   Color _colorFromAnsi256(int code) {
+    if (code < 0 || code > 255) return Colors.white;
+    if (emitIndexedColors) return Color.ansi(code);
+    return _legacyColorFromAnsi256(code);
+  }
+
+  Color _legacyColorFromAnsi256(int code) {
     if (code < 0 || code > 255) return Colors.white;
     if (code < 16) {
       final rgb = _ansi16Rgb[code];
