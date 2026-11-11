@@ -3,6 +3,56 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-11
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.14.1`](#termui---v0141)
+ - [`termui_flutter` - `v0.10.3`](#termui_flutter---v0103)
+ - [`termui_pty` - `v0.9.1`](#termui_pty---v091)
+ - [`termui_recorder` - `v0.10.2`](#termui_recorder---v0102)
+ - [`termui_test` - `v0.4.2`](#termui_test---v042)
+ - [`termui_hotreload` - `v0.6.28`](#termui_hotreload---v0628)
+ - [`termui_tinpot` - `v0.4.2`](#termui_tinpot---v042)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.2`
+ - `termui_test` - `v0.4.2`
+ - `termui_hotreload` - `v0.6.28`
+ - `termui_tinpot` - `v0.4.2`
+
+---
+
+#### `termui` - `v0.14.1`
+
+ - **FEAT**(termui): support Color.ansi and barrierColor in DimmerEffect and DimmingBarrier.
+ - **FEAT**(termui): support Color.ansi in Buffer, Compositor, and Renderer.
+ - **FEAT**(termui): add TerminalColorTheme presets and OKLab contrast solver.
+ - **FEAT**(termui): add Color.ansi indexed palette tokens and SGR helpers.
+ - **FEAT**(termui): add SceneManager.enableDebugToggleKey and gate managed PromptRunner.
+
+#### `termui_flutter` - `v0.10.3`
+
+ - **FIX**(termui_flutter): normalize Ctrl+letter keys while preserving AltGr and shiftedCodepoint.
+ - **FEAT**(termui_flutter): plumb TerminalColorTheme, default colors, and faintOpacity into TuiAtlasPainter.
+
+#### `termui_pty` - `v0.9.1`
+
+ - **FIX**(termui_pty): normalize C0 and CapsLock control keys in InputEncoder.
+ - **FEAT**(termui_pty): add emitIndexedColors and OSC 4/10-12/?996n/?2031 queries.
+
+
 ## 2026-11-10
 
 ### Changes

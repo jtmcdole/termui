@@ -1,3 +1,11 @@
+## 0.14.1
+
+ - **FEAT**(termui): support Color.ansi and barrierColor in DimmerEffect and DimmingBarrier.
+ - **FEAT**(termui): support Color.ansi in Buffer, Compositor, and Renderer.
+ - **FEAT**(termui): add TerminalColorTheme presets and OKLab contrast solver.
+ - **FEAT**(termui): add Color.ansi indexed palette tokens and SGR helpers.
+ - **FEAT**(termui): add SceneManager.enableDebugToggleKey and gate managed PromptRunner.
+
 ## 0.14.0
 
 > Note: This release has breaking changes.

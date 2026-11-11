@@ -1,3 +1,8 @@
+## 0.9.1
+
+ - **FIX**(termui_pty): normalize C0 and CapsLock control keys in InputEncoder.
+ - **FEAT**(termui_pty): add emitIndexedColors and OSC 4/10-12/?996n/?2031 queries.
+
 ## 0.9.0
 
 > Note: This release has breaking changes.
