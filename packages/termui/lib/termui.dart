@@ -5,6 +5,7 @@ export 'direction.dart';
 export 'terminal/terminal.dart' hide Modifier;
 export 'ui/buffer.dart';
 export 'ui/color.dart';
+export 'ui/terminal_palette.dart';
 
 export 'ui/style.dart';
 export 'terminal/event.dart' hide Modifier;
