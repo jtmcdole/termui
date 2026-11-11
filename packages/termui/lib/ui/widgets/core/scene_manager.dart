@@ -1008,6 +1008,10 @@ class SceneManager implements Reassemblable {
     required WidgetBuilder builder,
     bool barrierDismissible = true,
     double barrierScalar = 0.5,
+    Color? barrierColor,
+    Color? defaultForeground,
+    Color? defaultBackground,
+    TerminalColorTheme palette = TerminalColorTheme.legacyVga,
     int width = 40,
     int height = 10,
   }) {
@@ -1030,7 +1034,13 @@ class SceneManager implements Reassemblable {
         top: 0,
         right: 0,
         bottom: 0,
-        child: DimmingBarrier(scalar: barrierScalar),
+        child: DimmingBarrier(
+          scalar: barrierScalar,
+          barrierColor: barrierColor,
+          defaultForeground: defaultForeground,
+          defaultBackground: defaultBackground,
+          palette: palette,
+        ),
       ),
       if (barrierDismissible)
         Positioned(

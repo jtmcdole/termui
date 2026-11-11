@@ -54,7 +54,7 @@ void _defineColorAnsiTests() {
 }
 
 void _defineCompositorAndDimmerTests() {
-  group('Compositor and blendColor with Color.ansi', () {
+  group('Compositor, blendColor, and DimmerEffect with Color.ansi', () {
     test('preserves Color.ansi across blendColor and Compositor', () {
       final blue = const Color.ansi(4).argb;
       final bg = const Color.ansi(0).argb;
@@ -86,6 +86,35 @@ void _defineCompositorAndDimmerTests() {
       expect(blended.a, equals(255));
       expect(blended.r, greaterThan(100));
     });
+
+    test(
+      'DimmerEffect resolves Color.ansi and supports light barrierColor',
+      () {
+        final buf = Buffer.blank(2, 1)
+          ..writeString(
+            0,
+            0,
+            'A',
+            const Style(foreground: Color.ansi(4), background: Color.ansi(15)),
+          );
+        const DimmerEffect(
+          scalar: 0.5,
+        ).applyEffect(buf, const Rect(0, 0, 2, 1));
+        expect(buf.getForeground(0, 0).isAnsiIndexed, isFalse);
+        expect(buf.getForeground(0, 0).b, equals(85));
+        expect(buf.getBackground(0, 0).r, equals(127));
+
+        final lightBuf = Buffer.blank(1, 1);
+        const DimmerEffect(
+          scalar: 0.5,
+          barrierColor: Color(0, 0, 0),
+          defaultForeground: Color(0x65, 0x7B, 0x83),
+          defaultBackground: Color(0xFD, 0xF6, 0xE3),
+        ).applyEffect(lightBuf, const Rect(0, 0, 1, 1));
+        expect(lightBuf.getBackground(0, 0).r, equals(127));
+        expect(lightBuf.getForeground(0, 0).r, equals(51));
+      },
+    );
   });
 }
 

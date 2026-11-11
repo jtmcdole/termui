@@ -1,26 +1,53 @@
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:termui/termui.dart';
 
-/// A mathematical mutator for 24-bit TrueColor cells.
+/// A mathematical mutator for 24-bit TrueColor and [Color.ansi] cells.
 final class ColorMutator {
-  /// The scalar to multiply each RGB channel by.
+  /// The scalar to multiply each RGB channel by (or interpolation weight toward [barrierColor]).
   final double scalar;
 
+  /// Optional backdrop color to blend toward instead of `#000000`.
+  final Color? barrierColor;
+
+  /// Palette used when resolving [Color.ansi] indices before dimming.
+  final TerminalColorTheme palette;
+
   /// Creates a [ColorMutator] with the given [scalar].
-  const ColorMutator(this.scalar);
+  const ColorMutator(
+    this.scalar, {
+    this.barrierColor,
+    this.palette = TerminalColorTheme.legacyVga,
+  });
 
   /// Dims the raw packed 32-bit integer color without allocating Color objects.
   int dimPacked(int argb) {
     if (argb == 0) return 0;
 
-    final int a = (argb >> 24) & 0xFF;
+    final resolved = argb.isAnsiIndexed
+        ? palette.resolvePackedColor(argb)
+        : argb;
+    final int a = (resolved >> 24) & 0xFF;
     if (a == 0) return argb;
 
-    final int r = (((argb >> 16) & 0xFF) * scalar).toInt().clamp(0, 255);
-    final int g = (((argb >> 8) & 0xFF) * scalar).toInt().clamp(0, 255);
-    final int b = ((argb & 0xFF) * scalar).toInt().clamp(0, 255);
+    final int r = (resolved >> 16) & 0xFF;
+    final int g = (resolved >> 8) & 0xFF;
+    final int b = resolved & 0xFF;
 
-    return (a << 24) | (r << 16) | (g << 8) | b;
+    final barrier = barrierColor;
+    if (barrier != null) {
+      final inv = 1.0 - scalar;
+      final outR = (r * scalar + barrier.r * inv).round().clamp(0, 255);
+      final outG = (g * scalar + barrier.g * inv).round().clamp(0, 255);
+      final outB = (b * scalar + barrier.b * inv).round().clamp(0, 255);
+      return (a << 24) | (outR << 16) | (outG << 8) | outB;
+    }
+
+    final int outR = (r * scalar).toInt().clamp(0, 255);
+    final int outG = (g * scalar).toInt().clamp(0, 255);
+    final int outB = (b * scalar).toInt().clamp(0, 255);
+
+    return (a << 24) | (outR << 16) | (outG << 8) | outB;
   }
 
   /// Dims the given [color] by multiplying its RGB channels by [scalar].
@@ -317,39 +344,80 @@ final class DimmerEffect extends TerminalEffect {
   /// The scalar to dim colors by.
   final double scalar;
 
+  /// Optional backdrop color to blend toward instead of `#000000`.
+  final Color? barrierColor;
+
+  /// Optional fallback foreground used when dimming default (`fg == 0`) cells.
+  final Color? defaultForeground;
+
+  /// Optional fallback background used when dimming default (`bg == 0`) cells.
+  final Color? defaultBackground;
+
+  /// Palette used when resolving [Color.ansi] indices before dimming.
+  final TerminalColorTheme palette;
+
   /// Creates a dimmer effect.
-  const DimmerEffect({this.scalar = 0.5});
+  const DimmerEffect({
+    this.scalar = 0.5,
+    this.barrierColor,
+    this.defaultForeground,
+    this.defaultBackground,
+    this.palette = TerminalColorTheme.legacyVga,
+  });
 
   @override
   void applyEffect(Buffer target, Rect bounds) {
-    final mutator = ColorMutator(scalar);
     final startY = max(0, bounds.y);
     final endY = min(target.height, bounds.y + bounds.height);
     final startX = max(0, bounds.x);
     final endX = min(target.width, bounds.x + bounds.width);
-
     if (startX >= endX || startY >= endY) return;
 
+    final mutator = ColorMutator(
+      scalar,
+      barrierColor: barrierColor,
+      palette: palette,
+    );
+    final defFg = defaultForeground?.argb ?? 0;
+    final defBg = defaultBackground?.argb ?? 0;
+    final attrs = target.attributes;
+    final width = target.width;
+
     for (var y = startY; y < endY; y++) {
-      final rowOffset = y * target.width;
+      final rowOffset = y * width;
       for (var x = startX; x < endX; x++) {
-        final idx = rowOffset + x;
-        final attrIdx = idx * 3;
-        if ((target.attributes[attrIdx + 2] & Modifier.transparent) != 0) {
-          continue;
-        }
-
-        final fg = target.attributes[attrIdx + 0];
-        if (fg != 0 &&
-            (target.attributes[attrIdx + 2] & Modifier.kittyPlaceholder) == 0) {
-          target.attributes[attrIdx + 0] = mutator.dimPacked(fg);
-        }
-
-        final bg = target.attributes[attrIdx + 1];
-        if (bg != 0) {
-          target.attributes[attrIdx + 1] = mutator.dimPacked(bg);
-        }
+        _dimCell(
+          attrs,
+          (rowOffset + x) * 3,
+          mutator,
+          defFg: defFg,
+          defBg: defBg,
+        );
       }
+    }
+  }
+
+  @pragma('vm:prefer-inline')
+  static void _dimCell(
+    Uint32List attrs,
+    int attrIdx,
+    ColorMutator mutator, {
+    required int defFg,
+    required int defBg,
+  }) {
+    final mods = attrs[attrIdx + 2];
+    if ((mods & Modifier.transparent) != 0) return;
+
+    final fg = attrs[attrIdx];
+    final effectiveFg = fg != 0 ? fg : defFg;
+    if (effectiveFg != 0 && (mods & Modifier.kittyPlaceholder) == 0) {
+      attrs[attrIdx] = mutator.dimPacked(effectiveFg);
+    }
+
+    final bg = attrs[attrIdx + 1];
+    final effectiveBg = bg != 0 ? bg : defBg;
+    if (effectiveBg != 0) {
+      attrs[attrIdx + 1] = mutator.dimPacked(effectiveBg);
     }
   }
 }
@@ -378,14 +446,39 @@ class DimmingBarrier extends StatelessWidget {
   /// The scalar to dim by.
   final double scalar;
 
+  /// Optional backdrop color to blend toward instead of `#000000`.
+  final Color? barrierColor;
+
+  /// Optional fallback foreground used when dimming default (`fg == 0`) cells.
+  final Color? defaultForeground;
+
+  /// Optional fallback background used when dimming default (`bg == 0`) cells.
+  final Color? defaultBackground;
+
+  /// Palette used when resolving [Color.ansi] indices before dimming.
+  final TerminalColorTheme palette;
+
   /// Creates a dimming barrier.
-  const DimmingBarrier({super.key, this.scalar = 0.5});
+  const DimmingBarrier({
+    super.key,
+    this.scalar = 0.5,
+    this.barrierColor,
+    this.defaultForeground,
+    this.defaultBackground,
+    this.palette = TerminalColorTheme.legacyVga,
+  });
 
   @override
   Widget build(BuildContext context) {
     return AbsorbPointer(
       child: EffectWidget(
-        effect: DimmerEffect(scalar: scalar),
+        effect: DimmerEffect(
+          scalar: scalar,
+          barrierColor: barrierColor,
+          defaultForeground: defaultForeground,
+          defaultBackground: defaultBackground,
+          palette: palette,
+        ),
         globalComposite: true,
         child: const SizedBox.expand(),
       ),
