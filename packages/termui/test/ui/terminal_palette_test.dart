@@ -3,6 +3,8 @@ import 'package:test/test.dart';
 
 void main() {
   _defineColorAnsiTests();
+  _defineCompositorAndDimmerTests();
+  _defineAnsiRoundTripTests();
   _definePaletteAndContrastTests();
 }
 
@@ -47,6 +49,135 @@ void _defineColorAnsiTests() {
       expect(const Color.ansi(1).backgroundCode, equals('\x1b[41m'));
       expect(const Color.ansi(9).backgroundCode, equals('\x1b[101m'));
       expect(const Color.ansi(235).backgroundCode, equals('\x1b[48;5;235m'));
+    });
+  });
+}
+
+void _defineCompositorAndDimmerTests() {
+  group('Compositor and blendColor with Color.ansi', () {
+    test('preserves Color.ansi across blendColor and Compositor', () {
+      final blue = const Color.ansi(4).argb;
+      final bg = const Color.ansi(0).argb;
+      expect(blendColor(blue, 0), equals(blue));
+      expect(blendColor(0, blue), equals(blue));
+      expect(blendColor(blue, bg), equals(blue));
+
+      final layer = Buffer.blank(4, 1)
+        ..writeString(
+          0,
+          0,
+          'dir ',
+          const Style(foreground: Color.ansi(4), background: Color.ansi(0)),
+        );
+      final target = Buffer.blank(4, 1);
+      Compositor().composite(
+        target: target,
+        layers: [LayeredBuffer(buffer: layer, x: 0, y: 0)],
+      );
+      expect(target.getForeground(0, 0), equals(blue));
+      expect(target.getBackground(0, 0), equals(bg));
+    });
+
+    test('blends translucent overlay over Color.ansi via legacyVga', () {
+      final translucentWhite = const Color.argb(0x80FFFFFF).argb;
+      final ansiBlack = const Color.ansi(0).argb;
+      final blended = blendColor(translucentWhite, ansiBlack);
+      expect(blended.isAnsiIndexed, isFalse);
+      expect(blended.a, equals(255));
+      expect(blended.r, greaterThan(100));
+    });
+  });
+}
+
+void _defineAnsiRoundTripTests() {
+  group('Buffer ANSI & Renderer round-trip with Color.ansi', () {
+    test(
+      'toAnsiString and fromAnsi preserve basic, bright, 256, and ul colors',
+      () {
+        final src = Buffer.blank(4, 1)
+          ..writeString(
+            0,
+            0,
+            'A',
+            const Style(foreground: Color.ansi(4), background: Color.ansi(0)),
+          )
+          ..writeString(
+            1,
+            0,
+            'B',
+            const Style(
+              foreground: Color.ansi(12),
+              background: Color.ansi(9),
+              underlineColor: Color.ansi(202),
+              underlineStyle: .single,
+            ),
+          )
+          ..writeString(
+            2,
+            0,
+            'C',
+            const Style(
+              foreground: Color.ansi(220),
+              background: Color.ansi(235),
+            ),
+          );
+
+        final ansi = src.toAnsiString();
+        expect(ansi, contains('\x1b[34;40m'));
+        expect(ansi, contains('94'));
+        expect(ansi, contains('101'));
+        expect(ansi, contains('58:5:202m'));
+        expect(ansi, contains('38;5;220;48;5;235m'));
+
+        final parsed = BufferAnsiSerialization.fromAnsi(
+          ansi,
+          width: 4,
+          height: 1,
+        );
+        expect(parsed.getForeground(0, 0), equals(const Color.ansi(4).argb));
+        expect(parsed.getBackground(0, 0), equals(const Color.ansi(0).argb));
+        expect(parsed.getForeground(1, 0), equals(const Color.ansi(12).argb));
+        expect(parsed.getBackground(1, 0), equals(const Color.ansi(9).argb));
+        expect(
+          parsed.getUnderlineColor(1, 0),
+          equals(const Color.ansi(202).argb),
+        );
+        expect(parsed.getForeground(2, 0), equals(const Color.ansi(220).argb));
+        expect(parsed.getBackground(2, 0), equals(const Color.ansi(235).argb));
+      },
+    );
+
+    test('Renderer emits compact ANSI palette SGR sequences', () {
+      final renderer = Renderer(3, 1);
+      final back = Buffer.blank(3, 1)
+        ..writeString(
+          0,
+          0,
+          'X',
+          const Style(
+            foreground: Color.ansi(4),
+            background: Color.ansi(10),
+            underlineColor: Color.ansi(196),
+            underlineStyle: .single,
+          ),
+        );
+      final out = StringBuffer();
+      renderer.render(back, out);
+      final emitted = out.toString();
+      expect(emitted, contains('34;102'));
+      expect(emitted, contains('\x1b[58:5:196m'));
+    });
+
+    test('fromAnsi ignores out-of-range 256-color indices without masking', () {
+      final parsed = BufferAnsiSerialization.fromAnsi(
+        '\x1b[38;5;300;48;5;-1;58:5:256;38:5:-5;1mA\x1b[0m',
+        width: 2,
+        height: 1,
+      );
+      expect(parsed.getForeground(0, 0), equals(0));
+      expect(parsed.getBackground(0, 0), equals(0));
+      expect(parsed.getUnderlineColor(0, 0), equals(0));
+      expect(parsed.getModifiers(0, 0) & Modifier.bold, equals(Modifier.bold));
     });
   });
 }

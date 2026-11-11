@@ -3,22 +3,28 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:characters/characters.dart';
 
-/// Blends two ARGB colors.
+/// Blends two ARGB colors (resolving [Color.ansi] indices via legacy VGA when
+/// blended under a translucent overlay).
 int blendColor(int top, int bottom) {
   if (bottom == 0) return top;
   if (top == 0) return bottom;
+  if (top.isAnsiIndexed) return top;
 
   final aTop = (top >> 24) & 0xFF;
   if (aTop == 255) return top;
+
+  final resolvedBottom = bottom.isAnsiIndexed
+      ? TerminalColorTheme.legacyVga.resolveAnsi256(bottom.ansiIndex).argb
+      : bottom;
 
   final rTop = (top >> 16) & 0xFF;
   final gTop = (top >> 8) & 0xFF;
   final bTop = top & 0xFF;
 
-  final aBottom = (bottom >> 24) & 0xFF;
-  final rBottom = (bottom >> 16) & 0xFF;
-  final gBottom = (bottom >> 8) & 0xFF;
-  final bBottom = bottom & 0xFF;
+  final aBottom = (resolvedBottom >> 24) & 0xFF;
+  final rBottom = (resolvedBottom >> 16) & 0xFF;
+  final gBottom = (resolvedBottom >> 8) & 0xFF;
+  final bBottom = resolvedBottom & 0xFF;
 
   final invAlpha = 255 - aTop;
   final effectiveBottomA = (aBottom * invAlpha) ~/ 255;
@@ -33,6 +39,7 @@ int blendColor(int top, int bottom) {
 }
 
 int _premultiplyBlack(int color) {
+  if (color.isAnsiIndexed) return color;
   final a = (color >> 24) & 0xFF;
   if (a == 255) return color;
   if (a == 0) return 0xFF000000;
@@ -1172,11 +1179,11 @@ class Compositor {
       final len = attrs.length;
       for (var i = 0; i < len; i += 3) {
         final fg = attrs[i];
-        if (fg != 0 && ((fg >> 24) & 0xFF) != 255) {
+        if (fg != 0 && fg.effectiveAlpha != 255) {
           attrs[i] = _premultiplyBlack(fg);
         }
         final bg = attrs[i + 1];
-        if (bg != 0 && ((bg >> 24) & 0xFF) != 255) {
+        if (bg != 0 && bg.effectiveAlpha != 255) {
           attrs[i + 1] = _premultiplyBlack(bg);
         }
       }
@@ -1267,8 +1274,8 @@ class Compositor {
       final maskBit = 1 << (i & 31);
       final word = i >> 5;
       final char = target.characters[i];
-      final fgAlpha = (target.attributes[attrIdx] >> 24) & 0xFF;
-      final bgAlpha = (target.attributes[attrIdx + 1] >> 24) & 0xFF;
+      final fgAlpha = target.attributes[attrIdx].effectiveAlpha;
+      final bgAlpha = target.attributes[attrIdx + 1].effectiveAlpha;
 
       if ((char != ' ' && char != '') || bgAlpha == 255) {
         masks.charWritten[word] |= maskBit;
@@ -1462,7 +1469,7 @@ class Compositor {
       }
       return fgOccluded;
     }
-    if (((sourceBg >> 24) & 0xFF) == 255) {
+    if (sourceBg.effectiveAlpha == 255) {
       target.characters[targetIdx] = ' ';
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
@@ -1492,7 +1499,7 @@ class Compositor {
       target.attributes[targetAttrIdx + 2],
       sourceMods,
     );
-    if (((blendedFg >> 24) & 0xFF) == 255 || ((sourceFg >> 24) & 0xFF) == 255) {
+    if (blendedFg.effectiveAlpha == 255 || sourceFg.effectiveAlpha == 255) {
       masks.fgWritten[word] |= maskBit;
     }
   }
@@ -1507,13 +1514,13 @@ class Compositor {
     int maskBit, {
     required bool skipZeroBg,
   }) {
-    if (skipZeroBg && ((sourceBg >> 24) & 0xFF) == 0) return;
+    if (skipZeroBg && sourceBg.effectiveAlpha == 0) return;
     final blendedBg = blendColor(
       target.attributes[targetAttrIdx + 1],
       sourceBg,
     );
     target.attributes[targetAttrIdx + 1] = blendedBg;
-    if (((blendedBg >> 24) & 0xFF) == 255) {
+    if (blendedBg.effectiveAlpha == 255) {
       masks.bgWritten[word] |= maskBit;
       masks.remainingBg--;
     }
@@ -1571,7 +1578,7 @@ class Compositor {
     final targetIsEmptyChar = currentChar == ' ' || currentChar == '';
 
     if (targetIsEmptyChar &&
-        (sourceChar != ' ' || ((sourceBg >> 24) & 0xFF) == 255)) {
+        (sourceChar != ' ' || sourceBg.effectiveAlpha == 255)) {
       target.characters[targetIdx] = sourceChar;
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(
@@ -2202,7 +2209,7 @@ extension BufferAnsiSerialization on Buffer {
       }
       final code = int.tryParse(token) ?? 0;
       if (code == 38 || code == 48 || code == 58) {
-        final parsedColor = _parseTrueColorSgr(paramsStr, semi + 1);
+        final parsedColor = _parseExtendedColorSgr(paramsStr, semi + 1);
         pIdx = parsedColor.nextIdx;
         if (parsedColor.argb != null) {
           style = _applyExtendedColorCode(code, parsedColor.argb!, style);
@@ -2255,6 +2262,13 @@ extension BufferAnsiSerialization on Buffer {
       );
     }
     if ((head == 38 || head == 48 || head == 58) &&
+        parts.length >= 3 &&
+        parts[1] == '5') {
+      final idx = int.tryParse(parts[2]);
+      if (idx == null || idx < 0 || idx > 255) return s;
+      return _applyExtendedColorCode(head, Color.ansi(idx).argb, s);
+    }
+    if ((head == 38 || head == 48 || head == 58) &&
         parts.length >= 5 &&
         parts[1] == '2') {
       final n = parts.length;
@@ -2273,7 +2287,7 @@ extension BufferAnsiSerialization on Buffer {
     return idx == -1 ? s.length : idx;
   }
 
-  static ({int? argb, int nextIdx}) _parseTrueColorSgr(
+  static ({int? argb, int nextIdx}) _parseExtendedColorSgr(
     String paramsStr,
     int typeStart,
   ) {
@@ -2282,6 +2296,17 @@ extension BufferAnsiSerialization on Buffer {
     }
     final s2 = _nextSemicolon(paramsStr, typeStart);
     final type = int.tryParse(paramsStr.substring(typeStart, s2)) ?? 0;
+    if (type == 5) {
+      if (s2 + 1 >= paramsStr.length) {
+        return (argb: null, nextIdx: paramsStr.length);
+      }
+      final s3 = _nextSemicolon(paramsStr, s2 + 1);
+      final idx = int.tryParse(paramsStr.substring(s2 + 1, s3));
+      if (idx == null || idx < 0 || idx > 255) {
+        return (argb: null, nextIdx: s3 + 1);
+      }
+      return (argb: Color.ansi(idx).argb, nextIdx: s3 + 1);
+    }
     if (type != 2) {
       return (argb: null, nextIdx: s2 + 1);
     }
@@ -2335,11 +2360,31 @@ extension BufferAnsiSerialization on Buffer {
         27 => _withMods(s, s.mods & ~Modifier.reverse),
         28 => _withMods(s, s.mods & ~Modifier.hidden),
         29 => _withMods(s, s.mods & ~Modifier.crossedOut),
+        >= 30 && <= 37 => _applyExtendedColorCode(
+          38,
+          Color.ansi(code - 30).argb,
+          s,
+        ),
         39 => (fg: 0, bg: s.bg, mods: s.mods, ulColor: s.ulColor, uri: s.uri),
+        >= 40 && <= 47 => _applyExtendedColorCode(
+          48,
+          Color.ansi(code - 40).argb,
+          s,
+        ),
         49 => (fg: s.fg, bg: 0, mods: s.mods, ulColor: s.ulColor, uri: s.uri),
         53 => _withMods(s, s.mods | Modifier.overline),
         55 => _withMods(s, s.mods & ~Modifier.overline),
         59 => (fg: s.fg, bg: s.bg, mods: s.mods, ulColor: 0, uri: s.uri),
+        >= 90 && <= 97 => _applyExtendedColorCode(
+          38,
+          Color.ansi(code - 90 + 8).argb,
+          s,
+        ),
+        >= 100 && <= 107 => _applyExtendedColorCode(
+          48,
+          Color.ansi(code - 100 + 8).argb,
+          s,
+        ),
         _ => s,
       };
 
@@ -2611,6 +2656,10 @@ extension BufferAnsiSerialization on Buffer {
       sb.write('\x1b[4:${tgtUl.index}m');
     }
     if (target.ulColor != effective.ulColor && target.ulColor != 0) {
+      if (target.ulColor.isAnsiIndexed) {
+        sb.write('\x1b[58:5:${target.ulColor.ansiIndex}m');
+        return;
+      }
       final r = (target.ulColor >> 16) & 0xFF;
       final g = (target.ulColor >> 8) & 0xFF;
       final b = target.ulColor & 0xFF;
@@ -2634,6 +2683,10 @@ extension BufferAnsiSerialization on Buffer {
     return (fg: 0, bg: 0, mods: Modifier.none, ulColor: 0, uri: uri);
   }
 
-  static String _rgbSgrSegment(int prefix, int argb) =>
-      '$prefix;2;${(argb >> 16) & 0xFF};${(argb >> 8) & 0xFF};${argb & 0xFF}';
+  static String _rgbSgrSegment(int prefix, int argb) {
+    if (argb.isAnsiIndexed && (prefix == 38 || prefix == 48)) {
+      return argb.ansiSgrParams(background: prefix == 48);
+    }
+    return '$prefix;2;${(argb >> 16) & 0xFF};${(argb >> 8) & 0xFF};${argb & 0xFF}';
+  }
 }
