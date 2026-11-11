@@ -1,12 +1,27 @@
 /// Represents a 24-bit RGB color with 8-bit alpha, packed into a single 32-bit integer.
 /// Using a single final int field minimizes memory footprint for each Color instance.
+///
+/// Palette-indexed ANSI colors (`0..255`) use the disjoint sentinel range
+/// `0x00010000..0x000100FF` via [Color.ansi].
 extension type const Color._(int argb) implements int {
+  static const int _ansiTagMask = 0xFFFFFF00;
+  static const int _ansiTagPrefix = 0x00010000;
+
   /// Creates an opaque color from red, green, and blue components.
   const Color(int r, int g, int b)
     : argb = (255 << 24) | ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
 
   /// Creates a color with custom alpha.
   const Color.argb(this.argb);
+
+  /// Creates a palette-indexed ANSI color (`0..255`) resolved by the active viewer theme.
+  const Color.ansi(int index) : argb = _ansiTagPrefix | (index & 0xFF);
+
+  /// Whether this value represents an unresolved ANSI palette index (`0..255`).
+  bool get isAnsiIndexed => (argb & _ansiTagMask) == _ansiTagPrefix;
+
+  /// The ANSI palette slot (`0..255`) when [isAnsiIndexed] is `true`.
+  int get ansiIndex => argb & 0xFF;
 
   /// Extract the alpha channel (0-255).
   int get a => (argb >> 24) & 0xFF;
@@ -20,24 +35,24 @@ extension type const Color._(int argb) implements int {
   /// Extract the blue channel (0-255).
   int get b => argb & 0xFF;
 
-  /// Returns true if this color is fully transparent (alpha == 0).
-  bool get isTransparent => a == 0;
+  /// Returns true if this color is fully transparent (alpha == 0 and not [isAnsiIndexed]).
+  bool get isTransparent => a == 0 && !isAnsiIndexed;
 
   /// Creates a string that applies this color as a foreground color to [text].
-  String foreground(String text) {
-    return '\x1b[38;2;$r;$g;${b}m$text\x1b[0m';
-  }
+  String foreground(String text) => '$foregroundCode$text\x1b[0m';
 
   /// Creates a string that applies this color as a background color to [text].
-  String background(String text) {
-    return '\x1b[48;2;$r;$g;${b}m$text\x1b[0m';
-  }
+  String background(String text) => '$backgroundCode$text\x1b[0m';
 
   /// Returns the ANSI escape sequence for setting this color as foreground.
-  String get foregroundCode => '\x1b[38;2;$r;$g;${b}m';
+  String get foregroundCode => isAnsiIndexed
+      ? '\x1b[${argb.ansiSgrParams(background: false)}m'
+      : '\x1b[38;2;$r;$g;${b}m';
 
   /// Returns the ANSI escape sequence for setting this color as background.
-  String get backgroundCode => '\x1b[48;2;$r;$g;${b}m';
+  String get backgroundCode => isAnsiIndexed
+      ? '\x1b[${argb.ansiSgrParams(background: true)}m'
+      : '\x1b[48;2;$r;$g;${b}m';
 }
 
 /// Common standard colors.
@@ -392,6 +407,26 @@ abstract final class CharmColors {
 /// Extension on [int] to provide easy access and manipulation of ARGB colors
 /// represented as 32-bit integers.
 extension ColorIntExtension on int {
+  /// Whether this packed color integer represents an indexed ANSI slot (`0..255`).
+  bool get isAnsiIndexed => (this & 0xFFFFFF00) == 0x00010000;
+
+  /// The ANSI palette index (`0..255`) when [isAnsiIndexed] is `true`.
+  int get ansiIndex => this & 0xFF;
+
+  /// Returns the SGR parameter segment for an [isAnsiIndexed] color
+  /// (`30..37`, `90..97`, `38;5;n` for foreground; `40..47`, `100..107`,
+  /// `48;5;n` for background).
+  String ansiSgrParams({required bool background}) {
+    final idx = ansiIndex;
+    final offset = background ? 10 : 0;
+    if (idx < 8) return '${30 + offset + idx}';
+    if (idx < 16) return '${90 + offset + idx - 8}';
+    return '${38 + offset};5;$idx';
+  }
+
+  /// Effective alpha (`255` for [isAnsiIndexed] values, otherwise [a]).
+  int get effectiveAlpha => isAnsiIndexed ? 255 : a;
+
   /// Extract the alpha channel (0-255).
   int get a => (this >> 24) & 0xFF;
 
@@ -404,11 +439,14 @@ extension ColorIntExtension on int {
   /// Extract the blue channel (0-255).
   int get b => this & 0xFF;
 
-  /// Returns true if this color is fully transparent (alpha == 0).
-  bool get isTransparent => a == 0;
+  /// Returns true if this color is fully transparent (alpha == 0 and not [isAnsiIndexed]).
+  bool get isTransparent => a == 0 && !isAnsiIndexed;
 
   /// Returns a new ARGB integer with the updated alpha value (0-255).
-  int withAlpha(int a) => (this & 0x00FFFFFF) | ((a & 0xFF) << 24);
+  int withAlpha(int a) {
+    final next = (this & 0x00FFFFFF) | ((a & 0xFF) << 24);
+    return next.isAnsiIndexed ? 0 : next;
+  }
 
   /// Returns a new ARGB integer with the updated red value (0-255).
   int withRed(int r) => (this & 0xFF00FFFF) | ((r & 0xFF) << 16);
