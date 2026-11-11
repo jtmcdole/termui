@@ -370,6 +370,12 @@ class Renderer {
   }
 
   void _appendRgbSgr(StringBuffer sb, int code, int argb) {
+    if (argb.isAnsiIndexed && (code == 38 || code == 48)) {
+      sb
+        ..write(argb.ansiSgrParams(background: code == 48))
+        ..write(';');
+      return;
+    }
     final r = (argb >> 16) & 0xFF;
     final g = (argb >> 8) & 0xFF;
     final b = argb & 0xFF;
@@ -409,6 +415,10 @@ class Renderer {
       if (ulCode != null) out.write('\x1b[${ulCode}m');
     }
     if (tgtUlColor != effectiveUlColor && tgtUlColor != 0) {
+      if (tgtUlColor.isAnsiIndexed) {
+        out.write('\x1b[58:5:${tgtUlColor.ansiIndex}m');
+        return;
+      }
       final r = (tgtUlColor >> 16) & 0xFF;
       final g = (tgtUlColor >> 8) & 0xFF;
       final b = tgtUlColor & 0xFF;
