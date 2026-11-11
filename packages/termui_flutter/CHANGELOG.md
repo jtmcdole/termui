@@ -1,3 +1,8 @@
+## 0.10.3
+
+ - **FIX**(termui_flutter): normalize Ctrl+letter keys while preserving AltGr and shiftedCodepoint.
+ - **FEAT**(termui_flutter): plumb TerminalColorTheme, default colors, and faintOpacity into TuiAtlasPainter.
+
 ## 0.10.2
 
  - **FEAT**(termui_flutter): add selection/link delegation, exact cell metrics, and KTTY guards.

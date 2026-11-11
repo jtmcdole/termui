@@ -1,3 +1,7 @@
+## 0.10.2
+
+ - Update a dependency to the latest release.
+
 ## 0.10.1
 
  - **FEAT**(termui): add OSC 8 hyperlink support and extended SGR round-tripping in fromAnsi.

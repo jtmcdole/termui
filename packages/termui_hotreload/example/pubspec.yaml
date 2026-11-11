@@ -9,5 +9,5 @@ environment:
 resolution: workspace
 
 dependencies:
-  termui: ^0.14.0
-  termui_hotreload: ^0.6.27
+  termui: ^0.14.1
+  termui_hotreload: ^0.6.28
