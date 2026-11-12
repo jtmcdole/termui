@@ -20,7 +20,7 @@ version: 1.0.0+1
 
 environment:
   sdk: ">=3.11.0 <4.0.0"
-  flutter: ">=3.44.0"
+  flutter: ">=3.41.0"
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -39,11 +39,11 @@ dependencies:
   cupertino_icons: ^1.0.8
   file: ^7.0.0
   termui: ^0.14.1
-  termui_flutter: ^0.10.3
+  termui_flutter: ^0.11.0
   termui_shared_examples: any
   termui_recorder: ^0.10.2
-  termui_pty: ^0.9.1
-  pty2: ^0.8.1
+  termui_pty: ^0.10.0
+  pty2: ^0.9.0
   core_bus: ^1.0.1
   clock: ^1.1.2
   web: ^1.1.1

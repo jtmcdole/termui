@@ -3,6 +3,58 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-12
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`pty2` - `v0.9.0`](#pty2---v090)
+ - [`termui_audio` - `v0.5.0`](#termui_audio---v050)
+ - [`termui_audio_flutter` - `v0.3.0`](#termui_audio_flutter---v030)
+ - [`termui_flutter` - `v0.11.0`](#termui_flutter---v0110)
+ - [`termui_pty` - `v0.10.0`](#termui_pty---v0100)
+ - [`termui_tinpot` - `v0.5.0`](#termui_tinpot---v050)
+
+Packages with other changes:
+
+ - There are no other changes in this release.
+
+---
+
+#### `pty2` - `v0.9.0`
+
+ - **BREAKING** **FEAT**(pty2): add reaper shim for SIGCHLD safety and TIOCSWINSZ pixel dimensions.
+
+#### `termui_audio` - `v0.5.0`
+
+ - **DOCS**(termui_audio): fix 3D positional parameters, engine factory docs, and example README.
+ - **BREAKING** **FIX**(termui_flutter,examples): drop deprecated flutter/material.dart for Flutter 3.50.
+ - **BREAKING** **FEAT**(termui_audio,termui_audio_flutter): fix dart.library.io guard, add setVoicePan, and add ApcAudioEncoder.
+
+#### `termui_audio_flutter` - `v0.3.0`
+
+ - **DOCS**(termui_audio_flutter): replace non-existent TermuiAudioFlutter snippet with FlutterAudioEngine.
+ - **BREAKING** **FIX**(termui_flutter,examples): drop deprecated flutter/material.dart for Flutter 3.50.
+ - **BREAKING** **FEAT**(termui_audio,termui_audio_flutter): fix dart.library.io guard, add setVoicePan, and add ApcAudioEncoder.
+
+#### `termui_flutter` - `v0.11.0`
+
+ - **FEAT**(termui_flutter): extract GlyphAtlasController, TerminalImeClient, and TerminalSurface.
+ - **BREAKING** **FIX**(termui_flutter,examples): drop deprecated flutter/material.dart for Flutter 3.50.
+
+#### `termui_pty` - `v0.10.0`
+
+ - **FEAT**(termui_pty): add BEL callback, audio APC parser, TerminalPort, and PtyRouter.
+ - **BREAKING** **FEAT**(pty2): add reaper shim for SIGCHLD safety and TIOCSWINSZ pixel dimensions.
+
+#### `termui_tinpot` - `v0.5.0`
+
+ - **BREAKING** **FIX**(termui_flutter,examples): drop deprecated flutter/material.dart for Flutter 3.50.
+
+
 ## 2026-11-11
 
 ### Changes
