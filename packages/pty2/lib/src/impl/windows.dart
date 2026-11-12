@@ -737,7 +737,12 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
   }
 
   @override
-  void resize(int width, int height) {
+  void resize(
+    int width,
+    int height, {
+    int pixelWidth = 0,
+    int pixelHeight = 0,
+  }) {
     if (_failed || _killed || _pHPty == nullptr) return;
     final bindings = _conPtyBindings;
     using((arena) {

@@ -145,6 +145,7 @@ abstract interface class PseudoTerminal {
   /// Resizes the pseudo-terminal window size.
   ///
   /// The process running in the pseudo-terminal will be notified of the new
-  /// [width] (columns) and [height] (rows).
-  void resize(int width, int height);
+  /// [width] (columns) and [height] (rows), along with optional viewport pixel
+  /// dimensions [pixelWidth] and [pixelHeight] on Unix terminals (`TIOCSWINSZ`).
+  void resize(int width, int height, {int pixelWidth = 0, int pixelHeight = 0});
 }
