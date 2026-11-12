@@ -20,6 +20,8 @@ import 'package:pty2/src/util/unix_ffi.dart';
     Uint16,
     Int32,
     Pointer<Int32>,
+    Pointer<Int32>,
+    Pointer<Int32>,
   )
 >(symbol: 'pty2_spawn_unix')
 external int _pty2SpawnUnix(
@@ -31,6 +33,8 @@ external int _pty2SpawnUnix(
   int rows,
   int raw,
   Pointer<Int32> outPtm,
+  Pointer<Int32> outStatusFd,
+  Pointer<Int32> outShimPid,
 );
 
 @Native<Int32 Function(Int32)>(symbol: 'pty2_dup_cloexec')
@@ -48,14 +52,50 @@ external int _pty2Poll(Pointer<Void> fds, int nfds, int timeoutMs);
 @Native<Int32 Function(Int32, Pointer<Int32>, Int32)>(symbol: 'pty2_waitpid')
 external int _pty2Waitpid(int pid, Pointer<Int32> outStatus, int options);
 
-@Native<Int32 Function(Int32, Uint16, Uint16)>(symbol: 'pty2_resize')
-external int _pty2Resize(int fd, int cols, int rows);
+@Native<Int32 Function(Int32, Uint16, Uint16, Uint16, Uint16)>(
+  symbol: 'pty2_resize',
+)
+external int _pty2Resize(int fd, int cols, int rows, int xpixel, int ypixel);
 
-@Native<Pointer<Uint8> Function(UintPtr)>(symbol: 'pty2_alloc_main_state')
-external Pointer<Uint8> _pty2AllocMainState(int bufSize);
+@Native<Pointer<Void> Function(UintPtr, Int32, Int32, Int32, Int32)>(
+  symbol: 'pty2_alloc_main_state',
+)
+external Pointer<Void> _pty2AllocMainState(
+  int bufSize,
+  int ptm,
+  int statusFd,
+  int shimPid,
+  int shellPid,
+);
 
 @Native<Void Function(Pointer<Void>)>(symbol: 'pty2_dispose_main_state')
 external void _pty2DisposeMainState(Pointer<Void> ptr);
+
+@Native<Pointer<Uint8> Function(Pointer<Void>)>(
+  symbol: 'pty2_main_state_write_buffer',
+)
+external Pointer<Uint8> _pty2MainStateWriteBuffer(Pointer<Void> ptr);
+
+@Native<Int32 Function(Pointer<Void>)>(symbol: 'pty2_get_ptm', isLeaf: true)
+external int _pty2GetPtm(Pointer<Void> ptr);
+
+@Native<Void Function(Pointer<Void>)>(symbol: 'pty2_close_ptm')
+external void _pty2ClosePtm(Pointer<Void> ptr);
+
+@Native<Uint8 Function(Pointer<Void>)>(symbol: 'pty2_is_stopped', isLeaf: true)
+external int _pty2IsStopped(Pointer<Void> ptr);
+
+@Native<Int32 Function(Pointer<Void>, Int32, Pointer<Int32>)>(
+  symbol: 'pty2_reap_status',
+)
+external int _pty2ReapStatus(
+  Pointer<Void> mainState,
+  int blocking,
+  Pointer<Int32> outStatus,
+);
+
+@Native<Int32 Function(Pointer<Void>, Int32)>(symbol: 'pty2_kill_shell')
+external int _pty2KillShell(Pointer<Void> mainState, int sig);
 
 Map<String, String> _buildUnixEnvironment(
   Map<String, String>? customEnvironment,
@@ -113,6 +153,39 @@ int _decodeWaitStatus(int status) {
   return (status & 0xFF00) >> 8;
 }
 
+int? _reapExitCode(Pointer<Void> mainState, {required bool blocking}) {
+  if (mainState == nullptr) return null;
+  return using((arena) {
+    final statusPointer = arena<Int32>();
+    final ret = _pty2ReapStatus(mainState, blocking ? 1 : 0, statusPointer);
+    if (ret == 0) {
+      return null;
+    }
+    if (ret < 0) {
+      return -1;
+    }
+    return _decodeWaitStatus(statusPointer.value);
+  });
+}
+
+void _cleanupSpawnFailure({
+  required Arena arena,
+  required int shellPid,
+  required int shimPid,
+  required int mainPtm,
+  required int statusFd,
+  int workerPtm = -1,
+}) {
+  if (workerPtm >= 0) unix.close(workerPtm);
+  if (mainPtm >= 0) unix.close(mainPtm);
+  if (statusFd >= 0) unix.close(statusFd);
+  if (shellPid > 1) {
+    unix.kill(-shellPid, consts.SIGKILL);
+    unix.kill(shellPid, consts.SIGKILL);
+  }
+  if (shimPid > 0) _pty2Waitpid(shimPid, arena<Int32>(), 0);
+}
+
 final class PtyCoreUnix implements PtyCore, Finalizable {
   factory PtyCoreUnix.start(
     String executable,
@@ -144,7 +217,9 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
       );
 
       final pPtm = arena<Int32>();
-      final pid = _pty2SpawnUnix(
+      final pStatusFd = arena<Int32>();
+      final pShimPid = arena<Int32>();
+      final shellPid = _pty2SpawnUnix(
         nativeExecutable,
         argv,
         env,
@@ -153,54 +228,82 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
         20,
         raw ? 1 : 0,
         pPtm,
+        pStatusFd,
+        pShimPid,
       );
 
-      if (pid == -2) {
+      if (shellPid == -2) {
         throw PtyException('openpty failed');
       }
-      if (pid < 0) {
+      if (shellPid < 0) {
         throw PtyException('fork failed.');
       }
 
       final ptm = pPtm.value;
+      final statusFd = pStatusFd.value;
+      final shimPid = pShimPid.value;
       final workerPtm = _pty2DupCloexec(ptm);
       if (workerPtm < 0) {
-        unix.close(ptm);
-        unix.kill(pid, 9);
-        _pty2Waitpid(pid, arena<Int32>(), 0);
+        _cleanupSpawnFailure(
+          arena: arena,
+          shellPid: shellPid,
+          shimPid: shimPid,
+          mainPtm: ptm,
+          statusFd: statusFd,
+        );
         throw PtyException('dup failed');
       }
 
-      return PtyCoreUnix._(pid, ptm, workerPtm);
+      return PtyCoreUnix._(
+        shellPid: shellPid,
+        shimPid: shimPid,
+        mainPtm: ptm,
+        workerPtm: workerPtm,
+        statusFd: statusFd,
+      );
     });
   }
 
-  PtyCoreUnix._(this._pid, int mainPtm, int workerPtm) {
-    final nativeMem = _pty2AllocMainState(_bufferSize);
+  PtyCoreUnix._({
+    required int shellPid,
+    required int shimPid,
+    required int mainPtm,
+    required int workerPtm,
+    required int statusFd,
+  }) {
+    final nativeMem = _pty2AllocMainState(
+      _bufferSize,
+      mainPtm,
+      statusFd,
+      shimPid,
+      shellPid,
+    );
     if (nativeMem == nullptr) {
-      unix.close(mainPtm);
-      unix.close(workerPtm);
+      using((arena) {
+        _cleanupSpawnFailure(
+          arena: arena,
+          shellPid: shellPid,
+          shimPid: shimPid,
+          mainPtm: mainPtm,
+          statusFd: statusFd,
+          workerPtm: workerPtm,
+        );
+      });
       throw PtyException('alloc failed');
     }
     _nativeMem = nativeMem;
-    _pMainPtm = nativeMem.cast<Int32>()..value = mainPtm;
-    _stopFlag = nativeMem + 4;
-    _writeBuffer = nativeMem + 8;
+    _writeBuffer = _pty2MainStateWriteBuffer(nativeMem);
     _worker = PtyCoreUnixWorker(
       ptm: workerPtm,
-      pid: _pid,
-      stopFlagAddress: _stopFlag.address,
+      mainStateAddress: nativeMem.address,
     );
 
-    _finalizer.attach(this, _nativeMem.cast(), detach: this);
+    _finalizer.attach(this, _nativeMem, detach: this);
   }
 
-  final int _pid;
   static const _bufferSize = 81920;
 
-  late final Pointer<Uint8> _nativeMem;
-  late final Pointer<Int32> _pMainPtm;
-  late final Pointer<Uint8> _stopFlag;
+  late final Pointer<Void> _nativeMem;
   late final Pointer<Uint8> _writeBuffer;
   static final _finalizer = NativeFinalizer(
     Native.addressOf<NativeFunction<Void Function(Pointer<Void>)>>(
@@ -210,20 +313,6 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
   late final PtyCoreUnixWorker _worker;
 
-  void _closePtm() {
-    _stopFlag.value = 1;
-    final ptm = _pMainPtm.value;
-    if (ptm >= 0) {
-      _pMainPtm.value = -1;
-      unix.close(ptm);
-    }
-  }
-
-  static bool _isProcessDead(int pid) {
-    if (pid <= 0) return true;
-    return unix.kill(pid, 0) != 0;
-  }
-
   @override
   PtyCoreUnixWorker get worker => _worker;
 
@@ -232,87 +321,68 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
   @override
   void onReaderClosed() {
-    _closePtm();
+    _pty2ClosePtm(_nativeMem);
   }
 
   @override
-  int? exitCodeNonBlocking() {
-    return using((arena) {
-      final statusPointer = arena<Int32>();
-      final pid = _pty2Waitpid(_pid, statusPointer, consts.WNOHANG);
-      if (pid == 0) {
-        return null;
-      }
-      if (pid < 0) {
-        if (_isProcessDead(_pid)) {
-          _reaped = true;
-          return -1;
-        }
-        return null;
-      }
-
-      _reaped = true;
-      return _decodeWaitStatus(statusPointer.value);
-    });
-  }
+  int? exitCodeNonBlocking() => _reapExitCode(_nativeMem, blocking: false);
 
   @override
   int exitCodeBlocking() => _worker.exitCodeBlocking();
 
   bool _killed = false;
-  bool _reaped = false;
 
   @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
-    _closePtm();
-    if (_reaped) return false;
+    _pty2ClosePtm(_nativeMem);
     if (_killed && signal != ProcessSignal.sigkill) return false;
-    if (_isProcessDead(_pid)) {
+
+    final sigNum = _mapSignal(signal);
+    final delivered = _pty2KillShell(_nativeMem, sigNum) != 0;
+    if (!delivered) {
       _killed = true;
       return false;
     }
     _killed = true;
-
-    final sigNum = _mapSignal(signal);
-    if (_pid > 1) {
-      unix.kill(-_pid, sigNum);
-    }
-    final ret = unix.kill(_pid, sigNum) == 0;
     // Also send SIGHUP alongside closing ptm on the reader worker so
     // interactive shells that ignore SIGTERM exit immediately.
-    if (sigNum != 9 && sigNum != 1) {
-      _sendSignal(1);
+    if (sigNum != consts.SIGKILL && sigNum != consts.SIGHUP) {
+      _pty2KillShell(_nativeMem, consts.SIGHUP);
     }
-    return ret;
-  }
-
-  void _sendSignal(int sigNum) {
-    if (_pid > 1) {
-      unix.kill(-_pid, sigNum);
-    }
-    unix.kill(_pid, sigNum);
+    return true;
   }
 
   int _mapSignal(ProcessSignal signal) => switch (signal) {
-    ProcessSignal.sigterm => 15,
-    ProcessSignal.sigkill => 9,
-    ProcessSignal.sighup => 1,
-    ProcessSignal.sigint => 2,
-    ProcessSignal.sigusr1 => 10,
-    ProcessSignal.sigusr2 => 12,
-    _ => 15,
+    ProcessSignal.sigterm => consts.SIGTERM,
+    ProcessSignal.sigkill => consts.SIGKILL,
+    ProcessSignal.sighup => consts.SIGHUP,
+    ProcessSignal.sigint => consts.SIGINT,
+    ProcessSignal.sigusr1 => consts.SIGUSR1,
+    ProcessSignal.sigusr2 => consts.SIGUSR2,
+    _ => consts.SIGTERM,
   };
 
   @override
-  void resize(int width, int height) {
-    final ptm = _pMainPtm.value;
+  void resize(
+    int width,
+    int height, {
+    int pixelWidth = 0,
+    int pixelHeight = 0,
+  }) {
+    final ptm = _pty2GetPtm(_nativeMem);
     if (ptm < 0) return;
-    _pty2Resize(ptm, width, height);
+    _pty2Resize(
+      ptm,
+      width.clamp(0, 65535),
+      height.clamp(0, 65535),
+      pixelWidth.clamp(0, 65535),
+      pixelHeight.clamp(0, 65535),
+    );
   }
 
   @override
   void write(List<int> data) {
-    if (_pMainPtm.value < 0) return;
+    if (_pty2GetPtm(_nativeMem) < 0) return;
     var offset = 0;
     while (offset < data.length) {
       final remaining = data.length - offset;
@@ -326,7 +396,7 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
   bool _writeChunk(int chunkLen) {
     var chunkOffset = 0;
     while (chunkOffset < chunkLen) {
-      final ptm = _pMainPtm.value;
+      final ptm = _pty2GetPtm(_nativeMem);
       if (ptm < 0) return false;
       final written = _pty2Write(
         ptm,
@@ -363,23 +433,22 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
 final class PtyCoreUnixWorker implements PtyCoreWorker {
   final int ptm;
-  final int pid;
-  final int stopFlagAddress;
+  final int mainStateAddress;
   static const _bufferSize = 81920;
 
   bool _ptmClosed = false;
   Pointer<Int8>? _buffer;
   Pointer<pollfd>? _pPollFd;
 
-  PtyCoreUnixWorker({
-    required this.ptm,
-    required this.pid,
-    this.stopFlagAddress = 0,
-  });
+  PtyCoreUnixWorker({required this.ptm, required this.mainStateAddress});
+
+  Pointer<Void> get _mainState => Pointer<Void>.fromAddress(mainStateAddress);
 
   bool get _isStopped =>
-      stopFlagAddress != 0 &&
-      Pointer<Uint8>.fromAddress(stopFlagAddress).value != 0;
+      mainStateAddress == 0 || _pty2IsStopped(_mainState) != 0;
+
+  bool get _isShellReaped =>
+      mainStateAddress == 0 || _pty2ReapStatus(_mainState, 0, nullptr) != 0;
 
   void _closePtm() {
     if (!_ptmClosed && ptm >= 0) {
@@ -400,6 +469,15 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
     return Uint8List.fromList(buf.cast<Uint8>().asTypedList(readlen));
   }
 
+  bool _hasTrailingInput(Pointer<pollfd> pfd) {
+    pfd.ref
+      ..fd = ptm
+      ..events = consts.POLLIN
+      ..revents = 0;
+    final drainRet = _pty2Poll(pfd.cast(), 1, 0);
+    return drainRet > 0 && (pfd.ref.revents & consts.POLLIN) != 0;
+  }
+
   bool _waitForReadable(Pointer<pollfd> pfd) {
     final hangupMask = consts.POLLHUP | consts.POLLERR | consts.POLLNVAL;
     while (!_isStopped) {
@@ -410,8 +488,11 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
 
       final ret = _pty2Poll(pfd.cast(), 1, 50);
       if (ret == -consts.EINTR) continue;
-      if (ret == 0 && !PtyCoreUnix._isProcessDead(pid)) continue;
-      if (ret <= 0) return false;
+      if (ret < 0) return false;
+      if (ret == 0) {
+        if (!_isShellReaped) continue;
+        return _hasTrailingInput(pfd);
+      }
 
       final revents = pfd.ref.revents;
       if ((revents & consts.POLLIN) != 0) return true;
@@ -421,16 +502,7 @@ final class PtyCoreUnixWorker implements PtyCoreWorker {
   }
 
   @override
-  int exitCodeBlocking() {
-    return using((arena) {
-      final statusPointer = arena<Int32>();
-      final pidResult = _pty2Waitpid(pid, statusPointer, 0);
-      if (pidResult < 0) {
-        return -1;
-      }
-      return _decodeWaitStatus(statusPointer.value);
-    });
-  }
+  int exitCodeBlocking() => _reapExitCode(_mainState, blocking: true) ?? -1;
 
   @override
   void free() {

@@ -13,7 +13,7 @@ abstract interface class PtyCore {
 
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]);
 
-  void resize(int width, int height);
+  void resize(int width, int height, {int pixelWidth = 0, int pixelHeight = 0});
 
   // int get pid;
 

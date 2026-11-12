@@ -30,8 +30,18 @@ abstract base class BasePseudoTerminal implements PseudoTerminal {
   }
 
   @override
-  void resize(int width, int height) {
-    _core.resize(width, height);
+  void resize(
+    int width,
+    int height, {
+    int pixelWidth = 0,
+    int pixelHeight = 0,
+  }) {
+    _core.resize(
+      width,
+      height,
+      pixelWidth: pixelWidth,
+      pixelHeight: pixelHeight,
+    );
   }
 }
 
@@ -48,12 +58,20 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
   late SendPort _sendPort;
   final bool _syncProcessed;
   late final StreamController<String> _outStreamController;
+  bool _hasSendPort = false;
+  bool _pendingAck = false;
+  bool _outCancelled = false;
 
   late final Future<int> _exitCodeFuture;
 
   @override
   void init() {
-    _outStreamController = StreamController<String>();
+    _outStreamController = StreamController<String>(
+      onCancel: () {
+        _outCancelled = true;
+        ackProcessed();
+      },
+    );
     out = _outStreamController.stream;
 
     final exitPort = ReceivePort();
@@ -79,7 +97,19 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
       }
       if (first) {
         _sendPort = msg as SendPort;
+        _hasSendPort = true;
         first = false;
+        if (_pendingAck || _outCancelled) {
+          _pendingAck = false;
+          ackProcessed();
+        }
+        return;
+      }
+
+      if (_outCancelled) {
+        // Subscription was cancelled; keep draining the reader isolate to EOF
+        // so its ReceivePort closes cleanly instead of idling forever.
+        ackProcessed();
         return;
       }
 
@@ -110,7 +140,11 @@ final class BlockingPseudoTerminal extends BasePseudoTerminal {
   @override
   void ackProcessed() {
     if (_syncProcessed) {
-      _sendPort.send(true);
+      if (_hasSendPort) {
+        _sendPort.send(true);
+      } else {
+        _pendingAck = true;
+      }
     }
   }
 }

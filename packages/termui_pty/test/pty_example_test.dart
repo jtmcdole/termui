@@ -26,7 +26,12 @@ class MockPseudoTerminal implements PseudoTerminal {
   @override
   Future<int> get exitCode => _exitCompleter.future;
   @override
-  void resize(int columns, int rows) {}
+  void resize(
+    int columns,
+    int rows, {
+    int pixelWidth = 0,
+    int pixelHeight = 0,
+  }) {}
   @override
   void ackProcessed() {}
   @override

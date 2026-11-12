@@ -32,7 +32,12 @@ class MockPty implements PseudoTerminal {
   Stream<String> get out => _outController.stream;
 
   @override
-  void resize(int width, int height) {}
+  void resize(
+    int width,
+    int height, {
+    int pixelWidth = 0,
+    int pixelHeight = 0,
+  }) {}
 
   @override
   void write(String input) {
