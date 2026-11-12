@@ -67,6 +67,8 @@ class MockAudioEngine implements TermuiAudioEngine {
   @override
   void setVoiceVolume(AudioVoice voice, double volume) {}
   @override
+  void setVoicePan(AudioVoice voice, double pan) {}
+  @override
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z) =>
       throw UnimplementedError();
   @override

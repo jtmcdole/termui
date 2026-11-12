@@ -185,6 +185,14 @@ final class CliAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  void setVoicePan(AudioVoice voice, double pan) {
+    if (!_inited) throw Exception('Engine not initialized.');
+    if (!_activeVoices.containsKey(voice.id)) return;
+    final clamped = pan.isFinite ? pan.clamp(-1.0, 1.0).toDouble() : 0.0;
+    ffi.setPan(voice.id, clamped);
+  }
+
+  @override
   void setPaused(AudioVoice voice, bool paused) {
     if (!_inited) throw Exception('Engine not initialized.');
     if (!_activeVoices.containsKey(voice.id)) return;

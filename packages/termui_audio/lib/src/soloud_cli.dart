@@ -121,6 +121,9 @@ external void setPause(int handle, bool pause);
 @Native<Int32 Function(Uint32, Float)>(symbol: 'setVolume')
 external int setVolume(int handle, double volume);
 
+@Native<Void Function(Uint32, Double)>(symbol: 'setPan')
+external void setPan(int handle, double pan);
+
 @Native<Void Function(Uint32)>(symbol: 'disposeSound')
 external void disposeSound(int soundHash);
 

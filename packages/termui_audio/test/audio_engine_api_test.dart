@@ -143,6 +143,11 @@ class MockAudioEngine extends TermuiAudioEngine {
   void setVoiceVolume(AudioVoice voice, double volume) {}
 
   @override
+  void setVoicePan(AudioVoice voice, double pan) {
+    callLog.add('setVoicePan(${voice.id}, $pan)');
+  }
+
+  @override
   void set3dSourceMinMaxDistance(
     AudioVoice voice,
     double minDistance,

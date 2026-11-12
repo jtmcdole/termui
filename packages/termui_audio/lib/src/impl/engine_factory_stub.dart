@@ -73,6 +73,9 @@ class StubAudioEngine implements TermuiAudioEngine {
   void setVoiceVolume(AudioVoice voice, double volume) =>
       throw UnsupportedError('StubAudioEngine');
   @override
+  void setVoicePan(AudioVoice voice, double pan) =>
+      throw UnsupportedError('StubAudioEngine');
+  @override
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z) =>
       throw UnsupportedError('StubAudioEngine');
   @override

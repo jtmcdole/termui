@@ -184,5 +184,12 @@ void main() {
         equals(1),
       );
     });
+
+    test('setVoicePan throws when engine is not initialized', () {
+      final engine = FlutterAudioEngine();
+      final voice = AudioVoice(7, Completer<void>().future);
+
+      expect(() => engine.setVoicePan(voice, -0.5), throwsA(isA<Exception>()));
+    });
   });
 }
