@@ -1,11 +1,21 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart' hide Color;
+import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/termui.dart' as termui;
 import 'package:termui_flutter/termui_flutter.dart';
+
+Widget _testApp({required Widget home}) => WidgetsApp(
+  color: const ui.Color(0xFF000000),
+  pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+    settings: settings,
+    pageBuilder: (context, _, _) => builder(context),
+  ),
+  home: home,
+);
 
 void main() {
   testWidgets(
@@ -18,7 +28,7 @@ void main() {
       var now = DateTime(2026, 11, 2, 12);
       await withClock(Clock(() => now), () async {
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: Terminal(
               onRun: (terminal, drawFrame) async {
                 sub = terminal.events.listen((event) {
@@ -107,7 +117,7 @@ void main() {
       var now = DateTime(2026, 11, 2, 12);
       await withClock(Clock(() => now), () async {
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: Terminal(
               onRun: (terminal, drawFrame) async {
                 sub = terminal.events.listen((event) {

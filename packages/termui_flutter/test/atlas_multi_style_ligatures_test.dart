@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/material.dart' hide Color;
+import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/color.dart' as tui_color;
@@ -13,6 +13,15 @@ import 'package:termui_flutter/src/service/terminal_service.dart';
 // ignore: implementation_imports
 import 'package:termui_flutter/src/terminal.dart';
 import 'package:termui_flutter/termui_flutter.dart';
+
+Widget _testApp({required Widget home}) => WidgetsApp(
+  color: const ui.Color(0xFF000000),
+  pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+    settings: settings,
+    pageBuilder: (context, _, _) => builder(context),
+  ),
+  home: home,
+);
 
 final class _CapturingTerminalService implements TerminalService {
   final Map<String, Uint8List> savedFiles = {};
@@ -139,18 +148,16 @@ void main() {
       addTearDown(terminal.dispose);
 
       await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: Terminal(
-              terminal: terminal,
-              enableLigatures: true,
-              fontSize: 14.0,
-              fontFamily: 'Roboto Mono',
-              onRun: (term, drawFrame) async {
-                final buf = Buffer(10, 2);
-                drawFrame(buf);
-              },
-            ),
+        _testApp(
+          home: Terminal(
+            terminal: terminal,
+            enableLigatures: true,
+            fontSize: 14.0,
+            fontFamily: 'Roboto Mono',
+            onRun: (term, drawFrame) async {
+              final buf = Buffer(10, 2);
+              drawFrame(buf);
+            },
           ),
         ),
       );
@@ -525,19 +532,17 @@ void main() {
 
           await tester.runAsync(() async {
             await tester.pumpWidget(
-              MaterialApp(
-                home: Scaffold(
-                  body: SizedBox(
-                    width: 400,
-                    height: 300,
-                    child: Terminal(
-                      terminal: terminal,
-                      fontSize: 12.0,
-                      fontFamily: 'Roboto Mono',
-                      onRun: (term, drawFrame) async {
-                        drawFrame(Buffer(10, 4));
-                      },
-                    ),
+              _testApp(
+                home: SizedBox(
+                  width: 400,
+                  height: 300,
+                  child: Terminal(
+                    terminal: terminal,
+                    fontSize: 12.0,
+                    fontFamily: 'Roboto Mono',
+                    onRun: (term, drawFrame) async {
+                      drawFrame(Buffer(10, 4));
+                    },
                   ),
                 ),
               ),
@@ -582,33 +587,31 @@ void main() {
 
           await tester.runAsync(() async {
             await tester.pumpWidget(
-              MaterialApp(
-                home: Scaffold(
-                  body: SizedBox(
-                    width: 320,
-                    height: 200,
-                    child: Terminal(
-                      terminal: terminal,
-                      service: service,
-                      fontSize: 14.0,
-                      fontFamily: 'Roboto Mono',
-                      onRun: (term, drawFrame) async {
-                        draw = drawFrame;
-                        final buf = Buffer(8, 2)
-                          ..writeString(
-                            0,
-                            0,
-                            'L',
-                            const Style(
-                              foreground: tui_color.Color(255, 255, 255),
-                              modifiers: Modifier.underline,
-                              underlineColor: tui_color.Color(255, 64, 128),
-                              uri: 'https://termui.dev',
-                            ),
-                          );
-                        drawFrame(buf);
-                      },
-                    ),
+              _testApp(
+                home: SizedBox(
+                  width: 320,
+                  height: 200,
+                  child: Terminal(
+                    terminal: terminal,
+                    service: service,
+                    fontSize: 14.0,
+                    fontFamily: 'Roboto Mono',
+                    onRun: (term, drawFrame) async {
+                      draw = drawFrame;
+                      final buf = Buffer(8, 2)
+                        ..writeString(
+                          0,
+                          0,
+                          'L',
+                          const Style(
+                            foreground: tui_color.Color(255, 255, 255),
+                            modifiers: Modifier.underline,
+                            underlineColor: tui_color.Color(255, 64, 128),
+                            uri: 'https://termui.dev',
+                          ),
+                        );
+                      drawFrame(buf);
+                    },
                   ),
                 ),
               ),
@@ -658,20 +661,18 @@ void main() {
 
           await tester.runAsync(() async {
             await tester.pumpWidget(
-              MaterialApp(
-                home: Scaffold(
-                  body: SizedBox(
-                    width: 600,
-                    height: 400,
-                    child: Terminal(
-                      terminal: terminal,
-                      fontSize: 14.0,
-                      fontFamily: 'Roboto Mono',
-                      onRun: (term, drawFrame) async {
-                        draw = drawFrame;
-                        drawFrame(Buffer(20, 16));
-                      },
-                    ),
+              _testApp(
+                home: SizedBox(
+                  width: 600,
+                  height: 400,
+                  child: Terminal(
+                    terminal: terminal,
+                    fontSize: 14.0,
+                    fontFamily: 'Roboto Mono',
+                    onRun: (term, drawFrame) async {
+                      draw = drawFrame;
+                      drawFrame(Buffer(20, 16));
+                    },
                   ),
                 ),
               ),

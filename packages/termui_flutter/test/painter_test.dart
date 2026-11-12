@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'package:flutter/material.dart' hide Color;
+import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/color.dart';
@@ -642,7 +642,12 @@ Future<void> _testLiveThemeUpdate(WidgetTester tester) async {
   void Function(Buffer)? drawFrame;
 
   Widget buildWithTheme(TerminalColorTheme theme, double faintOpacity) {
-    return MaterialApp(
+    return WidgetsApp(
+      color: const ui.Color(0xFF000000),
+      pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+        settings: settings,
+        pageBuilder: (context, _, _) => builder(context),
+      ),
       home: SizedBox(
         width: 320,
         height: 200,

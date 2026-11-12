@@ -1,14 +1,24 @@
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/termui.dart' as termui;
 import 'package:termui_flutter/src/rendering/painter.dart';
 import 'package:termui_flutter/src/service/terminal_service.dart';
 import 'package:termui_flutter/src/terminal.dart' show PrivateTuiView;
 import 'package:termui_flutter/termui_flutter.dart';
+
+Widget _testApp({required Widget home}) => WidgetsApp(
+  color: const ui.Color(0xFF000000),
+  pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+    settings: settings,
+    pageBuilder: (context, _, _) => builder(context),
+  ),
+  home: home,
+);
 
 Uint8List _pngIhdrHeader(int width, int height) {
   final header = BytesBuilder()
@@ -71,7 +81,7 @@ void main() {
         buffer.writeString(0, 1, 'Second Line of Text', const termui.Style());
 
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: Terminal(
               service: service,
               selectionController: selectionController,
@@ -125,7 +135,7 @@ void main() {
       buffer.writeString(0, 2, 'GGGG HHHH IIII', const termui.Style());
 
       await tester.pumpWidget(
-        MaterialApp(
+        _testApp(
           home: Terminal(
             service: service,
             selectionController: selectionController,
@@ -179,7 +189,7 @@ void main() {
       }
 
       await tester.pumpWidget(
-        MaterialApp(
+        _testApp(
           home: Terminal(
             service: service,
             selectionController: selectionController,
@@ -221,7 +231,7 @@ void main() {
         }
 
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: Terminal(
               service: service,
               selectionController: selectionController,
@@ -282,7 +292,7 @@ void main() {
         }
 
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: Terminal(
               service: service,
               selectionController: selectionController,
@@ -348,7 +358,7 @@ void main() {
         addTearDown(sub.cancel);
 
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: Terminal(
               terminal: terminal,
               service: service,
@@ -448,7 +458,7 @@ void main() {
 
         service.clipboardText = 'pasted';
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: Terminal(
               terminal: terminal,
               service: service,

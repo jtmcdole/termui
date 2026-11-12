@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:ui' as ui;
-import 'package:flutter/material.dart' hide Color;
+import 'package:flutter/widgets.dart' hide Color;
 import 'package:termui/ui/buffer.dart';
 
 /// Procedurally renders block, shade, and box-drawing characters on a Canvas.
@@ -27,7 +27,7 @@ import 'package:termui/ui/buffer.dart';
 /// ### Example Usage
 ///
 /// ```dart
-/// final paint = Paint()..color = Colors.white;
+/// final paint = Paint()..color = const ui.Color(0xFFFFFFFF);
 /// final handled = drawProceduralCharacter(
 ///   canvas, 0.0, 0.0, 10.0, 20.0, 1.0, '█', paint,
 /// );
@@ -732,7 +732,7 @@ TextPainter _createAtlasTextPainter({
         fontFeatures: _isAsciiLigature(char)
             ? _atlasLigatureFontFeatures
             : null,
-        color: Colors.white,
+        color: const ui.Color(0xFFFFFFFF),
         fontWeight: bold ? FontWeight.bold : FontWeight.normal,
         fontStyle: italic ? FontStyle.italic : FontStyle.normal,
         letterSpacing: 0.0,
@@ -844,7 +844,7 @@ Rect _paintSingleAtlasGlyph({
     cellHeight,
     actualPadding,
     pg.char,
-    Paint()..color = Colors.white,
+    Paint()..color = const ui.Color(0xFFFFFFFF),
   );
   if (!drawn) {
     final charBaseline = pg.painter.computeDistanceToActualBaseline(
@@ -1387,7 +1387,7 @@ abstract final class GlyphAtlasGenerator {
 
     canvas.drawRect(
       Rect.fromLTWH(0, 0, m.colWidth, m.rowHeight),
-      Paint()..color = Colors.white,
+      Paint()..color = const ui.Color(0xFFFFFFFF),
     );
     final whiteRect = Rect.fromLTWH(
       m.actualPadding * devicePixelRatio,
@@ -1573,7 +1573,7 @@ abstract final class GlyphAtlasGenerator {
 
     canvas.drawRect(
       Rect.fromLTWH(whiteX, whiteY, m.colWidth, m.rowHeight),
-      Paint()..color = Colors.white,
+      Paint()..color = const ui.Color(0xFFFFFFFF),
     );
     final whiteRect = Rect.fromLTWH(
       (whiteX + m.actualPadding) * devicePixelRatio,
