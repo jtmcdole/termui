@@ -69,8 +69,13 @@ library;
 
 export 'src/backend.dart' show FlutterTerminal;
 export 'src/terminal.dart' show Terminal;
+export 'src/terminal_ime_client.dart' show TerminalImeClient;
+export 'src/terminal_surface.dart' show TerminalSurface;
+export 'src/service/terminal_service.dart'
+    show DefaultTerminalService, TerminalService;
 export 'src/rendering/atlas.dart'
     show GlyphAtlas, GlyphAtlasGenerator, GlyphStyleVariant;
+export 'src/rendering/atlas_controller.dart' show GlyphAtlasController;
 export 'src/util/file_saver.dart' show saveFile;
 export 'src/util/font_helper.dart' show waitForFontsToLoad;
 export 'src/util/url_launcher.dart'

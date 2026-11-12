@@ -7,7 +7,6 @@ import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/termui.dart' as termui;
 import 'package:termui_flutter/src/rendering/painter.dart';
-import 'package:termui_flutter/src/service/terminal_service.dart';
 import 'package:termui_flutter/src/terminal.dart' show PrivateTuiView;
 import 'package:termui_flutter/termui_flutter.dart';
 

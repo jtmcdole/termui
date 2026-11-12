@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -10,6 +11,16 @@ import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 import 'atlas.dart';
+
+/// Computes the total terminal cell width spanned by [text], counting wide
+/// graphemes as `2` cells and normal graphemes as `1`.
+int countGraphemeDisplayCells(String text) {
+  var total = 0;
+  for (final grapheme in text.characters) {
+    total += isWideGrapheme(grapheme) ? 2 : 1;
+  }
+  return total;
+}
 
 bool _isBlockCharacter(String char) {
   if (char.isEmpty) return false;
@@ -89,7 +100,7 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Optional callback invoked when unrecognized glyphs are requested.
   final void Function(List<String>)? onMissingGlyphs;
 
-  /// Optional callback invoked with exact `(char, GlyphStyleVariant)` pairs for lazy dynamic rasterization.
+  /// Optional callback invoked with exact `(char, GlyphStyleVariant)` pairs for lazy on-demand rasterization.
   final void Function(List<(String, GlyphStyleVariant)>)? onMissingStyledGlyphs;
 
   /// Cache of individual [TextPainter] objects for glyphs absent in the main atlas.
@@ -191,6 +202,12 @@ final class TuiAtlasPainter extends CustomPainter {
     this.defaultBackgroundArgb = 0xFF000000,
     this.faintOpacity = 140 / 255,
     this.palette = TerminalColorTheme.termuiDark,
+    this.activePtyCols,
+    this.activePtyRows,
+    this.outOfBoundsDimColor,
+    this.composingText = '',
+    this.cursorCol = 0,
+    this.cursorRow = 0,
   }) : _selectionStart = selectionStart,
        _selectionEnd = selectionEnd,
        _selectionColBounds = selectionColBounds,
@@ -208,6 +225,24 @@ final class TuiAtlasPainter extends CustomPainter {
 
   /// Palette used to resolve [ColorIntExtension.isAnsiIndexed] cell colors.
   final TerminalColorTheme palette;
+
+  /// Active clamped PTY width in columns; cells at `x >= activePtyCols` are dimmed.
+  final int? activePtyCols;
+
+  /// Active clamped PTY height in rows; cells at `y >= activePtyRows` are dimmed.
+  final int? activePtyRows;
+
+  /// Optional scrim color applied over cells outside [activePtyCols] and [activePtyRows].
+  final Color? outOfBoundsDimColor;
+
+  /// Active IME pre-edit composition string rendered underlined at `(cursorCol, cursorRow)`.
+  final String composingText;
+
+  /// Zero-based cursor column where [composingText] begins.
+  final int cursorCol;
+
+  /// Zero-based cursor row where [composingText] is painted.
+  final int cursorRow;
 
   void _drawRawAtlasInChunks(
     Canvas canvas,
@@ -322,6 +357,118 @@ final class TuiAtlasPainter extends CustomPainter {
 
     if (decorations.isNotEmpty) {
       _paintDecorations(canvas, decorations);
+    }
+
+    if (activePtyCols != null || activePtyRows != null) {
+      _paintOutOfBoundsDimming(canvas, size, geo);
+    }
+
+    if (composingText.isNotEmpty) {
+      _paintComposingOverlay(canvas, size, geo);
+    }
+  }
+
+  static bool _isDarkArgb(int argb) {
+    final r = (argb >> 16) & 0xFF;
+    final g = (argb >> 8) & 0xFF;
+    final b = argb & 0xFF;
+    return (0.299 * r + 0.587 * g + 0.114 * b) < 128.0;
+  }
+
+  void _paintOutOfBoundsDimming(Canvas canvas, Size size, _AtlasGeometry geo) {
+    final activeX = activePtyCols != null
+        ? (math.max(0, activePtyCols!) * geo.cellWidth).clamp(0.0, size.width)
+        : size.width;
+    final activeY = activePtyRows != null
+        ? (math.max(0, activePtyRows!) * geo.cellHeight).clamp(0.0, size.height)
+        : size.height;
+    if (activeX >= size.width && activeY >= size.height) return;
+
+    final dimPaint = Paint()
+      ..color = outOfBoundsDimColor ?? const Color(0x80000000);
+    if (activeX < size.width && activeY > 0) {
+      canvas.drawRect(
+        Rect.fromLTRB(activeX, 0.0, size.width, activeY),
+        dimPaint,
+      );
+    }
+    if (activeY < size.height) {
+      canvas.drawRect(
+        Rect.fromLTRB(0.0, activeY, size.width, size.height),
+        dimPaint,
+      );
+    }
+
+    final borderPaint = Paint()
+      ..color = _isDarkArgb(defaultBackgroundArgb)
+          ? const Color(0x33FFFFFF)
+          : const Color(0x33000000)
+      ..strokeWidth = 1.0;
+    if (activeX < size.width && activeY > 0) {
+      final bx = math.min(size.width - 0.5, activeX + 0.5);
+      final bottom = activeY < size.height
+          ? math.min(size.height, activeY + 1.0)
+          : size.height;
+      canvas.drawLine(Offset(bx, 0.0), Offset(bx, bottom), borderPaint);
+    }
+    if (activeY < size.height && activeX > 0) {
+      final by = math.min(size.height - 0.5, activeY + 0.5);
+      canvas.drawLine(Offset(0.0, by), Offset(activeX, by), borderPaint);
+    }
+  }
+
+  void _paintComposingOverlay(Canvas canvas, Size size, _AtlasGeometry geo) {
+    final maxCols = math.max(1, (size.width / geo.cellWidth).floor());
+    final maxRows = math.max(1, (size.height / geo.cellHeight).floor());
+    final col = cursorCol.clamp(0, maxCols - 1);
+    final row = cursorRow.clamp(0, maxRows - 1);
+    final originX = col * geo.cellWidth;
+    final originY = row * geo.cellHeight;
+    final availWidth = math.max(geo.cellWidth, size.width - originX);
+
+    final fgColor = Color(defaultForegroundArgb);
+    final bgColor = Color(defaultBackgroundArgb);
+    final tp = TextPainter(
+      text: TextSpan(
+        text: composingText,
+        style: TextStyle(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
+          fontSize: atlas.fontSize,
+          color: fgColor,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    try {
+      final cellSpan = countGraphemeDisplayCells(composingText);
+      final rawWidth = math.max(cellSpan * geo.cellWidth, tp.width);
+      final overlayWidth = math.min(availWidth, rawWidth);
+      final overlayRect = Rect.fromLTWH(
+        originX,
+        originY,
+        overlayWidth,
+        geo.cellHeight,
+      );
+
+      canvas.save();
+      canvas.clipRect(overlayRect);
+      canvas.drawRect(overlayRect, Paint()..color = bgColor);
+      final offsetY = (geo.cellHeight - tp.height) / 2;
+      tp.paint(canvas, Offset(originX, originY + offsetY));
+      final underlineY = originY + geo.cellHeight - 1.5;
+      canvas.drawLine(
+        Offset(originX, underlineY),
+        Offset(originX + overlayWidth, underlineY),
+        Paint()
+          ..color = fgColor
+          ..strokeWidth = 1.5,
+      );
+      canvas.restore();
+    } finally {
+      tp.dispose();
     }
   }
 
@@ -1039,6 +1186,30 @@ final class TuiAtlasPainter extends CustomPainter {
       final offsetX = (fc.w - tp.width) / 2;
       final offsetY = (fc.h - tp.height) / 2;
       tp.paint(canvas, Offset(fc.x + offsetX, fc.y + offsetY));
+      return;
+    }
+
+    final transient = TextPainter(
+      text: TextSpan(
+        text: fc.char,
+        style: TextStyle(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFamilyFallback,
+          fontSize: atlas.fontSize,
+          color: color,
+          fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+          fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    try {
+      final offsetX = (fc.w - transient.width) / 2;
+      final offsetY = (fc.h - transient.height) / 2;
+      transient.paint(canvas, Offset(fc.x + offsetX, fc.y + offsetY));
+    } finally {
+      transient.dispose();
     }
   }
 
