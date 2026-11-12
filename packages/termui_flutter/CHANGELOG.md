@@ -1,3 +1,10 @@
+## 0.11.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(termui_flutter): extract GlyphAtlasController, TerminalImeClient, and TerminalSurface.
+ - **BREAKING** **FIX**(termui_flutter,examples): drop deprecated flutter/material.dart for Flutter 3.50.
+
 ## 0.10.3
 
  - **FIX**(termui_flutter): normalize Ctrl+letter keys while preserving AltGr and shiftedCodepoint.

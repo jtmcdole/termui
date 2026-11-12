@@ -1,3 +1,10 @@
+## 0.10.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(termui_pty): add BEL callback, audio APC parser, TerminalPort, and PtyRouter.
+ - **BREAKING** **FEAT**(pty2): add reaper shim for SIGCHLD safety and TIOCSWINSZ pixel dimensions.
+
 ## 0.9.1
 
  - **FIX**(termui_pty): normalize C0 and CapsLock control keys in InputEncoder.

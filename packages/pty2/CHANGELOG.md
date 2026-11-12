@@ -1,3 +1,9 @@
+## 0.9.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(pty2): add reaper shim for SIGCHLD safety and TIOCSWINSZ pixel dimensions.
+
 ## 0.8.1
 
  - **FIX**(pty2): fall back to gcc on Linux and suppress Visual Studio warning.

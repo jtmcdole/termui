@@ -1,3 +1,9 @@
+## 0.5.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_flutter,examples): drop deprecated flutter/material.dart for Flutter 3.50.
+
 ## 0.4.2
 
  - Update a dependency to the latest release.
