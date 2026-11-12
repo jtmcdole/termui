@@ -2,8 +2,8 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/buffer.dart';
@@ -18,6 +18,15 @@ import 'package:termui_flutter/src/service/terminal_service.dart';
 // ignore: implementation_imports
 import 'package:termui_flutter/src/terminal.dart';
 import 'package:termui_flutter/termui_flutter.dart';
+
+Widget _testApp({required Widget home}) => WidgetsApp(
+  color: const ui.Color(0xFF000000),
+  pageRouteBuilder: <T>(settings, builder) => PageRouteBuilder<T>(
+    settings: settings,
+    pageBuilder: (context, _, _) => builder(context),
+  ),
+  home: home,
+);
 
 final class _TestTerminalService implements TerminalService {
   int screenshotCount = 0;
@@ -156,7 +165,7 @@ void main() {
         addTearDown(sub.cancel);
 
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: SizedBox(
               width: 400,
               height: 300,
@@ -303,7 +312,7 @@ void main() {
         late StateSetter rebuildHost;
 
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: StatefulBuilder(
               builder: (context, setState) {
                 rebuildHost = setState;
@@ -380,7 +389,7 @@ void main() {
       addTearDown(sub.cancel);
 
       await tester.pumpWidget(
-        MaterialApp(
+        _testApp(
           home: Align(
             alignment: Alignment.topLeft,
             child: SizedBox(
@@ -696,7 +705,7 @@ void main() {
         late void Function(Buffer) drawFrame;
 
         await tester.pumpWidget(
-          MaterialApp(
+          _testApp(
             home: SizedBox(
               width: 400,
               height: 300,
@@ -977,7 +986,7 @@ void main() {
           late void Function(Buffer) drawFrame;
 
           await tester.pumpWidget(
-            MaterialApp(
+            _testApp(
               home: SizedBox(
                 width: 300,
                 height: 200,
@@ -1099,7 +1108,7 @@ void main() {
           addTearDown(sub.cancel);
 
           await tester.pumpWidget(
-            MaterialApp(
+            _testApp(
               home: Align(
                 alignment: Alignment.topLeft,
                 child: SizedBox(

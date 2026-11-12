@@ -5,9 +5,9 @@ import 'dart:ui' as ui;
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
-import 'package:flutter/material.dart' hide Color;
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' hide Color;
 import 'package:termui/perf/tracer.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/buffer.dart';
@@ -33,7 +33,7 @@ import 'util/font_helper.dart';
 /// Terminal(
 ///   fontSize: 14.0,
 ///   fontFamily: 'Cascadia Code',
-///   backgroundColor: Colors.black,
+///   backgroundColor: const Color(0xFF000000),
 ///   onRun: (terminal, drawFrame) async {
 ///     final app = App(backend: terminal.backend);
 ///     app.run((frame) {
@@ -110,8 +110,8 @@ final class Terminal extends StatefulWidget {
     this.fontSize = 13.0,
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
-    this.backgroundColor = Colors.black,
-    this.foregroundColor = Colors.white,
+    this.backgroundColor = const ui.Color(0xFF000000),
+    this.foregroundColor = const ui.Color(0xFFFFFFFF),
     this.faintOpacity = 140 / 255,
     this.palette = TerminalColorTheme.termuiDark,
     this.service = const DefaultTerminalService(),
@@ -292,8 +292,8 @@ final class PrivateTuiView extends StatefulWidget {
     this.fontSize = 13,
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
-    this.backgroundColor = Colors.black,
-    this.foregroundColor = Colors.white,
+    this.backgroundColor = const ui.Color(0xFF000000),
+    this.foregroundColor = const ui.Color(0xFFFFFFFF),
     this.faintOpacity = 140 / 255,
     this.palette = TerminalColorTheme.termuiDark,
     this.enableBleed = kIsWeb,
@@ -1245,34 +1245,17 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   Future<void> _performTakeScreenshot() async {
     try {
       final timestamp = clock.now().millisecondsSinceEpoch;
-      final screenshotBasename = await _saveRepaintBoundaryScreenshot(
-        timestamp,
-      );
+      await _saveRepaintBoundaryScreenshot(timestamp);
       final atlas = _atlas;
-      final atlasBasename = atlas != null
-          ? await _saveAtlasScreenshot(atlas, timestamp)
-          : null;
       if (atlas != null) {
+        await _saveAtlasScreenshot(atlas, timestamp);
         await _saveAtlasTable(atlas, timestamp);
       }
       final buffer = _currentBuffer;
-      final coordinatesBasename = (buffer != null && atlas != null)
-          ? await _saveCoordinatesScreenshot(buffer, atlas, timestamp)
-          : null;
-
-      final savedFiles = <String>[
-        ?screenshotBasename,
-        ?atlasBasename,
-        if (atlasBasename != null)
-          atlasBasename
-              .replaceFirst('atlas_', 'atlas_table_')
-              .replaceAll('.png', '.json'),
-        ?coordinatesBasename,
-      ];
-      _showScreenshotSnackBar(savedFiles);
-    } catch (e) {
-      _showScreenshotErrorSnackBar(e);
-    }
+      if (buffer != null && atlas != null) {
+        await _saveCoordinatesScreenshot(buffer, atlas, timestamp);
+      }
+    } on Object catch (_) {}
   }
 
   Future<String?> _saveRepaintBoundaryScreenshot(int timestamp) async {
@@ -1399,25 +1382,6 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
   static String? _formatHexColorOrNull(int argb) => argb != 0
       ? '0x${argb.toRadixString(16).padLeft(8, '0').toUpperCase()}'
       : null;
-
-  void _showScreenshotSnackBar(List<String> files) {
-    if (!mounted) return;
-    final message = files.isNotEmpty
-        ? 'Saved: ${files.join(', ')}'
-        : 'No files saved.';
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
-    );
-  }
-
-  void _showScreenshotErrorSnackBar(Object error) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Error saving screenshot/atlas/coordinates: $error'),
-      ),
-    );
-  }
 
   static const int _maxWheelStepsPerEvent = 32;
   static const Duration _scrollIdleReset = Duration(milliseconds: 250);
@@ -1705,10 +1669,8 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     return LayoutBuilder(builder: _buildTerminalBody);
   }
 
-  Widget _buildLoadingIndicator() => Scaffold(
-    backgroundColor: widget.backgroundColor,
-    body: const Center(child: CircularProgressIndicator()),
-  );
+  Widget _buildLoadingIndicator() =>
+      ColoredBox(color: widget.backgroundColor, child: const SizedBox.expand());
 
   Widget _buildTerminalBody(BuildContext context, BoxConstraints constraints) {
     final atlas = _atlas!;
@@ -1721,18 +1683,20 @@ class PrivateTuiViewState extends State<PrivateTuiView> {
     _syncTerminalSize(cols, rows);
 
     final layoutSize = Size(cols * atlas.cellWidth, rows * atlas.cellHeight);
-    return Scaffold(
-      backgroundColor: widget.backgroundColor,
-      body: Focus(
-        focusNode: _focusNode,
-        autofocus: true,
-        onKeyEvent: (node, event) => _handleKeyEvent(event),
-        child: Center(
-          child: RepaintBoundary(
-            key: _boundaryKey,
-            child: MouseRegion(
-              cursor: _effectiveCursor,
-              child: _buildPointerListener(layoutSize),
+    return ColoredBox(
+      color: widget.backgroundColor,
+      child: SizedBox.expand(
+        child: Focus(
+          focusNode: _focusNode,
+          autofocus: true,
+          onKeyEvent: (node, event) => _handleKeyEvent(event),
+          child: Center(
+            child: RepaintBoundary(
+              key: _boundaryKey,
+              child: MouseRegion(
+                cursor: _effectiveCursor,
+                child: _buildPointerListener(layoutSize),
+              ),
             ),
           ),
         ),

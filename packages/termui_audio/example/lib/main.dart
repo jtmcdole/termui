@@ -1,6 +1,6 @@
 // ignore_for_file: public_member_api_docs, avoid_print
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:termui_audio_example/src/audio_player_app.dart';
 import 'package:termui_audio_flutter/termui_audio_flutter.dart';

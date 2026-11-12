@@ -10,10 +10,10 @@
 /// ### Example Usage
 ///
 /// The following example demonstrates how to host a TUI application inside
-/// a standard [MaterialApp].
+/// a standard `MaterialApp`.
 ///
 /// ```dart
-/// import 'package:flutter/material.dart' hide Color;
+/// import 'package:material_ui/material_ui.dart' hide Color;
 /// import 'package:termui/termui.dart' as termui;
 /// import 'package:termui_flutter/termui_flutter.dart';
 ///
