@@ -465,6 +465,9 @@ void main() {
           expect(cli.getBufferDuration(buffer2), greaterThan(Duration.zero));
           final voice = cli.play(buffer2);
           expect(voice.id, greaterThan(0));
+          cli.setVoicePan(voice, -2.0);
+          cli.setVoicePan(voice, 0.75);
+          cli.setVoicePan(voice, double.nan);
           cli.stop(voice);
         } finally {
           await cli.dispose();

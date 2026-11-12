@@ -1,12 +1,13 @@
 import 'src/api/audio_engine.dart';
 import 'src/api/audio_types.dart';
 import 'src/impl/engine_factory_stub.dart'
-    if (dart.library.ffi) 'src/impl/engine_factory_cli.dart';
+    if (dart.library.io) 'src/impl/engine_factory_cli.dart';
 
+export 'src/apc_audio_encoder.dart';
 export 'src/api/audio_engine.dart';
 export 'src/api/audio_types.dart';
 export 'src/impl/engine_factory_stub.dart'
-    if (dart.library.ffi) 'src/impl/engine_factory_cli.dart'
+    if (dart.library.io) 'src/impl/engine_factory_cli.dart'
     show createAudioEngine;
 export 'src/utils/audio_dsp_utils.dart';
 

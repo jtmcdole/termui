@@ -78,6 +78,9 @@ abstract class TermuiAudioEngine {
   /// Sets the volume of a playing [voice].
   void setVoiceVolume(AudioVoice voice, double volume);
 
+  /// Sets the stereo pan of a playing [voice] (`-1.0` left .. `1.0` right).
+  void setVoicePan(AudioVoice voice, double pan);
+
   /// Pauses or unpauses a playing [voice].
   void setPaused(AudioVoice voice, bool paused);
 

@@ -310,6 +310,13 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   @override
+  void setVoicePan(AudioVoice voice, double pan) {
+    if (!isInitialized) throw Exception('Engine not initialized.');
+    final clamped = pan.isFinite ? pan.clamp(-1.0, 1.0).toDouble() : 0.0;
+    _engine.setPan(sol.SoundHandle(voice.id), clamped);
+  }
+
+  @override
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z) {
     if (buffer case FlutterAudioBuffer(:final source)) {
       final voice = _engine.play3d(source, x, y, z);
