@@ -1,8 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:termui/termui.dart';
+
+import 'zlib_decoder_stub.dart' if (dart.library.io) 'zlib_decoder_io.dart';
 
 final class _PayloadTooLargeException implements Exception {
   const _PayloadTooLargeException();
@@ -361,8 +362,10 @@ final class KittyApcHandler {
     );
     final decoded = base64Decode(cleaned);
     if (!pending.compressed) return decoded;
+    final decoder = platformZlibDecoder;
+    if (decoder == null) throw const _InvalidPayloadException();
     final outSink = _BoundedByteSink(_maxInflatedBytes);
-    zlib.decoder.startChunkedConversion(outSink)
+    decoder.startChunkedConversion(outSink)
       ..add(decoded)
       ..close();
     return outSink.takeBytes();

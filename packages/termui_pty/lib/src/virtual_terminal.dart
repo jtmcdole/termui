@@ -6,6 +6,7 @@ import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
 import 'ansi_parser.dart';
+import 'audio_apc_handler.dart';
 import 'kitty_apc_handler.dart';
 import 'scrollback_buffer.dart';
 
@@ -632,6 +633,12 @@ final class VirtualTerminal implements TerminalHandler {
   /// Callback invoked with full Kitty `OSC 99` metadata (`id`, `a=report`, `c=1`).
   void Function(Osc99Notification notification)? onOsc99Notification;
 
+  /// Callback invoked when the terminal receives a `BEL` (`0x07`) control character.
+  void Function()? onBell;
+
+  /// Callback invoked when an `ESC _ A` audio APC event is decoded.
+  void Function(TerminalAudioEvent event)? onAudioEvent;
+
   static final RegExp _osc99UnsafeIdChars = RegExp(r'[^a-zA-Z0-9_.\-]');
 
   /// Emits a Kitty `OSC 99` activation event reply (`\x1b]99;i=<id>;\x1b\\`) via [onReply].
@@ -654,6 +661,10 @@ final class VirtualTerminal implements TerminalHandler {
     onPlaceVirtual: _placeVirtualImage,
   );
 
+  late final AudioApcHandler _audioApcHandler = AudioApcHandler(
+    onAudioEvent: (event) => onAudioEvent?.call(event),
+  );
+
   final List<void Function()> _listeners = [];
 
   /// Creates a new virtual terminal with the specified dimensions and settings.
@@ -673,6 +684,8 @@ final class VirtualTerminal implements TerminalHandler {
     Duration? syncSafetyTimeout = _defaultSyncSafetyTimeout,
     this.onReply,
     this.onNotification,
+    this.onBell,
+    this.onAudioEvent,
   }) : width = math.max(1, width),
        _colorScheme =
            colorScheme ?? theme?.brightness ?? TerminalBrightness.dark,
@@ -766,6 +779,7 @@ final class VirtualTerminal implements TerminalHandler {
     _syncSafetyTimer = null;
     _pendingOsc99.clear();
     _kittyApcHandler.reset();
+    _audioApcHandler.reset();
     _utf8Sink.close();
     _listeners.clear();
   }
@@ -884,6 +898,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _resetFullScreenState() {
     _kittyApcHandler.reset();
+    _audioApcHandler.reset();
     _resetDefaultTabStops();
     _savedPrimary = _initialSavedCursor;
     _savedAlt = _initialSavedCursor;
@@ -1451,6 +1466,10 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void execute(int charCode) {
+    if (charCode == 7) {
+      onBell?.call();
+      return;
+    }
     _markDirty();
     switch (charCode) {
       case 8: // Backspace
@@ -1561,6 +1580,7 @@ final class VirtualTerminal implements TerminalHandler {
       _usingAltScreen = true;
       _scrollTop = 0;
       _scrollBottom = height - 1;
+      _audioApcHandler.reset();
       if (saveRestoreCursor) {
         cursorX = 0;
         cursorY = 0;
@@ -1574,6 +1594,7 @@ final class VirtualTerminal implements TerminalHandler {
       _altBuffer = null;
       _scrollTop = 0;
       _scrollBottom = height - 1;
+      _audioApcHandler.reset();
       if (saveRestoreCursor) {
         _restoreCursor();
       } else {
@@ -2256,6 +2277,10 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void apc(String payload) {
+    if (payload.startsWith('A') || payload.startsWith('_A')) {
+      _audioApcHandler.handleApc(payload);
+      return;
+    }
     _markDirty();
     _kittyApcHandler.handleApc(payload);
   }
