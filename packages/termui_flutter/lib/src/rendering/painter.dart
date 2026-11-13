@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
@@ -91,6 +92,9 @@ bool isColorEmoji(String char) {
 /// )
 /// ```
 final class TuiAtlasPainter extends CustomPainter {
+  /// Optional listenable driving canvas repaints without rebuilding the widget subtree.
+  final Listenable? repaint;
+
   /// The buffer containing the current layout state to paint.
   final Buffer buffer;
 
@@ -116,6 +120,24 @@ final class TuiAtlasPainter extends CustomPainter {
 
   Float32List? _transformsEmoji;
   Float32List? _rectsEmoji;
+
+  int _fgSpriteCount = 0;
+  int _emojiSpriteCount = 0;
+
+  static final Paint _atlasSpritePaint = Paint()
+    ..filterQuality = FilterQuality.none;
+  static final Paint _emojiSpritePaint = Paint();
+  final Paint _dimPaint = Paint();
+  final Paint _borderPaint = Paint()..strokeWidth = 1.0;
+  final Paint _composingBgPaint = Paint();
+  final Paint _composingUnderlinePaint = Paint()..strokeWidth = 1.5;
+  final Paint _italicPaint = Paint()..filterQuality = FilterQuality.low;
+  final Paint _kittyPaint = Paint()
+    ..style = PaintingStyle.fill
+    ..filterQuality = FilterQuality.low;
+  final Paint _decorationPaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.0;
 
   /// The primary font family used for rendering text.
   final String fontFamily;
@@ -181,6 +203,7 @@ final class TuiAtlasPainter extends CustomPainter {
 
   /// Constructs a [TuiAtlasPainter] targeting the supplied [buffer].
   TuiAtlasPainter({
+    this.repaint,
     required this.buffer,
     required this.atlas,
     required this.fontFamily,
@@ -212,7 +235,8 @@ final class TuiAtlasPainter extends CustomPainter {
        _selectionEnd = selectionEnd,
        _selectionColBounds = selectionColBounds,
        ligaturePainters =
-           ligaturePainters ?? <(String, bool, bool, Color), TextPainter>{};
+           ligaturePainters ?? <(String, bool, bool, Color), TextPainter>{},
+       super(repaint: repaint);
 
   /// Default ARGB foreground color substituted when a cell has `fg == 0`.
   final int defaultForegroundArgb;
@@ -297,7 +321,7 @@ final class TuiAtlasPainter extends CustomPainter {
     final missingGlyphs = <String>[];
     final missingStyledGlyphs = <(String, GlyphStyleVariant)>[];
 
-    final (fgSpriteCount, emojiSpriteCount) = _stageGridCells(
+    _stageGridCells(
       geo,
       fallbackCells,
       italicCells,
@@ -316,30 +340,30 @@ final class TuiAtlasPainter extends CustomPainter {
       _rectsBg!,
       _colorsBg!,
       count,
-      Paint()..filterQuality = FilterQuality.none,
+      _atlasSpritePaint,
     );
 
-    if (fgSpriteCount > 0) {
+    if (_fgSpriteCount > 0) {
       _drawRawAtlasInChunks(
         canvas,
         atlas.image,
         _transformsFg!,
         _rectsFg!,
         _colorsFg!,
-        fgSpriteCount,
-        Paint()..filterQuality = FilterQuality.none,
+        _fgSpriteCount,
+        _atlasSpritePaint,
       );
     }
 
-    if (emojiSpriteCount > 0) {
+    if (_emojiSpriteCount > 0) {
       _drawRawAtlasInChunks(
         canvas,
         atlas.image,
         _transformsEmoji!,
         _rectsEmoji!,
         null,
-        emojiSpriteCount,
-        Paint(),
+        _emojiSpriteCount,
+        _emojiSpritePaint,
       );
     }
 
@@ -384,36 +408,33 @@ final class TuiAtlasPainter extends CustomPainter {
         : size.height;
     if (activeX >= size.width && activeY >= size.height) return;
 
-    final dimPaint = Paint()
-      ..color = outOfBoundsDimColor ?? const Color(0x80000000);
+    _dimPaint.color = outOfBoundsDimColor ?? const Color(0x80000000);
     if (activeX < size.width && activeY > 0) {
       canvas.drawRect(
         Rect.fromLTRB(activeX, 0.0, size.width, activeY),
-        dimPaint,
+        _dimPaint,
       );
     }
     if (activeY < size.height) {
       canvas.drawRect(
         Rect.fromLTRB(0.0, activeY, size.width, size.height),
-        dimPaint,
+        _dimPaint,
       );
     }
 
-    final borderPaint = Paint()
-      ..color = _isDarkArgb(defaultBackgroundArgb)
-          ? const Color(0x33FFFFFF)
-          : const Color(0x33000000)
-      ..strokeWidth = 1.0;
+    _borderPaint.color = _isDarkArgb(defaultBackgroundArgb)
+        ? const Color(0x33FFFFFF)
+        : const Color(0x33000000);
     if (activeX < size.width && activeY > 0) {
       final bx = math.min(size.width - 0.5, activeX + 0.5);
       final bottom = activeY < size.height
           ? math.min(size.height, activeY + 1.0)
           : size.height;
-      canvas.drawLine(Offset(bx, 0.0), Offset(bx, bottom), borderPaint);
+      canvas.drawLine(Offset(bx, 0.0), Offset(bx, bottom), _borderPaint);
     }
     if (activeY < size.height && activeX > 0) {
       final by = math.min(size.height - 0.5, activeY + 0.5);
-      canvas.drawLine(Offset(0.0, by), Offset(activeX, by), borderPaint);
+      canvas.drawLine(Offset(0.0, by), Offset(activeX, by), _borderPaint);
     }
   }
 
@@ -455,16 +476,16 @@ final class TuiAtlasPainter extends CustomPainter {
 
       canvas.save();
       canvas.clipRect(overlayRect);
-      canvas.drawRect(overlayRect, Paint()..color = bgColor);
+      _composingBgPaint.color = bgColor;
+      canvas.drawRect(overlayRect, _composingBgPaint);
       final offsetY = (geo.cellHeight - tp.height) / 2;
       tp.paint(canvas, Offset(originX, originY + offsetY));
       final underlineY = originY + geo.cellHeight - 1.5;
+      _composingUnderlinePaint.color = fgColor;
       canvas.drawLine(
         Offset(originX, underlineY),
         Offset(originX + overlayWidth, underlineY),
-        Paint()
-          ..color = fgColor
-          ..strokeWidth = 1.5,
+        _composingUnderlinePaint,
       );
       canvas.restore();
     } finally {
@@ -527,7 +548,7 @@ final class TuiAtlasPainter extends CustomPainter {
     return true;
   }
 
-  (int, int) _stageGridCells(
+  void _stageGridCells(
     _AtlasGeometry geo,
     List<_FallbackCell> fallbackCells,
     List<_ItalicAtlasCell> italicCells,
@@ -538,17 +559,20 @@ final class TuiAtlasPainter extends CustomPainter {
   ) {
     final cols = buffer.width;
     final rows = buffer.height;
-    var fgSpriteCount = 0;
-    var emojiSpriteCount = 0;
+    final chars = buffer.characters;
+    final attrs = buffer.attributes;
+    _fgSpriteCount = 0;
+    _emojiSpriteCount = 0;
 
     for (var y = 0; y < rows; y++) {
       final screenY = y * geo.cellHeight;
+      final rowStart = y * cols;
       var x = 0;
       while (x < cols) {
         if (enableLigatures) {
           final lig = _detectLigature(x, y, cols);
           if (lig != null) {
-            fgSpriteCount = _stageLigatureRun(
+            _fgSpriteCount = _stageLigatureRun(
               lig.$1,
               lig.$2,
               x,
@@ -557,16 +581,19 @@ final class TuiAtlasPainter extends CustomPainter {
               geo,
               decorations,
               ligatureCells,
-              fgSpriteCount,
+              _fgSpriteCount,
             );
             x += lig.$2;
             continue;
           }
         }
 
-        (fgSpriteCount, emojiSpriteCount) = _stageSingleCell(
+        _stageSingleCell(
           x,
           y,
+          rowStart + x,
+          chars,
+          attrs,
           screenY,
           geo,
           decorations,
@@ -574,19 +601,18 @@ final class TuiAtlasPainter extends CustomPainter {
           italicCells,
           missingGlyphs,
           missingStyledGlyphs,
-          fgSpriteCount,
-          emojiSpriteCount,
         );
         x++;
       }
     }
-
-    return (fgSpriteCount, emojiSpriteCount);
   }
 
-  (int, int) _stageSingleCell(
+  void _stageSingleCell(
     int x,
     int y,
+    int idx,
+    List<String> chars,
+    Uint32List attrs,
     double screenY,
     _AtlasGeometry geo,
     List<_CellDecoration> decorations,
@@ -594,16 +620,14 @@ final class TuiAtlasPainter extends CustomPainter {
     List<_ItalicAtlasCell> italicCells,
     List<String> missingGlyphs,
     List<(String, GlyphStyleVariant)> missingStyledGlyphs,
-    int fgSpriteCount,
-    int emojiSpriteCount,
   ) {
-    final char = buffer.getCharacter(x, y);
-    final bgArgb = buffer.getBackground(x, y);
-    final fgArgb = buffer.getForeground(x, y);
-    final modifiers = buffer.getModifiers(x, y);
+    final char = chars[idx];
+    final attrBase = idx * 3;
+    final fgArgb = attrs[attrBase];
+    final bgArgb = attrs[attrBase + 1];
+    final modifiers = attrs[attrBase + 2];
     final isReverse = Modifier.has(modifiers, Modifier.reverse);
 
-    final idx = y * buffer.width + x;
     final isSelected = !_isKittyCell(char, modifiers) && _isCellSelected(x, y);
     final screenX = x * geo.cellWidth;
 
@@ -629,7 +653,7 @@ final class TuiAtlasPainter extends CustomPainter {
     );
 
     if (Modifier.has(modifiers, Modifier.hidden) && !isSelected) {
-      return (fgSpriteCount, emojiSpriteCount);
+      return;
     }
 
     _maybeStageDecoration(
@@ -645,10 +669,10 @@ final class TuiAtlasPainter extends CustomPainter {
     );
 
     if (char.isEmpty || char == ' ') {
-      return (fgSpriteCount, emojiSpriteCount);
+      return;
     }
 
-    return _stageForegroundCell(
+    _stageForegroundCell(
       char: char,
       gridCol: x,
       gridRow: y,
@@ -658,8 +682,6 @@ final class TuiAtlasPainter extends CustomPainter {
       resolvedFg: resolvedFg,
       screenX: screenX,
       screenY: screenY,
-      fgSpriteCount: fgSpriteCount,
-      emojiSpriteCount: emojiSpriteCount,
       geo: geo,
       fallbackCells: fallbackCells,
       italicCells: italicCells,
@@ -922,7 +944,7 @@ final class TuiAtlasPainter extends CustomPainter {
     _colorsBg![idx] = bgColor;
   }
 
-  (int, int) _stageForegroundCell({
+  void _stageForegroundCell({
     required String char,
     required int gridCol,
     required int gridRow,
@@ -932,8 +954,6 @@ final class TuiAtlasPainter extends CustomPainter {
     required int resolvedFg,
     required double screenX,
     required double screenY,
-    required int fgSpriteCount,
-    required int emojiSpriteCount,
     required _AtlasGeometry geo,
     required List<_FallbackCell> fallbackCells,
     required List<_ItalicAtlasCell> italicCells,
@@ -963,19 +983,19 @@ final class TuiAtlasPainter extends CustomPainter {
         screenY: screenY,
         geo: geo,
       );
-      return (fgSpriteCount, emojiSpriteCount);
+      return;
     }
 
     if (isColorEmoji(char)) {
-      _stageEmojiSprite(emojiSpriteCount, screenX, screenY, sourceRect, geo);
-      return (fgSpriteCount, emojiSpriteCount + 1);
+      _stageEmojiSprite(_emojiSpriteCount, screenX, screenY, sourceRect, geo);
+      _emojiSpriteCount++;
+      return;
     }
 
     final isBlock = _isBlockCharacter(char);
     final hasNativeStyle =
         variant == GlyphStyleVariant.regular ||
-        atlas.styledCharRects.containsKey((char, variant)) ||
-        atlas.styleRects.containsKey((char, isBold, isItalic));
+        atlas.hasNativeVariant(char, variant);
     if (!isBlock && !hasNativeStyle) {
       missingStyledGlyphs.add((char, variant));
     }
@@ -990,11 +1010,11 @@ final class TuiAtlasPainter extends CustomPainter {
           isBold: isBold,
         ),
       );
-      return (fgSpriteCount, emojiSpriteCount);
+      return;
     }
 
     _stageTextSprite(
-      fgSpriteCount,
+      _fgSpriteCount,
       char,
       screenX,
       screenY,
@@ -1002,10 +1022,10 @@ final class TuiAtlasPainter extends CustomPainter {
       resolvedFg,
       geo,
     );
-    var nextFgCount = fgSpriteCount + 1;
+    _fgSpriteCount++;
     if (!isBlock && isBold && !hasNativeStyle) {
       _stageTextSprite(
-        nextFgCount,
+        _fgSpriteCount,
         char,
         screenX + 0.6,
         screenY,
@@ -1013,9 +1033,8 @@ final class TuiAtlasPainter extends CustomPainter {
         resolvedFg,
         geo,
       );
-      nextFgCount++;
+      _fgSpriteCount++;
     }
-    return (nextFgCount, emojiSpriteCount);
   }
 
   void _stageEmojiSprite(
@@ -1066,7 +1085,7 @@ final class TuiAtlasPainter extends CustomPainter {
 
   bool _isKittyCell(String char, int modifiers) =>
       Modifier.has(modifiers, Modifier.kittyPlaceholder) ||
-      char.startsWith(kittyPlaceholderChar);
+      (char.length >= 2 && char.startsWith(kittyPlaceholderChar));
 
   void _stageFallbackCell(
     List<String> missingGlyphs,
@@ -1113,7 +1132,7 @@ final class TuiAtlasPainter extends CustomPainter {
     List<_ItalicAtlasCell> cells,
     _AtlasGeometry geo,
   ) {
-    final paint = Paint()..filterQuality = FilterQuality.low;
+    final paint = _italicPaint;
     for (final ic in cells) {
       paint.colorFilter = ColorFilter.mode(Color(ic.color), BlendMode.modulate);
       final dstW = ic.sourceRect.width * geo.fgScaleBlock;
@@ -1140,14 +1159,11 @@ final class TuiAtlasPainter extends CustomPainter {
   }
 
   void _paintFallbackCells(Canvas canvas, List<_FallbackCell> fallbackCells) {
-    final kittyPaint = Paint()
-      ..style = PaintingStyle.fill
-      ..filterQuality = FilterQuality.low;
     var i = 0;
     while (i < fallbackCells.length) {
       final fc = fallbackCells[i];
       if (_isKittyCell(fc.char, fc.modifiers)) {
-        i = _paintKittyCellOrRun(canvas, kittyPaint, fallbackCells, i);
+        i = _paintKittyCellOrRun(canvas, _kittyPaint, fallbackCells, i);
         continue;
       }
       _paintSingleFallbackGlyph(canvas, fc);
@@ -1261,6 +1277,7 @@ final class TuiAtlasPainter extends CustomPainter {
     final runCols = lastTileCol - coords.col + 1;
     final tileW = gpuImage.width / data.gridCols;
     final tileH = gpuImage.height / data.gridRows;
+    paint.color = const Color(0xFFFFFFFF);
     canvas.drawImageRect(
       gpuImage,
       Rect.fromLTWH(
@@ -1424,9 +1441,7 @@ final class TuiAtlasPainter extends CustomPainter {
   }
 
   void _paintDecorations(Canvas canvas, List<_CellDecoration> decorations) {
-    final paint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
+    final paint = _decorationPaint;
 
     for (final d in decorations) {
       if (Modifier.has(d.modifiers, Modifier.overline)) {
@@ -1610,8 +1625,39 @@ final class TuiAtlasPainter extends CustomPainter {
   );
 
   @override
-  // Buffer cells mutate in place across frames without changing identity.
-  bool shouldRepaint(covariant TuiAtlasPainter oldDelegate) => true;
+  bool shouldRepaint(covariant TuiAtlasPainter oldDelegate) =>
+      repaint == null ||
+      oldDelegate.buffer != buffer ||
+      oldDelegate.atlas != atlas ||
+      oldDelegate.repaint != repaint ||
+      oldDelegate.fontFamily != fontFamily ||
+      !listEquals(oldDelegate.fontFamilyFallback, fontFamilyFallback) ||
+      oldDelegate.fallbackPainters != fallbackPainters ||
+      oldDelegate.enableBleed != enableBleed ||
+      oldDelegate.enableLigatures != enableLigatures ||
+      (oldDelegate.ligaturePainters != ligaturePainters &&
+          (oldDelegate.ligaturePainters.isNotEmpty ||
+              ligaturePainters.isNotEmpty)) ||
+      oldDelegate.selectionController != selectionController ||
+      oldDelegate._selectionStart != _selectionStart ||
+      oldDelegate._selectionEnd != _selectionEnd ||
+      oldDelegate._selectionColBounds != _selectionColBounds ||
+      oldDelegate.selectionBoxMode != selectionBoxMode ||
+      oldDelegate.kittyImages != kittyImages ||
+      oldDelegate.kittyImagesById != kittyImagesById ||
+      oldDelegate.defaultForegroundArgb != defaultForegroundArgb ||
+      oldDelegate.defaultBackgroundArgb != defaultBackgroundArgb ||
+      oldDelegate.faintOpacity != faintOpacity ||
+      oldDelegate.palette != palette ||
+      oldDelegate.activePtyCols != activePtyCols ||
+      oldDelegate.activePtyRows != activePtyRows ||
+      oldDelegate.outOfBoundsDimColor != outOfBoundsDimColor ||
+      oldDelegate.composingText != composingText ||
+      oldDelegate.cursorCol != cursorCol ||
+      oldDelegate.cursorRow != cursorRow ||
+      (oldDelegate.onMissingGlyphs == null) != (onMissingGlyphs == null) ||
+      (oldDelegate.onMissingStyledGlyphs == null) !=
+          (onMissingStyledGlyphs == null);
 }
 
 final class _AtlasGeometry {
