@@ -367,5 +367,84 @@ void main() {
         expect(clip.bytes, equals(Uint8List.fromList([1, 2, 3, 4, 5, 6])));
       },
     );
+
+    test(
+      'decodes clip startOffset and transport/fade/stop fields both live and mid-upload',
+      () {
+        final events = <TerminalAudioEvent>[];
+        final handler = AudioApcHandler(onAudioEvent: events.add);
+        final b64 = base64Encode(Uint8List.fromList([1, 2, 3, 4, 5, 6]));
+        final half = b64.length ~/ 2;
+
+        handler.handleApc(
+          'Aa=clip,i=4,fmt=ogg,s=250,m=1;${b64.substring(0, half)}',
+        );
+        handler.handleApc(
+          'Aa=update,i=4,s=900,pa=1,sp=1.25,pp=1,fv=0.4:300,fs=0.8:500,st=1200;',
+        );
+        expect(events, isEmpty);
+        handler.handleApc('Ai=4,m=0;${b64.substring(half)}');
+
+        expect(events, hasLength(2));
+        final clip = events[0] as TerminalClipAudioEvent;
+        expect(clip.startOffset, equals(const Duration(milliseconds: 250)));
+        expect(
+          events[1],
+          equals(
+            const TerminalUpdateAudioEvent(
+              clipId: 4,
+              seekPosition: Duration(milliseconds: 900),
+              paused: true,
+              speed: 1.25,
+              preservePitch: true,
+              fadeVolumeTarget: 0.4,
+              fadeVolumeDuration: Duration(milliseconds: 300),
+              fadeSpeedTarget: 0.8,
+              fadeSpeedDuration: Duration(milliseconds: 500),
+              scheduleStopDuration: Duration(milliseconds: 1200),
+            ),
+          ),
+        );
+
+        events.clear();
+        // Mid-upload explicit v= / sp= clears earlier deferred fv= / fs=.
+        handler.handleApc('Aa=clip,i=5,fmt=wav,m=1;${b64.substring(0, half)}');
+        handler.handleApc('Aa=update,i=5,fv=0.2:400,fs=0.5:300;');
+        handler.handleApc('Aa=update,i=5,v=0.85,sp=1.5;');
+        handler.handleApc('Ai=5,m=0;${b64.substring(half)}');
+        expect(events, hasLength(2));
+        final clearedClip = events[0] as TerminalClipAudioEvent;
+        expect(clearedClip.volume, equals(0.85));
+        const expectedClearedUpdate = TerminalUpdateAudioEvent(
+          clipId: 5,
+          speed: 1.5,
+        );
+        expect(events[1], equals(expectedClearedUpdate));
+        expect(events[1].hashCode, equals(expectedClearedUpdate.hashCode));
+
+        events.clear();
+        handler.handleApc(
+          'Aa=update,i=8,s=100,pa=0,sp=16,pp=0,fv=0.1:50,fs=0.01:75,st=500;',
+        );
+        handler.handleApc('Aa=update,i=8,sp=-1,fv=bad,fs=1:2:3,s=-5;');
+        expect(
+          events,
+          equals([
+            const TerminalUpdateAudioEvent(
+              clipId: 8,
+              seekPosition: Duration(milliseconds: 100),
+              paused: false,
+              speed: 8.0,
+              preservePitch: false,
+              fadeVolumeTarget: 0.1,
+              fadeVolumeDuration: Duration(milliseconds: 50),
+              fadeSpeedTarget: 0.125,
+              fadeSpeedDuration: Duration(milliseconds: 75),
+              scheduleStopDuration: Duration(milliseconds: 500),
+            ),
+          ]),
+        );
+      },
+    );
   });
 }

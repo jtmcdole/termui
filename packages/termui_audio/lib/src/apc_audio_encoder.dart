@@ -9,6 +9,11 @@ import 'apc_fs_stub.dart' if (dart.library.io) 'apc_fs_io.dart';
 import 'api/audio_engine.dart';
 import 'api/audio_types.dart';
 import 'utils/audio_dsp_utils.dart';
+import 'utils/mp3_duration.dart';
+
+extension on Duration {
+  String letMs(String Function(double ms) fmt) => fmt(inMicroseconds / 1000.0);
+}
 
 /// Encodes audio playback commands into chunked `ESC _ A <k=v,...>;<base64> ST`
 /// APC escape sequences safe for PTY transport across native and Web targets.
@@ -113,6 +118,7 @@ abstract final class ApcAudioEncoder {
     double volume = 1.0,
     double pan = 0.0,
     bool loop = false,
+    Duration startOffset = Duration.zero,
     int chunkSize = chunkBase64Chars,
   }) {
     if (clipId <= 0) {
@@ -129,11 +135,17 @@ abstract final class ApcAudioEncoder {
     if (bytes.isEmpty || bytes.length > maxClipBytes) {
       throw RangeError.range(bytes.length, 1, maxClipBytes, 'bytes.length');
     }
+    if (startOffset.isNegative) {
+      throw ArgumentError.value(startOffset, 'startOffset', 'Must be >= 0');
+    }
     final step = math.max(4, chunkSize);
     final encoded = base64Encode(bytes);
     final volStr = _formatFloat(_clampUnit(volume, 1.0));
     final panStr = _formatFloat(_clampPan(pan));
     final loopFlag = loop ? 1 : 0;
+    final startPart = startOffset > Duration.zero
+        ? ',s=${_formatFloat(startOffset.inMicroseconds / 1000.0)}'
+        : '';
 
     final frames = <String>[];
     for (var offset = 0; offset < encoded.length; offset += step) {
@@ -143,7 +155,7 @@ abstract final class ApcAudioEncoder {
       if (offset == 0) {
         frames.add(
           '\x1b_Aa=clip,i=$clipId,fmt=$normalizedFmt,'
-          'v=$volStr,p=$panStr,l=$loopFlag,m=$more;$chunk\x1b\\',
+          'v=$volStr,p=$panStr,l=$loopFlag$startPart,m=$more;$chunk\x1b\\',
         );
       } else {
         frames.add('\x1b_Ai=$clipId,m=$more;$chunk\x1b\\');
@@ -152,27 +164,129 @@ abstract final class ApcAudioEncoder {
     return frames;
   }
 
+  static double _clampSpeed(double speed) =>
+      speed.isFinite ? speed.clamp(0.125, 8.0).toDouble() : 1.0;
+
+  static void _validateUpdatePair(
+    double? target,
+    Duration? duration,
+    String name,
+  ) {
+    if ((target == null) != (duration == null)) {
+      throw ArgumentError(
+        '$name target and duration must both be provided or both null',
+      );
+    }
+    if (duration != null && duration.isNegative) {
+      throw ArgumentError.value(duration, '${name}Duration', 'Must be >= 0');
+    }
+    if (target != null && !target.isFinite) {
+      throw ArgumentError.value(target, '${name}Target', 'Must be finite');
+    }
+  }
+
+  static void _validateUpdateDuration(Duration? d, String name) {
+    if (d != null && d.isNegative) {
+      throw ArgumentError.value(d, name, 'Must be >= 0');
+    }
+  }
+
+  static String? _formatFiniteField(
+    double? value,
+    double Function(double) clampFn,
+  ) => (value != null && value.isFinite) ? _formatFloat(clampFn(value)) : null;
+
+  static String? _formatFadeField(
+    double? target,
+    Duration? duration,
+    double Function(double) clampFn,
+  ) {
+    if (target == null || duration == null) return null;
+    return '${_formatFloat(clampFn(target))}:'
+        '${_formatFloat(duration.inMicroseconds / 1000.0)}';
+  }
+
+  static void _appendUpdateFields(
+    StringBuffer buf, {
+    required double? volume,
+    required double? pan,
+    required Duration? seekPosition,
+    required bool? paused,
+    required double? speed,
+    required bool? preservePitch,
+    required double? fadeVolumeTarget,
+    required Duration? fadeVolumeDuration,
+    required double? fadeSpeedTarget,
+    required Duration? fadeSpeedDuration,
+    required Duration? scheduleStopDuration,
+  }) {
+    final entries = <(String, String?)>[
+      ('v', _formatFiniteField(volume, (v) => _clampUnit(v, 1.0))),
+      ('p', _formatFiniteField(pan, _clampPan)),
+      ('s', seekPosition?.letMs((ms) => _formatFloat(ms))),
+      ('pa', paused == null ? null : (paused ? '1' : '0')),
+      ('sp', _formatFiniteField(speed, _clampSpeed)),
+      ('pp', preservePitch == null ? null : (preservePitch ? '1' : '0')),
+      (
+        'fv',
+        _formatFadeField(
+          fadeVolumeTarget,
+          fadeVolumeDuration,
+          (v) => _clampUnit(v, 1.0),
+        ),
+      ),
+      ('fs', _formatFadeField(fadeSpeedTarget, fadeSpeedDuration, _clampSpeed)),
+      ('st', scheduleStopDuration?.letMs((ms) => _formatFloat(ms))),
+    ];
+    var wroteAny = false;
+    for (final (key, val) in entries) {
+      if (val == null) continue;
+      buf.write(',$key=$val');
+      wroteAny = true;
+    }
+    if (!wroteAny) {
+      throw ArgumentError('At least one finite update parameter must be set');
+    }
+  }
+
   /// Encodes an APC live voice update command (`ESC _ A a=update,... ST`).
   static String encodeUpdate({
     required int clipId,
     double? volume,
     double? pan,
+    Duration? seekPosition,
+    bool? paused,
+    double? speed,
+    bool? preservePitch,
+    double? fadeVolumeTarget,
+    Duration? fadeVolumeDuration,
+    double? fadeSpeedTarget,
+    Duration? fadeSpeedDuration,
+    Duration? scheduleStopDuration,
   }) {
     if (clipId <= 0 || clipId > 0x7FFFFFFF) {
       throw ArgumentError.value(clipId, 'clipId', 'Must be in 1..0x7FFFFFFF');
     }
-    final hasVolume = volume != null && volume.isFinite;
-    final hasPan = pan != null && pan.isFinite;
-    if (!hasVolume && !hasPan) {
-      throw ArgumentError('At least one finite volume or pan must be provided');
-    }
+    _validateUpdateDuration(seekPosition, 'seekPosition');
+    _validateUpdateDuration(scheduleStopDuration, 'scheduleStopDuration');
+    _validateUpdatePair(fadeVolumeTarget, fadeVolumeDuration, 'fadeVolume');
+    _validateUpdatePair(fadeSpeedTarget, fadeSpeedDuration, 'fadeSpeed');
+
     final buf = StringBuffer('\x1b_Aa=update,i=$clipId');
-    if (hasVolume) {
-      buf.write(',v=${_formatFloat(_clampUnit(volume, 1.0))}');
-    }
-    if (hasPan) {
-      buf.write(',p=${_formatFloat(_clampPan(pan))}');
-    }
+    _appendUpdateFields(
+      buf,
+      volume: volume,
+      pan: pan,
+      seekPosition: seekPosition,
+      paused: paused,
+      speed: speed,
+      preservePitch: preservePitch,
+      fadeVolumeTarget: fadeVolumeTarget,
+      fadeVolumeDuration: fadeVolumeDuration,
+      fadeSpeedTarget: fadeSpeedTarget,
+      fadeSpeedDuration: fadeSpeedDuration,
+      scheduleStopDuration: scheduleStopDuration,
+    );
     buf.write(';\x1b\\');
     return buf.toString();
   }
@@ -240,9 +354,23 @@ final class _ActivePtyVoice {
   double attenuationRolloff = 1.0;
   String? emittedVolStr;
   String? emittedPanStr;
+  String emittedSpeedStr = '1';
   bool emitted;
-  Duration? scheduledDuration;
-  DateTime? startedAt;
+  bool isPaused;
+  Duration basePosition = Duration.zero;
+  DateTime? anchorAt;
+  double speed = 1.0;
+  ({double from, double to, Duration duration})? speedRamp;
+  double dopplerFactor = 1.0;
+  bool preservePitch = false;
+  bool emittedPreservePitch = false;
+  Duration? scheduledStopRemaining;
+  DateTime? scheduledStopAnchorAt;
+  bool scheduleStopByStopCmd = false;
+  double? pendingFadeVolumeTarget;
+  Duration? pendingFadeVolumeDuration;
+  double? pendingFadeSpeedTarget;
+  Duration? pendingFadeSpeedDuration;
   Duration bufferDuration = Duration.zero;
   Timer? stopTimer;
 
@@ -254,6 +382,8 @@ final class _ActivePtyVoice {
     required this.clipId,
     required this.volume,
     required this.emitted,
+    required this.isPaused,
+    this.basePosition = Duration.zero,
   });
 }
 
@@ -404,6 +534,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       switch (format) {
         'wav' => _estimateWavDuration(bytes),
         'ogg' => _estimateOggDuration(bytes),
+        'mp3' => estimateMp3Duration(bytes),
         _ => Duration.zero,
       };
 
@@ -618,6 +749,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       clipId: clipId,
       volume: busVol,
       emitted: !paused,
+      isPaused: paused,
     );
     _voices[voiceId] = state;
     if (!paused) {
@@ -684,29 +816,70 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   static double _effectiveVolume(_ActivePtyVoice state) =>
       (state.volume * _computeAttenuation(state)).clamp(0.0, 1.0).toDouble();
 
+  void _refreshExpiredSpeedRamp(_ActivePtyVoice state, DateTime now) {
+    final ramp = state.speedRamp;
+    final anchor = state.anchorAt;
+    if (ramp == null || anchor == null || state.isPaused) return;
+    if (now.difference(anchor) >= ramp.duration) {
+      _snapshotPlayhead(state, now);
+    }
+  }
+
   void _syncEmittedVoice(_ActivePtyVoice state) {
     final clipId = state.clipId;
     if (_disposed || !state.emitted || clipId == null || clipId > 0x7FFFFFFF) {
       return;
     }
+    _refreshExpiredSpeedRamp(state, _clock.now());
     final effVol = _effectiveVolume(state);
     final clampedPan = ApcAudioEncoder._clampPan(state.pan);
+    final effSpeed = _effectiveSpeed(state);
     final volStr = ApcAudioEncoder._formatFloat(effVol);
     final panStr = ApcAudioEncoder._formatFloat(clampedPan);
+    final speedStr = ApcAudioEncoder._formatFloat(effSpeed);
     final volChanged = volStr != state.emittedVolStr;
     final panChanged = panStr != state.emittedPanStr;
-    if (!volChanged && !panChanged) {
+    final speedChanged =
+        state.speedRamp == null && speedStr != state.emittedSpeedStr;
+    if (!volChanged && !panChanged && !speedChanged) {
       return;
     }
     state.emittedVolStr = volStr;
     state.emittedPanStr = panStr;
+    if (speedChanged) {
+      state.emittedSpeedStr = speedStr;
+    }
     writeEscape(
       ApcAudioEncoder.encodeUpdate(
         clipId: clipId,
         volume: volChanged ? effVol : null,
         pan: panChanged ? clampedPan : null,
+        speed: speedChanged ? effSpeed : null,
       ),
     );
+  }
+
+  static double _effectiveSpeed(_ActivePtyVoice state) =>
+      (state.speed * state.dopplerFactor).clamp(0.125, 8.0).toDouble();
+
+  static double _computeRadialDoppler(
+    double x,
+    double y,
+    double z,
+    double vx,
+    double vy,
+    double vz,
+  ) {
+    if (!vx.isFinite || !vy.isFinite || !vz.isFinite) return 1.0;
+    if (vx == 0.0 && vy == 0.0 && vz == 0.0) return 1.0;
+    final dist = math.sqrt(x * x + y * y + z * z);
+    if (dist <= 0.0) return 1.0;
+    // Closing velocity (positive when source moves toward listener at origin).
+    final vRadial = -(x * vx + y * vy + z * vz) / dist;
+    const speedOfSound = 343.3;
+    final denom = speedOfSound - vRadial;
+    if (denom <= 0.0) return 8.0;
+    return (speedOfSound / denom).clamp(0.125, 8.0).toDouble();
   }
 
   void _emitVoicePlayback(
@@ -718,23 +891,24 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     try {
       final effVol = _effectiveVolume(voice);
       final clampedPan = ApcAudioEncoder._clampPan(voice.pan);
-      final Duration effectiveDuration;
+      final Duration bufferDur;
       switch (buffer) {
         case _PtyWaveformBuffer(:final shape, :final frequency):
-          effectiveDuration = durationOverride ?? defaultToneDuration;
+          bufferDur = durationOverride ?? defaultToneDuration;
           writeEscape(
             ApcAudioEncoder.encodeTone(
               waveform: shape,
               frequencyHz: frequency,
-              duration: effectiveDuration,
+              duration: bufferDur,
               volume: effVol,
               pan: clampedPan,
             ),
           );
         case _PtyClipBuffer(:final format, :final bytes, :final duration):
-          effectiveDuration = durationOverride ?? duration;
+          bufferDur = duration;
           voice.emittedVolStr = ApcAudioEncoder._formatFloat(effVol);
           voice.emittedPanStr = ApcAudioEncoder._formatFloat(clampedPan);
+          voice.emittedSpeedStr = '1';
           final frames = ApcAudioEncoder.encodeClip(
             clipId: voice.clipId ?? voice.id,
             format: format,
@@ -742,22 +916,215 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
             volume: effVol,
             pan: clampedPan,
             loop: voice.loop,
+            startOffset: voice.basePosition,
           );
           for (final frame in frames) {
             writeEscape(frame);
           }
       }
-      voice.startedAt = _clock.now();
-      voice.bufferDuration = effectiveDuration;
-      if (!_disposed && !voice.loop && voice.stopTimer == null) {
-        voice.stopTimer = Timer(
-          effectiveDuration,
-          () => _evictAndCompleteVoice(voice.id),
-        );
+      final now = _clock.now();
+      voice.bufferDuration = bufferDur;
+      voice.anchorAt = voice.isPaused ? null : now;
+      if (voice.scheduledStopRemaining != null && !voice.isPaused) {
+        voice.scheduledStopAnchorAt = now;
       }
+      _emitPreEmissionUpdates(voice);
+      _rescheduleStopTimer(voice, now);
     } finally {
       voice.buffer = null;
     }
+  }
+
+  void _emitPreEmissionUpdates(_ActivePtyVoice voice) {
+    final clipId = voice.clipId;
+    if (_disposed || clipId == null || clipId > 0x7FFFFFFF) return;
+    final effSpeed = _effectiveSpeed(voice);
+    final sendSpeed = voice.speedRamp == null && (effSpeed - 1.0).abs() > 1e-6;
+    final sendPp = voice.preservePitch;
+    final fadeVolTarget = voice.pendingFadeVolumeTarget;
+    final fadeVolDur = voice.pendingFadeVolumeDuration;
+    final fadeSpTarget = voice.pendingFadeSpeedTarget;
+    final fadeSpDur = voice.pendingFadeSpeedDuration;
+    final stopDur = voice.scheduledStopRemaining;
+    if (!sendSpeed &&
+        !sendPp &&
+        fadeVolTarget == null &&
+        fadeSpTarget == null &&
+        stopDur == null) {
+      return;
+    }
+    if (sendSpeed) {
+      voice.emittedSpeedStr = ApcAudioEncoder._formatFloat(effSpeed);
+    }
+    if (sendPp) {
+      voice.emittedPreservePitch = true;
+    }
+    voice.pendingFadeVolumeTarget = null;
+    voice.pendingFadeVolumeDuration = null;
+    voice.pendingFadeSpeedTarget = null;
+    voice.pendingFadeSpeedDuration = null;
+    writeEscape(
+      ApcAudioEncoder.encodeUpdate(
+        clipId: clipId,
+        speed: sendSpeed ? effSpeed : null,
+        preservePitch: sendPp ? true : null,
+        fadeVolumeTarget: fadeVolTarget,
+        fadeVolumeDuration: fadeVolDur,
+        fadeSpeedTarget: fadeSpTarget,
+        fadeSpeedDuration: fadeSpDur,
+        scheduleStopDuration: stopDur,
+      ),
+    );
+  }
+
+  static double _currentSpeedAt(_ActivePtyVoice state, DateTime now) {
+    final ramp = state.speedRamp;
+    final anchor = state.anchorAt;
+    if (ramp == null || anchor == null || state.isPaused) {
+      return state.speed;
+    }
+    final rampUs = ramp.duration.inMicroseconds;
+    if (rampUs <= 0) return ramp.to;
+    final elapsedUs = now.difference(anchor).inMicroseconds;
+    if (elapsedUs <= 0) return ramp.from;
+    if (elapsedUs >= rampUs) return ramp.to;
+    return ramp.from + (ramp.to - ramp.from) * (elapsedUs / rampUs);
+  }
+
+  static Duration _computeRawPosition(_ActivePtyVoice state, DateTime now) {
+    final anchor = state.anchorAt;
+    if (anchor == null || state.isPaused) return state.basePosition;
+    final elapsedUs = now.difference(anchor).inMicroseconds;
+    if (elapsedUs <= 0) return state.basePosition;
+    final ramp = state.speedRamp;
+    final int deltaUs;
+    if (ramp == null) {
+      deltaUs = (elapsedUs * _effectiveSpeed(state)).round();
+    } else {
+      deltaUs = _integrateSpeedRampUs(elapsedUs, ramp);
+    }
+    return state.basePosition + Duration(microseconds: deltaUs);
+  }
+
+  static int _integrateSpeedRampUs(
+    int elapsedUs,
+    ({double from, double to, Duration duration}) ramp,
+  ) {
+    final rampUs = ramp.duration.inMicroseconds;
+    if (rampUs <= 0) return (elapsedUs * ramp.to).round();
+    if (elapsedUs <= rampUs) {
+      final cur = ramp.from + (ramp.to - ramp.from) * (elapsedUs / rampUs);
+      return (elapsedUs * (ramp.from + cur) / 2.0).round();
+    }
+    final rampArea = rampUs * (ramp.from + ramp.to) / 2.0;
+    final tailArea = (elapsedUs - rampUs) * ramp.to;
+    return (rampArea + tailArea).round();
+  }
+
+  static Duration _normalizePosition(_ActivePtyVoice state, Duration rawPos) {
+    if (rawPos <= Duration.zero) return Duration.zero;
+    final dur = state.bufferDuration;
+    if (dur <= Duration.zero) return rawPos;
+    if (state.loop) {
+      return Duration(microseconds: rawPos.inMicroseconds % dur.inMicroseconds);
+    }
+    return rawPos > dur ? dur : rawPos;
+  }
+
+  void _snapshotPlayhead(_ActivePtyVoice state, DateTime now) {
+    final pos = _normalizePosition(state, _computeRawPosition(state, now));
+    final curSpeed = _currentSpeedAt(state, now);
+    final ramp = state.speedRamp;
+    if (ramp != null && state.anchorAt != null && !state.isPaused) {
+      final elapsed = now.difference(state.anchorAt!);
+      final remainingRamp = ramp.duration - elapsed;
+      if (remainingRamp > Duration.zero) {
+        state.speedRamp = (
+          from: curSpeed,
+          to: ramp.to,
+          duration: remainingRamp,
+        );
+      } else {
+        state.speedRamp = null;
+      }
+    }
+    state.speed = curSpeed;
+    state.basePosition = pos;
+    state.anchorAt = state.isPaused ? null : now;
+
+    final stopAnchor = state.scheduledStopAnchorAt;
+    final stopRem = state.scheduledStopRemaining;
+    if (stopAnchor != null && stopRem != null && !state.isPaused) {
+      final left = stopRem - now.difference(stopAnchor);
+      state.scheduledStopRemaining = left > Duration.zero
+          ? left
+          : Duration.zero;
+      state.scheduledStopAnchorAt = now;
+    }
+  }
+
+  static Duration _wallTimeForMediaDelta(
+    Duration mediaDelta,
+    double effSpeed,
+    ({double from, double to, Duration duration})? ramp,
+  ) {
+    if (mediaDelta <= Duration.zero) return Duration.zero;
+    final mediaUs = mediaDelta.inMicroseconds.toDouble();
+    if (ramp == null) {
+      return Duration(microseconds: (mediaUs / effSpeed).round());
+    }
+    final rampUs = ramp.duration.inMicroseconds.toDouble();
+    final rampArea = rampUs * (ramp.from + ramp.to) / 2.0;
+    if (rampUs <= 0 || mediaUs >= rampArea) {
+      final extraUs = (mediaUs - rampArea) / ramp.to;
+      return Duration(microseconds: (rampUs + extraUs).round());
+    }
+    final slope = (ramp.to - ramp.from) / rampUs;
+    if (slope.abs() < 1e-9) {
+      return Duration(microseconds: (mediaUs / ramp.from).round());
+    }
+    final a = 0.5 * slope;
+    final b = ramp.from;
+    final disc = math.max(0.0, b * b + 4.0 * a * mediaUs);
+    final t = (-b + math.sqrt(disc)) / (2.0 * a);
+    return Duration(microseconds: math.max(0.0, t).round());
+  }
+
+  void _rescheduleStopTimer(_ActivePtyVoice state, DateTime now) {
+    state.stopTimer?.cancel();
+    state.stopTimer = null;
+    if (_disposed || !state.emitted || state.isPaused) return;
+
+    Duration? delay;
+    var triggerStop = false;
+    final schedRem = state.scheduledStopRemaining;
+    if (schedRem != null) {
+      delay = schedRem;
+      triggerStop = state.scheduleStopByStopCmd;
+    }
+    if (!state.loop && state.bufferDuration > Duration.zero) {
+      final pos = _normalizePosition(state, _computeRawPosition(state, now));
+      final mediaDelay = _wallTimeForMediaDelta(
+        state.bufferDuration - pos,
+        _effectiveSpeed(state),
+        state.speedRamp,
+      );
+      if (delay == null || mediaDelay < delay) {
+        delay = mediaDelay;
+        triggerStop = false;
+      }
+    } else if (!state.loop && delay == null) {
+      delay = Duration.zero;
+    }
+    if (delay == null) return;
+    final voiceId = state.id;
+    state.stopTimer = Timer(delay, () {
+      if (triggerStop) {
+        stop(AudioVoice(voiceId, state.completer.future));
+      } else {
+        _evictAndCompleteVoice(voiceId);
+      }
+    });
   }
 
   @override
@@ -797,15 +1164,41 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     _syncEmittedVoice(state);
   }
 
-  /// Resumes a paused [voice] by emitting its APC frame. Pausing an already
-  /// emitted voice is a no-op because the APC wire format has no pause frame.
+  /// Pauses or resumes [voice], emitting deferred APC playback on first resume
+  /// or `a=update,pa=<0|1>` after emission.
   @override
   void setPaused(AudioVoice voice, bool paused) {
     if (_disposed) return;
     final state = _voices[voice.id];
-    if (state == null || paused || state.emitted) return;
-    state.emitted = true;
-    _emitVoicePlayback(state, durationOverride: state.scheduledDuration);
+    if (state == null) return;
+    if (!state.emitted) {
+      if (paused) {
+        state.isPaused = true;
+        return;
+      }
+      state.emitted = true;
+      state.isPaused = false;
+      _emitVoicePlayback(state, durationOverride: state.scheduledStopRemaining);
+      return;
+    }
+    if (state.isPaused == paused) return;
+    final now = _clock.now();
+    _snapshotPlayhead(state, now);
+    state.isPaused = paused;
+    if (paused) {
+      state.anchorAt = null;
+      state.scheduledStopAnchorAt = null;
+    } else {
+      state.anchorAt = now;
+      if (state.scheduledStopRemaining != null) {
+        state.scheduledStopAnchorAt = now;
+      }
+    }
+    _rescheduleStopTimer(state, now);
+    final clipId = state.clipId;
+    if (clipId != null && clipId <= 0x7FFFFFFF) {
+      writeEscape(ApcAudioEncoder.encodeUpdate(clipId: clipId, paused: paused));
+    }
   }
 
   static double _spatialPan(double x, double y, double z) {
@@ -828,7 +1221,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     return voice;
   }
 
-  /// Updates the 3D source coordinates, stereo pan, and distance attenuation for [voice].
+  /// Updates the 3D source coordinates, velocity Doppler, stereo pan, and distance attenuation for [voice].
   @override
   void set3dSourceParameters(
     AudioVoice voice,
@@ -845,6 +1238,15 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     state.posY = y;
     state.posZ = z;
     state.pan = _spatialPan(x, y, z);
+    final nextDoppler = _computeRadialDoppler(x, y, z, vx, vy, vz);
+    if (nextDoppler != state.dopplerFactor && state.emitted) {
+      final now = _clock.now();
+      _snapshotPlayhead(state, now);
+      state.dopplerFactor = nextDoppler;
+      _rescheduleStopTimer(state, now);
+    } else {
+      state.dopplerFactor = nextDoppler;
+    }
     _syncEmittedVoice(state);
   }
 
@@ -889,33 +1291,70 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   @override
   Duration getVoicePosition(AudioVoice voice) {
     final state = _voices[voice.id];
-    final startedAt = state?.startedAt;
-    if (state == null || !state.emitted || startedAt == null) {
-      return Duration.zero;
-    }
-    final elapsed = _clock.now().difference(startedAt);
-    if (elapsed.isNegative) return Duration.zero;
-    final dur = state.bufferDuration;
-    if (dur <= Duration.zero) return elapsed;
-    if (state.loop) {
-      return Duration(
-        microseconds: elapsed.inMicroseconds % dur.inMicroseconds,
-      );
-    }
-    return elapsed > dur ? dur : elapsed;
+    if (state == null || !state.emitted) return Duration.zero;
+    return _normalizePosition(state, _computeRawPosition(state, _clock.now()));
   }
 
-  /// No-op: the APC audio wire format has no seek command, so the local
-  /// playhead remains truthful to remote playback.
+  /// Seeks [voice] to [position], rescheduling `stopTimer` and emitting `a=update,s=...`.
   @override
-  void seek(AudioVoice voice, Duration position) {}
+  void seek(AudioVoice voice, Duration position) {
+    if (_disposed) return;
+    final state = _voices[voice.id];
+    if (state == null) return;
+    var target = position.isNegative ? Duration.zero : position;
+    final dur = state.bufferDuration;
+    if (dur > Duration.zero && target > dur) {
+      target = dur;
+    }
+    final now = _clock.now();
+    state.basePosition = target;
+    state.anchorAt = (state.emitted && !state.isPaused) ? now : null;
+    if (!state.emitted) return;
+    _rescheduleStopTimer(state, now);
+    final clipId = state.clipId;
+    if (clipId != null && clipId <= 0x7FFFFFFF) {
+      writeEscape(
+        ApcAudioEncoder.encodeUpdate(clipId: clipId, seekPosition: target),
+      );
+    }
+  }
 
   @override
   void setRelativePlaySpeed(
     AudioVoice voice,
     double speed, {
     bool preservePitch = false,
-  }) {}
+  }) {
+    if (_disposed) return;
+    final state = _voices[voice.id];
+    if (state == null || !speed.isFinite || speed <= 0) return;
+    final clamped = ApcAudioEncoder._clampSpeed(speed);
+    final now = _clock.now();
+    if (state.emitted) {
+      _snapshotPlayhead(state, now);
+    }
+    state.speed = clamped;
+    state.preservePitch = preservePitch;
+    state.speedRamp = null;
+    if (!state.emitted) return;
+    _rescheduleStopTimer(state, now);
+    final clipId = state.clipId;
+    if (clipId != null && clipId <= 0x7FFFFFFF) {
+      final effSpeed = _effectiveSpeed(state);
+      state.emittedSpeedStr = ApcAudioEncoder._formatFloat(effSpeed);
+      final emitPp = preservePitch || state.emittedPreservePitch
+          ? preservePitch
+          : null;
+      state.emittedPreservePitch = preservePitch;
+      writeEscape(
+        ApcAudioEncoder.encodeUpdate(
+          clipId: clipId,
+          speed: effSpeed,
+          preservePitch: emitPp,
+        ),
+      );
+    }
+  }
 
   @override
   Stream<Duration> getVoicePositionStream(
@@ -933,22 +1372,91 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     AudioVoice voice,
     double speed,
     Duration duration,
-  ) {}
+  ) {
+    if (_disposed) return;
+    final state = _voices[voice.id];
+    if (state == null || !speed.isFinite || speed <= 0) return;
+    final clamped = ApcAudioEncoder._clampSpeed(speed);
+    final dur = duration.isNegative ? Duration.zero : duration;
+    final now = _clock.now();
+    if (state.emitted) {
+      _snapshotPlayhead(state, now);
+    }
+    if (dur == Duration.zero) {
+      state.speed = clamped;
+      state.speedRamp = null;
+    } else {
+      state.speedRamp = (from: state.speed, to: clamped, duration: dur);
+    }
+    if (!state.emitted) {
+      state.pendingFadeSpeedTarget = clamped;
+      state.pendingFadeSpeedDuration = dur;
+      return;
+    }
+    _rescheduleStopTimer(state, now);
+    final clipId = state.clipId;
+    if (clipId != null && clipId <= 0x7FFFFFFF) {
+      final effTarget = (clamped * state.dopplerFactor)
+          .clamp(0.125, 8.0)
+          .toDouble();
+      state.emittedSpeedStr = ApcAudioEncoder._formatFloat(effTarget);
+      writeEscape(
+        ApcAudioEncoder.encodeUpdate(
+          clipId: clipId,
+          fadeSpeedTarget: effTarget,
+          fadeSpeedDuration: dur,
+        ),
+      );
+    }
+  }
 
   @override
-  void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) {}
+  void fadeVolume(AudioVoice voice, double targetVolume, Duration duration) {
+    if (_disposed) return;
+    final state = _voices[voice.id];
+    if (state == null || !targetVolume.isFinite) return;
+    final clamped = targetVolume.clamp(0.0, 1.0).toDouble();
+    final dur = duration.isNegative ? Duration.zero : duration;
+    state.volume = clamped;
+    final effVol = _effectiveVolume(state);
+    if (!state.emitted) {
+      state.pendingFadeVolumeTarget = effVol;
+      state.pendingFadeVolumeDuration = dur;
+      return;
+    }
+    state.emittedVolStr = ApcAudioEncoder._formatFloat(effVol);
+    final clipId = state.clipId;
+    if (clipId != null && clipId <= 0x7FFFFFFF) {
+      writeEscape(
+        ApcAudioEncoder.encodeUpdate(
+          clipId: clipId,
+          fadeVolumeTarget: effVol,
+          fadeVolumeDuration: dur,
+        ),
+      );
+    }
+  }
 
   @override
   void scheduleStop(AudioVoice voice, Duration duration) {
     if (_disposed) return;
     final state = _voices[voice.id];
     if (state == null) return;
-    state.scheduledDuration = duration;
-    if (state.emitted) {
-      state.bufferDuration = duration;
+    final dur = duration.isNegative ? Duration.zero : duration;
+    final now = _clock.now();
+    state.scheduledStopRemaining = dur;
+    state.scheduledStopAnchorAt = (state.emitted && !state.isPaused)
+        ? now
+        : null;
+    state.scheduleStopByStopCmd = true;
+    if (!state.emitted) return;
+    _rescheduleStopTimer(state, now);
+    final clipId = state.clipId;
+    if (clipId != null && clipId <= 0x7FFFFFFF) {
+      writeEscape(
+        ApcAudioEncoder.encodeUpdate(clipId: clipId, scheduleStopDuration: dur),
+      );
     }
-    state.stopTimer?.cancel();
-    state.stopTimer = Timer(duration, () => stop(voice));
   }
 
   @override
@@ -988,6 +1496,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final voiceId = _nextVoiceId++;
     final busVol = (bus is _PtyAudioBus) ? bus.volume : 1.0;
     final clipId = resolved is _PtyClipBuffer ? voiceId : null;
+    final clampedStart = start.isNegative ? Duration.zero : start;
+    final clampedDur = duration.isNegative ? Duration.zero : duration;
     final state = _ActivePtyVoice(
       id: voiceId,
       buffer: resolved,
@@ -996,12 +1506,15 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       clipId: clipId,
       volume: busVol,
       emitted: true,
+      isPaused: false,
+      basePosition: clampedStart,
     );
+    state.scheduledStopRemaining = clampedDur;
+    state.scheduleStopByStopCmd = true;
     _voices[voiceId] = state;
     final voice = AudioVoice(voiceId, state.completer.future);
-    scheduleStop(voice, duration);
     try {
-      _emitVoicePlayback(state, durationOverride: duration);
+      _emitVoicePlayback(state, durationOverride: clampedDur);
     } catch (_) {
       state.stopTimer?.cancel();
       _voices.remove(voiceId);

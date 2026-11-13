@@ -67,6 +67,9 @@ final class TerminalClipAudioEvent extends TerminalAudioEvent {
   /// Whether clip playback should loop until stopped.
   final bool loop;
 
+  /// Initial playback start offset (`playSprite` start position).
+  final Duration startOffset;
+
   /// Creates an audio clip playback event.
   const TerminalClipAudioEvent({
     required this.clipId,
@@ -75,6 +78,7 @@ final class TerminalClipAudioEvent extends TerminalAudioEvent {
     this.volume = 1.0,
     this.pan = 0.0,
     this.loop = false,
+    this.startOffset = Duration.zero,
   });
 }
 
@@ -95,7 +99,7 @@ final class TerminalStopAudioEvent extends TerminalAudioEvent {
   int get hashCode => clipId.hashCode;
 }
 
-/// Live voice parameter update decoded from `ESC _ A a=update,... ST`.
+/// Live voice parameter and transport update decoded from `ESC _ A a=update,... ST`.
 final class TerminalUpdateAudioEvent extends TerminalAudioEvent {
   /// Positive 31-bit wire clip identifier (`1 .. 0x7FFFFFFF`).
   final int clipId;
@@ -106,8 +110,48 @@ final class TerminalUpdateAudioEvent extends TerminalAudioEvent {
   /// Optional updated stereo pan clamped to `-1.0 .. 1.0`.
   final double? pan;
 
+  /// Optional seek target position (`>= Duration.zero`).
+  final Duration? seekPosition;
+
+  /// Optional pause state (`true` pauses, `false` resumes).
+  final bool? paused;
+
+  /// Optional relative playback speed multiplier clamped to `0.125 .. 8.0`.
+  final double? speed;
+
+  /// Optional pitch-preservation flag for speed changes.
+  final bool? preservePitch;
+
+  /// Optional volume fade target (`0.0 .. 1.0`), paired with [fadeVolumeDuration].
+  final double? fadeVolumeTarget;
+
+  /// Optional volume fade duration, paired with [fadeVolumeTarget].
+  final Duration? fadeVolumeDuration;
+
+  /// Optional speed fade target (`0.125 .. 8.0`), paired with [fadeSpeedDuration].
+  final double? fadeSpeedTarget;
+
+  /// Optional speed fade duration, paired with [fadeSpeedTarget].
+  final Duration? fadeSpeedDuration;
+
+  /// Optional scheduled stop delay (`>= Duration.zero`).
+  final Duration? scheduleStopDuration;
+
   /// Creates an audio voice update event.
-  const TerminalUpdateAudioEvent({required this.clipId, this.volume, this.pan});
+  const TerminalUpdateAudioEvent({
+    required this.clipId,
+    this.volume,
+    this.pan,
+    this.seekPosition,
+    this.paused,
+    this.speed,
+    this.preservePitch,
+    this.fadeVolumeTarget,
+    this.fadeVolumeDuration,
+    this.fadeSpeedTarget,
+    this.fadeSpeedDuration,
+    this.scheduleStopDuration,
+  });
 
   @override
   bool operator ==(Object other) =>
@@ -115,10 +159,32 @@ final class TerminalUpdateAudioEvent extends TerminalAudioEvent {
       other is TerminalUpdateAudioEvent &&
           other.clipId == clipId &&
           other.volume == volume &&
-          other.pan == pan;
+          other.pan == pan &&
+          other.seekPosition == seekPosition &&
+          other.paused == paused &&
+          other.speed == speed &&
+          other.preservePitch == preservePitch &&
+          other.fadeVolumeTarget == fadeVolumeTarget &&
+          other.fadeVolumeDuration == fadeVolumeDuration &&
+          other.fadeSpeedTarget == fadeSpeedTarget &&
+          other.fadeSpeedDuration == fadeSpeedDuration &&
+          other.scheduleStopDuration == scheduleStopDuration;
 
   @override
-  int get hashCode => Object.hash(clipId, volume, pan);
+  int get hashCode => Object.hashAll([
+    clipId,
+    volume,
+    pan,
+    seekPosition,
+    paused,
+    speed,
+    preservePitch,
+    fadeVolumeTarget,
+    fadeVolumeDuration,
+    fadeSpeedTarget,
+    fadeSpeedDuration,
+    scheduleStopDuration,
+  ]);
 }
 
 final class _PendingAudioUpload {
@@ -127,6 +193,16 @@ final class _PendingAudioUpload {
   double volume;
   double pan;
   final bool loop;
+  final Duration startOffset;
+  Duration? seekPosition;
+  bool? paused;
+  double? speed;
+  bool? preservePitch;
+  double? fadeVolumeTarget;
+  Duration? fadeVolumeDuration;
+  double? fadeSpeedTarget;
+  Duration? fadeSpeedDuration;
+  Duration? scheduleStopDuration;
   final StringBuffer base64Data = StringBuffer();
   int charCount = 0;
   bool overflowed = false;
@@ -137,7 +213,17 @@ final class _PendingAudioUpload {
     required this.volume,
     required this.pan,
     required this.loop,
+    required this.startOffset,
   });
+
+  bool get hasDeferredTransportUpdate =>
+      seekPosition != null ||
+      paused != null ||
+      speed != null ||
+      preservePitch != null ||
+      fadeVolumeTarget != null ||
+      fadeSpeedTarget != null ||
+      scheduleStopDuration != null;
 }
 
 /// Pure-Dart parser for chunked `ESC _ A <k=v,...>;<base64> ST` audio commands.
@@ -304,6 +390,92 @@ final class AudioApcHandler {
     );
   }
 
+  static Duration? _parseOptionalDurationMs(
+    String? raw, {
+    double maxMs = 86400000.0,
+  }) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = double.tryParse(raw);
+    if (parsed == null || !parsed.isFinite || parsed < 0) return null;
+    final clamped = parsed > maxMs ? maxMs : parsed;
+    return Duration(microseconds: (clamped * 1000.0).round());
+  }
+
+  static bool? _parseOptionalBoolFlag(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    return switch (raw.trim().toLowerCase()) {
+      '1' || 'true' => true,
+      '0' || 'false' => false,
+      _ => null,
+    };
+  }
+
+  static double? _parseOptionalSpeed(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = double.tryParse(raw);
+    if (parsed == null || !parsed.isFinite || parsed <= 0) return null;
+    return parsed.clamp(0.125, 8.0).toDouble();
+  }
+
+  static ({double target, Duration duration})? _parseFadePair(
+    String? raw, {
+    required double minVal,
+    required double maxVal,
+    bool requirePositive = false,
+  }) {
+    if (raw == null || raw.isEmpty) return null;
+    final sep = raw.indexOf(':');
+    if (sep <= 0 || sep >= raw.length - 1 || raw.indexOf(':', sep + 1) >= 0) {
+      return null;
+    }
+    final targetStr = raw.substring(0, sep);
+    final durStr = raw.substring(sep + 1);
+    final target = requirePositive
+        ? _parseOptionalSpeed(targetStr)
+        : _parseOptionalBoundedDouble(targetStr, min: minVal, max: maxVal);
+    final duration = _parseOptionalDurationMs(durStr);
+    if (target == null || duration == null) return null;
+    return (target: target, duration: duration);
+  }
+
+  static void _applyPendingUploadUpdate(
+    _PendingAudioUpload pending, {
+    required double? volume,
+    required double? pan,
+    required Duration? seekPosition,
+    required bool? paused,
+    required double? speed,
+    required bool? preservePitch,
+    required ({double target, Duration duration})? fadeVol,
+    required ({double target, Duration duration})? fadeSpeed,
+    required Duration? scheduleStopDuration,
+  }) {
+    if (volume != null) {
+      pending.volume = volume;
+      pending.fadeVolumeTarget = null;
+      pending.fadeVolumeDuration = null;
+    }
+    pending.pan = pan ?? pending.pan;
+    pending.seekPosition = seekPosition ?? pending.seekPosition;
+    pending.paused = paused ?? pending.paused;
+    if (speed != null) {
+      pending.speed = speed;
+      pending.fadeSpeedTarget = null;
+      pending.fadeSpeedDuration = null;
+    }
+    pending.preservePitch = preservePitch ?? pending.preservePitch;
+    if (fadeVol != null) {
+      pending.fadeVolumeTarget = fadeVol.target;
+      pending.fadeVolumeDuration = fadeVol.duration;
+    }
+    if (fadeSpeed != null) {
+      pending.fadeSpeedTarget = fadeSpeed.target;
+      pending.fadeSpeedDuration = fadeSpeed.duration;
+    }
+    pending.scheduleStopDuration =
+        scheduleStopDuration ?? pending.scheduleStopDuration;
+  }
+
   void _handleUpdate(Map<String, String> control) {
     final clipId = _parseExplicitClipId(control['i']);
     if (clipId == null || clipId <= 0) return;
@@ -313,15 +485,63 @@ final class AudioApcHandler {
       max: 1.0,
     );
     final pan = _parseOptionalBoundedDouble(control['p'], min: -1.0, max: 1.0);
-    if (volume == null && pan == null) return;
+    final seekPosition = _parseOptionalDurationMs(control['s']);
+    final paused = _parseOptionalBoolFlag(control['pa']);
+    final speed = _parseOptionalSpeed(control['sp']);
+    final preservePitch = _parseOptionalBoolFlag(control['pp']);
+    final fadeVol = _parseFadePair(control['fv'], minVal: 0.0, maxVal: 1.0);
+    final fadeSpeed = _parseFadePair(
+      control['fs'],
+      minVal: 0.125,
+      maxVal: 8.0,
+      requirePositive: true,
+    );
+    final scheduleStopDuration = _parseOptionalDurationMs(control['st']);
+
+    final hasAny =
+        volume != null ||
+        pan != null ||
+        seekPosition != null ||
+        paused != null ||
+        speed != null ||
+        preservePitch != null ||
+        fadeVol != null ||
+        fadeSpeed != null ||
+        scheduleStopDuration != null;
+    if (!hasAny) return;
+
     final pending = _pendingUploads[clipId];
     if (pending != null) {
-      pending.volume = volume ?? pending.volume;
-      pending.pan = pan ?? pending.pan;
+      _applyPendingUploadUpdate(
+        pending,
+        volume: volume,
+        pan: pan,
+        seekPosition: seekPosition,
+        paused: paused,
+        speed: speed,
+        preservePitch: preservePitch,
+        fadeVol: fadeVol,
+        fadeSpeed: fadeSpeed,
+        scheduleStopDuration: scheduleStopDuration,
+      );
       return;
     }
+
     onAudioEvent?.call(
-      TerminalUpdateAudioEvent(clipId: clipId, volume: volume, pan: pan),
+      TerminalUpdateAudioEvent(
+        clipId: clipId,
+        volume: volume,
+        pan: pan,
+        seekPosition: seekPosition,
+        paused: paused,
+        speed: speed,
+        preservePitch: preservePitch,
+        fadeVolumeTarget: fadeVol?.target,
+        fadeVolumeDuration: fadeVol?.duration,
+        fadeSpeedTarget: fadeSpeed?.target,
+        fadeSpeedDuration: fadeSpeed?.duration,
+        scheduleStopDuration: scheduleStopDuration,
+      ),
     );
   }
 
@@ -375,6 +595,7 @@ final class AudioApcHandler {
     _evictOldestUploadIfNeeded();
 
     final loopRaw = (control['l'] ?? '0').trim().toLowerCase();
+    final startOffset = _parseOptionalDurationMs(control['s']) ?? Duration.zero;
     final pending = _PendingAudioUpload(
       clipId: clipId,
       format: rawFmt,
@@ -391,6 +612,7 @@ final class AudioApcHandler {
         fallback: 0.0,
       ),
       loop: loopRaw == '1' || loopRaw == 'true',
+      startOffset: startOffset,
     );
     _pendingUploads[clipId] = pending;
     _processClipChunk(pending, control, dataPart);
@@ -419,8 +641,25 @@ final class AudioApcHandler {
         volume: pending.volume,
         pan: pending.pan,
         loop: pending.loop,
+        startOffset: pending.startOffset,
       ),
     );
+    if (pending.hasDeferredTransportUpdate) {
+      onAudioEvent?.call(
+        TerminalUpdateAudioEvent(
+          clipId: pending.clipId,
+          seekPosition: pending.seekPosition,
+          paused: pending.paused,
+          speed: pending.speed,
+          preservePitch: pending.preservePitch,
+          fadeVolumeTarget: pending.fadeVolumeTarget,
+          fadeVolumeDuration: pending.fadeVolumeDuration,
+          fadeSpeedTarget: pending.fadeSpeedTarget,
+          fadeSpeedDuration: pending.fadeSpeedDuration,
+          scheduleStopDuration: pending.scheduleStopDuration,
+        ),
+      );
+    }
   }
 
   void _appendChunk(_PendingAudioUpload pending, String dataPart) {
