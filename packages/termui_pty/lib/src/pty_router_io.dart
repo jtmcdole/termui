@@ -90,12 +90,13 @@ final class Pty2RoutedBackend implements RoutedPtyBackend {
       key.startsWith('CAST_');
 
   /// Builds the child PTY environment from [baseEnvironment], stripping
-  /// inherited multiplexer/caster variables and defaulting `TERM` to
-  /// `xterm-256color`.
+  /// inherited multiplexer/caster variables, defaulting `TERM` to
+  /// `xterm-256color`, and enabling `TERMUI_AUDIO_APC=1` unless opted out.
   static Map<String, String> buildChildEnvironment({
     required Map<String, String> baseEnvironment,
     Map<String, String>? overrides,
   }) => {
+    'TERMUI_AUDIO_APC': '1',
     for (final MapEntry(:key, :value) in baseEnvironment.entries)
       if (!_shouldStripHostEnvVar(key)) key: value,
     'TERM': 'xterm-256color',

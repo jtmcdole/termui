@@ -551,5 +551,33 @@ void main() {
       },
       testOn: 'posix',
     );
+
+    test(
+      'Pty2RoutedBackend.buildChildEnvironment enables TERMUI_AUDIO_APC=1 unless overridden',
+      () {
+        final env = Pty2RoutedBackend.buildChildEnvironment(
+          baseEnvironment: const {'PATH': '/usr/bin', 'TMUX': 'strip-me'},
+        );
+        expect(
+          env,
+          equals({
+            'PATH': '/usr/bin',
+            'TERM': 'xterm-256color',
+            'TERMUI_AUDIO_APC': '1',
+          }),
+        );
+
+        final hostOptOut = Pty2RoutedBackend.buildChildEnvironment(
+          baseEnvironment: const {'PATH': '/usr/bin', 'TERMUI_AUDIO_APC': '0'},
+        );
+        expect(hostOptOut['TERMUI_AUDIO_APC'], equals('0'));
+
+        final overrideOptOut = Pty2RoutedBackend.buildChildEnvironment(
+          baseEnvironment: const {'PATH': '/usr/bin'},
+          overrides: const {'TERMUI_AUDIO_APC': '0'},
+        );
+        expect(overrideOptOut['TERMUI_AUDIO_APC'], equals('0'));
+      },
+    );
   });
 }
