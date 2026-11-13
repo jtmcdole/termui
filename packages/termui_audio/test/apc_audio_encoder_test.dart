@@ -2,11 +2,46 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
 import 'package:termui_audio/src/impl/cli/cli_audio_engine.dart';
 import 'package:termui_audio/src/impl/engine_factory_cli.dart' as cli_factory;
 import 'package:termui_audio/src/impl/engine_factory_stub.dart' as stub_factory;
 import 'package:termui_audio/termui_audio.dart';
 import 'package:test/test.dart';
+
+Uint8List _oggPage(
+  int serial,
+  int granuleLow,
+  List<int> payload, {
+  int headerType = 0,
+  int granuleHigh = 0,
+}) {
+  final out = Uint8List(28 + payload.length);
+  ByteData.sublistView(out)
+    ..setUint32(6, granuleLow, Endian.little)
+    ..setInt32(10, granuleHigh, Endian.little)
+    ..setUint32(14, serial, Endian.little);
+  out.setRange(0, 4, 'OggS'.codeUnits);
+  out[5] = headerType;
+  out[26] = 1;
+  out[27] = payload.length;
+  out.setRange(28, out.length, payload);
+  return out;
+}
+
+Uint8List _vorbisId(int sampleRate) =>
+    (Uint8List(30)
+        ..[0] = 0x01
+        ..setRange(1, 7, 'vorbis'.codeUnits)
+        ..[11] = 2)
+      ..buffer.asByteData().setUint32(12, sampleRate, Endian.little);
+
+Uint8List _opusHead(int preSkip) =>
+    (Uint8List(19)
+        ..setRange(0, 8, 'OpusHead'.codeUnits)
+        ..[8] = 1
+        ..[9] = 2)
+      ..buffer.asByteData().setUint16(10, preSkip, Endian.little);
 
 void main() {
   group('ApcAudioEncoder', () {
@@ -357,6 +392,157 @@ void main() {
         expect(frames.first, contains('fmt=ogg'));
         apc.stop(v2);
         await apc.dispose();
+        await engine.dispose();
+      },
+    );
+
+    test(
+      'WAV odd-chunk padding and Ogg Vorbis/Opus duration parsing handle real assets, pre-skip, fake OggS, and chained serials',
+      () async {
+        final engine = PtyApcAudioEngine((_) {});
+        final wav = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(milliseconds: 100),
+        );
+        final junkWav = Uint8List.fromList([
+          ...wav.sublist(0, 12),
+          ...'JUNK'.codeUnits,
+          3,
+          0,
+          0,
+          0,
+          1,
+          2,
+          3,
+          0,
+          ...wav.sublist(12),
+        ]);
+        expect(
+          engine
+              .getBufferDuration(await engine.loadMem('junk.wav', junkWav))
+              .inMilliseconds,
+          inInclusiveRange(95, 105),
+        );
+
+        final vorbis = Uint8List.fromList([
+          ..._oggPage(1, 0, _vorbisId(44100), headerType: 0x02),
+          ..._oggPage(1, 44100, [
+            ...'OggS\x00\x04'.codeUnits,
+            1,
+          ], headerType: 4),
+        ]);
+        expect(
+          engine.getBufferDuration(await engine.loadMem('a.ogg', vorbis)),
+          equals(const Duration(seconds: 1)),
+        );
+
+        final opus = Uint8List.fromList([
+          ..._oggPage(2, 0, _opusHead(312), headerType: 0x02),
+          ..._oggPage(2, 48312, [0, 1, 2]),
+        ]);
+        expect(
+          engine.getBufferDuration(await engine.loadMem('b.ogg', opus)),
+          equals(const Duration(seconds: 1)),
+        );
+
+        final chained = Uint8List.fromList([
+          ..._oggPage(1, 0, _opusHead(0), headerType: 0x02),
+          ..._oggPage(2, 48000, [0, 1], headerType: 0x04),
+        ]);
+        expect(
+          engine.getBufferDuration(await engine.loadMem('c.ogg', chained)),
+          equals(Duration.zero),
+        );
+
+        final assetDir = Directory('example/assets').existsSync()
+            ? 'example/assets'
+            : 'packages/termui_audio/example/assets';
+        final swish = await engine.loadFile('$assetDir/fast_swish1.ogg');
+        expect(engine.getBufferDuration(swish).inMilliseconds, equals(360));
+        final bgm = await engine.loadFile('$assetDir/DontFallOffTheClouds.ogg');
+        expect(
+          engine.getBufferDuration(bgm).inMilliseconds,
+          inInclusiveRange(90800, 90820),
+        );
+        await engine.dispose();
+      },
+    );
+
+    test(
+      'Clock tracks playhead position, seek is no-op, and set3dSourceParameters normalizes pan',
+      () async {
+        var now = DateTime.utc(2026, 1, 1);
+        final frames = <String>[];
+        final engine = PtyApcAudioEngine(frames.add, clock: Clock(() => now));
+        final wavBytes = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(milliseconds: 400),
+        );
+        final clip = await engine.loadMem('loop.wav', wavBytes);
+
+        final pausedVoice = engine.play(clip, paused: true);
+        expect(engine.getVoicePosition(pausedVoice), equals(Duration.zero));
+        engine.set3dSourceParameters(pausedVoice, 3.0, 4.0, 0.0);
+        engine.setPaused(pausedVoice, false);
+        expect(frames.first, contains('p=0.6,'));
+
+        now = now.add(const Duration(milliseconds: 150));
+        expect(
+          engine.getVoicePosition(pausedVoice),
+          equals(const Duration(milliseconds: 150)),
+        );
+        engine.seek(pausedVoice, const Duration(milliseconds: 10));
+        expect(
+          engine.getVoicePosition(pausedVoice),
+          equals(const Duration(milliseconds: 150)),
+        );
+        now = now.add(const Duration(milliseconds: 400));
+        expect(
+          engine.getVoicePosition(pausedVoice),
+          equals(engine.getBufferDuration(clip)),
+        );
+
+        final loopVoice = engine.play(clip, loop: true);
+        final streamPositions = <Duration>[];
+        final sub = engine
+            .getVoicePositionStream(
+              loopVoice,
+              interval: const Duration(milliseconds: 10),
+            )
+            .listen(streamPositions.add);
+        now = now.add(const Duration(milliseconds: 550));
+        expect(
+          engine.getVoicePosition(loopVoice).inMilliseconds,
+          inInclusiveRange(145, 155),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        expect(streamPositions, isNotEmpty);
+
+        engine.scheduleStop(loopVoice, const Duration(milliseconds: 200));
+        now = now.add(const Duration(milliseconds: 150));
+        expect(
+          engine.getVoicePosition(loopVoice),
+          equals(const Duration(milliseconds: 100)),
+        );
+
+        final mp3Clip = await engine.loadMem(
+          'unknown.mp3',
+          Uint8List.fromList([0x49, 0x44, 0x33, 1, 2, 3]),
+        );
+        final mp3Voice = engine.play(mp3Clip);
+        await mp3Voice.completed;
+        frames.clear();
+        engine.stop(mp3Voice);
+        engine.stop(mp3Voice);
+        expect(frames, equals(['\x1b_Aa=stop,i=${mp3Voice.id};\x1b\\']));
+
+        engine.stop(pausedVoice);
+        engine.stop(loopVoice);
+        await sub.cancel();
+        await engine.disposeBuffer(clip);
+        expect(engine.getBufferDuration(clip), equals(Duration.zero));
         await engine.dispose();
       },
     );
