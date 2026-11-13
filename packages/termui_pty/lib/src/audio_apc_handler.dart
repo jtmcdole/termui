@@ -389,8 +389,11 @@ final class AudioApcHandler {
   /// Maximum decoded audio clip size allowed per upload (`2 MiB`).
   static const int maxClipBytes = 2 * 1024 * 1024;
 
-  /// Maximum resident buffer size allowed per audio stream (`16 MiB`).
+  /// Maximum compressed stream payload bytes (`16 MiB`).
   static const int maxStreamBytes = 16 * 1024 * 1024;
+
+  /// Maximum decoded PCM buffer size allowed per audio stream (`128 MiB`).
+  static const int maxStreamBufferBytes = 128 * 1024 * 1024;
 
   /// Maximum concurrent in-flight chunked clip uploads.
   static const int maxConcurrentUploads = 8;
@@ -636,7 +639,7 @@ final class AudioApcHandler {
     final maxRaw = control['max'];
     final maxBufferSize = maxRaw == null
         ? 4 * 1024 * 1024
-        : _parseOptionalBoundedInt(maxRaw, min: 1, max: maxStreamBytes);
+        : _parseOptionalBoundedInt(maxRaw, min: 1, max: maxStreamBufferBytes);
     final relRaw = control['rel'];
     final releaseConsumed = relRaw == null
         ? false

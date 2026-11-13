@@ -43,9 +43,14 @@ final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
   bool? lastPlayedPaused;
   int _nextVoiceId = 1;
   int _nextBusId = 100;
+  final Set<int> activeVoiceIds = {};
 
   @override
   bool get isInitialized => true;
+
+  @override
+  bool isVoiceActive(int voiceId) =>
+      activeVoiceIds.contains(voiceId) || super.isVoiceActive(voiceId);
 
   @override
   AudioBus createBus() {
@@ -93,6 +98,12 @@ final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
   }
 
   @override
+  void stop(AudioVoice voice) {
+    activeVoiceIds.remove(voice.id);
+    super.stop(voice);
+  }
+
+  @override
   void stopEngineVoice(int voiceId) {
     calls.add('stopEngineVoice(voice:$voiceId)');
   }
@@ -107,6 +118,7 @@ final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
     lastPlayedBus = bus;
     lastPlayedPaused = paused;
     final id = _nextVoiceId++;
+    activeVoiceIds.add(id);
     calls.add('play(hash:${buffer.hash}, bus:${bus?.id}, paused:$paused)');
     return AudioVoice(id, Completer<void>().future);
   }
@@ -174,9 +186,18 @@ void main() {
         );
 
         final engine = _RecordingFlutterAudioEngine();
-        final v1 = AudioVoice(10, Completer<void>().future);
-        final v2 = AudioVoice(20, Completer<void>().future);
+        final v1 = engine.play(const _FakeAudioBuffer(1));
+        final v2 = engine.play(const _FakeAudioBuffer(2));
+        final unknownVoice = AudioVoice(999, Completer<void>().future);
         final pitchFt = FilterType.pitchShift.index;
+
+        // Ended or unknown voices must not allocate a pitch bus or mutate engine speed.
+        engine.setRelativePlaySpeed(unknownVoice, 0.5, preservePitch: true);
+        expect(engine.createdBuses, isEmpty);
+        expect(
+          engine.calls.where((c) => c.startsWith('setEngineSpeed(')),
+          isEmpty,
+        );
 
         // Non-finite or non-positive speed with preservePitch is ignored.
         engine.setRelativePlaySpeed(v1, 0.0, preservePitch: true);
@@ -188,7 +209,7 @@ void main() {
         expect(engine.createdBuses, hasLength(1));
         final b1 = engine.createdBuses.single;
         expect(engine.attachedFilters, equals([(b1.id, pitchFt)]));
-        expect(engine.annexedVoices, equals([(b1.id, 10)]));
+        expect(engine.annexedVoices, equals([(b1.id, v1.id)]));
         expect(
           engine.filterParams,
           equals([(b1.id, pitchFt, 0, 1.0), (b1.id, pitchFt, 1, 2.0)]),
@@ -215,9 +236,12 @@ void main() {
           equals([(b1.id, pitchFt, 0, 0.0), (b1.id, pitchFt, 1, 1.0)]),
         );
 
-        // stop(v1) disposes v1's pitch bus cleanly.
+        // stop(v1) disposes v1's pitch bus cleanly, and subsequent speed updates on v1 are ignored.
         engine.stop(v1);
         expect(engine.destroyedBusIds, equals([b1.id]));
+        final busCountAfterStop = engine.createdBuses.length;
+        engine.setRelativePlaySpeed(v1, 0.5, preservePitch: true);
+        expect(engine.createdBuses.length, equals(busCountAfterStop));
 
         // Failed annex rolls back allocated pitch bus immediately.
         engine.throwOnAnnex = true;

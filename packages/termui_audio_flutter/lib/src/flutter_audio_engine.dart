@@ -106,13 +106,18 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     return _engine.getPosition(sol.SoundHandle(voice.id));
   }
 
+  /// Returns whether [voiceId] is currently tracked as an active voice.
+  @protected
+  @visibleForTesting
+  bool isVoiceActive(int voiceId) => _activeVoices.containsKey(voiceId);
+
   @override
   Stream<Duration> getVoicePositionStream(
     AudioVoice voice, {
     Duration interval = const Duration(milliseconds: 50),
   }) => createVoicePositionStream(
     voice: voice,
-    isVoiceActive: _activeVoices.containsKey,
+    isVoiceActive: isVoiceActive,
     getPosition: getVoicePosition,
     interval: interval,
   );
@@ -433,6 +438,7 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     bool preservePitch = false,
   }) {
     if (!isInitialized) throw Exception('Engine not initialized.');
+    if (!isVoiceActive(voice.id)) return;
     final pitchFilterId = FilterType.pitchShift.index;
     if (!preservePitch) {
       final existing = _voicePitchBuses[voice.id];
