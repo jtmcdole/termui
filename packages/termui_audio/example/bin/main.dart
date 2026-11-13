@@ -21,6 +21,9 @@ void main() async {
     if (!file.existsSync()) {
       file = File('packages/termui_audio/example/$assetPath');
     }
+    if (!file.existsSync() && Platform.script.isScheme('file')) {
+      file = File.fromUri(Platform.script.resolve('../$assetPath'));
+    }
     if (!file.existsSync()) {
       throw Exception('Could not find audio asset at $assetPath');
     }

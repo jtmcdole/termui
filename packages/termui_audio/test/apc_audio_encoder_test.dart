@@ -1,7 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:termui_audio/src/impl/engine_factory_stub.dart';
+import 'package:termui_audio/src/impl/cli/cli_audio_engine.dart';
+import 'package:termui_audio/src/impl/engine_factory_cli.dart' as cli_factory;
+import 'package:termui_audio/src/impl/engine_factory_stub.dart' as stub_factory;
 import 'package:termui_audio/termui_audio.dart';
 import 'package:test/test.dart';
 
@@ -254,9 +257,108 @@ void main() {
     });
 
     test('StubAudioEngine.setVoicePan throws UnsupportedError', () {
-      final stub = StubAudioEngine();
+      final stub = stub_factory.StubAudioEngine();
       final voice = AudioVoice(1, Future<void>.value());
       expect(() => stub.setVoicePan(voice, 0.0), throwsUnsupportedError);
     });
+
+    test(
+      'PtyApcAudioEngine estimates WAV/OGG duration, normalizes 3D spatial pan, and keeps non-looping BGM active until stopped or elapsed',
+      () async {
+        final frames = <String>[];
+        final engine = PtyApcAudioEngine(frames.add);
+        await engine.init();
+
+        final wavBytes = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(milliseconds: 400),
+        );
+        final wavBuf = await engine.loadMem('bgm.wav', wavBytes);
+        expect(
+          engine.getBufferDuration(wavBuf).inMilliseconds,
+          inInclusiveRange(390, 410),
+        );
+
+        final voice = engine.play3d(wavBuf, -5.0, -5.0, 0.0);
+        expect(frames, isNotEmpty);
+        // (-5, -5, 0) has distance sqrt(50) ≈ 7.071 -> pan = -5 / 7.071 ≈ -0.7071 (not clamped to -1).
+        expect(frames.first, contains('p=-0.7071,'));
+
+        // Must remain active past Duration.zero so TUI togglePlay can stop it.
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+        expect(engine.activeVoiceCount, equals(1));
+
+        engine.stop(voice);
+        expect(frames.last, equals('\x1b_Aa=stop,i=${voice.id};\x1b\\'));
+        expect(engine.activeVoiceCount, equals(0));
+        await engine.dispose();
+      },
+    );
+
+    test(
+      'createAudioEngine selects APC vs CLI from TERMUI_AUDIO_APC and loadFile reads bytes',
+      () async {
+        final frames = <String>[];
+        final apc = cli_factory.createAudioEngine(
+          environment: const {'TERMUI_AUDIO_APC': '1'},
+          writeEscape: frames.add,
+        );
+        expect(apc, isA<PtyApcAudioEngine>());
+        expect(
+          cli_factory.createAudioEngine(
+            environment: const {'TERMUI_AUDIO_APC': ' TRUE '},
+            writeEscape: frames.add,
+          ),
+          isA<PtyApcAudioEngine>(),
+        );
+        expect(
+          cli_factory.createAudioEngine(
+            environment: const {'TERMUI_AUDIO_APC': '0'},
+          ),
+          isA<CliAudioEngine>(),
+        );
+        expect(
+          stub_factory.createAudioEngine(),
+          isA<stub_factory.StubAudioEngine>(),
+        );
+        final defaultStdoutApc = cli_factory.createAudioEngine(
+          environment: const {'TERMUI_AUDIO_APC': '1'},
+        );
+        expect(defaultStdoutApc, isA<PtyApcAudioEngine>());
+        await defaultStdoutApc.dispose();
+
+        final wavBytes = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(milliseconds: 120),
+        );
+        final engine = PtyApcAudioEngine(
+          frames.add,
+          readFileBytes: (_) async => wavBytes,
+        );
+        final progresses = <double>[];
+        final loaded = await engine.loadFile(
+          'clip.wav',
+          onProgress: progresses.add,
+        );
+        expect(progresses, equals([1.0]));
+        expect(await engine.loadFileBytes('clip.wav'), equals(wavBytes));
+        final v1 = engine.play(loaded, loop: true);
+        expect(frames.first, contains('fmt=wav'));
+        engine.stop(v1);
+
+        frames.clear();
+        final assetPath = File('example/assets/fast_swish1.ogg').existsSync()
+            ? 'example/assets/fast_swish1.ogg'
+            : 'packages/termui_audio/example/assets/fast_swish1.ogg';
+        final realBuf = await (apc as PtyApcAudioEngine).loadFile(assetPath);
+        final v2 = apc.play(realBuf, loop: true);
+        expect(frames.first, contains('fmt=ogg'));
+        apc.stop(v2);
+        await apc.dispose();
+        await engine.dispose();
+      },
+    );
   });
 }

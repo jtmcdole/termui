@@ -184,4 +184,7 @@ class StubAudioEngine implements TermuiAudioEngine {
 }
 
 /// Creates a new [TermuiAudioEngine] throwing an unsupported error.
-TermuiAudioEngine createAudioEngine() => StubAudioEngine();
+TermuiAudioEngine createAudioEngine({
+  Map<String, String>? environment,
+  void Function(String sequence)? writeEscape,
+}) => StubAudioEngine();
