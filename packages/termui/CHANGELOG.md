@@ -1,3 +1,7 @@
+## 0.14.2
+
+ - **FIX**(termui): bound scoped Kitty registries and cover combining marks in width checks.
+
 ## 0.14.1
 
  - **FEAT**(termui): support Color.ansi and barrierColor in DimmerEffect and DimmingBarrier.

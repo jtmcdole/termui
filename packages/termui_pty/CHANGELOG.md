@@ -1,3 +1,7 @@
+## 0.10.1
+
+ - **FIX**(termui_pty): reassemble chunk-split combining marks in VirtualTerminal.
+
 ## 0.10.0
 
 > Note: This release has breaking changes.
