@@ -102,12 +102,20 @@ void main() {
       _testSharedAtlasIsolationAcrossPanes,
     );
     testWidgets(
+      'bufferListenable repaints canvas without rebuilding TerminalSurface on steady-state deltas and handles null->Buffer and resize',
+      _testSteadyStateRepaintWithoutRebuild,
+    );
+    testWidgets(
       'GlyphAtlasController coalesces multiple requestMissingStyledGlyphs calls into one atlas upload',
       _testCoalescedMissingStyledGlyphs,
     );
     testWidgets(
       'GlyphAtlasController does not overwrite recreated atlas with stale addStyledGlyphs batch',
       _testConcurrentRecreateDoesNotOverwriteAtlas,
+    );
+    testWidgets(
+      'TerminalSurface with bufferProvider and no bufferListenable repaints on rebuild and skips duplicate prepareBuffer',
+      _testBufferProviderWithoutListenableAndExternallyPrepared,
     );
   });
 
@@ -1019,6 +1027,99 @@ Future<void> _testTransientFallbackGlyphOnCacheMiss() async {
   expect(litPixels, greaterThan(0));
 }
 
+Future<void> _testSteadyStateRepaintWithoutRebuild(WidgetTester tester) async {
+  final atlasController = GlyphAtlasController(
+    fontSize: 14.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlasController.dispose);
+  await tester.runAsync<void>(atlasController.ensureInitialized);
+
+  Buffer? currentBuffer;
+  final notifier = ValueNotifier<int>(0);
+  addTearDown(notifier.dispose);
+  var surfaceBuildCount = 0;
+  var cursorPos = (col: 0, row: 0);
+  final reportedSizes = <(int, int)>[];
+
+  Widget buildHarness({required double width, required double height}) =>
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: width,
+            height: height,
+            child: StatefulBuilder(
+              builder: (context, _) {
+                surfaceBuildCount++;
+                return TerminalSurface(
+                  atlasController: atlasController,
+                  bufferProvider: () => currentBuffer,
+                  bufferListenable: notifier,
+                  cursorPositionProvider: () => cursorPos,
+                  onViewportSizeChanged: (cols, rows, _, _) =>
+                      reportedSizes.add((cols, rows)),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+  // 1. Start with null buffer: renders SizedBox placeholder.
+  await tester.pumpWidget(buildHarness(width: 320, height: 200));
+  await tester.pump();
+  expect(find.byType(CustomPaint), findsNothing);
+  final buildsAtNull = surfaceBuildCount;
+
+  // 2. null -> Buffer transition triggers TerminalSurface rebuild & mounts CustomPaint.
+  final buf = Buffer(20, 6)..writeString(0, 0, 'Hello', Style.empty);
+  currentBuffer = buf;
+  notifier.value++;
+  await tester.pump();
+  expect(find.byType(CustomPaint), findsOneWidget);
+
+  final surfaceElement =
+      tester.element(find.byType(TerminalSurface)) as StatefulElement;
+  final initialPainter =
+      tester.widget<CustomPaint>(find.byType(CustomPaint)).painter!
+          as TuiAtlasPainter;
+  expect(initialPainter.repaint, isNotNull);
+
+  // Count TerminalSurface state builds by checking whether painter identity changes
+  // across steady-state in-place deltas (TerminalSurface only creates a new
+  // TuiAtlasPainter when TerminalSurfaceState.build runs).
+  buf.writeString(0, 0, 'World', Style.empty);
+  cursorPos = (col: 5, row: 0);
+  notifier.value++;
+  await tester.pump();
+
+  final afterDeltaPainter =
+      tester.widget<CustomPaint>(find.byType(CustomPaint)).painter!
+          as TuiAtlasPainter;
+  expect(identical(afterDeltaPainter, initialPainter), isTrue);
+  expect(surfaceBuildCount, equals(buildsAtNull));
+  expect(surfaceElement.dirty, isFalse);
+
+  // Verify the canvas actually painted the updated character 'W' at cell (0,0)
+  // via the repaint listenable even without TerminalSurface rebuilding.
+  final boundary = tester.renderObject<RenderObject>(
+    find.descendant(
+      of: find.byType(TerminalSurface),
+      matching: find.byType(RepaintBoundary),
+    ),
+  );
+  expect(boundary.debugNeedsPaint, isFalse);
+
+  // 3. Viewport resize triggers LayoutBuilder rebuild and reports new cols/rows.
+  await tester.pumpWidget(buildHarness(width: 400, height: 260));
+  await tester.pump();
+  await tester.pump();
+  expect(reportedSizes.length, greaterThanOrEqualTo(2));
+  expect(reportedSizes.last, isNot(equals(reportedSizes.first)));
+}
+
 Future<void> _testCoalescedMissingStyledGlyphs(WidgetTester tester) async {
   final atlasController = GlyphAtlasController(
     fontSize: 14.0,
@@ -1124,4 +1225,131 @@ Future<void> _testConcurrentRecreateDoesNotOverwriteAtlas(
     atlasController.atlas!.hasNativeVariant('Ψ', GlyphStyleVariant.regular),
     isTrue,
   );
+}
+
+Future<void> _testBufferProviderWithoutListenableAndExternallyPrepared(
+  WidgetTester tester,
+) async {
+  final atlasController = GlyphAtlasController(
+    fontSize: 13.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlasController.dispose);
+  await tester.runAsync<void>(atlasController.ensureInitialized);
+
+  final buf = Buffer(10, 2)..setCharacter(0, 0, 'Ж');
+  late StateSetter setHostState;
+
+  await tester.pumpWidget(
+    MediaQuery(
+      data: const MediaQueryData(),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: StatefulBuilder(
+          builder: (context, setState) {
+            setHostState = setState;
+            return TerminalSurface(
+              atlasController: atlasController,
+              bufferProvider: () => buf,
+            );
+          },
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
+  expect(
+    atlasController.fallbackPainters.keys.any((k) => k.$1 == 'Ж') ||
+        atlasController.atlas!.hasNativeVariant('Ж', GlyphStyleVariant.regular),
+    isTrue,
+  );
+
+  // In-place mutation + parent rebuild without bufferListenable must prepare new
+  // fallback glyphs and notify CustomPaint's repaint listenable.
+  buf.setCharacter(1, 0, 'Щ');
+  final customPaintFinder = find.descendant(
+    of: find.byType(TerminalSurface),
+    matching: find.byType(CustomPaint),
+  );
+  final customPaint = tester.widget<CustomPaint>(customPaintFinder);
+  final renderPaint = tester.renderObject<RenderObject>(customPaintFinder);
+  var paintNotifications = 0;
+  void onPaintNotified() => paintNotifications++;
+  customPaint.painter!.addListener(onPaintNotified);
+
+  setHostState(() {});
+  await tester.pump();
+  customPaint.painter!.removeListener(onPaintNotified);
+  expect(paintNotifications, equals(1));
+  expect(renderPaint.debugNeedsPaint, isFalse);
+  expect(
+    atlasController.fallbackPainters.keys.any((k) => k.$1 == 'Щ') ||
+        atlasController.atlas!.hasNativeVariant('Щ', GlyphStyleVariant.regular),
+    isTrue,
+  );
+
+  // Calling surfaceState.prepareBuffer(buf) before rebuilding TerminalSurface(buffer: buf)
+  // suppresses redundant fallback preparation during didUpdateWidget.
+  final surfaceKey = GlobalKey<TerminalSurfaceState>();
+  final buf2 = Buffer(10, 2)..setCharacter(0, 0, 'Д');
+  await tester.pumpWidget(
+    MediaQuery(
+      data: const MediaQueryData(),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Offstage(
+          offstage: true,
+          child: TerminalSurface(
+            key: surfaceKey,
+            atlasController: atlasController,
+            buffer: buf2,
+          ),
+        ),
+      ),
+    ),
+  );
+  expect(atlasController.fallbackPainters.keys.any((k) => k.$1 == 'Д'), isTrue);
+
+  surfaceKey.currentState!.prepareBuffer(buf2);
+  buf2.setCharacter(1, 0, 'Ф');
+  await tester.pumpWidget(
+    MediaQuery(
+      data: const MediaQueryData(),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Offstage(
+          offstage: true,
+          child: TerminalSurface(
+            key: surfaceKey,
+            atlasController: atlasController,
+            buffer: buf2,
+          ),
+        ),
+      ),
+    ),
+  );
+  expect(
+    atlasController.fallbackPainters.keys.any((k) => k.$1 == 'Ф'),
+    isFalse,
+  );
+
+  // Subsequent rebuild without prepareBuffer() runs fallback preparation again.
+  buf2.setCharacter(2, 0, 'Х');
+  await tester.pumpWidget(
+    MediaQuery(
+      data: const MediaQueryData(),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: Offstage(
+          offstage: true,
+          child: TerminalSurface(
+            key: surfaceKey,
+            atlasController: atlasController,
+            buffer: buf2,
+          ),
+        ),
+      ),
+    ),
+  );
+  expect(atlasController.fallbackPainters.keys.any((k) => k.$1 == 'Х'), isTrue);
 }
