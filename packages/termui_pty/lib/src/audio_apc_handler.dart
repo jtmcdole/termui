@@ -95,11 +95,37 @@ final class TerminalStopAudioEvent extends TerminalAudioEvent {
   int get hashCode => clipId.hashCode;
 }
 
+/// Live voice parameter update decoded from `ESC _ A a=update,... ST`.
+final class TerminalUpdateAudioEvent extends TerminalAudioEvent {
+  /// Positive 31-bit wire clip identifier (`1 .. 0x7FFFFFFF`).
+  final int clipId;
+
+  /// Optional updated playback volume clamped to `0.0 .. 1.0`.
+  final double? volume;
+
+  /// Optional updated stereo pan clamped to `-1.0 .. 1.0`.
+  final double? pan;
+
+  /// Creates an audio voice update event.
+  const TerminalUpdateAudioEvent({required this.clipId, this.volume, this.pan});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TerminalUpdateAudioEvent &&
+          other.clipId == clipId &&
+          other.volume == volume &&
+          other.pan == pan;
+
+  @override
+  int get hashCode => Object.hash(clipId, volume, pan);
+}
+
 final class _PendingAudioUpload {
   final int clipId;
   final String format;
-  final double volume;
-  final double pan;
+  double volume;
+  double pan;
   final bool loop;
   final StringBuffer base64Data = StringBuffer();
   int charCount = 0;
@@ -186,6 +212,8 @@ final class AudioApcHandler {
         _handleTone(control);
       case 'clip':
         _handleNewClip(control, dataPart);
+      case 'update':
+        _handleUpdate(control);
       case 'stop':
         _handleStop(control);
     }
@@ -214,17 +242,23 @@ final class AudioApcHandler {
     return parsed;
   }
 
+  static double? _parseOptionalBoundedDouble(
+    String? raw, {
+    required double min,
+    required double max,
+  }) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = double.tryParse(raw);
+    if (parsed == null || !parsed.isFinite) return null;
+    return parsed.clamp(min, max).toDouble();
+  }
+
   static double _parseBoundedDouble(
     String? raw, {
     required double min,
     required double max,
     required double fallback,
-  }) {
-    if (raw == null || raw.isEmpty) return fallback;
-    final parsed = double.tryParse(raw);
-    if (parsed == null || !parsed.isFinite) return fallback;
-    return parsed.clamp(min, max).toDouble();
-  }
+  }) => _parseOptionalBoundedDouble(raw, min: min, max: max) ?? fallback;
 
   static String? _normalizeWaveform(String? raw) {
     final lower = (raw ?? 'sine').trim().toLowerCase();
@@ -267,6 +301,27 @@ final class AudioApcHandler {
         volume: volume,
         pan: pan,
       ),
+    );
+  }
+
+  void _handleUpdate(Map<String, String> control) {
+    final clipId = _parseExplicitClipId(control['i']);
+    if (clipId == null || clipId <= 0) return;
+    final volume = _parseOptionalBoundedDouble(
+      control['v'],
+      min: 0.0,
+      max: 1.0,
+    );
+    final pan = _parseOptionalBoundedDouble(control['p'], min: -1.0, max: 1.0);
+    if (volume == null && pan == null) return;
+    final pending = _pendingUploads[clipId];
+    if (pending != null) {
+      pending.volume = volume ?? pending.volume;
+      pending.pan = pan ?? pending.pan;
+      return;
+    }
+    onAudioEvent?.call(
+      TerminalUpdateAudioEvent(clipId: clipId, volume: volume, pan: pan),
     );
   }
 

@@ -315,5 +315,57 @@ void main() {
         expect(clip.clipId, greaterThanOrEqualTo(0x80000001));
       },
     );
+
+    test(
+      'decodes a=update frames (pan-only, volume-only, both, clamped, invalid ignored) and preserves interleaved clip uploads',
+      () {
+        final events = <TerminalAudioEvent>[];
+        final vt = VirtualTerminal(
+          width: 20,
+          height: 5,
+          onAudioEvent: events.add,
+        );
+        addTearDown(vt.dispose);
+
+        // Interleave a=update between m=1 and m=0 chunks of a clip upload.
+        final b64 = base64Encode(Uint8List.fromList([1, 2, 3, 4, 5, 6]));
+        final half = b64.length ~/ 2;
+        vt.writeString(
+          '\x1b_Aa=clip,i=2,fmt=wav,m=1;${b64.substring(0, half)}\x1b\\',
+        );
+        vt.writeString(
+          '\x1b_Aa=update,i=1,p=-0.75;\x1b\\'
+          '\x1b_Aa=update,i=1,v=0.4;\x1b\\'
+          '\x1b_Aa=update,i=1,v=2.0,p=-3.0;\x1b\\'
+          '\x1b_Aa=update,i=2,v=0.35,p=0.25;\x1b\\'
+          '\x1b_Aa=update,i=0,v=0.5;\x1b\\'
+          '\x1b_Aa=update,i=2147483648,v=0.5;\x1b\\'
+          '\x1b_Aa=update,i=1;\x1b\\'
+          '\x1b_Aa=update,i=1,v=nan,p=inf;\x1b\\',
+        );
+        vt.writeString('\x1b_Ai=2,m=0;${b64.substring(half)}\x1b\\');
+
+        expect(events, hasLength(4));
+        expect(
+          events[0],
+          equals(const TerminalUpdateAudioEvent(clipId: 1, pan: -0.75)),
+        );
+        expect(
+          events[1],
+          equals(const TerminalUpdateAudioEvent(clipId: 1, volume: 0.4)),
+        );
+        expect(
+          events[2],
+          equals(
+            const TerminalUpdateAudioEvent(clipId: 1, volume: 1.0, pan: -1.0),
+          ),
+        );
+        final clip = events[3] as TerminalClipAudioEvent;
+        expect(clip.clipId, equals(2));
+        expect(clip.volume, equals(0.35));
+        expect(clip.pan, equals(0.25));
+        expect(clip.bytes, equals(Uint8List.fromList([1, 2, 3, 4, 5, 6])));
+      },
+    );
   });
 }
