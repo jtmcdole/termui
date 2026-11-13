@@ -1,6 +1,6 @@
 name: termui_audio
 description: A low-latency SoLoud game audio engine and multiplatform API for termui.
-version: 0.5.0
+version: 0.6.0
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_audio
 
 resolution: workspace

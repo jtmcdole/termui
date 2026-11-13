@@ -1,3 +1,9 @@
+## 0.15.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(termui): add Buffer.hasKittyImages and wide-safe word-drag selection.
+
 ## 0.14.2
 
  - **FIX**(termui): bound scoped Kitty registries and cover combining marks in width checks.

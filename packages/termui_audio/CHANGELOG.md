@@ -1,3 +1,10 @@
+## 0.6.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_audio): parse Ogg Vorbis/Opus durations, track Clock playhead, and emit stop on zero-duration eviction.
+ - **BREAKING** **FEAT**(termui_audio): route CLI createAudioEngine via TERMUI_AUDIO_APC, add loadFile, and parse WAV duration.
+
 ## 0.5.0
 
 > Note: This release has breaking changes.

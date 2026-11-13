@@ -11,6 +11,58 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`termui` - `v0.15.0`](#termui---v0150)
+ - [`termui_audio` - `v0.6.0`](#termui_audio---v060)
+ - [`termui_flutter` - `v0.12.0`](#termui_flutter---v0120)
+ - [`termui_pty` - `v0.11.0`](#termui_pty---v0110)
+
+Packages with other changes:
+
+ - [`termui_recorder` - `v0.10.4`](#termui_recorder---v0104)
+ - [`termui_test` - `v0.4.4`](#termui_test---v044)
+ - [`termui_hotreload` - `v0.6.30`](#termui_hotreload---v0630)
+ - [`termui_tinpot` - `v0.5.2`](#termui_tinpot---v052)
+ - [`termui_audio_flutter` - `v0.3.1`](#termui_audio_flutter---v031)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.4`
+ - `termui_test` - `v0.4.4`
+ - `termui_hotreload` - `v0.6.30`
+ - `termui_tinpot` - `v0.5.2`
+ - `termui_audio_flutter` - `v0.3.1`
+
+---
+
+#### `termui` - `v0.15.0`
+
+ - **BREAKING** **FEAT**(termui): add Buffer.hasKittyImages and wide-safe word-drag selection.
+
+#### `termui_audio` - `v0.6.0`
+
+ - **BREAKING** **FIX**(termui_audio): parse Ogg Vorbis/Opus durations, track Clock playhead, and emit stop on zero-duration eviction.
+ - **BREAKING** **FEAT**(termui_audio): route CLI createAudioEngine via TERMUI_AUDIO_APC, add loadFile, and parse WAV duration.
+
+#### `termui_flutter` - `v0.12.0`
+
+ - **BREAKING** **PERF**(termui_flutter): sparse background rects, procedural variant aliasing, and paint-time prep.
+ - **BREAKING** **FEAT**(termui_flutter): add mouseTracking, Shift selection override, copyOnSelect, and word selection.
+
+#### `termui_pty` - `v0.11.0`
+
+ - **BREAKING** **FIX**(termui_pty): default TERMUI_AUDIO_APC=1 in Pty2RoutedBackend child environment.
+
+
+## 2026-11-13
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - There are no breaking changes in this release.
 
 Packages with other changes:

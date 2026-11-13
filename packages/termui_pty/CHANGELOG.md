@@ -1,3 +1,9 @@
+## 0.11.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_pty): default TERMUI_AUDIO_APC=1 in Pty2RoutedBackend child environment.
+
 ## 0.10.1
 
  - **FIX**(termui_pty): reassemble chunk-split combining marks in VirtualTerminal.
