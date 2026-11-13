@@ -505,7 +505,7 @@ void main() {
     );
 
     test(
-      'Clock tracks playhead position, seek is no-op, and set3dSourceParameters normalizes pan',
+      'Clock tracks playhead position, seek, pause, speed, fades, scheduleStop, and 3D Doppler',
       () async {
         var now = DateTime.utc(2026, 1, 1);
         final frames = <String>[];
@@ -528,12 +528,35 @@ void main() {
           engine.getVoicePosition(pausedVoice),
           equals(const Duration(milliseconds: 150)),
         );
+        // Seeking updates playhead and emits s=<ms>.
         engine.seek(pausedVoice, const Duration(milliseconds: 10));
         expect(
-          engine.getVoicePosition(pausedVoice),
-          equals(const Duration(milliseconds: 150)),
+          frames.last,
+          equals('\x1b_Aa=update,i=${pausedVoice.id},s=10;\x1b\\'),
         );
-        now = now.add(const Duration(milliseconds: 400));
+        expect(
+          engine.getVoicePosition(pausedVoice),
+          equals(const Duration(milliseconds: 10)),
+        );
+
+        // Pausing freezes playhead; resuming continues from paused position.
+        engine.setPaused(pausedVoice, true);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${pausedVoice.id},pa=1;\x1b\\'),
+        );
+        now = now.add(const Duration(milliseconds: 500));
+        expect(
+          engine.getVoicePosition(pausedVoice),
+          equals(const Duration(milliseconds: 10)),
+        );
+        engine.setPaused(pausedVoice, false);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${pausedVoice.id},pa=0;\x1b\\'),
+        );
+
+        now = now.add(const Duration(milliseconds: 500));
         expect(
           engine.getVoicePosition(pausedVoice),
           equals(engine.getBufferDuration(clip)),
@@ -555,11 +578,16 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 25));
         expect(streamPositions, isNotEmpty);
 
+        // scheduleStop preserves bufferDuration (400ms) while emitting st=<ms>.
         engine.scheduleStop(loopVoice, const Duration(milliseconds: 200));
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${loopVoice.id},st=200;\x1b\\'),
+        );
         now = now.add(const Duration(milliseconds: 150));
         expect(
           engine.getVoicePosition(loopVoice),
-          equals(const Duration(milliseconds: 100)),
+          equals(const Duration(milliseconds: 300)),
         );
 
         final mp3Clip = await engine.loadMem(
@@ -578,6 +606,241 @@ void main() {
         await sub.cancel();
         await engine.disposeBuffer(clip);
         expect(engine.getBufferDuration(clip), equals(Duration.zero));
+        await engine.dispose();
+      },
+    );
+
+    test(
+      'encodes and tracks startOffset, speed ramps, fadeVolume, Doppler, and MP3 duration',
+      () async {
+        expect(
+          ApcAudioEncoder.encodeClip(
+            clipId: 3,
+            format: 'wav',
+            bytes: Uint8List.fromList([1, 2, 3]),
+            startOffset: const Duration(milliseconds: 125),
+          ).single,
+          contains(',l=0,s=125,m=0;'),
+        );
+        expect(
+          ApcAudioEncoder.encodeUpdate(
+            clipId: 9,
+            volume: 0.5,
+            pan: -0.25,
+            seekPosition: const Duration(milliseconds: 1500),
+            paused: true,
+            speed: 1.5,
+            preservePitch: true,
+            fadeVolumeTarget: 0.2,
+            fadeVolumeDuration: const Duration(milliseconds: 400),
+            fadeSpeedTarget: 0.75,
+            fadeSpeedDuration: const Duration(milliseconds: 600),
+            scheduleStopDuration: const Duration(milliseconds: 800),
+          ),
+          equals(
+            '\x1b_Aa=update,i=9,v=0.5,p=-0.25,s=1500,pa=1,sp=1.5,pp=1,'
+            'fv=0.2:400,fs=0.75:600,st=800;\x1b\\',
+          ),
+        );
+        expect(
+          () => ApcAudioEncoder.encodeClip(
+            clipId: 1,
+            format: 'wav',
+            bytes: Uint8List.fromList([1, 2, 3]),
+            startOffset: const Duration(milliseconds: -1),
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeUpdate(
+            clipId: 1,
+            fadeVolumeTarget: 0.5,
+            fadeVolumeDuration: const Duration(milliseconds: -1),
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeUpdate(clipId: 1, fadeVolumeTarget: 0.5),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeUpdate(
+            clipId: 1,
+            seekPosition: const Duration(milliseconds: -1),
+          ),
+          throwsArgumentError,
+        );
+
+        var now = DateTime.utc(2026, 2, 1);
+        final frames = <String>[];
+        final engine = PtyApcAudioEngine(frames.add, clock: Clock(() => now));
+
+        // CBR MPEG-1 Layer III 128kbps 44100Hz (417 bytes/frame * 2 = 834 bytes -> 52125 us).
+        final mp3Frame = Uint8List(417)
+          ..[0] = 0xFF
+          ..[1] = 0xFB
+          ..[2] = 0x90
+          ..[3] = 0x00;
+        final mp3 = await engine.loadMem(
+          'beep.mp3',
+          Uint8List.fromList([...mp3Frame, ...mp3Frame]),
+        );
+        expect(engine.getBufferDuration(mp3).inMicroseconds, equals(52125));
+
+        final wavBytes = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(milliseconds: 1000),
+        );
+        final clip = await engine.loadMem('long.wav', wavBytes);
+        final voice = engine.play(clip);
+        frames.clear();
+
+        // 0.5x speed advances playhead at half rate and emits sp=0.5,pp=1.
+        engine.setRelativePlaySpeed(voice, 0.5, preservePitch: true);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${voice.id},sp=0.5,pp=1;\x1b\\'),
+        );
+        now = now.add(const Duration(milliseconds: 200));
+        expect(
+          engine.getVoicePosition(voice),
+          equals(const Duration(milliseconds: 100)),
+        );
+
+        // Speed ramp 0.5 -> 1.5 over 200ms averages 1.0x -> +200ms -> 300ms.
+        engine.fadeRelativePlaySpeed(
+          voice,
+          1.5,
+          const Duration(milliseconds: 200),
+        );
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${voice.id},fs=1.5:200;\x1b\\'),
+        );
+        now = now.add(const Duration(milliseconds: 200));
+        expect(
+          engine.getVoicePosition(voice),
+          equals(const Duration(milliseconds: 300)),
+        );
+
+        // fadeVolume updates state.volume and emittedVolStr so identical setVoiceVolume is a no-op.
+        engine.fadeVolume(voice, 0.35, const Duration(milliseconds: 300));
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${voice.id},fv=0.35:300;\x1b\\'),
+        );
+        final countAfterFade = frames.length;
+        engine.setVoiceVolume(voice, 0.35);
+        expect(frames, hasLength(countAfterFade));
+
+        // 3D Doppler: moving toward listener at 100 m/s -> 343.3 / 243.3 ≈ 1.411.
+        engine.setRelativePlaySpeed(voice, 1.0);
+        engine.set3dSourceParameters(voice, 10.0, 0.0, 0.0, vx: -100.0);
+        expect(frames.last, contains('sp=1.411'));
+        // Supersonic approach clamps to 8.0; fast recede clamps to 0.125.
+        engine.set3dSourceParameters(voice, 10.0, 0.0, 0.0, vx: -500.0);
+        expect(frames.last, contains('sp=8'));
+        engine.set3dSourceParameters(voice, 10.0, 0.0, 0.0, vx: 5000.0);
+        expect(frames.last, contains('sp=0.125'));
+
+        // playSprite emits s=<startMs> on a=clip and st=<durMs> on a=update.
+        frames.clear();
+        final sprite = engine.playSprite(
+          clip,
+          start: const Duration(milliseconds: 250),
+          duration: const Duration(milliseconds: 40),
+        );
+        expect(frames.first, contains(',s=250,'));
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${sprite.id},st=40;\x1b\\'),
+        );
+        await sprite.completed.timeout(const Duration(seconds: 2));
+        expect(frames.last, equals('\x1b_Aa=stop,i=${sprite.id};\x1b\\'));
+
+        // playSprite / scheduleStop on unestimated Duration.zero clip waits for schedRem (not 0ms).
+        frames.clear();
+        final unknownMp3 = await engine.loadMem(
+          'zero_dur.mp3',
+          Uint8List.fromList([0x49, 0x44, 0x33, 1, 2, 3]),
+        );
+        final zeroSprite = engine.playSprite(
+          unknownMp3,
+          start: Duration.zero,
+          duration: const Duration(milliseconds: 35),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(frames.any((f) => f.contains('a=stop')), isFalse);
+        await zeroSprite.completed.timeout(const Duration(seconds: 2));
+        expect(frames.last, equals('\x1b_Aa=stop,i=${zeroSprite.id};\x1b\\'));
+
+        // Post-ramp Doppler: fadeRelativePlaySpeed finishes cleanly and allows subsequent Doppler sp= updates.
+        final dopplerVoice = engine.play(clip, loop: true);
+        engine.fadeRelativePlaySpeed(
+          dopplerVoice,
+          1.5,
+          const Duration(milliseconds: 100),
+        );
+        now = now.add(const Duration(milliseconds: 150));
+        // Post-ramp position: 100ms at avg 1.25x = 125ms, plus 50ms at 1.5x = 75ms -> 200ms.
+        expect(
+          engine.getVoicePosition(dopplerVoice),
+          equals(const Duration(milliseconds: 200)),
+        );
+        frames.clear();
+        engine.set3dSourceParameters(dopplerVoice, 10.0, 0.0, 0.0, vx: -100.0);
+        expect(frames.last, contains('sp='));
+        // Mid-ramp fadeRelativePlaySpeed while Doppler != 1.0 scales target speed cleanly.
+        engine.fadeRelativePlaySpeed(
+          dopplerVoice,
+          1.0,
+          const Duration(milliseconds: 200),
+        );
+        expect(frames.last, contains('fs=1.411:200'));
+        // Mid-ramp pause + resume preserves remaining ramp and scheduledStop.
+        engine.scheduleStop(dopplerVoice, const Duration(milliseconds: 500));
+        now = now.add(const Duration(milliseconds: 100));
+        engine.setPaused(dopplerVoice, true);
+        engine.setPaused(dopplerVoice, false);
+        engine.stop(dopplerVoice);
+
+        // Pre-emission paused: true defers speed, preservePitch, fades, and scheduleStop until unpause.
+        frames.clear();
+        final preVoice = engine.play(clip, paused: true);
+        engine.setPaused(preVoice, true);
+        engine.setRelativePlaySpeed(preVoice, 1.5, preservePitch: true);
+        engine.fadeVolume(preVoice, 0.4, const Duration(milliseconds: 200));
+        engine.fadeRelativePlaySpeed(
+          preVoice,
+          0.75,
+          const Duration(milliseconds: 300),
+        );
+        engine.scheduleStop(preVoice, const Duration(milliseconds: 800));
+        expect(frames, isEmpty);
+        engine.setPaused(preVoice, false);
+        expect(frames.first, contains('a=clip'));
+        expect(frames.last, contains('pp=1,fv=0.4:200,fs=0.75:300,st=800'));
+        engine.stop(preVoice);
+
+        // Non-looping clip ending mid-ramp exercises quadratic _wallTimeForMediaDelta.
+        final shortClip = await engine.loadMem(
+          'short.wav',
+          generateWaveformPcmWav(
+            shape: WaveForm.sin,
+            frequency: 440,
+            duration: const Duration(milliseconds: 100),
+          ),
+        );
+        final quadVoice = engine.play(shortClip);
+        engine.fadeRelativePlaySpeed(
+          quadVoice,
+          2.0,
+          const Duration(milliseconds: 500),
+        );
+        engine.stop(quadVoice);
+
+        engine.stop(voice);
         await engine.dispose();
       },
     );
