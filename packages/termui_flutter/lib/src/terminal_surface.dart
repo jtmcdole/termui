@@ -23,6 +23,8 @@ import 'rendering/painter.dart';
 import 'service/terminal_service.dart';
 import 'terminal_ime_client.dart';
 
+enum _LeftGestureRoute { none, localSelection, ptyMouse }
+
 /// A `Scaffold`-free terminal rendering and input surface.
 ///
 /// Multiple [TerminalSurface] panes can share a single [GlyphAtlasController]
@@ -74,6 +76,21 @@ final class TerminalSurface extends StatefulWidget {
 
   /// Optional live getter for pixel mouse reporting.
   final bool Function()? reportPixelMouseEventsProvider;
+
+  /// Whether the hosted terminal application is actively tracking mouse events.
+  ///
+  /// When `true`, left-button gestures are forwarded to the TUI unless `Shift`
+  /// is held on press to force local text selection.
+  final bool mouseTracking;
+
+  /// Optional live getter overriding [mouseTracking] on each pointer event.
+  final bool Function()? mouseTrackingProvider;
+
+  /// Whether completed local selections are copied to the clipboard on release.
+  final bool copyOnSelect;
+
+  /// Optional live getter overriding [copyOnSelect] on selection release.
+  final bool Function()? copyOnSelectProvider;
 
   /// Optional OSC 22 mouse cursor name when not using [terminal].
   final String? mouseCursorName;
@@ -185,6 +202,10 @@ final class TerminalSurface extends StatefulWidget {
     this.reportKeyReleaseEventsProvider,
     this.reportPixelMouseEvents = false,
     this.reportPixelMouseEventsProvider,
+    this.mouseTracking = false,
+    this.mouseTrackingProvider,
+    this.copyOnSelect = true,
+    this.copyOnSelectProvider,
     this.mouseCursorName,
     this.onViewportSizeChanged,
     this.onInputEvent,
@@ -263,6 +284,10 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   bool _isLinkModifierActive = false;
   ({int col, int row})? _linkPressCell;
   bool _isSelecting = false;
+  term.MouseButton _lastPressedButton = term.MouseButton.left;
+  _LeftGestureRoute _leftGestureRoute = _LeftGestureRoute.none;
+  DateTime? _lastLeftTapAt;
+  ({int col, int row})? _lastLeftTapCell;
   term.MouseEvent? _lastInjectedPointerEvent;
 
   double _scrollRemainderDy = 0.0;
@@ -297,6 +322,12 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       widget.reportPixelMouseEventsProvider?.call() ??
       widget.terminal?.reportPixelMouseEvents ??
       widget.reportPixelMouseEvents;
+
+  bool get _effectiveMouseTracking =>
+      widget.mouseTrackingProvider?.call() ?? widget.mouseTracking;
+
+  bool get _effectiveCopyOnSelect =>
+      widget.copyOnSelectProvider?.call() ?? widget.copyOnSelect;
 
   /// Active [GlyphAtlasController] used by this surface.
   GlyphAtlasController get atlasController => _atlasController;
@@ -636,6 +667,8 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     }
     if (oldWidget.enableBuiltinSelection && !widget.enableBuiltinSelection) {
       _isSelecting = false;
+      _lastLeftTapAt = null;
+      _lastLeftTapCell = null;
       _selectionController.clearSelection();
     }
     if (oldWidget.enableBuiltinLinkOpen && !widget.enableBuiltinLinkOpen) {
@@ -752,6 +785,8 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     if (!mounted) return;
     if (!enabled) {
       _isSelecting = false;
+      _lastLeftTapAt = null;
+      _lastLeftTapCell = null;
       _selectionController.clearSelection();
     }
     setState(() {
@@ -998,6 +1033,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   static (term.MouseButton, term.MouseEventType) _classifyPointerEvent(
     PointerEvent event,
+    term.MouseButton releaseButton,
   ) => switch (event) {
     PointerDownEvent(:final buttons) => (
       _resolveMouseButton(buttons),
@@ -1007,16 +1043,19 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _resolveMouseButton(buttons),
       term.MouseEventType.drag,
     ),
-    PointerUpEvent() => (term.MouseButton.left, term.MouseEventType.release),
+    PointerUpEvent() => (releaseButton, term.MouseEventType.release),
     _ => (term.MouseButton.none, term.MouseEventType.move),
   };
 
-  void _handlePointerEvent(PointerEvent event, Size layoutSize) {
+  ({int col, int row, int pixelX, int pixelY})? _resolvePointerCoords(
+    PointerEvent event,
+    Size layoutSize,
+  ) {
     final atlas = _atlasController.atlas;
-    if (atlas == null) return;
+    if (atlas == null) return null;
     final maxCol = (layoutSize.width / atlas.cellWidth).floor();
     final maxRow = (layoutSize.height / atlas.cellHeight).floor();
-    if (maxCol <= 0 || maxRow <= 0) return;
+    if (maxCol <= 0 || maxRow <= 0) return null;
 
     final (clampedCol, clampedRow) = _clampCellToActiveGrid(
       (event.localPosition.dx / atlas.cellWidth).floor(),
@@ -1024,6 +1063,17 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       maxCol,
       maxRow,
     );
+    return (
+      col: clampedCol,
+      row: clampedRow,
+      pixelX: event.localPosition.dx.floor().clamp(0, 100000) + 1,
+      pixelY: event.localPosition.dy.floor().clamp(0, 100000) + 1,
+    );
+  }
+
+  void _handlePointerEvent(PointerEvent event, Size layoutSize) {
+    final coords = _resolvePointerCoords(event, layoutSize);
+    if (coords == null) return;
 
     if (event is PointerDownEvent &&
         !_focusNode.hasFocus &&
@@ -1031,22 +1081,71 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _focusNode.requestFocus();
     }
 
-    final (termuiButton, termuiType) = _classifyPointerEvent(event);
-    _updateSelectionAndUri(clampedCol, clampedRow, termuiButton, termuiType);
+    if (event is PointerDownEvent) {
+      _lastPressedButton = _resolveMouseButton(event.buttons);
+    }
+    final (termuiButton, termuiType) = _classifyPointerEvent(
+      event,
+      _lastPressedButton,
+    );
+    if (event is PointerUpEvent) {
+      _lastPressedButton = term.MouseButton.left;
+    }
+    _updateSelectionAndUri(coords.col, coords.row, termuiButton, termuiType);
 
-    final pixelX = event.localPosition.dx.floor().clamp(0, 100000) + 1;
-    final pixelY = event.localPosition.dy.floor().clamp(0, 100000) + 1;
+    final isLeftButton = termuiButton == term.MouseButton.left;
+    final suppressPtyMouse =
+        isLeftButton &&
+        _leftGestureRoute == _LeftGestureRoute.localSelection &&
+        (termuiType == term.MouseEventType.press ||
+            termuiType == term.MouseEventType.drag ||
+            termuiType == term.MouseEventType.release);
+    if (isLeftButton && termuiType == term.MouseEventType.release) {
+      _leftGestureRoute = _LeftGestureRoute.none;
+    }
+    if (suppressPtyMouse) return;
+
     final termEvent = term.MouseEvent(
-      x: clampedCol + 1,
-      y: clampedRow + 1,
-      pixelX: pixelX,
-      pixelY: pixelY,
+      x: coords.col + 1,
+      y: coords.row + 1,
+      pixelX: coords.pixelX,
+      pixelY: coords.pixelY,
       button: termuiButton,
       type: termuiType,
       modifiers: collectHardwareModifiers(),
     );
 
     if (_isDuplicatePointerMotion(termEvent)) return;
+    _lastInjectedPointerEvent = termEvent;
+    _injectInputEvent(termEvent);
+  }
+
+  void _handlePointerCancel(PointerCancelEvent event, Size layoutSize) {
+    final wasSelecting = _isSelecting;
+    final route = _leftGestureRoute;
+    _resetScrollAccumulator();
+    _linkPressCell = null;
+    _isSelecting = false;
+    _lastLeftTapAt = null;
+    _lastLeftTapCell = null;
+    _lastPressedButton = term.MouseButton.left;
+    _leftGestureRoute = _LeftGestureRoute.none;
+    if (wasSelecting || route == _LeftGestureRoute.ptyMouse) {
+      _selectionController.clearSelection();
+    }
+    if (route != _LeftGestureRoute.ptyMouse) return;
+
+    final coords = _resolvePointerCoords(event, layoutSize);
+    if (coords == null) return;
+    final termEvent = term.MouseEvent(
+      x: coords.col + 1,
+      y: coords.row + 1,
+      pixelX: coords.pixelX,
+      pixelY: coords.pixelY,
+      button: term.MouseButton.left,
+      type: term.MouseEventType.release,
+      modifiers: collectHardwareModifiers(),
+    );
     _lastInjectedPointerEvent = termEvent;
     _injectInputEvent(termEvent);
   }
@@ -1073,12 +1172,14 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     term.MouseEventType type,
   ) {
     final (nextUri, uriChanged) = _updateHoveredLinkCell(col, row);
-    if (type == term.MouseEventType.press && button == term.MouseButton.left) {
-      _handleLeftPointerPress(col, row);
-    } else if (type == term.MouseEventType.drag) {
-      _handlePointerDrag(col, row);
-    } else if (type == term.MouseEventType.release) {
-      _finishPointerRelease(col, row, nextUri);
+    if (button == term.MouseButton.left) {
+      if (type == term.MouseEventType.press) {
+        _handleLeftPointerPress(col, row, nextUri);
+      } else if (type == term.MouseEventType.drag) {
+        _handlePointerDrag(col, row);
+      } else if (type == term.MouseEventType.release) {
+        _finishPointerRelease(col, row, nextUri);
+      }
     }
     if (uriChanged && mounted) {
       setState(() {});
@@ -1102,7 +1203,38 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     return (nextUri, changed);
   }
 
-  void _handleLeftPointerPress(int col, int row) {
+  void _handleLeftPointerPress(int col, int row, String? hoveredUri) {
+    final isLinkClick =
+        _builtinLinkOpenEnabled &&
+        _isLinkOpenModifierPressed() &&
+        hoveredUri != null &&
+        hoveredUri.isNotEmpty;
+    if (isLinkClick) {
+      _linkPressCell = (col: col, row: row);
+      _leftGestureRoute = _effectiveMouseTracking
+          ? _LeftGestureRoute.localSelection
+          : _LeftGestureRoute.none;
+      return;
+    }
+
+    if (_effectiveMouseTracking) {
+      if (HardwareKeyboard.instance.isShiftPressed &&
+          _builtinSelectionEnabled) {
+        _linkPressCell = _builtinLinkOpenEnabled ? (col: col, row: row) : null;
+        _leftGestureRoute = _LeftGestureRoute.localSelection;
+        _startSelectionAt(col, row);
+        return;
+      }
+      _linkPressCell = null;
+      _leftGestureRoute = _LeftGestureRoute.ptyMouse;
+      _isSelecting = false;
+      _lastLeftTapAt = null;
+      _lastLeftTapCell = null;
+      _selectionController.clearSelection();
+      return;
+    }
+
+    _leftGestureRoute = _LeftGestureRoute.none;
     _linkPressCell = _builtinLinkOpenEnabled ? (col: col, row: row) : null;
     if (_builtinSelectionEnabled) {
       _startSelectionAt(col, row);
@@ -1113,19 +1245,40 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     if (_linkPressCell != null && _linkPressCell != (col: col, row: row)) {
       _linkPressCell = null;
     }
-    if (_builtinSelectionEnabled && _isSelecting) {
-      final mode = HardwareKeyboard.instance.isAltPressed
-          ? SelectionMode.block
-          : SelectionMode.stream;
-      _selectionController.updateSelection(col, row, mode: mode);
+    if (!_builtinSelectionEnabled || !_isSelecting) return;
+
+    if (_selectionController.mode == SelectionMode.word) {
+      final buf = _activeBuffer;
+      if (buf != null) {
+        _selectionController.updateWordSelection(buf, col, row);
+      }
+      return;
     }
+
+    final tapCell = (
+      col: _resolveTapLeadCol(_activeBuffer, col, row),
+      row: row,
+    );
+    if (tapCell == _lastLeftTapCell && !_selectionController.hasSelection) {
+      return;
+    }
+    _lastLeftTapAt = null;
+    final mode = HardwareKeyboard.instance.isAltPressed
+        ? SelectionMode.block
+        : SelectionMode.stream;
+    _selectionController.updateSelection(col, row, mode: mode);
+  }
+
+  static int _resolveTapLeadCol(Buffer? buf, int col, int row) {
+    if (buf == null || col <= 0 || col >= buf.width) return col;
+    if (row < 0 || row >= buf.height) return col;
+    return buf.getCharacter(col, row).isEmpty ? col - 1 : col;
   }
 
   void _startSelectionAt(int col, int row) {
     final buf = _activeBuffer;
-    final mode = HardwareKeyboard.instance.isAltPressed
-        ? SelectionMode.block
-        : SelectionMode.stream;
+    final isAlt = HardwareKeyboard.instance.isAltPressed;
+    final mode = isAlt ? SelectionMode.block : SelectionMode.stream;
     final region = buf != null
         ? TerminalSelectionController.resolveRegionForCell(
             buf,
@@ -1135,10 +1288,31 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
           )
         : null;
     if (_isGraphicCanvasPress(buf, row, region)) {
+      _lastLeftTapAt = null;
+      _lastLeftTapCell = null;
       _selectionController.clearSelection();
       _isSelecting = false;
       return;
     }
+
+    final leadCol = _resolveTapLeadCol(buf, col, row);
+    final tapCell = (col: leadCol, row: row);
+    final now = clock.now();
+    final lastAt = _lastLeftTapAt;
+    if (!isAlt &&
+        buf != null &&
+        lastAt != null &&
+        _lastLeftTapCell == tapCell &&
+        now.difference(lastAt) <= kDoubleTapTimeout) {
+      _lastLeftTapAt = null;
+      _lastLeftTapCell = null;
+      _selectionController.selectWord(buf, leadCol, row, region: region);
+      _isSelecting = true;
+      return;
+    }
+
+    _lastLeftTapAt = now;
+    _lastLeftTapCell = tapCell;
     _selectionController.startSelection(col, row, mode: mode, region: region);
     _isSelecting = true;
   }
@@ -1170,10 +1344,13 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _linkPressCell = null;
 
     if (_builtinSelectionEnabled) {
-      final wasDragging = _isSelecting && _selectionController.hasSelection;
+      final hasCompletedSelection =
+          _isSelecting && _selectionController.hasSelection;
       _isSelecting = false;
-      if (wasDragging) {
-        _copySelectedBufferText();
+      if (hasCompletedSelection) {
+        if (_effectiveCopyOnSelect) {
+          _copySelectedBufferText();
+        }
         return;
       }
       _selectionController.clearSelection();
@@ -1486,7 +1663,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     onPointerMove: (e) => _handlePointerEvent(e, layoutSize),
     onPointerHover: (e) => _handlePointerEvent(e, layoutSize),
     onPointerUp: (e) => _handlePointerEvent(e, layoutSize),
-    onPointerCancel: (_) => _resetScrollAccumulator(),
+    onPointerCancel: (e) => _handlePointerCancel(e, layoutSize),
     onPointerSignal: (signal) {
       if (signal case PointerScrollEvent(:final scrollDelta)) {
         _handleScrollDelta(signal, scrollDelta.dy, layoutSize);

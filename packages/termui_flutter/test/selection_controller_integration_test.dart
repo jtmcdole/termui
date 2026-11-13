@@ -605,5 +605,223 @@ void main() {
         expect(missingStyled, isEmpty);
       },
     );
+
+    testWidgets(
+      'double-click selects hit word, preserves selection on release, and double-click-drag extends by whole words',
+      (tester) async {
+        final buffer = termui.Buffer(40, 6);
+        buffer.writeString(
+          0,
+          0,
+          'hello world_42 foo.bar',
+          const termui.Style(),
+        );
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(atlasCtrl.dispose);
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+
+        await tester.pumpWidget(
+          _testApp(
+            home: TerminalSurface(
+              atlasController: atlasCtrl,
+              service: service,
+              selectionController: selectionController,
+              buffer: buffer,
+              fontSize: 14.0,
+              alignment: Alignment.topLeft,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final atlas = atlasCtrl.atlas!;
+        final paintFinder = find.descendant(
+          of: find.byType(TerminalSurface),
+          matching: find.byType(CustomPaint),
+        );
+        final topLeft = tester.getTopLeft(paintFinder);
+
+        Future<TestGesture> tapAt(Offset p, {bool release = true}) async {
+          final g = await tester.startGesture(p, kind: PointerDeviceKind.mouse);
+          await tester.pump(const Duration(milliseconds: 20));
+          if (release) {
+            await g.up();
+            await tester.pump(const Duration(milliseconds: 40));
+          }
+          return g;
+        }
+
+        // Double-click on 'world_42' (col 8, row 0).
+        final wordHit =
+            topLeft + Offset(atlas.cellWidth * 8.5, atlas.cellHeight * 0.5);
+        await tapAt(wordHit);
+        await tapAt(wordHit);
+
+        expect(selectionController.hasSelection, isTrue);
+        expect(selectionController.mode, equals(SelectionMode.word));
+        expect(selectionController.extractText(buffer), equals('world_42'));
+        expect(service.clipboardText, equals('world_42'));
+
+        // Double-click 'hello' (col 2) and drag to 'world_42' (col 9) -> snaps both words.
+        await tester.pump(const Duration(milliseconds: 600));
+        final helloHit =
+            topLeft + Offset(atlas.cellWidth * 2.5, atlas.cellHeight * 0.5);
+        await tapAt(helloHit);
+        final d2 = await tapAt(helloHit, release: false);
+        await d2.moveTo(wordHit);
+        await tester.pump(const Duration(milliseconds: 20));
+        await d2.up();
+        await tester.pump();
+
+        expect(
+          selectionController.extractText(buffer),
+          equals('hello world_42'),
+        );
+      },
+    );
+
+    testWidgets(
+      'mouseTracking Shift latch, PointerCancelEvent, copyOnSelect: false, and CJK double-click',
+      (tester) async {
+        final buffer = termui.Buffer(40, 6)
+          ..writeString(0, 0, '日本語 hello', const termui.Style());
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(atlasCtrl.dispose);
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+        final injected = <termui.MouseEvent>[];
+        var mouseTracking = true;
+        var copyOnSelect = true;
+        Future<Offset> pump(bool builtinSel) async {
+          await tester.pumpWidget(
+            _testApp(
+              home: TerminalSurface(
+                atlasController: atlasCtrl,
+                service: service,
+                selectionController: selectionController,
+                buffer: buffer,
+                mouseTrackingProvider: () => mouseTracking,
+                copyOnSelectProvider: () => copyOnSelect,
+                enableBuiltinSelection: builtinSel,
+                alignment: Alignment.topLeft,
+                onInputEvent: (e) {
+                  if (e is termui.MouseEvent) injected.add(e);
+                },
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          return tester.getTopLeft(
+            find.descendant(
+              of: find.byType(TerminalSurface),
+              matching: find.byType(CustomPaint),
+            ),
+          );
+        }
+
+        final atlas = atlasCtrl.atlas!;
+        final topLeft = await pump(true);
+        Offset cell(double c) =>
+            topLeft + Offset(atlas.cellWidth * c, atlas.cellHeight * 0.5);
+        Future<TestGesture> down(double c) =>
+            tester.startGesture(cell(c), kind: PointerDeviceKind.mouse);
+        Future<void> click(double c, {bool jitter = true}) async {
+          final g = await down(c);
+          await tester.pump(const Duration(milliseconds: 20));
+          if (jitter) await g.moveBy(const Offset(0.2, 0.1));
+          await g.up();
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+
+        const pressRelease = [
+          termui.MouseEventType.press,
+          termui.MouseEventType.release,
+        ];
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        final drag = await down(7.5);
+        await tester.pump();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await drag.moveTo(cell(11.5));
+        await drag.up();
+        await tester.pump();
+        expect(injected, isEmpty);
+        expect(selectionController.extractText(buffer), equals('hello'));
+        expect(service.clipboardText, equals('hello'));
+
+        for (final cancel in [false, true]) {
+          final rg = await tester.startGesture(
+            cell(7.5),
+            kind: PointerDeviceKind.mouse,
+            buttons: kSecondaryMouseButton,
+          );
+          await (cancel ? rg.cancel() : rg.up());
+        }
+        await tester.pump();
+        expect(selectionController.hasSelection, isTrue);
+        injected.clear();
+
+        final ptyGesture = await down(7.5);
+        await tester.pump();
+        await ptyGesture.cancel();
+        await tester.pump();
+        expect(injected.map((e) => e.type), equals(pressRelease));
+
+        injected.clear();
+        await pump(false);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        await click(7.5, jitter: false);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        expect(injected.map((e) => e.type), equals(pressRelease));
+
+        buffer.setUri(7, 0, 'https://example.com');
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await click(7.5);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        expect(service.openedUrl, equals('https://example.com'));
+
+        service.clipboardText = null;
+        mouseTracking = false;
+        copyOnSelect = false;
+        await pump(true);
+        await click(2.5);
+        await click(3.5);
+        expect(selectionController.hasSelection, isTrue);
+        expect(selectionController.mode, equals(SelectionMode.word));
+        expect(selectionController.extractText(buffer), equals('日本語'));
+        expect(service.clipboardText, isNull);
+      },
+    );
+
+    test(
+      'FlutterTerminalBackend DECSET mouse modes 9/1000/1002/1003 and RIS resets',
+      () {
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        final b = terminal.backend;
+        expect(terminal.mouseTracking, isFalse);
+        for (final m in const ['9', '1000', '1002', '1003']) {
+          b.write('\x1b[?${m}h');
+          expect(terminal.mouseTracking, isTrue);
+          b.write('\x1b[?${m}l');
+          expect(terminal.mouseTracking, isFalse);
+        }
+        b.write('\x1b[?1000;1002h');
+        expect(terminal.mouseTracking, isTrue);
+        b.write('\x1b[?1000l');
+        expect(terminal.mouseTracking, isTrue);
+        for (final reset in const ['\x1bc', '\x1b[!p']) {
+          b.write('\x1b[?1003h');
+          expect(terminal.mouseTracking, isTrue);
+          b.write(reset);
+          expect(terminal.mouseTracking, isFalse);
+        }
+      },
+    );
   });
 }

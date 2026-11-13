@@ -35,6 +35,14 @@ final class FlutterTerminalBackend implements TerminalBackend {
   int _kittyKeyboardFlags = 0;
   final List<int> _kittyKeyboardStack = [];
   bool _sgrPixelsMouseMode = false;
+  int _mouseTrackingMask = 0;
+
+  static const Map<String, int> _mouseTrackingBitByMode = {
+    '9': 1,
+    '1000': 2,
+    '1002': 4,
+    '1003': 8,
+  };
 
   static const _esc = '\x1b';
   static const _bel = '\x07';
@@ -61,6 +69,10 @@ final class FlutterTerminalBackend implements TerminalBackend {
   /// Whether DEC private mode `1016` (SGR-Pixels mouse reporting) is active.
   bool get sgrPixelsMouseMode => _sgrPixelsMouseMode;
 
+  /// Whether any DECSET mouse tracking mode (`?9`, `?1000`, `?1002`, `?1003`)
+  /// is active.
+  bool get mouseTrackingMode => _mouseTrackingMask != 0;
+
   @override
   bool get isWindows => false;
 
@@ -77,6 +89,7 @@ final class FlutterTerminalBackend implements TerminalBackend {
   void _parseDecPrivateModes(String data) {
     if (data.contains('${_esc}c') || data.contains('$_esc[!p')) {
       _sgrPixelsMouseMode = false;
+      _mouseTrackingMask = 0;
     }
     if (!data.contains('$_esc[?')) return;
     for (final match in _decPrivateModeRegex.allMatches(data)) {
@@ -88,6 +101,13 @@ final class FlutterTerminalBackend implements TerminalBackend {
     for (final part in params.split(';')) {
       if (part == '1016') {
         _sgrPixelsMouseMode = enable;
+        continue;
+      }
+      final bit = _mouseTrackingBitByMode[part];
+      if (bit != null) {
+        _mouseTrackingMask = enable
+            ? (_mouseTrackingMask | bit)
+            : (_mouseTrackingMask & ~bit);
       }
     }
   }
@@ -364,6 +384,10 @@ final class FlutterTerminal extends core.Terminal {
   /// requested via [setReportPixelMouseEvents].
   bool get reportPixelMouseEvents =>
       _flutterBackend.sgrPixelsMouseMode || _explicitReportPixelMouse;
+
+  /// Whether any DECSET mouse tracking mode (`?9`, `?1000`, `?1002`, `?1003`)
+  /// is active.
+  bool get mouseTracking => _flutterBackend.mouseTrackingMode;
 
   /// Explicitly enables or disables reporting sub-cell pixel pointer motion regardless of `?1016`.
   void setReportPixelMouseEvents(bool enabled) {
