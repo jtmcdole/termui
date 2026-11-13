@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:clock/clock.dart';
+
 import 'apc_fs_stub.dart' if (dart.library.io) 'apc_fs_io.dart';
 import 'api/audio_engine.dart';
 import 'api/audio_types.dart';
@@ -206,6 +208,8 @@ final class _ActivePtyVoice {
   double pan = 0.0;
   bool emitted;
   Duration? scheduledDuration;
+  DateTime? startedAt;
+  Duration bufferDuration = Duration.zero;
   Timer? stopTimer;
 
   _ActivePtyVoice({
@@ -235,8 +239,10 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   final Map<int, _PtyAudioBuffer> _buffers = {};
   final Map<int, _PtyAudioBus> _buses = {};
   final Map<int, _ActivePtyVoice> _voices = {};
+  final Set<int> _autoEvictedClipIds = {};
 
   final Future<Uint8List> Function(String path)? _readFileBytes;
+  final Clock? _clockOverride;
 
   /// Number of currently tracked active or paused voices.
   int get activeVoiceCount => _voices.length;
@@ -246,7 +252,11 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     this.writeEscape, {
     this.defaultToneDuration = const Duration(milliseconds: 250),
     Future<Uint8List> Function(String path)? readFileBytes,
-  }) : _readFileBytes = readFileBytes ?? createDefaultApcFileReader();
+    Clock? clock,
+  }) : _readFileBytes = readFileBytes ?? createDefaultApcFileReader(),
+       _clockOverride = clock;
+
+  Clock get _clock => _clockOverride ?? clock;
 
   @override
   Future<void> init({bool enableVisualization = true}) async {}
@@ -263,6 +273,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       }
     }
     _voices.clear();
+    _autoEvictedClipIds.clear();
     _buffers.clear();
     _buses.clear();
   }
@@ -358,6 +369,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   static Duration _estimateClipDuration(String format, Uint8List bytes) =>
       switch (format) {
         'wav' => _estimateWavDuration(bytes),
+        'ogg' => _estimateOggDuration(bytes),
         _ => Duration.zero,
       };
 
@@ -400,6 +412,104 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       offset = next;
     }
     return Duration.zero;
+  }
+
+  static ({int serial, int sampleRate, int preSkip})? _parseOggHeader(
+    Uint8List bytes,
+    ByteData bd,
+  ) {
+    if (bytes.length < 27 ||
+        !_matchesAscii(bytes, 0, 'OggS') ||
+        bytes[4] != 0) {
+      return null;
+    }
+    final segs = bytes[26];
+    final pktOffset = 27 + segs;
+    if (pktOffset > bytes.length) return null;
+    var pktLen = 0;
+    for (var i = 0; i < segs; i++) {
+      final seg = bytes[27 + i];
+      pktLen += seg;
+      if (seg < 255) break;
+    }
+    pktLen = math.min(pktLen, bytes.length - pktOffset);
+    final serial = bd.getUint32(14, Endian.little);
+    if (pktLen >= 16 &&
+        bytes[pktOffset] == 0x01 &&
+        _matchesAscii(bytes, pktOffset + 1, 'vorbis')) {
+      return (
+        serial: serial,
+        sampleRate: bd.getUint32(pktOffset + 12, Endian.little),
+        preSkip: 0,
+      );
+    }
+    if (pktLen >= 19 && _matchesAscii(bytes, pktOffset, 'OpusHead')) {
+      return (
+        serial: serial,
+        sampleRate: 48000,
+        preSkip: bd.getUint16(pktOffset + 10, Endian.little),
+      );
+    }
+    return null;
+  }
+
+  static int? _readValidOggPageEnd(Uint8List bytes, int pos) {
+    if (!_matchesAscii(bytes, pos, 'OggS') ||
+        bytes[pos + 4] != 0 ||
+        (bytes[pos + 5] & 0xF8) != 0) {
+      return null;
+    }
+    final segs = bytes[pos + 26];
+    final headerEnd = pos + 27 + segs;
+    if (headerEnd > bytes.length) return null;
+    var bodyLen = 0;
+    for (var i = 0; i < segs; i++) {
+      bodyLen += bytes[pos + 27 + i];
+    }
+    final pageEnd = headerEnd + bodyLen;
+    if (pageEnd == bytes.length) return pageEnd;
+    if (pageEnd + 4 <= bytes.length && _matchesAscii(bytes, pageEnd, 'OggS')) {
+      return pageEnd;
+    }
+    return null;
+  }
+
+  static Duration _granuleToDuration(
+    double granule,
+    int preSkip,
+    int sampleRate,
+  ) {
+    final samples = granule - preSkip;
+    if (samples <= 0 || sampleRate <= 0) return Duration.zero;
+    return Duration(microseconds: (samples * 1000000.0 / sampleRate).round());
+  }
+
+  static Duration _estimateOggDuration(Uint8List bytes) {
+    final bd = ByteData.sublistView(bytes);
+    final header = _parseOggHeader(bytes, bd);
+    if (header == null) return Duration.zero;
+    final minPos = math.max(0, bytes.length - 65307);
+    double? fallbackGranule;
+    for (var pos = bytes.length - 27; pos >= minPos; pos--) {
+      if (_readValidOggPageEnd(bytes, pos) == null) continue;
+      if (bd.getUint32(pos + 14, Endian.little) != header.serial) {
+        return Duration.zero;
+      }
+      final high = bd.getInt32(pos + 10, Endian.little);
+      if (high < 0) continue;
+      final granule =
+          high * 4294967296.0 + bd.getUint32(pos + 6, Endian.little);
+      if ((bytes[pos + 5] & 0x04) != 0) {
+        return _granuleToDuration(granule, header.preSkip, header.sampleRate);
+      }
+      fallbackGranule ??= granule;
+    }
+    if (fallbackGranule == null) return Duration.zero;
+    return _granuleToDuration(
+      fallbackGranule,
+      header.preSkip,
+      header.sampleRate,
+    );
   }
 
   static String _detectClipFormat(String pathId, Uint8List bytes) {
@@ -500,6 +610,14 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     if (state == null) return;
     state.stopTimer = null;
     state.buffer = null;
+    if (state.emitted &&
+        state.clipId != null &&
+        state.bufferDuration <= Duration.zero) {
+      if (_autoEvictedClipIds.length >= 256) {
+        _autoEvictedClipIds.remove(_autoEvictedClipIds.first);
+      }
+      _autoEvictedClipIds.add(state.clipId!);
+    }
     if (!state.completer.isCompleted) {
       state.completer.complete();
     }
@@ -539,7 +657,9 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
             writeEscape(frame);
           }
       }
-      if (!voice.loop && voice.stopTimer == null) {
+      voice.startedAt = _clock.now();
+      voice.bufferDuration = effectiveDuration;
+      if (!_disposed && !voice.loop && voice.stopTimer == null) {
         voice.stopTimer = Timer(
           effectiveDuration,
           () => _evictAndCompleteVoice(voice.id),
@@ -553,7 +673,13 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   @override
   void stop(AudioVoice voice) {
     final state = _voices.remove(voice.id);
-    if (state == null) return;
+    if (state == null) {
+      if (!_disposed && _autoEvictedClipIds.remove(voice.id)) {
+        writeEscape(ApcAudioEncoder.encodeStop(clipId: voice.id));
+      }
+      return;
+    }
+    _autoEvictedClipIds.remove(voice.id);
     state.stopTimer?.cancel();
     state.stopTimer = null;
     state.buffer = null;
@@ -579,8 +705,11 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     state.pan = pan.clamp(-1.0, 1.0).toDouble();
   }
 
+  /// Resumes a paused [voice] by emitting its APC frame. Pausing an already
+  /// emitted voice is a no-op because the APC wire format has no pause frame.
   @override
   void setPaused(AudioVoice voice, bool paused) {
+    if (_disposed) return;
     final state = _voices[voice.id];
     if (state == null || paused || state.emitted) return;
     state.emitted = true;
@@ -638,8 +767,26 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Duration getVoicePosition(AudioVoice voice) => Duration.zero;
+  Duration getVoicePosition(AudioVoice voice) {
+    final state = _voices[voice.id];
+    final startedAt = state?.startedAt;
+    if (state == null || !state.emitted || startedAt == null) {
+      return Duration.zero;
+    }
+    final elapsed = _clock.now().difference(startedAt);
+    if (elapsed.isNegative) return Duration.zero;
+    final dur = state.bufferDuration;
+    if (dur <= Duration.zero) return elapsed;
+    if (state.loop) {
+      return Duration(
+        microseconds: elapsed.inMicroseconds % dur.inMicroseconds,
+      );
+    }
+    return elapsed > dur ? dur : elapsed;
+  }
 
+  /// No-op: the APC audio wire format has no seek command, so the local
+  /// playhead remains truthful to remote playback.
   @override
   void seek(AudioVoice voice, Duration position) {}
 
@@ -654,7 +801,12 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   Stream<Duration> getVoicePositionStream(
     AudioVoice voice, {
     Duration interval = const Duration(milliseconds: 50),
-  }) => const Stream.empty();
+  }) => createVoicePositionStream(
+    voice: voice,
+    isVoiceActive: _voices.containsKey,
+    getPosition: getVoicePosition,
+    interval: interval,
+  );
 
   @override
   void fadeRelativePlaySpeed(
@@ -668,9 +820,13 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
 
   @override
   void scheduleStop(AudioVoice voice, Duration duration) {
+    if (_disposed) return;
     final state = _voices[voice.id];
     if (state == null) return;
     state.scheduledDuration = duration;
+    if (state.emitted) {
+      state.bufferDuration = duration;
+    }
     state.stopTimer?.cancel();
     state.stopTimer = Timer(duration, () => stop(voice));
   }
