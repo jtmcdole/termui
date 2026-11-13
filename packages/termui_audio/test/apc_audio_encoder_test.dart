@@ -1261,9 +1261,16 @@ void main() {
         expect(
           () => ApcAudioEncoder.encodeStreamOpen(
             streamId: 1,
-            maxBufferSize: ApcAudioEncoder.maxStreamBytes + 1,
+            maxBufferSize: ApcAudioEncoder.maxStreamBufferBytes + 1,
           ),
           throwsRangeError,
+        );
+        expect(
+          ApcAudioEncoder.encodeStreamOpen(
+            streamId: 1,
+            maxBufferSize: ApcAudioEncoder.maxStreamBufferBytes,
+          ),
+          contains('max=${ApcAudioEncoder.maxStreamBufferBytes}'),
         );
         expect(
           () => ApcAudioEncoder.encodeStreamOpen(
@@ -1643,6 +1650,198 @@ void main() {
 
         // Disposed engine fetchWaveform returns cached snapshot immediately.
         expect((await engine.fetchWaveform()).length, equals(256));
+      },
+    );
+
+    test(
+      'regression fixes: >2 MiB loadUrl PCM capacity & duration, seek snapshot, pre-emission fadeVolume, sticky preservePitch, and fetchWaveform reply gate',
+      () async {
+        // Fix 1: >2 MiB loadUrl estimates duration and sizes maxBufferSize for decoded PCM_F32LE.
+        final frames = <String>[];
+        var fakeNow = DateTime.utc(2026, 5, 1, 12);
+        final engine = PtyApcAudioEngine(
+          frames.add,
+          clock: Clock(() => fakeNow),
+          urlByteReader: (url, {onProgress}) async {
+            if (url.endsWith('/big.wav')) {
+              final dataBytes =
+                  2304000; // 12s at 48kHz stereo 16-bit (192000 B/s)
+              final wav = Uint8List(44 + dataBytes);
+              final bd = ByteData.sublistView(wav);
+              wav.setRange(0, 4, 'RIFF'.codeUnits);
+              bd.setUint32(4, 36 + dataBytes, Endian.little);
+              wav.setRange(8, 16, 'WAVEfmt '.codeUnits);
+              bd.setUint32(16, 16, Endian.little);
+              bd.setUint16(20, 1, Endian.little);
+              bd.setUint16(22, 2, Endian.little);
+              bd.setUint32(24, 48000, Endian.little);
+              bd.setUint32(28, 192000, Endian.little);
+              bd.setUint16(32, 4, Endian.little);
+              bd.setUint16(34, 16, Endian.little);
+              wav.setRange(36, 40, 'data'.codeUnits);
+              bd.setUint32(40, dataBytes, Endian.little);
+              return wav;
+            }
+            if (url.endsWith('/short_big.wav')) {
+              final dataBytes = ApcAudioEncoder.maxClipBytes + 1024;
+              final wav = Uint8List(44 + dataBytes);
+              final bd = ByteData.sublistView(wav);
+              wav.setRange(0, 4, 'RIFF'.codeUnits);
+              bd.setUint32(4, 36 + dataBytes, Endian.little);
+              wav.setRange(8, 16, 'WAVEfmt '.codeUnits);
+              bd.setUint32(16, 16, Endian.little);
+              bd.setUint16(20, 1, Endian.little);
+              bd.setUint16(22, 2, Endian.little);
+              bd.setUint32(24, 48000, Endian.little);
+              // Synthetic high byteRate so duration is ~50ms for completion check.
+              bd.setUint32(28, dataBytes * 20, Endian.little);
+              bd.setUint16(32, 4, Endian.little);
+              bd.setUint16(34, 16, Endian.little);
+              wav.setRange(36, 40, 'data'.codeUnits);
+              bd.setUint32(40, dataBytes, Endian.little);
+              return wav;
+            }
+            return Uint8List(ApcAudioEncoder.maxClipBytes + 512);
+          },
+        );
+
+        final bigWavBuf = await engine.loadUrl('https://example.com/big.wav');
+        expect(
+          engine.getBufferDuration(bigWavBuf),
+          equals(const Duration(seconds: 12)),
+        );
+        expect(frames.first, contains('max=${(12 * 48000 * 2 * 4) + 65536},'));
+
+        frames.clear();
+        final shortBigBuf = await engine.loadUrl(
+          'https://example.com/short_big.wav',
+        );
+        expect(
+          engine.getBufferDuration(shortBigBuf).inMilliseconds,
+          closeTo(50, 2),
+        );
+        final streamVoice = engine.play(shortBigBuf);
+        await streamVoice.completed.timeout(const Duration(seconds: 2));
+
+        // Unknown >2 MiB format falls back safely to Duration.zero and bytes.length * 8 PCM capacity.
+        frames.clear();
+        final unknownBigBuf = await engine.loadUrl(
+          'https://example.com/unknown.bin',
+        );
+        expect(engine.getBufferDuration(unknownBigBuf), equals(Duration.zero));
+        expect(
+          frames.first,
+          contains('max=${(ApcAudioEncoder.maxClipBytes + 512) * 8},'),
+        );
+
+        // Fix 8: fetchWaveform returns immediately without emitting a=wave when no replies attached.
+        frames.clear();
+        final noReplyWave = await engine.fetchWaveform();
+        expect(noReplyWave.length, equals(256));
+        expect(frames, isEmpty);
+        // Direct handleApcReply activates reply support.
+        engine.handleApcReply('Aa=waver,q=999;');
+        final activeWaveFuture = engine.fetchWaveform();
+        expect(frames, equals(['\x1b_Aa=wave,q=1;\x1b\\']));
+        engine.handleApcReply('Aa=waver,q=1;');
+        await activeWaveFuture;
+
+        // Fix 2: seek snapshots playhead (scheduledStopRemaining & speedRamp).
+        final clipWav = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(seconds: 10),
+        );
+        final clipBuf = await engine.loadMem('seek_clip.wav', clipWav);
+        frames.clear();
+        final seekVoice = engine.play(clipBuf);
+        engine.scheduleStop(seekVoice, const Duration(milliseconds: 200));
+        engine.fadeRelativePlaySpeed(
+          seekVoice,
+          2.0,
+          const Duration(seconds: 1),
+        );
+        fakeNow = fakeNow.add(const Duration(milliseconds: 120));
+        engine.seek(seekVoice, const Duration(seconds: 2));
+        // Scheduled stop should now fire after remaining ~80ms, well before 200ms.
+        await seekVoice.completed.timeout(const Duration(milliseconds: 150));
+
+        // Verify speedRamp snapshot preserved mid-ramp slope across seek.
+        final rampVoice = engine.play(clipBuf);
+        engine.fadeRelativePlaySpeed(
+          rampVoice,
+          2.0,
+          const Duration(seconds: 1),
+        );
+        fakeNow = fakeNow.add(const Duration(milliseconds: 500));
+        // Speed at 500ms is 1.5; seek to 3s keeps remaining 500ms ramp from 1.5 -> 2.0.
+        engine.seek(rampVoice, const Duration(seconds: 3));
+        fakeNow = fakeNow.add(const Duration(milliseconds: 500));
+        // Integral of 1.5 -> 2.0 over 0.5s is 0.875s -> position 3.875s (not 3.75s).
+        expect(
+          engine.getVoicePosition(rampVoice).inMilliseconds,
+          closeTo(3875, 2),
+        );
+        engine.stop(rampVoice);
+
+        // Fix 3: pre-emission fadeVolume keeps initial gain on a=clip and clears on setVoiceVolume.
+        frames.clear();
+        final fadeInVoice = engine.play(clipBuf, paused: true);
+        engine.setVoiceVolume(fadeInVoice, 0.2);
+        engine.fadeVolume(fadeInVoice, 0.9, const Duration(milliseconds: 300));
+        engine.setPaused(fadeInVoice, false);
+        expect(frames.first, contains('a=clip,i=${fadeInVoice.id},'));
+        expect(frames.first, contains(',v=0.2,'));
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${fadeInVoice.id},fv=0.9:300;\x1b\\'),
+        );
+        engine.stop(fadeInVoice);
+
+        frames.clear();
+        final overriddenFadeVoice = engine.play(clipBuf, paused: true);
+        engine.fadeVolume(
+          overriddenFadeVoice,
+          0.9,
+          const Duration(milliseconds: 300),
+        );
+        engine.setVoiceVolume(overriddenFadeVoice, 0.4);
+        engine.setPaused(overriddenFadeVoice, false);
+        expect(frames.first, contains(',v=0.4,'));
+        expect(frames.any((f) => f.contains('a=update')), isFalse);
+        engine.stop(overriddenFadeVoice);
+
+        // Pre-emission zero-duration fadeVolume applies immediately to initial a=clip gain.
+        frames.clear();
+        final instantFadeVoice = engine.play(clipBuf, paused: true);
+        engine.fadeVolume(instantFadeVoice, 0.3, Duration.zero);
+        engine.setPaused(instantFadeVoice, false);
+        expect(frames.first, contains(',v=0.3,'));
+        expect(frames.any((f) => f.contains('a=update')), isFalse);
+        engine.stop(instantFadeVoice);
+
+        // Fix 4 (sender): Doppler speed updates preserve pp=1/0 when preservePitch is active or cleared.
+        frames.clear();
+        final ppVoice = engine.play(clipBuf);
+        engine.setRelativePlaySpeed(ppVoice, 1.5, preservePitch: true);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${ppVoice.id},sp=1.5,pp=1;\x1b\\'),
+        );
+        engine.set3dSourceParameters(ppVoice, 10.0, 0.0, 0.0, vx: -50.0);
+        expect(frames.last, contains('sp='));
+        expect(frames.last, contains(',pp=1;'));
+        engine.setRelativePlaySpeed(ppVoice, 1.2, preservePitch: false);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${ppVoice.id},sp=1.4046,pp=0;\x1b\\'),
+        );
+        engine.set3dSourceParameters(ppVoice, 10.0, 0.0, 0.0, vx: -10.0);
+        expect(frames.last, contains('sp='));
+        expect(frames.last, isNot(contains('pp=')));
+        engine.stop(ppVoice);
+
+        await engine.dispose();
       },
     );
   });

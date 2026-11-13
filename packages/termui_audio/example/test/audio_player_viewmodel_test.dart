@@ -1,6 +1,10 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math' show Point;
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui_audio/termui_audio.dart';
 import 'package:termui_audio_example/src/audio_player_app.dart';
 
@@ -174,6 +178,47 @@ class MockAudioEngine implements TermuiAudioEngine {
   }) => const Stream.empty();
 }
 
+final class _MemoryTerminalBackend implements term.TerminalBackend {
+  final StreamController<List<int>> _input = StreamController<List<int>>();
+  final List<String> writes = [];
+
+  @override
+  bool get isWindows => false;
+
+  @override
+  Stream<List<int>> get rawInput => _input.stream;
+
+  @override
+  void write(String data) {
+    writes.add(data);
+  }
+
+  @override
+  Point<int> get size => const Point(80, 24);
+
+  @override
+  Stream<Point<int>> watchSize() => const Stream.empty();
+
+  @override
+  void enableRawMode() {}
+
+  @override
+  void disableRawMode() {}
+
+  @override
+  void dispose() {
+    unawaited(_input.close());
+  }
+
+  void emitApcReply(String frame) {
+    _input.add(utf8.encode(frame));
+  }
+
+  void sendCtrlC() {
+    _input.add([0x03]);
+  }
+}
+
 void main() {
   test('AudioPlayerViewModel should support activeRadarIndex and movement', () {
     final vm = AudioPlayerViewModel(
@@ -199,4 +244,37 @@ void main() {
     vm.changeSfxVolume(-2.0);
     expect(vm.sfxVolume, equals(0.0)); // bounded to 0.0 min
   });
+
+  test(
+    'runAudioPlayerApp attaches terminal.audioApcReplies to PtyApcAudioEngine',
+    () async {
+      final backend = _MemoryTerminalBackend();
+      final terminal = term.Terminal(backend);
+      final engine = PtyApcAudioEngine(backend.write);
+
+      final appFuture = runAudioPlayerApp(
+        terminal,
+        engine,
+        (path, {onProgress}) async => MockAudioBuffer(),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      final samples = Float32List(256)..[7] = 0.42;
+      final fetchFuture = engine.fetchWaveform();
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        backend.writes.any((w) => w.contains('\x1b_Aa=wave,q=1;\x1b\\')),
+        isTrue,
+      );
+      backend.emitApcReply(ApcAudioEncoder.encodeWaveformReply(1, samples));
+
+      final received = await fetchFuture.timeout(const Duration(seconds: 2));
+      expect(received[7], closeTo(0.42, 1e-6));
+
+      backend.sendCtrlC();
+      await appFuture.timeout(const Duration(seconds: 2));
+      await engine.dispose();
+      terminal.dispose();
+    },
+  );
 }

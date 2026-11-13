@@ -21,8 +21,11 @@ abstract final class ApcAudioEncoder {
   /// Maximum decoded byte length permitted for an APC audio clip (`2 MiB`).
   static const int maxClipBytes = 2 * 1024 * 1024;
 
-  /// Maximum resident/total byte length permitted for an APC audio stream (`16 MiB`).
+  /// Maximum compressed wire/transfer byte length permitted for an APC audio stream (`16 MiB`).
   static const int maxStreamBytes = 16 * 1024 * 1024;
+
+  /// Maximum decoded PCM buffer size permitted for an APC audio stream (`128 MiB`).
+  static const int maxStreamBufferBytes = 128 * 1024 * 1024;
 
   /// Base64 payload characters per emitted chunk (`4096` chars per APC frame).
   static const int chunkBase64Chars = 4096;
@@ -225,8 +228,13 @@ abstract final class ApcAudioEncoder {
     int channels = 2,
   }) {
     _validateWireId(streamId, 'streamId');
-    if (maxBufferSize <= 0 || maxBufferSize > maxStreamBytes) {
-      throw RangeError.range(maxBufferSize, 1, maxStreamBytes, 'maxBufferSize');
+    if (maxBufferSize <= 0 || maxBufferSize > maxStreamBufferBytes) {
+      throw RangeError.range(
+        maxBufferSize,
+        1,
+        maxStreamBufferBytes,
+        'maxBufferSize',
+      );
     }
     if (bufferingTimeNeeds.isNegative) {
       throw ArgumentError.value(
@@ -594,6 +602,7 @@ final class _PtyStreamBuffer extends _PtyAudioBuffer {
   final Duration bufferingTimeNeeds;
   final int sampleRate;
   final int channels;
+  Duration duration = Duration.zero;
   int nextSeq = 0;
   bool ended = false;
 
@@ -829,10 +838,28 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     if (bytes.length <= ApcAudioEncoder.maxClipBytes) {
       return loadMem(url, bytes);
     }
-    final streamBuf = await createBufferStream(maxBufferSize: bytes.length);
+    final duration = _estimateStreamUrlDuration(url, bytes);
+    final pcmBytes = duration > Duration.zero
+        ? ((duration.inMicroseconds * 48000 * 2 * 4) ~/ 1000000) + 65536
+        : bytes.length * 8;
+    final maxBuf = pcmBytes.clamp(
+      bytes.length * 2,
+      ApcAudioEncoder.maxStreamBufferBytes,
+    );
+    final streamBuf = await createBufferStream(maxBufferSize: maxBuf);
+    (streamBuf as _PtyStreamBuffer).duration = duration;
     addStreamData(streamBuf, bytes);
     setStreamEnded(streamBuf);
     return streamBuf;
+  }
+
+  static Duration _estimateStreamUrlDuration(String url, Uint8List bytes) {
+    try {
+      final format = _detectClipFormat(url, bytes);
+      return _estimateClipDuration(format, bytes);
+    } on ArgumentError {
+      return Duration.zero;
+    }
   }
 
   @override
@@ -1272,8 +1299,13 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     }
     state.emittedVolStr = volStr;
     state.emittedPanStr = panStr;
+    final sendPreservePitch =
+        speedChanged && (state.preservePitch || state.emittedPreservePitch);
     if (speedChanged) {
       state.emittedSpeedStr = speedStr;
+    }
+    if (sendPreservePitch) {
+      state.emittedPreservePitch = state.preservePitch;
     }
     writeEscape(
       ApcAudioEncoder.encodeUpdate(
@@ -1281,6 +1313,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
         volume: volChanged ? effVol : null,
         pan: panChanged ? clampedPan : null,
         speed: speedChanged ? effSpeed : null,
+        preservePitch: sendPreservePitch ? state.preservePitch : null,
       ),
     );
   }
@@ -1352,8 +1385,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
           for (final frame in frames) {
             writeEscape(frame);
           }
-        case _PtyStreamBuffer(:final streamId):
-          bufferDur = Duration.zero;
+        case _PtyStreamBuffer(:final streamId, :final duration):
+          bufferDur = duration;
           voice.emittedVolStr = ApcAudioEncoder._formatFloat(effVol);
           voice.emittedPanStr = ApcAudioEncoder._formatFloat(clampedPan);
           voice.emittedSpeedStr = '1';
@@ -1406,6 +1439,12 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     if (sendPp) {
       voice.emittedPreservePitch = true;
     }
+    double? effFadeVolTarget;
+    if (fadeVolTarget != null && fadeVolDur != null) {
+      voice.volume = fadeVolTarget;
+      effFadeVolTarget = _effectiveVolume(voice);
+      voice.emittedVolStr = ApcAudioEncoder._formatFloat(effFadeVolTarget);
+    }
     voice.pendingFadeVolumeTarget = null;
     voice.pendingFadeVolumeDuration = null;
     voice.pendingFadeSpeedTarget = null;
@@ -1415,7 +1454,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
         clipId: clipId,
         speed: sendSpeed ? effSpeed : null,
         preservePitch: sendPp ? true : null,
-        fadeVolumeTarget: fadeVolTarget,
+        fadeVolumeTarget: effFadeVolTarget,
         fadeVolumeDuration: fadeVolDur,
         fadeSpeedTarget: fadeSpTarget,
         fadeSpeedDuration: fadeSpDur,
@@ -1600,6 +1639,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final state = _voices[voice.id];
     if (state == null || !volume.isFinite) return;
     state.volume = volume.clamp(0.0, 1.0).toDouble();
+    state.pendingFadeVolumeTarget = null;
+    state.pendingFadeVolumeDuration = null;
     _syncEmittedVoice(state);
   }
 
@@ -1732,7 +1773,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     return switch (stored) {
       _PtyClipBuffer(:final duration) => duration,
       _PtyWaveformBuffer() => defaultToneDuration,
-      _PtyStreamBuffer() => Duration.zero,
+      _PtyStreamBuffer(:final duration) => duration,
     };
   }
 
@@ -1755,6 +1796,9 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       target = dur;
     }
     final now = _clock.now();
+    if (state.emitted) {
+      _snapshotPlayhead(state, now);
+    }
     state.basePosition = target;
     state.anchorAt = (state.emitted && !state.isPaused) ? now : null;
     if (!state.emitted) return;
@@ -1865,13 +1909,19 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     if (state == null || !targetVolume.isFinite) return;
     final clamped = targetVolume.clamp(0.0, 1.0).toDouble();
     final dur = duration.isNegative ? Duration.zero : duration;
-    state.volume = clamped;
-    final effVol = _effectiveVolume(state);
     if (!state.emitted) {
-      state.pendingFadeVolumeTarget = effVol;
-      state.pendingFadeVolumeDuration = dur;
+      if (dur == Duration.zero) {
+        state.volume = clamped;
+        state.pendingFadeVolumeTarget = null;
+        state.pendingFadeVolumeDuration = null;
+      } else {
+        state.pendingFadeVolumeTarget = clamped;
+        state.pendingFadeVolumeDuration = dur;
+      }
       return;
     }
+    state.volume = clamped;
+    final effVol = _effectiveVolume(state);
     state.emittedVolStr = ApcAudioEncoder._formatFloat(effVol);
     final clipId = state.clipId;
     if (clipId != null && clipId <= 0x7FFFFFFF) {
@@ -2187,6 +2237,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   /// Processes a single inbound APC reply payload (e.g., `Aa=waver,q=<id>;<b64>`).
   void handleApcReply(String payload) {
     if (_disposed) return;
+    _hasApcReplies = true;
     final clean = payload.startsWith('_A') ? payload.substring(1) : payload;
     if (!clean.startsWith('A')) return;
     final semiIdx = clean.indexOf(';');
@@ -2267,7 +2318,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   @override
   Future<Float32List> fetchWaveform([Float32List? outBuffer]) async {
     final target = _prepareWaveformBuffer(outBuffer);
-    if (_disposed) {
+    if (_disposed || !_hasApcReplies) {
       target.setRange(0, _waveformLength, _cachedWaveform);
       return target;
     }

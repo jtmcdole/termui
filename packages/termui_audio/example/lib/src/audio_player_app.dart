@@ -206,6 +206,9 @@ Future<void> runAudioPlayerApp(
   bool isFlutter = false,
   void Function(Buffer)? onFrameRedrawn,
 }) async {
+  if (audioService case final PtyApcAudioEngine apcEngine) {
+    apcEngine.attachApcReplies(terminal.audioApcReplies);
+  }
   final sceneManager = SceneManager(
     terminal,
     renderingMode: RenderingMode.alternateScreen,

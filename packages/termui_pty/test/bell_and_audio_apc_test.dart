@@ -568,6 +568,14 @@ void main() {
         handler.handleApc('Am=0;${clipB64.substring(4)}');
         expect(handler.pendingUploadCount, equals(0));
 
+        // 128 MiB decoded PCM stream buffer size is accepted, >128 MiB is rejected.
+        handler.handleApc(
+          'Aa=stream,op=open,s=10,max=${AudioApcHandler.maxStreamBufferBytes};',
+        );
+        handler.handleApc(
+          'Aa=stream,op=open,s=11,max=${AudioApcHandler.maxStreamBufferBytes + 1};',
+        );
+
         // Invalid stream / st= inputs are ignored cleanly.
         handler.handleApc('Aa=stream,op=open,s=0;');
         handler.handleApc('Aa=stream,op=open,s=9,max=0;');
@@ -575,7 +583,21 @@ void main() {
         handler.handleApc('Aa=stream,op=end,s=9,seq=-2;');
         handler.handleApc('Aa=clip,i=16,st=0;');
 
-        expect(events, hasLength(5));
+        expect(events, hasLength(6));
+        expect(
+          events[5],
+          equals(
+            const TerminalStreamAudioEvent(
+              op: 'open',
+              streamId: 10,
+              maxBufferSize: AudioApcHandler.maxStreamBufferBytes,
+              releaseConsumed: false,
+              bufferingTimeNeeds: Duration(milliseconds: 500),
+              sampleRate: 48000,
+              channels: 2,
+            ),
+          ),
+        );
         const expectedOpen = TerminalStreamAudioEvent(
           op: 'open',
           streamId: 9,
