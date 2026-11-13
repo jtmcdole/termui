@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'apc_fs_stub.dart' if (dart.library.io) 'apc_fs_io.dart';
 import 'api/audio_engine.dart';
 import 'api/audio_types.dart';
 import 'utils/audio_dsp_utils.dart';
@@ -175,8 +176,9 @@ final class _PtyWaveformBuffer extends _PtyAudioBuffer {
 final class _PtyClipBuffer extends _PtyAudioBuffer {
   final String format;
   final Uint8List bytes;
+  final Duration duration;
 
-  const _PtyClipBuffer(super.hash, this.format, this.bytes);
+  const _PtyClipBuffer(super.hash, this.format, this.bytes, this.duration);
 }
 
 final class _PtyAudioBus implements AudioBus {
@@ -234,6 +236,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   final Map<int, _PtyAudioBus> _buses = {};
   final Map<int, _ActivePtyVoice> _voices = {};
 
+  final Future<Uint8List> Function(String path)? _readFileBytes;
+
   /// Number of currently tracked active or paused voices.
   int get activeVoiceCount => _voices.length;
 
@@ -241,7 +245,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   PtyApcAudioEngine(
     this.writeEscape, {
     this.defaultToneDuration = const Duration(milliseconds: 250),
-  });
+    Future<Uint8List> Function(String path)? readFileBytes,
+  }) : _readFileBytes = readFileBytes ?? createDefaultApcFileReader();
 
   @override
   Future<void> init({bool enableVisualization = true}) async {}
@@ -267,11 +272,22 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     String path, {
     bool stream = false,
     LoadProgressCallback? onProgress,
-  }) => throw UnsupportedError('PtyApcAudioEngine does not read local files');
+  }) async {
+    final bytes = await loadFileBytes(path);
+    onProgress?.call(1.0);
+    return loadMem(path, bytes, stream: stream);
+  }
 
   @override
-  Future<Uint8List> loadFileBytes(String path) =>
-      throw UnsupportedError('PtyApcAudioEngine does not read local files');
+  Future<Uint8List> loadFileBytes(String path) {
+    final reader = _readFileBytes;
+    if (reader == null) {
+      throw UnsupportedError(
+        'PtyApcAudioEngine does not read local files on this platform',
+      );
+    }
+    return reader(path);
+  }
 
   @override
   Future<AudioBuffer> loadUrl(String url, {LoadProgressCallback? onProgress}) =>
@@ -291,7 +307,12 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
         frequency: frequency,
         duration: defaultToneDuration,
       );
-      buf = _PtyClipBuffer(id, 'wav', wavBytes);
+      buf = _PtyClipBuffer(
+        id,
+        'wav',
+        wavBytes,
+        _estimateClipDuration('wav', wavBytes),
+      );
     } else {
       buf = _PtyWaveformBuffer(id, shape, frequency);
     }
@@ -314,10 +335,71 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       );
     }
     final format = _detectClipFormat(pathId, bytes);
+    final copy = Uint8List.fromList(bytes);
     final id = _nextBufferId++;
-    final buf = _PtyClipBuffer(id, format, Uint8List.fromList(bytes));
+    final buf = _PtyClipBuffer(
+      id,
+      format,
+      copy,
+      _estimateClipDuration(format, copy),
+    );
     _buffers[id] = buf;
     return buf;
+  }
+
+  static bool _matchesAscii(Uint8List bytes, int offset, String tag) {
+    if (offset < 0 || offset + tag.length > bytes.length) return false;
+    for (var i = 0; i < tag.length; i++) {
+      if (bytes[offset + i] != tag.codeUnitAt(i)) return false;
+    }
+    return true;
+  }
+
+  static Duration _estimateClipDuration(String format, Uint8List bytes) =>
+      switch (format) {
+        'wav' => _estimateWavDuration(bytes),
+        _ => Duration.zero,
+      };
+
+  static int _readWavByteRate(ByteData bd, int dataStart) {
+    final byteRate = bd.getUint32(dataStart + 8, Endian.little);
+    if (byteRate > 0) return byteRate;
+    final channels = bd.getUint16(dataStart + 2, Endian.little);
+    final sampleRate = bd.getUint32(dataStart + 4, Endian.little);
+    final bitsPerSample = bd.getUint16(dataStart + 14, Endian.little);
+    return (sampleRate * channels * bitsPerSample) ~/ 8;
+  }
+
+  static Duration _estimateWavDuration(Uint8List bytes) {
+    if (bytes.length < 44 ||
+        !_matchesAscii(bytes, 0, 'RIFF') ||
+        !_matchesAscii(bytes, 8, 'WAVE')) {
+      return Duration.zero;
+    }
+    final bd = ByteData.sublistView(bytes);
+    var effectiveByteRate = 0;
+    var availData = 0;
+    var offset = 12;
+    while (offset + 8 <= bytes.length) {
+      final chunkSize = bd.getUint32(offset + 4, Endian.little);
+      final dataStart = offset + 8;
+      if (chunkSize >= 16 &&
+          dataStart + 16 <= bytes.length &&
+          _matchesAscii(bytes, offset, 'fmt ')) {
+        effectiveByteRate = _readWavByteRate(bd, dataStart);
+      } else if (_matchesAscii(bytes, offset, 'data')) {
+        availData = math.min(chunkSize, bytes.length - dataStart);
+      }
+      if (effectiveByteRate > 0 && availData > 0) {
+        return Duration(
+          microseconds: (availData * 1000000.0 / effectiveByteRate).round(),
+        );
+      }
+      final next = dataStart + chunkSize + (chunkSize.isOdd ? 1 : 0);
+      if (next <= offset) break;
+      offset = next;
+    }
+    return Duration.zero;
   }
 
   static String _detectClipFormat(String pathId, Uint8List bytes) {
@@ -430,9 +512,10 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final buffer = voice.buffer;
     if (buffer == null) return;
     try {
+      final Duration effectiveDuration;
       switch (buffer) {
         case _PtyWaveformBuffer(:final shape, :final frequency):
-          final effectiveDuration = durationOverride ?? defaultToneDuration;
+          effectiveDuration = durationOverride ?? defaultToneDuration;
           writeEscape(
             ApcAudioEncoder.encodeTone(
               waveform: shape,
@@ -442,13 +525,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
               pan: voice.pan,
             ),
           );
-          if (!voice.loop && voice.stopTimer == null) {
-            voice.stopTimer = Timer(
-              effectiveDuration,
-              () => _evictAndCompleteVoice(voice.id),
-            );
-          }
-        case _PtyClipBuffer(:final format, :final bytes):
+        case _PtyClipBuffer(:final format, :final bytes, :final duration):
+          effectiveDuration = durationOverride ?? duration;
           final frames = ApcAudioEncoder.encodeClip(
             clipId: voice.clipId ?? voice.id,
             format: format,
@@ -460,12 +538,12 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
           for (final frame in frames) {
             writeEscape(frame);
           }
-          if (!voice.loop && voice.stopTimer == null) {
-            voice.stopTimer = Timer(
-              Duration.zero,
-              () => _evictAndCompleteVoice(voice.id),
-            );
-          }
+      }
+      if (!voice.loop && voice.stopTimer == null) {
+        voice.stopTimer = Timer(
+          effectiveDuration,
+          () => _evictAndCompleteVoice(voice.id),
+        );
       }
     } finally {
       voice.buffer = null;
@@ -509,14 +587,21 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     _emitVoicePlayback(state, durationOverride: state.scheduledDuration);
   }
 
+  static double _spatialPan(double x, double y, double z) {
+    if (!x.isFinite || !y.isFinite || !z.isFinite) return 0.0;
+    final dist = math.sqrt(x * x + y * y + z * z);
+    return (x / math.max(1.0, dist)).clamp(-1.0, 1.0).toDouble();
+  }
+
   @override
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z) {
     final voice = play(buffer, paused: true);
-    setVoicePan(voice, x);
+    setVoicePan(voice, _spatialPan(x, y, z));
     setPaused(voice, false);
     return voice;
   }
 
+  /// Updates the pre-emission normalized 3D stereo pan for [voice].
   @override
   void set3dSourceParameters(
     AudioVoice voice,
@@ -526,7 +611,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     double vx = 0.0,
     double vy = 0.0,
     double vz = 0.0,
-  }) => setVoicePan(voice, x);
+  }) => setVoicePan(voice, _spatialPan(x, y, z));
 
   @override
   void set3dSourceMinMaxDistance(
@@ -543,7 +628,14 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   ) {}
 
   @override
-  Duration getBufferDuration(AudioBuffer buffer) => Duration.zero;
+  Duration getBufferDuration(AudioBuffer buffer) {
+    final stored = _buffers[buffer.hash];
+    if (stored == null) return Duration.zero;
+    return switch (stored) {
+      _PtyClipBuffer(:final duration) => duration,
+      _PtyWaveformBuffer() => defaultToneDuration,
+    };
+  }
 
   @override
   Duration getVoicePosition(AudioVoice voice) => Duration.zero;
