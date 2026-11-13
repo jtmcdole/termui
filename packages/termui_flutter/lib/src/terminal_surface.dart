@@ -240,6 +240,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
 
   bool _hadActiveBuffer = false;
+  bool _bufferResourcesDirty = false;
   Buffer? _lastPaintedBuffer;
   Buffer? _externallyPreparedBuffer;
   (int, int)? _lastPaintedActivePtySize;
@@ -697,7 +698,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final cursorMoved = cursor != _lastCursorPosition;
     _lastCursorPosition = cursor;
 
-    _prepareActiveBufferResources();
+    _bufferResourcesDirty = true;
     if (cursorMoved) {
       _scheduleGeometrySync();
     }
@@ -770,6 +771,12 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     });
   }
 
+  void _flushDirtyBufferResources() {
+    if (!mounted || !_bufferResourcesDirty) return;
+    _bufferResourcesDirty = false;
+    _prepareActiveBufferResources();
+  }
+
   void _prepareActiveBufferResources() {
     final buf = _activeBuffer;
     if (buf == null) return;
@@ -783,6 +790,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   }
 
   void _prepareBufferResources(Buffer buffer) {
+    if (identical(buffer, _activeBuffer)) {
+      _bufferResourcesDirty = false;
+    }
     _kittyCache.ensureForBuffer(buffer);
     _atlasController.ensureFallbackPaintersForBuffer(
       buffer,
@@ -1516,6 +1526,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
                 onMissingGlyphs: null,
                 onMissingStyledGlyphs:
                     _atlasController.requestMissingStyledGlyphs,
+                onBeforePaint: _flushDirtyBufferResources,
                 enableBleed: widget.enableBleed,
                 enableLigatures: _enableLigatures,
                 ligaturePainters: _atlasController.ligaturePainters,
@@ -1562,6 +1573,7 @@ final class _KittyGpuImageCache {
   _KittyGpuImageCache({required this.onDecoded});
 
   void ensureForBuffer(Buffer buffer) {
+    if (!buffer.hasKittyImages) return;
     final width = buffer.width;
     final total = width * buffer.height;
     final chars = buffer.characters;

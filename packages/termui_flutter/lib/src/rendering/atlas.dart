@@ -699,8 +699,16 @@ const List<String> _prebakedLigatures = [
 
 bool _isColorEmojiAtlas(String char) {
   if (char.isEmpty) return false;
-  if (char.runes.contains(0xFE0E)) return false;
-  if (char.runes.contains(0xFE0F)) return true;
+  // Fast-path single UTF-16 code units: emoji >= U+1F300 require surrogate pairs,
+  // leaving standalone U+FE0F (VS16 emoji presentation selector) as the only match.
+  if (char.length == 1) return char.codeUnitAt(0) == 0xFE0F;
+  var hasVs16 = false;
+  for (var i = 0; i < char.length; i++) {
+    final cu = char.codeUnitAt(i);
+    if (cu == 0xFE0E) return false; // VS15 forces monochrome text presentation.
+    if (cu == 0xFE0F) hasVs16 = true; // VS16 requests color emoji presentation.
+  }
+  if (hasVs16) return true;
   final code = char.runes.first;
   return code >= 0x1F300 && code <= 0x1FAFF;
 }
@@ -796,7 +804,7 @@ void _rasterizePlacedGlyphs({
   required Map<(String, GlyphStyleVariant), Rect> styledCharRects,
 }) {
   for (final pg in placedGlyphs) {
-    final rect = _paintSingleAtlasGlyph(
+    final (rect, procedural) = _paintSingleAtlasGlyph(
       canvas: canvas,
       pg: pg,
       colWidth: colWidth,
@@ -810,6 +818,7 @@ void _rasterizePlacedGlyphs({
     _recordAtlasGlyphRect(
       pg: pg,
       rect: rect,
+      procedural: procedural,
       charRects: charRects,
       styleRects: styleRects,
       styledCharRects: styledCharRects,
@@ -817,7 +826,7 @@ void _rasterizePlacedGlyphs({
   }
 }
 
-Rect _paintSingleAtlasGlyph({
+(Rect, bool) _paintSingleAtlasGlyph({
   required Canvas canvas,
   required _PlacedGlyph pg,
   required double colWidth,
@@ -861,17 +870,21 @@ Rect _paintSingleAtlasGlyph({
   pg.painter.dispose();
   canvas.restore();
 
-  return Rect.fromLTWH(
-    (x + actualPadding) * devicePixelRatio,
-    (y + actualPadding) * devicePixelRatio,
-    targetWidth * devicePixelRatio,
-    cellHeight * devicePixelRatio,
+  return (
+    Rect.fromLTWH(
+      (x + actualPadding) * devicePixelRatio,
+      (y + actualPadding) * devicePixelRatio,
+      targetWidth * devicePixelRatio,
+      cellHeight * devicePixelRatio,
+    ),
+    drawn,
   );
 }
 
 void _recordAtlasGlyphRect({
   required _PlacedGlyph pg,
   required Rect rect,
+  required bool procedural,
   required Map<String, Rect> charRects,
   required Map<(String, bool, bool), Rect> styleRects,
   required Map<(String, GlyphStyleVariant), Rect> styledCharRects,
@@ -881,7 +894,7 @@ void _recordAtlasGlyphRect({
   }
   styleRects[(pg.char, pg.variant.isBold, pg.variant.isItalic)] = rect;
   styledCharRects[(pg.char, pg.variant)] = rect;
-  if (_isColorEmojiAtlas(pg.char)) {
+  if (procedural || _isColorEmojiAtlas(pg.char)) {
     for (final v in GlyphStyleVariant.values) {
       styleRects[(pg.char, v.isBold, v.isItalic)] = rect;
       styledCharRects[(pg.char, v)] = rect;

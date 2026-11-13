@@ -460,6 +460,10 @@ void _defineThemePalettePainterTests() {
       'TuiAtlasPainter resets _kittyPaint.color before drawImageRect after translucent subpixel paint',
       _testKittyPaintColorResetAfterSubpixels,
     );
+    test(
+      'TuiAtlasPainter enableBleed masks neighbor bleed over default-background edges',
+      _testEnableBleedCoversAdjacentBackgroundEdges,
+    );
   });
 }
 
@@ -780,13 +784,21 @@ Future<void> _testAtlasHasNativeVariantAndRectFor() async {
     expect(rect, equals(atlas.styledCharRects[('A', variant)]));
   }
 
-  // '─' (0x2500) is prebaked only for regular, not bold/italic/boldItalic.
-  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.regular), isTrue);
-  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.bold), isFalse);
-  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.italic), isFalse);
-  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.boldItalic), isFalse);
-  expect(atlas.rectFor('─', isBold: true), equals(atlas.rectFor('─')));
-  expect(atlas.rectFor('─', isItalic: true), equals(atlas.rectFor('─')));
+  // '─' (0x2500) is procedural and aliased across all 4 variants.
+  for (final variant in GlyphStyleVariant.values) {
+    expect(atlas.hasNativeVariant('─', variant), isTrue);
+    expect(
+      atlas.rectFor('─', isBold: variant.isBold, isItalic: variant.isItalic),
+      equals(atlas.rectFor('─')),
+    );
+  }
+  // '╭' (0x256D) is prebaked only for regular, not bold/italic/boldItalic.
+  expect(atlas.hasNativeVariant('╭', GlyphStyleVariant.regular), isTrue);
+  expect(atlas.hasNativeVariant('╭', GlyphStyleVariant.bold), isFalse);
+  expect(atlas.hasNativeVariant('╭', GlyphStyleVariant.italic), isFalse);
+  expect(atlas.hasNativeVariant('╭', GlyphStyleVariant.boldItalic), isFalse);
+  expect(atlas.rectFor('╭', isBold: true), equals(atlas.rectFor('╭')));
+  expect(atlas.rectFor('╭', isItalic: true), equals(atlas.rectFor('╭')));
   expect(atlas.hasNativeVariant('Ж', GlyphStyleVariant.regular), isFalse);
   expect(atlas.rectFor('Ж'), isNull);
 }
@@ -963,4 +975,92 @@ Future<void> _testKittyPaintColorResetAfterSubpixels() async {
   final centerOffset = ((h ~/ 2) * w + (w ~/ 2)) * 4;
   expect(bytes[centerOffset + 1], equals(255));
   expect(bytes[centerOffset + 3], equals(255));
+}
+
+Future<void> _testEnableBleedCoversAdjacentBackgroundEdges() async {
+  final atlas = await GlyphAtlasGenerator.generateEmpty(
+    fontSize: 16.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlas.image.dispose);
+
+  const defaultBg = 0xFF000000;
+  const redBg = 0xFFFF0000;
+  final buffer = Buffer(3, 3)
+    ..setAttributes(1, 0, char: ' ', fg: 0xFFFFFFFF, bg: redBg);
+
+  final painter = TuiAtlasPainter(
+    buffer: buffer,
+    atlas: atlas,
+    fontFamily: 'Roboto Mono',
+    fallbackPainters: const {},
+    onMissingGlyphs: null,
+    enableBleed: true,
+    defaultBackgroundArgb: defaultBg,
+  );
+
+  final cellW = atlas.cellWidth;
+  final cellH = atlas.cellHeight;
+  final imgW = (3 * cellW).ceil();
+  final imgH = (3 * cellH).ceil();
+  final rec = ui.PictureRecorder();
+  painter.paint(Canvas(rec), Size(imgW.toDouble(), imgH.toDouble()));
+  final pic = rec.endRecording();
+  final rendered = await pic.toImage(imgW, imgH);
+  pic.dispose();
+  addTearDown(rendered.dispose);
+
+  final bytes = (await rendered.toByteData())!.buffer.asUint8List();
+  (int, int, int, int) pixelAt(int px, int py) {
+    final offset = (py * imgW + px) * 4;
+    return (
+      bytes[offset],
+      bytes[offset + 1],
+      bytes[offset + 2],
+      bytes[offset + 3],
+    );
+  }
+
+  expect(
+    pixelAt((cellW * 1.5).floor(), (cellH * 0.5).floor()),
+    equals((255, 0, 0, 255)),
+  );
+
+  final rightEdgeX = (2 * cellW).floor();
+  final bottomEdgeY = cellH.floor();
+  final leftCornerX = cellW.floor() - 1;
+  expect(pixelAt(rightEdgeX, (cellH * 0.5).floor()), equals((0, 0, 0, 255)));
+  expect(
+    pixelAt((cellW * 2.5).floor(), (cellH * 0.5).floor()),
+    equals((0, 0, 0, 255)),
+  );
+  expect(pixelAt((cellW * 1.5).floor(), bottomEdgeY), equals((0, 0, 0, 255)));
+  expect(
+    pixelAt((cellW * 1.5).floor(), (cellH * 1.5).floor()),
+    equals((0, 0, 0, 255)),
+  );
+  expect(pixelAt(rightEdgeX, bottomEdgeY), equals((0, 0, 0, 255)));
+  expect(pixelAt(leftCornerX, bottomEdgeY), equals((0, 0, 0, 255)));
+
+  final transRec = ui.PictureRecorder();
+  TuiAtlasPainter(
+    buffer: buffer,
+    atlas: atlas,
+    fontFamily: 'Roboto Mono',
+    fallbackPainters: const {},
+    onMissingGlyphs: null,
+    enableBleed: true,
+    defaultBackgroundArgb: 0x80102030,
+  ).paint(Canvas(transRec), Size(imgW.toDouble(), imgH.toDouble()));
+  final transPic = transRec.endRecording();
+  final transImg = await transPic.toImage(imgW, imgH);
+  transPic.dispose();
+  addTearDown(transImg.dispose);
+  final transBytes = (await transImg.toByteData())!.buffer.asUint8List();
+  final adjOff = ((cellH * 1.5).floor() * imgW + (cellW * 1.5).floor()) * 4;
+  final baseOff = ((cellH * 0.5).floor() * imgW + (cellW * 2.5).floor()) * 4;
+  expect(
+    transBytes.sublist(adjOff, adjOff + 4),
+    equals(transBytes.sublist(baseOff, baseOff + 4)),
+  );
 }

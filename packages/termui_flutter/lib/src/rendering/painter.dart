@@ -57,8 +57,16 @@ bool _isLigatureChar(String ch) {
 /// Determines if a given grapheme cluster character represents a color emoji.
 bool isColorEmoji(String char) {
   if (char.isEmpty) return false;
-  if (char.runes.contains(0xFE0E)) return false;
-  if (char.runes.contains(0xFE0F)) return true;
+  // Fast-path single UTF-16 code units: emoji >= U+1F300 require surrogate pairs,
+  // leaving standalone U+FE0F (VS16 emoji presentation selector) as the only match.
+  if (char.length == 1) return char.codeUnitAt(0) == 0xFE0F;
+  var hasVs16 = false;
+  for (var i = 0; i < char.length; i++) {
+    final cu = char.codeUnitAt(i);
+    if (cu == 0xFE0E) return false; // VS15 forces monochrome text presentation.
+    if (cu == 0xFE0F) hasVs16 = true; // VS16 requests color emoji presentation.
+  }
+  if (hasVs16) return true;
   final code = char.runes.first;
   if (code >= 0x1F300 && code <= 0x1FAFF) return true;
   return false;
@@ -70,7 +78,7 @@ bool isColorEmoji(String char) {
 /// [Canvas]. To optimize performance and prevent GPU command buffer overflow
 /// when drawing large grids (which is common in TUI applications), the painter
 /// batches draw calls using [Canvas.drawRawAtlas] and processes sprites in
-/// chunks of 500.
+/// chunks of 2048.
 ///
 /// If a character is not found in the [atlas] (e.g. dynamic unicode or emojis
 /// being loaded), it triggers [onMissingGlyphs] and falls back to rendering
@@ -107,12 +115,16 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Optional callback invoked with exact `(char, GlyphStyleVariant)` pairs for lazy on-demand rasterization.
   final void Function(List<(String, GlyphStyleVariant)>)? onMissingStyledGlyphs;
 
+  /// Optional callback invoked at the start of [paint] before reading caches.
+  final VoidCallback? onBeforePaint;
+
   /// Cache of individual [TextPainter] objects for glyphs absent in the main atlas.
   final Map<(String, bool, bool, bool, Color), TextPainter> fallbackPainters;
 
   Float32List? _transformsBg;
   Float32List? _rectsBg;
   Int32List? _colorsBg;
+  Uint8List? _nonDefaultBgMask;
 
   Float32List? _transformsFg;
   Float32List? _rectsFg;
@@ -121,12 +133,14 @@ final class TuiAtlasPainter extends CustomPainter {
   Float32List? _transformsEmoji;
   Float32List? _rectsEmoji;
 
+  int _bgSpriteCount = 0;
   int _fgSpriteCount = 0;
   int _emojiSpriteCount = 0;
 
   static final Paint _atlasSpritePaint = Paint()
     ..filterQuality = FilterQuality.none;
   static final Paint _emojiSpritePaint = Paint();
+  final Paint _defaultBgPaint = Paint();
   final Paint _dimPaint = Paint();
   final Paint _borderPaint = Paint()..strokeWidth = 1.0;
   final Paint _composingBgPaint = Paint();
@@ -211,6 +225,7 @@ final class TuiAtlasPainter extends CustomPainter {
     required this.fallbackPainters,
     required this.onMissingGlyphs,
     this.onMissingStyledGlyphs,
+    this.onBeforePaint,
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
     Map<(String, bool, bool, Color), TextPainter>? ligaturePainters,
@@ -277,7 +292,7 @@ final class TuiAtlasPainter extends CustomPainter {
     int totalSprites,
     Paint paint,
   ) {
-    const int chunkSize = 500;
+    const int chunkSize = 2048;
     for (int i = 0; i < totalSprites; i += chunkSize) {
       final int end = (i + chunkSize < totalSprites)
           ? i + chunkSize
@@ -310,6 +325,7 @@ final class TuiAtlasPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    onBeforePaint?.call();
     final count = buffer.width * buffer.height;
     _ensureBatchBuffers(count);
 
@@ -333,15 +349,30 @@ final class TuiAtlasPainter extends CustomPainter {
 
     _scheduleMissingGlyphCallbacks(missingGlyphs, missingStyledGlyphs);
 
-    _drawRawAtlasInChunks(
-      canvas,
-      atlas.image,
-      _transformsBg!,
-      _rectsBg!,
-      _colorsBg!,
-      count,
-      _atlasSpritePaint,
-    );
+    if (count > 0 && (defaultBackgroundArgb >>> 24) != 0) {
+      _defaultBgPaint.color = Color(defaultBackgroundArgb);
+      canvas.drawRect(
+        Rect.fromLTWH(
+          0.0,
+          0.0,
+          buffer.width * geo.cellWidth,
+          buffer.height * geo.cellHeight,
+        ),
+        _defaultBgPaint,
+      );
+    }
+
+    if (_bgSpriteCount > 0) {
+      _drawRawAtlasInChunks(
+        canvas,
+        atlas.image,
+        _transformsBg!,
+        _rectsBg!,
+        _colorsBg!,
+        _bgSpriteCount,
+        _atlasSpritePaint,
+      );
+    }
 
     if (_fgSpriteCount > 0) {
       _drawRawAtlasInChunks(
@@ -513,6 +544,7 @@ final class TuiAtlasPainter extends CustomPainter {
     _transformsBg = Float32List(count * 4);
     _rectsBg = Float32List(count * 4);
     _colorsBg = Int32List(count);
+    _nonDefaultBgMask = Uint8List(count);
 
     // Allocate 2x capacity for foreground sprites to accommodate synthetic bold overstrike
     _transformsFg = Float32List(count * 8);
@@ -561,6 +593,7 @@ final class TuiAtlasPainter extends CustomPainter {
     final rows = buffer.height;
     final chars = buffer.characters;
     final attrs = buffer.attributes;
+    _bgSpriteCount = 0;
     _fgSpriteCount = 0;
     _emojiSpriteCount = 0;
 
@@ -632,7 +665,10 @@ final class TuiAtlasPainter extends CustomPainter {
     final screenX = x * geo.cellWidth;
 
     _stageBackgroundSprite(
+      x,
+      y,
       idx,
+      buffer.width,
       screenX,
       screenY,
       _resolveBgColor(
@@ -786,7 +822,10 @@ final class TuiAtlasPainter extends CustomPainter {
         final x = startX + i;
         final idx = y * buffer.width + x;
         _stageBackgroundSprite(
+          x,
+          y,
           idx,
+          buffer.width,
           x * geo.cellWidth,
           screenY,
           resolvedBg,
@@ -808,7 +847,16 @@ final class TuiAtlasPainter extends CustomPainter {
       final x = startX + i;
       final idx = y * buffer.width + x;
       final screenX = x * geo.cellWidth;
-      _stageBackgroundSprite(idx, screenX, screenY, resolvedBg, geo);
+      _stageBackgroundSprite(
+        x,
+        y,
+        idx,
+        buffer.width,
+        screenX,
+        screenY,
+        resolvedBg,
+        geo,
+      );
       _maybeStageDecoration(
         decorations,
         char: buffer.getCharacter(x, y),
@@ -923,14 +971,37 @@ final class TuiAtlasPainter extends CustomPainter {
     );
   }
 
+  bool _hasNonDefaultBgPredecessor(int x, int y, int idx, int cols) {
+    final mask = _nonDefaultBgMask!;
+    if (x > 0 && mask[idx - 1] != 0) return true;
+    if (y == 0) return false;
+    final prevRowIdx = idx - cols;
+    if (mask[prevRowIdx] != 0) return true;
+    if (x > 0 && mask[prevRowIdx - 1] != 0) return true;
+    return x + 1 < cols && mask[prevRowIdx + 1] != 0;
+  }
+
   void _stageBackgroundSprite(
+    int x,
+    int y,
     int idx,
+    int cols,
     double screenX,
     double screenY,
     int bgColor,
     _AtlasGeometry geo,
   ) {
-    final base = idx * 4;
+    final isNonDefault = bgColor != defaultBackgroundArgb;
+    _nonDefaultBgMask![idx] = isNonDefault ? 1 : 0;
+    if (!isNonDefault &&
+        (!enableBleed ||
+            (defaultBackgroundArgb >>> 24) != 0xFF ||
+            !_hasNonDefaultBgPredecessor(x, y, idx, cols))) {
+      return;
+    }
+
+    final spriteIdx = _bgSpriteCount++;
+    final base = spriteIdx * 4;
     _transformsBg![base + 0] = geo.bgScaleBlock;
     _transformsBg![base + 1] = 0.0;
     _transformsBg![base + 2] = screenX - geo.bleedBgLogical;
@@ -941,7 +1012,7 @@ final class TuiAtlasPainter extends CustomPainter {
     _rectsBg![base + 2] = geo.bgRect2;
     _rectsBg![base + 3] = geo.bgRect3;
 
-    _colorsBg![idx] = bgColor;
+    _colorsBg![spriteIdx] = bgColor;
   }
 
   void _stageForegroundCell({
@@ -1657,7 +1728,8 @@ final class TuiAtlasPainter extends CustomPainter {
       oldDelegate.cursorRow != cursorRow ||
       (oldDelegate.onMissingGlyphs == null) != (onMissingGlyphs == null) ||
       (oldDelegate.onMissingStyledGlyphs == null) !=
-          (onMissingStyledGlyphs == null);
+          (onMissingStyledGlyphs == null) ||
+      (oldDelegate.onBeforePaint == null) != (onBeforePaint == null);
 }
 
 final class _AtlasGeometry {
