@@ -172,6 +172,7 @@ final class VirtualTerminal implements TerminalHandler {
   static const int _maxKittyKbStackDepth = 16;
   static const int _maxOsc99Chars = 16 * 1024;
   static const int _maxPendingOsc99 = 32;
+  static const int _maxCellGraphemeUnits = 32;
 
   /// The width of the virtual terminal in columns.
   int width;
@@ -465,6 +466,8 @@ final class VirtualTerminal implements TerminalHandler {
   int _scrollBottom;
   Style _currentStyle = .empty;
   String? _lastPrintedGrapheme;
+  int? _lastPrintedCellX;
+  int? _lastPrintedCellY;
   bool _g0DecGraphics = false;
   bool _g1DecGraphics = false;
   bool _useG1 = false;
@@ -856,6 +859,7 @@ final class VirtualTerminal implements TerminalHandler {
   void _resetState({required bool fullReset}) {
     _currentStyle = .empty;
     _lastPrintedGrapheme = null;
+    _clearLastPrintedCell();
     _g0DecGraphics = false;
     _g1DecGraphics = false;
     _useG1 = false;
@@ -947,6 +951,7 @@ final class VirtualTerminal implements TerminalHandler {
   /// Resizes the virtual terminal (both primary and active alternate buffers)
   /// to [newWidth] by [newHeight].
   void resize(int newWidth, int newHeight) {
+    _clearLastPrintedCell();
     final clampedWidth = math.max(1, newWidth);
     final clampedHeight = math.max(1, newHeight);
     if (clampedWidth == width && clampedHeight == height) return;
@@ -1343,9 +1348,33 @@ final class VirtualTerminal implements TerminalHandler {
     _wrappingNextIndexDown = false;
   }
 
+  void _clearLastPrintedCell() {
+    _lastPrintedCellX = null;
+    _lastPrintedCellY = null;
+  }
+
+  static bool _isZeroWidthMark(String grapheme) {
+    if (grapheme.isEmpty || !isZeroWidthGrapheme(grapheme)) return false;
+    final cu = grapheme.codeUnitAt(0);
+    return cu != 0x00AD && (cu < 0xFFF9 || cu > 0xFFFB);
+  }
+
+  static String _capGrapheme(String grapheme) {
+    if (grapheme.length <= _maxCellGraphemeUnits) return grapheme;
+    var end = _maxCellGraphemeUnits;
+    final last = grapheme.codeUnitAt(end - 1);
+    if (last >= 0xD800 && last <= 0xDBFF) end--;
+    return grapheme.substring(0, end);
+  }
+
   void _printGrapheme(String rawChar, {bool translateCharset = true}) {
     if (rawChar.isEmpty || _containsControlCodeUnit(rawChar)) return;
-    final char = translateCharset ? _translateCharset(rawChar) : rawChar;
+    final translated = translateCharset ? _translateCharset(rawChar) : rawChar;
+    if (_isZeroWidthMark(translated)) {
+      _appendZeroWidthMark(translated);
+      return;
+    }
+    final char = _capGrapheme(translated);
     _lastPrintedGrapheme = char;
     if (cursorX >= width) {
       if (_autoWrap) {
@@ -1363,9 +1392,11 @@ final class VirtualTerminal implements TerminalHandler {
       return;
     }
     if (_insertMode) _insertBlankChars(1);
+    final printedX = cursorX;
+    final printedY = cursorY;
     buffer.setAttributes(
-      cursorX,
-      cursorY,
+      printedX,
+      printedY,
       char: char,
       fg: fgArg,
       bg: bgArg,
@@ -1373,7 +1404,106 @@ final class VirtualTerminal implements TerminalHandler {
       underlineColor: _resolveOscColorArg(_currentStyle.underlineColor, null),
       uri: _activeUri ?? '',
     );
+    _lastPrintedCellX = printedX;
+    _lastPrintedCellY = printedY;
     _advanceCursorAfterPrint(1);
+  }
+
+  void _appendZeroWidthMark(String mark) {
+    final prevX = _lastPrintedCellX;
+    final prevY = _lastPrintedCellY;
+    if (prevX == null ||
+        prevY == null ||
+        prevY != cursorY ||
+        prevX < 0 ||
+        prevX >= width ||
+        prevY < 0 ||
+        prevY >= height) {
+      return;
+    }
+    final active = buffer;
+    final cellIdx = prevY * width + prevX;
+    final existing = active.characters[cellIdx];
+    if (existing.isEmpty ||
+        existing.length + mark.length > _maxCellGraphemeUnits) {
+      return;
+    }
+    final merged = '$existing$mark';
+    _lastPrintedGrapheme = merged;
+    final wasWide = isWideGrapheme(existing);
+    if (wasWide || !isWideGrapheme(merged)) {
+      active.characters[cellIdx] = merged;
+      return;
+    }
+    _promoteMergedCellToWide(active, prevX, prevY, cellIdx, merged);
+  }
+
+  void _promoteMergedCellToWide(
+    Buffer active,
+    int prevX,
+    int prevY,
+    int cellIdx,
+    String merged,
+  ) {
+    final attrBase = cellIdx * 3;
+    final fg = active.attributes[attrBase];
+    final bg = active.attributes[attrBase + 1];
+    final mod = active.attributes[attrBase + 2];
+    final ul = active.getUnderlineColor(prevX, prevY);
+    final uri = active.getUri(prevX, prevY) ?? '';
+    if (prevX + 1 < width) {
+      if (_insertMode) _insertBlankChars(1);
+      active.setAttributes(
+        prevX,
+        prevY,
+        char: merged,
+        fg: fg,
+        bg: bg,
+        modifiers: mod,
+        underlineColor: ul,
+        uri: uri,
+        blend: false,
+      );
+      cursorX = prevX;
+      _advanceCursorAfterPrint(2);
+      return;
+    }
+    final padMod = (transparentBackground && bg == 0)
+        ? (mod | Modifier.transparent)
+        : mod;
+    active.setAttributes(
+      prevX,
+      prevY,
+      char: ' ',
+      fg: fg,
+      bg: bg,
+      modifiers: padMod,
+      underlineColor: 0,
+      uri: '',
+      blend: false,
+    );
+    if (width == 1 || !_autoWrap) {
+      _clearLastPrintedCell();
+      return;
+    }
+    _wrapLineDown();
+    if (_insertMode) _insertBlankChars(2);
+    final wrappedX = cursorX;
+    final wrappedY = cursorY;
+    active.setAttributes(
+      wrappedX,
+      wrappedY,
+      char: merged,
+      fg: fg,
+      bg: bg,
+      modifiers: mod,
+      underlineColor: ul,
+      uri: uri,
+      blend: false,
+    );
+    _lastPrintedCellX = wrappedX;
+    _lastPrintedCellY = wrappedY;
+    _advanceCursorAfterPrint(2);
   }
 
   String _translateCharset(String char) {
@@ -1436,15 +1566,18 @@ final class VirtualTerminal implements TerminalHandler {
         modifiers: bgTransparent ? (modArg | Modifier.transparent) : modArg,
       );
       if (width == 1 || !_autoWrap) {
+        _clearLastPrintedCell();
         cursorX = (width == 1 && _autoWrap) ? 1 : width - 1;
         return;
       }
       _wrapLineDown();
     }
     if (_insertMode) _insertBlankChars(2);
+    final printedX = cursorX;
+    final printedY = cursorY;
     buffer.setAttributes(
-      cursorX,
-      cursorY,
+      printedX,
+      printedY,
       char: char,
       fg: fgArg,
       bg: bgArg,
@@ -1452,6 +1585,8 @@ final class VirtualTerminal implements TerminalHandler {
       underlineColor: _resolveOscColorArg(_currentStyle.underlineColor, null),
       uri: _activeUri ?? '',
     );
+    _lastPrintedCellX = printedX;
+    _lastPrintedCellY = printedY;
     _advanceCursorAfterPrint(2);
   }
 
@@ -1466,6 +1601,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void execute(int charCode) {
+    _clearLastPrintedCell();
     if (charCode == 7) {
       onBell?.call();
       return;
@@ -1574,6 +1710,7 @@ final class VirtualTerminal implements TerminalHandler {
   }
 
   void _switchAlternateScreen(bool enable, {required bool saveRestoreCursor}) {
+    _clearLastPrintedCell();
     if (enable && !_usingAltScreen) {
       if (saveRestoreCursor) _saveCursor();
       _altBuffer = _newBuffer(width, height);
@@ -1644,6 +1781,7 @@ final class VirtualTerminal implements TerminalHandler {
     String? intermediate,
     List<List<int>?>? subparams,
   }) {
+    _clearLastPrintedCell();
     if (intermediate == null && command == 'm') {
       _markDirty();
       _applySgr(params, subparams: subparams);
@@ -2277,6 +2415,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void apc(String payload) {
+    _clearLastPrintedCell();
     if (payload.startsWith('A') || payload.startsWith('_A')) {
       _audioApcHandler.handleApc(payload);
       return;
@@ -2287,6 +2426,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void osc(int command, String payload) {
+    _clearLastPrintedCell();
     switch (command) {
       case 0:
         _markDirty();
@@ -2719,6 +2859,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   @override
   void esc(String command) {
+    _clearLastPrintedCell();
     _markDirty();
     switch (command) {
       case 'c': // RIS (Reset to Initial State)

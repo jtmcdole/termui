@@ -392,5 +392,165 @@ void main() {
         expect(terminal.imageRegistryRevision, greaterThan(revBeforeReset));
       },
     );
+
+    test(
+      'Reassembles chunk-split U+10EEEE combining diacritics across write/writeString boundaries',
+      () {
+        final terminal = VirtualTerminal(width: 6, height: 3);
+
+        // 1. Split after base U+10EEEE, after row diacritic, and after col diacritic (with 32-bit MSB 0x42 -> 0x065A).
+        final full32 = kittyPlaceholderCell(2, 3, imageIdMsb: 0x42);
+        final u10eeee = full32.substring(0, 2);
+        final rowMark = full32.substring(2, 3);
+        final colMark = full32.substring(3, 4);
+        final msbMark = full32.substring(4, 5);
+
+        terminal.write(utf8.encode(u10eeee));
+        expect(terminal.cursorX, equals(1));
+        expect(terminal.cursorY, equals(0));
+
+        terminal.write(utf8.encode(rowMark));
+        expect(terminal.cursorX, equals(1));
+
+        terminal.writeString(colMark);
+        expect(terminal.cursorX, equals(1));
+
+        terminal.write(utf8.encode(msbMark));
+        expect(terminal.cursorX, equals(1));
+        expect(terminal.cursorY, equals(0));
+        expect(terminal.buffer.getCharacter(0, 0), equals(full32));
+        expect(
+          Modifier.has(
+            terminal.buffer.getModifiers(0, 0),
+            Modifier.kittyPlaceholder,
+          ),
+          isTrue,
+        );
+        expect(
+          parseKittyPlaceholderCell(terminal.buffer.getCharacter(0, 0)),
+          equals((row: 2, col: 3, imageIdMsb: 0x42)),
+        );
+
+        // 2. CSI Ps b (REP) repeats the merged multi-chunk grapheme cluster.
+        terminal.writeString('\x1b[2b');
+        expect(terminal.cursorX, equals(3));
+        expect(terminal.buffer.getCharacter(1, 0), equals(full32));
+        expect(terminal.buffer.getCharacter(2, 0), equals(full32));
+
+        // 3. Split at right margin (width - 1) on the bottom row must merge onto (width - 1, height - 1)
+        //    without triggering premature line wrap or scroll.
+        terminal.writeString('\x1b[3;6H'); // 1-based row=3, col=6 -> (5, 2)
+        terminal.writeString(u10eeee);
+        expect(terminal.cursorX, equals(6)); // pending wrap
+        expect(terminal.cursorY, equals(2));
+        terminal.writeString('$rowMark$colMark$msbMark');
+        expect(terminal.cursorX, equals(6)); // still pending wrap, no scroll
+        expect(terminal.cursorY, equals(2));
+        expect(terminal.buffer.getCharacter(5, 2), equals(full32));
+        expect(terminal.scrollback.totalLines, equals(0));
+
+        // 4. Standalone combining mark after CSI cursor move is dropped without shifting columns.
+        terminal.writeString('\x1b[2;2H'); // (1, 1)
+        terminal.writeString(rowMark);
+        expect(terminal.cursorX, equals(1));
+        expect(terminal.cursorY, equals(1));
+        expect(terminal.buffer.getCharacter(1, 1), equals(' '));
+
+        // 5. Bounded DoS cap (<= 32 UTF-16 code units) drops excess combining marks cleanly.
+        terminal.writeString('\x1b[2;1H'); // (0, 1)
+        terminal.writeString('A');
+        for (var i = 0; i < 40; i++) {
+          terminal.writeString('\u{0305}');
+        }
+        expect(terminal.cursorX, equals(1));
+        expect(terminal.buffer.getCharacter(0, 1).length, equals(32));
+
+        // 6. All 297 Kitty placeholder diacritics report graphemeWidth == 0.
+        for (final cp in kittyDiacritics) {
+          expect(graphemeWidth(String.fromCharCode(cp)), equals(0));
+        }
+
+        // 7. Narrow-to-wide promotion when '\uFE0F' arrives in the next chunk.
+        terminal.writeString('\x1b[3;1H'); // (0, 2)
+        terminal.writeString('\u{2764}');
+        expect(terminal.cursorX, equals(1));
+        expect(terminal.buffer.getCharacter(0, 2), equals('\u{2764}'));
+        terminal.writeString('\u{FE0F}');
+        expect(terminal.cursorX, equals(2));
+        expect(terminal.buffer.getCharacter(0, 2), equals('\u{2764}\u{FE0F}'));
+        expect(terminal.buffer.getCharacter(1, 2), equals(''));
+
+        // 8. Standalone U+00AD / U+FFF9 advance cursorX by 1 without merging.
+        terminal.writeString('\x1b[2;1H'); // (0, 1)
+        terminal.writeString('X');
+        terminal.writeString('\u{00AD}');
+        expect(terminal.cursorX, equals(2));
+        expect(terminal.buffer.getCharacter(0, 1), equals('X'));
+        expect(terminal.buffer.getCharacter(1, 1), equals('\u{00AD}'));
+        terminal.writeString('\u{FFF9}');
+        expect(terminal.cursorX, equals(3));
+        expect(terminal.buffer.getCharacter(2, 1), equals('\u{FFF9}'));
+
+        // 9. Single-chunk combining flood is capped at 32 UTF-16 code units.
+        terminal.writeString('\x1b[1;1H');
+        terminal.writeString('A${'\u{0305}' * 40}');
+        expect(terminal.buffer.getCharacter(0, 0).length, equals(32));
+      },
+    );
+
+    test(
+      'Promotes chunk-split right-margin wide emoji cleanly under !DECAWM, DECAWM+IRM, and repeated resize()',
+      () {
+        // !DECAWM: blanks (width-1, y) including aux metadata and drops wide promotion.
+        final noWrap = VirtualTerminal(width: 4, height: 2);
+        noWrap.writeString('\x1b[?7l'); // disable auto-wrap
+        noWrap.writeString(
+          '\x1b[1;4H\x1b]8;;https://dart.dev\x07\x1b[58:2::1:2:3m\u{2764}',
+        );
+        noWrap.writeString('\u{FE0F}');
+        noWrap.writeString('\x1b]8;;\x07');
+        expect(noWrap.buffer.getCharacter(3, 0), equals(' '));
+        expect(noWrap.buffer.getUri(3, 0), isNull);
+        expect(noWrap.buffer.getUnderlineColor(3, 0), equals(0));
+        expect(noWrap.cursorY, equals(0));
+
+        // DECAWM + IRM: blanks (width-1, y), wraps, and inserts 2 cells on next row.
+        final irm = VirtualTerminal(width: 4, height: 2);
+        irm.writeString('\x1b[4h'); // enable IRM
+        irm.writeString('\x1b[2;1HAB');
+        irm.writeString(
+          '\x1b[1;4H\x1b]8;;https://dart.dev\x07\x1b[58:2::1:2:3m\u{2764}',
+        );
+        irm.writeString('\u{FE0F}');
+        expect(irm.buffer.getCharacter(3, 0), equals(' '));
+        expect(irm.buffer.getUri(3, 0), isNull);
+        expect(irm.buffer.getUnderlineColor(3, 0), equals(0));
+        expect(irm.buffer.getCharacter(0, 1), equals('\u{2764}\u{FE0F}'));
+        expect(irm.buffer.getCharacter(1, 1), equals(''));
+        expect(irm.buffer.getCharacter(2, 1), equals('A'));
+        expect(irm.buffer.getCharacter(3, 1), equals('B'));
+
+        // Repeated terminal.resize() shrinks/grows preserve Kitty lookup and clip bounds.
+        final b64 = base64Encode(Uint8List.fromList([1, 2, 3, 255]));
+        irm.writeString(
+          '\x1b[1;1H\x1b_Gi=77,s=1,v=1,a=T,f=32,c=1,r=1;$b64\x1b\\',
+        );
+        irm.resize(2, 1);
+        irm.resize(6, 3);
+        irm.resize(4, 2);
+        expect(irm.buffer.lookupKittyImage(0, 0, 77), isNotNull);
+        expect(
+          identical(irm.buffer.lookupKittyRegistry(3, 1), irm.imageRegistry),
+          isTrue,
+        );
+        expect(
+          identical(
+            irm.buffer.lookupKittyRegistry(5, 2),
+            KittyImageRegistry.global,
+          ),
+          isTrue,
+        );
+      },
+    );
   });
 }
