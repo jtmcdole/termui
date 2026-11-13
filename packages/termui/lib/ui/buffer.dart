@@ -90,6 +90,16 @@ class Buffer {
   final List<({Rect bounds, KittyImageRegistry registry})>
   _scopedKittyRegistries = [];
 
+  /// Whether any Kitty image is registered in [KittyImageRegistry.global] or a
+  /// scoped registry attached to this buffer.
+  bool get hasKittyImages {
+    if (KittyImageRegistry.global.hasImages) return true;
+    for (final entry in _scopedKittyRegistries) {
+      if (entry.registry.hasImages) return true;
+    }
+    return false;
+  }
+
   /// Whether cell attribute writes alpha-blend colors over existing cells when
   /// a per-call `blend` argument is omitted.
   final bool defaultBlend;

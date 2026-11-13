@@ -553,6 +553,9 @@ class KittyImageRegistry {
     _revision++;
   }
 
+  /// Whether this registry currently holds at least one registered image.
+  bool get hasImages => _images.isNotEmpty;
+
   /// Returns all 32-bit image IDs currently stored in this registry.
   Iterable<int> get registeredImageIds => _images.keys;
 

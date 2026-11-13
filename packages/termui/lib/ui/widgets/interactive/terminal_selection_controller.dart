@@ -176,6 +176,7 @@ class TerminalSelectionController implements TerminalListenable {
   SelectionMode _mode = SelectionMode.character;
   SelectionPoint? _anchor;
   SelectionPoint? _focus;
+  (SelectionPoint start, SelectionPoint end)? _wordAnchor;
   SelectionRegion? _region;
 
   /// Creates a new [TerminalSelectionController].
@@ -212,6 +213,7 @@ class TerminalSelectionController implements TerminalListenable {
     _region = region;
     _anchor = _clampPoint(col, row, region);
     _focus = null;
+    _wordAnchor = null;
     notifyListeners();
   }
 
@@ -228,6 +230,76 @@ class TerminalSelectionController implements TerminalListenable {
     notifyListeners();
   }
 
+  /// Extends a word-snapped selection from the initial [_wordAnchor] to the
+  /// word at `(col, row)` in [buffer], supporting forward, backward, and
+  /// direction-reversed drags across wide graphemes.
+  void updateWordSelection(Buffer buffer, int col, int row) {
+    if (_anchor == null || buffer.width <= 0 || buffer.height <= 0) return;
+    final r = _region;
+    final minCol = r != null ? max(0, r.minCol) : 0;
+    final maxCol = r != null
+        ? min(buffer.width - 1, r.maxCol)
+        : buffer.width - 1;
+    final minRow = r != null ? max(0, r.minRow) : 0;
+    final maxRow = r != null
+        ? min(buffer.height - 1, r.maxRow)
+        : buffer.height - 1;
+    if (minCol > maxCol || minRow > maxRow) return;
+
+    final clampedCol = col.clamp(minCol, maxCol);
+    final clampedRow = row.clamp(minRow, maxRow);
+    final (targetStart, targetEnd) = _expandWordBounds(
+      buffer,
+      clampedRow,
+      clampedCol,
+      minCol,
+      maxCol,
+    );
+    final (anchorStart, anchorEnd) =
+        _wordAnchor ?? _orderPoints(_anchor!, _focus ?? _anchor!);
+
+    final (
+      SelectionPoint nextAnchor,
+      SelectionPoint nextFocus,
+    ) = _resolveWordDragEndpoints(
+      anchorStart: anchorStart,
+      anchorEnd: anchorEnd,
+      clampedRow: clampedRow,
+      targetStart: targetStart,
+      targetEnd: targetEnd,
+    );
+
+    if (_mode == SelectionMode.word &&
+        _anchor == nextAnchor &&
+        _focus == nextFocus) {
+      return;
+    }
+    _mode = SelectionMode.word;
+    _anchor = nextAnchor;
+    _focus = nextFocus;
+    notifyListeners();
+  }
+
+  static (SelectionPoint, SelectionPoint) _resolveWordDragEndpoints({
+    required SelectionPoint anchorStart,
+    required SelectionPoint anchorEnd,
+    required int clampedRow,
+    required int targetStart,
+    required int targetEnd,
+  }) {
+    if (clampedRow < anchorStart.row ||
+        (clampedRow == anchorStart.row && targetEnd < anchorStart.col)) {
+      return (anchorEnd, SelectionPoint(targetStart, clampedRow));
+    }
+    if (clampedRow == anchorStart.row && targetStart <= anchorEnd.col) {
+      return (
+        SelectionPoint(min(anchorStart.col, targetStart), clampedRow),
+        SelectionPoint(max(anchorEnd.col, targetEnd), clampedRow),
+      );
+    }
+    return (anchorStart, SelectionPoint(targetEnd, clampedRow));
+  }
+
   /// Selects the contiguous word at `(col, row)` in [buffer].
   void selectWord(Buffer buffer, int col, int row, {SelectionRegion? region}) {
     if (buffer.width <= 0 || row < 0 || row >= buffer.height) return;
@@ -235,11 +307,13 @@ class TerminalSelectionController implements TerminalListenable {
     final maxCol = region != null
         ? min(buffer.width - 1, region.maxCol)
         : buffer.width - 1;
-    if (minCol > maxCol) return;
+    final minRow = region != null ? max(0, region.minRow) : 0;
+    final maxRow = region != null
+        ? min(buffer.height - 1, region.maxRow)
+        : buffer.height - 1;
+    if (minCol > maxCol || minRow > maxRow) return;
 
-    final clampedRow = region != null
-        ? row.clamp(region.minRow, region.maxRow)
-        : row;
+    final clampedRow = row.clamp(minRow, maxRow);
     final clampedCol = col.clamp(minCol, maxCol);
     final (startCol, endCol) = _expandWordBounds(
       buffer,
@@ -253,6 +327,7 @@ class TerminalSelectionController implements TerminalListenable {
     _region = region;
     _anchor = SelectionPoint(startCol, clampedRow);
     _focus = SelectionPoint(endCol, clampedRow);
+    _wordAnchor = (_anchor!, _focus!);
     notifyListeners();
   }
 
@@ -263,19 +338,48 @@ class TerminalSelectionController implements TerminalListenable {
     int minCol,
     int maxCol,
   ) {
-    if (!_isWordChar(buffer.getCharacter(col, row))) {
-      return (col, col);
+    final leadCol = col > minCol && buffer.getCharacter(col, row).isEmpty
+        ? col - 1
+        : col;
+    if (!_isWordChar(buffer.getCharacter(leadCol, row))) {
+      final endCol =
+          leadCol < maxCol && buffer.getCharacter(leadCol + 1, row).isEmpty
+          ? leadCol + 1
+          : leadCol;
+      return (leadCol, endCol);
     }
-    var start = col;
-    while (start > minCol && _isWordChar(buffer.getCharacter(start - 1, row))) {
-      start--;
+    var start = leadCol;
+    while (true) {
+      final step = _wordStepLeft(buffer, row, start, minCol);
+      if (step == 0) break;
+      start -= step;
     }
-    var end = col;
+    var end = _consumeContinuation(buffer, row, leadCol, maxCol);
     while (end < maxCol && _isWordChar(buffer.getCharacter(end + 1, row))) {
-      end++;
+      end = _consumeContinuation(buffer, row, end + 1, maxCol);
     }
     return (start, end);
   }
+
+  static int _wordStepLeft(Buffer buffer, int row, int start, int minCol) {
+    if (start <= minCol) return 0;
+    final prev = buffer.getCharacter(start - 1, row);
+    if (_isWordChar(prev)) return 1;
+    if (prev.isEmpty &&
+        start - 2 >= minCol &&
+        _isWordChar(buffer.getCharacter(start - 2, row))) {
+      return 2;
+    }
+    return 0;
+  }
+
+  static int _consumeContinuation(
+    Buffer buffer,
+    int row,
+    int col,
+    int maxCol,
+  ) =>
+      col < maxCol && buffer.getCharacter(col + 1, row).isEmpty ? col + 1 : col;
 
   static bool _isWordChar(String ch) =>
       ch.isNotEmpty && ch != ' ' && _wordCharPattern.hasMatch(ch);
@@ -293,6 +397,7 @@ class TerminalSelectionController implements TerminalListenable {
     if (_anchor == null && _focus == null && _region == null) return;
     _anchor = null;
     _focus = null;
+    _wordAnchor = null;
     _region = null;
     notifyListeners();
   }
