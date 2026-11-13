@@ -1,3 +1,10 @@
+## 0.12.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **PERF**(termui_flutter): sparse background rects, procedural variant aliasing, and paint-time prep.
+ - **BREAKING** **FEAT**(termui_flutter): add mouseTracking, Shift selection override, copyOnSelect, and word selection.
+
 ## 0.11.1
 
  - **PERF**(termui_flutter): repaint steady-state buffer updates without widget rebuilds.
