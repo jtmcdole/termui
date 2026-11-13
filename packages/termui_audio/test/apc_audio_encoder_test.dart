@@ -155,6 +155,41 @@ void main() {
         equals('\x1b_Aa=stop,i=9;\x1b\\'),
       );
     });
+
+    test('encodeUpdate validates clipId and params, clamps, and formats', () {
+      expect(
+        ApcAudioEncoder.encodeUpdate(clipId: 3, volume: 1.5, pan: -2.0),
+        equals('\x1b_Aa=update,i=3,v=1,p=-1;\x1b\\'),
+      );
+      expect(
+        ApcAudioEncoder.encodeUpdate(clipId: 4, volume: 0.25),
+        equals('\x1b_Aa=update,i=4,v=0.25;\x1b\\'),
+      );
+      expect(
+        ApcAudioEncoder.encodeUpdate(clipId: 5, pan: -0.5),
+        equals('\x1b_Aa=update,i=5,p=-0.5;\x1b\\'),
+      );
+      expect(
+        () => ApcAudioEncoder.encodeUpdate(clipId: 0, volume: 0.5),
+        throwsArgumentError,
+      );
+      expect(
+        () => ApcAudioEncoder.encodeUpdate(clipId: 0x80000000, pan: 0.0),
+        throwsArgumentError,
+      );
+      expect(
+        () => ApcAudioEncoder.encodeUpdate(clipId: 1),
+        throwsArgumentError,
+      );
+      expect(
+        () => ApcAudioEncoder.encodeUpdate(
+          clipId: 1,
+          volume: double.nan,
+          pan: double.infinity,
+        ),
+        throwsArgumentError,
+      );
+    });
   });
 
   group('PtyApcAudioEngine', () {
@@ -543,6 +578,101 @@ void main() {
         await sub.cancel();
         await engine.disposeBuffer(clip);
         expect(engine.getBufferDuration(clip), equals(Duration.zero));
+        await engine.dispose();
+      },
+    );
+
+    test(
+      'emits deduplicated a=update frames for live 3D pan, distance attenuation, volume, and pan changes',
+      () async {
+        final frames = <String>[];
+        final engine = PtyApcAudioEngine(frames.add);
+        final wavBytes = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(milliseconds: 20),
+        );
+        final clip = await engine.loadMem('track.wav', wavBytes);
+
+        // Clouds-style start at (0, 0, 0) with min=2, max=20: no redundant update on attenuation setup.
+        final clouds = engine.play3d(clip, 0.0, 0.0, 0.0);
+        expect(frames, hasLength(1));
+        expect(frames.single, contains('v=1,p=0,'));
+        engine.set3dSourceMinMaxDistance(clouds, 2.0, 20.0);
+        engine.set3dSourceAttenuation(
+          clouds,
+          AttenuationModel.linearDistance,
+          1.0,
+        );
+        expect(frames, hasLength(1));
+
+        // setVoiceVolume after emission sends a=update.
+        engine.setVoiceVolume(clouds, 0.8);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${clouds.id},v=0.8;\x1b\\'),
+        );
+
+        // Live set3dSourceParameters updates pan and linear distance attenuation.
+        engine.set3dSourceParameters(clouds, 11.0, 0.0, 0.0);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${clouds.id},v=0.4,p=1;\x1b\\'),
+        );
+
+        // Duplicate quantized update (same 4-decimal v and p) is suppressed.
+        final countBeforeDup = frames.length;
+        engine.set3dSourceParameters(clouds, 11.00001, 0.0, 0.0);
+        expect(frames, hasLength(countBeforeDup));
+
+        // Inverse and exponential attenuation models compute expected gain.
+        engine.set3dSourceAttenuation(
+          clouds,
+          AttenuationModel.inverseDistance,
+          1.0,
+        );
+        engine.set3dSourceParameters(clouds, 4.0, 0.0, 0.0);
+        // min=2, d=4, r=1 -> 2 / (2 + 1*(4-2)) = 0.5; 0.8 * 0.5 = 0.4
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${clouds.id},v=0.4;\x1b\\'),
+        );
+
+        engine.set3dSourceAttenuation(
+          clouds,
+          AttenuationModel.exponentialDistance,
+          2.0,
+        );
+        // min=2, d=4, r=2 -> (4/2)^(-2) = 0.25; 0.8 * 0.25 = 0.2
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${clouds.id},v=0.2;\x1b\\'),
+        );
+
+        // setVoicePan after emission sends a=update.
+        engine.setVoicePan(clouds, -0.5);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${clouds.id},p=-0.5;\x1b\\'),
+        );
+
+        // Swish-style start at (-5, -5, 0) with min=2, max=20 emits attenuated update (v=0.7183).
+        frames.clear();
+        final swish = engine.play3d(clip, -5.0, -5.0, 0.0);
+        engine.set3dSourceMinMaxDistance(swish, 2.0, 20.0);
+        engine.set3dSourceAttenuation(
+          swish,
+          AttenuationModel.linearDistance,
+          1.0,
+        );
+        expect(frames, hasLength(2));
+        expect(
+          frames.last,
+          equals('\x1b_Aa=update,i=${swish.id},v=0.7183;\x1b\\'),
+        );
+
+        engine.stop(clouds);
+        engine.stop(swish);
         await engine.dispose();
       },
     );

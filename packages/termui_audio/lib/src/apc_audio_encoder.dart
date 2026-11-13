@@ -152,6 +152,31 @@ abstract final class ApcAudioEncoder {
     return frames;
   }
 
+  /// Encodes an APC live voice update command (`ESC _ A a=update,... ST`).
+  static String encodeUpdate({
+    required int clipId,
+    double? volume,
+    double? pan,
+  }) {
+    if (clipId <= 0 || clipId > 0x7FFFFFFF) {
+      throw ArgumentError.value(clipId, 'clipId', 'Must be in 1..0x7FFFFFFF');
+    }
+    final hasVolume = volume != null && volume.isFinite;
+    final hasPan = pan != null && pan.isFinite;
+    if (!hasVolume && !hasPan) {
+      throw ArgumentError('At least one finite volume or pan must be provided');
+    }
+    final buf = StringBuffer('\x1b_Aa=update,i=$clipId');
+    if (hasVolume) {
+      buf.write(',v=${_formatFloat(_clampUnit(volume, 1.0))}');
+    }
+    if (hasPan) {
+      buf.write(',p=${_formatFloat(_clampPan(pan))}');
+    }
+    buf.write(';\x1b\\');
+    return buf.toString();
+  }
+
   /// Encodes an APC stop command for [clipId] (or all active clips if `null`).
   static String encodeStop({int? clipId}) {
     if (clipId != null && clipId > 0) {
@@ -206,6 +231,15 @@ final class _ActivePtyVoice {
   final int? clipId;
   double volume;
   double pan = 0.0;
+  double posX = 0.0;
+  double posY = 0.0;
+  double posZ = 0.0;
+  double minDistance = 1.0;
+  double maxDistance = 1000000.0;
+  AttenuationModel attenuationModel = AttenuationModel.none;
+  double attenuationRolloff = 1.0;
+  String? emittedVolStr;
+  String? emittedPanStr;
   bool emitted;
   Duration? scheduledDuration;
   DateTime? startedAt;
@@ -623,6 +657,58 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     }
   }
 
+  static double _computeAttenuation(_ActivePtyVoice state) {
+    if (state.attenuationModel == AttenuationModel.none) return 1.0;
+    final rawDist = math.sqrt(
+      state.posX * state.posX +
+          state.posY * state.posY +
+          state.posZ * state.posZ,
+    );
+    final minD = math.max(0.0, state.minDistance);
+    final maxD = math.max(minD, state.maxDistance);
+    final d = rawDist.clamp(minD, maxD).toDouble();
+    final r = state.attenuationRolloff;
+    if (state.attenuationModel == AttenuationModel.linearDistance) {
+      return maxD <= minD
+          ? 1.0
+          : (1.0 - r * (d - minD) / (maxD - minD)).clamp(0.0, 1.0).toDouble();
+    }
+    if (minD <= 0.0) return d <= 0.0 ? 1.0 : 0.0;
+    final denom = minD + r * (d - minD);
+    final rawFactor = state.attenuationModel == AttenuationModel.inverseDistance
+        ? (denom <= 0.0 ? 1.0 : minD / denom)
+        : math.pow(d / minD, -r).toDouble();
+    return rawFactor.clamp(0.0, 1.0).toDouble();
+  }
+
+  static double _effectiveVolume(_ActivePtyVoice state) =>
+      (state.volume * _computeAttenuation(state)).clamp(0.0, 1.0).toDouble();
+
+  void _syncEmittedVoice(_ActivePtyVoice state) {
+    final clipId = state.clipId;
+    if (_disposed || !state.emitted || clipId == null || clipId > 0x7FFFFFFF) {
+      return;
+    }
+    final effVol = _effectiveVolume(state);
+    final clampedPan = ApcAudioEncoder._clampPan(state.pan);
+    final volStr = ApcAudioEncoder._formatFloat(effVol);
+    final panStr = ApcAudioEncoder._formatFloat(clampedPan);
+    final volChanged = volStr != state.emittedVolStr;
+    final panChanged = panStr != state.emittedPanStr;
+    if (!volChanged && !panChanged) {
+      return;
+    }
+    state.emittedVolStr = volStr;
+    state.emittedPanStr = panStr;
+    writeEscape(
+      ApcAudioEncoder.encodeUpdate(
+        clipId: clipId,
+        volume: volChanged ? effVol : null,
+        pan: panChanged ? clampedPan : null,
+      ),
+    );
+  }
+
   void _emitVoicePlayback(
     _ActivePtyVoice voice, {
     required Duration? durationOverride,
@@ -630,6 +716,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final buffer = voice.buffer;
     if (buffer == null) return;
     try {
+      final effVol = _effectiveVolume(voice);
+      final clampedPan = ApcAudioEncoder._clampPan(voice.pan);
       final Duration effectiveDuration;
       switch (buffer) {
         case _PtyWaveformBuffer(:final shape, :final frequency):
@@ -639,18 +727,20 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
               waveform: shape,
               frequencyHz: frequency,
               duration: effectiveDuration,
-              volume: voice.volume,
-              pan: voice.pan,
+              volume: effVol,
+              pan: clampedPan,
             ),
           );
         case _PtyClipBuffer(:final format, :final bytes, :final duration):
           effectiveDuration = durationOverride ?? duration;
+          voice.emittedVolStr = ApcAudioEncoder._formatFloat(effVol);
+          voice.emittedPanStr = ApcAudioEncoder._formatFloat(clampedPan);
           final frames = ApcAudioEncoder.encodeClip(
             clipId: voice.clipId ?? voice.id,
             format: format,
             bytes: bytes,
-            volume: voice.volume,
-            pan: voice.pan,
+            volume: effVol,
+            pan: clampedPan,
             loop: voice.loop,
           );
           for (final frame in frames) {
@@ -696,6 +786,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final state = _voices[voice.id];
     if (state == null || !volume.isFinite) return;
     state.volume = volume.clamp(0.0, 1.0).toDouble();
+    _syncEmittedVoice(state);
   }
 
   @override
@@ -703,6 +794,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final state = _voices[voice.id];
     if (state == null || !pan.isFinite) return;
     state.pan = pan.clamp(-1.0, 1.0).toDouble();
+    _syncEmittedVoice(state);
   }
 
   /// Resumes a paused [voice] by emitting its APC frame. Pausing an already
@@ -725,12 +817,18 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   @override
   AudioVoice play3d(AudioBuffer buffer, double x, double y, double z) {
     final voice = play(buffer, paused: true);
-    setVoicePan(voice, _spatialPan(x, y, z));
+    final state = _voices[voice.id];
+    if (state != null && x.isFinite && y.isFinite && z.isFinite) {
+      state.posX = x;
+      state.posY = y;
+      state.posZ = z;
+      state.pan = _spatialPan(x, y, z);
+    }
     setPaused(voice, false);
     return voice;
   }
 
-  /// Updates the pre-emission normalized 3D stereo pan for [voice].
+  /// Updates the 3D source coordinates, stereo pan, and distance attenuation for [voice].
   @override
   void set3dSourceParameters(
     AudioVoice voice,
@@ -740,21 +838,43 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     double vx = 0.0,
     double vy = 0.0,
     double vz = 0.0,
-  }) => setVoicePan(voice, _spatialPan(x, y, z));
+  }) {
+    final state = _voices[voice.id];
+    if (state == null || !x.isFinite || !y.isFinite || !z.isFinite) return;
+    state.posX = x;
+    state.posY = y;
+    state.posZ = z;
+    state.pan = _spatialPan(x, y, z);
+    _syncEmittedVoice(state);
+  }
 
   @override
   void set3dSourceMinMaxDistance(
     AudioVoice voice,
     double minDistance,
     double maxDistance,
-  ) {}
+  ) {
+    final state = _voices[voice.id];
+    if (state == null || !minDistance.isFinite || !maxDistance.isFinite) {
+      return;
+    }
+    state.minDistance = minDistance;
+    state.maxDistance = maxDistance;
+    _syncEmittedVoice(state);
+  }
 
   @override
   void set3dSourceAttenuation(
     AudioVoice voice,
     AttenuationModel attenuationModel,
     double attenuationRolloffFactor,
-  ) {}
+  ) {
+    final state = _voices[voice.id];
+    if (state == null || !attenuationRolloffFactor.isFinite) return;
+    state.attenuationModel = attenuationModel;
+    state.attenuationRolloff = attenuationRolloffFactor;
+    _syncEmittedVoice(state);
+  }
 
   @override
   Duration getBufferDuration(AudioBuffer buffer) {
