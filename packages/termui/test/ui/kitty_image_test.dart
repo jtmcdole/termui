@@ -259,6 +259,57 @@ void main() {
     );
 
     test(
+      'hasImages, Buffer.hasKittyImages, and Viewport.hasKittyImages track empty, scoped, global, and cleared registries',
+      () {
+        final emptyScoped = KittyImageRegistry();
+        expect(emptyScoped.hasImages, isFalse);
+        expect(KittyImageRegistry.global.hasImages, isFalse);
+
+        final buf = Buffer.blank(10, 4);
+        final vp = Viewport(buf, const Rect(0, 0, 5, 2));
+        expect(buf.hasKittyImages, isFalse);
+        expect(vp.hasKittyImages, isFalse);
+
+        // Attaching an empty scoped registry must keep hasKittyImages false.
+        buf.registerKittyRegistry(const Rect(0, 0, 10, 4), emptyScoped);
+        expect(buf.hasKittyImages, isFalse);
+        expect(vp.hasKittyImages, isFalse);
+
+        final data = KittyImageData(
+          imageId: 91,
+          pixelWidth: 1,
+          pixelHeight: 1,
+          rgbaPixels: Uint8List.fromList([1, 2, 3, 255]),
+          gridCols: 1,
+          gridRows: 1,
+        );
+
+        // Populating the attached scoped registry flips hasKittyImages true.
+        emptyScoped.registerImage(data);
+        expect(emptyScoped.hasImages, isTrue);
+        expect(buf.hasKittyImages, isTrue);
+        expect(vp.hasKittyImages, isTrue);
+
+        // Clearing the scoped registry restores false.
+        emptyScoped.clearImages();
+        expect(emptyScoped.hasImages, isFalse);
+        expect(buf.hasKittyImages, isFalse);
+        expect(vp.hasKittyImages, isFalse);
+
+        // Global registry flips hasKittyImages true even with empty scoped registries.
+        KittyImageRegistry.register(data);
+        expect(KittyImageRegistry.global.hasImages, isTrue);
+        expect(buf.hasKittyImages, isTrue);
+        expect(vp.hasKittyImages, isTrue);
+
+        KittyImageRegistry.clear();
+        expect(KittyImageRegistry.global.hasImages, isFalse);
+        expect(buf.hasKittyImages, isFalse);
+        expect(vp.hasKittyImages, isFalse);
+      },
+    );
+
+    test(
       'Compositor upper text with default fg occludes lower KittyImage without inheriting imageId or kittyPlaceholder',
       () {
         final rgba = Uint8List.fromList(List.filled(2 * 2 * 4, 255));

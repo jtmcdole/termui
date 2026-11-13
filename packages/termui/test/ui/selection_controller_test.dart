@@ -112,6 +112,103 @@ void main() {
         expect(controller.mode, equals(SelectionMode.word));
         expect(controller.extractSelectedText(buf), equals('beta'));
       });
+
+      test(
+        'selectWord and updateWordSelection handle wide CJK words, forward/backward drags, and direction reversal',
+        () {
+          final buf = Buffer(24, 3);
+          buf.writeString(0, 0, 'alpha beta gamma', const Style());
+          // Row 1: 'hi 日本語 ok' -> cols: 0='h',1='i',2=' ',3='日',4='',5='本',6='',7='語',8='',9=' ',10='o',11='k'
+          buf.writeString(0, 1, 'hi 日本語 ok', const Style());
+          buf.writeString(0, 2, 'tail word', const Style());
+
+          // 1. Wide CJK word selection hitting both lead and continuation columns.
+          controller.selectWord(buf, 5, 1); // lead of '本'
+          expect(controller.anchor, equals(const SelectionPoint(3, 1)));
+          expect(controller.focus, equals(const SelectionPoint(8, 1)));
+          expect(controller.extractSelectedText(buf), equals('日本語'));
+
+          controller.selectWord(buf, 6, 1); // continuation '' of '本'
+          expect(controller.anchor, equals(const SelectionPoint(3, 1)));
+          expect(controller.focus, equals(const SelectionPoint(8, 1)));
+          expect(controller.extractSelectedText(buf), equals('日本語'));
+
+          // 2. Same-row forward drag, backward drag, and reversal back over anchor word.
+          var notifications = 0;
+          void listener() => notifications++;
+          controller.addListener(listener);
+
+          controller.selectWord(buf, 7, 0); // 'beta' (6..9)
+          expect(notifications, equals(1));
+          expect(controller.extractSelectedText(buf), equals('beta'));
+
+          // Drag forward to 'gamma' (11..15).
+          controller.updateWordSelection(buf, 12, 0);
+          expect(notifications, equals(2));
+          expect(controller.anchor, equals(const SelectionPoint(6, 0)));
+          expect(controller.focus, equals(const SelectionPoint(15, 0)));
+          expect(controller.extractSelectedText(buf), equals('beta gamma'));
+
+          // Redundant update on same word skips listener notification.
+          controller.updateWordSelection(buf, 14, 0);
+          expect(notifications, equals(2));
+
+          // Reverse backward onto initial word 'beta' (6..9).
+          controller.updateWordSelection(buf, 8, 0);
+          expect(notifications, equals(3));
+          expect(controller.anchor, equals(const SelectionPoint(6, 0)));
+          expect(controller.focus, equals(const SelectionPoint(9, 0)));
+          expect(controller.extractSelectedText(buf), equals('beta'));
+
+          // Continue dragging backward to 'alpha' (0..4).
+          controller.updateWordSelection(buf, 2, 0);
+          expect(notifications, equals(4));
+          expect(controller.anchor, equals(const SelectionPoint(9, 0)));
+          expect(controller.focus, equals(const SelectionPoint(0, 0)));
+          expect(controller.extractSelectedText(buf), equals('alpha beta'));
+
+          // Drag forward into row 1 onto CJK continuation col 6 ('本').
+          controller.updateWordSelection(buf, 6, 1);
+          expect(controller.anchor, equals(const SelectionPoint(6, 0)));
+          expect(controller.focus, equals(const SelectionPoint(8, 1)));
+          expect(
+            controller.extractSelectedText(buf),
+            equals('beta gamma\nhi 日本語'),
+          );
+
+          // Anchor on row 1 CJK word ('日本語', 3..8) and drag backward to row 0 'gamma' (11..15).
+          controller.selectWord(buf, 4, 1);
+          controller.updateWordSelection(buf, 13, 0);
+          expect(controller.anchor, equals(const SelectionPoint(8, 1)));
+          expect(controller.focus, equals(const SelectionPoint(11, 0)));
+          expect(controller.extractSelectedText(buf), equals('gamma\nhi 日本語'));
+
+          // Region clamping confines word drag bounds.
+          const region = SelectionRegion(
+            minCol: 3,
+            maxCol: 10,
+            minRow: 1,
+            maxRow: 2,
+          );
+          controller.selectWord(buf, 4, 1, region: region);
+          expect(controller.extractSelectedText(buf), equals('日本語'));
+          controller.updateWordSelection(buf, 20, 2);
+          expect(controller.focus, equals(const SelectionPoint(10, 2)));
+
+          // startSelection clears _wordAnchor so subsequent updateWordSelection
+          // uses the new anchor instead of the stale word span.
+          controller.startSelection(0, 0);
+          controller.updateWordSelection(buf, 13, 0);
+          expect(controller.anchor, equals(const SelectionPoint(0, 0)));
+          expect(controller.focus, equals(const SelectionPoint(15, 0)));
+          expect(
+            controller.extractSelectedText(buf),
+            equals('alpha beta gamma'),
+          );
+
+          controller.removeListener(listener);
+        },
+      );
     });
 
     group('Block / box selection mode', () {

@@ -34,6 +34,9 @@ class Viewport implements Buffer {
   bool get hasUris => parent.hasUris;
 
   @override
+  bool get hasKittyImages => parent.hasKittyImages;
+
+  @override
   int get width => bounds.width;
   @override
   set width(int val) =>
