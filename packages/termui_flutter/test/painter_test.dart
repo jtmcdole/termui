@@ -1,12 +1,15 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart' show RenderCustomPaint;
 import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/color.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/terminal_palette.dart';
+import 'package:termui/ui/widgets/core/geometry.dart' as tui_geo;
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 // ignore: implementation_imports
@@ -445,6 +448,18 @@ void _defineThemePalettePainterTests() {
       'PrivateTuiView updates fallbackPainters & TuiAtlasPainter when theme changes',
       _testLiveThemeUpdate,
     );
+    test(
+      'GlyphAtlas.hasNativeVariant and rectFor resolve all four style variants and fall back cleanly',
+      _testAtlasHasNativeVariantAndRectFor,
+    );
+    testWidgets(
+      'TuiAtlasPainter compares delegate fields in shouldRepaint and repaints via repaint Listenable',
+      _testShouldRepaintAndListenable,
+    );
+    test(
+      'TuiAtlasPainter resets _kittyPaint.color before drawImageRect after translucent subpixel paint',
+      _testKittyPaintColorResetAfterSubpixels,
+    );
   });
 }
 
@@ -744,4 +759,208 @@ Future<void> _testLiveThemeUpdate(WidgetTester tester) async {
     );
     expect(lightPainter.shouldRepaint(darkPainter), isTrue);
   });
+}
+
+Future<void> _testAtlasHasNativeVariantAndRectFor() async {
+  final atlas = await GlyphAtlasGenerator.generate(
+    fontSize: 14.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlas.image.dispose);
+
+  // 'A' is prebaked across all 4 variants.
+  for (final variant in GlyphStyleVariant.values) {
+    expect(atlas.hasNativeVariant('A', variant), isTrue);
+    final rect = atlas.rectFor(
+      'A',
+      isBold: variant.isBold,
+      isItalic: variant.isItalic,
+    );
+    expect(rect, isNotNull);
+    expect(rect, equals(atlas.styledCharRects[('A', variant)]));
+  }
+
+  // '─' (0x2500) is prebaked only for regular, not bold/italic/boldItalic.
+  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.regular), isTrue);
+  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.bold), isFalse);
+  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.italic), isFalse);
+  expect(atlas.hasNativeVariant('─', GlyphStyleVariant.boldItalic), isFalse);
+  expect(atlas.rectFor('─', isBold: true), equals(atlas.rectFor('─')));
+  expect(atlas.rectFor('─', isItalic: true), equals(atlas.rectFor('─')));
+  expect(atlas.hasNativeVariant('Ж', GlyphStyleVariant.regular), isFalse);
+  expect(atlas.rectFor('Ж'), isNull);
+}
+
+Future<void> _testShouldRepaintAndListenable(WidgetTester tester) async {
+  final atlas = await tester.runAsync(
+    () => GlyphAtlasGenerator.generateEmpty(
+      fontSize: 13.0,
+      fontFamily: 'Roboto Mono',
+    ),
+  );
+  addTearDown(atlas!.image.dispose);
+
+  final bufA = Buffer(4, 2)..writeString(0, 0, 'Hi', Style.empty);
+  final bufB = Buffer(4, 2)..writeString(0, 0, 'Yo', Style.empty);
+  final repaintA = ValueNotifier<int>(0);
+  final repaintB = ValueNotifier<int>(0);
+  addTearDown(repaintA.dispose);
+  addTearDown(repaintB.dispose);
+
+  TuiAtlasPainter makePainter({
+    Buffer? buffer,
+    Listenable? repaint,
+    int defaultFg = 0xFFFFFFFF,
+    int? activePtyCols,
+    String composing = '',
+    int cursorCol = 0,
+    void Function(List<String>)? onMissing,
+  }) => TuiAtlasPainter(
+    repaint: repaint,
+    buffer: buffer ?? bufA,
+    atlas: atlas,
+    fontFamily: 'Roboto Mono',
+    fallbackPainters: const {},
+    onMissingGlyphs: onMissing,
+    defaultForegroundArgb: defaultFg,
+    activePtyCols: activePtyCols,
+    composingText: composing,
+    cursorCol: cursorCol,
+  );
+
+  final base = makePainter(repaint: repaintA);
+  expect(
+    makePainter(repaint: null).shouldRepaint(makePainter(repaint: null)),
+    isTrue,
+  );
+  expect(base.shouldRepaint(makePainter(repaint: repaintA)), isFalse);
+  expect(
+    base.shouldRepaint(makePainter(buffer: bufB, repaint: repaintA)),
+    isTrue,
+  );
+  expect(base.shouldRepaint(makePainter(repaint: repaintB)), isTrue);
+  expect(
+    base.shouldRepaint(makePainter(repaint: repaintA, defaultFg: 0xFF00FF00)),
+    isTrue,
+  );
+  expect(
+    base.shouldRepaint(makePainter(repaint: repaintA, activePtyCols: 2)),
+    isTrue,
+  );
+  expect(
+    base.shouldRepaint(makePainter(repaint: repaintA, composing: 'a')),
+    isTrue,
+  );
+  expect(
+    base.shouldRepaint(makePainter(repaint: repaintA, cursorCol: 1)),
+    isTrue,
+  );
+  expect(
+    base.shouldRepaint(makePainter(repaint: repaintA, onMissing: (_) {})),
+    isTrue,
+  );
+
+  var missingCallbacks = 0;
+  final missingBuf = Buffer(4, 2)..writeString(0, 0, 'Ж', Style.empty);
+  final countingPainter = makePainter(
+    buffer: missingBuf,
+    repaint: repaintA,
+    onMissing: (_) => missingCallbacks++,
+  );
+  await tester.pumpWidget(
+    Directionality(
+      textDirection: TextDirection.ltr,
+      child: CustomPaint(
+        size: Size(4 * atlas.cellWidth, 2 * atlas.cellHeight),
+        painter: countingPainter,
+      ),
+    ),
+  );
+  await tester.pump();
+  expect(missingCallbacks, equals(1));
+
+  final renderPaint = tester.renderObject<RenderCustomPaint>(
+    find.byType(CustomPaint),
+  );
+  expect(renderPaint.debugNeedsPaint, isFalse);
+
+  repaintA.value++;
+  expect(renderPaint.debugNeedsPaint, isTrue);
+  await tester.pump();
+  await tester.pump();
+  expect(renderPaint.debugNeedsPaint, isFalse);
+  expect(missingCallbacks, equals(2));
+}
+
+Future<void> _testKittyPaintColorResetAfterSubpixels() async {
+  final atlas = await GlyphAtlasGenerator.generateEmpty(
+    fontSize: 16.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlas.image.dispose);
+
+  const imageId = 0x5678;
+  final translucentRgba = Uint8List.fromList([255, 0, 0, 64]);
+  final kittyData = KittyImageData(
+    imageId: imageId,
+    pixelWidth: 1,
+    pixelHeight: 1,
+    rgbaPixels: translucentRgba,
+    gridCols: 1,
+    gridRows: 1,
+  );
+  final registry = KittyImageRegistry()..registerImage(kittyData);
+  final buffer = Buffer(1, 1)
+    ..registerKittyRegistry(const tui_geo.Rect(0, 0, 1, 1), registry)
+    ..setAttributes(
+      0,
+      0,
+      char: kittyPlaceholderCell(0, 0),
+      fg: 0xFF000000 | imageId,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder,
+    );
+
+  final kittyImages = <KittyImageData, ui.Image>{};
+  final painter = TuiAtlasPainter(
+    buffer: buffer,
+    atlas: atlas,
+    fontFamily: 'Roboto Mono',
+    fallbackPainters: const {},
+    onMissingGlyphs: null,
+    kittyImages: kittyImages,
+  );
+
+  final w = atlas.cellWidth.ceil();
+  final h = atlas.cellHeight.ceil();
+
+  // Frame 1: undecoded translucent Kitty subpixel sets _kittyPaint.color alpha < 255.
+  final rec1 = ui.PictureRecorder();
+  painter.paint(Canvas(rec1), Size(w.toDouble(), h.toDouble()));
+  rec1.endRecording().dispose();
+
+  // Frame 2: same painter instance now has a decoded opaque GPU image in kittyImages.
+  final decodedCompleter = Completer<ui.Image>();
+  ui.decodeImageFromPixels(
+    Uint8List.fromList([0, 255, 0, 255]),
+    1,
+    1,
+    ui.PixelFormat.rgba8888,
+    decodedCompleter.complete,
+  );
+  final gpuImage = await decodedCompleter.future;
+  addTearDown(gpuImage.dispose);
+  kittyImages[kittyData] = gpuImage;
+
+  final rec2 = ui.PictureRecorder();
+  painter.paint(Canvas(rec2), Size(w.toDouble(), h.toDouble()));
+  final pic2 = rec2.endRecording();
+  final rendered = await pic2.toImage(w, h);
+  pic2.dispose();
+  addTearDown(rendered.dispose);
+
+  final bytes = (await rendered.toByteData())!.buffer.asUint8List();
+  final centerOffset = ((h ~/ 2) * w + (w ~/ 2)) * 4;
+  expect(bytes[centerOffset + 1], equals(255));
+  expect(bytes[centerOffset + 3], equals(255));
 }
