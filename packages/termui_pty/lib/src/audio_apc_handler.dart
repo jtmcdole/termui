@@ -79,6 +79,9 @@ final class TerminalClipAudioEvent extends TerminalAudioEvent {
   /// Optional positive 31-bit mixing bus identifier (`1 .. 0x7FFFFFFF`).
   final int? busId;
 
+  /// Optional positive 31-bit open buffer stream identifier (`1 .. 0x7FFFFFFF`).
+  final int? streamId;
+
   /// Creates an audio clip playback event.
   const TerminalClipAudioEvent({
     required this.clipId,
@@ -89,7 +92,87 @@ final class TerminalClipAudioEvent extends TerminalAudioEvent {
     this.loop = false,
     this.startOffset = Duration.zero,
     this.busId,
+    this.streamId,
   });
+}
+
+/// Pass-through buffer stream lifecycle or chunk event decoded from `ESC _ A a=stream,... ST`.
+final class TerminalStreamAudioEvent extends TerminalAudioEvent {
+  /// Stream operation (`'open'`, `'chunk'`, or `'end'`).
+  final String op;
+
+  /// Positive 31-bit wire stream identifier (`1 .. 0x7FFFFFFF`).
+  final int streamId;
+
+  /// Monotonic chunk sequence number (`>= 0`) for `'chunk'` and optionally `'end'`.
+  final int? seq;
+
+  /// Maximum resident buffer size in bytes (`1 .. 16 MiB`) for `'open'`.
+  final int? maxBufferSize;
+
+  /// Whether consumed samples are released from the circular buffer (`'open'`).
+  final bool? releaseConsumed;
+
+  /// Target pre-playback buffering duration (`'open'`).
+  final Duration? bufferingTimeNeeds;
+
+  /// Sample rate in Hertz (`1 .. 384000`) for `'open'`.
+  final int? sampleRate;
+
+  /// Channel count (`1` mono or `2` stereo) for `'open'`.
+  final int? channels;
+
+  /// Decoded raw audio chunk bytes for `'chunk'`.
+  final Uint8List? chunkBytes;
+
+  /// Creates a buffer stream lifecycle or chunk audio event.
+  const TerminalStreamAudioEvent({
+    required this.op,
+    required this.streamId,
+    this.seq,
+    this.maxBufferSize,
+    this.releaseConsumed,
+    this.bufferingTimeNeeds,
+    this.sampleRate,
+    this.channels,
+    this.chunkBytes,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TerminalStreamAudioEvent &&
+          other.op == op &&
+          other.streamId == streamId &&
+          other.seq == seq &&
+          other.maxBufferSize == maxBufferSize &&
+          other.releaseConsumed == releaseConsumed &&
+          other.bufferingTimeNeeds == bufferingTimeNeeds &&
+          other.sampleRate == sampleRate &&
+          other.channels == channels &&
+          _bytesEqual(other.chunkBytes, chunkBytes);
+
+  @override
+  int get hashCode => Object.hash(
+    op,
+    streamId,
+    seq,
+    maxBufferSize,
+    releaseConsumed,
+    bufferingTimeNeeds,
+    sampleRate,
+    channels,
+    chunkBytes == null ? null : Object.hashAll(chunkBytes!),
+  );
+
+  static bool _bytesEqual(Uint8List? a, Uint8List? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 }
 
 /// Mixing bus lifecycle or DSP filter command decoded from `ESC _ A a=bus,... ST`.
@@ -289,6 +372,9 @@ final class AudioApcHandler {
   /// Maximum decoded audio clip size allowed per upload (`2 MiB`).
   static const int maxClipBytes = 2 * 1024 * 1024;
 
+  /// Maximum resident buffer size allowed per audio stream (`16 MiB`).
+  static const int maxStreamBytes = 16 * 1024 * 1024;
+
   /// Maximum concurrent in-flight chunked clip uploads.
   static const int maxConcurrentUploads = 8;
 
@@ -362,6 +448,8 @@ final class AudioApcHandler {
         _handleStop(control);
       case 'bus':
         _handleBus(control);
+      case 'stream':
+        _handleStream(control, dataPart);
     }
   }
 
@@ -468,6 +556,99 @@ final class AudioApcHandler {
     if (raw == null || raw.isEmpty) return null;
     final parsed = double.tryParse(raw);
     return (parsed != null && parsed.isFinite) ? parsed : null;
+  }
+
+  void _handleStream(Map<String, String> control, String dataPart) {
+    final op = control['op']?.trim().toLowerCase();
+    final streamId = _parseExplicitClipId(control['s']);
+    if (op == null || streamId == null || streamId <= 0) return;
+    switch (op) {
+      case 'open':
+        _handleStreamOpen(control, streamId);
+      case 'chunk':
+        _handleStreamChunk(control, streamId, dataPart);
+      case 'end':
+        _handleStreamEnd(control, streamId);
+    }
+  }
+
+  void _handleStreamOpen(Map<String, String> control, int streamId) {
+    final maxRaw = control['max'];
+    final maxBufferSize = maxRaw == null
+        ? 4 * 1024 * 1024
+        : _parseOptionalBoundedInt(maxRaw, min: 1, max: maxStreamBytes);
+    final relRaw = control['rel'];
+    final releaseConsumed = relRaw == null
+        ? false
+        : _parseOptionalBoolFlag(relRaw);
+    final bufRaw = control['buf'];
+    final bufferingTimeNeeds = bufRaw == null
+        ? const Duration(milliseconds: 500)
+        : _parseOptionalDurationMs(bufRaw, maxMs: 60000.0);
+    final srRaw = control['sr'];
+    final sampleRate = srRaw == null
+        ? 48000
+        : _parseOptionalBoundedInt(srRaw, min: 1, max: 384000);
+    final chRaw = control['ch'];
+    final channels = chRaw == null
+        ? 2
+        : _parseOptionalBoundedInt(chRaw, min: 1, max: 2);
+    if (maxBufferSize == null ||
+        releaseConsumed == null ||
+        bufferingTimeNeeds == null ||
+        sampleRate == null ||
+        channels == null) {
+      return;
+    }
+    onAudioEvent?.call(
+      TerminalStreamAudioEvent(
+        op: 'open',
+        streamId: streamId,
+        maxBufferSize: maxBufferSize,
+        releaseConsumed: releaseConsumed,
+        bufferingTimeNeeds: bufferingTimeNeeds,
+        sampleRate: sampleRate,
+        channels: channels,
+      ),
+    );
+  }
+
+  void _handleStreamChunk(
+    Map<String, String> control,
+    int streamId,
+    String dataPart,
+  ) {
+    final seq = _parseOptionalBoundedInt(
+      control['seq'],
+      min: 0,
+      max: 0x7FFFFFFF,
+    );
+    if (seq == null || dataPart.isEmpty) return;
+    final clean = dataPart.replaceAll(_whitespaceRegex, '');
+    final decoded = _decodeBase64Bounded(clean);
+    if (decoded == null) return;
+    onAudioEvent?.call(
+      TerminalStreamAudioEvent(
+        op: 'chunk',
+        streamId: streamId,
+        seq: seq,
+        chunkBytes: decoded,
+      ),
+    );
+  }
+
+  void _handleStreamEnd(Map<String, String> control, int streamId) {
+    final seqRaw = control['seq'];
+    final int? seq;
+    if (seqRaw != null) {
+      seq = _parseOptionalBoundedInt(seqRaw, min: 0, max: 0x7FFFFFFF);
+      if (seq == null) return;
+    } else {
+      seq = null;
+    }
+    onAudioEvent?.call(
+      TerminalStreamAudioEvent(op: 'end', streamId: streamId, seq: seq),
+    );
   }
 
   void _handleBus(Map<String, String> control) {
@@ -730,33 +911,55 @@ final class AudioApcHandler {
         .toLowerCase();
     final explicitId = _parseExplicitClipId(control['i']);
     final busId = _parseExplicitClipId(control['b']);
+    final streamId = _parseExplicitClipId(control['st']);
     if ((explicitId != null && explicitId < 0) ||
-        (busId != null && busId < 0)) {
+        (busId != null && busId < 0) ||
+        (streamId != null && streamId < 0)) {
       return;
     }
     final clipId = explicitId ?? _allocateAutoId();
     _removePendingUpload(clipId);
     if (!_validFormats.contains(rawFmt)) return;
-    _evictOldestUploadIfNeeded();
 
     final loopRaw = (control['l'] ?? '0').trim().toLowerCase();
+    final loop = loopRaw == '1' || loopRaw == 'true';
     final startOffset = _parseOptionalDurationMs(control['s']) ?? Duration.zero;
+    final volume = _parseBoundedDouble(
+      control['v'],
+      min: 0.0,
+      max: 1.0,
+      fallback: 1.0,
+    );
+    final pan = _parseBoundedDouble(
+      control['p'],
+      min: -1.0,
+      max: 1.0,
+      fallback: 0.0,
+    );
+    if (streamId != null) {
+      onAudioEvent?.call(
+        TerminalClipAudioEvent(
+          clipId: clipId,
+          format: rawFmt,
+          bytes: Uint8List(0),
+          volume: volume,
+          pan: pan,
+          loop: loop,
+          startOffset: startOffset,
+          busId: busId,
+          streamId: streamId,
+        ),
+      );
+      return;
+    }
+
+    _evictOldestUploadIfNeeded();
     final pending = _PendingAudioUpload(
       clipId: clipId,
       format: rawFmt,
-      volume: _parseBoundedDouble(
-        control['v'],
-        min: 0.0,
-        max: 1.0,
-        fallback: 1.0,
-      ),
-      pan: _parseBoundedDouble(
-        control['p'],
-        min: -1.0,
-        max: 1.0,
-        fallback: 0.0,
-      ),
-      loop: loopRaw == '1' || loopRaw == 'true',
+      volume: volume,
+      pan: pan,
+      loop: loop,
       startOffset: startOffset,
       busId: busId,
     );
