@@ -964,6 +964,11 @@ final class GlyphAtlas {
   /// Number of columns allocated in the atlas grid.
   final int numCols;
 
+  final Map<String, Rect> _regularRects = <String, Rect>{};
+  final Map<String, Rect> _boldRects = <String, Rect>{};
+  final Map<String, Rect> _italicRects = <String, Rect>{};
+  final Map<String, Rect> _boldItalicRects = <String, Rect>{};
+
   /// Blank padding added around each glyph to prevent texture bleed.
   static const double padding = 2.0;
 
@@ -1007,23 +1012,49 @@ final class GlyphAtlas {
   }) : styleRects = styleRects ?? const {},
        styledCharRects =
            styledCharRects ??
-           (styleRects != null ? _deriveStyledCharRects(styleRects) : const {});
+           (styleRects != null
+               ? _deriveStyledCharRects(styleRects)
+               : const {}) {
+    _populateVariantMaps();
+  }
+
+  void _populateVariantMaps() {
+    for (final entry in styleRects.entries) {
+      final (char, isBold, isItalic) = entry.key;
+      _mapForFlags(isBold, isItalic)[char] = entry.value;
+    }
+    for (final entry in styledCharRects.entries) {
+      final (char, variant) = entry.key;
+      _mapForVariant(variant)[char] = entry.value;
+    }
+    _regularRects.addAll(charRects);
+  }
+
+  Map<String, Rect> _mapForFlags(bool isBold, bool isItalic) {
+    if (!isBold) return isItalic ? _italicRects : _regularRects;
+    return isItalic ? _boldItalicRects : _boldRects;
+  }
+
+  Map<String, Rect> _mapForVariant(GlyphStyleVariant variant) =>
+      switch (variant) {
+        GlyphStyleVariant.regular => _regularRects,
+        GlyphStyleVariant.bold => _boldRects,
+        GlyphStyleVariant.italic => _italicRects,
+        GlyphStyleVariant.boldItalic => _boldItalicRects,
+      };
+
+  /// Whether this atlas contains a native rasterized entry for [char] in [variant].
+  bool hasNativeVariant(String char, GlyphStyleVariant variant) =>
+      _mapForVariant(variant).containsKey(char);
 
   /// Returns the atlas source [Rect] for [char] matching [isBold] and [isItalic].
   ///
   /// Falls back to the regular variant when a specialized styled variant is absent.
   Rect? rectFor(String char, {bool isBold = false, bool isItalic = false}) {
     if (!isBold && !isItalic) {
-      return charRects[char] ??
-          styledCharRects[(char, GlyphStyleVariant.regular)];
+      return _regularRects[char];
     }
-    final variant = GlyphStyleVariant.fromFlags(
-      isBold: isBold,
-      isItalic: isItalic,
-    );
-    return styledCharRects[(char, variant)] ??
-        styleRects[(char, isBold, isItalic)] ??
-        charRects[char];
+    return _mapForFlags(isBold, isItalic)[char] ?? _regularRects[char];
   }
 
   /// Looks up the glyph rect for [char] matching the specified style variant.

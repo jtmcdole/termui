@@ -43,6 +43,7 @@ final class GlyphAtlasController extends ChangeNotifier {
   int _generationId = 0;
   bool _isDisposed = false;
   bool _isUpdatingAtlas = false;
+  bool _atlasUpdateScheduled = false;
   bool _webFontsWaitStarted = false;
   bool _postFrameDisposalScheduled = false;
   Future<void>? _initFuture;
@@ -311,16 +312,34 @@ final class GlyphAtlasController extends ChangeNotifier {
     if (_isDisposed || currentAtlas == null) return;
     var needsUpdate = false;
     for (final entry in glyphs) {
-      if (!_pendingGlyphs.contains(entry) &&
-          !_processingGlyphs.contains(entry) &&
-          !currentAtlas.styledCharRects.containsKey(entry)) {
+      if (!currentAtlas.hasNativeVariant(entry.$1, entry.$2) &&
+          !_pendingGlyphs.contains(entry) &&
+          !_processingGlyphs.contains(entry)) {
         _pendingGlyphs.add(entry);
         needsUpdate = true;
       }
     }
     if (needsUpdate) {
-      unawaited(_triggerAtlasUpdate());
+      _scheduleAtlasUpdate();
     }
+  }
+
+  void _scheduleAtlasUpdate() {
+    if (_isDisposed || _isUpdatingAtlas || _atlasUpdateScheduled) return;
+    _atlasUpdateScheduled = true;
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase != SchedulerPhase.idle &&
+        phase != SchedulerPhase.postFrameCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _atlasUpdateScheduled = false;
+        unawaited(_triggerAtlasUpdate());
+      });
+      return;
+    }
+    scheduleMicrotask(() {
+      _atlasUpdateScheduled = false;
+      unawaited(_triggerAtlasUpdate());
+    });
   }
 
   Future<void> _triggerAtlasUpdate() async {
@@ -344,9 +363,16 @@ final class GlyphAtlasController extends ChangeNotifier {
       if (_isDisposed || genId != _generationId || baseAtlas == null) return;
 
       final newAtlas = await baseAtlas.addStyledGlyphs(batch);
-      if (_isDisposed || genId != _generationId || newAtlas.isDisposed) {
-        if (!identical(baseAtlas.image, newAtlas.image)) {
+      if (_isDisposed ||
+          genId != _generationId ||
+          !identical(_atlas, baseAtlas) ||
+          newAtlas.isDisposed) {
+        if (!identical(baseAtlas.image, newAtlas.image) &&
+            !newAtlas.isDisposed) {
           newAtlas.dispose();
+        }
+        if (!_isDisposed) {
+          _requeueUnbakedGlyphs(batch);
         }
         return;
       }
@@ -361,8 +387,19 @@ final class GlyphAtlasController extends ChangeNotifier {
         _isUpdatingAtlas = false;
       }
       Tracer.record(_traceTriggerAtlasUpdateId, Phase.end, TraceCategory.paint);
-      if (!_isDisposed && _pendingGlyphs.isNotEmpty && genId == _generationId) {
-        unawaited(_triggerAtlasUpdate());
+      if (!_isDisposed && _pendingGlyphs.isNotEmpty && !_isUpdatingAtlas) {
+        _scheduleAtlasUpdate();
+      }
+    }
+  }
+
+  void _requeueUnbakedGlyphs(List<(String, GlyphStyleVariant)> batch) {
+    final current = _atlas;
+    if (current == null) return;
+    for (final entry in batch) {
+      if (!current.hasNativeVariant(entry.$1, entry.$2) &&
+          !_pendingGlyphs.contains(entry)) {
+        _pendingGlyphs.add(entry);
       }
     }
   }
@@ -402,40 +439,46 @@ final class GlyphAtlasController extends ChangeNotifier {
     if (_isDisposed || activeAtlas == null) return;
 
     final width = buffer.width;
+    final chars = buffer.characters;
+    final attrs = buffer.attributes;
     final total = width * buffer.height;
-    for (var i = 0; i < total; i++) {
-      final char = buffer.characters[i];
-      if (char.isEmpty || char == ' ') continue;
-      final x = i % width;
-      final y = i ~/ width;
-      final mods = buffer.getModifiers(x, y);
-      if (Modifier.has(mods, Modifier.kittyPlaceholder) ||
-          char.startsWith(kittyPlaceholderChar)) {
-        continue;
-      }
-      final isBold = Modifier.has(mods, Modifier.bold);
-      final isItalic = Modifier.has(mods, Modifier.italic);
-      if (activeAtlas.rectFor(char, isBold: isBold, isItalic: isItalic) !=
-          null) {
-        continue;
-      }
-      _ensureSingleFallbackPainter(
+    var missLayouts = 0;
+    for (var i = 0; i < total && missLayouts < maxFallbackPainters; i++) {
+      final char = chars[i];
+      final mods = attrs[i * 3 + 2];
+      if (!_needsFallbackPainter(activeAtlas, char, mods)) continue;
+      final created = _ensureSingleFallbackPainter(
         buffer,
-        x: x,
-        y: y,
+        x: i % width,
+        y: i ~/ width,
         char: char,
         mods: mods,
-        isBold: isBold,
-        isItalic: isItalic,
+        isBold: Modifier.has(mods, Modifier.bold),
+        isItalic: Modifier.has(mods, Modifier.italic),
         defaultForegroundArgb: defaultForegroundArgb,
         defaultBackgroundArgb: defaultBackgroundArgb,
         faintOpacity: faintOpacity,
         palette: palette,
       );
+      if (created) missLayouts++;
     }
   }
 
-  void _ensureSingleFallbackPainter(
+  static bool _needsFallbackPainter(GlyphAtlas atlas, String char, int mods) {
+    if (char.isEmpty || char == ' ') return false;
+    if (Modifier.has(mods, Modifier.kittyPlaceholder) ||
+        (char.length >= 2 && char.startsWith(kittyPlaceholderChar))) {
+      return false;
+    }
+    return atlas.rectFor(
+          char,
+          isBold: Modifier.has(mods, Modifier.bold),
+          isItalic: Modifier.has(mods, Modifier.italic),
+        ) ==
+        null;
+  }
+
+  bool _ensureSingleFallbackPainter(
     Buffer buffer, {
     required int x,
     required int y,
@@ -466,7 +509,7 @@ final class GlyphAtlasController extends ChangeNotifier {
     final existing = _fallbackPainters.remove(key);
     if (existing != null) {
       _fallbackPainters[key] = existing;
-      return;
+      return false;
     }
     while (_fallbackPainters.length >= maxFallbackPainters) {
       final oldest = _fallbackPainters.keys.first;
@@ -491,6 +534,7 @@ final class GlyphAtlasController extends ChangeNotifier {
       ),
       textDirection: TextDirection.ltr,
     )..layout();
+    return true;
   }
 
   @override
