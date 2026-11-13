@@ -1,3 +1,9 @@
+## 0.11.1
+
+ - **PERF**(termui_flutter): repaint steady-state buffer updates without widget rebuilds.
+ - **PERF**(termui_flutter): support repaint listenable and zero-Record loops in TuiAtlasPainter.
+ - **PERF**(termui_flutter): eliminate GlyphAtlas Record lookups and batch missing-glyph updates.
+
 ## 0.11.0
 
 > Note: This release has breaking changes.

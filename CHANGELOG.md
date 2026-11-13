@@ -3,6 +3,52 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-13
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui` - `v0.14.2`](#termui---v0142)
+ - [`termui_flutter` - `v0.11.1`](#termui_flutter---v0111)
+ - [`termui_pty` - `v0.10.1`](#termui_pty---v0101)
+ - [`termui_recorder` - `v0.10.3`](#termui_recorder---v0103)
+ - [`termui_test` - `v0.4.3`](#termui_test---v043)
+ - [`termui_hotreload` - `v0.6.29`](#termui_hotreload---v0629)
+ - [`termui_tinpot` - `v0.5.1`](#termui_tinpot---v051)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.3`
+ - `termui_test` - `v0.4.3`
+ - `termui_hotreload` - `v0.6.29`
+ - `termui_tinpot` - `v0.5.1`
+
+---
+
+#### `termui` - `v0.14.2`
+
+ - **FIX**(termui): bound scoped Kitty registries and cover combining marks in width checks.
+
+#### `termui_flutter` - `v0.11.1`
+
+ - **PERF**(termui_flutter): repaint steady-state buffer updates without widget rebuilds.
+ - **PERF**(termui_flutter): support repaint listenable and zero-Record loops in TuiAtlasPainter.
+ - **PERF**(termui_flutter): eliminate GlyphAtlas Record lookups and batch missing-glyph updates.
+
+#### `termui_pty` - `v0.10.1`
+
+ - **FIX**(termui_pty): reassemble chunk-split combining marks in VirtualTerminal.
+
+
 ## 2026-11-12
 
 ### Changes
