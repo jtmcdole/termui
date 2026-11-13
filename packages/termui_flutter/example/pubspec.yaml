@@ -39,7 +39,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   file: ^7.0.0
   termui: ^0.14.1
-  termui_flutter: ^0.11.0
+  termui_flutter: ^0.11.1
   termui_shared_examples: any
   termui_recorder: ^0.10.2
   termui_pty: ^0.10.0

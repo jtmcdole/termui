@@ -3,6 +3,29 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-13
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.11.1`](#termui_flutter---v0111)
+
+---
+
+#### `termui_flutter` - `v0.11.1`
+
+ - **PERF**(termui_flutter): repaint steady-state buffer updates without widget rebuilds.
+ - **PERF**(termui_flutter): support repaint listenable and zero-Record loops in TuiAtlasPainter.
+ - **PERF**(termui_flutter): eliminate GlyphAtlas Record lookups and batch missing-glyph updates.
+
+
 ## 2026-11-12
 
 ### Changes
