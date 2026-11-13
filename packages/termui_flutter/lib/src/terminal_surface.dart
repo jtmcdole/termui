@@ -237,6 +237,13 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   late TerminalImeClient _imeClient;
   late bool _ownsImeClient;
   late _KittyGpuImageCache _kittyCache;
+  final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
+
+  bool _hadActiveBuffer = false;
+  Buffer? _lastPaintedBuffer;
+  Buffer? _externallyPreparedBuffer;
+  (int, int)? _lastPaintedActivePtySize;
+  ({int col, int row})? _lastCursorPosition;
 
   StreamSubscription<double>? _fontSizeSubscription;
   StreamSubscription<String?>? _mouseCursorSubscription;
@@ -324,6 +331,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _initModeFlags();
     _bindTerminalStreams();
     widget.bufferListenable?.addListener(_onExternalBufferChanged);
+    _hadActiveBuffer = _activeBuffer != null;
+    _lastCursorPosition =
+        widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
     _prepareActiveBufferResources();
     if (_focusNode.hasFocus && widget.enableIme) {
       _imeClient.attach();
@@ -589,11 +599,27 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       widget.bufferListenable?.addListener(_onExternalBufferChanged);
     }
 
-    if (oldWidget.buffer != widget.buffer ||
+    _syncBufferResourcesOnUpdate(oldWidget);
+  }
+
+  void _syncBufferResourcesOnUpdate(TerminalSurface oldWidget) {
+    final activeBuf = _activeBuffer;
+    final alreadyPrepared = identical(activeBuf, _externallyPreparedBuffer);
+    _externallyPreparedBuffer = null;
+    final bindingsChanged =
+        oldWidget.buffer != widget.buffer ||
         oldWidget.bufferProvider != widget.bufferProvider ||
-        oldWidget.cursorPosition != widget.cursorPosition) {
-      _prepareActiveBufferResources();
+        oldWidget.cursorPosition != widget.cursorPosition;
+    if (bindingsChanged) {
       _scheduleGeometrySync();
+    }
+    if (activeBuf == null) return;
+    if (!alreadyPrepared &&
+        (bindingsChanged || widget.bufferListenable == null)) {
+      _prepareBufferResources(activeBuf);
+    }
+    if (widget.bufferListenable == null) {
+      _paintNotifier.notify();
     }
   }
 
@@ -639,6 +665,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _atlasController.dispose();
     }
     _kittyCache.dispose();
+    _paintNotifier.dispose();
     super.dispose();
   }
 
@@ -661,9 +688,32 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   void _onExternalBufferChanged() {
     if (!mounted) return;
+    final buf = _activeBuffer;
+    final hasBuf = buf != null;
+    final activePty =
+        widget.activePtySizeProvider?.call() ?? widget.activePtySize;
+    final cursor =
+        widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
+    final cursorMoved = cursor != _lastCursorPosition;
+    _lastCursorPosition = cursor;
+
     _prepareActiveBufferResources();
-    setState(() {});
-    _scheduleGeometrySync();
+    if (cursorMoved) {
+      _scheduleGeometrySync();
+    }
+
+    final needsWidgetRebuild =
+        !hasBuf ||
+        !_hadActiveBuffer ||
+        !identical(buf, _lastPaintedBuffer) ||
+        activePty != _lastPaintedActivePtySize ||
+        (_imeClient.composingText.isNotEmpty && cursorMoved);
+
+    if (needsWidgetRebuild) {
+      setState(() {});
+      return;
+    }
+    _paintNotifier.notify();
   }
 
   void _onImeComposingChanged() {
@@ -687,13 +737,13 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   void _onSelectionChanged() {
     if (mounted) {
-      setState(() {});
+      _paintNotifier.notify();
     }
   }
 
   void _onKittyImageDecoded() {
     if (mounted) {
-      setState(() {});
+      _paintNotifier.notify();
     }
   }
 
@@ -723,11 +773,16 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   void _prepareActiveBufferResources() {
     final buf = _activeBuffer;
     if (buf == null) return;
-    prepareBuffer(buf);
+    _prepareBufferResources(buf);
   }
 
   /// Pre-populates Kitty GPU image decoding and fallback [TextPainter] caches for [buffer].
   void prepareBuffer(Buffer buffer) {
+    _externallyPreparedBuffer = buffer;
+    _prepareBufferResources(buffer);
+  }
+
+  void _prepareBufferResources(Buffer buffer) {
     _kittyCache.ensureForBuffer(buffer);
     _atlasController.ensureFallbackPaintersForBuffer(
       buffer,
@@ -1440,6 +1495,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
         widget.activePtySizeProvider?.call() ?? widget.activePtySize;
     final cursor =
         widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
+    _hadActiveBuffer = buf != null;
+    _lastPaintedBuffer = buf;
+    _lastPaintedActivePtySize = activePty;
     return Container(
       width: layoutSize.width,
       height: layoutSize.height,
@@ -1449,6 +1507,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
           : CustomPaint(
               size: layoutSize,
               painter: TuiAtlasPainter(
+                repaint: _paintNotifier,
                 buffer: buf,
                 atlas: _atlasController.atlas!,
                 fontFamily: _atlasController.fontFamily,
@@ -1503,19 +1562,29 @@ final class _KittyGpuImageCache {
   _KittyGpuImageCache({required this.onDecoded});
 
   void ensureForBuffer(Buffer buffer) {
-    final total = buffer.width * buffer.height;
     final width = buffer.width;
+    final total = width * buffer.height;
+    final chars = buffer.characters;
+    final attrs = buffer.attributes;
     KittyImageData? lastKittyData;
     for (var i = 0; i < total; i++) {
-      final char = buffer.characters[i];
-      if (char.isEmpty || char == ' ') continue;
-      final x = i % width;
-      final y = i ~/ width;
-      final mods = buffer.getModifiers(x, y);
-      if (Modifier.has(mods, Modifier.kittyPlaceholder) ||
-          char.startsWith(kittyPlaceholderChar)) {
-        lastKittyData = _resolveAndEnsure(buffer, x, y, char, lastKittyData);
+      final mods = attrs[i * 3 + 2];
+      final hasKittyMod = Modifier.has(mods, Modifier.kittyPlaceholder);
+      final char = chars[i];
+      if (!hasKittyMod) {
+        if (char.length < 2 || !char.startsWith(kittyPlaceholderChar)) {
+          continue;
+        }
+      } else if (char.isEmpty || char == ' ') {
+        continue;
       }
+      lastKittyData = _resolveAndEnsure(
+        buffer,
+        i % width,
+        i ~/ width,
+        char,
+        lastKittyData,
+      );
     }
   }
 
@@ -1648,4 +1717,8 @@ final class _KittyGpuImageCache {
     images.clear();
     _decoding.clear();
   }
+}
+
+final class _SurfaceRepaintNotifier extends ChangeNotifier {
+  void notify() => notifyListeners();
 }
