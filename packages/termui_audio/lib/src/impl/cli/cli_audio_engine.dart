@@ -57,6 +57,7 @@ final class CliAudioEngine implements TermuiAudioEngine {
   final Map<int, Completer<void>> _activeVoices = {};
   final Map<int, int> _activeBuses = {};
   final Set<Timer> _activeTimers = {};
+  Completer<void> _disposeCompleter = Completer<void>();
 
   NativeCallable<ffi.DartVoiceEndedFunction>? _voiceEndedCallable;
 
@@ -121,12 +122,20 @@ final class CliAudioEngine implements TermuiAudioEngine {
 
     ffi.setDartEventCallback(callable.nativeFunction.cast(), nullptr, nullptr);
 
+    if (_disposeCompleter.isCompleted) {
+      _disposeCompleter = Completer<void>();
+    }
     _inited = true;
   }
 
   @override
   Future<void> dispose() async {
-    if (!_inited) return;
+    if (!_inited) {
+      if (!_disposeCompleter.isCompleted) {
+        _disposeCompleter.complete();
+      }
+      return;
+    }
 
     for (final timer in _activeTimers) {
       timer.cancel();
@@ -144,6 +153,9 @@ final class CliAudioEngine implements TermuiAudioEngine {
     _voiceEndedCallable = null;
     _epoch = 0;
     _inited = false;
+    if (!_disposeCompleter.isCompleted) {
+      _disposeCompleter.complete();
+    }
   }
 
   @override
@@ -803,4 +815,18 @@ final class CliAudioEngine implements TermuiAudioEngine {
       calloc.free(isSamePtr);
     }
   }
+
+  @override
+  Future<Float32List> fetchWaveform([Float32List? outBuffer]) async =>
+      getWaveform(outBuffer);
+
+  @override
+  Stream<Float32List> watchWaveform({
+    Duration interval = const Duration(milliseconds: 100),
+  }) => createWaveformStream(
+    fetchWaveform: fetchWaveform,
+    isDisposed: () => _disposeCompleter.isCompleted,
+    onDisposed: _disposeCompleter.future,
+    interval: interval,
+  );
 }

@@ -55,12 +55,16 @@ class Terminal {
   }
 
   final _events = StreamController<InputEvent>.broadcast();
+  final _audioApcReplies = StreamController<String>.broadcast();
 
   /// Reads a single input event from the terminal asynchronously.
   Future<InputEvent> readInput() => _events.stream.first;
 
   /// A stream of all incoming input events from the terminal.
   Stream<InputEvent> get events => _events.stream;
+
+  /// Stream of inbound `ESC _ A a=waver` APC reply payloads from terminal input.
+  Stream<String> get audioApcReplies => _audioApcReplies.stream;
 
   StreamSubscription<List<int>>? _stdinSubscription;
 
@@ -118,22 +122,32 @@ class Terminal {
     this.backend.enableRawMode();
     _stdinSubscription = this.backend.rawInput.listen(
       (List<int> chunk) {
-        final parsed = _parser.parse(chunk);
-        for (final event in parsed) {
-          if (event case CursorPositionReportEvent(:final x, :final y)) {
-            if (_cursorCallback != null && !_cursorCallback!.isCompleted) {
-              _cursorCallback!.complete(Point<int>(x, y));
-            }
-            _cursorCallback = null;
-          } else {
-            _events.add(event);
-          }
+        for (final event in _parser.parse(chunk)) {
+          _dispatchParsedEvent(event);
         }
       },
       onDone: () {
         _events.close();
+        _audioApcReplies.close();
       },
     );
+  }
+
+  void _dispatchParsedEvent(InputEvent event) {
+    if (event case CursorPositionReportEvent(:final x, :final y)) {
+      if (_cursorCallback case final cb? when !cb.isCompleted) {
+        cb.complete(Point<int>(x, y));
+      }
+      _cursorCallback = null;
+      return;
+    }
+    if (event case AudioApcReplyEvent(:final payload)) {
+      if (!_audioApcReplies.isClosed) {
+        _audioApcReplies.add(payload);
+      }
+      return;
+    }
+    _events.add(event);
   }
 
   void _resetActiveModes() {
@@ -160,6 +174,7 @@ class Terminal {
     _stdinSubscription?.cancel();
     _stdinSubscription = null;
     _events.close();
+    _audioApcReplies.close();
     backend.disableRawMode();
     backend.dispose();
   }

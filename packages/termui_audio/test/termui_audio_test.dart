@@ -474,5 +474,72 @@ void main() {
         }
       },
     );
+
+    test(
+      '18. CliAudioEngine fetchWaveform and watchWaveform stream and close on dispose',
+      () async {
+        final cli = CliAudioEngine();
+        await cli.init(enableVisualization: true);
+        final out = Float32List(256);
+        final fetched = await cli.fetchWaveform(out);
+        expect(fetched, same(out));
+        expect(() => cli.fetchWaveform(Float32List(16)), throwsArgumentError);
+
+        final received = <Float32List>[];
+        var closed = false;
+        final sub = cli
+            .watchWaveform(interval: const Duration(milliseconds: 20))
+            .listen(received.add, onDone: () => closed = true);
+        await Future<void>.delayed(const Duration(milliseconds: 75));
+        expect(received, isNotEmpty);
+        await cli.dispose();
+        await Future<void>.delayed(Duration.zero);
+        expect(closed, isTrue);
+        await sub.cancel();
+
+        final uninitialized = CliAudioEngine();
+        await uninitialized.dispose();
+      },
+    );
+
+    test(
+      '19. createWaveformStream handles already-disposed, mid-poll disposal, and fetch errors',
+      () async {
+        final empty = createWaveformStream(
+          fetchWaveform: ([_]) async => Float32List(256),
+          isDisposed: () => true,
+        );
+        expect(await empty.toList(), isEmpty);
+
+        var disposed = false;
+        final errors = <Object>[];
+        var doneCount = 0;
+        var shouldThrow = true;
+        final sub = createWaveformStream(
+          fetchWaveform: ([_]) async {
+            if (shouldThrow) {
+              shouldThrow = false;
+              throw StateError('wave boom');
+            }
+            disposed = true;
+            return Float32List(256);
+          },
+          isDisposed: () => disposed,
+          interval: const Duration(milliseconds: 20),
+        ).listen((_) {}, onError: errors.add, onDone: () => doneCount += 1);
+        await Future<void>.delayed(const Duration(milliseconds: 180));
+        expect(errors.single, isA<StateError>());
+        expect(doneCount, equals(1));
+        await sub.cancel();
+
+        var flipDisposed = false;
+        final flipped = createWaveformStream(
+          fetchWaveform: ([_]) async => Float32List(256),
+          isDisposed: () => flipDisposed,
+        );
+        flipDisposed = true;
+        expect(await flipped.toList(), isEmpty);
+      },
+    );
   });
 }

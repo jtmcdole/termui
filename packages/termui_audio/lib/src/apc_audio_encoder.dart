@@ -518,6 +518,38 @@ abstract final class ApcAudioEncoder {
     }
   }
 
+  /// Encodes an APC live waveform query (`ESC _ A a=wave,q=<requestId>; ST`).
+  static String encodeWaveformQuery(int requestId) {
+    _validateWireId(requestId, 'requestId');
+    return '\x1b_Aa=wave,q=$requestId;\x1b\\';
+  }
+
+  /// Encodes an APC live waveform reply (`ESC _ A a=waver,q=<requestId>;<base64> ST`).
+  ///
+  /// When [samples] is `null`, emits an empty payload representing zeros.
+  /// Otherwise encodes the first 256 samples as `1024` little-endian IEEE-754
+  /// `Float32` bytes.
+  static String encodeWaveformReply(int requestId, Float32List? samples) {
+    _validateWireId(requestId, 'requestId');
+    if (samples == null) {
+      return '\x1b_Aa=waver,q=$requestId;\x1b\\';
+    }
+    if (samples.length < 256) {
+      throw ArgumentError.value(
+        samples.length,
+        'samples.length',
+        'Must be at least 256 elements long',
+      );
+    }
+    final raw = Uint8List(1024);
+    final bd = ByteData.sublistView(raw);
+    for (var i = 0; i < 256; i++) {
+      final v = samples[i];
+      bd.setFloat32(i * 4, v.isFinite ? v : 0.0, Endian.little);
+    }
+    return '\x1b_Aa=waver,q=$requestId;${base64Encode(raw)}\x1b\\';
+  }
+
   static void _validateBusFilterAndParam(
     int? filterId,
     int? paramId,
@@ -678,6 +710,22 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   _readUrlBytes;
   final Clock? _clockOverride;
 
+  static const int _waveformLength = 256;
+  static const int _waveformWireBytes = _waveformLength * 4;
+  static const Duration _waveformMinInterval = Duration(milliseconds: 50);
+  static const Duration _waveformQueryTimeout = Duration(milliseconds: 500);
+  static final RegExp _waveformWhitespaceRegex = RegExp(r'\s+');
+
+  final Float32List _cachedWaveform = Float32List(_waveformLength);
+  StreamSubscription<String>? _apcRepliesSub;
+  bool _hasApcReplies = false;
+  int _nextWaveformReqId = 1;
+  int? _inFlightWaveformReqId;
+  Completer<Float32List>? _inFlightWaveformCompleter;
+  Timer? _waveformTimeoutTimer;
+  DateTime? _lastWaveformQueryAt;
+  final Completer<void> _disposeCompleter = Completer<void>();
+
   /// Number of currently tracked active or paused voices.
   int get activeVoiceCount => _voices.length;
 
@@ -689,9 +737,14 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     Future<Uint8List> Function(String url, {LoadProgressCallback? onProgress})?
     urlByteReader,
     Clock? clock,
+    Stream<String>? apcReplies,
   }) : _readFileBytes = readFileBytes ?? createDefaultApcFileReader(),
        _readUrlBytes = urlByteReader ?? createDefaultApcUrlReader(),
-       _clockOverride = clock;
+       _clockOverride = clock {
+    if (apcReplies != null) {
+      attachApcReplies(apcReplies);
+    }
+  }
 
   Clock get _clock => _clockOverride ?? clock;
 
@@ -701,6 +754,21 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   @override
   Future<void> dispose() async {
     _disposed = true;
+    _waveformTimeoutTimer?.cancel();
+    _waveformTimeoutTimer = null;
+    final pendingReqId = _inFlightWaveformReqId;
+    if (pendingReqId != null) {
+      _completeInFlightWaveform(pendingReqId);
+    }
+    final repliesSub = _apcRepliesSub;
+    _apcRepliesSub = null;
+    _hasApcReplies = false;
+    if (repliesSub != null) {
+      await repliesSub.cancel();
+    }
+    if (!_disposeCompleter.isCompleted) {
+      _disposeCompleter.complete();
+    }
     for (final voice in _voices.values) {
       voice.stopTimer?.cancel();
       voice.stopTimer = null;
@@ -2099,11 +2167,156 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     }
   }
 
-  @override
-  Float32List getWaveform([Float32List? outBuffer]) {
-    if (outBuffer != null && outBuffer.length < 256) {
+  /// Subscribes to inbound APC reply payloads (such as `a=waver` waveform replies).
+  void attachApcReplies(Stream<String> replies) {
+    if (_disposed) return;
+    final prev = _apcRepliesSub;
+    if (prev != null) {
+      unawaited(prev.cancel());
+    }
+    _hasApcReplies = true;
+    _apcRepliesSub = replies.listen(
+      handleApcReply,
+      onDone: () {
+        _apcRepliesSub = null;
+        _hasApcReplies = false;
+      },
+    );
+  }
+
+  /// Processes a single inbound APC reply payload (e.g., `Aa=waver,q=<id>;<b64>`).
+  void handleApcReply(String payload) {
+    if (_disposed) return;
+    final clean = payload.startsWith('_A') ? payload.substring(1) : payload;
+    if (!clean.startsWith('A')) return;
+    final semiIdx = clean.indexOf(';');
+    final controlPart = semiIdx >= 0
+        ? clean.substring(1, semiIdx)
+        : clean.substring(1);
+    final dataPart = semiIdx >= 0 ? clean.substring(semiIdx + 1) : '';
+    final control = _parseWaveformControl(controlPart);
+    if (control['a'] != 'waver') return;
+    final reqId = int.tryParse(control['q'] ?? '');
+    if (reqId == null || reqId != _inFlightWaveformReqId) return;
+    if (!_decodeWaveformReplyPayload(dataPart)) return;
+    _completeInFlightWaveform(reqId);
+  }
+
+  static Map<String, String> _parseWaveformControl(String control) {
+    final map = <String, String>{};
+    if (control.isEmpty) return map;
+    for (final pair in control.split(',')) {
+      final eq = pair.indexOf('=');
+      if (eq > 0) {
+        map[pair.substring(0, eq).trim()] = pair.substring(eq + 1).trim();
+      }
+    }
+    return map;
+  }
+
+  bool _decodeWaveformReplyPayload(String dataPart) {
+    final cleanData = dataPart.replaceAll(_waveformWhitespaceRegex, '');
+    if (cleanData.isEmpty) {
+      _cachedWaveform.fillRange(0, _waveformLength, 0.0);
+      return true;
+    }
+    final Uint8List decoded;
+    try {
+      decoded = base64Decode(cleanData);
+    } on Object {
+      return false;
+    }
+    if (decoded.length != _waveformWireBytes) return false;
+    final bd = ByteData.sublistView(decoded);
+    for (var i = 0; i < _waveformLength; i++) {
+      final sample = bd.getFloat32(i * 4, Endian.little);
+      _cachedWaveform[i] = sample.isFinite ? sample : 0.0;
+    }
+    return true;
+  }
+
+  void _completeInFlightWaveform(int reqId) {
+    if (_inFlightWaveformReqId != reqId) return;
+    _inFlightWaveformReqId = null;
+    _waveformTimeoutTimer?.cancel();
+    _waveformTimeoutTimer = null;
+    final completer = _inFlightWaveformCompleter;
+    _inFlightWaveformCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete(Float32List.fromList(_cachedWaveform));
+    }
+  }
+
+  static Float32List _prepareWaveformBuffer(Float32List? outBuffer) {
+    if (outBuffer != null && outBuffer.length < _waveformLength) {
       throw ArgumentError('outBuffer must be at least 256 elements long.');
     }
-    return outBuffer ?? Float32List(256);
+    return outBuffer ?? Float32List(_waveformLength);
   }
+
+  @override
+  Float32List getWaveform([Float32List? outBuffer]) {
+    final target = _prepareWaveformBuffer(outBuffer);
+    target.setRange(0, _waveformLength, _cachedWaveform);
+    if (!_disposed && _hasApcReplies) {
+      unawaited(fetchWaveform());
+    }
+    return target;
+  }
+
+  @override
+  Future<Float32List> fetchWaveform([Float32List? outBuffer]) async {
+    final target = _prepareWaveformBuffer(outBuffer);
+    if (_disposed) {
+      target.setRange(0, _waveformLength, _cachedWaveform);
+      return target;
+    }
+    final inFlight = _inFlightWaveformCompleter;
+    if (inFlight != null) {
+      final snapshot = await inFlight.future;
+      target.setRange(0, _waveformLength, snapshot);
+      return target;
+    }
+    final now = _clock.now();
+    final lastAt = _lastWaveformQueryAt;
+    if (lastAt != null && now.difference(lastAt) < _waveformMinInterval) {
+      target.setRange(0, _waveformLength, _cachedWaveform);
+      return target;
+    }
+    final snapshot = await _dispatchWaveformQuery(now);
+    target.setRange(0, _waveformLength, snapshot);
+    return target;
+  }
+
+  Future<Float32List> _dispatchWaveformQuery(DateTime now) {
+    final reqId = _nextWaveformReqId;
+    _nextWaveformReqId = _nextWaveformReqId >= 0x7FFFFFFF
+        ? 1
+        : _nextWaveformReqId + 1;
+    final completer = Completer<Float32List>();
+    _inFlightWaveformReqId = reqId;
+    _inFlightWaveformCompleter = completer;
+    _lastWaveformQueryAt = now;
+    _waveformTimeoutTimer?.cancel();
+    _waveformTimeoutTimer = Timer(
+      _waveformQueryTimeout,
+      () => _completeInFlightWaveform(reqId),
+    );
+    try {
+      writeEscape(ApcAudioEncoder.encodeWaveformQuery(reqId));
+    } catch (_) {
+      _completeInFlightWaveform(reqId);
+    }
+    return completer.future;
+  }
+
+  @override
+  Stream<Float32List> watchWaveform({
+    Duration interval = const Duration(milliseconds: 100),
+  }) => createWaveformStream(
+    fetchWaveform: fetchWaveform,
+    isDisposed: () => _disposed,
+    onDisposed: _disposeCompleter.future,
+    interval: interval,
+  );
 }

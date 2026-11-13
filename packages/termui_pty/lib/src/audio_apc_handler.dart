@@ -238,6 +238,23 @@ final class TerminalStopAudioEvent extends TerminalAudioEvent {
   int get hashCode => clipId.hashCode;
 }
 
+/// Host waveform capture query decoded from `ESC _ A a=wave,q=<requestId>; ST`.
+final class TerminalWaveformQueryAudioEvent extends TerminalAudioEvent {
+  /// Positive 31-bit query correlation identifier (`1 .. 0x7FFFFFFF`).
+  final int requestId;
+
+  /// Creates a waveform capture query event.
+  const TerminalWaveformQueryAudioEvent({required this.requestId});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TerminalWaveformQueryAudioEvent && other.requestId == requestId;
+
+  @override
+  int get hashCode => requestId.hashCode;
+}
+
 /// Live voice parameter and transport update decoded from `ESC _ A a=update,... ST`.
 final class TerminalUpdateAudioEvent extends TerminalAudioEvent {
   /// Positive 31-bit wire clip identifier (`1 .. 0x7FFFFFFF`).
@@ -417,6 +434,38 @@ final class AudioApcHandler {
     _lastActiveUploadId = null;
   }
 
+  /// Encodes an `a=waver` APC waveform reply for PTY `stdin`.
+  ///
+  /// When [samples] is `null`, emits an empty payload representing zeros.
+  /// Otherwise encodes the first 256 samples as `1024` little-endian IEEE-754
+  /// `Float32` bytes.
+  static String encodeWaveformReply(int requestId, Float32List? samples) {
+    if (requestId <= 0 || requestId > 0x7FFFFFFF) {
+      throw ArgumentError.value(
+        requestId,
+        'requestId',
+        'Must be in 1..0x7FFFFFFF',
+      );
+    }
+    if (samples == null) {
+      return '\x1b_Aa=waver,q=$requestId;\x1b\\';
+    }
+    if (samples.length < 256) {
+      throw ArgumentError.value(
+        samples.length,
+        'samples.length',
+        'Must be at least 256 elements long',
+      );
+    }
+    final raw = Uint8List(1024);
+    final bd = ByteData.sublistView(raw);
+    for (var i = 0; i < 256; i++) {
+      final v = samples[i];
+      bd.setFloat32(i * 4, v.isFinite ? v : 0.0, Endian.little);
+    }
+    return '\x1b_Aa=waver,q=$requestId;${base64Encode(raw)}\x1b\\';
+  }
+
   /// Parses an APC payload beginning with `A` or `_A`.
   void handleApc(String payload) {
     if (!payload.startsWith('A') && !payload.startsWith('_A')) return;
@@ -450,7 +499,18 @@ final class AudioApcHandler {
         _handleBus(control);
       case 'stream':
         _handleStream(control, dataPart);
+      case 'wave':
+        _handleWaveQuery(control);
+      case 'waver':
+        // Explicitly ignored on stdout so canonical TTY echo can never loop.
+        break;
     }
+  }
+
+  void _handleWaveQuery(Map<String, String> control) {
+    final requestId = _parseExplicitClipId(control['q']);
+    if (requestId == null || requestId <= 0) return;
+    onAudioEvent?.call(TerminalWaveformQueryAudioEvent(requestId: requestId));
   }
 
   static Map<String, String> _parseControlPart(String control) {

@@ -61,6 +61,12 @@ final class FlutterAudioBus implements AudioBus {
 
 /// The Flutter and Web implementation of [TermuiAudioEngine] backed by `flutter_soloud`.
 class FlutterAudioEngine implements TermuiAudioEngine {
+  /// Creates a [FlutterAudioEngine] backend.
+  FlutterAudioEngine({
+    @visibleForTesting
+    Duration visualizationIdleTimeout = const Duration(seconds: 5),
+  }) : _visualizationIdleTimeout = visualizationIdleTimeout;
+
   sol.SoLoud get _engine => sol.SoLoud.instance;
   bool _inited = false;
 
@@ -71,7 +77,11 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   final Map<int, sol.Bus> _buses = {};
   final Map<int, AudioBus> _voicePitchBuses = {};
   final Set<Timer> _activeTimers = {};
+  final Duration _visualizationIdleTimeout;
   sol.AudioData? _audioData;
+  bool _visualizationEnabled = false;
+  Timer? _visualizationIdleTimer;
+  Completer<void> _disposeCompleter = Completer<void>();
 
   Timer _scheduleTimer(Duration duration, void Function() callback) {
     late final Timer timer;
@@ -116,10 +126,12 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   Future<void> init({bool enableVisualization = true}) async {
     if (!_engine.isInitialized) {
       await _engine.init();
-      _engine.setVisualizationEnabled(enableVisualization);
-      _audioData = sol.AudioData(sol.GetSamplesKind.wave);
+      setEngineVisualizationEnabled(false);
     }
     _inited = true;
+    if (_disposeCompleter.isCompleted) {
+      _disposeCompleter = Completer<void>();
+    }
   }
 
   void _completeVoice(int voiceId) {
@@ -148,6 +160,8 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   Future<void> dispose() async {
+    _visualizationIdleTimer = null;
+    _visualizationEnabled = false;
     for (final timer in _activeTimers) {
       timer.cancel();
     }
@@ -169,12 +183,14 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     }
     _buses.clear();
 
-    _audioData?.dispose();
-    _audioData = null;
+    disposeEngineAudioData();
     if (_inited && _engine.isInitialized) {
       _engine.deinit();
     }
     _inited = false;
+    if (!_disposeCompleter.isCompleted) {
+      _disposeCompleter.complete();
+    }
   }
 
   @override
@@ -681,19 +697,90 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     }
   }
 
+  // Thin native SoLoud FFI shims exercised via test overrides.
+  // coverage:ignore-start
+  /// Toggles native SoLoud waveform visualization capture.
+  @protected
+  @visibleForTesting
+  void setEngineVisualizationEnabled(bool enabled) {
+    _engine.setVisualizationEnabled(enabled);
+  }
+
+  /// Lazily allocates SoLoud wave [sol.AudioData] and reads current samples.
+  @protected
+  @visibleForTesting
+  Float32List? readEngineWaveformSamples() {
+    final data = _audioData ??= sol.AudioData(sol.GetSamplesKind.wave);
+    data.updateSamples();
+    return data.getAudioData(alwaysReturnData: true);
+  }
+  // coverage:ignore-end
+
+  /// Disposes any allocated SoLoud wave [sol.AudioData] instance.
+  @protected
+  @visibleForTesting
+  void disposeEngineAudioData() {
+    _audioData?.dispose();
+    _audioData = null;
+  }
+
+  void _resetVisualizationIdleTimer() {
+    final prev = _visualizationIdleTimer;
+    if (prev != null) {
+      prev.cancel();
+      _activeTimers.remove(prev);
+    }
+    _visualizationIdleTimer = _scheduleTimer(
+      _visualizationIdleTimeout,
+      _disableVisualizationOnIdle,
+    );
+  }
+
+  void _disableVisualizationOnIdle() {
+    _visualizationIdleTimer = null;
+    if (!_visualizationEnabled) return;
+    _visualizationEnabled = false;
+    if (isInitialized) {
+      setEngineVisualizationEnabled(false);
+    }
+    disposeEngineAudioData();
+  }
+
   @override
   Float32List getWaveform([Float32List? outBuffer]) {
     if (outBuffer != null && outBuffer.length < 256) {
       throw ArgumentError('outBuffer must be at least 256 elements long.');
     }
     final buffer = outBuffer ?? Float32List(256);
-    if (_audioData == null) return buffer;
+    if (!isInitialized) return buffer;
 
-    _audioData!.updateSamples();
-    final data = _audioData!.getAudioData(alwaysReturnData: true);
-    buffer.setAll(0, data);
+    if (!_visualizationEnabled) {
+      _visualizationEnabled = true;
+      setEngineVisualizationEnabled(true);
+    }
+    _resetVisualizationIdleTimer();
+
+    final data = readEngineWaveformSamples();
+    if (data != null) {
+      final count = math.min(256, data.length);
+      buffer.setRange(0, count, data);
+    }
     return buffer;
   }
+
+  @override
+  Future<Float32List> fetchWaveform([Float32List? outBuffer]) async =>
+      getWaveform(outBuffer);
+
+  @override
+  Stream<Float32List> watchWaveform({
+    Duration interval = const Duration(milliseconds: 100),
+  }) => createWaveformStream(
+    fetchWaveform: fetchWaveform,
+    isDisposed: () => _disposeCompleter.isCompleted,
+    onDisposed: _disposeCompleter.future,
+    interval: interval,
+  );
 }
 
 void _activateBusFilter(sol.Bus solBus, FilterType filter) {

@@ -1501,5 +1501,149 @@ void main() {
         );
       },
     );
+
+    test(
+      'encodes Float32 waveform queries/replies and supports PtyApcAudioEngine fetchWaveform, getWaveform, watchWaveform, and factory apcReplies',
+      () async {
+        expect(
+          ApcAudioEncoder.encodeWaveformQuery(42),
+          equals('\x1b_Aa=wave,q=42;\x1b\\'),
+        );
+        expect(
+          () => ApcAudioEncoder.encodeWaveformQuery(0),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeWaveformQuery(0x80000000),
+          throwsArgumentError,
+        );
+        expect(
+          ApcAudioEncoder.encodeWaveformReply(42, null),
+          equals('\x1b_Aa=waver,q=42;\x1b\\'),
+        );
+        expect(
+          () => ApcAudioEncoder.encodeWaveformReply(42, Float32List(10)),
+          throwsArgumentError,
+        );
+
+        final sourceSamples = Float32List(256);
+        for (var i = 0; i < 256; i++) {
+          sourceSamples[i] = (i - 128) / 128.0;
+        }
+        sourceSamples[0] = double.nan; // sanitized to 0.0
+        final encodedReply = ApcAudioEncoder.encodeWaveformReply(
+          42,
+          sourceSamples,
+        );
+        expect(encodedReply, startsWith('\x1b_Aa=waver,q=42;'));
+        expect(encodedReply, endsWith('\x1b\\'));
+
+        // StubAudioEngine fetchWaveform / watchWaveform.
+        final stub = stub_factory.createAudioEngine();
+        final stubOut = Float32List(256);
+        expect(await stub.fetchWaveform(stubOut), same(stubOut));
+        expect(() => stub.fetchWaveform(Float32List(4)), throwsArgumentError);
+        final stubWatched = await stub
+            .watchWaveform(interval: const Duration(milliseconds: 10))
+            .first;
+        expect(stubWatched.length, equals(256));
+
+        // PtyApcAudioEngine via factory with apcReplies stream.
+        var now = DateTime.utc(2026, 4, 1);
+        final repliesController = StreamController<String>.broadcast();
+        final writes = <String>[];
+        final factoryEngine = cli_factory.createAudioEngine(
+          environment: const {'TERMUI_AUDIO_APC': '1'},
+          writeEscape: writes.add,
+          apcReplies: repliesController.stream,
+        );
+        expect(factoryEngine, isA<PtyApcAudioEngine>());
+        await factoryEngine.dispose();
+        await repliesController.close();
+
+        // Full PtyApcAudioEngine waveform lifecycle with fake clock.
+        writes.clear();
+        final engineReplies = StreamController<String>.broadcast();
+        final engine = PtyApcAudioEngine(
+          writes.add,
+          clock: Clock(() => now),
+          apcReplies: engineReplies.stream,
+        );
+
+        // Single-flight coalescing: two concurrent fetchWaveform calls emit only 1 query.
+        final bufA = Float32List(256);
+        final bufB = Float32List(256);
+        final fA = engine.fetchWaveform(bufA);
+        final fB = engine.fetchWaveform(bufB);
+        expect(writes, equals(['\x1b_Aa=wave,q=1;\x1b\\']));
+
+        // Stale/malformed replies are ignored while valid reply resolves both futures.
+        engine.handleApcReply('Ga=waver,q=1;');
+        engine.handleApcReply('Aa=waver,q=99;');
+        engine.handleApcReply('Aa=waver,q=1;!!!');
+        engine.handleApcReply('Aa=waver,q=1;${base64Encode([1, 2, 3])}');
+        final validReplyBody = ApcAudioEncoder.encodeWaveformReply(
+          1,
+          sourceSamples,
+        );
+        // Strip ESC _ and ST to simulate InputParser APC payload.
+        engineReplies.add(
+          validReplyBody.substring(2, validReplyBody.length - 2),
+        );
+        final resA = await fA;
+        final resB = await fB;
+        expect(resA, same(bufA));
+        expect(resB, same(bufB));
+        expect(resA[0], equals(0.0));
+        expect(resA[200], closeTo((200 - 128) / 128.0, 1e-6));
+        expect(resB[200], equals(resA[200]));
+
+        // Within 50ms rate floor: returns cached snapshot without emitting another query.
+        now = now.add(const Duration(milliseconds: 20));
+        final cachedRes = await engine.fetchWaveform();
+        expect(writes, hasLength(1));
+        expect(cachedRes[200], equals(resA[200]));
+
+        // Sync getWaveform copies cached snapshot and triggers background query once >= 50ms passes.
+        now = now.add(const Duration(milliseconds: 40));
+        final syncSnap = engine.getWaveform();
+        expect(syncSnap[200], equals(resA[200]));
+        expect(
+          writes,
+          equals(['\x1b_Aa=wave,q=1;\x1b\\', '\x1b_Aa=wave,q=2;\x1b\\']),
+        );
+
+        // Empty data section resets cached snapshot to zeros.
+        engine.handleApcReply('_Aa=waver,q=2;');
+        await Future<void>.delayed(Duration.zero);
+        expect(engine.getWaveform().every((v) => v == 0.0), isTrue);
+
+        // 500ms timeout returns cached snapshot cleanly.
+        now = now.add(const Duration(milliseconds: 60));
+        final timedOut = await engine.fetchWaveform();
+        expect(timedOut.length, equals(256));
+
+        // watchWaveform clamps <50ms interval, skips re-entrant ticks, and closes on dispose.
+        now = now.add(const Duration(milliseconds: 60));
+        final watched = <Float32List>[];
+        var watchClosed = false;
+        final watchSub = engine
+            .watchWaveform(interval: const Duration(milliseconds: 10))
+            .listen(watched.add, onDone: () => watchClosed = true);
+        await Future<void>.delayed(const Duration(milliseconds: 70));
+        engine.handleApcReply('Aa=waver,q=4;');
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(watched, isNotEmpty);
+
+        await engine.dispose();
+        await Future<void>.delayed(Duration.zero);
+        expect(watchClosed, isTrue);
+        await watchSub.cancel();
+        await engineReplies.close();
+
+        // Disposed engine fetchWaveform returns cached snapshot immediately.
+        expect((await engine.fetchWaveform()).length, equals(256));
+      },
+    );
   });
 }

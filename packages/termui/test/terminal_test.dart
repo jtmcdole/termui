@@ -24,6 +24,8 @@ class _OrderTrackingBackend implements TerminalBackend {
   @override
   Stream<List<int>> get rawInput => _input.stream;
 
+  void emitRaw(List<int> bytes) => _input.add(bytes);
+
   @override
   void enableRawMode() {
     log.add('enableRawMode');
@@ -444,6 +446,59 @@ void main() {
             .join();
         expect(rejoined, equals(largeMultibyte));
         expect(rejoined.contains('\uFFFD'), isFalse);
+      },
+    );
+
+    test(
+      'InputParser emits AudioApcReplyEvent and Terminal routes it exclusively to audioApcReplies',
+      () async {
+        final parser = InputParser();
+        final parsed = parser.parse('\x1b_Aa=waver,q=7;AAAA\x1b\\k'.codeUnits);
+        expect(parsed, hasLength(2));
+        expect(
+          parsed[0],
+          equals(const AudioApcReplyEvent('Aa=waver,q=7;AAAA')),
+        );
+        expect(
+          parsed[0].hashCode,
+          equals(const AudioApcReplyEvent('Aa=waver,q=7;AAAA').hashCode),
+        );
+        expect(
+          parsed[0].toString(),
+          equals('AudioApcReplyEvent(payload: Aa=waver,q=7;AAAA)'),
+        );
+        expect(parsed[1], isA<KeyEvent>().having((e) => e.key, 'key', 'k'));
+
+        // Other ESC _ A payloads do not emit AudioApcReplyEvent.
+        expect(parser.parse('\x1b_Aa=wave,q=7;\x1b\\'.codeUnits), isEmpty);
+
+        final backend = _OrderTrackingBackend();
+        final terminal = Terminal(backend);
+        final events = <InputEvent>[];
+        final replies = <String>[];
+        var repliesDone = false;
+        final eventSub = terminal.events.listen(events.add);
+        final replySub = terminal.audioApcReplies.listen(
+          replies.add,
+          onDone: () => repliesDone = true,
+        );
+
+        backend.emitRaw(utf8.encode('\x1b_Aa=waver,q=11;TEST\x1b\\x'));
+        await Future<void>.delayed(Duration.zero);
+
+        expect(replies, equals(['Aa=waver,q=11;TEST']));
+        expect(events, equals([const KeyEvent('x', KeyType.character)]));
+
+        final posFuture = terminal.cursorPosition();
+        await Future<void>.delayed(Duration.zero);
+        backend.emitRaw(utf8.encode('\x1b[12;34R'));
+        expect(await posFuture, equals(const Point<int>(34, 12)));
+
+        await eventSub.cancel();
+        terminal.dispose();
+        await Future<void>.delayed(Duration.zero);
+        expect(repliesDone, isTrue);
+        await replySub.cancel();
       },
     );
   });

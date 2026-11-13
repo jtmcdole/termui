@@ -26,6 +26,8 @@ final class _FakeAudioBus implements AudioBus {
 }
 
 final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
+  _RecordingFlutterAudioEngine({super.visualizationIdleTimeout});
+
   final List<String> calls = [];
   final List<_FakeAudioBus> createdBuses = [];
   final List<int> destroyedBusIds = [];
@@ -33,6 +35,9 @@ final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
   final List<(int busId, int filterId, int paramId, double value)>
   filterParams = [];
   final List<(int busId, int voiceId)> annexedVoices = [];
+  final List<bool> visualizationCalls = [];
+  int disposeAudioDataCalls = 0;
+  Float32List? nextWaveformSamples;
   bool throwOnAnnex = false;
   AudioBus? lastPlayedBus;
   bool? lastPlayedPaused;
@@ -119,6 +124,21 @@ final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
   @override
   void scheduleStop(AudioVoice voice, Duration duration) {
     calls.add('scheduleStop(voice:${voice.id}, ms:${duration.inMilliseconds})');
+  }
+
+  @override
+  void setEngineVisualizationEnabled(bool enabled) {
+    visualizationCalls.add(enabled);
+    calls.add('setVisualizationEnabled($enabled)');
+  }
+
+  @override
+  Float32List? readEngineWaveformSamples() => nextWaveformSamples;
+
+  @override
+  void disposeEngineAudioData() {
+    disposeAudioDataCalls += 1;
+    calls.add('disposeEngineAudioData');
   }
 }
 
@@ -305,11 +325,69 @@ void main() {
       );
     });
 
-    test('setVoicePan throws when engine is not initialized', () {
+    test('setVoicePan throws when engine is not initialized', () async {
       final engine = FlutterAudioEngine();
       final voice = AudioVoice(7, Completer<void>().future);
 
       expect(() => engine.setVoicePan(voice, -0.5), throwsA(isA<Exception>()));
+      engine.disposeEngineAudioData();
+      await engine.dispose();
     });
+
+    test(
+      'lazily enables visualization on first waveform read, disables after idle timeout, and supports fetchWaveform/watchWaveform',
+      () async {
+        final engine =
+            _RecordingFlutterAudioEngine(
+                visualizationIdleTimeout: const Duration(milliseconds: 120),
+              )
+              ..nextWaveformSamples = Float32List.fromList(
+                List<double>.generate(256, (i) => i / 256.0),
+              );
+
+        expect(engine.visualizationCalls, isEmpty);
+        expect(() => engine.getWaveform(Float32List(16)), throwsArgumentError);
+
+        // First read enables visualization lazily.
+        final first = engine.getWaveform();
+        expect(first[128], closeTo(0.5, 1e-6));
+        expect(engine.visualizationCalls, equals([true]));
+
+        // Read again before idle timeout resets the timer.
+        await Future<void>.delayed(const Duration(milliseconds: 70));
+        expect(engine.visualizationCalls, equals([true]));
+        final fetched = await engine.fetchWaveform();
+        expect(fetched[128], closeTo(0.5, 1e-6));
+        expect(engine.visualizationCalls, equals([true]));
+
+        // Still active before full idle timeout elapses after second read.
+        await Future<void>.delayed(const Duration(milliseconds: 70));
+        expect(engine.visualizationCalls, equals([true]));
+        expect(engine.disposeAudioDataCalls, equals(0));
+
+        // After full idle timeout since last read: visualization disables & AudioData disposes.
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(engine.visualizationCalls, equals([true, false]));
+        expect(engine.disposeAudioDataCalls, equals(1));
+
+        // Next read re-enables visualization.
+        engine.getWaveform();
+        expect(engine.visualizationCalls, equals([true, false, true]));
+
+        // watchWaveform polls and closes cleanly on dispose().
+        final watched = <Float32List>[];
+        var watchClosed = false;
+        final sub = engine
+            .watchWaveform(interval: const Duration(milliseconds: 20))
+            .listen(watched.add, onDone: () => watchClosed = true);
+        await Future<void>.delayed(const Duration(milliseconds: 130));
+        expect(watched, isNotEmpty);
+
+        await engine.dispose();
+        await Future<void>.delayed(Duration.zero);
+        expect(watchClosed, isTrue);
+        await sub.cancel();
+      },
+    );
   });
 }

@@ -574,7 +574,8 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
           term.FocusOutEvent() ||
           term.CursorPositionReportEvent() ||
           term.KittyGraphicsEvent() ||
-          term.KittyKeyboardEvent():
+          term.KittyKeyboardEvent() ||
+          term.AudioApcReplyEvent():
         break;
     }
   }

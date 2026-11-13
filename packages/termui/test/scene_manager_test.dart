@@ -331,6 +331,7 @@ void main() {
 
       // Shift focus to fg layer
       sceneManager.focusedLayer = fgLayer;
+      terminal.injectTestEvent(const AudioApcReplyEvent('Aa=waver,q=1;'));
       final keyEvent2 = const KeyEvent('b', KeyType.character);
       terminal.injectTestEvent(keyEvent2);
 
