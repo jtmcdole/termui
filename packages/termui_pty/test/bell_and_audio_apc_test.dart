@@ -446,5 +446,95 @@ void main() {
         );
       },
     );
+
+    test(
+      'decodes a=bus lifecycle/filter commands and optional busId on tone and clip frames',
+      () {
+        final events = <TerminalAudioEvent>[];
+        final handler = AudioApcHandler(onAudioEvent: events.add);
+
+        handler.handleApc('Aa=bus,op=create,b=2;');
+        handler.handleApc('Aa=bus,op=vol,b=2,v=1.5;');
+        handler.handleApc('Aa=bus,op=attach,b=2,ft=7;');
+        handler.handleApc('Aa=bus,op=param,b=2,ft=0,pm=2,v=1250.5;');
+        handler.handleApc('Aa=bus,op=fade,b=2,ft=7,pm=2,v=0.8,d=400;');
+        handler.handleApc('Aa=bus,op=destroy,b=2;');
+        handler.handleApc('Aa=tone,w=sine,f=440,d=100,v=0.5,p=0.25,b=2;');
+
+        final b64 = base64Encode(Uint8List.fromList([1, 2, 3, 4]));
+        handler.handleApc(
+          'Aa=clip,i=11,fmt=wav,v=0.9,p=-0.2,l=1,b=2,m=1;${b64.substring(0, 4)}',
+        );
+        handler.handleApc('Ai=11,m=0;${b64.substring(4)}');
+
+        // Malformed bus commands and invalid b= on tone/clip are rejected cleanly.
+        handler.handleApc('Aa=bus,op=create,b=0;');
+        handler.handleApc('Aa=bus,op=bogus,b=2;');
+        handler.handleApc('Aa=bus,op=vol,b=2;');
+        handler.handleApc('Aa=bus,op=attach,b=2,ft=12;');
+        handler.handleApc('Aa=bus,op=param,b=2,ft=0,pm=67,v=1.0;');
+        handler.handleApc('Aa=bus,op=fade,b=2,ft=0,pm=0,v=nan,d=100;');
+        handler.handleApc('Aa=bus,op=fade,b=2,ft=0,pm=0,v=0.5,d=-5;');
+        handler.handleApc('Aa=tone,w=sine,f=440,d=100,b=0;');
+        handler.handleApc('Aa=clip,i=12,fmt=wav,b=2147483648,m=0;$b64');
+
+        expect(events, hasLength(8));
+        const expectedCreate = TerminalBusAudioEvent(op: 'create', busId: 2);
+        expect(events[0], equals(expectedCreate));
+        expect(events[0].hashCode, equals(expectedCreate.hashCode));
+        expect(
+          events[1],
+          equals(const TerminalBusAudioEvent(op: 'vol', busId: 2, value: 1.0)),
+        );
+        expect(
+          events[2],
+          equals(
+            const TerminalBusAudioEvent(op: 'attach', busId: 2, filterId: 7),
+          ),
+        );
+        expect(
+          events[3],
+          equals(
+            const TerminalBusAudioEvent(
+              op: 'param',
+              busId: 2,
+              filterId: 0,
+              paramId: 2,
+              value: 1250.5,
+            ),
+          ),
+        );
+        expect(
+          events[4],
+          equals(
+            const TerminalBusAudioEvent(
+              op: 'fade',
+              busId: 2,
+              filterId: 7,
+              paramId: 2,
+              value: 0.8,
+              duration: Duration(milliseconds: 400),
+            ),
+          ),
+        );
+        expect(
+          events[5],
+          equals(const TerminalBusAudioEvent(op: 'destroy', busId: 2)),
+        );
+        const expectedTone = TerminalToneAudioEvent(
+          waveform: 'sine',
+          frequencyHz: 440.0,
+          duration: Duration(milliseconds: 100),
+          volume: 0.5,
+          pan: 0.25,
+          busId: 2,
+        );
+        expect(events[6], equals(expectedTone));
+        expect(events[6].hashCode, equals(expectedTone.hashCode));
+        final clip = events[7] as TerminalClipAudioEvent;
+        expect(clip.clipId, equals(11));
+        expect(clip.busId, equals(2));
+      },
+    );
   });
 }

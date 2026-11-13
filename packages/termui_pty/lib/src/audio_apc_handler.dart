@@ -24,6 +24,9 @@ final class TerminalToneAudioEvent extends TerminalAudioEvent {
   /// Stereo pan clamped to `-1.0 .. 1.0`.
   final double pan;
 
+  /// Optional positive 31-bit mixing bus identifier (`1 .. 0x7FFFFFFF`).
+  final int? busId;
+
   /// Creates a synthetic tone audio event.
   const TerminalToneAudioEvent({
     required this.waveform,
@@ -31,6 +34,7 @@ final class TerminalToneAudioEvent extends TerminalAudioEvent {
     required this.duration,
     this.volume = 0.8,
     this.pan = 0.0,
+    this.busId,
   });
 
   @override
@@ -41,10 +45,12 @@ final class TerminalToneAudioEvent extends TerminalAudioEvent {
           other.frequencyHz == frequencyHz &&
           other.duration == duration &&
           other.volume == volume &&
-          other.pan == pan;
+          other.pan == pan &&
+          other.busId == busId;
 
   @override
-  int get hashCode => Object.hash(waveform, frequencyHz, duration, volume, pan);
+  int get hashCode =>
+      Object.hash(waveform, frequencyHz, duration, volume, pan, busId);
 }
 
 /// Decoded in-memory audio clip playback event from `ESC _ A a=clip,... ST`.
@@ -70,6 +76,9 @@ final class TerminalClipAudioEvent extends TerminalAudioEvent {
   /// Initial playback start offset (`playSprite` start position).
   final Duration startOffset;
 
+  /// Optional positive 31-bit mixing bus identifier (`1 .. 0x7FFFFFFF`).
+  final int? busId;
+
   /// Creates an audio clip playback event.
   const TerminalClipAudioEvent({
     required this.clipId,
@@ -79,7 +88,54 @@ final class TerminalClipAudioEvent extends TerminalAudioEvent {
     this.pan = 0.0,
     this.loop = false,
     this.startOffset = Duration.zero,
+    this.busId,
   });
+}
+
+/// Mixing bus lifecycle or DSP filter command decoded from `ESC _ A a=bus,... ST`.
+final class TerminalBusAudioEvent extends TerminalAudioEvent {
+  /// Bus operation (`'create'`, `'destroy'`, `'vol'`, `'attach'`, `'param'`, or `'fade'`).
+  final String op;
+
+  /// Positive 31-bit wire bus identifier (`1 .. 0x7FFFFFFF`).
+  final int busId;
+
+  /// Optional DSP filter type index (`0 .. 11`) for `'attach'`, `'param'`, and `'fade'`.
+  final int? filterId;
+
+  /// Optional filter parameter index (`0 .. 66`) for `'param'` and `'fade'`.
+  final int? paramId;
+
+  /// Optional bus volume (`0.0 .. 1.0`) for `'vol'`, or filter parameter value for `'param'` / `'fade'`.
+  final double? value;
+
+  /// Optional fade duration (`>= Duration.zero`) for `'fade'`.
+  final Duration? duration;
+
+  /// Creates a mixing bus or filter audio event.
+  const TerminalBusAudioEvent({
+    required this.op,
+    required this.busId,
+    this.filterId,
+    this.paramId,
+    this.value,
+    this.duration,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TerminalBusAudioEvent &&
+          other.op == op &&
+          other.busId == busId &&
+          other.filterId == filterId &&
+          other.paramId == paramId &&
+          other.value == value &&
+          other.duration == duration;
+
+  @override
+  int get hashCode =>
+      Object.hash(op, busId, filterId, paramId, value, duration);
 }
 
 /// Audio stop request decoded from `ESC _ A a=stop,... ST`.
@@ -194,6 +250,7 @@ final class _PendingAudioUpload {
   double pan;
   final bool loop;
   final Duration startOffset;
+  final int? busId;
   Duration? seekPosition;
   bool? paused;
   double? speed;
@@ -214,6 +271,7 @@ final class _PendingAudioUpload {
     required this.pan,
     required this.loop,
     required this.startOffset,
+    this.busId,
   });
 
   bool get hasDeferredTransportUpdate =>
@@ -302,6 +360,8 @@ final class AudioApcHandler {
         _handleUpdate(control);
       case 'stop':
         _handleStop(control);
+      case 'bus':
+        _handleBus(control);
     }
   }
 
@@ -356,13 +416,15 @@ final class AudioApcHandler {
     final waveform = _normalizeWaveform(control['w']);
     final freq = double.tryParse(control['f'] ?? '');
     final durationMs = double.tryParse(control['d'] ?? '');
+    final busId = _parseExplicitClipId(control['b']);
     if (waveform == null ||
         freq == null ||
         !freq.isFinite ||
         freq <= 0 ||
         durationMs == null ||
         !durationMs.isFinite ||
-        durationMs < 0) {
+        durationMs < 0 ||
+        (busId != null && busId < 0)) {
       return;
     }
     final clampedFreq = freq.clamp(20.0, 20000.0).toDouble();
@@ -386,8 +448,87 @@ final class AudioApcHandler {
         duration: Duration(microseconds: (clampedDurationMs * 1000.0).round()),
         volume: volume,
         pan: pan,
+        busId: busId,
       ),
     );
+  }
+
+  static int? _parseOptionalBoundedInt(
+    String? raw, {
+    required int min,
+    required int max,
+  }) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = int.tryParse(raw);
+    if (parsed == null || parsed < min || parsed > max) return null;
+    return parsed;
+  }
+
+  static double? _parseOptionalFiniteDouble(String? raw) {
+    if (raw == null || raw.isEmpty) return null;
+    final parsed = double.tryParse(raw);
+    return (parsed != null && parsed.isFinite) ? parsed : null;
+  }
+
+  void _handleBus(Map<String, String> control) {
+    final op = control['op']?.trim().toLowerCase();
+    final busId = _parseExplicitClipId(control['b']);
+    if (op == null || busId == null || busId <= 0) return;
+    switch (op) {
+      case 'create' || 'destroy':
+        onAudioEvent?.call(TerminalBusAudioEvent(op: op, busId: busId));
+      case 'vol':
+        final value = _parseOptionalBoundedDouble(
+          control['v'],
+          min: 0.0,
+          max: 1.0,
+        );
+        if (value == null) return;
+        onAudioEvent?.call(
+          TerminalBusAudioEvent(op: op, busId: busId, value: value),
+        );
+      case 'attach':
+        final filterId = _parseOptionalBoundedInt(
+          control['ft'],
+          min: 0,
+          max: 11,
+        );
+        if (filterId == null) return;
+        onAudioEvent?.call(
+          TerminalBusAudioEvent(op: op, busId: busId, filterId: filterId),
+        );
+      case 'param' || 'fade':
+        final filterId = _parseOptionalBoundedInt(
+          control['ft'],
+          min: 0,
+          max: 11,
+        );
+        final paramId = _parseOptionalBoundedInt(
+          control['pm'],
+          min: 0,
+          max: 66,
+        );
+        final value = _parseOptionalFiniteDouble(control['v']);
+        final duration = op == 'fade'
+            ? _parseOptionalDurationMs(control['d'])
+            : null;
+        if (filterId == null ||
+            paramId == null ||
+            value == null ||
+            (op == 'fade' && duration == null)) {
+          return;
+        }
+        onAudioEvent?.call(
+          TerminalBusAudioEvent(
+            op: op,
+            busId: busId,
+            filterId: filterId,
+            paramId: paramId,
+            value: value,
+            duration: duration,
+          ),
+        );
+    }
   }
 
   static Duration? _parseOptionalDurationMs(
@@ -588,7 +729,11 @@ final class AudioApcHandler {
         .trim()
         .toLowerCase();
     final explicitId = _parseExplicitClipId(control['i']);
-    if (explicitId != null && explicitId < 0) return;
+    final busId = _parseExplicitClipId(control['b']);
+    if ((explicitId != null && explicitId < 0) ||
+        (busId != null && busId < 0)) {
+      return;
+    }
     final clipId = explicitId ?? _allocateAutoId();
     _removePendingUpload(clipId);
     if (!_validFormats.contains(rawFmt)) return;
@@ -613,6 +758,7 @@ final class AudioApcHandler {
       ),
       loop: loopRaw == '1' || loopRaw == 'true',
       startOffset: startOffset,
+      busId: busId,
     );
     _pendingUploads[clipId] = pending;
     _processClipChunk(pending, control, dataPart);
@@ -642,6 +788,7 @@ final class AudioApcHandler {
         pan: pending.pan,
         loop: pending.loop,
         startOffset: pending.startOffset,
+        busId: pending.busId,
       ),
     );
     if (pending.hasDeferredTransportUpdate) {
