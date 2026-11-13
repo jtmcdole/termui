@@ -190,6 +190,9 @@ void main() {
 
           // Inject Enter key. Since our widget consumes it (returns true), it should NOT trigger prompt completion.
           terminal.injectTestEvent(
+            const ui.AudioApcReplyEvent('Aa=waver,q=1;'),
+          );
+          terminal.injectTestEvent(
             const ui.KeyEvent('enter', ui.KeyType.enter),
           );
 
@@ -396,6 +399,9 @@ void main() {
 
           // Complete prompt
           terminal.injectTestEvent(
+            const ui.AudioApcReplyEvent('Aa=waver,q=1;'),
+          );
+          terminal.injectTestEvent(
             const ui.KeyEvent('enter', ui.KeyType.enter),
           );
           future.catchError((_) => null);
@@ -470,6 +476,9 @@ void main() {
             isNot(contains(Terminal.enterAlternateScreenSequence)),
           );
 
+          terminal.injectTestEvent(
+            const ui.AudioApcReplyEvent('Aa=waver,q=1;'),
+          );
           terminal.injectTestEvent(
             const ui.KeyEvent('enter', ui.KeyType.enter),
           );

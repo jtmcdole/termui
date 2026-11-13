@@ -678,6 +678,7 @@ class SceneManager implements Reassemblable {
       case CursorPositionReportEvent():
       case KittyGraphicsEvent():
       case KittyKeyboardEvent():
+      case AudioApcReplyEvent():
         break;
     }
   }

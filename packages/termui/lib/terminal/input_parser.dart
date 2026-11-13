@@ -258,7 +258,8 @@ class InputParser {
     List<InputEvent> events,
   ) {
     final remaining = _buffer.length - offset;
-    if (remaining == 2 || _buffer[offset + 2] != 0x47) {
+    if (remaining == 2 ||
+        (_buffer[offset + 2] != 0x47 && _buffer[offset + 2] != 0x41)) {
       events.add(
         const KeyEvent('_', KeyType.character, modifiers: {Modifier.alt}),
       );
@@ -332,6 +333,10 @@ class InputParser {
 
   void _dispatchApcPayload(List<int> bytes, List<InputEvent> events) {
     final payload = String.fromCharCodes(bytes);
+    if (payload.startsWith('Aa=waver') || payload.startsWith('_Aa=waver')) {
+      events.add(AudioApcReplyEvent(payload));
+      return;
+    }
     if (!payload.startsWith('G') && !payload.startsWith('_G')) return;
     // Expected format: Gi=<id>;<status> or G<key>=<val>...;<status>
     final semi = payload.indexOf(';');

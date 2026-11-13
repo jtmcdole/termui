@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:typed_data';
 import '../api/audio_engine.dart';
 import '../api/audio_types.dart';
+import '../utils/audio_dsp_utils.dart';
 
 /// A stub implementation of [TermuiAudioEngine] for unsupported platforms.
 class StubAudioEngine implements TermuiAudioEngine {
@@ -181,10 +183,24 @@ class StubAudioEngine implements TermuiAudioEngine {
     }
     return outBuffer ?? Float32List(256);
   }
+
+  @override
+  Future<Float32List> fetchWaveform([Float32List? outBuffer]) async =>
+      getWaveform(outBuffer);
+
+  @override
+  Stream<Float32List> watchWaveform({
+    Duration interval = const Duration(milliseconds: 100),
+  }) => createWaveformStream(
+    fetchWaveform: fetchWaveform,
+    isDisposed: () => false,
+    interval: interval,
+  );
 }
 
 /// Creates a new [TermuiAudioEngine] throwing an unsupported error.
 TermuiAudioEngine createAudioEngine({
   Map<String, String>? environment,
   void Function(String sequence)? writeEscape,
+  Stream<String>? apcReplies,
 }) => StubAudioEngine();

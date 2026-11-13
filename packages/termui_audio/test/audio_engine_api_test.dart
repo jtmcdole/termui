@@ -310,6 +310,15 @@ class MockAudioEngine extends TermuiAudioEngine {
   @override
   Float32List getWaveform([Float32List? outBuffer]) =>
       outBuffer ?? Float32List(256);
+
+  @override
+  Future<Float32List> fetchWaveform([Float32List? outBuffer]) async =>
+      getWaveform(outBuffer);
+
+  @override
+  Stream<Float32List> watchWaveform({
+    Duration interval = const Duration(milliseconds: 100),
+  }) => const Stream.empty();
 }
 
 class MockAudioBuffer implements AudioBuffer {

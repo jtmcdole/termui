@@ -747,3 +747,23 @@ final class KittyKeyboardEvent extends InputEvent {
   @override
   String toString() => 'KittyKeyboardEvent(flags: $flags)';
 }
+
+/// Event representing an inbound `ESC _ A` APC reply payload (e.g., `a=waver`).
+final class AudioApcReplyEvent extends InputEvent {
+  /// Raw APC payload body (e.g., `'Aa=waver,q=1;...'`).
+  final String payload;
+
+  /// Creates an [AudioApcReplyEvent].
+  const AudioApcReplyEvent(this.payload);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AudioApcReplyEvent && other.payload == payload;
+
+  @override
+  int get hashCode => payload.hashCode;
+
+  @override
+  String toString() => 'AudioApcReplyEvent(payload: $payload)';
+}

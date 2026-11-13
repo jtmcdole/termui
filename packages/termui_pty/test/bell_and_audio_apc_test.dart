@@ -623,5 +623,61 @@ void main() {
         expect(finishedClip.bytes, equals([10, 20, 30, 40, 50, 60]));
       },
     );
+
+    test(
+      'decodes a=wave,q= into TerminalWaveformQueryAudioEvent, ignores a=waver echo, and encodes replies',
+      () {
+        final events = <TerminalAudioEvent>[];
+        final handler = AudioApcHandler(onAudioEvent: events.add);
+
+        handler.handleApc('Aa=wave,q=17;');
+        handler.handleApc('_Aa=wave,q=18;');
+        // Invalid request IDs are ignored.
+        handler.handleApc('Aa=wave;');
+        handler.handleApc('Aa=wave,q=0;');
+        handler.handleApc('Aa=wave,q=-5;');
+        // Canonical TTY echo of a=waver MUST be ignored!
+        handler.handleApc('Aa=waver,q=17;AAAA');
+        handler.handleApc('_Aa=waver,q=18;');
+
+        expect(
+          events,
+          equals(const [
+            TerminalWaveformQueryAudioEvent(requestId: 17),
+            TerminalWaveformQueryAudioEvent(requestId: 18),
+          ]),
+        );
+        expect(
+          events[0].hashCode,
+          equals(const TerminalWaveformQueryAudioEvent(requestId: 17).hashCode),
+        );
+
+        expect(
+          AudioApcHandler.encodeWaveformReply(17, null),
+          equals('\x1b_Aa=waver,q=17;\x1b\\'),
+        );
+        expect(
+          () => AudioApcHandler.encodeWaveformReply(0, null),
+          throwsArgumentError,
+        );
+        expect(
+          () => AudioApcHandler.encodeWaveformReply(1, Float32List(10)),
+          throwsArgumentError,
+        );
+        final samples = Float32List(256);
+        samples[3] = -0.375;
+        samples[4] = double.infinity;
+        final encoded = AudioApcHandler.encodeWaveformReply(17, samples);
+        final b64 = encoded.substring(
+          encoded.indexOf(';') + 1,
+          encoded.length - 2,
+        );
+        final raw = base64Decode(b64);
+        expect(raw.length, equals(1024));
+        final bd = ByteData.sublistView(raw);
+        expect(bd.getFloat32(3 * 4, Endian.little), closeTo(-0.375, 1e-6));
+        expect(bd.getFloat32(4 * 4, Endian.little), equals(0.0));
+      },
+    );
   });
 }

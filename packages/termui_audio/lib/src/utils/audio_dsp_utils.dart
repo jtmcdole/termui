@@ -142,3 +142,98 @@ Stream<Duration> createVoicePositionStream({
 
   return controller.stream;
 }
+
+/// Minimum polling interval enforced by [createWaveformStream].
+const Duration minWaveformWatchInterval = Duration(milliseconds: 50);
+
+/// Creates a broadcast waveform stream polling [fetchWaveform] at [interval].
+///
+/// Clamps [interval] to at least `50ms`, skips re-entrant ticks while a fetch
+/// is already in flight, and closes cleanly on cancel or engine disposal.
+Stream<Float32List> createWaveformStream({
+  required Future<Float32List> Function([Float32List? outBuffer]) fetchWaveform,
+  required bool Function() isDisposed,
+  Duration interval = const Duration(milliseconds: 100),
+  Future<void>? onDisposed,
+}) {
+  if (isDisposed()) {
+    return const Stream.empty();
+  }
+  final effectiveInterval = interval < minWaveformWatchInterval
+      ? minWaveformWatchInterval
+      : interval;
+  return _WaveformWatchSession(
+    fetchWaveform: fetchWaveform,
+    isDisposed: isDisposed,
+    interval: effectiveInterval,
+    onDisposed: onDisposed,
+  ).stream;
+}
+
+final class _WaveformWatchSession {
+  _WaveformWatchSession({
+    required this.fetchWaveform,
+    required this.isDisposed,
+    required this.interval,
+    Future<void>? onDisposed,
+  }) {
+    _controller = StreamController<Float32List>.broadcast(
+      onListen: _startTicker,
+      onCancel: _stopTicker,
+    );
+    if (onDisposed != null) {
+      unawaited(onDisposed.then((_) => _close()));
+    }
+  }
+
+  final Future<Float32List> Function([Float32List? outBuffer]) fetchWaveform;
+  final bool Function() isDisposed;
+  final Duration interval;
+
+  late final StreamController<Float32List> _controller;
+  Timer? _ticker;
+  var _inFlight = false;
+
+  Stream<Float32List> get stream => _controller.stream;
+
+  void _startTicker() {
+    if (isDisposed()) {
+      _close();
+      return;
+    }
+    _ticker = Timer.periodic(interval, (_) => unawaited(_poll()));
+  }
+
+  void _stopTicker() {
+    _ticker?.cancel();
+    _ticker = null;
+  }
+
+  void _close() {
+    _stopTicker();
+    if (!_controller.isClosed) {
+      unawaited(_controller.close());
+    }
+  }
+
+  Future<void> _poll() async {
+    if (isDisposed() || _controller.isClosed) {
+      _close();
+      return;
+    }
+    if (_inFlight) return;
+    _inFlight = true;
+    try {
+      final samples = await fetchWaveform();
+      if (!isDisposed() && !_controller.isClosed) {
+        _controller.add(samples);
+      }
+    } catch (error, stackTrace) {
+      if (!isDisposed() && !_controller.isClosed) {
+        _controller.addError(error, stackTrace);
+      }
+    } finally {
+      _inFlight = false;
+    }
+  }
+}

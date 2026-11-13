@@ -205,4 +205,21 @@ abstract class TermuiAudioEngine {
   /// If [outBuffer] is provided, it must be at least 256 elements long and will be populated
   /// and returned. Otherwise, a new [Float32List] is allocated.
   Float32List getWaveform([Float32List? outBuffer]);
+
+  /// Asynchronously fetches a 256-element PCM audio waveform array currently outputting from the engine.
+  ///
+  /// Local backends resolve immediately with [getWaveform]; APC-backed engines
+  /// query the host terminal and resolve when a reply arrives or on timeout.
+  ///
+  /// If [outBuffer] is provided, it must be at least 256 elements long and will be populated
+  /// and returned. Otherwise, a new [Float32List] is allocated.
+  Future<Float32List> fetchWaveform([Float32List? outBuffer]);
+
+  /// Returns a broadcast stream polling [fetchWaveform] at [interval].
+  ///
+  /// Intervals below `50ms` are clamped to `50ms`, re-entrant ticks while a
+  /// fetch is in flight are skipped, and the stream closes on engine disposal.
+  Stream<Float32List> watchWaveform({
+    Duration interval = const Duration(milliseconds: 100),
+  });
 }
