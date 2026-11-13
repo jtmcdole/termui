@@ -557,5 +557,53 @@ void main() {
         );
       },
     );
+
+    testWidgets(
+      'procedural box and block glyphs register all style variants without missing-glyph atlas re-bakes',
+      (tester) async {
+        final atlas = await tester.runAsync(
+          () => GlyphAtlasGenerator.generate(
+            fontSize: 13.0,
+            fontFamily: 'Cascadia Mono',
+          ),
+        );
+        addTearDown(() => atlas?.dispose());
+
+        for (final ch in const ['─', '│', '┌', '┐', '═', '║', '█', '░']) {
+          expect(
+            atlas!.hasNativeVariant(ch, GlyphStyleVariant.bold),
+            isTrue,
+            reason: 'Expected procedural "$ch" to alias bold without re-bake',
+          );
+          expect(
+            atlas.hasNativeVariant(ch, GlyphStyleVariant.boldItalic),
+            isTrue,
+          );
+        }
+
+        final buf = termui.Buffer(12, 4);
+        buf.writeString(
+          0,
+          0,
+          '┌──┐══██░░',
+          const termui.Style(modifiers: termui.Modifier.bold),
+        );
+        final missingStyled = <(String, GlyphStyleVariant)>[];
+        final painter = TuiAtlasPainter(
+          buffer: buf,
+          atlas: atlas!,
+          fontFamily: 'Cascadia Mono',
+          fallbackPainters: {},
+          onMissingGlyphs: null,
+          onMissingStyledGlyphs: missingStyled.addAll,
+        );
+        final rec = ui.PictureRecorder();
+        painter.paint(Canvas(rec), const Size(200, 80));
+        rec.endRecording().dispose();
+        await tester.pump();
+
+        expect(missingStyled, isEmpty);
+      },
+    );
   });
 }
