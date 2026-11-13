@@ -126,7 +126,36 @@ class Buffer {
   void registerKittyRegistry(Rect bounds, KittyImageRegistry registry) {
     final clipped = _boundsClip.intersect(bounds);
     if (clipped.width <= 0 || clipped.height <= 0) return;
+    if (_scopedKittyRegistries.isNotEmpty) {
+      final last = _scopedKittyRegistries.last;
+      if (identical(last.registry, registry) &&
+          _rectCovers(clipped, last.bounds)) {
+        _scopedKittyRegistries[_scopedKittyRegistries.length - 1] = (
+          bounds: clipped,
+          registry: registry,
+        );
+        return;
+      }
+    }
     _scopedKittyRegistries.add((bounds: clipped, registry: registry));
+  }
+
+  static bool _rectCovers(Rect outer, Rect inner) =>
+      outer.x <= inner.x &&
+      outer.y <= inner.y &&
+      outer.x + outer.width >= inner.x + inner.width &&
+      outer.y + outer.height >= inner.y + inner.height;
+
+  void _clipScopedRegistries() {
+    for (var i = _scopedKittyRegistries.length - 1; i >= 0; i--) {
+      final entry = _scopedKittyRegistries[i];
+      final clipped = _boundsClip.intersect(entry.bounds);
+      if (clipped.width <= 0 || clipped.height <= 0) {
+        _scopedKittyRegistries.removeAt(i);
+      } else {
+        _scopedKittyRegistries[i] = (bounds: clipped, registry: entry.registry);
+      }
+    }
   }
 
   /// Resolves the active [KittyImageRegistry] covering ([x], [y]), falling back
@@ -893,6 +922,7 @@ class Buffer {
       _underlineColors = newUl;
       _uris = newUris;
       _boundsClip = Rect(0, 0, width, height);
+      _clipScopedRegistries();
     } finally {
       Tracer.record(_traceResizeId, Phase.end, TraceCategory.layout);
     }
@@ -1631,53 +1661,153 @@ int graphemeWidth(String grapheme) {
 bool isZeroWidthGrapheme(String grapheme) {
   final len = grapheme.length;
   if (len == 0) return true;
-
-  if (len == 1) {
-    final cu = grapheme.codeUnitAt(0);
-    return isZeroWidthCodePoint(cu);
-  }
-
-  // If the cluster starts with a zero-width code point and contains no visible base char
-  final cu0 = grapheme.codeUnitAt(0);
-  if (isZeroWidthCodePoint(cu0)) {
-    for (var i = 1; i < len; i++) {
-      if (!isZeroWidthCodePoint(grapheme.codeUnitAt(i))) return false;
+  var i = 0;
+  while (i < len) {
+    var cp = grapheme.codeUnitAt(i++);
+    if (cp >= 0xD800 && cp <= 0xDBFF && i < len) {
+      final lo = grapheme.codeUnitAt(i);
+      if (lo >= 0xDC00 && lo <= 0xDFFF) {
+        cp = 0x10000 + ((cp & 0x3FF) << 10) + (lo & 0x3FF);
+        i++;
+      }
     }
-    return true;
+    if (!isZeroWidthCodePoint(cp)) return false;
   }
-
-  return false;
+  return true;
 }
 
 /// Returns true if the given code point occupies 0 terminal cells.
 bool isZeroWidthCodePoint(int codePoint) {
   if (codePoint <= 0x1F) return codePoint >= 0;
   if (codePoint < 0x7F) return false;
-  return codePoint < 0x2000
-      ? _isZeroWidthBelow2000(codePoint)
-      : _isZeroWidthFrom2000(codePoint);
-}
-
-bool _isZeroWidthBelow2000(int codePoint) {
-  // C1 control characters (0x7F..0x9F) and Soft Hyphen (0x00AD)
-  if (codePoint <= 0x9F || codePoint == 0x00AD) return true;
-  // Combining Diacritical Marks, Cyrillic, Hebrew, and isolated Hangul Jamo
+  if (codePoint <= 0x9F) return true;
   if (codePoint >= 0x0300 && codePoint <= 0x036F) return true;
-  if (codePoint >= 0x0483 && codePoint <= 0x0489) return true;
-  if (codePoint >= 0x0591 && codePoint <= 0x05BD) return true;
-  return codePoint >= 0x1160 && codePoint <= 0x11FF;
+  var low = 0;
+  var high = _zeroWidthRangeStarts.length - 1;
+  while (low <= high) {
+    final mid = (low + high) >> 1;
+    if (codePoint < _zeroWidthRangeStarts[mid]) {
+      high = mid - 1;
+    } else if (codePoint > _zeroWidthRangeEnds[mid]) {
+      low = mid + 1;
+    } else {
+      return true;
+    }
+  }
+  return false;
 }
 
-bool _isZeroWidthFrom2000(int codePoint) {
-  // Format controls, BiDi controls, word joiners, variation selectors, BOM, tags
-  if (codePoint >= 0x200B && codePoint <= 0x200F) return true;
-  if (codePoint >= 0x202A && codePoint <= 0x202E) return true;
-  if (codePoint >= 0x2060 && codePoint <= 0x206F) return true;
-  if (codePoint >= 0xFE00 && codePoint <= 0xFE0F) return true;
-  if (codePoint == 0xFEFF) return true;
-  if (codePoint >= 0xFFF9 && codePoint <= 0xFFFB) return true;
-  return codePoint >= 0xE0000 && codePoint <= 0xE007F;
-}
+final Uint32List _zeroWidthRangeStarts = Uint32List.fromList([
+  0x00AD,
+  0x0483,
+  0x0591,
+  0x05BF,
+  0x05C1,
+  0x05C4,
+  0x05C7,
+  0x0610,
+  0x064B,
+  0x0670,
+  0x06D6,
+  0x06DF,
+  0x06E7,
+  0x06EA,
+  0x0711,
+  0x0730,
+  0x07EB,
+  0x0816,
+  0x081B,
+  0x0825,
+  0x0829,
+  0x08D3,
+  0x08E3,
+  0x0951,
+  0x09FE,
+  0x0F82,
+  0x0F86,
+  0x1160,
+  0x135D,
+  0x17DD,
+  0x193A,
+  0x1A17,
+  0x1A75,
+  0x1AB0,
+  0x1B6B,
+  0x1CD0,
+  0x1CD4,
+  0x1CE2,
+  0x1CED,
+  0x1CF4,
+  0x1CF8,
+  0x1DC0,
+  0x200B,
+  0x202A,
+  0x2060,
+  0x20D0,
+  0x2CEF,
+  0x2DE0,
+  0xFE00,
+  0xFEFF,
+  0xFFF9,
+  0xE0000,
+  0xE0100,
+]);
+
+final Uint32List _zeroWidthRangeEnds = Uint32List.fromList([
+  0x00AD,
+  0x0489,
+  0x05BD,
+  0x05BF,
+  0x05C2,
+  0x05C5,
+  0x05C7,
+  0x061A,
+  0x065F,
+  0x0670,
+  0x06DC,
+  0x06E4,
+  0x06E8,
+  0x06ED,
+  0x0711,
+  0x074A,
+  0x07F3,
+  0x0819,
+  0x0823,
+  0x0827,
+  0x082D,
+  0x08E1,
+  0x0902,
+  0x0957,
+  0x09FE,
+  0x0F84,
+  0x0F87,
+  0x11FF,
+  0x135F,
+  0x17DD,
+  0x193A,
+  0x1A18,
+  0x1A7C,
+  0x1ABE,
+  0x1B73,
+  0x1CD2,
+  0x1CE0,
+  0x1CE8,
+  0x1CED,
+  0x1CF4,
+  0x1CF9,
+  0x1DFF,
+  0x200F,
+  0x202E,
+  0x206F,
+  0x20FF,
+  0x2CF1,
+  0x2DFF,
+  0xFE0F,
+  0xFEFF,
+  0xFFFB,
+  0xE007F,
+  0xE01EF,
+]);
 
 /// Returns true if the given grapheme cluster is a double-width (wide) character.
 ///

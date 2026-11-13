@@ -50,6 +50,10 @@ void main() {
       expect(graphemeWidth('\u200B'), 0);
       expect(graphemeWidth('\uFEFF'), 0);
       expect(graphemeWidth('\u0300'), 0);
+      expect(isZeroWidthGrapheme('\u{E0067}'), isTrue);
+      expect(graphemeWidth('\u{E0067}'), 0);
+      expect(isZeroWidthGrapheme('\u{E0100}'), isTrue);
+      expect(graphemeWidth('\u{E0100}'), 0);
     });
 
     test('Standard ASCII and visible characters are not zero-width', () {
