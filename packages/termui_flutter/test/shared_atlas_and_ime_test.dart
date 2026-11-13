@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -99,6 +100,14 @@ void main() {
     testWidgets(
       'shared-atlas pane theme and terminal fontSize changes preserve sibling caches and atlas size',
       _testSharedAtlasIsolationAcrossPanes,
+    );
+    testWidgets(
+      'GlyphAtlasController coalesces multiple requestMissingStyledGlyphs calls into one atlas upload',
+      _testCoalescedMissingStyledGlyphs,
+    );
+    testWidgets(
+      'GlyphAtlasController does not overwrite recreated atlas with stale addStyledGlyphs batch',
+      _testConcurrentRecreateDoesNotOverwriteAtlas,
     );
   });
 
@@ -359,6 +368,26 @@ Future<void> _testFallbackCacheCap() async {
     faintOpacity: 0.55,
     palette: TerminalColorTheme.termuiDark,
   );
+  expect(
+    controller.fallbackPainters.length,
+    equals(GlyphAtlasController.maxFallbackPainters),
+  );
+  // First 256 unbaked glyphs were cached; index 256 (\u0500) was deferred by the cap.
+  expect(controller.fallbackPainters.keys.any((k) => k.$1 == '\u0400'), isTrue);
+  expect(
+    controller.fallbackPainters.keys.any((k) => k.$1 == '\u0500'),
+    isFalse,
+  );
+
+  // Second scan caches the previously skipped \u0500 without losing the cache bound.
+  controller.ensureFallbackPaintersForBuffer(
+    buf,
+    defaultForegroundArgb: 0xFFFFFFFF,
+    defaultBackgroundArgb: 0xFF000000,
+    faintOpacity: 0.55,
+    palette: TerminalColorTheme.termuiDark,
+  );
+  expect(controller.fallbackPainters.keys.any((k) => k.$1 == '\u0500'), isTrue);
   expect(
     controller.fallbackPainters.length,
     equals(GlyphAtlasController.maxFallbackPainters),
@@ -988,4 +1017,111 @@ Future<void> _testTransientFallbackGlyphOnCacheMiss() async {
     }
   }
   expect(litPixels, greaterThan(0));
+}
+
+Future<void> _testCoalescedMissingStyledGlyphs(WidgetTester tester) async {
+  final atlasController = GlyphAtlasController(
+    fontSize: 14.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlasController.dispose);
+  await tester.runAsync<void>(atlasController.ensureInitialized);
+  final baseCount = atlasController.debugCreatedAtlasCount;
+
+  await tester.runAsync<void>(() async {
+    atlasController.requestMissingStyledGlyphs(const [
+      ('Ψ', GlyphStyleVariant.regular),
+    ]);
+    atlasController.requestMissingStyledGlyphs(const [
+      ('Ω', GlyphStyleVariant.bold),
+    ]);
+    for (
+      var i = 0;
+      i < 40 && atlasController.debugCreatedAtlasCount == baseCount;
+      i++
+    ) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  });
+
+  expect(atlasController.debugCreatedAtlasCount, equals(baseCount + 1));
+  expect(
+    atlasController.atlas!.hasNativeVariant('Ψ', GlyphStyleVariant.regular),
+    isTrue,
+  );
+  expect(
+    atlasController.atlas!.hasNativeVariant('Ω', GlyphStyleVariant.bold),
+    isTrue,
+  );
+
+  // Also verify postFrameCallbacks -> microtask coalescing branch.
+  final postFrameBaseCount = atlasController.debugCreatedAtlasCount;
+  SchedulerBinding.instance.addPostFrameCallback((_) {
+    atlasController.requestMissingStyledGlyphs(const [
+      ('Δ', GlyphStyleVariant.regular),
+    ]);
+    atlasController.requestMissingStyledGlyphs(const [
+      ('Λ', GlyphStyleVariant.italic),
+    ]);
+  });
+  await tester.pump();
+  await tester.runAsync<void>(() async {
+    for (
+      var i = 0;
+      i < 40 && atlasController.debugCreatedAtlasCount == postFrameBaseCount;
+      i++
+    ) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  });
+  expect(
+    atlasController.debugCreatedAtlasCount,
+    equals(postFrameBaseCount + 1),
+  );
+  expect(
+    atlasController.atlas!.hasNativeVariant('Δ', GlyphStyleVariant.regular),
+    isTrue,
+  );
+  expect(
+    atlasController.atlas!.hasNativeVariant('Λ', GlyphStyleVariant.italic),
+    isTrue,
+  );
+}
+
+Future<void> _testConcurrentRecreateDoesNotOverwriteAtlas(
+  WidgetTester tester,
+) async {
+  final atlasController = GlyphAtlasController(
+    fontSize: 13.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlasController.dispose);
+  await tester.runAsync<void>(atlasController.ensureInitialized);
+
+  await tester.runAsync<void>(() async {
+    final recreateFuture = atlasController.setFontSize(19.0);
+    atlasController.requestMissingStyledGlyphs(const [
+      ('Ψ', GlyphStyleVariant.regular),
+    ]);
+    await recreateFuture;
+    for (
+      var i = 0;
+      i < 40 &&
+          !atlasController.atlas!.hasNativeVariant(
+            'Ψ',
+            GlyphStyleVariant.regular,
+          );
+      i++
+    ) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  });
+
+  expect(atlasController.atlas!.fontSize, equals(19.0));
+  expect(
+    atlasController.atlas!.hasNativeVariant('Ψ', GlyphStyleVariant.regular),
+    isTrue,
+  );
 }
