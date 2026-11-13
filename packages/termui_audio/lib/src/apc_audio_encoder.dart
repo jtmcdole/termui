@@ -21,6 +21,9 @@ abstract final class ApcAudioEncoder {
   /// Maximum decoded byte length permitted for an APC audio clip (`2 MiB`).
   static const int maxClipBytes = 2 * 1024 * 1024;
 
+  /// Maximum resident/total byte length permitted for an APC audio stream (`16 MiB`).
+  static const int maxStreamBytes = 16 * 1024 * 1024;
+
   /// Base64 payload characters per emitted chunk (`4096` chars per APC frame).
   static const int chunkBase64Chars = 4096;
 
@@ -95,6 +98,35 @@ abstract final class ApcAudioEncoder {
     }
   }
 
+  static void _validateWireId(int id, String name) {
+    if (id <= 0 || id > 0x7FFFFFFF) {
+      throw ArgumentError.value(id, name, 'Must be in 1..0x7FFFFFFF');
+    }
+  }
+
+  static String _formatClipMeta({
+    required double volume,
+    required double pan,
+    required bool loop,
+    required Duration startOffset,
+    required int? busId,
+  }) {
+    if (startOffset.isNegative) {
+      throw ArgumentError.value(startOffset, 'startOffset', 'Must be >= 0');
+    }
+    if (busId != null) {
+      _validateWireBusId(busId);
+    }
+    final volStr = _formatFloat(_clampUnit(volume, 1.0));
+    final panStr = _formatFloat(_clampPan(pan));
+    final loopFlag = loop ? 1 : 0;
+    final startPart = startOffset > Duration.zero
+        ? ',s=${_formatFloat(startOffset.inMicroseconds / 1000.0)}'
+        : '';
+    final busPart = busId != null ? ',b=$busId' : '';
+    return 'v=$volStr,p=$panStr,l=$loopFlag$startPart$busPart';
+  }
+
   /// Encodes a synthetic tone synthesis APC command (`ESC _ A a=tone,... ST`).
   static String encodeTone({
     WaveForm waveform = WaveForm.sin,
@@ -157,21 +189,15 @@ abstract final class ApcAudioEncoder {
     if (bytes.isEmpty || bytes.length > maxClipBytes) {
       throw RangeError.range(bytes.length, 1, maxClipBytes, 'bytes.length');
     }
-    if (startOffset.isNegative) {
-      throw ArgumentError.value(startOffset, 'startOffset', 'Must be >= 0');
-    }
-    if (busId != null) {
-      _validateWireBusId(busId);
-    }
+    final meta = _formatClipMeta(
+      volume: volume,
+      pan: pan,
+      loop: loop,
+      startOffset: startOffset,
+      busId: busId,
+    );
     final step = math.max(4, chunkSize);
     final encoded = base64Encode(bytes);
-    final volStr = _formatFloat(_clampUnit(volume, 1.0));
-    final panStr = _formatFloat(_clampPan(pan));
-    final loopFlag = loop ? 1 : 0;
-    final startPart = startOffset > Duration.zero
-        ? ',s=${_formatFloat(startOffset.inMicroseconds / 1000.0)}'
-        : '';
-    final busPart = busId != null ? ',b=$busId' : '';
 
     final frames = <String>[];
     for (var offset = 0; offset < encoded.length; offset += step) {
@@ -180,14 +206,109 @@ abstract final class ApcAudioEncoder {
       final more = end < encoded.length ? 1 : 0;
       if (offset == 0) {
         frames.add(
-          '\x1b_Aa=clip,i=$clipId,fmt=$normalizedFmt,'
-          'v=$volStr,p=$panStr,l=$loopFlag$startPart$busPart,m=$more;$chunk\x1b\\',
+          '\x1b_Aa=clip,i=$clipId,fmt=$normalizedFmt,$meta,m=$more;$chunk\x1b\\',
         );
       } else {
         frames.add('\x1b_Ai=$clipId,m=$more;$chunk\x1b\\');
       }
     }
     return frames;
+  }
+
+  /// Encodes an APC stream-open command (`ESC _ A a=stream,op=open,... ST`).
+  static String encodeStreamOpen({
+    required int streamId,
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  }) {
+    _validateWireId(streamId, 'streamId');
+    if (maxBufferSize <= 0 || maxBufferSize > maxStreamBytes) {
+      throw RangeError.range(maxBufferSize, 1, maxStreamBytes, 'maxBufferSize');
+    }
+    if (bufferingTimeNeeds.isNegative) {
+      throw ArgumentError.value(
+        bufferingTimeNeeds,
+        'bufferingTimeNeeds',
+        'Must be >= 0',
+      );
+    }
+    if (sampleRate <= 0 || sampleRate > 384000) {
+      throw ArgumentError.value(
+        sampleRate,
+        'sampleRate',
+        'Must be in 1..384000',
+      );
+    }
+    if (channels != 1 && channels != 2) {
+      throw ArgumentError.value(channels, 'channels', 'Must be 1 or 2');
+    }
+    final rel = releaseConsumed ? 1 : 0;
+    final bufMs = _formatFloat(bufferingTimeNeeds.inMicroseconds / 1000.0);
+    return '\x1b_Aa=stream,op=open,s=$streamId,max=$maxBufferSize,'
+        'rel=$rel,buf=$bufMs,sr=$sampleRate,ch=$channels;\x1b\\';
+  }
+
+  /// Encodes raw audio [bytes] into pass-through `4096`-char base64 `a=stream,op=chunk`
+  /// frames with monotonic `seq` starting at [startSeq].
+  static List<String> encodeStreamChunk({
+    required int streamId,
+    required Uint8List bytes,
+    int startSeq = 0,
+    int chunkSize = chunkBase64Chars,
+  }) {
+    _validateWireId(streamId, 'streamId');
+    if (startSeq < 0) {
+      throw ArgumentError.value(startSeq, 'startSeq', 'Must be >= 0');
+    }
+    if (bytes.isEmpty || bytes.length > maxStreamBytes) {
+      throw RangeError.range(bytes.length, 1, maxStreamBytes, 'bytes.length');
+    }
+    final alignedChars = math.max(4, chunkSize - (chunkSize % 4));
+    final rawStep = (alignedChars ~/ 4) * 3;
+    final frames = <String>[];
+    var seq = startSeq;
+    for (var offset = 0; offset < bytes.length; offset += rawStep) {
+      final end = math.min(offset + rawStep, bytes.length);
+      final encoded = base64Encode(Uint8List.sublistView(bytes, offset, end));
+      frames.add('\x1b_Aa=stream,op=chunk,s=$streamId,seq=$seq;$encoded\x1b\\');
+      seq++;
+    }
+    return frames;
+  }
+
+  /// Encodes an APC stream-end command (`ESC _ A a=stream,op=end,s=<streamId>[,seq=<seq>]; ST`).
+  static String encodeStreamEnd({required int streamId, int? seq}) {
+    _validateWireId(streamId, 'streamId');
+    if (seq != null && seq < 0) {
+      throw ArgumentError.value(seq, 'seq', 'Must be >= 0');
+    }
+    final seqPart = seq != null ? ',seq=$seq' : '';
+    return '\x1b_Aa=stream,op=end,s=$streamId$seqPart;\x1b\\';
+  }
+
+  /// Encodes an APC stream-backed clip play command (`ESC _ A a=clip,i=<clipId>,st=<streamId>,... ST`).
+  static String encodeStreamPlay({
+    required int clipId,
+    required int streamId,
+    double volume = 1.0,
+    double pan = 0.0,
+    bool loop = false,
+    Duration startOffset = Duration.zero,
+    int? busId,
+  }) {
+    _validateWireId(clipId, 'clipId');
+    _validateWireId(streamId, 'streamId');
+    final meta = _formatClipMeta(
+      volume: volume,
+      pan: pan,
+      loop: loop,
+      startOffset: startOffset,
+      busId: busId,
+    );
+    return '\x1b_Aa=clip,i=$clipId,st=$streamId,$meta;\x1b\\';
   }
 
   static double _clampSpeed(double speed) =>
@@ -434,6 +555,27 @@ final class _PtyClipBuffer extends _PtyAudioBuffer {
   const _PtyClipBuffer(super.hash, this.format, this.bytes, this.duration);
 }
 
+final class _PtyStreamBuffer extends _PtyAudioBuffer {
+  final int streamId;
+  final int maxBufferSize;
+  final bool releaseConsumed;
+  final Duration bufferingTimeNeeds;
+  final int sampleRate;
+  final int channels;
+  int nextSeq = 0;
+  bool ended = false;
+
+  _PtyStreamBuffer(
+    super.hash, {
+    required this.streamId,
+    required this.maxBufferSize,
+    required this.releaseConsumed,
+    required this.bufferingTimeNeeds,
+    required this.sampleRate,
+    required this.channels,
+  });
+}
+
 final class _PtyAudioBus implements AudioBus {
   @override
   final int id;
@@ -463,6 +605,7 @@ final class _ActivePtyVoice {
   final bool loop;
   final int? clipId;
   final int? busId;
+  final bool isStreamVoice;
   double volume;
   double pan = 0.0;
   double posX = 0.0;
@@ -501,6 +644,7 @@ final class _ActivePtyVoice {
     required this.loop,
     required this.clipId,
     this.busId,
+    this.isStreamVoice = false,
     required this.volume,
     required this.emitted,
     required this.isPaused,
@@ -527,6 +671,11 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   final Set<int> _autoEvictedClipIds = {};
 
   final Future<Uint8List> Function(String path)? _readFileBytes;
+  final Future<Uint8List> Function(
+    String url, {
+    LoadProgressCallback? onProgress,
+  })?
+  _readUrlBytes;
   final Clock? _clockOverride;
 
   /// Number of currently tracked active or paused voices.
@@ -537,8 +686,11 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     this.writeEscape, {
     this.defaultToneDuration = const Duration(milliseconds: 250),
     Future<Uint8List> Function(String path)? readFileBytes,
+    Future<Uint8List> Function(String url, {LoadProgressCallback? onProgress})?
+    urlByteReader,
     Clock? clock,
   }) : _readFileBytes = readFileBytes ?? createDefaultApcFileReader(),
+       _readUrlBytes = urlByteReader ?? createDefaultApcUrlReader(),
        _clockOverride = clock;
 
   Clock get _clock => _clockOverride ?? clock;
@@ -586,8 +738,34 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   }
 
   @override
-  Future<AudioBuffer> loadUrl(String url, {LoadProgressCallback? onProgress}) =>
-      throw UnsupportedError('PtyApcAudioEngine does not load URLs');
+  Future<AudioBuffer> loadUrl(
+    String url, {
+    LoadProgressCallback? onProgress,
+  }) async {
+    final reader = _readUrlBytes;
+    if (reader == null) {
+      throw UnsupportedError(
+        'PtyApcAudioEngine does not load URLs on this platform',
+      );
+    }
+    final bytes = await reader(url, onProgress: onProgress);
+    if (bytes.isEmpty || bytes.length > ApcAudioEncoder.maxStreamBytes) {
+      throw RangeError.range(
+        bytes.length,
+        1,
+        ApcAudioEncoder.maxStreamBytes,
+        'bytes.length',
+      );
+    }
+    onProgress?.call(1.0);
+    if (bytes.length <= ApcAudioEncoder.maxClipBytes) {
+      return loadMem(url, bytes);
+    }
+    final streamBuf = await createBufferStream(maxBufferSize: bytes.length);
+    addStreamData(streamBuf, bytes);
+    setStreamEnded(streamBuf);
+    return streamBuf;
+  }
 
   @override
   Future<AudioBuffer> loadWaveform(
@@ -836,15 +1014,67 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
     int sampleRate = 48000,
     int channels = 2,
-  }) => throw UnsupportedError('PtyApcAudioEngine does not support streaming');
+  }) async {
+    final id = _nextBufferId++;
+    final frame = ApcAudioEncoder.encodeStreamOpen(
+      streamId: id,
+      maxBufferSize: maxBufferSize,
+      releaseConsumed: releaseConsumed,
+      bufferingTimeNeeds: bufferingTimeNeeds,
+      sampleRate: sampleRate,
+      channels: channels,
+    );
+    final buf = _PtyStreamBuffer(
+      id,
+      streamId: id,
+      maxBufferSize: maxBufferSize,
+      releaseConsumed: releaseConsumed,
+      bufferingTimeNeeds: bufferingTimeNeeds,
+      sampleRate: sampleRate,
+      channels: channels,
+    );
+    _buffers[id] = buf;
+    if (!_disposed) {
+      writeEscape(frame);
+    }
+    return buf;
+  }
+
+  _PtyStreamBuffer _resolveStreamBuffer(AudioBuffer buffer) {
+    final resolved = _buffers[buffer.hash];
+    if (resolved is _PtyStreamBuffer) return resolved;
+    throw ArgumentError('Unknown stream AudioBuffer for PtyApcAudioEngine');
+  }
 
   @override
-  void addStreamData(AudioBuffer buffer, Uint8List chunk) =>
-      throw UnsupportedError('PtyApcAudioEngine does not support streaming');
+  void addStreamData(AudioBuffer buffer, Uint8List chunk) {
+    if (_disposed) return;
+    final streamBuf = _resolveStreamBuffer(buffer);
+    if (streamBuf.ended || chunk.isEmpty) return;
+    final frames = ApcAudioEncoder.encodeStreamChunk(
+      streamId: streamBuf.streamId,
+      bytes: chunk,
+      startSeq: streamBuf.nextSeq,
+    );
+    streamBuf.nextSeq += frames.length;
+    for (final frame in frames) {
+      writeEscape(frame);
+    }
+  }
 
   @override
-  void setStreamEnded(AudioBuffer buffer) =>
-      throw UnsupportedError('PtyApcAudioEngine does not support streaming');
+  void setStreamEnded(AudioBuffer buffer) {
+    if (_disposed) return;
+    final streamBuf = _resolveStreamBuffer(buffer);
+    if (streamBuf.ended) return;
+    streamBuf.ended = true;
+    writeEscape(
+      ApcAudioEncoder.encodeStreamEnd(
+        streamId: streamBuf.streamId,
+        seq: streamBuf.nextSeq,
+      ),
+    );
+  }
 
   @override
   Future<void> disposeBuffer(AudioBuffer buffer) async {
@@ -863,7 +1093,9 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final busId = (bus is _PtyAudioBus && _buses.containsKey(bus.id))
         ? bus.id
         : null;
-    final clipId = resolved is _PtyClipBuffer ? voiceId : null;
+    final clipId = (resolved is _PtyClipBuffer || resolved is _PtyStreamBuffer)
+        ? voiceId
+        : null;
     final state = _ActivePtyVoice(
       id: voiceId,
       buffer: resolved,
@@ -871,6 +1103,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       loop: loop,
       clipId: clipId,
       busId: busId,
+      isStreamVoice: resolved is _PtyStreamBuffer,
       volume: 1.0,
       emitted: !paused,
       isPaused: paused,
@@ -902,6 +1135,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     state.buffer = null;
     if (state.emitted &&
         state.clipId != null &&
+        !state.isStreamVoice &&
         state.bufferDuration <= Duration.zero) {
       if (_autoEvictedClipIds.length >= 256) {
         _autoEvictedClipIds.remove(_autoEvictedClipIds.first);
@@ -1050,6 +1284,22 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
           for (final frame in frames) {
             writeEscape(frame);
           }
+        case _PtyStreamBuffer(:final streamId):
+          bufferDur = Duration.zero;
+          voice.emittedVolStr = ApcAudioEncoder._formatFloat(effVol);
+          voice.emittedPanStr = ApcAudioEncoder._formatFloat(clampedPan);
+          voice.emittedSpeedStr = '1';
+          writeEscape(
+            ApcAudioEncoder.encodeStreamPlay(
+              clipId: voice.clipId ?? voice.id,
+              streamId: streamId,
+              volume: effVol,
+              pan: clampedPan,
+              loop: voice.loop,
+              startOffset: voice.basePosition,
+              busId: busId,
+            ),
+          );
       }
       final now = _clock.now();
       voice.bufferDuration = bufferDur;
@@ -1242,7 +1492,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
         delay = mediaDelay;
         triggerStop = false;
       }
-    } else if (!state.loop && delay == null) {
+    } else if (!state.loop && !state.isStreamVoice && delay == null) {
       delay = Duration.zero;
     }
     if (delay == null) return;
@@ -1414,6 +1664,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     return switch (stored) {
       _PtyClipBuffer(:final duration) => duration,
       _PtyWaveformBuffer() => defaultToneDuration,
+      _PtyStreamBuffer() => Duration.zero,
     };
   }
 
@@ -1774,7 +2025,9 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     final busId = (bus is _PtyAudioBus && _buses.containsKey(bus.id))
         ? bus.id
         : null;
-    final clipId = resolved is _PtyClipBuffer ? voiceId : null;
+    final clipId = (resolved is _PtyClipBuffer || resolved is _PtyStreamBuffer)
+        ? voiceId
+        : null;
     final clampedStart = start.isNegative ? Duration.zero : start;
     final clampedDur = duration.isNegative ? Duration.zero : duration;
     final state = _ActivePtyVoice(
@@ -1784,6 +2037,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       loop: false,
       clipId: clipId,
       busId: busId,
+      isStreamVoice: resolved is _PtyStreamBuffer,
       volume: 1.0,
       emitted: true,
       isPaused: false,

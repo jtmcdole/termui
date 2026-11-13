@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:clock/clock.dart';
+import 'package:termui_audio/src/apc_fs_io.dart';
 import 'package:termui_audio/src/impl/cli/cli_audio_engine.dart';
 import 'package:termui_audio/src/impl/engine_factory_cli.dart' as cli_factory;
 import 'package:termui_audio/src/impl/engine_factory_stub.dart' as stub_factory;
@@ -1183,6 +1185,320 @@ void main() {
           throwsStateError,
         );
         await engine.dispose();
+      },
+    );
+
+    test(
+      'ApcAudioEncoder stream commands and PtyApcAudioEngine streaming + loadUrl work end to end',
+      () async {
+        final openFrame = ApcAudioEncoder.encodeStreamOpen(
+          streamId: 5,
+          maxBufferSize: 8 * 1024 * 1024,
+          releaseConsumed: true,
+          bufferingTimeNeeds: const Duration(milliseconds: 250),
+          sampleRate: 44100,
+          channels: 1,
+        );
+        expect(
+          openFrame,
+          equals(
+            '\x1b_Aa=stream,op=open,s=5,max=8388608,rel=1,buf=250,sr=44100,ch=1;\x1b\\',
+          ),
+        );
+
+        final chunkData = Uint8List.fromList([
+          for (var i = 0; i < 4000; i++) i & 0xFF,
+        ]);
+        final chunkFrames = ApcAudioEncoder.encodeStreamChunk(
+          streamId: 5,
+          bytes: chunkData,
+          startSeq: 10,
+        );
+        expect(chunkFrames, hasLength(2));
+        expect(
+          chunkFrames[0],
+          startsWith('\x1b_Aa=stream,op=chunk,s=5,seq=10;'),
+        );
+        expect(
+          chunkFrames[1],
+          startsWith('\x1b_Aa=stream,op=chunk,s=5,seq=11;'),
+        );
+        final reassembled = BytesBuilder();
+        for (final frame in chunkFrames) {
+          final semi = frame.indexOf(';');
+          final b64 = frame.substring(semi + 1, frame.length - 2);
+          expect(b64.length, lessThanOrEqualTo(4096));
+          reassembled.add(base64Decode(b64));
+        }
+        expect(reassembled.takeBytes(), equals(chunkData));
+
+        expect(
+          ApcAudioEncoder.encodeStreamEnd(streamId: 5, seq: 12),
+          equals('\x1b_Aa=stream,op=end,s=5,seq=12;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeStreamEnd(streamId: 5),
+          equals('\x1b_Aa=stream,op=end,s=5;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeStreamPlay(
+            clipId: 7,
+            streamId: 5,
+            volume: 0.75,
+            pan: -0.25,
+            loop: true,
+            startOffset: const Duration(milliseconds: 120),
+            busId: 2,
+          ),
+          equals('\x1b_Aa=clip,i=7,st=5,v=0.75,p=-0.25,l=1,s=120,b=2;\x1b\\'),
+        );
+
+        // Validation guards.
+        expect(
+          () => ApcAudioEncoder.encodeStreamOpen(streamId: 0),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeStreamOpen(
+            streamId: 1,
+            maxBufferSize: ApcAudioEncoder.maxStreamBytes + 1,
+          ),
+          throwsRangeError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeStreamOpen(
+            streamId: 1,
+            bufferingTimeNeeds: const Duration(milliseconds: -1),
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeStreamOpen(streamId: 1, sampleRate: 0),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeStreamOpen(streamId: 1, channels: 3),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeStreamChunk(
+            streamId: 1,
+            bytes: Uint8List(0),
+          ),
+          throwsRangeError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeStreamChunk(
+            streamId: 1,
+            bytes: Uint8List.fromList([1]),
+            startSeq: -1,
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeStreamEnd(streamId: 1, seq: -1),
+          throwsArgumentError,
+        );
+
+        // PtyApcAudioEngine stream playback stays active until stop or scheduleStop.
+        final frames = <String>[];
+        final engine = PtyApcAudioEngine(
+          frames.add,
+          urlByteReader: (url, {onProgress}) async {
+            if (url.endsWith('small.wav')) {
+              return generateWaveformPcmWav(
+                shape: WaveForm.sin,
+                frequency: 440,
+                duration: const Duration(milliseconds: 80),
+              );
+            }
+            if (url.endsWith('large.mp3')) {
+              return Uint8List(ApcAudioEncoder.maxClipBytes + 512);
+            }
+            return Uint8List(0);
+          },
+        );
+        await engine.init();
+
+        final streamBuf = await engine.createBufferStream(
+          maxBufferSize: 1024 * 1024,
+          sampleRate: 48000,
+          channels: 2,
+        );
+        expect(engine.getBufferDuration(streamBuf), equals(Duration.zero));
+        engine.addStreamData(streamBuf, Uint8List(0));
+        engine.addStreamData(streamBuf, Uint8List.fromList([1, 2, 3, 4]));
+        engine.setStreamEnded(streamBuf);
+        engine.setStreamEnded(streamBuf); // idempotent
+
+        final voice = engine.play(streamBuf);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        // Must NOT be prematurely evicted at Duration.zero!
+        expect(engine.activeVoiceCount, equals(1));
+        engine.setVoiceVolume(voice, 0.5);
+        expect(frames.last, contains('a=update,i=${voice.id},v=0.5'));
+
+        engine.stop(voice);
+        expect(frames.last, equals('\x1b_Aa=stop,i=${voice.id};\x1b\\'));
+        await voice.completed;
+        expect(engine.activeVoiceCount, equals(0));
+
+        // playSprite on stream schedules stop after sprite duration.
+        final spriteVoice = engine.playSprite(
+          streamBuf,
+          start: const Duration(milliseconds: 10),
+          duration: const Duration(milliseconds: 25),
+        );
+        await spriteVoice.completed.timeout(const Duration(seconds: 2));
+        expect(frames.last, equals('\x1b_Aa=stop,i=${spriteVoice.id};\x1b\\'));
+
+        // loadUrl <= 2 MiB routes through loadMem; > 2 MiB streams through createBufferStream.
+        final progresses = <double>[];
+        final smallBuf = await engine.loadUrl(
+          'https://example.com/small.wav',
+          onProgress: progresses.add,
+        );
+        expect(progresses.last, equals(1.0));
+        frames.clear();
+        final smallVoice = engine.play(smallBuf);
+        expect(frames.first, contains('a=clip,i=${smallVoice.id},fmt=wav'));
+        engine.stop(smallVoice);
+
+        frames.clear();
+        final largeBuf = await engine.loadUrl('https://example.com/large.mp3');
+        expect(frames.first, startsWith('\x1b_Aa=stream,op=open,'));
+        expect(
+          frames.where((f) => f.contains('op=chunk')).length,
+          greaterThan(600),
+        );
+        expect(frames.last, startsWith('\x1b_Aa=stream,op=end,'));
+        final largeVoice = engine.play(largeBuf);
+        expect(frames.last, startsWith('\x1b_Aa=clip,i=${largeVoice.id},st='));
+        engine.stop(largeVoice);
+
+        await expectLater(
+          engine.loadUrl('https://example.com/empty.wav'),
+          throwsRangeError,
+        );
+        final nonStreamBuf = await engine.loadWaveform(WaveForm.sin, 440);
+        expect(
+          () => engine.addStreamData(nonStreamBuf, Uint8List.fromList([1])),
+          throwsArgumentError,
+        );
+        await engine.dispose();
+      },
+    );
+
+    test(
+      'createDefaultApcUrlReader enforces schemes, redirects, timeouts, and 16 MiB cap via local HttpServer',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+
+        server.listen((req) async {
+          switch (req.uri.path) {
+            case '/ok':
+              final payload = Uint8List.fromList([10, 20, 30, 40, 50]);
+              req.response.contentLength = payload.length;
+              req.response.add(payload);
+              await req.response.close();
+            case '/chunked':
+              req.response.headers.chunkedTransferEncoding = true;
+              req.response.add([1, 2, 3]);
+              req.response.add([4, 5]);
+              await req.response.close();
+            case '/redirect1':
+              req.response.statusCode = HttpStatus.found;
+              req.response.headers.set(HttpHeaders.locationHeader, '/ok');
+              await req.response.close();
+            case '/loop':
+              final step = int.parse(req.uri.queryParameters['n'] ?? '0');
+              req.response.statusCode = HttpStatus.found;
+              req.response.headers.set(
+                HttpHeaders.locationHeader,
+                '/loop?n=${step + 1}',
+              );
+              await req.response.close();
+            case '/noloc':
+              req.response.statusCode = HttpStatus.found;
+              await req.response.close();
+            case '/badscheme':
+              req.response.statusCode = HttpStatus.found;
+              req.response.headers.set(
+                HttpHeaders.locationHeader,
+                'file:///etc/passwd',
+              );
+              await req.response.close();
+            case '/notfound':
+              req.response.statusCode = HttpStatus.notFound;
+              await req.response.close();
+            case '/empty':
+              req.response.contentLength = 0;
+              await req.response.close();
+            case '/huge-header':
+              req.response.headers.set(
+                HttpHeaders.contentLengthHeader,
+                '${ApcAudioEncoder.maxStreamBytes + 1}',
+              );
+              await req.response.flush();
+              try {
+                await req.response.close();
+              } on Object {
+                // Client aborts connection cleanly on Content-Length rejection.
+              }
+            case '/huge-stream':
+              req.response.headers.chunkedTransferEncoding = true;
+              final chunk = Uint8List(1024 * 1024);
+              try {
+                for (var i = 0; i < 17; i++) {
+                  req.response.add(chunk);
+                  await req.response.flush();
+                }
+                await req.response.close();
+              } on Object {
+                // Client aborts connection cleanly once running 16 MiB cap trips.
+              }
+            case '/slow':
+              await Future<void>.delayed(const Duration(milliseconds: 250));
+              req.response.add([1, 2]);
+              await req.response.close();
+          }
+        });
+
+        final base = 'http://127.0.0.1:${server.port}';
+        final reader = createDefaultApcUrlReader(
+          connectTimeout: const Duration(seconds: 2),
+          totalTimeout: const Duration(milliseconds: 120),
+        )!;
+        final fastReader = createDefaultApcUrlReader()!;
+
+        final progress = <double>[];
+        expect(
+          await fastReader('$base/ok', onProgress: progress.add),
+          equals(Uint8List.fromList([10, 20, 30, 40, 50])),
+        );
+        expect(progress.last, equals(1.0));
+        expect(
+          await fastReader('$base/chunked'),
+          equals(Uint8List.fromList([1, 2, 3, 4, 5])),
+        );
+        expect(
+          await fastReader('$base/redirect1'),
+          equals(Uint8List.fromList([10, 20, 30, 40, 50])),
+        );
+
+        expect(() => fastReader('file:///tmp/a.wav'), throwsArgumentError);
+        await expectLater(fastReader('$base/loop?n=0'), throwsException);
+        await expectLater(fastReader('$base/noloc'), throwsException);
+        await expectLater(fastReader('$base/badscheme'), throwsException);
+        await expectLater(fastReader('$base/notfound'), throwsException);
+        await expectLater(fastReader('$base/empty'), throwsException);
+        await expectLater(fastReader('$base/huge-header'), throwsException);
+        await expectLater(fastReader('$base/huge-stream'), throwsException);
+        await expectLater(
+          reader('$base/slow'),
+          throwsA(isA<TimeoutException>()),
+        );
       },
     );
   });

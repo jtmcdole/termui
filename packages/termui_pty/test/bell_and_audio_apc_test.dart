@@ -536,5 +536,92 @@ void main() {
         expect(clip.busId, equals(2));
       },
     );
+
+    test(
+      'decodes pass-through a=stream events and a=clip,st= without disturbing pending clip uploads',
+      () {
+        final events = <TerminalAudioEvent>[];
+        final handler = AudioApcHandler(onAudioEvent: events.add);
+
+        // Start a multi-chunk clip upload first.
+        final clipB64 = base64Encode(
+          Uint8List.fromList([10, 20, 30, 40, 50, 60]),
+        );
+        handler.handleApc(
+          'Aa=clip,i=4,fmt=ogg,v=0.8,p=0.1,l=0,m=1;${clipB64.substring(0, 4)}',
+        );
+        expect(handler.pendingUploadCount, equals(1));
+
+        // Interleave a=stream open, chunk, end, and a=clip,st=.
+        handler.handleApc(
+          'Aa=stream,op=open,s=9,max=8388608,rel=1,buf=250,sr=44100,ch=1;',
+        );
+        final chunkBytes = Uint8List.fromList([0x49, 0x44, 0x33, 1, 2, 3]);
+        handler.handleApc(
+          'Aa=stream,op=chunk,s=9,seq=0;${base64Encode(chunkBytes)}',
+        );
+        handler.handleApc('Aa=stream,op=end,s=9,seq=1;');
+        handler.handleApc('Aa=clip,i=15,st=9,v=0.6,p=-0.3,l=1,s=50,b=2;');
+
+        // Pending clip upload must still be intact; complete it with m=0 and no i=.
+        expect(handler.pendingUploadCount, equals(1));
+        handler.handleApc('Am=0;${clipB64.substring(4)}');
+        expect(handler.pendingUploadCount, equals(0));
+
+        // Invalid stream / st= inputs are ignored cleanly.
+        handler.handleApc('Aa=stream,op=open,s=0;');
+        handler.handleApc('Aa=stream,op=open,s=9,max=0;');
+        handler.handleApc('Aa=stream,op=chunk,s=9,seq=-1;AAAA');
+        handler.handleApc('Aa=stream,op=end,s=9,seq=-2;');
+        handler.handleApc('Aa=clip,i=16,st=0;');
+
+        expect(events, hasLength(5));
+        const expectedOpen = TerminalStreamAudioEvent(
+          op: 'open',
+          streamId: 9,
+          maxBufferSize: 8388608,
+          releaseConsumed: true,
+          bufferingTimeNeeds: Duration(milliseconds: 250),
+          sampleRate: 44100,
+          channels: 1,
+        );
+        expect(events[0], equals(expectedOpen));
+        expect(events[0].hashCode, equals(expectedOpen.hashCode));
+        expect(
+          events[1],
+          equals(
+            TerminalStreamAudioEvent(
+              op: 'chunk',
+              streamId: 9,
+              seq: 0,
+              chunkBytes: chunkBytes,
+            ),
+          ),
+        );
+        expect(
+          events[2],
+          equals(
+            const TerminalStreamAudioEvent(op: 'end', streamId: 9, seq: 1),
+          ),
+        );
+        final streamClip = events[3] as TerminalClipAudioEvent;
+        expect(streamClip.clipId, equals(15));
+        expect(streamClip.streamId, equals(9));
+        expect(streamClip.bytes, isEmpty);
+        expect(streamClip.volume, equals(0.6));
+        expect(streamClip.pan, equals(-0.3));
+        expect(streamClip.loop, isTrue);
+        expect(
+          streamClip.startOffset,
+          equals(const Duration(milliseconds: 50)),
+        );
+        expect(streamClip.busId, equals(2));
+
+        final finishedClip = events[4] as TerminalClipAudioEvent;
+        expect(finishedClip.clipId, equals(4));
+        expect(finishedClip.streamId, isNull);
+        expect(finishedClip.bytes, equals([10, 20, 30, 40, 50, 60]));
+      },
+    );
   });
 }
