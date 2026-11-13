@@ -939,5 +939,251 @@ void main() {
         await engine.dispose();
       },
     );
+
+    test(
+      'encodes bus lifecycle/filter commands, routes voices without double-multiplying bus volume, and shadows filter params with Clock interpolation',
+      () async {
+        expect(
+          ApcAudioEncoder.encodeBus(op: 'create', busId: 2),
+          equals('\x1b_Aa=bus,op=create,b=2;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeBus(op: 'destroy', busId: 2),
+          equals('\x1b_Aa=bus,op=destroy,b=2;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeBus(op: 'vol', busId: 2, value: 1.5),
+          equals('\x1b_Aa=bus,op=vol,b=2,v=1;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeBus(op: 'attach', busId: 2, filterId: 7),
+          equals('\x1b_Aa=bus,op=attach,b=2,ft=7;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeBus(
+            op: 'param',
+            busId: 2,
+            filterId: 0,
+            paramId: 2,
+            value: 1200.0,
+          ),
+          equals('\x1b_Aa=bus,op=param,b=2,ft=0,pm=2,v=1200;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeBus(
+            op: 'fade',
+            busId: 2,
+            filterId: 7,
+            paramId: 2,
+            value: 0.9,
+            duration: const Duration(milliseconds: 500),
+          ),
+          equals('\x1b_Aa=bus,op=fade,b=2,ft=7,pm=2,v=0.9,d=500;\x1b\\'),
+        );
+        expect(
+          ApcAudioEncoder.encodeTone(
+            frequencyHz: 440,
+            duration: const Duration(milliseconds: 50),
+            busId: 3,
+          ),
+          contains(',b=3;'),
+        );
+        expect(
+          ApcAudioEncoder.encodeClip(
+            clipId: 1,
+            format: 'wav',
+            bytes: Uint8List.fromList([1, 2, 3]),
+            busId: 3,
+          ).single,
+          contains(',b=3,m=0;'),
+        );
+        expect(
+          () => ApcAudioEncoder.encodeBus(op: 'bogus', busId: 1),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeBus(op: 'create', busId: 0),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeBus(op: 'vol', busId: 1),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeBus(op: 'attach', busId: 1, filterId: 99),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeBus(
+            op: 'param',
+            busId: 1,
+            filterId: 0,
+            paramId: -1,
+            value: 1.0,
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeBus(
+            op: 'param',
+            busId: 1,
+            filterId: 0,
+            paramId: 0,
+            value: double.nan,
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeBus(
+            op: 'fade',
+            busId: 1,
+            filterId: 0,
+            paramId: 0,
+            value: 0.5,
+            duration: const Duration(milliseconds: -1),
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => ApcAudioEncoder.encodeTone(
+            frequencyHz: 440,
+            duration: const Duration(milliseconds: 50),
+            busId: 0,
+          ),
+          throwsArgumentError,
+        );
+
+        var now = DateTime.utc(2026, 3, 1);
+        final frames = <String>[];
+        final engine = PtyApcAudioEngine(frames.add, clock: Clock(() => now));
+
+        final bus = engine.createBus();
+        expect(
+          frames.single,
+          equals('\x1b_Aa=bus,op=create,b=${bus.id};\x1b\\'),
+        );
+        bus.setVolume(0.4);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=bus,op=vol,b=${bus.id},v=0.4;\x1b\\'),
+        );
+
+        // Clip played on bus carries b=<busId> and keeps voice volume=1.0 (no double-multiply).
+        final wavBytes = generateWaveformPcmWav(
+          shape: WaveForm.sin,
+          frequency: 440,
+          duration: const Duration(milliseconds: 200),
+        );
+        final clip = await engine.loadMem('bus_clip.wav', wavBytes);
+        frames.clear();
+        final clipVoice = engine.play(clip, bus: bus, loop: true);
+        expect(frames.first, contains(',v=1,'));
+        expect(frames.first, contains(',b=${bus.id},'));
+
+        // Tone and sprite played on bus carry b=<busId>.
+        final tone = await engine.loadWaveform(WaveForm.sin, 440);
+        final toneVoice = engine.play(tone, bus: bus);
+        expect(frames.last, contains(',v=1,p=0,b=${bus.id};'));
+        final sprite = engine.playSprite(
+          clip,
+          start: Duration.zero,
+          duration: const Duration(milliseconds: 30),
+          bus: bus,
+        );
+        expect(
+          frames.any(
+            (f) => f.contains('i=${sprite.id}') && f.contains(',b=${bus.id},'),
+          ),
+          isTrue,
+        );
+
+        // Filter defaults, attach, set, get, and linear fade interpolation.
+        final freeverbId = engine.createFilter(FilterType.freeverb);
+        final biquadId = engine.createFilter(FilterType.biquadResonant);
+        final eqId = engine.createFilter(FilterType.parametricEq);
+        final pitchId = engine.createFilter(FilterType.pitchShift);
+        expect(() => engine.attachFilterToBus(bus, 99), throwsRangeError);
+        engine.attachFilterToBus(bus, freeverbId);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=bus,op=attach,b=${bus.id},ft=$freeverbId;\x1b\\'),
+        );
+        expect(engine.getFilterParameter(bus, freeverbId, 0), equals(1.0));
+        expect(engine.getFilterParameter(bus, freeverbId, 2), equals(0.5));
+        expect(engine.getFilterParameter(bus, biquadId, 2), equals(1000.0));
+        expect(engine.getFilterParameter(bus, eqId, 1), equals(1024.0));
+        expect(engine.getFilterParameter(bus, eqId, 5), equals(1.0));
+
+        engine.setFilterParameter(bus, freeverbId, 2, 0.2);
+        expect(engine.getFilterParameter(bus, freeverbId, 2), equals(0.2));
+        expect(
+          frames.last,
+          equals(
+            '\x1b_Aa=bus,op=param,b=${bus.id},ft=$freeverbId,pm=2,v=0.2;\x1b\\',
+          ),
+        );
+
+        engine.fadeFilterParameter(
+          bus,
+          freeverbId,
+          2,
+          0.8,
+          const Duration(milliseconds: 200),
+        );
+        expect(
+          frames.last,
+          equals(
+            '\x1b_Aa=bus,op=fade,b=${bus.id},ft=$freeverbId,pm=2,v=0.8,d=200;\x1b\\',
+          ),
+        );
+        now = now.add(const Duration(milliseconds: 100));
+        expect(
+          engine.getFilterParameter(bus, freeverbId, 2),
+          closeTo(0.5, 1e-6),
+        );
+        // Mid-fade re-target starts from 0.5.
+        engine.fadeFilterParameter(
+          bus,
+          freeverbId,
+          2,
+          1.0,
+          const Duration(milliseconds: 100),
+        );
+        now = now.add(const Duration(milliseconds: 50));
+        expect(
+          engine.getFilterParameter(bus, freeverbId, 2),
+          closeTo(0.75, 1e-6),
+        );
+        now = now.add(const Duration(milliseconds: 100));
+        expect(engine.getFilterParameter(bus, freeverbId, 2), equals(1.0));
+
+        // PitchShift paired shift <-> semitones shadow.
+        engine.attachFilterToBus(bus, pitchId);
+        engine.setFilterParameter(bus, pitchId, 1, 2.0);
+        expect(engine.getFilterParameter(bus, pitchId, 2), closeTo(12.0, 1e-6));
+        engine.fadeFilterParameter(bus, pitchId, 2, 0.0, Duration.zero);
+        expect(engine.getFilterParameter(bus, pitchId, 1), closeTo(1.0, 1e-6));
+
+        engine.stop(clipVoice);
+        engine.stop(toneVoice);
+        engine.stop(sprite);
+        engine.destroyBus(bus);
+        expect(
+          frames.last,
+          equals('\x1b_Aa=bus,op=destroy,b=${bus.id};\x1b\\'),
+        );
+
+        // Destroyed bus ignores further volume/param ops and throws StateError on attach.
+        final countAfterDestroy = frames.length;
+        bus.setVolume(0.9);
+        engine.setFilterParameter(bus, freeverbId, 0, 0.5);
+        expect(frames, hasLength(countAfterDestroy));
+        expect(
+          () => engine.attachFilterToBus(bus, freeverbId),
+          throwsStateError,
+        );
+        await engine.dispose();
+      },
+    );
   });
 }

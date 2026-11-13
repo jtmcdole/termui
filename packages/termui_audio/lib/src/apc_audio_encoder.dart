@@ -27,6 +27,16 @@ abstract final class ApcAudioEncoder {
   /// Wire audio container formats accepted by [encodeClip].
   static const Set<String> supportedFormats = {'wav', 'ogg', 'mp3'};
 
+  /// Wire operations accepted by [encodeBus].
+  static const Set<String> supportedBusOps = {
+    'create',
+    'destroy',
+    'vol',
+    'attach',
+    'param',
+    'fade',
+  };
+
   /// Converts a [WaveForm] enum value into its canonical wire name.
   ///
   /// Maps [WaveForm.sin] to `'sine'`.
@@ -79,6 +89,12 @@ abstract final class ApcAudioEncoder {
     return result == '-0' ? '0' : result;
   }
 
+  static void _validateWireBusId(int busId) {
+    if (busId <= 0 || busId > 0x7FFFFFFF) {
+      throw ArgumentError.value(busId, 'busId', 'Must be in 1..0x7FFFFFFF');
+    }
+  }
+
   /// Encodes a synthetic tone synthesis APC command (`ESC _ A a=tone,... ST`).
   static String encodeTone({
     WaveForm waveform = WaveForm.sin,
@@ -86,6 +102,7 @@ abstract final class ApcAudioEncoder {
     required Duration duration,
     double volume = 0.8,
     double pan = 0.0,
+    int? busId,
   }) {
     if (!frequencyHz.isFinite || frequencyHz <= 0 || frequencyHz > 24000.0) {
       throw ArgumentError.value(
@@ -97,14 +114,18 @@ abstract final class ApcAudioEncoder {
     if (duration.isNegative || duration > const Duration(seconds: 60)) {
       throw ArgumentError.value(duration, 'duration', 'Must be in [0, 60s]');
     }
+    if (busId != null) {
+      _validateWireBusId(busId);
+    }
     final wireWaveform = waveformToWire(waveform);
     final freqStr = _formatFloat(frequencyHz);
     final durationMs = duration.inMicroseconds / 1000.0;
     final durStr = _formatFloat(durationMs);
     final volStr = _formatFloat(_clampUnit(volume, 0.8));
     final panStr = _formatFloat(_clampPan(pan));
+    final busPart = busId != null ? ',b=$busId' : '';
     return '\x1b_Aa=tone,w=$wireWaveform,f=$freqStr,d=$durStr,'
-        'v=$volStr,p=$panStr;\x1b\\';
+        'v=$volStr,p=$panStr$busPart;\x1b\\';
   }
 
   /// Encodes an in-memory audio clip into chunked `m=1`/`m=0` APC frames.
@@ -119,6 +140,7 @@ abstract final class ApcAudioEncoder {
     double pan = 0.0,
     bool loop = false,
     Duration startOffset = Duration.zero,
+    int? busId,
     int chunkSize = chunkBase64Chars,
   }) {
     if (clipId <= 0) {
@@ -138,6 +160,9 @@ abstract final class ApcAudioEncoder {
     if (startOffset.isNegative) {
       throw ArgumentError.value(startOffset, 'startOffset', 'Must be >= 0');
     }
+    if (busId != null) {
+      _validateWireBusId(busId);
+    }
     final step = math.max(4, chunkSize);
     final encoded = base64Encode(bytes);
     final volStr = _formatFloat(_clampUnit(volume, 1.0));
@@ -146,6 +171,7 @@ abstract final class ApcAudioEncoder {
     final startPart = startOffset > Duration.zero
         ? ',s=${_formatFloat(startOffset.inMicroseconds / 1000.0)}'
         : '';
+    final busPart = busId != null ? ',b=$busId' : '';
 
     final frames = <String>[];
     for (var offset = 0; offset < encoded.length; offset += step) {
@@ -155,7 +181,7 @@ abstract final class ApcAudioEncoder {
       if (offset == 0) {
         frames.add(
           '\x1b_Aa=clip,i=$clipId,fmt=$normalizedFmt,'
-          'v=$volStr,p=$panStr,l=$loopFlag$startPart,m=$more;$chunk\x1b\\',
+          'v=$volStr,p=$panStr,l=$loopFlag$startPart$busPart,m=$more;$chunk\x1b\\',
         );
       } else {
         frames.add('\x1b_Ai=$clipId,m=$more;$chunk\x1b\\');
@@ -298,6 +324,92 @@ abstract final class ApcAudioEncoder {
     }
     return '\x1b_Aa=stop;\x1b\\';
   }
+
+  /// Encodes an APC mixing bus lifecycle or DSP filter command (`ESC _ A a=bus,... ST`).
+  static String encodeBus({
+    required String op,
+    required int busId,
+    int? filterId,
+    int? paramId,
+    double? value,
+    Duration? duration,
+  }) {
+    if (!supportedBusOps.contains(op)) {
+      throw ArgumentError.value(op, 'op', 'Expected one of $supportedBusOps');
+    }
+    _validateWireBusId(busId);
+    final buf = StringBuffer('\x1b_Aa=bus,op=$op,b=$busId');
+    _appendBusOpFields(
+      buf,
+      op: op,
+      filterId: filterId,
+      paramId: paramId,
+      value: value,
+      duration: duration,
+    );
+    buf.write(';\x1b\\');
+    return buf.toString();
+  }
+
+  static void _appendBusOpFields(
+    StringBuffer buf, {
+    required String op,
+    required int? filterId,
+    required int? paramId,
+    required double? value,
+    required Duration? duration,
+  }) {
+    switch (op) {
+      case 'create' || 'destroy':
+        return;
+      case 'vol':
+        if (value == null || !value.isFinite) {
+          throw ArgumentError.value(value, 'value', 'Must be finite for vol');
+        }
+        buf.write(',v=${_formatFloat(_clampUnit(value, 1.0))}');
+      case 'attach':
+        _validateBusFilterId(filterId);
+        buf.write(',ft=$filterId');
+      case 'param':
+        _validateBusFilterAndParam(filterId, paramId, value);
+        buf.write(',ft=$filterId,pm=$paramId,v=${_formatFloat(value!)}');
+      case 'fade':
+        _validateBusFilterAndParam(filterId, paramId, value);
+        if (duration == null || duration.isNegative) {
+          throw ArgumentError.value(duration, 'duration', 'Must be >= 0');
+        }
+        buf.write(
+          ',ft=$filterId,pm=$paramId,v=${_formatFloat(value!)},'
+          'd=${_formatFloat(duration.inMicroseconds / 1000.0)}',
+        );
+    }
+  }
+
+  static void _validateBusFilterId(int? filterId) {
+    if (filterId == null ||
+        filterId < 0 ||
+        filterId >= FilterType.values.length) {
+      throw ArgumentError.value(
+        filterId,
+        'filterId',
+        'Must be in 0..${FilterType.values.length - 1}',
+      );
+    }
+  }
+
+  static void _validateBusFilterAndParam(
+    int? filterId,
+    int? paramId,
+    double? value,
+  ) {
+    _validateBusFilterId(filterId);
+    if (paramId == null || paramId < 0) {
+      throw ArgumentError.value(paramId, 'paramId', 'Must be >= 0');
+    }
+    if (value == null || !value.isFinite) {
+      throw ArgumentError.value(value, 'value', 'Must be finite');
+    }
+  }
 }
 
 sealed class _PtyAudioBuffer implements AudioBuffer {
@@ -327,6 +439,13 @@ final class _PtyAudioBus implements AudioBus {
   final int id;
   final void Function(double) _onVolume;
   double volume = 1.0;
+  final Set<int> attachedFilters = {};
+  final Map<(int, int), double> paramValues = {};
+  final Map<
+    (int, int),
+    ({double from, double to, DateTime startAt, Duration duration})
+  >
+  paramFades = {};
 
   _PtyAudioBus(this.id, this._onVolume);
 
@@ -343,6 +462,7 @@ final class _ActivePtyVoice {
   final Completer<void> completer;
   final bool loop;
   final int? clipId;
+  final int? busId;
   double volume;
   double pan = 0.0;
   double posX = 0.0;
@@ -380,6 +500,7 @@ final class _ActivePtyVoice {
     required this.completer,
     required this.loop,
     required this.clipId,
+    this.busId,
     required this.volume,
     required this.emitted,
     required this.isPaused,
@@ -739,7 +860,9 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   }) {
     final resolved = _resolveBuffer(buffer);
     final voiceId = _nextVoiceId++;
-    final busVol = (bus is _PtyAudioBus) ? bus.volume : 1.0;
+    final busId = (bus is _PtyAudioBus && _buses.containsKey(bus.id))
+        ? bus.id
+        : null;
     final clipId = resolved is _PtyClipBuffer ? voiceId : null;
     final state = _ActivePtyVoice(
       id: voiceId,
@@ -747,7 +870,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       completer: Completer<void>(),
       loop: loop,
       clipId: clipId,
-      volume: busVol,
+      busId: busId,
+      volume: 1.0,
       emitted: !paused,
       isPaused: paused,
     );
@@ -891,6 +1015,9 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     try {
       final effVol = _effectiveVolume(voice);
       final clampedPan = ApcAudioEncoder._clampPan(voice.pan);
+      final busId = (voice.busId != null && _buses.containsKey(voice.busId))
+          ? voice.busId
+          : null;
       final Duration bufferDur;
       switch (buffer) {
         case _PtyWaveformBuffer(:final shape, :final frequency):
@@ -902,6 +1029,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
               duration: bufferDur,
               volume: effVol,
               pan: clampedPan,
+              busId: busId,
             ),
           );
         case _PtyClipBuffer(:final format, :final bytes, :final duration):
@@ -917,6 +1045,7 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
             pan: clampedPan,
             loop: voice.loop,
             startOffset: voice.basePosition,
+            busId: busId,
           );
           for (final frame in frames) {
             writeEscape(frame);
@@ -1459,11 +1588,92 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     }
   }
 
+  static const List<List<double>> _defaultFilterParams = [
+    [1.0, 0.0, 1000.0, 2.0], // biquadResonant
+    [1.0, 0.3, 0.7, 0.0], // echo
+    [1.0, 4000.0, 3.0], // lofi
+    [1.0, 0.005, 10.0], // flanger
+    [1.0, 2.0], // bassboost
+    [1.0, 0.0], // waveShaper
+    [1.0, 30.0, 0.0], // robotize
+    [1.0, 0.0, 0.5, 0.5, 1.0], // freeverb
+    [1.0, 1.0, 0.0], // pitchShift
+    [1.0, -3.0, -1.0, 6.0, 50.0, 1.0], // limiter
+    [1.0, -6.0, 0.0, 2.0, 3.0, 10.0, 100.0], // compressor
+    [1.0, 1024.0, 3.0], // parametricEq (band gains 3..66 default to 1.0)
+  ];
+
+  static bool _isValidFilterParam(int filterId, int paramId) {
+    if (filterId < 0 ||
+        filterId >= _defaultFilterParams.length ||
+        paramId < 0) {
+      return false;
+    }
+    final maxParams = filterId == FilterType.parametricEq.index
+        ? 67
+        : _defaultFilterParams[filterId].length;
+    return paramId < maxParams;
+  }
+
+  static double _defaultFilterParamValue(int filterId, int paramId) {
+    if (!_isValidFilterParam(filterId, paramId)) return 0.0;
+    final defaults = _defaultFilterParams[filterId];
+    return paramId < defaults.length ? defaults[paramId] : 1.0;
+  }
+
+  static void _seedFilterDefaults(_PtyAudioBus busState, int filterId) {
+    if (!busState.attachedFilters.add(filterId)) return;
+    final count = filterId == FilterType.parametricEq.index
+        ? 67
+        : _defaultFilterParams[filterId].length;
+    for (var p = 0; p < count; p++) {
+      busState.paramValues.putIfAbsent((
+        filterId,
+        p,
+      ), () => _defaultFilterParamValue(filterId, p));
+    }
+  }
+
+  static void _syncPairedPitchParams(
+    _PtyAudioBus busState,
+    int filterId,
+    int paramId,
+    double value,
+  ) {
+    if (filterId != FilterType.pitchShift.index) return;
+    if (paramId == 1 && value > 0.0) {
+      final semitones = 12.0 * math.log(value) / math.ln2;
+      busState.paramFades.remove((filterId, 2));
+      busState.paramValues[(filterId, 2)] = semitones;
+    } else if (paramId == 2) {
+      final shift = math.pow(2.0, value / 12.0).toDouble();
+      busState.paramFades.remove((filterId, 1));
+      busState.paramValues[(filterId, 1)] = shift;
+    }
+  }
+
   @override
   int createFilter(FilterType type) => type.index;
 
   @override
-  void attachFilterToBus(AudioBus bus, int filterId) {}
+  void attachFilterToBus(AudioBus bus, int filterId) {
+    if (_disposed) return;
+    if (filterId < 0 || filterId >= FilterType.values.length) {
+      throw RangeError.index(filterId, FilterType.values, 'filterId');
+    }
+    final busState = _buses[bus.id];
+    if (busState == null) {
+      throw StateError('AudioBus ${bus.id} is not registered on this engine.');
+    }
+    _seedFilterDefaults(busState, filterId);
+    writeEscape(
+      ApcAudioEncoder.encodeBus(
+        op: 'attach',
+        busId: bus.id,
+        filterId: filterId,
+      ),
+    );
+  }
 
   @override
   void setFilterParameter(
@@ -1471,10 +1681,47 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     int filterId,
     int paramId,
     double value,
-  ) {}
+  ) {
+    if (_disposed || !value.isFinite) return;
+    final busState = _buses[bus.id];
+    if (busState == null || !_isValidFilterParam(filterId, paramId)) return;
+    _seedFilterDefaults(busState, filterId);
+    final key = (filterId, paramId);
+    busState.paramFades.remove(key);
+    busState.paramValues[key] = value;
+    _syncPairedPitchParams(busState, filterId, paramId, value);
+    writeEscape(
+      ApcAudioEncoder.encodeBus(
+        op: 'param',
+        busId: bus.id,
+        filterId: filterId,
+        paramId: paramId,
+        value: value,
+      ),
+    );
+  }
 
   @override
-  double getFilterParameter(AudioBus bus, int filterId, int paramId) => 0.0;
+  double getFilterParameter(AudioBus bus, int filterId, int paramId) {
+    if (_disposed) return 0.0;
+    final busState = _buses[bus.id];
+    if (busState == null || !_isValidFilterParam(filterId, paramId)) return 0.0;
+    final key = (filterId, paramId);
+    final fade = busState.paramFades[key];
+    if (fade != null) {
+      final elapsed = _clock.now().difference(fade.startAt);
+      if (fade.duration <= Duration.zero || elapsed >= fade.duration) {
+        busState.paramFades.remove(key);
+        busState.paramValues[key] = fade.to;
+        return fade.to;
+      }
+      if (elapsed <= Duration.zero) return fade.from;
+      final t = elapsed.inMicroseconds / fade.duration.inMicroseconds;
+      return fade.from + (fade.to - fade.from) * t;
+    }
+    return busState.paramValues[key] ??
+        _defaultFilterParamValue(filterId, paramId);
+  }
 
   @override
   void fadeFilterParameter(
@@ -1483,7 +1730,37 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
     int paramId,
     double targetValue,
     Duration duration,
-  ) {}
+  ) {
+    if (_disposed || !targetValue.isFinite) return;
+    final busState = _buses[bus.id];
+    if (busState == null || !_isValidFilterParam(filterId, paramId)) return;
+    _seedFilterDefaults(busState, filterId);
+    final key = (filterId, paramId);
+    final current = getFilterParameter(bus, filterId, paramId);
+    final dur = duration.isNegative ? Duration.zero : duration;
+    if (dur == Duration.zero) {
+      busState.paramFades.remove(key);
+      busState.paramValues[key] = targetValue;
+      _syncPairedPitchParams(busState, filterId, paramId, targetValue);
+    } else {
+      busState.paramFades[key] = (
+        from: current,
+        to: targetValue,
+        startAt: _clock.now(),
+        duration: dur,
+      );
+    }
+    writeEscape(
+      ApcAudioEncoder.encodeBus(
+        op: 'fade',
+        busId: bus.id,
+        filterId: filterId,
+        paramId: paramId,
+        value: targetValue,
+        duration: dur,
+      ),
+    );
+  }
 
   @override
   AudioVoice playSprite(
@@ -1494,7 +1771,9 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   }) {
     final resolved = _resolveBuffer(buffer);
     final voiceId = _nextVoiceId++;
-    final busVol = (bus is _PtyAudioBus) ? bus.volume : 1.0;
+    final busId = (bus is _PtyAudioBus && _buses.containsKey(bus.id))
+        ? bus.id
+        : null;
     final clipId = resolved is _PtyClipBuffer ? voiceId : null;
     final clampedStart = start.isNegative ? Duration.zero : start;
     final clampedDur = duration.isNegative ? Duration.zero : duration;
@@ -1504,7 +1783,8 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
       completer: Completer<void>(),
       loop: false,
       clipId: clipId,
-      volume: busVol,
+      busId: busId,
+      volume: 1.0,
       emitted: true,
       isPaused: false,
       basePosition: clampedStart,
@@ -1544,14 +1824,25 @@ final class PtyApcAudioEngine implements TermuiAudioEngine {
   @override
   AudioBus createBus() {
     final id = _nextBusId++;
-    final bus = _PtyAudioBus(id, (_) {});
+    final bus = _PtyAudioBus(id, (volume) {
+      if (_disposed || !_buses.containsKey(id)) return;
+      writeEscape(
+        ApcAudioEncoder.encodeBus(op: 'vol', busId: id, value: volume),
+      );
+    });
     _buses[id] = bus;
+    if (!_disposed) {
+      writeEscape(ApcAudioEncoder.encodeBus(op: 'create', busId: id));
+    }
     return bus;
   }
 
   @override
   void destroyBus(AudioBus bus) {
-    _buses.remove(bus.id);
+    final removed = _buses.remove(bus.id);
+    if (removed != null && !_disposed) {
+      writeEscape(ApcAudioEncoder.encodeBus(op: 'destroy', busId: removed.id));
+    }
   }
 
   @override

@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show protected, visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:flutter_soloud/flutter_soloud.dart' as sol;
 import 'package:termui_audio/termui_audio.dart';
@@ -67,6 +69,7 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   final Map<int, Completer<void>> _activeVoices = {};
   final Map<int, sol.Bus> _buses = {};
+  final Map<int, AudioBus> _voicePitchBuses = {};
   final Set<Timer> _activeTimers = {};
   sol.AudioData? _audioData;
 
@@ -120,10 +123,27 @@ class FlutterAudioEngine implements TermuiAudioEngine {
   }
 
   void _completeVoice(int voiceId) {
+    final pitchBus = _voicePitchBuses.remove(voiceId);
+    if (pitchBus != null && isInitialized) {
+      try {
+        destroyBus(pitchBus);
+      } catch (_) {}
+    }
     final completer = _activeVoices.remove(voiceId);
     if (completer != null && !completer.isCompleted) {
       completer.complete();
     }
+  }
+
+  void _disposePitchBuses() {
+    if (_voicePitchBuses.isNotEmpty && isInitialized) {
+      for (final pitchBus in _voicePitchBuses.values) {
+        try {
+          destroyBus(pitchBus);
+        } catch (_) {}
+      }
+    }
+    _voicePitchBuses.clear();
   }
 
   @override
@@ -137,6 +157,8 @@ class FlutterAudioEngine implements TermuiAudioEngine {
       if (!c.isCompleted) c.complete();
     }
     _activeVoices.clear();
+
+    _disposePitchBuses();
 
     if (_inited && _engine.isInitialized) {
       for (final solBus in _buses.values) {
@@ -293,8 +315,15 @@ class FlutterAudioEngine implements TermuiAudioEngine {
 
   @override
   void stop(AudioVoice voice) {
-    _engine.stop(sol.SoundHandle(voice.id));
+    stopEngineVoice(voice.id);
     _completeVoice(voice.id);
+  }
+
+  /// Stops the native SoLoud voice handle for [voiceId].
+  @protected
+  @visibleForTesting
+  void stopEngineVoice(int voiceId) {
+    _engine.stop(sol.SoundHandle(voiceId));
   }
 
   @override
@@ -374,20 +403,90 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     );
   }
 
+  /// Sets the relative play speed multiplier for [voice].
+  ///
+  /// When [preservePitch] is true, allocates an internal per-voice [sol.Bus]
+  /// with an active pitch-shift filter and annexes [voice] into it via
+  /// `solBus.annexSound`. Because SoLoud reparents annexed voices, enabling
+  /// [preservePitch] detaches [voice] from any user mixing bus it was
+  /// originally played on.
   @override
   void setRelativePlaySpeed(
     AudioVoice voice,
     double speed, {
     bool preservePitch = false,
   }) {
-    if (preservePitch) {
-      throw UnimplementedError(
-        'preservePitch is not yet supported by FlutterAudioEngine; '
-        'use CliAudioEngine or attach a pitchShift filter to an AudioBus.',
-      );
-    }
     if (!isInitialized) throw Exception('Engine not initialized.');
-    _engine.setRelativePlaySpeed(sol.SoundHandle(voice.id), speed);
+    final pitchFilterId = FilterType.pitchShift.index;
+    if (!preservePitch) {
+      final existing = _voicePitchBuses[voice.id];
+      if (existing != null) {
+        setFilterParameter(existing, pitchFilterId, 0, 0.0);
+        setFilterParameter(existing, pitchFilterId, 1, 1.0);
+      }
+      setEngineRelativePlaySpeed(voice.id, speed);
+      return;
+    }
+    if (!speed.isFinite || speed <= 0.0) return;
+    final clampedSpeed = speed.clamp(0.125, 8.0).toDouble();
+    final pitchBus = _voicePitchBuses[voice.id] ??= _createVoicePitchBus(
+      voice.id,
+      pitchFilterId,
+    );
+    _applyPitchShiftCompensation(pitchBus, pitchFilterId, clampedSpeed);
+    setEngineRelativePlaySpeed(voice.id, clampedSpeed);
+  }
+
+  AudioBus _createVoicePitchBus(int voiceId, int pitchFilterId) {
+    final bus = createBus();
+    try {
+      attachFilterToBus(bus, pitchFilterId);
+      annexVoiceToBus(bus, voiceId);
+    } catch (_) {
+      try {
+        destroyBus(bus);
+      } catch (_) {}
+      rethrow;
+    }
+    return bus;
+  }
+
+  void _applyPitchShiftCompensation(
+    AudioBus bus,
+    int pitchFilterId,
+    double speed,
+  ) {
+    if ((speed - 1.0).abs() <= 0.001) {
+      setFilterParameter(bus, pitchFilterId, 0, 0.0);
+      setFilterParameter(bus, pitchFilterId, 1, 1.0);
+      return;
+    }
+    final shift = (1.0 / speed).clamp(0.125, 8.0).toDouble();
+    setFilterParameter(bus, pitchFilterId, 0, 1.0);
+    if (shift <= 3.0) {
+      setFilterParameter(bus, pitchFilterId, 1, shift);
+    } else {
+      // flutter_soloud caps PitchShiftEnum.shift at 3.0; semitones [-36, 36]
+      // computes pow(2, semitones / 12) in C++ to cover [0.125, 8.0].
+      final semitones = (12.0 * math.log(shift) / math.ln2)
+          .clamp(-36.0, 36.0)
+          .toDouble();
+      setFilterParameter(bus, pitchFilterId, 2, semitones);
+    }
+  }
+
+  /// Reparents live voice [voiceId] onto mixing [bus] via `sol.Bus.annexSound`.
+  @protected
+  @visibleForTesting
+  void annexVoiceToBus(AudioBus bus, int voiceId) {
+    _resolveSolBus(bus)?.annexSound(sol.SoundHandle(voiceId));
+  }
+
+  /// Applies native SoLoud relative play speed for [voiceId].
+  @protected
+  @visibleForTesting
+  void setEngineRelativePlaySpeed(int voiceId, double speed) {
+    _engine.setRelativePlaySpeed(sol.SoundHandle(voiceId), speed);
   }
 
   @override

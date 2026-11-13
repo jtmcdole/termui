@@ -27,12 +27,70 @@ final class _FakeAudioBus implements AudioBus {
 
 final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
   final List<String> calls = [];
+  final List<_FakeAudioBus> createdBuses = [];
+  final List<int> destroyedBusIds = [];
+  final List<(int busId, int filterId)> attachedFilters = [];
+  final List<(int busId, int filterId, int paramId, double value)>
+  filterParams = [];
+  final List<(int busId, int voiceId)> annexedVoices = [];
+  bool throwOnAnnex = false;
   AudioBus? lastPlayedBus;
   bool? lastPlayedPaused;
   int _nextVoiceId = 1;
+  int _nextBusId = 100;
 
   @override
   bool get isInitialized => true;
+
+  @override
+  AudioBus createBus() {
+    final bus = _FakeAudioBus(_nextBusId++);
+    createdBuses.add(bus);
+    calls.add('createBus(${bus.id})');
+    return bus;
+  }
+
+  @override
+  void destroyBus(AudioBus bus) {
+    destroyedBusIds.add(bus.id);
+    calls.add('destroyBus(${bus.id})');
+  }
+
+  @override
+  void attachFilterToBus(AudioBus bus, int filterId) {
+    attachedFilters.add((bus.id, filterId));
+    calls.add('attachFilter(bus:${bus.id}, ft:$filterId)');
+  }
+
+  @override
+  void setFilterParameter(
+    AudioBus bus,
+    int filterId,
+    int paramId,
+    double value,
+  ) {
+    filterParams.add((bus.id, filterId, paramId, value));
+    calls.add(
+      'setFilterParam(bus:${bus.id}, ft:$filterId, pm:$paramId, v:$value)',
+    );
+  }
+
+  @override
+  void annexVoiceToBus(AudioBus bus, int voiceId) {
+    if (throwOnAnnex) throw StateError('annex failed');
+    annexedVoices.add((bus.id, voiceId));
+    calls.add('annexVoice(bus:${bus.id}, voice:$voiceId)');
+  }
+
+  @override
+  void setEngineRelativePlaySpeed(int voiceId, double speed) {
+    calls.add('setEngineSpeed(voice:$voiceId, speed:$speed)');
+  }
+
+  @override
+  void stopEngineVoice(int voiceId) {
+    calls.add('stopEngineVoice(voice:$voiceId)');
+  }
 
   @override
   AudioVoice play(
@@ -82,21 +140,83 @@ void main() {
     );
 
     test(
-      'setRelativePlaySpeed throws UnimplementedError when preservePitch is true',
-      () {
-        final engine = FlutterAudioEngine();
-        final voice = AudioVoice(42, Completer<void>().future);
-
+      'setRelativePlaySpeed throws when uninitialized and manages per-voice pitch bus when preservePitch is true',
+      () async {
+        final uninit = FlutterAudioEngine();
+        final uninitVoice = AudioVoice(42, Completer<void>().future);
         expect(
-          () => engine.setRelativePlaySpeed(voice, 1.5, preservePitch: true),
-          throwsA(
-            isA<UnimplementedError>().having(
-              (e) => e.message,
-              'message',
-              contains('preservePitch is not yet supported'),
-            ),
+          () => uninit.setRelativePlaySpeed(
+            uninitVoice,
+            1.5,
+            preservePitch: true,
           ),
+          throwsA(isA<Exception>()),
         );
+
+        final engine = _RecordingFlutterAudioEngine();
+        final v1 = AudioVoice(10, Completer<void>().future);
+        final v2 = AudioVoice(20, Completer<void>().future);
+        final pitchFt = FilterType.pitchShift.index;
+
+        // Non-finite or non-positive speed with preservePitch is ignored.
+        engine.setRelativePlaySpeed(v1, 0.0, preservePitch: true);
+        engine.setRelativePlaySpeed(v1, double.nan, preservePitch: true);
+        expect(engine.createdBuses, isEmpty);
+
+        // 0.5x speed allocates bus once, attaches pitchShift, annexes voice, and sets wet=1.0, shift=2.0.
+        engine.setRelativePlaySpeed(v1, 0.5, preservePitch: true);
+        expect(engine.createdBuses, hasLength(1));
+        final b1 = engine.createdBuses.single;
+        expect(engine.attachedFilters, equals([(b1.id, pitchFt)]));
+        expect(engine.annexedVoices, equals([(b1.id, 10)]));
+        expect(
+          engine.filterParams,
+          equals([(b1.id, pitchFt, 0, 1.0), (b1.id, pitchFt, 1, 2.0)]),
+        );
+
+        // 0.25x clamps shift=4.0 (> 3.0) via semitones (+24.0) without reallocating bus.
+        engine.setRelativePlaySpeed(v1, 0.25, preservePitch: true);
+        expect(engine.createdBuses, hasLength(1));
+        expect(engine.filterParams.last.$3, equals(2));
+        expect(engine.filterParams.last.$4, closeTo(24.0, 1e-6));
+
+        // Near-1.0x speed bypasses pitchShiftFilter (wet=0.0, shift=1.0).
+        engine.setRelativePlaySpeed(v1, 1.0005, preservePitch: true);
+        expect(
+          engine.filterParams.skip(engine.filterParams.length - 2),
+          equals([(b1.id, pitchFt, 0, 0.0), (b1.id, pitchFt, 1, 1.0)]),
+        );
+
+        // Subsequent preservePitch: false also bypasses existing pitch bus without disposing mid-flight.
+        engine.setRelativePlaySpeed(v1, 1.5, preservePitch: false);
+        expect(engine.destroyedBusIds, isEmpty);
+        expect(
+          engine.filterParams.skip(engine.filterParams.length - 2),
+          equals([(b1.id, pitchFt, 0, 0.0), (b1.id, pitchFt, 1, 1.0)]),
+        );
+
+        // stop(v1) disposes v1's pitch bus cleanly.
+        engine.stop(v1);
+        expect(engine.destroyedBusIds, equals([b1.id]));
+
+        // Failed annex rolls back allocated pitch bus immediately.
+        engine.throwOnAnnex = true;
+        expect(
+          () => engine.setRelativePlaySpeed(v2, 0.5, preservePitch: true),
+          throwsStateError,
+        );
+        expect(engine.destroyedBusIds, hasLength(2));
+        engine.throwOnAnnex = false;
+
+        // dispose() cleans up any remaining voice pitch buses.
+        engine.setRelativePlaySpeed(v2, 2.0, preservePitch: true);
+        final b2 = engine.createdBuses.last;
+        expect(engine.destroyedBusIds, isNot(contains(b2.id)));
+        await engine.dispose();
+        expect(engine.destroyedBusIds, contains(b2.id));
+
+        // Base annexVoiceToBus no-ops safely for unregistered non-FlutterAudioBus handles.
+        uninit.annexVoiceToBus(_FakeAudioBus(999), 1);
       },
     );
 
