@@ -3,10 +3,12 @@ on:
   push:  
     tags:  
       - '*-v*'  
+      - '!fterm-v*'
   workflow_dispatch:
 jobs:
   publish-packages:
     name: Publish packages
+    if: ${{ !startsWith(github.ref, 'refs/tags/fterm-v') }}
     permissions:
       contents: write
       id-token: write # Required for authentication using OIDC

@@ -1,0 +1,363 @@
+# Setup Guide for Google Cloud Run and Identity-Aware Proxy
+
+> [!WARNING]
+> `termui_caster` relays live interactive shells (`zsh`, `bash`, `pwsh`) over WebSockets. Always protect internet-facing Cloud Run deployments with **Identity-Aware Proxy (`--iap`)** and store shared tokens in **Secret Manager** (`--set-secrets`). Exposing a relay publicly without IAM enforcement lets any leaked bearer token grant immediate Remote Code Execution (RCE) on every connected casting host.
+
+The `buildpack:` block in the root [pubspec.yaml](../../../pubspec.yaml) compiles `apps/termui_cast/server/bin/server.dart` as the server binary and builds `apps/fterm` to WebAssembly (`build/web`). Run `gcloud run deploy --source .` from the `termui` repository root so `.gcloudignore` uploads only the workspace manifests, `packages/`, and `apps/` required by Cloud Build. On startup, `termui_cast_server` binds `0.0.0.0:$PORT` and serves both the static `fterm` WASM client at `/` and the WebSocket endpoints at `/v1/caster` and `/v1/client`.
+
+## 1. Enable APIs and Grant Cloud Build Permissions
+
+New Google Cloud projects run source builds under the default Compute Engine service account without automatic storage, registry, or Secret Manager roles. Enable the required APIs and grant `roles/run.builder` once per project:
+
+**Linux / macOS (`bash` / `zsh`)**
+```bash
+PROJECT_ID="your-gcp-project-id"
+REGION="us-west2"
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+RUNTIME_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  iap.googleapis.com \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com \
+  --project="$PROJECT_ID"
+
+gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+  --member="serviceAccount:${RUNTIME_SA}" \
+  --role="roles/run.builder"
+```
+
+**Windows (`PowerShell`)**
+```powershell
+$env:PROJECT_ID = "your-gcp-project-id"
+$env:REGION = "us-west2"
+$env:PROJECT_NUMBER = (gcloud projects describe $env:PROJECT_ID --format="value(projectNumber)").Trim()
+$env:RUNTIME_SA = "$($env:PROJECT_NUMBER)-compute@developer.gserviceaccount.com"
+
+gcloud services enable `
+  run.googleapis.com `
+  cloudbuild.googleapis.com `
+  artifactregistry.googleapis.com `
+  secretmanager.googleapis.com `
+  cloudresourcemanager.googleapis.com `
+  iap.googleapis.com `
+  iam.googleapis.com `
+  iamcredentials.googleapis.com `
+  --project="$env:PROJECT_ID"
+
+gcloud projects add-iam-policy-binding $env:PROJECT_ID `
+  --member="serviceAccount:$env:RUNTIME_SA" `
+  --role="roles/run.builder"
+```
+
+## 2. Store Caster and Client Tokens in Secret Manager
+
+Generate two independent 256-bit random tokens and store them in Secret Manager. This keeps secrets out of plaintext Cloud Run revision specs and audit logs:
+
+**Linux / macOS (`bash` / `zsh`)**
+```bash
+CASTER_TOKEN="$(openssl rand -hex 32)"
+CLIENT_TOKEN="$(openssl rand -hex 32)"
+
+printf '%s' "$CASTER_TOKEN" | gcloud secrets create termui-cast-caster-token \
+  --project="$PROJECT_ID" \
+  --replication-policy="automatic" \
+  --data-file=-
+
+printf '%s' "$CLIENT_TOKEN" | gcloud secrets create termui-cast-client-token \
+  --project="$PROJECT_ID" \
+  --replication-policy="automatic" \
+  --data-file=-
+
+for SECRET in termui-cast-caster-token termui-cast-client-token; do
+  gcloud secrets add-iam-policy-binding "$SECRET" \
+    --project="$PROJECT_ID" \
+    --member="serviceAccount:${RUNTIME_SA}" \
+    --role="roles/secretmanager.secretAccessor"
+done
+```
+
+**Windows (`PowerShell`)**
+```powershell
+$b1 = New-Object byte[] 32; $b2 = New-Object byte[] 32
+$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($b1); $rng.GetBytes($b2)
+$env:CASTER_TOKEN = ($b1 | ForEach-Object ToString x2) -join ''
+$env:CLIENT_TOKEN = ($b2 | ForEach-Object ToString x2) -join ''
+
+$env:CASTER_TOKEN | gcloud secrets create termui-cast-caster-token `
+  --project="$env:PROJECT_ID" `
+  --replication-policy="automatic" `
+  --data-file=-
+
+$env:CLIENT_TOKEN | gcloud secrets create termui-cast-client-token `
+  --project="$env:PROJECT_ID" `
+  --replication-policy="automatic" `
+  --data-file=-
+
+foreach ($secret in @("termui-cast-caster-token", "termui-cast-client-token")) {
+  gcloud secrets add-iam-policy-binding $secret `
+    --project="$env:PROJECT_ID" `
+    --member="serviceAccount:$env:RUNTIME_SA" `
+    --role="roles/secretmanager.secretAccessor"
+}
+```
+
+## 3. Deploy the Service from Source with Secret Manager and IAP
+
+Run this from the `termui` repository root (`--source .`). Set `--max-instances=1` because `SessionRegistry` holds active stream pairs in process memory. Set `--timeout=3600` for one-hour WebSocket sessions, and pass `--no-allow-unauthenticated` and `--iap` so Identity-Aware Proxy protects the service from the first revision:
+
+**Linux / macOS (`bash` / `zsh`)**
+```bash
+gcloud run deploy termui-cast \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --source . \
+  --no-allow-unauthenticated \
+  --iap \
+  --max-instances=1 \
+  --timeout=3600 \
+  --set-secrets="TERMUI_CAST_CASTER_TOKEN=termui-cast-caster-token:latest,TERMUI_CAST_CLIENT_TOKEN=termui-cast-client-token:latest"
+```
+
+**Windows (`PowerShell`)**
+```powershell
+gcloud run deploy termui-cast `
+  --project="$env:PROJECT_ID" `
+  --region="$env:REGION" `
+  --source . `
+  --no-allow-unauthenticated `
+  --iap `
+  --max-instances=1 `
+  --timeout=3600 `
+  --set-secrets="TERMUI_CAST_CASTER_TOKEN=termui-cast-caster-token:latest,TERMUI_CAST_CLIENT_TOKEN=termui-cast-client-token:latest"
+```
+
+## 4. Authorize Your User Account for IAP and Cloud Run Invoker
+
+Grant your Google account `roles/run.invoker` on the Cloud Run service and `roles/iap.httpsResourceAccessor` on the IAP web resource. Update the Google Cloud SDK (`gcloud components update`) if your local CLI rejects `--iap` or `--resource-type=cloud-run`:
+
+**Linux / macOS (`bash` / `zsh`)**
+```bash
+USER_EMAIL="$(gcloud config get-value account)"
+
+gcloud run services add-iam-policy-binding termui-cast \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/run.invoker"
+
+gcloud iap web add-iam-policy-binding \
+  --project="$PROJECT_ID" \
+  --resource-type=cloud-run \
+  --region="$REGION" \
+  --service=termui-cast \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/iap.httpsResourceAccessor"
+```
+
+**Windows (`PowerShell`)**
+```powershell
+$env:USER_EMAIL = (gcloud config get-value account).Trim()
+
+gcloud run services add-iam-policy-binding termui-cast `
+  --project="$env:PROJECT_ID" `
+  --region="$env:REGION" `
+  --member="user:$env:USER_EMAIL" `
+  --role="roles/run.invoker"
+
+gcloud iap web add-iam-policy-binding `
+  --project="$env:PROJECT_ID" `
+  --resource-type=cloud-run `
+  --region="$env:REGION" `
+  --service=termui-cast `
+  --member="user:$env:USER_EMAIL" `
+  --role="roles/iap.httpsResourceAccessor"
+```
+
+> [!TIP]
+> IAP caches negative access checks for 2 to 5 minutes if you visit the service URL before adding the `roles/iap.httpsResourceAccessor` binding. Visit `https://<service-url>/?gcp-iap-mode=CLEAR_LOGIN_COOKIE` to clear the cached IAP session cookie and force a fresh login check.
+
+## 5. Provision a Service Account per Caster Host and Save Local Config
+
+Create a dedicated service account for each machine that casts sessions. This lets you revoke a single host from IAP without rotating `TERMUI_CAST_CASTER_TOKEN`.
+
+### Create and Authorize the Host Service Account
+
+Service account IDs must be 6 to 30 lowercase letters, digits, or hyphens. If `gcloud iap web add-iam-policy-binding` reports `Invalid choice: 'cloud-run'`, run `gcloud components update` first or run step 3 with `gcloud beta iap web add-iam-policy-binding`:
+
+**Linux / macOS (`bash` / `zsh`)**
+```bash
+USER_EMAIL="$(gcloud config get-value account)"
+HOST_SLUG="$(hostname -s | tr '[:upper:]_' '[:lower:]-' | tr -cd 'a-z0-9-')"
+HOST_SA_NAME="caster-${HOST_SLUG}"
+HOST_SA_EMAIL="${HOST_SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+
+gcloud iam service-accounts create "$HOST_SA_NAME" \
+  --project="$PROJECT_ID" \
+  --display-name="TermUI Caster (${HOST_SA_NAME})"
+
+gcloud iam service-accounts add-iam-policy-binding "$HOST_SA_EMAIL" \
+  --project="$PROJECT_ID" \
+  --member="user:${USER_EMAIL}" \
+  --role="roles/iam.serviceAccountTokenCreator"
+
+gcloud iam service-accounts add-iam-policy-binding "$HOST_SA_EMAIL" \
+  --project="$PROJECT_ID" \
+  --member="serviceAccount:${HOST_SA_EMAIL}" \
+  --role="roles/iam.serviceAccountTokenCreator"
+
+gcloud run services add-iam-policy-binding termui-cast \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --member="serviceAccount:${HOST_SA_EMAIL}" \
+  --role="roles/run.invoker"
+
+gcloud iap web add-iam-policy-binding \
+  --project="$PROJECT_ID" \
+  --resource-type=cloud-run \
+  --region="$REGION" \
+  --service=termui-cast \
+  --member="serviceAccount:${HOST_SA_EMAIL}" \
+  --role="roles/iap.httpsResourceAccessor"
+```
+
+**Windows (`PowerShell`)**
+```powershell
+$env:USER_EMAIL = (gcloud config get-value account).Trim()
+$env:HOST_SLUG = ($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9-]', '')
+$env:HOST_SA_NAME = "caster-$($env:HOST_SLUG)"
+$env:HOST_SA_EMAIL = "$($env:HOST_SA_NAME)@$($env:PROJECT_ID).iam.gserviceaccount.com"
+
+gcloud iam service-accounts create "$env:HOST_SA_NAME" `
+  --project="$env:PROJECT_ID" `
+  --display-name="TermUI Caster ($env:HOST_SA_NAME)"
+
+gcloud iam service-accounts add-iam-policy-binding "$env:HOST_SA_EMAIL" `
+  --project="$env:PROJECT_ID" `
+  --member="user:$env:USER_EMAIL" `
+  --role="roles/iam.serviceAccountTokenCreator"
+
+gcloud iam service-accounts add-iam-policy-binding "$env:HOST_SA_EMAIL" `
+  --project="$env:PROJECT_ID" `
+  --member="serviceAccount:$env:HOST_SA_EMAIL" `
+  --role="roles/iam.serviceAccountTokenCreator"
+
+gcloud run services add-iam-policy-binding termui-cast `
+  --project="$env:PROJECT_ID" `
+  --region="$env:REGION" `
+  --member="serviceAccount:$env:HOST_SA_EMAIL" `
+  --role="roles/run.invoker"
+
+gcloud iap web add-iam-policy-binding `
+  --project="$env:PROJECT_ID" `
+  --resource-type=cloud-run `
+  --region="$env:REGION" `
+  --service=termui-cast `
+  --member="serviceAccount:$env:HOST_SA_EMAIL" `
+  --role="roles/iap.httpsResourceAccessor"
+```
+
+If your organization enforces `constraints/iam.disableServiceAccountKeyCreation`, keep the machine logged into `gcloud` (`gcloud auth login`). `termui_cast` uses `--iap-service-account` (`$TERMUI_CAST_IAP_SERVICE_ACCOUNT`) to sign short-lived JWTs remotely via `gcloud iam service-accounts sign-jwt` without a private key file on disk.
+
+If your project permits service-account keys and the target host does not have `gcloud` installed, export a key to `sa-key.json`. Pass `--iap-key-file` (`$TERMUI_CAST_IAP_KEY_FILE`) so `termui_cast` signs the `RS256` IAP JWT locally in pure Dart:
+
+**Linux / macOS (`bash` / `zsh`)**
+```bash
+mkdir -p ~/.config/termui_cast && chmod 700 ~/.config/termui_cast
+gcloud iam service-accounts keys create ~/.config/termui_cast/sa-key.json \
+  --project="$PROJECT_ID" \
+  --iam-account="$HOST_SA_EMAIL"
+chmod 600 ~/.config/termui_cast/sa-key.json
+```
+
+**Windows (`PowerShell`)**
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\.config\termui_cast" | Out-Null
+gcloud iam service-accounts keys create "$HOME\.config\termui_cast\sa-key.json" `
+  --project="$env:PROJECT_ID" `
+  --iam-account="$env:HOST_SA_EMAIL"
+```
+
+### Save the Caster Environment Config on the Host
+
+Store the relay URL, IAP credential setting, and caster token in a restricted local file. This keeps secrets out of shell history and process flags (`ps`):
+
+**Linux / macOS (`bash` / `zsh`: `~/.config/termui_cast/env`)**
+```bash
+mkdir -p ~/.config/termui_cast && chmod 700 ~/.config/termui_cast
+cat > ~/.config/termui_cast/env <<EOF
+export TERMUI_CAST_SERVER_URL="wss://<service-url>/v1/caster"
+export TERMUI_CAST_CASTER_TOKEN="${CASTER_TOKEN}"
+export TERMUI_CAST_IAP_SERVICE_ACCOUNT="${HOST_SA_EMAIL}"
+# Or pure-Dart local RS256 signing without gcloud:
+# export TERMUI_CAST_IAP_KEY_FILE="\$HOME/.config/termui_cast/sa-key.json"
+EOF
+chmod 600 ~/.config/termui_cast/env
+```
+
+**Windows (`PowerShell`: `$HOME\.config\termui_cast\env.ps1`)**
+```powershell
+New-Item -ItemType Directory -Force -Path "$HOME\.config\termui_cast" | Out-Null
+@"
+`$env:TERMUI_CAST_SERVER_URL = "wss://<service-url>/v1/caster"
+`$env:TERMUI_CAST_CASTER_TOKEN = "$env:CASTER_TOKEN"
+`$env:TERMUI_CAST_IAP_SERVICE_ACCOUNT = "$env:HOST_SA_EMAIL"
+# Or pure-Dart local RS256 signing without gcloud:
+# `$env:TERMUI_CAST_IAP_KEY_FILE = "`$HOME\.config\termui_cast\sa-key.json"
+"@ | Set-Content -Path "$HOME\.config\termui_cast\env.ps1" -Encoding UTF8
+```
+
+## 6. Connect the Viewer and Cast a Session
+
+Open `https://<service-url>/` (or `https://<service-url>/#token=<client-token>`) in Chrome. The web viewer immediately scrubs `#token=...` from the browser address bar using `history.replaceState` and connects to `wss://<service-url>/v1/client`.
+
+On the casting machine, load the environment config and run `termui_cast` from a prebuilt release archive (`termui_cast-<os>-<arch>`, keeping `bin/` and `lib/` together) or via `dart run`:
+
+**Linux / macOS (`bash` / `zsh`)**
+```bash
+source ~/.config/termui_cast/env
+# Using a prebuilt release bundle (or `dart run apps/termui_cast/caster_cli/bin/termui_cast.dart`):
+./bin/termui_cast --title "$(hostname -s)-zsh" -- zsh
+```
+
+**Windows (`PowerShell`)**
+```powershell
+. "$HOME\.config\termui_cast\env.ps1"
+# Using a prebuilt release bundle (or `dart run apps/termui_cast/caster_cli/bin/termui_cast.dart`):
+& "./bin/termui_cast.exe" --title "$($env:COMPUTERNAME.ToLower())-pwsh" '--' powershell
+```
+
+`termui_cast` pre-warms and caches the signed IAP JWT in memory and refreshes it before the 1-hour Cloud Run timeout. It also strips `TERMUI_CAST_*` variables from the spawned child shell environment.
+
+> [!TIP]
+> On macOS and Linux, send `SIGHUP` if a host drops off the dashboard after sleep or a network change. The caster reconnects right away while keeping the local shell alive. Use `pkill -HUP -x termui_cast` for prebuilt binaries. From source, inspect PIDs with `pgrep -fl termui_cast.dart` and run `kill -HUP <pid>` to avoid signaling editors or `termui_cast_server`.
+
+## Unauthenticated Proxy Ingress (Not Recommended)
+
+> [!CAUTION]
+> **High Risk (Single-Factor Bearer Token Only):** Bypassing Identity-Aware Proxy (`allUsers` or `--no-invoker-iam-check`) exposes the Cloud Run WebSocket endpoints directly to the public internet. Although `termui_cast_server` enforces `TERMUI_CAST_CASTER_TOKEN` and `TERMUI_CAST_CLIENT_TOKEN` on every WebSocket upgrade, there is no second authentication factor, identity audit trail, or per-host IAM revocation. Use these commands only in throwaway sandbox environments where IAP is unavailable.
+
+If your organization permits public Cloud Run services and you choose not to use IAP:
+
+```bash
+gcloud run services add-iam-policy-binding termui-cast \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --member="allUsers" \
+  --role="roles/run.invoker"
+```
+
+Or, if an organization policy (`iam.allowedPolicyMemberDomains`) blocks `allUsers` on IAM bindings and IAP is not available:
+
+```bash
+gcloud run services update termui-cast \
+  --project="$PROJECT_ID" \
+  --region="$REGION" \
+  --no-invoker-iam-check
+```

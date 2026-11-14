@@ -34,6 +34,11 @@ The project is managed as a Melos monorepo with the following workspace packages
 10. **[termui_audio_flutter](/packages/termui_audio_flutter)**: Flutter Desktop, Mobile, and Web SoLoud backend (`FlutterAudioEngine`) for `termui_audio`.
 11. **[termui_tinpot](/packages/termui_tinpot)**: Chafa-inspired Unicode block and DIN99d perceptual image-to-ANSI quantizer.
 
+### Applications & Relay Tools (`apps/`, unpublished `publish_to: none`)
+
+1. **[fterm](/apps/fterm)**: Native Flutter desktop terminal multiplexer (`macos`, `linux`, `windows`) and WebAssembly client (`web`) with local `PtyRouter` splits and optional per-pane relay sharing.
+2. **[termui_cast](/apps/termui_cast/README.md)**: Unpublished four-package suite (`protocol`, `server`, `caster_cli`, `client_core`) providing the binary WebSocket PTY caster, stateless Cloud Run relay server, and client state machine.
+
 ### Dependencies & Platforms
 * **Dart SDK**: Target environment is `sdk: ">=3.11.0 <4.0.0"`.
 * **Platform APIs**: Interacts with libc APIs on Linux/Unix using `dart:ffi` and Windows APIs using [win32](/packages/termui/pubspec.yaml#L37) (`^6.0.0`) to configure TTY raw mode and query screen sizing.

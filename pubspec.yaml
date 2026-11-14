@@ -43,8 +43,17 @@ workspace:
   - apps/termui_cast/client_core
   - apps/fterm
 
+dependencies:
+  flutter:
+    sdk: flutter
+
 dev_dependencies:
   melos: ^8.1.0
+
+buildpack:
+  server: apps/termui_cast/server
+  static: apps/fterm
+  postbuild: cd /workspace/apps/fterm && flutter build web --wasm --no-web-resources-cdn
 
 melos:
   command:
