@@ -1,0 +1,1454 @@
+import 'dart:async';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'package:flutter/services.dart'
+    show
+        Clipboard,
+        ClipboardData,
+        HardwareKeyboard,
+        KeyDownEvent,
+        KeyEvent,
+        KeyRepeatEvent,
+        KeyUpEvent,
+        LogicalKeyboardKey,
+        MethodChannel;
+import 'package:material_ui/material_ui.dart';
+import 'package:termui/terminal/event.dart' as ev;
+import 'package:termui/termui.dart' as tui;
+import 'package:termui_cast_client_core/termui_cast_client_core.dart';
+import 'package:termui_flutter/termui_flutter.dart';
+
+import '../file_drop_bridge.dart';
+import '../font_loader.dart';
+import '../workspace/fterm_pane_controller.dart';
+import '../workspace/fterm_workspace_controller.dart';
+import '../workspace/local_host_driver.dart';
+import '../workspace/split_tree_model.dart';
+import 'fterm_overlays.dart';
+import 'fterm_shortcut_dispatcher.dart';
+
+/// Root Flutter shell hosting the 28px tab bar, recursive binary split trees
+/// of [TerminalSurface] panes sharing one [GlyphAtlasController], and overlays.
+final class FtermShellScaffold extends StatefulWidget {
+  /// Backing workspace controller.
+  final FtermWorkspaceController workspace;
+
+  /// Monospace cell point size passed to the shared [GlyphAtlasController].
+  final double fontSize;
+
+  /// External URL launcher invoked on `Ctrl/Cmd+Click`.
+  final UrlOpener onOpenUrl;
+
+  /// Optional platform override for testing macOS vs Linux/Windows chrome.
+  final TargetPlatform? platformOverride;
+
+  /// Optional Web polarity override for testing Web vs Desktop behavior.
+  final bool? isWebOverride;
+
+  /// Optional drag-over indicator shown during file drag-and-drop hover.
+  final bool isDraggingOverFiles;
+
+  /// Creates the main `fterm` workspace scaffold.
+  const FtermShellScaffold({
+    super.key,
+    required this.workspace,
+    required this.onOpenUrl,
+    this.fontSize = 13.0,
+    this.platformOverride,
+    this.isWebOverride,
+    this.isDraggingOverFiles = false,
+  });
+
+  @override
+  State<FtermShellScaffold> createState() => _FtermShellScaffoldState();
+}
+
+final class _FtermShellScaffoldState extends State<FtermShellScaffold>
+    with WidgetsBindingObserver {
+  static const double tabBarHeight = 28.0;
+  static const double leftRailWidth = 172.0;
+  static const double macOsTrafficLightInset = 72.0;
+  static const MethodChannel _windowChannel = MethodChannel('fterm/window');
+
+  late final GlyphAtlasController _atlasController;
+  late final FtermShortcutDispatcher _shortcutDispatcher;
+  late final TerminalService _terminalService;
+  final Map<String, FocusNode> _paneFocusNodes = {};
+  final Map<String, GlobalKey<State<TerminalSurface>>> _paneSurfaceKeys = {};
+  final Set<String> _suppressMiddleReleasePaneIds = {};
+  final FocusNode _emptyWorkspaceFocusNode = FocusNode(
+    debugLabel: 'fterm-empty-focus',
+  );
+  String? _lastRequestedFocusedPaneId;
+  bool _hadBakedAtlas = false;
+  DateTime? _lastTabTapAt;
+  String? _lastTabTapId;
+
+  TargetPlatform get _platform =>
+      widget.platformOverride ?? defaultTargetPlatform;
+  bool get _isWeb => widget.isWebOverride ?? kIsWeb;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _atlasController = GlyphAtlasController(
+      fontSize: widget.fontSize,
+      fontFamily: castPrimaryFontFamily,
+      fontFamilyFallback: castFallbackFontFamilies,
+    );
+    _shortcutDispatcher = FtermShortcutDispatcher(
+      workspace: widget.workspace,
+      platformOverride: widget.platformOverride,
+      isWebOverride: widget.isWebOverride,
+    );
+    _terminalService = _FtermTerminalService(onOpenUrl: widget.onOpenUrl);
+    _atlasController.addListener(_onAtlasChanged);
+    widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
+    FocusManager.instance.addEarlyKeyEventHandler(_handleEarlyF12Event);
+  }
+
+  void _syncDevicePixelRatio() {
+    if (!mounted || _atlasController.atlas == null) return;
+    final dpr =
+        View.maybeOf(context)?.devicePixelRatio ??
+        MediaQuery.maybeDevicePixelRatioOf(context);
+    if (dpr != null && dpr.isFinite && dpr > 0) {
+      unawaited(_atlasController.setDevicePixelRatio(dpr));
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    _syncDevicePixelRatio();
+    if (_isWeb && mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncDevicePixelRatio();
+      if (_isWeb && mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  void _onAtlasChanged() {
+    final hasAtlas = _atlasController.atlas != null;
+    if (hasAtlas && !_hadBakedAtlas) {
+      _hadBakedAtlas = true;
+      _lastRequestedFocusedPaneId = null;
+      _syncKeyboardFocus();
+    } else if (!hasAtlas) {
+      _hadBakedAtlas = false;
+    }
+  }
+
+  @override
+  void didUpdateWidget(FtermShellScaffold oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.fontSize != widget.fontSize) {
+      unawaited(_atlasController.updateConfig(fontSize: widget.fontSize));
+    }
+    if (!identical(oldWidget.workspace, widget.workspace)) {
+      oldWidget.workspace.chromeNotifier.removeListener(
+        _onWorkspaceChromeChanged,
+      );
+      widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
+      _lastRequestedFocusedPaneId = null;
+    }
+  }
+
+  void _onWorkspaceChromeChanged() {
+    if (!mounted) return;
+    _pruneDisposedFocusNodes();
+    setState(() {});
+    _syncKeyboardFocus();
+  }
+
+  void _pruneDisposedFocusNodes() {
+    final activeIds = <String>{
+      for (final tab in widget.workspace.tabs) ...tab.splitTree.paneIds,
+    };
+    final stale = [
+      for (final id in _paneFocusNodes.keys)
+        if (!activeIds.contains(id)) id,
+    ];
+    for (final id in stale) {
+      _paneFocusNodes.remove(id)?.dispose();
+    }
+    final staleSurfaceKeys = [
+      for (final id in _paneSurfaceKeys.keys)
+        if (!activeIds.contains(id)) id,
+    ];
+    for (final id in staleSurfaceKeys) {
+      _paneSurfaceKeys.remove(id);
+    }
+  }
+
+  void _syncKeyboardFocus() {
+    final overlayOpen = widget.workspace.activeOverlay != FtermOverlay.none;
+    if (overlayOpen) {
+      _lastRequestedFocusedPaneId = null;
+      return;
+    }
+    if (_atlasController.atlas == null) {
+      _lastRequestedFocusedPaneId = null;
+      return;
+    }
+    final targetId = widget.workspace.focusedPane?.paneId;
+    if (targetId == null || targetId == _lastRequestedFocusedPaneId) return;
+    _lastRequestedFocusedPaneId = targetId;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.workspace.activeOverlay != FtermOverlay.none) {
+        return;
+      }
+      final node = _paneFocusNodes[targetId];
+      if (node == null || node.context == null) {
+        _lastRequestedFocusedPaneId = null;
+        return;
+      }
+      node.requestFocus();
+    });
+  }
+
+  FocusNode _focusNodeForPane(String paneId) => _paneFocusNodes.putIfAbsent(
+    paneId,
+    () => FocusNode(debugLabel: 'fterm-pane-$paneId'),
+  );
+
+  GlobalKey<State<TerminalSurface>> _surfaceKeyForPane(String paneId) =>
+      _paneSurfaceKeys.putIfAbsent(
+        paneId,
+        () => GlobalKey<State<TerminalSurface>>(
+          debugLabel: 'fterm-pane-surface-$paneId',
+        ),
+      );
+
+  static Set<ev.Modifier> _collectHardwareModifiers() {
+    final kb = HardwareKeyboard.instance;
+    return {
+      if (kb.isShiftPressed) ev.Modifier.shift,
+      if (kb.isAltPressed) ev.Modifier.alt,
+      if (kb.isControlPressed) ev.Modifier.control,
+      if (kb.isMetaPressed) ev.Modifier.meta,
+    };
+  }
+
+  KeyEventResult _handleEarlyF12Event(KeyEvent event) {
+    if (widget.workspace.activeOverlay != FtermOverlay.none) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey != LogicalKeyboardKey.f12) {
+      return KeyEventResult.ignored;
+    }
+    final mods = _collectHardwareModifiers();
+    if (widget.workspace.f12ShortcutsEnabled &&
+        mods.difference(const <ev.Modifier>{.shift}).isEmpty) {
+      return KeyEventResult.ignored;
+    }
+    final pane = widget.workspace.focusedPane;
+    if (pane == null) return KeyEventResult.ignored;
+
+    if (event is KeyDownEvent) {
+      pane.sendInputEvent(ev.KeyEvent('f12', ev.KeyType.f12, modifiers: mods));
+    } else if (event is KeyRepeatEvent) {
+      pane.sendInputEvent(
+        ev.KeyEvent(
+          'f12',
+          ev.KeyType.f12,
+          modifiers: mods,
+          eventType: ev.KeyEventType.repeat,
+        ),
+      );
+    } else if (event is KeyUpEvent && pane.reportKeyReleaseEvents) {
+      pane.sendInputEvent(
+        ev.KeyEvent(
+          'f12',
+          ev.KeyType.f12,
+          modifiers: mods,
+          eventType: ev.KeyEventType.release,
+        ),
+      );
+    }
+    return KeyEventResult.handled;
+  }
+
+  KeyEventResult _handleRootKeyEvent(KeyEvent event) {
+    final mods = _collectHardwareModifiers();
+    if (_shortcutDispatcher.handleHostShortcut(event, mods)) {
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Future<void> _pasteClipboardToPane(FtermPaneController pane) async {
+    final String? text;
+    try {
+      text = await _terminalService.getClipboard();
+    } on Object catch (_) {
+      return;
+    }
+    if (!mounted || text == null || text.isEmpty) return;
+    pane.sendInputEvent(ev.PasteEvent(text));
+  }
+
+  void _handlePaneInputEvent(FtermPaneController pane, ev.InputEvent event) {
+    if (event case ev.MouseEvent()) {
+      final isMiddlePress =
+          event.button == ev.MouseButton.middle &&
+          event.type == ev.MouseEventType.press;
+      final bypassMouseTracking =
+          !pane.mouseTracking || event.modifiers.contains(ev.Modifier.shift);
+      if (isMiddlePress && bypassMouseTracking) {
+        _suppressMiddleReleasePaneIds.add(pane.paneId);
+        unawaited(_pasteClipboardToPane(pane));
+        return;
+      }
+      if (_suppressMiddleReleasePaneIds.contains(pane.paneId)) {
+        if (event.button == ev.MouseButton.middle &&
+            event.type == ev.MouseEventType.drag) {
+          return;
+        }
+        if (event.type == ev.MouseEventType.release) {
+          _suppressMiddleReleasePaneIds.remove(pane.paneId);
+          return;
+        }
+        if (event.type == ev.MouseEventType.press) {
+          _suppressMiddleReleasePaneIds.remove(pane.paneId);
+        }
+      }
+    }
+    pane.sendInputEvent(event);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    FocusManager.instance.removeEarlyKeyEventHandler(_handleEarlyF12Event);
+    _atlasController.removeListener(_onAtlasChanged);
+    widget.workspace.chromeNotifier.removeListener(_onWorkspaceChromeChanged);
+    for (final node in _paneFocusNodes.values) {
+      node.dispose();
+    }
+    _paneFocusNodes.clear();
+    _paneSurfaceKeys.clear();
+    _emptyWorkspaceFocusNode.dispose();
+    _atlasController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = widget.workspace.activeTerminalTheme;
+    final bgColor = Color(theme.background.argb);
+    final showBar = widget.workspace.shouldShowTabBar;
+    final dock = widget.workspace.dockPosition;
+    final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
+
+    final Widget mainContent = Expanded(child: _buildActiveTabBody(theme));
+
+    final Widget workspaceLayout = switch ((showBar, dock)) {
+      (true, DockPosition.top) => Column(
+        children: [_buildTopTabBar(theme), mainContent],
+      ),
+      (true, DockPosition.left) => Row(
+        children: [_buildLeftTabRail(theme), mainContent],
+      ),
+      _ when isMacOsDesktop => Column(
+        children: [
+          ColoredBox(
+            color: bgColor,
+            child: _buildMacOsSafeDragRow(
+              key: const ValueKey('fterm-macos-titlebar-strip'),
+            ),
+          ),
+          mainContent,
+        ],
+      ),
+      _ => _buildActiveTabBody(theme),
+    };
+
+    return Scaffold(
+      backgroundColor: bgColor,
+      body: Focus(
+        canRequestFocus: false,
+        onKeyEvent: (_, event) => _handleRootKeyEvent(event),
+        child: Listener(
+          behavior: HitTestBehavior.translucent,
+          onPointerDown: (_) =>
+              unawaited(widget.workspace.audioController.notifyUserGesture()),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              workspaceLayout,
+              if (widget.isDraggingOverFiles) _buildDragOverlay(theme),
+              FtermOverlayHost(workspace: widget.workspace),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveTabBody(tui.TerminalColorTheme theme) {
+    final tab = widget.workspace.activeTab;
+    if (tab == null) {
+      return _buildEmptyWorkspaceState(theme);
+    }
+    final tree = tab.splitTree;
+    if (tree.isZoomed) {
+      final zoomedId = tree.zoomedPaneId;
+      final zoomedPane = zoomedId == null
+          ? null
+          : widget.workspace.paneById(zoomedId);
+      if (zoomedPane != null) {
+        return _buildPaneLeaf(
+          pane: zoomedPane,
+          tab: tab,
+          showFocusBorder: false,
+          theme: theme,
+        );
+      }
+    }
+    return _SplitTreeView(
+      key: ValueKey('split-root-${tab.tabId}'),
+      node: tree.root,
+      tab: tab,
+      workspace: widget.workspace,
+      theme: theme,
+      buildLeaf: (paneId) {
+        final pane = widget.workspace.paneById(paneId);
+        if (pane == null) {
+          return ColoredBox(color: Color(theme.background.argb));
+        }
+        return _buildPaneLeaf(
+          pane: pane,
+          tab: tab,
+          showFocusBorder: tree.paneCount > 1,
+          theme: theme,
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyWorkspaceState(tui.TerminalColorTheme theme) {
+    final fg = Color(theme.foreground.argb);
+    return Focus(
+      focusNode: _emptyWorkspaceFocusNode,
+      autofocus: widget.workspace.activeOverlay == FtermOverlay.none,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'fterm',
+              style: TextStyle(
+                color: fg.withValues(alpha: 0.75),
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 10,
+              children: [
+                if (widget.workspace.isDesktopHost)
+                  FilledButton.icon(
+                    onPressed: () =>
+                        unawaited(widget.workspace.openLocalShellTab()),
+                    icon: const Icon(Icons.terminal, size: 16),
+                    label: const Text('New Local Shell'),
+                  ),
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      widget.workspace.setOverlay(FtermOverlay.connect),
+                  icon: const Icon(Icons.link, size: 16),
+                  label: const Text('Connect Relay'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  bool _readCopyOnSelect() => widget.workspace.copyOnSelect;
+
+  Widget _buildPaneLeaf({
+    required FtermPaneController pane,
+    required FtermTabState tab,
+    required bool showFocusBorder,
+    required tui.TerminalColorTheme theme,
+  }) {
+    final isFocused = pane.paneId == tab.splitTree.focusedPaneId;
+    final bgColor = Color(theme.background.argb);
+    final fgColor = Color(theme.foreground.argb);
+    final borderColor = isFocused
+        ? Color(theme.cursorColor.argb)
+        : fgColor.withValues(alpha: 0.16);
+
+    final surface = Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => widget.workspace.focusPane(pane.paneId),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          TerminalSurface(
+            key: _surfaceKeyForPane(pane.paneId),
+            atlasController: _atlasController,
+            focusNode: _focusNodeForPane(pane.paneId),
+            autofocus:
+                isFocused &&
+                widget.workspace.activeOverlay == FtermOverlay.none,
+            bufferProvider: pane.readDisplayBuffer,
+            bufferListenable: pane.bufferListenable,
+            activePtySizeProvider: pane.readActivePtySize,
+            cursorPositionProvider: pane.readCursorPosition,
+            kittyKeyboardFlagsProvider: pane.readKittyKeyboardFlags,
+            reportKeyReleaseEventsProvider: pane.readReportKeyReleaseEvents,
+            reportPixelMouseEventsProvider: pane.readReportPixelMouseEvents,
+            mouseTrackingProvider: pane.readMouseTracking,
+            copyOnSelectProvider: _readCopyOnSelect,
+            macosOptionAsAlt: widget.workspace.preferences.macosOptionAsAlt,
+            fontSize: widget.fontSize,
+            fontFamily: castPrimaryFontFamily,
+            fontFamilyFallback: castFallbackFontFamilies,
+            backgroundColor: bgColor,
+            foregroundColor: fgColor,
+            faintOpacity:
+                widget.workspace.workspaceSettings.themeSettings.faintOpacity,
+            palette: theme,
+            outOfBoundsDimColor: const Color(0x88000000),
+            service: _terminalService,
+            enableBuiltinSelection: true,
+            enableBuiltinLinkOpen: true,
+            linkLineLookup: pane.lookupLinkLine,
+            hoveredLinkStyler: _styleHoveredRainbowLink,
+            hoveredLinkAnimationInterval:
+                WorkspaceBufferCompositor.rainbowHoverTickInterval,
+            enableHostShortcuts: true,
+            alignment: Alignment.topLeft,
+            onViewportSizeChanged: pane.updateViewportSize,
+            onInputEvent: (event) => _handlePaneInputEvent(pane, event),
+            onTextInput: pane.sendCommittedText,
+            onHostShortcut: _shortcutDispatcher.handleHostShortcut,
+            onFocusChanged: (hasFocus) {
+              if (hasFocus) widget.workspace.focusPane(pane.paneId);
+            },
+          ),
+          _buildPaneCornerPill(pane, tab, theme),
+        ],
+      ),
+    );
+
+    if (!showFocusBorder) {
+      return SizedBox.expand(
+        key: ValueKey('pane-leaf-${pane.paneId}'),
+        child: surface,
+      );
+    }
+    return Container(
+      key: ValueKey('pane-leaf-${pane.paneId}'),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor, width: 1.0),
+      ),
+      child: surface,
+    );
+  }
+
+  static void _styleHoveredRainbowLink(
+    ResolvedTerminalLink _,
+    int cellCount,
+    DateTime timestamp,
+    HoveredLinkCellStyles styles,
+  ) {
+    styles.fillBackground(WorkspaceBufferCompositor.rainbowLinkBackgroundArgb);
+    styles.fillModifiers(WorkspaceBufferCompositor.rainbowLinkModifiers);
+    styles.underlineMatchesForeground = true;
+    final phaseHue = WorkspaceBufferCompositor.rainbowPhaseHueAt(
+      timestamp.millisecondsSinceEpoch,
+    );
+    for (var i = 0; i < cellCount; i++) {
+      styles.setForeground(
+        i,
+        WorkspaceBufferCompositor.rainbowLinkForegroundAtPhase(i, phaseHue),
+      );
+    }
+  }
+
+  Widget _buildPaneCornerPill(
+    FtermPaneController pane,
+    FtermTabState tab,
+    tui.TerminalColorTheme theme,
+  ) {
+    final labels = <String>[];
+    if (tab.splitTree.zoomedPaneId == pane.paneId) {
+      labels.add('ZOOM');
+    }
+    final share = pane.shareSnapshot;
+    if (pane.isLocal && share.state != LocalShareState.unshared) {
+      labels.add(switch (share.state) {
+        LocalShareState.live => 'LIVE • ${share.subscriberCount}v',
+        LocalShareState.connecting =>
+          share.errorMessage != null ? 'SHARING (RETRY)' : 'SHARING...',
+        LocalShareState.error => 'SHARE ERR',
+        LocalShareState.unshared => '',
+      });
+    } else if (pane.remoteSessionId != null &&
+        widget.workspace.subscriberCountFor(pane.remoteSessionId!) > 1) {
+      labels.add(
+        '${widget.workspace.subscriberCountFor(pane.remoteSessionId!)}v',
+      );
+    }
+    if (pane.scrollOffsetLines > 0) {
+      labels.add('+${pane.scrollOffsetLines}');
+    }
+    if (pane.hasExited) {
+      labels.add('💀 ${pane.exitStatus ?? 0}');
+    }
+    if (labels.isEmpty) return const SizedBox.shrink();
+
+    final fg = Color(theme.foreground.argb);
+    final bg = Color(theme.background.argb);
+    return Positioned(
+      top: 6,
+      right: 8,
+      child: IgnorePointer(
+        child: Container(
+          key: ValueKey('pane-pill-${pane.paneId}'),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: Color.lerp(bg, fg, 0.14)!.withValues(alpha: 0.88),
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: fg.withValues(alpha: 0.2)),
+          ),
+          child: Text(
+            labels.join(' · '),
+            style: TextStyle(
+              color: fg,
+              fontSize: 10,
+              fontFamily: castPrimaryFontFamily,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMacOsSafeDragRow({Key? key}) => SizedBox(
+    key: key,
+    height: tabBarHeight,
+    child: Row(
+      children: [
+        const SizedBox(width: macOsTrafficLightInset),
+        Expanded(
+          child: _WindowDragStrip(
+            key: const ValueKey('fterm-window-drag-strip'),
+            enableMacOsDrag: true,
+            windowChannel: _windowChannel,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _buildTopTabBar(tui.TerminalColorTheme theme) {
+    final bg = _chromeBackground(theme);
+    final fg = Color(theme.foreground.argb);
+    final border = fg.withValues(alpha: 0.14);
+    final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
+
+    return Container(
+      key: const ValueKey('fterm-tab-bar-top'),
+      height: tabBarHeight,
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border(bottom: BorderSide(color: border, width: 1)),
+      ),
+      child: Row(
+        children: [
+          if (isMacOsDesktop)
+            const SizedBox(
+              key: ValueKey('fterm-macos-inset'),
+              width: macOsTrafficLightInset,
+            ),
+          Expanded(
+            child: LayoutBuilder(
+              builder: (_, constraints) {
+                final maxTabsWidth = math.max(0.0, constraints.maxWidth - 48.0);
+                return Row(
+                  children: [
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: maxTabsWidth),
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (
+                              var i = 0;
+                              i < widget.workspace.tabs.length;
+                              i++
+                            )
+                              _buildHorizontalTabChip(
+                                index: i,
+                                tab: widget.workspace.tabs[i],
+                                theme: theme,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: _WindowDragStrip(
+                        key: const ValueKey('fterm-window-drag-strip'),
+                        enableMacOsDrag: isMacOsDesktop,
+                        windowChannel: _windowChannel,
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          ..._buildChromeActionControls(theme),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLeftTabRail(tui.TerminalColorTheme theme) {
+    final bg = _chromeBackground(theme);
+    final fg = Color(theme.foreground.argb);
+    final border = fg.withValues(alpha: 0.14);
+    final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
+
+    return Container(
+      key: const ValueKey('fterm-tab-bar-left'),
+      width: leftRailWidth,
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border(right: BorderSide(color: border, width: 1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (isMacOsDesktop)
+            _buildMacOsSafeDragRow(
+              key: const ValueKey('fterm-macos-inset-top'),
+            ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: widget.workspace.tabs.length,
+              itemBuilder: (_, i) => _buildVerticalTabTile(
+                index: i,
+                tab: widget.workspace.tabs[i],
+                theme: theme,
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            child: Wrap(
+              spacing: 2,
+              children: _buildChromeActionControls(theme),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHorizontalTabChip({
+    required int index,
+    required FtermTabState tab,
+    required tui.TerminalColorTheme theme,
+  }) {
+    final selected = index == widget.workspace.activeTabIndex;
+    final fg = Color(theme.foreground.argb);
+    final activeBg = Color(theme.background.argb);
+    final panes = _resolvePaneLookup();
+    final title = tab.resolveTitle(panes);
+    final exited = tab.isExited(panes);
+    final shared = tab.isShared(panes);
+
+    return GestureDetector(
+      key: ValueKey('fterm-tab-${tab.tabId}'),
+      behavior: HitTestBehavior.opaque,
+      onTap: () => _handleTabTap(index, tab.tabId),
+      child: Container(
+        height: tabBarHeight,
+        constraints: const BoxConstraints(minWidth: 72, maxWidth: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected ? activeBg : Colors.transparent,
+          border: Border(
+            right: BorderSide(color: fg.withValues(alpha: 0.12), width: 1),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (shared)
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: Icon(
+                  Icons.wifi_tethering,
+                  size: 11,
+                  color: Color(theme.resolveAnsi256(2).argb),
+                ),
+              ),
+            if (exited)
+              const Padding(
+                padding: EdgeInsets.only(right: 4),
+                child: Text('💀', style: TextStyle(fontSize: 10)),
+              ),
+            Flexible(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? fg : fg.withValues(alpha: 0.68),
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  fontFamily: castPrimaryFontFamily,
+                ),
+              ),
+            ),
+            if (tab.unreadBellCount > 0)
+              Container(
+                key: ValueKey('fterm-tab-bell-${tab.tabId}'),
+                margin: const EdgeInsets.only(left: 5),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Color(theme.resolveAnsi256(3).argb),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${tab.unreadBellCount}',
+                  style: TextStyle(
+                    color: Color(theme.background.argb),
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            const SizedBox(width: 4),
+            InkWell(
+              key: ValueKey('fterm-tab-close-${tab.tabId}'),
+              onTap: () => unawaited(widget.workspace.closeTab(index)),
+              child: Icon(
+                Icons.close,
+                size: 12,
+                color: fg.withValues(alpha: 0.55),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildVerticalTabTile({
+    required int index,
+    required FtermTabState tab,
+    required tui.TerminalColorTheme theme,
+  }) {
+    final selected = index == widget.workspace.activeTabIndex;
+    final fg = Color(theme.foreground.argb);
+    final panes = _resolvePaneLookup();
+    final title = tab.resolveTitle(panes);
+    return InkWell(
+      key: ValueKey('fterm-tab-${tab.tabId}'),
+      onTap: () => _handleTabTap(index, tab.tabId),
+      child: Container(
+        height: tabBarHeight,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        color: selected ? Color(theme.background.argb) : Colors.transparent,
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: selected ? fg : fg.withValues(alpha: 0.7),
+                  fontSize: 11,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  fontFamily: castPrimaryFontFamily,
+                ),
+              ),
+            ),
+            if (tab.unreadBellCount > 0)
+              Container(
+                key: ValueKey('fterm-tab-bell-${tab.tabId}'),
+                margin: const EdgeInsets.only(right: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Color(theme.resolveAnsi256(3).argb),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '${tab.unreadBellCount}',
+                  style: TextStyle(
+                    color: Color(theme.background.argb),
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            InkWell(
+              key: ValueKey('fterm-tab-close-${tab.tabId}'),
+              onTap: () => unawaited(widget.workspace.closeTab(index)),
+              child: Icon(
+                Icons.close,
+                size: 12,
+                color: fg.withValues(alpha: 0.55),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _handleTabTap(int index, String tabId) {
+    final now = widget.workspace.workspaceClock.now();
+    final isDoubleTap =
+        _lastTabTapId == tabId &&
+        _lastTabTapAt != null &&
+        now.difference(_lastTabTapAt!) <= const Duration(milliseconds: 300);
+    _lastTabTapId = tabId;
+    _lastTabTapAt = now;
+    widget.workspace.selectTab(index);
+    if (isDoubleTap) {
+      _lastTabTapAt = null;
+      widget.workspace.setOverlay(FtermOverlay.rename);
+    }
+  }
+
+  Map<String, FtermPaneController> _resolvePaneLookup() {
+    final out = <String, FtermPaneController>{};
+    for (final tab in widget.workspace.tabs) {
+      for (final paneId in tab.splitTree.paneIds) {
+        final pane = widget.workspace.paneById(paneId);
+        if (pane != null) out[paneId] = pane;
+      }
+    }
+    return out;
+  }
+
+  List<Widget> _buildChromeActionControls(tui.TerminalColorTheme theme) {
+    final fg = Color(theme.foreground.argb);
+    final focused = widget.workspace.focusedPane;
+    final muted = widget.workspace.audioController.muted;
+
+    return [
+      if (widget.workspace.isLeaderArmed) _buildLeaderBadge(theme),
+      _buildConnectActionButton(theme),
+      _buildSessionsActionButton(theme),
+      if (focused != null && focused.isLocal)
+        _buildShareActionButton(focused, theme),
+      _chromeIconButton(
+        key: const ValueKey('fterm-new-tab-button'),
+        tooltip: widget.workspace.isDesktopHost
+            ? 'New local shell'
+            : 'Sessions & relay',
+        icon: Icons.add,
+        color: fg.withValues(alpha: 0.75),
+        onTap: _onNewTabActionPressed,
+      ),
+      _chromeIconButton(
+        key: const ValueKey('fterm-mute-toggle'),
+        tooltip: muted ? 'Unmute audio' : 'Mute audio',
+        icon: muted ? Icons.volume_off : Icons.volume_up,
+        color: fg.withValues(alpha: 0.72),
+        onTap: () => widget.workspace.updatePreferences(
+          widget.workspace.preferences.copyWith(audioMuted: !muted),
+        ),
+      ),
+      _chromeIconButton(
+        key: const ValueKey('fterm-settings-button'),
+        tooltip: 'Settings (Ctrl+\\ ,)',
+        icon: Icons.tune,
+        color: fg.withValues(alpha: 0.72),
+        onTap: () => widget.workspace.setOverlay(FtermOverlay.settings),
+      ),
+      _chromeIconButton(
+        key: const ValueKey('fterm-help-button'),
+        tooltip: 'Shortcuts (Ctrl+\\ ?)',
+        icon: Icons.help_outline,
+        color: fg.withValues(alpha: 0.72),
+        onTap: () => widget.workspace.setOverlay(FtermOverlay.help),
+      ),
+    ];
+  }
+
+  Widget _buildLeaderBadge(tui.TerminalColorTheme theme) => Container(
+    key: const ValueKey('fterm-leader-badge'),
+    margin: const EdgeInsets.symmetric(horizontal: 4),
+    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+    decoration: BoxDecoration(
+      color: Color(theme.resolveAnsi256(4).argb),
+      borderRadius: BorderRadius.circular(4),
+    ),
+    child: Text(
+      r'^\',
+      style: TextStyle(
+        color: Color(theme.background.argb),
+        fontSize: 10,
+        fontWeight: FontWeight.bold,
+      ),
+    ),
+  );
+
+  Widget _buildConnectActionButton(tui.TerminalColorTheme theme) {
+    final fg = Color(theme.foreground.argb);
+    final (icon, color, tooltip) = switch (widget.workspace.connectionState) {
+      ClientConnectionState.authenticated => (
+        Icons.cloud_done_outlined,
+        Color(theme.resolveAnsi256(2).argb),
+        'Relay connected — configure (Ctrl+\\ c)',
+      ),
+      ClientConnectionState.connecting ||
+      ClientConnectionState.reconnecting => (
+        Icons.cloud_sync_outlined,
+        Color(theme.resolveAnsi256(3).argb),
+        'Relay connecting — configure (Ctrl+\\ c)',
+      ),
+      ClientConnectionState.authFailed => (
+        Icons.cloud_off_outlined,
+        Color(theme.resolveAnsi256(1).argb),
+        'Relay authentication failed — configure (Ctrl+\\ c)',
+      ),
+      ClientConnectionState.unconnected => (
+        Icons.cloud_outlined,
+        fg.withValues(alpha: 0.72),
+        'Relay connection settings (Ctrl+\\ c)',
+      ),
+    };
+    return _chromeIconButton(
+      key: const ValueKey('fterm-connect-button'),
+      tooltip: tooltip,
+      icon: icon,
+      color: color,
+      onTap: () => widget.workspace.setOverlay(FtermOverlay.connect),
+    );
+  }
+
+  Widget _buildSessionsActionButton(tui.TerminalColorTheme theme) {
+    final fg = Color(theme.foreground.argb);
+    final count = widget.workspace.availableRemoteSessions.length;
+    final hasSessions = count > 0;
+    final color = hasSessions
+        ? Color(theme.resolveAnsi256(2).argb)
+        : fg.withValues(alpha: 0.72);
+    final tooltip = hasSessions
+        ? 'Remote sessions ($count) (Ctrl+\\ c)'
+        : 'Sessions & shells (Ctrl+\\ c)';
+
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        key: const ValueKey('fterm-sessions-button'),
+        onTap: () => widget.workspace.setOverlay(FtermOverlay.sessionPicker),
+        child: SizedBox(
+          width: hasSessions ? 30 : 24,
+          height: tabBarHeight,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(Icons.dns_outlined, size: 14, color: color),
+              if (hasSessions)
+                Positioned(
+                  right: 1,
+                  top: 3,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 3),
+                    decoration: BoxDecoration(
+                      color: color,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      count > 9 ? '9+' : '$count',
+                      style: TextStyle(
+                        color: Color(theme.background.argb),
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                        height: 1.1,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShareActionButton(
+    FtermPaneController focused,
+    tui.TerminalColorTheme theme,
+  ) {
+    final fg = Color(theme.foreground.argb);
+    final share = focused.shareSnapshot;
+    final (icon, color, tooltip) = switch (share.state) {
+      LocalShareState.unshared => (
+        Icons.cast,
+        fg.withValues(alpha: 0.72),
+        'Share local pane (Ctrl+\\ b)',
+      ),
+      LocalShareState.connecting => (
+        Icons.cast_connected,
+        Color(theme.resolveAnsi256(3).argb),
+        share.errorMessage != null
+            ? 'Share retrying (${share.errorMessage}) — click to stop'
+            : 'Connecting share... — click to stop',
+      ),
+      LocalShareState.live => (
+        Icons.cast_connected,
+        Color(theme.resolveAnsi256(2).argb),
+        'Stop sharing local pane (${share.subscriberCount} viewers) (Ctrl+\\ b)',
+      ),
+      LocalShareState.error => (
+        Icons.cast_connected,
+        Color(theme.resolveAnsi256(1).argb),
+        share.errorMessage != null
+            ? 'Share error (${share.errorMessage}) — click to retry'
+            : 'Share failed — click to retry',
+      ),
+    };
+    return _chromeIconButton(
+      key: const ValueKey('fterm-share-toggle'),
+      tooltip: tooltip,
+      icon: icon,
+      color: color,
+      onTap: () => unawaited(widget.workspace.togglePaneShare()),
+    );
+  }
+
+  void _onNewTabActionPressed() {
+    if (widget.workspace.isDesktopHost) {
+      unawaited(widget.workspace.openLocalShellTab());
+      return;
+    }
+    widget.workspace.setOverlay(FtermOverlay.sessionPicker);
+  }
+
+  Widget _chromeIconButton({
+    required Key key,
+    required String tooltip,
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) => Tooltip(
+    message: tooltip,
+    child: InkWell(
+      key: key,
+      onTap: onTap,
+      child: SizedBox(
+        width: 24,
+        height: tabBarHeight,
+        child: Icon(icon, size: 14, color: color),
+      ),
+    ),
+  );
+
+  Color _chromeBackground(tui.TerminalColorTheme theme) {
+    final bg = Color(theme.background.argb);
+    final isDark = theme.brightness == tui.TerminalBrightness.dark;
+    return isDark
+        ? Color.lerp(bg, const Color(0xFFFFFFFF), 0.05)!
+        : Color.lerp(bg, const Color(0xFF000000), 0.05)!;
+  }
+
+  Widget _buildDragOverlay(tui.TerminalColorTheme theme) => IgnorePointer(
+    child: Container(
+      decoration: BoxDecoration(
+        color: const Color(0xAA0D131F),
+        border: Border.all(
+          color: Color(theme.resolveAnsi256(2).argb),
+          width: 2.0,
+        ),
+      ),
+      padding: const EdgeInsets.all(24),
+      child: const Center(
+        child: Text(
+          'Drop files to upload to remote host',
+          style: TextStyle(
+            color: Color(0xFFEAF2FF),
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+            fontFamily: castPrimaryFontFamily,
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+final class _WindowDragStrip extends StatelessWidget {
+  final bool enableMacOsDrag;
+  final MethodChannel windowChannel;
+
+  const _WindowDragStrip({
+    super.key,
+    required this.enableMacOsDrag,
+    required this.windowChannel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!enableMacOsDrag) {
+      return const SizedBox(height: _FtermShellScaffoldState.tabBarHeight);
+    }
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onPanStart: (_) => unawaited(
+        windowChannel.invokeMethod<void>('startDrag').catchError((_) {}),
+      ),
+      onDoubleTap: () => unawaited(
+        windowChannel.invokeMethod<void>('zoomWindow').catchError((_) {}),
+      ),
+      child: const SizedBox(height: _FtermShellScaffoldState.tabBarHeight),
+    );
+  }
+}
+
+final class _SplitTreeView extends StatelessWidget {
+  static const double dividerThickness = 1.0;
+  static const double dividerHitThickness = 6.0;
+
+  final SplitTreeNode node;
+  final FtermTabState tab;
+  final FtermWorkspaceController workspace;
+  final tui.TerminalColorTheme theme;
+  final Widget Function(String paneId) buildLeaf;
+
+  const _SplitTreeView({
+    super.key,
+    required this.node,
+    required this.tab,
+    required this.workspace,
+    required this.theme,
+    required this.buildLeaf,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    switch (node) {
+      case PaneLeaf(:final paneId):
+        return buildLeaf(paneId);
+      case final SplitNode split:
+        return LayoutBuilder(
+          builder: (layoutContext, constraints) =>
+              _buildSplitLayout(layoutContext, split, constraints),
+        );
+    }
+  }
+
+  Widget _buildSplitLayout(
+    BuildContext context,
+    SplitNode split,
+    BoxConstraints constraints,
+  ) {
+    final isHoriz = split.axis == SplitAxis.horizontal;
+    final totalSpan = isHoriz ? constraints.maxWidth : constraints.maxHeight;
+    final usableSpan = math.max(0.0, totalSpan - dividerThickness);
+    final rawDpr =
+        MediaQuery.maybeDevicePixelRatioOf(context) ??
+        View.maybeOf(context)?.devicePixelRatio ??
+        1.0;
+    final dpr = rawDpr.isFinite && rawDpr > 0 ? rawDpr : 1.0;
+    final rawFirstSpan = (usableSpan * split.ratio).clamp(0.0, usableSpan);
+    final firstSpan = ((rawFirstSpan * dpr).roundToDouble() / dpr).clamp(
+      0.0,
+      usableSpan,
+    );
+    final dividerColor = Color(theme.foreground.argb).withValues(alpha: 0.22);
+
+    final firstChild = _SplitTreeView(
+      node: split.first,
+      tab: tab,
+      workspace: workspace,
+      theme: theme,
+      buildLeaf: buildLeaf,
+    );
+    final secondChild = _SplitTreeView(
+      node: split.second,
+      tab: tab,
+      workspace: workspace,
+      theme: theme,
+      buildLeaf: buildLeaf,
+    );
+    final visualSpacer = SizedBox(
+      width: isHoriz ? dividerThickness : null,
+      height: isHoriz ? null : dividerThickness,
+    );
+    final layout = isHoriz
+        ? Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(width: firstSpan, child: firstChild),
+              visualSpacer,
+              Expanded(child: secondChild),
+            ],
+          )
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(height: firstSpan, child: firstChild),
+              visualSpacer,
+              Expanded(child: secondChild),
+            ],
+          );
+
+    final hitOffset =
+        firstSpan - (dividerHitThickness - dividerThickness) * 0.5;
+    final handle = _SplitDragHandle(
+      key: ValueKey('splitter-hit-${split.splitId}'),
+      splitId: split.splitId,
+      axis: split.axis,
+      color: dividerColor,
+      ratio: split.ratio,
+      usableSpan: usableSpan,
+      onRatioChanged: (ratio) => workspace.setSplitRatio(split.splitId, ratio),
+    );
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        layout,
+        if (isHoriz)
+          Positioned(
+            left: hitOffset,
+            top: 0,
+            bottom: 0,
+            width: dividerHitThickness,
+            child: handle,
+          )
+        else
+          Positioned(
+            top: hitOffset,
+            left: 0,
+            right: 0,
+            height: dividerHitThickness,
+            child: handle,
+          ),
+      ],
+    );
+  }
+}
+
+final class _SplitDragHandle extends StatefulWidget {
+  final String splitId;
+  final SplitAxis axis;
+  final Color color;
+  final double ratio;
+  final double usableSpan;
+  final void Function(double nextRatio) onRatioChanged;
+
+  const _SplitDragHandle({
+    super.key,
+    required this.splitId,
+    required this.axis,
+    required this.color,
+    required this.ratio,
+    required this.usableSpan,
+    required this.onRatioChanged,
+  });
+
+  @override
+  State<_SplitDragHandle> createState() => _SplitDragHandleState();
+}
+
+final class _SplitDragHandleState extends State<_SplitDragHandle> {
+  double? _dragStartRatio;
+  double _dragDeltaPx = 0.0;
+
+  void _startDrag(DragStartDetails _) {
+    _dragStartRatio = widget.ratio;
+    _dragDeltaPx = 0.0;
+  }
+
+  void _updateDrag(double deltaPx) {
+    if (widget.usableSpan <= 0) return;
+    final startRatio = _dragStartRatio ?? widget.ratio;
+    _dragDeltaPx += deltaPx;
+    final nextRatio =
+        ((widget.usableSpan * startRatio) + _dragDeltaPx) / widget.usableSpan;
+    widget.onRatioChanged(nextRatio);
+  }
+
+  void _endDrag([Object? _]) {
+    _dragStartRatio = null;
+    _dragDeltaPx = 0.0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isHoriz = widget.axis == SplitAxis.horizontal;
+    return MouseRegion(
+      cursor: isHoriz
+          ? SystemMouseCursors.resizeLeftRight
+          : SystemMouseCursors.resizeUpDown,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onHorizontalDragStart: isHoriz ? _startDrag : null,
+        onHorizontalDragUpdate: isHoriz ? (d) => _updateDrag(d.delta.dx) : null,
+        onHorizontalDragEnd: isHoriz ? _endDrag : null,
+        onHorizontalDragCancel: isHoriz ? _endDrag : null,
+        onVerticalDragStart: !isHoriz ? _startDrag : null,
+        onVerticalDragUpdate: !isHoriz ? (d) => _updateDrag(d.delta.dy) : null,
+        onVerticalDragEnd: !isHoriz ? _endDrag : null,
+        onVerticalDragCancel: !isHoriz ? _endDrag : null,
+        child: Center(
+          child: SizedBox(
+            key: ValueKey('splitter-${widget.splitId}'),
+            width: isHoriz ? _SplitTreeView.dividerThickness : double.infinity,
+            height: isHoriz ? double.infinity : _SplitTreeView.dividerThickness,
+            child: ColoredBox(color: widget.color),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _FtermTerminalService implements TerminalService {
+  final UrlOpener onOpenUrl;
+
+  const _FtermTerminalService({required this.onOpenUrl});
+
+  @override
+  Future<String?> saveScreenshot(String basename, Uint8List bytes) =>
+      const DefaultTerminalService().saveScreenshot(basename, bytes);
+
+  @override
+  Future<void> setClipboard(String text) =>
+      Clipboard.setData(ClipboardData(text: text));
+
+  @override
+  Future<String?> getClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    return data?.text;
+  }
+
+  @override
+  Future<bool> openUrl(String url) async {
+    final parsed = Uri.tryParse(url);
+    if (parsed == null) return false;
+    onOpenUrl(parsed);
+    return true;
+  }
+}
