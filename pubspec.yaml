@@ -41,6 +41,7 @@ workspace:
   - apps/termui_cast/server
   - apps/termui_cast/caster_cli
   - apps/termui_cast/client_core
+  - apps/fterm
 
 dev_dependencies:
   melos: ^8.1.0
@@ -80,6 +81,8 @@ melos:
       packageFilters:
         dirExists: test
         flutter: true
+        ignore:
+          - fterm
 
     test:all:
       steps:

@@ -56,12 +56,12 @@ jobs:
             "PUB_CACHE=D:\pub-cache" | Out-File -FilePath $env:GITHUB_ENV -Append
             $env:PUB_CACHE = "D:\pub-cache"
           }
-          Remove-Item -Recurse -Force packages/termui_flutter, packages/termui_audio_flutter, packages/termui_tinpot/example
+          Remove-Item -Recurse -Force packages/termui_flutter, packages/termui_audio_flutter, packages/termui_tinpot/example, apps/fterm
           Get-ChildItem -Path packages/termui_audio/example -Force |
             Where-Object { $_.Name -ne 'assets' } |
             Remove-Item -Recurse -Force
           (Get-Content pubspec.yaml) |
-            Where-Object { $_ -notmatch '^\s*-\s+packages/(termui_flutter|termui_audio_flutter|termui_audio/example|termui_tinpot/example)(/|\s*$)' } |
+            Where-Object { $_ -notmatch '^\s*-\s+(packages/(termui_flutter|termui_audio_flutter|termui_audio/example|termui_tinpot/example)|apps/fterm)(/|\s*$)' } |
             Set-Content pubspec.yaml
           dart pub get
 

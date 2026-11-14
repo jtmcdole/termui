@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bgGrad" gradientUnits="userSpaceOnUse" x1="140" y1="40" x2="884" y2="984">
+      <stop offset="0%" stop-color="#1E2430"/>
+      <stop offset="50%" stop-color="#14171F"/>
+      <stop offset="100%" stop-color="#0D1017"/>
+    </linearGradient>
+    <radialGradient id="blueAmbient" gradientUnits="userSpaceOnUse" cx="350" cy="460" r="460">
+      <stop offset="0%" stop-color="#5294E2" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#5294E2" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="mintAmbient" gradientUnits="userSpaceOnUse" cx="730" cy="530" r="420">
+      <stop offset="0%" stop-color="#62D196" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#62D196" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rimGrad" gradientUnits="userSpaceOnUse" x1="512" y1="0" x2="512" y2="1024">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="45%" stop-color="#5294E2" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0.48"/>
+    </linearGradient>
+    <linearGradient id="fGrad" gradientUnits="userSpaceOnUse" x1="330" y1="220" x2="270" y2="800">
+      <stop offset="0%" stop-color="#F6FAFF"/>
+      <stop offset="100%" stop-color="#CEDCEB"/>
+    </linearGradient>
+    <linearGradient id="gtGrad" gradientUnits="userSpaceOnUse" x1="570" y1="360" x2="810" y2="660">
+      <stop offset="0%" stop-color="#86F2B8"/>
+      <stop offset="55%" stop-color="#62D196"/>
+      <stop offset="100%" stop-color="#3DB87A"/>
+    </linearGradient>
+    <filter id="macShadow" x="-16%" y="-14%" width="132%" height="132%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
+    <filter id="mintGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="22" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="surfaceClip">
+      <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228"/>
+    </clipPath>
+  </defs>
+  <g transform="translate(16,16) scale(0.96875)">
+    <rect x="0" y="0" width="1024" height="1024" rx="228" ry="228" fill="url(#bgGrad)"/>
+    <g clip-path="url(#surfaceClip)">
+      <rect x="0" y="0" width="1024" height="1024" fill="url(#blueAmbient)"/>
+      <rect x="0" y="0" width="1024" height="1024" fill="url(#mintAmbient)"/>
+    </g>
+    <rect x="6" y="6" width="1012" height="1012" rx="222" ry="222" fill="none" stroke="url(#rimGrad)" stroke-width="14"/>
+    
+    <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <!-- Florin italic f ligature -->
+      <path d="M 468 268 C 430 218, 360 228, 340 318 L 264 704 C 248 786, 184 808, 146 770"
+            stroke="url(#fGrad)" stroke-width="86"/>
+      <path d="M 206 448 L 416 448"
+            stroke="url(#fGrad)" stroke-width="78"/>
+      <!-- Terminal prompt chevron > -->
+      <path d="M 576 382 L 802 522 L 576 662"
+            stroke="#62D196" stroke-opacity="0.28" stroke-width="106" filter="url(#mintGlow)"/>
+      <path d="M 576 382 L 802 522 L 576 662"
+            stroke="url(#gtGrad)" stroke-width="86"/>
+    </g>
+  </g>
+</svg>

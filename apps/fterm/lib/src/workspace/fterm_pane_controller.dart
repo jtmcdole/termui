@@ -1,0 +1,850 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
+import 'dart:typed_data';
+
+import 'package:flutter/foundation.dart'
+    show ChangeNotifier, ValueListenable, VoidCallback, visibleForTesting;
+import 'package:termui/terminal/event.dart' as ev;
+import 'package:termui/termui.dart' as tui;
+import 'package:termui_cast_client_core/termui_cast_client_core.dart';
+import 'package:termui_cast_protocol/termui_cast_protocol.dart' show SessionId;
+import 'package:termui_pty/termui_pty.dart';
+
+import 'local_host_driver.dart';
+
+/// Callback notified when a terminal pane receives `BEL`.
+typedef PaneBellCallback = void Function(String paneId);
+
+/// Callback notified when a terminal pane decodes an `ESC _ A` audio event.
+typedef PaneAudioCallback =
+    void Function(String paneId, TerminalAudioEvent event);
+
+/// Callback notified when a pane's shell title updates via `OSC 0`/`OSC 2`.
+typedef PaneTitleCallback = void Function(String paneId, String title);
+
+/// Callback notified when a pane receives an `OSC 52` clipboard write.
+typedef PaneClipboardCallback =
+    void Function(String paneId, String selection, String text);
+
+/// Callback notified when a pane's backing shell or remote session exits.
+typedef PaneExitedCallback = void Function(String paneId, int exitCode);
+
+final class _PaneChangeNotifier extends ChangeNotifier {
+  int _listenerCount = 0;
+
+  @override
+  void addListener(VoidCallback listener) {
+    super.addListener(listener);
+    _listenerCount += 1;
+  }
+
+  @override
+  void removeListener(VoidCallback listener) {
+    super.removeListener(listener);
+    if (_listenerCount > 0) {
+      _listenerCount -= 1;
+    }
+  }
+
+  void emitChange() => notifyListeners();
+}
+
+/// Manages live buffer compositing, scrollback offset, cursor rendering,
+/// debounced viewport resizing, and encoded input for a single split pane.
+final class FtermPaneController {
+  static const int _maxInputChunkBytes = 4096;
+  static const int _wheelScrollLines = 3;
+
+  /// Stable unique pane identifier within the workspace.
+  final String paneId;
+
+  /// Backing terminal port (local [PtyRouter] port or [RemoteTerminalPort]).
+  final TerminalPort port;
+
+  /// Local shell host handle when this pane owns a local desktop PTY.
+  final LocalPaneHost? localHost;
+
+  /// Relay session identifier when this pane views a remote caster session.
+  final SessionId? remoteSessionId;
+
+  final Duration _resizeDebounce;
+  final _PaneChangeNotifier _visualNotifier = _PaneChangeNotifier();
+  final void Function(tui.Buffer buffer)? _onFrameRedrawn;
+
+  PaneBellCallback? _onBell;
+  PaneAudioCallback? _onAudio;
+  PaneTitleCallback? _onTitleChanged;
+  PaneClipboardCallback? _onClipboard;
+  PaneExitedCallback? _onExited;
+  void Function()? _onShareChanged;
+
+  TerminalColorResolver _colorResolver;
+  tui.Buffer? _composedBuffer;
+  Timer? _resizeTimer;
+  StreamSubscription<LocalShareSnapshot>? _shareSub;
+
+  int? _pendingCols;
+  int? _pendingRows;
+  int _pendingCellW = 0;
+  int _pendingCellH = 0;
+  int _scrollOffsetLines = 0;
+  int _lastScrollbackClearSeq = 0;
+  int _lastComposedRevision = -1;
+  int _lastCursorCellIndex = -1;
+  int _lastComposedWidth = 0;
+  int _lastComposedHeight = 0;
+  int _lastComposedScrollOffset = 0;
+  int _bellCount = 0;
+  bool _focused = false;
+  bool _hasExited = false;
+  int? _exitStatus;
+  String _shellTitle = '';
+  bool _disposed = false;
+
+  /// Attaches a pane controller to [port].
+  FtermPaneController({
+    required this.paneId,
+    required this.port,
+    required TerminalColorResolver colorResolver,
+    this.localHost,
+    this.remoteSessionId,
+    Duration resizeDebounce = const Duration(milliseconds: 32),
+    PaneBellCallback? onBell,
+    PaneAudioCallback? onAudio,
+    PaneTitleCallback? onTitleChanged,
+    PaneClipboardCallback? onClipboard,
+    PaneExitedCallback? onExited,
+    void Function()? onShareChanged,
+    void Function(tui.Buffer buffer)? onFrameRedrawn,
+  }) : _colorResolver = colorResolver,
+       _resizeDebounce = resizeDebounce,
+       _onBell = onBell,
+       _onAudio = onAudio,
+       _onTitleChanged = onTitleChanged,
+       _onClipboard = onClipboard,
+       _onExited = onExited,
+       _onShareChanged = onShareChanged,
+       _onFrameRedrawn = onFrameRedrawn {
+    _shellTitle = _resolveInitialTitle();
+    _lastScrollbackClearSeq = port.scrollbackWindow.clearSeq;
+    _attachPortListeners();
+    _recomposite(notify: false);
+  }
+
+  /// Whether this pane hosts a local desktop shell.
+  bool get isLocal => localHost != null;
+
+  /// Listenable notified whenever [displayBuffer] or cursor state changes.
+  ValueListenable<tui.Buffer> get bufferListenable => _bufferListenable ??=
+      _PaneBufferListenable(_visualNotifier, readDisplayBuffer);
+
+  _PaneBufferListenable? _bufferListenable;
+
+  /// Backing notifier triggered on visual redraws.
+  ChangeNotifier get visualNotifier => _visualNotifier;
+
+  /// Active listener count registered on [visualNotifier] (for regression tests).
+  @visibleForTesting
+  int get debugVisualListenerCount => _visualNotifier._listenerCount;
+
+  /// Most recently composited screen buffer ready for `TerminalSurface`.
+  tui.Buffer get displayBuffer {
+    final existing = _composedBuffer;
+    if (existing != null) return existing;
+    _recomposite(notify: false);
+    return _composedBuffer!;
+  }
+
+  /// Stable tear-off reading [displayBuffer] for `TerminalSurface.bufferProvider`.
+  tui.Buffer readDisplayBuffer() => displayBuffer;
+
+  /// Resolves the un-overlaid [tui.VirtualLineSlice] for 0-based [viewportRow],
+  /// mapping across scrollback history and the active live buffer.
+  tui.VirtualLineSlice? lookupLinkLine(int viewportRow) {
+    if (_disposed || viewportRow < 0) return null;
+    final sbWin = port.scrollbackWindow;
+    final total = sbWin.totalLines;
+    final topVirtual = math.max(0, total - _scrollOffsetLines);
+    final virtualY = topVirtual + viewportRow;
+
+    final remote = remotePort;
+    if (remote != null) {
+      final slot = remote.slot;
+      final liveBuffer = slot.buffer;
+      if (liveBuffer == null) return null;
+      return WorkspaceBufferCompositor.lookupVirtualLine(
+        slot,
+        liveBuffer,
+        virtualY,
+      );
+    }
+
+    if (virtualY < total) {
+      final slice = port.readScrollbackSlice(virtualY, 1);
+      final line = slice.isNotEmpty ? slice.first : null;
+      if (line == null) {
+        return (isWrapped: false, characters: const <String>[], uris: null);
+      }
+      return (
+        isWrapped: line.isWrapped,
+        characters: line.characters,
+        uris: line.uris,
+      );
+    }
+
+    final liveY = virtualY - total;
+    final liveBuffer = port.buffer;
+    if (liveY < 0 || liveY >= liveBuffer.height) return null;
+    final start = liveY * liveBuffer.width;
+    final end = start + liveBuffer.width;
+    return (
+      isWrapped: false,
+      characters: liveBuffer.characters.sublist(start, end),
+      uris: liveBuffer.sliceUris(start, end),
+    );
+  }
+
+  /// Active PTY dimensions `(cols, rows)` used for out-of-bounds dimming.
+  (int cols, int rows) get activePtySize => port.activePtySize;
+
+  /// Stable tear-off reading [activePtySize] for `TerminalSurface`.
+  (int cols, int rows) readActivePtySize() => activePtySize;
+
+  /// Current zero-based cursor coordinate for IME pre-edit placement.
+  ({int col, int row}) get cursorPosition =>
+      (col: port.cursor.x, row: port.cursor.y);
+
+  /// Stable tear-off reading [cursorPosition] for `TerminalSurface`.
+  ({int col, int row}) readCursorPosition() => cursorPosition;
+
+  /// Active Kitty keyboard progressive enhancement flags (`0..31`).
+  int get kittyKeyboardFlags => port.modes.kittyKeyboardFlags;
+
+  /// Stable tear-off reading [kittyKeyboardFlags] for `TerminalSurface`.
+  int readKittyKeyboardFlags() => kittyKeyboardFlags;
+
+  /// Whether Kitty flag bit 2 (report key repeat/release) is active.
+  bool get reportKeyReleaseEvents => (port.modes.kittyKeyboardFlags & 2) != 0;
+
+  /// Stable tear-off reading [reportKeyReleaseEvents] for `TerminalSurface`.
+  bool readReportKeyReleaseEvents() => reportKeyReleaseEvents;
+
+  /// Whether DECSET 1016 pixel mouse reporting is active.
+  bool get reportPixelMouseEvents => port.modes.sgrPixelsMouse;
+
+  /// Stable tear-off reading [reportPixelMouseEvents] for `TerminalSurface`.
+  bool readReportPixelMouseEvents() => reportPixelMouseEvents;
+
+  /// Whether DECSET mouse tracking is active at the live bottom row.
+  bool get mouseTracking => _scrollOffsetLines == 0 && port.modes.mouseTracking;
+
+  /// Stable tear-off reading [mouseTracking] for `TerminalSurface`.
+  bool readMouseTracking() => mouseTracking;
+
+  /// Current primary-screen scrollback offset (`0` = live bottom).
+  int get scrollOffsetLines => _scrollOffsetLines;
+
+  /// Current local relay share status snapshot (`unshared` for remote panes).
+  LocalShareSnapshot get shareSnapshot =>
+      localHost?.shareSnapshot ?? LocalShareSnapshot.unshared;
+
+  /// Latest sanitized title emitted by the shell (`OSC 0`/`OSC 2`).
+  String get shellTitle => _shellTitle;
+
+  /// Current unread bell count accumulated by this pane.
+  int get bellCount => _bellCount;
+
+  /// Whether this pane currently owns keyboard focus in its split tree.
+  bool get isFocused => _focused;
+
+  /// Whether the underlying process or remote session has exited.
+  bool get hasExited => _hasExited;
+
+  /// Process exit status code when [hasExited] is true.
+  int? get exitStatus => _exitStatus;
+
+  /// Remote port handle when backing a remote relay session.
+  RemoteTerminalPort? get remotePort =>
+      port is RemoteTerminalPort ? port as RemoteTerminalPort : null;
+
+  String _resolveInitialTitle() {
+    final raw = switch (port) {
+      final RemoteTerminalPort remote => remote.displayTitle,
+      _ => port.windowTitle,
+    };
+    return raw.trim();
+  }
+
+  void _attachPortListeners() {
+    port.addListener(_handlePortChange);
+    port.addBellListener(_handleBell);
+    port.addAudioListener(_handleAudio);
+    port.addTitleListener(_handleTitle);
+    port.addClipboardListener(_handleClipboard);
+
+    final host = localHost;
+    if (host != null) {
+      _shareSub = host.shareUpdates.listen((_) {
+        if (!_disposed) {
+          _onShareChanged?.call();
+        }
+      });
+    }
+
+    unawaited(
+      port.exitCode.then(_handleExited, onError: (_, _) => _handleExited(-1)),
+    );
+  }
+
+  void _handlePortChange() {
+    if (_disposed) return;
+    _recomposite(notify: true);
+  }
+
+  void _handleBell() {
+    if (_disposed) return;
+    _bellCount += 1;
+    _onBell?.call(paneId);
+  }
+
+  void _handleAudio(TerminalAudioEvent event) {
+    if (_disposed) return;
+    _onAudio?.call(paneId, event);
+  }
+
+  void _handleTitle(String title) {
+    if (_disposed) return;
+    final trimmed = title.trim();
+    if (trimmed == _shellTitle) return;
+    _shellTitle = trimmed;
+    _onTitleChanged?.call(paneId, _shellTitle);
+  }
+
+  void _handleClipboard(String selection, String text) {
+    if (_disposed) return;
+    _onClipboard?.call(paneId, selection, text);
+  }
+
+  void _handleExited(int code) {
+    if (_disposed || _hasExited) return;
+    _hasExited = true;
+    _exitStatus = code;
+    _onExited?.call(paneId, code);
+  }
+
+  /// Clears unread bell counts on this pane and any attached remote slot.
+  void clearBellCount() {
+    _bellCount = 0;
+    remotePort?.clearBellCount();
+  }
+
+  /// Updates the color resolver when theme or contrast settings change.
+  void setColorResolver(TerminalColorResolver nextResolver) {
+    if (_disposed) return;
+    _colorResolver = nextResolver;
+    localHost?.setColorScheme(nextResolver.theme.brightness);
+    _recomposite(notify: true, forceFull: true);
+  }
+
+  /// Updates keyboard focus status and forwards DECSET 1004 focus sequences.
+  void setFocused(bool focused) {
+    if (_disposed || _focused == focused) return;
+    _focused = focused;
+    if (focused) {
+      clearBellCount();
+    }
+    if (port.modes.focusReporting && !_hasExited) {
+      final seq = focused ? '\x1b[I' : '\x1b[O';
+      port.sendInput(Uint8List.fromList(utf8.encode(seq)));
+    }
+    _recomposite(notify: true, forceFull: true);
+  }
+
+  /// Schedules a PTY viewport size update for this pane's grid & cell metrics.
+  void updateViewportSize(
+    int cols,
+    int rows,
+    double cellWidth,
+    double cellHeight,
+  ) {
+    if (_disposed || cols <= 0 || rows <= 0) return;
+    final cw = cellWidth.round().clamp(1, 512);
+    final ch = cellHeight.round().clamp(1, 512);
+    _pendingCols = cols;
+    _pendingRows = rows;
+    _pendingCellW = cw;
+    _pendingCellH = ch;
+
+    if (_resizeDebounce == Duration.zero) {
+      _flushPendingResize();
+      return;
+    }
+    _resizeTimer?.cancel();
+    _resizeTimer = Timer(_resizeDebounce, _flushPendingResize);
+  }
+
+  void _flushPendingResize() {
+    _resizeTimer?.cancel();
+    _resizeTimer = null;
+    if (_disposed) return;
+    final cols = _pendingCols;
+    final rows = _pendingRows;
+    if (cols == null || rows == null) return;
+    port.setViewportSize(
+      cols,
+      rows,
+      cellPixelWidth: _pendingCellW,
+      cellPixelHeight: _pendingCellH,
+    );
+  }
+
+  /// Scrolls primary-screen history by [deltaLines] (`+` = up, `-` = down).
+  void scrollLines(int deltaLines) {
+    if (_disposed || deltaLines == 0 || port.modes.altScreen) return;
+    final total = port.scrollbackWindow.totalLines;
+    final next = (_scrollOffsetLines + deltaLines).clamp(0, total);
+    if (next == _scrollOffsetLines) return;
+    _scrollOffsetLines = next;
+    _recomposite(notify: true);
+  }
+
+  /// Resets scrollback offset back to live bottom (`0`).
+  void jumpToBottom() {
+    if (_disposed || _scrollOffsetLines == 0) return;
+    _scrollOffsetLines = 0;
+    _recomposite(notify: true);
+  }
+
+  /// Encodes and routes a high-level `termui` [event] to the PTY or local
+  /// scrollback engine.
+  void sendInputEvent(ev.InputEvent event) {
+    if (_disposed || _hasExited) return;
+    switch (event) {
+      case ev.MouseEvent():
+        _handleMouseEvent(event);
+      case ev.KeyEvent():
+        if (_scrollOffsetLines > 0) {
+          jumpToBottom();
+        }
+        _sendEncodedEvent(event);
+      case ev.PasteEvent():
+        if (_scrollOffsetLines > 0) {
+          jumpToBottom();
+        }
+        _sendEncodedEvent(event);
+      case ev.FocusInEvent():
+        if (port.modes.focusReporting) {
+          port.sendInput(Uint8List.fromList(utf8.encode('\x1b[I')));
+        }
+      case ev.FocusOutEvent():
+        if (port.modes.focusReporting) {
+          port.sendInput(Uint8List.fromList(utf8.encode('\x1b[O')));
+        }
+      case ev.CursorPositionReportEvent() ||
+          ev.KittyGraphicsEvent() ||
+          ev.KittyKeyboardEvent() ||
+          ev.AudioApcReplyEvent():
+        break;
+    }
+  }
+
+  /// Sends committed IME or printable UTF-8 text to the backing PTY.
+  void sendCommittedText(String text) {
+    if (_disposed || _hasExited || text.isEmpty) return;
+    if (_scrollOffsetLines > 0) {
+      jumpToBottom();
+    }
+    _sendUtf8Chunked(text);
+  }
+
+  void _handleMouseEvent(ev.MouseEvent event) {
+    final modes = port.modes;
+    final isWheel =
+        event.button == ev.MouseButton.wheelUp ||
+        event.button == ev.MouseButton.wheelDown;
+    if (isWheel) {
+      _handleWheelMouseEvent(event, modes);
+      return;
+    }
+    if (mouseTracking) {
+      _sendEncodedEvent(event);
+    }
+  }
+
+  void _handleWheelMouseEvent(ev.MouseEvent event, TerminalPortModes modes) {
+    if (mouseTracking && !event.modifiers.contains(ev.Modifier.shift)) {
+      _sendEncodedEvent(event);
+      return;
+    }
+    final up = event.button == ev.MouseButton.wheelUp;
+    if (modes.altScreen && modes.alternateScroll) {
+      final seq = modes.appCursorKeys
+          ? (up ? '\x1bOA' : '\x1bOB')
+          : (up ? '\x1b[A' : '\x1b[B');
+      port.sendInput(Uint8List.fromList(utf8.encode(seq)));
+      return;
+    }
+    if (!modes.altScreen) {
+      scrollLines(up ? _wheelScrollLines : -_wheelScrollLines);
+    }
+  }
+
+  void _sendEncodedEvent(ev.InputEvent event) {
+    final modes = port.modes;
+    final (pixelX, pixelY) = event is ev.MouseEvent
+        ? (event.pixelX, event.pixelY)
+        : (null, null);
+    final encoded = InputEncoder.encode(
+      event,
+      bracketedPaste: modes.bracketedPaste,
+      applicationCursorKeys: modes.appCursorKeys,
+      sgrMouse: modes.sgrMouse || modes.sgrPixelsMouse,
+      sgrPixels: modes.sgrPixelsMouse,
+      kittyKeyboardFlags: modes.kittyKeyboardFlags,
+      pixelX: pixelX,
+      pixelY: pixelY,
+    );
+    if (encoded.isEmpty) return;
+    _sendUtf8Chunked(encoded);
+  }
+
+  void _sendUtf8Chunked(String payload) {
+    final bytes = utf8.encode(payload);
+    if (bytes.length <= _maxInputChunkBytes) {
+      port.sendInput(bytes);
+      return;
+    }
+    for (var offset = 0; offset < bytes.length; offset += _maxInputChunkBytes) {
+      final end = math.min(bytes.length, offset + _maxInputChunkBytes);
+      port.sendInput(Uint8List.sublistView(bytes, offset, end));
+    }
+  }
+
+  void _recomposite({required bool notify, bool forceFull = false}) {
+    final src = port.buffer;
+    final width = math.max(1, src.width);
+    final height = math.max(1, src.height);
+
+    final sbWin = port.scrollbackWindow;
+    if (sbWin.clearSeq != _lastScrollbackClearSeq) {
+      _lastScrollbackClearSeq = sbWin.clearSeq;
+      _scrollOffsetLines = 0;
+    }
+    if (port.modes.altScreen) {
+      _scrollOffsetLines = 0;
+    } else {
+      _scrollOffsetLines = _scrollOffsetLines.clamp(0, sbWin.totalLines);
+    }
+
+    var out = _composedBuffer;
+    if (out == null || out.width != width || out.height != height) {
+      out = tui.Buffer.blank(width, height);
+      _composedBuffer = out;
+      _recompositeFull(out, src, sbWin);
+    } else if (forceFull || !_tryIncrementalRecomposite(out, src)) {
+      out.clear();
+      _recompositeFull(out, src, sbWin);
+    }
+
+    _onFrameRedrawn?.call(out);
+    if (notify) {
+      _visualNotifier.emitChange();
+    }
+  }
+
+  void _recompositeFull(
+    tui.Buffer out,
+    tui.Buffer src,
+    ScrollbackWindowData sbWin,
+  ) {
+    _populateRows(out, src, sbWin);
+    if (_scrollOffsetLines == 0) {
+      out.propagateMetadataFrom(src);
+      _lastCursorCellIndex = _paintCursorIfVisible(out);
+    } else {
+      _lastCursorCellIndex = -1;
+      _propagateScrolledKittyMetadata(out, src);
+      _paintScrollbarThumb(out, sbWin.totalLines);
+    }
+    _lastComposedWidth = out.width;
+    _lastComposedHeight = out.height;
+    _lastComposedScrollOffset = _scrollOffsetLines;
+    _lastComposedRevision = _scrollOffsetLines == 0
+        ? (remotePort?.renderRevision ?? -1)
+        : -1;
+  }
+
+  bool _tryIncrementalRecomposite(tui.Buffer out, tui.Buffer src) {
+    final remote = remotePort;
+    if (remote == null ||
+        _scrollOffsetLines != 0 ||
+        _lastComposedScrollOffset != 0 ||
+        _lastComposedWidth != src.width ||
+        _lastComposedHeight != src.height ||
+        src.effects.isNotEmpty ||
+        src.selectableRegions.isNotEmpty ||
+        _lastComposedRevision < remote.fullSyncRevision) {
+      return false;
+    }
+
+    final totalCells = out.width * out.height;
+    final prevCursorIdx = _lastCursorCellIndex;
+    if (prevCursorIdx >= 0 && prevCursorIdx < totalCells) {
+      _copyResolvedSpan(out, src, prevCursorIdx, 1);
+    }
+
+    final sinceRev = _lastComposedRevision;
+    for (final span in remote.dirtySpans) {
+      if (span.revision <= sinceRev) continue;
+      final start = span.start.clamp(0, totalCells);
+      final end = (span.start + span.length).clamp(start, totalCells);
+      final len = end - start;
+      if (len > 0) {
+        _copyResolvedSpan(out, src, start, len);
+      }
+    }
+
+    _lastCursorCellIndex = _paintCursorIfVisible(out);
+    _lastComposedRevision = remote.renderRevision;
+    return true;
+  }
+
+  void _copyResolvedSpan(tui.Buffer out, tui.Buffer src, int start, int len) {
+    _copyResolvedCells(
+      out: out,
+      dstOffset: start,
+      copyCols: len,
+      srcChars: src.characters,
+      srcAttrs: src.attributes,
+      srcStartCell: start,
+    );
+    out.copyCellAuxRangeFrom(src, start, start, len);
+  }
+
+  void _populateRows(
+    tui.Buffer out,
+    tui.Buffer src,
+    ScrollbackWindowData sbWin,
+  ) {
+    final total = sbWin.totalLines;
+    final topVirtual = math.max(0, total - _scrollOffsetLines);
+    final sbCount = math.max(0, math.min(out.height, total - topVirtual));
+    final sbRows = sbCount > 0
+        ? port.readScrollbackSlice(sbWin.oldestLine + topVirtual, sbCount)
+        : const <ScrollbackLine?>[];
+
+    for (var screenY = 0; screenY < out.height; screenY++) {
+      if (screenY < sbCount) {
+        final line = sbRows[screenY];
+        if (line != null) {
+          _copyScrollbackRow(out, screenY, line);
+        } else {
+          _clearScreenRow(out, screenY);
+        }
+      } else {
+        final liveY = topVirtual + screenY - total;
+        if (liveY >= 0 && liveY < src.height) {
+          _copyLiveRow(out, screenY, src, liveY);
+        } else {
+          _clearScreenRow(out, screenY);
+        }
+      }
+    }
+  }
+
+  void _clearScreenRow(tui.Buffer out, int screenY) {
+    final start = screenY * out.width;
+    final end = start + out.width;
+    out.characters.fillRange(start, end, ' ');
+    out.attributes.fillRange(start * 3, end * 3, 0);
+    out.clearCellAuxRange(start, end);
+  }
+
+  void _copyLiveRow(tui.Buffer out, int screenY, tui.Buffer src, int liveY) {
+    final copyCols = math.min(out.width, src.width);
+    final dstOffset = screenY * out.width;
+    final srcOffset = liveY * src.width;
+    _copyResolvedCells(
+      out: out,
+      dstOffset: dstOffset,
+      copyCols: copyCols,
+      srcChars: src.characters,
+      srcAttrs: src.attributes,
+      srcStartCell: srcOffset,
+    );
+    out.clearCellAuxRange(dstOffset, dstOffset + out.width);
+    if (copyCols > 0) {
+      out.copyCellAuxRangeFrom(src, dstOffset, srcOffset, copyCols);
+    }
+    _fillRowTailBlank(out, dstOffset, copyCols);
+  }
+
+  void _copyScrollbackRow(tui.Buffer out, int screenY, ScrollbackLine line) {
+    final copyCols = math.min(out.width, line.characters.length);
+    final dstOffset = screenY * out.width;
+    _copyResolvedCells(
+      out: out,
+      dstOffset: dstOffset,
+      copyCols: copyCols,
+      srcChars: line.characters,
+      srcAttrs: line.attributes,
+      srcStartCell: 0,
+    );
+    out.clearCellAuxRange(dstOffset, dstOffset + out.width);
+    for (var col = 0; col < copyCols; col++) {
+      final ul = line.underlineColors?[col] ?? 0;
+      if (ul != 0) out.setUnderlineColorAt(dstOffset + col, ul);
+      final uri = line.uris?[col];
+      if (uri != null && uri.isNotEmpty) {
+        out.setUriAt(dstOffset + col, uri);
+      }
+    }
+    _fillRowTailBlank(out, dstOffset, copyCols);
+  }
+
+  void _fillRowTailBlank(tui.Buffer out, int dstOffset, int copyCols) {
+    if (copyCols >= out.width) return;
+    final tailStart = dstOffset + copyCols;
+    final tailEnd = dstOffset + out.width;
+    out.characters.fillRange(tailStart, tailEnd, ' ');
+    out.attributes.fillRange(tailStart * 3, tailEnd * 3, 0);
+  }
+
+  void _copyResolvedCells({
+    required tui.Buffer out,
+    required int dstOffset,
+    required int copyCols,
+    required List<String> srcChars,
+    required Uint32List srcAttrs,
+    required int srcStartCell,
+  }) {
+    final outChars = out.characters;
+    final outAttrs = out.attributes;
+    for (var col = 0; col < copyCols; col++) {
+      final srcIdx = srcStartCell + col;
+      final dstIdx = dstOffset + col;
+      final ch = srcChars[srcIdx];
+      outChars[dstIdx] = ch;
+      final sBase = srcIdx * 3;
+      _colorResolver.resolveCellInto(
+        rawFg: srcAttrs[sBase],
+        rawBg: srcAttrs[sBase + 1],
+        modifiers: srcAttrs[sBase + 2] & ~tui.Modifier.transparent,
+        grapheme: ch,
+        outAttributes: outAttrs,
+        attrOffset: dstIdx * 3,
+      );
+    }
+  }
+
+  int _paintCursorIfVisible(tui.Buffer out) {
+    final cursor = port.cursor;
+    if (!cursor.visible || !_focused || out.width <= 0 || out.height <= 0) {
+      return -1;
+    }
+    final cx = cursor.x.clamp(0, out.width - 1);
+    final cy = cursor.y.clamp(0, out.height - 1);
+    final cellIdx = cy * out.width + cx;
+    final base = cellIdx * 3;
+    final useInverse =
+        _colorResolver.theme.id == 'termui_dark' &&
+        _colorResolver.settings.customOverrides.cursorColor == null;
+    if (useInverse) {
+      out.attributes[base + 2] ^= tui.Modifier.reverse;
+      return cellIdx;
+    }
+    final (cursorColor, cursorTextColor) = _colorResolver.resolveCursorColors(
+      cellFg: out.attributes[base],
+      cellBg: out.attributes[base + 1],
+    );
+    out.attributes[base] = cursorTextColor;
+    out.attributes[base + 1] = cursorColor;
+    out.attributes[base + 2] &= ~tui.Modifier.reverse;
+    return cellIdx;
+  }
+
+  void _propagateScrolledKittyMetadata(tui.Buffer out, tui.Buffer src) {
+    final paneRegistry =
+        remotePort?.slot.kittyRegistry ??
+        (src.width > 0 && src.height > 0
+            ? src.lookupKittyRegistry(0, 0)
+            : null);
+    if (paneRegistry != null &&
+        !identical(paneRegistry, tui.KittyImageRegistry.global)) {
+      out.registerKittyRegistry(
+        tui.Rect(0, 0, out.width, out.height),
+        paneRegistry,
+      );
+    }
+  }
+
+  void _paintScrollbarThumb(tui.Buffer out, int totalLines) {
+    if (out.width < 2 || out.height < 1 || totalLines <= 0) return;
+    final h = out.height;
+    final thumbH = math.max(1, (h * h / (totalLines + h)).round()).clamp(1, h);
+    final maxTop = math.max(0, h - thumbH);
+    final top =
+        ((totalLines - _scrollOffsetLines) * maxTop / math.max(1, totalLines))
+            .round()
+            .clamp(0, maxTop);
+    final x = out.width - 1;
+    for (var y = top; y < top + thumbH; y++) {
+      final idx = y * out.width + x;
+      out.characters[idx] = '▐';
+      out.attributes[idx * 3] = 0xFF7B8FA6;
+      out.attributes[idx * 3 + 2] = tui.Modifier.none;
+      out.clearCellAuxRange(idx, idx + 1);
+    }
+  }
+
+  /// Detaches listeners and cancels pending resize timers without necessarily
+  /// disposing [localHost] (caller owns pane teardown order).
+  Future<void> dispose({bool disposePort = true}) async {
+    if (_disposed) return;
+    _disposed = true;
+    _onBell = null;
+    _onAudio = null;
+    _onTitleChanged = null;
+    _onClipboard = null;
+    _onExited = null;
+    _onShareChanged = null;
+    _resizeTimer?.cancel();
+    _resizeTimer = null;
+    await _shareSub?.cancel();
+    _shareSub = null;
+    port.removeListener(_handlePortChange);
+    port.removeBellListener(_handleBell);
+    port.removeAudioListener(_handleAudio);
+    port.removeTitleListener(_handleTitle);
+    port.removeClipboardListener(_handleClipboard);
+    _bufferListenable?.dispose();
+    _visualNotifier.dispose();
+    if (disposePort) {
+      if (localHost != null) {
+        await localHost!.dispose();
+      } else {
+        await port.dispose();
+      }
+    }
+  }
+}
+
+final class _PaneBufferListenable extends ChangeNotifier
+    implements ValueListenable<tui.Buffer> {
+  final ChangeNotifier _source;
+  final tui.Buffer Function() _read;
+
+  _PaneBufferListenable(this._source, this._read) {
+    _source.addListener(notifyListeners);
+  }
+
+  @override
+  tui.Buffer get value => _read();
+
+  @override
+  void dispose() {
+    _source.removeListener(notifyListeners);
+    super.dispose();
+  }
+}

@@ -1,0 +1,41 @@
+name: fterm
+description: Flutter web and native desktop monospace terminal client and mux for TermUI PTY casting.
+version: 0.1.0+1
+publish_to: none
+resolution: workspace
+
+environment:
+  sdk: ">=3.11.0 <4.0.0"
+  flutter: ">=3.44.0"
+
+dependencies:
+  clock: ^1.1.2
+  flutter:
+    sdk: flutter
+  material_ui: ^1.3.0
+  path: ^1.9.1
+  stream_channel: ^2.1.4
+  termui: ^0.16.0
+  termui_audio_flutter: ^0.4.0
+  termui_cast_client_core: any
+  termui_cast_protocol: any
+  termui_caster_cli: any
+  termui_flutter: ^0.12.1
+  termui_pty: ^0.12.0
+  web: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  termui_cast_server: any
+  termui_test: ^0.4.5
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: Cascadia Mono
+      fonts:
+        - asset: fonts/CascadiaMonoPL.ttf
+    - family: MesloLGS NF
+      fonts:
+        - asset: fonts/MesloLGS_NF_Regular.ttf
