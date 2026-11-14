@@ -1,7 +1,3 @@
-import 'dart:io';
+import 'termui_cast_server.dart' as cli;
 
-import 'package:termui_cast_server/termui_cast_server.dart';
-
-Future<void> main(List<String> args) async {
-  exitCode = await runServerCli(args);
-}
+Future<void> main(List<String> args) => cli.main(args);

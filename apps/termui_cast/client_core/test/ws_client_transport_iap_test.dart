@@ -35,8 +35,12 @@ w4exRE3P94LpwktT6JM3sijtRxSUJM5sfrP/nuLlt0ybG+f2ZAfvG8sO
 -----END PRIVATE KEY-----
 ''';
 
-const String _loopbackPinSha256 =
-    '5e6b75f8fd8e0d30efe0c22865759e235ccc2bf2d86d6855fa72c513fd8cdfbb';
+final class _TrustLoopbackCertHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      super.createHttpClient(context)
+        ..badCertificateCallback = (_, host, _) => host == '127.0.0.1';
+}
 
 void main() {
   group('WsClientTransport Cloud Run IAP bearer integration', () {
@@ -83,7 +87,7 @@ void main() {
 
     test(
       'attaches refreshed Authorization: Bearer headers over wss:// and recovers viewer token via reconnect',
-      () async {
+      () => HttpOverrides.runWithHttpOverrides(() async {
         final seenAuthHeaders = <String?>[];
         final seenViewerTokens = <String>[];
         final server = await _bindMockIapTlsRelay(
@@ -98,7 +102,6 @@ void main() {
         final transport = WsClientTransport(
           serverUri: uri,
           token: 'wrong-viewer-token',
-          tlsPinSha256: _loopbackPinSha256,
           iapTokenProvider: () async => 'iap-jwt-${++mintCount}',
         );
         final repository = CastClientRepository(
@@ -128,12 +131,12 @@ void main() {
         check(
           seenViewerTokens,
         ).deepEquals(['wrong-viewer-token', 'viewer-secret']);
-      },
+      }, _TrustLoopbackCertHttpOverrides()),
     );
 
     test(
       'rejects blank IAP tokens and retries transient provider failures via repository backoff',
-      () async {
+      () => HttpOverrides.runWithHttpOverrides(() async {
         final seenHeaders = <String?>[];
         final server = await _bindMockIapTlsRelay(
           expectedViewerToken: 'ok',
@@ -146,7 +149,6 @@ void main() {
         final blankTransport = WsClientTransport(
           serverUri: uri,
           token: 'ok',
-          tlsPinSha256: _loopbackPinSha256,
           iapTokenProvider: () async => '   ',
         );
         addTearDown(blankTransport.close);
@@ -156,7 +158,6 @@ void main() {
         final transientTransport = WsClientTransport(
           serverUri: uri,
           token: 'ok',
-          tlsPinSha256: _loopbackPinSha256,
           iapTokenProvider: () async {
             attempt++;
             if (attempt == 1) {
@@ -178,7 +179,7 @@ void main() {
         await _waitFor(() => received.any((m) => m is AuthAcceptedFrame));
         check(attempt).equals(2);
         check(seenHeaders).deepEquals(['Bearer iap-recovered']);
-      },
+      }, _TrustLoopbackCertHttpOverrides()),
     );
   });
 

@@ -39,9 +39,6 @@ w4exRE3P94LpwktT6JM3sijtRxSUJM5sfrP/nuLlt0ybG+f2ZAfvG8sO
 -----END PRIVATE KEY-----
 ''';
 
-const String _testPinSha256 =
-    '5e6b75f8fd8e0d30efe0c22865759e235ccc2bf2d86d6855fa72c513fd8cdfbb';
-
 const String _testRsaPrivateKeyPem = '''
 -----BEGIN PRIVATE KEY-----
 MIICdQIBADANBgkqhkiG9w0BAQEFAASCAl8wggJbAgEAAoGBAKEbjO9lhv9IyH7m
@@ -60,6 +57,13 @@ AcUmR6oniiNfTkhtwRerwKrdqSbSjEbxlevwqqQnM1+Kl1vKC0Tyy8WM5yVuQkAJ
 EwFSx/7Q3CSd
 -----END PRIVATE KEY-----
 ''';
+
+final class _TrustLoopbackCertHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      super.createHttpClient(context)
+        ..badCertificateCallback = (_, host, _) => host == '127.0.0.1';
+}
 
 final class _ThrowingStreamSink implements StreamSink<Uint8List> {
   int sentCount = 0;
@@ -166,8 +170,6 @@ void main() {
         '100',
         '--rows',
         '30',
-        '--tls-pin-sha256',
-        'A' * 64,
         '--',
         '/bin/zsh',
         '-l',
@@ -178,10 +180,6 @@ void main() {
       check(config.title).equals('zsh');
       check(config.initialCols).equals(100);
       check(config.initialRows).equals(30);
-      check(config.tlsPinBytes).isNotNull();
-      check(
-        config.tlsPinBytes!,
-      ).deepEquals(Uint8List.fromList(List<int>.filled(32, 0xaa)));
       check(config.command).deepEquals(['/bin/zsh', '-l']);
 
       final boundary = CasterConfig(
@@ -230,19 +228,6 @@ void main() {
           title: 'sh',
           command: const ['sh'],
         ),
-      ).throws<FormatException>();
-      check(
-        () => CasterConfig.fromArgs(['--tls-pin-sha256', 'b' * 64, '--', 'sh']),
-      ).throws<FormatException>();
-      check(
-        () => CasterConfig.fromArgs([
-          '--server',
-          'wss://127.0.0.1:8420/v1/caster',
-          '--tls-pin-sha256',
-          'not-hex',
-          '--',
-          'sh',
-        ]),
       ).throws<FormatException>();
       check(
         () => CasterConfig(
@@ -966,92 +951,7 @@ void main() {
     );
   });
 
-  group('Default wss:// TLS pinning and live pty2 CLI execution', () {
-    test(
-      'verifies --tls-pin-sha256 against self-signed wss:// server without external openssl',
-      () async {
-        final ctx = SecurityContext()
-          ..useCertificateChainBytes(utf8.encode(_testCertPem))
-          ..usePrivateKeyBytes(utf8.encode(_testKeyPem));
-        final httpServer = await HttpServer.bindSecure(
-          InternetAddress.loopbackIPv4,
-          0,
-          ctx,
-        );
-        addTearDown(() => httpServer.close(force: true));
-
-        final registered = Completer<RegisterSessionFrame>();
-        httpServer.listen((req) async {
-          if (!WebSocketTransformer.isUpgradeRequest(req)) {
-            req.response.statusCode = HttpStatus.ok;
-            await req.response.close();
-            return;
-          }
-          final ws = await WebSocketTransformer.upgrade(req);
-          ws.listen((raw) {
-            final msg = BufferFrameCodec.decode(
-              Uint8List.fromList(raw as List<int>),
-            );
-            if (msg is AuthFrame) {
-              ws.add(
-                BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
-              );
-            } else if (msg is RegisterSessionFrame && !registered.isCompleted) {
-              registered.complete(msg);
-            }
-          });
-        });
-
-        final serverUri = Uri.parse(
-          'wss://127.0.0.1:${httpServer.port}/v1/caster',
-        );
-
-        // Mismatched pin fails handshake and enters reconnectBackoff.
-        final badPty = _FakePtySession();
-        final badFailureLogged = Completer<void>();
-        final badService = CasterService(
-          config: CasterConfig(
-            serverUri: serverUri,
-            sessionId: const SessionId('bad-pin'),
-            title: 'bad',
-            tlsPinSha256: '0' * 64,
-            command: const ['sh'],
-          ),
-          pty: badPty,
-          onLog: (line) {
-            if (line.contains('failed') && !badFailureLogged.isCompleted) {
-              badFailureLogged.complete();
-            }
-          },
-          baseReconnectDelay: const Duration(seconds: 5),
-        );
-        await badService.start();
-        await badFailureLogged.future.timeout(const Duration(seconds: 3));
-        await pumpEventQueue();
-        check(
-          badService.stateMachine.state,
-        ).equals(CasterLifecycleState.reconnectBackoff);
-        await badService.stop(killPty: true);
-
-        // Matching pin connects, authenticates, and registers over wss://!
-        final goodPty = _FakePtySession();
-        final goodService = CasterService(
-          config: CasterConfig(
-            serverUri: serverUri,
-            sessionId: const SessionId('good-pin'),
-            title: 'good',
-            tlsPinSha256: _testPinSha256,
-            command: const ['sh'],
-          ),
-          pty: goodPty,
-        );
-        await goodService.start();
-        final reg = await registered.future.timeout(const Duration(seconds: 3));
-        check(reg.sessionId).equals(const SessionId('good-pin'));
-        await goodService.stop(killPty: true);
-      },
-    );
-
+  group('Live pty2 CLI execution', () {
     test(
       'runCasterCli casts a real pty2 child process and returns exit code 0',
       () async {
@@ -1655,20 +1555,23 @@ Future<void> main() async {
             token: 'app-tok',
             sessionId: const SessionId('iap-sess'),
             title: 'iap',
-            tlsPinSha256: _testPinSha256,
             iapKeyFilePath: keyFile.path,
             command: const ['sh'],
           ),
           pty: pty,
         );
-        await service.start();
-        final reg = await registered.future.timeout(const Duration(seconds: 3));
-        check(reg.sessionId).equals(const SessionId('iap-sess'));
-        check(authHeaders.length).equals(1);
-        check(authHeaders.single).isNotNull();
-        check(authHeaders.single!).startsWith('Bearer eyJ');
-        await pty.finish(0);
-        check(await service.done).equals(0);
+        await HttpOverrides.runWithHttpOverrides(() async {
+          await service.start();
+          final reg = await registered.future.timeout(
+            const Duration(seconds: 3),
+          );
+          check(reg.sessionId).equals(const SessionId('iap-sess'));
+          check(authHeaders.length).equals(1);
+          check(authHeaders.single).isNotNull();
+          check(authHeaders.single!).startsWith('Bearer eyJ');
+          await pty.finish(0);
+          check(await service.done).equals(0);
+        }, _TrustLoopbackCertHttpOverrides());
 
         // 4. Pure-Dart RS256 signing via --iap-key-file / TERMUI_CAST_IAP_KEY_FILE without gcloud,
         //    plus CLI-over-env precedence and mutual exclusion.
@@ -2649,8 +2552,8 @@ Future<void> main() async {
     );
 
     test(
-      'default HTTP HEAD /v1/caster revision prober over wss:// with TLS pinning and IAP JWT detects server revision rollout',
-      () async {
+      'default HTTP HEAD /v1/caster revision prober over wss:// with IAP JWT detects server revision rollout',
+      () => HttpOverrides.runWithHttpOverrides(() async {
         final ctx = SecurityContext()
           ..useCertificateChainBytes(utf8.encode(_testCertPem))
           ..usePrivateKeyBytes(utf8.encode(_testKeyPem));
@@ -2711,7 +2614,6 @@ Future<void> main() async {
             token: 'tok',
             sessionId: const SessionId('live-rev-wss'),
             title: 'zsh',
-            tlsPinSha256: _testPinSha256,
             command: const ['zsh'],
           ),
           pty: pty,
@@ -2734,7 +2636,7 @@ Future<void> main() async {
         servedRevision = 'rev-2';
         await secondUpgradeDone.future.timeout(const Duration(seconds: 3));
         check(wsUpgrades).equals(2);
-      },
+      }, _TrustLoopbackCertHttpOverrides()),
     );
 
     test(

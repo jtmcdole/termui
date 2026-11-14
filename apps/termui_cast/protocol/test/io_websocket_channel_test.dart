@@ -13,30 +13,6 @@ import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol_io.dart';
 import 'package:test/test.dart';
 
-const String _testCertPem = '''
------BEGIN CERTIFICATE-----
-MIIBXjCCAQSgAwIBAgIULU3zm1zY44xP1dipeoCjSC/8K70wCgYIKoZIzj0EAwIw
-FDESMBAGA1UEAwwJMTI3LjAuMC4xMCAXDTI2MTAzMTA0MDU0M1oYDzIxMjYxMDA3
-MDQwNTQzWjAUMRIwEAYDVQQDDAkxMjcuMC4wLjEwWTATBgcqhkjOPQIBBggqhkjO
-PQMBBwNCAAT6yG8zLGFj+MjDuYRd1ADtqLt5rTI8w4exRE3P94LpwktT6JM3sijt
-RxSUJM5sfrP/nuLlt0ybG+f2ZAfvG8sOozIwMDAdBgNVHQ4EFgQUKyz+9Glq20Rm
-nJ0YWXDYbbbE1d4wDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiEA
-uYj8rkQ0YjvzlQEAK+n0RKl/u3RajZVX6AegRkn32rQCIHjGmHCbsMIbqGi+tuMy
-Kd7O/JigQBUF35okHmv7/y+N
------END CERTIFICATE-----
-''';
-
-const String _testKeyPem = '''
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcnEPuDznhktG/80D
-VI1RW5oy4n+z93IGlv9cLtYJuBOhRANCAAT6yG8zLGFj+MjDuYRd1ADtqLt5rTI8
-w4exRE3P94LpwktT6JM3sijtRxSUJM5sfrP/nuLlt0ybG+f2ZAfvG8sO
------END PRIVATE KEY-----
-''';
-
-const String _testPinSha256 =
-    '5e6b75f8fd8e0d30efe0c22865759e235ccc2bf2d86d6855fa72c513fd8cdfbb';
-
 void main() {
   group('io_websocket_channel', () {
     test(
@@ -134,55 +110,6 @@ void main() {
         }
         await closedCompleter.future.timeout(const Duration(seconds: 3));
         await clientChan.sink.done;
-      },
-    );
-
-    test(
-      'verifies DER SHA-256 certificate pin over wss:// without external openssl',
-      () async {
-        final ctx = SecurityContext()
-          ..useCertificateChainBytes(utf8.encode(_testCertPem))
-          ..usePrivateKeyBytes(utf8.encode(_testKeyPem));
-        final httpsServer = await HttpServer.bindSecure(
-          InternetAddress.loopbackIPv4,
-          0,
-          ctx,
-        );
-        addTearDown(() => httpsServer.close(force: true));
-
-        String? observedAuthHeader;
-        httpsServer.listen((req) async {
-          observedAuthHeader = req.headers.value(
-            HttpHeaders.authorizationHeader,
-          );
-          final (:channel, closeWithCode: _) = await upgradeCastWebSocket(req);
-          channel.stream.listen(channel.sink.add);
-        });
-
-        final uri = Uri.parse('wss://127.0.0.1:${httpsServer.port}/ws');
-
-        // Wrong pin fails TLS handshake.
-        await check(
-          connectCastWebSocket(
-            uri,
-            tlsPinSha256: TokenAuthenticator.parseSha256PinHex('0' * 64),
-          ),
-        ).throws<Object>();
-
-        // Matching pin connects, forwards upgrade headers, and echoes binary payload.
-        final chan = await connectCastWebSocket(
-          uri,
-          tlsPinSha256: TokenAuthenticator.parseSha256PinHex(_testPinSha256),
-          headers: const <String, Object>{'Authorization': 'Bearer iap-jwt-1'},
-        );
-        check(observedAuthHeader).equals('Bearer iap-jwt-1');
-        final payload = Uint8List.fromList([1, 2, 3, 4]);
-        chan.sink.add(payload);
-        final echoed = await chan.stream.first.timeout(
-          const Duration(seconds: 3),
-        );
-        check(echoed).deepEquals(payload);
-        await chan.sink.close();
       },
     );
 
@@ -607,16 +534,9 @@ Future<void> _assertRedirectBlocked() async {
     channel.stream.listen((_) {}, onError: (Object _) {});
   });
 
-  final ctx = SecurityContext()
-    ..useCertificateChainBytes(utf8.encode(_testCertPem))
-    ..usePrivateKeyBytes(utf8.encode(_testKeyPem));
-  final tlsRedirector = await HttpServer.bindSecure(
-    InternetAddress.loopbackIPv4,
-    0,
-    ctx,
-  );
-  addTearDown(() => tlsRedirector.close(force: true));
-  tlsRedirector.listen((req) async {
+  final redirector = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  addTearDown(() => redirector.close(force: true));
+  redirector.listen((req) async {
     req.response.statusCode = HttpStatus.found;
     req.response.headers.set(
       HttpHeaders.locationHeader,
@@ -626,10 +546,7 @@ Future<void> _assertRedirectBlocked() async {
   });
 
   await check(
-    connectCastWebSocket(
-      Uri.parse('wss://127.0.0.1:${tlsRedirector.port}/ws'),
-      tlsPinSha256: TokenAuthenticator.parseSha256PinHex(_testPinSha256),
-    ),
+    connectCastWebSocket(Uri.parse('ws://127.0.0.1:${redirector.port}/ws')),
   ).throws<WebSocketException>();
   check(redirectHits).equals(0);
 }

@@ -8,30 +8,6 @@ import 'package:termui_cast_protocol/termui_cast_protocol_io.dart';
 import 'package:termui_cast_server/termui_cast_server.dart';
 import 'package:test/test.dart';
 
-const String _testCertPem = '''
------BEGIN CERTIFICATE-----
-MIIBXjCCAQSgAwIBAgIULU3zm1zY44xP1dipeoCjSC/8K70wCgYIKoZIzj0EAwIw
-FDESMBAGA1UEAwwJMTI3LjAuMC4xMCAXDTI2MTAzMTA0MDU0M1oYDzIxMjYxMDA3
-MDQwNTQzWjAUMRIwEAYDVQQDDAkxMjcuMC4wLjEwWTATBgcqhkjOPQIBBggqhkjO
-PQMBBwNCAAT6yG8zLGFj+MjDuYRd1ADtqLt5rTI8w4exRE3P94LpwktT6JM3sijt
-RxSUJM5sfrP/nuLlt0ybG+f2ZAfvG8sOozIwMDAdBgNVHQ4EFgQUKyz+9Glq20Rm
-nJ0YWXDYbbbE1d4wDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNIADBFAiEA
-uYj8rkQ0YjvzlQEAK+n0RKl/u3RajZVX6AegRkn32rQCIHjGmHCbsMIbqGi+tuMy
-Kd7O/JigQBUF35okHmv7/y+N
------END CERTIFICATE-----
-''';
-
-const String _testKeyPem = '''
------BEGIN PRIVATE KEY-----
-MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgcnEPuDznhktG/80D
-VI1RW5oy4n+z93IGlv9cLtYJuBOhRANCAAT6yG8zLGFj+MjDuYRd1ADtqLt5rTI8
-w4exRE3P94LpwktT6JM3sijtRxSUJM5sfrP/nuLlt0ybG+f2ZAfvG8sO
------END PRIVATE KEY-----
-''';
-
-const String _testPinSha256 =
-    '5e6b75f8fd8e0d30efe0c22865759e235ccc2bf2d86d6855fa72c513fd8cdfbb';
-
 void main() {
   group('ServerConfig and CLI guardrails', () {
     test('rejects non-loopback bind without both caster and client tokens', () {
@@ -48,9 +24,6 @@ void main() {
       ).throws<FormatException>();
 
       check(() => ServerConfig(port: 70000)).throws<FormatException>();
-      check(
-        () => ServerConfig(tlsCertPath: '/tmp/cert.pem'),
-      ).throws<FormatException>();
       check(
         () => ServerConfig.fromArgs(['unexpected']),
       ).throws<FormatException>();
@@ -237,53 +210,6 @@ void main() {
         final rebound = await CastServer.bind(ServerConfig(port: boundPort));
         addTearDown(rebound.close);
         check(rebound.port).equals(boundPort);
-      },
-    );
-
-    test(
-      'binds self-signed wss:// when --tls-cert and --tls-key are configured',
-      () async {
-        final tempDir = await Directory.systemTemp.createTemp('cast_tls_test_');
-        addTearDown(() => tempDir.delete(recursive: true));
-
-        final certPath = '${tempDir.path}/cert.pem';
-        final keyPath = '${tempDir.path}/key.pem';
-        await File(certPath).writeAsString(_testCertPem);
-        await File(keyPath).writeAsString(_testKeyPem);
-
-        final server = await CastServer.bind(
-          ServerConfig(
-            port: 0,
-            casterToken: 'tls-c',
-            clientToken: 'tls-v',
-            tlsCertPath: certPath,
-            tlsKeyPath: keyPath,
-          ),
-        );
-        addTearDown(server.close);
-        check(server.clientUri.scheme).equals('wss');
-
-        final chan = await connectCastWebSocket(
-          server.clientUri,
-          tlsPinSha256: TokenAuthenticator.parseSha256PinHex(_testPinSha256),
-        );
-        addTearDown(() => chan.sink.close());
-
-        final accepted = Completer<AuthAcceptedFrame>();
-        chan.stream.listen((raw) {
-          final msg = BufferFrameCodec.decode(raw);
-          if (msg is AuthAcceptedFrame && !accepted.isCompleted) {
-            accepted.complete(msg);
-          }
-        });
-        chan.sink.add(
-          BufferFrameCodec.encode(
-            const AuthFrame(role: .client, token: 'tls-v'),
-          ),
-        );
-
-        final frame = await accepted.future.timeout(const Duration(seconds: 3));
-        check(frame.role).equals(CastRole.client);
       },
     );
 
@@ -617,26 +543,7 @@ void _registerBackpressureAndOriginTests() {
         ], requestHostHeader: 'cast.corp.example:8420'),
       ).isTrue();
 
-      final tlsCfg = ServerConfig(
-        host: InternetAddress.anyIPv4,
-        port: 8420,
-        casterToken: 'c-tok',
-        clientToken: 'v-tok',
-        tlsCertPath: '/tmp/cert.pem',
-        tlsKeyPath: '/tmp/key.pem',
-      );
-      check(
-        tlsCfg.isOriginAllowed(const [
-          'http://cast.corp.example:8420',
-        ], requestHostHeader: 'cast.corp.example:8420'),
-      ).isFalse();
-      check(
-        tlsCfg.isOriginAllowed(const [
-          'https://cast.corp.example:8420',
-        ], requestHostHeader: 'cast.corp.example:8420'),
-      ).isTrue();
-
-      // Verify X-Forwarded-Proto: https behind TLS-terminating reverse proxy (isTlsEnabled == false)
+      // Verify X-Forwarded-Proto: https behind TLS-terminating reverse proxy
       // rejects http:// Origin and accepts https:// Origin on same-host match.
       check(
         nonLoopbackCfg.isOriginAllowed(

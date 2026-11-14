@@ -64,9 +64,6 @@ final class CasterConfig {
   /// Terminal color scheme polarity (`dark` or `light`) for query responses.
   final TerminalBrightness colorScheme;
 
-  /// Pre-parsed 32-byte SHA-256 DER certificate pin for `wss://`.
-  final Uint8List? tlsPinBytes;
-
   /// Optional Google Cloud service account email used to sign IAP bearer JWTs.
   final String? iapServiceAccount;
 
@@ -102,7 +99,6 @@ final class CasterConfig {
     this.initialRows = 24,
     this.maxScrollbackLines = defaultScrollbackLines,
     this.colorScheme = .dark,
-    String? tlsPinSha256,
     String? iapServiceAccount,
     String? iapKeyFilePath,
     IapServiceAccountKey? iapServiceAccountKey,
@@ -113,9 +109,6 @@ final class CasterConfig {
     required List<String> command,
   }) : serverUri = serverUri ?? defaultServerUri,
        title = title.trim(),
-       tlsPinBytes = tlsPinSha256 == null
-           ? null
-           : TokenAuthenticator.parseSha256PinHex(tlsPinSha256),
        iapServiceAccount = _normalizeOptionalString(iapServiceAccount),
        iapKeyFilePath = _normalizeOptionalString(iapKeyFilePath),
        iapServiceAccountKey =
@@ -198,11 +191,6 @@ final class CasterConfig {
   }
 
   void _validateSecurityOptions() {
-    if (tlsPinBytes != null && serverUri.scheme != 'wss') {
-      throw const FormatException(
-        '--tls-pin-sha256 requires a wss:// server URI.',
-      );
-    }
     final iapAccount = iapServiceAccount;
     if (iapAccount != null && iapServiceAccountKey != null) {
       throw const FormatException(
@@ -258,10 +246,6 @@ final class CasterConfig {
         defaultsTo: 'dark',
         help:
             'Terminal color scheme polarity for query responses (dark or light, or \$TERMUI_CAST_COLOR_SCHEME).',
-      )
-      ..addOption(
-        'tls-pin-sha256',
-        help: 'Expected 64-char hex SHA-256 DER digest for self-signed wss://.',
       )
       ..addOption(
         'iap-service-account',
@@ -411,7 +395,6 @@ final class CasterConfig {
       initialRows: rows,
       maxScrollbackLines: maxScrollbackLines,
       colorScheme: colorScheme,
-      tlsPinSha256: results['tls-pin-sha256'] as String?,
       iapServiceAccount: iapAccount,
       iapKeyFilePath: iapKeyFile,
       downloadConPty: downloadConPty,
@@ -847,11 +830,7 @@ final class CasterService {
         );
         headers = <String, Object>{'Authorization': 'Bearer $bearer'};
       }
-      return connectCastWebSocket(
-        config.serverUri,
-        tlsPinSha256: config.tlsPinBytes,
-        headers: headers,
-      );
+      return connectCastWebSocket(config.serverUri, headers: headers);
     };
   }
 
@@ -866,16 +845,11 @@ final class CasterService {
       port: config.serverUri.hasPort ? config.serverUri.port : null,
       path: config.serverUri.path.isEmpty ? '/' : config.serverUri.path,
     );
-    return () => _probeRevisionOverHttp(
-      probeUri,
-      tlsPinSha256: config.tlsPinBytes,
-      tokenProvider: tokenProvider,
-    );
+    return () => _probeRevisionOverHttp(probeUri, tokenProvider: tokenProvider);
   }
 
   static Future<String?> _probeRevisionOverHttp(
     Uri probeUri, {
-    required Uint8List? tlsPinSha256,
     required IapTokenProvider? tokenProvider,
   }) async {
     HttpClient? client;
@@ -883,9 +857,7 @@ final class CasterService {
       final bearer = tokenProvider == null
           ? null
           : await tokenProvider().timeout(const Duration(seconds: 5));
-      final activeClient =
-          createPinnedHttpClient(probeUri, tlsPinSha256: tlsPinSha256) ??
-          HttpClient();
+      final activeClient = HttpClient();
       client = activeClient;
       activeClient.connectionTimeout = const Duration(seconds: 5);
       return await _executeRevisionHeadRequest(

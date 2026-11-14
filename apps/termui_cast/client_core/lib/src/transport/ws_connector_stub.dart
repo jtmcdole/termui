@@ -9,14 +9,8 @@ import 'ws_channel_adapter.dart';
 /// Opens a browser-compatible binary WebSocket channel to [uri].
 Future<StreamChannel<Uint8List>> openPlatformClientWebSocket(
   Uri uri, {
-  Uint8List? tlsPinBytes,
   IapTokenProvider? iapTokenProvider,
 }) async {
-  if (tlsPinBytes != null) {
-    throw UnsupportedError(
-      'Certificate SHA-256 pinning is unsupported in Web browsers.',
-    );
-  }
   if (iapTokenProvider != null) {
     throw UnsupportedError(
       'Cloud Run IAP bearer headers are unsupported in Web browsers.',

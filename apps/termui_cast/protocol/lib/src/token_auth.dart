@@ -45,31 +45,6 @@ final class TokenAuthenticator {
     return diff == 0;
   }
 
-  /// Parses a 64-character hex SHA-256 certificate pin into 32 digest bytes.
-  static Uint8List parseSha256PinHex(String hex) {
-    if (hex.length != 64) {
-      throw const FormatException(
-        '--tls-pin-sha256 must be a 64-character hex SHA-256 digest.',
-      );
-    }
-    final out = Uint8List(32);
-    for (var i = 0; i < 32; i++) {
-      final hi = _hexNibble(hex.codeUnitAt(i * 2));
-      final lo = _hexNibble(hex.codeUnitAt(i * 2 + 1));
-      out[i] = (hi << 4) | lo;
-    }
-    return out;
-  }
-
-  /// Verifies that the SHA-256 digest of [certDer] matches [expectedPinBytes].
-  static bool verifyCertificateDerPin(
-    List<int> certDer,
-    Uint8List expectedPinBytes,
-  ) {
-    final actual = sha256.convert(certDer).bytes;
-    return constantTimeEquals32(expectedPinBytes, actual);
-  }
-
   /// Whether [email] has valid service-account email syntax.
   static bool isValidServiceAccountEmail(String email) =>
       _serviceAccountPattern.hasMatch(email);
@@ -88,15 +63,6 @@ final class TokenAuthenticator {
       path: wsUri.path.isEmpty ? '/' : wsUri.path,
     );
     return '$audienceUri';
-  }
-
-  static int _hexNibble(int unit) {
-    if (unit >= 0x30 && unit <= 0x39) return unit - 0x30;
-    if (unit >= 0x41 && unit <= 0x46) return unit - 0x41 + 10;
-    if (unit >= 0x61 && unit <= 0x66) return unit - 0x61 + 10;
-    throw const FormatException(
-      '--tls-pin-sha256 must be a 64-character hex SHA-256 digest.',
-    );
   }
 
   Uint8List? _expectedDigest(CastRole role) => switch (role) {
