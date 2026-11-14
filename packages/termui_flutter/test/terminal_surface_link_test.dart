@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/termui.dart' as termui;
+// ignore: implementation_imports
+import 'package:termui_flutter/src/rendering/painter.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
 class _RecordingTerminalService implements TerminalService {
@@ -33,6 +35,8 @@ Widget _wrapSurface({
   Listenable? bufferListenable,
   VirtualLineLookup? linkLineLookup,
   void Function(termui.InputEvent)? onInputEvent,
+  HoveredLinkStyler? hoveredLinkStyler,
+  Duration? hoveredLinkAnimationInterval,
   bool mouseTracking = false,
   bool autofocus = true,
   bool enableBuiltinLinkOpen = true,
@@ -51,6 +55,8 @@ Widget _wrapSurface({
           linkLineLookup: linkLineLookup,
           service: service,
           onInputEvent: onInputEvent,
+          hoveredLinkStyler: hoveredLinkStyler,
+          hoveredLinkAnimationInterval: hoveredLinkAnimationInterval,
           mouseTracking: mouseTracking,
           autofocus: autofocus,
           enableBuiltinLinkOpen: enableBuiltinLinkOpen,
@@ -472,6 +478,157 @@ void main() {
         await rightClick(linkPos, withCtrl: true);
         expect(rightPressReleases(), hasLength(2));
         expect(service.openedUrls, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'hovering with Ctrl sets hoveredLink (underlined by default) and ticks custom styler when animation interval is supplied',
+      (tester) async {
+        final service = _RecordingTerminalService();
+        final atlasController = GlyphAtlasController(fontSize: 14.0);
+        addTearDown(atlasController.dispose);
+        final buffer = termui.Buffer(40, 4);
+        buffer.writeString(
+          0,
+          0,
+          'See https://example.com/rainbow now',
+          const termui.Style(),
+        );
+
+        await tester.pumpWidget(
+          _wrapSurface(
+            buffer: buffer,
+            service: service,
+            atlasController: atlasController,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final cellW = atlasController.atlas!.cellWidth;
+        final cellH = atlasController.atlas!.cellHeight;
+        final origin = tester.getTopLeft(find.byType(CustomPaint).last);
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: origin - const Offset(10, 10));
+        await tester.pump();
+        await mouse.moveTo(origin + Offset(cellW * 6.5, cellH * 0.5));
+        await tester.pump();
+
+        var customPaint = tester.widget<CustomPaint>(
+          find.byType(CustomPaint).last,
+        );
+        final painterBefore = customPaint.painter! as TuiAtlasPainter;
+        expect(painterBefore.hoveredLink, isNull);
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+
+        customPaint = tester.widget<CustomPaint>(find.byType(CustomPaint).last);
+        final painterDefault = customPaint.painter! as TuiAtlasPainter;
+        expect(
+          painterDefault.hoveredLink?.uri,
+          equals('https://example.com/rainbow'),
+        );
+        expect(painterDefault.hoveredLinkStyler, isNull);
+
+        // Now supply a client styler + animation interval and verify periodic single-batch ticks.
+        final timestamps = <DateTime>[];
+        await tester.pumpWidget(
+          _wrapSurface(
+            buffer: buffer,
+            service: service,
+            atlasController: atlasController,
+            hoveredLinkAnimationInterval: const Duration(milliseconds: 40),
+            hoveredLinkStyler: (_, count, now, styles) {
+              timestamps.add(now);
+              for (var i = 0; i < count; i++) {
+                styles.setForeground(i, 0xFF112233 + i);
+              }
+            },
+          ),
+        );
+        await tester.pump();
+        final initialCount = timestamps.length;
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(timestamps.length, greaterThan(initialCount));
+
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+
+        customPaint = tester.widget<CustomPaint>(find.byType(CustomPaint).last);
+        final painterReleased = customPaint.painter! as TuiAtlasPainter;
+        expect(painterReleased.hoveredLink, isNull);
+      },
+    );
+
+    testWidgets(
+      'buffer update under resting hover starts and stops hoveredLinkStyler ticker without mouse movement',
+      (tester) async {
+        final service = _RecordingTerminalService();
+        final atlasController = GlyphAtlasController(fontSize: 14.0);
+        addTearDown(atlasController.dispose);
+        final buffer = termui.Buffer(40, 4);
+        buffer.writeString(0, 0, 'Plain text here', const termui.Style());
+        final bufferNotifier = ValueNotifier<int>(0);
+        addTearDown(bufferNotifier.dispose);
+
+        var ticks = 0;
+        await tester.pumpWidget(
+          _wrapSurface(
+            buffer: buffer,
+            bufferListenable: bufferNotifier,
+            service: service,
+            atlasController: atlasController,
+            hoveredLinkAnimationInterval: const Duration(milliseconds: 40),
+            hoveredLinkStyler: (_, count, _, styles) {
+              ticks++;
+              for (var i = 0; i < count; i++) {
+                styles.setForeground(i, 0xFF112233 + i);
+              }
+            },
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final cellW = atlasController.atlas!.cellWidth;
+        final cellH = atlasController.atlas!.cellHeight;
+        final origin = tester.getTopLeft(find.byType(CustomPaint).last);
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: origin - const Offset(10, 10));
+        await tester.pump();
+        await mouse.moveTo(origin + Offset(cellW * 8.5, cellH * 0.5));
+        await tester.pump();
+
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(ticks, equals(0));
+
+        // Mutate buffer so a link appears under resting cursor -> ticker starts.
+        buffer.clear();
+        buffer.writeString(
+          0,
+          0,
+          'See https://example.com/tick now',
+          const termui.Style(),
+        );
+        bufferNotifier.value++;
+        await tester.pump();
+        final ticksOnAppear = ticks;
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(ticks, greaterThan(ticksOnAppear));
+
+        // Clear buffer -> ticker stops cleanly.
+        buffer.clear();
+        bufferNotifier.value++;
+        await tester.pump();
+        final ticksAfterClear = ticks;
+        await tester.pump(const Duration(milliseconds: 120));
+        expect(ticks, equals(ticksAfterClear));
+
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
       },
     );
   });
