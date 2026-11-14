@@ -10,9 +10,9 @@ import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-/// Pure-Dart benchmark measuring `200x60` color-resolved composition, 1-cell and
-/// 1-row delta handling, and `adaptBinaryWebSocketChannel` frame throughput on
-/// the Dart VM and `dart compile wasm`.
+/// Pure-Dart benchmark measuring `200x60` color-resolved buffer copy, 1-cell
+/// and 1-row delta handling, and `adaptBinaryWebSocketChannel` frame throughput
+/// on the Dart VM and `dart compile wasm`.
 Future<void> main() async {
   try {
     const cols = 200;
@@ -27,7 +27,7 @@ Future<void> main() async {
     );
 
     var sinkChecksum = 0;
-    final fullComposeUs = _benchFullCompose(
+    final fullComposeUs = _benchFullResolve(
       slot,
       cols,
       rows,
@@ -35,7 +35,7 @@ Future<void> main() async {
       (buf) => sinkChecksum ^=
           buf.attributes[0] ^ buf.attributes[buf.attributes.length - 1],
     );
-    final oneCellUs = await _benchDeltaCompose(
+    final oneCellUs = await _benchDeltaResolve(
       slot,
       cols,
       rows,
@@ -43,9 +43,9 @@ Future<void> main() async {
       cellCount: 1,
       iterations: 300,
       startSeq: 2,
-      onComposed: (buf) => sinkChecksum ^= buf.attributes[0],
+      onResolved: (buf) => sinkChecksum ^= buf.attributes[0],
     );
-    final oneRowUs = await _benchDeltaCompose(
+    final oneRowUs = await _benchDeltaResolve(
       slot,
       cols,
       rows,
@@ -53,7 +53,7 @@ Future<void> main() async {
       cellCount: cols,
       iterations: 200,
       startSeq: 302,
-      onComposed: (buf) => sinkChecksum ^= buf.attributes[0],
+      onResolved: (buf) => sinkChecksum ^= buf.attributes[0],
     );
     final wsThroughputUs = await _benchWsChannelAdapter(frameCount: 1000);
 
@@ -64,9 +64,9 @@ Future<void> main() async {
 
     print(
       'web_pipeline_benchmark (200x60): '
-      'fullCompose=${fullComposeUs.toStringAsFixed(1)}us/op, '
-      'oneCellDeltaCompose=${oneCellUs.toStringAsFixed(1)}us/op, '
-      'oneRowDeltaCompose=${oneRowUs.toStringAsFixed(1)}us/op, '
+      'fullResolve=${fullComposeUs.toStringAsFixed(1)}us/op, '
+      'oneCellDeltaResolve=${oneCellUs.toStringAsFixed(1)}us/op, '
+      'oneRowDeltaResolve=${oneRowUs.toStringAsFixed(1)}us/op, '
       'wsAdapter1000Frames=${wsThroughputUs.toStringAsFixed(1)}us/1000frames '
       '(${(wsThroughputUs / 1000).toStringAsFixed(3)}us/frame)',
     );
@@ -74,6 +74,34 @@ Future<void> main() async {
     print('BENCH_ERROR: $e\n$st');
     rethrow;
   }
+}
+
+Buffer _resolveSlotBuffer(
+  SessionSlot slot,
+  int cols,
+  int rows,
+  TerminalColorResolver resolver,
+) {
+  final src = slot.buffer;
+  if (src == null) return Buffer.blank(cols, rows);
+  final out = Buffer.blank(src.width, src.height);
+  final total = src.width * src.height;
+  final srcChars = src.characters;
+  final srcAttrs = src.attributes;
+  final outAttrs = out.attributes;
+  out.characters.setRange(0, total, srcChars, 0);
+  for (var i = 0; i < total; i++) {
+    final base = i * 3;
+    resolver.resolveCellInto(
+      rawFg: srcAttrs[base],
+      rawBg: srcAttrs[base + 1],
+      modifiers: srcAttrs[base + 2],
+      grapheme: srcChars[i],
+      outAttributes: outAttrs,
+      attrOffset: base,
+    );
+  }
+  return out;
 }
 
 Future<SessionSlot> _createHydratedSlot(int cols, int rows) async {
@@ -125,52 +153,26 @@ Future<SessionSlot> _createHydratedSlot(int cols, int rows) async {
   return slot;
 }
 
-double _benchFullCompose(
+double _benchFullResolve(
   SessionSlot slot,
   int cols,
   int rows,
   TerminalColorResolver resolver,
-  void Function(Buffer) onComposed,
+  void Function(Buffer) onResolved,
 ) {
   for (var i = 0; i < 20; i++) {
-    onComposed(
-      WorkspaceBufferCompositor.compose(
-        slot: slot,
-        viewportCols: cols,
-        viewportRows: rows,
-        hoveredLink: null,
-        activeSelection: null,
-        theme: resolver.theme,
-        themeSettings: resolver.settings,
-        colorResolver: resolver,
-        nowMs: 0,
-        hiddenClipboardNotice: null,
-      ),
-    );
+    onResolved(_resolveSlotBuffer(slot, cols, rows, resolver));
   }
   const iterations = 200;
   final sw = Stopwatch()..start();
   for (var i = 0; i < iterations; i++) {
-    onComposed(
-      WorkspaceBufferCompositor.compose(
-        slot: slot,
-        viewportCols: cols,
-        viewportRows: rows,
-        hoveredLink: null,
-        activeSelection: null,
-        theme: resolver.theme,
-        themeSettings: resolver.settings,
-        colorResolver: resolver,
-        nowMs: 0,
-        hiddenClipboardNotice: null,
-      ),
-    );
+    onResolved(_resolveSlotBuffer(slot, cols, rows, resolver));
   }
   sw.stop();
   return sw.elapsedMicroseconds / iterations;
 }
 
-Future<double> _benchDeltaCompose(
+Future<double> _benchDeltaResolve(
   SessionSlot slot,
   int cols,
   int rows,
@@ -178,7 +180,7 @@ Future<double> _benchDeltaCompose(
   required int cellCount,
   required int iterations,
   required int startSeq,
-  required void Function(Buffer) onComposed,
+  required void Function(Buffer) onResolved,
 }) async {
   final chars = List<String>.filled(cellCount, 'X');
   final attrs = Uint32List(cellCount * 3);
@@ -192,20 +194,7 @@ Future<double> _benchDeltaCompose(
     final delta = _buildDelta(cols, rows, seq - 1, seq, chars, attrs, i % cols);
     seq++;
     await slot.machine.handle(.delta, delta);
-    onComposed(
-      WorkspaceBufferCompositor.compose(
-        slot: slot,
-        viewportCols: cols,
-        viewportRows: rows,
-        hoveredLink: null,
-        activeSelection: null,
-        theme: resolver.theme,
-        themeSettings: resolver.settings,
-        colorResolver: resolver,
-        nowMs: 0,
-        hiddenClipboardNotice: null,
-      ),
-    );
+    onResolved(_resolveSlotBuffer(slot, cols, rows, resolver));
   }
 
   final sw = Stopwatch()..start();
@@ -213,20 +202,7 @@ Future<double> _benchDeltaCompose(
     final delta = _buildDelta(cols, rows, seq - 1, seq, chars, attrs, i % cols);
     seq++;
     await slot.machine.handle(.delta, delta);
-    onComposed(
-      WorkspaceBufferCompositor.compose(
-        slot: slot,
-        viewportCols: cols,
-        viewportRows: rows,
-        hoveredLink: null,
-        activeSelection: null,
-        theme: resolver.theme,
-        themeSettings: resolver.settings,
-        colorResolver: resolver,
-        nowMs: 0,
-        hiddenClipboardNotice: null,
-      ),
-    );
+    onResolved(_resolveSlotBuffer(slot, cols, rows, resolver));
   }
   sw.stop();
   return sw.elapsedMicroseconds / iterations;
@@ -262,7 +238,6 @@ BufferDelta _buildDelta(
 
 Future<double> _benchWsChannelAdapter({required int frameCount}) async {
   final payload = Uint8List.fromList(List<int>.generate(64, (i) => i & 0xFF));
-  // Warmup
   await _runWsAdapterBatch(payload, 100);
   const batches = 10;
   var totalUs = 0;

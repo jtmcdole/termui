@@ -1,12 +1,8 @@
-import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:checks/checks.dart';
-import 'package:clock/clock.dart';
 import 'package:termui/termui.dart';
-import 'package:termui_cast_client_core/src/session_slot.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
-import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:test/test.dart';
 
 import 'support/fake_three_way_ws_harness.dart';
@@ -14,9 +10,7 @@ import 'support/fake_three_way_ws_harness.dart';
 void main() {
   _defineThemeSettingsTests();
   _defineColorResolverTests();
-  _defineCompositorCursorAndSelectionTests();
-  _defineMultiViewerAndReloadTests();
-  _defineWorkspaceChromeThemeTests();
+  _defineMultiViewerThemeTests();
 }
 
 void _defineThemeSettingsTests() {
@@ -399,199 +393,6 @@ void _defineColorResolverTests() {
   });
 }
 
-SessionSlot _makeTestSlot([String id = 'theme-slot']) => SessionSlot(
-  id: SessionId(id),
-  clock: const Clock(),
-  requestTimeout: const Duration(seconds: 2),
-  onVisualChange: () {},
-  onClearSelection: () {},
-  onRequestKeyframe: () {},
-  onRequestScrollback: (_) {},
-);
-
-void _defineCompositorCursorAndSelectionTests() {
-  group('WorkspaceBufferCompositor.compose themed cursor & selection', () {
-    test(
-      'paints themed normal selection, legible Light Mode box selection (>= 4.5:1), and wide CJK themed block cursor',
-      () {
-        final slot = _makeTestSlot();
-        addTearDown(slot.dispose);
-
-        final src = Buffer.blank(8, 2)
-          ..writeString(0, 0, 'Hello', Style.empty)
-          ..writeString(2, 1, '漢字', Style.empty);
-        slot.buffer = src;
-        slot.cursor = const CursorState(
-          x: 3,
-          y: 1,
-          visible: true,
-          shape: .steadyBlock,
-        );
-
-        const lightTheme = TerminalColorTheme.termuiLight;
-        final normalSelected = WorkspaceBufferCompositor.compose(
-          slot: slot,
-          viewportCols: 8,
-          viewportRows: 2,
-          hoveredLink: null,
-          activeSelection: const TerminalSelection(
-            anchor: Point<int>(0, 0),
-            focus: Point<int>(3, 0),
-          ),
-          theme: lightTheme,
-          themeSettings: const TerminalThemeSettings(appearanceMode: .light),
-          nowMs: 0,
-          hiddenClipboardNotice: null,
-        );
-        check(
-          normalSelected.getBackground(1, 0),
-        ).equals(lightTheme.selectionBackground.argb);
-        check(
-          normalSelected.getForeground(1, 0),
-        ).equals(lightTheme.selectionForeground!.argb);
-
-        for (final col in const [2, 3]) {
-          check(
-            normalSelected.getBackground(col, 1),
-          ).equals(lightTheme.cursorColor.argb);
-          check(
-            normalSelected.getForeground(col, 1),
-          ).equals(lightTheme.cursorTextColor.argb);
-          check(
-            normalSelected.getModifiers(col, 1) & Modifier.reverse,
-          ).equals(0);
-        }
-
-        final boxSelected = WorkspaceBufferCompositor.compose(
-          slot: slot,
-          viewportCols: 8,
-          viewportRows: 2,
-          hoveredLink: null,
-          activeSelection: const TerminalSelection(
-            anchor: Point<int>(0, 0),
-            focus: Point<int>(2, 0),
-            mode: .box,
-          ),
-          theme: lightTheme,
-          themeSettings: const TerminalThemeSettings(appearanceMode: .light),
-          nowMs: 0,
-          hiddenClipboardNotice: null,
-        );
-        final boxFg = Color.argb(boxSelected.getForeground(1, 0));
-        final boxBg = Color.argb(boxSelected.getBackground(1, 0));
-        check(
-          TerminalContrast.contrastRatio(boxFg, boxBg),
-        ).isGreaterOrEqual(4.5);
-      },
-    );
-
-    test(
-      'keeps block cursor high-contrast (>= 4.5:1) on SGR 7 reverse-video status bars across gruvbox_dark, solarized_dark, and termui_light',
-      () {
-        final slot = _makeTestSlot('reverse-cursor-slot');
-        addTearDown(slot.dispose);
-        slot.buffer = _buildReverseStatusBarBuffer();
-
-        for (final preset in const [
-          TerminalColorTheme.gruvboxDark,
-          TerminalColorTheme.solarizedDark,
-          TerminalColorTheme.termuiLight,
-        ]) {
-          _assertReverseStatusBarCursorContrast(slot, preset);
-        }
-      },
-    );
-
-    test(
-      'overriding only ANSI 4 on termui_dark preserves default Modifier.reverse cursor',
-      () {
-        final slot = _makeTestSlot('override-ansi4-slot');
-        addTearDown(slot.dispose);
-        slot.buffer = Buffer.blank(4, 1)..writeString(0, 0, 'dir', Style.empty);
-        slot.cursor = const CursorState(
-          x: 0,
-          y: 0,
-          visible: true,
-          shape: .steadyBlock,
-        );
-
-        final settings = TerminalThemeSettings(
-          appearanceMode: .dark,
-          darkThemeId: 'termui_dark',
-          customOverrides: const CustomPaletteOverrides().withAnsiSlot(
-            4,
-            const Color(0x33, 0x99, 0xFF),
-          ),
-        );
-        final activeTheme = settings.resolveActiveTheme(.dark);
-        final out = WorkspaceBufferCompositor.compose(
-          slot: slot,
-          viewportCols: 4,
-          viewportRows: 1,
-          hoveredLink: null,
-          activeSelection: null,
-          theme: activeTheme,
-          themeSettings: settings,
-          nowMs: 0,
-          hiddenClipboardNotice: null,
-        );
-        check(
-          out.getModifiers(0, 0) & Modifier.reverse,
-        ).equals(Modifier.reverse);
-        check(out.getBackground(0, 0)).equals(0);
-      },
-    );
-  });
-}
-
-Buffer _buildReverseStatusBarBuffer() {
-  final src = Buffer.blank(10, 2);
-  for (var x = 0; x < 10; x++) {
-    src.setAttributes(
-      x,
-      0,
-      char: 'S',
-      fg: 0,
-      bg: 0,
-      modifiers: Modifier.reverse,
-    );
-    src.setAttributes(
-      x,
-      1,
-      char: 'B',
-      fg: const Color.ansi(4).argb,
-      bg: 0,
-      modifiers: Modifier.reverse,
-    );
-  }
-  return src;
-}
-
-void _assertReverseStatusBarCursorContrast(
-  SessionSlot slot,
-  TerminalColorTheme preset,
-) {
-  for (final (row, barBg) in [(0, preset.foreground), (1, preset.ansi[4])]) {
-    slot.cursor = CursorState(x: 2, y: row, visible: true, shape: .steadyBlock);
-    final composed = WorkspaceBufferCompositor.compose(
-      slot: slot,
-      viewportCols: 10,
-      viewportRows: 2,
-      hoveredLink: null,
-      activeSelection: null,
-      theme: preset,
-      themeSettings: const TerminalThemeSettings(),
-      nowMs: 0,
-      hiddenClipboardNotice: null,
-    );
-    final curFg = Color.argb(composed.getForeground(2, row));
-    final curBg = Color.argb(composed.getBackground(2, row));
-    check(composed.getModifiers(2, row) & Modifier.reverse).equals(0);
-    check(TerminalContrast.contrastRatio(curFg, curBg)).isGreaterOrEqual(4.5);
-    check(TerminalContrast.contrastRatio(curBg, barBg)).isGreaterOrEqual(4.5);
-  }
-}
-
 Future<void> _pumpRelay() async {
   for (var i = 0; i < 8; i++) {
     await Future<void>.delayed(const Duration(milliseconds: 15));
@@ -607,10 +408,10 @@ int _findLiveRedRow(Buffer buf) {
   return -1;
 }
 
-void _defineMultiViewerAndReloadTests() {
-  group('Multi-viewer theme isolation & storage reload', () {
+void _defineMultiViewerThemeTests() {
+  group('Multi-viewer TerminalColorResolver isolation', () {
     test(
-      'two simultaneous viewers on one CasterService render solarized_light vs high_contrast_dark across live deltas and ScrollbackChunkFrame rows',
+      'two simultaneous RemoteTerminalPorts on one CasterService resolve solarized_light vs high_contrast_dark across live deltas and scrollback rows',
       () async {
         final harness = FakeThreeWayWsHarness();
         addTearDown(harness.dispose);
@@ -621,29 +422,40 @@ void _defineMultiViewerAndReloadTests() {
           initialCols: 32,
           initialRows: 5,
         );
-        final viewerLight = await harness.connectViewer(
-          initialViewportCols: 32,
-          initialViewportRows: 5,
-          resizeDebounce: Duration.zero,
-        );
-        final viewerHcDark = await harness.connectViewer(
-          initialViewportCols: 32,
-          initialViewportRows: 5,
-          resizeDebounce: Duration.zero,
-        );
+        final viewerLight = await harness.connectViewer();
+        final viewerHcDark = await harness.connectViewer();
 
-        viewerLight.viewModel.updateThemeSettings(
-          const TerminalThemeSettings(
-            appearanceMode: .light,
-            lightThemeId: 'solarized_light',
-          ),
+        final portLight = viewerLight.repository.openTerminalPort(
+          caster.sessionId,
+          initialCols: 32,
+          initialRows: 5,
         );
-        viewerHcDark.viewModel.updateThemeSettings(
-          const TerminalThemeSettings(
-            appearanceMode: .dark,
-            darkThemeId: 'high_contrast_dark',
-            minimumContrast: 7.0,
-          ),
+        final portHcDark = viewerHcDark.repository.openTerminalPort(
+          caster.sessionId,
+          initialCols: 32,
+          initialRows: 5,
+        );
+        addTearDown(() async {
+          await portLight.dispose();
+          await portHcDark.dispose();
+        });
+
+        const lightSettings = TerminalThemeSettings(
+          appearanceMode: .light,
+          lightThemeId: 'solarized_light',
+        );
+        const hcSettings = TerminalThemeSettings(
+          appearanceMode: .dark,
+          darkThemeId: 'high_contrast_dark',
+          minimumContrast: 7.0,
+        );
+        final lightResolver = TerminalColorResolver(
+          theme: lightSettings.resolveActiveTheme(.light),
+          settings: lightSettings,
+        );
+        final hcResolver = TerminalColorResolver(
+          theme: hcSettings.resolveActiveTheme(.dark),
+          settings: hcSettings,
         );
 
         await _pumpRelay();
@@ -658,111 +470,73 @@ void _defineMultiViewerAndReloadTests() {
         );
         await _pumpRelay();
 
-        final liveLight = viewerLight.viewModel.composeActiveBufferWithCursor();
-        final liveHc = viewerHcDark.viewModel.composeActiveBufferWithCursor();
-        final liveRow = _findLiveRedRow(liveLight);
-
+        final liveRow = _findLiveRedRow(portLight.buffer);
         check(liveRow).isGreaterOrEqual(0);
-        check(
-          liveLight.getForeground(0, liveRow),
-        ).equals(TerminalColorTheme.solarizedLight.ansi[1].argb);
-        check(
-          liveHc.getForeground(0, liveRow),
-        ).not((it) => it.equals(liveLight.getForeground(0, liveRow)));
+
+        final (lightFg, _) = lightResolver.resolveCellColors(
+          rawFg: portLight.buffer.getForeground(0, liveRow),
+          rawBg: portLight.buffer.getBackground(0, liveRow),
+          modifiers: portLight.buffer.getModifiers(0, liveRow),
+          grapheme: portLight.buffer.getCharacter(0, liveRow),
+        );
+        final (hcFg, _) = hcResolver.resolveCellColors(
+          rawFg: portHcDark.buffer.getForeground(0, liveRow),
+          rawBg: portHcDark.buffer.getBackground(0, liveRow),
+          modifiers: portHcDark.buffer.getModifiers(0, liveRow),
+          grapheme: portHcDark.buffer.getCharacter(0, liveRow),
+        );
+        check(lightFg).equals(TerminalColorTheme.solarizedLight.ansi[1].argb);
+        check(hcFg).not((it) => it.equals(lightFg));
         check(
           TerminalContrast.contrastRatio(
-            Color.argb(liveHc.getForeground(0, liveRow)),
+            Color.argb(hcFg),
             TerminalColorTheme.highContrastDark.background,
           ),
         ).isGreaterOrEqual(7.0);
 
-        check(liveLight.getForeground(9, liveRow)).equals(0xFF123456);
-        check(liveHc.getForeground(9, liveRow)).equals(0xFF123456);
+        final (lightTrueFg, _) = lightResolver.resolveCellColors(
+          rawFg: portLight.buffer.getForeground(9, liveRow),
+          rawBg: portLight.buffer.getBackground(9, liveRow),
+          modifiers: portLight.buffer.getModifiers(9, liveRow),
+          grapheme: portLight.buffer.getCharacter(9, liveRow),
+        );
+        final (hcTrueFg, _) = hcResolver.resolveCellColors(
+          rawFg: portHcDark.buffer.getForeground(9, liveRow),
+          rawBg: portHcDark.buffer.getBackground(9, liveRow),
+          modifiers: portHcDark.buffer.getModifiers(9, liveRow),
+          grapheme: portHcDark.buffer.getCharacter(9, liveRow),
+        );
+        check(lightTrueFg).equals(0xFF123456);
+        check(hcTrueFg).equals(0xFF123456);
 
-        check(viewerLight.viewModel.scrollActiveBy(5)).isTrue();
-        check(viewerHcDark.viewModel.scrollActiveBy(5)).isTrue();
+        // Fetch primary scrollback rows and resolve their ANSI 4 colors per viewer theme.
+        final win = portLight.scrollbackWindow;
+        check(win.totalLines).isGreaterThan(0);
+        portLight.readScrollbackSlice(0, win.totalLines);
+        portHcDark.readScrollbackSlice(0, win.totalLines);
         await _pumpRelay();
 
-        final sbLight = viewerLight.viewModel.composeActiveBufferWithCursor();
-        final sbHc = viewerHcDark.viewModel.composeActiveBufferWithCursor();
-        check(sbLight.getCharacter(0, 0)).equals('h');
-        check(sbHc.getCharacter(0, 0)).equals('h');
-        check(
-          sbLight.getForeground(0, 0),
-        ).equals(TerminalColorTheme.solarizedLight.ansi[4].argb);
-        check(
-          sbHc.getForeground(0, 0),
-        ).equals(TerminalColorTheme.highContrastDark.ansi[4].argb);
+        final sbLightRow = portLight.scrollbackCache.rowAt(0);
+        final sbHcRow = portHcDark.scrollbackCache.rowAt(0);
+        check(sbLightRow).isNotNull();
+        check(sbHcRow).isNotNull();
+        check(sbLightRow!.characters[0]).equals('h');
+        check(sbHcRow!.characters[0]).equals('h');
+        final (sbLightFg, _) = lightResolver.resolveCellColors(
+          rawFg: sbLightRow.attributes[0],
+          rawBg: sbLightRow.attributes[1],
+          modifiers: sbLightRow.attributes[2],
+          grapheme: sbLightRow.characters[0],
+        );
+        final (sbHcFg, _) = hcResolver.resolveCellColors(
+          rawFg: sbHcRow.attributes[0],
+          rawBg: sbHcRow.attributes[1],
+          modifiers: sbHcRow.attributes[2],
+          grapheme: sbHcRow.characters[0],
+        );
+        check(sbLightFg).equals(TerminalColorTheme.solarizedLight.ansi[4].argb);
+        check(sbHcFg).equals(TerminalColorTheme.highContrastDark.ansi[4].argb);
       },
     );
-
-    test(
-      'CastWorkspaceViewModel caches activeTerminalTheme/colorResolver and reloads settings via onReloadSettings',
-      () async {
-        final harness = FakeThreeWayWsHarness();
-        addTearDown(harness.dispose);
-        final unbacked = await harness.connectViewer(autoConnect: false);
-        check(unbacked.viewModel.canReloadSettings).isFalse();
-        check(unbacked.viewModel.reloadSettingsFromStorage()).isFalse();
-
-        const stored = CastWorkspaceSettings(
-          dockPosition: .left,
-          copyOnSelect: false,
-          debugOverlayEnabled: true,
-          f12ShortcutsEnabled: true,
-          themeSettings: TerminalThemeSettings(
-            appearanceMode: .dark,
-            darkThemeId: 'catppuccin_mocha',
-          ),
-        );
-        final transport = WsClientTransport(
-          token: harness.token,
-          channelFactory: harness.openClientChannel,
-        );
-        final repo = CastClientRepository(transport: transport);
-        final vm = CastWorkspaceViewModel(
-          repository: repo,
-          onReloadSettings: () => stored,
-        );
-        addTearDown(() async {
-          await vm.dispose();
-          await repo.dispose();
-        });
-
-        check(vm.canReloadSettings).isTrue();
-        final firstResolver = vm.colorResolver;
-        check(vm.colorResolver).identicalTo(firstResolver);
-
-        check(vm.reloadSettingsFromStorage()).isTrue();
-        check(vm.dockPosition).equals(DockPosition.left);
-        check(vm.copyOnSelect).isFalse();
-        check(vm.debugOverlayEnabled).isTrue();
-        check(vm.f12ShortcutsEnabled).isTrue();
-        check(vm.activeTerminalTheme.id).equals('catppuccin_mocha');
-        check(vm.clipboardNotice).equals('Settings reloaded from storage');
-        check(vm.colorResolver).not((it) => it.identicalTo(firstResolver));
-      },
-    );
-  });
-}
-
-void _defineWorkspaceChromeThemeTests() {
-  group('WorkspaceChromeTheme presets and scope', () {
-    test('returns exact defaultDark constants for termuiDark preset', () {
-      final chrome = WorkspaceChromeTheme.fromTerminalTheme(
-        TerminalColorTheme.termuiDark,
-      );
-      check(chrome).identicalTo(WorkspaceChromeTheme.defaultDark);
-    });
-
-    test('derives coordinated styles and barrierColor for light preset', () {
-      final chrome = WorkspaceChromeTheme.fromTerminalTheme(
-        TerminalColorTheme.termuiLight,
-      );
-      check(chrome.barrierColor).isNotNull();
-      check(
-        chrome.activeTabStyle.background,
-      ).equals(TerminalColorTheme.termuiLight.cursorColor);
-    });
   });
 }

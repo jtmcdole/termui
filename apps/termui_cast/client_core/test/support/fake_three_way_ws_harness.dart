@@ -4,7 +4,6 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:clock/clock.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
@@ -161,20 +160,10 @@ final class HarnessViewerHandle {
   /// Client repository bound to [transport].
   final CastClientRepository repository;
 
-  /// Workspace view model managing multi-PTY buffers and resize debounce.
-  final CastWorkspaceViewModel viewModel;
+  HarnessViewerHandle({required this.transport, required this.repository});
 
-  HarnessViewerHandle({
-    required this.transport,
-    required this.repository,
-    required this.viewModel,
-  });
-
-  /// Disposes [viewModel] and [repository].
-  Future<void> dispose() async {
-    await viewModel.dispose();
-    await repository.dispose();
-  }
+  /// Disposes [repository].
+  Future<void> dispose() => repository.dispose();
 }
 
 /// In-memory three-way WebSocket harness (`CasterService` <-> `WsRelayHandler` <-> `WsClientTransport`).
@@ -290,28 +279,12 @@ final class FakeThreeWayWsHarness {
   Future<HarnessViewerHandle> connectViewer({
     String? clientToken,
     bool autoConnect = true,
-    Clock? clock,
-    DockPosition initialDockPosition = .top,
-    int initialViewportCols = 80,
-    int initialViewportRows = 23,
-    Duration resizeDebounce = const Duration(milliseconds: 32),
-    int maxRetainedEndedTabs =
-        CastWorkspaceViewModel.defaultMaxRetainedEndedTabs,
   }) async {
     final transport = WsClientTransport(
       token: clientToken ?? token,
       channelFactory: openClientChannel,
     );
     final repository = CastClientRepository(transport: transport);
-    final viewModel = CastWorkspaceViewModel(
-      repository: repository,
-      clock: clock,
-      initialDockPosition: initialDockPosition,
-      initialViewportCols: initialViewportCols,
-      initialViewportRows: initialViewportRows,
-      resizeDebounce: resizeDebounce,
-      maxRetainedEndedTabs: maxRetainedEndedTabs,
-    );
     if (autoConnect) {
       await repository.connect();
     }
@@ -319,7 +292,6 @@ final class FakeThreeWayWsHarness {
     final viewer = HarnessViewerHandle(
       transport: transport,
       repository: repository,
-      viewModel: viewModel,
     );
     _viewers.add(viewer);
     return viewer;
