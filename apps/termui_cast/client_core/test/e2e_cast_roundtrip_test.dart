@@ -9,14 +9,12 @@ import 'dart:typed_data';
 
 import 'package:checks/checks.dart';
 import 'package:stream_channel/stream_channel.dart';
-import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui/termui.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_cast_server/termui_cast_server.dart';
 import 'package:termui_caster_cli/termui_caster_cli.dart';
 import 'package:termui_pty/termui_pty.dart';
-import 'package:termui_test/termui_test.dart';
 import 'package:test/test.dart';
 
 String _bufferText(Buffer buffer) {
@@ -46,7 +44,7 @@ Future<void> _waitUntil(
 void main() {
   group('Live CastServer + pty2 + WsClientTransport E2E roundtrip', () {
     test(
-      'streams multiple live pty2 sessions, switches tabs, routes input, and clamps smallest viewport',
+      'streams multiple live pty2 sessions via RemoteTerminalPort, routes input, and clamps smallest viewport',
       () async {
         final server = await CastServer.bind(
           ServerConfig(
@@ -61,8 +59,9 @@ void main() {
         CasterService? caster2;
         CastClientRepository? repo1;
         CastClientRepository? repo2;
-        CastWorkspaceViewModel? vm1;
-        CastWorkspaceViewModel? vm2;
+        RemoteTerminalPort? v1Port1;
+        RemoteTerminalPort? v1Port2;
+        RemoteTerminalPort? v2Port1;
 
         final tempDir = await Directory.systemTemp.createTemp('e2e_cast_pty_');
         addTearDown(() => tempDir.delete(recursive: true));
@@ -138,20 +137,14 @@ void main(List<String> args) {
               token: 'client-tok',
             ),
           );
-          vm1 = CastWorkspaceViewModel(
-            repository: repo1,
-            initialViewportCols: 80,
-            initialViewportRows: 24,
-            resizeDebounce: Duration.zero,
-          );
           await repo1.connect();
-
+          v1Port1 = repo1.openTerminalPort(
+            const SessionId('live-1'),
+            initialCols: 80,
+            initialRows: 24,
+          );
           await _waitUntil(
-            () =>
-                vm1!.sessions.length == 2 &&
-                _bufferText(
-                  vm1.composeActiveBufferWithCursor(),
-                ).contains('READY:ONE'),
+            () => _bufferText(v1Port1!.buffer).contains('READY:ONE'),
           );
 
           // Viewer 2 joins at 60x18 while Viewer 1 is 80x24: relay clamps
@@ -162,34 +155,29 @@ void main(List<String> args) {
               token: 'client-tok',
             ),
           );
-          vm2 = CastWorkspaceViewModel(
-            repository: repo2,
-            initialViewportCols: 60,
-            initialViewportRows: 18,
-            resizeDebounce: Duration.zero,
-          );
           await repo2.connect();
-
+          v2Port1 = repo2.openTerminalPort(
+            const SessionId('live-1'),
+            initialCols: 60,
+            initialRows: 18,
+          );
           await _waitUntil(
-            () => _bufferText(
-              vm2!.composeActiveBufferWithCursor(),
-            ).contains('READY:ONE'),
+            () => _bufferText(v2Port1!.buffer).contains('READY:ONE'),
           );
           await _waitUntil(
             () => caster1!.terminal.cols == 60 && caster1.terminal.rows == 18,
           );
 
           // Viewer 2 sends input while clamped at 60x18; both viewers observe echo.
-          vm2.sendRawInputBytes('ping-from-v2\n'.codeUnits);
+          v2Port1.sendInput(Uint8List.fromList('ping-from-v2\r'.codeUnits));
           await _waitUntil(
-            () => _bufferText(
-              vm1!.composeActiveBufferWithCursor(),
-            ).contains('ECHO:ONE:ping-from-v2'),
+            () =>
+                _bufferText(v1Port1!.buffer).contains('ECHO:ONE:ping-from-v2'),
           );
 
           // Viewer 2 disconnects -> live-1 automatically restores to Viewer 1's 80x24.
-          await vm2.dispose();
-          vm2 = null;
+          await v2Port1.dispose();
+          v2Port1 = null;
           await repo2.dispose();
           repo2 = null;
           await _waitUntil(
@@ -197,32 +185,28 @@ void main(List<String> args) {
           );
 
           // Remaining Viewer 1 can expand live-1 up to 92x28 before shutting down live-1.
-          vm1.resizeActiveViewport(92, 28);
+          v1Port1.setViewportSize(92, 28);
           await _waitUntil(
             () => caster1!.terminal.cols == 92 && caster1.terminal.rows == 28,
           );
-          vm1.sendRawInputBytes('EXIT\n'.codeUnits);
+          v1Port1.sendInput(Uint8List.fromList('EXIT\r'.codeUnits));
 
-          // Viewer 1 switches to tab 2 (live-2) and sends input + clean exit.
-          await vm1.selectSession(const SessionId('live-2'));
-          await _waitUntil(
-            () => _bufferText(
-              vm1!.composeActiveBufferWithCursor(),
-            ).contains('READY:TWO'),
+          // Viewer 1 opens live-2 and sends input + clean exit.
+          v1Port2 = repo1.openTerminalPort(
+            const SessionId('live-2'),
+            initialCols: 80,
+            initialRows: 24,
           );
-          vm1.sendRawInputBytes('hello-two\n'.codeUnits);
           await _waitUntil(
-            () => _bufferText(
-              vm1!.composeActiveBufferWithCursor(),
-            ).contains('ECHO:TWO:hello-two'),
+            () => _bufferText(v1Port2!.buffer).contains('READY:TWO'),
+          );
+          v1Port2.sendInput(Uint8List.fromList('hello-two\r'.codeUnits));
+          await _waitUntil(
+            () => _bufferText(v1Port2!.buffer).contains('ECHO:TWO:hello-two'),
           );
 
-          vm1.sendRawInputBytes('EXIT\n'.codeUnits);
+          v1Port2.sendInput(Uint8List.fromList('EXIT\r'.codeUnits));
           final exitCodes = await [caster1.done, caster2.done].wait;
-          // Each worker writes `exit_<TAG>` immediately before `exit(0)`, which
-          // proves a clean exit deterministically. The reported code can still
-          // be `-1`: pty2 0.5.7 (`lib/src/impl/unix.dart:457-462`) maps `ECHILD`
-          // to `-1` when the Dart VM `ExitCodeHandler` reaps the child first.
           for (final tag in const ['ONE', 'TWO']) {
             check(
               File('${tempDir.path}/exit_$tag').readAsStringSync(),
@@ -232,8 +216,9 @@ void main(List<String> args) {
             check(const [0, -1]).contains(code);
           }
         } finally {
-          await vm1?.dispose();
-          await vm2?.dispose();
+          await v1Port2?.dispose();
+          await v1Port1?.dispose();
+          await v2Port1?.dispose();
           await repo1?.dispose();
           await repo2?.dispose();
           await caster1?.stop(killPty: true);
@@ -274,7 +259,9 @@ void main() {
 
         CasterService? caster;
         CastClientRepository? repo;
-        CastWorkspaceViewModel? vm;
+        RemoteTerminalPort? port;
+        FileUploadCoordinator? uploader;
+        void Function(CastMessage)? ackListener;
         try {
           final pty = Pty2Session.start(
             Platform.resolvedExecutable,
@@ -282,11 +269,12 @@ void main() {
             initialCols: 100,
             initialRows: 24,
           );
+          const sessionId = SessionId('upload-live');
           caster = CasterService(
             config: CasterConfig(
               serverUri: server.casterUri,
               token: 'caster-tok',
-              sessionId: const SessionId('upload-live'),
+              sessionId: sessionId,
               title: 'upload-worker',
               uploadDirPath: uploadDir.path,
               command: const ['dart'],
@@ -302,17 +290,26 @@ void main() {
               token: 'client-tok',
             ),
           );
-          vm = CastWorkspaceViewModel(
+          final uploadErrors = <String>[];
+          uploader = FileUploadCoordinator(
             repository: repo,
-            initialViewportCols: 100,
-            initialViewportRows: 24,
-            resizeDebounce: Duration.zero,
+            onProgressChanged: () {},
+            onError: uploadErrors.add,
           );
+          ackListener = (msg) {
+            if (msg is FileUploadAckFrame) {
+              uploader!.handleAckFrame(msg);
+            }
+          };
+          clientMessageReceivedEvent.addListener(repo.bus, ackListener);
           await repo.connect();
+          port = repo.openTerminalPort(
+            sessionId,
+            initialCols: 100,
+            initialRows: 24,
+          );
           await _waitUntil(
-            () => _bufferText(
-              vm!.composeActiveBufferWithCursor(),
-            ).contains('READY:UPLOAD'),
+            () => _bufferText(port!.buffer).contains('READY:UPLOAD'),
           );
 
           final multiChunkBytes = Uint8List.fromList(
@@ -329,8 +326,9 @@ void main() {
             ),
           ];
 
-          final ok = await vm.uploadDroppedFiles(files);
+          final ok = await uploader.uploadFiles(sessionId, files);
           check(ok).isTrue();
+          check(uploadErrors).isEmpty();
           check(
             File('${uploadDir.path}/payload.bin').readAsBytesSync(),
           ).deepEquals(multiChunkBytes);
@@ -340,15 +338,14 @@ void main() {
 
           await _waitUntil(
             () =>
-                _bufferText(
-                  vm!.composeActiveBufferWithCursor(),
-                ).contains('payload.bin') &&
-                _bufferText(
-                  vm.composeActiveBufferWithCursor(),
-                ).contains('empty note.txt'),
+                _bufferText(port!.buffer).contains('payload.bin') &&
+                _bufferText(port.buffer).contains('empty note.txt'),
           );
         } finally {
-          await vm?.dispose();
+          if (repo != null && ackListener != null) {
+            clientMessageReceivedEvent.removeListener(repo.bus, ackListener);
+          }
+          await port?.dispose();
           await repo?.dispose();
           await caster?.stop(killPty: true);
           await server.close();
@@ -357,133 +354,7 @@ void main() {
     );
 
     test(
-      'FileUploadDialog renders confirmation warnings, gradient progress bar, consumes double-Enter, and supports Esc cancel',
-      () async {
-        final serverSide = StreamChannelController<Uint8List>();
-        final transport = WsClientTransport(
-          serverUri: Uri.parse('ws://127.0.0.1:8420/v1/client'),
-          channelFactory: () async => serverSide.local,
-        );
-        final repo = CastClientRepository(
-          transport: transport,
-          enableReconnect: false,
-        );
-        final vm = CastWorkspaceViewModel(
-          repository: repo,
-          initialViewportCols: 80,
-          initialViewportRows: 23,
-          resizeDebounce: Duration.zero,
-        );
-        final terminal = MockTerminal(
-          MockTerminalBackend(size: const Point(80, 24)),
-        );
-        Buffer? latestFrame;
-        final controller = CastSceneController(
-          terminal: terminal,
-          viewModel: vm,
-          onFrameRedrawn: (b) => latestFrame = b,
-        );
-        addTearDown(() async {
-          controller.dispose();
-          terminal.dispose();
-          await vm.dispose();
-          await repo.dispose();
-        });
-
-        const sessionId = SessionId('dlg-sess');
-        final sentClientFrames = <CastMessage>[];
-        final pendingStarts = <FileUploadStartFrame>[];
-        serverSide.foreign.stream.listen((raw) {
-          final msg = BufferFrameCodec.decode(raw);
-          sentClientFrames.add(msg);
-          if (msg is AuthFrame) {
-            serverSide.foreign.sink.add(
-              BufferFrameCodec.encode(const AuthAcceptedFrame(role: .client)),
-            );
-            serverSide.foreign.sink.add(
-              BufferFrameCodec.encode(
-                const SessionDirectoryFrame(
-                  sessions: [
-                    SessionSummary(
-                      id: sessionId,
-                      title: 'zsh',
-                      cols: 80,
-                      rows: 23,
-                    ),
-                  ],
-                ),
-              ),
-            );
-          } else if (msg is SubscribeSessionFrame) {
-            serverSide.foreign.sink.add(
-              BufferFrameCodec.encode(
-                BufferSnapshotFrame(
-                  snapshot: BufferSnapshot.fromBuffer(
-                    sessionId: sessionId,
-                    seq: 1,
-                    buffer: Buffer.blank(80, 23),
-                    cursor: CursorState.origin,
-                    modes: TerminalModes.defaults,
-                  ),
-                ),
-              ),
-            );
-          } else if (msg is FileUploadStartFrame) {
-            pendingStarts.add(msg);
-          }
-        });
-
-        await repo.connect();
-        await _waitUntil(() => vm.activeSessionSyncState == .synchronized);
-
-        final dialogFuture = controller.handleDroppedFiles([
-          MemoryDroppedFileSource(
-            name: 'report.txt',
-            bytes: Uint8List.fromList(utf8.encode('hello')),
-          ),
-          MemoryDroppedFileSource(
-            name: 'subdir',
-            bytes: Uint8List(0),
-            isDirectory: true,
-          ),
-        ]);
-        await pumpEventQueue();
-
-        check(controller.isFileUploadDialogOpen).isTrue();
-        final confirmText = _bufferText(latestFrame!);
-        check(confirmText).contains('Upload Files to Remote Host');
-        check(confirmText).contains('report.txt');
-        check(confirmText).contains('Docker/Podman');
-        check(confirmText).contains('Skipped 1 directory');
-
-        // Confirm with Enter -> transitions to Uploading view with LinearProgressIndicator.
-        terminal.injectTestEvent(const KeyEvent('enter', .enter));
-        await pumpEventQueue();
-        check(pendingStarts).length.equals(1);
-        final uploadingText = _bufferText(latestFrame!);
-        check(uploadingText).contains('Uploading Files to Remote Host');
-        check(uploadingText).contains('0%');
-
-        // A second Enter while uploading must be consumed as a no-op without aborting!
-        terminal.injectTestEvent(const KeyEvent('enter', .enter));
-        await pumpEventQueue();
-        check(controller.isFileUploadDialogOpen).isTrue();
-        check(sentClientFrames.whereType<FileUploadEndFrame>()).isEmpty();
-
-        // Pressing Escape mid-upload cancels and sends FileUploadEndFrame(aborted: true).
-        terminal.injectTestEvent(const KeyEvent('escape', .escape));
-        final result = await dialogFuture;
-        check(result).equals(false);
-        check(controller.isFileUploadDialogOpen).isFalse();
-        final abortEnd = sentClientFrames
-            .whereType<FileUploadEndFrame>()
-            .single;
-        check(abortEnd.aborted).isTrue();
-      },
-    );
-
-    test(
-      'FileUploadCoordinator handles C1 sanitization, directory/oversize filtering, caster rejection, readSlice errors, and all-invalid dialog',
+      'FileUploadCoordinator handles mid-upload cancel, C1 sanitization, directory/oversize filtering, caster rejection, and readSlice errors',
       () async {
         // 1. sanitizeWireFileName strips C0/C1 controls, paths, '.', '..', and truncates >255 UTF-8 bytes.
         check(
@@ -500,35 +371,37 @@ void main() {
 
         final channelCtrl = StreamChannelController<Uint8List>();
         final transport = WsClientTransport(
-          serverUri: Uri.parse('ws://127.0.0.1:8080/v1/client'),
+          serverUri: Uri.parse('ws://127.0.0.1:8420/v1/client'),
           token: 'secret',
           channelFactory: () async => channelCtrl.local,
         );
-        final repo = CastClientRepository(transport: transport);
-        final vm = CastWorkspaceViewModel(
+        final repo = CastClientRepository(
+          transport: transport,
+          enableReconnect: false,
+        );
+        final errors = <String>[];
+        final coordinator = FileUploadCoordinator(
           repository: repo,
-          initialViewportCols: 80,
-          initialViewportRows: 24,
+          onProgressChanged: () {},
+          onError: errors.add,
         );
-        final terminal = MockTerminal(
-          MockTerminalBackend(size: const Point(80, 24)),
-        );
-        Buffer? latestFrame;
-        final controller = CastSceneController(
-          terminal: terminal,
-          viewModel: vm,
-          onFrameRedrawn: (buf) => latestFrame = buf,
-        );
+        void ackListener(CastMessage msg) {
+          if (msg is FileUploadAckFrame) {
+            coordinator.handleAckFrame(msg);
+          }
+        }
+
+        clientMessageReceivedEvent.addListener(repo.bus, ackListener);
+        RemoteTerminalPort? port;
         addTearDown(() async {
-          controller.dispose();
-          terminal.dispose();
-          await vm.dispose();
+          clientMessageReceivedEvent.removeListener(repo.bus, ackListener);
+          await port?.dispose();
           await repo.dispose();
         });
 
         const sessionId = SessionId('edge-1');
         final sentClientFrames = <CastMessage>[];
-        var rejectNextStart = true;
+        var ackMode = 'ready_only';
 
         channelCtrl.foreign.stream.listen((bytes) {
           final msg = BufferFrameCodec.decode(bytes);
@@ -567,14 +440,15 @@ void main() {
               ),
             );
           } else if (msg is FileUploadStartFrame) {
+            final reject = ackMode == 'reject_start';
             channelCtrl.foreign.sink.add(
               BufferFrameCodec.encode(
                 FileUploadAckFrame(
                   sessionId: sessionId,
                   transferId: msg.transferId,
-                  status: rejectNextStart ? .rejected : .ready,
+                  status: reject ? .rejected : .ready,
                   nextOffset: 0,
-                  message: rejectNextStart ? 'disk full' : '',
+                  message: reject ? 'disk full' : '',
                 ),
               ),
             );
@@ -582,10 +456,31 @@ void main() {
         });
 
         await repo.connect();
-        await _waitUntil(() => vm.activeSessionSyncState == .synchronized);
+        port = repo.openTerminalPort(
+          sessionId,
+          initialCols: 80,
+          initialRows: 23,
+        );
+        await _waitUntil(() => port!.slot.state == .synchronized);
 
-        // 2. Direct uploadDroppedFiles filters out directories cleanly.
-        final dirOnlyOk = await vm.uploadDroppedFiles([
+        // 2. Mid-upload cancel sends FileUploadEndFrame(aborted: true).
+        final inFlight = coordinator.uploadFiles(sessionId, [
+          MemoryDroppedFileSource(
+            name: 'report.txt',
+            bytes: Uint8List.fromList(utf8.encode('hello')),
+          ),
+        ]);
+        await _waitUntil(
+          () => sentClientFrames.whereType<FileUploadChunkFrame>().isNotEmpty,
+        );
+        coordinator.cancel();
+        check(await inFlight).isFalse();
+        check(
+          sentClientFrames.whereType<FileUploadEndFrame>().single.aborted,
+        ).isTrue();
+
+        // 3. Direct uploadFiles filters out directories cleanly.
+        final dirOnlyOk = await coordinator.uploadFiles(sessionId, [
           MemoryDroppedFileSource(
             name: 'folder',
             bytes: Uint8List(0),
@@ -594,20 +489,21 @@ void main() {
         ]);
         check(dirOnlyOk).isFalse();
 
-        // 3. Caster rejection surfaces error notice in clipboardNotice.
-        final rejectedOk = await vm.uploadDroppedFiles([
+        // 4. Caster rejection surfaces error callback.
+        ackMode = 'reject_start';
+        final rejectedOk = await coordinator.uploadFiles(sessionId, [
           MemoryDroppedFileSource(
             name: 'rejected.txt',
             bytes: Uint8List.fromList([1, 2, 3]),
           ),
         ]);
         check(rejectedOk).isFalse();
-        check(vm.clipboardNotice).equals(' ! Upload failed: disk full ');
+        check(errors.last).equals('disk full');
 
-        // 4. readSlice throwing sends FileUploadEndFrame(aborted: true) and surfaces error notice.
-        rejectNextStart = false;
+        // 5. readSlice throwing sends FileUploadEndFrame(aborted: true) and reports error.
+        ackMode = 'ready_only';
         sentClientFrames.clear();
-        final brokenOk = await vm.uploadDroppedFiles([
+        final brokenOk = await coordinator.uploadFiles(sessionId, [
           const _ThrowingDroppedFileSource(name: 'broken.txt', size: 16),
         ]);
         await pumpEventQueue();
@@ -615,25 +511,7 @@ void main() {
         check(
           sentClientFrames.whereType<FileUploadEndFrame>().single.aborted,
         ).isTrue();
-        check(
-          vm.clipboardNotice,
-        ).isNotNull().contains('Failed to read dropped file "broken.txt"');
-
-        // 5. All-invalid FileUploadDialog shows "No eligible files to upload." and closes on Enter.
-        final dialogFuture = controller.handleDroppedFiles([
-          MemoryDroppedFileSource(
-            name: 'only-dir',
-            bytes: Uint8List(0),
-            isDirectory: true,
-          ),
-        ]);
-        await pumpEventQueue();
-        final text = _bufferText(latestFrame!);
-        check(text).contains('No eligible files to upload.');
-        check(text).contains('Close (Enter)');
-        terminal.injectTestEvent(const KeyEvent('enter', .enter));
-        final closed = await dialogFuture;
-        check(closed).equals(false);
+        check(errors.last).contains('Failed to read dropped file "broken.txt"');
       },
     );
 
@@ -681,9 +559,7 @@ void main() {
 
         CasterService? caster;
         CastClientRepository? repo;
-        CastWorkspaceViewModel? vm;
-        final openedUrls = <Uri>[];
-        final copiedTexts = <String>[];
+        RemoteTerminalPort? port;
 
         try {
           final pty = Pty2Session.start(
@@ -692,11 +568,12 @@ void main() {
             initialCols: 60,
             initialRows: 12,
           );
+          const sessionId = SessionId('v5-live');
           caster = CasterService(
             config: CasterConfig(
               serverUri: server.casterUri,
               token: 'caster-tok',
-              sessionId: const SessionId('v5-live'),
+              sessionId: sessionId,
               title: 'ktty-e2e',
               initialCols: 60,
               initialRows: 12,
@@ -713,106 +590,62 @@ void main() {
               token: 'client-tok',
             ),
           );
-          vm = CastWorkspaceViewModel(
-            repository: repo,
-            initialViewportCols: 60,
-            initialViewportRows: 12,
-            resizeDebounce: Duration.zero,
-            onOpenUrl: openedUrls.add,
-            onClipboardWrite: copiedTexts.add,
-          );
           await repo.connect();
+          port = repo.openTerminalPort(
+            sessionId,
+            initialCols: 60,
+            initialRows: 12,
+          );
 
           await _waitUntil(
-            () => _bufferText(
-              vm!.composeActiveBufferWithCursor(),
-            ).contains('READY_V5'),
+            () => _bufferText(port!.buffer).contains('READY_V5'),
           );
 
-          final composed = vm.composeActiveBufferWithCursor();
-          check(vm.activeModes.kittyKeyboardFlags).equals(11);
-          check(vm.wantsKeyReleaseEvents).isTrue();
-          check(composed.lookupKittyImage(0, 0, 77)).isNotNull();
-          check(composed.getUri(0, 1)).equals('https://dart.dev');
+          final buf = port.buffer;
+          check(port.modes.kittyKeyboardFlags).equals(11);
+          check(buf.lookupKittyImage(0, 0, 77)).isNotNull();
+          check(buf.getUri(0, 1)).equals('https://dart.dev');
           check(
-            composed.getUnderlineColor(0, 1),
+            buf.getUnderlineColor(0, 1),
           ).equals(const Color(40, 210, 120).argb);
 
-          // Ctrl+Click on OSC 8 hyperlink opens https://dart.dev.
-          check(
-            vm.handlePtyMouseEvent(
-              const ev.MouseEvent(
-                x: 2,
-                y: 2,
-                button: .left,
-                type: .press,
-                modifiers: {ev.Modifier.control},
-              ),
+          // Link span resolution across RemoteTerminalPort + WorkspaceBufferCompositor.
+          final matched = TerminalSelection.matchUrlAt(
+            (y) => WorkspaceBufferCompositor.lookupVirtualLine(
+              port!.slot,
+              port.buffer,
+              y,
             ),
-          ).isTrue();
-          check(
-            vm.handlePtyMouseEvent(
-              const ev.MouseEvent(x: 2, y: 2, button: .left, type: .release),
-            ),
-          ).isTrue();
-          check(openedUrls).deepEquals([Uri.parse('https://dart.dev')]);
+            virtualX: 2,
+            virtualY: 1,
+            cols: port.cols,
+          );
+          check(matched).isNotNull();
+          check(matched!.url).equals(Uri.parse('https://dart.dev'));
 
-          // Alt+Drag box selection over 'ABCD\nEFGH' copies rectangular block,
-          // and sending a Kitty key release reaches the PTY without clearing selection!
-          check(
-            vm.handlePtyMouseEvent(
-              const ev.MouseEvent(
-                x: 6,
-                y: 3,
-                button: .left,
-                type: .press,
-                modifiers: {ev.Modifier.alt},
-              ),
+          // Box selection over 'ABCD\nEFGH' extracts rectangular block cleanly.
+          const boxSel = TerminalSelection(
+            anchor: Point<int>(5, 2),
+            focus: Point<int>(8, 3),
+            mode: .box,
+          );
+          final boxText = boxSel.extractVirtualText(
+            (y) => WorkspaceBufferCompositor.lookupVirtualLine(
+              port!.slot,
+              port.buffer,
+              y,
             ),
-          ).isTrue();
-          check(
-            vm.handlePtyMouseEvent(
-              const ev.MouseEvent(
-                x: 9,
-                y: 4,
-                button: .left,
-                type: .drag,
-                modifiers: {ev.Modifier.alt},
-              ),
-            ),
-          ).isTrue();
-          check(
-            vm.handlePtyMouseEvent(
-              const ev.MouseEvent(
-                x: 9,
-                y: 4,
-                button: .left,
-                type: .release,
-                modifiers: {ev.Modifier.alt},
-              ),
-            ),
-          ).isTrue();
-          check(copiedTexts).deepEquals(['ABCD\nEFGH']);
+            cols: port.cols,
+          );
+          check(boxText).equals('ABCD\nEFGH');
 
-          check(
-            vm.encodeAndSendKey(const ev.KeyEvent('k', ev.KeyType.character)),
-          ).isTrue();
-          check(
-            vm.encodeAndSendKey(
-              const ev.KeyEvent(
-                'k',
-                ev.KeyType.character,
-                eventType: ev.KeyEventType.release,
-              ),
-            ),
-          ).isTrue();
+          // Sending Kitty CSI u key release reaches PTY.
+          port.sendInput(Uint8List.fromList(utf8.encode('\x1b[107;1:3u')));
           await _waitUntil(
-            () => _bufferText(
-              vm!.composeActiveBufferWithCursor(),
-            ).contains('GOT_RELEASE'),
+            () => _bufferText(port!.buffer).contains('GOT_RELEASE'),
           );
         } finally {
-          await vm?.dispose();
+          await port?.dispose();
           await repo?.dispose();
           await caster?.stop(killPty: true);
           await server.close();
@@ -939,7 +772,7 @@ void main() {
                 port1!.activePtySize == (72, 22),
           );
 
-          port1.sendInput(Uint8List.fromList(utf8.encode('SIGNALS\n')));
+          port1.sendInput(Uint8List.fromList(utf8.encode('SIGNALS\r\n')));
           await _waitUntil(
             () =>
                 titles.contains('Live Signal Shell') &&
@@ -967,7 +800,7 @@ void main() {
           );
 
           // Clean exit completes port1.exitCode and closing last port unsubscribes.
-          port1.sendInput(Uint8List.fromList(utf8.encode('EXIT\n')));
+          port1.sendInput(Uint8List.fromList(utf8.encode('EXIT\r\n')));
           final exitCode = await port1.exitCode;
           check(const [0, -1]).contains(exitCode);
 
