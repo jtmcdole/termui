@@ -272,6 +272,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   bool routePrintableThroughIme;
 
   TextInputConnection? _connection;
+  TextInputConfiguration? _attachedConfiguration;
   TextEditingValue _editingValue = TextEditingValue.empty;
 
   Size? _lastEditableSize;
@@ -371,7 +372,19 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     TextInputConfiguration configuration = defaultInputConfiguration,
   ]) {
     final existing = _connection;
-    if (existing != null && existing.attached) return;
+    if (existing != null && existing.attached) {
+      if (configuration.viewId == _attachedConfiguration?.viewId) {
+        if (configuration != _attachedConfiguration) {
+          _attachedConfiguration = configuration;
+          existing.updateConfig(configuration);
+        }
+        return;
+      }
+      existing.close();
+      _connection = null;
+      _attachedConfiguration = null;
+    }
+    _attachedConfiguration = configuration;
     final connection = TextInput.attach(this, configuration)
       ..show()
       ..setEditingState(_editingValue);
@@ -383,6 +396,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   void detach() {
     final existing = _connection;
     _connection = null;
+    _attachedConfiguration = null;
     if (existing != null && existing.attached) {
       existing.close();
     }
@@ -826,6 +840,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   @override
   void connectionClosed() {
     _connection = null;
+    _attachedConfiguration = null;
     _clearComposingState();
   }
 

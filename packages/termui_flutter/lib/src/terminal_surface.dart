@@ -323,6 +323,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   double _lastReportedCellW = 0.0;
   double _lastReportedCellH = 0.0;
   bool _geometrySyncScheduled = false;
+  int? _imeViewId;
 
   Buffer? get _activeBuffer => widget.bufferProvider?.call() ?? widget.buffer;
 
@@ -392,10 +393,6 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _lastCursorPosition =
         widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
     _prepareActiveBufferResources();
-    if (_focusNode.hasFocus && widget.enableIme) {
-      _imeClient.attach();
-      _scheduleGeometrySync();
-    }
   }
 
   void _initAtlasController() {
@@ -541,6 +538,17 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     }
     unawaited(_atlasController.ensureInitialized());
     _syncTerminalCellMetrics();
+    final nextViewId =
+        View.maybeOf(context)?.viewId ??
+        WidgetsBinding.instance.platformDispatcher.implicitView?.viewId;
+    final viewIdChanged = _imeViewId != nextViewId;
+    _imeViewId = nextViewId;
+    if (widget.enableIme &&
+        _focusNode.hasFocus &&
+        (!_imeClient.isAttached || viewIdChanged)) {
+      _attachIme();
+      _scheduleGeometrySync();
+    }
   }
 
   @override
@@ -616,7 +624,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     if (!widget.enableIme || !_focusNode.hasFocus) {
       _imeClient.detach();
     } else if (_focusNode.hasFocus && widget.enableIme) {
-      _imeClient.attach();
+      _attachIme();
       _scheduleGeometrySync();
     }
 
@@ -810,13 +818,24 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final hasFocus = _focusNode.hasFocus;
     if (widget.enableIme) {
       if (hasFocus) {
-        _imeClient.attach();
+        _attachIme();
         _scheduleGeometrySync();
       } else {
         _imeClient.detach();
       }
     }
     widget.onFocusChanged?.call(hasFocus);
+  }
+
+  TextInputConfiguration _resolveImeConfiguration() {
+    final viewId =
+        _imeViewId ??
+        WidgetsBinding.instance.platformDispatcher.implicitView?.viewId;
+    return TerminalImeClient.defaultInputConfiguration.copyWith(viewId: viewId);
+  }
+
+  void _attachIme() {
+    _imeClient.attach(_resolveImeConfiguration());
   }
 
   void _onSelectionChanged() {
