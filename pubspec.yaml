@@ -37,6 +37,10 @@ workspace:
   - packages/termui_audio/example
   - packages/termui_tinpot
   - packages/termui_tinpot/example
+  - apps/termui_cast/protocol
+  - apps/termui_cast/server
+  - apps/termui_cast/caster_cli
+  - apps/termui_cast/client_core
 
 dev_dependencies:
   melos: ^8.1.0
@@ -61,6 +65,11 @@ melos:
       packageFilters:
         dirExists: test
         flutter: false
+        ignore:
+          - termui_cast_protocol
+          - termui_cast_server
+          - termui_caster_cli
+          - termui_cast_client_core
 
     test:flutter:
       description: Run unit tests for all Flutter packages.
