@@ -1,0 +1,114 @@
+name: Apps Build and Test
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'pubspec.yaml'
+      - 'analysis_options.yaml'
+      - '.github/workflows/apps.yml'
+      - 'apps/**'
+      - 'packages/pty2/**'
+      - 'packages/termui/**'
+      - 'packages/termui_audio/**'
+      - 'packages/termui_audio_flutter/**'
+      - 'packages/termui_flutter/**'
+      - 'packages/termui_pty/**'
+      - 'packages/termui_recorder/**'
+      - 'packages/termui_test/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'pubspec.yaml'
+      - 'analysis_options.yaml'
+      - '.github/workflows/apps.yml'
+      - 'apps/**'
+      - 'packages/pty2/**'
+      - 'packages/termui/**'
+      - 'packages/termui_audio/**'
+      - 'packages/termui_audio_flutter/**'
+      - 'packages/termui_flutter/**'
+      - 'packages/termui_pty/**'
+      - 'packages/termui_recorder/**'
+      - 'packages/termui_test/**'
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test-apps:
+    name: Apps Test and Web Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install ALSA library (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install workspace dependencies
+        run: flutter pub get
+
+      - name: Normalize SoLoud source timestamps for CMake cache
+        shell: pwsh
+        run: |
+          "IMAGE_VERSION=$($env:ImageVersion)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $epoch = [datetime]'2020-01-01T00:00:00Z'
+          @(Get-Item packages/termui_audio/CMakeLists.txt) + @(
+            Get-ChildItem -Path packages/termui_audio/src, packages/termui_audio/windows/include, packages/termui_audio/windows/libs, packages/termui_audio/macos/include, packages/termui_audio/macos/libs, packages/termui_audio/linux/include, packages/termui_audio/linux/libs -Recurse -File
+          ) | ForEach-Object { $_.LastWriteTimeUtc = $epoch }
+
+      - name: Cache SoLoud CMake native assets
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .dart_tool/hooks_runner/shared/termui_audio/build
+          key: ${{ runner.os }}-${{ env.IMAGE_VERSION }}-soloud-cmake-${{ hashFiles('pubspec.lock', 'packages/termui_audio/pubspec.yaml', 'packages/termui_audio/CMakeLists.txt', 'packages/termui_audio/src/**', 'packages/termui_audio/hook/**', 'packages/termui_audio/windows/include/**', 'packages/termui_audio/windows/libs/**', 'packages/termui_audio/macos/include/**', 'packages/termui_audio/macos/libs/**', 'packages/termui_audio/linux/include/**', 'packages/termui_audio/linux/libs/**') }}
+
+      - name: Test termui_cast_protocol
+        working-directory: apps/termui_cast/protocol
+        run: dart test
+
+      - name: Test termui_cast_server
+        working-directory: apps/termui_cast/server
+        run: dart test
+
+      - name: Test termui_caster_cli
+        working-directory: apps/termui_cast/caster_cli
+        run: dart test
+
+      - name: Test termui_cast_client_core
+        working-directory: apps/termui_cast/client_core
+        run: dart test
+
+      - name: Test fterm
+        working-directory: apps/fterm
+        run: flutter test --no-pub
+
+      - name: Build WASM web viewer (no CDN)
+        if: runner.os == 'Linux'
+        working-directory: apps/fterm
+        run: |
+          flutter build web --wasm --no-web-resources-cdn
+          grep -q '"useLocalCanvasKit":true' build/web/flutter_bootstrap.js

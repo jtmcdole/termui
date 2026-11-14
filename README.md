@@ -25,6 +25,7 @@ This library shifts away from naive command-line printing (which causes terminal
 - **Flutter & Web GPU Renderer**: Render `termui` applications inside Flutter desktop, mobile, and web apps using a batched `drawRawAtlas` glyph texture atlas (`termui_flutter`).
 - **3D Spatial Audio & Synthesis**: Play spatial audio, synthesized waveforms, and filtered audio buses in CLI and Flutter apps (`termui_audio`, `termui_audio_flutter`).
 - **Recording, Golden Testing & Performance Tracing**: Capture Asciicast v3 sessions, run headless deterministic tests (`termui_recorder`, `termui_test`), hot-reload TUI code (`termui_hotreload`), and inspect flame charts (`termui_trace`).
+- **Terminal Multiplexer & Remote PTY Casting**: Run `fterm` (`apps/fterm`) as a native desktop multiplexer or WebAssembly browser client, and stream live PTY sessions over WebSockets with [apps/termui_cast](apps/termui_cast/README.md).
 
 ---
 
