@@ -27,6 +27,14 @@ typedef LocalPtyBackendFactory =
       Map<String, String>? environment,
     });
 
+/// Callback staging Windows ConPTY binaries before opening a local shell.
+@visibleForTesting
+typedef ConPtyReadyEnsurer =
+    Future<String?> Function({
+      bool download,
+      void Function(String message)? onWarning,
+    });
+
 /// Creates the `dart:io` desktop [LocalHostDriver].
 ///
 /// Remains unsupported (`isSupported == false`) when `FLUTTER_TEST` is set in
@@ -75,8 +83,12 @@ final class IoLocalHostDriver implements LocalHostDriver {
   final Map<String, _IoLocalPaneHost> _hosts = {};
   final Random _random;
   final LocalPtyBackendFactory _backendFactory;
+  final ConPtyReadyEnsurer _ensureConPtyReady;
+  final bool _isWindows;
+  final bool _downloadConPty;
   bool _disposed = false;
-  bool _conPtyChecked = false;
+  bool _conPtyResolved = false;
+  Future<String?>? _conPtyPrepareFuture;
   int _sessionCounter = 0;
 
   /// Creates a `dart:io` local shell host driver.
@@ -84,9 +96,17 @@ final class IoLocalHostDriver implements LocalHostDriver {
     PtyRouter? router,
     Random? random,
     @visibleForTesting LocalPtyBackendFactory? backendFactory,
+    @visibleForTesting ConPtyReadyEnsurer? ensureConPtyReady,
+    @visibleForTesting bool? isWindows,
+    @visibleForTesting bool? downloadConPty,
   }) : _router = router ?? PtyRouter(),
        _random = random ?? Random.secure(),
-       _backendFactory = backendFactory ?? _startDefaultBackend;
+       _backendFactory = backendFactory ?? _startDefaultBackend,
+       _ensureConPtyReady =
+           ensureConPtyReady ?? Pty2RoutedBackend.ensureConPtyReady,
+       _isWindows = isWindows ?? Platform.isWindows,
+       _downloadConPty =
+           downloadConPty ?? !Platform.environment.containsKey('FLUTTER_TEST');
 
   static RoutedPtyBackend _startDefaultBackend({
     required String executable,
@@ -116,15 +136,46 @@ final class IoLocalHostDriver implements LocalHostDriver {
   @override
   bool get isSupported => !_disposed;
 
+  Future<void> _ensureConPtyPrepared() async {
+    if (!_isWindows || _conPtyResolved) return;
+    final inFlight = _conPtyPrepareFuture ??= _runConPtyPrepare();
+    try {
+      await inFlight;
+    } finally {
+      if (identical(_conPtyPrepareFuture, inFlight)) {
+        _conPtyPrepareFuture = null;
+      }
+    }
+  }
+
+  Future<String?> _runConPtyPrepare() async {
+    try {
+      final resolved = await _ensureConPtyReady(
+        download: _downloadConPty,
+        onWarning: _logConPtyWarning,
+      );
+      if (resolved != null) {
+        _conPtyResolved = true;
+      }
+      return resolved;
+    } on Object catch (error) {
+      _logConPtyWarning('$error');
+      return null;
+    }
+  }
+
+  static void _logConPtyWarning(String message) {
+    if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+      stderr.writeln('fterm: $message');
+    }
+  }
+
   @override
   Future<LocalPaneHost> openShell(LocalShellConfig config) async {
     if (_disposed) {
       throw StateError('IoLocalHostDriver is disposed.');
     }
-    if (Platform.isWindows && !_conPtyChecked) {
-      _conPtyChecked = true;
-      await Pty2RoutedBackend.ensureConPtyReady();
-    }
+    await _ensureConPtyPrepared();
     final executable = _resolveShellExecutable(config.executable);
     final arguments = resolveShellArguments(config, executable);
     final envOverrides = resolveChildEnvironmentOverrides(Platform.environment);

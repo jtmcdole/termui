@@ -2544,6 +2544,121 @@ void _defineHardeningRegressionTests() {
     );
 
     test(
+      'IoLocalHostDriver awaits shared ConPTY download before starting Windows shells and retries after transient null',
+      () async {
+        final downloadFlags = <bool>[];
+        final startedBackends = <_TestRoutedPtyBackend>[];
+        Completer<String?>? pendingPrepare;
+        String? nextResult;
+        var prepareCalls = 0;
+
+        final driver = IoLocalHostDriver(
+          isWindows: true,
+          downloadConPty: true,
+          ensureConPtyReady: ({bool download = false, onWarning}) {
+            prepareCalls += 1;
+            downloadFlags.add(download);
+            final completer = pendingPrepare;
+            if (completer != null) {
+              return completer.future;
+            }
+            return Future<String?>.value(nextResult);
+          },
+          backendFactory:
+              ({
+                required executable,
+                required arguments,
+                required initialCols,
+                required initialRows,
+                required pixelWidth,
+                required pixelHeight,
+                workingDirectory,
+                environment,
+              }) {
+                final b = _TestRoutedPtyBackend();
+                startedBackends.add(b);
+                return b;
+              },
+        );
+        addTearDown(driver.dispose);
+
+        // 1. Offline / transient null: returns gracefully and retries on next open.
+        nextResult = null;
+        final offlineHost = await driver.openShell(
+          const LocalShellConfig(executable: 'pwsh.exe'),
+        );
+        expect(prepareCalls, equals(1));
+        expect(downloadFlags, equals(const [true]));
+        expect(startedBackends, hasLength(1));
+        await offlineHost.dispose();
+
+        // 2. Concurrent shell launches share the same in-flight future and wait
+        //    until ConPTY staging finishes before spawning backends.
+        final activeCompleter = Completer<String?>();
+        pendingPrepare = activeCompleter;
+        final openA = driver.openShell(
+          const LocalShellConfig(executable: 'pwsh.exe'),
+        );
+        final openB = driver.openShell(
+          const LocalShellConfig(executable: 'pwsh.exe'),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(prepareCalls, equals(2));
+        expect(
+          startedBackends,
+          hasLength(1),
+          reason:
+              'Neither concurrent shell may start before ConPTY staging finishes.',
+        );
+
+        activeCompleter.complete(r'C:\pty2\conpty.dll');
+        pendingPrepare = null;
+        final hostA = await openA;
+        final hostB = await openB;
+        expect(startedBackends, hasLength(3));
+        await hostA.dispose();
+        await hostB.dispose();
+
+        // 3. Subsequent shell launch reuses cached resolved ConPTY without re-probing.
+        final cachedHost = await driver.openShell(
+          const LocalShellConfig(executable: 'pwsh.exe'),
+        );
+        expect(prepareCalls, equals(2));
+        await cachedHost.dispose();
+      },
+    );
+
+    test('IoLocalHostDriver skips ConPTY preparation on non-Windows', () async {
+      var prepareCalls = 0;
+      final driver = IoLocalHostDriver(
+        isWindows: false,
+        downloadConPty: true,
+        ensureConPtyReady: ({bool download = false, onWarning}) async {
+          prepareCalls += 1;
+          return r'C:\pty2\conpty.dll';
+        },
+        backendFactory:
+            ({
+              required executable,
+              required arguments,
+              required initialCols,
+              required initialRows,
+              required pixelWidth,
+              required pixelHeight,
+              workingDirectory,
+              environment,
+            }) => _TestRoutedPtyBackend(),
+      );
+      addTearDown(driver.dispose);
+
+      final host = await driver.openShell(
+        const LocalShellConfig(executable: '/bin/sh'),
+      );
+      expect(prepareCalls, equals(0));
+      await host.dispose();
+    });
+
+    test(
       'elects one canonical pane per remote SessionId so twin split panes do not double-play bell/audio or increment unread badges',
       () async {
         final harness = AppThreeWayWsHarness();
