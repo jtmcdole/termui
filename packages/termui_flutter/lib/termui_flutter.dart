@@ -76,12 +76,15 @@ export 'src/service/terminal_service.dart'
 export 'src/rendering/atlas.dart'
     show GlyphAtlas, GlyphAtlasGenerator, GlyphStyleVariant;
 export 'src/rendering/atlas_controller.dart' show GlyphAtlasController;
+export 'src/rendering/painter.dart'
+    show HoveredLinkCellStyles, HoveredLinkStyler;
 export 'src/util/file_saver.dart' show saveFile;
 export 'src/util/font_helper.dart' show waitForFontsToLoad;
 export 'src/util/url_launcher.dart'
     show isAllowedExternalUrl, parseAllowedExternalUri;
 export 'package:termui/ui/widgets/interactive/selection_controller.dart'
     show
+        ResolvedTerminalLink,
         SelectionMode,
         SelectionRegion,
         TerminalSelectionController,

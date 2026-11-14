@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:characters/characters.dart';
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -12,6 +13,189 @@ import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 import 'atlas.dart';
+
+/// Reusable per-frame typed sink for writing visual overrides across hovered
+/// hyperlink cells without allocating per-cell records or closures.
+final class HoveredLinkCellStyles {
+  Uint32List _fgArgb = Uint32List(0);
+  Uint32List _bgArgb = Uint32List(0);
+  Uint32List _ulArgb = Uint32List(0);
+  Uint32List _modifiers = Uint32List(0);
+  Uint8List _flags = Uint8List(0);
+
+  static const int _hasFg = 1 << 0;
+  static const int _hasBg = 1 << 1;
+  static const int _hasUl = 1 << 2;
+  static const int _hasMods = 1 << 3;
+
+  int _length = 0;
+  bool _hasUniformBg = false;
+  int _uniformBgArgb = 0;
+  bool _hasUniformMods = false;
+  int _uniformModifiers = 0;
+  bool _hasPerCellBg = false;
+  bool _hasPerCellMods = false;
+
+  /// Whether cell underlines reuse the cell's overridden foreground color
+  /// unless explicitly overridden via [setUnderlineColor].
+  bool underlineMatchesForeground = false;
+
+  /// Number of cells in the active hovered link range.
+  int get length => _length;
+
+  /// Prepares capacity for [cellCount] cells and clears all override flags.
+  @visibleForTesting
+  void reset(int cellCount) {
+    final clamped = math.max(0, cellCount);
+    _length = clamped;
+    _hasUniformBg = false;
+    _uniformBgArgb = 0;
+    _hasUniformMods = false;
+    _uniformModifiers = 0;
+    _hasPerCellBg = false;
+    _hasPerCellMods = false;
+    underlineMatchesForeground = false;
+    if (clamped > _flags.length) {
+      _fgArgb = Uint32List(clamped);
+      _bgArgb = Uint32List(clamped);
+      _ulArgb = Uint32List(clamped);
+      _modifiers = Uint32List(clamped);
+      _flags = Uint8List(clamped);
+    } else {
+      _flags.fillRange(0, clamped, 0);
+    }
+  }
+
+  /// Clears active overrides without shrinking allocated backing arrays.
+  @visibleForTesting
+  void clear() {
+    _length = 0;
+    _hasUniformBg = false;
+    _uniformBgArgb = 0;
+    _hasUniformMods = false;
+    _uniformModifiers = 0;
+    _hasPerCellBg = false;
+    _hasPerCellMods = false;
+    underlineMatchesForeground = false;
+  }
+
+  /// Sets the foreground ARGB color for hovered cell [index].
+  void setForeground(int index, int argb) {
+    if (index < 0 || index >= _length) return;
+    _fgArgb[index] = argb;
+    _flags[index] |= _hasFg;
+  }
+
+  /// Sets the background ARGB color for hovered cell [index].
+  void setBackground(int index, int argb) {
+    if (index < 0 || index >= _length) return;
+    _bgArgb[index] = argb;
+    _flags[index] |= _hasBg;
+    _hasPerCellBg = true;
+  }
+
+  /// Fills the background ARGB color across `[start, end)` hovered cells
+  /// (defaults to `[0, length)` in O(1) time).
+  void fillBackground(int argb, [int start = 0, int? end]) {
+    final s = start.clamp(0, _length);
+    final e = (end ?? _length).clamp(s, _length);
+    if (s == 0 && e == _length) {
+      _hasUniformBg = true;
+      _uniformBgArgb = argb;
+      if (_hasPerCellBg) {
+        for (var i = 0; i < _length; i++) {
+          _flags[i] &= ~_hasBg;
+        }
+        _hasPerCellBg = false;
+      }
+      return;
+    }
+    for (var i = s; i < e; i++) {
+      _bgArgb[i] = argb;
+      _flags[i] |= _hasBg;
+    }
+    if (s < e) {
+      _hasPerCellBg = true;
+    }
+  }
+
+  /// Sets the underline ARGB color for hovered cell [index].
+  void setUnderlineColor(int index, int argb) {
+    if (index < 0 || index >= _length) return;
+    _ulArgb[index] = argb;
+    _flags[index] |= _hasUl;
+  }
+
+  /// Sets additional [Modifier] bits ORed onto hovered cell [index].
+  void setModifiers(int index, int modifiers) {
+    if (index < 0 || index >= _length) return;
+    _modifiers[index] = modifiers;
+    _flags[index] |= _hasMods;
+    _hasPerCellMods = true;
+  }
+
+  /// Fills additional [Modifier] bits across `[start, end)` hovered cells
+  /// (defaults to `[0, length)` in O(1) time).
+  void fillModifiers(int modifiers, [int start = 0, int? end]) {
+    final s = start.clamp(0, _length);
+    final e = (end ?? _length).clamp(s, _length);
+    if (s == 0 && e == _length) {
+      _hasUniformMods = true;
+      _uniformModifiers = modifiers;
+      if (_hasPerCellMods) {
+        for (var i = 0; i < _length; i++) {
+          _flags[i] &= ~_hasMods;
+        }
+        _hasPerCellMods = false;
+      }
+      return;
+    }
+    for (var i = s; i < e; i++) {
+      _modifiers[i] = modifiers;
+      _flags[i] |= _hasMods;
+    }
+    if (s < e) {
+      _hasPerCellMods = true;
+    }
+  }
+
+  /// Returns the overridden foreground ARGB color at [index], or `null` if unset.
+  int? foregroundAt(int index) =>
+      index >= 0 && index < _length && (_flags[index] & _hasFg) != 0
+      ? _fgArgb[index]
+      : null;
+
+  /// Returns the overridden background ARGB color at [index], or `null` if unset.
+  int? backgroundAt(int index) {
+    if (index < 0 || index >= _length) return null;
+    if ((_flags[index] & _hasBg) != 0) return _bgArgb[index];
+    return _hasUniformBg ? _uniformBgArgb : null;
+  }
+
+  /// Returns the overridden underline ARGB color at [index], or `null` if unset.
+  int? underlineColorAt(int index) {
+    if (index < 0 || index >= _length) return null;
+    if ((_flags[index] & _hasUl) != 0) return _ulArgb[index];
+    return underlineMatchesForeground ? foregroundAt(index) : null;
+  }
+
+  /// Returns the overridden modifier bits at [index], or `null` if unset.
+  int? modifiersAt(int index) {
+    if (index < 0 || index >= _length) return null;
+    if ((_flags[index] & _hasMods) != 0) return _modifiers[index];
+    return _hasUniformMods ? _uniformModifiers : null;
+  }
+}
+
+/// Client callback invoked once per painted frame when [link] is hovered,
+/// writing per-cell overrides across `[0, cellCount)` into [styles] at [timestamp].
+typedef HoveredLinkStyler =
+    void Function(
+      ResolvedTerminalLink link,
+      int cellCount,
+      DateTime timestamp,
+      HoveredLinkCellStyles styles,
+    );
 
 /// Computes the total terminal cell width spanned by [text], counting wide
 /// graphemes as `2` cells and normal graphemes as `1`.
@@ -215,6 +399,10 @@ final class TuiAtlasPainter extends CustomPainter {
 
   static const int _selectionBgArgb = 0xFF264F78;
 
+  final HoveredLinkCellStyles _hoveredLinkStyles = HoveredLinkCellStyles();
+  int _visibleLinkStartIdx = -1;
+  int _visibleLinkEndIdx = -1;
+
   /// Constructs a [TuiAtlasPainter] targeting the supplied [buffer].
   TuiAtlasPainter({
     this.repaint,
@@ -234,6 +422,8 @@ final class TuiAtlasPainter extends CustomPainter {
     math.Point<int>? selectionEnd,
     (int, int)? selectionColBounds,
     this.selectionBoxMode = false,
+    this.hoveredLink,
+    this.hoveredLinkStyler,
     this.kittyImages = const {},
     this.kittyImagesById = const {},
     this.defaultForegroundArgb = 0xFFFFFFFF,
@@ -252,6 +442,15 @@ final class TuiAtlasPainter extends CustomPainter {
        ligaturePainters =
            ligaturePainters ?? <(String, bool, bool, Color), TextPainter>{},
        super(repaint: repaint);
+
+  /// Active hovered link span highlighted while link-open modifiers are held.
+  final ResolvedTerminalLink? hoveredLink;
+
+  /// Optional client-supplied per-cell style override for [hoveredLink].
+  ///
+  /// When omitted, hovered link cells are underlined by default without
+  /// altering their foreground or background colors.
+  final HoveredLinkStyler? hoveredLinkStyler;
 
   /// Default ARGB foreground color substituted when a cell has `fg == 0`.
   final int defaultForegroundArgb;
@@ -326,101 +525,184 @@ final class TuiAtlasPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     onBeforePaint?.call();
-    final count = buffer.width * buffer.height;
-    _ensureBatchBuffers(count);
+    try {
+      _prepareHoveredLinkStyles();
+      final count = buffer.width * buffer.height;
+      _ensureBatchBuffers(count);
 
-    final geo = _AtlasGeometry.fromAtlas(atlas, enableBleed: enableBleed);
-    final fallbackCells = <_FallbackCell>[];
-    final italicCells = <_ItalicAtlasCell>[];
-    final decorations = <_CellDecoration>[];
-    final ligatureCells = <_LigatureCell>[];
-    final missingGlyphs = <String>[];
-    final missingStyledGlyphs = <(String, GlyphStyleVariant)>[];
+      final geo = _AtlasGeometry.fromAtlas(atlas, enableBleed: enableBleed);
+      final fallbackCells = <_FallbackCell>[];
+      final italicCells = <_ItalicAtlasCell>[];
+      final decorations = <_CellDecoration>[];
+      final ligatureCells = <_LigatureCell>[];
+      final missingGlyphs = <String>[];
+      final missingStyledGlyphs = <(String, GlyphStyleVariant)>[];
 
-    _stageGridCells(
-      geo,
-      fallbackCells,
-      italicCells,
-      decorations,
-      ligatureCells,
-      missingGlyphs,
-      missingStyledGlyphs,
-    );
+      _stageGridCells(
+        geo,
+        fallbackCells,
+        italicCells,
+        decorations,
+        ligatureCells,
+        missingGlyphs,
+        missingStyledGlyphs,
+      );
 
-    _scheduleMissingGlyphCallbacks(missingGlyphs, missingStyledGlyphs);
+      _scheduleMissingGlyphCallbacks(missingGlyphs, missingStyledGlyphs);
 
-    if (count > 0 && (defaultBackgroundArgb >>> 24) != 0) {
-      _defaultBgPaint.color = Color(defaultBackgroundArgb);
-      canvas.drawRect(
-        Rect.fromLTWH(
-          0.0,
-          0.0,
-          buffer.width * geo.cellWidth,
-          buffer.height * geo.cellHeight,
+      if (count > 0 && (defaultBackgroundArgb >>> 24) != 0) {
+        _defaultBgPaint.color = Color(defaultBackgroundArgb);
+        canvas.drawRect(
+          Rect.fromLTWH(
+            0.0,
+            0.0,
+            buffer.width * geo.cellWidth,
+            buffer.height * geo.cellHeight,
+          ),
+          _defaultBgPaint,
+        );
+      }
+
+      if (_bgSpriteCount > 0) {
+        _drawRawAtlasInChunks(
+          canvas,
+          atlas.image,
+          _transformsBg!,
+          _rectsBg!,
+          _colorsBg!,
+          _bgSpriteCount,
+          _atlasSpritePaint,
+        );
+      }
+
+      if (_fgSpriteCount > 0) {
+        _drawRawAtlasInChunks(
+          canvas,
+          atlas.image,
+          _transformsFg!,
+          _rectsFg!,
+          _colorsFg!,
+          _fgSpriteCount,
+          _atlasSpritePaint,
+        );
+      }
+
+      if (_emojiSpriteCount > 0) {
+        _drawRawAtlasInChunks(
+          canvas,
+          atlas.image,
+          _transformsEmoji!,
+          _rectsEmoji!,
+          null,
+          _emojiSpriteCount,
+          _emojiSpritePaint,
+        );
+      }
+
+      if (italicCells.isNotEmpty) {
+        _paintItalicAtlasCells(canvas, italicCells, geo);
+      }
+
+      if (fallbackCells.isNotEmpty) {
+        _paintFallbackCells(canvas, fallbackCells);
+      }
+
+      if (ligatureCells.isNotEmpty) {
+        _paintLigatureCells(canvas, ligatureCells, geo);
+      }
+
+      if (decorations.isNotEmpty) {
+        _paintDecorations(canvas, decorations);
+      }
+
+      if (activePtyCols != null || activePtyRows != null) {
+        _paintOutOfBoundsDimming(canvas, size, geo);
+      }
+
+      if (composingText.isNotEmpty) {
+        _paintComposingOverlay(canvas, size, geo);
+      }
+    } finally {
+      _hoveredLinkStyles.clear();
+      _visibleLinkStartIdx = -1;
+      _visibleLinkEndIdx = -1;
+    }
+  }
+
+  void _prepareHoveredLinkStyles() {
+    final link = hoveredLink;
+    if (link == null) {
+      _visibleLinkStartIdx = -1;
+      _visibleLinkEndIdx = -1;
+      _hoveredLinkStyles.clear();
+      return;
+    }
+    final bounds = _visibleHoveredLinkBounds(link, buffer.width, buffer.height);
+    if (bounds == null) {
+      _visibleLinkStartIdx = -1;
+      _visibleLinkEndIdx = -1;
+      _hoveredLinkStyles.clear();
+      return;
+    }
+    _visibleLinkStartIdx = bounds.startIdx;
+    _visibleLinkEndIdx = bounds.endIdx;
+    final styler = hoveredLinkStyler;
+    if (styler == null) {
+      _hoveredLinkStyles.clear();
+      return;
+    }
+    final cellCount = _hoveredLinkCellCount(link, buffer.width, buffer.height);
+    if (cellCount <= 0) {
+      _hoveredLinkStyles.clear();
+      return;
+    }
+    _hoveredLinkStyles.reset(cellCount);
+    try {
+      styler(link, cellCount, clock.now(), _hoveredLinkStyles);
+    } on Object catch (error, stackTrace) {
+      _hoveredLinkStyles.clear();
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stackTrace,
+          library: 'termui_flutter',
+          context: ErrorDescription('while invoking hoveredLinkStyler'),
         ),
-        _defaultBgPaint,
       );
     }
+  }
 
-    if (_bgSpriteCount > 0) {
-      _drawRawAtlasInChunks(
-        canvas,
-        atlas.image,
-        _transformsBg!,
-        _rectsBg!,
-        _colorsBg!,
-        _bgSpriteCount,
-        _atlasSpritePaint,
-      );
+  static ({int startIdx, int endIdx})? _visibleHoveredLinkBounds(
+    ResolvedTerminalLink link,
+    int cols,
+    int rows,
+  ) {
+    if (cols <= 0 || rows <= 0 || link.endRow < 0 || link.startRow >= rows) {
+      return null;
     }
+    if (link.startRow == link.endRow &&
+        (link.startCol >= cols || link.endCol < 0)) {
+      return null;
+    }
+    final startRow = link.startRow < 0 ? 0 : link.startRow;
+    final startCol = link.startRow < 0 ? 0 : link.startCol.clamp(0, cols - 1);
+    final endRow = link.endRow >= rows ? rows - 1 : link.endRow;
+    final endCol = link.endRow >= rows
+        ? cols - 1
+        : link.endCol.clamp(0, cols - 1);
+    final startIdx = startRow * cols + startCol;
+    final endIdx = endRow * cols + endCol;
+    if (endIdx < startIdx) return null;
+    return (startIdx: startIdx, endIdx: endIdx);
+  }
 
-    if (_fgSpriteCount > 0) {
-      _drawRawAtlasInChunks(
-        canvas,
-        atlas.image,
-        _transformsFg!,
-        _rectsFg!,
-        _colorsFg!,
-        _fgSpriteCount,
-        _atlasSpritePaint,
-      );
-    }
-
-    if (_emojiSpriteCount > 0) {
-      _drawRawAtlasInChunks(
-        canvas,
-        atlas.image,
-        _transformsEmoji!,
-        _rectsEmoji!,
-        null,
-        _emojiSpriteCount,
-        _emojiSpritePaint,
-      );
-    }
-
-    if (italicCells.isNotEmpty) {
-      _paintItalicAtlasCells(canvas, italicCells, geo);
-    }
-
-    if (fallbackCells.isNotEmpty) {
-      _paintFallbackCells(canvas, fallbackCells);
-    }
-
-    if (ligatureCells.isNotEmpty) {
-      _paintLigatureCells(canvas, ligatureCells, geo);
-    }
-
-    if (decorations.isNotEmpty) {
-      _paintDecorations(canvas, decorations);
-    }
-
-    if (activePtyCols != null || activePtyRows != null) {
-      _paintOutOfBoundsDimming(canvas, size, geo);
-    }
-
-    if (composingText.isNotEmpty) {
-      _paintComposingOverlay(canvas, size, geo);
-    }
+  static int _hoveredLinkCellCount(
+    ResolvedTerminalLink link,
+    int cols,
+    int rows,
+  ) {
+    final bounds = _visibleHoveredLinkBounds(link, cols, rows);
+    return bounds == null ? 0 : bounds.endIdx - bounds.startIdx + 1;
   }
 
   static bool _isDarkArgb(int argb) {
@@ -640,6 +922,13 @@ final class TuiAtlasPainter extends CustomPainter {
     }
   }
 
+  int _hoveredLinkIndex(int x, int y) {
+    if (_visibleLinkStartIdx < 0) return -1;
+    final idx = y * buffer.width + x;
+    if (idx < _visibleLinkStartIdx || idx > _visibleLinkEndIdx) return -1;
+    return idx - _visibleLinkStartIdx;
+  }
+
   void _stageSingleCell(
     int x,
     int y,
@@ -661,9 +950,20 @@ final class TuiAtlasPainter extends CustomPainter {
     final modifiers = attrs[attrBase + 2];
     final isReverse = Modifier.has(modifiers, Modifier.reverse);
 
-    final isSelected = !_isKittyCell(char, modifiers) && _isCellSelected(x, y);
+    final isKitty = _isKittyCell(char, modifiers);
+    final isSelected = !isKitty && _isCellSelected(x, y);
+    final linkIdx = !isKitty && !isSelected ? _hoveredLinkIndex(x, y) : -1;
+    final isHoveredLink = linkIdx >= 0;
     final screenX = x * geo.cellWidth;
 
+    final resolvedBg =
+        (isHoveredLink ? _hoveredLinkStyles.backgroundAt(linkIdx) : null) ??
+        _resolveBgColor(
+          bgArgb,
+          fgArgb,
+          isReverse: isReverse,
+          isSelected: isSelected,
+        );
     _stageBackgroundSprite(
       x,
       y,
@@ -671,22 +971,23 @@ final class TuiAtlasPainter extends CustomPainter {
       buffer.width,
       screenX,
       screenY,
-      _resolveBgColor(
-        bgArgb,
-        fgArgb,
-        isReverse: isReverse,
-        isSelected: isSelected,
-      ),
+      resolvedBg,
       geo,
     );
 
-    final resolvedFg = _resolveFgColor(
-      fgArgb,
-      bgArgb,
-      modifiers: modifiers,
-      isReverse: isReverse,
-      isSelected: isSelected,
-    );
+    final resolvedFg =
+        (isHoveredLink ? _hoveredLinkStyles.foregroundAt(linkIdx) : null) ??
+        _resolveFgColor(
+          fgArgb,
+          bgArgb,
+          modifiers: modifiers,
+          isReverse: isReverse,
+          isSelected: isSelected,
+        );
+    final effectiveModifiers = isHoveredLink
+        ? (modifiers |
+              (_hoveredLinkStyles.modifiersAt(linkIdx) ?? Modifier.underline))
+        : modifiers;
 
     if (Modifier.has(modifiers, Modifier.hidden) && !isSelected) {
       return;
@@ -699,8 +1000,11 @@ final class TuiAtlasPainter extends CustomPainter {
       y: y,
       screenX: screenX,
       screenY: screenY,
-      modifiers: modifiers,
+      modifiers: effectiveModifiers,
       resolvedFg: resolvedFg,
+      overrideUlArgb: isHoveredLink
+          ? _hoveredLinkStyles.underlineColorAt(linkIdx)
+          : null,
       geo: geo,
     );
 
@@ -712,7 +1016,7 @@ final class TuiAtlasPainter extends CustomPainter {
       char: char,
       gridCol: x,
       gridRow: y,
-      modifiers: modifiers,
+      modifiers: effectiveModifiers,
       fgArgb: fgArgb,
       bgArgb: bgArgb,
       resolvedFg: resolvedFg,
@@ -738,7 +1042,9 @@ final class TuiAtlasPainter extends CustomPainter {
 
   String? _checkLigatureCandidate(int startX, int y, int len) {
     final firstChar = buffer.getCharacter(startX, y);
-    if (!_isLigatureChar(firstChar)) return null;
+    if (!_isLigatureChar(firstChar) || _hoveredLinkIndex(startX, y) >= 0) {
+      return null;
+    }
 
     final firstMods = buffer.getModifiers(startX, y);
     final firstSelected = _isCellSelected(startX, y);
@@ -755,7 +1061,8 @@ final class TuiAtlasPainter extends CustomPainter {
     for (var i = 1; i < len; i++) {
       final curX = startX + i;
       final ch = buffer.getCharacter(curX, y);
-      if (!_isLigatureChar(ch) ||
+      if (_hoveredLinkIndex(curX, y) >= 0 ||
+          !_isLigatureChar(ch) ||
           !_cellMatchesLigatureRun(
             curX,
             y,
@@ -951,13 +1258,19 @@ final class TuiAtlasPainter extends CustomPainter {
     required double screenY,
     required int modifiers,
     required int resolvedFg,
+    int? overrideUlArgb,
     required _AtlasGeometry geo,
   }) {
     if (char.isEmpty || (modifiers & _decorationMask) == 0) return;
-    final ulArgb = buffer.getUnderlineColor(x, y);
-    final resolvedUl = ulArgb != 0
-        ? palette.resolvePackedColor(ulArgb)
-        : resolvedFg;
+    final int resolvedUl;
+    if (overrideUlArgb != null) {
+      resolvedUl = overrideUlArgb;
+    } else {
+      final ulArgb = buffer.getUnderlineColor(x, y);
+      resolvedUl = ulArgb != 0
+          ? palette.resolvePackedColor(ulArgb)
+          : resolvedFg;
+    }
     decorations.add(
       _CellDecoration(
         x: screenX,
@@ -1050,6 +1363,7 @@ final class TuiAtlasPainter extends CustomPainter {
         modifiers: modifiers,
         fgArgb: fgArgb,
         bgArgb: bgArgb,
+        resolvedFg: resolvedFg,
         screenX: screenX,
         screenY: screenY,
         geo: geo,
@@ -1169,6 +1483,7 @@ final class TuiAtlasPainter extends CustomPainter {
     required int modifiers,
     required int fgArgb,
     required int bgArgb,
+    required int resolvedFg,
     required double screenX,
     required double screenY,
     required _AtlasGeometry geo,
@@ -1188,6 +1503,7 @@ final class TuiAtlasPainter extends CustomPainter {
         modifiers: modifiers,
         fgArgb: fgArgb,
         bgArgb: bgArgb,
+        resolvedFg: resolvedFg,
         x: screenX,
         y: screenY,
         w: isKitty
@@ -1255,15 +1571,7 @@ final class TuiAtlasPainter extends CustomPainter {
   }
 
   void _paintSingleFallbackGlyph(Canvas canvas, _FallbackCell fc) {
-    final isReverse = Modifier.has(fc.modifiers, Modifier.reverse);
-    final color = Color(
-      _resolveFgColor(
-        fc.fgArgb,
-        fc.bgArgb,
-        modifiers: fc.modifiers,
-        isReverse: isReverse,
-      ),
-    );
+    final color = Color(fc.resolvedFg);
     final isBold = Modifier.has(fc.modifiers, Modifier.bold);
     final isItalic = Modifier.has(fc.modifiers, Modifier.italic);
     final isDim = Modifier.has(fc.modifiers, Modifier.dim);
@@ -1714,6 +2022,9 @@ final class TuiAtlasPainter extends CustomPainter {
       oldDelegate._selectionEnd != _selectionEnd ||
       oldDelegate._selectionColBounds != _selectionColBounds ||
       oldDelegate.selectionBoxMode != selectionBoxMode ||
+      oldDelegate.hoveredLink != hoveredLink ||
+      oldDelegate.hoveredLinkStyler != hoveredLinkStyler ||
+      (hoveredLink != null && hoveredLinkStyler != null) ||
       oldDelegate.kittyImages != kittyImages ||
       oldDelegate.kittyImagesById != kittyImagesById ||
       oldDelegate.defaultForegroundArgb != defaultForegroundArgb ||
@@ -1840,6 +2151,7 @@ final class _FallbackCell {
   final int modifiers;
   final int fgArgb;
   final int bgArgb;
+  final int resolvedFg;
   final double x;
   final double y;
   final double w;
@@ -1854,6 +2166,7 @@ final class _FallbackCell {
     required this.modifiers,
     required this.fgArgb,
     required this.bgArgb,
+    required this.resolvedFg,
     required this.x,
     required this.y,
     required this.w,

@@ -431,6 +431,252 @@ void main() {
     },
   );
 
+  test(
+    'TuiAtlasPainter underlines hoveredLink by default and applies hoveredLinkStyler overrides',
+    () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 16.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(atlas.image.dispose);
+
+      final plainBuf = Buffer(10, 2)..writeString(0, 0, 'a b', const Style());
+      final underlinedBuf = Buffer(10, 2)
+        ..writeString(0, 0, 'a b', const Style(modifiers: Modifier.underline));
+      const hoveredLink = (
+        uri: 'https://example.com',
+        startCol: 0,
+        startRow: 0,
+        endCol: 2,
+        endRow: 0,
+      );
+
+      Future<Uint8List> paintWith(
+        Buffer buf, {
+        ResolvedTerminalLink? link,
+        HoveredLinkStyler? styler,
+      }) async {
+        final w = (10 * atlas.cellWidth).ceil();
+        final h = (2 * atlas.cellHeight).ceil();
+        final rec = ui.PictureRecorder();
+        TuiAtlasPainter(
+          buffer: buf,
+          atlas: atlas,
+          fontFamily: 'Roboto Mono',
+          fallbackPainters: const {},
+          onMissingGlyphs: null,
+          hoveredLink: link,
+          hoveredLinkStyler: styler,
+        ).paint(Canvas(rec), Size(w.toDouble(), h.toDouble()));
+        final pic = rec.endRecording();
+        final img = await pic.toImage(w, h);
+        pic.dispose();
+        addTearDown(img.dispose);
+        return (await img.toByteData())!.buffer.asUint8List();
+      }
+
+      final plainBytes = await paintWith(plainBuf);
+      final expectedUnderlinedBytes = await paintWith(underlinedBuf);
+      final defaultHoverBytes = await paintWith(plainBuf, link: hoveredLink);
+
+      expect(defaultHoverBytes, isNot(equals(plainBytes)));
+      expect(defaultHoverBytes, equals(expectedUnderlinedBytes));
+
+      var callCount = 0;
+      final customBytes = await paintWith(
+        plainBuf,
+        link: hoveredLink,
+        styler: (link, cellCount, _, styles) {
+          callCount++;
+          expect(link, equals(hoveredLink));
+          expect(cellCount, equals(3));
+          styles.fillBackground(0xFF1B263B);
+          styles.fillModifiers(Modifier.underline | Modifier.bold);
+          styles.underlineMatchesForeground = true;
+          for (var i = 0; i < cellCount; i++) {
+            styles.setForeground(i, 0xFF00FF00 + i);
+          }
+          expect(styles.backgroundAt(1), equals(0xFF1B263B));
+          expect(styles.underlineColorAt(2), equals(0xFF00FF02));
+          styles.setUnderlineColor(1, 0xFFFF00FF);
+          expect(styles.underlineColorAt(1), equals(0xFFFF00FF));
+        },
+      );
+      expect(callCount, equals(1));
+      expect(customBytes, isNot(equals(defaultHoverBytes)));
+
+      final defaultPainter = TuiAtlasPainter(
+        buffer: plainBuf,
+        atlas: atlas,
+        fontFamily: 'Roboto Mono',
+        fallbackPainters: const {},
+        onMissingGlyphs: null,
+        hoveredLink: hoveredLink,
+      );
+      final styledPainter = TuiAtlasPainter(
+        buffer: plainBuf,
+        atlas: atlas,
+        fontFamily: 'Roboto Mono',
+        fallbackPainters: const {},
+        onMissingGlyphs: null,
+        hoveredLink: hoveredLink,
+        hoveredLinkStyler: (_, count, _, styles) {
+          for (var i = 0; i < count; i++) {
+            styles.setForeground(i, 0xFF112233 + i);
+          }
+        },
+      );
+      expect(styledPainter.shouldRepaint(defaultPainter), isTrue);
+    },
+  );
+
+  test(
+    'HoveredLinkCellStyles handles setBackground->fillBackground, setModifiers->fillModifiers, and reset(-1)',
+    () {
+      final styles = HoveredLinkCellStyles()..reset(4);
+      styles.setBackground(1, 0xFFAA0000);
+      expect(styles.backgroundAt(1), equals(0xFFAA0000));
+      styles.fillBackground(0xFF00BBCC);
+      expect(styles.backgroundAt(0), equals(0xFF00BBCC));
+      expect(styles.backgroundAt(1), equals(0xFF00BBCC));
+      expect(styles.backgroundAt(3), equals(0xFF00BBCC));
+
+      styles.setModifiers(2, Modifier.bold);
+      expect(styles.modifiersAt(2), equals(Modifier.bold));
+      styles.fillModifiers(Modifier.underline);
+      expect(styles.modifiersAt(0), equals(Modifier.underline));
+      expect(styles.modifiersAt(2), equals(Modifier.underline));
+
+      styles.reset(-1);
+      expect(styles.length, equals(0));
+      expect(styles.backgroundAt(0), isNull);
+      expect(styles.modifiersAt(0), isNull);
+    },
+  );
+
+  test(
+    'TuiAtlasPainter renders fallback unbaked glyph inside hoveredLink with styler fgArgb, handles throwing styler, and clips off-top links',
+    () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 16.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(atlas.image.dispose);
+
+      Future<Uint8List> paintWith(
+        Buffer buf, {
+        ResolvedTerminalLink? link,
+        HoveredLinkStyler? styler,
+      }) async {
+        final w = (buf.width * atlas.cellWidth).ceil();
+        final h = (buf.height * atlas.cellHeight).ceil();
+        final rec = ui.PictureRecorder();
+        TuiAtlasPainter(
+          buffer: buf,
+          atlas: atlas,
+          fontFamily: 'Roboto Mono',
+          fallbackPainters: const {},
+          onMissingGlyphs: null,
+          hoveredLink: link,
+          hoveredLinkStyler: styler,
+        ).paint(Canvas(rec), Size(w.toDouble(), h.toDouble()));
+        final pic = rec.endRecording();
+        final img = await pic.toImage(w, h);
+        pic.dispose();
+        addTearDown(img.dispose);
+        return (await img.toByteData())!.buffer.asUint8List();
+      }
+
+      // 1. Unbaked fallback glyph (\u4E2D) receives overridden foreground color.
+      final fallbackBuf = Buffer(6, 2)
+        ..writeString(0, 0, '\u4E2D', const Style());
+      const fallbackLink = (
+        uri: 'https://example.com/cjk',
+        startCol: 0,
+        startRow: 0,
+        endCol: 0,
+        endRow: 0,
+      );
+      final expectedRedFallbackBuf = Buffer(6, 2)
+        ..writeString(
+          0,
+          0,
+          '\u4E2D',
+          const Style(
+            foreground: Color(255, 0, 0),
+            modifiers: Modifier.underline,
+          ),
+        );
+      final expectedFallbackBytes = await paintWith(expectedRedFallbackBuf);
+      final hoveredFallbackBytes = await paintWith(
+        fallbackBuf,
+        link: fallbackLink,
+        styler: (_, _, _, styles) {
+          styles.setForeground(0, 0xFFFF0000);
+        },
+      );
+      expect(hoveredFallbackBytes, equals(expectedFallbackBytes));
+
+      // 2. Throwing hoveredLinkStyler reports error and falls back cleanly to default underline.
+      final plainBuf = Buffer(10, 2)..writeString(0, 0, 'abc', const Style());
+      const plainLink = (
+        uri: 'https://example.com/abc',
+        startCol: 0,
+        startRow: 0,
+        endCol: 2,
+        endRow: 0,
+      );
+      final defaultHoverBytes = await paintWith(plainBuf, link: plainLink);
+      final reportedErrors = <FlutterErrorDetails>[];
+      final previousOnError = FlutterError.onError;
+      FlutterError.onError = reportedErrors.add;
+      try {
+        final fallbackOnThrowBytes = await paintWith(
+          plainBuf,
+          link: plainLink,
+          styler: (_, _, _, styles) {
+            styles.setForeground(0, 0xFF00FF00);
+            throw StateError('boom');
+          },
+        );
+        expect(reportedErrors, hasLength(1));
+        expect(fallbackOnThrowBytes, equals(defaultHoverBytes));
+      } finally {
+        FlutterError.onError = previousOnError;
+      }
+
+      // 3. Off-top clipped link (startRow: -1, endRow: 0) styles visible row 0 cells cleanly.
+      const clippedLink = (
+        uri: 'https://example.com/wrapped',
+        startCol: 5,
+        startRow: -1,
+        endCol: 2,
+        endRow: 0,
+      );
+      int? observedCount;
+      final clippedBytes = await paintWith(
+        plainBuf,
+        link: clippedLink,
+        styler: (_, count, _, styles) {
+          observedCount = count;
+          styles.fillBackground(0xFF224466);
+        },
+      );
+      expect(observedCount, equals(3));
+      final expectedClippedBuf = Buffer(10, 2)
+        ..writeString(
+          0,
+          0,
+          'abc',
+          const Style(
+            background: Color(0x22, 0x44, 0x66),
+            modifiers: Modifier.underline,
+          ),
+        );
+      expect(clippedBytes, equals(await paintWith(expectedClippedBuf)));
+    },
+  );
+
   _defineThemePalettePainterTests();
 }
 

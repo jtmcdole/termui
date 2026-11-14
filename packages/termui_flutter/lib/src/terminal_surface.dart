@@ -185,6 +185,16 @@ final class TerminalSurface extends StatefulWidget {
   /// rows across scrollback and viewport lines; defaults to slicing [buffer].
   final VirtualLineLookup? linkLineLookup;
 
+  /// Optional client-supplied per-cell style override for hovered hyperlinks.
+  ///
+  /// When omitted, hovered links are underlined by default.
+  final HoveredLinkStyler? hoveredLinkStyler;
+
+  /// Optional repaint interval used to animate [hoveredLinkStyler] while a
+  /// link is actively hovered; ignored when [hoveredLinkStyler] is `null` or
+  /// the duration is non-positive.
+  final Duration? hoveredLinkAnimationInterval;
+
   /// Enables built-in host shortcuts (`F12` screenshot, `Shift+F12` rebuild, paste).
   final bool enableHostShortcuts;
 
@@ -242,6 +252,8 @@ final class TerminalSurface extends StatefulWidget {
     this.enableBuiltinSelection = true,
     this.enableBuiltinLinkOpen = true,
     this.linkLineLookup,
+    this.hoveredLinkStyler,
+    this.hoveredLinkAnimationInterval,
     this.enableHostShortcuts = true,
     this.alignment = Alignment.center,
   });
@@ -294,6 +306,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   bool _isLinkModifierActive = false;
   ({int col, int row})? _linkPressCell;
   bool _suppressLinkRightClick = false;
+  Timer? _linkHoverTimer;
   bool _isSelecting = false;
   term.MouseButton _lastPressedButton = term.MouseButton.left;
   _LeftGestureRoute _leftGestureRoute = _LeftGestureRoute.none;
@@ -658,7 +671,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
         oldWidget.linkLineLookup != widget.linkLineLookup ||
         oldWidget.enableBuiltinLinkOpen != widget.enableBuiltinLinkOpen ||
         widget.bufferListenable == null) {
-      _refreshHoverLinkForBufferChange();
+      if (_refreshHoverLinkForBufferChange()) {
+        _syncLinkHoverTicker();
+      }
     }
     if (bindingsChanged) {
       _scheduleGeometrySync();
@@ -696,11 +711,19 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _isLinkModifierActive = false;
       _linkPressCell = null;
       _suppressLinkRightClick = false;
+      _stopLinkHoverTicker();
+    } else if (oldWidget.hoveredLinkStyler != widget.hoveredLinkStyler ||
+        oldWidget.hoveredLinkAnimationInterval !=
+            widget.hoveredLinkAnimationInterval ||
+        oldWidget.enableBuiltinLinkOpen != widget.enableBuiltinLinkOpen) {
+      _stopLinkHoverTicker();
+      _syncLinkHoverTicker();
     }
   }
 
   @override
   void dispose() {
+    _stopLinkHoverTicker();
     HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
     widget.bufferListenable?.removeListener(_onExternalBufferChanged);
     _cancelTerminalStreams();
@@ -759,6 +782,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     }
 
     final linkChanged = _refreshHoverLinkForBufferChange();
+    if (linkChanged) {
+      _syncLinkHoverTicker();
+    }
     final needsWidgetRebuild =
         linkChanged ||
         !hasBuf ||
@@ -827,11 +853,13 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _isLinkModifierActive = false;
       _linkPressCell = null;
       _suppressLinkRightClick = false;
+      _stopLinkHoverTicker();
     }
     setState(() {
       _terminalBuiltinLinkOpen = enabled;
       if (enabled) {
         _refreshHoverLinkForBufferChange();
+        _syncLinkHoverTicker();
       }
     });
   }
@@ -976,6 +1004,37 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     return false;
   }
 
+  bool get _isLinkHovered =>
+      _builtinLinkOpenEnabled && _hoveredLink != null && _isLinkModifierActive;
+
+  bool get _shouldRunHoverTicker {
+    final interval = widget.hoveredLinkAnimationInterval;
+    return _isLinkHovered &&
+        widget.hoveredLinkStyler != null &&
+        interval != null &&
+        interval > Duration.zero;
+  }
+
+  void _syncLinkHoverTicker() {
+    if (!_shouldRunHoverTicker || !mounted) {
+      _stopLinkHoverTicker();
+      return;
+    }
+    if (_linkHoverTimer != null) return;
+    _linkHoverTimer = Timer.periodic(widget.hoveredLinkAnimationInterval!, (_) {
+      if (!mounted || !_shouldRunHoverTicker) {
+        _stopLinkHoverTicker();
+        return;
+      }
+      _paintNotifier.notify();
+    });
+  }
+
+  void _stopLinkHoverTicker() {
+    _linkHoverTimer?.cancel();
+    _linkHoverTimer = null;
+  }
+
   bool _refreshHoverLinkForBufferChange() {
     _hoverLinkResolved = false;
     final prevLink = _hoveredLink;
@@ -1010,6 +1069,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _hoveredLink = _resolveLinkAt(_activeBuffer, cell.col, cell.row);
       _hoverLinkResolved = true;
     }
+    _syncLinkHoverTicker();
     if (mounted && (_hoveredLink != prevLink || _hoveredLink != null)) {
       setState(() {});
     }
@@ -1351,6 +1411,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _hoveredLink = nextLink;
     _hoverLinkResolved = true;
     _isLinkModifierActive = linkMod;
+    if (changed) {
+      _syncLinkHoverTicker();
+    }
     return (nextLink, changed);
   }
 
@@ -1397,6 +1460,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _hoveredLink = null;
     _lastHoverCell = null;
     _hoverLinkResolved = false;
+    _stopLinkHoverTicker();
     if (hadHoveredLink && mounted) {
       setState(() {});
     }
@@ -1910,6 +1974,8 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
                 selectionController: _builtinSelectionEnabled
                     ? _selectionController
                     : null,
+                hoveredLink: _isLinkHovered ? _hoveredLink : null,
+                hoveredLinkStyler: widget.hoveredLinkStyler,
                 kittyImages: _kittyCache.images,
                 kittyImagesById: _kittyCache.imagesById,
                 defaultForegroundArgb: widget.foregroundColor.toARGB32(),
