@@ -1,3 +1,8 @@
+## 0.12.1
+
+ - **FIX**(flutter): support macOS Ctrl+RightClick and plain-text links.
+ - **FEAT**(flutter): underline hovered links by default and batch style hoveredLinkStyler.
+
 ## 0.12.0
 
 > Note: This release has breaking changes.

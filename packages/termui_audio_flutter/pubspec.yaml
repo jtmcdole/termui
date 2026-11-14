@@ -1,6 +1,6 @@
 name: termui_audio_flutter
 description: Flutter and Web SoLoud backend for termui_audio.
-version: 0.3.1
+version: 0.4.0
 repository: https://github.com/jtmcdole/termui/tree/main/packages/termui_audio_flutter
 
 resolution: workspace
@@ -27,7 +27,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_soloud: ^4.0.13
-  termui_audio: ^0.6.0
+  termui_audio: ^0.7.0
 
 dev_dependencies:
   flutter_test:

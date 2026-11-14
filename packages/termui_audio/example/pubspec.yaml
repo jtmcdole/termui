@@ -13,10 +13,10 @@ dependencies:
   flutter:
     sdk: flutter
   material_ui: ^1.3.0
-  termui: ^0.15.0
-  termui_flutter: ^0.12.0
-  termui_audio: ^0.6.0
-  termui_audio_flutter: ^0.3.1
+  termui: ^0.16.0
+  termui_flutter: ^0.12.1
+  termui_audio: ^0.7.0
+  termui_audio_flutter: ^0.4.0
 
 dev_dependencies:
   flutter_test:

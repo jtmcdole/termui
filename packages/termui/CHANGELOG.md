@@ -1,3 +1,9 @@
+## 0.16.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(termui,audio,audio_flutter,pty): add APC Float32 waveform queries and watchWaveform.
+
 ## 0.15.0
 
 > Note: This release has breaking changes.
