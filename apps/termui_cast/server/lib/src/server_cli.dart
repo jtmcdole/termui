@@ -36,11 +36,11 @@ Future<int> runServerCli(
   }
 
   final isCloudRun = env['K_SERVICE']?.isNotEmpty ?? false;
-  if (!config.host.isLoopback && !config.isTlsEnabled && !isCloudRun) {
+  if (!config.host.isLoopback && !isCloudRun) {
     stderrSink.writeln(
       '[termui_cast_server] WARNING: Binding non-loopback '
-      '${config.host.address} over plaintext ws://. Bearer tokens and '
-      'terminal I/O are unencrypted; pass --tls-cert and --tls-key for wss://.',
+      '${config.host.address} over plaintext ws://. Terminate TLS at a '
+      'reverse proxy, SSH tunnel, or Cloud Run IAP in front of the relay.',
     );
   }
 

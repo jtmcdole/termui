@@ -21,9 +21,6 @@ final class WsClientTransport {
   /// Bearer token sent inside the initial binary `AuthFrame`.
   final String token;
 
-  /// Pre-parsed 32-byte DER SHA-256 certificate pin digest (`dart:io` only).
-  final Uint8List? tlsPinBytes;
-
   /// Optional Cloud Run IAP bearer token provider (`dart:io` `wss://` only).
   final IapTokenProvider? iapTokenProvider;
 
@@ -47,22 +44,10 @@ final class WsClientTransport {
   factory WsClientTransport({
     Uri? serverUri,
     String token = '',
-    String? tlsPinSha256,
     IapTokenProvider? iapTokenProvider,
     ClientChannelFactory? channelFactory,
   }) {
     final resolvedUri = _validateServerUri(serverUri);
-    final normalizedPin = tlsPinSha256 == null || tlsPinSha256.isEmpty
-        ? null
-        : tlsPinSha256.toLowerCase();
-    final pinBytes = normalizedPin == null
-        ? null
-        : TokenAuthenticator.parseSha256PinHex(normalizedPin);
-    if (pinBytes != null && resolvedUri.scheme != 'wss') {
-      throw const FormatException(
-        '--tls-pin-sha256 requires a wss:// server URI.',
-      );
-    }
     if (iapTokenProvider != null && resolvedUri.scheme != 'wss') {
       throw const FormatException(
         'Cloud Run IAP authentication requires a wss:// server URI.',
@@ -71,14 +56,12 @@ final class WsClientTransport {
     return WsClientTransport._(
       serverUri: resolvedUri,
       token: token,
-      tlsPinBytes: pinBytes,
       iapTokenProvider: iapTokenProvider,
       customChannelFactory: channelFactory,
       channelFactory:
           channelFactory ??
           (() => openPlatformClientWebSocket(
             resolvedUri,
-            tlsPinBytes: pinBytes,
             iapTokenProvider: iapTokenProvider,
           )),
     );
@@ -87,7 +70,6 @@ final class WsClientTransport {
   WsClientTransport._({
     required this.serverUri,
     required this.token,
-    required this.tlsPinBytes,
     required this.iapTokenProvider,
     required ClientChannelFactory? customChannelFactory,
     required ClientChannelFactory channelFactory,
@@ -95,15 +77,9 @@ final class WsClientTransport {
        _channelFactory = channelFactory;
 
   /// Creates a fresh transport targeting [endpoint], preserving any injected
-  /// channel factory seam or compatible `wss://` certificate pin and IAP signer.
+  /// channel factory seam or compatible `wss://` IAP signer.
   WsClientTransport copyWithEndpoint(CastEndpoint endpoint) {
     final resolvedUri = _validateServerUri(endpoint.serverUri);
-    final preservedPin =
-        tlsPinBytes != null &&
-            resolvedUri.scheme == 'wss' &&
-            resolvedUri.host == serverUri.host
-        ? tlsPinBytes
-        : null;
     final preservedIapProvider =
         iapTokenProvider != null &&
             resolvedUri.scheme == 'wss' &&
@@ -116,14 +92,12 @@ final class WsClientTransport {
     return WsClientTransport._(
       serverUri: resolvedUri,
       token: endpoint.token,
-      tlsPinBytes: preservedPin,
       iapTokenProvider: preservedIapProvider,
       customChannelFactory: customFactory,
       channelFactory:
           customFactory ??
           (() => openPlatformClientWebSocket(
             resolvedUri,
-            tlsPinBytes: preservedPin,
             iapTokenProvider: preservedIapProvider,
           )),
     );

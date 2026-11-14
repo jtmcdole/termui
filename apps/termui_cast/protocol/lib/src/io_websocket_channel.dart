@@ -8,7 +8,6 @@ import 'package:crypto/crypto.dart';
 import 'package:stream_channel/stream_channel.dart';
 
 import 'buffer_frame_codec.dart';
-import 'token_auth.dart';
 
 const String _webSocketGuid = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 
@@ -556,33 +555,16 @@ final class _MeteredWebSocketSocket extends Stream<Uint8List>
   InternetAddress get remoteAddress => _inner.remoteAddress;
 }
 
-/// Creates an [HttpClient] configured with 32-byte DER SHA-256 certificate
-/// pinning when [tlsPinSha256] is non-null, or returns `null` when unpinned.
-HttpClient? createPinnedHttpClient(Uri uri, {Uint8List? tlsPinSha256}) {
-  if (tlsPinSha256 == null) return null;
-  if (uri.scheme != 'wss' && uri.scheme != 'https') {
-    throw const FormatException(
-      '--tls-pin-sha256 requires a wss:// server URI.',
-    );
-  }
-  return HttpClient(context: SecurityContext(withTrustedRoots: false))
-    ..badCertificateCallback = (cert, _, _) =>
-        TokenAuthenticator.verifyCertificateDerPin(cert.der, tlsPinSha256);
-}
-
 /// Connects to a `ws://` or `wss://` [uri] with uncompressed frames, optional
-/// 32-byte DER SHA-256 certificate pinning, optional HTTP upgrade [headers],
-/// and [maxPayloadLength] enforcement.
+/// HTTP upgrade [headers], and [maxPayloadLength] enforcement.
 Future<StreamChannel<Uint8List>> connectCastWebSocket(
   Uri uri, {
-  Uint8List? tlsPinSha256,
   Map<String, Object>? headers,
   int maxPayloadLength = BufferFrameCodec.maxFrameBytes,
   Duration timeout = const Duration(seconds: 10),
   Duration pingInterval = const Duration(seconds: 20),
 }) async {
-  final customClient = createPinnedHttpClient(uri, tlsPinSha256: tlsPinSha256);
-  final client = (customClient ?? HttpClient())..connectionTimeout = timeout;
+  final client = HttpClient()..connectionTimeout = timeout;
   var canceled = false;
   final openFuture = _openUpgradedClientWebSocket(
     client,

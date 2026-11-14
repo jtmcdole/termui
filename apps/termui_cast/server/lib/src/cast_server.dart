@@ -96,14 +96,13 @@ final class CastServer {
   }
 
   Uri _endpointUri(String path) {
-    final scheme = config.isTlsEnabled ? 'wss' : 'ws';
     final rawHost = _httpServer.address.address;
     final connectHost = switch (rawHost) {
       '0.0.0.0' => '127.0.0.1',
       '::' => '::1',
       _ => rawHost,
     };
-    return Uri(scheme: scheme, host: connectHost, port: port, path: path);
+    return Uri(scheme: 'ws', host: connectHost, port: port, path: path);
   }
 
   Future<void> _handleHttpRequest(HttpRequest request) async {
@@ -206,13 +205,6 @@ final class CastServer {
     }
   }
 
-  static Future<HttpServer> _bindHttpServer(ServerConfig config) async {
-    if (!config.isTlsEnabled) {
-      return HttpServer.bind(config.host, config.port);
-    }
-    final context = SecurityContext()
-      ..useCertificateChain(config.tlsCertPath!)
-      ..usePrivateKey(config.tlsKeyPath!);
-    return HttpServer.bindSecure(config.host, config.port, context);
-  }
+  static Future<HttpServer> _bindHttpServer(ServerConfig config) =>
+      HttpServer.bind(config.host, config.port);
 }
