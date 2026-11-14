@@ -151,6 +151,16 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.linux),
       _testFastPrintableAfterCtrlAndAlt,
     );
+    testWidgets(
+      'attaches TextInput with View.of(context).viewId on Windows and delivers printable deltas',
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+      _testWindowsViewIdAndPrintableDeltas,
+    );
+    testWidgets(
+      'attaches with viewId when FocusNode is pre-focused and reattaches if viewId changes',
+      variant: TargetPlatformVariant.only(TargetPlatform.windows),
+      _testPreFocusedAndViewIdChange,
+    );
   });
 }
 
@@ -1352,4 +1362,120 @@ Future<void> _testBufferProviderWithoutListenableAndExternallyPrepared(
     ),
   );
   expect(atlasController.fallbackPainters.keys.any((k) => k.$1 == 'Х'), isTrue);
+}
+
+int? _lastSetClientViewId(WidgetTester tester) {
+  final calls = tester.testTextInput.log
+      .where((m) => m.method == 'TextInput.setClient')
+      .toList();
+  if (calls.isEmpty) return null;
+  if (calls.last.arguments case [_, final Map<Object?, Object?> config]) {
+    return config['viewId'] as int?;
+  }
+  return null;
+}
+
+Future<void> _testWindowsViewIdAndPrintableDeltas(WidgetTester tester) async {
+  final terminal = FlutterTerminal();
+  addTearDown(terminal.dispose);
+  final events = <term.InputEvent>[];
+  final sub = terminal.events.listen(events.add);
+  addTearDown(sub.cancel);
+
+  final imeClient = TerminalImeClient();
+  addTearDown(imeClient.dispose);
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 480,
+          height: 320,
+          child: TerminalSurface(
+            terminal: terminal,
+            imeClient: imeClient,
+            buffer: Buffer(40, 12),
+            activePtySize: const (30, 10),
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  expect(imeClient.isAttached, isTrue);
+  expect(_lastSetClientViewId(tester), equals(tester.view.viewId));
+
+  await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+  await tester.pump();
+  expect(events, isEmpty);
+
+  await _sendDeltas(tester, [
+    _deltaPayload(
+      oldText: '',
+      start: 0,
+      end: 0,
+      deltaText: 'a',
+      selectionBase: 1,
+      selectionExtent: 1,
+    ),
+  ]);
+  expect(events.whereType<term.KeyEvent>().toList(), [
+    const term.KeyEvent('a', term.KeyType.character),
+  ]);
+}
+
+Future<void> _testPreFocusedAndViewIdChange(WidgetTester tester) async {
+  final focusNode = FocusNode();
+  addTearDown(focusNode.dispose);
+  final imeClient = TerminalImeClient();
+  addTearDown(imeClient.dispose);
+
+  // Focus the node on a host Focus first so it already has focus when
+  // TerminalSurface mounts with the shared FocusNode.
+  await tester.pumpWidget(
+    Directionality(
+      textDirection: TextDirection.ltr,
+      child: Focus(
+        focusNode: focusNode,
+        autofocus: true,
+        child: const SizedBox(),
+      ),
+    ),
+  );
+  await tester.pump();
+  expect(focusNode.hasFocus, isTrue);
+
+  tester.testTextInput.log.clear();
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 480,
+          height: 320,
+          child: TerminalSurface(
+            focusNode: focusNode,
+            imeClient: imeClient,
+            buffer: Buffer(40, 12),
+            activePtySize: const (30, 10),
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pump();
+
+  expect(imeClient.isAttached, isTrue);
+  expect(_lastSetClientViewId(tester), equals(tester.view.viewId));
+
+  // Changing viewId triggers a fresh TextInput.setClient with the new viewId.
+  tester.testTextInput.log.clear();
+  imeClient.attach(
+    TerminalImeClient.defaultInputConfiguration.copyWith(viewId: 42),
+  );
+  expect(_lastSetClientViewId(tester), equals(42));
 }
