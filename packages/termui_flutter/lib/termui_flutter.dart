@@ -81,4 +81,9 @@ export 'src/util/font_helper.dart' show waitForFontsToLoad;
 export 'src/util/url_launcher.dart'
     show isAllowedExternalUrl, parseAllowedExternalUri;
 export 'package:termui/ui/widgets/interactive/selection_controller.dart'
-    show TerminalSelectionController, SelectionMode, SelectionRegion;
+    show
+        SelectionMode,
+        SelectionRegion,
+        TerminalSelectionController,
+        VirtualLineLookup,
+        VirtualLineSlice;

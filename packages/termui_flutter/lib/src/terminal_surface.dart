@@ -22,6 +22,7 @@ import 'rendering/atlas_controller.dart';
 import 'rendering/painter.dart';
 import 'service/terminal_service.dart';
 import 'terminal_ime_client.dart';
+import 'util/url_launcher.dart';
 
 enum _LeftGestureRoute { none, localSelection, ptyMouse }
 
@@ -175,8 +176,14 @@ final class TerminalSurface extends StatefulWidget {
   /// Enables built-in viewport mouse selection and auto-copy.
   final bool enableBuiltinSelection;
 
-  /// Enables built-in `OSC 8` link hover cursor and `Ctrl/Cmd+Click` launch.
+  /// Enables built-in `OSC 8` and plain-text (`http`/`https`/`mailto`) link
+  /// hover cursor feedback and `Ctrl/Cmd+Click` (including macOS `Ctrl+RightClick`)
+  /// launch.
   final bool enableBuiltinLinkOpen;
+
+  /// Optional virtual row lookup used by link resolution to span soft-wrapped
+  /// rows across scrollback and viewport lines; defaults to slicing [buffer].
+  final VirtualLineLookup? linkLineLookup;
 
   /// Enables built-in host shortcuts (`F12` screenshot, `Shift+F12` rebuild, paste).
   final bool enableHostShortcuts;
@@ -234,6 +241,7 @@ final class TerminalSurface extends StatefulWidget {
     this.selectionController,
     this.enableBuiltinSelection = true,
     this.enableBuiltinLinkOpen = true,
+    this.linkLineLookup,
     this.enableHostShortcuts = true,
     this.alignment = Alignment.center,
   });
@@ -280,9 +288,12 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   late bool _terminalBuiltinLinkOpen;
 
   MouseCursor _currentCursor = SystemMouseCursors.basic;
-  String? _hoveredUri;
+  ResolvedTerminalLink? _hoveredLink;
+  ({int col, int row})? _lastHoverCell;
+  bool _hoverLinkResolved = false;
   bool _isLinkModifierActive = false;
   ({int col, int row})? _linkPressCell;
+  bool _suppressLinkRightClick = false;
   bool _isSelecting = false;
   term.MouseButton _lastPressedButton = term.MouseButton.left;
   _LeftGestureRoute _leftGestureRoute = _LeftGestureRoute.none;
@@ -340,7 +351,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   MouseCursor get _effectiveCursor =>
       (_builtinLinkOpenEnabled &&
-          _hoveredUri != null &&
+          _hoveredLink != null &&
           _isLinkModifierActive &&
           _currentCursor == SystemMouseCursors.basic)
       ? SystemMouseCursors.click
@@ -362,6 +373,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _kittyCache = _KittyGpuImageCache(onDecoded: _onKittyImageDecoded);
     _initModeFlags();
     _bindTerminalStreams();
+    HardwareKeyboard.instance.addHandler(_onHardwareKeyEvent);
     widget.bufferListenable?.addListener(_onExternalBufferChanged);
     _hadActiveBuffer = _activeBuffer != null;
     _lastCursorPosition =
@@ -642,6 +654,12 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
         oldWidget.buffer != widget.buffer ||
         oldWidget.bufferProvider != widget.bufferProvider ||
         oldWidget.cursorPosition != widget.cursorPosition;
+    if (bindingsChanged ||
+        oldWidget.linkLineLookup != widget.linkLineLookup ||
+        oldWidget.enableBuiltinLinkOpen != widget.enableBuiltinLinkOpen ||
+        widget.bufferListenable == null) {
+      _refreshHoverLinkForBufferChange();
+    }
     if (bindingsChanged) {
       _scheduleGeometrySync();
     }
@@ -672,14 +690,18 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _selectionController.clearSelection();
     }
     if (oldWidget.enableBuiltinLinkOpen && !widget.enableBuiltinLinkOpen) {
-      _hoveredUri = null;
+      _hoveredLink = null;
+      _lastHoverCell = null;
+      _hoverLinkResolved = false;
       _isLinkModifierActive = false;
       _linkPressCell = null;
+      _suppressLinkRightClick = false;
     }
   }
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
     widget.bufferListenable?.removeListener(_onExternalBufferChanged);
     _cancelTerminalStreams();
     _focusNode.removeListener(_onFocusChanged);
@@ -736,7 +758,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _scheduleGeometrySync();
     }
 
+    final linkChanged = _refreshHoverLinkForBufferChange();
     final needsWidgetRebuild =
+        linkChanged ||
         !hasBuf ||
         !_hadActiveBuffer ||
         !identical(buf, _lastPaintedBuffer) ||
@@ -797,12 +821,18 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   void _onTerminalBuiltinLinkOpenChanged(bool enabled) {
     if (!mounted) return;
     if (!enabled) {
-      _hoveredUri = null;
+      _hoveredLink = null;
+      _lastHoverCell = null;
+      _hoverLinkResolved = false;
       _isLinkModifierActive = false;
       _linkPressCell = null;
+      _suppressLinkRightClick = false;
     }
     setState(() {
       _terminalBuiltinLinkOpen = enabled;
+      if (enabled) {
+        _refreshHoverLinkForBufferChange();
+      }
     });
   }
 
@@ -932,17 +962,56 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   static bool _isLinkOpenModifierPressed() {
     final kb = HardwareKeyboard.instance;
-    return kb.isControlPressed || kb.isMetaPressed;
+    // Exclude Shift/Alt so Ctrl+Shift (forced selection) and Alt+Click (block
+    // selection) remain unaffected.
+    return (kb.isControlPressed || kb.isMetaPressed) &&
+        !kb.isShiftPressed &&
+        !kb.isAltPressed;
+  }
+
+  bool _onHardwareKeyEvent(KeyEvent _) {
+    // Sync modifier state even when this pane does not yet hold keyboard focus
+    // so stationary Ctrl/Cmd hover feedback updates across unfocused panes.
+    _syncLinkModifierState();
+    return false;
+  }
+
+  bool _refreshHoverLinkForBufferChange() {
+    _hoverLinkResolved = false;
+    final prevLink = _hoveredLink;
+    final prevMod = _isLinkModifierActive;
+    final hoverCell = _lastHoverCell;
+    final linkMod = _isLinkOpenModifierPressed();
+    if (!_builtinLinkOpenEnabled ||
+        _isSelecting ||
+        hoverCell == null ||
+        !linkMod) {
+      _hoveredLink = null;
+      _isLinkModifierActive = _builtinLinkOpenEnabled && linkMod;
+      return _hoveredLink != prevLink || _isLinkModifierActive != prevMod;
+    }
+    _hoveredLink = _resolveLinkAt(_activeBuffer, hoverCell.col, hoverCell.row);
+    _hoverLinkResolved = true;
+    _isLinkModifierActive = true;
+    return _hoveredLink != prevLink || !prevMod;
   }
 
   void _syncLinkModifierState() {
     if (!_builtinLinkOpenEnabled) return;
     final pressed = _isLinkOpenModifierPressed();
-    if (pressed != _isLinkModifierActive) {
-      _isLinkModifierActive = pressed;
-      if (_hoveredUri != null && mounted) {
-        setState(() {});
-      }
+    if (pressed == _isLinkModifierActive) return;
+    final prevLink = _hoveredLink;
+    _isLinkModifierActive = pressed;
+    if (!pressed) {
+      _hoveredLink = null;
+      _hoverLinkResolved = false;
+    } else if (_lastHoverCell case final cell?
+        when !_isSelecting && !_hoverLinkResolved) {
+      _hoveredLink = _resolveLinkAt(_activeBuffer, cell.col, cell.row);
+      _hoverLinkResolved = true;
+    }
+    if (mounted && (_hoveredLink != prevLink || _hoveredLink != null)) {
+      setState(() {});
     }
   }
 
@@ -979,6 +1048,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final rawSteps = (_scrollRemainderDy / cellH).truncate();
     if (rawSteps == 0) return;
     _scrollRemainderDy -= rawSteps * cellH;
+    _hoverLinkResolved = false;
 
     final (col, row) = _clampCellToActiveGrid(
       (event.localPosition.dx / cellW).floor(),
@@ -1093,17 +1163,14 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     }
     _updateSelectionAndUri(coords.col, coords.row, termuiButton, termuiType);
 
-    final isLeftButton = termuiButton == term.MouseButton.left;
-    final suppressPtyMouse =
-        isLeftButton &&
-        _leftGestureRoute == _LeftGestureRoute.localSelection &&
-        (termuiType == term.MouseEventType.press ||
-            termuiType == term.MouseEventType.drag ||
-            termuiType == term.MouseEventType.release);
-    if (isLeftButton && termuiType == term.MouseEventType.release) {
-      _leftGestureRoute = _LeftGestureRoute.none;
-    }
-    if (suppressPtyMouse) return;
+    final suppressLeftPtyMouse =
+        termuiButton == term.MouseButton.left &&
+        _consumeLeftPtySuppression(termuiType);
+    final suppressRightLinkMouse = _consumeRightLinkSuppression(
+      termuiButton,
+      termuiType,
+    );
+    if (suppressLeftPtyMouse || suppressRightLinkMouse) return;
 
     final termEvent = term.MouseEvent(
       x: coords.col + 1,
@@ -1125,6 +1192,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final route = _leftGestureRoute;
     _resetScrollAccumulator();
     _linkPressCell = null;
+    _suppressLinkRightClick = false;
     _isSelecting = false;
     _lastLeftTapAt = null;
     _lastLeftTapCell = null;
@@ -1171,36 +1239,168 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     term.MouseButton button,
     term.MouseEventType type,
   ) {
-    final (nextUri, uriChanged) = _updateHoveredLinkCell(col, row);
+    final (nextLink, uriChanged) = _updateHoveredLinkCell(col, row);
     if (button == term.MouseButton.left) {
       if (type == term.MouseEventType.press) {
-        _handleLeftPointerPress(col, row, nextUri);
+        _handleLeftPointerPress(col, row, nextLink?.uri);
       } else if (type == term.MouseEventType.drag) {
         _handlePointerDrag(col, row);
       } else if (type == term.MouseEventType.release) {
-        _finishPointerRelease(col, row, nextUri);
+        _finishPointerRelease(col, row, nextLink?.uri);
       }
+    } else if (button == term.MouseButton.right) {
+      _handleRightLinkPointerEvent(col, row, type, nextLink?.uri);
     }
     if (uriChanged && mounted) {
       setState(() {});
     }
   }
 
-  (String?, bool) _updateHoveredLinkCell(int col, int row) {
+  bool _consumeLeftPtySuppression(term.MouseEventType type) {
+    final suppress =
+        _leftGestureRoute == _LeftGestureRoute.localSelection &&
+        (type == term.MouseEventType.press ||
+            type == term.MouseEventType.drag ||
+            type == term.MouseEventType.release);
+    if (type == term.MouseEventType.release) {
+      _leftGestureRoute = _LeftGestureRoute.none;
+    }
+    return suppress;
+  }
+
+  bool _consumeRightLinkSuppression(
+    term.MouseButton button,
+    term.MouseEventType type,
+  ) {
+    if (button != term.MouseButton.right || !_suppressLinkRightClick) {
+      return false;
+    }
+    if (type == term.MouseEventType.release) {
+      _suppressLinkRightClick = false;
+    }
+    return true;
+  }
+
+  /// Handles macOS `Ctrl+Click`, which AppKit/Flutter maps to a secondary
+  /// (right) mouse button event while `Control` is pressed.
+  void _handleRightLinkPointerEvent(
+    int col,
+    int row,
+    term.MouseEventType type,
+    String? hoveredUri,
+  ) {
+    if (defaultTargetPlatform != TargetPlatform.macOS) return;
+    if (type == term.MouseEventType.press) {
+      final kb = HardwareKeyboard.instance;
+      final isCtrlOnly =
+          kb.isControlPressed &&
+          !kb.isShiftPressed &&
+          !kb.isAltPressed &&
+          !kb.isMetaPressed;
+      if (_builtinLinkOpenEnabled &&
+          isCtrlOnly &&
+          hoveredUri != null &&
+          hoveredUri.isNotEmpty) {
+        _linkPressCell = (col: col, row: row);
+        _suppressLinkRightClick = true;
+      }
+      return;
+    }
+    if (!_suppressLinkRightClick) return;
+    if (type == term.MouseEventType.drag &&
+        _linkPressCell != (col: col, row: row)) {
+      _linkPressCell = null;
+      return;
+    }
+    if (type == term.MouseEventType.release) {
+      final clicked = _linkPressCell == (col: col, row: row);
+      _linkPressCell = null;
+      if (_builtinLinkOpenEnabled &&
+          clicked &&
+          hoveredUri != null &&
+          hoveredUri.isNotEmpty &&
+          _isLinkOpenModifierPressed()) {
+        unawaited(widget.service.openUrl(hoveredUri));
+      }
+    }
+  }
+
+  (ResolvedTerminalLink?, bool) _updateHoveredLinkCell(int col, int row) {
     if (!_builtinLinkOpenEnabled) return (null, false);
-    final buf = _activeBuffer;
-    final inBounds =
-        buf != null &&
-        col >= 0 &&
-        col < buf.width &&
-        row >= 0 &&
-        row < buf.height;
-    final nextUri = inBounds ? buf.getUri(col, row) : null;
+    final cell = (col: col, row: row);
+    if (_lastHoverCell != cell) {
+      _lastHoverCell = cell;
+      _hoverLinkResolved = false;
+    }
     final linkMod = _isLinkOpenModifierPressed();
-    final changed = nextUri != _hoveredUri || linkMod != _isLinkModifierActive;
-    _hoveredUri = nextUri;
+    if (!linkMod || _isSelecting) {
+      final changed = _hoveredLink != null || linkMod != _isLinkModifierActive;
+      _hoveredLink = null;
+      _hoverLinkResolved = false;
+      _isLinkModifierActive = linkMod;
+      return (null, changed);
+    }
+    if (_hoverLinkResolved) {
+      final changed = linkMod != _isLinkModifierActive;
+      _isLinkModifierActive = linkMod;
+      return (_hoveredLink, changed);
+    }
+    final nextLink = _resolveLinkAt(_activeBuffer, col, row);
+    final changed =
+        nextLink != _hoveredLink || linkMod != _isLinkModifierActive;
+    _hoveredLink = nextLink;
+    _hoverLinkResolved = true;
     _isLinkModifierActive = linkMod;
-    return (nextUri, changed);
+    return (nextLink, changed);
+  }
+
+  ResolvedTerminalLink? _resolveLinkAt(Buffer? buf, int col, int row) {
+    if (buf == null ||
+        col < 0 ||
+        col >= buf.width ||
+        row < 0 ||
+        row >= buf.height) {
+      return null;
+    }
+    final lookup =
+        widget.linkLineLookup ?? (int vRow) => _bufferLineSlice(buf, vRow);
+    final resolved = TerminalSelectionController.resolveLinkSpanAt(
+      lookup: lookup,
+      col: col,
+      virtualRow: row,
+    );
+    if (resolved == null) return null;
+    final parsed = parseAllowedExternalUri(resolved.uri);
+    if (parsed == null) return null;
+    return (
+      uri: parsed.toString(),
+      startCol: resolved.startCol,
+      startRow: resolved.startRow,
+      endCol: resolved.endCol,
+      endRow: resolved.endRow,
+    );
+  }
+
+  static VirtualLineSlice? _bufferLineSlice(Buffer buf, int row) {
+    if (row < 0 || row >= buf.height) return null;
+    final start = row * buf.width;
+    final end = start + buf.width;
+    return (
+      isWrapped: false,
+      characters: buf.characters.sublist(start, end),
+      uris: buf.sliceUris(start, end),
+    );
+  }
+
+  void _handlePointerExit(PointerExitEvent event) {
+    final hadHoveredLink = _hoveredLink != null;
+    _hoveredLink = null;
+    _lastHoverCell = null;
+    _hoverLinkResolved = false;
+    if (hadHoveredLink && mounted) {
+      setState(() {});
+    }
+    widget.onPointerExit?.call(event);
   }
 
   void _handleLeftPointerPress(int col, int row, String? hoveredUri) {
@@ -1603,7 +1803,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
             key: _boundaryKey,
             child: MouseRegion(
               cursor: _effectiveCursor,
-              onExit: widget.onPointerExit,
+              onExit: _handlePointerExit,
               child: _buildPointerListener(layoutSize),
             ),
           ),
