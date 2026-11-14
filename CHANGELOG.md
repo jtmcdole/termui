@@ -3,6 +3,72 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-14
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.16.0`](#termui---v0160)
+ - [`termui_audio` - `v0.7.0`](#termui_audio---v070)
+ - [`termui_audio_flutter` - `v0.4.0`](#termui_audio_flutter---v040)
+ - [`termui_pty` - `v0.12.0`](#termui_pty---v0120)
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.12.1`](#termui_flutter---v0121)
+ - [`termui_recorder` - `v0.10.5`](#termui_recorder---v0105)
+ - [`termui_test` - `v0.4.5`](#termui_test---v045)
+ - [`termui_hotreload` - `v0.6.31`](#termui_hotreload---v0631)
+ - [`termui_tinpot` - `v0.5.3`](#termui_tinpot---v053)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.5`
+ - `termui_test` - `v0.4.5`
+ - `termui_hotreload` - `v0.6.31`
+ - `termui_tinpot` - `v0.5.3`
+
+---
+
+#### `termui` - `v0.16.0`
+
+ - **BREAKING** **FEAT**(termui,audio,audio_flutter,pty): add APC Float32 waveform queries and watchWaveform.
+
+#### `termui_audio` - `v0.7.0`
+
+ - **BREAKING** **FIX**(audio,audio_flutter,pty): harden stream PCM capacity, transport fades, pitch buses, and wave gate.
+ - **BREAKING** **FEAT**(termui,audio,audio_flutter,pty): add APC Float32 waveform queries and watchWaveform.
+ - **BREAKING** **FEAT**(audio,pty): add pass-through APC buffer streaming and caster-host loadUrl.
+ - **BREAKING** **FEAT**(audio,audio_flutter,pty): add APC mixing buses, 12 DSP filters, and annexed pitch shift.
+ - **BREAKING** **FEAT**(audio,pty): add MP3 duration parser, transport/fade APC updates, and Doppler.
+ - **BREAKING** **FEAT**(audio,pty): add live APC a=update 3D spatial pan, attenuation, and gain.
+
+#### `termui_audio_flutter` - `v0.4.0`
+
+ - **BREAKING** **FIX**(audio,audio_flutter,pty): harden stream PCM capacity, transport fades, pitch buses, and wave gate.
+ - **BREAKING** **FEAT**(termui,audio,audio_flutter,pty): add APC Float32 waveform queries and watchWaveform.
+ - **BREAKING** **FEAT**(audio,audio_flutter,pty): add APC mixing buses, 12 DSP filters, and annexed pitch shift.
+
+#### `termui_pty` - `v0.12.0`
+
+ - **BREAKING** **FIX**(audio,audio_flutter,pty): harden stream PCM capacity, transport fades, pitch buses, and wave gate.
+ - **BREAKING** **FEAT**(termui,audio,audio_flutter,pty): add APC Float32 waveform queries and watchWaveform.
+ - **BREAKING** **FEAT**(audio,pty): add pass-through APC buffer streaming and caster-host loadUrl.
+ - **BREAKING** **FEAT**(audio,audio_flutter,pty): add APC mixing buses, 12 DSP filters, and annexed pitch shift.
+ - **BREAKING** **FEAT**(audio,pty): add MP3 duration parser, transport/fade APC updates, and Doppler.
+ - **BREAKING** **FEAT**(audio,pty): add live APC a=update 3D spatial pan, attenuation, and gain.
+
+#### `termui_flutter` - `v0.12.1`
+
+ - **FIX**(flutter): support macOS Ctrl+RightClick and plain-text links.
+ - **FEAT**(flutter): underline hovered links by default and batch style hoveredLinkStyler.
+
+
 ## 2026-11-13
 
 ### Changes

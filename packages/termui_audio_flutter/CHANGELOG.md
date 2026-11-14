@@ -1,3 +1,11 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(audio,audio_flutter,pty): harden stream PCM capacity, transport fades, pitch buses, and wave gate.
+ - **BREAKING** **FEAT**(termui,audio,audio_flutter,pty): add APC Float32 waveform queries and watchWaveform.
+ - **BREAKING** **FEAT**(audio,audio_flutter,pty): add APC mixing buses, 12 DSP filters, and annexed pitch shift.
+
 ## 0.3.1
 
  - Update a dependency to the latest release.
