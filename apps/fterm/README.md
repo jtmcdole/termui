@@ -117,6 +117,6 @@ Releases use a two-step GitHub Actions pipeline powered by Melos:
 
 1. If workspace libraries under `packages/` have unreleased changes that `fterm` depends on, run **[Prepare release](../../.github/workflows/release-prepare.yml)** first so Melos versions and tags those packages.
 2. Run **[Prepare fterm release](../../.github/workflows/release-fterm-prepare.yml)** (`Actions -> Prepare fterm release -> Run workflow`). Melos bumps `apps/fterm` and any modified `apps/termui_cast/*` packages from Conventional Commits, writes `CHANGELOG.md` entries, and opens (or updates) a `chore(fterm-release): release fterm vX.Y.Z` pull request against `main`.
-3. Review and merge that pull request into `main`. **[Release fterm](../../.github/workflows/release-fterm.yml)** starts automatically and builds the `macos-arm64`, `linux-x64`, `linux-arm64`, and `windows-x64` archives. It then tags `fterm-vX.Y.Z` (plus companion `termui_cast*-v*` baseline tags) and publishes the GitHub Release.
+3. Review and merge that pull request into `main`. **[Release fterm](../../.github/workflows/release-fterm.yml)** starts automatically and builds the `macos-arm64`, `linux-x64`, and `windows-x64` archives. It then tags `fterm-vX.Y.Z` (plus companion `termui_cast*-v*` baseline tags) and publishes the GitHub Release.
 
 You can also trigger **[Release fterm](../../.github/workflows/release-fterm.yml)** manually via `workflow_dispatch` to cut a draft release or override the version string.
