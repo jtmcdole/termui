@@ -1,3 +1,10 @@
+## 0.18.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(form): integrate FormField with FocusNode tree and Form.onSubmit.
+ - **BREAKING** **FEAT**(ui): add MouseEventConsumer, non-stealing scope seeding, and TextField click-to-caret.
+
 ## 0.17.0
 
 > Note: This release has breaking changes.
