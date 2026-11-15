@@ -128,10 +128,10 @@ final class IoLocalHostDriver implements LocalHostDriver {
     environment: environment,
   );
 
-  /// Whether any mounted local host currently has an active share status poll timer.
+  /// Whether any mounted local host currently has an active share status listener.
   @visibleForTesting
   bool get hasActiveSharePolling =>
-      _hosts.values.any((host) => host._sharePollTimer != null);
+      _hosts.values.any((host) => host._shareStatusSub != null);
 
   @override
   bool get isSupported => !_disposed;
@@ -176,6 +176,9 @@ final class IoLocalHostDriver implements LocalHostDriver {
       throw StateError('IoLocalHostDriver is disposed.');
     }
     await _ensureConPtyPrepared();
+    if (_disposed) {
+      throw StateError('IoLocalHostDriver is disposed.');
+    }
     final executable = _resolveShellExecutable(config.executable);
     final arguments = resolveShellArguments(config, executable);
     final envOverrides = resolveChildEnvironmentOverrides(Platform.environment);
@@ -328,7 +331,7 @@ final class _IoLocalPaneHost implements LocalPaneHost {
       StreamController<LocalShareSnapshot>.broadcast();
 
   CasterService? _shareService;
-  Timer? _sharePollTimer;
+  StreamSubscription<CasterStatusSnapshot>? _shareStatusSub;
   LocalShareSnapshot _shareSnapshot = LocalShareSnapshot.unshared;
   String? _lastShareError;
   bool _disposed = false;
@@ -377,8 +380,8 @@ final class _IoLocalPaneHost implements LocalPaneHost {
       token: casterToken,
       sessionId: sessionId,
       title: safeTitle,
-      initialCols: port.cols,
-      initialRows: port.rows,
+      initialCols: port.cols.clamp(1, 400),
+      initialRows: port.rows.clamp(1, 200),
       uploadDirPath: uploadDirPath,
       command: <String>[_executableName],
     );
@@ -388,7 +391,6 @@ final class _IoLocalPaneHost implements LocalPaneHost {
       config: config,
       iapTokenProvider: iapTokenProvider,
       channelOpener: channelOpener,
-      onLog: (message) => _onShareServiceLog(service, sessionId, message),
     );
     _lastShareError = null;
     _shareService = service;
@@ -398,12 +400,12 @@ final class _IoLocalPaneHost implements LocalPaneHost {
         sessionId: sessionId,
       ),
     );
-    _startShareStatusPolling(service, sessionId);
+    _startShareStatusListening(service, sessionId);
     try {
       await service.start();
     } on Object catch (error) {
       if (identical(_shareService, service)) {
-        _stopPolling();
+        await _stopStatusSubscription();
         _shareService = null;
         _setShareSnapshot(
           LocalShareSnapshot(
@@ -414,42 +416,8 @@ final class _IoLocalPaneHost implements LocalPaneHost {
       }
       rethrow;
     }
-    _syncShareSnapshot(service, sessionId);
+    _applyShareStatus(service, sessionId, service.currentStatus);
     return sessionId;
-  }
-
-  void _onShareServiceLog(
-    CasterService service,
-    SessionId sessionId,
-    String message,
-  ) {
-    if (_disposed || !identical(_shareService, service)) return;
-    final failure = _extractShareFailureMessage(message);
-    if (failure == null) return;
-    final isNew = failure != _lastShareError;
-    _lastShareError = failure;
-    if (isNew && !Platform.environment.containsKey('FLUTTER_TEST')) {
-      stderr.writeln('fterm: share failed: $failure');
-    }
-    _syncShareSnapshot(service, sessionId);
-  }
-
-  static String? _extractShareFailureMessage(String message) {
-    const prefixes = [
-      'Connection attempt failed: ',
-      'Transport error: ',
-      'Error ',
-    ];
-    for (final prefix in prefixes) {
-      if (message.startsWith(prefix)) {
-        final detail = message.substring(prefix.length).trim();
-        return detail.isEmpty ? message : detail;
-      }
-    }
-    if (message == 'Relay authentication timed out') {
-      return message;
-    }
-    return null;
   }
 
   String _sanitizeShareTitle(String rawTitle) {
@@ -458,17 +426,27 @@ final class _IoLocalPaneHost implements LocalPaneHost {
     return _executableName.isNotEmpty ? _executableName : 'fterm';
   }
 
-  void _startShareStatusPolling(CasterService service, SessionId sessionId) {
-    _stopPolling();
-    _sharePollTimer = Timer.periodic(
-      const Duration(milliseconds: 200),
-      (_) => _syncShareSnapshot(service, sessionId),
+  void _startShareStatusListening(CasterService service, SessionId sessionId) {
+    unawaited(_shareStatusSub?.cancel());
+    _shareStatusSub = service.statusStream.listen(
+      (snapshot) => _applyShareStatus(service, sessionId, snapshot),
     );
   }
 
-  void _syncShareSnapshot(CasterService service, SessionId sessionId) {
+  void _applyShareStatus(
+    CasterService service,
+    SessionId sessionId,
+    CasterStatusSnapshot snapshot,
+  ) {
     if (_disposed || !identical(_shareService, service)) return;
-    final state = switch (service.stateMachine.state) {
+    final statusError = snapshot.lastError;
+    if (statusError != null && statusError != _lastShareError) {
+      _lastShareError = statusError;
+      if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+        stderr.writeln('fterm: share failed: $statusError');
+      }
+    }
+    final state = switch (snapshot.state) {
       CasterLifecycleState.streaming => LocalShareState.live,
       CasterLifecycleState.terminated => LocalShareState.error,
       _ => LocalShareState.connecting,
@@ -476,14 +454,14 @@ final class _IoLocalPaneHost implements LocalPaneHost {
     if (state == LocalShareState.live) {
       _lastShareError = null;
     } else if (state == LocalShareState.error) {
-      _stopPolling();
+      unawaited(_stopStatusSubscription());
       _shareService = null;
     }
     _setShareSnapshot(
       LocalShareSnapshot(
         state: state,
         sessionId: sessionId,
-        subscriberCount: service.subscriberCount,
+        subscriberCount: snapshot.subscriberCount,
         errorMessage: switch (state) {
           LocalShareState.live || LocalShareState.unshared => null,
           LocalShareState.connecting => _lastShareError,
@@ -502,14 +480,15 @@ final class _IoLocalPaneHost implements LocalPaneHost {
     }
   }
 
-  void _stopPolling() {
-    _sharePollTimer?.cancel();
-    _sharePollTimer = null;
+  Future<void> _stopStatusSubscription() async {
+    final sub = _shareStatusSub;
+    _shareStatusSub = null;
+    await sub?.cancel();
   }
 
   @override
   Future<void> stopShare() async {
-    _stopPolling();
+    await _stopStatusSubscription();
     final service = _shareService;
     _shareService = null;
     if (service != null) {

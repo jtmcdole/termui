@@ -41,6 +41,9 @@ void openPlatformExternalUrl(Uri url) {
   web.window.open(serialized, '_blank', 'noopener,noreferrer');
 }
 
+@JS('__ftermConsumeInitialToken')
+external JSFunction? get _consumeInitialTokenFn;
+
 /// Removes any `#...` URL fragment (such as `#token=...`) from the browser
 /// address bar and session history without triggering a navigation.
 void scrubPlatformUrlFragment() {
@@ -51,6 +54,14 @@ void scrubPlatformUrlFragment() {
       '${web.window.location.pathname}${web.window.location.search}',
     );
   }
+}
+
+/// Reads and clears the one-shot `#token=` value stashed by `hash_scrub.js`.
+String consumePlatformInitialHashToken() {
+  final fn = _consumeInitialTokenFn;
+  if (fn == null) return '';
+  final result = fn.callAsFunction();
+  return result.isA<JSString>() ? (result as JSString).toDart : '';
 }
 
 final class _WebFileDropBridge implements FileDropBridge {

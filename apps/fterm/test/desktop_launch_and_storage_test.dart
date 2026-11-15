@@ -250,7 +250,7 @@ void _defineFileSettingsStorageUnitTests() {
   group('Desktop FileSettingsStorage and FLUTTER_TEST isolation', () {
     test(
       'resolves macOS/Linux and Windows settings paths and isolates storage under FLUTTER_TEST',
-      () {
+      () async {
         expect(
           resolveDesktopSettingsFilePath(
             environment: const {'HOME': '/Users/alice'},
@@ -328,6 +328,7 @@ void _defineFileSettingsStorageUnitTests() {
           p.join(tempHome.path, '.config', 'fterm'),
         );
         final settingsFile = File(p.join(settingsDir.path, 'settings.json'));
+        await (liveDesktop as BatchSettingsStorage).flush();
         expect(settingsFile.existsSync(), isTrue);
         expect(
           liveDesktop.getItem(castSettingsStorageKey),
@@ -370,7 +371,7 @@ void _defineFileSettingsStorageUnitTests() {
 
     test(
       'round-trips CastWorkspaceSettings in a temp directory, supports nested JSON maps, and heals corrupt files',
-      () {
+      () async {
         final tempDir = Directory.systemTemp.createTempSync(
           'termui_cast_settings_',
         );
@@ -399,6 +400,8 @@ void _defineFileSettingsStorageUnitTests() {
         );
         saveStoredSettings(writer, saved);
         writer.setItem('other.key', 'preserved');
+        await writer.flush();
+        expect(writer.lastError, isNull);
 
         final reader = FileSettingsStorage(settingsFile);
         final restored = loadStoredSettings(reader);
@@ -427,13 +430,17 @@ void _defineFileSettingsStorageUnitTests() {
             },
           }),
         );
+        reader.invalidateCache();
         final fromNestedMap = loadStoredSettings(reader);
         expect(fromNestedMap.dockPosition, equals(DockPosition.hidden));
 
         // Corrupt JSON falls back safely on read and heals on next write.
         settingsFile.writeAsStringSync('{corrupt-json');
+        reader.invalidateCache();
         expect(reader.getItem(castSettingsStorageKey), isNull);
         saveStoredSettings(writer, CastWorkspaceSettings.defaults);
+        await writer.flush();
+        reader.invalidateCache();
         expect(
           loadStoredSettings(reader).dockPosition,
           equals(DockPosition.top),
@@ -493,16 +500,18 @@ void _defineFileSettingsStorageWidgetTests() {
         equals('catppuccin_mocha'),
       );
 
-      // Mutating a setting in the workspace persists directly to settings.json on disk.
+      // Mutating a setting in the workspace persists asynchronously to settings.json on disk.
       workspace!.setCopyOnSelect(false);
+      await tester.runAsync(fileStorage.flush);
       expect(
         loadStoredSettings(FileSettingsStorage(settingsFile)).copyOnSelect,
         isFalse,
       );
 
       // Simulate editing settings.json externally on disk, then invoking Reload from Storage.
+      final externalWriter = FileSettingsStorage(settingsFile);
       saveStoredSettings(
-        FileSettingsStorage(settingsFile),
+        externalWriter,
         const CastWorkspaceSettings(
           copyOnSelect: true,
           themeSettings: TerminalThemeSettings(
@@ -512,6 +521,7 @@ void _defineFileSettingsStorageWidgetTests() {
           ),
         ),
       );
+      await tester.runAsync(externalWriter.flush);
 
       expect(workspace!.reloadSettingsFromStorage(), isTrue);
       await tester.pump();
@@ -601,16 +611,21 @@ void _defineDesktopIapLaunchTests() {
     test(
       'resolves --iap-key-file and --iap-service-account with CLI > env precedence and ws:// env ignore',
       () async {
-        // 1. Ambient TERMUI_CAST_IAP_* ignored on default ws:// loopback.
+        // 1. Ambient TERMUI_CAST_IAP_* ignored on default ws:// loopback iapTokenProvider,
+        //    but preserved for later wss:// connections via iapTokenProviderFor.
         final loopbackCfg = resolveCastLaunchConfig(
           baseUri: desktopBase,
           environment: <String, String>{
             'TERMUI_CAST_IAP_KEY_FILE': keyFile.path,
-            'TERMUI_CAST_IAP_SERVICE_ACCOUNT':
-                'ambient@proj.iam.gserviceaccount.com',
           },
         );
         expect(loopbackCfg.iapTokenProvider, isNull);
+        expect(
+          loopbackCfg.iapTokenProviderFor(
+            Uri.parse('wss://relay.run.app/v1/client'),
+          ),
+          isNotNull,
+        );
 
         // 2. Ambient TERMUI_CAST_IAP_KEY_FILE activates when defineServerUrl or --server uses wss://.
         final envKeyCfg = resolveCastLaunchConfig(
@@ -1025,15 +1040,35 @@ void _defineThrottledSettingsSaverTests() {
         expect(storage.writeCount, equals(4));
         expect(loadStoredSettings(storage), equals(s4));
 
+        // Coalesced BatchSettingsStorage write: dirtying both settings & preferences flushes in 1 batch call.
+        await tester.pump(const Duration(milliseconds: 200));
+        storage.batchWriteCount = 0;
+        storage.writeCount = 0;
+        saver
+          ..save(s1) // leading edge workspace write
+          ..save(s2) // queued trailing workspace write
+          ..savePreferences(
+            const FtermPreferences(audioMuted: false),
+          ) // leading edge prefs
+          ..savePreferences(
+            const FtermPreferences(audioMuted: true),
+          ); // queued trailing prefs
+        expect(storage.writeCount, equals(2));
+        expect(storage.batchWriteCount, equals(0));
+        saver.flush();
+        expect(storage.batchWriteCount, equals(1));
+        expect(loadStoredSettings(storage), equals(s2));
+        expect(loadStoredPreferences(storage).audioMuted, isTrue);
+
         // dispose() flushes pending s1 and ignores subsequent save() calls.
         saver
           ..save(s1)
           ..dispose();
-        expect(storage.writeCount, equals(5));
+        expect(storage.writeCount, equals(3));
         expect(loadStoredSettings(storage), equals(s1));
 
         saver.save(s2);
-        expect(storage.writeCount, equals(5));
+        expect(storage.writeCount, equals(3));
         expect(loadStoredSettings(storage), equals(s1));
       },
     );
@@ -1088,11 +1123,145 @@ void _defineThrottledSettingsSaverTests() {
       },
     );
   });
+
+  group('Wave 2 launch secret files, IAP cache, and symlink guards', () {
+    test(
+      '--token-file and --caster-token-file read secrets, CLI flags warn, and TERMUI_CAST_IAP_* stays wired when --server is omitted',
+      () {
+        final tempDir = Directory.systemTemp.createTempSync(
+          'fterm_secret_files_',
+        );
+        addTearDown(() => tempDir.deleteSync(recursive: true));
+
+        final clientSecretFile = File(p.join(tempDir.path, 'client.tok'))
+          ..writeAsStringSync('  file-client-tok\n');
+        final casterSecretFile = File(p.join(tempDir.path, 'caster.tok'))
+          ..writeAsStringSync('file-caster-tok\n');
+
+        final warnings = <String>[];
+        final fromFiles = resolveCastLaunchConfig(
+          baseUri: Uri.parse('file:///Users/dev/fterm/'),
+          args: [
+            '--token-file=${clientSecretFile.path}',
+            '--caster-token-file',
+            casterSecretFile.path,
+          ],
+          environment: const {},
+          secretFileReader: readPlatformSecretFileSync,
+          onCliSecretWarning: warnings.add,
+        );
+        expect(fromFiles.token, equals('file-client-tok'));
+        expect(fromFiles.casterToken, equals('file-caster-tok'));
+        expect(warnings, isEmpty);
+
+        // Passing --token directly emits warning; both --token and --token-file fail.
+        resolveCastLaunchConfig(
+          baseUri: Uri.parse('file:///Users/dev/fterm/'),
+          args: const ['--token=cli-secret'],
+          environment: const {},
+          secretFileReader: readPlatformSecretFileSync,
+          onCliSecretWarning: warnings.add,
+        );
+        expect(warnings, equals(['--token']));
+
+        expect(
+          () => resolveCastLaunchConfig(
+            baseUri: Uri.parse('file:///Users/dev/fterm/'),
+            args: ['--token=a', '--token-file=${clientSecretFile.path}'],
+            environment: const {},
+            secretFileReader: readPlatformSecretFileSync,
+          ),
+          throwsFormatException,
+        );
+
+        // TERMUI_CAST_IAP_* stays active in scopedIapProviderFactory even with omitted --server (ws:// default).
+        resetCachedPlatformIapKeys();
+        final iapKeyFile = File(p.join(tempDir.path, 'sa.json'))
+          ..writeAsStringSync(
+            jsonEncode(<String, String>{
+              'client_email': 'sa@proj.iam.gserviceaccount.com',
+              'private_key_id': 'key-1',
+              'private_key': _iapRsaKeyPem,
+            }),
+          );
+        final cfg = resolveCastLaunchConfig(
+          baseUri: Uri.parse('file:///Users/dev/fterm/'),
+          args: const [],
+          environment: {'TERMUI_CAST_IAP_KEY_FILE': iapKeyFile.path},
+          iapProviderBuilder: buildPlatformIapTokenProvider,
+        );
+        expect(cfg.serverUri, equals(CastLaunchConfig.defaultServerUri));
+        expect(
+          cfg.iapTokenProvider,
+          isNull,
+        ); // ws:// default doesn't use IAP directly
+
+        // Caching across distinct wss:// audiences preserves env IAP credentials and parses key JSON once.
+        final p1 = cfg.iapTokenProviderFor(
+          Uri.parse('wss://relay-a.run.app/v1/client'),
+        );
+        final p2 = cfg.iapTokenProviderFor(
+          Uri.parse('wss://relay-b.run.app/v1/client'),
+        );
+        expect(p1, isNotNull);
+        expect(p2, isNotNull);
+        expect(debugIapKeyParseCount, equals(1));
+      },
+    );
+
+    test(
+      'FileSettingsStorage rejects symlinks on write without clobbering target',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync('fterm_symlink_');
+        addTearDown(() => tempDir.deleteSync(recursive: true));
+
+        final target = File(p.join(tempDir.path, 'victim.txt'))
+          ..writeAsStringSync('keep-me');
+        final linkPath = p.join(tempDir.path, 'settings.json');
+        try {
+          Link(linkPath).createSync(target.path);
+        } on FileSystemException {
+          // Windows without Developer Mode / SeCreateSymbolicLinkPrivilege cannot create symlinks.
+          return;
+        }
+
+        final storage = FileSettingsStorage(File(linkPath));
+        storage.setItem('k', 'v');
+        await storage.flush();
+
+        expect(storage.lastError, isA<FileSystemException>());
+        expect(target.readAsStringSync(), equals('keep-me'));
+      },
+    );
+
+    test(
+      'D-14: FileSettingsStorage.invalidateCache clears queued _pendingPayload so stale write does not overwrite',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync(
+          'fterm_invalidate_cache_',
+        );
+        addTearDown(() => tempDir.deleteSync(recursive: true));
+        final file = File(p.join(tempDir.path, 'settings.json'));
+        final storage = FileSettingsStorage(file);
+
+        // First write enters _writePayloadAsync immediately; second write queues in _pendingPayload.
+        storage.setItem('persisted', '1');
+        storage.setItem('stale_queued', '2');
+        storage.invalidateCache();
+        await storage.flush();
+
+        final reloaded = FileSettingsStorage(file);
+        expect(reloaded.getItem('persisted'), equals('1'));
+        expect(reloaded.getItem('stale_queued'), isNull);
+      },
+    );
+  });
 }
 
-final class _CountingSettingsStorage implements SettingsStorage {
+final class _CountingSettingsStorage implements BatchSettingsStorage {
   final Map<String, String> _entries = {};
   int writeCount = 0;
+  int batchWriteCount = 0;
   bool throwOnNextSetItem = false;
 
   @override
@@ -1107,4 +1276,16 @@ final class _CountingSettingsStorage implements SettingsStorage {
     writeCount++;
     _entries[key] = value;
   }
+
+  @override
+  void setItems(Map<String, String> entries) {
+    batchWriteCount++;
+    _entries.addAll(entries);
+  }
+
+  @override
+  void invalidateCache() {}
+
+  @override
+  Future<void> flush() async {}
 }

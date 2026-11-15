@@ -83,6 +83,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     debugLabel: 'fterm-empty-focus',
   );
   String? _lastRequestedFocusedPaneId;
+  Object? _lastLayoutSignature;
   bool _hadBakedAtlas = false;
   DateTime? _lastTabTapAt;
   String? _lastTabTapId;
@@ -108,6 +109,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     _terminalService = _FtermTerminalService(onOpenUrl: widget.onOpenUrl);
     _atlasController.addListener(_onAtlasChanged);
     widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
+    _lastLayoutSignature = _computeLayoutSignature();
     FocusManager.instance.addEarlyKeyEventHandler(_handleEarlyF12Event);
   }
 
@@ -162,13 +164,35 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       );
       widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
       _lastRequestedFocusedPaneId = null;
+      _lastLayoutSignature = _computeLayoutSignature();
     }
+  }
+
+  Object _computeLayoutSignature() {
+    final ws = widget.workspace;
+    return Object.hashAll([
+      ws.activeTabIndex,
+      ws.dockPosition,
+      ws.shouldShowTabBar,
+      ws.activeOverlay != FtermOverlay.none,
+      ws.activeTerminalTheme,
+      ws.workspaceSettings.themeSettings.faintOpacity,
+      ws.preferences.macosOptionAsAlt,
+      for (final tab in ws.tabs) ...[
+        tab.tabId,
+        identityHashCode(tab.splitTree),
+      ],
+    ]);
   }
 
   void _onWorkspaceChromeChanged() {
     if (!mounted) return;
     _pruneDisposedFocusNodes();
-    setState(() {});
+    final nextSignature = _computeLayoutSignature();
+    if (nextSignature != _lastLayoutSignature) {
+      _lastLayoutSignature = nextSignature;
+      setState(() {});
+    }
     _syncKeyboardFocus();
   }
 
@@ -176,6 +200,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     final activeIds = <String>{
       for (final tab in widget.workspace.tabs) ...tab.splitTree.paneIds,
     };
+    _suppressMiddleReleasePaneIds.removeWhere((id) => !activeIds.contains(id));
     final stale = [
       for (final id in _paneFocusNodes.keys)
         if (!activeIds.contains(id)) id,
@@ -193,9 +218,9 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   }
 
   void _syncKeyboardFocus() {
-    final overlayOpen = widget.workspace.activeOverlay != FtermOverlay.none;
-    if (overlayOpen) {
+    if (widget.workspace.activeOverlay != FtermOverlay.none) {
       _lastRequestedFocusedPaneId = null;
+      _unfocusWorkspacePanes();
       return;
     }
     if (_atlasController.atlas == null) {
@@ -205,17 +230,32 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     final targetId = widget.workspace.focusedPane?.paneId;
     if (targetId == null || targetId == _lastRequestedFocusedPaneId) return;
     _lastRequestedFocusedPaneId = targetId;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || widget.workspace.activeOverlay != FtermOverlay.none) {
-        return;
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) => _applyPostFramePaneFocus(targetId),
+    );
+  }
+
+  void _unfocusWorkspacePanes() {
+    for (final node in _paneFocusNodes.values) {
+      if (node.hasFocus) {
+        node.unfocus();
       }
-      final node = _paneFocusNodes[targetId];
-      if (node == null || node.context == null) {
-        _lastRequestedFocusedPaneId = null;
-        return;
-      }
-      node.requestFocus();
-    });
+    }
+    if (_emptyWorkspaceFocusNode.hasFocus) {
+      _emptyWorkspaceFocusNode.unfocus();
+    }
+  }
+
+  void _applyPostFramePaneFocus(String targetId) {
+    if (!mounted || widget.workspace.activeOverlay != FtermOverlay.none) {
+      return;
+    }
+    final node = _paneFocusNodes[targetId];
+    if (node == null || node.context == null) {
+      _lastRequestedFocusedPaneId = null;
+      return;
+    }
+    node.requestFocus();
   }
 
   FocusNode _focusNodeForPane(String paneId) => _paneFocusNodes.putIfAbsent(
@@ -300,32 +340,38 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   }
 
   void _handlePaneInputEvent(FtermPaneController pane, ev.InputEvent event) {
-    if (event case ev.MouseEvent()) {
-      final isMiddlePress =
-          event.button == ev.MouseButton.middle &&
-          event.type == ev.MouseEventType.press;
-      final bypassMouseTracking =
-          !pane.mouseTracking || event.modifiers.contains(ev.Modifier.shift);
-      if (isMiddlePress && bypassMouseTracking) {
-        _suppressMiddleReleasePaneIds.add(pane.paneId);
-        unawaited(_pasteClipboardToPane(pane));
-        return;
-      }
-      if (_suppressMiddleReleasePaneIds.contains(pane.paneId)) {
-        if (event.button == ev.MouseButton.middle &&
-            event.type == ev.MouseEventType.drag) {
-          return;
-        }
-        if (event.type == ev.MouseEventType.release) {
-          _suppressMiddleReleasePaneIds.remove(pane.paneId);
-          return;
-        }
-        if (event.type == ev.MouseEventType.press) {
-          _suppressMiddleReleasePaneIds.remove(pane.paneId);
-        }
-      }
+    if (event case ev.MouseEvent() when _handleMiddleMousePaste(pane, event)) {
+      return;
     }
     pane.sendInputEvent(event);
+  }
+
+  bool _handleMiddleMousePaste(FtermPaneController pane, ev.MouseEvent event) {
+    final isMiddlePress =
+        event.button == ev.MouseButton.middle &&
+        event.type == ev.MouseEventType.press;
+    final bypassMouseTracking =
+        !pane.mouseTracking || event.modifiers.contains(ev.Modifier.shift);
+    if (isMiddlePress && bypassMouseTracking) {
+      _suppressMiddleReleasePaneIds.add(pane.paneId);
+      unawaited(_pasteClipboardToPane(pane));
+      return true;
+    }
+    if (!_suppressMiddleReleasePaneIds.contains(pane.paneId)) {
+      return false;
+    }
+    switch (event.type) {
+      case ev.MouseEventType.drag:
+        return event.button == ev.MouseButton.middle;
+      case ev.MouseEventType.release:
+        _suppressMiddleReleasePaneIds.remove(pane.paneId);
+        return true;
+      case ev.MouseEventType.press:
+        _suppressMiddleReleasePaneIds.remove(pane.paneId);
+        return false;
+      default:
+        return false;
+    }
   }
 
   @override
@@ -387,9 +433,16 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           child: Stack(
             fit: StackFit.expand,
             children: [
-              workspaceLayout,
+              ExcludeFocus(
+                excluding: widget.workspace.activeOverlay != FtermOverlay.none,
+                child: workspaceLayout,
+              ),
               if (widget.isDraggingOverFiles) _buildDragOverlay(theme),
-              FtermOverlayHost(workspace: widget.workspace),
+              ListenableBuilder(
+                listenable: widget.workspace.chromeNotifier,
+                builder: (_, _) =>
+                    FtermOverlayHost(workspace: widget.workspace),
+              ),
             ],
           ),
         ),
@@ -588,59 +641,73 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     FtermPaneController pane,
     FtermTabState tab,
     tui.TerminalColorTheme theme,
+  ) => ListenableBuilder(
+    listenable: Listenable.merge([
+      widget.workspace.chromeNotifier,
+      pane.visualNotifier,
+    ]),
+    builder: (_, _) {
+      final labels = _collectPaneCornerLabels(pane, tab);
+      if (labels.isEmpty) return const SizedBox.shrink();
+
+      final fg = Color(theme.foreground.argb);
+      final bg = Color(theme.background.argb);
+      return Positioned(
+        top: 6,
+        right: 8,
+        child: IgnorePointer(
+          child: Container(
+            key: ValueKey('pane-pill-${pane.paneId}'),
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Color.lerp(bg, fg, 0.14)!.withValues(alpha: 0.88),
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(color: fg.withValues(alpha: 0.2)),
+            ),
+            child: Text(
+              labels.join(' · '),
+              style: TextStyle(
+                color: fg,
+                fontSize: 10,
+                fontFamily: castPrimaryFontFamily,
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  List<String> _collectPaneCornerLabels(
+    FtermPaneController pane,
+    FtermTabState tab,
   ) {
-    final labels = <String>[];
-    if (tab.splitTree.zoomedPaneId == pane.paneId) {
-      labels.add('ZOOM');
-    }
+    final shareLabel = _formatPaneShareLabel(pane);
+    return [
+      if (tab.splitTree.zoomedPaneId == pane.paneId) 'ZOOM',
+      ?shareLabel,
+      if (pane.scrollOffsetLines > 0) '+${pane.scrollOffsetLines}',
+      if (pane.hasExited) '💀 ${pane.exitStatus ?? 0}',
+    ];
+  }
+
+  String? _formatPaneShareLabel(FtermPaneController pane) {
     final share = pane.shareSnapshot;
     if (pane.isLocal && share.state != LocalShareState.unshared) {
-      labels.add(switch (share.state) {
+      return switch (share.state) {
         LocalShareState.live => 'LIVE • ${share.subscriberCount}v',
         LocalShareState.connecting =>
           share.errorMessage != null ? 'SHARING (RETRY)' : 'SHARING...',
         LocalShareState.error => 'SHARE ERR',
-        LocalShareState.unshared => '',
-      });
-    } else if (pane.remoteSessionId != null &&
-        widget.workspace.subscriberCountFor(pane.remoteSessionId!) > 1) {
-      labels.add(
-        '${widget.workspace.subscriberCountFor(pane.remoteSessionId!)}v',
-      );
+        LocalShareState.unshared => null,
+      };
     }
-    if (pane.scrollOffsetLines > 0) {
-      labels.add('+${pane.scrollOffsetLines}');
+    final remoteId = pane.remoteSessionId;
+    if (remoteId != null) {
+      final count = widget.workspace.subscriberCountFor(remoteId);
+      if (count > 1) return '${count}v';
     }
-    if (pane.hasExited) {
-      labels.add('💀 ${pane.exitStatus ?? 0}');
-    }
-    if (labels.isEmpty) return const SizedBox.shrink();
-
-    final fg = Color(theme.foreground.argb);
-    final bg = Color(theme.background.argb);
-    return Positioned(
-      top: 6,
-      right: 8,
-      child: IgnorePointer(
-        child: Container(
-          key: ValueKey('pane-pill-${pane.paneId}'),
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: Color.lerp(bg, fg, 0.14)!.withValues(alpha: 0.88),
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: fg.withValues(alpha: 0.2)),
-          ),
-          child: Text(
-            labels.join(' · '),
-            style: TextStyle(
-              color: fg,
-              fontSize: 10,
-              fontFamily: castPrimaryFontFamily,
-            ),
-          ),
-        ),
-      ),
-    );
+    return null;
   }
 
   Widget _buildMacOsSafeDragRow({Key? key}) => SizedBox(
@@ -660,122 +727,156 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     ),
   );
 
-  Widget _buildTopTabBar(tui.TerminalColorTheme theme) {
-    final bg = _chromeBackground(theme);
-    final fg = Color(theme.foreground.argb);
-    final border = fg.withValues(alpha: 0.14);
-    final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
+  Widget _buildTopTabBar(tui.TerminalColorTheme theme) => ListenableBuilder(
+    listenable: widget.workspace.chromeNotifier,
+    builder: (_, _) {
+      final bg = _chromeBackground(theme);
+      final fg = Color(theme.foreground.argb);
+      final border = fg.withValues(alpha: 0.14);
+      final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
+      final panes = widget.workspace.panes;
 
-    return Container(
-      key: const ValueKey('fterm-tab-bar-top'),
-      height: tabBarHeight,
-      decoration: BoxDecoration(
-        color: bg,
-        border: Border(bottom: BorderSide(color: border, width: 1)),
-      ),
-      child: Row(
-        children: [
-          if (isMacOsDesktop)
-            const SizedBox(
-              key: ValueKey('fterm-macos-inset'),
-              width: macOsTrafficLightInset,
-            ),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (_, constraints) {
-                final maxTabsWidth = math.max(0.0, constraints.maxWidth - 48.0);
-                return Row(
-                  children: [
-                    ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: maxTabsWidth),
-                      child: SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            for (
-                              var i = 0;
-                              i < widget.workspace.tabs.length;
-                              i++
-                            )
-                              _buildHorizontalTabChip(
-                                index: i,
-                                tab: widget.workspace.tabs[i],
-                                theme: theme,
-                              ),
-                          ],
+      return Container(
+        key: const ValueKey('fterm-tab-bar-top'),
+        height: tabBarHeight,
+        decoration: BoxDecoration(
+          color: bg,
+          border: Border(bottom: BorderSide(color: border, width: 1)),
+        ),
+        child: Row(
+          children: [
+            if (isMacOsDesktop)
+              const SizedBox(
+                key: ValueKey('fterm-macos-inset'),
+                width: macOsTrafficLightInset,
+              ),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (_, constraints) {
+                  final maxTabsWidth = math.max(
+                    0.0,
+                    constraints.maxWidth - 48.0,
+                  );
+                  return Row(
+                    children: [
+                      ConstrainedBox(
+                        constraints: BoxConstraints(maxWidth: maxTabsWidth),
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (
+                                var i = 0;
+                                i < widget.workspace.tabs.length;
+                                i++
+                              )
+                                _buildHorizontalTabChip(
+                                  index: i,
+                                  tab: widget.workspace.tabs[i],
+                                  panes: panes,
+                                  theme: theme,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
-                    ),
-                    Expanded(
-                      child: _WindowDragStrip(
-                        key: const ValueKey('fterm-window-drag-strip'),
-                        enableMacOsDrag: isMacOsDesktop,
-                        windowChannel: _windowChannel,
+                      Expanded(
+                        child: _WindowDragStrip(
+                          key: const ValueKey('fterm-window-drag-strip'),
+                          enableMacOsDrag: isMacOsDesktop,
+                          windowChannel: _windowChannel,
+                        ),
                       ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          ..._buildChromeActionControls(theme),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLeftTabRail(tui.TerminalColorTheme theme) {
-    final bg = _chromeBackground(theme);
-    final fg = Color(theme.foreground.argb);
-    final border = fg.withValues(alpha: 0.14);
-    final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
-
-    return Container(
-      key: const ValueKey('fterm-tab-bar-left'),
-      width: leftRailWidth,
-      decoration: BoxDecoration(
-        color: bg,
-        border: Border(right: BorderSide(color: border, width: 1)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (isMacOsDesktop)
-            _buildMacOsSafeDragRow(
-              key: const ValueKey('fterm-macos-inset-top'),
-            ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: widget.workspace.tabs.length,
-              itemBuilder: (_, i) => _buildVerticalTabTile(
-                index: i,
-                tab: widget.workspace.tabs[i],
-                theme: theme,
+                    ],
+                  );
+                },
               ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            child: Wrap(
-              spacing: 2,
-              children: _buildChromeActionControls(theme),
+            ..._buildChromeActionControls(theme),
+          ],
+        ),
+      );
+    },
+  );
+
+  Widget _buildLeftTabRail(tui.TerminalColorTheme theme) => ListenableBuilder(
+    listenable: widget.workspace.chromeNotifier,
+    builder: (_, _) {
+      final bg = _chromeBackground(theme);
+      final fg = Color(theme.foreground.argb);
+      final border = fg.withValues(alpha: 0.14);
+      final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
+      final panes = widget.workspace.panes;
+
+      return Container(
+        key: const ValueKey('fterm-tab-bar-left'),
+        width: leftRailWidth,
+        decoration: BoxDecoration(
+          color: bg,
+          border: Border(right: BorderSide(color: border, width: 1)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (isMacOsDesktop)
+              _buildMacOsSafeDragRow(
+                key: const ValueKey('fterm-macos-inset-top'),
+              ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: widget.workspace.tabs.length,
+                itemBuilder: (_, i) => _buildVerticalTabTile(
+                  index: i,
+                  tab: widget.workspace.tabs[i],
+                  panes: panes,
+                  theme: theme,
+                ),
+              ),
             ),
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              child: Wrap(
+                spacing: 2,
+                children: _buildChromeActionControls(theme),
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+
+  List<Widget> _buildTabStatusBadges(
+    tui.TerminalColorTheme theme, {
+    required bool shared,
+    required bool exited,
+  }) => [
+    if (shared)
+      Padding(
+        padding: const EdgeInsets.only(right: 4),
+        child: Icon(
+          Icons.wifi_tethering,
+          size: 11,
+          color: Color(theme.resolveAnsi256(2).argb),
+        ),
       ),
-    );
-  }
+    if (exited)
+      const Padding(
+        padding: EdgeInsets.only(right: 4),
+        child: Text('💀', style: TextStyle(fontSize: 10)),
+      ),
+  ];
 
   Widget _buildHorizontalTabChip({
     required int index,
     required FtermTabState tab,
+    required Map<String, FtermPaneController> panes,
     required tui.TerminalColorTheme theme,
   }) {
     final selected = index == widget.workspace.activeTabIndex;
     final fg = Color(theme.foreground.argb);
     final activeBg = Color(theme.background.argb);
-    final panes = _resolvePaneLookup();
     final title = tab.resolveTitle(panes);
     final exited = tab.isExited(panes);
     final shared = tab.isShared(panes);
@@ -797,20 +898,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (shared)
-              Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: Icon(
-                  Icons.wifi_tethering,
-                  size: 11,
-                  color: Color(theme.resolveAnsi256(2).argb),
-                ),
-              ),
-            if (exited)
-              const Padding(
-                padding: EdgeInsets.only(right: 4),
-                child: Text('💀', style: TextStyle(fontSize: 10)),
-              ),
+            ..._buildTabStatusBadges(theme, shared: shared, exited: exited),
             Flexible(
               child: Text(
                 title,
@@ -861,12 +949,14 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   Widget _buildVerticalTabTile({
     required int index,
     required FtermTabState tab,
+    required Map<String, FtermPaneController> panes,
     required tui.TerminalColorTheme theme,
   }) {
     final selected = index == widget.workspace.activeTabIndex;
     final fg = Color(theme.foreground.argb);
-    final panes = _resolvePaneLookup();
     final title = tab.resolveTitle(panes);
+    final exited = tab.isExited(panes);
+    final shared = tab.isShared(panes);
     return InkWell(
       key: ValueKey('fterm-tab-${tab.tabId}'),
       onTap: () => _handleTabTap(index, tab.tabId),
@@ -876,6 +966,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         color: selected ? Color(theme.background.argb) : Colors.transparent,
         child: Row(
           children: [
+            ..._buildTabStatusBadges(theme, shared: shared, exited: exited),
             Expanded(
               child: Text(
                 title,
@@ -935,17 +1026,6 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       _lastTabTapAt = null;
       widget.workspace.setOverlay(FtermOverlay.rename);
     }
-  }
-
-  Map<String, FtermPaneController> _resolvePaneLookup() {
-    final out = <String, FtermPaneController>{};
-    for (final tab in widget.workspace.tabs) {
-      for (final paneId in tab.splitTree.paneIds) {
-        final pane = widget.workspace.paneById(paneId);
-        if (pane != null) out[paneId] = pane;
-      }
-    }
-    return out;
   }
 
   List<Widget> _buildChromeActionControls(tui.TerminalColorTheme theme) {

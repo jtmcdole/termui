@@ -24,6 +24,10 @@ void openExternalUrl(Uri url) => impl.openPlatformExternalUrl(url);
 /// address bar and session history on Web (no-op on non-web platforms).
 void scrubUrlFragment() => impl.scrubPlatformUrlFragment();
 
+/// Consumes any `#token=` value stashed once by `hash_scrub.js` before WASM
+/// startup on Web, returning `''` on non-web platforms or subsequent calls.
+String consumeInitialHashToken() => impl.consumePlatformInitialHashToken();
+
 /// Disposable bridge listening for browser or desktop file drag-and-drop events.
 abstract interface class FileDropBridge {
   /// Detaches any active DOM or platform drag-and-drop listeners.

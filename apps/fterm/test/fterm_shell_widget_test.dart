@@ -20,7 +20,12 @@ import 'package:material_ui/material_ui.dart';
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_audio_flutter/termui_audio_flutter.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart'
-    show DockPosition, TerminalColorResolver, TerminalThemeSettings;
+    show
+        DockPosition,
+        MemoryDroppedFileSource,
+        Osc52ClipboardPolicy,
+        TerminalColorResolver,
+        TerminalThemeSettings;
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_pty/termui_pty.dart';
@@ -1380,6 +1385,293 @@ void main() {
         await tester.runAsync(harness.dispose);
       },
     );
+
+    testWidgets(
+      'modal focus guard blocks Enter, Backspace, printable chars, and Ctrl+C across overlays and toggles OSC 52 setting',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final harness = AppThreeWayWsHarness();
+        await tester.runAsync(
+          () => harness.startCaster(id: 'modal-guard', title: 'bash'),
+        );
+        final localDriver = _WidgetFakeLocalHostDriver(harness: harness);
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(token: harness.token),
+            channelFactory: harness.openClientChannel,
+            localHostDriver: localDriver,
+            resizeDebounce: Duration.zero,
+            settingsStorage: _MemSettings(),
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester);
+
+        final port = localDriver.hosts.single.port;
+        port.inputs.clear();
+
+        for (final overlay in const [
+          FtermOverlay.settings,
+          FtermOverlay.sessionPicker,
+          FtermOverlay.stats,
+          FtermOverlay.help,
+          FtermOverlay.fileUpload,
+        ]) {
+          if (overlay == FtermOverlay.fileUpload) {
+            await tester.runAsync(() async {
+              final remoteId = workspace!.availableRemoteSessions.first.id;
+              workspace!.openRemoteSessionTab(remoteId);
+            });
+            await settleCastApp(tester, cycles: 2);
+            workspace!.stageDroppedFiles([
+              MemoryDroppedFileSource(
+                name: 'drop.txt',
+                bytes: Uint8List.fromList([1, 2, 3]),
+              ),
+            ]);
+          } else {
+            workspace!.selectTab(0);
+            workspace!.setOverlay(overlay);
+          }
+          await tester.pump();
+          await tester.pump();
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+          await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+          await tester.sendKeyEvent(LogicalKeyboardKey.keyA, character: 'a');
+          await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+          await tester.sendKeyEvent(LogicalKeyboardKey.keyC, character: '\x03');
+          await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+          await tester.pump();
+
+          expect(
+            port.inputs,
+            isEmpty,
+            reason: 'Keystrokes leaked to PTY during ${overlay.name}',
+          );
+
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pump();
+          expect(workspace!.activeOverlay, equals(FtermOverlay.none));
+        }
+
+        // Toggle OSC 52 policy via Settings overlay control.
+        workspace!.setOverlay(FtermOverlay.settings);
+        await tester.pump();
+        final osc52Finder = find.byKey(const ValueKey('settings-osc52-toggle'));
+        await tester.ensureVisible(osc52Finder);
+        await tester.pump();
+        await tester.tap(osc52Finder);
+        await tester.pump();
+        expect(
+          workspace!.workspaceSettings.osc52Policy,
+          equals(Osc52ClipboardPolicy.deny),
+        );
+
+        await tester.runAsync(() => workspace!.dispose());
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(harness.dispose);
+      },
+    );
+
+    testWidgets(
+      'D-02 & D-12: Connect/Rename TextFields support editing/paste/Tab/Enter without PTY leaks, and customOverrides updates Scaffold color',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final harness = AppThreeWayWsHarness();
+        final localDriver = _WidgetFakeLocalHostDriver(harness: harness);
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(token: harness.token),
+            channelFactory: harness.openClientChannel,
+            localHostDriver: localDriver,
+            resizeDebounce: Duration.zero,
+            settingsStorage: _MemSettings(),
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester);
+
+        final port = localDriver.hosts.single.port;
+        port.inputs.clear();
+
+        // 1. Connect overlay: Backspace, ArrowLeft, Ctrl+V paste, Tab focus traversal.
+        workspace!.setOverlay(FtermOverlay.connect);
+        await tester.pump();
+        await tester.pump();
+
+        final urlFinder = find.byKey(const ValueKey('connect-url-field'));
+        await tester.enterText(urlFinder, 'wss://relay.old');
+        await tester.pump();
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+        await tester.pump();
+        final urlCtrl = tester.widget<TextField>(urlFinder).controller!;
+        expect(urlCtrl.text, equals('wss://relay.ol'));
+
+        final posBeforeArrow = urlCtrl.selection.baseOffset;
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.pump();
+        expect(urlCtrl.selection.baseOffset, equals(posBeforeArrow - 1));
+
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+              if (call.method == 'Clipboard.getData') {
+                return const <String, Object?>{'text': 'X'};
+              }
+              if (call.method == 'Clipboard.hasStrings') {
+                return const <String, Object?>{'value': true};
+              }
+              return null;
+            });
+        addTearDown(
+          () => TestDefaultBinaryMessengerBinding
+              .instance
+              .defaultBinaryMessenger
+              .setMockMethodCallHandler(SystemChannels.platform, null),
+        );
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+        await tester.pump();
+        expect(urlCtrl.text, contains('X'));
+
+        final urlFocusBeforeTab = FocusManager.instance.primaryFocus;
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab);
+        await tester.pump();
+        expect(FocusManager.instance.primaryFocus, isNot(urlFocusBeforeTab));
+
+        await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+        await tester.pump();
+        expect(workspace!.activeOverlay, equals(FtermOverlay.none));
+
+        // 2. Rename overlay: Backspace + TextInputAction.done + Tab/Enter on modal button.
+        workspace!.setOverlay(FtermOverlay.rename);
+        await tester.pump();
+        await tester.pump();
+        final renameFinder = find.byKey(const ValueKey('rename-title-field'));
+        await tester.enterText(renameFinder, 'My Tab!');
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.backspace);
+        await tester.pump();
+        expect(
+          tester.widget<TextField>(renameFinder).controller!.text,
+          equals('My Tab'),
+        );
+        await tester.testTextInput.receiveAction(TextInputAction.done);
+        await tester.pump();
+        expect(workspace!.activeOverlay, equals(FtermOverlay.none));
+        expect(workspace!.activeTab!.pinnedTitle, equals('My Tab'));
+
+        // Reopen Rename and Tab to Apply FilledButton, activating it via Enter key.
+        workspace!.setOverlay(FtermOverlay.rename);
+        await tester.pump();
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab); // CheckboxListTile
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab); // Cancel button
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.tab); // Apply button
+        await tester.pump();
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pump();
+        expect(workspace!.activeOverlay, equals(FtermOverlay.none));
+        expect(port.inputs, isEmpty);
+
+        // 3. D-12: Changing customOverrides under the same preset id updates Scaffold theme.
+        workspace!.updateWorkspaceSettings(
+          workspace!.workspaceSettings.copyWith(
+            themeSettings: const TerminalThemeSettings(
+              customOverrides: tui.CustomPaletteOverrides(
+                background: tui.Color(0x11, 0x22, 0x33),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        final scaffold = tester.widget<Scaffold>(find.byType(Scaffold));
+        expect(scaffold.backgroundColor, equals(const Color(0xFF112233)));
+
+        await tester.runAsync(() => workspace!.dispose());
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(harness.dispose);
+      },
+    );
+
+    testWidgets(
+      'left-rail vertical tabs display shared & exited badges and title ticks do not rebuild TerminalSurface',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 600));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final harness = AppThreeWayWsHarness();
+        final localDriver = _WidgetFakeLocalHostDriver(harness: harness);
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(token: harness.token),
+            channelFactory: harness.openClientChannel,
+            localHostDriver: localDriver,
+            resizeDebounce: Duration.zero,
+            settingsStorage: _MemSettings(),
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester);
+
+        workspace!.setDockPosition(DockPosition.left);
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('fterm-tab-bar-left')),
+          findsOneWidget,
+        );
+
+        final surfaceBefore = tester.widget<TerminalSurface>(
+          find.byType(TerminalSurface),
+        );
+
+        // Title updates update the tab label without rebuilding SplitTree TerminalSurface.
+        localDriver.hosts.single.port.emitTitle('vim-notes');
+        await tester.pump();
+        final surfaceAfter = tester.widget<TerminalSurface>(
+          find.byType(TerminalSurface),
+        );
+        expect(identical(surfaceBefore, surfaceAfter), isTrue);
+        expect(find.text('vim-notes'), findsOneWidget);
+
+        // Sharing shows wifi_tethering icon badge inside left rail; exiting shows skull badge.
+        await tester.runAsync(() => workspace!.togglePaneShare());
+        await settleCastApp(tester, cycles: 2);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('fterm-tab-bar-left')),
+            matching: find.byIcon(Icons.wifi_tethering),
+          ),
+          findsOneWidget,
+        );
+
+        localDriver.hosts.single.port.completeExit(0);
+        await settleCastApp(tester, cycles: 2);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('fterm-tab-bar-left')),
+            matching: find.text('💀'),
+          ),
+          findsOneWidget,
+        );
+
+        await tester.runAsync(() => workspace!.dispose());
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(harness.dispose);
+      },
+    );
   });
 }
 
@@ -1569,13 +1861,26 @@ final class _WidgetMemPort implements TerminalPort {
   int totalScrollbackLines = 0;
   final Set<void Function()> _listeners = {};
   final Set<void Function()> _bellListeners = {};
+  final Set<void Function(String)> _titleListeners = {};
   final Completer<int> _exitCode = Completer<int>();
   final List<Uint8List> inputs = [];
+  String _title = 'local-zsh';
 
   void emitBell() {
     for (final fn in [..._bellListeners]) {
       fn();
     }
+  }
+
+  void emitTitle(String next) {
+    _title = next;
+    for (final fn in [..._titleListeners]) {
+      fn(next);
+    }
+  }
+
+  void completeExit([int code = 0]) {
+    if (!_exitCode.isCompleted) _exitCode.complete(code);
   }
 
   @override
@@ -1591,6 +1896,15 @@ final class _WidgetMemPort implements TerminalPort {
   int get rows => _buffer.height;
 
   @override
+  int get renderRevision => 0;
+
+  @override
+  int get fullSyncRevision => 0;
+
+  @override
+  List<DirtyCellSpan> get dirtySpans => const [];
+
+  @override
   (int cols, int rows) get activePtySize => (_buffer.width, _buffer.height);
 
   @override
@@ -1604,7 +1918,7 @@ final class _WidgetMemPort implements TerminalPort {
       (clearSeq: 0, oldestLine: 0, totalLines: totalScrollbackLines);
 
   @override
-  String get windowTitle => 'local-zsh';
+  String get windowTitle => _title;
 
   @override
   String? get workingDirectory => '/tmp';
@@ -1619,10 +1933,12 @@ final class _WidgetMemPort implements TerminalPort {
   void removeListener(void Function() listener) => _listeners.remove(listener);
 
   @override
-  void addTitleListener(void Function(String title) listener) {}
+  void addTitleListener(void Function(String title) listener) =>
+      _titleListeners.add(listener);
 
   @override
-  void removeTitleListener(void Function(String title) listener) {}
+  void removeTitleListener(void Function(String title) listener) =>
+      _titleListeners.remove(listener);
 
   @override
   void addBellListener(void Function() listener) =>

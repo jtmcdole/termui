@@ -22,9 +22,15 @@ final class DesktopLaunchOverrides {
   /// Optional bearer viewer token override.
   final String? token;
 
+  /// Optional `--token-file` path override.
+  final String? tokenFile;
+
   /// Optional bearer caster token override (`--caster-token` /
   /// `TERMUI_CAST_CASTER_TOKEN`).
   final String? casterToken;
+
+  /// Optional `--caster-token-file` path override.
+  final String? casterTokenFile;
 
   /// Normalized `--iap-service-account` CLI override, if non-empty.
   final String? cliIapServiceAccount;
@@ -38,6 +44,12 @@ final class DesktopLaunchOverrides {
   /// Normalized `TERMUI_CAST_IAP_KEY_FILE` environment fallback.
   final String? envIapKeyFile;
 
+  /// Whether `--token` was explicitly supplied on the CLI.
+  final bool hasCliToken;
+
+  /// Whether `--caster-token` was explicitly supplied on the CLI.
+  final bool hasCliCasterToken;
+
   /// Whether `--iap-service-account` was explicitly supplied on the CLI.
   final bool hasCliIapServiceAccount;
 
@@ -48,17 +60,22 @@ final class DesktopLaunchOverrides {
   const DesktopLaunchOverrides({
     this.serverUrl,
     this.token,
+    this.tokenFile,
     this.casterToken,
+    this.casterTokenFile,
     this.cliIapServiceAccount,
     this.cliIapKeyFile,
     this.envIapServiceAccount,
     this.envIapKeyFile,
+    this.hasCliToken = false,
+    this.hasCliCasterToken = false,
     this.hasCliIapServiceAccount = false,
     this.hasCliIapKeyFile = false,
   });
 }
 
-/// Parses optional `--server` / `--url`, `--token`, `--iap-service-account`,
+/// Parses optional `--server` / `--url`, `--token`, `--token-file`,
+/// `--caster-token`, `--caster-token-file`, `--iap-service-account`,
 /// and `--iap-key-file` CLI flags from [args], along with `TERMUI_CAST_*`
 /// environment fallbacks in [environment].
 ///
@@ -70,6 +87,26 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
   Map<String, String> environment = const {},
 }) {
   final cli = _parseCliArgs(args);
+  if (cli.hasToken && cli.hasTokenFile) {
+    throw const FormatException(
+      'Cannot specify both --token and --token-file.',
+    );
+  }
+  if (cli.hasCasterToken && cli.hasCasterTokenFile) {
+    throw const FormatException(
+      'Cannot specify both --caster-token and --caster-token-file.',
+    );
+  }
+  final cliTokenFile = _nonEmptyTrimmed(cli.tokenFile);
+  if (cli.hasTokenFile && cliTokenFile == null) {
+    throw const FormatException('Missing non-empty value for --token-file.');
+  }
+  final cliCasterTokenFile = _nonEmptyTrimmed(cli.casterTokenFile);
+  if (cli.hasCasterTokenFile && cliCasterTokenFile == null) {
+    throw const FormatException(
+      'Missing non-empty value for --caster-token-file.',
+    );
+  }
   final cliAccount = _nonEmptyTrimmed(cli.iapServiceAccount);
   if (cli.hasIapServiceAccount && cliAccount == null) {
     throw const FormatException(
@@ -87,15 +124,19 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
     token:
         _nonEmptyRaw(cli.token) ??
         _nonEmptyRaw(environment['TERMUI_CAST_TOKEN']),
+    tokenFile: cliTokenFile,
     casterToken:
         _nonEmptyRaw(cli.casterToken) ??
         _nonEmptyRaw(environment['TERMUI_CAST_CASTER_TOKEN']),
+    casterTokenFile: cliCasterTokenFile,
     cliIapServiceAccount: cliAccount,
     cliIapKeyFile: cliKeyFile,
     envIapServiceAccount: _nonEmptyTrimmed(
       environment['TERMUI_CAST_IAP_SERVICE_ACCOUNT'],
     ),
     envIapKeyFile: _nonEmptyTrimmed(environment['TERMUI_CAST_IAP_KEY_FILE']),
+    hasCliToken: cli.hasToken,
+    hasCliCasterToken: cli.hasCasterToken,
     hasCliIapServiceAccount: cli.hasIapServiceAccount,
     hasCliIapKeyFile: cli.hasIapKeyFile,
   );
@@ -107,19 +148,33 @@ CastLaunchConfig resolveCastLaunchConfig({
   required Uri baseUri,
   List<String> args = const [],
   Map<String, String>? environment,
+  String initialFragmentToken = '',
   String defineServerUrl = '',
   String defineToken = '',
   String defineCasterToken = '',
   DesktopIapProviderBuilder? iapProviderBuilder,
+  String Function(String path)? secretFileReader,
+  void Function(String flag)? onCliSecretWarning,
 }) {
   final overrides = environment != null
       ? parseDesktopLaunchOverrides(args: args, environment: environment)
       : impl.readPlatformLaunchOverrides(args);
+  final warnSecret = onCliSecretWarning ?? impl.warnPlatformCliSecret;
+  if (overrides.hasCliToken) warnSecret('--token');
+  if (overrides.hasCliCasterToken) warnSecret('--caster-token');
+  final readSecretFile = secretFileReader ?? impl.readPlatformSecretFileSync;
+  final resolvedToken = overrides.tokenFile != null
+      ? readSecretFile(overrides.tokenFile!)
+      : (overrides.token ?? defineToken);
+  final resolvedCasterToken = overrides.casterTokenFile != null
+      ? readSecretFile(overrides.casterTokenFile!)
+      : (overrides.casterToken ?? defineCasterToken);
   final baseConfig = CastLaunchConfig.fromEnvironmentAndUri(
     baseUri: baseUri,
+    initialFragmentToken: initialFragmentToken,
     envServerUrl: overrides.serverUrl ?? defineServerUrl,
-    envToken: overrides.token ?? defineToken,
-    envCasterToken: overrides.casterToken ?? defineCasterToken,
+    envToken: resolvedToken,
+    envCasterToken: resolvedCasterToken,
   );
   final builder = iapProviderBuilder ?? impl.buildPlatformIapTokenProvider;
   final iapProvider = _resolveIapTokenProvider(
@@ -153,8 +208,13 @@ IapTokenProvider? Function(Uri targetUri)? _buildScopedIapProviderFactory({
   final (serviceAccount, keyFilePath) = _selectIapCredentials(
     overrides: overrides,
     serverUri: startupUri,
+    requireWssForEnv: false,
   );
   if (serviceAccount == null && keyFilePath == null) return null;
+  _validateIapCredentialFormat(
+    serviceAccount: serviceAccount,
+    keyFilePath: keyFilePath,
+  );
   final cache = <String, IapTokenProvider?>{};
   if (startupProvider != null && startupUri.scheme == 'wss') {
     cache[TokenAuthenticator.iapAudienceForWebSocketUri(startupUri)] =
@@ -177,10 +237,11 @@ IapTokenProvider? Function(Uri targetUri)? _buildScopedIapProviderFactory({
 (String?, String?) _selectIapCredentials({
   required DesktopLaunchOverrides overrides,
   required Uri serverUri,
+  bool requireWssForEnv = true,
 }) {
   final fromCli =
       overrides.hasCliIapServiceAccount || overrides.hasCliIapKeyFile;
-  final useEnv = !fromCli && serverUri.scheme == 'wss';
+  final useEnv = !fromCli && (!requireWssForEnv || serverUri.scheme == 'wss');
   final serviceAccount = fromCli
       ? overrides.cliIapServiceAccount
       : (useEnv ? overrides.envIapServiceAccount : null);
@@ -221,8 +282,7 @@ IapTokenProvider? _resolveIapTokenProvider({
   );
 }
 
-void _validateIapOptions({
-  required Uri serverUri,
+void _validateIapCredentialFormat({
   required String? serviceAccount,
   required String? keyFilePath,
 }) {
@@ -231,17 +291,27 @@ void _validateIapOptions({
       'Cannot specify both --iap-service-account and --iap-key-file.',
     );
   }
-  if (serviceAccount != null) {
-    if (serverUri.scheme != 'wss') {
-      throw const FormatException(
-        '--iap-service-account requires a wss:// server URI.',
-      );
-    }
-    if (!TokenAuthenticator.isValidServiceAccountEmail(serviceAccount)) {
-      throw FormatException(
-        'Invalid --iap-service-account email: "$serviceAccount".',
-      );
-    }
+  if (serviceAccount != null &&
+      !TokenAuthenticator.isValidServiceAccountEmail(serviceAccount)) {
+    throw FormatException(
+      'Invalid --iap-service-account email: "$serviceAccount".',
+    );
+  }
+}
+
+void _validateIapOptions({
+  required Uri serverUri,
+  required String? serviceAccount,
+  required String? keyFilePath,
+}) {
+  _validateIapCredentialFormat(
+    serviceAccount: serviceAccount,
+    keyFilePath: keyFilePath,
+  );
+  if (serviceAccount != null && serverUri.scheme != 'wss') {
+    throw const FormatException(
+      '--iap-service-account requires a wss:// server URI.',
+    );
   }
   if (keyFilePath != null && serverUri.scheme != 'wss') {
     throw const FormatException('--iap-key-file requires a wss:// server URI.');
@@ -251,18 +321,30 @@ void _validateIapOptions({
 ({
   String? serverUrl,
   String? token,
+  String? tokenFile,
   String? casterToken,
+  String? casterTokenFile,
   String? iapServiceAccount,
   String? iapKeyFile,
+  bool hasToken,
+  bool hasTokenFile,
+  bool hasCasterToken,
+  bool hasCasterTokenFile,
   bool hasIapServiceAccount,
   bool hasIapKeyFile,
 })
 _parseCliArgs(List<String> args) {
   String? serverUrl;
   String? token;
+  String? tokenFile;
   String? casterToken;
+  String? casterTokenFile;
   String? iapServiceAccount;
   String? iapKeyFile;
+  var hasToken = false;
+  var hasTokenFile = false;
+  var hasCasterToken = false;
+  var hasCasterTokenFile = false;
   var hasIapServiceAccount = false;
   var hasIapKeyFile = false;
   for (var i = 0; i < args.length; i++) {
@@ -277,8 +359,16 @@ _parseCliArgs(List<String> args) {
         serverUrl = readValue();
       case '--token':
         token = readValue();
+        hasToken = true;
+      case '--token-file':
+        tokenFile = readValue();
+        hasTokenFile = true;
       case '--caster-token':
         casterToken = readValue();
+        hasCasterToken = true;
+      case '--caster-token-file':
+        casterTokenFile = readValue();
+        hasCasterTokenFile = true;
       case '--iap-service-account':
         iapServiceAccount = readValue();
         hasIapServiceAccount = true;
@@ -290,9 +380,15 @@ _parseCliArgs(List<String> args) {
   return (
     serverUrl: serverUrl,
     token: token,
+    tokenFile: tokenFile,
     casterToken: casterToken,
+    casterTokenFile: casterTokenFile,
     iapServiceAccount: iapServiceAccount,
     iapKeyFile: iapKeyFile,
+    hasToken: hasToken,
+    hasTokenFile: hasTokenFile,
+    hasCasterToken: hasCasterToken,
+    hasCasterTokenFile: hasCasterTokenFile,
     hasIapServiceAccount: hasIapServiceAccount,
     hasIapKeyFile: hasIapKeyFile,
   );

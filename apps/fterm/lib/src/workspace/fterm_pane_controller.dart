@@ -165,7 +165,7 @@ final class FtermPaneController {
     if (_disposed || viewportRow < 0) return null;
     final sbWin = port.scrollbackWindow;
     final total = sbWin.totalLines;
-    final topVirtual = math.max(0, total - _scrollOffsetLines);
+    final topVirtual = math.max(sbWin.oldestLine, total - _scrollOffsetLines);
     final virtualY = topVirtual + viewportRow;
 
     final remote = remotePort;
@@ -399,11 +399,14 @@ final class FtermPaneController {
     );
   }
 
+  static int _retainedScrollbackLines(ScrollbackWindowData sbWin) =>
+      math.max(0, sbWin.totalLines - sbWin.oldestLine);
+
   /// Scrolls primary-screen history by [deltaLines] (`+` = up, `-` = down).
   void scrollLines(int deltaLines) {
     if (_disposed || deltaLines == 0 || port.modes.altScreen) return;
-    final total = port.scrollbackWindow.totalLines;
-    final next = (_scrollOffsetLines + deltaLines).clamp(0, total);
+    final retained = _retainedScrollbackLines(port.scrollbackWindow);
+    final next = (_scrollOffsetLines + deltaLines).clamp(0, retained);
     if (next == _scrollOffsetLines) return;
     _scrollOffsetLines = next;
     _recomposite(notify: true);
@@ -534,7 +537,8 @@ final class FtermPaneController {
     if (port.modes.altScreen) {
       _scrollOffsetLines = 0;
     } else {
-      _scrollOffsetLines = _scrollOffsetLines.clamp(0, sbWin.totalLines);
+      final retained = _retainedScrollbackLines(sbWin);
+      _scrollOffsetLines = _scrollOffsetLines.clamp(0, retained);
     }
 
     var out = _composedBuffer;
@@ -543,7 +547,7 @@ final class FtermPaneController {
       _composedBuffer = out;
       _recompositeFull(out, src, sbWin);
     } else if (forceFull || !_tryIncrementalRecomposite(out, src)) {
-      out.clear();
+      out.clearMetadata();
       _recompositeFull(out, src, sbWin);
     }
 
@@ -565,26 +569,24 @@ final class FtermPaneController {
     } else {
       _lastCursorCellIndex = -1;
       _propagateScrolledKittyMetadata(out, src);
-      _paintScrollbarThumb(out, sbWin.totalLines);
+      _paintScrollbarThumb(out, _retainedScrollbackLines(sbWin));
     }
     _lastComposedWidth = out.width;
     _lastComposedHeight = out.height;
     _lastComposedScrollOffset = _scrollOffsetLines;
-    _lastComposedRevision = _scrollOffsetLines == 0
-        ? (remotePort?.renderRevision ?? -1)
-        : -1;
+    _lastComposedRevision = _scrollOffsetLines == 0 ? port.renderRevision : -1;
   }
 
   bool _tryIncrementalRecomposite(tui.Buffer out, tui.Buffer src) {
-    final remote = remotePort;
-    if (remote == null ||
-        _scrollOffsetLines != 0 ||
+    if (_scrollOffsetLines != 0 ||
         _lastComposedScrollOffset != 0 ||
         _lastComposedWidth != src.width ||
         _lastComposedHeight != src.height ||
+        out.effects.isNotEmpty ||
+        out.selectableRegions.isNotEmpty ||
         src.effects.isNotEmpty ||
         src.selectableRegions.isNotEmpty ||
-        _lastComposedRevision < remote.fullSyncRevision) {
+        _lastComposedRevision < port.fullSyncRevision) {
       return false;
     }
 
@@ -595,7 +597,7 @@ final class FtermPaneController {
     }
 
     final sinceRev = _lastComposedRevision;
-    for (final span in remote.dirtySpans) {
+    for (final span in port.dirtySpans) {
       if (span.revision <= sinceRev) continue;
       final start = span.start.clamp(0, totalCells);
       final end = (span.start + span.length).clamp(start, totalCells);
@@ -606,7 +608,7 @@ final class FtermPaneController {
     }
 
     _lastCursorCellIndex = _paintCursorIfVisible(out);
-    _lastComposedRevision = remote.renderRevision;
+    _lastComposedRevision = port.renderRevision;
     return true;
   }
 
@@ -628,28 +630,48 @@ final class FtermPaneController {
     ScrollbackWindowData sbWin,
   ) {
     final total = sbWin.totalLines;
-    final topVirtual = math.max(0, total - _scrollOffsetLines);
+    final topVirtual = math.max(sbWin.oldestLine, total - _scrollOffsetLines);
     final sbCount = math.max(0, math.min(out.height, total - topVirtual));
     final sbRows = sbCount > 0
-        ? port.readScrollbackSlice(sbWin.oldestLine + topVirtual, sbCount)
+        ? port.readScrollbackSlice(topVirtual, sbCount)
         : const <ScrollbackLine?>[];
 
     for (var screenY = 0; screenY < out.height; screenY++) {
-      if (screenY < sbCount) {
-        final line = sbRows[screenY];
-        if (line != null) {
-          _copyScrollbackRow(out, screenY, line);
-        } else {
-          _clearScreenRow(out, screenY);
-        }
+      _populateSingleRow(
+        out: out,
+        src: src,
+        screenY: screenY,
+        topVirtual: topVirtual,
+        total: total,
+        sbCount: sbCount,
+        sbRows: sbRows,
+      );
+    }
+  }
+
+  void _populateSingleRow({
+    required tui.Buffer out,
+    required tui.Buffer src,
+    required int screenY,
+    required int topVirtual,
+    required int total,
+    required int sbCount,
+    required List<ScrollbackLine?> sbRows,
+  }) {
+    if (screenY < sbCount) {
+      final line = screenY < sbRows.length ? sbRows[screenY] : null;
+      if (line != null) {
+        _copyScrollbackRow(out, screenY, line);
       } else {
-        final liveY = topVirtual + screenY - total;
-        if (liveY >= 0 && liveY < src.height) {
-          _copyLiveRow(out, screenY, src, liveY);
-        } else {
-          _clearScreenRow(out, screenY);
-        }
+        _clearScreenRow(out, screenY);
       }
+      return;
+    }
+    final liveY = topVirtual + screenY - total;
+    if (liveY >= 0 && liveY < src.height) {
+      _copyLiveRow(out, screenY, src, liveY);
+    } else {
+      _clearScreenRow(out, screenY);
     }
   }
 

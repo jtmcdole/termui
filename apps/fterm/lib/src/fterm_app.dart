@@ -195,8 +195,13 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
       case AppLifecycleState.hidden || AppLifecycleState.paused:
         _workspace.flushPendingSettings();
         _workspace.setWorkspaceVisible(false);
-      case AppLifecycleState.resumed || AppLifecycleState.inactive:
+        _workspace.setWindowFocused(false);
+      case AppLifecycleState.inactive:
         _workspace.setWorkspaceVisible(true);
+        _workspace.setWindowFocused(false);
+      case AppLifecycleState.resumed:
+        _workspace.setWorkspaceVisible(true);
+        _workspace.setWindowFocused(true);
       case AppLifecycleState.detached:
         unawaited(_shutdownBeforeExit());
     }
