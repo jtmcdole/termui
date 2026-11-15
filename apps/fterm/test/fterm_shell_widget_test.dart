@@ -1865,6 +1865,56 @@ void main() {
         await settleCastApp(tester);
         expect(workspace!.preferences.fontSize, isNull);
 
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('settings-shell-preset-zsh')),
+        );
+        await tester.tap(
+          find.byKey(const ValueKey('settings-shell-preset-zsh')),
+        );
+        await settleCastApp(tester);
+        expect(workspace!.preferences.shellExecutable, equals('zsh'));
+
+        const rawArgs =
+            '-c "tmux new -A -s main" --rcfile "/path/with spaces/bashrc"';
+        const expectedArgs = [
+          '-c',
+          'tmux new -A -s main',
+          '--rcfile',
+          '/path/with spaces/bashrc',
+        ];
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('settings-shell-arguments')),
+        );
+        await tester.pump();
+        await tester.enterText(
+          find.byKey(const ValueKey('settings-shell-arguments')),
+          rawArgs,
+        );
+        await settleCastApp(tester);
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('settings-login-shell')),
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('settings-login-shell')));
+        await settleCastApp(tester);
+        expect(workspace!.preferences.shellArguments, equals(expectedArgs));
+        expect(workspace!.preferences.loginShell, isFalse);
+
+        workspace!.dismissOverlay();
+        await settleCastApp(tester);
+        workspace!.setOverlay(FtermOverlay.settings);
+        await settleCastApp(tester);
+        final argsField = tester.widget<TextField>(
+          find.byKey(const ValueKey('settings-shell-arguments')),
+        );
+        expect(argsField.controller!.text, equals(rawArgs));
+
+        await tester.runAsync(() => workspace!.openLocalShellTab());
+        await settleCastApp(tester, cycles: 2);
+        expect(localDriver.openedConfigs.last.executable, equals('zsh'));
+        expect(localDriver.openedConfigs.last.arguments, equals(expectedArgs));
+        expect(localDriver.openedConfigs.last.loginShell, isFalse);
+
         workspace!.setOverlay(FtermOverlay.help);
         await settleCastApp(tester);
         expect(find.text('Cmd+= / Cmd+- / Cmd+0'), findsOneWidget);
@@ -1878,7 +1928,7 @@ void main() {
         pane.pillNotifier.addListener(() => pillCalls += 1);
         pane.visualNotifier.addListener(() => visualCalls += 1);
 
-        final port = localDriver.hosts.single.port;
+        final port = localDriver.hosts.last.port;
         for (var i = 0; i < 40; i++) {
           port.emitFrame(totalScrollback: i + 1);
         }
