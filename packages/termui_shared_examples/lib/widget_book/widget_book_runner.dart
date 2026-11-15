@@ -211,7 +211,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     implements MouseEventHandler {
   late final FocusScopeNode _rootScopeNode = FocusScopeNode(id: 'root_scope');
   late final FocusNode _sidebarFocusNode = FocusNode(id: 'sidebar');
-  late final FocusScopeNode _previewFocusNode = FocusScopeNode(id: 'preview');
+  FocusScopeNode _previewFocusNode = FocusScopeNode(id: 'preview');
   final _previewPaneKey = GlobalKey();
   bool _tickerRunning = false;
 
@@ -280,14 +280,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
       );
       final idx = DemoPage.values.indexOf(page);
       if (idx != _selectedPageIdx) {
-        setState(() {
-          _selectedPageIdx = idx;
-          _selectedPage = page;
-          _hoveredPageIdx = null;
-          widget.terminal.resetMousePointer();
-        });
-        _updateTickerState();
-        pageChangedEvent.post(widgetBookEventBus, page.name);
+        _selectPage(idx);
       }
     });
 
@@ -311,7 +304,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     var needsRepaint = false;
     final activeExample = examples[_selectedPage];
     if (activeExample != null) {
-      needsRepaint = activeExample.tick(const Duration(milliseconds: 16));
+      needsRepaint = activeExample.tick(elapsed);
     }
 
     fpsFrameCount++;
@@ -332,6 +325,29 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
         }
       }
     }
+  }
+
+  void _selectPage(int idx) {
+    if (!mounted) return;
+    final page = DemoPage.values[idx];
+    if (idx != _selectedPageIdx) {
+      final oldPreviewNode = _previewFocusNode;
+      if (oldPreviewNode.hasFocus) {
+        _sidebarFocusNode.requestFocus();
+      }
+      _previewFocusNode = FocusScopeNode(id: 'preview');
+      oldPreviewNode.dispose();
+      _rootScopeNode.addChild(_previewFocusNode);
+    }
+    setState(() {
+      _selectedPageIdx = idx;
+      _selectedPage = page;
+      _hoveredPageIdx = null;
+      _focusDemoPane = false;
+      widget.terminal.resetMousePointer();
+    });
+    _updateTickerState();
+    pageChangedEvent.post(widgetBookEventBus, page.name);
   }
 
   void _updateTickerState() {
@@ -483,6 +499,101 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     return '$prefix  $castBtnText$status';
   }
 
+  Map<String, String> _buildFooterBindings(WidgetBookExample activeExample) {
+    final traceLabel = Tracer.isEnabled ? 'Stop Tracing' : 'Start Tracing';
+    if (!_focusDemoPane) {
+      return {
+        'Tab': 'Focus Preview',
+        'Up/Down': 'Navigate',
+        'T': traceLabel,
+        'H/?': 'Shortcuts Help',
+        'Q': 'Quit',
+      };
+    }
+    return {
+      ...activeExample.helpBindings,
+      if (!activeExample.helpBindings.keys.any((k) => k.contains('Tab')))
+        'Tab': 'Sidebar',
+      'Esc': 'Defocus',
+      'T': traceLabel,
+      if (_selectedPage != DemoPage.textInputs) 'H/?': 'Shortcuts Help',
+      'Q': 'Quit',
+    };
+  }
+
+  bool _handleRootKeyEvent(BuildContext context, KeyEvent event) {
+    if (event.type == KeyType.tab) {
+      if (event.modifiers.contains(term.Modifier.shift)) {
+        _rootScopeNode.previousFocus();
+      } else {
+        _rootScopeNode.nextFocus();
+      }
+      return true;
+    }
+
+    if ((event.type == KeyType.escape || event.key == 'escape') &&
+        _previewFocusNode.hasFocus) {
+      _sidebarFocusNode.requestFocus();
+      return true;
+    }
+
+    if (event.type != KeyType.character) {
+      return false;
+    }
+
+    switch (event.key) {
+      case 'q':
+        PromptScope.of(context)?.done();
+        return true;
+      case 'h' || '?':
+        if (mounted) {
+          setState(() {
+            _showHelpDialog = true;
+          });
+        }
+        return true;
+      case 't':
+        _toggleTracing();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  Widget _buildHelpDialogOverlay() {
+    void closeDialog() {
+      if (mounted) {
+        setState(() {
+          _showHelpDialog = false;
+        });
+      }
+    }
+
+    return Positioned(
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      child: ModalDismissBarrier(
+        onDismiss: closeDialog,
+        child: Stack([
+          Positioned.center(
+            width: 62,
+            height: 16,
+            child: Focus(
+              autofocus: true,
+              onKeyEvent: (event) {
+                closeDialog();
+                return true;
+              },
+              child: const HelpDialog(),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final element = context as Element;
@@ -529,23 +640,13 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
                   selectedIndex: _selectedPageIdx,
                   hoveredIndex: _hoveredPageIdx,
                   focusNode: _sidebarFocusNode,
-                  onSelected: (idx) {
-                    setState(() {
-                      _selectedPageIdx = idx;
-                      _selectedPage = DemoPage.values[idx];
-                      _hoveredPageIdx = null; // Clear hover state
-                      widget.terminal.resetMousePointer();
-                    });
-                    _updateTickerState();
-                    pageChangedEvent.post(
-                      widgetBookEventBus,
-                      _selectedPage.name,
-                    );
-                  },
+                  onSelected: _selectPage,
                   onHovered: (idx) {
-                    setState(() {
-                      _hoveredPageIdx = idx;
-                    });
+                    if (mounted) {
+                      setState(() {
+                        _hoveredPageIdx = idx;
+                      });
+                    }
                   },
                 ),
               ),
@@ -600,24 +701,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
       SizedBox(
         height: 1,
         child: Help(
-          bindings: _focusDemoPane
-              ? {
-                  ...activeExample.helpBindings,
-                  if (!activeExample.helpBindings.containsKey('Tab'))
-                    'Tab': 'Sidebar',
-                  'Esc': 'Defocus',
-                  'T': Tracer.isEnabled ? 'Stop Tracing' : 'Start Tracing',
-                  if (_selectedPage != DemoPage.textInputs)
-                    'H/?': 'Shortcuts Help',
-                  'Q': 'Quit',
-                }
-              : {
-                  'Tab': 'Focus Preview',
-                  'Up/Down': 'Navigate',
-                  'T': Tracer.isEnabled ? 'Stop Tracing' : 'Start Tracing',
-                  'H/?': 'Shortcuts Help',
-                  'Q': 'Quit',
-                },
+          bindings: _buildFooterBindings(activeExample),
           keyStyle: const Style(
             foreground: CharmColors.julep,
             modifiers: Modifier.bold,
@@ -629,74 +713,10 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     return FocusScope(
       focusNode: _rootScopeNode,
       autofocus: true,
-      onKeyEvent: (event) {
-        if (event.type == KeyType.tab) {
-          if (event.modifiers.contains(term.Modifier.shift)) {
-            _rootScopeNode.previousFocus();
-          } else {
-            _rootScopeNode.nextFocus();
-          }
-          return true;
-        }
-
-        if (event.type == KeyType.escape || event.key == 'escape') {
-          if (_previewFocusNode.hasFocus) {
-            _sidebarFocusNode.requestFocus();
-            return true;
-          }
-        }
-
-        if (event.type == KeyType.character) {
-          if (event.key == 'q') {
-            PromptScope.of(context)?.done();
-            return true;
-          }
-          if (event.key == 'h' || event.key == '?') {
-            setState(() {
-              _showHelpDialog = true;
-            });
-            return true;
-          }
-          if (event.key == 't') {
-            _toggleTracing();
-            return true;
-          }
-        }
-
-        return false;
-      },
+      onKeyEvent: (event) => _handleRootKeyEvent(context, event),
       child: Stack([
         Positioned(left: 0, top: 0, right: 0, bottom: 0, child: mainLayout),
-        if (_showHelpDialog)
-          Positioned(
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-            child: ModalDismissBarrier(
-              onDismiss: () {
-                setState(() {
-                  _showHelpDialog = false;
-                });
-              },
-              child: Stack([
-                Positioned.center(
-                  width: 62,
-                  height: 16,
-                  child: Focus(
-                    autofocus: true,
-                    onKeyEvent: (event) {
-                      setState(() {
-                        _showHelpDialog = false;
-                      });
-                      return true;
-                    },
-                    child: const HelpDialog(),
-                  ),
-                ),
-              ]),
-            ),
-          ),
+        if (_showHelpDialog) _buildHelpDialogOverlay(),
       ]),
     );
   }
@@ -975,7 +995,16 @@ final class _PreviewPaneElement extends Element implements MouseEventHandler {
   @override
   void handleMouseEvent(term.MouseEvent event, int localX, int localY) {
     final w = widget as PreviewPaneWidget;
-    w.focusNode.requestFocus();
+    final inBounds =
+        localX >= 0 &&
+        localX < w.contentWidth &&
+        localY >= 0 &&
+        localY < w.contentHeight;
+    if (event.type == term.MouseEventType.press &&
+        inBounds &&
+        !w.focusNode.hasFocus) {
+      w.focusNode.requestFocus();
+    }
     w.activeExample.handleMouseEvent(
       event,
       localX,

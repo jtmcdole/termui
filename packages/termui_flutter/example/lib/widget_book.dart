@@ -24,8 +24,12 @@ final class FlutterWidgetBookPlatform implements WidgetBookPlatform {
 
   @override
   void startTicker(void Function(Duration elapsed) onTick) {
+    _ticker?.dispose();
+    var lastElapsed = Duration.zero;
     _ticker = Ticker((elapsed) {
-      onTick(elapsed);
+      final rawDelta = elapsed - lastElapsed;
+      lastElapsed = elapsed;
+      onTick(rawDelta.isNegative ? Duration.zero : rawDelta);
     });
     _ticker!.start();
   }
@@ -33,6 +37,7 @@ final class FlutterWidgetBookPlatform implements WidgetBookPlatform {
   @override
   void stopTicker() {
     _ticker?.dispose();
+    _ticker = null;
   }
 
   @override

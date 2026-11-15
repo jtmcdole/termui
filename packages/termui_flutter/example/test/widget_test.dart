@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:example_flutter/main.dart';
 import 'package:example_flutter/src/events.dart';
+import 'package:example_flutter/widget_book.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui/ui/termui_debug.dart';
 import 'package:termui_shared_examples/widget_book/events.dart';
@@ -217,6 +218,69 @@ void main() {
       await tester.runAsync(() async {
         await tuiFuture?.timeout(const Duration(seconds: 2));
       });
+    },
+  );
+
+  testWidgets(
+    'FlutterWidgetBookPlatform.startTicker forwards deterministic FakeAsync per-frame deltas regardless of wall-clock stalls',
+    (WidgetTester tester) async {
+      // testWidgets drives Ticker callbacks through AutomatedTestWidgetsFlutterBinding's
+      // FakeAsync clock rather than host wall-clock time.
+      expect(tester.binding, isA<AutomatedTestWidgetsFlutterBinding>());
+      final t0 = tester.binding.clock.now();
+
+      void burnWallClock(Duration minRealTime) {
+        final sw = Stopwatch()..start();
+        while (sw.elapsed < minRealTime) {}
+      }
+
+      final platform = FlutterWidgetBookPlatform(null, null);
+      final deltas = <Duration>[];
+
+      platform.startTicker(deltas.add);
+      await tester.pump();
+      expect(tester.binding.clock.now().difference(t0), equals(Duration.zero));
+
+      burnWallClock(const Duration(milliseconds: 15));
+      await tester.pump(const Duration(milliseconds: 4));
+      expect(
+        tester.binding.clock.now().difference(t0),
+        equals(const Duration(milliseconds: 4)),
+      );
+
+      burnWallClock(const Duration(milliseconds: 15));
+      await tester.pump(const Duration(milliseconds: 8));
+      expect(
+        tester.binding.clock.now().difference(t0),
+        equals(const Duration(milliseconds: 12)),
+      );
+
+      await tester.pump(const Duration(milliseconds: 4));
+      platform.stopTicker();
+
+      expect(
+        deltas,
+        equals([
+          Duration.zero,
+          const Duration(milliseconds: 4),
+          const Duration(milliseconds: 8),
+          const Duration(milliseconds: 4),
+        ]),
+      );
+
+      deltas.clear();
+      final tRestart = tester.binding.clock.now();
+      platform.startTicker(deltas.add);
+      await tester.pump();
+      burnWallClock(const Duration(milliseconds: 15));
+      await tester.pump(const Duration(milliseconds: 5));
+      platform.stopTicker();
+
+      expect(
+        tester.binding.clock.now().difference(tRestart),
+        equals(const Duration(milliseconds: 5)),
+      );
+      expect(deltas, equals([Duration.zero, const Duration(milliseconds: 5)]));
     },
   );
 }
