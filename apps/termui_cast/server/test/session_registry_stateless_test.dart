@@ -2213,18 +2213,414 @@ void _registerUnsubscribedTitleBurstTest(WsRelayHandler Function() getHandler) {
         );
       }
       await pumpEventQueue();
+      await Future<void>.delayed(
+        SessionRegistry.defaultDirectoryBroadcastInterval +
+            const Duration(milliseconds: 30),
+      );
 
       check(pausedCloseCode).isNull();
-      final latestDir = dirInbox
-          .whereType<SessionDirectoryFrame>()
-          .last
-          .sessions
-          .firstWhere((s) => s.id == noisyId);
+      final dirFrames = dirInbox.whereType<SessionDirectoryFrame>().toList();
+      check(dirFrames.length).isLessThan(10);
+      final latestDir = dirFrames.last.sessions.firstWhere(
+        (s) => s.id == noisyId,
+      );
       check(latestDir.title).equals('title-199');
 
       pausedSub.resume();
       await pumpEventQueue();
       check(pausedCloseCode).isNull();
+    },
+  );
+
+  test(
+    'gates resize, scrollback, and rename at 75% caster pressure, downgrades slow viewers on deltas, and deduplicates re-subscribes',
+    () async {
+      final handler = getHandler();
+      const sessionId = SessionId('sess-gating');
+      final casterIn = StreamController<Uint8List>();
+      final casterOut = StreamController<Uint8List>();
+      final casterLocal = StreamChannel<Uint8List>(
+        casterOut.stream,
+        casterIn.sink,
+      );
+      final casterForeign = StreamChannel<Uint8List>(
+        casterIn.stream,
+        casterOut.sink,
+      );
+      handler.attachCasterChannel(casterForeign);
+      final casterInbox = <CastMessage>[];
+      final casterSub = casterLocal.stream.listen(
+        (b) => casterInbox.add(BufferFrameCodec.decode(b)),
+      );
+      addTearDown(casterSub.cancel);
+      addTearDown(casterIn.close);
+
+      casterLocal.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .caster, token: '')),
+      );
+      casterLocal.sink.add(
+        BufferFrameCodec.encode(
+          const RegisterSessionFrame(
+            sessionId: sessionId,
+            title: 'gated',
+            cols: 80,
+            rows: 24,
+          ),
+        ),
+      );
+
+      final clientPipe = StreamChannelController<Uint8List>();
+      handler.attachClientChannel(clientPipe.foreign);
+      final clientInbox = <CastMessage>[];
+      addTearDown(
+        clientPipe.local.stream
+            .listen((b) => clientInbox.add(BufferFrameCodec.decode(b)))
+            .cancel,
+      );
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+      );
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const SubscribeSessionFrame(sessionId: sessionId, cols: 80, rows: 24),
+        ),
+      );
+      await pumpEventQueue();
+      casterInbox.clear();
+      clientInbox.clear();
+
+      // Re-subscribe with identical viewport while already awaiting keyframe does not spam directory or duplicate keyframes.
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const SubscribeSessionFrame(sessionId: sessionId, cols: 80, rows: 24),
+        ),
+      );
+      await pumpEventQueue();
+      check(clientInbox.whereType<SessionDirectoryFrame>()).isEmpty();
+      check(casterInbox.whereType<RequestKeyframeFrame>()).isEmpty();
+
+      // Deliver initial snapshot to clear awaitingKeyframe.
+      final buf = Buffer.blank(80, 24);
+      casterLocal.sink.add(
+        BufferFrameCodec.encode(
+          BufferSnapshotFrame(
+            snapshot: BufferSnapshot.fromBuffer(
+              sessionId: sessionId,
+              seq: 1,
+              buffer: buf,
+              cursor: CursorState.origin,
+              modes: TerminalModes.defaults,
+            ),
+          ),
+        ),
+      );
+      await pumpEventQueue();
+
+      // Pause caster sink reader and push 7 inputs (>75% of maxOutboundFrames=8) -> caster_busy on resize, scrollback, rename.
+      casterSub.pause();
+      for (var i = 0; i < 7; i++) {
+        clientPipe.local.sink.add(
+          BufferFrameCodec.encode(
+            InputFrame(sessionId: sessionId, data: Uint8List.fromList([0x61])),
+          ),
+        );
+      }
+      await pumpEventQueue();
+      clientInbox.clear();
+
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const ResizeFrame(sessionId: sessionId, cols: 60, rows: 20),
+        ),
+      );
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const RequestScrollbackFrame(
+            sessionId: sessionId,
+            requestId: 1,
+            clearSeq: 0,
+            startLine: 0,
+            count: 10,
+          ),
+        ),
+      );
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const RenameSessionFrame(sessionId: sessionId, title: 'blocked'),
+        ),
+      );
+      await pumpEventQueue();
+      final busyErrors = clientInbox.whereType<ErrorFrame>().toList();
+      check(busyErrors.length).equals(3);
+      for (final err in busyErrors) {
+        check(err.code).equals('caster_busy');
+      }
+      casterSub.resume();
+      await pumpEventQueue();
+
+      // Slow viewer paused during delta burst is downgraded to awaitingKeyframe rather than 1008-evicted.
+      int? slowCloseCode;
+      final slowIn = StreamController<Uint8List>();
+      final slowOut = StreamController<Uint8List>();
+      final slowLocal = StreamChannel<Uint8List>(slowOut.stream, slowIn.sink);
+      final slowForeign = StreamChannel<Uint8List>(slowIn.stream, slowOut.sink);
+      handler.attachClientChannel(
+        slowForeign,
+        closeWithCode: (code, _) async {
+          slowCloseCode = code;
+          unawaited(slowOut.close());
+        },
+      );
+      final slowSub = slowLocal.stream.listen((_) {});
+      addTearDown(slowSub.cancel);
+      addTearDown(slowIn.close);
+      slowLocal.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+      );
+      slowLocal.sink.add(
+        BufferFrameCodec.encode(
+          const SubscribeSessionFrame(sessionId: sessionId),
+        ),
+      );
+      await pumpEventQueue();
+      // Deliver snapshot so slowLocal clears awaitingKeyframe before stalling.
+      casterLocal.sink.add(
+        BufferFrameCodec.encode(
+          BufferSnapshotFrame(
+            snapshot: BufferSnapshot.fromBuffer(
+              sessionId: sessionId,
+              seq: 2,
+              buffer: buf,
+              cursor: CursorState.origin,
+              modes: TerminalModes.defaults,
+            ),
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      casterInbox.clear();
+      slowSub.pause();
+
+      for (var seq = 3; seq <= 14; seq++) {
+        casterLocal.sink.add(
+          BufferFrameCodec.encode(
+            BufferDeltaFrame(
+              delta: BufferDelta(
+                sessionId: sessionId,
+                baseSeq: seq - 1,
+                seq: seq,
+                cols: 80,
+                rows: 24,
+                cursor: CursorState.origin,
+                modes: TerminalModes.defaults,
+                runs: const [],
+              ),
+            ),
+          ),
+        );
+      }
+      await pumpEventQueue();
+      check(slowCloseCode).isNull();
+      check(casterInbox.whereType<RequestKeyframeFrame>()).isNotEmpty();
+      slowSub.resume();
+    },
+  );
+
+  test(
+    'D-04/D-08: gates subscribe/unsubscribe/resize/upload under 75% caster pump pressure without mutating viewports or stranding keyframe, and patches scrollback reqId in one pass',
+    () async {
+      final registry = SessionRegistry(
+        maxOutboundFrames: 8,
+        maxOutboundBytes: 65536,
+      );
+      addTearDown(registry.close);
+      final handler = WsRelayHandler(
+        registry: registry,
+        authenticator: TokenAuthenticator(),
+      );
+      const sessionId = SessionId('sess-caster-pressure');
+
+      final casterIn = StreamController<Uint8List>();
+      final casterOut = StreamController<Uint8List>();
+      final casterLocal = StreamChannel<Uint8List>(
+        casterOut.stream,
+        casterIn.sink,
+      );
+      final casterForeign = StreamChannel<Uint8List>(
+        casterIn.stream,
+        casterOut.sink,
+      );
+      int? casterCloseCode;
+      handler.attachCasterChannel(
+        casterForeign,
+        closeWithCode: (code, _) async {
+          casterCloseCode = code;
+          unawaited(casterOut.close());
+        },
+      );
+      final casterInbox = <CastMessage>[];
+      final casterSub = casterLocal.stream.listen((raw) {
+        casterInbox.add(BufferFrameCodec.decode(raw));
+      });
+      addTearDown(casterSub.cancel);
+      addTearDown(casterIn.close);
+
+      casterLocal.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .caster, token: '')),
+      );
+      casterLocal.sink.add(
+        BufferFrameCodec.encode(
+          const RegisterSessionFrame(
+            sessionId: sessionId,
+            title: 'p',
+            cols: 80,
+            rows: 24,
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      // D-07: Initial 0-viewer registration receives SubscriberCountFrame(0).
+      check(
+        casterInbox.whereType<SubscriberCountFrame>().single.subscriberCount,
+      ).equals(0);
+      casterInbox.clear();
+
+      final client1 = StreamChannelController<Uint8List>();
+      handler.attachClientChannel(client1.foreign);
+      final client1Inbox = <CastMessage>[];
+      addTearDown(
+        client1.local.stream
+            .listen((b) => client1Inbox.add(BufferFrameCodec.decode(b)))
+            .cancel,
+      );
+      client1.local.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+      );
+      client1.local.sink.add(
+        BufferFrameCodec.encode(
+          const SubscribeSessionFrame(sessionId: sessionId, cols: 80, rows: 24),
+        ),
+      );
+      await pumpEventQueue();
+      casterInbox.clear();
+
+      // Pause caster stream and fill caster pump to >= 75% (6/8 frames).
+      casterSub.pause();
+      for (var i = 0; i < 6; i++) {
+        client1.local.sink.add(
+          BufferFrameCodec.encode(
+            InputFrame(
+              sessionId: sessionId,
+              data: Uint8List.fromList([0x41 + i]),
+            ),
+          ),
+        );
+      }
+      await pumpEventQueue();
+      client1Inbox.clear();
+
+      // Rejected ResizeFrame under pressure must NOT mutate subscriberViewports or evict caster.
+      client1.local.sink.add(
+        BufferFrameCodec.encode(
+          const ResizeFrame(sessionId: sessionId, cols: 55, rows: 19),
+        ),
+      );
+      // Rejected FileUploadStartFrame under pressure must reject client before allocating transfer state.
+      client1.local.sink.add(
+        BufferFrameCodec.encode(
+          const FileUploadStartFrame(
+            sessionId: sessionId,
+            transferId: 9,
+            fileName: 'blocked.bin',
+            totalBytes: 4,
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      check(
+        client1Inbox.whereType<ErrorFrame>().any(
+          (e) => e.code == 'caster_busy',
+        ),
+      ).isTrue();
+      check(
+        client1Inbox.whereType<FileUploadAckFrame>().single.status,
+      ).equals(FileUploadStatus.rejected);
+
+      // Subscribing client2 under caster pressure defers SubscriberCountFrame / RequestKeyframeFrame without eviction.
+      final client2 = StreamChannelController<Uint8List>();
+      handler.attachClientChannel(client2.foreign);
+      addTearDown(client2.local.stream.listen((_) {}).cancel);
+      client2.local.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+      );
+      client2.local.sink.add(
+        BufferFrameCodec.encode(
+          const SubscribeSessionFrame(sessionId: sessionId, cols: 80, rows: 24),
+        ),
+      );
+      await pumpEventQueue();
+      check(casterCloseCode).isNull();
+
+      // Drain caster pump -> deferred SubscriberCountFrame(2) and RequestKeyframeFrame flush automatically.
+      casterSub.resume();
+      await pumpEventQueue();
+      check(
+        casterInbox.whereType<SubscriberCountFrame>().any(
+          (f) => f.subscriberCount == 2,
+        ),
+      ).isTrue();
+      check(casterInbox.whereType<RequestKeyframeFrame>()).isNotEmpty();
+
+      // Verify client1's rejected 55x19 resize did NOT pollute subscriberViewports when unsubscribing client2.
+      casterInbox.clear();
+      client2.local.sink.add(
+        BufferFrameCodec.encode(
+          const UnsubscribeSessionFrame(sessionId: sessionId),
+        ),
+      );
+      await pumpEventQueue();
+      check(casterInbox.whereType<ResizeFrame>()).isEmpty();
+
+      // Single-pass scrollback chunk forwarding with rewriteInPlace: true patches client reqId accurately.
+      client1Inbox.clear();
+      client1.local.sink.add(
+        BufferFrameCodec.encode(
+          const RequestScrollbackFrame(
+            sessionId: sessionId,
+            requestId: 4242,
+            clearSeq: 0,
+            startLine: 0,
+            count: 1,
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      final forwardedReq = casterInbox
+          .whereType<RequestScrollbackFrame>()
+          .single;
+      casterLocal.sink.add(
+        BufferFrameCodec.encode(
+          ScrollbackChunkFrame(
+            sessionId: sessionId,
+            requestId: forwardedReq.requestId,
+            clearSeq: 0,
+            startLine: 0,
+            rows: [
+              EncodedScrollbackRow(
+                isWrapped: false,
+                characters: ['z'],
+                attributes: Uint32List(3),
+              ),
+            ],
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      final deliveredChunk = client1Inbox
+          .whereType<ScrollbackChunkFrame>()
+          .single;
+      check(deliveredChunk.requestId).equals(4242);
+      check(deliveredChunk.rows.single.characters.single).equals('z');
     },
   );
 }

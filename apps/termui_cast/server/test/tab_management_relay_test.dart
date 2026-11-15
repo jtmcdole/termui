@@ -25,7 +25,7 @@ void main() {
     });
 
     test(
-      'renameSession allows unsubscribed viewers, skips no-ops, rejects unknown sessions, and rate-limits per client',
+      'renameSession enforces client subscription, skips no-ops, rejects unknown sessions, and rate-limits per client',
       () async {
         var now = DateTime.utc(2026, 11, 4, 20, 0, 0);
         final timedRegistry = SessionRegistry(
@@ -95,8 +95,23 @@ void main() {
         inboxSub.clear();
         inboxUnsub.clear();
 
-        // 1. Unsubscribed client renames session -> forwarded to caster and broadcast to all viewers.
+        // 1. Unsubscribed client is rejected with rename_rejected; subscribed client renames session -> forwarded and broadcast.
         clientUnsub.local.sink.add(
+          BufferFrameCodec.encode(
+            const RenameSessionFrame(
+              sessionId: sessionId,
+              title: 'unsub-attempt',
+            ),
+          ),
+        );
+        await pumpEventQueue();
+        check(
+          inboxUnsub.whereType<ErrorFrame>().single.code,
+        ).equals('rename_rejected');
+        check(casterInbox).isEmpty();
+        inboxUnsub.clear();
+
+        clientSub.local.sink.add(
           BufferFrameCodec.encode(
             const RenameSessionFrame(sessionId: sessionId, title: 'renamed-1'),
           ),
@@ -128,7 +143,7 @@ void main() {
         inboxSub.clear();
         inboxUnsub.clear();
         for (var i = 0; i < 6; i++) {
-          clientUnsub.local.sink.add(
+          clientSub.local.sink.add(
             BufferFrameCodec.encode(
               const RenameSessionFrame(
                 sessionId: sessionId,
@@ -143,7 +158,7 @@ void main() {
         check(inboxUnsub).isEmpty();
 
         // 3. Unknown session returns rename_rejected only to the requesting client.
-        clientUnsub.local.sink.add(
+        clientSub.local.sink.add(
           BufferFrameCodec.encode(
             const RenameSessionFrame(
               sessionId: SessionId('unknown'),
@@ -153,14 +168,14 @@ void main() {
         );
         await pumpEventQueue();
         check(
-          inboxUnsub.whereType<ErrorFrame>().single.code,
+          inboxSub.whereType<ErrorFrame>().single.code,
         ).equals('rename_rejected');
-        check(inboxSub).isEmpty();
-        inboxUnsub.clear();
+        check(inboxUnsub).isEmpty();
+        inboxSub.clear();
 
         // 4. Consume remaining 3 renames in the 1s window (2, 3, 4 succeed; 5th is rate-limited).
         for (final nextTitle in ['renamed-2', 'renamed-3', 'renamed-4']) {
-          clientUnsub.local.sink.add(
+          clientSub.local.sink.add(
             BufferFrameCodec.encode(
               RenameSessionFrame(sessionId: sessionId, title: nextTitle),
             ),
@@ -171,21 +186,21 @@ void main() {
 
         inboxSub.clear();
         inboxUnsub.clear();
-        clientUnsub.local.sink.add(
+        clientSub.local.sink.add(
           BufferFrameCodec.encode(
             const RenameSessionFrame(sessionId: sessionId, title: 'renamed-5'),
           ),
         );
         await pumpEventQueue();
-        final rateErr = inboxUnsub.whereType<ErrorFrame>().single;
+        final rateErr = inboxSub.whereType<ErrorFrame>().single;
         check(rateErr.code).equals('rename_rejected');
         check(rateErr.message).contains('rate limit');
-        check(inboxSub).isEmpty();
+        check(inboxUnsub).isEmpty();
         check(timedRegistry.sessions.single.title).equals('renamed-4');
 
         // Advancing past the 1s sliding window restores rename quota.
         now = now.add(const Duration(seconds: 1));
-        clientUnsub.local.sink.add(
+        clientSub.local.sink.add(
           BufferFrameCodec.encode(
             const RenameSessionFrame(sessionId: sessionId, title: 'renamed-5'),
           ),

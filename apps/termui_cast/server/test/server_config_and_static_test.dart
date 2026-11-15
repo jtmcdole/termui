@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:checks/checks.dart';
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_cast_server/termui_cast_server.dart';
@@ -528,6 +530,95 @@ void main() {
 
         final postRes = await sendRequest('POST', '/index.html');
         check(postRes.statusCode).equals(HttpStatus.methodNotAllowed);
+      },
+    );
+
+    test(
+      'supports --*-token-file, emits argv token warnings, and serves WASM/JS with no-cache ETag + 304',
+      () async {
+        final tokenDir = Directory.systemTemp.createTempSync('cast_tok_files_');
+        addTearDown(() => tokenDir.deleteSync(recursive: true));
+        final casterTokFile = File(p.join(tokenDir.path, 'caster.tok'))
+          ..writeAsStringSync('  file-caster-secret\n');
+        final clientTokFile = File(p.join(tokenDir.path, 'client.tok'))
+          ..writeAsStringSync('file-client-secret\n');
+
+        final fromFiles = ServerConfig.fromArgs(
+          [
+            '--caster-token-file=${casterTokFile.path}',
+            '--client-token-file=${clientTokFile.path}',
+          ],
+          environment: const {},
+          currentDirectory: Directory.systemTemp,
+        )!;
+        check(fromFiles.casterToken).equals('file-caster-secret');
+        check(fromFiles.clientToken).equals('file-client-secret');
+        check(fromFiles.warnings).isEmpty();
+
+        final fromArgv = ServerConfig.fromArgs(
+          const ['--caster-token=argv-c', '--client-token=argv-v'],
+          environment: const {},
+          currentDirectory: Directory.systemTemp,
+        )!;
+        check(fromArgv.warnings.length).equals(2);
+
+        check(
+          () => ServerConfig.fromArgs(
+            [
+              '--caster-token=inline',
+              '--caster-token-file=${casterTokFile.path}',
+            ],
+            environment: const {},
+            currentDirectory: Directory.systemTemp,
+          ),
+        ).throws<FormatException>();
+
+        final client = HttpClient();
+        addTearDown(() => client.close(force: true));
+        final wasmReq = await client.getUrl(
+          Uri.parse('http://127.0.0.1:${server.port}/main.dart.wasm'),
+        );
+        final wasmRes = await wasmReq.close();
+        await wasmRes.drain<void>();
+        check(wasmRes.statusCode).equals(HttpStatus.ok);
+        check(
+          wasmRes.headers.value(HttpHeaders.cacheControlHeader),
+        ).equals('no-cache');
+        final etag = wasmRes.headers.value(HttpHeaders.etagHeader);
+        check(etag).isNotNull().isNotEmpty();
+        check(etag!.startsWith('W/')).isFalse();
+        check(etag).equals(
+          '"${sha256.convert(await File('${webDir.path}/main.dart.wasm').readAsBytes())}"',
+        );
+
+        final revalReq = await client.getUrl(
+          Uri.parse('http://127.0.0.1:${server.port}/main.dart.wasm'),
+        );
+        revalReq.headers.set(HttpHeaders.ifNoneMatchHeader, etag);
+        final revalRes = await revalReq.close();
+        await revalRes.drain<void>();
+        check(revalRes.statusCode).equals(HttpStatus.notModified);
+
+        // D-09: Same byte length and same mtime across rebuilds produces a different strong SHA-256 ETag.
+        final wasmFile = File('${webDir.path}/main.dart.wasm');
+        final originalBytes = await wasmFile.readAsBytes();
+        final originalModified = (await wasmFile.stat()).modified;
+        final replacedBytes = Uint8List.fromList(originalBytes);
+        replacedBytes[0] ^= 0xFF;
+        await wasmFile.writeAsBytes(replacedBytes);
+        await wasmFile.setLastModified(originalModified);
+        final server2 = await CastServer.bind(
+          ServerConfig(port: 0, webRoot: webDir.path),
+        );
+        addTearDown(server2.close);
+        final wasmReq2 = await client.getUrl(
+          Uri.parse('http://127.0.0.1:${server2.port}/main.dart.wasm'),
+        );
+        final wasmRes2 = await wasmReq2.close();
+        await wasmRes2.drain<void>();
+        check(
+          wasmRes2.headers.value(HttpHeaders.etagHeader),
+        ).not((it) => it.equals(etag));
       },
     );
   });

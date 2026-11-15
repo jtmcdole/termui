@@ -335,6 +335,14 @@ final class IapJwtSigner {
         'Exactly one of serviceAccount or serviceAccountKey must be provided.',
       );
     }
+    if (this.serviceAccount != null &&
+        !TokenAuthenticator.isValidServiceAccountEmail(this.serviceAccount!)) {
+      throw ArgumentError.value(
+        this.serviceAccount,
+        'serviceAccount',
+        'Invalid GCP service account email.',
+      );
+    }
     if (ttl <= Duration.zero ||
         ttl > const Duration(hours: 1) ||
         refreshMargin < Duration.zero ||
@@ -379,7 +387,21 @@ final class IapJwtSigner {
         await stderrFuture,
       );
     } on TimeoutException {
-      process.kill();
+      if (Platform.isWindows) {
+        try {
+          await Process.run('taskkill', [
+            '/T',
+            '/F',
+            '/PID',
+            '${process.pid}',
+          ]).timeout(const Duration(seconds: 5));
+        } on Object catch (_) {}
+      } else {
+        process.kill();
+      }
+      try {
+        await process.exitCode.timeout(const Duration(seconds: 2));
+      } on Object catch (_) {}
       rethrow;
     }
   }
@@ -388,10 +410,6 @@ final class IapJwtSigner {
     final trimmed = value?.trim();
     return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
   }
-
-  /// Derives the `https://` IAP JWT audience URL from a `wss://` [wsUri].
-  static String audienceForWebSocketUri(Uri wsUri) =>
-      TokenAuthenticator.iapAudienceForWebSocketUri(wsUri);
 
   /// Returns a valid cached JWT or mints a fresh one when missing or near expiry.
   Future<String> getBearerToken() {
@@ -493,9 +511,19 @@ final class IapJwtSigner {
       }
       return signedJwt;
     } finally {
-      try {
-        await tempDir.delete(recursive: true);
-      } on Object catch (_) {}
+      for (var attempt = 0; attempt < 4; attempt++) {
+        try {
+          await tempDir.delete(recursive: true);
+          break;
+        } on FileSystemException catch (_) {
+          if (attempt == 3) break;
+          await Future<void>.delayed(
+            Duration(milliseconds: 25 * (1 << attempt)),
+          );
+        } on Object catch (_) {
+          break;
+        }
+      }
     }
   }
 

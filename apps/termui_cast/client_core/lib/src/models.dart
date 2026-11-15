@@ -255,11 +255,25 @@ enum DockPosition {
   };
 }
 
+/// Policy governing inbound remote `OSC 52` clipboard writes on viewer clients.
+enum Osc52ClipboardPolicy {
+  /// Allow `OSC 52` writes only when the target session/pane has active focus
+  /// and the payload is within the configured size bound.
+  allowFocused,
+
+  /// Ignore all inbound remote `OSC 52` clipboard writes.
+  deny,
+}
+
 /// Immutable user preferences for a workspace, serializable to and from JSON
 /// for browser `localStorage` persistence.
 final class CastWorkspaceSettings {
+  /// Maximum decoded UTF-8 byte size accepted from an inbound `OSC 52` write (`1 MiB`).
+  static const int defaultMaxOsc52ClipboardBytes = 1024 * 1024;
+
   /// Default workspace settings (`dockPosition: top`, `copyOnSelect: true`,
-  /// `debugOverlayEnabled: false`, `f12ShortcutsEnabled: false`).
+  /// `debugOverlayEnabled: false`, `f12ShortcutsEnabled: false`,
+  /// `osc52Policy: allowFocused`).
   static const CastWorkspaceSettings defaults = CastWorkspaceSettings();
 
   /// Placement of the multi-session tab/dock bar.
@@ -277,6 +291,9 @@ final class CastWorkspaceSettings {
   /// Terminal palette and theme configuration.
   final TerminalThemeSettings themeSettings;
 
+  /// Inbound remote `OSC 52` clipboard security policy.
+  final Osc52ClipboardPolicy osc52Policy;
+
   /// Creates an immutable workspace settings snapshot.
   const CastWorkspaceSettings({
     this.dockPosition = .top,
@@ -284,6 +301,7 @@ final class CastWorkspaceSettings {
     this.debugOverlayEnabled = false,
     this.f12ShortcutsEnabled = false,
     this.themeSettings = const TerminalThemeSettings(),
+    this.osc52Policy = .allowFocused,
   });
 
   /// Returns a copy of these settings with specified fields replaced.
@@ -293,12 +311,14 @@ final class CastWorkspaceSettings {
     bool? debugOverlayEnabled,
     bool? f12ShortcutsEnabled,
     TerminalThemeSettings? themeSettings,
+    Osc52ClipboardPolicy? osc52Policy,
   }) => CastWorkspaceSettings(
     dockPosition: dockPosition ?? this.dockPosition,
     copyOnSelect: copyOnSelect ?? this.copyOnSelect,
     debugOverlayEnabled: debugOverlayEnabled ?? this.debugOverlayEnabled,
     f12ShortcutsEnabled: f12ShortcutsEnabled ?? this.f12ShortcutsEnabled,
     themeSettings: themeSettings ?? this.themeSettings,
+    osc52Policy: osc52Policy ?? this.osc52Policy,
   );
 
   /// Encodes this settings snapshot to a JSON map.
@@ -308,6 +328,7 @@ final class CastWorkspaceSettings {
     'debugOverlayEnabled': debugOverlayEnabled,
     'f12ShortcutsEnabled': f12ShortcutsEnabled,
     'themeSettings': themeSettings.toJson(),
+    'osc52Policy': osc52Policy.name,
   };
 
   /// Encodes this settings snapshot to a JSON string.
@@ -343,6 +364,7 @@ final class CastWorkspaceSettings {
           fallback: false,
         ),
         themeSettings: TerminalThemeSettings.fromJson(decoded['themeSettings']),
+        osc52Policy: _parseOsc52Policy(decoded['osc52Policy']),
       );
     } on FormatException {
       return CastWorkspaceSettings(dockPosition: defaultDockPosition);
@@ -357,6 +379,12 @@ final class CastWorkspaceSettings {
         _ => fallback,
       };
 
+  static Osc52ClipboardPolicy _parseOsc52Policy(Object? raw) => switch (raw) {
+    'deny' => .deny,
+    'allowFocused' => .allowFocused,
+    _ => .allowFocused,
+  };
+
   static bool _parseBool(Object? raw, {required bool fallback}) =>
       raw is bool ? raw : fallback;
 
@@ -368,7 +396,8 @@ final class CastWorkspaceSettings {
           other.copyOnSelect == copyOnSelect &&
           other.debugOverlayEnabled == debugOverlayEnabled &&
           other.f12ShortcutsEnabled == f12ShortcutsEnabled &&
-          other.themeSettings == themeSettings;
+          other.themeSettings == themeSettings &&
+          other.osc52Policy == osc52Policy;
 
   @override
   int get hashCode => Object.hash(
@@ -377,6 +406,7 @@ final class CastWorkspaceSettings {
     debugOverlayEnabled,
     f12ShortcutsEnabled,
     themeSettings,
+    osc52Policy,
   );
 }
 

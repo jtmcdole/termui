@@ -28,8 +28,11 @@ enum CasterLifecycleEvent {
   /// Begin initial connection attempt.
   start,
 
-  /// Handshake and session registration succeeded.
+  /// Authentication accepted by the relay server; session registration queued.
   connected,
+
+  /// Session registration confirmed by the relay server; resets backoff.
+  registered,
 
   /// Connection or handshake failed.
   connectionFailed,
@@ -81,7 +84,8 @@ final class CasterConnectionMachine {
                 id: .connecting,
                 entry: _enterConnecting,
                 on: {
-                  .connected: .to(target: .streaming, action: _resetAttempts),
+                  .connected: .to(target: .streaming),
+                  .registered: .to(target: .streaming, action: _resetAttempts),
                   .connectionFailed: .to(
                     target: .reconnectBackoff,
                     action: _incrementAttempts,
@@ -97,6 +101,7 @@ final class CasterConnectionMachine {
                 id: .streaming,
                 entry: _enterStreaming,
                 on: {
+                  .registered: .to(target: .streaming, action: _resetAttempts),
                   .disconnected: .to(
                     target: .reconnectBackoff,
                     action: _incrementAttempts,

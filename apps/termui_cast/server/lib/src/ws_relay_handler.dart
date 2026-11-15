@@ -1,15 +1,12 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:hierarchical_state_machine/hierarchical_state_machine.dart';
 import 'package:stream_channel/stream_channel.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 
 import 'session_registry.dart';
 
-enum _ConnState { root, awaitingAuth, authenticated, closed }
-
-enum _ConnEvent { frame, timeout, disconnected }
+enum _ConnPhase { awaitingAuth, authenticated, closed }
 
 /// Attaches binary `StreamChannel<Uint8List>` peers to a [SessionRegistry].
 final class WsRelayHandler {
@@ -38,6 +35,7 @@ final class WsRelayHandler {
   final void Function(String message)? onLog;
 
   final Set<_RelayPeerSession> _sessions = {};
+  int _reservedUpgrades = 0;
 
   /// Creates a WebSocket relay channel handler.
   WsRelayHandler({
@@ -62,7 +60,20 @@ final class WsRelayHandler {
   int get totalPeerCount => _sessions.length;
 
   /// Whether the relay has capacity to accept a new WebSocket upgrade.
-  bool get canAcceptUpgrade => totalPeerCount < maxTotalPeers;
+  bool get canAcceptUpgrade =>
+      totalPeerCount + _reservedUpgrades < maxTotalPeers;
+
+  /// Atomically reserves one pre-upgrade peer slot if below [maxTotalPeers].
+  bool tryReserveUpgrade() {
+    if (!canAcceptUpgrade) return false;
+    _reservedUpgrades++;
+    return true;
+  }
+
+  /// Releases a slot previously acquired with [tryReserveUpgrade].
+  void releaseUpgradeReservation() {
+    if (_reservedUpgrades > 0) _reservedUpgrades--;
+  }
 
   /// Attaches an incoming caster binary frame channel.
   void attachCasterChannel(
@@ -135,7 +146,7 @@ final class _RelayPeerSession {
   final void Function(String message)? onLog;
   final void Function() onTerminated;
 
-  late final Machine<_ConnState, _ConnEvent> _machine;
+  _ConnPhase _phase = _ConnPhase.awaitingAuth;
   StreamSubscription<Uint8List>? _sub;
   Timer? _authTimer;
   CasterPeer? _casterPeer;
@@ -152,57 +163,32 @@ final class _RelayPeerSession {
     required this.authTimeout,
     required this.onLog,
     required this.onTerminated,
-  }) {
-    final blueprint = MachineBlueprint<_ConnState, _ConnEvent>(
-      name: 'relay-${role.name}',
-      root: .composite(
-        id: .root,
-        initial: .awaitingAuth,
-        children: [
-          .composite(
-            id: .awaitingAuth,
-            on: {
-              .frame: .to(
-                target: .authenticated,
-                guard: _verifyInitialAuth,
-                action: _onAuthenticated,
-              ),
-              .timeout: .to(target: .closed, action: _onAuthTimeout),
-              .disconnected: .to(target: .closed, action: _onDisconnected),
-            },
-          ),
-          .composite(
-            id: .authenticated,
-            on: {
-              .frame: .to(action: _onAuthenticatedFrame),
-              .disconnected: .to(target: .closed, action: _onDisconnected),
-            },
-          ),
-          .composite(id: .closed),
-        ],
-      ),
-    );
-    final (compiled, _) = blueprint.compile();
-    _machine = compiled!;
-  }
+  });
 
   void start() {
-    _machine.start();
-    _authTimer = Timer(authTimeout, () {
-      unawaited(_machine.handle(.timeout));
-    });
+    _authTimer = Timer(authTimeout, _onAuthTimeout);
     _sub = channel.stream.listen(
-      (bytes) {
-        unawaited(_machine.handle(.frame, bytes));
-      },
+      _onFrame,
       onError: (Object error) {
         onLog?.call('Relay ${role.name} stream error: $error');
         unawaited(_rejectProtocolViolation());
       },
-      onDone: () {
-        unawaited(_machine.handle(.disconnected));
-      },
+      onDone: _cleanup,
     );
+  }
+
+  void _onFrame(Uint8List bytes) {
+    switch (_phase) {
+      case .awaitingAuth:
+        if (_verifyInitialAuth(bytes)) {
+          _phase = .authenticated;
+          _onAuthenticated();
+        }
+      case .authenticated:
+        _onAuthenticatedFrame(bytes);
+      case .closed:
+        return;
+    }
   }
 
   Future<void> close() async {
@@ -215,12 +201,12 @@ final class _RelayPeerSession {
     }
   }
 
-  bool _verifyInitialAuth(_ConnEvent? _, Object? data) {
-    if (_terminated) return false;
+  bool _verifyInitialAuth(Uint8List bytes) {
+    if (_terminated || _phase != .awaitingAuth) return false;
     _authTimer?.cancel();
     _authTimer = null;
     try {
-      final decoded = BufferFrameCodec.decode(data as Uint8List);
+      final decoded = BufferFrameCodec.decode(bytes);
       if (decoded is! AuthFrame || decoded.role != role) {
         unawaited(
           _rejectAndClose('auth_role', 'Expected ${role.name} AuthFrame'),
@@ -238,7 +224,7 @@ final class _RelayPeerSession {
     }
   }
 
-  void _onAuthenticated(_ConnEvent? _, Object? _) {
+  void _onAuthenticated() {
     if (_terminated) return;
     isAuthenticated = true;
     final accepted = AuthAcceptedFrame(role: role);
@@ -258,10 +244,9 @@ final class _RelayPeerSession {
     }
   }
 
-  void _onAuthenticatedFrame(_ConnEvent? _, Object? data) {
-    if (_terminated) return;
+  void _onAuthenticatedFrame(Uint8List bytes) {
+    if (_terminated || _phase != .authenticated) return;
     try {
-      final bytes = data as Uint8List;
       if (role == .caster) {
         _dispatchCasterFrame(bytes);
       } else {
@@ -290,14 +275,6 @@ final class _RelayPeerSession {
             'Invalid caster shell title frame',
           );
         }
-      case BellFrame frame:
-        if (!registry.forwardCasterBell(caster, frame, rawBytes: rawBytes)) {
-          throw const ProtocolFormatException('Invalid caster bell frame');
-        }
-      case AudioFrame frame:
-        if (!registry.forwardCasterAudio(caster, frame, rawBytes: rawBytes)) {
-          throw const ProtocolFormatException('Invalid caster audio frame');
-        }
       case ClipboardFrame frame:
         if (!registry.forwardCasterClipboard(
           caster,
@@ -305,16 +282,6 @@ final class _RelayPeerSession {
           rawBytes: rawBytes,
         )) {
           throw const ProtocolFormatException('Invalid caster clipboard frame');
-        }
-      case ScrollbackChunkFrame frame:
-        if (!registry.forwardCasterScrollbackChunk(
-          caster,
-          frame,
-          rawBytes: rawBytes,
-        )) {
-          throw const ProtocolFormatException(
-            'Invalid caster scrollback chunk',
-          );
         }
       case FileUploadAckFrame frame:
         if (!registry.forwardCasterFileUploadAck(caster, frame)) {
@@ -338,7 +305,11 @@ final class _RelayPeerSession {
       return true;
     }
     if (tag == 0x11) {
-      if (!registry.forwardCasterScrollbackChunkBytes(caster, rawBytes)) {
+      if (!registry.forwardCasterScrollbackChunkBytes(
+        caster,
+        rawBytes,
+        rewriteInPlace: true,
+      )) {
         throw const ProtocolFormatException('Invalid caster scrollback chunk');
       }
       return true;
@@ -389,7 +360,8 @@ final class _RelayPeerSession {
     }
   }
 
-  void _onAuthTimeout(_ConnEvent? _, Object? _) {
+  void _onAuthTimeout() {
+    if (_phase != .awaitingAuth) return;
     unawaited(_rejectAndClose('auth_timeout', 'Authentication timed out'));
   }
 
@@ -399,20 +371,16 @@ final class _RelayPeerSession {
     );
   }
 
-  void _onDisconnected(_ConnEvent? _, Object? _) {
-    _cleanup();
-  }
-
   Future<void> _rejectAndClose(String code, String message) async {
     if (_terminated) return;
     _terminated = true;
+    _phase = .closed;
     onTerminated();
     _authTimer?.cancel();
     _authTimer = null;
     final sub = _sub;
     _sub = null;
     unawaited(sub?.cancel());
-    _machine.stop();
     try {
       channel.sink.add(
         BufferFrameCodec.encode(ErrorFrame(code: code, message: message)),
@@ -439,6 +407,7 @@ final class _RelayPeerSession {
   void _cleanup({bool closeSink = true}) {
     if (_terminated) return;
     _terminated = true;
+    _phase = .closed;
     onTerminated();
     _authTimer?.cancel();
     _authTimer = null;
@@ -449,6 +418,5 @@ final class _RelayPeerSession {
     if (caster != null) registry.detachCasterPeer(caster, closeSink: closeSink);
     final client = _clientPeer;
     if (client != null) registry.detachClientPeer(client, closeSink: closeSink);
-    _machine.stop();
   }
 }

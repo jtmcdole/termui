@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
 /// Serves pre-built static Flutter web / WASM assets with strict path-traversal
@@ -7,6 +8,8 @@ import 'package:path/path.dart' as p;
 final class StaticWebHandler {
   final String _canonicalRoot;
   final File _indexFile;
+  final Map<String, ({int size, int modifiedMicros, String etag})> _etagCache =
+      {};
 
   /// Creates a static handler rooted at [webRoot], resolving symlinks once.
   StaticWebHandler(String webRoot)
@@ -119,10 +122,9 @@ final class StaticWebHandler {
       await probe.close();
     }
     final ext = p.extension(file.path).toLowerCase();
+    final etag = _etagFor(file, stat);
     final response = request.response
-      ..statusCode = HttpStatus.ok
       ..headers.contentType = _contentTypeForExtension(ext)
-      ..headers.contentLength = stat.size
       ..headers.set('x-content-type-options', 'nosniff')
       ..headers.set('x-frame-options', 'DENY')
       ..headers.set('referrer-policy', 'no-referrer')
@@ -138,13 +140,63 @@ final class StaticWebHandler {
             "connect-src 'self' ws: wss:; frame-ancestors 'none'; "
             "base-uri 'self'; object-src 'none'",
       )
-      ..headers.set(HttpHeaders.cacheControlHeader, _cacheControlForFile(file));
+      ..headers.set(HttpHeaders.cacheControlHeader, _cacheControlForFile(file))
+      ..headers.set(HttpHeaders.etagHeader, etag);
+
+    if (_matchesIfNoneMatch(
+      request.headers[HttpHeaders.ifNoneMatchHeader],
+      etag,
+    )) {
+      response.statusCode = HttpStatus.notModified;
+      await response.close();
+      return;
+    }
+
+    response
+      ..statusCode = HttpStatus.ok
+      ..headers.contentLength = stat.size;
 
     if (request.method != 'HEAD') {
       await response.addStream(file.openRead());
     }
     await response.close();
   }
+
+  String _etagFor(File file, FileStat stat) {
+    final path = file.path;
+    final modifiedMicros = stat.modified.microsecondsSinceEpoch;
+    final cached = _etagCache[path];
+    if (cached != null &&
+        cached.size == stat.size &&
+        cached.modifiedMicros == modifiedMicros) {
+      return cached.etag;
+    }
+    final digest = sha256.convert(file.readAsBytesSync());
+    final etag = '"$digest"';
+    _etagCache[path] = (
+      size: stat.size,
+      modifiedMicros: modifiedMicros,
+      etag: etag,
+    );
+    return etag;
+  }
+
+  static bool _matchesIfNoneMatch(List<String>? values, String etag) {
+    if (values == null || values.isEmpty) return false;
+    final normalizedEtag = _stripWeakPrefix(etag);
+    for (final header in values) {
+      for (final rawToken in header.split(',')) {
+        final token = rawToken.trim();
+        if (token == '*' || _stripWeakPrefix(token) == normalizedEtag) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static String _stripWeakPrefix(String token) =>
+      token.startsWith('W/') ? token.substring(2) : token;
 
   static ContentType _contentTypeForExtension(String ext) => switch (ext) {
     '.html' => ContentType.html,
@@ -162,11 +214,18 @@ final class StaticWebHandler {
     _ => ContentType.binary,
   };
 
-  static String _cacheControlForFile(File file) {
-    final name = p.basename(file.path);
+  String _cacheControlForFile(File file) {
+    final name = p.basename(file.path).toLowerCase();
     if (name == 'index.html' ||
         name == 'flutter_bootstrap.js' ||
-        name == 'version.json') {
+        name == 'version.json' ||
+        name.endsWith('.wasm') ||
+        name.endsWith('.js') ||
+        name.endsWith('.mjs')) {
+      return 'no-cache';
+    }
+    final rel = p.relative(file.path, from: _canonicalRoot).toLowerCase();
+    if (rel.startsWith('canvaskit/') || rel.startsWith(r'canvaskit\')) {
       return 'no-cache';
     }
     return 'public, max-age=3600';

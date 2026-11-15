@@ -457,15 +457,21 @@ void main() {
         );
 
         final sentByCaster = <CastMessage>[];
-        serverCtrl.foreign.stream.listen((raw) {
+        final completedAck = Completer<void>();
+        final sub = serverCtrl.foreign.stream.listen((raw) {
           final decoded = BufferFrameCodec.decode(raw);
           sentByCaster.add(decoded);
           if (decoded is AuthFrame) {
             serverCtrl.foreign.sink.add(
               BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
             );
+          } else if (decoded is FileUploadAckFrame &&
+              decoded.status == .completed &&
+              !completedAck.isCompleted) {
+            completedAck.complete();
           }
         });
+        addTearDown(sub.cancel);
 
         await service.start();
         await pumpEventQueue();
@@ -505,6 +511,7 @@ void main() {
             ),
           ),
         );
+        await completedAck.future.timeout(const Duration(seconds: 5));
         await pumpEventQueue();
 
         final acks = [...sentByCaster.whereType<FileUploadAckFrame>()];
@@ -582,6 +589,132 @@ void _defineLazyDefaultUploadDirTests() {
         activeReceiver.dispose();
         check(createdDir.existsSync()).isFalse();
         check(createdRoot.existsSync()).isFalse();
+      },
+    );
+
+    test(
+      'enforces Windows reserved names, cumulative upload byte/file quotas, and exclusive CSPRNG .part staging',
+      () async {
+        check(
+          FileUploadReceiver.sanitizeFileName('CON.txt'),
+        ).equals('_CON.txt');
+        check(
+          FileUploadReceiver.sanitizeFileName('CONIN\$.txt'),
+        ).equals('CONIN_.txt');
+        check(
+          FileUploadReceiver.sanitizeFileName('COM0.log'),
+        ).equals('_COM0.log');
+        check(FileUploadReceiver.sanitizeFileName('LPT0')).equals('_LPT0');
+
+        final dir = Directory.systemTemp.createTempSync('upload_quota_');
+        addTearDown(() => dir.deleteSync(recursive: true));
+
+        final receiver = FileUploadReceiver(
+          sessionId: const SessionId('quota-sess'),
+          uploadDir: dir,
+          maxSessionUploadBytes: 10,
+          maxSessionUploadFiles: 2,
+        );
+        addTearDown(receiver.dispose);
+
+        final p1 = Uint8List.fromList(utf8.encode('123456'));
+        final d1 = Uint8List.fromList(sha256.convert(p1).bytes);
+        check(
+          (await receiver.handleStartAsync(
+            FileUploadStartFrame(
+              sessionId: const SessionId('quota-sess'),
+              transferId: 1,
+              fileName: 'a.txt',
+              totalBytes: p1.length,
+            ),
+          )).status,
+        ).equals(FileUploadStatus.ready);
+        final stagingFiles = [
+          for (final e in dir.listSync().whereType<File>()) p.basename(e.path),
+        ];
+        check(stagingFiles.single).startsWith('.upload-quota-sess-');
+        check(stagingFiles.single.length).isGreaterThan(40);
+        check(
+          (await receiver.handleChunkAsync(
+            FileUploadChunkFrame(
+              sessionId: const SessionId('quota-sess'),
+              transferId: 1,
+              offset: 0,
+              data: p1,
+            ),
+          )).status,
+        ).equals(FileUploadStatus.chunkAck);
+        final (end1, _) = await receiver.handleEndAsync(
+          FileUploadEndFrame(
+            sessionId: const SessionId('quota-sess'),
+            transferId: 1,
+            sha256: d1,
+          ),
+        );
+        check(end1.status).equals(FileUploadStatus.completed);
+        check(receiver.totalUploadedBytes).equals(6);
+        check(receiver.totalUploadedFiles).equals(1);
+
+        // Next upload exceeding cumulative byte quota (6 + 5 > 10) is rejected.
+        final byteQuotaRejection = await receiver.handleStartAsync(
+          const FileUploadStartFrame(
+            sessionId: SessionId('quota-sess'),
+            transferId: 2,
+            fileName: 'too_big.txt',
+            totalBytes: 5,
+          ),
+        );
+        check(byteQuotaRejection.status).equals(FileUploadStatus.rejected);
+        check(byteQuotaRejection.message).contains('quota');
+
+        // Upload 2 fits within byte quota (6 + 2 = 8 <= 10), hitting file count quota (2).
+        final p2 = Uint8List.fromList(utf8.encode('ok'));
+        final d2 = Uint8List.fromList(sha256.convert(p2).bytes);
+        check(
+          (await receiver.handleStartAsync(
+            FileUploadStartFrame(
+              sessionId: const SessionId('quota-sess'),
+              transferId: 3,
+              fileName: 'b.txt',
+              totalBytes: p2.length,
+            ),
+          )).status,
+        ).equals(FileUploadStatus.ready);
+        await receiver.handleChunkAsync(
+          FileUploadChunkFrame(
+            sessionId: const SessionId('quota-sess'),
+            transferId: 3,
+            offset: 0,
+            data: p2,
+          ),
+        );
+        final (end2, _) = await receiver.handleEndAsync(
+          FileUploadEndFrame(
+            sessionId: const SessionId('quota-sess'),
+            transferId: 3,
+            sha256: d2,
+          ),
+        );
+        check(end2.status).equals(FileUploadStatus.completed);
+
+        final fileQuotaRejection = await receiver.handleStartAsync(
+          FileUploadStartFrame(
+            sessionId: const SessionId('quota-sess'),
+            transferId: 4,
+            fileName: 'c.txt',
+            totalBytes: 1,
+          ),
+        );
+        check(fileQuotaRejection.status).equals(FileUploadStatus.rejected);
+        check(
+          fileQuotaRejection.message,
+        ).contains('Session file upload count limit');
+
+        // D-03: Windows reserved names revealed after post-truncation trailing-dot/space stripping are still prefixed and <= 200 UTF-8 bytes.
+        final paddedReserved = 'CON${' ' * 195}x.txt';
+        check(
+          FileUploadReceiver.sanitizeFileName(paddedReserved),
+        ).equals('_CON.txt');
       },
     );
   });

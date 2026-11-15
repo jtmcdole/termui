@@ -127,8 +127,8 @@ final class AuthoritativeTerminal {
   }
 
   void _initShadowState(int cols, int rows) {
-    final safeCols = max(1, cols);
-    final safeRows = max(1, rows);
+    final safeCols = clampCols(cols);
+    final safeRows = clampRows(rows);
     final totalCells = safeCols * safeRows;
     _shadowCols = safeCols;
     _shadowRows = safeRows;
@@ -233,18 +233,28 @@ final class AuthoritativeTerminal {
   /// Current window title reported by the wrapped [VirtualTerminal].
   String get windowTitle => _terminal.windowTitle;
 
+  String? _lastRawUri;
+  String? _lastClampedUri;
+
   void _markDirty() {
     _dirty = true;
   }
 
-  bool get _dimsOutOfSync =>
-      _shadowCols != _terminal.width || _shadowRows != _terminal.height;
+  /// Clamps column count into the wire protocol's supported `[1..400]` range.
+  static int clampCols(int value) =>
+      value.clamp(1, BufferFrameCodec.maxGridCols);
 
-  /// Current terminal width in columns.
-  int get cols => _terminal.width;
+  /// Clamps row count into the wire protocol's supported `[1..200]` range.
+  static int clampRows(int value) =>
+      value.clamp(1, BufferFrameCodec.maxGridRows);
 
-  /// Current terminal height in rows.
-  int get rows => _terminal.height;
+  bool get _dimsOutOfSync => _shadowCols != cols || _shadowRows != rows;
+
+  /// Current wire-clamped terminal width in columns.
+  int get cols => clampCols(_terminal.width);
+
+  /// Current wire-clamped terminal height in rows.
+  int get rows => clampRows(_terminal.height);
 
   /// Latest emitted frame sequence number.
   int get seq => _seq;
@@ -276,10 +286,10 @@ final class AuthoritativeTerminal {
   /// Underlying parsed `termui` [Buffer].
   Buffer get buffer => _terminal.buffer;
 
-  /// Current cursor coordinates, visibility, and shape.
+  /// Current cursor coordinates (clamped into wire bounds), visibility, and shape.
   CursorState get cursor => CursorState(
-    x: _terminal.cursorX.clamp(0, _terminal.width - 1),
-    y: _terminal.cursorY.clamp(0, _terminal.height - 1),
+    x: _terminal.cursorX.clamp(0, cols - 1),
+    y: _terminal.cursorY.clamp(0, rows - 1),
     visible: _terminal.cursorVisible,
     shape: _mapCursorShape(_terminal.cursorShape),
   );
@@ -327,20 +337,31 @@ final class AuthoritativeTerminal {
     }
   }
 
+  /// Feeds decoded UTF-16/UTF-8 PTY [chunk] text directly into [VirtualTerminal].
+  void writeString(String chunk) {
+    if (chunk.isEmpty) return;
+    _terminal.writeString(chunk);
+    if (_terminal.synchronizedOutput) {
+      _dirty = true;
+    }
+  }
+
   /// Resizes the terminal grid and marks a full keyframe pending.
   bool resize(int newCols, int newRows) {
-    final safeCols = max(1, newCols);
-    final safeRows = max(1, newRows);
+    final safeCols = clampCols(newCols);
+    final safeRows = clampRows(newRows);
+    final vtTargetCols = _ownsTerminal ? safeCols : max(1, newCols);
+    final vtTargetRows = _ownsTerminal ? safeRows : max(1, newRows);
     final vtChanged =
-        safeCols != _terminal.width || safeRows != _terminal.height;
+        vtTargetCols != _terminal.width || vtTargetRows != _terminal.height;
     final shadowChanged = safeCols != _shadowCols || safeRows != _shadowRows;
     if (!vtChanged && !shadowChanged) {
       return false;
     }
     if (vtChanged) {
-      _terminal.resize(safeCols, safeRows);
+      _terminal.resize(vtTargetCols, vtTargetRows);
     }
-    _reallocateShadow(safeCols, safeRows);
+    _reallocateShadow(clampCols(_terminal.width), clampRows(_terminal.height));
     return true;
   }
 
@@ -360,13 +381,17 @@ final class AuthoritativeTerminal {
   /// Captures a full [BufferSnapshot] keyframe, advancing [seq] and syncing shadow state.
   BufferSnapshot takeSnapshot() {
     if (_dimsOutOfSync) {
-      _reallocateShadow(_terminal.width, _terminal.height);
+      _reallocateShadow(cols, rows);
     }
     _seq++;
     final buf = _terminal.buffer;
-    _shadowChars.setRange(0, _shadowChars.length, buf.characters);
-    _shadowAttrs.setRange(0, _shadowAttrs.length, buf.attributes);
-    _syncAllShadowAux(buf);
+    if (buf.width == _shadowCols && buf.height == _shadowRows) {
+      _shadowChars.setRange(0, _shadowChars.length, buf.characters);
+      _shadowAttrs.setRange(0, _shadowAttrs.length, buf.attributes);
+      _syncAllShadowAux(buf);
+    } else {
+      _syncProjectedShadow(buf, _shadowCols, _shadowRows);
+    }
     _shadowCursor = cursor;
     _shadowModes = modes;
     _shadowScrollback = scrollbackWindow;
@@ -374,6 +399,51 @@ final class AuthoritativeTerminal {
     _dirty = false;
     _forceKeyframe = false;
     return _buildSnapshot(buf, syncKittyTracking: true);
+  }
+
+  void _syncProjectedShadow(Buffer buf, int dstCols, int dstRows) {
+    final srcCols = buf.width;
+    final copyCols = min(srcCols, dstCols);
+    final copyRows = min(buf.height, dstRows);
+    final srcChars = buf.characters;
+    final srcAttrs = buf.attributes;
+    for (var r = 0; r < copyRows; r++) {
+      final srcRowStart = r * srcCols;
+      final dstRowStart = r * dstCols;
+      _shadowChars.setRange(
+        dstRowStart,
+        dstRowStart + copyCols,
+        srcChars,
+        srcRowStart,
+      );
+      _shadowAttrs.setRange(
+        dstRowStart * 3,
+        (dstRowStart + copyCols) * 3,
+        srcAttrs,
+        srcRowStart * 3,
+      );
+      final healSplitWide =
+          srcCols > copyCols && srcChars[srcRowStart + copyCols].isEmpty;
+      if (healSplitWide) {
+        _shadowChars[dstRowStart + copyCols - 1] = ' ';
+      }
+      final auxLimit = healSplitWide ? copyCols - 1 : copyCols;
+      for (var c = 0; c < auxLimit; c++) {
+        final srcIdx = srcRowStart + c;
+        final dstIdx = dstRowStart + c;
+        _shadowUnderlineColors[dstIdx] = buf.hasUnderlineColors
+            ? buf.getUnderlineColorAt(srcIdx)
+            : 0;
+        _shadowUris[dstIdx] = buf.hasUris
+            ? _normalizedCellUri(buf, srcIdx)
+            : null;
+      }
+      if (healSplitWide) {
+        final lastIdx = dstRowStart + copyCols - 1;
+        _shadowUnderlineColors[lastIdx] = 0;
+        _shadowUris[lastIdx] = null;
+      }
+    }
   }
 
   /// Captures a [BufferSnapshot] at the current [seq] without advancing [seq]
@@ -386,11 +456,20 @@ final class AuthoritativeTerminal {
   }
 
   BufferSnapshot _buildSnapshot(Buffer buf, {required bool syncKittyTracking}) {
-    final totalCells = buf.width * buf.height;
-    final underlineColors = extractBufferUnderlineColors(buf, 0, totalCells);
-    final uriRuns = extractBufferUriRuns(buf, 0, totalCells);
+    final isProjected = buf.width != _shadowCols || buf.height != _shadowRows;
+    final snapChars = isProjected ? [..._shadowChars] : [...buf.characters];
+    final snapAttrs = isProjected
+        ? Uint32List.fromList(_shadowAttrs)
+        : Uint32List.fromList(buf.attributes);
+    final totalCells = _shadowCols * _shadowRows;
+    final underlineColors = isProjected
+        ? extractSliceUnderlineColors(_shadowUnderlineColors, totalCells)
+        : extractBufferUnderlineColors(buf, 0, totalCells);
+    final uriRuns = isProjected
+        ? extractSliceUriRuns(_shadowUris, totalCells)
+        : extractBufferUriRuns(buf, 0, totalCells);
     final spanBytes = _estimateSpanWireBytes(
-      buf.characters,
+      snapChars,
       underlineColors,
       uriRuns,
     );
@@ -401,14 +480,14 @@ final class AuthoritativeTerminal {
     return BufferSnapshot(
       sessionId: sessionId,
       seq: _seq,
-      cols: buf.width,
-      rows: buf.height,
+      cols: _shadowCols,
+      rows: _shadowRows,
       cursor: _shadowCursor,
       modes: _shadowModes,
       scrollback: _shadowScrollback,
       wrappedRows: Uint8List.fromList(_shadowWrappedRows),
-      characters: [...buf.characters],
-      attributes: Uint32List.fromList(buf.attributes),
+      characters: snapChars,
+      attributes: snapAttrs,
       underlineColors: underlineColors,
       uriRuns: uriRuns,
       kittyImages: kittyImages,
@@ -551,6 +630,9 @@ final class AuthoritativeTerminal {
 
   List<CellRun> _diffAndSyncCells() {
     final buf = _terminal.buffer;
+    if (buf.width != _shadowCols || buf.height != _shadowRows) {
+      return _diffAndSyncProjectedCells(buf);
+    }
     final chars = buf.characters;
     final attrs = buf.attributes;
     final total = chars.length;
@@ -569,6 +651,129 @@ final class AuthoritativeTerminal {
       runs.add(_extractAndSyncRun(buf, chars, attrs, start, i));
     }
     return runs;
+  }
+
+  List<CellRun> _diffAndSyncProjectedCells(Buffer buf) {
+    final total = _shadowCols * _shadowRows;
+    final proj = _projectBufferToShadowGrid(buf, total);
+    return _collectProjectedRuns(proj, total);
+  }
+
+  ({List<String> chars, Uint32List attrs, Uint32List ul, List<String?> uris})
+  _projectBufferToShadowGrid(Buffer buf, int total) {
+    final dstCols = _shadowCols;
+    final projChars = List<String>.filled(total, ' ');
+    final projAttrs = Uint32List(total * 3);
+    final projUl = Uint32List(total);
+    final projUris = List<String?>.filled(total, null);
+    final srcCols = buf.width;
+    final copyCols = min(srcCols, dstCols);
+    final copyRows = min(buf.height, _shadowRows);
+    final srcChars = buf.characters;
+    final srcAttrs = buf.attributes;
+    for (var r = 0; r < copyRows; r++) {
+      final srcRowStart = r * srcCols;
+      final dstRowStart = r * dstCols;
+      projChars.setRange(
+        dstRowStart,
+        dstRowStart + copyCols,
+        srcChars,
+        srcRowStart,
+      );
+      projAttrs.setRange(
+        dstRowStart * 3,
+        (dstRowStart + copyCols) * 3,
+        srcAttrs,
+        srcRowStart * 3,
+      );
+      final healSplitWide =
+          srcCols > copyCols && srcChars[srcRowStart + copyCols].isEmpty;
+      if (healSplitWide) {
+        projChars[dstRowStart + copyCols - 1] = ' ';
+      }
+      _copyRowAuxData(
+        buf,
+        srcRowStart,
+        dstRowStart,
+        healSplitWide ? copyCols - 1 : copyCols,
+        projUl,
+        projUris,
+      );
+    }
+    return (chars: projChars, attrs: projAttrs, ul: projUl, uris: projUris);
+  }
+
+  void _copyRowAuxData(
+    Buffer buf,
+    int srcRowStart,
+    int dstRowStart,
+    int auxLimit,
+    Uint32List projUl,
+    List<String?> projUris,
+  ) {
+    final hasUl = buf.hasUnderlineColors;
+    final hasUris = buf.hasUris;
+    if (!hasUl && !hasUris) return;
+    for (var c = 0; c < auxLimit; c++) {
+      final srcIdx = srcRowStart + c;
+      final dstIdx = dstRowStart + c;
+      if (hasUl) projUl[dstIdx] = buf.getUnderlineColorAt(srcIdx);
+      if (hasUris) projUris[dstIdx] = _normalizedCellUri(buf, srcIdx);
+    }
+  }
+
+  List<CellRun> _collectProjectedRuns(
+    ({List<String> chars, Uint32List attrs, Uint32List ul, List<String?> uris})
+    proj,
+    int total,
+  ) {
+    bool differs(int idx) {
+      final ao = idx * 3;
+      return proj.chars[idx] != _shadowChars[idx] ||
+          proj.attrs[ao] != _shadowAttrs[ao] ||
+          proj.attrs[ao + 1] != _shadowAttrs[ao + 1] ||
+          proj.attrs[ao + 2] != _shadowAttrs[ao + 2] ||
+          proj.ul[idx] != _shadowUnderlineColors[idx] ||
+          proj.uris[idx] != _shadowUris[idx];
+    }
+
+    final runs = <CellRun>[];
+    var i = 0;
+    while (i < total) {
+      if (!differs(i)) {
+        i++;
+        continue;
+      }
+      final start = i++;
+      while (i < total && differs(i)) {
+        i++;
+      }
+      runs.add(_commitProjectedRun(proj, start, i));
+    }
+    return runs;
+  }
+
+  CellRun _commitProjectedRun(
+    ({List<String> chars, Uint32List attrs, Uint32List ul, List<String?> uris})
+    proj,
+    int start,
+    int end,
+  ) {
+    final len = end - start;
+    _shadowChars.setRange(start, end, proj.chars, start);
+    _shadowAttrs.setRange(start * 3, end * 3, proj.attrs, start * 3);
+    _shadowUnderlineColors.setRange(start, end, proj.ul, start);
+    _shadowUris.setRange(start, end, proj.uris, start);
+    return CellRun(
+      startIndex: start,
+      characters: proj.chars.sublist(start, end),
+      attributes: Uint32List.fromList(proj.attrs.sublist(start * 3, end * 3)),
+      underlineColors: extractSliceUnderlineColors(
+        Uint32List.sublistView(proj.ul, start, end),
+        len,
+      ),
+      uriRuns: extractSliceUriRuns(proj.uris.sublist(start, end), len),
+    );
   }
 
   bool _cellDiffers(
@@ -651,11 +856,17 @@ final class AuthoritativeTerminal {
     }
   }
 
-  static String? _normalizedCellUri(Buffer buf, int index) {
+  String? _normalizedCellUri(Buffer buf, int index) {
     final raw = buf.getUriAt(index);
     if (raw == null || raw.isEmpty) return null;
+    if (identical(raw, _lastRawUri) || raw == _lastRawUri) {
+      return _lastClampedUri;
+    }
     final clamped = clampOsc8Uri(raw);
-    return clamped.isEmpty ? null : clamped;
+    final normalized = clamped.isEmpty ? null : clamped;
+    _lastRawUri = raw;
+    _lastClampedUri = normalized;
+    return normalized;
   }
 
   List<KittyImagePayload>? _collectSnapshotKittyPayloads({

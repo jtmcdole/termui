@@ -11,6 +11,34 @@ import 'scrollback_buffer.dart';
 import 'terminal_port.dart';
 import 'virtual_terminal.dart';
 
+const Set<String> _strippedHostEnvVars = {
+  'TMUX',
+  'TMUX_PANE',
+  'TERM_PROGRAM',
+  'TERM_PROGRAM_VERSION',
+};
+
+bool _shouldStripHostEnvVar(String key) {
+  final upper = key.toUpperCase();
+  return _strippedHostEnvVars.contains(upper) ||
+      upper.startsWith('TERMUI_CAST_');
+}
+
+/// Builds a sanitized child PTY environment from [baseEnvironment], stripping
+/// inherited host multiplexer and caster variables (case-insensitively for
+/// Windows compatibility), defaulting `TERM` to `xterm-256color`, and enabling
+/// `TERMUI_AUDIO_APC=1` unless explicitly overridden.
+Map<String, String> sanitizeChildEnvironment({
+  required Map<String, String> baseEnvironment,
+  Map<String, String>? overrides,
+}) => {
+  'TERMUI_AUDIO_APC': '1',
+  for (final MapEntry(:key, :value) in baseEnvironment.entries)
+    if (!_shouldStripHostEnvVar(key)) key: value,
+  'TERM': 'xterm-256color',
+  ...?overrides,
+};
+
 /// Abstract byte-oriented PTY backend driven by [PtyRouterSession].
 abstract interface class RoutedPtyBackend {
   /// Raw UTF-8 / ANSI output byte chunks emitted by the child process.
@@ -202,6 +230,21 @@ final class PtyRouterSession {
   int _lastPixelHeight = 0;
   bool _disposed = false;
 
+  static const int _maxDirtySpans = 64;
+  late int _shadowCols;
+  late int _shadowRows;
+  late List<String> _shadowChars;
+  late Uint32List _shadowAttrs;
+  late Uint32List _shadowUnderlineColors;
+  late List<String?> _shadowUris;
+  late int _lastImageRegistryRevision;
+  late bool _lastAltScreen;
+  int _renderRevision = 1;
+  int _fullSyncRevision = 1;
+  final List<DirtyCellSpan> _dirtySpans = <DirtyCellSpan>[];
+  late final List<DirtyCellSpan> _dirtySpansView =
+      UnmodifiableListView<DirtyCellSpan>(_dirtySpans);
+
   PtyRouterSession._({
     required this.id,
     required this.backend,
@@ -233,6 +276,7 @@ final class PtyRouterSession {
          defaultCursorColor: defaultCursorColor,
          colorScheme: colorScheme,
        ) {
+    _syncFullShadowState();
     terminal
       ..onReply = _handleTerminalReply
       ..addListener(_dispatchChange)
@@ -246,6 +290,126 @@ final class PtyRouterSession {
       onError: (_, _) {},
       onDone: () {},
     );
+  }
+
+  /// Monotonic visual revision incremented when buffer, cursor, or resize mutates.
+  int get renderRevision => _renderRevision;
+
+  /// Latest revision requiring a full recomposition rather than incremental [dirtySpans].
+  int get fullSyncRevision => _fullSyncRevision;
+
+  /// Bounded read-only view of dirty cell spans recorded since [fullSyncRevision].
+  List<DirtyCellSpan> get dirtySpans => _dirtySpansView;
+
+  void _syncFullShadowState() {
+    final buf = terminal.buffer;
+    _shadowCols = terminal.width;
+    _shadowRows = terminal.height;
+    final total = _shadowCols * _shadowRows;
+    _shadowChars = List<String>.from(buf.characters, growable: false);
+    _shadowAttrs = Uint32List.fromList(buf.attributes);
+    _shadowUnderlineColors = Uint32List(total);
+    _shadowUris = List<String?>.filled(total, null);
+    if (buf.hasUnderlineColors) {
+      for (var i = 0; i < total; i++) {
+        _shadowUnderlineColors[i] = buf.getUnderlineColorAt(i);
+      }
+    }
+    if (buf.hasUris) {
+      for (var i = 0; i < total; i++) {
+        _shadowUris[i] = buf.getUriAt(i);
+      }
+    }
+    _lastImageRegistryRevision = terminal.imageRegistryRevision;
+    _lastAltScreen = terminal.isUsingAlternateScreen;
+  }
+
+  bool _cellDiffersFromShadow(
+    Buffer buf,
+    List<String> chars,
+    Uint32List attrs,
+    int index,
+  ) {
+    final attrOffset = index * 3;
+    if (chars[index] != _shadowChars[index] ||
+        attrs[attrOffset] != _shadowAttrs[attrOffset] ||
+        attrs[attrOffset + 1] != _shadowAttrs[attrOffset + 1] ||
+        attrs[attrOffset + 2] != _shadowAttrs[attrOffset + 2]) {
+      return true;
+    }
+    final ul = buf.hasUnderlineColors ? buf.getUnderlineColorAt(index) : 0;
+    if (ul != _shadowUnderlineColors[index]) return true;
+    final uri = buf.hasUris ? buf.getUriAt(index) : null;
+    return uri != _shadowUris[index];
+  }
+
+  void _syncShadowRange(
+    Buffer buf,
+    List<String> chars,
+    Uint32List attrs,
+    int start,
+    int end,
+  ) {
+    _shadowChars.setRange(start, end, chars, start);
+    _shadowAttrs.setRange(start * 3, end * 3, attrs, start * 3);
+    if (buf.hasUnderlineColors) {
+      for (var i = start; i < end; i++) {
+        _shadowUnderlineColors[i] = buf.getUnderlineColorAt(i);
+      }
+    } else {
+      _shadowUnderlineColors.fillRange(start, end, 0);
+    }
+    if (buf.hasUris) {
+      for (var i = start; i < end; i++) {
+        _shadowUris[i] = buf.getUriAt(i);
+      }
+    } else {
+      _shadowUris.fillRange(start, end, null);
+    }
+  }
+
+  void _recordDirtyState() {
+    _renderRevision += 1;
+    final requiresFullSync =
+        terminal.width != _shadowCols ||
+        terminal.height != _shadowRows ||
+        terminal.imageRegistryRevision != _lastImageRegistryRevision ||
+        terminal.isUsingAlternateScreen != _lastAltScreen;
+    if (requiresFullSync) {
+      _syncFullShadowState();
+      _fullSyncRevision = _renderRevision;
+      _dirtySpans.clear();
+      return;
+    }
+
+    final buf = terminal.buffer;
+    final chars = buf.characters;
+    final attrs = buf.attributes;
+    final total = chars.length;
+    var i = 0;
+    while (i < total) {
+      if (!_cellDiffersFromShadow(buf, chars, attrs, i)) {
+        i++;
+        continue;
+      }
+      final start = i;
+      i++;
+      while (i < total && _cellDiffersFromShadow(buf, chars, attrs, i)) {
+        i++;
+      }
+      if (_dirtySpans.length >= _maxDirtySpans) {
+        _syncFullShadowState();
+        _fullSyncRevision = _renderRevision;
+        _dirtySpans.clear();
+        return;
+      }
+      _syncShadowRange(buf, chars, attrs, start, i);
+      _dirtySpans.add((
+        revision: _renderRevision,
+        start: start,
+        length: i - start,
+      ));
+    }
   }
 
   /// Current authoritative terminal width in columns.
@@ -294,6 +458,7 @@ final class PtyRouterSession {
   }
 
   void _dispatchChange() {
+    _recordDirtyState();
     for (final listener in List.of(_changeListeners)) {
       _invokeIsolated(listener);
     }
@@ -718,6 +883,15 @@ final class _RouterTerminalPort implements TerminalPort {
       totalLines: sb.totalLines,
     );
   }
+
+  @override
+  int get renderRevision => _session.renderRevision;
+
+  @override
+  int get fullSyncRevision => _session.fullSyncRevision;
+
+  @override
+  List<DirtyCellSpan> get dirtySpans => _session.dirtySpans;
 
   @override
   String get windowTitle => _session.terminal.windowTitle;

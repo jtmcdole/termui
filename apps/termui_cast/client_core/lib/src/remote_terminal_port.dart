@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -8,6 +9,7 @@ import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_pty/termui_pty.dart';
 
 import 'cast_client_repository.dart';
+import 'models.dart';
 import 'scrollback_page_cache.dart';
 import 'session_slot.dart';
 
@@ -159,6 +161,22 @@ final class RemoteTerminalPort implements TerminalPort {
 
   Buffer? _fallbackBuffer;
   ({int cols, int rows})? _localViewportSize;
+  final Map<int, ScrollbackLine> _decodedScrollbackCache =
+      <int, ScrollbackLine>{};
+  int _decodedCacheClearSeq = -1;
+  int _decodedCacheWidth = -1;
+
+  /// Policy governing inbound remote `OSC 52` clipboard writes on this port.
+  Osc52ClipboardPolicy clipboardPolicy = .allowFocused;
+
+  /// Whether this port currently holds active user focus for `allowFocused`
+  /// `OSC 52` clipboard writes.
+  bool isClipboardFocused = true;
+
+  /// Maximum decoded UTF-8 byte length allowed for `OSC 52` clipboard writes.
+  int maxOsc52ClipboardBytes =
+      CastWorkspaceSettings.defaultMaxOsc52ClipboardBytes;
+
   bool _disposed = false;
 
   /// Opens or shares a reference-counted [RemoteTerminalPort] on [repository].
@@ -217,13 +235,13 @@ final class RemoteTerminalPort implements TerminalPort {
   /// Number of unread terminal bell (`BEL`) events recorded on [sessionId].
   int get bellCount => _slot.bellCount;
 
-  /// Monotonic revision incremented on every visual buffer or cursor update.
+  @override
   int get renderRevision => _slot.renderRevision;
 
-  /// Revision of the most recent update requiring full viewport recomposition.
+  @override
   int get fullSyncRevision => _slot.fullSyncRevision;
 
-  /// Bounded read-only list of dirty cell spans recorded since the last full sync.
+  @override
   List<DirtyCellSpan> get dirtySpans => _slot.dirtySpans;
 
   /// Most recently reported local viewport dimensions for this pane, if set.
@@ -406,21 +424,32 @@ final class RemoteTerminalPort implements TerminalPort {
   List<ScrollbackLine?> readScrollbackSlice(int startLine, int count) {
     if (count <= 0) return const <ScrollbackLine?>[];
     if (!_disposed && _slot.state == .synchronized) {
-      final frames = _slot.scrollbackCache.planRequests(
-        sessionId: sessionId,
-        startLine: startLine,
-        endLine: startLine + count,
-      );
-      for (final frame in frames) {
-        repository.requestScrollback(frame);
-      }
+      _slot.prefetchScrollbackForRange(startLine, startLine + count);
+    }
+    final fallbackWidth = max(1, cols);
+    final clearSeq = _slot.scrollbackCache.clearSeq;
+    if (_decodedCacheClearSeq != clearSeq ||
+        _decodedCacheWidth != fallbackWidth) {
+      _decodedScrollbackCache.clear();
+      _decodedCacheClearSeq = clearSeq;
+      _decodedCacheWidth = fallbackWidth;
+    } else if (_decodedScrollbackCache.length >
+        ScrollbackPageCache.maxCachedRows) {
+      _decodedScrollbackCache.clear();
     }
     final result = List<ScrollbackLine?>.filled(count, null, growable: false);
-    final fallbackWidth = max(1, cols);
     for (var i = 0; i < count; i++) {
-      final encoded = _slot.scrollbackCache.rowAt(startLine + i);
+      final lineIdx = startLine + i;
+      final cached = _decodedScrollbackCache[lineIdx];
+      if (cached != null) {
+        result[i] = cached;
+        continue;
+      }
+      final encoded = _slot.scrollbackCache.rowAt(lineIdx);
       if (encoded != null) {
-        result[i] = _decodeScrollbackRow(encoded, fallbackWidth);
+        final decoded = _decodeScrollbackRow(encoded, fallbackWidth);
+        _decodedScrollbackCache[lineIdx] = decoded;
+        result[i] = decoded;
       }
     }
     return result;
@@ -435,6 +464,7 @@ final class RemoteTerminalPort implements TerminalPort {
     _bellListeners.clear();
     _audioListeners.clear();
     _clipboardListeners.clear();
+    _decodedScrollbackCache.clear();
     _fallbackBuffer = null;
     await _onDispose(this);
   }
@@ -461,6 +491,8 @@ final class RemoteTerminalPort implements TerminalPort {
   @internal
   void dispatchClipboard(String selection, String text) {
     if (_disposed || _clipboardListeners.isEmpty) return;
+    if (clipboardPolicy == .deny || !isClipboardFocused) return;
+    if (utf8.encode(text).length > maxOsc52ClipboardBytes) return;
     for (final listener in List<void Function(String, String)>.of(
       _clipboardListeners,
     )) {

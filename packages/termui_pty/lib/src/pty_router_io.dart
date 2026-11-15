@@ -47,13 +47,6 @@ final class _ImmediateTextSink extends StringConversionSinkBase {
 
 /// `dart:io` [RoutedPtyBackend] backed by `package:pty2`'s [PseudoTerminal].
 final class Pty2RoutedBackend implements RoutedPtyBackend {
-  static const Set<String> _strippedHostEnvVars = {
-    'TMUX',
-    'TMUX_PANE',
-    'TERM_PROGRAM',
-    'TERM_PROGRAM_VERSION',
-  };
-
   final PseudoTerminal _pty;
   final bool _ackProcessed;
   final _Utf8InputDecoder _inputDecoder;
@@ -84,24 +77,17 @@ final class Pty2RoutedBackend implements RoutedPtyBackend {
     );
   }
 
-  static bool _shouldStripHostEnvVar(String key) =>
-      _strippedHostEnvVars.contains(key) ||
-      key.startsWith('TERMUI_CAST_') ||
-      key.startsWith('CAST_');
-
   /// Builds the child PTY environment from [baseEnvironment], stripping
-  /// inherited multiplexer/caster variables, defaulting `TERM` to
-  /// `xterm-256color`, and enabling `TERMUI_AUDIO_APC=1` unless opted out.
+  /// inherited multiplexer/caster variables (case-insensitively), defaulting
+  /// `TERM` to `xterm-256color`, and enabling `TERMUI_AUDIO_APC=1` unless
+  /// opted out.
   static Map<String, String> buildChildEnvironment({
     required Map<String, String> baseEnvironment,
     Map<String, String>? overrides,
-  }) => {
-    'TERMUI_AUDIO_APC': '1',
-    for (final MapEntry(:key, :value) in baseEnvironment.entries)
-      if (!_shouldStripHostEnvVar(key)) key: value,
-    'TERM': 'xterm-256color',
-    ...?overrides,
-  };
+  }) => sanitizeChildEnvironment(
+    baseEnvironment: baseEnvironment,
+    overrides: overrides,
+  );
 
   /// Ensures Windows ConPTY redistributables are staged when [download] is `true`.
   static Future<String?> ensureConPtyReady({

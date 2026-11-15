@@ -247,6 +247,14 @@ void main() {
         check(sinkClosed).isTrue();
       },
     );
+
+    test('rejects serverUri containing embedded userInfo credentials', () {
+      check(
+        () => WsClientTransport(
+          serverUri: Uri.parse('wss://alice:secret@relay.example.com/ws'),
+        ),
+      ).throws<FormatException>();
+    });
   });
 }
 

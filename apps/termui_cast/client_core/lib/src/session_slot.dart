@@ -7,12 +7,12 @@ import 'package:clock/clock.dart';
 import 'package:hierarchical_state_machine/hierarchical_state_machine.dart';
 import 'package:termui/termui.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
+import 'package:termui_pty/termui_pty.dart' show DirtyCellSpan;
 
 import 'models.dart';
 import 'scrollback_page_cache.dart';
 
-/// Contiguous dirty cell span recorded for a [SessionSlot] render revision.
-typedef DirtyCellSpan = ({int revision, int start, int length});
+export 'package:termui_pty/termui_pty.dart' show DirtyCellSpan;
 
 /// Per-session synchronization states managed by `CastWorkspaceViewModel`.
 enum ClientSessionSyncState {
@@ -295,11 +295,31 @@ final class SessionSlot {
     for (var screenY = 0; screenY < rows; screenY++) {
       final virtualY = topVirtual + screenY;
       if (virtualY < totalLines) {
-        final rowLen = scrollbackCache.rowAt(virtualY)?.characters.length ?? 0;
-        if (rowLen > maxRowWidth) maxRowWidth = rowLen;
+        final cells = scrollbackCache.rowAt(virtualY)?.characters;
+        if (cells != null) {
+          final rowCols = _rowDisplayColumns(cells);
+          if (rowCols > maxRowWidth) maxRowWidth = rowCols;
+        }
       }
     }
     return max(0, maxRowWidth - cols);
+  }
+
+  static int _rowDisplayColumns(List<String> cells) {
+    var width = 0;
+    for (var i = 0; i < cells.length; i++) {
+      final cell = cells[i];
+      if (cell.isEmpty) {
+        final precededByWide =
+            i > 0 && cells[i - 1].isNotEmpty && graphemeWidth(cells[i - 1]) > 1;
+        if (!precededByWide) {
+          width += 1;
+        }
+        continue;
+      }
+      width += max(1, graphemeWidth(cell));
+    }
+    return width;
   }
 
   /// Clamps [scrollOffsetCols] to [maxHorizontalPanCols].
@@ -640,12 +660,29 @@ final class SessionSlot {
     }
     final visTop = max(scrollbackCache.oldestLine, topVirtualRow);
     final visEnd = min(scrollbackCache.totalLines, visTop + currentRows);
-    _dispatchPlannedRequests(visTop, visEnd);
+    prefetchScrollbackForRange(visTop, visEnd);
+  }
+
+  /// Requests uncached scrollback pages intersecting `[startLine, endLine)` plus
+  /// a 1-page upward lookahead, keeping the retry timer armed.
+  void prefetchScrollbackForRange(int startLine, int endLine) {
+    if (state != .synchronized ||
+        modes.altScreen ||
+        scrollbackCache.retainedLines == 0) {
+      _syncRetryTimer();
+      return;
+    }
+    final clampedStart = startLine.clamp(
+      scrollbackCache.oldestLine,
+      scrollbackCache.totalLines,
+    );
+    final clampedEnd = endLine.clamp(clampedStart, scrollbackCache.totalLines);
+    _dispatchPlannedRequests(clampedStart, clampedEnd);
     final lookaheadStart = max(
       scrollbackCache.oldestLine,
-      visTop - ScrollbackPageCache.pageSize,
+      clampedStart - ScrollbackPageCache.pageSize,
     );
-    _dispatchPlannedRequests(lookaheadStart, visTop);
+    _dispatchPlannedRequests(lookaheadStart, clampedStart);
     _syncRetryTimer();
   }
 

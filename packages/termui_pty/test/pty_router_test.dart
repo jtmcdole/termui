@@ -579,5 +579,91 @@ void main() {
         expect(overrideOptOut['TERMUI_AUDIO_APC'], equals('0'));
       },
     );
+
+    test(
+      'sanitizeChildEnvironment strips tmux and TERMUI_CAST_* vars while preserving CAST_*',
+      () {
+        final env = sanitizeChildEnvironment(
+          baseEnvironment: const {
+            'Path': 'C:\\Windows\\System32',
+            'tmux': '/tmp/tmux-1000/default,1,0',
+            'Term_Program': 'iTerm.app',
+            'termui_cast_caster_token': 'secret',
+            'TERMUI_CAST_CLIENT_TOKEN': 'secret2',
+            'cast_session_id': 'abc',
+            'CAST_COLOR': 'true',
+          },
+          overrides: const {'CUSTOM_VAR': 'ok'},
+        );
+        expect(
+          env,
+          equals({
+            'Path': 'C:\\Windows\\System32',
+            'cast_session_id': 'abc',
+            'CAST_COLOR': 'true',
+            'TERM': 'xterm-256color',
+            'TERMUI_AUDIO_APC': '1',
+            'CUSTOM_VAR': 'ok',
+          }),
+        );
+      },
+    );
+
+    test(
+      'PtyRouterSession tracks dirtySpans, cursor-only revisions, and >64 span full-sync overflow',
+      () async {
+        final backend = _FakeRoutedPtyBackend();
+        final router = PtyRouter();
+        final session = router.createSession(
+          id: 'dirty-1',
+          backend: backend,
+          initialCols: 140,
+          initialRows: 6,
+        );
+        final port = session.openPort();
+        addTearDown(() async {
+          await port.dispose();
+          await router.dispose();
+        });
+
+        final initialRender = port.renderRevision;
+        final initialFullSync = port.fullSyncRevision;
+        expect(initialRender, equals(1));
+        expect(initialFullSync, equals(1));
+        expect(port.dirtySpans, isEmpty);
+
+        // Emit normal text -> contiguous dirty span without fullSync bump.
+        backend.emitOutput('hello');
+        await Future<void>.delayed(Duration.zero);
+        final revAfterText = port.renderRevision;
+        expect(revAfterText, greaterThan(initialRender));
+        expect(port.fullSyncRevision, equals(initialFullSync));
+        expect(port.dirtySpans, hasLength(1));
+        expect(port.dirtySpans.single.revision, equals(revAfterText));
+        expect(port.dirtySpans.single.start, equals(0));
+        expect(port.dirtySpans.single.length, equals(5));
+
+        // Cursor-only movement -> renderRevision advances, no new dirty span.
+        backend.emitOutput('\x1b[2;10H');
+        await Future<void>.delayed(Duration.zero);
+        expect(port.renderRevision, greaterThan(revAfterText));
+        expect(port.fullSyncRevision, equals(initialFullSync));
+        expect(port.dirtySpans, hasLength(1));
+        expect(
+          port.dirtySpans.where((s) => s.revision > revAfterText),
+          isEmpty,
+        );
+
+        // >64 discontiguous dirty spans (every other column across 135 cols) -> fullSyncRevision bumps.
+        final sparse = StringBuffer('\x1b[1;1H');
+        for (var i = 0; i < 66; i++) {
+          sparse.write('\x1b[1;${(i * 2) + 1}H#');
+        }
+        backend.emitOutput(sparse.toString());
+        await Future<void>.delayed(Duration.zero);
+        expect(port.fullSyncRevision, equals(port.renderRevision));
+        expect(port.dirtySpans, isEmpty);
+      },
+    );
   });
 }

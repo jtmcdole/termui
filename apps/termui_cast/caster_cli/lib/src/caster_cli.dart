@@ -12,6 +12,42 @@ void _writeLineSafely(StringSink sink, String line) {
   } on IOException catch (_) {}
 }
 
+({CasterConfig? config, int? exitCode}) _parseCliConfig(
+  List<String> args,
+  Map<String, String> env,
+  StringSink stdoutSink,
+  StringSink stderrSink,
+) {
+  try {
+    final config = CasterConfig.fromArgs(args, environment: env);
+    if (config == null) {
+      _writeLineSafely(
+        stdoutSink,
+        'Usage: termui_cast [options] -- <command> [args...]',
+      );
+      _writeLineSafely(stdoutSink, CasterConfig.buildArgParser().usage);
+      return (config: null, exitCode: 0);
+    }
+    return (config: config, exitCode: null);
+  } on FormatException catch (e) {
+    _writeLineSafely(stderrSink, 'termui_cast: ${e.message}');
+    _writeLineSafely(stderrSink, CasterConfig.buildArgParser().usage);
+    return (config: null, exitCode: 64);
+  }
+}
+
+Future<void> _prewarmIapSigner(
+  IapJwtSigner? signer,
+  StringSink stderrSink,
+) async {
+  if (signer == null) return;
+  try {
+    await signer.getBearerToken();
+  } on Object catch (e) {
+    _writeLineSafely(stderrSink, 'termui_cast: IAP token pre-warm failed: $e');
+  }
+}
+
 /// Runs the `termui_cast` CLI with [args], returning the child or error exit code.
 Future<int> runCasterCli(
   List<String> args, {
@@ -25,77 +61,43 @@ Future<int> runCasterCli(
 }) async {
   final stdoutSink = out ?? stdout;
   final stderrSink = err ?? stderr;
-  final env = environment ?? Platform.environment;
+  final parsed = _parseCliConfig(
+    args,
+    environment ?? Platform.environment,
+    stdoutSink,
+    stderrSink,
+  );
+  final config = parsed.config;
+  if (config == null) return parsed.exitCode ?? 64;
 
-  final CasterConfig? config;
-  try {
-    config = CasterConfig.fromArgs(args, environment: env);
-  } on FormatException catch (e) {
-    _writeLineSafely(stderrSink, 'termui_cast: ${e.message}');
-    _writeLineSafely(stderrSink, CasterConfig.buildArgParser().usage);
-    return 64;
+  for (final warning in config.warnings) {
+    _writeLineSafely(stderrSink, 'termui_cast: warning: $warning');
   }
 
-  if (config == null) {
-    _writeLineSafely(
-      stdoutSink,
-      'Usage: termui_cast [options] -- <command> [args...]',
-    );
-    _writeLineSafely(stdoutSink, CasterConfig.buildArgParser().usage);
-    return 0;
-  }
-
-  final resolvedIapSigner =
-      iapSigner ??
-      ((config.iapServiceAccount != null || config.iapServiceAccountKey != null)
-          ? IapJwtSigner(
-              serviceAccount: config.iapServiceAccount,
-              serviceAccountKey: config.iapServiceAccountKey,
-              targetAudienceUrl: IapJwtSigner.audienceForWebSocketUri(
-                config.serverUri,
-              ),
-            )
-          : null);
-
+  final resolvedIapSigner = iapSigner ?? config.createIapSigner();
   var interrupted = false;
   CasterService? service;
   StreamSubscription<void>? signalSub;
-  final checkInSub = (checkInSignal ?? watchPosixHangupSignals()).listen((_) {
-    if (!interrupted && service != null) {
-      unawaited(service.checkIn());
-    }
-  });
-  try {
-    if (resolvedIapSigner != null) {
-      try {
-        await resolvedIapSigner.getBearerToken();
-      } on Object catch (e) {
-        _writeLineSafely(
-          stderrSink,
-          'termui_cast: IAP token pre-warm failed: $e',
-        );
-      }
-    }
 
-    final PtySession pty;
-    try {
-      await Pty2Session.ensureConPtyReady(
-        download: config.downloadConPty,
-        onWarning: (msg) => _writeLineSafely(stderrSink, 'termui_cast: $msg'),
-      );
-      pty = Pty2Session.start(
-        config.command.first,
-        config.command.sublist(1),
-        initialCols: config.initialCols,
-        initialRows: config.initialRows,
-      );
-    } on Object catch (e) {
-      _writeLineSafely(
-        stderrSink,
-        'termui_cast: failed to start PTY command: $e',
-      );
-      return 70;
-    }
+  void triggerShutdown() {
+    if (interrupted) return;
+    interrupted = true;
+    final active = service;
+    if (active != null) unawaited(active.stop(killPty: true));
+  }
+
+  final hupSub = _subscribeHupSignal(
+    config: config,
+    checkInSignal: checkInSignal,
+    stderrSink: stderrSink,
+    onCheckIn: () => service?.checkIn(),
+    onShutdown: triggerShutdown,
+    isInterrupted: () => interrupted,
+  );
+  try {
+    await _prewarmIapSigner(resolvedIapSigner, stderrSink);
+    final pty = await _startCliPty(config, stderrSink);
+    if (pty == null) return 70;
 
     final activeService = CasterService(
       config: config,
@@ -105,16 +107,61 @@ Future<int> runCasterCli(
       onLog: (msg) => _writeLineSafely(stderrSink, 'termui_cast: $msg'),
     );
     service = activeService;
+    if (interrupted) unawaited(activeService.stop(killPty: true));
     final stopStream = shutdownSignal ?? watchPosixTerminationSignals();
-    signalSub = stopStream.listen((_) {
-      if (interrupted) return;
-      interrupted = true;
-      unawaited(activeService.stop(killPty: true));
-    });
+    signalSub = stopStream.listen((_) => triggerShutdown());
     await activeService.start();
     return await activeService.done;
   } finally {
     await signalSub?.cancel();
-    await checkInSub.cancel();
+    await hupSub.cancel();
+  }
+}
+
+StreamSubscription<void> _subscribeHupSignal({
+  required CasterConfig config,
+  required Stream<void>? checkInSignal,
+  required StringSink stderrSink,
+  required Future<void>? Function() onCheckIn,
+  required void Function() onShutdown,
+  required bool Function() isInterrupted,
+}) {
+  if (checkInSignal != null || config.keepAliveOnHup) {
+    return (checkInSignal ?? watchPosixHangupSignals()).listen((_) {
+      if (isInterrupted()) return;
+      final pending = onCheckIn();
+      if (pending != null) unawaited(pending);
+    });
+  }
+  return watchPosixHangupSignals().listen((_) {
+    _writeLineSafely(
+      stderrSink,
+      'termui_cast: received SIGHUP; shutting down cleanly (pass --keep-alive-on-hup to check in instead)',
+    );
+    onShutdown();
+  });
+}
+
+Future<PtySession?> _startCliPty(
+  CasterConfig config,
+  StringSink stderrSink,
+) async {
+  try {
+    await Pty2Session.ensureConPtyReady(
+      download: config.downloadConPty,
+      onWarning: (msg) => _writeLineSafely(stderrSink, 'termui_cast: $msg'),
+    );
+    return Pty2Session.start(
+      config.command.first,
+      config.command.sublist(1),
+      initialCols: config.initialCols,
+      initialRows: config.initialRows,
+    );
+  } on Object catch (e) {
+    _writeLineSafely(
+      stderrSink,
+      'termui_cast: failed to start PTY command: $e',
+    );
+    return null;
   }
 }

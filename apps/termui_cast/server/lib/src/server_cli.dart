@@ -35,19 +35,34 @@ Future<int> runServerCli(
     return 0;
   }
 
+  for (final warning in config.warnings) {
+    stderrSink.writeln('[termui_cast_server] WARNING: $warning');
+  }
+
   final isCloudRun = env['K_SERVICE']?.isNotEmpty ?? false;
   if (!config.host.isLoopback && !isCloudRun) {
     stderrSink.writeln(
       '[termui_cast_server] WARNING: Binding non-loopback '
       '${config.host.address} over plaintext ws://. Terminate TLS at a '
-      'reverse proxy, SSH tunnel, or Cloud Run IAP in front of the relay.',
+      'reverse proxy, bastion, SSH tunnel, or Cloud Run IAP in front of the relay.',
     );
   }
 
-  final server = await CastServer.bind(
-    config,
-    onLog: (msg) => stderrSink.writeln('[termui_cast_server] $msg'),
-  );
+  final CastServer server;
+  try {
+    server = await CastServer.bind(
+      config,
+      onLog: (msg) => stderrSink.writeln('[termui_cast_server] $msg'),
+    );
+  } on SocketException catch (e) {
+    stderrSink.writeln(
+      'Error: Failed to bind ${config.host.address}:${config.port}: ${e.message}',
+    );
+    return 78;
+  } on FileSystemException catch (e) {
+    stderrSink.writeln('Error: ${e.message}');
+    return 78;
+  }
   stdoutSink.writeln(
     'Listening on ${server.casterUri} and ${server.clientUri}',
   );

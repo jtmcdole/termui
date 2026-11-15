@@ -44,10 +44,22 @@ final class SessionRegistry {
   /// Sliding window duration used to rate-limit client session renames.
   final Duration renameRateWindow;
 
+  /// Default minimum interval between droppable directory broadcasts caused by rapid title updates.
+  static const Duration defaultDirectoryBroadcastInterval = Duration(
+    milliseconds: 50,
+  );
+
   final Clock _clock;
+
+  /// Minimum interval between droppable directory broadcasts on shell-title bursts.
+  final Duration directoryBroadcastInterval;
   final Map<SessionId, _LiveSession> _sessions = {};
   final Set<CasterPeer> _casters = {};
   final Set<ClientPeer> _clients = {};
+  DateTime? _lastDirectoryBroadcastAt;
+  Timer? _directoryThrottleTimer;
+  bool _pendingDroppableDirectoryBroadcast = false;
+  bool _closed = false;
 
   /// Creates a stateless session registry.
   SessionRegistry({
@@ -57,6 +69,7 @@ final class SessionRegistry {
     this.uploadTimeout = defaultUploadTimeout,
     this.maxRenamesPerWindow = defaultMaxRenamesPerWindow,
     this.renameRateWindow = defaultRenameRateWindow,
+    this.directoryBroadcastInterval = defaultDirectoryBroadcastInterval,
     Clock clock = const Clock(),
   }) : _clock = clock;
 
@@ -80,6 +93,7 @@ final class SessionRegistry {
       maxBytes: maxOutboundBytes,
       closeWithCode: closeWithCode,
       onEvict: () => detachCasterPeer(peer),
+      onDrained: () => _flushPendingCasterControl(peer),
     );
     peer = CasterPeer._(pump);
     _casters.add(peer);
@@ -126,7 +140,7 @@ final class SessionRegistry {
       return true;
     }
     caster.sessionId = frame.sessionId;
-    _sessions[frame.sessionId] = _LiveSession(
+    final session = _LiveSession(
       id: frame.sessionId,
       initialTitle: frame.title,
       cols: frame.cols,
@@ -134,6 +148,8 @@ final class SessionRegistry {
       resumeToken: Uint8List.fromList(frame.resumeToken),
       caster: caster,
     );
+    _sessions[frame.sessionId] = session;
+    _syncCasterControl(session);
     _broadcastDirectory();
     return true;
   }
@@ -161,24 +177,17 @@ final class SessionRegistry {
     session.cols = frame.cols;
     session.rows = frame.rows;
     session.lastSeq = null;
+    session.resetSentControlStateForTakeover();
 
     if (session.subscribers.isEmpty) {
       session.clearRequestedSize();
+      _syncCasterControl(session);
     } else {
       session.awaitingKeyframe.addAll(session.subscribers);
-      newCaster.sendMessage(
-        SubscriberCountFrame(
-          sessionId: session.id,
-          subscriberCount: session.subscribers.length,
-        ),
-      );
       final (:cols, :rows) = session.effectiveMinSize();
       session.requestedCols = cols;
       session.requestedRows = rows;
-      newCaster.sendMessage(
-        ResizeFrame(sessionId: session.id, cols: cols, rows: rows),
-      );
-      newCaster.sendMessage(RequestKeyframeFrame(sessionId: session.id));
+      _syncCasterControl(session, requestKeyframe: true);
     }
     _syncTakeoverTitle(session, newCaster, frame.title);
     _broadcastDirectory();
@@ -223,10 +232,20 @@ final class SessionRegistry {
       );
       return false;
     }
+    if (!session.subscribers.contains(client)) {
+      client.sendMessage(
+        ErrorFrame(
+          code: 'rename_rejected',
+          message: 'Client is not subscribed to ${frame.sessionId.value}',
+        ),
+      );
+      return false;
+    }
     if (frame.clearPin) {
       return _clearSessionPin(client, session);
     }
     if (frame.title == session.pinnedTitle) return true;
+    if (!_rejectIfCasterPressured(client, session, 'rename')) return false;
     if (!_consumeRenameQuotaOrReject(client)) return false;
     session.pinnedTitle = frame.title;
     session.caster.sendMessage(frame);
@@ -236,6 +255,7 @@ final class SessionRegistry {
 
   bool _clearSessionPin(ClientPeer client, _LiveSession session) {
     if (session.pinnedTitle == null) return true;
+    if (!_rejectIfCasterPressured(client, session, 'rename')) return false;
     if (!_consumeRenameQuotaOrReject(client)) return false;
     session.pinnedTitle = null;
     session.caster.sendMessage(
@@ -247,6 +267,21 @@ final class SessionRegistry {
     );
     _broadcastDirectory();
     return true;
+  }
+
+  bool _rejectIfCasterPressured(
+    ClientPeer client,
+    _LiveSession session,
+    String action,
+  ) {
+    if (!session.caster._drainAndCheckOutboundPressure()) return true;
+    client.sendMessage(
+      ErrorFrame(
+        code: 'caster_busy',
+        message: 'Caster input queue is full; $action dropped.',
+      ),
+    );
+    return false;
   }
 
   bool _consumeRenameQuotaOrReject(ClientPeer client) {
@@ -374,6 +409,9 @@ final class SessionRegistry {
     } else {
       _forwardDelta(session, info.seq, rawFrame);
     }
+    if (session.pendingControlSync) {
+      _syncCasterControl(session);
+    }
     return true;
   }
 
@@ -453,9 +491,16 @@ final class SessionRegistry {
     }
 
     final wasEmpty = session.subscribers.isEmpty;
+    final prevViewport = session.subscriberViewports[client];
     final added = session.subscribers.add(client);
-    session.awaitingKeyframe.add(client);
+    final newlyAwaitingKeyframe = session.awaitingKeyframe.add(client);
     client._subscriptions.add(frame.sessionId);
+    final viewportChanged =
+        frame.cols > 0 &&
+        frame.rows > 0 &&
+        (prevViewport == null ||
+            prevViewport.cols != frame.cols ||
+            prevViewport.rows != frame.rows);
     if (frame.cols > 0 && frame.rows > 0) {
       session.subscriberViewports[client] = (
         cols: frame.cols,
@@ -464,35 +509,39 @@ final class SessionRegistry {
     }
 
     if (added) {
-      session.caster.sendMessage(
-        SubscriberCountFrame(
-          sessionId: session.id,
-          subscriberCount: session.subscribers.length,
-        ),
-      );
       if (session.shellTitle.isNotEmpty) {
         client.sendMessage(
           ShellTitleFrame(sessionId: session.id, title: session.shellTitle),
         );
       }
+      _dispatchSubscribeSizeAndKeyframe(
+        session,
+        wasEmpty: wasEmpty,
+        requestKeyframe: true,
+      );
+      _broadcastDirectory();
+      return;
     }
 
-    _dispatchSubscribeSizeAndKeyframe(session, wasEmpty: wasEmpty);
-    _broadcastDirectory();
+    if (viewportChanged || newlyAwaitingKeyframe) {
+      _dispatchSubscribeSizeAndKeyframe(
+        session,
+        wasEmpty: wasEmpty,
+        requestKeyframe: true,
+      );
+    }
   }
 
   void _dispatchSubscribeSizeAndKeyframe(
     _LiveSession session, {
     required bool wasEmpty,
+    required bool requestKeyframe,
   }) {
     final (:cols, :rows) = session.effectiveMinSize();
     if (wasEmpty) {
       session.requestedCols = cols;
       session.requestedRows = rows;
-      session.caster.sendMessage(
-        ResizeFrame(sessionId: session.id, cols: cols, rows: rows),
-      );
-      session.caster.sendMessage(RequestKeyframeFrame(sessionId: session.id));
+      _syncCasterControl(session, requestKeyframe: requestKeyframe);
       return;
     }
     final sizeChanged =
@@ -500,13 +549,78 @@ final class SessionRegistry {
     if (sizeChanged) {
       session.requestedCols = cols;
       session.requestedRows = rows;
-      session.caster.sendMessage(
-        ResizeFrame(sessionId: session.id, cols: cols, rows: rows),
-      );
     }
-    if (!sizeChanged || (cols == session.cols && rows == session.rows)) {
-      session.caster.sendMessage(RequestKeyframeFrame(sessionId: session.id));
+    final needKeyframe =
+        requestKeyframe &&
+        (!sizeChanged || (cols == session.cols && rows == session.rows));
+    _syncCasterControl(session, requestKeyframe: needKeyframe);
+  }
+
+  void _flushPendingCasterControl(CasterPeer caster) {
+    final session = _lookupCasterSession(caster);
+    if (session == null || !session.pendingControlSync) return;
+    _syncCasterControl(session);
+  }
+
+  void _syncCasterControl(
+    _LiveSession session, {
+    bool requestKeyframe = false,
+  }) {
+    if (requestKeyframe) {
+      session.pendingKeyframeSync = true;
     }
+    if (session.caster._drainAndCheckOutboundPressure()) {
+      session.pendingControlSync = true;
+      return;
+    }
+    if (!_syncSubscriberCountToCaster(session) ||
+        !_syncRequestedSizeToCaster(session) ||
+        !_syncKeyframeRequestToCaster(session)) {
+      session.pendingControlSync = true;
+      return;
+    }
+    session.pendingControlSync = false;
+  }
+
+  bool _syncSubscriberCountToCaster(_LiveSession session) {
+    final count = session.subscribers.length;
+    if (session.lastSentSubscriberCount == count) return true;
+    if (session.caster._drainAndCheckOutboundPressure()) return false;
+    session.lastSentSubscriberCount = count;
+    session.caster.sendMessage(
+      SubscriberCountFrame(sessionId: session.id, subscriberCount: count),
+    );
+    return true;
+  }
+
+  bool _syncRequestedSizeToCaster(_LiveSession session) {
+    final reqCols = session.requestedCols;
+    final reqRows = session.requestedRows;
+    if (session.subscribers.isEmpty || reqCols == null || reqRows == null) {
+      return true;
+    }
+    if (session.lastSentRequestedCols == reqCols &&
+        session.lastSentRequestedRows == reqRows) {
+      return true;
+    }
+    if (session.caster._drainAndCheckOutboundPressure()) return false;
+    session.lastSentRequestedCols = reqCols;
+    session.lastSentRequestedRows = reqRows;
+    session.caster.sendMessage(
+      ResizeFrame(sessionId: session.id, cols: reqCols, rows: reqRows),
+    );
+    return true;
+  }
+
+  bool _syncKeyframeRequestToCaster(_LiveSession session) {
+    if (!session.pendingKeyframeSync || session.awaitingKeyframe.isEmpty) {
+      session.pendingKeyframeSync = false;
+      return true;
+    }
+    if (session.caster._drainAndCheckOutboundPressure()) return false;
+    session.pendingKeyframeSync = false;
+    session.caster.sendMessage(RequestKeyframeFrame(sessionId: session.id));
+    return true;
   }
 
   /// Unsubscribes [client] from [sessionId] and restores larger dimensions when
@@ -527,19 +641,15 @@ final class SessionRegistry {
     session.abortUploadTransfersForClient(client);
     client._activeUploads.remove(sessionId);
 
-    session.caster.sendMessage(
-      SubscriberCountFrame(
-        sessionId: session.id,
-        subscriberCount: session.subscribers.length,
-      ),
-    );
     _reconcileSizeAfterSubscriberRemoved(session);
+    _syncCasterControl(session);
     _broadcastDirectory();
   }
 
   void _reconcileSizeAfterSubscriberRemoved(_LiveSession session) {
     if (session.subscribers.isEmpty) {
       session.clearRequestedSize();
+      session.pendingKeyframeSync = false;
       return;
     }
     if (session.subscriberViewports.isEmpty) return;
@@ -547,9 +657,6 @@ final class SessionRegistry {
     if (session.requestedCols == cols && session.requestedRows == rows) return;
     session.requestedCols = cols;
     session.requestedRows = rows;
-    session.caster.sendMessage(
-      ResizeFrame(sessionId: session.id, cols: cols, rows: rows),
-    );
   }
 
   /// Routes [frame] from a subscribed [client] to the target caster.
@@ -592,15 +699,24 @@ final class SessionRegistry {
     final session = _sessions[frame.sessionId];
     if (session == null || !session.subscribers.contains(client)) return;
 
-    session.subscriberViewports[client] = (cols: frame.cols, rows: frame.rows);
-    final (:cols, :rows) = session.effectiveMinSize();
-    if (session.requestedCols == cols && session.requestedRows == rows) return;
+    final (:cols, :rows) = session.effectiveMinSizeWithOverride(
+      client,
+      cols: frame.cols,
+      rows: frame.rows,
+    );
+    if (session.requestedCols == cols && session.requestedRows == rows) {
+      session.subscriberViewports[client] = (
+        cols: frame.cols,
+        rows: frame.rows,
+      );
+      return;
+    }
+    if (!_rejectIfCasterPressured(client, session, 'resize')) return;
 
+    session.subscriberViewports[client] = (cols: frame.cols, rows: frame.rows);
     session.requestedCols = cols;
     session.requestedRows = rows;
-    session.caster.sendMessage(
-      ResizeFrame(sessionId: session.id, cols: cols, rows: rows),
-    );
+    _syncCasterControl(session);
   }
 
   /// Requests an immediate keyframe on [sessionId] when [client] is subscribed.
@@ -609,8 +725,8 @@ final class SessionRegistry {
     if (session == null || !session.subscribers.contains(client)) return;
     final shouldRequest = session.awaitingKeyframe.isEmpty;
     session.awaitingKeyframe.add(client);
-    if (shouldRequest) {
-      session.caster.sendMessage(RequestKeyframeFrame(sessionId: sessionId));
+    if (shouldRequest || session.pendingKeyframeSync) {
+      _syncCasterControl(session, requestKeyframe: true);
     }
   }
 
@@ -629,6 +745,9 @@ final class SessionRegistry {
 
     final inFlight = client._inFlightScrollback[frame.sessionId] ?? 0;
     if (inFlight >= maxInFlightScrollbackPerClient) return false;
+    if (!_rejectIfCasterPressured(client, session, 'scrollback request')) {
+      return false;
+    }
 
     final relayReqId = session.allocateScrollbackRequestId();
     session.scrollbackRequests[relayReqId] = (
@@ -654,27 +773,28 @@ final class SessionRegistry {
   /// inflating or re-compressing the scrollback rows.
   bool forwardCasterScrollbackChunkBytes(
     CasterPeer caster,
-    Uint8List rawFrame,
-  ) {
+    Uint8List rawFrame, {
+    bool rewriteInPlace = false,
+  }) {
     final session = _lookupCasterSession(caster);
     if (session == null) return false;
-    final relayReqId = BufferFrameCodec.inspectRelayScrollbackChunkRequestId(
+    final inspected = BufferFrameCodec.inspectRelayScrollbackChunk(
       rawFrame,
       expectedSession: session.id,
     );
-    if (relayReqId == null) return false;
-    final pending = session.scrollbackRequests.remove(relayReqId);
+    if (inspected == null) return false;
+    final pending = session.scrollbackRequests.remove(inspected.requestId);
     if (pending == null) return true;
 
     pending.client._decrementInFlightScrollback(session.id);
     if (!session.subscribers.contains(pending.client)) return true;
 
-    final rewritten = BufferFrameCodec.rewriteScrollbackChunkRequestId(
+    final rewritten = BufferFrameCodec.patchScrollbackChunkRequestId(
       rawFrame,
-      expectedSession: session.id,
+      requestIdOffset: inspected.requestIdOffset,
       newRequestId: pending.clientRequestId,
+      inPlace: rewriteInPlace,
     );
-    if (rewritten == null) return false;
     pending.client._pump.enqueue(rewritten);
     return true;
   }
@@ -740,6 +860,18 @@ final class SessionRegistry {
           status: .rejected,
           nextOffset: 0,
           message: 'Maximum active uploads exceeded for this session.',
+        ),
+      );
+      return false;
+    }
+    if (session.caster._drainAndCheckOutboundPressure()) {
+      client.sendMessage(
+        FileUploadAckFrame(
+          sessionId: session.id,
+          transferId: frame.transferId,
+          status: .rejected,
+          nextOffset: 0,
+          message: 'Caster input queue is full; upload rejected.',
         ),
       );
       return false;
@@ -818,6 +950,21 @@ final class SessionRegistry {
     );
     if (resolved == null) return false;
     final (session, transfer) = resolved;
+    if (session.caster._drainAndCheckOutboundPressure()) {
+      session.removeUploadTransfer(transfer.relayTransferId);
+      if (!frame.aborted) {
+        client.sendMessage(
+          FileUploadAckFrame(
+            sessionId: session.id,
+            transferId: transfer.clientTransferId,
+            status: .rejected,
+            nextOffset: 0,
+            message: 'Caster input queue is full; upload aborted.',
+          ),
+        );
+      }
+      return false;
+    }
 
     if (frame.aborted) {
       session.removeUploadTransfer(transfer.relayTransferId);
@@ -893,9 +1040,8 @@ final class SessionRegistry {
     if (_clients.isEmpty) {
       for (final session in [..._sessions.values]) {
         if (!unsubscribed.contains(session.id) && session.subscribers.isEmpty) {
-          session.caster.sendMessage(
-            SubscriberCountFrame(sessionId: session.id, subscriberCount: 0),
-          );
+          session.lastSentSubscriberCount = null;
+          _syncCasterControl(session);
         }
       }
     }
@@ -904,6 +1050,10 @@ final class SessionRegistry {
 
   /// Disposes all active peer pumps and clears the registry.
   Future<void> close() async {
+    _closed = true;
+    _directoryThrottleTimer?.cancel();
+    _directoryThrottleTimer = null;
+    _pendingDroppableDirectoryBroadcast = false;
     final liveCasters = [..._casters];
     final liveClients = [..._clients];
     _sessions.clear();
@@ -938,6 +1088,8 @@ final class SessionRegistry {
     } else if (dimsChanged && session.subscriberViewports.isEmpty) {
       session.requestedCols = cols;
       session.requestedRows = rows;
+      session.lastSentRequestedCols = cols;
+      session.lastSentRequestedRows = rows;
     }
     final unicastOnly =
         !dimsChanged &&
@@ -948,6 +1100,9 @@ final class SessionRegistry {
         ? [...session.awaitingKeyframe]
         : [...session.subscribers];
     session.awaitingKeyframe.removeAll(targets);
+    if (session.awaitingKeyframe.isEmpty) {
+      session.pendingKeyframeSync = false;
+    }
     for (final subscriber in targets) {
       subscriber._pump.enqueue(rawFrame);
     }
@@ -956,19 +1111,56 @@ final class SessionRegistry {
 
   void _forwardDelta(_LiveSession session, int seq, Uint8List rawFrame) {
     session.lastSeq = seq;
-    final targets = [
-      for (final subscriber in session.subscribers)
-        if (!session.awaitingKeyframe.contains(subscriber)) subscriber,
-    ];
-    for (final subscriber in targets) {
+    final shouldRequestKeyframe = session.awaitingKeyframe.isEmpty;
+    var downgradedAny = false;
+    for (final subscriber in [...session.subscribers]) {
+      if (session.awaitingKeyframe.contains(subscriber)) continue;
+      if (subscriber._drainAndCheckOutboundPressure() ||
+          !subscriber._pump.canFit(rawFrame.length)) {
+        session.awaitingKeyframe.add(subscriber);
+        downgradedAny = true;
+        continue;
+      }
       subscriber._pump.enqueue(rawFrame);
+    }
+    if (downgradedAny &&
+        (shouldRequestKeyframe || session.pendingKeyframeSync)) {
+      _syncCasterControl(session, requestKeyframe: true);
     }
   }
 
-  void _broadcastDirectory() => _broadcastDirectoryBytes(droppable: false);
+  void _broadcastDirectory() {
+    _directoryThrottleTimer?.cancel();
+    _directoryThrottleTimer = null;
+    _pendingDroppableDirectoryBroadcast = false;
+    _lastDirectoryBroadcastAt = _clock.now();
+    _broadcastDirectoryBytes(droppable: false);
+  }
 
-  void _broadcastDirectoryDroppable() =>
+  void _broadcastDirectoryDroppable() {
+    if (_closed || _clients.isEmpty) return;
+    final now = _clock.now();
+    final last = _lastDirectoryBroadcastAt;
+    if (last == null || now.difference(last) >= directoryBroadcastInterval) {
+      _directoryThrottleTimer?.cancel();
+      _directoryThrottleTimer = null;
+      _pendingDroppableDirectoryBroadcast = false;
+      _lastDirectoryBroadcastAt = now;
       _broadcastDirectoryBytes(droppable: true);
+      return;
+    }
+    _pendingDroppableDirectoryBroadcast = true;
+    _directoryThrottleTimer ??= Timer(
+      directoryBroadcastInterval - now.difference(last),
+      () {
+        _directoryThrottleTimer = null;
+        if (_closed || !_pendingDroppableDirectoryBroadcast) return;
+        _pendingDroppableDirectoryBroadcast = false;
+        _lastDirectoryBroadcastAt = _clock.now();
+        _broadcastDirectoryBytes(droppable: true);
+      },
+    );
+  }
 
   void _broadcastDirectoryBytes({required bool droppable}) {
     if (_clients.isEmpty) return;
@@ -1103,6 +1295,11 @@ final class _LiveSession {
   int rows;
   int? requestedCols;
   int? requestedRows;
+  int? lastSentSubscriberCount;
+  int? lastSentRequestedCols;
+  int? lastSentRequestedRows;
+  bool pendingControlSync = false;
+  bool pendingKeyframeSync = false;
   int? lastSeq;
   final Uint8List resumeToken;
   CasterPeer caster;
@@ -1134,6 +1331,31 @@ final class _LiveSession {
   void clearRequestedSize() {
     requestedCols = null;
     requestedRows = null;
+    lastSentRequestedCols = null;
+    lastSentRequestedRows = null;
+  }
+
+  void resetSentControlStateForTakeover() {
+    lastSentSubscriberCount = null;
+    lastSentRequestedCols = null;
+    lastSentRequestedRows = null;
+    pendingControlSync = false;
+    pendingKeyframeSync = false;
+  }
+
+  ({int cols, int rows}) effectiveMinSizeWithOverride(
+    ClientPeer client, {
+    required int cols,
+    required int rows,
+  }) {
+    var minCols = cols;
+    var minRows = rows;
+    for (final entry in subscriberViewports.entries) {
+      if (identical(entry.key, client)) continue;
+      minCols = min(minCols, entry.value.cols);
+      minRows = min(minRows, entry.value.rows);
+    }
+    return (cols: minCols, rows: minRows);
   }
 
   ({int cols, int rows}) effectiveMinSize() {
@@ -1262,8 +1484,11 @@ final class _BoundedPeerPump {
   final int maxBytes;
   final Future<void> Function(int code, String reason)? closeWithCode;
   final void Function() onEvict;
+  final void Function()? onDrained;
 
-  late final _OutboundFrameStream _stream = _OutboundFrameStream();
+  late final _OutboundFrameStream _stream = _OutboundFrameStream(
+    onDrained: onDrained,
+  );
   Future<void>? _pumpFuture;
   bool _closed = false;
 
@@ -1273,6 +1498,7 @@ final class _BoundedPeerPump {
     required this.maxBytes,
     required this.closeWithCode,
     required this.onEvict,
+    this.onDrained,
   });
 
   void start() {
@@ -1360,8 +1586,11 @@ final class _BoundedPeerPump {
 }
 
 final class _OutboundFrameStream extends Stream<Uint8List> {
+  final void Function()? onDrained;
   final Queue<Uint8List> _queue = Queue<Uint8List>();
   int _queuedBytes = 0;
+
+  _OutboundFrameStream({this.onDrained});
   void Function(Uint8List)? _onData;
   void Function()? _onDone;
   bool _paused = false;
@@ -1444,6 +1673,9 @@ final class _OutboundFrameStream extends Stream<Uint8List> {
       }
     } finally {
       _delivering = false;
+    }
+    if (!_finished) {
+      onDrained?.call();
     }
   }
 

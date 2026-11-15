@@ -1131,4 +1131,181 @@ void main() {
       },
     );
   });
+
+  group('Wave 1 client_core hardening', () {
+    test(
+      'Osc52ClipboardPolicy enforces allowFocused, deny, focus, and byte cap',
+      () async {
+        const settings = CastWorkspaceSettings(osc52Policy: .deny);
+        final roundtrip = CastWorkspaceSettings.fromJsonString(
+          settings.toJsonString(),
+        );
+        check(roundtrip.osc52Policy).equals(Osc52ClipboardPolicy.deny);
+        check(
+          roundtrip.copyWith(osc52Policy: .allowFocused).osc52Policy,
+        ).equals(Osc52ClipboardPolicy.allowFocused);
+
+        const sessionId = SessionId('osc52-policy');
+        final server = _FakeServerTransportHarness();
+        final transport = WsClientTransport(channelFactory: server.openChannel);
+        final repo = CastClientRepository(
+          transport: transport,
+          enableReconnect: false,
+        );
+        await repo.connect();
+        server.send(const AuthAcceptedFrame(role: .client));
+        await Future<void>.delayed(Duration.zero);
+
+        final port = repo.openTerminalPort(sessionId);
+        final received = <(String, String)>[];
+        port.addClipboardListener((sel, text) => received.add((sel, text)));
+
+        // Focused + default allowFocused delivers small payload.
+        port.maxOsc52ClipboardBytes = 4;
+        server.send(const ClipboardFrame(sessionId: sessionId, text: 'abcd'));
+        await Future<void>.delayed(Duration.zero);
+        check(received).deepEquals(const [('c', 'abcd')]);
+
+        // Exceeding maxOsc52ClipboardBytes drops payload.
+        server.send(const ClipboardFrame(sessionId: sessionId, text: 'abcde'));
+        await Future<void>.delayed(Duration.zero);
+        check(received).length.equals(1);
+
+        // Unfocused drops payload under allowFocused.
+        port.isClipboardFocused = false;
+        server.send(const ClipboardFrame(sessionId: sessionId, text: 'ok'));
+        await Future<void>.delayed(Duration.zero);
+        check(received).length.equals(1);
+
+        // Focused + deny drops payload.
+        port.isClipboardFocused = true;
+        port.clipboardPolicy = .deny;
+        server.send(const ClipboardFrame(sessionId: sessionId, text: 'ok'));
+        await Future<void>.delayed(Duration.zero);
+        check(received).length.equals(1);
+
+        await port.dispose();
+        await repo.dispose();
+        await server.close();
+      },
+    );
+
+    test(
+      'readScrollbackSlice caches decoded ScrollbackLine per (clearSeq, width) and counts wide columns in maxHorizontalPanCols',
+      () async {
+        const sessionId = SessionId('sb-cache-wide');
+        final server = _FakeServerTransportHarness();
+        final transport = WsClientTransport(channelFactory: server.openChannel);
+        final repo = CastClientRepository(
+          transport: transport,
+          enableReconnect: false,
+        );
+        await repo.connect();
+        server.send(const AuthAcceptedFrame(role: .client));
+        await Future<void>.delayed(Duration.zero);
+
+        final port = repo.openTerminalPort(
+          sessionId,
+          initialCols: 4,
+          initialRows: 2,
+        );
+        server.send(
+          BufferSnapshotFrame(
+            snapshot: _makeSnapshot(
+              sessionId: sessionId,
+              seq: 1,
+              cols: 4,
+              rows: 2,
+              scrollback: const ScrollbackWindow(
+                clearSeq: 1,
+                oldestLine: 0,
+                totalLines: 2,
+              ),
+            ),
+          ),
+        );
+        final wideChars = <String>[
+          '\u4e2d',
+          '\u6587',
+          '\u5b57',
+          'a',
+        ]; // 7 display cols
+        server.send(
+          ScrollbackChunkFrame(
+            sessionId: sessionId,
+            requestId: 1,
+            clearSeq: 1,
+            startLine: 0,
+            rows: [
+              EncodedScrollbackRow(
+                isWrapped: false,
+                characters: wideChars,
+                attributes: Uint32List(wideChars.length * 3),
+              ),
+              EncodedScrollbackRow(
+                isWrapped: false,
+                characters: const [
+                  '\u4e2d',
+                  '',
+                  '\u6587',
+                  '',
+                  'x',
+                ], // 5 display cols
+                attributes: Uint32List(5 * 3),
+              ),
+            ],
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        port.slot.scrollBy(2, viewportCols: 4, viewportRows: 2);
+        check(port.slot.maxHorizontalPanCols(4, 2)).equals(3); // 7 - 4 = 3
+
+        final firstRead = port.readScrollbackSlice(0, 2);
+        final secondRead = port.readScrollbackSlice(0, 2);
+        check(identical(firstRead[0], secondRead[0])).isTrue();
+        check(identical(firstRead[1], secondRead[1])).isTrue();
+
+        // clearSeq bump invalidates decoded ScrollbackLine cache.
+        server.send(
+          BufferSnapshotFrame(
+            snapshot: _makeSnapshot(
+              sessionId: sessionId,
+              seq: 2,
+              cols: 4,
+              rows: 2,
+              scrollback: const ScrollbackWindow(
+                clearSeq: 2,
+                oldestLine: 0,
+                totalLines: 1,
+              ),
+            ),
+          ),
+        );
+        server.send(
+          ScrollbackChunkFrame(
+            sessionId: sessionId,
+            requestId: 2,
+            clearSeq: 2,
+            startLine: 0,
+            rows: [
+              EncodedScrollbackRow(
+                isWrapped: false,
+                characters: const ['z'],
+                attributes: Uint32List(3),
+              ),
+            ],
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        final afterClear = port.readScrollbackSlice(0, 1);
+        check(identical(firstRead[0], afterClear[0])).isFalse();
+
+        await port.dispose();
+        await repo.dispose();
+        await server.close();
+      },
+    );
+  });
 }
