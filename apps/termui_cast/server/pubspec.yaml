@@ -1,6 +1,6 @@
 name: termui_cast_server
 description: Stateless binary WebSocket relay server for TermUI PTY casting.
-version: 0.2.0
+version: 0.3.0
 publish_to: none
 resolution: workspace
 
@@ -13,7 +13,7 @@ dependencies:
   crypto: ^3.0.8
   path: ^1.9.1
   stream_channel: ^2.1.4
-  termui_cast_protocol: ^0.2.0
+  termui_cast_protocol: ^0.3.0
 
 dev_dependencies:
   checks: ^0.3.2

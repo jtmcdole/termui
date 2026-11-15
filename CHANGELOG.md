@@ -11,6 +11,63 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`fterm` - `v0.3.0`](#fterm---v030)
+ - [`termui_cast_client_core` - `v0.3.0`](#termui_cast_client_core---v030)
+ - [`termui_cast_protocol` - `v0.3.0`](#termui_cast_protocol---v030)
+ - [`termui_cast_server` - `v0.3.0`](#termui_cast_server---v030)
+ - [`termui_caster_cli` - `v0.3.0`](#termui_caster_cli---v030)
+
+Packages with other changes:
+
+ - There are no other changes in this release.
+
+---
+
+#### `fterm` - `v0.3.0`
+
+ - **FIX**(ci,docs): disable linux-arm64, switch to macos-latest, and fix Windows release packaging.
+ - **FIX**(fterm): download and await ConPTY sidecar on Windows shell launch.
+ - **FEAT**(ci,docs): add Melos fterm release prepare workflow and unsigned install docs.
+ - **FEAT**(fterm): import fterm desktop mux and WASM web client under apps/fterm.
+ - **BREAKING** **FEAT**(fterm): remediate security, performance, lifecycle, and UI defects.
+
+#### `termui_cast_client_core` - `v0.3.0`
+
+ - **FIX**(ci,test): stage ConPTY in Windows E2E tests and widen CLI subprocess startup timeouts.
+ - **FEAT**(termui_cast): import protocol, server, caster CLI, and client core under apps/.
+ - **BREAKING** **REFACTOR**(cast): remove in-app TLS plumbing and duplicate entrypoints.
+ - **BREAKING** **REFACTOR**(client_core): remove unused pure-TUI viewer stack.
+ - **BREAKING** **FIX**(cast): harden protocol, relay, caster, and client_core in Wave 1.
+
+#### `termui_cast_protocol` - `v0.3.0`
+
+ - **FIX**(ci,test): stage ConPTY in Windows E2E tests and widen CLI subprocess startup timeouts.
+ - **FEAT**(termui_cast): import protocol, server, caster CLI, and client core under apps/.
+ - **BREAKING** **REFACTOR**(cast): remove in-app TLS plumbing and duplicate entrypoints.
+ - **BREAKING** **FIX**(cast): harden protocol, relay, caster, and client_core in Wave 1.
+
+#### `termui_cast_server` - `v0.3.0`
+
+ - **FEAT**(termui_cast): import protocol, server, caster CLI, and client core under apps/.
+ - **BREAKING** **REFACTOR**(cast): remove in-app TLS plumbing and duplicate entrypoints.
+ - **BREAKING** **FIX**(cast): harden protocol, relay, caster, and client_core in Wave 1.
+
+#### `termui_caster_cli` - `v0.3.0`
+
+ - **FIX**(ci,test): stage ConPTY in Windows E2E tests and widen CLI subprocess startup timeouts.
+ - **FEAT**(termui_cast): import protocol, server, caster CLI, and client core under apps/.
+ - **BREAKING** **REFACTOR**(cast): remove in-app TLS plumbing and duplicate entrypoints.
+ - **BREAKING** **FIX**(cast): harden protocol, relay, caster, and client_core in Wave 1.
+
+
+## 2026-11-15
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`fterm` - `v0.2.0`](#fterm---v020)
  - [`termui_cast_client_core` - `v0.2.0`](#termui_cast_client_core---v020)
  - [`termui_cast_protocol` - `v0.2.0`](#termui_cast_protocol---v020)
