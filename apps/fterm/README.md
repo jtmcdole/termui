@@ -11,6 +11,43 @@ Flutter native desktop terminal multiplexer (`macos`, `linux`, `windows`) and We
 - **Audio & Web CSP**: Lazy first-gesture `FlutterAudioEngine` setup with stereo-panned `BEL` chimes, `ESC _ A` (`APC A`) tones/clips, and external `web/audio_unlock.js` (zero inline scripts).
 - **28px tab bar & 0px bottom bar**: Supports `top` (with `72px` macOS traffic-light inset and empty-strip window drag), `left`, `hidden`, and `autoHideSingle` modes, unread bell badges, and live vs user-pinned titles (`clearPin`).
 
+## Install from GitHub Releases
+
+Prebuilt desktop archives are published on [GitHub Releases](https://github.com/jtmcdole/termui/releases) without paid Apple Developer ID or Windows Authenticode code-signing certificates. Follow the platform steps below on first launch.
+
+### macOS (`fterm-macos-arm64.tar.gz`)
+
+macOS Gatekeeper quarantines unsigned archives downloaded in a browser and may report `fterm.app` as damaged. Clear the quarantine extended attribute after extracting, then open the app:
+
+```bash
+tar -xzf fterm-macos-arm64.tar.gz
+xattr -dr com.apple.quarantine fterm.app
+open fterm.app
+```
+
+You can move `fterm.app` into `/Applications` after clearing quarantine.
+
+### Windows (`fterm-windows-x64.zip`)
+
+Extract the full `.zip` archive to a folder so `conpty.dll`, `OpenConsole.exe`, `THIRD-PARTY-NOTICES.txt`, and `data/` stay next to `fterm.exe`:
+
+```powershell
+Expand-Archive -Path fterm-windows-x64.zip -DestinationPath .\fterm
+.\fterm\fterm.exe
+```
+
+If Windows Defender SmartScreen shows **"Windows protected your PC"** on first launch, select **More info** and then **Run anyway**. Downloading via `gh release download` or `curl.exe` avoids adding the browser Mark-of-the-Web stream.
+
+### Linux (`fterm-linux-x64.tar.gz`)
+
+Extract the bundle into its own directory so `lib/` and `data/` remain adjacent to the `fterm` binary:
+
+```bash
+mkdir -p fterm
+tar -xzf fterm-linux-x64.tar.gz -C fterm
+./fterm/fterm
+```
+
 ## Run in Chrome
 
 ```bash
@@ -73,3 +110,13 @@ flutter test
 flutter build web --wasm --no-web-resources-cdn
 flutter build macos
 ```
+
+## Releasing on GitHub
+
+Releases use a two-step GitHub Actions pipeline powered by Melos:
+
+1. If workspace libraries under `packages/` have unreleased changes that `fterm` depends on, run **[Prepare release](../../.github/workflows/release-prepare.yml)** first so Melos versions and tags those packages.
+2. Run **[Prepare fterm release](../../.github/workflows/release-fterm-prepare.yml)** (`Actions -> Prepare fterm release -> Run workflow`). Melos bumps `apps/fterm` and any modified `apps/termui_cast/*` packages from Conventional Commits, writes `CHANGELOG.md` entries, and opens (or updates) a `chore(fterm-release): release fterm vX.Y.Z` pull request against `main`.
+3. Review and merge that pull request into `main`. **[Release fterm](../../.github/workflows/release-fterm.yml)** starts automatically and builds the `macos-arm64`, `linux-x64`, `linux-arm64`, and `windows-x64` archives. It then tags `fterm-vX.Y.Z` (plus companion `termui_cast*-v*` baseline tags) and publishes the GitHub Release.
+
+You can also trigger **[Release fterm](../../.github/workflows/release-fterm.yml)** manually via `workflow_dispatch` to cut a draft release or override the version string.

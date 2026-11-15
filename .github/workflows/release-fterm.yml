@@ -1,11 +1,17 @@
 name: Release fterm
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/fterm/pubspec.yaml'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version without fterm-v prefix (e.g. 0.1.0)'
-        required: true
+        description: 'Optional version override without fterm-v prefix (defaults to apps/fterm/pubspec.yaml)'
+        required: false
+        default: ''
         type: string
       draft:
         description: 'Create GitHub release as a draft'
@@ -13,7 +19,7 @@ on:
         default: false
         type: boolean
       prerelease:
-        description: 'Mark GitHub release as a prerelease'
+        description: 'Mark GitHub release as a prerelease (auto-enabled for pre-release versions)'
         required: false
         default: false
         type: boolean
@@ -27,13 +33,32 @@ concurrency:
 jobs:
   preflight:
     name: Preflight release checks
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.head_commit.message, 'chore(fterm-release):')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      is_draft: ${{ steps.meta.outputs.is_draft }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
-      - name: Validate version and tag availability
+      - name: Checkout fterm pubspec
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            apps/fterm/pubspec.yaml
+
+      - name: Resolve version and validate tag availability
+        id: meta
         run: |
+          RELEASE_VERSION="${INPUT_VERSION}"
+          if [ -z "$RELEASE_VERSION" ]; then
+            RELEASE_VERSION="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#+]*\).*/\1/p' apps/fterm/pubspec.yaml | head -n 1)"
+          fi
           if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::error::Invalid version '$RELEASE_VERSION'. Expected semantic version like 0.1.0 or 0.1.0-rc.1."
             exit 1
@@ -43,8 +68,23 @@ jobs:
             echo "::error::Tag $TAG already exists."
             exit 1
           fi
+          IS_DRAFT="false"
+          if [ "$INPUT_DRAFT" = "true" ]; then
+            IS_DRAFT="true"
+          fi
+          IS_PRERELEASE="false"
+          if [ "$INPUT_PRERELEASE" = "true" ] || [[ "$RELEASE_VERSION" == *-* ]]; then
+            IS_PRERELEASE="true"
+          fi
+          {
+            printf 'version=%s\n' "$RELEASE_VERSION"
+            printf 'is_draft=%s\n' "$IS_DRAFT"
+            printf 'is_prerelease=%s\n' "$IS_PRERELEASE"
+          } >> "$GITHUB_OUTPUT"
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
@@ -133,7 +173,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           BUILD_DESKTOP: ${{ matrix.build_desktop }}
           DESKTOP_OS: ${{ runner.os == 'macOS' && 'macos' || 'linux' }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
 
       - name: Build and package Windows bundles
         if: runner.os == 'Windows'
@@ -231,7 +271,7 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
           BUILD_DESKTOP: ${{ matrix.build_desktop }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
 
       - name: Upload fterm desktop bundle artifact
         if: matrix.build_desktop
@@ -250,7 +290,7 @@ jobs:
 
   release:
     name: Tag and Publish fterm Release
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -280,6 +320,63 @@ jobs:
             echo "::error::Tag $TAG already exists."
             exit 1
           fi
+
+          extract_changelog() {
+            local file="$1"
+            local ver="$2"
+            if [ -f "$file" ]; then
+              awk -v ver="$ver" '
+                $0 == "## " ver { found = 1; next }
+                found && /^## / { exit }
+                found { print }
+              ' "$file"
+            fi
+          }
+
+          HAS_CHANGELOG="false"
+          : > changelog-section.md
+
+          FTERM_NOTES="$(extract_changelog apps/fterm/CHANGELOG.md "$RELEASE_VERSION")"
+          if [ -n "$FTERM_NOTES" ]; then
+            HAS_CHANGELOG="true"
+            printf '### `fterm` (`v%s`)\n%s\n\n' "$RELEASE_VERSION" "$FTERM_NOTES" >> changelog-section.md
+          fi
+
+          for pkg_dir in \
+            apps/termui_cast/protocol \
+            apps/termui_cast/server \
+            apps/termui_cast/caster_cli \
+            apps/termui_cast/client_core; do
+            pkg_name="$(sed -n 's/^name:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "${pkg_dir}/pubspec.yaml" | head -n 1)"
+            pkg_ver="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#+]*\).*/\1/p' "${pkg_dir}/pubspec.yaml" | head -n 1)"
+            pkg_tag="${pkg_name}-v${pkg_ver}"
+            if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${pkg_tag}" >/dev/null 2>&1; then
+              pkg_notes="$(extract_changelog "${pkg_dir}/CHANGELOG.md" "$pkg_ver")"
+              if [ -n "$pkg_notes" ]; then
+                HAS_CHANGELOG="true"
+                printf '### `%s` (`v%s`)\n%s\n\n' "$pkg_name" "$pkg_ver" "$pkg_notes" >> changelog-section.md
+              fi
+            fi
+          done
+
+          cat <<'EOF' > install-notes.md
+          ### Installing Prebuilt Archives (Unsigned Builds)
+
+          Release binaries are built on GitHub Actions without paid Apple Developer ID or Windows Authenticode certificates:
+
+          - **macOS (`fterm-macos-arm64.tar.gz`)**: Extract the archive and clear the browser quarantine attribute before first launch so Gatekeeper does not report `fterm.app` as damaged:
+            ```bash
+            tar -xzf fterm-macos-arm64.tar.gz
+            xattr -dr com.apple.quarantine fterm.app
+            open fterm.app
+            ```
+          - **Windows (`fterm-windows-x64.zip`)**: Extract the entire `.zip` folder (keeping `conpty.dll`, `OpenConsole.exe`, and `data/` next to `fterm.exe`), launch `fterm.exe`, and select **More info** -> **Run anyway** if Windows SmartScreen prompts on first launch.
+          - **Linux (`fterm-linux-x64.tar.gz`)**:
+            ```bash
+            mkdir -p fterm && tar -xzf fterm-linux-x64.tar.gz -C fterm && ./fterm/fterm
+            ```
+          EOF
+
           FLAGS=()
           if [ "$IS_DRAFT" = "true" ]; then
             FLAGS+=(--draft)
@@ -287,10 +384,48 @@ jobs:
           if [ "$IS_PRERELEASE" = "true" ]; then
             FLAGS+=(--prerelease)
           fi
-          gh release create "$TAG" dist/* --target "$TARGET_SHA" --title "$TAG" --generate-notes "${FLAGS[@]}"
+
+          if [ "$HAS_CHANGELOG" = "true" ]; then
+            {
+              printf '## Changes\n\n'
+              cat changelog-section.md
+              cat install-notes.md
+            } > release-notes.md
+            gh release create "$TAG" dist/* \
+              --target "$TARGET_SHA" \
+              --title "$TAG" \
+              --notes-file release-notes.md \
+              "${FLAGS[@]}"
+          else
+            gh release create "$TAG" dist/* \
+              --target "$TARGET_SHA" \
+              --title "$TAG" \
+              --generate-notes \
+              --notes "$(cat install-notes.md)" \
+              "${FLAGS[@]}"
+          fi
+          rm -f changelog-section.md install-notes.md release-notes.md
+
+          # Record companion Melos baseline tags for termui_cast packages when publishing a non-draft release.
+          if [ "$IS_DRAFT" != "true" ]; then
+            for pkg_dir in \
+              apps/termui_cast/protocol \
+              apps/termui_cast/server \
+              apps/termui_cast/caster_cli \
+              apps/termui_cast/client_core; do
+              pkg_name="$(sed -n 's/^name:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "${pkg_dir}/pubspec.yaml" | head -n 1)"
+              pkg_ver="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#+]*\).*/\1/p' "${pkg_dir}/pubspec.yaml" | head -n 1)"
+              pkg_tag="${pkg_name}-v${pkg_ver}"
+              if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${pkg_tag}" >/dev/null 2>&1; then
+                gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+                  -f ref="refs/tags/${pkg_tag}" \
+                  -f sha="$TARGET_SHA" >/dev/null
+              fi
+            done
+          fi
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          IS_DRAFT: ${{ inputs.draft }}
-          IS_PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          IS_DRAFT: ${{ needs.preflight.outputs.is_draft }}
+          IS_PRERELEASE: ${{ needs.preflight.outputs.is_prerelease }}
           TARGET_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

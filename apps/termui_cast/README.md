@@ -177,14 +177,19 @@ dart build cli -t apps/termui_cast/caster_cli/bin/termui_cast.dart -o build/cast
 
 This produces a self-contained directory bundle at `build/caster/bundle/` containing `bin/termui_cast` and `lib/libpty2_unix.{dylib,so}`. Keep `bin/` and `lib/` together in the same parent directory when distributing or installing the caster so `@rpath` resolves the native PTY library at runtime. On Windows, `termui_cast.exe` uses `conpty.dll` and `OpenConsole.exe` from the executable directory, `PTY2_CONPTY_DIR`, or the SHA-256-verified cache when `--download-conpty` (`$TERMUI_CAST_DOWNLOAD_CONPTY`) is enabled.
 
-Prebuilt `fterm` desktop apps and `termui_cast` CLI/server archives are built via the manual [`.github/workflows/release-fterm.yml`](../../.github/workflows/release-fterm.yml) workflow (`workflow_dispatch`).
+Prebuilt `fterm` desktop apps and `termui_cast` CLI/server archives are published through a two-step Melos release pipeline:
+
+1. Run [`.github/workflows/release-fterm-prepare.yml`](../../.github/workflows/release-fterm-prepare.yml) (**Prepare fterm release**) to bump versions and generate `CHANGELOG.md` files across `apps/fterm` and `apps/termui_cast/*`, opening a `chore(fterm-release): ...` pull request. (If workspace dependencies under `packages/` also have pending changes, run **Prepare release** first.)
+2. Merge that pull request into `main` to start [`.github/workflows/release-fterm.yml`](../../.github/workflows/release-fterm.yml) (**Release fterm**), which builds all platform archives, tags `fterm-v<version>`, and publishes the GitHub Release.
+
+Release binaries are unsigned. On macOS, run `xattr -dr com.apple.quarantine` on the extracted `fterm.app` or `termui_cast` directory before starting it. On Windows, keep `conpty.dll` and `OpenConsole.exe` next to `termui_cast.exe` (inside `bin/`) or `fterm.exe`, and choose **More info -> Run anyway** if SmartScreen prompts on first run.
 
 ### Relay Server (`termui_cast_server`) via `dart compile exe`
 
 `termui_cast_server` has no native FFI hooks and compiles to a single standalone executable:
 
 ```bash
-dart compile exe apps/termui_cast/server/bin/server.dart -o build/termui_cast_server
+dart compile exe apps/termui_cast/server/bin/termui_cast_server.dart -o build/termui_cast_server
 ```
 
 ## Cloud Run + Identity-Aware Proxy Setup

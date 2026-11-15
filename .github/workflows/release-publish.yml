@@ -4,11 +4,12 @@ on:
     tags:  
       - '*-v*'  
       - '!fterm-v*'
+      - '!termui_cast*-v*'
   workflow_dispatch:
 jobs:
   publish-packages:
     name: Publish packages
-    if: ${{ !startsWith(github.ref, 'refs/tags/fterm-v') }}
+    if: ${{ !startsWith(github.ref, 'refs/tags/fterm-v') && !startsWith(github.ref, 'refs/tags/termui_cast') }}
     permissions:
       contents: write
       id-token: write # Required for authentication using OIDC
