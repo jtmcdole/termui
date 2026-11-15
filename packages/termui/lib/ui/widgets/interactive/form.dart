@@ -1,5 +1,52 @@
+import 'dart:async';
+
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
+import 'package:termui/ui/event.dart' as ev;
+
+bool _isEnterKeyEvent(term.KeyEvent event) =>
+    event.type == .enter || event.baseKey == term.TermKey.enter;
+
+final class _FormFieldTapTarget extends Widget {
+  final VoidCallback onTapPress;
+  final Widget child;
+
+  const _FormFieldTapTarget({
+    super.key,
+    required this.onTapPress,
+    required this.child,
+  });
+
+  @override
+  Element createElement() => _FormFieldTapTargetElement(this);
+}
+
+final class _FormFieldTapTargetElement extends SingleChildElement
+    implements ev.MouseEventConsumer {
+  _FormFieldTapTargetElement(_FormFieldTapTarget super.widget);
+
+  @override
+  Widget? get childWidget => (widget as _FormFieldTapTarget).child;
+
+  @override
+  Size performLayout(BoxConstraints constraints) {
+    final childSize = childElement?.layout(constraints) ?? Size.zero;
+    return constraints.constrain(childSize);
+  }
+
+  @override
+  bool handleMouseEvent(term.MouseEvent event, int localX, int localY) {
+    if (event.type != .press || event.button != .left) return false;
+    if (localX < 0 ||
+        localX >= size.width ||
+        localY < 0 ||
+        localY >= size.height) {
+      return false;
+    }
+    (widget as _FormFieldTapTarget).onTapPress();
+    return true;
+  }
+}
 
 /// Ancestor provider to expose form state to field elements.
 class FormScope extends InheritedWidget {
@@ -53,6 +100,9 @@ abstract class FormField<T> extends StatefulWidget
   /// Returns an error message string if invalid, or `null` if valid.
   final String? Function(T?)? validator;
 
+  /// Optional external [FocusNode] for this field.
+  final FocusNode? focusNode;
+
   /// The current value of the form field.
   T? value;
 
@@ -69,23 +119,27 @@ abstract class FormField<T> extends StatefulWidget
   bool get focused => _focused;
 
   set focused(bool val) {
-    if (_focused && !val) {
-      if (touched) {
-        validate();
-      }
+    final wasFocused = _focused;
+    if (wasFocused && !val && touched) {
+      validate();
     }
     _focused = val;
     if (val) {
       touched = true;
     }
+    if (wasFocused != val) {
+      _state?._syncFromImperativeFocus(val);
+    }
   }
 
   /// Creates a [FormField] with common properties.
   FormField({
+    super.key,
     required this.label,
     this.description = '',
     this.initialValue,
     this.validator,
+    this.focusNode,
     bool focused = false,
   }) : value = initialValue,
        _focused = focused;
@@ -99,11 +153,7 @@ abstract class FormField<T> extends StatefulWidget
     if (_state != null) {
       return _state!.validate();
     }
-    if (validator != null) {
-      errorText = validator!(value);
-    } else {
-      errorText = null;
-    }
+    errorText = validator?.call(value);
     return errorText == null;
   }
 
@@ -123,6 +173,20 @@ abstract class FormField<T> extends StatefulWidget
 /// [FormField] with its parent [Form]. It hooks into [didChangeDependencies] and
 /// [dispose] to coordinate dynamic inherited widget bindings with [FormScope].
 abstract class FormFieldState<T> extends State<FormField<T>> {
+  late FocusNode _focusNode;
+  FormState? _registeredForm;
+  bool _needsInitialFocusSync = false;
+  bool _syncingFocusCallback = false;
+
+  /// The [FocusNode] owned or managed by this field state.
+  FocusNode get focusNode => _focusNode;
+
+  /// Whether a child widget (such as [TextField]) hosts the [Focus] widget.
+  bool get delegatesFocusToChild => false;
+
+  /// Whether this field consumes `Enter` inside a [Form] instead of advancing.
+  bool get consumesEnterInForm => false;
+
   /// Retrieves the current value of the form field.
   T? get value => widget.value;
 
@@ -137,23 +201,86 @@ abstract class FormFieldState<T> extends State<FormField<T>> {
   /// Updates widget.errorText, notifies listeners of state updates via [setState], and returns
   /// whether the field is currently valid.
   bool validate() {
-    setState(() {
-      if (widget.validator != null) {
-        widget.errorText = widget.validator!(widget.value);
-      } else {
-        widget.errorText = null;
-      }
-    });
+    final nextError = widget.validator?.call(widget.value);
+    if (mounted) {
+      setState(() {
+        widget.errorText = nextError;
+      });
+    } else {
+      widget.errorText = nextError;
+    }
     return widget.errorText == null;
   }
 
   /// Resets the form field to its [FormField.initialValue] and clears any active errors.
   void reset() {
+    if (!mounted) {
+      widget.value = widget.initialValue;
+      widget.errorText = null;
+      widget.touched = false;
+      return;
+    }
     setState(() {
       widget.value = widget.initialValue;
       widget.errorText = null;
       widget.touched = false;
     });
+  }
+
+  /// Synchronizes [FormField.focused], rebuilds, and notifies the parent [Form].
+  void handleFocusChange(bool hasFocus) {
+    final changed = widget._focused != hasFocus;
+    _syncingFocusCallback = true;
+    try {
+      widget.focused = hasFocus;
+    } finally {
+      _syncingFocusCallback = false;
+    }
+    if (mounted && changed) {
+      setState(() {});
+    }
+    if (mounted) {
+      _registeredForm?._onFieldFocusChanged(this, hasFocus);
+    }
+  }
+
+  /// Handles keys not consumed by the field control (such as `Enter`, `Up`, `Down`).
+  bool handleUnhandledKeyEvent(term.KeyEvent event) {
+    final form = _registeredForm;
+    if (form == null) return false;
+    if (_isEnterKeyEvent(event) && !consumesEnterInForm) {
+      return form._handleFieldEnter(this);
+    }
+    if (event.type == .up) return form._moveRelativeFrom(this, -1);
+    if (event.type == .down) return form._moveRelativeFrom(this, 1);
+    return false;
+  }
+
+  /// Key callback wired to [Focus] for non-text form fields.
+  bool handleFocusKeyEvent(term.KeyEvent event) {
+    final form = _registeredForm;
+    if (form != null && _isEnterKeyEvent(event) && !consumesEnterInForm) {
+      return form._handleFieldEnter(this);
+    }
+    if (widget.handleKeyEvent(event)) return true;
+    return handleUnhandledKeyEvent(event);
+  }
+
+  void _syncFromImperativeFocus(bool val) {
+    if (_syncingFocusCallback) return;
+    if (val) {
+      final scope = _focusNode.parent;
+      if (scope != null && scope.hasFocus) {
+        _focusNode.requestFocus();
+      } else if (scope is FocusScopeNode) {
+        scope.setInitialFocusChild(_focusNode);
+      }
+    } else if (_focusNode.hasFocus) {
+      _focusNode.unfocus();
+    }
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -163,31 +290,82 @@ abstract class FormFieldState<T> extends State<FormField<T>> {
       widget.value = widget.initialValue;
     }
     widget._state = this;
+    _focusNode =
+        widget.focusNode ?? FocusNode(id: 'form_field_${widget.hashCode}');
+    _needsInitialFocusSync = widget.focused;
   }
 
   @override
   void didUpdateWidget(covariant FormField<T> oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget, widget) && oldWidget._state == this) {
+      oldWidget._state = null;
+    }
     widget._state = this;
-    widget.value = oldWidget.value;
-    widget.errorText = oldWidget.errorText;
-    widget.touched = oldWidget.touched;
-    widget.focused = oldWidget.focused;
+    if (widget.focusNode != oldWidget.focusNode) {
+      if (oldWidget.focusNode == null) {
+        _focusNode.dispose();
+      }
+      _focusNode =
+          widget.focusNode ?? FocusNode(id: 'form_field_${widget.hashCode}');
+    }
+    if (!identical(oldWidget, widget)) {
+      widget.value = oldWidget.value;
+      widget.errorText = oldWidget.errorText;
+      widget.touched = oldWidget.touched;
+      widget._focused = oldWidget._focused;
+    }
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    Form.of(context)?.registerField(this);
+    final nextForm = Form.of(context);
+    if (_registeredForm != nextForm) {
+      _registeredForm?.unregisterField(this);
+      _registeredForm = nextForm;
+      _registeredForm?.registerField(this);
+    }
+    if (_needsInitialFocusSync &&
+        !delegatesFocusToChild &&
+        Zone.current[#isMeasuringIntrinsics] != true) {
+      _needsInitialFocusSync = false;
+      _focusNode.seedInitialFocus(
+        Focus.of(context),
+        isMounted: () => mounted,
+        onDeferredUnfocus: () => handleFocusChange(false),
+      );
+    }
   }
 
   @override
   void dispose() {
-    Form.of(context)?.unregisterField(this);
+    _registeredForm?.unregisterField(this);
+    _registeredForm = null;
     if (widget._state == this) {
       widget._state = null;
     }
+    if (widget.focusNode == null) {
+      _focusNode.dispose();
+    }
     super.dispose();
+  }
+
+  /// Wraps non-text field [content] in a [Focus] and tap target, or wraps
+  /// text-field [content] in a tap target alone.
+  Widget wrapInteractiveField(Widget content) {
+    final focusableChild = delegatesFocusToChild
+        ? content
+        : Focus(
+            focusNode: _focusNode,
+            onFocusChange: handleFocusChange,
+            onKeyEvent: handleFocusKeyEvent,
+            child: content,
+          );
+    return _FormFieldTapTarget(
+      onTapPress: _focusNode.requestFocus,
+      child: focusableChild,
+    );
   }
 }
 
@@ -218,7 +396,7 @@ class Form extends StatefulWidget implements Focusable {
   @override
   bool get focused {
     if (_state != null) {
-      return _state!._fields.any((fs) => fs.widget.focused);
+      return _state!._hasFocusedField;
     }
     return fields.any((f) => f.focused);
   }
@@ -228,6 +406,9 @@ class Form extends StatefulWidget implements Focusable {
 
   /// A flat list of form fields. Used in Legacy Mode.
   final List<FormField<Object?>> fields;
+
+  /// Optional callback invoked when `Enter` is pressed on the final field.
+  final VoidCallback? onSubmit;
 
   FormState? _state;
 
@@ -248,19 +429,15 @@ class Form extends StatefulWidget implements Focusable {
       return;
     }
     _activeFieldIndex = val;
-    if (fields.isNotEmpty) {
-      for (var i = 0; i < fields.length; i++) {
-        fields[i].focused = (i == val);
-      }
+    for (var i = 0; i < fields.length; i++) {
+      fields[i].focused = (i == val);
     }
   }
 
   /// Creates a [Form] to group multiple input fields.
-  Form({this.child, this.fields = const []}) {
-    if (fields.isNotEmpty) {
-      for (var i = 0; i < fields.length; i++) {
-        fields[i]._focused = (i == 0);
-      }
+  Form({super.key, this.child, this.fields = const [], this.onSubmit}) {
+    for (var i = 0; i < fields.length; i++) {
+      fields[i]._focused = (i == 0);
     }
   }
 
@@ -285,40 +462,45 @@ class Form extends StatefulWidget implements Focusable {
       return;
     }
     if (fields.isEmpty) return;
-
     if (event.logicalKey == term.TermKey.tab) {
-      fields[activeFieldIndex].focused = false;
-      activeFieldIndex = (activeFieldIndex + 1) % fields.length;
-      fields[activeFieldIndex].focused = true;
+      _stepHeadlessFocus(1);
     } else if (event.logicalKey == term.TermKey.shiftTab) {
-      fields[activeFieldIndex].focused = false;
-      activeFieldIndex = (activeFieldIndex - 1 + fields.length) % fields.length;
-      fields[activeFieldIndex].focused = true;
-    } else if (event.type == KeyType.enter ||
-        event.baseKey == term.TermKey.enter) {
-      final currentField = fields[activeFieldIndex];
-      currentField.validate();
-      if (currentField is! TextAreaFormField) {
-        currentField.focused = false;
-        activeFieldIndex = (activeFieldIndex + 1) % fields.length;
-        fields[activeFieldIndex].focused = true;
-      } else {
-        currentField.handleKeyEvent(event);
-      }
+      _stepHeadlessFocus(-1);
+    } else if (_isEnterKeyEvent(event)) {
+      _handleHeadlessEnter(event);
+    } else if (!fields[activeFieldIndex].handleKeyEvent(event)) {
+      _handleHeadlessArrow(event);
+    }
+  }
+
+  void _stepHeadlessFocus(int delta) {
+    final len = fields.length;
+    final current = activeFieldIndex;
+    fields[current].focused = false;
+    activeFieldIndex = ((current + delta) % len + len) % len;
+  }
+
+  void _handleHeadlessEnter(KeyEvent event) {
+    final currentIdx = activeFieldIndex;
+    final currentField = fields[currentIdx];
+    currentField.validate();
+    if (currentField is TextAreaFormField) {
+      currentField.handleKeyEvent(event);
+      return;
+    }
+    if (currentIdx < fields.length - 1) {
+      currentField.focused = false;
+      activeFieldIndex = currentIdx + 1;
     } else {
-      final handled = fields[activeFieldIndex].handleKeyEvent(event);
-      if (!handled) {
-        if (event.type == KeyType.up) {
-          fields[activeFieldIndex].focused = false;
-          activeFieldIndex =
-              (activeFieldIndex - 1 + fields.length) % fields.length;
-          fields[activeFieldIndex].focused = true;
-        } else if (event.type == KeyType.down) {
-          fields[activeFieldIndex].focused = false;
-          activeFieldIndex = (activeFieldIndex + 1) % fields.length;
-          fields[activeFieldIndex].focused = true;
-        }
-      }
+      onSubmit?.call();
+    }
+  }
+
+  void _handleHeadlessArrow(KeyEvent event) {
+    if (event.type == .up) {
+      _stepHeadlessFocus(-1);
+    } else if (event.type == .down) {
+      _stepHeadlessFocus(1);
     }
   }
 
@@ -334,199 +516,268 @@ class Form extends StatefulWidget implements Focusable {
 
 /// The mutable state of a [Form].
 class FormState extends State<Form> implements KeyEventHandler {
-  final Set<FormFieldState<Object?>> _fields = {};
+  final Set<FormFieldState<Object?>> _fieldSet = {};
+  List<FormFieldState<Object?>> _orderedFields = [];
+  bool _fieldsOrderDirty = false;
+  bool _orderSyncScheduled = false;
 
   /// Retrieves the list of currently registered form field states.
-  Iterable<FormFieldState<Object?>> get fields => _fields;
+  Iterable<FormFieldState<Object?>> get fields {
+    _ensureFieldOrder();
+    return _orderedFields;
+  }
+
+  List<FormField<Object?>> get _activeFields => widget.fields.isNotEmpty
+      ? widget.fields
+      : [for (final fs in _orderedFields) fs.widget];
+
+  bool get _hasFocusedField => _activeFields.any((f) => f.focused);
 
   /// Registers a [FormFieldState] dynamically with this form.
   void registerField(FormFieldState<Object?> field) {
-    _fields.add(field);
+    if (_fieldSet.add(field)) {
+      _orderedFields.add(field);
+      _markFieldOrderDirty();
+    }
   }
 
   /// Unregisters a [FormFieldState] from this form.
   void unregisterField(FormFieldState<Object?> field) {
-    _fields.remove(field);
+    if (_fieldSet.remove(field)) {
+      _orderedFields.remove(field);
+      _markFieldOrderDirty();
+    }
+  }
+
+  void _markFieldOrderDirty() {
+    _fieldsOrderDirty = true;
+    if (_orderSyncScheduled) return;
+    _orderSyncScheduled = true;
+    scheduleMicrotask(() {
+      _orderSyncScheduled = false;
+      if (mounted) _ensureFieldOrder();
+    });
+  }
+
+  void _ensureFieldOrder() {
+    if (!_fieldsOrderDirty || !mounted) return;
+    _fieldsOrderDirty = false;
+    _orderedFields = widget.fields.isNotEmpty
+        ? _collectLegacyFields()
+        : _collectDeclarativeFields();
+    _syncScopeChildOrder();
+  }
+
+  List<FormFieldState<Object?>> _collectLegacyFields() => [
+    for (final f in widget.fields)
+      if (f._state != null && _fieldSet.contains(f._state)) f._state!,
+  ];
+
+  List<FormFieldState<Object?>> _collectDeclarativeFields() {
+    final collected = <FormFieldState<Object?>>[];
+    _collectFieldStates(context as Element, _fieldSet, collected);
+    if (collected.length == _fieldSet.length) return collected;
+    _fieldsOrderDirty = true;
+    return [
+      ...collected,
+      for (final fs in _orderedFields)
+        if (!collected.contains(fs) && _fieldSet.contains(fs)) fs,
+    ];
+  }
+
+  void _syncScopeChildOrder() {
+    if (_orderedFields.length <= 1) return;
+    final nodes = [for (final fs in _orderedFields) fs.focusNode];
+    if (nodes.first.parent case final FocusScopeNode scope) {
+      scope.syncChildOrder(nodes);
+    }
+  }
+
+  static void _collectFieldStates(
+    Element element,
+    Set<FormFieldState<Object?>> known,
+    List<FormFieldState<Object?>> out,
+  ) {
+    if (element case StatefulElement(state: final FormFieldState<Object?> fs)) {
+      if (known.contains(fs)) {
+        out.add(fs);
+      }
+    }
+    element.visitChildren((child) => _collectFieldStates(child, known, out));
+  }
+
+  void _onFieldFocusChanged(FormFieldState<Object?> field, bool hasFocus) {
+    _ensureFieldOrder();
+    if (hasFocus) {
+      final idx = _indexOfState(field);
+      if (idx != -1) widget._activeFieldIndex = idx;
+    }
+    if (mounted && widget.fields.isNotEmpty) {
+      setState(() {});
+    }
+  }
+
+  int _indexOfState(FormFieldState<Object?> field) =>
+      _activeFields.indexOf(field.widget);
+
+  bool _handleFieldEnter(FormFieldState<Object?> fieldState) {
+    _ensureFieldOrder();
+    fieldState.validate();
+    final count = _activeFields.length;
+    final idx = _indexOfState(fieldState);
+    if (idx == -1 || count == 0) return false;
+    if (idx < count - 1) {
+      _selectFieldIndex(idx + 1);
+      return true;
+    }
+    if (widget.onSubmit != null) {
+      widget.onSubmit!();
+      return true;
+    }
+    return false;
+  }
+
+  bool _moveRelativeFrom(FormFieldState<Object?> fieldState, int delta) {
+    _ensureFieldOrder();
+    final count = _activeFields.length;
+    final idx = _indexOfState(fieldState);
+    if (idx == -1 || count == 0) return false;
+    _selectFieldIndex(((idx + delta) % count + count) % count);
+    return true;
   }
 
   /// Validates all fields registered in this form.
   bool validate() {
+    _ensureFieldOrder();
     var isValid = true;
-    for (final field in widget.fields) {
-      if (!field.validate()) {
-        isValid = false;
-      }
-    }
-    for (final fieldState in _fields) {
-      if (!fieldState.validate()) {
-        isValid = false;
-      }
+    for (final field in _activeFields) {
+      if (!field.validate()) isValid = false;
     }
     return isValid;
   }
 
   /// Resets all fields to their initial values.
   void reset() {
-    for (final field in widget.fields) {
-      field.value = field.initialValue;
-      field.errorText = null;
-      field.touched = false;
-    }
-    for (final fieldState in _fields) {
-      fieldState.reset();
+    _ensureFieldOrder();
+    for (final field in _activeFields) {
+      if (field._state != null) {
+        field._state!.reset();
+      } else {
+        field.value = field.initialValue;
+        field.errorText = null;
+        field.touched = false;
+      }
     }
   }
 
   /// The index of the currently active form field.
   int get activeFieldIndex {
-    if (widget.fields.isNotEmpty) {
-      final idx = widget.fields.indexWhere((f) => f.focused);
-      return idx != -1 ? idx : 0;
-    }
-    final list = _fields.toList();
-    if (list.isNotEmpty) {
-      final idx = list.indexWhere((fs) => fs.widget.focused);
-      return idx != -1 ? idx : 0;
-    }
-    return 0;
+    _ensureFieldOrder();
+    final list = _activeFields;
+    final focusedIdx = list.indexWhere((f) => f.focused);
+    if (focusedIdx != -1) return focusedIdx;
+    return list.isEmpty
+        ? 0
+        : widget._activeFieldIndex.clamp(0, list.length - 1);
   }
 
   set activeFieldIndex(int val) {
+    _ensureFieldOrder();
+    _selectFieldIndex(val);
+  }
+
+  void _selectFieldIndex(int rawIndex) {
+    final list = _activeFields;
+    if (list.isEmpty) return;
+    final clamped = rawIndex.clamp(0, list.length - 1);
+    widget._activeFieldIndex = clamped;
+    final targetState = list[clamped]._state;
     setState(() {
-      if (widget.fields.isNotEmpty) {
-        for (var i = 0; i < widget.fields.length; i++) {
-          widget.fields[i].focused = (i == val);
-        }
-        return;
+      for (var i = 0; i < list.length; i++) {
+        if (i != clamped) list[i].focused = false;
       }
-      final list = _fields.toList();
-      if (list.isNotEmpty) {
-        for (var i = 0; i < list.length; i++) {
-          list[i].widget.focused = (i == val);
-        }
-        return;
-      }
+      list[clamped].focused = true;
     });
+    if (targetState == null) return;
+    final scope = targetState.focusNode.parent;
+    if (scope != null && scope.hasFocus) {
+      targetState.focusNode.requestFocus();
+    } else if (scope is FocusScopeNode) {
+      scope.setInitialFocusChild(targetState.focusNode);
+    }
   }
 
   /// Routes a key event to the focused field, handling tab navigation.
   @override
   bool handleKeyEvent(term.KeyEvent event) {
-    if (widget.fields.isNotEmpty) {
-      final list = widget.fields;
-      var activeIdx = list.indexWhere((f) => f.focused);
-      if (activeIdx == -1) activeIdx = 0;
-
-      if (event.logicalKey == term.TermKey.tab) {
-        setState(() {
-          list[activeIdx].focused = false;
-          activeIdx = (activeIdx + 1) % list.length;
-          list[activeIdx].focused = true;
-        });
-        return true;
-      } else if (event.logicalKey == term.TermKey.shiftTab) {
-        setState(() {
-          list[activeIdx].focused = false;
-          activeIdx = (activeIdx - 1 + list.length) % list.length;
-          list[activeIdx].focused = true;
-        });
-        return true;
-      } else if (event.type == KeyType.enter ||
-          event.baseKey == term.TermKey.enter) {
-        final currentField = list[activeIdx];
-        currentField.validate();
-        if (currentField is! TextAreaFormField) {
-          setState(() {
-            currentField.focused = false;
-            activeIdx = (activeIdx + 1) % list.length;
-            list[activeIdx].focused = true;
-          });
-        } else {
-          currentField.handleKeyEvent(event);
-          currentField._state?.setState(() {});
-        }
-        return true;
-      } else {
-        final handled = list[activeIdx].handleKeyEvent(event);
-        list[activeIdx]._state?.setState(() {});
-        if (!handled) {
-          if (event.type == KeyType.up) {
-            setState(() {
-              list[activeIdx].focused = false;
-              activeIdx = (activeIdx - 1 + list.length) % list.length;
-              list[activeIdx].focused = true;
-            });
-            return true;
-          } else if (event.type == KeyType.down) {
-            setState(() {
-              list[activeIdx].focused = false;
-              activeIdx = (activeIdx + 1) % list.length;
-              list[activeIdx].focused = true;
-            });
-            return true;
-          }
-        }
-        return handled;
-      }
-    }
-
-    if (_fields.isEmpty) return false;
-
-    final list = _fields.toList();
-    var activeIdx = list.indexWhere((fs) => fs.widget.focused);
-    if (activeIdx == -1) activeIdx = 0;
-
+    _ensureFieldOrder();
+    final list = _activeFields;
+    final count = list.length;
+    if (count == 0) return false;
+    final activeIdx = activeFieldIndex;
     if (event.logicalKey == term.TermKey.tab) {
-      setState(() {
-        list[activeIdx].widget.focused = false;
-        activeIdx = (activeIdx + 1) % list.length;
-        list[activeIdx].widget.focused = true;
-      });
+      _selectFieldIndex((activeIdx + 1) % count);
       return true;
-    } else if (event.logicalKey == term.TermKey.shiftTab) {
-      setState(() {
-        list[activeIdx].widget.focused = false;
-        activeIdx = (activeIdx - 1 + list.length) % list.length;
-        list[activeIdx].widget.focused = true;
-      });
-      return true;
-    } else if (event.type == KeyType.enter ||
-        event.baseKey == term.TermKey.enter) {
-      final currentField = list[activeIdx].widget;
-      currentField.validate();
-      if (currentField is! TextAreaFormField) {
-        setState(() {
-          currentField.focused = false;
-          activeIdx = (activeIdx + 1) % list.length;
-          list[activeIdx].widget.focused = true;
-        });
-      } else {
-        currentField.handleKeyEvent(event);
-        list[activeIdx].setState(() {});
-      }
-      return true;
-    } else {
-      final handled = list[activeIdx].widget.handleKeyEvent(event);
-      list[activeIdx].setState(() {});
-      if (!handled) {
-        if (event.type == KeyType.up) {
-          setState(() {
-            list[activeIdx].widget.focused = false;
-            activeIdx = (activeIdx - 1 + list.length) % list.length;
-            list[activeIdx].widget.focused = true;
-          });
-          return true;
-        } else if (event.type == KeyType.down) {
-          setState(() {
-            list[activeIdx].widget.focused = false;
-            activeIdx = (activeIdx + 1) % list.length;
-            list[activeIdx].widget.focused = true;
-          });
-          return true;
-        }
-      }
-      return handled;
     }
+    if (event.logicalKey == term.TermKey.shiftTab) {
+      _selectFieldIndex((activeIdx - 1 + count) % count);
+      return true;
+    }
+    if (_isEnterKeyEvent(event)) {
+      return _dispatchImperativeEnter(list[activeIdx], activeIdx, count, event);
+    }
+    return _dispatchImperativeFieldKey(
+      list[activeIdx],
+      activeIdx,
+      count,
+      event,
+    );
+  }
+
+  bool _dispatchImperativeEnter(
+    FormField<Object?> currentField,
+    int activeIdx,
+    int count,
+    term.KeyEvent event,
+  ) {
+    currentField.validate();
+    if (currentField is TextAreaFormField) {
+      currentField.handleKeyEvent(event);
+      currentField._state?.setState(() {});
+      return true;
+    }
+    if (activeIdx < count - 1) {
+      _selectFieldIndex(activeIdx + 1);
+      return true;
+    }
+    if (widget.onSubmit != null) {
+      widget.onSubmit!();
+      return true;
+    }
+    return false;
+  }
+
+  bool _dispatchImperativeFieldKey(
+    FormField<Object?> currentField,
+    int activeIdx,
+    int count,
+    term.KeyEvent event,
+  ) {
+    final handled = currentField.handleKeyEvent(event);
+    final currentState = currentField._state;
+    if (currentState != null && currentState.mounted) {
+      currentState.setState(() {});
+    }
+    if (handled) return true;
+    if (event.type == .up) {
+      _selectFieldIndex((activeIdx - 1 + count) % count);
+      return true;
+    }
+    if (event.type == .down) {
+      _selectFieldIndex((activeIdx + 1) % count);
+      return true;
+    }
+    return false;
   }
 
   @override
@@ -538,8 +789,14 @@ class FormState extends State<Form> implements KeyEventHandler {
   @override
   void didUpdateWidget(covariant Form oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget, widget) && oldWidget._state == this) {
+      oldWidget._state = null;
+    }
     widget._state = this;
-    widget._activeFieldIndex = oldWidget._activeFieldIndex;
+    if (identical(oldWidget, widget)) {
+      widget._activeFieldIndex = oldWidget._activeFieldIndex;
+    }
+    _markFieldOrderDirty();
   }
 
   @override
@@ -569,9 +826,18 @@ class FormState extends State<Form> implements KeyEventHandler {
           borderHeight: (height - 1).clamp(0, height),
           child: field,
         );
-        items.add(SizedBox(height: height, child: wrappedField));
+        items.add(
+          _FormFieldTapTarget(
+            key: ValueKey<Object>(field),
+            onTapPress: () => field._state?.focusNode.requestFocus(),
+            child: SizedBox(height: height, child: wrappedField),
+          ),
+        );
       }
-      childWidget = Column(items);
+      childWidget = Column(
+        key: ValueKey<int>(Object.hashAll(widget.fields)),
+        items,
+      );
     }
 
     return FormScope(formState: this, child: childWidget);
@@ -602,10 +868,12 @@ class TextFormField extends FormField<String> {
 
   /// Creates a [TextFormField] for single-line text input.
   TextFormField({
+    super.key,
     required super.label,
     super.description = '',
     super.initialValue,
     super.validator,
+    super.focusNode,
     super.focused = false,
     Style style = Style.empty,
     Style cursorStyle = const Style(modifiers: Modifier.underline),
@@ -634,7 +902,7 @@ class TextFormField extends FormField<String> {
   bool handleKeyEvent(term.KeyEvent event) {
     final handled = _input.handleKeyEvent(event);
     value = _input.value;
-    if (_state != null) {
+    if (_state != null && _state!.mounted) {
       _state!.setState(() {});
     }
     return handled;
@@ -646,6 +914,9 @@ class TextFormField extends FormField<String> {
 
 class _TextFormFieldState extends FormFieldState<String>
     implements KeyEventHandler {
+  @override
+  bool get delegatesFocusToChild => true;
+
   @override
   void initState() {
     super.initState();
@@ -664,9 +935,14 @@ class _TextFormFieldState extends FormFieldState<String>
 
   @override
   void didUpdateWidget(covariant TextFormField oldWidget) {
+    final nextWidget = widget as TextFormField;
+    if (!identical(oldWidget, nextWidget)) {
+      nextWidget._input.controller.value = oldWidget._input.controller.value;
+      nextWidget._input.scrollOffset = oldWidget._input.scrollOffset;
+    }
     super.didUpdateWidget(oldWidget);
     final oldController = oldWidget._input.controller;
-    final newController = (widget as TextFormField)._input.controller;
+    final newController = nextWidget._input.controller;
     if (newController != oldController) {
       oldController.removeListener(_onControllerChanged);
       newController.addListener(_onControllerChanged);
@@ -676,16 +952,10 @@ class _TextFormFieldState extends FormFieldState<String>
   void _onControllerChanged() {
     final newValue = (widget as TextFormField)._input.value;
     widget.value = newValue;
-    if (widget.validator != null) {
-      final newError = widget.validator!(newValue);
-      if (newError != widget.errorText) {
-        setState(() {
-          widget.errorText = newError;
-        });
-      }
-    } else if (widget.errorText != null) {
+    final nextError = widget.validator?.call(newValue);
+    if (nextError != widget.errorText && mounted) {
       setState(() {
-        widget.errorText = null;
+        widget.errorText = nextError;
       });
     }
   }
@@ -697,7 +967,9 @@ class _TextFormFieldState extends FormFieldState<String>
 
   @override
   Widget build(BuildContext context) {
-    return _TextFormFieldRenderWidget(widget as TextFormField, this);
+    return wrapInteractiveField(
+      _TextFormFieldRenderWidget(widget as TextFormField, this),
+    );
   }
 }
 
@@ -752,8 +1024,9 @@ class _TextFormFieldRenderWidget extends StatelessWidget {
             placeholderStyle: widget._input.placeholderStyle,
             multiline: widget._input.multiline,
             customShortcuts: widget._input.customShortcuts,
-            focusNode: widget._input.focusNode,
-            onFocusChange: widget._input.onFocusChange,
+            focusNode: state.focusNode,
+            onFocusChange: state.handleFocusChange,
+            onKeyEvent: state.handleUnhandledKeyEvent,
           ),
         ),
       ),
@@ -801,10 +1074,12 @@ class TextAreaFormField extends FormField<String> {
 
   /// Creates a [TextAreaFormField] for multi-line text editing.
   TextAreaFormField({
+    super.key,
     required super.label,
     super.description = '',
     super.initialValue,
     super.validator,
+    super.focusNode,
     super.focused = false,
     this.fieldHeight = 3,
     Style style = Style.empty,
@@ -835,7 +1110,7 @@ class TextAreaFormField extends FormField<String> {
   bool handleKeyEvent(term.KeyEvent event) {
     final handled = _input.handleKeyEvent(event);
     value = _input.value;
-    if (_state != null) {
+    if (_state != null && _state!.mounted) {
       _state!.setState(() {});
     }
     return handled;
@@ -847,6 +1122,12 @@ class TextAreaFormField extends FormField<String> {
 
 class _TextAreaFormFieldState extends FormFieldState<String>
     implements KeyEventHandler {
+  @override
+  bool get delegatesFocusToChild => true;
+
+  @override
+  bool get consumesEnterInForm => true;
+
   @override
   void initState() {
     super.initState();
@@ -865,9 +1146,14 @@ class _TextAreaFormFieldState extends FormFieldState<String>
 
   @override
   void didUpdateWidget(covariant TextAreaFormField oldWidget) {
+    final nextWidget = widget as TextAreaFormField;
+    if (!identical(oldWidget, nextWidget)) {
+      nextWidget._input.controller.value = oldWidget._input.controller.value;
+      nextWidget._input.scrollOffset = oldWidget._input.scrollOffset;
+    }
     super.didUpdateWidget(oldWidget);
     final oldController = oldWidget._input.controller;
-    final newController = (widget as TextAreaFormField)._input.controller;
+    final newController = nextWidget._input.controller;
     if (newController != oldController) {
       oldController.removeListener(_onControllerChanged);
       newController.addListener(_onControllerChanged);
@@ -877,16 +1163,10 @@ class _TextAreaFormFieldState extends FormFieldState<String>
   void _onControllerChanged() {
     final newValue = (widget as TextAreaFormField)._input.value;
     widget.value = newValue;
-    if (widget.validator != null) {
-      final newError = widget.validator!(newValue);
-      if (newError != widget.errorText) {
-        setState(() {
-          widget.errorText = newError;
-        });
-      }
-    } else if (widget.errorText != null) {
+    final nextError = widget.validator?.call(newValue);
+    if (nextError != widget.errorText && mounted) {
       setState(() {
-        widget.errorText = null;
+        widget.errorText = nextError;
       });
     }
   }
@@ -898,7 +1178,9 @@ class _TextAreaFormFieldState extends FormFieldState<String>
 
   @override
   Widget build(BuildContext context) {
-    return _TextAreaFormFieldRenderWidget(widget as TextAreaFormField, this);
+    return wrapInteractiveField(
+      _TextAreaFormFieldRenderWidget(widget as TextAreaFormField, this),
+    );
   }
 }
 
@@ -953,8 +1235,9 @@ class _TextAreaFormFieldRenderWidget extends StatelessWidget {
             placeholderStyle: widget._input.placeholderStyle,
             multiline: widget._input.multiline,
             customShortcuts: widget._input.customShortcuts,
-            focusNode: widget._input.focusNode,
-            onFocusChange: widget._input.onFocusChange,
+            focusNode: state.focusNode,
+            onFocusChange: state.handleFocusChange,
+            onKeyEvent: state.handleUnhandledKeyEvent,
           ),
         ),
       ),
@@ -1010,11 +1293,13 @@ class SelectFormField<T> extends FormField<T> {
 
   /// Creates a [SelectFormField] with the given [options].
   SelectFormField({
+    super.key,
     required super.label,
     super.description = '',
     required this.options,
     super.initialValue,
     super.validator,
+    super.focusNode,
     super.focused = false,
   }) {
     if (initialValue != null) {
@@ -1045,14 +1330,14 @@ class SelectFormField<T> extends FormField<T> {
     if (event.type == KeyType.up) {
       _selectedIndex = (_selectedIndex - 1).clamp(0, options.length - 1);
       value = options[_selectedIndex].value;
-      if (_state != null) {
+      if (_state != null && _state!.mounted) {
         _state!.setState(() {});
       }
       return true;
     } else if (event.type == KeyType.down) {
       _selectedIndex = (_selectedIndex + 1).clamp(0, options.length - 1);
       value = options[_selectedIndex].value;
-      if (_state != null) {
+      if (_state != null && _state!.mounted) {
         _state!.setState(() {});
       }
       return true;
@@ -1081,7 +1366,9 @@ class _SelectFormFieldState<T> extends FormFieldState<T>
 
   @override
   Widget build(BuildContext context) {
-    return _SelectFormFieldRenderWidget<T>(widget as SelectFormField<T>, this);
+    return wrapInteractiveField(
+      _SelectFormFieldRenderWidget<T>(widget as SelectFormField<T>, this),
+    );
   }
 }
 
@@ -1176,10 +1463,12 @@ class _SelectFormFieldRenderWidget<T> extends StatelessWidget {
 class ConfirmFormField extends FormField<bool> {
   /// Creates a [ConfirmFormField] for boolean yes/no choice.
   ConfirmFormField({
+    super.key,
     required super.label,
     super.description = '',
     super.initialValue = false,
     super.validator,
+    super.focusNode,
     super.focused = false,
   });
 
@@ -1199,7 +1488,7 @@ class ConfirmFormField extends FormField<bool> {
         event.type == KeyType.right ||
         event.key == ' ') {
       value = !(value ?? false);
-      if (_state != null) {
+      if (_state != null && _state!.mounted) {
         _state!.setState(() {});
       }
       return true;
@@ -1220,7 +1509,9 @@ class _ConfirmFormFieldState extends FormFieldState<bool>
 
   @override
   Widget build(BuildContext context) {
-    return _ConfirmFormFieldRenderWidget(widget as ConfirmFormField, this);
+    return wrapInteractiveField(
+      _ConfirmFormFieldRenderWidget(widget as ConfirmFormField, this),
+    );
   }
 }
 
@@ -1343,11 +1634,13 @@ class MultiSelectFormField<T> extends FormField<List<T>> {
 
   /// Creates a [MultiSelectFormField] with the given [options].
   MultiSelectFormField({
+    super.key,
     required super.label,
     super.description = '',
     required this.options,
     List<T>? initialValue,
     super.validator,
+    super.focusNode,
     super.focused = false,
   }) : _selected = List.filled(options.length, false) {
     value = initialValue ?? [];
@@ -1381,27 +1674,25 @@ class MultiSelectFormField<T> extends FormField<List<T>> {
 
     if (event.type == KeyType.up) {
       _selectedIndex = (_selectedIndex - 1).clamp(0, options.length - 1);
-      if (_state != null) {
+      if (_state != null && _state!.mounted) {
         _state!.setState(() {});
       }
       return true;
     } else if (event.type == KeyType.down) {
       _selectedIndex = (_selectedIndex + 1).clamp(0, options.length - 1);
-      if (_state != null) {
+      if (_state != null && _state!.mounted) {
         _state!.setState(() {});
       }
       return true;
     } else if (event.baseKey == term.TermKey.space ||
         event.baseKey == term.TermKey.enter) {
       _selected[_selectedIndex] = !_selected[_selectedIndex];
-      final nextVal = <T>[];
-      for (var i = 0; i < options.length; i++) {
-        if (_selected[i]) {
-          nextVal.add(options[i].value);
-        }
-      }
+      final nextVal = <T>[
+        for (var i = 0; i < options.length; i++)
+          if (_selected[i]) options[i].value,
+      ];
       value = nextVal;
-      if (_state != null) {
+      if (_state != null && _state!.mounted) {
         _state!.setState(() {});
       }
       return true;
@@ -1422,9 +1713,11 @@ class _MultiSelectFormFieldState<T> extends FormFieldState<List<T>>
 
   @override
   Widget build(BuildContext context) {
-    return _MultiSelectFormFieldRenderWidget<T>(
-      widget as MultiSelectFormField<T>,
-      this,
+    return wrapInteractiveField(
+      _MultiSelectFormFieldRenderWidget<T>(
+        widget as MultiSelectFormField<T>,
+        this,
+      ),
     );
   }
 }
