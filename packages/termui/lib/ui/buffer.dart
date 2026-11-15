@@ -705,6 +705,15 @@ class Buffer {
     }
   }
 
+  /// Clears overlay metadata lists (effects, selectable regions, and scoped
+  /// Kitty image registries) without clearing cell character/attribute arrays.
+  void clearMetadata() {
+    effects.clear();
+    selectableRegions.clear();
+    _selectableRegionZIndices.clear();
+    _scopedKittyRegistries.clear();
+  }
+
   /// Resets all cells in the buffer to transparent empty cells.
   void clear() {
     Tracer.record(_traceClearId, Phase.begin, TraceCategory.paint);

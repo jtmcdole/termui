@@ -50,6 +50,8 @@ final class GlyphAtlasController extends ChangeNotifier {
 
   int _createdAtlasCount = 0;
   int _disposedAtlasCount = 0;
+  int _ensureInitializedCalls = 0;
+  int _setDevicePixelRatioCalls = 0;
 
   final Set<(String, GlyphStyleVariant)> _pendingGlyphs = {};
   final Set<(String, GlyphStyleVariant)> _processingGlyphs = {};
@@ -135,6 +137,14 @@ final class GlyphAtlasController extends ChangeNotifier {
   @visibleForTesting
   int get debugPendingAtlasDisposalCount => _pendingAtlasDisposals.length;
 
+  /// Number of [ensureInitialized] invocations (testing helper).
+  @visibleForTesting
+  int get debugEnsureInitializedCallCount => _ensureInitializedCalls;
+
+  /// Number of [setDevicePixelRatio] invocations (testing helper).
+  @visibleForTesting
+  int get debugSetDevicePixelRatioCallCount => _setDevicePixelRatioCalls;
+
   void _handleSystemFontsChange() {
     if (_isDisposed) return;
     unawaited(recreateAtlas());
@@ -142,6 +152,7 @@ final class GlyphAtlasController extends ChangeNotifier {
 
   /// Starts initial [GlyphAtlas] generation once; concurrent callers await the same [Future].
   Future<void> ensureInitialized() {
+    _ensureInitializedCalls++;
     if (_isDisposed) return Future<void>.value();
     return _initFuture ??= _initializeAsync();
   }
@@ -206,8 +217,10 @@ final class GlyphAtlasController extends ChangeNotifier {
   Future<void> setFontSize(double fontSize) => updateConfig(fontSize: fontSize);
 
   /// Updates [devicePixelRatio] and recreates the shared atlas if changed.
-  Future<void> setDevicePixelRatio(double devicePixelRatio) =>
-      updateConfig(devicePixelRatio: devicePixelRatio);
+  Future<void> setDevicePixelRatio(double devicePixelRatio) {
+    _setDevicePixelRatioCalls++;
+    return updateConfig(devicePixelRatio: devicePixelRatio);
+  }
 
   /// Regenerates the shared [GlyphAtlas] and defers disposal of the superseded texture.
   Future<void> recreateAtlas() async {

@@ -402,6 +402,9 @@ class Viewport implements Buffer {
   }
 
   @override
+  void clearMetadata() => parent.clearMetadata();
+
+  @override
   void fillAttributes({
     String? char,
     int? fg,

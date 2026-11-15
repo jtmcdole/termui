@@ -524,19 +524,36 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final media = MediaQuery.maybeOf(context);
     final dpr = media?.devicePixelRatio ?? 1.0;
     if (_ownsAtlasController) {
-      unawaited(
-        _atlasController.updateConfig(
-          fontSize: widget.fontSize,
-          fontFamily: widget.fontFamily,
-          fontFamilyFallback: widget.fontFamilyFallback,
-          updateFallbackList: true,
-          devicePixelRatio: dpr,
-        ),
-      );
-    } else if (media != null) {
+      final dprChanged =
+          dpr.isFinite && dpr > 0.0 && _atlasController.devicePixelRatio != dpr;
+      final configChanged =
+          _atlasController.fontSize != widget.fontSize ||
+          _atlasController.fontFamily != widget.fontFamily ||
+          !listEquals(
+            _atlasController.fontFamilyFallback,
+            widget.fontFamilyFallback,
+          ) ||
+          dprChanged;
+      if (_atlasController.atlas == null || configChanged) {
+        unawaited(
+          _atlasController.updateConfig(
+            fontSize: widget.fontSize,
+            fontFamily: widget.fontFamily,
+            fontFamilyFallback: widget.fontFamilyFallback,
+            updateFallbackList: true,
+            devicePixelRatio: dpr,
+          ),
+        );
+      }
+    } else if (media != null &&
+        dpr.isFinite &&
+        dpr > 0.0 &&
+        _atlasController.devicePixelRatio != dpr) {
       unawaited(_atlasController.setDevicePixelRatio(dpr));
     }
-    unawaited(_atlasController.ensureInitialized());
+    if (_atlasController.atlas == null) {
+      unawaited(_atlasController.ensureInitialized());
+    }
     _syncTerminalCellMetrics();
     final nextViewId =
         View.maybeOf(context)?.viewId ??
@@ -574,10 +591,16 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
         _bindTerminalStreams();
       }
       final media = MediaQuery.maybeOf(context);
-      if (media != null) {
-        unawaited(_atlasController.setDevicePixelRatio(media.devicePixelRatio));
+      final dpr = media?.devicePixelRatio ?? 1.0;
+      if (media != null &&
+          dpr.isFinite &&
+          dpr > 0.0 &&
+          _atlasController.devicePixelRatio != dpr) {
+        unawaited(_atlasController.setDevicePixelRatio(dpr));
       }
-      unawaited(_atlasController.ensureInitialized());
+      if (_atlasController.atlas == null) {
+        unawaited(_atlasController.ensureInitialized());
+      }
       _syncTerminalCellMetrics();
       return;
     }
