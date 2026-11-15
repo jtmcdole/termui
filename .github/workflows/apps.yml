@@ -44,7 +44,7 @@ concurrency:
 
 jobs:
   test-apps:
-    name: Apps Test and Web Build (${{ matrix.os }})
+    name: Apps (${{ matrix.suite }}, ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     permissions:
@@ -53,6 +53,10 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        suite: [cast, fterm]
+        include:
+          - os: ubuntu-latest
+            suite: web
 
     steps:
       - name: Checkout repository
@@ -68,7 +72,7 @@ jobs:
           Add-MpPreference -ExclusionProcess "tar.exe", "unzip.exe", "zstd.exe", "dart.exe", "flutter_tester.exe", "cl.exe", "link.exe", "OpenConsole.exe"
 
       - name: Install ALSA library (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.suite == 'fterm'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libasound2-dev
@@ -87,37 +91,43 @@ jobs:
         run: flutter pub get
 
       - name: Set up SoLoud CMake cache
+        if: matrix.suite == 'fterm'
         uses: ./.github/actions/setup-soloud
 
       - name: Cache Windows ConPTY sidecar
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (matrix.suite == 'cast' || matrix.suite == 'fterm')
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/AppData/Local/pty2/conpty
           key: ${{ runner.os }}-conpty-${{ hashFiles('packages/pty2/lib/src/impl/conpty_bundle.dart') }}
 
       - name: Test termui_cast_protocol
+        if: matrix.suite == 'cast'
         working-directory: apps/termui_cast/protocol
         run: dart test
 
       - name: Test termui_cast_server
+        if: matrix.suite == 'cast'
         working-directory: apps/termui_cast/server
         run: dart test
 
       - name: Test termui_caster_cli
+        if: matrix.suite == 'cast'
         working-directory: apps/termui_cast/caster_cli
         run: dart test
 
       - name: Test termui_cast_client_core
+        if: matrix.suite == 'cast'
         working-directory: apps/termui_cast/client_core
         run: dart test
 
       - name: Test fterm
+        if: matrix.suite == 'fterm'
         working-directory: apps/fterm
         run: flutter test --no-pub
 
       - name: Build WASM web viewer (no CDN)
-        if: runner.os == 'Linux'
+        if: matrix.suite == 'web'
         working-directory: apps/fterm
         run: |
           flutter build web --wasm --no-web-resources-cdn
