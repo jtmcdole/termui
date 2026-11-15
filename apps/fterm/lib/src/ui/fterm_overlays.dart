@@ -28,62 +28,112 @@ final class FtermOverlayHost extends StatelessWidget {
     final theme = workspace.activeTerminalTheme;
     final palette = _OverlayColors.fromTerminalTheme(theme);
 
-    return ColoredBox(
-      color: const Color(0x99000000),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 520, maxHeight: 540),
-          child: Material(
-            key: ValueKey('fterm-overlay-${overlay.name}'),
-            color: palette.surface,
-            elevation: 16,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-              side: BorderSide(color: palette.border),
-            ),
-            child: DefaultTextStyle(
-              style: TextStyle(
-                color: palette.foreground,
-                fontFamily: castPrimaryFontFamily,
-                fontSize: 12,
+    return _ModalFocusGuard(
+      overlay: overlay,
+      child: ColoredBox(
+        color: const Color(0x99000000),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520, maxHeight: 540),
+            child: Material(
+              key: ValueKey('fterm-overlay-${overlay.name}'),
+              color: palette.surface,
+              elevation: 16,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: BorderSide(color: palette.border),
               ),
-              child: switch (overlay) {
-                FtermOverlay.none => const SizedBox.shrink(),
-                FtermOverlay.connect => _ConnectOverlay(
-                  workspace: workspace,
-                  palette: palette,
+              child: DefaultTextStyle(
+                style: TextStyle(
+                  color: palette.foreground,
+                  fontFamily: castPrimaryFontFamily,
+                  fontSize: 12,
                 ),
-                FtermOverlay.sessionPicker => _SessionPickerOverlay(
-                  workspace: workspace,
-                  palette: palette,
-                ),
-                FtermOverlay.settings => _SettingsOverlay(
-                  workspace: workspace,
-                  palette: palette,
-                ),
-                FtermOverlay.stats => _StatsOverlay(
-                  workspace: workspace,
-                  palette: palette,
-                ),
-                FtermOverlay.rename => _RenameOverlay(
-                  workspace: workspace,
-                  palette: palette,
-                ),
-                FtermOverlay.help => _HelpOverlay(
-                  workspace: workspace,
-                  palette: palette,
-                ),
-                FtermOverlay.fileUpload => _FileUploadOverlay(
-                  workspace: workspace,
-                  palette: palette,
-                ),
-              },
+                child: switch (overlay) {
+                  FtermOverlay.none => const SizedBox.shrink(),
+                  FtermOverlay.connect => _ConnectOverlay(
+                    workspace: workspace,
+                    palette: palette,
+                  ),
+                  FtermOverlay.sessionPicker => _SessionPickerOverlay(
+                    workspace: workspace,
+                    palette: palette,
+                  ),
+                  FtermOverlay.settings => _SettingsOverlay(
+                    workspace: workspace,
+                    palette: palette,
+                  ),
+                  FtermOverlay.stats => _StatsOverlay(
+                    workspace: workspace,
+                    palette: palette,
+                  ),
+                  FtermOverlay.rename => _RenameOverlay(
+                    workspace: workspace,
+                    palette: palette,
+                  ),
+                  FtermOverlay.help => _HelpOverlay(
+                    workspace: workspace,
+                    palette: palette,
+                  ),
+                  FtermOverlay.fileUpload => _FileUploadOverlay(
+                    workspace: workspace,
+                    palette: palette,
+                  ),
+                },
+              ),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+final class _ModalFocusGuard extends StatefulWidget {
+  final FtermOverlay overlay;
+  final Widget child;
+
+  const _ModalFocusGuard({required this.overlay, required this.child});
+
+  @override
+  State<_ModalFocusGuard> createState() => _ModalFocusGuardState();
+}
+
+final class _ModalFocusGuardState extends State<_ModalFocusGuard> {
+  final FocusScopeNode _scopeNode = FocusScopeNode(
+    debugLabel: 'fterm-modal-scope',
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleFocusRequest();
+  }
+
+  @override
+  void didUpdateWidget(_ModalFocusGuard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.overlay != widget.overlay) {
+      _scheduleFocusRequest();
+    }
+  }
+
+  void _scheduleFocusRequest() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _scopeNode.hasFocus) return;
+      _scopeNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _scopeNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      FocusScope(node: _scopeNode, autofocus: true, child: widget.child);
 }
 
 final class _OverlayColors {
@@ -563,6 +613,19 @@ final class _SettingsOverlay extends StatelessWidget {
               onChanged: workspace.setF12ShortcutsEnabled,
             ),
             SwitchListTile.adaptive(
+              key: const ValueKey('settings-osc52-toggle'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Allow focused remote OSC 52 clipboard writes'),
+              value:
+                  wsSettings.osc52Policy == Osc52ClipboardPolicy.allowFocused,
+              onChanged: (enabled) => workspace.setOsc52Policy(
+                enabled
+                    ? Osc52ClipboardPolicy.allowFocused
+                    : Osc52ClipboardPolicy.deny,
+              ),
+            ),
+            SwitchListTile.adaptive(
               key: const ValueKey('settings-audio-mute'),
               dense: true,
               contentPadding: EdgeInsets.zero,
@@ -861,7 +924,7 @@ final class _FileUploadOverlay extends StatelessWidget {
           _overlayHeader(
             title: 'Upload Dropped Files (${files.length})',
             palette: p,
-            onClose: workspace.dismissOverlay,
+            onClose: workspace.cancelFileUpload,
           ),
           const SizedBox(height: 10),
           for (final file in files.take(6))
@@ -878,7 +941,8 @@ final class _FileUploadOverlay extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.end,
             children: [
               TextButton(
-                onPressed: workspace.dismissOverlay,
+                key: const ValueKey('upload-cancel'),
+                onPressed: workspace.cancelFileUpload,
                 child: const Text('Cancel'),
               ),
               const SizedBox(width: 8),

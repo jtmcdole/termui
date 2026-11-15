@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -99,10 +100,13 @@ String? _nonEmptyPath(String? raw) {
 
 /// JSON file-backed [SettingsStorage] for macOS, Linux, and Windows desktops.
 ///
-/// On POSIX systems, creates the parent directory with mode `0700` and writes
-/// updates atomically via an `exclusive: true` temp file set to mode `0600`
-/// prior to writing payloads and renaming.
-final class FileSettingsStorage implements SettingsStorage {
+/// Caches the decoded root JSON map in memory and persists mutations
+/// asynchronously through a coalescing writer without blocking the Flutter UI
+/// isolate. Rejects symlinks on the settings directory, target file, and temp
+/// staging files. On POSIX systems, applies mode `0700` on directory creation
+/// and `0600` on temp file creation; on Windows, restricts directory ACLs to
+/// the current user once on directory creation.
+final class FileSettingsStorage implements BatchSettingsStorage {
   static const JsonEncoder _prettyEncoder = JsonEncoder.withIndent('  ');
   static int _tempCounter = 0;
 
@@ -113,16 +117,31 @@ final class FileSettingsStorage implements SettingsStorage {
   final File? legacyFile;
 
   final bool? _isWindowsOverride;
+  final Map<String, String>? _environmentOverride;
+
+  Map<String, Object?>? _cachedEntries;
+  bool _dirSecured = false;
+  String? _pendingPayload;
+  Future<void>? _activeWrite;
+  Object? _lastError;
 
   /// Creates a [SettingsStorage] persisted in [file].
-  const FileSettingsStorage(this.file, {this.legacyFile, bool? isWindows})
-    : _isWindowsOverride = isWindows;
+  FileSettingsStorage(
+    this.file, {
+    this.legacyFile,
+    bool? isWindows,
+    Map<String, String>? environment,
+  }) : _isWindowsOverride = isWindows,
+       _environmentOverride = environment;
 
   bool get _isWindows => _isWindowsOverride ?? Platform.isWindows;
 
+  /// Last filesystem or symlink rejection error encountered during an async write.
+  Object? get lastError => _lastError;
+
   @override
   String? getItem(String key) {
-    final entry = _readEntries()[key];
+    final entry = _ensureEntriesLoaded()[key];
     return switch (entry) {
       final String s => s,
       final Map<Object?, Object?> m => jsonEncode(m),
@@ -131,50 +150,124 @@ final class FileSettingsStorage implements SettingsStorage {
   }
 
   @override
-  void setItem(String key, String value) {
+  void setItem(String key, String value) =>
+      setItems(<String, String>{key: value});
+
+  @override
+  void setItems(Map<String, String> entries) {
+    if (entries.isEmpty) return;
+    final current = _ensureEntriesLoaded();
+    current.addAll(entries);
+    _pendingPayload = '${_prettyEncoder.convert(current)}\n';
+    _activeWrite ??= Zone.root.run(_drainWrites);
+  }
+
+  @override
+  void invalidateCache() {
+    _cachedEntries = null;
+    _pendingPayload = null;
+  }
+
+  @override
+  Future<void> flush() async {
+    while (_activeWrite != null) {
+      await _activeWrite;
+    }
+  }
+
+  Future<void> _drainWrites() async {
     try {
-      final entries = _readEntries()..[key] = value;
-      final payload = '${_prettyEncoder.convert(entries)}\n';
-      _ensurePrivateParentDir();
-      final tempFile = _createPrivateTempFile();
-      try {
-        tempFile.writeAsStringSync(payload, flush: true);
-        tempFile.renameSync(file.path);
-      } catch (_) {
-        _deleteQuietly(tempFile);
-        rethrow;
+      while (_pendingPayload != null) {
+        final payload = _pendingPayload!;
+        _pendingPayload = null;
+        try {
+          await _writePayloadAsync(payload);
+          _lastError = null;
+        } on Object catch (e) {
+          _lastError = e;
+        }
       }
-    } on Object {
-      // Ignore read-only filesystem, sandbox, or disk-quota errors.
+    } finally {
+      _activeWrite = null;
     }
   }
 
-  void _ensurePrivateParentDir() {
+  Future<void> _writePayloadAsync(String payload) async {
+    await _ensurePrivateParentDirAsync();
+    if (await _isSymlinkAsync(file.path)) {
+      throw FileSystemException(
+        'Refusing to overwrite symlinked settings file',
+        file.path,
+      );
+    }
+    final tempFile = await _createPrivateTempFileAsync();
+    try {
+      await tempFile.writeAsString(payload, flush: true);
+      if (await _isSymlinkAsync(file.path)) {
+        throw FileSystemException(
+          'Refusing to overwrite symlinked settings file',
+          file.path,
+        );
+      }
+      await tempFile.rename(file.path);
+    } catch (_) {
+      await _deleteQuietlyAsync(tempFile);
+      rethrow;
+    }
+  }
+
+  Future<void> _ensurePrivateParentDirAsync() async {
     final parent = file.parent;
-    if (!parent.existsSync()) {
-      parent.createSync(recursive: true);
+    final parentType = await FileSystemEntity.type(
+      parent.path,
+      followLinks: false,
+    );
+    if (parentType == .link) {
+      _dirSecured = false;
+      throw FileSystemException(
+        'Refusing to use symlinked settings directory',
+        parent.path,
+      );
     }
-    if (!_isWindows && (parent.statSync().mode & 0x1FF) != 0x1C0) {
-      _chmodStrict(parent.path, '0700');
+    if (_dirSecured && parentType == .directory) return;
+
+    if (parentType == .notFound) {
+      await parent.create(recursive: true);
+      if (_isWindows) {
+        await _restrictWindowsDirAclOnceAsync(parent.path);
+      } else if (!Platform.isWindows) {
+        await _chmodStrictAsync(parent.path, '0700');
+      }
+    } else if (!_isWindows &&
+        !Platform.isWindows &&
+        ((await parent.stat()).mode & 0x1FF) != 0x1C0) {
+      await _chmodStrictAsync(parent.path, '0700');
     }
+    _dirSecured = true;
   }
 
-  File _createPrivateTempFile() {
+  Future<File> _createPrivateTempFileAsync() async {
     final parentPath = file.parent.path;
     final prefix = '.${p.basename(file.path)}.tmp.$pid';
     while (true) {
       final id = ++_tempCounter;
       final candidate = File(p.join(parentPath, '$prefix.$id'));
+      if (await _isSymlinkAsync(candidate.path)) {
+        throw FileSystemException(
+          'Refusing to write symlinked temp settings file',
+          candidate.path,
+        );
+      }
       try {
-        candidate.createSync(exclusive: true);
+        await candidate.create(exclusive: true);
       } on PathExistsException {
         continue;
       }
-      if (!_isWindows) {
+      if (!_isWindows && !Platform.isWindows) {
         try {
-          _chmodStrict(candidate.path, '0600');
+          await _chmodStrictAsync(candidate.path, '0600');
         } catch (_) {
-          _deleteQuietly(candidate);
+          await _deleteQuietlyAsync(candidate);
           rethrow;
         }
       }
@@ -182,27 +275,67 @@ final class FileSettingsStorage implements SettingsStorage {
     }
   }
 
-  void _chmodStrict(String path, String mode) {
-    final result = Process.runSync('chmod', [mode, path]);
+  Future<void> _chmodStrictAsync(String path, String mode) async {
+    final result = await Process.run('chmod', [mode, path]);
     if (result.exitCode != 0) {
       throw FileSystemException('chmod $mode failed (${result.stderr})', path);
     }
   }
 
-  void _deleteQuietly(File target) {
+  Future<void> _restrictWindowsDirAclOnceAsync(String dirPath) async {
+    final env = _environmentOverride ?? Platform.environment;
+    final user = env['USERNAME']?.trim();
+    if (user == null || user.isEmpty) return;
+    final domain = env['USERDOMAIN']?.trim();
+    final principal = (domain != null && domain.isNotEmpty)
+        ? '$domain\\$user'
+        : user;
     try {
-      if (target.existsSync()) {
-        target.deleteSync();
+      await Process.run('icacls', [
+        dirPath,
+        '/inheritance:r',
+        '/grant:r',
+        '$principal:(OI)(CI)F',
+      ]);
+    } on Object {
+      // Best-effort ACL restriction on hosts without icacls on PATH.
+    }
+  }
+
+  Future<void> _deleteQuietlyAsync(File target) async {
+    try {
+      if (await FileSystemEntity.type(target.path, followLinks: false) !=
+          .notFound) {
+        await target.delete();
       }
     } on Object {
       // Best-effort cleanup of abandoned temp file.
     }
   }
 
-  Map<String, Object?> _readEntries() {
-    final source = file.existsSync()
-        ? file
-        : (legacyFile != null && legacyFile!.existsSync() ? legacyFile! : null);
+  static Future<bool> _isSymlinkAsync(String path) async =>
+      await FileSystemEntity.type(path, followLinks: false) == .link;
+
+  static bool _isSymlinkSync(String path) =>
+      FileSystemEntity.typeSync(path, followLinks: false) == .link;
+
+  Map<String, Object?> _ensureEntriesLoaded() =>
+      _cachedEntries ??= _readEntriesFromDisk();
+
+  Map<String, Object?> _readEntriesFromDisk() {
+    if (_isSymlinkSync(file.parent.path) || _isSymlinkSync(file.path)) {
+      return <String, Object?>{};
+    }
+    final File? source;
+    if (file.existsSync()) {
+      source = file;
+    } else if (legacyFile != null &&
+        !_isSymlinkSync(legacyFile!.path) &&
+        legacyFile!.existsSync()) {
+      source = legacyFile!;
+    } else {
+      source = null;
+    }
     if (source == null) return <String, Object?>{};
     try {
       final Object? decoded = jsonDecode(source.readAsStringSync());

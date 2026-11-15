@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:clock/clock.dart';
+import 'package:flutter/services.dart' show SystemChannels;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/launch_config.dart';
@@ -24,10 +25,12 @@ import 'package:termui_pty/termui_pty.dart';
 import 'support/app_three_way_harness.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   _defineSplitTreeModelTests();
   _defineAudioControllerTests();
   _defineWorkspaceControllerTests();
   _defineHardeningRegressionTests();
+  _defineWave2HardeningTests();
 }
 
 void _defineSplitTreeModelTests() {
@@ -1323,6 +1326,7 @@ void _defineWorkspaceControllerTests() {
           clientToken: 'new-client-tok',
           casterToken: 'new-caster-tok',
         );
+        await (storage as BatchSettingsStorage).flush();
         final settingsFile = File(
           p.join(tempHome.path, '.config', 'fterm', 'settings.json'),
         );
@@ -1582,14 +1586,23 @@ final class _MemoryTerminalPort implements TerminalPort {
   final Set<void Function()> _bellListeners = {};
   final Set<void Function(String)> _titleListeners = {};
   final Set<void Function(TerminalAudioEvent)> _audioListeners = {};
+  final Set<void Function(String, String)> _clipboardListeners = {};
   final List<Uint8List> sentInputs = [];
   final Completer<int> _exitCode = Completer<int>();
   String _title = 'zsh';
+  int oldestScrollbackLine = 0;
+  List<ScrollbackLine> scrollbackRows = const [];
   bool isDisposed = false;
 
   void emitAudio(TerminalAudioEvent event) {
     for (final fn in [..._audioListeners]) {
       fn(event);
+    }
+  }
+
+  void emitClipboard(String selection, String text) {
+    for (final fn in [..._clipboardListeners]) {
+      fn(selection, text);
     }
   }
 
@@ -1614,6 +1627,15 @@ final class _MemoryTerminalPort implements TerminalPort {
   String get id => 'mem-port';
 
   @override
+  int get renderRevision => 0;
+
+  @override
+  int get fullSyncRevision => 0;
+
+  @override
+  List<DirtyCellSpan> get dirtySpans => const [];
+
+  @override
   tui.Buffer get buffer => _buffer;
 
   @override
@@ -1632,8 +1654,11 @@ final class _MemoryTerminalPort implements TerminalPort {
   TerminalPortModes get modes => TerminalPortModes.defaults;
 
   @override
-  ScrollbackWindowData get scrollbackWindow =>
-      (clearSeq: 0, oldestLine: 0, totalLines: 0);
+  ScrollbackWindowData get scrollbackWindow => (
+    clearSeq: 0,
+    oldestLine: oldestScrollbackLine,
+    totalLines: oldestScrollbackLine + scrollbackRows.length,
+  );
 
   @override
   String get windowTitle => _title;
@@ -1677,12 +1702,12 @@ final class _MemoryTerminalPort implements TerminalPort {
   @override
   void addClipboardListener(
     void Function(String selection, String text) listener,
-  ) {}
+  ) => _clipboardListeners.add(listener);
 
   @override
   void removeClipboardListener(
     void Function(String selection, String text) listener,
-  ) {}
+  ) => _clipboardListeners.remove(listener);
 
   @override
   void sendInput(Uint8List utf8Bytes) =>
@@ -1697,8 +1722,14 @@ final class _MemoryTerminalPort implements TerminalPort {
   }) {}
 
   @override
-  List<ScrollbackLine?> readScrollbackSlice(int startLine, int count) =>
-      const [];
+  List<ScrollbackLine?> readScrollbackSlice(int startLine, int count) {
+    if (scrollbackRows.isEmpty) return const [];
+    return List<ScrollbackLine?>.generate(count, (i) {
+      final offset = (startLine + i) - oldestScrollbackLine;
+      if (offset < 0 || offset >= scrollbackRows.length) return null;
+      return scrollbackRows[offset];
+    });
+  }
 
   @override
   Future<void> dispose() async {
@@ -2440,6 +2471,8 @@ void _defineHardeningRegressionTests() {
           launchConfig: CastLaunchConfig(token: harness.token),
           repository: CastClientRepository(
             transport: WsClientTransport(
+              serverUri: CastLaunchConfig.defaultServerUri,
+              token: harness.token,
               channelFactory: harness.openClientChannel,
             ),
             enableReconnect: false,
@@ -2792,17 +2825,33 @@ void _defineHardeningRegressionTests() {
         await _pumpUntil(() => activeWs.tabs.length == 2);
         await activeWs.audioController.notifyUserGesture();
 
+        // 2. D-11: Focused remote muted viewer replies with 256 zeros, while unmuted focused viewer returns engine samples.
         pty.emitRawAnsi('\x1b_Aa=wave,q=88;\x1b\\');
         await _pumpUntil(() => pty.writtenInputs.isNotEmpty);
+        expect(
+          utf8.decode(pty.writtenInputs.last),
+          equals(ApcAudioEncoder.encodeWaveformReply(88, Float32List(256))),
+        );
+
+        await mutedWs.dispose();
+        final afterMutedLen = pty.writtenInputs.length;
+        pty.emitRawAnsi('\x1b_Aa=wave,q=89;\x1b\\');
+        await _pumpUntil(() => pty.writtenInputs.length > afterMutedLen);
         final expectedReply = ApcAudioEncoder.encodeWaveformReply(
-          88,
+          89,
           activeSamples,
         );
         expect(pty.writtenInputs.map(utf8.decode), contains(expectedReply));
 
-        // 3. Local pane emits TerminalWaveformQueryAudioEvent -> writes a=waver via port.sendInput when live & active.
+        // 3. Unfocused local tab 0 stays silent; focused local tab 0 writes a=waver via port.sendInput.
         final localPort = activeDriver.hosts.single.port;
         localPort.sentInputs.clear();
+        localPort.emitAudio(
+          const TerminalWaveformQueryAudioEvent(requestId: 9),
+        );
+        expect(localPort.sentInputs, isEmpty);
+
+        activeWs.selectTab(0);
         localPort.emitAudio(
           const TerminalWaveformQueryAudioEvent(requestId: 9),
         );
@@ -3094,7 +3143,57 @@ void _defineHardeningRegressionTests() {
         assertMatchesFreshFull(darkResolver);
       },
     );
+
+    test(
+      'D-13: _tryIncrementalRecomposite clears stale metadata when src clears effects or selectableRegions',
+      () {
+        final port = _IncrementalMetaTerminalPort();
+        port.mutableBuffer.writeString(0, 0, 'AB', const tui.Style());
+        port.mutableBuffer.registerSelectableRegion(const tui.Rect(0, 0, 4, 1));
+
+        final resolver = TerminalColorResolver(
+          theme: tui.TerminalColorTheme.termuiDark,
+          settings: const TerminalThemeSettings(),
+        );
+        final pane = FtermPaneController(
+          paneId: 'pane-meta',
+          port: port,
+          colorResolver: resolver,
+        )..setFocused(true);
+        addTearDown(() => pane.dispose(disposePort: false));
+
+        expect(pane.displayBuffer.selectableRegions, isNotEmpty);
+
+        // Clear metadata on src and emit an incremental dirty span without fullSyncRevision bump.
+        port.mutableBuffer.clearMetadata();
+        port.mutableBuffer.writeString(0, 0, 'X', const tui.Style());
+        port.bumpIncremental(start: 0, length: 1);
+
+        expect(pane.displayBuffer.selectableRegions, isEmpty);
+      },
+    );
   });
+}
+
+final class _IncrementalMetaTerminalPort extends _MemoryTerminalPort {
+  int _rev = 1;
+  List<DirtyCellSpan> _spans = const [];
+
+  tui.Buffer get mutableBuffer => _buffer;
+
+  @override
+  int get renderRevision => _rev;
+
+  @override
+  List<DirtyCellSpan> get dirtySpans => _spans;
+
+  void bumpIncremental({required int start, required int length}) {
+    _rev += 1;
+    _spans = [(start: start, length: length, revision: _rev)];
+    for (final fn in [..._listeners]) {
+      fn();
+    }
+  }
 }
 
 final class _TestRoutedPtyBackend implements RoutedPtyBackend {
@@ -3242,6 +3341,598 @@ final class _ConfigurableLocalPaneHost implements LocalPaneHost {
     if (disposed) return;
     disposed = true;
     await disposeGate.future;
+    await port.dispose();
+    if (!_exitCode.isCompleted) _exitCode.complete(0);
+    await _shareUpdates.close();
+  }
+}
+
+void _defineWave2HardeningTests() {
+  group('Wave 2 security, scrollback wrap, upload, and driver hardening', () {
+    test(
+      'FtermPaneController handles oldestLine > 0 scrollback wrap without RangeError on local & remote ports',
+      () async {
+        // 1. Local port with evicted scrollback (oldestLine: 5000, retained: 1200).
+        final localPort = _MemoryTerminalPort();
+        addTearDown(localPort.dispose);
+        localPort.oldestScrollbackLine = 5000;
+        localPort.scrollbackRows = [
+          for (var i = 0; i < 1200; i++)
+            ScrollbackLine(
+              width: 80,
+              characters: ['L', '$i'],
+              attributes: Uint32List(6),
+              uris: ['https://example.com/${5000 + i}', null],
+            ),
+        ];
+        final resolver = TerminalColorResolver(
+          theme: tui.TerminalColorTheme.termuiDark,
+          settings: const TerminalThemeSettings(),
+        );
+        final localPane = FtermPaneController(
+          paneId: 'wrap-local',
+          port: localPort,
+          colorResolver: resolver,
+        );
+        addTearDown(() => localPane.dispose(disposePort: false));
+
+        // Scroll beyond retained scrollback clamps cleanly to 1200 and maps virtual lines.
+        localPane.scrollLines(2000);
+        expect(localPane.scrollOffsetLines, equals(1200));
+        final topLink = localPane.lookupLinkLine(0);
+        expect(topLink?.uris?.first, equals('https://example.com/5000'));
+
+        // Scroll partway into wrapped history.
+        localPane.jumpToBottom();
+        localPane.scrollLines(10);
+        expect(localPane.scrollOffsetLines, equals(10));
+        expect(
+          localPane.lookupLinkLine(0)?.uris?.first,
+          equals('https://example.com/6190'),
+        );
+
+        // 2. Remote port receiving BufferSnapshotFrame(oldestLine: 5000, totalLines: 6200)
+        //    + ScrollbackChunkFrame returning lines 5000..5003.
+        const remoteId = SessionId('wrap-remote');
+        final toClient = StreamController<Uint8List>(sync: true);
+        final fromClient = StreamController<Uint8List>(sync: true);
+        final fromClientFrames = <CastMessage>[];
+        final fromSub = fromClient.stream.listen(
+          (bytes) => fromClientFrames.add(BufferFrameCodec.decode(bytes)),
+        );
+        final repo = CastClientRepository(
+          transport: WsClientTransport(
+            channelFactory: () async =>
+                StreamChannel<Uint8List>(toClient.stream, fromClient.sink),
+          ),
+          enableReconnect: false,
+        );
+        addTearDown(() async {
+          await fromSub.cancel();
+          await repo.dispose();
+          await toClient.close();
+          await fromClient.close();
+        });
+        await repo.connect();
+        toClient.add(
+          BufferFrameCodec.encode(const AuthAcceptedFrame(role: .client)),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        final remotePort = repo.openTerminalPort(
+          remoteId,
+          initialCols: 16,
+          initialRows: 4,
+        );
+        final remotePane = FtermPaneController(
+          paneId: 'wrap-remote-pane',
+          port: remotePort,
+          colorResolver: resolver,
+          remoteSessionId: remoteId,
+        );
+        addTearDown(() => remotePane.dispose(disposePort: false));
+
+        toClient.add(
+          BufferFrameCodec.encode(
+            BufferSnapshotFrame(
+              snapshot: BufferSnapshot.fromBuffer(
+                sessionId: remoteId,
+                seq: 1,
+                buffer: tui.Buffer.blank(16, 4),
+                cursor: const CursorState(x: 0, y: 0),
+                modes: TerminalModes.defaults,
+                scrollback: const ScrollbackWindow(
+                  clearSeq: 1,
+                  oldestLine: 5000,
+                  totalLines: 6200,
+                ),
+              ),
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        remotePane.scrollLines(2000);
+        expect(remotePane.scrollOffsetLines, equals(1200));
+        final sbReq = fromClientFrames.whereType<RequestScrollbackFrame>().last;
+        expect(sbReq.startLine, equals(5000));
+
+        toClient.add(
+          BufferFrameCodec.encode(
+            ScrollbackChunkFrame(
+              sessionId: remoteId,
+              requestId: sbReq.requestId,
+              clearSeq: 1,
+              startLine: 5000,
+              rows: [
+                for (var i = 0; i < 4; i++)
+                  EncodedScrollbackRow(
+                    isWrapped: false,
+                    characters: const ['W', 'R', 'A', 'P'],
+                    attributes: Uint32List(12),
+                    uriRuns: [
+                      (
+                        start: 0,
+                        length: 1,
+                        uri: 'https://remote.example/${5000 + i}',
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(remotePane.displayBuffer.getCharacter(0, 0), equals('W'));
+        expect(
+          remotePane.lookupLinkLine(0)?.uris?.first,
+          equals('https://remote.example/5000'),
+        );
+      },
+    );
+
+    test(
+      'OSC 52 clipboard writes require focused pane, active window focus, allow policy, and <= 1 MiB payload',
+      () async {
+        final copied = <String>[];
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+              if (call.method == 'Clipboard.setData') {
+                final args = call.arguments as Map<Object?, Object?>;
+                copied.add(args['text'] as String);
+              }
+              return null;
+            });
+        addTearDown(() {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(SystemChannels.platform, null);
+        });
+
+        final harness = AppThreeWayWsHarness();
+        addTearDown(harness.dispose);
+        final driver = _FakeLocalHostDriver(harness: harness);
+        final workspace = FtermWorkspaceController(
+          launchConfig: CastLaunchConfig(),
+          repository: CastClientRepository(
+            transport: WsClientTransport(
+              channelFactory: harness.openClientChannel,
+            ),
+            enableReconnect: false,
+          ),
+          localHostDriver: driver,
+          audioController: FtermAudioController(
+            engineFactory: _FakeAudioEngine.new,
+          ),
+          storage: _InMemorySettingsStorage(),
+          resizeDebounce: Duration.zero,
+        );
+        addTearDown(workspace.dispose);
+
+        await workspace.openLocalShellTab();
+        final p1 = driver.hosts[0].port;
+        await workspace.splitFocusedPane(SplitAxis.horizontal);
+        final p2 = driver.hosts[1].port; // p2 is now focused
+
+        // 1. Unfocused pane p1 is blocked.
+        p1.emitClipboard('c', 'from-unfocused');
+        expect(copied, isEmpty);
+
+        // 2. Background / inactive window blocks even focused pane p2.
+        workspace.setWindowFocused(false);
+        p2.emitClipboard('c', 'while-unfocused-window');
+        expect(copied, isEmpty);
+        workspace.setWindowFocused(true);
+
+        // 3. Policy = deny blocks focused pane p2.
+        workspace.setOsc52Policy(Osc52ClipboardPolicy.deny);
+        p2.emitClipboard('c', 'denied-text');
+        expect(copied, isEmpty);
+        workspace.setOsc52Policy(Osc52ClipboardPolicy.allowFocused);
+
+        // 4. Oversized > 1 MiB payload is dropped.
+        p2.emitClipboard('c', 'x' * (1024 * 1024 + 1));
+        expect(copied, isEmpty);
+
+        // 5. Focused pane + active window + allowFocused policy + <= 1 MiB succeeds.
+        p2.emitClipboard('c', 'allowed-osc52');
+        expect(copied, equals(['allowed-osc52']));
+      },
+    );
+
+    test(
+      'unfocused or background remote waveform queries return 256 zero samples while focused pane returns engine samples',
+      () async {
+        final harness = AppThreeWayWsHarness();
+        addTearDown(harness.dispose);
+        final pty = await harness.startCaster(id: 'wf-remote', title: 'wf');
+
+        final fakeEngine = _FakeAudioEngine()
+          ..nextWaveform = Float32List.fromList(List.filled(256, 0.75));
+        final workspace = FtermWorkspaceController(
+          launchConfig: CastLaunchConfig(token: harness.token),
+          repository: CastClientRepository(
+            transport: WsClientTransport(
+              serverUri: CastLaunchConfig.defaultServerUri,
+              token: harness.token,
+              channelFactory: harness.openClientChannel,
+            ),
+            enableReconnect: false,
+          ),
+          localHostDriver: _StubOnlyLocalHostDriver(),
+          audioController: FtermAudioController(
+            engineFactory: () => fakeEngine,
+            requireUserGesture: false,
+          ),
+          storage: _InMemorySettingsStorage(),
+          resizeDebounce: Duration.zero,
+        );
+        addTearDown(workspace.dispose);
+
+        await workspace.audioController.notifyUserGesture();
+        await workspace.start();
+        await _pumpUntil(() => workspace.tabs.isNotEmpty);
+        final remotePane = workspace.focusedPane!;
+        expect(
+          remotePane.remoteSessionId,
+          equals(const SessionId('wf-remote')),
+        );
+
+        // 1. Backgrounded window -> remote waveform query sends 256 zeros.
+        workspace.setWindowFocused(false);
+        final bytesBeforeBg = pty.writtenInputs.length;
+        pty.emitRawAnsi('\x1b_Aa=wave,q=11\x1b\\');
+        await _pumpUntil(() => pty.writtenInputs.length > bytesBeforeBg);
+        expect(
+          utf8.decode(pty.writtenInputs.last),
+          equals(ApcAudioEncoder.encodeWaveformReply(11, Float32List(256))),
+        );
+
+        // 2. Foreground focused window + focused pane -> sends 0.75 waveform samples.
+        workspace.setWindowFocused(true);
+        final bytesBeforeFg = pty.writtenInputs.length;
+        pty.emitRawAnsi('\x1b_Aa=wave,q=12\x1b\\');
+        await _pumpUntil(() => pty.writtenInputs.length > bytesBeforeFg);
+        expect(
+          utf8.decode(pty.writtenInputs.last),
+          equals(
+            ApcAudioEncoder.encodeWaveformReply(
+              12,
+              Float32List.fromList(List.filled(256, 0.75)),
+            ),
+          ),
+        );
+
+        // 3. D-11: Unfocused/background local pane ignores TerminalWaveformQueryAudioEvent.
+        final localDriver = _FakeLocalHostDriver(harness: harness);
+        final localWs = FtermWorkspaceController(
+          launchConfig: CastLaunchConfig(token: harness.token),
+          repository: CastClientRepository(
+            transport: WsClientTransport(
+              serverUri: CastLaunchConfig.defaultServerUri,
+              token: harness.token,
+              channelFactory: harness.openClientChannel,
+            ),
+            enableReconnect: false,
+          ),
+          localHostDriver: localDriver,
+          audioController: FtermAudioController(
+            engineFactory: () => fakeEngine,
+            requireUserGesture: false,
+          ),
+          storage: _InMemorySettingsStorage(),
+          resizeDebounce: Duration.zero,
+        );
+        addTearDown(localWs.dispose);
+        await localWs.audioController.notifyUserGesture();
+        await localWs.start();
+        await localWs.openLocalShellTab();
+        expect(localDriver.hosts.length, equals(2));
+        final bgLocalPort = localDriver.hosts[0].port;
+        bgLocalPort.sentInputs.clear();
+        bgLocalPort.emitAudio(
+          const TerminalWaveformQueryAudioEvent(requestId: 77),
+        );
+        expect(bgLocalPort.sentInputs, isEmpty);
+      },
+    );
+
+    test(
+      'cancelFileUpload / dismissOverlay cancels upload and staged sessionId stays pinned across focus switch',
+      () async {
+        final harness = AppThreeWayWsHarness();
+        addTearDown(harness.dispose);
+        await harness.startCaster(id: 'up-s1', title: 's1');
+        await harness.startCaster(id: 'up-s2', title: 's2');
+
+        final workspace = FtermWorkspaceController(
+          launchConfig: CastLaunchConfig(token: harness.token),
+          repository: CastClientRepository(
+            transport: WsClientTransport(
+              serverUri: CastLaunchConfig.defaultServerUri,
+              token: harness.token,
+              channelFactory: harness.openClientChannel,
+            ),
+            enableReconnect: false,
+          ),
+          localHostDriver: _StubOnlyLocalHostDriver(),
+          audioController: FtermAudioController(
+            engineFactory: _FakeAudioEngine.new,
+          ),
+          storage: _InMemorySettingsStorage(),
+          resizeDebounce: Duration.zero,
+        );
+        addTearDown(workspace.dispose);
+
+        await workspace.start();
+        await _pumpUntil(() => workspace.tabs.length == 2);
+        workspace.selectTab(0);
+        final s1SessionId = workspace.focusedPane!.remoteSessionId!;
+
+        // Stage file on s1, then switch active tab to s2 before confirming/canceling.
+        workspace.stageDroppedFiles([
+          MemoryDroppedFileSource(
+            name: 'staged.txt',
+            bytes: Uint8List.fromList(utf8.encode('payload')),
+          ),
+        ]);
+        expect(workspace.activeOverlay, equals(FtermOverlay.fileUpload));
+        expect(workspace.pendingUploadFiles, hasLength(1));
+
+        workspace.selectTab(1);
+        expect(
+          workspace.focusedPane!.remoteSessionId,
+          isNot(equals(s1SessionId)),
+        );
+
+        // Confirming uploads to s1 (the pinned session), not s2; dismissing clears cleanly.
+        workspace.dismissOverlay();
+        expect(workspace.activeOverlay, equals(FtermOverlay.none));
+        expect(workspace.pendingUploadFiles, isEmpty);
+        expect(await workspace.confirmFileUpload(), isFalse);
+      },
+    );
+
+    test(
+      'IoLocalHostDriver.openShell disposed during ConPTY prepare throws StateError without spawning backend',
+      () async {
+        final prepareGate = Completer<String?>();
+        var backendCalls = 0;
+        final driver = IoLocalHostDriver(
+          isWindows: true,
+          downloadConPty: false,
+          ensureConPtyReady: ({download = false, onWarning}) =>
+              prepareGate.future,
+          backendFactory:
+              ({
+                required executable,
+                required arguments,
+                required initialCols,
+                required initialRows,
+                required pixelWidth,
+                required pixelHeight,
+                workingDirectory,
+                environment,
+              }) {
+                backendCalls += 1;
+                return _TestRoutedPtyBackend();
+              },
+        );
+
+        final openFuture = driver.openShell(const LocalShellConfig());
+        await driver.dispose();
+        prepareGate.complete('C:\\fake\\conpty.dll');
+
+        await expectLater(openFuture, throwsStateError);
+        expect(backendCalls, equals(0));
+      },
+    );
+
+    test(
+      'togglePaneShare ignores rapid double-invocation while startShare is in flight',
+      () async {
+        final harness = AppThreeWayWsHarness();
+        addTearDown(harness.dispose);
+        final startGate = Completer<void>();
+        final driver = _GateableLocalHostDriver(
+          harness: harness,
+          startGate: startGate,
+        );
+        final workspace = FtermWorkspaceController(
+          launchConfig: CastLaunchConfig(),
+          repository: CastClientRepository(
+            transport: WsClientTransport(
+              channelFactory: harness.openClientChannel,
+            ),
+            enableReconnect: false,
+          ),
+          localHostDriver: driver,
+          audioController: FtermAudioController(
+            engineFactory: _FakeAudioEngine.new,
+          ),
+          storage: _InMemorySettingsStorage(),
+          resizeDebounce: Duration.zero,
+        );
+        addTearDown(workspace.dispose);
+
+        await workspace.openLocalShellTab();
+        final paneId = workspace.focusedPane!.paneId;
+
+        final first = workspace.togglePaneShare(paneId: paneId);
+        final second = workspace.togglePaneShare(paneId: paneId);
+        expect(await second, isFalse);
+
+        startGate.complete();
+        expect(await first, isTrue);
+        expect(driver.hosts.single.startShareCalls, equals(1));
+      },
+    );
+
+    test(
+      'IoLocalHostDriver statusStream transitions error snapshot and cleans up subscription on failure and dispose',
+      () async {
+        final driver = IoLocalHostDriver(
+          isWindows: false,
+          backendFactory:
+              ({
+                required executable,
+                required arguments,
+                required initialCols,
+                required initialRows,
+                required pixelWidth,
+                required pixelHeight,
+                workingDirectory,
+                environment,
+              }) => _TestRoutedPtyBackend(),
+        );
+        addTearDown(driver.dispose);
+
+        final host = await driver.openShell(const LocalShellConfig());
+        final states = <LocalShareState>[];
+        final sub = host.shareUpdates.listen((s) => states.add(s.state));
+        addTearDown(sub.cancel);
+
+        await host.startShare(
+          serverUri: Uri.parse('ws://127.0.0.1:8420/v1/caster'),
+          casterToken: 'bad-tok',
+          title: 'status-test',
+          channelOpener: () async {
+            final ctrl = StreamChannelController<Uint8List>();
+            ctrl.foreign.stream.listen((raw) {
+              if (BufferFrameCodec.decode(raw) is AuthFrame) {
+                ctrl.foreign.sink.add(
+                  BufferFrameCodec.encode(
+                    const ErrorFrame(
+                      code: 'auth_failed',
+                      message: 'invalid caster token',
+                    ),
+                  ),
+                );
+              }
+            });
+            return ctrl.local;
+          },
+        );
+
+        await _pumpUntil(
+          () => host.shareSnapshot.state == LocalShareState.error,
+        );
+        expect(driver.hasActiveSharePolling, isFalse);
+        expect(states, contains(LocalShareState.error));
+        await host.dispose();
+        expect(driver.hasActiveSharePolling, isFalse);
+      },
+    );
+  });
+}
+
+final class _GateableLocalHostDriver implements LocalHostDriver {
+  final AppThreeWayWsHarness harness;
+  final Completer<void> startGate;
+  final List<_GateableLocalPaneHost> hosts = [];
+
+  _GateableLocalHostDriver({required this.harness, required this.startGate});
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<LocalPaneHost> openShell(LocalShellConfig config) async {
+    final host = _GateableLocalPaneHost(
+      id: 'gated-${hosts.length + 1}',
+      harness: harness,
+      startGate: startGate,
+    );
+    hosts.add(host);
+    return host;
+  }
+
+  @override
+  Future<void> dispose() async {
+    for (final h in hosts) {
+      await h.dispose();
+    }
+  }
+}
+
+final class _GateableLocalPaneHost implements LocalPaneHost {
+  @override
+  final String id;
+  final AppThreeWayWsHarness harness;
+  final Completer<void> startGate;
+  @override
+  final _MemoryTerminalPort port = _MemoryTerminalPort();
+  final Completer<int> _exitCode = Completer<int>();
+  final StreamController<LocalShareSnapshot> _shareUpdates =
+      StreamController<LocalShareSnapshot>.broadcast();
+  LocalShareSnapshot _snapshot = LocalShareSnapshot.unshared;
+  int startShareCalls = 0;
+
+  _GateableLocalPaneHost({
+    required this.id,
+    required this.harness,
+    required this.startGate,
+  });
+
+  @override
+  Future<int> get exitCode => _exitCode.future;
+
+  @override
+  LocalShareSnapshot get shareSnapshot => _snapshot;
+
+  @override
+  Stream<LocalShareSnapshot> get shareUpdates => _shareUpdates.stream;
+
+  @override
+  Future<SessionId> startShare({
+    required Uri serverUri,
+    required String casterToken,
+    required String title,
+    String? uploadDirPath,
+    IapTokenProvider? iapTokenProvider,
+    CasterTransportOpener? channelOpener,
+  }) async {
+    startShareCalls += 1;
+    await startGate.future;
+    final assigned = SessionId('gated-$id');
+    _snapshot = LocalShareSnapshot(
+      state: LocalShareState.live,
+      sessionId: assigned,
+    );
+    if (!_shareUpdates.isClosed) _shareUpdates.add(_snapshot);
+    return assigned;
+  }
+
+  @override
+  Future<void> stopShare() async {
+    _snapshot = LocalShareSnapshot.unshared;
+    if (!_shareUpdates.isClosed) _shareUpdates.add(_snapshot);
+  }
+
+  @override
+  void setColorScheme(tui.TerminalBrightness brightness) {}
+
+  @override
+  Future<void> dispose() async {
     await port.dispose();
     if (!_exitCode.isCompleted) _exitCode.complete(0);
     await _shareUpdates.close();

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection' show UnmodifiableMapView;
 import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -163,9 +164,12 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   final List<FtermTabState> _tabs = [];
   final Map<String, FtermPaneController> _panes = {};
+  late final Map<String, FtermPaneController> _panesView =
+      UnmodifiableMapView<String, FtermPaneController>(_panes);
   final List<SessionSummary> _remoteDirectorySessions = [];
   final Set<SessionId> _ownedSharedSessionIds = {};
   final Set<SessionId> _dismissedRemoteSessions = {};
+  final Set<String> _togglingSharePaneIds = {};
   final _ChromeChangeNotifier _chromeNotifier = _ChromeChangeNotifier();
 
   late final FileUploadCoordinator _uploadCoordinator;
@@ -182,6 +186,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   FtermOverlay _activeOverlay = FtermOverlay.none;
   bool _leaderArmed = false;
   bool _workspaceVisible = true;
+  bool _windowFocused = true;
   bool _started = false;
   bool _disposed = false;
   int _bellEventsCount = 0;
@@ -189,6 +194,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   int _titleEventsCount = 0;
   String? _statusBanner;
   List<DroppedFileSource> _pendingUploadFiles = const [];
+  SessionId? _stagedUploadSessionId;
   Uri _activeRelayUri;
   String _activeClientToken;
   String _activeCasterToken;
@@ -334,6 +340,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   /// Looks up a mounted pane controller by [paneId].
   FtermPaneController? paneById(String paneId) => _panes[paneId];
+
+  /// Read-only view of all mounted pane controllers keyed by pane ID.
+  Map<String, FtermPaneController> get panes => _panesView;
 
   /// Whether this host supports local interactive desktop shells.
   bool get isDesktopHost => localHostDriver.isSupported;
@@ -577,53 +586,23 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (_disposed) return null;
     final tab = activeTab;
     if (tab == null) {
-      if (localHostDriver.isSupported && remoteSessionId == null) {
-        return openLocalShellTab(localShellConfig);
-      }
-      if (remoteSessionId != null) {
-        return openRemoteSessionTab(remoteSessionId);
-      }
-      return null;
+      return _openSplitInEmptyWorkspace(
+        remoteSessionId: remoteSessionId,
+        localShellConfig: localShellConfig,
+      );
     }
 
     final targetPaneId = tab.splitTree.focusedPaneId;
-    final currentPane = _panes[targetPaneId];
-    final FtermPaneController newPane;
     final newPaneId = _allocatePaneId();
-    if (remoteSessionId == null &&
-        localHostDriver.isSupported &&
-        (currentPane?.isLocal ?? true)) {
-      final host = await localHostDriver.openShell(
-        localShellConfig ??
-            LocalShellConfig(
-              workingDirectory: currentPane?.localHost?.port.workingDirectory,
-              colorScheme: _platformBrightness,
-            ),
-      );
-      if (_disposed ||
-          !_tabs.contains(tab) ||
-          !tab.splitTree.containsPane(targetPaneId)) {
-        await host.dispose();
-        return null;
-      }
-      newPane = _createPaneController(
-        paneId: newPaneId,
-        port: host.port,
-        localHost: host,
-      );
-    } else {
-      final targetSession =
-          remoteSessionId ??
-          currentPane?.remoteSessionId ??
-          availableRemoteSessions.firstOrNull?.id;
-      if (targetSession == null) return null;
-      final port = repository.openTerminalPort(targetSession);
-      newPane = _createPaneController(
-        paneId: newPaneId,
-        port: port,
-        remoteSessionId: targetSession,
-      );
-    }
+    final newPane = await _createSplitPane(
+      tab: tab,
+      targetPaneId: targetPaneId,
+      newPaneId: newPaneId,
+      currentPane: _panes[targetPaneId],
+      remoteSessionId: remoteSessionId,
+      localShellConfig: localShellConfig,
+    );
+    if (newPane == null) return null;
 
     _panes[newPaneId] = newPane;
     tab.splitTree = tab.splitTree.splitPane(
@@ -634,6 +613,64 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _syncFocusedPaneStates();
     _notifyChromeChanged();
     return newPaneId;
+  }
+
+  Future<String?> _openSplitInEmptyWorkspace({
+    SessionId? remoteSessionId,
+    LocalShellConfig? localShellConfig,
+  }) async {
+    if (localHostDriver.isSupported && remoteSessionId == null) {
+      return openLocalShellTab(localShellConfig);
+    }
+    if (remoteSessionId != null) {
+      return openRemoteSessionTab(remoteSessionId);
+    }
+    return null;
+  }
+
+  Future<FtermPaneController?> _createSplitPane({
+    required FtermTabState tab,
+    required String targetPaneId,
+    required String newPaneId,
+    required FtermPaneController? currentPane,
+    required SessionId? remoteSessionId,
+    required LocalShellConfig? localShellConfig,
+  }) async {
+    final useLocal =
+        remoteSessionId == null &&
+        localHostDriver.isSupported &&
+        (currentPane?.isLocal ?? true);
+    if (!useLocal) {
+      final targetSession =
+          remoteSessionId ??
+          currentPane?.remoteSessionId ??
+          availableRemoteSessions.firstOrNull?.id;
+      if (targetSession == null) return null;
+      return _createPaneController(
+        paneId: newPaneId,
+        port: repository.openTerminalPort(targetSession),
+        remoteSessionId: targetSession,
+      );
+    }
+
+    final host = await localHostDriver.openShell(
+      localShellConfig ??
+          LocalShellConfig(
+            workingDirectory: currentPane?.localHost?.port.workingDirectory,
+            colorScheme: _platformBrightness,
+          ),
+    );
+    if (_disposed ||
+        !_tabs.contains(tab) ||
+        !tab.splitTree.containsPane(targetPaneId)) {
+      await host.dispose();
+      return null;
+    }
+    return _createPaneController(
+      paneId: newPaneId,
+      port: host.port,
+      localHost: host,
+    );
   }
 
   /// Closes [paneId] (or the currently focused pane), promoting its sibling or
@@ -844,54 +881,58 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }) async {
     if (_disposed) return false;
     final targetId = paneId ?? activeTab?.splitTree.focusedPaneId;
-    if (targetId == null) return false;
-    final pane = _panes[targetId];
-    final host = pane?.localHost;
-    if (pane == null || host == null) return false;
-
-    final shareState = host.shareSnapshot.state;
-    if (shareState == LocalShareState.connecting ||
-        shareState == LocalShareState.live) {
-      await _stopShareForHost(host);
-      _notifyChromeChanged();
-      return true;
-    }
-    if (shareState == LocalShareState.error) {
-      await _stopShareForHost(host);
-    }
-
-    final resolvedServer =
-        serverUri ?? CastLaunchConfig.deriveCasterServerUri(_activeRelayUri);
-    final resolvedToken =
-        casterToken ??
-        (_activeCasterToken.isNotEmpty
-            ? _activeCasterToken
-            : _relayCredentials.casterToken);
-    if (_requiresCasterTokenPrompt(
-      channelOpener: channelOpener,
-      resolvedToken: resolvedToken,
-      serverUri: resolvedServer,
-    )) {
-      _setStatusBanner('Configure relay caster token before sharing.');
-      _setOverlay(FtermOverlay.connect);
-      return false;
-    }
-
-    final tabTitle = _resolveShareTitle(targetId, pane);
+    if (targetId == null || !_togglingSharePaneIds.add(targetId)) return false;
     try {
-      final assignedId = await host.startShare(
-        serverUri: resolvedServer,
-        casterToken: resolvedToken,
-        title: tabTitle,
-        iapTokenProvider: launchConfig.iapTokenProviderFor(resolvedServer),
+      final pane = _panes[targetId];
+      final host = pane?.localHost;
+      if (pane == null || host == null) return false;
+
+      final shareState = host.shareSnapshot.state;
+      if (shareState == LocalShareState.connecting ||
+          shareState == LocalShareState.live) {
+        await _stopShareForHost(host);
+        _notifyChromeChanged();
+        return true;
+      }
+      if (shareState == LocalShareState.error) {
+        await _stopShareForHost(host);
+      }
+
+      final resolvedServer =
+          serverUri ?? CastLaunchConfig.deriveCasterServerUri(_activeRelayUri);
+      final resolvedToken =
+          casterToken ??
+          (_activeCasterToken.isNotEmpty
+              ? _activeCasterToken
+              : _relayCredentials.casterToken);
+      if (_requiresCasterTokenPrompt(
         channelOpener: channelOpener,
-      );
-      _ownedSharedSessionIds.add(assignedId);
-      _notifyChromeChanged();
-      return true;
-    } on Object catch (error) {
-      _setStatusBanner('Share failed: $error');
-      return false;
+        resolvedToken: resolvedToken,
+        serverUri: resolvedServer,
+      )) {
+        _setStatusBanner('Configure relay caster token before sharing.');
+        _setOverlay(FtermOverlay.connect);
+        return false;
+      }
+
+      final tabTitle = _resolveShareTitle(targetId, pane);
+      try {
+        final assignedId = await host.startShare(
+          serverUri: resolvedServer,
+          casterToken: resolvedToken,
+          title: tabTitle,
+          iapTokenProvider: launchConfig.iapTokenProviderFor(resolvedServer),
+          channelOpener: channelOpener,
+        );
+        _ownedSharedSessionIds.add(assignedId);
+        _notifyChromeChanged();
+        return true;
+      } on Object catch (error) {
+        _setStatusBanner('Share failed: $error');
+        return false;
+      }
+    } finally {
+      _togglingSharePaneIds.remove(targetId);
     }
   }
 
@@ -940,9 +981,25 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   /// Dismisses the transient banner and active modal overlay.
   void dismissOverlay() {
-    _leaderArmed = false;
     _statusBanner = null;
+    if (_activeOverlay == FtermOverlay.fileUpload) {
+      cancelFileUpload();
+      return;
+    }
+    _leaderArmed = false;
     if (_activeOverlay != FtermOverlay.none) {
+      _activeOverlay = FtermOverlay.none;
+    }
+    _notifyChromeChanged();
+  }
+
+  /// Cancels any active or staged file upload, clears pending files, and closes the overlay.
+  void cancelFileUpload() {
+    _leaderArmed = false;
+    _uploadCoordinator.cancel();
+    _pendingUploadFiles = const [];
+    _stagedUploadSessionId = null;
+    if (_activeOverlay == FtermOverlay.fileUpload) {
       _activeOverlay = FtermOverlay.none;
     }
     _notifyChromeChanged();
@@ -956,17 +1013,19 @@ final class FtermWorkspaceController extends ChangeNotifier {
       _setStatusBanner('Drop uploads target remote shared panes.');
       return;
     }
+    _stagedUploadSessionId = target;
     _pendingUploadFiles = List<DroppedFileSource>.unmodifiable(files);
     _setOverlay(FtermOverlay.fileUpload);
   }
 
-  /// Uploads staged [pendingUploadFiles] to the focused remote session.
+  /// Uploads staged [pendingUploadFiles] to the remote session pinned at drop time.
   Future<bool> confirmFileUpload() async {
-    final sessionId = focusedPane?.remoteSessionId;
+    final sessionId = _stagedUploadSessionId;
     final files = _pendingUploadFiles;
     if (sessionId == null || files.isEmpty) return false;
     final ok = await _uploadCoordinator.uploadFiles(sessionId, files);
     if (ok && !_disposed) {
+      _stagedUploadSessionId = null;
       _pendingUploadFiles = const [];
       _activeOverlay = FtermOverlay.none;
       _notifyChromeChanged();
@@ -994,6 +1053,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _workspaceSettings.copyWith(copyOnSelect: enabled),
   );
 
+  /// Updates and persists inbound remote `OSC 52` clipboard policy.
+  void setOsc52Policy(Osc52ClipboardPolicy policy) =>
+      updateWorkspaceSettings(_workspaceSettings.copyWith(osc52Policy: policy));
+
   /// Updates and persists F12 shortcut capture setting.
   void setF12ShortcutsEnabled(bool enabled) => updateWorkspaceSettings(
     _workspaceSettings.copyWith(f12ShortcutsEnabled: enabled),
@@ -1010,6 +1073,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (_disposed || _workspaceSettings == next) return;
     _workspaceSettings = next;
     _applyColorResolver();
+    _syncClipboardPolicies();
     _settingsSaver.save(next);
     _notifyChromeChanged();
   }
@@ -1030,6 +1094,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
   bool reloadSettingsFromStorage() {
     if (_disposed) return false;
     _settingsSaver.cancelPending();
+    if (_storage case final BatchSettingsStorage batch) {
+      batch.invalidateCache();
+    }
     _workspaceSettings = loadStoredSettings(
       _storage,
       defaultDockPosition: _workspaceSettings.dockPosition,
@@ -1039,6 +1106,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       ..setMuted(_preferences.audioMuted)
       ..setVolume(_preferences.audioVolume);
     _applyColorResolver();
+    _syncClipboardPolicies();
     _notifyChromeChanged();
     return true;
   }
@@ -1065,6 +1133,19 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _notifyChromeChanged();
   }
 
+  /// Tracks whether the `fterm` OS window currently holds input focus.
+  void setWindowFocused(bool focused) {
+    if (_disposed || _windowFocused == focused) return;
+    _windowFocused = focused;
+    _notifyChromeChanged();
+  }
+
+  void _syncClipboardPolicies() {
+    for (final pane in _panes.values) {
+      pane.remotePort?.clipboardPolicy = _workspaceSettings.osc52Policy;
+    }
+  }
+
   /// Cancels throttled timers and flushes settings immediately (e.g., on pause).
   void flushPendingSettings() {
     if (_disposed) return;
@@ -1076,21 +1157,26 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required TerminalPort port,
     LocalPaneHost? localHost,
     SessionId? remoteSessionId,
-  }) => FtermPaneController(
-    paneId: paneId,
-    port: port,
-    colorResolver: _colorResolver,
-    localHost: localHost,
-    remoteSessionId: remoteSessionId,
-    resizeDebounce: _resizeDebounce,
-    onBell: _handlePaneBell,
-    onAudio: _handlePaneAudio,
-    onTitleChanged: _handlePaneTitleChanged,
-    onClipboard: _handlePaneClipboard,
-    onExited: _handlePaneExited,
-    onShareChanged: _handlePaneShareChanged,
-    onFrameRedrawn: _onFrameRedrawn,
-  );
+  }) {
+    if (port is RemoteTerminalPort) {
+      port.clipboardPolicy = _workspaceSettings.osc52Policy;
+    }
+    return FtermPaneController(
+      paneId: paneId,
+      port: port,
+      colorResolver: _colorResolver,
+      localHost: localHost,
+      remoteSessionId: remoteSessionId,
+      resizeDebounce: _resizeDebounce,
+      onBell: _handlePaneBell,
+      onAudio: _handlePaneAudio,
+      onTitleChanged: _handlePaneTitleChanged,
+      onClipboard: _handlePaneClipboard,
+      onExited: _handlePaneExited,
+      onShareChanged: _handlePaneShareChanged,
+      onFrameRedrawn: _onFrameRedrawn,
+    );
+  }
 
   bool _isCanonicalEventPane(String paneId) {
     final pane = _panes[paneId];
@@ -1148,14 +1234,21 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   void _handleWaveformQuery(FtermPaneController pane, int requestId) {
-    final samples = audioController.captureActiveWaveform();
-    if (samples == null) return;
+    final isForegroundFocused =
+        _workspaceVisible &&
+        _windowFocused &&
+        focusedPane?.paneId == pane.paneId;
     final remotePort = pane.remotePort;
     if (remotePort != null) {
-      remotePort.sendWaveformReply(requestId, samples);
+      final samples = isForegroundFocused
+          ? audioController.captureActiveWaveform()
+          : null;
+      remotePort.sendWaveformReply(requestId, samples ?? Float32List(256));
       return;
     }
-    if (pane.hasExited) return;
+    if (!isForegroundFocused || pane.hasExited) return;
+    final samples = audioController.captureActiveWaveform();
+    if (samples == null) return;
     final encoded = ApcAudioEncoder.encodeWaveformReply(requestId, samples);
     pane.port.sendInput(Uint8List.fromList(utf8.encode(encoded)));
   }
@@ -1175,6 +1268,14 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   void _handlePaneClipboard(String paneId, String selection, String text) {
     if (_disposed || text.isEmpty) return;
+    if (_workspaceSettings.osc52Policy == Osc52ClipboardPolicy.deny) return;
+    if (!_workspaceVisible || !_windowFocused) return;
+    if (focusedPane?.paneId != paneId) return;
+    const maxBytes = CastWorkspaceSettings.defaultMaxOsc52ClipboardBytes;
+    if (text.length > maxBytes) return;
+    if (text.length * 3 > maxBytes && utf8.encode(text).length > maxBytes) {
+      return;
+    }
     if (selection.contains('c') || selection.isEmpty) {
       unawaited(
         Clipboard.setData(ClipboardData(text: text)).catchError((_) {}),
@@ -1263,12 +1364,6 @@ final class FtermWorkspaceController extends ChangeNotifier {
         _notifyChromeChanged();
       case FileUploadAckFrame():
         _uploadCoordinator.handleAckFrame(message);
-      case ClipboardFrame(:final text, :final readBlocked):
-        if (!readBlocked && text.isNotEmpty) {
-          unawaited(
-            Clipboard.setData(ClipboardData(text: text)).catchError((_) {}),
-          );
-        }
       case SessionClosedFrame():
         _notifyChromeChanged();
       case ErrorFrame(:final code, :final message):
@@ -1379,6 +1474,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       _onClientDisconnected,
     );
     _settingsSaver.dispose();
+    await _settingsSaver.flushAsync();
     final activePanes = [..._panes.values];
     _panes.clear();
     _tabs.clear();

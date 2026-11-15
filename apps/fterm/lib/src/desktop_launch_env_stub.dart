@@ -18,3 +18,10 @@ void reportPlatformStartupError(String message) {}
 
 /// No-op connect error logger on Web.
 void logPlatformConnectError(Object error) {}
+
+/// Unsupported secret file reader on Web.
+String readPlatformSecretFileSync(String path) =>
+    throw const FormatException('--token-file is not supported on Web.');
+
+/// No-op CLI secret warning on Web.
+void warnPlatformCliSecret(String flag) {}

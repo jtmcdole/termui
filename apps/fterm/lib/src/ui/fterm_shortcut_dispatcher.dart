@@ -82,12 +82,7 @@ final class FtermShortcutDispatcher {
     }
 
     if (workspace.activeOverlay != FtermOverlay.none) {
-      if (event.logicalKey == LogicalKeyboardKey.escape) {
-        workspace.dismissOverlay();
-        return true;
-      }
-      // Prevent obscured TerminalSurface from taking F12 screenshots while modal overlays are open.
-      return event.logicalKey == LogicalKeyboardKey.f12;
+      return _handleOverlayKeyEvent(event);
     }
 
     if (workspace.isLeaderArmed) {
@@ -106,6 +101,16 @@ final class FtermShortcutDispatcher {
     }
 
     return _handleF12Gate(event, modifiers);
+  }
+
+  bool _handleOverlayKeyEvent(KeyEvent event) {
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      workspace.dismissOverlay();
+      return true;
+    }
+    // Let modal controls, FocusTraversalGroup (Tab), and DefaultTextEditingShortcuts
+    // handle overlay keys while workspace panes stay excluded via ExcludeFocus.
+    return false;
   }
 
   bool _isCtrlBackslashLeader(KeyEvent event, Set<ev.Modifier> modifiers) {

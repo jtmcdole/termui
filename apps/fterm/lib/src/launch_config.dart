@@ -56,15 +56,18 @@ final class CastLaunchConfig {
   /// [defaultServerUri].
   factory CastLaunchConfig.fromEnvironmentAndUri({
     required Uri baseUri,
+    String initialFragmentToken = '',
     String envServerUrl = '',
     String envToken = '',
     String envCasterToken = '',
     IapTokenProvider? iapTokenProvider,
   }) {
     final hasHttpOrigin = _hasHttpOrigin(baseUri);
-    final fragToken = hasHttpOrigin
-        ? _parseFragmentParams(baseUri.fragment)['token']
-        : null;
+    final fragToken = initialFragmentToken.isNotEmpty
+        ? initialFragmentToken
+        : (hasHttpOrigin
+              ? _parseFragmentParams(baseUri.fragment)['token']
+              : null);
     final resolvedToken = (fragToken != null && fragToken.isNotEmpty)
         ? fragToken
         : envToken;

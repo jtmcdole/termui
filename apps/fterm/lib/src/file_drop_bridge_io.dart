@@ -24,6 +24,9 @@ void openPlatformExternalUrl(Uri url) {
 /// No-op URL fragment scrubber on native desktop (`dart:io`) platforms.
 void scrubPlatformUrlFragment() {}
 
+/// No-op initial hash token reader on native desktop (`dart:io`) platforms.
+String consumePlatformInitialHashToken() => '';
+
 final class _NoopIoFileDropBridge implements FileDropBridge {
   const _NoopIoFileDropBridge();
 

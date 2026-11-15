@@ -28,6 +28,19 @@ abstract interface class SettingsStorage {
   void setItem(String key, String value);
 }
 
+/// Optional [SettingsStorage] extension supporting multi-key coalesced writes,
+/// cache invalidation on external reload, and awaiting pending async flushes.
+abstract interface class BatchSettingsStorage implements SettingsStorage {
+  /// Atomically applies all key/value [entries] in one persistence write.
+  void setItems(Map<String, String> entries);
+
+  /// Clears any in-memory cached entries so subsequent reads reload from backing store.
+  void invalidateCache();
+
+  /// Awaits completion of any in-flight asynchronous disk persistence.
+  Future<void> flush();
+}
+
 /// Default platform [SettingsStorage] (`window.localStorage` on Web,
 /// `~/.config/fterm/settings.json` or `%APPDATA%\fterm\settings.json` on native
 /// desktop).
@@ -187,6 +200,24 @@ final class RelayCredentials {
   int get hashCode => Object.hash(serverUrl, clientToken, casterToken);
 }
 
+/// Writes [entries] in one coalesced batch when [storage] supports
+/// [BatchSettingsStorage], falling back to sequential [SettingsStorage.setItem].
+void saveStoredBatch(SettingsStorage storage, Map<String, String> entries) {
+  if (entries.isEmpty) return;
+  if (entries.length == 1) {
+    final entry = entries.entries.first;
+    storage.setItem(entry.key, entry.value);
+    return;
+  }
+  if (storage case final BatchSettingsStorage batch) {
+    batch.setItems(entries);
+    return;
+  }
+  for (final MapEntry(:key, :value) in entries.entries) {
+    storage.setItem(key, value);
+  }
+}
+
 /// Loads [CastWorkspaceSettings] from [storage] (falling back to
 /// [defaultDockPosition] when no stored settings exist or JSON is malformed).
 CastWorkspaceSettings loadStoredSettings(
@@ -278,10 +309,28 @@ final class ThrottledSettingsSaver {
   }
 
   /// Cancels active cooldown timers and writes pending updates synchronously
-  /// while leaving this saver active for subsequent saves.
+  /// while leaving this saver active for subsequent saves, coalescing multiple
+  /// dirty channels into one write.
   void flush() {
-    _settingsChannel.flush();
-    _preferencesChannel.flush();
+    final pendingSettings = _settingsChannel.takePending();
+    final pendingPreferences = _preferencesChannel.takePending();
+    final batch = <String, String>{
+      if (pendingSettings != null)
+        castSettingsStorageKey: pendingSettings.toJsonString(),
+      if (pendingPreferences != null)
+        ftermPreferencesStorageKey: pendingPreferences.toJsonString(),
+    };
+    if (batch.isNotEmpty) {
+      saveStoredBatch(_storage, batch);
+    }
+  }
+
+  /// Flushes pending writes and awaits any in-flight async storage flush.
+  Future<void> flushAsync() async {
+    flush();
+    if (_storage case final BatchSettingsStorage batch) {
+      await batch.flush();
+    }
   }
 
   /// Cancels active timers and flushes any pending updates synchronously.
@@ -324,13 +373,11 @@ final class _ThrottledWriteChannel<T> {
     _pending = null;
   }
 
-  void flush() {
+  T? takePending() {
     _cooldownTimer?.cancel();
     _cooldownTimer = null;
     final pending = _pending;
     _pending = null;
-    if (pending != null) {
-      _write(pending);
-    }
+    return pending;
   }
 }

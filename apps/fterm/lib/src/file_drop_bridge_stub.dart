@@ -14,6 +14,9 @@ void openPlatformExternalUrl(Uri url) {}
 /// No-op URL fragment scrubber on unsupported/fallback platforms.
 void scrubPlatformUrlFragment() {}
 
+/// No-op initial hash token reader on unsupported/fallback platforms.
+String consumePlatformInitialHashToken() => '';
+
 final class _NoopFileDropBridge implements FileDropBridge {
   const _NoopFileDropBridge();
 
