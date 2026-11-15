@@ -43,6 +43,20 @@ Future<void> _waitUntil(
 
 void main() {
   group('Live CastServer + pty2 + WsClientTransport E2E roundtrip', () {
+    setUpAll(() async {
+      final warnings = <String>[];
+      final resolved = await Pty2Session.ensureConPtyReady(
+        download: true,
+        onWarning: warnings.add,
+      );
+      if (Platform.isWindows) {
+        check(
+          resolved,
+          because: 'Windows E2E PTY tests require ConPtyBundle: $warnings',
+        ).isNotNull();
+      }
+    });
+
     test(
       'streams multiple live pty2 sessions via RemoteTerminalPort, routes input, and clamps smallest viewport',
       () async {

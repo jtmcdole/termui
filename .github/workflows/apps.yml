@@ -60,6 +60,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Configure Windows Defender exclusions
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-MpPreference -ExclusionPath "D:\"
+          Add-MpPreference -ExclusionProcess "tar.exe", "unzip.exe", "zstd.exe", "dart.exe", "flutter_tester.exe", "cl.exe", "link.exe", "OpenConsole.exe"
+
       - name: Install ALSA library (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -71,12 +78,23 @@ jobs:
         with:
           channel: stable
           cache: true
+          pub-cache: false
+          cache-path: ${{ runner.os == 'Windows' && 'D:/flutter-sdk/:channel:-:version:-:arch:' || '' }}
+          cache-key: ${{ runner.os == 'Windows' && 'flutter-:os:-:channel:-:version:-:arch:-:hash:-d1' || '' }}
+          pub-cache-path: ${{ runner.os == 'Windows' && 'D:/pub-cache' || 'default' }}
 
       - name: Install workspace dependencies
         run: flutter pub get
 
       - name: Set up SoLoud CMake cache
         uses: ./.github/actions/setup-soloud
+
+      - name: Cache Windows ConPTY sidecar
+        if: runner.os == 'Windows'
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/AppData/Local/pty2/conpty
+          key: ${{ runner.os }}-conpty-${{ hashFiles('packages/pty2/lib/src/impl/conpty_bundle.dart') }}
 
       - name: Test termui_cast_protocol
         working-directory: apps/termui_cast/protocol

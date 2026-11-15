@@ -1189,9 +1189,9 @@ Future<void> main() async {
         final result = await Process.run(Platform.resolvedExecutable, [
           '--packages=${packageConfig!.toFilePath()}',
           probeScript.path,
-        ]).timeout(const Duration(seconds: 15));
+        ]).timeout(const Duration(seconds: 30));
 
-        check(result.exitCode).equals(0);
+        check(result.exitCode, because: 'stderr=${result.stderr}').equals(0);
         final metrics =
             jsonDecode((result.stdout as String).trim())
                 as Map<String, Object?>;
@@ -1199,6 +1199,7 @@ Future<void> main() async {
         check(metrics['emittedFrames'] as int).isGreaterOrEqual(2);
         check(metrics['rssDeltaBytes'] as int).isLessThan(64 * 1024 * 1024);
       },
+      timeout: const Timeout(Duration(seconds: 60)),
       skip: Platform.isWindows ? 'Requires POSIX /bin/sh and yes' : null,
     );
 
@@ -1308,6 +1309,10 @@ Future<void> main() async {
         );
         addTearDown(server.close);
 
+        final tempDir = await Directory.systemTemp.createTemp('fast_exit_cli_');
+        addTearDown(() => tempDir.delete(recursive: true));
+        final exitTriggerPath = '${tempDir.path}/exit_now';
+
         final packageConfig = await Isolate.packageConfig;
         check(packageConfig).isNotNull();
 
@@ -1322,6 +1327,7 @@ Future<void> main() async {
         );
 
         final stderrLines = <String>[];
+        final registeredLogged = Completer<void>();
         final childExitedLogged = Completer<Stopwatch>();
 
         final proc = await Process.start(
@@ -1338,7 +1344,9 @@ Future<void> main() async {
             '--',
             '/bin/sh',
             '-c',
-            'sleep 0.4; exit 0',
+            'while [ ! -f "\$1" ]; do sleep 0.05; done; exit 0',
+            'sh',
+            exitTriggerPath,
           ],
           environment: const <String, String>{
             'TERMUI_CAST_SERVER_URL': '',
@@ -1354,6 +1362,10 @@ Future<void> main() async {
             .transform(const LineSplitter())
             .listen((line) {
               stderrLines.add(line);
+              if (line.contains('Registered session "fast-exit-test"') &&
+                  !registeredLogged.isCompleted) {
+                registeredLogged.complete();
+              }
               if (line.contains('Child process exited with code ') &&
                   !childExitedLogged.isCompleted) {
                 final sw = Stopwatch()..start();
@@ -1361,7 +1373,24 @@ Future<void> main() async {
               }
             });
 
+        unawaited(
+          proc.exitCode.then((code) {
+            final err = StateError(
+              'termui_cast exited early ($code): ${stderrLines.join(' | ')}',
+            );
+            if (!registeredLogged.isCompleted) {
+              registeredLogged.completeError(err);
+            }
+            if (!childExitedLogged.isCompleted) {
+              childExitedLogged.completeError(err);
+            }
+          }),
+        );
+
         unawaited(proc.stdout.drain<void>());
+
+        await registeredLogged.future.timeout(const Duration(seconds: 30));
+        await File(exitTriggerPath).writeAsString('go', flush: true);
 
         final stopwatch = await childExitedLogged.future.timeout(
           const Duration(seconds: 10),
@@ -1369,10 +1398,10 @@ Future<void> main() async {
         final code = await proc.exitCode.timeout(const Duration(seconds: 5));
         stopwatch.stop();
 
-        check(code).equals(0);
+        check(code, because: 'stderr=$stderrLines').equals(0);
         check(
           stderrLines,
-        ).any((l) => l.contains('Started "/bin/sh -c sleep 0.4; exit 0"'));
+        ).any((l) => l.contains('Started "/bin/sh -c while [ ! -f'));
         check(
           stderrLines,
         ).any((l) => l.contains('Registered session "fast-exit-test"'));
@@ -1381,6 +1410,7 @@ Future<void> main() async {
         ).any((l) => l.contains('Child process exited with code 0'));
         check(stopwatch.elapsedMilliseconds).isLessThan(2000);
       },
+      timeout: const Timeout(Duration(seconds: 60)),
       skip: Platform.isWindows ? 'Requires POSIX /bin/sh' : null,
     );
 
