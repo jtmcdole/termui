@@ -117,6 +117,10 @@ void main() {
       'TerminalSurface with bufferProvider and no bufferListenable repaints on rebuild and skips duplicate prepareBuffer',
       _testBufferProviderWithoutListenableAndExternallyPrepared,
     );
+    testWidgets(
+      'shared GlyphAtlasController short-circuits DPR updates and ensureInitialized across multiple panes at matching DPR',
+      _testSharedAtlasDprDeduplication,
+    );
   });
 
   group('Clamped viewport dimming & pre-edit overlay', () {
@@ -160,6 +164,10 @@ void main() {
       'attaches with viewId when FocusNode is pre-focused and reattaches if viewId changes',
       variant: TargetPlatformVariant.only(TargetPlatform.windows),
       _testPreFocusedAndViewIdChange,
+    );
+    test(
+      'grapheme-cluster prefix diffing preserves multi-code-unit emoji and combining marks',
+      _testGraphemeClusterImeDiffing,
     );
   });
 }
@@ -1478,4 +1486,134 @@ Future<void> _testPreFocusedAndViewIdChange(WidgetTester tester) async {
     TerminalImeClient.defaultInputConfiguration.copyWith(viewId: 42),
   );
   expect(_lastSetClientViewId(tester), equals(42));
+}
+
+Future<void> _testSharedAtlasDprDeduplication(WidgetTester tester) async {
+  final controller = GlyphAtlasController(
+    fontSize: 13.0,
+    fontFamily: 'Roboto Mono',
+    devicePixelRatio: 2.0,
+  );
+  addTearDown(controller.dispose);
+
+  await tester.runAsync<void>(() async {
+    await controller.ensureInitialized();
+  });
+  expect(controller.atlas, isNotNull);
+  expect(controller.debugEnsureInitializedCallCount, equals(1));
+  expect(controller.debugSetDevicePixelRatioCallCount, equals(0));
+  final initialCreated = controller.debugCreatedAtlasCount;
+
+  final b1 = Buffer(20, 6)..writeString(0, 0, 'One', Style.empty);
+  final b2 = Buffer(20, 6)..writeString(0, 0, 'Two', Style.empty);
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(devicePixelRatio: 2.0),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 800,
+            height: 400,
+            child: Row(
+              children: [
+                Expanded(
+                  child: TerminalSurface(
+                    atlasController: controller,
+                    buffer: b1,
+                  ),
+                ),
+                Expanded(
+                  child: TerminalSurface(
+                    atlasController: controller,
+                    buffer: b2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+
+  // Both panes must short-circuit ensureInitialized and setDevicePixelRatio.
+  expect(controller.debugEnsureInitializedCallCount, equals(1));
+  expect(controller.debugSetDevicePixelRatioCallCount, equals(0));
+  expect(controller.debugCreatedAtlasCount, equals(initialCreated));
+
+  // Changing MediaQuery DPR updates once when DPR differs.
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      MediaQuery(
+        data: const MediaQueryData(devicePixelRatio: 3.0),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 800,
+            height: 400,
+            child: Row(
+              children: [
+                Expanded(
+                  child: TerminalSurface(
+                    atlasController: controller,
+                    buffer: b1,
+                  ),
+                ),
+                Expanded(
+                  child: TerminalSurface(
+                    atlasController: controller,
+                    buffer: b2,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+  });
+  expect(controller.devicePixelRatio, equals(3.0));
+  expect(controller.debugSetDevicePixelRatioCallCount, equals(1));
+  expect(controller.debugEnsureInitializedCallCount, equals(1));
+}
+
+void _testGraphemeClusterImeDiffing() {
+  // Never split a base emoji from a ZWJ/skin-tone continuation grapheme.
+  expect(TerminalImeClient.stripGraphemePrefix('👍🏽', '👍'), equals('👍🏽'));
+  // Never split a base ASCII letter from a combining accent.
+  expect(
+    TerminalImeClient.stripGraphemePrefix('e\u0301', 'e'),
+    equals('e\u0301'),
+  );
+  // Strip an exact whole-grapheme prefix and keep the trailing cluster intact.
+  expect(
+    TerminalImeClient.stripGraphemePrefix('👨‍💻e\u0301', '👨‍💻'),
+    equals('e\u0301'),
+  );
+
+  final committed = <String>[];
+  final ime = TerminalImeClient(onTextInput: committed.add);
+  addTearDown(ime.dispose);
+
+  ime.updateEditingValueWithDeltas([
+    TextEditingDeltaInsertion(
+      oldText: '',
+      textInserted: '👨‍💻',
+      insertionOffset: 0,
+      selection: const TextSelection.collapsed(offset: 5),
+      composing: TextRange.empty,
+    ),
+    TextEditingDeltaInsertion(
+      oldText: '👨‍💻',
+      textInserted: 'e\u0301',
+      insertionOffset: 5,
+      selection: const TextSelection.collapsed(offset: 7),
+      composing: TextRange.empty,
+    ),
+  ]);
+  expect(committed, equals(['👨‍💻e\u0301']));
 }

@@ -791,10 +791,9 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       return;
     }
 
-    final committed =
-        (!prevComposing && value.text.startsWith(_editingValue.text))
-        ? value.text.substring(_editingValue.text.length)
-        : value.text;
+    final committed = prevComposing
+        ? value.text
+        : _stripGraphemePrefix(value.text, _editingValue.text);
     _editingValue = TextEditingValue.empty;
     if (committed.isNotEmpty &&
         (prevComposing || !_shouldSuppressNonComposingInsertion(committed))) {
@@ -887,6 +886,26 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       !range.isCollapsed &&
       range.start >= 0 &&
       range.end <= textLength;
+
+  /// Grapheme-cluster prefix stripper exposed for unit verification.
+  @visibleForTesting
+  static String stripGraphemePrefix(String text, String prefix) =>
+      _stripGraphemePrefix(text, prefix);
+
+  static String _stripGraphemePrefix(String text, String prefix) {
+    if (prefix.isEmpty || text.isEmpty) return text;
+    final textChars = text.characters;
+    final prefixChars = prefix.characters;
+    if (textChars.length < prefixChars.length) return text;
+    final textIter = textChars.iterator;
+    final prefixIter = prefixChars.iterator;
+    while (prefixIter.moveNext()) {
+      if (!textIter.moveNext() || textIter.current != prefixIter.current) {
+        return text;
+      }
+    }
+    return textChars.skip(prefixChars.length).string;
+  }
 
   static String _safeReplace(
     String text,
