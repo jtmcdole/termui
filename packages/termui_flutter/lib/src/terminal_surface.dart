@@ -349,7 +349,9 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       widget.reportPixelMouseEvents;
 
   bool get _effectiveMouseTracking =>
-      widget.mouseTrackingProvider?.call() ?? widget.mouseTracking;
+      widget.mouseTrackingProvider?.call() ??
+      widget.terminal?.mouseTracking ??
+      widget.mouseTracking;
 
   bool get _effectiveCopyOnSelect =>
       widget.copyOnSelectProvider?.call() ?? widget.copyOnSelect;

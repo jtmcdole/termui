@@ -113,6 +113,156 @@ void main() {
       expect(italicPsi, isNotNull);
       expect(boldItalicPsi, isNotNull);
     });
+
+    test(
+      'rectFor O(1) ASCII lookup matches style maps across 0x20..0x7E for all 4 variants',
+      () async {
+        final atlas = await GlyphAtlasGenerator.generate(
+          fontSize: 14.0,
+          fontFamily: 'Roboto Mono',
+        );
+        addTearDown(atlas.dispose);
+
+        for (var code = 0x20; code <= 0x7E; code++) {
+          final ch = String.fromCharCode(code);
+          final regular = atlas.charRects[ch];
+          expect(regular, isNotNull, reason: 'missing regular ASCII $code');
+          expect(atlas.rectFor(ch), equals(regular));
+          expect(
+            atlas.rectFor(ch, isBold: true),
+            equals(
+              atlas.styledCharRects[(ch, GlyphStyleVariant.bold)] ?? regular,
+            ),
+          );
+          expect(
+            atlas.rectFor(ch, isItalic: true),
+            equals(
+              atlas.styledCharRects[(ch, GlyphStyleVariant.italic)] ?? regular,
+            ),
+          );
+          expect(
+            atlas.rectFor(ch, isBold: true, isItalic: true),
+            equals(
+              atlas.styledCharRects[(ch, GlyphStyleVariant.boldItalic)] ??
+                  regular,
+            ),
+          );
+        }
+
+        expect(atlas.rectFor(''), isNull);
+        expect(atlas.rectFor('\x1F'), isNull);
+        expect(atlas.rectFor('\x7F'), isNull);
+        expect(atlas.rectFor('e\u0301'), isNull);
+        expect(atlas.rectFor('1\uFE0F\u20E3'), isNull);
+
+        final expanded = await atlas.addGlyphs(['e\u0301', '1\uFE0F\u20E3']);
+        addTearDown(expanded.dispose);
+
+        expect(expanded.rectFor('e\u0301'), isNotNull);
+        expect(
+          expanded.rectFor('e\u0301'),
+          isNot(equals(expanded.rectFor('e'))),
+        );
+        expect(expanded.rectFor('1\uFE0F\u20E3'), isNotNull);
+        expect(
+          expanded.rectFor('1\uFE0F\u20E3'),
+          isNot(equals(expanded.rectFor('1'))),
+        );
+      },
+    );
+
+    test(
+      'rectFor falls back to regular on partial ASCII styles, handles empty atlas, and updates after addStyledGlyphs',
+      () async {
+        final emptyAtlas = await GlyphAtlasGenerator.generateEmpty(
+          fontSize: 14.0,
+          fontFamily: 'Roboto Mono',
+        );
+        addTearDown(emptyAtlas.dispose);
+
+        for (var code = 0x20; code <= 0x7E; code++) {
+          final ch = String.fromCharCode(code);
+          expect(emptyAtlas.rectFor(ch), isNull);
+          expect(emptyAtlas.rectFor(ch, isBold: true), isNull);
+          expect(emptyAtlas.rectFor(ch, isItalic: true), isNull);
+          expect(emptyAtlas.rectFor(ch, isBold: true, isItalic: true), isNull);
+        }
+        expect(emptyAtlas.rectFor('\uFFFF'), isNotNull);
+        expect(emptyAtlas.rectFor('e\u0301'), isNull);
+        expect(emptyAtlas.rectFor('1\uFE0F\u20E3'), isNull);
+
+        const regularA = ui.Rect.fromLTWH(2, 2, 8, 16);
+        const boldA = ui.Rect.fromLTWH(12, 2, 8, 16);
+        const spaceRect = ui.Rect.fromLTWH(22, 2, 8, 16);
+        const tildeRect = ui.Rect.fromLTWH(32, 2, 8, 16);
+        final partialAtlas = GlyphAtlas(
+          image: emptyAtlas.image,
+          charRects: const {'A': regularA, ' ': spaceRect, '~': tildeRect},
+          styleRects: const {('A', true, false): boldA},
+          cellWidth: emptyAtlas.cellWidth,
+          cellHeight: emptyAtlas.cellHeight,
+          fontSize: emptyAtlas.fontSize,
+          fontFamily: emptyAtlas.fontFamily,
+          nextGridIndex: 1,
+        );
+
+        expect(partialAtlas.rectFor('A'), equals(regularA));
+        expect(partialAtlas.rectFor('A', isBold: true), equals(boldA));
+        expect(partialAtlas.rectFor('A', isItalic: true), equals(regularA));
+        expect(
+          partialAtlas.rectFor('A', isBold: true, isItalic: true),
+          equals(regularA),
+        );
+        expect(
+          partialAtlas.rectFor(' ', isBold: true, isItalic: true),
+          equals(spaceRect),
+        );
+        expect(
+          partialAtlas.rectFor('~', isBold: true, isItalic: true),
+          equals(tildeRect),
+        );
+        expect(partialAtlas.rectFor('B'), isNull);
+        expect(partialAtlas.rectFor('B', isBold: true), isNull);
+
+        final clonedAtlas = await emptyAtlas.addStyledGlyphs([
+          ('A', GlyphStyleVariant.regular),
+          ('A', GlyphStyleVariant.italic),
+          ('~', GlyphStyleVariant.bold),
+          ('e', GlyphStyleVariant.regular),
+          ('1', GlyphStyleVariant.regular),
+          ('e\u0301', GlyphStyleVariant.regular),
+          ('1\uFE0F\u20E3', GlyphStyleVariant.regular),
+        ]);
+        addTearDown(clonedAtlas.dispose);
+
+        expect(emptyAtlas.rectFor('A'), isNull);
+        expect(emptyAtlas.rectFor('e\u0301'), isNull);
+        expect(emptyAtlas.rectFor('1\uFE0F\u20E3'), isNull);
+        final clonedRegularA = clonedAtlas.rectFor('A');
+        final clonedItalicA = clonedAtlas.rectFor('A', isItalic: true);
+        expect(clonedRegularA, isNotNull);
+        expect(clonedItalicA, isNotNull);
+        expect(clonedItalicA, isNot(equals(clonedRegularA)));
+        expect(clonedAtlas.rectFor('A', isBold: true), equals(clonedRegularA));
+        expect(
+          clonedAtlas.rectFor('A', isBold: true, isItalic: true),
+          equals(clonedRegularA),
+        );
+        expect(clonedAtlas.rectFor('~'), isNull);
+        expect(clonedAtlas.rectFor('~', isBold: true), isNotNull);
+        expect(clonedAtlas.rectFor('B'), isNull);
+        expect(clonedAtlas.rectFor('e\u0301'), isNotNull);
+        expect(
+          clonedAtlas.rectFor('e\u0301'),
+          isNot(equals(clonedAtlas.rectFor('e'))),
+        );
+        expect(clonedAtlas.rectFor('1\uFE0F\u20E3'), isNotNull);
+        expect(
+          clonedAtlas.rectFor('1\uFE0F\u20E3'),
+          isNot(equals(clonedAtlas.rectFor('1'))),
+        );
+      },
+    );
   });
 
   group('FlutterTerminal & Terminal ligatures configuration', () {
