@@ -1,3 +1,8 @@
+## 0.13.1
+
+ - **FIX**(termui_flutter): wire terminal mouse tracking and add ASCII atlas lookup table.
+ - **FIX**(widget_book): adopt Form focus tree, WCAG cursor contrast, and elapsed ticker delta.
+
 ## 0.13.0
 
 > Note: This release has breaking changes.

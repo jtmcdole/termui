@@ -15,9 +15,9 @@ dependencies:
   path: ^1.9.1
   pty2: ^0.9.0
   stream_channel: ^2.1.4
-  termui: ^0.17.0
+  termui: ^0.18.0
   termui_cast_protocol: ^0.2.0
-  termui_pty: ^0.13.0
+  termui_pty: ^0.13.1
 
 dev_dependencies:
   checks: ^0.3.2

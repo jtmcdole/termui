@@ -11,6 +11,48 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`termui` - `v0.18.0`](#termui---v0180)
+
+Packages with other changes:
+
+ - [`termui_flutter` - `v0.13.1`](#termui_flutter---v0131)
+ - [`termui_recorder` - `v0.10.7`](#termui_recorder---v0107)
+ - [`termui_test` - `v0.4.7`](#termui_test---v047)
+ - [`termui_hotreload` - `v0.6.33`](#termui_hotreload---v0633)
+ - [`termui_pty` - `v0.13.1`](#termui_pty---v0131)
+ - [`termui_tinpot` - `v0.5.5`](#termui_tinpot---v055)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.7`
+ - `termui_test` - `v0.4.7`
+ - `termui_hotreload` - `v0.6.33`
+ - `termui_pty` - `v0.13.1`
+ - `termui_tinpot` - `v0.5.5`
+
+---
+
+#### `termui` - `v0.18.0`
+
+ - **BREAKING** **FEAT**(form): integrate FormField with FocusNode tree and Form.onSubmit.
+ - **BREAKING** **FEAT**(ui): add MouseEventConsumer, non-stealing scope seeding, and TextField click-to-caret.
+
+#### `termui_flutter` - `v0.13.1`
+
+ - **FIX**(termui_flutter): wire terminal mouse tracking and add ASCII atlas lookup table.
+ - **FIX**(widget_book): adopt Form focus tree, WCAG cursor contrast, and elapsed ticker delta.
+
+
+## 2026-11-15
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`fterm` - `v0.2.0`](#fterm---v020)
  - [`termui_cast_client_core` - `v0.2.0`](#termui_cast_client_core---v020)
  - [`termui_cast_protocol` - `v0.2.0`](#termui_cast_protocol---v020)
