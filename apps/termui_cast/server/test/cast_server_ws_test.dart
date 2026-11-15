@@ -277,6 +277,8 @@ void _registerBackpressureAndOriginTests() {
       final fastWs = await WebSocket.connect('${server.clientUri}');
       addTearDown(fastWs.close);
       int fastSnapshots = 0;
+      int? expectedFastSnapshots;
+      final allFastSnapshots = Completer<void>();
       final allSubscribed = Completer<void>();
       fastWs.listen((raw) {
         final msg = BufferFrameCodec.decode(
@@ -290,6 +292,11 @@ void _registerBackpressureAndOriginTests() {
         }
         if (msg is BufferSnapshotFrame) {
           fastSnapshots++;
+          if (expectedFastSnapshots != null &&
+              fastSnapshots >= expectedFastSnapshots &&
+              !allFastSnapshots.isCompleted) {
+            allFastSnapshots.complete();
+          }
         }
       });
 
@@ -372,6 +379,11 @@ void _registerBackpressureAndOriginTests() {
       backendToSlowSub?.resume();
       await slowWs.drain<void>().timeout(const Duration(seconds: 3));
       check(slowWs.closeCode).equals(1008);
+      // Wait for loopback fastWs to finish delivering the final in-flight snapshot.
+      expectedFastSnapshots = sentCount;
+      if (fastSnapshots < sentCount) {
+        await allFastSnapshots.future.timeout(const Duration(seconds: 3));
+      }
       check(fastSnapshots).equals(sentCount);
     },
   );
