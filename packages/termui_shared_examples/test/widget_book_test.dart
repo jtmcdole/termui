@@ -1,5 +1,6 @@
 import 'package:fake_async/fake_async.dart';
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:termui_shared_examples/widget_book/kitty_protocol_demo.dart';
 import 'package:termui_shared_examples/widget_book/layout_state.dart';
 import 'package:termui_shared_examples/widget_book/modal_dialog.dart';
@@ -1376,5 +1377,472 @@ void main() {
         });
       },
     );
+
+    test(
+      'WidgetBookApp forwards actual ticker elapsed delta instead of fixed 16ms',
+      () {
+        void Function(Duration elapsed)? tickCallback;
+        _runBook(
+          _CustomTickerPlatform(
+            initialPage: 'richTextTimer',
+            onStartTicker: (cb) => tickCallback = cb,
+          ),
+          (tester) async {
+            expect(tickCallback, isNotNull);
+            final timerWidget =
+                find
+                        .byType<TimerWidget>()
+                        .apply(collectAllElements(tester.rootElement!))
+                        .first
+                        .widget
+                    as TimerWidget;
+
+            for (var i = 0; i < 10; i++) {
+              tickCallback!(const Duration(milliseconds: 4));
+            }
+            await tester.pump();
+            expect(
+              timerWidget.duration,
+              equals(
+                const Duration(seconds: 120) - const Duration(milliseconds: 40),
+              ),
+            );
+
+            tickCallback!(const Duration(milliseconds: 960));
+            await tester.pump();
+            expect(timerWidget.duration, equals(const Duration(seconds: 119)));
+            expect(
+              _bufferLines(tester.backend.buffer!),
+              anyElement(contains('01:59')),
+            );
+          },
+        );
+      },
+    );
+
+    test(
+      'TextInputsExample and FormsExample meet WCAG focus legibility contrast and distinguish active vs inactive',
+      () {
+        const blackCanvas = 0xFF000000;
+        _runBook(TestWidgetBookPlatform(initialPage: 'textInputs'), (
+          tester,
+        ) async {
+          List<Element> textFields() => find
+              .byType<TextField>()
+              .apply(collectAllElements(tester.rootElement!))
+              .toList();
+
+          final initialSinglePos = _absOffset(textFields()[0]);
+          final initialMultiPos = _absOffset(textFields()[1]);
+          final initialBuf = tester.backend.buffer!;
+          expect(
+            initialBuf.getBackground(
+              initialSinglePos.dx.toInt(),
+              initialSinglePos.dy.toInt(),
+            ),
+            isNot(equals(CharmColors.charple.argb)),
+          );
+          expect(
+            initialBuf.getForeground(
+              initialMultiPos.dx.toInt(),
+              initialMultiPos.dy.toInt(),
+            ),
+            equals(CharmColors.smoke.argb),
+          );
+          expect(
+            find.textPattern(r'▶ Single-line TextField \(focused\):'),
+            findsNothing,
+          );
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(
+            find.textPattern(r'▶ Single-line TextField \(focused\):'),
+            findsOneWidget,
+          );
+          final singlePos = _absOffset(textFields()[0]);
+          final sx = singlePos.dx.toInt();
+          final sy = singlePos.dy.toInt();
+          _expectActiveCursor(tester.backend.buffer!, sx, sy);
+
+          tester.typeText('abc');
+          tester.sendKey(LogicalKey.arrowLeft);
+          await tester.pump();
+          final popBuf = tester.backend.buffer!;
+          expect(popBuf.getForeground(sx, sy), equals(CharmColors.soda.argb));
+          expect(
+            _contrastRatio(popBuf.getForeground(sx, sy), blackCanvas),
+            greaterThanOrEqualTo(4.5),
+          );
+          _expectActiveCursor(popBuf, sx + 2, sy);
+
+          final multiPos = _absOffset(textFields()[1]);
+          final mx = multiPos.dx.toInt();
+          final my = multiPos.dy.toInt();
+          expect(popBuf.getForeground(mx, my), equals(CharmColors.smoke.argb));
+          expect(
+            popBuf.getBackground(mx, my),
+            isNot(equals(CharmColors.charple.argb)),
+          );
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          final multiActiveBuf = tester.backend.buffer!;
+          expect(
+            multiActiveBuf.getForeground(sx, sy),
+            equals(CharmColors.smoke.argb),
+          );
+          expect(
+            multiActiveBuf.getBackground(sx + 2, sy),
+            isNot(equals(CharmColors.charple.argb)),
+          );
+          expect(
+            multiActiveBuf.getForeground(mx, my),
+            equals(CharmColors.soda.argb),
+          );
+          expect(
+            _contrastRatio(multiActiveBuf.getForeground(mx, my), blackCanvas),
+            greaterThanOrEqualTo(4.5),
+          );
+
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+          tester.tap(find.text('Forms & Validation'));
+          await tester.pump();
+
+          final formEmailBefore = _absOffset(textFields().first);
+          expect(
+            tester.backend.buffer!.getBackground(
+              formEmailBefore.dx.toInt(),
+              formEmailBefore.dy.toInt(),
+            ),
+            isNot(equals(CharmColors.charple.argb)),
+          );
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          final emailPos = _absOffset(textFields().first);
+          final ex = emailPos.dx.toInt();
+          final ey = emailPos.dy.toInt();
+          _expectActiveCursor(tester.backend.buffer!, ex, ey);
+
+          tester.typeText('a@b.c');
+          tester.sendKey(LogicalKey.arrowLeft);
+          await tester.pump();
+          _expectActiveCursor(tester.backend.buffer!, ex + 4, ey);
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(
+            tester.backend.buffer!.getBackground(ex + 4, ey),
+            isNot(equals(CharmColors.charple.argb)),
+          );
+        });
+      },
+    );
+
+    test(
+      'TextInputs logical focus routing: Tab/Shift+Tab cycling, Escape return, and q/h/t isolation',
+      () {
+        _runBook(TestWidgetBookPlatform(initialPage: 'textInputs'), (
+          tester,
+        ) async {
+          expect(FocusManager.instance.primaryFocus?.id, equals('sidebar'));
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(
+            FocusManager.instance.primaryFocus?.id,
+            equals('single_line_input'),
+          );
+
+          final fields = find
+              .byType<TextField>()
+              .apply(collectAllElements(tester.rootElement!))
+              .toList();
+          final singleCtrl = (fields[0].widget as TextField).controller;
+          final multiCtrl = (fields[1].widget as TextField).controller;
+          final initialMulti = multiCtrl.text;
+
+          tester.typeText('qht');
+          await tester.pump();
+          expect(singleCtrl.text, equals('qht'));
+          expect(multiCtrl.text, equals(initialMulti));
+          expect(Tracer.isEnabled, isFalse);
+          expect(find.byType<HelpDialog>(), findsNothing);
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(
+            FocusManager.instance.primaryFocus?.id,
+            equals('multi_line_input'),
+          );
+
+          tester.sendKey(LogicalKey.tab, shift: true);
+          await tester.pump();
+          expect(
+            FocusManager.instance.primaryFocus?.id,
+            equals('single_line_input'),
+          );
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          tester.typeText('qht');
+          await tester.pump();
+          expect(singleCtrl.text, equals('qht'));
+          expect(multiCtrl.text, endsWith('qht'));
+          expect(Tracer.isEnabled, isFalse);
+          expect(find.byType<HelpDialog>(), findsNothing);
+
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+          expect(FocusManager.instance.primaryFocus?.id, equals('sidebar'));
+          expect(find.textPattern(r'\[ACTIVE\]'), findsNothing);
+
+          final singleFieldOffset = _absOffset(fields[0]);
+          _tapAt(
+            tester,
+            singleFieldOffset.dx.toInt() + 2,
+            singleFieldOffset.dy.toInt() + 1,
+          );
+          await tester.pump();
+          expect(
+            FocusManager.instance.primaryFocus?.id,
+            equals('single_line_input'),
+          );
+          expect(singleCtrl.value.selection.cursorColumn, equals(1));
+          tester.typeText('!');
+          await tester.pump();
+          expect(singleCtrl.text, equals('q!ht'));
+        });
+      },
+    );
+
+    test(
+      'Forms & Validation: mouse move, Tab/Shift+Tab, and click route keys to active field without leaking',
+      () {
+        _runBook(TestWidgetBookPlatform(initialPage: 'forms'), (tester) async {
+          tester.mouseMove(60, 10, drag: false);
+          await tester.pump();
+          expect(
+            find.textPattern(r'Forms & Validation Preview \[ACTIVE\]'),
+            findsNothing,
+          );
+
+          final formEl =
+              find
+                      .byType<Form>()
+                      .apply(collectAllElements(tester.rootElement!))
+                      .first
+                  as StatefulElement;
+          final form = formEl.widget as Form;
+          final formState = formEl.state as FormState;
+          final fieldStates = [...formState.fields];
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(form.activeFieldIndex, equals(0));
+          expect(
+            FocusManager.instance.primaryFocus,
+            same(fieldStates[0].focusNode),
+          );
+          expect(
+            _bufferLines(
+              tester.backend.buffer!,
+            ).any((line) => line.contains('Sidebar')),
+            isFalse,
+          );
+
+          tester.typeText('me@x.dev');
+          await tester.pump();
+          expect(form.fields[0].value, equals('me@x.dev'));
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(form.activeFieldIndex, equals(1));
+          expect(
+            FocusManager.instance.primaryFocus,
+            same(fieldStates[1].focusNode),
+          );
+          expect(fieldStates[0].focusNode.isFocused, isFalse);
+
+          tester.sendKey(LogicalKey.arrowDown);
+          tester.sendKey(LogicalKey.character(' '));
+          await tester.pump();
+          expect(form.fields[1].value, equals('go'));
+          expect(form.fields[0].value, equals('me@x.dev'));
+
+          tester.sendKey(LogicalKey.tab);
+          await tester.pump();
+          expect(form.activeFieldIndex, equals(2));
+          expect(
+            FocusManager.instance.primaryFocus,
+            same(fieldStates[2].focusNode),
+          );
+          expect(fieldStates[0].focusNode.isFocused, isFalse);
+
+          tester.sendKey(LogicalKey.character(' '));
+          await tester.pump();
+          expect(form.fields[2].value, isTrue);
+          expect(form.fields[0].value, equals('me@x.dev'));
+
+          tester.sendKey(LogicalKey.tab, shift: true);
+          await tester.pump();
+          expect(form.activeFieldIndex, equals(1));
+          expect(
+            FocusManager.instance.primaryFocus,
+            same(fieldStates[1].focusNode),
+          );
+          tester.sendKey(LogicalKey.arrowDown);
+          await tester.pump();
+          expect(form.fields[1].value, equals('typescript'));
+
+          tester.sendKey(LogicalKey.escape);
+          await tester.pump();
+          expect(FocusManager.instance.primaryFocus?.id, equals('sidebar'));
+
+          final previewEl = find
+              .byType<PreviewPaneWidget>()
+              .apply(collectAllElements(tester.rootElement!))
+              .first;
+          final previewOffset = _absOffset(previewEl);
+          final clickX = previewOffset.dx.toInt() + 5;
+          final previewTopY = previewOffset.dy.toInt() + 1;
+
+          _tapAt(tester, clickX, previewTopY + 8);
+          await tester.pump();
+          expect(form.activeFieldIndex, equals(1));
+          expect(
+            FocusManager.instance.primaryFocus,
+            same(fieldStates[1].focusNode),
+          );
+          tester.sendKey(LogicalKey.arrowUp);
+          tester.sendKey(LogicalKey.character(' '));
+          await tester.pump();
+          expect(form.fields[1].value, equals('go'));
+          expect(form.fields[0].value, equals('me@x.dev'));
+
+          _tapAt(tester, clickX, previewTopY + 14);
+          await tester.pump();
+          expect(form.activeFieldIndex, equals(2));
+          expect(
+            FocusManager.instance.primaryFocus,
+            same(fieldStates[2].focusNode),
+          );
+          tester.sendKey(LogicalKey.character(' '));
+          await tester.pump();
+          expect(form.fields[2].value, isFalse);
+          expect(form.fields[0].value, equals('me@x.dev'));
+
+          tester.sendKey(LogicalKey.enter);
+          await tester.pump();
+          expect(form.fields[2].errorText, equals('You must agree to proceed'));
+
+          _tapAt(tester, clickX, previewTopY + 3);
+          await tester.pump();
+          expect(form.activeFieldIndex, equals(0));
+          expect(
+            FocusManager.instance.primaryFocus,
+            same(fieldStates[0].focusNode),
+          );
+          tester.typeText('!');
+          await tester.pump();
+          expect(form.fields[0].value, equals('me@x.dev!'));
+
+          _tapAt(tester, clickX + 2, previewTopY + 5);
+          await tester.pump();
+          expect((form.fields[0] as TextFormField).cursorColumn, equals(2));
+          tester.typeText('+');
+          await tester.pump();
+          expect(form.fields[0].value, equals('me+@x.dev!'));
+          expect(form.fields[1].value, equals('go'));
+          expect(form.fields[2].value, isFalse);
+        });
+      },
+    );
   });
+}
+
+void _runBook(
+  WidgetBookPlatform platform,
+  Future<void> Function(TerminalTester tester) body,
+) {
+  final tester = TerminalTester();
+  tester.run(() async {
+    final runner = PromptRunner<void>(
+      terminal: tester.terminal,
+      widget: WidgetBookApp(
+        terminal: tester.terminal,
+        platform: platform,
+        isInline: false,
+      ),
+      alternateScreen: true,
+    );
+    await tester.runPrompt(runner, () async {
+      await tester.pump();
+      await body(tester);
+      runner.dispose();
+    });
+  });
+}
+
+void _expectActiveCursor(Buffer buf, int x, int y) {
+  final fg = buf.getForeground(x, y);
+  final bg = buf.getBackground(x, y);
+  expect(fg, equals(CharmColors.soda.argb));
+  expect(bg, equals(CharmColors.charple.argb));
+  expect(Modifier.has(buf.getModifiers(x, y), Modifier.reverse), isFalse);
+  expect(_contrastRatio(fg, bg), greaterThanOrEqualTo(4.5));
+  expect(_contrastRatio(bg, 0xFF000000), greaterThanOrEqualTo(3.0));
+}
+
+void _tapAt(TerminalTester tester, int x, int y) {
+  tester.mouseDown(x, y);
+  tester.mouseUp(x, y);
+}
+
+Offset _absOffset(Element el) {
+  var offset = Offset.zero;
+  Element? cur = el;
+  while (cur != null) {
+    offset = offset + cur.relativeOffset;
+    cur = cur.parent;
+  }
+  return offset;
+}
+
+List<String> _bufferLines(Buffer buffer) => [
+  for (var y = 0; y < buffer.height; y++)
+    [for (var x = 0; x < buffer.width; x++) buffer.getCharacter(x, y)].join(),
+];
+
+double _srgbChannelLuminance(int channel) {
+  final c = channel / 255.0;
+  return c <= 0.03928
+      ? c / 12.92
+      : math.pow((c + 0.055) / 1.055, 2.4).toDouble();
+}
+
+double _relativeLuminance(int argb) =>
+    0.2126 * _srgbChannelLuminance((argb >> 16) & 0xFF) +
+    0.7152 * _srgbChannelLuminance((argb >> 8) & 0xFF) +
+    0.0722 * _srgbChannelLuminance(argb & 0xFF);
+
+double _contrastRatio(int argbA, int argbB) {
+  final l1 = _relativeLuminance(argbA);
+  final l2 = _relativeLuminance(argbB);
+  return (math.max(l1, l2) + 0.05) / (math.min(l1, l2) + 0.05);
+}
+
+final class _CustomTickerPlatform extends TestWidgetBookPlatform {
+  final void Function(void Function(Duration elapsed) onTick) onStartTicker;
+
+  _CustomTickerPlatform({
+    required super.initialPage,
+    required this.onStartTicker,
+  });
+
+  @override
+  void startTicker(void Function(Duration elapsed) onTick) =>
+      onStartTicker(onTick);
 }

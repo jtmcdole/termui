@@ -90,13 +90,12 @@ final class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
       },
       placeholder: 'Enter text here...',
       style: active
-          ? const Style(foreground: CharmColors.charple)
-          : const Style(foreground: CharmColors.soda),
+          ? const Style(foreground: CharmColors.soda)
+          : const Style(foreground: CharmColors.smoke),
       cursorStyle: active
           ? const Style(
-              foreground: CharmColors.pepper,
+              foreground: CharmColors.soda,
               background: CharmColors.charple,
-              modifiers: Modifier.reverse,
             )
           : const Style(modifiers: Modifier.none),
       multiline: false,
@@ -113,13 +112,12 @@ final class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
         if (mounted) setState(() {});
       },
       style: active
-          ? const Style(foreground: CharmColors.charple)
-          : const Style(foreground: CharmColors.soda),
+          ? const Style(foreground: CharmColors.soda)
+          : const Style(foreground: CharmColors.smoke),
       cursorStyle: active
           ? const Style(
-              foreground: CharmColors.pepper,
+              foreground: CharmColors.soda,
               background: CharmColors.charple,
-              modifiers: Modifier.reverse,
             )
           : const Style(modifiers: Modifier.none),
       placeholder: 'Type multi-line text...',
@@ -147,7 +145,7 @@ final class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
               : '  Single-line TextField:',
           style: singleLineActive
               ? const Style(
-                  foreground: CharmColors.charple,
+                  foreground: CharmColors.hazy,
                   modifiers: Modifier.bold,
                 )
               : const Style(foreground: CharmColors.soda),
@@ -163,7 +161,7 @@ final class TextInputsDemoWidgetState extends State<TextInputsDemoWidget> {
               : '  Multi-line TextField:',
           style: multiLineActive
               ? const Style(
-                  foreground: CharmColors.charple,
+                  foreground: CharmColors.hazy,
                   modifiers: Modifier.bold,
                 )
               : const Style(foreground: CharmColors.soda),
