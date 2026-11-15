@@ -1,0 +1,193 @@
+name: Prepare fterm release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: 'Version as prerelease'
+        required: false
+        default: false
+        type: boolean
+      graduate:
+        description: 'Graduate prereleases to stable'
+        required: false
+        default: false
+        type: boolean
+      manual_version:
+        description: 'Optional manual bump for fterm (patch, minor, major, or X.Y.Z)'
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-fterm-release:
+    name: Prepare fterm release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install workspace dependencies
+        run: flutter pub get
+
+      - name: Bump versions and generate changelogs with Melos
+        run: |
+          if [ "$IS_PRERELEASE" = "true" ] && [ "$IS_GRADUATE" = "true" ]; then
+            echo "::error::Cannot enable both 'prerelease' and 'graduate'."
+            exit 1
+          fi
+          if [ -n "$MANUAL_VERSION" ]; then
+            if [ "$IS_PRERELEASE" = "true" ] || [ "$IS_GRADUATE" = "true" ]; then
+              echo "::error::Cannot combine 'manual_version' with 'prerelease' or 'graduate'."
+              exit 1
+            fi
+            if [[ ! "$MANUAL_VERSION" =~ ^(patch|minor|major|[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$ ]]; then
+              echo "::error::Invalid manual_version '$MANUAL_VERSION'. Expected patch, minor, major, or SemVer like 0.2.0."
+              exit 1
+            fi
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          BEFORE_SHA="$(git rev-parse HEAD)"
+          RELEASE_BRANCH="release/fterm"
+          git checkout -B "$RELEASE_BRANCH"
+
+          MELOS_ARGS=(
+            version
+            --yes
+            --all
+            --no-git-tag-version
+            --scope=fterm
+            --scope=termui_cast_protocol
+            --scope=termui_cast_server
+            --scope=termui_caster_cli
+            --scope=termui_cast_client_core
+          )
+          if [ "$IS_PRERELEASE" = "true" ]; then
+            MELOS_ARGS+=(--prerelease)
+          fi
+          if [ "$IS_GRADUATE" = "true" ]; then
+            MELOS_ARGS+=(--graduate)
+          fi
+          if [ -n "$MANUAL_VERSION" ]; then
+            MELOS_ARGS+=("--manual-version=fterm:${MANUAL_VERSION}")
+          fi
+
+          COMMIT_MSG=$'chore(fterm-release): release fterm\n\n{new_package_versions}'
+          dart run melos "${MELOS_ARGS[@]}" --message="$COMMIT_MSG"
+
+          AFTER_SHA="$(git rev-parse HEAD)"
+          if [ "$AFTER_SHA" = "$BEFORE_SHA" ]; then
+            echo "::error::Melos did not bump any packages under apps/. Either apps/ has no new Conventional Commits since the last release tag, or a workspace dependency under packages/ has unreleased changes (run 'Prepare release' first)."
+            exit 1
+          fi
+
+          # If only termui_cast_server (a dev_dependency of fterm) had commits,
+          # also bump fterm so apps/fterm/pubspec.yaml advances for the release tag.
+          if git diff --quiet "$BEFORE_SHA" HEAD -- apps/fterm/pubspec.yaml; then
+            cur_ver="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#]*\).*/\1/p' apps/fterm/pubspec.yaml | head -n 1)"
+            if [ "$IS_PRERELEASE" = "true" ]; then
+              if [[ "$cur_ver" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([0-9A-Za-z-]+)\.([0-9]+)$ ]]; then
+                bump_spec="${BASH_REMATCH[1]}-${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+              elif [[ "$cur_ver" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                bump_spec="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))-dev.0"
+              else
+                bump_spec="patch"
+              fi
+            else
+              bump_spec="patch"
+            fi
+            dart run melos version \
+              --yes \
+              --all \
+              --no-git-tag-version \
+              --no-git-commit-version \
+              --scope=fterm \
+              "--manual-version=fterm:${bump_spec}"
+            git add apps/fterm/pubspec.yaml apps/fterm/CHANGELOG.md
+            if [ -f CHANGELOG.md ]; then
+              git add CHANGELOG.md
+            fi
+          fi
+
+          FTERM_VERSION="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#+]*\).*/\1/p' apps/fterm/pubspec.yaml | head -n 1)"
+          if [[ ! "$FTERM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid bumped fterm version '$FTERM_VERSION' in apps/fterm/pubspec.yaml."
+            exit 1
+          fi
+
+          PACKAGE_LIST="$(
+            for pubspec in \
+              apps/fterm/pubspec.yaml \
+              apps/termui_cast/protocol/pubspec.yaml \
+              apps/termui_cast/server/pubspec.yaml \
+              apps/termui_cast/caster_cli/pubspec.yaml \
+              apps/termui_cast/client_core/pubspec.yaml; do
+              if ! git diff --quiet "$BEFORE_SHA" HEAD -- "$pubspec" || ! git diff --cached --quiet -- "$pubspec"; then
+                pkg_name="$(sed -n 's/^name:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$pubspec" | head -n 1)"
+                pkg_ver="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$pubspec" | head -n 1)"
+                printf ' - %s@%s\n' "$pkg_name" "$pkg_ver"
+              fi
+            done
+          )"
+
+          PR_TITLE="chore(fterm-release): release fterm v${FTERM_VERSION}"
+          git commit --amend -m "$(printf '%s\n\n%s\n' "$PR_TITLE" "$PACKAGE_LIST")"
+
+          PUSH_TOKEN="${PAT_TOKEN:-$DEFAULT_TOKEN}"
+          AUTH_HEADER="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w 0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH_HEADER}" \
+            push --force origin "HEAD:refs/heads/${RELEASE_BRANCH}"
+
+          {
+            printf '## Summary\n\n'
+            printf 'Bumps `fterm` to `v%s` and updates `CHANGELOG.md` files via Melos:\n\n' "$FTERM_VERSION"
+            printf '%s\n\n' "$PACKAGE_LIST"
+            printf 'Merging this PR into `main` automatically starts **Release fterm** (`release-fterm.yml`) to build desktop and CLI bundles and publish `fterm-v%s`.\n' "$FTERM_VERSION"
+            if [ -f apps/fterm/CHANGELOG.md ]; then
+              NOTES="$(awk -v ver="$FTERM_VERSION" '
+                $0 == "## " ver { found = 1; next }
+                found && /^## / { exit }
+                found { print }
+              ' apps/fterm/CHANGELOG.md)"
+              if [ -n "$NOTES" ]; then
+                printf '\n## `fterm` %s Changelog\n\n%s\n' "$FTERM_VERSION" "$NOTES"
+              fi
+            fi
+          } > pr-body.md
+
+          EXISTING_PR="$(GH_TOKEN="$PUSH_TOKEN" gh pr list --head "$RELEASE_BRANCH" --base main --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$EXISTING_PR" ]; then
+            GH_TOKEN="$PUSH_TOKEN" gh pr edit "$EXISTING_PR" --title "$PR_TITLE" --body-file pr-body.md
+          else
+            GH_TOKEN="$PUSH_TOKEN" gh pr create --base main --head "$RELEASE_BRANCH" --title "$PR_TITLE" --body-file pr-body.md
+          fi
+          rm -f pr-body.md
+        env:
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          IS_GRADUATE: ${{ inputs.graduate }}
+          MANUAL_VERSION: ${{ inputs.manual_version }}
+          PAT_TOKEN: ${{ secrets.MY_PAT }}
+          DEFAULT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
