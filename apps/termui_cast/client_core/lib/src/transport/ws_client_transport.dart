@@ -110,6 +110,11 @@ final class WsClientTransport {
         'Expected ws:// or wss:// URL with a non-empty host, got "$uri".',
       );
     }
+    if (uri.userInfo.isNotEmpty) {
+      throw const FormatException(
+        'Relay server URI must not contain userInfo credentials.',
+      );
+    }
     return uri;
   }
 

@@ -33,10 +33,19 @@ String sanitizeShellTitle(String raw) {
       .trim();
 }
 
+bool _hasOsc8ControlChars(String value) {
+  for (var i = 0; i < value.length; i++) {
+    final unit = value.codeUnitAt(i);
+    if (unit <= 0x1F || (unit >= 0x7F && unit <= 0x9F)) return true;
+  }
+  return false;
+}
+
 /// Sanitizes [raw] via [sanitizeOsc8Uri] and truncates on a valid UTF-8 codepoint
 /// boundary so the result never exceeds [maxOsc8UriBytes] UTF-8 bytes.
 String clampOsc8Uri(String raw) {
-  final sanitized = sanitizeOsc8Uri(raw);
+  if (raw.isEmpty) return '';
+  final sanitized = _hasOsc8ControlChars(raw) ? sanitizeOsc8Uri(raw) : raw;
   if (sanitized.isEmpty) return '';
   if (sanitized.length <= maxOsc8UriBytes ~/ 3) return sanitized;
   final encoded = utf8.encode(sanitized);
@@ -209,7 +218,7 @@ int _advanceMatchingUriRun(
   var rel = startRel;
   while (rel < limit) {
     final nextRaw = uriAt(rel);
-    if (identical(nextRaw, raw)) {
+    if (identical(nextRaw, raw) || nextRaw == raw) {
       rel++;
       continue;
     }
@@ -327,11 +336,12 @@ Uri parseCastWebSocketUri(
     raw: raw,
   );
   final effectiveInput = hasExplicitScheme ? trimmed : 'wss://$trimmed';
-  if (parsed.host.isEmpty ||
+  if (parsed.userInfo.isNotEmpty ||
+      parsed.host.isEmpty ||
       parsed.path.startsWith('//') ||
       _hasInvalidAuthority(effectiveInput)) {
     throw FormatException(
-      'Expected ws://, wss://, https://, or host URL with a non-empty host, got "$raw".',
+      'Expected ws://, wss://, https://, or host URL with a non-empty host and no userinfo, got "$raw".',
     );
   }
   final nextPath = _resolveRelayPath(

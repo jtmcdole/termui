@@ -605,14 +605,15 @@ Future<({WebSocket ws, Socket rawSocket})> _openUpgradedClientWebSocket(
   if (uri.scheme != 'ws' && uri.scheme != 'wss') {
     throw WebSocketException("Unsupported URL scheme '${uri.scheme}'");
   }
+  if (uri.userInfo.isNotEmpty) {
+    throw const FormatException(
+      'WebSocket URI must not embed userInfo credentials.',
+    );
+  }
   final httpUri = uri.replace(scheme: uri.scheme == 'wss' ? 'https' : 'http');
   final nonce = _generateWebSocketNonce();
   final req = await client.openUrl('GET', httpUri);
   req.followRedirects = false;
-  if (uri.userInfo.isNotEmpty) {
-    final auth = base64Encode(utf8.encode(uri.userInfo));
-    req.headers.set(HttpHeaders.authorizationHeader, 'Basic $auth');
-  }
   if (headers != null) {
     for (final entry in headers.entries) {
       req.headers.add(entry.key, entry.value);
@@ -629,8 +630,14 @@ Future<({WebSocket ws, Socket rawSocket})> _openUpgradedClientWebSocket(
     unawaited(
       response.detachSocket().then((s) => s.destroy(), onError: (Object _) {}),
     );
+    final safeUri = Uri(
+      scheme: httpUri.scheme,
+      host: httpUri.host,
+      port: httpUri.hasPort ? httpUri.port : null,
+      path: httpUri.path,
+    );
     throw WebSocketException(
-      "Connection to '$httpUri' was not upgraded to websocket",
+      "Connection to '$safeUri' was not upgraded to websocket",
       response.statusCode,
     );
   }

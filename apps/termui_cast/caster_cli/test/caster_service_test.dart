@@ -316,6 +316,10 @@ void main() {
 
         await machine.dispatch(.connected);
         check(machine.state).equals(CasterLifecycleState.streaming);
+        check(machine.reconnectAttempt).equals(1);
+
+        await machine.dispatch(.registered);
+        check(machine.state).equals(CasterLifecycleState.streaming);
         check(machine.reconnectAttempt).equals(0);
 
         await machine.dispatch(.disconnected);
@@ -1070,6 +1074,7 @@ void main() {
             .join();
         check(finalRow).equals('LIVE_PTY2_OK');
       },
+      skip: Platform.isWindows ? 'Requires POSIX /bin/sh' : null,
     );
 
     test(
@@ -1194,6 +1199,7 @@ Future<void> main() async {
         check(metrics['emittedFrames'] as int).isGreaterOrEqual(2);
         check(metrics['rssDeltaBytes'] as int).isLessThan(64 * 1024 * 1024);
       },
+      skip: Platform.isWindows ? 'Requires POSIX /bin/sh and yes' : null,
     );
 
     test(
@@ -1291,6 +1297,7 @@ Future<void> main() async {
         check(received.toString()).contains('FIRST');
         check(received.toString()).contains('ECHO:HI');
       },
+      skip: Platform.isWindows ? 'Requires POSIX /bin/sh' : null,
     );
 
     test(
@@ -1374,6 +1381,7 @@ Future<void> main() async {
         ).any((l) => l.contains('Child process exited with code 0'));
         check(stopwatch.elapsedMilliseconds).isLessThan(2000);
       },
+      skip: Platform.isWindows ? 'Requires POSIX /bin/sh' : null,
     );
 
     test(
@@ -1419,12 +1427,12 @@ Future<void> main() async {
           ]),
         ).throws<FormatException>();
         check(
-          () => IapJwtSigner.audienceForWebSocketUri(
+          () => TokenAuthenticator.iapAudienceForWebSocketUri(
             Uri.parse('ws://127.0.0.1:8420/v1/caster'),
           ),
         ).throws<FormatException>();
         check(
-          IapJwtSigner.audienceForWebSocketUri(
+          TokenAuthenticator.iapAudienceForWebSocketUri(
             Uri.parse('wss://cast.example.com:8443/v1/caster'),
           ),
         ).equals('https://cast.example.com:8443/v1/caster');
@@ -2318,195 +2326,211 @@ Future<void> main() async {
 
     test(
       'CasterService defers revision reconnect while a file upload is active, handles rollback, and aborts stalled uploads after idle timeout',
-      () {
-        FakeAsync().run((async) {
-          const sessionId = SessionId('sess-rev-upload-defer');
-          final tempUploadDir = Directory.systemTemp.createTempSync(
-            'cast_rev_upload_',
-          );
-          addTearDown(() => tempUploadDir.deleteSync(recursive: true));
+      () async {
+        const sessionId = SessionId('sess-rev-upload-defer');
+        final tempUploadDir = Directory.systemTemp.createTempSync(
+          'cast_rev_upload_',
+        );
+        addTearDown(() => tempUploadDir.deleteSync(recursive: true));
 
-          final pty = _FakePtySession();
-          var activeRevision = 'rev-a';
-          var channelOpenCalls = 0;
-          late StreamChannelController<Uint8List> currentRelayCtrl;
-          final logs = <String>[];
+        final pty = _FakePtySession();
+        var activeRevision = 'rev-a';
+        var channelOpenCalls = 0;
+        late StreamChannelController<Uint8List> currentRelayCtrl;
+        final logs = <String>[];
+        final casterInbox = <CastMessage>[];
+        var nextProbeGate = Completer<void>();
 
-          final caster = CasterService(
-            config: CasterConfig(
+        final caster = CasterService(
+          config: CasterConfig(
+            sessionId: sessionId,
+            title: 'zsh',
+            uploadDirPath: tempUploadDir.path,
+            command: const ['zsh'],
+          ),
+          pty: pty,
+          random: Random(0),
+          baseReconnectDelay: const Duration(milliseconds: 20),
+          revisionPollInterval: const Duration(milliseconds: 40),
+          uploadIdleTimeout: const Duration(milliseconds: 400),
+          onLog: logs.add,
+          revisionProber: () async {
+            if (!nextProbeGate.isCompleted) nextProbeGate.complete();
+            return activeRevision;
+          },
+          channelOpener: () async {
+            channelOpenCalls++;
+            final ctrl = StreamChannelController<Uint8List>();
+            currentRelayCtrl = ctrl;
+            ctrl.foreign.stream.listen((raw) {
+              final decoded = BufferFrameCodec.decode(raw);
+              casterInbox.add(decoded);
+              if (decoded is AuthFrame) {
+                ctrl.foreign.sink.add(
+                  BufferFrameCodec.encode(
+                    const AuthAcceptedFrame(role: .caster),
+                  ),
+                );
+              }
+            });
+            return ctrl.local;
+          },
+        );
+        addTearDown(caster.stop);
+
+        Future<void> waitForAck(
+          FileUploadStatus status,
+          int expectedCount,
+        ) async {
+          final deadline = DateTime.now().add(const Duration(seconds: 3));
+          while (casterInbox
+                  .whereType<FileUploadAckFrame>()
+                  .where((a) => a.status == status)
+                  .length <
+              expectedCount) {
+            if (DateTime.now().isAfter(deadline)) {
+              fail('Timed out waiting for $expectedCount $status ACKs');
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 5));
+          }
+        }
+
+        Future<void> waitForProbes(int count) async {
+          for (var i = 0; i < count; i++) {
+            nextProbeGate = Completer<void>();
+            await nextProbeGate.future.timeout(const Duration(seconds: 3));
+          }
+          await pumpEventQueue();
+        }
+
+        await caster.start();
+        await waitForProbes(1);
+        check(channelOpenCalls).equals(1);
+
+        // 1. Start upload 1; revision rolls to rev-b then rolls back to rev-a before upload finishes.
+        final payload = Uint8List.fromList(utf8.encode('hello world'));
+        final digest = Uint8List.fromList(sha256.convert(payload).bytes);
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            FileUploadStartFrame(
               sessionId: sessionId,
-              title: 'zsh',
-              uploadDirPath: tempUploadDir.path,
-              command: const ['zsh'],
+              transferId: 6,
+              fileName: 'rollback.txt',
+              totalBytes: payload.length,
             ),
-            pty: pty,
-            random: Random(0),
-            revisionPollInterval: const Duration(seconds: 10),
-            uploadIdleTimeout: const Duration(seconds: 30),
-            onLog: logs.add,
-            revisionProber: () async => activeRevision,
-            channelOpener: () async {
-              channelOpenCalls++;
-              final ctrl = StreamChannelController<Uint8List>();
-              currentRelayCtrl = ctrl;
-              ctrl.foreign.stream.listen((raw) {
-                if (BufferFrameCodec.decode(raw) is AuthFrame) {
-                  ctrl.foreign.sink.add(
-                    BufferFrameCodec.encode(
-                      const AuthAcceptedFrame(role: .caster),
-                    ),
-                  );
-                }
-              });
-              return ctrl.local;
-            },
-          );
+          ),
+        );
+        await waitForAck(.ready, 1);
 
-          unawaited(caster.start());
-          async.flushMicrotasks();
-          check(channelOpenCalls).equals(1);
+        activeRevision = 'rev-b';
+        await waitForProbes(2);
+        check(
+          logs.where((l) => l.contains('deferring reconnect')).length,
+        ).equals(1);
 
-          // 1. Start upload 1; revision rolls to rev-b then rolls back to rev-a before upload finishes.
-          final payload = Uint8List.fromList(utf8.encode('hello world'));
-          final digest = Uint8List.fromList(sha256.convert(payload).bytes);
-          currentRelayCtrl.foreign.sink.add(
-            BufferFrameCodec.encode(
-              FileUploadStartFrame(
-                sessionId: sessionId,
-                transferId: 6,
-                fileName: 'rollback.txt',
-                totalBytes: payload.length,
-              ),
+        // Roll back to rev-a and finish upload 1 -> no spurious reconnect!
+        activeRevision = 'rev-a';
+        await waitForProbes(1);
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            FileUploadChunkFrame(
+              sessionId: sessionId,
+              transferId: 6,
+              offset: 0,
+              data: payload,
             ),
-          );
-          async.flushMicrotasks();
-
-          activeRevision = 'rev-b';
-          async.elapse(const Duration(seconds: 10));
-          async.flushMicrotasks();
-          // Second poll while still on rev-b should NOT log duplicate deferral message.
-          async.elapse(const Duration(seconds: 10));
-          async.flushMicrotasks();
-          check(
-            logs.where((l) => l.contains('deferring reconnect')).length,
-          ).equals(1);
-
-          // Roll back to rev-a and finish upload 1 -> no spurious reconnect!
-          activeRevision = 'rev-a';
-          currentRelayCtrl.foreign.sink.add(
-            BufferFrameCodec.encode(
-              FileUploadChunkFrame(
-                sessionId: sessionId,
-                transferId: 6,
-                offset: 0,
-                data: payload,
-              ),
+          ),
+        );
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            FileUploadEndFrame(
+              sessionId: sessionId,
+              transferId: 6,
+              sha256: digest,
             ),
-          );
-          async.elapse(const Duration(seconds: 10));
-          async.flushMicrotasks();
-          currentRelayCtrl.foreign.sink.add(
-            BufferFrameCodec.encode(
-              FileUploadEndFrame(
-                sessionId: sessionId,
-                transferId: 6,
-                sha256: digest,
-              ),
+          ),
+        );
+        await waitForAck(.completed, 1);
+        await waitForProbes(1);
+        check(channelOpenCalls).equals(1);
+        check(caster.stateMachine.state).equals(CasterLifecycleState.streaming);
+        pty.writtenInputs.clear();
+
+        // 2. Start upload 2; revision changes to rev-b while upload is in progress -> deferred, then reconnects on completion.
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            FileUploadStartFrame(
+              sessionId: sessionId,
+              transferId: 7,
+              fileName: 'notes.txt',
+              totalBytes: payload.length,
             ),
-          );
-          async.flushMicrotasks();
-          check(channelOpenCalls).equals(1);
-          check(
-            caster.stateMachine.state,
-          ).equals(CasterLifecycleState.streaming);
-          pty.writtenInputs.clear();
+          ),
+        );
+        await waitForAck(.ready, 2);
 
-          // 2. Start upload 2; revision changes to rev-b while upload is in progress -> deferred, then reconnects on completion.
-          currentRelayCtrl.foreign.sink.add(
-            BufferFrameCodec.encode(
-              FileUploadStartFrame(
-                sessionId: sessionId,
-                transferId: 7,
-                fileName: 'notes.txt',
-                totalBytes: payload.length,
-              ),
+        activeRevision = 'rev-b';
+        await waitForProbes(1);
+        check(channelOpenCalls).equals(1);
+        check(caster.stateMachine.state).equals(CasterLifecycleState.streaming);
+
+        // Send chunk and end frame -> upload finalizes, path is written to PTY, and deferred reconnect fires!
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            FileUploadChunkFrame(
+              sessionId: sessionId,
+              transferId: 7,
+              offset: 0,
+              data: payload,
             ),
-          );
-          async.flushMicrotasks();
-
-          activeRevision = 'rev-b';
-          async.elapse(const Duration(seconds: 10));
-          async.flushMicrotasks();
-          check(channelOpenCalls).equals(1);
-          check(
-            caster.stateMachine.state,
-          ).equals(CasterLifecycleState.streaming);
-
-          // Send chunk and end frame -> upload finalizes, path is written to PTY, and deferred reconnect fires!
-          currentRelayCtrl.foreign.sink.add(
-            BufferFrameCodec.encode(
-              FileUploadChunkFrame(
-                sessionId: sessionId,
-                transferId: 7,
-                offset: 0,
-                data: payload,
-              ),
+          ),
+        );
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            FileUploadEndFrame(
+              sessionId: sessionId,
+              transferId: 7,
+              sha256: digest,
             ),
-          );
-          currentRelayCtrl.foreign.sink.add(
-            BufferFrameCodec.encode(
-              FileUploadEndFrame(
-                sessionId: sessionId,
-                transferId: 7,
-                sha256: digest,
-              ),
+          ),
+        );
+        await waitForAck(.completed, 2);
+        final deadline2 = DateTime.now().add(const Duration(seconds: 3));
+        while (channelOpenCalls < 2) {
+          if (DateTime.now().isAfter(deadline2)) {
+            fail('Timed out waiting for channelOpenCalls == 2');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        check(utf8.decode(pty.writtenInputs.single)).contains('notes.txt');
+        await waitForProbes(1);
+
+        // 3. Start upload 3 and stall forever -> after uploadIdleTimeout (400ms), stalled upload is aborted and deferred reconnect fires!
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            FileUploadStartFrame(
+              sessionId: sessionId,
+              transferId: 8,
+              fileName: 'stalled.txt',
+              totalBytes: 1024,
             ),
-          );
-          async.flushMicrotasks();
-          check(
-            caster.stateMachine.state,
-          ).equals(CasterLifecycleState.reconnectBackoff);
-          check(utf8.decode(pty.writtenInputs.single)).contains('notes.txt');
+          ),
+        );
+        await waitForAck(.ready, 3);
 
-          async.elapse(const Duration(milliseconds: 500));
-          async.flushMicrotasks();
-          check(channelOpenCalls).equals(2);
+        activeRevision = 'rev-c';
+        await waitForProbes(1);
+        check(channelOpenCalls).equals(2);
 
-          // 3. Start upload 3 and stall forever -> after uploadIdleTimeout (30s), stalled upload is aborted and deferred reconnect fires!
-          currentRelayCtrl.foreign.sink.add(
-            BufferFrameCodec.encode(
-              FileUploadStartFrame(
-                sessionId: sessionId,
-                transferId: 8,
-                fileName: 'stalled.txt',
-                totalBytes: 1024,
-              ),
-            ),
-          );
-          async.flushMicrotasks();
-
-          activeRevision = 'rev-c';
-          async.elapse(const Duration(seconds: 10));
-          async.flushMicrotasks();
-          check(channelOpenCalls).equals(2);
-
-          // Advance remaining 20s to hit 30s uploadIdleTimeout.
-          async.elapse(const Duration(seconds: 20));
-          async.flushMicrotasks();
-          check(
-            logs,
-          ).contains('Aborted stalled file upload after idle timeout');
-          check(
-            caster.stateMachine.state,
-          ).equals(CasterLifecycleState.reconnectBackoff);
-
-          async.elapse(const Duration(milliseconds: 500));
-          async.flushMicrotasks();
-          check(channelOpenCalls).equals(3);
-
-          unawaited(caster.stop());
-          async.flushMicrotasks();
-        });
+        final deadline3 = DateTime.now().add(const Duration(seconds: 3));
+        while (channelOpenCalls < 3) {
+          if (DateTime.now().isAfter(deadline3)) {
+            fail('Timed out waiting for channelOpenCalls == 3');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        check(logs).contains('Aborted stalled file upload after idle timeout');
+        check(channelOpenCalls).equals(3);
       },
     );
 
@@ -2760,7 +2784,7 @@ Future<void> main() async {
     );
 
     test(
-      'IapJwtSigner default runner kills timed-out subprocess when signTimeout is short, and stop(killPty: true) escalates to SIGKILL',
+      'IapJwtSigner default runner kills timed-out subprocess when signTimeout is short, and runCasterCli prewarms JWT',
       () async {
         // 1. runCasterCli pre-warms iapSigner.getBearerToken() before starting Pty2Session.
         final eventOrder = <String>[];
@@ -2823,8 +2847,13 @@ Future<void> main() async {
           final alive = Process.killPid(pid, ProcessSignal.sigcont);
           check(alive).isFalse();
         }
+      },
+      skip: Platform.isWindows ? 'Requires POSIX /bin/sh and chmod' : null,
+    );
 
-        // 3. stop(killPty: true) escalates to SIGKILL after ptyKillTimeout when child ignores SIGTERM.
+    test(
+      'stop(killPty: true) escalates to SIGKILL after ptyKillTimeout when child ignores SIGTERM',
+      () {
         fakeAsync((async) {
           final stubbornPty = _FakePtySession()..ignoreSigterm = true;
           final service = CasterService(
@@ -3915,6 +3944,314 @@ void _registerWaveformQueryReplyTest() {
       });
     },
   );
+
+  group(
+    'Wave 1 hardening: config, clamping, backoff, pending title, drain & statusStream',
+    () {
+      test(
+        'CasterConfig warns on --token, reads --token-file / env, validates mutual exclusion, and rejects userInfo',
+        () {
+          final tempDir = Directory.systemTemp.createTempSync('caster_tok_');
+          addTearDown(() => tempDir.deleteSync(recursive: true));
+          final tokenFile = File('${tempDir.path}/token.txt')
+            ..writeAsStringSync('file-secret-tok\n');
+
+          final cliTokCfg = CasterConfig.fromArgs([
+            '--token',
+            'argv-secret',
+            '--keep-alive-on-hup',
+            '--',
+            'sh',
+          ]);
+          check(cliTokCfg).isNotNull();
+          check(cliTokCfg!.token).equals('argv-secret');
+          check(cliTokCfg.keepAliveOnHup).isTrue();
+          check(cliTokCfg.warnings).length.equals(1);
+          check(cliTokCfg.warnings.single).contains('--token');
+
+          final fileCfg = CasterConfig.fromArgs([
+            '--token-file',
+            tokenFile.path,
+            '--',
+            'sh',
+          ]);
+          check(fileCfg!.token).equals('file-secret-tok');
+          check(fileCfg.warnings).isEmpty();
+          check(fileCfg.keepAliveOnHup).isFalse();
+
+          final envFileCfg = CasterConfig.fromArgs(
+            ['--', 'sh'],
+            environment: {'TERMUI_CAST_CASTER_TOKEN_FILE': tokenFile.path},
+          );
+          check(envFileCfg!.token).equals('file-secret-tok');
+
+          check(
+            () => CasterConfig.fromArgs([
+              '--token',
+              'a',
+              '--token-file',
+              tokenFile.path,
+              '--',
+              'sh',
+            ]),
+          ).throws<FormatException>();
+          check(
+            () => CasterConfig.fromArgs([
+              '--server',
+              'ws://user:pass@127.0.0.1:8420/v1/caster',
+              '--',
+              'sh',
+            ]),
+          ).throws<FormatException>();
+        },
+      );
+
+      test(
+        'fromRouterSession clamps >400x200 router dimensions on RegisterSessionFrame & BufferSnapshotFrame',
+        () {
+          fakeAsync((async) {
+            final backend = _FakeRoutedPtyBackend();
+            final router = PtyRouter();
+            final session = router.createSession(
+              id: 'wide-router',
+              backend: backend,
+              initialCols: 450,
+              initialRows: 230,
+            );
+            addTearDown(session.dispose);
+
+            final sentFrames = <CastMessage>[];
+            late StreamChannel<Uint8List> serverSide;
+            final service = CasterService.fromRouterSession(
+              config: CasterConfig(
+                sessionId: const SessionId('wide-router'),
+                title: 'wide',
+                command: const ['sh'],
+              ),
+              session: session,
+              channelOpener: () async {
+                final c2s = StreamController<Uint8List>();
+                final s2c = StreamController<Uint8List>();
+                serverSide = StreamChannel<Uint8List>(c2s.stream, s2c.sink);
+                return StreamChannel<Uint8List>(s2c.stream, c2s.sink);
+              },
+            );
+
+            unawaited(service.start());
+            async.flushMicrotasks();
+            serverSide.stream.listen((raw) {
+              sentFrames.add(BufferFrameCodec.decode(raw));
+            });
+            serverSide.sink.add(
+              BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+            );
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const SubscriberCountFrame(
+                  sessionId: SessionId('wide-router'),
+                  subscriberCount: 1,
+                ),
+              ),
+            );
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const RequestKeyframeFrame(sessionId: SessionId('wide-router')),
+              ),
+            );
+            async.flushMicrotasks();
+
+            final reg = sentFrames.whereType<RegisterSessionFrame>().single;
+            check(reg.cols).equals(BufferFrameCodec.maxGridCols);
+            check(reg.rows).equals(BufferFrameCodec.maxGridRows);
+            final snap = sentFrames.whereType<BufferSnapshotFrame>().single;
+            check(snap.snapshot.cols).equals(BufferFrameCodec.maxGridCols);
+            check(snap.snapshot.rows).equals(BufferFrameCodec.maxGridRows);
+
+            unawaited(service.stop());
+            async.flushMicrotasks();
+          });
+        },
+      );
+
+      test(
+        'resets backoff only after SubscriberCountFrame, escalates duplicate_session backoff, preserves pending title on pause, and emits statusStream',
+        () {
+          fakeAsync((async) {
+            final pty = _FakePtySession();
+            final serverSides = <StreamChannel<Uint8List>>[];
+            final statuses = <CasterStatusSnapshot>[];
+            final service = CasterService(
+              config: CasterConfig(
+                sessionId: const SessionId('backoff-reg'),
+                title: 'shell',
+                command: const ['sh'],
+              ),
+              pty: pty,
+              random: Random(1),
+              baseReconnectDelay: const Duration(milliseconds: 100),
+              channelOpener: () async {
+                final ctrl = StreamChannelController<Uint8List>();
+                serverSides.add(ctrl.foreign);
+                return ctrl.local;
+              },
+            );
+            final statusSub = service.statusStream.listen(statuses.add);
+            addTearDown(statusSub.cancel);
+
+            unawaited(service.start());
+            async.flushMicrotasks();
+
+            for (var attempt = 0; attempt < 2; attempt++) {
+              final frames = <CastMessage>[];
+              serverSides[attempt].stream.listen((raw) {
+                frames.add(BufferFrameCodec.decode(raw));
+              });
+              serverSides[attempt].sink.add(
+                BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+              );
+              async.flushMicrotasks();
+              serverSides[attempt].sink.add(
+                BufferFrameCodec.encode(
+                  const ErrorFrame(
+                    code: 'duplicate_session',
+                    message: 'still active',
+                  ),
+                ),
+              );
+              async.flushMicrotasks();
+              check(service.stateMachine.reconnectAttempt).equals(attempt + 1);
+              // Must escalate past 100ms base delay (attempt 2 >= 100ms, never reset by AuthAccepted).
+              async.elapse(const Duration(milliseconds: 250));
+            }
+            check(serverSides.length).equals(3);
+
+            final s3Frames = <CastMessage>[];
+            final s3PauseCtrl = StreamController<Uint8List>();
+            serverSides[2].stream.listen((raw) {
+              s3Frames.add(BufferFrameCodec.decode(raw));
+            });
+            serverSides[2].sink.add(
+              BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+            );
+            async.flushMicrotasks();
+            check(service.stateMachine.reconnectAttempt).equals(2);
+
+            serverSides[2].sink.add(
+              BufferFrameCodec.encode(
+                const SubscriberCountFrame(
+                  sessionId: SessionId('backoff-reg'),
+                  subscriberCount: 1,
+                ),
+              ),
+            );
+            async.flushMicrotasks();
+            check(service.stateMachine.reconnectAttempt).equals(0);
+            check(service.currentStatus.subscriberCount).equals(1);
+            check(statuses.any((s) => s.subscriberCount == 1)).isTrue();
+
+            // Shell title during cooldown survives _cancelFrameTimers on resize.
+            s3Frames.clear();
+            pty.emitText('\x1b]2;title-first\x07');
+            async.flushMicrotasks();
+            pty.emitText('\x1b]2;title-pending\x07');
+            async.flushMicrotasks();
+            serverSides[2].sink.add(
+              BufferFrameCodec.encode(
+                const ResizeFrame(
+                  sessionId: SessionId('backoff-reg'),
+                  cols: 30,
+                  rows: 10,
+                ),
+              ),
+            );
+            async.flushMicrotasks();
+            async.elapse(const Duration(milliseconds: 150));
+            check(
+              s3Frames.whereType<ShellTitleFrame>().map((f) => f.title),
+            ).contains('title-pending');
+
+            unawaited(s3PauseCtrl.close());
+            unawaited(pty.finish(0));
+            async.flushMicrotasks();
+            async.elapse(const Duration(milliseconds: 500));
+          });
+        },
+      );
+
+      test(
+        'bounds _awaitPtyExit drain at 500ms if PTY output stays open and drains SessionClosedFrame on exit',
+        () {
+          fakeAsync((async) {
+            final outputCtrl = StreamController<Uint8List>();
+            final exitCompleter = Completer<int>();
+            final pty = _OpenOutputFakePty(
+              outputCtrl.stream,
+              exitCompleter.future,
+            );
+            final serverFrames = <CastMessage>[];
+            late StreamChannel<Uint8List> serverSide;
+            final service = CasterService(
+              config: CasterConfig(
+                sessionId: const SessionId('drain-bound'),
+                title: 'sh',
+                command: const ['sh'],
+              ),
+              pty: pty,
+              channelOpener: () async {
+                final ctrl = StreamChannelController<Uint8List>();
+                serverSide = ctrl.foreign;
+                serverSide.stream.listen((raw) {
+                  serverFrames.add(BufferFrameCodec.decode(raw));
+                });
+                return ctrl.local;
+              },
+            );
+
+            unawaited(service.start());
+            async.flushMicrotasks();
+            serverSide.sink.add(
+              BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+            );
+            async.flushMicrotasks();
+
+            var completed = false;
+            unawaited(service.done.then((_) => completed = true));
+            exitCompleter.complete(0);
+            async.flushMicrotasks();
+            check(completed).isFalse();
+
+            async.elapse(const Duration(milliseconds: 500));
+            async.flushMicrotasks();
+            check(completed).isTrue();
+            check(
+              serverFrames.whereType<SessionClosedFrame>().single.reason,
+            ).equals(SessionCloseReason.exited);
+
+            unawaited(outputCtrl.close());
+            async.flushMicrotasks();
+          });
+        },
+      );
+    },
+  );
+}
+
+final class _OpenOutputFakePty implements PtySession {
+  @override
+  final Stream<Uint8List> output;
+  @override
+  final Future<int> exitCode;
+
+  _OpenOutputFakePty(this.output, this.exitCode);
+
+  @override
+  void writeBytes(Uint8List data) {}
+
+  @override
+  void resize(int cols, int rows, {int pixelWidth = 0, int pixelHeight = 0}) {}
+
+  @override
+  bool kill([ProcessSignal signal = .sigterm]) => true;
 }
 
 final class _FakeAckPseudoTerminal implements PseudoTerminal {

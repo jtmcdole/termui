@@ -25,6 +25,7 @@ final class CastServer {
   final HttpServer _httpServer;
   final StaticWebHandler? _staticHandler;
   late final StreamSubscription<HttpRequest> _requestSub;
+  bool _closed = false;
 
   CastServer._({
     required this.config,
@@ -90,6 +91,7 @@ final class CastServer {
 
   /// Gracefully closes the HTTP listener and all active WebSocket peers.
   Future<void> close() async {
+    _closed = true;
     await _requestSub.cancel();
     await [handler.close(), registry.close()].wait;
     await _httpServer.close(force: true);
@@ -182,7 +184,7 @@ final class CastServer {
       await request.response.close();
       return;
     }
-    if (!handler.canAcceptUpgrade) {
+    if (_closed || !handler.tryReserveUpgrade()) {
       handler.onLog?.call('Rejected WebSocket upgrade on $path: at capacity');
       request.response.statusCode = HttpStatus.serviceUnavailable;
       await request.response.close();
@@ -195,6 +197,13 @@ final class CastServer {
         request.response.headers.set(castRevisionHeader, revision);
       }
       final (:channel, :closeWithCode) = await upgradeCastWebSocket(request);
+      if (_closed) {
+        await closeWithCode(
+          1001,
+          'Server shutting down',
+        ).catchError((Object _) {});
+        return;
+      }
       if (path == '/v1/caster') {
         handler.attachCasterChannel(channel, closeWithCode: closeWithCode);
       } else {
@@ -202,6 +211,8 @@ final class CastServer {
       }
     } on Object catch (error) {
       handler.onLog?.call('WebSocket upgrade failed on $path: $error');
+    } finally {
+      handler.releaseUpgradeReservation();
     }
   }
 

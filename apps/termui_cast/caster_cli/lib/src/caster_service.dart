@@ -27,6 +27,41 @@ typedef ChannelOpener = Future<StreamChannel<Uint8List>> Function();
 /// Async probe returning the active server revision identifier, or `null` if unavailable.
 typedef RevisionProber = Future<String?> Function();
 
+/// Immutable status snapshot emitted by [CasterService.statusStream].
+final class CasterStatusSnapshot {
+  /// Active lifecycle state of the caster relay connection.
+  final CasterLifecycleState state;
+
+  /// Active remote viewer count subscribed to this session.
+  final int subscriberCount;
+
+  /// Effective session title currently shown to viewers.
+  final String title;
+
+  /// Most recent connection or server error message, or `null` when healthy.
+  final String? lastError;
+
+  /// Creates an immutable status snapshot.
+  const CasterStatusSnapshot({
+    required this.state,
+    required this.subscriberCount,
+    required this.title,
+    this.lastError,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CasterStatusSnapshot &&
+          state == other.state &&
+          subscriberCount == other.subscriberCount &&
+          title == other.title &&
+          lastError == other.lastError;
+
+  @override
+  int get hashCode => Object.hash(state, subscriberCount, title, lastError);
+}
+
 /// Validated CLI configuration for `termui_cast`.
 final class CasterConfig {
   /// Default number of primary-screen scrollback lines retained by `termui_cast`.
@@ -86,6 +121,12 @@ final class CasterConfig {
   /// Maximum allowed byte size per uploaded file.
   final int maxUploadBytes;
 
+  /// Whether `SIGHUP` reconnects/re-registers instead of shutting down cleanly.
+  final bool keepAliveOnHup;
+
+  /// Non-fatal startup configuration warnings to display to the user.
+  final List<String> warnings;
+
   /// Target executable and arguments to run inside `pty2`.
   final List<String> command;
 
@@ -106,6 +147,8 @@ final class CasterConfig {
     this.uploadEnabled = true,
     String? uploadDirPath,
     this.maxUploadBytes = FileUploadReceiver.defaultMaxUploadBytes,
+    this.keepAliveOnHup = false,
+    List<String> warnings = const <String>[],
     required List<String> command,
   }) : serverUri = serverUri ?? defaultServerUri,
        title = title.trim(),
@@ -119,6 +162,7 @@ final class CasterConfig {
              _normalizeOptionalString(iapKeyFilePath),
            ),
        uploadDirPath = _normalizeOptionalString(uploadDirPath),
+       warnings = List<String>.unmodifiable(warnings),
        command = List<String>.unmodifiable(command) {
     _validate();
   }
@@ -152,6 +196,11 @@ final class CasterConfig {
         serverUri.host.isEmpty) {
       throw FormatException(
         'Expected ws:// or wss:// URL with a non-empty host, got "$serverUri".',
+      );
+    }
+    if (serverUri.userInfo.isNotEmpty) {
+      throw const FormatException(
+        'Relay server URI must not contain userInfo credentials.',
       );
     }
     if (command.isEmpty || command.first.trim().isEmpty) {
@@ -229,7 +278,12 @@ final class CasterConfig {
         'token',
         defaultsTo: '',
         help:
-            'Bearer token sent in initial binary AuthFrame (or \$TERMUI_CAST_CASTER_TOKEN).',
+            'Bearer token sent in initial binary AuthFrame (prefer \$TERMUI_CAST_CASTER_TOKEN or --token-file).',
+      )
+      ..addOption(
+        'token-file',
+        help:
+            'Path to a UTF-8 file containing the caster bearer token (or \$TERMUI_CAST_CASTER_TOKEN_FILE).',
       )
       ..addOption('session-id', help: 'Explicit unique session identifier.')
       ..addOption('title', help: 'Tab label displayed in viewer clients.')
@@ -261,6 +315,11 @@ final class CasterConfig {
         'download-conpty',
         help:
             'Download Microsoft ConPTY (conpty.dll + OpenConsole.exe) on Windows if not already cached locally (or \$TERMUI_CAST_DOWNLOAD_CONPTY).',
+      )
+      ..addFlag(
+        'keep-alive-on-hup',
+        help:
+            'Reconnect and re-register on SIGHUP instead of shutting down cleanly (or \$TERMUI_CAST_KEEP_ALIVE_ON_HUP).',
       )
       ..addFlag(
         'upload',
@@ -340,11 +399,8 @@ final class CasterConfig {
       'server',
       environment['TERMUI_CAST_SERVER_URL'],
     );
-    final rawToken = _resolveOption(
-      results,
-      'token',
-      environment['TERMUI_CAST_CASTER_TOKEN'],
-    );
+    final warnings = <String>[];
+    final rawToken = _resolveCasterToken(results, environment, warnings);
     final parsedUri = parseCastWebSocketUri(
       rawServer,
       defaultPath: '/v1/caster',
@@ -368,6 +424,12 @@ final class CasterConfig {
       'download-conpty',
       'TERMUI_CAST_DOWNLOAD_CONPTY',
       environment['TERMUI_CAST_DOWNLOAD_CONPTY'],
+    );
+    final keepAliveOnHup = _resolveFlag(
+      results,
+      'keep-alive-on-hup',
+      'TERMUI_CAST_KEEP_ALIVE_ON_HUP',
+      environment['TERMUI_CAST_KEEP_ALIVE_ON_HUP'],
     );
     final uploadEnabled = _resolveFlag(
       results,
@@ -398,11 +460,79 @@ final class CasterConfig {
       iapServiceAccount: iapAccount,
       iapKeyFilePath: iapKeyFile,
       downloadConPty: downloadConPty,
+      keepAliveOnHup: keepAliveOnHup,
       uploadEnabled: uploadEnabled,
       uploadDirPath: uploadDirPath,
       maxUploadBytes: maxUploadBytes,
+      warnings: warnings,
       command: command,
     );
+  }
+
+  /// Creates an [IapJwtSigner] for this config, or `null` when IAP is unconfigured.
+  IapJwtSigner? createIapSigner() {
+    if (iapServiceAccount == null && iapServiceAccountKey == null) return null;
+    return IapJwtSigner(
+      serviceAccount: iapServiceAccount,
+      serviceAccountKey: iapServiceAccountKey,
+      targetAudienceUrl: TokenAuthenticator.iapAudienceForWebSocketUri(
+        serverUri,
+      ),
+    );
+  }
+
+  static String _resolveCasterToken(
+    ArgResults results,
+    Map<String, String> environment,
+    List<String> warnings,
+  ) {
+    final cliHasToken = results.wasParsed('token');
+    final cliHasTokenFile = results.wasParsed('token-file');
+    if (cliHasToken && cliHasTokenFile) {
+      throw const FormatException(
+        'Cannot specify both --token and --token-file.',
+      );
+    }
+    if (cliHasToken) {
+      final token = results['token'] as String;
+      if (token.isNotEmpty) {
+        warnings.add(
+          '--token exposes the bearer token on process argv; prefer TERMUI_CAST_CASTER_TOKEN or --token-file.',
+        );
+      }
+      return token;
+    }
+    if (cliHasTokenFile) {
+      return _readTokenFile((results['token-file'] as String).trim());
+    }
+    final envToken = environment['TERMUI_CAST_CASTER_TOKEN'];
+    final envTokenFile = environment['TERMUI_CAST_CASTER_TOKEN_FILE']?.trim();
+    if (envToken != null &&
+        envToken.isNotEmpty &&
+        envTokenFile != null &&
+        envTokenFile.isNotEmpty) {
+      throw const FormatException(
+        'Cannot specify both TERMUI_CAST_CASTER_TOKEN and TERMUI_CAST_CASTER_TOKEN_FILE.',
+      );
+    }
+    if (envToken != null && envToken.trim().isNotEmpty) {
+      return envToken.trim();
+    }
+    if (envTokenFile != null && envTokenFile.isNotEmpty) {
+      return _readTokenFile(envTokenFile);
+    }
+    return '';
+  }
+
+  static String _readTokenFile(String path) {
+    if (path.isEmpty) {
+      throw const FormatException('--token-file path must not be empty.');
+    }
+    try {
+      return File(path).readAsStringSync().trim();
+    } on FileSystemException catch (e) {
+      throw FormatException('Failed to read token file "$path": ${e.message}');
+    }
   }
 
   static bool _resolveFlag(
@@ -539,12 +669,13 @@ final class CasterService {
   String? _pinnedTitle;
   String _sessionTitle;
   ({int cols, int rows})? _lastRemoteViewport;
-  StreamSubscription<Uint8List>? _ptySub;
+  Future<void> Function()? _cancelPtySub;
   StreamSubscription<Uint8List>? _channelSub;
   StreamChannel<Uint8List>? _activeChannel;
   StreamController<Uint8List>? _outboundController;
   AbortableByteStream? _outboundStream;
   Future<void>? _outboundPumpFuture;
+  Completer<void>? _outboundDrainCompleter;
   int _outboundQueuedBytes = 0;
   bool _drainingOutbound = false;
   Timer? _authTimer;
@@ -562,7 +693,13 @@ final class CasterService {
   );
   static const Duration _bellRateLimitInterval = Duration(milliseconds: 75);
   static const int _maxReplyCharsPerChunk = 1024;
+  static const int _maxReplyBufferChars = 64 * 1024;
+  static const int _maxPendingWaveformQueries = 16;
+  static const Duration _drainTimeout = Duration(milliseconds: 500);
   final StringBuffer _replyBuffer = StringBuffer();
+  final Queue<String> _overflowReplies = Queue<String>();
+  int _overflowReplyChars = 0;
+  Timer? _replyDrainTimer;
   String? _connectedRevision;
   bool _baselineProbeCompleted = false;
   bool _revisionProbeInFlight = false;
@@ -571,7 +708,13 @@ final class CasterService {
   String? _pendingClipboardText;
   bool _pendingClipboardReadBlocked = false;
   int _subscriberCount = 0;
-  int? _pendingWaveformReqId;
+  bool _registrationConfirmed = false;
+  final Queue<int> _pendingWaveformReqIds = Queue<int>();
+  Future<void> _uploadSerial = Future<void>.value();
+  final StreamController<CasterStatusSnapshot> _statusController =
+      StreamController<CasterStatusSnapshot>.broadcast();
+  CasterStatusSnapshot? _lastEmittedStatus;
+  String? _lastError;
   int _connectEpoch = 0;
   ({StreamChannel<Uint8List> channel, StreamSubscription<Uint8List>? sub})?
   _retiredConnection;
@@ -808,14 +951,7 @@ final class CasterService {
     IapTokenProvider? customIapProvider,
   ) {
     if (customIapProvider != null) return customIapProvider;
-    final iapAccount = config.iapServiceAccount;
-    final iapKey = config.iapServiceAccountKey;
-    if (iapAccount == null && iapKey == null) return null;
-    return IapJwtSigner(
-      serviceAccount: iapAccount,
-      serviceAccountKey: iapKey,
-      targetAudienceUrl: IapJwtSigner.audienceForWebSocketUri(config.serverUri),
-    ).getBearerToken;
+    return config.createIapSigner()?.getBearerToken;
   }
 
   static ChannelOpener _buildDefaultChannelOpener(
@@ -909,32 +1045,93 @@ final class CasterService {
 
   void _onTerminalReply(String reply) {
     if (_stopping || _ptyOutputDone.isCompleted || reply.isEmpty) return;
-    if (_replyBuffer.length + reply.length <= _maxReplyCharsPerChunk) {
+    if (_overflowReplies.isEmpty &&
+        _replyBuffer.length + reply.length <= _maxReplyCharsPerChunk) {
       _replyBuffer.write(reply);
+      return;
+    }
+    if (_replyBuffer.length + _overflowReplyChars + reply.length <=
+        _maxReplyBufferChars) {
+      _overflowReplies.addLast(reply);
+      _overflowReplyChars += reply.length;
     }
   }
 
   void _flushPendingReplies() {
-    if (_replyBuffer.isEmpty) return;
-    final combined = '$_replyBuffer';
-    _replyBuffer.clear();
-    if (!_stopping && !_ptyOutputDone.isCompleted) {
-      pty.writeBytes(utf8.encode(combined));
+    if (_replyBuffer.isNotEmpty) {
+      final combined = '$_replyBuffer';
+      _replyBuffer.clear();
+      if (!_stopping && !_ptyOutputDone.isCompleted) {
+        pty.writeBytes(utf8.encode(combined));
+      }
+    }
+    if (_overflowReplies.isNotEmpty &&
+        !_stopping &&
+        !_ptyOutputDone.isCompleted) {
+      _replyDrainTimer ??= Timer(Duration.zero, _drainOverflowReplies);
     }
   }
 
-  void _cancelFrameTimers() {
+  void _drainOverflowReplies() {
+    _replyDrainTimer = null;
+    if (_stopping || _ptyOutputDone.isCompleted || _overflowReplies.isEmpty) {
+      _overflowReplies.clear();
+      _overflowReplyChars = 0;
+      return;
+    }
+    final batch = StringBuffer();
+    while (_overflowReplies.isNotEmpty) {
+      final next = _overflowReplies.first;
+      if (batch.isNotEmpty &&
+          batch.length + next.length > _maxReplyCharsPerChunk) {
+        break;
+      }
+      _overflowReplies.removeFirst();
+      _overflowReplyChars -= next.length;
+      batch.write(next);
+      if (batch.length >= _maxReplyCharsPerChunk) break;
+    }
+    if (batch.isNotEmpty) {
+      pty.writeBytes(utf8.encode('$batch'));
+    }
+    if (_overflowReplies.isNotEmpty) {
+      _replyDrainTimer ??= Timer(Duration.zero, _drainOverflowReplies);
+    }
+  }
+
+  void _cancelFrameTimers({bool clearPendingTitle = false}) {
     _coalesceTimer?.cancel();
     _coalesceTimer = null;
     _syncOutputTimeoutTimer?.cancel();
     _syncOutputTimeoutTimer = null;
     _shellTitleTimer?.cancel();
     _shellTitleTimer = null;
-    _pendingShellTitle = false;
+    if (clearPendingTitle) {
+      _pendingShellTitle = false;
+    }
   }
 
   /// Completes with the child process exit code once casting finishes.
   Future<int> get done => _doneCompleter.future;
+
+  /// Broadcast stream of caster lifecycle, viewer count, title, and error updates.
+  Stream<CasterStatusSnapshot> get statusStream => _statusController.stream;
+
+  /// Current immutable status snapshot for in-process UI callers.
+  CasterStatusSnapshot get currentStatus => CasterStatusSnapshot(
+    state: stateMachine.state,
+    subscriberCount: _subscriberCount,
+    title: _sessionTitle,
+    lastError: _lastError,
+  );
+
+  void _emitStatus() {
+    if (_statusController.isClosed) return;
+    final next = currentStatus;
+    if (next == _lastEmittedStatus) return;
+    _lastEmittedStatus = next;
+    _statusController.add(next);
+  }
 
   /// Current active viewer count reported by the relay server.
   int get subscriberCount => _subscriberCount;
@@ -962,21 +1159,41 @@ final class CasterService {
     if (_routerSession != null) {
       unawaited(_awaitRouterExit());
     } else {
-      _ptySub = pty.output.listen(
+      _listenStandalonePtyOutput();
+      unawaited(_awaitPtyExit());
+    }
+    await stateMachine.dispatch(.start);
+    _emitStatus();
+    if (_isStaleEpoch(epoch)) return;
+    unawaited(_connectAttempt(epoch));
+  }
+
+  void _listenStandalonePtyOutput() {
+    if (pty case final Pty2Session pty2) {
+      final sub = pty2.textOutput.listen(
         (chunk) {
           _replyBuffer.clear();
-          terminal.writeOutput(chunk);
+          terminal.writeString(chunk);
           _flushPendingReplies();
           _scheduleDirtyFlushIfSubscribed();
         },
         onDone: _completePtyOutput,
         onError: (Object _) => _completePtyOutput(),
       );
-      unawaited(_awaitPtyExit());
+      _cancelPtySub = sub.cancel;
+      return;
     }
-    await stateMachine.dispatch(.start);
-    if (_isStaleEpoch(epoch)) return;
-    unawaited(_connectAttempt(epoch));
+    final sub = pty.output.listen(
+      (chunk) {
+        _replyBuffer.clear();
+        terminal.writeOutput(chunk);
+        _flushPendingReplies();
+        _scheduleDirtyFlushIfSubscribed();
+      },
+      onDone: _completePtyOutput,
+      onError: (Object _) => _completePtyOutput(),
+    );
+    _cancelPtySub = sub.cancel;
   }
 
   void _attachTerminalEventHooks() {
@@ -1041,7 +1258,11 @@ final class CasterService {
     if (_pinnedTitle == null) {
       _sessionTitle = _effectiveShellTitle;
     }
-    if (stateMachine.state != .streaming) return;
+    _emitStatus();
+    if (stateMachine.state != .streaming || _isOutboundPaused) {
+      _pendingShellTitle = true;
+      return;
+    }
     if (_shellTitleTimer == null) {
       _pendingShellTitle = false;
       _sendFrame(
@@ -1063,8 +1284,29 @@ final class CasterService {
       _pendingShellTitle = false;
       return;
     }
+    if (stateMachine.state != .streaming || _isOutboundPaused) {
+      return;
+    }
     _pendingShellTitle = false;
-    if (stateMachine.state != .streaming) return;
+    _sendFrame(
+      ShellTitleFrame(sessionId: config.sessionId, title: _shellTitle),
+      droppable: true,
+    );
+    _shellTitleTimer = Timer(
+      _shellTitleCoalesceInterval,
+      _onShellTitleCooldownDone,
+    );
+  }
+
+  void _flushPendingShellTitleIfReady() {
+    if (_stopping ||
+        !_pendingShellTitle ||
+        stateMachine.state != .streaming ||
+        _isOutboundPaused ||
+        _shellTitleTimer != null) {
+      return;
+    }
+    _pendingShellTitle = false;
     _sendFrame(
       ShellTitleFrame(sessionId: config.sessionId, title: _shellTitle),
       droppable: true,
@@ -1134,7 +1376,14 @@ final class CasterService {
         (highWaterBytes > 0 && _outboundQueuedBytes >= highWaterBytes)) {
       return;
     }
-    _pendingWaveformReqId = requestId;
+    while (_pendingWaveformReqIds.length >= _maxPendingWaveformQueries) {
+      final dropped = _pendingWaveformReqIds.removeFirst();
+      if (_routerSession == null) {
+        final empty = AudioApcHandler.encodeWaveformReply(dropped, null);
+        pty.writeBytes(Uint8List.fromList(utf8.encode(empty)));
+      }
+    }
+    _pendingWaveformReqIds.addLast(requestId);
     _sendFrame(
       AudioFrame(
         sessionId: config.sessionId,
@@ -1149,10 +1398,10 @@ final class CasterService {
     int requestId,
     Float32List samples,
   ) {
-    if (sessionId != config.sessionId || _pendingWaveformReqId != requestId) {
+    if (sessionId != config.sessionId ||
+        !_pendingWaveformReqIds.remove(requestId)) {
       return;
     }
-    _pendingWaveformReqId = null;
     if (_stopping || _finishing || _ptyOutputDone.isCompleted) return;
     final reply = AudioApcHandler.encodeWaveformReply(requestId, samples);
     pty.writeBytes(Uint8List.fromList(utf8.encode(reply)));
@@ -1206,6 +1455,7 @@ final class CasterService {
     await _closeActiveChannel(retire: true);
     if (_isStaleEpoch(epoch)) return;
     final transitioned = await stateMachine.dispatch(.checkIn);
+    _emitStatus();
     if (!transitioned || _isStaleEpoch(epoch)) return;
     unawaited(_connectAttempt(epoch));
   }
@@ -1218,7 +1468,11 @@ final class CasterService {
     final code = await pty.exitCode;
     if (_stopping || _finishing) return;
     onLog?.call('Child process exited with code $code');
-    await _ptyOutputDone.future;
+    try {
+      await _ptyOutputDone.future.timeout(_drainTimeout);
+    } on TimeoutException {
+      _completePtyOutput();
+    }
     await _finishWithExitCode(code);
   }
 
@@ -1229,6 +1483,7 @@ final class CasterService {
       channel = await _channelOpener();
     } on Object catch (error) {
       if (_isStaleEpoch(epoch)) return;
+      _lastError = '$error';
       onLog?.call('Connection attempt failed: $error');
       await _scheduleReconnect(fromConnectFailure: true, epoch: epoch);
       return;
@@ -1264,6 +1519,7 @@ final class CasterService {
       },
       onError: (Object error) {
         if (!_isActiveChannel(channel)) return;
+        _lastError = '$error';
         onLog?.call('Transport error: $error');
         unawaited(_scheduleReconnect(epoch: epoch));
       },
@@ -1274,6 +1530,7 @@ final class CasterService {
     );
     _authTimer?.cancel();
     _authTimer = Timer(authTimeout, () {
+      _lastError = 'Relay authentication timed out';
       onLog?.call('Relay authentication timed out');
       unawaited(_scheduleReconnect(epoch: epoch));
     });
@@ -1325,6 +1582,7 @@ final class CasterService {
             _pinnedTitle = title;
             _sessionTitle = title;
           }
+          _emitStatus();
         }
       case ErrorFrame(:final code, :final message):
         _onErrorFrame(code, message);
@@ -1343,21 +1601,26 @@ final class CasterService {
     if (!transitioned || _isStaleEpoch(epoch) || !_isActiveChannel(channel)) {
       return;
     }
+    _lastError = null;
+    _registrationConfirmed = false;
     _sendFrame(
       RegisterSessionFrame(
         sessionId: config.sessionId,
         title: _sessionTitle,
-        cols: terminal.cols,
-        rows: terminal.rows,
+        cols: AuthoritativeTerminal.clampCols(terminal.cols),
+        rows: AuthoritativeTerminal.clampRows(terminal.rows),
         resumeToken: _resumeToken,
       ),
     );
-    if (_pinnedTitle != null && _shellTitle.isNotEmpty) {
+    if ((_pinnedTitle != null || _pendingShellTitle) &&
+        _shellTitle.isNotEmpty) {
+      _pendingShellTitle = false;
       _sendFrame(
         ShellTitleFrame(sessionId: config.sessionId, title: _shellTitle),
         droppable: true,
       );
     }
+    _emitStatus();
     _closeRetiredConnection();
     final safeUri = Uri(
       scheme: config.serverUri.scheme,
@@ -1390,8 +1653,15 @@ final class CasterService {
       onLog?.call('Active viewers: $count');
     }
     _subscriberCount = count;
+    if (!_registrationConfirmed) {
+      _registrationConfirmed = true;
+      _lastError = null;
+      unawaited(stateMachine.dispatch(.registered).then((_) => _emitStatus()));
+    } else if (count != prevCount) {
+      _emitStatus();
+    }
     if (_subscriberCount <= 0) {
-      _pendingWaveformReqId = null;
+      _pendingWaveformReqIds.clear();
       _lastRemoteViewport = null;
       _cancelFrameTimers();
       _clearPendingClipboard();
@@ -1515,29 +1785,48 @@ final class CasterService {
 
   void _onFileUploadStart(FileUploadStartFrame frame) {
     if (frame.sessionId != config.sessionId) return;
-    _sendFrame(_uploadReceiver.handleStart(frame));
-    _syncUploadIdleTimer();
+    _enqueueUploadTask(() async {
+      final ack = await _uploadReceiver.handleStartAsync(frame);
+      if (_stopping || _finishing) return;
+      _sendFrame(ack);
+      _syncUploadIdleTimer();
+    });
   }
 
   void _onFileUploadChunk(FileUploadChunkFrame frame) {
     if (frame.sessionId != config.sessionId) return;
-    _sendFrame(_uploadReceiver.handleChunk(frame));
-    _syncUploadIdleTimer();
+    _enqueueUploadTask(() async {
+      final ack = await _uploadReceiver.handleChunkAsync(frame);
+      if (_stopping || _finishing) return;
+      _sendFrame(ack);
+      _syncUploadIdleTimer();
+    });
   }
 
   void _onFileUploadEnd(FileUploadEndFrame frame) {
     if (frame.sessionId != config.sessionId) return;
-    final (ack, completedPath) = _uploadReceiver.handleEnd(frame);
-    _sendFrame(ack);
-    if (completedPath != null && !_ptyOutputDone.isCompleted) {
-      final formatted = FileUploadReceiver.formatUploadedPathForPty(
-        completedPath,
-        isWindows: _isWindows,
-        bracketedPaste: terminal.modes.bracketedPaste,
-      );
-      pty.writeBytes(Uint8List.fromList(utf8.encode(formatted)));
-    }
-    _syncUploadIdleTimer();
+    _enqueueUploadTask(() async {
+      final (ack, completedPath) = await _uploadReceiver.handleEndAsync(frame);
+      if (_stopping || _finishing) return;
+      _sendFrame(ack);
+      if (completedPath != null && !_ptyOutputDone.isCompleted) {
+        final formatted = FileUploadReceiver.formatUploadedPathForPty(
+          completedPath,
+          isWindows: _isWindows,
+          bracketedPaste: terminal.modes.bracketedPaste,
+        );
+        pty.writeBytes(Uint8List.fromList(utf8.encode(formatted)));
+      }
+      _syncUploadIdleTimer();
+    });
+  }
+
+  void _enqueueUploadTask(Future<void> Function() task) {
+    _uploadSerial = _uploadSerial.then((_) => task()).catchError((
+      Object error,
+    ) {
+      onLog?.call('File upload error: $error');
+    });
   }
 
   void _syncUploadIdleTimer() {
@@ -1566,8 +1855,10 @@ final class CasterService {
     }
   }
 
-  void _onResizeFrame(int cols, int rows) {
+  void _onResizeFrame(int rawCols, int rawRows) {
     if (_ptyOutputDone.isCompleted) return;
+    final cols = AuthoritativeTerminal.clampCols(rawCols);
+    final rows = AuthoritativeTerminal.clampRows(rawRows);
     _lastRemoteViewport = (cols: cols, rows: rows);
     final router = _routerSession;
     if (router != null) {
@@ -1587,11 +1878,13 @@ final class CasterService {
     if (terminal.resize(targetCols, targetRows)) {
       _coalesceTimer?.cancel();
       _coalesceTimer = null;
+      _flushPendingShellTitleIfReady();
       _scheduleDirtyFlushIfSubscribed();
       return;
     }
     if (terminal.synchronizedOutput) {
       terminal.forceKeyframe();
+      _flushPendingShellTitleIfReady();
       _scheduleDirtyFlushIfSubscribed();
       return;
     }
@@ -1600,12 +1893,15 @@ final class CasterService {
         ? terminal.takeSnapshot()
         : terminal.snapshotCurrent();
     _sendFrame(BufferSnapshotFrame(snapshot: snapshot));
+    _flushPendingShellTitleIfReady();
     _scheduleDirtyFlushIfSubscribed();
   }
 
   void _onErrorFrame(String code, String message) {
+    _lastError = '$code: $message';
     onLog?.call('Server error ($code): $message');
     if (_isFatalErrorCode(code)) {
+      _emitStatus();
       _completePtyOutput();
       unawaited(_finishWithExitCode(78, killPty: _routerSession == null));
       return;
@@ -1625,9 +1921,14 @@ final class CasterService {
   }
 
   void _onOutboundResume() {
+    if (_outboundDrainCompleter != null) {
+      _drainOutboundQueue();
+      return;
+    }
     if (_stopping || _activeChannel == null) return;
     _drainOutboundQueue();
     if (!_isOutboundPaused) {
+      _flushPendingShellTitleIfReady();
       _scheduleDirtyFlushIfSubscribed();
     }
   }
@@ -1770,6 +2071,16 @@ final class CasterService {
       }
     } finally {
       _drainingOutbound = false;
+      if (_outboundQueue.isEmpty) {
+        _completeOutboundDrain();
+      }
+    }
+  }
+
+  void _completeOutboundDrain() {
+    final waiter = _outboundDrainCompleter;
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
     }
   }
 
@@ -1792,6 +2103,7 @@ final class CasterService {
         ? .connectionFailed
         : .disconnected;
     await stateMachine.dispatch(event);
+    _emitStatus();
     if (_isStaleEpoch(backoffEpoch) || stateMachine.state == .terminated) {
       return;
     }
@@ -1806,26 +2118,81 @@ final class CasterService {
     if (_isStaleEpoch(backoffEpoch)) return;
     final nextEpoch = ++_connectEpoch;
     await stateMachine.dispatch(.retryTimerFired);
+    _emitStatus();
     if (_isStaleEpoch(nextEpoch)) return;
     unawaited(_connectAttempt(nextEpoch));
   }
 
-  Future<void> _closeOutboundPump() async {
+  Future<bool> _closeOutboundPump({bool drain = false}) async {
     final outStream = _outboundStream;
     final outCtrl = _outboundController;
     final outPump = _outboundPumpFuture;
+    var timedOut = drain && outCtrl != null && !outCtrl.isClosed
+        ? await _awaitOutboundDrain()
+        : _resetOutboundDrain();
     _outboundStream = null;
     _outboundController = null;
     _outboundPumpFuture = null;
     _outboundQueue.clear();
     _outboundQueuedBytes = 0;
-    outStream?.abort();
+    if (!drain || timedOut) {
+      outStream?.abort();
+    }
     if (outCtrl != null && !outCtrl.isClosed) {
       unawaited(outCtrl.close());
     }
     if (outPump != null) {
-      await outPump;
+      timedOut = await _awaitOutboundPumpClose(
+        outPump,
+        outStream,
+        drain: drain,
+        alreadyTimedOut: timedOut,
+      );
     }
+    return timedOut;
+  }
+
+  bool _resetOutboundDrain() {
+    _completeOutboundDrain();
+    _outboundDrainCompleter = null;
+    return false;
+  }
+
+  Future<bool> _awaitOutboundDrain() async {
+    _drainOutboundQueue();
+    if (_outboundQueue.isEmpty) return false;
+    var timedOut = false;
+    final drainCompleter = Completer<void>();
+    _outboundDrainCompleter = drainCompleter;
+    await drainCompleter.future.timeout(
+      _drainTimeout,
+      onTimeout: () => timedOut = true,
+    );
+    if (identical(_outboundDrainCompleter, drainCompleter)) {
+      _outboundDrainCompleter = null;
+    }
+    return timedOut;
+  }
+
+  Future<bool> _awaitOutboundPumpClose(
+    Future<void> outPump,
+    AbortableByteStream? outStream, {
+    required bool drain,
+    required bool alreadyTimedOut,
+  }) async {
+    if (!drain || alreadyTimedOut) {
+      await outPump;
+      return alreadyTimedOut;
+    }
+    var timedOut = false;
+    await outPump.timeout(
+      _drainTimeout,
+      onTimeout: () {
+        timedOut = true;
+        outStream?.abort();
+      },
+    );
+    return timedOut;
   }
 
   void _closeRetiredConnection() {
@@ -1842,27 +2209,35 @@ final class CasterService {
     }
   }
 
-  Future<void> _closeActiveChannel({bool retire = false}) async {
+  Future<void> _closeActiveChannel({
+    bool retire = false,
+    bool drainOutbound = false,
+  }) async {
     final chan = _activeChannel;
     if (!retire || chan != null) {
       _closeRetiredConnection();
     }
     _authTimer?.cancel();
     _authTimer = null;
-    _cancelFrameTimers();
+    _cancelFrameTimers(clearPendingTitle: true);
     _lastBellSentAt = null;
     _revisionTimer?.cancel();
     _revisionTimer = null;
     _uploadIdleTimer?.cancel();
     _uploadIdleTimer = null;
+    _replyDrainTimer?.cancel();
+    _replyDrainTimer = null;
+    _overflowReplies.clear();
+    _overflowReplyChars = 0;
     _connectedRevision = null;
     _baselineProbeCompleted = false;
     _revisionProbeInFlight = false;
     _revisionProbePending = false;
     _revisionReconnectDeferred = false;
+    _registrationConfirmed = false;
     _clearPendingClipboard();
     _uploadReceiver.abortAll();
-    _pendingWaveformReqId = null;
+    _pendingWaveformReqIds.clear();
     _subscriberCount = 0;
     _lastRemoteViewport = null;
     _routerSession?.removeEndpointViewport(_remoteEndpointId);
@@ -1877,14 +2252,14 @@ final class CasterService {
         ..onError((Object _) {})
         ..onDone(null);
     }
-    await _closeOutboundPump();
+    final drainTimedOut = await _closeOutboundPump(drain: drainOutbound);
     if (chan != null && retire && !wasPaused) {
       _retiredConnection = (channel: chan, sub: sub);
       _retireTimer = Timer(authTimeout, _closeRetiredConnection);
       return;
     }
     if (chan != null) {
-      if (wasPaused || retire) {
+      if ((wasPaused && !drainOutbound) || drainTimedOut || retire) {
         unawaited(chan.sink.close().catchError((Object _) {}));
       } else {
         await chan.sink
@@ -1914,14 +2289,16 @@ final class CasterService {
     final killFuture = killPty ? _killPtyWithEscalation() : null;
     _authTimer?.cancel();
     _authTimer = null;
-    _cancelFrameTimers();
+    _cancelFrameTimers(clearPendingTitle: true);
     _lastBellSentAt = null;
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
     _revisionTimer?.cancel();
     _revisionTimer = null;
     _uploadIdleTimer?.cancel();
     _uploadIdleTimer = null;
+    _replyDrainTimer?.cancel();
+    _replyDrainTimer = null;
+    _overflowReplies.clear();
+    _overflowReplyChars = 0;
 
     if (stateMachine.state == .streaming) {
       if (_subscriberCount > 0) {
@@ -1941,11 +2318,11 @@ final class CasterService {
       );
     }
 
-    await _closeActiveChannel();
-    final ptySub = _ptySub;
-    _ptySub = null;
-    if (ptySub != null) {
-      unawaited(ptySub.cancel());
+    await _closeActiveChannel(drainOutbound: true);
+    final cancelPtySub = _cancelPtySub;
+    _cancelPtySub = null;
+    if (cancelPtySub != null) {
+      unawaited(cancelPtySub());
     }
     if (killFuture != null) {
       await killFuture;
@@ -1954,6 +2331,8 @@ final class CasterService {
     _detachTerminalEventHooks();
     terminal.dispose();
     await stateMachine.dispatch(.stop);
+    _emitStatus();
+    unawaited(_statusController.close());
     stateMachine.dispose();
     _doneCompleter.complete(code);
     return code;

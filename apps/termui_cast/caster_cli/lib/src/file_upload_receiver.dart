@@ -12,14 +12,25 @@ final class FileUploadReceiver {
   /// Default maximum size per uploaded file (`256 MiB`).
   static const int defaultMaxUploadBytes = 256 * 1024 * 1024;
 
+  /// Default cumulative maximum uploaded bytes permitted per session (`1 GiB`).
+  static const int defaultMaxSessionUploadBytes = 1024 * 1024 * 1024;
+
+  /// Default maximum number of completed uploaded files permitted per session.
+  static const int defaultMaxSessionUploadFiles = 256;
+
+  /// Maximum collision-suffix `(N)` attempts when resolving destination filename.
+  static const int maxCollisionSuffixAttempts = 1000;
+
   static const int _maxSanitizedFileNameBytes = 200;
+
+  static final Random _secureRandom = Random.secure();
 
   static final RegExp _forbiddenFileNameChars = RegExp(
     r'[\x00-\x1F\x7F-\x9F<>:"/\\|?*&%!^;`$]',
   );
   static final RegExp _trailingDotsOrSpaces = RegExp(r'[. ]+$');
   static final RegExp _windowsReservedName = RegExp(
-    r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$',
+    r'^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9]|LPT[0-9])(\..*)?$',
     caseSensitive: false,
   );
   static final RegExp _posixSafeUnquoted = RegExp(r'^[A-Za-z0-9_./:@+-]+$');
@@ -34,10 +45,24 @@ final class FileUploadReceiver {
   /// Maximum allowed size in bytes for a single uploaded file.
   final int maxUploadBytes;
 
+  /// Maximum cumulative uploaded bytes permitted across the lifetime of this session.
+  final int maxSessionUploadBytes;
+
+  /// Maximum completed file count permitted across the lifetime of this session.
+  final int maxSessionUploadFiles;
+
   final Directory? _customUploadDir;
   Directory? _autoUploadRoot;
   _ActiveUploadState? _active;
   bool _sweptStaleParts = false;
+  int _totalUploadedBytes = 0;
+  int _totalUploadedFiles = 0;
+
+  /// Cumulative bytes written by completed uploads in this session.
+  int get totalUploadedBytes => _totalUploadedBytes;
+
+  /// Number of completed uploads finalized in this session.
+  int get totalUploadedFiles => _totalUploadedFiles;
 
   /// Destination directory on the caster host where completed files are placed.
   ///
@@ -63,6 +88,8 @@ final class FileUploadReceiver {
     Directory? uploadDir,
     this.enabled = true,
     this.maxUploadBytes = defaultMaxUploadBytes,
+    this.maxSessionUploadBytes = defaultMaxSessionUploadBytes,
+    this.maxSessionUploadFiles = defaultMaxSessionUploadFiles,
   }) : _customUploadDir = uploadDir;
 
   static Directory _fallbackUploadDirectoryForSession(SessionId sessionId) =>
@@ -83,7 +110,7 @@ final class FileUploadReceiver {
     final base = lastSlash >= 0
         ? rawFileName.substring(lastSlash + 1)
         : rawFileName;
-    final cleaned = base
+    var cleaned = base
         .replaceAll(_forbiddenFileNameChars, '_')
         .trim()
         .replaceAll(_trailingDotsOrSpaces, '')
@@ -91,13 +118,25 @@ final class FileUploadReceiver {
     if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') {
       return 'upload.bin';
     }
-    final deviceSafe = _windowsReservedName.hasMatch(cleaned)
-        ? '_$cleaned'
-        : cleaned;
-    return _truncateUtf8PreservingExtension(
-      deviceSafe,
+    cleaned = _truncateUtf8PreservingExtension(
+      cleaned,
       _maxSanitizedFileNameBytes,
-    );
+    ).trim().replaceAll(_trailingDotsOrSpaces, '').trim();
+    if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') {
+      return 'upload.bin';
+    }
+    if (!_windowsReservedName.hasMatch(cleaned)) {
+      return cleaned;
+    }
+    final prefixed = '_$cleaned';
+    if (utf8.encode(prefixed).length <= _maxSanitizedFileNameBytes) {
+      return prefixed;
+    }
+    final trimmedForPrefix = _truncateUtf8PreservingExtension(
+      cleaned,
+      _maxSanitizedFileNameBytes - 1,
+    ).trim().replaceAll(_trailingDotsOrSpaces, '').trim();
+    return trimmedForPrefix.isEmpty ? 'upload.bin' : '_$trimmedForPrefix';
   }
 
   static String _truncateUtf8PreservingExtension(String name, int maxBytes) {
@@ -179,8 +218,7 @@ final class FileUploadReceiver {
     } on Object catch (_) {}
   }
 
-  /// Handles [FileUploadStartFrame], opening a `.part` staging file when accepted.
-  FileUploadAckFrame handleStart(FileUploadStartFrame frame) {
+  FileUploadAckFrame? _validateStartPreconditions(FileUploadStartFrame frame) {
     if (!enabled) {
       return _rejectedAck(
         frame.transferId,
@@ -193,6 +231,20 @@ final class FileUploadReceiver {
         frame.transferId,
         0,
         'File size (${frame.totalBytes} B) exceeds caster limit ($maxUploadBytes B).',
+      );
+    }
+    if (_totalUploadedFiles >= maxSessionUploadFiles) {
+      return _rejectedAck(
+        frame.transferId,
+        0,
+        'Session file upload count limit ($maxSessionUploadFiles) exceeded.',
+      );
+    }
+    if (_totalUploadedBytes + frame.totalBytes > maxSessionUploadBytes) {
+      return _rejectedAck(
+        frame.transferId,
+        0,
+        'Cumulative session upload byte quota ($maxSessionUploadBytes B) exceeded.',
       );
     }
     if (_active != null && _active!.transferId != frame.transferId) {
@@ -210,6 +262,26 @@ final class FileUploadReceiver {
         'Refusing to use symlink upload directory.',
       );
     }
+    return null;
+  }
+
+  static String _randomHexToken() {
+    final buf = StringBuffer();
+    for (var i = 0; i < 16; i++) {
+      buf.write(_secureRandom.nextInt(256).toRadixString(16).padLeft(2, '0'));
+    }
+    return '$buf';
+  }
+
+  String _nextStagingPartPath() => p.join(
+    uploadDir.path,
+    '.upload-${sessionId.value}-${_randomHexToken()}.part',
+  );
+
+  /// Handles [FileUploadStartFrame], creating a staging `.part` file exclusively.
+  FileUploadAckFrame handleStart(FileUploadStartFrame frame) {
+    final rejection = _validateStartPreconditions(frame);
+    if (rejection != null) return rejection;
     try {
       _prepareUploadDirectory();
       if (_isSymlinkPath(uploadDir.path)) {
@@ -219,10 +291,7 @@ final class FileUploadReceiver {
           'Refusing to use symlink upload directory.',
         );
       }
-      final partPath = p.join(
-        uploadDir.path,
-        '.upload-${sessionId.value}-${frame.transferId}.part',
-      );
+      final partPath = _nextStagingPartPath();
       if (_isSymlinkPath(partPath)) {
         return _rejectedAck(
           frame.transferId,
@@ -230,25 +299,9 @@ final class FileUploadReceiver {
           'Refusing to open symlink staging file.',
         );
       }
-      final partFile = File(partPath);
+      final partFile = File(partPath)..createSync(exclusive: true);
       final raf = partFile.openSync(mode: .writeOnly);
-      final digestSink = _DigestSink();
-      final hashSink = sha256.startChunkedConversion(digestSink);
-      _active = _ActiveUploadState(
-        transferId: frame.transferId,
-        sanitizedFileName: sanitizeFileName(frame.fileName),
-        totalBytes: frame.totalBytes,
-        partFile: partFile,
-        raf: raf,
-        digestSink: digestSink,
-        hashSink: hashSink,
-      );
-      return FileUploadAckFrame(
-        sessionId: sessionId,
-        transferId: frame.transferId,
-        status: .ready,
-        nextOffset: 0,
-      );
+      return _activateStagingFile(frame, partFile, raf);
     } on Object catch (error) {
       abortAll();
       return _rejectedAck(
@@ -259,26 +312,72 @@ final class FileUploadReceiver {
     }
   }
 
-  /// Appends [frame]'s bytes to the active `.part` file and updates the SHA-256 state.
-  FileUploadAckFrame handleChunk(FileUploadChunkFrame frame) {
-    final active = _active;
-    if (active == null || active.transferId != frame.transferId) {
-      return _rejectedAck(
-        frame.transferId,
-        0,
-        'Unknown or inactive upload transfer.',
-      );
-    }
-    final nextEnd = frame.offset + frame.data.length;
-    if (frame.offset != active.bytesWritten || nextEnd > active.totalBytes) {
-      final written = active.bytesWritten;
+  /// Async variant of [handleStart] creating `.part` exclusively without blocking.
+  Future<FileUploadAckFrame> handleStartAsync(
+    FileUploadStartFrame frame,
+  ) async {
+    final rejection = _validateStartPreconditions(frame);
+    if (rejection != null) return rejection;
+    try {
+      _prepareUploadDirectory();
+      if (_isSymlinkPath(uploadDir.path)) {
+        return _rejectedAck(
+          frame.transferId,
+          0,
+          'Refusing to use symlink upload directory.',
+        );
+      }
+      final partPath = _nextStagingPartPath();
+      if (_isSymlinkPath(partPath)) {
+        return _rejectedAck(
+          frame.transferId,
+          0,
+          'Refusing to open symlink staging file.',
+        );
+      }
+      final partFile = await File(partPath).create(exclusive: true);
+      final raf = await partFile.open(mode: .writeOnly);
+      return _activateStagingFile(frame, partFile, raf);
+    } on Object catch (error) {
       abortAll();
       return _rejectedAck(
         frame.transferId,
-        written,
-        'Out-of-order or overflowing upload chunk.',
+        0,
+        'Failed to open staging file: $error',
       );
     }
+  }
+
+  FileUploadAckFrame _activateStagingFile(
+    FileUploadStartFrame frame,
+    File partFile,
+    RandomAccessFile raf,
+  ) {
+    final digestSink = _DigestSink();
+    final hashSink = sha256.startChunkedConversion(digestSink);
+    _active = _ActiveUploadState(
+      transferId: frame.transferId,
+      sanitizedFileName: sanitizeFileName(frame.fileName),
+      totalBytes: frame.totalBytes,
+      partFile: partFile,
+      raf: raf,
+      digestSink: digestSink,
+      hashSink: hashSink,
+    );
+    return FileUploadAckFrame(
+      sessionId: sessionId,
+      transferId: frame.transferId,
+      status: .ready,
+      nextOffset: 0,
+    );
+  }
+
+  /// Appends [frame]'s bytes to the active `.part` file and updates the SHA-256 state.
+  FileUploadAckFrame handleChunk(FileUploadChunkFrame frame) {
+    final precheck = _validateChunkPreconditions(frame);
+    if (precheck.rejection != null) return precheck.rejection!;
+    final active = precheck.active!;
+    final nextEnd = precheck.nextEnd;
     try {
       active.raf.writeFromSync(frame.data);
       active.hashSink.add(frame.data);
@@ -300,10 +399,129 @@ final class FileUploadReceiver {
     }
   }
 
+  /// Async variant of [handleChunk] writing payload chunks without blocking the isolate.
+  Future<FileUploadAckFrame> handleChunkAsync(
+    FileUploadChunkFrame frame,
+  ) async {
+    final precheck = _validateChunkPreconditions(frame);
+    if (precheck.rejection != null) return precheck.rejection!;
+    final active = precheck.active!;
+    final nextEnd = precheck.nextEnd;
+    try {
+      await active.raf.writeFrom(frame.data);
+      active.hashSink.add(frame.data);
+      active.bytesWritten = nextEnd;
+      return FileUploadAckFrame(
+        sessionId: sessionId,
+        transferId: frame.transferId,
+        status: .chunkAck,
+        nextOffset: active.bytesWritten,
+      );
+    } on Object catch (error) {
+      final written = active.bytesWritten;
+      abortAll();
+      return _rejectedAck(
+        frame.transferId,
+        written,
+        'Disk write error during upload: $error',
+      );
+    }
+  }
+
+  ({FileUploadAckFrame? rejection, _ActiveUploadState? active, int nextEnd})
+  _validateChunkPreconditions(FileUploadChunkFrame frame) {
+    final active = _active;
+    if (active == null || active.transferId != frame.transferId) {
+      return (
+        rejection: _rejectedAck(
+          frame.transferId,
+          0,
+          'Unknown or inactive upload transfer.',
+        ),
+        active: null,
+        nextEnd: 0,
+      );
+    }
+    final nextEnd = frame.offset + frame.data.length;
+    if (frame.offset != active.bytesWritten || nextEnd > active.totalBytes) {
+      final written = active.bytesWritten;
+      abortAll();
+      return (
+        rejection: _rejectedAck(
+          frame.transferId,
+          written,
+          'Out-of-order or overflowing upload chunk.',
+        ),
+        active: null,
+        nextEnd: 0,
+      );
+    }
+    return (rejection: null, active: active, nextEnd: nextEnd);
+  }
+
+  /// Async variant of [handleEnd] closing and renaming without blocking the isolate.
+  Future<(FileUploadAckFrame ack, String? completedPath)> handleEndAsync(
+    FileUploadEndFrame frame,
+  ) async {
+    final precheck = _validateEndPreconditions(frame);
+    if (precheck.earlyResult != null) return precheck.earlyResult!;
+    final active = precheck.active!;
+    _active = null;
+    try {
+      await active.raf.close();
+      active.hashSink.close();
+      final actualBytes = active.digestSink.value?.bytes;
+      if (actualBytes == null || !_bytesEqual(actualBytes, frame.sha256)) {
+        _safeDeleteFile(active.partFile);
+        return (
+          _rejectedAck(
+            active.transferId,
+            active.bytesWritten,
+            'SHA-256 digest mismatch.',
+          ),
+          null,
+        );
+      }
+      final destinationPath = _resolveUniqueDestinationPath(
+        active.sanitizedFileName,
+      );
+      await active.partFile.rename(destinationPath);
+      _totalUploadedBytes += active.bytesWritten;
+      _totalUploadedFiles += 1;
+      return (
+        FileUploadAckFrame(
+          sessionId: sessionId,
+          transferId: active.transferId,
+          status: .completed,
+          nextOffset: active.bytesWritten,
+          message: destinationPath,
+        ),
+        destinationPath,
+      );
+    } on Object catch (error) {
+      _safeDeleteFile(active.partFile);
+      return (
+        _rejectedAck(
+          active.transferId,
+          active.bytesWritten,
+          'Failed to finalize uploaded file: $error',
+        ),
+        null,
+      );
+    }
+  }
+
   /// Verifies the SHA-256 digest and renames the `.part` file, or cleans up on abort.
   (FileUploadAckFrame ack, String? completedPath) handleEnd(
     FileUploadEndFrame frame,
   ) {
+    final precheck = _validateEndPreconditions(frame);
+    if (precheck.earlyResult != null) return precheck.earlyResult!;
+    return _finalizeActiveUpload(precheck.active!, frame.sha256);
+  }
+
+  ({(FileUploadAckFrame, String?)? earlyResult, _ActiveUploadState? active})
+  _validateEndPreconditions(FileUploadEndFrame frame) {
     final active = _active;
     if (frame.aborted) {
       final written = active?.transferId == frame.transferId
@@ -313,33 +531,42 @@ final class FileUploadReceiver {
         abortAll();
       }
       return (
-        _rejectedAck(frame.transferId, written, 'Upload cancelled.'),
-        null,
+        earlyResult: (
+          _rejectedAck(frame.transferId, written, 'Upload cancelled.'),
+          null,
+        ),
+        active: null,
       );
     }
     if (active == null || active.transferId != frame.transferId) {
       return (
-        _rejectedAck(
-          frame.transferId,
-          0,
-          'Unknown or inactive upload transfer.',
+        earlyResult: (
+          _rejectedAck(
+            frame.transferId,
+            0,
+            'Unknown or inactive upload transfer.',
+          ),
+          null,
         ),
-        null,
+        active: null,
       );
     }
     if (active.bytesWritten != active.totalBytes) {
       final written = active.bytesWritten;
       abortAll();
       return (
-        _rejectedAck(
-          frame.transferId,
-          written,
-          'Incomplete upload: expected ${active.totalBytes} B, received $written B.',
+        earlyResult: (
+          _rejectedAck(
+            frame.transferId,
+            written,
+            'Incomplete upload: expected ${active.totalBytes} B, received $written B.',
+          ),
+          null,
         ),
-        null,
+        active: null,
       );
     }
-    return _finalizeActiveUpload(active, frame.sha256);
+    return (earlyResult: null, active: active);
   }
 
   (FileUploadAckFrame ack, String? completedPath) _finalizeActiveUpload(
@@ -366,6 +593,8 @@ final class FileUploadReceiver {
         active.sanitizedFileName,
       );
       active.partFile.renameSync(destinationPath);
+      _totalUploadedBytes += active.bytesWritten;
+      _totalUploadedFiles += 1;
       return (
         FileUploadAckFrame(
           sessionId: sessionId,
@@ -400,15 +629,17 @@ final class FileUploadReceiver {
         ? sanitizedFileName.substring(0, dotIndex)
         : sanitizedFileName;
     final ext = hasExt ? sanitizedFileName.substring(dotIndex) : '';
-    var counter = 1;
-    while (true) {
+    for (var counter = 1; counter <= maxCollisionSuffixAttempts; counter++) {
       final candidate = p.join(uploadDir.path, '$stem ($counter)$ext');
       if (FileSystemEntity.typeSync(candidate, followLinks: false) ==
           .notFound) {
         return candidate;
       }
-      counter++;
     }
+    throw FileSystemException(
+      'Exceeded $maxCollisionSuffixAttempts duplicate filename attempts',
+      initial,
+    );
   }
 
   /// Closes and deletes any in-flight `.part` file.

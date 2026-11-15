@@ -735,7 +735,7 @@ void main() {
     );
 
     test(
-      'rejects C0, DEL, and C1 control characters in snapshot and delta cell graphemes',
+      'sanitizes C0/DEL/C1 control characters on encode and rejects hostile control bytes on decode/inspect',
       () {
         const sessionId = SessionId('no-ctrl-cells');
         const hostileGraphemes = [
@@ -761,15 +761,12 @@ void main() {
               ),
             ),
           );
-          check(
-            () => BufferFrameCodec.decode(snapWire),
-          ).throws<ProtocolFormatException>();
-          check(
-            () => BufferFrameCodec.inspectRelayBufferFrame(
-              snapWire,
-              expectedSession: sessionId,
-            ),
-          ).throws<ProtocolFormatException>();
+          final decodedSnap =
+              BufferFrameCodec.decode(snapWire) as BufferSnapshotFrame;
+          final expectedClean = grapheme == 'a\x1b]52;c;?\x07'
+              ? 'a]52;c;?'
+              : '';
+          check(decodedSnap.snapshot.characters[0]).equals(expectedClean);
 
           final deltaWire = BufferFrameCodec.encode(
             BufferDeltaFrame(
@@ -791,12 +788,44 @@ void main() {
               ),
             ),
           );
+          final decodedDelta =
+              BufferFrameCodec.decode(deltaWire) as BufferDeltaFrame;
           check(
-            () => BufferFrameCodec.decode(deltaWire),
+            decodedDelta.delta.runs.single.characters.single,
+          ).equals(expectedClean);
+
+          // Raw hostile control bytes on the wire still fail decode and inspect.
+          final rawBytes = utf8.encode(grapheme);
+          final hostileDeltaWire = Uint8List.fromList([
+            BufferFrameCodec.protocolVersion,
+            0x0A,
+            0,
+            sessionId.value.length,
+            ...sessionId.value.codeUnits,
+            0, 0, 0, 0, 0, 0, 0, 2, // seq
+            0, 0, 0, 0, 0, 0, 0, 1, // baseSeq
+            0, 2, 0, 1, // 2x1
+            0, 0, 0, 0, 0, 0, 0, // cursor + modes
+            ...List<int>.filled(20, 0), // scrollback
+            0, // wrappedRows
+            0, // compressionFlag = 0x00 raw
+            0, 0, 0, 1, // runCount = 1
+            0, 0, 0, 0, // startIndex = 0
+            0, 0, 0, 1, // len = 1
+            rawBytes.length,
+            ...rawBytes,
+            ...List<int>.filled(12, 0), // attrs
+            0, // auxFlags = 0
+            0, // clearKittyImages = 0
+            0, 0, // removals = 0
+            0, 0, // upserts = 0
+          ]);
+          check(
+            () => BufferFrameCodec.decode(hostileDeltaWire),
           ).throws<ProtocolFormatException>();
           check(
             () => BufferFrameCodec.inspectRelayBufferFrame(
-              deltaWire,
+              hostileDeltaWire,
               expectedSession: sessionId,
             ),
           ).throws<ProtocolFormatException>();
@@ -3440,4 +3469,36 @@ void _testV6HostileAudioAndTitleFrames() {
   check(
     () => BufferFrameCodec.decode(poisonedWire),
   ).throws<ProtocolFormatException>();
+
+  // Single-pass scrollback inspection + in-place patch.
+  final sbWire = BufferFrameCodec.encode(
+    ScrollbackChunkFrame(
+      sessionId: sessionId,
+      requestId: 17,
+      clearSeq: 1,
+      startLine: 0,
+      rows: [
+        EncodedScrollbackRow(
+          isWrapped: false,
+          characters: ['A'],
+          attributes: Uint32List(3),
+        ),
+      ],
+    ),
+  );
+  final inspected = BufferFrameCodec.inspectRelayScrollbackChunk(
+    sbWire,
+    expectedSession: sessionId,
+  )!;
+  check(inspected.requestId).equals(17);
+  final patched = BufferFrameCodec.patchScrollbackChunkRequestId(
+    sbWire,
+    requestIdOffset: inspected.requestIdOffset,
+    newRequestId: 99,
+    inPlace: true,
+  );
+  check(identical(patched, sbWire)).isTrue();
+  check(
+    (BufferFrameCodec.decode(patched) as ScrollbackChunkFrame).requestId,
+  ).equals(99);
 }

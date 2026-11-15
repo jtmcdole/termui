@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
@@ -16,6 +17,10 @@ final class FileUploadCoordinator {
 
   /// Maximum bytes read and transmitted per [FileUploadChunkFrame] (`64 KiB`).
   static const int chunkSizeBytes = FileUploadChunkFrame.maxChunkBytes;
+
+  /// Maximum number of pipelined `FileUploadChunkFrame`s in flight per file
+  /// (`8 * 64 KiB = 512 KiB`).
+  static const int windowChunks = 8;
 
   static final RegExp _controlOrSlash = RegExp(r'[\x00-\x1F\x7F-\x9F/\\]');
 
@@ -166,51 +171,19 @@ final class FileUploadCoordinator {
 
     final digestSink = _ClientDigestSink();
     final hashSink = sha256.startChunkedConversion(digestSink);
-    var offset = 0;
-    while (offset < file.size) {
-      if (_cancelled || epoch != _runEpoch) return false;
-      final end = min(offset + chunkSizeBytes, file.size);
-      final slice = await _readExpectedSlice(
-        epoch,
-        file,
-        offset,
-        end,
-        sessionId,
-        transferId,
-        wireName,
-      );
-      if (slice == null) return false;
-      hashSink.add(slice);
-      final chunkAck = await _sendAndAwaitAck(
-        epoch: epoch,
-        sessionId: sessionId,
-        transferId: transferId,
-        send: () => repository.sendFileUploadChunk(
-          FileUploadChunkFrame(
-            sessionId: sessionId,
-            transferId: transferId,
-            offset: offset,
-            data: slice,
-          ),
-        ),
-      );
-      if (chunkAck == null ||
-          chunkAck.status != .chunkAck ||
-          chunkAck.nextOffset != end) {
-        _reportRejection(chunkAck, epoch);
-        return false;
-      }
-      offset = end;
-      _updateProgress(
-        FileUploadProgress(
-          fileIndex: fileIndex,
-          fileCount: fileCount,
-          currentFileName: wireName,
-          overallSentBytes: completedBytesBeforeCurrent + offset,
-          overallTotalBytes: overallTotalBytes,
-        ),
-      );
-    }
+    final uploadedOk = await _pumpFileChunks(
+      epoch: epoch,
+      sessionId: sessionId,
+      transferId: transferId,
+      file: file,
+      wireName: wireName,
+      fileIndex: fileIndex,
+      fileCount: fileCount,
+      completedBytesBeforeCurrent: completedBytesBeforeCurrent,
+      overallTotalBytes: overallTotalBytes,
+      hashSink: hashSink,
+    );
+    if (!uploadedOk) return false;
 
     hashSink.close();
     final shaBytes = Uint8List.fromList(digestSink.value!.bytes);
@@ -231,6 +204,222 @@ final class FileUploadCoordinator {
       return false;
     }
     return true;
+  }
+
+  Future<bool> _pumpFileChunks({
+    required int epoch,
+    required SessionId sessionId,
+    required int transferId,
+    required DroppedFileSource file,
+    required String wireName,
+    required int fileIndex,
+    required int fileCount,
+    required int completedBytesBeforeCurrent,
+    required int overallTotalBytes,
+    required Sink<List<int>> hashSink,
+  }) async {
+    final inFlight = Queue<_PendingChunkSlot>();
+    var sentOffset = 0;
+
+    while (sentOffset < file.size || inFlight.isNotEmpty) {
+      if (_cancelled || epoch != _runEpoch) {
+        _clearInFlight(null);
+        return false;
+      }
+
+      if (sentOffset < file.size && inFlight.length < windowChunks) {
+        final nextOffset = await _enqueueNextChunkSlot(
+          inFlight: inFlight,
+          sentOffset: sentOffset,
+          epoch: epoch,
+          sessionId: sessionId,
+          transferId: transferId,
+          file: file,
+          wireName: wireName,
+          hashSink: hashSink,
+        );
+        if (nextOffset == null) return false;
+        sentOffset = nextOffset;
+        continue;
+      }
+
+      final drained = await _awaitAndDrainChunks(
+        inFlight: inFlight,
+        epoch: epoch,
+        sessionId: sessionId,
+        transferId: transferId,
+        fileIndex: fileIndex,
+        fileCount: fileCount,
+        wireName: wireName,
+        completedBytesBeforeCurrent: completedBytesBeforeCurrent,
+        overallTotalBytes: overallTotalBytes,
+      );
+      if (!drained) return false;
+    }
+    return true;
+  }
+
+  Future<int?> _enqueueNextChunkSlot({
+    required Queue<_PendingChunkSlot> inFlight,
+    required int sentOffset,
+    required int epoch,
+    required SessionId sessionId,
+    required int transferId,
+    required DroppedFileSource file,
+    required String wireName,
+    required Sink<List<int>> hashSink,
+  }) async {
+    final end = min(sentOffset + chunkSizeBytes, file.size);
+    final slice = await _readExpectedSlice(
+      epoch,
+      file,
+      sentOffset,
+      end,
+      sessionId,
+      transferId,
+      wireName,
+    );
+    if (slice == null) {
+      _clearInFlight(null);
+      return null;
+    }
+    final earlyFailure = _inFlight?.terminalFailure;
+    if (earlyFailure != null) {
+      _reportRejection(earlyFailure, epoch);
+      return null;
+    }
+    hashSink.add(slice);
+    inFlight.addLast(
+      _PendingChunkSlot(
+        end: end,
+        future: _enqueueTransferAck(
+          epoch: epoch,
+          sessionId: sessionId,
+          transferId: transferId,
+          send: () => repository.sendFileUploadChunk(
+            FileUploadChunkFrame(
+              sessionId: sessionId,
+              transferId: transferId,
+              offset: sentOffset,
+              data: slice,
+            ),
+          ),
+        ),
+      ),
+    );
+    return end;
+  }
+
+  Future<bool> _awaitAndDrainChunks({
+    required Queue<_PendingChunkSlot> inFlight,
+    required int epoch,
+    required SessionId sessionId,
+    required int transferId,
+    required int fileIndex,
+    required int fileCount,
+    required String wireName,
+    required int completedBytesBeforeCurrent,
+    required int overallTotalBytes,
+  }) async {
+    final head = inFlight.removeFirst();
+    final chunkAck = await head.future;
+    if (!_validateSettledSlot(
+      chunkAck,
+      head.end,
+      epoch: epoch,
+      sessionId: sessionId,
+      transferId: transferId,
+      fileIndex: fileIndex,
+      fileCount: fileCount,
+      wireName: wireName,
+      completedBytesBeforeCurrent: completedBytesBeforeCurrent,
+      overallTotalBytes: overallTotalBytes,
+    )) {
+      return false;
+    }
+    while (inFlight.isNotEmpty && inFlight.first.settled) {
+      final slot = inFlight.removeFirst();
+      if (!_validateSettledSlot(
+        slot.ack,
+        slot.end,
+        epoch: epoch,
+        sessionId: sessionId,
+        transferId: transferId,
+        fileIndex: fileIndex,
+        fileCount: fileCount,
+        wireName: wireName,
+        completedBytesBeforeCurrent: completedBytesBeforeCurrent,
+        overallTotalBytes: overallTotalBytes,
+      )) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  bool _validateSettledSlot(
+    FileUploadAckFrame? ack,
+    int ackedEnd, {
+    required int epoch,
+    required SessionId sessionId,
+    required int transferId,
+    required int fileIndex,
+    required int fileCount,
+    required String wireName,
+    required int completedBytesBeforeCurrent,
+    required int overallTotalBytes,
+  }) {
+    if (!_validateChunkAck(ack, ackedEnd, epoch, sessionId, transferId)) {
+      return false;
+    }
+    _updateChunkProgress(
+      fileIndex: fileIndex,
+      fileCount: fileCount,
+      wireName: wireName,
+      ackedOffset: ackedEnd,
+      completedBytesBeforeCurrent: completedBytesBeforeCurrent,
+      overallTotalBytes: overallTotalBytes,
+    );
+    return true;
+  }
+
+  bool _validateChunkAck(
+    FileUploadAckFrame? chunkAck,
+    int expectedEnd,
+    int epoch,
+    SessionId sessionId,
+    int transferId,
+  ) {
+    if (chunkAck != null &&
+        chunkAck.status == .chunkAck &&
+        chunkAck.nextOffset == expectedEnd) {
+      return true;
+    }
+    if (chunkAck != null && chunkAck.status != .rejected && !_cancelled) {
+      _sendAbortFrame(sessionId, transferId);
+    }
+    _clearInFlight(null);
+    _reportRejection(chunkAck, epoch);
+    return false;
+  }
+
+  void _updateChunkProgress({
+    required int fileIndex,
+    required int fileCount,
+    required String wireName,
+    required int ackedOffset,
+    required int completedBytesBeforeCurrent,
+    required int overallTotalBytes,
+  }) {
+    _updateProgress(
+      FileUploadProgress(
+        fileIndex: fileIndex,
+        fileCount: fileCount,
+        currentFileName: wireName,
+        overallSentBytes: completedBytesBeforeCurrent + ackedOffset,
+        overallTotalBytes: overallTotalBytes,
+      ),
+    );
   }
 
   Future<Uint8List?> _readExpectedSlice(
@@ -266,36 +455,61 @@ final class FileUploadCoordinator {
     required SessionId sessionId,
     required int transferId,
     required void Function() send,
+  }) => _enqueueTransferAck(
+    epoch: epoch,
+    sessionId: sessionId,
+    transferId: transferId,
+    send: send,
+  );
+
+  Future<FileUploadAckFrame?> _enqueueTransferAck({
+    required int epoch,
+    required SessionId sessionId,
+    required int transferId,
+    required void Function() send,
   }) {
     if (_cancelled || epoch != _runEpoch) {
       return Future<FileUploadAckFrame?>.value();
     }
+    var transfer = _inFlight;
+    if (transfer == null ||
+        transfer.sessionId != sessionId ||
+        transfer.transferId != transferId) {
+      transfer?.failAll(null);
+      transfer = _InFlightTransfer(
+        sessionId: sessionId,
+        transferId: transferId,
+      );
+      _inFlight = transfer;
+    }
     final completer = Completer<FileUploadAckFrame?>();
-    final timer = Timer(ackTimeout, () {
-      final active = _inFlight;
-      if (active == null || !identical(active.completer, completer)) return;
-      _inFlight = null;
-      _sendAbortFrame(sessionId, transferId);
-      if (!completer.isCompleted) {
-        completer.complete(
-          FileUploadAckFrame(
-            sessionId: sessionId,
-            transferId: transferId,
-            status: .rejected,
-            nextOffset: 0,
-            message: 'Upload timed out waiting for caster acknowledgment.',
-          ),
-        );
-      }
-    });
-    _inFlight = _InFlightTransfer(
-      sessionId: sessionId,
-      transferId: transferId,
-      completer: completer,
-      timer: timer,
-    );
+    transfer.pending.addLast(completer);
+    transfer.timer ??= _startAckTimer(transfer);
     send();
     return completer.future;
+  }
+
+  Timer _startAckTimer(_InFlightTransfer transfer) {
+    return Timer(ackTimeout, () {
+      if (!identical(_inFlight, transfer)) return;
+      _inFlight = null;
+      _sendAbortFrame(transfer.sessionId, transfer.transferId);
+      transfer.failAll(
+        FileUploadAckFrame(
+          sessionId: transfer.sessionId,
+          transferId: transfer.transferId,
+          status: .rejected,
+          nextOffset: 0,
+          message: 'Upload timed out waiting for caster acknowledgment.',
+        ),
+      );
+    });
+  }
+
+  void _clearInFlight(FileUploadAckFrame? terminalAck) {
+    final active = _inFlight;
+    _inFlight = null;
+    active?.failAll(terminalAck);
   }
 
   /// Handles an incoming [FileUploadAckFrame] from the relay server.
@@ -303,13 +517,26 @@ final class FileUploadCoordinator {
     final active = _inFlight;
     if (active == null ||
         active.sessionId != frame.sessionId ||
-        active.transferId != frame.transferId) {
+        active.transferId != frame.transferId ||
+        active.pending.isEmpty) {
       return;
     }
-    _inFlight = null;
+    final head = active.pending.removeFirst();
     active.cancelTimer();
-    if (!active.completer.isCompleted) {
-      active.completer.complete(frame);
+    if (frame.status == .rejected) {
+      active.terminalFailure = frame;
+      _inFlight = null;
+      if (!head.isCompleted) head.complete(frame);
+      active.failAll(frame);
+      return;
+    }
+    if (active.pending.isNotEmpty) {
+      active.timer = _startAckTimer(active);
+    } else {
+      _inFlight = null;
+    }
+    if (!head.isCompleted) {
+      head.complete(frame);
     }
   }
 
@@ -322,15 +549,12 @@ final class FileUploadCoordinator {
     final currentTransfer = _activeTransfer;
     _inFlight = null;
     _activeTransfer = null;
-    active?.cancelTimer();
     if (currentTransfer != null) {
       _sendAbortFrame(currentTransfer.sessionId, currentTransfer.transferId);
     } else if (active != null) {
       _sendAbortFrame(active.sessionId, active.transferId);
     }
-    if (active != null && !active.completer.isCompleted) {
-      active.completer.complete(null);
-    }
+    active?.failAll(null);
     _updateProgress(null);
   }
 
@@ -344,10 +568,7 @@ final class FileUploadCoordinator {
     final active = _inFlight;
     _inFlight = null;
     _activeTransfer = null;
-    active?.cancelTimer();
-    if (active != null && !active.completer.isCompleted) {
-      active.completer.complete(null);
-    }
+    active?.failAll(null);
     _updateProgress(null);
     onError(reason);
   }
@@ -383,20 +604,48 @@ final class FileUploadCoordinator {
   }
 }
 
+final class _PendingChunkSlot {
+  final int end;
+  late final Future<FileUploadAckFrame?> future;
+  bool settled = false;
+  FileUploadAckFrame? ack;
+
+  _PendingChunkSlot({
+    required this.end,
+    required Future<FileUploadAckFrame?> future,
+  }) {
+    this.future = future.then((value) {
+      ack = value;
+      settled = true;
+      return value;
+    });
+  }
+}
+
 final class _InFlightTransfer {
   final SessionId sessionId;
   final int transferId;
-  final Completer<FileUploadAckFrame?> completer;
-  final Timer timer;
+  final Queue<Completer<FileUploadAckFrame?>> pending =
+      Queue<Completer<FileUploadAckFrame?>>();
+  Timer? timer;
+  FileUploadAckFrame? terminalFailure;
 
-  const _InFlightTransfer({
-    required this.sessionId,
-    required this.transferId,
-    required this.completer,
-    required this.timer,
-  });
+  _InFlightTransfer({required this.sessionId, required this.transferId});
 
-  void cancelTimer() => timer.cancel();
+  void cancelTimer() {
+    timer?.cancel();
+    timer = null;
+  }
+
+  void failAll(FileUploadAckFrame? frame) {
+    cancelTimer();
+    while (pending.isNotEmpty) {
+      final completer = pending.removeFirst();
+      if (!completer.isCompleted) {
+        completer.complete(frame);
+      }
+    }
+  }
 }
 
 final class _ClientDigestSink implements Sink<Digest> {

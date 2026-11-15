@@ -318,6 +318,7 @@ Future<void> _runSubprocessSighupProxyTest() async {
       '$proxyCasterUri',
       '--token',
       'sighup-caster-tok',
+      '--keep-alive-on-hup',
       '--session-id',
       'sighup-subproc',
       '--',

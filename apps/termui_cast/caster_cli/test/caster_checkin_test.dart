@@ -674,6 +674,10 @@ void main() {
       'performs make-before-break takeover on healthy channel without dropping viewers and ignores duplicate AuthAcceptedFrame',
       _verifyHealthyMakeBeforeBreakTakeover,
     );
+    test(
+      '0-viewer session resets backoff via SubscriberCountFrame(0), upload preserves queued overflow replies, and reconnect sends offline pending shellTitle',
+      _verifyZeroViewerBackoffOverflowRepliesAndPendingTitle,
+    );
   });
 }
 
@@ -778,4 +782,159 @@ void _verifyHealthyMakeBeforeBreakTakeover() {
     unawaited(registry.close());
     async.flushMicrotasks();
   });
+}
+
+void _verifyZeroViewerBackoffOverflowRepliesAndPendingTitle() {
+  fakeAsync((async) {
+    final pty = _FakePtySession();
+    const sessionId = SessionId('docket-d01-d07');
+    final registry = SessionRegistry();
+    final handler = WsRelayHandler(
+      registry: registry,
+      authenticator: TokenAuthenticator(),
+    );
+    final sentPerAttempt = <List<CastMessage>>[];
+    var failFirst = true;
+    var openCalls = 0;
+
+    final service = CasterService(
+      config: _testConfig(sessionId: sessionId.value, cols: 20, rows: 3),
+      pty: pty,
+      random: Random(0),
+      baseReconnectDelay: const Duration(seconds: 2),
+      uploadIdleTimeout: Duration.zero,
+      channelOpener: () async {
+        openCalls++;
+        if (failFirst) {
+          failFirst = false;
+          throw const SocketException('transient failure');
+        }
+        final casterEnd = StreamChannelController<Uint8List>();
+        final serverEnd = StreamChannelController<Uint8List>();
+        final sent = <CastMessage>[];
+        sentPerAttempt.add(sent);
+        casterEnd.foreign.stream.listen((raw) {
+          sent.add(BufferFrameCodec.decode(raw));
+          serverEnd.local.sink.add(raw);
+        }, onDone: () => unawaited(serverEnd.local.sink.close()));
+        serverEnd.local.stream.listen(
+          casterEnd.foreign.sink.add,
+          onDone: () => unawaited(casterEnd.foreign.sink.close()),
+        );
+        handler.attachCasterChannel(serverEnd.foreign);
+        return casterEnd.local;
+      },
+    );
+
+    unawaited(service.start());
+    async.flushMicrotasks();
+    // Attempt 1 failed -> waiting in reconnectBackoff with nextBackoff >= 2s.
+    check(openCalls).equals(1);
+    check(
+      service.stateMachine.state,
+    ).equals(CasterLifecycleState.reconnectBackoff);
+
+    // Offline OSC 2 title update while disconnected.
+    pty.emitText('\x1b]2;offline-shell-title\x07');
+    async.flushMicrotasks();
+
+    // Advance backoff so attempt 2 connects with 0 viewers -> relay emits SubscriberCountFrame(0),
+    // caster transitions through .registered -> streaming (resetting backoff) and sends ShellTitleFrame.
+    async.elapse(const Duration(seconds: 5));
+    async.flushMicrotasks();
+    check(openCalls).equals(2);
+    check(service.stateMachine.state).equals(CasterLifecycleState.streaming);
+    check(
+      sentPerAttempt[0].whereType<ShellTitleFrame>().any(
+        (f) => f.title == 'offline-shell-title',
+      ),
+    ).isTrue();
+
+    // Queue overflow terminal query replies (total > 8192 bytes per drain tick so remainder sits in _overflowReplies)
+    // and emit an upload frame; upload idle sync must NOT clear queued _overflowReplies (D-01).
+    final ptyWrites = <String>[];
+    final recordingPty = _RecordingPtySession(ptyWrites);
+    final svc2 = CasterService(
+      config: _testConfig(sessionId: 'd01-upload', cols: 20, rows: 3),
+      pty: recordingPty,
+      random: Random(0),
+      channelOpener: () async {
+        final casterEnd = StreamChannelController<Uint8List>();
+        final serverEnd = StreamChannelController<Uint8List>();
+        casterEnd.foreign.stream.listen(
+          serverEnd.local.sink.add,
+          onDone: () => unawaited(serverEnd.local.sink.close()),
+        );
+        serverEnd.local.stream.listen(
+          casterEnd.foreign.sink.add,
+          onDone: () => unawaited(casterEnd.foreign.sink.close()),
+        );
+        handler.attachCasterChannel(serverEnd.foreign);
+        return casterEnd.local;
+      },
+    );
+    unawaited(svc2.start());
+    async.flushMicrotasks();
+
+    // Attach a viewer and trigger a DA1/DSR burst exceeding 8 KiB + file upload start mid-drain.
+    final viewer = StreamChannelController<Uint8List>();
+    final viewerInbox = <CastMessage>[];
+    viewer.local.stream.listen((raw) {
+      viewerInbox.add(BufferFrameCodec.decode(raw));
+    });
+    handler.attachClientChannel(viewer.foreign);
+    viewer.local.sink.add(
+      BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+    );
+    viewer.local.sink.add(
+      BufferFrameCodec.encode(
+        const SubscribeSessionFrame(sessionId: SessionId('d01-upload')),
+      ),
+    );
+    async.flushMicrotasks();
+
+    // Emit 300 DA1 queries (~7.5 KiB-10 KiB of replies) so _overflowReplies buffers tail chunks.
+    recordingPty.emitText('\x1b[c' * 1200);
+    // Start & abort an upload while overflow replies are pending drain.
+    viewer.local.sink.add(
+      BufferFrameCodec.encode(
+        const FileUploadStartFrame(
+          sessionId: SessionId('d01-upload'),
+          transferId: 1,
+          fileName: 'note.txt',
+          totalBytes: 4,
+        ),
+      ),
+    );
+    viewer.local.sink.add(
+      BufferFrameCodec.encode(
+        FileUploadEndFrame(
+          sessionId: const SessionId('d01-upload'),
+          transferId: 1,
+          sha256: Uint8List(0),
+          aborted: true,
+        ),
+      ),
+    );
+    async.elapse(const Duration(milliseconds: 50));
+    async.flushMicrotasks();
+
+    final totalWritten = ptyWrites.fold<int>(0, (sum, s) => sum + s.length);
+    check(totalWritten).isGreaterThan(8192);
+
+    unawaited(svc2.stop());
+    unawaited(service.stop());
+    unawaited(registry.close());
+    async.flushMicrotasks();
+  });
+}
+
+final class _RecordingPtySession extends _FakePtySession {
+  final List<String> writes;
+  _RecordingPtySession(this.writes);
+
+  @override
+  void writeBytes(Uint8List data) {
+    writes.add(utf8.decode(data, allowMalformed: true));
+  }
 }

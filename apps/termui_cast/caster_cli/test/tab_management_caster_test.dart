@@ -238,6 +238,17 @@ void main() {
         check(registry.sessions).length.equals(1);
         check(registry.sessions.single.title).equals('zsh');
 
+        clientPipe.local.sink.add(
+          BufferFrameCodec.encode(
+            const SubscribeSessionFrame(
+              sessionId: SessionId('e2e-takeover'),
+              cols: 80,
+              rows: 24,
+            ),
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+
         // Viewer renames tab -> propagated to CasterService and directory.
         clientPipe.local.sink.add(
           BufferFrameCodec.encode(

@@ -74,7 +74,7 @@ void main() {
       check(omittedPort).equals('https://relay.run.app/v1/client');
       check(explicit443).equals(omittedPort);
       check(
-        IapJwtSigner.audienceForWebSocketUri(
+        TokenAuthenticator.iapAudienceForWebSocketUri(
           Uri.parse('wss://relay.run.app:443/v1/client'),
         ),
       ).equals(omittedPort);
@@ -221,6 +221,86 @@ void main() {
         processRunner: (_, _) => Completer<ProcessResult>().future,
       );
       await check(hangingSigner.getBearerToken()).throws<TimeoutException>();
+    });
+
+    test(
+      'D-06: default subprocess runner kills timed-out tree holding tempDir file and cleans tempDir',
+      () async {
+        final sandbox = Directory.systemTemp.createTempSync('iap_d06_timeout_');
+        addTearDown(() async {
+          if (sandbox.existsSync()) {
+            await sandbox.delete(recursive: true);
+          }
+        });
+
+        final sleeperDart = File('${sandbox.path}/sleeper.dart')
+          ..writeAsStringSync(
+            'import "dart:async";\n'
+            'import "dart:io";\n'
+            'Future<void> main(List<String> args) async {\n'
+            '  final lockHandle = File(args.last).openSync(mode: FileMode.write);\n'
+            '  lockHandle.writeStringSync("locked");\n'
+            '  await Future<void>.delayed(const Duration(seconds: 30));\n'
+            '  lockHandle.closeSync();\n'
+            '}\n',
+          );
+
+        final String wrapperPath;
+        if (Platform.isWindows) {
+          wrapperPath = '${sandbox.path}\\fake_gcloud.cmd';
+          File(wrapperPath).writeAsStringSync(
+            '@echo off\r\n"${Platform.resolvedExecutable}" "${sleeperDart.path}" %*\r\n',
+          );
+        } else {
+          wrapperPath = '${sandbox.path}/fake_gcloud.sh';
+          File(wrapperPath).writeAsStringSync(
+            '#!/bin/sh\nexec "${Platform.resolvedExecutable}" "${sleeperDart.path}" "\$@"\n',
+          );
+          Process.runSync('chmod', ['+x', wrapperPath]);
+        }
+
+        final existingTempDirs = Directory.systemTemp
+            .listSync()
+            .whereType<Directory>()
+            .where((d) => d.path.contains('termui_cast_iap_'))
+            .map((d) => d.path)
+            .toSet();
+
+        final signer = IapJwtSigner(
+          serviceAccount: 'viewer@proj.iam.gserviceaccount.com',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+          gcloudExecutable: wrapperPath,
+          signTimeout: const Duration(milliseconds: 900),
+        );
+
+        await check(signer.getBearerToken()).throws<TimeoutException>();
+
+        final remainingNewTempDirs = Directory.systemTemp
+            .listSync()
+            .whereType<Directory>()
+            .where(
+              (d) =>
+                  d.path.contains('termui_cast_iap_') &&
+                  !existingTempDirs.contains(d.path),
+            )
+            .toList();
+        check(remainingNewTempDirs).isEmpty();
+      },
+    );
+
+    test('rejects invalid serviceAccount in IapJwtSigner constructor', () {
+      check(
+        () => IapJwtSigner(
+          serviceAccount: 'not-an-email',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+        ),
+      ).throws<ArgumentError>();
+      check(
+        () => IapJwtSigner(
+          serviceAccount: '',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+        ),
+      ).throws<ArgumentError>();
     });
   });
 }

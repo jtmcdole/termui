@@ -10,6 +10,9 @@ import 'virtual_terminal.dart';
 /// Immutable metadata describing the retained primary-screen scrollback window.
 typedef ScrollbackWindowData = ({int clearSeq, int oldestLine, int totalLines});
 
+/// Contiguous dirty cell span recorded for a [TerminalPort] render revision.
+typedef DirtyCellSpan = ({int revision, int start, int length});
+
 /// Immutable snapshot of terminal cursor coordinates, visibility, and visual shape.
 final class CursorStateData {
   /// Zero-indexed cursor column coordinate.
@@ -235,6 +238,15 @@ abstract interface class TerminalPort {
 
   /// Current primary-screen scrollback window metadata.
   ScrollbackWindowData get scrollbackWindow;
+
+  /// Monotonic visual revision incremented when buffer, cursor, or resize mutates.
+  int get renderRevision;
+
+  /// Latest revision requiring a full recomposition rather than incremental [dirtySpans].
+  int get fullSyncRevision;
+
+  /// Bounded read-only view of dirty cell spans recorded since [fullSyncRevision].
+  List<DirtyCellSpan> get dirtySpans;
 
   /// Current window title (`OSC 0` / `OSC 2` / `CSI 23 t`).
   String get windowTitle;

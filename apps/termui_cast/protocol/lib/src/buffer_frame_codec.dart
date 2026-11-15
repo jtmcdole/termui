@@ -416,19 +416,39 @@ abstract final class BufferFrameCodec {
     return (isSnapshot: isSnapshot, seq: seq, cols: cols, rows: rows);
   }
 
+  /// Validates the header and tail bounds of a raw `0x11` [ScrollbackChunkFrame]
+  /// for [expectedSession] in a single pass and returns its `requestId` and byte
+  /// offset, or `null` when [frame] does not belong to [expectedSession].
+  static ({int requestId, int requestIdOffset})? inspectRelayScrollbackChunk(
+    Uint8List frame, {
+    required SessionId expectedSession,
+  }) => _inspectScrollbackChunkHeader(frame, expectedSession: expectedSession);
+
+  /// Rewrites `requestId` at [requestIdOffset] in a validated `0x11`
+  /// [ScrollbackChunkFrame], mutating [frame] directly when [inPlace] is
+  /// `true` or returning a copy otherwise.
+  static Uint8List patchScrollbackChunkRequestId(
+    Uint8List frame, {
+    required int requestIdOffset,
+    required int newRequestId,
+    bool inPlace = false,
+  }) {
+    _checkUint32(newRequestId, 'newRequestId');
+    final target = inPlace ? frame : Uint8List.fromList(frame);
+    ByteData.sublistView(target).setUint32(requestIdOffset, newRequestId, .big);
+    return target;
+  }
+
   /// Validates the uncompressed header of a raw `0x11` [ScrollbackChunkFrame]
   /// for [expectedSession] and returns its `requestId`, or `null` when [frame]
   /// does not belong to [expectedSession].
   static int? inspectRelayScrollbackChunkRequestId(
     Uint8List frame, {
     required SessionId expectedSession,
-  }) {
-    final info = _inspectScrollbackChunkHeader(
-      frame,
-      expectedSession: expectedSession,
-    );
-    return info?.requestId;
-  }
+  }) => inspectRelayScrollbackChunk(
+    frame,
+    expectedSession: expectedSession,
+  )?.requestId;
 
   /// Validates a raw `0x11` [ScrollbackChunkFrame] for [expectedSession] and
   /// returns a copy with `requestId` rewritten to [newRequestId] without
@@ -445,11 +465,11 @@ abstract final class BufferFrameCodec {
       expectedSession: expectedSession,
     );
     if (info == null) return null;
-    final copy = Uint8List.fromList(frame);
-    ByteData.sublistView(
-      copy,
-    ).setUint32(info.requestIdOffset, newRequestId, .big);
-    return copy;
+    return patchScrollbackChunkRequestId(
+      frame,
+      requestIdOffset: info.requestIdOffset,
+      newRequestId: newRequestId,
+    );
   }
 
   /// Validates the header and length bounds of a raw `0x18` [BellFrame]
@@ -2029,7 +2049,7 @@ void _inspectRelayBufferTail(
   final flag = reader.readUint8();
   if (flag == _compressionRaw) {
     if (isSnapshot) {
-      reader.skipCellSpan(totalCells);
+      reader._skipCellSpan(totalCells);
       _skipSnapshotKittyTrailer(reader);
     } else {
       _skipDeltaRuns(reader, totalCells);
@@ -2113,24 +2133,6 @@ void _inspectRelayScrollbackTail(_FrameReader reader, int rowCount) {
   }
   if (reader.isAtEnd) {
     throw const ProtocolFormatException('Empty compressed scrollback tail');
-  }
-}
-
-void _skipScrollbackRows(_FrameReader reader, int rowCount) {
-  for (var i = 0; i < rowCount; i++) {
-    final rawFlags = reader.readUint8();
-    if (rawFlags != 0 && rawFlags != 1) {
-      throw ProtocolFormatException(
-        'Invalid scrollback row flags byte: $rawFlags',
-      );
-    }
-    final cellCount = reader.readUint16();
-    if (cellCount > BufferFrameCodec.maxGridCols) {
-      throw ProtocolFormatException(
-        'Scrollback row cells $cellCount > ${BufferFrameCodec.maxGridCols}',
-      );
-    }
-    reader.skipCellSpan(cellCount);
   }
 }
 
@@ -2244,6 +2246,16 @@ void _writeSnapshotKittyTrailer(
   }
 }
 
+void _skipSnapshotKittyTrailer(_FrameReader tail) {
+  final count = tail.readUint16();
+  if (count > _maxKittyImagesPerFrame) {
+    throw ProtocolFormatException('Snapshot kittyImages count $count > cap');
+  }
+  for (var i = 0; i < count; i++) {
+    tail._skipKittyPayload();
+  }
+}
+
 List<KittyImagePayload>? _readSnapshotKittyTrailer(_FrameReader tail) {
   final count = tail.readUint16();
   if (count > _maxKittyImagesPerFrame) {
@@ -2251,16 +2263,6 @@ List<KittyImagePayload>? _readSnapshotKittyTrailer(_FrameReader tail) {
   }
   if (count == 0) return null;
   return [for (var i = 0; i < count; i++) tail.readKittyPayload()];
-}
-
-void _skipSnapshotKittyTrailer(_FrameReader tail) {
-  final count = tail.readUint16();
-  if (count > _maxKittyImagesPerFrame) {
-    throw ProtocolFormatException('Snapshot kittyImages count $count > cap');
-  }
-  for (var i = 0; i < count; i++) {
-    tail.skipKittyPayload();
-  }
 }
 
 void _writeDeltaKittyTrailer(_FrameWriter tail, BufferDelta delta) {
@@ -2282,6 +2284,35 @@ void _writeDeltaKittyTrailer(_FrameWriter tail, BufferDelta delta) {
   tail.writeUint16(upserts.length);
   for (final img in upserts) {
     tail.writeKittyPayload(img);
+  }
+}
+
+void _skipDeltaKittyTrailer(_FrameReader tail) {
+  final rawClear = tail.readUint8();
+  if (rawClear != 0 && rawClear != 1) {
+    throw ProtocolFormatException(
+      'Invalid delta clearKittyImages byte: $rawClear',
+    );
+  }
+  final removalCount = tail.readUint16();
+  if (removalCount > _maxKittyImagesPerFrame) {
+    throw ProtocolFormatException(
+      'Delta kittyRemovals count $removalCount > cap',
+    );
+  }
+  for (var i = 0; i < removalCount; i++) {
+    if (tail.readUint32() == 0) {
+      throw const ProtocolFormatException('Zero Kitty removal imageId');
+    }
+  }
+  final upsertCount = tail.readUint16();
+  if (upsertCount > _maxKittyImagesPerFrame) {
+    throw ProtocolFormatException(
+      'Delta kittyUpserts count $upsertCount > cap',
+    );
+  }
+  for (var i = 0; i < upsertCount; i++) {
+    tail._skipKittyPayload();
   }
 }
 
@@ -2328,35 +2359,6 @@ _readDeltaKittyTrailer(_FrameReader tail) {
     kittyRemovals: removals,
     kittyUpserts: upserts,
   );
-}
-
-void _skipDeltaKittyTrailer(_FrameReader tail) {
-  final rawClear = tail.readUint8();
-  if (rawClear != 0 && rawClear != 1) {
-    throw ProtocolFormatException(
-      'Invalid delta clearKittyImages byte: $rawClear',
-    );
-  }
-  final removalCount = tail.readUint16();
-  if (removalCount > _maxKittyImagesPerFrame) {
-    throw ProtocolFormatException(
-      'Delta kittyRemovals count $removalCount > cap',
-    );
-  }
-  for (var i = 0; i < removalCount; i++) {
-    if (tail.readUint32() == 0) {
-      throw const ProtocolFormatException('Zero Kitty removal imageId');
-    }
-  }
-  final upsertCount = tail.readUint16();
-  if (upsertCount > _maxKittyImagesPerFrame) {
-    throw ProtocolFormatException(
-      'Delta kittyUpserts count $upsertCount > cap',
-    );
-  }
-  for (var i = 0; i < upsertCount; i++) {
-    tail.skipKittyPayload();
-  }
 }
 
 void _encodeSnapshot(_FrameWriter writer, BufferSnapshot snapshot) {
@@ -2469,7 +2471,7 @@ void _skipDeltaRuns(_FrameReader reader, int totalCells) {
       );
     }
     nextMinStart = startIndex + len;
-    reader.skipCellSpan(len);
+    reader._skipCellSpan(len);
   }
 }
 
@@ -2622,6 +2624,24 @@ void _encodeScrollbackChunk(_FrameWriter writer, ScrollbackChunkFrame frame) {
         );
     }
   });
+}
+
+void _skipScrollbackRows(_FrameReader reader, int rowCount) {
+  for (var i = 0; i < rowCount; i++) {
+    final rawFlags = reader.readUint8();
+    if (rawFlags != 0 && rawFlags != 1) {
+      throw ProtocolFormatException(
+        'Invalid scrollback row flags byte: $rawFlags',
+      );
+    }
+    final cellCount = reader.readUint16();
+    if (cellCount > BufferFrameCodec.maxGridCols) {
+      throw ProtocolFormatException(
+        'Scrollback row cells $cellCount > ${BufferFrameCodec.maxGridCols}',
+      );
+    }
+    reader._skipCellSpan(cellCount);
+  }
 }
 
 List<EncodedScrollbackRow> _readScrollbackRows(
@@ -2846,7 +2866,7 @@ FileUploadAckFrame _decodeFileUploadAck(_FrameReader reader) {
 }
 
 final class _FrameWriter {
-  final BytesBuilder _builder = BytesBuilder();
+  final BytesBuilder _builder = BytesBuilder(copy: false);
 
   void writeUint8(int value) => _builder.addByte(value & 0xFF);
 
@@ -3037,16 +3057,14 @@ final class _FrameWriter {
   void _writeDeduplicatedUriRuns(List<UriRun> runs) {
     final uriToIndex = <String, int>{};
     final tableBytes = <Uint8List>[];
-    final indexedRuns = <({int start, int length, int uriIndex})>[];
-    for (final run in runs) {
-      final sanitized = sanitizeOsc8Uri(run.uri);
-      final idx = uriToIndex.putIfAbsent(sanitized, () {
-        final nextIdx = tableBytes.length;
-        tableBytes.add(utf8.encode(sanitized));
-        return nextIdx;
-      });
-      indexedRuns.add((start: run.start, length: run.length, uriIndex: idx));
-    }
+    final indexedRuns = <({int start, int length, int uriIndex})>[
+      for (final run in runs)
+        (
+          start: run.start,
+          length: run.length,
+          uriIndex: _internSanitizedUri(run.uri, uriToIndex, tableBytes),
+        ),
+    ];
     writeUint32(tableBytes.length);
     for (final encoded in tableBytes) {
       writeUint16(encoded.length);
@@ -3058,6 +3076,30 @@ final class _FrameWriter {
       writeUint32(entry.length);
       writeUint32(entry.uriIndex);
     }
+  }
+
+  static int _internSanitizedUri(
+    String raw,
+    Map<String, int> uriToIndex,
+    List<Uint8List> tableBytes,
+  ) {
+    final cached = uriToIndex[raw];
+    if (cached != null) return cached;
+    final sanitized = _hasOsc8ControlCodeUnit(raw) ? clampOsc8Uri(raw) : raw;
+    final existing = sanitized == raw ? null : uriToIndex[sanitized];
+    if (existing != null) {
+      uriToIndex[raw] = existing;
+      return existing;
+    }
+    final encoded = utf8.encode(sanitized);
+    final clampedBytes = encoded.length <= maxOsc8UriBytes
+        ? encoded
+        : utf8.encode(clampOsc8Uri(sanitized));
+    final idx = tableBytes.length;
+    tableBytes.add(clampedBytes);
+    uriToIndex[sanitized] = idx;
+    uriToIndex[raw] = idx;
+    return idx;
   }
 
   void writeKittyPayload(KittyImagePayload payload) {
@@ -3080,13 +3122,22 @@ final class _FrameWriter {
     if (grapheme.length == 1) {
       final code = grapheme.codeUnitAt(0);
       if (code < 0x80) {
+        if (code <= 0x1F || code == 0x7F) {
+          _builder.addByte(0);
+          return;
+        }
         _builder
           ..addByte(1)
           ..addByte(code);
         return;
       }
     }
-    final utf8Bytes = utf8.encode(grapheme);
+    final clean = _stripControlCodeUnits(grapheme);
+    if (clean.isEmpty) {
+      _builder.addByte(0);
+      return;
+    }
+    final utf8Bytes = utf8.encode(clean);
     if (utf8Bytes.length < 0xFF) {
       _builder
         ..addByte(utf8Bytes.length)
@@ -3099,6 +3150,34 @@ final class _FrameWriter {
     _builder.addByte(0xFF);
     writeUint16(utf8Bytes.length);
     _builder.add(utf8Bytes);
+  }
+
+  static bool _hasOsc8ControlCodeUnit(String text) {
+    for (var i = 0; i < text.length; i++) {
+      final u = text.codeUnitAt(i);
+      if (u <= 0x1F || (u >= 0x7F && u <= 0x9F)) return true;
+    }
+    return false;
+  }
+
+  static String _stripControlCodeUnits(String grapheme) {
+    var hasControl = false;
+    for (var i = 0; i < grapheme.length; i++) {
+      final u = grapheme.codeUnitAt(i);
+      if (u <= 0x1F || (u >= 0x7F && u <= 0x9F)) {
+        hasControl = true;
+        break;
+      }
+    }
+    if (!hasControl) return grapheme;
+    final sb = StringBuffer();
+    for (var i = 0; i < grapheme.length; i++) {
+      final u = grapheme.codeUnitAt(i);
+      if (u > 0x1F && (u < 0x7F || u > 0x9F)) {
+        sb.writeCharCode(u);
+      }
+    }
+    return sb.toString();
   }
 
   void writeRawBytes(Uint8List bytes) => _builder.add(bytes);
@@ -3304,7 +3383,7 @@ final class _FrameReader {
     }
   }
 
-  void skipCellSpan(int cellCount) {
+  void _skipCellSpan(int cellCount) {
     if (cellCount < 0) {
       throw ProtocolFormatException('Negative cellCount: $cellCount');
     }
@@ -3312,8 +3391,78 @@ final class _FrameReader {
     for (var i = 0; i < cellCount; i++) {
       _skipGrapheme();
     }
-    skip(cellCount * 12);
+    final attrBytes = cellCount * 12;
+    _require(attrBytes);
+    _offset += attrBytes;
     _skipCellSpanAuxTrailer(cellCount);
+  }
+
+  void _skipCellSpanAuxTrailer(int cellCount) {
+    final auxFlags = readUint8();
+    if ((auxFlags & ~(_auxFlagUnderlineColors | _auxFlagUriRuns)) != 0) {
+      throw ProtocolFormatException('Invalid cell span auxFlags: $auxFlags');
+    }
+    if ((auxFlags & _auxFlagUnderlineColors) != 0) {
+      _skipUnderlineColorsMap(cellCount);
+    }
+    if ((auxFlags & _auxFlagUriRuns) != 0) {
+      _skipDeduplicatedUriRuns(cellCount);
+    }
+  }
+
+  void _skipUnderlineColorsMap(int cellCount) {
+    final count = readUint32();
+    if (count == 0 || count > cellCount) {
+      throw ProtocolFormatException(
+        'Invalid underlineColors count $count for span $cellCount',
+      );
+    }
+    _require(count * 8);
+    var prevIdx = -1;
+    for (var i = 0; i < count; i++) {
+      final idx = readUint32();
+      final color = readUint32();
+      if (idx <= prevIdx || idx >= cellCount || color == 0) {
+        throw ProtocolFormatException(
+          'Invalid underlineColor entry idx=$idx color=$color',
+        );
+      }
+      prevIdx = idx;
+    }
+  }
+
+  void _skipDeduplicatedUriRuns(int cellCount) {
+    final tableCount = readUint32();
+    if (tableCount == 0 || tableCount > cellCount) {
+      throw ProtocolFormatException(
+        'Invalid URI table count $tableCount for span $cellCount',
+      );
+    }
+    for (var i = 0; i < tableCount; i++) {
+      _readValidatedOsc8Uri();
+    }
+    final runCount = readUint32();
+    if (runCount == 0 || runCount > cellCount) {
+      throw ProtocolFormatException(
+        'Invalid UriRun count $runCount for span $cellCount',
+      );
+    }
+    _require(runCount * 12);
+    var nextMinStart = 0;
+    for (var i = 0; i < runCount; i++) {
+      final start = readUint32();
+      final length = readUint32();
+      final uriIdx = readUint32();
+      if (length == 0 ||
+          start < nextMinStart ||
+          start + length > cellCount ||
+          uriIdx >= tableCount) {
+        throw ProtocolFormatException(
+          'Invalid decoded UriRun start=$start len=$length uriIdx=$uriIdx',
+        );
+      }
+      nextMinStart = start + length;
+    }
   }
 
   ({
@@ -3361,19 +3510,6 @@ final class _FrameReader {
     return (underlineColors, uriRuns);
   }
 
-  void _skipCellSpanAuxTrailer(int cellCount) {
-    final auxFlags = readUint8();
-    if ((auxFlags & ~(_auxFlagUnderlineColors | _auxFlagUriRuns)) != 0) {
-      throw ProtocolFormatException('Invalid cell span auxFlags: $auxFlags');
-    }
-    if ((auxFlags & _auxFlagUnderlineColors) != 0) {
-      _skipUnderlineColorsMap(cellCount);
-    }
-    if ((auxFlags & _auxFlagUriRuns) != 0) {
-      _skipDeduplicatedUriRuns(cellCount);
-    }
-  }
-
   Map<int, int> _readUnderlineColorsMap(int cellCount) {
     final count = readUint32();
     if (count == 0 || count > cellCount) {
@@ -3396,27 +3532,6 @@ final class _FrameReader {
       map[idx] = color;
     }
     return map;
-  }
-
-  void _skipUnderlineColorsMap(int cellCount) {
-    final count = readUint32();
-    if (count == 0 || count > cellCount) {
-      throw ProtocolFormatException(
-        'Invalid underlineColors count $count for span $cellCount',
-      );
-    }
-    _require(count * 8);
-    var prevIdx = -1;
-    for (var i = 0; i < count; i++) {
-      final idx = readUint32();
-      final color = readUint32();
-      if (idx <= prevIdx || idx >= cellCount || color == 0) {
-        throw ProtocolFormatException(
-          'Invalid underlineColor entry idx=$idx color=$color',
-        );
-      }
-      prevIdx = idx;
-    }
   }
 
   List<UriRun> _readDeduplicatedUriRuns(int cellCount) {
@@ -3456,60 +3571,36 @@ final class _FrameReader {
     return runs;
   }
 
-  void _skipDeduplicatedUriRuns(int cellCount) {
-    final tableCount = readUint32();
-    if (tableCount == 0 || tableCount > cellCount) {
-      throw ProtocolFormatException(
-        'Invalid URI table count $tableCount for span $cellCount',
-      );
-    }
-    for (var i = 0; i < tableCount; i++) {
-      final byteLen = readUint16();
-      if (byteLen == 0 || byteLen > maxOsc8UriBytes) {
-        throw ProtocolFormatException(
-          'Invalid OSC 8 URI byte length: $byteLen',
-        );
-      }
-      _require(byteLen);
-      _validateUtf8GraphemeBytes(_bytes, _offset, _offset + byteLen);
-      _offset += byteLen;
-    }
-    final runCount = readUint32();
-    if (runCount == 0 || runCount > cellCount) {
-      throw ProtocolFormatException(
-        'Invalid UriRun count $runCount for span $cellCount',
-      );
-    }
-    _require(runCount * 12);
-    var nextMinStart = 0;
-    for (var i = 0; i < runCount; i++) {
-      final start = readUint32();
-      final length = readUint32();
-      final uriIdx = readUint32();
-      if (length == 0 ||
-          start < nextMinStart ||
-          start + length > cellCount ||
-          uriIdx >= tableCount) {
-        throw ProtocolFormatException(
-          'Invalid decoded UriRun start=$start len=$length uriIdx=$uriIdx',
-        );
-      }
-      nextMinStart = start + length;
-    }
-  }
-
   String _readValidatedOsc8Uri() {
     final byteLen = readUint16();
     if (byteLen == 0 || byteLen > maxOsc8UriBytes) {
       throw ProtocolFormatException('Invalid OSC 8 URI byte length: $byteLen');
     }
     final text = _decodeUtf8(byteLen);
-    if (sanitizeOsc8Uri(text) != text) {
-      throw const ProtocolFormatException(
-        'Control character in decoded OSC 8 URI',
-      );
+    for (var i = 0; i < text.length; i++) {
+      final u = text.codeUnitAt(i);
+      if (u <= 0x1F || (u >= 0x7F && u <= 0x9F)) {
+        throw const ProtocolFormatException(
+          'Control character in decoded OSC 8 URI',
+        );
+      }
     }
     return text;
+  }
+
+  void _skipKittyPayload() {
+    final header = _readValidatedKittyHeader();
+    _require(header.byteLen);
+    if (header.format == 100) {
+      _validatePngIhdrSlice(
+        _bytes,
+        _offset,
+        header.byteLen,
+        header.pixelWidth,
+        header.pixelHeight,
+      );
+    }
+    _offset += header.byteLen;
   }
 
   KittyImagePayload readKittyPayload() {
@@ -3534,21 +3625,6 @@ final class _FrameReader {
       format: header.format,
       bytes: bytes,
     );
-  }
-
-  void skipKittyPayload() {
-    final header = _readValidatedKittyHeader();
-    _require(header.byteLen);
-    if (header.format == 100) {
-      _validatePngIhdrSlice(
-        _bytes,
-        _offset,
-        header.byteLen,
-        header.pixelWidth,
-        header.pixelHeight,
-      );
-    }
-    _offset += header.byteLen;
   }
 
   ({
@@ -3597,17 +3673,6 @@ final class _FrameReader {
     );
   }
 
-  String _readGrapheme() {
-    final lenMarker = readUint8();
-    if (lenMarker == 0) return '';
-    final byteLen = lenMarker == 0xFF ? readUint16() : lenMarker;
-    if (byteLen == 0) return '';
-    if (byteLen == 1) {
-      return _asciiTable[_readAsciiGraphemeByte()];
-    }
-    return _readMultiByteGrapheme(byteLen);
-  }
-
   void _skipGrapheme() {
     final lenMarker = readUint8();
     if (lenMarker == 0) return;
@@ -3618,8 +3683,29 @@ final class _FrameReader {
       return;
     }
     _require(byteLen);
-    _validateUtf8GraphemeBytes(_bytes, _offset, _offset + byteLen);
-    _offset += byteLen;
+    final end = _offset + byteLen;
+    for (var i = _offset; i < end; i++) {
+      final b = _bytes[i];
+      if (b >= 0x80) {
+        _readMultiByteGrapheme(byteLen);
+        return;
+      }
+      if (b <= 0x1F || b == 0x7F) {
+        throw ProtocolFormatException('Control code unit in cell grapheme: $b');
+      }
+    }
+    _offset = end;
+  }
+
+  String _readGrapheme() {
+    final lenMarker = readUint8();
+    if (lenMarker == 0) return '';
+    final byteLen = lenMarker == 0xFF ? readUint16() : lenMarker;
+    if (byteLen == 0) return '';
+    if (byteLen == 1) {
+      return _asciiTable[_readAsciiGraphemeByte()];
+    }
+    return _readMultiByteGrapheme(byteLen);
   }
 
   int _readAsciiGraphemeByte() {
@@ -3664,61 +3750,5 @@ final class _FrameReader {
         'Truncated frame at offset $_offset (need $byteCount, len ${_bytes.length})',
       );
     }
-  }
-}
-
-bool _isContinuationByte(int b) => (b & 0xC0) == 0x80;
-
-bool _validUtf8TwoByte(Uint8List bytes, int index, int end, int b0) {
-  if (index + 2 > end) return false;
-  final b1 = bytes[index + 1];
-  final minB1 = b0 == 0xC2 ? 0xA0 : 0x80;
-  return b1 >= minB1 && b1 <= 0xBF;
-}
-
-bool _validUtf8ThreeByte(Uint8List bytes, int index, int end, int b0) {
-  if (index + 3 > end) return false;
-  final b1 = bytes[index + 1];
-  final minB1 = b0 == 0xE0 ? 0xA0 : 0x80;
-  final maxB1 = b0 == 0xED ? 0x9F : 0xBF;
-  return b1 >= minB1 && b1 <= maxB1 && _isContinuationByte(bytes[index + 2]);
-}
-
-bool _validUtf8FourByte(Uint8List bytes, int index, int end, int b0) {
-  if (index + 4 > end) return false;
-  final b1 = bytes[index + 1];
-  final minB1 = b0 == 0xF0 ? 0x90 : 0x80;
-  final maxB1 = b0 == 0xF4 ? 0x8F : 0xBF;
-  return b1 >= minB1 &&
-      b1 <= maxB1 &&
-      _isContinuationByte(bytes[index + 2]) &&
-      _isContinuationByte(bytes[index + 3]);
-}
-
-int _utf8SequenceStep(Uint8List bytes, int index, int end) {
-  final b0 = bytes[index];
-  if (b0 >= 0x20 && b0 <= 0x7E) return 1;
-  if (b0 >= 0xC2 && b0 <= 0xDF) {
-    return _validUtf8TwoByte(bytes, index, end, b0) ? 2 : 0;
-  }
-  if (b0 >= 0xE0 && b0 <= 0xEF) {
-    return _validUtf8ThreeByte(bytes, index, end, b0) ? 3 : 0;
-  }
-  if (b0 >= 0xF0 && b0 <= 0xF4) {
-    return _validUtf8FourByte(bytes, index, end, b0) ? 4 : 0;
-  }
-  return 0;
-}
-
-void _validateUtf8GraphemeBytes(Uint8List bytes, int start, int end) {
-  var i = start;
-  while (i < end) {
-    final step = _utf8SequenceStep(bytes, i, end);
-    if (step == 0) {
-      throw const ProtocolFormatException(
-        'Invalid UTF-8 payload: malformed or control byte in cell grapheme',
-      );
-    }
-    i += step;
   }
 }

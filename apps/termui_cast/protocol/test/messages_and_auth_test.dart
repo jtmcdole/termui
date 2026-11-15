@@ -620,4 +620,19 @@ void main() {
       },
     );
   });
+
+  group('parseCastWebSocketUri', () {
+    test('rejects embedded userInfo credentials', () {
+      check(
+        () =>
+            parseCastWebSocketUri('wss://user:secret@relay.example/v1/client'),
+      ).throws<FormatException>();
+      check(
+        () => parseCastWebSocketUri('wss://token@relay.example/v1/caster'),
+      ).throws<FormatException>();
+      check(
+        parseCastWebSocketUri('wss://relay.example/v1/client').userInfo,
+      ).equals('');
+    });
+  });
 }

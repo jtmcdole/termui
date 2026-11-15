@@ -415,14 +415,12 @@ Future<void> _verifyBlackholedCloseAndBadUpgrade() async {
     connectCastWebSocket(Uri.parse('http://127.0.0.1:${plainHttp.port}/ws')),
   ).throws<WebSocketException>();
 
-  // 2. Basic userInfo credentials in URI populate Authorization header, and
+  // 2. Embedded userInfo credentials in URI are rejected, and
   // unawaited(sub.cancel()) followed by sink.add + closeWithCode(1008) preserves
   // both the final frame and the 1008 close code.
-  String? userInfoAuth;
   final backend = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   addTearDown(() => backend.close(force: true));
   backend.listen((req) async {
-    userInfoAuth = req.headers.value(HttpHeaders.authorizationHeader);
     final (:channel, :closeWithCode) = await upgradeCastWebSocket(req);
     late final StreamSubscription<Uint8List> srvSub;
     srvSub = channel.stream.listen((data) async {
@@ -433,13 +431,11 @@ Future<void> _verifyBlackholedCloseAndBadUpgrade() async {
       }
     }, onError: (Object _) {});
   });
-  final userInfoChan = await connectCastWebSocket(
-    Uri.parse('ws://alice:secret@127.0.0.1:${backend.port}/ws'),
-  );
-  check(
-    userInfoAuth,
-  ).equals('Basic ${base64Encode(utf8.encode('alice:secret'))}');
-  await userInfoChan.sink.close();
+  await check(
+    connectCastWebSocket(
+      Uri.parse('ws://alice:secret@127.0.0.1:${backend.port}/ws'),
+    ),
+  ).throws<FormatException>();
 
   final rejectWs = await WebSocket.connect('ws://127.0.0.1:${backend.port}/ws');
   rejectWs.add(Uint8List.fromList([0xFE]));
@@ -511,6 +507,7 @@ Future<void> _verifyBlackholedCloseAndBadUpgrade() async {
 
 Future<void> _verifyUpgradeHardeningAndTimeoutCleanup() async {
   await _assertRedirectBlocked();
+  await _assertFailedUpgradeStripsQueryAndFragment();
   await _assertMalformedUpgradeHeadersRejected();
   await _assertTimeoutDestroysLateUpgradedSocket();
 
@@ -549,6 +546,31 @@ Future<void> _assertRedirectBlocked() async {
     connectCastWebSocket(Uri.parse('ws://127.0.0.1:${redirector.port}/ws')),
   ).throws<WebSocketException>();
   check(redirectHits).equals(0);
+}
+
+Future<void> _assertFailedUpgradeStripsQueryAndFragment() async {
+  final srv = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  addTearDown(() => srv.close(force: true));
+  srv.listen((req) async {
+    req.response.statusCode = HttpStatus.unauthorized;
+    await req.response.close();
+  });
+
+  Object? caught;
+  try {
+    await connectCastWebSocket(
+      Uri.parse(
+        'ws://127.0.0.1:${srv.port}/v1/client?token=secretQuery#secretFrag',
+      ),
+    );
+  } on WebSocketException catch (e) {
+    caught = e;
+  }
+  check(caught).isA<WebSocketException>();
+  final message = '$caught';
+  check(message).contains('/v1/client');
+  check(message).not((it) => it.contains('secretQuery'));
+  check(message).not((it) => it.contains('secretFrag'));
 }
 
 Future<void> _assertMalformedUpgradeHeadersRejected() async {

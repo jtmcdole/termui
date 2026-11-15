@@ -611,6 +611,46 @@ void _registerBackpressureAndOriginTests() {
       check(cliErr.toString()).contains('Rejected cross-origin');
     },
   );
+
+  test(
+    'reserves pre-upgrade peer cap under concurrent upgrades and exits 78 on bind SocketException',
+    () async {
+      final server = await CastServer.bind(
+        ServerConfig(host: InternetAddress.loopbackIPv4, port: 0),
+        maxTotalPeers: 2,
+      );
+      addTearDown(server.close);
+
+      // Simultaneous connection attempts exceeding maxTotalPeers=2 must reject overflow with 503.
+      final results = await [
+        for (var i = 0; i < 4; i++)
+          WebSocket.connect('${server.clientUri}').then<int>(
+            (ws) {
+              addTearDown(ws.close);
+              return HttpStatus.switchingProtocols;
+            },
+            onError: (Object err) =>
+                err is WebSocketException ? (err.httpStatusCode ?? 0) : 0,
+          ),
+      ].wait;
+      check(
+        results.where((s) => s == HttpStatus.switchingProtocols).length,
+      ).equals(2);
+      check(
+        results.where((s) => s == HttpStatus.serviceUnavailable).length,
+      ).equals(2);
+
+      // Binding second server on the occupied port returns exit code 78 cleanly.
+      final errSink = StringBuffer();
+      final exitCode = await runServerCli([
+        '--host=127.0.0.1',
+        '--port=${server.port}',
+        '--insecure-no-auth',
+      ], err: errSink);
+      check(exitCode).equals(78);
+      check(errSink.toString()).contains('Failed to bind');
+    },
+  );
 }
 
 final class _NotifyingStringSink implements StringSink {
