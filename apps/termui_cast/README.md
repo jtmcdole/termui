@@ -70,7 +70,7 @@ sequenceDiagram
 | Path | Role |
 | :--- | :--- |
 | `apps/termui_cast/protocol` | Binary frame codec (`0x09` `BufferSnapshot`, `0x0A` `BufferDelta`, `0x11` `ScrollbackChunk` with `compressionFlag=0x01` `deflate-raw` tails), control messages, `dart:io` WebSocket adapter, and constant-time SHA-256 token verification |
-| `apps/termui_cast/server` | Stateless `HttpServer` / `bindSecure` WebSocket relay (`--port 8420`, `/v1/caster`, `/v1/client`, `/healthz`) and static WASM web host |
+| `apps/termui_cast/server` | Stateless `HttpServer` WebSocket relay (`--port 8420`, `/v1/caster`, `/v1/client`, `/healthz`) and static WASM web host behind TLS-terminating bastion |
 | `apps/termui_cast/caster_cli` | `termui_cast` CLI (`pty2` + `VirtualTerminal` + jittered reconnect state machine + bounded uplink pump) |
 | `apps/termui_cast/client_core` | Pure-Dart client transport, `CastClientRepository`, `RemoteTerminalPort`, `TerminalThemeSettings`, `FileUploadCoordinator`, and session sync state |
 | `apps/fterm` | `fterm` Flutter desktop MUX & WASM web client (`TerminalSurface` splits sharing one `GlyphAtlas`, `PtyRouter` local shells, `Ctrl+\ b` pane share, `BEL`/`APC` audio) |
@@ -206,7 +206,7 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | `TERMUI_CAST_CASTER_TOKEN` | Server & Caster CLI | Shared secret token required to register caster sessions (`/v1/caster`) |
 | `TERMUI_CAST_CLIENT_TOKEN` | Server | Shared secret token required for viewer connections (`/v1/client`) |
 | `TERMUI_CAST_SERVER_URL` | Caster CLI & Web App | WebSocket endpoint URL (`wss://<host>/v1/caster` or `wss://<host>/v1/client`) |
-| `TERMUI_CAST_TOKEN` | Web App (`--dart-define`) | Default viewer token compiled into the web viewer |
+| `TERMUI_CAST_TOKEN` | Web App (`--dart-define`) | Default viewer token embedded into the web viewer static bundle (public to anyone able to load static assets unless gated behind IAP; prefer `#token=...` fragments or IAP) |
 | `TERMUI_CAST_IAP_SERVICE_ACCOUNT` | Caster CLI | Service account email for keyless `gcloud iam service-accounts sign-jwt` IAP authentication |
 | `TERMUI_CAST_IAP_KEY_FILE` | Caster CLI | Path to a service account JSON key for pure-Dart RS256 IAP authentication |
 | `TERMUI_CAST_WEB_DIR` | Server | Directory path containing the compiled Flutter web assets (`build/web`) |
@@ -231,7 +231,6 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | `--web-dir` | `$TERMUI_CAST_WEB_DIR` (`apps/fterm/build/web`) | Directory of static WASM web viewer assets |
 | `--no-web` | `false` | Disable static web asset serving at `/` |
 | `--revision` | `$TERMUI_CAST_REVISION` (or `$K_REVISION`) | Server revision string reported on `/healthz` |
-| `--tls-cert` / `--tls-key` | None | PEM certificate and private key paths for `wss://` / `https://` |
 
 ## Keyboard, Split, Audio, and Dock Controls
 
@@ -269,7 +268,8 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 - Peers authenticate via an initial binary `AuthFrame` rather than URL query strings, and `termui_cast` strips all `TERMUI_CAST_*` variables from spawned child shell environments.
 - Settings and saved relay credentials on native desktop live in `~/.config/fterm/settings.json` (`0700` directory, atomic `0600` POSIX temp-file write before rename) on macOS/Linux and `%APPDATA%\fterm\settings.json` on Windows.
 - WebAudio unlock uses external [audio_unlock.js](../fterm/web/audio_unlock.js) with zero inline scripts for strict CSP compatibility.
-- Optional self-signed `wss://` is supported via `--tls-cert` and `--tls-key` on the server and `--tls-pin-sha256` on `dart:io` clients.
+- TLS terminates at the bastion or reverse proxy (such as Google Cloud Run + Identity-Aware Proxy, nginx, or Caddy); `termui_cast_server` binds plain HTTP/WS behind that perimeter and trusts `wss://` via external TLS termination rather than in-app certificate flags.
+- Web WASM builds compiled with `--dart-define=TERMUI_CAST_TOKEN=...` embed that token inside public static JS/WASM assets readable by anyone able to fetch `/`. Always gate static asset hosting behind IAP when baking a default token, or pass tokens at runtime via URL fragments (`#token=...`, scrubbed synchronously before WASM loads).
 
 ## Running Tests
 

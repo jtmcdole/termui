@@ -1,0 +1,21 @@
+name: Setup SoLoud CMake Cache
+description: Normalize SoLoud source timestamps and restore or save CMake native asset cache
+
+runs:
+  using: composite
+  steps:
+    - name: Normalize SoLoud source timestamps for CMake cache
+      id: normalize
+      shell: pwsh
+      run: |
+        "image_version=$($env:ImageVersion)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+        $epoch = [datetime]'2020-01-01T00:00:00Z'
+        @(Get-Item packages/termui_audio/CMakeLists.txt) + @(
+          Get-ChildItem -Path packages/termui_audio/src, packages/termui_audio/windows/include, packages/termui_audio/windows/libs, packages/termui_audio/macos/include, packages/termui_audio/macos/libs, packages/termui_audio/linux/include, packages/termui_audio/linux/libs -Recurse -File
+        ) | ForEach-Object { $_.LastWriteTimeUtc = $epoch }
+
+    - name: Cache SoLoud CMake native assets
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: .dart_tool/hooks_runner/shared/termui_audio/build
+        key: ${{ runner.os }}-${{ steps.normalize.outputs.image_version }}-soloud-cmake-${{ hashFiles('pubspec.lock', 'packages/termui_audio/pubspec.yaml', 'packages/termui_audio/CMakeLists.txt', 'packages/termui_audio/src/**', 'packages/termui_audio/hook/**', 'packages/termui_audio/windows/include/**', 'packages/termui_audio/windows/libs/**', 'packages/termui_audio/macos/include/**', 'packages/termui_audio/macos/libs/**', 'packages/termui_audio/linux/include/**', 'packages/termui_audio/linux/libs/**') }}

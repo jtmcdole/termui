@@ -108,9 +108,12 @@ foreach ($secret in @("termui-cast-caster-token", "termui-cast-client-token")) {
 }
 ```
 
+> [!NOTE]
+> PowerShell pipeline input (`$env:CASTER_TOKEN | gcloud secrets create ... --data-file=-`) appends a trailing newline (`\r\n` or `\n`). `termui_cast_server` trims leading/trailing whitespace from `TERMUI_CAST_CASTER_TOKEN` and `TERMUI_CAST_CLIENT_TOKEN` on startup, so piped Secret Manager values match trimmed CLI tokens.
+
 ## 3. Deploy the Service from Source with Secret Manager and IAP
 
-Run this from the `termui` repository root (`--source .`). Set `--max-instances=1` because `SessionRegistry` holds active stream pairs in process memory. Set `--timeout=3600` for one-hour WebSocket sessions, and pass `--no-allow-unauthenticated` and `--iap` so Identity-Aware Proxy protects the service from the first revision:
+Run this from the `termui` repository root (`--source .`). Set `--max-instances=1` because `SessionRegistry` holds active stream pairs in process memory, and set `--concurrency=256` to match `termui_cast_server`'s 256-peer cap (Cloud Run defaults to `80`). Set `--timeout=3600` for one-hour WebSocket sessions, and pass `--no-allow-unauthenticated` and `--iap` so Identity-Aware Proxy protects the service from the first revision:
 
 **Linux / macOS (`bash` / `zsh`)**
 ```bash
@@ -121,6 +124,7 @@ gcloud run deploy termui-cast \
   --no-allow-unauthenticated \
   --iap \
   --max-instances=1 \
+  --concurrency=256 \
   --timeout=3600 \
   --set-secrets="TERMUI_CAST_CASTER_TOKEN=termui-cast-caster-token:latest,TERMUI_CAST_CLIENT_TOKEN=termui-cast-client-token:latest"
 ```
@@ -134,9 +138,13 @@ gcloud run deploy termui-cast `
   --no-allow-unauthenticated `
   --iap `
   --max-instances=1 `
+  --concurrency=256 `
   --timeout=3600 `
   --set-secrets="TERMUI_CAST_CASTER_TOKEN=termui-cast-caster-token:latest,TERMUI_CAST_CLIENT_TOKEN=termui-cast-client-token:latest"
 ```
+
+> [!NOTE]
+> **Revision Rollouts & WebSocket Drain:** Even with `--max-instances=1`, Cloud Run briefly runs the old and new container revisions side by side while existing WebSocket connections drain on the retiring revision and new requests route to the new revision. During that window, a caster still attached to the retiring revision will not appear to a viewer routed to the new revision. After deploying a new revision, allow the rollout to finish and reconnect any active casters (for example via `SIGHUP` on macOS/Linux when started with `--keep-alive-on-hup`, or otherwise by restarting `termui_cast`) and reload viewer tabs so all peers land on the active revision.
 
 ## 4. Authorize Your User Account for IAP and Cloud Run Invoker
 
@@ -278,10 +286,14 @@ chmod 600 ~/.config/termui_cast/sa-key.json
 
 **Windows (`PowerShell`)**
 ```powershell
-New-Item -ItemType Directory -Force -Path "$HOME\.config\termui_cast" | Out-Null
-gcloud iam service-accounts keys create "$HOME\.config\termui_cast\sa-key.json" `
+$cfgDir = "$HOME\.config\termui_cast"
+$keyPath = "$cfgDir\sa-key.json"
+New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+icacls $cfgDir /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
+gcloud iam service-accounts keys create $keyPath `
   --project="$env:PROJECT_ID" `
   --iam-account="$env:HOST_SA_EMAIL"
+icacls $keyPath /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
 ```
 
 ### Save the Caster Environment Config on the Host
@@ -303,14 +315,18 @@ chmod 600 ~/.config/termui_cast/env
 
 **Windows (`PowerShell`: `$HOME\.config\termui_cast\env.ps1`)**
 ```powershell
-New-Item -ItemType Directory -Force -Path "$HOME\.config\termui_cast" | Out-Null
+$cfgDir = "$HOME\.config\termui_cast"
+$envPs1 = "$cfgDir\env.ps1"
+New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+icacls $cfgDir /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
 @"
 `$env:TERMUI_CAST_SERVER_URL = "wss://<service-url>/v1/caster"
 `$env:TERMUI_CAST_CASTER_TOKEN = "$env:CASTER_TOKEN"
 `$env:TERMUI_CAST_IAP_SERVICE_ACCOUNT = "$env:HOST_SA_EMAIL"
 # Or pure-Dart local RS256 signing without gcloud:
 # `$env:TERMUI_CAST_IAP_KEY_FILE = "`$HOME\.config\termui_cast\sa-key.json"
-"@ | Set-Content -Path "$HOME\.config\termui_cast\env.ps1" -Encoding UTF8
+"@ | Set-Content -Path $envPs1 -Encoding UTF8
+icacls $envPs1 /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
 ```
 
 ## 6. Connect the Viewer and Cast a Session
@@ -336,7 +352,7 @@ source ~/.config/termui_cast/env
 `termui_cast` pre-warms and caches the signed IAP JWT in memory and refreshes it before the 1-hour Cloud Run timeout. It also strips `TERMUI_CAST_*` variables from the spawned child shell environment.
 
 > [!TIP]
-> On macOS and Linux, send `SIGHUP` if a host drops off the dashboard after sleep or a network change. The caster reconnects right away while keeping the local shell alive. Use `pkill -HUP -x termui_cast` for prebuilt binaries. From source, inspect PIDs with `pgrep -fl termui_cast.dart` and run `kill -HUP <pid>` to avoid signaling editors or `termui_cast_server`.
+> On macOS and Linux, `SIGHUP` shuts down `termui_cast` cleanly by default. Start `termui_cast` with `--keep-alive-on-hup` if you want `SIGHUP` to trigger an immediate reconnect/check-in while keeping the local shell alive (for example after sleep or a network change); otherwise restart `termui_cast`. Use `pkill -HUP -x termui_cast` for prebuilt binaries. From source, inspect PIDs with `pgrep -fl termui_cast.dart` and run `kill -HUP <pid>` to avoid signaling editors or `termui_cast_server`.
 
 ## Unauthenticated Proxy Ingress (Not Recommended)
 
