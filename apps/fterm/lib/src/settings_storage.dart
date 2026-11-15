@@ -46,11 +46,20 @@ abstract interface class BatchSettingsStorage implements SettingsStorage {
 /// desktop).
 SettingsStorage get defaultSettingsStorage => impl.platformSettingsStorage;
 
-/// App-level `fterm` audio and tab-bar preferences stored alongside
-/// [CastWorkspaceSettings].
+/// App-level `fterm` audio, font-size, and tab-bar preferences stored
+/// alongside [CastWorkspaceSettings].
 final class FtermPreferences {
   /// Default unmuted audio volume in `[0.0, 1.0]`.
   static const double defaultAudioVolume = 0.7;
+
+  /// Default terminal cell font size in logical pixels.
+  static const double defaultFontSize = 13.0;
+
+  /// Minimum clamped terminal cell font size in logical pixels.
+  static const double minFontSize = 6.0;
+
+  /// Maximum clamped terminal cell font size in logical pixels.
+  static const double maxFontSize = 72.0;
 
   /// Default value for [FtermPreferences].
   static const FtermPreferences defaults = FtermPreferences();
@@ -67,13 +76,23 @@ final class FtermPreferences {
   /// Whether macOS Option+key emits `Alt+key` instead of dead-key composition.
   final bool macosOptionAsAlt;
 
+  /// Optional user-configured terminal font size clamped to
+  /// `[minFontSize, maxFontSize]`, or `null` to use widget/default sizing.
+  final double? fontSize;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
     this.audioVolume = defaultAudioVolume,
     this.autoHideSingleTab = false,
     this.macosOptionAsAlt = false,
+    this.fontSize,
   });
+
+  /// Returns [fontSize] (or [fallback] when unset), clamped to
+  /// `[minFontSize, maxFontSize]`.
+  double effectiveFontSize([double fallback = defaultFontSize]) =>
+      (fontSize ?? fallback).clamp(minFontSize, maxFontSize).toDouble();
 
   /// Returns a copy with overridden preference fields.
   FtermPreferences copyWith({
@@ -81,11 +100,16 @@ final class FtermPreferences {
     double? audioVolume,
     bool? autoHideSingleTab,
     bool? macosOptionAsAlt,
+    double? fontSize,
+    bool clearFontSize = false,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
     autoHideSingleTab: autoHideSingleTab ?? this.autoHideSingleTab,
     macosOptionAsAlt: macosOptionAsAlt ?? this.macosOptionAsAlt,
+    fontSize: clearFontSize
+        ? null
+        : _normalizeFontSize(fontSize ?? this.fontSize),
   );
 
   /// Decodes [FtermPreferences] from JSON string [raw], returning [defaults] on
@@ -95,20 +119,33 @@ final class FtermPreferences {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<Object?, Object?>) return defaults;
-      final volumeRaw = decoded['audioVolume'];
-      final parsedVolume = volumeRaw is num
-          ? volumeRaw.toDouble().clamp(0.0, 1.0).toDouble()
-          : defaultAudioVolume;
       return FtermPreferences(
         audioMuted: decoded['audioMuted'] == true,
-        audioVolume: parsedVolume,
+        audioVolume: _parseAudioVolume(decoded['audioVolume']),
         autoHideSingleTab: decoded['autoHideSingleTab'] == true,
         macosOptionAsAlt: decoded['macosOptionAsAlt'] == true,
+        fontSize: _parseFontSize(decoded['fontSize']),
       );
     } on Object {
       return defaults;
     }
   }
+
+  static double _parseAudioVolume(Object? raw) => switch (raw) {
+    final num value when value.isFinite =>
+      value.toDouble().clamp(0.0, 1.0).toDouble(),
+    _ => defaultAudioVolume,
+  };
+
+  static double? _parseFontSize(Object? raw) => switch (raw) {
+    final num value when value.isFinite => _normalizeFontSize(value.toDouble()),
+    _ => null,
+  };
+
+  static double? _normalizeFontSize(double? value) =>
+      value == null || value.isNaN
+      ? null
+      : value.clamp(minFontSize, maxFontSize).toDouble();
 
   /// Serializes this preference set as a JSON object string.
   String toJsonString() => jsonEncode(<String, Object?>{
@@ -116,6 +153,7 @@ final class FtermPreferences {
     'audioVolume': audioVolume,
     'autoHideSingleTab': autoHideSingleTab,
     'macosOptionAsAlt': macosOptionAsAlt,
+    'fontSize': ?fontSize,
   });
 
   @override
@@ -125,11 +163,17 @@ final class FtermPreferences {
           other.audioMuted == audioMuted &&
           other.audioVolume == audioVolume &&
           other.autoHideSingleTab == autoHideSingleTab &&
-          other.macosOptionAsAlt == macosOptionAsAlt;
+          other.macosOptionAsAlt == macosOptionAsAlt &&
+          other.fontSize == fontSize;
 
   @override
-  int get hashCode =>
-      Object.hash(audioMuted, audioVolume, autoHideSingleTab, macosOptionAsAlt);
+  int get hashCode => Object.hash(
+    audioMuted,
+    audioVolume,
+    autoHideSingleTab,
+    macosOptionAsAlt,
+    fontSize,
+  );
 }
 
 /// Relay connection credentials persisted on `0600` desktop storage when the

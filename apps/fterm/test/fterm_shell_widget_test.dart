@@ -12,6 +12,7 @@ import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/font_loader.dart';
 import 'package:fterm/src/fterm_app.dart';
 import 'package:fterm/src/settings_storage.dart';
+import 'package:fterm/src/ui/fterm_shell_scaffold.dart';
 import 'package:fterm/src/workspace/fterm_pane_controller.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver.dart';
@@ -21,11 +22,13 @@ import 'package:termui/termui.dart' as tui;
 import 'package:termui_audio_flutter/termui_audio_flutter.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart'
     show
+        CastClientRepository,
         DockPosition,
         MemoryDroppedFileSource,
         Osc52ClipboardPolicy,
         TerminalColorResolver,
-        TerminalThemeSettings;
+        TerminalThemeSettings,
+        WsClientTransport;
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 import 'package:termui_pty/termui_pty.dart';
@@ -1672,6 +1675,233 @@ void main() {
         await tester.runAsync(harness.dispose);
       },
     );
+
+    Future<void> withWorkspace(
+      WidgetTester tester,
+      Future<void> Function(
+        FtermWorkspaceController ws,
+        _WidgetFakeLocalHostDriver driver,
+      )
+      body,
+    ) async {
+      await tester.binding.setSurfaceSize(const Size(960, 760));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      final harness = AppThreeWayWsHarness();
+      final driver = _WidgetFakeLocalHostDriver(harness: harness);
+      final repo = CastClientRepository(
+        transport: WsClientTransport(channelFactory: harness.openClientChannel),
+      );
+      final ws = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(
+          token: harness.token,
+          promptForConnection: false,
+        ),
+        repository: repo,
+        localHostDriver: driver,
+        audioController: FtermAudioController(
+          engineFactory: _WidgetFakeAudioEngine.new,
+        ),
+        storage: _MemSettings(),
+        defaultFontSize: 14.0,
+        resizeDebounce: Duration.zero,
+      );
+      await tester.runAsync(ws.openLocalShellTab);
+      try {
+        await body(ws, driver);
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(() async {
+          await ws.dispose();
+          await repo.dispose();
+          await driver.dispose();
+          await harness.dispose();
+        });
+      }
+    }
+
+    testWidgets(
+      'scales terminal fontSize by MediaQuery TextScaler on WSLg and handles Ctrl/Cmd zoom shortcuts without leaking Ctrl+- to PTY',
+      (tester) async {
+        await withWorkspace(tester, (workspace, localDriver) async {
+          Widget buildShell({
+            TargetPlatform? platform,
+            TextScaler scaler = TextScaler.noScaling,
+          }) => MaterialApp(
+            home: MediaQuery(
+              data: MediaQueryData(textScaler: scaler, devicePixelRatio: 1.0),
+              child: Scaffold(
+                body: FtermShellScaffold(
+                  workspace: workspace,
+                  fontSize: 14.0,
+                  platformOverride: platform,
+                  isWebOverride: false,
+                  onOpenUrl: (_) async {},
+                ),
+              ),
+            ),
+          );
+
+          await tester.pumpWidget(
+            buildShell(scaler: const TextScaler.linear(1.5)),
+          );
+          await settleCastApp(tester);
+          final surface = tester.widget<TerminalSurface>(
+            find.byType(TerminalSurface),
+          );
+          expect(surface.fontSize, equals(21.0));
+          expect(surface.atlasController!.fontSize, equals(21.0));
+          expect(surface.atlasController!.generationId, equals(1));
+          expect(surface.atlasController!.debugCreatedAtlasCount, equals(1));
+
+          Future<void> pressZoom(
+            LogicalKeyboardKey mod,
+            LogicalKeyboardKey key, {
+            bool repeat = false,
+            LogicalKeyboardKey? extraMod,
+          }) async {
+            await tester.sendKeyDownEvent(mod);
+            if (extraMod != null) await tester.sendKeyDownEvent(extraMod);
+            await tester.sendKeyDownEvent(key);
+            if (repeat) await tester.sendKeyRepeatEvent(key);
+            await tester.sendKeyUpEvent(key);
+            if (extraMod != null) await tester.sendKeyUpEvent(extraMod);
+            await tester.sendKeyUpEvent(mod);
+            await settleCastApp(tester);
+          }
+
+          await tester.pumpWidget(buildShell(platform: TargetPlatform.linux));
+          await settleCastApp(tester);
+          await pressZoom(
+            LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.equal,
+            repeat: true,
+          );
+          expect(workspace.effectiveFontSize, equals(16.0));
+
+          await pressZoom(
+            LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.minus,
+            repeat: true,
+          );
+          expect(workspace.effectiveFontSize, equals(14.0));
+          expect(
+            localDriver.hosts.single.port.inputs
+                .expand((bytes) => bytes)
+                .contains(0x1F),
+            isFalse,
+          );
+
+          await pressZoom(
+            LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.equal,
+            extraMod: LogicalKeyboardKey.altLeft,
+          );
+          expect(workspace.effectiveFontSize, equals(14.0));
+
+          await pressZoom(
+            LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.equal,
+          );
+          await pressZoom(
+            LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.digit0,
+          );
+          expect(workspace.preferences.fontSize, isNull);
+
+          await tester.pumpWidget(buildShell(platform: TargetPlatform.macOS));
+          await settleCastApp(tester);
+          await pressZoom(
+            LogicalKeyboardKey.metaLeft,
+            LogicalKeyboardKey.equal,
+            repeat: true,
+          );
+          await pressZoom(
+            LogicalKeyboardKey.metaLeft,
+            LogicalKeyboardKey.minus,
+          );
+          expect(workspace.effectiveFontSize, equals(15.0));
+          await pressZoom(
+            LogicalKeyboardKey.metaLeft,
+            LogicalKeyboardKey.digit0,
+          );
+          expect(workspace.preferences.fontSize, isNull);
+        });
+      },
+    );
+
+    testWidgets(
+      'SettingsOverlay adjusts font size, HelpOverlay lists zoom shortcuts, and pane corner pill uses pillNotifier',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 760));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        final harness = AppThreeWayWsHarness();
+        final localDriver = _WidgetFakeLocalHostDriver(harness: harness);
+        FtermWorkspaceController? workspace;
+
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(
+              token: harness.token,
+              promptForConnection: false,
+            ),
+            channelFactory: harness.openClientChannel,
+            localHostDriver: localDriver,
+            settingsStorage: _MemSettings(),
+            resizeDebounce: Duration.zero,
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester, cycles: 3);
+
+        workspace!.setOverlay(FtermOverlay.settings);
+        await settleCastApp(tester);
+        await tester.tap(find.byKey(const ValueKey('settings-font-increase')));
+        await settleCastApp(tester);
+        expect(workspace!.effectiveFontSize, equals(14.0));
+        await tester.tap(find.byKey(const ValueKey('settings-font-decrease')));
+        await settleCastApp(tester);
+        expect(workspace!.effectiveFontSize, equals(13.0));
+        await tester.tap(find.byKey(const ValueKey('settings-font-reset')));
+        await settleCastApp(tester);
+        expect(workspace!.preferences.fontSize, isNull);
+
+        workspace!.setOverlay(FtermOverlay.help);
+        await settleCastApp(tester);
+        expect(find.text('Cmd+= / Cmd+- / Cmd+0'), findsOneWidget);
+        expect(find.text('Ctrl+= / Ctrl+- / Ctrl+0'), findsOneWidget);
+        workspace!.dismissOverlay();
+        await settleCastApp(tester);
+
+        final pane = workspace!.focusedPane!;
+        var pillCalls = 0;
+        var visualCalls = 0;
+        pane.pillNotifier.addListener(() => pillCalls += 1);
+        pane.visualNotifier.addListener(() => visualCalls += 1);
+
+        final port = localDriver.hosts.single.port;
+        for (var i = 0; i < 40; i++) {
+          port.emitFrame(totalScrollback: i + 1);
+        }
+        await settleCastApp(tester);
+        expect(visualCalls, greaterThan(0));
+        expect(pillCalls, equals(0));
+        expect(find.byKey(ValueKey('pane-pill-${pane.paneId}')), findsNothing);
+
+        pane.scrollLines(3);
+        await settleCastApp(tester);
+        expect(pillCalls, equals(1));
+        expect(find.text('+3'), findsOneWidget);
+
+        pane.scrollLines(-10);
+        await settleCastApp(tester);
+        expect(pillCalls, equals(2));
+        expect(find.byKey(ValueKey('pane-pill-${pane.paneId}')), findsNothing);
+
+        await tester.runAsync(() => workspace!.dispose());
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(harness.dispose);
+      },
+    );
   });
 }
 
@@ -1769,6 +1999,7 @@ final class _MemSettings implements SettingsStorage {
 final class _WidgetFakeLocalHostDriver implements LocalHostDriver {
   final AppThreeWayWsHarness harness;
   final List<_WidgetFakeLocalPaneHost> hosts = [];
+  final List<LocalShellConfig> openedConfigs = [];
   int _counter = 0;
 
   _WidgetFakeLocalHostDriver({required this.harness});
@@ -1778,6 +2009,7 @@ final class _WidgetFakeLocalHostDriver implements LocalHostDriver {
 
   @override
   Future<LocalPaneHost> openShell(LocalShellConfig config) async {
+    openedConfigs.add(config);
     final host = _WidgetFakeLocalPaneHost(
       id: 'wlocal-${++_counter}',
       harness: harness,
@@ -1859,12 +2091,21 @@ final class _WidgetFakeLocalPaneHost implements LocalPaneHost {
 final class _WidgetMemPort implements TerminalPort {
   final tui.Buffer _buffer = tui.Buffer.blank(80, 24);
   int totalScrollbackLines = 0;
+  int _renderRevision = 0;
   final Set<void Function()> _listeners = {};
   final Set<void Function()> _bellListeners = {};
   final Set<void Function(String)> _titleListeners = {};
   final Completer<int> _exitCode = Completer<int>();
   final List<Uint8List> inputs = [];
   String _title = 'local-zsh';
+
+  void emitFrame({int? totalScrollback}) {
+    if (totalScrollback != null) totalScrollbackLines = totalScrollback;
+    _renderRevision += 1;
+    for (final fn in [..._listeners]) {
+      fn();
+    }
+  }
 
   void emitBell() {
     for (final fn in [..._bellListeners]) {
@@ -1896,7 +2137,7 @@ final class _WidgetMemPort implements TerminalPort {
   int get rows => _buffer.height;
 
   @override
-  int get renderRevision => 0;
+  int get renderRevision => _renderRevision;
 
   @override
   int get fullSyncRevision => 0;

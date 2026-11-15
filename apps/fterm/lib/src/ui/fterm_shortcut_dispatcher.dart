@@ -68,7 +68,10 @@ final class FtermShortcutDispatcher {
   }) : _platformOverride = platformOverride,
        _isWebOverride = isWebOverride;
 
+  static const double _fontZoomStep = 1.0;
+
   TargetPlatform get _platform => _platformOverride ?? defaultTargetPlatform;
+  bool get _isMacOs => _platform == TargetPlatform.macOS;
   bool get _isWeb => _isWebOverride ?? kIsWeb;
 
   /// Handles [event] with active [modifiers], returning `true` when the event
@@ -93,6 +96,10 @@ final class FtermShortcutDispatcher {
       if (event is KeyDownEvent) {
         workspace.setLeaderArmed(true);
       }
+      return true;
+    }
+
+    if (_handleFontZoomShortcut(event, modifiers)) {
       return true;
     }
 
@@ -271,6 +278,41 @@ final class FtermShortcutDispatcher {
         (shift && key == LogicalKeyboardKey.slash);
     if (isQuestion) return FtermOverlay.help;
     return null;
+  }
+
+  bool _hasZoomModifiers(Set<ev.Modifier> modifiers) {
+    final forbidAlt = !modifiers.contains(ev.Modifier.alt);
+    if (_isMacOs) {
+      return forbidAlt &&
+          modifiers.contains(ev.Modifier.meta) &&
+          !modifiers.contains(ev.Modifier.control);
+    }
+    return forbidAlt &&
+        modifiers.contains(ev.Modifier.control) &&
+        !modifiers.contains(ev.Modifier.meta);
+  }
+
+  bool _handleFontZoomShortcut(KeyEvent event, Set<ev.Modifier> modifiers) {
+    if (!_hasZoomModifiers(modifiers)) return false;
+    final key = event.logicalKey;
+    final shift = modifiers.contains(ev.Modifier.shift);
+    if (key == LogicalKeyboardKey.equal ||
+        key == LogicalKeyboardKey.add ||
+        key == LogicalKeyboardKey.numpadAdd) {
+      workspace.adjustFontSize(_fontZoomStep);
+      return true;
+    }
+    if (shift) return false;
+    if (key == LogicalKeyboardKey.minus ||
+        key == LogicalKeyboardKey.numpadSubtract) {
+      workspace.adjustFontSize(-_fontZoomStep);
+      return true;
+    }
+    if (key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0) {
+      workspace.resetFontSize();
+      return true;
+    }
+    return false;
   }
 
   bool _handleDesktopShortcut(KeyDownEvent event, Set<ev.Modifier> modifiers) {

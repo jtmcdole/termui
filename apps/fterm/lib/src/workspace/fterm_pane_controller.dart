@@ -4,7 +4,12 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart'
-    show ChangeNotifier, ValueListenable, VoidCallback, visibleForTesting;
+    show
+        ChangeNotifier,
+        Listenable,
+        ValueListenable,
+        VoidCallback,
+        visibleForTesting;
 import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
@@ -70,6 +75,7 @@ final class FtermPaneController {
 
   final Duration _resizeDebounce;
   final _PaneChangeNotifier _visualNotifier = _PaneChangeNotifier();
+  final _PaneChangeNotifier _pillNotifier = _PaneChangeNotifier();
   final void Function(tui.Buffer buffer)? _onFrameRedrawn;
 
   PaneBellCallback? _onBell;
@@ -95,6 +101,7 @@ final class FtermPaneController {
   int _lastComposedWidth = 0;
   int _lastComposedHeight = 0;
   int _lastComposedScrollOffset = 0;
+  int _lastPillScrollOffset = 0;
   int _bellCount = 0;
   bool _focused = false;
   bool _hasExited = false;
@@ -143,6 +150,10 @@ final class FtermPaneController {
 
   /// Backing notifier triggered on visual redraws.
   ChangeNotifier get visualNotifier => _visualNotifier;
+
+  /// Scoped listenable triggered only when pane corner pill state changes
+  /// (scrollback offset transitions, share status updates, or process exit).
+  Listenable get pillNotifier => _pillNotifier;
 
   /// Active listener count registered on [visualNotifier] (for regression tests).
   @visibleForTesting
@@ -288,6 +299,9 @@ final class FtermPaneController {
       _shareSub = host.shareUpdates.listen((_) {
         if (!_disposed) {
           _onShareChanged?.call();
+          if (!_disposed) {
+            _pillNotifier.emitChange();
+          }
         }
       });
     }
@@ -331,6 +345,9 @@ final class FtermPaneController {
     _hasExited = true;
     _exitStatus = code;
     _onExited?.call(paneId, code);
+    if (!_disposed) {
+      _pillNotifier.emitChange();
+    }
   }
 
   /// Clears unread bell counts on this pane and any attached remote slot.
@@ -554,6 +571,10 @@ final class FtermPaneController {
     _onFrameRedrawn?.call(out);
     if (notify) {
       _visualNotifier.emitChange();
+      if (_scrollOffsetLines != _lastPillScrollOffset) {
+        _lastPillScrollOffset = _scrollOffsetLines;
+        _pillNotifier.emitChange();
+      }
     }
   }
 
@@ -842,6 +863,7 @@ final class FtermPaneController {
     port.removeClipboardListener(_handleClipboard);
     _bufferListenable?.dispose();
     _visualNotifier.dispose();
+    _pillNotifier.dispose();
     if (disposePort) {
       if (localHost != null) {
         await localHost!.dispose();

@@ -162,6 +162,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final Clock _clock;
   final void Function(tui.Buffer buffer)? _onFrameRedrawn;
 
+  /// Fallback terminal font size (in logical pixels) when preferences omit it.
+  final double defaultFontSize;
+
   final List<FtermTabState> _tabs = [];
   final Map<String, FtermPaneController> _panes = {};
   late final Map<String, FtermPaneController> _panesView =
@@ -208,6 +211,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required FtermAudioController audioController,
     required SettingsStorage storage,
     DockPosition defaultDockPosition = DockPosition.top,
+    double defaultFontSize = FtermPreferences.defaultFontSize,
     tui.TerminalBrightness initialBrightness = tui.TerminalBrightness.dark,
     Duration resizeDebounce = const Duration(milliseconds: 32),
     Clock? clock,
@@ -218,6 +222,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     localHostDriver: localHostDriver,
     audioController: audioController,
     storage: storage,
+    defaultFontSize: defaultFontSize,
     initialSettings: loadStoredSettings(
       storage,
       defaultDockPosition: defaultDockPosition,
@@ -238,6 +243,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required this.localHostDriver,
     required this.audioController,
     required SettingsStorage storage,
+    required this.defaultFontSize,
     required CastWorkspaceSettings initialSettings,
     required FtermPreferences initialPreferences,
     required RelayCredentials initialCredentials,
@@ -367,6 +373,11 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   /// Current `fterm` audio & chrome preferences.
   FtermPreferences get preferences => _preferences;
+
+  /// Effective base terminal font size resolved from [preferences] and
+  /// [defaultFontSize] (before display `TextScaler` scaling).
+  double get effectiveFontSize =>
+      _preferences.effectiveFontSize(defaultFontSize);
 
   /// Persisted/active relay credentials snapshot.
   RelayCredentials get relayCredentials => RelayCredentials(
@@ -1079,7 +1090,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   /// Updates and persists [FtermPreferences] (`audioMuted`, `audioVolume`,
-  /// `autoHideSingleTab`, `macosOptionAsAlt`).
+  /// `autoHideSingleTab`, `macosOptionAsAlt`, and `fontSize`).
   void updatePreferences(FtermPreferences next) {
     if (_disposed || _preferences == next) return;
     _preferences = next;
@@ -1088,6 +1099,22 @@ final class FtermWorkspaceController extends ChangeNotifier {
       ..setVolume(next.audioVolume);
     _settingsSaver.savePreferences(next);
     _notifyChromeChanged();
+  }
+
+  /// Adjusts the persisted base terminal font size by [delta], clamped to
+  /// `[FtermPreferences.minFontSize, FtermPreferences.maxFontSize]`.
+  void adjustFontSize(double delta) {
+    final nextSize = (effectiveFontSize + delta).clamp(
+      FtermPreferences.minFontSize,
+      FtermPreferences.maxFontSize,
+    );
+    updatePreferences(_preferences.copyWith(fontSize: nextSize.toDouble()));
+  }
+
+  /// Clears any persisted font-size zoom override so [effectiveFontSize]
+  /// falls back to [defaultFontSize].
+  void resetFontSize() {
+    updatePreferences(_preferences.copyWith(clearFontSize: true));
   }
 
   /// Reloads stored settings and preferences synchronously from disk/localStorage.
