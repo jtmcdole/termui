@@ -1,3 +1,10 @@
+## 0.13.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(flutter): pass FlutterView viewId when attaching TextInput.
+ - **BREAKING** **FEAT**(termui,termui_flutter): add Buffer.clearMetadata and harden atlas/IME handling.
+
 ## 0.12.1
 
  - **FIX**(flutter): support macOS Ctrl+RightClick and plain-text links.

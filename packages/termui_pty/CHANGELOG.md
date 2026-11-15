@@ -1,3 +1,9 @@
+## 0.13.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(cast): harden protocol, relay, caster, and client_core in Wave 1.
+
 ## 0.12.0
 
 > Note: This release has breaking changes.

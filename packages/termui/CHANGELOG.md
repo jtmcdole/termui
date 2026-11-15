@@ -1,3 +1,9 @@
+## 0.17.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(termui,termui_flutter): add Buffer.clearMetadata and harden atlas/IME handling.
+
 ## 0.16.0
 
 > Note: This release has breaking changes.
