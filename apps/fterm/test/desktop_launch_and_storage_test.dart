@@ -1255,6 +1255,46 @@ void _defineThrottledSettingsSaverTests() {
         expect(reloaded.getItem('stale_queued'), isNull);
       },
     );
+
+    test(
+      'FtermPreferences round-trips fontSize with clamping and corrupt JSON fallback',
+      () {
+        final mem = _CountingSettingsStorage();
+        const prefs = FtermPreferences(
+          audioMuted: true,
+          audioVolume: 0.4,
+          autoHideSingleTab: true,
+          macosOptionAsAlt: true,
+          fontSize: 18.5,
+        );
+        saveStoredPreferences(mem, prefs);
+        final decoded = loadStoredPreferences(mem);
+        expect(decoded, equals(prefs));
+        expect(decoded.effectiveFontSize(), equals(18.5));
+
+        expect(
+          FtermPreferences.fromJsonString(
+            jsonEncode({'fontSize': 2.0}),
+          ).fontSize,
+          equals(FtermPreferences.minFontSize),
+        );
+        expect(
+          FtermPreferences.fromJsonString(
+            jsonEncode({'fontSize': 200.0}),
+          ).fontSize,
+          equals(FtermPreferences.maxFontSize),
+        );
+        expect(
+          FtermPreferences.fromJsonString(
+            jsonEncode({'fontSize': 'not-a-number'}),
+          ).fontSize,
+          isNull,
+        );
+
+        mem.setItem(ftermPreferencesStorageKey, '{corrupt json');
+        expect(loadStoredPreferences(mem), equals(const FtermPreferences()));
+      },
+    );
   });
 }
 

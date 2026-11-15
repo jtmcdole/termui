@@ -1591,8 +1591,17 @@ final class _MemoryTerminalPort implements TerminalPort {
   final Completer<int> _exitCode = Completer<int>();
   String _title = 'zsh';
   int oldestScrollbackLine = 0;
+  int clearSeq = 0;
+  int _renderRevision = 0;
   List<ScrollbackLine> scrollbackRows = const [];
   bool isDisposed = false;
+
+  void emitFrame() {
+    _renderRevision += 1;
+    for (final fn in [..._listeners]) {
+      fn();
+    }
+  }
 
   void emitAudio(TerminalAudioEvent event) {
     for (final fn in [..._audioListeners]) {
@@ -1627,7 +1636,7 @@ final class _MemoryTerminalPort implements TerminalPort {
   String get id => 'mem-port';
 
   @override
-  int get renderRevision => 0;
+  int get renderRevision => _renderRevision;
 
   @override
   int get fullSyncRevision => 0;
@@ -1655,7 +1664,7 @@ final class _MemoryTerminalPort implements TerminalPort {
 
   @override
   ScrollbackWindowData get scrollbackWindow => (
-    clearSeq: 0,
+    clearSeq: clearSeq,
     oldestLine: oldestScrollbackLine,
     totalLines: oldestScrollbackLine + scrollbackRows.length,
   );
@@ -3842,6 +3851,134 @@ void _defineWave2HardeningTests() {
         expect(driver.hasActiveSharePolling, isFalse);
       },
     );
+
+    test(
+      'workspace adjustFontSize and resetFontSize clamp and fall back to defaultFontSize',
+      () async {
+        final harness = AppThreeWayWsHarness();
+        final repo = CastClientRepository(
+          transport: WsClientTransport(
+            channelFactory: harness.openClientChannel,
+          ),
+        );
+        final driver = _GateableLocalHostDriver(
+          harness: harness,
+          startGate: Completer<void>()..complete(),
+        );
+        final workspace = FtermWorkspaceController(
+          launchConfig: CastLaunchConfig(
+            token: harness.token,
+            promptForConnection: false,
+          ),
+          repository: repo,
+          localHostDriver: driver,
+          audioController: FtermAudioController(
+            engineFactory: _FakeAudioEngine.new,
+          ),
+          storage: _InMemorySettingsStorage(),
+          defaultFontSize: 15.0,
+        );
+        addTearDown(() async {
+          await workspace.dispose();
+          await repo.dispose();
+          await driver.dispose();
+          await harness.dispose();
+        });
+
+        expect(workspace.effectiveFontSize, equals(15.0));
+        workspace.adjustFontSize(2.0);
+        expect(workspace.effectiveFontSize, equals(17.0));
+        workspace.adjustFontSize(-100.0);
+        expect(
+          workspace.effectiveFontSize,
+          equals(FtermPreferences.minFontSize),
+        );
+        workspace.adjustFontSize(200.0);
+        expect(
+          workspace.effectiveFontSize,
+          equals(FtermPreferences.maxFontSize),
+        );
+        workspace.resetFontSize();
+        expect(workspace.preferences.fontSize, isNull);
+        expect(workspace.effectiveFontSize, equals(15.0));
+      },
+    );
+
+    test(
+      'FtermPaneController.pillNotifier stays silent on 0 -> 0 PTY streaming and notifies on +N -> 0 reset, share updates, and exit',
+      () async {
+        final harness = AppThreeWayWsHarness();
+        final driver = _GateableLocalHostDriver(
+          harness: harness,
+          startGate: Completer<void>()..complete(),
+        );
+        final host =
+            await driver.openShell(const LocalShellConfig())
+                as _GateableLocalPaneHost;
+        final controller = FtermPaneController(
+          paneId: 'pane-pill',
+          port: host.port,
+          localHost: host,
+          colorResolver: TerminalColorResolver(
+            theme: tui.TerminalColorTheme.termuiDark,
+            settings: const TerminalThemeSettings(),
+          ),
+        );
+        addTearDown(() async {
+          await controller.dispose();
+          await host.dispose();
+          await harness.dispose();
+        });
+
+        var pillHits = 0;
+        var visualHits = 0;
+        controller.pillNotifier.addListener(() => pillHits += 1);
+        controller.visualNotifier.addListener(() => visualHits += 1);
+
+        // Emit normal PTY frames while scrollOffset == 0 -> 0.
+        host.port.scrollbackRows = List<ScrollbackLine>.generate(
+          20,
+          (i) => ScrollbackLine(
+            width: 80,
+            characters: ['L', '$i'],
+            attributes: Uint32List(6),
+            uris: const [null, null],
+          ),
+        );
+        for (var i = 0; i < 10; i++) {
+          host.port.emitFrame();
+        }
+        await Future<void>.delayed(Duration.zero);
+        expect(visualHits, greaterThan(0));
+        expect(pillHits, equals(0));
+
+        // Scroll into scrollback (0 -> +2), then clearSeq reset (+2 -> 0).
+        controller.scrollLines(2);
+        expect(controller.scrollOffsetLines, equals(2));
+        expect(pillHits, equals(1));
+
+        host.port.clearSeq += 1;
+        host.port.scrollbackRows = const [];
+        host.port.emitFrame();
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.scrollOffsetLines, equals(0));
+        expect(pillHits, equals(2));
+
+        // Share update and process exit notify pillNotifier.
+        await host.startShare(
+          serverUri: Uri.parse('ws://127.0.0.1:8420/v1/caster'),
+          casterToken: 'tok',
+          title: 'pill-share',
+        );
+        await Future<void>.delayed(Duration.zero);
+        expect(pillHits, equals(3));
+
+        host.port.completeExit(0);
+        await Future<void>.delayed(Duration.zero);
+        expect(controller.hasExited, isTrue);
+        expect(pillHits, equals(4));
+      },
+    );
   });
 }
 
@@ -3849,6 +3986,7 @@ final class _GateableLocalHostDriver implements LocalHostDriver {
   final AppThreeWayWsHarness harness;
   final Completer<void> startGate;
   final List<_GateableLocalPaneHost> hosts = [];
+  final List<LocalShellConfig> openedConfigs = [];
 
   _GateableLocalHostDriver({required this.harness, required this.startGate});
 
@@ -3857,6 +3995,7 @@ final class _GateableLocalHostDriver implements LocalHostDriver {
 
   @override
   Future<LocalPaneHost> openShell(LocalShellConfig config) async {
+    openedConfigs.add(config);
     final host = _GateableLocalPaneHost(
       id: 'gated-${hosts.length + 1}',
       harness: harness,
@@ -3936,5 +4075,9 @@ final class _GateableLocalPaneHost implements LocalPaneHost {
     await port.dispose();
     if (!_exitCode.isCompleted) _exitCode.complete(0);
     await _shareUpdates.close();
+  }
+
+  void completeExit(int code) {
+    if (!_exitCode.isCompleted) _exitCode.complete(code);
   }
 }

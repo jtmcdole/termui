@@ -144,6 +144,7 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
       audioController: audio,
       storage: storage,
       defaultDockPosition: widget.initialDockPosition,
+      defaultFontSize: widget.fontSize,
       initialBrightness: _resolvePlatformBrightness(),
       resizeDebounce: widget.resizeDebounce,
       clock: widget.clock,

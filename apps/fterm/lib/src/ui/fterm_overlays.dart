@@ -7,6 +7,7 @@ import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 
 import '../font_loader.dart';
 import '../launch_config.dart';
+import '../settings_storage.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
 
@@ -568,6 +569,8 @@ final class _SettingsOverlay extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
+            _FontSizeControls(workspace: workspace, palette: p),
+            const SizedBox(height: 10),
             Text(
               'Tab Bar Position',
               style: TextStyle(color: p.muted, fontSize: 11),
@@ -674,6 +677,59 @@ final class _SettingsOverlay extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+final class _FontSizeControls extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final _OverlayColors palette;
+
+  const _FontSizeControls({required this.workspace, required this.palette});
+
+  String _formatFontSize(double size) => size == size.roundToDouble()
+      ? '${size.toInt()} pt'
+      : '${size.toStringAsFixed(1)} pt';
+
+  @override
+  Widget build(BuildContext context) {
+    final size = workspace.effectiveFontSize;
+    final canDecrease = size > FtermPreferences.minFontSize;
+    final canIncrease = size < FtermPreferences.maxFontSize;
+    final hasOverride = workspace.preferences.fontSize != null;
+
+    return Row(
+      children: [
+        Text('Font Size', style: TextStyle(color: palette.muted, fontSize: 11)),
+        const Spacer(),
+        OutlinedButton(
+          key: const ValueKey('settings-font-decrease'),
+          onPressed: canDecrease ? () => workspace.adjustFontSize(-1.0) : null,
+          child: const Text('-'),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          _formatFontSize(size),
+          key: const ValueKey('settings-font-size-value'),
+          style: TextStyle(
+            color: palette.foreground,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        const SizedBox(width: 8),
+        OutlinedButton(
+          key: const ValueKey('settings-font-increase'),
+          onPressed: canIncrease ? () => workspace.adjustFontSize(1.0) : null,
+          child: const Text('+'),
+        ),
+        const SizedBox(width: 8),
+        TextButton(
+          key: const ValueKey('settings-font-reset'),
+          onPressed: hasOverride ? workspace.resetFontSize : null,
+          child: const Text('Reset'),
+        ),
+      ],
     );
   }
 }
@@ -859,7 +915,9 @@ final class _HelpOverlay extends StatelessWidget {
     (r'Ctrl+\ then d / Space', 'Cycle tab bar (top -> left -> hidden)'),
     (r'Ctrl+\ then , / i / ?', 'Settings / Stats / Help'),
     ('Cmd+T/W/D/Shift+D/1..9', 'Native macOS Desktop shortcuts'),
+    ('Cmd+= / Cmd+- / Cmd+0', 'Zoom font in / out / reset (macOS)'),
     ('Ctrl+Shift+T/W/D/E', 'Native Linux / Windows shortcuts'),
+    ('Ctrl+= / Ctrl+- / Ctrl+0', 'Zoom font in / out / reset (Linux/Win)'),
   ];
 
   @override

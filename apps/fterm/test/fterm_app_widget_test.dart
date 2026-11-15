@@ -54,6 +54,7 @@ void main() {
   _defineMultiPtyAndConnectionOverlayTests();
   _defineInputScrollUploadAndLinkTests();
   _defineThemeLifecycleAndPixelMouseTests();
+  _definePersistedPreferencesStartupTests();
 }
 
 void _defineCastLaunchConfigTests() {
@@ -1139,6 +1140,74 @@ void _defineThemeLifecycleAndPixelMouseTests() {
   );
 }
 
+void _definePersistedPreferencesStartupTests() {
+  testWidgets(
+    'loads persisted fontSize at startup and scales GlyphAtlasController with MediaQuery TextScaler without double-baking',
+    (tester) async {
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.binding.setSurfaceSize(const Size(900, 560));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final storage = _MemorySettingsStorage();
+      saveStoredPreferences(storage, const FtermPreferences(fontSize: 16.0));
+
+      Future<void> verifyStartupFont({
+        required TextScaler scaler,
+        required double expectedSize,
+      }) async {
+        final driver = _ExitTestLocalHostDriver();
+        FtermWorkspaceController? workspace;
+        final app = FtermApp(
+          config: CastLaunchConfig(promptForConnection: true),
+          localHostDriver: driver,
+          settingsStorage: storage,
+          resizeDebounce: Duration.zero,
+          fileDropBridgeFactory:
+              ({required onDragHoverChanged, required onFilesDropped}) =>
+                  _TestFileDropBridge(onDispose: () {}),
+          onWorkspaceCreated: (ws) => workspace = ws,
+        );
+        await tester.pumpWidget(
+          scaler == TextScaler.noScaling
+              ? app
+              : MediaQuery(
+                  data: MediaQueryData(
+                    textScaler: scaler,
+                    devicePixelRatio: 1.0,
+                  ),
+                  child: app,
+                ),
+        );
+        await settleCastApp(tester);
+
+        expect(workspace!.preferences.fontSize, equals(16.0));
+        expect(workspace!.effectiveFontSize, equals(16.0));
+        final surface = tester.widget<TerminalSurface>(
+          find.byType(TerminalSurface),
+        );
+        expect(surface.fontSize, equals(expectedSize));
+        expect(surface.atlasController!.fontSize, equals(expectedSize));
+        expect(surface.atlasController!.atlas?.fontSize, equals(expectedSize));
+        expect(surface.atlasController!.generationId, equals(1));
+        expect(surface.atlasController!.debugCreatedAtlasCount, equals(1));
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(() async {
+          await workspace!.dispose();
+          await driver.dispose();
+        });
+      }
+
+      await verifyStartupFont(scaler: TextScaler.noScaling, expectedSize: 16.0);
+      await verifyStartupFont(
+        scaler: const TextScaler.linear(1.5),
+        expectedSize: 24.0,
+      );
+    },
+  );
+}
+
 final class _FailingAudioEngine implements TermuiAudioEngine {
   final VoidCallback _onInit;
 
@@ -1335,6 +1404,7 @@ final class _ExitTestLocalHostDriver implements LocalHostDriver {
   final PtyRouter _router = PtyRouter();
   final List<_ExitTestRoutedBackend> backends = [];
   final List<_ExitTestLocalPaneHost> hosts = [];
+  final List<LocalShellConfig> openedConfigs = [];
   bool disposed = false;
 
   @override
@@ -1342,6 +1412,7 @@ final class _ExitTestLocalHostDriver implements LocalHostDriver {
 
   @override
   Future<LocalPaneHost> openShell(LocalShellConfig config) async {
+    openedConfigs.add(config);
     final backend = _ExitTestRoutedBackend();
     backends.add(backend);
     final session = _router.createSession(backend: backend);

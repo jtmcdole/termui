@@ -23,6 +23,7 @@ import 'package:termui_flutter/termui_flutter.dart';
 
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
+import '../settings_storage.dart';
 import '../workspace/fterm_pane_controller.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/local_host_driver.dart';
@@ -73,8 +74,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   static const double macOsTrafficLightInset = 72.0;
   static const MethodChannel _windowChannel = MethodChannel('fterm/window');
 
-  late final GlyphAtlasController _atlasController;
-  late final FtermShortcutDispatcher _shortcutDispatcher;
+  GlyphAtlasController? _atlasController;
+  late FtermShortcutDispatcher _shortcutDispatcher;
   late final TerminalService _terminalService;
   final Map<String, FocusNode> _paneFocusNodes = {};
   final Map<String, GlobalKey<State<TerminalSurface>>> _paneSurfaceKeys = {};
@@ -85,6 +86,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   String? _lastRequestedFocusedPaneId;
   Object? _lastLayoutSignature;
   bool _hadBakedAtlas = false;
+  bool _atlasInitRequested = false;
   DateTime? _lastTabTapAt;
   String? _lastTabTapId;
 
@@ -92,14 +94,42 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       widget.platformOverride ?? defaultTargetPlatform;
   bool get _isWeb => widget.isWebOverride ?? kIsWeb;
 
+  double _resolvedFontSize(BuildContext context) {
+    final baseFontSize = widget.workspace.preferences.effectiveFontSize(
+      widget.fontSize,
+    );
+    final scaler =
+        MediaQuery.maybeTextScalerOf(context) ?? TextScaler.noScaling;
+    return scaler
+        .scale(baseFontSize)
+        .clamp(FtermPreferences.minFontSize, FtermPreferences.maxFontSize)
+        .toDouble();
+  }
+
+  double? _resolveDevicePixelRatio() {
+    final dpr =
+        MediaQuery.maybeDevicePixelRatioOf(context) ??
+        View.maybeOf(context)?.devicePixelRatio;
+    return (dpr != null && dpr.isFinite && dpr > 0) ? dpr : null;
+  }
+
+  void _syncAtlasConfig() {
+    final ctrl = _atlasController;
+    if (!mounted || ctrl == null) return;
+    unawaited(
+      ctrl.updateConfig(
+        fontSize: _resolvedFontSize(context),
+        devicePixelRatio: _resolveDevicePixelRatio(),
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _atlasController = GlyphAtlasController(
-      fontSize: widget.fontSize,
-      fontFamily: castPrimaryFontFamily,
-      fontFamilyFallback: castFallbackFontFamilies,
+    final initialFontSize = widget.workspace.preferences.effectiveFontSize(
+      widget.fontSize,
     );
     _shortcutDispatcher = FtermShortcutDispatcher(
       workspace: widget.workspace,
@@ -107,25 +137,35 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       isWebOverride: widget.isWebOverride,
     );
     _terminalService = _FtermTerminalService(onOpenUrl: widget.onOpenUrl);
-    _atlasController.addListener(_onAtlasChanged);
     widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
-    _lastLayoutSignature = _computeLayoutSignature();
+    _lastLayoutSignature = _computeLayoutSignature(
+      resolvedFontSize: initialFontSize,
+    );
     FocusManager.instance.addEarlyKeyEventHandler(_handleEarlyF12Event);
   }
 
-  void _syncDevicePixelRatio() {
-    if (!mounted || _atlasController.atlas == null) return;
-    final dpr =
-        View.maybeOf(context)?.devicePixelRatio ??
-        MediaQuery.maybeDevicePixelRatioOf(context);
-    if (dpr != null && dpr.isFinite && dpr > 0) {
-      unawaited(_atlasController.setDevicePixelRatio(dpr));
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_atlasInitRequested) {
+      _atlasInitRequested = true;
+      final ctrl = GlyphAtlasController(
+        fontSize: _resolvedFontSize(context),
+        devicePixelRatio: _resolveDevicePixelRatio() ?? 1.0,
+        fontFamily: castPrimaryFontFamily,
+        fontFamilyFallback: castFallbackFontFamilies,
+      )..addListener(_onAtlasChanged);
+      _atlasController = ctrl;
+      unawaited(ctrl.ensureInitialized());
+    } else {
+      _syncAtlasConfig();
     }
+    _lastLayoutSignature = _computeLayoutSignature();
   }
 
   @override
   void didChangeMetrics() {
-    _syncDevicePixelRatio();
+    _syncAtlasConfig();
     if (_isWeb && mounted) {
       setState(() {});
     }
@@ -134,7 +174,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _syncDevicePixelRatio();
+      _syncAtlasConfig();
       if (_isWeb && mounted) {
         setState(() {});
       }
@@ -142,7 +182,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   }
 
   void _onAtlasChanged() {
-    final hasAtlas = _atlasController.atlas != null;
+    final hasAtlas = _atlasController?.atlas != null;
     if (hasAtlas && !_hadBakedAtlas) {
       _hadBakedAtlas = true;
       _lastRequestedFocusedPaneId = null;
@@ -156,7 +196,16 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   void didUpdateWidget(FtermShellScaffold oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.fontSize != widget.fontSize) {
-      unawaited(_atlasController.updateConfig(fontSize: widget.fontSize));
+      _syncAtlasConfig();
+    }
+    if (!identical(oldWidget.workspace, widget.workspace) ||
+        oldWidget.platformOverride != widget.platformOverride ||
+        oldWidget.isWebOverride != widget.isWebOverride) {
+      _shortcutDispatcher = FtermShortcutDispatcher(
+        workspace: widget.workspace,
+        platformOverride: widget.platformOverride,
+        isWebOverride: widget.isWebOverride,
+      );
     }
     if (!identical(oldWidget.workspace, widget.workspace)) {
       oldWidget.workspace.chromeNotifier.removeListener(
@@ -164,11 +213,12 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       );
       widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
       _lastRequestedFocusedPaneId = null;
+      _syncAtlasConfig();
       _lastLayoutSignature = _computeLayoutSignature();
     }
   }
 
-  Object _computeLayoutSignature() {
+  Object _computeLayoutSignature({double? resolvedFontSize}) {
     final ws = widget.workspace;
     return Object.hashAll([
       ws.activeTabIndex,
@@ -178,6 +228,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ws.activeTerminalTheme,
       ws.workspaceSettings.themeSettings.faintOpacity,
       ws.preferences.macosOptionAsAlt,
+      ws.preferences.fontSize,
+      resolvedFontSize ?? _resolvedFontSize(context),
       for (final tab in ws.tabs) ...[
         tab.tabId,
         identityHashCode(tab.splitTree),
@@ -188,6 +240,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   void _onWorkspaceChromeChanged() {
     if (!mounted) return;
     _pruneDisposedFocusNodes();
+    _syncAtlasConfig();
     final nextSignature = _computeLayoutSignature();
     if (nextSignature != _lastLayoutSignature) {
       _lastLayoutSignature = nextSignature;
@@ -223,7 +276,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       _unfocusWorkspacePanes();
       return;
     }
-    if (_atlasController.atlas == null) {
+    if (_atlasController?.atlas == null) {
       _lastRequestedFocusedPaneId = null;
       return;
     }
@@ -378,7 +431,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     FocusManager.instance.removeEarlyKeyEventHandler(_handleEarlyF12Event);
-    _atlasController.removeListener(_onAtlasChanged);
+    _atlasController?.removeListener(_onAtlasChanged);
     widget.workspace.chromeNotifier.removeListener(_onWorkspaceChromeChanged);
     for (final node in _paneFocusNodes.values) {
       node.dispose();
@@ -386,7 +439,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     _paneFocusNodes.clear();
     _paneSurfaceKeys.clear();
     _emptyWorkspaceFocusNode.dispose();
-    _atlasController.dispose();
+    _atlasController?.dispose();
+    _atlasController = null;
     super.dispose();
   }
 
@@ -398,7 +452,10 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     final dock = widget.workspace.dockPosition;
     final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
 
-    final Widget mainContent = Expanded(child: _buildActiveTabBody(theme));
+    final resolvedFontSize = _resolvedFontSize(context);
+    final Widget mainContent = Expanded(
+      child: _buildActiveTabBody(theme, resolvedFontSize),
+    );
 
     final Widget workspaceLayout = switch ((showBar, dock)) {
       (true, DockPosition.top) => Column(
@@ -418,7 +475,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           mainContent,
         ],
       ),
-      _ => _buildActiveTabBody(theme),
+      _ => _buildActiveTabBody(theme, resolvedFontSize),
     };
 
     return Scaffold(
@@ -450,7 +507,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     );
   }
 
-  Widget _buildActiveTabBody(tui.TerminalColorTheme theme) {
+  Widget _buildActiveTabBody(tui.TerminalColorTheme theme, double fontSize) {
     final tab = widget.workspace.activeTab;
     if (tab == null) {
       return _buildEmptyWorkspaceState(theme);
@@ -467,6 +524,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           tab: tab,
           showFocusBorder: false,
           theme: theme,
+          fontSize: fontSize,
         );
       }
     }
@@ -486,6 +544,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           tab: tab,
           showFocusBorder: tree.paneCount > 1,
           theme: theme,
+          fontSize: fontSize,
         );
       },
     );
@@ -540,6 +599,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     required FtermTabState tab,
     required bool showFocusBorder,
     required tui.TerminalColorTheme theme,
+    required double fontSize,
   }) {
     final isFocused = pane.paneId == tab.splitTree.focusedPaneId;
     final bgColor = Color(theme.background.argb);
@@ -571,7 +631,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
             mouseTrackingProvider: pane.readMouseTracking,
             copyOnSelectProvider: _readCopyOnSelect,
             macosOptionAsAlt: widget.workspace.preferences.macosOptionAsAlt,
-            fontSize: widget.fontSize,
+            fontSize: fontSize,
             fontFamily: castPrimaryFontFamily,
             fontFamilyFallback: castFallbackFontFamilies,
             backgroundColor: bgColor,
@@ -644,7 +704,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   ) => ListenableBuilder(
     listenable: Listenable.merge([
       widget.workspace.chromeNotifier,
-      pane.visualNotifier,
+      pane.pillNotifier,
     ]),
     builder: (_, _) {
       final labels = _collectPaneCornerLabels(pane, tab);
