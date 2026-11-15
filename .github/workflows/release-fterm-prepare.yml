@@ -70,15 +70,30 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          BEFORE_SHA="$(git rev-parse HEAD)"
           RELEASE_BRANCH="release/fterm"
-          git checkout -B "$RELEASE_BRANCH"
+          git checkout -B "$RELEASE_BRANCH" --track origin/main
+
+          restore_workspace_manifest() {
+            git checkout -- pubspec.yaml
+          }
+          trap restore_workspace_manifest EXIT
+
+          MELOS_BIN="$(python3 -c 'import json, os, urllib.parse; cfg = json.load(open(".dart_tool/package_config.json")); uri = next(p["rootUri"] for p in cfg["packages"] if p["name"] == "melos"); p = urllib.parse.unquote(urllib.parse.urlparse(uri).path); p = p[1:] if len(p) > 2 and p[0] == "/" and p[2] == ":" else p; print(os.path.join(p, "bin", "melos.dart"))')"
+
+          # Temporarily exclude packages/* from the workspace list so Melos
+          # does not block bumping unpublished apps/* when packages/* have
+          # commits not yet published to pub.dev.
+          python3 -c 'import re; p = open("pubspec.yaml").read(); updated = re.sub(r"(?m)^[ \t]*-[ \t]*packages/[^\r\n]+\r?\n", "", p); assert p != updated, "Failed to strip packages/* entries from pubspec.yaml"; open("pubspec.yaml", "w").write(updated)'
+          # Keep pubspec.lock newer than the temporary pubspec.yaml so
+          # cli_launcher does not re-run `flutter pub get` without packages/*.
+          touch pubspec.lock
 
           MELOS_ARGS=(
             version
             --yes
             --all
             --no-git-tag-version
+            --no-git-commit-version
             --scope=fterm
             --scope=termui_cast_protocol
             --scope=termui_cast_server
@@ -95,18 +110,16 @@ jobs:
             MELOS_ARGS+=("--manual-version=fterm:${MANUAL_VERSION}")
           fi
 
-          COMMIT_MSG=$'chore(fterm-release): release fterm\n\n{new_package_versions}'
-          dart run melos "${MELOS_ARGS[@]}" --message="$COMMIT_MSG"
+          dart --packages=.dart_tool/package_config.json "$MELOS_BIN" "${MELOS_ARGS[@]}"
 
-          AFTER_SHA="$(git rev-parse HEAD)"
-          if [ "$AFTER_SHA" = "$BEFORE_SHA" ]; then
-            echo "::error::Melos did not bump any packages under apps/. Either apps/ has no new Conventional Commits since the last release tag, or a workspace dependency under packages/ has unreleased changes (run 'Prepare release' first)."
+          if [ -z "$(git status --porcelain -- apps/)" ]; then
+            echo "::error::Melos did not bump any packages under apps/. Check that apps/ has new Conventional Commits since the last release tag (or pass manual_version)."
             exit 1
           fi
 
           # If only termui_cast_server (a dev_dependency of fterm) had commits,
           # also bump fterm so apps/fterm/pubspec.yaml advances for the release tag.
-          if git diff --quiet "$BEFORE_SHA" HEAD -- apps/fterm/pubspec.yaml; then
+          if git diff --quiet -- apps/fterm/pubspec.yaml; then
             cur_ver="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#]*\).*/\1/p' apps/fterm/pubspec.yaml | head -n 1)"
             if [ "$IS_PRERELEASE" = "true" ]; then
               if [[ "$cur_ver" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-([0-9A-Za-z-]+)\.([0-9]+)$ ]]; then
@@ -119,18 +132,17 @@ jobs:
             else
               bump_spec="patch"
             fi
-            dart run melos version \
+            dart --packages=.dart_tool/package_config.json "$MELOS_BIN" version \
               --yes \
               --all \
               --no-git-tag-version \
               --no-git-commit-version \
               --scope=fterm \
               "--manual-version=fterm:${bump_spec}"
-            git add apps/fterm/pubspec.yaml apps/fterm/CHANGELOG.md
-            if [ -f CHANGELOG.md ]; then
-              git add CHANGELOG.md
-            fi
           fi
+
+          restore_workspace_manifest
+          trap - EXIT
 
           FTERM_VERSION="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#+]*\).*/\1/p' apps/fterm/pubspec.yaml | head -n 1)"
           if [[ ! "$FTERM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
@@ -145,7 +157,7 @@ jobs:
               apps/termui_cast/server/pubspec.yaml \
               apps/termui_cast/caster_cli/pubspec.yaml \
               apps/termui_cast/client_core/pubspec.yaml; do
-              if ! git diff --quiet "$BEFORE_SHA" HEAD -- "$pubspec" || ! git diff --cached --quiet -- "$pubspec"; then
+              if ! git diff --quiet -- "$pubspec"; then
                 pkg_name="$(sed -n 's/^name:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$pubspec" | head -n 1)"
                 pkg_ver="$(sed -n 's/^version:[[:space:]]*\([^[:space:]#]*\).*/\1/p' "$pubspec" | head -n 1)"
                 printf ' - %s@%s\n' "$pkg_name" "$pkg_ver"
@@ -153,8 +165,13 @@ jobs:
             done
           )"
 
+          git add apps/
+          if [ -f CHANGELOG.md ]; then
+            git add CHANGELOG.md
+          fi
+
           PR_TITLE="chore(fterm-release): release fterm v${FTERM_VERSION}"
-          git commit --amend -m "$(printf '%s\n\n%s\n' "$PR_TITLE" "$PACKAGE_LIST")"
+          git commit -m "$(printf '%s\n\n%s\n' "$PR_TITLE" "$PACKAGE_LIST")"
 
           PUSH_TOKEN="${PAT_TOKEN:-$DEFAULT_TOKEN}"
           AUTH_HEADER="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 -w 0)"
