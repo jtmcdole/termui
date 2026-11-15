@@ -1,3 +1,4 @@
+#!include:.gitignore
 .git/
 .github/
 .agents/
@@ -23,6 +24,10 @@ trace*.json.gz
 browser_trace*.json.gz
 tmp/
 .env*
+*.pem
+*.key
+*sa-key*.json
+*credentials*.json
 **/test/
 packages/*/example/lib/
 packages/*/example/web/

@@ -25,7 +25,7 @@ jobs:
         suite: [dart, flutter]
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -44,7 +44,7 @@ jobs:
 
       - name: Set up Dart (pure Dart lane)
         if: matrix.suite == 'dart'
-        uses: dart-lang/setup-dart@v1
+        uses: dart-lang/setup-dart@2286a0c042b44434fe26d292bbce8d34f7ec662b # v1.8.2
         with:
           sdk: stable
 
@@ -68,7 +68,7 @@ jobs:
 
       - name: Set up Flutter (Flutter lane)
         if: matrix.suite == 'flutter'
-        uses: subosito/flutter-action@v2
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           channel: stable
           cache: true
@@ -81,20 +81,8 @@ jobs:
         if: matrix.suite == 'flutter'
         run: flutter pub get
 
-      - name: Normalize SoLoud source timestamps for CMake cache
-        shell: pwsh
-        run: |
-          "IMAGE_VERSION=$($env:ImageVersion)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          $epoch = [datetime]'2020-01-01T00:00:00Z'
-          @(Get-Item packages/termui_audio/CMakeLists.txt) + @(
-            Get-ChildItem -Path packages/termui_audio/src, packages/termui_audio/windows/include, packages/termui_audio/windows/libs, packages/termui_audio/macos/include, packages/termui_audio/macos/libs, packages/termui_audio/linux/include, packages/termui_audio/linux/libs -Recurse -File
-          ) | ForEach-Object { $_.LastWriteTimeUtc = $epoch }
-
-      - name: Cache SoLoud CMake native assets
-        uses: actions/cache@v5
-        with:
-          path: .dart_tool/hooks_runner/shared/termui_audio/build
-          key: ${{ runner.os }}-${{ env.IMAGE_VERSION }}-soloud-cmake-${{ hashFiles('pubspec.lock', 'packages/termui_audio/pubspec.yaml', 'packages/termui_audio/CMakeLists.txt', 'packages/termui_audio/src/**', 'packages/termui_audio/hook/**', 'packages/termui_audio/windows/include/**', 'packages/termui_audio/windows/libs/**', 'packages/termui_audio/macos/include/**', 'packages/termui_audio/macos/libs/**', 'packages/termui_audio/linux/include/**', 'packages/termui_audio/linux/libs/**') }}
+      - name: Set up SoLoud CMake cache
+        uses: ./.github/actions/setup-soloud
 
       - name: Run ${{ matrix.suite }} unit tests
         shell: pwsh

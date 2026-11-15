@@ -25,8 +25,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Preflight release checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Validate version and tag availability
+        run: |
+          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version '$RELEASE_VERSION'. Expected semantic version like 0.1.0 or 0.1.0-rc.1."
+            exit 1
+          fi
+          TAG="fterm-v${RELEASE_VERSION}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists."
+            exit 1
+          fi
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: Build (${{ matrix.target }})
+    needs: preflight
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     permissions:
@@ -53,16 +76,6 @@ jobs:
             build_desktop: false
 
     steps:
-      - name: Validate version input
-        shell: bash
-        run: |
-          if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Invalid version '$RELEASE_VERSION'. Expected semantic version like 0.1.0 or 0.1.0-rc.1."
-            exit 1
-          fi
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -94,7 +107,7 @@ jobs:
         run: |
           mkdir -p dist
           if [ "$BUILD_DESKTOP" = "true" ]; then
-            (cd apps/fterm && flutter build "$DESKTOP_OS" --release)
+            (cd apps/fterm && flutter build "$DESKTOP_OS" --release --build-name="$RELEASE_VERSION")
             if [ "$DESKTOP_OS" = "macos" ]; then
               tar -C apps/fterm/build/macos/Build/Products/Release -czf "dist/fterm-${TARGET}.tar.gz" fterm.app
             else
@@ -120,6 +133,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           BUILD_DESKTOP: ${{ matrix.build_desktop }}
           DESKTOP_OS: ${{ runner.os == 'macOS' && 'macos' || 'linux' }}
+          RELEASE_VERSION: ${{ inputs.version }}
 
       - name: Build and package Windows bundles
         if: runner.os == 'Windows'
@@ -128,10 +142,9 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           if ($env:BUILD_DESKTOP -eq "true") {
             Push-Location apps/fterm
-            flutter build windows --release
+            flutter build windows --release --build-name="$env:RELEASE_VERSION"
             if ($LASTEXITCODE -ne 0) { throw "flutter build windows failed ($LASTEXITCODE)" }
             Pop-Location
-            Compress-Archive -Path "apps/fterm/build/windows/x64/runner/Release/*" -DestinationPath "dist/fterm-$($env:TARGET).zip" -Force
           }
           dart build cli -t apps/termui_cast/caster_cli/bin/termui_cast.dart -o build/caster
           & "./build/caster/bundle/bin/termui_cast.exe" --help | Out-Null
@@ -141,10 +154,84 @@ jobs:
           & "./build/caster/bundle/bin/termui_cast_server.exe" --help | Out-Null
           & "./build/caster/bundle/bin/termui_cast_server.exe" --host 0.0.0.0 2>$null
           if ($LASTEXITCODE -ne 64) { throw "Expected exit code 64 from termui_cast_server.exe, got $LASTEXITCODE" }
-          Compress-Archive -Path "build/caster/bundle/*" -DestinationPath "dist/termui_cast-$($env:TARGET).zip" -Force
+
+          $conptyDir = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "pty2\conpty\*\x64") -Directory |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $conptyDir) {
+            throw "Missing staged ConPTY x64 directory under $env:LOCALAPPDATA\pty2\conpty"
+          }
+          $conptyFiles = @("conpty.dll", "OpenConsole.exe")
+          foreach ($file in $conptyFiles) {
+            if (-not (Test-Path (Join-Path $conptyDir.FullName $file))) {
+              throw "Missing $file in $($conptyDir.FullName)"
+            }
+          }
+
+          $noticesPath = Join-Path $conptyDir.FullName "THIRD-PARTY-NOTICES.txt"
+          @"
+          Microsoft.Windows.Console.ConPTY (conpty.dll, OpenConsole.exe)
+          MIT License
+
+          Copyright (c) Microsoft Corporation.
+
+          Permission is hereby granted, free of charge, to any person obtaining a copy
+          of this software and associated documentation files (the "Software"), to deal
+          in the Software without restriction, including without limitation the rights
+          to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+          copies of the Software, and to permit persons to whom the Software is
+          furnished to do so, subject to the following conditions:
+
+          The above copyright notice and this permission notice shall be included in all
+          copies or substantial portions of the Software.
+
+          THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+          IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+          FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+          AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+          LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+          OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+          SOFTWARE.
+          "@ | Set-Content -Path $noticesPath -Encoding UTF8
+
+          $bundleEntries = $conptyFiles + @("THIRD-PARTY-NOTICES.txt")
+          $casterBinDir = "build/caster/bundle/bin"
+          foreach ($entry in $bundleEntries) {
+            Copy-Item -Path (Join-Path $conptyDir.FullName $entry) -Destination (Join-Path $casterBinDir $entry) -Force
+          }
+          $casterZip = "dist/termui_cast-$($env:TARGET).zip"
+          Compress-Archive -Path "build/caster/bundle/*" -DestinationPath $casterZip -Force
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          function Assert-ZipEntries {
+            param([string]$ZipPath, [string[]]$RequiredEntries)
+            $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $ZipPath))
+            try {
+              $names = $zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
+              foreach ($req in $RequiredEntries) {
+                if ($names -notcontains $req) {
+                  throw "Archive $ZipPath is missing required entry '$req'"
+                }
+              }
+            } finally {
+              $zip.Dispose()
+            }
+          }
+          Assert-ZipEntries -ZipPath $casterZip -RequiredEntries @("bin/conpty.dll", "bin/OpenConsole.exe", "bin/THIRD-PARTY-NOTICES.txt")
+
+          if ($env:BUILD_DESKTOP -eq "true") {
+            $ftermReleaseDir = "apps/fterm/build/windows/x64/runner/Release"
+            foreach ($entry in $bundleEntries) {
+              Copy-Item -Path (Join-Path $conptyDir.FullName $entry) -Destination (Join-Path $ftermReleaseDir $entry) -Force
+            }
+            $ftermZip = "dist/fterm-$($env:TARGET).zip"
+            Compress-Archive -Path "$ftermReleaseDir/*" -DestinationPath $ftermZip -Force
+            Assert-ZipEntries -ZipPath $ftermZip -RequiredEntries $bundleEntries
+          }
         env:
           TARGET: ${{ matrix.target }}
           BUILD_DESKTOP: ${{ matrix.build_desktop }}
+          RELEASE_VERSION: ${{ inputs.version }}
 
       - name: Upload fterm desktop bundle artifact
         if: matrix.build_desktop
@@ -182,14 +269,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Configure Git
-        run: |
-          gh auth setup-git
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Tag and create GitHub Release
         run: |
           if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
@@ -197,12 +276,10 @@ jobs:
             exit 1
           fi
           TAG="fterm-v${RELEASE_VERSION}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
             echo "::error::Tag $TAG already exists."
             exit 1
           fi
-          git tag -a "$TAG" -m "Release $TAG" "$TARGET_SHA"
-          git push origin "$TAG"
           FLAGS=()
           if [ "$IS_DRAFT" = "true" ]; then
             FLAGS+=(--draft)
@@ -210,7 +287,7 @@ jobs:
           if [ "$IS_PRERELEASE" = "true" ]; then
             FLAGS+=(--prerelease)
           fi
-          gh release create "$TAG" dist/* --title "$TAG" --generate-notes "${FLAGS[@]}"
+          gh release create "$TAG" dist/* --target "$TARGET_SHA" --title "$TAG" --generate-notes "${FLAGS[@]}"
         env:
           RELEASE_VERSION: ${{ inputs.version }}
           IS_DRAFT: ${{ inputs.draft }}
