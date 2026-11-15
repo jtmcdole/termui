@@ -180,7 +180,11 @@ final class IoLocalHostDriver implements LocalHostDriver {
       throw StateError('IoLocalHostDriver is disposed.');
     }
     final executable = _resolveShellExecutable(config.executable);
-    final arguments = resolveShellArguments(config, executable);
+    final arguments = resolveShellArguments(
+      config,
+      executable,
+      isWindows: _isWindows,
+    );
     final envOverrides = resolveChildEnvironmentOverrides(Platform.environment);
     final backend = _backendFactory(
       executable: executable,
@@ -225,13 +229,28 @@ final class IoLocalHostDriver implements LocalHostDriver {
     return SessionId('fterm-$pid-$_sessionCounter-$nonce');
   }
 
-  static String _resolveShellExecutable(String? explicit) {
+  String _resolveShellExecutable(String? explicit) =>
+      resolveShellExecutable(explicit, isWindows: _isWindows);
+
+  /// Resolves the shell executable path from [explicit], `PATH` lookup for bare
+  /// command names, `pwsh.exe`/`COMSPEC`/`cmd.exe` on Windows, or `$SHELL` on POSIX.
+  @visibleForTesting
+  static String resolveShellExecutable(
+    String? explicit, {
+    String? pathEnv,
+    bool? isWindows,
+  }) {
+    final windows = isWindows ?? Platform.isWindows;
     final trimmed = explicit?.trim();
     if (trimmed != null && trimmed.isNotEmpty) {
+      if (!trimmed.contains('/') && !trimmed.contains(r'\')) {
+        return _findInPath(trimmed, pathEnv: pathEnv, isWindows: windows) ??
+            trimmed;
+      }
       return trimmed;
     }
-    if (Platform.isWindows) {
-      final pwsh = _findInPath('pwsh.exe');
+    if (windows) {
+      final pwsh = _findInPath('pwsh.exe', pathEnv: pathEnv, isWindows: true);
       if (pwsh != null) return pwsh;
       final comSpec = Platform.environment['COMSPEC']?.trim();
       return (comSpec != null && comSpec.isNotEmpty) ? comSpec : 'cmd.exe';
@@ -243,20 +262,56 @@ final class IoLocalHostDriver implements LocalHostDriver {
     return Platform.isMacOS ? '/bin/zsh' : '/bin/sh';
   }
 
-  static String? _findInPath(String binaryName) {
-    final pathEnv = Platform.environment['PATH'];
-    if (pathEnv == null || pathEnv.isEmpty) return null;
-    for (final entry in pathEnv.split(Platform.isWindows ? ';' : ':')) {
+  static List<String> _candidateExecutableNames(
+    String binaryName, {
+    required bool windows,
+  }) {
+    if (!windows || p.basename(binaryName).contains('.')) {
+      return [binaryName];
+    }
+    return [
+      '$binaryName.exe',
+      '$binaryName.cmd',
+      '$binaryName.bat',
+      binaryName,
+    ];
+  }
+
+  static String? _findInPath(
+    String binaryName, {
+    String? pathEnv,
+    bool? isWindows,
+  }) {
+    final windows = isWindows ?? Platform.isWindows;
+    final rawPath = pathEnv ?? Platform.environment['PATH'];
+    if (rawPath == null || rawPath.isEmpty) return null;
+    final names = _candidateExecutableNames(binaryName, windows: windows);
+    for (final entry in _splitPathEnv(rawPath, windows: windows)) {
       final dir = entry.trim();
       if (dir.isEmpty) continue;
-      final candidate = File(p.join(dir, binaryName));
-      if (candidate.existsSync()) return candidate.path;
+      for (final name in names) {
+        final candidate = File(p.join(dir, name));
+        if (candidate.existsSync()) return candidate.path;
+      }
     }
     return null;
   }
 
-  /// Resolves shell launch arguments, passing `['-l']` for default interactive
-  /// POSIX login shells when no explicit executable or arguments are set.
+  static final RegExp _posixPathSeparatorOnWindows = RegExp(
+    r'(?<!(?:^|:)[A-Za-z]):',
+  );
+
+  static List<String> _splitPathEnv(String rawPath, {required bool windows}) {
+    if (windows) return rawPath.split(';');
+    if (Platform.isWindows) {
+      return rawPath.split(_posixPathSeparatorOnWindows);
+    }
+    return rawPath.split(':');
+  }
+
+  /// Resolves shell launch arguments, passing `['-l']` for interactive POSIX
+  /// login shells when [LocalShellConfig.loginShell] is enabled (or `null` with
+  /// no explicit executable) and [LocalShellConfig.arguments] is empty.
   @visibleForTesting
   static List<String> resolveShellArguments(
     LocalShellConfig config,
@@ -264,8 +319,9 @@ final class IoLocalHostDriver implements LocalHostDriver {
     bool? isWindows,
   }) {
     final windows = isWindows ?? Platform.isWindows;
+    final effectiveLogin = config.loginShell ?? (config.executable == null);
     if (!windows &&
-        config.executable == null &&
+        effectiveLogin &&
         config.arguments.isEmpty &&
         _posixLoginShellNames.contains(p.basename(executable))) {
       return const ['-l'];

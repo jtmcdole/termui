@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 
 import 'settings_storage_stub.dart'
@@ -46,7 +47,7 @@ abstract interface class BatchSettingsStorage implements SettingsStorage {
 /// desktop).
 SettingsStorage get defaultSettingsStorage => impl.platformSettingsStorage;
 
-/// App-level `fterm` audio, font-size, and tab-bar preferences stored
+/// App-level `fterm` audio, font-size, shell, and tab-bar preferences stored
 /// alongside [CastWorkspaceSettings].
 final class FtermPreferences {
   /// Default unmuted audio volume in `[0.0, 1.0]`.
@@ -80,6 +81,18 @@ final class FtermPreferences {
   /// `[minFontSize, maxFontSize]`, or `null` to use widget/default sizing.
   final double? fontSize;
 
+  /// Optional explicit local shell executable override (trimmed; empty/blank
+  /// normalizes to `null` to use `$SHELL` / platform default).
+  final String? shellExecutable;
+
+  /// Optional explicit arguments forwarded to [shellExecutable] (unmodifiable
+  /// list of non-empty strings).
+  final List<String> shellArguments;
+
+  /// Whether POSIX local shells launch as login shells (`-l`) when
+  /// [shellArguments] is empty.
+  final bool loginShell;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
@@ -87,6 +100,9 @@ final class FtermPreferences {
     this.autoHideSingleTab = false,
     this.macosOptionAsAlt = false,
     this.fontSize,
+    this.shellExecutable,
+    this.shellArguments = const [],
+    this.loginShell = true,
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -102,6 +118,10 @@ final class FtermPreferences {
     bool? macosOptionAsAlt,
     double? fontSize,
     bool clearFontSize = false,
+    String? shellExecutable,
+    bool clearShellExecutable = false,
+    List<String>? shellArguments,
+    bool? loginShell,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -110,6 +130,13 @@ final class FtermPreferences {
     fontSize: clearFontSize
         ? null
         : _normalizeFontSize(fontSize ?? this.fontSize),
+    shellExecutable: clearShellExecutable
+        ? null
+        : _normalizeShellExecutable(shellExecutable ?? this.shellExecutable),
+    shellArguments: _normalizeShellArguments(
+      shellArguments ?? this.shellArguments,
+    ),
+    loginShell: loginShell ?? this.loginShell,
   );
 
   /// Decodes [FtermPreferences] from JSON string [raw], returning [defaults] on
@@ -125,6 +152,9 @@ final class FtermPreferences {
         autoHideSingleTab: decoded['autoHideSingleTab'] == true,
         macosOptionAsAlt: decoded['macosOptionAsAlt'] == true,
         fontSize: _parseFontSize(decoded['fontSize']),
+        shellExecutable: _parseShellExecutable(decoded['shellExecutable']),
+        shellArguments: _parseShellArguments(decoded['shellArguments']),
+        loginShell: _parseBool(decoded['loginShell'], fallback: true),
       );
     } on Object {
       return defaults;
@@ -147,6 +177,39 @@ final class FtermPreferences {
       ? null
       : value.clamp(minFontSize, maxFontSize).toDouble();
 
+  static String? _parseShellExecutable(Object? raw) => switch (raw) {
+    final String value => _normalizeShellExecutable(value),
+    _ => null,
+  };
+
+  static String? _normalizeShellExecutable(String? value) {
+    if (value == null) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
+  static List<String> _parseShellArguments(Object? raw) => switch (raw) {
+    final List<Object?> items => _normalizeShellArguments(<String>[
+      for (final item in items)
+        if (item case final String value) value,
+    ]),
+    _ => const [],
+  };
+
+  static List<String> _normalizeShellArguments(List<String> arguments) {
+    final filtered = <String>[
+      for (final arg in arguments)
+        if (arg.isNotEmpty) arg,
+    ];
+    return filtered.isEmpty ? const [] : List<String>.unmodifiable(filtered);
+  }
+
+  static bool _parseBool(Object? raw, {required bool fallback}) =>
+      switch (raw) {
+        final bool value => value,
+        _ => fallback,
+      };
+
   /// Serializes this preference set as a JSON object string.
   String toJsonString() => jsonEncode(<String, Object?>{
     'audioMuted': audioMuted,
@@ -154,6 +217,9 @@ final class FtermPreferences {
     'autoHideSingleTab': autoHideSingleTab,
     'macosOptionAsAlt': macosOptionAsAlt,
     'fontSize': ?fontSize,
+    'shellExecutable': ?shellExecutable,
+    if (shellArguments.isNotEmpty) 'shellArguments': shellArguments,
+    'loginShell': loginShell,
   });
 
   @override
@@ -164,7 +230,10 @@ final class FtermPreferences {
           other.audioVolume == audioVolume &&
           other.autoHideSingleTab == autoHideSingleTab &&
           other.macosOptionAsAlt == macosOptionAsAlt &&
-          other.fontSize == fontSize;
+          other.fontSize == fontSize &&
+          other.shellExecutable == shellExecutable &&
+          listEquals(other.shellArguments, shellArguments) &&
+          other.loginShell == loginShell;
 
   @override
   int get hashCode => Object.hash(
@@ -173,6 +242,9 @@ final class FtermPreferences {
     autoHideSingleTab,
     macosOptionAsAlt,
     fontSize,
+    shellExecutable,
+    Object.hashAll(shellArguments),
+    loginShell,
   );
 }
 

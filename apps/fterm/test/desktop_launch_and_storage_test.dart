@@ -15,6 +15,7 @@ import 'package:fterm/src/fterm_app.dart';
 import 'package:fterm/src/settings_storage.dart';
 import 'package:fterm/src/settings_storage_io.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
+import 'package:fterm/src/workspace/local_host_driver_io.dart';
 import 'package:material_ui/material_ui.dart' show Color, Scaffold;
 import 'package:path/path.dart' as p;
 import 'package:termui/termui.dart' show TerminalColorTheme;
@@ -1257,7 +1258,7 @@ void _defineThrottledSettingsSaverTests() {
     );
 
     test(
-      'FtermPreferences round-trips fontSize with clamping and corrupt JSON fallback',
+      'FtermPreferences round-trips fontSize & shell overrides with clamping and corrupt JSON fallback',
       () {
         final mem = _CountingSettingsStorage();
         const prefs = FtermPreferences(
@@ -1266,33 +1267,69 @@ void _defineThrottledSettingsSaverTests() {
           autoHideSingleTab: true,
           macosOptionAsAlt: true,
           fontSize: 18.5,
+          shellExecutable: '/bin/zsh',
+          shellArguments: ['-l', '-i'],
+          loginShell: false,
         );
         saveStoredPreferences(mem, prefs);
         final decoded = loadStoredPreferences(mem);
         expect(decoded, equals(prefs));
         expect(decoded.effectiveFontSize(), equals(18.5));
 
-        expect(
-          FtermPreferences.fromJsonString(
-            jsonEncode({'fontSize': 2.0}),
-          ).fontSize,
-          equals(FtermPreferences.minFontSize),
+        final low = FtermPreferences.fromJsonString(
+          jsonEncode({'fontSize': 2.0}),
         );
-        expect(
-          FtermPreferences.fromJsonString(
-            jsonEncode({'fontSize': 200.0}),
-          ).fontSize,
-          equals(FtermPreferences.maxFontSize),
+        expect(low.fontSize, equals(FtermPreferences.minFontSize));
+        final high = FtermPreferences.fromJsonString(
+          jsonEncode({'fontSize': 200.0}),
         );
-        expect(
-          FtermPreferences.fromJsonString(
-            jsonEncode({'fontSize': 'not-a-number'}),
-          ).fontSize,
-          isNull,
+        expect(high.fontSize, equals(FtermPreferences.maxFontSize));
+        final invalid = FtermPreferences.fromJsonString(
+          jsonEncode({'fontSize': 'not-a-number'}),
         );
+        expect(invalid.fontSize, isNull);
 
         mem.setItem(ftermPreferencesStorageKey, '{corrupt json');
         expect(loadStoredPreferences(mem), equals(const FtermPreferences()));
+      },
+    );
+
+    test(
+      'IoLocalHostDriver.resolveShellExecutable searches injected pathEnv for bare command names',
+      () async {
+        final tempDir = await Directory.systemTemp.createTemp('fterm_path_');
+        addTearDown(() => tempDir.delete(recursive: true));
+
+        final posixDir = Directory(p.join(tempDir.path, 'posix_bin'))
+          ..createSync();
+        final posixZsh = File(p.join(posixDir.path, 'zsh'))..createSync();
+        expect(
+          IoLocalHostDriver.resolveShellExecutable(
+            'zsh',
+            pathEnv: '/nonexistent:${posixDir.path}',
+            isWindows: false,
+          ),
+          equals(posixZsh.path),
+        );
+        expect(
+          IoLocalHostDriver.resolveShellExecutable(
+            'missing_shell',
+            pathEnv: posixDir.path,
+            isWindows: false,
+          ),
+          equals('missing_shell'),
+        );
+
+        final winDir = Directory(p.join(tempDir.path, 'win_bin'))..createSync();
+        final winZsh = File(p.join(winDir.path, 'zsh.exe'))..createSync();
+        expect(
+          IoLocalHostDriver.resolveShellExecutable(
+            'zsh',
+            pathEnv: winDir.path,
+            isWindows: true,
+          ),
+          equals(winZsh.path),
+        );
       },
     );
   });

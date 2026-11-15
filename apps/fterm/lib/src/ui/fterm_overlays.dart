@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
@@ -502,15 +503,77 @@ final class _SessionPickerOverlay extends StatelessWidget {
   }
 }
 
-final class _SettingsOverlay extends StatelessWidget {
+final class _SettingsOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
   final _OverlayColors palette;
 
   const _SettingsOverlay({required this.workspace, required this.palette});
 
   @override
+  State<_SettingsOverlay> createState() => _SettingsOverlayState();
+}
+
+final class _SettingsOverlayState extends State<_SettingsOverlay> {
+  late final TextEditingController _shellExecCtrl;
+  late final TextEditingController _shellArgsCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    final prefs = widget.workspace.preferences;
+    _shellExecCtrl = TextEditingController(text: prefs.shellExecutable ?? '');
+    _shellArgsCtrl = TextEditingController(
+      text: FtermWorkspaceController.formatShellArguments(prefs.shellArguments),
+    );
+    widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
+  }
+
+  @override
+  void didUpdateWidget(_SettingsOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.workspace, widget.workspace)) {
+      oldWidget.workspace.chromeNotifier.removeListener(
+        _onWorkspaceChromeChanged,
+      );
+      widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
+    }
+    _syncControllersFromPreferences();
+  }
+
+  void _onWorkspaceChromeChanged() {
+    if (!mounted) return;
+    _syncControllersFromPreferences();
+    setState(() {});
+  }
+
+  void _syncControllersFromPreferences() {
+    final prefs = widget.workspace.preferences;
+    final expectedExec = prefs.shellExecutable ?? '';
+    if (_shellExecCtrl.text.trim() != expectedExec) {
+      _shellExecCtrl.text = expectedExec;
+    }
+    final parsedArgs = FtermWorkspaceController.parseShellArguments(
+      _shellArgsCtrl.text,
+    );
+    if (!listEquals(parsedArgs, prefs.shellArguments)) {
+      _shellArgsCtrl.text = FtermWorkspaceController.formatShellArguments(
+        prefs.shellArguments,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.workspace.chromeNotifier.removeListener(_onWorkspaceChromeChanged);
+    _shellExecCtrl.dispose();
+    _shellArgsCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final p = palette;
+    final workspace = widget.workspace;
+    final p = widget.palette;
     final wsSettings = workspace.workspaceSettings;
     final themeSettings = wsSettings.themeSettings;
     final prefs = workspace.preferences;
@@ -650,6 +713,15 @@ final class _SettingsOverlay extends StatelessWidget {
                 ),
               ],
             ),
+            if (workspace.isDesktopHost) ...[
+              const SizedBox(height: 8),
+              _DesktopShellOverrideSection(
+                workspace: workspace,
+                palette: p,
+                shellExecCtrl: _shellExecCtrl,
+                shellArgsCtrl: _shellArgsCtrl,
+              ),
+            ],
             const SizedBox(height: 6),
             Wrap(
               alignment: WrapAlignment.end,
@@ -728,6 +800,109 @@ final class _FontSizeControls extends StatelessWidget {
           key: const ValueKey('settings-font-reset'),
           onPressed: hasOverride ? workspace.resetFontSize : null,
           child: const Text('Reset'),
+        ),
+      ],
+    );
+  }
+}
+
+final class _DesktopShellOverrideSection extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final _OverlayColors palette;
+  final TextEditingController shellExecCtrl;
+  final TextEditingController shellArgsCtrl;
+
+  const _DesktopShellOverrideSection({
+    required this.workspace,
+    required this.palette,
+    required this.shellExecCtrl,
+    required this.shellArgsCtrl,
+  });
+
+  static const List<(String id, String label, String? executable)> _presets = [
+    ('default', r'Default ($SHELL)', null),
+    ('zsh', 'zsh', 'zsh'),
+    ('bash', 'bash', 'bash'),
+    ('sh', 'sh', 'sh'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = workspace.preferences;
+    final activeExec = prefs.shellExecutable;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Shell Override (new tabs & splits)',
+          style: TextStyle(color: palette.muted, fontSize: 11),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final preset in _presets)
+              ChoiceChip(
+                key: ValueKey('settings-shell-preset-${preset.$1}'),
+                label: Text(preset.$2),
+                selected: activeExec == preset.$3,
+                onSelected: (_) => workspace.updatePreferences(
+                  workspace.preferences.copyWith(
+                    shellExecutable: preset.$3,
+                    clearShellExecutable: preset.$3 == null,
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          key: const ValueKey('settings-shell-executable'),
+          controller: shellExecCtrl,
+          decoration: const InputDecoration(
+            isDense: true,
+            labelText: 'Shell executable',
+            hintText: r'Leave blank for $SHELL (e.g. zsh, /bin/zsh)',
+          ),
+          onChanged: (value) {
+            final trimmed = value.trim();
+            workspace.updatePreferences(
+              workspace.preferences.copyWith(
+                shellExecutable: trimmed,
+                clearShellExecutable: trimmed.isEmpty,
+              ),
+            );
+          },
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          key: const ValueKey('settings-shell-arguments'),
+          controller: shellArgsCtrl,
+          decoration: const InputDecoration(
+            isDense: true,
+            labelText: 'Shell arguments',
+            hintText: 'Flags (e.g. -l --norc or -c "tmux new")',
+          ),
+          onChanged: (value) => workspace.updatePreferences(
+            workspace.preferences.copyWith(
+              shellArguments: FtermWorkspaceController.parseShellArguments(
+                value,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 4),
+        SwitchListTile.adaptive(
+          key: const ValueKey('settings-login-shell'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Run as login shell (-l)'),
+          value: prefs.loginShell,
+          onChanged: (v) => workspace.updatePreferences(
+            workspace.preferences.copyWith(loginShell: v),
+          ),
         ),
       ],
     );

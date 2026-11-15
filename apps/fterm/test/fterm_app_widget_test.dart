@@ -1150,7 +1150,14 @@ void _definePersistedPreferencesStartupTests() {
       addTearDown(() => tester.binding.setSurfaceSize(null));
 
       final storage = _MemorySettingsStorage();
-      saveStoredPreferences(storage, const FtermPreferences(fontSize: 16.0));
+      saveStoredPreferences(
+        storage,
+        const FtermPreferences(
+          fontSize: 16.0,
+          shellExecutable: 'zsh',
+          loginShell: false,
+        ),
+      );
 
       Future<void> verifyStartupFont({
         required TextScaler scaler,
@@ -1183,6 +1190,8 @@ void _definePersistedPreferencesStartupTests() {
 
         expect(workspace!.preferences.fontSize, equals(16.0));
         expect(workspace!.effectiveFontSize, equals(16.0));
+        expect(driver.openedConfigs.single.executable, equals('zsh'));
+        expect(driver.openedConfigs.single.loginShell, isFalse);
         final surface = tester.widget<TerminalSurface>(
           find.byType(TerminalSurface),
         );

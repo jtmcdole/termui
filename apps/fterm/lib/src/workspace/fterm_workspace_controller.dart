@@ -528,8 +528,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Opens a new local shell tab (desktop only).
   Future<String?> openLocalShellTab([LocalShellConfig? config]) async {
     if (_disposed || !localHostDriver.isSupported) return null;
-    final shellConfig =
-        config ?? LocalShellConfig(colorScheme: _platformBrightness);
+    final shellConfig = config ?? _defaultLocalShellConfig();
     final host = await localHostDriver.openShell(shellConfig);
     if (_disposed) {
       await host.dispose();
@@ -666,9 +665,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
     final host = await localHostDriver.openShell(
       localShellConfig ??
-          LocalShellConfig(
+          _defaultLocalShellConfig(
             workingDirectory: currentPane?.localHost?.port.workingDirectory,
-            colorScheme: _platformBrightness,
           ),
     );
     if (_disposed ||
@@ -1090,7 +1088,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   /// Updates and persists [FtermPreferences] (`audioMuted`, `audioVolume`,
-  /// `autoHideSingleTab`, `macosOptionAsAlt`, and `fontSize`).
+  /// `autoHideSingleTab`, `macosOptionAsAlt`, `fontSize`, and shell overrides).
   void updatePreferences(FtermPreferences next) {
     if (_disposed || _preferences == next) return;
     _preferences = next;
@@ -1116,6 +1114,55 @@ final class FtermWorkspaceController extends ChangeNotifier {
   void resetFontSize() {
     updatePreferences(_preferences.copyWith(clearFontSize: true));
   }
+
+  static final RegExp _shellTokenPattern = RegExp(
+    r'''(?:"(?:\\.|[^"\\])*"|'[^']*'|\\.|[^\s"'\\])+''',
+  );
+  static final RegExp _needsShellQuoting = RegExp(r'''[\s"'\\]''');
+
+  /// Parses shell arguments, honoring single quotes, double quotes, and `\` escapes.
+  static List<String> parseShellArguments(String raw) => List.unmodifiable([
+    for (final match in _shellTokenPattern.allMatches(raw))
+      _unquoteShellToken(match[0]!),
+  ]);
+
+  /// Formats parsed shell [args] back into a round-trippable input string.
+  static String formatShellArguments(List<String> args) =>
+      [for (final arg in args) _formatShellArgument(arg)].join(' ');
+
+  static String _formatShellArgument(String arg) {
+    if (arg.isEmpty) return '""';
+    if (!_needsShellQuoting.hasMatch(arg)) return arg;
+    final escaped = arg.replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+    return '"$escaped"';
+  }
+
+  static String _unquoteShellToken(String token) {
+    final out = StringBuffer();
+    String? quote;
+    for (var i = 0; i < token.length; i++) {
+      final ch = token[i];
+      if (ch == r'\' && quote != "'" && i + 1 < token.length) {
+        out.write(token[++i]);
+      } else if (ch == quote) {
+        quote = null;
+      } else if (quote == null && (ch == '"' || ch == "'")) {
+        quote = ch;
+      } else {
+        out.write(ch);
+      }
+    }
+    return out.toString();
+  }
+
+  LocalShellConfig _defaultLocalShellConfig({String? workingDirectory}) =>
+      LocalShellConfig(
+        executable: _preferences.shellExecutable,
+        arguments: _preferences.shellArguments,
+        loginShell: _preferences.loginShell,
+        workingDirectory: workingDirectory,
+        colorScheme: _platformBrightness,
+      );
 
   /// Reloads stored settings and preferences synchronously from disk/localStorage.
   bool reloadSettingsFromStorage() {

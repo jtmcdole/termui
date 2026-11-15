@@ -2541,6 +2541,22 @@ void _defineHardeningRegressionTests() {
         );
         expect(
           IoLocalHostDriver.resolveShellArguments(
+            const LocalShellConfig(loginShell: false),
+            '/bin/zsh',
+            isWindows: false,
+          ),
+          isEmpty,
+        );
+        expect(
+          IoLocalHostDriver.resolveShellArguments(
+            const LocalShellConfig(executable: '/bin/zsh', loginShell: true),
+            '/bin/zsh',
+            isWindows: false,
+          ),
+          equals(const ['-l']),
+        );
+        expect(
+          IoLocalHostDriver.resolveShellArguments(
             const LocalShellConfig(arguments: ['-i']),
             '/bin/bash',
             isWindows: false,
@@ -3853,8 +3869,56 @@ void _defineWave2HardeningTests() {
     );
 
     test(
-      'workspace adjustFontSize and resetFontSize clamp and fall back to defaultFontSize',
+      'workspace font zoom methods, shell arg parser, and shell overrides wire through new tabs and splits',
       () async {
+        expect(
+          FtermWorkspaceController.parseShellArguments('  -l\t--norc  '),
+          equals(const ['-l', '--norc']),
+        );
+        expect(FtermWorkspaceController.parseShellArguments('   '), isEmpty);
+        expect(
+          FtermWorkspaceController.parseShellArguments(
+            '-c "tmux new -A -s main"',
+          ),
+          equals(const ['-c', 'tmux new -A -s main']),
+        );
+        expect(
+          FtermWorkspaceController.parseShellArguments(
+            '--rcfile "/path/with spaces/bashrc"',
+          ),
+          equals(const ['--rcfile', '/path/with spaces/bashrc']),
+        );
+        expect(
+          FtermWorkspaceController.parseShellArguments('""'),
+          equals(const ['']),
+        );
+        expect(
+          FtermWorkspaceController.parseShellArguments(r'-c "echo \"hi\""'),
+          equals(const ['-c', 'echo "hi"']),
+        );
+        expect(
+          FtermWorkspaceController.parseShellArguments(
+            r"'-c' 'echo \x' \--flag",
+          ),
+          equals(const ['-c', r'echo \x', '--flag']),
+        );
+        const roundTripCases = [
+          <String>[],
+          ['-l', '--norc'],
+          ['-c', 'tmux new -A -s main'],
+          ['--rcfile', '/path/with spaces/bashrc'],
+          [''],
+          ['-c', 'echo "hi"'],
+          ['-c', r'a\b'],
+        ];
+        for (final args in roundTripCases) {
+          final formatted = FtermWorkspaceController.formatShellArguments(args);
+          expect(
+            FtermWorkspaceController.parseShellArguments(formatted),
+            equals(args),
+          );
+        }
+
         final harness = AppThreeWayWsHarness();
         final repo = CastClientRepository(
           transport: WsClientTransport(
@@ -3865,6 +3929,8 @@ void _defineWave2HardeningTests() {
           harness: harness,
           startGate: Completer<void>()..complete(),
         );
+        final storage = _InMemorySettingsStorage();
+        final audio = FtermAudioController(engineFactory: _FakeAudioEngine.new);
         final workspace = FtermWorkspaceController(
           launchConfig: CastLaunchConfig(
             token: harness.token,
@@ -3872,10 +3938,8 @@ void _defineWave2HardeningTests() {
           ),
           repository: repo,
           localHostDriver: driver,
-          audioController: FtermAudioController(
-            engineFactory: _FakeAudioEngine.new,
-          ),
-          storage: _InMemorySettingsStorage(),
+          audioController: audio,
+          storage: storage,
           defaultFontSize: 15.0,
         );
         addTearDown(() async {
@@ -3901,6 +3965,23 @@ void _defineWave2HardeningTests() {
         workspace.resetFontSize();
         expect(workspace.preferences.fontSize, isNull);
         expect(workspace.effectiveFontSize, equals(15.0));
+
+        workspace.updatePreferences(
+          workspace.preferences.copyWith(
+            shellExecutable: '/usr/bin/zsh',
+            shellArguments: const ['-i', '-l'],
+            loginShell: false,
+          ),
+        );
+        await workspace.openLocalShellTab();
+        expect(driver.openedConfigs.last.executable, equals('/usr/bin/zsh'));
+        expect(driver.openedConfigs.last.arguments, equals(const ['-i', '-l']));
+        expect(driver.openedConfigs.last.loginShell, isFalse);
+
+        await workspace.splitFocusedPane(SplitAxis.horizontal);
+        expect(driver.openedConfigs.last.executable, equals('/usr/bin/zsh'));
+        expect(driver.openedConfigs.last.arguments, equals(const ['-i', '-l']));
+        expect(driver.openedConfigs.last.loginShell, isFalse);
       },
     );
 

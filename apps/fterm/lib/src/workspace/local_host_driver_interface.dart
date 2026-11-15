@@ -17,6 +17,10 @@ final class LocalShellConfig {
   /// Optional arguments forwarded to [executable].
   final List<String> arguments;
 
+  /// Optional login-shell override (`-l` on POSIX): `null` preserves the driver
+  /// default (`true` when [executable] is `null`, `false` otherwise).
+  final bool? loginShell;
+
   /// Optional starting working directory.
   final String? workingDirectory;
 
@@ -42,6 +46,7 @@ final class LocalShellConfig {
   const LocalShellConfig({
     this.executable,
     this.arguments = const [],
+    this.loginShell,
     this.workingDirectory,
     this.initialCols = 80,
     this.initialRows = 24,
