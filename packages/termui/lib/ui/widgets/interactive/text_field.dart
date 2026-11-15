@@ -346,6 +346,9 @@ class TextField extends StatefulWidget implements Focusable {
   /// Optional callback executed when focus status transitions.
   final void Function(bool hasFocus)? onFocusChange;
 
+  /// Optional fallback callback invoked when [handleKeyEvent] does not consume a key.
+  final bool Function(KeyEvent event)? onKeyEvent;
+
   /// Vertical scroll offset.
   int scrollOffset = 0;
 
@@ -367,6 +370,7 @@ class TextField extends StatefulWidget implements Focusable {
     this.customShortcuts,
     this.focusNode,
     this.onFocusChange,
+    this.onKeyEvent,
   }) : controller =
            controller ?? TextEditingController(text: value ?? initialText) {
     if (obscureText && multiline) {
@@ -908,6 +912,7 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
 
   TextEditingController? _listenedController;
   late FocusNode _focusNode;
+  bool _needsInitialFocusSync = false;
 
   void _onControllerChanged() {
     if (mounted) {
@@ -929,11 +934,26 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
     _focusNode =
         widget.focusNode ?? FocusNode(id: 'textfield_${widget.hashCode}');
     _updateListener();
-    if (widget.focused) {
-      scheduleMicrotask(() {
-        if (mounted) _focusNode.requestFocus();
-      });
+    _needsInitialFocusSync = widget.focused;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_needsInitialFocusSync ||
+        Zone.current[#isMeasuringIntrinsics] == true) {
+      return;
     }
+    _needsInitialFocusSync = false;
+    _focusNode.seedInitialFocus(
+      Focus.of(context),
+      isMounted: () => mounted,
+      onDeferredUnfocus: () {
+        widget.focused = false;
+        widget.onFocusChange?.call(false);
+        if (mounted) setState(() {});
+      },
+    );
   }
 
   @override
@@ -977,10 +997,10 @@ class TextFieldState extends State<TextField> implements KeyEventHandler {
           setState(() {}); // Redraw cursor highlight
         }
       },
-      onKeyEvent: (event) {
-        return widget.handleKeyEvent(event);
-      },
-      child: _TextFieldRenderWidget(widget),
+      onKeyEvent: (event) =>
+          widget.handleKeyEvent(event) ||
+          (widget.onKeyEvent?.call(event) ?? false),
+      child: _TextFieldRenderWidget(widget, _focusNode),
     );
   }
 }
@@ -989,15 +1009,19 @@ class _TextFieldRenderWidget extends Widget {
   /// The parent TextField widget configuration.
   final TextField textFieldWidget;
 
+  /// The focus node associated with this text field.
+  final FocusNode focusNode;
+
   /// Creates a render proxy for a TextField.
-  const _TextFieldRenderWidget(this.textFieldWidget);
+  const _TextFieldRenderWidget(this.textFieldWidget, this.focusNode);
 
   @override
   Element createElement() => _TextFieldRenderWidgetElement(this);
 }
 
 /// Element that performs layout and paint for [_TextFieldRenderWidget].
-class _TextFieldRenderWidgetElement extends Element {
+class _TextFieldRenderWidgetElement extends Element
+    implements ev.MouseEventConsumer {
   /// Instantiates the rendering element for the given [_TextFieldRenderWidget].
   _TextFieldRenderWidgetElement(_TextFieldRenderWidget super.widget);
 
@@ -1084,6 +1108,63 @@ class _TextFieldRenderWidgetElement extends Element {
     }
   }
 
+  @override
+  bool handleMouseEvent(term.MouseEvent event, int localX, int localY) {
+    if (event.type != .press || event.button != .left) return false;
+    if (localX < 0 ||
+        localX >= size.width ||
+        localY < 0 ||
+        localY >= size.height) {
+      return false;
+    }
+    final renderWidget = widget as _TextFieldRenderWidget;
+    final textField = renderWidget.textFieldWidget;
+    renderWidget.focusNode.requestFocus();
+    final text = textField.controller.value.text;
+    final lines = textField.controller.value.lines;
+    final targetLine = (textField.scrollOffset + localY).clamp(
+      0,
+      lines.length - 1,
+    );
+    final targetCol = _resolveClickedColumn(
+      lines[targetLine],
+      localX,
+      obscureText: textField.obscureText,
+    );
+    final nextOffset = textField._getOffsetFromLineColumn(
+      text,
+      targetLine,
+      targetCol,
+    );
+    textField.controller.value = TextEditingValue(
+      text: text,
+      selection: TextSelection(
+        baseOffset: nextOffset,
+        extentOffset: nextOffset,
+        cursorLine: targetLine,
+        cursorColumn: targetCol,
+      ),
+    );
+    return true;
+  }
+
+  static int _resolveClickedColumn(
+    String line,
+    int localX, {
+    required bool obscureText,
+  }) {
+    if (localX <= 0) return 0;
+    var col = 0;
+    var idx = 0;
+    for (final ch in line.characters) {
+      final w = obscureText ? 1 : max(1, graphemeWidth(ch));
+      if (localX < col + w) return idx;
+      col += w;
+      idx++;
+    }
+    return idx;
+  }
+
   void _paintLine(
     Buffer buffer,
     Offset rowOffset,
@@ -1093,39 +1174,69 @@ class _TextFieldRenderWidgetElement extends Element {
     Style mergedCursorStyle, {
     required bool isCursorLine,
   }) {
-    final charIter = line.characters.iterator;
-    var lineLen = 0;
-
-    for (var x = 0; x < width; x++) {
-      var char = ' ';
-      if (charIter.moveNext()) {
-        lineLen++;
-        char = textField.obscureText
-            ? textField.obscuringCharacter
-            : charIter.current;
-      }
-
-      final isCursor = isCursorLine && x == textField.cursorColumn;
-      final cellStyle = isCursor ? mergedCursorStyle : textField.style;
+    final (:graphemeCount, :displayEnd) = _paintLineGraphemes(
+      buffer,
+      rowOffset,
+      width,
+      line,
+      textField,
+      mergedCursorStyle,
+      isCursorLine: isCursorLine,
+    );
+    for (var x = displayEnd; x < width; x++) {
       buffer.setAttributes(
         rowOffset.dx + x,
         rowOffset.dy,
-        char: char,
-        fg: cellStyle.foreground?.argb ?? 0,
-        bg: cellStyle.background?.argb ?? 0,
-        modifiers: cellStyle.modifiers,
+        char: ' ',
+        fg: textField.style.foreground?.argb ?? 0,
+        bg: textField.style.background?.argb ?? 0,
+        modifiers: textField.style.modifiers,
       );
     }
-
-    // Render cursor at end of line if needed
-    if (isCursorLine && textField.cursorColumn >= lineLen && lineLen < width) {
+    if (isCursorLine &&
+        textField.cursorColumn >= graphemeCount &&
+        displayEnd < width) {
       buffer.setAttributes(
-        rowOffset.dx + lineLen,
+        rowOffset.dx + displayEnd,
         rowOffset.dy,
         fg: mergedCursorStyle.foreground?.argb ?? 0,
         bg: mergedCursorStyle.background?.argb ?? 0,
         modifiers: mergedCursorStyle.modifiers,
       );
     }
+  }
+
+  ({int graphemeCount, int displayEnd}) _paintLineGraphemes(
+    Buffer buffer,
+    Offset rowOffset,
+    int width,
+    String line,
+    TextField textField,
+    Style mergedCursorStyle, {
+    required bool isCursorLine,
+  }) {
+    var col = 0;
+    var graphemeIdx = 0;
+    for (final rawChar in line.characters) {
+      final char = textField.obscureText
+          ? textField.obscuringCharacter
+          : rawChar;
+      final step = textField.obscureText ? 1 : max(1, graphemeWidth(char));
+      if (col + step > width) break;
+      final cellStyle = (isCursorLine && graphemeIdx == textField.cursorColumn)
+          ? mergedCursorStyle
+          : textField.style;
+      buffer.setAttributes(
+        rowOffset.dx + col,
+        rowOffset.dy,
+        char: char,
+        fg: cellStyle.foreground?.argb ?? 0,
+        bg: cellStyle.background?.argb ?? 0,
+        modifiers: cellStyle.modifiers,
+      );
+      col += step;
+      graphemeIdx++;
+    }
+    return (graphemeCount: graphemeIdx, displayEnd: col);
   }
 }

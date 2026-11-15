@@ -1,6 +1,8 @@
-import 'package:termui/termui.dart';
+import 'dart:async';
 import 'dart:math';
+
 import 'package:characters/characters.dart';
+import 'package:termui/termui.dart';
 import 'event.dart' as ev;
 
 /// A node in the keyboard focus tree.
@@ -104,6 +106,44 @@ class FocusNode {
   /// Request focus for this specific node.
   void requestFocus() {
     FocusManager.instance.setPrimaryFocus(this);
+  }
+
+  /// Attaches this node to [parentScope] for an initially focused widget without
+  /// stealing focus from an unfocused nested scope.
+  void seedInitialFocus(
+    FocusNode? parentScope, {
+    required bool Function() isMounted,
+    required VoidCallback onDeferredUnfocus,
+  }) {
+    if (parentScope == null) {
+      scheduleMicrotask(() {
+        if (isMounted() && FocusManager.instance.primaryFocus == null) {
+          requestFocus();
+        }
+      });
+      return;
+    }
+    parentScope.addChild(this);
+    if (FocusManager.instance.primaryFocus == parentScope) {
+      requestFocus();
+      return;
+    }
+    if (parentScope is FocusScopeNode) {
+      parentScope.setInitialFocusChild(this);
+      if (parentScope.parent != null && !parentScope.hasFocus) {
+        onDeferredUnfocus();
+        return;
+      }
+    }
+    scheduleMicrotask(() {
+      if (!isMounted()) return;
+      final primary = FocusManager.instance.primaryFocus;
+      if (primary == null || primary == parent) {
+        requestFocus();
+      } else if (primary != this) {
+        onDeferredUnfocus();
+      }
+    });
   }
 
   /// Removes focus from this node.
@@ -229,6 +269,35 @@ class FocusScopeNode extends FocusNode {
 
   /// The active focused child node inside this scope.
   FocusNode? get focusedChild => _focusedChild;
+
+  /// Records [child] as the initial focused child when none is set yet,
+  /// without changing [FocusManager.primaryFocus].
+  void setInitialFocusChild(FocusNode child) {
+    if (_focusedChild == null && child.parent == this) {
+      _focusedChild = child;
+    }
+  }
+
+  /// Reorders the subset of [children] present in [orderedSubset] to match
+  /// [orderedSubset] starting at their earliest existing index.
+  void syncChildOrder(List<FocusNode> orderedSubset) {
+    final present = [
+      for (final node in orderedSubset)
+        if (node.parent == this) node,
+    ];
+    if (present.length <= 1) return;
+    final presentSet = {...present};
+    var firstIdx = -1;
+    for (var i = 0; i < children.length; i++) {
+      if (presentSet.contains(children[i])) {
+        firstIdx = i;
+        break;
+      }
+    }
+    if (firstIdx == -1) return;
+    children.removeWhere(presentSet.contains);
+    children.insertAll(firstIdx, present);
+  }
 
   @override
   void requestFocus() {

@@ -517,8 +517,13 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     _renderer = Renderer(_width, _computedHeight, mode: _renderingMode);
     _completer = completer;
     _isDisposed = false;
+    final hadPreRunFocus =
+        FocusManager.instance.primaryFocus == _focusScopeNode;
     _focusScopeNode = runScope;
     _activeRootScopes.add(runScope);
+    if (hadPreRunFocus) {
+      FocusManager.instance.setPrimaryFocus(runScope);
+    }
 
     final scopedWidget = _buildScopedWidget(runScope, completer);
     _buildOwner = BuildOwner(onNeedVisualUpdate: _scheduleRender);
@@ -734,7 +739,9 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
     if (childConsumed && inside) return true;
 
     if (_routeToElement(element, event, localX, localY)) {
-      if (event.type == term.MouseEventType.press) {
+      if (event.type == .press &&
+          event.button != .wheelUp &&
+          event.button != .wheelDown) {
         _mouseCaptureElement = element;
       }
       return inside;
@@ -1127,6 +1134,9 @@ bool _routeToElement(
   final area = Rect(0, 0, element.size.width, element.size.height);
 
   bool tryRoute(Object handler) {
+    if (handler case final MouseEventConsumer h) {
+      return h.handleMouseEvent(event, localX, localY);
+    }
     if (handler case final MouseEventHandlerWithArea h) {
       h.handleMouseEvent(event, localX, localY, area);
       return true;

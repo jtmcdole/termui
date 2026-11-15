@@ -14,6 +14,12 @@ abstract interface class KeyEventHandler {
   bool handleKeyEvent(KeyEvent event);
 }
 
+/// An interface that indicates a widget, state, or element selectively consumes mouse events.
+abstract interface class MouseEventConsumer {
+  /// Handles a mouse event at local coordinates, returning `true` when consumed.
+  bool handleMouseEvent(MouseEvent event, int localX, int localY);
+}
+
 /// An interface that indicates a widget or state can handle terminal mouse events.
 abstract interface class MouseEventHandler {
   /// Handles a mouse event at local coordinates.
