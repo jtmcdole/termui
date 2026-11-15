@@ -99,7 +99,7 @@ jobs:
       matrix:
         include:
           - target: macos-arm64
-            os: macos-14
+            os: macos-latest
             archive_ext: tar.gz
             build_desktop: true
           - target: linux-x64
@@ -110,10 +110,12 @@ jobs:
             os: windows-latest
             archive_ext: zip
             build_desktop: true
-          - target: linux-arm64
-            os: ubuntu-24.04-arm
-            archive_ext: tar.gz
-            build_desktop: false
+          # Disabled for now: Flutter does not publish linux-arm64 release archives
+          # required by subosito/flutter-action (requires cloning the SDK + fetching tools).
+          # - target: linux-arm64
+          #   os: ubuntu-24.04-arm
+          #   archive_ext: tar.gz
+          #   build_desktop: false
 
     steps:
       - name: Checkout repository
@@ -191,9 +193,14 @@ jobs:
           & "./build/caster/bundle/bin/termui_cast.exe" --download-conpty --server ws://127.0.0.1:9/v1/caster '--' cmd /c "exit 3"
           if ($LASTEXITCODE -ne 3) { throw "Expected exit code 3 from termui_cast.exe, got $LASTEXITCODE" }
           dart compile exe apps/termui_cast/server/bin/termui_cast_server.dart -o build/caster/bundle/bin/termui_cast_server.exe
+          Write-Output "Verifying termui_cast_server.exe..."
           & "./build/caster/bundle/bin/termui_cast_server.exe" --help | Out-Null
-          & "./build/caster/bundle/bin/termui_cast_server.exe" --host 0.0.0.0 2>$null
-          if ($LASTEXITCODE -ne 64) { throw "Expected exit code 64 from termui_cast_server.exe, got $LASTEXITCODE" }
+          if ($LASTEXITCODE -ne 0) { throw "Expected exit code 0 from termui_cast_server.exe --help, got $LASTEXITCODE" }
+          $serverProc = Start-Process -FilePath "./build/caster/bundle/bin/termui_cast_server.exe" -ArgumentList "--host", "0.0.0.0" -NoNewWindow -Wait -PassThru -RedirectStandardError "dist/server-check.err"
+          $serverErr = if (Test-Path "dist/server-check.err") { Get-Content "dist/server-check.err" -Raw } else { "" }
+          Remove-Item -Path "dist/server-check.err" -ErrorAction SilentlyContinue
+          if ($serverProc.ExitCode -ne 64) { throw "Expected exit code 64 from termui_cast_server.exe, got $($serverProc.ExitCode): $serverErr" }
+          $global:LASTEXITCODE = 0
 
           $conptyDir = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "pty2\conpty\*\x64") -Directory |
             Sort-Object FullName -Descending |
@@ -201,6 +208,7 @@ jobs:
           if (-not $conptyDir) {
             throw "Missing staged ConPTY x64 directory under $env:LOCALAPPDATA\pty2\conpty"
           }
+          Write-Output "Staging ConPTY from $($conptyDir.FullName)"
           $conptyFiles = @("conpty.dll", "OpenConsole.exe")
           foreach ($file in $conptyFiles) {
             if (-not (Test-Path (Join-Path $conptyDir.FullName $file))) {
@@ -258,6 +266,7 @@ jobs:
             }
           }
           Assert-ZipEntries -ZipPath $casterZip -RequiredEntries @("bin/conpty.dll", "bin/OpenConsole.exe", "bin/THIRD-PARTY-NOTICES.txt")
+          Write-Output "Packaged $casterZip"
 
           if ($env:BUILD_DESKTOP -eq "true") {
             $ftermReleaseDir = "apps/fterm/build/windows/x64/runner/Release"
@@ -267,6 +276,7 @@ jobs:
             $ftermZip = "dist/fterm-$($env:TARGET).zip"
             Compress-Archive -Path "$ftermReleaseDir/*" -DestinationPath $ftermZip -Force
             Assert-ZipEntries -ZipPath $ftermZip -RequiredEntries $bundleEntries
+            Write-Output "Packaged $ftermZip"
           }
         env:
           TARGET: ${{ matrix.target }}
