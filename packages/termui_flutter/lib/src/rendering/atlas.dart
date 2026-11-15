@@ -977,10 +977,15 @@ final class GlyphAtlas {
   /// Number of columns allocated in the atlas grid.
   final int numCols;
 
+  static const int _asciiStart = 0x20;
+  static const int _asciiEnd = 0x7E;
+  static const int _asciiCount = _asciiEnd - _asciiStart + 1;
+
   final Map<String, Rect> _regularRects = <String, Rect>{};
   final Map<String, Rect> _boldRects = <String, Rect>{};
   final Map<String, Rect> _italicRects = <String, Rect>{};
   final Map<String, Rect> _boldItalicRects = <String, Rect>{};
+  final List<Rect?> _asciiRects = List<Rect?>.filled(_asciiCount * 4, null);
 
   /// Blank padding added around each glyph to prevent texture bleed.
   static const double padding = 2.0;
@@ -1041,6 +1046,15 @@ final class GlyphAtlas {
       _mapForVariant(variant)[char] = entry.value;
     }
     _regularRects.addAll(charRects);
+    for (var code = _asciiStart; code <= _asciiEnd; code++) {
+      final ch = String.fromCharCode(code);
+      final regular = _regularRects[ch];
+      final base = (code - _asciiStart) << 2;
+      _asciiRects[base] = regular;
+      _asciiRects[base | 1] = _boldRects[ch] ?? regular;
+      _asciiRects[base | 2] = _italicRects[ch] ?? regular;
+      _asciiRects[base | 3] = _boldItalicRects[ch] ?? regular;
+    }
   }
 
   Map<String, Rect> _mapForFlags(bool isBold, bool isItalic) {
@@ -1064,6 +1078,11 @@ final class GlyphAtlas {
   ///
   /// Falls back to the regular variant when a specialized styled variant is absent.
   Rect? rectFor(String char, {bool isBold = false, bool isItalic = false}) {
+    final code = char.length == 1 ? char.codeUnitAt(0) : -1;
+    if (code >= _asciiStart && code <= _asciiEnd) {
+      final variant = (isBold ? 1 : 0) | (isItalic ? 2 : 0);
+      return _asciiRects[((code - _asciiStart) << 2) | variant];
+    }
     if (!isBold && !isItalic) {
       return _regularRects[char];
     }
