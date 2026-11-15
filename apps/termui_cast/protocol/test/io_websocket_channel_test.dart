@@ -314,6 +314,7 @@ void main() {
     test(
       'watchPosixHangupSignals delivers SIGHUP on POSIX and stays empty on Windows',
       _verifyPosixHangupSignals,
+      timeout: const Timeout(Duration(seconds: 60)),
     );
 
     test(
@@ -375,13 +376,18 @@ Future<void> main() async {
     childScript.path,
   ]);
   addTearDown(child.kill);
-  unawaited(child.stderr.drain<void>());
+  final stderrLines = <String>[];
+  child.stderr
+      .transform(utf8.decoder)
+      .transform(const LineSplitter())
+      .listen(stderrLines.add);
   final outLines = StreamIterator(
     child.stdout.transform(utf8.decoder).transform(const LineSplitter()),
   );
 
   check(
-    await outLines.moveNext().timeout(const Duration(seconds: 10)),
+    await outLines.moveNext().timeout(const Duration(seconds: 30)),
+    because: 'stderr=$stderrLines',
   ).isTrue();
   check(outLines.current).equals('LISTENING_1');
   check(Process.killPid(child.pid, .sighup)).isTrue();

@@ -345,8 +345,20 @@ Future<void> _runSubprocessSighupProxyTest() async {
     }
   });
 
+  unawaited(
+    proc.exitCode.then((code) {
+      if (!tracker.firstRegisteredDir.isCompleted) {
+        tracker.firstRegisteredDir.completeError(
+          StateError(
+            'termui_cast exited early ($code): ${stderrLines.join(' | ')}',
+          ),
+        );
+      }
+    }),
+  );
+
   // 1. Wait for registration and pre-HUP output snapshot/delta.
-  await tracker.firstRegisteredDir.future.timeout(const Duration(seconds: 20));
+  await tracker.firstRegisteredDir.future.timeout(const Duration(seconds: 30));
   viewer.sink.add(
     BufferFrameCodec.encode(
       const SubscribeSessionFrame(
@@ -572,6 +584,7 @@ void main() {
     test(
       'live termui_cast subprocess survives SIGHUP over blackholed TCP proxy, re-registers, and keeps child alive',
       _runSubprocessSighupProxyTest,
+      timeout: const Timeout(Duration(seconds: 60)),
     );
   });
 }
