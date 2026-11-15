@@ -3,6 +3,50 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-15
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.17.0`](#termui---v0170)
+ - [`termui_flutter` - `v0.13.0`](#termui_flutter---v0130)
+ - [`termui_pty` - `v0.13.0`](#termui_pty---v0130)
+
+Packages with other changes:
+
+ - [`termui_recorder` - `v0.10.6`](#termui_recorder---v0106)
+ - [`termui_test` - `v0.4.6`](#termui_test---v046)
+ - [`termui_hotreload` - `v0.6.32`](#termui_hotreload---v0632)
+ - [`termui_tinpot` - `v0.5.4`](#termui_tinpot---v054)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.6`
+ - `termui_test` - `v0.4.6`
+ - `termui_hotreload` - `v0.6.32`
+ - `termui_tinpot` - `v0.5.4`
+
+---
+
+#### `termui` - `v0.17.0`
+
+ - **BREAKING** **FEAT**(termui,termui_flutter): add Buffer.clearMetadata and harden atlas/IME handling.
+
+#### `termui_flutter` - `v0.13.0`
+
+ - **FIX**(flutter): pass FlutterView viewId when attaching TextInput.
+ - **BREAKING** **FEAT**(termui,termui_flutter): add Buffer.clearMetadata and harden atlas/IME handling.
+
+#### `termui_pty` - `v0.13.0`
+
+ - **BREAKING** **FIX**(cast): harden protocol, relay, caster, and client_core in Wave 1.
+
+
 ## 2026-11-14
 
 ### Changes
