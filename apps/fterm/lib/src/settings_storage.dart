@@ -47,8 +47,17 @@ abstract interface class BatchSettingsStorage implements SettingsStorage {
 /// desktop).
 SettingsStorage get defaultSettingsStorage => impl.platformSettingsStorage;
 
-/// App-level `fterm` audio, font-size, shell, and tab-bar preferences stored
-/// alongside [CastWorkspaceSettings].
+/// Cadence for checking GitHub `fterm-v*` releases on desktop builds.
+enum UpdateCheckMode {
+  /// Check only when the user clicks **Check for Updates**.
+  manual,
+
+  /// Check automatically once every 24 hours and on user request.
+  daily,
+}
+
+/// App-level `fterm` audio, font-size, shell, tab-bar, and auto-update
+/// preferences stored alongside [CastWorkspaceSettings].
 final class FtermPreferences {
   /// Default unmuted audio volume in `[0.0, 1.0]`.
   static const double defaultAudioVolume = 0.7;
@@ -93,6 +102,26 @@ final class FtermPreferences {
   /// [shellArguments] is empty.
   final bool loginShell;
 
+  /// Cadence for GitHub release update discovery (`manual` default).
+  final UpdateCheckMode updateCheckMode;
+
+  /// Whether pre-release tags (`fterm-vX.Y.Z-rc.N`) are eligible for updates.
+  final bool includePrereleases;
+
+  /// UTC timestamp of the most recent completed release check, if any.
+  final DateTime? lastUpdateCheckUtc;
+
+  /// Optional release version string skipped by the user for automatic prompts.
+  final String? skippedUpdateVersion;
+
+  /// HTTP `ETag` from the latest successful `git/matching-refs/tags/fterm-v`
+  /// query.
+  final String? lastReleaseTagEtag;
+
+  /// Cached `fterm-v*` tag names paired with [lastReleaseTagEtag] so `304`
+  /// responses remain comparable across restarts and portable copies.
+  final List<String> cachedReleaseTags;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
@@ -103,6 +132,12 @@ final class FtermPreferences {
     this.shellExecutable,
     this.shellArguments = const [],
     this.loginShell = true,
+    this.updateCheckMode = UpdateCheckMode.manual,
+    this.includePrereleases = false,
+    this.lastUpdateCheckUtc,
+    this.skippedUpdateVersion,
+    this.lastReleaseTagEtag,
+    this.cachedReleaseTags = const [],
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -122,22 +157,61 @@ final class FtermPreferences {
     bool clearShellExecutable = false,
     List<String>? shellArguments,
     bool? loginShell,
+    UpdateCheckMode? updateCheckMode,
+    bool? includePrereleases,
+    DateTime? lastUpdateCheckUtc,
+    bool clearLastUpdateCheckUtc = false,
+    String? skippedUpdateVersion,
+    bool clearSkippedUpdateVersion = false,
+    String? lastReleaseTagEtag,
+    bool clearLastReleaseTagEtag = false,
+    List<String>? cachedReleaseTags,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
     autoHideSingleTab: autoHideSingleTab ?? this.autoHideSingleTab,
     macosOptionAsAlt: macosOptionAsAlt ?? this.macosOptionAsAlt,
-    fontSize: clearFontSize
-        ? null
-        : _normalizeFontSize(fontSize ?? this.fontSize),
-    shellExecutable: clearShellExecutable
-        ? null
-        : _normalizeShellExecutable(shellExecutable ?? this.shellExecutable),
-    shellArguments: _normalizeShellArguments(
+    fontSize: _resolveOptionalField<double>(
+      clear: clearFontSize,
+      next: fontSize ?? this.fontSize,
+      normalize: _normalizeFontSize,
+    ),
+    shellExecutable: _resolveOptionalField<String>(
+      clear: clearShellExecutable,
+      next: shellExecutable ?? this.shellExecutable,
+      normalize: _normalizeOptionalText,
+    ),
+    shellArguments: _normalizeNonEmptyStrings(
       shellArguments ?? this.shellArguments,
     ),
     loginShell: loginShell ?? this.loginShell,
+    updateCheckMode: updateCheckMode ?? this.updateCheckMode,
+    includePrereleases: includePrereleases ?? this.includePrereleases,
+    lastUpdateCheckUtc: _resolveOptionalField<DateTime>(
+      clear: clearLastUpdateCheckUtc,
+      next: lastUpdateCheckUtc ?? this.lastUpdateCheckUtc,
+      normalize: (dt) => dt?.toUtc(),
+    ),
+    skippedUpdateVersion: _resolveOptionalField<String>(
+      clear: clearSkippedUpdateVersion,
+      next: skippedUpdateVersion ?? this.skippedUpdateVersion,
+      normalize: _normalizeOptionalText,
+    ),
+    lastReleaseTagEtag: _resolveOptionalField<String>(
+      clear: clearLastReleaseTagEtag,
+      next: lastReleaseTagEtag ?? this.lastReleaseTagEtag,
+      normalize: _normalizeOptionalText,
+    ),
+    cachedReleaseTags: _normalizeTrimmedStrings(
+      cachedReleaseTags ?? this.cachedReleaseTags,
+    ),
   );
+
+  static T? _resolveOptionalField<T>({
+    required bool clear,
+    required T? next,
+    required T? Function(T? value) normalize,
+  }) => clear ? null : normalize(next);
 
   /// Decodes [FtermPreferences] from JSON string [raw], returning [defaults] on
   /// null or malformed input.
@@ -146,20 +220,33 @@ final class FtermPreferences {
     try {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<Object?, Object?>) return defaults;
-      return FtermPreferences(
-        audioMuted: decoded['audioMuted'] == true,
-        audioVolume: _parseAudioVolume(decoded['audioVolume']),
-        autoHideSingleTab: decoded['autoHideSingleTab'] == true,
-        macosOptionAsAlt: decoded['macosOptionAsAlt'] == true,
-        fontSize: _parseFontSize(decoded['fontSize']),
-        shellExecutable: _parseShellExecutable(decoded['shellExecutable']),
-        shellArguments: _parseShellArguments(decoded['shellArguments']),
-        loginShell: _parseBool(decoded['loginShell'], fallback: true),
-      );
+      return _decodePreferencesMap(decoded);
     } on Object {
       return defaults;
     }
   }
+
+  static FtermPreferences _decodePreferencesMap(
+    Map<Object?, Object?> decoded,
+  ) => FtermPreferences(
+    audioMuted: decoded['audioMuted'] == true,
+    audioVolume: _parseAudioVolume(decoded['audioVolume']),
+    autoHideSingleTab: decoded['autoHideSingleTab'] == true,
+    macosOptionAsAlt: decoded['macosOptionAsAlt'] == true,
+    fontSize: _parseFontSize(decoded['fontSize']),
+    shellExecutable: _parseOptionalText(decoded['shellExecutable']),
+    shellArguments: _parseStringList(decoded['shellArguments'], trim: false),
+    loginShell: _parseBool(decoded['loginShell'], fallback: true),
+    updateCheckMode: _parseUpdateCheckMode(decoded['updateCheckMode']),
+    includePrereleases: decoded['includePrereleases'] == true,
+    lastUpdateCheckUtc: _parseUtcDateTime(decoded['lastUpdateCheckUtc']),
+    skippedUpdateVersion: _parseOptionalText(decoded['skippedUpdateVersion']),
+    lastReleaseTagEtag: _parseOptionalText(decoded['lastReleaseTagEtag']),
+    cachedReleaseTags: _parseStringList(
+      decoded['cachedReleaseTags'],
+      trim: true,
+    ),
+  );
 
   static double _parseAudioVolume(Object? raw) => switch (raw) {
     final num value when value.isFinite =>
@@ -177,29 +264,53 @@ final class FtermPreferences {
       ? null
       : value.clamp(minFontSize, maxFontSize).toDouble();
 
-  static String? _parseShellExecutable(Object? raw) => switch (raw) {
-    final String value => _normalizeShellExecutable(value),
+  static String? _parseOptionalText(Object? raw) => switch (raw) {
+    final String value => _normalizeOptionalText(value),
     _ => null,
   };
 
-  static String? _normalizeShellExecutable(String? value) {
+  static String? _normalizeOptionalText(String? value) {
     if (value == null) return null;
     final trimmed = value.trim();
     return trimmed.isEmpty ? null : trimmed;
   }
 
-  static List<String> _parseShellArguments(Object? raw) => switch (raw) {
-    final List<Object?> items => _normalizeShellArguments(<String>[
-      for (final item in items)
-        if (item case final String value) value,
-    ]),
-    _ => const [],
+  static UpdateCheckMode _parseUpdateCheckMode(Object? raw) => switch (raw) {
+    'daily' => UpdateCheckMode.daily,
+    _ => UpdateCheckMode.manual,
   };
 
-  static List<String> _normalizeShellArguments(List<String> arguments) {
+  static DateTime? _parseUtcDateTime(Object? raw) => switch (raw) {
+    final String value => DateTime.tryParse(value.trim())?.toUtc(),
+    _ => null,
+  };
+
+  static List<String> _parseStringList(Object? raw, {required bool trim}) =>
+      switch (raw) {
+        final List<Object?> items =>
+          trim
+              ? _normalizeTrimmedStrings(_extractStrings(items))
+              : _normalizeNonEmptyStrings(_extractStrings(items)),
+        _ => const [],
+      };
+
+  static List<String> _extractStrings(List<Object?> items) => <String>[
+    for (final item in items)
+      if (item case final String value) value,
+  ];
+
+  static List<String> _normalizeNonEmptyStrings(List<String> values) {
     final filtered = <String>[
-      for (final arg in arguments)
-        if (arg.isNotEmpty) arg,
+      for (final item in values)
+        if (item.isNotEmpty) item,
+    ];
+    return filtered.isEmpty ? const [] : List<String>.unmodifiable(filtered);
+  }
+
+  static List<String> _normalizeTrimmedStrings(List<String> values) {
+    final filtered = <String>[
+      for (final item in values)
+        if (item.trim() case final trimmed when trimmed.isNotEmpty) trimmed,
     ];
     return filtered.isEmpty ? const [] : List<String>.unmodifiable(filtered);
   }
@@ -209,6 +320,8 @@ final class FtermPreferences {
         final bool value => value,
         _ => fallback,
       };
+
+  DateTime? get _normalizedCheckUtc => lastUpdateCheckUtc?.toUtc();
 
   /// Serializes this preference set as a JSON object string.
   String toJsonString() => jsonEncode(<String, Object?>{
@@ -220,6 +333,13 @@ final class FtermPreferences {
     'shellExecutable': ?shellExecutable,
     if (shellArguments.isNotEmpty) 'shellArguments': shellArguments,
     'loginShell': loginShell,
+    'updateCheckMode': updateCheckMode.name,
+    'includePrereleases': includePrereleases,
+    if (_normalizedCheckUtc case final checkUtc?)
+      'lastUpdateCheckUtc': checkUtc.toIso8601String(),
+    'skippedUpdateVersion': ?skippedUpdateVersion,
+    'lastReleaseTagEtag': ?lastReleaseTagEtag,
+    if (cachedReleaseTags.isNotEmpty) 'cachedReleaseTags': cachedReleaseTags,
   });
 
   @override
@@ -233,7 +353,13 @@ final class FtermPreferences {
           other.fontSize == fontSize &&
           other.shellExecutable == shellExecutable &&
           listEquals(other.shellArguments, shellArguments) &&
-          other.loginShell == loginShell;
+          other.loginShell == loginShell &&
+          other.updateCheckMode == updateCheckMode &&
+          other.includePrereleases == includePrereleases &&
+          other._normalizedCheckUtc == _normalizedCheckUtc &&
+          other.skippedUpdateVersion == skippedUpdateVersion &&
+          other.lastReleaseTagEtag == lastReleaseTagEtag &&
+          listEquals(other.cachedReleaseTags, cachedReleaseTags);
 
   @override
   int get hashCode => Object.hash(
@@ -245,6 +371,12 @@ final class FtermPreferences {
     shellExecutable,
     Object.hashAll(shellArguments),
     loginShell,
+    updateCheckMode,
+    includePrereleases,
+    _normalizedCheckUtc,
+    skippedUpdateVersion,
+    lastReleaseTagEtag,
+    Object.hashAll(cachedReleaseTags),
   );
 }
 

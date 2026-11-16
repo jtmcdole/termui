@@ -25,6 +25,10 @@ final class CastLaunchConfig {
   /// `wss://` target URI (such as `/v1/caster` vs `/v1/client`).
   final IapTokenProvider? Function(Uri targetUri)? iapTokenProviderFactory;
 
+  /// Sanitized CLI arguments forwarded when relaunching `fterm` after an
+  /// in-place desktop update (file paths canonicalized, raw secrets stripped).
+  final List<String> relaunchArgs;
+
   /// Creates an explicit launch configuration.
   CastLaunchConfig({
     Uri? serverUri,
@@ -33,7 +37,11 @@ final class CastLaunchConfig {
     this.promptForConnection = false,
     this.iapTokenProvider,
     this.iapTokenProviderFactory,
-  }) : serverUri = serverUri ?? defaultServerUri;
+    List<String> relaunchArgs = const [],
+  }) : serverUri = serverUri ?? defaultServerUri,
+       relaunchArgs = relaunchArgs.isEmpty
+           ? const []
+           : List<String>.unmodifiable(relaunchArgs);
 
   /// Resolves an [IapTokenProvider] scoped to [targetUri] (`wss://` only),
   /// minting an audience-matched token for endpoints such as `/v1/caster`.

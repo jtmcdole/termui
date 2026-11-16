@@ -558,14 +558,20 @@ final class _IoLocalPaneHost implements LocalPaneHost {
     _session.terminal.setColorScheme(brightness);
   }
 
+  Future<void> _disposeLocalPty() async {
+    await port.dispose();
+    await _session.dispose();
+  }
+
   @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    await stopShare();
-    await port.dispose();
-    await _session.dispose();
-    await _shareUpdates.close();
-    _onDisposed();
+    try {
+      await Future.wait([stopShare(), _disposeLocalPty()]);
+    } finally {
+      await _shareUpdates.close();
+      _onDisposed();
+    }
   }
 }

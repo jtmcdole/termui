@@ -10,6 +10,7 @@ import 'dart:io'
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:path/path.dart' as p;
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol_io.dart';
 
@@ -33,7 +34,16 @@ void resetCachedPlatformIapKeys() {
 /// Resolves [DesktopLaunchOverrides] from CLI [args] and [Platform.environment]
 /// on native desktop (`dart:io`) platforms.
 DesktopLaunchOverrides readPlatformLaunchOverrides(List<String> args) =>
-    parseDesktopLaunchOverrides(args: args, environment: Platform.environment);
+    parseDesktopLaunchOverrides(
+      args: args,
+      environment: Platform.environment,
+      canonicalizePath: canonicalizePlatformFilePath,
+    );
+
+/// Resolves [rawPath] against the startup working directory so relaunches from
+/// `/` (such as macOS `open -n`) keep valid file flag paths.
+String canonicalizePlatformFilePath(String rawPath) =>
+    p.normalize(File(rawPath).absolute.path);
 
 /// Reads and trims a bearer secret token from [path] at startup.
 String readPlatformSecretFileSync(String path) {
