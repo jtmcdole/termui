@@ -1738,7 +1738,7 @@ final class CasterService {
       _revisionReconnectDeferred = false;
       return;
     }
-    if (_uploadReceiver.hasActiveUploads) {
+    if (_uploadReceiver.hasActiveUploads || _pendingUploadTasks > 0) {
       if (!_revisionReconnectDeferred) {
         _revisionReconnectDeferred = true;
         onLog?.call(
