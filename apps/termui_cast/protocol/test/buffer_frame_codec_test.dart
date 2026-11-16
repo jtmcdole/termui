@@ -1884,6 +1884,57 @@ void _testZipBombAndCorruptSessionTail() {
       .has((e) => e.sessionId, 'sessionId')
       .equals(sessionId);
 
+  // Case C2: Valid stored deflate block followed by an invalid BTYPE=11 block
+  // whose partial output equals declaredUncompressedLen must still throw
+  // CorruptSessionFrameException (requires throwOnError: true on archive >=4.6).
+  final smallSnapWire = BufferFrameCodec.encode(
+    BufferSnapshotFrame(
+      snapshot: BufferSnapshot.fromBuffer(
+        sessionId: sessionId,
+        seq: 1,
+        buffer: Buffer.blank(2, 2),
+        cursor: CursorState.origin,
+        modes: TerminalModes.defaults,
+      ),
+    ),
+  );
+  // Header before compressionFlag on 2x2 snapshot ('sess-bomb' = 9B):
+  // 1(ver)+1(type)+2+9(sid)+8(seq)+4(cols/rows)+7(cursor/modes)+20(sb)+1(wrap) = 53;
+  // byte 53 is compressionFlag == 0 (raw), bytes 54..end are valid uncompressed tail.
+  check(smallSnapWire[53]).equals(0);
+  final validTail = smallSnapWire.sublist(54);
+  final tLen = validTail.length;
+  final nLen = (~tLen) & 0xFFFF;
+  final partialThenCorruptDeflate = <int>[
+    0x00, // BFINAL=0, BTYPE=00 (stored uncompressed block)
+    tLen & 0xFF,
+    (tLen >> 8) & 0xFF,
+    nLen & 0xFF,
+    (nLen >> 8) & 0xFF,
+    ...validTail,
+    0x07, // BFINAL=1, BTYPE=11 (reserved/corrupt deflate block)
+    0xFF,
+    0xFF,
+  ];
+  final sneakyCorruptSnap = Uint8List.fromList([
+    ...smallSnapWire.sublist(0, 53),
+    1, // compressionFlag = 0x01 (deflate-raw)
+    (tLen >> 24) & 0xFF,
+    (tLen >> 16) & 0xFF,
+    (tLen >> 8) & 0xFF,
+    tLen & 0xFF,
+    ...partialThenCorruptDeflate,
+  ]);
+  check(() => BufferFrameCodec.decode(sneakyCorruptSnap))
+      .throws<CorruptSessionFrameException>()
+      .has((e) => e.sessionId, 'sessionId')
+      .equals(sessionId);
+
+  // Guard pubspec.yaml archive constraint >=4.7.1 so stale gitignored lockfiles
+  // cannot resolve archive <4.5.0 (missing maxOutputSize) or 4.7.0 (broken WASM).
+  final pubspecText = File('pubspec.yaml').readAsStringSync();
+  check(pubspecText).contains('archive: ^4.7.1');
+
   // Case D (Opus-M1): Uncompressed snapshot tail > maxFrameBytes (4 MiB) throws on encode even when repetitive.
   final zalgoCell = 'A' * 64;
   final oversizedSnap = BufferSnapshotFrame(
