@@ -15,6 +15,27 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - [`termui_audio_flutter` - `v0.4.1`](#termui_audio_flutter---v041)
+
+---
+
+#### `termui_audio_flutter` - `v0.4.1`
+
+ - **FIX**(termui_audio_flutter): decode native Ogg Opus and Ogg FLAC clips via BufferStream.
+
+
+## 2026-11-16
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`fterm` - `v0.2.1`](#fterm---v021)
 
 ---
