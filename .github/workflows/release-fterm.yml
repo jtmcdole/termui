@@ -151,8 +151,16 @@ jobs:
           if [ "$BUILD_DESKTOP" = "true" ]; then
             (cd apps/fterm && flutter build "$DESKTOP_OS" --release --build-name="$RELEASE_VERSION")
             if [ "$DESKTOP_OS" = "macos" ]; then
-              tar -C apps/fterm/build/macos/Build/Products/Release -czf "dist/fterm-${TARGET}.tar.gz" fterm.app
+              COPYFILE_DISABLE=1 tar -C apps/fterm/build/macos/Build/Products/Release -czf "dist/fterm-${TARGET}.tar.gz" fterm.app
             else
+              python3 -c '
+          import json, os
+          root = "apps/fterm/build/linux/x64/release/bundle"
+          entries = sorted(set(os.listdir(root)) | {".fterm-files.json"})
+          with open(os.path.join(root, ".fterm-files.json"), "w", encoding="utf-8") as f:
+              json.dump(entries, f, indent=2)
+              f.write("\n")
+          '
               tar -C apps/fterm/build/linux/x64/release/bundle -czf "dist/fterm-${TARGET}.tar.gz" .
             fi
           fi
@@ -273,9 +281,16 @@ jobs:
             foreach ($entry in $bundleEntries) {
               Copy-Item -Path (Join-Path $conptyDir.FullName $entry) -Destination (Join-Path $ftermReleaseDir $entry) -Force
             }
+            $ownedEntries = @(
+              @(Get-ChildItem -Path $ftermReleaseDir -Force | Select-Object -ExpandProperty Name) + @(".fterm-files.json") |
+                ForEach-Object { $_ -replace '\\', '/' } |
+                Sort-Object -Unique
+            )
+            ConvertTo-Json -InputObject $ownedEntries |
+              Set-Content -Path (Join-Path $ftermReleaseDir ".fterm-files.json") -Encoding utf8NoBOM
             $ftermZip = "dist/fterm-$($env:TARGET).zip"
-            Compress-Archive -Path "$ftermReleaseDir/*" -DestinationPath $ftermZip -Force
-            Assert-ZipEntries -ZipPath $ftermZip -RequiredEntries $bundleEntries
+            Compress-Archive -Path (Get-ChildItem -Path $ftermReleaseDir -Force).FullName -DestinationPath $ftermZip -Force
+            Assert-ZipEntries -ZipPath $ftermZip -RequiredEntries ($bundleEntries + @("fterm.exe", ".fterm-files.json"))
             Write-Output "Packaged $ftermZip"
           }
         env:
@@ -387,10 +402,9 @@ jobs:
             ```
           EOF
 
-          FLAGS=()
-          if [ "$IS_DRAFT" = "true" ]; then
-            FLAGS+=(--draft)
-          fi
+          # Always create as draft first so GitHub Immutable Releases locks the tag
+          # and asset digests only after every archive is uploaded.
+          FLAGS=(--draft)
           if [ "$IS_PRERELEASE" = "true" ]; then
             FLAGS+=(--prerelease)
           fi
@@ -415,6 +429,10 @@ jobs:
               "${FLAGS[@]}"
           fi
           rm -f changelog-section.md install-notes.md release-notes.md
+
+          if [ "$IS_DRAFT" != "true" ]; then
+            gh release edit "$TAG" --draft=false
+          fi
 
           # Record companion Melos baseline tags for termui_cast packages when publishing a non-draft release.
           if [ "$IS_DRAFT" != "true" ]; then
