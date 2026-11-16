@@ -18,6 +18,8 @@ import 'package:termui_caster_cli/termui_caster_cli.dart';
 import 'package:termui_pty/termui_pty.dart';
 import 'package:test/test.dart';
 
+import 'support/backpressure_probe.dart' show probeJsonPrefix;
+
 const String _testCertPem = '''
 -----BEGIN CERTIFICATE-----
 MIIBXjCCAQSgAwIBAgIULU3zm1zY44xP1dipeoCjSC/8K70wCgYIKoZIzj0EAwIw
@@ -1077,130 +1079,63 @@ void main() {
       skip: Platform.isWindows ? 'Requires POSIX /bin/sh' : null,
     );
 
+    Future<Map<String, Object?>> runBackpressureProbe({
+      required bool synthetic,
+    }) async {
+      final packageConfig = await Isolate.packageConfig;
+      check(packageConfig).isNotNull();
+      final libUri = await Isolate.resolvePackageUri(
+        Uri.parse('package:termui_caster_cli/termui_caster_cli.dart'),
+      );
+      check(libUri).isNotNull();
+      final probePath = libUri!
+          .resolve('../test/support/backpressure_probe.dart')
+          .toFilePath();
+
+      final result = await Process.run(Platform.resolvedExecutable, [
+        '--enable-vm-service=0',
+        '--disable-service-auth-codes',
+        '--packages=${packageConfig!.toFilePath()}',
+        probePath,
+        if (synthetic) '--synthetic',
+      ]).timeout(const Duration(seconds: 30));
+
+      check(
+        result.exitCode,
+        because: 'stdout=${result.stdout}\nstderr=${result.stderr}',
+      ).equals(0);
+      final jsonLine = LineSplitter.split(
+        result.stdout as String,
+      ).lastWhere((line) => line.startsWith(probeJsonPrefix));
+      return jsonDecode(jsonLine.substring(probeJsonPrefix.length))
+          as Map<String, Object?>;
+    }
+
     test(
       'high-throughput pty2 child applies backpressure so timers keep firing and memory stays bounded',
       () async {
-        // Measure RSS and timer responsiveness inside an isolated Dart VM
-        // subprocess so concurrent sibling suites in `dart test` cannot
-        // pollute `ProcessInfo.currentRss`.
-        final packageConfig = await Isolate.packageConfig;
-        check(packageConfig).isNotNull();
-        final tempDir = await Directory.systemTemp.createTemp(
-          'caster_backpressure_probe_',
-        );
-        addTearDown(() => tempDir.delete(recursive: true));
-        final probeScript = File('${tempDir.path}/probe.dart');
-        await probeScript.writeAsString(r'''
-import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:typed_data';
-
-import 'package:stream_channel/stream_channel.dart';
-import 'package:termui_cast_protocol/termui_cast_protocol.dart';
-import 'package:termui_caster_cli/termui_caster_cli.dart';
-
-Future<void> main() async {
-  final warmedUp = Completer<void>();
-  var emittedFrames = 0;
-  final pty = Pty2Session.start(
-    '/bin/sh',
-    const [
-      '-c',
-      r'(exec </dev/null >/dev/null 2>&1; sleep 4; kill -TERM $$) & exec yes',
-    ],
-    initialCols: 160,
-    initialRows: 50,
-  );
-  final service = CasterService(
-    config: CasterConfig(
-      sessionId: const SessionId('flood-pty'),
-      title: 'yes-flood',
-      initialCols: 160,
-      initialRows: 50,
-      command: const ['yes'],
-    ),
-    pty: pty,
-    frameCoalesceInterval: const Duration(milliseconds: 16),
-    channelOpener: () async {
-      final ctrl = StreamChannelController<Uint8List>();
-      ctrl.foreign.stream.listen((raw) {
-        switch (BufferFrameCodec.decode(raw)) {
-          case AuthFrame():
-            ctrl.foreign.sink.add(
-              BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
-            );
-          case RegisterSessionFrame(:final sessionId):
-            ctrl.foreign.sink.add(
-              BufferFrameCodec.encode(
-                SubscriberCountFrame(
-                  sessionId: sessionId,
-                  subscriberCount: 1,
-                ),
-              ),
-            );
-            ctrl.foreign.sink.add(
-              BufferFrameCodec.encode(
-                RequestKeyframeFrame(sessionId: sessionId),
-              ),
-            );
-          case BufferDeltaFrame():
-            emittedFrames++;
-            if (!warmedUp.isCompleted) warmedUp.complete();
-          case _:
-            emittedFrames++;
-        }
-      });
-      return ctrl.local;
-    },
-  );
-
-  await service.start();
-  await warmedUp.future.timeout(const Duration(seconds: 3));
-
-  final baselineRss = ProcessInfo.currentRss;
-  var peakRss = baselineRss;
-  var timerTicks = 0;
-  final sw = Stopwatch()..start();
-  final done = Completer<void>();
-  final timer = Timer.periodic(const Duration(milliseconds: 25), (_) {
-    timerTicks++;
-    final rss = ProcessInfo.currentRss;
-    if (rss > peakRss) peakRss = rss;
-    if (sw.elapsedMilliseconds >= 300 && !done.isCompleted) {
-      done.complete();
-    }
-  });
-
-  await Future.any<void>([done.future, pty.exitCode.then((_) {})]);
-  timer.cancel();
-  await service.stop(killPty: true);
-
-  stdout.writeln(
-    jsonEncode({
-      'timerTicks': timerTicks,
-      'emittedFrames': emittedFrames,
-      'rssDeltaBytes': peakRss - baselineRss,
-    }),
-  );
-}
-''');
-
-        final result = await Process.run(Platform.resolvedExecutable, [
-          '--packages=${packageConfig!.toFilePath()}',
-          probeScript.path,
-        ]).timeout(const Duration(seconds: 30));
-
-        check(result.exitCode, because: 'stderr=${result.stderr}').equals(0);
-        final metrics =
-            jsonDecode((result.stdout as String).trim())
-                as Map<String, Object?>;
+        // Measure post-GC main-isolate `heapUsage` via the Dart VM service in
+        // a subprocess so concurrent sibling suites, the in-process CFE
+        // `kernel-service` isolate, and OS `MADV_FREE` page caching cannot
+        // cause false-positive memory spikes.
+        final metrics = await runBackpressureProbe(synthetic: false);
         check(metrics['timerTicks'] as int).isGreaterOrEqual(3);
         check(metrics['emittedFrames'] as int).isGreaterOrEqual(2);
-        check(metrics['rssDeltaBytes'] as int).isLessThan(64 * 1024 * 1024);
+        check(metrics['heapDeltaBytes'] as int).isLessThan(16 * 1024 * 1024);
       },
       timeout: const Timeout(Duration(seconds: 60)),
       skip: Platform.isWindows ? 'Requires POSIX /bin/sh and yes' : null,
+    );
+
+    test(
+      'backpressure heap probe measures bounded post-GC isolate heap under flood',
+      () async {
+        final metrics = await runBackpressureProbe(synthetic: true);
+        check(metrics['timerTicks'] as int).isGreaterOrEqual(3);
+        check(metrics['emittedFrames'] as int).isGreaterOrEqual(2);
+        check(metrics['heapDeltaBytes'] as int).isLessThan(16 * 1024 * 1024);
+      },
+      timeout: const Timeout(Duration(seconds: 60)),
     );
 
     test(
