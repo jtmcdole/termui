@@ -1,3 +1,7 @@
+## 0.4.1
+
+ - **FIX**(termui_audio_flutter): decode native Ogg Opus and Ogg FLAC clips via BufferStream.
+
 ## 0.4.0
 
 > Note: This release has breaking changes.
