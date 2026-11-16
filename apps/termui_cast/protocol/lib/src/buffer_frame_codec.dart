@@ -1108,6 +1108,7 @@ _FrameReader _readAudioTailReader(_FrameReader reader) {
     inflated = const ZLibDecoder().decodeBytes(
       compressed,
       raw: true,
+      throwOnError: true,
       maxOutputSize: uncompressedLen,
     );
   } on Object catch (e) {
@@ -2009,6 +2010,7 @@ _FrameReader _readTailReader(_FrameReader reader) {
     inflated = const ZLibDecoder().decodeBytes(
       compressed,
       raw: true,
+      throwOnError: true,
       maxOutputSize: uncompressedLen,
     );
   } on Object catch (e) {
