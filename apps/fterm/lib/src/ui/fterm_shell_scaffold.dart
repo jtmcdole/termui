@@ -229,6 +229,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ws.workspaceSettings.themeSettings.faintOpacity,
       ws.preferences.macosOptionAsAlt,
       ws.preferences.fontSize,
+      ws.updateViewModel.status,
       resolvedFontSize ?? _resolvedFontSize(context),
       for (final tab in ws.tabs) ...[
         tab.tabId,
@@ -497,8 +498,11 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               if (widget.isDraggingOverFiles) _buildDragOverlay(theme),
               ListenableBuilder(
                 listenable: widget.workspace.chromeNotifier,
-                builder: (_, _) =>
-                    FtermOverlayHost(workspace: widget.workspace),
+                builder: (_, _) => FtermOverlayHost(
+                  workspace: widget.workspace,
+                  onOpenUrl: widget.onOpenUrl,
+                  isWeb: _isWeb,
+                ),
               ),
             ],
           ),
@@ -743,7 +747,15 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     FtermTabState tab,
   ) {
     final shareLabel = _formatPaneShareLabel(pane);
+    final showUpdatePill =
+        !_isWeb &&
+        !widget.workspace.shouldShowTabBar &&
+        pane.paneId == tab.splitTree.focusedPaneId;
+    final updateLabel = showUpdatePill
+        ? widget.workspace.updateViewModel.cornerPillLabel
+        : null;
     return [
+      ?updateLabel,
       if (tab.splitTree.zoomedPaneId == pane.paneId) 'ZOOM',
       ?shareLabel,
       if (pane.scrollOffsetLines > 0) '+${pane.scrollOffsetLines}',
@@ -1117,13 +1129,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           widget.workspace.preferences.copyWith(audioMuted: !muted),
         ),
       ),
-      _chromeIconButton(
-        key: const ValueKey('fterm-settings-button'),
-        tooltip: 'Settings (Ctrl+\\ ,)',
-        icon: Icons.tune,
-        color: fg.withValues(alpha: 0.72),
-        onTap: () => widget.workspace.setOverlay(FtermOverlay.settings),
-      ),
+      _buildSettingsActionButton(theme),
       _chromeIconButton(
         key: const ValueKey('fterm-help-button'),
         tooltip: 'Shortcuts (Ctrl+\\ ?)',
@@ -1132,6 +1138,46 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         onTap: () => widget.workspace.setOverlay(FtermOverlay.help),
       ),
     ];
+  }
+
+  Widget _buildSettingsActionButton(tui.TerminalColorTheme theme) {
+    final fg = Color(theme.foreground.argb);
+    final showBadge =
+        !_isWeb && widget.workspace.updateViewModel.hasActionableUpdate;
+    final accent = Color(theme.resolveAnsi256(4).argb);
+    return Tooltip(
+      message: showBadge
+          ? 'Settings — update available (Ctrl+\\ ,)'
+          : 'Settings (Ctrl+\\ ,)',
+      child: InkWell(
+        key: const ValueKey('fterm-settings-button'),
+        onTap: () => widget.workspace.setOverlay(FtermOverlay.settings),
+        child: SizedBox(
+          width: 24,
+          height: tabBarHeight,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(Icons.tune, size: 14, color: fg.withValues(alpha: 0.72)),
+              if (showBadge)
+                Positioned(
+                  right: 3,
+                  top: 5,
+                  child: Container(
+                    key: const ValueKey('fterm-settings-update-dot'),
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: accent,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildLeaderBadge(tui.TerminalColorTheme theme) => Container(
