@@ -16,32 +16,36 @@ typedef DesktopIapProviderBuilder =
 /// Startup connection overrides resolved from CLI flags or runtime environment
 /// variables on native desktop (`dart:io`) platforms.
 final class DesktopLaunchOverrides {
-  /// Optional `/v1/client` WebSocket URL override.
+  /// Optional `/v1/client` WebSocket URL override (CLI or environment).
   final String? serverUrl;
+
+  /// Optional `/v1/client` WebSocket URL explicitly passed via `--server` or
+  /// `--url` on the CLI.
+  final String? cliServerUrl;
 
   /// Optional bearer viewer token override.
   final String? token;
 
-  /// Optional `--token-file` path override.
+  /// Optional canonicalized `--token-file` path override.
   final String? tokenFile;
 
   /// Optional bearer caster token override (`--caster-token` /
   /// `TERMUI_CAST_CASTER_TOKEN`).
   final String? casterToken;
 
-  /// Optional `--caster-token-file` path override.
+  /// Optional canonicalized `--caster-token-file` path override.
   final String? casterTokenFile;
 
   /// Normalized `--iap-service-account` CLI override, if non-empty.
   final String? cliIapServiceAccount;
 
-  /// Normalized `--iap-key-file` CLI override, if non-empty.
+  /// Canonicalized `--iap-key-file` CLI override, if non-empty.
   final String? cliIapKeyFile;
 
   /// Normalized `TERMUI_CAST_IAP_SERVICE_ACCOUNT` environment fallback.
   final String? envIapServiceAccount;
 
-  /// Normalized `TERMUI_CAST_IAP_KEY_FILE` environment fallback.
+  /// Canonicalized `TERMUI_CAST_IAP_KEY_FILE` environment fallback.
   final String? envIapKeyFile;
 
   /// Whether `--token` was explicitly supplied on the CLI.
@@ -59,6 +63,7 @@ final class DesktopLaunchOverrides {
   /// Creates an immutable set of desktop launch overrides.
   const DesktopLaunchOverrides({
     this.serverUrl,
+    this.cliServerUrl,
     this.token,
     this.tokenFile,
     this.casterToken,
@@ -72,6 +77,17 @@ final class DesktopLaunchOverrides {
     this.hasCliIapServiceAccount = false,
     this.hasCliIapKeyFile = false,
   });
+
+  /// Sanitized CLI arguments safe to forward across an auto-update relaunch
+  /// (preserving canonicalized file flags and server URL while stripping raw
+  /// `--token` and `--caster-token` bearer values).
+  List<String> get relaunchArgs => List<String>.unmodifiable(<String>[
+    if (cliServerUrl case final server?) ...['--server', server],
+    if (tokenFile case final tf?) ...['--token-file', tf],
+    if (casterTokenFile case final ctf?) ...['--caster-token-file', ctf],
+    if (cliIapServiceAccount case final sa?) ...['--iap-service-account', sa],
+    if (cliIapKeyFile case final kf?) ...['--iap-key-file', kf],
+  ]);
 }
 
 /// Parses optional `--server` / `--url`, `--token`, `--token-file`,
@@ -85,42 +101,40 @@ final class DesktopLaunchOverrides {
 DesktopLaunchOverrides parseDesktopLaunchOverrides({
   List<String> args = const [],
   Map<String, String> environment = const {},
+  String Function(String path)? canonicalizePath,
 }) {
+  final canonicalize = canonicalizePath ?? impl.canonicalizePlatformFilePath;
   final cli = _parseCliArgs(args);
-  if (cli.hasToken && cli.hasTokenFile) {
-    throw const FormatException(
-      'Cannot specify both --token and --token-file.',
-    );
-  }
-  if (cli.hasCasterToken && cli.hasCasterTokenFile) {
-    throw const FormatException(
-      'Cannot specify both --caster-token and --caster-token-file.',
-    );
-  }
-  final cliTokenFile = _nonEmptyTrimmed(cli.tokenFile);
-  if (cli.hasTokenFile && cliTokenFile == null) {
-    throw const FormatException('Missing non-empty value for --token-file.');
-  }
-  final cliCasterTokenFile = _nonEmptyTrimmed(cli.casterTokenFile);
-  if (cli.hasCasterTokenFile && cliCasterTokenFile == null) {
-    throw const FormatException(
-      'Missing non-empty value for --caster-token-file.',
-    );
-  }
-  final cliAccount = _nonEmptyTrimmed(cli.iapServiceAccount);
-  if (cli.hasIapServiceAccount && cliAccount == null) {
-    throw const FormatException(
-      'Missing non-empty value for --iap-service-account.',
-    );
-  }
-  final cliKeyFile = _nonEmptyTrimmed(cli.iapKeyFile);
-  if (cli.hasIapKeyFile && cliKeyFile == null) {
-    throw const FormatException('Missing non-empty value for --iap-key-file.');
-  }
+  _validateMutualExclusions(cli);
+  final cliTokenFile = _resolveRequiredFileFlag(
+    present: cli.hasTokenFile,
+    raw: cli.tokenFile,
+    flag: '--token-file',
+    canonicalize: canonicalize,
+  );
+  final cliCasterTokenFile = _resolveRequiredFileFlag(
+    present: cli.hasCasterTokenFile,
+    raw: cli.casterTokenFile,
+    flag: '--caster-token-file',
+    canonicalize: canonicalize,
+  );
+  final cliAccount = _resolveRequiredTextFlag(
+    present: cli.hasIapServiceAccount,
+    raw: cli.iapServiceAccount,
+    flag: '--iap-service-account',
+  );
+  final cliKeyFile = _resolveRequiredFileFlag(
+    present: cli.hasIapKeyFile,
+    raw: cli.iapKeyFile,
+    flag: '--iap-key-file',
+    canonicalize: canonicalize,
+  );
+  final cliServer = _nonEmptyTrimmed(cli.serverUrl);
+  final envKeyRaw = _nonEmptyTrimmed(environment['TERMUI_CAST_IAP_KEY_FILE']);
   return DesktopLaunchOverrides(
     serverUrl:
-        _nonEmptyTrimmed(cli.serverUrl) ??
-        _nonEmptyTrimmed(environment['TERMUI_CAST_SERVER_URL']),
+        cliServer ?? _nonEmptyTrimmed(environment['TERMUI_CAST_SERVER_URL']),
+    cliServerUrl: cliServer,
     token:
         _nonEmptyRaw(cli.token) ??
         _nonEmptyRaw(environment['TERMUI_CAST_TOKEN']),
@@ -134,12 +148,51 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
     envIapServiceAccount: _nonEmptyTrimmed(
       environment['TERMUI_CAST_IAP_SERVICE_ACCOUNT'],
     ),
-    envIapKeyFile: _nonEmptyTrimmed(environment['TERMUI_CAST_IAP_KEY_FILE']),
+    envIapKeyFile: envKeyRaw == null ? null : canonicalize(envKeyRaw),
     hasCliToken: cli.hasToken,
     hasCliCasterToken: cli.hasCasterToken,
     hasCliIapServiceAccount: cli.hasIapServiceAccount,
     hasCliIapKeyFile: cli.hasIapKeyFile,
   );
+}
+
+void _validateMutualExclusions(_ParsedCliFlags cli) {
+  if (cli.hasToken && cli.hasTokenFile) {
+    throw const FormatException(
+      'Cannot specify both --token and --token-file.',
+    );
+  }
+  if (cli.hasCasterToken && cli.hasCasterTokenFile) {
+    throw const FormatException(
+      'Cannot specify both --caster-token and --caster-token-file.',
+    );
+  }
+}
+
+String? _resolveRequiredTextFlag({
+  required bool present,
+  required String? raw,
+  required String flag,
+}) {
+  final normalized = _nonEmptyTrimmed(raw);
+  if (present && normalized == null) {
+    throw FormatException('Missing non-empty value for $flag.');
+  }
+  return normalized;
+}
+
+String? _resolveRequiredFileFlag({
+  required bool present,
+  required String? raw,
+  required String flag,
+  required String Function(String path) canonicalize,
+}) {
+  final normalized = _resolveRequiredTextFlag(
+    present: present,
+    raw: raw,
+    flag: flag,
+  );
+  return normalized == null ? null : canonicalize(normalized);
 }
 
 /// Resolves [CastLaunchConfig] across CLI flags, runtime environment variables
@@ -154,10 +207,15 @@ CastLaunchConfig resolveCastLaunchConfig({
   String defineCasterToken = '',
   DesktopIapProviderBuilder? iapProviderBuilder,
   String Function(String path)? secretFileReader,
+  String Function(String path)? canonicalizePath,
   void Function(String flag)? onCliSecretWarning,
 }) {
-  final overrides = environment != null
-      ? parseDesktopLaunchOverrides(args: args, environment: environment)
+  final overrides = (environment != null || canonicalizePath != null)
+      ? parseDesktopLaunchOverrides(
+          args: args,
+          environment: environment ?? const {},
+          canonicalizePath: canonicalizePath,
+        )
       : impl.readPlatformLaunchOverrides(args);
   final warnSecret = onCliSecretWarning ?? impl.warnPlatformCliSecret;
   if (overrides.hasCliToken) warnSecret('--token');
@@ -188,7 +246,10 @@ CastLaunchConfig resolveCastLaunchConfig({
     startupProvider: iapProvider,
     builder: builder,
   );
-  if (iapProvider == null && iapFactory == null) return baseConfig;
+  final relaunchArgs = overrides.relaunchArgs;
+  if (iapProvider == null && iapFactory == null && relaunchArgs.isEmpty) {
+    return baseConfig;
+  }
   return CastLaunchConfig(
     serverUri: baseConfig.serverUri,
     token: baseConfig.token,
@@ -196,6 +257,7 @@ CastLaunchConfig resolveCastLaunchConfig({
     promptForConnection: baseConfig.promptForConnection,
     iapTokenProvider: iapProvider,
     iapTokenProviderFactory: iapFactory,
+    relaunchArgs: relaunchArgs,
   );
 }
 
@@ -318,7 +380,7 @@ void _validateIapOptions({
   }
 }
 
-({
+typedef _ParsedCliFlags = ({
   String? serverUrl,
   String? token,
   String? tokenFile,
@@ -332,8 +394,9 @@ void _validateIapOptions({
   bool hasCasterTokenFile,
   bool hasIapServiceAccount,
   bool hasIapKeyFile,
-})
-_parseCliArgs(List<String> args) {
+});
+
+_ParsedCliFlags _parseCliArgs(List<String> args) {
   String? serverUrl;
   String? token;
   String? tokenFile;

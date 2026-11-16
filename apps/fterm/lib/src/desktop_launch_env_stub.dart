@@ -25,3 +25,6 @@ String readPlatformSecretFileSync(String path) =>
 
 /// No-op CLI secret warning on Web.
 void warnPlatformCliSecret(String flag) {}
+
+/// Identity file path canonicalizer on Web where `dart:io` is unavailable.
+String canonicalizePlatformFilePath(String rawPath) => rawPath;
