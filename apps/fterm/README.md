@@ -111,12 +111,23 @@ flutter build web --wasm --no-web-resources-cdn
 flutter build macos
 ```
 
+### Desktop Versioning & Testing Auto-Updates
+
+`fterm` reads its compiled semantic version from `appBuildName` (`package:flutter/services.dart`), which Flutter (`>=3.41.0`) populates automatically via `FLUTTER_BUILD_NAME`:
+
+- `flutter test`, `flutter run`, and `flutter build` read `version:` from `apps/fterm/pubspec.yaml` automatically. Never hardcode a version string in Dart.
+- Pass `--build-name=<x.y.z>` to `flutter build` when testing updates locally (for example, `flutter build windows --release --build-name=0.2.0`). `flutter run` does not accept `--build-name`, and Flutter reserves `FLUTTER_BUILD_NAME` so `--dart-define=FLUTTER_BUILD_NAME=...` is rejected.
+- Copy the release bundle (`build/windows/x64/runner/Release`, `build/linux/x64/release/bundle`, or `build/macos/Build/Products/Release/fterm.app`) into a standalone writable folder (such as `C:\temp\fterm-test` or `~/fterm-test`) before testing self-updates. `resolvePortableInstallLayout` disables in-place updates inside `build/`, in debug/profile builds (`!kReleaseMode`), and under `FLUTTER_TEST`.
+
 ## Releasing on GitHub
 
-Releases use a two-step GitHub Actions pipeline powered by Melos:
+Releases use a two-step GitHub Actions pipeline powered by Melos and **GitHub Immutable Releases**:
 
 1. If workspace libraries under `packages/` have unreleased changes that `fterm` depends on, run **[Prepare release](../../.github/workflows/release-prepare.yml)** first so Melos versions and tags those packages.
-2. Run **[Prepare fterm release](../../.github/workflows/release-fterm-prepare.yml)** (`Actions -> Prepare fterm release -> Run workflow`). Melos bumps `apps/fterm` and any modified `apps/termui_cast/*` packages from Conventional Commits, writes `CHANGELOG.md` entries, and opens (or updates) a `chore(fterm-release): release fterm vX.Y.Z` pull request against `main`.
-3. Review and merge that pull request into `main`. **[Release fterm](../../.github/workflows/release-fterm.yml)** starts automatically and builds the `macos-arm64`, `linux-x64`, and `windows-x64` archives. It then tags `fterm-vX.Y.Z` (plus companion `termui_cast*-v*` baseline tags) and publishes the GitHub Release.
+2. Run **[Prepare fterm release](../../.github/workflows/release-fterm-prepare.yml)** (`Actions -> Prepare fterm release -> Run workflow`):
+   - For a pre-release, set `prerelease: true` (automatic `-dev.N` bump) or pass `manual_version: X.Y.Z-rc.N` with `prerelease: false` (`manual_version` and `prerelease` cannot be combined).
+   - To graduate a pre-release to stable, set `graduate: true` (`prerelease: false`, `manual_version: ''`) to promote `-dev.N` / `-rc.N` to `X.Y.Z`.
+   - For a standard release, leave all inputs at defaults so Melos bumps from Conventional Commits and opens (or updates) a `chore(fterm-release): release fterm vX.Y.Z` pull request against `main`.
+3. Review and merge that pull request into `main`. **[Release fterm](../../.github/workflows/release-fterm.yml)** builds the `macos-arm64`, `linux-x64`, and `windows-x64` archives with `--build-name`, uploads them to a draft release, and promotes `--draft=false` so GitHub locks the `fterm-vX.Y.Z` tag and `sha256:` asset digests as immutable. Note that `fterm`'s auto-updater requires `immutable: true` and rejects releases published before repository immutability was enabled (`<= v0.2.2`).
 
 You can also trigger **[Release fterm](../../.github/workflows/release-fterm.yml)** manually via `workflow_dispatch` to cut a draft release or override the version string.
