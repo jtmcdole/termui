@@ -67,21 +67,34 @@ final class _VmHeapProbe {
 
 final class _SyntheticFloodPty implements PtySession {
   static final Uint8List _chunk = Uint8List.fromList(
-    ('y\r\n' * 4096).codeUnits,
+    ('y\r\n' * 1024).codeUnits,
   );
 
-  final StreamController<Uint8List> _controller = StreamController<Uint8List>();
+  final StreamController<Uint8List> _controller = StreamController<Uint8List>(
+    sync: true,
+  );
   final Completer<int> _exitCode = Completer<int>();
   bool _stopped = false;
+  bool _ackPending = false;
 
-  void start() => Timer.run(_pump);
+  void start() => _scheduleNextChunk();
+
+  void _scheduleNextChunk() {
+    if (_stopped || _ackPending || _controller.isClosed) return;
+    _ackPending = true;
+    Timer.run(() {
+      if (_stopped || _controller.isClosed) return;
+      Timer.run(_pump);
+    });
+  }
 
   void _pump() {
+    _ackPending = false;
     if (_stopped || _controller.isClosed) return;
     if (!_controller.isPaused) {
       _controller.add(_chunk);
     }
-    Timer.run(_pump);
+    _scheduleNextChunk();
   }
 
   @override
@@ -140,7 +153,7 @@ PtySession _startFloodPty({required bool synthetic}) {
     '/bin/sh',
     const [
       '-c',
-      r'(exec </dev/null >/dev/null 2>&1; sleep 4; kill -TERM $$) & exec yes',
+      r'(exec </dev/null >/dev/null 2>&1; sleep 8; kill -TERM $$) & exec yes',
     ],
     initialCols: 160,
     initialRows: 50,
@@ -153,7 +166,7 @@ Future<int> _countTimerTicksDuringFlood(Future<int> ptyExit) async {
   final done = Completer<void>();
   final timer = Timer.periodic(const Duration(milliseconds: 25), (_) {
     timerTicks++;
-    if (sw.elapsedMilliseconds >= 300 && !done.isCompleted) {
+    if (sw.elapsedMilliseconds >= 450 && !done.isCompleted) {
       done.complete();
     }
   });
@@ -175,6 +188,7 @@ Future<void> main(List<String> args) async {
       title: 'yes-flood',
       initialCols: 160,
       initialRows: 50,
+      maxScrollbackLines: 200,
       command: const ['yes'],
     ),
     pty: pty,
@@ -190,7 +204,8 @@ Future<void> main(List<String> args) async {
   );
 
   await service.start();
-  await warmedUp.future.timeout(const Duration(seconds: 3));
+  await warmedUp.future.timeout(const Duration(seconds: 5));
+  await Future<void>.delayed(const Duration(milliseconds: 300));
 
   final baselineHeapBytes = await heapProbe.liveHeapBytesAfterGc();
   final timerTicks = await _countTimerTicksDuringFlood(pty.exitCode);

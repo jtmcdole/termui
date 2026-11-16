@@ -1093,6 +1093,8 @@ void main() {
           .toFilePath();
 
       final result = await Process.run(Platform.resolvedExecutable, [
+        '--old_gen_heap_size=64',
+        '--new_gen_semi_max_size=4',
         '--enable-vm-service=0',
         '--disable-service-auth-codes',
         '--packages=${packageConfig!.toFilePath()}',
