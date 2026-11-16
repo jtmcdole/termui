@@ -1,6 +1,6 @@
 name: fterm
 description: Flutter web and native desktop monospace terminal client and mux for TermUI PTY casting.
-version: 0.2.0
+version: 0.2.1
 publish_to: none
 resolution: workspace
 

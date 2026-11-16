@@ -3,6 +3,28 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-16
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`fterm` - `v0.2.1`](#fterm---v021)
+
+---
+
+#### `fterm` - `v0.2.1`
+
+ - **FEAT**(fterm): add persistent login shell and custom shell overrides.
+ - **FEAT**(fterm): add WSLg MediaQuery text scaling, font zoom, and pillNotifier.
+
+
 ## 2026-11-15
 
 ### Changes

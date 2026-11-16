@@ -1,3 +1,8 @@
+## 0.2.1
+
+ - **FEAT**(fterm): add persistent login shell and custom shell overrides.
+ - **FEAT**(fterm): add WSLg MediaQuery text scaling, font zoom, and pillNotifier.
+
 ## 0.2.0
 
 > Note: This release has breaking changes.
