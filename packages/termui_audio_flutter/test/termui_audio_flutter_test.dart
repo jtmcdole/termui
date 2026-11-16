@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_audio_flutter/src/ogg_xiph_detector.dart';
 import 'package:termui_audio_flutter/src/ogg_xiph_file_reader.dart';
@@ -443,35 +444,38 @@ void main() {
       },
     );
 
-    test('dispose cancels pending playSpriteSequence timers cleanly', () async {
-      final engine = _RecordingFlutterAudioEngine();
-      const buffer = _FakeAudioBuffer(88);
-      final bus = _FakeAudioBus(3);
+    test('dispose cancels pending playSpriteSequence timers cleanly', () {
+      fakeAsync((async) {
+        final engine = _RecordingFlutterAudioEngine();
+        const buffer = _FakeAudioBuffer(88);
+        final bus = _FakeAudioBus(3);
 
-      unawaited(
-        engine.playSpriteSequence(buffer, const [
-          SpriteSegment(
-            start: Duration.zero,
-            duration: Duration(milliseconds: 80),
-          ),
-          SpriteSegment(
-            start: Duration(milliseconds: 80),
-            duration: Duration(milliseconds: 80),
-          ),
-        ], bus: bus),
-      );
+        unawaited(
+          engine.playSpriteSequence(buffer, const [
+            SpriteSegment(
+              start: Duration.zero,
+              duration: Duration(milliseconds: 80),
+            ),
+            SpriteSegment(
+              start: Duration(milliseconds: 80),
+              duration: Duration(milliseconds: 80),
+            ),
+          ], bus: bus),
+        );
 
-      // First segment starts immediately; second segment is scheduled on a tracked timer.
-      expect(engine.calls.first, equals('play(hash:88, bus:3, paused:true)'));
+        // First segment starts immediately; second segment is scheduled on a tracked timer.
+        expect(engine.calls.first, equals('play(hash:88, bus:3, paused:true)'));
 
-      await engine.dispose();
-      await Future<void>.delayed(const Duration(milliseconds: 120));
+        unawaited(engine.dispose());
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 120));
 
-      // Second segment must not fire after dispose() cancels tracked timers.
-      expect(
-        engine.calls.where((c) => c.startsWith('play(')).length,
-        equals(1),
-      );
+        // Second segment must not fire after dispose() cancels tracked timers.
+        expect(
+          engine.calls.where((c) => c.startsWith('play(')).length,
+          equals(1),
+        );
+      });
     });
 
     test('setVoicePan throws when engine is not initialized', () async {
@@ -485,57 +489,65 @@ void main() {
 
     test(
       'lazily enables visualization on first waveform read, disables after idle timeout, and supports fetchWaveform/watchWaveform',
-      () async {
-        final engine =
-            _RecordingFlutterAudioEngine(
-                visualizationIdleTimeout: const Duration(milliseconds: 120),
-              )
-              ..nextWaveformSamples = Float32List.fromList(
-                List<double>.generate(256, (i) => i / 256.0),
-              );
+      () {
+        fakeAsync((async) {
+          final engine =
+              _RecordingFlutterAudioEngine(
+                  visualizationIdleTimeout: const Duration(milliseconds: 120),
+                )
+                ..nextWaveformSamples = Float32List.fromList(
+                  List<double>.generate(256, (i) => i / 256.0),
+                );
 
-        expect(engine.visualizationCalls, isEmpty);
-        expect(() => engine.getWaveform(Float32List(16)), throwsArgumentError);
+          expect(engine.visualizationCalls, isEmpty);
+          expect(
+            () => engine.getWaveform(Float32List(16)),
+            throwsArgumentError,
+          );
 
-        // First read enables visualization lazily.
-        final first = engine.getWaveform();
-        expect(first[128], closeTo(0.5, 1e-6));
-        expect(engine.visualizationCalls, equals([true]));
+          // First read enables visualization lazily.
+          final first = engine.getWaveform();
+          expect(first[128], closeTo(0.5, 1e-6));
+          expect(engine.visualizationCalls, equals([true]));
 
-        // Read again before idle timeout resets the timer.
-        await Future<void>.delayed(const Duration(milliseconds: 70));
-        expect(engine.visualizationCalls, equals([true]));
-        final fetched = await engine.fetchWaveform();
-        expect(fetched[128], closeTo(0.5, 1e-6));
-        expect(engine.visualizationCalls, equals([true]));
+          // Read again before idle timeout resets the timer.
+          async.elapse(const Duration(milliseconds: 70));
+          expect(engine.visualizationCalls, equals([true]));
+          Float32List? fetched;
+          unawaited(engine.fetchWaveform().then((v) => fetched = v));
+          async.flushMicrotasks();
+          expect(fetched![128], closeTo(0.5, 1e-6));
+          expect(engine.visualizationCalls, equals([true]));
 
-        // Still active before full idle timeout elapses after second read.
-        await Future<void>.delayed(const Duration(milliseconds: 70));
-        expect(engine.visualizationCalls, equals([true]));
-        expect(engine.disposeAudioDataCalls, equals(0));
+          // Still active before full idle timeout elapses after second read.
+          async.elapse(const Duration(milliseconds: 70));
+          expect(engine.visualizationCalls, equals([true]));
+          expect(engine.disposeAudioDataCalls, equals(0));
 
-        // After full idle timeout since last read: visualization disables & AudioData disposes.
-        await Future<void>.delayed(const Duration(milliseconds: 80));
-        expect(engine.visualizationCalls, equals([true, false]));
-        expect(engine.disposeAudioDataCalls, equals(1));
+          // After full idle timeout since last read: visualization disables & AudioData disposes.
+          async.elapse(const Duration(milliseconds: 80));
+          expect(engine.visualizationCalls, equals([true, false]));
+          expect(engine.disposeAudioDataCalls, equals(1));
 
-        // Next read re-enables visualization.
-        engine.getWaveform();
-        expect(engine.visualizationCalls, equals([true, false, true]));
+          // Next read re-enables visualization.
+          engine.getWaveform();
+          expect(engine.visualizationCalls, equals([true, false, true]));
 
-        // watchWaveform polls and closes cleanly on dispose().
-        final watched = <Float32List>[];
-        var watchClosed = false;
-        final sub = engine
-            .watchWaveform(interval: const Duration(milliseconds: 20))
-            .listen(watched.add, onDone: () => watchClosed = true);
-        await Future<void>.delayed(const Duration(milliseconds: 130));
-        expect(watched, isNotEmpty);
+          // watchWaveform polls (clamped to >=50ms) and closes cleanly on dispose().
+          final watched = <Float32List>[];
+          var watchClosed = false;
+          final sub = engine
+              .watchWaveform(interval: const Duration(milliseconds: 20))
+              .listen(watched.add, onDone: () => watchClosed = true);
+          async.elapse(const Duration(milliseconds: 130));
+          expect(watched, hasLength(2));
 
-        await engine.dispose();
-        await Future<void>.delayed(Duration.zero);
-        expect(watchClosed, isTrue);
-        await sub.cancel();
+          unawaited(engine.dispose());
+          async.flushMicrotasks();
+          expect(watchClosed, isTrue);
+          unawaited(sub.cancel());
+          async.flushMicrotasks();
+        });
       },
     );
 
