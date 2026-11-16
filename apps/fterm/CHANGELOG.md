@@ -1,3 +1,7 @@
+## 0.2.2
+
+ - Update a dependency to the latest release.
+
 ## 0.2.1
 
  - **FEAT**(fterm): add persistent login shell and custom shell overrides.

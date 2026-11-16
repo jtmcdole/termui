@@ -1,6 +1,6 @@
 name: termui_cast_protocol
 description: Pure-Dart wire protocol, binary Buffer frame codec, and token auth for TermUI casting.
-version: 0.2.0
+version: 0.2.1
 publish_to: none
 resolution: workspace
 

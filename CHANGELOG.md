@@ -15,6 +15,43 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - [`termui_cast_protocol` - `v0.2.1`](#termui_cast_protocol---v021)
+ - [`termui_caster_cli` - `v0.2.1`](#termui_caster_cli---v021)
+ - [`termui_cast_server` - `v0.2.1`](#termui_cast_server---v021)
+ - [`termui_cast_client_core` - `v0.2.1`](#termui_cast_client_core---v021)
+ - [`fterm` - `v0.2.2`](#fterm---v022)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_cast_server` - `v0.2.1`
+ - `termui_cast_client_core` - `v0.2.1`
+ - `fterm` - `v0.2.2`
+
+---
+
+#### `termui_cast_protocol` - `v0.2.1`
+
+ - **FIX**(cast_protocol): require archive ^4.7.1 and pass throwOnError on inflate.
+
+#### `termui_caster_cli` - `v0.2.1`
+
+ - **FIX**(caster_cli): pause upload idle timer during queued disk tasks.
+
+
+## 2026-11-16
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`termui_audio_flutter` - `v0.4.1`](#termui_audio_flutter---v041)
 
 ---

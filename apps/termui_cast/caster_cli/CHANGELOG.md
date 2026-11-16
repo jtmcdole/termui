@@ -1,3 +1,7 @@
+## 0.2.1
+
+ - **FIX**(caster_cli): pause upload idle timer during queued disk tasks.
+
 ## 0.2.0
 
 > Note: This release has breaking changes.

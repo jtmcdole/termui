@@ -1,3 +1,7 @@
+## 0.2.1
+
+ - **FIX**(cast_protocol): require archive ^4.7.1 and pass throwOnError on inflate.
+
 ## 0.2.0
 
 > Note: This release has breaking changes.
