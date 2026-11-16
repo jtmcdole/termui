@@ -1,3 +1,13 @@
+## 0.3.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(fterm): add portable auto-update engine and single-binary swapper.
+ - **DOCS**(fterm): document appBuildName versioning and immutable release flow.
+ - **BREAKING** **FIX**(fterm): parallelize local PTY teardown and canonicalize launch file flags.
+ - **BREAKING** **FEAT**(fterm): wire auto-update settings controls, badges, and exit hooks.
+ - **BREAKING** **BUILD**(fterm): set org.mcdole.fterm bundle IDs and stage immutable release manifests.
+
 ## 0.2.2
 
  - Update a dependency to the latest release.

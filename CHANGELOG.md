@@ -11,6 +11,31 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`fterm` - `v0.3.0`](#fterm---v030)
+
+Packages with other changes:
+
+ - There are no other changes in this release.
+
+---
+
+#### `fterm` - `v0.3.0`
+
+ - **FEAT**(fterm): add portable auto-update engine and single-binary swapper.
+ - **DOCS**(fterm): document appBuildName versioning and immutable release flow.
+ - **BREAKING** **FIX**(fterm): parallelize local PTY teardown and canonicalize launch file flags.
+ - **BREAKING** **FEAT**(fterm): wire auto-update settings controls, badges, and exit hooks.
+ - **BREAKING** **BUILD**(fterm): set org.mcdole.fterm bundle IDs and stage immutable release manifests.
+
+
+## 2026-11-16
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - There are no breaking changes in this release.
 
 Packages with other changes:
