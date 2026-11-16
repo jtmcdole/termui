@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:termui_audio_flutter/src/ogg_xiph_detector.dart';
+import 'package:termui_audio_flutter/src/ogg_xiph_file_reader.dart';
 import 'package:termui_audio_flutter/termui_audio_flutter.dart';
 
 final class _FakeAudioBuffer implements AudioBuffer {
@@ -152,6 +155,128 @@ final class _RecordingFlutterAudioEngine extends FlutterAudioEngine {
     disposeAudioDataCalls += 1;
     calls.add('disposeEngineAudioData');
   }
+
+  final List<({int maxBufferSize, bool releaseConsumed, Duration buffering})>
+  createdBufferStreams = [];
+  final Map<int, BytesBuilder> streamedBytesByHash = {};
+  final List<int> chunkSizes = [];
+  final Set<int> endedBufferHashes = {};
+  final List<int> disposedBufferHashes = [];
+  final List<(String pathId, int length, bool stream)> engineMemLoads = [];
+  final List<(String path, bool stream)> engineFileLoads = [];
+  int? throwOnAddStreamChunkCall;
+  int _addStreamChunkCalls = 0;
+  int _nextBufferHash = 500;
+
+  @override
+  Future<AudioBuffer> createBufferStream({
+    int maxBufferSize = 4 * 1024 * 1024,
+    bool releaseConsumed = false,
+    Duration bufferingTimeNeeds = const Duration(milliseconds: 500),
+    int sampleRate = 48000,
+    int channels = 2,
+  }) async {
+    final hash = _nextBufferHash++;
+    createdBufferStreams.add((
+      maxBufferSize: maxBufferSize,
+      releaseConsumed: releaseConsumed,
+      buffering: bufferingTimeNeeds,
+    ));
+    streamedBytesByHash[hash] = BytesBuilder(copy: false);
+    calls.add('createBufferStream(hash:$hash)');
+    return _FakeAudioBuffer(hash);
+  }
+
+  @override
+  void addStreamData(AudioBuffer buffer, Uint8List chunk) {
+    _addStreamChunkCalls += 1;
+    if (throwOnAddStreamChunkCall == _addStreamChunkCalls) {
+      throw StateError('addStreamData failed');
+    }
+    chunkSizes.add(chunk.length);
+    streamedBytesByHash[buffer.hash]?.add(Uint8List.fromList(chunk));
+    calls.add('addStreamData(hash:${buffer.hash}, len:${chunk.length})');
+  }
+
+  @override
+  void setStreamEnded(AudioBuffer buffer) {
+    endedBufferHashes.add(buffer.hash);
+    calls.add('setStreamEnded(hash:${buffer.hash})');
+  }
+
+  @override
+  Future<void> disposeBuffer(AudioBuffer buffer) async {
+    disposedBufferHashes.add(buffer.hash);
+    calls.add('disposeBuffer(hash:${buffer.hash})');
+  }
+
+  @override
+  Future<AudioBuffer> loadEngineMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  }) async {
+    final hash = _nextBufferHash++;
+    engineMemLoads.add((pathId, bytes.length, stream));
+    calls.add('loadEngineMem($pathId, len:${bytes.length}, stream:$stream)');
+    return _FakeAudioBuffer(hash);
+  }
+
+  @override
+  Future<AudioBuffer> loadEngineFile(String path, {bool stream = false}) async {
+    final hash = _nextBufferHash++;
+    engineFileLoads.add((path, stream));
+    calls.add('loadEngineFile($path, stream:$stream)');
+    return _FakeAudioBuffer(hash);
+  }
+}
+
+Uint8List _buildOggPage(List<int> payload) {
+  final fullSegments = payload.length ~/ 255;
+  final remainder = payload.length % 255;
+  final segments = <int>[...List<int>.filled(fullSegments, 255), remainder];
+  return Uint8List.fromList([
+    ...'OggS'.codeUnits,
+    ...List<int>.filled(22, 0),
+    segments.length,
+    ...segments,
+    ...payload,
+  ]);
+}
+
+Uint8List _buildOggOpusBytes({int trailingAudioBytes = 64}) {
+  final opusHead = <int>[...'OpusHead'.codeUnits, ...List<int>.filled(11, 0)];
+  final audioPayload = List<int>.generate(
+    trailingAudioBytes,
+    (index) => index & 0xff,
+  );
+  return Uint8List.fromList([
+    ..._buildOggPage(opusHead),
+    ..._buildOggPage(audioPayload),
+  ]);
+}
+
+Uint8List _buildOggFlacBytes() {
+  final flacBos = <int>[
+    0x7f,
+    ...'FLAC'.codeUnits,
+    0x01,
+    0x00,
+    0x00,
+    0x01,
+    ...'fLaC'.codeUnits,
+    ...List<int>.filled(34, 0),
+  ];
+  return _buildOggPage(flacBos);
+}
+
+Uint8List _buildOggVorbisBytes() {
+  final vorbisBos = <int>[
+    0x01,
+    ...'vorbis'.codeUnits,
+    ...List<int>.filled(23, 0),
+  ];
+  return _buildOggPage(vorbisBos);
 }
 
 List<int> _extractPcmSamples(Uint8List wavBytes) {
@@ -411,6 +536,213 @@ void main() {
         await Future<void>.delayed(Duration.zero);
         expect(watchClosed, isTrue);
         await sub.cancel();
+      },
+    );
+
+    test(
+      'isOggXiphBytes distinguishes Ogg Opus and Ogg FLAC from Ogg Vorbis, WAV, and malformed headers',
+      () async {
+        expect(isOggXiphBytes(_buildOggOpusBytes()), isTrue);
+        expect(isOggXiphBytes(_buildOggFlacBytes()), isTrue);
+
+        // Chained/preceding Ogg page (e.g. Skeleton fishead) followed by OpusHead.
+        final chained = Uint8List.fromList([
+          ..._buildOggPage([
+            ...'fishead\x00'.codeUnits,
+            ...List<int>.filled(56, 0),
+          ]),
+          0xff, // non-page sync byte skipped cleanly
+          ..._buildOggOpusBytes(trailingAudioBytes: 16),
+        ]);
+        expect(isOggXiphBytes(chained), isTrue);
+
+        // Real example Swish and Clouds assets from termui_audio/example/assets.
+        final swishBytes = await File(
+          '../termui_audio/example/assets/fast_swish1.ogg',
+        ).readAsBytes();
+        expect(isOggXiphBytes(swishBytes), isTrue);
+
+        // Non-Xiph formats and malformed Ogg containers return false.
+        expect(isOggXiphBytes(_buildOggVorbisBytes()), isFalse);
+        expect(
+          isOggXiphBytes(
+            generateWaveformPcmWav(shape: WaveForm.triangle, frequency: 440.0),
+          ),
+          isFalse,
+        );
+        expect(isOggXiphBytes(Uint8List(0)), isFalse);
+        expect(isOggXiphBytes(Uint8List.fromList('OggS'.codeUnits)), isFalse);
+
+        // Truncated segment table and truncated page payload return false safely.
+        final truncatedSegTable = Uint8List.fromList([
+          ...'OggS'.codeUnits,
+          ...List<int>.filled(22, 0),
+          20, // claims 20 segments, only 8 bytes follow
+          ...List<int>.filled(8, 255),
+        ]);
+        expect(isOggXiphBytes(truncatedSegTable), isFalse);
+
+        final truncatedPayload = Uint8List.fromList([
+          ...'OggS'.codeUnits,
+          ...List<int>.filled(22, 0),
+          1,
+          50, // claims 50-byte payload, only 8 bytes follow
+          ...'OpusHead'.codeUnits,
+        ]);
+        expect(isOggXiphBytes(truncatedPayload), isFalse);
+      },
+    );
+
+    test(
+      'readOggXiphFileBytes reads small and >64 KiB Ogg Xiph files and returns null for Vorbis, short, or missing files',
+      () async {
+        final tempDir = await Directory.systemTemp.createTemp(
+          'termui_audio_flutter_ogg_test_',
+        );
+        addTearDown(() => tempDir.delete(recursive: true));
+
+        final smallOpus = _buildOggOpusBytes(trailingAudioBytes: 512);
+        final smallPath = '${tempDir.path}/small.ogg';
+        await File(smallPath).writeAsBytes(smallOpus);
+        expect(await readOggXiphFileBytes(smallPath), equals(smallOpus));
+
+        final largeOpus = _buildOggOpusBytes(trailingAudioBytes: 90 * 1024);
+        final largePath = '${tempDir.path}/large.ogg';
+        await File(largePath).writeAsBytes(largeOpus);
+        expect(await readOggXiphFileBytes(largePath), equals(largeOpus));
+
+        final vorbisPath = '${tempDir.path}/vorbis.ogg';
+        await File(vorbisPath).writeAsBytes(_buildOggVorbisBytes());
+        expect(await readOggXiphFileBytes(vorbisPath), isNull);
+
+        final tinyPath = '${tempDir.path}/tiny.ogg';
+        await File(tinyPath).writeAsBytes(const [1, 2, 3, 4]);
+        expect(await readOggXiphFileBytes(tinyPath), isNull);
+
+        expect(
+          await readOggXiphFileBytes('${tempDir.path}/missing.ogg'),
+          isNull,
+        );
+      },
+    );
+
+    test(
+      'loadMem routes Ogg Opus and Ogg FLAC through preserved BufferStream chunks, rolls back on error, and keeps native loadMem for other codecs',
+      () async {
+        final uninit = FlutterAudioEngine();
+        expect(
+          () => uninit.loadMem('swish.ogg', _buildOggOpusBytes()),
+          throwsA(isA<Exception>()),
+        );
+
+        final engine = _RecordingFlutterAudioEngine();
+        final swishBytes = await File(
+          '../termui_audio/example/assets/fast_swish1.ogg',
+        ).readAsBytes();
+
+        // Short Ogg Opus clip (fast_swish1.ogg) bypasses native loadMem (which hits MBOggDecoder::readOpus EOF bug).
+        final swishBuffer = await engine.loadMem('fast_swish1.ogg', swishBytes);
+        expect(engine.engineMemLoads, isEmpty);
+        expect(engine.createdBufferStreams, hasLength(1));
+        expect(
+          engine.createdBufferStreams.single,
+          equals((
+            maxBufferSize: 512 * 1024 * 1024,
+            releaseConsumed: false,
+            buffering: Duration.zero,
+          )),
+        );
+        expect(
+          engine.streamedBytesByHash[swishBuffer.hash]?.toBytes(),
+          equals(swishBytes),
+        );
+        expect(engine.endedBufferHashes, contains(swishBuffer.hash));
+
+        // Multi-chunk (> 128 KiB) Ogg Opus stream slices into 128 KiB chunks and preserves exact byte order.
+        final multiChunkOpus = _buildOggOpusBytes(
+          trailingAudioBytes: 300 * 1024,
+        );
+        final largeBuffer = await engine.loadMem(
+          'large.opus',
+          multiChunkOpus,
+          stream: true,
+        );
+        expect(engine.engineMemLoads, isEmpty);
+        expect(
+          engine.chunkSizes.skip(1),
+          everyElement(lessThanOrEqualTo(128 * 1024)),
+        );
+        expect(
+          engine.streamedBytesByHash[largeBuffer.hash]?.toBytes(),
+          equals(multiChunkOpus),
+        );
+        expect(engine.endedBufferHashes, contains(largeBuffer.hash));
+
+        // Non-Xiph formats (Ogg Vorbis, WAV) continue calling loadEngineMem directly.
+        final vorbisBytes = _buildOggVorbisBytes();
+        await engine.loadMem('track.ogg', vorbisBytes, stream: true);
+        expect(
+          engine.engineMemLoads,
+          equals([('track.ogg', vorbisBytes.length, true)]),
+        );
+
+        // Error during chunk feed disposes the partially initialized BufferStream cleanly.
+        final failingEngine = _RecordingFlutterAudioEngine()
+          ..throwOnAddStreamChunkCall = 2;
+        await expectLater(
+          () => failingEngine.loadMem('broken.opus', multiChunkOpus),
+          throwsStateError,
+        );
+        expect(failingEngine.disposedBufferHashes, hasLength(1));
+        expect(failingEngine.endedBufferHashes, isEmpty);
+      },
+    );
+
+    test(
+      'loadFile routes Ogg Opus files through preserved BufferStream with progress updates and delegates non-Xiph files to native loadFile',
+      () async {
+        final uninit = FlutterAudioEngine();
+        expect(() => uninit.loadFile('missing.wav'), throwsA(isA<Exception>()));
+
+        final tempDir = await Directory.systemTemp.createTemp(
+          'termui_audio_flutter_load_file_',
+        );
+        addTearDown(() => tempDir.delete(recursive: true));
+
+        final multiChunkOpus = _buildOggOpusBytes(
+          trailingAudioBytes: 200 * 1024,
+        );
+        final opusFile = File('${tempDir.path}/clip.ogg');
+        await opusFile.writeAsBytes(multiChunkOpus);
+
+        final engine = _RecordingFlutterAudioEngine();
+        final opusProgress = <double>[];
+        final opusBuffer = await engine.loadFile(
+          opusFile.path,
+          onProgress: opusProgress.add,
+        );
+        expect(engine.engineFileLoads, isEmpty);
+        expect(
+          engine.streamedBytesByHash[opusBuffer.hash]?.toBytes(),
+          equals(multiChunkOpus),
+        );
+        expect(engine.endedBufferHashes, contains(opusBuffer.hash));
+        expect(opusProgress.first, closeTo(0.1, 1e-6));
+        expect(opusProgress.length, greaterThan(2));
+        expect(opusProgress.last, closeTo(1.0, 1e-6));
+
+        final wavFile = File('${tempDir.path}/tone.wav');
+        await wavFile.writeAsBytes(
+          generateWaveformPcmWav(shape: WaveForm.triangle, frequency: 440.0),
+        );
+        final wavProgress = <double>[];
+        await engine.loadFile(
+          wavFile.path,
+          stream: true,
+          onProgress: wavProgress.add,
+        );
+        expect(engine.engineFileLoads, equals([(wavFile.path, true)]));
+        expect(wavProgress, equals([0.1, 1.0]));
       },
     );
   });

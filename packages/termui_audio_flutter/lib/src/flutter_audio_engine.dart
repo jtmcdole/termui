@@ -2,10 +2,17 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show protected, visibleForTesting;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, protected, visibleForTesting;
 import 'package:flutter/services.dart';
 import 'package:flutter_soloud/flutter_soloud.dart' as sol;
 import 'package:termui_audio/termui_audio.dart';
+
+import 'ogg_xiph_detector.dart';
+import 'ogg_xiph_file_reader.dart';
+
+const int _oggXiphMaxBufferBytes = 512 * 1024 * 1024;
+const int _oggXiphChunkBytes = 128 * 1024;
 
 typedef _FilterParamOps = ({
   double Function() read,
@@ -204,14 +211,33 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     bool stream = false,
     LoadProgressCallback? onProgress,
   }) async {
+    if (!isInitialized) throw Exception('Engine not initialized.');
     onProgress?.call(0.1);
+    final xiphBytes = await readLocalOggXiphBytes(path);
+    final buffer = xiphBytes != null
+        ? await _loadOggXiphBufferStream(xiphBytes, onProgress: onProgress)
+        : await loadEngineFile(path, stream: stream);
+    onProgress?.call(1.0);
+    return buffer;
+  }
+
+  /// Loads [path] directly through the underlying SoLoud file loader.
+  @protected
+  @visibleForTesting
+  Future<AudioBuffer> loadEngineFile(String path, {bool stream = false}) async {
     final source = await _engine.loadFile(
       path,
       mode: stream ? sol.LoadMode.disk : sol.LoadMode.memory,
     );
-    onProgress?.call(1.0);
     return FlutterAudioBuffer(source, this);
   }
+
+  /// Probes [path] on native platforms and returns full bytes when the file is
+  /// an Ogg Opus or Ogg FLAC container, or `null` otherwise.
+  @protected
+  @visibleForTesting
+  Future<Uint8List?> readLocalOggXiphBytes(String path) =>
+      kIsWeb ? Future<Uint8List?>.value() : readOggXiphFileBytes(path);
 
   @override
   Future<AudioBuffer> loadUrl(
@@ -245,6 +271,62 @@ class FlutterAudioEngine implements TermuiAudioEngine {
     bool stream = false,
   }) async {
     if (!isInitialized) throw Exception('Engine not initialized.');
+    if (!kIsWeb && isOggXiphBytes(bytes)) {
+      return _loadOggXiphBufferStream(bytes);
+    }
+    return loadEngineMem(pathId, bytes, stream: stream);
+  }
+
+  /// Decodes Ogg Opus and Ogg FLAC containers into a preserved [BufferStream]
+  /// on native platforms to bypass `flutter_soloud`'s `MBOggDecoder::readOpus`
+  /// EOF truncation on final Ogg pages.
+  Future<AudioBuffer> _loadOggXiphBufferStream(
+    Uint8List bytes, {
+    LoadProgressCallback? onProgress,
+  }) async {
+    final buffer = await createBufferStream(
+      maxBufferSize: _oggXiphMaxBufferBytes,
+      bufferingTimeNeeds: Duration.zero,
+    );
+    try {
+      await _feedOggXiphChunks(buffer, bytes, onProgress);
+      setStreamEnded(buffer);
+      return buffer;
+    } catch (_) {
+      await _safeDisposeBuffer(buffer);
+      rethrow;
+    }
+  }
+
+  Future<void> _feedOggXiphChunks(
+    AudioBuffer buffer,
+    Uint8List bytes,
+    LoadProgressCallback? onProgress,
+  ) async {
+    for (var offset = 0; offset < bytes.length; offset += _oggXiphChunkBytes) {
+      final end = math.min(offset + _oggXiphChunkBytes, bytes.length);
+      addStreamData(buffer, Uint8List.sublistView(bytes, offset, end));
+      if (end < bytes.length) {
+        onProgress?.call(0.1 + 0.8 * (end / bytes.length));
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+  }
+
+  Future<void> _safeDisposeBuffer(AudioBuffer buffer) async {
+    try {
+      await disposeBuffer(buffer);
+    } catch (_) {}
+  }
+
+  /// Loads [bytes] directly through the underlying SoLoud memory loader.
+  @protected
+  @visibleForTesting
+  Future<AudioBuffer> loadEngineMem(
+    String pathId,
+    Uint8List bytes, {
+    bool stream = false,
+  }) async {
     final source = await _engine.loadMem(
       pathId,
       bytes,
