@@ -13,6 +13,8 @@ import 'font_loader.dart';
 import 'launch_config.dart';
 import 'settings_storage.dart';
 import 'ui/fterm_shell_scaffold.dart';
+import 'update/update_service.dart';
+import 'update/update_view_model.dart';
 import 'workspace/fterm_workspace_controller.dart';
 import 'workspace/local_host_driver.dart';
 
@@ -62,6 +64,12 @@ final class FtermApp extends StatefulWidget {
   /// Optional Web polarity override for Web vs Desktop tests.
   final bool? isWebOverride;
 
+  /// Optional desktop update service seam for tests.
+  final UpdateService? updateService;
+
+  /// Optional update timer factory seam for deterministic tests.
+  final UpdateTimerFactory? updateTimerFactory;
+
   /// Optional test hook invoked with the created [FtermWorkspaceController].
   final void Function(FtermWorkspaceController workspace)? onWorkspaceCreated;
 
@@ -82,6 +90,8 @@ final class FtermApp extends StatefulWidget {
     this.clock,
     this.platformOverride,
     this.isWebOverride,
+    this.updateService,
+    this.updateTimerFactory,
     this.onWorkspaceCreated,
   });
 
@@ -112,6 +122,10 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
     );
     _initWorkspace();
     unawaited(_workspace.start());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(_workspace.updateViewModel.runStartupCleanup());
+    });
   }
 
   void _initWorkspace() {
@@ -148,6 +162,8 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
       initialBrightness: _resolvePlatformBrightness(),
       resizeDebounce: widget.resizeDebounce,
       clock: widget.clock,
+      updateService: widget.updateService,
+      updateTimerFactory: widget.updateTimerFactory,
       onFrameRedrawn: widget.onFrameRedrawn,
     );
     _appThemeMode = _resolveMaterialThemeMode();
@@ -186,6 +202,15 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
 
   @override
   Future<AppExitResponse> didRequestAppExit() async {
+    final updateVm = _workspace.updateViewModel;
+    if (updateVm.applyOnQuit && updateVm.stagedUpdate != null) {
+      final applied = await updateVm.applyStagedOnQuitIfArmed();
+      if (!applied &&
+          updateVm.capability ==
+              SelfUpdateCapability.macosAppManagementDenied) {
+        return AppExitResponse.cancel;
+      }
+    }
     await _shutdownBeforeExit();
     return AppExitResponse.exit;
   }
@@ -203,6 +228,7 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         _workspace.setWorkspaceVisible(true);
         _workspace.setWindowFocused(true);
+        _workspace.updateViewModel.onAppResumed();
       case AppLifecycleState.detached:
         unawaited(_shutdownBeforeExit());
     }

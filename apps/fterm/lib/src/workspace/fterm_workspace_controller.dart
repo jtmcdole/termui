@@ -17,6 +17,8 @@ import 'package:termui_pty/termui_pty.dart';
 import '../audio/fterm_audio_controller.dart';
 import '../launch_config.dart';
 import '../settings_storage.dart';
+import '../update/update_service.dart';
+import '../update/update_view_model.dart';
 import 'fterm_pane_controller.dart';
 import 'local_host_driver.dart';
 import 'split_tree_model.dart';
@@ -177,6 +179,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   late final FileUploadCoordinator _uploadCoordinator;
 
+  /// Desktop auto-update ViewModel (fine-grained progress + coarse chrome cues).
+  late final UpdateViewModel updateViewModel;
+
   CastWorkspaceSettings _workspaceSettings;
   FtermPreferences _preferences;
   RelayCredentials _relayCredentials;
@@ -215,6 +220,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
     tui.TerminalBrightness initialBrightness = tui.TerminalBrightness.dark,
     Duration resizeDebounce = const Duration(milliseconds: 32),
     Clock? clock,
+    UpdateService? updateService,
+    UpdateTimerFactory? updateTimerFactory,
     void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
@@ -234,6 +241,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
     initialBrightness: initialBrightness,
     resizeDebounce: resizeDebounce,
     clock: clock,
+    updateService: updateService,
+    updateTimerFactory: updateTimerFactory,
     onFrameRedrawn: onFrameRedrawn,
   );
 
@@ -250,6 +259,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required tui.TerminalBrightness initialBrightness,
     required Duration resizeDebounce,
     required Clock? clock,
+    required UpdateService? updateService,
+    required UpdateTimerFactory? updateTimerFactory,
     required void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) : _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
@@ -275,6 +286,16 @@ final class FtermWorkspaceController extends ChangeNotifier {
       repository: repository,
       onProgressChanged: _notifyChromeChanged,
       onError: _setStatusBanner,
+    );
+    updateViewModel = UpdateViewModel(
+      service: updateService ?? createPlatformUpdateService(),
+      readPreferences: () => _preferences,
+      writePreferences: updatePreferences,
+      beforeExitTeardown: prepareForUpdateSwap,
+      relaunchArgs: launchConfig.relaunchArgs,
+      onCoarseStateChanged: _notifyChromeChanged,
+      clock: _clock,
+      timerFactory: updateTimerFactory,
     );
     if (repository.transport.isConnected) {
       _connectionState = ClientConnectionState.connecting;
@@ -452,10 +473,50 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Current clock instance.
   Clock get workspaceClock => _clock;
 
+  /// Counts live local shell panes and active outbound relay broadcasts so
+  /// restarting for an update warns before terminating running sessions.
+  ({int activeLocalShells, int activeLiveShares}) get activeLocalSessionCounts {
+    var shells = 0;
+    var shares = 0;
+    for (final pane in _panes.values) {
+      if (!pane.isLocal) continue;
+      if (!pane.hasExited) {
+        shells += 1;
+      }
+      final shareState = pane.shareSnapshot.state;
+      if (shareState == LocalShareState.live ||
+          shareState == LocalShareState.connecting) {
+        shares += 1;
+      }
+    }
+    return (activeLocalShells: shells, activeLiveShares: shares);
+  }
+
+  /// Flushes settings and closes all local PTYs and outbound shares in parallel
+  /// before an update swap, bounded by a 2-second timeout.
+  Future<void> prepareForUpdateSwap() async {
+    if (_disposed) return;
+    _settingsSaver.flush();
+    await _settingsSaver.flushAsync();
+    final activePanes = [..._panes.values];
+    _panes.clear();
+    _tabs.clear();
+    _ownedSharedSessionIds.clear();
+    _activeTabIndex = 0;
+    try {
+      await Future.wait([
+        for (final pane in activePanes) pane.dispose(disposePort: true),
+      ]).timeout(const Duration(seconds: 2));
+    } on TimeoutException {
+      // Local PTYs already received terminate concurrently with stopShare().
+    }
+  }
+
   /// Starts initial tabs (local shell on Desktop; auto-relay or Connect modal on Web).
   Future<void> start() async {
     if (_started || _disposed) return;
     _started = true;
+    updateViewModel.start();
     if (localHostDriver.isSupported) {
       try {
         await openLocalShellTab();
@@ -1088,7 +1149,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   /// Updates and persists [FtermPreferences] (`audioMuted`, `audioVolume`,
-  /// `autoHideSingleTab`, `macosOptionAsAlt`, `fontSize`, and shell overrides).
+  /// `autoHideSingleTab`, `macosOptionAsAlt`, `fontSize`, shell overrides, and
+  /// update preferences).
   void updatePreferences(FtermPreferences next) {
     if (_disposed || _preferences == next) return;
     _preferences = next;
@@ -1096,6 +1158,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       ..setMuted(next.audioMuted)
       ..setVolume(next.audioVolume);
     _settingsSaver.savePreferences(next);
+    updateViewModel.onPreferencesChanged();
     _notifyChromeChanged();
   }
 
@@ -1181,6 +1244,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       ..setVolume(_preferences.audioVolume);
     _applyColorResolver();
     _syncClipboardPolicies();
+    updateViewModel.onPreferencesChanged();
     _notifyChromeChanged();
     return true;
   }
@@ -1547,6 +1611,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       repository.bus,
       _onClientDisconnected,
     );
+    updateViewModel.dispose();
     _settingsSaver.dispose();
     await _settingsSaver.flushAsync();
     final activePanes = [..._panes.values];
@@ -1554,12 +1619,23 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _tabs.clear();
     _ownedSharedSessionIds.clear();
     await Future.wait([
-      for (final pane in activePanes) pane.dispose(disposePort: true),
+      _disposePanesAndHost(activePanes),
+      audioController.dispose(),
+      repository.dispose(),
     ]);
-    await localHostDriver.dispose();
-    await audioController.dispose();
-    await repository.dispose();
     _chromeNotifier.dispose();
     super.dispose();
+  }
+
+  Future<void> _disposePanesAndHost(
+    List<FtermPaneController> activePanes,
+  ) async {
+    try {
+      await Future.wait([
+        for (final pane in activePanes) pane.dispose(disposePort: true),
+      ]);
+    } finally {
+      await localHostDriver.dispose();
+    }
   }
 }

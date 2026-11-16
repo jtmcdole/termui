@@ -6,9 +6,12 @@ import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 
+import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../launch_config.dart';
 import '../settings_storage.dart';
+import '../update/update_service.dart';
+import '../update/update_view_model.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
 
@@ -18,8 +21,19 @@ final class FtermOverlayHost extends StatelessWidget {
   /// Backing workspace coordinator.
   final FtermWorkspaceController workspace;
 
+  /// External URL launcher invoked for release links.
+  final UrlOpener onOpenUrl;
+
+  /// Whether this host renders in Web mode (hides native desktop update UI).
+  final bool isWeb;
+
   /// Creates the active modal overlay layer, or `SizedBox.shrink()` when idle.
-  const FtermOverlayHost({super.key, required this.workspace});
+  const FtermOverlayHost({
+    super.key,
+    required this.workspace,
+    this.onOpenUrl = openExternalUrl,
+    this.isWeb = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -64,6 +78,8 @@ final class FtermOverlayHost extends StatelessWidget {
                   FtermOverlay.settings => _SettingsOverlay(
                     workspace: workspace,
                     palette: palette,
+                    onOpenUrl: onOpenUrl,
+                    isWeb: isWeb,
                   ),
                   FtermOverlay.stats => _StatsOverlay(
                     workspace: workspace,
@@ -506,8 +522,15 @@ final class _SessionPickerOverlay extends StatelessWidget {
 final class _SettingsOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
   final _OverlayColors palette;
+  final UrlOpener onOpenUrl;
+  final bool isWeb;
 
-  const _SettingsOverlay({required this.workspace, required this.palette});
+  const _SettingsOverlay({
+    required this.workspace,
+    required this.palette,
+    required this.onOpenUrl,
+    required this.isWeb,
+  });
 
   @override
   State<_SettingsOverlay> createState() => _SettingsOverlayState();
@@ -722,6 +745,15 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
                 shellArgsCtrl: _shellArgsCtrl,
               ),
             ],
+            if (!widget.isWeb &&
+                workspace.updateViewModel.isSupportedDesktop) ...[
+              const SizedBox(height: 8),
+              _DesktopUpdatesSection(
+                workspace: workspace,
+                palette: p,
+                onOpenUrl: widget.onOpenUrl,
+              ),
+            ],
             const SizedBox(height: 6),
             Wrap(
               alignment: WrapAlignment.end,
@@ -904,6 +936,409 @@ final class _DesktopShellOverrideSection extends StatelessWidget {
             workspace.preferences.copyWith(loginShell: v),
           ),
         ),
+      ],
+    );
+  }
+}
+
+final class _DesktopUpdatesSection extends StatefulWidget {
+  final FtermWorkspaceController workspace;
+  final _OverlayColors palette;
+  final UrlOpener onOpenUrl;
+
+  const _DesktopUpdatesSection({
+    required this.workspace,
+    required this.palette,
+    required this.onOpenUrl,
+  });
+
+  @override
+  State<_DesktopUpdatesSection> createState() => _DesktopUpdatesSectionState();
+}
+
+final class _DesktopUpdatesSectionState extends State<_DesktopUpdatesSection> {
+  bool _awaitingRestartConfirm = false;
+
+  void _onRestartPressed(UpdateViewModel vm) {
+    final counts = widget.workspace.activeLocalSessionCounts;
+    if (counts.activeLocalShells > 0 || counts.activeLiveShares > 0) {
+      setState(() => _awaitingRestartConfirm = true);
+      return;
+    }
+    unawaited(vm.restartToUpdate());
+  }
+
+  void _confirmRestart(UpdateViewModel vm) {
+    setState(() => _awaitingRestartConfirm = false);
+    unawaited(vm.restartToUpdate());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final vm = widget.workspace.updateViewModel;
+    return ListenableBuilder(
+      listenable: vm,
+      builder: (_, _) {
+        final prefs = widget.workspace.preferences;
+        final p = widget.palette;
+        final isBusy =
+            vm.status == UpdateStatus.checking ||
+            vm.status == UpdateStatus.downloading;
+        return Column(
+          key: const ValueKey('settings-updates-section'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Text('Updates', style: TextStyle(color: p.muted, fontSize: 11)),
+                const SizedBox(width: 8),
+                Text(
+                  'v${vm.currentVersion}',
+                  key: const ValueKey('settings-update-current-version'),
+                  style: TextStyle(
+                    color: p.foreground,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                OutlinedButton(
+                  key: const ValueKey('settings-update-check'),
+                  onPressed: isBusy
+                      ? null
+                      : () => unawaited(vm.checkForUpdates()),
+                  child: Text(
+                    vm.status == UpdateStatus.checking
+                        ? 'Checking...'
+                        : 'Check for Updates',
+                  ),
+                ),
+              ],
+            ),
+            SwitchListTile.adaptive(
+              key: const ValueKey('settings-update-daily'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Check daily for updates'),
+              value: prefs.updateCheckMode == UpdateCheckMode.daily,
+              onChanged: (daily) => widget.workspace.updatePreferences(
+                prefs.copyWith(
+                  updateCheckMode: daily
+                      ? UpdateCheckMode.daily
+                      : UpdateCheckMode.manual,
+                ),
+              ),
+            ),
+            SwitchListTile.adaptive(
+              key: const ValueKey('settings-update-prereleases'),
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Include pre-releases'),
+              value: prefs.includePrereleases,
+              onChanged: (inc) => widget.workspace.updatePreferences(
+                prefs.copyWith(includePrereleases: inc),
+              ),
+            ),
+            if (vm.statusMessage case final infoMsg?)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  infoMsg,
+                  key: const ValueKey('settings-update-status-message'),
+                  style: TextStyle(color: p.muted, fontSize: 11),
+                ),
+              ),
+            if (vm.errorMessage case final errMsg?)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  errMsg,
+                  key: const ValueKey('settings-update-error-message'),
+                  style: TextStyle(color: p.danger, fontSize: 11),
+                ),
+              ),
+            if (vm.availableUpdate case final update?)
+              _UpdateReleaseCard(
+                workspace: widget.workspace,
+                vm: vm,
+                update: update,
+                palette: p,
+                onOpenUrl: widget.onOpenUrl,
+                awaitingRestartConfirm: _awaitingRestartConfirm,
+                onRestartPressed: () => _onRestartPressed(vm),
+                onConfirmRestart: () => _confirmRestart(vm),
+                onCancelRestart: () =>
+                    setState(() => _awaitingRestartConfirm = false),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+final class _UpdateReleaseCard extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final UpdateViewModel vm;
+  final AvailableUpdate update;
+  final _OverlayColors palette;
+  final UrlOpener onOpenUrl;
+  final bool awaitingRestartConfirm;
+  final VoidCallback onRestartPressed;
+  final VoidCallback onConfirmRestart;
+  final VoidCallback onCancelRestart;
+
+  const _UpdateReleaseCard({
+    required this.workspace,
+    required this.vm,
+    required this.update,
+    required this.palette,
+    required this.onOpenUrl,
+    required this.awaitingRestartConfirm,
+    required this.onRestartPressed,
+    required this.onConfirmRestart,
+    required this.onCancelRestart,
+  });
+
+  static String _summarizeNotes(String raw) {
+    final lines = [
+      for (final line in raw.split('\n'))
+        if (line.trim() case final t when t.isNotEmpty && !t.startsWith('#')) t,
+    ];
+    if (lines.isEmpty) return '';
+    return lines.take(2).join('\n');
+  }
+
+  static String _formatMegabytes(int bytes) =>
+      (bytes / (1024 * 1024)).toStringAsFixed(1);
+
+  @override
+  Widget build(BuildContext context) {
+    final summary = _summarizeNotes(update.notes);
+    final progress = vm.downloadProgress;
+    return Material(
+      color: palette.surfaceAlt,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(6),
+        side: BorderSide(color: palette.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    update.isPrerelease
+                        ? 'fterm v${update.version} (pre-release)'
+                        : 'fterm v${update.version} available',
+                    style: TextStyle(
+                      color: palette.foreground,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  key: const ValueKey('settings-update-release-link'),
+                  onPressed: () => onOpenUrl(update.htmlUrl),
+                  child: const Text('Release Notes'),
+                ),
+              ],
+            ),
+            if (summary.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                summary,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: palette.muted, fontSize: 11),
+              ),
+            ],
+            if (update.unavailableAssetReason case final reason?) ...[
+              const SizedBox(height: 4),
+              Text(
+                reason,
+                style: TextStyle(color: palette.muted, fontSize: 11),
+              ),
+            ],
+            const SizedBox(height: 8),
+            if (vm.status == UpdateStatus.downloading) ...[
+              LinearProgressIndicator(
+                key: const ValueKey('settings-update-progress'),
+                value: (progress != null && progress.totalBytes > 0)
+                    ? progress.fraction
+                    : null,
+              ),
+              if (progress != null && progress.totalBytes > 0) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '${_formatMegabytes(progress.receivedBytes)} / '
+                  '${_formatMegabytes(progress.totalBytes)} MB',
+                  style: TextStyle(color: palette.muted, fontSize: 10),
+                ),
+              ],
+            ] else if (vm.status == UpdateStatus.readyToRestart)
+              _UpdateReadyControls(
+                workspace: workspace,
+                vm: vm,
+                palette: palette,
+                awaitingRestartConfirm: awaitingRestartConfirm,
+                onRestartPressed: onRestartPressed,
+                onConfirmRestart: onConfirmRestart,
+                onCancelRestart: onCancelRestart,
+              )
+            else
+              _UpdateActionButtons(
+                vm: vm,
+                update: update,
+                onOpenUrl: onOpenUrl,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _UpdateReadyControls extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final UpdateViewModel vm;
+  final _OverlayColors palette;
+  final bool awaitingRestartConfirm;
+  final VoidCallback onRestartPressed;
+  final VoidCallback onConfirmRestart;
+  final VoidCallback onCancelRestart;
+
+  const _UpdateReadyControls({
+    required this.workspace,
+    required this.vm,
+    required this.palette,
+    required this.awaitingRestartConfirm,
+    required this.onRestartPressed,
+    required this.onConfirmRestart,
+    required this.onCancelRestart,
+  });
+
+  static String _formatSessionWarning(int shells, int shares) {
+    final parts = <String>[
+      if (shells > 0)
+        '$shells active local ${shells == 1 ? 'shell' : 'shells'}',
+      if (shares > 0)
+        '$shares live ${shares == 1 ? 'broadcast' : 'broadcasts'}',
+    ];
+    return 'Restarting closes ${parts.join(' and ')}.';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = workspace.activeLocalSessionCounts;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SwitchListTile.adaptive(
+          key: const ValueKey('settings-update-apply-on-quit'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Apply update on quit'),
+          value: vm.applyOnQuit,
+          onChanged: vm.setApplyOnQuit,
+        ),
+        if (awaitingRestartConfirm) ...[
+          Text(
+            _formatSessionWarning(
+              counts.activeLocalShells,
+              counts.activeLiveShares,
+            ),
+            key: const ValueKey('settings-update-restart-warning'),
+            style: TextStyle(color: palette.danger, fontSize: 11),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            alignment: WrapAlignment.end,
+            spacing: 8,
+            children: [
+              TextButton(
+                key: const ValueKey('settings-update-cancel-restart'),
+                onPressed: onCancelRestart,
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                key: const ValueKey('settings-update-confirm-restart'),
+                onPressed: onConfirmRestart,
+                child: const Text('Confirm Restart'),
+              ),
+            ],
+          ),
+        ] else
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton(
+              key: const ValueKey('settings-update-restart'),
+              onPressed: onRestartPressed,
+              child: const Text('Restart to Update'),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+final class _UpdateActionButtons extends StatelessWidget {
+  final UpdateViewModel vm;
+  final AvailableUpdate update;
+  final UrlOpener onOpenUrl;
+
+  const _UpdateActionButtons({
+    required this.vm,
+    required this.update,
+    required this.onOpenUrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final canDownload =
+        vm.capability == SelfUpdateCapability.supported && update.asset != null;
+    final showFinderReveal =
+        vm.capability == SelfUpdateCapability.macosAppManagementDenied &&
+        vm.stagedUpdate != null;
+    return Wrap(
+      alignment: WrapAlignment.end,
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        TextButton(
+          key: const ValueKey('settings-update-skip'),
+          onPressed: vm.skipAvailableVersion,
+          child: const Text('Skip Version'),
+        ),
+        if (showFinderReveal)
+          FilledButton(
+            key: const ValueKey('settings-update-reveal-finder'),
+            onPressed: () => unawaited(vm.revealStagedInFinder()),
+            child: const Text('Reveal Staged App in Finder'),
+          ),
+        if (canDownload)
+          FilledButton(
+            key: const ValueKey('settings-update-download'),
+            onPressed: () => unawaited(vm.downloadAvailableUpdate()),
+            child: Text(
+              vm.status == UpdateStatus.error
+                  ? 'Retry Download'
+                  : 'Download Update',
+            ),
+          )
+        else
+          OutlinedButton(
+            key: const ValueKey('settings-update-open-release'),
+            onPressed: () => onOpenUrl(update.htmlUrl),
+            child: const Text('Open GitHub Release'),
+          ),
       ],
     );
   }
