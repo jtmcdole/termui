@@ -711,6 +711,7 @@ final class CasterService {
   bool _registrationConfirmed = false;
   final Queue<int> _pendingWaveformReqIds = Queue<int>();
   Future<void> _uploadSerial = Future<void>.value();
+  int _pendingUploadTasks = 0;
   final StreamController<CasterStatusSnapshot> _statusController =
       StreamController<CasterStatusSnapshot>.broadcast();
   CasterStatusSnapshot? _lastEmittedStatus;
@@ -1789,7 +1790,6 @@ final class CasterService {
       final ack = await _uploadReceiver.handleStartAsync(frame);
       if (_stopping || _finishing) return;
       _sendFrame(ack);
-      _syncUploadIdleTimer();
     });
   }
 
@@ -1799,7 +1799,6 @@ final class CasterService {
       final ack = await _uploadReceiver.handleChunkAsync(frame);
       if (_stopping || _finishing) return;
       _sendFrame(ack);
-      _syncUploadIdleTimer();
     });
   }
 
@@ -1817,21 +1816,35 @@ final class CasterService {
         );
         pty.writeBytes(Uint8List.fromList(utf8.encode(formatted)));
       }
-      _syncUploadIdleTimer();
     });
   }
 
   void _enqueueUploadTask(Future<void> Function() task) {
-    _uploadSerial = _uploadSerial.then((_) => task()).catchError((
-      Object error,
-    ) {
-      onLog?.call('File upload error: $error');
-    });
+    // Pause idle countdown while upload frames await serial disk I/O so slow
+    // filesystem operations never trigger false inter-frame stall aborts.
+    _pendingUploadTasks++;
+    _uploadIdleTimer?.cancel();
+    _uploadIdleTimer = null;
+    _uploadSerial = _uploadSerial
+        .then((_) => _runTrackedUploadTask(task))
+        .catchError((Object error) {
+          onLog?.call('File upload error: $error');
+        });
+  }
+
+  Future<void> _runTrackedUploadTask(Future<void> Function() task) async {
+    try {
+      await task();
+    } finally {
+      _pendingUploadTasks--;
+      _syncUploadIdleTimer();
+    }
   }
 
   void _syncUploadIdleTimer() {
     _uploadIdleTimer?.cancel();
     _uploadIdleTimer = null;
+    if (_stopping || _finishing || _pendingUploadTasks > 0) return;
     if (_uploadReceiver.hasActiveUploads) {
       if (_uploadIdleTimeout > Duration.zero) {
         _uploadIdleTimer = Timer(_uploadIdleTimeout, _onUploadIdleTimeout);
@@ -1846,7 +1859,7 @@ final class CasterService {
 
   void _onUploadIdleTimeout() {
     _uploadIdleTimer = null;
-    if (!_uploadReceiver.hasActiveUploads) return;
+    if (_pendingUploadTasks > 0 || !_uploadReceiver.hasActiveUploads) return;
     _uploadReceiver.abortAll();
     onLog?.call('Aborted stalled file upload after idle timeout');
     if (_revisionReconnectDeferred) {

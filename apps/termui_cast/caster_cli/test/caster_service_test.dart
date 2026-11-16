@@ -2292,7 +2292,7 @@ void main() {
     );
 
     test(
-      'CasterService defers revision reconnect while a file upload is active, handles rollback, and aborts stalled uploads after idle timeout',
+      'CasterService defers revision reconnect while a file upload is active and handles rollback before completion',
       () async {
         const sessionId = SessionId('sess-rev-upload-defer');
         final tempUploadDir = Directory.systemTemp.createTempSync(
@@ -2307,6 +2307,7 @@ void main() {
         final logs = <String>[];
         final casterInbox = <CastMessage>[];
         var nextProbeGate = Completer<void>();
+        Completer<void>? reconnectGate;
 
         final caster = CasterService(
           config: CasterConfig(
@@ -2319,7 +2320,9 @@ void main() {
           random: Random(0),
           baseReconnectDelay: const Duration(milliseconds: 20),
           revisionPollInterval: const Duration(milliseconds: 40),
-          uploadIdleTimeout: const Duration(milliseconds: 400),
+          // Keep idle timeout generous so CI disk/scheduler stalls during
+          // upload 1 or upload 2 cannot falsely trigger a mid-upload abort.
+          uploadIdleTimeout: const Duration(seconds: 30),
           onLog: logs.add,
           revisionProber: () async {
             if (!nextProbeGate.isCompleted) nextProbeGate.complete();
@@ -2327,6 +2330,10 @@ void main() {
           },
           channelOpener: () async {
             channelOpenCalls++;
+            final gate = reconnectGate;
+            if (gate != null && !gate.isCompleted) {
+              gate.complete();
+            }
             final ctrl = StreamChannelController<Uint8List>();
             currentRelayCtrl = ctrl;
             ctrl.foreign.stream.listen((raw) {
@@ -2349,7 +2356,7 @@ void main() {
           FileUploadStatus status,
           int expectedCount,
         ) async {
-          final deadline = DateTime.now().add(const Duration(seconds: 3));
+          final deadline = DateTime.now().add(const Duration(seconds: 10));
           while (casterInbox
                   .whereType<FileUploadAckFrame>()
                   .where((a) => a.status == status)
@@ -2365,7 +2372,7 @@ void main() {
         Future<void> waitForProbes(int count) async {
           for (var i = 0; i < count; i++) {
             nextProbeGate = Completer<void>();
-            await nextProbeGate.future.timeout(const Duration(seconds: 3));
+            await nextProbeGate.future.timeout(const Duration(seconds: 10));
           }
           await pumpEventQueue();
         }
@@ -2442,6 +2449,7 @@ void main() {
         check(caster.stateMachine.state).equals(CasterLifecycleState.streaming);
 
         // Send chunk and end frame -> upload finalizes, path is written to PTY, and deferred reconnect fires!
+        reconnectGate = Completer<void>();
         currentRelayCtrl.foreign.sink.add(
           BufferFrameCodec.encode(
             FileUploadChunkFrame(
@@ -2462,17 +2470,93 @@ void main() {
           ),
         );
         await waitForAck(.completed, 2);
-        final deadline2 = DateTime.now().add(const Duration(seconds: 3));
-        while (channelOpenCalls < 2) {
-          if (DateTime.now().isAfter(deadline2)) {
-            fail('Timed out waiting for channelOpenCalls == 2');
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 5));
-        }
+        await reconnectGate.future.timeout(const Duration(seconds: 10));
+        check(channelOpenCalls).equals(2);
         check(utf8.decode(pty.writtenInputs.single)).contains('notes.txt');
-        await waitForProbes(1);
+      },
+    );
 
-        // 3. Start upload 3 and stall forever -> after uploadIdleTimeout (400ms), stalled upload is aborted and deferred reconnect fires!
+    test(
+      'CasterService aborts stalled uploads after uploadIdleTimeout and triggers deferred revision reconnect',
+      () async {
+        const sessionId = SessionId('sess-rev-upload-stall');
+        final tempUploadDir = Directory.systemTemp.createTempSync(
+          'cast_rev_stall_',
+        );
+        addTearDown(() => tempUploadDir.deleteSync(recursive: true));
+
+        final pty = _FakePtySession();
+        var activeRevision = 'rev-a';
+        var channelOpenCalls = 0;
+        late StreamChannelController<Uint8List> currentRelayCtrl;
+        final logs = <String>[];
+        final readyGate = Completer<void>();
+        final baselineProbeGate = Completer<void>();
+        final deferredLogGate = Completer<void>();
+        final abortedLogGate = Completer<void>();
+        final reconnectedGate = Completer<void>();
+
+        final caster = CasterService(
+          config: CasterConfig(
+            sessionId: sessionId,
+            title: 'zsh',
+            uploadDirPath: tempUploadDir.path,
+            command: const ['zsh'],
+          ),
+          pty: pty,
+          random: Random(0),
+          baseReconnectDelay: const Duration(milliseconds: 20),
+          // Trigger revision probes explicitly via SubscriberCountFrame(0) so
+          // no periodic timer races the idle timeout window.
+          revisionPollInterval: const Duration(seconds: 60),
+          uploadIdleTimeout: const Duration(milliseconds: 500),
+          onLog: (message) {
+            logs.add(message);
+            if (message.contains('deferring reconnect') &&
+                !deferredLogGate.isCompleted) {
+              deferredLogGate.complete();
+            }
+            if (message == 'Aborted stalled file upload after idle timeout' &&
+                !abortedLogGate.isCompleted) {
+              abortedLogGate.complete();
+            }
+          },
+          revisionProber: () async {
+            if (!baselineProbeGate.isCompleted) {
+              baselineProbeGate.complete();
+            }
+            return activeRevision;
+          },
+          channelOpener: () async {
+            channelOpenCalls++;
+            if (channelOpenCalls == 2 && !reconnectedGate.isCompleted) {
+              reconnectedGate.complete();
+            }
+            final ctrl = StreamChannelController<Uint8List>();
+            currentRelayCtrl = ctrl;
+            ctrl.foreign.stream.listen((raw) {
+              final decoded = BufferFrameCodec.decode(raw);
+              if (decoded is AuthFrame) {
+                ctrl.foreign.sink.add(
+                  BufferFrameCodec.encode(
+                    const AuthAcceptedFrame(role: .caster),
+                  ),
+                );
+              } else if (decoded is FileUploadAckFrame &&
+                  decoded.status == .ready &&
+                  !readyGate.isCompleted) {
+                readyGate.complete();
+              }
+            });
+            return ctrl.local;
+          },
+        );
+        addTearDown(caster.stop);
+
+        await caster.start();
+        await baselineProbeGate.future.timeout(const Duration(seconds: 10));
+        check(channelOpenCalls).equals(1);
+
         currentRelayCtrl.foreign.sink.add(
           BufferFrameCodec.encode(
             FileUploadStartFrame(
@@ -2483,21 +2567,29 @@ void main() {
             ),
           ),
         );
-        await waitForAck(.ready, 3);
+        await readyGate.future.timeout(const Duration(seconds: 10));
 
-        activeRevision = 'rev-c';
-        await waitForProbes(1);
-        check(channelOpenCalls).equals(2);
+        // Change server revision and trigger an immediate probe while upload is stalled.
+        activeRevision = 'rev-b';
+        currentRelayCtrl.foreign.sink.add(
+          BufferFrameCodec.encode(
+            const SubscriberCountFrame(
+              sessionId: sessionId,
+              subscriberCount: 0,
+            ),
+          ),
+        );
+        await deferredLogGate.future.timeout(const Duration(seconds: 10));
+        check(channelOpenCalls).equals(1);
+        check(caster.stateMachine.state).equals(CasterLifecycleState.streaming);
 
-        final deadline3 = DateTime.now().add(const Duration(seconds: 3));
-        while (channelOpenCalls < 3) {
-          if (DateTime.now().isAfter(deadline3)) {
-            fail('Timed out waiting for channelOpenCalls == 3');
-          }
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-        }
+        // Once uploadIdleTimeout expires, the stalled upload is aborted and deferred reconnect fires.
+        await Future.wait([
+          abortedLogGate.future,
+          reconnectedGate.future,
+        ]).timeout(const Duration(seconds: 10));
         check(logs).contains('Aborted stalled file upload after idle timeout');
-        check(channelOpenCalls).equals(3);
+        check(channelOpenCalls).equals(2);
       },
     );
 
