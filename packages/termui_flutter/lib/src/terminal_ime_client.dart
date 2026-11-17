@@ -49,29 +49,31 @@ bool isTerminalFunctionalKey(LogicalKeyboardKey key) => switch (key) {
   _ => false,
 };
 
+extension _ExactSetMatch<T> on Set<T> {
+  bool isExactly(Set<T> expected) =>
+      length == expected.length && containsAll(expected);
+}
+
+/// Whether `(key, mods)` represents a built-in clipboard copy shortcut
+/// (`Cmd+C`, `Ctrl+Shift+C`, or `Ctrl+Insert`).
+bool isTerminalCopyShortcut(LogicalKeyboardKey key, Set<term.Modifier> mods) =>
+    switch (key) {
+      .keyC when mods.isExactly(const {.meta}) => true,
+      .keyC when mods.isExactly(const {.control, .shift}) => true,
+      .insert when mods.isExactly(const {.control}) => true,
+      _ => false,
+    };
+
 /// Whether `(key, mods)` represents a built-in clipboard paste shortcut
 /// (`Cmd+V`, `Ctrl+Shift+V`, or `Shift+Insert`).
-bool isTerminalPasteShortcut(LogicalKeyboardKey key, Set<term.Modifier> mods) {
-  if (key == LogicalKeyboardKey.keyV) {
-    final isCmdV =
-        mods.contains(term.Modifier.meta) &&
-        !mods.contains(term.Modifier.control) &&
-        !mods.contains(term.Modifier.alt);
-    final isCtrlShiftV =
-        mods.contains(term.Modifier.control) &&
-        mods.contains(term.Modifier.shift) &&
-        !mods.contains(term.Modifier.meta) &&
-        !mods.contains(term.Modifier.alt);
-    return isCmdV || isCtrlShiftV;
-  }
-  if (key == LogicalKeyboardKey.insert) {
-    return mods.contains(term.Modifier.shift) &&
-        !mods.contains(term.Modifier.control) &&
-        !mods.contains(term.Modifier.alt) &&
-        !mods.contains(term.Modifier.meta);
-  }
-  return false;
-}
+bool isTerminalPasteShortcut(LogicalKeyboardKey key, Set<term.Modifier> mods) =>
+    switch (key) {
+      .keyV when mods.isExactly(const {.meta}) => true,
+      .keyV when mods.isExactly(const {.meta, .shift}) => true,
+      .keyV when mods.isExactly(const {.control, .shift}) => true,
+      .insert when mods.isExactly(const {.shift}) => true,
+      _ => false,
+    };
 
 /// Resolves a Flutter hardware [KeyEvent] and active [mods] into a `termui`
 /// [term.KeyEvent], or returns `null` for standalone modifier keys.
@@ -400,6 +402,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     if (existing != null && existing.attached) {
       existing.close();
     }
+    _suppressedHostShortcutKeys.clear();
     _clearComposingState();
   }
 
@@ -461,12 +464,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     }
 
     final mods = collectHardwareModifiers();
-    final shortcutHandler = _onHostShortcut ?? _boundOnHostShortcut;
-    if (shortcutHandler != null && shortcutHandler(event, mods)) {
-      _recordSuppressedClaimedKey(event, mods);
-      if (reportReleases || kittyClaimAll) {
-        _suppressedHostShortcutKeys.add(event.logicalKey);
-      }
+    if (_tryHandleHostShortcut(event, mods)) {
       return KeyEventResult.handled;
     }
 
@@ -488,16 +486,33 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     return _claimKeyInFocus(event, mods, eventType);
   }
 
+  bool _tryHandleHostShortcut(KeyEvent event, Set<term.Modifier> mods) {
+    final key = event.logicalKey;
+    if (event is KeyDownEvent) {
+      _suppressedHostShortcutKeys.remove(key);
+    }
+    final shortcutHandler = _onHostShortcut ?? _boundOnHostShortcut;
+    final handled = shortcutHandler != null && shortcutHandler(event, mods);
+    final isSuppressedRepeat =
+        event is KeyRepeatEvent && _suppressedHostShortcutKeys.contains(key);
+    if (!handled && !isSuppressedRepeat) {
+      return false;
+    }
+    _recordSuppressedClaimedKey(event, mods);
+    _suppressedHostShortcutKeys.add(key);
+    return true;
+  }
+
   KeyEventResult _handleKeyUpEvent(
     KeyUpEvent event, {
     required bool kittyClaimAll,
     required bool reportReleases,
   }) {
+    final wasSuppressed = _suppressedHostShortcutKeys.remove(event.logicalKey);
     if (!reportReleases && !kittyClaimAll) {
-      _suppressedHostShortcutKeys.clear();
       return KeyEventResult.ignored;
     }
-    if (_suppressedHostShortcutKeys.remove(event.logicalKey)) {
+    if (wasSuppressed) {
       return KeyEventResult.handled;
     }
     final mods = collectHardwareModifiers();

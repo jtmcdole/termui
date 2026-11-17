@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
@@ -607,7 +608,7 @@ void main() {
     );
 
     testWidgets(
-      'double-click selects hit word, preserves selection on release, and double-click-drag extends by whole words',
+      'double-click selects hit word, clears selection after copy on release, and double-click-drag extends by whole words',
       (tester) async {
         final buffer = termui.Buffer(40, 6);
         buffer.writeString(
@@ -658,12 +659,16 @@ void main() {
         final wordHit =
             topLeft + Offset(atlas.cellWidth * 8.5, atlas.cellHeight * 0.5);
         await tapAt(wordHit);
-        await tapAt(wordHit);
+        final g2 = await tapAt(wordHit, release: false);
 
         expect(selectionController.hasSelection, isTrue);
         expect(selectionController.mode, equals(SelectionMode.word));
         expect(selectionController.extractText(buffer), equals('world_42'));
+
+        await g2.up();
+        await tester.pump(const Duration(milliseconds: 40));
         expect(service.clipboardText, equals('world_42'));
+        expect(selectionController.hasSelection, isFalse);
 
         // Double-click 'hello' (col 2) and drag to 'world_42' (col 9) -> snaps both words.
         await tester.pump(const Duration(milliseconds: 600));
@@ -673,13 +678,15 @@ void main() {
         final d2 = await tapAt(helloHit, release: false);
         await d2.moveTo(wordHit);
         await tester.pump(const Duration(milliseconds: 20));
-        await d2.up();
-        await tester.pump();
-
         expect(
           selectionController.extractText(buffer),
           equals('hello world_42'),
         );
+
+        await d2.up();
+        await tester.pump();
+        expect(service.clipboardText, equals('hello world_42'));
+        expect(selectionController.hasSelection, isFalse);
       },
     );
 
@@ -748,23 +755,13 @@ void main() {
         await tester.pump();
         await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
         await drag.moveTo(cell(11.5));
+        await tester.pump();
+        expect(selectionController.extractText(buffer), equals('hello'));
         await drag.up();
         await tester.pump();
         expect(injected, isEmpty);
-        expect(selectionController.extractText(buffer), equals('hello'));
         expect(service.clipboardText, equals('hello'));
-
-        for (final cancel in [false, true]) {
-          final rg = await tester.startGesture(
-            cell(7.5),
-            kind: PointerDeviceKind.mouse,
-            buttons: kSecondaryMouseButton,
-          );
-          await (cancel ? rg.cancel() : rg.up());
-        }
-        await tester.pump();
-        expect(selectionController.hasSelection, isTrue);
-        injected.clear();
+        expect(selectionController.hasSelection, isFalse);
 
         final ptyGesture = await down(7.5);
         await tester.pump();
@@ -795,6 +792,324 @@ void main() {
         expect(selectionController.mode, equals(SelectionMode.word));
         expect(selectionController.extractText(buffer), equals('日本語'));
         expect(service.clipboardText, isNull);
+
+        for (final cancel in [false, true]) {
+          final rg = await tester.startGesture(
+            cell(7.5),
+            kind: PointerDeviceKind.mouse,
+            buttons: kSecondaryMouseButton,
+          );
+          await (cancel ? rg.cancel() : rg.up());
+        }
+        await tester.pump();
+        expect(selectionController.hasSelection, isTrue);
+      },
+    );
+
+    testWidgets(
+      'clears selection highlight pixels after auto-copy and after keyboard copy when copyOnSelect is false',
+      (tester) async {
+        final buffer = termui.Buffer(30, 4)
+          ..writeString(0, 0, 'Copy Me Now', const termui.Style());
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(atlasCtrl.dispose);
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+
+        final keyEvents = <termui.KeyEvent>[];
+        var copyOnSelect = true;
+        await tester.pumpWidget(
+          _testApp(
+            home: TerminalSurface(
+              atlasController: atlasCtrl,
+              service: service,
+              selectionController: selectionController,
+              buffer: buffer,
+              copyOnSelectProvider: () => copyOnSelect,
+              reportKeyReleaseEvents: true,
+              alignment: Alignment.topLeft,
+              onInputEvent: (e) {
+                if (e is termui.KeyEvent) keyEvents.add(e);
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final atlas = atlasCtrl.atlas!;
+        final surfaceFinder = find.byType(TerminalSurface);
+        final topLeft = tester.getTopLeft(
+          find.descendant(
+            of: surfaceFinder,
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        Offset cellCenter(double col) =>
+            topLeft + Offset(atlas.cellWidth * col, atlas.cellHeight * 0.5);
+
+        Future<(int, int, int)> sampleSpaceCellRgb() async {
+          final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find
+                .descendant(
+                  of: surfaceFinder,
+                  matching: find.byType(RepaintBoundary),
+                )
+                .first,
+          );
+          final img = await tester.runAsync(
+            () => boundary.toImage(pixelRatio: 1.0),
+          );
+          addTearDown(() => img?.dispose());
+          final bytes = await tester.runAsync(
+            () => img!.toByteData(format: ui.ImageByteFormat.rawRgba),
+          );
+          final sx = ((4 + 0.5) * atlas.cellWidth).floor();
+          final sy = (0.5 * atlas.cellHeight).floor();
+          final idx = (sy * img!.width + sx) * 4;
+          return (
+            bytes!.getUint8(idx),
+            bytes.getUint8(idx + 1),
+            bytes.getUint8(idx + 2),
+          );
+        }
+
+        const selBg = (0x26, 0x4F, 0x78);
+        const canvasBg = (0x00, 0x00, 0x00);
+
+        // 1. copyOnSelect: true -> highlight shows during drag, disappears after release & copy.
+        final drag1 = await tester.startGesture(
+          cellCenter(0.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await drag1.moveTo(cellCenter(6.5));
+        await tester.pump();
+        expect(selectionController.hasSelection, isTrue);
+        expect(await sampleSpaceCellRgb(), equals(selBg));
+
+        await drag1.up();
+        await tester.pump();
+        expect(service.clipboardText, equals('Copy Me'));
+        expect(selectionController.hasSelection, isFalse);
+        expect(await sampleSpaceCellRgb(), equals(canvasBg));
+
+        // 2. copyOnSelect: false -> highlight stays on release, then disappears on Cmd+C, Ctrl+Shift+C, and Ctrl+Insert.
+        copyOnSelect = false;
+        final shortcuts = <List<LogicalKeyboardKey>>[
+          [
+            LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.shiftLeft,
+            LogicalKeyboardKey.keyC,
+          ],
+          [LogicalKeyboardKey.metaLeft, LogicalKeyboardKey.keyC],
+          [LogicalKeyboardKey.controlLeft, LogicalKeyboardKey.insert],
+        ];
+        for (final chord in shortcuts) {
+          service.clipboardText = null;
+          keyEvents.clear();
+
+          final drag = await tester.startGesture(
+            cellCenter(0.5),
+            kind: PointerDeviceKind.mouse,
+          );
+          await tester.pump();
+          await drag.moveTo(cellCenter(6.5));
+          await tester.pump();
+          await drag.up();
+          await tester.pump();
+
+          expect(service.clipboardText, isNull);
+          expect(selectionController.hasSelection, isTrue);
+          expect(await sampleSpaceCellRgb(), equals(selBg));
+
+          for (final k in chord) {
+            await tester.sendKeyDownEvent(k);
+          }
+          await tester.pump();
+          for (final k in chord.reversed) {
+            await tester.sendKeyUpEvent(k);
+          }
+          await tester.pump();
+
+          expect(service.clipboardText, equals('Copy Me'));
+          expect(selectionController.hasSelection, isFalse);
+          expect(await sampleSpaceCellRgb(), equals(canvasBg));
+          expect(keyEvents, isEmpty);
+        }
+
+        // 3. Without active selection, Ctrl+Shift+C still forwards to onInputEvent.
+        keyEvents.clear();
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC);
+        await tester.pump();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+        expect(keyEvents.where((e) => e.key == 'c'), isNotEmpty);
+      },
+    );
+
+    testWidgets(
+      'holding a copy shortcut into key repeat does not leak KeyRepeatEvents after KeyDownEvent clears selection',
+      (tester) async {
+        final buffer = termui.Buffer(30, 4)
+          ..writeString(0, 0, 'Copy Me Now', const termui.Style());
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(atlasCtrl.dispose);
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+
+        final keyEvents = <termui.KeyEvent>[];
+        await tester.pumpWidget(
+          _testApp(
+            home: TerminalSurface(
+              atlasController: atlasCtrl,
+              service: service,
+              selectionController: selectionController,
+              buffer: buffer,
+              copyOnSelect: false,
+              reportKeyReleaseEvents: true,
+              alignment: Alignment.topLeft,
+              onInputEvent: (e) {
+                if (e is termui.KeyEvent) keyEvents.add(e);
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final atlas = atlasCtrl.atlas!;
+        final topLeft = tester.getTopLeft(
+          find.descendant(
+            of: find.byType(TerminalSurface),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        Offset cellCenter(double col) =>
+            topLeft + Offset(atlas.cellWidth * col, atlas.cellHeight * 0.5);
+
+        final shortcuts = <List<LogicalKeyboardKey>>[
+          [
+            LogicalKeyboardKey.controlLeft,
+            LogicalKeyboardKey.shiftLeft,
+            LogicalKeyboardKey.keyC,
+          ],
+          [LogicalKeyboardKey.metaLeft, LogicalKeyboardKey.keyC],
+          [LogicalKeyboardKey.controlLeft, LogicalKeyboardKey.insert],
+        ];
+        for (final chord in shortcuts) {
+          service.clipboardText = null;
+          keyEvents.clear();
+
+          final drag = await tester.startGesture(
+            cellCenter(0.5),
+            kind: PointerDeviceKind.mouse,
+          );
+          await tester.pump();
+          await drag.moveTo(cellCenter(6.5));
+          await tester.pump();
+          await drag.up();
+          await tester.pump();
+          expect(selectionController.hasSelection, isTrue);
+
+          for (final k in chord) {
+            await tester.sendKeyDownEvent(k);
+          }
+          await tester.pump();
+          await tester.sendKeyRepeatEvent(chord.last);
+          await tester.pump();
+          for (final k in chord.reversed) {
+            await tester.sendKeyUpEvent(k);
+          }
+          await tester.pump();
+
+          expect(service.clipboardText, equals('Copy Me'));
+          expect(selectionController.hasSelection, isFalse);
+          expect(
+            keyEvents,
+            isEmpty,
+            reason: 'Expected held $chord repeat not to leak KeyEvents',
+          );
+        }
+      },
+    );
+
+    testWidgets(
+      'copying via keyboard shortcut while mouse press is held over a hyperlink does not open the link on release',
+      (tester) async {
+        final buffer = termui.Buffer(40, 4)
+          ..writeString(0, 0, 'https://example.com/docs', const termui.Style());
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(atlasCtrl.dispose);
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+
+        await tester.pumpWidget(
+          _testApp(
+            home: TerminalSurface(
+              atlasController: atlasCtrl,
+              service: service,
+              selectionController: selectionController,
+              buffer: buffer,
+              copyOnSelect: false,
+              alignment: Alignment.topLeft,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final atlas = atlasCtrl.atlas!;
+        final topLeft = tester.getTopLeft(
+          find.descendant(
+            of: find.byType(TerminalSurface),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        final wordHit =
+            topLeft + Offset(atlas.cellWidth * 9.5, atlas.cellHeight * 0.5);
+
+        // First click of double-click on 'example' inside the URL.
+        final tap1 = await tester.startGesture(
+          wordHit,
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        await tap1.up();
+        await tester.pump(const Duration(milliseconds: 40));
+
+        // Second click held down -> selects 'example' while mouse button stays pressed.
+        final tap2 = await tester.startGesture(
+          wordHit,
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        expect(selectionController.hasSelection, isTrue);
+        expect(selectionController.extractText(buffer), equals('example'));
+
+        // Copy via Cmd+C while mouse button is still held, then release mouse before releasing Cmd.
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.keyC);
+        await tester.pump();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+        await tester.pump();
+
+        expect(service.clipboardText, equals('example'));
+        expect(selectionController.hasSelection, isFalse);
+
+        await tap2.up();
+        await tester.pump();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+        await tester.pump();
+
+        expect(service.openedUrl, isNull);
       },
     );
 
