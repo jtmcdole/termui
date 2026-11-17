@@ -195,7 +195,7 @@ final class TerminalSurface extends StatefulWidget {
   /// the duration is non-positive.
   final Duration? hoveredLinkAnimationInterval;
 
-  /// Enables built-in host shortcuts (`F12` screenshot, `Shift+F12` rebuild, paste).
+  /// Enables built-in host shortcuts (`F12` screenshot, `Shift+F12` rebuild, copy/paste).
   final bool enableHostShortcuts;
 
   /// Alignment of the cell-quantized terminal grid inside loose or bounded margins.
@@ -1006,6 +1006,14 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       }
       return true;
     }
+    if (_builtinSelectionEnabled &&
+        _selectionController.hasSelection &&
+        isTerminalCopyShortcut(key, mods)) {
+      if (event is KeyDownEvent) {
+        _copySelectedBufferText();
+      }
+      return true;
+    }
     if (isTerminalPasteShortcut(key, mods)) {
       unawaited(_pasteFromClipboard());
       return true;
@@ -1675,11 +1683,12 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   void _copySelectedBufferText() {
     final buf = _activeBuffer;
-    if (buf == null) return;
-    final selectedText = _selectionController.extractText(
-      buf,
-      includeHidden: true,
-    );
+    final selectedText = buf == null
+        ? ''
+        : _selectionController.extractText(buf, includeHidden: true);
+    _isSelecting = false;
+    _linkPressCell = null;
+    _selectionController.clearSelection();
     if (selectedText.isNotEmpty) {
       unawaited(_writeToClipboard(selectedText));
     }
