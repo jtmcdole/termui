@@ -170,14 +170,36 @@ final class FtermPaneController {
   /// Stable tear-off reading [displayBuffer] for `TerminalSurface.bufferProvider`.
   tui.Buffer readDisplayBuffer() => displayBuffer;
 
-  /// Resolves the un-overlaid [tui.VirtualLineSlice] for 0-based [viewportRow],
-  /// mapping across scrollback history and the active live buffer.
-  tui.VirtualLineSlice? lookupLinkLine(int viewportRow) {
-    if (_disposed || viewportRow < 0) return null;
+  /// Monotonic virtual row index corresponding to viewport row `0` (`0` when
+  /// `altScreen` is active, or `max(oldestLine, totalLines - scrollOffsetLines)`
+  /// on the primary screen).
+  int get topVirtualRow {
+    if (port.modes.altScreen) return 0;
     final sbWin = port.scrollbackWindow;
-    final total = sbWin.totalLines;
-    final topVirtual = math.max(sbWin.oldestLine, total - _scrollOffsetLines);
-    final virtualY = topVirtual + viewportRow;
+    return math.max(sbWin.oldestLine, sbWin.totalLines - _scrollOffsetLines);
+  }
+
+  /// Stable tear-off reading [topVirtualRow] for `TerminalSurface`.
+  int readTopVirtualRow() => topVirtualRow;
+
+  /// Epoch token combining scrollback `clearSeq` and `altScreen` state so
+  /// selections reset cleanly on screen switches or history clears.
+  Object get selectionEpoch =>
+      Object.hash(port.scrollbackWindow.clearSeq, port.modes.altScreen);
+
+  /// Stable tear-off reading [selectionEpoch] for `TerminalSurface`.
+  Object readSelectionEpoch() => selectionEpoch;
+
+  /// Resolves the un-overlaid [tui.VirtualLineSlice] for monotonic [virtualRow]
+  /// (`[oldestLine .. totalLines + liveHeight)` on primary screen, or
+  /// `[0 .. liveHeight)` when `altScreen` is active).
+  tui.VirtualLineSlice? lookupVirtualLine(int virtualRow) {
+    if (_disposed || virtualRow < 0) return null;
+    if (port.modes.altScreen) {
+      return _sliceLiveBufferRow(virtualRow);
+    }
+    final sbWin = port.scrollbackWindow;
+    if (virtualRow < sbWin.oldestLine) return null;
 
     final remote = remotePort;
     if (remote != null) {
@@ -187,33 +209,44 @@ final class FtermPaneController {
       return WorkspaceBufferCompositor.lookupVirtualLine(
         slot,
         liveBuffer,
-        virtualY,
+        virtualRow,
       );
     }
 
-    if (virtualY < total) {
-      final slice = port.readScrollbackSlice(virtualY, 1);
+    final total = sbWin.totalLines;
+    if (virtualRow < total) {
+      final slice = port.readScrollbackSlice(virtualRow, 1);
       final line = slice.isNotEmpty ? slice.first : null;
-      if (line == null) {
-        return (isWrapped: false, characters: const <String>[], uris: null);
-      }
+      if (line == null) return null;
       return (
         isWrapped: line.isWrapped,
         characters: line.characters,
         uris: line.uris,
       );
     }
+    return _sliceLiveBufferRow(virtualRow - total);
+  }
 
-    final liveY = virtualY - total;
-    final liveBuffer = port.buffer;
-    if (liveY < 0 || liveY >= liveBuffer.height) return null;
+  tui.VirtualLineSlice? _sliceLiveBufferRow(int liveY) {
+    final remote = remotePort;
+    final liveBuffer = remote != null ? remote.slot.buffer : port.buffer;
+    if (liveBuffer == null || liveY < 0 || liveY >= liveBuffer.height) {
+      return null;
+    }
     final start = liveY * liveBuffer.width;
     final end = start + liveBuffer.width;
     return (
-      isWrapped: false,
+      isWrapped: remote != null && remote.slot.isLiveRowWrapped(liveY),
       characters: liveBuffer.characters.sublist(start, end),
       uris: liveBuffer.sliceUris(start, end),
     );
+  }
+
+  /// Resolves the un-overlaid [tui.VirtualLineSlice] for 0-based [viewportRow],
+  /// mapping across scrollback history and the active live buffer.
+  tui.VirtualLineSlice? lookupLinkLine(int viewportRow) {
+    if (_disposed || viewportRow < 0) return null;
+    return lookupVirtualLine(topVirtualRow + viewportRow);
   }
 
   /// Active PTY dimensions `(cols, rows)` used for out-of-bounds dimming.

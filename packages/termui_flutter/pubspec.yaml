@@ -29,6 +29,7 @@ dependencies:
   termui: ^0.18.0
   characters: ^1.4.0
   clock: ^1.1.2
+  hierarchical_state_machine: ^2.4.0
   web: ^1.1.1
 
 dev_dependencies:

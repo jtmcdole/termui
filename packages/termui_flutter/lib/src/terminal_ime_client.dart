@@ -262,6 +262,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   bool Function(KeyEvent event, Set<term.Modifier> modifiers)?
   _boundOnHostShortcut;
   VoidCallback? _boundOnModifiersChanged;
+  Set<term.Modifier> Function()? _boundModifiersProvider;
 
   final List<VoidCallback> _listeners = [];
   final Set<LogicalKeyboardKey> _suppressedHostShortcutKeys = {};
@@ -350,6 +351,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     void Function(String text)? onTextInput,
     bool Function(KeyEvent event, Set<term.Modifier> modifiers)? onHostShortcut,
     VoidCallback? onModifiersChanged,
+    Set<term.Modifier> Function()? modifiersProvider,
   }) {
     _boundKittyFlags = kittyKeyboardFlags;
     _boundReportKeyRelease = reportKeyReleaseEvents;
@@ -357,6 +359,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     _boundOnTextInput = onTextInput;
     _boundOnHostShortcut = onHostShortcut;
     _boundOnModifiersChanged = onModifiersChanged;
+    _boundModifiersProvider = modifiersProvider;
   }
 
   /// Clears fallback surface callbacks on widget unmount/replacement.
@@ -367,6 +370,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     _boundOnTextInput = null;
     _boundOnHostShortcut = null;
     _boundOnModifiersChanged = null;
+    _boundModifiersProvider = null;
   }
 
   /// Opens or ensures an active [TextInputConnection] and syncs editing state and cursor geometry.
@@ -463,7 +467,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       return KeyEventResult.ignored;
     }
 
-    final mods = collectHardwareModifiers();
+    final mods = (_boundModifiersProvider ?? collectHardwareModifiers)();
     if (_tryHandleHostShortcut(event, mods)) {
       return KeyEventResult.handled;
     }
@@ -515,7 +519,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     if (wasSuppressed) {
       return KeyEventResult.handled;
     }
-    final mods = collectHardwareModifiers();
+    final mods = (_boundModifiersProvider ?? collectHardwareModifiers)();
     final resolved = resolveTerminalKeyEvent(
       event,
       mods,

@@ -697,6 +697,124 @@ void main() {
           );
         },
       );
+
+      test(
+        'clearSelection resets mode to character and block updateSelection ignores pane region clamping',
+        () {
+          controller
+            ..startSelection(
+              1,
+              1,
+              mode: SelectionMode.character,
+              region: const SelectionRegion(
+                minCol: 0,
+                maxCol: 4,
+                minRow: 0,
+                maxRow: 3,
+              ),
+            )
+            ..updateSelection(9, 6, mode: SelectionMode.block);
+          expect(controller.mode, equals(SelectionMode.block));
+          expect(controller.focus, equals(const SelectionPoint(9, 6)));
+
+          controller.clearSelection();
+          expect(controller.hasSelection, isFalse);
+          expect(controller.mode, equals(SelectionMode.character));
+        },
+      );
+
+      test(
+        'selectWord and updateWordSelection anchor in virtual rows across scrollback shifts',
+        () {
+          final viewportA = Buffer.blank(20, 4)
+            ..writeString(0, 1, 'alpha beta gamma', const Style());
+          controller.selectWord(viewportA, 7, 1, topVirtualRow: 50);
+          expect(controller.mode, equals(SelectionMode.word));
+          expect(controller.anchor, equals(const SelectionPoint(6, 51)));
+          expect(controller.focus, equals(const SelectionPoint(9, 51)));
+
+          // Viewport scrolls down so virtual row 51 is off-screen above (topVirtualRow: 60).
+          final viewportB = Buffer.blank(20, 4)
+            ..writeString(0, 2, 'delta omega zeta', const Style());
+          controller.updateWordSelection(viewportB, 7, 2, topVirtualRow: 60);
+          expect(controller.anchor, equals(const SelectionPoint(6, 51)));
+          expect(controller.focus, equals(const SelectionPoint(10, 62)));
+        },
+      );
+
+      test(
+        'resolveRegionForCell translates enclosed horizontal borders to virtual rows and opens uncapped scrollback bounds',
+        () {
+          // 1. Enclosed box with top (row 0) and bottom (row 3) horizontal borders:
+          final boxed = Buffer.blank(12, 4)
+            ..writeString(0, 0, '┌──────────┐', const Style())
+            ..writeString(0, 1, '│inside    │', const Style())
+            ..writeString(0, 2, '│box       │', const Style())
+            ..writeString(0, 3, '└──────────┘', const Style());
+          final enclosed = TerminalSelectionController.resolveRegionForCell(
+            boxed,
+            2,
+            1,
+            topVirtualRow: 100,
+            openVerticalScrollback: true,
+          );
+          expect(
+            enclosed,
+            equals(
+              const SelectionRegion(
+                minCol: 1,
+                maxCol: 10,
+                minRow: 101,
+                maxRow: 102,
+              ),
+            ),
+          );
+
+          // 2. Uncapped vertical split (no horizontal borders) opens vertical range across scrollback:
+          final split = Buffer.blank(12, 3)
+            ..writeString(0, 0, 'left │right ', const Style())
+            ..writeString(0, 1, 'pane │pane  ', const Style())
+            ..writeString(0, 2, 'text │text  ', const Style());
+          final openSplit = TerminalSelectionController.resolveRegionForCell(
+            split,
+            2,
+            1,
+            topVirtualRow: 100,
+            openVerticalScrollback: true,
+          );
+          expect(
+            openSplit,
+            equals(
+              const SelectionRegion(
+                minCol: 0,
+                maxCol: 4,
+                minRow: 0,
+                maxRow: 0x3FFFFFFF,
+              ),
+            ),
+          );
+        },
+      );
+
+      test(
+        'extractVirtualText preserves trailing spaces inside rectangular block selections',
+        () {
+          final lines = <VirtualLineSlice>[
+            (isWrapped: false, characters: 'ab   '.split(''), uris: null),
+            (isWrapped: true, characters: 'cd   '.split(''), uris: null),
+          ];
+          VirtualLineSlice? lookup(int y) =>
+              y >= 0 && y < lines.length ? lines[y] : null;
+
+          controller
+            ..startSelection(0, 0, mode: SelectionMode.block)
+            ..updateSelection(4, 1, mode: SelectionMode.block);
+          expect(
+            controller.extractVirtualText(lookup, cols: 5),
+            equals('ab   \ncd   '),
+          );
+        },
+      );
     });
   });
 }

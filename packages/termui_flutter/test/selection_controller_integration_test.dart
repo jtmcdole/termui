@@ -1,6 +1,8 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/services.dart';
@@ -9,6 +11,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:termui/termui.dart' as termui;
 import 'package:termui_flutter/src/rendering/painter.dart';
 import 'package:termui_flutter/src/terminal.dart' show PrivateTuiView;
+import 'package:termui_flutter/src/terminal_surface.dart'
+    show TerminalSurfaceState;
 import 'package:termui_flutter/termui_flutter.dart';
 
 Widget _testApp({required Widget home}) => WidgetsApp(
@@ -1110,6 +1114,329 @@ void main() {
         await tester.pump();
 
         expect(service.openedUrl, isNull);
+      },
+    );
+
+    testWidgets(
+      'resets selection mode on clearSelection and clears stuck Alt modifier after window lifecycle blur',
+      (tester) async {
+        final buffer = termui.Buffer(20, 4)
+          ..writeString(0, 0, 'AAAA BBBB', const termui.Style())
+          ..writeString(0, 1, 'CCCC DDDD', const termui.Style());
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(atlasCtrl.dispose);
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+
+        await tester.pumpWidget(
+          _testApp(
+            home: TerminalSurface(
+              atlasController: atlasCtrl,
+              service: service,
+              selectionController: selectionController,
+              buffer: buffer,
+              alignment: Alignment.topLeft,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final atlas = atlasCtrl.atlas!;
+        final topLeft = tester.getTopLeft(
+          find.descendant(
+            of: find.byType(TerminalSurface),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        Offset cell(double col, double row) =>
+            topLeft + Offset(atlas.cellWidth * col, atlas.cellHeight * row);
+
+        // 1. Alt+drag box selection clears back to SelectionMode.stream after copy/clear.
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump();
+        final boxDrag = await tester.startGesture(
+          cell(0.5, 0.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await boxDrag.moveTo(cell(2.5, 1.5));
+        await tester.pump();
+        expect(selectionController.mode, equals(SelectionMode.block));
+        await boxDrag.up();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump();
+        expect(selectionController.hasSelection, isFalse);
+        expect(selectionController.mode, equals(SelectionMode.stream));
+
+        // 2. Simulate Alt+Tab window switch: AltDown arrives, then window blurs & resumes without AltUp.
+        addTearDown(() async {
+          if (HardwareKeyboard.instance.isAltPressed) {
+            await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+          }
+        });
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump();
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pump();
+
+        // Subsequent drag without pressing Alt must perform stream selection, not stuck block selection.
+        service.clipboardText = null;
+        final streamDrag = await tester.startGesture(
+          cell(5.5, 0.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await streamDrag.moveTo(cell(3.5, 1.5));
+        await tester.pump();
+        expect(selectionController.mode, equals(SelectionMode.stream));
+        await streamDrag.up();
+        await tester.pump();
+        expect(service.clipboardText, equals('BBBB\nCCCC'));
+      },
+    );
+
+    testWidgets(
+      'stationary click during streaming output does not select/copy and standalone edge drag injects no wheel events',
+      (WidgetTester tester) async {
+        final service = FakeTerminalService();
+        final selectionController = TerminalSelectionController();
+        final notifier = ChangeNotifier();
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(() {
+          selectionController.dispose();
+          notifier.dispose();
+          atlasCtrl.dispose();
+        });
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+
+        final buf = termui.Buffer.blank(30, 8)
+          ..writeString(0, 0, 'Log line 0', const termui.Style())
+          ..writeString(0, 1, 'Log line 1', const termui.Style())
+          ..writeString(0, 2, 'Log line 2', const termui.Style())
+          ..writeString(0, 3, 'Log line 3', const termui.Style());
+        var topVirtual = 10;
+        final injectedEvents = <termui.InputEvent>[];
+
+        await tester.pumpWidget(
+          _testApp(
+            home: SizedBox(
+              width: 400,
+              height: 240,
+              child: TerminalSurface(
+                atlasController: atlasCtrl,
+                bufferProvider: () => buf,
+                bufferListenable: notifier,
+                topVirtualRowProvider: () => topVirtual,
+                selectionController: selectionController,
+                service: service,
+                alignment: Alignment.topLeft,
+                onInputEvent: injectedEvents.add,
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final surfaceState = tester.state<TerminalSurfaceState>(
+          find.byType(TerminalSurface),
+        );
+        final atlas = atlasCtrl.atlas!;
+        final topLeft = tester.getTopLeft(
+          find.descendant(
+            of: find.byType(TerminalSurface),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        Offset cell(double col, double row) =>
+            topLeft + Offset(atlas.cellWidth * col, atlas.cellHeight * row);
+
+        // H2: Stationary focus click while PTY output advances topVirtualRow must NOT select or copy.
+        final focusTap = await tester.startGesture(
+          cell(2.5, 2.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        topVirtual += 3;
+        // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+        notifier.notifyListeners();
+        await tester.pump();
+        await focusTap.up();
+        await tester.pump();
+        expect(surfaceState.debugGestureState.name, equals('idle'));
+        expect(service.clipboardText, isNull);
+
+        // H1: Standalone TerminalSurface (no scrollback callback) dragging past top edge must NOT inject wheelUp.
+        injectedEvents.clear();
+        final edgeDrag = await tester.startGesture(
+          cell(2.5, 2.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await edgeDrag.moveTo(cell(2.5, -2.0));
+        await tester.pump(const Duration(milliseconds: 160));
+        await edgeDrag.up();
+        await tester.pump();
+        expect(
+          injectedEvents.whereType<termui.MouseEvent>().where(
+            (e) => e.button == termui.MouseButton.wheelUp,
+          ),
+          isEmpty,
+        );
+
+        // L3: With activePtySize: (30, 4) < buf.height (8) and onSelectionAutoScroll wired,
+        // dragging into the dimmed bottom margin (rawRow = 6) keeps auto-scrolling past tick 1.
+        final scrollDeltas = <int>[];
+        await tester.pumpWidget(
+          _testApp(
+            home: SizedBox(
+              width: 400,
+              height: 240,
+              child: TerminalSurface(
+                atlasController: atlasCtrl,
+                bufferProvider: () => buf,
+                bufferListenable: notifier,
+                activePtySize: const (30, 4),
+                topVirtualRowProvider: () => topVirtual,
+                onSelectionAutoScroll: (delta) {
+                  scrollDeltas.add(delta);
+                  topVirtual -= delta;
+                  // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+                  notifier.notifyListeners();
+                },
+                selectionController: selectionController,
+                service: service,
+                alignment: Alignment.topLeft,
+                onInputEvent: injectedEvents.add,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final marginDrag = await tester.startGesture(
+          cell(2.5, 1.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await marginDrag.moveTo(cell(2.5, 6.5));
+        for (var i = 0; i < 3; i++) {
+          await tester.pump(const Duration(milliseconds: 55));
+        }
+        await marginDrag.up();
+        await tester.pump();
+        expect(scrollDeltas.length, greaterThanOrEqualTo(3));
+        expect(scrollDeltas.every((d) => d < 0), isTrue);
+      },
+    );
+
+    testWidgets(
+      'cleared Alt latch survives mounting a fresh TerminalSurface and macOS right-drag ignores active left selection',
+      (WidgetTester tester) async {
+        final service = FakeTerminalService();
+        final selectionController = TerminalSelectionController();
+        final atlasCtrl = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Cascadia Mono',
+        );
+        addTearDown(selectionController.dispose);
+        addTearDown(atlasCtrl.dispose);
+        addTearDown(() async {
+          debugDefaultTargetPlatformOverride = null;
+          if (HardwareKeyboard.instance.isAltPressed) {
+            await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+          }
+        });
+        await tester.runAsync(atlasCtrl.ensureInitialized);
+
+        final buf = termui.Buffer.blank(30, 6)
+          ..writeString(0, 0, 'AAAA BBBB', const termui.Style())
+          ..writeString(0, 1, 'CCCC DDDD', const termui.Style());
+
+        Widget buildPane(String keyId) => _testApp(
+          home: SizedBox(
+            width: 400,
+            height: 200,
+            child: TerminalSurface(
+              key: ValueKey(keyId),
+              atlasController: atlasCtrl,
+              buffer: buf,
+              selectionController: selectionController,
+              service: service,
+              alignment: Alignment.topLeft,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(buildPane('tab-1'));
+        await tester.pumpAndSettle();
+
+        // M1: AltDown + lifecycle blur/resume on tab-1, then switch to freshly mounted tab-2.
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump();
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+        await tester.pumpWidget(buildPane('tab-2'));
+        await tester.pumpAndSettle();
+
+        final atlas = atlasCtrl.atlas!;
+        final topLeft = tester.getTopLeft(
+          find.descendant(
+            of: find.byType(TerminalSurface),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        Offset cell(double col, double row) =>
+            topLeft + Offset(atlas.cellWidth * col, atlas.cellHeight * row);
+
+        final tab2Drag = await tester.startGesture(
+          cell(5.5, 0.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await tab2Drag.moveTo(cell(3.5, 1.5));
+        await tester.pump();
+        expect(selectionController.mode, equals(SelectionMode.stream));
+        await tab2Drag.up();
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump();
+
+        // L2: On macOS, secondary button pressed mid-primary-drag must NOT mutate primary selection.
+        debugDefaultTargetPlatformOverride = TargetPlatform.macOS;
+        final leftDrag = await tester.startGesture(
+          cell(1.5, 0.5),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await leftDrag.moveTo(cell(4.5, 0.5));
+        await tester.pump();
+        expect(selectionController.focus?.col, equals(4));
+
+        tester.binding.handlePointerEvent(
+          PointerMoveEvent(
+            position: cell(8.5, 0.5),
+            kind: PointerDeviceKind.mouse,
+            buttons: kPrimaryMouseButton | kSecondaryMouseButton,
+          ),
+        );
+        await tester.pump();
+        expect(selectionController.focus?.col, equals(4));
+        await leftDrag.up();
+        await tester.pump();
+        debugDefaultTargetPlatformOverride = null;
       },
     );
 

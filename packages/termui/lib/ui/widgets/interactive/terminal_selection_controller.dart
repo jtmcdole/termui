@@ -224,36 +224,34 @@ class TerminalSelectionController implements TerminalListenable {
     if (modeChanged) {
       _mode = mode;
     }
-    final newFocus = _clampPoint(col, row, _region);
+    final clampRegion = _mode == SelectionMode.block ? null : _region;
+    final newFocus = _clampPoint(col, row, clampRegion);
     if (_focus == newFocus && !modeChanged) return;
     _focus = newFocus;
     notifyListeners();
   }
 
   /// Extends a word-snapped selection from the initial [_wordAnchor] to the
-  /// word at `(col, row)` in [buffer], supporting forward, backward, and
-  /// direction-reversed drags across wide graphemes.
-  void updateWordSelection(Buffer buffer, int col, int row) {
+  /// word at `(col, row)` in [buffer] (offset by [topVirtualRow]), supporting
+  /// forward, backward, and direction-reversed drags across wide graphemes.
+  void updateWordSelection(
+    Buffer buffer,
+    int col,
+    int row, {
+    int topVirtualRow = 0,
+  }) {
     if (_anchor == null || buffer.width <= 0 || buffer.height <= 0) return;
-    final r = _region;
-    final minCol = r != null ? max(0, r.minCol) : 0;
-    final maxCol = r != null
-        ? min(buffer.width - 1, r.maxCol)
-        : buffer.width - 1;
-    final minRow = r != null ? max(0, r.minRow) : 0;
-    final maxRow = r != null
-        ? min(buffer.height - 1, r.maxRow)
-        : buffer.height - 1;
-    if (minCol > maxCol || minRow > maxRow) return;
+    final bounds = _screenSelectionBounds(buffer, _region, topVirtualRow);
+    if (bounds == null) return;
 
-    final clampedCol = col.clamp(minCol, maxCol);
-    final clampedRow = row.clamp(minRow, maxRow);
+    final clampedCol = col.clamp(bounds.minCol, bounds.maxCol);
+    final clampedScreenRow = row.clamp(bounds.minRow, bounds.maxRow);
     final (targetStart, targetEnd) = _expandWordBounds(
       buffer,
-      clampedRow,
+      clampedScreenRow,
       clampedCol,
-      minCol,
-      maxCol,
+      bounds.minCol,
+      bounds.maxCol,
     );
     final (anchorStart, anchorEnd) =
         _wordAnchor ?? _orderPoints(_anchor!, _focus ?? _anchor!);
@@ -264,7 +262,7 @@ class TerminalSelectionController implements TerminalListenable {
     ) = _resolveWordDragEndpoints(
       anchorStart: anchorStart,
       anchorEnd: anchorEnd,
-      clampedRow: clampedRow,
+      clampedRow: clampedScreenRow + topVirtualRow,
       targetStart: targetStart,
       targetEnd: targetEnd,
     );
@@ -300,35 +298,58 @@ class TerminalSelectionController implements TerminalListenable {
     return (anchorStart, SelectionPoint(targetEnd, clampedRow));
   }
 
-  /// Selects the contiguous word at `(col, row)` in [buffer].
-  void selectWord(Buffer buffer, int col, int row, {SelectionRegion? region}) {
+  /// Selects the contiguous word at `(col, row)` in [buffer] (offset by
+  /// [topVirtualRow]).
+  void selectWord(
+    Buffer buffer,
+    int col,
+    int row, {
+    SelectionRegion? region,
+    int topVirtualRow = 0,
+  }) {
     if (buffer.width <= 0 || row < 0 || row >= buffer.height) return;
+    final bounds = _screenSelectionBounds(buffer, region, topVirtualRow);
+    if (bounds == null) return;
+
+    final clampedScreenRow = row.clamp(bounds.minRow, bounds.maxRow);
+    final clampedCol = col.clamp(bounds.minCol, bounds.maxCol);
+    final (startCol, endCol) = _expandWordBounds(
+      buffer,
+      clampedScreenRow,
+      clampedCol,
+      bounds.minCol,
+      bounds.maxCol,
+    );
+    final virtualRow = clampedScreenRow + topVirtualRow;
+
+    _mode = SelectionMode.word;
+    _region = region;
+    _anchor = SelectionPoint(startCol, virtualRow);
+    _focus = SelectionPoint(endCol, virtualRow);
+    _wordAnchor = (_anchor!, _focus!);
+    notifyListeners();
+  }
+
+  static SelectionRegion? _screenSelectionBounds(
+    Buffer buffer,
+    SelectionRegion? region,
+    int topVirtualRow,
+  ) {
     final minCol = region != null ? max(0, region.minCol) : 0;
     final maxCol = region != null
         ? min(buffer.width - 1, region.maxCol)
         : buffer.width - 1;
-    final minRow = region != null ? max(0, region.minRow) : 0;
+    final minRow = region != null ? max(0, region.minRow - topVirtualRow) : 0;
     final maxRow = region != null
-        ? min(buffer.height - 1, region.maxRow)
+        ? min(buffer.height - 1, region.maxRow - topVirtualRow)
         : buffer.height - 1;
-    if (minCol > maxCol || minRow > maxRow) return;
-
-    final clampedRow = row.clamp(minRow, maxRow);
-    final clampedCol = col.clamp(minCol, maxCol);
-    final (startCol, endCol) = _expandWordBounds(
-      buffer,
-      clampedRow,
-      clampedCol,
-      minCol,
-      maxCol,
+    if (minCol > maxCol || minRow > maxRow) return null;
+    return SelectionRegion(
+      minCol: minCol,
+      maxCol: maxCol,
+      minRow: minRow,
+      maxRow: maxRow,
     );
-
-    _mode = SelectionMode.word;
-    _region = region;
-    _anchor = SelectionPoint(startCol, clampedRow);
-    _focus = SelectionPoint(endCol, clampedRow);
-    _wordAnchor = (_anchor!, _focus!);
-    notifyListeners();
   }
 
   static (int, int) _expandWordBounds(
@@ -392,9 +413,15 @@ class TerminalSelectionController implements TerminalListenable {
     );
   }
 
-  /// Clears the current selection.
+  /// Clears the current selection and resets [mode] to [SelectionMode.character].
   void clearSelection() {
-    if (_anchor == null && _focus == null && _region == null) return;
+    if (_anchor == null &&
+        _focus == null &&
+        _region == null &&
+        _mode == SelectionMode.character) {
+      return;
+    }
+    _mode = SelectionMode.character;
     _anchor = null;
     _focus = null;
     _wordAnchor = null;
@@ -711,7 +738,10 @@ class TerminalSelectionController implements TerminalListenable {
         rawEnd,
         minBound: minBound,
         maxBound: maxBound,
-        stripTrailingSpaces: !_isFollowedBySoftWrap(lookup, virtualY),
+        stripTrailingSpaces:
+            _mode != SelectionMode.block &&
+            rawEnd >= maxBound &&
+            !_isFollowedBySoftWrap(lookup, virtualY),
       );
       if (!isFirstRow && _shouldInsertVirtualNewline(line)) {
         out.write('\n');
@@ -738,29 +768,50 @@ class TerminalSelectionController implements TerminalListenable {
     required int maxBound,
     required bool stripTrailingSpaces,
   }) {
-    if (chars.isEmpty) return '';
     final clampMin = max(0, minBound);
-    final clampMax = min(chars.length - 1, maxBound);
-    if (clampMin > clampMax) return '';
+    if (clampMin > maxBound) return '';
     final clampedStart = max(clampMin, rawStart);
-    final clampedEnd = min(clampMax, rawEnd);
+    final clampedEnd = min(maxBound, rawEnd);
     if (clampedStart > clampedEnd) return '';
-    final (colStart, colEnd) = snapWideBounds(
+    final (colStart, colEnd) = _snapVirtualBounds(
       chars,
-      0,
       clampedStart,
       clampedEnd,
       minCol: clampMin,
-      maxCol: clampMax,
+      maxCol: maxBound,
     );
     final rowBuf = StringBuffer();
     for (var x = colStart; x <= colEnd; x++) {
+      if (x >= chars.length) {
+        if (!stripTrailingSpaces) rowBuf.write(' ');
+        continue;
+      }
       final cell = chars[x];
       if (cell.isEmpty || cell.startsWith(kittyPlaceholderChar)) continue;
       rowBuf.write(cell);
     }
     final text = '$rowBuf';
     return stripTrailingSpaces ? text.replaceFirst(_trailingSpaces, '') : text;
+  }
+
+  static (int, int) _snapVirtualBounds(
+    List<String> chars,
+    int colStart,
+    int colEnd, {
+    required int minCol,
+    required int maxCol,
+  }) {
+    final snappedStart =
+        colStart > minCol && colStart < chars.length && chars[colStart].isEmpty
+        ? colStart - 1
+        : colStart;
+    final snappedEnd =
+        colEnd < maxCol &&
+            colEnd + 1 < chars.length &&
+            chars[colEnd + 1].isEmpty
+        ? colEnd + 1
+        : colEnd;
+    return (snappedStart, snappedEnd);
   }
 
   static String _extractBlockText(
@@ -1246,22 +1297,25 @@ class TerminalSelectionController implements TerminalListenable {
     return count;
   }
 
-  /// Resolves the confining [SelectionRegion] for a pointer gesture starting at
-  /// `([col], [row])` in [buffer], or returns `null` when selection should span
-  /// the full buffer unconstrained.
+  static const int _unboundedMaxVirtualRow = 0x3FFFFFFF;
+
+  /// Resolves the bounding [SelectionRegion] containing `([col], [row])` in
+  /// [buffer], or `null` when unconstrained (including [SelectionMode.block]).
   ///
-  /// - In [SelectionMode.block] (`box`), always returns `null` so `Alt+Drag`
-  ///   rectangular selection is never clamped to pane dividers.
   /// - Checks [Buffer.selectableRegions] for the smallest sub-region containing
   ///   `([col], [row])`, narrowing further if vertical dividers exist inside it.
   /// - Falls back to scanning vertical box-drawing dividers (`│`, `┃`, `║`),
   ///   and only scans horizontal dividers (`─`, `━`, `═`) when vertical dividers
   ///   were also found so plain shell horizontal rules are never clamped.
+  /// - Translates vertical bounds by [topVirtualRow] and opens uncapped vertical
+  ///   ranges when [openVerticalScrollback] is `true`.
   static SelectionRegion? resolveRegionForCell(
     Buffer buffer,
     int col,
     int row, {
     SelectionMode mode = SelectionMode.character,
+    int topVirtualRow = 0,
+    bool openVerticalScrollback = false,
   }) {
     if (mode == SelectionMode.block ||
         !_isWithinBufferBounds(buffer, col, row)) {
@@ -1276,7 +1330,7 @@ class TerminalSelectionController implements TerminalListenable {
         row,
         SelectionRegion.fromRect(subregion),
         requireVerticalForReturn: false,
-      );
+      )?.translate(dRow: topVirtualRow);
     }
 
     final fullBounds = SelectionRegion(
@@ -1291,6 +1345,8 @@ class TerminalSelectionController implements TerminalListenable {
       row,
       fullBounds,
       requireVerticalForReturn: true,
+      topVirtualRow: topVirtualRow,
+      openVerticalScrollback: openVerticalScrollback,
     );
   }
 
@@ -1328,6 +1384,8 @@ class TerminalSelectionController implements TerminalListenable {
     int row,
     SelectionRegion bounds, {
     required bool requireVerticalForReturn,
+    int topVirtualRow = 0,
+    bool openVerticalScrollback = false,
   }) {
     final (minCol, maxCol, foundVertical) = _scanVerticalDividerBounds(
       buffer,
@@ -1338,7 +1396,12 @@ class TerminalSelectionController implements TerminalListenable {
     if (!foundVertical) {
       return requireVerticalForReturn ? null : bounds;
     }
-    final (minRow, maxRow) = _scanHorizontalDividerBounds(
+    final (
+      minRow,
+      maxRow,
+      foundTop,
+      foundBottom,
+    ) = _scanHorizontalDividerBounds(
       buffer,
       col,
       row,
@@ -1347,11 +1410,17 @@ class TerminalSelectionController implements TerminalListenable {
       bounds.minRow,
       bounds.maxRow,
     );
+    final vMinRow = (openVerticalScrollback && !foundTop)
+        ? 0
+        : topVirtualRow + minRow;
+    final vMaxRow = (openVerticalScrollback && !foundBottom)
+        ? _unboundedMaxVirtualRow
+        : topVirtualRow + maxRow;
     return SelectionRegion(
       minCol: minCol,
       maxCol: maxCol,
-      minRow: minRow,
-      maxRow: maxRow,
+      minRow: vMinRow,
+      maxRow: vMaxRow,
     );
   }
 
@@ -1397,7 +1466,7 @@ class TerminalSelectionController implements TerminalListenable {
         : (bounds.minCol, bounds.maxCol, false);
   }
 
-  static (int, int) _scanHorizontalDividerBounds(
+  static (int, int, bool, bool) _scanHorizontalDividerBounds(
     Buffer buffer,
     int col,
     int row,
@@ -1407,20 +1476,27 @@ class TerminalSelectionController implements TerminalListenable {
     int baseMaxRow,
   ) {
     var minRow = baseMinRow;
+    var foundTop = false;
     for (var y = row - 1; y >= baseMinRow; y--) {
       if (_isHorizontalPaneDivider(buffer, col, y, minCol, maxCol)) {
         minRow = y + 1;
+        foundTop = true;
         break;
       }
     }
     var maxRow = baseMaxRow;
+    var foundBottom = false;
     for (var y = row + 1; y <= baseMaxRow; y++) {
       if (_isHorizontalPaneDivider(buffer, col, y, minCol, maxCol)) {
         maxRow = y - 1;
+        foundBottom = true;
         break;
       }
     }
-    return minRow <= maxRow ? (minRow, maxRow) : (baseMinRow, baseMaxRow);
+    if (minRow > maxRow) {
+      return (baseMinRow, baseMaxRow, false, false);
+    }
+    return (minRow, maxRow, foundTop, foundBottom);
   }
 
   static bool _isVerticalPaneDivider(
