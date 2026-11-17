@@ -349,6 +349,15 @@ final class TuiAtlasPainter extends CustomPainter {
   /// Optional controller managing active text selection state.
   final TerminalSelectionController? selectionController;
 
+  /// Virtual row index mapped to screen row `0` (`0` when un-scrolled or no scrollback).
+  final int topVirtualRow;
+
+  /// Optional live getter overriding [topVirtualRow] on each paint pass.
+  final int Function()? topVirtualRowProvider;
+
+  int get _effectiveTopVirtualRow =>
+      topVirtualRowProvider?.call() ?? topVirtualRow;
+
   final math.Point<int>? _selectionStart;
   final math.Point<int>? _selectionEnd;
   final (int, int)? _selectionColBounds;
@@ -418,6 +427,8 @@ final class TuiAtlasPainter extends CustomPainter {
     this.enableLigatures = false,
     Map<(String, bool, bool, Color), TextPainter>? ligaturePainters,
     this.selectionController,
+    this.topVirtualRow = 0,
+    this.topVirtualRowProvider,
     math.Point<int>? selectionStart,
     math.Point<int>? selectionEnd,
     (int, int)? selectionColBounds,
@@ -842,7 +853,11 @@ final class TuiAtlasPainter extends CustomPainter {
 
   bool _isCellSelected(int x, int y) {
     if (selectionController != null) {
-      return selectionController!.isCellSelected(x, y);
+      return selectionController!.isCellSelected(
+        x,
+        y,
+        topVirtualRow: _effectiveTopVirtualRow,
+      );
     }
     final a = selectionStart;
     final b = selectionEnd;
@@ -2018,6 +2033,8 @@ final class TuiAtlasPainter extends CustomPainter {
           (oldDelegate.ligaturePainters.isNotEmpty ||
               ligaturePainters.isNotEmpty)) ||
       oldDelegate.selectionController != selectionController ||
+      oldDelegate.topVirtualRow != topVirtualRow ||
+      oldDelegate.topVirtualRowProvider != topVirtualRowProvider ||
       oldDelegate._selectionStart != _selectionStart ||
       oldDelegate._selectionEnd != _selectionEnd ||
       oldDelegate._selectionColBounds != _selectionColBounds ||

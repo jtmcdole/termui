@@ -1455,6 +1455,51 @@ void _defineWorkspaceControllerTests() {
         expect(audioEngine.stoppedVoiceIds, contains(twinVoice.id));
       },
     );
+
+    test(
+      'FtermPaneController.lookupVirtualLine returns null for evicted scrollback rows < oldestLine',
+      () async {
+        final port = _MemoryTerminalPort()
+          ..oldestScrollbackLine = 10
+          ..scrollbackRows = [
+            ScrollbackLine(
+              width: 80,
+              characters: 'Line 10'.split(''),
+              attributes: Uint32List(7 * 3),
+            ),
+            ScrollbackLine(
+              width: 80,
+              characters: 'Line 11'.split(''),
+              attributes: Uint32List(7 * 3),
+            ),
+          ];
+        final pane = FtermPaneController(
+          paneId: 'evict-pane',
+          port: port,
+          colorResolver: TerminalColorResolver(
+            theme: tui.TerminalColorTheme.termuiDark,
+            settings: const TerminalThemeSettings(),
+          ),
+        );
+        addTearDown(() {
+          pane.dispose();
+          unawaited(port.dispose());
+        });
+
+        expect(pane.lookupVirtualLine(5), isNull);
+        expect(pane.lookupVirtualLine(9), isNull);
+        expect(pane.lookupVirtualLine(10)?.characters.join(), 'Line 10');
+
+        final sel = tui.TerminalSelectionController()
+          ..startSelection(0, 5)
+          ..updateSelection(6, 11);
+        addTearDown(sel.dispose);
+        expect(
+          sel.extractVirtualText(pane.lookupVirtualLine, cols: 80),
+          equals('Line 10\nLine 11'),
+        );
+      },
+    );
   });
 }
 

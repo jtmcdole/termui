@@ -20,11 +20,10 @@ import 'backend.dart';
 import 'rendering/atlas.dart';
 import 'rendering/atlas_controller.dart';
 import 'rendering/painter.dart';
+import 'selection_gesture_machine.dart';
 import 'service/terminal_service.dart';
 import 'terminal_ime_client.dart';
 import 'util/url_launcher.dart';
-
-enum _LeftGestureRoute { none, localSelection, ptyMouse }
 
 /// A `Scaffold`-free terminal rendering and input surface.
 ///
@@ -173,6 +172,21 @@ final class TerminalSurface extends StatefulWidget {
   /// Optional external text selection controller.
   final TerminalSelectionController? selectionController;
 
+  /// Monotonic virtual row index corresponding to viewport row `0`.
+  final int topVirtualRow;
+
+  /// Optional live getter overriding [topVirtualRow] as scrollback moves.
+  final int Function()? topVirtualRowProvider;
+
+  /// Optional live epoch token (e.g. `(clearSeq, altScreen)`) whose change resets active selection state.
+  final Object? Function()? selectionEpochProvider;
+
+  /// Optional virtual row lookup used to extract multi-screenful selections across scrollback and live rows.
+  final VirtualLineLookup? virtualLineLookup;
+
+  /// Optional scrollback callback invoked when a selection drag crosses the top (`+`) or bottom (`-`) edge.
+  final void Function(int deltaLines)? onSelectionAutoScroll;
+
   /// Enables built-in viewport mouse selection and auto-copy.
   final bool enableBuiltinSelection;
 
@@ -249,6 +263,11 @@ final class TerminalSurface extends StatefulWidget {
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
     this.selectionController,
+    this.topVirtualRow = 0,
+    this.topVirtualRowProvider,
+    this.selectionEpochProvider,
+    this.virtualLineLookup,
+    this.onSelectionAutoScroll,
     this.enableBuiltinSelection = true,
     this.enableBuiltinLinkOpen = true,
     this.linkLineLookup,
@@ -263,7 +282,8 @@ final class TerminalSurface extends StatefulWidget {
 }
 
 /// State backing [TerminalSurface], exposed for diagnostics and widget tests.
-final class TerminalSurfaceState extends State<TerminalSurface> {
+final class TerminalSurfaceState extends State<TerminalSurface>
+    with WidgetsBindingObserver {
   static const int _maxWheelStepsPerEvent = 32;
   static const Duration _scrollIdleReset = Duration(milliseconds: 250);
 
@@ -299,19 +319,18 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   late bool _terminalBuiltinSelection;
   late bool _terminalBuiltinLinkOpen;
 
+  static final Set<LogicalKeyboardKey> _latchedClearedModifiers = {};
+
   MouseCursor _currentCursor = SystemMouseCursors.basic;
   ResolvedTerminalLink? _hoveredLink;
   ({int col, int row})? _lastHoverCell;
   bool _hoverLinkResolved = false;
   bool _isLinkModifierActive = false;
-  ({int col, int row})? _linkPressCell;
-  bool _suppressLinkRightClick = false;
   Timer? _linkHoverTimer;
-  bool _isSelecting = false;
+  late SelectionGestureMachine _gestureMachine;
+  int _lastTopVirtualRow = 0;
+  Object? _lastSelectionEpoch;
   term.MouseButton _lastPressedButton = term.MouseButton.left;
-  _LeftGestureRoute _leftGestureRoute = _LeftGestureRoute.none;
-  DateTime? _lastLeftTapAt;
-  ({int col, int row})? _lastLeftTapCell;
   term.MouseEvent? _lastInjectedPointerEvent;
 
   double _scrollRemainderDy = 0.0;
@@ -356,6 +375,16 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   bool get _effectiveCopyOnSelect =>
       widget.copyOnSelectProvider?.call() ?? widget.copyOnSelect;
 
+  int get _effectiveTopVirtualRow =>
+      widget.topVirtualRowProvider?.call() ?? widget.topVirtualRow;
+
+  int _readEffectiveTopVirtualRow() => _effectiveTopVirtualRow;
+
+  bool get _hasScrollbackBinding =>
+      widget.virtualLineLookup != null ||
+      widget.topVirtualRowProvider != null ||
+      widget.topVirtualRow != 0;
+
   /// Active [GlyphAtlasController] used by this surface.
   GlyphAtlasController get atlasController => _atlasController;
 
@@ -364,6 +393,10 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   /// Active [TerminalSelectionController] used by this surface.
   TerminalSelectionController get selectionController => _selectionController;
+
+  /// Active leaf state of the selection gesture HSM (for diagnostics and tests).
+  @visibleForTesting
+  SelectionGestureState get debugGestureState => _gestureMachine.state;
 
   MouseCursor get _effectiveCursor =>
       (_builtinLinkOpenEnabled &&
@@ -383,6 +416,10 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _latchedClearedModifiers.retainAll(
+      HardwareKeyboard.instance.logicalKeysPressed,
+    );
     _initAtlasController();
     _initFocusAndSelection();
     _initImeClient();
@@ -392,9 +429,21 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     HardwareKeyboard.instance.addHandler(_onHardwareKeyEvent);
     widget.bufferListenable?.addListener(_onExternalBufferChanged);
     _hadActiveBuffer = _activeBuffer != null;
+    _lastTopVirtualRow = _effectiveTopVirtualRow;
+    _lastSelectionEpoch = widget.selectionEpochProvider?.call();
     _lastCursorPosition =
         widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
     _prepareActiveBufferResources();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) {
+      _latchedClearedModifiers.addAll(
+        HardwareKeyboard.instance.logicalKeysPressed,
+      );
+      _syncLinkModifierState();
+    }
   }
 
   void _initAtlasController() {
@@ -418,7 +467,17 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _selectionController =
         widget.selectionController ?? TerminalSelectionController();
     _selectionController.addListener(_onSelectionChanged);
+    _gestureMachine = _createGestureMachine();
   }
+
+  SelectionGestureMachine _createGestureMachine() => SelectionGestureMachine(
+    controller: _selectionController,
+    onCopySelection: _copySelectedBufferText,
+    onOpenUrl: (uri) => unawaited(widget.service.openUrl(uri)),
+    onEdgeAutoScroll: widget.onSelectionAutoScroll != null
+        ? _handleEdgeAutoScroll
+        : null,
+  );
 
   void _initImeClient() {
     _ownsImeClient = widget.imeClient == null;
@@ -442,6 +501,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
         onTextInput: widget.onTextInput,
         onHostShortcut: _handleHostShortcut,
         onModifiersChanged: _syncLinkModifierState,
+        modifiersProvider: _collectEffectiveModifiers,
       )
       ..addListener(_onImeComposingChanged);
   }
@@ -654,6 +714,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     }
 
     if (oldWidget.selectionController != widget.selectionController) {
+      _gestureMachine.dispose();
       _selectionController.removeListener(_onSelectionChanged);
       if (_ownsSelectionController) {
         _selectionController.dispose();
@@ -662,6 +723,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _selectionController =
           widget.selectionController ?? TerminalSelectionController();
       _selectionController.addListener(_onSelectionChanged);
+      _gestureMachine = _createGestureMachine();
     }
   }
 
@@ -693,6 +755,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   }
 
   void _syncBufferResourcesOnUpdate(TerminalSurface oldWidget) {
+    _syncVirtualScrollSelection();
     final activeBuf = _activeBuffer;
     final alreadyPrepared = identical(activeBuf, _externallyPreparedBuffer);
     _externallyPreparedBuffer = null;
@@ -731,19 +794,18 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       }
       _prepareActiveBufferResources();
     }
+    _gestureMachine.onEdgeAutoScroll = widget.onSelectionAutoScroll != null
+        ? _handleEdgeAutoScroll
+        : null;
     if (oldWidget.enableBuiltinSelection && !widget.enableBuiltinSelection) {
-      _isSelecting = false;
-      _lastLeftTapAt = null;
-      _lastLeftTapCell = null;
-      _selectionController.clearSelection();
+      _gestureMachine.dispatch(.reset);
     }
     if (oldWidget.enableBuiltinLinkOpen && !widget.enableBuiltinLinkOpen) {
       _hoveredLink = null;
       _lastHoverCell = null;
       _hoverLinkResolved = false;
       _isLinkModifierActive = false;
-      _linkPressCell = null;
-      _suppressLinkRightClick = false;
+      _gestureMachine.disarmLinks();
       _stopLinkHoverTicker();
     } else if (oldWidget.hoveredLinkStyler != widget.hoveredLinkStyler ||
         oldWidget.hoveredLinkAnimationInterval !=
@@ -757,6 +819,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   @override
   void dispose() {
     _stopLinkHoverTicker();
+    WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
     widget.bufferListenable?.removeListener(_onExternalBufferChanged);
     _cancelTerminalStreams();
@@ -768,6 +831,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     if (_ownsImeClient) {
       _imeClient.dispose();
     }
+    _gestureMachine.dispose();
     _selectionController.removeListener(_onSelectionChanged);
     if (_ownsSelectionController) {
       _selectionController.dispose();
@@ -800,6 +864,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
 
   void _onExternalBufferChanged() {
     if (!mounted) return;
+    _syncVirtualScrollSelection();
     final buf = _activeBuffer;
     final hasBuf = buf != null;
     final activePty =
@@ -878,10 +943,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   void _onTerminalBuiltinSelectionChanged(bool enabled) {
     if (!mounted) return;
     if (!enabled) {
-      _isSelecting = false;
-      _lastLeftTapAt = null;
-      _lastLeftTapCell = null;
-      _selectionController.clearSelection();
+      _gestureMachine.dispatch(.reset);
     }
     setState(() {
       _terminalBuiltinSelection = enabled;
@@ -895,8 +957,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _lastHoverCell = null;
       _hoverLinkResolved = false;
       _isLinkModifierActive = false;
-      _linkPressCell = null;
-      _suppressLinkRightClick = false;
+      _gestureMachine.disarmLinks();
       _stopLinkHoverTicker();
     }
     setState(() {
@@ -999,7 +1060,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     }
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.f12) {
-      if (HardwareKeyboard.instance.isShiftPressed) {
+      if (_isShiftPressed) {
         unawaited(_atlasController.recreateAtlas());
       } else {
         unawaited(_performTakeScreenshot());
@@ -1010,7 +1071,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
         _selectionController.hasSelection &&
         isTerminalCopyShortcut(key, mods)) {
       if (event is KeyDownEvent) {
-        _copySelectedBufferText();
+        _gestureMachine.dispatch(.copyShortcut);
       }
       return true;
     }
@@ -1040,16 +1101,44 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _injectInputEvent(term.PasteEvent(text));
   }
 
-  static bool _isLinkOpenModifierPressed() {
-    final kb = HardwareKeyboard.instance;
-    // Exclude Shift/Alt so Ctrl+Shift (forced selection) and Alt+Click (block
-    // selection) remain unaffected.
-    return (kb.isControlPressed || kb.isMetaPressed) &&
-        !kb.isShiftPressed &&
-        !kb.isAltPressed;
-  }
+  bool _isKeyPressed(LogicalKeyboardKey key) =>
+      !_latchedClearedModifiers.contains(key) &&
+      HardwareKeyboard.instance.isLogicalKeyPressed(key);
 
-  bool _onHardwareKeyEvent(KeyEvent _) {
+  bool get _isControlPressed =>
+      _isKeyPressed(.controlLeft) || _isKeyPressed(.controlRight);
+
+  bool get _isShiftPressed =>
+      _isKeyPressed(.shiftLeft) || _isKeyPressed(.shiftRight);
+
+  bool get _isAltPressed => _isKeyPressed(.altLeft) || _isKeyPressed(.altRight);
+
+  bool get _isMetaPressed =>
+      _isKeyPressed(.metaLeft) || _isKeyPressed(.metaRight);
+
+  Set<term.Modifier> _collectEffectiveModifiers() => {
+    if (_isShiftPressed) term.Modifier.shift,
+    if (_isAltPressed) term.Modifier.alt,
+    if (_isControlPressed) term.Modifier.control,
+    if (_isMetaPressed) term.Modifier.meta,
+  };
+
+  bool _isLinkOpenModifierPressed() =>
+      // Exclude Shift/Alt so Ctrl+Shift (forced selection) and Alt+Click (block
+      // selection) remain unaffected.
+      (_isControlPressed || _isMetaPressed) &&
+      !_isShiftPressed &&
+      !_isAltPressed;
+
+  bool get _isMacCtrlRightClick =>
+      defaultTargetPlatform == TargetPlatform.macOS &&
+      _isControlPressed &&
+      !_isShiftPressed &&
+      !_isAltPressed &&
+      !_isMetaPressed;
+
+  bool _onHardwareKeyEvent(KeyEvent event) {
+    _latchedClearedModifiers.remove(event.logicalKey);
     // Sync modifier state even when this pane does not yet hold keyboard focus
     // so stationary Ctrl/Cmd hover feedback updates across unfocused panes.
     _syncLinkModifierState();
@@ -1094,7 +1183,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final hoverCell = _lastHoverCell;
     final linkMod = _isLinkOpenModifierPressed();
     if (!_builtinLinkOpenEnabled ||
-        _isSelecting ||
+        _gestureMachine.isSelectingGesture ||
         hoverCell == null ||
         !linkMod) {
       _hoveredLink = null;
@@ -1117,7 +1206,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _hoveredLink = null;
       _hoverLinkResolved = false;
     } else if (_lastHoverCell case final cell?
-        when !_isSelecting && !_hoverLinkResolved) {
+        when !_gestureMachine.isSelectingGesture && !_hoverLinkResolved) {
       _hoveredLink = _resolveLinkAt(_activeBuffer, cell.col, cell.row);
       _hoverLinkResolved = true;
     }
@@ -1162,7 +1251,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _scrollRemainderDy -= rawSteps * cellH;
     _hoverLinkResolved = false;
 
-    final (col, row) = _clampCellToActiveGrid(
+    final (col, row, _) = _clampCellToActiveGrid(
       (event.localPosition.dx / cellW).floor(),
       (event.localPosition.dy / cellH).floor(),
       maxCol,
@@ -1174,7 +1263,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final button = rawSteps < 0
         ? term.MouseButton.wheelUp
         : term.MouseButton.wheelDown;
-    final mods = collectHardwareModifiers();
+    final mods = _collectEffectiveModifiers();
 
     for (var i = 0; i < steps; i++) {
       final termEvent = term.MouseEvent(
@@ -1189,9 +1278,10 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _lastInjectedPointerEvent = termEvent;
       _injectInputEvent(termEvent);
     }
+    _syncVirtualScrollSelection();
   }
 
-  (int, int) _clampCellToActiveGrid(
+  (int, int, int) _clampCellToActiveGrid(
     int rawCol,
     int rawRow,
     int maxC,
@@ -1204,7 +1294,11 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     final effRows = active != null
         ? math.max(1, math.min(maxR, active.$2))
         : maxR;
-    return (rawCol.clamp(0, effCols - 1), rawRow.clamp(0, effRows - 1));
+    return (
+      rawCol.clamp(0, effCols - 1),
+      rawRow.clamp(0, effRows - 1),
+      effRows,
+    );
   }
 
   static term.MouseButton _resolveMouseButton(int buttons) {
@@ -1229,25 +1323,27 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     _ => (term.MouseButton.none, term.MouseEventType.move),
   };
 
-  ({int col, int row, int pixelX, int pixelY})? _resolvePointerCoords(
-    PointerEvent event,
-    Size layoutSize,
-  ) {
+  ({int col, int row, int rawRow, int effRows, int pixelX, int pixelY})?
+  _resolvePointerCoords(PointerEvent event, Size layoutSize) {
     final atlas = _atlasController.atlas;
     if (atlas == null) return null;
     final maxCol = (layoutSize.width / atlas.cellWidth).floor();
     final maxRow = (layoutSize.height / atlas.cellHeight).floor();
     if (maxCol <= 0 || maxRow <= 0) return null;
 
-    final (clampedCol, clampedRow) = _clampCellToActiveGrid(
-      (event.localPosition.dx / atlas.cellWidth).floor(),
-      (event.localPosition.dy / atlas.cellHeight).floor(),
+    final rawCol = (event.localPosition.dx / atlas.cellWidth).floor();
+    final rawRow = (event.localPosition.dy / atlas.cellHeight).floor();
+    final (clampedCol, clampedRow, effRows) = _clampCellToActiveGrid(
+      rawCol,
+      rawRow,
       maxCol,
       maxRow,
     );
     return (
       col: clampedCol,
       row: clampedRow,
+      rawRow: rawRow,
+      effRows: effRows,
       pixelX: event.localPosition.dx.floor().clamp(0, 100000) + 1,
       pixelY: event.localPosition.dy.floor().clamp(0, 100000) + 1,
     );
@@ -1273,12 +1369,12 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     if (event is PointerUpEvent) {
       _lastPressedButton = term.MouseButton.left;
     }
-    _updateSelectionAndUri(coords.col, coords.row, termuiButton, termuiType);
+    _updateSelectionAndUri(coords, termuiButton, termuiType);
 
     final suppressLeftPtyMouse =
         termuiButton == term.MouseButton.left &&
-        _consumeLeftPtySuppression(termuiType);
-    final suppressRightLinkMouse = _consumeRightLinkSuppression(
+        _gestureMachine.consumeLeftPtySuppression(termuiType);
+    final suppressRightLinkMouse = _gestureMachine.consumeRightLinkSuppression(
       termuiButton,
       termuiType,
     );
@@ -1291,7 +1387,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       pixelY: coords.pixelY,
       button: termuiButton,
       type: termuiType,
-      modifiers: collectHardwareModifiers(),
+      modifiers: _collectEffectiveModifiers(),
     );
 
     if (_isDuplicatePointerMotion(termEvent)) return;
@@ -1300,20 +1396,10 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   }
 
   void _handlePointerCancel(PointerCancelEvent event, Size layoutSize) {
-    final wasSelecting = _isSelecting;
-    final route = _leftGestureRoute;
     _resetScrollAccumulator();
-    _linkPressCell = null;
-    _suppressLinkRightClick = false;
-    _isSelecting = false;
-    _lastLeftTapAt = null;
-    _lastLeftTapCell = null;
     _lastPressedButton = term.MouseButton.left;
-    _leftGestureRoute = _LeftGestureRoute.none;
-    if (wasSelecting || route == _LeftGestureRoute.ptyMouse) {
-      _selectionController.clearSelection();
-    }
-    if (route != _LeftGestureRoute.ptyMouse) return;
+    _gestureMachine.dispatch(.pointerCancel);
+    if (!_gestureMachine.consumeCancelPtyRelease()) return;
 
     final coords = _resolvePointerCoords(event, layoutSize);
     if (coords == null) return;
@@ -1324,7 +1410,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       pixelY: coords.pixelY,
       button: term.MouseButton.left,
       type: term.MouseEventType.release,
-      modifiers: collectHardwareModifiers(),
+      modifiers: _collectEffectiveModifiers(),
     );
     _lastInjectedPointerEvent = termEvent;
     _injectInputEvent(termEvent);
@@ -1346,95 +1432,185 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
   }
 
   void _updateSelectionAndUri(
-    int col,
-    int row,
+    ({int col, int row, int rawRow, int effRows, int pixelX, int pixelY})
+    coords,
     term.MouseButton button,
     term.MouseEventType type,
   ) {
-    final (nextLink, uriChanged) = _updateHoveredLinkCell(col, row);
+    final (nextLink, uriChanged) = _updateHoveredLinkCell(
+      coords.col,
+      coords.row,
+    );
     if (button == term.MouseButton.left) {
-      if (type == term.MouseEventType.press) {
-        _handleLeftPointerPress(col, row, nextLink?.uri);
-      } else if (type == term.MouseEventType.drag) {
-        _handlePointerDrag(col, row);
-      } else if (type == term.MouseEventType.release) {
-        _finishPointerRelease(col, row, nextLink?.uri);
-      }
+      _dispatchLeftPointerToHsm(coords, type, nextLink?.uri);
     } else if (button == term.MouseButton.right) {
-      _handleRightLinkPointerEvent(col, row, type, nextLink?.uri);
+      _dispatchRightPointerToHsm(coords, type, nextLink?.uri);
     }
     if (uriChanged && mounted) {
       setState(() {});
     }
   }
 
-  bool _consumeLeftPtySuppression(term.MouseEventType type) {
-    final suppress =
-        _leftGestureRoute == _LeftGestureRoute.localSelection &&
-        (type == term.MouseEventType.press ||
-            type == term.MouseEventType.drag ||
-            type == term.MouseEventType.release);
-    if (type == term.MouseEventType.release) {
-      _leftGestureRoute = _LeftGestureRoute.none;
-    }
-    return suppress;
-  }
-
-  bool _consumeRightLinkSuppression(
-    term.MouseButton button,
+  void _dispatchLeftPointerToHsm(
+    ({int col, int row, int rawRow, int effRows, int pixelX, int pixelY})
+    coords,
     term.MouseEventType type,
+    String? hoveredUri,
   ) {
-    if (button != term.MouseButton.right || !_suppressLinkRightClick) {
-      return false;
+    switch (type) {
+      case .press:
+        _gestureMachine.dispatch(
+          .leftDown,
+          _buildPointerDownPayload(coords.col, coords.row, hoveredUri),
+        );
+      case .drag:
+        _gestureMachine.dispatch(
+          .pointerDrag,
+          _buildPointerDragPayload(coords),
+        );
+      case .release:
+        _gestureMachine.dispatch(
+          .leftUp,
+          _buildPointerUpPayload(coords.col, coords.row, hoveredUri),
+        );
+      case .move:
+        break;
     }
-    if (type == term.MouseEventType.release) {
-      _suppressLinkRightClick = false;
-    }
-    return true;
   }
 
-  /// Handles macOS `Ctrl+Click`, which AppKit/Flutter maps to a secondary
-  /// (right) mouse button event while `Control` is pressed.
-  void _handleRightLinkPointerEvent(
-    int col,
-    int row,
+  void _dispatchRightPointerToHsm(
+    ({int col, int row, int rawRow, int effRows, int pixelX, int pixelY})
+    coords,
     term.MouseEventType type,
     String? hoveredUri,
   ) {
     if (defaultTargetPlatform != TargetPlatform.macOS) return;
-    if (type == term.MouseEventType.press) {
-      final kb = HardwareKeyboard.instance;
-      final isCtrlOnly =
-          kb.isControlPressed &&
-          !kb.isShiftPressed &&
-          !kb.isAltPressed &&
-          !kb.isMetaPressed;
-      if (_builtinLinkOpenEnabled &&
-          isCtrlOnly &&
-          hoveredUri != null &&
-          hoveredUri.isNotEmpty) {
-        _linkPressCell = (col: col, row: row);
-        _suppressLinkRightClick = true;
+    switch (type) {
+      case .press:
+        _gestureMachine.dispatch(
+          .rightDown,
+          _buildPointerDownPayload(coords.col, coords.row, hoveredUri),
+        );
+      case .drag:
+        if (_gestureMachine.state == .linkClicking) {
+          _gestureMachine.dispatch(
+            .pointerDrag,
+            _buildPointerDragPayload(coords),
+          );
+        }
+      case .release:
+        _gestureMachine.dispatch(
+          .rightUp,
+          _buildPointerUpPayload(coords.col, coords.row, hoveredUri),
+        );
+      case .move:
+        break;
+    }
+  }
+
+  SelectionPointerDown _buildPointerDownPayload(
+    int col,
+    int row,
+    String? hoveredUri,
+  ) => (
+    col: col,
+    row: row,
+    topVirtualRow: _effectiveTopVirtualRow,
+    buffer: _activeBuffer,
+    hoveredUri: hoveredUri,
+    builtinSelectionEnabled: _builtinSelectionEnabled,
+    builtinLinkOpenEnabled: _builtinLinkOpenEnabled,
+    mouseTracking: _effectiveMouseTracking,
+    openVerticalScrollback: _hasScrollbackBinding,
+    isShift: _isShiftPressed,
+    isAlt: _isAltPressed,
+    isLinkModifier: _isLinkOpenModifierPressed(),
+    isMacCtrlRightClick: _isMacCtrlRightClick,
+    now: clock.now(),
+  );
+
+  SelectionPointerDrag _buildPointerDragPayload(
+    ({int col, int row, int rawRow, int effRows, int pixelX, int pixelY})
+    coords,
+  ) => (
+    col: coords.col,
+    row: coords.row,
+    rawRow: coords.rawRow,
+    effRows: coords.effRows,
+    topVirtualRow: _effectiveTopVirtualRow,
+    buffer: _activeBuffer,
+    builtinSelectionEnabled: _builtinSelectionEnabled,
+    isAlt: _isAltPressed,
+  );
+
+  SelectionPointerUp _buildPointerUpPayload(
+    int col,
+    int row,
+    String? hoveredUri,
+  ) => (
+    col: col,
+    row: row,
+    hoveredUri: hoveredUri,
+    builtinSelectionEnabled: _builtinSelectionEnabled,
+    builtinLinkOpenEnabled: _builtinLinkOpenEnabled,
+    copyOnSelect: _effectiveCopyOnSelect,
+    isLinkModifier: _isLinkOpenModifierPressed(),
+  );
+
+  void _syncVirtualScrollSelection() {
+    if (widget.selectionEpochProvider case final epochProvider?) {
+      final nextEpoch = epochProvider();
+      if (nextEpoch != _lastSelectionEpoch) {
+        _lastSelectionEpoch = nextEpoch;
+        _lastTopVirtualRow = _effectiveTopVirtualRow;
+        _gestureMachine.dispatch(.reset);
+        return;
       }
+    }
+    final nextTopVirtual = _effectiveTopVirtualRow;
+    if (nextTopVirtual == _lastTopVirtualRow) return;
+    _lastTopVirtualRow = nextTopVirtual;
+    if (_gestureMachine.isDraggingSelection) {
+      _extendSelectionAfterScroll(nextTopVirtual);
+    }
+  }
+
+  void _extendSelectionAfterScroll(int topVirtualRow) {
+    final cell = _gestureMachine.lastDragScreenCell;
+    if (cell == null) return;
+    final buf = _activeBuffer;
+    if (buf == null || buf.width <= 0 || buf.height <= 0) return;
+    final (clampedCol, clampedRow, effRows) = _clampCellToActiveGrid(
+      cell.col,
+      cell.row,
+      buf.width,
+      buf.height,
+    );
+    _gestureMachine.dispatch(.pointerDrag, (
+      col: clampedCol,
+      row: clampedRow,
+      rawRow: cell.rawRow,
+      effRows: effRows,
+      topVirtualRow: topVirtualRow,
+      buffer: buf,
+      builtinSelectionEnabled: _builtinSelectionEnabled,
+      isAlt: _isAltPressed,
+    ));
+  }
+
+  void _handleEdgeAutoScroll(int rowDelta) {
+    final scroll = widget.onSelectionAutoScroll;
+    if (!mounted ||
+        scroll == null ||
+        rowDelta == 0 ||
+        !_gestureMachine.isDraggingSelection) {
       return;
     }
-    if (!_suppressLinkRightClick) return;
-    if (type == term.MouseEventType.drag &&
-        _linkPressCell != (col: col, row: row)) {
-      _linkPressCell = null;
-      return;
-    }
-    if (type == term.MouseEventType.release) {
-      final clicked = _linkPressCell == (col: col, row: row);
-      _linkPressCell = null;
-      if (_builtinLinkOpenEnabled &&
-          clicked &&
-          hoveredUri != null &&
-          hoveredUri.isNotEmpty &&
-          _isLinkOpenModifierPressed()) {
-        unawaited(widget.service.openUrl(hoveredUri));
-      }
-    }
+    final deltaLines = rowDelta < 0
+        ? (-rowDelta).clamp(1, 6)
+        : -rowDelta.clamp(1, 6);
+    scroll(deltaLines);
+    _syncVirtualScrollSelection();
   }
 
   (ResolvedTerminalLink?, bool) _updateHoveredLinkCell(int col, int row) {
@@ -1445,7 +1621,7 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
       _hoverLinkResolved = false;
     }
     final linkMod = _isLinkOpenModifierPressed();
-    if (!linkMod || _isSelecting) {
+    if (!linkMod || _gestureMachine.isSelectingGesture) {
       final changed = _hoveredLink != null || linkMod != _isLinkModifierActive;
       _hoveredLink = null;
       _hoverLinkResolved = false;
@@ -1519,175 +1695,23 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
     widget.onPointerExit?.call(event);
   }
 
-  void _handleLeftPointerPress(int col, int row, String? hoveredUri) {
-    final isLinkClick =
-        _builtinLinkOpenEnabled &&
-        _isLinkOpenModifierPressed() &&
-        hoveredUri != null &&
-        hoveredUri.isNotEmpty;
-    if (isLinkClick) {
-      _linkPressCell = (col: col, row: row);
-      _leftGestureRoute = _effectiveMouseTracking
-          ? _LeftGestureRoute.localSelection
-          : _LeftGestureRoute.none;
-      return;
-    }
-
-    if (_effectiveMouseTracking) {
-      if (HardwareKeyboard.instance.isShiftPressed &&
-          _builtinSelectionEnabled) {
-        _linkPressCell = _builtinLinkOpenEnabled ? (col: col, row: row) : null;
-        _leftGestureRoute = _LeftGestureRoute.localSelection;
-        _startSelectionAt(col, row);
-        return;
-      }
-      _linkPressCell = null;
-      _leftGestureRoute = _LeftGestureRoute.ptyMouse;
-      _isSelecting = false;
-      _lastLeftTapAt = null;
-      _lastLeftTapCell = null;
-      _selectionController.clearSelection();
-      return;
-    }
-
-    _leftGestureRoute = _LeftGestureRoute.none;
-    _linkPressCell = _builtinLinkOpenEnabled ? (col: col, row: row) : null;
-    if (_builtinSelectionEnabled) {
-      _startSelectionAt(col, row);
-    }
-  }
-
-  void _handlePointerDrag(int col, int row) {
-    if (_linkPressCell != null && _linkPressCell != (col: col, row: row)) {
-      _linkPressCell = null;
-    }
-    if (!_builtinSelectionEnabled || !_isSelecting) return;
-
-    if (_selectionController.mode == SelectionMode.word) {
-      final buf = _activeBuffer;
-      if (buf != null) {
-        _selectionController.updateWordSelection(buf, col, row);
-      }
-      return;
-    }
-
-    final tapCell = (
-      col: _resolveTapLeadCol(_activeBuffer, col, row),
-      row: row,
-    );
-    if (tapCell == _lastLeftTapCell && !_selectionController.hasSelection) {
-      return;
-    }
-    _lastLeftTapAt = null;
-    final mode = HardwareKeyboard.instance.isAltPressed
-        ? SelectionMode.block
-        : SelectionMode.stream;
-    _selectionController.updateSelection(col, row, mode: mode);
-  }
-
-  static int _resolveTapLeadCol(Buffer? buf, int col, int row) {
-    if (buf == null || col <= 0 || col >= buf.width) return col;
-    if (row < 0 || row >= buf.height) return col;
-    return buf.getCharacter(col, row).isEmpty ? col - 1 : col;
-  }
-
-  void _startSelectionAt(int col, int row) {
-    final buf = _activeBuffer;
-    final isAlt = HardwareKeyboard.instance.isAltPressed;
-    final mode = isAlt ? SelectionMode.block : SelectionMode.stream;
-    final region = buf != null
-        ? TerminalSelectionController.resolveRegionForCell(
-            buf,
-            col,
-            row,
-            mode: mode,
-          )
-        : null;
-    if (_isGraphicCanvasPress(buf, row, region)) {
-      _lastLeftTapAt = null;
-      _lastLeftTapCell = null;
-      _selectionController.clearSelection();
-      _isSelecting = false;
-      return;
-    }
-
-    final leadCol = _resolveTapLeadCol(buf, col, row);
-    final tapCell = (col: leadCol, row: row);
-    final now = clock.now();
-    final lastAt = _lastLeftTapAt;
-    if (!isAlt &&
-        buf != null &&
-        lastAt != null &&
-        _lastLeftTapCell == tapCell &&
-        now.difference(lastAt) <= kDoubleTapTimeout) {
-      _lastLeftTapAt = null;
-      _lastLeftTapCell = null;
-      _selectionController.selectWord(buf, leadCol, row, region: region);
-      _isSelecting = true;
-      return;
-    }
-
-    _lastLeftTapAt = now;
-    _lastLeftTapCell = tapCell;
-    _selectionController.startSelection(col, row, mode: mode, region: region);
-    _isSelecting = true;
-  }
-
-  static bool _isGraphicCanvasPress(
-    Buffer? buf,
-    int row,
-    SelectionRegion? region,
-  ) {
-    if (buf == null || row < 0 || row >= buf.height) return false;
-    final minCol = region?.minCol ?? 0;
-    final maxCol = region?.maxCol ?? (buf.width - 1);
-    var halfBlocks = 0;
-    for (var x = minCol; x <= maxCol; x++) {
-      if (Modifier.has(buf.getModifiers(x, row), Modifier.kittyPlaceholder)) {
-        return true;
-      }
-      final ch = buf.getCharacter(x, row);
-      if (ch == '▀' || ch == '▄') {
-        halfBlocks++;
-        if (halfBlocks >= 8) return true;
-      }
-    }
-    return false;
-  }
-
-  void _finishPointerRelease(int col, int row, String? uri) {
-    final clickedLinkCell = _linkPressCell == (col: col, row: row);
-    _linkPressCell = null;
-
-    if (_builtinSelectionEnabled) {
-      final hasCompletedSelection =
-          _isSelecting && _selectionController.hasSelection;
-      _isSelecting = false;
-      if (hasCompletedSelection) {
-        if (_effectiveCopyOnSelect) {
-          _copySelectedBufferText();
-        }
-        return;
-      }
-      _selectionController.clearSelection();
-    }
-
-    if (_builtinLinkOpenEnabled &&
-        clickedLinkCell &&
-        uri != null &&
-        uri.isNotEmpty &&
-        _isLinkOpenModifierPressed()) {
-      unawaited(widget.service.openUrl(uri));
-    }
-  }
-
   void _copySelectedBufferText() {
     final buf = _activeBuffer;
-    final selectedText = buf == null
-        ? ''
-        : _selectionController.extractText(buf, includeHidden: true);
-    _isSelecting = false;
-    _linkPressCell = null;
+    final String selectedText;
+    if (buf == null) {
+      selectedText = '';
+    } else if (widget.virtualLineLookup case final lookup?) {
+      selectedText = _selectionController.extractVirtualText(
+        lookup,
+        cols: buf.width,
+      );
+    } else {
+      selectedText = _selectionController.extractText(
+        buf,
+        includeHidden: true,
+        topVirtualRow: _effectiveTopVirtualRow,
+      );
+    }
     _selectionController.clearSelection();
     if (selectedText.isNotEmpty) {
       unawaited(_writeToClipboard(selectedText));
@@ -2027,6 +2051,8 @@ final class TerminalSurfaceState extends State<TerminalSurface> {
                 selectionController: _builtinSelectionEnabled
                     ? _selectionController
                     : null,
+                topVirtualRow: _effectiveTopVirtualRow,
+                topVirtualRowProvider: _readEffectiveTopVirtualRow,
                 hoveredLink: _isLinkHovered ? _hoveredLink : null,
                 hoveredLinkStyler: widget.hoveredLinkStyler,
                 kittyImages: _kittyCache.images,

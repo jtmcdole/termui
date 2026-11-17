@@ -1952,6 +1952,207 @@ void main() {
         await tester.runAsync(harness.dispose);
       },
     );
+
+    testWidgets(
+      'roots selection in scrollback so highlight moves on scroll and multi-screenful scrollback selections copy all lines',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.binding.setSurfaceSize(const Size(480, 180));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final harness = AppThreeWayWsHarness();
+        final pty = await tester.runAsync(
+          () => harness.startCaster(id: 'sb-select', title: 'scrollback'),
+        );
+
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(token: harness.token),
+            channelFactory: harness.openClientChannel,
+            isWebOverride: true,
+            settingsStorage: _MemSettings(),
+            audioControllerFactory: () =>
+                FtermAudioController(engineFactory: _WidgetFakeAudioEngine.new),
+            resizeDebounce: Duration.zero,
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester);
+
+        String? copiedClipboard;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          (call) async {
+            if (call.method == 'Clipboard.setData') {
+              final args = call.arguments as Map<Object?, Object?>?;
+              copiedClipboard = args?['text'] as String?;
+            }
+            return null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+
+        // Emit 30 numbered lines so >20 lines scroll into primary scrollback above a <10-row viewport.
+        final payload = StringBuffer('\x1b[2J\x1b[H');
+        for (var i = 0; i < 30; i++) {
+          final label = 'Line ${i.toString().padLeft(2, '0')}';
+          payload.write(i < 29 ? '$label\r\n' : label);
+        }
+        pty!.emitRawAnsi('$payload');
+        await settleCastApp(tester, cycles: 8);
+
+        final pane = workspace!.focusedPane!;
+        final rows = pane.port.rows;
+        expect(rows, lessThan(12));
+
+        final surfaceFinder = find.byType(TerminalSurface).first;
+        final atlas = tester
+            .widget<TerminalSurface>(surfaceFinder)
+            .atlasController!
+            .atlas!;
+        final topLeft = tester.getTopLeft(
+          find
+              .descendant(of: surfaceFinder, matching: find.byType(CustomPaint))
+              .first,
+        );
+        Offset cellCenter(double col, int row) =>
+            topLeft +
+            Offset(atlas.cellWidth * col, atlas.cellHeight * (row + 0.5));
+
+        Future<(int, int, int)> sampleSpacePixelAtRow(int screenRow) async {
+          final boundary = tester.renderObject<RenderRepaintBoundary>(
+            find
+                .descendant(
+                  of: surfaceFinder,
+                  matching: find.byType(RepaintBoundary),
+                )
+                .first,
+          );
+          final img = await tester.runAsync(
+            () => boundary.toImage(pixelRatio: 1.0),
+          );
+          addTearDown(() => img?.dispose());
+          final rgba = await tester.runAsync(
+            () => img!.toByteData(format: ui.ImageByteFormat.rawRgba),
+          );
+          return _sampleRgbaAt(
+            rgba!,
+            img!.width,
+            ((4 + 0.5) * atlas.cellWidth).floor(),
+            ((screenRow + 0.5) * atlas.cellHeight).floor(),
+          );
+        }
+
+        const selBg = (0x26, 0x4F, 0x78);
+
+        // 1. With copyOnSelect: false, select row `r0` and scroll backwards 2 lines:
+        //    the highlight must move down on screen to `r0 + 2` with the text.
+        workspace!.setCopyOnSelect(false);
+        await tester.pump();
+        final r0 = rows - 4;
+        final staticSel = await tester.startGesture(
+          cellCenter(0.5, r0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        await staticSel.moveTo(cellCenter(6.5, r0));
+        await tester.pump(const Duration(milliseconds: 20));
+        await staticSel.up();
+        await tester.pump();
+
+        final unselectedBg = await sampleSpacePixelAtRow(r0 + 2);
+        expect(await sampleSpacePixelAtRow(r0), equals(selBg));
+
+        pane.scrollLines(2);
+        await settleCastApp(tester, cycles: 4);
+        expect(await sampleSpacePixelAtRow(r0), equals(unselectedBg));
+        expect(await sampleSpacePixelAtRow(r0 + 2), equals(selBg));
+
+        // 2. With copyOnSelect: true, start drag at 'Line 29' on bottom row, scroll backwards
+        //    across multiple screenfuls to 'Line 05', and release -> copies all 25 lines.
+        pane.jumpToBottom();
+        workspace!.setCopyOnSelect(true);
+        await settleCastApp(tester, cycles: 3);
+        copiedClipboard = null;
+
+        final bottomRow = rows - 1;
+        final multiDrag = await tester.startGesture(
+          cellCenter(6.5, bottomRow),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        await multiDrag.moveTo(cellCenter(0.5, 0));
+        await tester.pump(const Duration(milliseconds: 20));
+
+        // Scroll backwards while holding mouse steady (no extra moveTo) so 'Line 05'
+        // lands at row 0, then release immediately.
+        final targetOffset = 30 - rows - 5;
+        pane.scrollLines(targetOffset);
+        await settleCastApp(tester, cycles: 8);
+        await multiDrag.up();
+        await settleCastApp(tester, cycles: 4);
+
+        expect(copiedClipboard, isNotNull);
+        final copiedLines = copiedClipboard!.split('\n');
+        expect(copiedLines.length, equals(25));
+        expect(copiedLines.first, equals('Line 05'));
+        expect(copiedLines.last, equals('Line 29'));
+        expect(copiedClipboard, isNot(contains('▐')));
+
+        // 3. Dragging past the top viewport edge auto-scrolls backwards and selects >1 screenful.
+        pane.jumpToBottom();
+        await settleCastApp(tester, cycles: 3);
+        copiedClipboard = null;
+
+        final edgeDrag = await tester.startGesture(
+          cellCenter(6.5, bottomRow),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        await edgeDrag.moveTo(cellCenter(0.5, -2));
+        for (var i = 0; i < 3; i++) {
+          await tester.pump(const Duration(milliseconds: 60));
+        }
+        await settleCastApp(tester, cycles: 4);
+        expect(pane.scrollOffsetLines, greaterThan(0));
+        await edgeDrag.up();
+        await settleCastApp(tester, cycles: 4);
+
+        expect(copiedClipboard, isNotNull);
+        final edgeLines = copiedClipboard!.split('\n');
+        expect(edgeLines.length, greaterThan(rows));
+        expect(edgeLines.last, equals('Line 29'));
+
+        // 4. On altScreen (?1049h), dragging past the top edge must NOT send arrow-key / wheel input to PTY.
+        pty.emitRawAnsi('\x1b[?1049h\x1b[2J\x1b[HAlt 0\r\nAlt 1\r\nAlt 2');
+        await settleCastApp(tester, cycles: 6);
+        pty.writtenInputs.clear();
+
+        final altEdgeDrag = await tester.startGesture(
+          cellCenter(2.5, 2),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump(const Duration(milliseconds: 20));
+        await altEdgeDrag.moveTo(cellCenter(1.5, -2));
+        for (var i = 0; i < 3; i++) {
+          await tester.pump(const Duration(milliseconds: 60));
+        }
+        await altEdgeDrag.up();
+        await settleCastApp(tester, cycles: 4);
+        expect(pty.writtenInputs, isEmpty);
+
+        await tester.runAsync(() => workspace!.dispose());
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(harness.dispose);
+      },
+    );
   });
 }
 
