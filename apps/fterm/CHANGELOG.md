@@ -1,3 +1,12 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(client_core,fterm): preserve Kitty placeholder IDs across theme contrast and cursors.
+ - **BREAKING** **FIX**: replace restricted audio assets and fix POSIX CI test races.
+ - **BREAKING** **FEAT**(fterm): add splash About overlay and open-source licenses viewer.
+ - **BREAKING** **FEAT**(selection): root scrollback selection and migrate pointer gestures to HSM.
+
 ## 0.3.0
 
 > Note: This release has breaking changes.

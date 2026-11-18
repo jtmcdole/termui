@@ -11,6 +11,39 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`fterm` - `v0.4.0`](#fterm---v040)
+ - [`termui_cast_client_core` - `v0.3.0`](#termui_cast_client_core---v030)
+
+Packages with other changes:
+
+ - [`termui_caster_cli` - `v0.2.2`](#termui_caster_cli---v022)
+
+---
+
+#### `fterm` - `v0.4.0`
+
+ - **BREAKING** **FIX**(client_core,fterm): preserve Kitty placeholder IDs across theme contrast and cursors.
+ - **BREAKING** **FIX**: replace restricted audio assets and fix POSIX CI test races.
+ - **BREAKING** **FEAT**(fterm): add splash About overlay and open-source licenses viewer.
+ - **BREAKING** **FEAT**(selection): root scrollback selection and migrate pointer gestures to HSM.
+
+#### `termui_cast_client_core` - `v0.3.0`
+
+ - **BREAKING** **FIX**(client_core,fterm): preserve Kitty placeholder IDs across theme contrast and cursors.
+
+#### `termui_caster_cli` - `v0.2.2`
+
+ - **FIX**(caster_cli): defer revision reconnect during pending upload tasks.
+
+
+## 2026-11-18
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`pty2` - `v0.10.0`](#pty2---v0100)
  - [`termui` - `v0.19.0`](#termui---v0190)
  - [`termui_audio` - `v0.8.0`](#termui_audio---v080)

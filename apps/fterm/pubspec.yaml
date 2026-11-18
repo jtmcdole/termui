@@ -1,6 +1,6 @@
 name: fterm
 description: Flutter web and native desktop monospace terminal client and mux for TermUI PTY casting.
-version: 0.3.0
+version: 0.4.0
 publish_to: none
 resolution: workspace
 
@@ -20,9 +20,9 @@ dependencies:
   stream_channel: ^2.1.4
   termui: ^0.19.0
   termui_audio_flutter: ^0.5.0
-  termui_cast_client_core: ^0.2.1
+  termui_cast_client_core: ^0.3.0
   termui_cast_protocol: ^0.2.1
-  termui_caster_cli: ^0.2.1
+  termui_caster_cli: ^0.2.2
   termui_flutter: ^0.14.0
   termui_pty: ^0.14.0
   web: ^1.1.0
