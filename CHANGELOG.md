@@ -3,6 +3,68 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-18
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`pty2` - `v0.10.0`](#pty2---v0100)
+ - [`termui` - `v0.19.0`](#termui---v0190)
+ - [`termui_audio` - `v0.8.0`](#termui_audio---v080)
+ - [`termui_audio_flutter` - `v0.5.0`](#termui_audio_flutter---v050)
+ - [`termui_flutter` - `v0.14.0`](#termui_flutter---v0140)
+ - [`termui_pty` - `v0.14.0`](#termui_pty---v0140)
+
+Packages with other changes:
+
+ - [`termui_recorder` - `v0.10.8`](#termui_recorder---v0108)
+ - [`termui_test` - `v0.4.8`](#termui_test---v048)
+ - [`termui_hotreload` - `v0.6.34`](#termui_hotreload---v0634)
+ - [`termui_tinpot` - `v0.5.6`](#termui_tinpot---v056)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.8`
+ - `termui_test` - `v0.4.8`
+ - `termui_hotreload` - `v0.6.34`
+ - `termui_tinpot` - `v0.5.6`
+
+---
+
+#### `pty2` - `v0.10.0`
+
+ - **BREAKING** **FIX**: replace restricted audio assets and fix POSIX CI test races.
+
+#### `termui` - `v0.19.0`
+
+ - **BREAKING** **FEAT**(termui,termui_flutter): support Color.ansi Kitty IDs and add format constants.
+ - **BREAKING** **FEAT**(selection): root scrollback selection and migrate pointer gestures to HSM.
+
+#### `termui_audio` - `v0.8.0`
+
+ - **BREAKING** **FIX**: replace restricted audio assets and fix POSIX CI test races.
+
+#### `termui_audio_flutter` - `v0.5.0`
+
+ - **BREAKING** **FIX**: replace restricted audio assets and fix POSIX CI test races.
+
+#### `termui_flutter` - `v0.14.0`
+
+ - **BREAKING** **FIX**(termui_flutter): preserve overhanging glyphs in atlas and foreground pass.
+ - **BREAKING** **FIX**(termui_flutter): clear selection highlight after copying to clipboard.
+ - **BREAKING** **FEAT**(termui,termui_flutter): support Color.ansi Kitty IDs and add format constants.
+ - **BREAKING** **FEAT**(selection): root scrollback selection and migrate pointer gestures to HSM.
+
+#### `termui_pty` - `v0.14.0`
+
+ - **BREAKING** **FIX**(termui_pty): support kitten icat direct streaming and multi-row Kitty scrolling.
+
+
 ## 2026-11-16
 
 ### Changes

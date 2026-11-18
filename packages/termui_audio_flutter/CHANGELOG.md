@@ -1,3 +1,9 @@
+## 0.5.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**: replace restricted audio assets and fix POSIX CI test races.
+
 ## 0.4.1
 
  - **FIX**(termui_audio_flutter): decode native Ogg Opus and Ogg FLAC clips via BufferStream.

@@ -1,3 +1,12 @@
+## 0.14.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_flutter): preserve overhanging glyphs in atlas and foreground pass.
+ - **BREAKING** **FIX**(termui_flutter): clear selection highlight after copying to clipboard.
+ - **BREAKING** **FEAT**(termui,termui_flutter): support Color.ansi Kitty IDs and add format constants.
+ - **BREAKING** **FEAT**(selection): root scrollback selection and migrate pointer gestures to HSM.
+
 ## 0.13.1
 
  - **FIX**(termui_flutter): wire terminal mouse tracking and add ASCII atlas lookup table.

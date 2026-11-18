@@ -1,3 +1,10 @@
+## 0.19.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(termui,termui_flutter): support Color.ansi Kitty IDs and add format constants.
+ - **BREAKING** **FEAT**(selection): root scrollback selection and migrate pointer gestures to HSM.
+
 ## 0.18.0
 
 > Note: This release has breaking changes.
