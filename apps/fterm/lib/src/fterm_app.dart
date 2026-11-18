@@ -6,6 +6,7 @@ import 'package:material_ui/material_ui.dart';
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 
+import 'about/about_service.dart';
 import 'audio/fterm_audio_controller.dart';
 import 'desktop_launch_env.dart';
 import 'file_drop_bridge.dart';
@@ -70,6 +71,9 @@ final class FtermApp extends StatefulWidget {
   /// Optional update timer factory seam for deterministic tests.
   final UpdateTimerFactory? updateTimerFactory;
 
+  /// Optional About metadata & license loader seam for deterministic tests.
+  final AboutService? aboutService;
+
   /// Optional test hook invoked with the created [FtermWorkspaceController].
   final void Function(FtermWorkspaceController workspace)? onWorkspaceCreated;
 
@@ -92,6 +96,7 @@ final class FtermApp extends StatefulWidget {
     this.isWebOverride,
     this.updateService,
     this.updateTimerFactory,
+    this.aboutService,
     this.onWorkspaceCreated,
   });
 
@@ -164,6 +169,7 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
       clock: widget.clock,
       updateService: widget.updateService,
       updateTimerFactory: widget.updateTimerFactory,
+      aboutService: widget.aboutService,
       onFrameRedrawn: widget.onFrameRedrawn,
     );
     _appThemeMode = _resolveMaterialThemeMode();

@@ -1141,6 +1141,13 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         color: fg.withValues(alpha: 0.72),
         onTap: () => widget.workspace.setOverlay(FtermOverlay.help),
       ),
+      _chromeIconButton(
+        key: const ValueKey('fterm-about-button'),
+        tooltip: 'About fterm (Ctrl+\\ a)',
+        icon: Icons.info_outline,
+        color: fg.withValues(alpha: 0.72),
+        onTap: () => widget.workspace.setOverlay(FtermOverlay.about),
+      ),
     ];
   }
 

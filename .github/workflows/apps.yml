@@ -130,5 +130,6 @@ jobs:
         if: matrix.suite == 'web'
         working-directory: apps/fterm
         run: |
-          flutter build web --wasm --no-web-resources-cdn
+          BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          flutter build web --wasm --no-web-resources-cdn --dart-define="FTERM_BUILD_DATE=${BUILD_DATE}"
           grep -q '"useLocalCanvasKit":true' build/web/flutter_bootstrap.js

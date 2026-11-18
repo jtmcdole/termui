@@ -35,6 +35,11 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - LICENSE
+    - fonts/LICENSE-MesloLGS.txt
+    - fonts/OFL-CascadiaMonoPL.txt
+    - web/favicon.svg
   fonts:
     - family: Cascadia Mono
       fonts:

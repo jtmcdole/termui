@@ -42,6 +42,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.meta.outputs.version }}
+      build_date: ${{ steps.meta.outputs.build_date }}
       is_draft: ${{ steps.meta.outputs.is_draft }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
     steps:
@@ -76,8 +77,10 @@ jobs:
           if [ "$INPUT_PRERELEASE" = "true" ] || [[ "$RELEASE_VERSION" == *-* ]]; then
             IS_PRERELEASE="true"
           fi
+          BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           {
             printf 'version=%s\n' "$RELEASE_VERSION"
+            printf 'build_date=%s\n' "$BUILD_DATE"
             printf 'is_draft=%s\n' "$IS_DRAFT"
             printf 'is_prerelease=%s\n' "$IS_PRERELEASE"
           } >> "$GITHUB_OUTPUT"
@@ -149,7 +152,7 @@ jobs:
         run: |
           mkdir -p dist
           if [ "$BUILD_DESKTOP" = "true" ]; then
-            (cd apps/fterm && flutter build "$DESKTOP_OS" --release --build-name="$RELEASE_VERSION")
+            (cd apps/fterm && flutter build "$DESKTOP_OS" --release --build-name="$RELEASE_VERSION" --dart-define="FTERM_BUILD_DATE=$BUILD_DATE")
             if [ "$DESKTOP_OS" = "macos" ]; then
               COPYFILE_DISABLE=1 tar -C apps/fterm/build/macos/Build/Products/Release -czf "dist/fterm-${TARGET}.tar.gz" fterm.app
             else
@@ -184,6 +187,7 @@ jobs:
           BUILD_DESKTOP: ${{ matrix.build_desktop }}
           DESKTOP_OS: ${{ runner.os == 'macOS' && 'macos' || 'linux' }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          BUILD_DATE: ${{ needs.preflight.outputs.build_date }}
 
       - name: Build and package Windows bundles
         if: runner.os == 'Windows'
@@ -192,7 +196,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           if ($env:BUILD_DESKTOP -eq "true") {
             Push-Location apps/fterm
-            flutter build windows --release --build-name="$env:RELEASE_VERSION"
+            flutter build windows --release --build-name="$env:RELEASE_VERSION" --dart-define="FTERM_BUILD_DATE=$env:BUILD_DATE"
             if ($LASTEXITCODE -ne 0) { throw "flutter build windows failed ($LASTEXITCODE)" }
             Pop-Location
           }
@@ -297,6 +301,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           BUILD_DESKTOP: ${{ matrix.build_desktop }}
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          BUILD_DATE: ${{ needs.preflight.outputs.build_date }}
 
       - name: Upload fterm desktop bundle artifact
         if: matrix.build_desktop
