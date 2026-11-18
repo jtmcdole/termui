@@ -390,6 +390,69 @@ void _defineColorResolverTests() {
         }
       },
     );
+
+    test(
+      'resolveCellInto and resolveCellColors preserve Kitty placeholder imageId fg and resolve indexed bg despite reverse, bold, and high minimumContrast',
+      () {
+        const theme = TerminalColorTheme.solarizedLight;
+        final resolver = TerminalColorResolver(
+          theme: theme,
+          settings: const TerminalThemeSettings(
+            minimumContrast: 7.0,
+            boldIsBright: true,
+          ),
+        );
+        const kittyMods =
+            Modifier.kittyPlaceholder | Modifier.bold | Modifier.reverse;
+        const placeholderChar = '\u{10EEEE}';
+
+        final cases = <(int rawFg, int rawBg, int expectedFg, int expectedBg)>[
+          (
+            const Color.ansi(42).argb,
+            const Color.ansi(4).argb,
+            0xFF00_0000 | 42,
+            theme.resolveAnsi256(4).argb,
+          ),
+          (const Color.ansi(3).argb, 0, 0xFF00_0000 | 3, 0),
+          (
+            0xFF12_3456,
+            const Color.ansi(7).argb,
+            0xFF12_3456,
+            theme.resolveAnsi256(7).argb,
+          ),
+          (0xFF12_3456, 0xFF65_4321, 0xFF12_3456, 0xFF65_4321),
+          (0, const Color.ansi(1).argb, 0, theme.resolveAnsi256(1).argb),
+        ];
+
+        final out = Uint32List(6);
+        for (final (rawFg, rawBg, expectedFg, expectedBg) in cases) {
+          final (fg, bg) = resolver.resolveCellColors(
+            rawFg: rawFg,
+            rawBg: rawBg,
+            modifiers: kittyMods,
+            grapheme: placeholderChar,
+          );
+          check(fg).equals(expectedFg);
+          check(bg).equals(expectedBg);
+
+          out.fillRange(0, out.length, 0xDEAD_BEEF);
+          resolver.resolveCellInto(
+            rawFg: rawFg,
+            rawBg: rawBg,
+            modifiers: kittyMods,
+            grapheme: placeholderChar,
+            outAttributes: out,
+            attrOffset: 3,
+          );
+          check(out[0]).equals(0xDEAD_BEEF);
+          check(out[1]).equals(0xDEAD_BEEF);
+          check(out[2]).equals(0xDEAD_BEEF);
+          check(out[3]).equals(expectedFg);
+          check(out[4]).equals(expectedBg);
+          check(out[5]).equals(kittyMods);
+        }
+      },
+    );
   });
 }
 
