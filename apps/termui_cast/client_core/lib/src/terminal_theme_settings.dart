@@ -244,6 +244,9 @@ final class TerminalColorResolver {
   /// Leaves `fg == 0` and `bg == 0` as `0` for default styling, passes 24-bit truecolor
   /// through untouched, remaps `Color.ansi` indexed colors against [theme], and enforces
   /// [TerminalThemeSettings.minimumContrast] against the effective visual background.
+  /// Cells carrying [Modifier.kittyPlaceholder] take a fast path that passes 24-bit
+  /// `fgArgb` `imageId`s through without theme/contrast adjustment and packs
+  /// `Color.ansi` tokens as `0xFF00_0000 | ansiIndex`.
   (int fg, int bg) resolveCellColors({
     required int rawFg,
     required int rawBg,
@@ -263,6 +266,10 @@ final class TerminalColorResolver {
 
   /// Resolves the cell's display colors and writes `(fg, bg, modifiers)` into
   /// [outAttributes] starting at [attrOffset] without allocating a Record.
+  ///
+  /// Cells carrying [Modifier.kittyPlaceholder] take a fast path that passes 24-bit
+  /// `fgArgb` `imageId`s through without theme/contrast adjustment and packs
+  /// `Color.ansi` tokens as `0xFF00_0000 | ansiIndex`.
   void resolveCellInto({
     required int rawFg,
     required int rawBg,
@@ -272,6 +279,14 @@ final class TerminalColorResolver {
     required int attrOffset,
   }) {
     outAttributes[attrOffset + 2] = modifiers;
+    // Kitty placeholders encode the 24-bit imageId in fg; preserve it untouched.
+    if (Modifier.has(modifiers, Modifier.kittyPlaceholder)) {
+      outAttributes[attrOffset] = rawFg.isAnsiIndexed
+          ? (0xFF00_0000 | rawFg.ansiIndex)
+          : rawFg;
+      outAttributes[attrOffset + 1] = _resolveBgArgb(rawBg);
+      return;
+    }
     if (rawFg == 0 && rawBg == 0) {
       outAttributes[attrOffset] = 0;
       outAttributes[attrOffset + 1] = 0;
@@ -297,9 +312,7 @@ final class TerminalColorResolver {
       return;
     }
 
-    final outBg = isBgIndexed
-        ? theme.resolveAnsi256(rawBg.ansiIndex).argb
-        : rawBg;
+    final outBg = _resolveBgArgb(rawBg);
     outAttributes[attrOffset + 1] = outBg;
     if (!isFgIndexed) {
       outAttributes[attrOffset] = rawFg;
@@ -325,6 +338,9 @@ final class TerminalColorResolver {
       hasExplicitBackground: true,
     );
   }
+
+  int _resolveBgArgb(int rawBg) =>
+      rawBg.isAnsiIndexed ? theme.resolveAnsi256(rawBg.ansiIndex).argb : rawBg;
 
   int _mappedFgIndex(int fgIdx, int modifiers) =>
       settings.boldIsBright &&

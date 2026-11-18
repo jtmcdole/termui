@@ -823,20 +823,26 @@ final class FtermPaneController {
     final cy = cursor.y.clamp(0, out.height - 1);
     final cellIdx = cy * out.width + cx;
     final base = cellIdx * 3;
+    final mods = out.attributes[base + 2];
+    final isKitty = tui.Modifier.has(mods, tui.Modifier.kittyPlaceholder);
     final useInverse =
+        !isKitty &&
         _colorResolver.theme.id == 'termui_dark' &&
         _colorResolver.settings.customOverrides.cursorColor == null;
     if (useInverse) {
-      out.attributes[base + 2] ^= tui.Modifier.reverse;
+      out.attributes[base + 2] = mods ^ tui.Modifier.reverse;
       return cellIdx;
     }
     final (cursorColor, cursorTextColor) = _colorResolver.resolveCursorColors(
-      cellFg: out.attributes[base],
+      cellFg: isKitty ? 0 : out.attributes[base],
       cellBg: out.attributes[base + 1],
     );
-    out.attributes[base] = cursorTextColor;
+    // Preserve fgArgb on Kitty placeholder cells since it carries the imageId.
+    if (!isKitty) {
+      out.attributes[base] = cursorTextColor;
+    }
     out.attributes[base + 1] = cursorColor;
-    out.attributes[base + 2] &= ~tui.Modifier.reverse;
+    out.attributes[base + 2] = mods & ~tui.Modifier.reverse;
     return cellIdx;
   }
 
