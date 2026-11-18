@@ -14,6 +14,7 @@ import '../update/update_service.dart';
 import '../update/update_view_model.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
+import 'fterm_about_overlay.dart';
 
 /// Modal overlays rendered over the terminal workspace when [FtermOverlay] !=
 /// [FtermOverlay.none].
@@ -42,66 +43,96 @@ final class FtermOverlayHost extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final theme = workspace.activeTerminalTheme;
-    final palette = _OverlayColors.fromTerminalTheme(theme);
+    final palette = FtermOverlayPalette.fromTerminalTheme(theme);
+    final (maxWidth, maxHeight) = switch (overlay) {
+      FtermOverlay.licenses => (680.0, 560.0),
+      FtermOverlay.about => (540.0, 560.0),
+      _ => (520.0, 540.0),
+    };
 
     return _ModalFocusGuard(
       overlay: overlay,
-      child: ColoredBox(
-        color: const Color(0x99000000),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 520, maxHeight: 540),
-            child: Material(
-              key: ValueKey('fterm-overlay-${overlay.name}'),
-              color: palette.surface,
-              elevation: 16,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(8),
-                side: BorderSide(color: palette.border),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              key: const ValueKey('fterm-overlay-scrim'),
+              behavior: HitTestBehavior.opaque,
+              onTap: overlay == FtermOverlay.about
+                  ? workspace.dismissOverlay
+                  : null,
+              child: const ColoredBox(color: Color(0x99000000)),
+            ),
+          ),
+          Center(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: maxWidth,
+                maxHeight: maxHeight,
               ),
-              child: DefaultTextStyle(
-                style: TextStyle(
-                  color: palette.foreground,
-                  fontFamily: castPrimaryFontFamily,
-                  fontSize: 12,
+              child: Material(
+                key: ValueKey('fterm-overlay-${overlay.name}'),
+                color: palette.surface,
+                elevation: 16,
+                clipBehavior: Clip.antiAlias,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  side: BorderSide(color: palette.border),
                 ),
-                child: switch (overlay) {
-                  FtermOverlay.none => const SizedBox.shrink(),
-                  FtermOverlay.connect => _ConnectOverlay(
-                    workspace: workspace,
-                    palette: palette,
+                child: DefaultTextStyle(
+                  style: TextStyle(
+                    color: palette.foreground,
+                    fontFamily: castPrimaryFontFamily,
+                    fontSize: 12,
                   ),
-                  FtermOverlay.sessionPicker => _SessionPickerOverlay(
-                    workspace: workspace,
-                    palette: palette,
-                  ),
-                  FtermOverlay.settings => _SettingsOverlay(
-                    workspace: workspace,
-                    palette: palette,
-                    onOpenUrl: onOpenUrl,
-                    isWeb: isWeb,
-                  ),
-                  FtermOverlay.stats => _StatsOverlay(
-                    workspace: workspace,
-                    palette: palette,
-                  ),
-                  FtermOverlay.rename => _RenameOverlay(
-                    workspace: workspace,
-                    palette: palette,
-                  ),
-                  FtermOverlay.help => _HelpOverlay(
-                    workspace: workspace,
-                    palette: palette,
-                  ),
-                  FtermOverlay.fileUpload => _FileUploadOverlay(
-                    workspace: workspace,
-                    palette: palette,
-                  ),
-                },
+                  child: switch (overlay) {
+                    FtermOverlay.none => const SizedBox.shrink(),
+                    FtermOverlay.connect => _ConnectOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                    ),
+                    FtermOverlay.sessionPicker => _SessionPickerOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                    ),
+                    FtermOverlay.settings => _SettingsOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                      onOpenUrl: onOpenUrl,
+                      isWeb: isWeb,
+                    ),
+                    FtermOverlay.stats => _StatsOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                    ),
+                    FtermOverlay.rename => _RenameOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                    ),
+                    FtermOverlay.help => _HelpOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                    ),
+                    FtermOverlay.about => FtermAboutOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                      onOpenUrl: onOpenUrl,
+                    ),
+                    FtermOverlay.licenses => FtermLicensesOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                    ),
+                    FtermOverlay.fileUpload => _FileUploadOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                    ),
+                  },
+                ),
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -154,16 +185,31 @@ final class _ModalFocusGuardState extends State<_ModalFocusGuard> {
       FocusScope(node: _scopeNode, autofocus: true, child: widget.child);
 }
 
-final class _OverlayColors {
+/// Overlay surface colors derived from the active [tui.TerminalColorTheme].
+final class FtermOverlayPalette {
+  /// Primary modal surface background color.
   final Color surface;
+
+  /// Elevated secondary panel background color.
   final Color surfaceAlt;
+
+  /// Primary text and icon color.
   final Color foreground;
+
+  /// Secondary muted caption and label color.
   final Color muted;
+
+  /// Accent color for links, selections, and active badges.
   final Color accent;
+
+  /// Subtle 1px modal and card outline color.
   final Color border;
+
+  /// Destructive/error foreground color.
   final Color danger;
 
-  const _OverlayColors({
+  /// Creates an immutable [FtermOverlayPalette].
+  const FtermOverlayPalette({
     required this.surface,
     required this.surfaceAlt,
     required this.foreground,
@@ -173,12 +219,13 @@ final class _OverlayColors {
     required this.danger,
   });
 
-  factory _OverlayColors.fromTerminalTheme(tui.TerminalColorTheme theme) {
+  /// Derives overlay colors from [theme].
+  factory FtermOverlayPalette.fromTerminalTheme(tui.TerminalColorTheme theme) {
     final bg = Color(theme.background.argb);
     final fg = Color(theme.foreground.argb);
     final accent = Color(theme.resolveAnsi256(4).argb);
     final isDark = theme.brightness == tui.TerminalBrightness.dark;
-    return _OverlayColors(
+    return FtermOverlayPalette(
       surface: isDark
           ? Color.lerp(bg, const Color(0xFFFFFFFF), 0.06)!
           : Color.lerp(bg, const Color(0xFF000000), 0.03)!,
@@ -194,9 +241,10 @@ final class _OverlayColors {
   }
 }
 
-Widget _overlayHeader({
+/// Builds the standard title + close button row shared by modal overlays.
+Widget buildFtermOverlayHeader({
   required String title,
-  required _OverlayColors palette,
+  required FtermOverlayPalette palette,
   required VoidCallback onClose,
 }) {
   return Row(
@@ -224,7 +272,7 @@ Widget _overlayHeader({
 
 final class _ConnectOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
 
   const _ConnectOverlay({required this.workspace, required this.palette});
 
@@ -300,7 +348,7 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _overlayHeader(
+            buildFtermOverlayHeader(
               title: 'Connect to Relay',
               palette: p,
               onClose: widget.workspace.dismissOverlay,
@@ -372,7 +420,7 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
     );
   }
 
-  static InputDecoration _inputDeco(String label, _OverlayColors p) =>
+  static InputDecoration _inputDeco(String label, FtermOverlayPalette p) =>
       InputDecoration(
         labelText: label,
         labelStyle: TextStyle(color: p.muted, fontSize: 11),
@@ -386,7 +434,7 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
 
 final class _SessionPickerOverlay extends StatelessWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
 
   const _SessionPickerOverlay({required this.workspace, required this.palette});
 
@@ -400,7 +448,7 @@ final class _SessionPickerOverlay extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _overlayHeader(
+          buildFtermOverlayHeader(
             title: 'Sessions & Shells',
             palette: p,
             onClose: workspace.dismissOverlay,
@@ -467,7 +515,7 @@ final class _SessionPickerOverlay extends StatelessWidget {
     );
   }
 
-  Widget _buildSessionTile(SessionSummary session, _OverlayColors p) {
+  Widget _buildSessionTile(SessionSummary session, FtermOverlayPalette p) {
     final subtitle =
         '${session.cols}x${session.rows} • ${session.subscriberCount} viewers';
     return Padding(
@@ -521,7 +569,7 @@ final class _SessionPickerOverlay extends StatelessWidget {
 
 final class _SettingsOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
   final UrlOpener onOpenUrl;
   final bool isWeb;
 
@@ -608,7 +656,7 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _overlayHeader(
+            buildFtermOverlayHeader(
               title: 'Settings',
               palette: p,
               onClose: workspace.dismissOverlay,
@@ -762,6 +810,12 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
               runSpacing: 8,
               children: [
                 OutlinedButton.icon(
+                  key: const ValueKey('settings-open-about'),
+                  onPressed: () => workspace.setOverlay(FtermOverlay.about),
+                  icon: const Icon(Icons.info_outline, size: 14),
+                  label: const Text('About'),
+                ),
+                OutlinedButton.icon(
                   key: const ValueKey('settings-open-connect'),
                   onPressed: () => workspace.setOverlay(FtermOverlay.connect),
                   icon: const Icon(Icons.cloud_outlined, size: 14),
@@ -787,7 +841,7 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
 
 final class _FontSizeControls extends StatelessWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
 
   const _FontSizeControls({required this.workspace, required this.palette});
 
@@ -840,7 +894,7 @@ final class _FontSizeControls extends StatelessWidget {
 
 final class _DesktopShellOverrideSection extends StatelessWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
   final TextEditingController shellExecCtrl;
   final TextEditingController shellArgsCtrl;
 
@@ -943,7 +997,7 @@ final class _DesktopShellOverrideSection extends StatelessWidget {
 
 final class _DesktopUpdatesSection extends StatefulWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
   final UrlOpener onOpenUrl;
 
   const _DesktopUpdatesSection({
@@ -1082,7 +1136,7 @@ final class _UpdateReleaseCard extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final UpdateViewModel vm;
   final AvailableUpdate update;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
   final UrlOpener onOpenUrl;
   final bool awaitingRestartConfirm;
   final VoidCallback onRestartPressed;
@@ -1208,7 +1262,7 @@ final class _UpdateReleaseCard extends StatelessWidget {
 final class _UpdateReadyControls extends StatelessWidget {
   final FtermWorkspaceController workspace;
   final UpdateViewModel vm;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
   final bool awaitingRestartConfirm;
   final VoidCallback onRestartPressed;
   final VoidCallback onConfirmRestart;
@@ -1346,7 +1400,7 @@ final class _UpdateActionButtons extends StatelessWidget {
 
 final class _StatsOverlay extends StatelessWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
 
   const _StatsOverlay({required this.workspace, required this.palette});
 
@@ -1386,7 +1440,7 @@ final class _StatsOverlay extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _overlayHeader(
+          buildFtermOverlayHeader(
             title: 'Session & Telemetry Stats',
             palette: p,
             onClose: workspace.dismissOverlay,
@@ -1419,7 +1473,7 @@ final class _StatsOverlay extends StatelessWidget {
 
 final class _RenameOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
 
   const _RenameOverlay({required this.workspace, required this.palette});
 
@@ -1457,7 +1511,7 @@ final class _RenameOverlayState extends State<_RenameOverlay> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _overlayHeader(
+          buildFtermOverlayHeader(
             title: 'Rename Tab',
             palette: p,
             onClose: widget.workspace.dismissOverlay,
@@ -1508,7 +1562,7 @@ final class _RenameOverlayState extends State<_RenameOverlay> {
 
 final class _HelpOverlay extends StatelessWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
 
   const _HelpOverlay({required this.workspace, required this.palette});
 
@@ -1523,7 +1577,7 @@ final class _HelpOverlay extends StatelessWidget {
     (r'Ctrl+\ then r', 'Rename tab or clear title pin'),
     (r'Ctrl+\ then x', 'Close focused pane / tab'),
     (r'Ctrl+\ then d / Space', 'Cycle tab bar (top -> left -> hidden)'),
-    (r'Ctrl+\ then , / i / ?', 'Settings / Stats / Help'),
+    (r'Ctrl+\ then , / i / ? / a', 'Settings / Stats / Help / About'),
     ('Cmd+T/W/D/Shift+D/1..9', 'Native macOS Desktop shortcuts'),
     ('Cmd+= / Cmd+- / Cmd+0', 'Zoom font in / out / reset (macOS)'),
     ('Ctrl+Shift+T/W/D/E', 'Native Linux / Windows shortcuts'),
@@ -1539,7 +1593,7 @@ final class _HelpOverlay extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _overlayHeader(
+          buildFtermOverlayHeader(
             title: 'fterm Keyboard Shortcuts',
             palette: p,
             onClose: workspace.dismissOverlay,
@@ -1574,7 +1628,7 @@ final class _HelpOverlay extends StatelessWidget {
 
 final class _FileUploadOverlay extends StatelessWidget {
   final FtermWorkspaceController workspace;
-  final _OverlayColors palette;
+  final FtermOverlayPalette palette;
 
   const _FileUploadOverlay({required this.workspace, required this.palette});
 
@@ -1589,7 +1643,7 @@ final class _FileUploadOverlay extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _overlayHeader(
+          buildFtermOverlayHeader(
             title: 'Upload Dropped Files (${files.length})',
             palette: p,
             onClose: workspace.cancelFileUpload,

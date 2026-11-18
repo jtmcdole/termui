@@ -14,6 +14,9 @@ import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_pty/termui_pty.dart';
 
+import '../about/about_repository.dart';
+import '../about/about_service.dart';
+import '../about/about_view_model.dart';
 import '../audio/fterm_audio_controller.dart';
 import '../launch_config.dart';
 import '../settings_storage.dart';
@@ -45,6 +48,12 @@ enum FtermOverlay {
 
   /// Keyboard chord and desktop native shortcut reference.
   help,
+
+  /// Application metadata, SVG logo, build date, and open-source licenses link.
+  about,
+
+  /// Deduplicated open-source and bundled font license viewer.
+  licenses,
 
   /// Drag-and-drop multi-file upload confirmation and progress sheet.
   fileUpload,
@@ -182,6 +191,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Desktop auto-update ViewModel (fine-grained progress + coarse chrome cues).
   late final UpdateViewModel updateViewModel;
 
+  /// About & open-source licenses ViewModel shared by modal overlays.
+  late final AboutViewModel aboutViewModel;
+
   CastWorkspaceSettings _workspaceSettings;
   FtermPreferences _preferences;
   RelayCredentials _relayCredentials;
@@ -222,6 +234,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     Clock? clock,
     UpdateService? updateService,
     UpdateTimerFactory? updateTimerFactory,
+    AboutService? aboutService,
     void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
@@ -243,6 +256,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     clock: clock,
     updateService: updateService,
     updateTimerFactory: updateTimerFactory,
+    aboutService: aboutService,
     onFrameRedrawn: onFrameRedrawn,
   );
 
@@ -261,6 +275,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required Clock? clock,
     required UpdateService? updateService,
     required UpdateTimerFactory? updateTimerFactory,
+    required AboutService? aboutService,
     required void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) : _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
@@ -296,6 +311,11 @@ final class FtermWorkspaceController extends ChangeNotifier {
       onCoarseStateChanged: _notifyChromeChanged,
       clock: _clock,
       timerFactory: updateTimerFactory,
+    );
+    aboutViewModel = AboutViewModel(
+      repository: AboutRepository(
+        service: aboutService ?? createDefaultAboutService(),
+      ),
     );
     if (repository.transport.isConnected) {
       _connectionState = ClientConnectionState.connecting;
@@ -1046,6 +1066,15 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (_disposed || _activeOverlay == overlay) return;
     _activeOverlay = overlay;
     _leaderArmed = false;
+    switch (overlay) {
+      case FtermOverlay.about:
+        unawaited(aboutViewModel.ensureInitialized());
+      case FtermOverlay.licenses:
+        unawaited(aboutViewModel.ensureInitialized());
+        unawaited(aboutViewModel.ensureLicensesLoaded());
+      default:
+        break;
+    }
     _notifyChromeChanged();
   }
 
@@ -1057,6 +1086,11 @@ final class FtermWorkspaceController extends ChangeNotifier {
       return;
     }
     _leaderArmed = false;
+    if (_activeOverlay == FtermOverlay.licenses) {
+      _activeOverlay = FtermOverlay.about;
+      _notifyChromeChanged();
+      return;
+    }
     if (_activeOverlay != FtermOverlay.none) {
       _activeOverlay = FtermOverlay.none;
     }
@@ -1612,6 +1646,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       _onClientDisconnected,
     );
     updateViewModel.dispose();
+    aboutViewModel.dispose();
     _settingsSaver.dispose();
     await _settingsSaver.flushAsync();
     final activePanes = [..._panes.values];

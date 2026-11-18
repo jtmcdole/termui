@@ -272,6 +272,7 @@ final class FtermShortcutDispatcher {
       return FtermOverlay.settings;
     }
     if (key == LogicalKeyboardKey.keyI) return FtermOverlay.stats;
+    if (key == LogicalKeyboardKey.keyA) return FtermOverlay.about;
     final isQuestion =
         ch == '?' ||
         key == LogicalKeyboardKey.question ||
