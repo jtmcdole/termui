@@ -387,6 +387,17 @@ Future<void> main() async {
   expect(result.exitCode, equals(0), reason: '${result.stderr}');
 }
 
+Future<void> _testImmediateUnsubscribedKillRace() async {
+  for (var i = 0; i < 25; i++) {
+    final pty = PseudoTerminal.start('/bin/sh', const [
+      '-c',
+      'sleep 5',
+    ], ackProcessed: true);
+    expect(pty.kill(), isTrue, reason: 'iteration $i');
+    await pty.exitCode.timeout(const Duration(seconds: 5));
+  }
+}
+
 void main() {
   test(
     'concurrent PseudoTerminal.start + Process.run returns exact exit codes '
@@ -440,6 +451,12 @@ void main() {
   test(
     'cancelling out before EOF drains BlockingPseudoTerminal isolates so Dart VM exits',
     _testCancellingOutBeforeEofExitsDartVm,
+    testOn: 'posix',
+  );
+
+  test(
+    'immediate kill() on unsubscribed ackProcessed PTY delivers signal before closing ptm',
+    _testImmediateUnsubscribedKillRace,
     testOn: 'posix',
   );
 }

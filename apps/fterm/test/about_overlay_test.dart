@@ -89,7 +89,7 @@ void main() {
         );
 
         String? probedPath;
-        final fromBinary = IoAboutService(
+        final fromWindowsBinary = IoAboutService(
           defineBuildDate: '',
           resolvedExecutableOverride: r'C:\opt\fterm\fterm.exe',
           environmentOverride: const {},
@@ -99,10 +99,26 @@ void main() {
           },
         );
         expect(
-          await fromBinary.resolveBuildDateUtc(),
+          await fromWindowsBinary.resolveBuildDateUtc(),
           equals(DateTime.utc(2026, 11, 17, 20, 45)),
         );
         expect(probedPath, equals(r'C:\opt\fterm\fterm.exe'));
+
+        String? probedPosixPath;
+        final fromPosixBinary = IoAboutService(
+          defineBuildDate: '',
+          resolvedExecutableOverride: '/opt/fterm/fterm',
+          environmentOverride: const {},
+          executableModifiedUtcReader: (path) async {
+            probedPosixPath = path;
+            return DateTime.utc(2026, 11, 17, 21, 0);
+          },
+        );
+        expect(
+          await fromPosixBinary.resolveBuildDateUtc(),
+          equals(DateTime.utc(2026, 11, 17, 21, 0)),
+        );
+        expect(probedPosixPath, equals('/opt/fterm/fterm'));
 
         const ignoredTester = IoAboutService(
           defineBuildDate: '',
@@ -113,7 +129,9 @@ void main() {
 
         final realFileMissing = IoAboutService(
           defineBuildDate: '',
-          resolvedExecutableOverride: r'Z:\nonexistent-path\fterm.exe',
+          resolvedExecutableOverride: Platform.isWindows
+              ? r'Z:\nonexistent-path\fterm.exe'
+              : '/nonexistent-fterm-dir/fterm',
           environmentOverride: const {},
         );
         expect(await realFileMissing.resolveBuildDateUtc(), isNull);

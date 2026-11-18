@@ -1,0 +1,12 @@
+VoxelRevolution.ogg:
+"Voxel Revolution" Kevin MacLeod (incompetech.com)
+Licensed under Creative Commons: By Attribution 4.0 License
+http://creativecommons.org/licenses/by/4.0/
+ISRC: USUAN2000169
+
+--------------------------------------------------------------------------------
+
+kenney_swish1.ogg, kenney_swish2.ogg, kenney_swish3.ogg, kenney_swish4.ogg:
+Derived from "50 RPG Sound Effects" (cloth1.ogg - cloth4.ogg) by Kenney Vleugels (www.kenney.nl)
+Licensed under CC0 1.0 Universal (Public Domain)
+http://creativecommons.org/publicdomain/zero/1.0/

@@ -421,9 +421,9 @@ void main() {
         engine.stop(v1);
 
         frames.clear();
-        final assetPath = File('example/assets/fast_swish1.ogg').existsSync()
-            ? 'example/assets/fast_swish1.ogg'
-            : 'packages/termui_audio/example/assets/fast_swish1.ogg';
+        final assetPath = File('example/assets/kenney_swish1.ogg').existsSync()
+            ? 'example/assets/kenney_swish1.ogg'
+            : 'packages/termui_audio/example/assets/kenney_swish1.ogg';
         final realBuf = await (apc as PtyApcAudioEngine).loadFile(assetPath);
         final v2 = apc.play(realBuf, loop: true);
         expect(frames.first, contains('fmt=ogg'));
@@ -495,12 +495,15 @@ void main() {
         final assetDir = Directory('example/assets').existsSync()
             ? 'example/assets'
             : 'packages/termui_audio/example/assets';
-        final swish = await engine.loadFile('$assetDir/fast_swish1.ogg');
-        expect(engine.getBufferDuration(swish).inMilliseconds, equals(360));
-        final bgm = await engine.loadFile('$assetDir/DontFallOffTheClouds.ogg');
+        final swish = await engine.loadFile('$assetDir/kenney_swish1.ogg');
+        expect(
+          engine.getBufferDuration(swish).inMilliseconds,
+          inInclusiveRange(660, 675),
+        );
+        final bgm = await engine.loadFile('$assetDir/VoxelRevolution.ogg');
         expect(
           engine.getBufferDuration(bgm).inMilliseconds,
-          inInclusiveRange(90800, 90820),
+          inInclusiveRange(129900, 129930),
         );
         await engine.dispose();
       },
