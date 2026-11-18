@@ -213,6 +213,23 @@ bool _isBlockCharacter(String char) {
   return code >= 0x2580 && code <= 0x2590;
 }
 
+bool _needsGlyphOverhang(
+  String char, {
+  required bool isBold,
+  required bool isItalic,
+}) {
+  if (char.isEmpty || isProceduralAtlasCharacter(char)) return false;
+  if (isItalic) return true;
+  if (char.length == 1) {
+    final code = char.codeUnitAt(0);
+    if (code >= 0x20 && code <= 0x7E) {
+      return isBold && (code == 0x26 || code == 0x57 || code == 0x59);
+    }
+    return code > 0x7E;
+  }
+  return true;
+}
+
 const Set<String> _knownLigatures = {
   // 4-character
   '<!--', '->>>', '<<<-', '<==>', '<-->',
@@ -1204,6 +1221,8 @@ final class TuiAtlasPainter extends CustomPainter {
         atlasRect,
         resolvedFg,
         geo,
+        isBold: isBold,
+        isItalic: isItalic,
       );
       return fgSpriteCount + 1;
     }
@@ -1421,6 +1440,8 @@ final class TuiAtlasPainter extends CustomPainter {
       sourceRect,
       resolvedFg,
       geo,
+      isBold: isBold,
+      isItalic: isItalic,
     );
     _fgSpriteCount++;
     if (!isBlock && isBold && !hasNativeStyle) {
@@ -1432,6 +1453,8 @@ final class TuiAtlasPainter extends CustomPainter {
         sourceRect,
         resolvedFg,
         geo,
+        isBold: isBold,
+        isItalic: isItalic,
       );
       _fgSpriteCount++;
     }
@@ -1444,16 +1467,19 @@ final class TuiAtlasPainter extends CustomPainter {
     Rect sourceRect,
     _AtlasGeometry geo,
   ) {
+    final expand = geo.canExpandRect(sourceRect);
+    final padPhysical = expand ? geo.overhangFgPhysical : 0.0;
+    final padLogical = expand ? geo.overhangFgLogical : 0.0;
     final base = eIdx * 4;
     _transformsEmoji![base + 0] = geo.fgScaleBlock;
     _transformsEmoji![base + 1] = 0.0;
-    _transformsEmoji![base + 2] = screenX;
-    _transformsEmoji![base + 3] = screenY;
+    _transformsEmoji![base + 2] = screenX - padLogical;
+    _transformsEmoji![base + 3] = screenY - padLogical;
 
-    _rectsEmoji![base + 0] = sourceRect.left;
-    _rectsEmoji![base + 1] = sourceRect.top;
-    _rectsEmoji![base + 2] = sourceRect.right;
-    _rectsEmoji![base + 3] = sourceRect.bottom;
+    _rectsEmoji![base + 0] = sourceRect.left - padPhysical;
+    _rectsEmoji![base + 1] = sourceRect.top - padPhysical;
+    _rectsEmoji![base + 2] = sourceRect.right + padPhysical;
+    _rectsEmoji![base + 3] = sourceRect.bottom + padPhysical;
   }
 
   void _stageTextSprite(
@@ -1463,22 +1489,34 @@ final class TuiAtlasPainter extends CustomPainter {
     double screenY,
     Rect sourceRect,
     int fgColor,
-    _AtlasGeometry geo,
-  ) {
-    final isBlock = _isBlockCharacter(char);
-    final bleedFgPhysical = isBlock ? geo.bleedFgPhysicalBlock : 0.0;
-    final bleedFgLogical = isBlock ? geo.bleedFgLogicalBlock : 0.0;
+    _AtlasGeometry geo, {
+    required bool isBold,
+    required bool isItalic,
+  }) {
+    final double padPhysical;
+    final double padLogical;
+    if (_isBlockCharacter(char) && isProceduralAtlasCharacter(char)) {
+      padPhysical = geo.bleedFgPhysicalBlock;
+      padLogical = geo.bleedFgLogicalBlock;
+    } else if (_needsGlyphOverhang(char, isBold: isBold, isItalic: isItalic) &&
+        geo.canExpandRect(sourceRect)) {
+      padPhysical = geo.overhangFgPhysical;
+      padLogical = geo.overhangFgLogical;
+    } else {
+      padPhysical = 0.0;
+      padLogical = 0.0;
+    }
 
     final base = fgIdx * 4;
     _transformsFg![base + 0] = geo.fgScaleBlock;
     _transformsFg![base + 1] = 0.0;
-    _transformsFg![base + 2] = screenX - bleedFgLogical;
-    _transformsFg![base + 3] = screenY - bleedFgLogical;
+    _transformsFg![base + 2] = screenX - padLogical;
+    _transformsFg![base + 3] = screenY - padLogical;
 
-    _rectsFg![base + 0] = sourceRect.left - bleedFgPhysical;
-    _rectsFg![base + 1] = sourceRect.top - bleedFgPhysical;
-    _rectsFg![base + 2] = sourceRect.right + bleedFgPhysical;
-    _rectsFg![base + 3] = sourceRect.bottom + bleedFgPhysical;
+    _rectsFg![base + 0] = sourceRect.left - padPhysical;
+    _rectsFg![base + 1] = sourceRect.top - padPhysical;
+    _rectsFg![base + 2] = sourceRect.right + padPhysical;
+    _rectsFg![base + 3] = sourceRect.bottom + padPhysical;
 
     _colorsFg![fgIdx] = fgColor;
   }
@@ -1537,26 +1575,34 @@ final class TuiAtlasPainter extends CustomPainter {
     final paint = _italicPaint;
     for (final ic in cells) {
       paint.colorFilter = ColorFilter.mode(Color(ic.color), BlendMode.modulate);
-      final dstW = ic.sourceRect.width * geo.fgScaleBlock;
-      final dstH = ic.sourceRect.height * geo.fgScaleBlock;
+      final expand = geo.canExpandRect(ic.sourceRect);
+      final srcRect = expand
+          ? ic.sourceRect.inflate(geo.overhangFgPhysical)
+          : ic.sourceRect;
+      final padLogical = expand ? geo.overhangFgLogical : 0.0;
+      final dstW = srcRect.width * geo.fgScaleBlock;
+      final dstH = srcRect.height * geo.fgScaleBlock;
       canvas.save();
-      canvas.translate(ic.x + geo.cellWidth * 0.14, ic.y);
-      canvas.skew(-0.18, 0.0);
-      canvas.drawImageRect(
-        atlas.image,
-        ic.sourceRect,
-        Rect.fromLTWH(0, 0, dstW, dstH),
-        paint,
-      );
-      if (ic.isBold) {
+      try {
+        canvas.translate(ic.x + geo.cellWidth * 0.14, ic.y);
+        canvas.skew(-0.18, 0.0);
         canvas.drawImageRect(
           atlas.image,
-          ic.sourceRect,
-          Rect.fromLTWH(0.6, 0, dstW, dstH),
+          srcRect,
+          Rect.fromLTWH(-padLogical, -padLogical, dstW, dstH),
           paint,
         );
+        if (ic.isBold) {
+          canvas.drawImageRect(
+            atlas.image,
+            srcRect,
+            Rect.fromLTWH(0.6 - padLogical, -padLogical, dstW, dstH),
+            paint,
+          );
+        }
+      } finally {
+        canvas.restore();
       }
-      canvas.restore();
     }
   }
 
@@ -1591,11 +1637,9 @@ final class TuiAtlasPainter extends CustomPainter {
     final isItalic = Modifier.has(fc.modifiers, Modifier.italic);
     final isDim = Modifier.has(fc.modifiers, Modifier.dim);
 
-    final tp = fallbackPainters[(fc.char, isBold, isItalic, isDim, color)];
-    if (tp != null) {
-      final offsetX = (fc.w - tp.width) / 2;
-      final offsetY = (fc.h - tp.height) / 2;
-      tp.paint(canvas, Offset(fc.x + offsetX, fc.y + offsetY));
+    final cached = fallbackPainters[(fc.char, isBold, isItalic, isDim, color)];
+    if (cached != null) {
+      _paintFallbackTextPainter(canvas, fc, cached);
       return;
     }
 
@@ -1609,17 +1653,45 @@ final class TuiAtlasPainter extends CustomPainter {
           color: color,
           fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
           fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
-          height: 1.0,
+          letterSpacing: 0.0,
         ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
     try {
-      final offsetX = (fc.w - transient.width) / 2;
-      final offsetY = (fc.h - transient.height) / 2;
-      transient.paint(canvas, Offset(fc.x + offsetX, fc.y + offsetY));
+      _paintFallbackTextPainter(canvas, fc, transient);
     } finally {
       transient.dispose();
+    }
+  }
+
+  void _paintFallbackTextPainter(
+    Canvas canvas,
+    _FallbackCell fc,
+    TextPainter tp,
+  ) {
+    final overhang = atlas.actualOverhang;
+    final rawDx = (fc.w - tp.width) / 2;
+    final dx = rawDx < 0.0 && fc.char.length > 1 && !isColorEmoji(fc.char)
+        ? 0.0
+        : rawDx;
+    final dy =
+        atlas.standardBaseline -
+        tp.computeDistanceToActualBaseline(TextBaseline.alphabetic);
+
+    canvas.save();
+    try {
+      canvas.clipRect(
+        Rect.fromLTWH(
+          fc.x - overhang,
+          fc.y - overhang,
+          fc.w + 2 * overhang,
+          fc.h + 2 * overhang,
+        ),
+      );
+      tp.paint(canvas, Offset(fc.x + dx, fc.y + dy));
+    } finally {
+      canvas.restore();
     }
   }
 
@@ -2066,6 +2138,10 @@ final class _AtlasGeometry {
   final double bleedBgLogical;
   final double bleedFgPhysicalBlock;
   final double bleedFgLogicalBlock;
+  final double overhangFgPhysical;
+  final double overhangFgLogical;
+  final double atlasPhysWidth;
+  final double atlasPhysHeight;
   final double bgScaleBlock;
   final double fgScaleBlock;
   final double bgRect0;
@@ -2079,6 +2155,10 @@ final class _AtlasGeometry {
     required this.bleedBgLogical,
     required this.bleedFgPhysicalBlock,
     required this.bleedFgLogicalBlock,
+    required this.overhangFgPhysical,
+    required this.overhangFgLogical,
+    required this.atlasPhysWidth,
+    required this.atlasPhysHeight,
     required this.bgScaleBlock,
     required this.fgScaleBlock,
     required this.bgRect0,
@@ -2086,6 +2166,13 @@ final class _AtlasGeometry {
     required this.bgRect2,
     required this.bgRect3,
   });
+
+  bool canExpandRect(Rect r) =>
+      overhangFgPhysical > 0.0 &&
+      r.left >= overhangFgPhysical &&
+      r.top >= overhangFgPhysical &&
+      r.right + overhangFgPhysical <= atlasPhysWidth &&
+      r.bottom + overhangFgPhysical <= atlasPhysHeight;
 
   factory _AtlasGeometry.fromAtlas(
     GlyphAtlas atlas, {
@@ -2104,6 +2191,11 @@ final class _AtlasGeometry {
         : 0.0;
     final bleedBgLogical = bleedPhysical * (cellWidth / whiteW);
     final bleedFgLogicalBlock = bleedPhysical / atlas.devicePixelRatio;
+    final overhangFgPhysical = (GlyphAtlas.overhang * atlas.devicePixelRatio)
+        .floorToDouble();
+    final overhangFgLogical = overhangFgPhysical / atlas.devicePixelRatio;
+    final atlasPhysWidth = atlas.image.width.toDouble();
+    final atlasPhysHeight = atlas.image.height.toDouble();
     final bgScaleBlock = cellWidth / whiteW;
     final fgScaleBlock = (cellWidth / atlas.cellWidth) / atlas.devicePixelRatio;
 
@@ -2113,6 +2205,10 @@ final class _AtlasGeometry {
       bleedBgLogical: bleedBgLogical,
       bleedFgPhysicalBlock: bleedPhysical,
       bleedFgLogicalBlock: bleedFgLogicalBlock,
+      overhangFgPhysical: overhangFgPhysical,
+      overhangFgLogical: overhangFgLogical,
+      atlasPhysWidth: atlasPhysWidth,
+      atlasPhysHeight: atlasPhysHeight,
       bgScaleBlock: bgScaleBlock,
       fgScaleBlock: fgScaleBlock,
       bgRect0: whiteX - bleedPhysical,

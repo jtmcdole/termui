@@ -3,3 +3,4 @@
 *.woff binary
 *.woff2 binary
 *.ansi text eol=lf
+*.png binary

@@ -1,7 +1,37 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/widgets.dart' hide Color;
 import 'package:termui/ui/buffer.dart';
+
+/// Returns whether [char] is rasterized procedurally by
+/// [drawProceduralCharacter] rather than via font text shaping.
+bool isProceduralAtlasCharacter(String char) {
+  if (char.length != 1) return false;
+  return switch (char.codeUnitAt(0)) {
+    0x2580 ||
+    0x2584 ||
+    (>= 0x2588 && <= 0x2593) ||
+    0x2500 ||
+    0x2502 ||
+    0x250C ||
+    0x2510 ||
+    0x2514 ||
+    0x2518 ||
+    0x251C ||
+    0x2524 ||
+    0x252C ||
+    0x2534 ||
+    0x253C ||
+    0x2550 ||
+    0x2551 ||
+    0x2554 ||
+    0x2557 ||
+    0x255A ||
+    0x255D => true,
+    _ => false,
+  };
+}
 
 /// Procedurally renders block, shade, and box-drawing characters on a Canvas.
 ///
@@ -840,35 +870,64 @@ void _rasterizePlacedGlyphs({
   final x = pg.col * colWidth;
   final y = pg.row * rowHeight;
   final targetWidth = pg.cellSpan * cellWidth;
-  final targetSlotWidth = pg.cellSpan * colWidth;
+  final proceduralPad =
+      (1.0 * devicePixelRatio).ceilToDouble() / devicePixelRatio;
+  final overhang =
+      (GlyphAtlas.overhang * devicePixelRatio).floorToDouble() /
+      devicePixelRatio;
+  final isProcedural = isProceduralAtlasCharacter(pg.char);
 
   canvas.save();
-  canvas.clipRect(Rect.fromLTWH(x, y, targetSlotWidth, rowHeight));
-
-  final drawn = drawProceduralCharacter(
-    canvas,
-    x + actualPadding,
-    y + actualPadding,
-    targetWidth,
-    cellHeight,
-    actualPadding,
-    pg.char,
-    Paint()..color = const ui.Color(0xFFFFFFFF),
-  );
-  if (!drawn) {
-    final charBaseline = pg.painter.computeDistanceToActualBaseline(
-      TextBaseline.alphabetic,
-    );
-    final dx = (targetWidth - pg.painter.width) / 2;
-    final dy = standardBaseline - charBaseline;
-    pg.painter.paint(
-      canvas,
-      Offset(x + actualPadding + dx, y + actualPadding + dy),
-    );
+  try {
+    if (isProcedural) {
+      canvas.clipRect(
+        Rect.fromLTWH(
+          x + actualPadding - proceduralPad,
+          y + actualPadding - proceduralPad,
+          targetWidth + 2 * proceduralPad,
+          cellHeight + 2 * proceduralPad,
+        ),
+      );
+      drawProceduralCharacter(
+        canvas,
+        x + actualPadding,
+        y + actualPadding,
+        targetWidth,
+        cellHeight,
+        proceduralPad,
+        pg.char,
+        Paint()..color = const ui.Color(0xFFFFFFFF),
+      );
+    } else {
+      canvas.clipRect(
+        Rect.fromLTWH(
+          x + actualPadding - overhang,
+          y + actualPadding - overhang,
+          targetWidth + 2 * overhang,
+          cellHeight + 2 * overhang,
+        ),
+      );
+      final charBaseline = pg.painter.computeDistanceToActualBaseline(
+        TextBaseline.alphabetic,
+      );
+      final rawDx = (targetWidth - pg.painter.width) / 2;
+      final dx =
+          rawDx < 0.0 &&
+              pg.char.length > 1 &&
+              !_isAsciiLigature(pg.char) &&
+              !_isColorEmojiAtlas(pg.char)
+          ? 0.0
+          : rawDx;
+      final dy = standardBaseline - charBaseline;
+      pg.painter.paint(
+        canvas,
+        Offset(x + actualPadding + dx, y + actualPadding + dy),
+      );
+    }
+  } finally {
+    pg.painter.dispose();
+    canvas.restore();
   }
-
-  pg.painter.dispose();
-  canvas.restore();
 
   return (
     Rect.fromLTWH(
@@ -877,7 +936,7 @@ void _rasterizePlacedGlyphs({
       targetWidth * devicePixelRatio,
       cellHeight * devicePixelRatio,
     ),
-    drawn,
+    isProcedural,
   );
 }
 
@@ -959,6 +1018,9 @@ final class GlyphAtlas {
   /// Standard monospaced row height.
   final double cellHeight;
 
+  /// Standard alphabetic baseline offset from the top of a cell in logical pixels.
+  final double standardBaseline;
+
   /// Point size used to measure/render text.
   final double fontSize;
 
@@ -988,12 +1050,19 @@ final class GlyphAtlas {
   final List<Rect?> _asciiRects = List<Rect?>.filled(_asciiCount * 4, null);
 
   /// Blank padding added around each glyph to prevent texture bleed.
-  static const double padding = 2.0;
+  static const double padding = 3.0;
+
+  /// Maximum logical overhang rasterized outside each glyph's nominal cell bounds.
+  static const double overhang = 2.0;
 
   /// The actual padding used, rounded to physical boundaries.
   double get actualPadding =>
       (GlyphAtlasGenerator.padding * devicePixelRatio).ceilToDouble() /
       devicePixelRatio;
+
+  /// The actual overhang allowed outside nominal cell bounds, snapped to physical pixels.
+  double get actualOverhang =>
+      (overhang * devicePixelRatio).floorToDouble() / devicePixelRatio;
 
   /// Total width of a grid column, including padding.
   double get colWidth => cellWidth + 2 * actualPadding;
@@ -1021,13 +1090,15 @@ final class GlyphAtlas {
     Map<(String, GlyphStyleVariant), Rect>? styledCharRects,
     required this.cellWidth,
     required this.cellHeight,
+    double? standardBaseline,
     required this.fontSize,
     required this.fontFamily,
     this.fontFamilyFallback,
     this.devicePixelRatio = 1.0,
     required this.nextGridIndex,
     this.numCols = 64,
-  }) : styleRects = styleRects ?? const {},
+  }) : standardBaseline = standardBaseline ?? cellHeight * 0.8,
+       styleRects = styleRects ?? const {},
        styledCharRects =
            styledCharRects ??
            (styleRects != null
@@ -1137,7 +1208,6 @@ final class GlyphAtlas {
     canvas.drawImage(image, Offset.zero, Paint());
     canvas.restore();
 
-    final standardBaseline = _measureStandardBaseline();
     final updatedRects = Map<String, Rect>.from(charRects);
     final updatedStyleRects = Map<(String, bool, bool), Rect>.from(styleRects);
     final updatedStyledRects = Map<(String, GlyphStyleVariant), Rect>.from(
@@ -1177,6 +1247,7 @@ final class GlyphAtlas {
       styledCharRects: updatedStyledRects,
       cellWidth: cellWidth,
       cellHeight: cellHeight,
+      standardBaseline: standardBaseline,
       fontSize: fontSize,
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
@@ -1213,20 +1284,6 @@ final class GlyphAtlas {
       );
     }
     return measures;
-  }
-
-  double _measureStandardBaseline() {
-    final testPainter = _createAtlasTextPainter(
-      char: 'A',
-      fontSize: fontSize,
-      fontFamily: fontFamily,
-      fontFamilyFallback: fontFamilyFallback,
-    );
-    final baseline = testPainter.computeDistanceToActualBaseline(
-      TextBaseline.alphabetic,
-    );
-    testPainter.dispose();
-    return baseline;
   }
 }
 
@@ -1278,7 +1335,7 @@ final class _PlacedGlyph {
 /// ```
 abstract final class GlyphAtlasGenerator {
   /// Blank padding added around each glyph.
-  static const double padding = 2.0;
+  static const double padding = 3.0;
 
   static const List<int> _initialCodePoints = [
     32,
@@ -1409,9 +1466,15 @@ abstract final class GlyphAtlasGenerator {
     final cellWidth =
         (testPainter.width * devicePixelRatio).ceilToDouble() /
         devicePixelRatio;
+    final unroundedHeight = switch (testPainter.computeLineMetrics()) {
+      [final first, ...] => math.max(
+        testPainter.height,
+        first.ascent + first.descent,
+      ),
+      [] => testPainter.height,
+    };
     final cellHeight =
-        (testPainter.height * devicePixelRatio).ceilToDouble() /
-        devicePixelRatio;
+        (unroundedHeight * devicePixelRatio).ceilToDouble() / devicePixelRatio;
     final standardBaseline = testPainter.computeDistanceToActualBaseline(
       TextBaseline.alphabetic,
     );
@@ -1449,7 +1512,7 @@ abstract final class GlyphAtlasGenerator {
     canvas.scale(devicePixelRatio);
 
     canvas.drawRect(
-      Rect.fromLTWH(0, 0, m.colWidth, m.rowHeight),
+      Rect.fromLTWH(1.0, 1.0, m.colWidth - 2.0, m.rowHeight - 2.0),
       Paint()..color = const ui.Color(0xFFFFFFFF),
     );
     final whiteRect = Rect.fromLTWH(
@@ -1481,6 +1544,7 @@ abstract final class GlyphAtlasGenerator {
       styledCharRects: styledCharRects,
       cellWidth: m.cellWidth,
       cellHeight: m.cellHeight,
+      standardBaseline: m.standardBaseline,
       fontSize: fontSize,
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
@@ -1635,7 +1699,12 @@ abstract final class GlyphAtlasGenerator {
     );
 
     canvas.drawRect(
-      Rect.fromLTWH(whiteX, whiteY, m.colWidth, m.rowHeight),
+      Rect.fromLTWH(
+        whiteX + 1.0,
+        whiteY + 1.0,
+        m.colWidth - 2.0,
+        m.rowHeight - 2.0,
+      ),
       Paint()..color = const ui.Color(0xFFFFFFFF),
     );
     final whiteRect = Rect.fromLTWH(
@@ -1664,6 +1733,7 @@ abstract final class GlyphAtlasGenerator {
       styledCharRects: styledCharRects,
       cellWidth: m.cellWidth,
       cellHeight: m.cellHeight,
+      standardBaseline: m.standardBaseline,
       fontSize: fontSize,
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
