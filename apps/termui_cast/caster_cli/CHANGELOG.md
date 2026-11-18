@@ -1,3 +1,7 @@
+## 0.2.2-dev.0
+
+ - **FIX**(caster_cli): defer revision reconnect during pending upload tasks.
+
 ## 0.2.1
 
  - **FIX**(caster_cli): pause upload idle timer during queued disk tasks.

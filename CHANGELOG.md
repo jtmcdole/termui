@@ -3,6 +3,33 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-18
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`fterm` - `v0.4.0-dev.0`](#fterm---v040-dev0)
+
+Packages with other changes:
+
+ - [`termui_caster_cli` - `v0.2.2-dev.0`](#termui_caster_cli---v022-dev0)
+
+---
+
+#### `fterm` - `v0.4.0-dev.0`
+
+ - **BREAKING** **FIX**: replace restricted audio assets and fix POSIX CI test races.
+ - **BREAKING** **FEAT**(fterm): add splash About overlay and open-source licenses viewer.
+ - **BREAKING** **FEAT**(selection): root scrollback selection and migrate pointer gestures to HSM.
+
+#### `termui_caster_cli` - `v0.2.2-dev.0`
+
+ - **FIX**(caster_cli): defer revision reconnect during pending upload tasks.
+
+
 ## 2026-11-16
 
 ### Changes
