@@ -662,6 +662,7 @@ final class VirtualTerminal implements TerminalHandler {
     registry: imageRegistry,
     onReply: (reply) => onReply?.call(reply),
     onPlaceVirtual: _placeVirtualImage,
+    cellPixelSize: () => (_cellPixelWidth, _cellPixelHeight),
   );
 
   late final AudioApcHandler _audioApcHandler = AudioApcHandler(
@@ -718,35 +719,90 @@ final class VirtualTerminal implements TerminalHandler {
       ..addAll([for (var col = 8; col < width; col += 8) col]);
   }
 
-  void _placeVirtualImage(int cols, int rows, int imageId, bool advanceCursor) {
-    final maskedId = imageId & 0xFFFFFFFF;
-    final startX = cursorX.clamp(0, width - 1);
-    final startY = cursorY.clamp(0, height - 1);
-    final validCols = math.max(1, math.min(cols, width - startX));
-    final validRows = math.max(1, math.min(rows, height - startY));
-    final fgArgb = 0xFF000000 | (maskedId & 0xFFFFFF);
-    final imageIdMsb = (maskedId >> 24) & 0xFF;
+  void _resolvePendingWrapBeforeWrite() {
+    if (cursorX >= width && _autoWrap) {
+      _wrapLineDown();
+    }
+  }
 
-    for (var r = 0; r < validRows; r++) {
-      final y = startY + r;
-      for (var c = 0; c < validCols; c++) {
-        final x = startX + c;
-        final cell = kittyPlaceholderCell(r, c, imageIdMsb: imageIdMsb);
-        buffer.setAttributes(
-          x,
-          y,
-          char: cell,
-          fg: fgArgb,
-          bg: 0,
-          modifiers: Modifier.kittyPlaceholder,
-          underlineColor: 0,
-          uri: '',
-          blend: false,
+  void _placeVirtualImage(int cols, int rows, int imageId, bool advanceCursor) {
+    if (advanceCursor) {
+      _resolvePendingWrapBeforeWrite();
+    }
+
+    final maskedId = imageId & 0xFFFF_FFFF;
+    final startX = cursorX.clamp(0, width - 1);
+    final validCols = math.max(
+      1,
+      math.min(cols, math.min(width - startX, kittyDiacritics.length)),
+    );
+    final totalRows = math.max(1, math.min(rows, kittyDiacritics.length));
+    final fgArgb = 0xFF00_0000 | (maskedId & 0xFF_FFFF);
+    final imageIdMsb = (maskedId >>> 24) & 0xFF;
+
+    if (!advanceCursor) {
+      final startY = cursorY.clamp(0, height - 1);
+      final clippedRows = math.max(1, math.min(totalRows, height - startY));
+      for (var r = 0; r < clippedRows; r++) {
+        _writeKittyImageRow(
+          startX,
+          startY + r,
+          r,
+          validCols,
+          fgArgb,
+          imageIdMsb,
         );
       }
+      return;
     }
-    if (advanceCursor) {
-      cursorX = (startX + validCols).clamp(0, width - 1);
+
+    var y = cursorY.clamp(0, height - 1);
+    final usesScrollRegion = y <= _scrollBottom;
+    for (var r = 0; r < totalRows; r++) {
+      if (r > 0) {
+        if (usesScrollRegion && y >= _scrollBottom) {
+          _scrollRegion(
+            _scrollTop,
+            _scrollBottom,
+            1,
+            up: true,
+            evictTop: _scrollTop == 0,
+          );
+          y = _scrollBottom;
+        } else if (y < height - 1) {
+          y++;
+        } else {
+          break;
+        }
+      }
+      _writeKittyImageRow(startX, y, r, validCols, fgArgb, imageIdMsb);
+    }
+
+    cursorY = y;
+    cursorX = startX;
+    _advanceCursorAfterPrint(validCols);
+  }
+
+  void _writeKittyImageRow(
+    int startX,
+    int y,
+    int tileRow,
+    int validCols,
+    int fgArgb,
+    int imageIdMsb,
+  ) {
+    for (var c = 0; c < validCols; c++) {
+      buffer.setAttributes(
+        startX + c,
+        y,
+        char: kittyPlaceholderCell(tileRow, c, imageIdMsb: imageIdMsb),
+        fg: fgArgb,
+        bg: 0,
+        modifiers: Modifier.kittyPlaceholder,
+        underlineColor: 0,
+        uri: '',
+        blend: false,
+      );
     }
   }
 
@@ -1087,7 +1143,10 @@ final class VirtualTerminal implements TerminalHandler {
   int _resolveOscColorArg(Color? color, Color? dynamicOverride) {
     if (color == null) return dynamicOverride?.argb ?? 0;
     if (color.isAnsiIndexed) {
-      return _osc4Overrides[color.ansiIndex]?.argb ?? color.argb;
+      return _osc4Overrides[color.ansiIndex]?.argb ??
+          (emitIndexedColors
+              ? color.argb
+              : _legacyColorFromAnsi256(color.ansiIndex).argb);
     }
     return color.argb;
   }
@@ -1376,13 +1435,7 @@ final class VirtualTerminal implements TerminalHandler {
     }
     final char = _capGrapheme(translated);
     _lastPrintedGrapheme = char;
-    if (cursorX >= width) {
-      if (_autoWrap) {
-        _wrapLineDown();
-      } else {
-        cursorX = width - 1;
-      }
-    }
+    _resolvePendingWrapBeforeWrite();
 
     final (fgArg, bgArg, modArg, isBgTransparent) = _resolvePrintAttributes(
       char,
@@ -1528,10 +1581,15 @@ final class VirtualTerminal implements TerminalHandler {
   (int fg, int bg, int mod, bool bgTransparent) _resolvePrintAttributes(
     String char,
   ) {
-    var fgArg = _resolveOscColorArg(_currentStyle.foreground, _osc10Override);
+    final isKitty = char.startsWith(kittyPlaceholderChar);
+    var fgArg = switch ((isKitty, _currentStyle.foreground)) {
+      (true, null) => 0,
+      (true, final fg?) when fg.isAnsiIndexed => 0xFF00_0000 | fg.ansiIndex,
+      (_, final fg) => _resolveOscColorArg(fg, _osc10Override),
+    };
     var bgArg = _resolveOscColorArg(_currentStyle.background, _osc11Override);
     var modArg = _currentStyle.modifiers;
-    if (char.startsWith(kittyPlaceholderChar)) {
+    if (isKitty) {
       modArg |= Modifier.kittyPlaceholder;
     }
 
@@ -1541,9 +1599,9 @@ final class VirtualTerminal implements TerminalHandler {
         (bgArg == 0 || bgArg == 0xFF000000);
     if (bgTransparent) {
       bgArg = 0;
-      if (fgArg == 0) fgArg = defaultForeground?.argb ?? 0xFFFFFFFF;
+      if (fgArg == 0 && !isKitty) fgArg = defaultForeground?.argb ?? 0xFFFFFFFF;
       if (char == ' ') modArg |= Modifier.transparent;
-    } else if (fgArg == 0 && defaultForeground != null) {
+    } else if (fgArg == 0 && !isKitty && defaultForeground != null) {
       fgArg = defaultForeground!.argb;
     }
     return (fgArg, bgArg, modArg, bgTransparent);
@@ -2891,8 +2949,7 @@ final class VirtualTerminal implements TerminalHandler {
 
   Color _colorFromAnsi256(int code) {
     if (code < 0 || code > 255) return Colors.white;
-    if (emitIndexedColors) return Color.ansi(code);
-    return _legacyColorFromAnsi256(code);
+    return Color.ansi(code);
   }
 
   Color _legacyColorFromAnsi256(int code) {
