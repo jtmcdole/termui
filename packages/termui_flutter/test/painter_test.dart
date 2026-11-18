@@ -710,6 +710,14 @@ void _defineThemePalettePainterTests() {
       'TuiAtlasPainter enableBleed masks neighbor bleed over default-background edges',
       _testEnableBleedCoversAdjacentBackgroundEdges,
     );
+    test(
+      'TuiAtlasPainter resolves Color.ansi indexed foregrounds for Kitty U+10EEEE placeholders',
+      _testKittyAnsiIndexedForegroundPaint,
+    );
+    test(
+      'TuiAtlasPainter ignores Modifier.reverse on Kitty U+10EEEE placeholders',
+      _testKittyReverseModifierIgnoresFgBackground,
+    );
   });
 }
 
@@ -1309,4 +1317,181 @@ Future<void> _testEnableBleedCoversAdjacentBackgroundEdges() async {
     transBytes.sublist(adjOff, adjOff + 4),
     equals(transBytes.sublist(baseOff, baseOff + 4)),
   );
+}
+
+Future<void> _testKittyAnsiIndexedForegroundPaint() async {
+  final atlas = await GlyphAtlasGenerator.generateEmpty(
+    fontSize: 16.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlas.image.dispose);
+
+  const imageId = 42;
+  final indexedFg = const Color.ansi(imageId).argb;
+  final rgba = Uint8List.fromList([
+    0, 255, 0, 255, // col 0: pure green
+    0, 0, 255, 255, // col 1: pure blue
+  ]);
+  final kittyData = KittyImageData(
+    imageId: imageId,
+    pixelWidth: 2,
+    pixelHeight: 1,
+    rgbaPixels: rgba,
+    gridCols: 2,
+    gridRows: 1,
+  );
+  final registry = KittyImageRegistry()..registerImage(kittyData);
+  final buffer = Buffer(2, 1)
+    ..registerKittyRegistry(const tui_geo.Rect(0, 0, 2, 1), registry)
+    ..setAttributes(
+      0,
+      0,
+      char: kittyPlaceholderCell(0, 0),
+      fg: indexedFg,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder,
+    )
+    ..setAttributes(
+      1,
+      0,
+      char: kittyPlaceholderCell(0, 1),
+      fg: indexedFg,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder,
+    );
+
+  final missing = <String>[];
+  final kittyImages = <KittyImageData, ui.Image>{};
+  final painter = TuiAtlasPainter(
+    buffer: buffer,
+    atlas: atlas,
+    fontFamily: 'Roboto Mono',
+    fallbackPainters: const {},
+    onMissingGlyphs: missing.addAll,
+    kittyImages: kittyImages,
+  );
+
+  final w = (atlas.cellWidth * 2).ceil();
+  final h = atlas.cellHeight.ceil();
+
+  // Verify subpixel fallback path with Color.ansi(42) on cell (0, 0).
+  final subRec = ui.PictureRecorder();
+  painter.paint(Canvas(subRec), Size(w.toDouble(), h.toDouble()));
+  final subPic = subRec.endRecording();
+  final subImg = await subPic.toImage(w, h);
+  subPic.dispose();
+  addTearDown(subImg.dispose);
+  final subBytes = (await subImg.toByteData())!.buffer.asUint8List();
+  final col0Center = ((h ~/ 2) * w + (atlas.cellWidth * 0.5).floor()) * 4;
+  expect(missing, isEmpty);
+  expect(subBytes[col0Center], equals(0));
+  expect(subBytes[col0Center + 1], equals(255));
+  expect(subBytes[col0Center + 2], equals(0));
+  expect(subBytes[col0Center + 3], equals(255));
+
+  // Verify GPU texture rendering across both cells with Color.ansi(42).
+  final decodedCompleter = Completer<ui.Image>();
+  ui.decodeImageFromPixels(
+    rgba,
+    2,
+    1,
+    ui.PixelFormat.rgba8888,
+    decodedCompleter.complete,
+  );
+  final gpuImage = await decodedCompleter.future;
+  addTearDown(gpuImage.dispose);
+  kittyImages[kittyData] = gpuImage;
+
+  final gpuRec = ui.PictureRecorder();
+  painter.paint(Canvas(gpuRec), Size(w.toDouble(), h.toDouble()));
+  final gpuPic = gpuRec.endRecording();
+  final gpuImg = await gpuPic.toImage(w, h);
+  gpuPic.dispose();
+  addTearDown(gpuImg.dispose);
+  final gpuBytes = (await gpuImg.toByteData())!.buffer.asUint8List();
+  final col0Left = (h ~/ 2) * w * 4;
+  final col1Right = ((h ~/ 2) * w + (w - 2)) * 4;
+  final col1Center = ((h ~/ 2) * w + (atlas.cellWidth * 1.5).floor()) * 4;
+  expect(gpuBytes[col0Left], equals(0));
+  expect(gpuBytes[col0Left + 1], equals(255));
+  expect(gpuBytes[col0Left + 2], equals(0));
+  expect(gpuBytes[col0Left + 3], equals(255));
+  expect(gpuBytes[col1Right], equals(0));
+  expect(gpuBytes[col1Right + 1], equals(0));
+  expect(gpuBytes[col1Right + 2], equals(255));
+  expect(gpuBytes[col1Right + 3], equals(255));
+  expect(gpuBytes[col0Center + 1], greaterThan(200));
+  expect(gpuBytes[col1Center + 2], greaterThan(200));
+}
+
+Future<void> _testKittyReverseModifierIgnoresFgBackground() async {
+  final atlas = await GlyphAtlasGenerator.generateEmpty(
+    fontSize: 16.0,
+    fontFamily: 'Roboto Mono',
+  );
+  addTearDown(atlas.image.dispose);
+
+  final transparentPx = Uint8List.fromList([0, 0, 0, 0]);
+  final rgbIdData = KittyImageData(
+    imageId: 0xFF0000,
+    pixelWidth: 1,
+    pixelHeight: 1,
+    rgbaPixels: transparentPx,
+    gridCols: 1,
+    gridRows: 1,
+  );
+  final ansiIdData = KittyImageData(
+    imageId: 42,
+    pixelWidth: 1,
+    pixelHeight: 1,
+    rgbaPixels: transparentPx,
+    gridCols: 1,
+    gridRows: 1,
+  );
+  final registry = KittyImageRegistry()
+    ..registerImage(rgbIdData)
+    ..registerImage(ansiIdData);
+
+  final buffer = Buffer(2, 1)
+    ..registerKittyRegistry(const tui_geo.Rect(0, 0, 2, 1), registry)
+    ..setAttributes(
+      0,
+      0,
+      char: kittyPlaceholderCell(0, 0),
+      fg: 0xFFFF0000,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder | Modifier.reverse,
+    )
+    ..setAttributes(
+      1,
+      0,
+      char: kittyPlaceholderCell(0, 0),
+      fg: const Color.ansi(42).argb,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder | Modifier.reverse,
+    );
+
+  final painter = TuiAtlasPainter(
+    buffer: buffer,
+    atlas: atlas,
+    fontFamily: 'Roboto Mono',
+    fallbackPainters: const {},
+    onMissingGlyphs: null,
+  );
+
+  final w = (atlas.cellWidth * 2).ceil();
+  final h = atlas.cellHeight.ceil();
+  final rec = ui.PictureRecorder();
+  painter.paint(Canvas(rec), Size(w.toDouble(), h.toDouble()));
+  final pic = rec.endRecording();
+  final img = await pic.toImage(w, h);
+  pic.dispose();
+  addTearDown(img.dispose);
+
+  final bytes = (await img.toByteData())!.buffer.asUint8List();
+  final col0Center = ((h ~/ 2) * w + (atlas.cellWidth * 0.5).floor()) * 4;
+  final col1Center = ((h ~/ 2) * w + (atlas.cellWidth * 1.5).floor()) * 4;
+  // Both cells keep their black background (0, 0, 0, 255) instead of inverting fgArgb imageIds.
+  expect(bytes.sublist(col0Center, col0Center + 4), equals([0, 0, 0, 255]));
+  expect(bytes.sublist(col1Center, col1Center + 4), equals([0, 0, 0, 255]));
 }

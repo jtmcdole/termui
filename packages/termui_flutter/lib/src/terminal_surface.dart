@@ -2148,7 +2148,7 @@ final class _KittyGpuImageCache {
       return;
     }
     if (data.rgbaPixels.isEmpty) return;
-    if (data.format == 100) {
+    if (data.format == KittyImageData.formatPng) {
       if (!_decoding.add(data)) return;
       unawaited(_decodePngImage(registry, data));
       return;

@@ -352,8 +352,11 @@ String kittyPlaceholderCell(int row, int col, {int imageIdMsb = 0}) {
 
 /// Extracts the 32-bit Kitty `imageId` from a `U+10EEEE` placeholder [grapheme]
 /// and cell [fgArgb] without allocating coordinate records.
+///
+/// 24-bit [fgArgb] image IDs must pack `0xFF00_0000 | id` because the
+/// `0x0001_0000..0x0001_00FF` range is reserved for `Color.ansi` indexed colors.
 int extractKittyCellImageId(String grapheme, int fgArgb) {
-  final low24 = fgArgb & 0xFFFFFF;
+  final low24 = fgArgb.isAnsiIndexed ? fgArgb.ansiIndex : (fgArgb & 0xFF_FFFF);
   if (grapheme.length < 5) return low24;
   final msb = _diacriticToIndex[grapheme.codeUnitAt(4)] ?? 0;
   return ((msb & 0xFF) << 24) | low24;
@@ -361,6 +364,15 @@ int extractKittyCellImageId(String grapheme, int fgArgb) {
 
 /// Immutable RGBA pixel buffer and grid placement metadata for a Kitty image.
 final class KittyImageData {
+  /// Kitty Graphics `f=` transmission code for 24-bit raw RGB (3 bytes per pixel).
+  static const int formatRgb24 = 24;
+
+  /// Kitty Graphics `f=` transmission code for 32-bit raw RGBA (4 bytes per pixel, protocol default).
+  static const int formatRgba32 = 32;
+
+  /// Kitty Graphics `f=` transmission code for PNG-encoded image byte streams.
+  static const int formatPng = 100;
+
   /// Unique 32-bit Kitty image ID (`1..0xFFFFFFFF`).
   final int imageId;
 
@@ -382,7 +394,8 @@ final class KittyImageData {
   /// Optional version counter incremented when pixel contents change for the same [imageId].
   final int version;
 
-  /// Format flag: 32 for RGBA8888, 100 for PNG.
+  /// Format flag (`f=`): [formatRgba32] for 32-bit RGBA or [formatPng] for PNG
+  /// in stored [rgbaPixels] buffers; [formatRgb24] is used for 24-bit wire queries/APC.
   final int format;
 
   /// Creates a [KittyImageData] descriptor.
@@ -394,7 +407,7 @@ final class KittyImageData {
     required this.gridCols,
     required this.gridRows,
     this.version = 0,
-    this.format = 32,
+    this.format = formatRgba32,
   });
 
   /// Creates a [KittyImageData] descriptor from pre-compressed PNG bytes (`f=100`).
@@ -414,12 +427,12 @@ final class KittyImageData {
     gridCols: gridCols,
     gridRows: gridRows,
     version: version,
-    format: 100,
+    format: formatPng,
   );
 
   /// Builds a Kitty Graphics capability query sequence (`a=q`).
   static String buildCapabilityQuery({int queryId = 31}) =>
-      '\x1b_Gi=$queryId,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c';
+      '\x1b_Gi=$queryId,s=1,v=1,a=q,t=d,f=$formatRgb24;AAAA\x1b\\\x1b[c';
 
   /// Returns whether [other] has identical image metadata, grid size, version,
   /// format, and underlying [rgbaPixels] buffer identity.
@@ -458,8 +471,8 @@ final class KittyImageData {
   /// Encodes the Kitty Graphics `APC` upload (`a=t,f=...`) and virtual placement
   /// (`a=p,U=1`) sequences for CLI terminals.
   ///
-  /// When [compress] is `true` (and [format] is 32), the RGBA payload is compressed
-  /// with zlib (`o=z`). [chunkSize] must be a positive multiple of 4.
+  /// When [compress] is `true` (and [format] is [formatRgba32]), the RGBA payload
+  /// is compressed with zlib (`o=z`). [chunkSize] must be a positive multiple of 4.
   String toApcSequence({int chunkSize = 4096, bool compress = false}) {
     if (chunkSize <= 0 || chunkSize % 4 != 0) {
       throw ArgumentError.value(
@@ -468,7 +481,7 @@ final class KittyImageData {
         'must be a positive multiple of 4',
       );
     }
-    final useZlib = compress && format == 32;
+    final useZlib = compress && format == formatRgba32;
     final bytesToSend = useZlib
         ? Uint8List.fromList(zlib.encode(rgbaPixels))
         : rgbaPixels;
