@@ -334,22 +334,21 @@ final class PtyCoreUnix implements PtyCore, Finalizable {
 
   @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
-    _pty2ClosePtm(_nativeMem);
-    if (_killed && signal != ProcessSignal.sigkill) return false;
+    if (_killed && signal != ProcessSignal.sigkill) {
+      _pty2ClosePtm(_nativeMem);
+      return false;
+    }
 
     final sigNum = _mapSignal(signal);
     final delivered = _pty2KillShell(_nativeMem, sigNum) != 0;
-    if (!delivered) {
-      _killed = true;
-      return false;
-    }
     _killed = true;
-    // Also send SIGHUP alongside closing ptm on the reader worker so
-    // interactive shells that ignore SIGTERM exit immediately.
-    if (sigNum != consts.SIGKILL && sigNum != consts.SIGHUP) {
+    // Also send SIGHUP before closing ptm so interactive shells that ignore
+    // SIGTERM exit immediately.
+    if (delivered && sigNum != consts.SIGKILL && sigNum != consts.SIGHUP) {
       _pty2KillShell(_nativeMem, consts.SIGHUP);
     }
-    return true;
+    _pty2ClosePtm(_nativeMem);
+    return delivered;
   }
 
   int _mapSignal(ProcessSignal signal) => switch (signal) {

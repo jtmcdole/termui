@@ -206,13 +206,11 @@ void main() {
     );
 
     test('TS-STR06: Long-form audio track streaming and seek', () async {
-      final soundPath = _resolveAudioPath(
-        'example/assets/DontFallOffTheClouds.ogg',
-      );
+      final soundPath = _resolveAudioPath('example/assets/VoxelRevolution.ogg');
       final buffer = await cli.loadFile(soundPath, stream: true);
 
       final duration = cli.getBufferDuration(buffer);
-      // Track is ~37 seconds long
+      // Track is ~130 seconds long
       expect(duration.inSeconds, greaterThan(30));
 
       final voice = cli.play(buffer);
@@ -313,12 +311,14 @@ void main() {
     test(
       'TS-STR10: In-memory Opus streaming with loadMem(stream: true)',
       () async {
-        final opusPath = _resolveAudioPath('example/assets/test_opus_ch7.opus');
+        final opusPath = _resolveAudioPath(
+          'example/assets/VoxelRevolution.ogg',
+        );
         final bytes = await File(opusPath).readAsBytes();
 
         // Load Opus stream into memory
         final buffer = await cli.loadMem(
-          'test_opus_ch7_mem',
+          'voxel_revolution_mem',
           bytes,
           stream: true,
         );
@@ -344,7 +344,7 @@ void main() {
     );
 
     test('TS-STR11: Disk Opus streaming with loadFile(stream: true)', () async {
-      final opusPath = _resolveAudioPath('example/assets/test_opus_ch7.opus');
+      final opusPath = _resolveAudioPath('example/assets/VoxelRevolution.ogg');
 
       // Load Opus file via disk streaming (header sniffed via readFileHeaderBytes)
       final buffer = await cli.loadFile(opusPath, stream: true);

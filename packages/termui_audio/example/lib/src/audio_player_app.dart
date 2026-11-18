@@ -11,12 +11,15 @@ typedef AssetLoader =
       LoadProgressCallback? onProgress,
     });
 
+/// Bundled demo tracks:
+/// - "Voxel Revolution" Kevin MacLeod (incompetech.com), CC BY 4.0.
+/// - Swish 1-4 by Kenney Vleugels (www.kenney.nl), CC0 1.0.
 const Map<String, String> playlist = {
-  'Clouds': 'assets/DontFallOffTheClouds.ogg',
-  'Swish 1': 'assets/fast_swish1.ogg',
-  'Swish 2': 'assets/fast_swish2.ogg',
-  'Swish 3': 'assets/fast_swish3.ogg',
-  'Swish 4': 'assets/fast_swish4.ogg',
+  'Voxel': 'assets/VoxelRevolution.ogg',
+  'Swish 1': 'assets/kenney_swish1.ogg',
+  'Swish 2': 'assets/kenney_swish2.ogg',
+  'Swish 3': 'assets/kenney_swish3.ogg',
+  'Swish 4': 'assets/kenney_swish4.ogg',
 };
 
 class AudioPlayerViewModel {

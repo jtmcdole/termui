@@ -568,9 +568,9 @@ void main() {
         ]);
         expect(isOggXiphBytes(chained), isTrue);
 
-        // Real example Swish and Clouds assets from termui_audio/example/assets.
+        // Real Kenney CC0 Ogg Opus example asset from termui_audio/example/assets.
         final swishBytes = await File(
-          '../termui_audio/example/assets/fast_swish1.ogg',
+          '../termui_audio/example/assets/kenney_swish1.ogg',
         ).readAsBytes();
         expect(isOggXiphBytes(swishBytes), isTrue);
 
@@ -649,11 +649,14 @@ void main() {
 
         final engine = _RecordingFlutterAudioEngine();
         final swishBytes = await File(
-          '../termui_audio/example/assets/fast_swish1.ogg',
+          '../termui_audio/example/assets/kenney_swish1.ogg',
         ).readAsBytes();
 
-        // Short Ogg Opus clip (fast_swish1.ogg) bypasses native loadMem (which hits MBOggDecoder::readOpus EOF bug).
-        final swishBuffer = await engine.loadMem('fast_swish1.ogg', swishBytes);
+        // Short Ogg Opus clip (kenney_swish1.ogg) bypasses native loadMem (which hits MBOggDecoder::readOpus EOF bug).
+        final swishBuffer = await engine.loadMem(
+          'kenney_swish1.ogg',
+          swishBytes,
+        );
         expect(engine.engineMemLoads, isEmpty);
         expect(engine.createdBufferStreams, hasLength(1));
         expect(

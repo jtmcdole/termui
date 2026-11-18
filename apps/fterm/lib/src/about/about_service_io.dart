@@ -60,7 +60,11 @@ final class IoAboutService implements AboutService {
       return null;
     }
     final exePath = resolvedExecutableOverride ?? Platform.resolvedExecutable;
-    if (p.basenameWithoutExtension(exePath).toLowerCase() != 'fterm') {
+    final pathContext = exePath.contains('\\') && !exePath.contains('/')
+        ? p.windows
+        : p.context;
+    if (pathContext.basenameWithoutExtension(exePath).toLowerCase() !=
+        'fterm') {
       return null;
     }
     final reader = executableModifiedUtcReader ?? _defaultReadModifiedUtc;
