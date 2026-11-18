@@ -663,5 +663,74 @@ void main() {
         expect(postOverflow, equals([const KeyEvent('q', KeyType.character)]));
       },
     );
+
+    test(
+      'extractKittyCellImageId decodes Color.ansi and opaque 24-bit foregrounds with and without imageIdMsb',
+      () {
+        const indexedFg = Color.ansi(42);
+        expect(
+          extractKittyCellImageId(kittyPlaceholderCell(0, 0), indexedFg.argb),
+          equals(42),
+        );
+        expect(
+          extractKittyCellImageId(
+            kittyPlaceholderCell(0, 0, imageIdMsb: 0x42),
+            indexedFg.argb,
+          ),
+          equals((0x42 << 24) | 42),
+        );
+
+        const opaque24BitFg = Color(1, 0, 42);
+        expect(opaque24BitFg.argb, equals(0xFF01_002A));
+        expect(
+          extractKittyCellImageId(
+            kittyPlaceholderCell(0, 0),
+            opaque24BitFg.argb,
+          ),
+          equals(0x01_002A),
+        );
+        expect(
+          extractKittyCellImageId(
+            kittyPlaceholderCell(0, 0, imageIdMsb: 0x42),
+            opaque24BitFg.argb,
+          ),
+          equals((0x42 << 24) | 0x01_002A),
+        );
+      },
+    );
+
+    test(
+      'KittyImageData format constants map to Kitty f= codes in constructors and queries',
+      () {
+        expect(KittyImageData.formatRgb24, equals(24));
+        expect(KittyImageData.formatRgba32, equals(32));
+        expect(KittyImageData.formatPng, equals(100));
+
+        final rgbaData = KittyImageData(
+          imageId: 1,
+          pixelWidth: 1,
+          pixelHeight: 1,
+          rgbaPixels: Uint8List(4),
+          gridCols: 1,
+          gridRows: 1,
+        );
+        expect(rgbaData.format, equals(KittyImageData.formatRgba32));
+
+        final pngData = KittyImageData.fromPng(
+          imageId: 2,
+          pixelWidth: 1,
+          pixelHeight: 1,
+          pngBytes: Uint8List(8),
+          gridCols: 1,
+          gridRows: 1,
+        );
+        expect(pngData.format, equals(KittyImageData.formatPng));
+
+        expect(
+          KittyImageData.buildCapabilityQuery(),
+          contains('f=${KittyImageData.formatRgb24}'),
+        );
+      },
+    );
   });
 }

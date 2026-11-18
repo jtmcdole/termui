@@ -980,9 +980,8 @@ final class TuiAtlasPainter extends CustomPainter {
     final fgArgb = attrs[attrBase];
     final bgArgb = attrs[attrBase + 1];
     final modifiers = attrs[attrBase + 2];
-    final isReverse = Modifier.has(modifiers, Modifier.reverse);
-
     final isKitty = _isKittyCell(char, modifiers);
+    final isReverse = !isKitty && Modifier.has(modifiers, Modifier.reverse);
     final isSelected = !isKitty && _isCellSelected(x, y);
     final linkIdx = !isKitty && !isSelected ? _hoveredLinkIndex(x, y) : -1;
     final isHoveredLink = linkIdx >= 0;
@@ -1705,8 +1704,7 @@ final class TuiAtlasPainter extends CustomPainter {
     final coords = parseKittyPlaceholderCell(fc.char);
     if (coords == null) return index + 1;
 
-    final imageId =
-        (((coords.imageIdMsb ?? 0) & 0xFF) << 24) | (fc.fgArgb & 0xFFFFFF);
+    final imageId = extractKittyCellImageId(fc.char, fc.fgArgb);
     final registry = buffer.lookupKittyRegistry(fc.gridCol, fc.gridRow);
     final data = registry.lookupImage(imageId);
     if (data == null ||
@@ -1777,8 +1775,7 @@ final class TuiAtlasPainter extends CustomPainter {
         coords.col != expectedTileCol) {
       return false;
     }
-    final nextId =
-        (((coords.imageIdMsb ?? 0) & 0xFF) << 24) | (next.fgArgb & 0xFFFFFF);
+    final nextId = extractKittyCellImageId(next.char, next.fgArgb);
     if (nextId != imageId) return false;
     final nextData = buffer.lookupKittyImage(
       next.gridCol,
@@ -1796,7 +1793,7 @@ final class TuiAtlasPainter extends CustomPainter {
     int tileRow,
     int tileCol,
   ) {
-    if (data.format == 100) return;
+    if (data.format == KittyImageData.formatPng) return;
     final stepsX = math.min(
       2,
       math.max(1, data.pixelWidth ~/ math.max(1, data.gridCols)),
