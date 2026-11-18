@@ -542,7 +542,7 @@ final class GlyphAtlasController extends ChangeNotifier {
           color: color,
           fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
           fontStyle: isItalic ? FontStyle.italic : FontStyle.normal,
-          height: 1.0,
+          letterSpacing: 0.0,
         ),
       ),
       textDirection: TextDirection.ltr,
