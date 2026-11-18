@@ -1,3 +1,9 @@
+## 0.14.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_pty): support kitten icat direct streaming and multi-row Kitty scrolling.
+
 ## 0.13.1
 
  - Update a dependency to the latest release.
