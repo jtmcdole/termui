@@ -631,5 +631,76 @@ void main() {
         await tester.pump();
       },
     );
+
+    testWidgets(
+      'hard-wrapped indented multi-row URL highlights exact row spans and opens full URL from any wrapped row',
+      (tester) async {
+        const row0 =
+            '  ✓ Building Container... Logs are available at [ https://console.cloud.google.';
+        const row1 =
+            '  com/cloud-build/builds;region=us-west2/471e9261-7f4e-45e2-ba1b-2269358f6bde?p';
+        const row2 = '  roject=501742486119 ].';
+        const expectedUrl =
+            'https://console.cloud.google.com/cloud-build/builds;region=us-west2/471e9261-7f4e-45e2-ba1b-2269358f6bde?project=501742486119';
+
+        final buffer = termui.Buffer(100, 4)
+          ..writeString(0, 0, row0, const termui.Style())
+          ..writeString(0, 1, row1, const termui.Style())
+          ..writeString(0, 2, row2, const termui.Style());
+        final service = _RecordingTerminalService();
+        final atlasController = GlyphAtlasController(fontSize: 14.0);
+        addTearDown(atlasController.dispose);
+
+        await tester.pumpWidget(
+          _wrapSurface(
+            buffer: buffer,
+            service: service,
+            atlasController: atlasController,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final cellW = atlasController.atlas!.cellWidth;
+        final cellH = atlasController.atlas!.cellHeight;
+        final origin = tester.getTopLeft(find.byType(CustomPaint).last);
+
+        final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+        await mouse.addPointer(location: origin - const Offset(10, 10));
+        await tester.pump();
+
+        // Hover over row 1 ('com/cloud-build/...') while holding Ctrl.
+        final row1Target = origin + Offset(cellW * 12.5, cellH * 1.5);
+        await mouse.moveTo(row1Target);
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+
+        final painter =
+            tester.widget<CustomPaint>(find.byType(CustomPaint).last).painter!
+                as TuiAtlasPainter;
+        expect(painter.hoveredLink?.uri, equals(expectedUrl));
+        expect(
+          painter.hoveredLinkRowSpans,
+          equals(const [
+            (row: 0, startCol: 50, endCol: 78),
+            (row: 1, startCol: 2, endCol: 78),
+            (row: 2, startCol: 2, endCol: 20),
+          ]),
+        );
+
+        // Ctrl+Click on row 2 ('roject=501742486119') opens the full URL.
+        final row2Target = origin + Offset(cellW * 6.5, cellH * 2.5);
+        await mouse.moveTo(row2Target);
+        await tester.pump();
+        await mouse.down(row2Target);
+        await tester.pump();
+        await mouse.up();
+        await tester.pump();
+
+        expect(service.openedUrls, equals([expectedUrl]));
+
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+        await tester.pump();
+      },
+    );
   });
 }

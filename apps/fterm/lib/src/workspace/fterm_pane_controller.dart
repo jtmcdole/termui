@@ -235,18 +235,24 @@ final class FtermPaneController {
     }
     final start = liveY * liveBuffer.width;
     final end = start + liveBuffer.width;
+    final isWrapped = remote != null
+        ? remote.slot.isLiveRowWrapped(liveY)
+        : (localHost?.isLiveRowWrapped(liveY) ?? false);
     return (
-      isWrapped: remote != null && remote.slot.isLiveRowWrapped(liveY),
+      isWrapped: isWrapped,
       characters: liveBuffer.characters.sublist(start, end),
       uris: liveBuffer.sliceUris(start, end),
     );
   }
 
-  /// Resolves the un-overlaid [tui.VirtualLineSlice] for 0-based [viewportRow],
-  /// mapping across scrollback history and the active live buffer.
+  /// Resolves the un-overlaid [tui.VirtualLineSlice] for [viewportRow] relative
+  /// to [topVirtualRow] (including negative offsets into scrollback when links
+  /// wrap across the top viewport edge).
   tui.VirtualLineSlice? lookupLinkLine(int viewportRow) {
-    if (_disposed || viewportRow < 0) return null;
-    return lookupVirtualLine(topVirtualRow + viewportRow);
+    if (_disposed) return null;
+    final virtualRow = topVirtualRow + viewportRow;
+    if (virtualRow < 0) return null;
+    return lookupVirtualLine(virtualRow);
   }
 
   /// Active PTY dimensions `(cols, rows)` used for out-of-bounds dimming.

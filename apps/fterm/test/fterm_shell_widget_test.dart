@@ -2331,6 +2331,9 @@ final class _WidgetFakeLocalPaneHost implements LocalPaneHost {
   void setColorScheme(tui.TerminalBrightness brightness) {}
 
   @override
+  bool isLiveRowWrapped(int row) => false;
+
+  @override
   Future<void> dispose() async {
     await stopShare();
     await port.dispose();

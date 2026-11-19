@@ -428,6 +428,8 @@ final class TuiAtlasPainter extends CustomPainter {
   final HoveredLinkCellStyles _hoveredLinkStyles = HoveredLinkCellStyles();
   int _visibleLinkStartIdx = -1;
   int _visibleLinkEndIdx = -1;
+  int _visibleLinkMinRow = -1;
+  List<({int startCol, int endCol, int baseOffset})?>? _visibleLinkRowSpans;
 
   /// Constructs a [TuiAtlasPainter] targeting the supplied [buffer].
   TuiAtlasPainter({
@@ -451,6 +453,7 @@ final class TuiAtlasPainter extends CustomPainter {
     (int, int)? selectionColBounds,
     this.selectionBoxMode = false,
     this.hoveredLink,
+    this.hoveredLinkRowSpans,
     this.hoveredLinkStyler,
     this.kittyImages = const {},
     this.kittyImagesById = const {},
@@ -473,6 +476,14 @@ final class TuiAtlasPainter extends CustomPainter {
 
   /// Active hovered link span highlighted while link-open modifiers are held.
   final ResolvedTerminalLink? hoveredLink;
+
+  /// Optional per-row inclusive column spans for [hoveredLink].
+  ///
+  /// When provided, only cells inside each row's `[startCol, endCol]` range
+  /// are highlighted (skipping leading indentation and trailing spaces on
+  /// hard-wrapped lines). When omitted, [hoveredLink] highlights linearly from
+  /// `(startCol, startRow)` to `(endCol, endRow)`.
+  final List<TerminalLinkRowSpan>? hoveredLinkRowSpans;
 
   /// Optional client-supplied per-cell style override for [hoveredLink].
   ///
@@ -651,36 +662,36 @@ final class TuiAtlasPainter extends CustomPainter {
         _paintComposingOverlay(canvas, size, geo);
       }
     } finally {
-      _hoveredLinkStyles.clear();
-      _visibleLinkStartIdx = -1;
-      _visibleLinkEndIdx = -1;
+      _clearVisibleHoveredLink();
     }
+  }
+
+  void _clearVisibleHoveredLink() {
+    _hoveredLinkStyles.clear();
+    _visibleLinkStartIdx = -1;
+    _visibleLinkEndIdx = -1;
+    _visibleLinkMinRow = -1;
+    _visibleLinkRowSpans = null;
   }
 
   void _prepareHoveredLinkStyles() {
     final link = hoveredLink;
     if (link == null) {
-      _visibleLinkStartIdx = -1;
-      _visibleLinkEndIdx = -1;
-      _hoveredLinkStyles.clear();
+      _clearVisibleHoveredLink();
       return;
     }
-    final bounds = _visibleHoveredLinkBounds(link, buffer.width, buffer.height);
-    if (bounds == null) {
-      _visibleLinkStartIdx = -1;
-      _visibleLinkEndIdx = -1;
-      _hoveredLinkStyles.clear();
+    final cellCount = _prepareVisibleHoveredLinkBounds(
+      link,
+      hoveredLinkRowSpans,
+      buffer.width,
+      buffer.height,
+    );
+    if (cellCount <= 0) {
+      _clearVisibleHoveredLink();
       return;
     }
-    _visibleLinkStartIdx = bounds.startIdx;
-    _visibleLinkEndIdx = bounds.endIdx;
     final styler = hoveredLinkStyler;
     if (styler == null) {
-      _hoveredLinkStyles.clear();
-      return;
-    }
-    final cellCount = _hoveredLinkCellCount(link, buffer.width, buffer.height);
-    if (cellCount <= 0) {
       _hoveredLinkStyles.clear();
       return;
     }
@@ -698,6 +709,73 @@ final class TuiAtlasPainter extends CustomPainter {
         ),
       );
     }
+  }
+
+  int _prepareVisibleHoveredLinkBounds(
+    ResolvedTerminalLink link,
+    List<TerminalLinkRowSpan>? rowSpans,
+    int cols,
+    int rows,
+  ) {
+    if (rowSpans != null) {
+      return _prepareVisibleRowSpans(rowSpans, cols, rows);
+    }
+    _visibleLinkMinRow = -1;
+    _visibleLinkRowSpans = null;
+    final bounds = _visibleHoveredLinkBounds(link, cols, rows);
+    if (bounds == null) return 0;
+    _visibleLinkStartIdx = bounds.startIdx;
+    _visibleLinkEndIdx = bounds.endIdx;
+    return bounds.endIdx - bounds.startIdx + 1;
+  }
+
+  static TerminalLinkRowSpan? _clipVisibleRowSpan(
+    TerminalLinkRowSpan span,
+    int cols,
+    int rows,
+  ) {
+    if (span.row < 0 || span.row >= rows) return null;
+    if (span.startCol >= cols || span.endCol < 0) return null;
+    final startCol = span.startCol.clamp(0, cols - 1);
+    final endCol = span.endCol.clamp(0, cols - 1);
+    if (endCol < startCol) return null;
+    return (row: span.row, startCol: startCol, endCol: endCol);
+  }
+
+  int _prepareVisibleRowSpans(
+    List<TerminalLinkRowSpan> rowSpans,
+    int cols,
+    int rows,
+  ) {
+    _visibleLinkStartIdx = -1;
+    _visibleLinkEndIdx = -1;
+    if (cols <= 0 || rows <= 0 || rowSpans.isEmpty) return 0;
+    final clipped = <TerminalLinkRowSpan>[
+      for (final span in rowSpans) ?_clipVisibleRowSpan(span, cols, rows),
+    ];
+    if (clipped.isEmpty) return 0;
+    var minRow = clipped.first.row;
+    var maxRow = minRow;
+    for (final span in clipped) {
+      minRow = math.min(minRow, span.row);
+      maxRow = math.max(maxRow, span.row);
+    }
+    final table = List<({int startCol, int endCol, int baseOffset})?>.filled(
+      maxRow - minRow + 1,
+      null,
+    );
+    var offset = 0;
+    for (final span in clipped) {
+      table[span.row - minRow] = (
+        startCol: span.startCol,
+        endCol: span.endCol,
+        baseOffset: offset,
+      );
+      offset += span.endCol - span.startCol + 1;
+    }
+    _visibleLinkMinRow = minRow;
+    _visibleLinkRowSpans = table;
+    return offset;
   }
 
   static ({int startIdx, int endIdx})? _visibleHoveredLinkBounds(
@@ -722,15 +800,6 @@ final class TuiAtlasPainter extends CustomPainter {
     final endIdx = endRow * cols + endCol;
     if (endIdx < startIdx) return null;
     return (startIdx: startIdx, endIdx: endIdx);
-  }
-
-  static int _hoveredLinkCellCount(
-    ResolvedTerminalLink link,
-    int cols,
-    int rows,
-  ) {
-    final bounds = _visibleHoveredLinkBounds(link, cols, rows);
-    return bounds == null ? 0 : bounds.endIdx - bounds.startIdx + 1;
   }
 
   static bool _isDarkArgb(int argb) {
@@ -955,6 +1024,14 @@ final class TuiAtlasPainter extends CustomPainter {
   }
 
   int _hoveredLinkIndex(int x, int y) {
+    final rowSpans = _visibleLinkRowSpans;
+    if (rowSpans != null) {
+      final rowIdx = y - _visibleLinkMinRow;
+      if (rowIdx < 0 || rowIdx >= rowSpans.length) return -1;
+      final span = rowSpans[rowIdx];
+      if (span == null || x < span.startCol || x > span.endCol) return -1;
+      return span.baseOffset + (x - span.startCol);
+    }
     if (_visibleLinkStartIdx < 0) return -1;
     final idx = y * buffer.width + x;
     if (idx < _visibleLinkStartIdx || idx > _visibleLinkEndIdx) return -1;
@@ -2109,6 +2186,7 @@ final class TuiAtlasPainter extends CustomPainter {
       oldDelegate._selectionColBounds != _selectionColBounds ||
       oldDelegate.selectionBoxMode != selectionBoxMode ||
       oldDelegate.hoveredLink != hoveredLink ||
+      !listEquals(oldDelegate.hoveredLinkRowSpans, hoveredLinkRowSpans) ||
       oldDelegate.hoveredLinkStyler != hoveredLinkStyler ||
       (hoveredLink != null && hoveredLinkStyler != null) ||
       oldDelegate.kittyImages != kittyImages ||

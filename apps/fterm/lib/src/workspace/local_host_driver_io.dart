@@ -579,6 +579,10 @@ final class _IoLocalPaneHost implements LocalPaneHost {
     _session.terminal.setColorScheme(brightness);
   }
 
+  @override
+  bool isLiveRowWrapped(int row) =>
+      !_disposed && _session.terminal.isRowWrapped(row);
+
   Future<void> _disposeLocalPty() async {
     await port.dispose();
     await _session.dispose();

@@ -85,8 +85,10 @@ export 'src/util/url_launcher.dart'
 export 'package:termui/ui/widgets/interactive/selection_controller.dart'
     show
         ResolvedTerminalLink,
+        ResolvedTerminalLinkDetail,
         SelectionMode,
         SelectionRegion,
+        TerminalLinkRowSpan,
         TerminalSelectionController,
         VirtualLineLookup,
         VirtualLineSlice;
