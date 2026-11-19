@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
@@ -29,8 +30,9 @@ final class FtermOverlayHost extends StatelessWidget {
   /// Whether this host renders in Web mode (hides native desktop update UI).
   final bool isWeb;
 
-  /// Optional callback capturing the active terminal pane as a PNG file.
-  final Future<String?> Function()? onCaptureScreenshot;
+  /// Optional callback capturing the active terminal pane as a [ui.Image]
+  /// (ownership transfers to the caller for annotation and disposal).
+  final Future<ui.Image?> Function()? onCaptureScreenshot;
 
   /// Creates the active modal overlay layer, or `SizedBox.shrink()` when idle.
   const FtermOverlayHost({

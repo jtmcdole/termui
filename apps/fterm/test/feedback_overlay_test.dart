@@ -1,5 +1,6 @@
 import 'dart:io' show Directory, File;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/services.dart' show LogicalKeyboardKey;
@@ -536,10 +537,39 @@ void main() {
           findsOneWidget,
         );
 
-        // 3. Tap Save Screenshot to exercise FtermShellScaffold._captureFocusedPaneScreenshot.
+        // 3. Tap Screenshot... -> opens editor -> drag a blackout -> Save PNG.
         await tester.tap(
           find.byKey(const ValueKey('feedback-save-screenshot')),
         );
+        await tester.pump();
+        for (var i = 0; i < 40; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 25)),
+          );
+          await tester.pump();
+          if (find
+              .byKey(const ValueKey('fterm-screenshot-editor'))
+              .evaluate()
+              .isNotEmpty) {
+            break;
+          }
+        }
+        expect(
+          find.byKey(const ValueKey('fterm-screenshot-editor')),
+          findsOneWidget,
+        );
+        await tester.pump(const Duration(milliseconds: 250));
+        final canvasRect = tester.getRect(
+          find.byKey(const ValueKey('screenshot-editor-canvas')),
+        );
+        await tester.dragFrom(
+          canvasRect.center - const Offset(60, 30),
+          const Offset(120, 60),
+        );
+        await tester.pump();
+        expect(find.textContaining('1 blackout'), findsOneWidget);
+
+        await tester.tap(find.byKey(const ValueKey('screenshot-editor-save')));
         await tester.pump();
         for (var i = 0; i < 40; i++) {
           await tester.runAsync(
@@ -561,19 +591,18 @@ void main() {
         final savedMatch = RegExp(
           r'Saved to (.+?) —',
         ).firstMatch(noticeText.data ?? '');
-        if (savedMatch != null) {
-          final savedFile = File(savedMatch.group(1)!);
-          expect(savedFile.existsSync(), isTrue);
-          addTearDown(() async {
-            if (savedFile.existsSync()) await savedFile.delete();
-          });
-        }
+        expect(savedMatch, isNotNull);
+        final savedFile = File(savedMatch!.group(1)!);
+        expect(savedFile.existsSync(), isTrue);
+        addTearDown(() async {
+          if (savedFile.existsSync()) await savedFile.delete();
+        });
         expect(launchedUris, isEmpty);
       },
     );
 
     testWidgets(
-      'Save Screenshot attaches basename only to Markdown and surfaces capture failure cleanly',
+      'Screenshot editor attaches basename only to Markdown, preserves edits on reopen, and surfaces failures cleanly',
       (tester) async {
         await tester.binding.setSurfaceSize(const Size(1280, 820));
         addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -585,7 +614,8 @@ void main() {
         addTearDown(() => tester.runAsync(harness.dispose));
 
         final launchedUris = <Uri>[];
-        var shouldThrow = false;
+        final savedPngSizes = <int>[];
+        var shouldThrowOnCapture = false;
 
         final ws = FtermWorkspaceController(
           launchConfig: CastLaunchConfig(token: harness.token),
@@ -612,21 +642,46 @@ void main() {
             await Future<void>.delayed(const Duration(milliseconds: 10));
           }
         });
-        ws.setOverlay(FtermOverlay.feedback);
+
+        final palette = FtermOverlayPalette.fromTerminalTheme(
+          ws.activeTerminalTheme,
+        );
+
+        Future<ui.Image?> captureSyntheticImage() async {
+          if (shouldThrowOnCapture) throw StateError('capture failed');
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, 200, 120));
+          canvas.drawRect(
+            const Rect.fromLTWH(0, 0, 200, 120),
+            Paint()..color = const Color(0xFF102030),
+          );
+          final picture = recorder.endRecording();
+          try {
+            return await picture.toImage(200, 120);
+          } finally {
+            picture.dispose();
+          }
+        }
 
         await tester.pumpWidget(
           MaterialApp(
             debugShowCheckedModeBanner: false,
             home: Scaffold(
-              body: ListenableBuilder(
-                listenable: ws.chromeNotifier,
-                builder: (_, _) => FtermOverlayHost(
-                  workspace: ws,
-                  onOpenUrl: launchedUris.add,
-                  onCaptureScreenshot: () async {
-                    if (shouldThrow) throw StateError('disk full');
-                    return r'C:\Users\alice/screenshot_99.png';
-                  },
+              body: Center(
+                child: SizedBox(
+                  width: 560,
+                  height: 620,
+                  child: FtermFeedbackOverlay(
+                    workspace: ws,
+                    palette: palette,
+                    onOpenUrl: launchedUris.add,
+                    isWeb: false,
+                    onCaptureScreenshot: captureSyntheticImage,
+                    onSaveScreenshot: (_, bytes) async {
+                      savedPngSizes.add(bytes.length);
+                      return r'C:\Users\alice/screenshot_99.png';
+                    },
+                  ),
                 ),
               ),
             ),
@@ -634,12 +689,56 @@ void main() {
         );
         await tester.pumpAndSettle();
 
+        // 1. Capture -> drag blackout -> Save PNG.
         await tester.tap(
           find.byKey(const ValueKey('feedback-save-screenshot')),
         );
+        await tester.pump();
+        for (var i = 0; i < 40; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+          if (find
+              .byKey(const ValueKey('fterm-screenshot-editor'))
+              .evaluate()
+              .isNotEmpty) {
+            break;
+          }
+        }
+        expect(
+          find.byKey(const ValueKey('fterm-screenshot-editor')),
+          findsOneWidget,
+        );
         await tester.pumpAndSettle();
+        final canvasRect = tester.getRect(
+          find.byKey(const ValueKey('screenshot-editor-canvas')),
+        );
+        await tester.dragFrom(
+          canvasRect.center - const Offset(60, 30),
+          const Offset(120, 60),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('screenshot-editor-save')));
+        for (var i = 0; i < 40; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump();
+          if (find
+              .byKey(const ValueKey('feedback-status-notice'))
+              .evaluate()
+              .isNotEmpty) {
+            break;
+          }
+        }
+        await tester.pumpAndSettle();
+        expect(savedPngSizes, hasLength(1));
+        expect(savedPngSizes.single, greaterThan(0));
         expect(find.textContaining('screenshot_99.png'), findsOneWidget);
+        expect(find.text('Edit Screenshot'), findsOneWidget);
 
+        // 2. Markdown uses basename only (no username path leak).
         await tester.tap(find.byKey(const ValueKey('feedback-open-github')));
         await tester.pumpAndSettle();
         expect(launchedUris, hasLength(1));
@@ -647,7 +746,41 @@ void main() {
         expect(body, contains('screenshot_99.png'));
         expect(body, isNot(contains('alice')));
 
-        shouldThrow = true;
+        // 3. Reopening Edit Screenshot preserves prior annotations.
+        await tester.tap(
+          find.byKey(const ValueKey('feedback-save-screenshot')),
+        );
+        await tester.pumpAndSettle();
+        expect(find.textContaining('1 blackout'), findsOneWidget);
+        await tester.tap(
+          find.byKey(const ValueKey('screenshot-editor-cancel')),
+        );
+        await tester.pumpAndSettle();
+
+        // 4. Fresh overlay surfaces capture failure cleanly.
+        shouldThrowOnCapture = true;
+        await tester.pumpWidget(
+          MaterialApp(
+            debugShowCheckedModeBanner: false,
+            home: Scaffold(
+              body: Center(
+                child: SizedBox(
+                  width: 560,
+                  height: 620,
+                  child: FtermFeedbackOverlay(
+                    key: const ValueKey('failing-feedback-overlay'),
+                    workspace: ws,
+                    palette: palette,
+                    onOpenUrl: launchedUris.add,
+                    isWeb: false,
+                    onCaptureScreenshot: captureSyntheticImage,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
         await tester.tap(
           find.byKey(const ValueKey('feedback-save-screenshot')),
         );
