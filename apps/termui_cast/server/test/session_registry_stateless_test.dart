@@ -2623,4 +2623,163 @@ void _registerUnsubscribedTitleBurstTest(WsRelayHandler Function() getHandler) {
       check(deliveredChunk.rows.single.characters.single).equals('z');
     },
   );
+
+  test(
+    'forwardCasterKittyChunkBytes guards session ownership, drains pendingControlSync, and fans out valid frames',
+    () async {
+      final registry = SessionRegistry(
+        maxOutboundFrames: 4,
+        maxOutboundBytes: 65536,
+      );
+      addTearDown(registry.close);
+      const sessionId = SessionId('sess-kitty-forward');
+
+      final casterOut = StreamController<Uint8List>();
+      addTearDown(casterOut.close);
+      final casterInbox = <CastMessage>[];
+      final casterSub = casterOut.stream.listen((raw) {
+        casterInbox.add(BufferFrameCodec.decode(raw));
+      });
+      addTearDown(casterSub.cancel);
+      final caster = registry.registerCasterPeer(sink: casterOut.sink);
+      registry.registerSession(
+        caster,
+        const RegisterSessionFrame(
+          sessionId: sessionId,
+          title: 'kitty',
+          cols: 10,
+          rows: 2,
+        ),
+      );
+
+      final client1Out = StreamController<Uint8List>();
+      addTearDown(client1Out.close);
+      final client1Inbox = <CastMessage>[];
+      final client1Sub = client1Out.stream.listen((raw) {
+        client1Inbox.add(BufferFrameCodec.decode(raw));
+      });
+      addTearDown(client1Sub.cancel);
+      final client1 = registry.registerClientPeer(
+        sink: client1Out.sink,
+        closeWithCode: (_, _) async {},
+      );
+      registry.subscribeClient(
+        client1,
+        const SubscribeSessionFrame(sessionId: sessionId, cols: 10, rows: 2),
+      );
+
+      check(
+        registry.forwardCasterBufferBytes(
+          caster,
+          BufferFrameCodec.encode(
+            BufferSnapshotFrame(
+              snapshot: BufferSnapshot.fromBuffer(
+                sessionId: sessionId,
+                seq: 1,
+                buffer: Buffer.blank(10, 2),
+                cursor: CursorState.origin,
+                modes: TerminalModes.defaults,
+              ),
+            ),
+          ),
+        ),
+      ).isTrue();
+      await pumpEventQueue();
+      client1Inbox.clear();
+      casterInbox.clear();
+
+      final decodedKittyChunk = KittyImageChunkFrame(
+        sessionId: sessionId,
+        imageId: 88,
+        pixelWidth: 2,
+        pixelHeight: 2,
+        gridCols: 1,
+        gridRows: 1,
+        totalDecodedBytes: 16,
+        totalWireBytes: 16,
+        chunkIndex: 0,
+        chunkCount: 1,
+        data: Uint8List(16),
+      );
+      final validChunkBytes = BufferFrameCodec.encode(decodedKittyChunk);
+
+      // Fill caster outbound pump to trigger pendingControlSync, then verify
+      // forwardCasterKittyChunkBytes flushes control sync on subscribe and unsubscribe.
+      casterSub.pause();
+      for (var i = 0; i < 4; i++) {
+        registry.forwardClientInput(
+          client1,
+          InputFrame(
+            sessionId: sessionId,
+            data: Uint8List.fromList([0x41 + i]),
+          ),
+        );
+      }
+      final client2Out = StreamController<Uint8List>();
+      addTearDown(client2Out.close);
+      final client2Sub = client2Out.stream.listen((_) {});
+      addTearDown(client2Sub.cancel);
+      final client2 = registry.registerClientPeer(
+        sink: client2Out.sink,
+        closeWithCode: (_, _) async {},
+      );
+      registry.subscribeClient(
+        client2,
+        const SubscribeSessionFrame(sessionId: sessionId, cols: 10, rows: 2),
+      );
+      check(
+        registry.forwardCasterKittyChunkBytes(caster, validChunkBytes),
+      ).isTrue();
+      casterSub.resume();
+      await pumpEventQueue();
+      check(
+        casterInbox.whereType<SubscriberCountFrame>().last.subscriberCount,
+      ).equals(2);
+
+      casterSub.pause();
+      for (var i = 0; i < 4; i++) {
+        registry.forwardClientInput(
+          client1,
+          InputFrame(
+            sessionId: sessionId,
+            data: Uint8List.fromList([0x51 + i]),
+          ),
+        );
+      }
+      registry.unsubscribeClient(client2, sessionId);
+      check(
+        registry.forwardCasterKittyChunkBytes(caster, validChunkBytes),
+      ).isTrue();
+      casterSub.resume();
+      await pumpEventQueue();
+      check(
+        casterInbox.whereType<SubscriberCountFrame>().last.subscriberCount,
+      ).equals(1);
+
+      check(
+        registry.forwardCasterKittyChunkBytes(
+          caster,
+          BufferFrameCodec.encode(
+            KittyImageChunkFrame(
+              sessionId: const SessionId('wrong-sess'),
+              imageId: 88,
+              pixelWidth: 2,
+              pixelHeight: 2,
+              gridCols: 1,
+              gridRows: 1,
+              totalDecodedBytes: 16,
+              totalWireBytes: 16,
+              chunkIndex: 0,
+              chunkCount: 1,
+              data: Uint8List(16),
+            ),
+          ),
+        ),
+      ).isFalse();
+      await pumpEventQueue();
+      check(
+        client1Inbox.whereType<KittyImageChunkFrame>().map((f) => f.imageId),
+      ).deepEquals([88, 88]);
+    },
+  );
 }
