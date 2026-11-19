@@ -322,7 +322,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   static final Set<LogicalKeyboardKey> _latchedClearedModifiers = {};
 
   MouseCursor _currentCursor = SystemMouseCursors.basic;
-  ResolvedTerminalLink? _hoveredLink;
+  ResolvedTerminalLinkDetail? _hoveredLinkDetail;
+  ResolvedTerminalLink? get _hoveredLink => _hoveredLinkDetail?.link;
   ({int col, int row})? _lastHoverCell;
   bool _hoverLinkResolved = false;
   bool _isLinkModifierActive = false;
@@ -801,7 +802,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       _gestureMachine.dispatch(.reset);
     }
     if (oldWidget.enableBuiltinLinkOpen && !widget.enableBuiltinLinkOpen) {
-      _hoveredLink = null;
+      _hoveredLinkDetail = null;
       _lastHoverCell = null;
       _hoverLinkResolved = false;
       _isLinkModifierActive = false;
@@ -953,7 +954,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   void _onTerminalBuiltinLinkOpenChanged(bool enabled) {
     if (!mounted) return;
     if (!enabled) {
-      _hoveredLink = null;
+      _hoveredLinkDetail = null;
       _lastHoverCell = null;
       _hoverLinkResolved = false;
       _isLinkModifierActive = false;
@@ -1176,9 +1177,14 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _linkHoverTimer = null;
   }
 
+  static bool _linkDetailsEqual(
+    ResolvedTerminalLinkDetail? a,
+    ResolvedTerminalLinkDetail? b,
+  ) => a?.link == b?.link && listEquals(a?.rowSpans, b?.rowSpans);
+
   bool _refreshHoverLinkForBufferChange() {
     _hoverLinkResolved = false;
-    final prevLink = _hoveredLink;
+    final prevDetail = _hoveredLinkDetail;
     final prevMod = _isLinkModifierActive;
     final hoverCell = _lastHoverCell;
     final linkMod = _isLinkOpenModifierPressed();
@@ -1186,32 +1192,43 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         _gestureMachine.isSelectingGesture ||
         hoverCell == null ||
         !linkMod) {
-      _hoveredLink = null;
+      _hoveredLinkDetail = null;
       _isLinkModifierActive = _builtinLinkOpenEnabled && linkMod;
-      return _hoveredLink != prevLink || _isLinkModifierActive != prevMod;
+      return !_linkDetailsEqual(_hoveredLinkDetail, prevDetail) ||
+          _isLinkModifierActive != prevMod;
     }
-    _hoveredLink = _resolveLinkAt(_activeBuffer, hoverCell.col, hoverCell.row);
+    _hoveredLinkDetail = _resolveLinkDetailAt(
+      _activeBuffer,
+      hoverCell.col,
+      hoverCell.row,
+    );
     _hoverLinkResolved = true;
     _isLinkModifierActive = true;
-    return _hoveredLink != prevLink || !prevMod;
+    return !_linkDetailsEqual(_hoveredLinkDetail, prevDetail) || !prevMod;
   }
 
   void _syncLinkModifierState() {
     if (!_builtinLinkOpenEnabled) return;
     final pressed = _isLinkOpenModifierPressed();
     if (pressed == _isLinkModifierActive) return;
-    final prevLink = _hoveredLink;
+    final prevDetail = _hoveredLinkDetail;
     _isLinkModifierActive = pressed;
     if (!pressed) {
-      _hoveredLink = null;
+      _hoveredLinkDetail = null;
       _hoverLinkResolved = false;
     } else if (_lastHoverCell case final cell?
         when !_gestureMachine.isSelectingGesture && !_hoverLinkResolved) {
-      _hoveredLink = _resolveLinkAt(_activeBuffer, cell.col, cell.row);
+      _hoveredLinkDetail = _resolveLinkDetailAt(
+        _activeBuffer,
+        cell.col,
+        cell.row,
+      );
       _hoverLinkResolved = true;
     }
     _syncLinkHoverTicker();
-    if (mounted && (_hoveredLink != prevLink || _hoveredLink != null)) {
+    if (mounted &&
+        (!_linkDetailsEqual(_hoveredLinkDetail, prevDetail) ||
+            _hoveredLinkDetail != null)) {
       setState(() {});
     }
   }
@@ -1623,7 +1640,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     final linkMod = _isLinkOpenModifierPressed();
     if (!linkMod || _gestureMachine.isSelectingGesture) {
       final changed = _hoveredLink != null || linkMod != _isLinkModifierActive;
-      _hoveredLink = null;
+      _hoveredLinkDetail = null;
       _hoverLinkResolved = false;
       _isLinkModifierActive = linkMod;
       return (null, changed);
@@ -1633,10 +1650,12 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       _isLinkModifierActive = linkMod;
       return (_hoveredLink, changed);
     }
-    final nextLink = _resolveLinkAt(_activeBuffer, col, row);
+    final nextDetail = _resolveLinkDetailAt(_activeBuffer, col, row);
+    final nextLink = nextDetail?.link;
     final changed =
-        nextLink != _hoveredLink || linkMod != _isLinkModifierActive;
-    _hoveredLink = nextLink;
+        !_linkDetailsEqual(nextDetail, _hoveredLinkDetail) ||
+        linkMod != _isLinkModifierActive;
+    _hoveredLinkDetail = nextDetail;
     _hoverLinkResolved = true;
     _isLinkModifierActive = linkMod;
     if (changed) {
@@ -1645,7 +1664,11 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     return (nextLink, changed);
   }
 
-  ResolvedTerminalLink? _resolveLinkAt(Buffer? buf, int col, int row) {
+  ResolvedTerminalLinkDetail? _resolveLinkDetailAt(
+    Buffer? buf,
+    int col,
+    int row,
+  ) {
     if (buf == null ||
         col < 0 ||
         col >= buf.width ||
@@ -1655,20 +1678,24 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     }
     final lookup =
         widget.linkLineLookup ?? (int vRow) => _bufferLineSlice(buf, vRow);
-    final resolved = TerminalSelectionController.resolveLinkSpanAt(
+    final resolved = TerminalSelectionController.resolveLinkSpanDetailAt(
       lookup: lookup,
       col: col,
       virtualRow: row,
     );
     if (resolved == null) return null;
-    final parsed = parseAllowedExternalUri(resolved.uri);
+    final parsed = parseAllowedExternalUri(resolved.link.uri);
     if (parsed == null) return null;
+    final link = resolved.link;
     return (
-      uri: parsed.toString(),
-      startCol: resolved.startCol,
-      startRow: resolved.startRow,
-      endCol: resolved.endCol,
-      endRow: resolved.endRow,
+      link: (
+        uri: '$parsed',
+        startCol: link.startCol,
+        startRow: link.startRow,
+        endCol: link.endCol,
+        endRow: link.endRow,
+      ),
+      rowSpans: resolved.rowSpans,
     );
   }
 
@@ -1685,7 +1712,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
 
   void _handlePointerExit(PointerExitEvent event) {
     final hadHoveredLink = _hoveredLink != null;
-    _hoveredLink = null;
+    _hoveredLinkDetail = null;
     _lastHoverCell = null;
     _hoverLinkResolved = false;
     _stopLinkHoverTicker();
@@ -2054,6 +2081,9 @@ final class TerminalSurfaceState extends State<TerminalSurface>
                 topVirtualRow: _effectiveTopVirtualRow,
                 topVirtualRowProvider: _readEffectiveTopVirtualRow,
                 hoveredLink: _isLinkHovered ? _hoveredLink : null,
+                hoveredLinkRowSpans: _isLinkHovered
+                    ? _hoveredLinkDetail?.rowSpans
+                    : null,
                 hoveredLinkStyler: widget.hoveredLinkStyler,
                 kittyImages: _kittyCache.images,
                 kittyImagesById: _kittyCache.imagesById,

@@ -147,6 +147,9 @@ abstract interface class LocalPaneHost {
   /// Updates the color-scheme polarity answered to child terminal queries.
   void setColorScheme(tui.TerminalBrightness brightness);
 
+  /// Whether primary-screen live row [row] soft-wrapped from the previous row.
+  bool isLiveRowWrapped(int row);
+
   /// Stops any active share and closes this local shell pane cleanly.
   Future<void> dispose();
 }

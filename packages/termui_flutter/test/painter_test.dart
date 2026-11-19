@@ -677,6 +677,96 @@ void main() {
     },
   );
 
+  test(
+    'TuiAtlasPainter highlights only exact hoveredLinkRowSpans cells and skips leading/trailing spaces',
+    () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 16.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(atlas.image.dispose);
+
+      Future<Uint8List> paintWith(
+        Buffer buffer, {
+        ResolvedTerminalLink? link,
+        List<TerminalLinkRowSpan>? rowSpans,
+        HoveredLinkStyler? styler,
+      }) async {
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder);
+        final size = Size(
+          buffer.width * atlas.cellWidth,
+          buffer.height * atlas.cellHeight,
+        );
+        TuiAtlasPainter(
+          buffer: buffer,
+          atlas: atlas,
+          fontFamily: 'Roboto Mono',
+          fallbackPainters: const {},
+          onMissingGlyphs: null,
+          hoveredLink: link,
+          hoveredLinkRowSpans: rowSpans,
+          hoveredLinkStyler: styler,
+        ).paint(canvas, size);
+        final pic = recorder.endRecording();
+        final img = await pic.toImage(size.width.ceil(), size.height.ceil());
+        pic.dispose();
+        addTearDown(img.dispose);
+        return (await img.toByteData())!.buffer.asUint8List();
+      }
+
+      final buf = Buffer(12, 3)
+        ..writeString(0, 0, '  [ https:', const Style())
+        ..writeString(0, 1, '  //a.dev/  ', const Style())
+        ..writeString(0, 2, '  path ]    ', const Style());
+
+      const link = (
+        uri: 'https://a.dev/path',
+        startCol: 4,
+        startRow: 0,
+        endCol: 5,
+        endRow: 2,
+      );
+      const rowSpans = <TerminalLinkRowSpan>[
+        (row: 0, startCol: 4, endCol: 9), // 6 cells: 'https:'
+        (row: 1, startCol: 2, endCol: 9), // 8 cells: '//a.dev/'
+        (row: 2, startCol: 2, endCol: 5), // 4 cells: 'path'
+      ];
+
+      int? observedCount;
+      final styledBytes = await paintWith(
+        buf,
+        link: link,
+        rowSpans: rowSpans,
+        styler: (_, count, _, styles) {
+          observedCount = count;
+          styles.fillBackground(0xFF1B263B);
+          styles.fillModifiers(Modifier.underline | Modifier.bold);
+          for (var i = 0; i < count; i++) {
+            styles.setForeground(i, 0xFF33AAFF);
+          }
+        },
+      );
+      // Total cells = 6 + 8 + 4 = 18 (not linear span across trailing/leading spaces).
+      expect(observedCount, equals(18));
+
+      const linkStyle = Style(
+        foreground: Color(0x33, 0xAA, 0xFF),
+        background: Color(0x1B, 0x26, 0x3B),
+        modifiers: Modifier.underline | Modifier.bold,
+      );
+      final expectedBuf = Buffer(12, 3)
+        ..writeString(0, 0, '  [ ', const Style())
+        ..writeString(4, 0, 'https:', linkStyle)
+        ..writeString(0, 1, '  ', const Style())
+        ..writeString(2, 1, '//a.dev/', linkStyle)
+        ..writeString(0, 2, '  ', const Style())
+        ..writeString(2, 2, 'path', linkStyle)
+        ..writeString(6, 2, ' ]    ', const Style());
+      expect(styledBytes, equals(await paintWith(expectedBuf)));
+    },
+  );
+
   _defineThemePalettePainterTests();
 }
 

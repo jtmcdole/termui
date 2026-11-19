@@ -639,6 +639,9 @@ final class _FakeLocalPaneHost implements LocalPaneHost {
   void setColorScheme(tui.TerminalBrightness brightness) {}
 
   @override
+  bool isLiveRowWrapped(int row) => false;
+
+  @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

@@ -1417,6 +1417,9 @@ final class _ExitTestLocalPaneHost implements LocalPaneHost {
   }
 
   @override
+  bool isLiveRowWrapped(int row) => _session.terminal.isRowWrapped(row);
+
+  @override
   Future<void> dispose() async {
     if (disposed) return;
     disposed = true;

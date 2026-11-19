@@ -1617,6 +1617,9 @@ final class _FakeLocalPaneHost implements LocalPaneHost {
   void setColorScheme(tui.TerminalBrightness brightness) {}
 
   @override
+  bool isLiveRowWrapped(int row) => false;
+
+  @override
   Future<void> dispose() async {
     await stopShare();
     await port.dispose();
@@ -3407,6 +3410,9 @@ final class _ConfigurableLocalPaneHost implements LocalPaneHost {
   void setColorScheme(tui.TerminalBrightness brightness) {}
 
   @override
+  bool isLiveRowWrapped(int row) => false;
+
+  @override
   Future<void> dispose() async {
     if (disposed) return;
     disposed = true;
@@ -4195,6 +4201,9 @@ final class _GateableLocalPaneHost implements LocalPaneHost {
 
   @override
   void setColorScheme(tui.TerminalBrightness brightness) {}
+
+  @override
+  bool isLiveRowWrapped(int row) => false;
 
   @override
   Future<void> dispose() async {
