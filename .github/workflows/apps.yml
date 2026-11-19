@@ -124,7 +124,21 @@ jobs:
       - name: Test fterm
         if: matrix.suite == 'fterm'
         working-directory: apps/fterm
-        run: flutter test --no-pub
+        shell: bash
+        run: |
+          extra_args=()
+          if [ "${UPDATE_GOLDENS:-false}" = "true" ]; then
+            extra_args+=(--update-goldens)
+          fi
+          flutter test --no-pub "${extra_args[@]}"
+
+      - name: Upload Golden Failures
+        if: failure() && runner.os == 'Linux' && matrix.suite == 'fterm'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fterm-golden-failures
+          path: apps/fterm/test/failures/*.png
+          if-no-files-found: ignore
 
       - name: Build WASM web viewer (no CDN)
         if: matrix.suite == 'web'

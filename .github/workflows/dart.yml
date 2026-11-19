@@ -86,6 +86,19 @@ jobs:
 
       - name: Run ${{ matrix.suite }} unit tests
         shell: pwsh
+        run: |
+          if ($env:SUITE -eq 'flutter' -and $env:UPDATE_GOLDENS -eq 'true') {
+            dart run melos exec -c 1 --flutter --dir-exists=test --ignore=fterm -- "flutter test --no-pub --reporter=expanded --update-goldens"
+          } else {
+            dart run melos run "test:$env:SUITE" --no-select
+          }
         env:
           SUITE: ${{ matrix.suite }}
-        run: dart run melos run "test:$env:SUITE" --no-select
+
+      - name: Upload Golden Failures
+        if: failure() && matrix.os == 'ubuntu-latest' && matrix.suite == 'flutter'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: flutter-golden-failures
+          path: packages/**/test/failures/*.png
+          if-no-files-found: ignore

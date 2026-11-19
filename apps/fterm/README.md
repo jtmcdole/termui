@@ -111,6 +111,43 @@ flutter build web --wasm --no-web-resources-cdn
 flutter build macos
 ```
 
+### Updating Flutter Golden Tests (Linux-only)
+
+Flutter UI screenshot goldens (`apps/fterm/test/goldens/` and `packages/termui_flutter/test/goldens/`) run strictly on **Linux** (`Platform.isLinux`) for deterministic FreeType font rasterization across CI runners.
+
+On a Linux host:
+
+```bash
+flutter test --update-goldens
+```
+
+On macOS or Windows with Docker and [`gh act`](https://github.com/nektos/gh-act), run the Linux workflow locally to inspect failures or accept golden updates:
+
+```shell
+# Verify goldens locally in a Linux container (writes diffs into test/failures/)
+gh act \
+  -b \
+  --container-architecture linux/amd64 \
+  --container-options="--tty" \
+  --workflows ".github/workflows/apps.yml" \
+  -j test-apps \
+  --matrix os:ubuntu-latest \
+  --matrix suite:fterm
+
+# Update fterm goldens locally in a Linux container
+gh act \
+  -b \
+  --env UPDATE_GOLDENS=true \
+  --container-architecture linux/amd64 \
+  --container-options="--tty" \
+  --workflows ".github/workflows/apps.yml" \
+  -j test-apps \
+  --matrix os:ubuntu-latest \
+  --matrix suite:fterm
+```
+
+On GitHub Actions, failed Linux golden runs automatically upload `test/failures/*.png` as a `fterm-golden-failures` (or `flutter-golden-failures`) workflow artifact so you can review or download the rendered `*_testImage.png` without running Docker locally.
+
 ### Desktop Versioning & Testing Auto-Updates
 
 `fterm` reads its compiled semantic version from `appBuildName` (`package:flutter/services.dart`), which Flutter (`>=3.41.0`) populates automatically via `FLUTTER_BUILD_NAME`:
