@@ -3,6 +3,56 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-19
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.20.0`](#termui---v0200)
+ - [`termui_audio` - `v0.9.0`](#termui_audio---v090)
+ - [`termui_flutter` - `v0.15.0`](#termui_flutter---v0150)
+ - [`termui_pty` - `v0.15.0`](#termui_pty---v0150)
+
+Packages with other changes:
+
+ - [`termui_recorder` - `v0.10.9`](#termui_recorder---v0109)
+ - [`termui_test` - `v0.4.9`](#termui_test---v049)
+ - [`termui_hotreload` - `v0.6.35`](#termui_hotreload---v0635)
+ - [`termui_tinpot` - `v0.5.7`](#termui_tinpot---v057)
+ - [`termui_audio_flutter` - `v0.5.1`](#termui_audio_flutter---v051)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.9`
+ - `termui_test` - `v0.4.9`
+ - `termui_hotreload` - `v0.6.35`
+ - `termui_tinpot` - `v0.5.7`
+ - `termui_audio_flutter` - `v0.5.1`
+
+---
+
+#### `termui` - `v0.20.0`
+
+ - **BREAKING** **FIX**(termui_pty,termui): encode legacy xterm modifiers and decode double-ESC/SS3 keys.
+
+#### `termui_audio` - `v0.9.0`
+
+ - **BREAKING** **FIX**(cast_protocol,fterm,termui_audio): fix WebSocket close timer, upload dispose, and CI test races.
+
+#### `termui_flutter` - `v0.15.0`
+
+ - **BREAKING** **FIX**(termui_pty,termui): encode legacy xterm modifiers and decode double-ESC/SS3 keys.
+
+#### `termui_pty` - `v0.15.0`
+
+ - **BREAKING** **FIX**(termui_pty,termui): encode legacy xterm modifiers and decode double-ESC/SS3 keys.
+
+
 ## 2026-11-18
 
 ### Changes

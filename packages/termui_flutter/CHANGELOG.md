@@ -1,3 +1,9 @@
+## 0.15.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_pty,termui): encode legacy xterm modifiers and decode double-ESC/SS3 keys.
+
 ## 0.14.0
 
 > Note: This release has breaking changes.
