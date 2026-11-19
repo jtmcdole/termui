@@ -441,49 +441,66 @@ void _defineInputScrollUploadAndLinkTests() {
       late void Function(bool) emitHover;
       late void Function(List<DroppedFileSource>) emitDrop;
 
-      await tester.pumpWidget(
-        FtermApp(
-          config: CastLaunchConfig(token: harness.token),
-          channelFactory: harness.openClientChannel,
-          resizeDebounce: Duration.zero,
-          fileDropBridgeFactory:
-              ({required onDragHoverChanged, required onFilesDropped}) {
-                emitHover = onDragHoverChanged;
-                emitDrop = onFilesDropped;
-                return _TestFileDropBridge(onDispose: () {});
-              },
-        ),
-      );
-      await settleCastApp(tester);
+      try {
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(token: harness.token),
+            channelFactory: harness.openClientChannel,
+            resizeDebounce: Duration.zero,
+            fileDropBridgeFactory:
+                ({required onDragHoverChanged, required onFilesDropped}) {
+                  emitHover = onDragHoverChanged;
+                  emitDrop = onFilesDropped;
+                  return _TestFileDropBridge(onDispose: () {});
+                },
+          ),
+        );
+        await settleCastApp(tester);
 
-      emitHover(true);
-      await tester.pump();
-      expect(find.text('Drop files to upload to remote host'), findsOneWidget);
+        emitHover(true);
+        await tester.pump();
+        expect(
+          find.text('Drop files to upload to remote host'),
+          findsOneWidget,
+        );
 
-      emitHover(false);
-      emitDrop([
-        MemoryDroppedFileSource(
-          name: 'hello.txt',
-          bytes: Uint8List.fromList(utf8.encode('hello-fterm')),
-        ),
-      ]);
-      await tester.pump();
-      expect(
-        find.byKey(const ValueKey('fterm-overlay-fileUpload')),
-        findsOneWidget,
-      );
+        emitHover(false);
+        emitDrop([
+          MemoryDroppedFileSource(
+            name: 'hello.txt',
+            bytes: Uint8List.fromList(utf8.encode('hello-fterm')),
+          ),
+        ]);
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('fterm-overlay-fileUpload')),
+          findsOneWidget,
+        );
 
-      await tester.tap(find.byKey(const ValueKey('upload-submit')));
-      await settleCastApp(tester, cycles: 6);
-      expect(
-        find.byKey(const ValueKey('fterm-overlay-fileUpload')),
-        findsNothing,
-      );
-      final uploadedFile = File('${uploadDir.path}/hello.txt');
-      expect(uploadedFile.existsSync(), isTrue);
-      expect(uploadedFile.readAsStringSync(), equals('hello-fterm'));
-
-      await tester.pumpWidget(const SizedBox.shrink());
+        await tester.tap(find.byKey(const ValueKey('upload-submit')));
+        final dismissed = await settleCastAppUntil(
+          tester,
+          () => find
+              .byKey(const ValueKey('fterm-overlay-fileUpload'))
+              .evaluate()
+              .isEmpty,
+        );
+        expect(
+          dismissed,
+          isTrue,
+          reason: 'FileUpload overlay did not dismiss within timeout',
+        );
+        expect(
+          find.byKey(const ValueKey('fterm-overlay-fileUpload')),
+          findsNothing,
+        );
+        final uploadedFile = File('${uploadDir.path}/hello.txt');
+        expect(uploadedFile.existsSync(), isTrue);
+        expect(uploadedFile.readAsStringSync(), equals('hello-fterm'));
+      } finally {
+        await tester.pumpWidget(const SizedBox.shrink());
+        await settleCastApp(tester, cycles: 2);
+      }
     },
   );
 

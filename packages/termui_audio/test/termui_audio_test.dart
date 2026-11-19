@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:typed_data';
@@ -376,42 +377,47 @@ void main() {
           final wavBytes = generateWaveformPcmWav(
             shape: WaveForm.sin,
             frequency: 440.0,
-            duration: const Duration(milliseconds: 600),
+            duration: const Duration(seconds: 5),
           );
           final buffer = await cli.loadMem('muted_sprite_test.wav', wavBytes);
           final mutedBus = cli.createBus();
-          mutedBus.setVolume(0.0);
+          AudioVoice? voice;
+          try {
+            mutedBus.setVolume(0.0);
 
-          final voice = cli.playSprite(
-            buffer,
-            bus: mutedBus,
-            start: const Duration(milliseconds: 20),
-            duration: const Duration(milliseconds: 350),
-          );
+            voice = cli.playSprite(
+              buffer,
+              bus: mutedBus,
+              start: const Duration(milliseconds: 20),
+              duration: const Duration(seconds: 4),
+            );
 
-          await cli
-              .getVoicePositionStream(
-                voice,
-                interval: const Duration(milliseconds: 10),
-              )
-              .firstWhere((pos) => pos > const Duration(milliseconds: 80))
-              .timeout(const Duration(seconds: 2));
+            await cli
+                .getVoicePositionStream(
+                  voice,
+                  interval: const Duration(milliseconds: 10),
+                )
+                .firstWhere((pos) => pos > const Duration(milliseconds: 80))
+                .timeout(const Duration(seconds: 2));
 
-          final waveform = cli.getWaveform();
-          var peak = 0.0;
-          for (final sample in waveform) {
-            final absVal = sample.abs();
-            if (absVal > peak) peak = absVal;
+            final waveform = cli.getWaveform();
+            var peak = 0.0;
+            for (final sample in waveform) {
+              final absVal = sample.abs();
+              if (absVal > peak) peak = absVal;
+            }
+            expect(
+              peak,
+              equals(0.0),
+              reason:
+                  'Sprite routed through a muted AudioBus must produce 0.0 peak waveform amplitude',
+            );
+          } finally {
+            if (voice != null) {
+              cli.stop(voice);
+            }
+            cli.destroyBus(mutedBus);
           }
-          expect(
-            peak,
-            equals(0.0),
-            reason:
-                'Sprite routed through a muted AudioBus must produce 0.0 peak waveform amplitude',
-          );
-
-          cli.stop(voice);
-          cli.destroyBus(mutedBus);
         } finally {
           await cli.dispose();
         }
@@ -480,22 +486,35 @@ void main() {
       () async {
         final cli = CliAudioEngine();
         await cli.init(enableVisualization: true);
-        final out = Float32List(256);
-        final fetched = await cli.fetchWaveform(out);
-        expect(fetched, same(out));
-        expect(() => cli.fetchWaveform(Float32List(16)), throwsArgumentError);
+        StreamSubscription<Float32List>? sub;
+        try {
+          final out = Float32List(256);
+          final fetched = await cli.fetchWaveform(out);
+          expect(fetched, same(out));
+          expect(() => cli.fetchWaveform(Float32List(16)), throwsArgumentError);
 
-        final received = <Float32List>[];
-        var closed = false;
-        final sub = cli
-            .watchWaveform(interval: const Duration(milliseconds: 20))
-            .listen(received.add, onDone: () => closed = true);
-        await Future<void>.delayed(const Duration(milliseconds: 75));
-        expect(received, isNotEmpty);
-        await cli.dispose();
-        await Future<void>.delayed(Duration.zero);
-        expect(closed, isTrue);
-        await sub.cancel();
+          final received = <Float32List>[];
+          final firstReceived = Completer<void>();
+          final done = Completer<void>();
+          sub = cli
+              .watchWaveform(interval: const Duration(milliseconds: 20))
+              .listen(
+                (frame) {
+                  received.add(frame);
+                  if (!firstReceived.isCompleted) firstReceived.complete();
+                },
+                onDone: () {
+                  if (!done.isCompleted) done.complete();
+                },
+              );
+          await firstReceived.future.timeout(const Duration(seconds: 2));
+          expect(received, isNotEmpty);
+          await cli.dispose();
+          await done.future.timeout(const Duration(seconds: 2));
+        } finally {
+          await sub?.cancel();
+          await cli.dispose();
+        }
 
         final uninitialized = CliAudioEngine();
         await uninitialized.dispose();
@@ -514,23 +533,35 @@ void main() {
         var disposed = false;
         final errors = <Object>[];
         var doneCount = 0;
+        final done = Completer<void>();
         var shouldThrow = true;
-        final sub = createWaveformStream(
-          fetchWaveform: ([_]) async {
-            if (shouldThrow) {
-              shouldThrow = false;
-              throw StateError('wave boom');
-            }
-            disposed = true;
-            return Float32List(256);
-          },
-          isDisposed: () => disposed,
-          interval: const Duration(milliseconds: 20),
-        ).listen((_) {}, onError: errors.add, onDone: () => doneCount += 1);
-        await Future<void>.delayed(const Duration(milliseconds: 180));
-        expect(errors.single, isA<StateError>());
-        expect(doneCount, equals(1));
-        await sub.cancel();
+        final sub =
+            createWaveformStream(
+              fetchWaveform: ([_]) async {
+                if (shouldThrow) {
+                  shouldThrow = false;
+                  throw StateError('wave boom');
+                }
+                disposed = true;
+                return Float32List(256);
+              },
+              isDisposed: () => disposed,
+              interval: const Duration(milliseconds: 20),
+            ).listen(
+              (_) {},
+              onError: errors.add,
+              onDone: () {
+                doneCount += 1;
+                if (!done.isCompleted) done.complete();
+              },
+            );
+        try {
+          await done.future.timeout(const Duration(seconds: 2));
+          expect(errors.single, isA<StateError>());
+          expect(doneCount, equals(1));
+        } finally {
+          await sub.cancel();
+        }
 
         var flipDisposed = false;
         final flipped = createWaveformStream(

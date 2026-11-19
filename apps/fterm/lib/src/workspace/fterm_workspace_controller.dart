@@ -1635,6 +1635,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _uploadCoordinator.cancel();
     clientConnectingEvent.removeListener(repository.bus, _onClientConnecting);
     clientConnectFailedEvent.removeListener(
       repository.bus,

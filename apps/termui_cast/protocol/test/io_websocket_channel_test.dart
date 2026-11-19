@@ -525,6 +525,17 @@ Future<void> _verifyUpgradeHardeningAndTimeoutCleanup() async {
   );
   await stalledSink.close().timeout(const Duration(seconds: 2));
   check(closeTimedOut).isTrue();
+
+  final subCanceled = Completer<void>();
+  final (:channel, closeWithCode: _) = wrapIoBinaryWebSocket(
+    _FakePauseTrackingWebSocket((event) {
+      if (event == 'cancel' && !subCanceled.isCompleted) {
+        subCanceled.complete();
+      }
+    }, hangClose: true),
+  );
+  await channel.sink.close().timeout(const Duration(seconds: 2));
+  await subCanceled.future.timeout(const Duration(seconds: 2));
 }
 
 Future<void> _assertRedirectBlocked() async {
