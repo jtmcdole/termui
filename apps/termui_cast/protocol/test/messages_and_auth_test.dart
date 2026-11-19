@@ -181,6 +181,22 @@ void main() {
             List<double>.generate(256, (i) => (i - 128) / 128.0),
           ),
         ),
+        KittyImageChunkFrame(
+          sessionId: idA,
+          imageId: 0x80000001,
+          version: 2,
+          pixelWidth: 2,
+          pixelHeight: 2,
+          gridCols: 1,
+          gridRows: 1,
+          format: 32,
+          encoding: KittyChunkEncoding.raw,
+          totalDecodedBytes: 16,
+          totalWireBytes: 16,
+          chunkIndex: 0,
+          chunkCount: 1,
+          data: Uint8List(16),
+        ),
         const ErrorFrame(code: 'auth_failed', message: 'Invalid bearer token'),
         const ClipboardFrame(sessionId: idA, text: 'hello 🚀'),
         const ClipboardFrame(sessionId: idB, readBlocked: true),
@@ -434,6 +450,16 @@ void main() {
             check(requestId).equals(33);
             check(samples.length).equals(256);
             check(samples[200]).isCloseTo((200 - 128) / 128.0, 1e-6);
+          case KittyImageChunkFrame(
+            :final sessionId,
+            :final imageId,
+            :final version,
+            :final totalWireBytes,
+          ):
+            check(sessionId).equals(idA);
+            check(imageId).equals(0x80000001);
+            check(version).equals(2);
+            check(totalWireBytes).equals(16);
           case ErrorFrame(:final code, :final message):
             check(code).equals('auth_failed');
             check(message).equals('Invalid bearer token');

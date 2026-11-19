@@ -470,3 +470,80 @@ final class AudioWaveformReplyFrame extends CastMessage {
     required this.samples,
   });
 }
+
+/// Wire byte encoding used by [KittyImageChunkFrame].
+enum KittyChunkEncoding {
+  /// Raw pixel bytes (`format == 32` RGBA8888 or `format == 100` PNG).
+  raw(0),
+
+  /// `deflate-raw` compressed payload bytes bounded to [KittyImageChunkFrame.totalDecodedBytes].
+  deflateRaw(1);
+
+  /// Wire discriminant byte (`0` or `1`).
+  final int code;
+
+  const KittyChunkEncoding(this.code);
+}
+
+/// Bounded wire chunk transferring large Kitty Graphics (`APC G`) textures (`0x1B`).
+final class KittyImageChunkFrame extends CastMessage {
+  /// Source session that owns this texture.
+  final SessionId sessionId;
+
+  /// Positive 32-bit Kitty image identifier (`1 .. 0xFFFFFFFF`).
+  final int imageId;
+
+  /// Monotonic per-image mutation version counter (`uint32`).
+  final int version;
+
+  /// Source image width in pixels (`1 .. 4096`).
+  final int pixelWidth;
+
+  /// Source image height in pixels (`1 .. 4096`).
+  final int pixelHeight;
+
+  /// Target placement width in terminal columns (`1 .. 512`).
+  final int gridCols;
+
+  /// Target placement height in terminal rows (`1 .. 512`).
+  final int gridRows;
+
+  /// Pixel format (`32` = RGBA8888, `100` = PNG).
+  final int format;
+
+  /// Wire compression encoding applied to the full reassembled payload.
+  final KittyChunkEncoding encoding;
+
+  /// Uncompressed decoded byte length (`pixelWidth * pixelHeight * 4` for RGBA32, or PNG byte length).
+  final int totalDecodedBytes;
+
+  /// Total concatenated wire payload bytes across all chunks (`1 .. 16 MiB`).
+  final int totalWireBytes;
+
+  /// Zero-indexed chunk ordinal (`0 .. chunkCount - 1`).
+  final int chunkIndex;
+
+  /// Total number of chunks composing this image transfer (`1 .. 256`).
+  final int chunkCount;
+
+  /// Slice of the wire payload (`1 .. BufferFrameCodec.maxKittyChunkBytes`).
+  final Uint8List data;
+
+  /// Creates a Kitty graphics image chunk frame.
+  const KittyImageChunkFrame({
+    required this.sessionId,
+    required this.imageId,
+    this.version = 0,
+    required this.pixelWidth,
+    required this.pixelHeight,
+    required this.gridCols,
+    required this.gridRows,
+    this.format = 32,
+    this.encoding = KittyChunkEncoding.raw,
+    required this.totalDecodedBytes,
+    required this.totalWireBytes,
+    required this.chunkIndex,
+    required this.chunkCount,
+    required this.data,
+  });
+}
