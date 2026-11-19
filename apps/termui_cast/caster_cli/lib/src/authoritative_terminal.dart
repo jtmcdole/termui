@@ -13,11 +13,39 @@ final int _traceTakeNextFrameId = Tracer.registerString(
 
 const int _maxUncompressedTailBudget = BufferFrameCodec.maxFrameBytes - 256;
 const int _emptyDeltaBaseTailBytes = 9;
+const int _maxInlineImageBytes =
+    _maxUncompressedTailBudget - _emptyDeltaBaseTailBytes;
 const int _maxKittyEntriesPerFrame = 1024;
 const int _maxKittyDimension = 4096;
 const int _maxKittyTotalPixels = 4_194_304;
 const int _maxKittyGridSpan = 512;
+const int _maxKittyChunkCount = 256;
 const int _minPngBytes = 24;
+
+typedef _PreparedKittyWire = ({
+  KittyImageData data,
+  KittyChunkEncoding encoding,
+  Uint8List wireBytes,
+  int totalDecodedBytes,
+});
+
+final class _PendingKittyChunkTransfer {
+  final int imageId;
+  final KittyImageData data;
+  final KittyChunkEncoding encoding;
+  final Uint8List wireBytes;
+  final int totalDecodedBytes;
+  int? chunkStep;
+  int nextChunkIndex = 0;
+
+  _PendingKittyChunkTransfer({
+    required this.imageId,
+    required this.data,
+    required this.encoding,
+    required this.wireBytes,
+    required this.totalDecodedBytes,
+  });
+}
 
 typedef _DeltaKittySync = ({
   bool clearAll,
@@ -75,6 +103,10 @@ final class AuthoritativeTerminal {
   final Map<int, KittyImageData> _syncedKittyData = <int, KittyImageData>{};
   final Map<int, KittyImageData> _skippedOversizedData =
       <int, KittyImageData>{};
+  final Map<int, _PreparedKittyWire> _preparedChunkWire =
+      <int, _PreparedKittyWire>{};
+  final LinkedHashMap<int, _PendingKittyChunkTransfer> _pendingKittyChunks =
+      LinkedHashMap<int, _PendingKittyChunkTransfer>();
   int _lastImageRegistryRevision = 0;
   bool _hasDeferredKittySync = false;
   CursorState _shadowCursor = CursorState.origin;
@@ -256,6 +288,12 @@ final class AuthoritativeTerminal {
   /// Current wire-clamped terminal height in rows.
   int get rows => clampRows(_terminal.height);
 
+  /// Cell width in pixels (`>= 1`) reported on `XTWINOPS` (`14t` / `16t`).
+  int get cellPixelWidth => _terminal.cellPixelWidth;
+
+  /// Cell height in pixels (`>= 1`) reported on `XTWINOPS` (`14t` / `16t`).
+  int get cellPixelHeight => _terminal.cellPixelHeight;
+
   /// Latest emitted frame sequence number.
   int get seq => _seq;
 
@@ -278,9 +316,16 @@ final class AuthoritativeTerminal {
     _terminal.synchronizedOutput = false;
   }
 
+  /// Whether at least one chunked Kitty image transfer still has unsent chunks.
+  bool get hasPendingKittyChunks {
+    _pruneStaleHeadChunkTransfer();
+    return _pendingKittyChunks.isNotEmpty;
+  }
+
   /// Marks a full [BufferSnapshot] keyframe pending for the next [takeNextFrame].
   void forceKeyframe() {
     _forceKeyframe = true;
+    _pendingKittyChunks.clear();
   }
 
   /// Underlying parsed `termui` [Buffer].
@@ -869,18 +914,118 @@ final class AuthoritativeTerminal {
     return normalized;
   }
 
+  /// Pops and builds the next [KittyImageChunkFrame] for any staged large texture,
+  /// or returns `null` when no pending chunk transfers remain.
+  KittyImageChunkFrame? takeNextKittyChunkFrame({
+    int maxChunkBytes = BufferFrameCodec.maxKittyChunkBytes,
+  }) {
+    RangeError.checkValueInInterval(
+      maxChunkBytes,
+      1,
+      BufferFrameCodec.maxKittyChunkBytes,
+      'maxChunkBytes',
+    );
+    _pruneStaleHeadChunkTransfer();
+    if (_pendingKittyChunks.isEmpty) return null;
+    final transfer = _pendingKittyChunks.values.first;
+    final totalWire = transfer.wireBytes.length;
+    final minStepForCap =
+        (totalWire + _maxKittyChunkCount - 1) ~/ _maxKittyChunkCount;
+    final chunkStep = transfer.chunkStep ??= max(maxChunkBytes, minStepForCap);
+    final chunkCount = (totalWire + chunkStep - 1) ~/ chunkStep;
+    final index = transfer.nextChunkIndex;
+    final start = index * chunkStep;
+    final end = min(totalWire, start + chunkStep);
+    final slice = Uint8List.sublistView(transfer.wireBytes, start, end);
+    transfer.nextChunkIndex = index + 1;
+    if (transfer.nextChunkIndex >= chunkCount) {
+      _pendingKittyChunks.remove(transfer.imageId);
+    }
+    return KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: transfer.imageId,
+      version: transfer.data.version,
+      pixelWidth: transfer.data.pixelWidth,
+      pixelHeight: transfer.data.pixelHeight,
+      gridCols: transfer.data.gridCols,
+      gridRows: transfer.data.gridRows,
+      format: transfer.data.format,
+      encoding: transfer.encoding,
+      totalDecodedBytes: transfer.totalDecodedBytes,
+      totalWireBytes: totalWire,
+      chunkIndex: index,
+      chunkCount: chunkCount,
+      data: slice,
+    );
+  }
+
+  void _pruneStaleHeadChunkTransfer() {
+    final registry = _terminal.imageRegistry;
+    while (_pendingKittyChunks.isNotEmpty) {
+      final transfer = _pendingKittyChunks.values.first;
+      if (identical(registry.lookupImage(transfer.imageId), transfer.data)) {
+        return;
+      }
+      _pendingKittyChunks.remove(transfer.imageId);
+      _preparedChunkWire.remove(transfer.imageId);
+    }
+  }
+
+  void _stageKittyChunk(int id, KittyImageData data) {
+    final prepared = _prepareKittyChunkWire(id, data);
+    _pendingKittyChunks[id] = _PendingKittyChunkTransfer(
+      imageId: id,
+      data: data,
+      encoding: prepared.encoding,
+      wireBytes: prepared.wireBytes,
+      totalDecodedBytes: prepared.totalDecodedBytes,
+    );
+  }
+
+  void _cancelKittyChunk(int id) {
+    _pendingKittyChunks.remove(id);
+    _preparedChunkWire.remove(id);
+  }
+
+  _PreparedKittyWire _prepareKittyChunkWire(int id, KittyImageData data) {
+    final cached = _preparedChunkWire[id];
+    if (cached != null && identical(cached.data, data)) {
+      return cached;
+    }
+    final raw = data.rgbaPixels;
+    var encoding = KittyChunkEncoding.raw;
+    var wireBytes = raw;
+    if (data.format == 32) {
+      final compressed = BufferFrameCodec.compressKittyBytes(raw);
+      if (compressed.length < raw.length) {
+        encoding = KittyChunkEncoding.deflateRaw;
+        wireBytes = compressed;
+      }
+    }
+    final prepared = (
+      data: data,
+      encoding: encoding,
+      wireBytes: wireBytes,
+      totalDecodedBytes: raw.length,
+    );
+    _preparedChunkWire[id] = prepared;
+    return prepared;
+  }
+
   List<KittyImagePayload>? _collectSnapshotKittyPayloads({
     required int cellSpanBytes,
     required bool syncTracking,
   }) {
     final registry = _terminal.imageRegistry;
-    _pruneSkippedOversized(registry);
+    _pruneStaleKittyState(registry);
     if (syncTracking) {
       _syncedKittyData.clear();
       _lastImageRegistryRevision = _terminal.imageRegistryRevision;
     }
     final ids = [...registry.registeredImageIds];
     if (ids.isEmpty) {
+      _pendingKittyChunks.clear();
+      _preparedChunkWire.clear();
       if (syncTracking) _hasDeferredKittySync = false;
       return null;
     }
@@ -904,20 +1049,50 @@ final class AuthoritativeTerminal {
     for (final id in ids) {
       final data = registry.lookupImage(id);
       if (data == null || !_acceptOrSkipKittyData(id, data)) continue;
-      final wireBytes = KittyImagePayload.estimateWireBytes(data);
-      if (payloads.length >= _maxKittyEntriesPerFrame || wireBytes > budget) {
+      final consumed = _stageOrPackSnapshotKitty(
+        id,
+        data,
+        payloads: payloads,
+        remainingBudget: budget,
+        syncTracking: syncTracking,
+      );
+      if (consumed < 0) {
         deferred = true;
-        _syncedKittyData.remove(id);
         continue;
       }
-      payloads.add(KittyImagePayload.fromImageData(data));
-      budget -= wireBytes;
-      if (syncTracking) _syncedKittyData[id] = data;
+      budget -= consumed;
     }
     if (syncTracking || deferred) {
       _hasDeferredKittySync = deferred;
     }
     return payloads.isEmpty ? null : payloads;
+  }
+
+  /// Stages oversized snapshot Kitty images for chunked transfer or packs
+  /// inline payloads within budget. Returns bytes consumed, `0` when staged
+  /// as chunks, or `-1` when inline packing was deferred due to budget/limits.
+  int _stageOrPackSnapshotKitty(
+    int id,
+    KittyImageData data, {
+    required List<KittyImagePayload> payloads,
+    required int remainingBudget,
+    required bool syncTracking,
+  }) {
+    final wireBytes = KittyImagePayload.estimateWireBytes(data);
+    if (wireBytes > _maxInlineImageBytes) {
+      _stageKittyChunk(id, data);
+      if (syncTracking) _syncedKittyData[id] = data;
+      return 0;
+    }
+    _cancelKittyChunk(id);
+    if (payloads.length >= _maxKittyEntriesPerFrame ||
+        wireBytes > remainingBudget) {
+      _syncedKittyData.remove(id);
+      return -1;
+    }
+    payloads.add(KittyImagePayload.fromImageData(data));
+    if (syncTracking) _syncedKittyData[id] = data;
+    return wireBytes;
   }
 
   _DeltaKittySync _syncDeltaKittyIfNeeded(List<CellRun> runs) {
@@ -926,12 +1101,14 @@ final class AuthoritativeTerminal {
       return _emptyDeltaKittySync;
     }
     final registry = _terminal.imageRegistry;
-    _pruneSkippedOversized(registry);
+    _pruneStaleKittyState(registry);
     _lastImageRegistryRevision = _terminal.imageRegistryRevision;
     final activeIds = [...registry.registeredImageIds];
     if (activeIds.isEmpty) {
       final hadSynced = _syncedKittyData.isNotEmpty;
       _syncedKittyData.clear();
+      _pendingKittyChunks.clear();
+      _preparedChunkWire.clear();
       _hasDeferredKittySync = false;
       return (
         clearAll: hadSynced,
@@ -946,6 +1123,7 @@ final class AuthoritativeTerminal {
     final (upserts, deferredUpserts) = _collectKittyUpserts(
       registry,
       activeIds,
+      removals,
       remainingBudget,
     );
     _hasDeferredKittySync = deferredRemovals || deferredUpserts;
@@ -970,13 +1148,47 @@ final class AuthoritativeTerminal {
       }
       removals.add(id);
       _syncedKittyData.remove(id);
+      _cancelKittyChunk(id);
     }
     return (removals, deferred);
+  }
+
+  static bool _needsChunkAbaRemoval(
+    KittyImageData? prev,
+    KittyImageData next,
+  ) =>
+      prev != null &&
+      !identical(prev, next) &&
+      prev.version == next.version &&
+      prev.pixelWidth == next.pixelWidth &&
+      prev.pixelHeight == next.pixelHeight &&
+      prev.gridCols == next.gridCols &&
+      prev.gridRows == next.gridRows &&
+      prev.format == next.format;
+
+  int _stageChunkUpsert(
+    int id,
+    KittyImageData data, {
+    required List<int> removals,
+    required int remainingBudget,
+  }) {
+    var consumed = 0;
+    if (_needsChunkAbaRemoval(_syncedKittyData[id], data)) {
+      if (removals.length >= _maxKittyEntriesPerFrame || remainingBudget < 4) {
+        return -1;
+      }
+      removals.add(id);
+      consumed = 4;
+    }
+    _stageKittyChunk(id, data);
+    _syncedKittyData[id] = data;
+    return consumed;
   }
 
   (List<KittyImagePayload>, bool) _collectKittyUpserts(
     KittyImageRegistry registry,
     List<int> activeIds,
+    List<int> removals,
     int initialBudget,
   ) {
     final upserts = <KittyImagePayload>[];
@@ -987,6 +1199,21 @@ final class AuthoritativeTerminal {
       if (data == null || identical(_syncedKittyData[id], data)) continue;
       if (!_acceptOrSkipKittyData(id, data)) continue;
       final wireBytes = KittyImagePayload.estimateWireBytes(data);
+      if (wireBytes > _maxInlineImageBytes) {
+        final consumed = _stageChunkUpsert(
+          id,
+          data,
+          removals: removals,
+          remainingBudget: remainingBudget,
+        );
+        if (consumed < 0) {
+          deferred = true;
+          continue;
+        }
+        remainingBudget -= consumed;
+        continue;
+      }
+      _cancelKittyChunk(id);
       if (upserts.length >= _maxKittyEntriesPerFrame ||
           wireBytes > remainingBudget) {
         deferred = true;
@@ -999,24 +1226,36 @@ final class AuthoritativeTerminal {
     return (upserts, deferred);
   }
 
-  void _pruneSkippedOversized(KittyImageRegistry registry) {
-    if (_skippedOversizedData.isEmpty) return;
-    for (final entry in [..._skippedOversizedData.entries]) {
-      if (!identical(registry.lookupImage(entry.key), entry.value)) {
-        _skippedOversizedData.remove(entry.key);
+  void _pruneStaleKittyState(KittyImageRegistry registry) {
+    _pruneMapByIdentity(registry, _skippedOversizedData);
+    _pruneMapByIdentity(registry, _preparedChunkWire, (entry) => entry.data);
+    _pruneMapByIdentity(registry, _pendingKittyChunks, (entry) => entry.data);
+  }
+
+  static void _pruneMapByIdentity<V>(
+    KittyImageRegistry registry,
+    Map<int, V> map, [
+    KittyImageData Function(V value)? extractData,
+  ]) {
+    if (map.isEmpty) return;
+    for (final entry in [...map.entries]) {
+      final expected = extractData != null
+          ? extractData(entry.value)
+          : entry.value;
+      if (!identical(registry.lookupImage(entry.key), expected)) {
+        map.remove(entry.key);
       }
     }
   }
 
   bool _acceptOrSkipKittyData(int id, KittyImageData data) {
     if (identical(_skippedOversizedData[id], data)) return false;
-    const maxSingleImageBytes =
-        _maxUncompressedTailBudget - _emptyDeltaBaseTailBytes;
-    if (_canEncodeKittyImage(id, data, maxSingleImageBytes)) return true;
+    if (_canEncodeKittyImage(id, data)) return true;
     _skippedOversizedData[id] = data;
+    _cancelKittyChunk(id);
     final wireBytes = KittyImagePayload.estimateWireBytes(data);
     onLog?.call(
-      'Skipping Kitty image id=$id ($wireBytes wire bytes): exceeds single-frame limit',
+      'Skipping Kitty image id=$id ($wireBytes wire bytes): exceeds 16 MiB limit or invalid payload',
     );
     return false;
   }
@@ -1032,11 +1271,7 @@ final class AuthoritativeTerminal {
     0x0A,
   ];
 
-  static bool _canEncodeKittyImage(
-    int id,
-    KittyImageData data,
-    int maxWireBytes,
-  ) {
+  static bool _canEncodeKittyImage(int id, KittyImageData data) {
     if (id <= 0 || id > 0xFFFFFFFF) return false;
     final w = data.pixelWidth;
     final h = data.pixelHeight;
@@ -1053,8 +1288,10 @@ final class AuthoritativeTerminal {
         data.gridRows > _maxKittyGridSpan) {
       return false;
     }
-    if (KittyImagePayload.estimateWireBytes(data) > maxWireBytes) return false;
     final byteLen = data.rgbaPixels.length;
+    if (byteLen <= 0 || byteLen > BufferFrameCodec.maxKittyImageBytes) {
+      return false;
+    }
     return switch (data.format) {
       32 => byteLen == w * h * 4,
       100 => _hasValidPngHeader(data.rgbaPixels, w, h),
@@ -1136,6 +1373,8 @@ final class AuthoritativeTerminal {
     _bellListeners.clear();
     _audioListeners.clear();
     _clipboardListeners.clear();
+    _pendingKittyChunks.clear();
+    _preparedChunkWire.clear();
     if (_ownsTerminal) {
       _terminal.dispose();
       return;

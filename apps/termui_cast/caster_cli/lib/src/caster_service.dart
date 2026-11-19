@@ -624,6 +624,8 @@ final class CasterConfig {
 
 /// Service bridging a local [PtySession] and [AuthoritativeTerminal] to the relay server.
 final class CasterService {
+  static const int _maxKittyChunksPerFlush = 4;
+
   /// Validated caster configuration.
   final CasterConfig config;
 
@@ -1768,6 +1770,9 @@ final class CasterService {
     _cancelFrameTimers();
     if (terminal.needsKeyframe || (_subscriberCount <= 1 && terminal.isDirty)) {
       _sendFrame(BufferSnapshotFrame(snapshot: terminal.takeSnapshot()));
+      if (!terminal.synchronizedOutput) {
+        _drainKittyChunksTurn();
+      }
       _scheduleDirtyFlushIfSubscribed();
       return;
     }
@@ -1776,6 +1781,9 @@ final class CasterService {
       if (deltaFrame != null) _sendFrame(deltaFrame);
     }
     _sendFrame(BufferSnapshotFrame(snapshot: terminal.snapshotCurrent()));
+    if (!terminal.synchronizedOutput) {
+      _drainKittyChunksTurn();
+    }
     _scheduleDirtyFlushIfSubscribed();
   }
 
@@ -1884,7 +1892,13 @@ final class CasterService {
         );
       }
     } else {
-      pty.resize(cols, rows);
+      final (pxW, pxH) = Pty2Session.resolvePixelDimensions(
+        cols,
+        rows,
+        cellPixelWidth: terminal.cellPixelWidth,
+        cellPixelHeight: terminal.cellPixelHeight,
+      );
+      pty.resize(cols, rows, pixelWidth: pxW, pixelHeight: pxH);
     }
     final targetCols = router?.cols ?? cols;
     final targetRows = router?.rows ?? rows;
@@ -1906,6 +1920,9 @@ final class CasterService {
         ? terminal.takeSnapshot()
         : terminal.snapshotCurrent();
     _sendFrame(BufferSnapshotFrame(snapshot: snapshot));
+    if (!terminal.synchronizedOutput) {
+      _drainKittyChunksTurn();
+    }
     _flushPendingShellTitleIfReady();
     _scheduleDirtyFlushIfSubscribed();
   }
@@ -1959,7 +1976,9 @@ final class CasterService {
         stateMachine.state != .streaming ||
         _subscriberCount <= 0 ||
         _isOutboundPaused ||
-        (!terminal.isDirty && !_hasPendingClipboard)) {
+        (!terminal.isDirty &&
+            !terminal.hasPendingKittyChunks &&
+            !_hasPendingClipboard)) {
       return;
     }
     if (terminal.synchronizedOutput) {
@@ -2004,9 +2023,30 @@ final class CasterService {
     if (frame != null) _sendFrame(frame);
     if (!_isOutboundPaused) {
       _flushPendingClipboard();
-      if (terminal.isDirty) {
+      _drainKittyChunksTurn();
+      if (terminal.isDirty || terminal.hasPendingKittyChunks) {
         _scheduleDirtyFlushIfSubscribed();
       }
+    }
+  }
+
+  void _drainKittyChunksTurn({int? maxChunks = _maxKittyChunksPerFlush}) {
+    final halfOutboundBytes = maxOutboundBytes ~/ 2;
+    final chunkBudget = min(
+      BufferFrameCodec.maxKittyChunkBytes,
+      max(1, halfOutboundBytes),
+    );
+    for (var sent = 0; maxChunks == null || sent < maxChunks; sent++) {
+      if (_isOutboundPaused) break;
+      if (_outboundQueuedBytes > 0 &&
+          _outboundQueuedBytes + chunkBudget > halfOutboundBytes) {
+        break;
+      }
+      final chunk = terminal.takeNextKittyChunkFrame(
+        maxChunkBytes: chunkBudget,
+      );
+      if (chunk == null) break;
+      _sendFrame(chunk);
     }
   }
 
@@ -2321,6 +2361,7 @@ final class CasterService {
           _sendFrame(finalFrame);
         }
         _flushPendingClipboard();
+        _drainKittyChunksTurn(maxChunks: null);
       }
       _sendFrame(
         SessionClosedFrame(

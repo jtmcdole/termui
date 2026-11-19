@@ -1183,26 +1183,150 @@ void _defineV5ProtocolAndKittyTests(SessionId sessionId) {
       check(abaDelta.kittyUpserts!.single.imageId).equals(21);
       check(abaDelta.kittyUpserts!.single.bytes).deepEquals([0, 255, 255, 255]);
 
-      // Single texture exceeding 4 MiB logs once and skips cleanly so isDirty clears;
-      // replacing that skipped id=99 (version 0) after a=d with a valid small image syncs!
-      final oversizedBytes = Uint8List(1025 * 1024 * 4); // 4,198,400 bytes
-      final b64ZlibOversized = base64Encode(zlib.encode(oversizedBytes));
+      // Large valid texture exceeding 4 MiB (1025x1024 RGBA) stages via KittyImageChunkFrame
+      // instead of skipping, supports snapshotCurrent() replay without advancing seq, and cancels on a=d!
+      final largeRgba = Uint8List(1025 * 1024 * 4); // 4,198,400 bytes
+      for (var i = 0; i < largeRgba.length; i += 4) {
+        largeRgba[i] = 0x42;
+      }
+      final b64ZlibLarge = base64Encode(zlib.encode(largeRgba));
       auth.writeOutput(
         utf8.encode(
-          '\x1b_Gi=99,s=1025,v=1024,a=t,t=d,f=32,o=z,q=2;$b64ZlibOversized\x1b\\',
+          '\x1b_Gi=99,s=1025,v=1024,a=t,t=d,f=32,o=z,q=2;$b64ZlibLarge\x1b\\',
         ),
       );
       check(auth.takeNextFrame()).isNull();
       check(auth.isDirty).isFalse();
-      check(logs).any((line) => line.contains('Skipping Kitty image id=99'));
+      check(auth.hasPendingKittyChunks).isTrue();
+      check(
+        logs.any((line) => line.contains('Skipping Kitty image id=99')),
+      ).isFalse();
 
+      final chunkFrames = <KittyImageChunkFrame>[];
+      var callIdx = 0;
+      while (auth.hasPendingKittyChunks) {
+        final limit = callIdx.isEven ? 4096 : 8192;
+        chunkFrames.add(auth.takeNextKittyChunkFrame(maxChunkBytes: limit)!);
+        callIdx++;
+      }
+      check(chunkFrames).isNotEmpty();
+      check(chunkFrames.first.imageId).equals(99);
+      check(chunkFrames.first.encoding).equals(KittyChunkEncoding.deflateRaw);
+      final expectedCount = chunkFrames.first.chunkCount;
+      check(chunkFrames.length).equals(expectedCount);
+      final assembled = BytesBuilder(copy: false);
+      for (var i = 0; i < chunkFrames.length; i++) {
+        check(chunkFrames[i].chunkIndex).equals(i);
+        check(chunkFrames[i].chunkCount).equals(expectedCount);
+        assembled.add(chunkFrames[i].data);
+      }
+      check(
+        BufferFrameCodec.inflateKittyBytes(
+          assembled.takeBytes(),
+          expectedBytes: chunkFrames.first.totalDecodedBytes,
+        ),
+      ).deepEquals(largeRgba);
+
+      // ABA delete + re-upload of >4 MiB image with same dims/version=0 in one coalesce window
+      // emits id=99 in kittyRemovals AND re-stages chunks for the replacement payload.
+      final largeRgbaB = Uint8List.fromList(largeRgba)..[0] = 0x99;
+      final b64ZlibLargeB = base64Encode(zlib.encode(largeRgbaB));
       auth.writeOutput(
         utf8.encode(
           '\x1b_Ga=d,d=i,i=99,q=2\x1b\\'
-          '\x1b_Gi=99,s=1,v=1,a=t,t=d,f=32,q=2;$pxCyan\x1b\\',
+          '\x1b_Gi=99,s=1025,v=1024,a=t,t=d,f=32,o=z,q=2;$b64ZlibLargeB\x1b\\',
         ),
       );
-      final recovered99 = (auth.takeNextFrame()! as BufferDeltaFrame).delta;
+      final abaChunkDelta = (auth.takeNextFrame()! as BufferDeltaFrame).delta;
+      check(abaChunkDelta.kittyRemovals).isNotNull().deepEquals([99]);
+      check(auth.hasPendingKittyChunks).isTrue();
+      final replacementWire = BytesBuilder(copy: false);
+      while (auth.hasPendingKittyChunks) {
+        replacementWire.add(
+          auth.takeNextKittyChunkFrame(maxChunkBytes: 4096)!.data,
+        );
+      }
+      check(
+        BufferFrameCodec.inflateKittyBytes(
+          replacementWire.takeBytes(),
+          expectedBytes: largeRgbaB.length,
+        ),
+      ).deepEquals(largeRgbaB);
+
+      // snapshotCurrent() re-stages large active image from chunk 0 without bumping seq.
+      final snapSeqBefore = auth.seq;
+      final snapWithLarge = auth.snapshotCurrent();
+      check(snapWithLarge.seq).equals(snapSeqBefore);
+      check(
+        snapWithLarge.kittyImages?.map((p) => p.imageId),
+      ).isNotNull().not((it) => it.contains(99));
+      check(auth.hasPendingKittyChunks).isTrue();
+      final replayedFirst = auth.takeNextKittyChunkFrame()!;
+      check(replayedFirst.chunkIndex).equals(0);
+      check(replayedFirst.imageId).equals(99);
+
+      // Deleting id=99 via a=d cancels any remaining pending chunks and emits removal.
+      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=i,i=99,q=2\x1b\\'));
+      final removeLarge = (auth.takeNextFrame()! as BufferDeltaFrame).delta;
+      check(removeLarge.kittyRemovals).isNotNull().deepEquals([99]);
+      check(auth.hasPendingKittyChunks).isFalse();
+      check(auth.takeNextKittyChunkFrame()).isNull();
+
+      // forceKeyframe() clears staged chunk transfers until takeSnapshot() re-stages active textures.
+      auth.writeOutput(
+        utf8.encode(
+          '\x1b_Gi=98,s=1025,v=1024,a=t,t=d,f=32,o=z,q=2;$b64ZlibLarge\x1b\\',
+        ),
+      );
+      auth.takeNextFrame();
+      check(auth.hasPendingKittyChunks).isTrue();
+      auth.forceKeyframe();
+      check(auth.hasPendingKittyChunks).isFalse();
+      auth.takeSnapshot();
+      check(auth.hasPendingKittyChunks).isTrue();
+      auth.writeOutput(utf8.encode('\x1b_Ga=d,d=i,i=98,q=2\x1b\\'));
+      auth.takeNextFrame();
+
+      // Truly invalid / >16 MiB textures registered directly log once, skip cleanly, and recover.
+      final rawVt = VirtualTerminal(width: 10, height: 4);
+      final rawLogs = <String>[];
+      final wrapped = AuthoritativeTerminal.wrapping(
+        rawVt,
+        sessionId: const SessionId('wrap-skip'),
+        onLog: rawLogs.add,
+      );
+      addTearDown(() {
+        wrapped.dispose();
+        rawVt.dispose();
+      });
+      wrapped.takeSnapshot();
+      rawVt.imageRegistry.registerImage(
+        KittyImageData(
+          imageId: 99,
+          pixelWidth: 2049,
+          pixelHeight: 2048,
+          rgbaPixels: Uint8List(16),
+          gridCols: 1,
+          gridRows: 1,
+        ),
+      );
+      rawVt.writeString('x');
+      wrapped.takeNextFrame();
+      check(rawLogs).any((line) => line.contains('Skipping Kitty image id=99'));
+      check(wrapped.hasPendingKittyChunks).isFalse();
+
+      rawVt.imageRegistry.registerImage(
+        KittyImageData(
+          imageId: 99,
+          pixelWidth: 1,
+          pixelHeight: 1,
+          rgbaPixels: Uint8List.fromList([0, 255, 255, 255]),
+          gridCols: 1,
+          gridRows: 1,
+        ),
+      );
+      rawVt.writeString('y');
+      final recovered99 = (wrapped.takeNextFrame()! as BufferDeltaFrame).delta;
       check(recovered99.kittyUpserts).isNotNull().length.equals(1);
       check(recovered99.kittyUpserts!.single.imageId).equals(99);
     },

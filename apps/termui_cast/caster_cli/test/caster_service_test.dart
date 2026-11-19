@@ -115,6 +115,7 @@ final class _FakePtySession implements PtySession {
   final Completer<int> _exitCompleter = Completer<int>();
   final List<Uint8List> writtenInputs = [];
   final List<(int cols, int rows)> resizes = [];
+  final List<(int pixelWidth, int pixelHeight)> pixelResizes = [];
   final List<ProcessSignal> killSignals = [];
   bool ignoreSigterm = false;
   bool killed = false;
@@ -144,6 +145,7 @@ final class _FakePtySession implements PtySession {
   @override
   void resize(int cols, int rows, {int pixelWidth = 0, int pixelHeight = 0}) {
     resizes.add((cols, rows));
+    pixelResizes.add((pixelWidth, pixelHeight));
   }
 
   @override
@@ -465,6 +467,7 @@ void main() {
           async.elapse(const Duration(milliseconds: 16));
           check(pty.writtenInputs.single).deepEquals([0x03]);
           check(pty.resizes.single).equals((32, 10));
+          check(pty.pixelResizes.single).equals((32 * 8, 10 * 16));
           // Must coalesce into ONE BufferSnapshotFrame (not snapshot + delta!).
           check(server1Frames.length).equals(1);
           check(server1Frames.single).isA<BufferSnapshotFrame>();
@@ -4289,6 +4292,289 @@ void _registerWaveformQueryReplyTest() {
             unawaited(outputCtrl.close());
             async.flushMicrotasks();
           });
+        },
+      );
+
+      test(
+        'paces chunked >4 MiB Kitty textures across flush turns, pauses on backpressure, replays on keyframe/resize, and drains on exit',
+        () {
+          fakeAsync((async) {
+            const sessionId = SessionId('kitty-chunk-pace');
+            final pty = _FakePtySession();
+            late StreamChannel<Uint8List> serverSide;
+            final serverFrames = <CastMessage>[];
+            final service = CasterService(
+              config: CasterConfig(
+                sessionId: sessionId,
+                title: 'chunks',
+                initialCols: 20,
+                initialRows: 6,
+                command: const ['sh'],
+              ),
+              pty: pty,
+              frameCoalesceInterval: const Duration(milliseconds: 5),
+              maxOutboundBytes: 8 * 1024 * 1024,
+              channelOpener: () async {
+                final ctrl = StreamChannelController<Uint8List>();
+                serverSide = ctrl.foreign;
+                return ctrl.local;
+              },
+            );
+
+            unawaited(service.start());
+            async.flushMicrotasks();
+            final sub = serverSide.stream.listen((raw) {
+              serverFrames.add(BufferFrameCodec.decode(raw));
+            });
+            serverSide.sink.add(
+              BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+            );
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const SubscriberCountFrame(
+                  sessionId: sessionId,
+                  subscriberCount: 1,
+                ),
+              ),
+            );
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const RequestKeyframeFrame(sessionId: sessionId),
+              ),
+            );
+            async.flushMicrotasks();
+            serverFrames.clear();
+
+            // Emit incompressible 1600x1200 RGB24 o=z (7,680,000 B RGBA -> 15 chunks @ 512 KiB).
+            final rgb = Uint8List(1600 * 1200 * 3);
+            var seed = 0x13579BDF;
+            for (var i = 0; i < rgb.length; i++) {
+              seed = (seed * 1664525 + 1013904223) & 0xFFFFFFFF;
+              rgb[i] = (seed >> 16) & 0xFF;
+            }
+            final b64 = base64Encode(zlib.encode(rgb));
+            final tx = StringBuffer();
+            for (var offset = 0; offset < b64.length; offset += 4096) {
+              final end = (offset + 4096).clamp(0, b64.length);
+              final more = end < b64.length ? 1 : 0;
+              final slice = b64.substring(offset, end);
+              if (offset == 0) {
+                tx.write(
+                  '\x1b_Gi=301,a=T,f=24,o=z,s=1600,v=1200,c=4,r=2,q=2,m=$more;$slice\x1b\\',
+                );
+              } else {
+                tx.write('\x1b_Gm=$more;$slice\x1b\\');
+              }
+            }
+            pty.emitText('$tx');
+            async.flushMicrotasks();
+
+            // First flush emits BufferDeltaFrame first, then <= 4 chunks.
+            async.elapse(const Duration(milliseconds: 5));
+            final firstDeltas = [...serverFrames.whereType<BufferDeltaFrame>()];
+            final firstChunks = [
+              ...serverFrames.whereType<KittyImageChunkFrame>(),
+            ];
+            check(firstDeltas.length).equals(1);
+            check(firstChunks.length).equals(4);
+            check(
+              serverFrames.indexOf(firstDeltas.single),
+            ).isLessThan(serverFrames.indexOf(firstChunks.first));
+
+            // Backpressure pause halts further chunk emission until resumed.
+            sub.pause();
+            async.flushMicrotasks();
+            async.elapse(const Duration(milliseconds: 25));
+            check(
+              serverFrames.whereType<KittyImageChunkFrame>().length,
+            ).equals(4);
+            sub.resume();
+            async.flushMicrotasks();
+
+            // Drains all remaining chunks across flush intervals, then RequestKeyframe replays from 0.
+            for (var i = 0; i < 6; i++) {
+              async.elapse(const Duration(milliseconds: 5));
+            }
+            final allChunks = [
+              ...serverFrames.whereType<KittyImageChunkFrame>(),
+            ];
+            final expectedChunks = allChunks.first.chunkCount;
+            check(allChunks.length).isGreaterThan(4);
+            check(allChunks.length).equals(expectedChunks);
+            for (var i = 0; i < allChunks.length; i++) {
+              check(allChunks[i].chunkIndex).equals(i);
+            }
+
+            serverFrames.clear();
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const RequestKeyframeFrame(sessionId: sessionId),
+              ),
+            );
+            async.flushMicrotasks();
+            check(
+              serverFrames.whereType<BufferSnapshotFrame>().length,
+            ).equals(1);
+            check(
+              serverFrames.whereType<KittyImageChunkFrame>().length,
+            ).equals(4);
+
+            // ResizeFrame triggers snapshotCurrent + initial chunks, and exit drains remaining chunks.
+            serverFrames.clear();
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const ResizeFrame(sessionId: sessionId, cols: 20, rows: 6),
+              ),
+            );
+            async.flushMicrotasks();
+            check(
+              serverFrames.whereType<BufferSnapshotFrame>().length,
+            ).equals(1);
+            check(
+              serverFrames.whereType<KittyImageChunkFrame>().length,
+            ).equals(4);
+
+            unawaited(pty.finish(0));
+            async.flushMicrotasks();
+            async.elapse(const Duration(milliseconds: 20));
+            check(
+              serverFrames.whereType<KittyImageChunkFrame>().length,
+            ).equals(expectedChunks);
+            check(
+              serverFrames.whereType<SessionClosedFrame>().single.reason,
+            ).equals(SessionCloseReason.exited);
+            unawaited(sub.cancel());
+            async.flushMicrotasks();
+          });
+        },
+      );
+
+      test(
+        'drains >4 MiB Kitty chunks without livelock when maxOutboundBytes < 1 MiB',
+        () {
+          fakeAsync((async) {
+            const sessionId = SessionId('kitty-small-outbound');
+            final pty = _FakePtySession();
+            late StreamChannel<Uint8List> serverSide;
+            final serverFrames = <CastMessage>[];
+            final service = CasterService(
+              config: CasterConfig(
+                sessionId: sessionId,
+                title: 'small-outbound',
+                initialCols: 20,
+                initialRows: 6,
+                command: const ['sh'],
+              ),
+              pty: pty,
+              frameCoalesceInterval: const Duration(milliseconds: 5),
+              maxOutboundBytes: 64 * 1024,
+              channelOpener: () async {
+                final ctrl = StreamChannelController<Uint8List>();
+                serverSide = ctrl.foreign;
+                return ctrl.local;
+              },
+            );
+
+            unawaited(service.start());
+            async.flushMicrotasks();
+            final sub = serverSide.stream.listen((raw) {
+              serverFrames.add(BufferFrameCodec.decode(raw));
+            });
+            serverSide.sink.add(
+              BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+            );
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const SubscriberCountFrame(
+                  sessionId: sessionId,
+                  subscriberCount: 1,
+                ),
+              ),
+            );
+            serverSide.sink.add(
+              BufferFrameCodec.encode(
+                const RequestKeyframeFrame(sessionId: sessionId),
+              ),
+            );
+            async.flushMicrotasks();
+            serverFrames.clear();
+
+            // 1025x1024 RGBA (>4 MiB) with noisy first 128 KiB compresses to >32 KiB (>1 chunk at 64 KiB cap).
+            final rgba = Uint8List(1025 * 1024 * 4);
+            var seed = 0x2468ACE1;
+            for (var i = 0; i < 128 * 1024; i++) {
+              seed = (seed * 1664525 + 1013904223) & 0xFFFFFFFF;
+              rgba[i] = (seed >> 16) & 0xFF;
+            }
+            final b64 = base64Encode(zlib.encode(rgba));
+            final tx = StringBuffer();
+            for (var offset = 0; offset < b64.length; offset += 4096) {
+              final end = (offset + 4096).clamp(0, b64.length);
+              final more = end < b64.length ? 1 : 0;
+              final slice = b64.substring(offset, end);
+              if (offset == 0) {
+                tx.write(
+                  '\x1b_Gi=302,a=T,f=32,o=z,s=1025,v=1024,c=4,r=2,q=2,m=$more;$slice\x1b\\',
+                );
+              } else {
+                tx.write('\x1b_Gm=$more;$slice\x1b\\');
+              }
+            }
+            pty.emitText('$tx');
+            async.flushMicrotasks();
+
+            async.elapse(const Duration(milliseconds: 5));
+            async.elapse(const Duration(milliseconds: 5));
+            final chunks = [...serverFrames.whereType<KittyImageChunkFrame>()];
+            check(chunks).isNotEmpty();
+            check(chunks.length).equals(chunks.first.chunkCount);
+            for (var i = 0; i < chunks.length; i++) {
+              check(chunks[i].chunkIndex).equals(i);
+              check(chunks[i].data.length).isLessOrEqual(32 * 1024);
+            }
+
+            unawaited(service.stop(killPty: true));
+            async.flushMicrotasks();
+            unawaited(sub.cancel());
+            async.flushMicrotasks();
+          });
+        },
+      );
+
+      test(
+        'Pty2Session.resolvePixelDimensions and AuthoritativeTerminal expose non-zero cell pixel sizes',
+        () {
+          final term = AuthoritativeTerminal(
+            sessionId: const SessionId('pixel-dims'),
+            initialCols: 80,
+            initialRows: 24,
+          );
+          addTearDown(term.dispose);
+          check(term.cellPixelWidth).equals(Pty2Session.defaultCellPixelWidth);
+          check(
+            term.cellPixelHeight,
+          ).equals(Pty2Session.defaultCellPixelHeight);
+          check(Pty2Session.resolvePixelDimensions(80, 24)).equals((640, 384));
+          check(
+            Pty2Session.resolvePixelDimensions(
+              80,
+              24,
+              cellPixelWidth: 10,
+              cellPixelHeight: 20,
+            ),
+          ).equals((800, 480));
+          check(
+            Pty2Session.resolvePixelDimensions(
+              80,
+              24,
+              pixelWidth: 1200,
+              pixelHeight: 900,
+            ),
+          ).equals((1200, 900));
+          check(
+            Pty2Session.resolvePixelDimensions(10000, 10000),
+          ).equals((65535, 65535));
+          check(Pty2Session.resolvePixelDimensions(0, 0)).equals((8, 16));
         },
       );
     },
