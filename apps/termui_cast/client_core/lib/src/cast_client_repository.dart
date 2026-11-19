@@ -591,6 +591,8 @@ final class CastClientRepository {
         }
       case final ScrollbackChunkFrame chunk:
         _attachedPortGroups[chunk.sessionId]?.slot.ingestScrollbackChunk(chunk);
+      case final KittyImageChunkFrame chunk:
+        _attachedPortGroups[chunk.sessionId]?.slot.ingestKittyImageChunk(chunk);
       case final ClipboardFrame frame:
         _handleClipboardForPorts(frame);
       case final SessionClosedFrame frame:

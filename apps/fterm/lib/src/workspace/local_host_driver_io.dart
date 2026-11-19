@@ -363,6 +363,26 @@ final class IoLocalHostDriver implements LocalHostDriver {
     return null;
   }
 
+  /// Logs caster skip and transport diagnostic messages to `stderr` outside tests.
+  @visibleForTesting
+  static void logShareDiagnostic(
+    String message, {
+    Map<String, String>? environment,
+    StringSink? sink,
+  }) {
+    final env = environment ?? Platform.environment;
+    if (env.containsKey('FLUTTER_TEST')) return;
+    if (message.contains('Skipping Kitty image') ||
+        message.contains('Failed to send') ||
+        message.contains('Server error') ||
+        message.contains('Malformed') ||
+        message.contains('Outbound frame queue overflow') ||
+        message.contains('File upload error') ||
+        message.contains('Aborted stalled file upload')) {
+      (sink ?? stderr).writeln('[fterm cast] $message');
+    }
+  }
+
   @override
   Future<void> dispose() async {
     if (_disposed) return;
@@ -447,6 +467,7 @@ final class _IoLocalPaneHost implements LocalPaneHost {
       config: config,
       iapTokenProvider: iapTokenProvider,
       channelOpener: channelOpener,
+      onLog: IoLocalHostDriver.logShareDiagnostic,
     );
     _lastShareError = null;
     _shareService = service;

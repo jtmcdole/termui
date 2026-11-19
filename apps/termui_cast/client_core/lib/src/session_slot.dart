@@ -53,6 +53,12 @@ final class SessionSlot {
   /// Maximum queued [DirtyCellSpan] entries retained before promoting to a full sync.
   static const int maxDirtySpans = 64;
 
+  /// Maximum concurrent in-flight chunked Kitty image assemblies retained per slot.
+  static const int maxPendingKittyAssemblies = 16;
+
+  /// Maximum cumulative buffered wire bytes across pending Kitty assemblies (`32 MiB`).
+  static const int maxPendingKittyAssemblyBytes = 32 * 1024 * 1024;
+
   /// Remote session identifier.
   final SessionId id;
 
@@ -150,6 +156,9 @@ final class SessionSlot {
   final List<DirtyCellSpan> _dirtySpans = <DirtyCellSpan>[];
   late final List<DirtyCellSpan> _dirtySpansView =
       UnmodifiableListView<DirtyCellSpan>(_dirtySpans);
+  final LinkedHashMap<int, _PendingKittyAssembly> _pendingKittyAssemblies =
+      LinkedHashMap<int, _PendingKittyAssembly>();
+  int _pendingKittyAssemblyBytes = 0;
 
   /// Backing hierarchical state machine.
   late final Machine<ClientSessionSyncState, SessionSyncEvent> machine;
@@ -438,6 +447,7 @@ final class SessionSlot {
     hoveredLink = null;
     selectionController.clearSelection();
     kittyRegistry.clearImages();
+    _clearPendingKittyAssemblies();
     scrollbackCache.reset();
     _cancelRetryTimer();
     _resetCorruptRetry();
@@ -446,6 +456,7 @@ final class SessionSlot {
 
   void _enterUnsubscribed() {
     state = .unsubscribed;
+    _clearPendingKittyAssemblies();
     cancelInactiveTimer();
     _cancelRetryTimer();
     _resetCorruptRetry();
@@ -469,6 +480,7 @@ final class SessionSlot {
 
   void _enterAwaitingKeyframe() {
     state = .awaitingKeyframe;
+    _clearPendingKittyAssemblies();
     _cancelRetryTimer();
   }
 
@@ -759,6 +771,7 @@ final class SessionSlot {
   }
 
   void _replaceKittyImages(List<KittyImagePayload>? images) {
+    _clearPendingKittyAssemblies();
     kittyRegistry.clearImages();
     if (images == null) return;
     for (final payload in images) {
@@ -768,18 +781,190 @@ final class SessionSlot {
 
   void _applyDeltaKittyChanges(BufferDelta delta) {
     if (delta.clearKittyImages) {
+      _clearPendingKittyAssemblies();
       kittyRegistry.clearImages();
     }
     if (delta.kittyRemovals case final removals?) {
       for (final imageId in removals) {
+        _discardPendingKittyAssembly(imageId);
         kittyRegistry.unregisterImage(imageId);
       }
     }
     if (delta.kittyUpserts case final upserts?) {
       for (final payload in upserts) {
+        _discardPendingKittyAssembly(payload.imageId);
         kittyRegistry.registerImage(payload.toImageData());
       }
     }
+  }
+
+  /// Ingests an incoming `0x1B` [KittyImageChunkFrame] while synchronized.
+  void ingestKittyImageChunk(KittyImageChunkFrame chunk) {
+    if (state != .synchronized) return;
+    if (_matchesRegisteredKitty(chunk)) {
+      _discardPendingKittyAssembly(chunk.imageId);
+      return;
+    }
+    if (chunk.chunkCount == 1 && chunk.chunkIndex == 0) {
+      _discardPendingKittyAssembly(chunk.imageId);
+      if (chunk.data.length != chunk.totalWireBytes) {
+        _failCorruptKittyAssembly(chunk.imageId);
+        return;
+      }
+      _finalizeKittyAssembly(chunk, chunk.data);
+      return;
+    }
+    if (chunk.chunkIndex == 0) {
+      _startKittyAssembly(chunk);
+      return;
+    }
+    _appendKittyChunk(chunk);
+  }
+
+  bool _matchesRegisteredKitty(KittyImageChunkFrame chunk) {
+    final existing = kittyRegistry.lookupImage(chunk.imageId);
+    return existing != null &&
+        existing.version == chunk.version &&
+        existing.pixelWidth == chunk.pixelWidth &&
+        existing.pixelHeight == chunk.pixelHeight &&
+        existing.gridCols == chunk.gridCols &&
+        existing.gridRows == chunk.gridRows &&
+        existing.format == chunk.format &&
+        existing.rgbaPixels.length == chunk.totalDecodedBytes;
+  }
+
+  void _startKittyAssembly(KittyImageChunkFrame chunk) {
+    _discardPendingKittyAssembly(chunk.imageId);
+    _evictPendingKittyIfNeeded(chunk.data.length, addingNew: true);
+    if (_pendingKittyAssemblies.length >= maxPendingKittyAssemblies ||
+        _pendingKittyAssemblyBytes + chunk.data.length >
+            maxPendingKittyAssemblyBytes) {
+      _failCorruptKittyAssembly(chunk.imageId);
+      return;
+    }
+    final assembly = _PendingKittyAssembly.fromFirstChunk(chunk);
+    _pendingKittyAssemblies[chunk.imageId] = assembly;
+    _pendingKittyAssemblyBytes += chunk.data.length;
+  }
+
+  void _appendKittyChunk(KittyImageChunkFrame chunk) {
+    final pending = _pendingKittyAssemblies[chunk.imageId];
+    if (pending == null ||
+        !pending.matchesHeader(chunk) ||
+        chunk.chunkIndex != pending.nextChunkIndex ||
+        pending.receivedWireBytes + chunk.data.length > chunk.totalWireBytes) {
+      _failCorruptKittyAssembly(chunk.imageId);
+      return;
+    }
+    _evictPendingKittyIfNeeded(chunk.data.length, preserveId: chunk.imageId);
+    pending.builder.add(chunk.data);
+    pending.receivedWireBytes += chunk.data.length;
+    pending.nextChunkIndex += 1;
+    _pendingKittyAssemblyBytes += chunk.data.length;
+    if (chunk.chunkIndex < chunk.chunkCount - 1) return;
+
+    _pendingKittyAssemblies.remove(chunk.imageId);
+    _pendingKittyAssemblyBytes -= pending.receivedWireBytes;
+    if (pending.receivedWireBytes != chunk.totalWireBytes) {
+      _failCorruptKittyAssembly(chunk.imageId);
+      return;
+    }
+    _finalizeKittyAssembly(chunk, pending.builder.takeBytes());
+  }
+
+  void _evictPendingKittyIfNeeded(
+    int incomingBytes, {
+    int? preserveId,
+    bool addingNew = false,
+  }) {
+    final maxAllowed = addingNew
+        ? maxPendingKittyAssemblies - 1
+        : maxPendingKittyAssemblies;
+    while (_pendingKittyAssemblies.isNotEmpty &&
+        (_pendingKittyAssemblies.length > maxAllowed ||
+            _pendingKittyAssemblyBytes + incomingBytes >
+                maxPendingKittyAssemblyBytes)) {
+      final evictId = _findOldestEvictableKittyId(preserveId: preserveId);
+      if (evictId == null) return;
+      _discardPendingKittyAssembly(evictId);
+    }
+  }
+
+  int? _findOldestEvictableKittyId({int? preserveId}) {
+    for (final key in _pendingKittyAssemblies.keys) {
+      if (key != preserveId) return key;
+    }
+    return null;
+  }
+
+  void _finalizeKittyAssembly(
+    KittyImageChunkFrame chunk,
+    Uint8List assembledWire,
+  ) {
+    try {
+      final pixelBytes = chunk.encoding == .deflateRaw
+          ? BufferFrameCodec.inflateKittyBytes(
+              assembledWire,
+              expectedBytes: chunk.totalDecodedBytes,
+            )
+          : assembledWire;
+      _validateFinalKittyPayload(chunk, pixelBytes);
+      kittyRegistry.registerImage(
+        KittyImagePayload(
+          imageId: chunk.imageId,
+          pixelWidth: chunk.pixelWidth,
+          pixelHeight: chunk.pixelHeight,
+          gridCols: chunk.gridCols,
+          gridRows: chunk.gridRows,
+          version: chunk.version,
+          format: chunk.format,
+          bytes: pixelBytes,
+        ).toImageData(),
+      );
+      _markFullSync();
+      onVisualChange();
+    } on Object {
+      _failCorruptKittyAssembly(chunk.imageId);
+    }
+  }
+
+  static void _validateFinalKittyPayload(
+    KittyImageChunkFrame chunk,
+    Uint8List pixelBytes,
+  ) {
+    if (chunk.format == 32) {
+      final expected = chunk.pixelWidth * chunk.pixelHeight * 4;
+      if (pixelBytes.length != expected) {
+        throw const ProtocolFormatException('Invalid RGBA32 Kitty byte length');
+      }
+      return;
+    }
+    if (chunk.format == 100) {
+      BufferFrameCodec.validateKittyPngHeader(
+        pixelBytes,
+        chunk.pixelWidth,
+        chunk.pixelHeight,
+      );
+      return;
+    }
+    throw ProtocolFormatException('Unsupported Kitty format: ${chunk.format}');
+  }
+
+  void _discardPendingKittyAssembly(int imageId) {
+    final removed = _pendingKittyAssemblies.remove(imageId);
+    if (removed != null) {
+      _pendingKittyAssemblyBytes -= removed.receivedWireBytes;
+    }
+  }
+
+  void _clearPendingKittyAssemblies() {
+    _pendingKittyAssemblies.clear();
+    _pendingKittyAssemblyBytes = 0;
+  }
+
+  void _failCorruptKittyAssembly(int imageId) {
+    _discardPendingKittyAssembly(imageId);
+    unawaited(machine.handle(.corruptFrame));
   }
 
   /// Stops timers and the backing state machine.
@@ -787,9 +972,74 @@ final class SessionSlot {
     cancelInactiveTimer();
     _cancelRetryTimer();
     _resetCorruptRetry();
+    _clearPendingKittyAssemblies();
     hoveredLink = null;
     selectionController.dispose();
     kittyRegistry.clearImages();
     machine.stop();
   }
+}
+
+final class _PendingKittyAssembly {
+  final int imageId;
+  final int version;
+  final int pixelWidth;
+  final int pixelHeight;
+  final int gridCols;
+  final int gridRows;
+  final int format;
+  final KittyChunkEncoding encoding;
+  final int totalDecodedBytes;
+  final int totalWireBytes;
+  final int chunkCount;
+  final BytesBuilder builder = BytesBuilder(copy: false);
+  int nextChunkIndex = 1;
+  int receivedWireBytes;
+
+  _PendingKittyAssembly._({
+    required this.imageId,
+    required this.version,
+    required this.pixelWidth,
+    required this.pixelHeight,
+    required this.gridCols,
+    required this.gridRows,
+    required this.format,
+    required this.encoding,
+    required this.totalDecodedBytes,
+    required this.totalWireBytes,
+    required this.chunkCount,
+    required this.receivedWireBytes,
+  });
+
+  factory _PendingKittyAssembly.fromFirstChunk(KittyImageChunkFrame chunk) {
+    final assembly = _PendingKittyAssembly._(
+      imageId: chunk.imageId,
+      version: chunk.version,
+      pixelWidth: chunk.pixelWidth,
+      pixelHeight: chunk.pixelHeight,
+      gridCols: chunk.gridCols,
+      gridRows: chunk.gridRows,
+      format: chunk.format,
+      encoding: chunk.encoding,
+      totalDecodedBytes: chunk.totalDecodedBytes,
+      totalWireBytes: chunk.totalWireBytes,
+      chunkCount: chunk.chunkCount,
+      receivedWireBytes: chunk.data.length,
+    );
+    assembly.builder.add(chunk.data);
+    return assembly;
+  }
+
+  bool matchesHeader(KittyImageChunkFrame chunk) =>
+      imageId == chunk.imageId &&
+      version == chunk.version &&
+      pixelWidth == chunk.pixelWidth &&
+      pixelHeight == chunk.pixelHeight &&
+      gridCols == chunk.gridCols &&
+      gridRows == chunk.gridRows &&
+      format == chunk.format &&
+      encoding == chunk.encoding &&
+      totalDecodedBytes == chunk.totalDecodedBytes &&
+      totalWireBytes == chunk.totalWireBytes &&
+      chunkCount == chunk.chunkCount;
 }
