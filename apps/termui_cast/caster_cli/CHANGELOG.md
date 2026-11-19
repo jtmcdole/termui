@@ -1,3 +1,10 @@
+## 0.3.0-dev.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(cast_protocol,fterm,termui_audio): fix WebSocket close timer, upload dispose, and CI test races.
+ - **BREAKING** **FEAT**(caster_cli): stage and pace >4 MiB Kitty textures as 0x1B chunks.
+
 ## 0.2.2
 
  - **FIX**(caster_cli): defer revision reconnect during pending upload tasks.

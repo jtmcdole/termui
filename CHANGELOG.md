@@ -11,6 +11,51 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`fterm` - `v0.5.0-dev.0`](#fterm---v050-dev0)
+ - [`termui_cast_client_core` - `v0.4.0-dev.0`](#termui_cast_client_core---v040-dev0)
+ - [`termui_cast_protocol` - `v0.3.0-dev.0`](#termui_cast_protocol---v030-dev0)
+ - [`termui_cast_server` - `v0.3.0-dev.0`](#termui_cast_server---v030-dev0)
+ - [`termui_caster_cli` - `v0.3.0-dev.0`](#termui_caster_cli---v030-dev0)
+
+Packages with other changes:
+
+ - There are no other changes in this release.
+
+---
+
+#### `fterm` - `v0.5.0-dev.0`
+
+ - **BREAKING** **FIX**(termui_pty,termui): encode legacy xterm modifiers and decode double-ESC/SS3 keys.
+ - **BREAKING** **FIX**(cast_protocol,fterm,termui_audio): fix WebSocket close timer, upload dispose, and CI test races.
+ - **BREAKING** **FIX**(client_core,fterm): reassemble 0x1B Kitty chunks and log share diagnostics.
+
+#### `termui_cast_client_core` - `v0.4.0-dev.0`
+
+ - **BREAKING** **FIX**(client_core,fterm): reassemble 0x1B Kitty chunks and log share diagnostics.
+
+#### `termui_cast_protocol` - `v0.3.0-dev.0`
+
+ - **BREAKING** **FIX**(cast_protocol,fterm,termui_audio): fix WebSocket close timer, upload dispose, and CI test races.
+ - **BREAKING** **FEAT**(cast_protocol): add v8 KittyImageChunkFrame (0x1B) wire codec.
+
+#### `termui_cast_server` - `v0.3.0-dev.0`
+
+ - **BREAKING** **FEAT**(cast_server): relay 0x1B Kitty image chunks zero-copy.
+
+#### `termui_caster_cli` - `v0.3.0-dev.0`
+
+ - **BREAKING** **FIX**(cast_protocol,fterm,termui_audio): fix WebSocket close timer, upload dispose, and CI test races.
+ - **BREAKING** **FEAT**(caster_cli): stage and pace >4 MiB Kitty textures as 0x1B chunks.
+
+
+## 2026-11-19
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`termui` - `v0.20.0`](#termui---v0200)
  - [`termui_audio` - `v0.9.0`](#termui_audio---v090)
  - [`termui_flutter` - `v0.15.0`](#termui_flutter---v0150)
