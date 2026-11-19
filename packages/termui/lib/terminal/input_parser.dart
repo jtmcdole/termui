@@ -170,7 +170,7 @@ class InputParser {
   }
 
   KeyEvent _decodeBackspace(int byte) {
-    if (!_backspaceDetected) {
+    if (isWindows && !_backspaceDetected) {
       _backspaceIs8 = (byte == 8);
       _backspaceDetected = true;
     }
@@ -229,29 +229,136 @@ class InputParser {
       return (offset: offset + 1, stop: true);
     }
 
-    final second = _buffer[offset + 1];
-    if (second == 91) {
-      return _consumeCsiSequence(offset, events);
-    }
-    if (second == 79) {
-      return _consumeSs3Sequence(offset, events);
-    }
-    if (second == 93) {
-      return _consumeOscStart(offset, events);
-    }
-    if (second == 0x5F) {
-      return _consumeApcStart(offset, events);
-    }
+    return switch (_buffer[offset + 1]) {
+      27 => _consumeDoubleEscape(offset, events),
+      91 => _consumeCsiSequence(offset, events),
+      79 => _consumeSs3Sequence(offset, events),
+      93 => _consumeOscStart(offset, events),
+      0x5F => _consumeApcStart(offset, events),
+      final second => _consumeAltModifiedByte(offset, second, events),
+    };
+  }
 
-    events.add(
-      KeyEvent(
+  ({int offset, bool stop}) _consumeAltModifiedByte(
+    int offset,
+    int second,
+    List<InputEvent> events,
+  ) {
+    final event = switch (second) {
+      127 => const KeyEvent(
+        'backspace',
+        KeyType.backspace,
+        modifiers: {Modifier.alt},
+      ),
+      8 => const KeyEvent(
+        'backspace',
+        KeyType.backspace,
+        modifiers: {Modifier.control, Modifier.alt},
+      ),
+      9 => const KeyEvent('\t', KeyType.tab, modifiers: {Modifier.alt}),
+      10 ||
+      13 => const KeyEvent('\n', KeyType.enter, modifiers: {Modifier.alt}),
+      >= 1 && <= 26 => KeyEvent(
+        String.fromCharCode(second + 96),
+        KeyType.character,
+        modifiers: const {Modifier.control, Modifier.alt},
+      ),
+      _ => KeyEvent(
         String.fromCharCode(second),
         KeyType.character,
         modifiers: const {Modifier.alt},
       ),
-    );
+    };
+    events.add(event);
     return (offset: offset + 2, stop: false);
   }
+
+  ({int offset, bool stop}) _consumeDoubleEscape(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    if (_buffer.length - offset == 2) {
+      events.add(
+        const KeyEvent('escape', KeyType.escape, modifiers: {Modifier.alt}),
+      );
+      return (offset: offset + 2, stop: true);
+    }
+    return switch (_buffer[offset + 2]) {
+      91 => _consumeDoubleEscCsi(offset, events),
+      79 => _consumeDoubleEscSs3(offset, events),
+      _ => _emitLeadingEscape(offset, events),
+    };
+  }
+
+  static ({int offset, bool stop}) _emitLeadingEscape(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    events.add(const KeyEvent('escape', KeyType.escape));
+    return (offset: offset + 1, stop: false);
+  }
+
+  ({int offset, bool stop}) _consumeDoubleEscSs3(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    if (_buffer.length - offset == 3) {
+      return _emitLeadingEscape(offset, events);
+    }
+    final innerKey = _tryParseSs3FunctionalKey(_buffer[offset + 3]);
+    if (innerKey == null) {
+      return _emitLeadingEscape(offset, events);
+    }
+    events.add(_withAltModifier(innerKey));
+    return (offset: offset + 4, stop: false);
+  }
+
+  ({int offset, bool stop}) _consumeDoubleEscCsi(
+    int offset,
+    List<InputEvent> events,
+  ) {
+    if (_buffer.length - offset == 3) {
+      return _emitLeadingEscape(offset, events);
+    }
+    final innerOffset = offset + 1;
+    final innerRemaining = _buffer.length - innerOffset;
+    final scanIdx = _scanCsiBody(offset + 3);
+    if (scanIdx >= _buffer.length) {
+      return innerRemaining > maxCsiBytes
+          ? (offset: _buffer.length, stop: false)
+          : (offset: offset, stop: true);
+    }
+    final termByte = _buffer[scanIdx];
+    if (termByte < 0x40 || termByte > 0x7E) {
+      return _emitLeadingEscape(offset, events);
+    }
+    if (scanIdx - innerOffset + 1 > maxCsiBytes) {
+      return (offset: scanIdx + 1, stop: false);
+    }
+    final seqStr = String.fromCharCodes(
+      _buffer.getRange(innerOffset, scanIdx + 1),
+    );
+    final innerKey = _tryParseRecognizedCsiKey(seqStr, termByte);
+    if (innerKey == null ||
+        innerKey.modifiers.contains(Modifier.alt) ||
+        innerKey.eventType != KeyEventType.press) {
+      return _emitLeadingEscape(offset, events);
+    }
+    events.add(_withAltModifier(innerKey));
+    return (offset: scanIdx + 1, stop: false);
+  }
+
+  static KeyEvent _withAltModifier(KeyEvent event) =>
+      event.modifiers.contains(Modifier.alt)
+      ? event
+      : KeyEvent(
+          event.key,
+          event.type,
+          modifiers: {...event.modifiers, Modifier.alt},
+          eventType: event.eventType,
+          shiftedCodepoint: event.shiftedCodepoint,
+          baseLayoutCodepoint: event.baseLayoutCodepoint,
+        );
 
   ({int offset, bool stop}) _consumeApcStart(
     int offset,
@@ -536,33 +643,59 @@ class InputParser {
     final evType = _extractCsiEventType(paramsStr);
 
     return switch (termByte) {
-      90 => KeyEvent(
-        'backtab',
-        KeyType.tab,
-        modifiers: mods.isEmpty ? const {Modifier.shift} : mods,
-        eventType: evType,
-      ),
       73 => const FocusInEvent(),
       79 => const FocusOutEvent(),
-      65 => KeyEvent('up', KeyType.up, modifiers: mods, eventType: evType),
-      66 => KeyEvent('down', KeyType.down, modifiers: mods, eventType: evType),
-      67 => KeyEvent(
-        'right',
-        KeyType.right,
-        modifiers: mods,
-        eventType: evType,
-      ),
-      68 => KeyEvent('left', KeyType.left, modifiers: mods, eventType: evType),
-      72 => KeyEvent('home', KeyType.home, modifiers: mods, eventType: evType),
-      70 => KeyEvent('end', KeyType.end, modifiers: mods, eventType: evType),
-      80 => KeyEvent('f1', KeyType.f1, modifiers: mods, eventType: evType),
-      81 => KeyEvent('f2', KeyType.f2, modifiers: mods, eventType: evType),
-      83 => KeyEvent('f4', KeyType.f4, modifiers: mods, eventType: evType),
       82 => _parseRSequence(paramsStr, params, mods, evType),
       126 => _parseCsiTildeKey(seq, params, mods, evType),
-      _ => KeyEvent(seq, KeyType.character),
+      _ =>
+        _parseCsiLetterKey(termByte, mods, evType) ??
+            KeyEvent(seq, KeyType.character),
     };
   }
+
+  static KeyEvent? _tryParseRecognizedCsiKey(String seq, int termByte) {
+    final paramsStr = seq.substring(2, seq.length - 1);
+    if (paramsStr.isNotEmpty) {
+      final prefix = paramsStr.codeUnitAt(0);
+      if (prefix >= 0x3C && prefix <= 0x3F) return null;
+    }
+
+    final params = _parseCsiMainParams(paramsStr);
+    final mods = _decodeCsiModifiers(params);
+    final evType = _extractCsiEventType(paramsStr);
+
+    return switch (termByte) {
+      82 => switch (_parseRSequence(paramsStr, params, mods, evType)) {
+        final KeyEvent k => k,
+        _ => null,
+      },
+      126 when params.isNotEmpty => _lookupTildeKey(params[0], mods, evType),
+      _ => _parseCsiLetterKey(termByte, mods, evType),
+    };
+  }
+
+  static KeyEvent? _parseCsiLetterKey(
+    int termByte,
+    Set<Modifier> mods,
+    KeyEventType evType,
+  ) => switch (termByte) {
+    90 => KeyEvent(
+      'backtab',
+      KeyType.tab,
+      modifiers: mods.isEmpty ? const {Modifier.shift} : mods,
+      eventType: evType,
+    ),
+    65 => KeyEvent('up', KeyType.up, modifiers: mods, eventType: evType),
+    66 => KeyEvent('down', KeyType.down, modifiers: mods, eventType: evType),
+    67 => KeyEvent('right', KeyType.right, modifiers: mods, eventType: evType),
+    68 => KeyEvent('left', KeyType.left, modifiers: mods, eventType: evType),
+    72 => KeyEvent('home', KeyType.home, modifiers: mods, eventType: evType),
+    70 => KeyEvent('end', KeyType.end, modifiers: mods, eventType: evType),
+    80 => KeyEvent('f1', KeyType.f1, modifiers: mods, eventType: evType),
+    81 => KeyEvent('f2', KeyType.f2, modifiers: mods, eventType: evType),
+    83 => KeyEvent('f4', KeyType.f4, modifiers: mods, eventType: evType),
+    _ => null,
+  };
 
   static InputEvent? _parsePrivateCsi(
     String paramsStr,
@@ -728,16 +861,23 @@ class InputParser {
       _pasteBuffer.clear();
       return null;
     }
+    return _lookupTildeKey(keyNum, mods, eventType) ??
+        KeyEvent(seq, KeyType.character);
+  }
+
+  static KeyEvent? _lookupTildeKey(
+    int keyNum,
+    Set<Modifier> mods,
+    KeyEventType eventType,
+  ) {
     final mapped = _tildeKeyMap[keyNum];
-    if (mapped != null) {
-      return KeyEvent(
-        mapped.$1,
-        mapped.$2,
-        modifiers: mods,
-        eventType: eventType,
-      );
-    }
-    return KeyEvent(seq, KeyType.character);
+    if (mapped == null) return null;
+    return KeyEvent(
+      mapped.$1,
+      mapped.$2,
+      modifiers: mods,
+      eventType: eventType,
+    );
   }
 
   static const Map<int, (String, KeyType)> _tildeKeyMap = {
@@ -764,13 +904,23 @@ class InputParser {
     127: ('backspace', KeyType.backspace),
   };
 
-  InputEvent _parseSs3Key(int term) => switch (term) {
+  static KeyEvent? _tryParseSs3FunctionalKey(int term) => switch (term) {
+    65 => const KeyEvent('up', KeyType.up),
+    66 => const KeyEvent('down', KeyType.down),
+    67 => const KeyEvent('right', KeyType.right),
+    68 => const KeyEvent('left', KeyType.left),
+    72 => const KeyEvent('home', KeyType.home),
+    70 => const KeyEvent('end', KeyType.end),
     80 => const KeyEvent('f1', KeyType.f1),
     81 => const KeyEvent('f2', KeyType.f2),
     82 => const KeyEvent('f3', KeyType.f3),
     83 => const KeyEvent('f4', KeyType.f4),
-    _ => KeyEvent(String.fromCharCode(term), KeyType.character),
+    _ => null,
   };
+
+  InputEvent _parseSs3Key(int term) =>
+      _tryParseSs3FunctionalKey(term) ??
+      KeyEvent(String.fromCharCode(term), KeyType.character);
 
   ({int offset, bool stop}) _consumeOscStart(
     int offset,

@@ -501,5 +501,248 @@ void main() {
         await replySub.cancel();
       },
     );
+
+    test(
+      'InputParser decodes DECCKM SS3 cursor/home/end, CSI 1;3A..D, double-ESC Alt+CSI/SS3, and chunked delivery without corrupting non-key CSI',
+      () {
+        final parser = InputParser(isWindows: false);
+
+        // 1. xterm CSI 1;3A..D (Alt+Arrows).
+        expect(
+          parser.parse('\x1b[1;3A\x1b[1;3B\x1b[1;3C\x1b[1;3D'.codeUnits),
+          equals(const [
+            KeyEvent('up', KeyType.up, modifiers: {Modifier.alt}),
+            KeyEvent('down', KeyType.down, modifiers: {Modifier.alt}),
+            KeyEvent('right', KeyType.right, modifiers: {Modifier.alt}),
+            KeyEvent('left', KeyType.left, modifiers: {Modifier.alt}),
+          ]),
+        );
+
+        // 2. DECCKM SS3 cursor and Home/End (\x1bOA..D, \x1bOH, \x1bOF).
+        expect(
+          parser.parse('\x1bOA\x1bOB\x1bOC\x1bOD\x1bOH\x1bOF'.codeUnits),
+          equals(const [
+            KeyEvent('up', KeyType.up),
+            KeyEvent('down', KeyType.down),
+            KeyEvent('right', KeyType.right),
+            KeyEvent('left', KeyType.left),
+            KeyEvent('home', KeyType.home),
+            KeyEvent('end', KeyType.end),
+          ]),
+        );
+
+        // 3. Double-ESC CSI (\x1b\x1b[A..D, \x1b\x1b[1;2A, \x1b\x1b[3~, \x1b\x1b[Z).
+        expect(
+          parser.parse('\x1b\x1b[A\x1b\x1b[B\x1b\x1b[C\x1b\x1b[D'.codeUnits),
+          equals(const [
+            KeyEvent('up', KeyType.up, modifiers: {Modifier.alt}),
+            KeyEvent('down', KeyType.down, modifiers: {Modifier.alt}),
+            KeyEvent('right', KeyType.right, modifiers: {Modifier.alt}),
+            KeyEvent('left', KeyType.left, modifiers: {Modifier.alt}),
+          ]),
+        );
+        expect(
+          parser.parse('\x1b\x1b[1;2A\x1b\x1b[3~\x1b\x1b[Z'.codeUnits),
+          equals(const [
+            KeyEvent(
+              'up',
+              KeyType.up,
+              modifiers: {Modifier.shift, Modifier.alt},
+            ),
+            KeyEvent('delete', KeyType.delete, modifiers: {Modifier.alt}),
+            KeyEvent(
+              'backtab',
+              KeyType.tab,
+              modifiers: {Modifier.shift, Modifier.alt},
+            ),
+          ]),
+        );
+
+        // 4. Double-ESC SS3 (\x1b\x1bOA..D, \x1b\x1bOH, \x1b\x1bOF, \x1b\x1bOP).
+        expect(
+          parser.parse(
+            '\x1b\x1bOA\x1b\x1bOB\x1b\x1bOC\x1b\x1bOD\x1b\x1bOH\x1b\x1bOF\x1b\x1bOP'
+                .codeUnits,
+          ),
+          equals(const [
+            KeyEvent('up', KeyType.up, modifiers: {Modifier.alt}),
+            KeyEvent('down', KeyType.down, modifiers: {Modifier.alt}),
+            KeyEvent('right', KeyType.right, modifiers: {Modifier.alt}),
+            KeyEvent('left', KeyType.left, modifiers: {Modifier.alt}),
+            KeyEvent('home', KeyType.home, modifiers: {Modifier.alt}),
+            KeyEvent('end', KeyType.end, modifiers: {Modifier.alt}),
+            KeyEvent('f1', KeyType.f1, modifiers: {Modifier.alt}),
+          ]),
+        );
+
+        // 5. Standalone 3-byte \x1b\x1b[ and \x1b\x1bO flush immediately without
+        //    wedging _buffer, while partial CSI parameter bodies still reassemble.
+        expect(
+          parser.parse('\x1b\x1b['.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('[', KeyType.character, modifiers: {Modifier.alt}),
+          ]),
+        );
+        expect(
+          parser.parse('A'.codeUnits),
+          equals(const [KeyEvent('A', KeyType.character)]),
+        );
+        expect(
+          parser.parse('\x1b\x1bO'.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('O', KeyType.character, modifiers: {Modifier.alt}),
+          ]),
+        );
+
+        expect(parser.parse('\x1b\x1b[1'.codeUnits), isEmpty);
+        expect(parser.parse(';2'.codeUnits), isEmpty);
+        expect(
+          parser.parse('A'.codeUnits),
+          equals(const [
+            KeyEvent(
+              'up',
+              KeyType.up,
+              modifiers: {Modifier.shift, Modifier.alt},
+            ),
+          ]),
+        );
+
+        // 6. Non-key CSI after bare ESC (mouse SGR, focus, bracketed paste, CPR) stays uncorrupted.
+        expect(
+          parser.parse('\x1b\x1b[<0;10;20M'.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            MouseEvent(
+              x: 10,
+              y: 20,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+          ]),
+        );
+        expect(
+          parser.parse('\x1b\x1b[I\x1b\x1b[O'.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            FocusInEvent(),
+            KeyEvent('escape', KeyType.escape),
+            FocusOutEvent(),
+          ]),
+        );
+        expect(
+          parser.parse('\x1b\x1b[200~pasted\x1b[201~'.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            PasteEvent('pasted'),
+          ]),
+        );
+        expect(
+          parser.parse('\x1b\x1b[24;80R'.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            CursorPositionReportEvent(80, 24),
+          ]),
+        );
+
+        // 7. Standalone Alt+Escape, Alt+Backspace, Ctrl+Alt+Backspace, Ctrl+Alt+c, Alt+Enter, and Alt+Tab.
+        expect(
+          parser.parse('\x1b\x1b'.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape, modifiers: {Modifier.alt}),
+          ]),
+        );
+        expect(
+          parser.parse('\x1b\x7f\x1b\x08\x1b\x03\x1b\r\x1b\t'.codeUnits),
+          equals(const [
+            KeyEvent('backspace', KeyType.backspace, modifiers: {Modifier.alt}),
+            KeyEvent(
+              'backspace',
+              KeyType.backspace,
+              modifiers: {Modifier.control, Modifier.alt},
+            ),
+            KeyEvent(
+              'c',
+              KeyType.character,
+              modifiers: {Modifier.control, Modifier.alt},
+            ),
+            KeyEvent('\n', KeyType.enter, modifiers: {Modifier.alt}),
+            KeyEvent('\t', KeyType.tab, modifiers: {Modifier.alt}),
+          ]),
+        );
+
+        // 8. Leading Ctrl+Backspace (\x08) or Ctrl+Alt+Backspace (\x1b\x08) on a
+        //    fresh POSIX parser never poisons subsequent plain Backspace (\x7f).
+        final freshCtrlBs = InputParser(isWindows: false);
+        expect(
+          freshCtrlBs.parse('\x08\x7f'.codeUnits),
+          equals(const [
+            KeyEvent(
+              'backspace',
+              KeyType.backspace,
+              modifiers: {Modifier.control},
+            ),
+            KeyEvent('backspace', KeyType.backspace),
+          ]),
+        );
+        final freshCtrlAltBs = InputParser(isWindows: false);
+        expect(
+          freshCtrlAltBs.parse('\x1b\x08\x7f'.codeUnits),
+          equals(const [
+            KeyEvent(
+              'backspace',
+              KeyType.backspace,
+              modifiers: {Modifier.control, Modifier.alt},
+            ),
+            KeyEvent('backspace', KeyType.backspace),
+          ]),
+        );
+
+        // 9. Double-ESC recovery on non-functional SS3, leading ESC + Alt+char,
+        //    ESC + Kitty CSI u (press & release), ESC + already-Alt/release CSI,
+        //    aborted CSI, and oversized runaway CSI.
+        expect(
+          parser.parse(
+            '\x1b\x1bOz\x1b\x1ba\x1b\x1b[97;5u\x1b\x1b[97;1:3u\x1b\x1b[1;3A\x1b\x1b[1;1:3A\x1b\x1b[R'
+                .codeUnits,
+          ),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('z', KeyType.character),
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('a', KeyType.character, modifiers: {Modifier.alt}),
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('a', KeyType.character, modifiers: {Modifier.control}),
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('a', KeyType.character, eventType: KeyEventType.release),
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('up', KeyType.up, modifiers: {Modifier.alt}),
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('up', KeyType.up, eventType: KeyEventType.release),
+            KeyEvent('f3', KeyType.f3, modifiers: {Modifier.alt}),
+          ]),
+        );
+        expect(
+          parser.parse('\x1b\x1b[1;\x1b[B'.codeUnits),
+          equals(const [
+            KeyEvent('escape', KeyType.escape),
+            KeyEvent('down', KeyType.down),
+          ]),
+        );
+        expect(
+          parser.parse(
+            '\x1b\x1b[${'0' * (InputParser.maxCsiBytes + 50)}'.codeUnits,
+          ),
+          isEmpty,
+        );
+        expect(
+          parser.parse(
+            '\x1b\x1b[${'1;' * InputParser.maxCsiBytes}Aq'.codeUnits,
+          ),
+          equals(const [KeyEvent('q', KeyType.character)]),
+        );
+      },
+    );
   });
 }
