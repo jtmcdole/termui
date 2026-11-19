@@ -1,18 +1,25 @@
 import 'dart:async';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 
 import '../feedback/feedback_models.dart';
 import '../feedback/feedback_platform.dart';
+import '../feedback/feedback_screenshot.dart';
+import '../feedback/screenshot_annotations.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import 'fterm_overlays.dart';
+import 'fterm_screenshot_editor.dart';
 
 /// Guided GitHub issue & feedback modal pre-populating version and platform
-/// metadata with opt-in workspace state, sanitized logs, and pane screenshots.
+/// metadata with opt-in workspace state, sanitized logs, and annotated
+/// pane screenshots.
 final class FtermFeedbackOverlay extends StatefulWidget {
   /// Backing workspace coordinator.
   final FtermWorkspaceController workspace;
@@ -26,8 +33,13 @@ final class FtermFeedbackOverlay extends StatefulWidget {
   /// Whether running in Web/Wasm mode.
   final bool isWeb;
 
-  /// Optional callback capturing the active terminal pane as a PNG file.
-  final Future<String?> Function()? onCaptureScreenshot;
+  /// Optional callback capturing the active terminal pane as a [ui.Image]
+  /// (ownership transfers to this overlay for annotation and disposal).
+  final Future<ui.Image?> Function()? onCaptureScreenshot;
+
+  /// Optional PNG persistence override (defaults to [saveFeedbackScreenshot]).
+  final Future<String?> Function(String basename, Uint8List bytes)?
+  onSaveScreenshot;
 
   /// Optional clipboard writer override (defaults to `Clipboard.setData`).
   final Future<void> Function(String text)? onCopyToClipboard;
@@ -43,6 +55,7 @@ final class FtermFeedbackOverlay extends StatefulWidget {
     required this.onOpenUrl,
     required this.isWeb,
     this.onCaptureScreenshot,
+    this.onSaveScreenshot,
     this.onCopyToClipboard,
     this.platformLabelResolver,
   });
@@ -62,6 +75,8 @@ final class _FtermFeedbackOverlayState extends State<FtermFeedbackOverlay> {
   bool _includeDiagnosticLogs = false;
   bool _showPreview = false;
   bool _capturingScreenshot = false;
+  ui.Image? _capturedImage;
+  List<ScreenshotAnnotation> _screenshotAnnotations = const [];
   String? _savedScreenshotName;
   String? _feedbackNotice;
   bool _noticeIsError = false;
@@ -89,6 +104,8 @@ final class _FtermFeedbackOverlayState extends State<FtermFeedbackOverlay> {
 
   @override
   void dispose() {
+    _capturedImage?.dispose();
+    _capturedImage = null;
     _titleCtrl.dispose();
     _detailsCtrl.dispose();
     super.dispose();
@@ -128,6 +145,54 @@ final class _FtermFeedbackOverlayState extends State<FtermFeedbackOverlay> {
     }
   }
 
+  Future<ui.Image?> _ensureCapturedImage(
+    Future<ui.Image?> Function() capture,
+  ) async {
+    if (_capturedImage case final existing?) return existing;
+    final captured = await capture();
+    if (!mounted) {
+      captured?.dispose();
+      return null;
+    }
+    _capturedImage = captured;
+    return captured;
+  }
+
+  Future<void> _saveAnnotatedScreenshot(
+    ui.Image image,
+    List<ScreenshotAnnotation> annotations,
+  ) async {
+    final pngBytes = await renderAnnotatedScreenshotPng(image, annotations);
+    if (!mounted) return;
+    if (pngBytes == null) {
+      _setNotice('Unable to encode annotated screenshot.', isError: true);
+      return;
+    }
+    final saver = widget.onSaveScreenshot ?? saveFeedbackScreenshot;
+    final filename =
+        'fterm_screenshot_${clock.now().millisecondsSinceEpoch}.png';
+    final saved = await saver(filename, pngBytes);
+    if (!mounted) return;
+    if (saved == null || saved.trim().isEmpty) {
+      _setNotice('Unable to save screenshot file.', isError: true);
+      return;
+    }
+    final trimmedPath = saved.trim();
+    setState(() {
+      _savedScreenshotName = _extractScreenshotBasename(trimmedPath);
+      _feedbackNotice =
+          'Saved to $trimmedPath — review before dragging onto the GitHub issue.';
+      _noticeIsError = false;
+    });
+  }
+
+  void _setNotice(String message, {required bool isError}) {
+    setState(() {
+      _feedbackNotice = message;
+      _noticeIsError = isError;
+    });
+  }
+
   Future<void> _handleCaptureScreenshot() async {
     final capture = widget.onCaptureScreenshot;
     if (capture == null || _capturingScreenshot) return;
@@ -137,29 +202,37 @@ final class _FtermFeedbackOverlayState extends State<FtermFeedbackOverlay> {
       _noticeIsError = false;
     });
     try {
-      final saved = await capture();
+      final image = await _ensureCapturedImage(capture);
       if (!mounted) return;
-      if (saved == null || saved.trim().isEmpty) {
-        setState(() {
-          _feedbackNotice = 'Unable to capture screenshot of the active pane.';
-          _noticeIsError = true;
-        });
+      if (image == null) {
+        _setNotice(
+          'Unable to capture screenshot of the active pane.',
+          isError: true,
+        );
         return;
       }
-      final trimmedPath = saved.trim();
-      final name = _extractScreenshotBasename(trimmedPath);
-      setState(() {
-        _savedScreenshotName = name;
-        _feedbackNotice =
-            'Saved to $trimmedPath — review before dragging onto the GitHub issue.';
-        _noticeIsError = false;
-      });
+      final edited = await showFtermScreenshotEditorDialog(
+        context: context,
+        image: image,
+        palette: widget.palette,
+        initialAnnotations: _screenshotAnnotations,
+      );
+      if (!mounted) return;
+      if (edited == null) {
+        if (_savedScreenshotName == null) {
+          _capturedImage?.dispose();
+          _capturedImage = null;
+        }
+        return;
+      }
+      setState(() => _screenshotAnnotations = edited);
+      await _saveAnnotatedScreenshot(image, edited);
     } on Object {
       if (!mounted) return;
-      setState(() {
-        _feedbackNotice = 'Unable to capture screenshot of the active pane.';
-        _noticeIsError = true;
-      });
+      _setNotice(
+        'Unable to capture screenshot of the active pane.',
+        isError: true,
+      );
     } finally {
       if (mounted) {
         setState(() => _capturingScreenshot = false);
@@ -330,6 +403,7 @@ final class _FtermFeedbackOverlayState extends State<FtermFeedbackOverlay> {
                 _FeedbackActionBar(
                   canScreenshot: canScreenshot,
                   capturingScreenshot: _capturingScreenshot,
+                  hasCapturedScreenshot: _capturedImage != null,
                   onCaptureScreenshot: () =>
                       unawaited(_handleCaptureScreenshot()),
                   onCopyReport: () => unawaited(_handleCopyReport()),
@@ -548,6 +622,7 @@ final class _FeedbackNoticeBanner extends StatelessWidget {
 final class _FeedbackActionBar extends StatelessWidget {
   final bool canScreenshot;
   final bool capturingScreenshot;
+  final bool hasCapturedScreenshot;
   final VoidCallback onCaptureScreenshot;
   final VoidCallback onCopyReport;
   final VoidCallback onOpenGitHub;
@@ -555,6 +630,7 @@ final class _FeedbackActionBar extends StatelessWidget {
   const _FeedbackActionBar({
     required this.canScreenshot,
     required this.capturingScreenshot,
+    required this.hasCapturedScreenshot,
     required this.onCaptureScreenshot,
     required this.onCopyReport,
     required this.onOpenGitHub,
@@ -562,6 +638,11 @@ final class _FeedbackActionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final screenshotLabel = capturingScreenshot
+        ? 'Working...'
+        : hasCapturedScreenshot
+        ? 'Edit Screenshot'
+        : 'Screenshot...';
     return Wrap(
       alignment: WrapAlignment.end,
       spacing: 8,
@@ -571,8 +652,13 @@ final class _FeedbackActionBar extends StatelessWidget {
           OutlinedButton.icon(
             key: const ValueKey('feedback-save-screenshot'),
             onPressed: capturingScreenshot ? null : onCaptureScreenshot,
-            icon: const Icon(Icons.camera_alt_outlined, size: 14),
-            label: Text(capturingScreenshot ? 'Saving...' : 'Save Screenshot'),
+            icon: Icon(
+              hasCapturedScreenshot
+                  ? Icons.edit_outlined
+                  : Icons.camera_alt_outlined,
+              size: 14,
+            ),
+            label: Text(screenshotLabel),
           ),
         OutlinedButton.icon(
           key: const ValueKey('feedback-copy-report'),

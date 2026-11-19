@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
@@ -24,7 +23,6 @@ import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
-import '../feedback/feedback_screenshot.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../settings_storage.dart';
@@ -336,26 +334,14 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     () => GlobalKey(debugLabel: 'fterm-pane-boundary-$paneId'),
   );
 
-  Future<String?> _captureFocusedPaneScreenshot() async {
+  Future<ui.Image?> _captureFocusedPaneScreenshot() async {
     final paneId = widget.workspace.focusedPane?.paneId;
     if (paneId == null) return null;
     final boundary =
         _paneBoundaryKeys[paneId]?.currentContext?.findRenderObject()
             as RenderRepaintBoundary?;
     if (boundary == null) return null;
-    final image = await boundary.toImage(pixelRatio: 2.0);
-    final ByteData? byteData;
-    try {
-      byteData = await image.toByteData(format: ui.ImageByteFormat.png);
-    } finally {
-      image.dispose();
-    }
-    if (byteData == null) return null;
-    final timestamp = clock.now().millisecondsSinceEpoch;
-    return saveFeedbackScreenshot(
-      'fterm_screenshot_$timestamp.png',
-      byteData.buffer.asUint8List(),
-    );
+    return boundary.toImage(pixelRatio: 2.0);
   }
 
   static Set<ev.Modifier> _collectHardwareModifiers() {
