@@ -1307,5 +1307,523 @@ void main() {
         await server.close();
       },
     );
+
+    test(
+      'assembles multi-chunk raw/deflateRaw KittyImageChunkFrame textures via CastClientRepository, deduplicates, clears on delta/snapshot, evicts stale pending, and recovers on corrupt chunks',
+      () async {
+        const sessionId = SessionId('kitty-chunks-client');
+        final server = _FakeServerTransportHarness();
+        final transport = WsClientTransport(channelFactory: server.openChannel);
+        final repo = CastClientRepository(
+          transport: transport,
+          enableReconnect: false,
+        );
+        await repo.connect();
+        server.send(const AuthAcceptedFrame(role: .client));
+        await Future<void>.delayed(Duration.zero);
+
+        final port = repo.openTerminalPort(sessionId);
+        var visualChanges = 0;
+        port.addListener(() => visualChanges += 1);
+
+        // Chunks received while awaitingKeyframe are ignored safely.
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 700,
+            pixelWidth: 2,
+            pixelHeight: 2,
+            gridCols: 1,
+            gridRows: 1,
+            totalDecodedBytes: 16,
+            totalWireBytes: 16,
+            chunkIndex: 0,
+            chunkCount: 1,
+            data: Uint8List(16),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(port.slot.kittyRegistry.lookupImage(700)).isNull();
+
+        server.send(
+          BufferSnapshotFrame(
+            snapshot: _makeSnapshot(
+              sessionId: sessionId,
+              seq: 1,
+              cols: 4,
+              rows: 2,
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        // 1. Multi-chunk deflateRaw reassembly + visual notification + O(1) dedup fast path.
+        final rgba = Uint8List.fromList(
+          List<int>.generate(64, (i) => (i * 7) & 0xFF),
+        );
+        final deflated = BufferFrameCodec.compressKittyBytes(rgba);
+        final half = deflated.length ~/ 2;
+        final part0 = Uint8List.sublistView(deflated, 0, half);
+        final part1 = Uint8List.sublistView(deflated, half);
+        final revBefore = port.fullSyncRevision;
+        final changesBefore = visualChanges;
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 701,
+            version: 5,
+            pixelWidth: 4,
+            pixelHeight: 4,
+            gridCols: 2,
+            gridRows: 2,
+            format: 32,
+            encoding: .deflateRaw,
+            totalDecodedBytes: 64,
+            totalWireBytes: deflated.length,
+            chunkIndex: 0,
+            chunkCount: 2,
+            data: part0,
+          ),
+        );
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 701,
+            version: 5,
+            pixelWidth: 4,
+            pixelHeight: 4,
+            gridCols: 2,
+            gridRows: 2,
+            format: 32,
+            encoding: .deflateRaw,
+            totalDecodedBytes: 64,
+            totalWireBytes: deflated.length,
+            chunkIndex: 1,
+            chunkCount: 2,
+            data: part1,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        final assembled701 = port.slot.kittyRegistry.lookupImage(701);
+        check(assembled701).isNotNull();
+        check(assembled701!.rgbaPixels).deepEquals(rgba);
+        check(port.fullSyncRevision).isGreaterThan(revBefore);
+        check(visualChanges).isGreaterThan(changesBefore);
+
+        // Duplicate chunk 0 with matching metadata+version is O(1) no-op.
+        final revAfter701 = port.fullSyncRevision;
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 701,
+            version: 5,
+            pixelWidth: 4,
+            pixelHeight: 4,
+            gridCols: 2,
+            gridRows: 2,
+            format: 32,
+            encoding: .deflateRaw,
+            totalDecodedBytes: 64,
+            totalWireBytes: deflated.length,
+            chunkIndex: 0,
+            chunkCount: 2,
+            data: part0,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(port.fullSyncRevision).equals(revAfter701);
+
+        // 2. Single-chunk PNG assembly.
+        final pngBytes =
+            (BytesBuilder()
+                  ..add(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+                  ..add(const [0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52])
+                  ..add(const [0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03])
+                  ..add(const [0x08, 0x06, 0x00, 0x00, 0x00]))
+                .takeBytes();
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 702,
+            pixelWidth: 3,
+            pixelHeight: 3,
+            gridCols: 1,
+            gridRows: 1,
+            format: 100,
+            encoding: .raw,
+            totalDecodedBytes: pngBytes.length,
+            totalWireBytes: pngBytes.length,
+            chunkIndex: 0,
+            chunkCount: 1,
+            data: pngBytes,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(
+          port.slot.kittyRegistry.lookupImage(702)?.rgbaPixels,
+        ).isNotNull().deepEquals(pngBytes);
+
+        // 3. Partial assembly eviction when > maxPendingKittyAssemblies (16) and cleanup on delta removal.
+        for (var i = 0; i < 18; i++) {
+          server.send(
+            KittyImageChunkFrame(
+              sessionId: sessionId,
+              imageId: 800 + i,
+              pixelWidth: 2,
+              pixelHeight: 2,
+              gridCols: 1,
+              gridRows: 1,
+              totalDecodedBytes: 16,
+              totalWireBytes: 16,
+              chunkIndex: 0,
+              chunkCount: 2,
+              data: Uint8List(8),
+            ),
+          );
+        }
+        await Future<void>.delayed(Duration.zero);
+
+        // Completing the evicted oldest assembly (800) triggers corruptFrame keyframe recovery!
+        server.received.clear();
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 800,
+            pixelWidth: 2,
+            pixelHeight: 2,
+            gridCols: 1,
+            gridRows: 1,
+            totalDecodedBytes: 16,
+            totalWireBytes: 16,
+            chunkIndex: 1,
+            chunkCount: 2,
+            data: Uint8List(8),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<RequestKeyframeFrame>()).isNotEmpty();
+
+        // Re-sync and test corrupt deflate triggers .corruptFrame + delta removals clear partial state.
+        server.send(
+          BufferSnapshotFrame(
+            snapshot: _makeSnapshot(
+              sessionId: sessionId,
+              seq: 2,
+              cols: 4,
+              rows: 2,
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        server.received.clear();
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 901,
+            pixelWidth: 4,
+            pixelHeight: 4,
+            gridCols: 1,
+            gridRows: 1,
+            format: 32,
+            encoding: .deflateRaw,
+            totalDecodedBytes: 64,
+            totalWireBytes: 4,
+            chunkIndex: 0,
+            chunkCount: 1,
+            data: Uint8List.fromList([0xFF, 0xFF, 0xFF, 0xFF]),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<RequestKeyframeFrame>()).isNotEmpty();
+
+        server.send(
+          BufferSnapshotFrame(
+            snapshot: _makeSnapshot(
+              sessionId: sessionId,
+              seq: 3,
+              cols: 4,
+              rows: 2,
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 902,
+            pixelWidth: 2,
+            pixelHeight: 2,
+            gridCols: 1,
+            gridRows: 1,
+            totalDecodedBytes: 16,
+            totalWireBytes: 16,
+            chunkIndex: 0,
+            chunkCount: 2,
+            data: Uint8List(8),
+          ),
+        );
+        server.send(
+          BufferDeltaFrame(
+            delta: BufferDelta(
+              sessionId: sessionId,
+              seq: 4,
+              baseSeq: 3,
+              cols: 4,
+              rows: 2,
+              cursor: CursorState.origin,
+              modes: TerminalModes.defaults,
+              runs: const [],
+              kittyRemovals: const [902],
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        // After delta removal discarded partial 902, chunk 1 alone fails safely with keyframe request.
+        server.received.clear();
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 902,
+            pixelWidth: 2,
+            pixelHeight: 2,
+            gridCols: 1,
+            gridRows: 1,
+            totalDecodedBytes: 16,
+            totalWireBytes: 16,
+            chunkIndex: 1,
+            chunkCount: 2,
+            data: Uint8List(8),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<RequestKeyframeFrame>()).isNotEmpty();
+
+        // 4. Exact 16 concurrent 2-chunk assemblies complete cleanly without evicting entry 0.
+        server.send(
+          BufferSnapshotFrame(
+            snapshot: _makeSnapshot(
+              sessionId: sessionId,
+              seq: 5,
+              cols: 4,
+              rows: 2,
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        server.received.clear();
+        for (var i = 0; i < 16; i++) {
+          server.send(
+            KittyImageChunkFrame(
+              sessionId: sessionId,
+              imageId: 1000 + i,
+              pixelWidth: 2,
+              pixelHeight: 2,
+              gridCols: 1,
+              gridRows: 1,
+              totalDecodedBytes: 16,
+              totalWireBytes: 16,
+              chunkIndex: 0,
+              chunkCount: 2,
+              data: Uint8List(8)..[0] = i,
+            ),
+          );
+        }
+        for (var i = 0; i < 16; i++) {
+          server.send(
+            KittyImageChunkFrame(
+              sessionId: sessionId,
+              imageId: 1000 + i,
+              pixelWidth: 2,
+              pixelHeight: 2,
+              gridCols: 1,
+              gridRows: 1,
+              totalDecodedBytes: 16,
+              totalWireBytes: 16,
+              chunkIndex: 1,
+              chunkCount: 2,
+              data: Uint8List(8)..[0] = i + 100,
+            ),
+          );
+        }
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<RequestKeyframeFrame>()).isEmpty();
+        for (var i = 0; i < 16; i++) {
+          final img = port.slot.kittyRegistry.lookupImage(1000 + i);
+          check(img).isNotNull();
+          check(img!.rgbaPixels[0]).equals(i);
+          check(img.rgbaPixels[8]).equals(i + 100);
+        }
+
+        // 5. >32 MiB cumulative wire bytes evicts oldest assembly (1100) while preserving active (1102).
+        final chunk500K = Uint8List(500 * 1000);
+        for (final id in [1100, 1101]) {
+          for (var c = 0; c < 31; c++) {
+            server.send(
+              KittyImageChunkFrame(
+                sessionId: sessionId,
+                imageId: id,
+                pixelWidth: 2000,
+                pixelHeight: 2000,
+                gridCols: 4,
+                gridRows: 2,
+                totalDecodedBytes: 16 * 1000 * 1000,
+                totalWireBytes: 16 * 1000 * 1000,
+                chunkIndex: c,
+                chunkCount: 32,
+                data: chunk500K,
+              ),
+            );
+          }
+        }
+        for (var c = 0; c < 7; c++) {
+          server.send(
+            KittyImageChunkFrame(
+              sessionId: sessionId,
+              imageId: 1102,
+              pixelWidth: 1000,
+              pixelHeight: 1000,
+              gridCols: 2,
+              gridRows: 1,
+              totalDecodedBytes: 4 * 1000 * 1000,
+              totalWireBytes: 4 * 1000 * 1000,
+              chunkIndex: c,
+              chunkCount: 8,
+              data: chunk500K,
+            ),
+          );
+        }
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 1102,
+            pixelWidth: 1000,
+            pixelHeight: 1000,
+            gridCols: 2,
+            gridRows: 1,
+            totalDecodedBytes: 4 * 1000 * 1000,
+            totalWireBytes: 4 * 1000 * 1000,
+            chunkIndex: 7,
+            chunkCount: 8,
+            data: chunk500K,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(port.slot.kittyRegistry.lookupImage(1102)).isNotNull();
+        // Oldest assembly (1100) was evicted when 1102 crossed the 32 MiB cap.
+        server.received.clear();
+        server.send(
+          KittyImageChunkFrame(
+            sessionId: sessionId,
+            imageId: 1100,
+            pixelWidth: 2000,
+            pixelHeight: 2000,
+            gridCols: 4,
+            gridRows: 2,
+            totalDecodedBytes: 16 * 1000 * 1000,
+            totalWireBytes: 16 * 1000 * 1000,
+            chunkIndex: 31,
+            chunkCount: 32,
+            data: chunk500K,
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<RequestKeyframeFrame>()).isNotEmpty();
+
+        // 6. Header mismatch, out-of-order chunkIndex, and invalid PNG IHDR trigger corruptFrame recovery,
+        // and _enterAwaitingKeyframe discards unrelated pending assemblies.
+        for (final badCase in ['header_mismatch', 'out_of_order', 'bad_png']) {
+          server.send(
+            BufferSnapshotFrame(
+              snapshot: _makeSnapshot(
+                sessionId: sessionId,
+                seq: 6,
+                cols: 4,
+                rows: 2,
+              ),
+            ),
+          );
+          await Future<void>.delayed(Duration.zero);
+          // Start an unrelated pending assembly to confirm _enterAwaitingKeyframe discards it.
+          server.send(
+            KittyImageChunkFrame(
+              sessionId: sessionId,
+              imageId: 1299,
+              pixelWidth: 2,
+              pixelHeight: 2,
+              gridCols: 1,
+              gridRows: 1,
+              totalDecodedBytes: 16,
+              totalWireBytes: 16,
+              chunkIndex: 0,
+              chunkCount: 2,
+              data: Uint8List(8),
+            ),
+          );
+          server.received.clear();
+          if (badCase == 'bad_png') {
+            final bogusPngDeflated = BufferFrameCodec.compressKittyBytes(
+              Uint8List.fromList(List<int>.filled(32, 0x7A)),
+            );
+            server.send(
+              KittyImageChunkFrame(
+                sessionId: sessionId,
+                imageId: 1200,
+                pixelWidth: 2,
+                pixelHeight: 2,
+                gridCols: 1,
+                gridRows: 1,
+                format: 100,
+                encoding: .deflateRaw,
+                totalDecodedBytes: 32,
+                totalWireBytes: bogusPngDeflated.length,
+                chunkIndex: 0,
+                chunkCount: 1,
+                data: bogusPngDeflated,
+              ),
+            );
+          } else {
+            server.send(
+              KittyImageChunkFrame(
+                sessionId: sessionId,
+                imageId: 1200,
+                pixelWidth: 2,
+                pixelHeight: 2,
+                gridCols: 1,
+                gridRows: 1,
+                totalDecodedBytes: 16,
+                totalWireBytes: 16,
+                chunkIndex: 0,
+                chunkCount: 3,
+                data: Uint8List(6),
+              ),
+            );
+            server.send(
+              KittyImageChunkFrame(
+                sessionId: sessionId,
+                imageId: 1200,
+                pixelWidth: badCase == 'header_mismatch' ? 4 : 2,
+                pixelHeight: badCase == 'header_mismatch' ? 1 : 2,
+                gridCols: 1,
+                gridRows: 1,
+                totalDecodedBytes: 16,
+                totalWireBytes: 16,
+                chunkIndex: badCase == 'out_of_order' ? 2 : 1,
+                chunkCount: 3,
+                data: Uint8List(6),
+              ),
+            );
+          }
+          await Future<void>.delayed(Duration.zero);
+          check(server.received.whereType<RequestKeyframeFrame>()).isNotEmpty();
+          check(
+            port.slot.state,
+          ).equals(ClientSessionSyncState.awaitingKeyframe);
+        }
+
+        await port.dispose();
+        await repo.dispose();
+        await server.close();
+      },
+    );
   });
 }
