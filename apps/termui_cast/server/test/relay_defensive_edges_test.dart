@@ -623,5 +623,202 @@ void main() {
         check(casterCloseCode).equals(1008);
       },
     );
+
+    test(
+      'routes 0x1B KittyImageChunkFrame to synchronized subscribers, respects awaitingKeyframe & outbound pressure, and evicts tampered 0x1B casters',
+      () async {
+        const sessionId = SessionId('kitty-chunk-relay');
+        final registry = SessionRegistry(
+          maxOutboundFrames: 4,
+          maxOutboundBytes: 128 * 1024,
+        );
+        addTearDown(registry.close);
+        final handler = WsRelayHandler(
+          registry: registry,
+          authenticator: TokenAuthenticator(
+            casterToken: 'c-tok',
+            clientToken: 'v-tok',
+          ),
+        );
+        addTearDown(handler.close);
+
+        final casterPipe = StreamChannelController<Uint8List>();
+        int? casterCloseCode;
+        handler.attachCasterChannel(
+          casterPipe.foreign,
+          closeWithCode: (code, _) async => casterCloseCode = code,
+        );
+        final casterInbox = <CastMessage>[];
+        addTearDown(
+          casterPipe.local.stream
+              .listen((raw) => casterInbox.add(BufferFrameCodec.decode(raw)))
+              .cancel,
+        );
+
+        casterPipe.local.sink.add(
+          BufferFrameCodec.encode(
+            const AuthFrame(role: .caster, token: 'c-tok'),
+          ),
+        );
+        casterPipe.local.sink.add(
+          BufferFrameCodec.encode(
+            const RegisterSessionFrame(
+              sessionId: sessionId,
+              title: 'chunk-relay',
+              cols: 8,
+              rows: 4,
+            ),
+          ),
+        );
+        await pumpEventQueue();
+
+        // Attach synced client (with direct StreamController backpressure).
+        final syncedIn = StreamController<Uint8List>();
+        final syncedOut = StreamController<Uint8List>();
+        final syncedLocal = StreamChannel<Uint8List>(
+          syncedOut.stream,
+          syncedIn.sink,
+        );
+        final syncedForeign = StreamChannel<Uint8List>(
+          syncedIn.stream,
+          syncedOut.sink,
+        );
+        handler.attachClientChannel(
+          syncedForeign,
+          closeWithCode: (_, _) async => unawaited(syncedOut.close()),
+        );
+        final syncedMsgs = <CastMessage>[];
+        final syncedSub = syncedLocal.stream.listen(
+          (raw) => syncedMsgs.add(BufferFrameCodec.decode(raw)),
+        );
+        addTearDown(syncedSub.cancel);
+        addTearDown(syncedIn.close);
+
+        syncedLocal.sink.add(
+          BufferFrameCodec.encode(
+            const AuthFrame(role: .client, token: 'v-tok'),
+          ),
+        );
+        syncedLocal.sink.add(
+          BufferFrameCodec.encode(
+            const SubscribeSessionFrame(sessionId: sessionId),
+          ),
+        );
+        await pumpEventQueue();
+
+        // Bring only syncedPipe out of awaitingKeyframe by delivering snapshot,
+        // then add late2 after snapshot so late2 remains in awaitingKeyframe.
+        casterPipe.local.sink.add(
+          BufferFrameCodec.encode(
+            BufferSnapshotFrame(
+              snapshot: BufferSnapshot(
+                sessionId: sessionId,
+                seq: 1,
+                cols: 8,
+                rows: 4,
+                cursor: CursorState.origin,
+                modes: TerminalModes.defaults,
+                wrappedRows: Uint8List(1),
+                characters: List<String>.filled(32, ' '),
+                attributes: Uint32List(32 * 3),
+              ),
+            ),
+          ),
+        );
+        await pumpEventQueue();
+        syncedMsgs.clear();
+
+        final late2Pipe = StreamChannelController<Uint8List>();
+        handler.attachClientChannel(late2Pipe.foreign);
+        final late2Msgs = <CastMessage>[];
+        addTearDown(
+          late2Pipe.local.stream
+              .listen((raw) => late2Msgs.add(BufferFrameCodec.decode(raw)))
+              .cancel,
+        );
+        late2Pipe.local.sink.add(
+          BufferFrameCodec.encode(
+            const AuthFrame(role: .client, token: 'v-tok'),
+          ),
+        );
+        late2Pipe.local.sink.add(
+          BufferFrameCodec.encode(
+            const SubscribeSessionFrame(sessionId: sessionId),
+          ),
+        );
+        await pumpEventQueue();
+        late2Msgs.clear();
+        casterInbox.clear();
+
+        // Forward 0x1B chunk: syncedPipe receives it; awaitingKeyframe late2 does not.
+        final validChunk = KittyImageChunkFrame(
+          sessionId: sessionId,
+          imageId: 55,
+          pixelWidth: 2,
+          pixelHeight: 2,
+          gridCols: 1,
+          gridRows: 1,
+          format: 32,
+          encoding: .raw,
+          totalDecodedBytes: 16,
+          totalWireBytes: 16,
+          chunkIndex: 0,
+          chunkCount: 1,
+          data: Uint8List(16),
+        );
+        casterPipe.local.sink.add(BufferFrameCodec.encode(validChunk));
+        await pumpEventQueue();
+        check(
+          syncedMsgs.whereType<KittyImageChunkFrame>().single.imageId,
+        ).equals(55);
+        check(late2Msgs.whereType<KittyImageChunkFrame>()).isEmpty();
+
+        // Synchronize late2 with snapshot seq=2 so awaitingKeyframe empties,
+        // then pause syncedPipe and send >maxOutboundFrames chunks ->
+        // downgraded to awaitingKeyframe + RequestKeyframe.
+        casterPipe.local.sink.add(
+          BufferFrameCodec.encode(
+            BufferSnapshotFrame(
+              snapshot: BufferSnapshot(
+                sessionId: sessionId,
+                seq: 2,
+                cols: 8,
+                rows: 4,
+                cursor: CursorState.origin,
+                modes: TerminalModes.defaults,
+                wrappedRows: Uint8List(1),
+                characters: List<String>.filled(32, ' '),
+                attributes: Uint32List(32 * 3),
+              ),
+            ),
+          ),
+        );
+        await pumpEventQueue();
+        casterInbox.clear();
+
+        syncedSub.pause();
+        await pumpEventQueue();
+        for (var i = 0; i < 8; i++) {
+          casterPipe.local.sink.add(BufferFrameCodec.encode(validChunk));
+        }
+        await pumpEventQueue();
+        syncedSub.resume();
+        await pumpEventQueue();
+        check(casterInbox.whereType<RequestKeyframeFrame>()).isNotEmpty();
+        syncedMsgs.clear();
+        casterPipe.local.sink.add(BufferFrameCodec.encode(validChunk));
+        await pumpEventQueue();
+        check(syncedMsgs.whereType<KittyImageChunkFrame>()).isEmpty();
+
+        // Tampered trailing-byte 0x1B chunk evicts caster with 1008.
+        final badChunkWire = Uint8List.fromList([
+          ...BufferFrameCodec.encode(validChunk),
+          0xFF,
+        ]);
+        casterPipe.local.sink.add(badChunkWire);
+        await pumpEventQueue();
+        check(casterCloseCode).equals(1008);
+      },
+    );
   });
 }

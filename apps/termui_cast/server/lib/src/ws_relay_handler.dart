@@ -262,7 +262,7 @@ final class _RelayPeerSession {
     final caster = _casterPeer;
     if (caster == null) return;
     // Fast zero-allocation path for BufferSnapshotFrame (0x09), BufferDeltaFrame (0x0A),
-    // ScrollbackChunkFrame (0x11), BellFrame (0x18), and AudioFrame (0x19).
+    // ScrollbackChunkFrame (0x11), BellFrame (0x18), AudioFrame (0x19), and KittyImageChunkFrame (0x1B).
     if (_tryForwardRawCasterFrame(caster, rawBytes)) return;
     switch (BufferFrameCodec.decode(rawBytes)) {
       case RegisterSessionFrame frame:
@@ -297,36 +297,38 @@ final class _RelayPeerSession {
         rawBytes[0] != BufferFrameCodec.protocolVersion) {
       return false;
     }
-    final tag = rawBytes[1];
-    if (tag == 0x09 || tag == 0x0A) {
-      if (!registry.forwardCasterBufferBytes(caster, rawBytes)) {
-        throw const ProtocolFormatException('Invalid caster buffer frame');
-      }
-      return true;
-    }
-    if (tag == 0x11) {
-      if (!registry.forwardCasterScrollbackChunkBytes(
-        caster,
-        rawBytes,
-        rewriteInPlace: true,
-      )) {
-        throw const ProtocolFormatException('Invalid caster scrollback chunk');
-      }
-      return true;
-    }
-    if (tag == 0x18) {
-      if (!registry.forwardCasterBellBytes(caster, rawBytes)) {
-        throw const ProtocolFormatException('Invalid caster bell frame');
-      }
-      return true;
-    }
-    if (tag == 0x19) {
-      if (!registry.forwardCasterAudioBytes(caster, rawBytes)) {
-        throw const ProtocolFormatException('Invalid caster audio frame');
-      }
-      return true;
-    }
-    return false;
+    return switch (rawBytes[1]) {
+      0x09 || 0x0A => _requireForwarded(
+        registry.forwardCasterBufferBytes(caster, rawBytes),
+        'Invalid caster buffer frame',
+      ),
+      0x11 => _requireForwarded(
+        registry.forwardCasterScrollbackChunkBytes(
+          caster,
+          rawBytes,
+          rewriteInPlace: true,
+        ),
+        'Invalid caster scrollback chunk',
+      ),
+      0x18 => _requireForwarded(
+        registry.forwardCasterBellBytes(caster, rawBytes),
+        'Invalid caster bell frame',
+      ),
+      0x19 => _requireForwarded(
+        registry.forwardCasterAudioBytes(caster, rawBytes),
+        'Invalid caster audio frame',
+      ),
+      0x1B => _requireForwarded(
+        registry.forwardCasterKittyChunkBytes(caster, rawBytes),
+        'Invalid caster Kitty chunk',
+      ),
+      _ => false,
+    };
+  }
+
+  static bool _requireForwarded(bool ok, String message) {
+    if (!ok) throw ProtocolFormatException(message);
+    return true;
   }
 
   void _dispatchClientFrame(Uint8List rawBytes) {

@@ -392,6 +392,25 @@ final class SessionRegistry {
     }
   }
 
+  /// Validates and forwards a raw `0x1B` [KittyImageChunkFrame] from [caster]
+  /// to synchronized subscribers zero-copy, downgrading pressured subscribers
+  /// to awaiting a keyframe.
+  bool forwardCasterKittyChunkBytes(CasterPeer caster, Uint8List rawFrame) {
+    final session = _lookupCasterSession(caster);
+    if (session == null) return false;
+    if (!BufferFrameCodec.inspectRelayKittyChunkFrame(
+      rawFrame,
+      expectedSession: session.id,
+    )) {
+      return false;
+    }
+    _fanOutSynchronizedFrame(session, rawFrame);
+    if (session.pendingControlSync) {
+      _syncCasterControl(session);
+    }
+    return true;
+  }
+
   /// Validates and forwards a live buffer frame (`0x09` or `0x0A`) from
   /// [caster] without storing history, returning `false` when invalid.
   bool forwardCasterBufferBytes(CasterPeer caster, Uint8List rawFrame) {
@@ -1111,6 +1130,10 @@ final class SessionRegistry {
 
   void _forwardDelta(_LiveSession session, int seq, Uint8List rawFrame) {
     session.lastSeq = seq;
+    _fanOutSynchronizedFrame(session, rawFrame);
+  }
+
+  void _fanOutSynchronizedFrame(_LiveSession session, Uint8List rawFrame) {
     final shouldRequestKeyframe = session.awaitingKeyframe.isEmpty;
     var downgradedAny = false;
     for (final subscriber in [...session.subscribers]) {
