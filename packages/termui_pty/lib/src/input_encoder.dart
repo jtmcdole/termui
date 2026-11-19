@@ -176,7 +176,7 @@ abstract final class InputEncoder {
     final evNum = key.eventType == ev.KeyEventType.repeat ? 2 : 3;
     final modAndEvent = hasEventSub ? '$modParam:$evNum' : '$modParam';
 
-    if (_letterFunctionalFinal(key.type) case final ch?) {
+    if (_letterFunctionalFinal(key.type, kitty: true) case final ch?) {
       return _encodeKittyLetterFunctional(
         key.type,
         ch,
@@ -220,7 +220,12 @@ abstract final class InputEncoder {
     return null;
   }
 
-  static String? _letterFunctionalFinal(ev.KeyType type) => switch (type) {
+  // Kitty keyboard protocol maps F3 to tilde code 13 (`CSI 13 ~`) to avoid
+  // colliding with CPR (`CSI r ; c R`), whereas legacy xterm/terminfo uses `R`.
+  static String? _letterFunctionalFinal(
+    ev.KeyType type, {
+    required bool kitty,
+  }) => switch (type) {
     ev.KeyType.up => 'A',
     ev.KeyType.down => 'B',
     ev.KeyType.right => 'C',
@@ -229,6 +234,7 @@ abstract final class InputEncoder {
     ev.KeyType.end => 'F',
     ev.KeyType.f1 => 'P',
     ev.KeyType.f2 => 'Q',
+    ev.KeyType.f3 when !kitty => 'R',
     ev.KeyType.f4 => 'S',
     _ => null,
   };
@@ -258,8 +264,12 @@ abstract final class InputEncoder {
     _ => null,
   };
 
-  static bool _isSs3FunctionKey(ev.KeyType type) =>
-      type == ev.KeyType.f1 || type == ev.KeyType.f2 || type == ev.KeyType.f4;
+  static bool _isSs3FunctionKey(ev.KeyType type, {required bool kitty}) =>
+      switch (type) {
+        ev.KeyType.f1 || ev.KeyType.f2 || ev.KeyType.f4 => true,
+        ev.KeyType.f3 => !kitty,
+        _ => false,
+      };
 
   static String? _encodeKittyLetterFunctional(
     ev.KeyType type,
@@ -272,7 +282,7 @@ abstract final class InputEncoder {
     if (modParam > 1 || hasEventSub) {
       return '\x1b[1;$modAndEvent$ch';
     }
-    if (_isSs3FunctionKey(type)) {
+    if (_isSs3FunctionKey(type, kitty: true)) {
       return (kf.disambiguate || kf.reportAll) ? '\x1b[$ch' : null;
     }
     return kf.reportAll ? '\x1b[$ch' : null;
@@ -417,39 +427,52 @@ abstract final class InputEncoder {
     return modBits;
   }
 
-  static String _encodeKeyEvent(ev.KeyEvent event) => switch (event.type) {
-    ev.KeyType.character => _encodeCharacterKey(event),
-    ev.KeyType.up => '\x1b[A',
-    ev.KeyType.down => '\x1b[B',
-    ev.KeyType.right => '\x1b[C',
-    ev.KeyType.left => '\x1b[D',
-    ev.KeyType.enter => '\r',
-    ev.KeyType.backspace => '\x7f',
-    ev.KeyType.tab
-        when event.modifiers.contains(ev.Modifier.shift) ||
-            event.key == 'backtab' =>
-      '\x1b[Z',
-    ev.KeyType.tab => '\t',
-    ev.KeyType.escape => '\x1b',
-    ev.KeyType.home => '\x1b[H',
-    ev.KeyType.end => '\x1b[F',
-    ev.KeyType.pageUp => '\x1b[5~',
-    ev.KeyType.pageDown => '\x1b[6~',
-    ev.KeyType.delete => '\x1b[3~',
-    ev.KeyType.insert => '\x1b[2~',
-    ev.KeyType.f1 => '\x1bOP',
-    ev.KeyType.f2 => '\x1bOQ',
-    ev.KeyType.f3 => '\x1bOR',
-    ev.KeyType.f4 => '\x1bOS',
-    ev.KeyType.f5 => '\x1b[15~',
-    ev.KeyType.f6 => '\x1b[17~',
-    ev.KeyType.f7 => '\x1b[18~',
-    ev.KeyType.f8 => '\x1b[19~',
-    ev.KeyType.f9 => '\x1b[20~',
-    ev.KeyType.f10 => '\x1b[21~',
-    ev.KeyType.f11 => '\x1b[23~',
-    ev.KeyType.f12 => '\x1b[24~',
-  };
+  static String _encodeLegacyTab(ev.KeyEvent event) {
+    final isShift =
+        event.modifiers.contains(ev.Modifier.shift) || event.key == 'backtab';
+    final base = isShift ? '\x1b[Z' : '\t';
+    return event.modifiers.contains(ev.Modifier.alt) ? '\x1b$base' : base;
+  }
+
+  static String _encodeLegacyBackspace(ev.KeyEvent event) {
+    final base = event.modifiers.contains(ev.Modifier.control)
+        ? '\x08'
+        : '\x7f';
+    return event.modifiers.contains(ev.Modifier.alt) ? '\x1b$base' : base;
+  }
+
+  static String _encodeKeyEvent(ev.KeyEvent event) {
+    // Legacy xterm mode does not represent GUI Super/Cmd shortcuts; drop them
+    // consistently across character, cursor, functional, and C0 keys.
+    if (event.modifiers.contains(ev.Modifier.meta)) {
+      return '';
+    }
+    if (event.type == ev.KeyType.character) {
+      return _encodeCharacterKey(event);
+    }
+    final modBits = _encodeKittyModifierBits(event);
+    if (_letterFunctionalFinal(event.type, kitty: false) case final ch?) {
+      if (modBits > 0) return '\x1b[1;${1 + modBits}$ch';
+      return _isSs3FunctionKey(event.type, kitty: false)
+          ? '\x1bO$ch'
+          : '\x1b[$ch';
+    }
+    if (_tildeFunctionalCode(event.type) case final code?) {
+      return modBits > 0 ? '\x1b[$code;${1 + modBits}~' : '\x1b[$code~';
+    }
+    return _encodeLegacySpecialC0(event);
+  }
+
+  static String _encodeLegacySpecialC0(ev.KeyEvent event) {
+    final hasAlt = event.modifiers.contains(ev.Modifier.alt);
+    return switch (event.type) {
+      ev.KeyType.enter => hasAlt ? '\x1b\r' : '\r',
+      ev.KeyType.backspace => _encodeLegacyBackspace(event),
+      ev.KeyType.tab => _encodeLegacyTab(event),
+      ev.KeyType.escape => hasAlt ? '\x1b\x1b' : '\x1b',
+      _ => '',
+    };
+  }
 
   static String _encodeCharacterKey(ev.KeyEvent event) {
     if (event.modifiers.contains(ev.Modifier.meta)) {

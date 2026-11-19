@@ -165,6 +165,10 @@ void main() {
       variant: TargetPlatformVariant.only(TargetPlatform.windows),
       _testPreFocusedAndViewIdChange,
     );
+    testWidgets(
+      'forwards Alt+Arrow keys with altLeft and altRight when kittyKeyboardFlags is 0',
+      _testAltArrowsWithAltModifiers,
+    );
     test(
       'grapheme-cluster prefix diffing preserves multi-code-unit emoji and combining marks',
       _testGraphemeClusterImeDiffing,
@@ -1616,4 +1620,64 @@ void _testGraphemeClusterImeDiffing() {
     ),
   ]);
   expect(committed, equals(['👨‍💻e\u0301']));
+}
+
+Future<void> _testAltArrowsWithAltModifiers(WidgetTester tester) async {
+  final keyEvents = <term.KeyEvent>[];
+  final imeClient = TerminalImeClient(onKeyEvent: keyEvents.add);
+  addTearDown(imeClient.dispose);
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 320,
+          height: 200,
+          child: TerminalSurface(
+            imeClient: imeClient,
+            kittyKeyboardFlags: 0,
+            buffer: Buffer(20, 8),
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  const arrows = [
+    (LogicalKeyboardKey.arrowUp, 'up', term.KeyType.up),
+    (LogicalKeyboardKey.arrowDown, 'down', term.KeyType.down),
+    (LogicalKeyboardKey.arrowRight, 'right', term.KeyType.right),
+    (LogicalKeyboardKey.arrowLeft, 'left', term.KeyType.left),
+  ];
+
+  for (final altKey in const [
+    LogicalKeyboardKey.altLeft,
+    LogicalKeyboardKey.altRight,
+  ]) {
+    keyEvents.clear();
+    await tester.sendKeyDownEvent(altKey);
+    try {
+      for (final (logical, _, _) in arrows) {
+        await tester.sendKeyEvent(logical);
+      }
+    } finally {
+      await tester.sendKeyUpEvent(altKey);
+    }
+    await tester.pump();
+
+    expect(
+      keyEvents,
+      equals([
+        for (final (_, name, expectedType) in arrows)
+          term.KeyEvent(
+            name,
+            expectedType,
+            modifiers: const {term.Modifier.alt},
+          ),
+      ]),
+    );
+  }
 }

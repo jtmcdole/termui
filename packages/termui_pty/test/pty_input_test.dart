@@ -91,7 +91,7 @@ void main() {
   });
 
   group('InputEncoder', () {
-    test('encodes Tab, Shift+Tab, and backtab', () {
+    test('encodes Tab, Shift+Tab, Alt+Tab, and backtab', () {
       expect(
         InputEncoder.encode(
           const ev.KeyEvent(
@@ -109,6 +109,26 @@ void main() {
       expect(
         InputEncoder.encode(const ev.KeyEvent('Tab', ev.KeyType.tab)),
         '\t',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            'Tab',
+            ev.KeyType.tab,
+            modifiers: {ev.Modifier.alt},
+          ),
+        ),
+        '\x1b\t',
+      );
+      expect(
+        InputEncoder.encode(
+          const ev.KeyEvent(
+            'backtab',
+            ev.KeyType.tab,
+            modifiers: {ev.Modifier.shift, ev.Modifier.alt},
+          ),
+        ),
+        '\x1b\x1b[Z',
       );
     });
 
@@ -362,14 +382,23 @@ void main() {
 
     test('encodes SS3 cursor keys when applicationCursorKeys is enabled', () {
       const keys = [
-        (ev.KeyType.up, '\x1bOA', '\x1b[A'),
-        (ev.KeyType.down, '\x1bOB', '\x1b[B'),
-        (ev.KeyType.right, '\x1bOC', '\x1b[C'),
-        (ev.KeyType.left, '\x1bOD', '\x1b[D'),
-        (ev.KeyType.home, '\x1bOH', '\x1b[H'),
-        (ev.KeyType.end, '\x1bOF', '\x1b[F'),
+        (ev.KeyType.up, 'A', '\x1bOA', '\x1b[A'),
+        (ev.KeyType.down, 'B', '\x1bOB', '\x1b[B'),
+        (ev.KeyType.right, 'C', '\x1bOC', '\x1b[C'),
+        (ev.KeyType.left, 'D', '\x1bOD', '\x1b[D'),
+        (ev.KeyType.home, 'H', '\x1bOH', '\x1b[H'),
+        (ev.KeyType.end, 'F', '\x1bOF', '\x1b[F'),
       ];
-      for (final (keyType, appSeq, normalSeq) in keys) {
+      const modExpectations = [
+        ({ev.Modifier.shift}, 2),
+        ({ev.Modifier.alt}, 3),
+        ({ev.Modifier.shift, ev.Modifier.alt}, 4),
+        ({ev.Modifier.control}, 5),
+        ({ev.Modifier.control, ev.Modifier.shift}, 6),
+        ({ev.Modifier.control, ev.Modifier.alt}, 7),
+        ({ev.Modifier.control, ev.Modifier.shift, ev.Modifier.alt}, 8),
+      ];
+      for (final (keyType, finalChar, appSeq, normalSeq) in keys) {
         expect(
           InputEncoder.encode(
             ev.KeyEvent('', keyType),
@@ -378,17 +407,27 @@ void main() {
           appSeq,
         );
         expect(InputEncoder.encode(ev.KeyEvent('', keyType)), normalSeq);
-        for (final mod in [
-          ev.Modifier.shift,
-          ev.Modifier.alt,
-          ev.Modifier.control,
-        ]) {
+        expect(
+          InputEncoder.encode(
+            ev.KeyEvent('', keyType, modifiers: const {ev.Modifier.meta}),
+          ),
+          isEmpty,
+        );
+        for (final (mods, modParam) in modExpectations) {
+          final expected = '\x1b[1;$modParam$finalChar';
           expect(
             InputEncoder.encode(
-              ev.KeyEvent('', keyType, modifiers: {mod}),
+              ev.KeyEvent('', keyType, modifiers: mods),
+              applicationCursorKeys: false,
+            ),
+            expected,
+          );
+          expect(
+            InputEncoder.encode(
+              ev.KeyEvent('', keyType, modifiers: mods),
               applicationCursorKeys: true,
             ),
-            normalSeq,
+            expected,
           );
         }
       }
@@ -401,6 +440,177 @@ void main() {
         '\x1b[5~',
       );
     });
+
+    test(
+      'encodes legacy xterm modifiers (kittyKeyboardFlags: 0) on F1-F12, tilde, and special C0 keys',
+      () {
+        const f1ToF4 = [
+          (ev.KeyType.f1, 'P', '\x1bOP'),
+          (ev.KeyType.f2, 'Q', '\x1bOQ'),
+          (ev.KeyType.f3, 'R', '\x1bOR'),
+          (ev.KeyType.f4, 'S', '\x1bOS'),
+        ];
+        const tildeKeys = [
+          (ev.KeyType.insert, 2),
+          (ev.KeyType.delete, 3),
+          (ev.KeyType.pageUp, 5),
+          (ev.KeyType.pageDown, 6),
+          (ev.KeyType.f5, 15),
+          (ev.KeyType.f6, 17),
+          (ev.KeyType.f7, 18),
+          (ev.KeyType.f8, 19),
+          (ev.KeyType.f9, 20),
+          (ev.KeyType.f10, 21),
+          (ev.KeyType.f11, 23),
+          (ev.KeyType.f12, 24),
+        ];
+        const modCases = [
+          ({ev.Modifier.shift}, 2),
+          ({ev.Modifier.alt}, 3),
+          ({ev.Modifier.shift, ev.Modifier.alt}, 4),
+          ({ev.Modifier.control}, 5),
+          ({ev.Modifier.control, ev.Modifier.alt}, 7),
+        ];
+
+        for (final (keyType, finalChar, plainSeq) in f1ToF4) {
+          for (final appCursor in const [false, true]) {
+            expect(
+              InputEncoder.encode(
+                ev.KeyEvent('', keyType),
+                applicationCursorKeys: appCursor,
+              ),
+              plainSeq,
+            );
+            expect(
+              InputEncoder.encode(
+                ev.KeyEvent('', keyType, modifiers: const {ev.Modifier.meta}),
+                applicationCursorKeys: appCursor,
+              ),
+              isEmpty,
+            );
+            for (final (mods, modParam) in modCases) {
+              expect(
+                InputEncoder.encode(
+                  ev.KeyEvent('', keyType, modifiers: mods),
+                  applicationCursorKeys: appCursor,
+                ),
+                '\x1b[1;$modParam$finalChar',
+              );
+            }
+          }
+        }
+
+        for (final (keyType, code) in tildeKeys) {
+          for (final appCursor in const [false, true]) {
+            expect(
+              InputEncoder.encode(
+                ev.KeyEvent('', keyType),
+                applicationCursorKeys: appCursor,
+              ),
+              '\x1b[$code~',
+            );
+            expect(
+              InputEncoder.encode(
+                ev.KeyEvent('', keyType, modifiers: const {ev.Modifier.meta}),
+                applicationCursorKeys: appCursor,
+              ),
+              isEmpty,
+            );
+            for (final (mods, modParam) in modCases) {
+              expect(
+                InputEncoder.encode(
+                  ev.KeyEvent('', keyType, modifiers: mods),
+                  applicationCursorKeys: appCursor,
+                ),
+                '\x1b[$code;$modParam~',
+              );
+            }
+          }
+        }
+
+        // Legacy Backspace, Enter, and Escape with Alt/Ctrl modifiers.
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent('backspace', ev.KeyType.backspace),
+          ),
+          '\x7f',
+        );
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent(
+              'backspace',
+              ev.KeyType.backspace,
+              modifiers: {ev.Modifier.alt},
+            ),
+          ),
+          '\x1b\x7f',
+        );
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent(
+              'backspace',
+              ev.KeyType.backspace,
+              modifiers: {ev.Modifier.control},
+            ),
+          ),
+          '\x08',
+        );
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent(
+              'backspace',
+              ev.KeyType.backspace,
+              modifiers: {ev.Modifier.control, ev.Modifier.alt},
+            ),
+          ),
+          '\x1b\x08',
+        );
+        expect(
+          InputEncoder.encode(const ev.KeyEvent('\n', ev.KeyType.enter)),
+          '\r',
+        );
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent(
+              '\n',
+              ev.KeyType.enter,
+              modifiers: {ev.Modifier.alt},
+            ),
+          ),
+          '\x1b\r',
+        );
+        expect(
+          InputEncoder.encode(const ev.KeyEvent('escape', ev.KeyType.escape)),
+          '\x1b',
+        );
+        expect(
+          InputEncoder.encode(
+            const ev.KeyEvent(
+              'escape',
+              ev.KeyType.escape,
+              modifiers: {ev.Modifier.alt},
+            ),
+          ),
+          '\x1b\x1b',
+        );
+        for (final special in const [
+          ev.KeyEvent(
+            'backspace',
+            ev.KeyType.backspace,
+            modifiers: {ev.Modifier.meta},
+          ),
+          ev.KeyEvent('\n', ev.KeyType.enter, modifiers: {ev.Modifier.meta}),
+          ev.KeyEvent('\t', ev.KeyType.tab, modifiers: {ev.Modifier.meta}),
+          ev.KeyEvent(
+            'escape',
+            ev.KeyType.escape,
+            modifiers: {ev.Modifier.meta},
+          ),
+        ]) {
+          expect(InputEncoder.encode(special), isEmpty);
+        }
+      },
+    );
 
     test('encodes alternate scroll wheel sequences', () {
       expect(
