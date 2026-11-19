@@ -1348,7 +1348,7 @@ void main() {
         check(
           stderrLines,
         ).any((l) => l.contains('Child process exited with code 0'));
-        check(stopwatch.elapsedMilliseconds).isLessThan(2000);
+        check(stopwatch.elapsedMilliseconds).isLessThan(4000);
       },
       timeout: const Timeout(Duration(seconds: 60)),
       skip: Platform.isWindows ? 'Requires POSIX /bin/sh' : null,

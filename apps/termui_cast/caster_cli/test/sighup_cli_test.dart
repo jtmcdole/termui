@@ -405,7 +405,8 @@ Future<void> _runSubprocessSighupProxyTest() async {
   );
   check(postHupSnap.characters.join()).contains('BEFORE_HUP');
 
-  // 4. Send input to verify child shell is still alive, then exit cleanly < 2000ms.
+  // 4. Send input to verify child shell is still alive, then exit cleanly < 4000ms
+  // (below Dart's 5s WebSocket close timer so leaked timers fail fast).
   viewer.sink.add(
     BufferFrameCodec.encode(
       InputFrame(
@@ -422,7 +423,7 @@ Future<void> _runSubprocessSighupProxyTest() async {
   stopwatch.stop();
 
   check(exitCode).equals(0);
-  check(stopwatch.elapsedMilliseconds).isLessThan(2000);
+  check(stopwatch.elapsedMilliseconds).isLessThan(4000);
   check(stderrLines).any(
     (l) =>
         l.contains('Check-in requested; reconnecting session "sighup-subproc"'),

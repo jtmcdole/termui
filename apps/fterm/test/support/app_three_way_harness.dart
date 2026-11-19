@@ -183,12 +183,13 @@ final class AppThreeWayWsHarness {
     return pipe.local;
   }
 
-  /// Disposes all casters and closes the relay registry.
+  /// Disposes all casters and closes the relay handler and registry.
   Future<void> dispose() async {
     for (final caster in [..._casters]) {
       await caster.stop(killPty: true);
     }
     _casters.clear();
+    await relayHandler.close();
     await registry.close();
   }
 }
@@ -201,4 +202,24 @@ Future<void> settleCastApp(WidgetTester tester, {int cycles = 6}) async {
     });
     await tester.pump(const Duration(milliseconds: 20));
   }
+}
+
+/// Pumps real async work and Flutter frames until [condition] returns `true`
+/// or wall-clock [timeout] elapses.
+///
+/// Returns `true` if [condition] became `true` before [timeout].
+Future<bool> settleCastAppUntil(
+  WidgetTester tester,
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 5),
+  Duration step = const Duration(milliseconds: 20),
+}) async {
+  final deadline = Stopwatch()..start();
+  while (!condition() && deadline.elapsed < timeout) {
+    await tester.runAsync(() async {
+      await Future<void>.delayed(step);
+    });
+    await tester.pump(step);
+  }
+  return condition();
 }

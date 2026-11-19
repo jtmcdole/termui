@@ -274,16 +274,26 @@ _wrapIoBinaryWebSocketInternal(
 }) {
   ws.pingInterval = pingInterval;
   final handshakeCompleter = Completer<void>();
+  final wsDone = Completer<void>();
   late final StreamSubscription<Object?> sub;
   late final IoBinaryWebSocketSink sink;
   late final StreamController<Uint8List> incoming;
+  Future<void> cancelSubAfterDone() async {
+    if (wsDone.isCompleted) return;
+    try {
+      await wsDone.future.timeout(const Duration(milliseconds: 200));
+    } on TimeoutException {
+      await sub.cancel();
+    }
+  }
+
   incoming = StreamController<Uint8List>(
     onPause: () => sub.pause(),
     onResume: () => sub.resume(),
     onCancel: () async {
       await Future<void>.value();
       await (sink._closeFuture ?? sink.close());
-      await sub.cancel();
+      await cancelSubAfterDone();
     },
   );
   sink = IoBinaryWebSocketSink(
@@ -295,7 +305,7 @@ _wrapIoBinaryWebSocketInternal(
     onCloseTimeout: () {
       (onCloseTimeout ?? meteredSocket?.destroy)?.call();
       _markCloseHandshakeDone(ws, handshakeCompleter);
-      unawaited(sub.cancel());
+      unawaited(cancelSubAfterDone());
     },
   );
   meteredSocket?.onLimitExceeded = (ProtocolFormatException error) {
@@ -318,6 +328,7 @@ _wrapIoBinaryWebSocketInternal(
     },
     onError: incoming.addError,
     onDone: () {
+      if (!wsDone.isCompleted) wsDone.complete();
       _markCloseHandshakeDone(ws, handshakeCompleter);
       unawaited(sink.close());
       if (!incoming.isClosed) {
