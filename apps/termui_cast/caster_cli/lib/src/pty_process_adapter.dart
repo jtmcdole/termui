@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:pty2/pty2.dart';
@@ -68,7 +69,15 @@ final class _ImmediateStringSink extends StringConversionSinkBase {
 
 /// Production [PtySession] backed by `package:pty2`'s `PseudoTerminal`.
 final class Pty2Session implements PtySession {
+  /// Default horizontal cell extent in pixels matching [VirtualTerminal].
+  static const int defaultCellPixelWidth = 8;
+
+  /// Default vertical cell extent in pixels matching [VirtualTerminal].
+  static const int defaultCellPixelHeight = 16;
+
   final PseudoTerminal _pty;
+  final int _cellPixelWidth;
+  final int _cellPixelHeight;
   final Utf8ChunkDecoder _inputDecoder;
   late final StreamController<Uint8List> _controller;
   late final StreamController<String> _textController;
@@ -80,7 +89,13 @@ final class Pty2Session implements PtySession {
   bool _byteListenerActive = false;
   bool _textListenerActive = false;
 
-  Pty2Session._(this._pty) : _inputDecoder = Utf8ChunkDecoder(_pty.write) {
+  Pty2Session._(
+    this._pty, {
+    int cellPixelWidth = defaultCellPixelWidth,
+    int cellPixelHeight = defaultCellPixelHeight,
+  }) : _cellPixelWidth = max(1, cellPixelWidth),
+       _cellPixelHeight = max(1, cellPixelHeight),
+       _inputDecoder = Utf8ChunkDecoder(_pty.write) {
     _controller = StreamController<Uint8List>(
       sync: true,
       onListen: _onListenBytes,
@@ -98,7 +113,36 @@ final class Pty2Session implements PtySession {
   }
 
   /// Wraps an already-started [PseudoTerminal] instance.
-  factory Pty2Session.wrap(PseudoTerminal pty) => Pty2Session._(pty);
+  factory Pty2Session.wrap(
+    PseudoTerminal pty, {
+    int cellPixelWidth = defaultCellPixelWidth,
+    int cellPixelHeight = defaultCellPixelHeight,
+  }) => Pty2Session._(
+    pty,
+    cellPixelWidth: cellPixelWidth,
+    cellPixelHeight: cellPixelHeight,
+  );
+
+  /// Computes clamped `(pixelWidth, pixelHeight)` (`1..65535`) for `TIOCSWINSZ`,
+  /// falling back to `cols * cellPixelWidth` and `rows * cellPixelHeight` when zero.
+  static (int pixelWidth, int pixelHeight) resolvePixelDimensions(
+    int cols,
+    int rows, {
+    int pixelWidth = 0,
+    int pixelHeight = 0,
+    int cellPixelWidth = defaultCellPixelWidth,
+    int cellPixelHeight = defaultCellPixelHeight,
+  }) {
+    final int safeCols = max(1, cols);
+    final int safeRows = max(1, rows);
+    final int pxW = pixelWidth > 0
+        ? pixelWidth
+        : safeCols * max<int>(1, cellPixelWidth);
+    final int pxH = pixelHeight > 0
+        ? pixelHeight
+        : safeRows * max<int>(1, cellPixelHeight);
+    return (min(65535, max(1, pxW)), min(65535, max(1, pxH)));
+  }
 
   /// Direct decoded UTF-16 string stream from the underlying PTY, avoiding
   /// a redundant `utf8.encode` -> `utf8.decode` round-trip when feeding
@@ -136,6 +180,8 @@ final class Pty2Session implements PtySession {
     List<String> arguments, {
     required int initialCols,
     required int initialRows,
+    int cellPixelWidth = defaultCellPixelWidth,
+    int cellPixelHeight = defaultCellPixelHeight,
     String? workingDirectory,
     Map<String, String>? environment,
   }) {
@@ -150,11 +196,23 @@ final class Pty2Session implements PtySession {
       environment: mergedEnv,
       ackProcessed: true,
     );
+    final safeCols = max(1, initialCols);
+    final safeRows = max(1, initialRows);
+    final (pxW, pxH) = resolvePixelDimensions(
+      safeCols,
+      safeRows,
+      cellPixelWidth: cellPixelWidth,
+      cellPixelHeight: cellPixelHeight,
+    );
     try {
-      pty.resize(initialCols, initialRows);
+      pty.resize(safeCols, safeRows, pixelWidth: pxW, pixelHeight: pxH);
     } on Object catch (_) {}
 
-    return Pty2Session._(pty);
+    return Pty2Session._(
+      pty,
+      cellPixelWidth: cellPixelWidth,
+      cellPixelHeight: cellPixelHeight,
+    );
   }
 
   @override
@@ -294,7 +352,17 @@ final class Pty2Session implements PtySession {
 
   @override
   void resize(int cols, int rows, {int pixelWidth = 0, int pixelHeight = 0}) {
-    _pty.resize(cols, rows, pixelWidth: pixelWidth, pixelHeight: pixelHeight);
+    final safeCols = max(1, cols);
+    final safeRows = max(1, rows);
+    final (pxW, pxH) = resolvePixelDimensions(
+      safeCols,
+      safeRows,
+      pixelWidth: pixelWidth,
+      pixelHeight: pixelHeight,
+      cellPixelWidth: _cellPixelWidth,
+      cellPixelHeight: _cellPixelHeight,
+    );
+    _pty.resize(safeCols, safeRows, pixelWidth: pxW, pixelHeight: pxH);
   }
 
   @override
