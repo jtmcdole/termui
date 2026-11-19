@@ -574,7 +574,7 @@ final class _FontRasterGoldenComparator extends LocalFileComparator {
 
   @override
   Future<bool> compare(Uint8List imageBytes, Uri golden) async {
-    if (Platform.isWindows) {
+    if (Platform.isMacOS) {
       return super.compare(imageBytes, golden);
     }
     final result = await GoldenFileComparator.compareLists(
