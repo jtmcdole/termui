@@ -80,6 +80,7 @@ const int _tagShellTitle = 0x17;
 const int _tagBell = 0x18;
 const int _tagAudio = 0x19;
 const int _tagAudioWaveformReply = 0x1A;
+const int _tagKittyImageChunk = 0x1B;
 
 const int _renameFlagClearPin = 0x01;
 const int _summaryFlagUserPinned = 0x01;
@@ -144,6 +145,7 @@ const int _maxKittyImagesPerFrame = 1024;
 const int _maxKittyImageDimension = 4096;
 const int _maxKittyImageTotalPixels = 4_194_304;
 const int _maxKittyImageGridSpan = 512;
+const int _maxKittyChunkCount = 256;
 const int _minPngBytes = 24;
 const int _auxFlagUnderlineColors = 0x01;
 const int _auxFlagUriRuns = 0x02;
@@ -197,7 +199,7 @@ SessionTitleValidation validateSessionTitle(String input) {
 /// Binary wire codec for [CastMessage] frames and 1D [Buffer] delta application.
 abstract final class BufferFrameCodec {
   /// Current binary wire protocol version byte.
-  static const int protocolVersion = 7;
+  static const int protocolVersion = 8;
 
   /// Maximum uncompressed/compressed audio clip payload size (`2 MiB`).
   static const int maxAudioPayloadBytes = CastAudioPayload.maxClipBytes;
@@ -207,6 +209,58 @@ abstract final class BufferFrameCodec {
 
   /// Maximum allowed UTF-8 byte length for a session title.
   static const int maxTitleBytes = _maxTitleBytes;
+
+  /// Maximum decoded or wire byte size for a single chunked Kitty image (`16 MiB`).
+  static const int maxKittyImageBytes = _maxKittyImageTotalPixels * 4;
+
+  /// Maximum wire payload bytes per [KittyImageChunkFrame] (`512 KiB`).
+  static const int maxKittyChunkBytes = 524_288;
+
+  /// Compresses raw Kitty image bytes with `deflate-raw` level 1.
+  static Uint8List compressKittyBytes(Uint8List rawBytes) =>
+      compressDeflateRawLevel1(rawBytes);
+
+  /// Inflates a `deflate-raw` Kitty image buffer strictly bounded to [expectedBytes].
+  static Uint8List inflateKittyBytes(
+    Uint8List compressed, {
+    required int expectedBytes,
+  }) {
+    if (expectedBytes <= 0 || expectedBytes > maxKittyImageBytes) {
+      throw ProtocolFormatException(
+        'Invalid expected Kitty inflated length: $expectedBytes',
+      );
+    }
+    final Uint8List inflated;
+    try {
+      inflated = const ZLibDecoder().decodeBytes(
+        compressed,
+        raw: true,
+        throwOnError: true,
+        maxOutputSize: expectedBytes,
+      );
+    } on Object catch (e) {
+      throw ProtocolFormatException('Failed to inflate Kitty image: $e');
+    }
+    if (inflated.length != expectedBytes) {
+      throw ProtocolFormatException(
+        'Inflated Kitty length ${inflated.length} != expected $expectedBytes',
+      );
+    }
+    return inflated;
+  }
+
+  /// Validates that [bytes] has a valid PNG signature and matching `IHDR` dimensions.
+  static void validateKittyPngHeader(
+    Uint8List bytes,
+    int expectedWidth,
+    int expectedHeight,
+  ) => _validatePngIhdrSlice(
+    bytes,
+    0,
+    bytes.length,
+    expectedWidth,
+    expectedHeight,
+  );
 
   /// Validates that [title] is trimmed, non-empty, `<= 512` UTF-8 bytes, and free of control or bidi override characters.
   static void validateTitle(String title) {
@@ -347,6 +401,8 @@ abstract final class BufferFrameCodec {
         :final samples,
       ):
         _encodeAudioWaveformReply(writer, sessionId, requestId, samples);
+      case KittyImageChunkFrame frame:
+        _encodeKittyImageChunk(writer, frame);
     }
     final bytes = writer.takeBytes();
     if (bytes.length > maxFrameBytes) {
@@ -525,6 +581,33 @@ abstract final class BufferFrameCodec {
     return true;
   }
 
+  /// Validates the header and slice bounds of a raw `0x1B` [KittyImageChunkFrame]
+  /// for [expectedSession] in O(1) without copying chunk bytes.
+  static bool inspectRelayKittyChunkFrame(
+    Uint8List frame, {
+    required SessionId expectedSession,
+  }) {
+    if (frame.length < 2 ||
+        frame[0] != protocolVersion ||
+        frame[1] != _tagKittyImageChunk) {
+      return false;
+    }
+    if (frame.length > maxFrameBytes) {
+      throw ProtocolFormatException(
+        'Relay Kitty chunk frame exceeds $maxFrameBytes bytes: ${frame.length}',
+      );
+    }
+    final reader = _FrameReader(frame)..skip(2);
+    if (reader.readSessionId() != expectedSession) return false;
+    _readValidatedKittyChunkHeader(reader);
+    if (!reader.isAtEnd) {
+      throw const ProtocolFormatException(
+        'Trailing bytes after KittyImageChunkFrame',
+      );
+    }
+    return true;
+  }
+
   /// Applies [delta] to [buffer] via `setRange` when `(baseSeq, cols, rows)` match.
   ///
   /// Returns `false` without mutating [buffer] when [currentSeq] does not match
@@ -683,6 +766,7 @@ CastMessage _decodeByTag(_FrameReader reader, int tag) {
     _tagFileUploadEnd => _decodeFileUploadEnd(reader),
     _tagFileUploadAck => _decodeFileUploadAck(reader),
     _tagAudioWaveformReply => _decodeAudioWaveformReply(reader),
+    _tagKittyImageChunk => _decodeKittyImageChunk(reader),
     _ => throw ProtocolFormatException('Unknown frame tag: $tag'),
   };
 }
@@ -885,6 +969,313 @@ AudioWaveformReplyFrame _decodeAudioWaveformReply(_FrameReader reader) {
     requestId: requestId,
     samples: samples,
   );
+}
+
+void _validateKittyImageDimensions({
+  required int imageId,
+  required int pixelWidth,
+  required int pixelHeight,
+  required int gridCols,
+  required int gridRows,
+}) {
+  if (imageId <= 0 || imageId > 0xFFFFFFFF) {
+    throw ProtocolFormatException('Invalid Kitty imageId: $imageId');
+  }
+  if (pixelWidth <= 0 ||
+      pixelWidth > _maxKittyImageDimension ||
+      pixelHeight <= 0 ||
+      pixelHeight > _maxKittyImageDimension ||
+      pixelWidth * pixelHeight > _maxKittyImageTotalPixels) {
+    throw ProtocolFormatException(
+      'Invalid Kitty image dimensions: ${pixelWidth}x$pixelHeight',
+    );
+  }
+  if (gridCols <= 0 ||
+      gridCols > _maxKittyImageGridSpan ||
+      gridRows <= 0 ||
+      gridRows > _maxKittyImageGridSpan) {
+    throw ProtocolFormatException(
+      'Invalid Kitty grid span: ${gridCols}x$gridRows',
+    );
+  }
+}
+
+KittyChunkEncoding _decodeKittyChunkEncoding(int raw) => switch (raw) {
+  0 => .raw,
+  1 => .deflateRaw,
+  _ => throw ProtocolFormatException('Invalid KittyChunkEncoding byte: $raw'),
+};
+
+void _validateKittyChunkMetadata({
+  required int imageId,
+  required int version,
+  required int pixelWidth,
+  required int pixelHeight,
+  required int gridCols,
+  required int gridRows,
+  required int format,
+  required KittyChunkEncoding encoding,
+  required int totalDecodedBytes,
+  required int totalWireBytes,
+  required int chunkIndex,
+  required int chunkCount,
+  required int dataLength,
+}) {
+  _validateKittyImageDimensions(
+    imageId: imageId,
+    pixelWidth: pixelWidth,
+    pixelHeight: pixelHeight,
+    gridCols: gridCols,
+    gridRows: gridRows,
+  );
+  _checkUint32(version, 'kittyChunk.version');
+  _validateKittyChunkFormatAndSizes(
+    format: format,
+    encoding: encoding,
+    pixelWidth: pixelWidth,
+    pixelHeight: pixelHeight,
+    totalDecodedBytes: totalDecodedBytes,
+    totalWireBytes: totalWireBytes,
+  );
+  _validateKittyChunkSliceBounds(
+    totalWireBytes: totalWireBytes,
+    chunkIndex: chunkIndex,
+    chunkCount: chunkCount,
+    dataLength: dataLength,
+  );
+}
+
+void _validateKittyChunkFormatAndSizes({
+  required int format,
+  required KittyChunkEncoding encoding,
+  required int pixelWidth,
+  required int pixelHeight,
+  required int totalDecodedBytes,
+  required int totalWireBytes,
+}) {
+  if (format == 32) {
+    final expected = pixelWidth * pixelHeight * 4;
+    if (totalDecodedBytes != expected) {
+      throw ProtocolFormatException(
+        'RGBA32 Kitty totalDecodedBytes $totalDecodedBytes != $expected',
+      );
+    }
+  } else if (format == 100) {
+    if (totalDecodedBytes < _minPngBytes ||
+        totalDecodedBytes > BufferFrameCodec.maxKittyImageBytes) {
+      throw ProtocolFormatException(
+        'PNG Kitty totalDecodedBytes out of range: $totalDecodedBytes',
+      );
+    }
+  } else {
+    throw ProtocolFormatException('Unsupported Kitty image format: $format');
+  }
+  if (totalWireBytes <= 0 ||
+      totalWireBytes > BufferFrameCodec.maxKittyImageBytes) {
+    throw ProtocolFormatException(
+      'Kitty totalWireBytes out of range: $totalWireBytes',
+    );
+  }
+  if (encoding == .raw && totalWireBytes != totalDecodedBytes) {
+    throw ProtocolFormatException(
+      'Raw Kitty totalWireBytes $totalWireBytes != $totalDecodedBytes',
+    );
+  }
+}
+
+void _validateKittyChunkSliceBounds({
+  required int totalWireBytes,
+  required int chunkIndex,
+  required int chunkCount,
+  required int dataLength,
+}) {
+  final minChunks =
+      (totalWireBytes + BufferFrameCodec.maxKittyChunkBytes - 1) ~/
+      BufferFrameCodec.maxKittyChunkBytes;
+  final maxChunks = totalWireBytes < _maxKittyChunkCount
+      ? totalWireBytes
+      : _maxKittyChunkCount;
+  if (chunkCount <= 0 ||
+      chunkCount > _maxKittyChunkCount ||
+      chunkCount < minChunks ||
+      chunkCount > maxChunks) {
+    throw ProtocolFormatException(
+      'Invalid Kitty chunkCount=$chunkCount for totalWireBytes=$totalWireBytes',
+    );
+  }
+  if (chunkIndex < 0 || chunkIndex >= chunkCount) {
+    throw ProtocolFormatException(
+      'Invalid Kitty chunkIndex=$chunkIndex for chunkCount=$chunkCount',
+    );
+  }
+  if (dataLength <= 0 ||
+      dataLength > BufferFrameCodec.maxKittyChunkBytes ||
+      dataLength > totalWireBytes) {
+    throw ProtocolFormatException(
+      'Invalid Kitty chunk dataLength=$dataLength for totalWireBytes=$totalWireBytes',
+    );
+  }
+  final maxRemainingBytes =
+      (chunkCount - 1) * BufferFrameCodec.maxKittyChunkBytes;
+  if (dataLength > totalWireBytes - (chunkCount - 1) ||
+      dataLength < totalWireBytes - maxRemainingBytes) {
+    throw ProtocolFormatException(
+      'Kitty chunk dataLength=$dataLength incompatible with totalWireBytes=$totalWireBytes across $chunkCount chunks',
+    );
+  }
+}
+
+void _encodeKittyImageChunk(_FrameWriter writer, KittyImageChunkFrame frame) {
+  _validateKittyChunkMetadata(
+    imageId: frame.imageId,
+    version: frame.version,
+    pixelWidth: frame.pixelWidth,
+    pixelHeight: frame.pixelHeight,
+    gridCols: frame.gridCols,
+    gridRows: frame.gridRows,
+    format: frame.format,
+    encoding: frame.encoding,
+    totalDecodedBytes: frame.totalDecodedBytes,
+    totalWireBytes: frame.totalWireBytes,
+    chunkIndex: frame.chunkIndex,
+    chunkCount: frame.chunkCount,
+    dataLength: frame.data.length,
+  );
+  if (frame.chunkIndex == 0 && frame.format == 100 && frame.encoding == .raw) {
+    _validatePngIhdrSlice(
+      frame.data,
+      0,
+      frame.data.length,
+      frame.pixelWidth,
+      frame.pixelHeight,
+    );
+  }
+  writer
+    ..writeUint8(_tagKittyImageChunk)
+    ..writeSessionId(frame.sessionId)
+    ..writeUint32(frame.imageId)
+    ..writeUint32(frame.version)
+    ..writeUint16(frame.pixelWidth)
+    ..writeUint16(frame.pixelHeight)
+    ..writeUint16(frame.gridCols)
+    ..writeUint16(frame.gridRows)
+    ..writeUint8(frame.format)
+    ..writeUint8(frame.encoding.code)
+    ..writeUint32(frame.totalDecodedBytes)
+    ..writeUint32(frame.totalWireBytes)
+    ..writeUint16(frame.chunkIndex)
+    ..writeUint16(frame.chunkCount)
+    ..writeBytes32(frame.data);
+}
+
+({
+  int imageId,
+  int version,
+  int pixelWidth,
+  int pixelHeight,
+  int gridCols,
+  int gridRows,
+  int format,
+  KittyChunkEncoding encoding,
+  int totalDecodedBytes,
+  int totalWireBytes,
+  int chunkIndex,
+  int chunkCount,
+  int dataOffset,
+  int dataLength,
+})
+_readValidatedKittyChunkHeader(_FrameReader reader) {
+  final imageId = reader.readUint32();
+  final version = reader.readUint32();
+  final pixelWidth = reader.readUint16();
+  final pixelHeight = reader.readUint16();
+  final gridCols = reader.readUint16();
+  final gridRows = reader.readUint16();
+  final format = reader.readUint8();
+  final encoding = _decodeKittyChunkEncoding(reader.readUint8());
+  final totalDecodedBytes = reader.readUint32();
+  final totalWireBytes = reader.readUint32();
+  final chunkIndex = reader.readUint16();
+  final chunkCount = reader.readUint16();
+  final dataLength = reader.readUint32();
+  _validateKittyChunkMetadata(
+    imageId: imageId,
+    version: version,
+    pixelWidth: pixelWidth,
+    pixelHeight: pixelHeight,
+    gridCols: gridCols,
+    gridRows: gridRows,
+    format: format,
+    encoding: encoding,
+    totalDecodedBytes: totalDecodedBytes,
+    totalWireBytes: totalWireBytes,
+    chunkIndex: chunkIndex,
+    chunkCount: chunkCount,
+    dataLength: dataLength,
+  );
+  reader._require(dataLength);
+  final dataOffset = reader._offset;
+  if (chunkIndex == 0 && format == 100 && encoding == .raw) {
+    _validatePngIhdrSlice(
+      reader._bytes,
+      dataOffset,
+      dataLength,
+      pixelWidth,
+      pixelHeight,
+    );
+  }
+  reader._offset += dataLength;
+  return (
+    imageId: imageId,
+    version: version,
+    pixelWidth: pixelWidth,
+    pixelHeight: pixelHeight,
+    gridCols: gridCols,
+    gridRows: gridRows,
+    format: format,
+    encoding: encoding,
+    totalDecodedBytes: totalDecodedBytes,
+    totalWireBytes: totalWireBytes,
+    chunkIndex: chunkIndex,
+    chunkCount: chunkCount,
+    dataOffset: dataOffset,
+    dataLength: dataLength,
+  );
+}
+
+KittyImageChunkFrame _decodeKittyImageChunk(_FrameReader reader) {
+  final sessionId = reader.readSessionId();
+  try {
+    final h = _readValidatedKittyChunkHeader(reader);
+    if (!reader.isAtEnd) {
+      throw const ProtocolFormatException('Trailing bytes after frame body');
+    }
+    final data = Uint8List.fromList(
+      Uint8List.sublistView(
+        reader._bytes,
+        h.dataOffset,
+        h.dataOffset + h.dataLength,
+      ),
+    );
+    return KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: h.imageId,
+      version: h.version,
+      pixelWidth: h.pixelWidth,
+      pixelHeight: h.pixelHeight,
+      gridCols: h.gridCols,
+      gridRows: h.gridRows,
+      format: h.format,
+      encoding: h.encoding,
+      totalDecodedBytes: h.totalDecodedBytes,
+      totalWireBytes: h.totalWireBytes,
+      chunkIndex: h.chunkIndex,
+      chunkCount: h.chunkCount,
+      data: data,
+    );
+  } on ProtocolFormatException catch (e) {
+    throw CorruptSessionFrameException(sessionId, e.message);
+  }
 }
 
 void _writeToneAudio(_FrameWriter tail, CastToneAudioPayload tone) {
@@ -2139,26 +2530,15 @@ void _inspectRelayScrollbackTail(_FrameReader reader, int rowCount) {
 }
 
 void _validateKittyPayload(KittyImagePayload payload) {
-  if (payload.imageId <= 0 || payload.imageId > 0xFFFFFFFF) {
-    throw ProtocolFormatException('Invalid Kitty imageId: ${payload.imageId}');
-  }
   final w = payload.pixelWidth;
   final h = payload.pixelHeight;
-  if (w <= 0 ||
-      w > _maxKittyImageDimension ||
-      h <= 0 ||
-      h > _maxKittyImageDimension ||
-      w * h > _maxKittyImageTotalPixels) {
-    throw ProtocolFormatException('Invalid Kitty image dimensions: ${w}x$h');
-  }
-  if (payload.gridCols <= 0 ||
-      payload.gridCols > _maxKittyImageGridSpan ||
-      payload.gridRows <= 0 ||
-      payload.gridRows > _maxKittyImageGridSpan) {
-    throw ProtocolFormatException(
-      'Invalid Kitty grid span: ${payload.gridCols}x${payload.gridRows}',
-    );
-  }
+  _validateKittyImageDimensions(
+    imageId: payload.imageId,
+    pixelWidth: w,
+    pixelHeight: h,
+    gridCols: payload.gridCols,
+    gridRows: payload.gridRows,
+  );
   _checkUint32(payload.version, 'kittyImage.version');
   _validateKittyPayloadFormatBytes(payload.format, w, h, payload.bytes.length);
   if (payload.format == 100) {

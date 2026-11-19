@@ -1514,9 +1514,9 @@ void main() {
     );
 
     test(
-      'protocol v7 validates resumeToken, SessionCloseReason, RenameSessionFrame, and hostile titles',
+      'protocol v8 validates resumeToken, SessionCloseReason, RenameSessionFrame, and hostile titles',
       () {
-        check(BufferFrameCodec.protocolVersion).equals(7);
+        check(BufferFrameCodec.protocolVersion).equals(8);
         const sessionId = SessionId('sess-v3');
 
         // Default RegisterSessionFrame resumeToken is 16 zero bytes.
@@ -3552,4 +3552,363 @@ void _testV6HostileAudioAndTitleFrames() {
   check(
     (BufferFrameCodec.decode(patched) as ScrollbackChunkFrame).requestId,
   ).equals(99);
+
+  // Protocol v8: 0x1B KittyImageChunkFrame encode, decode, relay inspection, and deflate helpers.
+  final rawRgba = Uint8List.fromList(List<int>.generate(64, (i) => i & 0xFF));
+  final deflated = BufferFrameCodec.compressKittyBytes(rawRgba);
+  final chunkWire = BufferFrameCodec.encode(
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 0x80000001,
+      version: 3,
+      pixelWidth: 4,
+      pixelHeight: 4,
+      gridCols: 2,
+      gridRows: 2,
+      format: 32,
+      encoding: .deflateRaw,
+      totalDecodedBytes: 64,
+      totalWireBytes: deflated.length,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: deflated,
+    ),
+  );
+  check(
+    BufferFrameCodec.inspectRelayKittyChunkFrame(
+      chunkWire,
+      expectedSession: sessionId,
+    ),
+  ).isTrue();
+  check(
+    BufferFrameCodec.inspectRelayKittyChunkFrame(
+      chunkWire,
+      expectedSession: const SessionId('other'),
+    ),
+  ).isFalse();
+  final decodedChunk =
+      BufferFrameCodec.decode(chunkWire) as KittyImageChunkFrame;
+  check(decodedChunk.encoding).equals(.deflateRaw);
+  check(
+    BufferFrameCodec.inflateKittyBytes(
+      decodedChunk.data,
+      expectedBytes: decodedChunk.totalDecodedBytes,
+    ),
+  ).deepEquals(rawRgba);
+
+  // Raw PNG chunk-0 IHDR validation and CorruptSessionFrameException wrapping.
+  final pngChunkBytes =
+      (BytesBuilder()
+            ..add(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+            ..add(const [0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52])
+            ..add(const [0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x06])
+            ..add(const [0x08, 0x06, 0x00, 0x00, 0x00]))
+          .takeBytes();
+  final pngChunkWire = BufferFrameCodec.encode(
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 44,
+      pixelWidth: 8,
+      pixelHeight: 6,
+      gridCols: 1,
+      gridRows: 1,
+      format: 100,
+      encoding: .raw,
+      totalDecodedBytes: pngChunkBytes.length,
+      totalWireBytes: pngChunkBytes.length,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: pngChunkBytes,
+    ),
+  );
+  check(
+    BufferFrameCodec.inspectRelayKittyChunkFrame(
+      pngChunkWire,
+      expectedSession: sessionId,
+    ),
+  ).isTrue();
+  BufferFrameCodec.validateKittyPngHeader(pngChunkBytes, 8, 6);
+  final decodedPng =
+      BufferFrameCodec.decode(pngChunkWire) as KittyImageChunkFrame;
+  check(decodedPng.pixelWidth).equals(8);
+  check(decodedPng.pixelHeight).equals(6);
+  check(decodedPng.format).equals(100);
+  check(decodedPng.chunkIndex).equals(0);
+  check(decodedPng.chunkCount).equals(1);
+
+  final multiChunkWire = BufferFrameCodec.encode(
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 45,
+      version: 7,
+      pixelWidth: 3,
+      pixelHeight: 2,
+      gridCols: 4,
+      gridRows: 1,
+      format: 32,
+      encoding: .raw,
+      totalDecodedBytes: 24,
+      totalWireBytes: 24,
+      chunkIndex: 1,
+      chunkCount: 2,
+      data: Uint8List(12),
+    ),
+  );
+  final decodedMulti =
+      BufferFrameCodec.decode(multiChunkWire) as KittyImageChunkFrame;
+  check(decodedMulti.pixelWidth).equals(3);
+  check(decodedMulti.pixelHeight).equals(2);
+  check(decodedMulti.gridCols).equals(4);
+  check(decodedMulti.gridRows).equals(1);
+  check(decodedMulti.chunkIndex).equals(1);
+  check(decodedMulti.chunkCount).equals(2);
+
+  check(
+    () => BufferFrameCodec.decode(Uint8List.fromList([...pngChunkWire, 0x00])),
+  ).throws<CorruptSessionFrameException>();
+  final badPngHeader = Uint8List.fromList(pngChunkBytes)..[19] = 0x99;
+  check(
+    () => BufferFrameCodec.validateKittyPngHeader(badPngHeader, 8, 6),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.encode(
+      KittyImageChunkFrame(
+        sessionId: sessionId,
+        imageId: 44,
+        pixelWidth: 8,
+        pixelHeight: 6,
+        gridCols: 1,
+        gridRows: 1,
+        format: 100,
+        encoding: .raw,
+        totalDecodedBytes: badPngHeader.length,
+        totalWireBytes: badPngHeader.length,
+        chunkIndex: 0,
+        chunkCount: 1,
+        data: badPngHeader,
+      ),
+    ),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.encode(
+      KittyImageChunkFrame(
+        sessionId: sessionId,
+        imageId: 44,
+        pixelWidth: 4,
+        pixelHeight: 4,
+        gridCols: 1,
+        gridRows: 1,
+        format: 32,
+        encoding: .raw,
+        totalDecodedBytes: 64,
+        totalWireBytes: 32,
+        chunkIndex: 0,
+        chunkCount: 1,
+        data: Uint8List(32),
+      ),
+    ),
+  ).throws<ProtocolFormatException>();
+
+  // Additional 0x1B header/slice/inflate boundary validation.
+  for (final badFrame in [
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 0,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 16,
+      totalWireBytes: 16,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: Uint8List(16),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 4097,
+      pixelHeight: 1,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 4097 * 4,
+      totalWireBytes: 4097 * 4,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: Uint8List(4097 * 4),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 513,
+      gridRows: 1,
+      totalDecodedBytes: 16,
+      totalWireBytes: 16,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: Uint8List(16),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      format: 24,
+      totalDecodedBytes: 16,
+      totalWireBytes: 16,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: Uint8List(16),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      format: 100,
+      totalDecodedBytes: 12,
+      totalWireBytes: 12,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: Uint8List(12),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 16,
+      totalWireBytes: 0,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: Uint8List(1),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 16,
+      totalWireBytes: 16,
+      chunkIndex: 1,
+      chunkCount: 1,
+      data: Uint8List(16),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 16,
+      totalWireBytes: 16,
+      chunkIndex: 0,
+      chunkCount: 1,
+      data: Uint8List(8),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 16,
+      totalWireBytes: 16,
+      chunkIndex: 0,
+      chunkCount: 2,
+      data: Uint8List(16),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 2,
+      pixelHeight: 2,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 16,
+      totalWireBytes: 16,
+      chunkIndex: 0,
+      chunkCount: 17,
+      data: Uint8List(1),
+    ),
+    KittyImageChunkFrame(
+      sessionId: sessionId,
+      imageId: 1,
+      pixelWidth: 512,
+      pixelHeight: 512,
+      gridCols: 1,
+      gridRows: 1,
+      totalDecodedBytes: 1_048_576,
+      totalWireBytes: 1_048_576,
+      chunkIndex: 0,
+      chunkCount: 2,
+      data: Uint8List(1),
+    ),
+  ]) {
+    check(
+      () => BufferFrameCodec.encode(badFrame),
+    ).throws<ProtocolFormatException>();
+  }
+
+  // Bad encoding byte, wrong tag/length in inspectRelayKittyChunkFrame, and bad inflateKittyBytes.
+  final badEncodingWire = Uint8List.fromList(chunkWire);
+  // Flip encoding byte (after 2B header + 2B sidLen + sidBytes + 4+4+2+2+2+2+1 = 17B).
+  final sidLen = utf8.encode(sessionId.value).length;
+  badEncodingWire[2 + 2 + sidLen + 17] = 9;
+  check(
+    () => BufferFrameCodec.decode(badEncodingWire),
+  ).throws<CorruptSessionFrameException>();
+  check(
+    BufferFrameCodec.inspectRelayKittyChunkFrame(
+      BufferFrameCodec.encode(const BellFrame(sessionId: sessionId)),
+      expectedSession: sessionId,
+    ),
+  ).isFalse();
+  check(
+    () => BufferFrameCodec.inspectRelayKittyChunkFrame(
+      Uint8List.fromList([...chunkWire, 0x01]),
+      expectedSession: sessionId,
+    ),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.inspectRelayKittyChunkFrame(
+      Uint8List(BufferFrameCodec.maxFrameBytes + 1)
+        ..[0] = BufferFrameCodec.protocolVersion
+        ..[1] = 0x1B,
+      expectedSession: sessionId,
+    ),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.inflateKittyBytes(deflated, expectedBytes: 0),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.inflateKittyBytes(
+      deflated,
+      expectedBytes: BufferFrameCodec.maxKittyImageBytes + 1,
+    ),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.inflateKittyBytes(
+      Uint8List.fromList([0xFF, 0xFF]),
+      expectedBytes: 64,
+    ),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.inflateKittyBytes(deflated, expectedBytes: 32),
+  ).throws<ProtocolFormatException>();
+  check(
+    () => BufferFrameCodec.inflateKittyBytes(deflated, expectedBytes: 128),
+  ).throws<ProtocolFormatException>();
 }
