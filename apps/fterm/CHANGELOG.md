@@ -1,3 +1,11 @@
+## 0.5.0-dev.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(termui_pty,termui): encode legacy xterm modifiers and decode double-ESC/SS3 keys.
+ - **BREAKING** **FIX**(cast_protocol,fterm,termui_audio): fix WebSocket close timer, upload dispose, and CI test races.
+ - **BREAKING** **FIX**(client_core,fterm): reassemble 0x1B Kitty chunks and log share diagnostics.
+
 ## 0.4.0
 
 > Note: This release has breaking changes.

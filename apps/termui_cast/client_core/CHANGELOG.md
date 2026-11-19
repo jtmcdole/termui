@@ -1,3 +1,9 @@
+## 0.4.0-dev.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(client_core,fterm): reassemble 0x1B Kitty chunks and log share diagnostics.
+
 ## 0.3.0
 
 > Note: This release has breaking changes.

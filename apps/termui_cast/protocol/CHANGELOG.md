@@ -1,3 +1,10 @@
+## 0.3.0-dev.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FIX**(cast_protocol,fterm,termui_audio): fix WebSocket close timer, upload dispose, and CI test races.
+ - **BREAKING** **FEAT**(cast_protocol): add v8 KittyImageChunkFrame (0x1B) wire codec.
+
 ## 0.2.1
 
  - **FIX**(cast_protocol): require archive ^4.7.1 and pass throwOnError on inflate.
