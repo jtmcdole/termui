@@ -24,6 +24,15 @@ typedef ResolvedTerminalLink = ({
   int endRow,
 });
 
+/// Inclusive column span `[startCol, endCol]` on a single virtual [row].
+typedef TerminalLinkRowSpan = ({int row, int startCol, int endCol});
+
+/// Resolved hyperlink with both its bounding [link] and exact per-row [rowSpans].
+typedef ResolvedTerminalLinkDetail = ({
+  ResolvedTerminalLink link,
+  List<TerminalLinkRowSpan> rowSpans,
+});
+
 /// An interface for objects that provide change notifications to listeners.
 abstract interface class TerminalListenable {
   /// Adds a listener to be notified when the state changes.
@@ -169,6 +178,13 @@ class TerminalSelectionController implements TerminalListenable {
     '(?:https?://|mailto:)(?:\\[[^$_urlExcludedChars]*\\]|[^$_urlExcludedChars])+',
     caseSensitive: false,
   );
+  static final RegExp _urlExcludedCharPattern = RegExp('[$_urlExcludedChars]');
+  static final RegExp _urlSchemePrefix = RegExp(
+    '^(?:https?://|mailto:)',
+    caseSensitive: false,
+  );
+  static final RegExp _urlStructureChar = RegExp(r'[/?=&#%]');
+  static const int _standardHardWrapMinCol = 68;
 
   final List<void Function()> _listeners = [];
   bool _disposed = false;
@@ -956,9 +972,23 @@ class TerminalSelectionController implements TerminalListenable {
   }
 
   /// Resolves a hyperlink span at `([col], [virtualRow])` across soft-wrapped
-  /// rows in [lookup], preferring contiguous `OSC 8` `uris` spans first and
-  /// falling back to plain-text `http://`, `https://`, and `mailto:` tokens.
+  /// and hard-wrapped rows in [lookup], preferring contiguous `OSC 8` `uris`
+  /// spans first and falling back to plain-text `http://`, `https://`, and
+  /// `mailto:` tokens.
   static ResolvedTerminalLink? resolveLinkSpanAt({
+    required VirtualLineLookup lookup,
+    required int col,
+    required int virtualRow,
+  }) => resolveLinkSpanDetailAt(
+    lookup: lookup,
+    col: col,
+    virtualRow: virtualRow,
+  )?.link;
+
+  /// Resolves a hyperlink span along with its exact per-row column segments at
+  /// `([col], [virtualRow])` across soft-wrapped and hard-wrapped rows in
+  /// [lookup].
+  static ResolvedTerminalLinkDetail? resolveLinkSpanDetailAt({
     required VirtualLineLookup lookup,
     required int col,
     required int virtualRow,
@@ -972,9 +1002,9 @@ class TerminalSelectionController implements TerminalListenable {
     final snappedCol = col > 0 && clickedLine.characters[col].isEmpty
         ? col - 1
         : col;
-    final (wrapStart, wrapEnd) = _softWrapBounds(lookup, virtualRow);
     final osc8Uri = _supportedOsc8UriAt(clickedLine, snappedCol);
     if (osc8Uri != null) {
+      final (wrapStart, wrapEnd) = _softWrapBounds(lookup, virtualRow);
       return _expandOsc8Span(
         lookup,
         osc8Uri,
@@ -986,13 +1016,7 @@ class TerminalSelectionController implements TerminalListenable {
     }
 
     if (clickedLine.characters[snappedCol].isEmpty) return null;
-    return _matchPlainLinkSpan(
-      lookup,
-      snappedCol,
-      virtualRow,
-      wrapStart,
-      wrapEnd,
-    );
+    return _matchPlainLinkSpan(lookup, snappedCol, virtualRow);
   }
 
   static String? _supportedOsc8UriAt(VirtualLineSlice line, int col) {
@@ -1016,7 +1040,7 @@ class TerminalSelectionController implements TerminalListenable {
     };
   }
 
-  static ResolvedTerminalLink _expandOsc8Span(
+  static ResolvedTerminalLinkDetail _expandOsc8Span(
     VirtualLineLookup lookup,
     String targetUri,
     int col,
@@ -1033,12 +1057,34 @@ class TerminalSelectionController implements TerminalListenable {
       wrapEnd,
     );
     final (endCol, endRow) = _walkOsc8End(lookup, targetUri, col, row, wrapEnd);
+    final rowSpans = <TerminalLinkRowSpan>[
+      for (var r = startRow; r <= endRow; r++)
+        (
+          row: r,
+          startCol: r == startRow ? startCol : 0,
+          endCol: r == endRow
+              ? endCol
+              : max(
+                  0,
+                  _rowContentLength(
+                        lookup,
+                        lookup(r)?.characters ?? const <String>[],
+                        r,
+                        endRow,
+                      ) -
+                      1,
+                ),
+        ),
+    ];
     return (
-      uri: targetUri,
-      startCol: startCol,
-      startRow: startRow,
-      endCol: endCol,
-      endRow: endRow,
+      link: (
+        uri: targetUri,
+        startCol: startCol,
+        startRow: startRow,
+        endCol: endCol,
+        endRow: endRow,
+      ),
+      rowSpans: List<TerminalLinkRowSpan>.unmodifiable(rowSpans),
     );
   }
 
@@ -1112,13 +1158,12 @@ class TerminalSelectionController implements TerminalListenable {
     return (curCol, curRow);
   }
 
-  static ResolvedTerminalLink? _matchPlainLinkSpan(
+  static ResolvedTerminalLinkDetail? _matchPlainLinkSpan(
     VirtualLineLookup lookup,
     int snappedCol,
     int virtualRow,
-    int wrapStart,
-    int wrapEnd,
   ) {
+    final (wrapStart, wrapEnd) = _plainLinkWrapBounds(lookup, virtualRow);
     final (logicalText, clickedOffset, cellByOffset) = _buildLogicalLine(
       lookup,
       wrapStart,
@@ -1127,24 +1172,11 @@ class TerminalSelectionController implements TerminalListenable {
       targetCol: snappedCol,
     );
     if (clickedOffset < 0) return null;
-    final match = _matchPlainUrlAtOffset(
+    return _matchPlainUrlAtOffset(
+      lookup,
       logicalText,
       clickedOffset,
       cellByOffset,
-    );
-    if (match == null) return null;
-    final endChars = lookup(match.endRow)?.characters;
-    if (endChars == null ||
-        match.endCol + 1 >= endChars.length ||
-        endChars[match.endCol + 1].isNotEmpty) {
-      return match;
-    }
-    return (
-      uri: match.uri,
-      startCol: match.startCol,
-      startRow: match.startRow,
-      endCol: match.endCol + 1,
-      endRow: match.endRow,
     );
   }
 
@@ -1154,8 +1186,8 @@ class TerminalSelectionController implements TerminalListenable {
   ) {
     var startRow = virtualY;
     while (virtualY - startRow < _maxLinkWrapRows &&
-        startRow > 0 &&
-        (lookup(startRow)?.isWrapped ?? false)) {
+        (lookup(startRow)?.isWrapped ?? false) &&
+        lookup(startRow - 1) != null) {
       startRow--;
     }
     var endRow = virtualY;
@@ -1164,6 +1196,128 @@ class TerminalSelectionController implements TerminalListenable {
       endRow++;
     }
     return (startRow, endRow);
+  }
+
+  static (int startRow, int endRow) _plainLinkWrapBounds(
+    VirtualLineLookup lookup,
+    int virtualY,
+  ) {
+    var startRow = virtualY;
+    while (virtualY - startRow < _maxLinkWrapRows) {
+      final curLine = lookup(startRow);
+      final prevLine = lookup(startRow - 1);
+      if (curLine == null || prevLine == null) break;
+      if (!curLine.isWrapped && !_canHardWrapJoin(prevLine, curLine)) {
+        break;
+      }
+      startRow--;
+    }
+    var endRow = virtualY;
+    while (endRow - virtualY < _maxLinkWrapRows) {
+      final curLine = lookup(endRow);
+      final nextLine = lookup(endRow + 1);
+      if (curLine == null || nextLine == null) break;
+      if (!nextLine.isWrapped && !_canHardWrapJoin(curLine, nextLine)) {
+        break;
+      }
+      endRow++;
+    }
+    return (startRow, endRow);
+  }
+
+  static bool _canHardWrapJoin(
+    VirtualLineSlice prevLine,
+    VirtualLineSlice nextLine,
+  ) {
+    final prevChars = prevLine.characters;
+    final nextChars = nextLine.characters;
+    final prevStart = _firstNonSpaceCol(prevChars);
+    final prevEnd = _lastNonSpaceCol(prevChars);
+    if (prevStart < 0 || prevEnd < 0) return false;
+    final nextStart = _firstNonSpaceCol(nextChars);
+    if (nextStart < 0) return false;
+
+    final nextUris = nextLine.uris;
+    if (nextUris != null &&
+        nextStart < nextUris.length &&
+        nextUris[nextStart] != null) {
+      return false;
+    }
+    if (!_hasHardWrapGeometry(
+      prevChars.length,
+      prevStart,
+      prevEnd,
+      nextStart,
+    )) {
+      return false;
+    }
+
+    final prevLast = prevChars[prevEnd];
+    if (!_isUrlChar(prevLast) || !_isUrlChar(nextChars[nextStart])) {
+      return false;
+    }
+
+    final (:token, endCol: _) = _extractLeadingUrlToken(nextChars, nextStart);
+    return _isUrlContinuationToken(prevLast, token);
+  }
+
+  static bool _hasHardWrapGeometry(
+    int width,
+    int prevStart,
+    int prevEnd,
+    int nextStart,
+  ) {
+    final edgeMargin = width >= 16 ? 4 : 2;
+    if (nextStart == 0) return prevEnd >= width - edgeMargin;
+    final minEnd = min(width - edgeMargin, _standardHardWrapMinCol);
+    return prevEnd >= minEnd &&
+        nextStart >= prevStart &&
+        nextStart <= prevStart + 4;
+  }
+
+  static bool _isUrlContinuationToken(String prevLast, String token) {
+    if (token.isEmpty || _urlSchemePrefix.hasMatch(token)) return false;
+    final core = _trimTrailingUrlPunctuation(token);
+    if (core.isEmpty || core.contains('@')) return false;
+    if (prevLast == '/' && core.startsWith('/')) return false;
+    return _urlStructureChar.hasMatch(core);
+  }
+
+  static int _firstNonSpaceCol(List<String> chars) {
+    for (var col = 0; col < chars.length; col++) {
+      final ch = chars[col];
+      if (ch.isNotEmpty && ch != ' ') return col;
+    }
+    return -1;
+  }
+
+  static int _lastNonSpaceCol(List<String> chars) {
+    for (var col = chars.length - 1; col >= 0; col--) {
+      final ch = chars[col];
+      if (ch.isNotEmpty && ch != ' ') return col;
+    }
+    return -1;
+  }
+
+  static bool _isUrlChar(String ch) =>
+      ch.isNotEmpty &&
+      !ch.startsWith(kittyPlaceholderChar) &&
+      !_urlExcludedCharPattern.hasMatch(ch);
+
+  static ({String token, int endCol}) _extractLeadingUrlToken(
+    List<String> chars,
+    int startCol,
+  ) {
+    final sb = StringBuffer();
+    var endCol = startCol - 1;
+    for (var col = startCol; col < chars.length; col++) {
+      final ch = chars[col];
+      if (ch.isEmpty) continue;
+      if (!_isUrlChar(ch)) break;
+      sb.write(ch);
+      endCol = col;
+    }
+    return (token: '$sb', endCol: endCol);
   }
 
   static (String text, int clickedOffset, List<SelectionPoint> cellByOffset)
@@ -1178,13 +1332,21 @@ class TerminalSelectionController implements TerminalListenable {
     final cellByOffset = <SelectionPoint>[];
     var clickedOffset = -1;
     for (var row = startRow; row <= endRow; row++) {
-      final chars = lookup(row)?.characters ?? const <String>[];
-      final limit = _rowContentLength(lookup, chars, row, endRow);
+      final curLine = lookup(row);
+      if (curLine == null) continue;
+      final chars = curLine.characters;
+      final hardFromPrev = row > startRow && !curLine.isWrapped;
+      final hardToNext = row < endRow && !(lookup(row + 1)?.isWrapped ?? false);
+      final rowStart = hardFromPrev ? max(0, _firstNonSpaceCol(chars)) : 0;
+      final limit = hardToNext
+          ? max(rowStart, _lastNonSpaceCol(chars) + 1)
+          : _rowContentLength(lookup, chars, row, endRow);
       final rowOffset = _appendLogicalRow(
         sb,
         cellByOffset,
         chars,
         row,
+        rowStart,
         limit,
         row == targetRow ? targetCol : null,
       );
@@ -1216,11 +1378,12 @@ class TerminalSelectionController implements TerminalListenable {
     List<SelectionPoint> cellByOffset,
     List<String> chars,
     int row,
+    int startCol,
     int limit,
     int? targetCol,
   ) {
     int? clickedOffset;
-    for (var col = 0; col < limit; col++) {
+    for (var col = startCol; col < limit; col++) {
       final cell = chars[col];
       if (col == targetCol && !cell.startsWith(kittyPlaceholderChar)) {
         clickedOffset = sb.length;
@@ -1236,7 +1399,8 @@ class TerminalSelectionController implements TerminalListenable {
     return clickedOffset;
   }
 
-  static ResolvedTerminalLink? _matchPlainUrlAtOffset(
+  static ResolvedTerminalLinkDetail? _matchPlainUrlAtOffset(
+    VirtualLineLookup lookup,
     String text,
     int clickedOffset,
     List<SelectionPoint> cellByOffset,
@@ -1248,17 +1412,74 @@ class TerminalSelectionController implements TerminalListenable {
       if (clickedOffset >= endOffset) return null;
       final uri = _parsePlainExternalUri(trimmed);
       if (uri == null) return null;
-      final startPt = cellByOffset[match.start];
-      final endPt = cellByOffset[endOffset - 1];
+      final rowSpans = _buildLinkRowSpans(
+        lookup,
+        cellByOffset,
+        match.start,
+        endOffset,
+      );
+      final first = rowSpans.first;
+      final last = rowSpans.last;
       return (
-        uri: '$uri',
-        startCol: startPt.col,
-        startRow: startPt.row,
-        endCol: endPt.col,
-        endRow: endPt.row,
+        link: (
+          uri: '$uri',
+          startCol: first.startCol,
+          startRow: first.row,
+          endCol: last.endCol,
+          endRow: last.row,
+        ),
+        rowSpans: List<TerminalLinkRowSpan>.unmodifiable(rowSpans),
       );
     }
     return null;
+  }
+
+  static List<TerminalLinkRowSpan> _buildLinkRowSpans(
+    VirtualLineLookup lookup,
+    List<SelectionPoint> cellByOffset,
+    int startOffset,
+    int endOffset,
+  ) {
+    final spans = <TerminalLinkRowSpan>[];
+    var curRow = cellByOffset[startOffset].row;
+    var curStart = cellByOffset[startOffset].col;
+    var curEnd = curStart;
+
+    for (var i = startOffset + 1; i < endOffset; i++) {
+      final pt = cellByOffset[i];
+      if (pt.row != curRow) {
+        spans.add((
+          row: curRow,
+          startCol: curStart,
+          endCol: _snapTrailingWideCol(lookup, curRow, curEnd),
+        ));
+        curRow = pt.row;
+        curStart = pt.col;
+        curEnd = pt.col;
+      } else {
+        curEnd = pt.col;
+      }
+    }
+    spans.add((
+      row: curRow,
+      startCol: curStart,
+      endCol: _snapTrailingWideCol(lookup, curRow, curEnd),
+    ));
+    return spans;
+  }
+
+  static int _snapTrailingWideCol(
+    VirtualLineLookup lookup,
+    int row,
+    int endCol,
+  ) {
+    final chars = lookup(row)?.characters;
+    if (chars != null &&
+        endCol + 1 < chars.length &&
+        chars[endCol + 1].isEmpty) {
+      return endCol + 1;
+    }
+    return endCol;
   }
 
   static Uri? _parsePlainExternalUri(String raw) {

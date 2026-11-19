@@ -815,6 +815,346 @@ void main() {
           );
         },
       );
+
+      test(
+        'resolveLinkSpanDetailAt joins indented hard-wrapped CLI URLs (gcloud) across rows with exact per-row spans',
+        () {
+          VirtualLineSlice padRow(String text, int width) => (
+            isWrapped: false,
+            characters: text.padRight(width).split(''),
+            uris: null,
+          );
+
+          const row0 =
+              '  ✓ Building Container... Logs are available at [ https://console.cloud.google.';
+          const row1 =
+              '  com/cloud-build/builds;region=us-west2/471e9261-7f4e-45e2-ba1b-2269358f6bde?p';
+          const row2 = '  roject=501742486119 ].';
+          const expectedUrl =
+              'https://console.cloud.google.com/cloud-build/builds;region=us-west2/471e9261-7f4e-45e2-ba1b-2269358f6bde?project=501742486119';
+
+          for (final width in [80, 120]) {
+            final lines = <VirtualLineSlice>[
+              padRow(row0, width),
+              padRow(row1, width),
+              padRow(row2, width),
+            ];
+            VirtualLineSlice? lookup(int y) =>
+                y >= 0 && y < lines.length ? lines[y] : null;
+
+            // Hovering row 0, row 1, and row 2 all resolve the full URL and exact per-row spans.
+            for (final (col, row) in [(55, 0), (10, 1), (8, 2)]) {
+              final detail =
+                  TerminalSelectionController.resolveLinkSpanDetailAt(
+                    lookup: lookup,
+                    col: col,
+                    virtualRow: row,
+                  );
+              expect(
+                detail,
+                isNotNull,
+                reason: 'width=$width cell=($col,$row)',
+              );
+              expect(detail!.link.uri, equals(expectedUrl));
+              expect(
+                detail.rowSpans,
+                equals(const [
+                  (row: 0, startCol: 50, endCol: 78),
+                  (row: 1, startCol: 2, endCol: 78),
+                  (row: 2, startCol: 2, endCol: 20),
+                ]),
+              );
+            }
+
+            // Leading indent spaces, trailing padding, and closing `].` are not links.
+            expect(
+              TerminalSelectionController.resolveLinkSpanDetailAt(
+                lookup: lookup,
+                col: 1,
+                virtualRow: 1,
+              ),
+              isNull,
+            );
+            expect(
+              TerminalSelectionController.resolveLinkSpanDetailAt(
+                lookup: lookup,
+                col: 79,
+                virtualRow: 0,
+              ),
+              isNull,
+            );
+            expect(
+              TerminalSelectionController.resolveLinkSpanDetailAt(
+                lookup: lookup,
+                col: 22,
+                virtualRow: 2,
+              ),
+              isNull,
+            );
+          }
+        },
+      );
+
+      test(
+        'resolveLinkSpanDetailAt joins col-0 hard wraps and rejects consecutive URLs or prose breaks',
+        () {
+          VirtualLineSlice padRow(String text, int width) => (
+            isWrapped: false,
+            characters: text.padRight(width).split(''),
+            uris: null,
+          );
+
+          // 1. Hard-wrapped at terminal right edge (col 0 continuation, 40-col pane).
+          final edgeLines = <VirtualLineSlice>[
+            padRow('Open https://github.com/jtmcdole/termui/', 40),
+            padRow('issues/369 for feedback.', 40),
+          ];
+          final edgeDetail =
+              TerminalSelectionController.resolveLinkSpanDetailAt(
+                lookup: (y) =>
+                    y >= 0 && y < edgeLines.length ? edgeLines[y] : null,
+                col: 3,
+                virtualRow: 1,
+              );
+          expect(
+            edgeDetail?.link.uri,
+            equals('https://github.com/jtmcdole/termui/issues/369'),
+          );
+          expect(
+            edgeDetail?.rowSpans,
+            equals(const [
+              (row: 0, startCol: 5, endCol: 39),
+              (row: 1, startCol: 0, endCol: 9),
+            ]),
+          );
+
+          // 2. Two consecutive URLs must never merge.
+          final stackedUrls = <VirtualLineSlice>[
+            padRow(
+              'https://example.com/first/path/reaching/column/seventy/five/segment/one',
+              80,
+            ),
+            padRow('https://example.com/second', 80),
+          ];
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: (y) =>
+                  y >= 0 && y < stackedUrls.length ? stackedUrls[y] : null,
+              col: 10,
+              virtualRow: 0,
+            )?.uri,
+            equals(
+              'https://example.com/first/path/reaching/column/seventy/five/segment/one',
+            ),
+          );
+
+          // 3. Sentence ending in URL + period followed by capitalized prose must not merge.
+          final sentenceBreak = <VirtualLineSlice>[
+            padRow(
+              'Please read our comprehensive documentation at https://example.com/docs/v2.',
+              120,
+            ),
+            padRow(
+              'After reviewing the guide, configure your environment variables.',
+              120,
+            ),
+          ];
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: (y) =>
+                  y >= 0 && y < sentenceBreak.length ? sentenceBreak[y] : null,
+              col: 55,
+              virtualRow: 0,
+            )?.uri,
+            equals('https://example.com/docs/v2'),
+          );
+
+          // 4. Mid-terminal 78-char line ending in URL followed by lowercase prose must not merge.
+          final proseBreak = <VirtualLineSlice>[
+            padRow(
+              'Visit https://example.com/very/long/url/that/hits/the/exact/right/edge/of/line',
+              120,
+            ),
+            padRow('and then restart your shell.', 120),
+          ];
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: (y) =>
+                  y >= 0 && y < proseBreak.length ? proseBreak[y] : null,
+              col: 12,
+              virtualRow: 0,
+            )?.uri,
+            equals(
+              'https://example.com/very/long/url/that/hits/the/exact/right/edge/of/line',
+            ),
+          );
+
+          // 5. Any whitespace on a regular span or trailing space before a soft wrap terminates the URL.
+          final inlineSpace = <VirtualLineSlice>[
+            padRow('See https://example.com/path   next-token', 80),
+          ];
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: (y) => y == 0 ? inlineSpace[0] : null,
+              col: 10,
+              virtualRow: 0,
+            )?.uri,
+            equals('https://example.com/path'),
+          );
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: (y) => y == 0 ? inlineSpace[0] : null,
+              col: 33,
+              virtualRow: 0,
+            ),
+            isNull,
+          );
+
+          final softWrapWithTrailingSpace = <VirtualLineSlice>[
+            (
+              isWrapped: false,
+              characters: 'https://example.com/a '.split(''),
+              uris: null,
+            ),
+            (
+              isWrapped: true,
+              characters: 'continued/path        '.split(''),
+              uris: null,
+            ),
+          ];
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: (y) => y >= 0 && y < softWrapWithTrailingSpace.length
+                  ? softWrapWithTrailingSpace[y]
+                  : null,
+              col: 5,
+              virtualRow: 0,
+            )?.uri,
+            equals('https://example.com/a'),
+          );
+          expect(
+            TerminalSelectionController.resolveLinkSpanAt(
+              lookup: (y) => y >= 0 && y < softWrapWithTrailingSpace.length
+                  ? softWrapWithTrailingSpace[y]
+                  : null,
+              col: 3,
+              virtualRow: 1,
+            ),
+            isNull,
+          );
+        },
+      );
+
+      test(
+        'resolveLinkSpanDetailAt never glues flutter run, git push, shell prompts, Done., punctuated prose, or next-line paths onto URLs',
+        () {
+          VirtualLineSlice padRow(String text, int width) => (
+            isWrapped: false,
+            characters: text.padRight(width).split(''),
+            uris: null,
+          );
+
+          final cases =
+              <
+                ({
+                  String name,
+                  String row0,
+                  String row1,
+                  int hoverCol0,
+                  int hoverCol1,
+                  String expectedUri,
+                })
+              >[
+                (
+                  name: 'flutter run DevTools banner',
+                  row0:
+                      'A Dart VM Service on macOS is available at: http://127.0.0.1:50857/qkvVX3o3hSs=/',
+                  row1: 'The Flutter DevTools debugger and profiler is ready.',
+                  hoverCol0: 50,
+                  hoverCol1: 1,
+                  expectedUri: 'http://127.0.0.1:50857/qkvVX3o3hSs=/',
+                ),
+                (
+                  name: 'git push remote pull request banner',
+                  row0:
+                      'remote:      https://github.com/org/repo/pull/new/feature-branch-name-long-here',
+                  row1: 'remote:      ',
+                  hoverCol0: 20,
+                  hoverCol1: 2,
+                  expectedUri:
+                      'https://github.com/org/repo/pull/new/feature-branch-name-long-here',
+                ),
+                (
+                  name: 'shell prompt after server status URL',
+                  row0:
+                      'Listening on http://127.0.0.1:8080/api/v1/sessions/active/stream/status',
+                  row1: 'user@macbook:~/src/termui\$ ls -la',
+                  hoverCol0: 20,
+                  hoverCol1: 4,
+                  expectedUri:
+                      'http://127.0.0.1:8080/api/v1/sessions/active/stream/status',
+                ),
+                (
+                  name: 'single-word Done. line after archive URL',
+                  row0:
+                      'Downloaded https://downloads.example.com/releases/2026/bundle-archive.tar.gz',
+                  row1: 'Done.',
+                  hoverCol0: 20,
+                  hoverCol1: 1,
+                  expectedUri:
+                      'https://downloads.example.com/releases/2026/bundle-archive.tar.gz',
+                ),
+                (
+                  name: 'punctuated prose After, after URL ending in dot',
+                  row0:
+                      'Please read our comprehensive documentation at https://example.com/docs/v2.',
+                  row1: 'After, configure your environment variables.',
+                  hoverCol0: 55,
+                  hoverCol1: 1,
+                  expectedUri: 'https://example.com/docs/v2',
+                ),
+                (
+                  name: 'next-line absolute file path after trailing slash URL',
+                  row0:
+                      'Health endpoint ready at https://localhost:8080/healthz/live/v1/status/ready/',
+                  row1: '/var/log/app.log rotated',
+                  hoverCol0: 35,
+                  hoverCol1: 3,
+                  expectedUri:
+                      'https://localhost:8080/healthz/live/v1/status/ready/',
+                ),
+              ];
+
+          for (final width in [80, 120, 200]) {
+            for (final c in cases) {
+              final lines = <VirtualLineSlice>[
+                padRow(c.row0, width),
+                padRow(c.row1, width),
+              ];
+              VirtualLineSlice? lookup(int y) =>
+                  y >= 0 && y < lines.length ? lines[y] : null;
+              expect(
+                TerminalSelectionController.resolveLinkSpanAt(
+                  lookup: lookup,
+                  col: c.hoverCol0,
+                  virtualRow: 0,
+                )?.uri,
+                equals(c.expectedUri),
+                reason: '${c.name} (width=$width, row0)',
+              );
+              expect(
+                TerminalSelectionController.resolveLinkSpanAt(
+                  lookup: lookup,
+                  col: c.hoverCol1,
+                  virtualRow: 1,
+                ),
+                isNull,
+                reason: '${c.name} (width=$width, row1 must not highlight)',
+              );
+            }
+          }
+        },
+      );
     });
   });
 }
