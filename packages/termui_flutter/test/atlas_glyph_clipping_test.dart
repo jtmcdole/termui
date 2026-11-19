@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:characters/characters.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -844,65 +843,24 @@ void main() {
     );
   });
 
-  group('Selective Option A visual golden', () {
-    test(
-      'renders unclipped prompt icons, cursors, italics, ties, math, and 6x zoom',
-      () async {
-        final pngBytes = await _renderBoardPngBytes();
-        final previousComparator = goldenFileComparator;
-        if (previousComparator is LocalFileComparator) {
-          goldenFileComparator = _FontRasterGoldenComparator(
-            previousComparator.basedir.resolve(
-              'atlas_glyph_clipping_test.dart',
-            ),
-          );
-        }
-        try {
+  group(
+    'Selective Option A visual golden',
+    skip: !Platform.isLinux
+        ? 'Flutter pixel goldens run on Linux only (see apps/fterm/README.md).'
+        : null,
+    () {
+      test(
+        'renders unclipped prompt icons, cursors, italics, ties, math, and 6x zoom',
+        () async {
+          final pngBytes = await _renderBoardPngBytes();
           await expectLater(
             pngBytes,
             matchesGoldenFile('goldens/selective_option_a_glyph_overhang.png'),
           );
-        } finally {
-          goldenFileComparator = previousComparator;
-        }
-      },
-    );
-  });
-}
-
-class _FontRasterGoldenComparator extends LocalFileComparator {
-  _FontRasterGoldenComparator(
-    super.testFile, {
-    this.maxCrossOsDiffFraction = 0.08,
-  }) : assert(
-         maxCrossOsDiffFraction >= 0.0 && maxCrossOsDiffFraction <= 1.0,
-         'maxCrossOsDiffFraction must be in [0.0, 1.0]',
-       );
-
-  /// Tolerates minor FreeType/CoreText vs DirectWrite font anti-aliasing drift
-  /// on non-Windows runners while enforcing exact pixel matches on Windows.
-  final double maxCrossOsDiffFraction;
-
-  @override
-  Future<bool> compare(Uint8List imageBytes, Uri golden) async {
-    if (Platform.isWindows) {
-      return super.compare(imageBytes, golden);
-    }
-
-    final result = await GoldenFileComparator.compareLists(
-      imageBytes,
-      await getGoldenBytes(golden),
-    );
-    try {
-      if (result.passed || result.diffPercent <= maxCrossOsDiffFraction) {
-        return true;
-      }
-      final error = await generateFailureOutput(result, golden, basedir);
-      throw FlutterError(error);
-    } finally {
-      result.dispose();
-    }
-  }
+        },
+      );
+    },
+  );
 }
 
 typedef _BoardRun = ({String text, int fg, int bg, int mod});

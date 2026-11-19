@@ -473,57 +473,53 @@ void main() {
     );
   });
 
-  group('FtermAboutOverlay visual golden', () {
-    testWidgets(
-      'matches golden with baked FTerm SVG version pill, metadata, repo link, and licenses CTA',
-      (tester) async {
-        tester.view.physicalSize = const Size(680, 560);
-        tester.view.devicePixelRatio = 1.0;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
+  group(
+    'FtermAboutOverlay visual golden',
+    skip: !Platform.isLinux
+        ? 'Flutter pixel goldens run on Linux only (see apps/fterm/README.md).'
+        : null,
+    () {
+      testWidgets(
+        'matches golden with baked FTerm SVG version pill, metadata, repo link, and licenses CTA',
+        (tester) async {
+          tester.view.physicalSize = const Size(680, 560);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
 
-        final ws = _createStandaloneWorkspace(
-          aboutService: _FakeAboutService(
-            version: _kPinnedTestVersion,
-            buildDateUtc: _kPinnedTestBuildDateUtc,
-          ),
-        );
-        addTearDown(() => tester.runAsync(ws.dispose));
-
-        ws.setOverlay(FtermOverlay.about);
-        await tester.pumpWidget(_buildOverlayTestHarness(ws));
-        await tester.runAsync(() async {
-          await ws.aboutViewModel.ensureInitialized();
-        });
-        await tester.pump(const Duration(milliseconds: 50));
-
-        expect(ws.aboutViewModel.metadata.displayVersion, equals('v0.3.0'));
-        expect(
-          ws.aboutViewModel.metadata.formattedBuildDate,
-          equals('2026-11-18 03:15 UTC'),
-        );
-        expect(
-          ws.aboutViewModel.metadata.runtimeToolchainLabel,
-          equals('Flutter 3.41.0 (stable) · Dart 3.11.0'),
-        );
-
-        final previousComparator = goldenFileComparator;
-        if (previousComparator is LocalFileComparator) {
-          goldenFileComparator = _FontRasterGoldenComparator(
-            previousComparator.basedir.resolve('about_overlay_test.dart'),
+          final ws = _createStandaloneWorkspace(
+            aboutService: _FakeAboutService(
+              version: _kPinnedTestVersion,
+              buildDateUtc: _kPinnedTestBuildDateUtc,
+            ),
           );
-        }
-        try {
+          addTearDown(() => tester.runAsync(ws.dispose));
+
+          ws.setOverlay(FtermOverlay.about);
+          await tester.pumpWidget(_buildOverlayTestHarness(ws));
+          await tester.runAsync(() async {
+            await ws.aboutViewModel.ensureInitialized();
+          });
+          await tester.pump(const Duration(milliseconds: 50));
+
+          expect(ws.aboutViewModel.metadata.displayVersion, equals('v0.3.0'));
+          expect(
+            ws.aboutViewModel.metadata.formattedBuildDate,
+            equals('2026-11-18 03:15 UTC'),
+          );
+          expect(
+            ws.aboutViewModel.metadata.runtimeToolchainLabel,
+            equals('Flutter 3.41.0 (stable) · Dart 3.11.0'),
+          );
+
           await expectLater(
             find.byType(FtermOverlayHost),
             matchesGoldenFile('goldens/fterm_about_overlay.png'),
           );
-        } finally {
-          goldenFileComparator = previousComparator;
-        }
-      },
-    );
-  });
+        },
+      );
+    },
+  );
 }
 
 FtermWorkspaceController _createStandaloneWorkspace({
@@ -566,32 +562,6 @@ Widget _buildOverlayTestHarness(
     ),
   ),
 );
-
-final class _FontRasterGoldenComparator extends LocalFileComparator {
-  static const double _maxCrossOsDiffFraction = 0.08;
-
-  _FontRasterGoldenComparator(super.testFile);
-
-  @override
-  Future<bool> compare(Uint8List imageBytes, Uri golden) async {
-    if (Platform.isMacOS) {
-      return super.compare(imageBytes, golden);
-    }
-    final result = await GoldenFileComparator.compareLists(
-      imageBytes,
-      await getGoldenBytes(golden),
-    );
-    try {
-      if (result.passed || result.diffPercent <= _maxCrossOsDiffFraction) {
-        return true;
-      }
-      final error = await generateFailureOutput(result, golden, basedir);
-      throw FlutterError(error);
-    } finally {
-      result.dispose();
-    }
-  }
-}
 
 final class _FakeAboutService implements AboutService {
   final String version;
