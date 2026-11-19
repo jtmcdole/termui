@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 
+import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, defaultTargetPlatform, kIsWeb;
+import 'package:flutter/rendering.dart' show RenderRepaintBoundary;
 import 'package:flutter/services.dart'
     show
         Clipboard,
@@ -21,6 +24,7 @@ import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
+import '../feedback/feedback_screenshot.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../settings_storage.dart';
@@ -79,6 +83,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   late final TerminalService _terminalService;
   final Map<String, FocusNode> _paneFocusNodes = {};
   final Map<String, GlobalKey<State<TerminalSurface>>> _paneSurfaceKeys = {};
+  final Map<String, GlobalKey> _paneBoundaryKeys = {};
   final Set<String> _suppressMiddleReleasePaneIds = {};
   final FocusNode _emptyWorkspaceFocusNode = FocusNode(
     debugLabel: 'fterm-empty-focus',
@@ -268,6 +273,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     ];
     for (final id in staleSurfaceKeys) {
       _paneSurfaceKeys.remove(id);
+      _paneBoundaryKeys.remove(id);
     }
   }
 
@@ -324,6 +330,33 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           debugLabel: 'fterm-pane-surface-$paneId',
         ),
       );
+
+  GlobalKey _boundaryKeyForPane(String paneId) => _paneBoundaryKeys.putIfAbsent(
+    paneId,
+    () => GlobalKey(debugLabel: 'fterm-pane-boundary-$paneId'),
+  );
+
+  Future<String?> _captureFocusedPaneScreenshot() async {
+    final paneId = widget.workspace.focusedPane?.paneId;
+    if (paneId == null) return null;
+    final boundary =
+        _paneBoundaryKeys[paneId]?.currentContext?.findRenderObject()
+            as RenderRepaintBoundary?;
+    if (boundary == null) return null;
+    final image = await boundary.toImage(pixelRatio: 2.0);
+    final ByteData? byteData;
+    try {
+      byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+    } finally {
+      image.dispose();
+    }
+    if (byteData == null) return null;
+    final timestamp = clock.now().millisecondsSinceEpoch;
+    return saveFeedbackScreenshot(
+      'fterm_screenshot_$timestamp.png',
+      byteData.buffer.asUint8List(),
+    );
+  }
 
   static Set<ev.Modifier> _collectHardwareModifiers() {
     final kb = HardwareKeyboard.instance;
@@ -439,6 +472,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     }
     _paneFocusNodes.clear();
     _paneSurfaceKeys.clear();
+    _paneBoundaryKeys.clear();
     _emptyWorkspaceFocusNode.dispose();
     _atlasController?.dispose();
     _atlasController = null;
@@ -502,6 +536,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                   workspace: widget.workspace,
                   onOpenUrl: widget.onOpenUrl,
                   isWeb: _isWeb,
+                  onCaptureScreenshot: _captureFocusedPaneScreenshot,
                 ),
               ),
             ],
@@ -618,52 +653,55 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       child: Stack(
         fit: StackFit.expand,
         children: [
-          TerminalSurface(
-            key: _surfaceKeyForPane(pane.paneId),
-            atlasController: _atlasController,
-            focusNode: _focusNodeForPane(pane.paneId),
-            autofocus:
-                isFocused &&
-                widget.workspace.activeOverlay == FtermOverlay.none,
-            bufferProvider: pane.readDisplayBuffer,
-            bufferListenable: pane.bufferListenable,
-            activePtySizeProvider: pane.readActivePtySize,
-            cursorPositionProvider: pane.readCursorPosition,
-            kittyKeyboardFlagsProvider: pane.readKittyKeyboardFlags,
-            reportKeyReleaseEventsProvider: pane.readReportKeyReleaseEvents,
-            reportPixelMouseEventsProvider: pane.readReportPixelMouseEvents,
-            mouseTrackingProvider: pane.readMouseTracking,
-            copyOnSelectProvider: _readCopyOnSelect,
-            macosOptionAsAlt: widget.workspace.preferences.macosOptionAsAlt,
-            fontSize: fontSize,
-            fontFamily: castPrimaryFontFamily,
-            fontFamilyFallback: castFallbackFontFamilies,
-            backgroundColor: bgColor,
-            foregroundColor: fgColor,
-            faintOpacity:
-                widget.workspace.workspaceSettings.themeSettings.faintOpacity,
-            palette: theme,
-            outOfBoundsDimColor: const Color(0x88000000),
-            service: _terminalService,
-            topVirtualRowProvider: pane.readTopVirtualRow,
-            selectionEpochProvider: pane.readSelectionEpoch,
-            virtualLineLookup: pane.lookupVirtualLine,
-            onSelectionAutoScroll: pane.scrollLines,
-            enableBuiltinSelection: true,
-            enableBuiltinLinkOpen: true,
-            linkLineLookup: pane.lookupLinkLine,
-            hoveredLinkStyler: _styleHoveredRainbowLink,
-            hoveredLinkAnimationInterval:
-                WorkspaceBufferCompositor.rainbowHoverTickInterval,
-            enableHostShortcuts: true,
-            alignment: Alignment.topLeft,
-            onViewportSizeChanged: pane.updateViewportSize,
-            onInputEvent: (event) => _handlePaneInputEvent(pane, event),
-            onTextInput: pane.sendCommittedText,
-            onHostShortcut: _shortcutDispatcher.handleHostShortcut,
-            onFocusChanged: (hasFocus) {
-              if (hasFocus) widget.workspace.focusPane(pane.paneId);
-            },
+          RepaintBoundary(
+            key: _boundaryKeyForPane(pane.paneId),
+            child: TerminalSurface(
+              key: _surfaceKeyForPane(pane.paneId),
+              atlasController: _atlasController,
+              focusNode: _focusNodeForPane(pane.paneId),
+              autofocus:
+                  isFocused &&
+                  widget.workspace.activeOverlay == FtermOverlay.none,
+              bufferProvider: pane.readDisplayBuffer,
+              bufferListenable: pane.bufferListenable,
+              activePtySizeProvider: pane.readActivePtySize,
+              cursorPositionProvider: pane.readCursorPosition,
+              kittyKeyboardFlagsProvider: pane.readKittyKeyboardFlags,
+              reportKeyReleaseEventsProvider: pane.readReportKeyReleaseEvents,
+              reportPixelMouseEventsProvider: pane.readReportPixelMouseEvents,
+              mouseTrackingProvider: pane.readMouseTracking,
+              copyOnSelectProvider: _readCopyOnSelect,
+              macosOptionAsAlt: widget.workspace.preferences.macosOptionAsAlt,
+              fontSize: fontSize,
+              fontFamily: castPrimaryFontFamily,
+              fontFamilyFallback: castFallbackFontFamilies,
+              backgroundColor: bgColor,
+              foregroundColor: fgColor,
+              faintOpacity:
+                  widget.workspace.workspaceSettings.themeSettings.faintOpacity,
+              palette: theme,
+              outOfBoundsDimColor: const Color(0x88000000),
+              service: _terminalService,
+              topVirtualRowProvider: pane.readTopVirtualRow,
+              selectionEpochProvider: pane.readSelectionEpoch,
+              virtualLineLookup: pane.lookupVirtualLine,
+              onSelectionAutoScroll: pane.scrollLines,
+              enableBuiltinSelection: true,
+              enableBuiltinLinkOpen: true,
+              linkLineLookup: pane.lookupLinkLine,
+              hoveredLinkStyler: _styleHoveredRainbowLink,
+              hoveredLinkAnimationInterval:
+                  WorkspaceBufferCompositor.rainbowHoverTickInterval,
+              enableHostShortcuts: true,
+              alignment: Alignment.topLeft,
+              onViewportSizeChanged: pane.updateViewportSize,
+              onInputEvent: (event) => _handlePaneInputEvent(pane, event),
+              onTextInput: pane.sendCommittedText,
+              onHostShortcut: _shortcutDispatcher.handleHostShortcut,
+              onFocusChanged: (hasFocus) {
+                if (hasFocus) widget.workspace.focusPane(pane.paneId);
+              },
+            ),
           ),
           _buildPaneCornerPill(pane, tab, theme),
         ],
@@ -1140,6 +1178,13 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         icon: Icons.help_outline,
         color: fg.withValues(alpha: 0.72),
         onTap: () => widget.workspace.setOverlay(FtermOverlay.help),
+      ),
+      _chromeIconButton(
+        key: const ValueKey('fterm-feedback-button'),
+        tooltip: 'Send feedback / Report issue',
+        icon: Icons.feedback_outlined,
+        color: fg.withValues(alpha: 0.72),
+        onTap: () => widget.workspace.setOverlay(FtermOverlay.feedback),
       ),
       _chromeIconButton(
         key: const ValueKey('fterm-about-button'),

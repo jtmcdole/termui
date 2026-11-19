@@ -9,6 +9,7 @@ import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'about/about_service.dart';
 import 'audio/fterm_audio_controller.dart';
 import 'desktop_launch_env.dart';
+import 'feedback/diagnostic_log.dart';
 import 'file_drop_bridge.dart';
 import 'font_loader.dart';
 import 'launch_config.dart';
@@ -148,6 +149,11 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
         if (formatted == lastLoggedError) return;
         lastLoggedError = formatted;
         logDesktopConnectError(error);
+        if (mounted) {
+          _workspace.diagnosticLog.record(
+            DiagnosticEventKind.relayConnectFailed,
+          );
+        }
       },
     );
     final storage = widget.settingsStorage ?? defaultSettingsStorage;

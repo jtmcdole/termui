@@ -15,6 +15,7 @@ import '../update/update_view_model.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
 import 'fterm_about_overlay.dart';
+import 'fterm_feedback_overlay.dart';
 
 /// Modal overlays rendered over the terminal workspace when [FtermOverlay] !=
 /// [FtermOverlay.none].
@@ -28,12 +29,16 @@ final class FtermOverlayHost extends StatelessWidget {
   /// Whether this host renders in Web mode (hides native desktop update UI).
   final bool isWeb;
 
+  /// Optional callback capturing the active terminal pane as a PNG file.
+  final Future<String?> Function()? onCaptureScreenshot;
+
   /// Creates the active modal overlay layer, or `SizedBox.shrink()` when idle.
   const FtermOverlayHost({
     super.key,
     required this.workspace,
     this.onOpenUrl = openExternalUrl,
     this.isWeb = false,
+    this.onCaptureScreenshot,
   });
 
   @override
@@ -47,6 +52,7 @@ final class FtermOverlayHost extends StatelessWidget {
     final (maxWidth, maxHeight) = switch (overlay) {
       FtermOverlay.licenses => (680.0, 560.0),
       FtermOverlay.about => (540.0, 560.0),
+      FtermOverlay.feedback => (560.0, 620.0),
       _ => (520.0, 540.0),
     };
 
@@ -122,6 +128,13 @@ final class FtermOverlayHost extends StatelessWidget {
                     FtermOverlay.licenses => FtermLicensesOverlay(
                       workspace: workspace,
                       palette: palette,
+                    ),
+                    FtermOverlay.feedback => FtermFeedbackOverlay(
+                      workspace: workspace,
+                      palette: palette,
+                      onOpenUrl: onOpenUrl,
+                      isWeb: isWeb,
+                      onCaptureScreenshot: onCaptureScreenshot,
                     ),
                     FtermOverlay.fileUpload => _FileUploadOverlay(
                       workspace: workspace,

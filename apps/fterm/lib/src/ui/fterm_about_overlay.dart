@@ -419,6 +419,15 @@ final class _AboutLinksColumn extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         _AboutActionLink(
+          key: const ValueKey('about-send-feedback'),
+          icon: Icons.feedback_outlined,
+          label: 'Send Feedback / Report Issue',
+          palette: palette,
+          accent: false,
+          onTap: () => workspace.setOverlay(FtermOverlay.feedback),
+        ),
+        const SizedBox(height: 6),
+        _AboutActionLink(
           key: const ValueKey('about-open-licenses'),
           icon: Icons.description_outlined,
           label: 'Open Source Licenses',

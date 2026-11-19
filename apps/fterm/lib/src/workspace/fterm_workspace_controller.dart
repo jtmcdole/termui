@@ -18,6 +18,8 @@ import '../about/about_repository.dart';
 import '../about/about_service.dart';
 import '../about/about_view_model.dart';
 import '../audio/fterm_audio_controller.dart';
+import '../feedback/diagnostic_log.dart';
+import '../feedback/feedback_models.dart';
 import '../launch_config.dart';
 import '../settings_storage.dart';
 import '../update/update_service.dart';
@@ -54,6 +56,9 @@ enum FtermOverlay {
 
   /// Deduplicated open-source and bundled font license viewer.
   licenses,
+
+  /// Guided GitHub feedback and bug-report submission modal.
+  feedback,
 
   /// Drag-and-drop multi-file upload confirmation and progress sheet.
   fileUpload,
@@ -194,6 +199,12 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// About & open-source licenses ViewModel shared by modal overlays.
   late final AboutViewModel aboutViewModel;
 
+  /// Bounded in-memory sanitized diagnostic log for opt-in issue reports.
+  final FtermDiagnosticLog diagnosticLog;
+  final bool _ownsDiagnosticLog;
+  String? _lastLoggedShareError;
+  bool _lastUpdateWasError = false;
+
   CastWorkspaceSettings _workspaceSettings;
   FtermPreferences _preferences;
   RelayCredentials _relayCredentials;
@@ -235,6 +246,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     UpdateService? updateService,
     UpdateTimerFactory? updateTimerFactory,
     AboutService? aboutService,
+    FtermDiagnosticLog? diagnosticLog,
     void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
@@ -257,6 +269,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     updateService: updateService,
     updateTimerFactory: updateTimerFactory,
     aboutService: aboutService,
+    diagnosticLog: diagnosticLog,
     onFrameRedrawn: onFrameRedrawn,
   );
 
@@ -276,11 +289,15 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required UpdateService? updateService,
     required UpdateTimerFactory? updateTimerFactory,
     required AboutService? aboutService,
+    required FtermDiagnosticLog? diagnosticLog,
     required void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) : _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
        _resizeDebounce = resizeDebounce,
        _clock = clock ?? const Clock(),
+       _ownsDiagnosticLog = diagnosticLog == null,
+       diagnosticLog =
+           diagnosticLog ?? FtermDiagnosticLog(clock: clock ?? const Clock()),
        _onFrameRedrawn = onFrameRedrawn,
        _platformBrightness = initialBrightness,
        _workspaceSettings = initialSettings,
@@ -300,7 +317,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _uploadCoordinator = FileUploadCoordinator(
       repository: repository,
       onProgressChanged: _notifyChromeChanged,
-      onError: _setStatusBanner,
+      onError: (message) {
+        this.diagnosticLog.record(DiagnosticEventKind.fileUploadFailed);
+        _setStatusBanner(message);
+      },
     );
     updateViewModel = UpdateViewModel(
       service: updateService ?? createPlatformUpdateService(),
@@ -308,7 +328,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       writePreferences: updatePreferences,
       beforeExitTeardown: prepareForUpdateSwap,
       relaunchArgs: launchConfig.relaunchArgs,
-      onCoarseStateChanged: _notifyChromeChanged,
+      onCoarseStateChanged: _onUpdateCoarseStateChanged,
       clock: _clock,
       timerFactory: updateTimerFactory,
     );
@@ -1067,15 +1087,51 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _activeOverlay = overlay;
     _leaderArmed = false;
     switch (overlay) {
-      case FtermOverlay.about:
+      case FtermOverlay.about || FtermOverlay.feedback || FtermOverlay.licenses:
         unawaited(aboutViewModel.ensureInitialized());
-      case FtermOverlay.licenses:
-        unawaited(aboutViewModel.ensureInitialized());
-        unawaited(aboutViewModel.ensureLicensesLoaded());
+        if (overlay == FtermOverlay.licenses) {
+          unawaited(aboutViewModel.ensureLicensesLoaded());
+        }
       default:
         break;
     }
     _notifyChromeChanged();
+  }
+
+  /// Builds an allowlisted, opt-in diagnostic summary of workspace state for
+  /// GitHub issue reports (never includes URLs, hostnames, tokens, paths, or
+  /// terminal contents).
+  FtermWorkspaceDiagnosticSummary buildDiagnosticSummary({
+    required bool isWeb,
+  }) {
+    final focused = focusedPane;
+    final hasRemoteOrSharedPane = _panes.values.any(
+      (pane) =>
+          !pane.isLocal || pane.shareSnapshot.state != LocalShareState.unshared,
+    );
+    final usesRelay =
+        isWeb ||
+        hasRemoteOrSharedPane ||
+        _connectionState != ClientConnectionState.unconnected;
+    return FtermWorkspaceDiagnosticSummary(
+      tabCount: _tabs.length,
+      paneCount: activeSplitTree?.paneCount ?? 0,
+      focusedPaneKind: focused == null
+          ? 'none'
+          : (focused.isLocal ? 'local shell' : 'remote session (via relay)'),
+      usesRelay: usesRelay,
+      activePtySize: focused == null
+          ? null
+          : '${focused.activePtySize.$1}x${focused.activePtySize.$2}',
+      themeId: activeTerminalTheme.id,
+      appearanceMode: _workspaceSettings.themeSettings.appearanceMode.name,
+      fontSize: effectiveFontSize,
+      dockPosition: _workspaceSettings.dockPosition.name,
+      connectionState: _connectionState.name,
+      audioInitialized: audioController.isInitialized,
+      isWeb: isWeb,
+      updateStatus: isWeb ? null : updateViewModel.status.name,
+    );
   }
 
   /// Dismisses the transient banner and active modal overlay.
@@ -1488,9 +1544,26 @@ final class FtermWorkspaceController extends ChangeNotifier {
     }
     if (latestError != null) {
       _statusBanner = 'Share failed: $latestError';
-    } else if (_statusBanner?.startsWith('Share failed: ') ?? false) {
-      _statusBanner = null;
+      if (latestError != _lastLoggedShareError) {
+        _lastLoggedShareError = latestError;
+        diagnosticLog.record(DiagnosticEventKind.localShareFailed);
+      }
+    } else {
+      _lastLoggedShareError = null;
+      if (_statusBanner?.startsWith('Share failed: ') ?? false) {
+        _statusBanner = null;
+      }
     }
+    _notifyChromeChanged();
+  }
+
+  void _onUpdateCoarseStateChanged() {
+    if (_disposed) return;
+    final isError = updateViewModel.status == UpdateStatus.error;
+    if (isError && !_lastUpdateWasError) {
+      diagnosticLog.record(DiagnosticEventKind.updateError);
+    }
+    _lastUpdateWasError = isError;
     _notifyChromeChanged();
   }
 
@@ -1510,6 +1583,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   void _onClientDisconnected(bool _) {
     if (_disposed) return;
+    diagnosticLog.record(DiagnosticEventKind.relayDisconnected);
     if (_connectionState != ClientConnectionState.authFailed) {
       _connectionState = ClientConnectionState.reconnecting;
     }
@@ -1540,6 +1614,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
         _notifyChromeChanged();
       case ErrorFrame(:final code, :final message):
         if (CastClientRepository.isFatalAuthErrorCode(code)) {
+          diagnosticLog.record(DiagnosticEventKind.relayAuthFailed);
           _connectionState = ClientConnectionState.authFailed;
           _authErrorMessage = message;
           _statusBanner = message;
@@ -1548,6 +1623,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
           }
           _notifyChromeChanged();
         } else {
+          diagnosticLog.record(DiagnosticEventKind.relayProtocolError);
           _setStatusBanner(message);
         }
       default:
@@ -1648,6 +1724,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     );
     updateViewModel.dispose();
     aboutViewModel.dispose();
+    if (_ownsDiagnosticLog) {
+      diagnosticLog.dispose();
+    }
     _settingsSaver.dispose();
     await _settingsSaver.flushAsync();
     final activePanes = [..._panes.values];
