@@ -74,6 +74,24 @@ class Renderer {
   }
 
   @pragma('vm:prefer-inline')
+  static bool _cellsGlyphDiffer(
+    Buffer backBuffer,
+    Buffer frontBuffer,
+    int idx,
+  ) {
+    final backCode = backBuffer.glyphCodes[idx];
+    final frontCode = frontBuffer.glyphCodes[idx];
+    if (((backCode | frontCode) & GlyphCellList.clusterFlag) == 0) {
+      return backCode != frontCode;
+    }
+    if (((backCode ^ frontCode) & GlyphCellList.clusterFlag) != 0) {
+      return true;
+    }
+    return backBuffer.glyphCellList.decodeCode(backCode) !=
+        frontBuffer.glyphCellList.decodeCode(frontCode);
+  }
+
+  @pragma('vm:prefer-inline')
   bool _isCellChanged(
     Buffer backBuffer,
     int x,
@@ -85,7 +103,7 @@ class Renderer {
     if (sizeChanged) return true;
     final backAttr = backBuffer.attributes;
     final frontAttr = _frontBuffer.attributes;
-    if (backBuffer.characters[idx] != _frontBuffer.characters[idx] ||
+    if (_cellsGlyphDiffer(backBuffer, _frontBuffer, idx) ||
         backAttr[attrIdx + 0] != frontAttr[attrIdx + 0] ||
         backAttr[attrIdx + 1] != frontAttr[attrIdx + 1] ||
         backAttr[attrIdx + 2] != frontAttr[attrIdx + 2]) {
@@ -102,14 +120,18 @@ class Renderer {
 
   void _emitPendingKittyImages(Buffer backBuffer, StringSink out) {
     final attrs = backBuffer.attributes;
-    final chars = backBuffer.characters;
+    final codes = backBuffer.glyphCodes;
+    final cells = backBuffer.glyphCellList;
     final width = backBuffer.width;
     if (width <= 0) return;
-    final cellCount = chars.length;
+    final cellCount = codes.length;
     for (var cellIdx = 0; cellIdx < cellCount; cellIdx++) {
       final attrIdx = cellIdx * 3;
       if ((attrs[attrIdx + 2] & Modifier.kittyPlaceholder) == 0) continue;
-      final imageId = _extractKittyImageId(chars[cellIdx], attrs[attrIdx]);
+      final imageId = _extractKittyImageId(
+        cells.decodeCode(codes[cellIdx]),
+        attrs[attrIdx],
+      );
       final data = backBuffer.lookupKittyImage(
         cellIdx % width,
         cellIdx ~/ width,
@@ -181,6 +203,7 @@ class Renderer {
     int y,
     int rxIdx,
     int rxAttrIdx,
+    int backCode,
     String char,
     int cellFg,
     int cellBg,
@@ -188,7 +211,12 @@ class Renderer {
     int cellUlColor,
     String? cellUri,
   ) {
-    _frontBuffer.characters[rxIdx] = char;
+    final frontCells = _frontBuffer.glyphCellList;
+    if ((backCode & GlyphCellList.clusterFlag) == 0) {
+      frontCells.setCodeAt(rxIdx, backCode);
+    } else {
+      frontCells.setCodeAt(rxIdx, frontCells.encodeGrapheme(char));
+    }
     final frontAttr = _frontBuffer.attributes;
     frontAttr[rxAttrIdx + 0] = cellFg;
     frontAttr[rxAttrIdx + 1] = cellBg;
@@ -277,7 +305,8 @@ class Renderer {
       out.write('\x1b[${y + 1};${runStart + 1}H');
     }
 
-    final backChars = backBuffer.characters;
+    final backCodes = backBuffer.glyphCodes;
+    final backCells = backBuffer.glyphCellList;
     final backAttr = backBuffer.attributes;
 
     for (var rx = runStart; rx < runEnd; rx++) {
@@ -310,13 +339,15 @@ class Renderer {
       state.activeMod = cellMod;
       state.activeUlColor = cellUlColor;
 
-      final char = backChars[rxIdx];
+      final backCode = backCodes[rxIdx];
+      final char = backCells.decodeCode(backCode);
       out.write(char);
       _syncFrontCell(
         rx,
         y,
         rxIdx,
         rxAttrIdx,
+        backCode,
         char,
         cellFg,
         cellBg,

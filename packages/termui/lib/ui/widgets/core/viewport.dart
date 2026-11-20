@@ -52,9 +52,20 @@ class Viewport implements Buffer {
   List<String> get characters => throw UnsupportedError(
     'Flat characters access not supported on Viewport',
   );
-  @override
+
+  /// Throws [UnsupportedError] because a [Viewport] does not own a flat buffer.
   set characters(List<String> val) => throw UnsupportedError(
     'Flat characters access not supported on Viewport',
+  );
+
+  @override
+  Uint32List get glyphCodes => throw UnsupportedError(
+    'Flat glyphCodes access not supported on Viewport',
+  );
+
+  @override
+  GlyphCellList get glyphCellList => throw UnsupportedError(
+    'Flat glyphCellList access not supported on Viewport',
   );
 
   @override

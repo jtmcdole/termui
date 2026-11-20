@@ -4,6 +4,7 @@ library;
 export 'direction.dart';
 export 'terminal/terminal.dart' hide Modifier;
 export 'ui/buffer.dart';
+export 'ui/glyph_cell_list.dart';
 export 'ui/color.dart';
 export 'ui/terminal_palette.dart';
 
