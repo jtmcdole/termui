@@ -15,6 +15,28 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - There are no other changes in this release.
+
+Packages graduated to a stable release (see pre-releases prior to the stable version for changelog entries):
+
+ - `fterm` - `v0.5.0`
+ - `termui_cast_client_core` - `v0.4.0`
+ - `termui_cast_protocol` - `v0.3.0`
+ - `termui_cast_server` - `v0.3.0`
+ - `termui_caster_cli` - `v0.3.0`
+
+## 2026-11-20
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`termui` - `v0.20.2`](#termui---v0202)
  - [`termui_flutter` - `v0.15.2`](#termui_flutter---v0152)
  - [`termui_recorder` - `v0.10.11`](#termui_recorder---v01011)
