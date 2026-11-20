@@ -232,6 +232,17 @@ final class _PendingClaimedKey {
 final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   static const Duration _claimedSuppressionWindow = Duration(milliseconds: 100);
 
+  /// Idle empty editing state with a valid collapsed caret at offset `0`.
+  ///
+  /// Uses offset `0` rather than [TextEditingValue.empty] (`-1, -1`) because
+  /// Flutter Web's `DefaultTextEditingStrategy.setEditingState` ignores states
+  /// with negative selection offsets (`!editingState.isValid`), leaving the
+  /// DOM `<textarea>` un-cleared and causing the next `beforeinput` event to
+  /// emit `deltaStart = -1, deltaEnd = -1` (decoded as a non-text update).
+  static const TextEditingValue _idleEditingValue = TextEditingValue(
+    selection: TextSelection.collapsed(offset: 0),
+  );
+
   /// Default [TextInputConfiguration] enabling delta tracking with terminal-safe flags.
   static const TextInputConfiguration defaultInputConfiguration =
       TextInputConfiguration(
@@ -276,7 +287,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
 
   TextInputConnection? _connection;
   TextInputConfiguration? _attachedConfiguration;
-  TextEditingValue _editingValue = TextEditingValue.empty;
+  TextEditingValue _editingValue = _idleEditingValue;
 
   Size? _lastEditableSize;
   Matrix4? _lastTransform;
@@ -672,7 +683,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       );
     }
     return (
-      nextState: TextEditingValue.empty,
+      nextState: _idleEditingValue,
       needsPlatformReset: delta.oldText.isNotEmpty,
     );
   }
@@ -714,7 +725,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       committedOut.write(replacement);
     }
     return (
-      nextState: TextEditingValue.empty,
+      nextState: _idleEditingValue,
       needsPlatformReset: newText.isNotEmpty,
     );
   }
@@ -729,7 +740,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       if (next.text.isNotEmpty) {
         committedOut.write(next.text);
       }
-      return (nextState: TextEditingValue.empty, needsPlatformReset: true);
+      return (nextState: _idleEditingValue, needsPlatformReset: true);
     }
 
     if (next.composing.start == 0 && next.composing.end == next.text.length) {
@@ -807,13 +818,13 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     final committed = prevComposing
         ? value.text
         : _stripGraphemePrefix(value.text, _editingValue.text);
-    _editingValue = TextEditingValue.empty;
+    _editingValue = _idleEditingValue;
     if (committed.isNotEmpty &&
         (prevComposing || !_shouldSuppressNonComposingInsertion(committed))) {
       _emitCommittedText(committed);
     }
     if (value.text.isNotEmpty && _connection != null && _connection!.attached) {
-      _connection!.setEditingState(TextEditingValue.empty);
+      _connection!.setEditingState(_idleEditingValue);
     }
     if (prevComposing != isComposing || prevComposingText != composingText) {
       _notifyComposingChanged();
@@ -857,9 +868,9 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   }
 
   void _clearComposingState() {
-    if (_editingValue == TextEditingValue.empty) return;
+    if (_editingValue == _idleEditingValue) return;
     final hadComposing = isComposing;
-    _editingValue = TextEditingValue.empty;
+    _editingValue = _idleEditingValue;
     if (hadComposing) {
       _notifyComposingChanged();
     }
