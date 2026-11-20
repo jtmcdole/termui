@@ -69,6 +69,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
   web.WebGLTexture? _inputTexture;
   int _inputWidth = 0;
   int _inputHeight = 0;
+  ui.Image? _cachedInputImage;
 
   web.WebGLTexture? _wallpaperTexture;
   int _wallpaperWidth = 0;
@@ -258,7 +259,11 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     final dims = _resolveDimensions(physicalSize);
     if (dims == null) return null;
 
-    final inputData = await _readImageRgba(inputImage);
+    final needsInputUpload =
+        inputImage != null && !identical(inputImage, _cachedInputImage);
+    final inputData = needsInputUpload
+        ? await _readImageRgba(inputImage)
+        : null;
     final needsWallpaperUpload =
         wallpaperImage != null &&
         !identical(wallpaperImage, _cachedWallpaperImage);
@@ -269,7 +274,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     if (_isContextUnavailable) return null;
     if (!_ensureCoreResources()) return null;
 
-    final hasInput = _uploadInputIfPresent(inputImage, inputData);
+    final hasInput = _syncInputTexture(inputImage, inputData, needsInputUpload);
     final hasWallpaper = _syncWallpaperTexture(
       wallpaperImage,
       wallpaperData,
@@ -367,6 +372,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     _inputTexture = null;
     _inputWidth = 0;
     _inputHeight = 0;
+    _cachedInputImage = null;
     _wallpaperTexture = null;
     _wallpaperWidth = 0;
     _wallpaperHeight = 0;
@@ -999,8 +1005,15 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     return image.toByteData(format: ui.ImageByteFormat.rawRgba);
   }
 
-  bool _uploadInputIfPresent(ui.Image? image, ByteData? data) {
-    if (image == null || data == null) return false;
+  bool _syncInputTexture(ui.Image? image, ByteData? data, bool needsUpload) {
+    if (image == null) {
+      _cachedInputImage = null;
+      return false;
+    }
+    if (!needsUpload) {
+      return _inputTexture != null;
+    }
+    if (data == null) return false;
     final uploaded = _uploadRgbaTexture(
       existing: _inputTexture,
       existingWidth: _inputWidth,
@@ -1013,6 +1026,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     _inputTexture = uploaded;
     _inputWidth = image.width;
     _inputHeight = image.height;
+    _cachedInputImage = image;
     return true;
   }
 

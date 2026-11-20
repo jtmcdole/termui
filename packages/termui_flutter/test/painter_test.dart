@@ -1365,9 +1365,19 @@ Future<void> _testEnableBleedCoversAdjacentBackgroundEdges() async {
   final transBytes = (await transImg.toByteData())!.buffer.asUint8List();
   final adjOff = ((cellH * 1.5).floor() * imgW + (cellW * 1.5).floor()) * 4;
   final baseOff = ((cellH * 0.5).floor() * imgW + (cellW * 2.5).floor()) * 4;
+  final basePixel = transBytes.sublist(baseOff, baseOff + 4);
+  expect(transBytes.sublist(adjOff, adjOff + 4), equals(basePixel));
+  // Translucent defaultBackgroundArgb disables neighbor trimming, so bg bleed
+  // must also be disabled (no bright red bar protruding below or beside (1,0)).
+  final transBottomEdgeOff = (bottomEdgeY * imgW + (cellW * 1.5).floor()) * 4;
+  final transRightEdgeOff = ((cellH * 0.5).floor() * imgW + rightEdgeX) * 4;
   expect(
-    transBytes.sublist(adjOff, adjOff + 4),
-    equals(transBytes.sublist(baseOff, baseOff + 4)),
+    transBytes.sublist(transBottomEdgeOff, transBottomEdgeOff + 4),
+    equals(basePixel),
+  );
+  expect(
+    transBytes.sublist(transRightEdgeOff, transRightEdgeOff + 4),
+    equals(basePixel),
   );
 }
 

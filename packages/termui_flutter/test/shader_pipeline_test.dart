@@ -69,6 +69,7 @@ final class _FakeShaderBackend implements TerminalShaderBackend {
   bool disposed = false;
 
   ui.Image? nextSyncImage;
+  Color asyncOutputColor = const Color(0xFF44AA88);
   Object? nextSyncRenderError;
   Object? nextAsyncRenderError;
 
@@ -152,7 +153,7 @@ final class _FakeShaderBackend implements TerminalShaderBackend {
     return _createSolidImage(
       width: physicalSize.width.round().clamp(1, 32),
       height: physicalSize.height.round().clamp(1, 32),
-      color: const Color(0xFF44AA88),
+      color: asyncOutputColor,
     );
   }
 
@@ -1261,5 +1262,131 @@ void main() {
         );
       },
     );
+
+    testWidgets(
+      'static foreground shader waits for child repaint before capture and occludes live baseLayer against translucent bleed-through',
+      (tester) async {
+        final backend = _FakeShaderBackend()
+          // Translucent foreground output (50% green, like scanline with
+          // backgroundOpacity < 1.0).
+          ..asyncOutputColor = const Color(0x8000FF00);
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final config = TerminalShaderConfig(
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'fg:scanline',
+              stage: TerminalShaderStage.foreground,
+              preset: TerminalShaderPreset.scanlineOverlay,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.focused,
+          backgroundOpacity: 0.5,
+        );
+        await tester.runAsync(() => controller.syncConfig(config));
+
+        final paintNotifier = _TestPaintNotifier();
+        addTearDown(paintNotifier.dispose);
+        var childColor = const Color(0xFF0000FF); // blue on frame 1
+        final outerBoundaryKey = GlobalKey();
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: RepaintBoundary(
+                key: outerBoundaryKey,
+                child: SizedBox(
+                  width: 40,
+                  height: 20,
+                  child: TerminalShaderHost(
+                    controller: controller,
+                    config: config,
+                    backgroundArgb: 0xFF000000,
+                    activityListenable: paintNotifier,
+                    child: CustomPaint(
+                      painter: _ColorBlockPainter(
+                        repaint: paintNotifier,
+                        colorProvider: () => childColor,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+
+        expect(backend.asyncInputImages, hasLength(1));
+        final firstPx = await tester.runAsync(
+          () => _readPixel(backend.asyncInputImages.last!, 5, 5),
+        );
+        expect(firstPx!.b, greaterThan(200));
+
+        // Mutate child to bright RED and notify during SchedulerPhase.idle —
+        // mirrors TerminalSurface._paintNotifier firing before child
+        // RenderCustomPaint.markNeedsPaint runs.
+        childColor = const Color(0xFFFF0000);
+        paintNotifier.fire();
+
+        // Must wait for the next frame so the captured inputImage contains the
+        // NEW red child (not stale blue!).
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+
+        expect(backend.asyncInputImages.length, greaterThanOrEqualTo(2));
+        final secondPx = await tester.runAsync(
+          () => _readPixel(backend.asyncInputImages.last!, 5, 5),
+        );
+        expect(secondPx!.r, greaterThan(200));
+        expect(secondPx.b, lessThan(20));
+
+        // Now capture the final composited TerminalShaderHost output: even
+        // though the foreground shader image is 50% translucent green and the
+        // live baseLayer underneath is bright RED, the opaque backdrop in
+        // _ForegroundShaderPainter must prevent any red bleed-through!
+        final hostBoundary =
+            outerBoundaryKey.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final composited = await tester.runAsync(
+          () => hostBoundary.toImage(pixelRatio: 1.0),
+        );
+        addTearDown(() => composited?.dispose());
+        final outPx = await tester.runAsync(
+          () => _readPixel(composited!, 5, 5),
+        );
+        expect(outPx!.r, equals(0));
+        expect(outPx.g, inInclusiveRange(100, 155));
+        expect(outPx.a, equals(255));
+      },
+    );
   });
+}
+
+final class _TestPaintNotifier extends ChangeNotifier {
+  void fire() => notifyListeners();
+}
+
+final class _ColorBlockPainter extends CustomPainter {
+  final Color Function() colorProvider;
+
+  _ColorBlockPainter({required Listenable repaint, required this.colorProvider})
+    : super(repaint: repaint);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.drawRect(Offset.zero & size, Paint()..color = colorProvider());
+  }
+
+  @override
+  bool shouldRepaint(covariant _ColorBlockPainter oldDelegate) => false;
 }

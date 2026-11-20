@@ -718,7 +718,12 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     if (_foregroundPostFrameScheduled) return;
     _foregroundPostFrameScheduled = true;
     final scheduler = SchedulerBinding.instance;
+    // Never capture in a microtask while _childCaptureDirty is true:
+    // activityListenable notifies parent listeners before descendant
+    // CustomPaint.markNeedsPaint runs, so debugNeedsPaint may still be false
+    // until after the current synchronous notifyListeners() loop completes.
     if (scheduler.schedulerPhase == SchedulerPhase.idle &&
+        !_childCaptureDirty &&
         _isCaptureBoundaryReady()) {
       scheduleMicrotask(() {
         _foregroundPostFrameScheduled = false;
@@ -943,6 +948,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
                 painter: _ForegroundShaderPainter(
                   repaint: _frameNotifier,
                   imageProvider: () => _foregroundOutputImage,
+                  backgroundColor: Color(widget.backgroundArgb | 0xFF000000),
                   onPaintSize: _onForegroundPaint,
                 ),
               ),
@@ -1015,6 +1021,7 @@ final class _BackgroundShaderPainter extends CustomPainter {
 
 final class _ForegroundShaderPainter extends CustomPainter {
   final ui.Image? Function() imageProvider;
+  final Color backgroundColor;
   final void Function(Size logicalSize) onPaintSize;
 
   static final Paint _imagePaint = Paint()..filterQuality = FilterQuality.low;
@@ -1022,6 +1029,7 @@ final class _ForegroundShaderPainter extends CustomPainter {
   _ForegroundShaderPainter({
     required Listenable repaint,
     required this.imageProvider,
+    required this.backgroundColor,
     required this.onPaintSize,
   }) : super(repaint: repaint);
 
@@ -1031,6 +1039,10 @@ final class _ForegroundShaderPainter extends CustomPainter {
     onPaintSize(size);
     final image = imageProvider();
     if (image == null) return;
+    // Occlude the live un-shaded baseLayer underneath so translucent foreground
+    // outputs (e.g. scanline with backgroundOpacity < 1.0) or distorted passes
+    // (e.g. crt_lottes) never let a stale/raw cursor bleed through.
+    canvas.drawRect(Offset.zero & size, Paint()..color = backgroundColor);
     canvas.drawImageRect(
       image,
       Rect.fromLTWH(0.0, 0.0, image.width.toDouble(), image.height.toDouble()),
@@ -1040,5 +1052,6 @@ final class _ForegroundShaderPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _ForegroundShaderPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _ForegroundShaderPainter oldDelegate) =>
+      oldDelegate.backgroundColor != backgroundColor;
 }

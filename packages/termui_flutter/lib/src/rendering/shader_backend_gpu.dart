@@ -45,6 +45,57 @@ int alignUniformByteSize(int byteSize, int alignment) {
 String resolvePrevFrameKey(ShaderPassInvocation invocation) =>
     invocation.prevFrameKey ?? invocation.handle.id;
 
+/// Executes a GPU pass chain using one command buffer per render pass (and a
+/// separate command buffer for the trailing texture copy when the final pass
+/// writes to a ping-pong texture rather than [finalSurfaceTexture]).
+///
+/// Flutter 3.50's `flutter_gpu` `CommandBuffer` keeps each `RenderPass` and
+/// `BlitPass` encoder open until `CommandBuffer.submit()`, so creating a second
+/// pass or blit on the same command buffer trips Metal's single-active-encoder
+/// assertion (`A command encoder is already encoding to this command buffer`)
+/// and violates Vulkan render-pass ordering. Returning the final unsubmitted
+/// command buffer lets the caller invoke `surfaceFrame.present(...)` before
+/// final submission.
+TCmd
+executeSingleEncoderGpuPassChain<TCmd extends Object, TTex extends Object>({
+  required int passCount,
+  required TTex finalSurfaceTexture,
+  required TCmd Function() createCommandBuffer,
+  required TTex Function(int passIndex, TCmd commandBuffer) encodeRenderPass,
+  required void Function(TCmd commandBuffer) submitIntermediate,
+  required void Function(TCmd commandBuffer, TTex source, TTex destination)
+  encodeCopyToSurface,
+}) {
+  if (passCount <= 0) {
+    throw RangeError.value(passCount, 'passCount', 'Must be positive.');
+  }
+  TTex? lastTarget;
+  TCmd? finalCommandBuffer;
+
+  for (var i = 0; i < passCount; i++) {
+    final commandBuffer = createCommandBuffer();
+    final target = encodeRenderPass(i, commandBuffer);
+    lastTarget = target;
+    if (i == passCount - 1 && identical(target, finalSurfaceTexture)) {
+      finalCommandBuffer = commandBuffer;
+    } else {
+      submitIntermediate(commandBuffer);
+    }
+  }
+
+  if (finalCommandBuffer != null) {
+    return finalCommandBuffer;
+  }
+
+  final copyCommandBuffer = createCommandBuffer();
+  encodeCopyToSurface(
+    copyCommandBuffer,
+    lastTarget as TTex,
+    finalSurfaceTexture,
+  );
+  return copyCommandBuffer;
+}
+
 /// Per-shader reflection guard that skips SPIRV-Cross-stripped uniform blocks
 /// and memoizes stripped texture sampler names so binding never throws.
 final class GpuReflectionBindingCache {
@@ -579,7 +630,6 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     var presented = false;
     final pendingSwaps = <GpuPingPongSlot<gpu.Texture>>[];
     try {
-      final commandBuffer = _context.createCommandBuffer();
       final batch = packAlignedUniformBatch(<TerminalShaderUniforms>[
         for (final pass in passes) pass.uniforms,
       ], minimumUniformByteAlignment: _context.minimumUniformByteAlignment);
@@ -587,8 +637,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
       final vertexView = _ensureVertexBufferView();
       final fallback = _ensureFallbackTexture();
 
-      final lastTarget = _encodePassChain(
-        commandBuffer: commandBuffer,
+      final finalCommandBuffer = _encodePassChain(
         passes: passes,
         width: width,
         height: height,
@@ -602,17 +651,10 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
         pendingSwaps: pendingSwaps,
       );
 
-      if (!identical(lastTarget, surfaceFrame.colorTexture)) {
-        commandBuffer.copyTextureToTexture(
-          gpu.TextureRegion(lastTarget),
-          gpu.TextureDestinationRegion(surfaceFrame.colorTexture),
-        );
-      }
-
-      surfaceFrame.present(commandBuffer);
+      surfaceFrame.present(finalCommandBuffer);
       presented = true;
       _submitCommandBuffer(
-        commandBuffer,
+        finalCommandBuffer,
         surfacePool,
         width,
         height,
@@ -629,8 +671,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     }
   }
 
-  gpu.Texture _encodePassChain({
-    required gpu.CommandBuffer commandBuffer,
+  gpu.CommandBuffer _encodePassChain({
     required List<ShaderPassInvocation> passes,
     required int width,
     required int height,
@@ -645,49 +686,58 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
   }) {
     var currentInput = inputTexture ?? fallback;
     final channel1 = wallpaperTexture ?? fallback;
-    var lastOutput = finalSurfaceTexture;
 
-    for (var i = 0; i < passes.length; i++) {
-      final invocation = passes[i];
-      final handle = _requireOwnedHandle(invocation.handle);
-      final isFinal = i == passes.length - 1;
-      final pingPong = handle.usesPrevFrame
-          ? _pingPongRegistry.acquire(
-              resolvePrevFrameKey(invocation),
-              width,
-              height,
-              _createRenderTargetTexture,
-            )
-          : null;
-      final target = _selectPassTarget(
-        passIndex: i,
-        isFinal: isFinal,
-        width: width,
-        height: height,
-        pingPong: pingPong,
-        finalSurfaceTexture: finalSurfaceTexture,
-      );
-      _recordSinglePass(
-        commandBuffer: commandBuffer,
-        handle: handle,
-        targetTexture: target,
-        width: width,
-        height: height,
-        vertexView: vertexView,
-        uboBuffer: uboBuffer,
-        uboOffset: i * uboStride,
-        uboMaxLength: uboStride,
-        channel0: currentInput,
-        channel1: channel1,
-        prevFrame: pingPong?.readTexture ?? fallback,
-      );
-      if (pingPong != null) {
-        pendingSwaps.add(pingPong);
-      }
-      currentInput = target;
-      lastOutput = target;
-    }
-    return lastOutput;
+    return executeSingleEncoderGpuPassChain<gpu.CommandBuffer, gpu.Texture>(
+      passCount: passes.length,
+      finalSurfaceTexture: finalSurfaceTexture,
+      createCommandBuffer: _context.createCommandBuffer,
+      encodeRenderPass: (i, commandBuffer) {
+        final invocation = passes[i];
+        final handle = _requireOwnedHandle(invocation.handle);
+        final pingPong = handle.usesPrevFrame
+            ? _pingPongRegistry.acquire(
+                resolvePrevFrameKey(invocation),
+                width,
+                height,
+                _createRenderTargetTexture,
+              )
+            : null;
+        final target = _selectPassTarget(
+          passIndex: i,
+          isFinal: i == passes.length - 1,
+          width: width,
+          height: height,
+          pingPong: pingPong,
+          finalSurfaceTexture: finalSurfaceTexture,
+        );
+        _recordSinglePass(
+          commandBuffer: commandBuffer,
+          handle: handle,
+          targetTexture: target,
+          width: width,
+          height: height,
+          vertexView: vertexView,
+          uboBuffer: uboBuffer,
+          uboOffset: i * uboStride,
+          uboMaxLength: uboStride,
+          channel0: currentInput,
+          channel1: channel1,
+          prevFrame: pingPong?.readTexture ?? fallback,
+        );
+        if (pingPong != null) {
+          pendingSwaps.add(pingPong);
+        }
+        currentInput = target;
+        return target;
+      },
+      submitIntermediate: (commandBuffer) => commandBuffer.submit(),
+      encodeCopyToSurface: (commandBuffer, source, destination) {
+        commandBuffer.copyTextureToTexture(
+          gpu.TextureRegion(source),
+          gpu.TextureDestinationRegion(destination),
+        );
+      },
+    );
   }
 
   gpu.Texture _selectPassTarget({

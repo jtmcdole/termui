@@ -595,7 +595,13 @@ final class TuiAtlasPainter extends CustomPainter {
       final internals = stagingCacheInternalsOf(cache);
       internals.ensureGridCapacity(cols, rows);
 
-      final geo = _AtlasGeometry.fromAtlas(atlas, enableBleed: enableBleed);
+      final enableBgBleed =
+          enableBleed && (defaultBackgroundArgb >>> 24) == 0xFF;
+      final geo = _AtlasGeometry.fromAtlas(
+        atlas,
+        enableBleed: enableBleed,
+        enableBgBleed: enableBgBleed,
+      );
       if (rows > 0 && cols > 0) {
         _prepareSelectionRows(internals, cols, rows);
         _prepareHoveredLinkRows(internals, cols, rows);
@@ -3050,6 +3056,7 @@ final class _AtlasGeometry {
   factory _AtlasGeometry.fromAtlas(
     GlyphAtlas atlas, {
     required bool enableBleed,
+    bool? enableBgBleed,
   }) {
     final cellWidth = atlas.cellWidth;
     final cellHeight = atlas.cellHeight;
@@ -3076,7 +3083,10 @@ final class _AtlasGeometry {
     final whiteW = whiteRight - whiteX;
 
     final bleedPhysical = enableBleed ? (0.5 * dpr).ceilToDouble() : 0.0;
-    final bleedBgLogical = bleedPhysical * (cellWidth / whiteW);
+    final bgBleedPhysical = (enableBgBleed ?? enableBleed)
+        ? bleedPhysical
+        : 0.0;
+    final bleedBgLogical = bgBleedPhysical * (cellWidth / whiteW);
     final bleedFgLogicalBlock = bleedPhysical / dpr;
     final overhangFgPhysical = (GlyphAtlas.overhang * dpr).floorToDouble();
     final overhangFgLogical = overhangFgPhysical / dpr;
@@ -3098,10 +3108,10 @@ final class _AtlasGeometry {
       atlasPhysHeight: atlasPhysHeight,
       bgScaleBlock: bgScaleBlock,
       fgScaleBlock: fgScaleBlock,
-      bgRect0: whiteX - bleedPhysical,
-      bgRect1: whiteY - bleedPhysical,
-      bgRect2: whiteRight + bleedPhysical,
-      bgRect3: whiteBottom + bleedPhysical,
+      bgRect0: whiteX - bgBleedPhysical,
+      bgRect1: whiteY - bgBleedPhysical,
+      bgRect2: whiteRight + bgBleedPhysical,
+      bgRect3: whiteBottom + bgBleedPhysical,
       whiteRect0: whiteX,
       whiteRect1: whiteY,
       whiteRect2: whiteRight,

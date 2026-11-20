@@ -78,6 +78,47 @@ final class _FakeHandle implements CompiledShaderHandle {
   void dispose() {}
 }
 
+/// Models Impeller Metal's `MTLCommandBuffer` single-active-encoder contract
+/// under Flutter 3.50's `flutter_gpu`, where encoders stay open until
+/// `submit()`.
+final class _StrictMetalCommandBuffer {
+  final int id;
+  final List<String> ops = <String>[];
+  bool _hasOpenEncoder = false;
+  bool submitted = false;
+
+  _StrictMetalCommandBuffer(this.id);
+
+  void encodeRenderPass(String target) {
+    _openEncoder('render:$target');
+  }
+
+  void encodeBlitCopy(String source, String destination) {
+    _openEncoder('blit:$source->$destination');
+  }
+
+  void submit() {
+    if (submitted) {
+      throw StateError('CommandBuffer #$id already submitted.');
+    }
+    submitted = true;
+    _hasOpenEncoder = false;
+  }
+
+  void _openEncoder(String op) {
+    if (submitted) {
+      throw StateError('CommandBuffer #$id already submitted.');
+    }
+    if (_hasOpenEncoder) {
+      throw StateError(
+        'A command encoder is already encoding to this command buffer',
+      );
+    }
+    _hasOpenEncoder = true;
+    ops.add(op);
+  }
+}
+
 String _joinPath(List<String> parts) => parts.join(Platform.pathSeparator);
 
 String _writeExecutableScript(Directory dir, String name, String body) {
@@ -1019,6 +1060,135 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       expect(
         const GpuTextureSizeKey(10, 20).hashCode,
         equals(const GpuTextureSizeKey(10, 20).hashCode),
+      );
+    });
+
+    test('executeSingleEncoderGpuPassChain isolates render and blit encoders across command buffers', () {
+      const surfaceTex = 'surface_color';
+
+      // 1. Single pass rendering directly to finalSurfaceTexture uses 1 CB.
+      final singleDirectBuffers = <_StrictMetalCommandBuffer>[];
+      final singleDirectFinal =
+          executeSingleEncoderGpuPassChain<_StrictMetalCommandBuffer, String>(
+            passCount: 1,
+            finalSurfaceTexture: surfaceTex,
+            createCommandBuffer: () {
+              final cb = _StrictMetalCommandBuffer(singleDirectBuffers.length);
+              singleDirectBuffers.add(cb);
+              return cb;
+            },
+            encodeRenderPass: (i, cb) {
+              cb.encodeRenderPass(surfaceTex);
+              return surfaceTex;
+            },
+            submitIntermediate: (cb) => cb.submit(),
+            encodeCopyToSurface: (cb, src, dst) => cb.encodeBlitCopy(src, dst),
+          );
+      expect(singleDirectBuffers, hasLength(1));
+      expect(identical(singleDirectFinal, singleDirectBuffers.single), isTrue);
+      expect(singleDirectFinal.submitted, isFalse);
+      expect(singleDirectFinal.ops, <String>['render:surface_color']);
+
+      // 2. Single ping-pong pass (usesPrevFrame) submits render CB before
+      // opening a fresh CB for the trailing texture-to-texture blit copy.
+      final singlePingPongBuffers = <_StrictMetalCommandBuffer>[];
+      final singlePingPongFinal =
+          executeSingleEncoderGpuPassChain<_StrictMetalCommandBuffer, String>(
+            passCount: 1,
+            finalSurfaceTexture: surfaceTex,
+            createCommandBuffer: () {
+              final cb = _StrictMetalCommandBuffer(
+                singlePingPongBuffers.length,
+              );
+              singlePingPongBuffers.add(cb);
+              return cb;
+            },
+            encodeRenderPass: (i, cb) {
+              cb.encodeRenderPass('ping_pong_write');
+              return 'ping_pong_write';
+            },
+            submitIntermediate: (cb) => cb.submit(),
+            encodeCopyToSurface: (cb, src, dst) => cb.encodeBlitCopy(src, dst),
+          );
+      expect(singlePingPongBuffers, hasLength(2));
+      expect(singlePingPongBuffers[0].submitted, isTrue);
+      expect(singlePingPongBuffers[0].ops, <String>['render:ping_pong_write']);
+      expect(identical(singlePingPongFinal, singlePingPongBuffers[1]), isTrue);
+      expect(singlePingPongFinal.submitted, isFalse);
+      expect(singlePingPongFinal.ops, <String>[
+        'blit:ping_pong_write->surface_color',
+      ]);
+
+      // 3. Multi-pass chain ending on surface submits pass 0 and returns
+      // pass 1's CB unsubmitted for surfaceFrame.present().
+      final multiDirectBuffers = <_StrictMetalCommandBuffer>[];
+      final multiDirectFinal =
+          executeSingleEncoderGpuPassChain<_StrictMetalCommandBuffer, String>(
+            passCount: 2,
+            finalSurfaceTexture: surfaceTex,
+            createCommandBuffer: () {
+              final cb = _StrictMetalCommandBuffer(multiDirectBuffers.length);
+              multiDirectBuffers.add(cb);
+              return cb;
+            },
+            encodeRenderPass: (i, cb) {
+              final target = i == 0 ? 'scratch_0' : surfaceTex;
+              cb.encodeRenderPass(target);
+              return target;
+            },
+            submitIntermediate: (cb) => cb.submit(),
+            encodeCopyToSurface: (cb, src, dst) => cb.encodeBlitCopy(src, dst),
+          );
+      expect(multiDirectBuffers, hasLength(2));
+      expect(multiDirectBuffers[0].submitted, isTrue);
+      expect(multiDirectBuffers[0].ops, <String>['render:scratch_0']);
+      expect(identical(multiDirectFinal, multiDirectBuffers[1]), isTrue);
+      expect(multiDirectFinal.submitted, isFalse);
+      expect(multiDirectFinal.ops, <String>['render:surface_color']);
+
+      // 4. Multi-pass chain ending on a ping-pong texture uses 3 CBs:
+      // pass 0 (submitted), pass 1 (submitted), final blit (unsubmitted).
+      final multiPingPongBuffers = <_StrictMetalCommandBuffer>[];
+      final multiPingPongFinal =
+          executeSingleEncoderGpuPassChain<_StrictMetalCommandBuffer, String>(
+            passCount: 2,
+            finalSurfaceTexture: surfaceTex,
+            createCommandBuffer: () {
+              final cb = _StrictMetalCommandBuffer(multiPingPongBuffers.length);
+              multiPingPongBuffers.add(cb);
+              return cb;
+            },
+            encodeRenderPass: (i, cb) {
+              final target = i == 0 ? 'scratch_0' : 'ping_pong_1';
+              cb.encodeRenderPass(target);
+              return target;
+            },
+            submitIntermediate: (cb) => cb.submit(),
+            encodeCopyToSurface: (cb, src, dst) => cb.encodeBlitCopy(src, dst),
+          );
+      expect(multiPingPongBuffers, hasLength(3));
+      expect(multiPingPongBuffers[0].submitted, isTrue);
+      expect(multiPingPongBuffers[0].ops, <String>['render:scratch_0']);
+      expect(multiPingPongBuffers[1].submitted, isTrue);
+      expect(multiPingPongBuffers[1].ops, <String>['render:ping_pong_1']);
+      expect(identical(multiPingPongFinal, multiPingPongBuffers[2]), isTrue);
+      expect(multiPingPongFinal.submitted, isFalse);
+      expect(multiPingPongFinal.ops, <String>[
+        'blit:ping_pong_1->surface_color',
+      ]);
+
+      // 5. Rejects non-positive passCount.
+      expect(
+        () =>
+            executeSingleEncoderGpuPassChain<_StrictMetalCommandBuffer, String>(
+              passCount: 0,
+              finalSurfaceTexture: surfaceTex,
+              createCommandBuffer: () => _StrictMetalCommandBuffer(0),
+              encodeRenderPass: (i, cb) => surfaceTex,
+              submitIntermediate: (cb) => cb.submit(),
+              encodeCopyToSurface: (cb, src, dst) {},
+            ),
+        throwsRangeError,
       );
     });
   });
