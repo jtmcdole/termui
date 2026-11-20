@@ -1,3 +1,7 @@
+## 0.15.1
+
+ - **FEAT**(flutter,fterm): highlight per-row wrapped links and propagate local PTY wraps.
+
 ## 0.15.0
 
 > Note: This release has breaking changes.
