@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 
+import 'gpu_atlas_batch.dart';
 import 'shader_backend.dart';
 import 'shader_controller.dart';
 import 'shader_spec.dart';
@@ -89,6 +90,23 @@ final class TerminalShaderHost extends StatefulWidget {
   /// Idle timeout after which [ShaderAnimationMode.onActivity] stops ticking.
   final Duration activityTimeout;
 
+  /// Optional callback staging the active terminal grid into a
+  /// [GpuAtlasQuadBatch] for direct GPU-to-GPU rendering when the active
+  /// backend implements [DirectTerminalShaderBackend].
+  final GpuAtlasQuadBatch? Function(Size logicalSize, double devicePixelRatio)?
+  directTerminalBatchProvider;
+
+  /// Active glyph atlas image bound during direct GPU terminal rendering.
+  final ui.Image? atlasImage;
+
+  /// Device pixel ratio of [atlasImage] used to detect transient DPR rebuild
+  /// mismatches and fall back cleanly until the atlas catches up.
+  final double? atlasDevicePixelRatio;
+
+  /// Explicit logical viewport size for direct GPU terminal rendering so
+  /// pointer hit-testing and `F12` screenshots preserve exact cell geometry.
+  final Size? directLogicalSize;
+
   /// Wrapped terminal canvas widget.
   final Widget child;
 
@@ -114,6 +132,10 @@ final class TerminalShaderHost extends StatefulWidget {
     this.activityListenable,
     this.activitySignal = 0,
     this.activityTimeout = const Duration(seconds: 2),
+    this.directTerminalBatchProvider,
+    this.atlasImage,
+    this.atlasDevicePixelRatio,
+    this.directLogicalSize,
     required this.child,
   });
 
@@ -149,6 +171,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   bool _backgroundPending = false;
   bool _backgroundPostFrameScheduled = false;
   bool _backgroundDirty = true;
+  bool _directFallbackActive = false;
+  bool _directFallbackScheduled = false;
+  bool _directPrepareInFlight = false;
+  _DirectFallbackReason _directFallbackReason = _DirectFallbackReason.none;
 
   double _devicePixelRatio = 1.0;
   double _timeSeconds = 0.0;
@@ -165,10 +191,12 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   Size _lastLogicalSize = Size.zero;
   Size _cachedChildPhysicalSize = Size.zero;
   Size _pendingAsyncBgPhysicalSize = Size.zero;
+  Size _directOutputLogicalSize = Size.zero;
 
   ui.Image? _backgroundOutputImage;
   ui.Image? _foregroundOutputImage;
   ui.Image? _cachedChildCapture;
+  ui.Image? _directOutputImage;
 
   /// Number of superseded output images queued for post-frame disposal.
   @visibleForTesting
@@ -182,8 +210,35 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   @visibleForTesting
   ui.Image? get debugForegroundOutputImage => _foregroundOutputImage;
 
+  /// Whether unified direct GPU-to-GPU terminal rendering is currently active.
+  @visibleForTesting
+  bool get debugIsDirectModeActive => _isDirectModeActive;
+
+  /// Current rendered direct GPU terminal frame image, if any.
+  @visibleForTesting
+  ui.Image? get debugDirectOutputImage => _directOutputImage;
+
   ui.Image? get _effectiveWallpaper =>
       widget.config.backgroundImage ?? widget.controller?.wallpaperImage;
+
+  DirectTerminalShaderBackend? get _directBackend {
+    if (!widget.config.enabled || !_isBackendActive) return null;
+    final backend = widget.controller!.backend;
+    return backend is DirectTerminalShaderBackend &&
+            backend.supportsDirectTerminalRender
+        ? backend
+        : null;
+  }
+
+  bool get _canUseDirectTerminalRender =>
+      _directBackend != null &&
+      widget.directTerminalBatchProvider != null &&
+      widget.atlasImage != null &&
+      widget.directLogicalSize != null &&
+      !widget.directLogicalSize!.isEmpty;
+
+  bool get _isDirectModeActive =>
+      _canUseDirectTerminalRender && !_directFallbackActive;
 
   bool get _isInactive =>
       !widget.config.enabled ||
@@ -248,9 +303,20 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       _devicePixelRatio = nextDpr;
       _childCaptureDirty = true;
       _backgroundDirty = true;
+      if (_directFallbackActive &&
+          _directFallbackReason == _DirectFallbackReason.dprMismatch &&
+          _isAtlasDprMatched) {
+        _directFallbackActive = false;
+        _directFallbackReason = _DirectFallbackReason.none;
+      }
     }
     _tickerModeEnabled = nextTickerMode;
     _syncTicker();
+  }
+
+  bool get _isAtlasDprMatched {
+    final atlasDpr = widget.atlasDevicePixelRatio;
+    return atlasDpr == null || (atlasDpr - _devicePixelRatio).abs() <= 1e-3;
   }
 
   @override
@@ -259,6 +325,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     _rebindListeners(oldWidget);
     _syncFocusTransition(oldWidget);
     _syncActivityAndDirtyFlags(oldWidget);
+    _maybeRecoverDirectModeOnUpdate(oldWidget);
     _syncTicker();
     if (!_hasCompiledForegroundPasses && _foregroundOutputImage != null) {
       _replaceForegroundOutputImage(null);
@@ -266,8 +333,44 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     if (!_hasCompiledBackgroundPasses && _backgroundOutputImage != null) {
       _replaceBackgroundOutputImage(null);
     }
-    if (_hasCompiledForegroundPasses && _childCaptureDirty) {
+    if (!_canUseDirectTerminalRender && _directOutputImage != null) {
+      _replaceDirectOutputImage(null);
+    }
+    if (!_isDirectModeActive &&
+        _hasCompiledForegroundPasses &&
+        _childCaptureDirty) {
       _scheduleForegroundRender();
+    }
+  }
+
+  void _maybeRecoverDirectModeOnUpdate(TerminalShaderHost oldWidget) {
+    if (!_directFallbackActive ||
+        !_canUseDirectTerminalRender ||
+        _directPrepareInFlight) {
+      return;
+    }
+    final atlasChanged = !identical(oldWidget.atlasImage, widget.atlasImage);
+    final dprChanged =
+        oldWidget.atlasDevicePixelRatio != widget.atlasDevicePixelRatio;
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    if (controllerChanged) {
+      _directFallbackActive = false;
+      _directFallbackReason = _DirectFallbackReason.none;
+      return;
+    }
+    if (_directFallbackReason == _DirectFallbackReason.dprMismatch &&
+        (dprChanged || atlasChanged) &&
+        _isAtlasDprMatched) {
+      _directFallbackActive = false;
+      _directFallbackReason = _DirectFallbackReason.none;
+      return;
+    }
+    if (_directFallbackReason == _DirectFallbackReason.canvasOnly &&
+        (atlasChanged || oldWidget.activitySignal != widget.activitySignal)) {
+      _probeCanvasOnlyRecovery(callSetState: false);
     }
   }
 
@@ -307,7 +410,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
         oldWidget.config != widget.config ||
         oldWidget.foregroundArgb != widget.foregroundArgb ||
         oldWidget.backgroundArgb != widget.backgroundArgb ||
-        oldWidget.cellSizeLogical != widget.cellSizeLogical;
+        oldWidget.cellSizeLogical != widget.cellSizeLogical ||
+        !identical(oldWidget.atlasImage, widget.atlasImage) ||
+        oldWidget.atlasDevicePixelRatio != widget.atlasDevicePixelRatio ||
+        oldWidget.directLogicalSize != widget.directLogicalSize;
 
     if (activityChanged || cursorChanged) {
       _recordActivityBurst();
@@ -326,21 +432,39 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     if (!mounted) return;
     _backgroundDirty = true;
     _childCaptureDirty = true;
+    if (_directFallbackActive &&
+        _canUseDirectTerminalRender &&
+        !_directPrepareInFlight &&
+        _directFallbackReason != _DirectFallbackReason.canvasOnly) {
+      _directFallbackActive = false;
+      _directFallbackReason = _DirectFallbackReason.none;
+    }
     _syncTicker();
     setState(() {});
     _frameNotifier.notify();
-    if (_hasCompiledForegroundPasses) {
+    if (!_isDirectModeActive && _hasCompiledForegroundPasses) {
       _scheduleForegroundRender();
     }
   }
 
   void _onExternalActivity() {
-    if (!mounted || _isInactive) return;
+    if (!mounted || (_isInactive && !_canUseDirectTerminalRender)) return;
     _childCaptureDirty = true;
     if (_lastLogicalSize.width > 0 && _lastLogicalSize.height > 0) {
       _syncCursorState(_lastLogicalSize);
     }
     _recordActivityBurst();
+    if (_isDirectModeActive) {
+      _frameNotifier.notify();
+      return;
+    }
+    if (_directFallbackActive &&
+        _canUseDirectTerminalRender &&
+        !_directPrepareInFlight &&
+        _directFallbackReason == _DirectFallbackReason.canvasOnly &&
+        _probeCanvasOnlyRecovery(callSetState: true)) {
+      return;
+    }
     _frameNotifier.notify();
     if (_hasCompiledForegroundPasses) {
       _scheduleForegroundRender();
@@ -397,6 +521,12 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     _frameIndex++;
     if (dt > 0.0) {
       _frameRate = (1.0 / dt).clamp(1.0, 240.0);
+    }
+    if (_isDirectModeActive) {
+      if (_hasCompiledBackgroundPasses || _hasCompiledForegroundPasses) {
+        _frameNotifier.notify();
+      }
+      return;
     }
     if (_hasCompiledBackgroundPasses) {
       _backgroundDirty = true;
@@ -898,6 +1028,8 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     _backgroundOutputImage = null;
     _foregroundOutputImage?.dispose();
     _foregroundOutputImage = null;
+    _directOutputImage?.dispose();
+    _directOutputImage = null;
     _cachedChildCapture?.dispose();
     _cachedChildCapture = null;
     _flushPendingImageDisposals();
@@ -905,8 +1037,209 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     super.dispose();
   }
 
+  ui.Image? _renderDirectForPaint(Size logicalSize) {
+    if (logicalSize.isEmpty) return null;
+    _recordLogicalSize(logicalSize);
+    _syncCursorState(logicalSize);
+
+    final backend = _directBackend;
+    final atlasImage = widget.atlasImage;
+    final provider = widget.directTerminalBatchProvider;
+    if (backend == null || atlasImage == null || provider == null) {
+      _enterDirectFallbackPostFrame(_DirectFallbackReason.priming);
+      return _directBridgeImageFor(logicalSize);
+    }
+    if (!_isAtlasDprMatched) {
+      _enterDirectFallbackPostFrame(_DirectFallbackReason.dprMismatch);
+      return _directBridgeImageFor(logicalSize);
+    }
+
+    final physicalSize = Size(
+      logicalSize.width * _devicePixelRatio,
+      logicalSize.height * _devicePixelRatio,
+    );
+    if (physicalSize.width <= 0.0 || physicalSize.height <= 0.0) return null;
+
+    final batch = provider(logicalSize, _devicePixelRatio);
+    if (batch == null || batch.hasCanvasOnlyContent) {
+      _enterDirectFallbackPostFrame(_DirectFallbackReason.canvasOnly);
+      return _directBridgeImageFor(logicalSize);
+    }
+
+    final bgInvocations = _hasCompiledBackgroundPasses
+        ? _buildPassInvocations(widget.config.backgroundPasses, physicalSize)
+        : const <ShaderPassInvocation>[];
+    final fgInvocations = _hasCompiledForegroundPasses
+        ? _buildPassInvocations(widget.config.foregroundPasses, physicalSize)
+        : const <ShaderPassInvocation>[];
+
+    final result = _tryRenderDirectSync(
+      backend: backend,
+      backgroundPasses: bgInvocations,
+      foregroundPasses: fgInvocations,
+      physicalSize: physicalSize,
+      atlasImage: atlasImage,
+      batch: batch,
+    );
+    if (result.image != null) {
+      _directOutputLogicalSize = logicalSize;
+      _replaceDirectOutputImage(result.image);
+      return result.image;
+    }
+
+    if (!result.failed) {
+      _prepareDirectResourcesAsync(backend, atlasImage, batch);
+    }
+    _enterDirectFallbackPostFrame(_DirectFallbackReason.priming);
+    return _directBridgeImageFor(logicalSize);
+  }
+
+  ({ui.Image? image, bool failed}) _tryRenderDirectSync({
+    required DirectTerminalShaderBackend backend,
+    required List<ShaderPassInvocation> backgroundPasses,
+    required List<ShaderPassInvocation> foregroundPasses,
+    required Size physicalSize,
+    required ui.Image atlasImage,
+    required GpuAtlasQuadBatch batch,
+  }) {
+    try {
+      return (
+        image: backend.renderTerminalFrameSync(
+          backgroundPasses: backgroundPasses,
+          foregroundPasses: foregroundPasses,
+          physicalSize: physicalSize,
+          atlasImage: atlasImage,
+          batch: batch,
+          wallpaperImage: _effectiveWallpaper,
+        ),
+        failed: false,
+      );
+    } on ShaderCompileException catch (error) {
+      widget.controller?.reportRuntimeError(error);
+      return (image: null, failed: true);
+    } on Object catch (error) {
+      final firstId = foregroundPasses.isNotEmpty
+          ? foregroundPasses.first.handle.id
+          : (backgroundPasses.isNotEmpty
+                ? backgroundPasses.first.handle.id
+                : 'direct_gpu_atlas');
+      widget.controller?.reportRuntimeError(
+        ShaderCompileException(
+          shaderId: firstId,
+          message: 'Direct GPU terminal render failed: $error',
+        ),
+      );
+      return (image: null, failed: true);
+    }
+  }
+
+  void _prepareDirectResourcesAsync(
+    DirectTerminalShaderBackend backend,
+    ui.Image atlasImage,
+    GpuAtlasQuadBatch batch,
+  ) {
+    if (_directPrepareInFlight) return;
+    _directPrepareInFlight = true;
+    final kittyImages = <ui.Image>[
+      for (final quad in batch.kittyQuads) quad.image,
+    ];
+    unawaited(
+      backend
+          .prepareDirectResources(
+            atlasImage: atlasImage,
+            wallpaperImage: _effectiveWallpaper,
+            kittyImages: kittyImages,
+          )
+          .then((ready) {
+            _directPrepareInFlight = false;
+            if (!mounted || !ready) return;
+            if (_directFallbackReason == _DirectFallbackReason.priming) {
+              _directFallbackReason = _DirectFallbackReason.none;
+              if (_directFallbackActive) {
+                setState(() {
+                  _directFallbackActive = false;
+                });
+              }
+            }
+            _frameNotifier.notify();
+          })
+          .catchError((Object _) {
+            _directPrepareInFlight = false;
+          }),
+    );
+  }
+
+  void _enterDirectFallbackPostFrame(_DirectFallbackReason reason) {
+    _directFallbackReason = reason;
+    if (_directFallbackActive || _directFallbackScheduled) return;
+    _directFallbackScheduled = true;
+    SchedulerBinding.instance.addPostFrameCallback((_) {
+      _directFallbackScheduled = false;
+      if (!mounted ||
+          _directFallbackActive ||
+          _directFallbackReason == _DirectFallbackReason.none) {
+        return;
+      }
+      if (!_canUseDirectTerminalRender) return;
+      setState(() {
+        _directFallbackActive = true;
+      });
+      if (_hasCompiledForegroundPasses) {
+        _childCaptureDirty = true;
+        _scheduleForegroundRender();
+      }
+    });
+  }
+
+  bool _probeCanvasOnlyRecovery({required bool callSetState}) {
+    final provider = widget.directTerminalBatchProvider;
+    final size = widget.directLogicalSize;
+    if (provider == null || size == null || size.isEmpty) return false;
+    final probe = provider(size, _devicePixelRatio);
+    if (probe == null || probe.hasCanvasOnlyContent) return false;
+    if (callSetState) {
+      setState(() {
+        _directFallbackActive = false;
+        _directFallbackReason = _DirectFallbackReason.none;
+      });
+    } else {
+      _directFallbackActive = false;
+      _directFallbackReason = _DirectFallbackReason.none;
+    }
+    _frameNotifier.notify();
+    return true;
+  }
+
+  ui.Image? _directBridgeImageFor(Size logicalSize) =>
+      _directOutputLogicalSize == logicalSize ? _directOutputImage : null;
+
+  void _replaceDirectOutputImage(ui.Image? next) {
+    final previous = _directOutputImage;
+    if (identical(previous, next)) return;
+    _directOutputImage = next;
+    if (previous != null) {
+      _scheduleImageDisposal(previous);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (_isDirectModeActive) {
+      final logicalSize = widget.directLogicalSize!;
+      return SizedBox.fromSize(
+        size: logicalSize,
+        child: RepaintBoundary(
+          child: CustomPaint(
+            size: logicalSize,
+            painter: _DirectTerminalPainter(
+              repaint: _frameNotifier,
+              renderDirect: _renderDirectForPaint,
+              backgroundColor: Color(widget.backgroundArgb | 0xFF000000),
+            ),
+          ),
+        ),
+      );
+    }
     if (_isInactive) {
       return widget.child;
     }
@@ -962,6 +1295,44 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
 
 final class _ShaderFrameNotifier extends ChangeNotifier {
   void notify() => notifyListeners();
+}
+
+enum _DirectFallbackReason { none, priming, canvasOnly, dprMismatch }
+
+final class _DirectTerminalPainter extends CustomPainter {
+  final ui.Image? Function(Size logicalSize) renderDirect;
+  final Color backgroundColor;
+
+  static final Paint _imagePaint = Paint()..filterQuality = FilterQuality.none;
+
+  _DirectTerminalPainter({
+    required Listenable repaint,
+    required this.renderDirect,
+    required this.backgroundColor,
+  }) : super(repaint: repaint);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final image = renderDirect(size);
+    if (image == null) {
+      canvas.drawRect(Offset.zero & size, Paint()..color = backgroundColor);
+      return;
+    }
+    canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(0.0, 0.0, image.width.toDouble(), image.height.toDouble()),
+      Offset.zero & size,
+      _imagePaint,
+    );
+  }
+
+  @override
+  bool? hitTest(Offset position) => true;
+
+  @override
+  bool shouldRepaint(covariant _DirectTerminalPainter oldDelegate) =>
+      oldDelegate.backgroundColor != backgroundColor;
 }
 
 final class _BackgroundShaderPainter extends CustomPainter {

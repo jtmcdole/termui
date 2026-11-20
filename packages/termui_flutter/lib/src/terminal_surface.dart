@@ -21,6 +21,7 @@ import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 import 'backend.dart';
 import 'rendering/atlas.dart';
 import 'rendering/atlas_controller.dart';
+import 'rendering/gpu_atlas_batch.dart';
 import 'rendering/painter.dart';
 import 'rendering/shader_controller.dart';
 import 'rendering/shader_host.dart';
@@ -340,6 +341,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   late bool _ownsImeClient;
   late _KittyGpuImageCache _kittyCache;
   final TuiAtlasStagingCache _stagingCache = TuiAtlasStagingCache();
+  final GpuAtlasBatchBuilder _gpuBatchBuilder = GpuAtlasBatchBuilder();
   final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
 
   TextPainter? _composingPainter;
@@ -2217,6 +2219,70 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     child: _buildCanvasContainer(layoutSize),
   );
 
+  TuiAtlasPainter _createAtlasPainter(
+    Buffer buf, {
+    required String composingText,
+    required ({int col, int row})? cursor,
+    required (int, int)? activePty,
+    required Color effectiveBgColor,
+  }) => TuiAtlasPainter(
+    repaint: _paintNotifier,
+    buffer: buf,
+    atlas: _atlasController.atlas!,
+    stagingCache: widget.enableRowCache ? _stagingCache : null,
+    composingPainter: _composingPainter,
+    fontFamily: _atlasController.fontFamily,
+    fontFamilyFallback: _atlasController.fontFamilyFallback,
+    fallbackPainters: _atlasController.fallbackPainters,
+    onMissingGlyphs: null,
+    onMissingStyledGlyphs: _atlasController.requestMissingStyledGlyphs,
+    onBeforePaint: _flushDirtyBufferResources,
+    enableBleed: widget.enableBleed,
+    enableLigatures: _enableLigatures,
+    ligaturePainters: _atlasController.ligaturePainters,
+    selectionController: _builtinSelectionEnabled ? _selectionController : null,
+    topVirtualRow: _effectiveTopVirtualRow,
+    topVirtualRowProvider: _readEffectiveTopVirtualRow,
+    hoveredLink: _isLinkHovered ? _hoveredLink : null,
+    hoveredLinkRowSpans: _isLinkHovered ? _hoveredLinkDetail?.rowSpans : null,
+    hoveredLinkStyler: widget.hoveredLinkStyler,
+    kittyImages: _kittyCache.images,
+    kittyImagesById: _kittyCache.imagesById,
+    defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+    defaultBackgroundArgb: effectiveBgColor.toARGB32(),
+    faintOpacity: widget.faintOpacity,
+    palette: widget.palette,
+    activePtyCols: activePty?.$1,
+    activePtyRows: activePty?.$2,
+    outOfBoundsDimColor: widget.outOfBoundsDimColor,
+    composingText: composingText,
+    cursorCol: cursor?.col ?? 0,
+    cursorRow: cursor?.row ?? 0,
+  );
+
+  GpuAtlasQuadBatch? _stageDirectTerminalBatch(
+    Size logicalSize,
+    double devicePixelRatio,
+  ) {
+    final buf = _activeBuffer;
+    if (buf == null || _atlasController.atlas == null) return null;
+    final activePty =
+        widget.activePtySizeProvider?.call() ?? widget.activePtySize;
+    final cursor =
+        widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
+    _hadActiveBuffer = true;
+    _lastPaintedBuffer = buf;
+    _lastPaintedActivePtySize = activePty;
+    final painter = _createAtlasPainter(
+      buf,
+      composingText: '',
+      cursor: cursor,
+      activePty: activePty,
+      effectiveBgColor: _effectiveBackgroundColor,
+    );
+    return painter.stageForGpu(logicalSize, devicePixelRatio, _gpuBatchBuilder);
+  }
+
   Widget _buildCanvasContainer(Size layoutSize) {
     final buf = _activeBuffer;
     final activePty =
@@ -2229,6 +2295,10 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _syncComposingPainter();
     final effectiveOpacity = _effectiveBackgroundOpacity;
     final effectiveBgColor = _effectiveBackgroundColor;
+    final activeComposingText = widget.enableIme
+        ? _imeClient.composingText
+        : '';
+    final inlineComposingText = _hasShaderBinding ? '' : activeComposingText;
     final canvasBox = Container(
       width: layoutSize.width,
       height: layoutSize.height,
@@ -2239,44 +2309,12 @@ final class TerminalSurfaceState extends State<TerminalSurface>
           ? const SizedBox()
           : CustomPaint(
               size: layoutSize,
-              painter: TuiAtlasPainter(
-                repaint: _paintNotifier,
-                buffer: buf,
-                atlas: _atlasController.atlas!,
-                stagingCache: widget.enableRowCache ? _stagingCache : null,
-                composingPainter: _composingPainter,
-                fontFamily: _atlasController.fontFamily,
-                fontFamilyFallback: _atlasController.fontFamilyFallback,
-                fallbackPainters: _atlasController.fallbackPainters,
-                onMissingGlyphs: null,
-                onMissingStyledGlyphs:
-                    _atlasController.requestMissingStyledGlyphs,
-                onBeforePaint: _flushDirtyBufferResources,
-                enableBleed: widget.enableBleed,
-                enableLigatures: _enableLigatures,
-                ligaturePainters: _atlasController.ligaturePainters,
-                selectionController: _builtinSelectionEnabled
-                    ? _selectionController
-                    : null,
-                topVirtualRow: _effectiveTopVirtualRow,
-                topVirtualRowProvider: _readEffectiveTopVirtualRow,
-                hoveredLink: _isLinkHovered ? _hoveredLink : null,
-                hoveredLinkRowSpans: _isLinkHovered
-                    ? _hoveredLinkDetail?.rowSpans
-                    : null,
-                hoveredLinkStyler: widget.hoveredLinkStyler,
-                kittyImages: _kittyCache.images,
-                kittyImagesById: _kittyCache.imagesById,
-                defaultForegroundArgb: widget.foregroundColor.toARGB32(),
-                defaultBackgroundArgb: effectiveBgColor.toARGB32(),
-                faintOpacity: widget.faintOpacity,
-                palette: widget.palette,
-                activePtyCols: activePty?.$1,
-                activePtyRows: activePty?.$2,
-                outOfBoundsDimColor: widget.outOfBoundsDimColor,
-                composingText: widget.enableIme ? _imeClient.composingText : '',
-                cursorCol: cursor?.col ?? 0,
-                cursorRow: cursor?.row ?? 0,
+              painter: _createAtlasPainter(
+                buf,
+                composingText: inlineComposingText,
+                cursor: cursor,
+                activePty: activePty,
+                effectiveBgColor: effectiveBgColor,
               ),
             ),
     );
@@ -2284,7 +2322,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       return canvasBox;
     }
     final atlas = _atlasController.atlas!;
-    return TerminalShaderHost(
+    final Widget shaderHost = TerminalShaderHost(
       controller: widget.shaderController,
       config: widget.shaderConfig ?? TerminalShaderConfig.empty,
       paneKey: widget.key?.toString(),
@@ -2300,9 +2338,103 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       palette256Argb: _resolvePalette256Argb(),
       cellSizeLogical: Size(atlas.cellWidth, atlas.cellHeight),
       activityListenable: _paintNotifier,
+      directTerminalBatchProvider: buf == null
+          ? null
+          : _stageDirectTerminalBatch,
+      atlasImage: atlas.image,
+      atlasDevicePixelRatio: atlas.devicePixelRatio,
+      directLogicalSize: layoutSize,
       child: canvasBox,
     );
+    if (activeComposingText.isEmpty) {
+      return shaderHost;
+    }
+    return Stack(
+      fit: StackFit.passthrough,
+      children: <Widget>[
+        shaderHost,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(
+              size: layoutSize,
+              painter: _TerminalComposingOverlayPainter(
+                cellWidth: atlas.cellWidth,
+                cellHeight: atlas.cellHeight,
+                cursorCol: cursor?.col ?? 0,
+                cursorRow: cursor?.row ?? 0,
+                composingText: activeComposingText,
+                composingPainter: _composingPainter,
+                fontFamily: _atlasController.fontFamily,
+                fontFamilyFallback: _atlasController.fontFamilyFallback,
+                fontSize: atlas.fontSize,
+                defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+                defaultBackgroundArgb: effectiveBgColor.toARGB32(),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
+}
+
+final class _TerminalComposingOverlayPainter extends CustomPainter {
+  final double cellWidth;
+  final double cellHeight;
+  final int cursorCol;
+  final int cursorRow;
+  final String composingText;
+  final TextPainter? composingPainter;
+  final String fontFamily;
+  final List<String>? fontFamilyFallback;
+  final double fontSize;
+  final int defaultForegroundArgb;
+  final int defaultBackgroundArgb;
+
+  const _TerminalComposingOverlayPainter({
+    required this.cellWidth,
+    required this.cellHeight,
+    required this.cursorCol,
+    required this.cursorRow,
+    required this.composingText,
+    required this.composingPainter,
+    required this.fontFamily,
+    required this.fontFamilyFallback,
+    required this.fontSize,
+    required this.defaultForegroundArgb,
+    required this.defaultBackgroundArgb,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (composingText.isEmpty || size.isEmpty) return;
+    TuiAtlasPainter.paintComposingOverlay(
+      canvas: canvas,
+      size: size,
+      cellWidth: cellWidth,
+      cellHeight: cellHeight,
+      cursorCol: cursorCol,
+      cursorRow: cursorRow,
+      composingText: composingText,
+      composingPainter: composingPainter,
+      fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
+      fontSize: fontSize,
+      defaultForegroundArgb: defaultForegroundArgb,
+      defaultBackgroundArgb: defaultBackgroundArgb,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TerminalComposingOverlayPainter oldDelegate) =>
+      oldDelegate.composingText != composingText ||
+      oldDelegate.cursorCol != cursorCol ||
+      oldDelegate.cursorRow != cursorRow ||
+      oldDelegate.composingPainter != composingPainter ||
+      oldDelegate.cellWidth != cellWidth ||
+      oldDelegate.cellHeight != cellHeight ||
+      oldDelegate.defaultForegroundArgb != defaultForegroundArgb ||
+      oldDelegate.defaultBackgroundArgb != defaultBackgroundArgb;
 }
 
 final class _KittyGpuImageCache {

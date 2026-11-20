@@ -17,6 +17,7 @@ import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 
 import 'atlas.dart';
 import 'atlas_quad_table.dart';
+import 'gpu_atlas_batch.dart';
 import 'staging_cache.dart';
 
 /// Reusable per-frame typed sink for writing visual overrides across hovered
@@ -379,8 +380,8 @@ final class TuiAtlasPainter extends CustomPainter {
   final Paint _defaultBgPaint = Paint();
   final Paint _dimPaint = Paint();
   final Paint _borderPaint = Paint()..strokeWidth = 1.0;
-  final Paint _composingBgPaint = Paint();
-  final Paint _composingUnderlinePaint = Paint()..strokeWidth = 1.5;
+  static final Paint _composingBgPaint = Paint();
+  static final Paint _composingUnderlinePaint = Paint()..strokeWidth = 1.5;
   final Paint _italicPaint = Paint()..filterQuality = FilterQuality.low;
   final Paint _kittyPaint = Paint()
     ..style = PaintingStyle.fill
@@ -590,31 +591,73 @@ final class TuiAtlasPainter extends CustomPainter {
       final cols = buffer.width;
       final rows = buffer.height;
       final count = cols * rows;
-      final cache =
-          stagingCache ?? (_ephemeralCache ??= TuiAtlasStagingCache());
-      final internals = stagingCacheInternalsOf(cache);
-      internals.ensureGridCapacity(cols, rows);
-
-      final enableBgBleed =
-          enableBleed && (defaultBackgroundArgb >>> 24) == 0xFF;
-      final geo = _AtlasGeometry.fromAtlas(
-        atlas,
-        enableBleed: enableBleed,
-        enableBgBleed: enableBgBleed,
-      );
-      if (rows > 0 && cols > 0) {
-        _prepareSelectionRows(internals, cols, rows);
-        _prepareHoveredLinkRows(internals, cols, rows);
-      }
-
-      _stageGridCells(cache, internals, geo, useRowCache: stagingCache != null);
-
-      final staged = internals.active;
-      _scheduleMissingGlyphCallbacks(staged);
-      _paintStagedPasses(canvas, size, geo, staged, count);
+      final prepared = _prepareStagedFrame(cols, rows);
+      _paintStagedPasses(canvas, size, prepared.geo, prepared.staged, count);
     } finally {
       _hoveredLinkStyles.clear();
     }
+  }
+
+  /// Stages the active terminal grid into a [GpuAtlasQuadBatch] without calling
+  /// `Canvas.drawRawAtlas`, reusing [stagingCache], [onBeforePaint], and
+  /// post-frame missing-glyph scheduling.
+  GpuAtlasQuadBatch stageForGpu(
+    Size size,
+    double devicePixelRatio,
+    GpuAtlasBatchBuilder builder,
+  ) {
+    onBeforePaint?.call();
+    try {
+      final prepared = _prepareStagedFrame(buffer.width, buffer.height);
+      final geo = prepared.geo;
+      return builder.build(
+        staged: prepared.staged,
+        buffer: buffer,
+        logicalSize: size,
+        devicePixelRatio: devicePixelRatio,
+        cellWidth: geo.cellWidth,
+        cellHeight: geo.cellHeight,
+        atlasPhysWidth: geo.atlasPhysWidth,
+        atlasPhysHeight: geo.atlasPhysHeight,
+        fgScaleBlock: geo.fgScaleBlock,
+        overhangFgPhysical: geo.overhangFgPhysical,
+        overhangFgLogical: geo.overhangFgLogical,
+        defaultBackgroundArgb: defaultBackgroundArgb,
+        stagingGeneration: prepared.generation,
+        kittyImages: kittyImages,
+        kittyImagesById: kittyImagesById,
+        activePtyCols: activePtyCols,
+        activePtyRows: activePtyRows,
+        outOfBoundsDimArgb: outOfBoundsDimColor?.toARGB32(),
+        composingText: composingText,
+      );
+    } finally {
+      _hoveredLinkStyles.clear();
+    }
+  }
+
+  ({_AtlasGeometry geo, StagingBufferSet staged, int generation})
+  _prepareStagedFrame(int cols, int rows) {
+    final cache = stagingCache ?? (_ephemeralCache ??= TuiAtlasStagingCache());
+    final internals = stagingCacheInternalsOf(cache);
+    internals.ensureGridCapacity(cols, rows);
+
+    final enableBgBleed = enableBleed && (defaultBackgroundArgb >>> 24) == 0xFF;
+    final geo = _AtlasGeometry.fromAtlas(
+      atlas,
+      enableBleed: enableBleed,
+      enableBgBleed: enableBgBleed,
+    );
+    if (rows > 0 && cols > 0) {
+      _prepareSelectionRows(internals, cols, rows);
+      _prepareHoveredLinkRows(internals, cols, rows);
+    }
+
+    _stageGridCells(cache, internals, geo, useRowCache: stagingCache != null);
+
+    final staged = internals.active;
+    _scheduleMissingGlyphCallbacks(staged);
+    return (geo: geo, staged: staged, generation: internals.generation);
   }
 
   void _paintStagedPasses(
@@ -2812,13 +2855,46 @@ final class TuiAtlasPainter extends CustomPainter {
   }
 
   void _paintComposingOverlay(Canvas canvas, Size size, _AtlasGeometry geo) {
-    final maxCols = math.max(1, (size.width / geo.cellWidth).floor());
-    final maxRows = math.max(1, (size.height / geo.cellHeight).floor());
+    paintComposingOverlay(
+      canvas: canvas,
+      size: size,
+      cellWidth: geo.cellWidth,
+      cellHeight: geo.cellHeight,
+      cursorCol: cursorCol,
+      cursorRow: cursorRow,
+      composingText: composingText,
+      composingPainter: composingPainter,
+      fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
+      fontSize: atlas.fontSize,
+      defaultForegroundArgb: defaultForegroundArgb,
+      defaultBackgroundArgb: defaultBackgroundArgb,
+    );
+  }
+
+  /// Paints the inline IME composing text overlay at `[cursorCol], [cursorRow]`.
+  static void paintComposingOverlay({
+    required Canvas canvas,
+    required Size size,
+    required double cellWidth,
+    required double cellHeight,
+    required int cursorCol,
+    required int cursorRow,
+    required String composingText,
+    required TextPainter? composingPainter,
+    required String fontFamily,
+    required List<String>? fontFamilyFallback,
+    required double fontSize,
+    required int defaultForegroundArgb,
+    required int defaultBackgroundArgb,
+  }) {
+    final maxCols = math.max(1, (size.width / cellWidth).floor());
+    final maxRows = math.max(1, (size.height / cellHeight).floor());
     final col = cursorCol.clamp(0, maxCols - 1);
     final row = cursorRow.clamp(0, maxRows - 1);
-    final originX = col * geo.cellWidth;
-    final originY = row * geo.cellHeight;
-    final availWidth = math.max(geo.cellWidth, size.width - originX);
+    final originX = col * cellWidth;
+    final originY = row * cellHeight;
+    final availWidth = math.max(cellWidth, size.width - originX);
 
     final fgColor = Color(defaultForegroundArgb);
     final bgColor = Color(0xFF000000 | (defaultBackgroundArgb & 0x00FFFFFF));
@@ -2831,7 +2907,7 @@ final class TuiAtlasPainter extends CustomPainter {
             style: TextStyle(
               fontFamily: fontFamily,
               fontFamilyFallback: fontFamilyFallback,
-              fontSize: atlas.fontSize,
+              fontSize: fontSize,
               color: fgColor,
               height: 1.0,
             ),
@@ -2841,22 +2917,22 @@ final class TuiAtlasPainter extends CustomPainter {
 
     try {
       final cellSpan = countGraphemeDisplayCells(composingText);
-      final rawWidth = math.max(cellSpan * geo.cellWidth, tp.width);
+      final rawWidth = math.max(cellSpan * cellWidth, tp.width);
       final overlayWidth = math.min(availWidth, rawWidth);
       final overlayRect = Rect.fromLTWH(
         originX,
         originY,
         overlayWidth,
-        geo.cellHeight,
+        cellHeight,
       );
 
       canvas.save();
       canvas.clipRect(overlayRect);
       _composingBgPaint.color = bgColor;
       canvas.drawRect(overlayRect, _composingBgPaint);
-      final offsetY = (geo.cellHeight - tp.height) / 2;
+      final offsetY = (cellHeight - tp.height) / 2;
       tp.paint(canvas, Offset(originX, originY + offsetY));
-      final underlineY = originY + geo.cellHeight - 1.5;
+      final underlineY = originY + cellHeight - 1.5;
       _composingUnderlinePaint.color = fgColor;
       canvas.drawLine(
         Offset(originX, underlineY),

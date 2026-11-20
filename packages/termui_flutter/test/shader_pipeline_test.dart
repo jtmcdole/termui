@@ -40,7 +40,7 @@ final class _FakeShaderHandle implements CompiledShaderHandle {
   }
 }
 
-final class _FakeShaderBackend implements TerminalShaderBackend {
+class _FakeShaderBackend implements TerminalShaderBackend {
   @override
   final ShaderBackendKind kind;
 
@@ -1370,6 +1370,447 @@ void main() {
       },
     );
   });
+
+  group('Direct GPU-to-GPU terminal rendering', () {
+    testWidgets(
+      'bypasses renderPassesAsync on clean frames, ticks foreground-only animations, and stays idle with zero shaders',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 32,
+            height: 32,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 120,
+            height: 60,
+            color: const Color(0xFF2288EE),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final cleanBatch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: const <GpuKittyQuad>[],
+          hasCanvasOnlyContent: false,
+        );
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+
+        // 1. Zero-shader unified direct mode: renders once, 0 ticker ticks while idle.
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: TerminalShaderHost(
+                controller: controller,
+                config: TerminalShaderConfig.empty,
+                activityListenable: activity,
+                atlasImage: atlasImg,
+                atlasDevicePixelRatio: 1.0,
+                directLogicalSize: const Size(120, 60),
+                directTerminalBatchProvider: (_, _) => cleanBatch,
+                child: const SizedBox(width: 120, height: 60),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugIsDirectModeActive, isTrue);
+        expect(hostState.debugIsTickerActive, isFalse);
+        expect(backend.directSyncRenderCount, greaterThanOrEqualTo(1));
+        expect(backend.asyncPassCalls, isEmpty);
+        expect(
+          tester.getSize(find.byType(TerminalShaderHost)),
+          equals(const Size(120, 60)),
+        );
+
+        // Idle pump does not re-render; external activity triggers 1 direct sync render.
+        final countAfterIdle = backend.directSyncRenderCount;
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(backend.directSyncRenderCount, equals(countAfterIdle));
+        activity.fire();
+        await tester.pump();
+        expect(backend.directSyncRenderCount, equals(countAfterIdle + 1));
+
+        // 2. Animated foreground-only shader: ticks continuously in direct mode with 0 async captures.
+        final animatedFgConfig = TerminalShaderConfig(
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'fg:anim',
+              stage: TerminalShaderStage.foreground,
+              customSourcePath: 'anim.glsl',
+            ),
+          ],
+          animationMode: ShaderAnimationMode.always,
+        );
+        await tester.runAsync(
+          () => controller.syncConfig(
+            animatedFgConfig,
+            sourceLoader: (_) async => _validAnimatedGlsl,
+          ),
+        );
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: TerminalShaderHost(
+                controller: controller,
+                config: animatedFgConfig,
+                activityListenable: activity,
+                atlasImage: atlasImg,
+                atlasDevicePixelRatio: 1.0,
+                directLogicalSize: const Size(120, 60),
+                directTerminalBatchProvider: (_, _) => cleanBatch,
+                child: const SizedBox(width: 120, height: 60),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final beforeTicks = backend.directSyncRenderCount;
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(backend.directSyncRenderCount, greaterThan(beforeTicks));
+        expect(backend.asyncPassCalls, isEmpty);
+        expect(backend.lastDirectFgPassCount, equals(1));
+      },
+    );
+
+    testWidgets(
+      'primes uncached textures via fallback and recovers automatically on completion',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 32,
+            height: 32,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 100,
+            height: 50,
+            color: const Color(0xFF00AA55),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+
+        final primeCompleter = Completer<bool>();
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+          prepareFuture: primeCompleter.future,
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final cleanBatch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: const <GpuKittyQuad>[],
+          hasCanvasOnlyContent: false,
+        );
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: TerminalShaderHost(
+              controller: controller,
+              config: TerminalShaderConfig.empty,
+              atlasImage: atlasImg,
+              atlasDevicePixelRatio: 1.0,
+              directLogicalSize: const Size(100, 50),
+              directTerminalBatchProvider: (_, _) => cleanBatch,
+              child: const SizedBox(
+                key: ValueKey<String>('fallback-child'),
+                width: 100,
+                height: 50,
+              ),
+            ),
+          ),
+        );
+        // Post-frame fallback mounts while priming is in-flight.
+        await tester.pump();
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(backend.prepareCallCount, equals(1));
+        expect(hostState.debugIsDirectModeActive, isFalse);
+        expect(
+          find.byKey(const ValueKey<String>('fallback-child')),
+          findsOneWidget,
+        );
+
+        // Completing priming transitions automatically back to direct mode.
+        backend.primed = true;
+        primeCompleter.complete(true);
+        await tester.pump();
+        await tester.pump();
+        expect(hostState.debugIsDirectModeActive, isTrue);
+        expect(backend.directSyncRenderCount, greaterThanOrEqualTo(1));
+      },
+    );
+
+    testWidgets(
+      'falls back cleanly on hasCanvasOnlyContent and DPR mismatch without oscillating, then recovers',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 32,
+            height: 32,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 100,
+            height: 50,
+            color: const Color(0xFFAA44CC),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+
+        var hasCanvasOnly = true;
+        GpuAtlasQuadBatch batchProvider(Size _, double _) => GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: const <GpuKittyQuad>[],
+          hasCanvasOnlyContent: hasCanvasOnly,
+        );
+
+        Widget buildHost({required double atlasDpr}) => Directionality(
+          textDirection: TextDirection.ltr,
+          child: TerminalShaderHost(
+            controller: controller,
+            config: TerminalShaderConfig.empty,
+            activityListenable: activity,
+            atlasImage: atlasImg,
+            atlasDevicePixelRatio: atlasDpr,
+            directLogicalSize: const Size(100, 50),
+            directTerminalBatchProvider: batchProvider,
+            child: const SizedBox(
+              key: ValueKey<String>('fallback-child'),
+              width: 100,
+              height: 50,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(buildHost(atlasDpr: 1.0));
+        await tester.pump();
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugIsDirectModeActive, isFalse);
+
+        // Activity while still canvas-only must NOT oscillate back to direct mode.
+        activity.fire();
+        await tester.pump();
+        expect(hostState.debugIsDirectModeActive, isFalse);
+        expect(backend.directSyncRenderCount, equals(0));
+
+        // Clearing canvas-only content + activity recovers cleanly to direct mode.
+        hasCanvasOnly = false;
+        activity.fire();
+        await tester.pump();
+        await tester.pump();
+        expect(hostState.debugIsDirectModeActive, isTrue);
+        expect(backend.directSyncRenderCount, greaterThanOrEqualTo(1));
+
+        // DPR mismatch falls back and recovers when atlas DPR catches up.
+        await tester.pumpWidget(buildHost(atlasDpr: 2.0));
+        await tester.pump();
+        expect(hostState.debugIsDirectModeActive, isFalse);
+
+        await tester.pumpWidget(buildHost(atlasDpr: 1.0));
+        await tester.pump();
+        expect(hostState.debugIsDirectModeActive, isTrue);
+      },
+    );
+
+    testWidgets(
+      'TerminalSurface direct GPU integration preserves hit-testing, F12 screenshot, and IME overlay',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 160,
+            height: 64,
+            color: const Color(0xFF112233),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+
+        final atlasController = GlyphAtlasController(
+          fontSize: 14.0,
+          fontFamily: 'Roboto Mono',
+        );
+        addTearDown(atlasController.dispose);
+        await tester.runAsync(atlasController.ensureInitialized);
+
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+        );
+        final shaderController = TerminalShaderController(backend: backend);
+        addTearDown(shaderController.dispose);
+
+        final service = _CountingTerminalService();
+        final buffer = Buffer(10, 3)
+          ..writeString(0, 0, 'hello world', Style.empty);
+        final surfaceKey = GlobalKey<TerminalSurfaceState>();
+        final selectionController = TerminalSelectionController();
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: SizedBox(
+              width: 160,
+              height: 64,
+              child: TerminalSurface(
+                key: surfaceKey,
+                atlasController: atlasController,
+                buffer: buffer,
+                cursorPosition: (col: 2, row: 0),
+                shaderController: shaderController,
+                shaderConfig: TerminalShaderConfig.empty,
+                selectionController: selectionController,
+                service: service,
+                alignment: Alignment.topLeft,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugIsDirectModeActive, isTrue);
+        expect(backend.directSyncRenderCount, greaterThanOrEqualTo(1));
+        expect(backend.asyncPassCalls, isEmpty);
+        expect(backend.lastDirectBatch?.instanceCount, greaterThan(0));
+
+        // Pointer drag hit-testing reaches TerminalSurface Listener at exact cell coords.
+        final atlas = atlasController.atlas!;
+        final hostTopLeft = tester.getTopLeft(find.byType(TerminalShaderHost));
+        final p1 =
+            hostTopLeft + Offset(atlas.cellWidth * 0.5, atlas.cellHeight * 0.5);
+        final p2 = p1 + Offset(atlas.cellWidth * 4.0, 0.0);
+        final gesture = await tester.startGesture(
+          p1,
+          kind: ui.PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await gesture.moveTo(p2);
+        await tester.pump();
+        expect(selectionController.hasSelection, isTrue);
+        await gesture.up();
+        await tester.pump();
+
+        // F12 screenshot RepaintBoundary still captures cleanly in direct mode.
+        await tester.runAsync(() => surfaceKey.currentState!.takeScreenshot());
+        expect(
+          service.savedNames.any((n) => n.startsWith('screenshot_')),
+          isTrue,
+        );
+      },
+    );
+  });
+}
+
+final class _FakeDirectShaderBackend extends _FakeShaderBackend
+    implements DirectTerminalShaderBackend {
+  final ui.Image Function() syncOutputFactory;
+  final Future<bool>? prepareFuture;
+  bool primed;
+  int directSyncRenderCount = 0;
+  int prepareCallCount = 0;
+  int lastDirectFgPassCount = 0;
+  GpuAtlasQuadBatch? lastDirectBatch;
+
+  _FakeDirectShaderBackend({
+    required this.syncOutputFactory,
+    bool primedInitially = true,
+    this.prepareFuture,
+  }) : primed = primedInitially;
+
+  @override
+  bool get supportsDirectTerminalRender => true;
+
+  @override
+  Future<bool> prepareDirectResources({
+    required ui.Image atlasImage,
+    ui.Image? wallpaperImage,
+    Iterable<ui.Image> kittyImages = const <ui.Image>[],
+  }) async {
+    prepareCallCount++;
+    if (prepareFuture != null) {
+      return prepareFuture!;
+    }
+    primed = true;
+    return true;
+  }
+
+  @override
+  ui.Image? renderTerminalFrameSync({
+    required List<ShaderPassInvocation> backgroundPasses,
+    required List<ShaderPassInvocation> foregroundPasses,
+    required ui.Size physicalSize,
+    required ui.Image atlasImage,
+    required GpuAtlasQuadBatch batch,
+    ui.Image? wallpaperImage,
+  }) {
+    if (!primed) return null;
+    directSyncRenderCount++;
+    lastDirectFgPassCount = foregroundPasses.length;
+    lastDirectBatch = batch;
+    return syncOutputFactory();
+  }
 }
 
 final class _TestPaintNotifier extends ChangeNotifier {
