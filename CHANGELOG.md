@@ -3,6 +3,29 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-20
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`fterm` - `v0.5.0-dev.1`](#fterm---v050-dev1)
+
+---
+
+#### `fterm` - `v0.5.0-dev.1`
+
+ - **FEAT**(fterm): add blackout and highlight editor for feedback screenshots.
+ - **FEAT**(fterm): add guided GitHub feedback modal with opt-in diagnostics.
+ - **FEAT**(flutter,fterm): highlight per-row wrapped links and propagate local PTY wraps.
+
+
 ## 2026-11-19
 
 ### Changes
