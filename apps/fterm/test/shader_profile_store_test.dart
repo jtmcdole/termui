@@ -320,7 +320,13 @@ void _defineIoShaderProfileStoreTests() {
           final realShader = File(p.join(tempDir.path, 'real.glsl'));
           await realShader.writeAsString('void mainImage() {}');
           final linkShader = Link(p.join(shadersDir.path, 'linked.glsl'));
-          await linkShader.create(realShader.path);
+          try {
+            await linkShader.create(realShader.path);
+          } on FileSystemException {
+            // Windows without Developer Mode / SeCreateSymbolicLinkPrivilege
+            // cannot create symlinks.
+            return;
+          }
 
           await expectLater(
             store.loadShaderSource(linkShader.path),

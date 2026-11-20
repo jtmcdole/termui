@@ -78,8 +78,11 @@ final class _FakeHandle implements CompiledShaderHandle {
   void dispose() {}
 }
 
+String _joinPath(List<String> parts) => parts.join(Platform.pathSeparator);
+
 String _writeExecutableScript(Directory dir, String name, String body) {
-  final file = File('${dir.path}/$name')..writeAsStringSync(body);
+  final file = File(_joinPath(<String>[dir.path, name]))
+    ..writeAsStringSync(body);
   if (!Platform.isWindows) {
     Process.runSync('chmod', <String>['+x', file.path]);
   }
@@ -241,52 +244,92 @@ void main() {
       addTearDown(() => tmp.deleteSync(recursive: true));
 
       final exeName = Platform.isWindows ? 'impellerc.exe' : 'impellerc';
-      final overrideFile = File('${tmp.path}/override_$exeName')
-        ..writeAsStringSync('override');
-      final appDir = Directory('${tmp.path}/app')..createSync();
-      final appExe = File('${appDir.path}/fterm')..writeAsStringSync('app');
-      final bundledFile = File('${appDir.path}/helpers/$exeName')
-        ..parent.createSync(recursive: true)
-        ..writeAsStringSync('bundled');
-      final envFile = File('${tmp.path}/env_$exeName')
+      final overrideFile = File(
+        _joinPath(<String>[tmp.path, 'override_$exeName']),
+      )..writeAsStringSync('override');
+      final appDir = Directory(_joinPath(<String>[tmp.path, 'app']))
+        ..createSync();
+      final appExe = File(
+        _joinPath(<String>[
+          appDir.path,
+          Platform.isWindows ? 'fterm.exe' : 'fterm',
+        ]),
+      )..writeAsStringSync('app');
+      final bundledFile =
+          File(_joinPath(<String>[appDir.path, 'helpers', exeName]))
+            ..parent.createSync(recursive: true)
+            ..writeAsStringSync('bundled');
+      final envFile = File(_joinPath(<String>[tmp.path, 'env_$exeName']))
         ..writeAsStringSync('env');
 
+      final isArm64 = Platform.version.toLowerCase().contains('arm64');
       final archDir = Platform.isMacOS
-          ? (Platform.version.toLowerCase().contains('arm64')
-                ? 'darwin-arm64'
-                : 'darwin-x64')
+          ? (isArm64 ? 'darwin-arm64' : 'darwin-x64')
           : Platform.isWindows
-          ? 'windows-x64'
-          : (Platform.version.toLowerCase().contains('arm64')
-                ? 'linux-arm64'
-                : 'linux-x64');
+          ? (isArm64 ? 'windows-arm64' : 'windows-x64')
+          : (isArm64 ? 'linux-arm64' : 'linux-x64');
 
-      final flutterRootDir = Directory('${tmp.path}/sdk_env');
+      final flutterRootDir = Directory(
+        _joinPath(<String>[tmp.path, 'sdk_env']),
+      );
       final flutterRootImpellerc =
           File(
-              '${flutterRootDir.path}/bin/cache/artifacts/engine/$archDir/$exeName',
+              _joinPath(<String>[
+                flutterRootDir.path,
+                'bin',
+                'cache',
+                'artifacts',
+                'engine',
+                archDir,
+                exeName,
+              ]),
             )
             ..parent.createSync(recursive: true)
             ..writeAsStringSync('sdk_env');
 
-      final pathSdkDir = Directory('${tmp.path}/sdk_path');
-      final pathFlutterBin = Directory('${pathSdkDir.path}/bin')
-        ..createSync(recursive: true);
-      File('${pathFlutterBin.path}/flutter').writeAsStringSync('flutter');
+      final pathSdkDir = Directory(_joinPath(<String>[tmp.path, 'sdk_path']));
+      final pathFlutterBin = Directory(
+        _joinPath(<String>[pathSdkDir.path, 'bin']),
+      )..createSync(recursive: true);
+      File(
+        _joinPath(<String>[
+          pathFlutterBin.path,
+          Platform.isWindows ? 'flutter.bat' : 'flutter',
+        ]),
+      ).writeAsStringSync('flutter');
       final pathImpellerc =
           File(
-              '${pathSdkDir.path}/bin/cache/artifacts/engine/$archDir/$exeName',
+              _joinPath(<String>[
+                pathSdkDir.path,
+                'bin',
+                'cache',
+                'artifacts',
+                'engine',
+                archDir,
+                exeName,
+              ]),
             )
             ..parent.createSync(recursive: true)
             ..writeAsStringSync('sdk_path');
 
-      final fallbackSdkDir = Directory('${tmp.path}/sdk_fallback');
+      final fallbackSdkDir = Directory(
+        _joinPath(<String>[tmp.path, 'sdk_fallback']),
+      );
       final fallbackImpellerc =
           File(
-              '${fallbackSdkDir.path}/bin/cache/artifacts/engine/$archDir/$exeName',
+              _joinPath(<String>[
+                fallbackSdkDir.path,
+                'bin',
+                'cache',
+                'artifacts',
+                'engine',
+                archDir,
+                exeName,
+              ]),
             )
             ..parent.createSync(recursive: true)
             ..writeAsStringSync('sdk_fallback');
+      final noHelpersExe = _joinPath(<String>[tmp.path, 'no_helpers', 'fterm']);
 
       // 1. Explicit override wins over everything else.
       final c1 = ImpellercCompiler(
@@ -316,7 +359,7 @@ void main() {
 
       // 3. FTERM_IMPELLERC_PATH wins over FLUTTER_ROOT / PATH / fallback.
       final c3 = ImpellercCompiler(
-        resolvedExecutablePath: '${tmp.path}/no_helpers/fterm',
+        resolvedExecutablePath: noHelpersExe,
         environment: <String, String>{
           'FTERM_IMPELLERC_PATH': envFile.path,
           'FLUTTER_ROOT': flutterRootDir.path,
@@ -328,7 +371,7 @@ void main() {
 
       // 4. FLUTTER_ROOT wins over PATH and fallback.
       final c4 = ImpellercCompiler(
-        resolvedExecutablePath: '${tmp.path}/no_helpers/fterm',
+        resolvedExecutablePath: noHelpersExe,
         environment: <String, String>{
           'FLUTTER_ROOT': flutterRootDir.path,
           'PATH': pathFlutterBin.path,
@@ -339,7 +382,7 @@ void main() {
 
       // 5. PATH flutter wins over fallback SDK roots.
       final c5 = ImpellercCompiler(
-        resolvedExecutablePath: '${tmp.path}/no_helpers/fterm',
+        resolvedExecutablePath: noHelpersExe,
         environment: <String, String>{'PATH': pathFlutterBin.path},
         fallbackSdkRoots: <String>[fallbackSdkDir.path],
       );
@@ -347,7 +390,7 @@ void main() {
 
       // 6. Fallback SDK root used when env is empty.
       final c6 = ImpellercCompiler(
-        resolvedExecutablePath: '${tmp.path}/no_helpers/fterm',
+        resolvedExecutablePath: noHelpersExe,
         environment: const <String, String>{},
         fallbackSdkRoots: <String>[fallbackSdkDir.path],
       );
@@ -355,14 +398,18 @@ void main() {
 
       expect(
         ImpellercCompiler(
-          environment: const <String, String>{'HOME': '/tmp/home_test'},
+          environment: Platform.isWindows
+              ? const <String, String>{'LOCALAPPDATA': r'C:\tmp\local_app_data'}
+              : const <String, String>{'HOME': '/tmp/home_test'},
         ).resolveCacheDirectoryPath(),
-        '/tmp/home_test/.cache/fterm/shaders',
+        Platform.isWindows
+            ? r'C:\tmp\local_app_data\fterm\shaders'
+            : '/tmp/home_test/.cache/fterm/shaders',
       );
 
       // 7. Missing binary reports unavailable and throws ShaderCompileException.
       final cMissing = ImpellercCompiler(
-        resolvedExecutablePath: '${tmp.path}/no_helpers/fterm',
+        resolvedExecutablePath: noHelpersExe,
         environment: const <String, String>{},
         fallbackSdkRoots: const <String>[],
       );
