@@ -517,10 +517,18 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// wallpaper configuration forwarded to every pane's `TerminalSurface`.
   TerminalShaderConfig get activeShaderConfig => _activeShaderConfig;
 
+  /// Default opacity applied automatically when enabling a wallpaper or
+  /// background shader while [backgroundOpacity] is still `1.0` (`100%`), so
+  /// the background layer is immediately visible.
+  static const double autoRevealBackgroundOpacity = 0.5;
+
   /// Active default-background cell opacity (`0.0..1.0`, persisted in
   /// [TerminalThemeSettings]).
   double get backgroundOpacity =>
       _workspaceSettings.themeSettings.backgroundOpacity;
+
+  /// Whether the in-app FPS and frame-timing performance HUD is visible.
+  bool get showPerfHud => _preferences.showPerfHud;
 
   /// Ordered background shader presets or custom `.glsl` paths.
   List<String> get backgroundShaderChain =>
@@ -1350,6 +1358,28 @@ final class FtermWorkspaceController extends ChangeNotifier {
     );
   }
 
+  /// Shows or hides the in-app FPS and frame-timing performance HUD and
+  /// persists the preference.
+  void setShowPerfHud(bool enabled) {
+    if (_disposed || _preferences.showPerfHud == enabled) return;
+    _preferences = _preferences.copyWith(showPerfHud: enabled);
+    _settingsSaver.savePreferences(_preferences);
+    _notifyChromeChanged();
+  }
+
+  /// Toggles the in-app FPS and frame-timing performance HUD (`Ctrl+Shift+F9`).
+  void togglePerfHud() => setShowPerfHud(!showPerfHud);
+
+  void _maybeAutoLowerBackgroundOpacity() {
+    if (backgroundOpacity < 1.0) return;
+    _workspaceSettings = _workspaceSettings.copyWith(
+      themeSettings: _workspaceSettings.themeSettings.copyWith(
+        backgroundOpacity: autoRevealBackgroundOpacity,
+      ),
+    );
+    _settingsSaver.save(_workspaceSettings);
+  }
+
   /// Updates and persists the active [ShaderAnimationMode] across both
   /// [FtermPreferences] and [TerminalThemeSettings].
   void setShaderAnimationMode(ShaderAnimationMode mode) {
@@ -1397,6 +1427,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
         backgroundShaderChain: normalized,
       ),
     );
+    if (normalized.isNotEmpty) {
+      _maybeAutoLowerBackgroundOpacity();
+    }
     _rebuildActiveShaderConfig();
     _settingsSaver.save(_workspaceSettings);
     _settingsSaver.savePreferences(_preferences);
@@ -1482,6 +1515,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
       return;
     }
     _preferences = _preferences.copyWith(backgroundImagePath: trimmed);
+    _maybeAutoLowerBackgroundOpacity();
+    _rebuildActiveShaderConfig();
     _settingsSaver.savePreferences(_preferences);
     _notifyChromeChanged();
     await _loadPersistedWallpaper(trimmed);
@@ -1497,6 +1532,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       if (_disposed) return;
       _lastShaderAssetError = null;
       _preferences = _preferences.copyWith(backgroundImagePath: key.trim());
+      _maybeAutoLowerBackgroundOpacity();
       _rebuildActiveShaderConfig();
       _settingsSaver.savePreferences(_preferences);
       _notifyChromeChanged();

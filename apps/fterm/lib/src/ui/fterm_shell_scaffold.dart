@@ -31,6 +31,7 @@ import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/local_host_driver.dart';
 import '../workspace/split_tree_model.dart';
 import 'fterm_overlays.dart';
+import 'fterm_perf_hud.dart';
 import 'fterm_shortcut_dispatcher.dart';
 
 /// Root Flutter shell hosting the 28px tab bar, recursive binary split trees
@@ -233,6 +234,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ws.backgroundOpacity,
       ws.activeShaderConfig,
       ws.shaderController.backendKind,
+      ws.showPerfHud,
       ws.preferences.macosOptionAsAlt,
       ws.preferences.fontSize,
       ws.updateViewModel.status,
@@ -519,6 +521,12 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                 child: workspaceLayout,
               ),
               if (widget.isDraggingOverFiles) _buildDragOverlay(theme),
+              if (widget.workspace.showPerfHud)
+                Positioned(
+                  top: (showBar && dock == DockPosition.top) ? 36 : 12,
+                  right: 12,
+                  child: FtermPerfHud(workspace: widget.workspace),
+                ),
               ListenableBuilder(
                 listenable: widget.workspace.chromeNotifier,
                 builder: (_, _) => FtermOverlayHost(

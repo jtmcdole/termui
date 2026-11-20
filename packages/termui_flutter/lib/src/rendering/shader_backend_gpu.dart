@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -431,6 +432,10 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     );
   }
 
+  /// Maximum time [renderPassesAsync] waits for the GPU command buffer
+  /// completion callback before releasing backpressure.
+  static const Duration gpuCompletionTimeout = Duration(seconds: 4);
+
   @override
   ui.Image? renderBackgroundSync({
     required List<ShaderPassInvocation> passes,
@@ -449,12 +454,26 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     required ui.Size physicalSize,
     ui.Image? inputImage,
     ui.Image? wallpaperImage,
-  }) async => _renderPasses(
-    passes: passes,
-    physicalSize: physicalSize,
-    inputImage: inputImage,
-    wallpaperImage: wallpaperImage,
-  );
+  }) async {
+    final completion = Completer<bool>();
+    final image = _renderPasses(
+      passes: passes,
+      physicalSize: physicalSize,
+      inputImage: inputImage,
+      wallpaperImage: wallpaperImage,
+      completion: completion,
+    );
+    if (image == null) return null;
+    await completion.future.timeout(
+      gpuCompletionTimeout,
+      onTimeout: () => true,
+    );
+    if (_disposed) {
+      image.dispose();
+      return null;
+    }
+    return image;
+  }
 
   @override
   void dispose() {
@@ -477,6 +496,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     required ui.Size physicalSize,
     required ui.Image? inputImage,
     required ui.Image? wallpaperImage,
+    Completer<bool>? completion,
   }) {
     if (_disposed || passes.isEmpty) return null;
     final width = physicalSize.width.round();
@@ -500,6 +520,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
       height: height,
       inputTexture: inputTexture,
       wallpaperTexture: wallpaperTexture,
+      completion: completion,
     );
   }
 
@@ -510,6 +531,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     required int height,
     required gpu.Texture? inputTexture,
     required gpu.Texture? wallpaperTexture,
+    Completer<bool>? completion,
   }) {
     final surfaceFrame = surface.acquireNextFrame();
     var presented = false;
@@ -547,7 +569,12 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
 
       surfaceFrame.present(commandBuffer);
       presented = true;
-      _submitCommandBuffer(commandBuffer, width, height);
+      _submitCommandBuffer(
+        commandBuffer,
+        width,
+        height,
+        completion: completion,
+      );
       for (final slot in pendingSwaps) {
         slot.commitWriteAndSwap();
       }
@@ -725,13 +752,27 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
   void _submitCommandBuffer(
     gpu.CommandBuffer commandBuffer,
     int width,
-    int height,
-  ) {
+    int height, {
+    Completer<bool>? completion,
+  }) {
     try {
-      commandBuffer.submit();
+      if (completion == null) {
+        commandBuffer.submit();
+      } else {
+        commandBuffer.submit(
+          completionCallback: (success) {
+            if (!completion.isCompleted) {
+              completion.complete(success);
+            }
+          },
+        );
+      }
     } on Object {
       // Evict surface so an unsubmitted present never poisons subsequent frames.
       _surfacePool.remove(width, height);
+      if (completion != null && !completion.isCompleted) {
+        completion.complete(false);
+      }
       rethrow;
     }
   }

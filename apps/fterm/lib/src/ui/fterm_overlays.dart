@@ -1047,6 +1047,8 @@ final class _ShadersAndBackgroundSectionState
         const SizedBox(height: 8),
         _ShaderAnimationModeSelector(workspace: ws, palette: palette),
         const SizedBox(height: 8),
+        _PerfHudToggleRow(workspace: ws, palette: palette),
+        const SizedBox(height: 8),
         _ShaderActionsRow(
           workspace: ws,
           isWeb: widget.isWeb,
@@ -1522,6 +1524,30 @@ final class _ShaderAnimationModeSelector extends StatelessWidget {
               onSelected: (_) => workspace.setShaderAnimationMode(mode),
             ),
         ],
+      ),
+    ],
+  );
+}
+
+final class _PerfHudToggleRow extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+
+  const _PerfHudToggleRow({required this.workspace, required this.palette});
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Expanded(
+        child: Text(
+          'Performance HUD (FPS • Ctrl+Shift+F9)',
+          style: TextStyle(color: palette.muted, fontSize: 11),
+        ),
+      ),
+      Switch(
+        key: const ValueKey('settings-perf-hud-switch'),
+        value: workspace.showPerfHud,
+        onChanged: workspace.setShowPerfHud,
       ),
     ],
   );

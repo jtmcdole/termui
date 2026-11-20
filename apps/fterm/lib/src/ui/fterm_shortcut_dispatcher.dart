@@ -317,8 +317,12 @@ final class FtermShortcutDispatcher {
 
   bool _handleDesktopShortcut(KeyDownEvent event, Set<ev.Modifier> modifiers) {
     if (_isWeb) return false;
-    if (_isCtrlShiftF5(event.logicalKey, modifiers)) {
+    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f5, modifiers)) {
       unawaited(workspace.reloadShaders());
+      return true;
+    }
+    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f9, modifiers)) {
+      workspace.togglePerfHud();
       return true;
     }
     if (_platform == TargetPlatform.macOS) {
@@ -331,11 +335,12 @@ final class FtermShortcutDispatcher {
     return false;
   }
 
-  static bool _isCtrlShiftF5(
-    LogicalKeyboardKey key,
+  static bool _isCtrlShiftKey(
+    LogicalKeyboardKey actual,
+    LogicalKeyboardKey expected,
     Set<ev.Modifier> modifiers,
   ) =>
-      key == LogicalKeyboardKey.f5 &&
+      actual == expected &&
       modifiers.contains(ev.Modifier.control) &&
       modifiers.contains(ev.Modifier.shift) &&
       !modifiers.contains(ev.Modifier.alt) &&

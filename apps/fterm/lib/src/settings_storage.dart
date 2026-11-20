@@ -143,6 +143,9 @@ final class FtermPreferences {
   /// Optional serialized JSON payload storing custom shader profile parameters.
   final String? customShaderProfileJson;
 
+  /// Whether the in-app FPS and frame-timing performance HUD is visible.
+  final bool showPerfHud;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
@@ -165,6 +168,7 @@ final class FtermPreferences {
     this.shaderAnimationMode = ShaderAnimationMode.focused,
     this.shaderBackendOverride,
     this.customShaderProfileJson,
+    this.showPerfHud = false,
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -202,6 +206,7 @@ final class FtermPreferences {
     bool clearShaderBackendOverride = false,
     String? customShaderProfileJson,
     bool clearCustomShaderProfileJson = false,
+    bool? showPerfHud,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -261,6 +266,7 @@ final class FtermPreferences {
       next: customShaderProfileJson ?? this.customShaderProfileJson,
       normalize: _normalizeOptionalText,
     ),
+    showPerfHud: showPerfHud ?? this.showPerfHud,
   );
 
   static T? _resolveOptionalField<T>({
@@ -320,6 +326,7 @@ final class FtermPreferences {
     customShaderProfileJson: _parseOptionalText(
       decoded['customShaderProfileJson'],
     ),
+    showPerfHud: decoded['showPerfHud'] == true,
   );
 
   static double _parseAudioVolume(Object? raw) => switch (raw) {
@@ -423,6 +430,7 @@ final class FtermPreferences {
     if (shaderBackendOverride case final backendOverride?)
       'shaderBackendOverride': backendOverride.wireName,
     'customShaderProfileJson': ?customShaderProfileJson,
+    if (showPerfHud) 'showPerfHud': true,
   });
 
   @override
@@ -448,7 +456,8 @@ final class FtermPreferences {
           listEquals(other.foregroundShaderPaths, foregroundShaderPaths) &&
           other.shaderAnimationMode == shaderAnimationMode &&
           other.shaderBackendOverride == shaderBackendOverride &&
-          other.customShaderProfileJson == customShaderProfileJson;
+          other.customShaderProfileJson == customShaderProfileJson &&
+          other.showPerfHud == showPerfHud;
 
   @override
   int get hashCode => Object.hashAll(<Object?>[
@@ -472,6 +481,7 @@ final class FtermPreferences {
     shaderAnimationMode,
     shaderBackendOverride,
     customShaderProfileJson,
+    showPerfHud,
   ]);
 }
 
