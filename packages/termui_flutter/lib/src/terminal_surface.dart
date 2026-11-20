@@ -342,6 +342,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   late _KittyGpuImageCache _kittyCache;
   final TuiAtlasStagingCache _stagingCache = TuiAtlasStagingCache();
   final GpuAtlasBatchBuilder _gpuBatchBuilder = GpuAtlasBatchBuilder();
+  int _directPaintVersion = 0;
   final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
 
   TextPainter? _composingPainter;
@@ -1012,6 +1013,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         (_imeClient.composingText.isNotEmpty && cursorMoved);
 
     if (needsWidgetRebuild) {
+      _directPaintVersion++;
       setState(() {});
       return;
     }
@@ -2338,6 +2340,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       palette256Argb: _resolvePalette256Argb(),
       cellSizeLogical: Size(atlas.cellWidth, atlas.cellHeight),
       activityListenable: _paintNotifier,
+      activitySignal: _directPaintVersion,
       directTerminalBatchProvider: buf == null
           ? null
           : _stageDirectTerminalBatch,

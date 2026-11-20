@@ -1760,6 +1760,90 @@ void main() {
         );
       },
     );
+
+    testWidgets(
+      'direct GPU runtime error enters fallback without oscillating on reportRuntimeError',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 32,
+            height: 32,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 100,
+            height: 50,
+            color: const Color(0xFF00AA55),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          directRenderError: Exception('Unsupported GpuSurface pixel format.'),
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+
+        final cleanBatch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: const <GpuKittyQuad>[],
+          hasCanvasOnlyContent: false,
+        );
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: TerminalShaderHost(
+              controller: controller,
+              config: TerminalShaderConfig.empty,
+              activityListenable: activity,
+              atlasImage: atlasImg,
+              atlasDevicePixelRatio: 1.0,
+              directLogicalSize: const Size(100, 50),
+              directTerminalBatchProvider: (_, _) => cleanBatch,
+              child: const SizedBox(
+                key: ValueKey<String>('fallback-child'),
+                width: 100,
+                height: 50,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(controller.lastCompileError?.message, contains('Unsupported'));
+        expect(hostState.debugIsDirectModeActive, isFalse);
+        expect(
+          find.byKey(const ValueKey<String>('fallback-child')),
+          findsOneWidget,
+        );
+
+        // Subsequent activity must stay in fallback (no direct retry flicker).
+        final failedCalls = backend.directSyncAttemptCount;
+        activity.fire();
+        await tester.pump();
+        activity.fire();
+        await tester.pump();
+        expect(hostState.debugIsDirectModeActive, isFalse);
+        expect(backend.directSyncAttemptCount, equals(failedCalls));
+      },
+    );
   });
 }
 
@@ -1767,7 +1851,9 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
     implements DirectTerminalShaderBackend {
   final ui.Image Function() syncOutputFactory;
   final Future<bool>? prepareFuture;
+  Object? directRenderError;
   bool primed;
+  int directSyncAttemptCount = 0;
   int directSyncRenderCount = 0;
   int prepareCallCount = 0;
   int lastDirectFgPassCount = 0;
@@ -1777,6 +1863,7 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
     required this.syncOutputFactory,
     bool primedInitially = true,
     this.prepareFuture,
+    this.directRenderError,
   }) : primed = primedInitially;
 
   @override
@@ -1805,6 +1892,11 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
     required GpuAtlasQuadBatch batch,
     ui.Image? wallpaperImage,
   }) {
+    directSyncAttemptCount++;
+    final error = directRenderError;
+    if (error != null) {
+      throw error;
+    }
     if (!primed) return null;
     directSyncRenderCount++;
     lastDirectFgPassCount = foregroundPasses.length;

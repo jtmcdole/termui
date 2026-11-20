@@ -500,6 +500,22 @@ final class FlutterGpuShaderBackend implements DirectTerminalShaderBackend {
   gpu.Texture? _fallbackTexture;
   bool _disposed = false;
 
+  /// Resolves a render-target-safe [gpu.PixelFormat] for `GpuImageSurface` and
+  /// intermediate offscreen textures.
+  ///
+  /// On Apple wide-gamut displays, Flutter 3.50's `defaultColorFormat` maps
+  /// Impeller's `kB10G10R10A10XR` to [gpu.PixelFormat.unknown], which
+  /// `GpuImageSurface` rejects with `Unsupported GpuSurface pixel format.`.
+  /// Falling back to [gpu.PixelFormat.b8g8r8a8UNormInt] matches Metal's native
+  /// 8-bit render-target format cleanly.
+  static gpu.PixelFormat resolveSafeGpuColorFormat(gpu.PixelFormat format) =>
+      format == gpu.PixelFormat.unknown
+      ? gpu.PixelFormat.b8g8r8a8UNormInt
+      : format;
+
+  gpu.PixelFormat get _renderColorFormat =>
+      resolveSafeGpuColorFormat(_context.defaultColorFormat);
+
   /// Creates a Desktop `flutter_gpu` shader backend.
   FlutterGpuShaderBackend({
     ImpellercCompiler? compiler,
@@ -682,7 +698,7 @@ final class FlutterGpuShaderBackend implements DirectTerminalShaderBackend {
     final surface = _directSurfacePool.obtain(
       width,
       height,
-      (w, h) => _context.createImageSurface(w, h),
+      (w, h) => _context.createImageSurface(w, h, format: _renderColorFormat),
     );
     return _executeDirectSurfaceRender(
       surface: surface,
@@ -1250,7 +1266,7 @@ final class FlutterGpuShaderBackend implements DirectTerminalShaderBackend {
     final surface = surfacePool.obtain(
       width,
       height,
-      (w, h) => _context.createImageSurface(w, h),
+      (w, h) => _context.createImageSurface(w, h, format: _renderColorFormat),
     );
     return _executeSurfaceRender(
       surface: surface,
@@ -1586,7 +1602,7 @@ final class FlutterGpuShaderBackend implements DirectTerminalShaderBackend {
         gpu.StorageMode.devicePrivate,
         width,
         height,
-        format: _context.defaultColorFormat,
+        format: _renderColorFormat,
         enableRenderTargetUsage: true,
         enableShaderReadUsage: true,
       );

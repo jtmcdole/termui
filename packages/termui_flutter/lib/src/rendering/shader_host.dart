@@ -356,7 +356,9 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       oldWidget.controller,
       widget.controller,
     );
-    if (controllerChanged) {
+    if (controllerChanged ||
+        (_directFallbackReason == _DirectFallbackReason.runtimeError &&
+            oldWidget.config != widget.config)) {
       _directFallbackActive = false;
       _directFallbackReason = _DirectFallbackReason.none;
       return;
@@ -435,7 +437,8 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     if (_directFallbackActive &&
         _canUseDirectTerminalRender &&
         !_directPrepareInFlight &&
-        _directFallbackReason != _DirectFallbackReason.canvasOnly) {
+        _directFallbackReason != _DirectFallbackReason.canvasOnly &&
+        _directFallbackReason != _DirectFallbackReason.runtimeError) {
       _directFallbackActive = false;
       _directFallbackReason = _DirectFallbackReason.none;
     }
@@ -1087,9 +1090,12 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       return result.image;
     }
 
-    if (!result.failed) {
-      _prepareDirectResourcesAsync(backend, atlasImage, batch);
+    if (result.failed) {
+      _enterDirectFallbackPostFrame(_DirectFallbackReason.runtimeError);
+      return _directBridgeImageFor(logicalSize);
     }
+
+    _prepareDirectResourcesAsync(backend, atlasImage, batch);
     _enterDirectFallbackPostFrame(_DirectFallbackReason.priming);
     return _directBridgeImageFor(logicalSize);
   }
@@ -1297,7 +1303,13 @@ final class _ShaderFrameNotifier extends ChangeNotifier {
   void notify() => notifyListeners();
 }
 
-enum _DirectFallbackReason { none, priming, canvasOnly, dprMismatch }
+enum _DirectFallbackReason {
+  none,
+  priming,
+  canvasOnly,
+  dprMismatch,
+  runtimeError,
+}
 
 final class _DirectTerminalPainter extends CustomPainter {
   final ui.Image? Function(Size logicalSize) renderDirect;

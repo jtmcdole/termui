@@ -7,8 +7,10 @@ import 'package:termui/ui/widgets/core/geometry.dart' as tui_geo;
 import 'package:termui/ui/buffer.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
+import 'package:termui_flutter/src/rendering/atlas.dart';
 import 'package:termui_flutter/src/rendering/gpu_atlas_batch.dart';
 import 'package:termui_flutter/src/rendering/gpu_atlas_shaders.dart';
+import 'package:termui_flutter/src/rendering/painter.dart';
 import 'package:termui_flutter/src/rendering/staging_cache.dart';
 
 Future<ui.Image> _makeTestImage(int width, int height) {
@@ -606,6 +608,56 @@ void main() {
         GpuAtlasShaders.impellerFragmentSource,
         contains('#version 460 core'),
       );
+    });
+  });
+
+  group('TuiAtlasPainter.stageForGpu incremental typing', () {
+    test('stages every single keystroke (t -> th -> thi -> this) with monotonic generation and instanceCount', () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 14.0,
+        fontFamily: 'Roboto Mono',
+        devicePixelRatio: 2.0,
+      );
+      addTearDown(atlas.dispose);
+
+      final buffer = Buffer(40, 10)..writeString(0, 2, r'$ ', Style.empty);
+      final cache = TuiAtlasStagingCache();
+      final builder = GpuAtlasBatchBuilder();
+      final logicalSize = ui.Size(40 * atlas.cellWidth, 10 * atlas.cellHeight);
+
+      GpuAtlasQuadBatch stage(int cursorCol) => TuiAtlasPainter(
+        buffer: buffer,
+        atlas: atlas,
+        stagingCache: cache,
+        fontFamily: 'Roboto Mono',
+        fallbackPainters: const {},
+        onMissingGlyphs: null,
+        enableBleed: true,
+        cursorCol: cursorCol,
+        cursorRow: 2,
+      ).stageForGpu(logicalSize, 2.0, builder);
+
+      final baseline = stage(2);
+      var prevGen = baseline.generation;
+      var prevCount = baseline.instanceCount;
+
+      const typed = 'this';
+      for (var i = 0; i < typed.length; i++) {
+        buffer.writeString(2 + i, 2, typed[i], Style.empty);
+        final next = stage(2 + i + 1);
+        expect(
+          next.generation,
+          greaterThan(prevGen),
+          reason: 'keystroke "$typed"[0..$i] must advance batch generation',
+        );
+        expect(
+          next.instanceCount,
+          equals(prevCount + 1),
+          reason: 'keystroke "$typed"[0..$i] must emit new glyph instance',
+        );
+        prevGen = next.generation;
+        prevCount = next.instanceCount;
+      }
     });
   });
 }

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
 import 'package:termui_flutter/src/rendering/gpu_atlas_shaders.dart';
@@ -515,6 +516,30 @@ void main() {
       skip: realImpellercPath == null
           ? 'impellerc binary not found in Flutter SDK cache'
           : false,
+    );
+
+    test(
+      'resolveSafeGpuColorFormat maps PixelFormat.unknown to b8g8r8a8UNormInt',
+      () {
+        expect(
+          FlutterGpuShaderBackend.resolveSafeGpuColorFormat(
+            gpu.PixelFormat.unknown,
+          ),
+          equals(gpu.PixelFormat.b8g8r8a8UNormInt),
+        );
+        expect(
+          FlutterGpuShaderBackend.resolveSafeGpuColorFormat(
+            gpu.PixelFormat.r8g8b8a8UNormInt,
+          ),
+          equals(gpu.PixelFormat.r8g8b8a8UNormInt),
+        );
+        expect(
+          FlutterGpuShaderBackend.resolveSafeGpuColorFormat(
+            gpu.PixelFormat.b8g8r8a8UNormInt,
+          ),
+          equals(gpu.PixelFormat.b8g8r8a8UNormInt),
+        );
+      },
     );
 
     test(
