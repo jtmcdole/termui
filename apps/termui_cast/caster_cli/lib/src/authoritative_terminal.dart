@@ -137,7 +137,7 @@ final class AuthoritativeTerminal {
       theme: initialTheme,
     )..onReply = (reply) => onTerminalReply?.call(reply);
     _initShadowState(safeCols, safeRows);
-    _terminal.addListener(_markDirty);
+    _terminal.addListener(markDirty);
     _attachTerminalHooks(chainPrevious: false);
   }
 
@@ -152,7 +152,7 @@ final class AuthoritativeTerminal {
        _ownsTerminal = false,
        _wireTerminalHooks = wireTerminalHooks {
     _initShadowState(_terminal.width, _terminal.height);
-    _terminal.addListener(_markDirty);
+    _terminal.addListener(markDirty);
     if (_wireTerminalHooks) {
       _attachTerminalHooks(chainPrevious: true);
     }
@@ -268,7 +268,12 @@ final class AuthoritativeTerminal {
   String? _lastRawUri;
   String? _lastClampedUri;
 
-  void _markDirty() {
+  /// Marks this terminal as having unshipped mutations pending for the next
+  /// [takeNextFrame] call.
+  ///
+  /// Used by shared-router casters whose change callback can run before this
+  /// wrapper's own `VirtualTerminal` listener during the same notification pass.
+  void markDirty() {
     _dirty = true;
   }
 
@@ -1368,7 +1373,7 @@ final class AuthoritativeTerminal {
 
   /// Releases owned [VirtualTerminal] resources or restores external hooks.
   void dispose() {
-    _terminal.removeListener(_markDirty);
+    _terminal.removeListener(markDirty);
     _titleListeners.clear();
     _bellListeners.clear();
     _audioListeners.clear();

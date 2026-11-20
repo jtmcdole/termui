@@ -1238,6 +1238,10 @@ final class CasterService {
 
   void _onRouterTerminalChanged() {
     if (_stopping || _ptyOutputDone.isCompleted) return;
+    // PtyRouterSession attaches its listener to VirtualTerminal before
+    // AuthoritativeTerminal.wrapping(), so markDirty() ensures isDirty is
+    // already true when _scheduleDirtyFlushIfSubscribed() runs in this pass.
+    terminal.markDirty();
     _scheduleDirtyFlushIfSubscribed();
   }
 
