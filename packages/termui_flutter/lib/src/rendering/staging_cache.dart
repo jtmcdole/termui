@@ -41,6 +41,14 @@ final class TuiAtlasStagingCache {
   /// Number of dirty rows freshly staged during the most recent paint pass.
   int get lastRowMisses => _internals.lastRowMisses;
 
+  /// Monotonically increasing generation counter incremented whenever staged
+  /// sprite buffers change (grid resize, invalidation, or dirty row staging).
+  ///
+  /// GPU backends compare this value to skip redundant vertex/instance buffer
+  /// uploads on pure animation (`iTime`) frames whose terminal cells did not
+  /// change.
+  int get generation => _internals.generation;
+
   /// Ensures internal per-row metadata and backing buffers can hold a
   /// `[cols] x [rows]` grid, invalidating cached rows when dimensions change.
   void ensureGridCapacity(int cols, int rows) =>
@@ -214,6 +222,9 @@ final class StagingCacheInternals {
   /// Dirty row misses recorded on the most recent paint pass.
   int lastRowMisses = 0;
 
+  /// Monotonic counter incremented when staged sprite contents change.
+  int generation = 0;
+
   StagingBufferSet _active = StagingBufferSet();
   StagingBufferSet? _spare;
 
@@ -320,6 +331,7 @@ final class StagingCacheInternals {
 
     _active.ensureGridCapacity(safeRows, cellCount);
     _spare?.ensureRowCapacity(safeRows);
+    generation++;
   }
 
   /// Marks every row invalid without reallocating backing buffers.
@@ -327,6 +339,7 @@ final class StagingCacheInternals {
     if (rowValid.isNotEmpty) {
       rowValid.fillRange(0, rowValid.length, 0);
     }
+    generation++;
   }
 
   /// Whether [row] is valid and matches [fullFingerprint].
@@ -380,6 +393,9 @@ final class StagingCacheInternals {
     }
     lastRowHits = hits;
     lastRowMisses = misses;
+    if (misses > 0) {
+      generation++;
+    }
   }
 }
 
