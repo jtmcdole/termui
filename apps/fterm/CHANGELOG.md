@@ -1,3 +1,9 @@
+## 0.5.0-dev.1
+
+ - **FEAT**(fterm): add blackout and highlight editor for feedback screenshots.
+ - **FEAT**(fterm): add guided GitHub feedback modal with opt-in diagnostics.
+ - **FEAT**(flutter,fterm): highlight per-row wrapped links and propagate local PTY wraps.
+
 ## 0.5.0-dev.0
 
 > Note: This release has breaking changes.
