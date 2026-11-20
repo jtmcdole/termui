@@ -14,9 +14,9 @@ dependencies:
   hierarchical_state_machine: ^2.4.0
   meta: ^1.16.0
   stream_channel: ^2.1.4
-  termui: ^0.20.0
+  termui: ^0.20.1
   termui_cast_protocol: ^0.3.0-dev.0
-  termui_pty: ^0.15.0
+  termui_pty: ^0.15.1
   web_socket_channel: ^3.0.3
 
 dev_dependencies:
