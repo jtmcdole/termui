@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:js_interop';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -6,6 +7,8 @@ import 'dart:ui_web' as ui_web;
 
 import 'package:web/web.dart' as web;
 
+import 'gpu_atlas_batch.dart';
+import 'gpu_atlas_shaders.dart';
 import 'shader_backend.dart';
 import 'shader_spec.dart';
 import 'shadertoy_glsl_shim.dart';
@@ -20,9 +23,10 @@ import 'shadertoy_glsl_shim.dart';
 /// `webglcontextrestored` recovery, and exports frames via
 /// `OffscreenCanvas.transferToImageBitmap` plus
 /// `ui_web.createImageFromImageBitmap`.
-final class WebGl2ShaderBackend implements TerminalShaderBackend {
+final class WebGl2ShaderBackend implements DirectTerminalShaderBackend {
   static const int _uboBindingPoint = 0;
   static const int _maxParallelCompilePolls = 240;
+  static const int _maxKittyTextureCacheEntries = 32;
 
   static final Float32List _fullscreenTriangleVertices = Float32List.fromList(
     <double>[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0],
@@ -76,11 +80,40 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
   int _wallpaperHeight = 0;
   ui.Image? _cachedWallpaperImage;
 
+  web.WebGLProgram? _atlasProgram;
+  web.WebGLUniformLocation? _atlasViewportLoc;
+  web.WebGLBuffer? _atlasUnitQuadBuffer;
+  web.WebGLVertexArrayObject? _atlasVao;
+  web.WebGLBuffer? _atlasInstanceBuffer;
+  int _atlasInstanceCapBytes = 0;
+  web.WebGLVertexArrayObject? _singleQuadVao;
+  web.WebGLBuffer? _singleQuadInstanceBuffer;
+  final Float32List _singleQuadScratch = Float32List(
+    GpuAtlasQuadBatch.floatsPerInstance,
+  );
+  web.WebGLTexture? _atlasTexture;
+  int _atlasWidth = 0;
+  int _atlasHeight = 0;
+  ui.Image? _cachedAtlasImage;
+  int _atlasFilterMode = web.WebGL2RenderingContext.LINEAR;
+
+  final LinkedHashMap<ui.Image, _GlCachedTexture> _kittyTextures =
+      LinkedHashMap<ui.Image, _GlCachedTexture>.identity();
+  final Map<ui.Image, Future<bool>> _primingInFlight =
+      Map<ui.Image, Future<bool>>.identity();
+
+  Float32List? _uploadedInstanceData;
+  int _uploadedGeneration = -1;
+  int _uploadedInstanceCount = -1;
+
   _GlFboTarget? _scratchTarget;
   _GlFboTarget? _chainTarget;
+  _GlFboTarget? _sceneTarget;
 
   bool _hasParallelCompile = false;
   bool _coreInitialized = false;
+  bool _directAtlasInitialized = false;
+  bool _directAtlasInitFailed = false;
   bool _contextLost = false;
   bool _disposed = false;
 
@@ -130,6 +163,10 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
 
   @override
   bool get supportsSyncBackground => true;
+
+  @override
+  bool get supportsDirectTerminalRender =>
+      !_disposed && !_directAtlasInitFailed;
 
   bool get _isContextUnavailable =>
       _disposed || _contextLost || _gl.isContextLost();
@@ -293,6 +330,97 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
   }
 
   @override
+  Future<bool> prepareDirectResources({
+    required ui.Image atlasImage,
+    ui.Image? wallpaperImage,
+    Iterable<ui.Image> kittyImages = const <ui.Image>[],
+  }) async {
+    if (_isContextUnavailable || _directAtlasInitFailed) return false;
+
+    final pending = <Future<bool>>[
+      if (!_isAtlasTextureReady(atlasImage))
+        _primeImageDeduplicated(atlasImage, _syncAtlasTexture),
+      if (!_isWallpaperTextureReady(wallpaperImage))
+        _primeImageDeduplicated(
+          wallpaperImage!,
+          (image, data) => _syncWallpaperTexture(image, data, true),
+        ),
+      for (final kittyImage in kittyImages)
+        if (!_kittyTextures.containsKey(kittyImage))
+          _primeImageDeduplicated(kittyImage, _syncKittyTexture),
+    ];
+
+    if (pending.isNotEmpty) {
+      await Future.wait(pending);
+    }
+    if (_isContextUnavailable ||
+        !_ensureCoreResources() ||
+        !_ensureDirectAtlasResources()) {
+      return false;
+    }
+
+    return _isAtlasTextureReady(atlasImage) &&
+        _isWallpaperTextureReady(wallpaperImage) &&
+        kittyImages.every(_kittyTextures.containsKey);
+  }
+
+  @override
+  ui.Image? renderTerminalFrameSync({
+    required List<ShaderPassInvocation> backgroundPasses,
+    required List<ShaderPassInvocation> foregroundPasses,
+    required ui.Size physicalSize,
+    required ui.Image atlasImage,
+    required GpuAtlasQuadBatch batch,
+    ui.Image? wallpaperImage,
+  }) {
+    if (_isContextUnavailable || _directAtlasInitFailed) return null;
+    final dims = _resolveDimensions(physicalSize);
+    if (dims == null ||
+        !_areDirectTexturesPrimed(atlasImage, wallpaperImage, batch) ||
+        !_ensureCoreResources() ||
+        !_ensureDirectAtlasResources()) {
+      return null;
+    }
+
+    final width = dims.$1;
+    final height = dims.$2;
+    _ensureCanvasSize(width, height);
+
+    final hasForeground = foregroundPasses.isNotEmpty;
+    if (hasForeground && !_ensureSceneTarget(width, height)) return null;
+    final sceneFbo = hasForeground ? _sceneTarget!.framebuffer : null;
+
+    if (!_renderDirectBackgroundStage(
+      backgroundPasses: backgroundPasses,
+      wallpaperImage: wallpaperImage,
+      sceneFbo: sceneFbo,
+      width: width,
+      height: height,
+    )) {
+      return null;
+    }
+
+    _renderDirectTerminalStage(
+      batch: batch,
+      sceneFbo: sceneFbo,
+      width: width,
+      height: height,
+    );
+
+    if (hasForeground &&
+        !_renderDirectForegroundStage(
+          foregroundPasses: foregroundPasses,
+          hasWallpaperTexture: wallpaperImage != null,
+          width: width,
+          height: height,
+        )) {
+      return null;
+    }
+
+    return _exportCanvasImageSync();
+  }
+
+  @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
@@ -349,6 +477,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
   void _onContextRestored(web.Event event) {
     if (_disposed) return;
     _contextLost = false;
+    _directAtlasInitFailed = false;
     _invalidateGpuResources(deleteObjects: false);
   }
 
@@ -377,20 +506,40 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     _wallpaperWidth = 0;
     _wallpaperHeight = 0;
     _cachedWallpaperImage = null;
+    _atlasProgram = null;
+    _atlasViewportLoc = null;
+    _atlasUnitQuadBuffer = null;
+    _atlasVao = null;
+    _atlasInstanceBuffer = null;
+    _atlasInstanceCapBytes = 0;
+    _singleQuadVao = null;
+    _singleQuadInstanceBuffer = null;
+    _atlasTexture = null;
+    _atlasWidth = 0;
+    _atlasHeight = 0;
+    _cachedAtlasImage = null;
+    _atlasFilterMode = web.WebGL2RenderingContext.LINEAR;
+    _kittyTextures.clear();
+    _uploadedInstanceData = null;
+    _uploadedGeneration = -1;
+    _uploadedInstanceCount = -1;
     _hasParallelCompile = false;
     _coreInitialized = false;
+    _directAtlasInitialized = false;
   }
 
   void _deleteTransientTargets({required bool deleteObjects}) {
     if (deleteObjects) {
       _scratchTarget?.delete(_gl);
       _chainTarget?.delete(_gl);
+      _sceneTarget?.delete(_gl);
       for (final target in _prevFrameTargets.values) {
         target.delete(_gl);
       }
     }
     _scratchTarget = null;
     _chainTarget = null;
+    _sceneTarget = null;
     _prevFrameTargets.clear();
   }
 
@@ -402,6 +551,18 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     if (_dummyTexture != null) _gl.deleteTexture(_dummyTexture);
     if (_inputTexture != null) _gl.deleteTexture(_inputTexture);
     if (_wallpaperTexture != null) _gl.deleteTexture(_wallpaperTexture);
+    if (_atlasProgram != null) _gl.deleteProgram(_atlasProgram);
+    if (_atlasVao != null) _gl.deleteVertexArray(_atlasVao);
+    if (_atlasUnitQuadBuffer != null) _gl.deleteBuffer(_atlasUnitQuadBuffer);
+    if (_atlasInstanceBuffer != null) _gl.deleteBuffer(_atlasInstanceBuffer);
+    if (_singleQuadVao != null) _gl.deleteVertexArray(_singleQuadVao);
+    if (_singleQuadInstanceBuffer != null) {
+      _gl.deleteBuffer(_singleQuadInstanceBuffer);
+    }
+    if (_atlasTexture != null) _gl.deleteTexture(_atlasTexture);
+    for (final cached in _kittyTextures.values) {
+      _gl.deleteTexture(cached.texture);
+    }
   }
 
   bool _ensureCoreResources() {
@@ -679,6 +840,8 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     required int height,
     required bool hasInputTexture,
     required bool hasWallpaperTexture,
+    web.WebGLTexture? initialChannel0,
+    web.WebGLFramebuffer? finalFramebuffer,
   }) {
     if (_canvas.width != width || _canvas.height != height) {
       _canvas.width = width;
@@ -694,6 +857,8 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
         height: height,
         hasInputTexture: hasInputTexture,
         hasWallpaperTexture: hasWallpaperTexture,
+        initialChannel0: initialChannel0,
+        finalFramebuffer: finalFramebuffer,
       );
       if (!ok) return false;
     }
@@ -708,6 +873,8 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     required int height,
     required bool hasInputTexture,
     required bool hasWallpaperTexture,
+    web.WebGLTexture? initialChannel0,
+    web.WebGLFramebuffer? finalFramebuffer,
   }) {
     final handle = pass.handle;
     if (handle is! _WebGl2ShaderHandle ||
@@ -731,13 +898,19 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
 
     _uploadUniformBlock(pass.uniforms);
     _bindPassTextures(
-      channel0: _resolveChannel0Texture(passIndex, hasInputTexture),
+      channel0: _resolveChannel0Texture(
+        passIndex,
+        hasInputTexture,
+        initialChannel0: initialChannel0,
+      ),
       channel1: hasWallpaperTexture ? _wallpaperTexture : _dummyTexture,
       prevFrame: prevTarget?.readTexture ?? _dummyTexture,
     );
     _drawFullscreenPass(
       program,
-      framebuffer: needsScratchFbo ? _scratchTarget!.framebuffer : null,
+      framebuffer: needsScratchFbo
+          ? _scratchTarget!.framebuffer
+          : finalFramebuffer,
       width: width,
       height: height,
     );
@@ -748,6 +921,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
       width: width,
       height: height,
       prevTarget: prevTarget,
+      finalFramebuffer: finalFramebuffer,
     );
   }
 
@@ -768,10 +942,14 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
 
   web.WebGLTexture? _resolveChannel0Texture(
     int passIndex,
-    bool hasInputTexture,
-  ) {
+    bool hasInputTexture, {
+    web.WebGLTexture? initialChannel0,
+  }) {
     if (passIndex > 0) {
       return _chainTarget?.texture ?? _dummyTexture;
+    }
+    if (initialChannel0 != null) {
+      return initialChannel0;
     }
     return hasInputTexture ? (_inputTexture ?? _dummyTexture) : _dummyTexture;
   }
@@ -843,6 +1021,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     required int width,
     required int height,
     required _GlPingPongTarget? prevTarget,
+    web.WebGLFramebuffer? finalFramebuffer,
   }) {
     final scratch = _scratchTarget;
     if (scratch == null) return false;
@@ -871,7 +1050,7 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     } else {
       _blitFramebuffer(
         scratch.framebuffer,
-        null,
+        finalFramebuffer,
         width: width,
         height: height,
         flipY: false,
@@ -928,6 +1107,519 @@ final class WebGl2ShaderBackend implements TerminalShaderBackend {
     existing?.delete(_gl);
     _chainTarget = _createFboTarget(width, height);
     return _chainTarget != null;
+  }
+
+  bool _ensureSceneTarget(int width, int height) {
+    final existing = _sceneTarget;
+    if (existing != null && existing.matches(width, height)) return true;
+    existing?.delete(_gl);
+    _sceneTarget = _createFboTarget(width, height);
+    return _sceneTarget != null;
+  }
+
+  Future<bool> _primeImageDeduplicated(
+    ui.Image image,
+    bool Function(ui.Image image, ByteData? data) uploader,
+  ) {
+    final existing = _primingInFlight[image];
+    if (existing != null) return existing;
+    final future = _primeImageOnce(image, uploader);
+    _primingInFlight[image] = future;
+    return future;
+  }
+
+  Future<bool> _primeImageOnce(
+    ui.Image image,
+    bool Function(ui.Image image, ByteData? data) uploader,
+  ) async {
+    try {
+      final data = await _readImageRgba(image);
+      if (_isContextUnavailable || data == null) return false;
+      if (!_ensureCoreResources()) return false;
+      return uploader(image, data);
+    } on Object {
+      return false;
+    } finally {
+      _primingInFlight.remove(image);
+    }
+  }
+
+  bool _syncAtlasTexture(ui.Image image, ByteData? data) {
+    if (data == null) return false;
+    final uploaded = _uploadRgbaTexture(
+      existing: _atlasTexture,
+      existingWidth: _atlasWidth,
+      existingHeight: _atlasHeight,
+      width: image.width,
+      height: image.height,
+      rgbaData: data,
+    );
+    if (uploaded == null) return false;
+    _atlasTexture = uploaded;
+    _atlasWidth = image.width;
+    _atlasHeight = image.height;
+    _cachedAtlasImage = image;
+    _atlasFilterMode = web.WebGL2RenderingContext.LINEAR;
+    return true;
+  }
+
+  bool _syncKittyTexture(ui.Image image, ByteData? data) {
+    if (data == null) return false;
+    final existing = _kittyTextures.remove(image);
+    final uploaded = _uploadRgbaTexture(
+      existing: existing?.texture,
+      existingWidth: existing?.width ?? 0,
+      existingHeight: existing?.height ?? 0,
+      width: image.width,
+      height: image.height,
+      rgbaData: data,
+    );
+    if (uploaded == null) return false;
+    _kittyTextures[image] = _GlCachedTexture(
+      texture: uploaded,
+      width: image.width,
+      height: image.height,
+    );
+    while (_kittyTextures.length > _maxKittyTextureCacheEntries) {
+      final oldestKey = _kittyTextures.keys.first;
+      final evicted = _kittyTextures.remove(oldestKey);
+      if (evicted != null && !_gl.isContextLost()) {
+        _gl.deleteTexture(evicted.texture);
+      }
+    }
+    return true;
+  }
+
+  bool _isAtlasTextureReady(ui.Image atlasImage) =>
+      identical(atlasImage, _cachedAtlasImage) && _atlasTexture != null;
+
+  bool _isWallpaperTextureReady(ui.Image? wallpaperImage) =>
+      wallpaperImage == null ||
+      (identical(wallpaperImage, _cachedWallpaperImage) &&
+          _wallpaperTexture != null);
+
+  void _ensureCanvasSize(int width, int height) {
+    if (_canvas.width != width || _canvas.height != height) {
+      _canvas.width = width;
+      _canvas.height = height;
+    }
+  }
+
+  bool _renderDirectForegroundStage({
+    required List<ShaderPassInvocation> foregroundPasses,
+    required bool hasWallpaperTexture,
+    required int width,
+    required int height,
+  }) {
+    if (!_ensureChainTarget(width, height)) return false;
+    _blitFramebuffer(
+      _sceneTarget!.framebuffer,
+      _chainTarget!.framebuffer,
+      width: width,
+      height: height,
+      flipY: true,
+    );
+    return _executePasses(
+      foregroundPasses,
+      width: width,
+      height: height,
+      hasInputTexture: true,
+      hasWallpaperTexture: hasWallpaperTexture,
+      initialChannel0: _chainTarget!.texture,
+      finalFramebuffer: null,
+    );
+  }
+
+  bool _areDirectTexturesPrimed(
+    ui.Image atlasImage,
+    ui.Image? wallpaperImage,
+    GpuAtlasQuadBatch batch,
+  ) {
+    if (!_isAtlasTextureReady(atlasImage) ||
+        !_isWallpaperTextureReady(wallpaperImage)) {
+      return false;
+    }
+    for (final quad in batch.kittyQuads) {
+      if (!_kittyTextures.containsKey(quad.image)) return false;
+    }
+    return true;
+  }
+
+  bool _ensureDirectAtlasResources() {
+    if (_directAtlasInitialized) return true;
+    if (_isContextUnavailable || _directAtlasInitFailed) return false;
+
+    if (!_initDirectAtlasProgram() || !_initDirectAtlasBuffers()) {
+      _directAtlasInitFailed = true;
+      return false;
+    }
+    _directAtlasInitialized = true;
+    return true;
+  }
+
+  bool _initDirectAtlasProgram() {
+    final vert = _compileInlineShader(
+      web.WebGL2RenderingContext.VERTEX_SHADER,
+      GpuAtlasShaders.webgl2VertexSource,
+    );
+    final frag = _compileInlineShader(
+      web.WebGL2RenderingContext.FRAGMENT_SHADER,
+      GpuAtlasShaders.webgl2FragmentSource,
+    );
+    final program = _gl.createProgram();
+    if (vert == null || frag == null || program == null) {
+      if (vert != null) _gl.deleteShader(vert);
+      if (frag != null) _gl.deleteShader(frag);
+      if (program != null) _gl.deleteProgram(program);
+      return false;
+    }
+    _gl.attachShader(program, vert);
+    _gl.attachShader(program, frag);
+    _gl.linkProgram(program);
+    final linked = _asJsBool(
+      _gl.getProgramParameter(program, web.WebGL2RenderingContext.LINK_STATUS),
+    );
+    _gl.detachShader(program, vert);
+    _gl.detachShader(program, frag);
+    _gl.deleteShader(vert);
+    _gl.deleteShader(frag);
+    if (!linked) {
+      _gl.deleteProgram(program);
+      return false;
+    }
+    _atlasProgram = program;
+    _atlasViewportLoc = _gl.getUniformLocation(
+      program,
+      GpuAtlasShaders.viewportUniformName,
+    );
+    _gl.useProgram(program);
+    _bindSamplerIfActive(program, GpuAtlasShaders.atlasSamplerName, 0);
+    _gl.useProgram(null);
+    return true;
+  }
+
+  web.WebGLShader? _compileInlineShader(int type, String source) {
+    final shader = _gl.createShader(type);
+    if (shader == null) return null;
+    _gl.shaderSource(shader, source);
+    _gl.compileShader(shader);
+    if (!_asJsBool(
+      _gl.getShaderParameter(shader, web.WebGL2RenderingContext.COMPILE_STATUS),
+    )) {
+      _gl.deleteShader(shader);
+      return null;
+    }
+    return shader;
+  }
+
+  bool _initDirectAtlasBuffers() {
+    final unitVbo = _gl.createBuffer();
+    final instVbo = _gl.createBuffer();
+    final atlasVao = _gl.createVertexArray();
+    final singleVbo = _gl.createBuffer();
+    final singleVao = _gl.createVertexArray();
+    if (unitVbo == null ||
+        instVbo == null ||
+        atlasVao == null ||
+        singleVbo == null ||
+        singleVao == null) {
+      if (unitVbo != null) _gl.deleteBuffer(unitVbo);
+      if (instVbo != null) _gl.deleteBuffer(instVbo);
+      if (atlasVao != null) _gl.deleteVertexArray(atlasVao);
+      if (singleVbo != null) _gl.deleteBuffer(singleVbo);
+      if (singleVao != null) _gl.deleteVertexArray(singleVao);
+      return false;
+    }
+
+    _gl.bindBuffer(web.WebGL2RenderingContext.ARRAY_BUFFER, unitVbo);
+    _gl.bufferData(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      GpuAtlasShaders.unitQuadVertices.toJS,
+      web.WebGL2RenderingContext.STATIC_DRAW,
+    );
+
+    const initialCapBytes = 256 * GpuAtlasQuadBatch.bytesPerInstance;
+    _gl.bindBuffer(web.WebGL2RenderingContext.ARRAY_BUFFER, instVbo);
+    _gl.bufferData(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      initialCapBytes.toJS,
+      web.WebGL2RenderingContext.DYNAMIC_DRAW,
+    );
+
+    _gl.bindBuffer(web.WebGL2RenderingContext.ARRAY_BUFFER, singleVbo);
+    _gl.bufferData(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      GpuAtlasQuadBatch.bytesPerInstance.toJS,
+      web.WebGL2RenderingContext.DYNAMIC_DRAW,
+    );
+
+    _configureInstancedQuadVao(atlasVao, unitVbo, instVbo);
+    _configureInstancedQuadVao(singleVao, unitVbo, singleVbo);
+
+    _atlasUnitQuadBuffer = unitVbo;
+    _atlasInstanceBuffer = instVbo;
+    _atlasInstanceCapBytes = initialCapBytes;
+    _atlasVao = atlasVao;
+    _singleQuadInstanceBuffer = singleVbo;
+    _singleQuadVao = singleVao;
+    return true;
+  }
+
+  void _configureInstancedQuadVao(
+    web.WebGLVertexArrayObject vao,
+    web.WebGLBuffer unitVbo,
+    web.WebGLBuffer instanceVbo,
+  ) {
+    _gl.bindVertexArray(vao);
+    _gl.bindBuffer(web.WebGL2RenderingContext.ARRAY_BUFFER, unitVbo);
+    _gl.enableVertexAttribArray(0);
+    _gl.vertexAttribPointer(
+      0,
+      2,
+      web.WebGL2RenderingContext.FLOAT,
+      false,
+      0,
+      0,
+    );
+    _gl.vertexAttribDivisor(0, 0);
+
+    _gl.bindBuffer(web.WebGL2RenderingContext.ARRAY_BUFFER, instanceVbo);
+    _bindInstanceAttribOffsets(0);
+    for (var loc = 1; loc <= 4; loc++) {
+      _gl.enableVertexAttribArray(loc);
+      _gl.vertexAttribDivisor(loc, 1);
+    }
+    _gl.bindVertexArray(null);
+    _gl.bindBuffer(web.WebGL2RenderingContext.ARRAY_BUFFER, null);
+  }
+
+  void _bindInstanceAttribOffsets(int startInstance) {
+    const stride = GpuAtlasQuadBatch.bytesPerInstance;
+    final baseOffset = startInstance * stride;
+    for (var loc = 1; loc <= 4; loc++) {
+      _gl.vertexAttribPointer(
+        loc,
+        4,
+        web.WebGL2RenderingContext.FLOAT,
+        false,
+        stride,
+        baseOffset + (loc - 1) * 16,
+      );
+    }
+  }
+
+  bool _renderDirectBackgroundStage({
+    required List<ShaderPassInvocation> backgroundPasses,
+    required ui.Image? wallpaperImage,
+    required web.WebGLFramebuffer? sceneFbo,
+    required int width,
+    required int height,
+  }) {
+    if (backgroundPasses.isNotEmpty) {
+      return _executePasses(
+        backgroundPasses,
+        width: width,
+        height: height,
+        hasInputTexture: false,
+        hasWallpaperTexture: wallpaperImage != null,
+        finalFramebuffer: sceneFbo,
+      );
+    }
+
+    _gl.bindFramebuffer(web.WebGL2RenderingContext.FRAMEBUFFER, sceneFbo);
+    _gl.viewport(0, 0, width, height);
+    _gl.clearColor(0.0, 0.0, 0.0, 0.0);
+    _gl.clear(web.WebGL2RenderingContext.COLOR_BUFFER_BIT);
+    if (wallpaperImage == null || _wallpaperTexture == null) return true;
+
+    final uv = GpuAtlasShaders.computeCoverUvRect(
+      imageWidth: wallpaperImage.width.toDouble(),
+      imageHeight: wallpaperImage.height.toDouble(),
+      viewportWidth: width.toDouble(),
+      viewportHeight: height.toDouble(),
+    );
+    GpuAtlasShaders.writeTexturedQuadInstance(
+      _singleQuadScratch,
+      dstX: 0.0,
+      dstY: 0.0,
+      dstWidth: width.toDouble(),
+      dstHeight: height.toDouble(),
+      u0: uv.u0,
+      v0: uv.v0,
+      u1: uv.u1,
+      v1: uv.v1,
+    );
+    _gl.useProgram(_atlasProgram);
+    _gl.uniform2f(_atlasViewportLoc, width.toDouble(), height.toDouble());
+    _drawSingleTexturedQuad(_wallpaperTexture!);
+    _gl.bindVertexArray(null);
+    _gl.useProgram(null);
+    _unbindSamplerTextures();
+    return true;
+  }
+
+  void _renderDirectTerminalStage({
+    required GpuAtlasQuadBatch batch,
+    required web.WebGLFramebuffer? sceneFbo,
+    required int width,
+    required int height,
+  }) {
+    if (batch.instanceCount <= 0 && batch.kittyQuads.isEmpty) return;
+
+    _uploadAtlasInstancesIfNeeded(batch);
+    _gl.bindFramebuffer(web.WebGL2RenderingContext.FRAMEBUFFER, sceneFbo);
+    _gl.viewport(0, 0, width, height);
+    _gl.enable(web.WebGL2RenderingContext.BLEND);
+    _gl.blendFunc(
+      web.WebGL2RenderingContext.ONE,
+      web.WebGL2RenderingContext.ONE_MINUS_SRC_ALPHA,
+    );
+    _gl.useProgram(_atlasProgram);
+    _gl.uniform2f(_atlasViewportLoc, width.toDouble(), height.toDouble());
+
+    try {
+      final italicStart = batch.italicStartInstanceIndex;
+      final kittySplit = batch.kittyInsertInstanceIndex;
+      final total = batch.instanceCount;
+
+      if (italicStart > 0) {
+        _drawAtlasSlice(
+          0,
+          italicStart,
+          filter: web.WebGL2RenderingContext.NEAREST,
+        );
+      }
+      if (kittySplit > italicStart) {
+        _drawAtlasSlice(
+          italicStart,
+          kittySplit - italicStart,
+          filter: web.WebGL2RenderingContext.LINEAR,
+        );
+      }
+      if (batch.kittyQuads.isNotEmpty) {
+        _drawKittyQuads(batch.kittyQuads);
+      }
+      if (total > kittySplit) {
+        _drawAtlasSlice(
+          kittySplit,
+          total - kittySplit,
+          filter: web.WebGL2RenderingContext.NEAREST,
+        );
+      }
+    } finally {
+      _gl.disable(web.WebGL2RenderingContext.BLEND);
+      _gl.bindVertexArray(null);
+      _gl.useProgram(null);
+      _unbindSamplerTextures();
+    }
+  }
+
+  void _uploadAtlasInstancesIfNeeded(GpuAtlasQuadBatch batch) {
+    final count = batch.instanceCount;
+    if (count <= 0) return;
+    if (identical(batch.instanceData, _uploadedInstanceData) &&
+        batch.generation == _uploadedGeneration &&
+        count == _uploadedInstanceCount) {
+      return;
+    }
+
+    final byteLength = count * GpuAtlasQuadBatch.bytesPerInstance;
+    final activeFloats = count * GpuAtlasQuadBatch.floatsPerInstance;
+    final activeSlice = Float32List.sublistView(
+      batch.instanceData,
+      0,
+      activeFloats,
+    );
+    _gl.bindBuffer(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      _atlasInstanceBuffer,
+    );
+    if (byteLength > _atlasInstanceCapBytes) {
+      var nextCap = _atlasInstanceCapBytes == 0
+          ? byteLength
+          : _atlasInstanceCapBytes;
+      while (nextCap < byteLength) {
+        nextCap <<= 1;
+      }
+      _gl.bufferData(
+        web.WebGL2RenderingContext.ARRAY_BUFFER,
+        nextCap.toJS,
+        web.WebGL2RenderingContext.DYNAMIC_DRAW,
+      );
+      _atlasInstanceCapBytes = nextCap;
+    }
+    _gl.bufferSubData(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      0,
+      activeSlice.toJS,
+    );
+    _gl.bindBuffer(web.WebGL2RenderingContext.ARRAY_BUFFER, null);
+    _uploadedInstanceData = batch.instanceData;
+    _uploadedGeneration = batch.generation;
+    _uploadedInstanceCount = count;
+  }
+
+  void _drawAtlasSlice(int startInstance, int count, {required int filter}) {
+    final atlasTex = _atlasTexture;
+    if (atlasTex == null || count <= 0) return;
+    _gl.activeTexture(web.WebGL2RenderingContext.TEXTURE0);
+    _gl.bindTexture(web.WebGL2RenderingContext.TEXTURE_2D, atlasTex);
+    if (_atlasFilterMode != filter) {
+      _gl.texParameteri(
+        web.WebGL2RenderingContext.TEXTURE_2D,
+        web.WebGL2RenderingContext.TEXTURE_MIN_FILTER,
+        filter,
+      );
+      _gl.texParameteri(
+        web.WebGL2RenderingContext.TEXTURE_2D,
+        web.WebGL2RenderingContext.TEXTURE_MAG_FILTER,
+        filter,
+      );
+      _atlasFilterMode = filter;
+    }
+    _gl.bindVertexArray(_atlasVao);
+    _gl.bindBuffer(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      _atlasInstanceBuffer,
+    );
+    _bindInstanceAttribOffsets(startInstance);
+    _gl.drawArraysInstanced(web.WebGL2RenderingContext.TRIANGLES, 0, 6, count);
+  }
+
+  void _drawKittyQuads(List<GpuKittyQuad> quads) {
+    for (final quad in quads) {
+      final cached = _kittyTextures.remove(quad.image);
+      if (cached == null) continue;
+      _kittyTextures[quad.image] = cached;
+      GpuAtlasShaders.writeTexturedQuadInstance(
+        _singleQuadScratch,
+        dstX: quad.dstX,
+        dstY: quad.dstY,
+        dstWidth: quad.dstWidth,
+        dstHeight: quad.dstHeight,
+        u0: quad.u0,
+        v0: quad.v0,
+        u1: quad.u1,
+        v1: quad.v1,
+      );
+      _drawSingleTexturedQuad(cached.texture);
+    }
+  }
+
+  void _drawSingleTexturedQuad(web.WebGLTexture texture) {
+    _gl.activeTexture(web.WebGL2RenderingContext.TEXTURE0);
+    _gl.bindTexture(web.WebGL2RenderingContext.TEXTURE_2D, texture);
+    _gl.bindVertexArray(_singleQuadVao);
+    _gl.bindBuffer(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      _singleQuadInstanceBuffer,
+    );
+    _gl.bufferSubData(
+      web.WebGL2RenderingContext.ARRAY_BUFFER,
+      0,
+      _singleQuadScratch.toJS,
+    );
+    _gl.drawArraysInstanced(web.WebGL2RenderingContext.TRIANGLES, 0, 6, 1);
   }
 
   _GlPingPongTarget? _ensurePrevFrameTarget(String key, int width, int height) {
@@ -1244,6 +1936,18 @@ final class _WebGl2ShaderHandle implements CompiledShaderHandle {
   void dispose() {
     backend._disposeHandle(this);
   }
+}
+
+final class _GlCachedTexture {
+  final web.WebGLTexture texture;
+  final int width;
+  final int height;
+
+  const _GlCachedTexture({
+    required this.texture,
+    required this.width,
+    required this.height,
+  });
 }
 
 final class _GlFboTarget {

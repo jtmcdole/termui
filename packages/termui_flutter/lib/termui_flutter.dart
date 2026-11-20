@@ -78,11 +78,14 @@ export 'src/rendering/atlas.dart'
 export 'src/rendering/atlas_controller.dart' show GlyphAtlasController;
 export 'src/rendering/atlas_quad_table.dart' show AtlasDecorationKind;
 export 'src/rendering/builtin_shaders.dart' show BuiltinShaders;
+export 'src/rendering/gpu_atlas_batch.dart'
+    show GpuAtlasQuadBatch, GpuKittyQuad;
 export 'src/rendering/painter.dart'
     show HoveredLinkCellStyles, HoveredLinkStyler;
 export 'src/rendering/shader_backend.dart'
     show
         CompiledShaderHandle,
+        DirectTerminalShaderBackend,
         ShaderCompileException,
         ShaderPassInvocation,
         TerminalShaderBackend;

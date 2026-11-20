@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'gpu_atlas_batch.dart';
 import 'shader_spec.dart';
 
 /// Opaque handle representing a compiled shader pipeline owned by a
@@ -103,4 +104,44 @@ abstract interface class TerminalShaderBackend {
   /// Disposes all compiled handles, framebuffers, and GPU contexts owned by
   /// this backend.
   void dispose();
+}
+
+/// Optional additive contract implemented by [TerminalShaderBackend]s that can
+/// render staged terminal atlas and Kitty quads directly inside the GPU shader
+/// context, avoiding `RepaintBoundary.toImage()` and Web RGBA readbacks.
+abstract interface class DirectTerminalShaderBackend
+    implements TerminalShaderBackend {
+  /// Whether direct instanced terminal rendering is currently available.
+  ///
+  /// Returns `false` if internal atlas shader compilation permanently failed or
+  /// the GPU backend cannot support instanced rendering.
+  bool get supportsDirectTerminalRender;
+
+  /// Asynchronously prepares GPU resources required by [renderTerminalFrameSync].
+  ///
+  /// On Web, uploads uncached [atlasImage], [wallpaperImage], and [kittyImages]
+  /// pixels with per-image in-flight deduplication. On Native Desktop, compiles
+  /// the internal Impeller instanced atlas pipeline once. Returns `true` when
+  /// resources are ready for synchronous rendering.
+  Future<bool> prepareDirectResources({
+    required ui.Image atlasImage,
+    ui.Image? wallpaperImage,
+    Iterable<ui.Image> kittyImages = const <ui.Image>[],
+  });
+
+  /// Synchronously renders [backgroundPasses] (or [wallpaperImage] cover fill),
+  /// staged terminal atlas + Kitty quads from [batch], and [foregroundPasses]
+  /// inside one GPU context.
+  ///
+  /// Returns `null` when any required texture or internal pipeline is not yet
+  /// primed (or after context loss), signaling the host to trigger
+  /// [prepareDirectResources] and bridge via fallback.
+  ui.Image? renderTerminalFrameSync({
+    required List<ShaderPassInvocation> backgroundPasses,
+    required List<ShaderPassInvocation> foregroundPasses,
+    required ui.Size physicalSize,
+    required ui.Image atlasImage,
+    required GpuAtlasQuadBatch batch,
+    ui.Image? wallpaperImage,
+  });
 }
