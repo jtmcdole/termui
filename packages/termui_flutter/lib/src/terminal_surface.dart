@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/buffer.dart';
+import 'package:termui/ui/glyph_cell_list.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
@@ -20,6 +21,7 @@ import 'backend.dart';
 import 'rendering/atlas.dart';
 import 'rendering/atlas_controller.dart';
 import 'rendering/painter.dart';
+import 'rendering/staging_cache.dart';
 import 'selection_gesture_machine.dart';
 import 'service/terminal_service.dart';
 import 'terminal_ime_client.dart';
@@ -169,6 +171,11 @@ final class TerminalSurface extends StatefulWidget {
   /// Enables multi-cell font ligatures. Defaults to `false`.
   final bool enableLigatures;
 
+  /// Enables per-row sprite staging cache in [TuiAtlasPainter]. Defaults to `true`.
+  ///
+  /// Set to `false` as a runtime rollback switch to restage every row on each paint.
+  final bool enableRowCache;
+
   /// Optional external text selection controller.
   final TerminalSelectionController? selectionController;
 
@@ -262,6 +269,7 @@ final class TerminalSurface extends StatefulWidget {
     this.service = const DefaultTerminalService(),
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
+    this.enableRowCache = true,
     this.selectionController,
     this.topVirtualRow = 0,
     this.topVirtualRowProvider,
@@ -298,7 +306,15 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   late TerminalImeClient _imeClient;
   late bool _ownsImeClient;
   late _KittyGpuImageCache _kittyCache;
+  final TuiAtlasStagingCache _stagingCache = TuiAtlasStagingCache();
   final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
+
+  TextPainter? _composingPainter;
+  String _composingPainterText = '';
+  String _composingPainterFontFamily = '';
+  List<String>? _composingPainterFontFallback;
+  double _composingPainterFontSize = 0.0;
+  int _composingPainterColorArgb = 0;
 
   bool _hadActiveBuffer = false;
   bool _bufferResourcesDirty = false;
@@ -398,6 +414,14 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   /// Active leaf state of the selection gesture HSM (for diagnostics and tests).
   @visibleForTesting
   SelectionGestureState get debugGestureState => _gestureMachine.state;
+
+  /// Active row-staging cache owned by this surface (for diagnostics and tests).
+  @visibleForTesting
+  TuiAtlasStagingCache get debugStagingCache => _stagingCache;
+
+  /// Cached IME pre-edit [TextPainter], if currently composing (for tests).
+  @visibleForTesting
+  TextPainter? get debugComposingPainter => _composingPainter;
 
   MouseCursor get _effectiveCursor =>
       (_builtinLinkOpenEnabled &&
@@ -795,6 +819,10 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       }
       _prepareActiveBufferResources();
     }
+    if (oldWidget.enableRowCache != widget.enableRowCache) {
+      _stagingCache.invalidateAllRows();
+    }
+    _syncComposingPainter();
     _gestureMachine.onEdgeAutoScroll = widget.onSelectionAutoScroll != null
         ? _handleEdgeAutoScroll
         : null;
@@ -841,14 +869,68 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (_ownsAtlasController) {
       _atlasController.dispose();
     }
+    _disposeComposingPainter();
     _kittyCache.dispose();
     _paintNotifier.dispose();
     super.dispose();
   }
 
+  void _disposeComposingPainter() {
+    _composingPainter?.dispose();
+    _composingPainter = null;
+    _composingPainterText = '';
+    _composingPainterFontFamily = '';
+    _composingPainterFontFallback = null;
+    _composingPainterFontSize = 0.0;
+    _composingPainterColorArgb = 0;
+  }
+
+  void _syncComposingPainter() {
+    final text = widget.enableIme ? _imeClient.composingText : '';
+    final atlas = _atlasController.atlas;
+    if (text.isEmpty || atlas == null) {
+      if (_composingPainter != null) _disposeComposingPainter();
+      return;
+    }
+    final fontFamily = _atlasController.fontFamily;
+    final fontFallback = _atlasController.fontFamilyFallback;
+    final fontSize = atlas.fontSize;
+    final colorArgb = widget.foregroundColor.toARGB32();
+    if (_composingPainter != null &&
+        _composingPainterText == text &&
+        _composingPainterFontFamily == fontFamily &&
+        listEquals(_composingPainterFontFallback, fontFallback) &&
+        _composingPainterFontSize == fontSize &&
+        _composingPainterColorArgb == colorArgb) {
+      return;
+    }
+    _composingPainter?.dispose();
+    _composingPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFallback,
+          fontSize: fontSize,
+          color: widget.foregroundColor,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    _composingPainterText = text;
+    _composingPainterFontFamily = fontFamily;
+    _composingPainterFontFallback = fontFallback == null
+        ? null
+        : List<String>.unmodifiable(fontFallback);
+    _composingPainterFontSize = fontSize;
+    _composingPainterColorArgb = colorArgb;
+  }
+
   void _onAtlasChanged() {
     if (!mounted) return;
     _syncTerminalCellMetrics();
+    _syncComposingPainter();
     _prepareActiveBufferResources();
     setState(() {});
     _scheduleGeometrySync();
@@ -901,6 +983,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
 
   void _onImeComposingChanged() {
     if (!mounted) return;
+    _syncComposingPainter();
     setState(() {});
     _scheduleGeometrySync();
   }
@@ -2053,6 +2136,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _hadActiveBuffer = buf != null;
     _lastPaintedBuffer = buf;
     _lastPaintedActivePtySize = activePty;
+    _syncComposingPainter();
     return Container(
       width: layoutSize.width,
       height: layoutSize.height,
@@ -2065,6 +2149,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
                 repaint: _paintNotifier,
                 buffer: buf,
                 atlas: _atlasController.atlas!,
+                stagingCache: widget.enableRowCache ? _stagingCache : null,
+                composingPainter: _composingPainter,
                 fontFamily: _atlasController.fontFamily,
                 fontFamilyFallback: _atlasController.fontFamilyFallback,
                 fallbackPainters: _atlasController.fallbackPainters,
@@ -2128,18 +2214,28 @@ final class _KittyGpuImageCache {
     if (!buffer.hasKittyImages) return;
     final width = buffer.width;
     final total = width * buffer.height;
-    final chars = buffer.characters;
+    final codes = buffer.glyphCodes;
+    final glyphCells = buffer.glyphCellList;
     final attrs = buffer.attributes;
     KittyImageData? lastKittyData;
     for (var i = 0; i < total; i++) {
-      final mods = attrs[i * 3 + 2];
-      final hasKittyMod = Modifier.has(mods, Modifier.kittyPlaceholder);
-      final char = chars[i];
-      if (!hasKittyMod) {
-        if (char.length < 2 || !char.startsWith(kittyPlaceholderChar)) {
-          continue;
-        }
-      } else if (char.isEmpty || char == ' ') {
+      final code = codes[i];
+      if (code == GlyphCellList.wideContinuationCode ||
+          code == GlyphCellList.spaceCode) {
+        continue;
+      }
+      final hasKittyMod = Modifier.has(
+        attrs[i * 3 + 2],
+        Modifier.kittyPlaceholder,
+      );
+      if (!hasKittyMod &&
+          code != kittyPlaceholderCodePoint &&
+          (code & GlyphCellList.clusterFlag) == 0) {
+        continue;
+      }
+      final char = glyphCells.decodeCode(code);
+      if (!hasKittyMod &&
+          (char.length < 2 || !char.startsWith(kittyPlaceholderChar))) {
         continue;
       }
       lastKittyData = _resolveAndEnsure(
