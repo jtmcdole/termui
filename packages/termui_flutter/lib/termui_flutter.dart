@@ -77,13 +77,32 @@ export 'src/rendering/atlas.dart'
     show GlyphAtlas, GlyphAtlasGenerator, GlyphStyleVariant;
 export 'src/rendering/atlas_controller.dart' show GlyphAtlasController;
 export 'src/rendering/atlas_quad_table.dart' show AtlasDecorationKind;
+export 'src/rendering/builtin_shaders.dart' show BuiltinShaders;
 export 'src/rendering/painter.dart'
     show HoveredLinkCellStyles, HoveredLinkStyler;
+export 'src/rendering/shader_backend.dart'
+    show
+        CompiledShaderHandle,
+        ShaderCompileException,
+        ShaderPassInvocation,
+        TerminalShaderBackend;
+export 'src/rendering/shader_spec.dart'
+    show
+        ShaderAnimationMode,
+        ShaderBackendKind,
+        ShaderPassSpec,
+        TerminalShaderConfig,
+        TerminalShaderPreset,
+        TerminalShaderStage,
+        TerminalShaderUniforms;
+export 'src/rendering/shadertoy_glsl_shim.dart'
+    show ShadertoyGlslAnalysis, ShadertoyGlslShim, ShimmedShaderPair;
 export 'src/rendering/staging_cache.dart' show TuiAtlasStagingCache;
 export 'src/util/file_saver.dart' show saveFile;
 export 'src/util/font_helper.dart' show waitForFontsToLoad;
 export 'src/util/url_launcher.dart'
     show isAllowedExternalUrl, parseAllowedExternalUri;
+
 export 'package:termui/ui/widgets/interactive/selection_controller.dart'
     show
         ResolvedTerminalLink,

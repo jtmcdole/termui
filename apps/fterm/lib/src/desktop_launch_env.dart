@@ -6,12 +6,11 @@ import 'desktop_launch_env_stub.dart'
 import 'launch_config.dart';
 
 /// Pure-Dart factory seam building a platform [IapTokenProvider] at startup.
-typedef DesktopIapProviderBuilder =
-    IapTokenProvider? Function({
-      required Uri serverUri,
-      String? serviceAccount,
-      String? keyFilePath,
-    });
+typedef DesktopIapProviderBuilder = IapTokenProvider? Function({
+  required Uri serverUri,
+  String? serviceAccount,
+  String? keyFilePath,
+});
 
 /// Startup connection overrides resolved from CLI flags or runtime environment
 /// variables on native desktop (`dart:io`) platforms.

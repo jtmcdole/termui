@@ -22,15 +22,20 @@ import 'local_host_driver.dart';
 typedef PaneBellCallback = void Function(String paneId);
 
 /// Callback notified when a terminal pane decodes an `ESC _ A` audio event.
-typedef PaneAudioCallback =
-    void Function(String paneId, TerminalAudioEvent event);
+typedef PaneAudioCallback = void Function(
+  String paneId,
+  TerminalAudioEvent event,
+);
 
 /// Callback notified when a pane's shell title updates via `OSC 0`/`OSC 2`.
 typedef PaneTitleCallback = void Function(String paneId, String title);
 
 /// Callback notified when a pane receives an `OSC 52` clipboard write.
-typedef PaneClipboardCallback =
-    void Function(String paneId, String selection, String text);
+typedef PaneClipboardCallback = void Function(
+  String paneId,
+  String selection,
+  String text,
+);
 
 /// Callback notified when a pane's backing shell or remote session exits.
 typedef PaneExitedCallback = void Function(String paneId, int exitCode);
@@ -114,26 +119,18 @@ final class FtermPaneController {
   FtermPaneController({
     required this.paneId,
     required this.port,
-    required TerminalColorResolver colorResolver,
+    required this._colorResolver,
     this.localHost,
     this.remoteSessionId,
-    Duration resizeDebounce = const Duration(milliseconds: 32),
-    PaneBellCallback? onBell,
-    PaneAudioCallback? onAudio,
-    PaneTitleCallback? onTitleChanged,
-    PaneClipboardCallback? onClipboard,
-    PaneExitedCallback? onExited,
-    void Function()? onShareChanged,
-    void Function(tui.Buffer buffer)? onFrameRedrawn,
-  }) : _colorResolver = colorResolver,
-       _resizeDebounce = resizeDebounce,
-       _onBell = onBell,
-       _onAudio = onAudio,
-       _onTitleChanged = onTitleChanged,
-       _onClipboard = onClipboard,
-       _onExited = onExited,
-       _onShareChanged = onShareChanged,
-       _onFrameRedrawn = onFrameRedrawn {
+    this._resizeDebounce = const Duration(milliseconds: 32),
+    this._onBell,
+    this._onAudio,
+    this._onTitleChanged,
+    this._onClipboard,
+    this._onExited,
+    this._onShareChanged,
+    this._onFrameRedrawn,
+  }) {
     _shellTitle = _resolveInitialTitle();
     _lastScrollbackClearSeq = port.scrollbackWindow.clearSeq;
     _attachPortListeners();

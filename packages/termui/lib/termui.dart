@@ -36,6 +36,7 @@ export 'ui/widgets/core/element.dart';
 export 'ui/widgets/core/single_child_element.dart';
 export 'ui/widgets/core/absorb_pointer.dart';
 export 'ui/effect.dart';
+export 'ui/shader_animation_mode.dart';
 export 'ui/widgets/core/build_context.dart';
 export 'ui/widgets/core/key.dart';
 export 'ui/widgets/core/geometry.dart';

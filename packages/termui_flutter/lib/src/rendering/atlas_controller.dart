@@ -66,11 +66,10 @@ final class GlyphAtlasController extends ChangeNotifier {
   /// Creates a shared [GlyphAtlasController] for the given font metrics.
   GlyphAtlasController({
     double fontSize = 13.0,
-    String fontFamily = 'Cascadia Mono',
+    this._fontFamily = 'Cascadia Mono',
     List<String>? fontFamilyFallback,
     double devicePixelRatio = 1.0,
   }) : _fontSize = _sanitizePositive(fontSize, 13.0),
-       _fontFamily = fontFamily,
        _fontFamilyFallback = fontFamilyFallback == null
            ? null
            : List<String>.unmodifiable(fontFamilyFallback),

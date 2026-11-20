@@ -75,21 +75,15 @@ final class AtlasQuadTable {
 
   AtlasQuadTable._({
     required this.ltrbQuads,
-    required Int32List asciiOffsets,
-    required Int32List boxBlockOffsets,
-    required Int32List brailleOffsets,
-    required Int32List decorationOffsets,
+    required this._asciiOffsets,
+    required this._boxBlockOffsets,
+    required this._brailleOffsets,
+    required this._decorationOffsets,
     required Int32List hashKeys,
-    required Int32List hashValues,
-    required int hashCount,
-  }) : _asciiOffsets = asciiOffsets,
-       _boxBlockOffsets = boxBlockOffsets,
-       _brailleOffsets = brailleOffsets,
-       _decorationOffsets = decorationOffsets,
-       _hashKeys = hashKeys,
-       _hashValues = hashValues,
-       _hashMask = hashKeys.length - 1,
-       _hashCount = hashCount;
+    required this._hashValues,
+    required this._hashCount,
+  }) : _hashKeys = hashKeys,
+       _hashMask = hashKeys.length - 1;
 
   /// Number of quad entries stored in [ltrbQuads].
   int get quadCount => ltrbQuads.length >> 2;

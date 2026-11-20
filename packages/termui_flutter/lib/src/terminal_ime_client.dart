@@ -285,22 +285,16 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
 
   /// Creates a [TerminalImeClient] with optional input/mode callbacks.
   TerminalImeClient({
-    int Function()? kittyKeyboardFlags,
-    bool Function()? reportKeyReleaseEvents,
+    this._kittyKeyboardFlags,
+    this._reportKeyReleaseEvents,
     this.macosOptionAsAlt = false,
     this.routePrintableThroughIme = true,
-    void Function(term.KeyEvent event)? onKeyEvent,
-    void Function(String text)? onTextInput,
-    bool Function(KeyEvent event, Set<term.Modifier> modifiers)? onHostShortcut,
-    VoidCallback? onComposingChanged,
-    VoidCallback? onModifiersChanged,
-  }) : _kittyKeyboardFlags = kittyKeyboardFlags,
-       _reportKeyReleaseEvents = reportKeyReleaseEvents,
-       _onKeyEvent = onKeyEvent,
-       _onTextInput = onTextInput,
-       _onHostShortcut = onHostShortcut,
-       _onComposingChanged = onComposingChanged,
-       _onModifiersChanged = onModifiersChanged;
+    this._onKeyEvent,
+    this._onTextInput,
+    this._onHostShortcut,
+    this._onComposingChanged,
+    this._onModifiersChanged,
+  });
 
   /// Active Kitty keyboard flags (`0..31`).
   int get kittyKeyboardFlags =>

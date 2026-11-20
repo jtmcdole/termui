@@ -1,0 +1,698 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
+import 'package:termui_flutter/src/rendering/shader_backend.dart';
+import 'package:termui_flutter/src/rendering/shader_spec.dart';
+import 'package:termui_flutter/src/rendering/shadertoy_glsl_shim.dart';
+
+/// Community-style Ghostty shaders exercising verbatim `shadertoy_prefix.glsl`
+/// uniforms (`iPalette[256]`, `iBackgroundColor`, `iForegroundColor`,
+/// `iCurrentCursor`/`iPreviousCursor` `(x, y, w, h)`, `iCurrentCursorStyle`,
+/// `CURSORSTYLE_*`, `iFocus`, `iTimeFocus`, `iChannelResolution`, `texture2D`,
+/// and Kitty `iPrevFrame`).
+const Map<String, String> _ghosttyCommunityCorpus = <String, String>{
+  'ghostty_cursor_blaze': '''
+// Community-style Ghostty cursor smear / blaze shader
+float easeOut(float x) {
+  return 1.0 - pow(1.0 - clamp(x, 0.0, 1.0), 3.0);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / iResolution.xy;
+  vec4 terminal = texture2D(iChannel0, uv);
+  if (iCursorVisible == 0) {
+    fragColor = terminal;
+    return;
+  }
+  float dt = easeOut((iTime - iTimeCursorChange) / 0.25);
+  vec2 cur = iCurrentCursor.xy + iCurrentCursor.zw * 0.5;
+  vec2 prev = iPreviousCursor.xy + iPreviousCursor.zw * 0.5;
+  vec2 lerped = mix(prev, cur, dt);
+  float dist = length(fragCoord - lerped);
+  float glow = exp(-dist * 0.08) * (1.0 - dt);
+  vec3 tint = iCurrentCursorStyle == CURSORSTYLE_BAR
+      ? iCurrentCursorColor.rgb
+      : mix(iPreviousCursorColor.rgb, iCursorColor.rgb, dt);
+  fragColor = vec4(terminal.rgb + tint * glow * 0.6, terminal.a);
+}
+''',
+  'ghostty_palette_theme_tint': '''
+// Uses full 256-entry ANSI palette plus foreground/background colors
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / iResolution.xy;
+  vec4 base = texture(iChannel0, uv);
+  int idx = int(clamp(floor(uv.x * 255.0), 0.0, 255.0));
+  vec3 palColor = iPalette[idx];
+  vec3 accent = mix(iBackgroundColor, iForegroundColor, 0.15);
+  vec3 cr = iChannelResolution[0];
+  float safeScale = cr.x > 0.0 ? 0.04 : 0.03;
+  fragColor = vec4(mix(base.rgb, palColor + accent * 0.05, safeScale), base.a);
+}
+''',
+  'ghostty_focus_dim': '''
+// Static focus dim shader with smooth focus transition timestamp
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / iResolution.xy;
+  vec4 base = texture(iChannel0, uv);
+  float dimFactor = iFocus == 1 ? 1.0 : 0.72;
+  float edge = length(uv - 0.5);
+  vec3 tinted = mix(base.rgb * dimFactor, iBackgroundColor, (1.0 - dimFactor) * edge * 0.4);
+  fragColor = vec4(tinted, base.a + iTimeFocus * 0.0);
+}
+''',
+  'ghostty_cursor_styles_and_region': '''
+// Exercises all CURSORSTYLE_* constants, iMouse, iDate, iRegionRect, iCellSize
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / iResolution.xy;
+  vec4 base = texture(iChannel0, uv);
+  float styleWeight = 0.0;
+  if (iCurrentCursorStyle == CURSORSTYLE_BLOCK) styleWeight = 1.0;
+  else if (iCurrentCursorStyle == CURSORSTYLE_BAR) styleWeight = 0.75;
+  else if (iCurrentCursorStyle == CURSORSTYLE_UNDERLINE) styleWeight = 0.5;
+  else if (iCurrentCursorStyle == CURSORSTYLE_BLOCK_HOLLOW) styleWeight = 0.25;
+  vec2 cellUv = fract((fragCoord - iRegionRect.xy) / max(iCellSize, vec2(1.0)));
+  float pulse = 0.5 + 0.5 * sin(iDate.w + iMouse.x * 0.01 + float(iFrame) * 0.05);
+  fragColor = vec4(base.rgb + vec3(cellUv.x * 0.02 * styleWeight * pulse) + uParams1.rgb * 0.0, base.a);
+}
+''',
+  'kitty_prev_frame_trail': '''
+// Exercises Kitty/fterm iPrevFrame feedback plus iChannel1 wallpaper blend
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / iResolution.xy;
+  vec4 curr = texture(iChannel0, uv);
+  vec4 prev = texture(iPrevFrame, uv);
+  vec4 wp = texture(iChannel1, uv);
+  vec3 merged = max(curr.rgb, prev.rgb * 0.82);
+  fragColor = vec4(mix(merged, wp.rgb, 0.05), curr.a);
+}
+''',
+};
+
+String? _findImpellerc() {
+  final envPath = Platform.environment['FTERM_IMPELLERC_PATH'];
+  if (envPath != null && envPath.isNotEmpty && File(envPath).existsSync()) {
+    return envPath;
+  }
+  const candidates = <String>[
+    '/srv/opt/flutter/stable/bin/cache/artifacts/engine/linux-x64/impellerc',
+  ];
+  for (final path in candidates) {
+    if (File(path).existsSync()) return path;
+  }
+  final resolved = Platform.resolvedExecutable;
+  final binDir = File(resolved).parent;
+  final engineCache = File(
+    '${binDir.path}/cache/artifacts/engine/linux-x64/impellerc',
+  );
+  if (engineCache.existsSync()) return engineCache.path;
+  return null;
+}
+
+void main() {
+  group('ShadertoyGlslShim static analysis and validation', () {
+    test(
+      'detects usesTime, usesPrevFrame, samplesChannel0, samplesChannel1',
+      () {
+        final wp = ShadertoyGlslShim.analyze(BuiltinShaders.wallpaperWaveGlsl);
+        expect(wp.usesTime, isTrue);
+        expect(wp.usesPrevFrame, isFalse);
+        expect(wp.samplesChannel0, isFalse);
+        expect(wp.samplesChannel1, isTrue);
+
+        final scan = ShadertoyGlslShim.analyze(
+          BuiltinShaders.scanlineOverlayGlsl,
+        );
+        expect(scan.usesTime, isFalse);
+        expect(scan.usesPrevFrame, isFalse);
+        expect(scan.samplesChannel0, isTrue);
+        expect(scan.samplesChannel1, isFalse);
+
+        final phosphor = ShadertoyGlslShim.analyze(
+          BuiltinShaders.phosphorGlowGlsl,
+        );
+        expect(phosphor.usesTime, isFalse);
+        expect(phosphor.usesPrevFrame, isTrue);
+        expect(phosphor.samplesChannel0, isTrue);
+        expect(phosphor.samplesChannel1, isFalse);
+
+        final focusDim = ShadertoyGlslShim.analyze(
+          _ghosttyCommunityCorpus['ghostty_focus_dim']!,
+        );
+        expect(focusDim.usesTime, isFalse);
+        expect(focusDim.usesPrevFrame, isFalse);
+        expect(focusDim.samplesChannel0, isTrue);
+      },
+    );
+
+    test('ignores identifiers inside single-line and block comments', () {
+      const source = '''
+// iTime iPrevFrame iChannel1
+/*
+  iTimeDelta iFrame iPrevFrame
+  #not_an_include
+*/
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = texture(iChannel0, fragCoord / iResolution.xy);
+}
+''';
+      final analysis = ShadertoyGlslShim.analyze(source);
+      expect(analysis.usesTime, isFalse);
+      expect(analysis.usesPrevFrame, isFalse);
+      expect(analysis.samplesChannel0, isTrue);
+      expect(analysis.samplesChannel1, isFalse);
+    });
+
+    test('rejects #include directives including comment-obfuscated forms', () {
+      const plainInclude = '''
+#include "secret.glsl"
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''';
+      expect(
+        () => ShadertoyGlslShim.shim(plainInclude, shaderId: 'bad_inc'),
+        throwsA(
+          isA<ShaderCompileException>()
+              .having((e) => e.shaderId, 'shaderId', 'bad_inc')
+              .having((e) => e.message, 'message', contains('#include')),
+        ),
+      );
+
+      const obfuscatedInclude = '''
+#/*comment*/include <etc/passwd>
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''';
+      expect(
+        () => ShadertoyGlslShim.shim(obfuscatedInclude),
+        throwsA(isA<ShaderCompileException>()),
+      );
+    });
+
+    test('rejects empty sources, > 64 KiB sources, #version, and missing mainImage', () {
+      expect(
+        () => ShadertoyGlslShim.shim(''),
+        throwsA(isA<ShaderCompileException>()),
+      );
+
+      final oversized =
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  // ${'a' * (ShadertoyGlslShim.maxSourceBytes + 1)}\n'
+          '  fragColor = vec4(1.0);\n'
+          '}\n';
+      expect(
+        () => ShadertoyGlslShim.shim(oversized),
+        throwsA(
+          isA<ShaderCompileException>().having(
+            (e) => e.message,
+            'message',
+            contains('64 KiB'),
+          ),
+        ),
+      );
+
+      const withVersion = '''
+#version 300 es
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''';
+      expect(
+        () => ShadertoyGlslShim.shim(withVersion),
+        throwsA(isA<ShaderCompileException>()),
+      );
+
+      const noMainImage = 'vec4 helper() { return vec4(1.0); }';
+      expect(
+        () => ShadertoyGlslShim.shim(noMainImage),
+        throwsA(isA<ShaderCompileException>()),
+      );
+    });
+  });
+
+  group('ShadertoyGlslShim Impeller GLSL 460 and WebGL2 ES 3.00 emission', () {
+    test('emits verbatim Ghostty uniform block and UV flip wrappers for both targets', () {
+      final shimmed = ShadertoyGlslShim.shim(
+        _ghosttyCommunityCorpus['ghostty_cursor_blaze']!,
+        shaderId: 'cursor_blaze',
+      );
+
+      // Impeller GLSL 460 assertions
+      expect(shimmed.impellerVertexGlsl, contains('#version 460 core'));
+      expect(shimmed.impellerFragmentGlsl, contains('#version 460 core'));
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains(
+          'layout(set = 0, binding = 0, std140) uniform TerminalUniforms',
+        ),
+      );
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('layout(set = 0, binding = 1) uniform sampler2D iChannel0;'),
+      );
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('layout(set = 0, binding = 2) uniform sampler2D iChannel1;'),
+      );
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('layout(set = 0, binding = 3) uniform sampler2D iPrevFrame;'),
+      );
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('IMPELLER_TARGET_OPENGLES'),
+      );
+      expect(shimmed.impellerFragmentGlsl, contains('vec3 iPalette[256];'));
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('#define texture2D texture'),
+      );
+      expect(shimmed.impellerFragmentGlsl, contains('CURSORSTYLE_BLOCK = 0'));
+      expect(shimmed.impellerFragmentGlsl, contains('CURSORSTYLE_BAR = 1'));
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('CURSORSTYLE_UNDERLINE = 2'),
+      );
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('CURSORSTYLE_BLOCK_HOLLOW = 3'),
+      );
+      expect(
+        shimmed.impellerFragmentGlsl,
+        contains('vec2 fragCoord = v_uv * iResolution.xy;'),
+      );
+
+      // WebGL2 GLSL ES 3.00 assertions
+      expect(shimmed.webgl2VertexGlsl, contains('#version 300 es'));
+      expect(shimmed.webgl2FragmentGlsl, contains('#version 300 es'));
+      expect(shimmed.webgl2FragmentGlsl, contains('precision highp float;'));
+      expect(
+        shimmed.webgl2FragmentGlsl,
+        contains('layout(std140) uniform TerminalUniforms'),
+      );
+      expect(shimmed.webgl2FragmentGlsl, isNot(contains('layout(set = 0')));
+      expect(
+        shimmed.webgl2FragmentGlsl,
+        contains('uniform sampler2D iChannel0;'),
+      );
+      expect(
+        shimmed.webgl2FragmentGlsl,
+        contains('uniform sampler2D iChannel1;'),
+      );
+      expect(
+        shimmed.webgl2FragmentGlsl,
+        contains('uniform sampler2D iPrevFrame;'),
+      );
+      expect(shimmed.webgl2FragmentGlsl, contains('_termuiFlipUv'));
+    });
+
+    test('packs std140 UBO buffer with exact offsets and values', () {
+      final palette = Uint32List(256);
+      palette[0] = 0xFF112233;
+      palette[255] = 0xFFCCDDEE;
+      final uniforms = TerminalShaderUniforms(
+        width: 1920.0,
+        height: 1080.0,
+        timeSeconds: 12.5,
+        deltaSeconds: 0.016,
+        frameIndex: 42,
+        frameRate: 60.0,
+        currentCursorXywh: Float32List.fromList(<double>[10, 20, 8, 16]),
+        previousCursorXywh: Float32List.fromList(<double>[2, 4, 8, 16]),
+        currentCursorArgb: 0xFF336699,
+        previousCursorArgb: 0x80112233,
+        currentCursorStyle: TerminalShaderUniforms.cursorStyleBar,
+        timeCursorChange: 12.0,
+        cursorVisible: true,
+        isFocused: false,
+        timeFocusChange: 9.5,
+        foregroundArgb: 0xFFE6EDF3,
+        backgroundArgb: 0xFF0D1117,
+        palette256Argb: palette,
+        regionRect: const ui.Rect.fromLTWH(5, 6, 70, 80),
+        cellSize: const ui.Size(9, 18),
+        params: Float32List.fromList(<double>[1, 2, 3, 4, 5, 6, 7, 8]),
+        mouseXyzw: Float32List.fromList(<double>[100, 200, 300, 400]),
+        dateYmdSec: Float32List.fromList(<double>[2026, 11, 20, 3600]),
+        channelResolutions: Float32List.fromList(<double>[
+          1920,
+          1080,
+          1,
+          800,
+          600,
+          1,
+          1920,
+          1080,
+          1,
+          0,
+          0,
+          0,
+        ]),
+      );
+
+      final bytes = ByteData(ShadertoyGlslShim.uniformBufferByteLength);
+      ShadertoyGlslShim.packUniformsStd140(uniforms, bytes, flipUvY: true);
+
+      expect(bytes.getFloat32(0, Endian.little), closeTo(1920.0, 1e-5));
+      expect(bytes.getFloat32(4, Endian.little), closeTo(1080.0, 1e-5));
+      expect(bytes.getFloat32(8, Endian.little), closeTo(1.0, 1e-5));
+      expect(bytes.getFloat32(12, Endian.little), closeTo(12.5, 1e-5));
+      expect(bytes.getFloat32(16, Endian.little), closeTo(0.016, 1e-5));
+      expect(bytes.getInt32(20, Endian.little), 42);
+      expect(bytes.getFloat32(24, Endian.little), closeTo(60.0, 1e-5));
+      expect(bytes.getFloat32(28, Endian.little), closeTo(12.0, 1e-5));
+      expect(bytes.getFloat32(32, Endian.little), closeTo(100.0, 1e-5));
+      expect(bytes.getFloat32(48, Endian.little), closeTo(2026.0, 1e-5));
+      expect(bytes.getFloat32(64, Endian.little), closeTo(1920.0, 1e-5));
+      expect(bytes.getFloat32(80, Endian.little), closeTo(800.0, 1e-5));
+      // Palette slot 0 and 255
+      expect(bytes.getFloat32(128, Endian.little), closeTo(0x11 / 255.0, 1e-5));
+      expect(
+        bytes.getFloat32(128 + 255 * 16 + 8, Endian.little),
+        closeTo(0xEE / 255.0, 1e-5),
+      );
+      // Background & flip flag & foreground
+      expect(
+        bytes.getFloat32(4224, Endian.little),
+        closeTo(0x0D / 255.0, 1e-5),
+      );
+      expect(bytes.getFloat32(4236, Endian.little), closeTo(1.0, 1e-5));
+      expect(
+        bytes.getFloat32(4240, Endian.little),
+        closeTo(0xE6 / 255.0, 1e-5),
+      );
+      // Cursor geometry & colors & states
+      expect(bytes.getFloat32(4256, Endian.little), closeTo(10.0, 1e-5));
+      expect(bytes.getFloat32(4272, Endian.little), closeTo(2.0, 1e-5));
+      expect(
+        bytes.getFloat32(4288, Endian.little),
+        closeTo(0x33 / 255.0, 1e-5),
+      );
+      expect(
+        bytes.getFloat32(4316, Endian.little),
+        closeTo(0x80 / 255.0, 1e-5),
+      );
+      expect(
+        bytes.getInt32(4336, Endian.little),
+        TerminalShaderUniforms.cursorStyleBar,
+      );
+      expect(bytes.getInt32(4340, Endian.little), 1);
+      expect(bytes.getInt32(4344, Endian.little), 0);
+      expect(bytes.getFloat32(4348, Endian.little), closeTo(9.5, 1e-5));
+      // Region, cell size, params
+      expect(bytes.getFloat32(4352, Endian.little), closeTo(5.0, 1e-5));
+      expect(bytes.getFloat32(4368, Endian.little), closeTo(9.0, 1e-5));
+      expect(bytes.getFloat32(4384, Endian.little), closeTo(1.0, 1e-5));
+      expect(bytes.getFloat32(4412, Endian.little), closeTo(8.0, 1e-5));
+
+      expect(
+        () => ShadertoyGlslShim.packUniformsStd140(uniforms, ByteData(16)),
+        throwsRangeError,
+      );
+    });
+  });
+
+  group('Shader specs, presets, and wire codecs', () {
+    test('ShaderAnimationMode, ShaderBackendKind, and TerminalShaderPreset codecs round-trip', () {
+      for (final mode in ShaderAnimationMode.values) {
+        expect(ShaderAnimationMode.fromWireName(mode.wireName), mode);
+        expect(ShaderAnimationMode.fromWireName(mode.name), mode);
+      }
+      expect(
+        ShaderAnimationMode.fromWireName('bogus'),
+        ShaderAnimationMode.focused,
+      );
+
+      for (final kind in ShaderBackendKind.values) {
+        expect(ShaderBackendKind.tryFromWireName(kind.wireName), kind);
+        expect(ShaderBackendKind.tryFromWireName(kind.name), kind);
+      }
+      expect(ShaderBackendKind.tryFromWireName('bogus'), isNull);
+
+      for (final preset in TerminalShaderPreset.values) {
+        expect(TerminalShaderPreset.fromWireName(preset.wireName), preset);
+        expect(TerminalShaderPreset.fromWireName(preset.name), preset);
+      }
+      expect(
+        TerminalShaderPreset.fromWireName('bogus'),
+        TerminalShaderPreset.none,
+      );
+    });
+
+    test('ShaderPassSpec, TerminalShaderConfig, and ShaderCompileException semantics', () {
+      final passA = ShaderPassSpec(
+        id: 'p1',
+        stage: TerminalShaderStage.foreground,
+        preset: TerminalShaderPreset.crtLottes,
+        params: Float32List.fromList(<double>[0.1, 0.2]),
+      );
+      final passB = passA.copyWith();
+      expect(passA, equals(passB));
+      expect(passA.hashCode, equals(passB.hashCode));
+      expect(passA.params.length, ShaderPassSpec.paramCount);
+      expect(passA.params[0], closeTo(0.1, 1e-6));
+      expect(passA.params[7], 0.0);
+
+      expect(TerminalShaderConfig.empty.isEmpty, isTrue);
+      expect(TerminalShaderConfig.empty.hasBackgroundStage, isFalse);
+      expect(TerminalShaderConfig.empty.hasForegroundStage, isFalse);
+
+      final active = TerminalShaderConfig.empty.copyWith(
+        foregroundPasses: <ShaderPassSpec>[passA],
+        backgroundOpacity: 0.5,
+      );
+      expect(active.isEmpty, isFalse);
+      expect(active.hasForegroundStage, isTrue);
+      expect(active.backgroundOpacity, 0.5);
+      expect(active, equals(active.copyWith()));
+      expect(active.hashCode, equals(active.copyWith().hashCode));
+
+      const err = ShaderCompileException(
+        shaderId: 'broken.glsl',
+        message: 'syntax error',
+        lineNumber: 12,
+      );
+      expect(
+        err.toString(),
+        contains('ShaderCompileException[broken.glsl (line 12)]: syntax error'),
+      );
+      const errNoLine = ShaderCompileException(
+        shaderId: 'broken.glsl',
+        message: 'bad token',
+      );
+      expect(
+        errNoLine.toString(),
+        contains('ShaderCompileException[broken.glsl]: bad token'),
+      );
+
+      // Exercise TerminalShaderConfig clearBackgroundImage & disabled & inequality
+      final disabled = active.copyWith(
+        enabled: false,
+        backgroundPasses: <ShaderPassSpec>[
+          passA.copyWith(id: 'bg', stage: TerminalShaderStage.background),
+        ],
+        clearBackgroundImage: true,
+        backgroundOpacity: double.nan,
+      );
+      expect(disabled.isEmpty, isTrue);
+      expect(disabled.hasBackgroundStage, isFalse);
+      expect(disabled.hasForegroundStage, isFalse);
+      expect(disabled.backgroundOpacity, 0.5);
+      expect(disabled == active, isFalse);
+      expect(
+        passA == passA.copyWith(params: Float32List.fromList(<double>[9.0])),
+        isFalse,
+      );
+    });
+
+    test(
+      'BuiltinShaders exposes all 5 active presets with expected metadata',
+      () {
+        expect(
+          BuiltinShaders.sourceForPreset(TerminalShaderPreset.none),
+          isNull,
+        );
+        expect(BuiltinShaders.allPresets.length, 5);
+        expect(
+          BuiltinShaders.defaultStageForPreset(
+            TerminalShaderPreset.wallpaperWave,
+          ),
+          TerminalShaderStage.background,
+        );
+        expect(
+          BuiltinShaders.defaultStageForPreset(TerminalShaderPreset.crtLottes),
+          TerminalShaderStage.foreground,
+        );
+        expect(
+          BuiltinShaders.usesPrevFrame(TerminalShaderPreset.phosphorGlow),
+          isTrue,
+        );
+        expect(
+          BuiltinShaders.usesPrevFrame(TerminalShaderPreset.scanlineOverlay),
+          isFalse,
+        );
+        for (final preset in BuiltinShaders.allPresets.keys) {
+          final src = BuiltinShaders.sourceForPreset(preset);
+          expect(src, isNotNull);
+          final shimmed = ShadertoyGlslShim.shim(
+            src!,
+            shaderId: preset.wireName,
+          );
+          expect(
+            shimmed.analysis.usesPrevFrame,
+            BuiltinShaders.usesPrevFrame(preset),
+          );
+        }
+      },
+    );
+  });
+
+  group('Real impellerc compilation verification', () {
+    final impellerc = _findImpellerc();
+
+    test(
+      'compiles all 5 built-in presets and 5 Ghostty community shaders through impellerc --shader-bundle',
+      () {
+        final tmpDir = Directory.systemTemp.createTempSync('termui_shim_test_');
+        final incDir = Directory('${tmpDir.path}/inc')..createSync();
+        try {
+          final vertFile = File('${tmpDir.path}/vertex.glsl')
+            ..writeAsStringSync(ShadertoyGlslShim.impellerVertexShaderSource);
+
+          final cases = <String, String>{
+            for (final entry in BuiltinShaders.allPresets.entries)
+              'preset_${entry.key.wireName}': entry.value,
+            ..._ghosttyCommunityCorpus,
+          };
+
+          for (final entry in cases.entries) {
+            final shimmed = ShadertoyGlslShim.shim(
+              entry.value,
+              shaderId: entry.key,
+            );
+            final fragFile = File('${tmpDir.path}/${entry.key}.frag.glsl')
+              ..writeAsStringSync(shimmed.impellerFragmentGlsl);
+            final outFile = File('${tmpDir.path}/${entry.key}.shaderbundle');
+
+            final bundleSpec = jsonEncode(<String, Object?>{
+              ShadertoyGlslShim.vertexShaderName: <String, Object?>{
+                'type': 'vertex',
+                'file': vertFile.path,
+              },
+              ShadertoyGlslShim.fragmentShaderName: <String, Object?>{
+                'type': 'fragment',
+                'file': fragFile.path,
+              },
+            });
+
+            final result = Process.runSync(impellerc!, <String>[
+              '--shader-bundle=$bundleSpec',
+              '--sl=${outFile.path}',
+              '--include=${incDir.path}',
+              '--verbose',
+            ]);
+
+            expect(
+              result.exitCode,
+              0,
+              reason:
+                  'impellerc failed for ${entry.key}:\n'
+                  'STDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}',
+            );
+            expect(outFile.existsSync(), isTrue);
+            expect(outFile.lengthSync(), greaterThan(1024));
+          }
+        } finally {
+          tmpDir.deleteSync(recursive: true);
+        }
+      },
+      skip: impellerc == null
+          ? 'impellerc binary not found in Flutter SDK cache'
+          : false,
+    );
+
+    test(
+      'impellerc std140 reflection offsets match ShadertoyGlslShim.packUniformsStd140',
+      () {
+        const allFieldsShader = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / max(iResolution.xy, vec2(1.0));
+  vec3 acc = iResolution + iChannelResolution[0] + iPalette[0] + iPalette[255] +
+      iBackgroundColor + iForegroundColor + iMouse.rgb + iDate.rgb +
+      iCurrentCursor.rgb + iPreviousCursor.rgb + iCurrentCursorColor.rgb +
+      iPreviousCursorColor.rgb + iCursorColor.rgb + iRegionRect.rgb +
+      vec3(iCellSize, 0.0) + uParams0.rgb + uParams1.rgb +
+      vec3(iTime + iTimeDelta + float(iFrame) + iFrameRate + iTimeCursorChange +
+           float(iCurrentCursorStyle + iCursorVisible + iFocus) + iTimeFocus);
+  fragColor = texture(iChannel0, uv) + vec4(acc * 0.0, 1.0);
+}
+''';
+        final shimmed = ShadertoyGlslShim.shim(allFieldsShader);
+        final tmpDir = Directory.systemTemp.createTempSync('termui_refl_test_');
+        final incDir = Directory('${tmpDir.path}/inc')..createSync();
+        try {
+          final fragFile = File('${tmpDir.path}/all.frag.glsl')
+            ..writeAsStringSync(shimmed.impellerFragmentGlsl);
+          final reflFile = File('${tmpDir.path}/refl.json');
+          final result = Process.runSync(impellerc!, <String>[
+            '--metal-desktop',
+            '--input=${fragFile.path}',
+            '--input-type=frag',
+            '--sl=${tmpDir.path}/all.metal',
+            '--spirv=${tmpDir.path}/all.spv',
+            '--reflection-json=${reflFile.path}',
+            '--include=${incDir.path}',
+          ]);
+          expect(result.exitCode, 0, reason: '${result.stderr}');
+          final decoded =
+              jsonDecode(reflFile.readAsStringSync()) as Map<String, Object?>;
+          final buffers = decoded['buffers'] as List<Object?>;
+          final ubo = buffers.first as Map<String, Object?>;
+          expect(ubo['name'], ShadertoyGlslShim.uniformBlockName);
+          final type = ubo['type'] as Map<String, Object?>;
+          final members = type['members'] as List<Object?>;
+          final offsets = <String, int>{
+            for (final m in members.cast<Map<String, Object?>>())
+              m['name'] as String: m['offset'] as int,
+          };
+
+          expect(offsets['iResolution'], 0);
+          expect(offsets['iTime'], 12);
+          expect(offsets['iTimeDelta'], 16);
+          expect(offsets['iFrame'], 20);
+          expect(offsets['iFrameRate'], 24);
+          expect(offsets['iTimeCursorChange'], 28);
+          expect(offsets['iMouse'], 32);
+          expect(offsets['iDate'], 48);
+          expect(offsets['iChannelResolution'], 64);
+          expect(offsets['iPalette'], 128);
+          expect(offsets['iBackgroundColor'], 4224);
+          expect(offsets['iForegroundColor'], 4240);
+          expect(offsets['iCurrentCursor'], 4256);
+          expect(offsets['iPreviousCursor'], 4272);
+          expect(offsets['iCurrentCursorColor'], 4288);
+          expect(offsets['iPreviousCursorColor'], 4304);
+          expect(offsets['iCursorColor'], 4320);
+          expect(offsets['iCurrentCursorStyle'], 4336);
+          expect(offsets['iCursorVisible'], 4340);
+          expect(offsets['iFocus'], 4344);
+          expect(offsets['iTimeFocus'], 4348);
+          expect(offsets['iRegionRect'], 4352);
+          expect(offsets['iCellSize'], 4368);
+          expect(offsets['uParams0'], 4384);
+          expect(offsets['uParams1'], 4400);
+        } finally {
+          tmpDir.deleteSync(recursive: true);
+        }
+      },
+      skip: impellerc == null
+          ? 'impellerc binary not found in Flutter SDK cache'
+          : false,
+    );
+  });
+}

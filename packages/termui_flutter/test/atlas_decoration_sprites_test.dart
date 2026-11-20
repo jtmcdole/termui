@@ -448,362 +448,338 @@ void main() {
       );
     }
 
-    test(
-      'addStyledGlyphs preserves all 14 decoration quads and rasterized pixels verbatim',
-      () async {
-        final atlas = await GlyphAtlasGenerator.generate(
-          fontSize: 14.0,
-          fontFamily: 'Roboto Mono',
-          devicePixelRatio: 2.0,
-        );
-        addTearDown(atlas.dispose);
+    test('addStyledGlyphs preserves all 14 decoration quads and rasterized pixels verbatim', () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 14.0,
+        fontFamily: 'Roboto Mono',
+        devicePixelRatio: 2.0,
+      );
+      addTearDown(atlas.dispose);
 
-        final beforeImg = await _readImageRgba(atlas.image);
-        final expanded = await atlas.addStyledGlyphs([
-          ('Ψ', GlyphStyleVariant.regular),
-          ('Ψ', GlyphStyleVariant.bold),
-          ('🚀', GlyphStyleVariant.regular),
-          ('中', GlyphStyleVariant.regular),
-        ]);
-        addTearDown(expanded.dispose);
+      final beforeImg = await _readImageRgba(atlas.image);
+      final expanded = await atlas.addStyledGlyphs([
+        ('Ψ', GlyphStyleVariant.regular),
+        ('Ψ', GlyphStyleVariant.bold),
+        ('🚀', GlyphStyleVariant.regular),
+        ('中', GlyphStyleVariant.regular),
+      ]);
+      addTearDown(expanded.dispose);
 
-        final afterImg = await _readImageRgba(expanded.image);
+      final afterImg = await _readImageRgba(expanded.image);
 
-        for (final kind in AtlasDecorationKind.values) {
-          for (final isWide in const [false, true]) {
-            final beforeOff = atlas.quadTable.decorationQuadOffset(
-              kind,
-              isWide: isWide,
-            );
-            final afterOff = expanded.quadTable.decorationQuadOffset(
-              kind,
-              isWide: isWide,
-            );
-            expect(afterOff, greaterThanOrEqualTo(0));
-            final beforeRect = _quadRect(atlas.quadTable, beforeOff);
-            final afterRect = _quadRect(expanded.quadTable, afterOff);
-            expect(afterRect, equals(beforeRect));
+      for (final kind in AtlasDecorationKind.values) {
+        for (final isWide in const [false, true]) {
+          final beforeOff = atlas.quadTable.decorationQuadOffset(
+            kind,
+            isWide: isWide,
+          );
+          final afterOff = expanded.quadTable.decorationQuadOffset(
+            kind,
+            isWide: isWide,
+          );
+          expect(afterOff, greaterThanOrEqualTo(0));
+          final beforeRect = _quadRect(atlas.quadTable, beforeOff);
+          final afterRect = _quadRect(expanded.quadTable, afterOff);
+          expect(afterRect, equals(beforeRect));
 
-            final x0 = beforeRect.left.round();
-            final y0 = beforeRect.top.round();
-            final x1 = beforeRect.right.round();
-            final y1 = beforeRect.bottom.round();
-            for (var y = y0; y < y1; y++) {
-              for (var x = x0; x < x1; x++) {
-                expect(
-                  _pixelRgba(afterImg.rgba, afterImg.width, x, y),
-                  equals(_pixelRgba(beforeImg.rgba, beforeImg.width, x, y)),
-                );
-              }
+          final x0 = beforeRect.left.round();
+          final y0 = beforeRect.top.round();
+          final x1 = beforeRect.right.round();
+          final y1 = beforeRect.bottom.round();
+          for (var y = y0; y < y1; y++) {
+            for (var x = x0; x < x1; x++) {
+              expect(
+                _pixelRgba(afterImg.rgba, afterImg.width, x, y),
+                equals(_pixelRgba(beforeImg.rgba, beforeImg.width, x, y)),
+              );
             }
           }
         }
-      },
-    );
+      }
+    });
 
-    test(
-      'generateEmpty reports -1 for decoration offsets while indexing white rect',
-      () async {
-        final empty = await GlyphAtlasGenerator.generateEmpty(
-          fontSize: 14.0,
-          fontFamily: 'Roboto Mono',
+    test('generateEmpty reports -1 for decoration offsets while indexing white rect', () async {
+      final empty = await GlyphAtlasGenerator.generateEmpty(
+        fontSize: 14.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(empty.dispose);
+
+      for (final kind in AtlasDecorationKind.values) {
+        expect(
+          empty.quadTable.decorationQuadOffset(kind, isWide: false),
+          equals(-1),
         );
-        addTearDown(empty.dispose);
-
-        for (final kind in AtlasDecorationKind.values) {
-          expect(
-            empty.quadTable.decorationQuadOffset(kind, isWide: false),
-            equals(-1),
-          );
-          expect(
-            empty.quadTable.decorationQuadOffset(kind, isWide: true),
-            equals(-1),
-          );
-        }
-        _expectRectParity(empty, 0xFFFF, 0, label: 'empty white pixel');
-        expect(empty.quadTable.quadOffsetForCode(0x41, variantBits: 0), -1);
-      },
-    );
+        expect(
+          empty.quadTable.decorationQuadOffset(kind, isWide: true),
+          equals(-1),
+        );
+      }
+      _expectRectParity(empty, 0xFFFF, 0, label: 'empty white pixel');
+      expect(empty.quadTable.quadOffsetForCode(0x41, variantBits: 0), -1);
+    });
   });
 
   group('AtlasQuadTable parity & open-addressed hash table', () {
-    test(
-      'quadOffsetForCode matches rectFor across ASCII, Box/Block, Braille, dynamic BMP/SMP, and invalid codes',
-      () async {
-        final baseAtlas = await GlyphAtlasGenerator.generate(
-          fontSize: 14.0,
-          fontFamily: 'Roboto Mono',
-        );
-        addTearDown(baseAtlas.dispose);
+    test('quadOffsetForCode matches rectFor across ASCII, Box/Block, Braille, dynamic BMP/SMP, and invalid codes', () async {
+      final baseAtlas = await GlyphAtlasGenerator.generate(
+        fontSize: 14.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(baseAtlas.dispose);
 
-        final atlas = await baseAtlas.addStyledGlyphs([
-          ('Ψ', GlyphStyleVariant.regular),
-          ('Ψ', GlyphStyleVariant.bold),
-          ('中', GlyphStyleVariant.regular),
-          ('🚀', GlyphStyleVariant.regular),
-          ('e\u0301', GlyphStyleVariant.regular),
-        ]);
-        addTearDown(atlas.dispose);
+      final atlas = await baseAtlas.addStyledGlyphs([
+        ('Ψ', GlyphStyleVariant.regular),
+        ('Ψ', GlyphStyleVariant.bold),
+        ('中', GlyphStyleVariant.regular),
+        ('🚀', GlyphStyleVariant.regular),
+        ('e\u0301', GlyphStyleVariant.regular),
+      ]);
+      addTearDown(atlas.dispose);
 
-        // ASCII direct table (0x20..0x7E) across all 4 variants.
-        for (var cp = 0x20; cp <= 0x7E; cp++) {
-          for (var v = 0; v < 4; v++) {
-            _expectRectParity(
-              atlas,
-              cp,
-              v,
-              label: 'ASCII U+${cp.toRadixString(16)} v=$v',
-            );
-          }
-        }
-
-        // Box/Block direct table (0x2500..0x259F) across all 4 variants.
-        for (var cp = 0x2500; cp <= 0x259F; cp++) {
-          for (var v = 0; v < 4; v++) {
-            _expectRectParity(
-              atlas,
-              cp,
-              v,
-              label: 'Box U+${cp.toRadixString(16)} v=$v',
-            );
-          }
-        }
-
-        // Braille direct table (0x2800..0x28FF) across all 4 variants.
-        for (var cp = 0x2800; cp <= 0x28FF; cp++) {
-          for (var v = 0; v < 4; v++) {
-            _expectRectParity(
-              atlas,
-              cp,
-              v,
-              label: 'Braille U+${cp.toRadixString(16)} v=$v',
-            );
-          }
-        }
-
-        // Hash-table scalars: initial extras, white pixel, dynamic BMP & SMP.
-        for (final cp in const [
-          0xF1,
-          0x2019,
-          0x2022,
-          0x2122,
-          0x25B6,
-          0x25BC,
-          0x25CB,
-          0x25CF,
-          0xFFFF,
-          0x03A8, // 'Ψ' (regular + bold, italic/boldItalic fall back to regular)
-          0x4E2D, // '中' (regular only)
-          0x1F680, // '🚀' (SMP surrogate pair)
-          0x0416, // 'Ж' (absent)
-        ]) {
-          for (var v = 0; v < 4; v++) {
-            _expectRectParity(
-              atlas,
-              cp,
-              v,
-              label: 'Hash U+${cp.toRadixString(16)} v=$v',
-            );
-          }
-        }
-
-        // Verify bold 'Ψ' differs from regular 'Ψ', while italic falls back to regular.
-        final regPsi = atlas.quadTable.quadOffsetForCode(
-          0x03A8,
-          variantBits: 0,
-        );
-        final boldPsi = atlas.quadTable.quadOffsetForCode(
-          0x03A8,
-          variantBits: 1,
-        );
-        final italicPsi = atlas.quadTable.quadOffsetForCode(
-          0x03A8,
-          variantBits: 2,
-        );
-        expect(boldPsi, isNot(equals(regPsi)));
-        expect(italicPsi, equals(regPsi));
-
-        // Non-scalar, zero, negative, cluster-flagged, and out-of-range codes return -1.
-        expect(
-          atlas.quadTable.quadOffsetForCode(
-            GlyphCellList.wideContinuationCode,
-            variantBits: 0,
-          ),
-          equals(-1),
-        );
-        expect(
-          atlas.quadTable.quadOffsetForCode(-1, variantBits: 0),
-          equals(-1),
-        );
-        expect(
-          atlas.quadTable.quadOffsetForCode(
-            GlyphCellList.clusterFlag | 0,
-            variantBits: 0,
-          ),
-          equals(-1),
-        );
-        expect(
-          atlas.quadTable.quadOffsetForCode(
-            GlyphCellList.clusterFlag | 99,
-            variantBits: 1,
-          ),
-          equals(-1),
-        );
-        expect(
-          atlas.quadTable.quadOffsetForCode(0x110000, variantBits: 0),
-          equals(-1),
-        );
-      },
-    );
-
-    test(
-      'partial style atlas matches rectFor when only bold variant exists and ignores invalid charRects keys',
-      () async {
-        final empty = await GlyphAtlasGenerator.generateEmpty(
-          fontSize: 14.0,
-          fontFamily: 'Roboto Mono',
-        );
-        addTearDown(empty.dispose);
-
-        const boldTilde = ui.Rect.fromLTWH(2, 2, 8, 16);
-        const boldPsi = ui.Rect.fromLTWH(12, 2, 8, 16);
-        const regOmega = ui.Rect.fromLTWH(22, 2, 8, 16);
-        const dummy = ui.Rect.fromLTWH(32, 2, 8, 16);
-
-        final partial = GlyphAtlas(
-          image: empty.image,
-          charRects: const {
-            'Ω': regOmega,
-            '': dummy,
-            '\x00': dummy,
-            '\uD800': dummy, // unpaired surrogate
-            '->': dummy, // multi-char ligature
-          },
-          styleRects: const {
-            ('~', true, false): boldTilde,
-            ('Ψ', true, false): boldPsi,
-          },
-          cellWidth: empty.cellWidth,
-          cellHeight: empty.cellHeight,
-          fontSize: empty.fontSize,
-          fontFamily: empty.fontFamily,
-          nextGridIndex: 1,
-        );
-
-        for (final cp in const [0x7E, 0x03A8, 0x03A9]) {
-          for (var v = 0; v < 4; v++) {
-            _expectRectParity(
-              partial,
-              cp,
-              v,
-              label: 'partial U+${cp.toRadixString(16)} v=$v',
-            );
-          }
-        }
-        expect(partial.quadTable.quadOffsetForCode(0x03A8, variantBits: 0), -1);
-        expect(
-          partial.quadTable.quadOffsetForCode(0x03A8, variantBits: 1),
-          greaterThanOrEqualTo(0),
-        );
-        expect(partial.quadTable.quadOffsetForCode(0x03A8, variantBits: 2), -1);
-      },
-    );
-
-    test(
-      'open-addressed hash table handles collisions, updates, and power-of-two resizing cleanly',
-      () {
-        final builder = AtlasQuadTableBuilder(
-          initialQuadCapacity: 4,
-          initialHashCapacity: 4,
-        );
-
-        // Ignored out-of-range code points.
-        builder.putCodePoint(
-          0,
-          variantBits: 0,
-          rect: const ui.Rect.fromLTWH(0, 0, 1, 1),
-        );
-        builder.putCodePoint(
-          0x110000,
-          variantBits: 0,
-          rect: const ui.Rect.fromLTWH(0, 0, 1, 1),
-        );
-
-        final expected = <(int, int), ui.Rect>{};
-        var idx = 0;
-
-        void insert(int cp, int variant) {
-          final rect = ui.Rect.fromLTWH(
-            (idx % 64) * 10.0,
-            (idx ~/ 64) * 20.0,
-            8.0,
-            16.0,
+      // ASCII direct table (0x20..0x7E) across all 4 variants.
+      for (var cp = 0x20; cp <= 0x7E; cp++) {
+        for (var v = 0; v < 4; v++) {
+          _expectRectParity(
+            atlas,
+            cp,
+            v,
+            label: 'ASCII U+${cp.toRadixString(16)} v=$v',
           );
-          builder.putCodePoint(cp, variantBits: variant, rect: rect);
-          expected[(cp, variant)] = rect;
-          idx++;
         }
+      }
 
-        // Insert 300+ entries across Cyrillic, CJK, and SMP ranges to force
-        // multiple hash table doublings (4 -> 8 -> ... -> 1024) and linear probes.
-        for (var cp = 0x0400; cp < 0x04A0; cp++) {
-          insert(cp, 0);
-          if (cp.isEven) insert(cp, 1);
+      // Box/Block direct table (0x2500..0x259F) across all 4 variants.
+      for (var cp = 0x2500; cp <= 0x259F; cp++) {
+        for (var v = 0; v < 4; v++) {
+          _expectRectParity(
+            atlas,
+            cp,
+            v,
+            label: 'Box U+${cp.toRadixString(16)} v=$v',
+          );
         }
-        for (var cp = 0x4E00; cp < 0x4E40; cp++) {
-          insert(cp, 0);
+      }
+
+      // Braille direct table (0x2800..0x28FF) across all 4 variants.
+      for (var cp = 0x2800; cp <= 0x28FF; cp++) {
+        for (var v = 0; v < 4; v++) {
+          _expectRectParity(
+            atlas,
+            cp,
+            v,
+            label: 'Braille U+${cp.toRadixString(16)} v=$v',
+          );
         }
-        for (var cp = 0x1F600; cp < 0x1F630; cp++) {
-          insert(cp, 0);
+      }
+
+      // Hash-table scalars: initial extras, white pixel, dynamic BMP & SMP.
+      for (final cp in const [
+        0xF1,
+        0x2019,
+        0x2022,
+        0x2122,
+        0x25B6,
+        0x25BC,
+        0x25CB,
+        0x25CF,
+        0xFFFF,
+        0x03A8, // 'Ψ' (regular + bold, italic/boldItalic fall back to regular)
+        0x4E2D, // '中' (regular only)
+        0x1F680, // '🚀' (SMP surrogate pair)
+        0x0416, // 'Ж' (absent)
+      ]) {
+        for (var v = 0; v < 4; v++) {
+          _expectRectParity(
+            atlas,
+            cp,
+            v,
+            label: 'Hash U+${cp.toRadixString(16)} v=$v',
+          );
         }
-        // Variant-only entry (no regular variant 0) to verify non-fallback path.
-        insert(0x2603, 2);
+      }
 
-        // Overwrite an existing entry to verify in-place replacement without duplicate count.
-        const updatedRect = ui.Rect.fromLTWH(999, 888, 12, 24);
-        builder.putCodePoint(0x0400, variantBits: 0, rect: updatedRect);
-        expected[(0x0400, 0)] = updatedRect;
+      // Verify bold 'Ψ' differs from regular 'Ψ', while italic falls back to regular.
+      final regPsi = atlas.quadTable.quadOffsetForCode(0x03A8, variantBits: 0);
+      final boldPsi = atlas.quadTable.quadOffsetForCode(0x03A8, variantBits: 1);
+      final italicPsi = atlas.quadTable.quadOffsetForCode(
+        0x03A8,
+        variantBits: 2,
+      );
+      expect(boldPsi, isNot(equals(regPsi)));
+      expect(italicPsi, equals(regPsi));
 
-        final table = builder.build();
+      // Non-scalar, zero, negative, cluster-flagged, and out-of-range codes return -1.
+      expect(
+        atlas.quadTable.quadOffsetForCode(
+          GlyphCellList.wideContinuationCode,
+          variantBits: 0,
+        ),
+        equals(-1),
+      );
+      expect(atlas.quadTable.quadOffsetForCode(-1, variantBits: 0), equals(-1));
+      expect(
+        atlas.quadTable.quadOffsetForCode(
+          GlyphCellList.clusterFlag | 0,
+          variantBits: 0,
+        ),
+        equals(-1),
+      );
+      expect(
+        atlas.quadTable.quadOffsetForCode(
+          GlyphCellList.clusterFlag | 99,
+          variantBits: 1,
+        ),
+        equals(-1),
+      );
+      expect(
+        atlas.quadTable.quadOffsetForCode(0x110000, variantBits: 0),
+        equals(-1),
+      );
+    });
 
-        // Capacity is a power of two and keeps load factor <= 0.5.
-        final cap = table.debugHashCapacity;
-        expect(cap, greaterThanOrEqualTo(512));
-        expect(cap & (cap - 1), equals(0));
-        expect(table.debugHashCount, equals(expected.length));
-        expect(table.debugHashCount * 2, lessThanOrEqualTo(cap));
-        expect(table.quadCount, equals(idx + 1));
+    test('partial style atlas matches rectFor when only bold variant exists and ignores invalid charRects keys', () async {
+      final empty = await GlyphAtlasGenerator.generateEmpty(
+        fontSize: 14.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(empty.dispose);
 
-        for (final entry in expected.entries) {
-          final (cp, v) = entry.key;
-          final off = table.quadOffsetForCode(cp, variantBits: v);
-          expect(off, greaterThanOrEqualTo(0));
-          expect(_quadRect(table, off), equals(entry.value));
+      const boldTilde = ui.Rect.fromLTWH(2, 2, 8, 16);
+      const boldPsi = ui.Rect.fromLTWH(12, 2, 8, 16);
+      const regOmega = ui.Rect.fromLTWH(22, 2, 8, 16);
+      const dummy = ui.Rect.fromLTWH(32, 2, 8, 16);
+
+      final partial = GlyphAtlas(
+        image: empty.image,
+        charRects: const {
+          'Ω': regOmega,
+          '': dummy,
+          '\x00': dummy,
+          '\uD800': dummy, // unpaired surrogate
+          '->': dummy, // multi-char ligature
+        },
+        styleRects: const {
+          ('~', true, false): boldTilde,
+          ('Ψ', true, false): boldPsi,
+        },
+        cellWidth: empty.cellWidth,
+        cellHeight: empty.cellHeight,
+        fontSize: empty.fontSize,
+        fontFamily: empty.fontFamily,
+        nextGridIndex: 1,
+      );
+
+      for (final cp in const [0x7E, 0x03A8, 0x03A9]) {
+        for (var v = 0; v < 4; v++) {
+          _expectRectParity(
+            partial,
+            cp,
+            v,
+            label: 'partial U+${cp.toRadixString(16)} v=$v',
+          );
         }
+      }
+      expect(partial.quadTable.quadOffsetForCode(0x03A8, variantBits: 0), -1);
+      expect(
+        partial.quadTable.quadOffsetForCode(0x03A8, variantBits: 1),
+        greaterThanOrEqualTo(0),
+      );
+      expect(partial.quadTable.quadOffsetForCode(0x03A8, variantBits: 2), -1);
+    });
 
-        // Fallback from missing italic (2) to regular (0).
-        final fallbackOff = table.quadOffsetForCode(0x0400, variantBits: 2);
-        expect(_quadRect(table, fallbackOff), equals(updatedRect));
+    test('open-addressed hash table handles collisions, updates, and power-of-two resizing cleanly', () {
+      final builder = AtlasQuadTableBuilder(
+        initialQuadCapacity: 4,
+        initialHashCapacity: 4,
+      );
 
-        // Missing regular (0) for variant-only key (0x2603, 2) does not fabricate a hit.
-        expect(table.quadOffsetForCode(0x2603, variantBits: 0), equals(-1));
-        expect(table.quadOffsetForCode(0x2603, variantBits: 1), equals(-1));
-        expect(
-          table.quadOffsetForCode(0x2603, variantBits: 2),
-          greaterThanOrEqualTo(0),
+      // Ignored out-of-range code points.
+      builder.putCodePoint(
+        0,
+        variantBits: 0,
+        rect: const ui.Rect.fromLTWH(0, 0, 1, 1),
+      );
+      builder.putCodePoint(
+        0x110000,
+        variantBits: 0,
+        rect: const ui.Rect.fromLTWH(0, 0, 1, 1),
+      );
+
+      final expected = <(int, int), ui.Rect>{};
+      var idx = 0;
+
+      void insert(int cp, int variant) {
+        final rect = ui.Rect.fromLTWH(
+          (idx % 64) * 10.0,
+          (idx ~/ 64) * 20.0,
+          8.0,
+          16.0,
         );
+        builder.putCodePoint(cp, variantBits: variant, rect: rect);
+        expected[(cp, variant)] = rect;
+        idx++;
+      }
 
-        // Absent hash keys terminate cleanly with -1.
-        expect(table.quadOffsetForCode(0x9999, variantBits: 0), equals(-1));
-        expect(table.quadOffsetForCode(0x10FFFF, variantBits: 3), equals(-1));
-      },
-    );
+      // Insert 300+ entries across Cyrillic, CJK, and SMP ranges to force
+      // multiple hash table doublings (4 -> 8 -> ... -> 1024) and linear probes.
+      for (var cp = 0x0400; cp < 0x04A0; cp++) {
+        insert(cp, 0);
+        if (cp.isEven) insert(cp, 1);
+      }
+      for (var cp = 0x4E00; cp < 0x4E40; cp++) {
+        insert(cp, 0);
+      }
+      for (var cp = 0x1F600; cp < 0x1F630; cp++) {
+        insert(cp, 0);
+      }
+      // Variant-only entry (no regular variant 0) to verify non-fallback path.
+      insert(0x2603, 2);
+
+      // Overwrite an existing entry to verify in-place replacement without duplicate count.
+      const updatedRect = ui.Rect.fromLTWH(999, 888, 12, 24);
+      builder.putCodePoint(0x0400, variantBits: 0, rect: updatedRect);
+      expected[(0x0400, 0)] = updatedRect;
+
+      final table = builder.build();
+
+      // Capacity is a power of two and keeps load factor <= 0.5.
+      final cap = table.debugHashCapacity;
+      expect(cap, greaterThanOrEqualTo(512));
+      expect(cap & (cap - 1), equals(0));
+      expect(table.debugHashCount, equals(expected.length));
+      expect(table.debugHashCount * 2, lessThanOrEqualTo(cap));
+      expect(table.quadCount, equals(idx + 1));
+
+      for (final entry in expected.entries) {
+        final (cp, v) = entry.key;
+        final off = table.quadOffsetForCode(cp, variantBits: v);
+        expect(off, greaterThanOrEqualTo(0));
+        expect(_quadRect(table, off), equals(entry.value));
+      }
+
+      // Fallback from missing italic (2) to regular (0).
+      final fallbackOff = table.quadOffsetForCode(0x0400, variantBits: 2);
+      expect(_quadRect(table, fallbackOff), equals(updatedRect));
+
+      // Missing regular (0) for variant-only key (0x2603, 2) does not fabricate a hit.
+      expect(table.quadOffsetForCode(0x2603, variantBits: 0), equals(-1));
+      expect(table.quadOffsetForCode(0x2603, variantBits: 1), equals(-1));
+      expect(
+        table.quadOffsetForCode(0x2603, variantBits: 2),
+        greaterThanOrEqualTo(0),
+      );
+
+      // Absent hash keys terminate cleanly with -1.
+      expect(table.quadOffsetForCode(0x9999, variantBits: 0), equals(-1));
+      expect(table.quadOffsetForCode(0x10FFFF, variantBits: 3), equals(-1));
+    });
   });
 
-  group('GlyphAtlasController.ensureFallbackPaintersForBuffer glyphCodes scan', () {
-    test(
-      'skips 0, 0x20, Kitty placeholders, and quadTable hits while creating fallbacks for unbaked scalars and clusters',
-      () async {
+  group(
+    'GlyphAtlasController.ensureFallbackPaintersForBuffer glyphCodes scan',
+    () {
+      test('skips 0, 0x20, Kitty placeholders, and quadTable hits while creating fallbacks for unbaked scalars and clusters', () async {
         final controller = GlyphAtlasController(
           fontSize: 14.0,
           fontFamily: 'Roboto Mono',
@@ -885,7 +861,7 @@ void main() {
             .map((k) => k.$1)
             .toSet();
         expect(charsAfterBake, equals({'🚀', '👨‍👩‍👧'}));
-      },
-    );
-  });
+      });
+    },
+  );
 }

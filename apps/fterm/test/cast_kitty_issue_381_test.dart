@@ -701,62 +701,50 @@ void main() {
       },
     );
 
-    test(
-      'IoLocalHostDriver.logShareDiagnostic logs caster skips/errors to stderr outside FLUTTER_TEST',
-      () {
-        final logged = StringBuffer();
-        IoLocalHostDriver.logShareDiagnostic(
-          'Skipping Kitty image id=1 (99 wire bytes)',
-          environment: const {},
-          sink: logged,
-        );
-        IoLocalHostDriver.logShareDiagnostic(
-          'Server error (internal): boom',
-          environment: const {},
-          sink: logged,
-        );
-        IoLocalHostDriver.logShareDiagnostic(
-          'Outbound frame queue overflow (64 frames, 1024 bytes)',
-          environment: const {},
-          sink: logged,
-        );
-        IoLocalHostDriver.logShareDiagnostic(
-          'File upload error: bad sha256',
-          environment: const {},
-          sink: logged,
-        );
-        IoLocalHostDriver.logShareDiagnostic(
-          'Aborted stalled file upload after idle timeout',
-          environment: const {},
-          sink: logged,
-        );
-        IoLocalHostDriver.logShareDiagnostic(
-          'Registered session "s" on ws://127.0.0.1',
-          environment: const {},
-          sink: logged,
-        );
-        IoLocalHostDriver.logShareDiagnostic(
-          'Skipping Kitty image id=2 (suppressed in test)',
-          environment: const {'FLUTTER_TEST': 'true'},
-          sink: logged,
-        );
-        expect('$logged', contains('[fterm cast] Skipping Kitty image id=1'));
-        expect(
-          '$logged',
-          contains('[fterm cast] Server error (internal): boom'),
-        );
-        expect(
-          '$logged',
-          contains('[fterm cast] Outbound frame queue overflow'),
-        );
-        expect(
-          '$logged',
-          contains('[fterm cast] File upload error: bad sha256'),
-        );
-        expect('$logged', contains('[fterm cast] Aborted stalled file upload'));
-        expect('$logged', isNot(contains('Registered session')));
-        expect('$logged', isNot(contains('suppressed in test')));
-      },
-    );
+    test('IoLocalHostDriver.logShareDiagnostic logs caster skips/errors to stderr outside FLUTTER_TEST', () {
+      final logged = StringBuffer();
+      IoLocalHostDriver.logShareDiagnostic(
+        'Skipping Kitty image id=1 (99 wire bytes)',
+        environment: const {},
+        sink: logged,
+      );
+      IoLocalHostDriver.logShareDiagnostic(
+        'Server error (internal): boom',
+        environment: const {},
+        sink: logged,
+      );
+      IoLocalHostDriver.logShareDiagnostic(
+        'Outbound frame queue overflow (64 frames, 1024 bytes)',
+        environment: const {},
+        sink: logged,
+      );
+      IoLocalHostDriver.logShareDiagnostic(
+        'File upload error: bad sha256',
+        environment: const {},
+        sink: logged,
+      );
+      IoLocalHostDriver.logShareDiagnostic(
+        'Aborted stalled file upload after idle timeout',
+        environment: const {},
+        sink: logged,
+      );
+      IoLocalHostDriver.logShareDiagnostic(
+        'Registered session "s" on ws://127.0.0.1',
+        environment: const {},
+        sink: logged,
+      );
+      IoLocalHostDriver.logShareDiagnostic(
+        'Skipping Kitty image id=2 (suppressed in test)',
+        environment: const {'FLUTTER_TEST': 'true'},
+        sink: logged,
+      );
+      expect('$logged', contains('[fterm cast] Skipping Kitty image id=1'));
+      expect('$logged', contains('[fterm cast] Server error (internal): boom'));
+      expect('$logged', contains('[fterm cast] Outbound frame queue overflow'));
+      expect('$logged', contains('[fterm cast] File upload error: bad sha256'));
+      expect('$logged', contains('[fterm cast] Aborted stalled file upload'));
+      expect('$logged', isNot(contains('Registered session')));
+      expect('$logged', isNot(contains('suppressed in test')));
+    });
   });
 }

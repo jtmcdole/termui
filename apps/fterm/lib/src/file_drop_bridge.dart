@@ -6,11 +6,10 @@ import 'file_drop_bridge_stub.dart'
     as impl;
 
 /// Signature for creating a platform [FileDropBridge].
-typedef FileDropBridgeFactory =
-    FileDropBridge Function({
-      required void Function(bool isDraggingOver) onDragHoverChanged,
-      required void Function(List<DroppedFileSource> files) onFilesDropped,
-    });
+typedef FileDropBridgeFactory = FileDropBridge Function({
+  required void Function(bool isDraggingOver) onDragHoverChanged,
+  required void Function(List<DroppedFileSource> files) onFilesDropped,
+});
 
 /// Signature for launching a validated external `http`, `https`, or `mailto` [Uri].
 typedef UrlOpener = void Function(Uri url);

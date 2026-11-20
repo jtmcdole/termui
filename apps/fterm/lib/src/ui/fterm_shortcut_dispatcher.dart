@@ -63,10 +63,9 @@ final class FtermShortcutDispatcher {
   /// Creates a shortcut dispatcher bound to [workspace].
   const FtermShortcutDispatcher({
     required this.workspace,
-    TargetPlatform? platformOverride,
-    bool? isWebOverride,
-  }) : _platformOverride = platformOverride,
-       _isWebOverride = isWebOverride;
+    this._platformOverride,
+    this._isWebOverride,
+  });
 
   static const double _fontZoomStep = 1.0;
 

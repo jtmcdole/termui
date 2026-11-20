@@ -19,12 +19,11 @@ const String kInternalSwapUpdateFlag = '--internal-swap-update';
 const int kDefaultParentExitWaitMs = 15000;
 
 /// Callback signature for launching a detached process after a swap.
-typedef DetachedProcessLauncher =
-    Future<void> Function(
-      String executable,
-      List<String> arguments,
-      String workingDirectory,
-    );
+typedef DetachedProcessLauncher = Future<void> Function(
+  String executable,
+  List<String> arguments,
+  String workingDirectory,
+);
 
 Future<void> _defaultDetachedLauncher(
   String executable,
@@ -126,16 +125,20 @@ final class WindowsSwapCliArgs {
   }
 }
 
-typedef _OpenProcessNative =
-    ffi.IntPtr Function(
-      ffi.Uint32 desiredAccess,
-      ffi.Int32 inheritHandle,
-      ffi.Uint32 processId,
-    );
-typedef _OpenProcessDart =
-    int Function(int desiredAccess, int inheritHandle, int processId);
-typedef _WaitForSingleObjectNative =
-    ffi.Uint32 Function(ffi.IntPtr handle, ffi.Uint32 milliseconds);
+typedef _OpenProcessNative = ffi.IntPtr Function(
+  ffi.Uint32 desiredAccess,
+  ffi.Int32 inheritHandle,
+  ffi.Uint32 processId,
+);
+typedef _OpenProcessDart = int Function(
+  int desiredAccess,
+  int inheritHandle,
+  int processId,
+);
+typedef _WaitForSingleObjectNative = ffi.Uint32 Function(
+  ffi.IntPtr handle,
+  ffi.Uint32 milliseconds,
+);
 typedef _WaitForSingleObjectDart = int Function(int handle, int milliseconds);
 typedef _CloseHandleNative = ffi.Int32 Function(ffi.IntPtr handle);
 typedef _CloseHandleDart = int Function(int handle);
@@ -176,20 +179,18 @@ Future<int?> queryAvailableDiskBytes(String directoryPath) async {
   return _queryPosixFreeDiskBytes(directoryPath);
 }
 
-typedef _GetDiskFreeSpaceExWNative =
-    ffi.Int32 Function(
-      ffi.Pointer<Utf16> directoryName,
-      ffi.Pointer<ffi.Uint64> freeBytesAvailableToCaller,
-      ffi.Pointer<ffi.Uint64> totalNumberOfBytes,
-      ffi.Pointer<ffi.Uint64> totalNumberOfFreeBytes,
-    );
-typedef _GetDiskFreeSpaceExWDart =
-    int Function(
-      ffi.Pointer<Utf16> directoryName,
-      ffi.Pointer<ffi.Uint64> freeBytesAvailableToCaller,
-      ffi.Pointer<ffi.Uint64> totalNumberOfBytes,
-      ffi.Pointer<ffi.Uint64> totalNumberOfFreeBytes,
-    );
+typedef _GetDiskFreeSpaceExWNative = ffi.Int32 Function(
+  ffi.Pointer<Utf16> directoryName,
+  ffi.Pointer<ffi.Uint64> freeBytesAvailableToCaller,
+  ffi.Pointer<ffi.Uint64> totalNumberOfBytes,
+  ffi.Pointer<ffi.Uint64> totalNumberOfFreeBytes,
+);
+typedef _GetDiskFreeSpaceExWDart = int Function(
+  ffi.Pointer<Utf16> directoryName,
+  ffi.Pointer<ffi.Uint64> freeBytesAvailableToCaller,
+  ffi.Pointer<ffi.Uint64> totalNumberOfBytes,
+  ffi.Pointer<ffi.Uint64> totalNumberOfFreeBytes,
+);
 
 int? _queryWindowsFreeDiskBytes(String directoryPath) {
   final kernel32 = ffi.DynamicLibrary.open('kernel32.dll');

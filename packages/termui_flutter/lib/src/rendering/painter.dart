@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+
 import 'package:characters/characters.dart';
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
@@ -13,6 +14,7 @@ import 'package:termui/ui/style.dart';
 import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 import 'package:termui/ui/widgets/interactive/selection_controller.dart';
+
 import 'atlas.dart';
 import 'atlas_quad_table.dart';
 import 'staging_cache.dart';
@@ -192,13 +194,12 @@ final class HoveredLinkCellStyles {
 
 /// Client callback invoked once per painted frame when [link] is hovered,
 /// writing per-cell overrides across `[0, cellCount)` into [styles] at [timestamp].
-typedef HoveredLinkStyler =
-    void Function(
-      ResolvedTerminalLink link,
-      int cellCount,
-      DateTime timestamp,
-      HoveredLinkCellStyles styles,
-    );
+typedef HoveredLinkStyler = void Function(
+  ResolvedTerminalLink link,
+  int cellCount,
+  DateTime timestamp,
+  HoveredLinkCellStyles styles,
+);
 
 /// Computes the total terminal cell width spanned by [text], counting wide
 /// graphemes as `2` cells and normal graphemes as `1`.
@@ -480,9 +481,9 @@ final class TuiAtlasPainter extends CustomPainter {
     this.selectionController,
     this.topVirtualRow = 0,
     this.topVirtualRowProvider,
-    math.Point<int>? selectionStart,
-    math.Point<int>? selectionEnd,
-    (int, int)? selectionColBounds,
+    this._selectionStart,
+    this._selectionEnd,
+    this._selectionColBounds,
     this.selectionBoxMode = false,
     this.hoveredLink,
     this.hoveredLinkRowSpans,
@@ -499,10 +500,7 @@ final class TuiAtlasPainter extends CustomPainter {
     this.composingText = '',
     this.cursorCol = 0,
     this.cursorRow = 0,
-  }) : _selectionStart = selectionStart,
-       _selectionEnd = selectionEnd,
-       _selectionColBounds = selectionColBounds,
-       ligaturePainters =
+  }) : ligaturePainters =
            ligaturePainters ?? <(String, bool, bool, Color), TextPainter>{},
        super(repaint: repaint);
 

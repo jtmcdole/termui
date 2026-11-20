@@ -40,126 +40,114 @@ void main() {
   });
 
   group('FtermDiagnosticLog, platform labels, and screenshot saver', () {
-    test(
-      'FtermDiagnosticLog uses injected Clock, records allowlisted event codes, and enforces ring-buffer capacity',
-      () {
-        var tick = 0;
-        final log = FtermDiagnosticLog(
-          maxEntries: 3,
-          clock: Clock(() => DateTime.utc(2026, 11, 19, 12, 0, tick++)),
-        );
-        addTearDown(log.dispose);
+    test('FtermDiagnosticLog uses injected Clock, records allowlisted event codes, and enforces ring-buffer capacity', () {
+      var tick = 0;
+      final log = FtermDiagnosticLog(
+        maxEntries: 3,
+        clock: Clock(() => DateTime.utc(2026, 11, 19, 12, 0, tick++)),
+      );
+      addTearDown(log.dispose);
 
-        log.record(DiagnosticEventKind.relayConnectFailed);
-        log.record(DiagnosticEventKind.relayAuthFailed);
-        log.record(DiagnosticEventKind.localShareFailed);
-        log.record(DiagnosticEventKind.updateError);
+      log.record(DiagnosticEventKind.relayConnectFailed);
+      log.record(DiagnosticEventKind.relayAuthFailed);
+      log.record(DiagnosticEventKind.localShareFailed);
+      log.record(DiagnosticEventKind.updateError);
 
-        expect(log.length, equals(3));
-        expect(
-          [for (final e in log.entries) e.formatLine()],
-          equals([
-            '[12:00:01Z] relay_auth_failed',
-            '[12:00:02Z] local_share_failed',
-            '[12:00:03Z] update_error',
-          ]),
-        );
-      },
-    );
+      expect(log.length, equals(3));
+      expect(
+        [for (final e in log.entries) e.formatLine()],
+        equals([
+          '[12:00:01Z] relay_auth_failed',
+          '[12:00:02Z] local_share_failed',
+          '[12:00:03Z] update_error',
+        ]),
+      );
+    });
 
-    test(
-      'resolvePlatformFeedbackLabel emits OS family and numeric version without hostnames',
-      () {
-        expect(
-          resolvePlatformFeedbackLabel(
-            operatingSystem: 'macos',
-            operatingSystemVersion: 'Version 15.4 (Build 24E248)',
-          ),
-          equals('macOS 15.4'),
-        );
-        expect(
-          resolvePlatformFeedbackLabel(
-            operatingSystem: 'windows',
-            operatingSystemVersion: '"Windows 11 Pro" 10.0 (Build 22631)',
-          ),
-          equals('Windows 10.0'),
-        );
-        expect(
-          resolvePlatformFeedbackLabel(
-            operatingSystem: 'linux',
-            operatingSystemVersion:
-                '#1 SMP PREEMPT Debian 6.8.0 (builder@corp-host.internal)',
-          ),
-          equals('Linux 6.8.0'),
-        );
-        expect(
-          resolvePlatformFeedbackLabel(
-            operatingSystem: 'linux',
-            operatingSystemVersion: '',
-          ),
-          equals('Linux'),
-        );
-        expect(
-          resolvePlatformFeedbackLabel(
-            operatingSystem: 'fuchsia',
-            operatingSystemVersion: '',
-          ),
-          equals('Unknown OS'),
-        );
-      },
-    );
+    test('resolvePlatformFeedbackLabel emits OS family and numeric version without hostnames', () {
+      expect(
+        resolvePlatformFeedbackLabel(
+          operatingSystem: 'macos',
+          operatingSystemVersion: 'Version 15.4 (Build 24E248)',
+        ),
+        equals('macOS 15.4'),
+      );
+      expect(
+        resolvePlatformFeedbackLabel(
+          operatingSystem: 'windows',
+          operatingSystemVersion: '"Windows 11 Pro" 10.0 (Build 22631)',
+        ),
+        equals('Windows 10.0'),
+      );
+      expect(
+        resolvePlatformFeedbackLabel(
+          operatingSystem: 'linux',
+          operatingSystemVersion:
+              '#1 SMP PREEMPT Debian 6.8.0 (builder@corp-host.internal)',
+        ),
+        equals('Linux 6.8.0'),
+      );
+      expect(
+        resolvePlatformFeedbackLabel(
+          operatingSystem: 'linux',
+          operatingSystemVersion: '',
+        ),
+        equals('Linux'),
+      );
+      expect(
+        resolvePlatformFeedbackLabel(
+          operatingSystem: 'fuchsia',
+          operatingSystemVersion: '',
+        ),
+        equals('Unknown OS'),
+      );
+    });
 
-    test(
-      'savePlatformFeedbackScreenshot prefers ~/Downloads, falls back to temp, and rejects invalid names',
-      () async {
-        final sandbox = await Directory.systemTemp.createTemp(
-          'fterm-feedback-shot-',
-        );
-        addTearDown(() async {
-          if (sandbox.existsSync()) await sandbox.delete(recursive: true);
-        });
-        final homeDir = Directory(p.join(sandbox.path, 'home'))..createSync();
-        final downloadsDir = Directory(p.join(homeDir.path, 'Downloads'))
-          ..createSync();
-        final tempDir = Directory(p.join(sandbox.path, 'tmp'))..createSync();
-        final pngBytes = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]);
+    test('savePlatformFeedbackScreenshot prefers ~/Downloads, falls back to temp, and rejects invalid names', () async {
+      final sandbox = await Directory.systemTemp.createTemp(
+        'fterm-feedback-shot-',
+      );
+      addTearDown(() async {
+        if (sandbox.existsSync()) await sandbox.delete(recursive: true);
+      });
+      final homeDir = Directory(p.join(sandbox.path, 'home'))..createSync();
+      final downloadsDir = Directory(p.join(homeDir.path, 'Downloads'))
+        ..createSync();
+      final tempDir = Directory(p.join(sandbox.path, 'tmp'))..createSync();
+      final pngBytes = Uint8List.fromList([0x89, 0x50, 0x4E, 0x47]);
 
-        // 1. Writes into ~/Downloads when present.
-        final savedInDownloads = await savePlatformFeedbackScreenshot(
-          'shot_1.png',
+      // 1. Writes into ~/Downloads when present.
+      final savedInDownloads = await savePlatformFeedbackScreenshot(
+        'shot_1.png',
+        pngBytes,
+        environment: {'HOME': homeDir.path},
+        tempDirectory: tempDir,
+      );
+      expect(savedInDownloads, equals(p.join(downloadsDir.path, 'shot_1.png')));
+      expect(File(savedInDownloads!).readAsBytesSync(), equals(pngBytes));
+
+      // 2. Falls back to tempDirectory when Downloads does not exist.
+      downloadsDir.deleteSync(recursive: true);
+      final savedInTemp = await savePlatformFeedbackScreenshot(
+        'nested/dir/shot_2.png',
+        pngBytes,
+        environment: {'HOME': homeDir.path},
+        tempDirectory: tempDir,
+      );
+      expect(savedInTemp, equals(p.join(tempDir.path, 'shot_2.png')));
+      expect(File(savedInTemp!).readAsBytesSync(), equals(pngBytes));
+
+      // 3. Rejects empty / dot filenames.
+      expect(
+        await savePlatformFeedbackScreenshot(
+          '..',
           pngBytes,
           environment: {'HOME': homeDir.path},
           tempDirectory: tempDir,
-        );
-        expect(
-          savedInDownloads,
-          equals(p.join(downloadsDir.path, 'shot_1.png')),
-        );
-        expect(File(savedInDownloads!).readAsBytesSync(), equals(pngBytes));
-
-        // 2. Falls back to tempDirectory when Downloads does not exist.
-        downloadsDir.deleteSync(recursive: true);
-        final savedInTemp = await savePlatformFeedbackScreenshot(
-          'nested/dir/shot_2.png',
-          pngBytes,
-          environment: {'HOME': homeDir.path},
-          tempDirectory: tempDir,
-        );
-        expect(savedInTemp, equals(p.join(tempDir.path, 'shot_2.png')));
-        expect(File(savedInTemp!).readAsBytesSync(), equals(pngBytes));
-
-        // 3. Rejects empty / dot filenames.
-        expect(
-          await savePlatformFeedbackScreenshot(
-            '..',
-            pngBytes,
-            environment: {'HOME': homeDir.path},
-            tempDirectory: tempDir,
-          ),
-          isNull,
-        );
-      },
-    );
+        ),
+        isNull,
+      );
+    });
   });
 
   group('buildGitHubIssuePayload budget, grapheme safety, and diagnostics', () {
@@ -189,184 +177,175 @@ void main() {
       updateStatus: 'idle',
     );
 
-    test(
-      'keeps default payload minimal and wraps opt-in state and event codes in <details> with zero URLs',
-      () {
-        final minimal = buildGitHubIssuePayload(
-          draft: const FeedbackDraft(
-            category: FeedbackCategory.bug,
-            title: 'Wrapped URL click',
-            details: 'Only first row highlights.',
-          ),
-          environment: env,
-          workspaceState: state,
-        );
-        expect(minimal.bodyTruncated, isFalse);
-        expect(
-          '${minimal.uri}',
-          startsWith('https://github.com/jtmcdole/termui/issues/new?'),
-        );
-        expect(
-          minimal.uri.queryParameters['title'],
-          equals('[fterm] Wrapped URL click'),
-        );
-        expect(minimal.uri.queryParameters['labels'], equals('bug'));
-        expect(minimal.fullMarkdown, contains('- App: fterm v0.5.0'));
-        expect(minimal.fullMarkdown, contains('- Client: macOS 15.4'));
-        expect(minimal.fullMarkdown, isNot(contains('<details>')));
-
-        final logs = [
-          DiagnosticLogEntry(
-            timestampUtc: DateTime.utc(2026, 11, 19, 11, 0, 5),
-            kind: DiagnosticEventKind.localShareFailed,
-          ),
-        ];
-        final rich = buildGitHubIssuePayload(
-          draft: const FeedbackDraft(
-            category: FeedbackCategory.feature,
-            title: 'Add feedback button',
-            details: 'Pre-fill version metadata.',
-            includeWorkspaceState: true,
-            includeDiagnosticLogs: true,
-            savedScreenshotName: 'screenshot_123.png',
-          ),
-          environment: env,
-          workspaceState: state,
-          diagnosticLogs: logs,
-        );
-        expect(rich.uri.queryParameters['labels'], equals('enhancement'));
-        expect(rich.fullMarkdown, contains('<details>'));
-        expect(
-          rich.fullMarkdown,
-          contains('<summary>Diagnostics (opt-in)</summary>'),
-        );
-        expect(rich.fullMarkdown, contains('via relay (authenticated)'));
-        expect(rich.fullMarkdown, contains('[11:00:05Z] local_share_failed'));
-        expect(rich.fullMarkdown, contains('</details>'));
-        expect(rich.fullMarkdown, contains('screenshot_123.png'));
-        expect(rich.fullMarkdown, isNot(contains('ws://')));
-        expect(rich.fullMarkdown, isNot(contains('wss://')));
-        expect(rich.fullMarkdown, isNot(contains('http://')));
-        expect(rich.fullMarkdown, isNot(contains('https://')));
-
-        final general = buildGitHubIssuePayload(
-          draft: const FeedbackDraft(category: FeedbackCategory.general),
-          environment: env,
-        );
-        expect(general.uri.queryParameters.containsKey('labels'), isFalse);
-      },
-    );
-
-    test(
-      'caps long titles, drops diagnostics cleanly without unclosed fences, and never splits emoji surrogates',
-      () {
-        final manyLogs = [
-          for (var i = 0; i < 35; i++)
-            DiagnosticLogEntry(
-              timestampUtc: DateTime.utc(2026, 11, 19, 11, 0, i),
-              kind: DiagnosticEventKind.relayProtocolError,
-            ),
-        ];
-
-        // 1. Long logs drop <details> first so URL body never leaves unclosed fences.
-        final truncated = buildGitHubIssuePayload(
-          draft: const FeedbackDraft(
-            category: FeedbackCategory.bug,
-            title: 'Long log report',
-            details: 'Some details here.',
-            includeWorkspaceState: true,
-            includeDiagnosticLogs: true,
-          ),
-          environment: env,
-          workspaceState: state,
-          diagnosticLogs: manyLogs,
-          maxUrlLength: 900,
-        );
-        expect(truncated.bodyTruncated, isTrue);
-        expect('${truncated.uri}'.length, lessThanOrEqualTo(900));
-        final urlBody = truncated.uri.queryParameters['body']!;
-        expect(urlBody, isNot(contains('<details>')));
-        expect(urlBody, isNot(contains('```text')));
-        expect(urlBody, contains('Full diagnostics copied to clipboard'));
-        expect(
-          truncated.fullMarkdown,
-          contains('[11:00:34Z] relay_protocol_error'),
-        );
-
-        // 2. Emoji-heavy details never emit U+FFFD replacement chars at any truncation boundary.
-        final emojiDraft = FeedbackDraft(
+    test('keeps default payload minimal and wraps opt-in state and event codes in <details> with zero URLs', () {
+      final minimal = buildGitHubIssuePayload(
+        draft: const FeedbackDraft(
           category: FeedbackCategory.bug,
-          title: '🚀' * 2500,
-          details: List<String>.filled(40, '🔥🚀👨‍👩‍👧‍👦').join(' '),
+          title: 'Wrapped URL click',
+          details: 'Only first row highlights.',
+        ),
+        environment: env,
+        workspaceState: state,
+      );
+      expect(minimal.bodyTruncated, isFalse);
+      expect(
+        '${minimal.uri}',
+        startsWith('https://github.com/jtmcdole/termui/issues/new?'),
+      );
+      expect(
+        minimal.uri.queryParameters['title'],
+        equals('[fterm] Wrapped URL click'),
+      );
+      expect(minimal.uri.queryParameters['labels'], equals('bug'));
+      expect(minimal.fullMarkdown, contains('- App: fterm v0.5.0'));
+      expect(minimal.fullMarkdown, contains('- Client: macOS 15.4'));
+      expect(minimal.fullMarkdown, isNot(contains('<details>')));
+
+      final logs = [
+        DiagnosticLogEntry(
+          timestampUtc: DateTime.utc(2026, 11, 19, 11, 0, 5),
+          kind: DiagnosticEventKind.localShareFailed,
+        ),
+      ];
+      final rich = buildGitHubIssuePayload(
+        draft: const FeedbackDraft(
+          category: FeedbackCategory.feature,
+          title: 'Add feedback button',
+          details: 'Pre-fill version metadata.',
+          includeWorkspaceState: true,
+          includeDiagnosticLogs: true,
+          savedScreenshotName: 'screenshot_123.png',
+        ),
+        environment: env,
+        workspaceState: state,
+        diagnosticLogs: logs,
+      );
+      expect(rich.uri.queryParameters['labels'], equals('enhancement'));
+      expect(rich.fullMarkdown, contains('<details>'));
+      expect(
+        rich.fullMarkdown,
+        contains('<summary>Diagnostics (opt-in)</summary>'),
+      );
+      expect(rich.fullMarkdown, contains('via relay (authenticated)'));
+      expect(rich.fullMarkdown, contains('[11:00:05Z] local_share_failed'));
+      expect(rich.fullMarkdown, contains('</details>'));
+      expect(rich.fullMarkdown, contains('screenshot_123.png'));
+      expect(rich.fullMarkdown, isNot(contains('ws://')));
+      expect(rich.fullMarkdown, isNot(contains('wss://')));
+      expect(rich.fullMarkdown, isNot(contains('http://')));
+      expect(rich.fullMarkdown, isNot(contains('https://')));
+
+      final general = buildGitHubIssuePayload(
+        draft: const FeedbackDraft(category: FeedbackCategory.general),
+        environment: env,
+      );
+      expect(general.uri.queryParameters.containsKey('labels'), isFalse);
+    });
+
+    test('caps long titles, drops diagnostics cleanly without unclosed fences, and never splits emoji surrogates', () {
+      final manyLogs = [
+        for (var i = 0; i < 35; i++)
+          DiagnosticLogEntry(
+            timestampUtc: DateTime.utc(2026, 11, 19, 11, 0, i),
+            kind: DiagnosticEventKind.relayProtocolError,
+          ),
+      ];
+
+      // 1. Long logs drop <details> first so URL body never leaves unclosed fences.
+      final truncated = buildGitHubIssuePayload(
+        draft: const FeedbackDraft(
+          category: FeedbackCategory.bug,
+          title: 'Long log report',
+          details: 'Some details here.',
+          includeWorkspaceState: true,
+          includeDiagnosticLogs: true,
+        ),
+        environment: env,
+        workspaceState: state,
+        diagnosticLogs: manyLogs,
+        maxUrlLength: 900,
+      );
+      expect(truncated.bodyTruncated, isTrue);
+      expect('${truncated.uri}'.length, lessThanOrEqualTo(900));
+      final urlBody = truncated.uri.queryParameters['body']!;
+      expect(urlBody, isNot(contains('<details>')));
+      expect(urlBody, isNot(contains('```text')));
+      expect(urlBody, contains('Full diagnostics copied to clipboard'));
+      expect(
+        truncated.fullMarkdown,
+        contains('[11:00:34Z] relay_protocol_error'),
+      );
+
+      // 2. Emoji-heavy details never emit U+FFFD replacement chars at any truncation boundary.
+      final emojiDraft = FeedbackDraft(
+        category: FeedbackCategory.bug,
+        title: '🚀' * 2500,
+        details: List<String>.filled(40, '🔥🚀👨‍👩‍👧‍👦').join(' '),
+      );
+      for (final budget in [360, 420, 500, 780, 792, 1900]) {
+        final payload = buildGitHubIssuePayload(
+          draft: emojiDraft,
+          environment: env,
+          maxUrlLength: budget,
         );
-        for (final budget in [360, 420, 500, 780, 792, 1900]) {
-          final payload = buildGitHubIssuePayload(
-            draft: emojiDraft,
-            environment: env,
-            maxUrlLength: budget,
-          );
-          expect(payload.bodyTruncated, isTrue);
-          expect(
-            '${payload.uri}'.length,
-            lessThanOrEqualTo(budget),
-            reason: 'budget=$budget exceeded',
-          );
-          final body = payload.uri.queryParameters['body'] ?? '';
-          expect(body.contains('\uFFFD'), isFalse, reason: 'budget=$budget');
-        }
-      },
-    );
+        expect(payload.bodyTruncated, isTrue);
+        expect(
+          '${payload.uri}'.length,
+          lessThanOrEqualTo(budget),
+          reason: 'budget=$budget exceeded',
+        );
+        final body = payload.uri.queryParameters['body'] ?? '';
+        expect(body.contains('\uFFFD'), isFalse, reason: 'budget=$budget');
+      }
+    });
   });
 
   group('Workspace diagnostic events', () {
-    test(
-      'FtermWorkspaceController records relayProtocolError, relayDisconnected, and remote buildDiagnosticSummary',
-      () async {
-        final harness = AppThreeWayWsHarness();
-        await harness.startCaster(id: 's1', title: 'diag-shell');
-        addTearDown(harness.dispose);
+    test('FtermWorkspaceController records relayProtocolError, relayDisconnected, and remote buildDiagnosticSummary', () async {
+      final harness = AppThreeWayWsHarness();
+      await harness.startCaster(id: 's1', title: 'diag-shell');
+      addTearDown(harness.dispose);
 
-        final ws = FtermWorkspaceController(
-          launchConfig: CastLaunchConfig(token: harness.token),
-          repository: CastClientRepository(
-            transport: WsClientTransport(
-              serverUri: CastLaunchConfig.defaultServerUri,
-              token: harness.token,
-              channelFactory: harness.openClientChannel,
-            ),
+      final ws = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(token: harness.token),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: CastLaunchConfig.defaultServerUri,
+            token: harness.token,
+            channelFactory: harness.openClientChannel,
           ),
-          localHostDriver: createLocalHostDriver(),
-          audioController: FtermAudioController(),
-          storage: _MemorySettingsStorage(),
-          updateService: createPlatformUpdateService(),
-          resizeDebounce: Duration.zero,
-        );
-        addTearDown(ws.dispose);
-        await ws.start();
+        ),
+        localHostDriver: createLocalHostDriver(),
+        audioController: FtermAudioController(),
+        storage: _MemorySettingsStorage(),
+        updateService: createPlatformUpdateService(),
+        resizeDebounce: Duration.zero,
+      );
+      addTearDown(ws.dispose);
+      await ws.start();
 
-        // Wait deterministically for remote session pane to mount.
-        for (var i = 0; i < 40 && ws.focusedPane == null; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 10));
-        }
-        expect(ws.focusedPane, isNotNull);
+      // Wait deterministically for remote session pane to mount.
+      for (var i = 0; i < 40 && ws.focusedPane == null; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      expect(ws.focusedPane, isNotNull);
 
-        final summary = ws.buildDiagnosticSummary(isWeb: false);
-        expect(summary.usesRelay, isTrue);
-        expect(summary.focusedPaneKind, equals('remote session (via relay)'));
-        expect(summary.activePtySize, isNotNull);
+      final summary = ws.buildDiagnosticSummary(isWeb: false);
+      expect(summary.usesRelay, isTrue);
+      expect(summary.focusedPaneKind, equals('remote session (via relay)'));
+      expect(summary.activePtySize, isNotNull);
 
-        // Emit non-fatal protocol error & disconnect events onto repository bus.
-        clientMessageReceivedEvent.post(
-          ws.repository.bus,
-          const ErrorFrame(code: 'rate_limited', message: 'slow down'),
-        );
-        clientDisconnectedEvent.post(ws.repository.bus, true);
+      // Emit non-fatal protocol error & disconnect events onto repository bus.
+      clientMessageReceivedEvent.post(
+        ws.repository.bus,
+        const ErrorFrame(code: 'rate_limited', message: 'slow down'),
+      );
+      clientDisconnectedEvent.post(ws.repository.bus, true);
 
-        final kinds = [for (final e in ws.diagnosticLog.entries) e.kind];
-        expect(kinds, contains(DiagnosticEventKind.relayProtocolError));
-        expect(kinds, contains(DiagnosticEventKind.relayDisconnected));
-      },
-    );
+      final kinds = [for (final e in ws.diagnosticLog.entries) e.kind];
+      expect(kinds, contains(DiagnosticEventKind.relayProtocolError));
+      expect(kinds, contains(DiagnosticEventKind.relayDisconnected));
+    });
   });
 
   group('FtermFeedbackOverlay widget & entry points', () {
@@ -588,9 +567,8 @@ void main() {
         final noticeText = tester.widget<Text>(
           find.descendant(of: notice, matching: find.byType(Text)),
         );
-        final savedMatch = RegExp(
-          r'Saved to (.+?) —',
-        ).firstMatch(noticeText.data ?? '');
+        final savedMatch = RegExp(r'Saved to (.+?) —')
+            .firstMatch(noticeText.data ?? '');
         expect(savedMatch, isNotNull);
         final savedFile = File(savedMatch!.group(1)!);
         expect(savedFile.existsSync(), isTrue);

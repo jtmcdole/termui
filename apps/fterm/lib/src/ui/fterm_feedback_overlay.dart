@@ -279,8 +279,7 @@ final class _FtermFeedbackOverlayState extends State<FtermFeedbackOverlay> {
     if (!mounted) return;
     setState(() {
       if (payload.bodyTruncated && !copied) {
-        _feedbackNotice =
-            'Opened GitHub issue, but clipboard copy failed — click Copy Report.';
+        _feedbackNotice = 'Opened GitHub issue, but clipboard copy failed — click Copy Report.';
         _noticeIsError = true;
       } else {
         _feedbackNotice = payload.bodyTruncated

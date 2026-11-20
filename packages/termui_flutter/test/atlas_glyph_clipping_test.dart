@@ -377,470 +377,463 @@ void main() {
       },
     );
 
-    test('Invariant 2: standalone prompt icons overhang into trailing space and '
-        'paint overhanging edge over cursor background on x + 1', () async {
-      for (final dpr in <double>[1.0, 2.0]) {
-        final base = await GlyphAtlasGenerator.generate(
-          fontSize: 13.0,
-          fontFamily: _primaryFont,
-          fontFamilyFallback: _fallbackFonts,
-          devicePixelRatio: dpr,
-        );
-        addTearDown(base.dispose);
-        final atlas = await base.addGlyphs(const <String>['\uF306', '\uF179']);
-        addTearDown(atlas.dispose);
-
-        final cellW = (atlas.cellWidth * dpr).round();
-        final overhangPx = (atlas.actualOverhang * dpr).round();
-
-        // 1. Standalone prompt icons: ' \uF306  \uF179 '
-        final promptBuf = _bufferFromLines(const [' \uF306  \uF179 ']);
-        final promptImg = await _paintBufferToRgba(
-          buffer: promptBuf,
-          atlas: atlas,
-          devicePixelRatio: dpr,
-        );
-
-        final f306Trailing = _measureInkBounds(
-          promptImg,
-          x0: 2 * cellW,
-          x1: 2 * cellW + overhangPx,
-          y0: 0,
-          y1: promptImg.height,
-        );
-        final f179Trailing = _measureInkBounds(
-          promptImg,
-          x0: 5 * cellW,
-          x1: 5 * cellW + overhangPx,
-          y0: 0,
-          y1: promptImg.height,
-        );
-        expect(
-          f306Trailing.count,
-          greaterThan(0),
-          reason: '\\uF306 at dpr=$dpr should overhang into trailing space',
-        );
-        expect(
-          f179Trailing.count,
-          greaterThan(0),
-          reason: '\\uF179 at dpr=$dpr should overhang into trailing space',
-        );
-
-        // Gap between \uF306 overhang and \uF179 left overhang stays pure background.
-        final gapBounds = _measureInkBounds(
-          promptImg,
-          x0: 2 * cellW + overhangPx,
-          x1: 4 * cellW - overhangPx,
-          y0: 0,
-          y1: promptImg.height,
-        );
-        expect(gapBounds.count, equals(0));
-
-        // 2. Cursor-adjacent \uF179 paints overhanging edge over cursor background on x + 1.
-        const cursorR = 0;
-        const cursorG = 220;
-        const cursorB = 120;
-        final cursorBuf = Buffer(3, 1)
-          ..writeString(
-            0,
-            0,
-            ' ',
-            const Style(
-              foreground: tui_color.Color(255, 255, 255),
-              background: tui_color.Color(20, 20, 20),
-            ),
-          )
-          ..writeString(
-            1,
-            0,
-            '\uF179',
-            const Style(
-              foreground: tui_color.Color(255, 255, 255),
-              background: tui_color.Color(20, 20, 20),
-            ),
-          )
-          ..writeString(
-            2,
-            0,
-            ' ',
-            const Style(
-              foreground: tui_color.Color(20, 20, 20),
-              background: tui_color.Color(cursorR, cursorG, cursorB),
-            ),
-          );
-        final cursorImg = await _paintBufferToRgba(
-          buffer: cursorBuf,
-          atlas: atlas,
-          devicePixelRatio: dpr,
-        );
-
-        var maxOverhangRedOverCursor = 0;
-        for (var y = 0; y < cursorImg.height; y++) {
-          for (var x = 2 * cellW; x < 2 * cellW + overhangPx; x++) {
-            final r = cursorImg.rgba[(y * cursorImg.width + x) * 4];
-            if (r > maxOverhangRedOverCursor) maxOverhangRedOverCursor = r;
-          }
-        }
-        expect(
-          maxOverhangRedOverCursor,
-          greaterThan(80),
-          reason:
-              '\\uF179 at dpr=$dpr should paint white overhanging edge over '
-              'green cursor background at x + 1',
-        );
-      }
-    });
-
     test(
-      'Invariant 3: italics and unrounded ascent+descent descenders across 13pt and 14pt',
+      'Invariant 2: standalone prompt icons overhang into trailing space and '
+      'paint overhanging edge over cursor background on x + 1',
       () async {
-        final expectedHeights = <double, double>{13.0: 16.0, 14.0: 17.0};
-
-        for (final entry in expectedHeights.entries) {
-          final fontSize = entry.key;
-          final expectedCellHeight = entry.value;
-          final atlas = await GlyphAtlasGenerator.generate(
-            fontSize: fontSize,
-            fontFamily: _primaryFont,
-            fontFamilyFallback: _fallbackFonts,
-          );
-          addTearDown(atlas.dispose);
-
-          expect(
-            atlas.cellHeight,
-            equals(expectedCellHeight),
-            reason: 'fontSize=$fontSize cellHeight mismatch',
-          );
-
-          final (:rgba, :width, :height) = await _readImageRgba(atlas.image);
-          final padPx = atlas.actualPadding.round();
-          final overhangPx = atlas.actualOverhang.round();
-
-          final checks = <(String, bool, bool)>[
-            ('@', false, true),
-            ('f', false, true),
-            ('W', false, true),
-            ('W', true, false),
-            ('Y', true, false),
-            ('&', true, false),
-            ('g', false, false),
-            ('j', false, false),
-            ('p', false, false),
-            ('q', false, false),
-            ('y', false, false),
-            (',', false, false),
-            (';', false, false),
-            ('Q', false, false),
-          ];
-
-          for (final (ch, isBold, isItalic) in checks) {
-            final rect = atlas.rectFor(ch, isBold: isBold, isItalic: isItalic);
-            expect(rect, isNotNull);
-            final moat = _measureSlotMoatAlpha(
-              atlasRgba: rgba,
-              atlasWidth: width,
-              atlasHeight: height,
-              sourceRect: rect!,
-              slotPadPx: padPx,
-              overhangPx: overhangPx,
-            );
-            expect(moat.maxInsideAlpha, greaterThan(0));
-            expect(
-              moat.maxMoatAlpha,
-              equals(0),
-              reason:
-                  "'$ch' (bold=$isBold, italic=$isItalic) at ${fontSize}pt "
-                  'exceeded overhang into slot moat',
-            );
-          }
-
-          // Render italic @, f, W and synthetic italic '╭' (no native italic variant).
-          final italicBuf = _bufferFromLines(const [
-            ' @  f  W  \u256D ',
-          ], style: const Style(modifiers: Modifier.italic));
-          final italicImg = await _paintBufferToRgba(
-            buffer: italicBuf,
-            atlas: atlas,
-          );
-          final cellW = atlas.cellWidth.round();
-          final cellH = atlas.cellHeight.round();
-          for (final col in <int>[1, 4, 7, 10]) {
-            final bounds = _measureInkBounds(
-              italicImg,
-              x0: col * cellW - overhangPx,
-              x1: (col + 1) * cellW + overhangPx,
-              y0: 0,
-              y1: cellH,
-            );
-            expect(
-              bounds.count,
-              greaterThan(0),
-              reason:
-                  'italic col=$col at ${fontSize}pt should render visible ink',
-            );
-          }
-
-          // Render descenders and verify bottom-row ink lives cleanly inside cellHeight.
-          final descBuf = _bufferFromLines(const ['gjpqy,;Q']);
-          final descImg = await _paintBufferToRgba(
-            buffer: descBuf,
-            atlas: atlas,
-          );
-          for (var col = 0; col < 8; col++) {
-            final bounds = _measureInkBounds(
-              descImg,
-              x0: col * cellW,
-              x1: (col + 1) * cellW,
-              y0: 0,
-              y1: cellH,
-            );
-            expect(bounds.count, greaterThan(0));
-            expect(
-              bounds.maxY,
-              greaterThan(atlas.standardBaseline.floor()),
-              reason:
-                  'descender col=$col at ${fontSize}pt must extend below baseline',
-            );
-            expect(bounds.maxY, lessThan(cellH));
-          }
-        }
-      },
-    );
-
-    test(
-      'Invariant 4: 3-row stacked math seamless across rows and combining tie-bars anchored on left',
-      () async {
-        final base = await GlyphAtlasGenerator.generate(
-          fontSize: 13.0,
-          fontFamily: _primaryFont,
-          fontFamilyFallback: _fallbackFonts,
-        );
-        addTearDown(base.dispose);
-        final atlas = await base.addGlyphs(const <String>[
-          '\u23A7', // ⎧
-          '\u23A8', // ⎨
-          '\u23A9', // ⎩
-          '\u2320', // ⌠
-          '\u23AE', // ⎮
-          '\u2321', // ⌡
-          't\u0361',
-          'o\u0361',
-        ]);
-        addTearDown(atlas.dispose);
-
-        final mathBuf = _bufferFromLines(const [
-          '\u23A7 \u2320',
-          '\u23A8 \u23AE',
-          '\u23A9 \u2321',
-        ]);
-        final mathImg = await _paintBufferToRgba(buffer: mathBuf, atlas: atlas);
-        final cellW = atlas.cellWidth.round();
-        final cellH = atlas.cellHeight.round();
-
-        bool hasLitPixelInRow(int col, int y) {
-          for (var x = col * cellW; x < (col + 1) * cellW; x++) {
-            final r = mathImg.rgba[(y * mathImg.width + x) * 4];
-            if (r - 0x14 > 24) return true;
-          }
-          return false;
-        }
-
-        for (final col in <int>[0, 2]) {
-          expect(hasLitPixelInRow(col, cellH - 1), isTrue);
-          expect(hasLitPixelInRow(col, cellH), isTrue);
-          expect(hasLitPixelInRow(col, 2 * cellH - 1), isTrue);
-          expect(hasLitPixelInRow(col, 2 * cellH), isTrue);
-        }
-
-        // Combining tie-bars: ' t\u0361s o\u0361o ' and trailing-space overhang ' t\u0361  o\u0361 '
-        final tieBuf = _bufferFromLines(const [' t\u0361s o\u0361o ']);
-        final tieImg = await _paintBufferToRgba(buffer: tieBuf, atlas: atlas);
-
-        final cell0Ink = _measureInkBounds(
-          tieImg,
-          x0: 0,
-          x1: cellW,
-          y0: 0,
-          y1: tieImg.height,
-        );
-        final cell3Ink = _measureInkBounds(
-          tieImg,
-          x0: 3 * cellW,
-          x1: 4 * cellW,
-          y0: 0,
-          y1: tieImg.height,
-        );
-        expect(
-          cell0Ink.count,
-          equals(0),
-          reason: 't\\u0361 should anchor on left without bleeding into cell 0',
-        );
-        expect(
-          cell3Ink.count,
-          equals(0),
-          reason: 'o\\u0361 should anchor on left without bleeding into cell 3',
-        );
-
-        final tieTrailBuf = _bufferFromLines(const [' t\u0361  o\u0361 ']);
-        final tieTrailImg = await _paintBufferToRgba(
-          buffer: tieTrailBuf,
-          atlas: atlas,
-        );
-        final overhangPx = atlas.actualOverhang.round();
-        final tRightOverhang = _measureInkBounds(
-          tieTrailImg,
-          x0: 2 * cellW,
-          x1: 2 * cellW + overhangPx,
-          y0: 0,
-          y1: tieTrailImg.height,
-        );
-        final oRightOverhang = _measureInkBounds(
-          tieTrailImg,
-          x0: 5 * cellW,
-          x1: 5 * cellW + overhangPx,
-          y0: 0,
-          y1: tieTrailImg.height,
-        );
-        expect(
-          tRightOverhang.count,
-          greaterThan(0),
-          reason: 't\\u0361 should overhang rightward into trailing space',
-        );
-        expect(
-          oRightOverhang.count,
-          greaterThan(0),
-          reason: 'o\\u0361 should overhang rightward into trailing space',
-        );
-      },
-    );
-
-    test(
-      'Invariant 5: procedural block zero neighbor bleed (enableBleed: false) '
-      'and Frame-1 fallback parity with Frame-2 baked atlas on " \\uF179 "',
-      () async {
-        // 5a. Procedural block ' █ ' with enableBleed: false -> maxNeighborDelta == 0.
         for (final dpr in <double>[1.0, 2.0]) {
-          final atlas = await GlyphAtlasGenerator.generate(
+          final base = await GlyphAtlasGenerator.generate(
             fontSize: 13.0,
             fontFamily: _primaryFont,
             fontFamilyFallback: _fallbackFonts,
             devicePixelRatio: dpr,
           );
+          addTearDown(base.dispose);
+          final atlas = await base.addGlyphs(const <String>[
+            '\uF306',
+            '\uF179',
+          ]);
           addTearDown(atlas.dispose);
 
-          final blockBuf = _bufferFromLines(const [' \u2588 ']);
-          final blockImg = await _paintBufferToRgba(
-            buffer: blockBuf,
+          final cellW = (atlas.cellWidth * dpr).round();
+          final overhangPx = (atlas.actualOverhang * dpr).round();
+
+          // 1. Standalone prompt icons: ' \uF306  \uF179 '
+          final promptBuf = _bufferFromLines(const [' \uF306  \uF179 ']);
+          final promptImg = await _paintBufferToRgba(
+            buffer: promptBuf,
             atlas: atlas,
             devicePixelRatio: dpr,
-            enableBleed: false,
           );
-          final cellW = (atlas.cellWidth * dpr).round();
-          var maxNeighborDelta = 0;
-          for (var y = 0; y < blockImg.height; y++) {
-            for (var x = 0; x < blockImg.width; x++) {
-              if (x >= cellW && x < 2 * cellW) continue;
-              final off = (y * blockImg.width + x) * 4;
-              for (var c = 0; c < 3; c++) {
-                final d = (blockImg.rgba[off + c] - 0x14).abs();
-                if (d > maxNeighborDelta) maxNeighborDelta = d;
-              }
+
+          final f306Trailing = _measureInkBounds(
+            promptImg,
+            x0: 2 * cellW,
+            x1: 2 * cellW + overhangPx,
+            y0: 0,
+            y1: promptImg.height,
+          );
+          final f179Trailing = _measureInkBounds(
+            promptImg,
+            x0: 5 * cellW,
+            x1: 5 * cellW + overhangPx,
+            y0: 0,
+            y1: promptImg.height,
+          );
+          expect(
+            f306Trailing.count,
+            greaterThan(0),
+            reason: '\\uF306 at dpr=$dpr should overhang into trailing space',
+          );
+          expect(
+            f179Trailing.count,
+            greaterThan(0),
+            reason: '\\uF179 at dpr=$dpr should overhang into trailing space',
+          );
+
+          // Gap between \uF306 overhang and \uF179 left overhang stays pure background.
+          final gapBounds = _measureInkBounds(
+            promptImg,
+            x0: 2 * cellW + overhangPx,
+            x1: 4 * cellW - overhangPx,
+            y0: 0,
+            y1: promptImg.height,
+          );
+          expect(gapBounds.count, equals(0));
+
+          // 2. Cursor-adjacent \uF179 paints overhanging edge over cursor background on x + 1.
+          const cursorR = 0;
+          const cursorG = 220;
+          const cursorB = 120;
+          final cursorBuf = Buffer(3, 1)
+            ..writeString(
+              0,
+              0,
+              ' ',
+              const Style(
+                foreground: tui_color.Color(255, 255, 255),
+                background: tui_color.Color(20, 20, 20),
+              ),
+            )
+            ..writeString(
+              1,
+              0,
+              '\uF179',
+              const Style(
+                foreground: tui_color.Color(255, 255, 255),
+                background: tui_color.Color(20, 20, 20),
+              ),
+            )
+            ..writeString(
+              2,
+              0,
+              ' ',
+              const Style(
+                foreground: tui_color.Color(20, 20, 20),
+                background: tui_color.Color(cursorR, cursorG, cursorB),
+              ),
+            );
+          final cursorImg = await _paintBufferToRgba(
+            buffer: cursorBuf,
+            atlas: atlas,
+            devicePixelRatio: dpr,
+          );
+
+          var maxOverhangRedOverCursor = 0;
+          for (var y = 0; y < cursorImg.height; y++) {
+            for (var x = 2 * cellW; x < 2 * cellW + overhangPx; x++) {
+              final r = cursorImg.rgba[(y * cursorImg.width + x) * 4];
+              if (r > maxOverhangRedOverCursor) maxOverhangRedOverCursor = r;
             }
           }
           expect(
-            maxNeighborDelta,
-            equals(0),
-            reason: 'Procedural block at dpr=$dpr bled into neighbor cells',
-          );
-        }
-
-        // 5b. Frame-1 fallback parity (cached and transient) with Frame-2 baked atlas on ' \uF179 '.
-        final iconBuf = _bufferFromLines(const [' \uF179 ']);
-        for (final (fontSize, dpr) in <(double, double)>[
-          (13.0, 1.0),
-          (13.0, 1.5),
-          (13.0, 2.0),
-          (14.0, 1.0),
-          (14.0, 2.0),
-        ]) {
-          final controller = GlyphAtlasController(
-            fontSize: fontSize,
-            fontFamily: _primaryFont,
-            fontFamilyFallback: _fallbackFonts,
-            devicePixelRatio: dpr,
-          );
-          addTearDown(controller.dispose);
-          await controller.ensureInitialized();
-
-          final unbakedAtlas = controller.atlas!;
-          expect(unbakedAtlas.rectFor('\uF179'), isNull);
-
-          controller.ensureFallbackPaintersForBuffer(
-            iconBuf,
-            defaultForegroundArgb: 0xFFE6E6E6,
-            defaultBackgroundArgb: 0xFF141414,
-            faintOpacity: 140 / 255,
-            palette: TerminalColorTheme.termuiDark,
-          );
-
-          final frame1Cached = await _paintBufferToRgba(
-            buffer: iconBuf,
-            atlas: unbakedAtlas,
-            fallbackPainters: controller.fallbackPainters,
-            devicePixelRatio: dpr,
-          );
-          final frame1Transient = await _paintBufferToRgba(
-            buffer: iconBuf,
-            atlas: unbakedAtlas,
-            devicePixelRatio: dpr,
-          );
-
-          final bakedAtlas = await unbakedAtlas.addStyledGlyphs(const [
-            ('\uF179', GlyphStyleVariant.regular),
-          ]);
-          addTearDown(bakedAtlas.dispose);
-
-          final frame2 = await _paintBufferToRgba(
-            buffer: iconBuf,
-            atlas: bakedAtlas,
-            devicePixelRatio: dpr,
-          );
-
-          final bounds1 = _measureInkBounds(
-            frame1Cached,
-            x0: 0,
-            x1: frame1Cached.width,
-            y0: 0,
-            y1: frame1Cached.height,
-          );
-          final bounds2 = _measureInkBounds(
-            frame2,
-            x0: 0,
-            x1: frame2.width,
-            y0: 0,
-            y1: frame2.height,
-          );
-
-          expect(
-            bounds1,
-            equals(bounds2),
+            maxOverhangRedOverCursor,
+            greaterThan(80),
             reason:
-                'fs=$fontSize dpr=$dpr Frame-1 bounds=$bounds1 vs Frame-2=$bounds2',
-          );
-          expect(
-            _maxPixelChannelDiff(frame1Cached.rgba, frame2.rgba),
-            equals(0),
-            reason: 'fs=$fontSize dpr=$dpr cached Frame-1 vs Frame-2 mismatch',
-          );
-          expect(
-            _maxPixelChannelDiff(frame1Transient.rgba, frame2.rgba),
-            equals(0),
-            reason:
-                'fs=$fontSize dpr=$dpr transient Frame-1 vs Frame-2 mismatch',
+                '\\uF179 at dpr=$dpr should paint white overhanging edge over '
+                'green cursor background at x + 1',
           );
         }
       },
     );
+
+    test('Invariant 3: italics and unrounded ascent+descent descenders across 13pt and 14pt', () async {
+      final expectedHeights = <double, double>{13.0: 16.0, 14.0: 17.0};
+
+      for (final entry in expectedHeights.entries) {
+        final fontSize = entry.key;
+        final expectedCellHeight = entry.value;
+        final atlas = await GlyphAtlasGenerator.generate(
+          fontSize: fontSize,
+          fontFamily: _primaryFont,
+          fontFamilyFallback: _fallbackFonts,
+        );
+        addTearDown(atlas.dispose);
+
+        expect(
+          atlas.cellHeight,
+          equals(expectedCellHeight),
+          reason: 'fontSize=$fontSize cellHeight mismatch',
+        );
+
+        final (:rgba, :width, :height) = await _readImageRgba(atlas.image);
+        final padPx = atlas.actualPadding.round();
+        final overhangPx = atlas.actualOverhang.round();
+
+        final checks = <(String, bool, bool)>[
+          ('@', false, true),
+          ('f', false, true),
+          ('W', false, true),
+          ('W', true, false),
+          ('Y', true, false),
+          ('&', true, false),
+          ('g', false, false),
+          ('j', false, false),
+          ('p', false, false),
+          ('q', false, false),
+          ('y', false, false),
+          (',', false, false),
+          (';', false, false),
+          ('Q', false, false),
+        ];
+
+        for (final (ch, isBold, isItalic) in checks) {
+          final rect = atlas.rectFor(ch, isBold: isBold, isItalic: isItalic);
+          expect(rect, isNotNull);
+          final moat = _measureSlotMoatAlpha(
+            atlasRgba: rgba,
+            atlasWidth: width,
+            atlasHeight: height,
+            sourceRect: rect!,
+            slotPadPx: padPx,
+            overhangPx: overhangPx,
+          );
+          expect(moat.maxInsideAlpha, greaterThan(0));
+          expect(
+            moat.maxMoatAlpha,
+            equals(0),
+            reason:
+                "'$ch' (bold=$isBold, italic=$isItalic) at ${fontSize}pt "
+                'exceeded overhang into slot moat',
+          );
+        }
+
+        // Render italic @, f, W and synthetic italic '╭' (no native italic variant).
+        final italicBuf = _bufferFromLines(const [
+          ' @  f  W  \u256D ',
+        ], style: const Style(modifiers: Modifier.italic));
+        final italicImg = await _paintBufferToRgba(
+          buffer: italicBuf,
+          atlas: atlas,
+        );
+        final cellW = atlas.cellWidth.round();
+        final cellH = atlas.cellHeight.round();
+        for (final col in <int>[1, 4, 7, 10]) {
+          final bounds = _measureInkBounds(
+            italicImg,
+            x0: col * cellW - overhangPx,
+            x1: (col + 1) * cellW + overhangPx,
+            y0: 0,
+            y1: cellH,
+          );
+          expect(
+            bounds.count,
+            greaterThan(0),
+            reason:
+                'italic col=$col at ${fontSize}pt should render visible ink',
+          );
+        }
+
+        // Render descenders and verify bottom-row ink lives cleanly inside cellHeight.
+        final descBuf = _bufferFromLines(const ['gjpqy,;Q']);
+        final descImg = await _paintBufferToRgba(buffer: descBuf, atlas: atlas);
+        for (var col = 0; col < 8; col++) {
+          final bounds = _measureInkBounds(
+            descImg,
+            x0: col * cellW,
+            x1: (col + 1) * cellW,
+            y0: 0,
+            y1: cellH,
+          );
+          expect(bounds.count, greaterThan(0));
+          expect(
+            bounds.maxY,
+            greaterThan(atlas.standardBaseline.floor()),
+            reason:
+                'descender col=$col at ${fontSize}pt must extend below baseline',
+          );
+          expect(bounds.maxY, lessThan(cellH));
+        }
+      }
+    });
+
+    test('Invariant 4: 3-row stacked math seamless across rows and combining tie-bars anchored on left', () async {
+      final base = await GlyphAtlasGenerator.generate(
+        fontSize: 13.0,
+        fontFamily: _primaryFont,
+        fontFamilyFallback: _fallbackFonts,
+      );
+      addTearDown(base.dispose);
+      final atlas = await base.addGlyphs(const <String>[
+        '\u23A7', // ⎧
+        '\u23A8', // ⎨
+        '\u23A9', // ⎩
+        '\u2320', // ⌠
+        '\u23AE', // ⎮
+        '\u2321', // ⌡
+        't\u0361',
+        'o\u0361',
+      ]);
+      addTearDown(atlas.dispose);
+
+      final mathBuf = _bufferFromLines(const [
+        '\u23A7 \u2320',
+        '\u23A8 \u23AE',
+        '\u23A9 \u2321',
+      ]);
+      final mathImg = await _paintBufferToRgba(buffer: mathBuf, atlas: atlas);
+      final cellW = atlas.cellWidth.round();
+      final cellH = atlas.cellHeight.round();
+
+      bool hasLitPixelInRow(int col, int y) {
+        for (var x = col * cellW; x < (col + 1) * cellW; x++) {
+          final r = mathImg.rgba[(y * mathImg.width + x) * 4];
+          if (r - 0x14 > 24) return true;
+        }
+        return false;
+      }
+
+      for (final col in <int>[0, 2]) {
+        expect(hasLitPixelInRow(col, cellH - 1), isTrue);
+        expect(hasLitPixelInRow(col, cellH), isTrue);
+        expect(hasLitPixelInRow(col, 2 * cellH - 1), isTrue);
+        expect(hasLitPixelInRow(col, 2 * cellH), isTrue);
+      }
+
+      // Combining tie-bars: ' t\u0361s o\u0361o ' and trailing-space overhang ' t\u0361  o\u0361 '
+      final tieBuf = _bufferFromLines(const [' t\u0361s o\u0361o ']);
+      final tieImg = await _paintBufferToRgba(buffer: tieBuf, atlas: atlas);
+
+      final cell0Ink = _measureInkBounds(
+        tieImg,
+        x0: 0,
+        x1: cellW,
+        y0: 0,
+        y1: tieImg.height,
+      );
+      final cell3Ink = _measureInkBounds(
+        tieImg,
+        x0: 3 * cellW,
+        x1: 4 * cellW,
+        y0: 0,
+        y1: tieImg.height,
+      );
+      expect(
+        cell0Ink.count,
+        equals(0),
+        reason: 't\\u0361 should anchor on left without bleeding into cell 0',
+      );
+      expect(
+        cell3Ink.count,
+        equals(0),
+        reason: 'o\\u0361 should anchor on left without bleeding into cell 3',
+      );
+
+      final tieTrailBuf = _bufferFromLines(const [' t\u0361  o\u0361 ']);
+      final tieTrailImg = await _paintBufferToRgba(
+        buffer: tieTrailBuf,
+        atlas: atlas,
+      );
+      final overhangPx = atlas.actualOverhang.round();
+      final tRightOverhang = _measureInkBounds(
+        tieTrailImg,
+        x0: 2 * cellW,
+        x1: 2 * cellW + overhangPx,
+        y0: 0,
+        y1: tieTrailImg.height,
+      );
+      final oRightOverhang = _measureInkBounds(
+        tieTrailImg,
+        x0: 5 * cellW,
+        x1: 5 * cellW + overhangPx,
+        y0: 0,
+        y1: tieTrailImg.height,
+      );
+      expect(
+        tRightOverhang.count,
+        greaterThan(0),
+        reason: 't\\u0361 should overhang rightward into trailing space',
+      );
+      expect(
+        oRightOverhang.count,
+        greaterThan(0),
+        reason: 'o\\u0361 should overhang rightward into trailing space',
+      );
+    });
+
+    test('Invariant 5: procedural block zero neighbor bleed (enableBleed: false) '
+        'and Frame-1 fallback parity with Frame-2 baked atlas on " \\uF179 "', () async {
+      // 5a. Procedural block ' █ ' with enableBleed: false -> maxNeighborDelta == 0.
+      for (final dpr in <double>[1.0, 2.0]) {
+        final atlas = await GlyphAtlasGenerator.generate(
+          fontSize: 13.0,
+          fontFamily: _primaryFont,
+          fontFamilyFallback: _fallbackFonts,
+          devicePixelRatio: dpr,
+        );
+        addTearDown(atlas.dispose);
+
+        final blockBuf = _bufferFromLines(const [' \u2588 ']);
+        final blockImg = await _paintBufferToRgba(
+          buffer: blockBuf,
+          atlas: atlas,
+          devicePixelRatio: dpr,
+          enableBleed: false,
+        );
+        final cellW = (atlas.cellWidth * dpr).round();
+        var maxNeighborDelta = 0;
+        for (var y = 0; y < blockImg.height; y++) {
+          for (var x = 0; x < blockImg.width; x++) {
+            if (x >= cellW && x < 2 * cellW) continue;
+            final off = (y * blockImg.width + x) * 4;
+            for (var c = 0; c < 3; c++) {
+              final d = (blockImg.rgba[off + c] - 0x14).abs();
+              if (d > maxNeighborDelta) maxNeighborDelta = d;
+            }
+          }
+        }
+        expect(
+          maxNeighborDelta,
+          equals(0),
+          reason: 'Procedural block at dpr=$dpr bled into neighbor cells',
+        );
+      }
+
+      // 5b. Frame-1 fallback parity (cached and transient) with Frame-2 baked atlas on ' \uF179 '.
+      final iconBuf = _bufferFromLines(const [' \uF179 ']);
+      for (final (fontSize, dpr) in <(double, double)>[
+        (13.0, 1.0),
+        (13.0, 1.5),
+        (13.0, 2.0),
+        (14.0, 1.0),
+        (14.0, 2.0),
+      ]) {
+        final controller = GlyphAtlasController(
+          fontSize: fontSize,
+          fontFamily: _primaryFont,
+          fontFamilyFallback: _fallbackFonts,
+          devicePixelRatio: dpr,
+        );
+        addTearDown(controller.dispose);
+        await controller.ensureInitialized();
+
+        final unbakedAtlas = controller.atlas!;
+        expect(unbakedAtlas.rectFor('\uF179'), isNull);
+
+        controller.ensureFallbackPaintersForBuffer(
+          iconBuf,
+          defaultForegroundArgb: 0xFFE6E6E6,
+          defaultBackgroundArgb: 0xFF141414,
+          faintOpacity: 140 / 255,
+          palette: TerminalColorTheme.termuiDark,
+        );
+
+        final frame1Cached = await _paintBufferToRgba(
+          buffer: iconBuf,
+          atlas: unbakedAtlas,
+          fallbackPainters: controller.fallbackPainters,
+          devicePixelRatio: dpr,
+        );
+        final frame1Transient = await _paintBufferToRgba(
+          buffer: iconBuf,
+          atlas: unbakedAtlas,
+          devicePixelRatio: dpr,
+        );
+
+        final bakedAtlas = await unbakedAtlas.addStyledGlyphs(const [
+          ('\uF179', GlyphStyleVariant.regular),
+        ]);
+        addTearDown(bakedAtlas.dispose);
+
+        final frame2 = await _paintBufferToRgba(
+          buffer: iconBuf,
+          atlas: bakedAtlas,
+          devicePixelRatio: dpr,
+        );
+
+        final bounds1 = _measureInkBounds(
+          frame1Cached,
+          x0: 0,
+          x1: frame1Cached.width,
+          y0: 0,
+          y1: frame1Cached.height,
+        );
+        final bounds2 = _measureInkBounds(
+          frame2,
+          x0: 0,
+          x1: frame2.width,
+          y0: 0,
+          y1: frame2.height,
+        );
+
+        expect(
+          bounds1,
+          equals(bounds2),
+          reason:
+              'fs=$fontSize dpr=$dpr Frame-1 bounds=$bounds1 vs Frame-2=$bounds2',
+        );
+        expect(
+          _maxPixelChannelDiff(frame1Cached.rgba, frame2.rgba),
+          equals(0),
+          reason: 'fs=$fontSize dpr=$dpr cached Frame-1 vs Frame-2 mismatch',
+        );
+        expect(
+          _maxPixelChannelDiff(frame1Transient.rgba, frame2.rgba),
+          equals(0),
+          reason: 'fs=$fontSize dpr=$dpr transient Frame-1 vs Frame-2 mismatch',
+        );
+      }
+    });
   });
 
   group(
@@ -849,16 +842,13 @@ void main() {
         ? 'Flutter pixel goldens run on Linux only (see apps/fterm/README.md).'
         : null,
     () {
-      test(
-        'renders unclipped prompt icons, cursors, italics, ties, math, and 6x zoom',
-        () async {
-          final pngBytes = await _renderBoardPngBytes();
-          await expectLater(
-            pngBytes,
-            matchesGoldenFile('goldens/selective_option_a_glyph_overhang.png'),
-          );
-        },
-      );
+      test('renders unclipped prompt icons, cursors, italics, ties, math, and 6x zoom', () async {
+        final pngBytes = await _renderBoardPngBytes();
+        await expectLater(
+          pngBytes,
+          matchesGoldenFile('goldens/selective_option_a_glyph_overhang.png'),
+        );
+      });
     },
   );
 }

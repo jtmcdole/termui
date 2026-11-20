@@ -48,406 +48,381 @@ void main() {
 
 void _defineDesktopLaunchConfigTests() {
   group('Desktop CastLaunchConfig file:// and CLI/env resolution', () {
-    test(
-      'falls back cleanly to defaultServerUri across POSIX, Windows drive, and UNC file:// base URIs',
-      () {
-        for (final rawBase in const [
-          'file:///Users/dev/termui_caster/apps/fterm/',
-          'file:///C:/Users/dev/fterm/',
-          'file://fileserver/share/fterm/',
-        ]) {
-          final unconfigured = resolveCastLaunchConfig(
-            baseUri: Uri.parse(rawBase),
-            environment: const {},
-          );
-          expect(
-            unconfigured.serverUri,
-            equals(CastLaunchConfig.defaultServerUri),
-          );
-          expect(unconfigured.token, isEmpty);
-          expect(unconfigured.promptForConnection, isTrue);
-        }
-
-        // URL fragments on file:// base URIs must never auto-populate a token.
-        final fileFragmentIgnored = resolveCastLaunchConfig(
-          baseUri: Uri.parse('file:///tmp/index.html#token=untrusted-frag'),
+    test('falls back cleanly to defaultServerUri across POSIX, Windows drive, and UNC file:// base URIs', () {
+      for (final rawBase in const [
+        'file:///Users/dev/termui_caster/apps/fterm/',
+        'file:///C:/Users/dev/fterm/',
+        'file://fileserver/share/fterm/',
+      ]) {
+        final unconfigured = resolveCastLaunchConfig(
+          baseUri: Uri.parse(rawBase),
           environment: const {},
         );
-        expect(fileFragmentIgnored.token, isEmpty);
-        expect(fileFragmentIgnored.promptForConnection, isTrue);
-
-        // Providing a token alone on desktop connects to defaultServerUri without prompting.
-        final tokenOnlyDesktop = resolveCastLaunchConfig(
-          baseUri: Uri.parse('file:///Users/dev/fterm/'),
-          environment: const {'TERMUI_CAST_TOKEN': 'dev-client'},
-        );
         expect(
-          tokenOnlyDesktop.serverUri,
+          unconfigured.serverUri,
           equals(CastLaunchConfig.defaultServerUri),
         );
-        expect(tokenOnlyDesktop.token, equals('dev-client'));
-        expect(tokenOnlyDesktop.promptForConnection, isFalse);
-      },
-    );
+        expect(unconfigured.token, isEmpty);
+        expect(unconfigured.promptForConnection, isTrue);
+      }
 
-    test(
-      'applies CLI > runtime environment > --dart-define precedence and ignores unknown platform flags',
-      () {
-        final desktopBase = Uri.parse('file:///Users/dev/fterm/');
+      // URL fragments on file:// base URIs must never auto-populate a token.
+      final fileFragmentIgnored = resolveCastLaunchConfig(
+        baseUri: Uri.parse('file:///tmp/index.html#token=untrusted-frag'),
+        environment: const {},
+      );
+      expect(fileFragmentIgnored.token, isEmpty);
+      expect(fileFragmentIgnored.promptForConnection, isTrue);
 
-        // 1. --dart-define fallback when CLI and runtime environment are empty.
-        final fromDefines = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          environment: const {'TERMUI_CAST_SERVER_URL': '   '},
-          defineServerUrl: 'ws://127.0.0.1:9001/v1/client',
-          defineToken: 'define-tok',
-        );
-        expect(
-          fromDefines.serverUri,
-          equals(Uri.parse('ws://127.0.0.1:9001/v1/client')),
-        );
-        expect(fromDefines.token, equals('define-tok'));
-        expect(fromDefines.promptForConnection, isFalse);
+      // Providing a token alone on desktop connects to defaultServerUri without prompting.
+      final tokenOnlyDesktop = resolveCastLaunchConfig(
+        baseUri: Uri.parse('file:///Users/dev/fterm/'),
+        environment: const {'TERMUI_CAST_TOKEN': 'dev-client'},
+      );
+      expect(
+        tokenOnlyDesktop.serverUri,
+        equals(CastLaunchConfig.defaultServerUri),
+      );
+      expect(tokenOnlyDesktop.token, equals('dev-client'));
+      expect(tokenOnlyDesktop.promptForConnection, isFalse);
+    });
 
-        // 2. Runtime environment overrides --dart-define.
-        final fromEnv = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          environment: const {
-            'TERMUI_CAST_SERVER_URL': 'wss://relay.example.com/v1/client',
-            'TERMUI_CAST_TOKEN': 'env-tok',
-          },
-          defineServerUrl: 'ws://127.0.0.1:9001/v1/client',
-          defineToken: 'define-tok',
-        );
-        expect(
-          fromEnv.serverUri,
-          equals(Uri.parse('wss://relay.example.com/v1/client')),
-        );
-        expect(fromEnv.token, equals('env-tok'));
-        expect(fromEnv.promptForConnection, isFalse);
+    test('applies CLI > runtime environment > --dart-define precedence and ignores unknown platform flags', () {
+      final desktopBase = Uri.parse('file:///Users/dev/fterm/');
 
-        // 3. CLI flags (--server/--url and --token, space and =) override runtime env and ignore OS flags & post-'--' args.
-        final fromSpaceCli = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          args: const [
-            '-NSDocumentRevisionsDebugMode',
-            'YES',
-            '--url',
-            'ws://127.0.0.1:9440/v1/client',
-            '--token',
-            'cli-space-tok',
-            '--',
-            '--server',
-            'ws://ignored.example/v1/client',
-          ],
-          environment: const {
-            'TERMUI_CAST_SERVER_URL': 'wss://relay.example.com/v1/client',
-            'TERMUI_CAST_TOKEN': 'env-tok',
-          },
-        );
-        expect(
-          fromSpaceCli.serverUri,
-          equals(Uri.parse('ws://127.0.0.1:9440/v1/client')),
-        );
-        expect(fromSpaceCli.token, equals('cli-space-tok'));
+      // 1. --dart-define fallback when CLI and runtime environment are empty.
+      final fromDefines = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        environment: const {'TERMUI_CAST_SERVER_URL': '   '},
+        defineServerUrl: 'ws://127.0.0.1:9001/v1/client',
+        defineToken: 'define-tok',
+      );
+      expect(
+        fromDefines.serverUri,
+        equals(Uri.parse('ws://127.0.0.1:9001/v1/client')),
+      );
+      expect(fromDefines.token, equals('define-tok'));
+      expect(fromDefines.promptForConnection, isFalse);
 
-        final fromEqualsCli = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          args: const [
-            '--server=wss://cli.example.com/v1/client',
-            '--token=base64+tok==',
-          ],
-          environment: const {
-            'TERMUI_CAST_SERVER_URL': 'wss://relay.example.com/v1/client',
-            'TERMUI_CAST_TOKEN': 'env-tok',
-          },
-        );
-        expect(
-          fromEqualsCli.serverUri,
-          equals(Uri.parse('wss://cli.example.com/v1/client')),
-        );
-        expect(fromEqualsCli.token, equals('base64+tok=='));
+      // 2. Runtime environment overrides --dart-define.
+      final fromEnv = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        environment: const {
+          'TERMUI_CAST_SERVER_URL': 'wss://relay.example.com/v1/client',
+          'TERMUI_CAST_TOKEN': 'env-tok',
+        },
+        defineServerUrl: 'ws://127.0.0.1:9001/v1/client',
+        defineToken: 'define-tok',
+      );
+      expect(
+        fromEnv.serverUri,
+        equals(Uri.parse('wss://relay.example.com/v1/client')),
+      );
+      expect(fromEnv.token, equals('env-tok'));
+      expect(fromEnv.promptForConnection, isFalse);
 
-        // Platform reader delegates cleanly to Platform.environment + CLI args.
-        final ioOverrides = readPlatformLaunchOverrides(const [
-          '--url=ws://127.0.0.1:8420/v1/client',
-          '--token=io-tok',
-        ]);
-        expect(ioOverrides.serverUrl, equals('ws://127.0.0.1:8420/v1/client'));
-        expect(ioOverrides.token, equals('io-tok'));
+      // 3. CLI flags (--server/--url and --token, space and =) override runtime env and ignore OS flags & post-'--' args.
+      final fromSpaceCli = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const [
+          '-NSDocumentRevisionsDebugMode',
+          'YES',
+          '--url',
+          'ws://127.0.0.1:9440/v1/client',
+          '--token',
+          'cli-space-tok',
+          '--',
+          '--server',
+          'ws://ignored.example/v1/client',
+        ],
+        environment: const {
+          'TERMUI_CAST_SERVER_URL': 'wss://relay.example.com/v1/client',
+          'TERMUI_CAST_TOKEN': 'env-tok',
+        },
+      );
+      expect(
+        fromSpaceCli.serverUri,
+        equals(Uri.parse('ws://127.0.0.1:9440/v1/client')),
+      );
+      expect(fromSpaceCli.token, equals('cli-space-tok'));
 
-        for (final badArgs in const [
-          ['--server'],
-          ['--url'],
-          ['--token'],
-          ['--server=http://not-websocket.example/v1/client'],
-          ['--server=ws://https://relay.run.app'],
-          ['--server=wss://https://relay.run.app/v1/client'],
-        ]) {
-          expect(
-            () => resolveCastLaunchConfig(
-              baseUri: desktopBase,
-              args: badArgs,
-              environment: const {},
-            ),
-            throwsFormatException,
-          );
-        }
+      final fromEqualsCli = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const [
+          '--server=wss://cli.example.com/v1/client',
+          '--token=base64+tok==',
+        ],
+        environment: const {
+          'TERMUI_CAST_SERVER_URL': 'wss://relay.example.com/v1/client',
+          'TERMUI_CAST_TOKEN': 'env-tok',
+        },
+      );
+      expect(
+        fromEqualsCli.serverUri,
+        equals(Uri.parse('wss://cli.example.com/v1/client')),
+      );
+      expect(fromEqualsCli.token, equals('base64+tok=='));
 
-        // HTTPS, bare host, and /v1/caster relay URLs normalize to ws(s)://.../v1/client.
-        final httpsRoot = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          args: const ['--server=https://relay.run.app'],
-          environment: const {},
-        );
+      // Platform reader delegates cleanly to Platform.environment + CLI args.
+      final ioOverrides = readPlatformLaunchOverrides(const [
+        '--url=ws://127.0.0.1:8420/v1/client',
+        '--token=io-tok',
+      ]);
+      expect(ioOverrides.serverUrl, equals('ws://127.0.0.1:8420/v1/client'));
+      expect(ioOverrides.token, equals('io-tok'));
+
+      for (final badArgs in const [
+        ['--server'],
+        ['--url'],
+        ['--token'],
+        ['--server=http://not-websocket.example/v1/client'],
+        ['--server=ws://https://relay.run.app'],
+        ['--server=wss://https://relay.run.app/v1/client'],
+      ]) {
         expect(
-          httpsRoot.serverUri,
-          equals(Uri.parse('wss://relay.run.app/v1/client')),
+          () => resolveCastLaunchConfig(
+            baseUri: desktopBase,
+            args: badArgs,
+            environment: const {},
+          ),
+          throwsFormatException,
         );
-        final httpsCasterPath = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          args: const ['--server=https://relay.run.app/v1/caster'],
-          environment: const {},
-        );
-        expect(
-          httpsCasterPath.serverUri,
-          equals(Uri.parse('wss://relay.run.app/v1/client')),
-        );
-        final bareHost = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          args: const ['--server=relay.run.app'],
-          environment: const {},
-        );
-        expect(
-          bareHost.serverUri,
-          equals(Uri.parse('wss://relay.run.app/v1/client')),
-        );
-        final bareLoopback = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          args: const ['--server=localhost:8420'],
-          environment: const {},
-        );
-        expect(
-          bareLoopback.serverUri,
-          equals(Uri.parse('ws://localhost:8420/v1/client')),
-        );
-        final httpsCustom = resolveCastLaunchConfig(
-          baseUri: desktopBase,
-          environment: const {
-            'TERMUI_CAST_SERVER_URL':
-                'https://relay.run.app:8443/custom/client',
-          },
-        );
-        expect(
-          httpsCustom.serverUri,
-          equals(Uri.parse('wss://relay.run.app:8443/custom/client')),
-        );
-      },
-    );
+      }
+
+      // HTTPS, bare host, and /v1/caster relay URLs normalize to ws(s)://.../v1/client.
+      final httpsRoot = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const ['--server=https://relay.run.app'],
+        environment: const {},
+      );
+      expect(
+        httpsRoot.serverUri,
+        equals(Uri.parse('wss://relay.run.app/v1/client')),
+      );
+      final httpsCasterPath = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const ['--server=https://relay.run.app/v1/caster'],
+        environment: const {},
+      );
+      expect(
+        httpsCasterPath.serverUri,
+        equals(Uri.parse('wss://relay.run.app/v1/client')),
+      );
+      final bareHost = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const ['--server=relay.run.app'],
+        environment: const {},
+      );
+      expect(
+        bareHost.serverUri,
+        equals(Uri.parse('wss://relay.run.app/v1/client')),
+      );
+      final bareLoopback = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const ['--server=localhost:8420'],
+        environment: const {},
+      );
+      expect(
+        bareLoopback.serverUri,
+        equals(Uri.parse('ws://localhost:8420/v1/client')),
+      );
+      final httpsCustom = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        environment: const {
+          'TERMUI_CAST_SERVER_URL': 'https://relay.run.app:8443/custom/client',
+        },
+      );
+      expect(
+        httpsCustom.serverUri,
+        equals(Uri.parse('wss://relay.run.app:8443/custom/client')),
+      );
+    });
   });
 }
 
 void _defineFileSettingsStorageUnitTests() {
   group('Desktop FileSettingsStorage and FLUTTER_TEST isolation', () {
-    test(
-      'resolves macOS/Linux and Windows settings paths and isolates storage under FLUTTER_TEST',
-      () async {
-        expect(
-          resolveDesktopSettingsFilePath(
-            environment: const {'HOME': '/Users/alice'},
-            isWindows: false,
-          ),
-          equals('/Users/alice/.config/fterm/settings.json'),
-        );
-        expect(
-          resolveDesktopSettingsFilePath(
-            environment: const {},
-            isWindows: false,
-          ),
-          isNull,
-        );
-        expect(
-          resolveDesktopSettingsFilePath(
-            environment: const {'APPDATA': r'C:\Users\alice\AppData\Roaming'},
-            isWindows: true,
-          ),
-          equals(r'C:\Users\alice\AppData\Roaming\fterm\settings.json'),
-        );
-        expect(
-          resolveDesktopSettingsFilePath(
-            environment: const {'USERPROFILE': r'C:\Users\alice'},
-            isWindows: true,
-          ),
-          equals(r'C:\Users\alice\AppData\Roaming\fterm\settings.json'),
-        );
-        expect(
-          resolveDesktopSettingsFilePath(
-            environment: const {},
-            isWindows: true,
-          ),
-          isNull,
-        );
-
-        final tempHome = Directory.systemTemp.createTempSync('fterm_home_');
-        addTearDown(() => tempHome.deleteSync(recursive: true));
-
-        // Under FLUTTER_TEST, createPlatformSettingsStorage & defaultSettingsStorage never touch HOME.
-        final testIsolated = createPlatformSettingsStorage(
-          environment: {'FLUTTER_TEST': 'true', 'HOME': tempHome.path},
+    test('resolves macOS/Linux and Windows settings paths and isolates storage under FLUTTER_TEST', () async {
+      expect(
+        resolveDesktopSettingsFilePath(
+          environment: const {'HOME': '/Users/alice'},
           isWindows: false,
-        );
-        testIsolated.setItem(castSettingsStorageKey, '{"copyOnSelect":false}');
-        expect(testIsolated.getItem(castSettingsStorageKey), isNull);
-        defaultSettingsStorage.setItem(
-          castSettingsStorageKey,
-          '{"copyOnSelect":false}',
-        );
-        expect(defaultSettingsStorage.getItem(castSettingsStorageKey), isNull);
-        expect(
-          File(
-            p.join(tempHome.path, '.config', 'fterm', 'settings.json'),
-          ).existsSync(),
-          isFalse,
-        );
+        ),
+        equals('/Users/alice/.config/fterm/settings.json'),
+      );
+      expect(
+        resolveDesktopSettingsFilePath(environment: const {}, isWindows: false),
+        isNull,
+      );
+      expect(
+        resolveDesktopSettingsFilePath(
+          environment: const {'APPDATA': r'C:\Users\alice\AppData\Roaming'},
+          isWindows: true,
+        ),
+        equals(r'C:\Users\alice\AppData\Roaming\fterm\settings.json'),
+      );
+      expect(
+        resolveDesktopSettingsFilePath(
+          environment: const {'USERPROFILE': r'C:\Users\alice'},
+          isWindows: true,
+        ),
+        equals(r'C:\Users\alice\AppData\Roaming\fterm\settings.json'),
+      );
+      expect(
+        resolveDesktopSettingsFilePath(environment: const {}, isWindows: true),
+        isNull,
+      );
 
-        // Outside FLUTTER_TEST, createPlatformSettingsStorage persists to <HOME>/.config/fterm/settings.json
-        // with strict 0700 directory and 0600 file permissions on POSIX.
-        final liveDesktop = createPlatformSettingsStorage(
-          environment: {'HOME': tempHome.path},
-          isWindows: false,
-        );
-        liveDesktop.setItem(castSettingsStorageKey, '{"copyOnSelect":false}');
-        saveStoredRelayCredentials(
-          liveDesktop,
-          const RelayCredentials(
-            serverUrl: 'wss://relay.example.com/v1/client',
-            clientToken: 'viewer-secret',
-            casterToken: 'caster-secret',
-          ),
-        );
-        final settingsDir = Directory(
-          p.join(tempHome.path, '.config', 'fterm'),
-        );
-        final settingsFile = File(p.join(settingsDir.path, 'settings.json'));
-        await (liveDesktop as BatchSettingsStorage).flush();
-        expect(settingsFile.existsSync(), isTrue);
-        expect(
-          liveDesktop.getItem(castSettingsStorageKey),
-          equals('{"copyOnSelect":false}'),
-        );
-        expect(
-          loadStoredRelayCredentials(liveDesktop).casterToken,
-          equals('caster-secret'),
-        );
-        if (!Platform.isWindows) {
-          expect(settingsDir.statSync().mode & 0x1ff, equals(0x1c0));
-          expect(settingsFile.statSync().mode & 0x1ff, equals(0x180));
-        }
+      final tempHome = Directory.systemTemp.createTempSync('fterm_home_');
+      addTearDown(() => tempHome.deleteSync(recursive: true));
 
-        // Legacy ~/.config/termui_cast/settings.json is read as fallback and migrated cleanly.
-        final legacyHome = Directory.systemTemp.createTempSync('fterm_legacy_');
-        addTearDown(() => legacyHome.deleteSync(recursive: true));
-        final legacyFile = File(
-          p.join(legacyHome.path, '.config', 'termui_cast', 'settings.json'),
-        )..createSync(recursive: true);
-        legacyFile.writeAsStringSync(
-          jsonEncode({castSettingsStorageKey: '{"copyOnSelect":false}'}),
-        );
-        final migratedDesktop = createPlatformSettingsStorage(
-          environment: {'HOME': legacyHome.path},
-          isWindows: false,
-        );
-        expect(loadStoredSettings(migratedDesktop).copyOnSelect, isFalse);
-        saveStoredRelayCredentials(
-          migratedDesktop,
-          const RelayCredentials(clientToken: 'migrated-token'),
-        );
-        expect(loadStoredSettings(migratedDesktop).copyOnSelect, isFalse);
-        expect(
-          loadStoredRelayCredentials(migratedDesktop).clientToken,
-          equals('migrated-token'),
-        );
-      },
-    );
+      // Under FLUTTER_TEST, createPlatformSettingsStorage & defaultSettingsStorage never touch HOME.
+      final testIsolated = createPlatformSettingsStorage(
+        environment: {'FLUTTER_TEST': 'true', 'HOME': tempHome.path},
+        isWindows: false,
+      );
+      testIsolated.setItem(castSettingsStorageKey, '{"copyOnSelect":false}');
+      expect(testIsolated.getItem(castSettingsStorageKey), isNull);
+      defaultSettingsStorage.setItem(
+        castSettingsStorageKey,
+        '{"copyOnSelect":false}',
+      );
+      expect(defaultSettingsStorage.getItem(castSettingsStorageKey), isNull);
+      expect(
+        File(p.join(tempHome.path, '.config', 'fterm', 'settings.json'))
+            .existsSync(),
+        isFalse,
+      );
 
-    test(
-      'round-trips CastWorkspaceSettings in a temp directory, supports nested JSON maps, and heals corrupt files',
-      () async {
-        final tempDir = Directory.systemTemp.createTempSync(
-          'termui_cast_settings_',
-        );
-        addTearDown(() => tempDir.deleteSync(recursive: true));
+      // Outside FLUTTER_TEST, createPlatformSettingsStorage persists to <HOME>/.config/fterm/settings.json
+      // with strict 0700 directory and 0600 file permissions on POSIX.
+      final liveDesktop = createPlatformSettingsStorage(
+        environment: {'HOME': tempHome.path},
+        isWindows: false,
+      );
+      liveDesktop.setItem(castSettingsStorageKey, '{"copyOnSelect":false}');
+      saveStoredRelayCredentials(
+        liveDesktop,
+        const RelayCredentials(
+          serverUrl: 'wss://relay.example.com/v1/client',
+          clientToken: 'viewer-secret',
+          casterToken: 'caster-secret',
+        ),
+      );
+      final settingsDir = Directory(p.join(tempHome.path, '.config', 'fterm'));
+      final settingsFile = File(p.join(settingsDir.path, 'settings.json'));
+      await (liveDesktop as BatchSettingsStorage).flush();
+      expect(settingsFile.existsSync(), isTrue);
+      expect(
+        liveDesktop.getItem(castSettingsStorageKey),
+        equals('{"copyOnSelect":false}'),
+      );
+      expect(
+        loadStoredRelayCredentials(liveDesktop).casterToken,
+        equals('caster-secret'),
+      );
+      if (!Platform.isWindows) {
+        expect(settingsDir.statSync().mode & 0x1ff, equals(0x1c0));
+        expect(settingsFile.statSync().mode & 0x1ff, equals(0x180));
+      }
 
-        final settingsFile = File(
-          p.join(tempDir.path, 'nested', 'termui_cast', 'settings.json'),
-        );
-        final writer = FileSettingsStorage(settingsFile);
-        expect(writer.getItem(castSettingsStorageKey), isNull);
+      // Legacy ~/.config/termui_cast/settings.json is read as fallback and migrated cleanly.
+      final legacyHome = Directory.systemTemp.createTempSync('fterm_legacy_');
+      addTearDown(() => legacyHome.deleteSync(recursive: true));
+      final legacyFile = File(
+        p.join(legacyHome.path, '.config', 'termui_cast', 'settings.json'),
+      )..createSync(recursive: true);
+      legacyFile.writeAsStringSync(
+        jsonEncode({castSettingsStorageKey: '{"copyOnSelect":false}'}),
+      );
+      final migratedDesktop = createPlatformSettingsStorage(
+        environment: {'HOME': legacyHome.path},
+        isWindows: false,
+      );
+      expect(loadStoredSettings(migratedDesktop).copyOnSelect, isFalse);
+      saveStoredRelayCredentials(
+        migratedDesktop,
+        const RelayCredentials(clientToken: 'migrated-token'),
+      );
+      expect(loadStoredSettings(migratedDesktop).copyOnSelect, isFalse);
+      expect(
+        loadStoredRelayCredentials(migratedDesktop).clientToken,
+        equals('migrated-token'),
+      );
+    });
 
-        const saved = CastWorkspaceSettings(
-          dockPosition: DockPosition.left,
-          copyOnSelect: false,
-          debugOverlayEnabled: true,
-          f12ShortcutsEnabled: true,
-          themeSettings: TerminalThemeSettings(
-            appearanceMode: .light,
-            darkThemeId: 'catppuccin_mocha',
-            lightThemeId: 'solarized_light',
-            minimumContrast: 4.5,
-            boldIsBright: true,
-            faintOpacity: 0.4,
-            smartCursorColor: false,
-          ),
-        );
-        saveStoredSettings(writer, saved);
-        writer.setItem('other.key', 'preserved');
-        await writer.flush();
-        expect(writer.lastError, isNull);
+    test('round-trips CastWorkspaceSettings in a temp directory, supports nested JSON maps, and heals corrupt files', () async {
+      final tempDir = Directory.systemTemp.createTempSync(
+        'termui_cast_settings_',
+      );
+      addTearDown(() => tempDir.deleteSync(recursive: true));
 
-        final reader = FileSettingsStorage(settingsFile);
-        final restored = loadStoredSettings(reader);
-        expect(restored.dockPosition, equals(DockPosition.left));
-        expect(restored.copyOnSelect, isFalse);
-        expect(restored.debugOverlayEnabled, isTrue);
-        expect(restored.f12ShortcutsEnabled, isTrue);
-        expect(
-          restored.themeSettings.appearanceMode,
-          equals(ThemeAppearanceMode.light),
-        );
-        expect(restored.themeSettings.darkThemeId, equals('catppuccin_mocha'));
-        expect(restored.themeSettings.lightThemeId, equals('solarized_light'));
-        expect(restored.themeSettings.minimumContrast, equals(4.5));
-        expect(restored.themeSettings.boldIsBright, isTrue);
-        expect(restored.themeSettings.faintOpacity, equals(0.4));
-        expect(restored.themeSettings.smartCursorColor, isFalse);
-        expect(reader.getItem('other.key'), equals('preserved'));
+      final settingsFile = File(
+        p.join(tempDir.path, 'nested', 'termui_cast', 'settings.json'),
+      );
+      final writer = FileSettingsStorage(settingsFile);
+      expect(writer.getItem(castSettingsStorageKey), isNull);
 
-        // Hand-edited unescaped JSON object under castSettingsStorageKey also loads cleanly.
-        settingsFile.writeAsStringSync(
-          jsonEncode({
-            castSettingsStorageKey: {
-              'dockPosition': 'hidden',
-              'copyOnSelect': true,
-            },
-          }),
-        );
-        reader.invalidateCache();
-        final fromNestedMap = loadStoredSettings(reader);
-        expect(fromNestedMap.dockPosition, equals(DockPosition.hidden));
+      const saved = CastWorkspaceSettings(
+        dockPosition: DockPosition.left,
+        copyOnSelect: false,
+        debugOverlayEnabled: true,
+        f12ShortcutsEnabled: true,
+        themeSettings: TerminalThemeSettings(
+          appearanceMode: .light,
+          darkThemeId: 'catppuccin_mocha',
+          lightThemeId: 'solarized_light',
+          minimumContrast: 4.5,
+          boldIsBright: true,
+          faintOpacity: 0.4,
+          smartCursorColor: false,
+        ),
+      );
+      saveStoredSettings(writer, saved);
+      writer.setItem('other.key', 'preserved');
+      await writer.flush();
+      expect(writer.lastError, isNull);
 
-        // Corrupt JSON falls back safely on read and heals on next write.
-        settingsFile.writeAsStringSync('{corrupt-json');
-        reader.invalidateCache();
-        expect(reader.getItem(castSettingsStorageKey), isNull);
-        saveStoredSettings(writer, CastWorkspaceSettings.defaults);
-        await writer.flush();
-        reader.invalidateCache();
-        expect(
-          loadStoredSettings(reader).dockPosition,
-          equals(DockPosition.top),
-        );
-      },
-    );
+      final reader = FileSettingsStorage(settingsFile);
+      final restored = loadStoredSettings(reader);
+      expect(restored.dockPosition, equals(DockPosition.left));
+      expect(restored.copyOnSelect, isFalse);
+      expect(restored.debugOverlayEnabled, isTrue);
+      expect(restored.f12ShortcutsEnabled, isTrue);
+      expect(
+        restored.themeSettings.appearanceMode,
+        equals(ThemeAppearanceMode.light),
+      );
+      expect(restored.themeSettings.darkThemeId, equals('catppuccin_mocha'));
+      expect(restored.themeSettings.lightThemeId, equals('solarized_light'));
+      expect(restored.themeSettings.minimumContrast, equals(4.5));
+      expect(restored.themeSettings.boldIsBright, isTrue);
+      expect(restored.themeSettings.faintOpacity, equals(0.4));
+      expect(restored.themeSettings.smartCursorColor, isFalse);
+      expect(reader.getItem('other.key'), equals('preserved'));
+
+      // Hand-edited unescaped JSON object under castSettingsStorageKey also loads cleanly.
+      settingsFile.writeAsStringSync(
+        jsonEncode({
+          castSettingsStorageKey: {
+            'dockPosition': 'hidden',
+            'copyOnSelect': true,
+          },
+        }),
+      );
+      reader.invalidateCache();
+      final fromNestedMap = loadStoredSettings(reader);
+      expect(fromNestedMap.dockPosition, equals(DockPosition.hidden));
+
+      // Corrupt JSON falls back safely on read and heals on next write.
+      settingsFile.writeAsStringSync('{corrupt-json');
+      reader.invalidateCache();
+      expect(reader.getItem(castSettingsStorageKey), isNull);
+      saveStoredSettings(writer, CastWorkspaceSettings.defaults);
+      await writer.flush();
+      reader.invalidateCache();
+      expect(loadStoredSettings(reader).dockPosition, equals(DockPosition.top));
+    });
   });
 }
 
@@ -609,195 +584,171 @@ void _defineDesktopIapLaunchTests() {
       tempDir.deleteSync(recursive: true);
     });
 
-    test(
-      'resolves --iap-key-file and --iap-service-account with CLI > env precedence and ws:// env ignore',
-      () async {
-        // 1. Ambient TERMUI_CAST_IAP_* ignored on default ws:// loopback iapTokenProvider,
-        //    but preserved for later wss:// connections via iapTokenProviderFor.
-        final loopbackCfg = resolveCastLaunchConfig(
+    test('resolves --iap-key-file and --iap-service-account with CLI > env precedence and ws:// env ignore', () async {
+      // 1. Ambient TERMUI_CAST_IAP_* ignored on default ws:// loopback iapTokenProvider,
+      //    but preserved for later wss:// connections via iapTokenProviderFor.
+      final loopbackCfg = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        environment: <String, String>{'TERMUI_CAST_IAP_KEY_FILE': keyFile.path},
+      );
+      expect(loopbackCfg.iapTokenProvider, isNull);
+      expect(
+        loopbackCfg.iapTokenProviderFor(
+          Uri.parse('wss://relay.run.app/v1/client'),
+        ),
+        isNotNull,
+      );
+
+      // 2. Ambient TERMUI_CAST_IAP_KEY_FILE activates when defineServerUrl or --server uses wss://.
+      final envKeyCfg = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        defineServerUrl: 'wss://relay.run.app/v1/client',
+        environment: <String, String>{'TERMUI_CAST_IAP_KEY_FILE': keyFile.path},
+      );
+      expect(envKeyCfg.iapTokenProvider, isNotNull);
+      final jwt = await envKeyCfg.iapTokenProvider!();
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(jwt.split('.')[1]))),
+      ) as Map<String, Object?>;
+      expect(
+        payload['iss'],
+        equals('desktop-viewer@proj.iam.gserviceaccount.com'),
+      );
+      expect(payload['aud'], equals('https://relay.run.app/v1/client'));
+
+      // Sharing derives /v1/caster and must mint an IAP JWT targeting /v1/caster, not /v1/client.
+      final casterProvider = envKeyCfg.iapTokenProviderFor(
+        envKeyCfg.casterServerUri,
+      );
+      expect(casterProvider, isNotNull);
+      final casterJwt = await casterProvider!();
+      final casterPayload = jsonDecode(
+        utf8.decode(
+          base64Url.decode(base64Url.normalize(casterJwt.split('.')[1])),
+        ),
+      ) as Map<String, Object?>;
+      expect(casterPayload['aud'], equals('https://relay.run.app/v1/caster'));
+
+      // 3. Explicit --iap-service-account on CLI overrides TERMUI_CAST_IAP_KEY_FILE in env without conflict.
+      final cliAccountCfg = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const [
+          '--server=wss://relay.run.app/v1/client',
+          '--iap-service-account=cli-sa@proj.iam.gserviceaccount.com',
+        ],
+        environment: <String, String>{'TERMUI_CAST_IAP_KEY_FILE': keyFile.path},
+        iapProviderBuilder:
+            ({required serverUri, serviceAccount, keyFilePath}) =>
+                buildPlatformIapTokenProvider(
+                  serverUri: serverUri,
+                  serviceAccount: serviceAccount,
+                  keyFilePath: keyFilePath,
+                  clock: Clock.fixed(DateTime.utc(2026, 11, 10)),
+                  processRunner: (_, arguments) async {
+                    await File(arguments.last)
+                        .writeAsString('gcloud-signed-jwt\n');
+                    return ProcessResult(1, 0, '', '');
+                  },
+                ),
+      );
+      expect(
+        await cliAccountCfg.iapTokenProvider!(),
+        equals('gcloud-signed-jwt'),
+      );
+    });
+
+    test('rejects conflicting flags, ws:// CLI flags, invalid emails, and bad key files', () {
+      final badInvocations = <void Function()>[
+        // Both CLI flags.
+        () => resolveCastLaunchConfig(
           baseUri: desktopBase,
+          args: [
+            '--server=wss://relay.run.app/v1/client',
+            '--iap-service-account=sa@proj.iam.gserviceaccount.com',
+            '--iap-key-file=${keyFile.path}',
+          ],
+          environment: const {},
+        ),
+        // Both env vars on wss://.
+        () => resolveCastLaunchConfig(
+          baseUri: desktopBase,
+          args: const ['--server=wss://relay.run.app/v1/client'],
           environment: <String, String>{
+            'TERMUI_CAST_IAP_SERVICE_ACCOUNT':
+                'sa@proj.iam.gserviceaccount.com',
             'TERMUI_CAST_IAP_KEY_FILE': keyFile.path,
           },
-        );
-        expect(loopbackCfg.iapTokenProvider, isNull);
-        expect(
-          loopbackCfg.iapTokenProviderFor(
-            Uri.parse('wss://relay.run.app/v1/client'),
-          ),
-          isNotNull,
-        );
-
-        // 2. Ambient TERMUI_CAST_IAP_KEY_FILE activates when defineServerUrl or --server uses wss://.
-        final envKeyCfg = resolveCastLaunchConfig(
+        ),
+        // Explicit CLI IAP flag on ws://.
+        () => resolveCastLaunchConfig(
           baseUri: desktopBase,
-          defineServerUrl: 'wss://relay.run.app/v1/client',
-          environment: <String, String>{
-            'TERMUI_CAST_IAP_KEY_FILE': keyFile.path,
-          },
-        );
-        expect(envKeyCfg.iapTokenProvider, isNotNull);
-        final jwt = await envKeyCfg.iapTokenProvider!();
-        final payload =
-            jsonDecode(
-                  utf8.decode(
-                    base64Url.decode(base64Url.normalize(jwt.split('.')[1])),
-                  ),
-                )
-                as Map<String, Object?>;
-        expect(
-          payload['iss'],
-          equals('desktop-viewer@proj.iam.gserviceaccount.com'),
-        );
-        expect(payload['aud'], equals('https://relay.run.app/v1/client'));
-
-        // Sharing derives /v1/caster and must mint an IAP JWT targeting /v1/caster, not /v1/client.
-        final casterProvider = envKeyCfg.iapTokenProviderFor(
-          envKeyCfg.casterServerUri,
-        );
-        expect(casterProvider, isNotNull);
-        final casterJwt = await casterProvider!();
-        final casterPayload =
-            jsonDecode(
-                  utf8.decode(
-                    base64Url.decode(
-                      base64Url.normalize(casterJwt.split('.')[1]),
-                    ),
-                  ),
-                )
-                as Map<String, Object?>;
-        expect(casterPayload['aud'], equals('https://relay.run.app/v1/caster'));
-
-        // 3. Explicit --iap-service-account on CLI overrides TERMUI_CAST_IAP_KEY_FILE in env without conflict.
-        final cliAccountCfg = resolveCastLaunchConfig(
+          args: ['--iap-key-file', keyFile.path],
+          environment: const {},
+        ),
+        // Blank explicit CLI flag value.
+        () => resolveCastLaunchConfig(
           baseUri: desktopBase,
           args: const [
             '--server=wss://relay.run.app/v1/client',
-            '--iap-service-account=cli-sa@proj.iam.gserviceaccount.com',
+            '--iap-service-account=',
           ],
-          environment: <String, String>{
-            'TERMUI_CAST_IAP_KEY_FILE': keyFile.path,
-          },
-          iapProviderBuilder:
-              ({required serverUri, serviceAccount, keyFilePath}) =>
-                  buildPlatformIapTokenProvider(
-                    serverUri: serverUri,
-                    serviceAccount: serviceAccount,
-                    keyFilePath: keyFilePath,
-                    clock: Clock.fixed(DateTime.utc(2026, 11, 10)),
-                    processRunner: (_, arguments) async {
-                      await File(
-                        arguments.last,
-                      ).writeAsString('gcloud-signed-jwt\n');
-                      return ProcessResult(1, 0, '', '');
-                    },
-                  ),
-        );
-        expect(
-          await cliAccountCfg.iapTokenProvider!(),
-          equals('gcloud-signed-jwt'),
-        );
-      },
-    );
-
-    test(
-      'rejects conflicting flags, ws:// CLI flags, invalid emails, and bad key files',
-      () {
-        final badInvocations = <void Function()>[
-          // Both CLI flags.
-          () => resolveCastLaunchConfig(
-            baseUri: desktopBase,
-            args: [
-              '--server=wss://relay.run.app/v1/client',
-              '--iap-service-account=sa@proj.iam.gserviceaccount.com',
-              '--iap-key-file=${keyFile.path}',
-            ],
-            environment: const {},
-          ),
-          // Both env vars on wss://.
-          () => resolveCastLaunchConfig(
-            baseUri: desktopBase,
-            args: const ['--server=wss://relay.run.app/v1/client'],
-            environment: <String, String>{
-              'TERMUI_CAST_IAP_SERVICE_ACCOUNT':
-                  'sa@proj.iam.gserviceaccount.com',
-              'TERMUI_CAST_IAP_KEY_FILE': keyFile.path,
-            },
-          ),
-          // Explicit CLI IAP flag on ws://.
-          () => resolveCastLaunchConfig(
-            baseUri: desktopBase,
-            args: ['--iap-key-file', keyFile.path],
-            environment: const {},
-          ),
-          // Blank explicit CLI flag value.
-          () => resolveCastLaunchConfig(
-            baseUri: desktopBase,
-            args: const [
-              '--server=wss://relay.run.app/v1/client',
-              '--iap-service-account=',
-            ],
-            environment: const {},
-          ),
-          // Invalid email format.
-          () => resolveCastLaunchConfig(
-            baseUri: desktopBase,
-            args: const [
-              '--server=wss://relay.run.app/v1/client',
-              '--iap-service-account=not-an-email',
-            ],
-            environment: const {},
-          ),
-          // Missing key file on disk.
-          () => resolveCastLaunchConfig(
-            baseUri: desktopBase,
-            args: [
-              '--server=wss://relay.run.app/v1/client',
-              '--iap-key-file=${p.join(tempDir.path, "missing.json")}',
-            ],
-            environment: const {},
-          ),
-        ];
-
-        for (final call in badInvocations) {
-          expect(call, throwsFormatException);
-        }
-      },
-    );
-
-    test(
-      'reportPlatformStartupError swallows IOException and skips exit under FLUTTER_TEST',
-      () {
-        final buffer = StringBuffer();
-        int? exitedCode;
-        reportPlatformStartupError(
-          'bad --iap-key-file',
-          err: buffer,
-          environment: const {'FLUTTER_TEST': 'true'},
-          onExit: (code) => exitedCode = code,
-        );
-        expect('$buffer', contains('fterm: bad --iap-key-file'));
-        expect(exitedCode, isNull);
-
-        reportPlatformStartupError(
-          'detached console failure',
-          err: _ThrowingStdoutSink(),
           environment: const {},
-          onExit: (code) => exitedCode = code,
-        );
-        expect(exitedCode, equals(64));
+        ),
+        // Invalid email format.
+        () => resolveCastLaunchConfig(
+          baseUri: desktopBase,
+          args: const [
+            '--server=wss://relay.run.app/v1/client',
+            '--iap-service-account=not-an-email',
+          ],
+          environment: const {},
+        ),
+        // Missing key file on disk.
+        () => resolveCastLaunchConfig(
+          baseUri: desktopBase,
+          args: [
+            '--server=wss://relay.run.app/v1/client',
+            '--iap-key-file=${p.join(tempDir.path, "missing.json")}',
+          ],
+          environment: const {},
+        ),
+      ];
 
-        final connectErrBuf = StringBuffer();
-        logPlatformConnectError(
-          const SocketException('dial failed'),
-          err: connectErrBuf,
-        );
-        expect(
-          '$connectErrBuf',
-          contains('fterm: connect failed: SocketException'),
-        );
-      },
-    );
+      for (final call in badInvocations) {
+        expect(call, throwsFormatException);
+      }
+    });
+
+    test('reportPlatformStartupError swallows IOException and skips exit under FLUTTER_TEST', () {
+      final buffer = StringBuffer();
+      int? exitedCode;
+      reportPlatformStartupError(
+        'bad --iap-key-file',
+        err: buffer,
+        environment: const {'FLUTTER_TEST': 'true'},
+        onExit: (code) => exitedCode = code,
+      );
+      expect('$buffer', contains('fterm: bad --iap-key-file'));
+      expect(exitedCode, isNull);
+
+      reportPlatformStartupError(
+        'detached console failure',
+        err: _ThrowingStdoutSink(),
+        environment: const {},
+        onExit: (code) => exitedCode = code,
+      );
+      expect(exitedCode, equals(64));
+
+      final connectErrBuf = StringBuffer();
+      logPlatformConnectError(
+        const SocketException('dial failed'),
+        err: connectErrBuf,
+      );
+      expect(
+        '$connectErrBuf',
+        contains('fterm: connect failed: SocketException'),
+      );
+    });
   });
 }
 
@@ -1126,89 +1077,86 @@ void _defineThrottledSettingsSaverTests() {
   });
 
   group('Wave 2 launch secret files, IAP cache, and symlink guards', () {
-    test(
-      '--token-file and --caster-token-file read secrets, CLI flags warn, and TERMUI_CAST_IAP_* stays wired when --server is omitted',
-      () {
-        final tempDir = Directory.systemTemp.createTempSync(
-          'fterm_secret_files_',
-        );
-        addTearDown(() => tempDir.deleteSync(recursive: true));
+    test('--token-file and --caster-token-file read secrets, CLI flags warn, and TERMUI_CAST_IAP_* stays wired when --server is omitted', () {
+      final tempDir = Directory.systemTemp.createTempSync(
+        'fterm_secret_files_',
+      );
+      addTearDown(() => tempDir.deleteSync(recursive: true));
 
-        final clientSecretFile = File(p.join(tempDir.path, 'client.tok'))
-          ..writeAsStringSync('  file-client-tok\n');
-        final casterSecretFile = File(p.join(tempDir.path, 'caster.tok'))
-          ..writeAsStringSync('file-caster-tok\n');
+      final clientSecretFile = File(p.join(tempDir.path, 'client.tok'))
+        ..writeAsStringSync('  file-client-tok\n');
+      final casterSecretFile = File(p.join(tempDir.path, 'caster.tok'))
+        ..writeAsStringSync('file-caster-tok\n');
 
-        final warnings = <String>[];
-        final fromFiles = resolveCastLaunchConfig(
+      final warnings = <String>[];
+      final fromFiles = resolveCastLaunchConfig(
+        baseUri: Uri.parse('file:///Users/dev/fterm/'),
+        args: [
+          '--token-file=${clientSecretFile.path}',
+          '--caster-token-file',
+          casterSecretFile.path,
+        ],
+        environment: const {},
+        secretFileReader: readPlatformSecretFileSync,
+        onCliSecretWarning: warnings.add,
+      );
+      expect(fromFiles.token, equals('file-client-tok'));
+      expect(fromFiles.casterToken, equals('file-caster-tok'));
+      expect(warnings, isEmpty);
+
+      // Passing --token directly emits warning; both --token and --token-file fail.
+      resolveCastLaunchConfig(
+        baseUri: Uri.parse('file:///Users/dev/fterm/'),
+        args: const ['--token=cli-secret'],
+        environment: const {},
+        secretFileReader: readPlatformSecretFileSync,
+        onCliSecretWarning: warnings.add,
+      );
+      expect(warnings, equals(['--token']));
+
+      expect(
+        () => resolveCastLaunchConfig(
           baseUri: Uri.parse('file:///Users/dev/fterm/'),
-          args: [
-            '--token-file=${clientSecretFile.path}',
-            '--caster-token-file',
-            casterSecretFile.path,
-          ],
+          args: ['--token=a', '--token-file=${clientSecretFile.path}'],
           environment: const {},
           secretFileReader: readPlatformSecretFileSync,
-          onCliSecretWarning: warnings.add,
-        );
-        expect(fromFiles.token, equals('file-client-tok'));
-        expect(fromFiles.casterToken, equals('file-caster-tok'));
-        expect(warnings, isEmpty);
+        ),
+        throwsFormatException,
+      );
 
-        // Passing --token directly emits warning; both --token and --token-file fail.
-        resolveCastLaunchConfig(
-          baseUri: Uri.parse('file:///Users/dev/fterm/'),
-          args: const ['--token=cli-secret'],
-          environment: const {},
-          secretFileReader: readPlatformSecretFileSync,
-          onCliSecretWarning: warnings.add,
+      // TERMUI_CAST_IAP_* stays active in scopedIapProviderFactory even with omitted --server (ws:// default).
+      resetCachedPlatformIapKeys();
+      final iapKeyFile = File(p.join(tempDir.path, 'sa.json'))
+        ..writeAsStringSync(
+          jsonEncode(<String, String>{
+            'client_email': 'sa@proj.iam.gserviceaccount.com',
+            'private_key_id': 'key-1',
+            'private_key': _iapRsaKeyPem,
+          }),
         );
-        expect(warnings, equals(['--token']));
+      final cfg = resolveCastLaunchConfig(
+        baseUri: Uri.parse('file:///Users/dev/fterm/'),
+        args: const [],
+        environment: {'TERMUI_CAST_IAP_KEY_FILE': iapKeyFile.path},
+        iapProviderBuilder: buildPlatformIapTokenProvider,
+      );
+      expect(cfg.serverUri, equals(CastLaunchConfig.defaultServerUri));
+      expect(
+        cfg.iapTokenProvider,
+        isNull,
+      ); // ws:// default doesn't use IAP directly
 
-        expect(
-          () => resolveCastLaunchConfig(
-            baseUri: Uri.parse('file:///Users/dev/fterm/'),
-            args: ['--token=a', '--token-file=${clientSecretFile.path}'],
-            environment: const {},
-            secretFileReader: readPlatformSecretFileSync,
-          ),
-          throwsFormatException,
-        );
-
-        // TERMUI_CAST_IAP_* stays active in scopedIapProviderFactory even with omitted --server (ws:// default).
-        resetCachedPlatformIapKeys();
-        final iapKeyFile = File(p.join(tempDir.path, 'sa.json'))
-          ..writeAsStringSync(
-            jsonEncode(<String, String>{
-              'client_email': 'sa@proj.iam.gserviceaccount.com',
-              'private_key_id': 'key-1',
-              'private_key': _iapRsaKeyPem,
-            }),
-          );
-        final cfg = resolveCastLaunchConfig(
-          baseUri: Uri.parse('file:///Users/dev/fterm/'),
-          args: const [],
-          environment: {'TERMUI_CAST_IAP_KEY_FILE': iapKeyFile.path},
-          iapProviderBuilder: buildPlatformIapTokenProvider,
-        );
-        expect(cfg.serverUri, equals(CastLaunchConfig.defaultServerUri));
-        expect(
-          cfg.iapTokenProvider,
-          isNull,
-        ); // ws:// default doesn't use IAP directly
-
-        // Caching across distinct wss:// audiences preserves env IAP credentials and parses key JSON once.
-        final p1 = cfg.iapTokenProviderFor(
-          Uri.parse('wss://relay-a.run.app/v1/client'),
-        );
-        final p2 = cfg.iapTokenProviderFor(
-          Uri.parse('wss://relay-b.run.app/v1/client'),
-        );
-        expect(p1, isNotNull);
-        expect(p2, isNotNull);
-        expect(debugIapKeyParseCount, equals(1));
-      },
-    );
+      // Caching across distinct wss:// audiences preserves env IAP credentials and parses key JSON once.
+      final p1 = cfg.iapTokenProviderFor(
+        Uri.parse('wss://relay-a.run.app/v1/client'),
+      );
+      final p2 = cfg.iapTokenProviderFor(
+        Uri.parse('wss://relay-b.run.app/v1/client'),
+      );
+      expect(p1, isNotNull);
+      expect(p2, isNotNull);
+      expect(debugIapKeyParseCount, equals(1));
+    });
 
     test(
       'FileSettingsStorage rejects symlinks on write without clobbering target',
@@ -1235,103 +1183,94 @@ void _defineThrottledSettingsSaverTests() {
       },
     );
 
-    test(
-      'D-14: FileSettingsStorage.invalidateCache clears queued _pendingPayload so stale write does not overwrite',
-      () async {
-        final tempDir = Directory.systemTemp.createTempSync(
-          'fterm_invalidate_cache_',
-        );
-        addTearDown(() => tempDir.deleteSync(recursive: true));
-        final file = File(p.join(tempDir.path, 'settings.json'));
-        final storage = FileSettingsStorage(file);
+    test('D-14: FileSettingsStorage.invalidateCache clears queued _pendingPayload so stale write does not overwrite', () async {
+      final tempDir = Directory.systemTemp.createTempSync(
+        'fterm_invalidate_cache_',
+      );
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final file = File(p.join(tempDir.path, 'settings.json'));
+      final storage = FileSettingsStorage(file);
 
-        // First write enters _writePayloadAsync immediately; second write queues in _pendingPayload.
-        storage.setItem('persisted', '1');
-        storage.setItem('stale_queued', '2');
-        storage.invalidateCache();
-        await storage.flush();
+      // First write enters _writePayloadAsync immediately; second write queues in _pendingPayload.
+      storage.setItem('persisted', '1');
+      storage.setItem('stale_queued', '2');
+      storage.invalidateCache();
+      await storage.flush();
 
-        final reloaded = FileSettingsStorage(file);
-        expect(reloaded.getItem('persisted'), equals('1'));
-        expect(reloaded.getItem('stale_queued'), isNull);
-      },
-    );
+      final reloaded = FileSettingsStorage(file);
+      expect(reloaded.getItem('persisted'), equals('1'));
+      expect(reloaded.getItem('stale_queued'), isNull);
+    });
 
-    test(
-      'FtermPreferences round-trips fontSize & shell overrides with clamping and corrupt JSON fallback',
-      () {
-        final mem = _CountingSettingsStorage();
-        const prefs = FtermPreferences(
-          audioMuted: true,
-          audioVolume: 0.4,
-          autoHideSingleTab: true,
-          macosOptionAsAlt: true,
-          fontSize: 18.5,
-          shellExecutable: '/bin/zsh',
-          shellArguments: ['-l', '-i'],
-          loginShell: false,
-        );
-        saveStoredPreferences(mem, prefs);
-        final decoded = loadStoredPreferences(mem);
-        expect(decoded, equals(prefs));
-        expect(decoded.effectiveFontSize(), equals(18.5));
+    test('FtermPreferences round-trips fontSize & shell overrides with clamping and corrupt JSON fallback', () {
+      final mem = _CountingSettingsStorage();
+      const prefs = FtermPreferences(
+        audioMuted: true,
+        audioVolume: 0.4,
+        autoHideSingleTab: true,
+        macosOptionAsAlt: true,
+        fontSize: 18.5,
+        shellExecutable: '/bin/zsh',
+        shellArguments: ['-l', '-i'],
+        loginShell: false,
+      );
+      saveStoredPreferences(mem, prefs);
+      final decoded = loadStoredPreferences(mem);
+      expect(decoded, equals(prefs));
+      expect(decoded.effectiveFontSize(), equals(18.5));
 
-        final low = FtermPreferences.fromJsonString(
-          jsonEncode({'fontSize': 2.0}),
-        );
-        expect(low.fontSize, equals(FtermPreferences.minFontSize));
-        final high = FtermPreferences.fromJsonString(
-          jsonEncode({'fontSize': 200.0}),
-        );
-        expect(high.fontSize, equals(FtermPreferences.maxFontSize));
-        final invalid = FtermPreferences.fromJsonString(
-          jsonEncode({'fontSize': 'not-a-number'}),
-        );
-        expect(invalid.fontSize, isNull);
+      final low = FtermPreferences.fromJsonString(
+        jsonEncode({'fontSize': 2.0}),
+      );
+      expect(low.fontSize, equals(FtermPreferences.minFontSize));
+      final high = FtermPreferences.fromJsonString(
+        jsonEncode({'fontSize': 200.0}),
+      );
+      expect(high.fontSize, equals(FtermPreferences.maxFontSize));
+      final invalid = FtermPreferences.fromJsonString(
+        jsonEncode({'fontSize': 'not-a-number'}),
+      );
+      expect(invalid.fontSize, isNull);
 
-        mem.setItem(ftermPreferencesStorageKey, '{corrupt json');
-        expect(loadStoredPreferences(mem), equals(const FtermPreferences()));
-      },
-    );
+      mem.setItem(ftermPreferencesStorageKey, '{corrupt json');
+      expect(loadStoredPreferences(mem), equals(const FtermPreferences()));
+    });
 
-    test(
-      'IoLocalHostDriver.resolveShellExecutable searches injected pathEnv for bare command names',
-      () async {
-        final tempDir = await Directory.systemTemp.createTemp('fterm_path_');
-        addTearDown(() => tempDir.delete(recursive: true));
+    test('IoLocalHostDriver.resolveShellExecutable searches injected pathEnv for bare command names', () async {
+      final tempDir = await Directory.systemTemp.createTemp('fterm_path_');
+      addTearDown(() => tempDir.delete(recursive: true));
 
-        final posixDir = Directory(p.join(tempDir.path, 'posix_bin'))
-          ..createSync();
-        final posixZsh = File(p.join(posixDir.path, 'zsh'))..createSync();
-        expect(
-          IoLocalHostDriver.resolveShellExecutable(
-            'zsh',
-            pathEnv: '/nonexistent:${posixDir.path}',
-            isWindows: false,
-          ),
-          equals(posixZsh.path),
-        );
-        expect(
-          IoLocalHostDriver.resolveShellExecutable(
-            'missing_shell',
-            pathEnv: posixDir.path,
-            isWindows: false,
-          ),
-          equals('missing_shell'),
-        );
+      final posixDir = Directory(p.join(tempDir.path, 'posix_bin'))
+        ..createSync();
+      final posixZsh = File(p.join(posixDir.path, 'zsh'))..createSync();
+      expect(
+        IoLocalHostDriver.resolveShellExecutable(
+          'zsh',
+          pathEnv: '/nonexistent:${posixDir.path}',
+          isWindows: false,
+        ),
+        equals(posixZsh.path),
+      );
+      expect(
+        IoLocalHostDriver.resolveShellExecutable(
+          'missing_shell',
+          pathEnv: posixDir.path,
+          isWindows: false,
+        ),
+        equals('missing_shell'),
+      );
 
-        final winDir = Directory(p.join(tempDir.path, 'win_bin'))..createSync();
-        final winZsh = File(p.join(winDir.path, 'zsh.exe'))..createSync();
-        expect(
-          IoLocalHostDriver.resolveShellExecutable(
-            'zsh',
-            pathEnv: winDir.path,
-            isWindows: true,
-          ),
-          equals(winZsh.path),
-        );
-      },
-    );
+      final winDir = Directory(p.join(tempDir.path, 'win_bin'))..createSync();
+      final winZsh = File(p.join(winDir.path, 'zsh.exe'))..createSync();
+      expect(
+        IoLocalHostDriver.resolveShellExecutable(
+          'zsh',
+          pathEnv: winDir.path,
+          isWindows: true,
+        ),
+        equals(winZsh.path),
+      );
+    });
   });
 }
 

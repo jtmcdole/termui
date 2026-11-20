@@ -204,53 +204,50 @@ void main() {
     },
   );
 
-  test(
-    'TuiAtlasPainter focus cursor resolves WCAG AA glyph-to-cursor and cursor-to-canvas contrast without Modifier.reverse',
-    () {
-      const canvasBgArgb = 0xFF000000;
-      final sodaArgb = termui.CharmColors.soda.argb;
-      final charpleArgb = termui.CharmColors.charple.argb;
-      final pepperArgb = termui.CharmColors.pepper.argb;
+  test('TuiAtlasPainter focus cursor resolves WCAG AA glyph-to-cursor and cursor-to-canvas contrast without Modifier.reverse', () {
+    const canvasBgArgb = 0xFF000000;
+    final sodaArgb = termui.CharmColors.soda.argb;
+    final charpleArgb = termui.CharmColors.charple.argb;
+    final pepperArgb = termui.CharmColors.pepper.argb;
 
-      final resolvedFg = TuiAtlasPainter.resolveCellForegroundArgb(
-        sodaArgb,
-        charpleArgb,
-        modifiers: 0,
-        isReverse: false,
-      );
-      final resolvedBg = TuiAtlasPainter.resolveCellBackgroundArgb(
-        charpleArgb,
-        sodaArgb,
-        isReverse: false,
-      );
+    final resolvedFg = TuiAtlasPainter.resolveCellForegroundArgb(
+      sodaArgb,
+      charpleArgb,
+      modifiers: 0,
+      isReverse: false,
+    );
+    final resolvedBg = TuiAtlasPainter.resolveCellBackgroundArgb(
+      charpleArgb,
+      sodaArgb,
+      isReverse: false,
+    );
 
-      expect(resolvedFg, equals(sodaArgb));
-      expect(resolvedBg, equals(charpleArgb));
-      expect(
-        _wcagContrastRatio(resolvedFg, resolvedBg),
-        greaterThanOrEqualTo(4.5),
-      );
-      expect(
-        _wcagContrastRatio(resolvedBg, canvasBgArgb),
-        greaterThanOrEqualTo(3.0),
-      );
+    expect(resolvedFg, equals(sodaArgb));
+    expect(resolvedBg, equals(charpleArgb));
+    expect(
+      _wcagContrastRatio(resolvedFg, resolvedBg),
+      greaterThanOrEqualTo(4.5),
+    );
+    expect(
+      _wcagContrastRatio(resolvedBg, canvasBgArgb),
+      greaterThanOrEqualTo(3.0),
+    );
 
-      // Inverting dark pepper foreground onto the cursor background collapses
-      // cursor-to-canvas contrast below WCAG 3.0:1.
-      final reversedPepperBg = TuiAtlasPainter.resolveCellBackgroundArgb(
-        charpleArgb,
-        pepperArgb,
-        isReverse: true,
-      );
-      final reversedPepperFg = TuiAtlasPainter.resolveCellForegroundArgb(
-        pepperArgb,
-        charpleArgb,
-        modifiers: termui.Modifier.reverse,
-        isReverse: true,
-      );
-      expect(reversedPepperBg, equals(pepperArgb));
-      expect(reversedPepperFg, equals(charpleArgb));
-      expect(_wcagContrastRatio(reversedPepperBg, canvasBgArgb), lessThan(3.0));
-    },
-  );
+    // Inverting dark pepper foreground onto the cursor background collapses
+    // cursor-to-canvas contrast below WCAG 3.0:1.
+    final reversedPepperBg = TuiAtlasPainter.resolveCellBackgroundArgb(
+      charpleArgb,
+      pepperArgb,
+      isReverse: true,
+    );
+    final reversedPepperFg = TuiAtlasPainter.resolveCellForegroundArgb(
+      pepperArgb,
+      charpleArgb,
+      modifiers: termui.Modifier.reverse,
+      isReverse: true,
+    );
+    expect(reversedPepperBg, equals(pepperArgb));
+    expect(reversedPepperFg, equals(charpleArgb));
+    expect(_wcagContrastRatio(reversedPepperBg, canvasBgArgb), lessThan(3.0));
+  });
 }

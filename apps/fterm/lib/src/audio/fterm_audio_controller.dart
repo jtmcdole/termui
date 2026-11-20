@@ -132,13 +132,12 @@ final class FtermAudioController {
     bool initialMuted = false,
     double initialVolume = 0.7,
     bool? requireUserGesture,
-    VoidCallback? onStateChanged,
+    this._onStateChanged,
   }) : _engineFactory = engineFactory ?? FlutterAudioEngine.new,
        _clockOverride = clock,
        _muted = initialMuted,
        _volume = initialVolume.clamp(0.0, 1.0).toDouble(),
-       _requireUserGesture = requireUserGesture ?? true,
-       _onStateChanged = onStateChanged {
+       _requireUserGesture = requireUserGesture ?? true {
     if (!_requireUserGesture) {
       _hasUserGesture = true;
     }

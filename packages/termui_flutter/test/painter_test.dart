@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+
 import 'package:flutter/rendering.dart' show RenderCustomPaint;
 import 'package:flutter/widgets.dart' hide Color;
 import 'package:flutter_test/flutter_test.dart';
@@ -83,689 +84,650 @@ void main() {
     },
   );
 
-  test(
-    'TuiAtlasPainter renders text modifiers, underline styles, and underlineColor',
-    () async {
-      final atlas = await GlyphAtlasGenerator.generate(
-        fontSize: 16.0,
-        fontFamily: 'Roboto Mono',
+  test('TuiAtlasPainter renders text modifiers, underline styles, and underlineColor', () async {
+    final atlas = await GlyphAtlasGenerator.generate(
+      fontSize: 16.0,
+      fontFamily: 'Roboto Mono',
+    );
+    addTearDown(() => atlas.image.dispose());
+
+    final buffer = Buffer(12, 2)
+      ..writeString(
+        0,
+        0,
+        'B',
+        const Style(foreground: Color(255, 255, 255), modifiers: Modifier.bold),
+      )
+      ..writeString(
+        1,
+        0,
+        'D',
+        const Style(foreground: Color(255, 255, 255), modifiers: Modifier.dim),
+      )
+      ..writeString(
+        2,
+        0,
+        'I',
+        const Style(
+          foreground: Color(255, 255, 255),
+          modifiers: Modifier.italic,
+        ),
+      )
+      ..writeString(
+        3,
+        0,
+        '█',
+        const Style(foreground: Color(255, 128, 0), modifiers: Modifier.hidden),
+      )
+      ..writeString(
+        4,
+        0,
+        ' ',
+        const Style(foreground: Color(0, 255, 0), modifiers: Modifier.overline),
+      )
+      ..writeString(
+        5,
+        0,
+        ' ',
+        const Style(
+          foreground: Color(0, 0, 255),
+          modifiers: Modifier.crossedOut,
+        ),
+      )
+      ..writeString(
+        6,
+        0,
+        ' ',
+        const Style(
+          foreground: Color(255, 255, 255),
+          underlineStyle: UnderlineStyle.single,
+          underlineColor: Color(255, 0, 128),
+        ),
+      )
+      ..writeString(
+        7,
+        0,
+        ' ',
+        const Style(
+          foreground: Color(255, 255, 255),
+          underlineStyle: UnderlineStyle.doubleLine,
+        ),
+      )
+      ..writeString(
+        8,
+        0,
+        ' ',
+        const Style(
+          foreground: Color(255, 255, 255),
+          underlineStyle: UnderlineStyle.curly,
+          underlineColor: Color(255, 0, 128),
+        ),
+      )
+      ..writeString(
+        9,
+        0,
+        ' ',
+        const Style(
+          foreground: Color(255, 255, 255),
+          underlineStyle: UnderlineStyle.dotted,
+        ),
+      )
+      ..writeString(
+        10,
+        0,
+        ' ',
+        const Style(
+          foreground: Color(255, 255, 255),
+          underlineStyle: UnderlineStyle.dashed,
+        ),
+      )
+      ..writeString(
+        11,
+        0,
+        'A',
+        const Style(
+          foreground: Color(255, 128, 0),
+          underlineStyle: UnderlineStyle.single,
+          modifiers: Modifier.hidden | Modifier.overline | Modifier.crossedOut,
+        ),
       );
-      addTearDown(() => atlas.image.dispose());
 
-      final buffer = Buffer(12, 2)
-        ..writeString(
-          0,
-          0,
-          'B',
-          const Style(
-            foreground: Color(255, 255, 255),
-            modifiers: Modifier.bold,
-          ),
-        )
-        ..writeString(
-          1,
-          0,
-          'D',
-          const Style(
-            foreground: Color(255, 255, 255),
-            modifiers: Modifier.dim,
-          ),
-        )
-        ..writeString(
-          2,
-          0,
-          'I',
-          const Style(
-            foreground: Color(255, 255, 255),
-            modifiers: Modifier.italic,
-          ),
-        )
-        ..writeString(
-          3,
-          0,
-          '█',
-          const Style(
-            foreground: Color(255, 128, 0),
-            modifiers: Modifier.hidden,
-          ),
-        )
-        ..writeString(
-          4,
-          0,
-          ' ',
-          const Style(
-            foreground: Color(0, 255, 0),
-            modifiers: Modifier.overline,
-          ),
-        )
-        ..writeString(
-          5,
-          0,
-          ' ',
-          const Style(
-            foreground: Color(0, 0, 255),
-            modifiers: Modifier.crossedOut,
-          ),
-        )
-        ..writeString(
-          6,
-          0,
-          ' ',
-          const Style(
-            foreground: Color(255, 255, 255),
-            underlineStyle: UnderlineStyle.single,
-            underlineColor: Color(255, 0, 128),
-          ),
-        )
-        ..writeString(
-          7,
-          0,
-          ' ',
-          const Style(
-            foreground: Color(255, 255, 255),
-            underlineStyle: UnderlineStyle.doubleLine,
-          ),
-        )
-        ..writeString(
-          8,
-          0,
-          ' ',
-          const Style(
-            foreground: Color(255, 255, 255),
-            underlineStyle: UnderlineStyle.curly,
-            underlineColor: Color(255, 0, 128),
-          ),
-        )
-        ..writeString(
-          9,
-          0,
-          ' ',
-          const Style(
-            foreground: Color(255, 255, 255),
-            underlineStyle: UnderlineStyle.dotted,
-          ),
-        )
-        ..writeString(
-          10,
-          0,
-          ' ',
-          const Style(
-            foreground: Color(255, 255, 255),
-            underlineStyle: UnderlineStyle.dashed,
-          ),
-        )
-        ..writeString(
-          11,
-          0,
-          'A',
-          const Style(
-            foreground: Color(255, 128, 0),
-            underlineStyle: UnderlineStyle.single,
-            modifiers:
-                Modifier.hidden | Modifier.overline | Modifier.crossedOut,
-          ),
-        );
+    final width = (12 * atlas.cellWidth).ceil();
+    final height = (2 * atlas.cellHeight).ceil();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    final painter = TuiAtlasPainter(
+      buffer: buffer,
+      atlas: atlas,
+      fontFamily: 'Roboto Mono',
+      fallbackPainters: const {},
+      onMissingGlyphs: null,
+    );
 
-      final width = (12 * atlas.cellWidth).ceil();
-      final height = (2 * atlas.cellHeight).ceil();
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      final painter = TuiAtlasPainter(
-        buffer: buffer,
+    painter.paint(canvas, Size(12 * atlas.cellWidth, 2 * atlas.cellHeight));
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(width, height);
+    picture.dispose();
+    addTearDown(image.dispose);
+
+    final bytes = await image.toByteData();
+    expect(bytes, isNotNull);
+    final data = bytes!.buffer.asUint8List();
+
+    bool hasPixelInCellWithColor(
+      int col,
+      int targetR,
+      int targetG,
+      int targetB,
+    ) {
+      final startX = (col * atlas.cellWidth).floor();
+      final endX = ((col + 1) * atlas.cellWidth).ceil().clamp(0, width);
+      final endY = atlas.cellHeight.ceil().clamp(0, height);
+      for (var y = 0; y < endY; y++) {
+        for (var x = startX; x < endX; x++) {
+          final idx = (y * width + x) * 4;
+          final r = data[idx];
+          final g = data[idx + 1];
+          final b = data[idx + 2];
+          final a = data[idx + 3];
+          if (a > 0 && r == targetR && g == targetG && b == targetB) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    // Col 3 ('█' with Modifier.hidden) should have zero orange pixels
+    expect(
+      hasPixelInCellWithColor(3, 255, 128, 0),
+      isFalse,
+      reason: 'Modifier.hidden must suppress foreground rendering',
+    );
+    // Col 4 (overline in green) should have green pixels
+    expect(
+      hasPixelInCellWithColor(4, 0, 255, 0),
+      isTrue,
+      reason: 'Modifier.overline should render top line in fg color',
+    );
+    // Col 5 (crossedOut in blue) should have blue pixels
+    expect(
+      hasPixelInCellWithColor(5, 0, 0, 255),
+      isTrue,
+      reason: 'Modifier.crossedOut should render strikethrough line',
+    );
+    // Col 6 (single underline with underlineColor RGB(255, 0, 128))
+    expect(
+      hasPixelInCellWithColor(6, 255, 0, 128),
+      isTrue,
+      reason: 'Underline should use custom SGR 58 underlineColor',
+    );
+    // Col 11 (Modifier.hidden + underline + overline + crossedOut) should have zero orange pixels
+    expect(
+      hasPixelInCellWithColor(11, 255, 128, 0),
+      isFalse,
+      reason: 'Modifier.hidden must suppress underline, overline, and strikethrough decorations',
+    );
+
+    // When Col 3 ('█' with Modifier.hidden) is selected via selectionStart/selectionEnd,
+    // TuiAtlasPainter highlights the cell and reveals the hidden glyph in white.
+    final selectedRecorder = ui.PictureRecorder();
+    final selectedCanvas = Canvas(selectedRecorder);
+    TuiAtlasPainter(
+      buffer: buffer,
+      atlas: atlas,
+      fontFamily: 'Roboto Mono',
+      fallbackPainters: const {},
+      onMissingGlyphs: null,
+      selectionStart: const math.Point(3, 0),
+      selectionEnd: const math.Point(3, 0),
+    ).paint(selectedCanvas, Size(12 * atlas.cellWidth, 2 * atlas.cellHeight));
+    final selectedPic = selectedRecorder.endRecording();
+    final selectedImg = await selectedPic.toImage(width, height);
+    selectedPic.dispose();
+    addTearDown(selectedImg.dispose);
+    final selectedData = (await selectedImg.toByteData())!.buffer.asUint8List();
+
+    var foundRevealedWhite = false;
+    final startX = (3 * atlas.cellWidth).floor();
+    final endX = (4 * atlas.cellWidth).ceil().clamp(0, width);
+    final endY = atlas.cellHeight.ceil().clamp(0, height);
+    for (var y = 0; y < endY; y++) {
+      for (var x = startX; x < endX; x++) {
+        final idx = (y * width + x) * 4;
+        if (selectedData[idx] == 255 &&
+            selectedData[idx + 1] == 255 &&
+            selectedData[idx + 2] == 255 &&
+            selectedData[idx + 3] > 0) {
+          foundRevealedWhite = true;
+        }
+      }
+    }
+    expect(
+      foundRevealedWhite,
+      isTrue,
+      reason: 'Selecting a Modifier.hidden cell must reveal its glyph',
+    );
+  });
+
+  test('TuiAtlasPainter renders KittyImage U+10EEEE placeholders and respects cell occlusion', () async {
+    final atlas = await GlyphAtlasGenerator.generate(
+      fontSize: 16.0,
+      fontFamily: 'Roboto Mono',
+    );
+    addTearDown(() => atlas.image.dispose());
+
+    // Register a 2x1 grid KittyImage: col 0 is pure cyan (0, 255, 255), col 1 is pure magenta (255, 0, 255).
+    final rgba = Uint8List.fromList([
+      0, 255, 255, 255, // pixel (0,0) -> col 0
+      255, 0, 255, 255, // pixel (1,0) -> col 1
+    ]);
+    const imageId = 0x1234;
+    KittyImageRegistry.register(
+      KittyImageData(
+        imageId: imageId,
+        pixelWidth: 2,
+        pixelHeight: 1,
+        rgbaPixels: rgba,
+        gridCols: 2,
+        gridRows: 1,
+      ),
+    );
+
+    final buffer = Buffer(2, 1);
+    buffer.setAttributes(
+      0,
+      0,
+      char: kittyPlaceholderCell(0, 0),
+      fg: 0xFF000000 | imageId,
+      bg: 0xFF000000,
+      modifiers: Modifier.kittyPlaceholder,
+    );
+    // Occlude col 1 with an opaque yellow background cell (simulating a floating TUI window)
+    buffer.writeString(1, 0, ' ', const Style(background: Color(255, 255, 0)));
+
+    final missing = <String>[];
+    final painter = TuiAtlasPainter(
+      buffer: buffer,
+      atlas: atlas,
+      fontFamily: 'Roboto Mono',
+      fallbackPainters: {},
+      onMissingGlyphs: missing.addAll,
+    );
+
+    final w = (atlas.cellWidth * 2).ceil();
+    final h = atlas.cellHeight.ceil();
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    painter.paint(canvas, Size(w.toDouble(), h.toDouble()));
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(w, h);
+    final bytes = (await img.toByteData(format: ui.ImageByteFormat.rawRgba))!;
+
+    expect(
+      missing,
+      isEmpty,
+      reason: 'U+10EEEE placeholders should not be reported as missing glyphs',
+    );
+
+    bool hasPixelInCell(int col, int targetR, int targetG, int targetB) {
+      final int x0 = (col * atlas.cellWidth).floor();
+      final int x1 = ((col + 1) * atlas.cellWidth).ceil().clamp(0, w);
+      for (var y = 0; y < h; y++) {
+        for (var x = x0; x < x1; x++) {
+          final idx = (y * w + x) * 4;
+          if (bytes.getUint8(idx) == targetR &&
+              bytes.getUint8(idx + 1) == targetG &&
+              bytes.getUint8(idx + 2) == targetB) {
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+
+    expect(
+      hasPixelInCell(0, 0, 255, 255),
+      isTrue,
+      reason: 'Col 0 should render KittyImage tile (0,0) in cyan',
+    );
+    expect(
+      hasPixelInCell(1, 255, 0, 255),
+      isFalse,
+      reason: 'Occluded Col 1 should not render KittyImage tile (0,1)',
+    );
+    expect(
+      hasPixelInCell(1, 255, 255, 0),
+      isTrue,
+      reason:
+          'Occluded Col 1 should render the occluding window yellow background',
+    );
+  });
+
+  test('TuiAtlasPainter underlines hoveredLink by default and applies hoveredLinkStyler overrides', () async {
+    final atlas = await GlyphAtlasGenerator.generate(
+      fontSize: 16.0,
+      fontFamily: 'Roboto Mono',
+    );
+    addTearDown(atlas.image.dispose);
+
+    final plainBuf = Buffer(10, 2)..writeString(0, 0, 'a b', const Style());
+    final underlinedBuf = Buffer(10, 2)
+      ..writeString(0, 0, 'a b', const Style(modifiers: Modifier.underline));
+    const hoveredLink = (
+      uri: 'https://example.com',
+      startCol: 0,
+      startRow: 0,
+      endCol: 2,
+      endRow: 0,
+    );
+
+    Future<Uint8List> paintWith(
+      Buffer buf, {
+      ResolvedTerminalLink? link,
+      HoveredLinkStyler? styler,
+    }) async {
+      final w = (10 * atlas.cellWidth).ceil();
+      final h = (2 * atlas.cellHeight).ceil();
+      final rec = ui.PictureRecorder();
+      TuiAtlasPainter(
+        buffer: buf,
         atlas: atlas,
         fontFamily: 'Roboto Mono',
         fallbackPainters: const {},
         onMissingGlyphs: null,
-      );
+        hoveredLink: link,
+        hoveredLinkStyler: styler,
+      ).paint(Canvas(rec), Size(w.toDouble(), h.toDouble()));
+      final pic = rec.endRecording();
+      final img = await pic.toImage(w, h);
+      pic.dispose();
+      addTearDown(img.dispose);
+      return (await img.toByteData())!.buffer.asUint8List();
+    }
 
-      painter.paint(canvas, Size(12 * atlas.cellWidth, 2 * atlas.cellHeight));
+    final plainBytes = await paintWith(plainBuf);
+    final expectedUnderlinedBytes = await paintWith(underlinedBuf);
+    final defaultHoverBytes = await paintWith(plainBuf, link: hoveredLink);
 
-      final picture = recorder.endRecording();
-      final image = await picture.toImage(width, height);
-      picture.dispose();
-      addTearDown(image.dispose);
+    expect(defaultHoverBytes, isNot(equals(plainBytes)));
+    expect(defaultHoverBytes, equals(expectedUnderlinedBytes));
 
-      final bytes = await image.toByteData();
-      expect(bytes, isNotNull);
-      final data = bytes!.buffer.asUint8List();
-
-      bool hasPixelInCellWithColor(
-        int col,
-        int targetR,
-        int targetG,
-        int targetB,
-      ) {
-        final startX = (col * atlas.cellWidth).floor();
-        final endX = ((col + 1) * atlas.cellWidth).ceil().clamp(0, width);
-        final endY = atlas.cellHeight.ceil().clamp(0, height);
-        for (var y = 0; y < endY; y++) {
-          for (var x = startX; x < endX; x++) {
-            final idx = (y * width + x) * 4;
-            final r = data[idx];
-            final g = data[idx + 1];
-            final b = data[idx + 2];
-            final a = data[idx + 3];
-            if (a > 0 && r == targetR && g == targetG && b == targetB) {
-              return true;
-            }
-          }
+    var callCount = 0;
+    final customBytes = await paintWith(
+      plainBuf,
+      link: hoveredLink,
+      styler: (link, cellCount, _, styles) {
+        callCount++;
+        expect(link, equals(hoveredLink));
+        expect(cellCount, equals(3));
+        styles.fillBackground(0xFF1B263B);
+        styles.fillModifiers(Modifier.underline | Modifier.bold);
+        styles.underlineMatchesForeground = true;
+        for (var i = 0; i < cellCount; i++) {
+          styles.setForeground(i, 0xFF00FF00 + i);
         }
-        return false;
-      }
+        expect(styles.backgroundAt(1), equals(0xFF1B263B));
+        expect(styles.underlineColorAt(2), equals(0xFF00FF02));
+        styles.setUnderlineColor(1, 0xFFFF00FF);
+        expect(styles.underlineColorAt(1), equals(0xFFFF00FF));
+      },
+    );
+    expect(callCount, equals(1));
+    expect(customBytes, isNot(equals(defaultHoverBytes)));
 
-      // Col 3 ('█' with Modifier.hidden) should have zero orange pixels
-      expect(
-        hasPixelInCellWithColor(3, 255, 128, 0),
-        isFalse,
-        reason: 'Modifier.hidden must suppress foreground rendering',
-      );
-      // Col 4 (overline in green) should have green pixels
-      expect(
-        hasPixelInCellWithColor(4, 0, 255, 0),
-        isTrue,
-        reason: 'Modifier.overline should render top line in fg color',
-      );
-      // Col 5 (crossedOut in blue) should have blue pixels
-      expect(
-        hasPixelInCellWithColor(5, 0, 0, 255),
-        isTrue,
-        reason: 'Modifier.crossedOut should render strikethrough line',
-      );
-      // Col 6 (single underline with underlineColor RGB(255, 0, 128))
-      expect(
-        hasPixelInCellWithColor(6, 255, 0, 128),
-        isTrue,
-        reason: 'Underline should use custom SGR 58 underlineColor',
-      );
-      // Col 11 (Modifier.hidden + underline + overline + crossedOut) should have zero orange pixels
-      expect(
-        hasPixelInCellWithColor(11, 255, 128, 0),
-        isFalse,
-        reason:
-            'Modifier.hidden must suppress underline, overline, and strikethrough decorations',
-      );
+    final defaultPainter = TuiAtlasPainter(
+      buffer: plainBuf,
+      atlas: atlas,
+      fontFamily: 'Roboto Mono',
+      fallbackPainters: const {},
+      onMissingGlyphs: null,
+      hoveredLink: hoveredLink,
+    );
+    final styledPainter = TuiAtlasPainter(
+      buffer: plainBuf,
+      atlas: atlas,
+      fontFamily: 'Roboto Mono',
+      fallbackPainters: const {},
+      onMissingGlyphs: null,
+      hoveredLink: hoveredLink,
+      hoveredLinkStyler: (_, count, _, styles) {
+        for (var i = 0; i < count; i++) {
+          styles.setForeground(i, 0xFF112233 + i);
+        }
+      },
+    );
+    expect(styledPainter.shouldRepaint(defaultPainter), isTrue);
+  });
 
-      // When Col 3 ('█' with Modifier.hidden) is selected via selectionStart/selectionEnd,
-      // TuiAtlasPainter highlights the cell and reveals the hidden glyph in white.
-      final selectedRecorder = ui.PictureRecorder();
-      final selectedCanvas = Canvas(selectedRecorder);
+  test('HoveredLinkCellStyles handles setBackground->fillBackground, setModifiers->fillModifiers, and reset(-1)', () {
+    final styles = HoveredLinkCellStyles()..reset(4);
+    styles.setBackground(1, 0xFFAA0000);
+    expect(styles.backgroundAt(1), equals(0xFFAA0000));
+    styles.fillBackground(0xFF00BBCC);
+    expect(styles.backgroundAt(0), equals(0xFF00BBCC));
+    expect(styles.backgroundAt(1), equals(0xFF00BBCC));
+    expect(styles.backgroundAt(3), equals(0xFF00BBCC));
+
+    styles.setModifiers(2, Modifier.bold);
+    expect(styles.modifiersAt(2), equals(Modifier.bold));
+    styles.fillModifiers(Modifier.underline);
+    expect(styles.modifiersAt(0), equals(Modifier.underline));
+    expect(styles.modifiersAt(2), equals(Modifier.underline));
+
+    styles.reset(-1);
+    expect(styles.length, equals(0));
+    expect(styles.backgroundAt(0), isNull);
+    expect(styles.modifiersAt(0), isNull);
+  });
+
+  test('TuiAtlasPainter renders fallback unbaked glyph inside hoveredLink with styler fgArgb, handles throwing styler, and clips off-top links', () async {
+    final atlas = await GlyphAtlasGenerator.generate(
+      fontSize: 16.0,
+      fontFamily: 'Roboto Mono',
+    );
+    addTearDown(atlas.image.dispose);
+
+    Future<Uint8List> paintWith(
+      Buffer buf, {
+      ResolvedTerminalLink? link,
+      HoveredLinkStyler? styler,
+    }) async {
+      final w = (buf.width * atlas.cellWidth).ceil();
+      final h = (buf.height * atlas.cellHeight).ceil();
+      final rec = ui.PictureRecorder();
+      TuiAtlasPainter(
+        buffer: buf,
+        atlas: atlas,
+        fontFamily: 'Roboto Mono',
+        fallbackPainters: const {},
+        onMissingGlyphs: null,
+        hoveredLink: link,
+        hoveredLinkStyler: styler,
+      ).paint(Canvas(rec), Size(w.toDouble(), h.toDouble()));
+      final pic = rec.endRecording();
+      final img = await pic.toImage(w, h);
+      pic.dispose();
+      addTearDown(img.dispose);
+      return (await img.toByteData())!.buffer.asUint8List();
+    }
+
+    // 1. Unbaked fallback glyph (\u4E2D) receives overridden foreground color.
+    final fallbackBuf = Buffer(6, 2)
+      ..writeString(0, 0, '\u4E2D', const Style());
+    const fallbackLink = (
+      uri: 'https://example.com/cjk',
+      startCol: 0,
+      startRow: 0,
+      endCol: 0,
+      endRow: 0,
+    );
+    final expectedRedFallbackBuf = Buffer(6, 2)
+      ..writeString(
+        0,
+        0,
+        '\u4E2D',
+        const Style(
+          foreground: Color(255, 0, 0),
+          modifiers: Modifier.underline,
+        ),
+      );
+    final expectedFallbackBytes = await paintWith(expectedRedFallbackBuf);
+    final hoveredFallbackBytes = await paintWith(
+      fallbackBuf,
+      link: fallbackLink,
+      styler: (_, _, _, styles) {
+        styles.setForeground(0, 0xFFFF0000);
+      },
+    );
+    expect(hoveredFallbackBytes, equals(expectedFallbackBytes));
+
+    // 2. Throwing hoveredLinkStyler reports error and falls back cleanly to default underline.
+    final plainBuf = Buffer(10, 2)..writeString(0, 0, 'abc', const Style());
+    const plainLink = (
+      uri: 'https://example.com/abc',
+      startCol: 0,
+      startRow: 0,
+      endCol: 2,
+      endRow: 0,
+    );
+    final defaultHoverBytes = await paintWith(plainBuf, link: plainLink);
+    final reportedErrors = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reportedErrors.add;
+    try {
+      final fallbackOnThrowBytes = await paintWith(
+        plainBuf,
+        link: plainLink,
+        styler: (_, _, _, styles) {
+          styles.setForeground(0, 0xFF00FF00);
+          throw StateError('boom');
+        },
+      );
+      expect(reportedErrors, hasLength(1));
+      expect(fallbackOnThrowBytes, equals(defaultHoverBytes));
+    } finally {
+      FlutterError.onError = previousOnError;
+    }
+
+    // 3. Off-top clipped link (startRow: -1, endRow: 0) styles visible row 0 cells cleanly.
+    const clippedLink = (
+      uri: 'https://example.com/wrapped',
+      startCol: 5,
+      startRow: -1,
+      endCol: 2,
+      endRow: 0,
+    );
+    int? observedCount;
+    final clippedBytes = await paintWith(
+      plainBuf,
+      link: clippedLink,
+      styler: (_, count, _, styles) {
+        observedCount = count;
+        styles.fillBackground(0xFF224466);
+      },
+    );
+    expect(observedCount, equals(3));
+    final expectedClippedBuf = Buffer(10, 2)
+      ..writeString(
+        0,
+        0,
+        'abc',
+        const Style(
+          background: Color(0x22, 0x44, 0x66),
+          modifiers: Modifier.underline,
+        ),
+      );
+    expect(clippedBytes, equals(await paintWith(expectedClippedBuf)));
+  });
+
+  test('TuiAtlasPainter highlights only exact hoveredLinkRowSpans cells and skips leading/trailing spaces', () async {
+    final atlas = await GlyphAtlasGenerator.generate(
+      fontSize: 16.0,
+      fontFamily: 'Roboto Mono',
+    );
+    addTearDown(atlas.image.dispose);
+
+    Future<Uint8List> paintWith(
+      Buffer buffer, {
+      ResolvedTerminalLink? link,
+      List<TerminalLinkRowSpan>? rowSpans,
+      HoveredLinkStyler? styler,
+    }) async {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final size = Size(
+        buffer.width * atlas.cellWidth,
+        buffer.height * atlas.cellHeight,
+      );
       TuiAtlasPainter(
         buffer: buffer,
         atlas: atlas,
         fontFamily: 'Roboto Mono',
         fallbackPainters: const {},
         onMissingGlyphs: null,
-        selectionStart: const math.Point(3, 0),
-        selectionEnd: const math.Point(3, 0),
-      ).paint(selectedCanvas, Size(12 * atlas.cellWidth, 2 * atlas.cellHeight));
-      final selectedPic = selectedRecorder.endRecording();
-      final selectedImg = await selectedPic.toImage(width, height);
-      selectedPic.dispose();
-      addTearDown(selectedImg.dispose);
-      final selectedData = (await selectedImg.toByteData())!.buffer
-          .asUint8List();
+        hoveredLink: link,
+        hoveredLinkRowSpans: rowSpans,
+        hoveredLinkStyler: styler,
+      ).paint(canvas, size);
+      final pic = recorder.endRecording();
+      final img = await pic.toImage(size.width.ceil(), size.height.ceil());
+      pic.dispose();
+      addTearDown(img.dispose);
+      return (await img.toByteData())!.buffer.asUint8List();
+    }
 
-      var foundRevealedWhite = false;
-      final startX = (3 * atlas.cellWidth).floor();
-      final endX = (4 * atlas.cellWidth).ceil().clamp(0, width);
-      final endY = atlas.cellHeight.ceil().clamp(0, height);
-      for (var y = 0; y < endY; y++) {
-        for (var x = startX; x < endX; x++) {
-          final idx = (y * width + x) * 4;
-          if (selectedData[idx] == 255 &&
-              selectedData[idx + 1] == 255 &&
-              selectedData[idx + 2] == 255 &&
-              selectedData[idx + 3] > 0) {
-            foundRevealedWhite = true;
-          }
+    final buf = Buffer(12, 3)
+      ..writeString(0, 0, '  [ https:', const Style())
+      ..writeString(0, 1, '  //a.dev/  ', const Style())
+      ..writeString(0, 2, '  path ]    ', const Style());
+
+    const link = (
+      uri: 'https://a.dev/path',
+      startCol: 4,
+      startRow: 0,
+      endCol: 5,
+      endRow: 2,
+    );
+    const rowSpans = <TerminalLinkRowSpan>[
+      (row: 0, startCol: 4, endCol: 9), // 6 cells: 'https:'
+      (row: 1, startCol: 2, endCol: 9), // 8 cells: '//a.dev/'
+      (row: 2, startCol: 2, endCol: 5), // 4 cells: 'path'
+    ];
+
+    int? observedCount;
+    final styledBytes = await paintWith(
+      buf,
+      link: link,
+      rowSpans: rowSpans,
+      styler: (_, count, _, styles) {
+        observedCount = count;
+        styles.fillBackground(0xFF1B263B);
+        styles.fillModifiers(Modifier.underline | Modifier.bold);
+        for (var i = 0; i < count; i++) {
+          styles.setForeground(i, 0xFF33AAFF);
         }
-      }
-      expect(
-        foundRevealedWhite,
-        isTrue,
-        reason: 'Selecting a Modifier.hidden cell must reveal its glyph',
-      );
-    },
-  );
+      },
+    );
+    // Total cells = 6 + 8 + 4 = 18 (not linear span across trailing/leading spaces).
+    expect(observedCount, equals(18));
 
-  test(
-    'TuiAtlasPainter renders KittyImage U+10EEEE placeholders and respects cell occlusion',
-    () async {
-      final atlas = await GlyphAtlasGenerator.generate(
-        fontSize: 16.0,
-        fontFamily: 'Roboto Mono',
-      );
-      addTearDown(() => atlas.image.dispose());
-
-      // Register a 2x1 grid KittyImage: col 0 is pure cyan (0, 255, 255), col 1 is pure magenta (255, 0, 255).
-      final rgba = Uint8List.fromList([
-        0, 255, 255, 255, // pixel (0,0) -> col 0
-        255, 0, 255, 255, // pixel (1,0) -> col 1
-      ]);
-      const imageId = 0x1234;
-      KittyImageRegistry.register(
-        KittyImageData(
-          imageId: imageId,
-          pixelWidth: 2,
-          pixelHeight: 1,
-          rgbaPixels: rgba,
-          gridCols: 2,
-          gridRows: 1,
-        ),
-      );
-
-      final buffer = Buffer(2, 1);
-      buffer.setAttributes(
-        0,
-        0,
-        char: kittyPlaceholderCell(0, 0),
-        fg: 0xFF000000 | imageId,
-        bg: 0xFF000000,
-        modifiers: Modifier.kittyPlaceholder,
-      );
-      // Occlude col 1 with an opaque yellow background cell (simulating a floating TUI window)
-      buffer.writeString(
-        1,
-        0,
-        ' ',
-        const Style(background: Color(255, 255, 0)),
-      );
-
-      final missing = <String>[];
-      final painter = TuiAtlasPainter(
-        buffer: buffer,
-        atlas: atlas,
-        fontFamily: 'Roboto Mono',
-        fallbackPainters: {},
-        onMissingGlyphs: missing.addAll,
-      );
-
-      final w = (atlas.cellWidth * 2).ceil();
-      final h = atlas.cellHeight.ceil();
-      final recorder = ui.PictureRecorder();
-      final canvas = Canvas(recorder);
-      painter.paint(canvas, Size(w.toDouble(), h.toDouble()));
-      final picture = recorder.endRecording();
-      final img = await picture.toImage(w, h);
-      final bytes = (await img.toByteData(format: ui.ImageByteFormat.rawRgba))!;
-
-      expect(
-        missing,
-        isEmpty,
-        reason:
-            'U+10EEEE placeholders should not be reported as missing glyphs',
-      );
-
-      bool hasPixelInCell(int col, int targetR, int targetG, int targetB) {
-        final int x0 = (col * atlas.cellWidth).floor();
-        final int x1 = ((col + 1) * atlas.cellWidth).ceil().clamp(0, w);
-        for (var y = 0; y < h; y++) {
-          for (var x = x0; x < x1; x++) {
-            final idx = (y * w + x) * 4;
-            if (bytes.getUint8(idx) == targetR &&
-                bytes.getUint8(idx + 1) == targetG &&
-                bytes.getUint8(idx + 2) == targetB) {
-              return true;
-            }
-          }
-        }
-        return false;
-      }
-
-      expect(
-        hasPixelInCell(0, 0, 255, 255),
-        isTrue,
-        reason: 'Col 0 should render KittyImage tile (0,0) in cyan',
-      );
-      expect(
-        hasPixelInCell(1, 255, 0, 255),
-        isFalse,
-        reason: 'Occluded Col 1 should not render KittyImage tile (0,1)',
-      );
-      expect(
-        hasPixelInCell(1, 255, 255, 0),
-        isTrue,
-        reason:
-            'Occluded Col 1 should render the occluding window yellow background',
-      );
-    },
-  );
-
-  test(
-    'TuiAtlasPainter underlines hoveredLink by default and applies hoveredLinkStyler overrides',
-    () async {
-      final atlas = await GlyphAtlasGenerator.generate(
-        fontSize: 16.0,
-        fontFamily: 'Roboto Mono',
-      );
-      addTearDown(atlas.image.dispose);
-
-      final plainBuf = Buffer(10, 2)..writeString(0, 0, 'a b', const Style());
-      final underlinedBuf = Buffer(10, 2)
-        ..writeString(0, 0, 'a b', const Style(modifiers: Modifier.underline));
-      const hoveredLink = (
-        uri: 'https://example.com',
-        startCol: 0,
-        startRow: 0,
-        endCol: 2,
-        endRow: 0,
-      );
-
-      Future<Uint8List> paintWith(
-        Buffer buf, {
-        ResolvedTerminalLink? link,
-        HoveredLinkStyler? styler,
-      }) async {
-        final w = (10 * atlas.cellWidth).ceil();
-        final h = (2 * atlas.cellHeight).ceil();
-        final rec = ui.PictureRecorder();
-        TuiAtlasPainter(
-          buffer: buf,
-          atlas: atlas,
-          fontFamily: 'Roboto Mono',
-          fallbackPainters: const {},
-          onMissingGlyphs: null,
-          hoveredLink: link,
-          hoveredLinkStyler: styler,
-        ).paint(Canvas(rec), Size(w.toDouble(), h.toDouble()));
-        final pic = rec.endRecording();
-        final img = await pic.toImage(w, h);
-        pic.dispose();
-        addTearDown(img.dispose);
-        return (await img.toByteData())!.buffer.asUint8List();
-      }
-
-      final plainBytes = await paintWith(plainBuf);
-      final expectedUnderlinedBytes = await paintWith(underlinedBuf);
-      final defaultHoverBytes = await paintWith(plainBuf, link: hoveredLink);
-
-      expect(defaultHoverBytes, isNot(equals(plainBytes)));
-      expect(defaultHoverBytes, equals(expectedUnderlinedBytes));
-
-      var callCount = 0;
-      final customBytes = await paintWith(
-        plainBuf,
-        link: hoveredLink,
-        styler: (link, cellCount, _, styles) {
-          callCount++;
-          expect(link, equals(hoveredLink));
-          expect(cellCount, equals(3));
-          styles.fillBackground(0xFF1B263B);
-          styles.fillModifiers(Modifier.underline | Modifier.bold);
-          styles.underlineMatchesForeground = true;
-          for (var i = 0; i < cellCount; i++) {
-            styles.setForeground(i, 0xFF00FF00 + i);
-          }
-          expect(styles.backgroundAt(1), equals(0xFF1B263B));
-          expect(styles.underlineColorAt(2), equals(0xFF00FF02));
-          styles.setUnderlineColor(1, 0xFFFF00FF);
-          expect(styles.underlineColorAt(1), equals(0xFFFF00FF));
-        },
-      );
-      expect(callCount, equals(1));
-      expect(customBytes, isNot(equals(defaultHoverBytes)));
-
-      final defaultPainter = TuiAtlasPainter(
-        buffer: plainBuf,
-        atlas: atlas,
-        fontFamily: 'Roboto Mono',
-        fallbackPainters: const {},
-        onMissingGlyphs: null,
-        hoveredLink: hoveredLink,
-      );
-      final styledPainter = TuiAtlasPainter(
-        buffer: plainBuf,
-        atlas: atlas,
-        fontFamily: 'Roboto Mono',
-        fallbackPainters: const {},
-        onMissingGlyphs: null,
-        hoveredLink: hoveredLink,
-        hoveredLinkStyler: (_, count, _, styles) {
-          for (var i = 0; i < count; i++) {
-            styles.setForeground(i, 0xFF112233 + i);
-          }
-        },
-      );
-      expect(styledPainter.shouldRepaint(defaultPainter), isTrue);
-    },
-  );
-
-  test(
-    'HoveredLinkCellStyles handles setBackground->fillBackground, setModifiers->fillModifiers, and reset(-1)',
-    () {
-      final styles = HoveredLinkCellStyles()..reset(4);
-      styles.setBackground(1, 0xFFAA0000);
-      expect(styles.backgroundAt(1), equals(0xFFAA0000));
-      styles.fillBackground(0xFF00BBCC);
-      expect(styles.backgroundAt(0), equals(0xFF00BBCC));
-      expect(styles.backgroundAt(1), equals(0xFF00BBCC));
-      expect(styles.backgroundAt(3), equals(0xFF00BBCC));
-
-      styles.setModifiers(2, Modifier.bold);
-      expect(styles.modifiersAt(2), equals(Modifier.bold));
-      styles.fillModifiers(Modifier.underline);
-      expect(styles.modifiersAt(0), equals(Modifier.underline));
-      expect(styles.modifiersAt(2), equals(Modifier.underline));
-
-      styles.reset(-1);
-      expect(styles.length, equals(0));
-      expect(styles.backgroundAt(0), isNull);
-      expect(styles.modifiersAt(0), isNull);
-    },
-  );
-
-  test(
-    'TuiAtlasPainter renders fallback unbaked glyph inside hoveredLink with styler fgArgb, handles throwing styler, and clips off-top links',
-    () async {
-      final atlas = await GlyphAtlasGenerator.generate(
-        fontSize: 16.0,
-        fontFamily: 'Roboto Mono',
-      );
-      addTearDown(atlas.image.dispose);
-
-      Future<Uint8List> paintWith(
-        Buffer buf, {
-        ResolvedTerminalLink? link,
-        HoveredLinkStyler? styler,
-      }) async {
-        final w = (buf.width * atlas.cellWidth).ceil();
-        final h = (buf.height * atlas.cellHeight).ceil();
-        final rec = ui.PictureRecorder();
-        TuiAtlasPainter(
-          buffer: buf,
-          atlas: atlas,
-          fontFamily: 'Roboto Mono',
-          fallbackPainters: const {},
-          onMissingGlyphs: null,
-          hoveredLink: link,
-          hoveredLinkStyler: styler,
-        ).paint(Canvas(rec), Size(w.toDouble(), h.toDouble()));
-        final pic = rec.endRecording();
-        final img = await pic.toImage(w, h);
-        pic.dispose();
-        addTearDown(img.dispose);
-        return (await img.toByteData())!.buffer.asUint8List();
-      }
-
-      // 1. Unbaked fallback glyph (\u4E2D) receives overridden foreground color.
-      final fallbackBuf = Buffer(6, 2)
-        ..writeString(0, 0, '\u4E2D', const Style());
-      const fallbackLink = (
-        uri: 'https://example.com/cjk',
-        startCol: 0,
-        startRow: 0,
-        endCol: 0,
-        endRow: 0,
-      );
-      final expectedRedFallbackBuf = Buffer(6, 2)
-        ..writeString(
-          0,
-          0,
-          '\u4E2D',
-          const Style(
-            foreground: Color(255, 0, 0),
-            modifiers: Modifier.underline,
-          ),
-        );
-      final expectedFallbackBytes = await paintWith(expectedRedFallbackBuf);
-      final hoveredFallbackBytes = await paintWith(
-        fallbackBuf,
-        link: fallbackLink,
-        styler: (_, _, _, styles) {
-          styles.setForeground(0, 0xFFFF0000);
-        },
-      );
-      expect(hoveredFallbackBytes, equals(expectedFallbackBytes));
-
-      // 2. Throwing hoveredLinkStyler reports error and falls back cleanly to default underline.
-      final plainBuf = Buffer(10, 2)..writeString(0, 0, 'abc', const Style());
-      const plainLink = (
-        uri: 'https://example.com/abc',
-        startCol: 0,
-        startRow: 0,
-        endCol: 2,
-        endRow: 0,
-      );
-      final defaultHoverBytes = await paintWith(plainBuf, link: plainLink);
-      final reportedErrors = <FlutterErrorDetails>[];
-      final previousOnError = FlutterError.onError;
-      FlutterError.onError = reportedErrors.add;
-      try {
-        final fallbackOnThrowBytes = await paintWith(
-          plainBuf,
-          link: plainLink,
-          styler: (_, _, _, styles) {
-            styles.setForeground(0, 0xFF00FF00);
-            throw StateError('boom');
-          },
-        );
-        expect(reportedErrors, hasLength(1));
-        expect(fallbackOnThrowBytes, equals(defaultHoverBytes));
-      } finally {
-        FlutterError.onError = previousOnError;
-      }
-
-      // 3. Off-top clipped link (startRow: -1, endRow: 0) styles visible row 0 cells cleanly.
-      const clippedLink = (
-        uri: 'https://example.com/wrapped',
-        startCol: 5,
-        startRow: -1,
-        endCol: 2,
-        endRow: 0,
-      );
-      int? observedCount;
-      final clippedBytes = await paintWith(
-        plainBuf,
-        link: clippedLink,
-        styler: (_, count, _, styles) {
-          observedCount = count;
-          styles.fillBackground(0xFF224466);
-        },
-      );
-      expect(observedCount, equals(3));
-      final expectedClippedBuf = Buffer(10, 2)
-        ..writeString(
-          0,
-          0,
-          'abc',
-          const Style(
-            background: Color(0x22, 0x44, 0x66),
-            modifiers: Modifier.underline,
-          ),
-        );
-      expect(clippedBytes, equals(await paintWith(expectedClippedBuf)));
-    },
-  );
-
-  test(
-    'TuiAtlasPainter highlights only exact hoveredLinkRowSpans cells and skips leading/trailing spaces',
-    () async {
-      final atlas = await GlyphAtlasGenerator.generate(
-        fontSize: 16.0,
-        fontFamily: 'Roboto Mono',
-      );
-      addTearDown(atlas.image.dispose);
-
-      Future<Uint8List> paintWith(
-        Buffer buffer, {
-        ResolvedTerminalLink? link,
-        List<TerminalLinkRowSpan>? rowSpans,
-        HoveredLinkStyler? styler,
-      }) async {
-        final recorder = ui.PictureRecorder();
-        final canvas = Canvas(recorder);
-        final size = Size(
-          buffer.width * atlas.cellWidth,
-          buffer.height * atlas.cellHeight,
-        );
-        TuiAtlasPainter(
-          buffer: buffer,
-          atlas: atlas,
-          fontFamily: 'Roboto Mono',
-          fallbackPainters: const {},
-          onMissingGlyphs: null,
-          hoveredLink: link,
-          hoveredLinkRowSpans: rowSpans,
-          hoveredLinkStyler: styler,
-        ).paint(canvas, size);
-        final pic = recorder.endRecording();
-        final img = await pic.toImage(size.width.ceil(), size.height.ceil());
-        pic.dispose();
-        addTearDown(img.dispose);
-        return (await img.toByteData())!.buffer.asUint8List();
-      }
-
-      final buf = Buffer(12, 3)
-        ..writeString(0, 0, '  [ https:', const Style())
-        ..writeString(0, 1, '  //a.dev/  ', const Style())
-        ..writeString(0, 2, '  path ]    ', const Style());
-
-      const link = (
-        uri: 'https://a.dev/path',
-        startCol: 4,
-        startRow: 0,
-        endCol: 5,
-        endRow: 2,
-      );
-      const rowSpans = <TerminalLinkRowSpan>[
-        (row: 0, startCol: 4, endCol: 9), // 6 cells: 'https:'
-        (row: 1, startCol: 2, endCol: 9), // 8 cells: '//a.dev/'
-        (row: 2, startCol: 2, endCol: 5), // 4 cells: 'path'
-      ];
-
-      int? observedCount;
-      final styledBytes = await paintWith(
-        buf,
-        link: link,
-        rowSpans: rowSpans,
-        styler: (_, count, _, styles) {
-          observedCount = count;
-          styles.fillBackground(0xFF1B263B);
-          styles.fillModifiers(Modifier.underline | Modifier.bold);
-          for (var i = 0; i < count; i++) {
-            styles.setForeground(i, 0xFF33AAFF);
-          }
-        },
-      );
-      // Total cells = 6 + 8 + 4 = 18 (not linear span across trailing/leading spaces).
-      expect(observedCount, equals(18));
-
-      const linkStyle = Style(
-        foreground: Color(0x33, 0xAA, 0xFF),
-        background: Color(0x1B, 0x26, 0x3B),
-        modifiers: Modifier.underline | Modifier.bold,
-      );
-      final expectedBuf = Buffer(12, 3)
-        ..writeString(0, 0, '  [ ', const Style())
-        ..writeString(4, 0, 'https:', linkStyle)
-        ..writeString(0, 1, '  ', const Style())
-        ..writeString(2, 1, '//a.dev/', linkStyle)
-        ..writeString(0, 2, '  ', const Style())
-        ..writeString(2, 2, 'path', linkStyle)
-        ..writeString(6, 2, ' ]    ', const Style());
-      expect(styledBytes, equals(await paintWith(expectedBuf)));
-    },
-  );
+    const linkStyle = Style(
+      foreground: Color(0x33, 0xAA, 0xFF),
+      background: Color(0x1B, 0x26, 0x3B),
+      modifiers: Modifier.underline | Modifier.bold,
+    );
+    final expectedBuf = Buffer(12, 3)
+      ..writeString(0, 0, '  [ ', const Style())
+      ..writeString(4, 0, 'https:', linkStyle)
+      ..writeString(0, 1, '  ', const Style())
+      ..writeString(2, 1, '//a.dev/', linkStyle)
+      ..writeString(0, 2, '  ', const Style())
+      ..writeString(2, 2, 'path', linkStyle)
+      ..writeString(6, 2, ' ]    ', const Style());
+    expect(styledBytes, equals(await paintWith(expectedBuf)));
+  });
 
   _defineThemePalettePainterTests();
 }
