@@ -19,6 +19,7 @@ import 'package:termui_flutter/termui_flutter.dart'
         ShaderBackendKind,
         ShaderCompileException,
         ShaderPassSpec,
+        ShadertoyGlslShim,
         TerminalShaderConfig,
         TerminalShaderController,
         TerminalShaderPreset,
@@ -223,6 +224,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   TerminalShaderConfig _activeShaderConfig = TerminalShaderConfig.empty;
   Map<String, List<double>> _shaderParamsByPass = <String, List<double>>{};
   List<String> _availableCustomShaders = const <String>[];
+  final Map<String, bool> _customShaderSamplesChannel0 = <String, bool>{};
   String? _lastShaderAssetError;
   String? _lastLoggedShareError;
   bool _lastUpdateWasError = false;
@@ -1477,6 +1479,87 @@ final class FtermWorkspaceController extends ChangeNotifier {
     return setForegroundShaderChain(next);
   }
 
+  /// Moves the background shader at [fromIndex] to [toIndex] in
+  /// [backgroundShaderChain], changing pass execution order (`0 -> N - 1`,
+  /// where later passes run on top of earlier ones).
+  Future<void> moveBackgroundShader(int fromIndex, int toIndex) {
+    final reordered = _moveChainEntry(
+      backgroundShaderChain,
+      fromIndex,
+      toIndex,
+    );
+    if (reordered == null) return Future<void>.value();
+    return setBackgroundShaderChain(reordered);
+  }
+
+  /// Moves the foreground shader at [fromIndex] to [toIndex] in
+  /// [foregroundShaderChain], changing pass execution order (`0 -> N - 1`).
+  Future<void> moveForegroundShader(int fromIndex, int toIndex) {
+    final reordered = _moveChainEntry(
+      foregroundShaderChain,
+      fromIndex,
+      toIndex,
+    );
+    if (reordered == null) return Future<void>.value();
+    return setForegroundShaderChain(reordered);
+  }
+
+  /// Whether shader [entry] in [stage] samples `iChannel0` (chains on top of
+  /// the previous pass), `false` when it is a standalone base/source shader,
+  /// or `null` when its GLSL source has not been analyzed yet.
+  bool? shaderSamplesChannel0(String entry, TerminalShaderStage stage) {
+    final analysis = _shaderController.analysisForPass(
+      _passIdForEntry(entry, stage),
+    );
+    if (analysis != null) return analysis.samplesChannel0;
+    final otherStage = stage == TerminalShaderStage.background
+        ? TerminalShaderStage.foreground
+        : TerminalShaderStage.background;
+    final otherAnalysis = _shaderController.analysisForPass(
+      _passIdForEntry(entry, otherStage),
+    );
+    if (otherAnalysis != null) return otherAnalysis.samplesChannel0;
+    final preset = TerminalShaderPreset.fromWireName(entry);
+    if (preset != TerminalShaderPreset.none) {
+      return BuiltinShaders.samplesChannel0(preset);
+    }
+    return _customShaderSamplesChannel0[entry];
+  }
+
+  /// Returns a human-readable warning when [stage]'s active shader chain has
+  /// overlapping or overwriting passes, or `null` when no conflict exists.
+  ///
+  /// Passes execute sequentially (`0 -> N - 1`), feeding each pass's output
+  /// into the next pass's `iChannel0`. Any pass after index `0` that does not
+  /// sample `iChannel0` overwrites all earlier passes. For
+  /// [TerminalShaderStage.background], selecting multiple shaders always
+  /// surfaces an ordering notice.
+  String? shaderChainWarningFor(TerminalShaderStage stage) {
+    final chain = stage == TerminalShaderStage.background
+        ? backgroundShaderChain
+        : foregroundShaderChain;
+    if (chain.length <= 1) return null;
+
+    for (var i = chain.length - 1; i >= 1; i--) {
+      final entry = chain[i];
+      if (shaderSamplesChannel0(entry, stage) == false) {
+        final overwriter = _shaderDisplayName(entry);
+        final hidden = <String>[
+          for (var j = 0; j < i; j++) _shaderDisplayName(chain[j]),
+        ].join(', ');
+        return '$overwriter does not sample iChannel0 and overwrites '
+            '$hidden. Reorder or disable extra shaders.';
+      }
+    }
+
+    if (stage == TerminalShaderStage.background) {
+      return '${chain.length} background shaders active. Passes run in order '
+          '(1 → ${chain.length}); the final pass wins unless it blends '
+          'iChannel0.';
+    }
+    return null;
+  }
+
   /// Updates float parameter [index] (`0..7`) for shader pass [passId] and
   /// persists it inside [FtermPreferences.customShaderProfileJson].
   void setShaderParam(String passId, int index, double value) {
@@ -1597,16 +1680,39 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   /// Refreshes the list of available custom `.glsl` / `.frag` files from
-  /// [shaderProfileStore].
+  /// [shaderProfileStore] and statically analyzes whether each shader samples
+  /// `iChannel0` so the Settings UI can show `base` vs `chains` badges before
+  /// activation.
   Future<void> refreshCustomShaders() async {
     if (_disposed) return;
     try {
       final listed = await _shaderProfileStore.listShaderFiles();
       if (_disposed) return;
+      final analyzed = <String, bool>{};
+      for (final path in listed) {
+        if (_disposed) return;
+        final samples = await _tryAnalyzeCustomSamplesChannel0(path);
+        if (samples != null) {
+          analyzed[path] = samples;
+        }
+      }
+      if (_disposed) return;
       _availableCustomShaders = listed;
+      _customShaderSamplesChannel0
+        ..clear()
+        ..addAll(analyzed);
       _notifyChromeChanged();
     } on Object {
       // Ignore unavailable shader directory during startup or tests.
+    }
+  }
+
+  Future<bool?> _tryAnalyzeCustomSamplesChannel0(String path) async {
+    try {
+      final source = await _shaderProfileStore.loadShaderSource(path);
+      return ShadertoyGlslShim.analyze(source, shaderId: path).samplesChannel0;
+    } on Object {
+      return null;
     }
   }
 
@@ -1734,8 +1840,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
       final entry = raw.trim();
       if (entry.isEmpty) continue;
       final preset = TerminalShaderPreset.fromWireName(entry);
+      final passId = _passIdForEntry(entry, stage);
       if (preset != TerminalShaderPreset.none) {
-        final passId = '${stage.name}:${preset.wireName}';
         specs.add(
           ShaderPassSpec(
             id: passId,
@@ -1746,7 +1852,6 @@ final class FtermWorkspaceController extends ChangeNotifier {
           ),
         );
       } else {
-        final passId = '${stage.name}:$entry';
         specs.add(
           ShaderPassSpec(
             id: passId,
@@ -1758,6 +1863,38 @@ final class FtermWorkspaceController extends ChangeNotifier {
       }
     }
     return List<ShaderPassSpec>.unmodifiable(specs);
+  }
+
+  static String _passIdForEntry(String entry, TerminalShaderStage stage) {
+    final preset = TerminalShaderPreset.fromWireName(entry);
+    final suffix = preset != TerminalShaderPreset.none
+        ? preset.wireName
+        : entry;
+    return '${stage.name}:$suffix';
+  }
+
+  static String _shaderDisplayName(String entry) {
+    final preset = TerminalShaderPreset.fromWireName(entry);
+    if (preset != TerminalShaderPreset.none) return preset.wireName;
+    return p.basename(entry);
+  }
+
+  static List<String>? _moveChainEntry(
+    List<String> chain,
+    int fromIndex,
+    int toIndex,
+  ) {
+    if (fromIndex < 0 ||
+        fromIndex >= chain.length ||
+        toIndex < 0 ||
+        toIndex >= chain.length ||
+        fromIndex == toIndex) {
+      return null;
+    }
+    final next = List<String>.of(chain);
+    final moved = next.removeAt(fromIndex);
+    next.insert(toIndex, moved);
+    return next;
   }
 
   static List<String> _normalizeShaderEntries(List<String> entries) {

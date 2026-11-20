@@ -31,6 +31,16 @@ abstract final class BuiltinShaders {
   static bool usesPrevFrame(TerminalShaderPreset preset) =>
       preset == TerminalShaderPreset.phosphorGlow;
 
+  /// Whether [preset] samples `iChannel0` (chains on top of the previous pass)
+  /// rather than generating a standalone base layer from scratch.
+  static bool samplesChannel0(TerminalShaderPreset preset) => switch (preset) {
+    TerminalShaderPreset.none || TerminalShaderPreset.wallpaperWave => false,
+    TerminalShaderPreset.cursorGlow ||
+    TerminalShaderPreset.scanlineOverlay ||
+    TerminalShaderPreset.crtLottes ||
+    TerminalShaderPreset.phosphorGlow => true,
+  };
+
   /// All active built-in shader presets mapped to their GLSL sources.
   static const Map<TerminalShaderPreset, String> allPresets =
       <TerminalShaderPreset, String>{

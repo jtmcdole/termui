@@ -540,6 +540,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           BuiltinShaders.usesPrevFrame(TerminalShaderPreset.scanlineOverlay),
           isFalse,
         );
+        expect(
+          BuiltinShaders.samplesChannel0(TerminalShaderPreset.none),
+          isFalse,
+        );
         for (final preset in BuiltinShaders.allPresets.keys) {
           final src = BuiltinShaders.sourceForPreset(preset);
           expect(src, isNotNull);
@@ -550,6 +554,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           expect(
             shimmed.analysis.usesPrevFrame,
             BuiltinShaders.usesPrevFrame(preset),
+          );
+          expect(
+            shimmed.analysis.samplesChannel0,
+            BuiltinShaders.samplesChannel0(preset),
           );
         }
       },

@@ -232,6 +232,9 @@ final class FtermOverlayPalette {
   /// Destructive/error foreground color.
   final Color danger;
 
+  /// Warning/caution foreground and border color.
+  final Color warning;
+
   /// Creates an immutable [FtermOverlayPalette].
   const FtermOverlayPalette({
     required this.surface,
@@ -241,6 +244,7 @@ final class FtermOverlayPalette {
     required this.accent,
     required this.border,
     required this.danger,
+    this.warning = const Color(0xFFE0AF68),
   });
 
   /// Derives overlay colors from [theme].
@@ -261,6 +265,7 @@ final class FtermOverlayPalette {
       accent: accent,
       border: fg.withValues(alpha: 0.2),
       danger: Color(theme.resolveAnsi256(1).argb),
+      warning: Color(theme.resolveAnsi256(3).argb),
     );
   }
 }
@@ -1005,14 +1010,22 @@ final class _ShadersAndBackgroundSectionState
           },
         ),
         const SizedBox(height: 8),
+        _ShaderRoleLegend(palette: palette),
+        const SizedBox(height: 6),
         _ShaderChainSelector(
           title: 'Background Shaders',
           keyPrefix: 'settings-bg-shader',
           presets: _bgPresets,
           activeChain: ws.backgroundShaderChain,
           availableCustomShaders: ws.availableCustomShaders,
+          samplesChannel0For: (entry) =>
+              ws.shaderSamplesChannel0(entry, TerminalShaderStage.background),
+          warningMessage: ws.shaderChainWarningFor(
+            TerminalShaderStage.background,
+          ),
           palette: palette,
           onToggle: (entry) => unawaited(ws.toggleBackgroundShader(entry)),
+          onMove: (from, to) => unawaited(ws.moveBackgroundShader(from, to)),
         ),
         const SizedBox(height: 8),
         _ShaderChainSelector(
@@ -1021,8 +1034,14 @@ final class _ShadersAndBackgroundSectionState
           presets: _fgPresets,
           activeChain: ws.foregroundShaderChain,
           availableCustomShaders: ws.availableCustomShaders,
+          samplesChannel0For: (entry) =>
+              ws.shaderSamplesChannel0(entry, TerminalShaderStage.foreground),
+          warningMessage: ws.shaderChainWarningFor(
+            TerminalShaderStage.foreground,
+          ),
           palette: palette,
           onToggle: (entry) => unawaited(ws.toggleForegroundShader(entry)),
+          onMove: (from, to) => unawaited(ws.moveForegroundShader(from, to)),
         ),
         const SizedBox(height: 8),
         _CustomShaderAddRow(
@@ -1310,14 +1329,102 @@ final class _WallpaperControls extends StatelessWidget {
   }
 }
 
+final class _ShaderRoleLegend extends StatelessWidget {
+  final FtermOverlayPalette palette;
+
+  const _ShaderRoleLegend({required this.palette});
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    key: const ValueKey('settings-shader-role-legend'),
+    spacing: 12,
+    runSpacing: 4,
+    crossAxisAlignment: WrapCrossAlignment.center,
+    children: [
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.bolt, size: 12, color: palette.warning),
+          const SizedBox(width: 3),
+          Text(
+            'base (starts chain)',
+            style: TextStyle(color: palette.muted, fontSize: 10),
+          ),
+        ],
+      ),
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.input, size: 12, color: palette.accent),
+          const SizedBox(width: 3),
+          Text(
+            'chains (reads iChannel0)',
+            style: TextStyle(color: palette.muted, fontSize: 10),
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
+final class _ShaderRoleBadge extends StatelessWidget {
+  final bool samplesChannel0;
+  final FtermOverlayPalette palette;
+
+  const _ShaderRoleBadge({
+    super.key,
+    required this.samplesChannel0,
+    required this.palette,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = samplesChannel0 ? palette.accent : palette.warning;
+    final icon = samplesChannel0 ? Icons.input : Icons.bolt;
+    final text = samplesChannel0 ? 'chains' : 'base';
+    final tooltip = samplesChannel0
+        ? 'Chains from previous pass (reads iChannel0)'
+        : 'Base shader (starts chain — ignores iChannel0)';
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(4),
+          border: Border.all(color: color.withValues(alpha: 0.5)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 10, color: color),
+            const SizedBox(width: 3),
+            Text(
+              text,
+              style: TextStyle(
+                color: color,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 final class _ShaderChainSelector extends StatelessWidget {
   final String title;
   final String keyPrefix;
   final List<TerminalShaderPreset> presets;
   final List<String> activeChain;
   final List<String> availableCustomShaders;
+  final bool? Function(String entry) samplesChannel0For;
+  final String? warningMessage;
   final FtermOverlayPalette palette;
   final void Function(String entry) onToggle;
+  final void Function(int fromIndex, int toIndex) onMove;
 
   const _ShaderChainSelector({
     required this.title,
@@ -1325,8 +1432,11 @@ final class _ShaderChainSelector extends StatelessWidget {
     required this.presets,
     required this.activeChain,
     required this.availableCustomShaders,
+    required this.samplesChannel0For,
+    required this.warningMessage,
     required this.palette,
     required this.onToggle,
+    required this.onMove,
   });
 
   List<(String id, String label)> _collectOptions() {
@@ -1349,6 +1459,33 @@ final class _ShaderChainSelector extends StatelessWidget {
     return options;
   }
 
+  Widget _buildChipLabel(String id, String label) {
+    final samples = samplesChannel0For(id);
+    if (samples == null) {
+      return Text(label);
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          samples ? Icons.input : Icons.bolt,
+          size: 12,
+          color: samples ? palette.accent : palette.warning,
+        ),
+        const SizedBox(width: 4),
+        Text(label),
+      ],
+    );
+  }
+
+  String _chipTooltip(String id) {
+    final samples = samplesChannel0For(id);
+    if (samples == null) return id;
+    return samples
+        ? '$id — chains from previous pass (reads iChannel0)'
+        : '$id — base shader (starts chain, ignores iChannel0)';
+  }
+
   @override
   Widget build(BuildContext context) {
     final options = _collectOptions();
@@ -1356,22 +1493,233 @@ final class _ShaderChainSelector extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Text(title, style: TextStyle(color: palette.muted, fontSize: 11)),
+        Row(
+          children: [
+            Text(title, style: TextStyle(color: palette.muted, fontSize: 11)),
+            if (activeChain.length > 1) ...[
+              const Spacer(),
+              Text(
+                '${activeChain.length} active • runs top → bottom',
+                style: TextStyle(color: palette.muted, fontSize: 10),
+              ),
+            ],
+          ],
+        ),
         const SizedBox(height: 4),
         Wrap(
           spacing: 6,
           runSpacing: 6,
           children: [
             for (final (id, label) in options)
-              FilterChip(
-                key: ValueKey('$keyPrefix-$id'),
-                label: Text(label),
-                selected: activeChain.contains(id),
-                onSelected: (_) => onToggle(id),
+              Tooltip(
+                message: _chipTooltip(id),
+                child: FilterChip(
+                  key: ValueKey('$keyPrefix-$id'),
+                  label: _buildChipLabel(id, label),
+                  selected: activeChain.contains(id),
+                  onSelected: (_) => onToggle(id),
+                ),
               ),
           ],
         ),
+        if (warningMessage case final message?) ...[
+          const SizedBox(height: 6),
+          Container(
+            key: ValueKey('$keyPrefix-warning'),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            decoration: BoxDecoration(
+              color: palette.warning.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: palette.warning),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(
+                    Icons.warning_amber_rounded,
+                    size: 14,
+                    color: palette.warning,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    message,
+                    style: TextStyle(color: palette.warning, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (activeChain.length > 1) ...[
+          const SizedBox(height: 6),
+          _ShaderChainOrderList(
+            keyPrefix: keyPrefix,
+            activeChain: activeChain,
+            samplesChannel0For: samplesChannel0For,
+            palette: palette,
+            onMove: onMove,
+            onRemove: onToggle,
+          ),
+        ],
       ],
+    );
+  }
+}
+
+final class _ShaderChainOrderList extends StatelessWidget {
+  final String keyPrefix;
+  final List<String> activeChain;
+  final bool? Function(String entry) samplesChannel0For;
+  final FtermOverlayPalette palette;
+  final void Function(int fromIndex, int toIndex) onMove;
+  final void Function(String entry) onRemove;
+
+  const _ShaderChainOrderList({
+    required this.keyPrefix,
+    required this.activeChain,
+    required this.samplesChannel0For,
+    required this.palette,
+    required this.onMove,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: ValueKey('$keyPrefix-order-list'),
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    decoration: BoxDecoration(
+      color: palette.surfaceAlt,
+      borderRadius: BorderRadius.circular(6),
+      border: Border.all(color: palette.border),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < activeChain.length; i++)
+          _ShaderChainOrderRow(
+            keyPrefix: keyPrefix,
+            index: i,
+            totalCount: activeChain.length,
+            entry: activeChain[i],
+            samplesChannel0: samplesChannel0For(activeChain[i]),
+            palette: palette,
+            onMove: onMove,
+            onRemove: onRemove,
+          ),
+      ],
+    ),
+  );
+}
+
+final class _ShaderChainOrderRow extends StatelessWidget {
+  final String keyPrefix;
+  final int index;
+  final int totalCount;
+  final String entry;
+  final bool? samplesChannel0;
+  final FtermOverlayPalette palette;
+  final void Function(int fromIndex, int toIndex) onMove;
+  final void Function(String entry) onRemove;
+
+  const _ShaderChainOrderRow({
+    required this.keyPrefix,
+    required this.index,
+    required this.totalCount,
+    required this.entry,
+    required this.samplesChannel0,
+    required this.palette,
+    required this.onMove,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isFirst = index == 0;
+    final isLast = index == totalCount - 1;
+    final label = p.basename(entry);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 18,
+            child: Text(
+              '${index + 1}.',
+              style: TextStyle(
+                color: isLast ? palette.accent : palette.muted,
+                fontSize: 11,
+                fontWeight: isLast ? FontWeight.w600 : FontWeight.normal,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: palette.foreground, fontSize: 11),
+            ),
+          ),
+          if (samplesChannel0 case final samples?) ...[
+            const SizedBox(width: 6),
+            _ShaderRoleBadge(
+              key: ValueKey('$keyPrefix-role-$index'),
+              samplesChannel0: samples,
+              palette: palette,
+            ),
+          ],
+          if (isLast) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: palette.accent.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: palette.accent.withValues(alpha: 0.5),
+                ),
+              ),
+              child: Text(
+                'final',
+                style: TextStyle(
+                  color: palette.accent,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(width: 4),
+          IconButton(
+            key: ValueKey('$keyPrefix-move-up-$index'),
+            onPressed: isFirst ? null : () => onMove(index, index - 1),
+            icon: const Icon(Icons.arrow_upward, size: 14),
+            tooltip: 'Move earlier (lower priority)',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+          ),
+          IconButton(
+            key: ValueKey('$keyPrefix-move-down-$index'),
+            onPressed: isLast ? null : () => onMove(index, index + 1),
+            icon: const Icon(Icons.arrow_downward, size: 14),
+            tooltip: 'Move later (higher priority)',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+          ),
+          IconButton(
+            key: ValueKey('$keyPrefix-remove-$index'),
+            onPressed: () => onRemove(entry),
+            icon: const Icon(Icons.close, size: 14),
+            tooltip: 'Disable shader',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+          ),
+        ],
+      ),
     );
   }
 }

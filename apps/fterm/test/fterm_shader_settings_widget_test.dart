@@ -297,6 +297,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 }
 ''';
 
+const String _opaqueCustomGlsl = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / max(iResolution.xy, vec2(1.0));
+  fragColor = vec4(uv, 0.5, 1.0);
+}
+''';
+
 Future<Uint8List> _createValidPng() async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
@@ -841,6 +848,239 @@ void main() {
         expect(
           env.workspace.shaderParamsFor('background:bg_custom.glsl')[1],
           closeTo(0.42, 0.001),
+        );
+
+        await tester.runAsync(env.workspace.dispose);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'warns on multiple/overwriting background shaders and lets users reorder or remove passes',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 800));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final env = _buildWorkspace();
+        env.store.shaders['smoke_and_ghosts.glsl'] = _validCustomGlsl;
+        env.store.shaders['opaque_bg.glsl'] = _opaqueCustomGlsl;
+        await env.workspace.refreshCustomShaders();
+        await env.workspace.setBackgroundShaderChain(const <String>[
+          'smoke_and_ghosts.glsl',
+          'wallpaper_wave',
+        ]);
+        env.workspace.setOverlay(FtermOverlay.settings);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: FtermShellScaffold(
+              workspace: env.workspace,
+              onOpenUrl: (_) {},
+              platformOverride: TargetPlatform.macOS,
+              isWebOverride: false,
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // 1. Role legend and base/chains chip icons appear immediately for
+        // both built-in presets and pre-analyzed custom shaders.
+        expect(
+          find.byKey(const ValueKey('settings-shader-role-legend')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('settings-bg-shader-wallpaper_wave')),
+            matching: find.byIcon(Icons.bolt),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('settings-bg-shader-opaque_bg.glsl')),
+            matching: find.byIcon(Icons.bolt),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey('settings-bg-shader-smoke_and_ghosts.glsl'),
+            ),
+            matching: find.byIcon(Icons.input),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('settings-fg-shader-crt_lottes')),
+            matching: find.byIcon(Icons.input),
+          ),
+          findsOneWidget,
+        );
+
+        // 2. wallpaper_wave runs second and does not sample iChannel0 ->
+        // explicit overwrite warning + ordered pass list with role badges.
+        final bgWarning = find.byKey(
+          const ValueKey('settings-bg-shader-warning'),
+        );
+        expect(bgWarning, findsOneWidget);
+        expect(
+          find.descendant(
+            of: bgWarning,
+            matching: find.textContaining(
+              'wallpaper_wave does not sample iChannel0 and overwrites '
+              'smoke_and_ghosts.glsl',
+            ),
+          ),
+          findsOneWidget,
+        );
+        final bgOrderList = find.byKey(
+          const ValueKey('settings-bg-shader-order-list'),
+        );
+        expect(bgOrderList, findsOneWidget);
+        expect(
+          find.descendant(of: bgOrderList, matching: find.text('final')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('settings-bg-shader-role-0')),
+            matching: find.text('chains'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('settings-bg-shader-role-1')),
+            matching: find.text('base'),
+          ),
+          findsOneWidget,
+        );
+
+        // 2. Move smoke_and_ghosts.glsl down (higher priority / final pass) ->
+        // chain becomes [wallpaper_wave, smoke_and_ghosts.glsl]. Since
+        // smoke_and_ghosts.glsl samples iChannel0, warning becomes a general
+        // multi-background ordering notice.
+        final moveDown0 = find.byKey(
+          const ValueKey('settings-bg-shader-move-down-0'),
+        );
+        await tester.ensureVisible(moveDown0);
+        await tester.pump();
+        await tester.tap(moveDown0);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(
+          env.workspace.backgroundShaderChain,
+          equals(const <String>['wallpaper_wave', 'smoke_and_ghosts.glsl']),
+        );
+        expect(
+          env.workspace.activeShaderConfig.backgroundPasses
+              .map((p) => p.id)
+              .toList(),
+          equals(const <String>[
+            'background:wallpaper_wave',
+            'background:smoke_and_ghosts.glsl',
+          ]),
+        );
+        expect(
+          find.descendant(
+            of: bgWarning,
+            matching: find.textContaining('2 background shaders active'),
+          ),
+          findsOneWidget,
+        );
+
+        // Persisted preference reflects the new order.
+        env.workspace.flushPendingSettings();
+        expect(
+          loadStoredPreferences(env.storage).backgroundShaderPaths,
+          equals(const <String>['wallpaper_wave', 'smoke_and_ghosts.glsl']),
+        );
+
+        // 3. Remove wallpaper_wave via row remove button -> single active
+        // background shader clears warning and hides the order list.
+        final remove0 = find.byKey(
+          const ValueKey('settings-bg-shader-remove-0'),
+        );
+        await tester.ensureVisible(remove0);
+        await tester.pump();
+        await tester.tap(remove0);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(
+          env.workspace.backgroundShaderChain,
+          equals(const <String>['smoke_and_ghosts.glsl']),
+        );
+        expect(bgWarning, findsNothing);
+        expect(bgOrderList, findsNothing);
+
+        // 4. Foreground chain: two iChannel0-sampling presets show order list
+        // with no warning, and move-up reorders priority cleanly.
+        await env.workspace.setForegroundShaderChain(const <String>[
+          'cursor_glow',
+          'crt_lottes',
+        ]);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(
+          find.byKey(const ValueKey('settings-fg-shader-warning')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey('settings-fg-shader-order-list')),
+          findsOneWidget,
+        );
+
+        final fgMoveUp1 = find.byKey(
+          const ValueKey('settings-fg-shader-move-up-1'),
+        );
+        await tester.ensureVisible(fgMoveUp1);
+        await tester.pump();
+        await tester.tap(fgMoveUp1);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(
+          env.workspace.foregroundShaderChain,
+          equals(const <String>['crt_lottes', 'cursor_glow']),
+        );
+
+        // Adding a non-iChannel0 shader at the end of foreground chain raises
+        // an explicit overwrite warning naming the hidden passes.
+        await env.workspace.setForegroundShaderChain(const <String>[
+          'crt_lottes',
+          'opaque_bg.glsl',
+        ]);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        final fgWarning = find.byKey(
+          const ValueKey('settings-fg-shader-warning'),
+        );
+        expect(fgWarning, findsOneWidget);
+        expect(
+          find.descendant(
+            of: fgWarning,
+            matching: find.textContaining(
+              'opaque_bg.glsl does not sample iChannel0 and overwrites '
+              'crt_lottes',
+            ),
+          ),
+          findsOneWidget,
+        );
+
+        // Out-of-bounds / no-op move calls leave chains unchanged.
+        await env.workspace.moveBackgroundShader(-1, 0);
+        await env.workspace.moveForegroundShader(0, 99);
+        await env.workspace.moveForegroundShader(1, 1);
+        expect(
+          env.workspace.foregroundShaderChain,
+          equals(const <String>['crt_lottes', 'opaque_bg.glsl']),
         );
 
         await tester.runAsync(env.workspace.dispose);
