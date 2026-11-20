@@ -265,7 +265,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       );
       expect(
         shimmed.impellerFragmentGlsl,
-        contains('IMPELLER_TARGET_OPENGLES'),
+        contains('return vec2(uv.x, 1.0 - uv.y);'),
+      );
+      expect(
+        shimmed.impellerFragmentGlsl,
+        isNot(contains('IMPELLER_TARGET_OPENGLES')),
       );
       expect(shimmed.impellerFragmentGlsl, contains('vec3 iPalette[256];'));
       expect(

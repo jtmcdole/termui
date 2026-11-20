@@ -182,12 +182,11 @@ layout(location = 0) out vec4 out_frag_color;
 
 $_cursorStyleConstantsGlsl
 
+// Impeller unifies offscreen render targets to a top-left texture origin across
+// Metal, Vulkan (negative viewport height), and OpenGLES (`_impeller_y_flip`),
+// while Shadertoy `v_uv` / `fragCoord` are Y-up (`0` at bottom, `1` at top).
 vec2 _termuiFlipUv(vec2 uv) {
-#if defined(IMPELLER_TARGET_OPENGLES) || defined(IMPELLER_TARGET_OPENGL)
-  return uv;
-#else
   return vec2(uv.x, 1.0 - uv.y);
-#endif
 }
 
 vec4 _termuiSample(sampler2D s, vec2 uv) {
