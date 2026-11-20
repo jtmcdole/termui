@@ -5,12 +5,14 @@ import 'package:flutter/painting.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:termui/perf/tracer.dart';
 import 'package:termui/ui/buffer.dart';
+import 'package:termui/ui/glyph_cell_list.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
 
 import '../util/font_helper.dart';
 import 'atlas.dart';
+import 'atlas_quad_table.dart';
 import 'painter.dart';
 
 /// Shared GPU texture atlas and bounded fallback/ligature painter controller.
@@ -452,14 +454,22 @@ final class GlyphAtlasController extends ChangeNotifier {
     if (_isDisposed || activeAtlas == null) return;
 
     final width = buffer.width;
-    final chars = buffer.characters;
+    final codes = buffer.glyphCodes;
+    final glyphCells = buffer.glyphCellList;
     final attrs = buffer.attributes;
+    final quadTable = activeAtlas.quadTable;
     final total = width * buffer.height;
     var missLayouts = 0;
     for (var i = 0; i < total && missLayouts < maxFallbackPainters; i++) {
-      final char = chars[i];
       final mods = attrs[i * 3 + 2];
-      if (!_needsFallbackPainter(activeAtlas, char, mods)) continue;
+      final char = _resolveMissingFallbackChar(
+        activeAtlas,
+        quadTable,
+        glyphCells,
+        codes[i],
+        mods,
+      );
+      if (char == null) continue;
       final created = _ensureSingleFallbackPainter(
         buffer,
         x: i % width,
@@ -477,18 +487,33 @@ final class GlyphAtlasController extends ChangeNotifier {
     }
   }
 
-  static bool _needsFallbackPainter(GlyphAtlas atlas, String char, int mods) {
-    if (char.isEmpty || char == ' ') return false;
-    if (Modifier.has(mods, Modifier.kittyPlaceholder) ||
-        (char.length >= 2 && char.startsWith(kittyPlaceholderChar))) {
-      return false;
+  static String? _resolveMissingFallbackChar(
+    GlyphAtlas atlas,
+    AtlasQuadTable quadTable,
+    GlyphCellList glyphCells,
+    int code,
+    int mods,
+  ) {
+    if (code == GlyphCellList.wideContinuationCode ||
+        code == GlyphCellList.spaceCode ||
+        code == kittyPlaceholderCodePoint ||
+        Modifier.has(mods, Modifier.kittyPlaceholder)) {
+      return null;
     }
-    return atlas.rectFor(
-          char,
-          isBold: Modifier.has(mods, Modifier.bold),
-          isItalic: Modifier.has(mods, Modifier.italic),
-        ) ==
-        null;
+    final isBold = Modifier.has(mods, Modifier.bold);
+    final isItalic = Modifier.has(mods, Modifier.italic);
+    if ((code & GlyphCellList.clusterFlag) == 0) {
+      final variantBits = (isBold ? 1 : 0) | (isItalic ? 2 : 0);
+      if (quadTable.quadOffsetForCode(code, variantBits: variantBits) >= 0) {
+        return null;
+      }
+      return glyphCells.decodeCode(code);
+    }
+    final char = glyphCells.decodeCode(code);
+    if (char.startsWith(kittyPlaceholderChar)) return null;
+    return atlas.rectFor(char, isBold: isBold, isItalic: isItalic) == null
+        ? char
+        : null;
   }
 
   bool _ensureSingleFallbackPainter(

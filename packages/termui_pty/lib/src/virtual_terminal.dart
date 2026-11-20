@@ -363,15 +363,21 @@ final class VirtualTerminal implements TerminalHandler {
       final dstStart = y * buf.width;
       if (vOffset > 0 && y < vOffset) {
         final sbLine = _scrollback[_scrollback.totalLines - vOffset + y];
-        _copyScrollbackRowToBuffer(buf, dstStart, copyW, sbLine);
+        _copyScrollbackRowToBuffer(
+          buf,
+          dstStart,
+          copyW,
+          sbLine,
+          transparent: transparentBackground,
+        );
       } else {
         final srcRow = vOffset > 0 ? y - vOffset : y;
         final srcStart = srcRow * src.width;
-        buf.characters.setRange(
+        buf.glyphCellList.copyCellsFrom(
+          src.glyphCellList,
           dstStart,
-          dstStart + copyW,
-          src.characters,
           srcStart,
+          copyW,
         );
         buf.attributes.setRange(
           dstStart * 3,
@@ -386,13 +392,34 @@ final class VirtualTerminal implements TerminalHandler {
     return buf;
   }
 
+  static void _fillBlankAttributes(
+    Buffer buf,
+    int startCell,
+    int endCell,
+    bool transparent,
+  ) {
+    buf.attributes.fillRange(startCell * 3, endCell * 3, 0);
+    if (transparent) {
+      for (var i = startCell * 3 + 2; i < endCell * 3; i += 3) {
+        buf.attributes[i] = Modifier.transparent;
+      }
+    }
+  }
+
   static void _copyScrollbackRowToBuffer(
     Buffer buf,
     int dstStart,
     int copyW,
-    ScrollbackLine? sbLine,
-  ) {
+    ScrollbackLine? sbLine, {
+    required bool transparent,
+  }) {
     if (sbLine == null) {
+      buf.glyphCellList.fillCodeRange(
+        dstStart,
+        dstStart + copyW,
+        GlyphCellList.spaceCode,
+      );
+      _fillBlankAttributes(buf, dstStart, dstStart + copyW, transparent);
       buf.clearCellAuxRange(dstStart, dstStart + copyW);
       return;
     }
@@ -402,15 +429,25 @@ final class VirtualTerminal implements TerminalHandler {
       underlineColors: sbLine.underlineColors,
       uris: sbLine.uris,
     );
-    final n = math.min(sbLine.characters.length, copyW);
-    if (n <= 0) return;
-    buf.characters.setRange(dstStart, dstStart + n, sbLine.characters, 0);
-    buf.attributes.setRange(
-      dstStart * 3,
-      (dstStart + n) * 3,
-      sbLine.attributes,
-      0,
-    );
+    final sbCells = sbLine.glyphCellList;
+    final n = math.min(sbCells.length, copyW);
+    if (n > 0) {
+      buf.glyphCellList.copyCellsFrom(sbCells, dstStart, 0, n);
+      buf.attributes.setRange(
+        dstStart * 3,
+        (dstStart + n) * 3,
+        sbLine.attributes,
+        0,
+      );
+    }
+    if (n < copyW) {
+      buf.glyphCellList.fillCodeRange(
+        dstStart + n,
+        dstStart + copyW,
+        GlyphCellList.spaceCode,
+      );
+      _fillBlankAttributes(buf, dstStart + n, dstStart + copyW, transparent);
+    }
   }
 
   int _cellPixelWidth;
@@ -978,15 +1015,7 @@ final class VirtualTerminal implements TerminalHandler {
     _scrollback.clear();
     _viewportOffset = 0;
     _promptLineIndices.clear();
-    final (fg, bg, mod) = _eraseAttributes();
-    _primaryBuffer.fillAttributes(
-      char: ' ',
-      fg: fg,
-      bg: bg,
-      modifiers: mod,
-      underlineColor: 0,
-      uri: '',
-    );
+    _fillRowsWithEraseAttributes(_primaryBuffer, 0, height);
   }
 
   void _resetSavedCursorOnly() {
@@ -1092,8 +1121,9 @@ final class VirtualTerminal implements TerminalHandler {
   static bool _rowHasVisibleContent(Buffer buf, int row) {
     final rowStart = row * buf.width;
     final rowEnd = rowStart + buf.width;
+    final codes = buf.glyphCodes;
     for (var cell = rowStart; cell < rowEnd; cell++) {
-      if (buf.characters[cell] != ' ') return true;
+      if (codes[cell] != GlyphCellList.spaceCode) return true;
       final attrIdx = cell * 3;
       if (buf.attributes[attrIdx + 1] != 0 ||
           (buf.attributes[attrIdx + 2] & ~Modifier.transparent) != 0) {
@@ -1103,18 +1133,25 @@ final class VirtualTerminal implements TerminalHandler {
     return false;
   }
 
+  static bool _isWideCellAt(Buffer buf, int cellIdx) {
+    final code = buf.glyphCodes[cellIdx];
+    if (code == GlyphCellList.wideContinuationCode) return false;
+    if ((code & GlyphCellList.clusterFlag) == 0) return isWideCodePoint(code);
+    return isWideGrapheme(buf.glyphCellList.decodeCode(code));
+  }
+
   void _healRightEdgeWideGraphemes(Buffer buf) {
     final rightCol = buf.width - 1;
     for (var y = 0; y < buf.height; y++) {
       final cellIdx = y * buf.width + rightCol;
-      if (isWideGrapheme(buf.characters[cellIdx])) {
+      if (_isWideCellAt(buf, cellIdx)) {
         _resetSplitCell(buf, cellIdx);
       }
     }
   }
 
   void _resetSplitCell(Buffer buf, int cellIdx) {
-    buf.characters[cellIdx] = ' ';
+    buf.glyphCellList.setCodeAt(cellIdx, GlyphCellList.spaceCode);
     final attrIdx = cellIdx * 3;
     buf.attributes[attrIdx] = 0;
     buf.attributes[attrIdx + 1] = 0;
@@ -1122,6 +1159,24 @@ final class VirtualTerminal implements TerminalHandler {
         ? Modifier.transparent
         : Modifier.none;
     buf.clearCellAuxRange(cellIdx, cellIdx + 1);
+  }
+
+  void _clearSplitWideEdges(
+    Buffer active,
+    int rowOffset,
+    int startX,
+    int endX,
+  ) {
+    final codes = active.glyphCodes;
+    if (startX > 0 &&
+        codes[rowOffset + startX] == GlyphCellList.wideContinuationCode &&
+        _isWideCellAt(active, rowOffset + startX - 1)) {
+      _resetSplitCell(active, rowOffset + startX - 1);
+    }
+    if (endX < width &&
+        codes[rowOffset + endX] == GlyphCellList.wideContinuationCode) {
+      _resetSplitCell(active, rowOffset + endX);
+    }
   }
 
   /// Feeds a chunk of UTF-8 encoded bytes into the terminal.
@@ -1163,16 +1218,19 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _eraseRowSpan(int y, int startX, int endX) {
     if (startX >= endX || y < 0 || y >= height) return;
-    final (fg, bg, mod) = _eraseAttributes();
-    buffer.fillRect(
-      Rect(startX, y, endX - startX, 1),
-      char: ' ',
-      fg: fg,
-      bg: bg,
-      modifiers: mod,
-      underlineColor: 0,
-      uri: '',
+    final active = buffer;
+    final rowOffset = y * width;
+    _clearSplitWideEdges(active, rowOffset, startX, endX);
+    final startCell = rowOffset + startX;
+    final endCell = rowOffset + endX;
+    active.glyphCellList.fillCodeRange(
+      startCell,
+      endCell,
+      GlyphCellList.spaceCode,
     );
+    final (fg, bg, mod) = _eraseAttributes();
+    _fillEraseAttributesRange(active, startCell, endCell, fg, bg, mod);
+    active.clearCellAuxRange(startCell, endCell);
   }
 
   void _eraseInDisplay(int mode) {
@@ -1183,45 +1241,19 @@ final class VirtualTerminal implements TerminalHandler {
         _eraseRowSpan(cursorY, cursorX, width);
         _clearLineWrapOnErase(clearStart: cursorX == 0, clearEnd: true);
         if (cursorY + 1 < height) {
-          final (fg, bg, mod) = _eraseAttributes();
-          active.fillRect(
-            Rect(0, cursorY + 1, width, height - (cursorY + 1)),
-            char: ' ',
-            fg: fg,
-            bg: bg,
-            modifiers: mod,
-            underlineColor: 0,
-            uri: '',
-          );
+          _fillRowsWithEraseAttributes(active, cursorY + 1, height);
           _clearWrappedRange(cursorY + 1, height);
         }
       case 1: // Start of screen to cursor (inclusive)
         _clampPendingWrap();
         if (cursorY > 0) {
-          final (fg, bg, mod) = _eraseAttributes();
-          active.fillRect(
-            Rect(0, 0, width, cursorY),
-            char: ' ',
-            fg: fg,
-            bg: bg,
-            modifiers: mod,
-            underlineColor: 0,
-            uri: '',
-          );
+          _fillRowsWithEraseAttributes(active, 0, cursorY);
         }
         _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
         _clearWrappedRange(0, cursorY + 1);
       case 2: // Entire screen
         _clampPendingWrap();
-        final (fg, bg, mod) = _eraseAttributes();
-        active.fillAttributes(
-          char: ' ',
-          fg: fg,
-          bg: bg,
-          modifiers: mod,
-          underlineColor: 0,
-          uri: '',
-        );
+        _fillRowsWithEraseAttributes(active, 0, height);
         _clearWrappedRange(0, height);
       case 3: // Saved scrollback lines only
         if (!_usingAltScreen) {
@@ -1359,11 +1391,11 @@ final class VirtualTerminal implements TerminalHandler {
     int cellCount,
   ) {
     if (cellCount <= 0) return;
-    buf.characters.setRange(
+    buf.glyphCellList.copyCellsFrom(
+      buf.glyphCellList,
       dstCell,
-      dstCell + cellCount,
-      buf.characters,
       srcCell,
+      cellCount,
     );
     buf.attributes.setRange(
       dstCell * 3,
@@ -1374,6 +1406,25 @@ final class VirtualTerminal implements TerminalHandler {
     buf.copyCellAuxRangeFrom(buf, dstCell, srcCell, cellCount);
   }
 
+  static void _fillEraseAttributesRange(
+    Buffer buf,
+    int startCell,
+    int endCell,
+    int fg,
+    int bg,
+    int mod,
+  ) {
+    if (fg == 0 && bg == 0 && mod == 0) {
+      buf.attributes.fillRange(startCell * 3, endCell * 3, 0);
+      return;
+    }
+    for (var i = startCell * 3; i < endCell * 3; i += 3) {
+      buf.attributes[i] = fg;
+      buf.attributes[i + 1] = bg;
+      buf.attributes[i + 2] = mod;
+    }
+  }
+
   void _fillRowsWithEraseAttributes(
     Buffer buf,
     int startRow,
@@ -1382,21 +1433,182 @@ final class VirtualTerminal implements TerminalHandler {
     final startCell = startRow * width;
     final endCell = endRowExclusive * width;
     if (startCell >= endCell) return;
-    buf.characters.fillRange(startCell, endCell, ' ');
+    buf.glyphCellList.fillCodeRange(
+      startCell,
+      endCell,
+      GlyphCellList.spaceCode,
+    );
     final (fg, bg, mod) = _eraseAttributes();
-    for (var i = startCell * 3; i < endCell * 3; i += 3) {
-      buf.attributes[i] = fg;
-      buf.attributes[i + 1] = bg;
-      buf.attributes[i + 2] = mod;
-    }
+    _fillEraseAttributesRange(buf, startCell, endCell, fg, bg, mod);
     buf.clearCellAuxRange(startCell, endCell);
+  }
+
+  bool get _isDecGraphicsActive => _useG1 ? _g1DecGraphics : _g0DecGraphics;
+
+  static bool _isPrintableAscii(String text) {
+    final len = text.length;
+    for (var i = 0; i < len; i++) {
+      final cu = text.codeUnitAt(i);
+      if (cu < 0x20 || cu > 0x7E) return false;
+    }
+    return true;
   }
 
   @override
   void printText(String text) {
-    if (text.isNotEmpty) _markDirty();
+    if (text.isEmpty) return;
+    _markDirty();
+    if (!_insertMode &&
+        !_isDecGraphicsActive &&
+        cursorX >= 0 &&
+        cursorY >= 0 &&
+        cursorY < height &&
+        (cursorX < width || _autoWrap) &&
+        _isPrintableAscii(text)) {
+      _printAsciiRun(text);
+      return;
+    }
     for (final char in text.characters) {
       _printGrapheme(char);
+    }
+  }
+
+  void _printAsciiRun(String text) {
+    final (fgArg, bgArg, baseMod, bgTransparent) = _resolvePrintAttributes('A');
+    final spaceMod = bgTransparent ? (baseMod | Modifier.transparent) : baseMod;
+    final ulColor = _resolveOscColorArg(_currentStyle.underlineColor, null);
+    final uri = _activeUri;
+    final len = text.length;
+    var offset = 0;
+
+    while (offset < len) {
+      _resolvePendingWrapBeforeWrite();
+      final active = buffer;
+      final remaining = len - offset;
+      final avail = width - cursorX;
+      if (!_autoWrap && remaining > avail) {
+        _writeClampedAsciiTail(
+          active,
+          text,
+          offset,
+          avail,
+          fgArg,
+          bgArg,
+          baseMod,
+          spaceMod,
+          ulColor,
+          uri,
+        );
+        return;
+      }
+
+      final count = math.min(remaining, avail);
+      final startX = cursorX;
+      _writeAsciiRowSegment(
+        active,
+        cursorY,
+        startX,
+        text,
+        offset,
+        count,
+        fgArg,
+        bgArg,
+        baseMod,
+        spaceMod,
+        ulColor,
+        uri,
+      );
+      _lastPrintedCellX = startX + count - 1;
+      _lastPrintedCellY = cursorY;
+      offset += count;
+      _advanceCursorAfterPrint(count);
+    }
+
+    _lastPrintedGrapheme = buffer.glyphCellList.decodeCode(
+      text.codeUnitAt(len - 1),
+    );
+  }
+
+  void _writeClampedAsciiTail(
+    Buffer active,
+    String text,
+    int offset,
+    int avail,
+    int fgArg,
+    int bgArg,
+    int baseMod,
+    int spaceMod,
+    int ulColor,
+    String? uri,
+  ) {
+    final headCount = avail - 1;
+    if (headCount > 0) {
+      _writeAsciiRowSegment(
+        active,
+        cursorY,
+        cursorX,
+        text,
+        offset,
+        headCount,
+        fgArg,
+        bgArg,
+        baseMod,
+        spaceMod,
+        ulColor,
+        uri,
+      );
+    }
+    final lastIndex = text.length - 1;
+    _writeAsciiRowSegment(
+      active,
+      cursorY,
+      width - 1,
+      text,
+      lastIndex,
+      1,
+      fgArg,
+      bgArg,
+      baseMod,
+      spaceMod,
+      ulColor,
+      uri,
+    );
+    cursorX = width - 1;
+    _lastPrintedCellX = cursorX;
+    _lastPrintedCellY = cursorY;
+    _lastPrintedGrapheme = active.glyphCellList.decodeCode(
+      text.codeUnitAt(lastIndex),
+    );
+  }
+
+  void _writeAsciiRowSegment(
+    Buffer active,
+    int y,
+    int startX,
+    String text,
+    int textOffset,
+    int count,
+    int fgArg,
+    int bgArg,
+    int baseMod,
+    int spaceMod,
+    int ulColor,
+    String? uri,
+  ) {
+    final rowOffset = y * width;
+    _clearSplitWideEdges(active, rowOffset, startX, startX + count);
+    final cells = active.glyphCellList;
+    final attrs = active.attributes;
+    for (var i = 0; i < count; i++) {
+      final cu = text.codeUnitAt(textOffset + i);
+      final idx = rowOffset + startX + i;
+      cells.setCodeAt(idx, cu);
+      final attrIdx = idx * 3;
+      attrs[attrIdx] = fgArg;
+      attrs[attrIdx + 1] = bgArg;
+      attrs[attrIdx + 2] = cu == GlyphCellList.spaceCode ? spaceMod : baseMod;
+      active.setUnderlineColorAt(idx, ulColor);
+      active.setUriAt(idx, uri);
     }
   }
 
@@ -2249,13 +2461,16 @@ final class VirtualTerminal implements TerminalHandler {
     _clampPendingWrap();
     final active = buffer;
     final rowBase = cursorY * width;
-    if (cursorX > 0 && active.characters[rowBase + cursorX] == '') {
+    final codes = active.glyphCodes;
+    if (cursorX > 0 &&
+        codes[rowBase + cursorX] == GlyphCellList.wideContinuationCode) {
       _resetSplitCell(active, rowBase + cursorX - 1);
     }
     final remaining = width - cursorX;
     final del = math.min(count, remaining);
     final srcEnd = cursorX + del;
-    if (srcEnd < width && active.characters[rowBase + srcEnd] == '') {
+    if (srcEnd < width &&
+        codes[rowBase + srcEnd] == GlyphCellList.wideContinuationCode) {
       _resetSplitCell(active, rowBase + srcEnd);
     }
     _copyCellSpan(active, rowBase + cursorX, rowBase + srcEnd, remaining - del);
@@ -2266,7 +2481,9 @@ final class VirtualTerminal implements TerminalHandler {
     _clampPendingWrap();
     final active = buffer;
     final rowBase = cursorY * width;
-    if (cursorX > 0 && active.characters[rowBase + cursorX] == '') {
+    if (cursorX > 0 &&
+        active.glyphCodes[rowBase + cursorX] ==
+            GlyphCellList.wideContinuationCode) {
       _resetSplitCell(active, rowBase + cursorX - 1);
       _resetSplitCell(active, rowBase + cursorX);
     }
@@ -2275,7 +2492,7 @@ final class VirtualTerminal implements TerminalHandler {
     final shiftCols = remaining - ins;
     if (shiftCols > 0) {
       final src = rowBase + cursorX;
-      if (isWideGrapheme(active.characters[src + shiftCols - 1])) {
+      if (_isWideCellAt(active, src + shiftCols - 1)) {
         _resetSplitCell(active, src + shiftCols - 1);
       }
       _copyCellSpan(active, src + ins, src, shiftCols);

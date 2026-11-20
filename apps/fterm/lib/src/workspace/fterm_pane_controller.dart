@@ -60,6 +60,7 @@ final class _PaneChangeNotifier extends ChangeNotifier {
 final class FtermPaneController {
   static const int _maxInputChunkBytes = 4096;
   static const int _wheelScrollLines = 3;
+  static const int _scrollbarThumbCode = 0x2590;
 
   /// Stable unique pane identifier within the workspace.
   final String paneId;
@@ -240,7 +241,10 @@ final class FtermPaneController {
         : (localHost?.isLiveRowWrapped(liveY) ?? false);
     return (
       isWrapped: isWrapped,
-      characters: liveBuffer.characters.sublist(start, end),
+      characters: WorkspaceBufferCompositor.rowCharactersView(
+        liveBuffer,
+        liveY,
+      ),
       uris: liveBuffer.sliceUris(start, end),
     );
   }
@@ -677,7 +681,7 @@ final class FtermPaneController {
       out: out,
       dstOffset: start,
       copyCols: len,
-      srcChars: src.characters,
+      srcChars: src.glyphCellList,
       srcAttrs: src.attributes,
       srcStartCell: start,
     );
@@ -738,7 +742,7 @@ final class FtermPaneController {
   void _clearScreenRow(tui.Buffer out, int screenY) {
     final start = screenY * out.width;
     final end = start + out.width;
-    out.characters.fillRange(start, end, ' ');
+    out.glyphCellList.fillCodeRange(start, end, tui.GlyphCellList.spaceCode);
     out.attributes.fillRange(start * 3, end * 3, 0);
     out.clearCellAuxRange(start, end);
   }
@@ -751,7 +755,7 @@ final class FtermPaneController {
       out: out,
       dstOffset: dstOffset,
       copyCols: copyCols,
-      srcChars: src.characters,
+      srcChars: src.glyphCellList,
       srcAttrs: src.attributes,
       srcStartCell: srcOffset,
     );
@@ -789,7 +793,11 @@ final class FtermPaneController {
     if (copyCols >= out.width) return;
     final tailStart = dstOffset + copyCols;
     final tailEnd = dstOffset + out.width;
-    out.characters.fillRange(tailStart, tailEnd, ' ');
+    out.glyphCellList.fillCodeRange(
+      tailStart,
+      tailEnd,
+      tui.GlyphCellList.spaceCode,
+    );
     out.attributes.fillRange(tailStart * 3, tailEnd * 3, 0);
   }
 
@@ -801,21 +809,40 @@ final class FtermPaneController {
     required Uint32List srcAttrs,
     required int srcStartCell,
   }) {
-    final outChars = out.characters;
+    if (copyCols <= 0) return;
+    final outGlyphs = out.glyphCellList;
+    if (srcChars is tui.GlyphCellList) {
+      outGlyphs.copyCellsFrom(srcChars, dstOffset, srcStartCell, copyCols);
+    } else {
+      outGlyphs.setRange(
+        dstOffset,
+        dstOffset + copyCols,
+        srcChars,
+        srcStartCell,
+      );
+    }
     final outAttrs = out.attributes;
     for (var col = 0; col < copyCols; col++) {
       final srcIdx = srcStartCell + col;
       final dstIdx = dstOffset + col;
-      final ch = srcChars[srcIdx];
-      outChars[dstIdx] = ch;
       final sBase = srcIdx * 3;
+      final dBase = dstIdx * 3;
+      final rawFg = srcAttrs[sBase];
+      final rawBg = srcAttrs[sBase + 1];
+      final mods = srcAttrs[sBase + 2] & ~tui.Modifier.transparent;
+      if (!rawFg.isAnsiIndexed && !rawBg.isAnsiIndexed) {
+        outAttrs[dBase] = rawFg;
+        outAttrs[dBase + 1] = rawBg;
+        outAttrs[dBase + 2] = mods;
+        continue;
+      }
       _colorResolver.resolveCellInto(
-        rawFg: srcAttrs[sBase],
-        rawBg: srcAttrs[sBase + 1],
-        modifiers: srcAttrs[sBase + 2] & ~tui.Modifier.transparent,
-        grapheme: ch,
+        rawFg: rawFg,
+        rawBg: rawBg,
+        modifiers: mods,
+        grapheme: outGlyphs[dstIdx],
         outAttributes: outAttrs,
-        attrOffset: dstIdx * 3,
+        attrOffset: dBase,
       );
     }
   }
@@ -879,7 +906,7 @@ final class FtermPaneController {
     final x = out.width - 1;
     for (var y = top; y < top + thumbH; y++) {
       final idx = y * out.width + x;
-      out.characters[idx] = '▐';
+      out.glyphCellList.setCodeAt(idx, _scrollbarThumbCode);
       out.attributes[idx * 3] = 0xFF7B8FA6;
       out.attributes[idx * 3 + 2] = tui.Modifier.none;
       out.clearCellAuxRange(idx, idx + 1);
