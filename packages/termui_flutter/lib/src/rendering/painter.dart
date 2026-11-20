@@ -2815,7 +2815,7 @@ final class TuiAtlasPainter extends CustomPainter {
     final availWidth = math.max(geo.cellWidth, size.width - originX);
 
     final fgColor = Color(defaultForegroundArgb);
-    final bgColor = Color(defaultBackgroundArgb);
+    final bgColor = Color(0xFF000000 | (defaultBackgroundArgb & 0x00FFFFFF));
     final cachedTp = composingPainter;
     final tp =
         cachedTp ??
@@ -2901,7 +2901,9 @@ final class TuiAtlasPainter extends CustomPainter {
     }
     final raw = isReverse ? bgArgb : fgArgb;
     final resolved = raw == 0
-        ? (isReverse ? defaultBackgroundArgb : defaultForegroundArgb)
+        ? (isReverse
+              ? (0xFF000000 | (defaultBackgroundArgb & 0x00FFFFFF))
+              : defaultForegroundArgb)
         : palette.resolvePackedColor(raw);
     if (Modifier.has(modifiers, Modifier.dim)) {
       final a = (((resolved >> 24) & 0xFF) * faintOpacity).round().clamp(

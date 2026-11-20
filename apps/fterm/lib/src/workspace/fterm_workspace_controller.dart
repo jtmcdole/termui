@@ -12,6 +12,17 @@ import 'package:termui/termui.dart' as tui;
 import 'package:termui_audio_flutter/termui_audio_flutter.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
+import 'package:termui_flutter/termui_flutter.dart'
+    show
+        BuiltinShaders,
+        ShaderAnimationMode,
+        ShaderBackendKind,
+        ShaderCompileException,
+        ShaderPassSpec,
+        TerminalShaderConfig,
+        TerminalShaderController,
+        TerminalShaderPreset,
+        TerminalShaderStage;
 import 'package:termui_pty/termui_pty.dart';
 
 import '../about/about_repository.dart';
@@ -22,6 +33,7 @@ import '../feedback/diagnostic_log.dart';
 import '../feedback/feedback_models.dart';
 import '../launch_config.dart';
 import '../settings_storage.dart';
+import '../shader_profile_store.dart';
 import '../update/update_service.dart';
 import '../update/update_view_model.dart';
 import 'fterm_pane_controller.dart';
@@ -202,6 +214,16 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Bounded in-memory sanitized diagnostic log for opt-in issue reports.
   final FtermDiagnosticLog diagnosticLog;
   final bool _ownsDiagnosticLog;
+  final TerminalShaderController _shaderController;
+  final bool _ownsShaderController;
+  final ShaderProfileStore _shaderProfileStore;
+  final bool _ownsShaderProfileStore;
+  final Future<void> Function(String directoryPath)? _openDirectoryHandler;
+  StreamSubscription<ShaderDirectoryChange>? _shaderWatchSubscription;
+  TerminalShaderConfig _activeShaderConfig = TerminalShaderConfig.empty;
+  Map<String, List<double>> _shaderParamsByPass = <String, List<double>>{};
+  List<String> _availableCustomShaders = const <String>[];
+  String? _lastShaderAssetError;
   String? _lastLoggedShareError;
   bool _lastUpdateWasError = false;
 
@@ -247,6 +269,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     UpdateTimerFactory? updateTimerFactory,
     AboutService? aboutService,
     FtermDiagnosticLog? diagnosticLog,
+    TerminalShaderController? shaderController,
+    ShaderProfileStore? shaderProfileStore,
+    Future<void> Function(String directoryPath)? openDirectoryHandler,
     void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
@@ -270,6 +295,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     updateTimerFactory: updateTimerFactory,
     aboutService: aboutService,
     diagnosticLog: diagnosticLog,
+    shaderController: shaderController,
+    shaderProfileStore: shaderProfileStore,
+    openDirectoryHandler: openDirectoryHandler,
     onFrameRedrawn: onFrameRedrawn,
   );
 
@@ -290,6 +318,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required UpdateTimerFactory? updateTimerFactory,
     required AboutService? aboutService,
     required FtermDiagnosticLog? diagnosticLog,
+    required TerminalShaderController? shaderController,
+    required ShaderProfileStore? shaderProfileStore,
+    required this._openDirectoryHandler,
     required this._onFrameRedrawn,
   }) : _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
@@ -297,6 +328,15 @@ final class FtermWorkspaceController extends ChangeNotifier {
        _ownsDiagnosticLog = diagnosticLog == null,
        diagnosticLog =
            diagnosticLog ?? FtermDiagnosticLog(clock: clock ?? const Clock()),
+       _ownsShaderController = shaderController == null,
+       _shaderController =
+           shaderController ??
+           TerminalShaderController(
+             initialBackendOverride: initialPreferences.shaderBackendOverride,
+           ),
+       _ownsShaderProfileStore = shaderProfileStore == null,
+       _shaderProfileStore =
+           shaderProfileStore ?? createPlatformShaderProfileStore(),
        _platformBrightness = initialBrightness,
        _workspaceSettings = initialSettings,
        _preferences = initialPreferences,
@@ -309,6 +349,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
          initialBrightness,
        ) {
     _hydrateSavedRelaySettings();
+    _initShaderSubsystem();
     audioController
       ..setMuted(_preferences.audioMuted)
       ..setVolume(_preferences.audioVolume);
@@ -465,6 +506,70 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   /// Active dock position (`top`, `left`, or `hidden`).
   DockPosition get dockPosition => _workspaceSettings.dockPosition;
+
+  /// Shared GPU/WebGL2 shader controller powering all panes in this workspace.
+  TerminalShaderController get shaderController => _shaderController;
+
+  /// Backing platform store for user `.glsl` files and wallpaper images.
+  ShaderProfileStore get shaderProfileStore => _shaderProfileStore;
+
+  /// Active compiled shader pass chains, animation mode, opacity, and
+  /// wallpaper configuration forwarded to every pane's `TerminalSurface`.
+  TerminalShaderConfig get activeShaderConfig => _activeShaderConfig;
+
+  /// Active default-background cell opacity (`0.0..1.0`, persisted in
+  /// [TerminalThemeSettings]).
+  double get backgroundOpacity =>
+      _workspaceSettings.themeSettings.backgroundOpacity;
+
+  /// Ordered background shader presets or custom `.glsl` paths.
+  List<String> get backgroundShaderChain =>
+      _preferences.backgroundShaderPaths.isNotEmpty
+      ? _preferences.backgroundShaderPaths
+      : _workspaceSettings.themeSettings.backgroundShaderChain;
+
+  /// Ordered foreground shader presets or custom `.glsl` paths.
+  List<String> get foregroundShaderChain =>
+      _preferences.foregroundShaderPaths.isNotEmpty
+      ? _preferences.foregroundShaderPaths
+      : _workspaceSettings.themeSettings.foregroundShaderChain;
+
+  /// Active `iTime` animation policy for time-varying fragment shaders.
+  ShaderAnimationMode get shaderAnimationMode =>
+      _preferences.shaderAnimationMode;
+
+  /// Optional runtime backend rollback override (`null` = auto).
+  ShaderBackendKind? get shaderBackendOverride =>
+      _preferences.shaderBackendOverride;
+
+  /// Configured wallpaper path or Web storage key, or `null` if none.
+  String? get backgroundImagePath => _preferences.backgroundImagePath;
+
+  /// Path to the user's desktop shaders directory, or `null` on Web/test.
+  String? get shadersDirectoryPath => _shaderProfileStore.shadersDirectoryPath;
+
+  /// Most recent GLSL compilation or validation error, if any.
+  ShaderCompileException? get lastShaderCompileError =>
+      _shaderController.lastCompileError;
+
+  /// Most recent wallpaper or shader file I/O validation error, if any.
+  String? get lastShaderAssetError => _lastShaderAssetError;
+
+  /// Sorted custom `.glsl` / `.frag` paths discovered in [shaderProfileStore].
+  List<String> get availableCustomShaders => _availableCustomShaders;
+
+  /// Returns the 8-float uniform parameter vector (`uParams0`, `uParams1`)
+  /// configured for [passId].
+  Float32List shaderParamsFor(String passId) {
+    final stored = _shaderParamsByPass[passId];
+    final result = Float32List(ShaderPassSpec.paramCount);
+    if (stored == null) return result;
+    final count = math.min(stored.length, result.length);
+    for (var i = 0; i < count; i++) {
+      result[i] = stored[i];
+    }
+    return result;
+  }
 
   /// Whether the 28px tab bar should collapse when `<= 1` tab is open.
   bool get shouldShowTabBar {
@@ -1231,9 +1336,428 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (_disposed || _workspaceSettings == next) return;
     _workspaceSettings = next;
     _applyColorResolver();
+    _rebuildActiveShaderConfig();
     _syncClipboardPolicies();
     _settingsSaver.save(next);
     _notifyChromeChanged();
+  }
+
+  /// Updates and persists default background cell [opacity] (`0.0..1.0`).
+  void setBackgroundOpacity(double opacity) {
+    final safe = opacity.isFinite ? opacity.clamp(0.0, 1.0) : 1.0;
+    setThemeSettings(
+      _workspaceSettings.themeSettings.copyWith(backgroundOpacity: safe),
+    );
+  }
+
+  /// Updates and persists the active [ShaderAnimationMode] across both
+  /// [FtermPreferences] and [TerminalThemeSettings].
+  void setShaderAnimationMode(ShaderAnimationMode mode) {
+    if (_disposed) return;
+    _preferences = _preferences.copyWith(shaderAnimationMode: mode);
+    _workspaceSettings = _workspaceSettings.copyWith(
+      themeSettings: _workspaceSettings.themeSettings.copyWith(
+        animationMode: mode,
+      ),
+    );
+    _rebuildActiveShaderConfig();
+    _settingsSaver.save(_workspaceSettings);
+    _settingsSaver.savePreferences(_preferences);
+    _notifyChromeChanged();
+  }
+
+  /// Switches and persists the runtime [ShaderBackendKind] override (`null`
+  /// restores platform auto-selection) and recompiles active shaders.
+  Future<void> setShaderBackendOverride(ShaderBackendKind? override) async {
+    if (_disposed) return;
+    _preferences = _preferences.copyWith(
+      shaderBackendOverride: override,
+      clearShaderBackendOverride: override == null,
+    );
+    _settingsSaver.savePreferences(_preferences);
+    _notifyChromeChanged();
+    await _shaderController.setBackendOverride(
+      override,
+      sourceLoader: _shaderProfileStore.loadShaderSource,
+    );
+    if (_disposed) return;
+    _rebuildActiveShaderConfig();
+    _syncShaderCompileBanner();
+    _notifyChromeChanged();
+  }
+
+  /// Replaces the ordered background shader chain (`preset` wire names or
+  /// custom `.glsl` paths) and compiles updated passes.
+  Future<void> setBackgroundShaderChain(List<String> entries) async {
+    if (_disposed) return;
+    final normalized = _normalizeShaderEntries(entries);
+    _preferences = _preferences.copyWith(backgroundShaderPaths: normalized);
+    _workspaceSettings = _workspaceSettings.copyWith(
+      themeSettings: _workspaceSettings.themeSettings.copyWith(
+        backgroundShaderChain: normalized,
+      ),
+    );
+    _rebuildActiveShaderConfig();
+    _settingsSaver.save(_workspaceSettings);
+    _settingsSaver.savePreferences(_preferences);
+    _notifyChromeChanged();
+    await _syncActiveShaders();
+  }
+
+  /// Replaces the ordered foreground shader chain (`preset` wire names or
+  /// custom `.glsl` paths) and compiles updated passes.
+  Future<void> setForegroundShaderChain(List<String> entries) async {
+    if (_disposed) return;
+    final normalized = _normalizeShaderEntries(entries);
+    _preferences = _preferences.copyWith(foregroundShaderPaths: normalized);
+    _workspaceSettings = _workspaceSettings.copyWith(
+      themeSettings: _workspaceSettings.themeSettings.copyWith(
+        foregroundShaderChain: normalized,
+      ),
+    );
+    _rebuildActiveShaderConfig();
+    _settingsSaver.save(_workspaceSettings);
+    _settingsSaver.savePreferences(_preferences);
+    _notifyChromeChanged();
+    await _syncActiveShaders();
+  }
+
+  /// Adds or removes [entry] in [backgroundShaderChain].
+  Future<void> toggleBackgroundShader(String entry) {
+    final trimmed = entry.trim();
+    if (trimmed.isEmpty) return Future<void>.value();
+    final next = <String>[...backgroundShaderChain];
+    if (!next.remove(trimmed)) {
+      next.add(trimmed);
+    }
+    return setBackgroundShaderChain(next);
+  }
+
+  /// Adds or removes [entry] in [foregroundShaderChain].
+  Future<void> toggleForegroundShader(String entry) {
+    final trimmed = entry.trim();
+    if (trimmed.isEmpty) return Future<void>.value();
+    final next = <String>[...foregroundShaderChain];
+    if (!next.remove(trimmed)) {
+      next.add(trimmed);
+    }
+    return setForegroundShaderChain(next);
+  }
+
+  /// Updates float parameter [index] (`0..7`) for shader pass [passId] and
+  /// persists it inside [FtermPreferences.customShaderProfileJson].
+  void setShaderParam(String passId, int index, double value) {
+    if (_disposed ||
+        index < 0 ||
+        index >= ShaderPassSpec.paramCount ||
+        !value.isFinite) {
+      return;
+    }
+    final existing = _shaderParamsByPass[passId];
+    final nextList = existing != null
+        ? List<double>.of(existing)
+        : List<double>.filled(ShaderPassSpec.paramCount, 0.0);
+    nextList[index] = value;
+    _shaderParamsByPass[passId] = nextList;
+    _preferences = _preferences.copyWith(
+      customShaderProfileJson: jsonEncode(_shaderParamsByPass),
+    );
+    _rebuildActiveShaderConfig();
+    _settingsSaver.savePreferences(_preferences);
+    _notifyChromeChanged();
+  }
+
+  /// Sets or clears the wallpaper image path/key, decoding validated bytes
+  /// asynchronously into [shaderController].
+  Future<void> setBackgroundImagePath(String? path) async {
+    if (_disposed) return;
+    final trimmed = path?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      _lastShaderAssetError = null;
+      _preferences = _preferences.copyWith(clearBackgroundImagePath: true);
+      _shaderController.clearWallpaperImage();
+      _rebuildActiveShaderConfig();
+      _settingsSaver.savePreferences(_preferences);
+      _notifyChromeChanged();
+      return;
+    }
+    _preferences = _preferences.copyWith(backgroundImagePath: trimmed);
+    _settingsSaver.savePreferences(_preferences);
+    _notifyChromeChanged();
+    await _loadPersistedWallpaper(trimmed);
+  }
+
+  /// Validates, persists, and activates uploaded wallpaper [bytes] under [key].
+  Future<void> uploadWallpaperBytes(String key, Uint8List bytes) async {
+    if (_disposed) return;
+    try {
+      await _shaderProfileStore.saveWallpaperBytes(key, bytes);
+      if (_disposed) return;
+      await _shaderController.setWallpaperBytes(bytes);
+      if (_disposed) return;
+      _lastShaderAssetError = null;
+      _preferences = _preferences.copyWith(backgroundImagePath: key.trim());
+      _rebuildActiveShaderConfig();
+      _settingsSaver.savePreferences(_preferences);
+      _notifyChromeChanged();
+    } on Object catch (error) {
+      if (_disposed) return;
+      _lastShaderAssetError = '$error';
+      _setStatusBanner('Wallpaper failed: $error');
+    }
+  }
+
+  /// Validates, persists, and optionally activates an inline custom `.glsl`
+  /// shader snippet (used for Web uploads and quick shader creation).
+  Future<void> uploadCustomShader(
+    String name,
+    String glslSource, {
+    TerminalShaderStage stage = TerminalShaderStage.foreground,
+    bool activate = true,
+  }) async {
+    if (_disposed) return;
+    final normalizedName = name.trim();
+    try {
+      await _shaderProfileStore.saveShaderSource(normalizedName, glslSource);
+      if (_disposed) return;
+      _lastShaderAssetError = null;
+      await refreshCustomShaders();
+      if (_disposed || !activate) return;
+      if (stage == TerminalShaderStage.background) {
+        final next = <String>[
+          ...backgroundShaderChain,
+          if (!backgroundShaderChain.contains(normalizedName)) normalizedName,
+        ];
+        await setBackgroundShaderChain(next);
+      } else {
+        final next = <String>[
+          ...foregroundShaderChain,
+          if (!foregroundShaderChain.contains(normalizedName)) normalizedName,
+        ];
+        await setForegroundShaderChain(next);
+      }
+      await reloadShaders();
+    } on Object catch (error) {
+      if (_disposed) return;
+      _lastShaderAssetError = '$error';
+      _setStatusBanner('Shader upload failed: $error');
+    }
+  }
+
+  /// Reloads custom `.glsl` shaders from [shaderProfileStore] and refreshes
+  /// compile error notices (`Ctrl+Shift+F5`).
+  Future<void> reloadShaders() async {
+    if (_disposed) return;
+    await refreshCustomShaders();
+    if (_disposed) return;
+    _rebuildActiveShaderConfig();
+    await _shaderController.reloadCustomShaders(
+      config: _activeShaderConfig,
+      sourceLoader: _shaderProfileStore.loadShaderSource,
+    );
+    if (_disposed) return;
+    _syncShaderCompileBanner();
+    _notifyChromeChanged();
+  }
+
+  /// Refreshes the list of available custom `.glsl` / `.frag` files from
+  /// [shaderProfileStore].
+  Future<void> refreshCustomShaders() async {
+    if (_disposed) return;
+    try {
+      final listed = await _shaderProfileStore.listShaderFiles();
+      if (_disposed) return;
+      _availableCustomShaders = listed;
+      _notifyChromeChanged();
+    } on Object {
+      // Ignore unavailable shader directory during startup or tests.
+    }
+  }
+
+  /// Opens or reveals the desktop shaders directory, returning `true` when a
+  /// shaders folder path is available on the current platform.
+  Future<bool> openShadersFolder() async {
+    if (_disposed) return false;
+    final dirPath = _shaderProfileStore.shadersDirectoryPath;
+    if (dirPath == null || dirPath.trim().isEmpty) {
+      _setStatusBanner('Shaders folder is unavailable on this platform.');
+      return false;
+    }
+    final handler = _openDirectoryHandler;
+    if (handler != null) {
+      await handler(dirPath);
+      return true;
+    }
+    unawaited(
+      Clipboard.setData(ClipboardData(text: dirPath)).catchError((_) {}),
+    );
+    _setStatusBanner('Shaders folder copied: $dirPath');
+    return true;
+  }
+
+  void _initShaderSubsystem() {
+    _shaderParamsByPass = _decodeShaderParamsMap(
+      _preferences.customShaderProfileJson,
+    );
+    _rebuildActiveShaderConfig();
+    _shaderController.addListener(_onShaderControllerChanged);
+    _shaderWatchSubscription = _shaderProfileStore
+        .watchShaderDirectory()
+        .listen(
+          _onShaderDirectoryChanged,
+          onError: (Object _, StackTrace _) {},
+        );
+    if (!_activeShaderConfig.isEmpty) {
+      unawaited(_syncActiveShaders());
+    }
+    if (_preferences.backgroundImagePath case final wallpaperPath?) {
+      unawaited(_loadPersistedWallpaper(wallpaperPath));
+    }
+    unawaited(refreshCustomShaders());
+  }
+
+  void _onShaderControllerChanged() {
+    if (_disposed) return;
+    _rebuildActiveShaderConfig();
+    _syncShaderCompileBanner();
+    _notifyChromeChanged();
+  }
+
+  void _onShaderDirectoryChanged(ShaderDirectoryChange _) {
+    if (_disposed) return;
+    unawaited(reloadShaders());
+  }
+
+  Future<void> _syncActiveShaders() async {
+    if (_disposed) return;
+    await _shaderController.syncConfig(
+      _activeShaderConfig,
+      sourceLoader: _shaderProfileStore.loadShaderSource,
+    );
+    if (_disposed) return;
+    _syncShaderCompileBanner();
+    _notifyChromeChanged();
+  }
+
+  Future<void> _loadPersistedWallpaper(String pathOrKey) async {
+    try {
+      final bytes = await _shaderProfileStore.loadWallpaperBytes(pathOrKey);
+      if (_disposed) return;
+      await _shaderController.setWallpaperBytes(bytes);
+      if (_disposed) return;
+      _lastShaderAssetError = null;
+      _rebuildActiveShaderConfig();
+      _notifyChromeChanged();
+    } on Object catch (error) {
+      if (_disposed) return;
+      _lastShaderAssetError = '$error';
+      _setStatusBanner('Wallpaper failed: $error');
+    }
+  }
+
+  void _syncShaderCompileBanner() {
+    final compileError = _shaderController.lastCompileError;
+    if (compileError != null) {
+      final loc = compileError.lineNumber == null
+          ? ''
+          : ' (line ${compileError.lineNumber})';
+      _statusBanner = 'Shader error$loc: ${compileError.message}';
+      return;
+    }
+    if (_statusBanner?.startsWith('Shader error') ?? false) {
+      _statusBanner = null;
+    }
+  }
+
+  void _rebuildActiveShaderConfig() {
+    final bgPasses = _buildPassSpecs(
+      backgroundShaderChain,
+      TerminalShaderStage.background,
+    );
+    final fgPasses = _buildPassSpecs(
+      foregroundShaderChain,
+      TerminalShaderStage.foreground,
+    );
+    _activeShaderConfig = TerminalShaderConfig(
+      backgroundPasses: bgPasses,
+      foregroundPasses: fgPasses,
+      animationMode: shaderAnimationMode,
+      backgroundOpacity: backgroundOpacity,
+      backgroundImage: _shaderController.wallpaperImage,
+      enabled: true,
+    );
+  }
+
+  List<ShaderPassSpec> _buildPassSpecs(
+    List<String> entries,
+    TerminalShaderStage stage,
+  ) {
+    if (entries.isEmpty) return const <ShaderPassSpec>[];
+    final specs = <ShaderPassSpec>[];
+    for (final raw in entries) {
+      final entry = raw.trim();
+      if (entry.isEmpty) continue;
+      final preset = TerminalShaderPreset.fromWireName(entry);
+      if (preset != TerminalShaderPreset.none) {
+        final passId = '${stage.name}:${preset.wireName}';
+        specs.add(
+          ShaderPassSpec(
+            id: passId,
+            stage: stage,
+            preset: preset,
+            usesPrevFrame: BuiltinShaders.usesPrevFrame(preset),
+            params: shaderParamsFor(passId),
+          ),
+        );
+      } else {
+        final passId = '${stage.name}:$entry';
+        specs.add(
+          ShaderPassSpec(
+            id: passId,
+            stage: stage,
+            customSourcePath: entry,
+            params: shaderParamsFor(passId),
+          ),
+        );
+      }
+    }
+    return List<ShaderPassSpec>.unmodifiable(specs);
+  }
+
+  static List<String> _normalizeShaderEntries(List<String> entries) {
+    final seen = <String>{};
+    final out = <String>[];
+    for (final item in entries) {
+      final trimmed = item.trim();
+      if (trimmed.isNotEmpty && seen.add(trimmed)) {
+        out.add(trimmed);
+      }
+    }
+    return out.isEmpty ? const <String>[] : List<String>.unmodifiable(out);
+  }
+
+  static Map<String, List<double>> _decodeShaderParamsMap(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return <String, List<double>>{};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<Object?, Object?>) return <String, List<double>>{};
+      final parsed = <String, List<double>>{};
+      for (final MapEntry(:key, :value) in decoded.entries) {
+        if (key is! String || value is! List<Object?>) continue;
+        final floats = List<double>.filled(ShaderPassSpec.paramCount, 0.0);
+        final count = math.min(value.length, floats.length);
+        for (var i = 0; i < count; i++) {
+          final item = value[i];
+          if (item is num && item.isFinite) {
+            floats[i] = item.toDouble();
+          }
+        }
+        parsed[key] = floats;
+      }
+      return parsed;
+    } on Object {
+      return <String, List<double>>{};
+    }
   }
 
   /// Updates and persists [FtermPreferences] (`audioMuted`, `audioVolume`,
@@ -1331,6 +1855,17 @@ final class FtermWorkspaceController extends ChangeNotifier {
       ..setMuted(_preferences.audioMuted)
       ..setVolume(_preferences.audioVolume);
     _applyColorResolver();
+    _shaderParamsByPass = _decodeShaderParamsMap(
+      _preferences.customShaderProfileJson,
+    );
+    _rebuildActiveShaderConfig();
+    unawaited(
+      _shaderController.setBackendOverride(
+        _preferences.shaderBackendOverride,
+        sourceLoader: _shaderProfileStore.loadShaderSource,
+      ),
+    );
+    unawaited(_syncActiveShaders());
     _syncClipboardPolicies();
     updateViewModel.onPreferencesChanged();
     _notifyChromeChanged();
@@ -1524,35 +2059,50 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   void _handlePaneShareChanged() {
     if (_disposed) return;
+    final latestError = _syncPaneShareOwnershipAndErrors();
+    _applyShareStatusBanner(latestError);
+    _notifyChromeChanged();
+  }
+
+  String? _syncPaneShareOwnershipAndErrors() {
     String? latestError;
     for (final pane in _panes.values) {
-      final host = pane.localHost;
-      if (host == null) continue;
-      final snap = host.shareSnapshot;
-      if (snap.state == LocalShareState.unshared && snap.sessionId != null) {
-        _ownedSharedSessionIds.remove(snap.sessionId);
-      } else if (snap.sessionId != null) {
-        _ownedSharedSessionIds.add(snap.sessionId!);
-      }
+      final snap = pane.localHost?.shareSnapshot;
+      if (snap == null) continue;
+      _syncOwnedSharedSessionId(snap);
+      final error = snap.errorMessage;
       if (snap.state != LocalShareState.live &&
-          snap.errorMessage != null &&
-          snap.errorMessage!.isNotEmpty) {
-        latestError = snap.errorMessage;
+          error != null &&
+          error.isNotEmpty) {
+        latestError = error;
       }
     }
-    if (latestError != null) {
-      _statusBanner = 'Share failed: $latestError';
-      if (latestError != _lastLoggedShareError) {
-        _lastLoggedShareError = latestError;
-        diagnosticLog.record(DiagnosticEventKind.localShareFailed);
-      }
+    return latestError;
+  }
+
+  void _syncOwnedSharedSessionId(LocalShareSnapshot snap) {
+    final sessionId = snap.sessionId;
+    if (sessionId == null) return;
+    if (snap.state == LocalShareState.unshared) {
+      _ownedSharedSessionIds.remove(sessionId);
     } else {
+      _ownedSharedSessionIds.add(sessionId);
+    }
+  }
+
+  void _applyShareStatusBanner(String? latestError) {
+    if (latestError == null) {
       _lastLoggedShareError = null;
       if (_statusBanner?.startsWith('Share failed: ') ?? false) {
         _statusBanner = null;
       }
+      return;
     }
-    _notifyChromeChanged();
+    _statusBanner = 'Share failed: $latestError';
+    if (latestError != _lastLoggedShareError) {
+      _lastLoggedShareError = latestError;
+      diagnosticLog.record(DiagnosticEventKind.localShareFailed);
+    }
   }
 
   void _onUpdateCoarseStateChanged() {
@@ -1722,10 +2272,22 @@ final class FtermWorkspaceController extends ChangeNotifier {
     );
     updateViewModel.dispose();
     aboutViewModel.dispose();
+    final shaderWatchSubscription = _shaderWatchSubscription;
+    _shaderWatchSubscription = null;
+    _shaderController.removeListener(_onShaderControllerChanged);
+    if (_ownsShaderProfileStore) {
+      _shaderProfileStore.dispose();
+    }
+    if (_ownsShaderController) {
+      _shaderController.dispose();
+    }
     if (_ownsDiagnosticLog) {
       diagnosticLog.dispose();
     }
     _settingsSaver.dispose();
+    if (shaderWatchSubscription != null) {
+      unawaited(shaderWatchSubscription.cancel());
+    }
     await _settingsSaver.flushAsync();
     final activePanes = [..._panes.values];
     _panes.clear();

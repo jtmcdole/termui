@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:clock/clock.dart';
@@ -21,6 +22,9 @@ import 'backend.dart';
 import 'rendering/atlas.dart';
 import 'rendering/atlas_controller.dart';
 import 'rendering/painter.dart';
+import 'rendering/shader_controller.dart';
+import 'rendering/shader_host.dart';
+import 'rendering/shader_spec.dart';
 import 'rendering/staging_cache.dart';
 import 'selection_gesture_machine.dart';
 import 'service/terminal_service.dart';
@@ -222,6 +226,29 @@ final class TerminalSurface extends StatefulWidget {
   /// Alignment of the cell-quantized terminal grid inside loose or bounded margins.
   final AlignmentGeometry alignment;
 
+  /// Optional controller managing compiled custom fragment shaders and
+  /// wallpaper textures across panes.
+  final TerminalShaderController? shaderController;
+
+  /// Optional declarative shader pass chains, animation mode, and wallpaper
+  /// configuration wrapped inside the screenshot `RepaintBoundary`.
+  final TerminalShaderConfig? shaderConfig;
+
+  /// Opacity multiplier (`0.0..1.0`) applied to default background cells and
+  /// canvas container fill so wallpapers and background shaders show through.
+  final double backgroundOpacity;
+
+  /// Active Ghostty cursor style constant (`0..3`, e.g.
+  /// [TerminalShaderUniforms.cursorStyleBlock]) forwarded to custom shaders.
+  final int cursorStyle;
+
+  /// Whether the terminal cursor is visible when [cursorVisibleProvider] is
+  /// omitted (forwarded to custom shaders as `iCursorVisible`).
+  final bool cursorVisible;
+
+  /// Optional live getter returning whether the terminal cursor is visible.
+  final bool Function()? cursorVisibleProvider;
+
   /// Creates a `Scaffold`-free [TerminalSurface].
   const TerminalSurface({
     super.key,
@@ -283,6 +310,12 @@ final class TerminalSurface extends StatefulWidget {
     this.hoveredLinkAnimationInterval,
     this.enableHostShortcuts = true,
     this.alignment = Alignment.center,
+    this.shaderController,
+    this.shaderConfig,
+    this.backgroundOpacity = 1.0,
+    this.cursorStyle = TerminalShaderUniforms.cursorStyleBlock,
+    this.cursorVisible = true,
+    this.cursorVisibleProvider,
   });
 
   @override
@@ -360,6 +393,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   double _lastReportedCellH = 0.0;
   bool _geometrySyncScheduled = false;
   int? _imeViewId;
+  TerminalColorTheme? _cachedPaletteTheme;
+  Uint32List? _cachedPalette256Argb;
 
   Buffer? get _activeBuffer => widget.bufferProvider?.call() ?? widget.buffer;
 
@@ -999,6 +1034,61 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       }
     }
     widget.onFocusChanged?.call(hasFocus);
+    if (mounted && _hasShaderBinding) {
+      setState(() {});
+    }
+  }
+
+  bool get _hasShaderBinding =>
+      widget.shaderConfig != null || widget.shaderController != null;
+
+  double get _effectiveBackgroundOpacity {
+    final surfaceOpacity = widget.backgroundOpacity.isFinite
+        ? widget.backgroundOpacity.clamp(0.0, 1.0)
+        : 1.0;
+    final configOpacity = widget.shaderConfig?.backgroundOpacity;
+    if (configOpacity == null || !configOpacity.isFinite) {
+      return surfaceOpacity;
+    }
+    return math.min(surfaceOpacity, configOpacity.clamp(0.0, 1.0));
+  }
+
+  Color get _effectiveBackgroundColor {
+    final opacity = _effectiveBackgroundOpacity;
+    if (opacity >= 1.0) return widget.backgroundColor;
+    return widget.backgroundColor.withValues(
+      alpha: widget.backgroundColor.a * opacity,
+    );
+  }
+
+  Uint32List _resolvePalette256Argb() {
+    final existing = _cachedPalette256Argb;
+    if (existing != null && identical(_cachedPaletteTheme, widget.palette)) {
+      return existing;
+    }
+    final table = Uint32List(TerminalShaderUniforms.paletteLength);
+    for (var i = 0; i < table.length; i++) {
+      table[i] = widget.palette.resolveAnsi256(i).argb;
+    }
+    _cachedPaletteTheme = widget.palette;
+    _cachedPalette256Argb = table;
+    return table;
+  }
+
+  Rect? _readCursorRectLogical() {
+    final atlas = _atlasController.atlas;
+    if (atlas == null) return null;
+    final cursor =
+        widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
+    if (cursor == null || atlas.cellWidth <= 0 || atlas.cellHeight <= 0) {
+      return null;
+    }
+    return Rect.fromLTWH(
+      cursor.col * atlas.cellWidth,
+      cursor.row * atlas.cellHeight,
+      atlas.cellWidth,
+      atlas.cellHeight,
+    );
   }
 
   TextInputConfiguration _resolveImeConfiguration() {
@@ -2047,7 +2137,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       autofocus: widget.autofocus,
       onKeyEvent: (_, event) => _imeClient.handleKeyEvent(event),
       child: ColoredBox(
-        color: widget.backgroundColor,
+        color: _effectiveBackgroundColor,
         child: Align(
           alignment: widget.alignment,
           child: RepaintBoundary(
@@ -2137,10 +2227,14 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _lastPaintedBuffer = buf;
     _lastPaintedActivePtySize = activePty;
     _syncComposingPainter();
-    return Container(
+    final effectiveOpacity = _effectiveBackgroundOpacity;
+    final effectiveBgColor = _effectiveBackgroundColor;
+    final canvasBox = Container(
       width: layoutSize.width,
       height: layoutSize.height,
-      color: widget.backgroundColor,
+      color: buf == null || effectiveOpacity >= 1.0
+          ? effectiveBgColor
+          : const ui.Color(0x00000000),
       child: buf == null
           ? const SizedBox()
           : CustomPaint(
@@ -2174,7 +2268,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
                 kittyImages: _kittyCache.images,
                 kittyImagesById: _kittyCache.imagesById,
                 defaultForegroundArgb: widget.foregroundColor.toARGB32(),
-                defaultBackgroundArgb: widget.backgroundColor.toARGB32(),
+                defaultBackgroundArgb: effectiveBgColor.toARGB32(),
                 faintOpacity: widget.faintOpacity,
                 palette: widget.palette,
                 activePtyCols: activePty?.$1,
@@ -2185,6 +2279,28 @@ final class TerminalSurfaceState extends State<TerminalSurface>
                 cursorRow: cursor?.row ?? 0,
               ),
             ),
+    );
+    if (!_hasShaderBinding) {
+      return canvasBox;
+    }
+    final atlas = _atlasController.atlas!;
+    return TerminalShaderHost(
+      controller: widget.shaderController,
+      config: widget.shaderConfig ?? TerminalShaderConfig.empty,
+      paneKey: widget.key?.toString(),
+      cursorRectLogicalProvider: _readCursorRectLogical,
+      cursorColorArgb: widget.palette.cursorColor.argb,
+      cursorStyle: widget.cursorStyle,
+      cursorVisible:
+          widget.cursorVisibleProvider?.call() ?? widget.cursorVisible,
+      cursorVisibleProvider: widget.cursorVisibleProvider,
+      isFocused: _focusNode.hasFocus,
+      foregroundArgb: widget.foregroundColor.toARGB32(),
+      backgroundArgb: widget.backgroundColor.toARGB32(),
+      palette256Argb: _resolvePalette256Argb(),
+      cellSizeLogical: Size(atlas.cellWidth, atlas.cellHeight),
+      activityListenable: _paintNotifier,
+      child: canvasBox,
     );
   }
 }

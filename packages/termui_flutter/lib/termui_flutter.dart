@@ -86,6 +86,13 @@ export 'src/rendering/shader_backend.dart'
         ShaderCompileException,
         ShaderPassInvocation,
         TerminalShaderBackend;
+export 'src/rendering/shader_backend_disabled.dart' show DisabledShaderBackend;
+export 'src/rendering/shader_backend_factory.dart'
+    show createTerminalShaderBackend;
+export 'src/rendering/shader_controller.dart'
+    show ShaderBackendFactory, ShaderSourceLoader, TerminalShaderController;
+export 'src/rendering/shader_host.dart'
+    show TerminalShaderHost, TerminalShaderHostState;
 export 'src/rendering/shader_spec.dart'
     show
         ShaderAnimationMode,

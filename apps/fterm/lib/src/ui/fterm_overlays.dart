@@ -3,9 +3,18 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' as p;
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
+import 'package:termui_flutter/termui_flutter.dart'
+    show
+        ShaderAnimationMode,
+        ShaderBackendKind,
+        ShaderCompileException,
+        ShaderPassSpec,
+        TerminalShaderPreset,
+        TerminalShaderStage;
 
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
@@ -799,6 +808,12 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
                 ),
               ],
             ),
+            const SizedBox(height: 10),
+            _ShadersAndBackgroundSection(
+              workspace: workspace,
+              palette: p,
+              isWeb: widget.isWeb,
+            ),
             if (workspace.isDesktopHost) ...[
               const SizedBox(height: 8),
               _DesktopShellOverrideSection(
@@ -852,6 +867,764 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
       ),
     );
   }
+}
+
+final class _ShadersAndBackgroundSection extends StatefulWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+  final bool isWeb;
+
+  const _ShadersAndBackgroundSection({
+    required this.workspace,
+    required this.palette,
+    required this.isWeb,
+  });
+
+  @override
+  State<_ShadersAndBackgroundSection> createState() =>
+      _ShadersAndBackgroundSectionState();
+}
+
+final class _ShadersAndBackgroundSectionState
+    extends State<_ShadersAndBackgroundSection> {
+  static const List<TerminalShaderPreset> _bgPresets = <TerminalShaderPreset>[
+    TerminalShaderPreset.wallpaperWave,
+  ];
+  static const List<TerminalShaderPreset> _fgPresets = <TerminalShaderPreset>[
+    TerminalShaderPreset.cursorGlow,
+    TerminalShaderPreset.scanlineOverlay,
+    TerminalShaderPreset.crtLottes,
+    TerminalShaderPreset.phosphorGlow,
+  ];
+
+  late final TextEditingController _wallpaperCtrl;
+  late final TextEditingController _customPathCtrl;
+  late final TextEditingController _webNameCtrl;
+  late final TextEditingController _webSourceCtrl;
+  bool _editingWallpaper = false;
+  bool _showCustomPathForm = false;
+  bool _showWebGlslForm = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _wallpaperCtrl = TextEditingController(
+      text: widget.workspace.backgroundImagePath ?? '',
+    );
+    _customPathCtrl = TextEditingController();
+    _webNameCtrl = TextEditingController(text: 'custom.glsl');
+    _webSourceCtrl = TextEditingController();
+  }
+
+  @override
+  void didUpdateWidget(_ShadersAndBackgroundSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final expected = widget.workspace.backgroundImagePath ?? '';
+    if (_wallpaperCtrl.text.trim() != expected) {
+      _wallpaperCtrl.text = expected;
+    }
+  }
+
+  @override
+  void dispose() {
+    _wallpaperCtrl.dispose();
+    _customPathCtrl.dispose();
+    _webNameCtrl.dispose();
+    _webSourceCtrl.dispose();
+    super.dispose();
+  }
+
+  void _addCustomShaderPath(TerminalShaderStage stage) {
+    final trimmed = _customPathCtrl.text.trim();
+    if (trimmed.isEmpty) return;
+    _customPathCtrl.clear();
+    if (stage == TerminalShaderStage.background) {
+      final next = <String>[
+        ...widget.workspace.backgroundShaderChain,
+        if (!widget.workspace.backgroundShaderChain.contains(trimmed)) trimmed,
+      ];
+      unawaited(widget.workspace.setBackgroundShaderChain(next));
+      return;
+    }
+    final next = <String>[
+      ...widget.workspace.foregroundShaderChain,
+      if (!widget.workspace.foregroundShaderChain.contains(trimmed)) trimmed,
+    ];
+    unawaited(widget.workspace.setForegroundShaderChain(next));
+  }
+
+  void _submitWebGlsl() {
+    final name = _webNameCtrl.text.trim();
+    final source = _webSourceCtrl.text;
+    if (name.isEmpty || source.trim().isEmpty) return;
+    unawaited(widget.workspace.uploadCustomShader(name, source));
+    setState(() => _showWebGlslForm = false);
+  }
+
+  ShaderPassSpec? _primaryActivePass() {
+    final cfg = widget.workspace.activeShaderConfig;
+    if (cfg.foregroundPasses.isNotEmpty) return cfg.foregroundPasses.first;
+    if (cfg.backgroundPasses.isNotEmpty) return cfg.backgroundPasses.first;
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ws = widget.workspace;
+    final palette = widget.palette;
+    final primaryPass = _primaryActivePass();
+    return Column(
+      key: const ValueKey('settings-shaders-section'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _ShaderBackendHeader(workspace: ws, palette: palette),
+        if (ws.lastShaderCompileError != null ||
+            ws.lastShaderAssetError != null) ...[
+          const SizedBox(height: 6),
+          _ShaderCompileErrorBanner(
+            compileError: ws.lastShaderCompileError,
+            assetError: ws.lastShaderAssetError,
+            palette: palette,
+          ),
+        ],
+        const SizedBox(height: 8),
+        _BackgroundOpacityControl(workspace: ws, palette: palette),
+        const SizedBox(height: 6),
+        _WallpaperControls(
+          workspace: ws,
+          palette: palette,
+          controller: _wallpaperCtrl,
+          isWeb: widget.isWeb,
+          isEditing: _editingWallpaper,
+          onToggleEdit: () =>
+              setState(() => _editingWallpaper = !_editingWallpaper),
+          onApply: () {
+            unawaited(ws.setBackgroundImagePath(_wallpaperCtrl.text));
+            setState(() => _editingWallpaper = false);
+          },
+        ),
+        const SizedBox(height: 8),
+        _ShaderChainSelector(
+          title: 'Background Shaders',
+          keyPrefix: 'settings-bg-shader',
+          presets: _bgPresets,
+          activeChain: ws.backgroundShaderChain,
+          availableCustomShaders: ws.availableCustomShaders,
+          palette: palette,
+          onToggle: (entry) => unawaited(ws.toggleBackgroundShader(entry)),
+        ),
+        const SizedBox(height: 8),
+        _ShaderChainSelector(
+          title: 'Foreground Shaders',
+          keyPrefix: 'settings-fg-shader',
+          presets: _fgPresets,
+          activeChain: ws.foregroundShaderChain,
+          availableCustomShaders: ws.availableCustomShaders,
+          palette: palette,
+          onToggle: (entry) => unawaited(ws.toggleForegroundShader(entry)),
+        ),
+        const SizedBox(height: 8),
+        _CustomShaderAddRow(
+          controller: _customPathCtrl,
+          palette: palette,
+          isExpanded: _showCustomPathForm,
+          onToggleExpanded: () =>
+              setState(() => _showCustomPathForm = !_showCustomPathForm),
+          onAddBackground: () =>
+              _addCustomShaderPath(TerminalShaderStage.background),
+          onAddForeground: () =>
+              _addCustomShaderPath(TerminalShaderStage.foreground),
+        ),
+        if (primaryPass != null) ...[
+          const SizedBox(height: 8),
+          _ShaderParamSliders(
+            workspace: ws,
+            pass: primaryPass,
+            palette: palette,
+          ),
+        ],
+        const SizedBox(height: 8),
+        _ShaderAnimationModeSelector(workspace: ws, palette: palette),
+        const SizedBox(height: 8),
+        _ShaderActionsRow(
+          workspace: ws,
+          isWeb: widget.isWeb,
+          onToggleWebUpload: () =>
+              setState(() => _showWebGlslForm = !_showWebGlslForm),
+        ),
+        if (widget.isWeb && _showWebGlslForm) ...[
+          const SizedBox(height: 8),
+          _WebGlslUploadForm(
+            nameController: _webNameCtrl,
+            sourceController: _webSourceCtrl,
+            palette: palette,
+            onSubmit: _submitWebGlsl,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+final class _ShaderBackendHeader extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+
+  const _ShaderBackendHeader({required this.workspace, required this.palette});
+
+  @override
+  Widget build(BuildContext context) {
+    final activeKind = workspace.shaderController.backendKind;
+    final override = workspace.shaderBackendOverride;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(
+              'Shaders & Background',
+              style: TextStyle(color: palette.muted, fontSize: 11),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              key: const ValueKey('settings-shader-backend-badge'),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: palette.surfaceAlt,
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(
+                  color: activeKind == ShaderBackendKind.disabled
+                      ? palette.border
+                      : palette.accent,
+                ),
+              ),
+              child: Text(
+                activeKind.name,
+                style: TextStyle(
+                  color: activeKind == ShaderBackendKind.disabled
+                      ? palette.muted
+                      : palette.accent,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            const Spacer(),
+            Wrap(
+              spacing: 6,
+              children: [
+                ChoiceChip(
+                  key: const ValueKey('settings-shader-backend-auto'),
+                  label: const Text('Auto'),
+                  selected: override == null,
+                  onSelected: (_) =>
+                      unawaited(workspace.setShaderBackendOverride(null)),
+                ),
+                ChoiceChip(
+                  key: const ValueKey('settings-shader-backend-disabled'),
+                  label: const Text('Disabled'),
+                  selected: override == ShaderBackendKind.disabled,
+                  onSelected: (_) => unawaited(
+                    workspace.setShaderBackendOverride(
+                      ShaderBackendKind.disabled,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+final class _ShaderCompileErrorBanner extends StatelessWidget {
+  final ShaderCompileException? compileError;
+  final String? assetError;
+  final FtermOverlayPalette palette;
+
+  const _ShaderCompileErrorBanner({
+    required this.compileError,
+    required this.assetError,
+    required this.palette,
+  });
+
+  String _formatMessage() {
+    final err = compileError;
+    if (err != null) {
+      final loc = err.lineNumber == null ? '' : ' (line ${err.lineNumber})';
+      return '${err.shaderId}$loc: ${err.message}';
+    }
+    return assetError ?? '';
+  }
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('settings-shader-compile-error'),
+    padding: const EdgeInsets.all(8),
+    decoration: BoxDecoration(
+      color: palette.danger.withValues(alpha: 0.12),
+      borderRadius: BorderRadius.circular(6),
+      border: Border.all(color: palette.danger),
+    ),
+    child: Text(
+      _formatMessage(),
+      style: TextStyle(color: palette.danger, fontSize: 11),
+    ),
+  );
+}
+
+final class _BackgroundOpacityControl extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+
+  const _BackgroundOpacityControl({
+    required this.workspace,
+    required this.palette,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final opacity = workspace.backgroundOpacity;
+    return Row(
+      children: [
+        Text(
+          'Background Opacity',
+          style: TextStyle(color: palette.muted, fontSize: 11),
+        ),
+        Expanded(
+          child: Slider(
+            key: const ValueKey('settings-background-opacity-slider'),
+            value: opacity,
+            min: 0.0,
+            max: 1.0,
+            onChanged: workspace.setBackgroundOpacity,
+          ),
+        ),
+        SizedBox(
+          width: 36,
+          child: Text(
+            '${(opacity * 100).round()}%',
+            key: const ValueKey('settings-background-opacity-value'),
+            textAlign: TextAlign.right,
+            style: TextStyle(color: palette.foreground, fontSize: 11),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+final class _WallpaperControls extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+  final TextEditingController controller;
+  final bool isWeb;
+  final bool isEditing;
+  final VoidCallback onToggleEdit;
+  final VoidCallback onApply;
+
+  const _WallpaperControls({
+    required this.workspace,
+    required this.palette,
+    required this.controller,
+    required this.isWeb,
+    required this.isEditing,
+    required this.onToggleEdit,
+    required this.onApply,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final currentPath = workspace.backgroundImagePath;
+    final hasWallpaper = currentPath != null;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                hasWallpaper ? 'Wallpaper: $currentPath' : 'Wallpaper: None',
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: palette.muted, fontSize: 11),
+              ),
+            ),
+            const SizedBox(width: 6),
+            OutlinedButton(
+              key: const ValueKey('settings-wallpaper-edit'),
+              onPressed: onToggleEdit,
+              child: Text(isEditing ? 'Cancel' : 'Set Wallpaper'),
+            ),
+            const SizedBox(width: 4),
+            TextButton(
+              key: const ValueKey('settings-wallpaper-clear'),
+              onPressed: hasWallpaper
+                  ? () {
+                      controller.clear();
+                      unawaited(workspace.setBackgroundImagePath(null));
+                    }
+                  : null,
+              child: const Text('Clear'),
+            ),
+          ],
+        ),
+        if (isEditing) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('settings-wallpaper-path-field'),
+                  controller: controller,
+                  decoration: InputDecoration(
+                    isDense: true,
+                    labelText: isWeb
+                        ? 'Wallpaper storage key'
+                        : 'Wallpaper path',
+                    hintText: isWeb
+                        ? 'e.g. wallpaper.png'
+                        : 'Path to PNG, JPEG, or WebP image',
+                    labelStyle: TextStyle(color: palette.muted, fontSize: 11),
+                  ),
+                  onSubmitted: (_) => onApply(),
+                ),
+              ),
+              const SizedBox(width: 6),
+              OutlinedButton(
+                key: const ValueKey('settings-wallpaper-apply'),
+                onPressed: onApply,
+                child: const Text('Apply'),
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+final class _ShaderChainSelector extends StatelessWidget {
+  final String title;
+  final String keyPrefix;
+  final List<TerminalShaderPreset> presets;
+  final List<String> activeChain;
+  final List<String> availableCustomShaders;
+  final FtermOverlayPalette palette;
+  final void Function(String entry) onToggle;
+
+  const _ShaderChainSelector({
+    required this.title,
+    required this.keyPrefix,
+    required this.presets,
+    required this.activeChain,
+    required this.availableCustomShaders,
+    required this.palette,
+    required this.onToggle,
+  });
+
+  List<(String id, String label)> _collectOptions() {
+    final seen = <String>{};
+    final options = <(String, String)>[];
+    for (final preset in presets) {
+      seen.add(preset.wireName);
+      options.add((preset.wireName, preset.wireName));
+    }
+    for (final path in availableCustomShaders) {
+      if (seen.add(path)) {
+        options.add((path, p.basename(path)));
+      }
+    }
+    for (final active in activeChain) {
+      if (seen.add(active)) {
+        options.add((active, p.basename(active)));
+      }
+    }
+    return options;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final options = _collectOptions();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(title, style: TextStyle(color: palette.muted, fontSize: 11)),
+        const SizedBox(height: 4),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final (id, label) in options)
+              FilterChip(
+                key: ValueKey('$keyPrefix-$id'),
+                label: Text(label),
+                selected: activeChain.contains(id),
+                onSelected: (_) => onToggle(id),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+final class _CustomShaderAddRow extends StatelessWidget {
+  final TextEditingController controller;
+  final FtermOverlayPalette palette;
+  final bool isExpanded;
+  final VoidCallback onToggleExpanded;
+  final VoidCallback onAddBackground;
+  final VoidCallback onAddForeground;
+
+  const _CustomShaderAddRow({
+    required this.controller,
+    required this.palette,
+    required this.isExpanded,
+    required this.onToggleExpanded,
+    required this.onAddBackground,
+    required this.onAddForeground,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!isExpanded) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          key: const ValueKey('settings-custom-shader-toggle'),
+          onPressed: onToggleExpanded,
+          icon: const Icon(Icons.add, size: 14),
+          label: const Text('Add Custom .glsl Path...'),
+        ),
+      );
+    }
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            key: const ValueKey('settings-custom-shader-path-field'),
+            controller: controller,
+            decoration: InputDecoration(
+              isDense: true,
+              labelText: 'Custom .glsl file',
+              hintText: 'my_effect.glsl or /path/to/shader.glsl',
+              labelStyle: TextStyle(color: palette.muted, fontSize: 11),
+            ),
+            onSubmitted: (_) => onAddForeground(),
+          ),
+        ),
+        const SizedBox(width: 6),
+        OutlinedButton(
+          key: const ValueKey('settings-custom-shader-add-bg'),
+          onPressed: onAddBackground,
+          child: const Text('Add BG'),
+        ),
+        const SizedBox(width: 4),
+        OutlinedButton(
+          key: const ValueKey('settings-custom-shader-add-fg'),
+          onPressed: onAddForeground,
+          child: const Text('Add FG'),
+        ),
+      ],
+    );
+  }
+}
+
+final class _ShaderParamSliders extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final ShaderPassSpec pass;
+  final FtermOverlayPalette palette;
+
+  const _ShaderParamSliders({
+    required this.workspace,
+    required this.pass,
+    required this.palette,
+  });
+
+  static const List<String> _labels = <String>[
+    'uParams0.x',
+    'uParams0.y',
+    'uParams0.z',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final values = workspace.shaderParamsFor(pass.id);
+    return Column(
+      key: const ValueKey('settings-shader-params'),
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'Shader Parameters (${pass.id})',
+          style: TextStyle(color: palette.muted, fontSize: 11),
+        ),
+        for (var i = 0; i < _labels.length; i++)
+          Row(
+            children: [
+              SizedBox(
+                width: 72,
+                child: Text(
+                  _labels[i],
+                  style: TextStyle(color: palette.muted, fontSize: 10),
+                ),
+              ),
+              Expanded(
+                child: Slider(
+                  key: ValueKey('settings-shader-param-$i'),
+                  value: values[i].clamp(0.0, 2.0),
+                  min: 0.0,
+                  max: 2.0,
+                  onChanged: (v) => workspace.setShaderParam(pass.id, i, v),
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+final class _ShaderAnimationModeSelector extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+
+  const _ShaderAnimationModeSelector({
+    required this.workspace,
+    required this.palette,
+  });
+
+  @override
+  Widget build(BuildContext context) => Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Text(
+        'Shader Animation Mode',
+        style: TextStyle(color: palette.muted, fontSize: 11),
+      ),
+      const SizedBox(height: 4),
+      Wrap(
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final mode in ShaderAnimationMode.values)
+            ChoiceChip(
+              key: ValueKey('settings-shader-anim-${mode.name}'),
+              label: Text(mode.name),
+              selected: workspace.shaderAnimationMode == mode,
+              onSelected: (_) => workspace.setShaderAnimationMode(mode),
+            ),
+        ],
+      ),
+    ],
+  );
+}
+
+final class _ShaderActionsRow extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final bool isWeb;
+  final VoidCallback onToggleWebUpload;
+
+  const _ShaderActionsRow({
+    required this.workspace,
+    required this.isWeb,
+    required this.onToggleWebUpload,
+  });
+
+  @override
+  Widget build(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 6,
+    children: [
+      if (isWeb)
+        OutlinedButton.icon(
+          key: const ValueKey('settings-upload-glsl'),
+          onPressed: onToggleWebUpload,
+          icon: const Icon(Icons.upload_file, size: 14),
+          label: const Text('Upload .glsl'),
+        )
+      else
+        OutlinedButton.icon(
+          key: const ValueKey('settings-open-shaders-folder'),
+          onPressed: () => unawaited(workspace.openShadersFolder()),
+          icon: const Icon(Icons.folder_open, size: 14),
+          label: const Text('Open Shaders Folder'),
+        ),
+      OutlinedButton.icon(
+        key: const ValueKey('settings-reload-shaders'),
+        onPressed: () => unawaited(workspace.reloadShaders()),
+        icon: const Icon(Icons.refresh, size: 14),
+        label: const Text('Reload Shaders (Ctrl+Shift+F5)'),
+      ),
+    ],
+  );
+}
+
+final class _WebGlslUploadForm extends StatelessWidget {
+  final TextEditingController nameController;
+  final TextEditingController sourceController;
+  final FtermOverlayPalette palette;
+  final VoidCallback onSubmit;
+
+  const _WebGlslUploadForm({
+    required this.nameController,
+    required this.sourceController,
+    required this.palette,
+    required this.onSubmit,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('settings-web-glsl-form'),
+    padding: const EdgeInsets.all(8),
+    decoration: BoxDecoration(
+      color: palette.surfaceAlt,
+      borderRadius: BorderRadius.circular(6),
+      border: Border.all(color: palette.border),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          key: const ValueKey('settings-web-glsl-name'),
+          controller: nameController,
+          decoration: const InputDecoration(
+            isDense: true,
+            labelText: 'Shader filename (.glsl)',
+          ),
+        ),
+        const SizedBox(height: 6),
+        TextField(
+          key: const ValueKey('settings-web-glsl-source'),
+          controller: sourceController,
+          maxLines: 4,
+          decoration: const InputDecoration(
+            isDense: true,
+            labelText: 'Ghostty Shadertoy GLSL',
+            hintText:
+                'void mainImage(out vec4 fragColor, in vec2 fragCoord) {}',
+          ),
+        ),
+        const SizedBox(height: 6),
+        Align(
+          alignment: Alignment.centerRight,
+          child: FilledButton(
+            key: const ValueKey('settings-web-glsl-save'),
+            onPressed: onSubmit,
+            child: const Text('Save & Apply'),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 final class _FontSizeControls extends StatelessWidget {
@@ -1597,6 +2370,7 @@ final class _HelpOverlay extends StatelessWidget {
     ('Cmd+= / Cmd+- / Cmd+0', 'Zoom font in / out / reset (macOS)'),
     ('Ctrl+Shift+T/W/D/E', 'Native Linux / Windows shortcuts'),
     ('Ctrl+= / Ctrl+- / Ctrl+0', 'Zoom font in / out / reset (Linux/Win)'),
+    ('Ctrl+Shift+F5', 'Reload custom fragment shaders (Desktop)'),
   ];
 
   @override
