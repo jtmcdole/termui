@@ -277,6 +277,8 @@ final class _GpuCompiledShaderHandle implements CompiledShaderHandle {
   gpu.RenderPipeline pipeline;
   bool _usesPrevFrame;
   bool _disposed = false;
+  bool _pipelineFailed = false;
+  String? _pipelineError;
 
   _GpuCompiledShaderHandle({
     required this.id,
@@ -294,12 +296,23 @@ final class _GpuCompiledShaderHandle implements CompiledShaderHandle {
 
   bool get isDisposed => _disposed;
 
+  bool get isPipelineFailed => _pipelineFailed;
+
+  String? get pipelineError => _pipelineError;
+
+  void markPipelineFailed(String message) {
+    _pipelineFailed = true;
+    _pipelineError = message;
+  }
+
   void applyReload({
     required gpu.RenderPipeline nextPipeline,
     required bool analysisUsesPrevFrame,
   }) {
     pipeline = nextPipeline;
     _usesPrevFrame = requestedUsesPrevFrame || analysisUsesPrevFrame;
+    _pipelineFailed = false;
+    _pipelineError = null;
     reflectionCache.invalidate();
   }
 
@@ -327,16 +340,25 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     heightAddressMode: gpu.SamplerAddressMode.clampToEdge,
   );
 
+  static const int _uboRingLength = 3;
+
   final ImpellercCompiler _compiler;
   final gpu.GpuContext _context;
 
   final Set<_GpuCompiledShaderHandle> _handles = <_GpuCompiledShaderHandle>{};
-  final GpuSizePool<gpu.GpuImageSurface> _surfacePool =
+  final GpuSizePool<gpu.GpuImageSurface> _backgroundSurfacePool =
+      GpuSizePool<gpu.GpuImageSurface>(maxEntries: 4);
+  final GpuSizePool<gpu.GpuImageSurface> _foregroundSurfacePool =
       GpuSizePool<gpu.GpuImageSurface>(maxEntries: 4);
   final GpuSizePool<(gpu.Texture, gpu.Texture)> _scratchPool =
       GpuSizePool<(gpu.Texture, gpu.Texture)>(maxEntries: 4);
   final GpuPingPongRegistry<gpu.Texture> _pingPongRegistry =
       GpuPingPongRegistry<gpu.Texture>(maxEntries: 16);
+  final List<gpu.DeviceBuffer?> _uboRing = List<gpu.DeviceBuffer?>.filled(
+    _uboRingLength,
+    null,
+  );
+  int _uboRingIndex = 0;
 
   gpu.DeviceBuffer? _fullscreenVertexBuffer;
   gpu.Texture? _fallbackTexture;
@@ -484,9 +506,13 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     for (final handle in active) {
       handle.dispose();
     }
-    _surfacePool.clear();
+    _backgroundSurfacePool.clear();
+    _foregroundSurfacePool.clear();
     _scratchPool.clear();
     _pingPongRegistry.clear();
+    for (var i = 0; i < _uboRing.length; i++) {
+      _uboRing[i] = null;
+    }
     _fullscreenVertexBuffer = null;
     _fallbackTexture = null;
   }
@@ -499,6 +525,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     Completer<bool>? completion,
   }) {
     if (_disposed || passes.isEmpty) return null;
+    if (_hasQuarantinedPass(passes)) return null;
     final width = physicalSize.width.round();
     final height = physicalSize.height.round();
     if (width <= 0 || height <= 0) return null;
@@ -508,13 +535,17 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
       return null;
     }
     final wallpaperTexture = _tryWrapImage(wallpaperImage);
-    final surface = _surfacePool.obtain(
+    final surfacePool = inputImage == null
+        ? _backgroundSurfacePool
+        : _foregroundSurfacePool;
+    final surface = surfacePool.obtain(
       width,
       height,
       (w, h) => _context.createImageSurface(w, h),
     );
     return _executeSurfaceRender(
       surface: surface,
+      surfacePool: surfacePool,
       passes: passes,
       width: width,
       height: height,
@@ -524,8 +555,19 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     );
   }
 
+  bool _hasQuarantinedPass(List<ShaderPassInvocation> passes) {
+    for (final pass in passes) {
+      final handle = pass.handle;
+      if (handle is _GpuCompiledShaderHandle && handle.isPipelineFailed) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   ui.Image? _executeSurfaceRender({
     required gpu.GpuImageSurface surface,
+    required GpuSizePool<gpu.GpuImageSurface> surfacePool,
     required List<ShaderPassInvocation> passes,
     required int width,
     required int height,
@@ -541,7 +583,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
       final batch = packAlignedUniformBatch(<TerminalShaderUniforms>[
         for (final pass in passes) pass.uniforms,
       ], minimumUniformByteAlignment: _context.minimumUniformByteAlignment);
-      final uboBuffer = _context.createDeviceBufferWithCopy(batch.data);
+      final uboBuffer = _stageUniformBuffer(batch.data);
       final vertexView = _ensureVertexBufferView();
       final fallback = _ensureFallbackTexture();
 
@@ -571,6 +613,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
       presented = true;
       _submitCommandBuffer(
         commandBuffer,
+        surfacePool,
         width,
         height,
         completion: completion,
@@ -709,7 +752,14 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     _bindSamplerIfPresent(renderPass, handle, 'iChannel0', channel0);
     _bindSamplerIfPresent(renderPass, handle, 'iChannel1', channel1);
     _bindSamplerIfPresent(renderPass, handle, 'iPrevFrame', prevFrame);
-    renderPass.draw(3);
+    try {
+      renderPass.draw(3);
+    } on Object catch (error) {
+      final message =
+          'GPU pipeline failed to link or draw shader "${handle.id}": $error';
+      handle.markPipelineFailed(message);
+      throw ShaderCompileException(shaderId: handle.id, message: message);
+    }
   }
 
   void _bindUniformBlockIfPresent({
@@ -749,8 +799,26 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     });
   }
 
+  gpu.DeviceBuffer _stageUniformBuffer(ByteData data) {
+    final slotIndex = _uboRingIndex;
+    _uboRingIndex = (_uboRingIndex + 1) % _uboRingLength;
+    final requiredBytes = data.lengthInBytes;
+    var buffer = _uboRing[slotIndex];
+    if (buffer == null || buffer.sizeInBytes < requiredBytes) {
+      buffer = _context.createDeviceBuffer(
+        gpu.StorageMode.hostVisible,
+        requiredBytes,
+      );
+      _uboRing[slotIndex] = buffer;
+    }
+    buffer.overwrite(data);
+    buffer.flush(offsetInBytes: 0, lengthInBytes: requiredBytes);
+    return buffer;
+  }
+
   void _submitCommandBuffer(
     gpu.CommandBuffer commandBuffer,
+    GpuSizePool<gpu.GpuImageSurface> surfacePool,
     int width,
     int height, {
     Completer<bool>? completion,
@@ -769,7 +837,7 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
       }
     } on Object {
       // Evict surface so an unsubmitted present never poisons subsequent frames.
-      _surfacePool.remove(width, height);
+      surfacePool.remove(width, height);
       if (completion != null && !completion.isCompleted) {
         completion.complete(false);
       }

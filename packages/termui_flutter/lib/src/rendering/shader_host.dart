@@ -403,6 +403,9 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       _frameNotifier.notify();
     }
     if (_hasCompiledForegroundPasses) {
+      if (_hasCompiledBackgroundPasses) {
+        _childCaptureDirty = true;
+      }
       _scheduleForegroundRender();
     }
   }
@@ -569,15 +572,18 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
         physicalSize,
       );
       if (invocations.isNotEmpty) {
-        final rendered = backend.renderBackgroundSync(
-          passes: invocations,
-          physicalSize: physicalSize,
-          wallpaperImage: _effectiveWallpaper,
+        final result = _tryRenderBackgroundSync(
+          backend,
+          invocations,
+          physicalSize,
         );
-        if (rendered != null) {
+        if (result.image != null) {
           _backgroundDirty = false;
-          _replaceBackgroundOutputImage(rendered, notify: false);
-          return rendered;
+          _replaceBackgroundOutputImage(result.image, notify: false);
+          return result.image;
+        }
+        if (result.failed) {
+          return _backgroundOutputImage;
         }
       }
     }
@@ -586,6 +592,34 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       _scheduleAsyncBackgroundRender(physicalSize);
     }
     return _backgroundOutputImage;
+  }
+
+  ({ui.Image? image, bool failed}) _tryRenderBackgroundSync(
+    TerminalShaderBackend backend,
+    List<ShaderPassInvocation> invocations,
+    Size physicalSize,
+  ) {
+    try {
+      return (
+        image: backend.renderBackgroundSync(
+          passes: invocations,
+          physicalSize: physicalSize,
+          wallpaperImage: _effectiveWallpaper,
+        ),
+        failed: false,
+      );
+    } on ShaderCompileException catch (error) {
+      widget.controller?.reportRuntimeError(error);
+      return (image: null, failed: true);
+    } on Object catch (error) {
+      widget.controller?.reportRuntimeError(
+        ShaderCompileException(
+          shaderId: invocations.first.handle.id,
+          message: 'Background shader render failed: $error',
+        ),
+      );
+      return (image: null, failed: true);
+    }
   }
 
   void _recordLogicalSize(Size logicalSize) {
@@ -649,6 +683,15 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       if (nextImage != null) {
         _replaceBackgroundOutputImage(nextImage);
       }
+    } on ShaderCompileException catch (error) {
+      widget.controller?.reportRuntimeError(error);
+    } on Object catch (error) {
+      widget.controller?.reportRuntimeError(
+        ShaderCompileException(
+          shaderId: invocations.first.handle.id,
+          message: 'Background shader render failed: $error',
+        ),
+      );
     } finally {
       _backgroundInFlight = false;
       if (mounted && _backgroundPending && _hasCompiledBackgroundPasses) {
@@ -750,6 +793,15 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       if (nextImage != null) {
         _replaceForegroundOutputImage(nextImage);
       }
+    } on ShaderCompileException catch (error) {
+      widget.controller?.reportRuntimeError(error);
+    } on Object catch (error) {
+      widget.controller?.reportRuntimeError(
+        ShaderCompileException(
+          shaderId: widget.config.foregroundPasses.first.id,
+          message: 'Foreground shader render failed: $error',
+        ),
+      );
     } finally {
       _foregroundInFlight = false;
       if (mounted && _foregroundPending && _hasCompiledForegroundPasses) {

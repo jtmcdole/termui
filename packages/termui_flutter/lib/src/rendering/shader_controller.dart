@@ -197,6 +197,29 @@ final class TerminalShaderController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Records a runtime GPU pipeline link or draw [error] without tearing down
+  /// unaffected panes or crashing the paint loop.
+  void reportRuntimeError(ShaderCompileException error) {
+    if (_disposed) return;
+    final current = _lastCompileError;
+    if (current != null &&
+        current.shaderId == error.shaderId &&
+        current.message == error.message) {
+      return;
+    }
+    _lastCompileError = error;
+    final scheduler = SchedulerBinding.instance;
+    if (scheduler.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      scheduler.addPostFrameCallback((_) {
+        if (!_disposed) {
+          notifyListeners();
+        }
+      });
+      return;
+    }
+    notifyListeners();
+  }
+
   Future<void> _enqueue(Future<void> Function() action) {
     if (_disposed) return Future<void>.value();
     final next = _operationChain.then((_) => _runIfActive(action));

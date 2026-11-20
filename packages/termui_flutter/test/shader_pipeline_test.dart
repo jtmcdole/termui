@@ -69,6 +69,8 @@ final class _FakeShaderBackend implements TerminalShaderBackend {
   bool disposed = false;
 
   ui.Image? nextSyncImage;
+  Object? nextSyncRenderError;
+  Object? nextAsyncRenderError;
 
   _FakeShaderBackend({
     this.kind = ShaderBackendKind.flutterGpu,
@@ -116,6 +118,11 @@ final class _FakeShaderBackend implements TerminalShaderBackend {
     ui.Image? wallpaperImage,
   }) {
     syncBackgroundCalls.add(List<ShaderPassInvocation>.of(passes));
+    final err = nextSyncRenderError;
+    if (err != null) {
+      nextSyncRenderError = null;
+      throw err;
+    }
     if (returnNullFromSyncBackground) return null;
     final img = nextSyncImage;
     nextSyncImage = null;
@@ -132,6 +139,11 @@ final class _FakeShaderBackend implements TerminalShaderBackend {
     asyncPassCalls.add(List<ShaderPassInvocation>.of(passes));
     asyncInputImages.add(inputImage);
     asyncWallpapers.add(wallpaperImage);
+    final err = nextAsyncRenderError;
+    if (err != null) {
+      nextAsyncRenderError = null;
+      throw err;
+    }
     if (holdAsyncRender) {
       final completer = Completer<ui.Image?>();
       pendingAsyncCompleters.add(completer);
@@ -1159,6 +1171,94 @@ void main() {
         controller.dispose();
         expect(controller.isDisposed, isTrue);
         expect(createdBackends.last.disposed, isTrue);
+      },
+    );
+
+    testWidgets(
+      'animated background shader refreshes foreground iChannel0 capture on idle ticks and catches runtime GPU link/draw errors cleanly',
+      (tester) async {
+        final backend = _FakeShaderBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final config = TerminalShaderConfig(
+          animationMode: ShaderAnimationMode.focused,
+          backgroundOpacity: 0.5,
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:wave',
+              stage: TerminalShaderStage.background,
+              preset: TerminalShaderPreset.wallpaperWave,
+            ),
+          ],
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'fg:scanline',
+              stage: TerminalShaderStage.foreground,
+              preset: TerminalShaderPreset.scanlineOverlay,
+            ),
+          ],
+        );
+        await controller.syncConfig(config);
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: SizedBox(
+              width: 120,
+              height: 60,
+              child: TerminalShaderHost(
+                controller: controller,
+                config: config,
+                isFocused: true,
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+
+        expect(backend.asyncInputImages, isNotEmpty);
+        final firstCapture = backend.asyncInputImages.last;
+
+        // Advance ticker with no user keypress/click -> must recapture iChannel0
+        // so animated background shaders animate under foreground overlays.
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+        expect(backend.asyncInputImages.length, greaterThanOrEqualTo(2));
+        expect(identical(backend.asyncInputImages.last, firstCapture), isFalse);
+
+        // Runtime GPU pipeline error in sync background & async foreground
+        // must be caught cleanly (no paint exception) and reported via
+        // controller.lastCompileError.
+        backend.nextSyncRenderError = const ShaderCompileException(
+          shaderId: 'bg:wave',
+          message: 'GPU pipeline failed to link',
+        );
+        await tester.pump(const Duration(milliseconds: 50));
+        expect(tester.takeException(), isNull);
+        expect(controller.lastCompileError?.shaderId, equals('bg:wave'));
+
+        controller.clearLastCompileError();
+        backend.nextAsyncRenderError = Exception('Failed to append draw');
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 20)),
+        );
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+        expect(controller.lastCompileError, isNotNull);
+        expect(
+          controller.lastCompileError!.message,
+          contains('Failed to append draw'),
+        );
       },
     );
   });
