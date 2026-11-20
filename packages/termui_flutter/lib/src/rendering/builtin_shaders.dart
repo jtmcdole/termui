@@ -41,6 +41,17 @@ abstract final class BuiltinShaders {
     TerminalShaderPreset.phosphorGlow => true,
   };
 
+  /// Recommended pipeline stage hint for [preset].
+  static ShaderStageHint stageHint(TerminalShaderPreset preset) =>
+      switch (preset) {
+        TerminalShaderPreset.none => ShaderStageHint.any,
+        TerminalShaderPreset.wallpaperWave => ShaderStageHint.background,
+        TerminalShaderPreset.cursorGlow ||
+        TerminalShaderPreset.scanlineOverlay ||
+        TerminalShaderPreset.crtLottes ||
+        TerminalShaderPreset.phosphorGlow => ShaderStageHint.foreground,
+      };
+
   /// All active built-in shader presets mapped to their GLSL sources.
   static const Map<TerminalShaderPreset, String> allPresets =
       <TerminalShaderPreset, String>{

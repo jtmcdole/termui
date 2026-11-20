@@ -14,6 +14,27 @@ enum TerminalShaderStage {
   foreground,
 }
 
+/// Recommended pipeline stage for a shader inferred from an optional
+/// `// @fterm-stage: bg | fg | both` comment directive or static GLSL analysis.
+enum ShaderStageHint {
+  /// Designed to render behind the terminal canvas (e.g. standalone generator
+  /// or wallpaper shader that ignores `iChannel0`).
+  background('BG'),
+
+  /// Designed to post-process the rendered terminal frame (e.g. samples
+  /// cursor/focus uniforms or chains over `iChannel0`).
+  foreground('FG'),
+
+  /// Suitable for either background or foreground chains (e.g. explicitly
+  /// tagged `both` / `any`, or samples both `iChannel0` and `iChannel1`).
+  any('Any');
+
+  /// Compact badge label displayed in settings UIs.
+  final String shortLabel;
+
+  const ShaderStageHint(this.shortLabel);
+}
+
 /// Active GPU shader compilation and execution backend.
 enum ShaderBackendKind {
   /// Desktop Impeller backend backed by `package:flutter_gpu` and `impellerc`.

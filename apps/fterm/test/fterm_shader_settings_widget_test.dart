@@ -304,6 +304,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 }
 ''';
 
+const String _dualStageCustomGlsl = '''
+// @fterm-stage: both
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / max(iResolution.xy, vec2(1.0));
+  fragColor = texture(iChannel0, uv);
+}
+''';
+
 Future<Uint8List> _createValidPng() async {
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder);
@@ -864,6 +872,7 @@ void main() {
         final env = _buildWorkspace();
         env.store.shaders['smoke_and_ghosts.glsl'] = _validCustomGlsl;
         env.store.shaders['opaque_bg.glsl'] = _opaqueCustomGlsl;
+        env.store.shaders['dual_stage.glsl'] = _dualStageCustomGlsl;
         await env.workspace.refreshCustomShaders();
         await env.workspace.setBackgroundShaderChain(const <String>[
           'smoke_and_ghosts.glsl',
@@ -916,6 +925,37 @@ void main() {
           find.descendant(
             of: find.byKey(const ValueKey('settings-fg-shader-crt_lottes')),
             matching: find.byIcon(Icons.input),
+          ),
+          findsOneWidget,
+        );
+
+        // Stage hint badges (BG / FG / Any) appear on custom shader chips.
+        expect(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey('settings-bg-shader-stage-hint-opaque_bg.glsl'),
+            ),
+            matching: find.text('BG'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey(
+                'settings-bg-shader-stage-hint-smoke_and_ghosts.glsl',
+              ),
+            ),
+            matching: find.text('FG'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(
+              const ValueKey('settings-bg-shader-stage-hint-dual_stage.glsl'),
+            ),
+            matching: find.text('Any'),
           ),
           findsOneWidget,
         );
@@ -1074,14 +1114,131 @@ void main() {
           findsOneWidget,
         );
 
+        // Single-pass base shader in Foreground warns that it will cover
+        // terminal text and recommends moving it to Background Shaders.
+        await env.workspace.setForegroundShaderChain(const <String>[
+          'opaque_bg.glsl',
+        ]);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(
+          find.descendant(
+            of: fgWarning,
+            matching: find.textContaining(
+              'opaque_bg.glsl does not sample iChannel0 and will cover '
+              'terminal text',
+            ),
+          ),
+          findsOneWidget,
+        );
+
         // Out-of-bounds / no-op move calls leave chains unchanged.
         await env.workspace.moveBackgroundShader(-1, 0);
         await env.workspace.moveForegroundShader(0, 99);
         await env.workspace.moveForegroundShader(1, 1);
         expect(
           env.workspace.foregroundShaderChain,
-          equals(const <String>['crt_lottes', 'opaque_bg.glsl']),
+          equals(const <String>['opaque_bg.glsl']),
         );
+
+        await tester.runAsync(env.workspace.dispose);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'Web Upload .glsl auto-detects BG vs FG stage from pasted GLSL and allows manual stage override',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 800));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final env = _buildWorkspace(
+          defaultBackendKind: ShaderBackendKind.webGl2,
+          shadersDir: null,
+        );
+        env.workspace.setOverlay(FtermOverlay.settings);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: FtermShellScaffold(
+              workspace: env.workspace,
+              onOpenUrl: (_) {},
+              platformOverride: TargetPlatform.linux,
+              isWebOverride: true,
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final uploadBtn = find.byKey(const ValueKey('settings-upload-glsl'));
+        await tester.ensureVisible(uploadBtn);
+        await tester.tap(uploadBtn);
+        await tester.pump();
+
+        // Pasting an opaque generator auto-detects BG and activates in Background.
+        await tester.enterText(
+          find.byKey(const ValueKey('settings-web-glsl-name')),
+          'aurora.glsl',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('settings-web-glsl-source')),
+          _opaqueCustomGlsl,
+        );
+        await tester.pump();
+
+        expect(
+          tester
+              .widget<Text>(
+                find.byKey(const ValueKey('settings-web-glsl-detected-stage')),
+              )
+              .data,
+          equals('Detected: BG'),
+        );
+        final saveBtn = find.byKey(const ValueKey('settings-web-glsl-save'));
+        await tester.ensureVisible(saveBtn);
+        await tester.tap(saveBtn);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(env.workspace.backgroundShaderChain, contains('aurora.glsl'));
+        expect(
+          env.workspace.foregroundShaderChain,
+          isNot(contains('aurora.glsl')),
+        );
+
+        // Re-open form, paste FG shader, and manually override to Background.
+        await tester.ensureVisible(uploadBtn);
+        await tester.tap(uploadBtn);
+        await tester.pump();
+        await tester.enterText(
+          find.byKey(const ValueKey('settings-web-glsl-name')),
+          'smoke.glsl',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('settings-web-glsl-source')),
+          _validCustomGlsl,
+        );
+        await tester.pump();
+        expect(
+          tester
+              .widget<Text>(
+                find.byKey(const ValueKey('settings-web-glsl-detected-stage')),
+              )
+              .data,
+          equals('Detected: FG'),
+        );
+        final bgStageChip = find.byKey(
+          const ValueKey('settings-web-glsl-stage-bg'),
+        );
+        await tester.ensureVisible(bgStageChip);
+        await tester.tap(bgStageChip);
+        await tester.pump();
+        await tester.ensureVisible(saveBtn);
+        await tester.tap(saveBtn);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(env.workspace.backgroundShaderChain, contains('smoke.glsl'));
 
         await tester.runAsync(env.workspace.dispose);
         await tester.pumpWidget(const SizedBox.shrink());

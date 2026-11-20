@@ -19,6 +19,16 @@ final class ShadertoyGlslAnalysis {
   /// Whether the shader references `iChannel1` (wallpaper or image texture).
   final bool samplesChannel1;
 
+  /// Whether the shader references cursor, focus, or foreground-text uniforms
+  /// (`iCurrentCursor*`, `iPreviousCursor*`, `iCursorVisible`, `iFocus`,
+  /// `iForegroundColor`, etc.).
+  final bool usesCursorUniforms;
+
+  /// Recommended pipeline stage inferred from an optional
+  /// `// @fterm-stage: bg | fg | both` comment directive or static uniform
+  /// analysis.
+  final ShaderStageHint stageHint;
+
   /// UTF-8 byte size of the validated input source.
   final int sourceByteLength;
 
@@ -29,6 +39,8 @@ final class ShadertoyGlslAnalysis {
     required this.samplesChannel0,
     required this.samplesChannel1,
     required this.sourceByteLength,
+    this.usesCursorUniforms = false,
+    this.stageHint = ShaderStageHint.any,
   });
 }
 
@@ -123,6 +135,17 @@ void main() {
   static final RegExp _prevFramePattern = RegExp(r'\biPrevFrame\b');
   static final RegExp _channel0Pattern = RegExp(r'\biChannel0\b');
   static final RegExp _channel1Pattern = RegExp(r'\biChannel1\b');
+  static final RegExp _cursorUniformPattern = RegExp(
+    r'\b(?:iCurrentCursor|iPreviousCursor|iCurrentCursorColor|'
+    r'iPreviousCursorColor|iCursorColor|iCurrentCursorStyle|'
+    r'iTimeCursorChange|iCursorVisible|iFocus|iTimeFocus|'
+    r'iForegroundColor|CURSORSTYLE_\w+)\b',
+  );
+  static final RegExp _stageDirectivePattern = RegExp(
+    r'^\s*//\s*@(?:fterm-)?stage\s*:\s*(background|bg|foreground|fg|both|any)\b',
+    multiLine: true,
+    caseSensitive: false,
+  );
   static final RegExp _mainImagePattern = RegExp(r'\bvoid\s+mainImage\s*\(');
 
   static const String _uboMembersGlsl = '''
@@ -311,13 +334,50 @@ void main() {
             'in vec2 fragCoord)`.',
       );
     }
+    final samplesChannel0 = _channel0Pattern.hasMatch(stripped);
+    final samplesChannel1 = _channel1Pattern.hasMatch(stripped);
+    final usesCursorUniforms = _cursorUniformPattern.hasMatch(stripped);
+    final stageHint = _resolveStageHint(
+      source: source,
+      samplesChannel0: samplesChannel0,
+      samplesChannel1: samplesChannel1,
+      usesCursorUniforms: usesCursorUniforms,
+    );
     return ShadertoyGlslAnalysis(
       usesTime: _timeUsagePattern.hasMatch(stripped),
       usesPrevFrame: _prevFramePattern.hasMatch(stripped),
-      samplesChannel0: _channel0Pattern.hasMatch(stripped),
-      samplesChannel1: _channel1Pattern.hasMatch(stripped),
+      samplesChannel0: samplesChannel0,
+      samplesChannel1: samplesChannel1,
+      usesCursorUniforms: usesCursorUniforms,
+      stageHint: stageHint,
       sourceByteLength: byteLength,
     );
+  }
+
+  static ShaderStageHint _resolveStageHint({
+    required String source,
+    required bool samplesChannel0,
+    required bool samplesChannel1,
+    required bool usesCursorUniforms,
+  }) {
+    final directiveMatch = _stageDirectivePattern.firstMatch(source);
+    if (directiveMatch != null) {
+      return switch (directiveMatch.group(1)!.toLowerCase()) {
+        'bg' || 'background' => ShaderStageHint.background,
+        'fg' || 'foreground' => ShaderStageHint.foreground,
+        _ => ShaderStageHint.any,
+      };
+    }
+    if (!samplesChannel0) {
+      return ShaderStageHint.background;
+    }
+    if (usesCursorUniforms) {
+      return ShaderStageHint.foreground;
+    }
+    if (samplesChannel1) {
+      return ShaderStageHint.any;
+    }
+    return ShaderStageHint.foreground;
   }
 
   /// Validates [source] and generates both Impeller GLSL 460 and WebGL2 GLSL

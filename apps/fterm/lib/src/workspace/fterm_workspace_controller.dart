@@ -19,6 +19,8 @@ import 'package:termui_flutter/termui_flutter.dart'
         ShaderBackendKind,
         ShaderCompileException,
         ShaderPassSpec,
+        ShaderStageHint,
+        ShadertoyGlslAnalysis,
         ShadertoyGlslShim,
         TerminalShaderConfig,
         TerminalShaderController,
@@ -224,7 +226,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
   TerminalShaderConfig _activeShaderConfig = TerminalShaderConfig.empty;
   Map<String, List<double>> _shaderParamsByPass = <String, List<double>>{};
   List<String> _availableCustomShaders = const <String>[];
-  final Map<String, bool> _customShaderSamplesChannel0 = <String, bool>{};
+  final Map<String, ShadertoyGlslAnalysis> _customShaderAnalyses =
+      <String, ShadertoyGlslAnalysis>{};
   String? _lastShaderAssetError;
   String? _lastLoggedShareError;
   bool _lastUpdateWasError = false;
@@ -1504,26 +1507,46 @@ final class FtermWorkspaceController extends ChangeNotifier {
     return setForegroundShaderChain(reordered);
   }
 
+  ShadertoyGlslAnalysis? _analysisForEntry(
+    String entry,
+    TerminalShaderStage stage,
+  ) {
+    final direct = _shaderController.analysisForPass(
+      _passIdForEntry(entry, stage),
+    );
+    if (direct != null) return direct;
+    final otherStage = stage == TerminalShaderStage.background
+        ? TerminalShaderStage.foreground
+        : TerminalShaderStage.background;
+    return _shaderController.analysisForPass(
+          _passIdForEntry(entry, otherStage),
+        ) ??
+        _customShaderAnalyses[entry];
+  }
+
   /// Whether shader [entry] in [stage] samples `iChannel0` (chains on top of
   /// the previous pass), `false` when it is a standalone base/source shader,
   /// or `null` when its GLSL source has not been analyzed yet.
   bool? shaderSamplesChannel0(String entry, TerminalShaderStage stage) {
-    final analysis = _shaderController.analysisForPass(
-      _passIdForEntry(entry, stage),
-    );
+    final analysis = _analysisForEntry(entry, stage);
     if (analysis != null) return analysis.samplesChannel0;
-    final otherStage = stage == TerminalShaderStage.background
-        ? TerminalShaderStage.foreground
-        : TerminalShaderStage.background;
-    final otherAnalysis = _shaderController.analysisForPass(
-      _passIdForEntry(entry, otherStage),
-    );
-    if (otherAnalysis != null) return otherAnalysis.samplesChannel0;
     final preset = TerminalShaderPreset.fromWireName(entry);
     if (preset != TerminalShaderPreset.none) {
       return BuiltinShaders.samplesChannel0(preset);
     }
-    return _customShaderSamplesChannel0[entry];
+    return null;
+  }
+
+  /// Recommended pipeline stage (`BG`, `FG`, or `Any`) inferred for [entry]
+  /// from an optional `// @fterm-stage:` directive or static GLSL analysis.
+  ShaderStageHint? shaderStageHint(String entry, TerminalShaderStage stage) {
+    final analysis = _analysisForEntry(entry, stage);
+    if (analysis != null) return analysis.stageHint;
+    final preset = TerminalShaderPreset.fromWireName(entry);
+    if (preset != TerminalShaderPreset.none) {
+      return BuiltinShaders.stageHint(preset);
+    }
+    return null;
   }
 
   /// Returns a human-readable warning when [stage]'s active shader chain has
@@ -1531,19 +1554,25 @@ final class FtermWorkspaceController extends ChangeNotifier {
   ///
   /// Passes execute sequentially (`0 -> N - 1`), feeding each pass's output
   /// into the next pass's `iChannel0`. Any pass after index `0` that does not
-  /// sample `iChannel0` overwrites all earlier passes. For
-  /// [TerminalShaderStage.background], selecting multiple shaders always
-  /// surfaces an ordering notice.
+  /// sample `iChannel0` overwrites all earlier passes; in
+  /// [TerminalShaderStage.foreground], even pass `0` ignoring `iChannel0`
+  /// covers terminal text. For [TerminalShaderStage.background], selecting
+  /// multiple shaders always surfaces an ordering notice.
   String? shaderChainWarningFor(TerminalShaderStage stage) {
     final chain = stage == TerminalShaderStage.background
         ? backgroundShaderChain
         : foregroundShaderChain;
-    if (chain.length <= 1) return null;
+    if (chain.isEmpty) return null;
 
-    for (var i = chain.length - 1; i >= 1; i--) {
+    final minCheckIndex = stage == TerminalShaderStage.foreground ? 0 : 1;
+    for (var i = chain.length - 1; i >= minCheckIndex; i--) {
       final entry = chain[i];
       if (shaderSamplesChannel0(entry, stage) == false) {
         final overwriter = _shaderDisplayName(entry);
+        if (i == 0) {
+          return '$overwriter does not sample iChannel0 and will cover '
+              'terminal text. Move it to Background Shaders.';
+        }
         final hidden = <String>[
           for (var j = 0; j < i; j++) _shaderDisplayName(chain[j]),
         ].join(', ');
@@ -1552,7 +1581,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       }
     }
 
-    if (stage == TerminalShaderStage.background) {
+    if (stage == TerminalShaderStage.background && chain.length > 1) {
       return '${chain.length} background shaders active. Passes run in order '
           '(1 → ${chain.length}); the final pass wins unless it blends '
           'iChannel0.';
@@ -1680,25 +1709,24 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   /// Refreshes the list of available custom `.glsl` / `.frag` files from
-  /// [shaderProfileStore] and statically analyzes whether each shader samples
-  /// `iChannel0` so the Settings UI can show `base` vs `chains` badges before
-  /// activation.
+  /// [shaderProfileStore] and statically analyzes each file so the Settings UI
+  /// can show `base`/`chains` and `BG`/`FG`/`Any` hints before activation.
   Future<void> refreshCustomShaders() async {
     if (_disposed) return;
     try {
       final listed = await _shaderProfileStore.listShaderFiles();
       if (_disposed) return;
-      final analyzed = <String, bool>{};
+      final analyzed = <String, ShadertoyGlslAnalysis>{};
       for (final path in listed) {
         if (_disposed) return;
-        final samples = await _tryAnalyzeCustomSamplesChannel0(path);
-        if (samples != null) {
-          analyzed[path] = samples;
+        final analysis = await _tryAnalyzeCustomShader(path);
+        if (analysis != null) {
+          analyzed[path] = analysis;
         }
       }
       if (_disposed) return;
       _availableCustomShaders = listed;
-      _customShaderSamplesChannel0
+      _customShaderAnalyses
         ..clear()
         ..addAll(analyzed);
       _notifyChromeChanged();
@@ -1707,10 +1735,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     }
   }
 
-  Future<bool?> _tryAnalyzeCustomSamplesChannel0(String path) async {
+  Future<ShadertoyGlslAnalysis?> _tryAnalyzeCustomShader(String path) async {
     try {
       final source = await _shaderProfileStore.loadShaderSource(path);
-      return ShadertoyGlslShim.analyze(source, shaderId: path).samplesChannel0;
+      return ShadertoyGlslShim.analyze(source, shaderId: path);
     } on Object {
       return null;
     }

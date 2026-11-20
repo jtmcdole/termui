@@ -122,6 +122,8 @@ void main() {
         expect(wp.usesPrevFrame, isFalse);
         expect(wp.samplesChannel0, isFalse);
         expect(wp.samplesChannel1, isTrue);
+        expect(wp.usesCursorUniforms, isFalse);
+        expect(wp.stageHint, ShaderStageHint.background);
 
         final scan = ShadertoyGlslShim.analyze(
           BuiltinShaders.scanlineOverlayGlsl,
@@ -130,6 +132,8 @@ void main() {
         expect(scan.usesPrevFrame, isFalse);
         expect(scan.samplesChannel0, isTrue);
         expect(scan.samplesChannel1, isFalse);
+        expect(scan.usesCursorUniforms, isFalse);
+        expect(scan.stageHint, ShaderStageHint.foreground);
 
         final phosphor = ShadertoyGlslShim.analyze(
           BuiltinShaders.phosphorGlowGlsl,
@@ -138,6 +142,7 @@ void main() {
         expect(phosphor.usesPrevFrame, isTrue);
         expect(phosphor.samplesChannel0, isTrue);
         expect(phosphor.samplesChannel1, isFalse);
+        expect(phosphor.stageHint, ShaderStageHint.foreground);
 
         final focusDim = ShadertoyGlslShim.analyze(
           _ghosttyCommunityCorpus['ghostty_focus_dim']!,
@@ -145,6 +150,42 @@ void main() {
         expect(focusDim.usesTime, isFalse);
         expect(focusDim.usesPrevFrame, isFalse);
         expect(focusDim.samplesChannel0, isTrue);
+        expect(focusDim.usesCursorUniforms, isTrue);
+        expect(focusDim.stageHint, ShaderStageHint.foreground);
+
+        // Explicit @fterm-stage / @stage directives override heuristics.
+        final explicitBg = ShadertoyGlslShim.analyze('''
+// @fterm-stage: bg
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = texture(iChannel0, fragCoord / iResolution.xy);
+}
+''');
+        expect(explicitBg.stageHint, ShaderStageHint.background);
+
+        final explicitBoth = ShadertoyGlslShim.analyze('''
+// @stage: both
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''');
+        expect(explicitBoth.stageHint, ShaderStageHint.any);
+
+        final explicitFg = ShadertoyGlslShim.analyze('''
+// @fterm-stage: foreground
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''');
+        expect(explicitFg.stageHint, ShaderStageHint.foreground);
+
+        // Sampling both iChannel0 and iChannel1 without cursor uniforms -> any.
+        final dualChannel = ShadertoyGlslShim.analyze('''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / iResolution.xy;
+  fragColor = mix(texture(iChannel0, uv), texture(iChannel1, uv), 0.5);
+}
+''');
+        expect(dualChannel.stageHint, ShaderStageHint.any);
       },
     );
 
@@ -544,6 +585,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           BuiltinShaders.samplesChannel0(TerminalShaderPreset.none),
           isFalse,
         );
+        expect(
+          BuiltinShaders.stageHint(TerminalShaderPreset.none),
+          ShaderStageHint.any,
+        );
         for (final preset in BuiltinShaders.allPresets.keys) {
           final src = BuiltinShaders.sourceForPreset(preset);
           expect(src, isNotNull);
@@ -559,6 +604,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             shimmed.analysis.samplesChannel0,
             BuiltinShaders.samplesChannel0(preset),
           );
+          expect(shimmed.analysis.stageHint, BuiltinShaders.stageHint(preset));
         }
       },
     );

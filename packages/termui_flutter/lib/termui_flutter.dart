@@ -98,6 +98,7 @@ export 'src/rendering/shader_spec.dart'
         ShaderAnimationMode,
         ShaderBackendKind,
         ShaderPassSpec,
+        ShaderStageHint,
         TerminalShaderConfig,
         TerminalShaderPreset,
         TerminalShaderStage,

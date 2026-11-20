@@ -13,6 +13,8 @@ import 'package:termui_flutter/termui_flutter.dart'
         ShaderBackendKind,
         ShaderCompileException,
         ShaderPassSpec,
+        ShaderStageHint,
+        ShadertoyGlslShim,
         TerminalShaderPreset,
         TerminalShaderStage;
 
@@ -909,6 +911,9 @@ final class _ShadersAndBackgroundSectionState
   bool _editingWallpaper = false;
   bool _showCustomPathForm = false;
   bool _showWebGlslForm = false;
+  TerminalShaderStage _webUploadStage = TerminalShaderStage.foreground;
+  bool _webUploadStageLocked = false;
+  ShaderStageHint? _webDetectedStageHint;
 
   @override
   void initState() {
@@ -958,12 +963,42 @@ final class _ShadersAndBackgroundSectionState
     unawaited(widget.workspace.setForegroundShaderChain(next));
   }
 
+  void _onWebGlslSourceChanged(String source) {
+    ShaderStageHint? detected;
+    try {
+      detected = ShadertoyGlslShim.analyze(source).stageHint;
+    } on Object {
+      detected = null;
+    }
+    setState(() {
+      _webDetectedStageHint = detected;
+      if (!_webUploadStageLocked && detected != null) {
+        _webUploadStage = detected == ShaderStageHint.background
+            ? TerminalShaderStage.background
+            : TerminalShaderStage.foreground;
+      }
+    });
+  }
+
+  void _selectWebUploadStage(TerminalShaderStage stage) {
+    setState(() {
+      _webUploadStage = stage;
+      _webUploadStageLocked = true;
+    });
+  }
+
   void _submitWebGlsl() {
     final name = _webNameCtrl.text.trim();
     final source = _webSourceCtrl.text;
     if (name.isEmpty || source.trim().isEmpty) return;
-    unawaited(widget.workspace.uploadCustomShader(name, source));
-    setState(() => _showWebGlslForm = false);
+    unawaited(
+      widget.workspace.uploadCustomShader(name, source, stage: _webUploadStage),
+    );
+    setState(() {
+      _showWebGlslForm = false;
+      _webUploadStageLocked = false;
+      _webDetectedStageHint = null;
+    });
   }
 
   ShaderPassSpec? _primaryActivePass() {
@@ -1015,11 +1050,14 @@ final class _ShadersAndBackgroundSectionState
         _ShaderChainSelector(
           title: 'Background Shaders',
           keyPrefix: 'settings-bg-shader',
+          stage: TerminalShaderStage.background,
           presets: _bgPresets,
           activeChain: ws.backgroundShaderChain,
           availableCustomShaders: ws.availableCustomShaders,
           samplesChannel0For: (entry) =>
               ws.shaderSamplesChannel0(entry, TerminalShaderStage.background),
+          stageHintFor: (entry) =>
+              ws.shaderStageHint(entry, TerminalShaderStage.background),
           warningMessage: ws.shaderChainWarningFor(
             TerminalShaderStage.background,
           ),
@@ -1031,11 +1069,14 @@ final class _ShadersAndBackgroundSectionState
         _ShaderChainSelector(
           title: 'Foreground Shaders',
           keyPrefix: 'settings-fg-shader',
+          stage: TerminalShaderStage.foreground,
           presets: _fgPresets,
           activeChain: ws.foregroundShaderChain,
           availableCustomShaders: ws.availableCustomShaders,
           samplesChannel0For: (entry) =>
               ws.shaderSamplesChannel0(entry, TerminalShaderStage.foreground),
+          stageHintFor: (entry) =>
+              ws.shaderStageHint(entry, TerminalShaderStage.foreground),
           warningMessage: ws.shaderChainWarningFor(
             TerminalShaderStage.foreground,
           ),
@@ -1079,7 +1120,11 @@ final class _ShadersAndBackgroundSectionState
           _WebGlslUploadForm(
             nameController: _webNameCtrl,
             sourceController: _webSourceCtrl,
+            stage: _webUploadStage,
+            detectedStageHint: _webDetectedStageHint,
             palette: palette,
+            onSourceChanged: _onWebGlslSourceChanged,
+            onStageSelected: _selectWebUploadStage,
             onSubmit: _submitWebGlsl,
           ),
         ],
@@ -1417,10 +1462,12 @@ final class _ShaderRoleBadge extends StatelessWidget {
 final class _ShaderChainSelector extends StatelessWidget {
   final String title;
   final String keyPrefix;
+  final TerminalShaderStage stage;
   final List<TerminalShaderPreset> presets;
   final List<String> activeChain;
   final List<String> availableCustomShaders;
   final bool? Function(String entry) samplesChannel0For;
+  final ShaderStageHint? Function(String entry) stageHintFor;
   final String? warningMessage;
   final FtermOverlayPalette palette;
   final void Function(String entry) onToggle;
@@ -1429,61 +1476,119 @@ final class _ShaderChainSelector extends StatelessWidget {
   const _ShaderChainSelector({
     required this.title,
     required this.keyPrefix,
+    required this.stage,
     required this.presets,
     required this.activeChain,
     required this.availableCustomShaders,
     required this.samplesChannel0For,
+    required this.stageHintFor,
     required this.warningMessage,
     required this.palette,
     required this.onToggle,
     required this.onMove,
   });
 
-  List<(String id, String label)> _collectOptions() {
+  bool _isRecommendedForStage(ShaderStageHint? hint) => switch (hint) {
+    null || ShaderStageHint.any => true,
+    ShaderStageHint.background => stage == TerminalShaderStage.background,
+    ShaderStageHint.foreground => stage == TerminalShaderStage.foreground,
+  };
+
+  List<(String id, String label, bool isCustom)> _collectOptions() {
     final seen = <String>{};
-    final options = <(String, String)>[];
+    final options = <(String, String, bool)>[];
     for (final preset in presets) {
       seen.add(preset.wireName);
-      options.add((preset.wireName, preset.wireName));
+      options.add((preset.wireName, preset.wireName, false));
     }
-    for (final path in availableCustomShaders) {
-      if (seen.add(path)) {
-        options.add((path, p.basename(path)));
+    final customMatching = <(String, String, bool)>[];
+    final customOther = <(String, String, bool)>[];
+    void addCustom(String id) {
+      if (!seen.add(id)) return;
+      final item = (id, p.basename(id), true);
+      if (_isRecommendedForStage(stageHintFor(id))) {
+        customMatching.add(item);
+      } else {
+        customOther.add(item);
       }
+    }
+
+    for (final path in availableCustomShaders) {
+      addCustom(path);
     }
     for (final active in activeChain) {
-      if (seen.add(active)) {
-        options.add((active, p.basename(active)));
-      }
+      addCustom(active);
     }
+    options
+      ..addAll(customMatching)
+      ..addAll(customOther);
     return options;
   }
 
-  Widget _buildChipLabel(String id, String label) {
+  Widget _buildChipLabel(String id, String label, bool isCustom) {
     final samples = samplesChannel0For(id);
-    if (samples == null) {
+    final stageHint = isCustom ? stageHintFor(id) : null;
+    if (samples == null && stageHint == null) {
       return Text(label);
     }
+    final isStageMatch = _isRecommendedForStage(stageHint);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(
-          samples ? Icons.input : Icons.bolt,
-          size: 12,
-          color: samples ? palette.accent : palette.warning,
-        ),
-        const SizedBox(width: 4),
+        if (samples != null) ...[
+          Icon(
+            samples ? Icons.input : Icons.bolt,
+            size: 12,
+            color: samples ? palette.accent : palette.warning,
+          ),
+          const SizedBox(width: 4),
+        ],
         Text(label),
+        if (stageHint != null) ...[
+          const SizedBox(width: 5),
+          Container(
+            key: ValueKey('$keyPrefix-stage-hint-$id'),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0.5),
+            decoration: BoxDecoration(
+              color: (isStageMatch ? palette.accent : palette.muted).withValues(
+                alpha: 0.14,
+              ),
+              borderRadius: BorderRadius.circular(3),
+              border: Border.all(
+                color: (isStageMatch ? palette.accent : palette.muted)
+                    .withValues(alpha: 0.45),
+              ),
+            ),
+            child: Text(
+              stageHint.shortLabel,
+              style: TextStyle(
+                color: isStageMatch ? palette.accent : palette.muted,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
       ],
     );
   }
 
   String _chipTooltip(String id) {
     final samples = samplesChannel0For(id);
-    if (samples == null) return id;
-    return samples
-        ? '$id — chains from previous pass (reads iChannel0)'
-        : '$id — base shader (starts chain, ignores iChannel0)';
+    final hint = stageHintFor(id);
+    final stageText = switch (hint) {
+      ShaderStageHint.background => 'Designed for Background',
+      ShaderStageHint.foreground => 'Designed for Foreground',
+      ShaderStageHint.any => 'Works in Background or Foreground',
+      null => null,
+    };
+    final roleText = switch (samples) {
+      true => 'chains from previous pass (reads iChannel0)',
+      false => 'base shader (starts chain, ignores iChannel0)',
+      null => null,
+    };
+    final details = <String>[?stageText, ?roleText];
+    return details.isEmpty ? id : '$id — ${details.join(' • ')}';
   }
 
   @override
@@ -1510,12 +1615,12 @@ final class _ShaderChainSelector extends StatelessWidget {
           spacing: 6,
           runSpacing: 6,
           children: [
-            for (final (id, label) in options)
+            for (final (id, label, isCustom) in options)
               Tooltip(
                 message: _chipTooltip(id),
                 child: FilterChip(
                   key: ValueKey('$keyPrefix-$id'),
-                  label: _buildChipLabel(id, label),
+                  label: _buildChipLabel(id, label, isCustom),
                   selected: activeChain.contains(id),
                   onSelected: (_) => onToggle(id),
                 ),
@@ -1944,13 +2049,21 @@ final class _ShaderActionsRow extends StatelessWidget {
 final class _WebGlslUploadForm extends StatelessWidget {
   final TextEditingController nameController;
   final TextEditingController sourceController;
+  final TerminalShaderStage stage;
+  final ShaderStageHint? detectedStageHint;
   final FtermOverlayPalette palette;
+  final ValueChanged<String> onSourceChanged;
+  final ValueChanged<TerminalShaderStage> onStageSelected;
   final VoidCallback onSubmit;
 
   const _WebGlslUploadForm({
     required this.nameController,
     required this.sourceController,
+    required this.stage,
+    required this.detectedStageHint,
     required this.palette,
+    required this.onSourceChanged,
+    required this.onStageSelected,
     required this.onSubmit,
   });
 
@@ -1980,12 +2093,41 @@ final class _WebGlslUploadForm extends StatelessWidget {
           key: const ValueKey('settings-web-glsl-source'),
           controller: sourceController,
           maxLines: 4,
+          onChanged: onSourceChanged,
           decoration: const InputDecoration(
             isDense: true,
             labelText: 'Ghostty Shadertoy GLSL',
             hintText:
                 'void mainImage(out vec4 fragColor, in vec2 fragCoord) {}',
           ),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            ChoiceChip(
+              key: const ValueKey('settings-web-glsl-stage-bg'),
+              label: const Text('Background'),
+              selected: stage == TerminalShaderStage.background,
+              onSelected: (_) =>
+                  onStageSelected(TerminalShaderStage.background),
+            ),
+            ChoiceChip(
+              key: const ValueKey('settings-web-glsl-stage-fg'),
+              label: const Text('Foreground'),
+              selected: stage == TerminalShaderStage.foreground,
+              onSelected: (_) =>
+                  onStageSelected(TerminalShaderStage.foreground),
+            ),
+            if (detectedStageHint case final hint?)
+              Text(
+                'Detected: ${hint.shortLabel}',
+                key: const ValueKey('settings-web-glsl-detected-stage'),
+                style: TextStyle(color: palette.muted, fontSize: 10),
+              ),
+          ],
         ),
         const SizedBox(height: 6),
         Align(
