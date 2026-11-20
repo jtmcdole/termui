@@ -15,6 +15,47 @@ Packages with breaking changes:
 
 Packages with other changes:
 
+ - [`termui` - `v0.20.2`](#termui---v0202)
+ - [`termui_flutter` - `v0.15.2`](#termui_flutter---v0152)
+ - [`termui_recorder` - `v0.10.11`](#termui_recorder---v01011)
+ - [`termui_test` - `v0.4.11`](#termui_test---v0411)
+ - [`termui_hotreload` - `v0.6.37`](#termui_hotreload---v0637)
+ - [`termui_pty` - `v0.15.2`](#termui_pty---v0152)
+ - [`termui_tinpot` - `v0.5.9`](#termui_tinpot---v059)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.11`
+ - `termui_test` - `v0.4.11`
+ - `termui_hotreload` - `v0.6.37`
+ - `termui_pty` - `v0.15.2`
+ - `termui_tinpot` - `v0.5.9`
+
+---
+
+#### `termui` - `v0.20.2`
+
+ - **FEAT**(termui): resolve hard-wrapped URLs and per-row link spans.
+
+#### `termui_flutter` - `v0.15.2`
+
+ - **FEAT**(flutter,fterm): highlight per-row wrapped links and propagate local PTY wraps.
+
+
+## 2026-11-20
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
  - [`termui` - `v0.20.1`](#termui---v0201)
  - [`termui_flutter` - `v0.15.1`](#termui_flutter---v0151)
  - [`termui_recorder` - `v0.10.10`](#termui_recorder---v01010)

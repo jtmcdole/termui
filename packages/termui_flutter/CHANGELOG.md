@@ -1,3 +1,7 @@
+## 0.15.2
+
+ - **FEAT**(flutter,fterm): highlight per-row wrapped links and propagate local PTY wraps.
+
 ## 0.15.1
 
  - **FEAT**(flutter,fterm): highlight per-row wrapped links and propagate local PTY wraps.

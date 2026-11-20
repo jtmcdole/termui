@@ -1,3 +1,7 @@
+## 0.20.2
+
+ - **FEAT**(termui): resolve hard-wrapped URLs and per-row link spans.
+
 ## 0.20.1
 
  - **FEAT**(termui): resolve hard-wrapped URLs and per-row link spans.
