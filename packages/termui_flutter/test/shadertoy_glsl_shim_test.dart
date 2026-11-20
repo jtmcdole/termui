@@ -363,7 +363,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       expect(bytes.getFloat32(8, Endian.little), closeTo(1.0, 1e-5));
       expect(bytes.getFloat32(12, Endian.little), closeTo(12.5, 1e-5));
       expect(bytes.getFloat32(16, Endian.little), closeTo(0.016, 1e-5));
-      expect(bytes.getInt32(20, Endian.little), 42);
+      expect(bytes.getFloat32(20, Endian.little), closeTo(42.0, 1e-5));
       expect(bytes.getFloat32(24, Endian.little), closeTo(60.0, 1e-5));
       expect(bytes.getFloat32(28, Endian.little), closeTo(12.0, 1e-5));
       expect(bytes.getFloat32(32, Endian.little), closeTo(100.0, 1e-5));
@@ -398,11 +398,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         closeTo(0x80 / 255.0, 1e-5),
       );
       expect(
-        bytes.getInt32(4336, Endian.little),
-        TerminalShaderUniforms.cursorStyleBar,
+        bytes.getFloat32(4336, Endian.little),
+        closeTo(TerminalShaderUniforms.cursorStyleBar.toDouble(), 1e-5),
       );
-      expect(bytes.getInt32(4340, Endian.little), 1);
-      expect(bytes.getInt32(4344, Endian.little), 0);
+      expect(bytes.getFloat32(4340, Endian.little), closeTo(1.0, 1e-5));
+      expect(bytes.getFloat32(4344, Endian.little), closeTo(0.0, 1e-5));
       expect(bytes.getFloat32(4348, Endian.little), closeTo(9.5, 1e-5));
       // Region, cell size, params
       expect(bytes.getFloat32(4352, Endian.little), closeTo(5.0, 1e-5));
@@ -656,15 +656,28 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           expect(ubo['name'], ShadertoyGlslShim.uniformBlockName);
           final type = ubo['type'] as Map<String, Object?>;
           final members = type['members'] as List<Object?>;
+          final memberMaps = members.cast<Map<String, Object?>>().toList();
+          // Impeller OpenGLES backend (`buffer_bindings_gles.cc`) only supports
+          // float/vec/mat UBO members (`ShaderType::kFloat`), rejecting int32.
+          for (final member in memberMaps) {
+            final name = member['name'] as String;
+            if (name.startsWith('_PADDING_')) continue;
+            expect(
+              member['base_type'],
+              'ShaderType::kFloat',
+              reason:
+                  'UBO member $name (${member['base_type']}) must be '
+                  'float-backed for Impeller OpenGLES compatibility',
+            );
+          }
           final offsets = <String, int>{
-            for (final m in members.cast<Map<String, Object?>>())
-              m['name'] as String: m['offset'] as int,
+            for (final m in memberMaps) m['name'] as String: m['offset'] as int,
           };
 
           expect(offsets['iResolution'], 0);
           expect(offsets['iTime'], 12);
           expect(offsets['iTimeDelta'], 16);
-          expect(offsets['iFrame'], 20);
+          expect(offsets['_termuiFrame'], 20);
           expect(offsets['iFrameRate'], 24);
           expect(offsets['iTimeCursorChange'], 28);
           expect(offsets['iMouse'], 32);
@@ -678,9 +691,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           expect(offsets['iCurrentCursorColor'], 4288);
           expect(offsets['iPreviousCursorColor'], 4304);
           expect(offsets['iCursorColor'], 4320);
-          expect(offsets['iCurrentCursorStyle'], 4336);
-          expect(offsets['iCursorVisible'], 4340);
-          expect(offsets['iFocus'], 4344);
+          expect(offsets['_termuiCurrentCursorStyle'], 4336);
+          expect(offsets['_termuiCursorVisible'], 4340);
+          expect(offsets['_termuiFocus'], 4344);
           expect(offsets['iTimeFocus'], 4348);
           expect(offsets['iRegionRect'], 4352);
           expect(offsets['iCellSize'], 4368);

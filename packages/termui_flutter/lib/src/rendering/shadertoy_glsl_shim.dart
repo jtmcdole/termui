@@ -129,7 +129,7 @@ void main() {
   vec3 iResolution;
   float iTime;
   float iTimeDelta;
-  int iFrame;
+  float _termuiFrame;
   float iFrameRate;
   float iTimeCursorChange;
   vec4 iMouse;
@@ -145,9 +145,9 @@ void main() {
   vec4 iCurrentCursorColor;
   vec4 iPreviousCursorColor;
   vec4 iCursorColor;
-  int iCurrentCursorStyle;
-  int iCursorVisible;
-  int iFocus;
+  float _termuiCurrentCursorStyle;
+  float _termuiCursorVisible;
+  float _termuiFocus;
   float iTimeFocus;
   vec4 iRegionRect;
   vec2 iCellSize;
@@ -159,7 +159,11 @@ void main() {
 const int CURSORSTYLE_BLOCK = 0;
 const int CURSORSTYLE_BAR = 1;
 const int CURSORSTYLE_UNDERLINE = 2;
-const int CURSORSTYLE_BLOCK_HOLLOW = 3;''';
+const int CURSORSTYLE_BLOCK_HOLLOW = 3;
+#define iFrame int(_termuiFrame)
+#define iCurrentCursorStyle int(_termuiCurrentCursorStyle)
+#define iCursorVisible int(_termuiCursorVisible)
+#define iFocus int(_termuiFocus)''';
 
   static const String _impellerPrefix =
       '''
@@ -245,6 +249,10 @@ vec4 _termuiSampleLod(sampler2D s, vec2 uv, float lod) {
 
   static const String _fragmentSuffix = '''
 
+#undef iFocus
+#undef iCursorVisible
+#undef iCurrentCursorStyle
+#undef iFrame
 #undef textureLod
 #undef texture2D
 #undef texture
@@ -351,7 +359,7 @@ void main() {
     _writeVec3(target, o + 0, uniforms.width, uniforms.height, 1.0);
     target.setFloat32(o + 12, uniforms.timeSeconds, Endian.little);
     target.setFloat32(o + 16, uniforms.deltaSeconds, Endian.little);
-    target.setInt32(o + 20, uniforms.frameIndex, Endian.little);
+    target.setFloat32(o + 20, uniforms.frameIndex.toDouble(), Endian.little);
     target.setFloat32(o + 24, uniforms.frameRate, Endian.little);
     target.setFloat32(o + 28, uniforms.timeCursorChange, Endian.little);
     _writeFloat4(target, o + 32, uniforms.mouseXyzw);
@@ -367,9 +375,17 @@ void main() {
     _writeArgbRgba(target, o + 4288, uniforms.currentCursorArgb);
     _writeArgbRgba(target, o + 4304, uniforms.previousCursorArgb);
     _writeArgbRgba(target, o + 4320, uniforms.currentCursorArgb);
-    target.setInt32(o + 4336, uniforms.currentCursorStyle, Endian.little);
-    target.setInt32(o + 4340, uniforms.cursorVisible ? 1 : 0, Endian.little);
-    target.setInt32(o + 4344, uniforms.isFocused ? 1 : 0, Endian.little);
+    target.setFloat32(
+      o + 4336,
+      uniforms.currentCursorStyle.toDouble(),
+      Endian.little,
+    );
+    target.setFloat32(
+      o + 4340,
+      uniforms.cursorVisible ? 1.0 : 0.0,
+      Endian.little,
+    );
+    target.setFloat32(o + 4344, uniforms.isFocused ? 1.0 : 0.0, Endian.little);
     target.setFloat32(o + 4348, uniforms.timeFocusChange, Endian.little);
     final rect = uniforms.regionRect;
     _writeVec4(target, o + 4352, rect.left, rect.top, rect.width, rect.height);
