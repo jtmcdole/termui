@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
+import 'package:termui_flutter/termui_flutter.dart'
+    show ShaderAnimationMode, ShaderBackendKind;
 
 import 'settings_storage_stub.dart'
     if (dart.library.js_interop) 'settings_storage_web.dart'
@@ -122,6 +124,25 @@ final class FtermPreferences {
   /// responses remain comparable across restarts and portable copies.
   final List<String> cachedReleaseTags;
 
+  /// Optional path or storage key for the user's background wallpaper image.
+  final String? backgroundImagePath;
+
+  /// Ordered list of background fragment shader paths or preset identifiers.
+  final List<String> backgroundShaderPaths;
+
+  /// Ordered list of foreground post-process shader paths or preset identifiers.
+  final List<String> foregroundShaderPaths;
+
+  /// Policy controlling when time-varying fragment shaders advance `iTime`.
+  final ShaderAnimationMode shaderAnimationMode;
+
+  /// Optional runtime override for the active shader backend (`null` uses
+  /// platform auto-selection).
+  final ShaderBackendKind? shaderBackendOverride;
+
+  /// Optional serialized JSON payload storing custom shader profile parameters.
+  final String? customShaderProfileJson;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
@@ -138,6 +159,12 @@ final class FtermPreferences {
     this.skippedUpdateVersion,
     this.lastReleaseTagEtag,
     this.cachedReleaseTags = const [],
+    this.backgroundImagePath,
+    this.backgroundShaderPaths = const [],
+    this.foregroundShaderPaths = const [],
+    this.shaderAnimationMode = ShaderAnimationMode.focused,
+    this.shaderBackendOverride,
+    this.customShaderProfileJson,
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -166,6 +193,15 @@ final class FtermPreferences {
     String? lastReleaseTagEtag,
     bool clearLastReleaseTagEtag = false,
     List<String>? cachedReleaseTags,
+    String? backgroundImagePath,
+    bool clearBackgroundImagePath = false,
+    List<String>? backgroundShaderPaths,
+    List<String>? foregroundShaderPaths,
+    ShaderAnimationMode? shaderAnimationMode,
+    ShaderBackendKind? shaderBackendOverride,
+    bool clearShaderBackendOverride = false,
+    String? customShaderProfileJson,
+    bool clearCustomShaderProfileJson = false,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -204,6 +240,26 @@ final class FtermPreferences {
     ),
     cachedReleaseTags: _normalizeTrimmedStrings(
       cachedReleaseTags ?? this.cachedReleaseTags,
+    ),
+    backgroundImagePath: _resolveOptionalField<String>(
+      clear: clearBackgroundImagePath,
+      next: backgroundImagePath ?? this.backgroundImagePath,
+      normalize: _normalizeOptionalText,
+    ),
+    backgroundShaderPaths: _normalizeTrimmedStrings(
+      backgroundShaderPaths ?? this.backgroundShaderPaths,
+    ),
+    foregroundShaderPaths: _normalizeTrimmedStrings(
+      foregroundShaderPaths ?? this.foregroundShaderPaths,
+    ),
+    shaderAnimationMode: shaderAnimationMode ?? this.shaderAnimationMode,
+    shaderBackendOverride: clearShaderBackendOverride
+        ? null
+        : (shaderBackendOverride ?? this.shaderBackendOverride),
+    customShaderProfileJson: _resolveOptionalField<String>(
+      clear: clearCustomShaderProfileJson,
+      next: customShaderProfileJson ?? this.customShaderProfileJson,
+      normalize: _normalizeOptionalText,
     ),
   );
 
@@ -245,6 +301,24 @@ final class FtermPreferences {
     cachedReleaseTags: _parseStringList(
       decoded['cachedReleaseTags'],
       trim: true,
+    ),
+    backgroundImagePath: _parseOptionalText(decoded['backgroundImagePath']),
+    backgroundShaderPaths: _parseStringList(
+      decoded['backgroundShaderPaths'],
+      trim: true,
+    ),
+    foregroundShaderPaths: _parseStringList(
+      decoded['foregroundShaderPaths'],
+      trim: true,
+    ),
+    shaderAnimationMode: ShaderAnimationMode.fromWireName(
+      decoded['shaderAnimationMode'],
+    ),
+    shaderBackendOverride: ShaderBackendKind.tryFromWireName(
+      decoded['shaderBackendOverride'],
+    ),
+    customShaderProfileJson: _parseOptionalText(
+      decoded['customShaderProfileJson'],
     ),
   );
 
@@ -340,6 +414,15 @@ final class FtermPreferences {
     'skippedUpdateVersion': ?skippedUpdateVersion,
     'lastReleaseTagEtag': ?lastReleaseTagEtag,
     if (cachedReleaseTags.isNotEmpty) 'cachedReleaseTags': cachedReleaseTags,
+    'backgroundImagePath': ?backgroundImagePath,
+    if (backgroundShaderPaths.isNotEmpty)
+      'backgroundShaderPaths': backgroundShaderPaths,
+    if (foregroundShaderPaths.isNotEmpty)
+      'foregroundShaderPaths': foregroundShaderPaths,
+    'shaderAnimationMode': shaderAnimationMode.wireName,
+    if (shaderBackendOverride case final backendOverride?)
+      'shaderBackendOverride': backendOverride.wireName,
+    'customShaderProfileJson': ?customShaderProfileJson,
   });
 
   @override
@@ -359,10 +442,16 @@ final class FtermPreferences {
           other._normalizedCheckUtc == _normalizedCheckUtc &&
           other.skippedUpdateVersion == skippedUpdateVersion &&
           other.lastReleaseTagEtag == lastReleaseTagEtag &&
-          listEquals(other.cachedReleaseTags, cachedReleaseTags);
+          listEquals(other.cachedReleaseTags, cachedReleaseTags) &&
+          other.backgroundImagePath == backgroundImagePath &&
+          listEquals(other.backgroundShaderPaths, backgroundShaderPaths) &&
+          listEquals(other.foregroundShaderPaths, foregroundShaderPaths) &&
+          other.shaderAnimationMode == shaderAnimationMode &&
+          other.shaderBackendOverride == shaderBackendOverride &&
+          other.customShaderProfileJson == customShaderProfileJson;
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll(<Object?>[
     audioMuted,
     audioVolume,
     autoHideSingleTab,
@@ -377,7 +466,13 @@ final class FtermPreferences {
     skippedUpdateVersion,
     lastReleaseTagEtag,
     Object.hashAll(cachedReleaseTags),
-  );
+    backgroundImagePath,
+    Object.hashAll(backgroundShaderPaths),
+    Object.hashAll(foregroundShaderPaths),
+    shaderAnimationMode,
+    shaderBackendOverride,
+    customShaderProfileJson,
+  ]);
 }
 
 /// Relay connection credentials persisted on `0600` desktop storage when the
