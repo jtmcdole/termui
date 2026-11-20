@@ -181,6 +181,8 @@ final class ImpellercCompiler {
   Future<ByteData> compileRawBundle({
     required String vertexGlsl,
     required String fragmentGlsl,
+    String vertexEntryName = ShadertoyGlslShim.vertexShaderName,
+    String fragmentEntryName = ShadertoyGlslShim.fragmentShaderName,
     String shaderId = '<inline>',
     int shimPrefixLineCount = 0,
     int? userLineCount,
@@ -190,6 +192,8 @@ final class ImpellercCompiler {
     final result = await _compileInternal(
       vertexGlsl: vertexGlsl,
       fragmentGlsl: fragmentGlsl,
+      vertexEntryName: vertexEntryName,
+      fragmentEntryName: fragmentEntryName,
       shaderId: shaderId,
       shimPrefixLineCount: shimPrefixLineCount,
       userLineCount: userLineCount,
@@ -305,6 +309,8 @@ final class ImpellercCompiler {
   Future<({ByteData bytes, String cacheKey, bool fromCache})> _compileInternal({
     required String vertexGlsl,
     required String fragmentGlsl,
+    String vertexEntryName = ShadertoyGlslShim.vertexShaderName,
+    String fragmentEntryName = ShadertoyGlslShim.fragmentShaderName,
     required String shaderId,
     required int shimPrefixLineCount,
     required int? userLineCount,
@@ -322,7 +328,14 @@ final class ImpellercCompiler {
     }
 
     final identity = _compilerIdentity(impellercPath);
-    final cacheKey = sha256Hex('$identity\n$vertexGlsl\n$fragmentGlsl');
+    final entryKey =
+        vertexEntryName == ShadertoyGlslShim.vertexShaderName &&
+            fragmentEntryName == ShadertoyGlslShim.fragmentShaderName
+        ? ''
+        : '$vertexEntryName:$fragmentEntryName\n';
+    final cacheKey = sha256Hex(
+      '$identity\n$entryKey$vertexGlsl\n$fragmentGlsl',
+    );
     final cacheDir = useCache ? resolveCacheDirectoryPath() : null;
 
     if (cacheDir != null) {
@@ -337,6 +350,8 @@ final class ImpellercCompiler {
       impellercPath: impellercPath,
       vertexGlsl: vertexGlsl,
       fragmentGlsl: fragmentGlsl,
+      vertexEntryName: vertexEntryName,
+      fragmentEntryName: fragmentEntryName,
       shaderId: shaderId,
       shimPrefixLineCount: shimPrefixLineCount,
       userLineCount: userLineCount,
@@ -357,6 +372,8 @@ final class ImpellercCompiler {
     required String impellercPath,
     required String vertexGlsl,
     required String fragmentGlsl,
+    required String vertexEntryName,
+    required String fragmentEntryName,
     required String shaderId,
     required int shimPrefixLineCount,
     required int? userLineCount,
@@ -373,11 +390,11 @@ final class ImpellercCompiler {
       await fragFile.writeAsString(fragmentGlsl);
 
       final bundleSpec = jsonEncode(<String, Object?>{
-        ShadertoyGlslShim.vertexShaderName: <String, Object?>{
+        vertexEntryName: <String, Object?>{
           'type': 'vertex',
           'file': vertFile.path,
         },
-        ShadertoyGlslShim.fragmentShaderName: <String, Object?>{
+        fragmentEntryName: <String, Object?>{
           'type': 'fragment',
           'file': fragFile.path,
         },

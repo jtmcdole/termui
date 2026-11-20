@@ -93,6 +93,8 @@ final class ImpellercCompiler {
   Future<ByteData> compileRawBundle({
     required String vertexGlsl,
     required String fragmentGlsl,
+    String vertexEntryName = ShadertoyGlslShim.vertexShaderName,
+    String fragmentEntryName = ShadertoyGlslShim.fragmentShaderName,
     String shaderId = '<inline>',
     int shimPrefixLineCount = 0,
     int? userLineCount,

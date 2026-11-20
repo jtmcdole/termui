@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
+import 'package:termui_flutter/src/rendering/gpu_atlas_shaders.dart';
 import 'package:termui_flutter/src/rendering/impellerc_compiler_io.dart';
 import 'package:termui_flutter/src/rendering/impellerc_compiler_stub.dart'
     as stub;
@@ -510,6 +511,37 @@ void main() {
           );
           expect(bytes.length, greaterThan(1024));
         }
+      },
+      skip: realImpellercPath == null
+          ? 'impellerc binary not found in Flutter SDK cache'
+          : false,
+    );
+
+    test(
+      'compiles GpuAtlasShaders instanced Impeller bundle via real impellerc into valid IPSB FlatBuffer',
+      () async {
+        final cacheDir = Directory.systemTemp.createTempSync(
+          'termui_atlas_bundle_',
+        );
+        addTearDown(() => cacheDir.deleteSync(recursive: true));
+
+        final compiler = ImpellercCompiler(
+          impellercPathOverride: realImpellercPath,
+          cacheDirectoryPath: cacheDir.path,
+        );
+        final compiled = await compiler.compileRawBundle(
+          vertexGlsl: GpuAtlasShaders.impellerVertexSource,
+          fragmentGlsl: GpuAtlasShaders.impellerFragmentSource,
+          vertexEntryName: GpuAtlasShaders.impellerVertexName,
+          fragmentEntryName: GpuAtlasShaders.impellerFragmentName,
+          shaderId: 'direct_gpu_atlas',
+        );
+        final bytes = compiled.buffer.asUint8List(
+          compiled.offsetInBytes,
+          compiled.lengthInBytes,
+        );
+        expect(ImpellercCompiler.isValidShaderBundleBytes(bytes), isTrue);
+        expect(bytes.length, greaterThan(512));
       },
       skip: realImpellercPath == null
           ? 'impellerc binary not found in Flutter SDK cache'

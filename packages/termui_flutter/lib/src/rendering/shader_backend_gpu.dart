@@ -5,6 +5,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter_gpu/gpu.dart' as gpu;
 
+import 'gpu_atlas_batch.dart';
+import 'gpu_atlas_shaders.dart';
 import 'impellerc_compiler_stub.dart'
     if (dart.library.io) 'impellerc_compiler_io.dart';
 import 'shader_backend.dart';
@@ -378,9 +380,17 @@ final class _GpuCompiledShaderHandle implements CompiledShaderHandle {
 
 /// Desktop Impeller shader backend built on `package:flutter_gpu` and
 /// out-of-process `impellerc` `.shaderbundle` compilation.
-final class FlutterGpuShaderBackend implements TerminalShaderBackend {
+final class FlutterGpuShaderBackend implements DirectTerminalShaderBackend {
   static final Float32List _fullscreenTriangleVertices = Float32List.fromList(
     <double>[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0],
+  );
+
+  static final gpu.SamplerOptions _nearestClampSampler = gpu.SamplerOptions(
+    minFilter: gpu.MinMagFilter.nearest,
+    magFilter: gpu.MinMagFilter.nearest,
+    mipFilter: gpu.MipFilter.nearest,
+    widthAddressMode: gpu.SamplerAddressMode.clampToEdge,
+    heightAddressMode: gpu.SamplerAddressMode.clampToEdge,
   );
 
   static final gpu.SamplerOptions _linearClampSampler = gpu.SamplerOptions(
@@ -389,6 +399,51 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     mipFilter: gpu.MipFilter.nearest,
     widthAddressMode: gpu.SamplerAddressMode.clampToEdge,
     heightAddressMode: gpu.SamplerAddressMode.clampToEdge,
+  );
+
+  static final gpu.ColorBlendEquation _premultipliedSrcOver =
+      gpu.ColorBlendEquation();
+
+  static const gpu.VertexLayout _directAtlasVertexLayout = gpu.VertexLayout(
+    buffers: <gpu.VertexBuffer>[
+      gpu.VertexBuffer(
+        strideInBytes: 8,
+        stepMode: gpu.VertexStepMode.vertex,
+        attributes: <gpu.VertexAttribute>[
+          gpu.VertexAttribute(
+            name: GpuAtlasShaders.attrCorner,
+            format: gpu.VertexFormat.float32x2,
+            offsetInBytes: 0,
+          ),
+        ],
+      ),
+      gpu.VertexBuffer(
+        strideInBytes: GpuAtlasQuadBatch.bytesPerInstance,
+        stepMode: gpu.VertexStepMode.instance,
+        attributes: <gpu.VertexAttribute>[
+          gpu.VertexAttribute(
+            name: GpuAtlasShaders.attrDstRect,
+            format: gpu.VertexFormat.float32x4,
+            offsetInBytes: 0,
+          ),
+          gpu.VertexAttribute(
+            name: GpuAtlasShaders.attrUvRect,
+            format: gpu.VertexFormat.float32x4,
+            offsetInBytes: 16,
+          ),
+          gpu.VertexAttribute(
+            name: GpuAtlasShaders.attrColor,
+            format: gpu.VertexFormat.float32x4,
+            offsetInBytes: 32,
+          ),
+          gpu.VertexAttribute(
+            name: GpuAtlasShaders.attrExtra,
+            format: gpu.VertexFormat.float32x4,
+            offsetInBytes: 48,
+          ),
+        ],
+      ),
+    ],
   );
 
   static const int _uboRingLength = 3;
@@ -401,6 +456,11 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
       GpuSizePool<gpu.GpuImageSurface>(maxEntries: 4);
   final GpuSizePool<gpu.GpuImageSurface> _foregroundSurfacePool =
       GpuSizePool<gpu.GpuImageSurface>(maxEntries: 4);
+  final GpuSizePool<gpu.GpuImageSurface> _directSurfacePool =
+      GpuSizePool<gpu.GpuImageSurface>(maxEntries: 4);
+  final GpuSizePool<gpu.Texture> _directScenePool = GpuSizePool<gpu.Texture>(
+    maxEntries: 4,
+  );
   final GpuSizePool<(gpu.Texture, gpu.Texture)> _scratchPool =
       GpuSizePool<(gpu.Texture, gpu.Texture)>(maxEntries: 4);
   final GpuPingPongRegistry<gpu.Texture> _pingPongRegistry =
@@ -410,6 +470,31 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     null,
   );
   int _uboRingIndex = 0;
+
+  final List<gpu.DeviceBuffer?> _directUboRing = List<gpu.DeviceBuffer?>.filled(
+    _uboRingLength,
+    null,
+  );
+  int _directUboRingIndex = 0;
+  final List<gpu.DeviceBuffer?> _directInstanceRing =
+      List<gpu.DeviceBuffer?>.filled(_uboRingLength, null);
+  int _directInstanceRingIndex = 0;
+  final List<gpu.DeviceBuffer?> _directAuxQuadRing =
+      List<gpu.DeviceBuffer?>.filled(_uboRingLength, null);
+  int _directAuxQuadRingIndex = 0;
+  final Float32List _directViewportUniformScratch = Float32List(4);
+
+  gpu.ShaderLibrary? _directAtlasLibrary;
+  gpu.Shader? _directAtlasVertexShader;
+  gpu.Shader? _directAtlasFragmentShader;
+  gpu.RenderPipeline? _directAtlasPipeline;
+  gpu.DeviceBuffer? _directUnitQuadBuffer;
+  gpu.DeviceBuffer? _lastDirectInstanceBuffer;
+  Float32List? _lastDirectInstanceData;
+  int _lastDirectInstanceGeneration = -1;
+  int _lastDirectInstanceCount = -1;
+  Future<bool>? _directPrepareFuture;
+  bool _directPipelineFailed = false;
 
   gpu.DeviceBuffer? _fullscreenVertexBuffer;
   gpu.Texture? _fallbackTexture;
@@ -445,6 +530,10 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
 
   @override
   bool get supportsSyncBackground => true;
+
+  @override
+  bool get supportsDirectTerminalRender =>
+      !_disposed && !_directPipelineFailed && _compiler.isAvailable;
 
   @override
   Future<CompiledShaderHandle> compile(
@@ -549,6 +638,68 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
   }
 
   @override
+  Future<bool> prepareDirectResources({
+    required ui.Image atlasImage,
+    ui.Image? wallpaperImage,
+    Iterable<ui.Image> kittyImages = const <ui.Image>[],
+  }) {
+    if (_disposed || _directPipelineFailed || !_compiler.isAvailable) {
+      return Future<bool>.value(false);
+    }
+    if (_directAtlasLibrary != null && _directAtlasPipeline != null) {
+      return Future<bool>.value(true);
+    }
+    return _directPrepareFuture ??= _compileDirectAtlasPipeline();
+  }
+
+  @override
+  ui.Image? renderTerminalFrameSync({
+    required List<ShaderPassInvocation> backgroundPasses,
+    required List<ShaderPassInvocation> foregroundPasses,
+    required ui.Size physicalSize,
+    required ui.Image atlasImage,
+    required GpuAtlasQuadBatch batch,
+    ui.Image? wallpaperImage,
+  }) {
+    if (_disposed || _directPipelineFailed) return null;
+    final pipeline = _directAtlasPipeline;
+    if (pipeline == null) return null;
+    if (_hasQuarantinedPass(backgroundPasses) ||
+        _hasQuarantinedPass(foregroundPasses)) {
+      return null;
+    }
+
+    final width = physicalSize.width.round();
+    final height = physicalSize.height.round();
+    if (width <= 0 || height <= 0) return null;
+
+    final atlasTexture = _tryWrapImage(atlasImage);
+    if (atlasTexture == null) return null;
+    final wallpaperTexture = _tryWrapImage(wallpaperImage);
+    final kittyTextures = _wrapKittyQuadTextures(batch.kittyQuads);
+    if (kittyTextures == null) return null;
+
+    final surface = _directSurfacePool.obtain(
+      width,
+      height,
+      (w, h) => _context.createImageSurface(w, h),
+    );
+    return _executeDirectSurfaceRender(
+      surface: surface,
+      pipeline: pipeline,
+      backgroundPasses: backgroundPasses,
+      foregroundPasses: foregroundPasses,
+      width: width,
+      height: height,
+      atlasTexture: atlasTexture,
+      wallpaperImage: wallpaperImage,
+      wallpaperTexture: wallpaperTexture,
+      batch: batch,
+      kittyTextures: kittyTextures,
+    );
+  }
+
+  @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
@@ -559,13 +710,520 @@ final class FlutterGpuShaderBackend implements TerminalShaderBackend {
     }
     _backgroundSurfacePool.clear();
     _foregroundSurfacePool.clear();
+    _directSurfacePool.clear();
+    _directScenePool.clear();
     _scratchPool.clear();
     _pingPongRegistry.clear();
     for (var i = 0; i < _uboRing.length; i++) {
       _uboRing[i] = null;
+      _directUboRing[i] = null;
+      _directInstanceRing[i] = null;
+      _directAuxQuadRing[i] = null;
     }
+    _directAtlasPipeline = null;
+    _directAtlasVertexShader = null;
+    _directAtlasFragmentShader = null;
+    _directAtlasLibrary = null;
+    _directUnitQuadBuffer = null;
+    _lastDirectInstanceBuffer = null;
+    _lastDirectInstanceData = null;
+    _lastDirectInstanceGeneration = -1;
+    _lastDirectInstanceCount = -1;
     _fullscreenVertexBuffer = null;
     _fallbackTexture = null;
+  }
+
+  Future<bool> _compileDirectAtlasPipeline() async {
+    try {
+      final bytes = await _compiler.compileRawBundle(
+        vertexGlsl: GpuAtlasShaders.impellerVertexSource,
+        fragmentGlsl: GpuAtlasShaders.impellerFragmentSource,
+        vertexEntryName: GpuAtlasShaders.impellerVertexName,
+        fragmentEntryName: GpuAtlasShaders.impellerFragmentName,
+        shaderId: 'direct_gpu_atlas',
+      );
+      if (_disposed) return false;
+      final library = await _loadShaderLibrary('direct_gpu_atlas', bytes);
+      if (_disposed) return false;
+      final vert = library[GpuAtlasShaders.impellerVertexName];
+      final frag = library[GpuAtlasShaders.impellerFragmentName];
+      if (vert == null || frag == null) {
+        _directPipelineFailed = true;
+        return false;
+      }
+      final pipeline = _context.createRenderPipeline(
+        vert,
+        frag,
+        vertexLayout: _directAtlasVertexLayout,
+      );
+      _directAtlasLibrary = library;
+      _directAtlasVertexShader = vert;
+      _directAtlasFragmentShader = frag;
+      _directAtlasPipeline = pipeline;
+      return true;
+    } on Object {
+      _directPipelineFailed = true;
+      return false;
+    } finally {
+      _directPrepareFuture = null;
+    }
+  }
+
+  List<gpu.Texture>? _wrapKittyQuadTextures(List<GpuKittyQuad> quads) {
+    if (quads.isEmpty) return const <gpu.Texture>[];
+    final wrapped = <gpu.Texture>[];
+    for (final quad in quads) {
+      final tex = _tryWrapImage(quad.image);
+      if (tex == null) return null;
+      wrapped.add(tex);
+    }
+    return wrapped;
+  }
+
+  ui.Image? _executeDirectSurfaceRender({
+    required gpu.GpuImageSurface surface,
+    required gpu.RenderPipeline pipeline,
+    required List<ShaderPassInvocation> backgroundPasses,
+    required List<ShaderPassInvocation> foregroundPasses,
+    required int width,
+    required int height,
+    required gpu.Texture atlasTexture,
+    required ui.Image? wallpaperImage,
+    required gpu.Texture? wallpaperTexture,
+    required GpuAtlasQuadBatch batch,
+    required List<gpu.Texture> kittyTextures,
+  }) {
+    final surfaceFrame = surface.acquireNextFrame();
+    var presented = false;
+    final pendingSwaps = <GpuPingPongSlot<gpu.Texture>>[];
+    try {
+      final hasForeground = foregroundPasses.isNotEmpty;
+      final sceneTarget = hasForeground
+          ? _directScenePool.obtain(width, height, _createRenderTargetTexture)
+          : surfaceFrame.colorTexture;
+
+      final fallback = _ensureFallbackTexture();
+      if (backgroundPasses.isNotEmpty) {
+        _submitDirectShaderChain(
+          passes: backgroundPasses,
+          width: width,
+          height: height,
+          inputTexture: null,
+          wallpaperTexture: wallpaperTexture,
+          fallback: fallback,
+          targetTexture: sceneTarget,
+          pendingSwaps: pendingSwaps,
+        );
+      }
+
+      final drawCoverWallpaper =
+          backgroundPasses.isEmpty &&
+          wallpaperImage != null &&
+          wallpaperTexture != null;
+      final atlasCmd = _context.createCommandBuffer();
+      _recordDirectAtlasPass(
+        commandBuffer: atlasCmd,
+        pipeline: pipeline,
+        targetTexture: sceneTarget,
+        loadAction: backgroundPasses.isNotEmpty
+            ? gpu.LoadAction.load
+            : gpu.LoadAction.clear,
+        width: width,
+        height: height,
+        atlasTexture: atlasTexture,
+        wallpaperImage: drawCoverWallpaper ? wallpaperImage : null,
+        wallpaperTexture: drawCoverWallpaper ? wallpaperTexture : null,
+        batch: batch,
+        kittyTextures: kittyTextures,
+      );
+
+      final gpu.CommandBuffer finalCommandBuffer;
+      if (hasForeground) {
+        atlasCmd.submit();
+        finalCommandBuffer = _buildDirectShaderChain(
+          passes: foregroundPasses,
+          width: width,
+          height: height,
+          inputTexture: sceneTarget,
+          wallpaperTexture: wallpaperTexture,
+          fallback: fallback,
+          targetTexture: surfaceFrame.colorTexture,
+          pendingSwaps: pendingSwaps,
+        );
+      } else {
+        finalCommandBuffer = atlasCmd;
+      }
+
+      surfaceFrame.present(finalCommandBuffer);
+      presented = true;
+      _submitCommandBuffer(
+        finalCommandBuffer,
+        _directSurfacePool,
+        width,
+        height,
+      );
+      for (final slot in pendingSwaps) {
+        slot.commitWriteAndSwap();
+      }
+      return surface.currentImage;
+    } finally {
+      if (!presented) {
+        surfaceFrame.discard();
+      }
+    }
+  }
+
+  void _submitDirectShaderChain({
+    required List<ShaderPassInvocation> passes,
+    required int width,
+    required int height,
+    required gpu.Texture? inputTexture,
+    required gpu.Texture? wallpaperTexture,
+    required gpu.Texture fallback,
+    required gpu.Texture targetTexture,
+    required List<GpuPingPongSlot<gpu.Texture>> pendingSwaps,
+  }) {
+    final cmd = _buildDirectShaderChain(
+      passes: passes,
+      width: width,
+      height: height,
+      inputTexture: inputTexture,
+      wallpaperTexture: wallpaperTexture,
+      fallback: fallback,
+      targetTexture: targetTexture,
+      pendingSwaps: pendingSwaps,
+    );
+    cmd.submit();
+  }
+
+  gpu.CommandBuffer _buildDirectShaderChain({
+    required List<ShaderPassInvocation> passes,
+    required int width,
+    required int height,
+    required gpu.Texture? inputTexture,
+    required gpu.Texture? wallpaperTexture,
+    required gpu.Texture fallback,
+    required gpu.Texture targetTexture,
+    required List<GpuPingPongSlot<gpu.Texture>> pendingSwaps,
+  }) {
+    final aligned = packAlignedUniformBatch(<TerminalShaderUniforms>[
+      for (final pass in passes) pass.uniforms,
+    ], minimumUniformByteAlignment: _context.minimumUniformByteAlignment);
+    final uboBuffer = _stageUniformBuffer(aligned.data);
+    final vertexView = _ensureVertexBufferView();
+    return _encodePassChain(
+      passes: passes,
+      width: width,
+      height: height,
+      uboBuffer: uboBuffer,
+      uboStride: aligned.alignedStride,
+      vertexView: vertexView,
+      fallback: fallback,
+      inputTexture: inputTexture,
+      wallpaperTexture: wallpaperTexture,
+      finalSurfaceTexture: targetTexture,
+      pendingSwaps: pendingSwaps,
+    );
+  }
+
+  void _recordDirectAtlasPass({
+    required gpu.CommandBuffer commandBuffer,
+    required gpu.RenderPipeline pipeline,
+    required gpu.Texture targetTexture,
+    required gpu.LoadAction loadAction,
+    required int width,
+    required int height,
+    required gpu.Texture atlasTexture,
+    required ui.Image? wallpaperImage,
+    required gpu.Texture? wallpaperTexture,
+    required GpuAtlasQuadBatch batch,
+    required List<gpu.Texture> kittyTextures,
+  }) {
+    final unitQuadView = _ensureDirectUnitQuadView();
+    final atlasUbo = _stageDirectViewportUniform(width, height);
+    final instanceBuffer = _stageDirectInstancesIfNeeded(batch);
+    final auxBuffer = _stageDirectAuxQuads(
+      width: width,
+      height: height,
+      wallpaperImage: wallpaperImage,
+      kittyQuads: batch.kittyQuads,
+    );
+
+    final attachment = gpu.ColorAttachment(
+      texture: targetTexture,
+      loadAction: loadAction,
+      storeAction: gpu.StoreAction.store,
+    );
+    final renderPass = commandBuffer.createRenderPass(
+      gpu.RenderTarget.singleColor(attachment),
+    );
+    renderPass.bindPipeline(pipeline);
+    renderPass.setCullMode(gpu.CullMode.none);
+    renderPass.setPrimitiveType(gpu.PrimitiveType.triangle);
+    renderPass.setViewport(gpu.Viewport(width: width, height: height));
+    renderPass.bindVertexBuffer(unitQuadView, slot: 0);
+
+    final uniformSlot = _directAtlasVertexShader!.getUniformSlot(
+      GpuAtlasShaders.uniformBlockName,
+    );
+    renderPass.bindUniform(
+      uniformSlot,
+      gpu.BufferView(
+        atlasUbo,
+        offsetInBytes: 0,
+        lengthInBytes: GpuAtlasShaders.impellerUniformByteLength,
+      ),
+    );
+
+    final samplerSlot = _directAtlasFragmentShader!.getUniformSlot(
+      GpuAtlasShaders.atlasSamplerName,
+    );
+
+    var auxQuadIndex = 0;
+    if (wallpaperImage != null &&
+        wallpaperTexture != null &&
+        auxBuffer != null) {
+      renderPass.setColorBlendEnable(false);
+      renderPass.bindVertexBuffer(
+        gpu.BufferView(
+          auxBuffer,
+          offsetInBytes: auxQuadIndex * GpuAtlasQuadBatch.bytesPerInstance,
+          lengthInBytes: GpuAtlasQuadBatch.bytesPerInstance,
+        ),
+        slot: 1,
+      );
+      renderPass.bindTexture(
+        samplerSlot,
+        wallpaperTexture,
+        sampler: _linearClampSampler,
+      );
+      renderPass.draw(6, instanceCount: 1);
+      auxQuadIndex++;
+    }
+
+    renderPass.setColorBlendEnable(true);
+    renderPass.setColorBlendEquation(_premultipliedSrcOver);
+
+    final italicStart = batch.italicStartInstanceIndex;
+    final kittySplit = batch.kittyInsertInstanceIndex;
+    final total = batch.instanceCount;
+
+    if (instanceBuffer != null && italicStart > 0) {
+      _drawDirectAtlasSlice(
+        renderPass: renderPass,
+        instanceBuffer: instanceBuffer,
+        samplerSlot: samplerSlot,
+        atlasTexture: atlasTexture,
+        sampler: _nearestClampSampler,
+        startInstance: 0,
+        count: italicStart,
+      );
+    }
+    if (instanceBuffer != null && kittySplit > italicStart) {
+      _drawDirectAtlasSlice(
+        renderPass: renderPass,
+        instanceBuffer: instanceBuffer,
+        samplerSlot: samplerSlot,
+        atlasTexture: atlasTexture,
+        sampler: _linearClampSampler,
+        startInstance: italicStart,
+        count: kittySplit - italicStart,
+      );
+    }
+    if (auxBuffer != null && kittyTextures.isNotEmpty) {
+      for (var i = 0; i < kittyTextures.length; i++) {
+        renderPass.bindVertexBuffer(
+          gpu.BufferView(
+            auxBuffer,
+            offsetInBytes:
+                (auxQuadIndex + i) * GpuAtlasQuadBatch.bytesPerInstance,
+            lengthInBytes: GpuAtlasQuadBatch.bytesPerInstance,
+          ),
+          slot: 1,
+        );
+        renderPass.bindTexture(
+          samplerSlot,
+          kittyTextures[i],
+          sampler: _linearClampSampler,
+        );
+        renderPass.draw(6, instanceCount: 1);
+      }
+    }
+    if (instanceBuffer != null && total > kittySplit) {
+      _drawDirectAtlasSlice(
+        renderPass: renderPass,
+        instanceBuffer: instanceBuffer,
+        samplerSlot: samplerSlot,
+        atlasTexture: atlasTexture,
+        sampler: _nearestClampSampler,
+        startInstance: kittySplit,
+        count: total - kittySplit,
+      );
+    }
+  }
+
+  void _drawDirectAtlasSlice({
+    required gpu.RenderPass renderPass,
+    required gpu.DeviceBuffer instanceBuffer,
+    required gpu.UniformSlot samplerSlot,
+    required gpu.Texture atlasTexture,
+    required gpu.SamplerOptions sampler,
+    required int startInstance,
+    required int count,
+  }) {
+    renderPass.bindVertexBuffer(
+      gpu.BufferView(
+        instanceBuffer,
+        offsetInBytes: startInstance * GpuAtlasQuadBatch.bytesPerInstance,
+        lengthInBytes: count * GpuAtlasQuadBatch.bytesPerInstance,
+      ),
+      slot: 1,
+    );
+    renderPass.bindTexture(samplerSlot, atlasTexture, sampler: sampler);
+    renderPass.draw(6, instanceCount: count);
+  }
+
+  gpu.BufferView _ensureDirectUnitQuadView() {
+    final buffer = _directUnitQuadBuffer ??= _context
+        .createDeviceBufferWithCopy(
+          GpuAtlasShaders.unitQuadVertices.buffer.asByteData(),
+        );
+    return gpu.BufferView(
+      buffer,
+      offsetInBytes: 0,
+      lengthInBytes: buffer.sizeInBytes,
+    );
+  }
+
+  gpu.DeviceBuffer _stageDirectViewportUniform(int width, int height) {
+    _directViewportUniformScratch[0] = width.toDouble();
+    _directViewportUniformScratch[1] = height.toDouble();
+    _directViewportUniformScratch[2] = 0.0;
+    _directViewportUniformScratch[3] = 0.0;
+    final slotIndex = _directUboRingIndex;
+    _directUboRingIndex = (_directUboRingIndex + 1) % _uboRingLength;
+    var buffer = _directUboRing[slotIndex];
+    const byteLength = GpuAtlasShaders.impellerUniformByteLength;
+    if (buffer == null || buffer.sizeInBytes < byteLength) {
+      buffer = _context.createDeviceBuffer(
+        gpu.StorageMode.hostVisible,
+        byteLength,
+      );
+      _directUboRing[slotIndex] = buffer;
+    }
+    buffer.overwrite(
+      _directViewportUniformScratch.buffer.asByteData(0, byteLength),
+    );
+    buffer.flush(offsetInBytes: 0, lengthInBytes: byteLength);
+    return buffer;
+  }
+
+  gpu.DeviceBuffer? _stageDirectInstancesIfNeeded(GpuAtlasQuadBatch batch) {
+    final count = batch.instanceCount;
+    if (count <= 0) return null;
+    if (_lastDirectInstanceBuffer != null &&
+        identical(batch.instanceData, _lastDirectInstanceData) &&
+        batch.generation == _lastDirectInstanceGeneration &&
+        count == _lastDirectInstanceCount) {
+      return _lastDirectInstanceBuffer;
+    }
+    final byteLength = count * GpuAtlasQuadBatch.bytesPerInstance;
+    final slotIndex = _directInstanceRingIndex;
+    _directInstanceRingIndex = (_directInstanceRingIndex + 1) % _uboRingLength;
+    var buffer = _directInstanceRing[slotIndex];
+    if (buffer == null || buffer.sizeInBytes < byteLength) {
+      var capBytes = buffer?.sizeInBytes ?? 16384;
+      while (capBytes < byteLength) {
+        capBytes <<= 1;
+      }
+      buffer = _context.createDeviceBuffer(
+        gpu.StorageMode.hostVisible,
+        capBytes,
+      );
+      _directInstanceRing[slotIndex] = buffer;
+    }
+    final activeBytes = ByteData.sublistView(
+      batch.instanceData,
+      0,
+      count * GpuAtlasQuadBatch.floatsPerInstance,
+    );
+    buffer.overwrite(activeBytes);
+    buffer.flush(offsetInBytes: 0, lengthInBytes: byteLength);
+    _lastDirectInstanceBuffer = buffer;
+    _lastDirectInstanceData = batch.instanceData;
+    _lastDirectInstanceGeneration = batch.generation;
+    _lastDirectInstanceCount = count;
+    return buffer;
+  }
+
+  gpu.DeviceBuffer? _stageDirectAuxQuads({
+    required int width,
+    required int height,
+    required ui.Image? wallpaperImage,
+    required List<GpuKittyQuad> kittyQuads,
+  }) {
+    final quadCount = (wallpaperImage != null ? 1 : 0) + kittyQuads.length;
+    if (quadCount <= 0) return null;
+    final byteLength = quadCount * GpuAtlasQuadBatch.bytesPerInstance;
+    final scratch = Float32List(
+      quadCount * GpuAtlasQuadBatch.floatsPerInstance,
+    );
+    var offsetFloats = 0;
+    if (wallpaperImage != null) {
+      final uv = GpuAtlasShaders.computeCoverUvRect(
+        imageWidth: wallpaperImage.width.toDouble(),
+        imageHeight: wallpaperImage.height.toDouble(),
+        viewportWidth: width.toDouble(),
+        viewportHeight: height.toDouble(),
+      );
+      GpuAtlasShaders.writeTexturedQuadInstance(
+        Float32List.sublistView(
+          scratch,
+          offsetFloats,
+          offsetFloats + GpuAtlasQuadBatch.floatsPerInstance,
+        ),
+        dstX: 0.0,
+        dstY: 0.0,
+        dstWidth: width.toDouble(),
+        dstHeight: height.toDouble(),
+        u0: uv.u0,
+        v0: uv.v0,
+        u1: uv.u1,
+        v1: uv.v1,
+      );
+      offsetFloats += GpuAtlasQuadBatch.floatsPerInstance;
+    }
+    for (final quad in kittyQuads) {
+      GpuAtlasShaders.writeTexturedQuadInstance(
+        Float32List.sublistView(
+          scratch,
+          offsetFloats,
+          offsetFloats + GpuAtlasQuadBatch.floatsPerInstance,
+        ),
+        dstX: quad.dstX,
+        dstY: quad.dstY,
+        dstWidth: quad.dstWidth,
+        dstHeight: quad.dstHeight,
+        u0: quad.u0,
+        v0: quad.v0,
+        u1: quad.u1,
+        v1: quad.v1,
+      );
+      offsetFloats += GpuAtlasQuadBatch.floatsPerInstance;
+    }
+    final slotIndex = _directAuxQuadRingIndex;
+    _directAuxQuadRingIndex = (_directAuxQuadRingIndex + 1) % _uboRingLength;
+    var buffer = _directAuxQuadRing[slotIndex];
+    if (buffer == null || buffer.sizeInBytes < byteLength) {
+      buffer = _context.createDeviceBuffer(
+        gpu.StorageMode.hostVisible,
+        byteLength,
+      );
+      _directAuxQuadRing[slotIndex] = buffer;
+    }
+    buffer.overwrite(scratch.buffer.asByteData(0, byteLength));
+    buffer.flush(offsetInBytes: 0, lengthInBytes: byteLength);
+    return buffer;
   }
 
   ui.Image? _renderPasses({
