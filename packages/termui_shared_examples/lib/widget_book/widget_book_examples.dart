@@ -20,6 +20,7 @@ export 'mcdole_logo.dart';
 export 'sparklines.dart';
 export 'fruit_game.dart';
 export 'kitty_protocol_demo.dart';
+export 'shader_text_arcade_demo.dart';
 export 'widget_book_platform.dart';
 export 'widget_book_runner.dart';
 export 'events.dart';

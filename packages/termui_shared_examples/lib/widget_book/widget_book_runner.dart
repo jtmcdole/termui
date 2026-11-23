@@ -72,7 +72,10 @@ enum DemoPage {
   fruitGame('Fruit Drop Game'),
 
   /// Kitty Graphics (U+10EEEE Placeholders), cell occlusion, and KTTY inspector.
-  kittyProtocol('Kitty Protocol (KTTY)');
+  kittyProtocol('Kitty Protocol (KTTY)'),
+
+  /// Interactive GPU Shader Text Arcade (One Ring, Vortext, Frost, Neon/Glitch, Forge/Ripple).
+  shaderArcade('Shader Text Arcade');
 
   /// Display title of the demo page.
   final String title;
@@ -115,36 +118,13 @@ Future<void> runWidgetBookShared(
     alternateScreen: !isInline,
     mode: ExecutionMode.managed,
     exitConditions: const {PromptExitTrigger.controlC: PromptExitAction.abort},
-    onFramePainted: (buf) {
-      final state = appKey.currentState;
-      if (state != null) {
-        final activeExample = state.examples[state._selectedPage]!;
-        if (activeExample.hasActiveOverlay) {
-          activeExample.renderOverlay(buf, buf.width, buf.height);
-        }
-      }
-      platform.onFrameRedrawn(buf);
-      state?.recordFrame(buf);
-      sceneManager.render();
-    },
-    onKeyEvent: (event) {
-      if (event.type == KeyType.f12 || event.key == 'f12') {
-        debugPaintHoverEnabled = !debugPaintHoverEnabled;
-        return true;
-      }
-      if (event.modifiers.contains(term.Modifier.control)) {
-        if (event.key == 'p' || event.key == 'P') {
-          debugMouseCursorEnabled = !debugMouseCursorEnabled;
-          sceneManager.render();
-          return true;
-        }
-        if (event.key == 'o' || event.key == 'O') {
-          debugPaintHoverEnabled = !debugPaintHoverEnabled;
-          return true;
-        }
-      }
-      return false;
-    },
+    onFramePainted: (buf) => _onWidgetBookFramePainted(
+      buf,
+      appKey: appKey,
+      platform: platform,
+      sceneManager: sceneManager,
+    ),
+    onKeyEvent: (event) => _handleWidgetBookGlobalKey(event, sceneManager),
   );
 
   final mainLayer = SceneLayer(
@@ -182,6 +162,44 @@ Future<void> runWidgetBookShared(
     }
     platform.onExit();
   }
+}
+
+void _onWidgetBookFramePainted(
+  Buffer buf, {
+  required GlobalKey<_WidgetBookAppState> appKey,
+  required WidgetBookPlatform platform,
+  required SceneManager sceneManager,
+}) {
+  final state = appKey.currentState;
+  if (state != null) {
+    final activeExample = state.examples[state._selectedPage]!;
+    if (activeExample.hasActiveOverlay) {
+      activeExample.renderOverlay(buf, buf.width, buf.height);
+    }
+  }
+  platform.onFrameRedrawn(buf);
+  state?.recordFrame(buf);
+  sceneManager.render();
+}
+
+bool _handleWidgetBookGlobalKey(KeyEvent event, SceneManager sceneManager) {
+  if (event.type == KeyType.f12 || event.key == 'f12') {
+    debugPaintHoverEnabled = !debugPaintHoverEnabled;
+    return true;
+  }
+  if (!event.modifiers.contains(term.Modifier.control)) {
+    return false;
+  }
+  if (event.key == 'p' || event.key == 'P') {
+    debugMouseCursorEnabled = !debugMouseCursorEnabled;
+    sceneManager.render();
+    return true;
+  }
+  if (event.key == 'o' || event.key == 'O') {
+    debugPaintHoverEnabled = !debugPaintHoverEnabled;
+    return true;
+  }
+  return false;
 }
 
 /// The main widget for the Widget Book application.
@@ -253,9 +271,34 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     DemoPage.sparklines: SparklinesExample(),
     DemoPage.fruitGame: FruitGameExample(),
     DemoPage.kittyProtocol: KittyProtocolExample(),
+    DemoPage.shaderArcade: ShaderTextArcadeExample(),
   };
 
   StreamSubscription<String>? _pageSelectedSub;
+  StreamSubscription<term.InputEvent>? _terminalEventsSub;
+  bool _gpuShadersSupported = false;
+
+  /// Updates whether the host terminal confirmed GPU shader support.
+  void setGpuShadersSupported(bool supported) {
+    if (_gpuShadersSupported == supported) return;
+    _gpuShadersSupported = supported;
+    if (examples[DemoPage.shaderArcade]
+        case final ShaderTextArcadeExample arcade) {
+      arcade.setGpuShadersSupported(supported);
+    }
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _initShaderCapabilities() {
+    _terminalEventsSub = widget.terminal.events.listen((event) {
+      if (event is term.ShaderCapabilitiesEvent) {
+        setGpuShadersSupported(event.isAnySupported);
+      }
+    });
+    widget.terminal.backend.write(ShaderApcEncoder.encodeQuery());
+  }
 
   @override
   void initState() {
@@ -291,6 +334,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
     if (examples[DemoPage.kittyProtocol] case final KittyProtocolExample ktty) {
       ktty.enableKittyPassthrough = !widget.platform.shouldRenderToTerminal;
     }
+    _initShaderCapabilities();
 
     _rootScopeNode.addChild(_sidebarFocusNode);
     _rootScopeNode.addChild(_previewFocusNode);
@@ -368,6 +412,7 @@ final class _WidgetBookAppState extends State<WidgetBookApp>
   @override
   void dispose() {
     _pageSelectedSub?.cancel();
+    _terminalEventsSub?.cancel();
     if (_tickerRunning) {
       widget.platform.stopTicker();
     }
@@ -1004,6 +1049,10 @@ final class _PreviewPaneElement extends Element implements MouseEventHandler {
         inBounds &&
         !w.focusNode.hasFocus) {
       w.focusNode.requestFocus();
+    }
+    if (event.type == term.MouseEventType.move &&
+        !w.activeExample.wantsMouseHoverRebuild) {
+      return;
     }
     w.activeExample.handleMouseEvent(
       event,
