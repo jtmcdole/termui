@@ -1,7 +1,9 @@
-# Setup Guide for Google Cloud Run and Identity-Aware Proxy
+# Setup Guide: Cloud Run (IAP) and Self-Hosted Reverse Proxies
 
 > [!WARNING]
-> `termui_caster` relays live interactive shells (`zsh`, `bash`, `pwsh`) over WebSockets. Always protect internet-facing Cloud Run deployments with **Identity-Aware Proxy (`--iap`)** and store shared tokens in **Secret Manager** (`--set-secrets`). Exposing a relay publicly without IAM enforcement lets any leaked bearer token grant immediate Remote Code Execution (RCE) on every connected casting host.
+> `termui_caster` relays live interactive shells (`zsh`, `bash`, `pwsh`) over WebSockets. Always protect internet-facing deployments with strong perimeter authentication (such as Identity-Aware Proxy, Tailscale Serve, or `oauth2-proxy`) and store shared tokens outside shell history. Exposing a relay publicly without perimeter auth lets any leaked bearer token grant immediate Remote Code Execution (RCE) on every connected casting host.
+
+Follow the steps below to deploy on Google Cloud Run with Identity-Aware Proxy (`--iap`). For Linux, macOS, Tailscale, `oauth2-proxy`, or Caddy, jump to [Self-Hosted Reverse Proxy Setup](#self-hosted-reverse-proxy-setup).
 
 The `buildpack:` block in the root [pubspec.yaml](../../../pubspec.yaml) compiles `apps/termui_cast/server/bin/server.dart` as the server binary and builds `apps/fterm` to WebAssembly (`build/web`). Run `gcloud run deploy --source .` from the `termui` repository root so `.gcloudignore` uploads only the workspace manifests, `packages/`, and `apps/` required by Cloud Build. On startup, `termui_cast_server` binds `0.0.0.0:$PORT` and serves both the static `fterm` WASM client at `/` and the WebSocket endpoints at `/v1/caster` and `/v1/client`.
 
@@ -377,3 +379,130 @@ gcloud run services update termui-cast \
   --region="$REGION" \
   --no-invoker-iam-check
 ```
+
+## Self-Hosted Reverse Proxy Setup
+
+You can run `termui_cast_server` on a Linux workstation, home server, or VM behind a TLS-terminating reverse proxy. Bind the relay to loopback (`127.0.0.1:8420`) so port `8420` stays closed to your LAN (including on Fedora and other hosts with strict firewalls).
+
+### Core Relay Flags
+
+1. Bind to loopback with `--host 127.0.0.1 --port 8420` and pass `--allowed-origin https://<public-host>`. On loopback WebSocket upgrades, `--allowed-origin` permits matching proxied `Host` headers (defaulting omitted ports to `443` or `80`, or matching an explicit port in `--allowed-origin`) while still blocking DNS rebinding from unknown hosts.
+2. Keep `/v1/caster` token-gated with `--caster-token-file` (or `$TERMUI_CAST_CASTER_TOKEN`). Create a restricted token file first:
+
+```bash
+mkdir -p ~/.config/termui_cast && chmod 700 ~/.config/termui_cast
+openssl rand -hex 32 > ~/.config/termui_cast/caster.token
+chmod 600 ~/.config/termui_cast/caster.token
+```
+
+3. Trust your proxy for viewer auth by passing `--trust-proxy-client-auth` and `--require-client-auth-header <header>`. When enabled, `termui_cast_server` allows tokenless `/v1/client` upgrades only when that HTTP header is non-empty. `fterm` Web attempts one silent same-origin connection on startup and skips the token dialog.
+4. Serve the compiled web bundle from `--web-dir apps/fterm/build/web`. `termui_cast_server` serves `.br` and `.gz` sidecars when present. Otherwise it caches on-the-fly `gzip` responses up to 32 MiB for compressible assets (`.wasm`, `.js`, `.mjs`, `.html`, `.json`, `.css`, `.svg`, `.ttf`, `.otf`).
+
+> [!CAUTION]
+> Never combine `--trust-proxy-client-auth` with direct network access to port `8420`. Make sure your reverse proxy strips any client-supplied copy of the header named in `--require-client-auth-header` before forwarding traffic. `termui_cast_server` rejects `--trust-proxy-client-auth` if you also set `--client-token*` or `--insecure-no-auth`.
+
+### Optional Non-Root Subpath Hosting (`--base-path`)
+
+To mount the relay under a subpath such as `https://<public-host>/term/`, pass `--base-path /term` (or `TERMUI_CAST_BASE_PATH=/term`). The server mounts `/term/`, `/term/healthz`, `/term/v1/caster`, and `/term/v1/client`, and redirects `GET /term` to `/term/` (`308`).
+
+`termui_cast_server` rewrites `<base href="/">` to `<base href="/term/">` in `index.html` in memory. One prebuilt `apps/fterm/build/web` bundle works at any subpath without rebuilding Flutter. On casting hosts, set `TERMUI_CAST_SERVER_URL="wss://<public-host>/term/v1/caster"` (or `https://<public-host>/term`, which normalizes to `/term/v1/caster`).
+
+### Option A: Tailscale Serve
+
+Tailscale Serve terminates HTTPS for your tailnet and injects the `Tailscale-User-Login` identity header on every request. Start `termui_cast_server` on loopback:
+
+```bash
+./build/termui_cast_server \
+  --host 127.0.0.1 \
+  --port 8420 \
+  --web-dir apps/fterm/build/web \
+  --caster-token-file ~/.config/termui_cast/caster.token \
+  --allowed-origin "https://<node>.<tailnet>.ts.net" \
+  --trust-proxy-client-auth \
+  --require-client-auth-header Tailscale-User-Login
+```
+
+Expose the loopback listener to your tailnet:
+
+```bash
+tailscale serve --bg http://127.0.0.1:8420
+```
+
+If you also pass `--base-path /term` to `termui_cast_server`, match the upstream path in Tailscale Serve (`tailscale serve --bg --set-path /term http://127.0.0.1:8420/term`). Do not use `tailscale funnel` with `--trust-proxy-client-auth`, because Funnel admits unauthenticated public internet requests.
+
+### Option B: `oauth2-proxy`
+
+`oauth2-proxy` authenticates browser users against an OIDC or GitHub provider and forwards `X-Forwarded-Email`. Because loopback `--allowed-origin` validates proxied `Host` headers natively, keep `--pass-host-header=true` enabled.
+
+Start `termui_cast_server` on loopback:
+
+```bash
+./build/termui_cast_server \
+  --host 127.0.0.1 \
+  --port 8420 \
+  --web-dir apps/fterm/build/web \
+  --caster-token-file ~/.config/termui_cast/caster.token \
+  --allowed-origin "https://term.example.com" \
+  --trust-proxy-client-auth \
+  --require-client-auth-header X-Forwarded-Email
+```
+
+Run `oauth2-proxy` in front of `127.0.0.1:8420` (behind TLS termination on `https://term.example.com`):
+
+```bash
+oauth2-proxy \
+  --http-address="127.0.0.1:4180" \
+  --upstream="http://127.0.0.1:8420" \
+  --reverse-proxy=true \
+  --pass-host-header=true \
+  --pass-user-headers=true \
+  --skip-auth-route="^/v1/caster$" \
+  --email-domain="example.com"
+```
+
+The `--skip-auth-route="^/v1/caster$"` rule lets remote `termui_cast` hosts reach `/v1/caster` using `TERMUI_CAST_CASTER_TOKEN` while browsers still require OAuth login for `/` and `/v1/client`. If you use `--base-path /term`, update the skip regex to `^/term/v1/caster$` (and optionally set `--proxy-prefix="/term/oauth2"` if you want OAuth callbacks inside `/term/`).
+
+### Option C: Caddy (Native Host or Podman / Docker)
+
+Caddy handles automatic HTTPS and WebSocket upgrades with zero extra WebSocket directives. When running `termui_cast_server` in Podman or Docker, bind `--host 0.0.0.0 --port 8420` inside the container, mount the compiled web bundle (`--web-dir /srv/web`), and publish only to host loopback with `-p 127.0.0.1:8420:8420`:
+
+```bash
+podman run -d --name termui-cast \
+  -p 127.0.0.1:8420:8420 \
+  -v ~/.config/termui_cast/caster.token:/run/secrets/caster.token:ro,Z \
+  -v ./apps/fterm/build/web:/srv/web:ro,Z \
+  termui-cast-server \
+  --host 0.0.0.0 \
+  --port 8420 \
+  --web-dir /srv/web \
+  --caster-token-file /run/secrets/caster.token \
+  --allowed-origin "https://term.example.com" \
+  --base-path /term \
+  --trust-proxy-client-auth \
+  --require-client-auth-header X-Forwarded-Email
+```
+
+Then proxy `/term`, `/term/*`, and `oauth2-proxy`'s `/oauth2/*` callback routes through Caddy (forwarding to `oauth2-proxy` on `127.0.0.1:4180` for browser auth, or directly to `127.0.0.1:8420` when Caddy enforces `forward_auth` itself):
+
+```caddyfile
+term.example.com {
+  @term path /term /term/* /oauth2/*
+  handle @term {
+    reverse_proxy 127.0.0.1:4180
+  }
+}
+```
+
+If Caddy handles auth directly (such as `forward_auth`), strip incoming `X-Forwarded-Email` first. Then copy the verified user header when proxying to `127.0.0.1:8420`.
+
+### Connecting a Caster Host
+
+On each casting machine, point `TERMUI_CAST_SERVER_URL` at your proxy URL and start an interactive shell:
+
+```bash
+export TERMUI_CAST_SERVER_URL="wss://term.example.com/term/v1/caster"
+export TERMUI_CAST_CASTER_TOKEN="$(cat ~/.config/termui_cast/caster.token)"
+termui_cast --keep-alive-on-hup --title "$(hostname -s)-zsh" -- zsh
+```
+
+Interactive shells enable remote shell spawning (`--allow-spawn`) automatically so browser tabs can open new shells from the same `termui_cast` process. Pass `--no-allow-spawn` if you want viewers restricted to the single initial shell.

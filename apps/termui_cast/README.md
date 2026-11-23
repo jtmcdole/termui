@@ -4,7 +4,7 @@
 > **Remote Code Execution (RCE) Risk:** `termui_caster` opens live interactive shells (`zsh`, `bash`, `pwsh`) over WebSockets with **no** built-in identity provider or IAM layer. Exposing a TTY relay without strong perimeter authentication (such as Google Cloud IAM + Identity-Aware Proxy) grants full RCE on the casting host. Always deploy internet-facing relays behind Identity-Aware Proxy (`--iap`), store tokens in Secret Manager, and follow [docs/setup.md](docs/setup.md).
 
 > [!NOTE]
-> **Status: `0.1.0` Prototype (Unlaunched).** Breaking protocol and API changes land without backwards-compatibility shims prior to `1.0.0`.
+> **Status: Active `0.x` Releases.** Current workspace versions are `fterm` `v0.5.0`, `termui_cast_client_core` `v0.4.0`, and `termui_cast_server` / `termui_caster_cli` / `termui_cast_protocol` `v0.3.0`. Breaking wire and API changes may still land between minor releases before `1.0.0`.
 
 `termui_caster` streams live interactive TTY sessions over binary WebSockets across pure-Dart and Flutter workspace apps under `apps/`:
 
@@ -74,7 +74,7 @@ sequenceDiagram
 | `apps/termui_cast/caster_cli` | `termui_cast` CLI (`pty2` + `VirtualTerminal` + jittered reconnect state machine + bounded uplink pump) |
 | `apps/termui_cast/client_core` | Pure-Dart client transport, `CastClientRepository`, `RemoteTerminalPort`, `TerminalThemeSettings`, `FileUploadCoordinator`, and session sync state |
 | `apps/fterm` | `fterm` Flutter desktop MUX & WASM web client (`TerminalSurface` splits sharing one `GlyphAtlas`, `PtyRouter` local shells, `Ctrl+\ b` pane share, `BEL`/`APC` audio) |
-| `apps/termui_cast/docs/setup.md` | Step-by-step Google Cloud Run, Secret Manager, and Identity-Aware Proxy (`--iap`) deployment guide |
+| `apps/termui_cast/docs/setup.md` | Deployment guide for Google Cloud Run with Identity-Aware Proxy (`--iap`) and self-hosted reverse proxies |
 
 ## Local Quickstart
 
@@ -150,9 +150,12 @@ flutter run -d chrome `
 
 ### Reconnecting Dropped Casters (`SIGHUP` on macOS / Linux)
 
-If a macOS or Linux caster drops off the viewer dashboard after sleep or a network change, send `SIGHUP` to reconnect it right away. This re-registers the session while keeping the local shell and scrollback intact:
+On macOS and Linux, `SIGHUP` shuts down `termui_cast` cleanly by default. Start `termui_cast` with `--keep-alive-on-hup` (or `TERMUI_CAST_KEEP_ALIVE_ON_HUP=true`) to make `SIGHUP` trigger an immediate reconnect and check-in instead. That mode re-registers the session after sleep or a network change while keeping the local shell and scrollback alive:
 
 ```bash
+# Start with keep-alive enabled:
+termui_cast --keep-alive-on-hup --title "shell-1" -- zsh
+
 # Prebuilt binary bundle (`termui_cast`):
 pkill -HUP -x termui_cast
 
@@ -189,6 +192,7 @@ Release binaries are unsigned. On macOS, run `xattr -dr com.apple.quarantine` on
 `termui_cast_server` has no native FFI hooks and compiles to a single standalone executable:
 
 ```bash
+mkdir -p build
 dart compile exe apps/termui_cast/server/bin/termui_cast_server.dart -o build/termui_cast_server
 ```
 
@@ -202,6 +206,8 @@ See **[docs/setup.md](docs/setup.md)** for the complete production deployment wa
 4. Locking down ingress with **Identity-Aware Proxy (`--iap`)** and `roles/run.invoker`.
 5. Provisioning per-host caster service accounts for keyless `gcloud` JWT signing (`TERMUI_CAST_IAP_SERVICE_ACCOUNT`) or pure-Dart local RS256 key signing (`TERMUI_CAST_IAP_KEY_FILE`).
 
+For self-hosted deployments behind Tailscale Serve, `oauth2-proxy`, or Caddy on loopback, see **[Self-Hosted Reverse Proxy Setup](docs/setup.md#self-hosted-reverse-proxy-setup)**.
+
 ## Environment Variables Reference
 
 All runtime environment variables use the `TERMUI_CAST_*` prefix.
@@ -209,14 +215,21 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | Variable | Component | Description |
 | :--- | :--- | :--- |
 | `TERMUI_CAST_CASTER_TOKEN` | Server & Caster CLI | Shared secret token required to register caster sessions (`/v1/caster`) |
+| `TERMUI_CAST_CASTER_TOKEN_FILE` | Server & Caster CLI | Path to a UTF-8 file containing the `/v1/caster` bearer token |
 | `TERMUI_CAST_CLIENT_TOKEN` | Server | Shared secret token required for viewer connections (`/v1/client`) |
+| `TERMUI_CAST_CLIENT_TOKEN_FILE` | Server | Path to a UTF-8 file containing the `/v1/client` bearer token |
+| `TERMUI_CAST_TRUST_PROXY_CLIENT_AUTH` | Server | Set to `true` or `1` to allow tokenless `/v1/client` upgrades behind perimeter auth |
+| `TERMUI_CAST_REQUIRE_CLIENT_AUTH_HEADER` | Server | HTTP header required on `/v1/client` upgrades when proxy client auth is enabled (such as `X-Forwarded-Email`) |
+| `TERMUI_CAST_BASE_PATH` | Server | URL subpath prefix (such as `/term`) for mounting relay endpoints and static web assets |
 | `TERMUI_CAST_SERVER_URL` | Caster CLI & Web App | WebSocket endpoint URL (`wss://<host>/v1/caster` or `wss://<host>/v1/client`) |
-| `TERMUI_CAST_TOKEN` | Web App (`--dart-define`) | Default viewer token embedded into the web viewer static bundle (public to anyone able to load static assets unless gated behind IAP; prefer `#token=...` fragments or IAP) |
+| `TERMUI_CAST_TOKEN` | Web App (`--dart-define`) | Default viewer token embedded into the web viewer static bundle (public to anyone able to load static assets unless gated behind IAP; prefer `#token=...` fragments or perimeter auth) |
 | `TERMUI_CAST_IAP_SERVICE_ACCOUNT` | Caster CLI | Service account email for keyless `gcloud iam service-accounts sign-jwt` IAP authentication |
 | `TERMUI_CAST_IAP_KEY_FILE` | Caster CLI | Path to a service account JSON key for pure-Dart RS256 IAP authentication |
 | `TERMUI_CAST_WEB_DIR` | Server | Directory path containing the compiled Flutter web assets (`build/web`) |
-| `TERMUI_CAST_ALLOWED_ORIGINS` | Server | Comma-separated list of additional allowed `Origin` URLs for WebSocket upgrades |
+| `TERMUI_CAST_ALLOWED_ORIGINS` | Server | Comma-separated list of additional allowed `Origin` URLs for WebSocket upgrades (also permits matching `Host` headers on loopback) |
 | `TERMUI_CAST_REVISION` | Server | Explicit revision string reported on `/healthz` (defaults to `K_REVISION` on Cloud Run) |
+| `TERMUI_CAST_ALLOW_SPAWN` | Caster CLI | Set to `true`/`1` or `false`/`0` to control remote shell spawning (auto-enabled for interactive shells, off for non-shell commands) |
+| `TERMUI_CAST_KEEP_ALIVE_ON_HUP` | Caster CLI | Set to `true` or `1` so `SIGHUP` reconnects and checks in instead of shutting down cleanly |
 | `TERMUI_CAST_SCROLLBACK_LINES` | Caster CLI | Maximum scrollback ring buffer lines retained per session (default `5000`) |
 | `TERMUI_CAST_DOWNLOAD_CONPTY` | Caster CLI (Windows) | Set to `true` or `1` to download the SHA-256-verified ConPTY bundle if missing |
 | `TERMUI_CAST_UPLOAD` | Caster CLI | Enable (`true`) or disable (`false`) viewer-to-caster file uploads |
@@ -230,12 +243,33 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | `--host` | `127.0.0.1` (`0.0.0.0` when `$PORT` is set) | Bind address for HTTP and WebSocket connections |
 | `--port`, `-p` | `8420` (or `$PORT`) | TCP port to listen on |
 | `--caster-token` | `$TERMUI_CAST_CASTER_TOKEN` (auto-minted on loopback) | Shared secret token required for `/v1/caster` upgrades |
+| `--caster-token-file` | `$TERMUI_CAST_CASTER_TOKEN_FILE` | File containing the `/v1/caster` bearer token |
 | `--client-token` | `$TERMUI_CAST_CLIENT_TOKEN` (auto-minted on loopback) | Shared secret token required for `/v1/client` upgrades |
+| `--client-token-file` | `$TERMUI_CAST_CLIENT_TOKEN_FILE` | File containing the `/v1/client` bearer token |
 | `--insecure-no-auth` | `false` | Disable token authentication on loopback bindings (`127.0.0.1` / `::1` only) |
-| `--allowed-origin` | `$TERMUI_CAST_ALLOWED_ORIGINS` | Additional allowed `Origin` header URLs (repeatable) |
+| `--trust-proxy-client-auth` | `false` (`$TERMUI_CAST_TRUST_PROXY_CLIENT_AUTH`) | Allow tokenless `/v1/client` upgrades behind perimeter auth; keeps `/v1/caster` token-gated |
+| `--require-client-auth-header` | `$TERMUI_CAST_REQUIRE_CLIENT_AUTH_HEADER` | Require a non-empty HTTP header on `/v1/client` upgrades (requires `--trust-proxy-client-auth`) |
+| `--base-path` | `""` (`$TERMUI_CAST_BASE_PATH`) | Mount `/healthz`, `/v1/caster`, `/v1/client`, and static assets under a URL subpath prefix (such as `/term`) |
+| `--allowed-origin` | `$TERMUI_CAST_ALLOWED_ORIGINS` | Additional allowed `Origin` header URLs (repeatable; on loopback, also permits matching proxied `Host` headers) |
 | `--web-dir` | `$TERMUI_CAST_WEB_DIR` (`apps/fterm/build/web`) | Directory of static WASM web viewer assets |
 | `--no-web` | `false` | Disable static web asset serving at `/` |
 | `--revision` | `$TERMUI_CAST_REVISION` (or `$K_REVISION`) | Server revision string reported on `/healthz` |
+
+### Caster CLI Flags (`termui_cast`)
+
+| Flag | Default | Description |
+| :--- | :--- | :--- |
+| `--server` | `ws://127.0.0.1:8420/v1/caster` (`$TERMUI_CAST_SERVER_URL`) | Relay server WebSocket URL (subpath URLs append `/v1/caster`) |
+| `--token` / `--token-file` | `$TERMUI_CAST_CASTER_TOKEN` / `$TERMUI_CAST_CASTER_TOKEN_FILE` | Bearer token sent in the initial binary `AuthFrame` |
+| `--title` | Executable basename | Tab label displayed in viewer clients |
+| `--allow-spawn` / `--no-allow-spawn` | Auto (`true` for interactive shells, `false` otherwise; `$TERMUI_CAST_ALLOW_SPAWN`) | Allow viewers to remotely spawn additional shell PTYs in the same caster process |
+| `--keep-alive-on-hup` | `false` (`$TERMUI_CAST_KEEP_ALIVE_ON_HUP`) | Reconnect and re-register on `SIGHUP` instead of shutting down cleanly |
+| `--scrollback-lines` | `5000` (`$TERMUI_CAST_SCROLLBACK_LINES`) | Primary-screen scrollback lines retained in memory (`0..100000`) |
+| `--upload` / `--no-upload` | `true` (`$TERMUI_CAST_UPLOAD`) | Allow or block browser drag-and-drop file uploads |
+| `--upload-dir` | Host default (`$TERMUI_CAST_UPLOAD_DIR`) | Destination directory for uploaded files |
+| `--max-upload-bytes` | `268435456` (`$TERMUI_CAST_MAX_UPLOAD_BYTES`) | Maximum size in bytes per uploaded file |
+| `--iap-service-account` / `--iap-key-file` | `$TERMUI_CAST_IAP_SERVICE_ACCOUNT` / `$TERMUI_CAST_IAP_KEY_FILE` | Google Cloud IAP JWT signing via `gcloud` or a local service-account key file |
+| `--download-conpty` | `false` (`$TERMUI_CAST_DOWNLOAD_CONPTY`) | Download SHA-256-verified ConPTY binaries on Windows if missing |
 
 ## Keyboard, Split, Audio, and Dock Controls
 
@@ -266,15 +300,19 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 ## Security Notes (`0.x`)
 
 - Locally, the relay binds to `127.0.0.1:8420` by default, or `0.0.0.0:$PORT` when `$PORT` is set.
-- Loopback bindings auto-mint and print random `TERMUI_CAST_CASTER_TOKEN` and `TERMUI_CAST_CLIENT_TOKEN` values when unset, unless `--insecure-no-auth` is passed explicitly.
-- Non-loopback bindings require both `--caster-token` (`$TERMUI_CAST_CASTER_TOKEN`) and `--client-token` (`$TERMUI_CAST_CLIENT_TOKEN`) and reject `--insecure-no-auth` with exit code `64`.
-- Loopback bindings reject non-loopback `Host` headers (`403 Forbidden`) to block DNS rebinding attacks.
+- Loopback bindings auto-mint and print random `TERMUI_CAST_CASTER_TOKEN` and `TERMUI_CAST_CLIENT_TOKEN` values when unset. Passing `--insecure-no-auth` disables auto-minting for both tokens; passing `--trust-proxy-client-auth` skips `TERMUI_CAST_CLIENT_TOKEN` while still requiring or auto-minting `TERMUI_CAST_CASTER_TOKEN`.
+- Non-loopback bindings require `--caster-token` (`$TERMUI_CAST_CASTER_TOKEN`) plus `--client-token` (unless `--trust-proxy-client-auth` is enabled), and reject `--insecure-no-auth` with exit code `64`.
+- Loopback bindings reject non-loopback `Host` headers on WebSocket upgrades (`403 Forbidden`) to block DNS rebinding. Passing `--allowed-origin https://<public-host>` permits matching proxied `Host` headers (defaulting omitted ports to `443` or `80`, or matching an explicit port in `--allowed-origin`) while rejecting unlisted hosts.
+- Passing `--trust-proxy-client-auth` allows tokenless `/v1/client` upgrades behind upstream perimeter auth while keeping `/v1/caster` token-gated. Pair it with `--require-client-auth-header` and block direct access to the relay port. See [Self-Hosted Reverse Proxy Setup](docs/setup.md#self-hosted-reverse-proxy-setup).
+- Static web hosting negotiates `Accept-Encoding` (respecting `q=0`) and serves `.br` or `.gz` sidecars when present. Otherwise it caches in-memory `gzip` responses up to 32 MiB for compressible assets (`.wasm`, `.js`, `.mjs`, `.html`, `.json`, `.css`, `.svg`, `.ttf`, `.otf`) with `Vary: Accept-Encoding` and encoding-scoped ETags.
+- On HTTP(S) origins without an explicit server URL, `fterm` Web attempts one silent tokenless same-origin connection before opening the connect dialog. Manually entered client tokens and open tab or split layouts persist only in tab-scoped `window.sessionStorage` (never `window.localStorage`), scoped to the matching relay URL.
+- `termui_cast` enables remote shell spawning (`--allow-spawn`) automatically for recognized interactive shells and disables it for non-shell commands or scripts. Pass `--no-allow-spawn` to disable spawning on interactive shells.
 - Pre-auth WebSocket upgrades enforce a 2-second auth deadline, a 16 KiB pre-auth cap, and oldest-pending eviction at 32 pending upgrades (`503` at 256 peers).
 - Peers authenticate via an initial binary `AuthFrame` rather than URL query strings, and `termui_cast` strips all `TERMUI_CAST_*` variables from spawned child shell environments.
 - Settings and saved relay credentials on native desktop live in `~/.config/fterm/settings.json` (`0700` directory, atomic `0600` POSIX temp-file write before rename) on macOS/Linux and `%APPDATA%\fterm\settings.json` on Windows.
 - WebAudio unlock uses external [audio_unlock.js](../fterm/web/audio_unlock.js) with zero inline scripts for strict CSP compatibility.
-- TLS terminates at the bastion or reverse proxy (such as Google Cloud Run + Identity-Aware Proxy, nginx, or Caddy); `termui_cast_server` binds plain HTTP/WS behind that perimeter and trusts `wss://` via external TLS termination rather than in-app certificate flags.
-- Web WASM builds compiled with `--dart-define=TERMUI_CAST_TOKEN=...` embed that token inside public static JS/WASM assets readable by anyone able to fetch `/`. Always gate static asset hosting behind IAP when baking a default token, or pass tokens at runtime via URL fragments (`#token=...`, scrubbed synchronously before WASM loads).
+- TLS terminates at the bastion or reverse proxy (such as Google Cloud Run + Identity-Aware Proxy, Tailscale Serve, `oauth2-proxy`, nginx, or Caddy). `termui_cast_server` binds plain HTTP/WS behind that perimeter rather than taking in-app TLS certificate flags.
+- Web WASM builds compiled with `--dart-define=TERMUI_CAST_TOKEN=...` embed that token inside public static JS/WASM assets readable by anyone able to fetch `/`. Gate static asset hosting behind perimeter auth when baking a token, or pass tokens via `#token=...` fragments (scrubbed synchronously before WASM loads).
 
 ## Running Tests
 
