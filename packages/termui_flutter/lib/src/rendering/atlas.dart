@@ -1,8 +1,11 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+
 import 'package:flutter/widgets.dart' hide Color;
 import 'package:termui/ui/buffer.dart';
+
+import 'atlas_quad_table.dart';
 
 /// Returns whether [char] is rasterized procedurally by
 /// [drawProceduralCharacter] rather than via font text shaping.
@@ -971,6 +974,207 @@ Map<(String, GlyphStyleVariant), Rect> _deriveStyledCharRects(
     ): entry.value,
 };
 
+int _tryScalarCodePoint(String char) {
+  final len = char.length;
+  if (len == 1) {
+    final cu = char.codeUnitAt(0);
+    if (cu != 0 && (cu < 0xD800 || cu > 0xDFFF)) return cu;
+    return -1;
+  }
+  if (len == 2) {
+    final cu0 = char.codeUnitAt(0);
+    final cu1 = char.codeUnitAt(1);
+    if (cu0 >= 0xD800 && cu0 <= 0xDBFF && cu1 >= 0xDC00 && cu1 <= 0xDFFF) {
+      return 0x10000 + ((cu0 & 0x3FF) << 10) + (cu1 & 0x3FF);
+    }
+  }
+  return -1;
+}
+
+final class _PlacedDecoration {
+  final AtlasDecorationKind kind;
+  final bool isWide;
+  final int cellSpan;
+  final int col;
+  final int row;
+
+  const _PlacedDecoration(
+    this.kind,
+    this.isWide,
+    this.cellSpan,
+    this.col,
+    this.row,
+  );
+}
+
+(List<_PlacedDecoration>, int) _placeDecorationSprites({
+  required int startIndex,
+  required int numCols,
+}) {
+  final placed = <_PlacedDecoration>[];
+  var currentIdx = startIndex;
+  for (final kind in AtlasDecorationKind.values) {
+    for (final isWide in const [false, true]) {
+      final cellSpan = isWide ? 2 : 1;
+      var col = currentIdx % numCols;
+      if (col + cellSpan > numCols) {
+        currentIdx += numCols - col;
+        col = 0;
+      }
+      final row = currentIdx ~/ numCols;
+      placed.add(_PlacedDecoration(kind, isWide, cellSpan, col, row));
+      currentIdx += cellSpan;
+    }
+  }
+  return (placed, currentIdx);
+}
+
+Map<(AtlasDecorationKind, bool), Rect> _rasterizeDecorationSprites({
+  required Canvas canvas,
+  required List<_PlacedDecoration> placedDecorations,
+  required double colWidth,
+  required double rowHeight,
+  required double cellWidth,
+  required double cellHeight,
+  required double actualPadding,
+  required double devicePixelRatio,
+}) {
+  final rects = <(AtlasDecorationKind, bool), Rect>{};
+  for (final pd in placedDecorations) {
+    final paintX = pd.col * colWidth + actualPadding;
+    final paintY = pd.row * rowHeight + actualPadding;
+    final spriteWidth = pd.cellSpan * cellWidth;
+
+    canvas.save();
+    try {
+      canvas.clipRect(Rect.fromLTWH(paintX, paintY, spriteWidth, cellHeight));
+      _drawDecorationSprite(
+        canvas,
+        pd.kind,
+        paintX,
+        paintY,
+        spriteWidth,
+        cellHeight,
+        devicePixelRatio: devicePixelRatio,
+      );
+    } finally {
+      canvas.restore();
+    }
+
+    rects[(pd.kind, pd.isWide)] = Rect.fromLTWH(
+      paintX * devicePixelRatio,
+      paintY * devicePixelRatio,
+      spriteWidth * devicePixelRatio,
+      cellHeight * devicePixelRatio,
+    );
+  }
+  return rects;
+}
+
+void _drawDecorationSprite(
+  Canvas canvas,
+  AtlasDecorationKind kind,
+  double x,
+  double y,
+  double w,
+  double h, {
+  required double devicePixelRatio,
+}) {
+  final fillPaint = Paint()
+    ..color = const ui.Color(0xFFFFFFFF)
+    ..style = PaintingStyle.fill
+    ..isAntiAlias = false;
+  switch (kind) {
+    case AtlasDecorationKind.overline:
+      canvas.drawRect(Rect.fromLTWH(x, y, w, 1.0), fillPaint);
+    case AtlasDecorationKind.strikethrough:
+      final midY = y + (h * 0.5).floorToDouble();
+      canvas.drawRect(Rect.fromLTWH(x, midY, w, 1.0), fillPaint);
+    case AtlasDecorationKind.underlineSingle:
+      canvas.drawRect(Rect.fromLTWH(x, y + h - 2.0, w, 1.0), fillPaint);
+    case AtlasDecorationKind.underlineDouble:
+      canvas.drawRect(Rect.fromLTWH(x, y + h - 3.0, w, 1.0), fillPaint);
+      canvas.drawRect(Rect.fromLTWH(x, y + h - 1.0, w, 1.0), fillPaint);
+    case AtlasDecorationKind.underlineCurly:
+      _drawCurlyDecorationSprite(canvas, x, y + h - 2.0, w);
+    case AtlasDecorationKind.underlineDotted:
+      _drawPeriodicSegmentedDecoration(
+        canvas,
+        fillPaint,
+        x,
+        y + h - 2.0,
+        w,
+        targetPeriod: 2.5,
+        dutyCycle: 1.0 / 2.5,
+        minDashWidth: 1.0 / devicePixelRatio,
+      );
+    case AtlasDecorationKind.underlineDashed:
+      _drawPeriodicSegmentedDecoration(
+        canvas,
+        fillPaint,
+        x,
+        y + h - 2.0,
+        w,
+        targetPeriod: 4.0,
+        dutyCycle: 2.5 / 4.0,
+        minDashWidth: 1.0 / devicePixelRatio,
+      );
+  }
+}
+
+void _drawCurlyDecorationSprite(
+  Canvas canvas,
+  double x,
+  double baseY,
+  double w,
+) {
+  const targetPeriod = 4.0;
+  const amplitude = 1.2;
+  final cycles = math.max(1, (w / targetPeriod).round());
+  final period = w / cycles;
+  final halfPeriod = period * 0.5;
+  // Extend one half-cycle past both horizontal bounds so the clipped sprite
+  // crosses baseY at x and x + w with identical upward tangent and full stroke
+  // thickness, allowing adjacent 1-cell and 2-cell sprites to tile seamlessly.
+  final path = Path()..moveTo(x - halfPeriod, baseY);
+  final totalHalfCycles = cycles * 2 + 2;
+  for (var i = 0; i < totalHalfCycles; i++) {
+    final segStart = x + (i - 1) * halfPeriod;
+    final segEnd = segStart + halfPeriod;
+    final midX = segStart + halfPeriod * 0.5;
+    final controlY = baseY + (i.isOdd ? -amplitude : amplitude);
+    path.quadraticBezierTo(midX, controlY, segEnd, baseY);
+  }
+  final strokePaint = Paint()
+    ..color = const ui.Color(0xFFFFFFFF)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.0
+    ..isAntiAlias = true;
+  canvas.drawPath(path, strokePaint);
+}
+
+void _drawPeriodicSegmentedDecoration(
+  Canvas canvas,
+  Paint paint,
+  double x,
+  double y,
+  double w, {
+  required double targetPeriod,
+  required double dutyCycle,
+  required double minDashWidth,
+}) {
+  final cycles = math.max(1, (w / targetPeriod).round());
+  final period = w / cycles;
+  final dash = math.min(period, math.max(minDashWidth, period * dutyCycle));
+  final halfGap = (period - dash) * 0.5;
+  for (var c = 0; c < cycles; c++) {
+    canvas.drawRect(
+      Rect.fromLTWH(x + c * period + halfGap, y, dash, 1.0),
+      paint,
+    );
+  }
+}
+
 /// A cached texture atlas containing rasterized glyphs for terminal rendering.
 ///
 /// The atlas organises characters in a [numCols] (64) column grid. When a cell
@@ -1048,6 +1252,12 @@ final class GlyphAtlas {
   final Map<String, Rect> _italicRects = <String, Rect>{};
   final Map<String, Rect> _boldItalicRects = <String, Rect>{};
   final List<Rect?> _asciiRects = List<Rect?>.filled(_asciiCount * 4, null);
+  final Map<(AtlasDecorationKind, bool), Rect> _decorationRects;
+  late final AtlasQuadTable _quadTable;
+
+  /// Flat typed-array quad lookup table for scalar glyph codes and pre-baked
+  /// cell decoration sprites in this atlas.
+  AtlasQuadTable get quadTable => _quadTable;
 
   /// Blank padding added around each glyph to prevent texture bleed.
   static const double padding = 3.0;
@@ -1088,6 +1298,7 @@ final class GlyphAtlas {
     required this.charRects,
     Map<(String, bool, bool), Rect>? styleRects,
     Map<(String, GlyphStyleVariant), Rect>? styledCharRects,
+    Map<(AtlasDecorationKind, bool), Rect>? decorationRects,
     required this.cellWidth,
     required this.cellHeight,
     double? standardBaseline,
@@ -1101,10 +1312,54 @@ final class GlyphAtlas {
        styleRects = styleRects ?? const {},
        styledCharRects =
            styledCharRects ??
-           (styleRects != null
-               ? _deriveStyledCharRects(styleRects)
-               : const {}) {
+           (styleRects != null ? _deriveStyledCharRects(styleRects) : const {}),
+       _decorationRects = decorationRects == null
+           ? const {}
+           : Map<(AtlasDecorationKind, bool), Rect>.unmodifiable(
+               decorationRects,
+             ) {
     _populateVariantMaps();
+    _quadTable = _buildQuadTable();
+  }
+
+  AtlasQuadTable _buildQuadTable() {
+    final builder = AtlasQuadTableBuilder(
+      initialQuadCapacity:
+          _regularRects.length +
+          _boldRects.length +
+          _italicRects.length +
+          _boldItalicRects.length +
+          _decorationRects.length,
+    );
+    _addVariantRectsToQuadTable(builder, _regularRects, 0);
+    _addVariantRectsToQuadTable(builder, _boldRects, 1);
+    _addVariantRectsToQuadTable(builder, _italicRects, 2);
+    _addVariantRectsToQuadTable(builder, _boldItalicRects, 3);
+    for (final entry in _decorationRects.entries) {
+      builder.putDecoration(
+        entry.key.$1,
+        isWide: entry.key.$2,
+        rect: entry.value,
+      );
+    }
+    return builder.build();
+  }
+
+  static void _addVariantRectsToQuadTable(
+    AtlasQuadTableBuilder builder,
+    Map<String, Rect> rects,
+    int variantBits,
+  ) {
+    for (final entry in rects.entries) {
+      final codePoint = _tryScalarCodePoint(entry.key);
+      if (codePoint >= 1) {
+        builder.putCodePoint(
+          codePoint,
+          variantBits: variantBits,
+          rect: entry.value,
+        );
+      }
+    }
   }
 
   void _populateVariantMaps() {
@@ -1245,6 +1500,7 @@ final class GlyphAtlas {
       charRects: updatedRects,
       styleRects: updatedStyleRects,
       styledCharRects: updatedStyledRects,
+      decorationRects: _decorationRects,
       cellWidth: cellWidth,
       cellHeight: cellHeight,
       standardBaseline: standardBaseline,
@@ -1671,7 +1927,10 @@ abstract final class GlyphAtlasGenerator {
 
     final whiteX = (whiteIdx % numCols) * m.colWidth;
     final whiteY = (whiteIdx ~/ numCols) * m.rowHeight;
-    final totalGlyphs = whiteIdx + 1;
+    final (placedDecorations, totalGlyphs) = _placeDecorationSprites(
+      startIndex: whiteIdx + 1,
+      numCols: numCols,
+    );
     final numRows = (totalGlyphs / numCols).ceil();
     final atlasWidth = (numCols * m.colWidth).ceil().toDouble();
     final atlasHeight = (numRows * m.rowHeight).ceil().toDouble();
@@ -1719,6 +1978,17 @@ abstract final class GlyphAtlasGenerator {
       styledCharRects[('\uFFFF', v)] = whiteRect;
     }
 
+    final decorationRects = _rasterizeDecorationSprites(
+      canvas: canvas,
+      placedDecorations: placedDecorations,
+      colWidth: m.colWidth,
+      rowHeight: m.rowHeight,
+      cellWidth: m.cellWidth,
+      cellHeight: m.cellHeight,
+      actualPadding: m.actualPadding,
+      devicePixelRatio: devicePixelRatio,
+    );
+
     final picture = recorder.endRecording();
     final newImage = await picture.toImage(
       (atlasWidth * devicePixelRatio).ceil(),
@@ -1731,6 +2001,7 @@ abstract final class GlyphAtlasGenerator {
       charRects: charRects,
       styleRects: styleRects,
       styledCharRects: styledCharRects,
+      decorationRects: decorationRects,
       cellWidth: m.cellWidth,
       cellHeight: m.cellHeight,
       standardBaseline: m.standardBaseline,

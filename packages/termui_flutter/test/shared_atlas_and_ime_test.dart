@@ -173,6 +173,10 @@ void main() {
       'grapheme-cluster prefix diffing preserves multi-code-unit emoji and combining marks',
       _testGraphemeClusterImeDiffing,
     );
+    testWidgets(
+      'keeps idle editing selection at offset 0 on attach and post-commit resets for Flutter Web',
+      _testIdleEditingStateNonNegativeSelection,
+    );
   });
 }
 
@@ -1680,4 +1684,88 @@ Future<void> _testAltArrowsWithAltModifiers(WidgetTester tester) async {
       ]),
     );
   }
+}
+
+List<Map<Object?, Object?>> _setEditingStatePayloads(WidgetTester tester) => [
+  for (final call in tester.testTextInput.log)
+    if (call.method == 'TextInput.setEditingState' &&
+        call.arguments is Map<Object?, Object?>)
+      call.arguments as Map<Object?, Object?>,
+];
+
+Future<void> _testIdleEditingStateNonNegativeSelection(
+  WidgetTester tester,
+) async {
+  final committed = <String>[];
+  final imeClient = TerminalImeClient(onTextInput: committed.add);
+  addTearDown(imeClient.dispose);
+
+  tester.testTextInput.log.clear();
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 320,
+          height: 200,
+          child: TerminalSurface(imeClient: imeClient, buffer: Buffer(20, 8)),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  expect(imeClient.isAttached, isTrue);
+  expect(
+    imeClient.currentTextEditingValue,
+    equals(
+      const TextEditingValue(selection: TextSelection.collapsed(offset: 0)),
+    ),
+  );
+  final attachStates = _setEditingStatePayloads(tester);
+  expect(attachStates, isNotEmpty);
+  for (final state in attachStates) {
+    expect(state['text'], equals(''));
+    expect(state['selectionBase'], equals(0));
+    expect(state['selectionExtent'], equals(0));
+  }
+
+  // Consecutive single-character commits each emit immediately and reset the
+  // platform editing state to (0, 0) so Flutter Web clears the backing input.
+  for (final ch in const ['t', 'h', 'i', 's']) {
+    tester.testTextInput.log.clear();
+    await _sendDeltas(tester, [
+      _deltaPayload(
+        oldText: '',
+        start: 0,
+        end: 0,
+        deltaText: ch,
+        selectionBase: 1,
+        selectionExtent: 1,
+      ),
+    ]);
+    expect(committed.last, equals(ch));
+    final resetStates = _setEditingStatePayloads(tester);
+    expect(resetStates, hasLength(1));
+    expect(resetStates.single['text'], equals(''));
+    expect(resetStates.single['selectionBase'], equals(0));
+    expect(resetStates.single['selectionExtent'], equals(0));
+  }
+  expect(committed, equals(const ['t', 'h', 'i', 's']));
+
+  // Non-delta updateEditingValue fallback also resets with offset 0.
+  tester.testTextInput.log.clear();
+  imeClient.updateEditingValue(
+    const TextEditingValue(
+      text: 'x',
+      selection: TextSelection.collapsed(offset: 1),
+    ),
+  );
+  expect(committed.last, equals('x'));
+  final fallbackStates = _setEditingStatePayloads(tester);
+  expect(fallbackStates, hasLength(1));
+  expect(fallbackStates.single['text'], equals(''));
+  expect(fallbackStates.single['selectionBase'], equals(0));
+  expect(fallbackStates.single['selectionExtent'], equals(0));
 }

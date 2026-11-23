@@ -425,107 +425,101 @@ void main() {
   });
 
   group('[M7] & Phase 4: GlyphStyleVariant, pre-baked ligatures, lazy variants', () {
-    test(
-      'GlyphAtlas pre-bakes 19 ligatures across 4 GlyphStyleVariants and addStyledGlyphs allocates lazily',
-      () async {
-        expect(
-          GlyphStyleVariant.fromFlags(isBold: false, isItalic: false),
-          equals(GlyphStyleVariant.regular),
-        );
-        expect(
-          GlyphStyleVariant.fromFlags(isBold: true, isItalic: false),
-          equals(GlyphStyleVariant.bold),
-        );
-        expect(
-          GlyphStyleVariant.fromFlags(isBold: false, isItalic: true),
-          equals(GlyphStyleVariant.italic),
-        );
-        expect(
-          GlyphStyleVariant.fromFlags(isBold: true, isItalic: true),
-          equals(GlyphStyleVariant.boldItalic),
-        );
+    test('GlyphAtlas pre-bakes 19 ligatures across 4 GlyphStyleVariants and addStyledGlyphs allocates lazily', () async {
+      expect(
+        GlyphStyleVariant.fromFlags(isBold: false, isItalic: false),
+        equals(GlyphStyleVariant.regular),
+      );
+      expect(
+        GlyphStyleVariant.fromFlags(isBold: true, isItalic: false),
+        equals(GlyphStyleVariant.bold),
+      );
+      expect(
+        GlyphStyleVariant.fromFlags(isBold: false, isItalic: true),
+        equals(GlyphStyleVariant.italic),
+      );
+      expect(
+        GlyphStyleVariant.fromFlags(isBold: true, isItalic: true),
+        equals(GlyphStyleVariant.boldItalic),
+      );
 
-        final atlas = await GlyphAtlasGenerator.generate(
-          fontSize: 14.0,
-          fontFamily: 'Roboto Mono',
-        );
-        addTearDown(atlas.image.dispose);
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 14.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(atlas.image.dispose);
 
-        const expectedLigatures = [
-          '->',
-          '=>',
-          '!=',
-          '==',
-          '<=',
-          '>=',
-          '===',
-          '!==',
-          '::',
-          '|>',
-          '&&',
-          '||',
-          '++',
-          '--',
-          '//',
-          '??',
-          '?.',
-          '..',
-          '...',
-        ];
-        for (final lig in expectedLigatures) {
-          for (final variant in GlyphStyleVariant.values) {
-            final rect = atlas.styledCharRects[(lig, variant)];
-            expect(
-              rect,
-              isNotNull,
-              reason: 'Missing pre-baked ligature $lig ($variant)',
-            );
-            expect(
-              rect!.width,
-              closeTo(
-                lig.length * atlas.cellWidth * atlas.devicePixelRatio,
-                0.01,
-              ),
-            );
-            expect(
-              atlas.rectFor(
-                lig,
-                isBold: variant.isBold,
-                isItalic: variant.isItalic,
-              ),
-              equals(rect),
-            );
-          }
+      const expectedLigatures = [
+        '->',
+        '=>',
+        '!=',
+        '==',
+        '<=',
+        '>=',
+        '===',
+        '!==',
+        '::',
+        '|>',
+        '&&',
+        '||',
+        '++',
+        '--',
+        '//',
+        '??',
+        '?.',
+        '..',
+        '...',
+      ];
+      for (final lig in expectedLigatures) {
+        for (final variant in GlyphStyleVariant.values) {
+          final rect = atlas.styledCharRects[(lig, variant)];
+          expect(
+            rect,
+            isNotNull,
+            reason: 'Missing pre-baked ligature $lig ($variant)',
+          );
+          expect(
+            rect!.width,
+            closeTo(
+              lig.length * atlas.cellWidth * atlas.devicePixelRatio,
+              0.01,
+            ),
+          );
+          expect(
+            atlas.rectFor(
+              lig,
+              isBold: variant.isBold,
+              isItalic: variant.isItalic,
+            ),
+            equals(rect),
+          );
         }
+      }
 
-        // Lazy dynamic CJK variant allocation: adding regular '漢' (wide = 2 cols)
-        // advances nextGridIndex by at most 3 (2 + at most 1 wrap alignment), NOT 8!
-        final beforeIdx = atlas.nextGridIndex;
-        final cjkAtlas = await atlas.addStyledGlyphs(const [
-          ('漢', GlyphStyleVariant.regular),
-        ]);
-        addTearDown(cjkAtlas.image.dispose);
+      // Lazy dynamic CJK variant allocation: adding regular '漢' (wide = 2 cols)
+      // advances nextGridIndex by at most 3 (2 + at most 1 wrap alignment), NOT 8!
+      final beforeIdx = atlas.nextGridIndex;
+      final cjkAtlas = await atlas.addStyledGlyphs(const [
+        ('漢', GlyphStyleVariant.regular),
+      ]);
+      addTearDown(cjkAtlas.image.dispose);
 
-        expect(cjkAtlas.nextGridIndex - beforeIdx, lessThanOrEqualTo(3));
-        expect(
-          cjkAtlas.styledCharRects.containsKey((
-            '漢',
-            GlyphStyleVariant.regular,
-          )),
-          isTrue,
-        );
-        expect(
-          cjkAtlas.styledCharRects.containsKey(('漢', GlyphStyleVariant.bold)),
-          isFalse,
-        );
-      },
-    );
+      expect(cjkAtlas.nextGridIndex - beforeIdx, lessThanOrEqualTo(3));
+      expect(
+        cjkAtlas.styledCharRects.containsKey(('漢', GlyphStyleVariant.regular)),
+        isTrue,
+      );
+      expect(
+        cjkAtlas.styledCharRects.containsKey(('漢', GlyphStyleVariant.bold)),
+        isFalse,
+      );
+    });
   });
 
-  group('[H7] & [MEDIUM-4]: Hidden ligatures, LRU cap, and font resize disposal', () {
-    test(
-      'Modifier.hidden ligatures draw zero fg pixels when unselected and reveal when selected',
-      () async {
+  group(
+    '[H7] & [MEDIUM-4]: Hidden ligatures, LRU cap, and font resize disposal',
+    () {
+      test('Modifier.hidden ligatures draw zero fg pixels when unselected and reveal when selected', () async {
         final atlas = await GlyphAtlasGenerator.generate(
           fontSize: 16.0,
           fontFamily: 'Roboto Mono',
@@ -646,12 +640,9 @@ void main() {
               255,
             );
         expect(revealed, isTrue);
-      },
-    );
+      });
 
-    test(
-      'fallback ligaturePainters caps at 128 entries and disposes on font-size change',
-      () async {
+      test('fallback ligaturePainters caps at 128 entries and disposes on font-size change', () async {
         final emptyAtlas = await GlyphAtlasGenerator.generateEmpty(
           fontSize: 14.0,
           fontFamily: 'Roboto Mono',
@@ -689,307 +680,26 @@ void main() {
         for (final p in ligaturePainters.values) {
           p.dispose();
         }
-      },
-    );
-
-    testWidgets(
-      'PrivateTuiViewState disposes and clears fallback ligaturePainters on font resize',
-      (tester) async {
-        final terminal = FlutterTerminal(
-          initialFontSize: 14.0,
-          enableLigatures: true,
-        );
-        addTearDown(terminal.dispose);
-        late void Function(Buffer) drawFrame;
-
-        await tester.pumpWidget(
-          _testApp(
-            home: SizedBox(
-              width: 400,
-              height: 300,
-              child: Terminal(
-                terminal: terminal,
-                enableLigatures: true,
-                onRun: (_, onDraw) async {
-                  drawFrame = onDraw;
-                },
-              ),
-            ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        // '<!--' is a 4-char ligature not in the 19 pre-baked ligatures -> uses _ligaturePainters
-        final buf = Buffer(10, 2)
-          ..writeString(
-            0,
-            0,
-            '<!--',
-            const Style(foreground: tui_color.Color(10, 200, 100)),
-          );
-        drawFrame(buf);
-        await tester.pumpAndSettle();
-
-        CustomPaint paintWidget() => tester.widget<CustomPaint>(
-          find.descendant(
-            of: find.byType(PrivateTuiView),
-            matching: find.byType(CustomPaint),
-          ),
-        );
-
-        final paintersBefore =
-            (paintWidget().painter! as TuiAtlasPainter).ligaturePainters;
-        expect(paintersBefore, isNotEmpty);
-        final oldPainterRef = paintersBefore.values.first;
-
-        // Change font size -> _recreateAtlas() must dispose & clear _ligaturePainters
-        terminal.setFontSize(18.0);
-        await tester.pumpAndSettle();
-
-        // After font size change, oldPainterRef was disposed (debugAssertNotDisposed or replaced)
-        final paintersAfter =
-            (paintWidget().painter! as TuiAtlasPainter).ligaturePainters;
-        expect(
-          paintersAfter.values.any((p) => identical(p, oldPainterRef)),
-          isFalse,
-        );
-      },
-    );
-  });
-
-  group(
-    '[HIGH-2 / L5], [MEDIUM-1], [H6]: Kitty PNG f=100, 32-bit IDs, scoped registries',
-    () {
-      test(
-        'TuiAtlasPainter resolves 32-bit imageIds and scoped Buffer.registerKittyRegistry without collision',
-        () async {
-          final atlas = await GlyphAtlasGenerator.generate(
-            fontSize: 16.0,
-            fontFamily: 'Roboto Mono',
-          );
-          addTearDown(atlas.image.dispose);
-
-          // Test 1: 32-bit imageIds sharing low 24 bits (0x01000005 vs 0x02000005)
-          final registry32 = KittyImageRegistry();
-          final redData = KittyImageData(
-            imageId: 0x01000005,
-            pixelWidth: 1,
-            pixelHeight: 1,
-            rgbaPixels: Uint8List.fromList([255, 0, 0, 255]),
-            gridCols: 1,
-            gridRows: 1,
-          );
-          final greenData = KittyImageData(
-            imageId: 0x02000005,
-            pixelWidth: 1,
-            pixelHeight: 1,
-            rgbaPixels: Uint8List.fromList([0, 255, 0, 255]),
-            gridCols: 1,
-            gridRows: 1,
-          );
-          registry32.registerImage(redData);
-          registry32.registerImage(greenData);
-
-          // Test 2: Two scoped panes BOTH using imageId = 1 with distinct colors (blue vs yellow)
-          final leftRegistry = KittyImageRegistry()
-            ..registerImage(
-              KittyImageData(
-                imageId: 1,
-                pixelWidth: 1,
-                pixelHeight: 1,
-                rgbaPixels: Uint8List.fromList([0, 0, 255, 255]),
-                gridCols: 1,
-                gridRows: 1,
-              ),
-            );
-          final rightRegistry = KittyImageRegistry()
-            ..registerImage(
-              KittyImageData(
-                imageId: 1,
-                pixelWidth: 1,
-                pixelHeight: 1,
-                rgbaPixels: Uint8List.fromList([255, 255, 0, 255]),
-                gridCols: 1,
-                gridRows: 1,
-              ),
-            );
-
-          final buffer = Buffer(4, 1)
-            ..registerKittyRegistry(const tui_geom.Rect(0, 0, 2, 1), registry32)
-            ..registerKittyRegistry(
-              const tui_geom.Rect(2, 0, 1, 1),
-              leftRegistry,
-            )
-            ..registerKittyRegistry(
-              const tui_geom.Rect(3, 0, 1, 1),
-              rightRegistry,
-            );
-
-          // Col 0: 0x01000005 (msb=1, low24=5 -> red)
-          buffer.setAttributes(
-            0,
-            0,
-            char: kittyPlaceholderCell(0, 0, imageIdMsb: 1),
-            fg: 0xFF000005,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-          // Col 1: 0x02000005 (msb=2, low24=5 -> green)
-          buffer.setAttributes(
-            1,
-            0,
-            char: kittyPlaceholderCell(0, 0, imageIdMsb: 2),
-            fg: 0xFF000005,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-          // Col 2: left pane imageId = 1 -> blue
-          buffer.setAttributes(
-            2,
-            0,
-            char: kittyPlaceholderCell(0, 0),
-            fg: 0xFF000001,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-          // Col 3: right pane imageId = 1 -> yellow
-          buffer.setAttributes(
-            3,
-            0,
-            char: kittyPlaceholderCell(0, 0),
-            fg: 0xFF000001,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-
-          final w = (4 * atlas.cellWidth).ceil();
-          final h = atlas.cellHeight.ceil();
-          final recorder = ui.PictureRecorder();
-          final canvas = Canvas(recorder);
-          TuiAtlasPainter(
-            buffer: buffer,
-            atlas: atlas,
-            fontFamily: 'Roboto Mono',
-            fallbackPainters: const {},
-            onMissingGlyphs: null,
-          ).paint(canvas, Size(w.toDouble(), h.toDouble()));
-          final pic = recorder.endRecording();
-          final img = await pic.toImage(w, h);
-          pic.dispose();
-          addTearDown(img.dispose);
-          final rgba = (await img.toByteData())!.buffer.asUint8List();
-
-          expect(
-            _hasCellColor(
-              rgba,
-              w,
-              h,
-              atlas.cellWidth,
-              atlas.cellHeight,
-              0,
-              255,
-              0,
-              0,
-            ),
-            isTrue,
-          );
-          expect(
-            _hasCellColor(
-              rgba,
-              w,
-              h,
-              atlas.cellWidth,
-              atlas.cellHeight,
-              1,
-              0,
-              255,
-              0,
-            ),
-            isTrue,
-          );
-          expect(
-            _hasCellColor(
-              rgba,
-              w,
-              h,
-              atlas.cellWidth,
-              atlas.cellHeight,
-              2,
-              0,
-              0,
-              255,
-            ),
-            isTrue,
-          );
-          expect(
-            _hasCellColor(
-              rgba,
-              w,
-              h,
-              atlas.cellWidth,
-              atlas.cellHeight,
-              3,
-              255,
-              255,
-              0,
-            ),
-            isTrue,
-          );
-        },
-      );
+      });
 
       testWidgets(
-        'decodes f=100 PNG KittyImageData via instantiateImageCodec and isolates scoped GPU images',
+        'PrivateTuiViewState disposes and clears fallback ligaturePainters on font resize',
         (tester) async {
-          late Uint8List pngCyan;
-          late Uint8List pngMagenta;
-          await tester.runAsync(() async {
-            pngCyan = await _createSolidPngBytes(
-              4,
-              4,
-              const ui.Color(0xFF00FFFF),
-            );
-            pngMagenta = await _createSolidPngBytes(
-              4,
-              4,
-              const ui.Color(0xFFFF00FF),
-            );
-          });
-
-          final paneA = KittyImageRegistry()
-            ..registerImage(
-              KittyImageData.fromPng(
-                imageId: 1,
-                pixelWidth: 4,
-                pixelHeight: 4,
-                pngBytes: pngCyan,
-                gridCols: 1,
-                gridRows: 1,
-              ),
-            );
-          final paneB = KittyImageRegistry()
-            ..registerImage(
-              KittyImageData.fromPng(
-                imageId: 1,
-                pixelWidth: 4,
-                pixelHeight: 4,
-                pngBytes: pngMagenta,
-                gridCols: 1,
-                gridRows: 1,
-              ),
-            );
-
-          final terminal = FlutterTerminal();
+          final terminal = FlutterTerminal(
+            initialFontSize: 14.0,
+            enableLigatures: true,
+          );
           addTearDown(terminal.dispose);
           late void Function(Buffer) drawFrame;
 
           await tester.pumpWidget(
             _testApp(
               home: SizedBox(
-                width: 300,
-                height: 200,
+                width: 400,
+                height: 300,
                 child: Terminal(
                   terminal: terminal,
+                  enableLigatures: true,
                   onRun: (_, onDraw) async {
                     drawFrame = onDraw;
                   },
@@ -999,335 +709,601 @@ void main() {
           );
           await tester.pumpAndSettle();
 
-          final buf = Buffer(4, 2)
-            ..registerKittyRegistry(const tui_geom.Rect(0, 0, 2, 2), paneA)
-            ..registerKittyRegistry(const tui_geom.Rect(2, 0, 2, 2), paneB);
-          buf.setAttributes(
-            0,
-            0,
-            char: kittyPlaceholderCell(0, 0),
-            fg: 0xFF000001,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-          buf.setAttributes(
-            2,
-            0,
-            char: kittyPlaceholderCell(0, 0),
-            fg: 0xFF000001,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-
+          // '<!--' is a 4-char ligature not in the 19 pre-baked ligatures -> uses _ligaturePainters
+          final buf = Buffer(10, 2)
+            ..writeString(
+              0,
+              0,
+              '<!--',
+              const Style(foreground: tui_color.Color(10, 200, 100)),
+            );
           drawFrame(buf);
-          await tester.runAsync(() async {
-            for (var i = 0; i < 30; i++) {
-              await Future<void>.delayed(const Duration(milliseconds: 10));
-            }
-          });
           await tester.pumpAndSettle();
 
-          final paintWidget = tester.widget<CustomPaint>(
+          CustomPaint paintWidget() => tester.widget<CustomPaint>(
             find.descendant(
               of: find.byType(PrivateTuiView),
               matching: find.byType(CustomPaint),
             ),
           );
-          final activePainter = paintWidget.painter! as TuiAtlasPainter;
-          final dataA = paneA.lookupImage(1)!;
-          final dataB = paneB.lookupImage(1)!;
 
-          // Both distinct PNG KittyImageData instances with imageId == 1 must be decoded and cached!
-          expect(activePainter.kittyImages[dataA], isNotNull);
-          expect(activePainter.kittyImages[dataB], isNotNull);
-          expect(
-            identical(
-              activePainter.kittyImages[dataA],
-              activePainter.kittyImages[dataB],
-            ),
-            isFalse,
-          );
+          final paintersBefore =
+              (paintWidget().painter! as TuiAtlasPainter).ligaturePainters;
+          expect(paintersBefore, isNotEmpty);
+          final oldPainterRef = paintersBefore.values.first;
 
-          // Verify painting with those decoded GPU PNG textures renders both cyan and magenta!
-          final w = (4 * activePainter.atlas.cellWidth).ceil();
-          final h = (2 * activePainter.atlas.cellHeight).ceil();
-          final recorder = ui.PictureRecorder();
-          final canvas = Canvas(recorder);
-          activePainter.paint(canvas, Size(w.toDouble(), h.toDouble()));
-          final pic = recorder.endRecording();
-          late Uint8List rgba;
-          await tester.runAsync(() async {
-            final img = await pic.toImage(w, h);
-            pic.dispose();
-            rgba = (await img.toByteData())!.buffer.asUint8List();
-            img.dispose();
-          });
-
-          expect(
-            _hasCellColor(
-              rgba,
-              w,
-              h,
-              activePainter.atlas.cellWidth,
-              activePainter.atlas.cellHeight,
-              0,
-              0,
-              255,
-              255,
-            ),
-            isTrue,
-          );
-          expect(
-            _hasCellColor(
-              rgba,
-              w,
-              h,
-              activePainter.atlas.cellWidth,
-              activePainter.atlas.cellHeight,
-              2,
-              255,
-              0,
-              255,
-            ),
-            isTrue,
-          );
-        },
-      );
-
-      testWidgets(
-        'deduplicates intra-cell pointer motion unless ?1016 SGR-Pixels is active',
-        (tester) async {
-          final terminal = FlutterTerminal();
-          addTearDown(terminal.dispose);
-          final mouseEvents = <term.MouseEvent>[];
-          final sub = terminal.events.listen((e) {
-            if (e is term.MouseEvent) mouseEvents.add(e);
-          });
-          addTearDown(sub.cancel);
-
-          await tester.pumpWidget(
-            _testApp(
-              home: Align(
-                alignment: Alignment.topLeft,
-                child: SizedBox(
-                  width: 400,
-                  height: 300,
-                  child: Terminal(
-                    terminal: terminal,
-                    onRun: (_, drawFrame) async {
-                      drawFrame(Buffer(20, 10));
-                    },
-                  ),
-                ),
-              ),
-            ),
-          );
+          // Change font size -> _recreateAtlas() must dispose & clear _ligaturePainters
+          terminal.setFontSize(18.0);
           await tester.pumpAndSettle();
 
-          final customPaintFinder = find.descendant(
-            of: find.byType(PrivateTuiView),
-            matching: find.byType(CustomPaint),
-          );
-          final topLeft = tester.getTopLeft(customPaintFinder);
-
-          // Default (?1016 off): intra-cell sub-pixel drags within cell (0,0) emit once on press + first drag, not per pixel!
-          expect(terminal.reportPixelMouseEvents, isFalse);
-          final gesture = await tester.startGesture(
-            topLeft + const Offset(1.0, 2.0),
-            kind: PointerDeviceKind.mouse,
-          );
-          await tester.pump();
-          await gesture.moveTo(topLeft + const Offset(2.0, 2.0));
-          await tester.pump();
-          await gesture.moveTo(topLeft + const Offset(3.0, 2.0));
-          await tester.pump();
-          await gesture.up();
-          await tester.pump();
-
-          final dragCountDefault = mouseEvents
-              .where((e) => e.type == term.MouseEventType.drag)
-              .length;
-          expect(dragCountDefault, lessThanOrEqualTo(1));
-
-          // Enable ?1016 via DECSET sequence: every 1px drag emits a distinct MouseEvent.
-          mouseEvents.clear();
-          terminal.backend.write('\x1b[?1002;1016h');
-          expect(terminal.reportPixelMouseEvents, isTrue);
-
-          final gesturePx = await tester.startGesture(
-            topLeft + const Offset(1.0, 2.0),
-            kind: PointerDeviceKind.mouse,
-          );
-          await tester.pump();
-          await gesturePx.moveTo(topLeft + const Offset(2.0, 2.0));
-          await tester.pump();
-          await gesturePx.moveTo(topLeft + const Offset(3.0, 2.0));
-          await tester.pump();
-          await gesturePx.up();
-          await tester.pump();
-
-          final dragEventsPx = mouseEvents
-              .where((e) => e.type == term.MouseEventType.drag)
-              .toList();
-          expect(dragEventsPx.length, equals(2));
-          expect(dragEventsPx[0].pixelX, equals(3));
-          expect(dragEventsPx[1].pixelX, equals(4));
-
-          terminal.backend.write('\x1b[?1016l');
-          expect(terminal.reportPixelMouseEvents, isFalse);
-        },
-      );
-
-      testWidgets(
-        'kittyImagesById retains previous GPU texture when KittyImageData version updates',
-        (tester) async {
-          late Uint8List pngCyan;
-          late ui.Image gpuTex;
-          late GlyphAtlas atlas;
-          await tester.runAsync(() async {
-            pngCyan = await _createSolidPngBytes(
-              4,
-              4,
-              const ui.Color(0xFF00FFFF),
-            );
-            final codec = await ui.instantiateImageCodec(pngCyan);
-            final frame = await codec.getNextFrame();
-            gpuTex = frame.image;
-            codec.dispose();
-            atlas = await GlyphAtlasGenerator.generate(
-              fontSize: 14.0,
-              fontFamily: 'Roboto Mono',
-            );
-          });
-          addTearDown(gpuTex.dispose);
-          addTearDown(atlas.image.dispose);
-
-          final registry = KittyImageRegistry()
-            ..registerImage(
-              KittyImageData.fromPng(
-                imageId: 42,
-                pixelWidth: 4,
-                pixelHeight: 4,
-                pngBytes: pngCyan,
-                gridCols: 1,
-                gridRows: 1,
-              ),
-            );
-          final dataV1 = registry.lookupImage(42)!;
-          final dataV2 = dataV1.copyWith(gridCols: 2, version: 2);
-          registry.registerImage(dataV2);
-
-          final buf = Buffer(4, 2)
-            ..registerKittyRegistry(const tui_geom.Rect(0, 0, 4, 2), registry);
-          buf.setAttributes(
-            0,
-            0,
-            char: kittyPlaceholderCell(0, 0),
-            fg: 0xFF00002A,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-          buf.setAttributes(
-            1,
-            0,
-            char: kittyPlaceholderCell(0, 1),
-            fg: 0xFF00002A,
-            bg: 0xFF000000,
-            modifiers: Modifier.kittyPlaceholder,
-          );
-
-          // Simulate frame right after dataV2 was registered (before dataV2 is in kittyImages,
-          // while kittyImagesById[(registry, 42)] still holds gpuTex).
-          final painter = TuiAtlasPainter(
-            buffer: buf,
-            atlas: atlas,
-            fontFamily: 'Roboto Mono',
-            fallbackPainters: {},
-            onMissingGlyphs: null,
-            kittyImages: {dataV1: gpuTex},
-            kittyImagesById: {(registry, 42): gpuTex},
-          );
-          final w = (4 * atlas.cellWidth).ceil();
-          final h = (2 * atlas.cellHeight).ceil();
-          final recorder = ui.PictureRecorder();
-          painter.paint(Canvas(recorder), Size(w.toDouble(), h.toDouble()));
-          final pic = recorder.endRecording();
-          late Uint8List rgba;
-          await tester.runAsync(() async {
-            final img = await pic.toImage(w, h);
-            pic.dispose();
-            rgba = (await img.toByteData())!.buffer.asUint8List();
-            img.dispose();
-          });
-
-          // PNG tile must render cyan from kittyImagesById[(global, 42)] instead of blanking!
+          // After font size change, oldPainterRef was disposed (debugAssertNotDisposed or replaced)
+          final paintersAfter =
+              (paintWidget().painter! as TuiAtlasPainter).ligaturePainters;
           expect(
-            _hasCellColor(
-              rgba,
-              w,
-              h,
-              atlas.cellWidth,
-              atlas.cellHeight,
-              0,
-              0,
-              255,
-              255,
-            ),
-            isTrue,
-          );
-
-          // A separate pane registry with imageId 42 must NOT inherit global's texture!
-          final otherPaneRegistry = KittyImageRegistry()..registerImage(dataV2);
-          buf.registerKittyRegistry(
-            const tui_geom.Rect(0, 0, 4, 2),
-            otherPaneRegistry,
-          );
-          final isolatedRecorder = ui.PictureRecorder();
-          painter.paint(
-            Canvas(isolatedRecorder),
-            Size(w.toDouble(), h.toDouble()),
-          );
-          final isolatedPic = isolatedRecorder.endRecording();
-          late Uint8List isolatedRgba;
-          await tester.runAsync(() async {
-            final img = await isolatedPic.toImage(w, h);
-            isolatedPic.dispose();
-            isolatedRgba = (await img.toByteData())!.buffer.asUint8List();
-            img.dispose();
-          });
-          expect(
-            _hasCellColor(
-              isolatedRgba,
-              w,
-              h,
-              atlas.cellWidth,
-              atlas.cellHeight,
-              0,
-              0,
-              255,
-              255,
-            ),
+            paintersAfter.values.any((p) => identical(p, oldPainterRef)),
             isFalse,
           );
-        },
-      );
-
-      test(
-        'GlyphAtlas.addStyledGlyphs safely aborts without drawImage assertion if disposed mid-flight',
-        () async {
-          final atlas = await GlyphAtlasGenerator.generate(
-            fontSize: 14.0,
-            fontFamily: 'Roboto Mono',
-          );
-          final inFlight = atlas.addStyledGlyphs([
-            ('A', GlyphStyleVariant.boldItalic),
-          ]);
-          atlas.dispose();
-          final returned = await inFlight;
-          expect(identical(returned, atlas), isTrue);
-          expect(atlas.isDisposed, isTrue);
         },
       );
     },
   );
+
+  group('[HIGH-2 / L5], [MEDIUM-1], [H6]: Kitty PNG f=100, 32-bit IDs, scoped registries', () {
+    test('TuiAtlasPainter resolves 32-bit imageIds and scoped Buffer.registerKittyRegistry without collision', () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 16.0,
+        fontFamily: 'Roboto Mono',
+      );
+      addTearDown(atlas.image.dispose);
+
+      // Test 1: 32-bit imageIds sharing low 24 bits (0x01000005 vs 0x02000005)
+      final registry32 = KittyImageRegistry();
+      final redData = KittyImageData(
+        imageId: 0x01000005,
+        pixelWidth: 1,
+        pixelHeight: 1,
+        rgbaPixels: Uint8List.fromList([255, 0, 0, 255]),
+        gridCols: 1,
+        gridRows: 1,
+      );
+      final greenData = KittyImageData(
+        imageId: 0x02000005,
+        pixelWidth: 1,
+        pixelHeight: 1,
+        rgbaPixels: Uint8List.fromList([0, 255, 0, 255]),
+        gridCols: 1,
+        gridRows: 1,
+      );
+      registry32.registerImage(redData);
+      registry32.registerImage(greenData);
+
+      // Test 2: Two scoped panes BOTH using imageId = 1 with distinct colors (blue vs yellow)
+      final leftRegistry = KittyImageRegistry()
+        ..registerImage(
+          KittyImageData(
+            imageId: 1,
+            pixelWidth: 1,
+            pixelHeight: 1,
+            rgbaPixels: Uint8List.fromList([0, 0, 255, 255]),
+            gridCols: 1,
+            gridRows: 1,
+          ),
+        );
+      final rightRegistry = KittyImageRegistry()
+        ..registerImage(
+          KittyImageData(
+            imageId: 1,
+            pixelWidth: 1,
+            pixelHeight: 1,
+            rgbaPixels: Uint8List.fromList([255, 255, 0, 255]),
+            gridCols: 1,
+            gridRows: 1,
+          ),
+        );
+
+      final buffer = Buffer(4, 1)
+        ..registerKittyRegistry(const tui_geom.Rect(0, 0, 2, 1), registry32)
+        ..registerKittyRegistry(const tui_geom.Rect(2, 0, 1, 1), leftRegistry)
+        ..registerKittyRegistry(const tui_geom.Rect(3, 0, 1, 1), rightRegistry);
+
+      // Col 0: 0x01000005 (msb=1, low24=5 -> red)
+      buffer.setAttributes(
+        0,
+        0,
+        char: kittyPlaceholderCell(0, 0, imageIdMsb: 1),
+        fg: 0xFF000005,
+        bg: 0xFF000000,
+        modifiers: Modifier.kittyPlaceholder,
+      );
+      // Col 1: 0x02000005 (msb=2, low24=5 -> green)
+      buffer.setAttributes(
+        1,
+        0,
+        char: kittyPlaceholderCell(0, 0, imageIdMsb: 2),
+        fg: 0xFF000005,
+        bg: 0xFF000000,
+        modifiers: Modifier.kittyPlaceholder,
+      );
+      // Col 2: left pane imageId = 1 -> blue
+      buffer.setAttributes(
+        2,
+        0,
+        char: kittyPlaceholderCell(0, 0),
+        fg: 0xFF000001,
+        bg: 0xFF000000,
+        modifiers: Modifier.kittyPlaceholder,
+      );
+      // Col 3: right pane imageId = 1 -> yellow
+      buffer.setAttributes(
+        3,
+        0,
+        char: kittyPlaceholderCell(0, 0),
+        fg: 0xFF000001,
+        bg: 0xFF000000,
+        modifiers: Modifier.kittyPlaceholder,
+      );
+
+      final w = (4 * atlas.cellWidth).ceil();
+      final h = atlas.cellHeight.ceil();
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      TuiAtlasPainter(
+        buffer: buffer,
+        atlas: atlas,
+        fontFamily: 'Roboto Mono',
+        fallbackPainters: const {},
+        onMissingGlyphs: null,
+      ).paint(canvas, Size(w.toDouble(), h.toDouble()));
+      final pic = recorder.endRecording();
+      final img = await pic.toImage(w, h);
+      pic.dispose();
+      addTearDown(img.dispose);
+      final rgba = (await img.toByteData())!.buffer.asUint8List();
+
+      expect(
+        _hasCellColor(
+          rgba,
+          w,
+          h,
+          atlas.cellWidth,
+          atlas.cellHeight,
+          0,
+          255,
+          0,
+          0,
+        ),
+        isTrue,
+      );
+      expect(
+        _hasCellColor(
+          rgba,
+          w,
+          h,
+          atlas.cellWidth,
+          atlas.cellHeight,
+          1,
+          0,
+          255,
+          0,
+        ),
+        isTrue,
+      );
+      expect(
+        _hasCellColor(
+          rgba,
+          w,
+          h,
+          atlas.cellWidth,
+          atlas.cellHeight,
+          2,
+          0,
+          0,
+          255,
+        ),
+        isTrue,
+      );
+      expect(
+        _hasCellColor(
+          rgba,
+          w,
+          h,
+          atlas.cellWidth,
+          atlas.cellHeight,
+          3,
+          255,
+          255,
+          0,
+        ),
+        isTrue,
+      );
+    });
+
+    testWidgets(
+      'decodes f=100 PNG KittyImageData via instantiateImageCodec and isolates scoped GPU images',
+      (tester) async {
+        late Uint8List pngCyan;
+        late Uint8List pngMagenta;
+        await tester.runAsync(() async {
+          pngCyan = await _createSolidPngBytes(
+            4,
+            4,
+            const ui.Color(0xFF00FFFF),
+          );
+          pngMagenta = await _createSolidPngBytes(
+            4,
+            4,
+            const ui.Color(0xFFFF00FF),
+          );
+        });
+
+        final paneA = KittyImageRegistry()
+          ..registerImage(
+            KittyImageData.fromPng(
+              imageId: 1,
+              pixelWidth: 4,
+              pixelHeight: 4,
+              pngBytes: pngCyan,
+              gridCols: 1,
+              gridRows: 1,
+            ),
+          );
+        final paneB = KittyImageRegistry()
+          ..registerImage(
+            KittyImageData.fromPng(
+              imageId: 1,
+              pixelWidth: 4,
+              pixelHeight: 4,
+              pngBytes: pngMagenta,
+              gridCols: 1,
+              gridRows: 1,
+            ),
+          );
+
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        late void Function(Buffer) drawFrame;
+
+        await tester.pumpWidget(
+          _testApp(
+            home: SizedBox(
+              width: 300,
+              height: 200,
+              child: Terminal(
+                terminal: terminal,
+                onRun: (_, onDraw) async {
+                  drawFrame = onDraw;
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final buf = Buffer(4, 2)
+          ..registerKittyRegistry(const tui_geom.Rect(0, 0, 2, 2), paneA)
+          ..registerKittyRegistry(const tui_geom.Rect(2, 0, 2, 2), paneB);
+        buf.setAttributes(
+          0,
+          0,
+          char: kittyPlaceholderCell(0, 0),
+          fg: 0xFF000001,
+          bg: 0xFF000000,
+          modifiers: Modifier.kittyPlaceholder,
+        );
+        buf.setAttributes(
+          2,
+          0,
+          char: kittyPlaceholderCell(0, 0),
+          fg: 0xFF000001,
+          bg: 0xFF000000,
+          modifiers: Modifier.kittyPlaceholder,
+        );
+
+        drawFrame(buf);
+        await tester.runAsync(() async {
+          for (var i = 0; i < 30; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+        });
+        await tester.pumpAndSettle();
+
+        final paintWidget = tester.widget<CustomPaint>(
+          find.descendant(
+            of: find.byType(PrivateTuiView),
+            matching: find.byType(CustomPaint),
+          ),
+        );
+        final activePainter = paintWidget.painter! as TuiAtlasPainter;
+        final dataA = paneA.lookupImage(1)!;
+        final dataB = paneB.lookupImage(1)!;
+
+        // Both distinct PNG KittyImageData instances with imageId == 1 must be decoded and cached!
+        expect(activePainter.kittyImages[dataA], isNotNull);
+        expect(activePainter.kittyImages[dataB], isNotNull);
+        expect(
+          identical(
+            activePainter.kittyImages[dataA],
+            activePainter.kittyImages[dataB],
+          ),
+          isFalse,
+        );
+
+        // Verify painting with those decoded GPU PNG textures renders both cyan and magenta!
+        final w = (4 * activePainter.atlas.cellWidth).ceil();
+        final h = (2 * activePainter.atlas.cellHeight).ceil();
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder);
+        activePainter.paint(canvas, Size(w.toDouble(), h.toDouble()));
+        final pic = recorder.endRecording();
+        late Uint8List rgba;
+        await tester.runAsync(() async {
+          final img = await pic.toImage(w, h);
+          pic.dispose();
+          rgba = (await img.toByteData())!.buffer.asUint8List();
+          img.dispose();
+        });
+
+        expect(
+          _hasCellColor(
+            rgba,
+            w,
+            h,
+            activePainter.atlas.cellWidth,
+            activePainter.atlas.cellHeight,
+            0,
+            0,
+            255,
+            255,
+          ),
+          isTrue,
+        );
+        expect(
+          _hasCellColor(
+            rgba,
+            w,
+            h,
+            activePainter.atlas.cellWidth,
+            activePainter.atlas.cellHeight,
+            2,
+            255,
+            0,
+            255,
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    testWidgets(
+      'deduplicates intra-cell pointer motion unless ?1016 SGR-Pixels is active',
+      (tester) async {
+        final terminal = FlutterTerminal();
+        addTearDown(terminal.dispose);
+        final mouseEvents = <term.MouseEvent>[];
+        final sub = terminal.events.listen((e) {
+          if (e is term.MouseEvent) mouseEvents.add(e);
+        });
+        addTearDown(sub.cancel);
+
+        await tester.pumpWidget(
+          _testApp(
+            home: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: 400,
+                height: 300,
+                child: Terminal(
+                  terminal: terminal,
+                  onRun: (_, drawFrame) async {
+                    drawFrame(Buffer(20, 10));
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final customPaintFinder = find.descendant(
+          of: find.byType(PrivateTuiView),
+          matching: find.byType(CustomPaint),
+        );
+        final topLeft = tester.getTopLeft(customPaintFinder);
+
+        // Default (?1016 off): intra-cell sub-pixel drags within cell (0,0) emit once on press + first drag, not per pixel!
+        expect(terminal.reportPixelMouseEvents, isFalse);
+        final gesture = await tester.startGesture(
+          topLeft + const Offset(1.0, 2.0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await gesture.moveTo(topLeft + const Offset(2.0, 2.0));
+        await tester.pump();
+        await gesture.moveTo(topLeft + const Offset(3.0, 2.0));
+        await tester.pump();
+        await gesture.up();
+        await tester.pump();
+
+        final dragCountDefault = mouseEvents
+            .where((e) => e.type == term.MouseEventType.drag)
+            .length;
+        expect(dragCountDefault, lessThanOrEqualTo(1));
+
+        // Enable ?1016 via DECSET sequence: every 1px drag emits a distinct MouseEvent.
+        mouseEvents.clear();
+        terminal.backend.write('\x1b[?1002;1016h');
+        expect(terminal.reportPixelMouseEvents, isTrue);
+
+        final gesturePx = await tester.startGesture(
+          topLeft + const Offset(1.0, 2.0),
+          kind: PointerDeviceKind.mouse,
+        );
+        await tester.pump();
+        await gesturePx.moveTo(topLeft + const Offset(2.0, 2.0));
+        await tester.pump();
+        await gesturePx.moveTo(topLeft + const Offset(3.0, 2.0));
+        await tester.pump();
+        await gesturePx.up();
+        await tester.pump();
+
+        final dragEventsPx = mouseEvents
+            .where((e) => e.type == term.MouseEventType.drag)
+            .toList();
+        expect(dragEventsPx.length, equals(2));
+        expect(dragEventsPx[0].pixelX, equals(3));
+        expect(dragEventsPx[1].pixelX, equals(4));
+
+        terminal.backend.write('\x1b[?1016l');
+        expect(terminal.reportPixelMouseEvents, isFalse);
+      },
+    );
+
+    testWidgets(
+      'kittyImagesById retains previous GPU texture when KittyImageData version updates',
+      (tester) async {
+        late Uint8List pngCyan;
+        late ui.Image gpuTex;
+        late GlyphAtlas atlas;
+        await tester.runAsync(() async {
+          pngCyan = await _createSolidPngBytes(
+            4,
+            4,
+            const ui.Color(0xFF00FFFF),
+          );
+          final codec = await ui.instantiateImageCodec(pngCyan);
+          final frame = await codec.getNextFrame();
+          gpuTex = frame.image;
+          codec.dispose();
+          atlas = await GlyphAtlasGenerator.generate(
+            fontSize: 14.0,
+            fontFamily: 'Roboto Mono',
+          );
+        });
+        addTearDown(gpuTex.dispose);
+        addTearDown(atlas.image.dispose);
+
+        final registry = KittyImageRegistry()
+          ..registerImage(
+            KittyImageData.fromPng(
+              imageId: 42,
+              pixelWidth: 4,
+              pixelHeight: 4,
+              pngBytes: pngCyan,
+              gridCols: 1,
+              gridRows: 1,
+            ),
+          );
+        final dataV1 = registry.lookupImage(42)!;
+        final dataV2 = dataV1.copyWith(gridCols: 2, version: 2);
+        registry.registerImage(dataV2);
+
+        final buf = Buffer(4, 2)
+          ..registerKittyRegistry(const tui_geom.Rect(0, 0, 4, 2), registry);
+        buf.setAttributes(
+          0,
+          0,
+          char: kittyPlaceholderCell(0, 0),
+          fg: 0xFF00002A,
+          bg: 0xFF000000,
+          modifiers: Modifier.kittyPlaceholder,
+        );
+        buf.setAttributes(
+          1,
+          0,
+          char: kittyPlaceholderCell(0, 1),
+          fg: 0xFF00002A,
+          bg: 0xFF000000,
+          modifiers: Modifier.kittyPlaceholder,
+        );
+
+        // Simulate frame right after dataV2 was registered (before dataV2 is in kittyImages,
+        // while kittyImagesById[(registry, 42)] still holds gpuTex).
+        final painter = TuiAtlasPainter(
+          buffer: buf,
+          atlas: atlas,
+          fontFamily: 'Roboto Mono',
+          fallbackPainters: {},
+          onMissingGlyphs: null,
+          kittyImages: {dataV1: gpuTex},
+          kittyImagesById: {(registry, 42): gpuTex},
+        );
+        final w = (4 * atlas.cellWidth).ceil();
+        final h = (2 * atlas.cellHeight).ceil();
+        final recorder = ui.PictureRecorder();
+        painter.paint(Canvas(recorder), Size(w.toDouble(), h.toDouble()));
+        final pic = recorder.endRecording();
+        late Uint8List rgba;
+        await tester.runAsync(() async {
+          final img = await pic.toImage(w, h);
+          pic.dispose();
+          rgba = (await img.toByteData())!.buffer.asUint8List();
+          img.dispose();
+        });
+
+        // PNG tile must render cyan from kittyImagesById[(global, 42)] instead of blanking!
+        expect(
+          _hasCellColor(
+            rgba,
+            w,
+            h,
+            atlas.cellWidth,
+            atlas.cellHeight,
+            0,
+            0,
+            255,
+            255,
+          ),
+          isTrue,
+        );
+
+        // A separate pane registry with imageId 42 must NOT inherit global's texture!
+        final otherPaneRegistry = KittyImageRegistry()..registerImage(dataV2);
+        buf.registerKittyRegistry(
+          const tui_geom.Rect(0, 0, 4, 2),
+          otherPaneRegistry,
+        );
+        final isolatedRecorder = ui.PictureRecorder();
+        painter.paint(
+          Canvas(isolatedRecorder),
+          Size(w.toDouble(), h.toDouble()),
+        );
+        final isolatedPic = isolatedRecorder.endRecording();
+        late Uint8List isolatedRgba;
+        await tester.runAsync(() async {
+          final img = await isolatedPic.toImage(w, h);
+          isolatedPic.dispose();
+          isolatedRgba = (await img.toByteData())!.buffer.asUint8List();
+          img.dispose();
+        });
+        expect(
+          _hasCellColor(
+            isolatedRgba,
+            w,
+            h,
+            atlas.cellWidth,
+            atlas.cellHeight,
+            0,
+            0,
+            255,
+            255,
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    test('GlyphAtlas.addStyledGlyphs safely aborts without drawImage assertion if disposed mid-flight', () async {
+      final atlas = await GlyphAtlasGenerator.generate(
+        fontSize: 14.0,
+        fontFamily: 'Roboto Mono',
+      );
+      final inFlight = atlas.addStyledGlyphs([
+        ('A', GlyphStyleVariant.boldItalic),
+      ]);
+      atlas.dispose();
+      final returned = await inFlight;
+      expect(identical(returned, atlas), isTrue);
+      expect(atlas.isDisposed, isTrue);
+    });
+  });
 }

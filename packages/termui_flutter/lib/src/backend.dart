@@ -2,6 +2,7 @@ import 'package:termui/terminal/terminal.dart' as core;
 import 'package:termui/terminal/backend/terminal_backend.dart';
 import 'package:termui/ui/event.dart' as core_event;
 import 'package:termui/perf/tracer.dart';
+
 import 'dart:async';
 import 'dart:math';
 
@@ -312,13 +313,10 @@ final class FlutterTerminal extends core.Terminal {
   /// | `enableBuiltinLinkOpen` | [bool] | Whether built-in `OSC 8` link opening is enabled. Defaults to `true`. |
   FlutterTerminal({
     double initialFontSize = 13.0,
-    bool enableLigatures = false,
-    bool enableBuiltinSelection = true,
-    bool enableBuiltinLinkOpen = true,
+    this._enableLigatures = false,
+    this._enableBuiltinSelection = true,
+    this._enableBuiltinLinkOpen = true,
   }) : _fontSize = initialFontSize,
-       _enableLigatures = enableLigatures,
-       _enableBuiltinSelection = enableBuiltinSelection,
-       _enableBuiltinLinkOpen = enableBuiltinLinkOpen,
        super(FlutterTerminalBackend());
 
   FlutterTerminalBackend get _flutterBackend =>
