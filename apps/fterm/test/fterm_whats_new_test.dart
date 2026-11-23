@@ -363,6 +363,14 @@ void main() {
 
         expect(env.workspace.activeOverlay, equals(FtermOverlay.whatsNew));
         expect(find.text("What's New in v0.3.0"), findsOneWidget);
+        expect(
+          find.text('Remote Shell Spawning, Nerd Font v3 & Layout Resume'),
+          findsOneWidget,
+        );
+        expect(
+          find.text('Self-Hosted Web Relay, Compression & Subpaths'),
+          findsOneWidget,
+        );
         expect(env.workspace.shouldShowWhatsNewPill, isFalse);
         expect(
           find.byKey(const ValueKey('fterm-whats-new-pill')),

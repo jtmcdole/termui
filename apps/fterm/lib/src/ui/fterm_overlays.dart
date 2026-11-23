@@ -709,6 +709,9 @@ final class _SessionPickerOverlay extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = palette;
     final remoteSessions = workspace.availableRemoteSessions;
+    final spawnableSessionId = workspace.isDesktopHost
+        ? null
+        : workspace.primarySpawnableRemoteSessionId;
     return Padding(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -731,6 +734,17 @@ final class _SessionPickerOverlay extends StatelessWidget {
                   onPressed: () => unawaited(workspace.openLocalShellTab()),
                   icon: const Icon(Icons.terminal, size: 14),
                   label: const Text('New Local Shell'),
+                ),
+              if (spawnableSessionId != null)
+                FilledButton.icon(
+                  key: const ValueKey('picker-new-remote-shell'),
+                  onPressed: () {
+                    if (workspace.requestRemoteShellSpawn(spawnableSessionId)) {
+                      workspace.dismissOverlay();
+                    }
+                  },
+                  icon: const Icon(Icons.add_box_outlined, size: 14),
+                  label: const Text('New Remote Shell'),
                 ),
               OutlinedButton.icon(
                 key: const ValueKey('picker-connect-relay'),
@@ -806,6 +820,17 @@ final class _SessionPickerOverlay extends StatelessWidget {
           trailing: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (session.allowSpawn)
+                IconButton(
+                  key: ValueKey('picker-spawn-${session.id.value}'),
+                  tooltip: 'New Shell',
+                  icon: Icon(Icons.add_box_outlined, size: 15, color: p.accent),
+                  onPressed: () {
+                    if (workspace.requestRemoteShellSpawn(session.id)) {
+                      workspace.dismissOverlay();
+                    }
+                  },
+                ),
               IconButton(
                 tooltip: 'Split right',
                 icon: Icon(Icons.vertical_split, size: 15, color: p.muted),
@@ -3433,7 +3458,7 @@ final class _WhatsNewOverlay extends StatelessWidget {
     listenable: workspace.chromeNotifier,
     builder: (_, _) {
       final p = palette;
-      return SingleChildScrollView(
+      return Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -3451,37 +3476,73 @@ final class _WhatsNewOverlay extends StatelessWidget {
               style: TextStyle(color: p.muted, fontSize: 11),
             ),
             const SizedBox(height: 12),
-            _WhatsNewCard(
-              palette: p,
-              icon: Icons.auto_awesome,
-              title: 'Ghostty GLSL Shaders & Built-In Presets',
-              description:
-                  'Drop Ghostty .glsl shaders into your shaders folder or '
-                  'stack built-in GPU passes (flutter_gpu on desktop, '
-                  'WebGL2 on web).',
-              footer: _WhatsNewTryItRow(workspace: workspace, palette: p),
-            ),
-            const SizedBox(height: 10),
-            _WhatsNewCard(
-              palette: p,
-              icon: Icons.terminal,
-              title: 'CLI Artistic Shaders (ESC _ S) & Safe Trust',
-              description:
-                  'Built-in region presets (fire, one_ring, vortex, '
-                  'ice_frost, neon_pulse, glitch_tear, forge_spark), '
-                  '120–240 Hz GPU cell transforms, and SHA-256 trust prompts '
-                  'for custom CLI GLSL.',
-            ),
-            const SizedBox(height: 10),
-            _WhatsNewCard(
-              palette: p,
-              icon: Icons.speed,
-              title: 'GPU Adapter Picker, FPS Cap & Performance HUD',
-              description:
-                  'Switch integrated vs. discrete GPU on Windows (with '
-                  '1-click restart), cap ambient shader FPS, monitor live '
-                  'FPS/GPU/VRAM (Ctrl+Shift+F9), and record Chrome traces '
-                  '(Ctrl+Shift+F10).',
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _WhatsNewCard(
+                      palette: p,
+                      icon: Icons.auto_awesome,
+                      title: 'Ghostty GLSL Shaders & Built-In Presets',
+                      description:
+                          'Drop Ghostty .glsl shaders into your shaders folder or '
+                          'stack built-in GPU passes (flutter_gpu on desktop, '
+                          'WebGL2 on web).',
+                      footer: _WhatsNewTryItRow(
+                        workspace: workspace,
+                        palette: p,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    _WhatsNewCard(
+                      palette: p,
+                      icon: Icons.terminal,
+                      title: 'CLI Artistic Shaders (ESC _ S) & Safe Trust',
+                      description:
+                          'Built-in region presets (fire, one_ring, vortex, '
+                          'ice_frost, neon_pulse, glitch_tear, forge_spark), '
+                          '120–240 Hz GPU cell transforms, and SHA-256 trust prompts '
+                          'for custom CLI GLSL.',
+                    ),
+                    const SizedBox(height: 10),
+                    _WhatsNewCard(
+                      palette: p,
+                      icon: Icons.speed,
+                      title: 'GPU Adapter Picker, FPS Cap & Performance HUD',
+                      description:
+                          'Switch integrated vs. discrete GPU on Windows (with '
+                          '1-click restart), cap ambient shader FPS, monitor live '
+                          'FPS/GPU/VRAM (Ctrl+Shift+F9), and record Chrome traces '
+                          '(Ctrl+Shift+F10).',
+                    ),
+                    const SizedBox(height: 10),
+                    _WhatsNewCard(
+                      palette: p,
+                      icon: Icons.add_box_outlined,
+                      title:
+                          'Remote Shell Spawning, Nerd Font v3 & Layout Resume',
+                      description:
+                          'Spawn fresh remote shells from fterm Web (picker or '
+                          'pane splits) via multi-PTY termui_cast, restore tabs '
+                          'and splits across refreshes via sessionStorage, and '
+                          'render Nerd Font v3 icons plus offline COLRv1 emoji.',
+                    ),
+                    const SizedBox(height: 10),
+                    _WhatsNewCard(
+                      palette: p,
+                      icon: Icons.public,
+                      title: 'Self-Hosted Web Relay, Compression & Subpaths',
+                      description:
+                          'Gzip/Brotli static WASM and font serving, loopback '
+                          '--allowed-origin proxy support, --trust-proxy-client-auth '
+                          'one-step reloads, --base-path subpath hosting, and an '
+                          'About-styled Web loading splash.',
+                    ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 14),
             _WhatsNewActionBar(workspace: workspace, palette: p, isWeb: isWeb),

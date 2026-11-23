@@ -82,7 +82,7 @@ void _defineCastLaunchConfigTests() {
         equals('ws://localhost:8080/v1/client'),
       );
       expect(queryServerAndTokenIgnored.token, isEmpty);
-      expect(queryServerAndTokenIgnored.promptForConnection, isTrue);
+      expect(queryServerAndTokenIgnored.promptForConnection, isFalse);
 
       final fragmentServerOverrideIgnored =
           CastLaunchConfig.fromEnvironmentAndUri(
@@ -115,9 +115,9 @@ void _defineCastLaunchConfigTests() {
       );
       expect(
         sameOriginHttps.serverUri,
-        equals(Uri.parse('wss://cast.example.com/v1/client')),
+        equals(Uri.parse('wss://cast.example.com/app/v1/client')),
       );
-      expect(sameOriginHttps.promptForConnection, isTrue);
+      expect(sameOriginHttps.promptForConnection, isFalse);
 
       final sameOriginHttp = CastLaunchConfig.fromEnvironmentAndUri(
         baseUri: Uri.parse('http://localhost:8080/'),
@@ -126,7 +126,7 @@ void _defineCastLaunchConfigTests() {
         sameOriginHttp.serverUri,
         equals(Uri.parse('ws://localhost:8080/v1/client')),
       );
-      expect(sameOriginHttp.promptForConnection, isTrue);
+      expect(sameOriginHttp.promptForConnection, isFalse);
 
       final fileBaseFallback = CastLaunchConfig.fromEnvironmentAndUri(
         baseUri: Uri.parse('file:///tmp/index.html'),

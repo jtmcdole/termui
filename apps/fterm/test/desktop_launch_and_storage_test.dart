@@ -12,12 +12,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/desktop_launch_env.dart';
 import 'package:fterm/src/desktop_launch_env_io.dart';
+import 'package:fterm/src/file_drop_bridge.dart';
 import 'package:fterm/src/font_loader.dart';
 import 'package:fterm/src/fterm_app.dart';
 import 'package:fterm/src/settings_storage.dart';
 import 'package:fterm/src/settings_storage_io.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver_io.dart';
+import 'package:fterm/src/workspace/split_tree_model.dart';
 import 'package:material_ui/material_ui.dart'
     show Color, FilledButton, Scaffold;
 import 'package:path/path.dart' as p;
@@ -234,15 +236,35 @@ void _defineDesktopLaunchConfigTests() {
         bareLoopback.serverUri,
         equals(Uri.parse('ws://localhost:8420/v1/client')),
       );
-      final httpsCustom = resolveCastLaunchConfig(
+      final httpsSubpath = resolveCastLaunchConfig(
         baseUri: desktopBase,
         environment: const {
           'TERMUI_CAST_SERVER_URL': 'https://relay.run.app:8443/custom/client',
         },
       );
       expect(
-        httpsCustom.serverUri,
+        httpsSubpath.serverUri,
         equals(Uri.parse('wss://relay.run.app:8443/custom/client/v1/client')),
+      );
+      final httpsSubpathExplicit = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        environment: const {
+          'TERMUI_CAST_SERVER_URL': 'https://relay.run.app:8443/term/v1/client',
+        },
+      );
+      expect(
+        httpsSubpathExplicit.serverUri,
+        equals(Uri.parse('wss://relay.run.app:8443/term/v1/client')),
+      );
+      final httpsSubpathCaster = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        environment: const {
+          'TERMUI_CAST_SERVER_URL': 'https://relay.run.app:8443/term/v1/caster',
+        },
+      );
+      expect(
+        httpsSubpathCaster.serverUri,
+        equals(Uri.parse('wss://relay.run.app:8443/term/v1/client')),
       );
     });
 
@@ -308,6 +330,238 @@ void _defineDesktopLaunchConfigTests() {
         }) async => throw const ProcessException('fterm', []),
       );
       expect(failed, isFalse);
+    });
+
+    test('resolves same-origin subpath WebSocket URIs and disables upfront connect prompt on HTTP(S) bases', () {
+      final cases = <(String, String)>[
+        ('https://cast.example.com', 'wss://cast.example.com/v1/client'),
+        ('https://cast.example.com/', 'wss://cast.example.com/v1/client'),
+        (
+          'https://cast.example.com/index.html',
+          'wss://cast.example.com/v1/client',
+        ),
+        (
+          'https://cast.example.com/term',
+          'wss://cast.example.com/term/v1/client',
+        ),
+        (
+          'https://cast.example.com/term/',
+          'wss://cast.example.com/term/v1/client',
+        ),
+        (
+          'https://cast.example.com/term/index.html',
+          'wss://cast.example.com/term/v1/client',
+        ),
+        ('http://127.0.0.1:8420/a/b/', 'ws://127.0.0.1:8420/a/b/v1/client'),
+      ];
+      for (final (rawBase, expectedWs) in cases) {
+        final cfg = CastLaunchConfig.fromEnvironmentAndUri(
+          baseUri: Uri.parse(rawBase),
+        );
+        expect(cfg.serverUri, equals(Uri.parse(expectedWs)), reason: rawBase);
+        expect(cfg.promptForConnection, isFalse, reason: rawBase);
+      }
+      final fallback = Uri.parse('file:///Users/dev/fterm/');
+      expect(resolveLaunchBaseUri(fallback), equals(fallback));
+
+      // resolveSameOriginBaseUri enforces exact scheme+host+port match against HTTP(S) fallbacks.
+      final httpFallback = Uri.parse(
+        'https://cast.example.com/index.html#token=frag-secret',
+      );
+      expect(
+        resolveSameOriginBaseUri(
+          'https://cast.example.com/term/',
+          httpFallback,
+        ),
+        equals(Uri.parse('https://cast.example.com/term/#token=frag-secret')),
+      );
+      expect(
+        resolveSameOriginBaseUri(
+          'https://CAST.EXAMPLE.COM:443/term/',
+          httpFallback,
+        ),
+        equals(
+          Uri.parse('https://CAST.EXAMPLE.COM:443/term/#token=frag-secret'),
+        ),
+      );
+      // Cross-origin CDN host, scheme downgrade, port mismatch, or non-HTTP schemes fall back.
+      for (final untrusted in const [
+        'https://cdn.example.com/term/',
+        'http://cast.example.com/term/',
+        'https://cast.example.com:8443/term/',
+        'javascript:alert(1)',
+        'file:///etc/passwd',
+        '   ',
+      ]) {
+        expect(
+          resolveSameOriginBaseUri(untrusted, httpFallback),
+          equals(httpFallback),
+          reason: untrusted,
+        );
+      }
+      // Non-HTTP fallback accepts valid HTTP(S) base URI.
+      expect(
+        resolveSameOriginBaseUri('https://cast.example.com/term/', fallback),
+        equals(Uri.parse('https://cast.example.com/term/')),
+      );
+    });
+
+    test('WebWorkspaceResumeSnapshot round-trips split trees, serverUrl, decode caps, ignores corrupt JSON, and desktop FileSettingsStorage skips it', () async {
+      final snapshot = WebWorkspaceResumeSnapshot(
+        serverUrl: 'wss://cast.example.com/team-a/v1/client',
+        tabs: [
+          WebTabResumeState(
+            root: WebResumeSplitBranch(
+              axis: SplitAxis.horizontal,
+              ratio: 0.35,
+              first: const WebResumePaneLeaf('s1'),
+              second: WebResumeSplitBranch(
+                axis: SplitAxis.vertical,
+                ratio: 0.65,
+                first: const WebResumePaneLeaf('s2'),
+                second: const WebResumePaneLeaf('s3'),
+              ),
+            ),
+            focusedLeafIndex: 2,
+            pinnedTitle: 'Main Split',
+          ),
+          const WebTabResumeState(root: WebResumePaneLeaf('s4')),
+        ],
+        activeTabIndex: 1,
+        dismissedSessionIds: const {'s5', 's6'},
+      );
+
+      final encoded = snapshot.toJsonString();
+      final decoded = WebWorkspaceResumeSnapshot.fromJsonString(encoded);
+      expect(decoded, equals(snapshot));
+      expect(decoded.hashCode, equals(snapshot.hashCode));
+      expect(
+        decoded.serverUrl,
+        equals('wss://cast.example.com/team-a/v1/client'),
+      );
+      expect(
+        WebWorkspaceResumeSnapshot(
+          serverUrl: 'wss://cast.example.com/team-b/v1/client',
+          tabs: snapshot.tabs,
+          activeTabIndex: snapshot.activeTabIndex,
+          dismissedSessionIds: snapshot.dismissedSessionIds,
+        ),
+        isNot(equals(snapshot)),
+      );
+      expect(decoded.tabs.first.sessionIds, equals(const ['s1', 's2', 's3']));
+      expect(decoded.tabs.first.focusedLeafIndex, equals(2));
+      expect(decoded.tabs.first.pinnedTitle, equals('Main Split'));
+      expect(decoded.activeTabIndex, equals(1));
+      expect(decoded.dismissedSessionIds, equals(const {'s5', 's6'}));
+
+      // Decode caps: max 64 tabs and max 32 leaves per tab.
+      Map<String, Object?> buildBalancedLeaves(int count, int offset) {
+        if (count == 1) {
+          return <String, Object?>{'type': 'leaf', 'sessionId': 'leaf-$offset'};
+        }
+        final left = count ~/ 2;
+        return <String, Object?>{
+          'type': 'split',
+          'axis': 'horizontal',
+          'ratio': 0.5,
+          'first': buildBalancedLeaves(left, offset),
+          'second': buildBalancedLeaves(count - left, offset + left),
+        };
+      }
+
+      final tab32 = WebTabResumeState.tryFromJson(<String, Object?>{
+        'root': buildBalancedLeaves(WebResumeSplitNode.maxDecodedLeaves, 0),
+      });
+      expect(tab32, isNotNull);
+      expect(tab32!.sessionIds, hasLength(WebResumeSplitNode.maxDecodedLeaves));
+      final tab33 = WebTabResumeState.tryFromJson(<String, Object?>{
+        'root': buildBalancedLeaves(WebResumeSplitNode.maxDecodedLeaves + 1, 0),
+      });
+      expect(tab33, isNull);
+
+      final cappedTabsSnapshot = WebWorkspaceResumeSnapshot.fromJsonString(
+        jsonEncode(<String, Object?>{
+          'serverUrl': 'wss://cast.example.com/team-a/v1/client',
+          'tabs': [
+            for (
+              var i = 0;
+              i < WebWorkspaceResumeSnapshot.maxDecodedTabs + 8;
+              i++
+            )
+              <String, Object?>{
+                'root': <String, Object?>{'type': 'leaf', 'sessionId': 't-$i'},
+              },
+          ],
+          'activeTabIndex': 99,
+        }),
+      );
+      expect(
+        cappedTabsSnapshot.tabs,
+        hasLength(WebWorkspaceResumeSnapshot.maxDecodedTabs),
+      );
+      expect(
+        cappedTabsSnapshot.activeTabIndex,
+        equals(WebWorkspaceResumeSnapshot.maxDecodedTabs - 1),
+      );
+
+      // Corrupt or malformed JSON degrades cleanly to empty or skips bad entries.
+      expect(
+        WebWorkspaceResumeSnapshot.fromJsonString(null),
+        equals(WebWorkspaceResumeSnapshot.empty),
+      );
+      expect(
+        WebWorkspaceResumeSnapshot.fromJsonString('{bad json'),
+        equals(WebWorkspaceResumeSnapshot.empty),
+      );
+      expect(
+        WebWorkspaceResumeSnapshot.fromJsonString('[]'),
+        equals(WebWorkspaceResumeSnapshot.empty),
+      );
+      final partial = WebWorkspaceResumeSnapshot.fromJsonString(
+        jsonEncode({
+          'tabs': [
+            {
+              'root': {'type': 'unknown'},
+            },
+            {
+              'root': {'type': 'leaf', 'sessionId': '   '},
+            },
+            {
+              'root': {
+                'type': 'split',
+                'axis': 'horizontal',
+                'ratio': 5.0,
+                'first': {'type': 'leaf', 'sessionId': 'live-1'},
+                'second': {'type': 'leaf', 'sessionId': 'live-2'},
+              },
+              'focusedLeafIndex': 99,
+            },
+          ],
+          'activeTabIndex': 10,
+          'dismissedSessionIds': ['', 42, 'closed-1'],
+        }),
+      );
+      expect(partial.tabs, hasLength(1));
+      expect(partial.tabs.single.focusedLeafIndex, equals(1));
+      expect(
+        (partial.tabs.single.root as WebResumeSplitBranch).ratio,
+        equals(SplitTreeNode.maxRatio),
+      );
+      expect(partial.activeTabIndex, equals(0));
+      expect(partial.dismissedSessionIds, equals(const {'closed-1'}));
+
+      // Desktop FileSettingsStorage must ignore ftermWebWorkspaceResumeStorageKey.
+      final tempDir = Directory.systemTemp.createTempSync('fterm_web_resume_');
+      addTearDown(() => tempDir.deleteSync(recursive: true));
+      final settingsFile = File(p.join(tempDir.path, 'settings.json'));
+      final desktopStorage = FileSettingsStorage(settingsFile);
+      saveWebWorkspaceResumeSnapshot(desktopStorage, snapshot);
+      await desktopStorage.flush();
+      expect(settingsFile.existsSync(), isFalse);
+      expect(
+        loadWebWorkspaceResumeSnapshot(desktopStorage),
+        equals(WebWorkspaceResumeSnapshot.empty),
+      );
     });
   });
 }

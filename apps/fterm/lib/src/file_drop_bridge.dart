@@ -27,6 +27,39 @@ void scrubUrlFragment() => impl.scrubPlatformUrlFragment();
 /// startup on Web, returning `''` on non-web platforms or subsequent calls.
 String consumeInitialHashToken() => impl.consumePlatformInitialHashToken();
 
+/// Resolves the effective launch base [Uri] for deriving relative same-origin
+/// endpoints (`document.baseURI` on Web when valid HTTP(S) matching [fallback]'s
+/// origin, preserving any non-empty [fallback] fragment, or [fallback] on
+/// non-web platforms).
+Uri resolveLaunchBaseUri(Uri fallback) =>
+    impl.resolvePlatformLaunchBaseUri(fallback);
+
+/// Resolves [rawBaseUri] (such as `document.baseURI` on Web) against [fallback],
+/// rejecting non-HTTP(S) URIs and any URI whose origin differs from an HTTP(S)
+/// [fallback], while preserving any non-empty fragment from [fallback].
+Uri resolveSameOriginBaseUri(String rawBaseUri, Uri fallback) {
+  final raw = rawBaseUri.trim();
+  if (raw.isEmpty) return fallback;
+  final parsed = Uri.tryParse(raw);
+  if (!_isHttpOriginUri(parsed)) return fallback;
+  if (_isHttpOriginUri(fallback) && !_hasSameOrigin(parsed!, fallback)) {
+    return fallback;
+  }
+  return fallback.fragment.isNotEmpty
+      ? parsed!.replace(fragment: fallback.fragment)
+      : parsed!;
+}
+
+bool _isHttpOriginUri(Uri? uri) =>
+    uri != null &&
+    (uri.scheme == 'http' || uri.scheme == 'https') &&
+    uri.host.isNotEmpty;
+
+bool _hasSameOrigin(Uri a, Uri b) =>
+    a.scheme == b.scheme &&
+    a.host.toLowerCase() == b.host.toLowerCase() &&
+    a.port == b.port;
+
 /// Disposable bridge listening for browser or desktop file drag-and-drop events.
 abstract interface class FileDropBridge {
   /// Detaches any active DOM or platform drag-and-drop listeners.

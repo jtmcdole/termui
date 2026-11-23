@@ -124,7 +124,7 @@ final class CastLaunchConfig {
       serverUri: _defaultServerUriForBase(baseUri),
       token: resolvedToken,
       casterToken: envCasterToken,
-      promptForConnection: resolvedToken.trim().isEmpty,
+      promptForConnection: !hasHttpOrigin && resolvedToken.trim().isEmpty,
       iapTokenProvider: iapTokenProvider,
     );
   }
@@ -162,12 +162,31 @@ final class CastLaunchConfig {
     if (!_hasHttpOrigin(baseUri)) {
       return defaultServerUri;
     }
+    final dirPath = _normalizeBaseDirectoryPath(baseUri.path);
     return Uri(
       scheme: baseUri.scheme == 'https' ? 'wss' : 'ws',
       host: baseUri.host,
       port: baseUri.hasPort ? baseUri.port : null,
-      path: '/v1/client',
+      path: '${dirPath}v1/client',
     );
+  }
+
+  static String _normalizeBaseDirectoryPath(String rawPath) {
+    if (rawPath.isEmpty || rawPath == '/') return '/';
+    final segments = <String>[
+      for (final seg in rawPath.split('/'))
+        if (seg.isNotEmpty) seg,
+    ];
+    if (segments.isEmpty) return '/';
+    if (!rawPath.endsWith('/') && _looksLikeDocumentFile(segments.last)) {
+      segments.removeLast();
+    }
+    return segments.isEmpty ? '/' : '/${segments.join('/')}/';
+  }
+
+  static bool _looksLikeDocumentFile(String segment) {
+    final lower = segment.toLowerCase();
+    return lower.endsWith('.html') || lower.endsWith('.htm');
   }
 
   static Map<String, String> _parseFragmentParams(String fragment) {

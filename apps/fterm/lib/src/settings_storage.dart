@@ -10,6 +10,7 @@ import 'settings_storage_stub.dart'
     if (dart.library.js_interop) 'settings_storage_web.dart'
     if (dart.library.io) 'settings_storage_io.dart'
     as impl;
+import 'workspace/split_tree_model.dart';
 
 /// Storage key used to persist [CastWorkspaceSettings] on Web and desktop.
 const String castSettingsStorageKey = 'termui_cast.settings.v1';
@@ -17,12 +18,24 @@ const String castSettingsStorageKey = 'termui_cast.settings.v1';
 /// Storage key used to persist `fterm`-specific UI and audio preferences.
 const String ftermPreferencesStorageKey = 'fterm.preferences.v1';
 
-/// Storage key used to persist relay connection credentials (`0600` on POSIX).
+/// Storage key used to persist relay connection credentials (`0600` on POSIX,
+/// tab-scoped `window.sessionStorage` on Web).
 const String ftermRelayCredentialsStorageKey = 'fterm.relay_credentials.v1';
 
-/// Key-value storage seam for persisting `fterm` settings and relay credentials
-/// (backed by `window.localStorage` on Web, `~/.config/fterm/settings.json` on
-/// native desktop, and an isolated no-op store under `flutter test`).
+/// Storage key used to persist Web tab and split layout state in
+/// `window.sessionStorage` across same-tab reloads (ignored on desktop).
+const String ftermWebWorkspaceResumeStorageKey =
+    'fterm.web_workspace_resume.v1';
+
+/// Key-value storage seam for persisting `fterm` settings, relay credentials,
+/// and Web workspace resume state.
+///
+/// On Web, preferences use `window.localStorage`, while
+/// [ftermRelayCredentialsStorageKey] and [ftermWebWorkspaceResumeStorageKey]
+/// route to tab-scoped `window.sessionStorage` (and never persist to
+/// `localStorage`). Native desktop uses `~/.config/fterm/settings.json` (or
+/// `%APPDATA%\fterm\settings.json`), and `flutter test` uses an isolated no-op
+/// store.
 abstract interface class SettingsStorage {
   /// Reads the raw string stored at [key], or `null` if unset or unavailable.
   String? getItem(String key);
@@ -44,7 +57,8 @@ abstract interface class BatchSettingsStorage implements SettingsStorage {
   Future<void> flush();
 }
 
-/// Default platform [SettingsStorage] (`window.localStorage` on Web,
+/// Default platform [SettingsStorage] (preferences in `window.localStorage` and
+/// relay credentials / layout resume in `window.sessionStorage` on Web;
 /// `~/.config/fterm/settings.json` or `%APPDATA%\fterm\settings.json` on native
 /// desktop).
 SettingsStorage get defaultSettingsStorage => impl.platformSettingsStorage;
@@ -698,8 +712,9 @@ final class FtermPreferences {
   ]);
 }
 
-/// Relay connection credentials persisted on `0600` desktop storage when the
-/// user connects to a relay from the UI or configures caster sharing.
+/// Relay connection credentials persisted in `0600` desktop storage (or
+/// tab-scoped `window.sessionStorage` on Web, scoped to the matching relay URL)
+/// when the user connects to a relay from the UI or configures caster sharing.
 final class RelayCredentials {
   /// Empty credentials placeholder.
   static const RelayCredentials empty = RelayCredentials();
@@ -847,7 +862,8 @@ RelayCredentials loadStoredRelayCredentials(SettingsStorage storage) =>
       storage.getItem(ftermRelayCredentialsStorageKey),
     );
 
-/// Writes [credentials] as JSON to [storage] (`0600` POSIX file on desktop).
+/// Writes [credentials] as JSON to [storage] (`0600` POSIX file on desktop,
+/// tab-scoped `window.sessionStorage` on Web).
 void saveStoredRelayCredentials(
   SettingsStorage storage,
   RelayCredentials credentials,
@@ -855,6 +871,373 @@ void saveStoredRelayCredentials(
   ftermRelayCredentialsStorageKey,
   credentials.toJsonString(),
 );
+
+final class _LeafBudget {
+  int remaining;
+
+  _LeafBudget(this.remaining);
+
+  bool consumeLeaf() {
+    if (remaining <= 0) return false;
+    remaining -= 1;
+    return true;
+  }
+}
+
+/// Serializable binary split-tree node persisted for Web workspace resume.
+sealed class WebResumeSplitNode {
+  static const int _maxDecodeDepth = 32;
+
+  /// Maximum total leaf panes permitted when decoding a single tab split tree.
+  static const int maxDecodedLeaves = 32;
+
+  /// Creates an immutable resume split node.
+  const WebResumeSplitNode();
+
+  /// In-order list of remote session identifiers referenced by leaf panes.
+  List<String> get sessionIds {
+    final ids = <String>[];
+    _collectSessionIds(this, ids);
+    return List<String>.unmodifiable(ids);
+  }
+
+  /// Serializes this node as a JSON-compatible map.
+  Map<String, Object?> toJsonMap();
+
+  /// Decodes a [WebResumeSplitNode] from untrusted JSON [raw], returning `null`
+  /// when malformed, exceeding maximum nesting depth, or exceeding
+  /// [maxDecodedLeaves] total leaves.
+  static WebResumeSplitNode? tryFromJson(Object? raw) =>
+      _tryFromJson(raw, depth: 0, budget: _LeafBudget(maxDecodedLeaves));
+
+  static WebResumeSplitNode? _tryFromJson(
+    Object? raw, {
+    required int depth,
+    required _LeafBudget budget,
+  }) {
+    if (depth > _maxDecodeDepth || raw is! Map<Object?, Object?>) return null;
+    return switch (raw['type']) {
+      'leaf' => _decodeLeaf(raw['sessionId'], budget),
+      'split' => _decodeSplit(raw, depth, budget),
+      _ => null,
+    };
+  }
+
+  static WebResumePaneLeaf? _decodeLeaf(
+    Object? rawSessionId,
+    _LeafBudget budget,
+  ) {
+    if (!budget.consumeLeaf() || rawSessionId is! String) return null;
+    final trimmed = rawSessionId.trim();
+    return trimmed.isEmpty ? null : WebResumePaneLeaf(trimmed);
+  }
+
+  static WebResumeSplitBranch? _decodeSplit(
+    Map<Object?, Object?> raw,
+    int depth,
+    _LeafBudget budget,
+  ) {
+    final axis = switch (raw['axis']) {
+      'horizontal' => SplitAxis.horizontal,
+      'vertical' => SplitAxis.vertical,
+      _ => null,
+    };
+    if (axis == null) return null;
+    final first = _tryFromJson(raw['first'], depth: depth + 1, budget: budget);
+    if (first == null) return null;
+    final second = _tryFromJson(
+      raw['second'],
+      depth: depth + 1,
+      budget: budget,
+    );
+    if (second == null) return null;
+    final ratioRaw = raw['ratio'];
+    final ratio = ratioRaw is num && ratioRaw.isFinite
+        ? SplitTreeNode.clampRatio(ratioRaw.toDouble())
+        : 0.5;
+    return WebResumeSplitBranch(
+      axis: axis,
+      ratio: ratio,
+      first: first,
+      second: second,
+    );
+  }
+
+  static void _collectSessionIds(WebResumeSplitNode node, List<String> out) {
+    switch (node) {
+      case WebResumePaneLeaf(:final sessionId):
+        out.add(sessionId);
+      case WebResumeSplitBranch(:final first, :final second):
+        _collectSessionIds(first, out);
+        _collectSessionIds(second, out);
+    }
+  }
+}
+
+/// Leaf pane entry in a [WebTabResumeState] referencing a remote [sessionId].
+final class WebResumePaneLeaf extends WebResumeSplitNode {
+  /// Remote relay session identifier displayed in this pane.
+  final String sessionId;
+
+  /// Creates an immutable leaf entry for [sessionId].
+  const WebResumePaneLeaf(this.sessionId);
+
+  @override
+  Map<String, Object?> toJsonMap() => <String, Object?>{
+    'type': 'leaf',
+    'sessionId': sessionId,
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WebResumePaneLeaf && other.sessionId == sessionId;
+
+  @override
+  int get hashCode => sessionId.hashCode;
+}
+
+/// Binary split container in a [WebTabResumeState].
+final class WebResumeSplitBranch extends WebResumeSplitNode {
+  /// Division axis (`horizontal` = left|right, `vertical` = top/bottom).
+  final SplitAxis axis;
+
+  /// Fraction of space allocated to [first] in `[0.1, 0.9]`.
+  final double ratio;
+
+  /// Left or top child subtree.
+  final WebResumeSplitNode first;
+
+  /// Right or bottom child subtree.
+  final WebResumeSplitNode second;
+
+  /// Creates an immutable split branch with clamped [ratio].
+  WebResumeSplitBranch({
+    required this.axis,
+    double ratio = 0.5,
+    required this.first,
+    required this.second,
+  }) : ratio = SplitTreeNode.clampRatio(ratio);
+
+  @override
+  Map<String, Object?> toJsonMap() => <String, Object?>{
+    'type': 'split',
+    'axis': axis.name,
+    'ratio': ratio,
+    'first': first.toJsonMap(),
+    'second': second.toJsonMap(),
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WebResumeSplitBranch &&
+          other.axis == axis &&
+          other.ratio == ratio &&
+          other.first == first &&
+          other.second == second;
+
+  @override
+  int get hashCode => Object.hash(axis, ratio, first, second);
+}
+
+/// Persisted Web workspace tab layout state captured across same-tab reloads.
+final class WebTabResumeState {
+  /// Root split-tree layout node for this tab.
+  final WebResumeSplitNode root;
+
+  /// Zero-based index of the focused leaf pane within [root].
+  final int focusedLeafIndex;
+
+  /// Optional user-pinned custom tab title.
+  final String? pinnedTitle;
+
+  /// Creates an immutable [WebTabResumeState].
+  const WebTabResumeState({
+    required this.root,
+    this.focusedLeafIndex = 0,
+    this.pinnedTitle,
+  });
+
+  /// Ordered remote session identifiers referenced by this tab's leaf panes.
+  List<String> get sessionIds => root.sessionIds;
+
+  /// Decodes a [WebTabResumeState] from untrusted JSON [raw], returning `null`
+  /// when malformed.
+  static WebTabResumeState? tryFromJson(Object? raw) {
+    if (raw is! Map<Object?, Object?>) return null;
+    final root = WebResumeSplitNode.tryFromJson(raw['root']);
+    if (root == null) return null;
+    final focusRaw = raw['focusedLeafIndex'];
+    final focusIdx = focusRaw is num && focusRaw.isFinite
+        ? focusRaw.toInt().clamp(0, root.sessionIds.length - 1)
+        : 0;
+    final pinnedRaw = raw['pinnedTitle'];
+    final pinned = pinnedRaw is String && pinnedRaw.trim().isNotEmpty
+        ? pinnedRaw.trim()
+        : null;
+    return WebTabResumeState(
+      root: root,
+      focusedLeafIndex: focusIdx,
+      pinnedTitle: pinned,
+    );
+  }
+
+  /// Serializes this tab state as a JSON-compatible map.
+  Map<String, Object?> toJsonMap() => <String, Object?>{
+    'root': root.toJsonMap(),
+    if (focusedLeafIndex != 0) 'focusedLeafIndex': focusedLeafIndex,
+    'pinnedTitle': ?pinnedTitle,
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WebTabResumeState &&
+          other.root == root &&
+          other.focusedLeafIndex == focusedLeafIndex &&
+          other.pinnedTitle == pinnedTitle;
+
+  @override
+  int get hashCode => Object.hash(root, focusedLeafIndex, pinnedTitle);
+}
+
+/// Tab-scoped snapshot of open remote sessions, split trees, active tab, and
+/// dismissed remote sessions persisted in `window.sessionStorage` on Web.
+final class WebWorkspaceResumeSnapshot {
+  /// Empty snapshot placeholder.
+  static const WebWorkspaceResumeSnapshot empty = WebWorkspaceResumeSnapshot();
+
+  /// Maximum number of tabs decoded from an untrusted resume snapshot.
+  static const int maxDecodedTabs = 64;
+
+  /// Relay `/v1/client` WebSocket URL string this snapshot was captured from.
+  final String serverUrl;
+
+  /// Ordered open tabs and their binary split layouts.
+  final List<WebTabResumeState> tabs;
+
+  /// Active tab index (`0` when [tabs] is empty).
+  final int activeTabIndex;
+
+  /// Remote session identifiers explicitly closed by the user.
+  final Set<String> dismissedSessionIds;
+
+  /// Creates an immutable [WebWorkspaceResumeSnapshot].
+  const WebWorkspaceResumeSnapshot({
+    this.serverUrl = '',
+    this.tabs = const <WebTabResumeState>[],
+    this.activeTabIndex = 0,
+    this.dismissedSessionIds = const <String>{},
+  });
+
+  /// Whether no tabs or dismissed sessions are recorded.
+  bool get isEmpty => tabs.isEmpty && dismissedSessionIds.isEmpty;
+
+  /// Decodes [WebWorkspaceResumeSnapshot] from JSON string [raw], returning
+  /// [empty] when missing or malformed.
+  factory WebWorkspaceResumeSnapshot.fromJsonString(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return empty;
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<Object?, Object?>) return empty;
+      return _decodeSnapshotMap(decoded);
+    } on Object {
+      return empty;
+    }
+  }
+
+  static WebWorkspaceResumeSnapshot _decodeSnapshotMap(
+    Map<Object?, Object?> decoded,
+  ) {
+    final parsedTabs = _parseTabs(decoded['tabs']);
+    final dismissed = _parseDismissedIds(decoded['dismissedSessionIds']);
+    if (parsedTabs.isEmpty && dismissed.isEmpty) return empty;
+    final serverUrl = switch (decoded['serverUrl']) {
+      final String value => value.trim(),
+      _ => '',
+    };
+    return WebWorkspaceResumeSnapshot(
+      serverUrl: serverUrl,
+      tabs: List<WebTabResumeState>.unmodifiable(parsedTabs),
+      activeTabIndex: _parseActiveTabIndex(
+        decoded['activeTabIndex'],
+        parsedTabs.length,
+      ),
+      dismissedSessionIds: Set<String>.unmodifiable(dismissed),
+    );
+  }
+
+  static List<WebTabResumeState> _parseTabs(Object? raw) {
+    if (raw is! List<Object?>) return const <WebTabResumeState>[];
+    final parsed = <WebTabResumeState>[];
+    for (final entry in raw) {
+      if (parsed.length >= maxDecodedTabs) break;
+      final tab = WebTabResumeState.tryFromJson(entry);
+      if (tab != null) {
+        parsed.add(tab);
+      }
+    }
+    return parsed;
+  }
+
+  static Set<String> _parseDismissedIds(Object? raw) => switch (raw) {
+    final List<Object?> items => <String>{
+      for (final entry in items)
+        if (entry is String && entry.trim().isNotEmpty) entry.trim(),
+    },
+    _ => const <String>{},
+  };
+
+  static int _parseActiveTabIndex(Object? raw, int tabCount) {
+    if (tabCount <= 0) return 0;
+    return raw is num && raw.isFinite ? raw.toInt().clamp(0, tabCount - 1) : 0;
+  }
+
+  /// Serializes this snapshot as a JSON object string.
+  String toJsonString() => jsonEncode(<String, Object?>{
+    if (serverUrl.isNotEmpty) 'serverUrl': serverUrl,
+    'tabs': [for (final tab in tabs) tab.toJsonMap()],
+    'activeTabIndex': tabs.isEmpty
+        ? 0
+        : activeTabIndex.clamp(0, tabs.length - 1),
+    if (dismissedSessionIds.isNotEmpty)
+      'dismissedSessionIds': [...dismissedSessionIds]..sort(),
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is WebWorkspaceResumeSnapshot &&
+          other.serverUrl == serverUrl &&
+          listEquals(other.tabs, tabs) &&
+          other.activeTabIndex == activeTabIndex &&
+          setEquals(other.dismissedSessionIds, dismissedSessionIds);
+
+  @override
+  int get hashCode => Object.hash(
+    serverUrl,
+    Object.hashAll(tabs),
+    activeTabIndex,
+    Object.hashAllUnordered(dismissedSessionIds),
+  );
+}
+
+/// Loads [WebWorkspaceResumeSnapshot] from [storage] (`window.sessionStorage`
+/// on Web; returns [WebWorkspaceResumeSnapshot.empty] on desktop/missing data).
+WebWorkspaceResumeSnapshot loadWebWorkspaceResumeSnapshot(
+  SettingsStorage storage,
+) => WebWorkspaceResumeSnapshot.fromJsonString(
+  storage.getItem(ftermWebWorkspaceResumeStorageKey),
+);
+
+/// Writes [snapshot] as JSON to [storage] under
+/// [ftermWebWorkspaceResumeStorageKey].
+void saveWebWorkspaceResumeSnapshot(
+  SettingsStorage storage,
+  WebWorkspaceResumeSnapshot snapshot,
+) =>
+    storage.setItem(ftermWebWorkspaceResumeStorageKey, snapshot.toJsonString());
 
 /// Coalesces rapid [CastWorkspaceSettings] and [FtermPreferences] mutations:
 /// persists immediately when idle, or coalesces rapid updates into one trailing

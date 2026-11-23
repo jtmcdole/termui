@@ -97,6 +97,20 @@ typedef _WhatsNewPreviewSnapshot = ({
   bool showPerfHud,
 });
 
+final class _PendingRemoteSpawn {
+  final Set<SessionId> baselineSessionIds;
+  final SplitAxis? splitAxis;
+  final String? targetPaneId;
+  final Timer timeoutTimer;
+
+  const _PendingRemoteSpawn({
+    required this.baselineSessionIds,
+    required this.timeoutTimer,
+    this.splitAxis,
+    this.targetPaneId,
+  });
+}
+
 final class _ChromeChangeNotifier extends ChangeNotifier {
   void emitChange() => notifyListeners();
 }
@@ -208,6 +222,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final SettingsStorage _storage;
   final ThrottledSettingsSaver _settingsSaver;
   final Duration _resizeDebounce;
+  final Duration _remoteSpawnTimeout;
   final Clock _clock;
   final void Function(tui.Buffer buffer)? _onFrameRedrawn;
   final DesktopIapProviderBuilder _iapProviderBuilder;
@@ -226,6 +241,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final Set<SessionId> _ownedSharedSessionIds = {};
   final Set<SessionId> _dismissedRemoteSessions = {};
   final Set<String> _togglingSharePaneIds = {};
+  final List<_PendingRemoteSpawn> _pendingRemoteSpawns = [];
+  WebWorkspaceResumeSnapshot _pendingWebResumeSnapshot;
+  bool _webResumeReconciled;
+  bool _persistWebCredentialsOnAuth = true;
   final _ChromeChangeNotifier _chromeNotifier = _ChromeChangeNotifier();
 
   late final FileUploadCoordinator _uploadCoordinator;
@@ -305,6 +324,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     double defaultFontSize = FtermPreferences.defaultFontSize,
     tui.TerminalBrightness initialBrightness = tui.TerminalBrightness.dark,
     Duration resizeDebounce = const Duration(milliseconds: 32),
+    Duration remoteSpawnTimeout = const Duration(seconds: 10),
     Clock? clock,
     UpdateService? updateService,
     UpdateTimerFactory? updateTimerFactory,
@@ -331,11 +351,13 @@ final class FtermWorkspaceController extends ChangeNotifier {
       defaultDockPosition: defaultDockPosition,
     ),
     initialPreferences: loadStoredPreferences(storage),
-    initialCredentials: localHostDriver.isSupported
-        ? loadStoredRelayCredentials(storage)
-        : RelayCredentials.empty,
+    initialCredentials: loadStoredRelayCredentials(storage),
+    initialWebResumeSnapshot: localHostDriver.isSupported
+        ? WebWorkspaceResumeSnapshot.empty
+        : loadWebWorkspaceResumeSnapshot(storage),
     initialBrightness: initialBrightness,
     resizeDebounce: resizeDebounce,
+    remoteSpawnTimeout: remoteSpawnTimeout,
     clock: clock,
     updateService: updateService,
     updateTimerFactory: updateTimerFactory,
@@ -362,8 +384,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required CastWorkspaceSettings initialSettings,
     required FtermPreferences initialPreferences,
     required RelayCredentials initialCredentials,
+    required WebWorkspaceResumeSnapshot initialWebResumeSnapshot,
     required tui.TerminalBrightness initialBrightness,
     required this._resizeDebounce,
+    required this._remoteSpawnTimeout,
     required Clock? clock,
     required UpdateService? updateService,
     required UpdateTimerFactory? updateTimerFactory,
@@ -381,6 +405,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }) : _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
        _clock = clock ?? const Clock(),
+       _pendingWebResumeSnapshot = initialWebResumeSnapshot,
+       _webResumeReconciled =
+           localHostDriver.isSupported || initialWebResumeSnapshot.isEmpty,
        _iapProviderBuilder = iapProviderBuilder ?? buildDesktopIapTokenProvider,
        _gcloudPathProber = gcloudPathProber ?? probeDesktopGcloudExecutable,
        _ownsTraceRecorder = traceRecorder == null,
@@ -468,6 +495,25 @@ final class FtermWorkspaceController extends ChangeNotifier {
   );
 
   void _hydrateSavedRelaySettings() {
+    if (!localHostDriver.isSupported) {
+      _hydrateWebRelaySettings();
+      return;
+    }
+    _hydrateDesktopRelaySettings();
+  }
+
+  void _hydrateWebRelaySettings() {
+    final savedUrl = _relayCredentials.serverUrl.trim();
+    if (_activeClientToken.isEmpty &&
+        _relayCredentials.clientToken.isNotEmpty &&
+        savedUrl == _activeRelayUri.toString()) {
+      _activeClientToken = _relayCredentials.clientToken;
+    }
+    _shouldAutoConnectRelay =
+        !launchConfig.promptForConnection || _activeClientToken.isNotEmpty;
+  }
+
+  void _hydrateDesktopRelaySettings() {
     if (_activeClientToken.isEmpty &&
         _relayCredentials.clientToken.isNotEmpty) {
       _activeClientToken = _relayCredentials.clientToken;
@@ -1044,6 +1090,61 @@ final class FtermWorkspaceController extends ChangeNotifier {
       if (!_ownedSharedSessionIds.contains(session.id)) session,
   ];
 
+  /// Whether [sessionId] is currently advertised by the relay directory with
+  /// [SessionSummary.allowSpawn] enabled.
+  bool canSpawnRemoteSession(SessionId sessionId) {
+    for (final session in _remoteDirectorySessions) {
+      if (session.id == sessionId) return session.allowSpawn;
+    }
+    return false;
+  }
+
+  /// Best candidate remote session for a top-level "New Remote Shell" action
+  /// (focused remote pane if spawnable, else first spawnable remote session).
+  SessionId? get primarySpawnableRemoteSessionId {
+    final focusedRemote = focusedPane?.remoteSessionId;
+    if (focusedRemote != null && canSpawnRemoteSession(focusedRemote)) {
+      return focusedRemote;
+    }
+    for (final session in availableRemoteSessions) {
+      if (session.allowSpawn) return session.id;
+    }
+    return null;
+  }
+
+  /// Number of in-flight remote shell spawn requests awaiting a newly
+  /// registered session in the relay directory.
+  int get pendingRemoteSpawnCount => _pendingRemoteSpawns.length;
+
+  /// Requests the caster owning [sourceSessionId] to spawn a fresh remote shell
+  /// PTY (`SpawnSessionFrame`) into a new top-level tab on arrival.
+  ///
+  /// Returns `true` when the spawn frame was dispatched to the relay.
+  bool requestRemoteShellSpawn(SessionId sourceSessionId) =>
+      _enqueueRemoteShellSpawn(sourceSessionId);
+
+  bool _enqueueRemoteShellSpawn(
+    SessionId sourceSessionId, {
+    ({SplitAxis axis, String targetPaneId})? splitTarget,
+  }) {
+    if (_disposed || !repository.requestSpawnSession(sourceSessionId)) {
+      return false;
+    }
+    late final _PendingRemoteSpawn pending;
+    pending = _PendingRemoteSpawn(
+      baselineSessionIds: {
+        for (final session in _remoteDirectorySessions) session.id,
+      },
+      splitAxis: splitTarget?.axis,
+      targetPaneId: splitTarget?.targetPaneId,
+      timeoutTimer: Timer(_remoteSpawnTimeout, () {
+        _pendingRemoteSpawns.remove(pending);
+      }),
+    );
+    _pendingRemoteSpawns.add(pending);
+    return true;
+  }
+
   /// Immutable copy of local self-casted session identifiers currently excluded
   /// from the Session Picker.
   Set<SessionId> get ownedSharedSessionIds =>
@@ -1110,9 +1211,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       _maybeStartLaunchTrace();
       return;
     }
-    if (launchConfig.promptForConnection &&
-        _activeClientToken.isEmpty &&
-        _relayCredentials.clientToken.isEmpty) {
+    if (launchConfig.promptForConnection && _activeClientToken.isEmpty) {
       _setOverlay(FtermOverlay.connect);
     } else {
       _startInitialRelayConnection();
@@ -1284,25 +1383,24 @@ final class FtermWorkspaceController extends ChangeNotifier {
           nextIapProvider;
     }
 
+    final relayUriChanged = _activeRelayUri != serverUri;
     _activeRelayUri = serverUri;
     _activeClientToken = clientToken;
     if (casterToken != null) {
       _activeCasterToken = casterToken;
     }
+    if (relayUriChanged) {
+      _pendingWebResumeSnapshot = WebWorkspaceResumeSnapshot.empty;
+      _webResumeReconciled = true;
+    }
+    _cancelAllPendingRemoteSpawns();
     _shouldAutoConnectRelay = true;
     _statusBanner = null;
-
-    if (persistCredentials && localHostDriver.isSupported) {
-      _relayCredentials = RelayCredentials(
-        serverUrl: serverUri.toString(),
-        clientToken: clientToken,
-        casterToken: _activeCasterToken,
-        iapServiceAccount: _activeIapServiceAccount,
-        iapKeyFilePath: _activeIapKeyFilePath,
-        gcloudPath: _activeGcloudPath,
-      );
-      saveStoredRelayCredentials(_storage, _relayCredentials);
-    }
+    _applyRelayCredentialPersistence(
+      serverUri: serverUri,
+      clientToken: clientToken,
+      persistCredentials: persistCredentials,
+    );
     if (_activeOverlay == FtermOverlay.connect) {
       _activeOverlay = FtermOverlay.none;
     }
@@ -1312,6 +1410,27 @@ final class FtermWorkspaceController extends ChangeNotifier {
       iapTokenProvider: nextIapProvider,
       replaceIapTokenProvider: true,
     );
+  }
+
+  void _applyRelayCredentialPersistence({
+    required Uri serverUri,
+    required String clientToken,
+    required bool persistCredentials,
+  }) {
+    if (!localHostDriver.isSupported) {
+      _persistWebCredentialsOnAuth = persistCredentials;
+      return;
+    }
+    if (!persistCredentials) return;
+    _relayCredentials = RelayCredentials(
+      serverUrl: serverUri.toString(),
+      clientToken: clientToken,
+      casterToken: _activeCasterToken,
+      iapServiceAccount: _activeIapServiceAccount,
+      iapKeyFilePath: _activeIapKeyFilePath,
+      gcloudPath: _activeGcloudPath,
+    );
+    saveStoredRelayCredentials(_storage, _relayCredentials);
   }
 
   static void _validateRelayIapSelection({
@@ -1418,6 +1537,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _activeTabIndex = _tabs.length - 1;
     _syncFocusedPaneStates();
     _activeOverlay = FtermOverlay.none;
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
     return tabId;
   }
@@ -1425,9 +1545,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Splits the currently focused pane along [axis].
   ///
   /// On Desktop hosts, spawns a new local shell in the new split pane (unless
-  /// [remoteSessionId] is explicitly specified). On Web/viewer hosts, opens a
-  /// new [RemoteTerminalPort] attached to [remoteSessionId] or the focused
-  /// pane's remote session.
+  /// [remoteSessionId] is explicitly specified). On Web/viewer hosts, spawns a
+  /// fresh remote shell when [remoteSessionId] is `null` and the focused
+  /// session advertises `allowSpawn`, or mirrors [remoteSessionId] / the
+  /// focused remote session otherwise.
   Future<String?> splitFocusedPane(
     SplitAxis axis, {
     SessionId? remoteSessionId,
@@ -1443,6 +1564,14 @@ final class FtermWorkspaceController extends ChangeNotifier {
     }
 
     final targetPaneId = tab.splitTree.focusedPaneId;
+    if (_trySpawnRemoteSplit(
+      axis: axis,
+      targetPaneId: targetPaneId,
+      remoteSessionId: remoteSessionId,
+    )) {
+      return null;
+    }
+
     final newPaneId = _allocatePaneId();
     final newPane = await _createSplitPane(
       tab: tab,
@@ -1461,8 +1590,25 @@ final class FtermWorkspaceController extends ChangeNotifier {
       axis: axis,
     );
     _syncFocusedPaneStates();
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
     return newPaneId;
+  }
+
+  bool _trySpawnRemoteSplit({
+    required SplitAxis axis,
+    required String targetPaneId,
+    required SessionId? remoteSessionId,
+  }) {
+    if (localHostDriver.isSupported || remoteSessionId != null) return false;
+    final currentRemoteId = _panes[targetPaneId]?.remoteSessionId;
+    if (currentRemoteId == null || !canSpawnRemoteSession(currentRemoteId)) {
+      return false;
+    }
+    return _enqueueRemoteShellSpawn(
+      currentRemoteId,
+      splitTarget: (axis: axis, targetPaneId: targetPaneId),
+    );
   }
 
   Future<String?> _openSplitInEmptyWorkspace({
@@ -1532,6 +1678,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (tabIdx < 0) return;
 
     final tab = _tabs[tabIdx];
+    _cancelPendingSpawnsForPane(targetPaneId);
     final removedPane = _panes.remove(targetPaneId);
     final nextTree = tab.splitTree.closePane(targetPaneId);
     if (nextTree == null) {
@@ -1544,6 +1691,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       _disposeScopeIfUnused(removedPane);
     }
     _syncFocusedPaneStates();
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
     if (removedPane != null) {
       await removedPane.dispose(disposePort: true);
@@ -1611,6 +1759,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _activeTabIndex = index;
     _tabs[index].unreadBellCount = 0;
     _syncFocusedPaneStates();
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
   }
 
@@ -1638,6 +1787,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       final nextActive = _tabs.indexWhere((t) => t.tabId == activeId);
       if (nextActive >= 0) _activeTabIndex = nextActive;
     }
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
   }
 
@@ -1655,6 +1805,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     tab.unreadBellCount = 0;
     tab.splitTree = tab.splitTree.focusPane(paneId);
     _syncFocusedPaneStates();
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
   }
 
@@ -1666,6 +1817,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (identical(next, tab.splitTree)) return;
     tab.splitTree = next;
     _syncFocusedPaneStates();
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
   }
 
@@ -1676,6 +1828,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     final next = tab.splitTree.setSplitRatio(splitId, ratio);
     if (identical(next, tab.splitTree)) return;
     tab.splitTree = next;
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
   }
 
@@ -1715,6 +1868,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       remote.rename(wireTitle, clearPin: clearPin || trimmed.isEmpty);
     }
     _activeOverlay = FtermOverlay.none;
+    _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
   }
 
@@ -3187,6 +3341,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   void _onClientDisconnected(bool _) {
     if (_disposed) return;
+    _cancelAllPendingRemoteSpawns();
     diagnosticLog.record(DiagnosticEventKind.relayDisconnected);
     if (_connectionState != ClientConnectionState.authFailed) {
       _connectionState = ClientConnectionState.reconnecting;
@@ -3198,42 +3353,349 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (_disposed) return;
     switch (message) {
       case AuthAcceptedFrame():
-        _connectionState = ClientConnectionState.authenticated;
-        _authErrorMessage = null;
-        _statusBanner = null;
-        _notifyChromeChanged();
+        _handleAuthAccepted();
       case SessionDirectoryFrame(:final sessions):
-        _connectionState = ClientConnectionState.authenticated;
-        _authErrorMessage = null;
-        _remoteDirectorySessions
-          ..clear()
-          ..addAll(sessions);
-        if (!localHostDriver.isSupported) {
-          _syncAutoRemoteTabs();
-        }
-        _notifyChromeChanged();
+        _handleSessionDirectory(sessions);
       case FileUploadAckFrame():
         _uploadCoordinator.handleAckFrame(message);
       case SessionClosedFrame():
         _notifyChromeChanged();
       case ErrorFrame(:final code, :final message):
-        if (CastClientRepository.isFatalAuthErrorCode(code)) {
-          diagnosticLog.record(DiagnosticEventKind.relayAuthFailed);
-          _connectionState = ClientConnectionState.authFailed;
-          _authErrorMessage = message;
-          _statusBanner = message;
-          if (!localHostDriver.isSupported) {
-            _activeOverlay = FtermOverlay.connect;
-          }
-          _notifyChromeChanged();
-        } else {
-          diagnosticLog.record(DiagnosticEventKind.relayProtocolError);
-          _setStatusBanner(message);
-        }
+        _handleServerErrorFrame(code, message);
       default:
         break;
     }
   }
+
+  void _handleAuthAccepted() {
+    _connectionState = ClientConnectionState.authenticated;
+    _authErrorMessage = null;
+    _statusBanner = null;
+    if (!localHostDriver.isSupported &&
+        _persistWebCredentialsOnAuth &&
+        _activeClientToken.isNotEmpty) {
+      _relayCredentials = RelayCredentials(
+        serverUrl: _activeRelayUri.toString(),
+        clientToken: _activeClientToken,
+      );
+      saveStoredRelayCredentials(_storage, _relayCredentials);
+    }
+    _notifyChromeChanged();
+  }
+
+  void _handleServerErrorFrame(String code, String message) {
+    if (CastClientRepository.isFatalAuthErrorCode(code)) {
+      diagnosticLog.record(DiagnosticEventKind.relayAuthFailed);
+      _cancelAllPendingRemoteSpawns();
+      _connectionState = ClientConnectionState.authFailed;
+      _authErrorMessage = message;
+      _statusBanner = message;
+      if (!localHostDriver.isSupported) {
+        _relayCredentials = RelayCredentials.empty;
+        saveStoredRelayCredentials(_storage, RelayCredentials.empty);
+        _activeOverlay = FtermOverlay.connect;
+      }
+      _notifyChromeChanged();
+      return;
+    }
+    if (code == 'spawn_rejected' && _pendingRemoteSpawns.isNotEmpty) {
+      _pendingRemoteSpawns.removeAt(0).timeoutTimer.cancel();
+    }
+    diagnosticLog.record(DiagnosticEventKind.relayProtocolError);
+    _setStatusBanner(message);
+  }
+
+  void _handleSessionDirectory(List<SessionSummary> sessions) {
+    _connectionState = ClientConnectionState.authenticated;
+    _authErrorMessage = null;
+    _remoteDirectorySessions
+      ..clear()
+      ..addAll(sessions);
+    if (!localHostDriver.isSupported && !_webResumeReconciled) {
+      _reconcileWebWorkspaceResume();
+    }
+    _fulfillPendingRemoteSpawns();
+    if (!localHostDriver.isSupported) {
+      _syncAutoRemoteTabs();
+      _persistWebWorkspaceResumeSnapshot();
+    }
+    _notifyChromeChanged();
+  }
+
+  void _fulfillPendingRemoteSpawns() {
+    if (_pendingRemoteSpawns.isEmpty) return;
+    for (final session in availableRemoteSessions) {
+      if (_findTabIndexForSession(session.id) >= 0) continue;
+      final matchIndex = _pendingRemoteSpawns.indexWhere(
+        (pending) => !pending.baselineSessionIds.contains(session.id),
+      );
+      if (matchIndex < 0) continue;
+      final pending = _pendingRemoteSpawns.removeAt(matchIndex);
+      pending.timeoutTimer.cancel();
+      _attachSpawnedRemoteSession(session.id, pending);
+      if (_pendingRemoteSpawns.isEmpty) break;
+    }
+  }
+
+  void _attachSpawnedRemoteSession(
+    SessionId sessionId,
+    _PendingRemoteSpawn pending,
+  ) {
+    _dismissedRemoteSessions.remove(sessionId);
+    final targetPaneId = pending.targetPaneId;
+    final splitAxis = pending.splitAxis;
+    if (targetPaneId != null && splitAxis != null) {
+      final tabIdx = _findTabIndexContainingPane(targetPaneId);
+      if (tabIdx >= 0) {
+        final tab = _tabs[tabIdx];
+        final newPaneId = _allocatePaneId();
+        _panes[newPaneId] = _createPaneController(
+          paneId: newPaneId,
+          port: repository.openTerminalPort(sessionId),
+          remoteSessionId: sessionId,
+        );
+        tab.splitTree = tab.splitTree.splitPane(
+          targetPaneId: targetPaneId,
+          newPaneId: newPaneId,
+          axis: splitAxis,
+        );
+        _activeTabIndex = tabIdx;
+        _syncFocusedPaneStates();
+        _persistWebWorkspaceResumeSnapshot();
+        return;
+      }
+    }
+    openRemoteSessionTab(sessionId);
+  }
+
+  void _cancelPendingSpawnsForPane(String paneId) {
+    _pendingRemoteSpawns.removeWhere((pending) {
+      if (pending.targetPaneId != paneId) return false;
+      pending.timeoutTimer.cancel();
+      return true;
+    });
+  }
+
+  void _cancelAllPendingRemoteSpawns() {
+    for (final pending in _pendingRemoteSpawns) {
+      pending.timeoutTimer.cancel();
+    }
+    _pendingRemoteSpawns.clear();
+  }
+
+  void _reconcileWebWorkspaceResume() {
+    _webResumeReconciled = true;
+    final snapshot = _pendingWebResumeSnapshot;
+    _pendingWebResumeSnapshot = WebWorkspaceResumeSnapshot.empty;
+    if (snapshot.isEmpty) return;
+    if (snapshot.serverUrl.isNotEmpty &&
+        snapshot.serverUrl != _activeRelayUri.toString()) {
+      return;
+    }
+
+    final liveIds = <String>{
+      for (final session in availableRemoteSessions) session.id.value,
+    };
+    for (final dismissed in snapshot.dismissedSessionIds) {
+      if (liveIds.contains(dismissed)) {
+        _dismissedRemoteSessions.add(SessionId(dismissed));
+      }
+    }
+    if (_tabs.isNotEmpty || snapshot.tabs.isEmpty) return;
+
+    int? restoredActiveIndex;
+    for (var i = 0; i < snapshot.tabs.length; i++) {
+      final tab = _materializeResumeTab(snapshot.tabs[i], liveIds);
+      if (tab == null) continue;
+      if (i == snapshot.activeTabIndex) {
+        restoredActiveIndex = _tabs.length;
+      }
+      _tabs.add(tab);
+    }
+    if (_tabs.isNotEmpty) {
+      _activeTabIndex = (restoredActiveIndex ?? snapshot.activeTabIndex).clamp(
+        0,
+        _tabs.length - 1,
+      );
+      _syncFocusedPaneStates();
+    }
+  }
+
+  FtermTabState? _materializeResumeTab(
+    WebTabResumeState savedTab,
+    Set<String> liveIds,
+  ) {
+    final pruned = _pruneResumeNode(savedTab.root, liveIds);
+    if (pruned == null) return null;
+    final leafPaneIds = <String>[];
+    final rootNode = _buildSplitTreeNodeFromResume(pruned, leafPaneIds);
+    final focusIdx = _remapFocusedLeafIndex(
+      savedTab.sessionIds,
+      savedTab.focusedLeafIndex,
+      liveIds,
+      leafPaneIds.length,
+    );
+    return FtermTabState(
+      tabId: _allocateTabId(),
+      splitTree: SplitTreeModel(
+        root: rootNode,
+        focusedPaneId: leafPaneIds[focusIdx],
+      ),
+      pinnedTitle: savedTab.pinnedTitle,
+    );
+  }
+
+  static int _remapFocusedLeafIndex(
+    List<String> originalSessionIds,
+    int savedFocusIndex,
+    Set<String> liveIds,
+    int survivingCount,
+  ) {
+    final targetIndex = savedFocusIndex.clamp(0, originalSessionIds.length - 1);
+    var survivingBefore = 0;
+    for (var i = 0; i < targetIndex; i++) {
+      if (liveIds.contains(originalSessionIds[i])) {
+        survivingBefore += 1;
+      }
+    }
+    return survivingBefore.clamp(0, survivingCount - 1);
+  }
+
+  SplitTreeNode _buildSplitTreeNodeFromResume(
+    WebResumeSplitNode node,
+    List<String> leafPaneIds,
+  ) => switch (node) {
+    WebResumePaneLeaf(:final sessionId) => _materializeResumeLeaf(
+      SessionId(sessionId),
+      leafPaneIds,
+    ),
+    WebResumeSplitBranch(
+      :final axis,
+      :final ratio,
+      :final first,
+      :final second,
+    ) =>
+      SplitNode(
+        splitId: _allocateResumeSplitId(),
+        axis: axis,
+        ratio: ratio,
+        first: _buildSplitTreeNodeFromResume(first, leafPaneIds),
+        second: _buildSplitTreeNodeFromResume(second, leafPaneIds),
+      ),
+  };
+
+  PaneLeaf _materializeResumeLeaf(
+    SessionId sessionId,
+    List<String> leafPaneIds,
+  ) {
+    _dismissedRemoteSessions.remove(sessionId);
+    final paneId = _allocatePaneId();
+    _panes[paneId] = _createPaneController(
+      paneId: paneId,
+      port: repository.openTerminalPort(sessionId),
+      remoteSessionId: sessionId,
+    );
+    leafPaneIds.add(paneId);
+    return PaneLeaf(paneId);
+  }
+
+  WebResumeSplitNode? _pruneResumeNode(
+    WebResumeSplitNode node,
+    Set<String> liveIds,
+  ) => switch (node) {
+    WebResumePaneLeaf(:final sessionId) =>
+      liveIds.contains(sessionId) ? node : null,
+    WebResumeSplitBranch(
+      :final axis,
+      :final ratio,
+      :final first,
+      :final second,
+    ) =>
+      _combineResumeBranches(
+        axis: axis,
+        ratio: ratio,
+        first: _pruneResumeNode(first, liveIds),
+        second: _pruneResumeNode(second, liveIds),
+      ),
+  };
+
+  static WebResumeSplitNode? _combineResumeBranches({
+    required SplitAxis axis,
+    required double ratio,
+    required WebResumeSplitNode? first,
+    required WebResumeSplitNode? second,
+  }) {
+    if (first == null) return second;
+    if (second == null) return first;
+    return WebResumeSplitBranch(
+      axis: axis,
+      ratio: ratio,
+      first: first,
+      second: second,
+    );
+  }
+
+  void _persistWebWorkspaceResumeSnapshot() {
+    if (_disposed || localHostDriver.isSupported || !_webResumeReconciled) {
+      return;
+    }
+    saveWebWorkspaceResumeSnapshot(
+      _storage,
+      _buildWebWorkspaceResumeSnapshot(),
+    );
+  }
+
+  WebWorkspaceResumeSnapshot _buildWebWorkspaceResumeSnapshot() {
+    final savedTabs = <WebTabResumeState>[];
+    var mappedActiveIndex = 0;
+    for (var i = 0; i < _tabs.length; i++) {
+      final saved = _captureResumeTab(_tabs[i]);
+      if (saved == null) continue;
+      if (i == _activeTabIndex) {
+        mappedActiveIndex = savedTabs.length;
+      }
+      savedTabs.add(saved);
+    }
+    return WebWorkspaceResumeSnapshot(
+      serverUrl: _activeRelayUri.toString(),
+      tabs: savedTabs,
+      activeTabIndex: savedTabs.isEmpty
+          ? 0
+          : mappedActiveIndex.clamp(0, savedTabs.length - 1),
+      dismissedSessionIds: {
+        for (final id in _dismissedRemoteSessions) id.value,
+      },
+    );
+  }
+
+  WebTabResumeState? _captureResumeTab(FtermTabState tab) {
+    final captured = _captureResumeNode(tab.splitTree.root);
+    if (captured == null) return null;
+    final leafPaneIds = <String>[
+      for (final paneId in tab.splitTree.paneIds)
+        if (_panes[paneId]?.remoteSessionId != null) paneId,
+    ];
+    final focusIdx = leafPaneIds.indexOf(tab.splitTree.focusedPaneId);
+    return WebTabResumeState(
+      root: captured,
+      focusedLeafIndex: focusIdx < 0 ? 0 : focusIdx,
+      pinnedTitle: tab.pinnedTitle,
+    );
+  }
+
+  WebResumeSplitNode? _captureResumeNode(SplitTreeNode node) => switch (node) {
+    PaneLeaf(:final paneId) => switch (_panes[paneId]?.remoteSessionId) {
+      final sessionId? => WebResumePaneLeaf(sessionId.value),
+      null => null,
+    },
+    SplitNode(:final axis, :final ratio, :final first, :final second) =>
+      _combineResumeBranches(
+        axis: axis,
+        ratio: ratio,
+        first: _captureResumeNode(first),
+        second: _captureResumeNode(second),
+      ),
+  };
 
   void _syncAutoRemoteTabs() {
     final sessions = availableRemoteSessions;
@@ -3310,11 +3772,13 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   static String _allocatePaneId() => 'pane-${++_idCounter}';
   static String _allocateTabId() => 'tab-${++_idCounter}';
+  static String _allocateResumeSplitId() => 'resume-split-${++_idCounter}';
 
   @override
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _cancelAllPendingRemoteSpawns();
     _uploadCoordinator.cancel();
     clientConnectingEvent.removeListener(repository.bus, _onClientConnecting);
     clientConnectFailedEvent.removeListener(
