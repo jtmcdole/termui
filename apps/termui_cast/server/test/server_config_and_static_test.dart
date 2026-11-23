@@ -6,6 +6,7 @@ import 'package:checks/checks.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
+import 'package:termui_cast_server/src/static_web_handler.dart';
 import 'package:termui_cast_server/termui_cast_server.dart';
 import 'package:test/test.dart';
 
@@ -276,17 +277,26 @@ void main() {
 
     Future<({int statusCode, HttpHeaders headers, List<int> body})> sendRequest(
       String method,
-      String path,
-    ) async {
-      final client = HttpClient();
+      String path, {
+      Map<String, String>? headers,
+      bool autoUncompress = false,
+      bool followRedirects = true,
+      int? targetPort,
+    }) async {
+      final client = HttpClient()..autoUncompress = autoUncompress;
       try {
         final uri = Uri(
           scheme: 'http',
           host: '127.0.0.1',
-          port: server.port,
+          port: targetPort ?? server.port,
           path: path,
         );
         final req = await client.openUrl(method, uri);
+        req.followRedirects = followRedirects;
+        if (!autoUncompress) {
+          req.headers.removeAll(HttpHeaders.acceptEncodingHeader);
+        }
+        headers?.forEach(req.headers.set);
         final res = await req.close();
         final bytes = await res.fold<List<int>>(
           <int>[],
@@ -573,11 +583,12 @@ void main() {
           ),
         ).throws<FormatException>();
 
-        final client = HttpClient();
+        final client = HttpClient()..autoUncompress = false;
         addTearDown(() => client.close(force: true));
         final wasmReq = await client.getUrl(
           Uri.parse('http://127.0.0.1:${server.port}/main.dart.wasm'),
         );
+        wasmReq.headers.removeAll(HttpHeaders.acceptEncodingHeader);
         final wasmRes = await wasmReq.close();
         await wasmRes.drain<void>();
         check(wasmRes.statusCode).equals(HttpStatus.ok);
@@ -594,7 +605,9 @@ void main() {
         final revalReq = await client.getUrl(
           Uri.parse('http://127.0.0.1:${server.port}/main.dart.wasm'),
         );
-        revalReq.headers.set(HttpHeaders.ifNoneMatchHeader, etag);
+        revalReq.headers
+          ..removeAll(HttpHeaders.acceptEncodingHeader)
+          ..set(HttpHeaders.ifNoneMatchHeader, etag);
         final revalRes = await revalReq.close();
         await revalRes.drain<void>();
         check(revalRes.statusCode).equals(HttpStatus.notModified);
@@ -614,6 +627,7 @@ void main() {
         final wasmReq2 = await client.getUrl(
           Uri.parse('http://127.0.0.1:${server2.port}/main.dart.wasm'),
         );
+        wasmReq2.headers.removeAll(HttpHeaders.acceptEncodingHeader);
         final wasmRes2 = await wasmReq2.close();
         await wasmRes2.drain<void>();
         check(
@@ -621,5 +635,602 @@ void main() {
         ).not((it) => it.equals(etag));
       },
     );
+
+    test(
+      'negotiates Accept-Encoding compression, sidecars, .ttf gzip, q=0, 304, HEAD, Vary, and raw binary assets (#402)',
+      () async {
+        final largeWasm = Uint8List.fromList([
+          for (var i = 0; i < 2048; i++) i % 17,
+        ]);
+        await File(p.join(webDir.path, 'app.wasm')).writeAsBytes(largeWasm);
+        final woff2Bytes = Uint8List.fromList([0x77, 0x4F, 0x46, 0x32, 1, 2]);
+        await File(p.join(webDir.path, 'font.woff2')).writeAsBytes(woff2Bytes);
+        await File(
+          p.join(webDir.path, 'icon.png'),
+        ).writeAsBytes(const [0x89, 0x50, 0x4E, 0x47]);
+
+        // 1. In-memory gzip on .wasm and .ttf, with Vary + encoding-scoped ETag + HEAD Content-Length.
+        final gzWasm = await sendRequest(
+          'GET',
+          '/app.wasm',
+          headers: const {'accept-encoding': 'gzip'},
+        );
+        check(gzWasm.statusCode).equals(HttpStatus.ok);
+        check(gzWasm.headers.contentType?.mimeType).equals('application/wasm');
+        check(
+          gzWasm.headers.value(HttpHeaders.contentEncodingHeader),
+        ).equals('gzip');
+        check(
+          gzWasm.headers.value(HttpHeaders.varyHeader),
+        ).equals('Accept-Encoding');
+        check(gzWasm.headers.contentLength).equals(gzWasm.body.length);
+        check(gzip.decode(gzWasm.body)).deepEquals(largeWasm);
+        final rawWasmDigest = '${sha256.convert(largeWasm)}';
+        check(
+          gzWasm.headers.value(HttpHeaders.etagHeader),
+        ).equals('"$rawWasmDigest-gzip"');
+
+        final headGzWasm = await sendRequest(
+          'HEAD',
+          '/app.wasm',
+          headers: const {'accept-encoding': 'gzip'},
+        );
+        check(headGzWasm.statusCode).equals(HttpStatus.ok);
+        check(headGzWasm.body).isEmpty();
+        check(
+          headGzWasm.headers.value(HttpHeaders.contentEncodingHeader),
+        ).equals('gzip');
+        check(headGzWasm.headers.contentLength).equals(gzWasm.body.length);
+        check(
+          headGzWasm.headers.value(HttpHeaders.etagHeader),
+        ).equals('"$rawWasmDigest-gzip"');
+
+        // .ttf font compresses cleanly with font/ttf MIME type.
+        final gzTtf = await sendRequest(
+          'GET',
+          '/assets/fonts/CascadiaMonoPL.ttf',
+          headers: const {'accept-encoding': 'gzip'},
+        );
+        check(gzTtf.statusCode).equals(HttpStatus.ok);
+        check(gzTtf.headers.contentType?.mimeType).equals('font/ttf');
+        check(
+          gzTtf.headers.value(HttpHeaders.contentEncodingHeader),
+        ).equals('gzip');
+        check(
+          gzTtf.headers.value(HttpHeaders.varyHeader),
+        ).equals('Accept-Encoding');
+        check(gzip.decode(gzTtf.body)).deepEquals(const [1, 2, 3, 4]);
+
+        // 2. q=0 exclusion (including duplicate orderings) and omitted Accept-Encoding serve raw bytes with raw ETag and Vary.
+        for (final acceptEncoding in const [
+          'gzip;q=0',
+          'gzip;q=0, gzip;q=1.0',
+          'gzip;q=1.0, gzip;q=0',
+        ]) {
+          final qZero = await sendRequest(
+            'GET',
+            '/app.wasm',
+            headers: {'accept-encoding': acceptEncoding},
+          );
+          check(qZero.statusCode).equals(HttpStatus.ok);
+          check(
+            qZero.headers.value(HttpHeaders.contentEncodingHeader),
+          ).isNull();
+          check(
+            qZero.headers.value(HttpHeaders.varyHeader),
+          ).equals('Accept-Encoding');
+          check(
+            qZero.headers.value(HttpHeaders.etagHeader),
+          ).equals('"$rawWasmDigest"');
+          check(qZero.body).deepEquals(largeWasm);
+        }
+
+        // 3. Encoding-scoped ETag 304: raw ETag must not match gzipped variant and vice versa.
+        final mismatch304 = await sendRequest(
+          'GET',
+          '/app.wasm',
+          headers: {
+            'accept-encoding': 'gzip',
+            'if-none-match': '"$rawWasmDigest"',
+          },
+        );
+        check(mismatch304.statusCode).equals(HttpStatus.ok);
+
+        final matchGz304 = await sendRequest(
+          'GET',
+          '/app.wasm',
+          headers: {
+            'accept-encoding': 'gzip',
+            'if-none-match': '"$rawWasmDigest-gzip"',
+          },
+        );
+        check(matchGz304.statusCode).equals(HttpStatus.notModified);
+        check(matchGz304.body).isEmpty();
+        check(
+          matchGz304.headers.value(HttpHeaders.varyHeader),
+        ).equals('Accept-Encoding');
+
+        // 4. Pre-compressed .br and .gz sidecars keep original MIME type, prefer br over gzip,
+        // and refuse symlink-escaped sidecars.
+        final fakeBr = Uint8List.fromList([0x1B, 0x02, 0x03, 0x04]);
+        final fakeGz = Uint8List.fromList(gzip.encode(const [9, 8, 7, 6]));
+        await File(p.join(webDir.path, 'app.wasm.br')).writeAsBytes(fakeBr);
+        await File(p.join(webDir.path, 'app.wasm.gz')).writeAsBytes(fakeGz);
+
+        final brRes = await sendRequest(
+          'GET',
+          '/app.wasm',
+          headers: const {'accept-encoding': 'gzip, deflate, br'},
+        );
+        check(brRes.statusCode).equals(HttpStatus.ok);
+        check(brRes.headers.contentType?.mimeType).equals('application/wasm');
+        check(
+          brRes.headers.value(HttpHeaders.contentEncodingHeader),
+        ).equals('br');
+        check(brRes.body).deepEquals(fakeBr);
+        check(
+          brRes.headers.value(HttpHeaders.etagHeader),
+        ).equals('"${sha256.convert(fakeBr)}-br"');
+
+        final qPrefGzip = await sendRequest(
+          'GET',
+          '/app.wasm',
+          headers: const {'accept-encoding': 'br;q=0.5, gzip;q=1.0'},
+        );
+        check(
+          qPrefGzip.headers.value(HttpHeaders.contentEncodingHeader),
+        ).equals('gzip');
+        check(qPrefGzip.body).deepEquals(fakeGz);
+
+        // Escaping symlink .br sidecar is ignored (never leaks outsideSecret).
+        final escapedBr = Link(p.join(webDir.path, 'main.dart.mjs.br'))
+          ..createSync(outsideSecret.path);
+        addTearDown(() {
+          if (escapedBr.existsSync()) escapedBr.deleteSync();
+        });
+        final safeMjs = await sendRequest(
+          'GET',
+          '/main.dart.mjs',
+          headers: const {'accept-encoding': 'br, gzip'},
+        );
+        check(safeMjs.statusCode).equals(HttpStatus.ok);
+        check(
+          safeMjs.headers.value(HttpHeaders.contentEncodingHeader),
+        ).equals('gzip');
+        check(
+          utf8.decode(gzip.decode(safeMjs.body)),
+        ).equals('export const ok = true;');
+
+        // 5. Already-compressed formats (.woff2, .png) remain uncompressed without Vary.
+        for (final rawPath in const ['/font.woff2', '/icon.png']) {
+          final res = await sendRequest(
+            'GET',
+            rawPath,
+            headers: const {'accept-encoding': 'gzip, br'},
+          );
+          check(res.statusCode).equals(HttpStatus.ok);
+          check(res.headers.value(HttpHeaders.contentEncodingHeader)).isNull();
+          check(res.headers.value(HttpHeaders.varyHeader)).isNull();
+        }
+      },
+    );
+
+    test(
+      'enforces --base-path routing, 308 redirect, <base href> rewrite bypassing sidecars, and traversal 403 (#406)',
+      () async {
+        await File(p.join(webDir.path, 'index.html')).writeAsString(
+          '<!doctype html><html><head><base href="/"></head><body>CastApp</body></html>',
+        );
+        await File(
+          p.join(webDir.path, 'index.html.gz'),
+        ).writeAsBytes(gzip.encode(utf8.encode('STALE_SIDECAR_GZ')));
+        await File(
+          p.join(webDir.path, 'index.html.br'),
+        ).writeAsBytes(utf8.encode('STALE_SIDECAR_BR'));
+
+        final prefixedServer = await CastServer.bind(
+          ServerConfig(port: 0, webRoot: webDir.path, basePath: '/term/'),
+        );
+        addTearDown(prefixedServer.close);
+        check(prefixedServer.casterUri.path).equals('/term/v1/caster');
+        check(prefixedServer.clientUri.path).equals('/term/v1/client');
+
+        // Exact GET/HEAD /term redirects 308 -> /term/.
+        for (final method in const ['GET', 'HEAD']) {
+          final redir = await sendRequest(
+            method,
+            '/term',
+            followRedirects: false,
+            targetPort: prefixedServer.port,
+          );
+          check(redir.statusCode).equals(HttpStatus.permanentRedirect);
+          check(
+            redir.headers.value(HttpHeaders.locationHeader),
+          ).equals('/term/');
+        }
+
+        // Paths outside exact /term segment boundary return 404.
+        for (final outsidePath in const [
+          '/',
+          '/healthz',
+          '/v1/client',
+          '/terminal',
+          '/terminal/index.html',
+        ]) {
+          final res = await sendRequest(
+            'GET',
+            outsidePath,
+            targetPort: prefixedServer.port,
+          );
+          check(res.statusCode).equals(HttpStatus.notFound);
+        }
+
+        // Prefixed /term/healthz works.
+        final health = await sendRequest(
+          'GET',
+          '/term/healthz',
+          targetPort: prefixedServer.port,
+        );
+        check(health.statusCode).equals(HttpStatus.ok);
+        check(utf8.decode(health.body)).equals('ok\n');
+
+        // GET /term/ bypasses .br/.gz sidecars, rewrites <base href="/"> -> <base href="/term/">,
+        // and computes ETag and gzip on the rewritten HTML.
+        final expectedHtml =
+            '<!doctype html><html><head><base href="/term/"></head><body>CastApp</body></html>';
+        final expectedDigest = '${sha256.convert(utf8.encode(expectedHtml))}';
+
+        final rawIndex = await sendRequest(
+          'GET',
+          '/term/',
+          targetPort: prefixedServer.port,
+        );
+        check(rawIndex.statusCode).equals(HttpStatus.ok);
+        check(utf8.decode(rawIndex.body)).equals(expectedHtml);
+        check(
+          rawIndex.headers.value(HttpHeaders.etagHeader),
+        ).equals('"$expectedDigest"');
+
+        final gzIndex = await sendRequest(
+          'GET',
+          '/term/',
+          headers: const {'accept-encoding': 'br, gzip'},
+          targetPort: prefixedServer.port,
+        );
+        check(gzIndex.statusCode).equals(HttpStatus.ok);
+        check(
+          gzIndex.headers.value(HttpHeaders.contentEncodingHeader),
+        ).equals('gzip');
+        check(utf8.decode(gzip.decode(gzIndex.body))).equals(expectedHtml);
+        check(
+          gzIndex.headers.value(HttpHeaders.etagHeader),
+        ).equals('"$expectedDigest-gzip"');
+
+        // SPA fallback under /term/sessions/shell-1 also serves rewritten index.html.
+        final spa = await sendRequest(
+          'GET',
+          '/term/sessions/shell-1',
+          targetPort: prefixedServer.port,
+        );
+        check(spa.statusCode).equals(HttpStatus.ok);
+        check(utf8.decode(spa.body)).equals(expectedHtml);
+
+        // Static asset under /term/main.dart.wasm strips basePath once.
+        final asset = await sendRequest(
+          'GET',
+          '/term/main.dart.wasm',
+          targetPort: prefixedServer.port,
+        );
+        check(asset.statusCode).equals(HttpStatus.ok);
+        check(asset.headers.contentType?.mimeType).equals('application/wasm');
+
+        // Also rewrites $FLUTTER_BASE_HREF placeholder.
+        await File(p.join(webDir.path, 'index.html')).writeAsString(
+          '<!doctype html><html><head><base href="\$FLUTTER_BASE_HREF"></head></html>',
+        );
+        final placeholderIndex = await sendRequest(
+          'GET',
+          '/term/',
+          targetPort: prefixedServer.port,
+        );
+        check(
+          utf8.decode(placeholderIndex.body),
+        ).contains('<base href="/term/">');
+
+        // Encoded traversal under /term returns 403 Forbidden.
+        final client = HttpClient()..autoUncompress = false;
+        addTearDown(() => client.close(force: true));
+        final travReq = await client.getUrl(
+          Uri.parse(
+            'http://127.0.0.1:${prefixedServer.port}/term/..%2f..%2fsecret.txt',
+          ),
+        );
+        final travRes = await travReq.close();
+        await travRes.drain<void>();
+        check(travRes.statusCode).equals(HttpStatus.forbidden);
+
+        // Direct StaticWebHandler callers passing invalid basePath values are rejected.
+        for (final bad in const ['/bad"path', '/a//b', '/term/../x', '/v1']) {
+          check(
+            () => StaticWebHandler(webDir.path, basePath: bad),
+          ).throws<FormatException>();
+        }
+
+        // Direct StaticWebHandler callers passing basePath without a leading slash normalize cleanly to /term.
+        final directHandler = StaticWebHandler(webDir.path, basePath: 'term');
+        final directHttp = await HttpServer.bind(
+          InternetAddress.loopbackIPv4,
+          0,
+        );
+        addTearDown(() => directHttp.close(force: true));
+        directHttp.listen(directHandler.handle);
+
+        final directIndex = await sendRequest(
+          'GET',
+          '/term/',
+          targetPort: directHttp.port,
+        );
+        check(directIndex.statusCode).equals(HttpStatus.ok);
+        check(utf8.decode(directIndex.body)).contains('<base href="/term/">');
+
+        final directAsset = await sendRequest(
+          'GET',
+          '/term/main.dart.wasm',
+          targetPort: directHttp.port,
+        );
+        check(directAsset.statusCode).equals(HttpStatus.ok);
+        check(
+          directAsset.headers.contentType?.mimeType,
+        ).equals('application/wasm');
+      },
+    );
   });
+
+  group(
+    'Loopback Host matching (#401), --base-path (#406), and proxy client auth (#407)',
+    () {
+      test(
+        'allows loopback Host matching allowedOrigins with default-port rules and blocks unknown hosts (#401)',
+        () {
+          final emptyOrigins = ServerConfig(port: 0);
+          check(emptyOrigins.isRequestHostAllowed('127.0.0.1:8420')).isTrue();
+          check(emptyOrigins.isRequestHostAllowed('localhost:8420')).isTrue();
+          check(emptyOrigins.isRequestHostAllowed('[::1]:8420')).isTrue();
+          check(emptyOrigins.isRequestHostAllowed('evil.example')).isFalse();
+          check(emptyOrigins.isRequestHostAllowed('example.ts.net')).isFalse();
+
+          final withOrigins = ServerConfig(
+            port: 0,
+            allowedOrigins: const [
+              'https://example.ts.net',
+              'https://custom.ts.net:8443',
+              'http://plain.internal',
+            ],
+          );
+          check(withOrigins.isRequestHostAllowed('example.ts.net')).isTrue();
+          check(
+            withOrigins.isRequestHostAllowed('example.ts.net:443'),
+          ).isTrue();
+          check(
+            withOrigins.isRequestHostAllowed('example.ts.net:8443'),
+          ).isFalse();
+          check(
+            withOrigins.isRequestHostAllowed('example.ts.net:80'),
+          ).isFalse();
+          check(withOrigins.isRequestHostAllowed('custom.ts.net')).isFalse();
+          check(
+            withOrigins.isRequestHostAllowed('custom.ts.net:8443'),
+          ).isTrue();
+          check(withOrigins.isRequestHostAllowed('plain.internal')).isTrue();
+          check(withOrigins.isRequestHostAllowed('plain.internal:80')).isTrue();
+          check(
+            withOrigins.isRequestHostAllowed('plain.internal:443'),
+          ).isFalse();
+          check(withOrigins.isRequestHostAllowed('evil.example')).isFalse();
+
+          check(
+            withOrigins.isOriginAllowed(
+              null,
+              requestHostHeader: 'example.ts.net',
+            ),
+          ).isTrue();
+          check(
+            withOrigins.isOriginAllowed(const [
+              'https://example.ts.net',
+            ], requestHostHeader: 'example.ts.net'),
+          ).isTrue();
+          check(
+            withOrigins.isOriginAllowed(const [
+              'https://evil.example',
+            ], requestHostHeader: 'example.ts.net'),
+          ).isFalse();
+
+          // Scheme downgrade on loopback proxied host must be rejected even without X-Forwarded-Proto.
+          final tailscaleCfg = ServerConfig(
+            port: 0,
+            allowedOrigins: const ['https://box.tail.ts.net'],
+          );
+          check(
+            tailscaleCfg.isOriginAllowed(const [
+              'http://box.tail.ts.net',
+            ], requestHostHeader: 'box.tail.ts.net'),
+          ).isFalse();
+          check(
+            tailscaleCfg.isOriginAllowed(const [
+              'https://box.tail.ts.net',
+            ], requestHostHeader: 'box.tail.ts.net'),
+          ).isTrue();
+        },
+      );
+
+      test(
+        'normalizes and validates --base-path / TERMUI_CAST_BASE_PATH (#406)',
+        () {
+          check(ServerConfig(basePath: '').basePath).equals('');
+          check(ServerConfig(basePath: '/').basePath).equals('');
+          check(ServerConfig(basePath: '/term').basePath).equals('/term');
+          check(ServerConfig(basePath: '/term/').basePath).equals('/term');
+          check(ServerConfig(basePath: 'term').basePath).equals('/term');
+          check(ServerConfig(basePath: '/a/b/').basePath).equals('/a/b');
+
+          final fromEnv = ServerConfig.fromArgs(
+            const [],
+            environment: const {'TERMUI_CAST_BASE_PATH': '/cast/'},
+            currentDirectory: Directory.systemTemp,
+          )!;
+          check(fromEnv.basePath).equals('/cast');
+
+          final cliOverride = ServerConfig.fromArgs(
+            const ['--base-path=/override/sub/'],
+            environment: const {'TERMUI_CAST_BASE_PATH': '/cast/'},
+            currentDirectory: Directory.systemTemp,
+          )!;
+          check(cliOverride.basePath).equals('/override/sub');
+
+          for (final invalid in const [
+            '//',
+            '/term//sub',
+            '/term//',
+            '/.',
+            '/term/.',
+            '/..',
+            '/term/../other',
+            '/term?x=1',
+            '/term#frag',
+            '/term\r\n',
+            '/term with space',
+            '/v1',
+            '/v1/app',
+            '/term/%2e%2e',
+            '/term"bad',
+            "/term'bad",
+            '/term<bad',
+            '/term>bad',
+            '/term`bad',
+          ]) {
+            check(
+              () => ServerConfig(basePath: invalid),
+            ).throws<FormatException>();
+          }
+        },
+      );
+
+      test(
+        'validates --trust-proxy-client-auth, loopback autoMint: false, conflicts, and header token syntax (#407)',
+        () {
+          // Loopback with --trust-proxy-client-auth: casterToken auto-minted, clientToken stays null!
+          final loopbackProxy = ServerConfig.fromArgs(
+            const ['--trust-proxy-client-auth'],
+            environment: const {},
+            currentDirectory: Directory.systemTemp,
+          )!;
+          check(loopbackProxy.trustProxyClientAuth).isTrue();
+          check(loopbackProxy.casterToken).isNotNull().isNotEmpty();
+          check(loopbackProxy.autoGeneratedCasterToken).isTrue();
+          check(loopbackProxy.clientToken).isNull();
+          check(loopbackProxy.autoGeneratedClientToken).isFalse();
+          check(loopbackProxy.requireClientAuthHeader).isNull();
+
+          // Env variables: truthy true/1 and header lowercasing.
+          final fromEnv = ServerConfig.fromArgs(
+            const [],
+            environment: const {
+              'TERMUI_CAST_TRUST_PROXY_CLIENT_AUTH': '1',
+              'TERMUI_CAST_REQUIRE_CLIENT_AUTH_HEADER': 'X-Forwarded-Email',
+            },
+            currentDirectory: Directory.systemTemp,
+          )!;
+          check(fromEnv.trustProxyClientAuth).isTrue();
+          check(fromEnv.clientToken).isNull();
+          check(fromEnv.requireClientAuthHeader).equals('x-forwarded-email');
+
+          // Non-loopback with --trust-proxy-client-auth allows null clientToken when casterToken is set.
+          final nonLoopbackOk = ServerConfig.fromArgs(
+            const [
+              '--host=0.0.0.0',
+              '--caster-token=c-secret',
+              '--trust-proxy-client-auth',
+              '--require-client-auth-header=Tailscale-User-Login',
+            ],
+            environment: const {},
+            currentDirectory: Directory.systemTemp,
+          )!;
+          check(nonLoopbackOk.clientToken).isNull();
+          check(
+            nonLoopbackOk.requireClientAuthHeader,
+          ).equals('tailscale-user-login');
+
+          // Non-loopback with --trust-proxy-client-auth still requires casterToken.
+          check(
+            () => ServerConfig.fromArgs(
+              const ['--host=0.0.0.0', '--trust-proxy-client-auth'],
+              environment: const {},
+              currentDirectory: Directory.systemTemp,
+            ),
+          ).throws<FormatException>();
+
+          // Conflict checks.
+          check(
+            () => ServerConfig.fromArgs(
+              const ['--trust-proxy-client-auth', '--client-token=secret'],
+              environment: const {},
+              currentDirectory: Directory.systemTemp,
+            ),
+          ).throws<FormatException>();
+          check(
+            () => ServerConfig.fromArgs(
+              const ['--trust-proxy-client-auth', '--client-token-file=/tmp/x'],
+              environment: const {},
+              currentDirectory: Directory.systemTemp,
+            ),
+          ).throws<FormatException>();
+          check(
+            () => ServerConfig.fromArgs(
+              const ['--trust-proxy-client-auth'],
+              environment: const {'TERMUI_CAST_CLIENT_TOKEN': 'secret'},
+              currentDirectory: Directory.systemTemp,
+            ),
+          ).throws<FormatException>();
+          check(
+            () => ServerConfig.fromArgs(
+              const ['--trust-proxy-client-auth'],
+              environment: const {'TERMUI_CAST_CLIENT_TOKEN_FILE': '/tmp/x'},
+              currentDirectory: Directory.systemTemp,
+            ),
+          ).throws<FormatException>();
+          check(
+            () => ServerConfig.fromArgs(
+              const ['--trust-proxy-client-auth', '--insecure-no-auth'],
+              environment: const {},
+              currentDirectory: Directory.systemTemp,
+            ),
+          ).throws<FormatException>();
+          check(
+            () => ServerConfig.fromArgs(
+              const ['--require-client-auth-header=x-forwarded-email'],
+              environment: const {},
+              currentDirectory: Directory.systemTemp,
+            ),
+          ).throws<FormatException>();
+
+          // RFC 9110 header token syntax validation.
+          for (final badHeader in const [
+            '',
+            ' ',
+            'x-forwarded email',
+            'x-forwarded:email',
+            'x-forwarded\r\nemail',
+            'x-forwarded/email',
+          ]) {
+            check(
+              () => ServerConfig(
+                trustProxyClientAuth: true,
+                requireClientAuthHeader: badHeader,
+              ),
+            ).throws<FormatException>();
+          }
+        },
+      );
+    },
+  );
 }
