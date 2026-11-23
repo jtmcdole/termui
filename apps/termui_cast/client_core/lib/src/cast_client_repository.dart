@@ -441,6 +441,25 @@ final class CastClientRepository {
     );
   }
 
+  /// Requests the caster owning [sessionId] to spawn a fresh shell PTY.
+  ///
+  /// Dispatches a [SpawnSessionFrame] (`0x1D`) and returns `true` only when
+  /// this repository is active, authenticated on a connected transport, has
+  /// received a [SessionDirectoryFrame] for the current connection, and
+  /// [sessionId] appears in that directory with [SessionSummary.allowSpawn]
+  /// enabled. Returns `false` without sending any frame otherwise.
+  bool requestSpawnSession(SessionId sessionId) {
+    if (_disposed ||
+        !_authenticatedOnTransport ||
+        !_hasReceivedDirectory ||
+        !_transport.isConnected ||
+        !(_latestDirectorySummaries[sessionId]?.allowSpawn ?? false)) {
+      return false;
+    }
+    _transport.send(SpawnSessionFrame(sessionId: sessionId));
+    return true;
+  }
+
   /// Sends a [FileUploadStartFrame] initiating a file transfer on [frame]'s session.
   void sendFileUploadStart(FileUploadStartFrame frame) {
     _transport.send(frame);

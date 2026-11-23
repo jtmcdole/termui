@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:termui_cast_protocol/termui_cast_protocol_io.dart';
 
 import 'caster_service.dart';
+import 'caster_supervisor.dart';
 import 'pty_process_adapter.dart';
 
 void _writeLineSafely(StringSink sink, String line) {
@@ -58,12 +59,14 @@ Future<int> runCasterCli(
   Stream<void>? shutdownSignal,
   Stream<void>? checkInSignal,
   Map<String, String>? environment,
+  PtyStarter? ptyStarter,
 }) async {
   final stdoutSink = out ?? stdout;
   final stderrSink = err ?? stderr;
+  final resolvedEnvironment = environment ?? Platform.environment;
   final parsed = _parseCliConfig(
     args,
-    environment ?? Platform.environment,
+    resolvedEnvironment,
     stdoutSink,
     stderrSink,
   );
@@ -76,13 +79,13 @@ Future<int> runCasterCli(
 
   final resolvedIapSigner = iapSigner ?? config.createIapSigner();
   var interrupted = false;
-  CasterService? service;
+  CasterSupervisor? supervisor;
   StreamSubscription<void>? signalSub;
 
   void triggerShutdown() {
     if (interrupted) return;
     interrupted = true;
-    final active = service;
+    final active = supervisor;
     if (active != null) unawaited(active.stop(killPty: true));
   }
 
@@ -90,28 +93,29 @@ Future<int> runCasterCli(
     config: config,
     checkInSignal: checkInSignal,
     stderrSink: stderrSink,
-    onCheckIn: () => service?.checkIn(),
+    onCheckIn: () => supervisor?.checkIn(),
     onShutdown: triggerShutdown,
     isInterrupted: () => interrupted,
   );
   try {
     await _prewarmIapSigner(resolvedIapSigner, stderrSink);
-    final pty = await _startCliPty(config, stderrSink);
-    if (pty == null) return 70;
+    if (interrupted) return -1;
 
-    final activeService = CasterService(
-      config: config,
-      pty: pty,
+    final activeSupervisor = CasterSupervisor(
+      primaryConfig: config,
+      ptyStarter: ptyStarter ?? (cfg) => _startCliPty(cfg, stderrSink),
+      environment: resolvedEnvironment,
       channelOpener: channelOpener,
       iapTokenProvider: resolvedIapSigner?.getBearerToken,
       onLog: (msg) => _writeLineSafely(stderrSink, 'termui_cast: $msg'),
     );
-    service = activeService;
-    if (interrupted) unawaited(activeService.stop(killPty: true));
+    supervisor = activeSupervisor;
     final stopStream = shutdownSignal ?? watchPosixTerminationSignals();
     signalSub = stopStream.listen((_) => triggerShutdown());
-    await activeService.start();
-    return await activeService.done;
+    if (interrupted) unawaited(activeSupervisor.stop(killPty: true));
+    final started = await activeSupervisor.start();
+    if (!started) return interrupted ? -1 : 70;
+    return await activeSupervisor.done;
   } finally {
     await signalSub?.cancel();
     await hupSub.cancel();

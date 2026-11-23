@@ -296,6 +296,191 @@ void main() {
     });
 
     test(
+      'resolves allowSpawn defaults, CLI overrides, env var, and default shell commands',
+      () {
+        // Recognized interactive shells across POSIX, Windows, case, and .exe.
+        for (final shell in const [
+          '/bin/zsh',
+          '/usr/bin/bash',
+          'sh',
+          '/opt/homebrew/bin/fish',
+          'dash',
+          '/bin/ksh',
+          '/usr/bin/tcsh',
+          'pwsh',
+          r'C:\Program Files\PowerShell\7\PWSH.EXE',
+          r'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+          r'C:\Windows\System32\cmd.exe',
+          'CMD.EXE',
+        ]) {
+          check(
+            CasterConfig.isInteractiveShellCommand([shell, '-l']),
+            because: 'shell=$shell',
+          ).isTrue();
+          final cfg = CasterConfig.fromArgs(['--', shell])!;
+          check(cfg.allowSpawn, because: 'shell=$shell').isTrue();
+        }
+
+        // Interactive shell invocations with harmless flags remain interactive.
+        for (final cmd in const [
+          <String>['bash', '-l'],
+          <String>['zsh', '-i'],
+          <String>['bash', '--login'],
+          <String>['bash', '--rcfile', '/tmp/bashrc'],
+          <String>['pwsh', '-NoLogo'],
+          <String>['pwsh', '-NoLogo', '-WorkingDirectory', r'C:\src'],
+          <String>['cmd', '/k', 'echo hi'],
+        ]) {
+          check(
+            CasterConfig.isInteractiveShellCommand(cmd),
+            because: 'interactive cmd=$cmd',
+          ).isTrue();
+        }
+
+        // Non-shell commands and non-interactive shell invocations default allowSpawn to false.
+        for (final cmd in const [
+          <String>[],
+          <String>[''],
+          <String>['   '],
+          <String>['/bin/zsh/'],
+          <String>['htop'],
+          <String>['/usr/bin/vim', 'README.md'],
+          <String>['python3', '-i'],
+          <String>['bashful'],
+          <String>['bash', '-c', 'tail -f /var/log/syslog'],
+          <String>['bash', '-lc', 'echo hi'],
+          <String>['zsh', '-ic', 'ls'],
+          <String>['/bin/sh', './status.sh'],
+          <String>['/bin/sh', '--', './status.sh'],
+          <String>['fish', '--command=echo hi'],
+          <String>['cmd', '/c', 'dir'],
+          <String>['CMD.EXE', '/C', 'echo hi'],
+          <String>['pwsh', '-File', 'monitor.ps1'],
+          <String>['pwsh', '-f', 'monitor.ps1'],
+          <String>['pwsh', '-Command', 'Get-Date'],
+          <String>['pwsh', '-c', 'Get-Date'],
+          <String>['pwsh', '-EncodedCommand', 'QQ=='],
+          <String>['pwsh', '-e', 'QQ=='],
+          <String>['pwsh', 'monitor.ps1'],
+          <String>['powershell.exe', '-File:monitor.ps1'],
+        ]) {
+          check(
+            CasterConfig.isInteractiveShellCommand(cmd),
+            because: 'cmd=$cmd',
+          ).isFalse();
+        }
+
+        check(
+          CasterConfig.fromArgs(['--', 'bash', '-c', 'echo hi'])!.allowSpawn,
+        ).isFalse();
+
+        final htopCfg = CasterConfig.fromArgs(['--', 'htop'])!;
+        check(htopCfg.allowSpawn).isFalse();
+
+        // Explicit CLI --allow-spawn and --no-allow-spawn overrides.
+        final forcedOn = CasterConfig.fromArgs([
+          '--allow-spawn',
+          '--',
+          'htop',
+        ])!;
+        check(forcedOn.allowSpawn).isTrue();
+
+        final forcedOff = CasterConfig.fromArgs([
+          '--no-allow-spawn',
+          '--',
+          '/bin/zsh',
+        ])!;
+        check(forcedOff.allowSpawn).isFalse();
+
+        // TERMUI_CAST_ALLOW_SPAWN environment overrides and CLI precedence.
+        for (final trueVal in const ['true', '1', 'TRUE']) {
+          final cfg = CasterConfig.fromArgs(
+            ['--', 'htop'],
+            environment: {'TERMUI_CAST_ALLOW_SPAWN': trueVal},
+          )!;
+          check(cfg.allowSpawn).isTrue();
+        }
+        for (final falseVal in const ['false', '0', 'FALSE']) {
+          final cfg = CasterConfig.fromArgs(
+            ['--', '/bin/zsh'],
+            environment: {'TERMUI_CAST_ALLOW_SPAWN': falseVal},
+          )!;
+          check(cfg.allowSpawn).isFalse();
+        }
+        check(
+          CasterConfig.fromArgs(
+            ['--no-allow-spawn', '--', 'htop'],
+            environment: const {'TERMUI_CAST_ALLOW_SPAWN': 'true'},
+          )!.allowSpawn,
+        ).isFalse();
+        check(
+          CasterConfig.fromArgs(
+            ['--allow-spawn', '--', '/bin/zsh'],
+            environment: const {'TERMUI_CAST_ALLOW_SPAWN': 'false'},
+          )!.allowSpawn,
+        ).isTrue();
+        check(
+          () => CasterConfig.fromArgs(
+            ['--', 'zsh'],
+            environment: const {'TERMUI_CAST_ALLOW_SPAWN': 'maybe'},
+          ),
+        ).throws<FormatException>();
+
+        // Constructor defaults match isInteractiveShellCommand unless overridden.
+        check(
+          CasterConfig(
+            sessionId: const SessionId('ctor-sh'),
+            title: 'zsh',
+            command: const ['/bin/zsh'],
+          ).allowSpawn,
+        ).isTrue();
+        check(
+          CasterConfig(
+            sessionId: const SessionId('ctor-htop'),
+            title: 'htop',
+            command: const ['htop'],
+          ).allowSpawn,
+        ).isFalse();
+        check(
+          CasterConfig(
+            sessionId: const SessionId('ctor-override'),
+            title: 'htop',
+            allowSpawn: true,
+            command: const ['htop'],
+          ).allowSpawn,
+        ).isTrue();
+
+        // resolveDefaultShellCommand across POSIX and Windows environments.
+        check(
+          CasterConfig.resolveDefaultShellCommand(const {
+            'SHELL': ' /usr/bin/zsh ',
+          }, isWindows: false),
+        ).deepEquals(['/usr/bin/zsh']);
+        check(
+          CasterConfig.resolveDefaultShellCommand(const {
+            'SHELL': '   ',
+          }, isWindows: false),
+        ).deepEquals(['/bin/sh']);
+        check(
+          CasterConfig.resolveDefaultShellCommand(const {
+            'COMSPEC': r'C:\Windows\System32\cmd.exe',
+          }, isWindows: true),
+        ).deepEquals([r'C:\Windows\System32\cmd.exe']);
+        check(
+          CasterConfig.resolveDefaultShellCommand(const {
+            'ComSpec': r'C:\Windows\System32\cmd.exe',
+          }, isWindows: true),
+        ).deepEquals([r'C:\Windows\System32\cmd.exe']);
+        check(
+          CasterConfig.resolveDefaultShellCommand(
+            const <String, String>{},
+            isWindows: true,
+          ),
+        ).deepEquals(['powershell.exe']);
+      },
+    );
+
+    test(
       'transitions through reconnect backoff and resets attempt counter',
       () async {
         final machine = CasterConnectionMachine(
@@ -384,7 +569,9 @@ void main() {
             BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
           );
           async.flushMicrotasks();
-          check(server1Frames.single).isA<RegisterSessionFrame>();
+          final reg1 = server1Frames.single as RegisterSessionFrame;
+          // Without an onSpawnRequested callback, allowSpawn stays false even for shell configs.
+          check(reg1.allowSpawn).isFalse();
           check(
             service.stateMachine.state,
           ).equals(CasterLifecycleState.streaming);
@@ -582,6 +769,127 @@ void main() {
           check(
             service.stateMachine.state,
           ).equals(CasterLifecycleState.terminated);
+        });
+      },
+    );
+
+    test(
+      'emits RegisterSessionFrame.allowSpawn accurately and guards SpawnSessionFrame callback',
+      () {
+        fakeAsync((async) {
+          // 1. Disallowed session (htop): advertises allowSpawn=false and ignores spawns.
+          final ptyOff = _FakePtySession();
+          final ctrlOff = StreamChannelController<Uint8List>();
+          final framesOff = <CastMessage>[];
+          var spawnCallsOff = 0;
+          ctrlOff.foreign.stream.listen(
+            (raw) => framesOff.add(BufferFrameCodec.decode(raw)),
+          );
+
+          final serviceOff = CasterService(
+            config: CasterConfig(
+              sessionId: const SessionId('htop-1'),
+              title: 'htop',
+              command: const ['htop'],
+            ),
+            pty: ptyOff,
+            onSpawnRequested: () async {
+              spawnCallsOff++;
+            },
+            channelOpener: () async => ctrlOff.local,
+          );
+
+          unawaited(serviceOff.start());
+          async.flushMicrotasks();
+          ctrlOff.foreign.sink.add(
+            BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+          );
+          async.flushMicrotasks();
+
+          final regOff = framesOff.whereType<RegisterSessionFrame>().single;
+          check(regOff.allowSpawn).isFalse();
+
+          ctrlOff.foreign.sink.add(
+            BufferFrameCodec.encode(
+              const SpawnSessionFrame(sessionId: SessionId('htop-1')),
+            ),
+          );
+          async.flushMicrotasks();
+          check(spawnCallsOff).equals(0);
+
+          unawaited(ptyOff.finish(0));
+          async.flushMicrotasks();
+
+          // 2. Allowed session (zsh): invokes callback only on matching sessionId and logs errors safely.
+          final ptyOn = _FakePtySession();
+          final ctrlOn = StreamChannelController<Uint8List>();
+          final framesOn = <CastMessage>[];
+          final logsOn = <String>[];
+          var spawnCallsOn = 0;
+          ctrlOn.foreign.stream.listen(
+            (raw) => framesOn.add(BufferFrameCodec.decode(raw)),
+          );
+
+          final serviceOn = CasterService(
+            config: CasterConfig(
+              sessionId: const SessionId('zsh-1'),
+              title: 'zsh',
+              command: const ['/bin/zsh'],
+            ),
+            pty: ptyOn,
+            onLog: logsOn.add,
+            onSpawnRequested: () async {
+              spawnCallsOn++;
+              if (spawnCallsOn == 2) {
+                throw StateError('spawn boom');
+              }
+            },
+            channelOpener: () async => ctrlOn.local,
+          );
+
+          unawaited(serviceOn.start());
+          async.flushMicrotasks();
+          ctrlOn.foreign.sink.add(
+            BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+          );
+          async.flushMicrotasks();
+
+          final regOn = framesOn.whereType<RegisterSessionFrame>().single;
+          check(regOn.allowSpawn).isTrue();
+
+          // Mismatched sessionId must be ignored.
+          ctrlOn.foreign.sink.add(
+            BufferFrameCodec.encode(
+              const SpawnSessionFrame(sessionId: SessionId('other-sess')),
+            ),
+          );
+          async.flushMicrotasks();
+          check(spawnCallsOn).equals(0);
+
+          // Matching sessionId triggers callback.
+          ctrlOn.foreign.sink.add(
+            BufferFrameCodec.encode(
+              const SpawnSessionFrame(sessionId: SessionId('zsh-1')),
+            ),
+          );
+          async.flushMicrotasks();
+          check(spawnCallsOn).equals(1);
+
+          // Async failure from callback is caught and logged without stopping service.
+          ctrlOn.foreign.sink.add(
+            BufferFrameCodec.encode(
+              const SpawnSessionFrame(sessionId: SessionId('zsh-1')),
+            ),
+          );
+          async.flushMicrotasks();
+          check(spawnCallsOn).equals(2);
+          check(logsOn).any((m) => m.contains('spawn boom'));
+          check(
+            serviceOn.stateMachine.state,
+          ).equals(CasterLifecycleState.streaming);
+
+          unawaited(ptyOn.finish(0));
+          async.flushMicrotasks();
         });
       },
     );
