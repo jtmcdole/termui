@@ -7,13 +7,25 @@ import 'package:termui_flutter/termui_flutter.dart';
 const String castPrimaryFontFamily = 'Cascadia Mono';
 
 /// Fallback monospace and symbol font families bundled with `fterm`.
-const List<String> castFallbackFontFamilies = <String>['MesloLGS NF'];
+const List<String> castFallbackFontFamilies = <String>[
+  'MesloLGS NF',
+  'Symbols Nerd Font Mono',
+  'Noto Color Emoji',
+];
 
 const List<({List<String> packages, String assetPath})> _bundledLicenseAssets =
     [
       (packages: ['fterm'], assetPath: 'LICENSE'),
       (packages: ['Cascadia Mono'], assetPath: 'fonts/OFL-CascadiaMonoPL.txt'),
       (packages: ['MesloLGS NF'], assetPath: 'fonts/LICENSE-MesloLGS.txt'),
+      (
+        packages: ['Symbols Nerd Font Mono'],
+        assetPath: 'fonts/LICENSE-SymbolsNerdFont.txt',
+      ),
+      (
+        packages: ['Noto Color Emoji'],
+        assetPath: 'fonts/OFL-NotoColorEmoji.txt',
+      ),
     ];
 
 Future<void>? _loadFontsFuture;
@@ -51,6 +63,11 @@ Future<void> _registerBundledFonts() async {
   await [
     _loadSingleFont('Cascadia Mono', 'fonts/CascadiaMonoPL.ttf'),
     _loadSingleFont('MesloLGS NF', 'fonts/MesloLGS_NF_Regular.ttf'),
+    _loadSingleFont(
+      'Symbols Nerd Font Mono',
+      'fonts/SymbolsNerdFontMono-Regular.ttf',
+    ),
+    _loadSingleFont('Noto Color Emoji', 'fonts/NotoColorEmoji-COLRv1.ttf'),
   ].wait;
 }
 

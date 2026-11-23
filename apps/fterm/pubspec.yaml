@@ -38,7 +38,9 @@ flutter:
   assets:
     - LICENSE
     - fonts/LICENSE-MesloLGS.txt
+    - fonts/LICENSE-SymbolsNerdFont.txt
     - fonts/OFL-CascadiaMonoPL.txt
+    - fonts/OFL-NotoColorEmoji.txt
     - web/favicon.svg
   fonts:
     - family: Cascadia Mono
@@ -47,3 +49,9 @@ flutter:
     - family: MesloLGS NF
       fonts:
         - asset: fonts/MesloLGS_NF_Regular.ttf
+    - family: Symbols Nerd Font Mono
+      fonts:
+        - asset: fonts/SymbolsNerdFontMono-Regular.ttf
+    - family: Noto Color Emoji
+      fonts:
+        - asset: fonts/NotoColorEmoji-COLRv1.ttf

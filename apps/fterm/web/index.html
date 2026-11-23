@@ -20,8 +20,168 @@
 
   <title>fterm</title>
   <link rel="manifest" href="manifest.json" crossorigin="use-credentials">
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #14171F;
+      overflow: hidden;
+    }
+
+    #fterm-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+      background:
+        radial-gradient(circle at 36% 38%, rgba(82, 148, 226, 0.18) 0%, rgba(82, 148, 226, 0) 56%),
+        radial-gradient(circle at 64% 44%, rgba(98, 209, 150, 0.22) 0%, rgba(98, 209, 150, 0) 52%),
+        linear-gradient(155deg, #1E2430 0%, #14171F 50%, #0D1017 100%);
+      color: #F6FAFF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      opacity: 1;
+      transition: opacity 220ms ease-out;
+    }
+
+    #fterm-splash.fterm-splash-hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .fterm-splash-stack {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 420px;
+    }
+
+    .fterm-splash-card {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 28px 24px 22px;
+      border-radius: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background:
+        radial-gradient(circle at 36% 32%, rgba(82, 148, 226, 0.16) 0%, rgba(82, 148, 226, 0) 64%),
+        radial-gradient(circle at 64% 40%, rgba(98, 209, 150, 0.20) 0%, rgba(98, 209, 150, 0) 60%),
+        linear-gradient(160deg, rgba(30, 36, 48, 0.94) 0%, rgba(20, 23, 31, 0.96) 52%, rgba(13, 16, 23, 0.98) 100%);
+      box-shadow:
+        0 20px 48px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .fterm-splash-logo {
+      width: 108px;
+      height: 108px;
+      display: block;
+      margin-bottom: 14px;
+      filter: drop-shadow(0 12px 22px rgba(0, 0, 0, 0.42));
+      user-select: none;
+    }
+
+    .fterm-splash-title {
+      margin: 0;
+      color: #F6FAFF;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 0.4px;
+      line-height: 1.2;
+    }
+
+    .fterm-splash-subtitle {
+      margin: 4px 0 0;
+      color: #A6B4C8;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .fterm-splash-motto {
+      margin: 6px 0 0;
+      color: #C8B273;
+      font-size: 11px;
+      font-style: italic;
+      letter-spacing: 0.6px;
+      line-height: 1.4;
+    }
+
+    .fterm-splash-progress {
+      position: relative;
+      width: min(260px, 78%);
+      height: 2px;
+      margin-top: 18px;
+      border-radius: 999px;
+      background: rgba(98, 209, 150, 0.18);
+      overflow: hidden;
+    }
+
+    .fterm-splash-progress-bar {
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: 42%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(98, 209, 150, 0) 0%, #62D196 45%, #86F2B8 60%, rgba(98, 209, 150, 0) 100%);
+      animation: fterm-splash-sweep 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+      will-change: transform;
+    }
+
+    #fterm-splash-status {
+      margin: 10px 0 0;
+      color: #8E9DB5;
+      font-size: 11.5px;
+      letter-spacing: 0.2px;
+      line-height: 1.4;
+      min-height: 16px;
+      text-align: center;
+    }
+
+    @keyframes fterm-splash-sweep {
+      0% {
+        transform: translateX(-110%);
+      }
+      100% {
+        transform: translateX(260%);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #fterm-splash {
+        transition: none;
+      }
+
+      .fterm-splash-progress-bar {
+        animation: none;
+        width: 100%;
+        transform: none;
+        background: #62D196;
+        opacity: 0.65;
+      }
+    }
+  </style>
 </head>
 <body>
+  <div id="fterm-splash" role="status" aria-live="polite" aria-label="Loading fterm">
+    <div class="fterm-splash-stack">
+      <div class="fterm-splash-card">
+        <img class="fterm-splash-logo" src="favicon.svg" alt="fterm" width="108" height="108">
+        <h1 class="fterm-splash-title">fterm</h1>
+        <p class="fterm-splash-subtitle">Flutter terminal multiplexer &amp; TermUI Caster client</p>
+        <p class="fterm-splash-motto">Ananas Maximus, Lucrum Maximum.</p>
+      </div>
+      <div class="fterm-splash-progress" aria-hidden="true">
+        <div class="fterm-splash-progress-bar"></div>
+      </div>
+      <p id="fterm-splash-status">Loading WebAssembly engine...</p>
+    </div>
+  </div>
   <script src="audio_unlock.js"></script>
   <script src="dpr_sync.js"></script>
   <script src="assets/packages/flutter_soloud/web/libflutter_soloud_plugin.js" defer></script>

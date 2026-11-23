@@ -203,8 +203,14 @@ void main() {
         licenseEntries: [
           const LicenseEntryWithLineBreaks(['zlib_extra'], 'Zlib text.'),
           const LicenseEntryWithLineBreaks([
+            'Noto Color Emoji',
+          ], 'SIL Open Font License 1.1 (Noto)'),
+          const LicenseEntryWithLineBreaks([
             'MesloLGS NF',
           ], 'MesloLGS NF License.'),
+          const LicenseEntryWithLineBreaks([
+            'Symbols Nerd Font Mono',
+          ], 'MIT License (Nerd Fonts)'),
           const LicenseEntryWithLineBreaks([
             'Cascadia Mono',
           ], 'SIL Open Font License 1.1'),
@@ -225,9 +231,15 @@ void main() {
           'fterm',
           'Cascadia Mono',
           'MesloLGS NF',
+          'Symbols Nerd Font Mono',
+          'Noto Color Emoji',
           'alpha_pkg',
           'zlib_extra',
         ]),
+      );
+      expect(
+        castFallbackFontFamilies,
+        equals(['MesloLGS NF', 'Symbols Nerd Font Mono', 'Noto Color Emoji']),
       );
       expect(vm.filteredPackages.first.noticeCount, equals(1));
       expect(vm.selectedPackageName, equals('fterm'));
@@ -239,7 +251,7 @@ void main() {
       vm.setFilterQuery('mono');
       expect(
         vm.filteredPackages.map((p) => p.packageName),
-        equals(['Cascadia Mono']),
+        equals(['Cascadia Mono', 'Symbols Nerd Font Mono']),
       );
       expect(vm.selectedPackageName, equals('Cascadia Mono'));
 
@@ -322,6 +334,14 @@ void main() {
         );
         expect(
           find.byKey(const ValueKey('licenses-pkg-MesloLGS NF')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('licenses-pkg-Symbols Nerd Font Mono')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('licenses-pkg-Noto Color Emoji')),
           findsOneWidget,
         );
         expect(
