@@ -43,16 +43,19 @@ class FileSystemSink implements TracerSink {
       final word0 = buffer[i * 2];
       final ts = buffer[i * 2 + 1];
 
-      final phaseVal = word0 & 0xFF;
-      final isolateId = (word0 >> 8) & 0xFFFFFF;
-      final stringId = (word0 >> 32) & 0xFFFFFFFF;
+      final phaseVal = Tracer.unpackPhase(word0);
+      final isolateId = Tracer.unpackIsolateId(word0);
+      final stringId = Tracer.unpackStringId(word0);
 
       final name = (stringId < _stringTable.length)
           ? _stringTable[stringId]
           : 'Unknown';
-      final ph = (phaseVal == Phase.begin)
-          ? 'B'
-          : (phaseVal == Phase.end ? 'E' : 'i');
+      final ph = switch (phaseVal) {
+        Phase.begin => 'B',
+        Phase.end => 'E',
+        Phase.counter => 'C',
+        _ => 'i',
+      };
 
       final realTs = baseEpochUs + ts;
 
@@ -62,8 +65,9 @@ class FileSystemSink implements TracerSink {
         _isFirst = false;
       }
 
-      final metaStr = metadata.containsKey(i)
-          ? ', "args": ${jsonEncode(metadata[i])}'
+      final eventMeta = metadata[i];
+      final metaStr = eventMeta != null
+          ? ', "args": ${_encodeEventArgs(eventMeta, phaseVal)}'
           : '';
       final escapedName = jsonEncode(name);
       chunk.write(
@@ -73,6 +77,22 @@ class FileSystemSink implements TracerSink {
     if (chunk.isNotEmpty) {
       _sink.write(chunk.toString());
     }
+  }
+
+  static String _encodeEventArgs(Map<String, String> raw, int phaseVal) {
+    if (phaseVal != Phase.counter) {
+      return jsonEncode(raw);
+    }
+    final numeric = <String, Object>{
+      for (final entry in raw.entries)
+        entry.key: _parseFiniteCounterValue(entry.value),
+    };
+    return jsonEncode(numeric);
+  }
+
+  static Object _parseFiniteCounterValue(String raw) {
+    final parsed = num.tryParse(raw);
+    return (parsed != null && parsed.isFinite) ? parsed : raw;
   }
 
   @override

@@ -31,6 +31,9 @@ final class WsRelayHandler {
   /// Maximum total concurrent peers (pending auth + authenticated).
   final int maxTotalPeers;
 
+  /// Whether this relay advertises and forwards capability-negotiated `0x1C` shader frames.
+  final bool enableShaderFrames;
+
   /// Optional diagnostic log callback for defensive error reporting.
   final void Function(String message)? onLog;
 
@@ -44,6 +47,7 @@ final class WsRelayHandler {
     this.authTimeout = const Duration(seconds: 2),
     this.maxPendingAuth = defaultMaxPendingAuth,
     this.maxTotalPeers = defaultMaxTotalPeers,
+    this.enableShaderFrames = true,
     this.onLog,
   });
 
@@ -112,6 +116,7 @@ final class WsRelayHandler {
       registry: registry,
       authenticator: authenticator,
       authTimeout: authTimeout,
+      enableShaderFrames: enableShaderFrames,
       onLog: onLog,
       onTerminated: () => _sessions.remove(session),
     );
@@ -143,6 +148,7 @@ final class _RelayPeerSession {
   final SessionRegistry registry;
   final TokenAuthenticator authenticator;
   final Duration authTimeout;
+  final bool enableShaderFrames;
   final void Function(String message)? onLog;
   final void Function() onTerminated;
 
@@ -161,6 +167,7 @@ final class _RelayPeerSession {
     required this.registry,
     required this.authenticator,
     required this.authTimeout,
+    required this.enableShaderFrames,
     required this.onLog,
     required this.onTerminated,
   });
@@ -227,7 +234,10 @@ final class _RelayPeerSession {
   void _onAuthenticated() {
     if (_terminated) return;
     isAuthenticated = true;
-    final accepted = AuthAcceptedFrame(role: role);
+    final accepted = AuthAcceptedFrame(
+      role: role,
+      shaderFrames: enableShaderFrames,
+    );
     if (role == .caster) {
       _casterPeer = registry.registerCasterPeer(
         sink: channel.sink,
@@ -322,8 +332,22 @@ final class _RelayPeerSession {
         registry.forwardCasterKittyChunkBytes(caster, rawBytes),
         'Invalid caster Kitty chunk',
       ),
+      0x1C => _handleCasterShaderBytes(caster, rawBytes),
       _ => false,
     };
+  }
+
+  bool _handleCasterShaderBytes(CasterPeer caster, Uint8List rawBytes) {
+    if (!enableShaderFrames) {
+      if (rawBytes.length > BufferFrameCodec.maxShaderFrameBytes) {
+        throw const ProtocolFormatException('Oversized caster shader frame');
+      }
+      return true;
+    }
+    return _requireForwarded(
+      registry.forwardCasterShaderBytes(caster, rawBytes),
+      'Invalid caster shader frame',
+    );
   }
 
   static bool _requireForwarded(bool ok, String message) {

@@ -8,6 +8,7 @@ import 'package:termui/termui.dart';
 
 import 'audio_apc_handler.dart';
 import 'scrollback_buffer.dart';
+import 'shader_apc_handler.dart';
 import 'terminal_port.dart';
 import 'virtual_terminal.dart';
 
@@ -215,6 +216,8 @@ final class PtyRouterSession {
   final LinkedHashSet<void Function()> _bellListeners = LinkedHashSet();
   final LinkedHashSet<void Function(TerminalAudioEvent event)> _audioListeners =
       LinkedHashSet();
+  final LinkedHashSet<void Function(TerminalShaderApcEvent event)>
+  _shaderListeners = LinkedHashSet();
   final LinkedHashSet<void Function(String selection, String text)>
   _clipboardListeners = LinkedHashSet();
   final LinkedHashSet<void Function(String selection)>
@@ -283,6 +286,7 @@ final class PtyRouterSession {
       ..onTitleChanged = _dispatchTitle
       ..onBell = _dispatchBell
       ..onAudioEvent = _dispatchAudio
+      ..onShaderEvent = _dispatchShader
       ..onClipboardWrite = _dispatchClipboard
       ..onClipboardReadBlocked = _dispatchClipboardBlocked;
     _outputSub = backend.output.listen(
@@ -494,6 +498,15 @@ final class PtyRouterSession {
     }
   }
 
+  void _dispatchShader(TerminalShaderApcEvent event) {
+    for (final listener in List.of(_shaderListeners)) {
+      _invokeIsolated(() => listener(event));
+    }
+    for (final port in List.of(_ports.values)) {
+      port._dispatchShader(event);
+    }
+  }
+
   void _dispatchClipboard(String selection, String text) {
     for (final listener in List.of(_clipboardListeners)) {
       _invokeIsolated(() => listener(selection, text));
@@ -539,6 +552,22 @@ final class PtyRouterSession {
   /// Unregisters a decoded audio APC event listener.
   void removeAudioListener(void Function(TerminalAudioEvent event) listener) =>
       _audioListeners.remove(listener);
+
+  /// Registers a decoded `ESC _ S` shader/transform APC event listener.
+  void addShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) => _shaderListeners.add(listener);
+
+  /// Unregisters a decoded shader/transform APC event listener.
+  void removeShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) => _shaderListeners.remove(listener);
+
+  /// Configures host shader capabilities reported for `ESC _ S a=query`.
+  void setShaderCapabilities(TerminalShaderCapabilities capabilities) {
+    if (_disposed) return;
+    terminal.setShaderCapabilities(capabilities);
+  }
 
   /// Registers an `OSC 52` clipboard write listener.
   void addClipboardListener(
@@ -790,6 +819,7 @@ final class PtyRouterSession {
     _titleListeners.clear();
     _bellListeners.clear();
     _audioListeners.clear();
+    _shaderListeners.clear();
     _clipboardListeners.clear();
     _clipboardBlockedListeners.clear();
     terminal.dispose();
@@ -811,6 +841,8 @@ final class _RouterTerminalPort implements TerminalPort {
   final LinkedHashSet<void Function()> _bellListeners = LinkedHashSet();
   final LinkedHashSet<void Function(TerminalAudioEvent event)> _audioListeners =
       LinkedHashSet();
+  final LinkedHashSet<void Function(TerminalShaderApcEvent event)>
+  _shaderListeners = LinkedHashSet();
   final LinkedHashSet<void Function(String selection, String text)>
   _clipboardListeners = LinkedHashSet();
 
@@ -930,6 +962,13 @@ final class _RouterTerminalPort implements TerminalPort {
     }
   }
 
+  void _dispatchShader(TerminalShaderApcEvent event) {
+    if (_disposed) return;
+    for (final listener in List.of(_shaderListeners)) {
+      PtyRouterSession._invokeIsolated(() => listener(event));
+    }
+  }
+
   void _dispatchClipboard(String selection, String text) {
     if (_disposed) return;
     for (final listener in List.of(_clipboardListeners)) {
@@ -979,6 +1018,25 @@ final class _RouterTerminalPort implements TerminalPort {
   @override
   void removeAudioListener(void Function(TerminalAudioEvent event) listener) {
     _audioListeners.remove(listener);
+  }
+
+  @override
+  void addShaderListener(void Function(TerminalShaderApcEvent event) listener) {
+    if (_disposed) return;
+    _shaderListeners.add(listener);
+  }
+
+  @override
+  void removeShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) {
+    _shaderListeners.remove(listener);
+  }
+
+  @override
+  void setShaderCapabilities(TerminalShaderCapabilities capabilities) {
+    if (_disposed) return;
+    _session.setShaderCapabilities(capabilities);
   }
 
   @override
@@ -1033,6 +1091,7 @@ final class _RouterTerminalPort implements TerminalPort {
     _titleListeners.clear();
     _bellListeners.clear();
     _audioListeners.clear();
+    _shaderListeners.clear();
     _clipboardListeners.clear();
     _session.removeEndpointViewport(_endpointKey);
     await _routerInputSub.cancel();

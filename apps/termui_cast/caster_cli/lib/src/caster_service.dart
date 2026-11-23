@@ -711,6 +711,7 @@ final class CasterService {
   bool _pendingClipboardReadBlocked = false;
   int _subscriberCount = 0;
   bool _registrationConfirmed = false;
+  bool _relaySupportsShaderFrames = false;
   final Queue<int> _pendingWaveformReqIds = Queue<int>();
   Future<void> _uploadSerial = Future<void>.value();
   int _pendingUploadTasks = 0;
@@ -1207,6 +1208,7 @@ final class CasterService {
         ..addTitleListener(_onShellTitle)
         ..addBellListener(_onBell)
         ..addAudioListener(_onAudioEvent)
+        ..addShaderListener(_onRouterShaderEvent)
         ..addClipboardListener(_onRouterClipboardWrite)
         ..addClipboardBlockedListener(_onRouterClipboardBlocked);
       return;
@@ -1214,7 +1216,8 @@ final class CasterService {
     terminal
       ..addTitleListener(_onShellTitle)
       ..addBellListener(_onBell)
-      ..addAudioListener(_onAudioEvent);
+      ..addAudioListener(_onAudioEvent)
+      ..addShaderListener(_onStandaloneShaderEvent);
   }
 
   void _detachTerminalEventHooks() {
@@ -1225,6 +1228,7 @@ final class CasterService {
         ..removeTitleListener(_onShellTitle)
         ..removeBellListener(_onBell)
         ..removeAudioListener(_onAudioEvent)
+        ..removeShaderListener(_onRouterShaderEvent)
         ..removeClipboardListener(_onRouterClipboardWrite)
         ..removeClipboardBlockedListener(_onRouterClipboardBlocked)
         ..removeEndpointViewport(_remoteEndpointId);
@@ -1233,11 +1237,27 @@ final class CasterService {
     terminal
       ..removeTitleListener(_onShellTitle)
       ..removeBellListener(_onBell)
-      ..removeAudioListener(_onAudioEvent);
+      ..removeAudioListener(_onAudioEvent)
+      ..removeShaderListener(_onStandaloneShaderEvent);
+  }
+
+  void _onRouterShaderEvent(TerminalShaderApcEvent event) {
+    if (_stopping || _ptyOutputDone.isCompleted) return;
+    terminal.recordShaderEvent(event);
+    _scheduleDirtyFlushIfSubscribed();
+  }
+
+  void _onStandaloneShaderEvent(TerminalShaderApcEvent event) {
+    if (_stopping || _ptyOutputDone.isCompleted) return;
+    _scheduleDirtyFlushIfSubscribed();
   }
 
   void _onRouterTerminalChanged() {
     if (_stopping || _ptyOutputDone.isCompleted) return;
+    // PtyRouterSession attaches its listener to VirtualTerminal before
+    // AuthoritativeTerminal.wrapping(), so markDirty() ensures isDirty is
+    // already true when _scheduleDirtyFlushIfSubscribed() runs in this pass.
+    terminal.markDirty();
     _scheduleDirtyFlushIfSubscribed();
   }
 
@@ -1550,8 +1570,8 @@ final class CasterService {
       return;
     }
     switch (msg) {
-      case AuthAcceptedFrame():
-        unawaited(_onAuthAccepted());
+      case AuthAcceptedFrame(:final shaderFrames):
+        unawaited(_onAuthAccepted(shaderFrames: shaderFrames));
       case SubscriberCountFrame(:final subscriberCount):
         _onSubscriberCount(subscriberCount);
       case RequestKeyframeFrame():
@@ -1594,7 +1614,7 @@ final class CasterService {
     }
   }
 
-  Future<void> _onAuthAccepted() async {
+  Future<void> _onAuthAccepted({required bool shaderFrames}) async {
     final channel = _activeChannel;
     if (channel == null) return;
     final epoch = _connectEpoch;
@@ -1606,6 +1626,17 @@ final class CasterService {
     }
     _lastError = null;
     _registrationConfirmed = false;
+    _relaySupportsShaderFrames = shaderFrames;
+    if (_routerSession == null) {
+      terminal.setShaderCapabilities(
+        shaderFrames
+            ? AuthoritativeTerminal.castShaderCapabilities
+            : AuthoritativeTerminal.disabledShaderCapabilities,
+      );
+    }
+    if (!shaderFrames) {
+      terminal.clearPendingShaderPayloads();
+    }
     _sendFrame(
       RegisterSessionFrame(
         sessionId: config.sessionId,
@@ -1668,6 +1699,7 @@ final class CasterService {
       _lastRemoteViewport = null;
       _cancelFrameTimers();
       _clearPendingClipboard();
+      terminal.clearPendingShaderPayloads();
       _routerSession?.removeEndpointViewport(_remoteEndpointId);
       unawaited(_probeServerRevision());
       return;
@@ -1768,8 +1800,11 @@ final class CasterService {
 
   void _onRequestKeyframe() {
     _cancelFrameTimers();
-    if (terminal.needsKeyframe || (_subscriberCount <= 1 && terminal.isDirty)) {
+    if (terminal.needsKeyframe ||
+        (_subscriberCount <= 1 &&
+            (terminal.isDirty || terminal.hasPendingShaderFrames))) {
       _sendFrame(BufferSnapshotFrame(snapshot: terminal.takeSnapshot()));
+      _sendShaderReplayFrames();
       if (!terminal.synchronizedOutput) {
         _drainKittyChunksTurn();
       }
@@ -1781,6 +1816,7 @@ final class CasterService {
       if (deltaFrame != null) _sendFrame(deltaFrame);
     }
     _sendFrame(BufferSnapshotFrame(snapshot: terminal.snapshotCurrent()));
+    _sendShaderReplayFrames();
     if (!terminal.synchronizedOutput) {
       _drainKittyChunksTurn();
     }
@@ -1971,12 +2007,16 @@ final class CasterService {
     _pendingClipboardReadBlocked = false;
   }
 
+  bool get _hasPendingShaderWork =>
+      _relaySupportsShaderFrames && terminal.hasPendingShaderFrames;
+
   void _scheduleDirtyFlushIfSubscribed() {
     if (_stopping ||
         stateMachine.state != .streaming ||
         _subscriberCount <= 0 ||
         _isOutboundPaused ||
         (!terminal.isDirty &&
+            !_hasPendingShaderWork &&
             !terminal.hasPendingKittyChunks &&
             !_hasPendingClipboard)) {
       return;
@@ -2022,11 +2062,32 @@ final class CasterService {
     final frame = terminal.takeNextFrame();
     if (frame != null) _sendFrame(frame);
     if (!_isOutboundPaused) {
+      _flushPendingShaderFrames();
       _flushPendingClipboard();
       _drainKittyChunksTurn();
-      if (terminal.isDirty || terminal.hasPendingKittyChunks) {
+      if (terminal.isDirty ||
+          _hasPendingShaderWork ||
+          terminal.hasPendingKittyChunks) {
         _scheduleDirtyFlushIfSubscribed();
       }
+    }
+  }
+
+  void _flushPendingShaderFrames() {
+    if (!_relaySupportsShaderFrames) {
+      terminal.clearPendingShaderPayloads();
+      return;
+    }
+    for (final frame in terminal.takePendingShaderFrames()) {
+      _sendFrame(frame);
+    }
+  }
+
+  void _sendShaderReplayFrames() {
+    terminal.clearPendingShaderPayloads();
+    if (!_relaySupportsShaderFrames) return;
+    for (final frame in terminal.buildShaderReplayFrames()) {
+      _sendFrame(frame);
     }
   }
 
@@ -2288,7 +2349,9 @@ final class CasterService {
     _revisionProbePending = false;
     _revisionReconnectDeferred = false;
     _registrationConfirmed = false;
+    _relaySupportsShaderFrames = false;
     _clearPendingClipboard();
+    terminal.clearPendingShaderPayloads();
     _uploadReceiver.abortAll();
     _pendingWaveformReqIds.clear();
     _subscriberCount = 0;
@@ -2360,6 +2423,7 @@ final class CasterService {
           if (finalFrame == null) break;
           _sendFrame(finalFrame);
         }
+        _flushPendingShaderFrames();
         _flushPendingClipboard();
         _drainKittyChunksTurn(maxChunks: null);
       }

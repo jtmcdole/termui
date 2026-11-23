@@ -9,6 +9,46 @@ import 'ansi_parser.dart';
 import 'audio_apc_handler.dart';
 import 'kitty_apc_handler.dart';
 import 'scrollback_buffer.dart';
+import 'shader_apc_handler.dart';
+
+/// Host shader and cell-transform capability profile returned for `ESC _ S a=query`.
+typedef TerminalShaderCapabilities = ({
+  String backend,
+  bool glsl,
+  bool xform,
+  bool region,
+  int maxSlots,
+  int maxRegions,
+});
+
+/// Callback returning current host shader capabilities for `ESC _ S a=query` replies.
+typedef ShaderCapabilitiesProvider = TerminalShaderCapabilities Function();
+
+/// Default capability profile when no GPU shader backend is configured.
+const TerminalShaderCapabilities defaultDisabledShaderCapabilities = (
+  backend: 'disabled',
+  glsl: false,
+  xform: true,
+  region: false,
+  maxSlots: ShaderApcParser.maxSlots,
+  maxRegions: ShaderRegion.maxRegionsPerPane,
+);
+
+final class _ScreenShaderState {
+  final Map<String, ShaderRegion> regions = <String, ShaderRegion>{};
+  final CellTransformTable transforms = CellTransformTable();
+  late final ShaderApcParser parser;
+
+  _ScreenShaderState(void Function(TerminalShaderApcEvent event) onEvent) {
+    parser = ShaderApcParser(onShaderEvent: onEvent);
+  }
+
+  void reset() {
+    regions.clear();
+    transforms.clear();
+    parser.reset();
+  }
+}
 
 /// Cursor visual style selected by `DECSCUSR` (`CSI Ps SP q`).
 enum TerminalCursorShape {
@@ -187,12 +227,26 @@ final class VirtualTerminal implements TerminalHandler {
   /// `APC G` image mutations and terminal resets.
   int get imageRegistryRevision => imageRegistry.revision;
 
+  int _shaderMetadataRevision = 0;
+
+  /// Monotonically increasing revision incremented whenever active buffer
+  /// `shaderRegions`, `cellTransforms`, or scrollback overlay visibility mutates.
+  int get shaderMetadataRevision => _shaderMetadataRevision;
+
   final Buffer _primaryBuffer;
   final ScrollbackBuffer _scrollback;
   List<bool> _primaryWrapped;
   bool _wrappingNextIndexDown = false;
   Buffer? _altBuffer;
   bool _usingAltScreen = false;
+  late final _ScreenShaderState _primaryShaderState = _ScreenShaderState(
+    _handleShaderEvent,
+  );
+  _ScreenShaderState? _altShaderState;
+
+  _ScreenShaderState get _activeShaderState => _usingAltScreen
+      ? (_altShaderState ?? _primaryShaderState)
+      : _primaryShaderState;
 
   /// Primary-screen scrollback ring buffer (`maxLines == 0` disables retention).
   ScrollbackBuffer get scrollback => _scrollback;
@@ -206,6 +260,7 @@ final class VirtualTerminal implements TerminalHandler {
     final clamped = value.clamp(0, _scrollback.retainedLines);
     if (_viewportOffset != clamped) {
       _viewportOffset = clamped;
+      _syncPrimaryShaderOverlays();
       _notifyListeners();
     }
   }
@@ -224,12 +279,14 @@ final class VirtualTerminal implements TerminalHandler {
       0,
       _scrollback.retainedLines,
     );
+    _syncPrimaryShaderOverlays();
     _notifyListeners();
   }
 
   /// Resets the scrollback viewport to the active screen (`viewportOffset = 0`).
   void resetViewport() {
     _viewportOffset = 0;
+    _syncPrimaryShaderOverlays();
     _notifyListeners();
   }
 
@@ -252,6 +309,7 @@ final class VirtualTerminal implements TerminalHandler {
 
     if (targetOffset == _viewportOffset) return false;
     _viewportOffset = targetOffset;
+    _syncPrimaryShaderOverlays();
     _notifyListeners();
     return true;
   }
@@ -363,15 +421,21 @@ final class VirtualTerminal implements TerminalHandler {
       final dstStart = y * buf.width;
       if (vOffset > 0 && y < vOffset) {
         final sbLine = _scrollback[_scrollback.totalLines - vOffset + y];
-        _copyScrollbackRowToBuffer(buf, dstStart, copyW, sbLine);
+        _copyScrollbackRowToBuffer(
+          buf,
+          dstStart,
+          copyW,
+          sbLine,
+          transparent: transparentBackground,
+        );
       } else {
         final srcRow = vOffset > 0 ? y - vOffset : y;
         final srcStart = srcRow * src.width;
-        buf.characters.setRange(
+        buf.glyphCellList.copyCellsFrom(
+          src.glyphCellList,
           dstStart,
-          dstStart + copyW,
-          src.characters,
           srcStart,
+          copyW,
         );
         buf.attributes.setRange(
           dstStart * 3,
@@ -383,16 +447,66 @@ final class VirtualTerminal implements TerminalHandler {
       }
     }
     buf.registerKittyRegistry(Rect(0, 0, width, height), imageRegistry);
+    buf.shaderRegions.clear();
+    buf.clearCellTransforms();
+    if (vOffset == 0) {
+      _copyShaderMetadataToBuffer(buf, src, copyW, copyH);
+    }
     return buf;
+  }
+
+  static void _copyShaderMetadataToBuffer(
+    Buffer dst,
+    Buffer src,
+    int copyW,
+    int copyH,
+  ) {
+    final clip = Rect(0, 0, copyW, copyH);
+    for (final region in src.shaderRegions) {
+      final clipped = region.translatedAndClipped(0, 0, clip);
+      if (clipped != null) {
+        dst.addShaderRegion(clipped);
+      }
+    }
+    final table = src.cellTransforms;
+    if (table == null || table.isEmpty || src.width <= 0) return;
+    for (final entry in table.entries) {
+      final x = entry.key % src.width;
+      final y = entry.key ~/ src.width;
+      if (x < copyW && y < copyH) {
+        dst.setCellTransform(x, y, entry.value);
+      }
+    }
+  }
+
+  static void _fillBlankAttributes(
+    Buffer buf,
+    int startCell,
+    int endCell,
+    bool transparent,
+  ) {
+    buf.attributes.fillRange(startCell * 3, endCell * 3, 0);
+    if (transparent) {
+      for (var i = startCell * 3 + 2; i < endCell * 3; i += 3) {
+        buf.attributes[i] = Modifier.transparent;
+      }
+    }
   }
 
   static void _copyScrollbackRowToBuffer(
     Buffer buf,
     int dstStart,
     int copyW,
-    ScrollbackLine? sbLine,
-  ) {
+    ScrollbackLine? sbLine, {
+    required bool transparent,
+  }) {
     if (sbLine == null) {
+      buf.glyphCellList.fillCodeRange(
+        dstStart,
+        dstStart + copyW,
+        GlyphCellList.spaceCode,
+      );
+      _fillBlankAttributes(buf, dstStart, dstStart + copyW, transparent);
       buf.clearCellAuxRange(dstStart, dstStart + copyW);
       return;
     }
@@ -402,15 +516,25 @@ final class VirtualTerminal implements TerminalHandler {
       underlineColors: sbLine.underlineColors,
       uris: sbLine.uris,
     );
-    final n = math.min(sbLine.characters.length, copyW);
-    if (n <= 0) return;
-    buf.characters.setRange(dstStart, dstStart + n, sbLine.characters, 0);
-    buf.attributes.setRange(
-      dstStart * 3,
-      (dstStart + n) * 3,
-      sbLine.attributes,
-      0,
-    );
+    final sbCells = sbLine.glyphCellList;
+    final n = math.min(sbCells.length, copyW);
+    if (n > 0) {
+      buf.glyphCellList.copyCellsFrom(sbCells, dstStart, 0, n);
+      buf.attributes.setRange(
+        dstStart * 3,
+        (dstStart + n) * 3,
+        sbLine.attributes,
+        0,
+      );
+    }
+    if (n < copyW) {
+      buf.glyphCellList.fillCodeRange(
+        dstStart + n,
+        dstStart + copyW,
+        GlyphCellList.spaceCode,
+      );
+      _fillBlankAttributes(buf, dstStart + n, dstStart + copyW, transparent);
+    }
   }
 
   int _cellPixelWidth;
@@ -642,6 +766,17 @@ final class VirtualTerminal implements TerminalHandler {
   /// Callback invoked when an `ESC _ A` audio APC event is decoded.
   void Function(TerminalAudioEvent event)? onAudioEvent;
 
+  /// Callback invoked when an `ESC _ S` artistic shader or cell-transform event is decoded.
+  void Function(TerminalShaderApcEvent event)? onShaderEvent;
+
+  /// Optional provider returning current host shader capabilities for `ESC _ S a=query`.
+  ShaderCapabilitiesProvider? shaderCapabilitiesProvider;
+
+  /// Configures a static [TerminalShaderCapabilities] profile for `ESC _ S a=query` replies.
+  void setShaderCapabilities(TerminalShaderCapabilities capabilities) {
+    shaderCapabilitiesProvider = () => capabilities;
+  }
+
   static final RegExp _osc99UnsafeIdChars = RegExp(r'[^a-zA-Z0-9_.\-]');
 
   /// Emits a Kitty `OSC 99` activation event reply (`\x1b]99;i=<id>;\x1b\\`) via [onReply].
@@ -690,6 +825,8 @@ final class VirtualTerminal implements TerminalHandler {
     this.onNotification,
     this.onBell,
     this.onAudioEvent,
+    this.onShaderEvent,
+    this.shaderCapabilitiesProvider,
   }) : width = math.max(1, width),
        _colorScheme =
            colorScheme ?? theme?.brightness ?? TerminalBrightness.dark,
@@ -839,6 +976,9 @@ final class VirtualTerminal implements TerminalHandler {
     _pendingOsc99.clear();
     _kittyApcHandler.reset();
     _audioApcHandler.reset();
+    _primaryShaderState.reset();
+    _altShaderState?.reset();
+    _altShaderState = null;
     _utf8Sink.close();
     _listeners.clear();
   }
@@ -953,12 +1093,17 @@ final class VirtualTerminal implements TerminalHandler {
       _resetFullScreenState();
     } else {
       _resetSavedCursorOnly();
+      _resetActiveShaderState();
     }
+    onShaderEvent?.call(const TerminalResetShaderEvent(target: .all));
   }
 
   void _resetFullScreenState() {
     _kittyApcHandler.reset();
     _audioApcHandler.reset();
+    _primaryShaderState.reset();
+    _altShaderState?.reset();
+    _altShaderState = null;
     _resetDefaultTabStops();
     _savedPrimary = _initialSavedCursor;
     _savedAlt = _initialSavedCursor;
@@ -978,15 +1123,17 @@ final class VirtualTerminal implements TerminalHandler {
     _scrollback.clear();
     _viewportOffset = 0;
     _promptLineIndices.clear();
-    final (fg, bg, mod) = _eraseAttributes();
-    _primaryBuffer.fillAttributes(
-      char: ' ',
-      fg: fg,
-      bg: bg,
-      modifiers: mod,
-      underlineColor: 0,
-      uri: '',
+    _fillRowsWithEraseAttributes(_primaryBuffer, 0, height);
+    _syncBufferShaderMetadata(
+      _primaryBuffer,
+      _primaryShaderState,
+      hideOverlays: false,
     );
+  }
+
+  void _resetActiveShaderState() {
+    _activeShaderState.reset();
+    _syncActiveBufferShaderMetadata();
   }
 
   void _resetSavedCursorOnly() {
@@ -1011,6 +1158,8 @@ final class VirtualTerminal implements TerminalHandler {
     final clampedWidth = math.max(1, newWidth);
     final clampedHeight = math.max(1, newHeight);
     if (clampedWidth == width && clampedHeight == height) return;
+    final oldWidth = width;
+    final oldHeight = height;
     _evictOverflowBeforeShrink(clampedHeight);
     final shrunkHorizontally = clampedWidth < width;
     _primaryBuffer.resize(clampedWidth, clampedHeight);
@@ -1040,6 +1189,18 @@ final class VirtualTerminal implements TerminalHandler {
     cursorX = cursorX.clamp(0, width - 1);
     cursorY = cursorY.clamp(0, height - 1);
     _viewportOffset = _viewportOffset.clamp(0, _scrollback.retainedLines);
+    _resizeShaderState(_primaryShaderState, oldWidth, oldHeight, width, height);
+    if (_altShaderState case final altShader?) {
+      _resizeShaderState(altShader, oldWidth, oldHeight, width, height);
+    }
+    _syncBufferShaderMetadata(
+      _primaryBuffer,
+      _primaryShaderState,
+      hideOverlays: !_usingAltScreen && _viewportOffset > 0,
+    );
+    if (alt != null && _altShaderState != null) {
+      _syncBufferShaderMetadata(alt, _altShaderState!, hideOverlays: false);
+    }
   }
 
   void _resizeTabStops(int newWidth) {
@@ -1065,6 +1226,7 @@ final class VirtualTerminal implements TerminalHandler {
     _pushPrimaryRowsToScrollback(evictCount);
     _copyCellSpan(_primaryBuffer, 0, evictCount * width, clampedHeight * width);
     _primaryWrapped.setRange(0, clampedHeight, _primaryWrapped, evictCount);
+    _shiftShaderStateRows(_primaryShaderState, 0, height - 1, -evictCount);
     _savedPrimary = (
       x: _savedPrimary.x,
       y: math.max(0, _savedPrimary.y.clamp(0, height - 1) - evictCount),
@@ -1092,8 +1254,9 @@ final class VirtualTerminal implements TerminalHandler {
   static bool _rowHasVisibleContent(Buffer buf, int row) {
     final rowStart = row * buf.width;
     final rowEnd = rowStart + buf.width;
+    final codes = buf.glyphCodes;
     for (var cell = rowStart; cell < rowEnd; cell++) {
-      if (buf.characters[cell] != ' ') return true;
+      if (codes[cell] != GlyphCellList.spaceCode) return true;
       final attrIdx = cell * 3;
       if (buf.attributes[attrIdx + 1] != 0 ||
           (buf.attributes[attrIdx + 2] & ~Modifier.transparent) != 0) {
@@ -1103,18 +1266,25 @@ final class VirtualTerminal implements TerminalHandler {
     return false;
   }
 
+  static bool _isWideCellAt(Buffer buf, int cellIdx) {
+    final code = buf.glyphCodes[cellIdx];
+    if (code == GlyphCellList.wideContinuationCode) return false;
+    if ((code & GlyphCellList.clusterFlag) == 0) return isWideCodePoint(code);
+    return isWideGrapheme(buf.glyphCellList.decodeCode(code));
+  }
+
   void _healRightEdgeWideGraphemes(Buffer buf) {
     final rightCol = buf.width - 1;
     for (var y = 0; y < buf.height; y++) {
       final cellIdx = y * buf.width + rightCol;
-      if (isWideGrapheme(buf.characters[cellIdx])) {
+      if (_isWideCellAt(buf, cellIdx)) {
         _resetSplitCell(buf, cellIdx);
       }
     }
   }
 
   void _resetSplitCell(Buffer buf, int cellIdx) {
-    buf.characters[cellIdx] = ' ';
+    buf.glyphCellList.setCodeAt(cellIdx, GlyphCellList.spaceCode);
     final attrIdx = cellIdx * 3;
     buf.attributes[attrIdx] = 0;
     buf.attributes[attrIdx + 1] = 0;
@@ -1122,6 +1292,24 @@ final class VirtualTerminal implements TerminalHandler {
         ? Modifier.transparent
         : Modifier.none;
     buf.clearCellAuxRange(cellIdx, cellIdx + 1);
+  }
+
+  void _clearSplitWideEdges(
+    Buffer active,
+    int rowOffset,
+    int startX,
+    int endX,
+  ) {
+    final codes = active.glyphCodes;
+    if (startX > 0 &&
+        codes[rowOffset + startX] == GlyphCellList.wideContinuationCode &&
+        _isWideCellAt(active, rowOffset + startX - 1)) {
+      _resetSplitCell(active, rowOffset + startX - 1);
+    }
+    if (endX < width &&
+        codes[rowOffset + endX] == GlyphCellList.wideContinuationCode) {
+      _resetSplitCell(active, rowOffset + endX);
+    }
   }
 
   /// Feeds a chunk of UTF-8 encoded bytes into the terminal.
@@ -1163,16 +1351,19 @@ final class VirtualTerminal implements TerminalHandler {
 
   void _eraseRowSpan(int y, int startX, int endX) {
     if (startX >= endX || y < 0 || y >= height) return;
-    final (fg, bg, mod) = _eraseAttributes();
-    buffer.fillRect(
-      Rect(startX, y, endX - startX, 1),
-      char: ' ',
-      fg: fg,
-      bg: bg,
-      modifiers: mod,
-      underlineColor: 0,
-      uri: '',
+    final active = buffer;
+    final rowOffset = y * width;
+    _clearSplitWideEdges(active, rowOffset, startX, endX);
+    final startCell = rowOffset + startX;
+    final endCell = rowOffset + endX;
+    active.glyphCellList.fillCodeRange(
+      startCell,
+      endCell,
+      GlyphCellList.spaceCode,
     );
+    final (fg, bg, mod) = _eraseAttributes();
+    _fillEraseAttributesRange(active, startCell, endCell, fg, bg, mod);
+    active.clearCellAuxRange(startCell, endCell);
   }
 
   void _eraseInDisplay(int mode) {
@@ -1183,51 +1374,26 @@ final class VirtualTerminal implements TerminalHandler {
         _eraseRowSpan(cursorY, cursorX, width);
         _clearLineWrapOnErase(clearStart: cursorX == 0, clearEnd: true);
         if (cursorY + 1 < height) {
-          final (fg, bg, mod) = _eraseAttributes();
-          active.fillRect(
-            Rect(0, cursorY + 1, width, height - (cursorY + 1)),
-            char: ' ',
-            fg: fg,
-            bg: bg,
-            modifiers: mod,
-            underlineColor: 0,
-            uri: '',
-          );
+          _fillRowsWithEraseAttributes(active, cursorY + 1, height);
           _clearWrappedRange(cursorY + 1, height);
         }
       case 1: // Start of screen to cursor (inclusive)
         _clampPendingWrap();
         if (cursorY > 0) {
-          final (fg, bg, mod) = _eraseAttributes();
-          active.fillRect(
-            Rect(0, 0, width, cursorY),
-            char: ' ',
-            fg: fg,
-            bg: bg,
-            modifiers: mod,
-            underlineColor: 0,
-            uri: '',
-          );
+          _fillRowsWithEraseAttributes(active, 0, cursorY);
         }
         _eraseRowSpan(cursorY, 0, math.min(width, cursorX + 1));
         _clearWrappedRange(0, cursorY + 1);
       case 2: // Entire screen
         _clampPendingWrap();
-        final (fg, bg, mod) = _eraseAttributes();
-        active.fillAttributes(
-          char: ' ',
-          fg: fg,
-          bg: bg,
-          modifiers: mod,
-          underlineColor: 0,
-          uri: '',
-        );
+        _fillRowsWithEraseAttributes(active, 0, height);
         _clearWrappedRange(0, height);
       case 3: // Saved scrollback lines only
         if (!_usingAltScreen) {
           _scrollback.clear();
           _viewportOffset = 0;
           _promptLineIndices.clear();
+          _syncPrimaryShaderOverlays();
         }
     }
   }
@@ -1316,6 +1482,8 @@ final class VirtualTerminal implements TerminalHandler {
     final fillEnd = up ? bottom + 1 : top + shift;
     _fillRowsWithEraseAttributes(active, fillStart, fillEnd);
     _clearWrappedRange(fillStart, fillEnd);
+    _shiftShaderStateRows(_activeShaderState, top, bottom, up ? -shift : shift);
+    _syncActiveBufferShaderMetadata();
   }
 
   void _evictTopRowsToScrollback(
@@ -1348,6 +1516,7 @@ final class VirtualTerminal implements TerminalHandler {
         0,
         _scrollback.retainedLines,
       );
+      _syncPrimaryShaderOverlays();
     }
     _pruneEvictedPromptLines();
   }
@@ -1359,11 +1528,11 @@ final class VirtualTerminal implements TerminalHandler {
     int cellCount,
   ) {
     if (cellCount <= 0) return;
-    buf.characters.setRange(
+    buf.glyphCellList.copyCellsFrom(
+      buf.glyphCellList,
       dstCell,
-      dstCell + cellCount,
-      buf.characters,
       srcCell,
+      cellCount,
     );
     buf.attributes.setRange(
       dstCell * 3,
@@ -1374,6 +1543,25 @@ final class VirtualTerminal implements TerminalHandler {
     buf.copyCellAuxRangeFrom(buf, dstCell, srcCell, cellCount);
   }
 
+  static void _fillEraseAttributesRange(
+    Buffer buf,
+    int startCell,
+    int endCell,
+    int fg,
+    int bg,
+    int mod,
+  ) {
+    if (fg == 0 && bg == 0 && mod == 0) {
+      buf.attributes.fillRange(startCell * 3, endCell * 3, 0);
+      return;
+    }
+    for (var i = startCell * 3; i < endCell * 3; i += 3) {
+      buf.attributes[i] = fg;
+      buf.attributes[i + 1] = bg;
+      buf.attributes[i + 2] = mod;
+    }
+  }
+
   void _fillRowsWithEraseAttributes(
     Buffer buf,
     int startRow,
@@ -1382,21 +1570,182 @@ final class VirtualTerminal implements TerminalHandler {
     final startCell = startRow * width;
     final endCell = endRowExclusive * width;
     if (startCell >= endCell) return;
-    buf.characters.fillRange(startCell, endCell, ' ');
+    buf.glyphCellList.fillCodeRange(
+      startCell,
+      endCell,
+      GlyphCellList.spaceCode,
+    );
     final (fg, bg, mod) = _eraseAttributes();
-    for (var i = startCell * 3; i < endCell * 3; i += 3) {
-      buf.attributes[i] = fg;
-      buf.attributes[i + 1] = bg;
-      buf.attributes[i + 2] = mod;
-    }
+    _fillEraseAttributesRange(buf, startCell, endCell, fg, bg, mod);
     buf.clearCellAuxRange(startCell, endCell);
+  }
+
+  bool get _isDecGraphicsActive => _useG1 ? _g1DecGraphics : _g0DecGraphics;
+
+  static bool _isPrintableAscii(String text) {
+    final len = text.length;
+    for (var i = 0; i < len; i++) {
+      final cu = text.codeUnitAt(i);
+      if (cu < 0x20 || cu > 0x7E) return false;
+    }
+    return true;
   }
 
   @override
   void printText(String text) {
-    if (text.isNotEmpty) _markDirty();
+    if (text.isEmpty) return;
+    _markDirty();
+    if (!_insertMode &&
+        !_isDecGraphicsActive &&
+        cursorX >= 0 &&
+        cursorY >= 0 &&
+        cursorY < height &&
+        (cursorX < width || _autoWrap) &&
+        _isPrintableAscii(text)) {
+      _printAsciiRun(text);
+      return;
+    }
     for (final char in text.characters) {
       _printGrapheme(char);
+    }
+  }
+
+  void _printAsciiRun(String text) {
+    final (fgArg, bgArg, baseMod, bgTransparent) = _resolvePrintAttributes('A');
+    final spaceMod = bgTransparent ? (baseMod | Modifier.transparent) : baseMod;
+    final ulColor = _resolveOscColorArg(_currentStyle.underlineColor, null);
+    final uri = _activeUri;
+    final len = text.length;
+    var offset = 0;
+
+    while (offset < len) {
+      _resolvePendingWrapBeforeWrite();
+      final active = buffer;
+      final remaining = len - offset;
+      final avail = width - cursorX;
+      if (!_autoWrap && remaining > avail) {
+        _writeClampedAsciiTail(
+          active,
+          text,
+          offset,
+          avail,
+          fgArg,
+          bgArg,
+          baseMod,
+          spaceMod,
+          ulColor,
+          uri,
+        );
+        return;
+      }
+
+      final count = math.min(remaining, avail);
+      final startX = cursorX;
+      _writeAsciiRowSegment(
+        active,
+        cursorY,
+        startX,
+        text,
+        offset,
+        count,
+        fgArg,
+        bgArg,
+        baseMod,
+        spaceMod,
+        ulColor,
+        uri,
+      );
+      _lastPrintedCellX = startX + count - 1;
+      _lastPrintedCellY = cursorY;
+      offset += count;
+      _advanceCursorAfterPrint(count);
+    }
+
+    _lastPrintedGrapheme = buffer.glyphCellList.decodeCode(
+      text.codeUnitAt(len - 1),
+    );
+  }
+
+  void _writeClampedAsciiTail(
+    Buffer active,
+    String text,
+    int offset,
+    int avail,
+    int fgArg,
+    int bgArg,
+    int baseMod,
+    int spaceMod,
+    int ulColor,
+    String? uri,
+  ) {
+    final headCount = avail - 1;
+    if (headCount > 0) {
+      _writeAsciiRowSegment(
+        active,
+        cursorY,
+        cursorX,
+        text,
+        offset,
+        headCount,
+        fgArg,
+        bgArg,
+        baseMod,
+        spaceMod,
+        ulColor,
+        uri,
+      );
+    }
+    final lastIndex = text.length - 1;
+    _writeAsciiRowSegment(
+      active,
+      cursorY,
+      width - 1,
+      text,
+      lastIndex,
+      1,
+      fgArg,
+      bgArg,
+      baseMod,
+      spaceMod,
+      ulColor,
+      uri,
+    );
+    cursorX = width - 1;
+    _lastPrintedCellX = cursorX;
+    _lastPrintedCellY = cursorY;
+    _lastPrintedGrapheme = active.glyphCellList.decodeCode(
+      text.codeUnitAt(lastIndex),
+    );
+  }
+
+  void _writeAsciiRowSegment(
+    Buffer active,
+    int y,
+    int startX,
+    String text,
+    int textOffset,
+    int count,
+    int fgArg,
+    int bgArg,
+    int baseMod,
+    int spaceMod,
+    int ulColor,
+    String? uri,
+  ) {
+    final rowOffset = y * width;
+    _clearSplitWideEdges(active, rowOffset, startX, startX + count);
+    final cells = active.glyphCellList;
+    final attrs = active.attributes;
+    for (var i = 0; i < count; i++) {
+      final cu = text.codeUnitAt(textOffset + i);
+      final idx = rowOffset + startX + i;
+      cells.setCodeAt(idx, cu);
+      final attrIdx = idx * 3;
+      attrs[attrIdx] = fgArg;
+      attrs[attrIdx + 1] = bgArg;
+      attrs[attrIdx + 2] = cu == GlyphCellList.spaceCode ? spaceMod : baseMod;
+      active.setUnderlineColorAt(idx, ulColor);
+      active.setUriAt(idx, uri);
     }
   }
 
@@ -1772,6 +2121,7 @@ final class VirtualTerminal implements TerminalHandler {
     if (enable && !_usingAltScreen) {
       if (saveRestoreCursor) _saveCursor();
       _altBuffer = _newBuffer(width, height);
+      _altShaderState = _ScreenShaderState(_handleShaderEvent);
       _usingAltScreen = true;
       _scrollTop = 0;
       _scrollBottom = height - 1;
@@ -1786,15 +2136,23 @@ final class VirtualTerminal implements TerminalHandler {
     }
     if (!enable && _usingAltScreen) {
       _usingAltScreen = false;
+      _altBuffer?.shaderRegions.clear();
+      _altBuffer?.clearCellTransforms();
       _altBuffer = null;
+      _altShaderState?.reset();
+      _altShaderState = null;
       _scrollTop = 0;
       _scrollBottom = height - 1;
       _audioApcHandler.reset();
+      _syncPrimaryShaderOverlays();
       if (saveRestoreCursor) {
         _restoreCursor();
       } else {
         _clampPendingWrap();
       }
+      onShaderEvent?.call(
+        const TerminalResetShaderEvent(target: .all, altScreenExit: true),
+      );
     }
   }
 
@@ -2249,13 +2607,16 @@ final class VirtualTerminal implements TerminalHandler {
     _clampPendingWrap();
     final active = buffer;
     final rowBase = cursorY * width;
-    if (cursorX > 0 && active.characters[rowBase + cursorX] == '') {
+    final codes = active.glyphCodes;
+    if (cursorX > 0 &&
+        codes[rowBase + cursorX] == GlyphCellList.wideContinuationCode) {
       _resetSplitCell(active, rowBase + cursorX - 1);
     }
     final remaining = width - cursorX;
     final del = math.min(count, remaining);
     final srcEnd = cursorX + del;
-    if (srcEnd < width && active.characters[rowBase + srcEnd] == '') {
+    if (srcEnd < width &&
+        codes[rowBase + srcEnd] == GlyphCellList.wideContinuationCode) {
       _resetSplitCell(active, rowBase + srcEnd);
     }
     _copyCellSpan(active, rowBase + cursorX, rowBase + srcEnd, remaining - del);
@@ -2266,7 +2627,9 @@ final class VirtualTerminal implements TerminalHandler {
     _clampPendingWrap();
     final active = buffer;
     final rowBase = cursorY * width;
-    if (cursorX > 0 && active.characters[rowBase + cursorX] == '') {
+    if (cursorX > 0 &&
+        active.glyphCodes[rowBase + cursorX] ==
+            GlyphCellList.wideContinuationCode) {
       _resetSplitCell(active, rowBase + cursorX - 1);
       _resetSplitCell(active, rowBase + cursorX);
     }
@@ -2275,7 +2638,7 @@ final class VirtualTerminal implements TerminalHandler {
     final shiftCols = remaining - ins;
     if (shiftCols > 0) {
       final src = rowBase + cursorX;
-      if (isWideGrapheme(active.characters[src + shiftCols - 1])) {
+      if (_isWideCellAt(active, src + shiftCols - 1)) {
         _resetSplitCell(active, src + shiftCols - 1);
       }
       _copyCellSpan(active, src + ins, src, shiftCols);
@@ -2478,8 +2841,278 @@ final class VirtualTerminal implements TerminalHandler {
       _audioApcHandler.handleApc(payload);
       return;
     }
+    if (payload.startsWith('S') || payload.startsWith('_S')) {
+      _activeShaderState.parser.handleApc(payload);
+      return;
+    }
     _markDirty();
     _kittyApcHandler.handleApc(payload);
+  }
+
+  void _handleShaderEvent(TerminalShaderApcEvent event) {
+    switch (event) {
+      case TerminalShaderQueryEvent():
+        _replyShaderCapabilities();
+        onShaderEvent?.call(event);
+      case TerminalShaderDefineEvent():
+        onShaderEvent?.call(event);
+      case TerminalShaderRegionEvent():
+        _applyShaderRegionEvent(event);
+        _markDirty();
+        onShaderEvent?.call(event);
+      case TerminalShaderTransformBatchEvent():
+        _applyShaderTransformBatchEvent(event);
+        _markDirty();
+        onShaderEvent?.call(event);
+      case TerminalShaderSetEvent():
+        _markDirty();
+        onShaderEvent?.call(event);
+      case TerminalShaderUniformEvent():
+        _applyShaderUniformEvent(event);
+        _markDirty();
+        onShaderEvent?.call(event);
+      case TerminalResetShaderEvent():
+        _applyShaderResetEvent(event);
+        _markDirty();
+        onShaderEvent?.call(event);
+    }
+  }
+
+  void _replyShaderCapabilities() {
+    final caps =
+        shaderCapabilitiesProvider?.call() ?? defaultDisabledShaderCapabilities;
+    onReply?.call(
+      ShaderApcEncoder.encodeCapsReply(
+        backend: caps.backend,
+        glsl: caps.glsl,
+        xform: caps.xform,
+        region: caps.region,
+        maxSlots: caps.maxSlots,
+        maxRegions: caps.maxRegions,
+      ),
+    );
+  }
+
+  void _applyShaderRegionEvent(TerminalShaderRegionEvent event) {
+    final state = _activeShaderState;
+    if (event.remove || event.region == null) {
+      state.regions.remove(event.id);
+      _syncActiveBufferShaderMetadata();
+      return;
+    }
+    final clipped = event.region!.translatedAndClipped(
+      0,
+      0,
+      Rect(0, 0, width, height),
+    );
+    if (clipped == null) {
+      state.regions.remove(event.id);
+    } else if (state.regions.containsKey(event.id) ||
+        state.regions.length < ShaderRegion.maxRegionsPerPane) {
+      state.regions[event.id] = clipped;
+    }
+    _syncActiveBufferShaderMetadata();
+  }
+
+  void _applyShaderTransformBatchEvent(
+    TerminalShaderTransformBatchEvent event,
+  ) {
+    final table = _activeShaderState.transforms;
+    if (event.replace) {
+      table.clear();
+    }
+    for (final entry in event.entries) {
+      if (entry.col < 0 ||
+          entry.col >= width ||
+          entry.row < 0 ||
+          entry.row >= height) {
+        continue;
+      }
+      final cellIdx = entry.row * width + entry.col;
+      final transform = entry.transform;
+      if (transform == null || transform.isIdentity) {
+        table.remove(cellIdx);
+      } else {
+        table.set(cellIdx, transform);
+      }
+    }
+    _syncActiveBufferShaderMetadata();
+  }
+
+  void _applyShaderUniformEvent(TerminalShaderUniformEvent event) {
+    final id = event.id;
+    if (id == null) return;
+    final state = _activeShaderState;
+    final existing = state.regions[id];
+    if (existing == null) return;
+    final updated = ShaderRegion.sanitizeParams(existing.params);
+    for (var i = 0; i < ShaderRegion.paramCount; i++) {
+      if ((event.paramMask & (1 << i)) != 0) {
+        updated[i] = event.params[i];
+      }
+    }
+    state.regions[id] = existing.copyWith(params: updated);
+    _syncActiveBufferShaderMetadata();
+  }
+
+  void _applyShaderResetEvent(TerminalResetShaderEvent event) {
+    final state = _activeShaderState;
+    switch (event.target) {
+      case ShaderResetTarget.all:
+        state.regions.clear();
+        state.transforms.clear();
+      case ShaderResetTarget.regions:
+        state.regions.clear();
+      case ShaderResetTarget.xforms:
+        state.transforms.clear();
+      case ShaderResetTarget.pane:
+        return;
+    }
+    _syncActiveBufferShaderMetadata();
+  }
+
+  void _syncActiveBufferShaderMetadata() {
+    _syncBufferShaderMetadata(
+      buffer,
+      _activeShaderState,
+      hideOverlays: !_usingAltScreen && _viewportOffset > 0,
+    );
+  }
+
+  void _syncPrimaryShaderOverlays() {
+    _syncBufferShaderMetadata(
+      _primaryBuffer,
+      _primaryShaderState,
+      hideOverlays: _viewportOffset > 0,
+    );
+  }
+
+  void _syncBufferShaderMetadata(
+    Buffer target,
+    _ScreenShaderState state, {
+    required bool hideOverlays,
+  }) {
+    _shaderMetadataRevision++;
+    target.clearShaderRegions();
+    target.clearCellTransforms();
+    if (hideOverlays) return;
+    for (final region in state.regions.values) {
+      target.addShaderRegion(region);
+    }
+    if (state.transforms.isEmpty) return;
+    for (final entry in state.transforms.entries) {
+      target.setCellTransformAt(entry.key, entry.value);
+    }
+  }
+
+  void _shiftShaderStateRows(
+    _ScreenShaderState state,
+    int top,
+    int bottom,
+    int deltaRows,
+  ) {
+    if (deltaRows == 0) return;
+    _shiftTransformsInRegion(state.transforms, top, bottom, deltaRows);
+    _shiftRegionsInRegion(state.regions, top, bottom, deltaRows);
+  }
+
+  void _shiftTransformsInRegion(
+    CellTransformTable table,
+    int top,
+    int bottom,
+    int deltaRows,
+  ) {
+    if (table.isEmpty) return;
+    if (top == 0 && bottom == height - 1) {
+      table.shiftRows(deltaRows, width, height);
+      return;
+    }
+    final next = <int, CellTransform>{};
+    for (final entry in table.entries) {
+      final col = entry.key % width;
+      final row = entry.key ~/ width;
+      if (row < top || row > bottom) {
+        next[entry.key] = entry.value;
+        continue;
+      }
+      final newRow = row + deltaRows;
+      if (newRow >= top && newRow <= bottom) {
+        next[newRow * width + col] = entry.value;
+      }
+    }
+    table.clear();
+    for (final entry in next.entries) {
+      table.set(entry.key, entry.value);
+    }
+  }
+
+  void _shiftRegionsInRegion(
+    Map<String, ShaderRegion> regions,
+    int top,
+    int bottom,
+    int deltaRows,
+  ) {
+    if (regions.isEmpty) return;
+    final clip = Rect(0, top, width, bottom - top + 1);
+    final isFullScreen = top == 0 && bottom == height - 1;
+    for (final id in [...regions.keys]) {
+      final region = regions[id]!;
+      final shifted = isFullScreen
+          ? region.translatedAndClipped(0, deltaRows, clip)
+          : _shiftRegionWithinBand(region, top, bottom, deltaRows, clip);
+      if (shifted == null) {
+        regions.remove(id);
+      } else {
+        regions[id] = shifted;
+      }
+    }
+  }
+
+  ShaderRegion? _shiftRegionWithinBand(
+    ShaderRegion region,
+    int top,
+    int bottom,
+    int deltaRows,
+    Rect bandClip,
+  ) {
+    final nextRects = <Rect>[];
+    for (final rect in region.sourceRects) {
+      final rectBottom = rect.y + rect.height - 1;
+      if (rectBottom < top || rect.y > bottom) {
+        nextRects.add(rect);
+        continue;
+      }
+      final moved = Rect(
+        rect.x,
+        rect.y + deltaRows,
+        rect.width,
+        rect.height,
+      ).intersect(bandClip);
+      if (moved.width > 0 && moved.height > 0) {
+        nextRects.add(moved);
+      }
+    }
+    return nextRects.isEmpty ? null : region.copyWith(sourceRects: nextRects);
+  }
+
+  static void _resizeShaderState(
+    _ScreenShaderState state,
+    int oldWidth,
+    int oldHeight,
+    int newWidth,
+    int newHeight,
+  ) {
+    state.transforms.resize(oldWidth, oldHeight, newWidth, newHeight);
+    if (state.regions.isEmpty) return;
+    final bounds = Rect(0, 0, newWidth, newHeight);
+    for (final id in [...state.regions.keys]) {
+      final clipped = state.regions[id]!.translatedAndClipped(0, 0, bounds);
+      if (clipped == null) {
+        state.regions.remove(id);
+      } else {
+        state.regions[id] = clipped;
+      }
+    }
   }
 
   @override

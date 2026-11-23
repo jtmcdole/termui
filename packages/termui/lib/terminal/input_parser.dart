@@ -1,5 +1,7 @@
 import 'dart:convert';
+
 import 'package:characters/characters.dart';
+
 import 'event.dart';
 
 /// A reactive input parser that converts byte streams from stdin into high-level
@@ -365,8 +367,8 @@ class InputParser {
     List<InputEvent> events,
   ) {
     final remaining = _buffer.length - offset;
-    if (remaining == 2 ||
-        (_buffer[offset + 2] != 0x47 && _buffer[offset + 2] != 0x41)) {
+    final third = remaining > 2 ? _buffer[offset + 2] : -1;
+    if (third != 0x47 && third != 0x41 && third != 0x53) {
       events.add(
         const KeyEvent('_', KeyType.character, modifiers: {Modifier.alt}),
       );
@@ -444,6 +446,11 @@ class InputParser {
       events.add(AudioApcReplyEvent(payload));
       return;
     }
+    if (payload.startsWith('S') || payload.startsWith('_S')) {
+      final caps = _parseShaderCapabilitiesApc(payload);
+      if (caps != null) events.add(caps);
+      return;
+    }
     if (!payload.startsWith('G') && !payload.startsWith('_G')) return;
     // Expected format: Gi=<id>;<status> or G<key>=<val>...;<status>
     final semi = payload.indexOf(';');
@@ -462,6 +469,63 @@ class InputParser {
         ),
       );
     }
+  }
+
+  static ShaderCapabilitiesEvent? _parseShaderCapabilitiesApc(String payload) {
+    final body = payload.startsWith('_S')
+        ? payload.substring(2)
+        : payload.substring(1);
+    final semi = body.indexOf(';');
+    final control = semi >= 0 ? body.substring(0, semi) : body;
+    final pairs = _parseApcKeyValues(control);
+    if (pairs['a'] != 'caps') return null;
+
+    final rawBackend = pairs['backend']?.trim() ?? '';
+    final backend = rawBackend.isEmpty ? 'disabled' : rawBackend;
+    final glsl = _parseApcBool(pairs['glsl']);
+    final xform = _parseApcBool(pairs['xform']);
+    final region = _parseApcBool(pairs['region']);
+    final maxSlots = _parseApcNonNegInt(
+      pairs['max_slots'],
+      fallback: glsl ? 16 : 0,
+    );
+    final maxRegions = _parseApcNonNegInt(
+      pairs['max_regions'],
+      fallback: region ? 8 : 0,
+    );
+    return ShaderCapabilitiesEvent(
+      backend: backend,
+      glsl: glsl,
+      xform: xform,
+      region: region,
+      maxSlots: maxSlots,
+      maxRegions: maxRegions,
+    );
+  }
+
+  static Map<String, String> _parseApcKeyValues(String control) {
+    final pairs = <String, String>{};
+    for (final entry in control.split(',')) {
+      final eq = entry.indexOf('=');
+      if (eq <= 0) continue;
+      final key = entry.substring(0, eq).trim();
+      final val = entry.substring(eq + 1).trim();
+      if (key.isNotEmpty) pairs[key] = val;
+    }
+    return pairs;
+  }
+
+  static bool _parseApcBool(String? raw) {
+    if (raw == null) return false;
+    final lower = raw.trim().toLowerCase();
+    return lower == '1' || lower == 'true';
+  }
+
+  static int _parseApcNonNegInt(String? raw, {required int fallback}) {
+    if (raw == null || raw.isEmpty) return fallback;
+    final parsed = int.tryParse(raw);
+    if (parsed == null || parsed < 0) return fallback;
+    return parsed;
   }
 
   ({int offset, bool stop}) _consumeSs3Sequence(

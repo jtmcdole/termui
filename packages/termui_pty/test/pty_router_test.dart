@@ -654,6 +654,18 @@ void main() {
           isEmpty,
         );
 
+        // Shader overlay APC (a=xform / a=region) must NOT bump fullSyncRevision (H2).
+        final fullSyncBeforeShader = port.fullSyncRevision;
+        final renderBeforeShader = port.renderRevision;
+        backend.emitOutput('\x1b_Sa=xform,c=0,r=0,dx=1.5,dy=0.5\x1b\\');
+        await Future<void>.delayed(Duration.zero);
+        expect(port.renderRevision, greaterThan(renderBeforeShader));
+        expect(port.fullSyncRevision, equals(fullSyncBeforeShader));
+        expect(
+          port.dirtySpans.where((s) => s.revision > renderBeforeShader),
+          isEmpty,
+        );
+
         // >64 discontiguous dirty spans (every other column across 135 cols) -> fullSyncRevision bumps.
         final sparse = StringBuffer('\x1b[1;1H');
         for (var i = 0; i < 66; i++) {

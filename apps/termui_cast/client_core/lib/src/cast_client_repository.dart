@@ -49,6 +49,10 @@ final class CastClientRepository {
   /// Whether unexpected transport drops schedule automatic reconnects.
   final bool enableReconnect;
 
+  /// Whether subscriptions opt into capability-negotiated `0x1C` shader frames
+  /// when advertised by the relay's [AuthAcceptedFrame].
+  final bool enableShaderFrames;
+
   /// Optional observer notified when a transport connect attempt throws.
   final void Function(Object error)? onConnectError;
 
@@ -68,6 +72,8 @@ final class CastClientRepository {
       StreamController<BellFrame>.broadcast();
   final StreamController<AudioFrame> _audioFrames =
       StreamController<AudioFrame>.broadcast();
+  final StreamController<ShaderFrame> _shaderFrames =
+      StreamController<ShaderFrame>.broadcast();
   final StreamController<ShellTitleFrame> _shellTitleFrames =
       StreamController<ShellTitleFrame>.broadcast();
   final Map<SessionId, _AttachedPortGroup> _attachedPortGroups =
@@ -86,6 +92,8 @@ final class CastClientRepository {
   int _priorTxBytes = 0;
   int _nextPortId = 1;
   bool _authenticatedOnTransport = false;
+  bool _hasReceivedDirectory = false;
+  bool _relaySupportsShaderFrames = false;
   bool _fatalAuthError = false;
   bool _disposed = false;
 
@@ -95,6 +103,7 @@ final class CastClientRepository {
     ClientTransportFactory? transportFactory,
     EventBus? bus,
     this.enableReconnect = true,
+    this.enableShaderFrames = true,
     this.onConnectError,
     Random? random,
     clock_pkg.Clock? clock,
@@ -116,6 +125,9 @@ final class CastClientRepository {
 
   /// Broadcast stream of inbound [AudioFrame] events across subscribed sessions.
   Stream<AudioFrame> get audioFrames => _audioFrames.stream;
+
+  /// Broadcast stream of inbound `0x1C` [ShaderFrame] events across subscribed sessions.
+  Stream<ShaderFrame> get shaderFrames => _shaderFrames.stream;
 
   /// Broadcast stream of inbound [ShellTitleFrame] updates across sessions.
   Stream<ShellTitleFrame> get shellTitleFrames => _shellTitleFrames.stream;
@@ -218,14 +230,16 @@ final class CastClientRepository {
 
   void _onTransportMessage(CastMessage message) {
     if (_disposed) return;
-    if (message is AuthAcceptedFrame) {
+    if (message case AuthAcceptedFrame(:final shaderFrames)) {
       _reconnectAttempt = 0;
       _fatalAuthError = false;
       _authenticatedOnTransport = true;
+      _relaySupportsShaderFrames = shaderFrames;
     } else if (message case ErrorFrame(:final code)) {
       if (isFatalAuthErrorCode(code)) {
         _fatalAuthError = true;
         _authenticatedOnTransport = false;
+        _relaySupportsShaderFrames = false;
         _reconnectTimer?.cancel();
         _reconnectTimer = null;
       }
@@ -281,15 +295,23 @@ final class CastClientRepository {
   }
 
   /// Subscribes to live buffer updates for [sessionId].
-  void subscribe(SessionId sessionId, {int cols = 0, int rows = 0}) {
+  void subscribe(
+    SessionId sessionId, {
+    int cols = 0,
+    int rows = 0,
+    bool? shaderFrames,
+  }) {
     final hasSize = cols > 0 && rows > 0;
     final safeCols = hasSize ? cols.clamp(1, BufferFrameCodec.maxGridCols) : 0;
     final safeRows = hasSize ? rows.clamp(1, BufferFrameCodec.maxGridRows) : 0;
+    final optInShaders =
+        shaderFrames ?? (enableShaderFrames && _relaySupportsShaderFrames);
     _transport.send(
       SubscribeSessionFrame(
         sessionId: sessionId,
         cols: safeCols,
         rows: safeRows,
+        shaderFrames: optInShaders,
       ),
     );
   }
@@ -434,6 +456,7 @@ final class CastClientRepository {
     await [
       _bellFrames.close(),
       _audioFrames.close(),
+      _shaderFrames.close(),
       _shellTitleFrames.close(),
     ].wait;
     if (_ownsBus) {
@@ -475,10 +498,11 @@ final class CastClientRepository {
     _AttachedPortGroup group,
   ) {
     final minSize = group.computeMinViewport();
+    final wantShaders = enableShaderFrames && _relaySupportsShaderFrames;
     if (!group.subscribedOnTransport) {
-      if ((_authenticatedOnTransport || _transport.isConnected) &&
-          !group.slot.endedByExit) {
+      if (_authenticatedOnTransport && !group.slot.endedByExit) {
         group.subscribedOnTransport = true;
+        group.subscribedWithShaderFrames = wantShaders;
         group.lastSentMinSize = minSize;
         if (group.slot.state == .unsubscribed) {
           unawaited(group.slot.machine.handle(.subscribe));
@@ -487,8 +511,20 @@ final class CastClientRepository {
           sessionId,
           cols: minSize?.cols ?? 0,
           rows: minSize?.rows ?? 0,
+          shaderFrames: wantShaders,
         );
       }
+      return;
+    }
+    if (wantShaders && !group.subscribedWithShaderFrames) {
+      group.subscribedWithShaderFrames = true;
+      group.lastSentMinSize = minSize;
+      subscribe(
+        sessionId,
+        cols: minSize?.cols ?? 0,
+        rows: minSize?.rows ?? 0,
+        shaderFrames: true,
+      );
       return;
     }
     if (minSize != null && minSize != group.lastSentMinSize) {
@@ -541,8 +577,11 @@ final class CastClientRepository {
 
   void _resetAttachedPortsConnectionState() {
     _authenticatedOnTransport = false;
+    _hasReceivedDirectory = false;
+    _relaySupportsShaderFrames = false;
     for (final group in _attachedPortGroups.values) {
       group.subscribedOnTransport = false;
+      group.subscribedWithShaderFrames = false;
       group.slot.handleSessionEnded(exited: false);
       _dispatchVisualChange(group);
     }
@@ -577,6 +616,8 @@ final class CastClientRepository {
         _handleBellFrame(frame);
       case final AudioFrame frame:
         _handleAudioFrame(frame);
+      case final ShaderFrame frame:
+        _handleShaderFrame(frame);
       case SessionDirectoryFrame(:final sessions):
         _handleDirectoryForPorts(sessions);
       case BufferSnapshotFrame(:final snapshot):
@@ -643,17 +684,33 @@ final class CastClientRepository {
     }
   }
 
+  void _handleShaderFrame(ShaderFrame frame) {
+    if (!_shaderFrames.isClosed) {
+      _shaderFrames.add(frame);
+    }
+    final group = _attachedPortGroups[frame.sessionId];
+    if (group == null) return;
+    final event = toTerminalShaderApcEvent(frame.payload);
+    for (final port in List<RemoteTerminalPort>.of(group.ports)) {
+      port.dispatchShader(event);
+    }
+  }
+
   void _handleDirectoryForPorts(List<SessionSummary> sessions) {
     _authenticatedOnTransport = true;
+    final hadDirectory = _hasReceivedDirectory;
+    _hasReceivedDirectory = true;
     final previousIds = _latestDirectorySummaries.keys.toSet();
     _latestDirectorySummaries.clear();
     for (final entry in sessions) {
       _latestDirectorySummaries[entry.id] = entry;
       final group = _attachedPortGroups[entry.id];
       if (group == null) continue;
-      if (!previousIds.contains(entry.id) &&
+      if (hadDirectory &&
+          !previousIds.contains(entry.id) &&
           group.slot.state != .synchronized) {
         group.subscribedOnTransport = false;
+        group.subscribedWithShaderFrames = false;
       }
       final prevTitle = group.slot.effectiveTitle;
       group.slot.applyDirectorySummary(entry);
@@ -683,6 +740,7 @@ final class CastClientRepository {
     final group = _attachedPortGroups[sessionId];
     if (group == null) return;
     group.subscribedOnTransport = false;
+    group.subscribedWithShaderFrames = false;
     group.slot.handleSessionEnded(exited: exited, exitCode: exitCode);
     if (exited && !group.exitCompleter.isCompleted) {
       group.exitCompleter.complete(exitCode ?? 0);
@@ -718,6 +776,7 @@ final class _AttachedPortGroup {
 
   ({int cols, int rows})? lastSentMinSize;
   bool subscribedOnTransport = false;
+  bool subscribedWithShaderFrames = false;
 
   _AttachedPortGroup({required this.slot});
 

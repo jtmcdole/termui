@@ -1424,4 +1424,62 @@ void _defineAuthoritativeTracerTests() {
       check(wrappedTitles).deepEquals(['wrapped-sh']);
     },
   );
+
+  test(
+    'standalone AuthoritativeTerminal advertises cast shader capabilities by default, updates via setShaderCapabilities, and wrapping preserves host capabilities',
+    () {
+      final replies = <String>[];
+      final auth = AuthoritativeTerminal(
+        sessionId: const SessionId('standalone-caps'),
+        initialCols: 40,
+        initialRows: 12,
+      )..onTerminalReply = replies.add;
+      addTearDown(auth.dispose);
+
+      // Default standalone caster responds to a=query with cast capabilities.
+      auth.writeOutput(utf8.encode(ShaderApcEncoder.encodeQuery()));
+      check(replies).length.equals(1);
+      check(replies.single).contains(
+        'backend=cast,glsl=1,xform=1,region=1,max_slots=16,max_regions=8',
+      );
+
+      // Disabling capabilities (e.g. relay without shaderFrames support) replies disabled.
+      auth.setShaderCapabilities(
+        AuthoritativeTerminal.disabledShaderCapabilities,
+      );
+      auth.writeOutput(utf8.encode(ShaderApcEncoder.encodeQuery()));
+      check(replies).length.equals(2);
+      check(replies.last).contains(
+        'backend=disabled,glsl=0,xform=0,region=0,max_slots=0,max_regions=0',
+      );
+
+      // AuthoritativeTerminal.wrapping leaves external VirtualTerminal capabilities untouched.
+      final hostReplies = <String>[];
+      final hostVt = VirtualTerminal(
+        width: 40,
+        height: 12,
+        onReply: hostReplies.add,
+        shaderCapabilitiesProvider: () => (
+          backend: 'flutter_gpu',
+          glsl: true,
+          xform: true,
+          region: true,
+          maxSlots: 16,
+          maxRegions: 8,
+        ),
+      );
+      addTearDown(hostVt.dispose);
+
+      final wrapped = AuthoritativeTerminal.wrapping(
+        hostVt,
+        sessionId: const SessionId('wrapped-caps'),
+      );
+      addTearDown(wrapped.dispose);
+
+      wrapped.setShaderCapabilities(defaultDisabledShaderCapabilities);
+      hostVt.write(utf8.encode(ShaderApcEncoder.encodeQuery()));
+      check(hostReplies).length.equals(1);
+      check(hostReplies.single).contains('backend=flutter_gpu,glsl=1');
+    },
+  );
 }

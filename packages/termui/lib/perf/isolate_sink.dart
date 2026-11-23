@@ -115,7 +115,7 @@ class IsolateSink implements TracerSink {
       port.send(_StringTableSync(newStrings));
     }
     if (buffer.isNotEmpty) {
-      final metadataBytes = _encodeMetadata(metadata);
+      final metadataBytes = _encodeMetadata(buffer, metadata);
       final TypedData typedBuffer = buffer is TypedData
           ? buffer as TypedData
           : Int64List.fromList(buffer);
@@ -128,11 +128,25 @@ class IsolateSink implements TracerSink {
     }
   }
 
-  static Uint8List? _encodeMetadata(Map<int, Map<String, String>> metadata) {
+  static Uint8List? _encodeMetadata(
+    List<int> buffer,
+    Map<int, Map<String, String>> metadata,
+  ) {
     if (metadata.isEmpty) return null;
     final builder = BytesBuilder(copy: false);
     for (final entry in metadata.entries) {
-      final bytes = utf8.encode(jsonEncode(entry.value));
+      final wordIndex = entry.key * 2;
+      final isCounter =
+          wordIndex >= 0 &&
+          wordIndex < buffer.length &&
+          Tracer.unpackPhase(buffer[wordIndex]) == Phase.counter;
+      final Object payload = isCounter
+          ? <String, Object>{
+              for (final kv in entry.value.entries)
+                kv.key: _parseFiniteCounterValue(kv.value),
+            }
+          : entry.value;
+      final bytes = utf8.encode(jsonEncode(payload));
       final header = ByteData(8)
         ..setInt32(0, entry.key, Endian.host)
         ..setInt32(4, bytes.length, Endian.host);
@@ -140,6 +154,11 @@ class IsolateSink implements TracerSink {
       builder.add(bytes);
     }
     return builder.toBytes();
+  }
+
+  static Object _parseFiniteCounterValue(String raw) {
+    final parsed = num.tryParse(raw);
+    return (parsed != null && parsed.isFinite) ? parsed : raw;
   }
 
   @override
@@ -251,9 +270,9 @@ bool _writeTraceBatch({
     final word0 = bufferList[i * 2];
     final ts = bufferList[i * 2 + 1];
 
-    final phaseVal = word0 & 0xFF;
-    final isolateId = (word0 >> 8) & 0xFFFFFF;
-    final stringId = (word0 >> 32) & 0xFFFFFFFF;
+    final phaseVal = Tracer.unpackPhase(word0);
+    final isolateId = Tracer.unpackIsolateId(word0);
+    final stringId = Tracer.unpackStringId(word0);
 
     final name = stringId < stringTable.length
         ? stringTable[stringId]
@@ -280,6 +299,7 @@ bool _writeTraceBatch({
 String _phaseSymbol(int phaseVal) => switch (phaseVal) {
   Phase.begin => 'B',
   Phase.end => 'E',
+  Phase.counter => 'C',
   _ => 'i',
 };
 

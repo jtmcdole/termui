@@ -81,6 +81,27 @@ const int _tagBell = 0x18;
 const int _tagAudio = 0x19;
 const int _tagAudioWaveformReply = 0x1A;
 const int _tagKittyImageChunk = 0x1B;
+const int _tagShader = 0x1C;
+
+const int _capFlagShaderFrames = 0x01;
+
+const int _shaderKindDefine = 0;
+const int _shaderKindRegion = 1;
+const int _shaderKindTransforms = 2;
+const int _shaderKindSet = 3;
+const int _shaderKindUniform = 4;
+const int _shaderKindReset = 5;
+
+const int _maxShaderIdBytes = 64;
+const int _maxShaderRectsPerRegion = 32;
+const Set<String> _validShaderStages = {'bg', 'fg', 'post'};
+const Set<String> _validShaderResetTargets = {
+  'all',
+  'regions',
+  'xforms',
+  'pane',
+};
+final RegExp _shaderIdPattern = RegExp(r'^[A-Za-z0-9_.-]{1,64}$');
 
 const int _renameFlagClearPin = 0x01;
 const int _summaryFlagUserPinned = 0x01;
@@ -216,6 +237,9 @@ abstract final class BufferFrameCodec {
   /// Maximum wire payload bytes per [KittyImageChunkFrame] (`512 KiB`).
   static const int maxKittyChunkBytes = 524_288;
 
+  /// Maximum total wire frame bytes permitted for a `0x1C` [ShaderFrame] (`64 KiB`).
+  static const int maxShaderFrameBytes = CastShaderPayload.maxWireBytes;
+
   /// Compresses raw Kitty image bytes with `deflate-raw` level 1.
   static Uint8List compressKittyBytes(Uint8List rawBytes) =>
       compressDeflateRawLevel1(rawBytes);
@@ -294,10 +318,13 @@ abstract final class BufferFrameCodec {
           ..writeUint8(_tagAuth)
           ..writeUint8(_encodeRole(role))
           ..writeString16(token, maxBytes: _maxTokenOrErrorBytes);
-      case AuthAcceptedFrame(:final role):
+      case AuthAcceptedFrame(:final role, :final shaderFrames):
         writer
           ..writeUint8(_tagAuthAccepted)
           ..writeUint8(_encodeRole(role));
+        if (shaderFrames) {
+          writer.writeUint8(_capFlagShaderFrames);
+        }
       case RegisterSessionFrame(
         :final sessionId,
         :final title,
@@ -319,13 +346,21 @@ abstract final class BufferFrameCodec {
           );
       case SessionDirectoryFrame(:final sessions):
         _encodeDirectory(writer, sessions);
-      case SubscribeSessionFrame(:final sessionId, :final cols, :final rows):
+      case SubscribeSessionFrame(
+        :final sessionId,
+        :final cols,
+        :final rows,
+        :final shaderFrames,
+      ):
         if (cols != 0 || rows != 0) _checkGridDims(cols, rows);
         writer
           ..writeUint8(_tagSubscribeSession)
           ..writeSessionId(sessionId)
           ..writeUint16(cols)
           ..writeUint16(rows);
+        if (shaderFrames) {
+          writer.writeUint8(_capFlagShaderFrames);
+        }
       case UnsubscribeSessionFrame(:final sessionId):
         writer
           ..writeUint8(_tagUnsubscribeSession)
@@ -403,8 +438,15 @@ abstract final class BufferFrameCodec {
         _encodeAudioWaveformReply(writer, sessionId, requestId, samples);
       case KittyImageChunkFrame frame:
         _encodeKittyImageChunk(writer, frame);
+      case ShaderFrame frame:
+        _encodeShaderFrame(writer, frame);
     }
     final bytes = writer.takeBytes();
+    if (message is ShaderFrame && bytes.length > maxShaderFrameBytes) {
+      throw ProtocolFormatException(
+        'Encoded ShaderFrame exceeds $maxShaderFrameBytes bytes: ${bytes.length}',
+      );
+    }
     if (bytes.length > maxFrameBytes) {
       throw ProtocolFormatException(
         'Encoded frame exceeds $maxFrameBytes bytes: ${bytes.length}',
@@ -608,6 +650,36 @@ abstract final class BufferFrameCodec {
     return true;
   }
 
+  /// Validates the header, `<= 64 KiB` byte budget, and typed payload bounds of
+  /// a raw `0x1C` [ShaderFrame] for [expectedSession] on the relay fast path.
+  static bool inspectRelayShaderFrame(
+    Uint8List frame, {
+    required SessionId expectedSession,
+  }) {
+    if (frame.length < 2 ||
+        frame[0] != protocolVersion ||
+        frame[1] != _tagShader) {
+      return false;
+    }
+    if (frame.length > maxShaderFrameBytes) {
+      throw ProtocolFormatException(
+        'Relay ShaderFrame exceeds $maxShaderFrameBytes bytes: ${frame.length}',
+      );
+    }
+    final reader = _FrameReader(frame)..skip(2);
+    final sessionId = reader.readSessionId();
+    if (sessionId != expectedSession) return false;
+    try {
+      _decodeShaderPayload(reader);
+      if (!reader.isAtEnd) {
+        throw const ProtocolFormatException('Trailing bytes after ShaderFrame');
+      }
+    } on ProtocolFormatException catch (e) {
+      throw CorruptSessionFrameException(sessionId, e.message);
+    }
+    return true;
+  }
+
   /// Applies [delta] to [buffer] via `setRange` when `(baseSeq, cols, rows)` match.
   ///
   /// Returns `false` without mutating [buffer] when [currentSeq] does not match
@@ -720,9 +792,7 @@ CastMessage _decodeByTag(_FrameReader reader, int tag) {
       role: _decodeRole(reader.readUint8()),
       token: reader.readString16(maxBytes: _maxTokenOrErrorBytes),
     ),
-    _tagAuthAccepted => AuthAcceptedFrame(
-      role: _decodeRole(reader.readUint8()),
-    ),
+    _tagAuthAccepted => _decodeAuthAccepted(reader),
     _tagRegisterSession => _decodeRegister(reader),
     _tagSessionDirectory => _decodeDirectory(reader),
     _tagSubscribeSession => _decodeSubscribe(reader),
@@ -767,6 +837,7 @@ CastMessage _decodeByTag(_FrameReader reader, int tag) {
     _tagFileUploadAck => _decodeFileUploadAck(reader),
     _tagAudioWaveformReply => _decodeAudioWaveformReply(reader),
     _tagKittyImageChunk => _decodeKittyImageChunk(reader),
+    _tagShader => _decodeShaderFrame(reader),
     _ => throw ProtocolFormatException('Unknown frame tag: $tag'),
   };
 }
@@ -2247,12 +2318,421 @@ RegisterSessionFrame _decodeRegister(_FrameReader reader) {
   );
 }
 
+AuthAcceptedFrame _decodeAuthAccepted(_FrameReader reader) {
+  final role = _decodeRole(reader.readUint8());
+  final capFlags = _readOptionalCapFlags(reader, 'AuthAcceptedFrame');
+  return AuthAcceptedFrame(
+    role: role,
+    shaderFrames: (capFlags & _capFlagShaderFrames) != 0,
+  );
+}
+
 SubscribeSessionFrame _decodeSubscribe(_FrameReader reader) {
   final sessionId = reader.readSessionId();
   final cols = reader.readUint16();
   final rows = reader.readUint16();
   if (cols != 0 || rows != 0) _checkGridDims(cols, rows);
-  return SubscribeSessionFrame(sessionId: sessionId, cols: cols, rows: rows);
+  final capFlags = _readOptionalCapFlags(reader, 'SubscribeSessionFrame');
+  return SubscribeSessionFrame(
+    sessionId: sessionId,
+    cols: cols,
+    rows: rows,
+    shaderFrames: (capFlags & _capFlagShaderFrames) != 0,
+  );
+}
+
+int _readOptionalCapFlags(_FrameReader reader, String frameName) {
+  if (reader.isAtEnd) return 0;
+  final capFlags = reader.readUint8();
+  if ((capFlags & ~_capFlagShaderFrames) != 0) {
+    throw ProtocolFormatException(
+      'Invalid $frameName capability flags byte: $capFlags',
+    );
+  }
+  return capFlags;
+}
+
+void _validateShaderId(String id, String label) {
+  if (!_shaderIdPattern.hasMatch(id)) {
+    throw ProtocolFormatException('Invalid shader $label: "$id"');
+  }
+}
+
+void _writeFloat32Array(_FrameWriter writer, Float32List values) {
+  if (values.length != ShaderRegion.paramCount) {
+    throw ProtocolFormatException(
+      'Expected ${ShaderRegion.paramCount} shader params, got ${values.length}',
+    );
+  }
+  final buf = Uint8List(ShaderRegion.paramCount * 4);
+  final view = ByteData.sublistView(buf);
+  for (var i = 0; i < ShaderRegion.paramCount; i++) {
+    final v = values[i];
+    if (!v.isFinite) {
+      throw ProtocolFormatException('Non-finite shader param at $i: $v');
+    }
+    view.setFloat32(
+      i * 4,
+      v
+          .clamp(ShaderRegion.minParamValue, ShaderRegion.maxParamValue)
+          .toDouble(),
+      Endian.little,
+    );
+  }
+  writer.writeRawBytes(buf);
+}
+
+Float32List _readFloat32Array(_FrameReader reader) {
+  final raw = reader.readFixedBytes(ShaderRegion.paramCount * 4);
+  final view = ByteData.sublistView(raw);
+  final out = Float32List(ShaderRegion.paramCount);
+  for (var i = 0; i < ShaderRegion.paramCount; i++) {
+    final v = view.getFloat32(i * 4, Endian.little);
+    if (!v.isFinite) {
+      throw ProtocolFormatException('Non-finite decoded shader param at $i');
+    }
+    out[i] = v
+        .clamp(ShaderRegion.minParamValue, ShaderRegion.maxParamValue)
+        .toDouble();
+  }
+  return out;
+}
+
+void _encodeShaderFrame(_FrameWriter writer, ShaderFrame frame) {
+  writer
+    ..writeUint8(_tagShader)
+    ..writeSessionId(frame.sessionId);
+  switch (frame.payload) {
+    case CastDefineShaderPayload():
+      _encodeDefineShader(writer, frame.payload as CastDefineShaderPayload);
+    case CastRegionShaderPayload():
+      _encodeRegionShader(writer, frame.payload as CastRegionShaderPayload);
+    case CastTransformsShaderPayload():
+      _encodeTransformsShader(
+        writer,
+        frame.payload as CastTransformsShaderPayload,
+      );
+    case CastSetShaderPayload():
+      _encodeSetShader(writer, frame.payload as CastSetShaderPayload);
+    case CastUniformShaderPayload():
+      _encodeUniformShader(writer, frame.payload as CastUniformShaderPayload);
+    case CastResetShaderPayload():
+      _encodeResetShader(writer, frame.payload as CastResetShaderPayload);
+  }
+}
+
+void _encodeDefineShader(_FrameWriter writer, CastDefineShaderPayload payload) {
+  _validateShaderId(payload.id, 'id');
+  final srcBytes = utf8.encode(payload.glslSource);
+  if (srcBytes.isEmpty ||
+      srcBytes.length > CastShaderPayload.maxGlslBytes ||
+      payload.glslSource.contains('\x00')) {
+    throw ProtocolFormatException(
+      'Invalid CLI GLSL byte length: ${srcBytes.length}',
+    );
+  }
+  writer
+    ..writeUint8(_shaderKindDefine)
+    ..writeString16(payload.id, maxBytes: _maxShaderIdBytes)
+    ..writeUint8(payload.persist ? 1 : 0)
+    ..writeUint16(srcBytes.length)
+    ..writeRawBytes(srcBytes);
+}
+
+void _encodeRegionShader(_FrameWriter writer, CastRegionShaderPayload payload) {
+  _validateShaderId(payload.id, 'id');
+  if (payload.remove) {
+    writer
+      ..writeUint8(_shaderKindRegion)
+      ..writeString16(payload.id, maxBytes: _maxShaderIdBytes)
+      ..writeUint8(1);
+    return;
+  }
+  final region = payload.region;
+  if (region == null ||
+      region.id != payload.id ||
+      region.sourceRects.isEmpty ||
+      region.sourceRects.length > _maxShaderRectsPerRegion) {
+    throw ProtocolFormatException(
+      'Invalid CastRegionShaderPayload for "${payload.id}"',
+    );
+  }
+  _validateShaderId(region.shaderId, 'shaderId');
+  final pad = region.padding.clamped();
+  writer
+    ..writeUint8(_shaderKindRegion)
+    ..writeString16(payload.id, maxBytes: _maxShaderIdBytes)
+    ..writeUint8(0)
+    ..writeString16(region.shaderId, maxBytes: _maxShaderIdBytes)
+    ..writeUint8(region.stage.code)
+    ..writeInt32(region.zIndex)
+    ..writeUint8(region.persist ? 1 : 0)
+    ..writeUint8(pad.top)
+    ..writeUint8(pad.right)
+    ..writeUint8(pad.bottom)
+    ..writeUint8(pad.left)
+    ..writeUint8(region.sourceRects.length);
+  for (final rect in region.sourceRects) {
+    if (rect.x < 0 ||
+        rect.y < 0 ||
+        rect.width <= 0 ||
+        rect.height <= 0 ||
+        rect.x > 0xFFFF ||
+        rect.y > 0xFFFF ||
+        rect.width > 0xFFFF ||
+        rect.height > 0xFFFF) {
+      throw ProtocolFormatException('Invalid ShaderRegion rect: $rect');
+    }
+    writer
+      ..writeUint16(rect.x)
+      ..writeUint16(rect.y)
+      ..writeUint16(rect.width)
+      ..writeUint16(rect.height);
+  }
+  _writeFloat32Array(writer, region.params);
+}
+
+void _encodeTransformsShader(
+  _FrameWriter writer,
+  CastTransformsShaderPayload payload,
+) {
+  final packed = CellTransformCodec.packBatch(payload.entries);
+  if (packed.length > CastShaderPayload.maxWireBytes - 64) {
+    throw ProtocolFormatException(
+      'CastTransformsShaderPayload exceeds single-frame 64 KiB cap: ${packed.length} bytes',
+    );
+  }
+  writer
+    ..writeUint8(_shaderKindTransforms)
+    ..writeUint8(payload.replace ? 1 : 0)
+    ..writeUint16(payload.entries.length)
+    ..writeRawBytes(packed);
+}
+
+void _encodeSetShader(_FrameWriter writer, CastSetShaderPayload payload) {
+  if (!_validShaderStages.contains(payload.stage)) {
+    throw ProtocolFormatException('Invalid shader stage: ${payload.stage}');
+  }
+  if (!payload.clear) {
+    final hasPreset = payload.presetId != null;
+    final hasShader = payload.shaderId != null;
+    if (!hasPreset && !hasShader) {
+      throw const ProtocolFormatException(
+        'CastSetShaderPayload requires presetId or shaderId when clear is false',
+      );
+    }
+    if (hasPreset) _validateShaderId(payload.presetId!, 'presetId');
+    if (hasShader) _validateShaderId(payload.shaderId!, 'shaderId');
+  }
+  writer
+    ..writeUint8(_shaderKindSet)
+    ..writeString16(payload.stage, maxBytes: 16)
+    ..writeUint8(payload.clear ? 1 : 0)
+    ..writeString16(payload.presetId ?? '', maxBytes: _maxShaderIdBytes)
+    ..writeString16(payload.shaderId ?? '', maxBytes: _maxShaderIdBytes);
+  _writeFloat32Array(writer, payload.params);
+}
+
+void _encodeUniformShader(
+  _FrameWriter writer,
+  CastUniformShaderPayload payload,
+) {
+  if (payload.id != null) _validateShaderId(payload.id!, 'id');
+  if (payload.paramMask <= 0 || payload.paramMask > 0xFF) {
+    throw ProtocolFormatException(
+      'Invalid CastUniformShaderPayload paramMask: ${payload.paramMask}',
+    );
+  }
+  writer
+    ..writeUint8(_shaderKindUniform)
+    ..writeString16(payload.id ?? '', maxBytes: _maxShaderIdBytes)
+    ..writeUint8(payload.paramMask);
+  _writeFloat32Array(writer, payload.params);
+}
+
+void _encodeResetShader(_FrameWriter writer, CastResetShaderPayload payload) {
+  if (!_validShaderResetTargets.contains(payload.target)) {
+    throw ProtocolFormatException(
+      'Invalid CastResetShaderPayload target: ${payload.target}',
+    );
+  }
+  writer
+    ..writeUint8(_shaderKindReset)
+    ..writeString16(payload.target, maxBytes: 16);
+}
+
+ShaderFrame _decodeShaderFrame(_FrameReader reader) {
+  if (reader._bytes.length > BufferFrameCodec.maxShaderFrameBytes) {
+    throw ProtocolFormatException(
+      'ShaderFrame exceeds ${BufferFrameCodec.maxShaderFrameBytes} bytes: ${reader._bytes.length}',
+    );
+  }
+  final sessionId = reader.readSessionId();
+  try {
+    final payload = _decodeShaderPayload(reader);
+    if (!reader.isAtEnd) {
+      throw const ProtocolFormatException('Trailing bytes after ShaderFrame');
+    }
+    return ShaderFrame(sessionId: sessionId, payload: payload);
+  } on ProtocolFormatException catch (e) {
+    throw CorruptSessionFrameException(sessionId, e.message);
+  }
+}
+
+CastShaderPayload _decodeShaderPayload(_FrameReader reader) {
+  final kind = reader.readUint8();
+  return switch (kind) {
+    _shaderKindDefine => _decodeDefineShader(reader),
+    _shaderKindRegion => _decodeRegionShader(reader),
+    _shaderKindTransforms => _decodeTransformsShader(reader),
+    _shaderKindSet => _decodeSetShader(reader),
+    _shaderKindUniform => _decodeUniformShader(reader),
+    _shaderKindReset => _decodeResetShader(reader),
+    _ => throw ProtocolFormatException('Unknown ShaderFrame kind: $kind'),
+  };
+}
+
+CastDefineShaderPayload _decodeDefineShader(_FrameReader reader) {
+  final id = reader.readString16(maxBytes: _maxShaderIdBytes);
+  _validateShaderId(id, 'id');
+  final persist = _readAudioBoolByte(reader, 'shader.persist');
+  final glsl = reader.readString16(maxBytes: CastShaderPayload.maxGlslBytes);
+  if (glsl.isEmpty || glsl.contains('\x00')) {
+    throw const ProtocolFormatException('Invalid CLI GLSL source payload');
+  }
+  return CastDefineShaderPayload(id: id, glslSource: glsl, persist: persist);
+}
+
+CastRegionShaderPayload _decodeRegionShader(_FrameReader reader) {
+  final id = reader.readString16(maxBytes: _maxShaderIdBytes);
+  _validateShaderId(id, 'id');
+  final remove = _readAudioBoolByte(reader, 'shader.regionRemove');
+  if (remove) {
+    return CastRegionShaderPayload(id: id, remove: true);
+  }
+  final shaderId = reader.readString16(maxBytes: _maxShaderIdBytes);
+  _validateShaderId(shaderId, 'shaderId');
+  final stageCode = reader.readUint8();
+  final stage = ShaderRegionStage.fromCode(stageCode);
+  if (stage == null) {
+    throw ProtocolFormatException('Invalid ShaderRegionStage code: $stageCode');
+  }
+  final zIndex = reader.readInt32();
+  final persist = _readAudioBoolByte(reader, 'shader.regionPersist');
+  final padTop = reader.readUint8();
+  final padRight = reader.readUint8();
+  final padBottom = reader.readUint8();
+  final padLeft = reader.readUint8();
+  if (padTop > CellPadding.maxPadding ||
+      padRight > CellPadding.maxPadding ||
+      padBottom > CellPadding.maxPadding ||
+      padLeft > CellPadding.maxPadding) {
+    throw ProtocolFormatException(
+      'ShaderRegion padding exceeds ${CellPadding.maxPadding}',
+    );
+  }
+  final rectCount = reader.readUint8();
+  if (rectCount == 0 || rectCount > _maxShaderRectsPerRegion) {
+    throw ProtocolFormatException('Invalid ShaderRegion rectCount: $rectCount');
+  }
+  final rects = <Rect>[];
+  for (var i = 0; i < rectCount; i++) {
+    final x = reader.readUint16();
+    final y = reader.readUint16();
+    final w = reader.readUint16();
+    final h = reader.readUint16();
+    if (w == 0 || h == 0) {
+      throw ProtocolFormatException('Empty ShaderRegion rect at $i');
+    }
+    rects.add(Rect(x, y, w, h));
+  }
+  final params = _readFloat32Array(reader);
+  return CastRegionShaderPayload(
+    id: id,
+    region: ShaderRegion(
+      id: id,
+      shaderId: shaderId,
+      sourceRects: rects,
+      padding: CellPadding(
+        top: padTop,
+        right: padRight,
+        bottom: padBottom,
+        left: padLeft,
+      ),
+      stage: stage,
+      zIndex: zIndex,
+      persist: persist,
+      params: params,
+    ),
+  );
+}
+
+CastTransformsShaderPayload _decodeTransformsShader(_FrameReader reader) {
+  final replace = _readAudioBoolByte(reader, 'shader.xformsReplace');
+  final count = reader.readUint16();
+  final byteLen = count * CellTransformCodec.strideBytes;
+  if (byteLen > CastShaderPayload.maxWireBytes) {
+    throw ProtocolFormatException(
+      'Shader transform batch exceeds 64 KiB: $byteLen bytes',
+    );
+  }
+  final raw = reader.readFixedBytes(byteLen);
+  final List<CellTransformEntry> entries;
+  try {
+    entries = CellTransformCodec.unpackBatch(raw);
+  } on FormatException catch (e) {
+    throw ProtocolFormatException('Invalid packed transforms: ${e.message}');
+  }
+  return CastTransformsShaderPayload(entries: entries, replace: replace);
+}
+
+CastSetShaderPayload _decodeSetShader(_FrameReader reader) {
+  final stage = reader.readString16(maxBytes: 16);
+  if (!_validShaderStages.contains(stage)) {
+    throw ProtocolFormatException('Invalid shader stage: $stage');
+  }
+  final clear = _readAudioBoolByte(reader, 'shader.setClear');
+  final rawPreset = reader.readString16(maxBytes: _maxShaderIdBytes);
+  final rawShader = reader.readString16(maxBytes: _maxShaderIdBytes);
+  final presetId = rawPreset.isEmpty ? null : rawPreset;
+  final shaderId = rawShader.isEmpty ? null : rawShader;
+  if (!clear) {
+    if (presetId == null && shaderId == null) {
+      throw const ProtocolFormatException(
+        'CastSetShaderPayload missing presetId and shaderId',
+      );
+    }
+    if (presetId != null) _validateShaderId(presetId, 'presetId');
+    if (shaderId != null) _validateShaderId(shaderId, 'shaderId');
+  }
+  final params = _readFloat32Array(reader);
+  return CastSetShaderPayload(
+    stage: stage,
+    presetId: presetId,
+    shaderId: shaderId,
+    params: params,
+    clear: clear,
+  );
+}
+
+CastUniformShaderPayload _decodeUniformShader(_FrameReader reader) {
+  final rawId = reader.readString16(maxBytes: _maxShaderIdBytes);
+  final id = rawId.isEmpty ? null : rawId;
+  if (id != null) _validateShaderId(id, 'id');
+  final paramMask = reader.readUint8();
+  if (paramMask == 0) {
+    throw const ProtocolFormatException('CastUniformShaderPayload mask is 0');
+  }
+  final params = _readFloat32Array(reader);
+  return CastUniformShaderPayload(id: id, paramMask: paramMask, params: params);
+}
+
+CastResetShaderPayload _decodeResetShader(_FrameReader reader) {
+  final target = reader.readString16(maxBytes: 16);
+  if (!_validShaderResetTargets.contains(target)) {
+    throw ProtocolFormatException('Invalid shader reset target: $target');
+  }
+  return CastResetShaderPayload(target: target);
 }
 
 ResizeFrame _decodeResize(_FrameReader reader) {

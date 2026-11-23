@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:termui/termui.dart';
 
 import 'scrollback_page_cache.dart';
@@ -18,6 +20,17 @@ abstract final class WorkspaceBufferCompositor {
 
   /// Modifiers (`bold | underline`) applied to Rainbow Road hovered links.
   static const int rainbowLinkModifiers = Modifier.underline | Modifier.bold;
+
+  /// Returns a zero-copy read-only [List] view over row [row] of [buffer]
+  /// without allocating an intermediate character `sublist`.
+  static List<String> rowCharactersView(Buffer buffer, int row) {
+    RangeError.checkValidIndex(row, buffer, 'row', buffer.height);
+    return _GlyphCellSliceView(
+      buffer.glyphCellList,
+      row * buffer.width,
+      buffer.width,
+    );
+  }
 
   /// Looks up virtual row [virtualY] across cached scrollback and [liveBuffer].
   static VirtualLineSlice? lookupVirtualLine(
@@ -43,7 +56,7 @@ abstract final class WorkspaceBufferCompositor {
     final end = start + liveBuffer.width;
     return (
       isWrapped: slot.isLiveRowWrapped(liveY),
-      characters: liveBuffer.characters.sublist(start, end),
+      characters: rowCharactersView(liveBuffer, liveY),
       uris: liveBuffer.sliceUris(start, end),
     );
   }
@@ -102,4 +115,26 @@ abstract final class WorkspaceBufferCompositor {
     final bi = ((b + m) * 255.0).round().clamp(0, 255);
     return 0xFF000000 | (ri << 16) | (gi << 8) | bi;
   }
+}
+
+final class _GlyphCellSliceView extends ListBase<String> {
+  final GlyphCellList _cells;
+  final int _start;
+
+  @override
+  final int length;
+
+  _GlyphCellSliceView(this._cells, this._start, this.length);
+
+  @override
+  set length(int _) => throw UnsupportedError('read-only');
+
+  @override
+  String operator [](int index) {
+    RangeError.checkValidIndex(index, this, 'index', length);
+    return _cells[_start + index];
+  }
+
+  @override
+  void operator []=(int _, String _) => throw UnsupportedError('read-only');
 }

@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
 import 'package:file/memory.dart';
 import 'package:termui/perf/isolate_sink.dart';
+import 'package:termui/perf/memory_sink.dart';
 import 'package:termui/perf/tracer.dart';
+import 'package:termui/perf/tracer_sink.dart';
 
 void main() {
   group('Tracer Cold Start & IsolateSink Error Resilience', () {
@@ -276,5 +279,192 @@ void main() {
         expect(() => jsonDecode(contents), returnsNormally);
       },
     );
+
+    test(
+      'JS-safe word0 packing round-trips stringId, isolateId, and Phase.counter',
+      () {
+        final packed = Tracer.packWord0(42, 7, Phase.counter);
+        expect(Tracer.unpackStringId(packed), equals(42));
+        expect(Tracer.unpackIsolateId(packed), equals(7));
+        expect(Tracer.unpackPhase(packed), equals(Phase.counter));
+      },
+    );
+
+    test(
+      'MemoryTracerSink captures spans, numeric counter args, and enforces maxEvents',
+      () async {
+        Tracer.activeCategories = {...TraceCategory.values};
+        final spanId = Tracer.registerString('gpuSpan');
+        final counterId = Tracer.registerString('gpuMemory');
+        late MemoryTracerSink memSink;
+
+        await Tracer.startWithSink((baseEpochUs) {
+          memSink = MemoryTracerSink(baseEpochUs: baseEpochUs, maxEvents: 3);
+          return memSink;
+        });
+
+        Tracer.record(
+          spanId,
+          Phase.begin,
+          TraceCategory.gpu,
+          metadata: const <String, String>{'stage': 'bg'},
+        );
+        Tracer.recordCounter(counterId, TraceCategory.gpu, const <String, num>{
+          'rssBytes': 1048576,
+          'fps': 240.1,
+        });
+        Tracer.record(spanId, Phase.end, TraceCategory.gpu);
+        // Fourth event exceeds maxEvents=3 and is dropped cleanly.
+        Tracer.record(spanId, Phase.instant, TraceCategory.gpu);
+
+        await Tracer.stop();
+
+        expect(memSink.eventCount, equals(3));
+        expect(memSink.droppedCount, equals(1));
+        final decoded = [
+          for (final e in jsonDecode(memSink.toTraceJson()) as List<Object?>)
+            e as Map<String, Object?>,
+        ];
+        expect(decoded, hasLength(3));
+        expect(decoded[0]['name'], equals('gpuSpan'));
+        expect(decoded[0]['ph'], equals('B'));
+        expect(
+          (decoded[0]['args'] as Map<String, Object?>)['stage'],
+          equals('bg'),
+        );
+        expect(decoded[1]['name'], equals('gpuMemory'));
+        expect(decoded[1]['ph'], equals('C'));
+        final counterArgs = decoded[1]['args'] as Map<String, Object?>;
+        expect(counterArgs['rssBytes'], equals(1048576));
+        expect(counterArgs['fps'], equals(240.1));
+        expect(decoded[2]['ph'], equals('E'));
+      },
+    );
+
+    test(
+      'FileSystemSink and IsolateSink serialize Phase.counter args as JSON numbers',
+      () async {
+        Tracer.activeCategories = {...TraceCategory.values};
+        final counterId = Tracer.registerString('frameCounters');
+
+        // FileSystemSink via MemoryFileSystem.
+        final memoryFs = MemoryFileSystem();
+        const memPath = '/mem/counters.json';
+        await Tracer.start(memPath, fs: memoryFs);
+        Tracer.recordCounter(counterId, TraceCategory.gpu, const <String, num>{
+          'inFlight': 2,
+          'avgMs': 0.85,
+        });
+        await Tracer.stop();
+
+        final fsEvents = [
+          for (final e
+              in jsonDecode(
+                    utf8.decode(memoryFs.file(memPath).readAsBytesSync()),
+                  )
+                  as List<Object?>)
+            e as Map<String, Object?>,
+        ];
+        expect(fsEvents, hasLength(1));
+        expect(fsEvents[0]['ph'], equals('C'));
+        final fsArgs = fsEvents[0]['args'] as Map<String, Object?>;
+        expect(fsArgs['inFlight'], equals(2));
+        expect(fsArgs['avgMs'], equals(0.85));
+
+        // IsolateSink via real disk file.
+        await Tracer.start(traceFilePath);
+        Tracer.recordCounter(counterId, TraceCategory.gpu, const <String, num>{
+          'inFlight': 1,
+          'avgMs': 0.16,
+        });
+        await Tracer.stop();
+
+        final isoEvents = [
+          for (final e
+              in jsonDecode(
+                    utf8.decode(await File(traceFilePath).readAsBytes()),
+                  )
+                  as List<Object?>)
+            e as Map<String, Object?>,
+        ];
+        expect(isoEvents, hasLength(1));
+        expect(isoEvents[0]['ph'], equals('C'));
+        final isoArgs = isoEvents[0]['args'] as Map<String, Object?>;
+        expect(isoArgs['inFlight'], equals(1));
+        expect(isoArgs['avgMs'], equals(0.16));
+      },
+    );
+
+    test(
+      'Tracer.recordCounter drops non-finite doubles and sinks stay valid JSON',
+      () async {
+        Tracer.activeCategories = {...TraceCategory.values};
+        late MemoryTracerSink memSink;
+        await Tracer.startWithSink((baseEpochUs) {
+          memSink = MemoryTracerSink(baseEpochUs: baseEpochUs);
+          return memSink;
+        });
+
+        final id = Tracer.registerString('nonFiniteCounter');
+        Tracer.recordCounter(id, TraceCategory.gpu, const <String, num>{
+          'good': 42,
+          'nanVal': double.nan,
+          'infVal': double.infinity,
+          'negInfVal': double.negativeInfinity,
+        });
+        // All-non-finite map is dropped completely.
+        Tracer.recordCounter(id, TraceCategory.gpu, const <String, num>{
+          'nanOnly': double.nan,
+        });
+        await Tracer.stop();
+
+        final events = [
+          for (final e in jsonDecode(memSink.toTraceJson()) as List<Object?>)
+            e as Map<String, Object?>,
+        ];
+        expect(events, hasLength(1));
+        final args = events[0]['args'] as Map<String, Object?>;
+        expect(args, equals(<String, Object?>{'good': 42}));
+      },
+    );
+
+    test(
+      'Tracer.stop detaches _sink before awaiting close so concurrent startWithSink succeeds',
+      () async {
+        Tracer.activeCategories = {...TraceCategory.values};
+        final closeGate = Completer<void>();
+        await Tracer.startWithSink((_) => _DelayedCloseSink(closeGate.future));
+        final stopFuture = Tracer.stop();
+
+        late MemoryTracerSink nextSink;
+        await Tracer.startWithSink((baseEpochUs) {
+          nextSink = MemoryTracerSink(baseEpochUs: baseEpochUs);
+          return nextSink;
+        });
+        closeGate.complete();
+        await stopFuture;
+
+        final id = Tracer.registerString('postOverlap');
+        Tracer.record(id, Phase.instant, TraceCategory.gpu);
+        await Tracer.stop();
+        expect(nextSink.eventCount, equals(1));
+      },
+    );
   });
+}
+
+final class _DelayedCloseSink implements TracerSink {
+  final Future<void> _closeGate;
+
+  _DelayedCloseSink(this._closeGate);
+
+  @override
+  void add(
+    List<int> buffer,
+    List<String> newStrings, [
+    Map<int, Map<String, String>>? metadata,
+  ]) {}
+
+  @override
+  Future<void> close() => _closeGate;
 }

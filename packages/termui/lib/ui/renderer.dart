@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+
 import 'package:termui/termui.dart';
 
 /// The target mode for terminal rendering.
@@ -38,9 +39,47 @@ class Renderer {
   >
   _uploadedKittyImages = {};
 
-  /// Creates a renderer with an initial screen size.
-  Renderer(int width, int height, {this.mode = RenderingMode.alternateScreen})
-    : _frontBuffer = Buffer(width, height);
+  ShaderCapabilitiesEvent? _shaderCapabilities;
+  final Map<String, _GlslContentHash> _uploadedGlslHashes = {};
+  final Map<String, ShaderRegion> _emittedShaderRegions = {};
+  final Map<int, CellTransform> _emittedCellTransforms = {};
+
+  /// Creates a renderer with an initial screen size and optional host shader capabilities.
+  Renderer(
+    int width,
+    int height, {
+    this.mode = RenderingMode.alternateScreen,
+    ShaderCapabilitiesEvent? shaderCapabilities,
+  }) : _frontBuffer = Buffer(width, height),
+       _shaderCapabilities = shaderCapabilities;
+
+  /// Active host shader and per-cell transform capabilities (`null` on plain terminals).
+  ShaderCapabilitiesEvent? get shaderCapabilities => _shaderCapabilities;
+
+  set shaderCapabilities(ShaderCapabilitiesEvent? value) {
+    if (_shaderCapabilities == value) return;
+    _shaderCapabilities = value;
+    _uploadedGlslHashes.clear();
+    _emittedShaderRegions.clear();
+    _emittedCellTransforms.clear();
+  }
+
+  /// Emits an `ESC _ S a=reset` sequence when shader capabilities are active
+  /// and resets the corresponding renderer diff caches.
+  void resetShaders(StringSink out, {String target = 'all'}) {
+    final caps = _shaderCapabilities;
+    if (caps == null || !caps.isAnySupported) return;
+    out.write(ShaderApcEncoder.encodeReset(target: target));
+    if (target == 'all' || target == 'regions') {
+      _emittedShaderRegions.clear();
+    }
+    if (target == 'all' || target == 'xforms') {
+      _emittedCellTransforms.clear();
+    }
+    if (target == 'all') {
+      _uploadedGlslHashes.clear();
+    }
+  }
 
   /// Exposes the current front-buffer representing the screen state.
   Buffer get frontBuffer => _frontBuffer;
@@ -74,6 +113,24 @@ class Renderer {
   }
 
   @pragma('vm:prefer-inline')
+  static bool _cellsGlyphDiffer(
+    Buffer backBuffer,
+    Buffer frontBuffer,
+    int idx,
+  ) {
+    final backCode = backBuffer.glyphCodes[idx];
+    final frontCode = frontBuffer.glyphCodes[idx];
+    if (((backCode | frontCode) & GlyphCellList.clusterFlag) == 0) {
+      return backCode != frontCode;
+    }
+    if (((backCode ^ frontCode) & GlyphCellList.clusterFlag) != 0) {
+      return true;
+    }
+    return backBuffer.glyphCellList.decodeCode(backCode) !=
+        frontBuffer.glyphCellList.decodeCode(frontCode);
+  }
+
+  @pragma('vm:prefer-inline')
   bool _isCellChanged(
     Buffer backBuffer,
     int x,
@@ -85,7 +142,7 @@ class Renderer {
     if (sizeChanged) return true;
     final backAttr = backBuffer.attributes;
     final frontAttr = _frontBuffer.attributes;
-    if (backBuffer.characters[idx] != _frontBuffer.characters[idx] ||
+    if (_cellsGlyphDiffer(backBuffer, _frontBuffer, idx) ||
         backAttr[attrIdx + 0] != frontAttr[attrIdx + 0] ||
         backAttr[attrIdx + 1] != frontAttr[attrIdx + 1] ||
         backAttr[attrIdx + 2] != frontAttr[attrIdx + 2]) {
@@ -102,14 +159,18 @@ class Renderer {
 
   void _emitPendingKittyImages(Buffer backBuffer, StringSink out) {
     final attrs = backBuffer.attributes;
-    final chars = backBuffer.characters;
+    final codes = backBuffer.glyphCodes;
+    final cells = backBuffer.glyphCellList;
     final width = backBuffer.width;
     if (width <= 0) return;
-    final cellCount = chars.length;
+    final cellCount = codes.length;
     for (var cellIdx = 0; cellIdx < cellCount; cellIdx++) {
       final attrIdx = cellIdx * 3;
       if ((attrs[attrIdx + 2] & Modifier.kittyPlaceholder) == 0) continue;
-      final imageId = _extractKittyImageId(chars[cellIdx], attrs[attrIdx]);
+      final imageId = _extractKittyImageId(
+        cells.decodeCode(codes[cellIdx]),
+        attrs[attrIdx],
+      );
       final data = backBuffer.lookupKittyImage(
         cellIdx % width,
         cellIdx ~/ width,
@@ -181,6 +242,7 @@ class Renderer {
     int y,
     int rxIdx,
     int rxAttrIdx,
+    int backCode,
     String char,
     int cellFg,
     int cellBg,
@@ -188,7 +250,12 @@ class Renderer {
     int cellUlColor,
     String? cellUri,
   ) {
-    _frontBuffer.characters[rxIdx] = char;
+    final frontCells = _frontBuffer.glyphCellList;
+    if ((backCode & GlyphCellList.clusterFlag) == 0) {
+      frontCells.setCodeAt(rxIdx, backCode);
+    } else {
+      frontCells.setCodeAt(rxIdx, frontCells.encodeGrapheme(char));
+    }
     final frontAttr = _frontBuffer.attributes;
     frontAttr[rxAttrIdx + 0] = cellFg;
     frontAttr[rxAttrIdx + 1] = cellBg;
@@ -206,7 +273,11 @@ class Renderer {
     Tracer.record(_traceRenderId, Phase.begin, TraceCategory.paint);
     try {
       final sizeChanged = _prepareFrame(backBuffer, out);
-      if (sizeChanged) _uploadedKittyImages.clear();
+      if (sizeChanged) {
+        _uploadedKittyImages.clear();
+        _emittedShaderRegions.clear();
+        _emittedCellTransforms.clear();
+      }
       _emitPendingKittyImages(backBuffer, out);
 
       var state = _RenderCursorState();
@@ -245,6 +316,9 @@ class Renderer {
         out.write('\x1b[0m');
       }
 
+      _emitShaderMetadataDiff(backBuffer, out);
+      _syncFrontShaderMetadata(backBuffer);
+
       if (mode == RenderingMode.inline) {
         _moveCursorRelative(
           out,
@@ -277,7 +351,8 @@ class Renderer {
       out.write('\x1b[${y + 1};${runStart + 1}H');
     }
 
-    final backChars = backBuffer.characters;
+    final backCodes = backBuffer.glyphCodes;
+    final backCells = backBuffer.glyphCellList;
     final backAttr = backBuffer.attributes;
 
     for (var rx = runStart; rx < runEnd; rx++) {
@@ -310,13 +385,15 @@ class Renderer {
       state.activeMod = cellMod;
       state.activeUlColor = cellUlColor;
 
-      final char = backChars[rxIdx];
+      final backCode = backCodes[rxIdx];
+      final char = backCells.decodeCode(backCode);
       out.write(char);
       _syncFrontCell(
         rx,
         y,
         rxIdx,
         rxAttrIdx,
+        backCode,
         char,
         cellFg,
         cellBg,
@@ -518,6 +595,201 @@ class Renderer {
       tgtMod,
     );
   }
+
+  void _emitShaderMetadataDiff(Buffer backBuffer, StringSink out) {
+    final caps = _shaderCapabilities;
+    if (caps == null || !caps.isAnySupported) return;
+    if (caps.region) {
+      _diffShaderRegions(backBuffer, caps, out);
+    }
+    if (caps.xform) {
+      _diffCellTransforms(backBuffer, out);
+    }
+  }
+
+  void _diffShaderRegions(
+    Buffer backBuffer,
+    ShaderCapabilitiesEvent caps,
+    StringSink out,
+  ) {
+    final nextRegions = _collectAllowedRegions(backBuffer, caps);
+    _emitRemovedRegions(nextRegions, out);
+    for (final entry in nextRegions.entries) {
+      final region = entry.value;
+      if (caps.glsl) {
+        _ensureGlslUploaded(region.shaderRef, caps.maxSlots, out);
+      }
+      if (_emittedShaderRegions[entry.key] != region) {
+        out.write(ShaderApcEncoder.encodeRegion(region));
+      }
+    }
+    _emittedShaderRegions
+      ..clear()
+      ..addAll(nextRegions);
+  }
+
+  static Map<String, ShaderRegion> _collectAllowedRegions(
+    Buffer backBuffer,
+    ShaderCapabilitiesEvent caps,
+  ) {
+    final next = <String, ShaderRegion>{};
+    if (caps.maxRegions <= 0) return next;
+    for (final region in backBuffer.shaderRegions) {
+      if (!caps.glsl && region.shaderRef is CustomGlslShaderRef) continue;
+      if (!next.containsKey(region.id) && next.length >= caps.maxRegions) {
+        continue;
+      }
+      next[region.id] = region;
+    }
+    return next;
+  }
+
+  void _emitRemovedRegions(
+    Map<String, ShaderRegion> nextRegions,
+    StringSink out,
+  ) {
+    if (nextRegions.isEmpty && _emittedShaderRegions.length > 1) {
+      out.write(ShaderApcEncoder.encodeReset(target: 'regions'));
+      return;
+    }
+    for (final id in _emittedShaderRegions.keys) {
+      if (!nextRegions.containsKey(id)) {
+        out.write(ShaderApcEncoder.encodeRemoveRegion(id));
+      }
+    }
+  }
+
+  void _ensureGlslUploaded(ShaderRef? ref, int maxSlots, StringSink out) {
+    if (ref is! CustomGlslShaderRef) return;
+    if (maxSlots <= 0) return;
+    if (!_uploadedGlslHashes.containsKey(ref.id) &&
+        _uploadedGlslHashes.length >= maxSlots) {
+      return;
+    }
+    final hash = _GlslContentHash.compute(ref.source, persist: ref.persist);
+    if (_uploadedGlslHashes[ref.id] == hash) return;
+    try {
+      final frames = ShaderApcEncoder.encodeDefine(
+        id: ref.id,
+        glslSource: ref.source,
+        persist: ref.persist,
+      );
+      for (final frame in frames) {
+        out.write(frame);
+      }
+      _uploadedGlslHashes[ref.id] = hash;
+    } on ArgumentError {
+      // Skip invalid or oversized custom GLSL source without disrupting render.
+    }
+  }
+
+  void _diffCellTransforms(Buffer backBuffer, StringSink out) {
+    final width = backBuffer.width;
+    if (width <= 0) return;
+    final backTable = backBuffer.cellTransforms;
+    if (backTable == null || backTable.isEmpty) {
+      _clearEmittedCellTransforms(width, out);
+      return;
+    }
+    final changes = _collectTransformChanges(backTable, width);
+    if (changes.isEmpty) return;
+    if (changes.length == 1) {
+      final c = changes.first;
+      out.write(
+        ShaderApcEncoder.encodeTransform(
+          col: c.col,
+          row: c.row,
+          transform: c.transform,
+        ),
+      );
+    } else {
+      for (final frame in ShaderApcEncoder.encodeTransformsBatch(changes)) {
+        out.write(frame);
+      }
+    }
+    _emittedCellTransforms.clear();
+    for (final entry in backTable.entries) {
+      _emittedCellTransforms[entry.key] = entry.value;
+    }
+  }
+
+  void _clearEmittedCellTransforms(int width, StringSink out) {
+    if (_emittedCellTransforms.isEmpty) return;
+    if (_emittedCellTransforms.length == 1) {
+      final idx = _emittedCellTransforms.keys.first;
+      out.write(
+        ShaderApcEncoder.encodeTransform(
+          col: idx % width,
+          row: idx ~/ width,
+          transform: null,
+        ),
+      );
+    } else {
+      out.write(ShaderApcEncoder.encodeReset(target: 'xforms'));
+    }
+    _emittedCellTransforms.clear();
+  }
+
+  List<CellTransformEntry> _collectTransformChanges(
+    CellTransformTable backTable,
+    int width,
+  ) => <CellTransformEntry>[
+    for (final idx in _emittedCellTransforms.keys)
+      if (backTable[idx] == null)
+        (col: idx % width, row: idx ~/ width, transform: null),
+    for (final entry in backTable.entries)
+      if (_emittedCellTransforms[entry.key] != entry.value)
+        (
+          col: entry.key % width,
+          row: entry.key ~/ width,
+          transform: entry.value,
+        ),
+  ];
+
+  void _syncFrontShaderMetadata(Buffer backBuffer) {
+    _frontBuffer.shaderRegions
+      ..clear()
+      ..addAll(backBuffer.shaderRegions);
+    _frontBuffer.clearCellTransforms();
+    final table = backBuffer.cellTransforms;
+    if (table == null || table.isEmpty) return;
+    for (final entry in table.entries) {
+      _frontBuffer.setCellTransformAt(entry.key, entry.value);
+    }
+  }
+}
+
+final class _GlslContentHash {
+  final int fnv1a;
+  final int djb2;
+  final int length;
+  final bool persist;
+
+  const _GlslContentHash(this.fnv1a, this.djb2, this.length, this.persist);
+
+  factory _GlslContentHash.compute(String source, {required bool persist}) {
+    var fnv = 0x811C9DC5;
+    var djb = 5381;
+    for (var i = 0; i < source.length; i++) {
+      final cu = source.codeUnitAt(i);
+      fnv ^= cu;
+      fnv = (fnv * 0x01000193) & 0xFFFFFFFF;
+      djb = (((djb << 5) + djb) ^ cu) & 0xFFFFFFFF;
+    }
+    return _GlslContentHash(fnv, djb, source.length, persist);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is _GlslContentHash &&
+          other.fnv1a == fnv1a &&
+          other.djb2 == djb2 &&
+          other.length == length &&
+          other.persist == persist;
+
+  @override
+  int get hashCode => Object.hash(fnv1a, djb2, length, persist);
 }
 
 final class _RenderCursorState {

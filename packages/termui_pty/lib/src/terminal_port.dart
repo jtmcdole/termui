@@ -5,6 +5,7 @@ import 'package:termui/termui.dart';
 
 import 'audio_apc_handler.dart';
 import 'scrollback_buffer.dart';
+import 'shader_apc_handler.dart';
 import 'virtual_terminal.dart';
 
 /// Immutable metadata describing the retained primary-screen scrollback window.
@@ -280,6 +281,17 @@ abstract interface class TerminalPort {
 
   /// Unregisters an audio event listener.
   void removeAudioListener(void Function(TerminalAudioEvent event) listener);
+
+  /// Registers a listener for decoded `ESC _ S` artistic shader and cell-transform events.
+  void addShaderListener(void Function(TerminalShaderApcEvent event) listener);
+
+  /// Unregisters a shader event listener.
+  void removeShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  );
+
+  /// Configures the host shader capabilities reported in response to `ESC _ S a=query`.
+  void setShaderCapabilities(TerminalShaderCapabilities capabilities);
 
   /// Registers a listener for `OSC 52` clipboard write events.
   void addClipboardListener(

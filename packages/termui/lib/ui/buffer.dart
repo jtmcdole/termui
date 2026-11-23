@@ -60,8 +60,16 @@ class Buffer {
   /// The height of the buffer in rows.
   int height;
 
+  GlyphCellList _glyphCells;
+
   /// Flat list of characters representing the grid.
-  List<String> characters;
+  List<String> get characters => _glyphCells;
+
+  /// Read-only view of the packed UTF-32 / cluster codes backing [characters].
+  Uint32List get glyphCodes => _glyphCells.codesView;
+
+  /// The underlying [GlyphCellList] storage for block cell operations.
+  GlyphCellList get glyphCellList => _glyphCells;
 
   /// Single unified data array for fg, bg, and modifiers.
   /// layout: [fg, bg, mod, fg, bg, mod...]
@@ -81,6 +89,33 @@ class Buffer {
 
   /// The list of terminal effects registered in this buffer.
   final List<RegisteredEffect> effects = [];
+
+  /// Scoped [ShaderRegion] overlays registered on this buffer (`<= 8` active).
+  final List<ShaderRegion> shaderRegions = [];
+
+  int _regionRevision = 0;
+
+  /// Monotonic revision incremented whenever [shaderRegions] is mutated via
+  /// [Buffer] methods.
+  int get regionRevision => _regionRevision;
+
+  /// Whether any [ShaderRegion] is currently attached to this buffer.
+  bool get hasShaderRegions => shaderRegions.isNotEmpty;
+
+  /// Lazily allocated sparse per-cell spatial transform table (`null` when unused).
+  CellTransformTable? _cellTransforms;
+
+  int _transformRevision = 0;
+
+  /// Monotonic revision incremented whenever per-cell transforms are mutated.
+  int get transformRevision => _transformRevision;
+
+  /// Whether any per-cell transform is currently active on this buffer.
+  bool get hasCellTransforms =>
+      _cellTransforms != null && _cellTransforms!.isNotEmpty;
+
+  /// Read-only access to the lazy [CellTransformTable], or `null` when unused.
+  CellTransformTable? get cellTransforms => _cellTransforms;
 
   /// Selectable sub-regions registered during the current paint pass.
   final List<Rect> selectableRegions = [];
@@ -109,6 +144,72 @@ class Buffer {
   /// Adds a terminal effect to this buffer.
   void addEffect(RegisteredEffect effect) {
     effects.add(effect);
+  }
+
+  /// Registers or updates a scoped [ShaderRegion] clipped to [activeClip].
+  ///
+  /// Enforces [ShaderRegion.maxRegionsPerPane] (`8`); updates with an existing
+  /// [ShaderRegion.id] replace the prior entry in place.
+  void addShaderRegion(ShaderRegion region) {
+    final clipped = region.translatedAndClipped(0, 0, activeClip);
+    if (clipped == null) return;
+    final existingIdx = shaderRegions.indexWhere((r) => r.id == clipped.id);
+    if (existingIdx >= 0) {
+      if (shaderRegions[existingIdx] != clipped) {
+        shaderRegions[existingIdx] = clipped;
+        _regionRevision++;
+      }
+      return;
+    }
+    if (shaderRegions.length >= ShaderRegion.maxRegionsPerPane) return;
+    shaderRegions.add(clipped);
+    _regionRevision++;
+  }
+
+  /// Clears all active [shaderRegions] and increments [regionRevision] when
+  /// non-empty.
+  void clearShaderRegions() {
+    if (shaderRegions.isEmpty) return;
+    shaderRegions.clear();
+    _regionRevision++;
+  }
+
+  /// Gets the [CellTransform] at ([x], [y]), or `null` when untransformed.
+  CellTransform? getCellTransform(int x, int y) {
+    final table = _cellTransforms;
+    if (table == null || !isCellValid(x, y)) return null;
+    return table[y * width + x];
+  }
+
+  /// Sets or clears the visual-only [CellTransform] at ([x], [y]).
+  void setCellTransform(int x, int y, CellTransform? transform) {
+    if (!isCellValid(x, y)) return;
+    setCellTransformAt(y * width + x, transform);
+  }
+
+  /// Sets or clears the visual-only [CellTransform] at flat index [cellIdx].
+  void setCellTransformAt(int cellIdx, CellTransform? transform) {
+    if (cellIdx < 0 || cellIdx >= width * height) return;
+    if (transform == null || transform.isIdentity) {
+      final table = _cellTransforms;
+      if (table != null && table[cellIdx] != null) {
+        table.remove(cellIdx);
+        _transformRevision++;
+      }
+      return;
+    }
+    final table = _cellTransforms ??= CellTransformTable();
+    if (table[cellIdx] == transform) return;
+    table.set(cellIdx, transform);
+    _transformRevision++;
+  }
+
+  /// Clears all active per-cell transforms without clearing cell characters.
+  void clearCellTransforms() {
+    final table = _cellTransforms;
+    if (table == null || table.isEmpty) return;
+    table.clear();
+    _transformRevision++;
   }
 
   /// Registers a selectable rectangular [region] in buffer coordinates with optional [zIndex].
@@ -168,6 +269,24 @@ class Buffer {
     }
   }
 
+  void _clipShaderRegions() {
+    var changed = false;
+    for (var i = shaderRegions.length - 1; i >= 0; i--) {
+      final prev = shaderRegions[i];
+      final clipped = prev.translatedAndClipped(0, 0, _boundsClip);
+      if (clipped == null) {
+        shaderRegions.removeAt(i);
+        changed = true;
+      } else if (clipped != prev) {
+        shaderRegions[i] = clipped;
+        changed = true;
+      }
+    }
+    if (changed) {
+      _regionRevision++;
+    }
+  }
+
   /// Resolves the active [KittyImageRegistry] covering ([x], [y]), falling back
   /// to [KittyImageRegistry.global] outside scoped regions.
   KittyImageRegistry lookupKittyRegistry(int x, int y) {
@@ -185,9 +304,9 @@ class Buffer {
   KittyImageData? lookupKittyImage(int x, int y, int imageId) =>
       lookupKittyRegistry(x, y).lookupImage(imageId);
 
-  /// Propagates region metadata (`effects`, `selectableRegions`, and scoped
-  /// [KittyImageRegistry] bounds) from [source] translated by ([dx], [dy]) and
-  /// clipped to [clip] (or [activeClip]).
+  /// Propagates region metadata (`effects`, `shaderRegions`, `cellTransforms`,
+  /// `selectableRegions`, and scoped [KittyImageRegistry] bounds) from [source]
+  /// translated by ([dx], [dy]) and clipped to [clip] (or [activeClip]).
   void propagateMetadataFrom(
     Buffer source, {
     int dx = 0,
@@ -198,8 +317,35 @@ class Buffer {
     final effectiveClip = _boundsClip.intersect(clip ?? activeClip);
     if (effectiveClip.width <= 0 || effectiveClip.height <= 0) return;
     _propagateEffectsFrom(source, dx, dy, effectiveClip);
+    _propagateShaderRegionsFrom(source, dx, dy, effectiveClip);
+    _propagateCellTransformsFrom(source, dx, dy, effectiveClip);
     _propagateSelectableRegionsFrom(source, dx, dy, effectiveClip, zIndex);
     _propagateRegistriesFrom(source, dx, dy, effectiveClip);
+  }
+
+  void _propagateShaderRegionsFrom(Buffer source, int dx, int dy, Rect clip) {
+    if (source is Viewport) return;
+    for (final region in source.shaderRegions) {
+      final translated = region.translatedAndClipped(dx, dy, clip);
+      if (translated != null) {
+        addShaderRegion(translated);
+      }
+    }
+  }
+
+  void _propagateCellTransformsFrom(Buffer source, int dx, int dy, Rect clip) {
+    if (source is Viewport) return;
+    final table = source._cellTransforms;
+    if (table == null || table.isEmpty || source.width <= 0) return;
+    for (final entry in table.entries) {
+      final srcX = entry.key % source.width;
+      final srcY = entry.key ~/ source.width;
+      final dstX = dx + srcX;
+      final dstY = dy + srcY;
+      if (clip.contains(dstX, dstY)) {
+        setCellTransform(dstX, dstY, entry.value);
+      }
+    }
   }
 
   void _propagateSelectableRegionsFrom(
@@ -276,7 +422,7 @@ class Buffer {
   /// Creates a new buffer of [width] by [height] initialized with transparent empty cell data.
   Buffer(this.width, this.height, {this.defaultBlend = true})
     : _emptyModifiers = Modifier.transparent,
-      characters = List.filled(width * height, ' '),
+      _glyphCells = GlyphCellList.filled(width * height),
       attributes = Uint32List(width * height * 3) {
     for (var i = 2; i < attributes.length; i += 3) {
       attributes[i] = Modifier.transparent;
@@ -286,7 +432,7 @@ class Buffer {
   /// Creates a new buffer of [width] by [height] initialized with solid blank cell data.
   Buffer.blank(this.width, this.height, {this.defaultBlend = true})
     : _emptyModifiers = Modifier.none,
-      characters = List.filled(width * height, ' '),
+      _glyphCells = GlyphCellList.filled(width * height),
       attributes = Uint32List(width * height * 3);
 
   /// Stack of active canvas clip rectangles.
@@ -319,7 +465,7 @@ class Buffer {
   /// Gets the character at ([x], [y]). Returns a space if coordinates are out of bounds.
   String getCharacter(int x, int y) {
     if (!isCellValid(x, y)) return ' ';
-    return characters[y * width + x];
+    return _glyphCells[y * width + x];
   }
 
   /// Gets the foreground color at ([x], [y]). Returns 0 if coordinates are out of bounds.
@@ -503,7 +649,7 @@ class Buffer {
   /// ([characters] and [attributes]) directly via `List.setRange()`.
   void setCharacter(int x, int y, String char) {
     if (isCellValid(x, y)) {
-      characters[y * width + x] = char;
+      _glyphCells[y * width + x] = char;
     }
   }
 
@@ -556,8 +702,16 @@ class Buffer {
   }
 
   @pragma('vm:prefer-inline')
+  bool _isWideCellAt(int idx) {
+    final code = _glyphCells.codesView[idx];
+    if (code == GlyphCellList.wideContinuationCode) return false;
+    if ((code & GlyphCellList.clusterFlag) == 0) return isWideCodePoint(code);
+    return isWideGrapheme(_glyphCells.decodeCode(code));
+  }
+
+  @pragma('vm:prefer-inline')
   void _resetCell(int cellIdx) {
-    characters[cellIdx] = ' ';
+    _glyphCells.setCodeAt(cellIdx, GlyphCellList.spaceCode);
     final attrIdx = cellIdx * 3;
     attributes[attrIdx + 0] = 0;
     attributes[attrIdx + 1] = 0;
@@ -595,16 +749,17 @@ class Buffer {
   }
 
   @pragma('vm:prefer-inline')
-  void _clearSplitWideEdges(int rowOffset, int startX, int endX, String char) {
-    if (char == '') return;
+  void _clearSplitWideEdges(int rowOffset, int startX, int endX, int fillCode) {
+    if (fillCode == GlyphCellList.wideContinuationCode) return;
+    final codes = _glyphCells.codesView;
     final rowStart = rowOffset + startX;
     if (startX > 0 &&
-        characters[rowStart] == '' &&
-        isWideGrapheme(characters[rowStart - 1])) {
+        codes[rowStart] == GlyphCellList.wideContinuationCode &&
+        _isWideCellAt(rowStart - 1)) {
       _resetCell(rowStart - 1);
     }
     final rowEnd = rowOffset + endX;
-    if (endX < width && characters[rowEnd] == '') {
+    if (endX < width && codes[rowEnd] == GlyphCellList.wideContinuationCode) {
       _resetCell(rowEnd);
     }
   }
@@ -629,7 +784,7 @@ class Buffer {
       final useBlend = blend ?? defaultBlend;
       final cellIdx = y * width + x;
       final idx = cellIdx * 3;
-      characters[cellIdx] = char;
+      _glyphCells[cellIdx] = char;
       attributes[idx + 0] = useBlend ? blendColor(fg, attributes[idx + 0]) : fg;
       attributes[idx + 1] = useBlend ? blendColor(bg, attributes[idx + 1]) : bg;
       attributes[idx + 2] = mod;
@@ -640,12 +795,14 @@ class Buffer {
 
   @pragma('vm:prefer-inline')
   void _resetOverwrittenWideAt(int x, int charIdx) {
-    if (characters[charIdx] == '') {
-      if (x > 0 && isWideGrapheme(characters[charIdx - 1])) {
+    final codes = _glyphCells.codesView;
+    if (codes[charIdx] == GlyphCellList.wideContinuationCode) {
+      if (x > 0 && _isWideCellAt(charIdx - 1)) {
         _resetCell(charIdx - 1);
       }
-    } else if (isWideGrapheme(characters[charIdx])) {
-      if (x + 1 < width && characters[charIdx + 1] == '') {
+    } else if (_isWideCellAt(charIdx)) {
+      if (x + 1 < width &&
+          codes[charIdx + 1] == GlyphCellList.wideContinuationCode) {
         _resetCell(charIdx + 1);
       }
     }
@@ -654,12 +811,13 @@ class Buffer {
   @pragma('vm:prefer-inline')
   void _placeWideContinuationAt(int x, int charIdx) {
     final nextIdx = charIdx + 1;
-    if (isWideGrapheme(characters[nextIdx]) &&
+    if (_isWideCellAt(nextIdx) &&
         x + 2 < width &&
-        characters[charIdx + 2] == '') {
+        _glyphCells.codesView[charIdx + 2] ==
+            GlyphCellList.wideContinuationCode) {
       _resetCell(charIdx + 2);
     }
-    characters[nextIdx] = '';
+    _glyphCells.setCodeAt(nextIdx, GlyphCellList.wideContinuationCode);
   }
 
   /// Sets the cell attributes at ([x], [y]). Does nothing if coordinates are out of bounds.
@@ -677,10 +835,16 @@ class Buffer {
     if (!isCellValid(x, y)) return;
     final useBlend = blend ?? defaultBlend;
     final charIdx = y * width + x;
-    final isWide = char != null && char != '' && isWideGrapheme(char);
-    if (char != null) {
-      if (char != '') _resetOverwrittenWideAt(x, charIdx);
-      characters[charIdx] = char;
+    final charCode = char != null ? _glyphCells.encodeGrapheme(char) : null;
+    final isWide =
+        char != null &&
+        charCode != GlyphCellList.wideContinuationCode &&
+        isWideGrapheme(char);
+    if (charCode != null) {
+      if (charCode != GlyphCellList.wideContinuationCode) {
+        _resetOverwrittenWideAt(x, charIdx);
+      }
+      _glyphCells.setCodeAt(charIdx, charCode);
       if (isWide && x + 1 < width) _placeWideContinuationAt(x, charIdx);
     }
     _writeCellAttributes(
@@ -705,10 +869,13 @@ class Buffer {
     }
   }
 
-  /// Clears overlay metadata lists (effects, selectable regions, and scoped
-  /// Kitty image registries) without clearing cell character/attribute arrays.
+  /// Clears overlay metadata lists (effects, shader regions, cell transforms,
+  /// selectable regions, and scoped Kitty image registries) without clearing
+  /// cell character/attribute arrays.
   void clearMetadata() {
     effects.clear();
+    clearShaderRegions();
+    clearCellTransforms();
     selectableRegions.clear();
     _selectableRegionZIndices.clear();
     _scopedKittyRegistries.clear();
@@ -718,7 +885,7 @@ class Buffer {
   void clear() {
     Tracer.record(_traceClearId, Phase.begin, TraceCategory.paint);
     try {
-      characters.fillRange(0, characters.length, ' ');
+      _glyphCells.fillCodeRange(0, _glyphCells.length, GlyphCellList.spaceCode);
       attributes.fillRange(0, attributes.length, 0);
       _underlineColors?.fillRange(0, _underlineColors!.length, 0);
       _uris?.fillRange(0, _uris!.length, null);
@@ -726,6 +893,8 @@ class Buffer {
         attributes[i] = Modifier.transparent;
       }
       effects.clear();
+      clearShaderRegions();
+      clearCellTransforms();
       selectableRegions.clear();
       _selectableRegionZIndices.clear();
       _scopedKittyRegistries.clear();
@@ -744,7 +913,13 @@ class Buffer {
     String? uri,
     bool? blend,
   }) {
-    if (char != null) characters.fillRange(0, characters.length, char);
+    if (char != null) {
+      _glyphCells.fillCodeRange(
+        0,
+        _glyphCells.length,
+        _glyphCells.encodeGrapheme(char),
+      );
+    }
     if (fg == null &&
         bg == null &&
         modifiers == null &&
@@ -753,7 +928,8 @@ class Buffer {
       return;
     }
     final useBlend = blend ?? defaultBlend;
-    for (var i = 0; i < characters.length; i++) {
+    final len = _glyphCells.length;
+    for (var i = 0; i < len; i++) {
       _writeCellAttributes(
         i * 3,
         fg: fg,
@@ -787,10 +963,15 @@ class Buffer {
     if (startX >= endX || startY >= endY) return;
 
     if (char != null) {
+      final fillCode = _glyphCells.encodeGrapheme(char);
       for (var y = startY; y < endY; y++) {
         final rowOffset = y * width;
-        _clearSplitWideEdges(rowOffset, startX, endX, char);
-        characters.fillRange(rowOffset + startX, rowOffset + endX, char);
+        _clearSplitWideEdges(rowOffset, startX, endX, fillCode);
+        _glyphCells.fillCodeRange(
+          rowOffset + startX,
+          rowOffset + endX,
+          fillCode,
+        );
       }
     }
 
@@ -837,7 +1018,7 @@ class Buffer {
       final rowOffset = y * width;
       for (var x = startX; x < endX; x++) {
         final idx = rowOffset + x;
-        characters[idx] = _cautionChar(x - offsetX, ly);
+        _glyphCells.setCodeAt(idx, _cautionCode(x - offsetX, ly));
         final attrIdx = idx * 3;
         attributes[attrIdx + 0] = yellow;
         attributes[attrIdx + 1] = charcoal;
@@ -848,18 +1029,17 @@ class Buffer {
     }
   }
 
-  static String _cautionChar(int lx, int ly) =>
-      switch (((lx - ly) % 3 + 3) % 3) {
-        0 => '\u259C',
-        1 => '\u2599',
-        _ => ' ',
-      };
+  static int _cautionCode(int lx, int ly) => switch (((lx - ly) % 3 + 3) % 3) {
+    0 => 0x259C,
+    1 => 0x2599,
+    _ => GlyphCellList.spaceCode,
+  };
 
   void _copyOverlappingRows(
     int newWidth,
     int overlapWidth,
     int overlapHeight,
-    List<String> newChars,
+    GlyphCellList newGlyphCells,
     Uint32List newAttributes,
     Uint32List? oldUl,
     Uint32List? newUl,
@@ -869,11 +1049,11 @@ class Buffer {
     for (var y = 0; y < overlapHeight; y++) {
       final targetCharStart = y * newWidth;
       final sourceCharStart = y * width;
-      newChars.setRange(
+      newGlyphCells.copyCellsFrom(
+        _glyphCells,
         targetCharStart,
-        targetCharStart + overlapWidth,
-        characters,
         sourceCharStart,
+        overlapWidth,
       );
       newUl?.setRange(
         targetCharStart,
@@ -902,7 +1082,7 @@ class Buffer {
     try {
       newWidth = max(0, newWidth);
       newHeight = max(0, newHeight);
-      final newChars = List.filled(newWidth * newHeight, ' ');
+      final newGlyphCells = GlyphCellList.filled(newWidth * newHeight);
       final newAttributes = Uint32List(newWidth * newHeight * 3);
       final oldUl = _underlineColors;
       final newUl = oldUl != null ? Uint32List(newWidth * newHeight) : null;
@@ -925,7 +1105,7 @@ class Buffer {
           newWidth,
           overlapWidth,
           overlapHeight,
-          newChars,
+          newGlyphCells,
           newAttributes,
           oldUl,
           newUl,
@@ -934,13 +1114,21 @@ class Buffer {
         );
       }
 
+      final oldWidth = width;
+      final oldHeight = height;
       width = newWidth;
       height = newHeight;
-      characters = newChars;
+      _glyphCells = newGlyphCells;
       attributes = newAttributes;
       _underlineColors = newUl;
       _uris = newUris;
       _boundsClip = Rect(0, 0, width, height);
+      final hadTransforms = hasCellTransforms;
+      _cellTransforms?.resize(oldWidth, oldHeight, width, height);
+      if (hadTransforms) {
+        _transformRevision++;
+      }
+      _clipShaderRegions();
       _clipScopedRegistries();
     } finally {
       Tracer.record(_traceResizeId, Phase.end, TraceCategory.layout);
@@ -957,22 +1145,13 @@ class Buffer {
   }
 
   @pragma('vm:prefer-inline')
-  void _clearOverwrittenWideChar(int currentX, int idx) {
-    if (characters[idx] == '') {
-      if (currentX > 0 && isWideGrapheme(characters[idx - 1])) {
-        _resetCell(idx - 1);
-      }
-    } else if (isWideGrapheme(characters[idx])) {
-      if (currentX + 1 < width && characters[idx + 1] == '') {
-        _resetCell(idx + 1);
-      }
-    }
-  }
+  void _clearOverwrittenWideChar(int currentX, int idx) =>
+      _resetOverwrittenWideAt(currentX, idx);
 
   @pragma('vm:prefer-inline')
   void _writeStyledCellRaw(
     int idx,
-    String char,
+    int glyphCode,
     int fg,
     int bg,
     int modifiers,
@@ -981,7 +1160,7 @@ class Buffer {
     bool hasFg,
     bool hasBg,
   ) {
-    characters[idx] = char;
+    _glyphCells.setCodeAt(idx, glyphCode);
     final attrIdx = idx * 3;
     attributes[attrIdx + 0] = hasFg ? fg : 0;
     if (hasBg) {
@@ -1014,9 +1193,12 @@ class Buffer {
       if (isCellValid(currentX, currentY)) {
         final idx = currentY * width + currentX;
         _clearOverwrittenWideChar(currentX, idx);
+        final glyphCode = codeUnit == 0
+            ? _glyphCells.encodeGrapheme('\x00')
+            : codeUnit;
         _writeStyledCellRaw(
           idx,
-          String.fromCharCode(codeUnit),
+          glyphCode,
           fg,
           bg,
           modifiers,
@@ -1051,7 +1233,7 @@ class Buffer {
       // Can't fit wide character in the last column or clip edge, write a space instead
       _writeStyledCellRaw(
         idx,
-        ' ',
+        GlyphCellList.spaceCode,
         fg,
         bg,
         modifiers,
@@ -1064,7 +1246,7 @@ class Buffer {
     }
     _writeStyledCellRaw(
       idx,
-      char,
+      _glyphCells.encodeGrapheme(char),
       fg,
       bg,
       modifiers,
@@ -1075,14 +1257,14 @@ class Buffer {
     );
     if (!isWide || currentX + 1 >= width) return;
     final nextIdx = idx + 1;
-    if (isWideGrapheme(characters[nextIdx]) &&
+    if (_isWideCellAt(nextIdx) &&
         currentX + 2 < width &&
-        characters[idx + 2] == '') {
+        _glyphCells.codesView[idx + 2] == GlyphCellList.wideContinuationCode) {
       _resetCell(idx + 2);
     }
     _writeStyledCellRaw(
       nextIdx,
-      '',
+      GlyphCellList.wideContinuationCode,
       fg,
       bg,
       modifiers,
@@ -1249,6 +1431,18 @@ class Compositor {
       final layer = sortedLayers[i];
       _propagateLayerRegistries(target, layer);
       _propagateLayerSelectableRegions(target, layer);
+      target._propagateShaderRegionsFrom(
+        layer.buffer,
+        layer.x,
+        layer.y,
+        target.activeClip,
+      );
+      target._propagateCellTransformsFrom(
+        layer.buffer,
+        layer.x,
+        layer.y,
+        target.activeClip,
+      );
     }
   }
 
@@ -1315,6 +1509,7 @@ class Compositor {
 
   static void _initMasksFromTarget(Buffer target, _CompositeMasks masks) {
     final totalCells = target.width * target.height;
+    final targetCodes = target.glyphCodes;
     for (var i = 0; i < totalCells; i++) {
       final attrIdx = i * 3;
       if ((target.attributes[attrIdx + 2] & Modifier.transparent) != 0) {
@@ -1322,11 +1517,13 @@ class Compositor {
       }
       final maskBit = 1 << (i & 31);
       final word = i >> 5;
-      final char = target.characters[i];
+      final code = targetCodes[i];
       final fgAlpha = target.attributes[attrIdx].effectiveAlpha;
       final bgAlpha = target.attributes[attrIdx + 1].effectiveAlpha;
 
-      if ((char != ' ' && char != '') || bgAlpha == 255) {
+      if ((code != GlyphCellList.spaceCode &&
+              code != GlyphCellList.wideContinuationCode) ||
+          bgAlpha == 255) {
         masks.charWritten[word] |= maskBit;
       }
       if (fgAlpha == 255 || bgAlpha == 255) {
@@ -1452,7 +1649,8 @@ class Compositor {
         target,
         targetIdx,
         targetAttrIdx,
-        source.characters[sourceIdx],
+        source,
+        sourceIdx,
         sourceFg,
         sourceBg,
         sourceMods,
@@ -1490,11 +1688,32 @@ class Compositor {
   }
 
   @pragma('vm:prefer-inline')
+  static void _copyCompositeGlyph(
+    Buffer target,
+    int targetIdx,
+    Buffer source,
+    int sourceIdx,
+    int sourceCode,
+  ) {
+    if ((sourceCode & GlyphCellList.clusterFlag) == 0) {
+      target._glyphCells.setCodeAt(targetIdx, sourceCode);
+    } else {
+      target._glyphCells.copyCellsFrom(
+        source._glyphCells,
+        targetIdx,
+        sourceIdx,
+        1,
+      );
+    }
+  }
+
+  @pragma('vm:prefer-inline')
   static bool _applyCompositeChar(
     Buffer target,
     int targetIdx,
     int targetAttrIdx,
-    String sourceChar,
+    Buffer source,
+    int sourceIdx,
     int sourceFg,
     int sourceBg,
     int sourceMods,
@@ -1505,8 +1724,9 @@ class Compositor {
     int maskBit,
     bool fgOccluded,
   ) {
-    if (sourceChar != ' ') {
-      target.characters[targetIdx] = sourceChar;
+    final sourceCode = source.glyphCodes[sourceIdx];
+    if (sourceCode != GlyphCellList.spaceCode) {
+      _copyCompositeGlyph(target, targetIdx, source, sourceIdx, sourceCode);
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
       target._setUriAt(targetIdx, sourceUri);
@@ -1519,7 +1739,7 @@ class Compositor {
       return fgOccluded;
     }
     if (sourceBg.effectiveAlpha == 255) {
-      target.characters[targetIdx] = ' ';
+      target._glyphCells.setCodeAt(targetIdx, GlyphCellList.spaceCode);
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(targetIdx, sourceUlColor);
       target._setUriAt(targetIdx, sourceUri);
@@ -1619,16 +1839,19 @@ class Compositor {
     final sourceMods = buf.attributes[sourceAttrIdx + 2];
     if ((sourceMods & Modifier.transparent) != 0) return;
 
-    final sourceChar = buf.characters[sourceIdx];
+    final sourceCode = buf.glyphCodes[sourceIdx];
     final sourceFg = buf.attributes[sourceAttrIdx];
     final sourceBg = buf.attributes[sourceAttrIdx + 1];
     final targetAttrIdx = targetIdx * 3;
-    final currentChar = target.characters[targetIdx];
-    final targetIsEmptyChar = currentChar == ' ' || currentChar == '';
+    final currentCode = target.glyphCodes[targetIdx];
+    final targetIsEmptyChar =
+        currentCode == GlyphCellList.spaceCode ||
+        currentCode == GlyphCellList.wideContinuationCode;
 
     if (targetIsEmptyChar &&
-        (sourceChar != ' ' || sourceBg.effectiveAlpha == 255)) {
-      target.characters[targetIdx] = sourceChar;
+        (sourceCode != GlyphCellList.spaceCode ||
+            sourceBg.effectiveAlpha == 255)) {
+      _copyCompositeGlyph(target, targetIdx, buf, sourceIdx, sourceCode);
       target.attributes[targetAttrIdx + 2] = sourceMods;
       target._setUnderlineColorAt(
         targetIdx,
@@ -2635,7 +2858,7 @@ extension BufferAnsiSerialization on Buffer {
     List<_ParsedAnsiCell> row,
     int targetWidth,
   ) {
-    final charsArray = buffer.characters;
+    final glyphCells = buffer._glyphCells;
     final attrsArray = buffer.attributes;
     final rowOffset = y * targetWidth;
     final colLimit = min(row.length, targetWidth);
@@ -2645,7 +2868,11 @@ extension BufferAnsiSerialization on Buffer {
       final idx = rowOffset + x;
       final clippedWide =
           x + 1 >= targetWidth && cell.char != '' && isWideGrapheme(cell.char);
-      charsArray[idx] = clippedWide ? ' ' : cell.char;
+      if (clippedWide) {
+        glyphCells.setCodeAt(idx, GlyphCellList.spaceCode);
+      } else {
+        glyphCells[idx] = cell.char;
+      }
       final attrIdx = idx * 3;
       attrsArray[attrIdx] = cell.fg;
       attrsArray[attrIdx + 1] = cell.bg;
@@ -2700,13 +2927,15 @@ extension BufferAnsiSerialization on Buffer {
   }
 
   int _lastContentCol(int y) {
+    final codes = glyphCodes;
     final rowOffset = y * width;
     for (var x = width - 1; x >= 0; x--) {
       final idx = rowOffset + x;
-      final char = characters[idx];
+      final code = codes[idx];
       final attrIdx = idx * 3;
       final isBlankUnstyled =
-          (char == ' ' || char == '') &&
+          (code == GlyphCellList.spaceCode ||
+              code == GlyphCellList.wideContinuationCode) &&
           attributes[attrIdx + 1] == 0 &&
           attributes[attrIdx + 2] == 0 &&
           (_uris == null || _uris![idx] == null);
@@ -2722,13 +2951,14 @@ extension BufferAnsiSerialization on Buffer {
     _ToAnsiStyle initialStyle,
   ) {
     var activeStyle = initialStyle;
+    final codes = glyphCodes;
     final rowOffset = y * width;
 
     for (var x = 0; x <= lastCol; x++) {
       final idx = rowOffset + x;
-      final char = characters[idx];
+      final code = codes[idx];
       // Wide character padding cells are represented by empty strings. Skip them.
-      if (char == '') continue;
+      if (code == GlyphCellList.wideContinuationCode) continue;
 
       final attrIdx = idx * 3;
       final cellStyle = (
@@ -2739,7 +2969,7 @@ extension BufferAnsiSerialization on Buffer {
         uri: _uris == null ? null : _uris![idx],
       );
       activeStyle = _writeAnsiStyleTransition(sb, activeStyle, cellStyle);
-      sb.write(char);
+      sb.write(_glyphCells.decodeCode(code));
     }
     return activeStyle;
   }

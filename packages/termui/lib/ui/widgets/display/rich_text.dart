@@ -1,4 +1,6 @@
 import 'dart:math';
+import 'dart:typed_data';
+
 import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 
@@ -25,7 +27,47 @@ class TextRun {
   String toString() => "TextRun('$text', style: $style)";
 }
 
-/// A helper representing a single grapheme cluster with its style.
+final class _SpanOrdinalCounter {
+  int _next = 0;
+  int next() => _next++;
+}
+
+final class _ShaderSpanGroup {
+  final String? explicitId;
+  final int autoOrdinal;
+  final ShaderRef shader;
+  final CellPadding padding;
+  final ShaderRegionStage stage;
+  final int zIndex;
+  final bool? persist;
+  final Float32List? params;
+
+  const _ShaderSpanGroup({
+    required this.explicitId,
+    required this.autoOrdinal,
+    required this.shader,
+    required this.padding,
+    required this.stage,
+    required this.zIndex,
+    required this.persist,
+    required this.params,
+  });
+
+  String resolveId(Offset offset) {
+    final explicit = explicitId;
+    if (explicit != null && explicit.isNotEmpty) {
+      return sanitizeShaderRegionId(explicit, fallback: 'rt');
+    }
+    final slug = sanitizeShaderRegionId(shader.shaderId, fallback: 'shader');
+    return sanitizeShaderRegionId(
+      'rt_${slug}_${offset.dx}_${offset.dy}_$autoOrdinal',
+      fallback: 'rt',
+    );
+  }
+}
+
+/// A helper representing a single grapheme cluster with its style and optional
+/// shader region or cell transform metadata.
 class StyledChar {
   /// The isolated grapheme character.
   final String char;
@@ -33,8 +75,20 @@ class StyledChar {
   /// The style bound to this character.
   final Style style;
 
+  /// Optional per-cell spatial transform inherited from a [TextSpan].
+  final CellTransform? transform;
+
+  final _ShaderSpanGroup? _shaderGroup;
+
   /// Creates a [StyledChar] mapping a grapheme string to its style.
-  StyledChar(this.char, this.style);
+  StyledChar(this.char, this.style, {this.transform}) : _shaderGroup = null;
+
+  StyledChar._withGroup(
+    this.char,
+    this.style,
+    this.transform,
+    this._shaderGroup,
+  );
 }
 
 /// A helper representing a token (a word, spaces, or a newline) for wrapping.
@@ -84,22 +138,94 @@ class TextSpan {
   /// Nested child text spans that inherit styling from this node.
   final List<TextSpan> children;
 
-  /// Initializes a text span with optional text content, styling overrides, and nested children spans.
-  const TextSpan({this.text, this.style, this.children = const []});
+  /// Optional scoped [ShaderRef] applied across all lines spanned by this node.
+  final ShaderRef? shader;
+
+  /// Optional stable region identifier (`^[A-Za-z0-9_.-]{1,64}$`) for [shader].
+  final String? shaderRegionId;
+
+  /// Cell-grid bleed padding around this span's painted glyphs when [shader] is set.
+  final CellPadding shaderPadding;
+
+  /// Compositing stage relative to text glyphs when [shader] is set.
+  final ShaderRegionStage shaderStage;
+
+  /// Stacking order among active shader regions when [shader] is set.
+  final int shaderZIndex;
+
+  /// Optional previous-frame feedback override for [shader].
+  final bool? shaderPersist;
+
+  /// Optional user float uniforms (`p0..p7`) passed to [shader].
+  final Float32List? shaderParams;
+
+  /// Optional per-cell spatial [CellTransform] applied to cells painted by this span.
+  final CellTransform? transform;
+
+  /// Initializes a text span with optional text content, styling overrides,
+  /// shader region metadata, per-cell transform, and nested children spans.
+  const TextSpan({
+    this.text,
+    this.style,
+    this.children = const [],
+    this.shader,
+    this.shaderRegionId,
+    this.shaderPadding = CellPadding.zero,
+    this.shaderStage = ShaderRegionStage.overGlyphs,
+    this.shaderZIndex = 0,
+    this.shaderPersist,
+    this.shaderParams,
+    this.transform,
+  });
 
   /// Recursively flattens the styling tree into a list of styled characters.
   void buildStyledChars(List<StyledChar> output, Style parentStyle) {
-    // Merge parent style with current span style.
+    _collectStyledChars(output, parentStyle, null, null, _SpanOrdinalCounter());
+  }
+
+  void _collectStyledChars(
+    List<StyledChar> output,
+    Style parentStyle,
+    _ShaderSpanGroup? parentGroup,
+    CellTransform? parentTransform,
+    _SpanOrdinalCounter counter,
+  ) {
     final mergedStyle = style != null ? parentStyle.merge(style!) : parentStyle;
+    final activeGroup = shader != null
+        ? _ShaderSpanGroup(
+            explicitId: shaderRegionId,
+            autoOrdinal: counter.next(),
+            shader: shader!,
+            padding: shaderPadding,
+            stage: shaderStage,
+            zIndex: shaderZIndex,
+            persist: shaderPersist,
+            params: shaderParams,
+          )
+        : parentGroup;
+    final activeTransform = transform ?? parentTransform;
 
     if (text != null) {
       for (final char in text!.characters) {
-        output.add(StyledChar(char, mergedStyle));
+        output.add(
+          StyledChar._withGroup(
+            char,
+            mergedStyle,
+            activeTransform,
+            activeGroup,
+          ),
+        );
       }
     }
 
     for (final child in children) {
-      child.buildStyledChars(output, mergedStyle);
+      child._collectStyledChars(
+        output,
+        mergedStyle,
+        activeGroup,
+        activeTransform,
+        counter,
+      );
     }
   }
 
@@ -109,10 +235,39 @@ class TextSpan {
       other is TextSpan &&
           other.text == text &&
           other.style == style &&
+          other.shader == shader &&
+          other.shaderRegionId == shaderRegionId &&
+          other.shaderPadding == shaderPadding &&
+          other.shaderStage == shaderStage &&
+          other.shaderZIndex == shaderZIndex &&
+          other.shaderPersist == shaderPersist &&
+          _floatListEquals(other.shaderParams, shaderParams) &&
+          other.transform == transform &&
           _listEquals(other.children, children);
 
   @override
-  int get hashCode => Object.hash(text, style, Object.hashAll(children));
+  int get hashCode => Object.hash(
+    text,
+    style,
+    shader,
+    shaderRegionId,
+    shaderPadding,
+    shaderStage,
+    shaderZIndex,
+    shaderPersist,
+    shaderParams == null ? null : Object.hashAll(shaderParams!),
+    transform,
+    Object.hashAll(children),
+  );
+
+  static bool _floatListEquals(Float32List? a, Float32List? b) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null || a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   bool _listEquals<T>(List<T> a, List<T> b) {
     if (a.length != b.length) return false;
@@ -344,6 +499,7 @@ class RichTextElement extends Element {
   void performPaint(Buffer buffer, Offset offset) {
     final richTextWidget = widget as RichText;
     final area = Rect(offset.dx, offset.dy, size.width, size.height);
+    final groupRects = <_ShaderSpanGroup, List<Rect>>{};
 
     final limit = richTextWidget.maxLines != null
         ? min(richTextWidget.maxLines!, area.height)
@@ -351,29 +507,104 @@ class RichTextElement extends Element {
     for (var y = 0; y < _cachedLines.length; y++) {
       if (y >= limit) break;
       final line = _cachedLines[y];
+      final startX = _resolveLineStartX(
+        richTextWidget.textAlign,
+        area.width,
+        line.length,
+      );
+      _paintStyledLine(
+        buffer,
+        line,
+        area.x + startX,
+        area.y + y,
+        area.x + area.width,
+        groupRects,
+      );
+    }
+    _registerShaderRegions(buffer, offset, groupRects);
+  }
 
-      // Compute horizontal alignments
-      final lineLen = line.length;
-      var startX = 0;
-      if (richTextWidget.textAlign == TextAlign.right) {
-        startX = max(0, area.width - lineLen);
-      } else if (richTextWidget.textAlign == TextAlign.center) {
-        startX = max(0, (area.width - lineLen) ~/ 2);
+  static int _resolveLineStartX(TextAlign align, int areaWidth, int lineLen) =>
+      switch (align) {
+        TextAlign.right => max(0, areaWidth - lineLen),
+        TextAlign.center => max(0, (areaWidth - lineLen) ~/ 2),
+        TextAlign.left || TextAlign.justify => 0,
+      };
+
+  static void _paintStyledLine(
+    Buffer buffer,
+    List<StyledChar> line,
+    int startX,
+    int cellY,
+    int maxX,
+    Map<_ShaderSpanGroup, List<Rect>> groupRects,
+  ) {
+    _ShaderSpanGroup? activeGroup;
+    var runStartX = 0;
+    var runEndX = 0;
+    var col = startX;
+
+    for (final sc in line) {
+      final w = max(1, graphemeWidth(sc.char));
+      if (col + w > maxX) break;
+      buffer.setAttributes(
+        col,
+        cellY,
+        char: sc.char,
+        fg: sc.style.foreground?.argb ?? 0,
+        bg: sc.style.background?.argb ?? 0,
+        modifiers: sc.style.modifiers,
+        underlineColor: sc.style.underlineColor?.argb ?? 0,
+        uri: sc.style.uri,
+      );
+      if (sc.transform case final xform? when !xform.isIdentity) {
+        buffer.setCellTransform(col, cellY, xform);
       }
 
-      for (var x = 0; x < line.length; x++) {
-        if (startX + x >= area.width) break;
-        buffer.setAttributes(
-          area.x + startX + x,
-          area.y + y,
-          char: line[x].char,
-          fg: line[x].style.foreground?.argb ?? 0,
-          bg: line[x].style.background?.argb ?? 0,
-          modifiers: line[x].style.modifiers,
-          underlineColor: line[x].style.underlineColor?.argb ?? 0,
-          uri: line[x].style.uri,
-        );
+      final group = sc._shaderGroup;
+      if (identical(group, activeGroup)) {
+        if (group != null) runEndX = col + w;
+      } else {
+        _flushShaderRun(groupRects, activeGroup, runStartX, runEndX, cellY);
+        activeGroup = group;
+        runStartX = col;
+        runEndX = col + w;
       }
+      col += w;
+    }
+    _flushShaderRun(groupRects, activeGroup, runStartX, runEndX, cellY);
+  }
+
+  static void _flushShaderRun(
+    Map<_ShaderSpanGroup, List<Rect>> groupRects,
+    _ShaderSpanGroup? group,
+    int startX,
+    int endX,
+    int y,
+  ) {
+    if (group == null || endX <= startX) return;
+    (groupRects[group] ??= <Rect>[]).add(Rect(startX, y, endX - startX, 1));
+  }
+
+  static void _registerShaderRegions(
+    Buffer buffer,
+    Offset offset,
+    Map<_ShaderSpanGroup, List<Rect>> groupRects,
+  ) {
+    for (final entry in groupRects.entries) {
+      final group = entry.key;
+      buffer.addShaderRegion(
+        ShaderRegion.fromRef(
+          id: group.resolveId(offset),
+          shader: group.shader,
+          sourceRects: entry.value,
+          padding: group.padding,
+          stage: group.stage,
+          zIndex: group.zIndex,
+          persist: group.persist,
+          params: group.params,
+        ),
+      );
     }
   }
 }

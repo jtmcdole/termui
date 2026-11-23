@@ -1274,3 +1274,208 @@ final class BufferDelta {
   /// Whether `0`-indexed [row] began via soft-wrap from the preceding row.
   bool isRowWrapped(int row) => unpackWrappedRow(wrappedRows, rows, row);
 }
+
+/// Wire-serializable CLI artistic shader or cell-transform payload carried in `ShaderFrame` (`0x1C`).
+sealed class CastShaderPayload {
+  /// Maximum wire byte budget allowed for a single `0x1C` `ShaderFrame` (`64 KiB`).
+  static const int maxWireBytes = 64 * 1024;
+
+  /// Maximum decoded UTF-8 byte length for a custom CLI GLSL shader (`32 KiB`).
+  static const int maxGlslBytes = 32 * 1024;
+
+  /// Creates an immutable cast shader payload.
+  const CastShaderPayload();
+}
+
+/// Custom CLI Ghostty Shadertoy GLSL shader definition (`kind = 0`).
+final class CastDefineShaderPayload extends CastShaderPayload {
+  /// Logical shader slot identifier (`1..64` ASCII identifier characters).
+  final String id;
+
+  /// UTF-8 GLSL fragment shader source (`1..32768` bytes).
+  final String glslSource;
+
+  /// Whether the shader requests previous-frame feedback (`persist=1`).
+  final bool persist;
+
+  /// Creates a custom GLSL shader definition payload.
+  const CastDefineShaderPayload({
+    required this.id,
+    required this.glslSource,
+    this.persist = false,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CastDefineShaderPayload &&
+          other.id == id &&
+          other.glslSource == glslSource &&
+          other.persist == persist;
+
+  @override
+  int get hashCode => Object.hash(id, glslSource, persist);
+}
+
+/// Scoped [ShaderRegion] attach, update, or removal (`kind = 1`).
+final class CastRegionShaderPayload extends CastShaderPayload {
+  /// Logical region identifier.
+  final String id;
+
+  /// Region configuration when [remove] is `false`, or `null` when removing.
+  final ShaderRegion? region;
+
+  /// Whether this payload removes the region identified by [id].
+  final bool remove;
+
+  /// Creates a scoped shader region payload.
+  const CastRegionShaderPayload({
+    required this.id,
+    this.region,
+    this.remove = false,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CastRegionShaderPayload &&
+          other.id == id &&
+          other.region == region &&
+          other.remove == remove;
+
+  @override
+  int get hashCode => Object.hash(id, region, remove);
+}
+
+/// Batched per-cell spatial transforms using the `64`-byte wire stride (`kind = 2`).
+final class CastTransformsShaderPayload extends CastShaderPayload {
+  /// Ordered cell transform updates (`transform == null` removes the transform).
+  final List<CellTransformEntry> entries;
+
+  /// Whether existing cell transforms should be cleared before applying [entries].
+  final bool replace;
+
+  /// Creates a batched per-cell transform payload.
+  CastTransformsShaderPayload({
+    required List<CellTransformEntry> entries,
+    this.replace = false,
+  }) : entries = List<CellTransformEntry>.unmodifiable(entries);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! CastTransformsShaderPayload) return false;
+    if (other.replace != replace || other.entries.length != entries.length) {
+      return false;
+    }
+    for (var i = 0; i < entries.length; i++) {
+      if (other.entries[i] != entries[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(replace, Object.hashAll(entries));
+}
+
+/// Full-pane CLI shader activation or clear (`kind = 3`).
+final class CastSetShaderPayload extends CastShaderPayload {
+  /// Target stage (`'bg'`, `'fg'`, or `'post'`).
+  final String stage;
+
+  /// Optional built-in preset identifier.
+  final String? presetId;
+
+  /// Optional CLI-defined custom GLSL shader identifier.
+  final String? shaderId;
+
+  /// Eight initial user uniform floats (`p0..p7`), clamped to `[-16.0, 16.0]`.
+  final Float32List params;
+
+  /// Whether this payload clears the CLI full-pane override for [stage].
+  final bool clear;
+
+  /// Creates a full-pane shader set or clear payload.
+  CastSetShaderPayload({
+    this.stage = 'post',
+    this.presetId,
+    this.shaderId,
+    Float32List? params,
+    this.clear = false,
+  }) : params = ShaderRegion.sanitizeParams(params);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! CastSetShaderPayload) return false;
+    if (other.stage != stage ||
+        other.presetId != presetId ||
+        other.shaderId != shaderId ||
+        other.clear != clear ||
+        other.params.length != params.length) {
+      return false;
+    }
+    for (var i = 0; i < params.length; i++) {
+      if (other.params[i] != params[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(stage, presetId, shaderId, clear, Object.hashAll(params));
+}
+
+/// Live uniform update (`p0..p7`) without shader recompilation (`kind = 4`).
+final class CastUniformShaderPayload extends CastShaderPayload {
+  /// Target region/shader identifier, or `null` for the active full-pane shader.
+  final String? id;
+
+  /// Bitmask (`bit0..bit7`) indicating which `p0..p7` indices are updated.
+  final int paramMask;
+
+  /// Eight float slots (only slots with bits set in [paramMask] are active).
+  final Float32List params;
+
+  /// Creates a live uniform update payload.
+  CastUniformShaderPayload({
+    this.id,
+    required this.paramMask,
+    required Float32List params,
+  }) : params = ShaderRegion.sanitizeParams(params);
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! CastUniformShaderPayload) return false;
+    if (other.id != id ||
+        other.paramMask != paramMask ||
+        other.params.length != params.length) {
+      return false;
+    }
+    for (var i = 0; i < params.length; i++) {
+      if (other.params[i] != params[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hash(id, paramMask, Object.hashAll(params));
+}
+
+/// CLI shader/transform reset command (`kind = 5`).
+final class CastResetShaderPayload extends CastShaderPayload {
+  /// Target scope (`'all'`, `'regions'`, `'xforms'`, or `'pane'`).
+  final String target;
+
+  /// Creates a shader reset payload.
+  const CastResetShaderPayload({this.target = 'all'});
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CastResetShaderPayload && other.target == target;
+
+  @override
+  int get hashCode => target.hashCode;
+}

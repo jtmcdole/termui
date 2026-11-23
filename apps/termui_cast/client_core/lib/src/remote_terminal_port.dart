@@ -127,6 +127,37 @@ TerminalAudioEvent toTerminalAudioEvent(CastAudioPayload payload) =>
         TerminalWaveformQueryAudioEvent(requestId: requestId),
     };
 
+/// Converts a wire [CastShaderPayload] into a [termui_pty] [TerminalShaderApcEvent].
+TerminalShaderApcEvent toTerminalShaderApcEvent(
+  CastShaderPayload payload,
+) => switch (payload) {
+  CastDefineShaderPayload(:final id, :final glslSource, :final persist) =>
+    TerminalShaderDefineEvent(id: id, glslSource: glslSource, persist: persist),
+  CastRegionShaderPayload(:final id, :final region, :final remove) =>
+    TerminalShaderRegionEvent(id: id, region: region, remove: remove),
+  CastTransformsShaderPayload(:final entries, :final replace) =>
+    TerminalShaderTransformBatchEvent(entries: entries, replace: replace),
+  CastSetShaderPayload(
+    :final stage,
+    :final presetId,
+    :final shaderId,
+    :final params,
+    :final clear,
+  ) =>
+    TerminalShaderSetEvent(
+      stage: stage,
+      presetId: presetId,
+      shaderId: shaderId,
+      params: params,
+      clear: clear,
+    ),
+  CastUniformShaderPayload(:final id, :final paramMask, :final params) =>
+    TerminalShaderUniformEvent(id: id, paramMask: paramMask, params: params),
+  CastResetShaderPayload(:final target) => TerminalResetShaderEvent(
+    target: ShaderResetTarget.fromWireName(target) ?? .all,
+  ),
+};
+
 /// Remote [TerminalPort] attached to a [SessionId] through a [CastClientRepository].
 ///
 /// Multiple split panes or widgets viewing the same [SessionId] share one
@@ -156,6 +187,8 @@ final class RemoteTerminalPort implements TerminalPort {
   final Set<void Function()> _bellListeners = <void Function()>{};
   final Set<void Function(TerminalAudioEvent event)> _audioListeners =
       <void Function(TerminalAudioEvent event)>{};
+  final Set<void Function(TerminalShaderApcEvent event)> _shaderListeners =
+      <void Function(TerminalShaderApcEvent event)>{};
   final Set<void Function(String selection, String text)> _clipboardListeners =
       <void Function(String selection, String text)>{};
 
@@ -378,6 +411,22 @@ final class RemoteTerminalPort implements TerminalPort {
   }
 
   @override
+  void addShaderListener(void Function(TerminalShaderApcEvent event) listener) {
+    if (_disposed) return;
+    _shaderListeners.add(listener);
+  }
+
+  @override
+  void removeShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) {
+    _shaderListeners.remove(listener);
+  }
+
+  @override
+  void setShaderCapabilities(TerminalShaderCapabilities capabilities) {}
+
+  @override
   void addClipboardListener(
     void Function(String selection, String text) listener,
   ) {
@@ -463,6 +512,7 @@ final class RemoteTerminalPort implements TerminalPort {
     _titleListeners.clear();
     _bellListeners.clear();
     _audioListeners.clear();
+    _shaderListeners.clear();
     _clipboardListeners.clear();
     _decodedScrollbackCache.clear();
     _fallbackBuffer = null;
@@ -486,6 +536,11 @@ final class RemoteTerminalPort implements TerminalPort {
   @internal
   void dispatchAudio(TerminalAudioEvent event) =>
       _invokeListeners(_audioListeners, event);
+
+  /// Dispatches a decoded `0x1C` shader/transform event to listeners registered on this port.
+  @internal
+  void dispatchShader(TerminalShaderApcEvent event) =>
+      _invokeListeners(_shaderListeners, event);
 
   /// Dispatches a clipboard write event to listeners registered on this port.
   @internal
