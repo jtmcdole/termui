@@ -179,6 +179,13 @@ final class CastClientRepository {
     IapTokenProvider? iapTokenProvider,
     bool replaceIapTokenProvider = false,
   }) async {
+    if (!replaceIapTokenProvider && iapTokenProvider != null) {
+      throw ArgumentError.value(
+        iapTokenProvider,
+        'iapTokenProvider',
+        'Requires replaceIapTokenProvider: true.',
+      );
+    }
     if (_disposed) return;
     final previous = _transport;
     final nextTransport =

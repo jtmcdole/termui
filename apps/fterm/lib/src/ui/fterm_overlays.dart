@@ -376,13 +376,14 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
       return (serviceAccount: null, keyFilePath: null, gcloudPath: null);
     }
     final gcloudOverride = _gcloudPathCtrl.text.trim();
-    return switch (_iapMode) {
-      _ConnectIapMode.none => (
-        serviceAccount: '',
-        keyFilePath: '',
-        gcloudPath: gcloudOverride,
-      ),
-      _ConnectIapMode.serviceAccount => () {
+    switch (_iapMode) {
+      case _ConnectIapMode.none:
+        return (
+          serviceAccount: '',
+          keyFilePath: '',
+          gcloudPath: gcloudOverride,
+        );
+      case _ConnectIapMode.serviceAccount:
         final sa = _iapSaCtrl.text.trim();
         if (sa.isEmpty) {
           throw const FormatException(
@@ -394,8 +395,7 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
           keyFilePath: '',
           gcloudPath: gcloudOverride,
         );
-      }(),
-      _ConnectIapMode.keyFile => () {
+      case _ConnectIapMode.keyFile:
         final keyPath = _iapKeyCtrl.text.trim();
         if (keyPath.isEmpty) {
           throw const FormatException(
@@ -407,8 +407,7 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
           keyFilePath: keyPath,
           gcloudPath: gcloudOverride,
         );
-      }(),
-    };
+    }
   }
 
   Future<void> _submit() async {
@@ -438,15 +437,16 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
       );
     } on FormatException catch (e) {
       if (mounted) {
-        setState(() {
-          _validationError = e.message;
-          _submitting = false;
-        });
+        setState(() => _validationError = e.message);
       }
-      return;
-    }
-    if (mounted) {
-      setState(() => _submitting = false);
+    } on Object catch (e) {
+      if (mounted) {
+        setState(() => _validationError = '$e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
     }
   }
 

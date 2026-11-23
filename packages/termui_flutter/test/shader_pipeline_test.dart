@@ -2942,6 +2942,389 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       },
     );
   });
+
+  group('M2 & M4 regression proofs: background elision, activity dirtying, and stale async outputs', () {
+    testWidgets(
+      'M2a: eliding background cursorGlow pass clears stale background output image',
+      (tester) async {
+        final backend = _FakeShaderBackend(supportsSyncBackground: true);
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final activity = _ManualNotifier();
+        addTearDown(activity.dispose);
+
+        final bgConfig = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:cursor_glow',
+              stage: TerminalShaderStage.background,
+              preset: TerminalShaderPreset.cursorGlow,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(bgConfig));
+
+        final bgImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 64,
+            height: 48,
+            color: const Color(0xFFFF0000),
+          ),
+        );
+        backend.nextSyncImage = bgImg;
+
+        var cursorVisible = true;
+        final boundaryKey = GlobalKey();
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: RepaintBoundary(
+              key: boundaryKey,
+              child: ColoredBox(
+                color: const Color(0xFF0000FF),
+                child: SizedBox(
+                  width: 64,
+                  height: 48,
+                  child: TerminalShaderHost(
+                    controller: controller,
+                    config: bgConfig,
+                    cursorVisibleProvider: () => cursorVisible,
+                    activityListenable: activity,
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        expect(backend.syncBackgroundCalls, hasLength(1));
+        expect(bgImg!.debugDisposed, isFalse);
+
+        // Verify red background shader image was painted while cursor visible.
+        final beforeBoundary =
+            boundaryKey.currentContext!.findRenderObject()!
+                as RenderRepaintBoundary;
+        final beforeSnap = await tester.runAsync(
+          () => beforeBoundary.toImage(pixelRatio: 1.0),
+        );
+        final beforePx = await tester.runAsync(
+          () => _readPixel(beforeSnap!, 8, 8),
+        );
+        beforeSnap!.dispose();
+        expect(beforePx!.r, greaterThan(200));
+        expect(beforePx.b, lessThan(50));
+
+        // Flip cursor invisible -> cursorGlow pass is elided -> stale red
+        // background output image must be cleared and disposed post-frame.
+        cursorVisible = false;
+        activity.trigger();
+        await tester.pump();
+        await tester.pump();
+
+        final afterSnap = await tester.runAsync(
+          () => beforeBoundary.toImage(pixelRatio: 1.0),
+        );
+        final afterPx = await tester.runAsync(
+          () => _readPixel(afterSnap!, 8, 8),
+        );
+        afterSnap!.dispose();
+        expect(
+          afterPx!.b,
+          greaterThan(200),
+          reason:
+              'Elided background pass must not keep painting stale red image.',
+        );
+        expect(
+          bgImg.debugDisposed,
+          isTrue,
+          reason:
+              'Cleared background output image must be disposed post-frame.',
+        );
+      },
+    );
+
+    testWidgets(
+      'M2b: activityListenable marks async background pass dirty and triggers refresh',
+      (tester) async {
+        final backend = _FakeShaderBackend(supportsSyncBackground: false);
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final activity = _ManualNotifier();
+        addTearDown(activity.dispose);
+
+        final bgConfig = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:cursor_glow',
+              stage: TerminalShaderStage.background,
+              preset: TerminalShaderPreset.cursorGlow,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(bgConfig));
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: SizedBox(
+              width: 64,
+              height: 48,
+              child: TerminalShaderHost(
+                controller: controller,
+                config: bgConfig,
+                activityListenable: activity,
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        );
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+        final callsAfterInitial = backend.asyncPassCalls.length;
+        expect(callsAfterInitial, equals(1));
+
+        // Firing activityListenable must mark _backgroundDirty = true so the
+        // async background backend schedules a fresh render pass.
+        activity.trigger();
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(
+          backend.asyncPassCalls.length,
+          greaterThan(callsAfterInitial),
+          reason:
+              'activityListenable must trigger async background refresh when '
+              'supportsSyncBackground is false.',
+        );
+      },
+    );
+
+    testWidgets(
+      'M4a: in-flight async background output is disposed if passes are disabled before completion',
+      (tester) async {
+        final backend = _FakeShaderBackend(supportsSyncBackground: false)
+          ..holdAsyncRender = true;
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final bgConfig = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:wave',
+              stage: TerminalShaderStage.background,
+              preset: TerminalShaderPreset.wallpaperWave,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(bgConfig));
+
+        Widget buildHost(TerminalShaderConfig config) => Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 64,
+            height: 48,
+            child: TerminalShaderHost(
+              controller: controller,
+              config: config,
+              child: const SizedBox.expand(),
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(buildHost(bgConfig));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(backend.pendingAsyncCompleters, hasLength(1));
+
+        // Disable background passes while renderPassesAsync is in flight.
+        await tester.runAsync(
+          () => controller.syncConfig(TerminalShaderConfig.empty),
+        );
+        await tester.pumpWidget(buildHost(TerminalShaderConfig.empty));
+
+        final staleBgImg = await tester.runAsync(
+          () => _createSolidImage(width: 64, height: 48),
+        );
+        backend.pendingAsyncCompleters.single.complete(staleBgImg);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+        expect(
+          staleBgImg!.debugDisposed,
+          isTrue,
+          reason:
+              'In-flight async background output must be disposed immediately '
+              'when background passes were disabled before completion.',
+        );
+      },
+    );
+
+    testWidgets(
+      'M4b: in-flight async foreground output is disposed if passes are disabled or direct mode activates',
+      (tester) async {
+        final backend = _FakeShaderBackend()..holdAsyncRender = true;
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final fgConfig = TerminalShaderConfig(
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'fg:scan',
+              stage: TerminalShaderStage.foreground,
+              preset: TerminalShaderPreset.scanlineOverlay,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(fgConfig));
+
+        Widget buildHost(TerminalShaderConfig config) => Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 64,
+            height: 48,
+            child: TerminalShaderHost(
+              controller: controller,
+              config: config,
+              child: const ColoredBox(color: Color(0xFF102030)),
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(buildHost(fgConfig));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+        expect(backend.pendingAsyncCompleters, hasLength(1));
+
+        // Disable foreground passes while renderPassesAsync is in flight.
+        await tester.runAsync(
+          () => controller.syncConfig(TerminalShaderConfig.empty),
+        );
+        await tester.pumpWidget(buildHost(TerminalShaderConfig.empty));
+
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        final staleFgImg = await tester.runAsync(
+          () => _createSolidImage(width: 64, height: 48),
+        );
+        backend.pendingAsyncCompleters.single.complete(staleFgImg);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+        expect(hostState.debugForegroundOutputImage, isNull);
+        expect(
+          staleFgImg!.debugDisposed,
+          isTrue,
+          reason:
+              'In-flight async foreground output must be disposed immediately '
+              'when foreground passes were disabled before completion.',
+        );
+      },
+    );
+
+    testWidgets(
+      'M4c: in-flight async foreground output is disposed if direct mode activates before completion',
+      (tester) async {
+        final directOutput = await tester.runAsync(
+          () => _createSolidImage(
+            width: 64,
+            height: 48,
+            color: const Color(0xFF224466),
+          ),
+        );
+        addTearDown(() => directOutput?.dispose());
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(width: 16, height: 16),
+        );
+        addTearDown(() => atlasImg?.dispose());
+
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => directOutput!.clone(),
+          primedInitially: true,
+        )..holdAsyncRender = true;
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final fgConfig = TerminalShaderConfig(
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'fg:scan',
+              stage: TerminalShaderStage.foreground,
+              preset: TerminalShaderPreset.scanlineOverlay,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(fgConfig));
+
+        Widget buildHost({required bool enableDirect}) => Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 64,
+            height: 48,
+            child: TerminalShaderHost(
+              controller: controller,
+              config: fgConfig,
+              atlasImage: enableDirect ? atlasImg : null,
+              directLogicalSize: enableDirect ? const Size(64, 48) : null,
+              directTerminalBatchProvider: enableDirect
+                  ? (_, _) => GpuAtlasQuadBatch(
+                      instanceData: Float32List(16),
+                      instanceCount: 1,
+                      italicStartInstanceIndex: 1,
+                      kittyInsertInstanceIndex: 1,
+                      generation: 1,
+                      defaultBackgroundArgb: 0xFF000000,
+                      kittyQuads: const <GpuKittyQuad>[],
+                      hasCanvasOnlyContent: false,
+                    )
+                  : null,
+              child: const ColoredBox(color: Color(0xFF102030)),
+            ),
+          ),
+        );
+
+        // Start in fallback mode so async foreground pass launches.
+        await tester.pumpWidget(buildHost(enableDirect: false));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+        expect(backend.pendingAsyncCompleters, hasLength(1));
+
+        // Activate direct mode while async foreground pass is in flight.
+        await tester.pumpWidget(buildHost(enableDirect: true));
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugIsDirectModeActive, isTrue);
+
+        final staleFgImg = await tester.runAsync(
+          () => _createSolidImage(width: 64, height: 48),
+        );
+        backend.pendingAsyncCompleters.single.complete(staleFgImg);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+        expect(hostState.debugForegroundOutputImage, isNull);
+        expect(
+          staleFgImg!.debugDisposed,
+          isTrue,
+          reason:
+              'In-flight async foreground output must be disposed immediately '
+              'when direct mode becomes active before completion.',
+        );
+      },
+    );
+  });
 }
 
 final class _FakeDirectShaderBackend extends _FakeShaderBackend

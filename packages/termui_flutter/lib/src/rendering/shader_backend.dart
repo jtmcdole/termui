@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:termui/ui/shader_region.dart';
@@ -263,4 +264,46 @@ abstract interface class DirectTerminalShaderBackend
     ui.Image? wallpaperImage,
     GpuFrameWatchdog? watchdog,
   });
+}
+
+/// Captured raw RGBA pixels and dimensions read from a cloned [ui.Image].
+final class RgbaImagePixels {
+  /// Raw RGBA pixel bytes.
+  final ByteData bytes;
+
+  /// Pixel width captured from the cloned image.
+  final int width;
+
+  /// Pixel height captured from the cloned image.
+  final int height;
+
+  /// Creates an immutable [RgbaImagePixels] snapshot.
+  const RgbaImagePixels({
+    required this.bytes,
+    required this.width,
+    required this.height,
+  });
+}
+
+/// Clones [image] synchronously before awaiting `toByteData(rawRgba)` so
+/// callers that dispose the original [ui.Image] mid-readback cannot trigger
+/// disposed-image failures during readback or post-await dimension lookups.
+///
+/// Returns `null` if [image] is `null`, already disposed, or pixel readback
+/// fails. Always disposes the internal clone in a `finally` block.
+Future<RgbaImagePixels?> readImageRgbaSafely(ui.Image? image) async {
+  if (image == null) return null;
+  ui.Image? cloned;
+  try {
+    cloned = image.clone();
+    final width = cloned.width;
+    final height = cloned.height;
+    final bytes = await cloned.toByteData(format: ui.ImageByteFormat.rawRgba);
+    if (bytes == null || width <= 0 || height <= 0) return null;
+    return RgbaImagePixels(bytes: bytes, width: width, height: height);
+  } on Object {
+    return null;
+  } finally {
+    cloned?.dispose();
+  }
 }

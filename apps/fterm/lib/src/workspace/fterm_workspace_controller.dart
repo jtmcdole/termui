@@ -1140,10 +1140,13 @@ final class FtermWorkspaceController extends ChangeNotifier {
     final endpointChanged =
         _activeRelayUri != launchConfig.serverUri ||
         _activeClientToken != launchConfig.token;
+    final gcloudHydrated = _activeGcloudPath != launchConfig.gcloudPath.trim();
     IapTokenProvider? startupIap;
     var replaceIap = false;
     if (_activeRelayUri.scheme == 'wss' &&
-        (endpointChanged || launchConfig.iapTokenProvider == null)) {
+        (endpointChanged ||
+            gcloudHydrated ||
+            launchConfig.iapTokenProvider == null)) {
       try {
         startupIap = resolveIapTokenProviderFor(_activeRelayUri);
         replaceIap = startupIap != null;
@@ -1265,7 +1268,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       gcloudPath: nextGcloud,
     );
 
-    if (iapChanged) {
+    if (iapChanged || nextKey.isNotEmpty) {
       _iapProviderCache.clear();
     }
     if (hasIapUpdate) {
@@ -1348,7 +1351,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (serviceAccount.isEmpty && keyFilePath.isEmpty) {
       return null;
     }
-    if (!iapChanged) {
+    if (!iapChanged && keyFilePath.isEmpty) {
       final audience = TokenAuthenticator.iapAudienceForWebSocketUri(serverUri);
       if (_iapProviderCache.containsKey(audience)) {
         return _iapProviderCache[audience];

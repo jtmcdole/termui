@@ -141,6 +141,14 @@ void main() {
       );
       expect(zeroList.codesView, [0, 0, 0]);
     });
+
+    test('L3: setCodeAt rejects out-of-range cluster codes in debug mode', () {
+      final list = GlyphCellList.filled(4);
+      expect(
+        () => list.setCodeAt(0, GlyphCellList.clusterFlag | 999),
+        throwsA(isA<AssertionError>()),
+      );
+    });
   });
 
   group('GlyphCellList block operations and cluster remapping', () {
@@ -424,5 +432,55 @@ void main() {
       renderer.render(back3, diffOut3);
       expect(diffOut3.toString(), contains('A'));
     });
+
+    test(
+      'H2: Buffer.setAttributes overwriting wide continuation does not write stale cluster ID after compaction',
+      () {
+        final buf = Buffer(8, 2);
+        // Intern 1023 unique dead clusters (IDs 0..1022) plus 1 live wide cluster (ID 1023)
+        // so cluster table length == compactionMinEntries (1024) without compacting yet.
+        for (var i = 0; i < GlyphCellList.compactionMinEntries - 1; i++) {
+          buf.setAttributes(4, 0, char: 'a$i\u0301');
+        }
+        buf.setAttributes(4, 0, char: ' ');
+        buf.setAttributes(0, 0, char: '👨‍👩‍👧');
+        expect(buf.getCharacter(0, 0), '👨‍👩‍👧');
+        expect(buf.getCharacter(1, 0), '');
+
+        // Overwriting the continuation cell (1, 0) with a brand-new cluster pushes
+        // table length to 1025 (> 1024), so resetting (0, 0) triggers compaction!
+        const fresh = '👩🏽‍💻';
+        buf.setAttributes(1, 0, char: fresh);
+
+        expect(buf.getCharacter(0, 0), ' ');
+        expect(buf.getCharacter(1, 0), fresh);
+        expect(buf.getCharacter(2, 0), '');
+      },
+    );
+
+    test(
+      'H3: Buffer.fillRect with a fresh cluster preserves valid cluster IDs across compaction on all rows',
+      () {
+        final buf = Buffer(8, 3);
+        // Intern 1023 dead clusters + 1 live wide cluster at (0, 0) (table length == 1024).
+        for (var i = 0; i < GlyphCellList.compactionMinEntries - 1; i++) {
+          buf.setAttributes(6, 2, char: 'b$i\u0301');
+        }
+        buf.setAttributes(6, 2, char: ' ');
+        buf.setAttributes(0, 0, char: '👨‍👩‍👧');
+
+        // Fill rect starting at x=1 (splitting wide cluster at (0, 0)) across 2 rows
+        // with a fresh cluster that pushes table length to 1025.
+        const fresh = 'e\u0301';
+        buf.fillRect(const Rect(1, 0, 3, 2), char: fresh);
+
+        expect(buf.getCharacter(0, 0), ' ');
+        for (var y = 0; y < 2; y++) {
+          for (var x = 1; x < 4; x++) {
+            expect(buf.getCharacter(x, y), fresh);
+          }
+        }
+      },
+    );
   });
 }

@@ -125,6 +125,7 @@ void main() {
 }
 ''';
 
+  static final RegExp _lineContinuationPattern = RegExp(r'\\\r?\n');
   static final RegExp _includeDirectivePattern = RegExp(
     r'^\s*#\s*include\b',
     multiLine: true,
@@ -315,8 +316,10 @@ void main() {
             '$maxSourceBytes byte (64 KiB) limit.',
       );
     }
-    final stripped = _stripComments(source);
+    final spliced = source.replaceAll(_lineContinuationPattern, '');
+    final stripped = _stripComments(spliced);
     if (_includeDirectivePattern.hasMatch(source) ||
+        _includeDirectivePattern.hasMatch(spliced) ||
         _includeDirectivePattern.hasMatch(stripped)) {
       throw ShaderCompileException(
         shaderId: shaderId,

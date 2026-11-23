@@ -575,7 +575,9 @@ final class FlutterGpuShaderBackend
   }) async {
     _ensureNotDisposed();
     final compiled = await _compiler.compile(shadertoyGlsl, shaderId: id);
+    _ensureNotDisposed();
     final library = await _loadShaderLibrary(id, compiled.bytes);
+    _ensureNotDisposed();
     final vertexShader = library[ShadertoyGlslShim.vertexShaderName];
     final fragmentShader = library[ShadertoyGlslShim.fragmentShaderName];
     if (vertexShader == null || fragmentShader == null) {
@@ -608,6 +610,8 @@ final class FlutterGpuShaderBackend
       shadertoyGlsl,
       shaderId: gpuHandle.id,
     );
+    _ensureNotDisposed();
+    _requireOwnedHandle(gpuHandle);
     final error = gpuHandle.library.reinitializeFromBytes(compiled.bytes);
     if (error != null) {
       throw ShaderCompileException(

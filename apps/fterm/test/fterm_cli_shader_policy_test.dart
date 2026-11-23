@@ -1214,5 +1214,149 @@ void main() {
         contains(TerminalShaderPreset.retroPhosphor),
       );
     });
+
+    test('M1: applyOverlaysToBuffer does not bump transformRevision on unchanged recomposites', () {
+      // Local pane path: src buffer carries active transforms.
+      final localState = PaneCliShaderState(
+        paneId: 'pane-local',
+        isLocal: true,
+        initialPolicy: CliShaderPolicy.promptCustomGlsl,
+        initialFullPaneMode: CliFullPaneShaderMode.cliBeforeUser,
+        trustedHashes: const <String>{},
+        readPaneLabel: () => 'local',
+        onVisualStateChanged: () {},
+        onPolicyUiChanged: () {},
+      );
+      addTearDown(localState.dispose);
+
+      final localSrc = tui.Buffer.blank(20, 8)
+        ..setCellTransform(1, 1, const tui.CellTransform(dx: 2.0));
+      final localOut = tui.Buffer.blank(20, 8);
+
+      localState.applyOverlaysToBuffer(localOut, localSrc);
+      expect(localOut.getCellTransform(1, 1), isNotNull);
+      final localRev1 = localOut.transformRevision;
+
+      // Second recomposite with unchanged src (e.g. cursor blink).
+      localState.applyOverlaysToBuffer(localOut, localSrc);
+      expect(localOut.transformRevision, equals(localRev1));
+
+      // Toggling policy disabled -> enabled invalidates cache and reapplies cleanly.
+      localState.updatePolicy(
+        policy: CliShaderPolicy.disabled,
+        fullPaneMode: CliFullPaneShaderMode.cliBeforeUser,
+        trustedHashes: const <String>{},
+        userHasFullPaneShaders: false,
+      );
+      localState.applyOverlaysToBuffer(localOut, localSrc);
+      expect(localOut.hasCellTransforms, isFalse);
+
+      localState.updatePolicy(
+        policy: CliShaderPolicy.promptCustomGlsl,
+        fullPaneMode: CliFullPaneShaderMode.cliBeforeUser,
+        trustedHashes: const <String>{},
+        userHasFullPaneShaders: false,
+      );
+      localState.applyOverlaysToBuffer(localOut, localSrc);
+      expect(localOut.getCellTransform(1, 1), isNotNull);
+
+      // Mutating src transform still propagates to out.
+      localSrc.setCellTransform(1, 1, const tui.CellTransform(dx: 3.0));
+      localState.applyOverlaysToBuffer(localOut, localSrc);
+      expect(localOut.getCellTransform(1, 1)?.dx, equals(3.0));
+
+      // Remote pane path: _activeTransforms carries active transforms.
+      final remoteState = PaneCliShaderState(
+        paneId: 'pane-remote',
+        isLocal: false,
+        initialPolicy: CliShaderPolicy.presetsAndTransforms,
+        initialFullPaneMode: CliFullPaneShaderMode.cliBeforeUser,
+        trustedHashes: const <String>{},
+        readPaneLabel: () => 'remote',
+        onVisualStateChanged: () {},
+        onPolicyUiChanged: () {},
+      );
+      addTearDown(remoteState.dispose);
+
+      remoteState.handleShaderEvent(
+        TerminalShaderTransformBatchEvent(
+          entries: const [
+            (col: 2, row: 1, transform: tui.CellTransform(dx: 1.5)),
+          ],
+        ),
+      );
+      final remoteSrc = tui.Buffer.blank(20, 8);
+      final remoteOut = tui.Buffer.blank(20, 8);
+
+      remoteState.applyOverlaysToBuffer(remoteOut, remoteSrc);
+      expect(remoteOut.getCellTransform(2, 1), isNotNull);
+      final remoteRev1 = remoteOut.transformRevision;
+
+      remoteState.applyOverlaysToBuffer(remoteOut, remoteSrc);
+      expect(remoteOut.transformRevision, equals(remoteRev1));
+    });
+
+    test('M7: user-approved alt-screen custom GLSL shaders are evicted on altScreenExit', () async {
+      final backend = _FakeShaderBackend();
+      final state = PaneCliShaderState(
+        paneId: 'pane-m7',
+        isLocal: true,
+        initialPolicy: CliShaderPolicy.promptCustomGlsl,
+        initialFullPaneMode: CliFullPaneShaderMode.cliBeforeUser,
+        trustedHashes: const <String>{},
+        readPaneLabel: () => 'local',
+        onVisualStateChanged: () {},
+        onPolicyUiChanged: () {},
+        backend: backend,
+      );
+      addTearDown(state.dispose);
+
+      // Path 1: approveHash on a pending custom GLSL defined while onAltScreen: true.
+      state.handleShaderEvent(
+        const TerminalShaderDefineEvent(
+          id: 'alt_fx',
+          glslSource: _validCustomGlslA,
+        ),
+        onAltScreen: true,
+      );
+      final hashA = PaneCliShaderState.computeSha256(_validCustomGlslA);
+      expect(state.approveHash(hashA, remember: false), isTrue);
+      await Future<void>.delayed(Duration.zero);
+      expect(state.registry.handleForShader('alt_fx'), isNotNull);
+
+      state.handleShaderEvent(
+        const TerminalResetShaderEvent(
+          target: ShaderResetTarget.all,
+          altScreenExit: true,
+        ),
+      );
+      expect(state.registry.handleForShader('alt_fx'), isNull);
+
+      // Path 2: _promoteNowTrustedPending via updatePolicy on a pending alt-screen shader.
+      state.handleShaderEvent(
+        const TerminalShaderDefineEvent(
+          id: 'alt_fx_promoted',
+          glslSource: _validCustomGlslB,
+        ),
+        onAltScreen: true,
+      );
+      final hashB = PaneCliShaderState.computeSha256(_validCustomGlslB);
+      state.updatePolicy(
+        policy: CliShaderPolicy.promptCustomGlsl,
+        fullPaneMode: CliFullPaneShaderMode.cliBeforeUser,
+        trustedHashes: <String>{hashB},
+        userHasFullPaneShaders: false,
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(state.registry.handleForShader('alt_fx_promoted'), isNotNull);
+
+      state.handleShaderEvent(
+        const TerminalResetShaderEvent(
+          target: ShaderResetTarget.all,
+          altScreenExit: true,
+        ),
+      );
+      expect(state.registry.handleForShader('alt_fx_promoted'), isNull);
+    });
   });
 }

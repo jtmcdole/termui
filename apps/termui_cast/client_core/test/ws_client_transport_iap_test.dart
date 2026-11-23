@@ -126,6 +126,15 @@ void main() {
             replaceIapTokenProvider: true,
           ),
         ).throws<FormatException>();
+
+        // L2: Passing non-null iapTokenProvider without replaceIapTokenProvider: true
+        // must fail fast with ArgumentError instead of silently ignoring it.
+        check(
+          () => installed.copyWithEndpoint((
+            serverUri: Uri.parse('wss://relay.run.app/v1/client'),
+            token: 't6',
+          ), iapTokenProvider: providerB),
+        ).throws<ArgumentError>();
       },
     );
 

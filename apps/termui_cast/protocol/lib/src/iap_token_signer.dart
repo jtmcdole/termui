@@ -556,15 +556,23 @@ final class IapJwtSigner {
   static Future<ProcessResult> _runProcessWithTimeout(
     String executable,
     List<String> arguments,
-    Duration timeout,
-  ) async {
+    Duration timeout, {
+    String? workingDirectory,
+  }) async {
     final Process process;
     try {
-      process = await Process.start(
-        executable,
-        arguments,
-        runInShell: Platform.isWindows,
-      );
+      process = Platform.isWindows
+          ? await Process.start(
+              'cmd.exe',
+              <String>['/d', '/c', 'call', executable, ...arguments],
+              workingDirectory: workingDirectory,
+              runInShell: false,
+            )
+          : await Process.start(
+              executable,
+              arguments,
+              workingDirectory: workingDirectory,
+            );
     } on ProcessException catch (e) {
       throw ProcessException(
         executable,
@@ -662,6 +670,12 @@ final class IapJwtSigner {
     return '$signingInput.${_base64UrlNoPad(signature)}';
   }
 
+  String _resolveSignerExecutable(ProcessRunner? runner) {
+    if (runner != null) return gcloudExecutable;
+    if (gcloudExecutable == 'gcloud') return resolveGcloudExecutable();
+    return expandHomePath(gcloudExecutable);
+  }
+
   Future<String> _signWithGcloud(
     String accountEmail,
     int nowSec,
@@ -674,31 +688,26 @@ final class IapJwtSigner {
     try {
       final claimFile = File.fromUri(tempDir.uri.resolve('claim.json'));
       final jwtFile = File.fromUri(tempDir.uri.resolve('output.jwt'));
-      final claimPath = claimFile.path;
-      final jwtPath = jwtFile.path;
       await claimFile.writeAsString(claimJson, flush: true);
 
+      final runner = _customProcessRunner;
+      final attemptedExecutable = _resolveSignerExecutable(runner);
       final args = <String>[
         'iam',
         'service-accounts',
         'sign-jwt',
         '--iam-account=$accountEmail',
         '--quiet',
-        claimPath,
-        jwtPath,
+        runner != null ? claimFile.path : 'claim.json',
+        runner != null ? jwtFile.path : 'output.jwt',
       ];
-      final runner = _customProcessRunner;
-      final attemptedExecutable = runner != null
-          ? gcloudExecutable
-          : (gcloudExecutable == 'gcloud'
-                ? resolveGcloudExecutable()
-                : expandHomePath(gcloudExecutable));
       final result = runner != null
           ? await runner(attemptedExecutable, args).timeout(signTimeout)
           : await _runProcessWithTimeout(
               attemptedExecutable,
               args,
               signTimeout,
+              workingDirectory: tempDir.path,
             );
       if (result.exitCode != 0) {
         final stderrText = '${result.stderr}'.trim();
@@ -723,18 +732,20 @@ final class IapJwtSigner {
       }
       return signedJwt;
     } finally {
-      for (var attempt = 0; attempt < 4; attempt++) {
-        try {
-          await tempDir.delete(recursive: true);
-          break;
-        } on FileSystemException catch (_) {
-          if (attempt == 3) break;
-          await Future<void>.delayed(
-            Duration(milliseconds: 25 * (1 << attempt)),
-          );
-        } on Object catch (_) {
-          break;
-        }
+      await _deleteTempDirWithRetry(tempDir);
+    }
+  }
+
+  static Future<void> _deleteTempDirWithRetry(Directory tempDir) async {
+    for (var attempt = 0; attempt < 4; attempt++) {
+      try {
+        await tempDir.delete(recursive: true);
+        return;
+      } on FileSystemException catch (_) {
+        if (attempt == 3) return;
+        await Future<void>.delayed(Duration(milliseconds: 25 * (1 << attempt)));
+      } on Object catch (_) {
+        return;
       }
     }
   }

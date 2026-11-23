@@ -136,6 +136,7 @@ final class AuthoritativeTerminal {
   final LinkedHashMap<int, _PendingKittyChunkTransfer> _pendingKittyChunks =
       LinkedHashMap<int, _PendingKittyChunkTransfer>();
   int _lastImageRegistryRevision = 0;
+  int _lastShaderMetadataRevision = 0;
   bool _hasDeferredKittySync = false;
   CursorState _shadowCursor = CursorState.origin;
   TerminalModes _shadowModes = TerminalModes.defaults;
@@ -212,7 +213,11 @@ final class AuthoritativeTerminal {
     _shadowUris = List<String?>.filled(totalCells, null);
     _shadowWrappedRows = Uint8List(wrappedRowsByteLength(safeRows));
     _lastImageRegistryRevision = _terminal.imageRegistryRevision;
-    _shaderSync.seedFromBuffer(_terminal.buffer);
+    _lastShaderMetadataRevision = _terminal.shaderMetadataRevision;
+    _shaderSync.seedFromBuffer(
+      _terminal.buffer,
+      isAltScreen: _terminal.isUsingAlternateScreen,
+    );
   }
 
   void _attachTerminalHooks({required bool chainPrevious}) {
@@ -256,7 +261,19 @@ final class AuthoritativeTerminal {
 
   void _handleTerminalShaderEvent(TerminalShaderApcEvent event) {
     _prevOnShaderEvent?.call(event);
-    recordShaderEvent(event);
+    final isAlt = _terminal.isUsingAlternateScreen;
+    if (event is TerminalResetShaderEvent && event.altScreenExit) {
+      if (_shaderSync.recordEvent(
+        event,
+        isAltScreen: isAlt,
+        activeBuffer: _terminal.viewportOffset == 0 ? _terminal.buffer : null,
+      )) {
+        _lastShaderMetadataRevision = _terminal.shaderMetadataRevision;
+        markDirty();
+      }
+    } else {
+      recordShaderEvent(event);
+    }
     for (final listener in List.of(_shaderListeners)) {
       listener(event);
     }
@@ -318,20 +335,28 @@ final class AuthoritativeTerminal {
   ) => _shaderListeners.remove(listener);
 
   /// Whether at least one coalesced `0x1C` shader payload is waiting to flush.
-  bool get hasPendingShaderFrames => _shaderSync.hasPending;
+  bool get hasPendingShaderFrames {
+    _syncShaderStateFromTerminal();
+    return _shaderSync.hasPending;
+  }
 
   /// Records a decoded `ESC _ S` [event], updating authoritative keyframe replay
   /// state, coalescing redundant updates within the current flush tick, and
   /// marking this terminal dirty.
   void recordShaderEvent(TerminalShaderApcEvent event) {
-    if (_shaderSync.recordEvent(event)) {
+    if (_shaderSync.recordEvent(
+      event,
+      isAltScreen: _terminal.isUsingAlternateScreen,
+    )) {
       markDirty();
     }
   }
 
   /// Drains pending coalesced `0x1C` [ShaderFrame]s for the current flush tick.
-  List<ShaderFrame> takePendingShaderFrames() =>
-      _shaderSync.takePendingFrames(sessionId);
+  List<ShaderFrame> takePendingShaderFrames() {
+    _syncShaderStateFromTerminal();
+    return _shaderSync.takePendingFrames(sessionId);
+  }
 
   /// Discards pending incremental `0x1C` payloads while preserving authoritative
   /// shader state for subsequent keyframe replay.
@@ -339,8 +364,24 @@ final class AuthoritativeTerminal {
 
   /// Builds full `0x1C` replay [ShaderFrame]s (active `define`s, `region`s,
   /// chunked `replace: true` `transforms`, and full-pane `set`s) for a keyframe.
-  List<ShaderFrame> buildShaderReplayFrames() =>
-      _shaderSync.buildReplayFrames(sessionId);
+  List<ShaderFrame> buildShaderReplayFrames() {
+    _syncShaderStateFromTerminal();
+    return _shaderSync.buildReplayFrames(sessionId);
+  }
+
+  void _syncShaderStateFromTerminal() {
+    final isAlt = _terminal.isUsingAlternateScreen;
+    final rev = _terminal.shaderMetadataRevision;
+    final screenChanged = _shaderSync.inAltScreen != isAlt;
+    if (!screenChanged && rev == _lastShaderMetadataRevision) return;
+    _lastShaderMetadataRevision = rev;
+    if (screenChanged) {
+      _shaderSync.syncAltScreen(isAlt);
+    }
+    if (isAlt || _terminal.viewportOffset == 0) {
+      _shaderSync.syncFromBuffer(_terminal.buffer, emitPending: true);
+    }
+  }
 
   /// Registers a multi-listener callback for `OSC 52` clipboard frames.
   void addClipboardListener(void Function(ClipboardFrame frame) listener) =>
@@ -1486,64 +1527,159 @@ final class AuthoritativeTerminal {
   }
 }
 
+final class _ShaderScreenBucket {
+  final LinkedHashMap<String, CastDefineShaderPayload> definedShaders =
+      LinkedHashMap();
+  final LinkedHashMap<String, ShaderRegion> activeRegions = LinkedHashMap();
+  final LinkedHashMap<int, CellTransformEntry> activeTransforms =
+      LinkedHashMap();
+  final LinkedHashMap<String, CastSetShaderPayload> activePaneShaders =
+      LinkedHashMap();
+
+  void clearAll() {
+    definedShaders.clear();
+    activeRegions.clear();
+    activeTransforms.clear();
+    activePaneShaders.clear();
+  }
+}
+
 final class _ShaderSyncState {
   static const int maxTransformsPerFrame = 960;
 
-  final LinkedHashMap<String, CastDefineShaderPayload> _definedShaders =
-      LinkedHashMap();
-  final LinkedHashMap<String, ShaderRegion> _activeRegions = LinkedHashMap();
-  final LinkedHashMap<int, CellTransformEntry> _activeTransforms =
-      LinkedHashMap();
-  final LinkedHashMap<String, CastSetShaderPayload> _activePaneShaders =
-      LinkedHashMap();
+  final _ShaderScreenBucket _primary = _ShaderScreenBucket();
+  final _ShaderScreenBucket _alt = _ShaderScreenBucket();
   final List<CastShaderPayload> _pendingPayloads = <CastShaderPayload>[];
+  bool _inAltScreen = false;
+
+  bool get inAltScreen => _inAltScreen;
+  _ShaderScreenBucket get _active => _inAltScreen ? _alt : _primary;
 
   bool get hasPending => _pendingPayloads.isNotEmpty;
 
   void clearPending() => _pendingPayloads.clear();
 
   void clearAll() {
-    _definedShaders.clear();
-    _activeRegions.clear();
-    _activeTransforms.clear();
-    _activePaneShaders.clear();
+    _primary.clearAll();
+    _alt.clearAll();
     _pendingPayloads.clear();
+    _inAltScreen = false;
   }
 
-  void seedFromBuffer(Buffer buffer) {
-    for (final region in buffer.shaderRegions) {
-      if (_activeRegions.length >= ShaderRegion.maxRegionsPerPane) break;
-      _activeRegions[region.id] = region;
-    }
-    final table = buffer.cellTransforms;
-    if (table == null || table.isEmpty || buffer.width <= 0) return;
-    for (final entry in table.entries) {
-      if (_activeTransforms.length >= CellTransformCodec.maxLiveTransforms) {
-        break;
+  void seedFromBuffer(Buffer buffer, {bool isAltScreen = false}) {
+    _inAltScreen = isAltScreen;
+    syncFromBuffer(buffer, emitPending: false);
+  }
+
+  void syncAltScreen(bool isAltScreen) {
+    if (_inAltScreen == isAltScreen) return;
+    _inAltScreen = isAltScreen;
+    _alt.clearAll();
+    if (isAltScreen) {
+      if (_primary.activeRegions.isNotEmpty) {
+        _pendingPayloads.add(const CastResetShaderPayload(target: 'regions'));
       }
-      final col = entry.key % buffer.width;
-      final row = entry.key ~/ buffer.width;
-      _activeTransforms[(row << 16) | col] = (
-        col: col,
-        row: row,
-        transform: entry.value,
+      if (_primary.activeTransforms.isNotEmpty) {
+        _pendingPayloads.add(const CastResetShaderPayload(target: 'xforms'));
+      }
+      if (_primary.activePaneShaders.isNotEmpty) {
+        _pendingPayloads.add(const CastResetShaderPayload(target: 'pane'));
+      }
+      return;
+    }
+    _pendingPayloads.add(const CastResetShaderPayload(target: 'all'));
+    _enqueueBucketRestorePayloads(_primary);
+  }
+
+  void syncFromBuffer(Buffer buffer, {required bool emitPending}) {
+    _syncRegionsFromBuffer(buffer, emitPending: emitPending);
+    _syncTransformsFromBuffer(buffer, emitPending: emitPending);
+  }
+
+  void _syncRegionsFromBuffer(Buffer buffer, {required bool emitPending}) {
+    final next = <String, ShaderRegion>{};
+    for (final region in buffer.shaderRegions) {
+      if (next.length >= ShaderRegion.maxRegionsPerPane) break;
+      next[region.id] = region;
+    }
+    final active = _active.activeRegions;
+    for (final id in [...active.keys]) {
+      if (next.containsKey(id)) continue;
+      active.remove(id);
+      if (emitPending) {
+        _upsertRegionPayload(CastRegionShaderPayload(id: id, remove: true));
+      }
+    }
+    for (final MapEntry(:key, :value) in next.entries) {
+      if (active[key] == value) continue;
+      active[key] = value;
+      if (emitPending) {
+        _upsertRegionPayload(CastRegionShaderPayload(id: key, region: value));
+      }
+    }
+  }
+
+  void _syncTransformsFromBuffer(Buffer buffer, {required bool emitPending}) {
+    final next = <int, CellTransformEntry>{};
+    final table = buffer.cellTransforms;
+    if (table != null && table.isNotEmpty && buffer.width > 0) {
+      for (final entry in table.entries) {
+        if (next.length >= CellTransformCodec.maxLiveTransforms) break;
+        final col = entry.key % buffer.width;
+        final row = entry.key ~/ buffer.width;
+        next[(row << 16) | col] = (col: col, row: row, transform: entry.value);
+      }
+    }
+    final active = _active.activeTransforms;
+    if (_transformsEqual(active, next)) return;
+    active
+      ..clear()
+      ..addAll(next);
+    if (emitPending) {
+      _coalescePendingTransforms(
+        active.values.toList(growable: false),
+        replace: true,
       );
     }
   }
 
-  bool recordEvent(TerminalShaderApcEvent event) => switch (event) {
-    TerminalShaderQueryEvent() => false,
-    TerminalShaderDefineEvent() => _recordDefine(event),
-    TerminalShaderRegionEvent() => _recordRegion(event),
-    TerminalShaderTransformBatchEvent() => _recordTransforms(event),
-    TerminalShaderSetEvent() => _recordSet(event),
-    TerminalShaderUniformEvent() => _recordUniform(event),
-    TerminalResetShaderEvent() => _recordReset(event),
-  };
+  static bool _transformsEqual(
+    Map<int, CellTransformEntry> a,
+    Map<int, CellTransformEntry> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (final MapEntry(:key, :value) in a.entries) {
+      if (b[key] != value) return false;
+    }
+    return true;
+  }
+
+  bool recordEvent(
+    TerminalShaderApcEvent event, {
+    bool isAltScreen = false,
+    Buffer? activeBuffer,
+  }) {
+    if (event is TerminalResetShaderEvent && event.altScreenExit) {
+      return _recordAltScreenExitReset(event, activeBuffer: activeBuffer);
+    }
+    if (_inAltScreen != isAltScreen) {
+      syncAltScreen(isAltScreen);
+    }
+    return switch (event) {
+      TerminalShaderQueryEvent() => false,
+      TerminalShaderDefineEvent() => _recordDefine(event),
+      TerminalShaderRegionEvent() => _recordRegion(event),
+      TerminalShaderTransformBatchEvent() => _recordTransforms(event),
+      TerminalShaderSetEvent() => _recordSet(event),
+      TerminalShaderUniformEvent() => _recordUniform(event),
+      TerminalResetShaderEvent() => _recordReset(event),
+    };
+  }
 
   bool _recordDefine(TerminalShaderDefineEvent event) {
-    if (!_definedShaders.containsKey(event.id) &&
-        _definedShaders.length >= ShaderApcParser.maxSlots) {
+    final defines = _active.definedShaders;
+    if (!defines.containsKey(event.id) &&
+        defines.length >= ShaderApcParser.maxSlots) {
       return false;
     }
     final payload = CastDefineShaderPayload(
@@ -1551,21 +1687,22 @@ final class _ShaderSyncState {
       glslSource: event.glslSource,
       persist: event.persist,
     );
-    _definedShaders[event.id] = payload;
+    defines[event.id] = payload;
     _pendingPayloads.add(payload);
     return true;
   }
 
   bool _recordRegion(TerminalShaderRegionEvent event) {
+    final regions = _active.activeRegions;
     final isRemove = event.remove || event.region == null;
     if (isRemove) {
-      _activeRegions.remove(event.id);
+      regions.remove(event.id);
     } else {
-      if (!_activeRegions.containsKey(event.id) &&
-          _activeRegions.length >= ShaderRegion.maxRegionsPerPane) {
+      if (!regions.containsKey(event.id) &&
+          regions.length >= ShaderRegion.maxRegionsPerPane) {
         return false;
       }
-      _activeRegions[event.id] = event.region!;
+      regions[event.id] = event.region!;
     }
     final payload = CastRegionShaderPayload(
       id: event.id,
@@ -1591,22 +1728,23 @@ final class _ShaderSyncState {
   }
 
   bool _recordTransforms(TerminalShaderTransformBatchEvent event) {
+    final transforms = _active.activeTransforms;
     if (event.replace) {
-      _activeTransforms.clear();
+      transforms.clear();
     }
     final accepted = <CellTransformEntry>[];
     for (final entry in event.entries) {
       final key = (entry.row << 16) | entry.col;
       if (entry.transform == null || entry.transform!.isIdentity) {
-        _activeTransforms.remove(key);
+        transforms.remove(key);
         accepted.add((col: entry.col, row: entry.row, transform: null));
         continue;
       }
-      if (!_activeTransforms.containsKey(key) &&
-          _activeTransforms.length >= CellTransformCodec.maxLiveTransforms) {
+      if (!transforms.containsKey(key) &&
+          transforms.length >= CellTransformCodec.maxLiveTransforms) {
         continue;
       }
-      _activeTransforms[key] = entry;
+      transforms[key] = entry;
       accepted.add(entry);
     }
     if (accepted.isEmpty && !event.replace) return false;
@@ -1666,6 +1804,7 @@ final class _ShaderSyncState {
   }
 
   bool _recordSet(TerminalShaderSetEvent event) {
+    final paneShaders = _active.activePaneShaders;
     final payload = CastSetShaderPayload(
       stage: event.stage,
       presetId: event.presetId,
@@ -1674,9 +1813,9 @@ final class _ShaderSyncState {
       clear: event.clear,
     );
     if (event.clear) {
-      _activePaneShaders.remove(event.stage);
+      paneShaders.remove(event.stage);
     } else {
-      _activePaneShaders[event.stage] = payload;
+      paneShaders[event.stage] = payload;
     }
     for (var i = _pendingPayloads.length - 1; i >= 0; i--) {
       final item = _pendingPayloads[i];
@@ -1706,17 +1845,18 @@ final class _ShaderSyncState {
   }
 
   void _applyUniformToReplayState(String? id, int mask, Float32List params) {
+    final bucket = _active;
     if (id != null) {
-      final region = _activeRegions[id];
+      final region = bucket.activeRegions[id];
       if (region == null) return;
-      _activeRegions[id] = region.copyWith(
+      bucket.activeRegions[id] = region.copyWith(
         params: _mergeParamArray(region.params, mask, params),
       );
       return;
     }
-    for (final entry in [..._activePaneShaders.entries]) {
+    for (final entry in [...bucket.activePaneShaders.entries]) {
       final current = entry.value;
-      _activePaneShaders[entry.key] = CastSetShaderPayload(
+      bucket.activePaneShaders[entry.key] = CastSetShaderPayload(
         stage: current.stage,
         presetId: current.presetId,
         shaderId: current.shaderId,
@@ -1768,22 +1908,65 @@ final class _ShaderSyncState {
     return merged;
   }
 
+  bool _recordAltScreenExitReset(
+    TerminalResetShaderEvent event, {
+    Buffer? activeBuffer,
+  }) {
+    _inAltScreen = false;
+    _alt.clearAll();
+    if (activeBuffer != null) {
+      syncFromBuffer(activeBuffer, emitPending: false);
+    }
+    _pendingPayloads.add(CastResetShaderPayload(target: event.target.wireName));
+    _enqueueBucketRestorePayloads(_primary);
+    return true;
+  }
+
   bool _recordReset(TerminalResetShaderEvent event) {
-    switch (event.target) {
-      case ShaderResetTarget.all:
-        _definedShaders.clear();
-        _activeRegions.clear();
-        _activeTransforms.clear();
-        _activePaneShaders.clear();
-      case ShaderResetTarget.regions:
-        _activeRegions.clear();
-      case ShaderResetTarget.xforms:
-        _activeTransforms.clear();
-      case ShaderResetTarget.pane:
-        _activePaneShaders.clear();
+    _clearBucketTarget(_active, event.target);
+    if (!_inAltScreen && event.target == ShaderResetTarget.all) {
+      _alt.clearAll();
     }
     _pendingPayloads.add(CastResetShaderPayload(target: event.target.wireName));
     return true;
+  }
+
+  static void _clearBucketTarget(
+    _ShaderScreenBucket bucket,
+    ShaderResetTarget target,
+  ) {
+    switch (target) {
+      case ShaderResetTarget.all:
+        bucket.clearAll();
+      case ShaderResetTarget.regions:
+        bucket.activeRegions.clear();
+      case ShaderResetTarget.xforms:
+        bucket.activeTransforms.clear();
+      case ShaderResetTarget.pane:
+        bucket.activePaneShaders.clear();
+    }
+  }
+
+  void _enqueueBucketRestorePayloads(_ShaderScreenBucket bucket) {
+    for (final def in bucket.definedShaders.values) {
+      _pendingPayloads.add(def);
+    }
+    for (final region in bucket.activeRegions.values) {
+      _pendingPayloads.add(
+        CastRegionShaderPayload(id: region.id, region: region),
+      );
+    }
+    if (bucket.activeTransforms.isNotEmpty) {
+      _pendingPayloads.add(
+        CastTransformsShaderPayload(
+          entries: bucket.activeTransforms.values.toList(growable: false),
+          replace: true,
+        ),
+      );
+    }
+    for (final pane in bucket.activePaneShaders.values) {
+      _pendingPayloads.add(pane);
+    }
   }
 
   List<ShaderFrame> takePendingFrames(SessionId sessionId) {
@@ -1806,24 +1989,30 @@ final class _ShaderSyncState {
   }
 
   List<ShaderFrame> buildReplayFrames(SessionId sessionId) {
+    final defines = _inAltScreen
+        ? (LinkedHashMap<String, CastDefineShaderPayload>.of(
+            _primary.definedShaders,
+          )..addAll(_alt.definedShaders))
+        : _primary.definedShaders;
+    final bucket = _active;
     final out = <ShaderFrame>[
-      for (final def in _definedShaders.values)
+      for (final def in defines.values)
         ShaderFrame(sessionId: sessionId, payload: def),
-      for (final region in _activeRegions.values)
+      for (final region in bucket.activeRegions.values)
         ShaderFrame(
           sessionId: sessionId,
           payload: CastRegionShaderPayload(id: region.id, region: region),
         ),
     ];
-    if (_activeTransforms.isNotEmpty) {
+    if (bucket.activeTransforms.isNotEmpty) {
       _appendChunkedTransformFrames(
         out,
         sessionId,
-        _activeTransforms.values.toList(growable: false),
+        bucket.activeTransforms.values.toList(growable: false),
         replace: true,
       );
     }
-    for (final pane in _activePaneShaders.values) {
+    for (final pane in bucket.activePaneShaders.values) {
       out.add(ShaderFrame(sessionId: sessionId, payload: pane));
     }
     return out;

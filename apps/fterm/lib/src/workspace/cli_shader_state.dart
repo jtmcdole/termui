@@ -200,14 +200,20 @@ final class PaneCliShaderState {
   final Set<String> _deniedHashes = <String>{};
   final Map<String, PendingCliShaderApproval> _pendingByHash =
       <String, PendingCliShaderApproval>{};
-  final Map<String, List<({String id, bool persist})>> _pendingDefsByHash =
-      <String, List<({String id, bool persist})>>{};
+  final Map<String, List<({String id, bool persist, bool fromAltScreen})>>
+  _pendingDefsByHash =
+      <String, List<({String id, bool persist, bool fromAltScreen})>>{};
   final Map<String, _DefinedCliGlsl> _approvedDefs =
       <String, _DefinedCliGlsl>{};
   final Set<String> _altScreenApprovedIds = <String>{};
   final Map<String, tui.ShaderRegion> _activeRegions =
       <String, tui.ShaderRegion>{};
   final tui.CellTransformTable _activeTransforms = tui.CellTransformTable();
+  int _remoteTransformRev = 0;
+  tui.Buffer? _lastOverlayOut;
+  tui.Buffer? _lastOverlaySrc;
+  int _lastOverlayOutRev = -1;
+  int _lastOverlaySourceRev = -1;
   final Map<TerminalShaderStage, _ActiveCliFullPanePass> _fullPanePasses =
       <TerminalShaderStage, _ActiveCliFullPanePass>{};
   CliFullPaneConflictChoice? _resolvedConflictChoice;
@@ -454,8 +460,12 @@ final class PaneCliShaderState {
     if (pending == null) return false;
     final defs = queuedDefs != null && queuedDefs.isNotEmpty
         ? queuedDefs
-        : <({String id, bool persist})>[
-            (id: pending.shaderId, persist: pending.persist),
+        : <({String id, bool persist, bool fromAltScreen})>[
+            (
+              id: pending.shaderId,
+              persist: pending.persist,
+              fromAltScreen: false,
+            ),
           ];
     for (final entry in defs) {
       _activateApprovedDefinition(
@@ -465,6 +475,7 @@ final class PaneCliShaderState {
           source: pending.glslSource,
           persist: entry.persist,
         ),
+        fromAltScreen: entry.fromAltScreen,
       );
     }
     onVisualStateChanged();
@@ -515,6 +526,8 @@ final class PaneCliShaderState {
     _altScreenApprovedIds.clear();
     _activeRegions.clear();
     _activeTransforms.clear();
+    _remoteTransformRev++;
+    _invalidateOverlayTransformCache();
     _fullPanePasses.clear();
     _resolvedConflictChoice = null;
     _pendingFullPaneConflict = null;
@@ -535,12 +548,32 @@ final class PaneCliShaderState {
     if (_policy == CliShaderPolicy.disabled) {
       out.clearShaderRegions();
       out.clearCellTransforms();
+      _invalidateOverlayTransformCache();
       return;
     }
 
-    out.clearCellTransforms();
-    _applyTransformsToBuffer(out, src);
+    final sourceRev = isLocal ? src.transformRevision : _remoteTransformRev;
+    final transformsUpToDate =
+        identical(out, _lastOverlayOut) &&
+        (!isLocal || identical(src, _lastOverlaySrc)) &&
+        out.transformRevision == _lastOverlayOutRev &&
+        sourceRev == _lastOverlaySourceRev;
+    if (!transformsUpToDate) {
+      out.clearCellTransforms();
+      _applyTransformsToBuffer(out, src);
+      _lastOverlayOut = out;
+      _lastOverlaySrc = isLocal ? src : null;
+      _lastOverlayOutRev = out.transformRevision;
+      _lastOverlaySourceRev = sourceRev;
+    }
     _applyRegionsToBuffer(out, src);
+  }
+
+  void _invalidateOverlayTransformCache() {
+    _lastOverlayOut = null;
+    _lastOverlaySrc = null;
+    _lastOverlayOutRev = -1;
+    _lastOverlaySourceRev = -1;
   }
 
   /// Combines active CLI `a=set` full-pane passes with [userConfig] according
@@ -601,6 +634,7 @@ final class PaneCliShaderState {
     _altScreenApprovedIds.clear();
     _activeRegions.clear();
     _activeTransforms.clear();
+    _invalidateOverlayTransformCache();
     _fullPanePasses.clear();
   }
 
@@ -638,16 +672,25 @@ final class PaneCliShaderState {
     if (existingDefs != null) {
       final idx = existingDefs.indexWhere((e) => e.id == event.id);
       if (idx >= 0) {
-        existingDefs[idx] = (id: event.id, persist: event.persist);
+        existingDefs[idx] = (
+          id: event.id,
+          persist: event.persist,
+          fromAltScreen: existingDefs[idx].fromAltScreen && onAltScreen,
+        );
       } else if (existingDefs.length < maxCustomSlots) {
-        existingDefs.add((id: event.id, persist: event.persist));
+        existingDefs.add((
+          id: event.id,
+          persist: event.persist,
+          fromAltScreen: onAltScreen,
+        ));
       }
       return;
     }
     if (_pendingByHash.length >= maxPendingPrompts) return;
-    _pendingDefsByHash[hash] = <({String id, bool persist})>[
-      (id: event.id, persist: event.persist),
-    ];
+    _pendingDefsByHash[hash] =
+        <({String id, bool persist, bool fromAltScreen})>[
+          (id: event.id, persist: event.persist, fromAltScreen: onAltScreen),
+        ];
     _pendingByHash[hash] = PendingCliShaderApproval(
       paneId: paneId,
       paneLabel: readPaneLabel(),
@@ -689,6 +732,7 @@ final class PaneCliShaderState {
         _activeTransforms.set(key, t.sanitized());
       }
     }
+    _remoteTransformRev++;
     onVisualStateChanged();
   }
 
@@ -764,6 +808,7 @@ final class PaneCliShaderState {
         onVisualStateChanged();
       case ShaderResetTarget.xforms:
         _activeTransforms.clear();
+        _remoteTransformRev++;
         onVisualStateChanged();
       case ShaderResetTarget.pane:
         _fullPanePasses.clear();
@@ -779,6 +824,7 @@ final class PaneCliShaderState {
     _pendingDefsByHash.clear();
     _activeRegions.clear();
     _activeTransforms.clear();
+    _remoteTransformRev++;
     _fullPanePasses.clear();
     _resolvedConflictChoice = null;
     _pendingFullPaneConflict = null;
@@ -818,8 +864,8 @@ final class PaneCliShaderState {
       final queuedDefs = _pendingDefsByHash.remove(item.sha256);
       final defs = queuedDefs != null && queuedDefs.isNotEmpty
           ? queuedDefs
-          : <({String id, bool persist})>[
-              (id: item.shaderId, persist: item.persist),
+          : <({String id, bool persist, bool fromAltScreen})>[
+              (id: item.shaderId, persist: item.persist, fromAltScreen: false),
             ];
       for (final entry in defs) {
         _activateApprovedDefinition(
@@ -829,6 +875,7 @@ final class PaneCliShaderState {
             source: item.glslSource,
             persist: entry.persist,
           ),
+          fromAltScreen: entry.fromAltScreen,
         );
       }
     }

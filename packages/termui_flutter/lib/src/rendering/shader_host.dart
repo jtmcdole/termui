@@ -612,6 +612,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
 
   void _onExternalActivity() {
     if (!mounted || (_isInactive && !_canUseDirectTerminalRender)) return;
+    _backgroundDirty = true;
     _childCaptureDirty = true;
     _regionFallbackDirty = true;
     final prevVisible = _cursorVisible;
@@ -1132,20 +1133,23 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
         widget.config.backgroundPasses,
         physicalSize,
       );
-      if (invocations.isNotEmpty) {
-        final result = _tryRenderBackgroundSync(
-          backend,
-          invocations,
-          physicalSize,
-        );
-        if (result.image != null) {
-          _backgroundDirty = false;
-          _replaceBackgroundOutputImage(result.image, notify: false);
-          return result.image;
-        }
-        if (result.failed || _wasLastSyncFrameSkipped(backend)) {
-          return _backgroundOutputImage;
-        }
+      if (invocations.isEmpty) {
+        _backgroundDirty = false;
+        _replaceBackgroundOutputImage(null, notify: false);
+        return null;
+      }
+      final result = _tryRenderBackgroundSync(
+        backend,
+        invocations,
+        physicalSize,
+      );
+      if (result.image != null) {
+        _backgroundDirty = false;
+        _replaceBackgroundOutputImage(result.image, notify: false);
+        return result.image;
+      }
+      if (result.failed || _wasLastSyncFrameSkipped(backend)) {
+        return _backgroundOutputImage;
       }
     }
     if (_backgroundDirty || _backgroundOutputImage == null) {
@@ -1218,7 +1222,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   }
 
   Future<void> _runAsyncBackgroundPipeline() async {
-    if (!mounted || !_hasCompiledBackgroundPasses || _backgroundInFlight) {
+    if (!mounted ||
+        !_hasCompiledBackgroundPasses ||
+        _isDirectModeActive ||
+        _backgroundInFlight) {
       return;
     }
     final physicalSize = _pendingAsyncBgPhysicalSize;
@@ -1229,7 +1236,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       widget.config.backgroundPasses,
       physicalSize,
     );
-    if (invocations.isEmpty) return;
+    if (invocations.isEmpty) {
+      _replaceBackgroundOutputImage(null);
+      return;
+    }
 
     _backgroundInFlight = true;
     _backgroundPending = false;
@@ -1241,7 +1251,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
         wallpaperImage: _effectiveWallpaper,
         watchdog: widget.watchdog,
       );
-      if (!mounted) {
+      if (!mounted || !_hasCompiledBackgroundPasses || _isDirectModeActive) {
         nextImage?.dispose();
         return;
       }
@@ -1259,7 +1269,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       );
     } finally {
       _backgroundInFlight = false;
-      if (mounted && _backgroundPending && _hasCompiledBackgroundPasses) {
+      if (mounted &&
+          _backgroundPending &&
+          _hasCompiledBackgroundPasses &&
+          !_isDirectModeActive) {
         _backgroundPending = false;
         _scheduleAsyncBackgroundRender(_pendingAsyncBgPhysicalSize);
       }
@@ -1321,7 +1334,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   bool _isCaptureBoundaryReady() => _readyCaptureBoundary() != null;
 
   Future<void> _runForegroundPipeline() async {
-    if (!mounted || !_hasCompiledForegroundPasses || _foregroundInFlight) {
+    if (!mounted ||
+        !_hasCompiledForegroundPasses ||
+        _isDirectModeActive ||
+        _foregroundInFlight) {
       return;
     }
     final boundary = _readyCaptureBoundary();
@@ -1357,7 +1373,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
           sw.elapsedMicroseconds,
         );
       }
-      if (mounted && _foregroundPending && _hasCompiledForegroundPasses) {
+      if (mounted &&
+          _foregroundPending &&
+          _hasCompiledForegroundPasses &&
+          !_isDirectModeActive) {
         _foregroundPending = false;
         _scheduleForegroundRender();
       }
@@ -1370,7 +1389,9 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     Size physicalSize,
   ) async {
     await _ensureChildCapture(boundary, physicalSize);
-    if (!mounted || !_hasCompiledForegroundPasses) return;
+    if (!mounted || !_hasCompiledForegroundPasses || _isDirectModeActive) {
+      return;
+    }
 
     _lastLogicalSize = logicalSize;
     _syncCursorState(logicalSize);
@@ -1392,7 +1413,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       wallpaperImage: _effectiveWallpaper,
       watchdog: widget.watchdog,
     );
-    if (!mounted) {
+    if (!mounted || !_hasCompiledForegroundPasses || _isDirectModeActive) {
       nextImage?.dispose();
       return;
     }
@@ -1413,7 +1434,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
 
     _childCaptureDirty = false;
     final captured = await boundary.toImage(pixelRatio: _devicePixelRatio);
-    if (!mounted) {
+    if (!mounted || !_hasCompiledForegroundPasses || _isDirectModeActive) {
       captured.dispose();
       return;
     }
