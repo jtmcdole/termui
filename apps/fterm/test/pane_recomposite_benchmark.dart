@@ -209,105 +209,102 @@ void main() {
     },
   );
 
-  test(
-    'local PtyRouterSession 200x60 full vs incremental echo & FileSettingsStorage 50-flush latency benchmark',
-    () async {
-      const cols = 200;
-      const rows = 60;
-      final backend = _BenchPtyBackend();
-      final router = PtyRouter();
-      final session = router.createSession(
-        backend: backend,
-        initialCols: cols,
-        initialRows: rows,
-        emitIndexedColors: true,
-      );
-      final localPort = session.openPort(initialCols: cols, initialRows: rows);
-      final resolver = TerminalColorResolver(
-        theme: tui.TerminalColorTheme.solarizedDark,
-        settings: const TerminalThemeSettings(
-          minimumContrast: 4.5,
-          boldIsBright: true,
-        ),
-      );
-      final pane = FtermPaneController(
-        paneId: 'bench-local',
-        port: localPort,
-        colorResolver: resolver,
-      )..setFocused(true);
+  test('local PtyRouterSession 200x60 full vs incremental echo & FileSettingsStorage 50-flush latency benchmark', () async {
+    const cols = 200;
+    const rows = 60;
+    final backend = _BenchPtyBackend();
+    final router = PtyRouter();
+    final session = router.createSession(
+      backend: backend,
+      initialCols: cols,
+      initialRows: rows,
+      emitIndexedColors: true,
+    );
+    final localPort = session.openPort(initialCols: cols, initialRows: rows);
+    final resolver = TerminalColorResolver(
+      theme: tui.TerminalColorTheme.solarizedDark,
+      settings: const TerminalThemeSettings(
+        minimumContrast: 4.5,
+        boldIsBright: true,
+      ),
+    );
+    final pane = FtermPaneController(
+      paneId: 'bench-local',
+      port: localPort,
+      colorResolver: resolver,
+    )..setFocused(true);
 
-      // Fill screen with dense multi-color indexed ANSI output.
-      final seedBuf = StringBuffer();
-      var seed = 9876543;
-      for (var y = 0; y < rows; y++) {
-        for (var x = 0; x < cols; x++) {
-          seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF;
-          final fg = 16 + (seed % 240);
-          final bg = 16 + ((seed >> 8) % 240);
-          final ch = String.fromCharCode(0x21 + (seed % 94));
-          seedBuf.write('\x1b[38;5;$fg;48;5;${bg}m$ch');
-        }
-        if (y < rows - 1) seedBuf.write('\r\n');
+    // Fill screen with dense multi-color indexed ANSI output.
+    final seedBuf = StringBuffer();
+    var seed = 9876543;
+    for (var y = 0; y < rows; y++) {
+      for (var x = 0; x < cols; x++) {
+        seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF;
+        final fg = 16 + (seed % 240);
+        final bg = 16 + ((seed >> 8) % 240);
+        final ch = String.fromCharCode(0x21 + (seed % 94));
+        seedBuf.write('\x1b[38;5;$fg;48;5;${bg}m$ch');
       }
-      backend.emitBytes(Uint8List.fromList(seedBuf.toString().codeUnits));
-      await Future<void>.delayed(Duration.zero);
+      if (y < rows - 1) seedBuf.write('\r\n');
+    }
+    backend.emitBytes(Uint8List.fromList(seedBuf.toString().codeUnits));
+    await Future<void>.delayed(Duration.zero);
 
-      for (var i = 0; i < 20; i++) {
-        pane.setColorResolver(resolver);
-      }
-      const fullIters = 200;
-      final swFull = Stopwatch()..start();
-      for (var i = 0; i < fullIters; i++) {
-        pane.setColorResolver(resolver);
-      }
-      swFull.stop();
-      final fullUs = swFull.elapsedMicroseconds / fullIters;
+    for (var i = 0; i < 20; i++) {
+      pane.setColorResolver(resolver);
+    }
+    const fullIters = 200;
+    final swFull = Stopwatch()..start();
+    for (var i = 0; i < fullIters; i++) {
+      pane.setColorResolver(resolver);
+    }
+    swFull.stop();
+    final fullUs = swFull.elapsedMicroseconds / fullIters;
 
-      final oneChar = Uint8List.fromList('\x1b[10;10HA'.codeUnits);
-      for (var i = 0; i < 30; i++) {
-        backend.emitBytes(oneChar);
-        await Future<void>.microtask(() {});
-      }
-      const incIters = 500;
-      final swInc = Stopwatch()..start();
-      for (var i = 0; i < incIters; i++) {
-        backend.emitBytes(oneChar);
-        await Future<void>.microtask(() {});
-      }
-      swInc.stop();
-      final incUs = swInc.elapsedMicroseconds / incIters;
-      expect(incUs, lessThan(fullUs));
+    final oneChar = Uint8List.fromList('\x1b[10;10HA'.codeUnits);
+    for (var i = 0; i < 30; i++) {
+      backend.emitBytes(oneChar);
+      await Future<void>.microtask(() {});
+    }
+    const incIters = 500;
+    final swInc = Stopwatch()..start();
+    for (var i = 0; i < incIters; i++) {
+      backend.emitBytes(oneChar);
+      await Future<void>.microtask(() {});
+    }
+    swInc.stop();
+    final incUs = swInc.elapsedMicroseconds / incIters;
+    expect(incUs, lessThan(fullUs));
 
-      // FileSettingsStorage + ThrottledSettingsSaver 50-flush latency benchmark.
-      final tempDir = Directory.systemTemp.createTempSync('fterm_bench_cfg_');
-      addTearDown(() => tempDir.deleteSync(recursive: true));
-      final storage = FileSettingsStorage(
-        File(p.join(tempDir.path, 'fterm', 'settings.json')),
-      );
-      final saver = ThrottledSettingsSaver(storage);
-      final swFlush = Stopwatch()..start();
-      for (var i = 0; i < 50; i++) {
-        saver.save(CastWorkspaceSettings(copyOnSelect: i.isEven));
-        saver.savePreferences(FtermPreferences(audioMuted: i.isOdd));
-        saver.flush();
-      }
-      await saver.flushAsync();
-      swFlush.stop();
-      saver.dispose();
+    // FileSettingsStorage + ThrottledSettingsSaver 50-flush latency benchmark.
+    final tempDir = Directory.systemTemp.createTempSync('fterm_bench_cfg_');
+    addTearDown(() => tempDir.deleteSync(recursive: true));
+    final storage = FileSettingsStorage(
+      File(p.join(tempDir.path, 'fterm', 'settings.json')),
+    );
+    final saver = ThrottledSettingsSaver(storage);
+    final swFlush = Stopwatch()..start();
+    for (var i = 0; i < 50; i++) {
+      saver.save(CastWorkspaceSettings(copyOnSelect: i.isEven));
+      saver.savePreferences(FtermPreferences(audioMuted: i.isOdd));
+      saver.flush();
+    }
+    await saver.flushAsync();
+    swFlush.stop();
+    saver.dispose();
 
-      // ignore: avoid_print
-      print(
-        'local_pane_recomposite_benchmark (200x60): '
-        'full=${fullUs.toStringAsFixed(1)}us/op, '
-        'oneCellIncremental=${incUs.toStringAsFixed(1)}us/op; '
-        'settings_50_flushes=${swFlush.elapsedMilliseconds}ms',
-      );
+    // ignore: avoid_print
+    print(
+      'local_pane_recomposite_benchmark (200x60): '
+      'full=${fullUs.toStringAsFixed(1)}us/op, '
+      'oneCellIncremental=${incUs.toStringAsFixed(1)}us/op; '
+      'settings_50_flushes=${swFlush.elapsedMilliseconds}ms',
+    );
 
-      await pane.dispose(disposePort: false);
-      await localPort.dispose();
-      await router.dispose();
-    },
-  );
+    await pane.dispose(disposePort: false);
+    await localPort.dispose();
+    await router.dispose();
+  });
 }
 
 final class _BenchPtyBackend implements RoutedPtyBackend {

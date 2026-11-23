@@ -8,8 +8,10 @@ import 'update_service.dart';
 
 /// Factory signature for scheduling cancellable one-shot timers (injectable in
 /// tests so zero timers leak).
-typedef UpdateTimerFactory =
-    Timer Function(Duration duration, VoidCallback callback);
+typedef UpdateTimerFactory = Timer Function(
+  Duration duration,
+  VoidCallback callback,
+);
 
 /// MVVM ViewModel coordinating `fterm` release checks, archive staging,
 /// download progress, and restart/apply-on-quit actions.
@@ -47,22 +49,17 @@ final class UpdateViewModel extends ChangeNotifier {
 
   /// Creates an [UpdateViewModel].
   UpdateViewModel({
-    required UpdateService service,
-    required FtermPreferences Function() readPreferences,
-    required void Function(FtermPreferences next) writePreferences,
-    Future<void> Function()? beforeExitTeardown,
+    required this._service,
+    required this._readPreferences,
+    required this._writePreferences,
+    this._beforeExitTeardown,
     List<String> relaunchArgs = const [],
-    VoidCallback? onCoarseStateChanged,
+    this._onCoarseStateChanged,
     Clock? clock,
     UpdateTimerFactory? timerFactory,
-  }) : _service = service,
-       _readPreferences = readPreferences,
-       _writePreferences = writePreferences,
-       _beforeExitTeardown = beforeExitTeardown,
-       _relaunchArgs = relaunchArgs.isEmpty
+  }) : _relaunchArgs = relaunchArgs.isEmpty
            ? const []
            : List<String>.unmodifiable(relaunchArgs),
-       _onCoarseStateChanged = onCoarseStateChanged,
        _clock = clock ?? const Clock(),
        _timerFactory = timerFactory ?? Timer.new;
 

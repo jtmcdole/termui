@@ -14,29 +14,53 @@ import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart' show SessionId;
+import 'package:termui_flutter/termui_flutter.dart'
+    show
+        CliShaderRegistry,
+        GpuFrameWatchdog,
+        ShaderBackendKind,
+        TerminalBufferChangeSignal,
+        TerminalShaderBackend,
+        TerminalShaderConfig;
 import 'package:termui_pty/termui_pty.dart';
 
+import '../settings_storage.dart';
+import 'cli_shader_state.dart';
 import 'local_host_driver.dart';
 
 /// Callback notified when a terminal pane receives `BEL`.
 typedef PaneBellCallback = void Function(String paneId);
 
 /// Callback notified when a terminal pane decodes an `ESC _ A` audio event.
-typedef PaneAudioCallback =
-    void Function(String paneId, TerminalAudioEvent event);
+typedef PaneAudioCallback = void Function(
+  String paneId,
+  TerminalAudioEvent event,
+);
 
 /// Callback notified when a pane's shell title updates via `OSC 0`/`OSC 2`.
 typedef PaneTitleCallback = void Function(String paneId, String title);
 
 /// Callback notified when a pane receives an `OSC 52` clipboard write.
-typedef PaneClipboardCallback =
-    void Function(String paneId, String selection, String text);
+typedef PaneClipboardCallback = void Function(
+  String paneId,
+  String selection,
+  String text,
+);
 
 /// Callback notified when a pane's backing shell or remote session exits.
 typedef PaneExitedCallback = void Function(String paneId, int exitCode);
 
-final class _PaneChangeNotifier extends ChangeNotifier {
+final class _PaneChangeNotifier extends ChangeNotifier
+    implements TerminalBufferChangeSignal {
   int _listenerCount = 0;
+  int _cellContentRevision = 0;
+
+  @override
+  int get cellContentRevision => _cellContentRevision;
+
+  void bumpCellContentRevision() {
+    _cellContentRevision += 1;
+  }
 
   @override
   void addListener(VoidCallback listener) {
@@ -60,6 +84,7 @@ final class _PaneChangeNotifier extends ChangeNotifier {
 final class FtermPaneController {
   static const int _maxInputChunkBytes = 4096;
   static const int _wheelScrollLines = 3;
+  static const int _scrollbarThumbCode = 0x2590;
 
   /// Stable unique pane identifier within the workspace.
   final String paneId;
@@ -84,7 +109,10 @@ final class FtermPaneController {
   PaneClipboardCallback? _onClipboard;
   PaneExitedCallback? _onExited;
   void Function()? _onShareChanged;
+  void Function(String paneId)? _onCliShaderUiChanged;
+  PaneCliShaderQuarantinedCallback? _onCliShaderQuarantined;
 
+  late final PaneCliShaderState _cliShaderState;
   TerminalColorResolver _colorResolver;
   tui.Buffer? _composedBuffer;
   Timer? _resizeTimer;
@@ -107,36 +135,111 @@ final class FtermPaneController {
   bool _hasExited = false;
   int? _exitStatus;
   String _shellTitle = '';
+  bool _deferPortShaderRecomposite = false;
+  bool _pendingDeferredShaderRecomposite = false;
   bool _disposed = false;
 
   /// Attaches a pane controller to [port].
   FtermPaneController({
     required this.paneId,
     required this.port,
-    required TerminalColorResolver colorResolver,
+    required this._colorResolver,
     this.localHost,
     this.remoteSessionId,
-    Duration resizeDebounce = const Duration(milliseconds: 32),
-    PaneBellCallback? onBell,
-    PaneAudioCallback? onAudio,
-    PaneTitleCallback? onTitleChanged,
-    PaneClipboardCallback? onClipboard,
-    PaneExitedCallback? onExited,
-    void Function()? onShareChanged,
-    void Function(tui.Buffer buffer)? onFrameRedrawn,
-  }) : _colorResolver = colorResolver,
-       _resizeDebounce = resizeDebounce,
-       _onBell = onBell,
-       _onAudio = onAudio,
-       _onTitleChanged = onTitleChanged,
-       _onClipboard = onClipboard,
-       _onExited = onExited,
-       _onShareChanged = onShareChanged,
-       _onFrameRedrawn = onFrameRedrawn {
+    this._resizeDebounce = const Duration(milliseconds: 32),
+    this._onBell,
+    this._onAudio,
+    this._onTitleChanged,
+    this._onClipboard,
+    this._onExited,
+    this._onShareChanged,
+    this._onFrameRedrawn,
+    CliShaderPolicy? cliShaderPolicy,
+    CliFullPaneShaderMode cliFullPaneShaderMode =
+        CliFullPaneShaderMode.cliBeforeUser,
+    Set<String> trustedCliShaderHashes = const <String>{},
+    TerminalShaderBackend? shaderBackend,
+    GpuFrameWatchdog? gpuFrameWatchdog,
+    this._onCliShaderUiChanged,
+    this._onCliShaderQuarantined,
+  }) {
     _shellTitle = _resolveInitialTitle();
     _lastScrollbackClearSeq = port.scrollbackWindow.clearSeq;
+    _cliShaderState = PaneCliShaderState(
+      paneId: paneId,
+      isLocal: localHost != null,
+      initialPolicy:
+          cliShaderPolicy ??
+          (localHost != null
+              ? CliShaderPolicy.promptCustomGlsl
+              : CliShaderPolicy.disabled),
+      initialFullPaneMode: cliFullPaneShaderMode,
+      trustedHashes: trustedCliShaderHashes,
+      readPaneLabel: _resolvePaneLabel,
+      onVisualStateChanged: _handleCliShaderVisualChanged,
+      onPolicyUiChanged: _handleCliShaderUiChanged,
+      onQuarantined: _handleCliShaderQuarantined,
+      backend: shaderBackend,
+      watchdog: gpuFrameWatchdog,
+    );
+    port.setShaderCapabilities(
+      _cliShaderState.resolveCapabilities(
+        shaderBackend?.kind ?? ShaderBackendKind.disabled,
+      ),
+    );
     _attachPortListeners();
     _recomposite(notify: false);
+  }
+
+  String _resolvePaneLabel() {
+    if (_shellTitle.isNotEmpty) return _shellTitle;
+    if (remoteSessionId case final id?) return id.value;
+    return paneId;
+  }
+
+  /// Per-pane CLI `ESC _ S` trust policy, SHA-256 prompt queue, and state.
+  PaneCliShaderState get cliShaderState => _cliShaderState;
+
+  /// Per-pane compiled CLI shader registry (`4s` timeout, `32 KiB` cap).
+  CliShaderRegistry get cliShaderRegistry => _cliShaderState.registry;
+
+  /// Per-pane best-effort GPU watchdog isolating offending custom CLI shaders.
+  GpuFrameWatchdog get gpuFrameWatchdog => _cliShaderState.watchdog;
+
+  /// Resolves the effective [TerminalShaderConfig] for this pane by combining
+  /// active CLI full-pane passes with [userConfig].
+  TerminalShaderConfig resolveShaderConfig(TerminalShaderConfig userConfig) =>
+      _cliShaderState.resolveFullPaneConfig(userConfig);
+
+  /// Updates the active CLI shader policy, stacking mode, and trusted hashes.
+  void syncCliShaderPolicy({
+    required CliShaderPolicy policy,
+    required CliFullPaneShaderMode fullPaneMode,
+    required Set<String> trustedHashes,
+    required bool userHasFullPaneShaders,
+    required ShaderBackendKind backendKind,
+  }) {
+    if (_disposed) return;
+    _cliShaderState.updatePolicy(
+      policy: policy,
+      fullPaneMode: fullPaneMode,
+      trustedHashes: trustedHashes,
+      userHasFullPaneShaders: userHasFullPaneShaders,
+    );
+    port.setShaderCapabilities(
+      _cliShaderState.resolveCapabilities(backendKind),
+    );
+  }
+
+  /// Attaches or switches the backing GPU/WebGL2 shader [backend].
+  void attachShaderBackend(TerminalShaderBackend? backend) {
+    if (_disposed) return;
+    _cliShaderState.attachBackend(backend);
+    port.setShaderCapabilities(
+      _cliShaderState.resolveCapabilities(
+        backend?.kind ?? ShaderBackendKind.disabled,
+      ),
+    );
   }
 
   /// Whether this pane hosts a local desktop shell.
@@ -240,7 +343,10 @@ final class FtermPaneController {
         : (localHost?.isLiveRowWrapped(liveY) ?? false);
     return (
       isWrapped: isWrapped,
-      characters: liveBuffer.characters.sublist(start, end),
+      characters: WorkspaceBufferCompositor.rowCharactersView(
+        liveBuffer,
+        liveY,
+      ),
       uris: liveBuffer.sliceUris(start, end),
     );
   }
@@ -267,6 +373,12 @@ final class FtermPaneController {
 
   /// Stable tear-off reading [cursorPosition] for `TerminalSurface`.
   ({int col, int row}) readCursorPosition() => cursorPosition;
+
+  /// Whether the terminal cursor is currently visible at the live bottom row.
+  bool get cursorVisible => port.cursor.visible && _scrollOffsetLines == 0;
+
+  /// Stable tear-off reading [cursorVisible] for `TerminalSurface`.
+  bool readCursorVisible() => cursorVisible;
 
   /// Active Kitty keyboard progressive enhancement flags (`0..31`).
   int get kittyKeyboardFlags => port.modes.kittyKeyboardFlags;
@@ -330,6 +442,7 @@ final class FtermPaneController {
     port.addListener(_handlePortChange);
     port.addBellListener(_handleBell);
     port.addAudioListener(_handleAudio);
+    port.addShaderListener(_handleShaderEvent);
     port.addTitleListener(_handleTitle);
     port.addClipboardListener(_handleClipboard);
 
@@ -352,6 +465,7 @@ final class FtermPaneController {
 
   void _handlePortChange() {
     if (_disposed) return;
+    _pendingDeferredShaderRecomposite = false;
     _recomposite(notify: true);
   }
 
@@ -364,6 +478,53 @@ final class FtermPaneController {
   void _handleAudio(TerminalAudioEvent event) {
     if (_disposed) return;
     _onAudio?.call(paneId, event);
+  }
+
+  void _handleShaderEvent(TerminalShaderApcEvent event) {
+    if (_disposed) return;
+    // Local PTY ports emit onShaderEvent synchronously during VirtualTerminal
+    // parsing and follow immediately with _handlePortChange. Deferring visual
+    // recomposition avoids double-recompositing every 25 Hz shader keyframe,
+    // with a microtask fallback for synthetic ports that omit onChange.
+    final deferVisual =
+        localHost != null && event is! TerminalShaderDefineEvent;
+    _deferPortShaderRecomposite = deferVisual;
+    try {
+      _cliShaderState.handleShaderEvent(
+        event,
+        onAltScreen: port.modes.altScreen,
+      );
+    } finally {
+      _deferPortShaderRecomposite = false;
+    }
+  }
+
+  void _handleCliShaderVisualChanged() {
+    if (_disposed) return;
+    if (_deferPortShaderRecomposite) {
+      if (!_pendingDeferredShaderRecomposite) {
+        _pendingDeferredShaderRecomposite = true;
+        scheduleMicrotask(_flushDeferredShaderRecomposite);
+      }
+      return;
+    }
+    _recomposite(notify: true);
+  }
+
+  void _flushDeferredShaderRecomposite() {
+    if (_disposed || !_pendingDeferredShaderRecomposite) return;
+    _pendingDeferredShaderRecomposite = false;
+    _recomposite(notify: true);
+  }
+
+  void _handleCliShaderUiChanged() {
+    if (_disposed) return;
+    _onCliShaderUiChanged?.call(paneId);
+  }
+
+  void _handleCliShaderQuarantined(String id, String shaderId, String reason) {
+    if (_disposed) return;
+    _onCliShaderQuarantined?.call(id, shaderId, reason);
   }
 
   void _handleTitle(String title) {
@@ -383,6 +544,7 @@ final class FtermPaneController {
     if (_disposed || _hasExited) return;
     _hasExited = true;
     _exitStatus = code;
+    _cliShaderState.resetAll(notify: true);
     _onExited?.call(paneId, code);
     if (!_disposed) {
       _pillNotifier.emitChange();
@@ -503,7 +665,8 @@ final class FtermPaneController {
       case ev.CursorPositionReportEvent() ||
           ev.KittyGraphicsEvent() ||
           ev.KittyKeyboardEvent() ||
-          ev.AudioApcReplyEvent():
+          ev.AudioApcReplyEvent() ||
+          ev.ShaderCapabilitiesEvent():
         break;
     }
   }
@@ -625,9 +788,12 @@ final class FtermPaneController {
     _populateRows(out, src, sbWin);
     if (_scrollOffsetLines == 0) {
       out.propagateMetadataFrom(src);
+      _cliShaderState.applyOverlaysToBuffer(out, src);
       _lastCursorCellIndex = _paintCursorIfVisible(out);
     } else {
       _lastCursorCellIndex = -1;
+      out.clearShaderRegions();
+      out.clearCellTransforms();
       _propagateScrolledKittyMetadata(out, src);
       _paintScrollbarThumb(out, _retainedScrollbackLines(sbWin));
     }
@@ -635,6 +801,7 @@ final class FtermPaneController {
     _lastComposedHeight = out.height;
     _lastComposedScrollOffset = _scrollOffsetLines;
     _lastComposedRevision = _scrollOffsetLines == 0 ? port.renderRevision : -1;
+    _visualNotifier.bumpCellContentRevision();
   }
 
   bool _tryIncrementalRecomposite(tui.Buffer out, tui.Buffer src) {
@@ -652,11 +819,38 @@ final class FtermPaneController {
 
     final totalCells = out.width * out.height;
     final prevCursorIdx = _lastCursorCellIndex;
-    if (prevCursorIdx >= 0 && prevCursorIdx < totalCells) {
-      _copyResolvedSpan(out, src, prevCursorIdx, 1);
+    final targetCursorIdx = _targetCursorCellIndex(out);
+    final sinceRev = _lastComposedRevision;
+    final hasDirtySpans = _hasDirtySpansSince(port.dirtySpans, sinceRev);
+    final cellsChanged = hasDirtySpans || targetCursorIdx != prevCursorIdx;
+
+    if (cellsChanged) {
+      if (prevCursorIdx >= 0 && prevCursorIdx < totalCells) {
+        _copyResolvedSpan(out, src, prevCursorIdx, 1);
+      }
+      _applyDirtySpans(out, src, sinceRev, totalCells);
+      _lastCursorCellIndex = _paintCursorIfVisible(out);
+      _visualNotifier.bumpCellContentRevision();
     }
 
-    final sinceRev = _lastComposedRevision;
+    _cliShaderState.applyOverlaysToBuffer(out, src);
+    _lastComposedRevision = port.renderRevision;
+    return true;
+  }
+
+  bool _hasDirtySpansSince(List<DirtyCellSpan> spans, int sinceRev) {
+    for (final span in spans) {
+      if (span.revision > sinceRev) return true;
+    }
+    return false;
+  }
+
+  void _applyDirtySpans(
+    tui.Buffer out,
+    tui.Buffer src,
+    int sinceRev,
+    int totalCells,
+  ) {
     for (final span in port.dirtySpans) {
       if (span.revision <= sinceRev) continue;
       final start = span.start.clamp(0, totalCells);
@@ -666,10 +860,16 @@ final class FtermPaneController {
         _copyResolvedSpan(out, src, start, len);
       }
     }
+  }
 
-    _lastCursorCellIndex = _paintCursorIfVisible(out);
-    _lastComposedRevision = port.renderRevision;
-    return true;
+  int _targetCursorCellIndex(tui.Buffer out) {
+    final cursor = port.cursor;
+    if (!cursor.visible || !_focused || out.width <= 0 || out.height <= 0) {
+      return -1;
+    }
+    final cx = cursor.x.clamp(0, out.width - 1);
+    final cy = cursor.y.clamp(0, out.height - 1);
+    return cy * out.width + cx;
   }
 
   void _copyResolvedSpan(tui.Buffer out, tui.Buffer src, int start, int len) {
@@ -677,7 +877,7 @@ final class FtermPaneController {
       out: out,
       dstOffset: start,
       copyCols: len,
-      srcChars: src.characters,
+      srcChars: src.glyphCellList,
       srcAttrs: src.attributes,
       srcStartCell: start,
     );
@@ -738,7 +938,7 @@ final class FtermPaneController {
   void _clearScreenRow(tui.Buffer out, int screenY) {
     final start = screenY * out.width;
     final end = start + out.width;
-    out.characters.fillRange(start, end, ' ');
+    out.glyphCellList.fillCodeRange(start, end, tui.GlyphCellList.spaceCode);
     out.attributes.fillRange(start * 3, end * 3, 0);
     out.clearCellAuxRange(start, end);
   }
@@ -751,7 +951,7 @@ final class FtermPaneController {
       out: out,
       dstOffset: dstOffset,
       copyCols: copyCols,
-      srcChars: src.characters,
+      srcChars: src.glyphCellList,
       srcAttrs: src.attributes,
       srcStartCell: srcOffset,
     );
@@ -789,7 +989,11 @@ final class FtermPaneController {
     if (copyCols >= out.width) return;
     final tailStart = dstOffset + copyCols;
     final tailEnd = dstOffset + out.width;
-    out.characters.fillRange(tailStart, tailEnd, ' ');
+    out.glyphCellList.fillCodeRange(
+      tailStart,
+      tailEnd,
+      tui.GlyphCellList.spaceCode,
+    );
     out.attributes.fillRange(tailStart * 3, tailEnd * 3, 0);
   }
 
@@ -801,21 +1005,40 @@ final class FtermPaneController {
     required Uint32List srcAttrs,
     required int srcStartCell,
   }) {
-    final outChars = out.characters;
+    if (copyCols <= 0) return;
+    final outGlyphs = out.glyphCellList;
+    if (srcChars is tui.GlyphCellList) {
+      outGlyphs.copyCellsFrom(srcChars, dstOffset, srcStartCell, copyCols);
+    } else {
+      outGlyphs.setRange(
+        dstOffset,
+        dstOffset + copyCols,
+        srcChars,
+        srcStartCell,
+      );
+    }
     final outAttrs = out.attributes;
     for (var col = 0; col < copyCols; col++) {
       final srcIdx = srcStartCell + col;
       final dstIdx = dstOffset + col;
-      final ch = srcChars[srcIdx];
-      outChars[dstIdx] = ch;
       final sBase = srcIdx * 3;
+      final dBase = dstIdx * 3;
+      final rawFg = srcAttrs[sBase];
+      final rawBg = srcAttrs[sBase + 1];
+      final mods = srcAttrs[sBase + 2] & ~tui.Modifier.transparent;
+      if (!rawFg.isAnsiIndexed && !rawBg.isAnsiIndexed) {
+        outAttrs[dBase] = rawFg;
+        outAttrs[dBase + 1] = rawBg;
+        outAttrs[dBase + 2] = mods;
+        continue;
+      }
       _colorResolver.resolveCellInto(
-        rawFg: srcAttrs[sBase],
-        rawBg: srcAttrs[sBase + 1],
-        modifiers: srcAttrs[sBase + 2] & ~tui.Modifier.transparent,
-        grapheme: ch,
+        rawFg: rawFg,
+        rawBg: rawBg,
+        modifiers: mods,
+        grapheme: outGlyphs[dstIdx],
         outAttributes: outAttrs,
-        attrOffset: dstIdx * 3,
+        attrOffset: dBase,
       );
     }
   }
@@ -879,7 +1102,7 @@ final class FtermPaneController {
     final x = out.width - 1;
     for (var y = top; y < top + thumbH; y++) {
       final idx = y * out.width + x;
-      out.characters[idx] = '▐';
+      out.glyphCellList.setCodeAt(idx, _scrollbarThumbCode);
       out.attributes[idx * 3] = 0xFF7B8FA6;
       out.attributes[idx * 3 + 2] = tui.Modifier.none;
       out.clearCellAuxRange(idx, idx + 1);
@@ -897,6 +1120,8 @@ final class FtermPaneController {
     _onClipboard = null;
     _onExited = null;
     _onShareChanged = null;
+    _onCliShaderUiChanged = null;
+    _onCliShaderQuarantined = null;
     _resizeTimer?.cancel();
     _resizeTimer = null;
     await _shareSub?.cancel();
@@ -904,8 +1129,10 @@ final class FtermPaneController {
     port.removeListener(_handlePortChange);
     port.removeBellListener(_handleBell);
     port.removeAudioListener(_handleAudio);
+    port.removeShaderListener(_handleShaderEvent);
     port.removeTitleListener(_handleTitle);
     port.removeClipboardListener(_handleClipboard);
+    _cliShaderState.dispose();
     _bufferListenable?.dispose();
     _visualNotifier.dispose();
     _pillNotifier.dispose();
@@ -920,8 +1147,8 @@ final class FtermPaneController {
 }
 
 final class _PaneBufferListenable extends ChangeNotifier
-    implements ValueListenable<tui.Buffer> {
-  final ChangeNotifier _source;
+    implements ValueListenable<tui.Buffer>, TerminalBufferChangeSignal {
+  final _PaneChangeNotifier _source;
   final tui.Buffer Function() _read;
 
   _PaneBufferListenable(this._source, this._read) {
@@ -930,6 +1157,9 @@ final class _PaneBufferListenable extends ChangeNotifier
 
   @override
   tui.Buffer get value => _read();
+
+  @override
+  int get cellContentRevision => _source.cellContentRevision;
 
   @override
   void dispose() {

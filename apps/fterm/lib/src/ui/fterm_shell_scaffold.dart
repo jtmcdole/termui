@@ -16,6 +16,7 @@ import 'package:flutter/services.dart'
         KeyRepeatEvent,
         KeyUpEvent,
         LogicalKeyboardKey,
+        MethodCall,
         MethodChannel;
 import 'package:material_ui/material_ui.dart';
 import 'package:termui/terminal/event.dart' as ev;
@@ -26,11 +27,13 @@ import 'package:termui_flutter/termui_flutter.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../settings_storage.dart';
+import '../workspace/cli_shader_state.dart';
 import '../workspace/fterm_pane_controller.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/local_host_driver.dart';
 import '../workspace/split_tree_model.dart';
 import 'fterm_overlays.dart';
+import 'fterm_perf_hud.dart';
 import 'fterm_shortcut_dispatcher.dart';
 
 /// Root Flutter shell hosting the 28px tab bar, recursive binary split trees
@@ -145,6 +148,40 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       resolvedFontSize: initialFontSize,
     );
     FocusManager.instance.addEarlyKeyEventHandler(_handleEarlyF12Event);
+    _windowChannel.setMethodCallHandler(_handleWindowChannelCall);
+    if (!_isWeb) {
+      unawaited(_queryGraphicsAdapterInfo());
+    }
+  }
+
+  Future<void> _queryGraphicsAdapterInfo() async {
+    try {
+      final info = await _windowChannel.invokeMapMethod<String, Object?>(
+        'getGraphicsAdapterInfo',
+      );
+      if (!mounted || info == null) return;
+      final description = info['description'] is String
+          ? info['description']! as String
+          : null;
+      final vramMb = info['dedicatedVideoMemoryMB'] is int
+          ? info['dedicatedVideoMemoryMB']! as int
+          : null;
+      widget.workspace.setActiveGpuAdapterInfo(
+        name: description,
+        dedicatedVramMb: vramMb,
+      );
+    } on Object {
+      // Non-Windows runners and unit tests may not register this method.
+    }
+  }
+
+  Future<Object?> _handleWindowChannelCall(MethodCall call) async {
+    if (call.method == 'windowSizeMoveChanged' && mounted) {
+      widget.workspace.shaderController.setAmbientTicksPaused(
+        call.arguments == true,
+      );
+    }
+    return null;
   }
 
   @override
@@ -230,6 +267,16 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ws.activeOverlay != FtermOverlay.none,
       ws.activeTerminalTheme,
       ws.workspaceSettings.themeSettings.faintOpacity,
+      ws.backgroundOpacity,
+      ws.activeShaderConfig,
+      ws.shaderController.backendKind,
+      ws.localCliShaderPolicy,
+      ws.remoteCliShaderPolicy,
+      ws.cliFullPaneShaderMode,
+      ws.pendingCliShaderApprovals.length,
+      ws.activeCliFullPaneConflict?.shaderLabel,
+      ws.showPerfHud,
+      ws.maxShaderFps,
       ws.preferences.macosOptionAsAlt,
       ws.preferences.fontSize,
       ws.updateViewModel.status,
@@ -449,6 +496,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
 
   @override
   void dispose() {
+    _windowChannel.setMethodCallHandler(null);
+    widget.workspace.shaderController.setAmbientTicksPaused(false);
     WidgetsBinding.instance.removeObserver(this);
     FocusManager.instance.removeEarlyKeyEventHandler(_handleEarlyF12Event);
     _atlasController?.removeListener(_onAtlasChanged);
@@ -516,6 +565,20 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                 child: workspaceLayout,
               ),
               if (widget.isDraggingOverFiles) _buildDragOverlay(theme),
+              if (widget.workspace.showPerfHud)
+                Positioned(
+                  top: (showBar && dock == DockPosition.top) ? 36 : 12,
+                  right: 12,
+                  child: FtermPerfHud(workspace: widget.workspace),
+                ),
+              ListenableBuilder(
+                listenable: widget.workspace.chromeNotifier,
+                builder: (_, _) => _CliShaderApprovalBannerHost(
+                  workspace: widget.workspace,
+                  theme: theme,
+                  topOffset: (showBar && dock == DockPosition.top) ? 36 : 12,
+                ),
+              ),
               ListenableBuilder(
                 listenable: widget.workspace.chromeNotifier,
                 builder: (_, _) => FtermOverlayHost(
@@ -652,6 +715,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               bufferListenable: pane.bufferListenable,
               activePtySizeProvider: pane.readActivePtySize,
               cursorPositionProvider: pane.readCursorPosition,
+              cursorVisibleProvider: pane.readCursorVisible,
               kittyKeyboardFlagsProvider: pane.readKittyKeyboardFlags,
               reportKeyReleaseEventsProvider: pane.readReportKeyReleaseEvents,
               reportPixelMouseEventsProvider: pane.readReportPixelMouseEvents,
@@ -663,6 +727,14 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               fontFamilyFallback: castFallbackFontFamilies,
               backgroundColor: bgColor,
               foregroundColor: fgColor,
+              backgroundOpacity: widget.workspace.backgroundOpacity,
+              shaderController: widget.workspace.shaderController,
+              shaderConfig: pane.resolveShaderConfig(
+                widget.workspace.activeShaderConfig,
+              ),
+              maxAmbientFps: widget.workspace.maxShaderFps?.toDouble(),
+              cliShaderRegistry: pane.cliShaderRegistry,
+              gpuFrameWatchdog: pane.gpuFrameWatchdog,
               faintOpacity:
                   widget.workspace.workspaceSettings.themeSettings.faintOpacity,
               palette: theme,
@@ -843,58 +915,66 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           color: bg,
           border: Border(bottom: BorderSide(color: border, width: 1)),
         ),
-        child: Row(
-          children: [
-            if (isMacOsDesktop)
-              const SizedBox(
-                key: ValueKey('fterm-macos-inset'),
-                width: macOsTrafficLightInset,
-              ),
-            Expanded(
-              child: LayoutBuilder(
-                builder: (_, constraints) {
-                  final maxTabsWidth = math.max(
-                    0.0,
-                    constraints.maxWidth - 48.0,
-                  );
-                  return Row(
-                    children: [
-                      ConstrainedBox(
-                        constraints: BoxConstraints(maxWidth: maxTabsWidth),
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              for (
-                                var i = 0;
-                                i < widget.workspace.tabs.length;
-                                i++
-                              )
-                                _buildHorizontalTabChip(
-                                  index: i,
-                                  tab: widget.workspace.tabs[i],
-                                  panes: panes,
-                                  theme: theme,
-                                ),
-                            ],
+        child: LayoutBuilder(
+          builder: (_, barConstraints) {
+            final compactWhatsNew = barConstraints.maxWidth < 420.0;
+            return Row(
+              children: [
+                if (isMacOsDesktop)
+                  const SizedBox(
+                    key: ValueKey('fterm-macos-inset'),
+                    width: macOsTrafficLightInset,
+                  ),
+                Expanded(
+                  child: LayoutBuilder(
+                    builder: (_, constraints) {
+                      final maxTabsWidth = math.max(
+                        0.0,
+                        constraints.maxWidth - 48.0,
+                      );
+                      return Row(
+                        children: [
+                          ConstrainedBox(
+                            constraints: BoxConstraints(maxWidth: maxTabsWidth),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  for (
+                                    var i = 0;
+                                    i < widget.workspace.tabs.length;
+                                    i++
+                                  )
+                                    _buildHorizontalTabChip(
+                                      index: i,
+                                      tab: widget.workspace.tabs[i],
+                                      panes: panes,
+                                      theme: theme,
+                                    ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
-                      Expanded(
-                        child: _WindowDragStrip(
-                          key: const ValueKey('fterm-window-drag-strip'),
-                          enableMacOsDrag: isMacOsDesktop,
-                          windowChannel: _windowChannel,
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            ),
-            ..._buildChromeActionControls(theme),
-          ],
+                          Expanded(
+                            child: _WindowDragStrip(
+                              key: const ValueKey('fterm-window-drag-strip'),
+                              enableMacOsDrag: isMacOsDesktop,
+                              windowChannel: _windowChannel,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+                ..._buildChromeActionControls(
+                  theme,
+                  compactWhatsNew: compactWhatsNew,
+                ),
+              ],
+            );
+          },
         ),
       );
     },
@@ -938,7 +1018,10 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               child: Wrap(
                 spacing: 2,
-                children: _buildChromeActionControls(theme),
+                children: _buildChromeActionControls(
+                  theme,
+                  compactWhatsNew: true,
+                ),
               ),
             ),
           ],
@@ -1128,13 +1211,18 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     }
   }
 
-  List<Widget> _buildChromeActionControls(tui.TerminalColorTheme theme) {
+  List<Widget> _buildChromeActionControls(
+    tui.TerminalColorTheme theme, {
+    bool compactWhatsNew = false,
+  }) {
     final fg = Color(theme.foreground.argb);
     final focused = widget.workspace.focusedPane;
     final muted = widget.workspace.audioController.muted;
 
     return [
       if (widget.workspace.isLeaderArmed) _buildLeaderBadge(theme),
+      if (widget.workspace.shouldShowWhatsNewPill)
+        _buildWhatsNewPill(theme, compact: compactWhatsNew),
       _buildConnectActionButton(theme),
       _buildSessionsActionButton(theme),
       if (focused != null && focused.isLocal)
@@ -1180,6 +1268,79 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         onTap: () => widget.workspace.setOverlay(FtermOverlay.about),
       ),
     ];
+  }
+
+  Widget _buildWhatsNewPill(
+    tui.TerminalColorTheme theme, {
+    required bool compact,
+  }) {
+    final accent = Color(theme.resolveAnsi256(4).argb);
+    final tooltip = "What's New in v${widget.workspace.currentWhatsNewVersion}";
+    if (compact) {
+      return Tooltip(
+        message: tooltip,
+        child: InkWell(
+          key: const ValueKey('fterm-whats-new-pill'),
+          borderRadius: BorderRadius.circular(10),
+          onTap: widget.workspace.openWhatsNew,
+          child: SizedBox(
+            width: 24,
+            height: tabBarHeight,
+            child: Center(
+              child: Container(
+                width: 20,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: accent.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(9),
+                  border: Border.all(color: accent.withValues(alpha: 0.55)),
+                ),
+                child: Icon(Icons.auto_awesome, size: 11, color: accent),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    return Tooltip(
+      message: tooltip,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 3),
+          child: InkWell(
+            key: const ValueKey('fterm-whats-new-pill'),
+            borderRadius: BorderRadius.circular(10),
+            onTap: widget.workspace.openWhatsNew,
+            child: Container(
+              height: 19,
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: accent.withValues(alpha: 0.55)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.auto_awesome, size: 11, color: accent),
+                  const SizedBox(width: 3),
+                  Text(
+                    'NEW',
+                    style: TextStyle(
+                      color: accent,
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.4,
+                      fontFamily: castPrimaryFontFamily,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildSettingsActionButton(tui.TerminalColorTheme theme) {
@@ -1678,5 +1839,377 @@ final class _FtermTerminalService implements TerminalService {
     if (parsed == null) return false;
     onOpenUrl(parsed);
     return true;
+  }
+}
+
+final class _CliShaderApprovalBannerHost extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final tui.TerminalColorTheme theme;
+  final double topOffset;
+
+  const _CliShaderApprovalBannerHost({
+    required this.workspace,
+    required this.theme,
+    required this.topOffset,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final approvals = workspace.pendingCliShaderApprovals;
+    final conflict = workspace.activeCliFullPaneConflict;
+    final blockedRemote = workspace.activeBlockedRemoteShadersNotice;
+    if (approvals.isEmpty && conflict == null && blockedRemote == null) {
+      return const SizedBox.shrink();
+    }
+    final Widget banner;
+    if (approvals.isNotEmpty) {
+      banner = _CliShaderTrustBanner(
+        workspace: workspace,
+        approval: approvals.first,
+        queueLength: approvals.length,
+        theme: theme,
+      );
+    } else if (conflict != null) {
+      banner = _CliFullPaneConflictBanner(
+        workspace: workspace,
+        conflict: conflict,
+        theme: theme,
+      );
+    } else {
+      banner = _BlockedRemoteCliShadersBanner(
+        workspace: workspace,
+        notice: blockedRemote!,
+        theme: theme,
+      );
+    }
+    return Positioned(
+      top: topOffset,
+      left: 16,
+      right: 16,
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 740),
+          child: banner,
+        ),
+      ),
+    );
+  }
+}
+
+final class _BlockedRemoteCliShadersBanner extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final PendingBlockedRemoteShadersNotice notice;
+  final tui.TerminalColorTheme theme;
+
+  const _BlockedRemoteCliShadersBanner({
+    required this.workspace,
+    required this.notice,
+    required this.theme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = Color(theme.foreground.argb);
+    final bg = Color(theme.background.argb);
+    final accent = Color(theme.cursorColor.argb);
+    final surfaceBg = Color.lerp(bg, fg, 0.14)!.withValues(alpha: 0.97);
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        key: const ValueKey('cli-remote-shaders-blocked-banner'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: surfaceBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: accent.withValues(alpha: 0.75), width: 1.5),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x88000000),
+              blurRadius: 16,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.auto_awesome, size: 16, color: accent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Remote session "${notice.paneLabel}" sent CLI shader effects',
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Remote CLI shaders are disabled by default. Enable built-in '
+              'presets & cell transforms, or prompt before compiling custom GLSL.',
+              style: TextStyle(color: fg.withValues(alpha: 0.82), fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              children: [
+                TextButton(
+                  key: const ValueKey('cli-remote-blocked-dismiss'),
+                  onPressed: () => workspace.dismissBlockedRemoteShadersNotice(
+                    notice.paneId,
+                  ),
+                  child: const Text('Dismiss'),
+                ),
+                OutlinedButton(
+                  key: const ValueKey('cli-remote-enable-presets'),
+                  onPressed: () => workspace.setRemoteCliShaderPolicy(
+                    CliShaderPolicy.presetsAndTransforms,
+                  ),
+                  child: const Text('Enable Presets & Transforms'),
+                ),
+                FilledButton(
+                  key: const ValueKey('cli-remote-enable-prompt-glsl'),
+                  onPressed: () => workspace.setRemoteCliShaderPolicy(
+                    CliShaderPolicy.promptCustomGlsl,
+                  ),
+                  child: const Text('Allow & Prompt Custom GLSL'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _CliShaderTrustBanner extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final PendingCliShaderApproval approval;
+  final int queueLength;
+  final tui.TerminalColorTheme theme;
+
+  const _CliShaderTrustBanner({
+    required this.workspace,
+    required this.approval,
+    required this.queueLength,
+    required this.theme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = Color(theme.foreground.argb);
+    final bg = Color(theme.background.argb);
+    final accent = Color(theme.cursorColor.argb);
+    final shortHash = approval.sha256.length >= 16
+        ? approval.sha256.substring(0, 16)
+        : approval.sha256;
+    final pinnedHash = approval.sha256;
+
+    final surfaceBg = Color.lerp(bg, fg, 0.14)!.withValues(alpha: 0.97);
+    final codeBg = bg.withValues(alpha: 0.92);
+
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        key: const ValueKey('cli-shader-approval-banner'),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: surfaceBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: accent.withValues(alpha: 0.85), width: 1.5),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x88000000),
+              blurRadius: 18,
+              offset: Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.auto_awesome, size: 18, color: accent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Approve Custom CLI GPU Shader "${approval.shaderId}"?',
+                    style: TextStyle(
+                      color: fg,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                if (queueLength > 1)
+                  Text(
+                    '1 of $queueLength pending',
+                    key: const ValueKey('cli-shader-approval-queue-count'),
+                    style: TextStyle(
+                      color: fg.withValues(alpha: 0.78),
+                      fontSize: 12,
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Pane "${approval.paneLabel}" requested compiling a custom GLSL '
+              'fragment shader (SHA-256: $shortHash…).',
+              style: TextStyle(color: fg.withValues(alpha: 0.82), fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 160),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: codeBg,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: fg.withValues(alpha: 0.22)),
+              ),
+              child: SingleChildScrollView(
+                child: Text(
+                  approval.sourcePreview,
+                  key: const ValueKey('cli-shader-approval-preview'),
+                  style: TextStyle(
+                    color: fg.withValues(alpha: 0.92),
+                    fontFamily: castPrimaryFontFamily,
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.end,
+              children: [
+                TextButton(
+                  key: const ValueKey('cli-shader-deny-all'),
+                  onPressed: () =>
+                      workspace.denyAllPendingCliShaders(approval.paneId),
+                  child: const Text('Deny All'),
+                ),
+                OutlinedButton(
+                  key: const ValueKey('cli-shader-deny'),
+                  onPressed: () => workspace.denyCliShaderHash(pinnedHash),
+                  child: const Text('Deny'),
+                ),
+                OutlinedButton(
+                  key: const ValueKey('cli-shader-allow-once'),
+                  onPressed: () => workspace.approveCliShaderHash(
+                    pinnedHash,
+                    remember: false,
+                  ),
+                  child: const Text('Allow Once'),
+                ),
+                FilledButton(
+                  key: const ValueKey('cli-shader-trust-hash'),
+                  onPressed: () => workspace.approveCliShaderHash(
+                    pinnedHash,
+                    remember: true,
+                  ),
+                  child: const Text('Always Trust Hash'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _CliFullPaneConflictBanner extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final PendingCliFullPaneConflict conflict;
+  final tui.TerminalColorTheme theme;
+
+  const _CliFullPaneConflictBanner({
+    required this.workspace,
+    required this.conflict,
+    required this.theme,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = Color(theme.foreground.argb);
+    final bg = Color(theme.background.argb);
+    final accent = Color(theme.cursorColor.argb);
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        key: const ValueKey('cli-full-pane-conflict-banner'),
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Color.lerp(bg, fg, 0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: accent.withValues(alpha: 0.7)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Pane "${conflict.paneLabel}" requested full-pane shader '
+              '"${conflict.shaderLabel}" while user shaders are active.',
+              style: TextStyle(
+                color: fg,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              alignment: WrapAlignment.end,
+              children: [
+                TextButton(
+                  key: const ValueKey('cli-conflict-keep-user'),
+                  onPressed: () => workspace.resolveCliFullPaneConflict(
+                    conflict.paneId,
+                    CliFullPaneConflictChoice.keepUserOnly,
+                  ),
+                  child: const Text('Keep User Only'),
+                ),
+                OutlinedButton(
+                  key: const ValueKey('cli-conflict-cli-replaces'),
+                  onPressed: () => workspace.resolveCliFullPaneConflict(
+                    conflict.paneId,
+                    CliFullPaneConflictChoice.cliReplacesUser,
+                  ),
+                  child: const Text('CLI Replaces User'),
+                ),
+                FilledButton(
+                  key: const ValueKey('cli-conflict-cli-before'),
+                  onPressed: () => workspace.resolveCliFullPaneConflict(
+                    conflict.paneId,
+                    CliFullPaneConflictChoice.cliBeforeUser,
+                  ),
+                  child: const Text('CLI Before User'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

@@ -63,10 +63,9 @@ final class FtermShortcutDispatcher {
   /// Creates a shortcut dispatcher bound to [workspace].
   const FtermShortcutDispatcher({
     required this.workspace,
-    TargetPlatform? platformOverride,
-    bool? isWebOverride,
-  }) : _platformOverride = platformOverride,
-       _isWebOverride = isWebOverride;
+    this._platformOverride,
+    this._isWebOverride,
+  });
 
   static const double _fontZoomStep = 1.0;
 
@@ -318,6 +317,18 @@ final class FtermShortcutDispatcher {
 
   bool _handleDesktopShortcut(KeyDownEvent event, Set<ev.Modifier> modifiers) {
     if (_isWeb) return false;
+    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f5, modifiers)) {
+      unawaited(workspace.reloadShaders());
+      return true;
+    }
+    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f9, modifiers)) {
+      workspace.togglePerfHud();
+      return true;
+    }
+    if (_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f10, modifiers)) {
+      unawaited(workspace.toggleTraceRecording());
+      return true;
+    }
     if (_platform == TargetPlatform.macOS) {
       return _handleMacOsShortcut(event.logicalKey, modifiers);
     }
@@ -327,6 +338,17 @@ final class FtermShortcutDispatcher {
     }
     return false;
   }
+
+  static bool _isCtrlShiftKey(
+    LogicalKeyboardKey actual,
+    LogicalKeyboardKey expected,
+    Set<ev.Modifier> modifiers,
+  ) =>
+      actual == expected &&
+      modifiers.contains(ev.Modifier.control) &&
+      modifiers.contains(ev.Modifier.shift) &&
+      !modifiers.contains(ev.Modifier.alt) &&
+      !modifiers.contains(ev.Modifier.meta);
 
   bool _handleMacOsShortcut(
     LogicalKeyboardKey key,

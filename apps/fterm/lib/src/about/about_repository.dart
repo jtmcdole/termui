@@ -22,7 +22,7 @@ final class AboutRepository {
   final AboutService _service;
 
   /// Creates an [AboutRepository] backed by [_service].
-  const AboutRepository({required AboutService service}) : _service = service;
+  const AboutRepository({required this._service});
 
   /// Returns synchronous compile-time build and toolchain metadata.
   FtermBuildMetadata initialBuildMetadata() =>

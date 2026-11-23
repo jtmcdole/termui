@@ -64,12 +64,10 @@ final class IoUpdateHttpClient implements UpdateHttpClient {
 
   /// Creates an [IoUpdateHttpClient] (lazily opening [HttpClient] on first request).
   IoUpdateHttpClient({
-    HttpClient? client,
-    Duration connectTimeout = kUpdateHttpConnectTimeout,
-    Duration chunkTimeout = kUpdateDownloadChunkTimeout,
-  }) : _client = client,
-       _connectTimeout = connectTimeout,
-       _chunkTimeout = chunkTimeout;
+    this._client,
+    this._connectTimeout = kUpdateHttpConnectTimeout,
+    this._chunkTimeout = kUpdateDownloadChunkTimeout,
+  });
 
   HttpClient get _activeClient =>
       _client ??= (HttpClient()..connectionTimeout = _connectTimeout);
@@ -260,9 +258,8 @@ final class IoUpdateRepository {
     required this.httpClient,
     required this.targetPlatform,
     Uri? matchingRefsUri,
-    String releaseTagBaseUrl = _defaultReleaseTagBase,
-  }) : _matchingRefsUri = matchingRefsUri ?? _defaultMatchingRefsUri,
-       _releaseTagBaseUrl = releaseTagBaseUrl;
+    this._releaseTagBaseUrl = _defaultReleaseTagBase,
+  }) : _matchingRefsUri = matchingRefsUri ?? _defaultMatchingRefsUri;
 
   Map<String, String> _apiHeaders({String? ifNoneMatch}) => <String, String>{
     HttpHeaders.acceptHeader: 'application/vnd.github+json',
@@ -349,9 +346,8 @@ final class IoUpdateRepository {
     }
     final tags = <String>[];
     for (final entry in decoded) {
-      if (entry case {
-        'ref': final String ref,
-      } when ref.startsWith('refs/tags/$kFtermReleaseTagPrefix')) {
+      if (entry case {'ref': final String ref}
+          when ref.startsWith('refs/tags/$kFtermReleaseTagPrefix')) {
         final tagName = ref.substring('refs/tags/'.length);
         if (FtermSemVer.tryParseReleaseTag(tagName) != null) {
           tags.add(tagName);

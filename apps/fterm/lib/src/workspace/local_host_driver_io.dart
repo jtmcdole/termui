@@ -15,25 +15,23 @@ export 'local_host_driver_interface.dart';
 
 /// Factory creating a [RoutedPtyBackend] for a spawned local shell pane.
 @visibleForTesting
-typedef LocalPtyBackendFactory =
-    RoutedPtyBackend Function({
-      required String executable,
-      required List<String> arguments,
-      required int initialCols,
-      required int initialRows,
-      required int pixelWidth,
-      required int pixelHeight,
-      String? workingDirectory,
-      Map<String, String>? environment,
-    });
+typedef LocalPtyBackendFactory = RoutedPtyBackend Function({
+  required String executable,
+  required List<String> arguments,
+  required int initialCols,
+  required int initialRows,
+  required int pixelWidth,
+  required int pixelHeight,
+  String? workingDirectory,
+  Map<String, String>? environment,
+});
 
 /// Callback staging Windows ConPTY binaries before opening a local shell.
 @visibleForTesting
-typedef ConPtyReadyEnsurer =
-    Future<String?> Function({
-      bool download,
-      void Function(String message)? onWarning,
-    });
+typedef ConPtyReadyEnsurer = Future<String?> Function({
+  bool download,
+  void Function(String message)? onWarning,
+});
 
 /// Creates the `dart:io` desktop [LocalHostDriver].
 ///
@@ -414,15 +412,12 @@ final class _IoLocalPaneHost implements LocalPaneHost {
 
   _IoLocalPaneHost({
     required this.id,
-    required String executableName,
-    required PtyRouterSession session,
+    required this._executableName,
+    required this._session,
     required this.port,
-    required SessionId Function() nextSessionId,
-    required void Function() onDisposed,
-  }) : _executableName = executableName,
-       _session = session,
-       _nextSessionId = nextSessionId,
-       _onDisposed = onDisposed;
+    required this._nextSessionId,
+    required this._onDisposed,
+  });
 
   @override
   Future<int> get exitCode => _session.exitCode;

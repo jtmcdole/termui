@@ -250,8 +250,10 @@ Future<bool> maybeRunPlatformInternalSwapUpdate(List<String> args) =>
 
 /// Process runner callback signature for testable OS tool invocations (`tar`,
 /// `xattr`, `codesign`, `open`, `chmod`, `icacls`).
-typedef SystemProcessRunner =
-    Future<ProcessResult> Function(String executable, List<String> arguments);
+typedef SystemProcessRunner = Future<ProcessResult> Function(
+  String executable,
+  List<String> arguments,
+);
 
 /// `dart:io` desktop implementation of [UpdateService].
 final class IoUpdateService implements UpdateService {
@@ -273,7 +275,7 @@ final class IoUpdateService implements UpdateService {
   /// Creates an [IoUpdateService] with explicit seams for testing.
   IoUpdateService({
     required this.currentVersion,
-    required IoUpdateRepository repository,
+    required this._repository,
     required PortableInstallLayout layout,
     @visibleForTesting
     Future<int?> Function(String dirPath)? freeDiskBytesProbe,
@@ -281,8 +283,7 @@ final class IoUpdateService implements UpdateService {
     @visibleForTesting DetachedProcessLauncher? detachedLauncher,
     @visibleForTesting void Function(int code)? onExit,
     @visibleForTesting Map<String, String>? environment,
-  }) : _repository = repository,
-       _layout = layout,
+  }) : _layout = layout,
        _capability = layout.capability,
        _freeDiskBytesProbe = freeDiskBytesProbe ?? queryAvailableDiskBytes,
        _processRunner = processRunner ?? Process.run,

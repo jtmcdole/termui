@@ -21,8 +21,7 @@ final class PortableInstanceLock {
   bool _closed = false;
   bool _holdingExclusive = false;
 
-  PortableInstanceLock._(this._raf, {required bool isWindows})
-    : _isWindows = isWindows;
+  PortableInstanceLock._(this._raf, {required this._isWindows});
 
   /// Opens `.fterm-instance.lock` in [lockDirectoryPath] and acquires a
   /// non-blocking shared lock (`FileLock.shared`), returning `null` if another

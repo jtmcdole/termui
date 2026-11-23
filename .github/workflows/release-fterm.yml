@@ -153,9 +153,26 @@ jobs:
           mkdir -p dist
           if [ "$BUILD_DESKTOP" = "true" ]; then
             (cd apps/fterm && flutter build "$DESKTOP_OS" --release --build-name="$RELEASE_VERSION" --dart-define="FTERM_BUILD_DATE=$BUILD_DATE")
+            FLUTTER_BIN_DIR="$(dirname "$(command -v flutter)")"
             if [ "$DESKTOP_OS" = "macos" ]; then
+              IMPELLERC_SRC="${FLUTTER_BIN_DIR}/cache/artifacts/engine/darwin-arm64/impellerc"
+              test -f "$IMPELLERC_SRC"
+              MACOS_APP="apps/fterm/build/macos/Build/Products/Release/fterm.app"
+              mkdir -p "${MACOS_APP}/Contents/Helpers"
+              cp "$IMPELLERC_SRC" "${MACOS_APP}/Contents/Helpers/impellerc"
+              chmod +x "${MACOS_APP}/Contents/Helpers/impellerc"
+              codesign --force --sign - "${MACOS_APP}/Contents/Helpers/impellerc"
+              codesign --force --deep --sign - "${MACOS_APP}"
+              codesign --verify --deep --strict "${MACOS_APP}"
               COPYFILE_DISABLE=1 tar -C apps/fterm/build/macos/Build/Products/Release -czf "dist/fterm-${TARGET}.tar.gz" fterm.app
+              tar -tzf "dist/fterm-${TARGET}.tar.gz" | grep -qx 'fterm.app/Contents/Helpers/impellerc'
             else
+              IMPELLERC_SRC="${FLUTTER_BIN_DIR}/cache/artifacts/engine/linux-x64/impellerc"
+              test -f "$IMPELLERC_SRC"
+              LINUX_BUNDLE="apps/fterm/build/linux/x64/release/bundle"
+              mkdir -p "${LINUX_BUNDLE}/helpers"
+              cp "$IMPELLERC_SRC" "${LINUX_BUNDLE}/helpers/impellerc"
+              chmod +x "${LINUX_BUNDLE}/helpers/impellerc"
               python3 -c '
           import json, os
           root = "apps/fterm/build/linux/x64/release/bundle"
@@ -164,7 +181,8 @@ jobs:
               json.dump(entries, f, indent=2)
               f.write("\n")
           '
-              tar -C apps/fterm/build/linux/x64/release/bundle -czf "dist/fterm-${TARGET}.tar.gz" .
+              tar -C "$LINUX_BUNDLE" -czf "dist/fterm-${TARGET}.tar.gz" .
+              tar -tzf "dist/fterm-${TARGET}.tar.gz" | grep -Eq '^(\./)?helpers/impellerc$'
             fi
           fi
           dart build cli -t apps/termui_cast/caster_cli/bin/termui_cast.dart -o build/caster
@@ -285,6 +303,14 @@ jobs:
             foreach ($entry in $bundleEntries) {
               Copy-Item -Path (Join-Path $conptyDir.FullName $entry) -Destination (Join-Path $ftermReleaseDir $entry) -Force
             }
+            $flutterBinDir = Split-Path -Parent (Get-Command flutter).Source
+            $impellercSrc = Join-Path $flutterBinDir "cache\artifacts\engine\windows-x64\impellerc.exe"
+            if (-not (Test-Path $impellercSrc)) {
+              throw "Missing impellerc.exe at $impellercSrc"
+            }
+            $helpersDir = Join-Path $ftermReleaseDir "helpers"
+            New-Item -ItemType Directory -Force -Path $helpersDir | Out-Null
+            Copy-Item -Path $impellercSrc -Destination (Join-Path $helpersDir "impellerc.exe") -Force
             $ownedEntries = @(
               @(Get-ChildItem -Path $ftermReleaseDir -Force | Select-Object -ExpandProperty Name) + @(".fterm-files.json") |
                 ForEach-Object { $_ -replace '\\', '/' } |
@@ -294,7 +320,7 @@ jobs:
               Set-Content -Path (Join-Path $ftermReleaseDir ".fterm-files.json") -Encoding utf8NoBOM
             $ftermZip = "dist/fterm-$($env:TARGET).zip"
             Compress-Archive -Path (Get-ChildItem -Path $ftermReleaseDir -Force).FullName -DestinationPath $ftermZip -Force
-            Assert-ZipEntries -ZipPath $ftermZip -RequiredEntries ($bundleEntries + @("fterm.exe", ".fterm-files.json"))
+            Assert-ZipEntries -ZipPath $ftermZip -RequiredEntries ($bundleEntries + @("fterm.exe", ".fterm-files.json", "helpers/impellerc.exe"))
             Write-Output "Packaged $ftermZip"
           }
         env:

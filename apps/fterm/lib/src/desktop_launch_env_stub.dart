@@ -28,3 +28,10 @@ void warnPlatformCliSecret(String flag) {}
 
 /// Identity file path canonicalizer on Web where `dart:io` is unavailable.
 String canonicalizePlatformFilePath(String rawPath) => rawPath;
+
+/// Unsupported desktop relaunch stub on Web.
+Future<bool> relaunchPlatformDesktopApp({List<String> args = const []}) async =>
+    false;
+
+/// Unsupported desktop directory reveal stub on Web.
+Future<bool> openPlatformDirectory(String directoryPath) async => false;
