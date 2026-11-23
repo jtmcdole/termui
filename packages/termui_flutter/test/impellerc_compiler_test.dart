@@ -284,8 +284,13 @@ void main() {
     });
 
     test('enforces resolution precedence: override > bundled > env > FLUTTER_ROOT > PATH > fallback', () {
-      final tmp = Directory.systemTemp.createTempSync('termui_resolve_test_');
-      addTearDown(() => tmp.deleteSync(recursive: true));
+      final rawTmp = Directory.systemTemp.createTempSync(
+        'termui_resolve_test_',
+      );
+      addTearDown(() => rawTmp.deleteSync(recursive: true));
+      // Resolve OS symlinks / Windows 8.3 short paths (e.g. RUNNER~1 ->
+      // runneradmin) so expected paths match PATH lookup resolution.
+      final tmp = Directory(rawTmp.resolveSymbolicLinksSync());
 
       final exeName = Platform.isWindows ? 'impellerc.exe' : 'impellerc';
       final overrideFile = File(
@@ -293,16 +298,32 @@ void main() {
       )..writeAsStringSync('override');
       final appDir = Directory(_joinPath(<String>[tmp.path, 'app']))
         ..createSync();
-      final appExe = File(
-        _joinPath(<String>[
-          appDir.path,
-          Platform.isWindows ? 'fterm.exe' : 'fterm',
-        ]),
-      )..writeAsStringSync('app');
-      final bundledFile =
-          File(_joinPath(<String>[appDir.path, 'helpers', exeName]))
-            ..parent.createSync(recursive: true)
-            ..writeAsStringSync('bundled');
+      final appExe = Platform.isMacOS
+          ? (File(
+                _joinPath(<String>[appDir.path, 'Contents', 'MacOS', 'fterm']),
+              )
+              ..parent.createSync(recursive: true)
+              ..writeAsStringSync('app'))
+          : (File(
+              _joinPath(<String>[
+                appDir.path,
+                Platform.isWindows ? 'fterm.exe' : 'fterm',
+              ]),
+            )..writeAsStringSync('app'));
+      final bundledFile = Platform.isMacOS
+          ? (File(
+                _joinPath(<String>[
+                  appDir.path,
+                  'Contents',
+                  'Helpers',
+                  exeName,
+                ]),
+              )
+              ..parent.createSync(recursive: true)
+              ..writeAsStringSync('bundled'))
+          : (File(_joinPath(<String>[appDir.path, 'helpers', exeName]))
+              ..parent.createSync(recursive: true)
+              ..writeAsStringSync('bundled'));
       final envFile = File(_joinPath(<String>[tmp.path, 'env_$exeName']))
         ..writeAsStringSync('env');
 
