@@ -17,6 +17,9 @@ void scrubPlatformUrlFragment() {}
 /// No-op initial hash token reader on unsupported/fallback platforms.
 String consumePlatformInitialHashToken() => '';
 
+/// Returns [fallback] unchanged on unsupported/fallback platforms.
+Uri resolvePlatformLaunchBaseUri(Uri fallback) => fallback;
+
 final class _NoopFileDropBridge implements FileDropBridge {
   const _NoopFileDropBridge();
 

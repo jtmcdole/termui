@@ -135,6 +135,8 @@ final class AppThreeWayWsHarness {
     int initialRows = 23,
     Directory? uploadDirectory,
     Duration initialBackoff = const Duration(seconds: 5),
+    bool allowSpawn = false,
+    Future<void> Function()? onSpawnRequested,
   }) async {
     final pty = AppFakePtySession(
       label: title,
@@ -150,9 +152,11 @@ final class AppThreeWayWsHarness {
         initialCols: initialCols,
         initialRows: initialRows,
         uploadDirPath: uploadDirectory?.path,
+        allowSpawn: allowSpawn,
         command: const ['fake-pty'],
       ),
       pty: pty,
+      onSpawnRequested: onSpawnRequested,
       frameCoalesceInterval: const Duration(milliseconds: 5),
       baseReconnectDelay: initialBackoff,
       channelOpener: () async {

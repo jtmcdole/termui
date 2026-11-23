@@ -64,6 +64,12 @@ String consumePlatformInitialHashToken() {
   return result.isA<JSString>() ? (result as JSString).toDart : '';
 }
 
+/// Resolves the effective HTTP(S) launch base URI from `document.baseURI` so
+/// same-origin `<base href>` subpaths govern relative WebSocket endpoints,
+/// preserving any non-empty fragment from [fallback].
+Uri resolvePlatformLaunchBaseUri(Uri fallback) =>
+    resolveSameOriginBaseUri(web.document.baseURI, fallback);
+
 final class _WebFileDropBridge implements FileDropBridge {
   final void Function(bool isDraggingOver) _onDragHoverChanged;
   final void Function(List<DroppedFileSource> files) _onFilesDropped;

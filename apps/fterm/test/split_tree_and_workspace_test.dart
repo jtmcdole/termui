@@ -2334,21 +2334,27 @@ void _defineHardeningRegressionTests() {
       expect(failingWs.statusBanner, contains('Local shell failed:'));
       expect(failingWs.tabs, isEmpty);
 
-      // 3. Web (!localHostDriver.isSupported) ignores stored relay credentials and never writes them.
+      // 3. Web (!localHostDriver.isSupported) scopes sessionStorage credential hydration
+      //    strictly to matching serverUrl (never overriding relay URI or leaking across subpaths),
+      //    and persists entered credentials via storage on connectRelay.
       final webStorage = _RecordingSettingsStorage();
       saveStoredRelayCredentials(
         webStorage,
         const RelayCredentials(
-          serverUrl: 'wss://stale.example/v1/client',
-          clientToken: 'stale-web-secret',
+          serverUrl: 'wss://web.example.com/other/v1/client',
+          clientToken: 'other-subpath-secret',
           casterToken: 'stale-caster-secret',
         ),
       );
       webStorage.writes.clear();
-      final webWs = FtermWorkspaceController(
-        launchConfig: CastLaunchConfig(promptForConnection: true),
+      final mismatchedWebWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(
+          serverUri: Uri.parse('wss://web.example.com/term/v1/client'),
+          promptForConnection: false,
+        ),
         repository: CastClientRepository(
           transport: WsClientTransport(
+            serverUri: Uri.parse('wss://web.example.com/term/v1/client'),
             channelFactory: harness.openClientChannel,
           ),
           enableReconnect: false,
@@ -2360,18 +2366,613 @@ void _defineHardeningRegressionTests() {
         storage: webStorage,
         resizeDebounce: Duration.zero,
       );
-      addTearDown(webWs.dispose);
-      expect(webWs.activeClientToken, isEmpty);
-      expect(webWs.activeRelayUri, equals(CastLaunchConfig.defaultServerUri));
+      addTearDown(mismatchedWebWs.dispose);
+      expect(mismatchedWebWs.activeClientToken, isEmpty);
+      expect(
+        mismatchedWebWs.activeRelayUri,
+        equals(Uri.parse('wss://web.example.com/term/v1/client')),
+      );
 
-      await webWs.connectRelay(
-        serverUri: Uri.parse('wss://web.example.com/v1/client'),
+      await mismatchedWebWs.connectRelay(
+        serverUri: Uri.parse('wss://web.example.com/term/v1/client'),
         clientToken: harness.token,
+      );
+      await _pumpUntil(
+        () =>
+            mismatchedWebWs.connectionState ==
+            ClientConnectionState.authenticated,
       );
       expect(
         webStorage.writes.containsKey(ftermRelayCredentialsStorageKey),
+        isTrue,
+      );
+      final persistedWebCreds = loadStoredRelayCredentials(webStorage);
+      expect(
+        persistedWebCreds.serverUrl,
+        equals('wss://web.example.com/term/v1/client'),
+      );
+      expect(persistedWebCreds.clientToken, equals(harness.token));
+      expect(persistedWebCreds.casterToken, isEmpty);
+
+      // Reloading on the matching subpath hydrates the saved token without overriding serverUrl.
+      final reloadedWebWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(
+          serverUri: Uri.parse('wss://web.example.com/term/v1/client'),
+          promptForConnection: false,
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://web.example.com/term/v1/client'),
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: webStorage,
+        resizeDebounce: Duration.zero,
+      );
+      addTearDown(reloadedWebWs.dispose);
+      expect(reloadedWebWs.activeClientToken, equals(harness.token));
+      expect(
+        reloadedWebWs.activeRelayUri,
+        equals(Uri.parse('wss://web.example.com/term/v1/client')),
+      );
+    });
+
+    test('Web silent tokenless connect opens Connect overlay on authFailed, remote spawn handles tab/split/close/timeout, and layout resumes across reload', () async {
+      // 1. Web silent tokenless connect falls back to FtermOverlay.connect on authFailed.
+      final harness = AppThreeWayWsHarness();
+      addTearDown(harness.dispose);
+      final spawnRequests = <String>[];
+      var nextSpawnIndex = 2;
+      await harness.startCaster(
+        id: 'primary-1',
+        title: 'zsh',
+        allowSpawn: true,
+        onSpawnRequested: () async {
+          final childId = 'spawned-${nextSpawnIndex++}';
+          spawnRequests.add(childId);
+          await harness.startCaster(
+            id: childId,
+            title: 'zsh #$nextSpawnIndex',
+            allowSpawn: true,
+          );
+        },
+      );
+
+      final storage = _InMemorySettingsStorage();
+      final silentWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig.fromEnvironmentAndUri(
+          baseUri: Uri.parse('https://cast.example.com/term/'),
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://cast.example.com/term/v1/client'),
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: storage,
+        resizeDebounce: Duration.zero,
+        remoteSpawnTimeout: const Duration(milliseconds: 80),
+      );
+      addTearDown(silentWs.dispose);
+
+      expect(silentWs.launchConfig.promptForConnection, isFalse);
+      await silentWs.start();
+      await _pumpUntil(
+        () => silentWs.connectionState == ClientConnectionState.authFailed,
+      );
+      expect(silentWs.activeOverlay, equals(FtermOverlay.connect));
+
+      // Entering valid token connects, dismisses Connect modal, and opens primary-1.
+      await silentWs.connectRelay(
+        serverUri: Uri.parse('wss://cast.example.com/term/v1/client'),
+        clientToken: harness.token,
+      );
+      await _pumpUntil(() => silentWs.tabs.length == 1);
+      expect(silentWs.activeOverlay, equals(FtermOverlay.none));
+      expect(
+        silentWs.canSpawnRemoteSession(const SessionId('primary-1')),
+        isTrue,
+      );
+
+      // 2. requestRemoteShellSpawn opens and auto-focuses a new tab on SessionDirectoryFrame.
+      expect(
+        silentWs.requestRemoteShellSpawn(const SessionId('primary-1')),
+        isTrue,
+      );
+      await _pumpUntil(() => silentWs.tabs.length == 2);
+      expect(silentWs.activeTabIndex, equals(1));
+      expect(
+        silentWs.focusedPane!.remoteSessionId,
+        equals(const SessionId('spawned-2')),
+      );
+      expect(silentWs.pendingRemoteSpawnCount, equals(0));
+
+      // 3. Web splitFocusedPane on an allowSpawn session spawns a fresh child into the split!
+      silentWs.selectTab(0);
+      await silentWs.splitFocusedPane(SplitAxis.horizontal);
+      await _pumpUntil(() => silentWs.tabs[0].splitTree.paneCount == 2);
+      final tab0Panes = silentWs.tabs[0].splitTree.paneIds;
+      expect(
+        silentWs.paneById(tab0Panes[0])!.remoteSessionId,
+        equals(const SessionId('primary-1')),
+      );
+      expect(
+        silentWs.paneById(tab0Panes[1])!.remoteSessionId,
+        equals(const SessionId('spawned-3')),
+      );
+      expect(silentWs.activeSplitTree!.focusedPaneId, equals(tab0Panes[1]));
+
+      // Adjust split ratio and pin title, then close tab 1 (dismissing spawned-2).
+      final rootSplit = silentWs.tabs[0].splitTree.root as SplitNode;
+      silentWs.setSplitRatio(rootSplit.splitId, 0.35);
+      silentWs.renameTab(tabIndex: 0, title: 'Dev Split');
+      await silentWs.closeTab(1);
+      expect(silentWs.tabs, hasLength(1));
+
+      // 4. Reload simulation: new Web controller reconciles saved layout against live sessions,
+      //    keeping the split tree/ratio/title, honoring dismissed spawned-2, and opening new sessions.
+      await harness.startCaster(
+        id: 'brand-new-4',
+        title: 'fresh',
+        allowSpawn: false,
+      );
+      final reloadedWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig.fromEnvironmentAndUri(
+          baseUri: Uri.parse('https://cast.example.com/term/'),
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://cast.example.com/term/v1/client'),
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: storage,
+        resizeDebounce: Duration.zero,
+        remoteSpawnTimeout: const Duration(milliseconds: 60),
+      );
+      addTearDown(reloadedWs.dispose);
+      expect(reloadedWs.activeClientToken, equals(harness.token));
+
+      await reloadedWs.start();
+      await _pumpUntil(() => reloadedWs.tabs.length == 2);
+
+      // Tab 0 restored with exact split tree (primary-1 | spawned-3) at ratio 0.35 and pinned title.
+      final restoredTab0 = reloadedWs.tabs[0];
+      expect(restoredTab0.pinnedTitle, equals('Dev Split'));
+      expect(restoredTab0.splitTree.paneCount, equals(2));
+      final restoredRoot = restoredTab0.splitTree.root as SplitNode;
+      expect(restoredRoot.axis, equals(SplitAxis.horizontal));
+      expect(restoredRoot.ratio, closeTo(0.35, 1e-6));
+      final restoredPaneIds = restoredTab0.splitTree.paneIds;
+      expect(
+        reloadedWs.paneById(restoredPaneIds[0])!.remoteSessionId,
+        equals(const SessionId('primary-1')),
+      );
+      expect(
+        reloadedWs.paneById(restoredPaneIds[1])!.remoteSessionId,
+        equals(const SessionId('spawned-3')),
+      );
+      expect(reloadedWs.activeTabIndex, equals(0));
+
+      // Dismissed spawned-2 stayed closed; brand-new-4 opened in tab 1.
+      expect(
+        reloadedWs
+            .paneById(reloadedWs.tabs[1].splitTree.focusedPaneId)!
+            .remoteSessionId,
+        equals(const SessionId('brand-new-4')),
+      );
+      expect(
+        reloadedWs.panes.values.any(
+          (p) => p.remoteSessionId == const SessionId('spawned-2'),
+        ),
         isFalse,
       );
+
+      // 5. Pending split cleanup on pane close and timeout.
+      await harness.startCaster(
+        id: 'silent-spawn',
+        title: 'silent',
+        allowSpawn: true,
+        onSpawnRequested: () async {
+          // Intentionally never registers a child session so we test cleanup.
+        },
+      );
+      await _pumpUntil(() => reloadedWs.tabs.length == 3);
+      reloadedWs.selectTab(2);
+      final silentPaneId = reloadedWs.focusedPane!.paneId;
+      await reloadedWs.splitFocusedPane(SplitAxis.vertical);
+      expect(reloadedWs.pendingRemoteSpawnCount, equals(1));
+      await reloadedWs.closePane(silentPaneId);
+      expect(reloadedWs.pendingRemoteSpawnCount, equals(0));
+
+      // Timeout clears pending spawn entry cleanly.
+      reloadedWs.openRemoteSessionTab(const SessionId('silent-spawn'));
+      expect(
+        reloadedWs.requestRemoteShellSpawn(const SessionId('silent-spawn')),
+        isTrue,
+      );
+      expect(reloadedWs.pendingRemoteSpawnCount, equals(1));
+      await _pumpUntil(() => reloadedWs.pendingRemoteSpawnCount == 0);
+      expect(reloadedWs.pendingRemoteSpawnCount, equals(0));
+    });
+
+    test('Web auth persists verified #token= after AuthAcceptedFrame, never saves rejected tokens, clears stale sessionStorage on authFailed, and scopes resume snapshots by serverUrl', () async {
+      final harness = AppThreeWayWsHarness();
+      addTearDown(harness.dispose);
+      await harness.startCaster(id: 'shared-s1', title: 'zsh-1');
+      await harness.startCaster(id: 'shared-s2', title: 'zsh-2');
+      await harness.startCaster(id: 'shared-s3', title: 'zsh-3');
+      await _pumpUntil(() => harness.registry.sessions.length == 3);
+
+      // 1. Rejected token must not persist in sessionStorage and must clear stale credentials.
+      final rejectStorage = _RecordingSettingsStorage();
+      saveStoredRelayCredentials(
+        rejectStorage,
+        const RelayCredentials(
+          serverUrl: 'wss://cast.example.com/team-a/v1/client',
+          clientToken: 'stale-rotated-token',
+        ),
+      );
+      final rejectWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig.fromEnvironmentAndUri(
+          baseUri: Uri.parse('https://cast.example.com/team-a/'),
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://cast.example.com/team-a/v1/client'),
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: rejectStorage,
+        resizeDebounce: Duration.zero,
+      );
+      addTearDown(rejectWs.dispose);
+
+      // Hydrated stale token is rejected by server -> sessionStorage cleared.
+      expect(rejectWs.activeClientToken, equals('stale-rotated-token'));
+      await rejectWs.start();
+      await _pumpUntil(
+        () => rejectWs.connectionState == ClientConnectionState.authFailed,
+      );
+      expect(
+        loadStoredRelayCredentials(rejectStorage),
+        equals(RelayCredentials.empty),
+      );
+
+      // Entering another bad token does not persist before AuthAcceptedFrame and stays empty.
+      final writesBeforeWrongToken =
+          rejectStorage.writeCounts[ftermRelayCredentialsStorageKey] ?? 0;
+      await rejectWs.connectRelay(
+        serverUri: Uri.parse('wss://cast.example.com/team-a/v1/client'),
+        clientToken: 'wrong-token',
+      );
+      await _pumpUntil(
+        () => rejectWs.connectionState == ClientConnectionState.authFailed,
+      );
+      expect(
+        loadStoredRelayCredentials(rejectStorage),
+        equals(RelayCredentials.empty),
+      );
+      // Only the fatal authFailed clear wrote (no pre-auth optimistic write).
+      expect(
+        rejectStorage.writeCounts[ftermRelayCredentialsStorageKey],
+        equals(writesBeforeWrongToken + 1),
+      );
+
+      // persistCredentials: false avoids writing even after AuthAcceptedFrame.
+      final writesBeforeNoPersist =
+          rejectStorage.writeCounts[ftermRelayCredentialsStorageKey] ?? 0;
+      await rejectWs.connectRelay(
+        serverUri: Uri.parse('wss://cast.example.com/team-a/v1/client'),
+        clientToken: harness.token,
+        persistCredentials: false,
+      );
+      await _pumpUntil(
+        () => rejectWs.connectionState == ClientConnectionState.authenticated,
+      );
+      expect(
+        rejectStorage.writeCounts[ftermRelayCredentialsStorageKey],
+        equals(writesBeforeNoPersist),
+      );
+
+      // 2. Initial #token= launch persists to sessionStorage on AuthAcceptedFrame so reload succeeds.
+      final hashStorage = _InMemorySettingsStorage();
+      final hashLaunchWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig.fromEnvironmentAndUri(
+          baseUri: Uri.parse(
+            'https://cast.example.com/team-a/#token=${harness.token}',
+          ),
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://cast.example.com/team-a/v1/client'),
+            token: harness.token,
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: hashStorage,
+        resizeDebounce: Duration.zero,
+      );
+      addTearDown(hashLaunchWs.dispose);
+      expect(
+        loadStoredRelayCredentials(hashStorage),
+        equals(RelayCredentials.empty),
+      );
+
+      await hashLaunchWs.start();
+      await _pumpUntil(() => hashLaunchWs.tabs.length == 3);
+      expect(
+        loadStoredRelayCredentials(hashStorage),
+        equals(
+          RelayCredentials(
+            serverUrl: 'wss://cast.example.com/team-a/v1/client',
+            clientToken: harness.token,
+          ),
+        ),
+      );
+
+      // Simulated reload without #token= hydrates token from sessionStorage and connects cleanly.
+      final reloadedHashWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig.fromEnvironmentAndUri(
+          baseUri: Uri.parse('https://cast.example.com/team-a/'),
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://cast.example.com/team-a/v1/client'),
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: hashStorage,
+        resizeDebounce: Duration.zero,
+      );
+      addTearDown(reloadedHashWs.dispose);
+      await reloadedHashWs.start();
+      await _pumpUntil(() => reloadedHashWs.tabs.length == 3);
+      expect(reloadedHashWs.activeOverlay, equals(FtermOverlay.none));
+
+      // 3. Snapshot saved for /team-a/v1/client is ignored when loading /team-b/v1/client.
+      final crossServerStorage = _InMemorySettingsStorage();
+      saveWebWorkspaceResumeSnapshot(
+        crossServerStorage,
+        const WebWorkspaceResumeSnapshot(
+          serverUrl: 'wss://cast.example.com/team-a/v1/client',
+          tabs: [
+            WebTabResumeState(
+              root: WebResumePaneLeaf('shared-s1'),
+              pinnedTitle: 'Team A Custom Title',
+            ),
+          ],
+          dismissedSessionIds: {'shared-s2', 'shared-s3'},
+        ),
+      );
+      final teamBWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(
+          serverUri: Uri.parse('wss://cast.example.com/team-b/v1/client'),
+          token: harness.token,
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://cast.example.com/team-b/v1/client'),
+            token: harness.token,
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: crossServerStorage,
+        resizeDebounce: Duration.zero,
+      );
+      addTearDown(teamBWs.dispose);
+      await teamBWs.start();
+      await _pumpUntil(() => teamBWs.tabs.length == 3);
+      expect(teamBWs.tabs.first.pinnedTitle, isNull);
+      expect(
+        loadWebWorkspaceResumeSnapshot(crossServerStorage).serverUrl,
+        equals('wss://cast.example.com/team-b/v1/client'),
+      );
+
+      // Switching _activeRelayUri via connectRelay before first directory clears pending snapshot.
+      final switchStorage = _InMemorySettingsStorage();
+      saveWebWorkspaceResumeSnapshot(
+        switchStorage,
+        const WebWorkspaceResumeSnapshot(
+          serverUrl: 'wss://cast.example.com/team-a/v1/client',
+          tabs: [
+            WebTabResumeState(
+              root: WebResumePaneLeaf('shared-s1'),
+              pinnedTitle: 'Stale Team A Title',
+            ),
+          ],
+          dismissedSessionIds: {'shared-s2'},
+        ),
+      );
+      final switchWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(
+          serverUri: Uri.parse('wss://cast.example.com/team-a/v1/client'),
+          promptForConnection: true,
+        ),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('wss://cast.example.com/team-a/v1/client'),
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: switchStorage,
+        resizeDebounce: Duration.zero,
+      );
+      addTearDown(switchWs.dispose);
+      await switchWs.connectRelay(
+        serverUri: Uri.parse('wss://cast.example.com/team-b/v1/client'),
+        clientToken: harness.token,
+      );
+      await _pumpUntil(() => switchWs.tabs.length == 3);
+      expect(switchWs.tabs.first.pinnedTitle, isNull);
+    });
+
+    test('Web resume remaps focusedLeafIndex after pruning dead leaves, reconciles contradictory dismissed IDs, and pending spawns clear on spawn_rejected, disconnect, relay switch, and fatal auth', () async {
+      final harness = AppThreeWayWsHarness();
+      addTearDown(harness.dispose);
+      await harness.startCaster(
+        id: 'live-2',
+        title: 'zsh-2',
+        allowSpawn: true,
+        onSpawnRequested: () async {},
+      );
+      await harness.startCaster(
+        id: 'live-3',
+        title: 'zsh-3',
+        allowSpawn: true,
+        onSpawnRequested: () async {},
+      );
+      await _pumpUntil(() => harness.registry.sessions.length == 2);
+
+      // Snapshot has [dead-1, live-2 (focusedLeafIndex: 1), live-3] AND contradictory live-2 in dismissedSessionIds.
+      final storage = _InMemorySettingsStorage();
+      saveWebWorkspaceResumeSnapshot(
+        storage,
+        WebWorkspaceResumeSnapshot(
+          serverUrl: 'wss://cast.example.com/term/v1/client',
+          tabs: [
+            WebTabResumeState(
+              root: WebResumeSplitBranch(
+                axis: SplitAxis.horizontal,
+                ratio: 0.4,
+                first: const WebResumePaneLeaf('dead-1'),
+                second: WebResumeSplitBranch(
+                  axis: SplitAxis.vertical,
+                  ratio: 0.5,
+                  first: const WebResumePaneLeaf('live-2'),
+                  second: const WebResumePaneLeaf('live-3'),
+                ),
+              ),
+              focusedLeafIndex: 1,
+            ),
+          ],
+          dismissedSessionIds: const {'live-2'},
+        ),
+      );
+
+      final repo = CastClientRepository(
+        transport: WsClientTransport(
+          serverUri: Uri.parse('wss://cast.example.com/term/v1/client'),
+          token: harness.token,
+          channelFactory: harness.openClientChannel,
+        ),
+        enableReconnect: false,
+      );
+      final ws = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(
+          serverUri: Uri.parse('wss://cast.example.com/term/v1/client'),
+          token: harness.token,
+        ),
+        repository: repo,
+        localHostDriver: _StubOnlyLocalHostDriver(),
+        audioController: FtermAudioController(
+          engineFactory: _FakeAudioEngine.new,
+        ),
+        storage: storage,
+        resizeDebounce: Duration.zero,
+        remoteSpawnTimeout: const Duration(seconds: 30),
+      );
+      addTearDown(ws.dispose);
+
+      await ws.start();
+      await _pumpUntil(() => ws.tabs.length == 1);
+      // Focused pane must remap from original index 1 -> surviving index 0 (live-2, NOT live-3).
+      expect(ws.tabs.single.splitTree.paneCount, equals(2));
+      expect(
+        ws.focusedPane!.remoteSessionId,
+        equals(const SessionId('live-2')),
+      );
+      // Contradictory live-2 must be removed from dismissedSessionIds upon materialization.
+      expect(
+        loadWebWorkspaceResumeSnapshot(storage).dismissedSessionIds,
+        isNot(contains('live-2')),
+      );
+
+      // spawn_rejected pops oldest pending spawn entry one at a time.
+      expect(ws.requestRemoteShellSpawn(const SessionId('live-2')), isTrue);
+      expect(ws.requestRemoteShellSpawn(const SessionId('live-3')), isTrue);
+      expect(ws.pendingRemoteSpawnCount, equals(2));
+      clientMessageReceivedEvent.post(
+        repo.bus,
+        const ErrorFrame(code: 'spawn_rejected', message: 'Spawn denied'),
+      );
+      expect(ws.pendingRemoteSpawnCount, equals(1));
+      clientMessageReceivedEvent.post(
+        repo.bus,
+        const ErrorFrame(code: 'spawn_rejected', message: 'Spawn denied'),
+      );
+      expect(ws.pendingRemoteSpawnCount, equals(0));
+
+      // Disconnect clears all pending remote spawns.
+      expect(ws.requestRemoteShellSpawn(const SessionId('live-2')), isTrue);
+      expect(ws.pendingRemoteSpawnCount, equals(1));
+      clientDisconnectedEvent.post(repo.bus, true);
+      expect(ws.pendingRemoteSpawnCount, equals(0));
+
+      // Fatal auth error clears all pending remote spawns.
+      expect(ws.requestRemoteShellSpawn(const SessionId('live-2')), isTrue);
+      expect(ws.pendingRemoteSpawnCount, equals(1));
+      clientMessageReceivedEvent.post(
+        repo.bus,
+        const ErrorFrame(code: 'auth_failed', message: 'Token revoked'),
+      );
+      expect(ws.pendingRemoteSpawnCount, equals(0));
+
+      // Reconnect via connectRelay clears all pending remote spawns.
+      await ws.connectRelay(
+        serverUri: Uri.parse('wss://cast.example.com/term/v1/client'),
+        clientToken: harness.token,
+      );
+      await _pumpUntil(
+        () => ws.connectionState == ClientConnectionState.authenticated,
+      );
+      expect(ws.requestRemoteShellSpawn(const SessionId('live-2')), isTrue);
+      expect(ws.pendingRemoteSpawnCount, equals(1));
+      await ws.connectRelay(
+        serverUri: Uri.parse('wss://cast.example.com/other/v1/client'),
+        clientToken: harness.token,
+      );
+      expect(ws.pendingRemoteSpawnCount, equals(0));
     });
 
     test('closePane and splitFocusedPane handle concurrent close across awaits without stale tab index or orphan host', () async {

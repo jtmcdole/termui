@@ -27,6 +27,9 @@ void scrubPlatformUrlFragment() {}
 /// No-op initial hash token reader on native desktop (`dart:io`) platforms.
 String consumePlatformInitialHashToken() => '';
 
+/// Returns [fallback] unchanged on native desktop (`dart:io`) platforms.
+Uri resolvePlatformLaunchBaseUri(Uri fallback) => fallback;
+
 final class _NoopIoFileDropBridge implements FileDropBridge {
   const _NoopIoFileDropBridge();
 

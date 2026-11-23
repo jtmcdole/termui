@@ -141,6 +141,7 @@ final class FileSettingsStorage implements BatchSettingsStorage {
 
   @override
   String? getItem(String key) {
+    if (key == ftermWebWorkspaceResumeStorageKey) return null;
     final entry = _ensureEntriesLoaded()[key];
     return switch (entry) {
       final String s => s,
@@ -150,14 +151,20 @@ final class FileSettingsStorage implements BatchSettingsStorage {
   }
 
   @override
-  void setItem(String key, String value) =>
-      setItems(<String, String>{key: value});
+  void setItem(String key, String value) {
+    if (key == ftermWebWorkspaceResumeStorageKey) return;
+    setItems(<String, String>{key: value});
+  }
 
   @override
   void setItems(Map<String, String> entries) {
-    if (entries.isEmpty) return;
+    final filtered = <String, String>{
+      for (final MapEntry(:key, :value) in entries.entries)
+        if (key != ftermWebWorkspaceResumeStorageKey) key: value,
+    };
+    if (filtered.isEmpty) return;
     final current = _ensureEntriesLoaded();
-    current.addAll(entries);
+    current.addAll(filtered);
     _pendingPayload = '${_prettyEncoder.convert(current)}\n';
     _activeWrite ??= Zone.root.run(_drainWrites);
   }

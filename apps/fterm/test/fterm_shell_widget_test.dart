@@ -2203,6 +2203,106 @@ void main() {
         await tester.runAsync(harness.dispose);
       },
     );
+
+    testWidgets(
+      'SessionPickerOverlay renders New Shell only for allowSpawn sessions and shows Web New Remote Shell button',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(900, 560));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final harness = AppThreeWayWsHarness();
+        var spawnCount = 0;
+        await tester.runAsync(() async {
+          await harness.startCaster(
+            id: 'spawnable-1',
+            title: 'zsh',
+            allowSpawn: true,
+            onSpawnRequested: () async {
+              spawnCount += 1;
+              await harness.startCaster(
+                id: 'spawned-$spawnCount',
+                title: 'zsh #${spawnCount + 1}',
+                allowSpawn: true,
+              );
+            },
+          );
+          await harness.startCaster(
+            id: 'fixed-2',
+            title: 'htop',
+            allowSpawn: false,
+          );
+        });
+
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(token: harness.token),
+            channelFactory: harness.openClientChannel,
+            settingsStorage: _MemSettings(),
+            resizeDebounce: Duration.zero,
+            isWebOverride: true,
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester);
+
+        workspace!.setOverlay(FtermOverlay.sessionPicker);
+        await tester.pump();
+
+        expect(
+          find.byKey(const ValueKey('fterm-overlay-sessionPicker')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('picker-new-remote-shell')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('picker-spawn-spawnable-1')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('picker-spawn-fixed-2')),
+          findsNothing,
+        );
+
+        await tester.tap(
+          find.byKey(const ValueKey('picker-spawn-spawnable-1')),
+        );
+        await settleCastApp(tester, cycles: 5);
+
+        expect(spawnCount, equals(1));
+        expect(
+          find.byKey(const ValueKey('fterm-overlay-sessionPicker')),
+          findsNothing,
+        );
+        expect(workspace!.tabs, hasLength(3));
+        expect(
+          workspace!.focusedPane!.remoteSessionId,
+          equals(const SessionId('spawned-1')),
+        );
+
+        // Re-open picker and tap top-level New Remote Shell button.
+        workspace!.setOverlay(FtermOverlay.sessionPicker);
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('picker-new-remote-shell')));
+        await settleCastApp(tester, cycles: 5);
+        expect(spawnCount, equals(2));
+        expect(
+          find.byKey(const ValueKey('fterm-overlay-sessionPicker')),
+          findsNothing,
+        );
+        expect(workspace!.tabs, hasLength(4));
+        expect(
+          workspace!.focusedPane!.remoteSessionId,
+          equals(const SessionId('spawned-2')),
+        );
+
+        await tester.runAsync(() => workspace!.dispose());
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(harness.dispose);
+      },
+    );
   });
 }
 

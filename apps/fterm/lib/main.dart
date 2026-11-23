@@ -15,7 +15,7 @@ Future<void> main(List<String> args) async {
   final CastLaunchConfig config;
   try {
     config = resolveCastLaunchConfig(
-      baseUri: Uri.base,
+      baseUri: resolveLaunchBaseUri(Uri.base),
       args: args,
       initialFragmentToken: initialFragmentToken,
       defineServerUrl: const String.fromEnvironment('TERMUI_CAST_SERVER_URL'),
