@@ -821,6 +821,203 @@ void main() {
         expect(secondUniforms.timeCursorChange, greaterThan(0.0));
       },
     );
+
+    testWidgets(
+      'ignores hidden cursor jumps so iPreviousCursor stays on the last visible position',
+      (WidgetTester tester) async {
+        final backend = _FakeShaderBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:cursor_probe',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: _validAnimatedGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.always,
+        );
+        await tester.runAsync(() => controller.syncConfig(config));
+
+        final palette = Uint32List(TerminalShaderUniforms.paletteLength);
+        for (var i = 0; i < palette.length; i++) {
+          palette[i] = TerminalColorTheme.termuiDark.resolveAnsi256(i).argb;
+        }
+
+        Widget buildHost(Rect rect, {required bool visible}) => MediaQuery(
+          data: const MediaQueryData(devicePixelRatio: 1.0),
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: 200,
+                height: 100,
+                child: TerminalShaderHost(
+                  controller: controller,
+                  config: config,
+                  cursorRectLogical: rect,
+                  cursorColorArgb: 0xFF62D196,
+                  cursorStyle: TerminalShaderUniforms.cursorStyleBlock,
+                  cursorVisible: visible,
+                  palette256Argb: palette,
+                  cellSizeLogical: const Size(10.0, 20.0),
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        // 1. Initial hidden frame must not latch a bogus origin.
+        await tester.pumpWidget(
+          buildHost(const Rect.fromLTWH(180, 0, 10, 20), visible: false),
+        );
+        expect(
+          backend.syncBackgroundCalls.last.first.uniforms.cursorVisible,
+          isFalse,
+        );
+
+        // 2. First visible frame at (10, 20) initializes both current & previous.
+        await tester.pumpWidget(
+          buildHost(const Rect.fromLTWH(10, 20, 10, 20), visible: true),
+        );
+        final firstVisible = backend.syncBackgroundCalls.last.first.uniforms;
+        expect(
+          firstVisible.currentCursorXywh,
+          equals(<double>[10.0, 60.0, 10.0, 20.0]),
+        );
+        expect(
+          firstVisible.previousCursorXywh,
+          equals(<double>[10.0, 60.0, 10.0, 20.0]),
+        );
+        final initialChangeTime = firstVisible.timeCursorChange;
+
+        // 3. Hidden jump to far right (simulating Powerlevel10k RPROMPT redraw)
+        // must NOT overwrite currentCursorXywh, previousCursorXywh, or timeCursorChange.
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.pumpWidget(
+          buildHost(const Rect.fromLTWH(180, 20, 10, 20), visible: false),
+        );
+        final hiddenFrame = backend.syncBackgroundCalls.last.first.uniforms;
+        expect(hiddenFrame.cursorVisible, isFalse);
+        expect(
+          hiddenFrame.currentCursorXywh,
+          equals(<double>[10.0, 60.0, 10.0, 20.0]),
+        );
+        expect(
+          hiddenFrame.previousCursorXywh,
+          equals(<double>[10.0, 60.0, 10.0, 20.0]),
+        );
+        expect(hiddenFrame.timeCursorChange, equals(initialChangeTime));
+
+        // 4. Cursor reappears on the next prompt row at (10, 40): previousCursor
+        // is the last visible position (10, 20), NOT the hidden far-right jump.
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.pumpWidget(
+          buildHost(const Rect.fromLTWH(10, 40, 10, 20), visible: true),
+        );
+        final nextVisible = backend.syncBackgroundCalls.last.first.uniforms;
+        expect(nextVisible.cursorVisible, isTrue);
+        expect(
+          nextVisible.currentCursorXywh,
+          equals(<double>[10.0, 40.0, 10.0, 20.0]),
+        );
+        expect(
+          nextVisible.previousCursorXywh,
+          equals(<double>[10.0, 60.0, 10.0, 20.0]),
+        );
+        expect(nextVisible.timeCursorChange, greaterThan(initialChangeTime));
+      },
+    );
+
+    testWidgets(
+      'coalesces multiple same-frame PTY cursor updates so unrendered intermediate positions do not pollute iPreviousCursor',
+      (WidgetTester tester) async {
+        final backend = _FakeShaderBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:cursor_probe',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: _validAnimatedGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.always,
+        );
+        await tester.runAsync(() => controller.syncConfig(config));
+
+        final palette = Uint32List(TerminalShaderUniforms.paletteLength);
+        for (var i = 0; i < palette.length; i++) {
+          palette[i] = TerminalColorTheme.termuiDark.resolveAnsi256(i).argb;
+        }
+
+        final activity = ChangeNotifier();
+        addTearDown(activity.dispose);
+        var currentRect = const Rect.fromLTWH(10, 20, 10, 20);
+
+        await tester.pumpWidget(
+          MediaQuery(
+            data: const MediaQueryData(devicePixelRatio: 1.0),
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: 200,
+                  height: 100,
+                  child: TerminalShaderHost(
+                    controller: controller,
+                    config: config,
+                    cursorRectLogicalProvider: () => currentRect,
+                    cursorColorArgb: 0xFF62D196,
+                    cursorStyle: TerminalShaderUniforms.cursorStyleBlock,
+                    cursorVisible: true,
+                    activityListenable: activity,
+                    palette256Argb: palette,
+                    cellSizeLogical: const Size(10.0, 20.0),
+                    child: const SizedBox.expand(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
+        // Initial painted frame: cursor at (10, 20) -> Y-up bottomY = 60.
+        final initial = backend.syncBackgroundCalls.last.first.uniforms;
+        expect(
+          initial.currentCursorXywh,
+          equals(<double>[10.0, 60.0, 10.0, 20.0]),
+        );
+
+        // Simulate two rapid PTY chunks before the next VSync frame paints:
+        // Chunk 1: zsh/P10k writes RPROMPT at far right (180, 20) while visible.
+        currentRect = const Rect.fromLTWH(180, 20, 10, 20);
+        activity.notifyListeners();
+        // Chunk 2: zsh moves down to new prompt on next row (10, 40).
+        currentRect = const Rect.fromLTWH(10, 40, 10, 20);
+        activity.notifyListeners();
+
+        // Next VSync paints: previousCursor must be (10, 20) [bottomY 60],
+        // NOT the unrendered intermediate far-right (180, 20).
+        await tester.pump(const Duration(milliseconds: 16));
+        final painted = backend.syncBackgroundCalls.last.first.uniforms;
+        expect(
+          painted.currentCursorXywh,
+          equals(<double>[10.0, 40.0, 10.0, 20.0]),
+        );
+        expect(
+          painted.previousCursorXywh,
+          equals(<double>[10.0, 60.0, 10.0, 20.0]),
+        );
+      },
+    );
   });
 
   group(

@@ -576,12 +576,12 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     if (activityChanged || cursorChanged || configChanged) {
       _childCaptureDirty = true;
       _backgroundDirty = true;
-      if (_lastLogicalSize.width > 0 && _lastLogicalSize.height > 0) {
-        _syncCursorState(_lastLogicalSize);
-      } else {
-        _cursorVisible =
-            widget.cursorVisibleProvider?.call() ?? widget.cursorVisible;
-      }
+      // Only update _cursorVisible here for ticker gating; defer cursor
+      // position transitions to actual frame render so multiple updates before
+      // VSync never shift an unrendered intermediate position into
+      // _previousCursorXywh.
+      _cursorVisible =
+          widget.cursorVisibleProvider?.call() ?? widget.cursorVisible;
       _frameNotifier.notify();
     }
   }
@@ -615,12 +615,13 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     _childCaptureDirty = true;
     _regionFallbackDirty = true;
     final prevVisible = _cursorVisible;
-    if (_lastLogicalSize.width > 0 && _lastLogicalSize.height > 0) {
-      _syncCursorState(_lastLogicalSize);
-    } else {
-      _cursorVisible =
-          widget.cursorVisibleProvider?.call() ?? widget.cursorVisible;
-    }
+    // Sync visibility for ticker pause/resume, but do NOT shift cursor
+    // coordinates here: rapid multi-chunk PTY writes within the same frame
+    // (such as zsh/Powerlevel10k writing RPROMPT then moving back to the left
+    // prompt) would otherwise record an unrendered cursor position as
+    // iPreviousCursor before paint() even runs.
+    _cursorVisible =
+        widget.cursorVisibleProvider?.call() ?? widget.cursorVisible;
     if (prevVisible != _cursorVisible) {
       _syncTicker();
     }
@@ -832,6 +833,13 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     final style = widget.cursorStyleProvider?.call() ?? widget.cursorStyle;
     final visible =
         widget.cursorVisibleProvider?.call() ?? widget.cursorVisible;
+    if (!visible) {
+      // Ignore hidden cursor jumps (e.g. shells hiding DECTCEM while painting
+      // right prompts or status bars) so iPreviousCursor stays on the last
+      // visible cursor position.
+      _cursorVisible = false;
+      return;
+    }
 
     final dpr = _devicePixelRatio;
     final double left = rect == null ? 0.0 : rect.left * dpr;
