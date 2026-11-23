@@ -41,10 +41,10 @@ final class KittyProtocolExample extends WidgetBookExample {
   int _grabOffsetY = 2;
 
   @override
-  bool get requiresTick => true;
+  bool get requiresTick => false;
 
   @override
-  bool tick(Duration duration) => false;
+  bool get wantsMouseHoverRebuild => false;
 
   @override
   Map<String, String> get helpBindings => {

@@ -42,6 +42,9 @@ abstract base class WidgetBookExample {
   /// Whether this example requires a ticker to update.
   bool get requiresTick => false;
 
+  /// Whether plain mouse hover (`MouseEventType.move`) should rebuild this page.
+  bool get wantsMouseHoverRebuild => true;
+
   /// Whether this example currently has an active overlay (e.g. modal).
   bool get hasActiveOverlay => false;
 
