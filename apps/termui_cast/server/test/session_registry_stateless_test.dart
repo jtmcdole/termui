@@ -2782,4 +2782,224 @@ void _registerUnsubscribedTitleBurstTest(WsRelayHandler Function() getHandler) {
       ).deepEquals([88, 88]);
     },
   );
+
+  test(
+    'propagates allowSpawn on register and takeover, forwards unsubscribed SpawnSessionFrame with rate limit and backpressure guards (#404)',
+    () async {
+      var now = DateTime.utc(2026, 11, 23, 12);
+      final spawnRegistry = SessionRegistry(
+        maxOutboundFrames: 4,
+        maxOutboundBytes: 65536,
+        clock: Clock(() => now),
+      );
+      addTearDown(spawnRegistry.close);
+      final spawnHandler = WsRelayHandler(
+        registry: spawnRegistry,
+        authenticator: TokenAuthenticator(),
+      );
+      addTearDown(spawnHandler.close);
+
+      const spawnableId = SessionId('sess-spawnable');
+      const lockedId = SessionId('sess-locked');
+      final resumeToken = Uint8List.fromList(
+        List<int>.generate(16, (i) => i + 1),
+      );
+
+      // Caster 1 registers spawnable session (allowSpawn: true).
+      final caster1Pipe = StreamChannelController<Uint8List>();
+      spawnHandler.attachCasterChannel(caster1Pipe.foreign);
+      final caster1Inbox = <CastMessage>[];
+      addTearDown(
+        caster1Pipe.local.stream
+            .listen((b) => caster1Inbox.add(BufferFrameCodec.decode(b)))
+            .cancel,
+      );
+      caster1Pipe.local.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .caster, token: '')),
+      );
+      caster1Pipe.local.sink.add(
+        BufferFrameCodec.encode(
+          RegisterSessionFrame(
+            sessionId: spawnableId,
+            title: 'zsh',
+            cols: 80,
+            rows: 24,
+            resumeToken: resumeToken,
+            allowSpawn: true,
+          ),
+        ),
+      );
+
+      // Caster 2 registers non-spawnable session (allowSpawn: false).
+      final caster2Pipe = StreamChannelController<Uint8List>();
+      spawnHandler.attachCasterChannel(caster2Pipe.foreign);
+      final caster2Inbox = <CastMessage>[];
+      addTearDown(
+        caster2Pipe.local.stream
+            .listen((b) => caster2Inbox.add(BufferFrameCodec.decode(b)))
+            .cancel,
+      );
+      caster2Pipe.local.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .caster, token: '')),
+      );
+      caster2Pipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const RegisterSessionFrame(
+            sessionId: lockedId,
+            title: 'htop',
+            cols: 80,
+            rows: 24,
+          ),
+        ),
+      );
+      await pumpEventQueue();
+
+      // Unsubscribed client connects and receives initial directory with allowSpawn flags.
+      final clientPipe = StreamChannelController<Uint8List>();
+      spawnHandler.attachClientChannel(clientPipe.foreign);
+      final clientInbox = <CastMessage>[];
+      addTearDown(
+        clientPipe.local.stream
+            .listen((b) => clientInbox.add(BufferFrameCodec.decode(b)))
+            .cancel,
+      );
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+      );
+      await pumpEventQueue();
+
+      final initialDir = clientInbox.whereType<SessionDirectoryFrame>().last;
+      final byId = {for (final s in initialDir.sessions) s.id: s};
+      check(byId[spawnableId]?.allowSpawn).equals(true);
+      check(byId[lockedId]?.allowSpawn).equals(false);
+
+      // 1. Disallowed session and unknown session are rejected without consuming spawn quota.
+      clientInbox.clear();
+      caster1Inbox.clear();
+      caster2Inbox.clear();
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(const SpawnSessionFrame(sessionId: lockedId)),
+      );
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const SpawnSessionFrame(sessionId: SessionId('missing-sess')),
+        ),
+      );
+      await pumpEventQueue();
+      check(caster2Inbox.whereType<SpawnSessionFrame>()).isEmpty();
+      check(
+        clientInbox.whereType<ErrorFrame>().map((e) => e.code).toList(),
+      ).deepEquals(['spawn_rejected', 'spawn_rejected']);
+
+      // 2. Unsubscribed client triggers 4 spawns within 10s -> all 4 forwarded; 5th rate-limited!
+      clientInbox.clear();
+      for (var i = 0; i < 5; i++) {
+        clientPipe.local.sink.add(
+          BufferFrameCodec.encode(
+            const SpawnSessionFrame(sessionId: spawnableId),
+          ),
+        );
+      }
+      await pumpEventQueue();
+      check(caster1Inbox.whereType<SpawnSessionFrame>()).length.equals(4);
+      check(
+        clientInbox.whereType<ErrorFrame>().single.code,
+      ).equals('spawn_rejected');
+
+      // Advance clock past 10s sliding window -> next spawn succeeds again.
+      now = now.add(const Duration(seconds: 10));
+      clientInbox.clear();
+      caster1Inbox.clear();
+      clientPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          const SpawnSessionFrame(sessionId: spawnableId),
+        ),
+      );
+      await pumpEventQueue();
+      check(caster1Inbox.whereType<SpawnSessionFrame>()).length.equals(1);
+      check(clientInbox.whereType<ErrorFrame>()).isEmpty();
+
+      // 3. Takeover updates allowSpawn (true -> false) and broadcasts updated directory.
+      final takeoverPipe = StreamChannelController<Uint8List>();
+      spawnHandler.attachCasterChannel(takeoverPipe.foreign);
+      addTearDown(takeoverPipe.local.stream.listen((_) {}).cancel);
+      takeoverPipe.local.sink.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .caster, token: '')),
+      );
+      takeoverPipe.local.sink.add(
+        BufferFrameCodec.encode(
+          RegisterSessionFrame(
+            sessionId: spawnableId,
+            title: 'zsh',
+            cols: 80,
+            rows: 24,
+            resumeToken: resumeToken,
+            allowSpawn: false,
+          ),
+        ),
+      );
+      await pumpEventQueue();
+      final updatedDir = clientInbox.whereType<SessionDirectoryFrame>().last;
+      check(
+        updatedDir.sessions.firstWhere((s) => s.id == spawnableId).allowSpawn,
+      ).isFalse();
+
+      // 4. Caster backpressure drops spawn with caster_busy without consuming quota.
+      final backpressureRegistry = SessionRegistry(
+        maxOutboundFrames: 4,
+        maxOutboundBytes: 65536,
+        clock: Clock(() => now),
+      );
+      addTearDown(backpressureRegistry.close);
+      final pressuredOut = StreamController<Uint8List>();
+      addTearDown(pressuredOut.close);
+      final pressuredSub = pressuredOut.stream.listen((_) {});
+      addTearDown(pressuredSub.cancel);
+      final pressuredCaster = backpressureRegistry.registerCasterPeer(
+        sink: pressuredOut.sink,
+      );
+      backpressureRegistry.registerSession(
+        pressuredCaster,
+        const RegisterSessionFrame(
+          sessionId: spawnableId,
+          title: 'zsh',
+          cols: 80,
+          rows: 24,
+          allowSpawn: true,
+        ),
+      );
+      final viewerOut = StreamController<Uint8List>();
+      addTearDown(viewerOut.close);
+      final viewerInbox = <CastMessage>[];
+      addTearDown(
+        viewerOut.stream
+            .listen((b) => viewerInbox.add(BufferFrameCodec.decode(b)))
+            .cancel,
+      );
+      final viewer = backpressureRegistry.registerClientPeer(
+        sink: viewerOut.sink,
+      );
+      await pumpEventQueue();
+      viewerInbox.clear();
+
+      // Pause caster stream and fill 3/4 high-water mark (3 frames of maxOutboundFrames=4).
+      pressuredSub.pause();
+      for (var i = 0; i < 3; i++) {
+        pressuredCaster.sendMessage(
+          const RequestKeyframeFrame(sessionId: spawnableId),
+        );
+      }
+      check(
+        backpressureRegistry.forwardClientSpawnSession(
+          viewer,
+          const SpawnSessionFrame(sessionId: spawnableId),
+        ),
+      ).isFalse();
+      await pumpEventQueue();
+      check(
+        viewerInbox.whereType<ErrorFrame>().single.code,
+      ).equals('caster_busy');
+      pressuredSub.resume();
+    },
+  );
 }

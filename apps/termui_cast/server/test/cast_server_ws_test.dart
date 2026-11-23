@@ -663,6 +663,208 @@ void _registerBackpressureAndOriginTests() {
       check(errSink.toString()).contains('Failed to bind');
     },
   );
+
+  test(
+    'allows loopback proxied Host headers matching --allowed-origin (#401) and routes WebSockets under --base-path (#406)',
+    () async {
+      final server = await CastServer.bind(
+        ServerConfig(
+          port: 0,
+          basePath: '/term',
+          allowedOrigins: const ['https://box.tail.ts.net'],
+        ),
+      );
+      addTearDown(server.close);
+      check(server.casterUri.path).equals('/term/v1/caster');
+      check(server.clientUri.path).equals('/term/v1/client');
+
+      // 1. Proxied Host: box.tail.ts.net and box.tail.ts.net:443 upgrade cleanly on loopback.
+      final httpClient = HttpClient();
+      addTearDown(() => httpClient.close(force: true));
+      for (final hostHeader in const [
+        'box.tail.ts.net',
+        'box.tail.ts.net:443',
+      ]) {
+        final req = await httpClient.getUrl(
+          Uri.parse('http://127.0.0.1:${server.port}/term/v1/client'),
+        );
+        req.persistentConnection = false;
+        req.headers
+          ..set(HttpHeaders.hostHeader, hostHeader)
+          ..set('origin', 'https://box.tail.ts.net')
+          ..set(HttpHeaders.connectionHeader, 'Upgrade')
+          ..set(HttpHeaders.upgradeHeader, 'websocket')
+          ..set('Sec-WebSocket-Version', '13')
+          ..set('Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ==');
+        final resp = await req.close();
+        check(resp.statusCode).equals(HttpStatus.switchingProtocols);
+        final sock = await resp.detachSocket();
+        sock.destroy();
+      }
+
+      // 2. Non-default port box.tail.ts.net:8443, unknown evil.example, and
+      // scheme-downgraded http:// Origin on loopback (without X-Forwarded-Proto) return 403.
+      for (final badHost in const ['box.tail.ts.net:8443', 'evil.example']) {
+        final req = await httpClient.getUrl(
+          Uri.parse('http://127.0.0.1:${server.port}/term/v1/client'),
+        );
+        req.persistentConnection = false;
+        req.headers
+          ..set(HttpHeaders.hostHeader, badHost)
+          ..set(HttpHeaders.connectionHeader, 'Upgrade')
+          ..set(HttpHeaders.upgradeHeader, 'websocket')
+          ..set('Sec-WebSocket-Version', '13')
+          ..set('Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ==');
+        final resp = await req.close();
+        await resp.drain<void>();
+        check(resp.statusCode).equals(HttpStatus.forbidden);
+      }
+
+      final downgradeReq = await httpClient.getUrl(
+        Uri.parse('http://127.0.0.1:${server.port}/term/v1/client'),
+      );
+      downgradeReq.persistentConnection = false;
+      downgradeReq.headers
+        ..set(HttpHeaders.hostHeader, 'box.tail.ts.net')
+        ..set('origin', 'http://box.tail.ts.net')
+        ..set(HttpHeaders.connectionHeader, 'Upgrade')
+        ..set(HttpHeaders.upgradeHeader, 'websocket')
+        ..set('Sec-WebSocket-Version', '13')
+        ..set('Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ==');
+      final downgradeResp = await downgradeReq.close();
+      await downgradeResp.drain<void>();
+      check(downgradeResp.statusCode).equals(HttpStatus.forbidden);
+
+      // 3. Unprefixed /v1/client and lookalike /terminal/v1/client return 404.
+      for (final wrongPath in const ['/v1/client', '/terminal/v1/client']) {
+        await check(
+          WebSocket.connect('ws://127.0.0.1:${server.port}$wrongPath'),
+        ).throws<WebSocketException>(
+          (it) => it
+              .has((e) => e.httpStatusCode, 'httpStatusCode')
+              .equals(HttpStatus.notFound),
+        );
+      }
+
+      // 4. Prefixed /term/v1/caster and /term/v1/client complete binary handshake.
+      final ws = await WebSocket.connect('${server.clientUri}');
+      addTearDown(ws.close);
+      final accepted = Completer<AuthAcceptedFrame>();
+      ws.listen((raw) {
+        final msg = BufferFrameCodec.decode(
+          raw is Uint8List ? raw : Uint8List.fromList(raw as List<int>),
+        );
+        if (msg is AuthAcceptedFrame && !accepted.isCompleted) {
+          accepted.complete(msg);
+        }
+      });
+      ws.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+      );
+      check(
+        (await accepted.future.timeout(const Duration(seconds: 2))).role,
+      ).equals(CastRole.client);
+    },
+  );
+
+  test(
+    'enforces --trust-proxy-client-auth and --require-client-auth-header while keeping /v1/caster token-gated (#407)',
+    () async {
+      final shutdown = StreamController<void>();
+      addTearDown(shutdown.close);
+      final cliOut = _NotifyingStringSink();
+      final cliErr = StringBuffer();
+      final cliFuture = runServerCli(
+        const [
+          '--port=0',
+          '--caster-token=caster-only-secret',
+          '--trust-proxy-client-auth',
+          '--require-client-auth-header=X-Forwarded-Email',
+        ],
+        out: cliOut,
+        err: cliErr,
+        shutdownSignal: shutdown.stream,
+      );
+      await cliOut.ready.future.timeout(const Duration(seconds: 3));
+      check(cliErr.toString()).contains('--trust-proxy-client-auth');
+      check(cliErr.toString()).contains('perimeter auth');
+
+      final clientUrl = RegExp(
+        r'ws://127\.0\.0\.1:\d+/v1/client',
+      ).firstMatch(cliOut.buffer.toString())!.group(0)!;
+      final casterUrl = clientUrl.replaceAll('/v1/client', '/v1/caster');
+
+      // 1. Missing or blank required header on /v1/client -> 401 Unauthorized.
+      await check(WebSocket.connect(clientUrl)).throws<WebSocketException>(
+        (it) => it
+            .has((e) => e.httpStatusCode, 'httpStatusCode')
+            .equals(HttpStatus.unauthorized),
+      );
+      await check(
+        WebSocket.connect(
+          clientUrl,
+          headers: const {'X-Forwarded-Email': '   '},
+        ),
+      ).throws<WebSocketException>(
+        (it) => it
+            .has((e) => e.httpStatusCode, 'httpStatusCode')
+            .equals(HttpStatus.unauthorized),
+      );
+
+      // 2. Non-empty required header allows tokenless /v1/client auth.
+      final clientWs = await WebSocket.connect(
+        clientUrl,
+        headers: const {'X-Forwarded-Email': 'alice@example.com'},
+      );
+      addTearDown(clientWs.close);
+      final clientAccepted = Completer<AuthAcceptedFrame>();
+      clientWs.listen((raw) {
+        final msg = BufferFrameCodec.decode(
+          raw is Uint8List ? raw : Uint8List.fromList(raw as List<int>),
+        );
+        if (msg is AuthAcceptedFrame && !clientAccepted.isCompleted) {
+          clientAccepted.complete(msg);
+        }
+      });
+      clientWs.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .client, token: '')),
+      );
+      check(
+        (await clientAccepted.future.timeout(const Duration(seconds: 2))).role,
+      ).equals(CastRole.client);
+
+      // 3. /v1/caster does NOT require client header, and remains gated by casterToken.
+      final badCasterWs = await WebSocket.connect(casterUrl);
+      badCasterWs.add(
+        BufferFrameCodec.encode(const AuthFrame(role: .caster, token: '')),
+      );
+      await badCasterWs.drain<void>().timeout(const Duration(seconds: 2));
+      check(badCasterWs.closeCode).equals(1008);
+
+      final goodCasterWs = await WebSocket.connect(casterUrl);
+      addTearDown(goodCasterWs.close);
+      final casterAccepted = Completer<AuthAcceptedFrame>();
+      goodCasterWs.listen((raw) {
+        final msg = BufferFrameCodec.decode(
+          raw is Uint8List ? raw : Uint8List.fromList(raw as List<int>),
+        );
+        if (msg is AuthAcceptedFrame && !casterAccepted.isCompleted) {
+          casterAccepted.complete(msg);
+        }
+      });
+      goodCasterWs.add(
+        BufferFrameCodec.encode(
+          const AuthFrame(role: .caster, token: 'caster-only-secret'),
+        ),
+      );
+      check(
+        (await casterAccepted.future.timeout(const Duration(seconds: 2))).role,
+      ).equals(CastRole.caster);
+
+      shutdown.add(null);
+      check(await cliFuture).equals(0);
+    },
+  );
 }
 
 final class _NotifyingStringSink implements StringSink {

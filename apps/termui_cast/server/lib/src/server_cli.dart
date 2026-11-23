@@ -39,6 +39,18 @@ Future<int> runServerCli(
     stderrSink.writeln('[termui_cast_server] WARNING: $warning');
   }
 
+  if (config.trustProxyClientAuth) {
+    final headerNote = config.requireClientAuthHeader == null
+        ? 'no --require-client-auth-header guard configured'
+        : 'requiring header "${config.requireClientAuthHeader}"';
+    stderrSink.writeln(
+      '[termui_cast_server] WARNING: --trust-proxy-client-auth is enabled; '
+      '/v1/client accepts tokenless connections and relies on upstream '
+      'perimeter auth ($headerNote). Ensure direct access to '
+      '${config.host.address}:${config.port} is blocked.',
+    );
+  }
+
   final isCloudRun = env['K_SERVICE']?.isNotEmpty ?? false;
   if (!config.host.isLoopback && !isCloudRun) {
     stderrSink.writeln(

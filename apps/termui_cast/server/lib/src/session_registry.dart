@@ -26,6 +26,12 @@ final class SessionRegistry {
   /// Default sliding rate-limit window for client session renames.
   static const Duration defaultRenameRateWindow = Duration(seconds: 1);
 
+  /// Default maximum remote shell spawn requests permitted per client within [defaultSpawnRateWindow].
+  static const int defaultMaxSpawnsPerWindow = 4;
+
+  /// Default sliding rate-limit window for client remote shell spawn requests.
+  static const Duration defaultSpawnRateWindow = Duration(seconds: 10);
+
   /// Default maximum `0x1C` shader frames relayed per session within [defaultShaderRateWindow].
   static const int defaultMaxShaderFramesPerSecond = 120;
 
@@ -52,6 +58,12 @@ final class SessionRegistry {
 
   /// Sliding window duration used to rate-limit client session renames.
   final Duration renameRateWindow;
+
+  /// Maximum remote shell spawn requests allowed per client within [spawnRateWindow].
+  final int maxSpawnsPerWindow;
+
+  /// Sliding window duration used to rate-limit client remote shell spawn requests.
+  final Duration spawnRateWindow;
 
   /// Maximum `0x1C` shader frames relayed per session within [shaderRateWindow].
   final int maxShaderFramesPerSecond;
@@ -87,6 +99,8 @@ final class SessionRegistry {
     this.uploadTimeout = defaultUploadTimeout,
     this.maxRenamesPerWindow = defaultMaxRenamesPerWindow,
     this.renameRateWindow = defaultRenameRateWindow,
+    this.maxSpawnsPerWindow = defaultMaxSpawnsPerWindow,
+    this.spawnRateWindow = defaultSpawnRateWindow,
     this.maxShaderFramesPerSecond = defaultMaxShaderFramesPerSecond,
     this.maxShaderBytesPerSecond = defaultMaxShaderBytesPerSecond,
     this.shaderRateWindow = defaultShaderRateWindow,
@@ -166,6 +180,7 @@ final class SessionRegistry {
       initialTitle: frame.title,
       cols: frame.cols,
       rows: frame.rows,
+      allowSpawn: frame.allowSpawn,
       resumeToken: Uint8List.fromList(frame.resumeToken),
       caster: caster,
     );
@@ -197,6 +212,7 @@ final class SessionRegistry {
     newCaster.sessionId = session.id;
     session.cols = frame.cols;
     session.rows = frame.rows;
+    session.allowSpawn = frame.allowSpawn;
     session.lastSeq = null;
     session.resetSentControlStateForTakeover();
 
@@ -316,6 +332,53 @@ final class SessionRegistry {
         const ErrorFrame(
           code: 'rename_rejected',
           message: 'Session rename rate limit exceeded',
+        ),
+      );
+    }
+    return allowed;
+  }
+
+  /// Forwards a [SpawnSessionFrame] from any registered [client] (without
+  /// requiring prior subscription) to the caster owning `frame.sessionId` when
+  /// that session advertises `allowSpawn == true`.
+  bool forwardClientSpawnSession(ClientPeer client, SpawnSessionFrame frame) {
+    if (!_clients.contains(client)) return false;
+    final session = _sessions[frame.sessionId];
+    if (session == null) {
+      client.sendMessage(
+        ErrorFrame(
+          code: 'spawn_rejected',
+          message: 'Unknown session ${frame.sessionId.value}',
+        ),
+      );
+      return false;
+    }
+    if (!session.allowSpawn) {
+      client.sendMessage(
+        ErrorFrame(
+          code: 'spawn_rejected',
+          message: 'Session ${frame.sessionId.value} does not allow spawning',
+        ),
+      );
+      return false;
+    }
+    if (!_rejectIfCasterPressured(client, session, 'spawn')) return false;
+    if (!_consumeSpawnQuotaOrReject(client)) return false;
+    session.caster.sendMessage(frame);
+    return true;
+  }
+
+  bool _consumeSpawnQuotaOrReject(ClientPeer client) {
+    final allowed = client._tryConsumeSpawnQuota(
+      _clock.now(),
+      maxSpawns: maxSpawnsPerWindow,
+      window: spawnRateWindow,
+    );
+    if (!allowed) {
+      client.sendMessage(
+        const ErrorFrame(
+          code: 'spawn_rejected',
+          message: 'Session spawn rate limit exceeded',
         ),
       );
     }
@@ -1297,6 +1360,7 @@ final class ClientPeer {
   final Map<SessionId, int> _inFlightScrollback = {};
   final Map<SessionId, int> _activeUploads = {};
   final Queue<DateTime> _renameTimestamps = Queue<DateTime>();
+  final Queue<DateTime> _spawnTimestamps = Queue<DateTime>();
 
   ClientPeer._(this._pump);
 
@@ -1306,14 +1370,37 @@ final class ClientPeer {
     DateTime now, {
     required int maxRenames,
     required Duration window,
+  }) => _tryConsumeSlidingQuota(
+    _renameTimestamps,
+    now,
+    maxEvents: maxRenames,
+    window: window,
+  );
+
+  bool _tryConsumeSpawnQuota(
+    DateTime now, {
+    required int maxSpawns,
+    required Duration window,
+  }) => _tryConsumeSlidingQuota(
+    _spawnTimestamps,
+    now,
+    maxEvents: maxSpawns,
+    window: window,
+  );
+
+  static bool _tryConsumeSlidingQuota(
+    Queue<DateTime> timestamps,
+    DateTime now, {
+    required int maxEvents,
+    required Duration window,
   }) {
-    if (maxRenames <= 0) return false;
-    while (_renameTimestamps.isNotEmpty &&
-        !now.isBefore(_renameTimestamps.first.add(window))) {
-      _renameTimestamps.removeFirst();
+    if (maxEvents <= 0) return false;
+    while (timestamps.isNotEmpty &&
+        !now.isBefore(timestamps.first.add(window))) {
+      timestamps.removeFirst();
     }
-    if (_renameTimestamps.length >= maxRenames) return false;
-    _renameTimestamps.addLast(now);
+    if (timestamps.length >= maxEvents) return false;
+    timestamps.addLast(now);
     return true;
   }
 
@@ -1382,6 +1469,7 @@ final class _LiveSession {
   String? pinnedTitle;
   int cols;
   int rows;
+  bool allowSpawn;
   int? requestedCols;
   int? requestedRows;
   int? lastSentSubscriberCount;
@@ -1409,6 +1497,7 @@ final class _LiveSession {
     required this.initialTitle,
     required this.cols,
     required this.rows,
+    required this.allowSpawn,
     required this.resumeToken,
     required this.caster,
   });
@@ -1589,6 +1678,7 @@ final class _LiveSession {
     rows: rows,
     subscriberCount: subscribers.length,
     isUserPinned: isUserPinned,
+    allowSpawn: allowSpawn,
   );
 }
 

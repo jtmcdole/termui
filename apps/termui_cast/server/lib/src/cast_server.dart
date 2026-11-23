@@ -44,11 +44,11 @@ final class CastServer {
   /// Bound TCP port.
   int get port => _httpServer.port;
 
-  /// WebSocket URI for caster peers (`/v1/caster`).
-  Uri get casterUri => _endpointUri('/v1/caster');
+  /// WebSocket URI for caster peers (`<basePath>/v1/caster`).
+  Uri get casterUri => _endpointUri('${config.basePath}/v1/caster');
 
-  /// WebSocket URI for viewer client peers (`/v1/client`).
-  Uri get clientUri => _endpointUri('/v1/client');
+  /// WebSocket URI for viewer client peers (`<basePath>/v1/client`).
+  Uri get clientUri => _endpointUri('${config.basePath}/v1/client');
 
   /// Binds an HTTP or HTTPS server according to [config].
   static Future<CastServer> bind(
@@ -62,7 +62,7 @@ final class CastServer {
   }) async {
     final staticHandler = config.webRoot == null
         ? null
-        : StaticWebHandler(config.webRoot!);
+        : StaticWebHandler(config.webRoot!, basePath: config.basePath);
     final httpServer = await _bindHttpServer(config);
     final registry = SessionRegistry(
       clock: clock,
@@ -109,16 +109,29 @@ final class CastServer {
 
   Future<void> _handleHttpRequest(HttpRequest request) async {
     try {
-      final path = request.uri.path;
-      if (await _handleHealthOrProbeRequest(request, path)) return;
+      final rawPath = request.uri.path;
+      final basePath = config.basePath;
+      if (basePath.isNotEmpty) {
+        if (await _handleBasePathRedirect(request, rawPath, basePath)) return;
+        if (rawPath != basePath && !rawPath.startsWith('$basePath/')) {
+          request.response.statusCode = HttpStatus.notFound;
+          await request.response.close();
+          return;
+        }
+      }
 
-      if (path == '/v1/caster' || path == '/v1/client') {
-        await _handleWebSocketUpgrade(request, path);
+      final routePath = basePath.isEmpty
+          ? rawPath
+          : rawPath.substring(basePath.length);
+      if (await _handleHealthOrProbeRequest(request, routePath)) return;
+
+      if (routePath == '/v1/caster' || routePath == '/v1/client') {
+        await _handleWebSocketUpgrade(request, routePath);
         return;
       }
 
       final staticHandler = _staticHandler;
-      if (staticHandler != null && !path.startsWith('/v1/')) {
+      if (staticHandler != null && !routePath.startsWith('/v1/')) {
         await staticHandler.handle(request);
         return;
       }
@@ -128,6 +141,23 @@ final class CastServer {
     } on Object catch (error) {
       handler.onLog?.call('HTTP error: $error');
     }
+  }
+
+  Future<bool> _handleBasePathRedirect(
+    HttpRequest request,
+    String rawPath,
+    String basePath,
+  ) async {
+    if (rawPath != basePath) return false;
+    if (request.method != 'GET' && request.method != 'HEAD') return false;
+    final location = request.uri.hasQuery
+        ? '$basePath/?${request.uri.query}'
+        : '$basePath/';
+    request.response
+      ..statusCode = HttpStatus.permanentRedirect
+      ..headers.set(HttpHeaders.locationHeader, location);
+    await request.response.close();
+    return true;
   }
 
   Future<bool> _handleHealthOrProbeRequest(
@@ -184,6 +214,15 @@ final class CastServer {
       await request.response.close();
       return;
     }
+    if (path == '/v1/client' && !_hasRequiredClientAuthHeader(request)) {
+      handler.onLog?.call(
+        'Rejected WebSocket upgrade on $path: missing required header '
+        '${config.requireClientAuthHeader}',
+      );
+      request.response.statusCode = HttpStatus.unauthorized;
+      await request.response.close();
+      return;
+    }
     if (_closed || !handler.tryReserveUpgrade()) {
       handler.onLog?.call('Rejected WebSocket upgrade on $path: at capacity');
       request.response.statusCode = HttpStatus.serviceUnavailable;
@@ -214,6 +253,14 @@ final class CastServer {
     } finally {
       handler.releaseUpgradeReservation();
     }
+  }
+
+  bool _hasRequiredClientAuthHeader(HttpRequest request) {
+    final headerName = config.requireClientAuthHeader;
+    if (headerName == null) return true;
+    final values = request.headers[headerName];
+    if (values == null || values.isEmpty) return false;
+    return values.any((value) => value.trim().isNotEmpty);
   }
 
   static Future<HttpServer> _bindHttpServer(ServerConfig config) =>

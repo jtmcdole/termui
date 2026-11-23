@@ -379,6 +379,8 @@ final class _RelayPeerSession {
         registry.forwardFileUploadEnd(client, frame);
       case RenameSessionFrame frame:
         registry.renameSession(client, frame);
+      case SpawnSessionFrame frame:
+        registry.forwardClientSpawnSession(client, frame);
       case AudioWaveformReplyFrame frame:
         registry.forwardClientWaveformReply(client, frame, rawBytes: rawBytes);
       default:
