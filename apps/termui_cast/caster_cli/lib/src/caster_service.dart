@@ -70,6 +70,37 @@ final class CasterConfig {
   /// Hard upper bound on `--scrollback-lines` (`100,000`).
   static const int maxScrollbackLinesLimit = 100000;
 
+  static const Set<String> _powerShellNonInteractiveFlags = <String>{
+    '-c',
+    '-command',
+    '-f',
+    '-file',
+    '-e',
+    '-ec',
+    '-enc',
+    '-encodedcommand',
+    '-noni',
+    '-noninteractive',
+  };
+
+  static const Set<String> _powerShellValueFlags = <String>{
+    '-workingdirectory',
+    '-wd',
+    '-executionpolicy',
+    '-ep',
+    '-windowstyle',
+    '-w',
+    '-settingsfile',
+    '-configurationname',
+    '-config',
+    '-configurationfile',
+    '-inputformat',
+    '-if',
+    '-outputformat',
+    '-of',
+    '-custompipename',
+  };
+
   /// Default local relay server caster endpoint.
   static final Uri defaultServerUri = Uri.parse(
     'ws://127.0.0.1:8420/v1/caster',
@@ -124,6 +155,9 @@ final class CasterConfig {
   /// Whether `SIGHUP` reconnects/re-registers instead of shutting down cleanly.
   final bool keepAliveOnHup;
 
+  /// Whether remote viewers may ask this caster to spawn additional shell PTYs.
+  final bool allowSpawn;
+
   /// Non-fatal startup configuration warnings to display to the user.
   final List<String> warnings;
 
@@ -148,6 +182,7 @@ final class CasterConfig {
     String? uploadDirPath,
     this.maxUploadBytes = FileUploadReceiver.defaultMaxUploadBytes,
     this.keepAliveOnHup = false,
+    bool? allowSpawn,
     List<String> warnings = const <String>[],
     required List<String> command,
   }) : serverUri = serverUri ?? defaultServerUri,
@@ -162,9 +197,144 @@ final class CasterConfig {
              _normalizeOptionalString(iapKeyFilePath),
            ),
        uploadDirPath = _normalizeOptionalString(uploadDirPath),
+       allowSpawn = allowSpawn ?? isInteractiveShellCommand(command),
        warnings = List<String>.unmodifiable(warnings),
        command = List<String>.unmodifiable(command) {
     _validate();
+  }
+
+  /// Returns `true` when [command] invokes a recognized interactive shell
+  /// (`zsh`, `bash`, `sh`, `fish`, `dash`, `ksh`, `tcsh`, `pwsh`, `powershell`,
+  /// or `cmd`, ignoring case and trailing `.exe`) without non-interactive
+  /// command or script execution arguments.
+  static bool isInteractiveShellCommand(List<String> command) {
+    if (command.isEmpty) return false;
+    final raw = command.first.trim();
+    if (raw.isEmpty) return false;
+    final slash = max(raw.lastIndexOf('/'), raw.lastIndexOf(r'\'));
+    var name = (slash >= 0 ? raw.substring(slash + 1) : raw).toLowerCase();
+    if (name.endsWith('.exe')) {
+      name = name.substring(0, name.length - 4);
+    }
+    final args = command.skip(1);
+    return switch (name) {
+      'zsh' ||
+      'bash' ||
+      'sh' ||
+      'fish' ||
+      'dash' ||
+      'ksh' ||
+      'tcsh' => _isInteractivePosixShellArgs(args),
+      'cmd' => _isInteractiveCmdArgs(args),
+      'pwsh' || 'powershell' => _isInteractivePowerShellArgs(args),
+      _ => false,
+    };
+  }
+
+  static bool _isInteractivePosixShellArgs(Iterable<String> args) {
+    var expectOptionValue = false;
+    var afterEndOfOptions = false;
+    for (final arg in args) {
+      if (afterEndOfOptions) return false;
+      if (expectOptionValue) {
+        expectOptionValue = false;
+        continue;
+      }
+      if (arg == '--') {
+        afterEndOfOptions = true;
+      } else if (_posixOptionTakesValue(arg)) {
+        expectOptionValue = true;
+      } else if (_isPosixCommandFlag(arg) || !_isPosixFlag(arg)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool _isPosixCommandFlag(String arg) {
+    if (arg == '--command' || arg.startsWith('--command=')) return true;
+    if (arg.startsWith('--') || !arg.startsWith('-') || arg.length < 2) {
+      return false;
+    }
+    return arg.substring(1).contains('c');
+  }
+
+  static bool _posixOptionTakesValue(String arg) =>
+      arg == '-o' || arg == '+o' || arg == '--rcfile' || arg == '--init-file';
+
+  static bool _isPosixFlag(String arg) =>
+      arg.startsWith('-') || arg.startsWith('+');
+
+  static bool _isInteractiveCmdArgs(Iterable<String> args) {
+    for (final rawArg in args) {
+      final arg = rawArg.trim().toLowerCase();
+      if (arg == '/c' || arg.startsWith('/c ')) return false;
+    }
+    return true;
+  }
+
+  static bool _isInteractivePowerShellArgs(Iterable<String> args) {
+    var expectOptionValue = false;
+    for (final rawArg in args) {
+      if (expectOptionValue) {
+        expectOptionValue = false;
+        continue;
+      }
+      final flag = _normalizePowerShellFlag(rawArg);
+      if (flag == null || _powerShellNonInteractiveFlags.contains(flag.name)) {
+        return false;
+      }
+      expectOptionValue =
+          !flag.hasInlineValue && _powerShellValueFlags.contains(flag.name);
+    }
+    return true;
+  }
+
+  static ({String name, bool hasInlineValue})? _normalizePowerShellFlag(
+    String rawArg,
+  ) {
+    final arg = rawArg.trim().toLowerCase();
+    if (arg.isEmpty || (!arg.startsWith('-') && !arg.startsWith('/'))) {
+      return null;
+    }
+    final dashed = arg.startsWith('/') ? '-${arg.substring(1)}' : arg;
+    final colon = dashed.indexOf(':');
+    if (colon < 0) return (name: dashed, hasInlineValue: false);
+    return (name: dashed.substring(0, colon), hasInlineValue: true);
+  }
+
+  /// Resolves the default interactive shell command from [environment].
+  ///
+  /// On Windows, returns `COMSPEC` when non-empty, otherwise `powershell.exe`.
+  /// On POSIX, returns `SHELL` when non-empty, otherwise `/bin/sh`.
+  static List<String> resolveDefaultShellCommand(
+    Map<String, String> environment, {
+    bool? isWindows,
+  }) {
+    if (isWindows ?? Platform.isWindows) {
+      final comspec = _lookupEnv(environment, 'COMSPEC', caseInsensitive: true);
+      return <String>[comspec ?? 'powershell.exe'];
+    }
+    final shell = _lookupEnv(environment, 'SHELL');
+    return <String>[shell ?? '/bin/sh'];
+  }
+
+  static String? _lookupEnv(
+    Map<String, String> environment,
+    String key, {
+    bool caseInsensitive = false,
+  }) {
+    final direct = environment[key]?.trim();
+    if (direct != null && direct.isNotEmpty) return direct;
+    if (!caseInsensitive) return null;
+    final target = key.toLowerCase();
+    for (final entry in environment.entries) {
+      if (entry.key.toLowerCase() == target) {
+        final trimmed = entry.value.trim();
+        if (trimmed.isNotEmpty) return trimmed;
+      }
+    }
+    return null;
   }
 
   static String? _normalizeOptionalString(String? raw) {
@@ -322,6 +492,12 @@ final class CasterConfig {
             'Reconnect and re-register on SIGHUP instead of shutting down cleanly (or \$TERMUI_CAST_KEEP_ALIVE_ON_HUP).',
       )
       ..addFlag(
+        'allow-spawn',
+        defaultsTo: null,
+        help:
+            'Allow viewers to remotely spawn additional shells from this caster (defaults on for shells, off for non-shells; or \$TERMUI_CAST_ALLOW_SPAWN).',
+      )
+      ..addFlag(
         'upload',
         defaultsTo: true,
         help:
@@ -431,6 +607,13 @@ final class CasterConfig {
       'TERMUI_CAST_KEEP_ALIVE_ON_HUP',
       environment['TERMUI_CAST_KEEP_ALIVE_ON_HUP'],
     );
+    final allowSpawn = _resolveFlag(
+      results,
+      'allow-spawn',
+      'TERMUI_CAST_ALLOW_SPAWN',
+      environment['TERMUI_CAST_ALLOW_SPAWN'],
+      defaultValue: isInteractiveShellCommand(command),
+    );
     final uploadEnabled = _resolveFlag(
       results,
       'upload',
@@ -461,6 +644,7 @@ final class CasterConfig {
       iapKeyFilePath: iapKeyFile,
       downloadConPty: downloadConPty,
       keepAliveOnHup: keepAliveOnHup,
+      allowSpawn: allowSpawn,
       uploadEnabled: uploadEnabled,
       uploadDirPath: uploadDirPath,
       maxUploadBytes: maxUploadBytes,
@@ -641,6 +825,12 @@ final class CasterService {
   /// Optional diagnostic log callback for server errors and transport faults.
   final void Function(String message)? onLog;
 
+  /// Optional callback invoked when a viewer sends a permitted [SpawnSessionFrame].
+  ///
+  /// [RegisterSessionFrame.allowSpawn] is advertised as `true` only when both
+  /// `config.allowSpawn` is `true` and [onSpawnRequested] is non-null.
+  final Future<void> Function()? onSpawnRequested;
+
   /// Maximum duration allowed for `AuthAcceptedFrame` after sending `AuthFrame`.
   final Duration authTimeout;
 
@@ -744,6 +934,7 @@ final class CasterService {
     Clock? clock,
     bool? isWindows,
     void Function(String message)? onLog,
+    Future<void> Function()? onSpawnRequested,
     Duration authTimeout = const Duration(seconds: 5),
     Duration frameCoalesceInterval = const Duration(milliseconds: 16),
     Duration baseReconnectDelay = const Duration(milliseconds: 200),
@@ -775,6 +966,7 @@ final class CasterService {
          clock: clock,
          isWindows: isWindows,
          onLog: onLog,
+         onSpawnRequested: onSpawnRequested,
          authTimeout: authTimeout,
          frameCoalesceInterval: frameCoalesceInterval,
          baseReconnectDelay: baseReconnectDelay,
@@ -802,6 +994,7 @@ final class CasterService {
     Clock? clock,
     bool? isWindows,
     void Function(String message)? onLog,
+    Future<void> Function()? onSpawnRequested,
     Duration authTimeout = const Duration(seconds: 5),
     Duration frameCoalesceInterval = const Duration(milliseconds: 16),
     Duration baseReconnectDelay = const Duration(milliseconds: 200),
@@ -831,6 +1024,7 @@ final class CasterService {
       clock: clock,
       isWindows: isWindows,
       onLog: onLog,
+      onSpawnRequested: onSpawnRequested,
       authTimeout: authTimeout,
       frameCoalesceInterval: frameCoalesceInterval,
       baseReconnectDelay: baseReconnectDelay,
@@ -856,6 +1050,7 @@ final class CasterService {
     Clock? clock,
     bool? isWindows,
     this.onLog,
+    this.onSpawnRequested,
     required this.authTimeout,
     required Duration frameCoalesceInterval,
     required Duration baseReconnectDelay,
@@ -1607,11 +1802,25 @@ final class CasterService {
           }
           _emitStatus();
         }
+      case SpawnSessionFrame(:final sessionId):
+        _onSpawnSessionFrame(sessionId);
       case ErrorFrame(:final code, :final message):
         _onErrorFrame(code, message);
       default:
         break;
     }
+  }
+
+  bool get _canFulfillSpawn => config.allowSpawn && onSpawnRequested != null;
+
+  void _onSpawnSessionFrame(SessionId sessionId) {
+    if (sessionId != config.sessionId || !_canFulfillSpawn) return;
+    final callback = onSpawnRequested!;
+    unawaited(
+      Future<void>.sync(callback).catchError((Object error) {
+        onLog?.call('Spawn session request failed: $error');
+      }),
+    );
   }
 
   Future<void> _onAuthAccepted({required bool shaderFrames}) async {
@@ -1644,6 +1853,7 @@ final class CasterService {
         cols: AuthoritativeTerminal.clampCols(terminal.cols),
         rows: AuthoritativeTerminal.clampRows(terminal.rows),
         resumeToken: _resumeToken,
+        allowSpawn: _canFulfillSpawn,
       ),
     );
     if ((_pinnedTitle != null || _pendingShellTitle) &&

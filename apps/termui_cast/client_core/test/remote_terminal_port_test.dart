@@ -1826,4 +1826,274 @@ void main() {
       },
     );
   });
+
+  group('CastClientRepository.requestSpawnSession', () {
+    test(
+      'returns true and transmits SpawnSessionFrame when authenticated, connected, and allowSpawn is true',
+      () async {
+        const spawnableId = SessionId('spawn-ok');
+        const readonlyId = SessionId('spawn-no');
+        final controller = StreamChannelController<Uint8List>();
+        final received = <CastMessage>[];
+        final sub = controller.local.stream.listen((raw) {
+          received.add(BufferFrameCodec.decode(raw));
+        });
+        addTearDown(() async {
+          await sub.cancel();
+          await controller.local.sink.close();
+        });
+
+        final transport = WsClientTransport(
+          channelFactory: () async => controller.foreign,
+        );
+        final repo = CastClientRepository(
+          transport: transport,
+          enableReconnect: false,
+        );
+        addTearDown(repo.dispose);
+
+        await repo.connect();
+        await Future<void>.delayed(Duration.zero);
+        received.clear();
+
+        // Connected but not yet authenticated or populated with a directory.
+        check(repo.requestSpawnSession(spawnableId)).isFalse();
+        await Future<void>.delayed(Duration.zero);
+        check(received).isEmpty();
+
+        controller.local.sink.add(
+          BufferFrameCodec.encode(const AuthAcceptedFrame(role: .client)),
+        );
+        controller.local.sink.add(
+          BufferFrameCodec.encode(
+            const SessionDirectoryFrame(
+              sessions: [
+                SessionSummary(
+                  id: spawnableId,
+                  title: 'zsh',
+                  cols: 80,
+                  rows: 24,
+                  allowSpawn: true,
+                ),
+                SessionSummary(
+                  id: readonlyId,
+                  title: 'htop',
+                  cols: 80,
+                  rows: 24,
+                  allowSpawn: false,
+                ),
+              ],
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        received.clear();
+
+        check(repo.requestSpawnSession(spawnableId)).isTrue();
+        await Future<void>.delayed(Duration.zero);
+
+        check(received).length.equals(1);
+        check(received.single)
+            .isA<SpawnSessionFrame>()
+            .has((f) => f.sessionId, 'sessionId')
+            .equals(spawnableId);
+      },
+    );
+
+    test(
+      'returns false and sends nothing when allowSpawn is false, sessionId is unknown, disconnected, or disposed',
+      () async {
+        const spawnableId = SessionId('spawn-ok');
+        const readonlyId = SessionId('spawn-no');
+        const unknownId = SessionId('spawn-unknown');
+
+        final controller = StreamChannelController<Uint8List>();
+        final received = <CastMessage>[];
+        final sub = controller.local.stream.listen((raw) {
+          received.add(BufferFrameCodec.decode(raw));
+        });
+        addTearDown(() async {
+          await sub.cancel();
+          await controller.local.sink.close();
+        });
+
+        final transport = WsClientTransport(
+          channelFactory: () async => controller.foreign,
+        );
+        final repo = CastClientRepository(
+          transport: transport,
+          enableReconnect: false,
+        );
+        addTearDown(repo.dispose);
+
+        // Disconnected before connect().
+        check(repo.requestSpawnSession(spawnableId)).isFalse();
+        check(received).isEmpty();
+
+        await repo.connect();
+        controller.local.sink.add(
+          BufferFrameCodec.encode(const AuthAcceptedFrame(role: .client)),
+        );
+        controller.local.sink.add(
+          BufferFrameCodec.encode(
+            const SessionDirectoryFrame(
+              sessions: [
+                SessionSummary(
+                  id: spawnableId,
+                  title: 'zsh',
+                  cols: 80,
+                  rows: 24,
+                  allowSpawn: true,
+                ),
+                SessionSummary(
+                  id: readonlyId,
+                  title: 'htop',
+                  cols: 80,
+                  rows: 24,
+                  allowSpawn: false,
+                ),
+              ],
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        received.clear();
+
+        // allowSpawn == false and unknown sessionId.
+        check(repo.requestSpawnSession(readonlyId)).isFalse();
+        check(repo.requestSpawnSession(unknownId)).isFalse();
+        await Future<void>.delayed(Duration.zero);
+        check(received).isEmpty();
+
+        // Transport disconnects while spawnableId was previously advertised.
+        await controller.local.sink.close();
+        await Future<void>.delayed(Duration.zero);
+        check(transport.isConnected).isFalse();
+        check(repo.requestSpawnSession(spawnableId)).isFalse();
+        await Future<void>.delayed(Duration.zero);
+        check(received).isEmpty();
+
+        // After dispose() on an authenticated connected repository.
+        final disposedController = StreamChannelController<Uint8List>();
+        final disposedReceived = <CastMessage>[];
+        final disposedSub = disposedController.local.stream.listen((raw) {
+          disposedReceived.add(BufferFrameCodec.decode(raw));
+        });
+        addTearDown(() async {
+          await disposedSub.cancel();
+          await disposedController.local.sink.close();
+        });
+
+        final disposedTransport = WsClientTransport(
+          channelFactory: () async => disposedController.foreign,
+        );
+        final disposedRepo = CastClientRepository(
+          transport: disposedTransport,
+          enableReconnect: false,
+        );
+        await disposedRepo.connect();
+        disposedController.local.sink.add(
+          BufferFrameCodec.encode(const AuthAcceptedFrame(role: .client)),
+        );
+        disposedController.local.sink.add(
+          BufferFrameCodec.encode(
+            const SessionDirectoryFrame(
+              sessions: [
+                SessionSummary(
+                  id: spawnableId,
+                  title: 'zsh',
+                  cols: 80,
+                  rows: 24,
+                  allowSpawn: true,
+                ),
+              ],
+            ),
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        disposedReceived.clear();
+
+        await disposedRepo.dispose();
+        check(disposedRepo.requestSpawnSession(spawnableId)).isFalse();
+        await Future<void>.delayed(Duration.zero);
+        check(disposedReceived).isEmpty();
+      },
+    );
+
+    test(
+      'returns false after reconnect + AuthAcceptedFrame until a fresh SessionDirectoryFrame arrives',
+      () async {
+        const spawnableId = SessionId('spawn-stale');
+        var server = _FakeServerTransportHarness();
+        final repo = CastClientRepository(
+          transport: WsClientTransport(channelFactory: server.openChannel),
+          transportFactory: (_) =>
+              WsClientTransport(channelFactory: server.openChannel),
+          enableReconnect: false,
+        );
+        addTearDown(() async {
+          await repo.dispose();
+          await server.close();
+        });
+
+        await repo.connect();
+        server.send(const AuthAcceptedFrame(role: .client));
+        server.send(
+          const SessionDirectoryFrame(
+            sessions: [
+              SessionSummary(
+                id: spawnableId,
+                title: 'zsh',
+                cols: 80,
+                rows: 24,
+                allowSpawn: true,
+              ),
+            ],
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        server.received.clear();
+
+        check(repo.requestSpawnSession(spawnableId)).isTrue();
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<SpawnSessionFrame>().length).equals(1);
+
+        // Reconnect and authenticate without receiving a fresh SessionDirectoryFrame yet.
+        await server.close();
+        server = _FakeServerTransportHarness();
+        await repo.reconnect((
+          serverUri: WsClientTransport.defaultServerUri,
+          token: 'reconnected-tok',
+        ));
+        server.send(const AuthAcceptedFrame(role: .client));
+        await Future<void>.delayed(Duration.zero);
+        server.received.clear();
+
+        // Stale directory from the previous connection must NOT authorize a spawn.
+        check(repo.requestSpawnSession(spawnableId)).isFalse();
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<SpawnSessionFrame>()).isEmpty();
+
+        // Once the fresh directory arrives on the new connection, spawning works again.
+        server.send(
+          const SessionDirectoryFrame(
+            sessions: [
+              SessionSummary(
+                id: spawnableId,
+                title: 'zsh',
+                cols: 80,
+                rows: 24,
+                allowSpawn: true,
+              ),
+            ],
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        check(repo.requestSpawnSession(spawnableId)).isTrue();
+        await Future<void>.delayed(Duration.zero);
+        check(server.received.whereType<SpawnSessionFrame>().length).equals(1);
+      },
+    );
+  });
 }

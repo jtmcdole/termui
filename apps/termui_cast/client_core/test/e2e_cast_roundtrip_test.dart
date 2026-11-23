@@ -830,7 +830,149 @@ void main() {
         }
       },
     );
+
+    test(
+      'live 3-way viewer requestSpawnSession spawns child shell via CasterSupervisor into SessionDirectoryFrame',
+      () async {
+        final server = await CastServer.bind(
+          ServerConfig(
+            host: InternetAddress.loopbackIPv4,
+            port: 0,
+            casterToken: 'caster-tok',
+            clientToken: 'client-tok',
+          ),
+        );
+        const primaryId = SessionId('spawn-primary');
+        final startedPtys = <_E2eFakePtySession>[];
+        CasterSupervisor? supervisor;
+        CastClientRepository? repo;
+        RemoteTerminalPort? childPort;
+        void Function(CastMessage)? dirListener;
+
+        try {
+          supervisor = CasterSupervisor(
+            primaryConfig: CasterConfig(
+              serverUri: server.casterUri,
+              token: 'caster-tok',
+              sessionId: primaryId,
+              title: 'zsh',
+              initialCols: 80,
+              initialRows: 24,
+              command: const ['/bin/zsh'],
+            ),
+            environment: const <String, String>{'SHELL': '/bin/zsh'},
+            isWindows: false,
+            random: Random(19),
+            ptyStarter: (config) async {
+              final pty = _E2eFakePtySession(tag: config.title);
+              startedPtys.add(pty);
+              return pty;
+            },
+          );
+          check(await supervisor.start()).isTrue();
+          await _waitUntil(
+            () => server.registry.sessions.any(
+              (s) => s.id == primaryId && s.allowSpawn,
+            ),
+          );
+
+          repo = CastClientRepository(
+            transport: WsClientTransport(
+              serverUri: server.clientUri,
+              token: 'client-tok',
+            ),
+            enableReconnect: false,
+          );
+          final latestDirectory = <SessionSummary>[];
+          dirListener = (msg) {
+            if (msg is SessionDirectoryFrame) {
+              latestDirectory
+                ..clear()
+                ..addAll(msg.sessions);
+            }
+          };
+          clientMessageReceivedEvent.addListener(repo.bus, dirListener);
+          await repo.connect();
+          await _waitUntil(
+            () => latestDirectory.any((s) => s.id == primaryId && s.allowSpawn),
+          );
+
+          check(repo.requestSpawnSession(primaryId)).isTrue();
+          await _waitUntil(() => latestDirectory.length == 2);
+
+          final spawnedSummary = latestDirectory.singleWhere(
+            (s) => s.id != primaryId,
+          );
+          check(spawnedSummary.title).equals('zsh #2');
+          check(spawnedSummary.allowSpawn).isTrue();
+          check(startedPtys.length).equals(2);
+
+          // Viewer can open a RemoteTerminalPort on the spawned child and exchange I/O.
+          childPort = repo.openTerminalPort(
+            spawnedSummary.id,
+            initialCols: 80,
+            initialRows: 24,
+          );
+          await _waitUntil(() => childPort!.slot.state == .synchronized);
+          startedPtys[1].emitText('BOOT:zsh #2\r\n');
+          await _waitUntil(
+            () => _bufferText(childPort!.buffer).contains('BOOT:zsh #2'),
+          );
+          childPort.sendInput(Uint8List.fromList(utf8.encode('hello-child\r')));
+          await _waitUntil(
+            () => startedPtys[1].writtenText.contains('hello-child'),
+          );
+        } finally {
+          if (repo != null && dirListener != null) {
+            clientMessageReceivedEvent.removeListener(repo.bus, dirListener);
+          }
+          await childPort?.dispose();
+          await repo?.dispose();
+          await supervisor?.stop(killPty: true);
+          await server.close();
+        }
+      },
+    );
   });
+}
+
+final class _E2eFakePtySession implements PtySession {
+  final String tag;
+  final StreamController<Uint8List> _output =
+      StreamController<Uint8List>.broadcast();
+  final Completer<int> _exitCode = Completer<int>();
+  final StringBuffer _written = StringBuffer();
+
+  _E2eFakePtySession({required this.tag});
+
+  String get writtenText => '$_written';
+
+  void emitText(String text) {
+    if (!_output.isClosed) {
+      _output.add(Uint8List.fromList(utf8.encode(text)));
+    }
+  }
+
+  @override
+  Stream<Uint8List> get output => _output.stream;
+
+  @override
+  Future<int> get exitCode => _exitCode.future;
+
+  @override
+  void writeBytes(Uint8List data) {
+    _written.write(utf8.decode(data, allowMalformed: true));
+  }
+
+  @override
+  void resize(int cols, int rows, {int pixelWidth = 0, int pixelHeight = 0}) {}
+
+  @override
+  bool kill([ProcessSignal signal = .sigterm]) {
+    if (!_output.isClosed) unawaited(_output.close());
+    if (!_exitCode.isCompleted) _exitCode.complete(-1);
+    return true;
+  }
 }
 
 final class _ThrowingDroppedFileSource implements DroppedFileSource {
