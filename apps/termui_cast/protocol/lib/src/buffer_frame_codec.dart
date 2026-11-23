@@ -82,8 +82,10 @@ const int _tagAudio = 0x19;
 const int _tagAudioWaveformReply = 0x1A;
 const int _tagKittyImageChunk = 0x1B;
 const int _tagShader = 0x1C;
+const int _tagSpawnSession = 0x1D;
 
 const int _capFlagShaderFrames = 0x01;
+const int _registerFlagAllowSpawn = 0x01;
 
 const int _shaderKindDefine = 0;
 const int _shaderKindRegion = 1;
@@ -105,6 +107,8 @@ final RegExp _shaderIdPattern = RegExp(r'^[A-Za-z0-9_.-]{1,64}$');
 
 const int _renameFlagClearPin = 0x01;
 const int _summaryFlagUserPinned = 0x01;
+const int _summaryFlagAllowSpawn = 0x02;
+const int _summaryFlagsMask = _summaryFlagUserPinned | _summaryFlagAllowSpawn;
 
 const int _audioKindTone = 0;
 const int _audioKindClip = 1;
@@ -325,25 +329,8 @@ abstract final class BufferFrameCodec {
         if (shaderFrames) {
           writer.writeUint8(_capFlagShaderFrames);
         }
-      case RegisterSessionFrame(
-        :final sessionId,
-        :final title,
-        :final cols,
-        :final rows,
-        :final resumeToken,
-      ):
-        _checkGridDims(cols, rows);
-        writer
-          ..writeUint8(_tagRegisterSession)
-          ..writeSessionId(sessionId)
-          ..writeTitle(title)
-          ..writeUint16(cols)
-          ..writeUint16(rows)
-          ..writeFixedBytes(
-            resumeToken,
-            expectedLength: RegisterSessionFrame.resumeTokenByteLength,
-            label: 'resumeToken',
-          );
+      case RegisterSessionFrame frame:
+        _encodeRegister(writer, frame);
       case SessionDirectoryFrame(:final sessions):
         _encodeDirectory(writer, sessions);
       case SubscribeSessionFrame(
@@ -440,6 +427,10 @@ abstract final class BufferFrameCodec {
         _encodeKittyImageChunk(writer, frame);
       case ShaderFrame frame:
         _encodeShaderFrame(writer, frame);
+      case SpawnSessionFrame(:final sessionId):
+        writer
+          ..writeUint8(_tagSpawnSession)
+          ..writeSessionId(sessionId);
     }
     final bytes = writer.takeBytes();
     if (message is ShaderFrame && bytes.length > maxShaderFrameBytes) {
@@ -838,6 +829,7 @@ CastMessage _decodeByTag(_FrameReader reader, int tag) {
     _tagAudioWaveformReply => _decodeAudioWaveformReply(reader),
     _tagKittyImageChunk => _decodeKittyImageChunk(reader),
     _tagShader => _decodeShaderFrame(reader),
+    _tagSpawnSession => SpawnSessionFrame(sessionId: reader.readSessionId()),
     _ => throw ProtocolFormatException('Unknown frame tag: $tag'),
   };
 }
@@ -2300,6 +2292,24 @@ void _checkGridDims(int cols, int rows) {
   }
 }
 
+void _encodeRegister(_FrameWriter writer, RegisterSessionFrame frame) {
+  _checkGridDims(frame.cols, frame.rows);
+  writer
+    ..writeUint8(_tagRegisterSession)
+    ..writeSessionId(frame.sessionId)
+    ..writeTitle(frame.title)
+    ..writeUint16(frame.cols)
+    ..writeUint16(frame.rows)
+    ..writeFixedBytes(
+      frame.resumeToken,
+      expectedLength: RegisterSessionFrame.resumeTokenByteLength,
+      label: 'resumeToken',
+    );
+  if (frame.allowSpawn) {
+    writer.writeUint8(_registerFlagAllowSpawn);
+  }
+}
+
 RegisterSessionFrame _decodeRegister(_FrameReader reader) {
   final sessionId = reader.readSessionId();
   final title = reader.readTitle();
@@ -2309,13 +2319,26 @@ RegisterSessionFrame _decodeRegister(_FrameReader reader) {
   final resumeToken = reader.readFixedBytes(
     RegisterSessionFrame.resumeTokenByteLength,
   );
+  final registerFlags = _readOptionalRegisterFlags(reader);
   return RegisterSessionFrame(
     sessionId: sessionId,
     title: title,
     cols: cols,
     rows: rows,
     resumeToken: resumeToken,
+    allowSpawn: (registerFlags & _registerFlagAllowSpawn) != 0,
   );
+}
+
+int _readOptionalRegisterFlags(_FrameReader reader) {
+  if (reader.isAtEnd) return 0;
+  final flags = reader.readUint8();
+  if ((flags & ~_registerFlagAllowSpawn) != 0) {
+    throw ProtocolFormatException(
+      'Invalid RegisterSessionFrame flags byte: $flags',
+    );
+  }
+  return flags;
 }
 
 AuthAcceptedFrame _decodeAuthAccepted(_FrameReader reader) {
@@ -2787,13 +2810,16 @@ void _encodeDirectory(_FrameWriter writer, List<SessionSummary> sessions) {
     ..writeUint16(sessions.length);
   for (final session in sessions) {
     _checkGridDims(session.cols, session.rows);
+    final flags =
+        (session.isUserPinned ? _summaryFlagUserPinned : 0) |
+        (session.allowSpawn ? _summaryFlagAllowSpawn : 0);
     writer
       ..writeSessionId(session.id)
       ..writeTitle(session.title)
       ..writeUint16(session.cols)
       ..writeUint16(session.rows)
       ..writeUint32(session.subscriberCount)
-      ..writeUint8(session.isUserPinned ? _summaryFlagUserPinned : 0);
+      ..writeUint8(flags);
   }
 }
 
@@ -2811,7 +2837,7 @@ SessionDirectoryFrame _decodeDirectory(_FrameReader reader) {
     _checkGridDims(cols, rows);
     final subscriberCount = reader.readUint32();
     final rawFlags = reader.readUint8();
-    if ((rawFlags & ~_summaryFlagUserPinned) != 0) {
+    if ((rawFlags & ~_summaryFlagsMask) != 0) {
       throw ProtocolFormatException(
         'Invalid SessionSummary flags byte: $rawFlags',
       );
@@ -2824,6 +2850,7 @@ SessionDirectoryFrame _decodeDirectory(_FrameReader reader) {
         rows: rows,
         subscriberCount: subscriberCount,
         isUserPinned: (rawFlags & _summaryFlagUserPinned) != 0,
+        allowSpawn: (rawFlags & _summaryFlagAllowSpawn) != 0,
       ),
     );
   }

@@ -1707,6 +1707,7 @@ void main() {
   _defineCompressionAndUtf8FuzzTests();
   _defineV5KttyAndAuxTests();
   _defineV6TitleBellAndAudioTests();
+  _defineSpawnSessionAndRegisterFlagsTests();
 }
 
 void _defineCompressionAndUtf8FuzzTests() {
@@ -2572,7 +2573,7 @@ void _testV6TitleAndBellFrames() {
             ..add([0, 1])
             ..add([0, 1, ...'s'.codeUnits])
             ..add([0, 1, ...'a'.codeUnits])
-            ..add([0, 80, 0, 24, 0, 0, 0, 0, 0x02]))
+            ..add([0, 80, 0, 24, 0, 0, 0, 0, 0x04]))
           .takeBytes();
   check(
     () => BufferFrameCodec.decode(badDir),
@@ -3911,4 +3912,167 @@ void _testV6HostileAudioAndTitleFrames() {
   check(
     () => BufferFrameCodec.inflateKittyBytes(deflated, expectedBytes: 128),
   ).throws<ProtocolFormatException>();
+}
+
+void _defineSpawnSessionAndRegisterFlagsTests() {
+  group(
+    'RegisterSessionFrame flags, SessionSummary.allowSpawn, and 0x1D SpawnSessionFrame',
+    () {
+      test(
+        'round-trips RegisterSessionFrame allowSpawn while keeping legacy bytes for allowSpawn: false',
+        () {
+          const sessionId = SessionId('sess-spawn-reg');
+          final resumeToken = Uint8List.fromList(
+            List<int>.generate(16, (i) => i + 10),
+          );
+
+          final legacyFrame = RegisterSessionFrame(
+            sessionId: sessionId,
+            title: 'zsh',
+            cols: 120,
+            rows: 40,
+            resumeToken: resumeToken,
+          );
+          final legacyWire = BufferFrameCodec.encode(legacyFrame);
+          final expectedLegacyLength =
+              2 +
+              2 +
+              sessionId.value.length +
+              2 +
+              'zsh'.length +
+              2 +
+              2 +
+              RegisterSessionFrame.resumeTokenByteLength;
+          check(legacyWire.length).equals(expectedLegacyLength);
+          final decodedLegacy =
+              BufferFrameCodec.decode(legacyWire) as RegisterSessionFrame;
+          check(decodedLegacy.sessionId).equals(sessionId);
+          check(decodedLegacy.title).equals('zsh');
+          check(decodedLegacy.cols).equals(120);
+          check(decodedLegacy.rows).equals(40);
+          check(decodedLegacy.resumeToken).deepEquals(resumeToken);
+          check(decodedLegacy.allowSpawn).isFalse();
+
+          // Explicit 0x00 trailing flags byte also decodes as allowSpawn: false.
+          final explicitZeroWire = Uint8List.fromList([...legacyWire, 0x00]);
+          final decodedExplicitZero =
+              BufferFrameCodec.decode(explicitZeroWire) as RegisterSessionFrame;
+          check(decodedExplicitZero.allowSpawn).isFalse();
+
+          // allowSpawn: true appends a single trailing 0x01 flags byte.
+          final spawnFrame = RegisterSessionFrame(
+            sessionId: sessionId,
+            title: 'zsh',
+            cols: 120,
+            rows: 40,
+            resumeToken: resumeToken,
+            allowSpawn: true,
+          );
+          final spawnWire = BufferFrameCodec.encode(spawnFrame);
+          check(spawnWire.length).equals(expectedLegacyLength + 1);
+          check(spawnWire.last).equals(0x01);
+          final decodedSpawn =
+              BufferFrameCodec.decode(spawnWire) as RegisterSessionFrame;
+          check(decodedSpawn.sessionId).equals(sessionId);
+          check(decodedSpawn.allowSpawn).isTrue();
+
+          // Unknown register flag bits or extra trailing bytes are rejected.
+          for (final badFlag in const [0x02, 0x03, 0x80, 0xFF]) {
+            final badWire = Uint8List.fromList([...legacyWire, badFlag]);
+            check(
+              () => BufferFrameCodec.decode(badWire),
+            ).throws<ProtocolFormatException>();
+          }
+          final extraTrailingWire = Uint8List.fromList([...spawnWire, 0x00]);
+          check(
+            () => BufferFrameCodec.decode(extraTrailingWire),
+          ).throws<ProtocolFormatException>();
+        },
+      );
+
+      test(
+        'round-trips SessionDirectoryFrame allowSpawn/isUserPinned flag combinations and rejects unassigned bits',
+        () {
+          const summaries = [
+            SessionSummary(id: SessionId('s0'), title: 'a', cols: 80, rows: 24),
+            SessionSummary(
+              id: SessionId('s1'),
+              title: 'b',
+              cols: 80,
+              rows: 24,
+              isUserPinned: true,
+            ),
+            SessionSummary(
+              id: SessionId('s2'),
+              title: 'c',
+              cols: 80,
+              rows: 24,
+              allowSpawn: true,
+            ),
+            SessionSummary(
+              id: SessionId('s3'),
+              title: 'd',
+              cols: 80,
+              rows: 24,
+              subscriberCount: 3,
+              isUserPinned: true,
+              allowSpawn: true,
+            ),
+          ];
+          final wire = BufferFrameCodec.encode(
+            const SessionDirectoryFrame(sessions: summaries),
+          );
+          final decoded =
+              BufferFrameCodec.decode(wire) as SessionDirectoryFrame;
+          check(decoded.sessions).deepEquals(summaries);
+
+          for (final badFlag in const [0x04, 0x08, 0x80, 0xFF]) {
+            final badDir =
+                (BytesBuilder()
+                      ..addByte(BufferFrameCodec.protocolVersion)
+                      ..addByte(0x04)
+                      ..add([0, 1])
+                      ..add([0, 1, ...'s'.codeUnits])
+                      ..add([0, 1, ...'a'.codeUnits])
+                      ..add([0, 80, 0, 24, 0, 0, 0, 0, badFlag]))
+                    .takeBytes();
+            check(
+              () => BufferFrameCodec.decode(badDir),
+            ).throws<ProtocolFormatException>();
+          }
+        },
+      );
+
+      test(
+        'round-trips 0x1D SpawnSessionFrame and rejects malformed frames',
+        () {
+          const sessionId = SessionId('sess-spawn-target');
+          final wire = BufferFrameCodec.encode(
+            const SpawnSessionFrame(sessionId: sessionId),
+          );
+          check(wire[0]).equals(BufferFrameCodec.protocolVersion);
+          check(wire[1]).equals(0x1D);
+          final decoded = BufferFrameCodec.decode(wire) as SpawnSessionFrame;
+          check(decoded.sessionId).equals(sessionId);
+
+          // Invalid SessionId rejected on encode.
+          check(
+            () => BufferFrameCodec.encode(
+              const SpawnSessionFrame(sessionId: SessionId('bad/id')),
+            ),
+          ).throws<ProtocolFormatException>();
+
+          // Truncated and trailing-byte 0x1D frames rejected on decode.
+          check(
+            () => BufferFrameCodec.decode(
+              Uint8List.sublistView(wire, 0, wire.length - 1),
+            ),
+          ).throws<ProtocolFormatException>();
+          check(
+            () => BufferFrameCodec.decode(Uint8List.fromList([...wire, 0x00])),
+          ).throws<ProtocolFormatException>();
+        },
+      );
+    },
+  );
 }

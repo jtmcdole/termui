@@ -59,6 +59,9 @@ final class RegisterSessionFrame extends CastMessage {
   /// 16-byte token proving session ownership across caster reconnect takeovers.
   Uint8List get resumeToken => _resumeToken ?? _zeroResumeToken;
 
+  /// Whether this caster accepts remote [SpawnSessionFrame] (`0x1D`) requests.
+  final bool allowSpawn;
+
   /// Creates a session registration frame.
   const RegisterSessionFrame({
     required this.sessionId,
@@ -66,6 +69,7 @@ final class RegisterSessionFrame extends CastMessage {
     required this.cols,
     required this.rows,
     Uint8List? resumeToken,
+    this.allowSpawn = false,
   }) : _resumeToken = resumeToken;
 }
 
@@ -568,4 +572,13 @@ final class ShaderFrame extends CastMessage {
 
   /// Creates a shader update frame.
   const ShaderFrame({required this.sessionId, required this.payload});
+}
+
+/// Viewer request asking the caster owning [sessionId] to spawn a fresh shell PTY (`0x1D`).
+final class SpawnSessionFrame extends CastMessage {
+  /// Existing live session whose owning caster should spawn a new shell PTY.
+  final SessionId sessionId;
+
+  /// Creates a remote shell spawn request frame.
+  const SpawnSessionFrame({required this.sessionId});
 }
