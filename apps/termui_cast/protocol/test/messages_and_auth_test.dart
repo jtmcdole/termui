@@ -201,6 +201,7 @@ void main() {
           sessionId: idA,
           payload: CastResetShaderPayload(target: 'all'),
         ),
+        const SpawnSessionFrame(sessionId: idA),
         const ErrorFrame(code: 'auth_failed', message: 'Invalid bearer token'),
         const ClipboardFrame(sessionId: idA, text: 'hello 🚀'),
         const ClipboardFrame(sessionId: idB, readBlocked: true),
@@ -467,6 +468,8 @@ void main() {
           case ShaderFrame(:final sessionId, :final payload):
             check(sessionId).equals(idA);
             check(payload).equals(const CastResetShaderPayload(target: 'all'));
+          case SpawnSessionFrame(:final sessionId):
+            check(sessionId).equals(idA);
           case ErrorFrame(:final code, :final message):
             check(code).equals('auth_failed');
             check(message).equals('Invalid bearer token');
@@ -654,6 +657,43 @@ void main() {
     );
   });
 
+  group('SessionSummary', () {
+    test('includes allowSpawn in equality and hashCode', () {
+      const id = SessionId('sess-spawn-eq');
+      const a = SessionSummary(
+        id: id,
+        title: 'zsh',
+        cols: 80,
+        rows: 24,
+        subscriberCount: 1,
+        isUserPinned: true,
+        allowSpawn: true,
+      );
+      const b = SessionSummary(
+        id: id,
+        title: 'zsh',
+        cols: 80,
+        rows: 24,
+        subscriberCount: 1,
+        isUserPinned: true,
+        allowSpawn: true,
+      );
+      const c = SessionSummary(
+        id: id,
+        title: 'zsh',
+        cols: 80,
+        rows: 24,
+        subscriberCount: 1,
+        isUserPinned: true,
+      );
+      check(a.allowSpawn).isTrue();
+      check(c.allowSpawn).isFalse();
+      check(a).equals(b);
+      check(a.hashCode).equals(b.hashCode);
+      check(a).not((it) => it.equals(c));
+    });
+  });
+
   group('parseCastWebSocketUri', () {
     test('rejects embedded userInfo credentials', () {
       check(
@@ -667,5 +707,194 @@ void main() {
         parseCastWebSocketUri('wss://relay.example/v1/client').userInfo,
       ).equals('');
     });
+
+    test(
+      'appends defaultPath to subpath prefixes without duplicating slashes',
+      () {
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term',
+            defaultPath: '/v1/client',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/',
+            defaultPath: '/v1/client',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'wss://relay.example/a/b',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/a/b/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'wss://relay.example/a/b/',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/a/b/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'relay.example/term',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'localhost:8420/term/',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('ws://localhost:8420/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/#token=secret',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/client',
+            defaultPath: '/v1/client',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/client/',
+            defaultPath: '/v1/client',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/caster',
+            defaultPath: '/v1/client',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/caster/',
+            defaultPath: '/v1/client',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/caster',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/caster');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term',
+            defaultPath: '/v1/caster',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/caster');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/',
+            defaultPath: '/v1/caster',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/caster');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/caster',
+            defaultPath: '/v1/caster',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/caster');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/client',
+            defaultPath: '/v1/caster',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri('https://relay.example/term').toString(),
+        ).equals('wss://relay.example/term');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/caster',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/v1/caster/',
+            normalizeCasterPath: true,
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/myv1/client',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/myv1/client/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term',
+            defaultPath: 'v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term',
+            defaultPath: '/custom/',
+          ).toString(),
+        ).equals('wss://relay.example/term/custom');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term/custom',
+            defaultPath: '/custom/',
+          ).toString(),
+        ).equals('wss://relay.example/term/custom');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term',
+            defaultPath: '/',
+          ).toString(),
+        ).equals('wss://relay.example/term');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example',
+            defaultPath: '/',
+          ).toString(),
+        ).equals('wss://relay.example/');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term',
+            defaultPath: '',
+          ).toString(),
+        ).equals('wss://relay.example/term');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example',
+            defaultPath: '',
+          ).toString(),
+        ).equals('wss://relay.example/');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term?foo=bar',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client?foo=bar');
+        check(
+          parseCastWebSocketUri(
+            'https://relay.example/term///',
+            defaultPath: '/v1/client',
+          ).toString(),
+        ).equals('wss://relay.example/term/v1/client');
+        check(
+          () => parseCastWebSocketUri(
+            'https://relay.example///',
+            defaultPath: '/v1/client',
+          ),
+        ).throws<FormatException>();
+      },
+    );
   });
 }

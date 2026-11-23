@@ -242,7 +242,7 @@ void _defineDesktopLaunchConfigTests() {
       );
       expect(
         httpsCustom.serverUri,
-        equals(Uri.parse('wss://relay.run.app:8443/custom/client')),
+        equals(Uri.parse('wss://relay.run.app:8443/custom/client/v1/client')),
       );
     });
 

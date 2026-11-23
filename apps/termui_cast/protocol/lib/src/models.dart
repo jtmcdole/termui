@@ -308,8 +308,10 @@ extension type const SessionId(String value) {
 /// nested-scheme inputs such as `ws://https://...` throw [FormatException].
 ///
 /// When [normalizeCasterPath] is `true`, `/v1/caster` suffixes are rewritten to
-/// `/v1/client`. When [defaultPath] is non-null and the resolved path is empty
-/// or `/`, it is replaced with [defaultPath].
+/// `/v1/client`. When [defaultPath] is non-null, empty or `/` paths resolve to
+/// [defaultPath], and subpath prefixes without an explicit `/v1/client` or
+/// `/v1/caster` suffix (such as `/term` or `/term/`) have [defaultPath]
+/// appended without duplicate slashes.
 Uri parseCastWebSocketUri(
   String raw, {
   String? defaultPath,
@@ -401,19 +403,42 @@ String _resolveRelayPath(
   required String? defaultPath,
   required bool normalizeCasterPath,
 }) {
-  var nextPath = path;
-  if (normalizeCasterPath) {
-    if (nextPath == '/v1/caster') {
-      nextPath = '/v1/client';
-    } else if (nextPath.endsWith('/v1/caster')) {
-      nextPath =
-          '${nextPath.substring(0, nextPath.length - '/v1/caster'.length)}/v1/client';
-    }
+  final normalizedPath = _normalizeCasterSuffix(path, normalizeCasterPath);
+  if (defaultPath == null) return normalizedPath;
+  final normalizedDefault = _normalizeDefaultPath(defaultPath);
+  final trimmed = _stripTrailingSlashes(normalizedPath);
+  if (trimmed.isEmpty) return normalizedDefault;
+  if (normalizedDefault == '/' ||
+      _hasRelayEndpointSuffix(trimmed, normalizedDefault)) {
+    return trimmed;
   }
-  if (defaultPath != null && (nextPath.isEmpty || nextPath == '/')) {
-    return defaultPath;
+  return '$trimmed$normalizedDefault';
+}
+
+String _normalizeCasterSuffix(String path, bool normalizeCasterPath) {
+  if (!normalizeCasterPath) return path;
+  final trimmed = _stripTrailingSlashes(path);
+  if (!trimmed.endsWith('/v1/caster')) return path;
+  return '${trimmed.substring(0, trimmed.length - '/v1/caster'.length)}/v1/client';
+}
+
+String _normalizeDefaultPath(String defaultPath) {
+  final trimmed = _stripTrailingSlashes(defaultPath);
+  if (trimmed.isEmpty) return '/';
+  return trimmed.startsWith('/') ? trimmed : '/$trimmed';
+}
+
+bool _hasRelayEndpointSuffix(String path, String normalizedDefault) =>
+    path.endsWith('/v1/client') ||
+    path.endsWith('/v1/caster') ||
+    path.endsWith(normalizedDefault);
+
+String _stripTrailingSlashes(String path) {
+  var end = path.length;
+  while (end > 0 && path.codeUnitAt(end - 1) == 0x2F) {
+    end--;
   }
-  return nextPath;
+  return end == path.length ? path : path.substring(0, end);
 }
 
 /// Peer role authenticating with the relay server.
@@ -474,6 +499,9 @@ final class SessionSummary {
   /// Whether [title] was explicitly pinned by a user rename rather than live shell `OSC 0`/`OSC 2`.
   final bool isUserPinned;
 
+  /// Whether the owning caster accepts remote `SpawnSessionFrame` (`0x1D`) requests.
+  final bool allowSpawn;
+
   /// Creates an immutable session directory entry.
   const SessionSummary({
     required this.id,
@@ -482,6 +510,7 @@ final class SessionSummary {
     required this.rows,
     this.subscriberCount = 0,
     this.isUserPinned = false,
+    this.allowSpawn = false,
   });
 
   @override
@@ -493,11 +522,19 @@ final class SessionSummary {
           other.cols == cols &&
           other.rows == rows &&
           other.subscriberCount == subscriberCount &&
-          other.isUserPinned == isUserPinned;
+          other.isUserPinned == isUserPinned &&
+          other.allowSpawn == allowSpawn;
 
   @override
-  int get hashCode =>
-      Object.hash(id, title, cols, rows, subscriberCount, isUserPinned);
+  int get hashCode => Object.hash(
+    id,
+    title,
+    cols,
+    rows,
+    subscriberCount,
+    isUserPinned,
+    allowSpawn,
+  );
 }
 
 /// Wire-serializable terminal audio payload carried inside an `AudioFrame` (`0x19`).
