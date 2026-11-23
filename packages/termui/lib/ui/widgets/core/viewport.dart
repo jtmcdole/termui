@@ -52,9 +52,20 @@ class Viewport implements Buffer {
   List<String> get characters => throw UnsupportedError(
     'Flat characters access not supported on Viewport',
   );
-  @override
+
+  /// Throws [UnsupportedError] because a [Viewport] does not own a flat buffer.
   set characters(List<String> val) => throw UnsupportedError(
     'Flat characters access not supported on Viewport',
+  );
+
+  @override
+  Uint32List get glyphCodes => throw UnsupportedError(
+    'Flat glyphCodes access not supported on Viewport',
+  );
+
+  @override
+  GlyphCellList get glyphCellList => throw UnsupportedError(
+    'Flat glyphCellList access not supported on Viewport',
   );
 
   @override
@@ -208,6 +219,58 @@ class Viewport implements Buffer {
 
   @override
   List<RegisteredEffect> get effects => parent.effects;
+
+  @override
+  List<ShaderRegion> get shaderRegions => parent.shaderRegions;
+
+  @override
+  int get regionRevision => parent.regionRevision;
+
+  @override
+  bool get hasShaderRegions => parent.hasShaderRegions;
+
+  @override
+  int get transformRevision => parent.transformRevision;
+
+  @override
+  bool get hasCellTransforms => parent.hasCellTransforms;
+
+  @override
+  CellTransformTable? get cellTransforms => throw UnsupportedError(
+    'Flat cellTransforms access not supported on Viewport',
+  );
+
+  @override
+  void addShaderRegion(ShaderRegion region) {
+    final clipped = region.translatedAndClipped(bounds.x, bounds.y, bounds);
+    if (clipped != null) {
+      parent.addShaderRegion(clipped);
+    }
+  }
+
+  @override
+  void clearShaderRegions() => parent.clearShaderRegions();
+
+  @override
+  CellTransform? getCellTransform(int x, int y) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return null;
+    return parent.getCellTransform(bounds.x + x, bounds.y + y);
+  }
+
+  @override
+  void setCellTransform(int x, int y, CellTransform? transform) {
+    if (x < 0 || x >= bounds.width || y < 0 || y >= bounds.height) return;
+    parent.setCellTransform(bounds.x + x, bounds.y + y, transform);
+  }
+
+  @override
+  void setCellTransformAt(int cellIdx, CellTransform? transform) =>
+      throw UnsupportedError(
+        'Flat cell index access not supported on Viewport',
+      );
+
+  @override
+  void clearCellTransforms() => parent.clearCellTransforms();
 
   @override
   List<Rect> get selectableRegions => parent.selectableRegions;

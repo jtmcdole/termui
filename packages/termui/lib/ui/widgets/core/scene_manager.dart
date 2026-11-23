@@ -1,8 +1,11 @@
 import 'dart:async';
+
 import 'package:characters/characters.dart';
 import 'package:clock/clock.dart';
+
 import 'dart:collection';
 import 'dart:math';
+
 import 'package:termui/termui.dart';
 
 /// Manages multiple visual layers in a terminal windowing system,
@@ -84,6 +87,7 @@ class SceneManager implements Reassemblable {
 
   Timer? _debugTouchTimer;
   Renderer? _renderer;
+  ShaderCapabilitiesEvent? _shaderCapabilities;
   Buffer? _targetBuffer;
 
   StreamSubscription<InputEvent>? _eventsSubscription;
@@ -673,6 +677,10 @@ class SceneManager implements Reassemblable {
         handleMouseEvent(e);
       case final PasteEvent e:
         handlePasteEvent(e);
+      case final ShaderCapabilitiesEvent e:
+        _shaderCapabilities = e;
+        _renderer?.shaderCapabilities = e;
+        scheduleRender();
       case FocusInEvent():
       case FocusOutEvent():
       case CursorPositionReportEvent():
@@ -714,7 +722,12 @@ class SceneManager implements Reassemblable {
     _renderDirtyLayers();
 
     final (width, height) = _resolveViewportSize();
-    final renderer = _renderer ??= Renderer(width, height, mode: renderingMode);
+    final renderer = _renderer ??= Renderer(
+      width,
+      height,
+      mode: renderingMode,
+      shaderCapabilities: _shaderCapabilities,
+    );
     final layeredBuffers = _collectLayeredBuffers(width, height);
     final target = _prepareTargetBuffer(width, height);
 

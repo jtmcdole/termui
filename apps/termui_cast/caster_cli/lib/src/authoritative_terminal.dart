@@ -76,22 +76,50 @@ final class AuthoritativeTerminal {
   /// Optional diagnostic log callback for skipped oversized Kitty textures.
   void Function(String message)? onLog;
 
+  /// Default shader capabilities advertised by standalone `termui_cast` casters
+  /// so hosted CLI applications emit `ESC _ S` shader metadata for forwarding
+  /// over `0x1C` cast frames.
+  static const TerminalShaderCapabilities castShaderCapabilities = (
+    backend: 'cast',
+    glsl: true,
+    xform: true,
+    region: true,
+    maxSlots: ShaderApcParser.maxSlots,
+    maxRegions: ShaderRegion.maxRegionsPerPane,
+  );
+
+  /// Fully disabled shader capabilities advertised when the connected relay
+  /// does not support `0x1C` shader frames (`AuthAcceptedFrame.shaderFrames == false`).
+  static const TerminalShaderCapabilities disabledShaderCapabilities = (
+    backend: 'disabled',
+    glsl: false,
+    xform: false,
+    region: false,
+    maxSlots: 0,
+    maxRegions: 0,
+  );
+
   late final VirtualTerminal _terminal;
   final bool _ownsTerminal;
   final bool _wireTerminalHooks;
+  TerminalShaderCapabilities _shaderCapabilities;
   final LinkedHashSet<void Function(String title)> _titleListeners =
       LinkedHashSet();
   final LinkedHashSet<void Function()> _bellListeners = LinkedHashSet();
   final LinkedHashSet<void Function(TerminalAudioEvent event)> _audioListeners =
       LinkedHashSet();
+  final LinkedHashSet<void Function(TerminalShaderApcEvent event)>
+  _shaderListeners = LinkedHashSet();
   final LinkedHashSet<void Function(ClipboardFrame frame)> _clipboardListeners =
       LinkedHashSet();
 
   void Function(String title)? _prevOnTitleChanged;
   void Function()? _prevOnBell;
   void Function(TerminalAudioEvent event)? _prevOnAudioEvent;
+  void Function(TerminalShaderApcEvent event)? _prevOnShaderEvent;
   void Function(String selection, String text)? _prevOnClipboardWrite;
   void Function(String selection)? _prevOnClipboardReadBlocked;
+  final _ShaderSyncState _shaderSync = _ShaderSyncState();
 
   late int _shadowCols;
   late int _shadowRows;
@@ -123,9 +151,11 @@ final class AuthoritativeTerminal {
     int initialRows = 24,
     int maxScrollbackLines = 5000,
     TerminalColorTheme initialTheme = TerminalColorTheme.termuiDark,
+    TerminalShaderCapabilities shaderCapabilities = castShaderCapabilities,
     this.onLog,
   }) : _ownsTerminal = true,
-       _wireTerminalHooks = true {
+       _wireTerminalHooks = true,
+       _shaderCapabilities = shaderCapabilities {
     final safeCols = max(1, initialCols);
     final safeRows = max(1, initialRows);
     _terminal = VirtualTerminal(
@@ -135,9 +165,10 @@ final class AuthoritativeTerminal {
       syncSafetyTimeout: null,
       emitIndexedColors: true,
       theme: initialTheme,
+      shaderCapabilitiesProvider: () => _shaderCapabilities,
     )..onReply = (reply) => onTerminalReply?.call(reply);
     _initShadowState(safeCols, safeRows);
-    _terminal.addListener(_markDirty);
+    _terminal.addListener(markDirty);
     _attachTerminalHooks(chainPrevious: false);
   }
 
@@ -150,12 +181,23 @@ final class AuthoritativeTerminal {
     this.onLog,
   }) : _terminal = terminal,
        _ownsTerminal = false,
-       _wireTerminalHooks = wireTerminalHooks {
+       _wireTerminalHooks = wireTerminalHooks,
+       _shaderCapabilities = defaultDisabledShaderCapabilities {
     _initShadowState(_terminal.width, _terminal.height);
-    _terminal.addListener(_markDirty);
+    _terminal.addListener(markDirty);
     if (_wireTerminalHooks) {
       _attachTerminalHooks(chainPrevious: true);
     }
+  }
+
+  /// Updates the [TerminalShaderCapabilities] advertised on `ESC _ S a=query`
+  /// when this instance owns its [VirtualTerminal].
+  ///
+  /// Has no effect for [AuthoritativeTerminal.wrapping] instances so host
+  /// router capabilities remain authoritative.
+  void setShaderCapabilities(TerminalShaderCapabilities capabilities) {
+    if (!_ownsTerminal) return;
+    _shaderCapabilities = capabilities;
   }
 
   void _initShadowState(int cols, int rows) {
@@ -170,6 +212,7 @@ final class AuthoritativeTerminal {
     _shadowUris = List<String?>.filled(totalCells, null);
     _shadowWrappedRows = Uint8List(wrappedRowsByteLength(safeRows));
     _lastImageRegistryRevision = _terminal.imageRegistryRevision;
+    _shaderSync.seedFromBuffer(_terminal.buffer);
   }
 
   void _attachTerminalHooks({required bool chainPrevious}) {
@@ -177,6 +220,7 @@ final class AuthoritativeTerminal {
       _prevOnTitleChanged = _terminal.onTitleChanged;
       _prevOnBell = _terminal.onBell;
       _prevOnAudioEvent = _terminal.onAudioEvent;
+      _prevOnShaderEvent = _terminal.onShaderEvent;
       _prevOnClipboardWrite = _terminal.onClipboardWrite;
       _prevOnClipboardReadBlocked = _terminal.onClipboardReadBlocked;
     }
@@ -184,6 +228,7 @@ final class AuthoritativeTerminal {
       ..onTitleChanged = _handleTerminalTitleChanged
       ..onBell = _handleTerminalBell
       ..onAudioEvent = _handleTerminalAudioEvent
+      ..onShaderEvent = _handleTerminalShaderEvent
       ..onClipboardWrite = _handleTerminalClipboardWrite
       ..onClipboardReadBlocked = _handleTerminalClipboardReadBlocked;
   }
@@ -205,6 +250,14 @@ final class AuthoritativeTerminal {
   void _handleTerminalAudioEvent(TerminalAudioEvent event) {
     _prevOnAudioEvent?.call(event);
     for (final listener in List.of(_audioListeners)) {
+      listener(event);
+    }
+  }
+
+  void _handleTerminalShaderEvent(TerminalShaderApcEvent event) {
+    _prevOnShaderEvent?.call(event);
+    recordShaderEvent(event);
+    for (final listener in List.of(_shaderListeners)) {
       listener(event);
     }
   }
@@ -254,6 +307,41 @@ final class AuthoritativeTerminal {
   void removeAudioListener(void Function(TerminalAudioEvent event) listener) =>
       _audioListeners.remove(listener);
 
+  /// Registers a multi-listener callback for `ESC _ S` shader/transform events.
+  void addShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) => _shaderListeners.add(listener);
+
+  /// Unregisters a shader/transform event callback.
+  void removeShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) => _shaderListeners.remove(listener);
+
+  /// Whether at least one coalesced `0x1C` shader payload is waiting to flush.
+  bool get hasPendingShaderFrames => _shaderSync.hasPending;
+
+  /// Records a decoded `ESC _ S` [event], updating authoritative keyframe replay
+  /// state, coalescing redundant updates within the current flush tick, and
+  /// marking this terminal dirty.
+  void recordShaderEvent(TerminalShaderApcEvent event) {
+    if (_shaderSync.recordEvent(event)) {
+      markDirty();
+    }
+  }
+
+  /// Drains pending coalesced `0x1C` [ShaderFrame]s for the current flush tick.
+  List<ShaderFrame> takePendingShaderFrames() =>
+      _shaderSync.takePendingFrames(sessionId);
+
+  /// Discards pending incremental `0x1C` payloads while preserving authoritative
+  /// shader state for subsequent keyframe replay.
+  void clearPendingShaderPayloads() => _shaderSync.clearPending();
+
+  /// Builds full `0x1C` replay [ShaderFrame]s (active `define`s, `region`s,
+  /// chunked `replace: true` `transforms`, and full-pane `set`s) for a keyframe.
+  List<ShaderFrame> buildShaderReplayFrames() =>
+      _shaderSync.buildReplayFrames(sessionId);
+
   /// Registers a multi-listener callback for `OSC 52` clipboard frames.
   void addClipboardListener(void Function(ClipboardFrame frame) listener) =>
       _clipboardListeners.add(listener);
@@ -268,7 +356,12 @@ final class AuthoritativeTerminal {
   String? _lastRawUri;
   String? _lastClampedUri;
 
-  void _markDirty() {
+  /// Marks this terminal as having unshipped mutations pending for the next
+  /// [takeNextFrame] call.
+  ///
+  /// Used by shared-router casters whose change callback can run before this
+  /// wrapper's own `VirtualTerminal` listener during the same notification pass.
+  void markDirty() {
     _dirty = true;
   }
 
@@ -1368,11 +1461,13 @@ final class AuthoritativeTerminal {
 
   /// Releases owned [VirtualTerminal] resources or restores external hooks.
   void dispose() {
-    _terminal.removeListener(_markDirty);
+    _terminal.removeListener(markDirty);
     _titleListeners.clear();
     _bellListeners.clear();
     _audioListeners.clear();
+    _shaderListeners.clear();
     _clipboardListeners.clear();
+    _shaderSync.clearAll();
     _pendingKittyChunks.clear();
     _preparedChunkWire.clear();
     if (_ownsTerminal) {
@@ -1384,8 +1479,391 @@ final class AuthoritativeTerminal {
         ..onTitleChanged = _prevOnTitleChanged
         ..onBell = _prevOnBell
         ..onAudioEvent = _prevOnAudioEvent
+        ..onShaderEvent = _prevOnShaderEvent
         ..onClipboardWrite = _prevOnClipboardWrite
         ..onClipboardReadBlocked = _prevOnClipboardReadBlocked;
+    }
+  }
+}
+
+final class _ShaderSyncState {
+  static const int maxTransformsPerFrame = 960;
+
+  final LinkedHashMap<String, CastDefineShaderPayload> _definedShaders =
+      LinkedHashMap();
+  final LinkedHashMap<String, ShaderRegion> _activeRegions = LinkedHashMap();
+  final LinkedHashMap<int, CellTransformEntry> _activeTransforms =
+      LinkedHashMap();
+  final LinkedHashMap<String, CastSetShaderPayload> _activePaneShaders =
+      LinkedHashMap();
+  final List<CastShaderPayload> _pendingPayloads = <CastShaderPayload>[];
+
+  bool get hasPending => _pendingPayloads.isNotEmpty;
+
+  void clearPending() => _pendingPayloads.clear();
+
+  void clearAll() {
+    _definedShaders.clear();
+    _activeRegions.clear();
+    _activeTransforms.clear();
+    _activePaneShaders.clear();
+    _pendingPayloads.clear();
+  }
+
+  void seedFromBuffer(Buffer buffer) {
+    for (final region in buffer.shaderRegions) {
+      if (_activeRegions.length >= ShaderRegion.maxRegionsPerPane) break;
+      _activeRegions[region.id] = region;
+    }
+    final table = buffer.cellTransforms;
+    if (table == null || table.isEmpty || buffer.width <= 0) return;
+    for (final entry in table.entries) {
+      if (_activeTransforms.length >= CellTransformCodec.maxLiveTransforms) {
+        break;
+      }
+      final col = entry.key % buffer.width;
+      final row = entry.key ~/ buffer.width;
+      _activeTransforms[(row << 16) | col] = (
+        col: col,
+        row: row,
+        transform: entry.value,
+      );
+    }
+  }
+
+  bool recordEvent(TerminalShaderApcEvent event) => switch (event) {
+    TerminalShaderQueryEvent() => false,
+    TerminalShaderDefineEvent() => _recordDefine(event),
+    TerminalShaderRegionEvent() => _recordRegion(event),
+    TerminalShaderTransformBatchEvent() => _recordTransforms(event),
+    TerminalShaderSetEvent() => _recordSet(event),
+    TerminalShaderUniformEvent() => _recordUniform(event),
+    TerminalResetShaderEvent() => _recordReset(event),
+  };
+
+  bool _recordDefine(TerminalShaderDefineEvent event) {
+    if (!_definedShaders.containsKey(event.id) &&
+        _definedShaders.length >= ShaderApcParser.maxSlots) {
+      return false;
+    }
+    final payload = CastDefineShaderPayload(
+      id: event.id,
+      glslSource: event.glslSource,
+      persist: event.persist,
+    );
+    _definedShaders[event.id] = payload;
+    _pendingPayloads.add(payload);
+    return true;
+  }
+
+  bool _recordRegion(TerminalShaderRegionEvent event) {
+    final isRemove = event.remove || event.region == null;
+    if (isRemove) {
+      _activeRegions.remove(event.id);
+    } else {
+      if (!_activeRegions.containsKey(event.id) &&
+          _activeRegions.length >= ShaderRegion.maxRegionsPerPane) {
+        return false;
+      }
+      _activeRegions[event.id] = event.region!;
+    }
+    final payload = CastRegionShaderPayload(
+      id: event.id,
+      region: isRemove ? null : event.region,
+      remove: isRemove,
+    );
+    _upsertRegionPayload(payload);
+    return true;
+  }
+
+  void _upsertRegionPayload(CastRegionShaderPayload payload) {
+    for (var i = _pendingPayloads.length - 1; i >= 0; i--) {
+      final item = _pendingPayloads[i];
+      if (item is CastResetShaderPayload || item is CastDefineShaderPayload) {
+        break;
+      }
+      if (item is CastRegionShaderPayload && item.id == payload.id) {
+        _pendingPayloads[i] = payload;
+        return;
+      }
+    }
+    _pendingPayloads.add(payload);
+  }
+
+  bool _recordTransforms(TerminalShaderTransformBatchEvent event) {
+    if (event.replace) {
+      _activeTransforms.clear();
+    }
+    final accepted = <CellTransformEntry>[];
+    for (final entry in event.entries) {
+      final key = (entry.row << 16) | entry.col;
+      if (entry.transform == null || entry.transform!.isIdentity) {
+        _activeTransforms.remove(key);
+        accepted.add((col: entry.col, row: entry.row, transform: null));
+        continue;
+      }
+      if (!_activeTransforms.containsKey(key) &&
+          _activeTransforms.length >= CellTransformCodec.maxLiveTransforms) {
+        continue;
+      }
+      _activeTransforms[key] = entry;
+      accepted.add(entry);
+    }
+    if (accepted.isEmpty && !event.replace) return false;
+    _coalescePendingTransforms(accepted, replace: event.replace);
+    return true;
+  }
+
+  void _coalescePendingTransforms(
+    List<CellTransformEntry> entries, {
+    required bool replace,
+  }) {
+    if (replace) {
+      _removePendingTransformsAfterLastReset();
+      _pendingPayloads.add(
+        CastTransformsShaderPayload(entries: entries, replace: true),
+      );
+      return;
+    }
+    for (var i = _pendingPayloads.length - 1; i >= 0; i--) {
+      final item = _pendingPayloads[i];
+      if (item is CastResetShaderPayload) break;
+      if (item is CastTransformsShaderPayload) {
+        _pendingPayloads[i] = _mergeTransformBatches(item, entries);
+        return;
+      }
+    }
+    _pendingPayloads.add(
+      CastTransformsShaderPayload(entries: entries, replace: false),
+    );
+  }
+
+  void _removePendingTransformsAfterLastReset() {
+    for (var i = _pendingPayloads.length - 1; i >= 0; i--) {
+      final item = _pendingPayloads[i];
+      if (item is CastResetShaderPayload) break;
+      if (item is CastTransformsShaderPayload) {
+        _pendingPayloads.removeAt(i);
+      }
+    }
+  }
+
+  static CastTransformsShaderPayload _mergeTransformBatches(
+    CastTransformsShaderPayload existing,
+    List<CellTransformEntry> incoming,
+  ) {
+    final merged = <int, CellTransformEntry>{};
+    for (final e in existing.entries) {
+      merged[(e.row << 16) | e.col] = e;
+    }
+    for (final e in incoming) {
+      merged[(e.row << 16) | e.col] = e;
+    }
+    return CastTransformsShaderPayload(
+      entries: merged.values.toList(growable: false),
+      replace: existing.replace,
+    );
+  }
+
+  bool _recordSet(TerminalShaderSetEvent event) {
+    final payload = CastSetShaderPayload(
+      stage: event.stage,
+      presetId: event.presetId,
+      shaderId: event.shaderId,
+      params: event.params,
+      clear: event.clear,
+    );
+    if (event.clear) {
+      _activePaneShaders.remove(event.stage);
+    } else {
+      _activePaneShaders[event.stage] = payload;
+    }
+    for (var i = _pendingPayloads.length - 1; i >= 0; i--) {
+      final item = _pendingPayloads[i];
+      if (item is CastResetShaderPayload || item is CastDefineShaderPayload) {
+        break;
+      }
+      if (item is CastSetShaderPayload && item.stage == payload.stage) {
+        _pendingPayloads[i] = payload;
+        return true;
+      }
+    }
+    _pendingPayloads.add(payload);
+    return true;
+  }
+
+  bool _recordUniform(TerminalShaderUniformEvent event) {
+    final mask = event.paramMask & 0xFF;
+    if (mask == 0) return false;
+    _applyUniformToReplayState(event.id, mask, event.params);
+    final payload = CastUniformShaderPayload(
+      id: event.id,
+      paramMask: mask,
+      params: event.params,
+    );
+    _coalesceUniformPayload(payload);
+    return true;
+  }
+
+  void _applyUniformToReplayState(String? id, int mask, Float32List params) {
+    if (id != null) {
+      final region = _activeRegions[id];
+      if (region == null) return;
+      _activeRegions[id] = region.copyWith(
+        params: _mergeParamArray(region.params, mask, params),
+      );
+      return;
+    }
+    for (final entry in [..._activePaneShaders.entries]) {
+      final current = entry.value;
+      _activePaneShaders[entry.key] = CastSetShaderPayload(
+        stage: current.stage,
+        presetId: current.presetId,
+        shaderId: current.shaderId,
+        params: _mergeParamArray(current.params, mask, params),
+        clear: current.clear,
+      );
+    }
+  }
+
+  void _coalesceUniformPayload(CastUniformShaderPayload incoming) {
+    for (var i = _pendingPayloads.length - 1; i >= 0; i--) {
+      final item = _pendingPayloads[i];
+      if (_isUniformBarrier(item, incoming.id)) break;
+      if (item is CastUniformShaderPayload && item.id == incoming.id) {
+        _pendingPayloads[i] = CastUniformShaderPayload(
+          id: incoming.id,
+          paramMask: item.paramMask | incoming.paramMask,
+          params: _mergeParamArray(
+            item.params,
+            incoming.paramMask,
+            incoming.params,
+          ),
+        );
+        return;
+      }
+    }
+    _pendingPayloads.add(incoming);
+  }
+
+  static bool _isUniformBarrier(CastShaderPayload item, String? targetId) =>
+      item is CastResetShaderPayload ||
+      item is CastDefineShaderPayload ||
+      (targetId != null &&
+          item is CastRegionShaderPayload &&
+          item.id == targetId) ||
+      (targetId == null && item is CastSetShaderPayload);
+
+  static Float32List _mergeParamArray(
+    Float32List base,
+    int mask,
+    Float32List incoming,
+  ) {
+    final merged = ShaderRegion.sanitizeParams(base);
+    for (var i = 0; i < ShaderRegion.paramCount; i++) {
+      if ((mask & (1 << i)) != 0) {
+        merged[i] = incoming[i];
+      }
+    }
+    return merged;
+  }
+
+  bool _recordReset(TerminalResetShaderEvent event) {
+    switch (event.target) {
+      case ShaderResetTarget.all:
+        _definedShaders.clear();
+        _activeRegions.clear();
+        _activeTransforms.clear();
+        _activePaneShaders.clear();
+      case ShaderResetTarget.regions:
+        _activeRegions.clear();
+      case ShaderResetTarget.xforms:
+        _activeTransforms.clear();
+      case ShaderResetTarget.pane:
+        _activePaneShaders.clear();
+    }
+    _pendingPayloads.add(CastResetShaderPayload(target: event.target.wireName));
+    return true;
+  }
+
+  List<ShaderFrame> takePendingFrames(SessionId sessionId) {
+    if (_pendingPayloads.isEmpty) return const [];
+    final out = <ShaderFrame>[];
+    for (final payload in _pendingPayloads) {
+      if (payload is CastTransformsShaderPayload) {
+        _appendChunkedTransformFrames(
+          out,
+          sessionId,
+          payload.entries,
+          replace: payload.replace,
+        );
+      } else {
+        out.add(ShaderFrame(sessionId: sessionId, payload: payload));
+      }
+    }
+    _pendingPayloads.clear();
+    return out;
+  }
+
+  List<ShaderFrame> buildReplayFrames(SessionId sessionId) {
+    final out = <ShaderFrame>[
+      for (final def in _definedShaders.values)
+        ShaderFrame(sessionId: sessionId, payload: def),
+      for (final region in _activeRegions.values)
+        ShaderFrame(
+          sessionId: sessionId,
+          payload: CastRegionShaderPayload(id: region.id, region: region),
+        ),
+    ];
+    if (_activeTransforms.isNotEmpty) {
+      _appendChunkedTransformFrames(
+        out,
+        sessionId,
+        _activeTransforms.values.toList(growable: false),
+        replace: true,
+      );
+    }
+    for (final pane in _activePaneShaders.values) {
+      out.add(ShaderFrame(sessionId: sessionId, payload: pane));
+    }
+    return out;
+  }
+
+  static void _appendChunkedTransformFrames(
+    List<ShaderFrame> out,
+    SessionId sessionId,
+    List<CellTransformEntry> entries, {
+    required bool replace,
+  }) {
+    if (entries.isEmpty) {
+      if (replace) {
+        out.add(
+          ShaderFrame(
+            sessionId: sessionId,
+            payload: CastTransformsShaderPayload(
+              entries: const [],
+              replace: true,
+            ),
+          ),
+        );
+      }
+      return;
+    }
+    for (
+      var offset = 0;
+      offset < entries.length;
+      offset += maxTransformsPerFrame
+    ) {
+      final end = min(offset + maxTransformsPerFrame, entries.length);
+      out.add(
+        ShaderFrame(
+          sessionId: sessionId,
+          payload: CastTransformsShaderPayload(
+            entries: entries.sublist(offset, end),
+            replace: replace && offset == 0,
+          ),
+        ),
+      );
     }
   }
 }

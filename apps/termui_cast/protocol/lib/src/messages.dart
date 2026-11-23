@@ -26,8 +26,11 @@ final class AuthAcceptedFrame extends CastMessage {
   /// Authenticated peer role.
   final CastRole role;
 
+  /// Whether the relay supports capability-negotiated `0x1C` [ShaderFrame] messages.
+  final bool shaderFrames;
+
   /// Creates an authentication acceptance frame.
-  const AuthAcceptedFrame({required this.role});
+  const AuthAcceptedFrame({required this.role, this.shaderFrames = false});
 }
 
 /// Caster registration announcing a live PTY session to the relay server.
@@ -86,11 +89,15 @@ final class SubscribeSessionFrame extends CastMessage {
   /// Optional initial viewport height requested by the subscribing client (`0` to omit).
   final int rows;
 
+  /// Whether this viewer opts into synchronized `0x1C` [ShaderFrame] delivery.
+  final bool shaderFrames;
+
   /// Creates a session subscription request.
   const SubscribeSessionFrame({
     required this.sessionId,
     this.cols = 0,
     this.rows = 0,
+    this.shaderFrames = false,
   });
 }
 
@@ -546,4 +553,19 @@ final class KittyImageChunkFrame extends CastMessage {
     required this.chunkCount,
     required this.data,
   });
+}
+
+/// Synchronized artistic shader / cell-transform update frame (`0x1C`).
+///
+/// Sent only when capability negotiation (`shaderFrames`) is enabled on both
+/// the relay (`AuthAcceptedFrame`) and subscribing viewer (`SubscribeSessionFrame`).
+final class ShaderFrame extends CastMessage {
+  /// Source session that emitted this shader/transform update.
+  final SessionId sessionId;
+
+  /// Typed shader definition, region, transform batch, full-pane set, uniform, or reset payload.
+  final CastShaderPayload payload;
+
+  /// Creates a shader update frame.
+  const ShaderFrame({required this.sessionId, required this.payload});
 }

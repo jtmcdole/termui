@@ -12,6 +12,8 @@ export 'widgets/display/spinner.dart';
 export 'widgets/display/table.dart';
 export 'widgets/display/paginator.dart';
 export 'widgets/display/rich_text.dart';
+export 'widgets/display/shader_region_widget.dart';
+export 'widgets/display/cell_transform_widget.dart';
 export 'widgets/display/timer_widget.dart';
 export 'widgets/interactive/form.dart';
 export 'widgets/display/left_border.dart';

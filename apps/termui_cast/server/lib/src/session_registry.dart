@@ -26,6 +26,15 @@ final class SessionRegistry {
   /// Default sliding rate-limit window for client session renames.
   static const Duration defaultRenameRateWindow = Duration(seconds: 1);
 
+  /// Default maximum `0x1C` shader frames relayed per session within [defaultShaderRateWindow].
+  static const int defaultMaxShaderFramesPerSecond = 120;
+
+  /// Default maximum `0x1C` shader bytes relayed per session within [defaultShaderRateWindow] (`512 KiB`).
+  static const int defaultMaxShaderBytesPerSecond = 512 * 1024;
+
+  /// Default sliding rate-limit window for per-session `0x1C` shader frames.
+  static const Duration defaultShaderRateWindow = Duration(seconds: 1);
+
   /// Maximum queued outbound frames per peer before slow-consumer eviction.
   final int maxOutboundFrames;
 
@@ -43,6 +52,15 @@ final class SessionRegistry {
 
   /// Sliding window duration used to rate-limit client session renames.
   final Duration renameRateWindow;
+
+  /// Maximum `0x1C` shader frames relayed per session within [shaderRateWindow].
+  final int maxShaderFramesPerSecond;
+
+  /// Maximum `0x1C` shader bytes relayed per session within [shaderRateWindow].
+  final int maxShaderBytesPerSecond;
+
+  /// Sliding window duration used to rate-limit per-session `0x1C` shader frames.
+  final Duration shaderRateWindow;
 
   /// Default minimum interval between droppable directory broadcasts caused by rapid title updates.
   static const Duration defaultDirectoryBroadcastInterval = Duration(
@@ -69,6 +87,9 @@ final class SessionRegistry {
     this.uploadTimeout = defaultUploadTimeout,
     this.maxRenamesPerWindow = defaultMaxRenamesPerWindow,
     this.renameRateWindow = defaultRenameRateWindow,
+    this.maxShaderFramesPerSecond = defaultMaxShaderFramesPerSecond,
+    this.maxShaderBytesPerSecond = defaultMaxShaderBytesPerSecond,
+    this.shaderRateWindow = defaultShaderRateWindow,
     this.directoryBroadcastInterval = defaultDirectoryBroadcastInterval,
     Clock clock = const Clock(),
   }) : _clock = clock;
@@ -411,6 +432,39 @@ final class SessionRegistry {
     return true;
   }
 
+  /// Validates a raw `0x1C` [ShaderFrame] from [caster], enforces per-session
+  /// frame/byte budgets (`<= 120` frames/sec and `<= 512 KiB`/sec by default),
+  /// and fans out via [_fanOutSynchronizedFrame] strictly to subscribers that
+  /// opted into `shaderFrames`.
+  bool forwardCasterShaderBytes(CasterPeer caster, Uint8List rawFrame) {
+    final session = _lookupCasterSession(caster);
+    if (session == null) return false;
+    if (!BufferFrameCodec.inspectRelayShaderFrame(
+      rawFrame,
+      expectedSession: session.id,
+    )) {
+      return false;
+    }
+    if (!session.tryConsumeShaderBudget(
+      _clock.now(),
+      rawFrame.length,
+      maxFrames: maxShaderFramesPerSecond,
+      maxBytes: maxShaderBytesPerSecond,
+      window: shaderRateWindow,
+    )) {
+      return true;
+    }
+    _fanOutSynchronizedFrame(
+      session,
+      rawFrame,
+      targets: session.shaderSubscribers,
+    );
+    if (session.pendingControlSync) {
+      _syncCasterControl(session);
+    }
+    return true;
+  }
+
   /// Validates and forwards a live buffer frame (`0x09` or `0x0A`) from
   /// [caster] without storing history, returning `false` when invalid.
   bool forwardCasterBufferBytes(CasterPeer caster, Uint8List rawFrame) {
@@ -512,6 +566,9 @@ final class SessionRegistry {
     final wasEmpty = session.subscribers.isEmpty;
     final prevViewport = session.subscriberViewports[client];
     final added = session.subscribers.add(client);
+    final shaderOptInChanged = frame.shaderFrames
+        ? session.shaderSubscribers.add(client)
+        : session.shaderSubscribers.remove(client);
     final newlyAwaitingKeyframe = session.awaitingKeyframe.add(client);
     client._subscriptions.add(frame.sessionId);
     final viewportChanged =
@@ -542,7 +599,7 @@ final class SessionRegistry {
       return;
     }
 
-    if (viewportChanged || newlyAwaitingKeyframe) {
+    if (viewportChanged || newlyAwaitingKeyframe || shaderOptInChanged) {
       _dispatchSubscribeSizeAndKeyframe(
         session,
         wasEmpty: wasEmpty,
@@ -653,6 +710,7 @@ final class SessionRegistry {
       return;
     }
     session.subscriberViewports.remove(client);
+    session.shaderSubscribers.remove(client);
     session.awaitingKeyframe.remove(client);
     session.scrollbackRequests.removeWhere(
       (_, entry) => identical(entry.client, client),
@@ -1133,10 +1191,18 @@ final class SessionRegistry {
     _fanOutSynchronizedFrame(session, rawFrame);
   }
 
-  void _fanOutSynchronizedFrame(_LiveSession session, Uint8List rawFrame) {
+  void _fanOutSynchronizedFrame(
+    _LiveSession session,
+    Uint8List rawFrame, {
+    Iterable<ClientPeer>? targets,
+  }) {
+    final recipients = targets == null
+        ? [...session.subscribers]
+        : [...targets];
+    if (recipients.isEmpty) return;
     final shouldRequestKeyframe = session.awaitingKeyframe.isEmpty;
     var downgradedAny = false;
-    for (final subscriber in [...session.subscribers]) {
+    for (final subscriber in recipients) {
       if (session.awaitingKeyframe.contains(subscriber)) continue;
       if (subscriber._drainAndCheckOutboundPressure() ||
           !subscriber._pump.canFit(rawFrame.length)) {
@@ -1327,11 +1393,14 @@ final class _LiveSession {
   final Uint8List resumeToken;
   CasterPeer caster;
   final Set<ClientPeer> subscribers = {};
+  final Set<ClientPeer> shaderSubscribers = {};
   final Map<ClientPeer, ({int cols, int rows})> subscriberViewports = {};
   final Set<ClientPeer> awaitingKeyframe = {};
   final Map<int, _PendingScrollbackRequest> scrollbackRequests = {};
   final Map<int, _ActiveUploadTransfer> uploadTransfers = {};
   final Map<(ClientPeer, int), int> clientUploadTransferIds = {};
+  final Queue<({DateTime at, int bytes})> _shaderRateEntries = Queue();
+  int _shaderRateBytes = 0;
   int _nextScrollbackRequestId = 1;
   int _nextUploadTransferId = 1;
 
@@ -1489,6 +1558,28 @@ final class _LiveSession {
         );
       }
     }
+  }
+
+  bool tryConsumeShaderBudget(
+    DateTime now,
+    int frameBytes, {
+    required int maxFrames,
+    required int maxBytes,
+    required Duration window,
+  }) {
+    if (maxFrames <= 0 || maxBytes <= 0 || frameBytes > maxBytes) return false;
+    while (_shaderRateEntries.isNotEmpty &&
+        !now.isBefore(_shaderRateEntries.first.at.add(window))) {
+      final expired = _shaderRateEntries.removeFirst();
+      _shaderRateBytes -= expired.bytes;
+    }
+    if (_shaderRateEntries.length >= maxFrames ||
+        _shaderRateBytes + frameBytes > maxBytes) {
+      return false;
+    }
+    _shaderRateEntries.addLast((at: now, bytes: frameBytes));
+    _shaderRateBytes += frameBytes;
+    return true;
   }
 
   SessionSummary toSummary() => SessionSummary(

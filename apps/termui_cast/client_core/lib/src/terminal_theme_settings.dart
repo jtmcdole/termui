@@ -46,6 +46,18 @@ final class TerminalThemeSettings {
   /// User-defined color overrides on top of the active preset.
   final CustomPaletteOverrides customOverrides;
 
+  /// Opacity applied to default background cells (`0.0..1.0`, default `1.0`).
+  final double backgroundOpacity;
+
+  /// Ordered preset identifiers or `.glsl` paths executed behind the terminal.
+  final List<String> backgroundShaderChain;
+
+  /// Ordered preset identifiers or `.glsl` paths executed over the terminal.
+  final List<String> foregroundShaderChain;
+
+  /// Policy controlling when animated fragment shaders advance `iTime`.
+  final ShaderAnimationMode animationMode;
+
   /// Creates terminal theme settings with calibrated defaults.
   const TerminalThemeSettings({
     this.appearanceMode = .system,
@@ -56,6 +68,10 @@ final class TerminalThemeSettings {
     this.faintOpacity = 0.55,
     this.smartCursorColor = true,
     this.customOverrides = CustomPaletteOverrides.empty,
+    this.backgroundOpacity = 1.0,
+    this.backgroundShaderChain = const <String>[],
+    this.foregroundShaderChain = const <String>[],
+    this.animationMode = ShaderAnimationMode.focused,
   });
 
   /// Resolves the active [TerminalColorTheme] for [platformBrightness] with [customOverrides] applied.
@@ -83,6 +99,10 @@ final class TerminalThemeSettings {
     double? faintOpacity,
     bool? smartCursorColor,
     CustomPaletteOverrides? customOverrides,
+    double? backgroundOpacity,
+    List<String>? backgroundShaderChain,
+    List<String>? foregroundShaderChain,
+    ShaderAnimationMode? animationMode,
   }) => TerminalThemeSettings(
     appearanceMode: appearanceMode ?? this.appearanceMode,
     darkThemeId: darkThemeId ?? this.darkThemeId,
@@ -102,6 +122,19 @@ final class TerminalThemeSettings {
     ),
     smartCursorColor: smartCursorColor ?? this.smartCursorColor,
     customOverrides: customOverrides ?? this.customOverrides,
+    backgroundOpacity: _clampFinite(
+      backgroundOpacity,
+      min: 0.0,
+      max: 1.0,
+      fallback: this.backgroundOpacity.isFinite ? this.backgroundOpacity : 1.0,
+    ),
+    backgroundShaderChain: backgroundShaderChain == null
+        ? this.backgroundShaderChain
+        : List<String>.unmodifiable(backgroundShaderChain),
+    foregroundShaderChain: foregroundShaderChain == null
+        ? this.foregroundShaderChain
+        : List<String>.unmodifiable(foregroundShaderChain),
+    animationMode: animationMode ?? this.animationMode,
   );
 
   static double _clampFinite(
@@ -110,6 +143,25 @@ final class TerminalThemeSettings {
     required double max,
     required double fallback,
   }) => value == null || !value.isFinite ? fallback : value.clamp(min, max);
+
+  static List<String> _parseShaderChain(Object? raw) {
+    if (raw is! List<Object?> || raw.isEmpty) return const <String>[];
+    final entries = <String>[
+      for (final item in raw)
+        if (item is String && item.trim().isNotEmpty) item.trim(),
+    ];
+    return entries.isEmpty
+        ? const <String>[]
+        : List<String>.unmodifiable(entries);
+  }
+
+  static bool _stringListEquals(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 
   /// Serializes theme settings to a JSON map.
   Map<String, Object?> toJson() => {
@@ -121,6 +173,12 @@ final class TerminalThemeSettings {
     'faintOpacity': faintOpacity,
     'smartCursorColor': smartCursorColor,
     if (!customOverrides.isEmpty) 'customOverrides': customOverrides.toJson(),
+    'backgroundOpacity': backgroundOpacity,
+    if (backgroundShaderChain.isNotEmpty)
+      'backgroundShaderChain': backgroundShaderChain,
+    if (foregroundShaderChain.isNotEmpty)
+      'foregroundShaderChain': foregroundShaderChain,
+    'animationMode': animationMode.wireName,
   };
 
   /// Parses settings from a JSON map with resilient fallbacks on invalid data.
@@ -138,6 +196,7 @@ final class TerminalThemeSettings {
     final boldIsBrightRaw = raw['boldIsBright'];
     final faintOpacityRaw = raw['faintOpacity'];
     final smartCursorColorRaw = raw['smartCursorColor'];
+    final bgOpacityRaw = raw['backgroundOpacity'];
 
     return TerminalThemeSettings(
       appearanceMode: appearanceMode,
@@ -162,6 +221,15 @@ final class TerminalThemeSettings {
       ),
       smartCursorColor: smartCursorColorRaw is! bool || smartCursorColorRaw,
       customOverrides: CustomPaletteOverrides.fromJson(raw['customOverrides']),
+      backgroundOpacity: _clampFinite(
+        bgOpacityRaw is num ? bgOpacityRaw.toDouble() : null,
+        min: 0.0,
+        max: 1.0,
+        fallback: 1.0,
+      ),
+      backgroundShaderChain: _parseShaderChain(raw['backgroundShaderChain']),
+      foregroundShaderChain: _parseShaderChain(raw['foregroundShaderChain']),
+      animationMode: ShaderAnimationMode.fromWireName(raw['animationMode']),
     );
   }
 
@@ -176,7 +244,17 @@ final class TerminalThemeSettings {
           other.boldIsBright == boldIsBright &&
           other.faintOpacity == faintOpacity &&
           other.smartCursorColor == smartCursorColor &&
-          other.customOverrides == customOverrides;
+          other.customOverrides == customOverrides &&
+          other.backgroundOpacity == backgroundOpacity &&
+          _stringListEquals(
+            other.backgroundShaderChain,
+            backgroundShaderChain,
+          ) &&
+          _stringListEquals(
+            other.foregroundShaderChain,
+            foregroundShaderChain,
+          ) &&
+          other.animationMode == animationMode;
 
   @override
   int get hashCode => Object.hash(
@@ -188,6 +266,10 @@ final class TerminalThemeSettings {
     faintOpacity,
     smartCursorColor,
     customOverrides,
+    backgroundOpacity,
+    Object.hashAll(backgroundShaderChain),
+    Object.hashAll(foregroundShaderChain),
+    animationMode,
   );
 }
 

@@ -1,6 +1,8 @@
 import 'dart:math' as math;
+
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/event.dart' as ev;
+
 import 'virtual_terminal.dart';
 import 'scrollback_buffer.dart';
 import 'input_encoder.dart';
@@ -347,10 +349,10 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
   }
 
   static void _fillBlankRow(Buffer buffer, int targetStartIdx, int rowLength) {
-    buffer.characters.fillRange(
+    buffer.glyphCellList.fillCodeRange(
       targetStartIdx,
       targetStartIdx + rowLength,
-      ' ',
+      GlyphCellList.spaceCode,
     );
     buffer.attributes.fillRange(
       targetStartIdx * 3,
@@ -360,21 +362,30 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
     buffer.clearCellAuxRange(targetStartIdx, targetStartIdx + rowLength);
   }
 
+  static void _copyGlyphCellAt(
+    GlyphCellList dst,
+    int dstIdx,
+    GlyphCellList src,
+    int rawCode,
+  ) {
+    dst.setCodeAt(
+      dstIdx,
+      (rawCode & GlyphCellList.clusterFlag) != 0
+          ? dst.encodeGrapheme(src.decodeCode(rawCode))
+          : rawCode,
+    );
+  }
+
   static void _paintScrollbackOpaque(
     Buffer buffer,
     int targetStartIdx,
     int rowLength,
     ScrollbackLine sbLine,
   ) {
-    final chars = sbLine.characters;
-    final copyLen = math.min(chars.length, rowLength);
+    final sbCells = sbLine.glyphCellList;
+    final copyLen = math.min(sbCells.length, rowLength);
     if (copyLen > 0) {
-      buffer.characters.setRange(
-        targetStartIdx,
-        targetStartIdx + copyLen,
-        chars,
-        0,
-      );
+      buffer.glyphCellList.copyCellsFrom(sbCells, targetStartIdx, 0, copyLen);
       buffer.attributes.setRange(
         targetStartIdx * 3,
         (targetStartIdx + copyLen) * 3,
@@ -383,10 +394,10 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
       );
     }
     if (copyLen < rowLength) {
-      buffer.characters.fillRange(
+      buffer.glyphCellList.fillCodeRange(
         targetStartIdx + copyLen,
         targetStartIdx + rowLength,
-        ' ',
+        GlyphCellList.spaceCode,
       );
       buffer.attributes.fillRange(
         (targetStartIdx + copyLen) * 3,
@@ -408,13 +419,15 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
     int rowLength,
     ScrollbackLine sbLine,
   ) {
-    final chars = sbLine.characters;
-    final copyLen = math.min(chars.length, rowLength);
+    final sbCells = sbLine.glyphCellList;
+    final sbCodes = sbLine.glyphCodes;
+    final dstCells = buffer.glyphCellList;
+    final copyLen = math.min(sbCells.length, rowLength);
     var tIdx = targetStartIdx;
     for (var i = 0; i < copyLen; i++, tIdx++) {
       final sAttrIdx = i * 3;
       if ((sbLine.attributes[sAttrIdx + 2] & Modifier.transparent) == 0) {
-        buffer.characters[tIdx] = chars[i];
+        _copyGlyphCellAt(dstCells, tIdx, sbCells, sbCodes[i]);
         final tAttrIdx = tIdx * 3;
         buffer.attributes[tAttrIdx + 0] = sbLine.attributes[sAttrIdx + 0];
         buffer.attributes[tAttrIdx + 1] = sbLine.attributes[sAttrIdx + 1];
@@ -434,11 +447,11 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
     required bool transparent,
   }) {
     if (!transparent) {
-      buffer.characters.setRange(
+      buffer.glyphCellList.copyCellsFrom(
+        source.glyphCellList,
         targetStartIdx,
-        targetStartIdx + rowLength,
-        source.characters,
         sourceStartIdx,
+        rowLength,
       );
       final targetAttrStart = targetStartIdx * 3;
       final sourceAttrStart = sourceStartIdx * 3;
@@ -455,12 +468,15 @@ class _TerminalBufferElement extends LeafElement implements MouseEventHandler {
         rowLength,
       );
     } else {
+      final dstCells = buffer.glyphCellList;
+      final srcCells = source.glyphCellList;
+      final srcCodes = source.glyphCodes;
       var tIdx = targetStartIdx;
       var sIdx = sourceStartIdx;
       for (var i = 0; i < rowLength; i++, tIdx++, sIdx++) {
         final sAttrIdx = sIdx * 3;
         if ((source.attributes[sAttrIdx + 2] & Modifier.transparent) == 0) {
-          buffer.characters[tIdx] = source.characters[sIdx];
+          _copyGlyphCellAt(dstCells, tIdx, srcCells, srcCodes[sIdx]);
           final tAttrIdx = tIdx * 3;
           buffer.attributes[tAttrIdx + 0] = source.attributes[sAttrIdx + 0];
           buffer.attributes[tAttrIdx + 1] = source.attributes[sAttrIdx + 1];

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math';
+
 import 'package:characters/characters.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
@@ -575,6 +576,9 @@ class PromptRunner<T> implements ListenableSceneRenderer, Reassemblable {
         handleMouseEvent(mouseEvent);
       case final term.PasteEvent pasteEvent:
         handlePasteEvent(pasteEvent);
+      case final term.ShaderCapabilitiesEvent caps:
+        _renderer?.shaderCapabilities = caps;
+        _scheduleRender();
       case term.FocusInEvent() ||
           term.FocusOutEvent() ||
           term.CursorPositionReportEvent() ||

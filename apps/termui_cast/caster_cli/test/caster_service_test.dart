@@ -3633,10 +3633,102 @@ void main() {
     );
 
     _registerRouterAuthFailTest();
+    _registerRouterIncrementalEchoTest();
     _registerTitleBellBurstTest();
     _registerPty2AckTest();
     _registerWaveformQueryReplyTest();
   });
+}
+
+void _registerRouterIncrementalEchoTest() {
+  test(
+    'CasterService.fromRouterSession flushes every single-character PTY echo immediately without waiting for a second keystroke',
+    () {
+      fakeAsync((async) {
+        const sessionId = SessionId('router-echo');
+        final backend = _FakeRoutedPtyBackend();
+        final router = PtyRouter();
+        final routerSession = router.createSession(
+          id: 'local-echo',
+          backend: backend,
+          initialCols: 40,
+          initialRows: 12,
+        );
+
+        late StreamChannel<Uint8List> serverSide;
+        final serverFrames = <CastMessage>[];
+        final service = CasterService.fromRouterSession(
+          config: CasterConfig(
+            sessionId: sessionId,
+            title: 'local-zsh',
+            initialCols: 40,
+            initialRows: 12,
+            command: const ['zsh'],
+          ),
+          session: routerSession,
+          channelOpener: () async {
+            final ctrl = StreamChannelController<Uint8List>();
+            serverSide = ctrl.foreign;
+            return ctrl.local;
+          },
+        );
+
+        unawaited(service.start());
+        async.flushMicrotasks();
+        final sub = serverSide.stream.listen((raw) {
+          serverFrames.add(BufferFrameCodec.decode(raw));
+        });
+        async.flushMicrotasks();
+
+        serverSide.sink.add(
+          BufferFrameCodec.encode(const AuthAcceptedFrame(role: .caster)),
+        );
+        serverSide.sink.add(
+          BufferFrameCodec.encode(
+            const SubscriberCountFrame(
+              sessionId: sessionId,
+              subscriberCount: 1,
+            ),
+          ),
+        );
+        serverSide.sink.add(
+          BufferFrameCodec.encode(
+            const RequestKeyframeFrame(sessionId: sessionId),
+          ),
+        );
+        async.flushMicrotasks();
+        // Initial keyframe flushes synchronously once requested by viewer.
+        check(serverFrames.whereType<BufferSnapshotFrame>()).length.equals(1);
+        serverFrames.clear();
+
+        // Each single-character echo separated by >16ms must flush its own
+        // BufferDeltaFrame immediately (never stalling odd keystrokes until
+        // the next keystroke arrives).
+        for (final (idx, ch) in const ['t', 'h', 'i', 's'].indexed) {
+          backend.emitText(ch);
+          async.flushMicrotasks();
+          async.elapse(const Duration(milliseconds: 20));
+
+          final deltas = [...serverFrames.whereType<BufferDeltaFrame>()];
+          check(
+            because: 'single-character echo "$ch" must flush immediately',
+            deltas,
+          ).length.equals(1);
+          check(deltas.single.delta.runs).length.equals(1);
+          check(deltas.single.delta.runs.single.startIndex).equals(idx);
+          check(deltas.single.delta.runs.single.characters).deepEquals([ch]);
+          serverFrames.clear();
+        }
+
+        unawaited(service.stop());
+        unawaited(sub.cancel());
+        async.flushMicrotasks();
+        unawaited(router.dispose());
+        unawaited(backend.dispose());
+        async.flushMicrotasks();
+      });
+    },
+  );
 }
 
 void _registerRouterAuthFailTest() {

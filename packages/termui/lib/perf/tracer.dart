@@ -22,6 +22,9 @@ enum TraceCategory {
 
   /// Traces related to the compositor.
   compositor,
+
+  /// Traces related to GPU shader rendering and presentation.
+  gpu,
 }
 
 /// Represents event phases in the trace log.
@@ -34,6 +37,9 @@ class Phase {
 
   /// An instant phase event.
   static const int instant = 3;
+
+  /// A numeric counter phase event (`ph: "C"` in Chrome Trace Event Format).
+  static const int counter = 4;
 }
 
 /// A high-performance, low-overhead event tracer.
@@ -83,27 +89,74 @@ class Tracer {
     registerString('Unknown');
   }
 
-  /// Start a recording session.
+  /// Start a recording session writing to a file path on [fs].
   static Future<void> start(String traceFilePath, {FileSystem? fs}) async {
+    final fileSystem = fs ?? getDefaultFileSystem();
+    await startWithSink(
+      (baseEpochUs) => createTracerSink(fileSystem, traceFilePath, baseEpochUs),
+    );
+  }
+
+  /// Start a recording session streaming events into a custom [TracerSink]
+  /// created with the session's `baseEpochUs`.
+  static Future<void> startWithSink(
+    TracerSink Function(int baseEpochUs) createSink,
+  ) async {
     if (isEnabled) return;
 
     _writeIndex = 0;
     _activeMetadata = {};
     _activeBuffer.fillRange(0, _activeBuffer.length, 0);
 
-    final fileSystem = fs ?? getDefaultFileSystem();
     _baseEpochUs = clock.now().microsecondsSinceEpoch;
     _stopwatch.reset();
     _stopwatch.start();
 
-    _sink = createTracerSink(fileSystem, traceFilePath, _baseEpochUs);
+    _sink = createSink(_baseEpochUs);
 
-    // Synchronize the current string table with the sink
+    // Synchronize the current string table with the sink.
     if (_idToStringList.isNotEmpty) {
-      _sink!.add(_createBuffer(0), List.from(_idToStringList));
+      _sink!.add(_createBuffer(0), List<String>.from(_idToStringList));
     }
 
     isEnabled = true;
+  }
+
+  /// Packs [stringId], [isolateId], and [phase] into a single word using
+  /// JavaScript-safe 53-bit arithmetic (compatible with 64-bit VM/WASM and
+  /// 32-bit-bitwise Dart2JS runtimes).
+  @pragma('vm:prefer-inline')
+  static int packWord0(int stringId, int isolateId, int phase) =>
+      stringId * 0x100000000 + ((isolateId & 0xFFFFFF) << 8) + (phase & 0xFF);
+
+  /// Unpacks the string table ID from [word0] without 64-bit right shifts.
+  @pragma('vm:prefer-inline')
+  static int unpackStringId(int word0) => (word0 ~/ 0x100000000) & 0xFFFFFFFF;
+
+  /// Unpacks the 24-bit isolate ID from [word0].
+  @pragma('vm:prefer-inline')
+  static int unpackIsolateId(int word0) => (word0 ~/ 256) & 0xFFFFFF;
+
+  /// Unpacks the 8-bit [Phase] value from [word0].
+  @pragma('vm:prefer-inline')
+  static int unpackPhase(int word0) => word0 & 0xFF;
+
+  /// Records a Chrome Trace counter event (`ph: "C"`) with finite numeric
+  /// [values]. Non-finite `double` values (`NaN`, `Infinity`) are omitted so
+  /// Chrome Trace JSON encoders never throw.
+  @pragma('vm:prefer-inline')
+  static void recordCounter(
+    int stringId,
+    TraceCategory category,
+    Map<String, num> values,
+  ) {
+    if (!isEnabled || !activeCategories.contains(category)) return;
+    final encoded = <String, String>{
+      for (final entry in values.entries)
+        if (entry.value.isFinite) entry.key: '${entry.value}',
+    };
+    if (encoded.isEmpty) return;
+    record(stringId, Phase.counter, category, metadata: encoded);
   }
 
   /// Register a string literal and return its static ID.
@@ -134,8 +187,8 @@ class Tracer {
     if (!isEnabled) return;
     final idx = _writeIndex;
 
-    // Word 0: (stringId << 32) | (isolateId << 8) | phase
-    _activeBuffer[idx] = (stringId << 32) | (_isolateId << 8) | phase;
+    // Word 0: JS-safe 53-bit equivalent of (stringId << 32) | (isolateId << 8) | phase
+    _activeBuffer[idx] = packWord0(stringId, _isolateId, phase);
 
     // Word 1: monotonic timestamp
     _activeBuffer[idx + 1] = _stopwatch.elapsedMicroseconds;
@@ -156,20 +209,21 @@ class Tracer {
     if (!isEnabled) return;
     isEnabled = false;
     _stopwatch.stop();
+    final sink = _sink;
+    _sink = null;
 
-    if (_writeIndex > 0) {
+    if (_writeIndex > 0 && sink != null) {
       // Send the partially filled buffer
       final copy = _createBuffer(_writeIndex);
       List.copyRange(copy, 0, _activeBuffer, 0, _writeIndex);
-      _sink!.add(copy, const [], _activeMetadata);
+      sink.add(copy, const [], _activeMetadata);
     }
 
     _writeIndex = 0;
     _activeMetadata = {};
     _activeBuffer.fillRange(0, _activeBuffer.length, 0);
 
-    await _sink!.close();
-    _sink = null;
+    await sink?.close();
   }
 
   static void _swapAndFlush() {

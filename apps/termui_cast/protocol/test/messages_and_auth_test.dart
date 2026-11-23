@@ -197,6 +197,10 @@ void main() {
           chunkCount: 1,
           data: Uint8List(16),
         ),
+        const ShaderFrame(
+          sessionId: idA,
+          payload: CastResetShaderPayload(target: 'all'),
+        ),
         const ErrorFrame(code: 'auth_failed', message: 'Invalid bearer token'),
         const ClipboardFrame(sessionId: idA, text: 'hello 🚀'),
         const ClipboardFrame(sessionId: idB, readBlocked: true),
@@ -460,6 +464,9 @@ void main() {
             check(imageId).equals(0x80000001);
             check(version).equals(2);
             check(totalWireBytes).equals(16);
+          case ShaderFrame(:final sessionId, :final payload):
+            check(sessionId).equals(idA);
+            check(payload).equals(const CastResetShaderPayload(target: 'all'));
           case ErrorFrame(:final code, :final message):
             check(code).equals('auth_failed');
             check(message).equals('Invalid bearer token');

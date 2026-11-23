@@ -25,10 +25,55 @@ void _defineThemeSettingsTests() {
       check(json['boldIsBright']).equals(false);
       check(json['faintOpacity']).equals(0.55);
       check(json['smartCursorColor']).equals(true);
+      check(json['backgroundOpacity']).equals(1.0);
+      check(json['animationMode']).equals('focused');
+      check(json.containsKey('backgroundShaderChain')).isFalse();
+      check(json.containsKey('foregroundShaderChain')).isFalse();
 
       final parsed = TerminalThemeSettings.fromJson(json);
       check(parsed).equals(settings);
     });
+
+    test(
+      'round-trips shader chains, backgroundOpacity, and animationMode cleanly',
+      () {
+        final settings = const TerminalThemeSettings().copyWith(
+          backgroundOpacity: 0.72,
+          backgroundShaderChain: const <String>['wallpaper_wave'],
+          foregroundShaderChain: const <String>[
+            'crt_lottes',
+            '~/.config/fterm/shaders/cursor_trail.glsl',
+          ],
+          animationMode: ShaderAnimationMode.onActivity,
+        );
+        final json = settings.toJson();
+        check(json['backgroundOpacity']).equals(0.72);
+        check(json['animationMode']).equals('on_activity');
+        check(
+          json['backgroundShaderChain'],
+        ).isA<List<String>>().deepEquals(const <String>['wallpaper_wave']);
+        check(json['foregroundShaderChain']).isA<List<String>>().deepEquals(
+          const <String>[
+            'crt_lottes',
+            '~/.config/fterm/shaders/cursor_trail.glsl',
+          ],
+        );
+
+        final parsed = TerminalThemeSettings.fromJson(json);
+        check(parsed).equals(settings);
+        check(parsed.hashCode).equals(settings.hashCode);
+
+        // Legacy JSON missing the new fields preserves backward-compatible defaults.
+        final legacyParsed = TerminalThemeSettings.fromJson(<String, Object?>{
+          'appearanceMode': 'dark',
+          'darkThemeId': 'gruvbox_dark',
+        });
+        check(legacyParsed.backgroundOpacity).equals(1.0);
+        check(legacyParsed.backgroundShaderChain).isEmpty();
+        check(legacyParsed.foregroundShaderChain).isEmpty();
+        check(legacyParsed.animationMode).equals(ShaderAnimationMode.focused);
+      },
+    );
 
     test(
       'recovers safely from invalid, corrupt, or NaN/infinite values without throwing',
@@ -41,6 +86,10 @@ void _defineThemeSettingsTests() {
           'faintOpacity': -5.0,
           'smartCursorColor': 'nope',
           'customOverrides': 'not a map',
+          'backgroundOpacity': 3.5,
+          'backgroundShaderChain': <Object?>['  ', 42, ' wallpaper_wave '],
+          'foregroundShaderChain': 'not a list',
+          'animationMode': 'invalid_mode',
         });
         check(parsed.appearanceMode).equals(ThemeAppearanceMode.system);
         check(parsed.darkThemeId).equals('termui_dark');
@@ -49,24 +98,37 @@ void _defineThemeSettingsTests() {
         check(parsed.faintOpacity).equals(0.25);
         check(parsed.smartCursorColor).isTrue();
         check(parsed.customOverrides.isEmpty).isTrue();
+        check(parsed.backgroundOpacity).equals(1.0);
+        check(
+          parsed.backgroundShaderChain,
+        ).deepEquals(const <String>['wallpaper_wave']);
+        check(parsed.foregroundShaderChain).isEmpty();
+        check(parsed.animationMode).equals(ShaderAnimationMode.focused);
 
         final fromNan = TerminalThemeSettings.fromJson({
           'minimumContrast': double.nan,
           'faintOpacity': double.infinity,
+          'backgroundOpacity': double.nan,
+          'animationMode': 'staticOnly',
         });
         check(fromNan.minimumContrast).equals(1.0);
         check(fromNan.faintOpacity).equals(0.55);
+        check(fromNan.backgroundOpacity).equals(1.0);
+        check(fromNan.animationMode).equals(ShaderAnimationMode.staticOnly);
 
         final copiedNan =
             const TerminalThemeSettings(
               minimumContrast: 4.5,
               faintOpacity: 0.7,
+              backgroundOpacity: 0.65,
             ).copyWith(
               minimumContrast: double.nan,
               faintOpacity: double.negativeInfinity,
+              backgroundOpacity: double.infinity,
             );
         check(copiedNan.minimumContrast).equals(4.5);
         check(copiedNan.faintOpacity).equals(0.7);
+        check(copiedNan.backgroundOpacity).equals(0.65);
       },
     );
 

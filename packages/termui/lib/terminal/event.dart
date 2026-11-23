@@ -767,3 +767,58 @@ final class AudioApcReplyEvent extends InputEvent {
   @override
   String toString() => 'AudioApcReplyEvent(payload: $payload)';
 }
+
+/// Event representing a host shader capability reply (`ESC _ S a=caps,... ST`).
+final class ShaderCapabilitiesEvent extends InputEvent {
+  /// Host shader backend identifier (e.g. `'flutter_gpu'`, `'webgl2'`, `'disabled'`).
+  final String backend;
+
+  /// Whether custom GLSL uploads (`a=define`) and GPU fragment shaders are supported.
+  final bool glsl;
+
+  /// Whether per-cell spatial transforms and host tweens (`a=xform` / `a=xforms`) are supported.
+  final bool xform;
+
+  /// Whether scoped shader regions (`a=region`) are supported.
+  final bool region;
+
+  /// Maximum simultaneous custom CLI shader slots permitted per pane.
+  final int maxSlots;
+
+  /// Maximum simultaneous active shader regions permitted per pane.
+  final int maxRegions;
+
+  /// Creates a [ShaderCapabilitiesEvent].
+  const ShaderCapabilitiesEvent({
+    required this.backend,
+    required this.glsl,
+    required this.xform,
+    required this.region,
+    this.maxSlots = 16,
+    this.maxRegions = 8,
+  });
+
+  /// Whether any artistic shader or per-cell transform feature is active.
+  bool get isAnySupported => glsl || xform || region;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ShaderCapabilitiesEvent &&
+          other.backend == backend &&
+          other.glsl == glsl &&
+          other.xform == xform &&
+          other.region == region &&
+          other.maxSlots == maxSlots &&
+          other.maxRegions == maxRegions;
+
+  @override
+  int get hashCode =>
+      Object.hash(backend, glsl, xform, region, maxSlots, maxRegions);
+
+  @override
+  String toString() =>
+      'ShaderCapabilitiesEvent(backend: $backend, glsl: $glsl, '
+      'xform: $xform, region: $region, maxSlots: $maxSlots, '
+      'maxRegions: $maxRegions)';
+}

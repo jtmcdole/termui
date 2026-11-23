@@ -8,6 +8,7 @@ export 'src/pseudo_terminal_view_stub.dart'
 export 'src/pty_router.dart';
 export 'src/pty_router_stub.dart' if (dart.library.io) 'src/pty_router_io.dart';
 export 'src/scrollback_buffer.dart';
+export 'src/shader_apc_handler.dart';
 export 'src/terminal_port.dart';
 export 'src/terminal_view.dart';
 export 'src/virtual_terminal.dart';

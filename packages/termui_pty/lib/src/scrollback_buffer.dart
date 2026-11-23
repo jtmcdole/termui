@@ -5,11 +5,22 @@ import 'package:termui/termui.dart';
 
 /// An immutable snapshot of a single primary-screen row evicted into scrollback.
 final class ScrollbackLine {
+  static final GlyphCellList _emptyGlyphCells = GlyphCellList.filled(0);
+  static final Uint32List _emptyAttributes = Uint32List(0);
+
   /// The terminal column width when this line was evicted.
   final int width;
 
+  final GlyphCellList _glyphCells;
+
+  /// Backing [GlyphCellList] storage for zero-allocation block copies.
+  GlyphCellList get glyphCellList => _glyphCells;
+
+  /// Read-only view of the packed UTF-32 / cluster codes backing [characters].
+  Uint32List get glyphCodes => _glyphCells.codesView;
+
   /// Cell graphemes, trimmed of trailing default-styled blank spaces.
-  final List<String> characters;
+  List<String> get characters => _glyphCells;
 
   /// Packed `[fg, bg, modifiers]` attributes (`length == characters.length * 3`).
   final Uint32List attributes;
@@ -23,15 +34,52 @@ final class ScrollbackLine {
   /// Whether this row began via right-margin auto-wrap from the preceding row.
   final bool isWrapped;
 
-  /// Creates an immutable [ScrollbackLine].
+  /// Creates an immutable [ScrollbackLine] from a list of cell [characters].
   ScrollbackLine({
     required this.width,
-    required this.characters,
+    required List<String> characters,
     required this.attributes,
     this.underlineColors,
     this.uris,
     this.isWrapped = false,
-  }) : assert(attributes.length == characters.length * 3);
+  }) : _glyphCells = _wrapCharacters(characters),
+       assert(attributes.length == characters.length * 3);
+
+  ScrollbackLine._({
+    required this.width,
+    required GlyphCellList glyphCells,
+    required this.attributes,
+    this.underlineColors,
+    this.uris,
+    this.isWrapped = false,
+  }) : _glyphCells = glyphCells,
+       assert(attributes.length == glyphCells.length * 3);
+
+  /// Creates an immutable [ScrollbackLine] directly backed by [glyphCells]
+  /// without allocating intermediate `String` lists.
+  factory ScrollbackLine.fromGlyphCells({
+    required int width,
+    required GlyphCellList glyphCells,
+    required Uint32List attributes,
+    Uint32List? underlineColors,
+    List<String?>? uris,
+    bool isWrapped = false,
+  }) => ScrollbackLine._(
+    width: width,
+    glyphCells: glyphCells,
+    attributes: attributes,
+    underlineColors: underlineColors,
+    uris: uris,
+    isWrapped: isWrapped,
+  );
+
+  static GlyphCellList _wrapCharacters(List<String> characters) {
+    if (characters.isEmpty) return _emptyGlyphCells;
+    if (characters is GlyphCellList) return characters;
+    final cells = GlyphCellList.filled(characters.length);
+    cells.setRange(0, characters.length, characters);
+    return cells;
+  }
 
   /// Captures row [row] from [buffer], trimming trailing default blank cells.
   factory ScrollbackLine.fromBufferRow(
@@ -43,27 +91,24 @@ final class ScrollbackLine {
     final rowStart = row * rowWidth;
     final trimmedLen = _findTrimmedLength(buffer, rowStart, rowWidth);
     if (trimmedLen == 0) {
-      return ScrollbackLine(
+      return ScrollbackLine.fromGlyphCells(
         width: rowWidth,
-        characters: const [],
-        attributes: Uint32List(0),
+        glyphCells: _emptyGlyphCells,
+        attributes: _emptyAttributes,
         isWrapped: isWrapped,
       );
     }
 
-    final chars = List<String>.generate(
-      trimmedLen,
-      (i) => buffer.characters[rowStart + i],
-      growable: false,
-    );
+    final glyphCells = GlyphCellList.filled(trimmedLen)
+      ..copyCellsFrom(buffer.glyphCellList, 0, rowStart, trimmedLen);
     final attrs = buffer.attributes.sublist(
       rowStart * 3,
       (rowStart + trimmedLen) * 3,
     );
     final rowEnd = rowStart + trimmedLen;
-    return ScrollbackLine(
+    return ScrollbackLine.fromGlyphCells(
       width: rowWidth,
-      characters: chars,
+      glyphCells: glyphCells,
       attributes: attrs,
       underlineColors: buffer.sliceUnderlineColors(rowStart, rowEnd),
       uris: buffer.sliceUris(rowStart, rowEnd),
@@ -81,7 +126,7 @@ final class ScrollbackLine {
   }
 
   static bool _isDefaultBlankCell(Buffer buffer, int cellIdx) {
-    if (buffer.characters[cellIdx] != ' ') return false;
+    if (buffer.glyphCodes[cellIdx] != GlyphCellList.spaceCode) return false;
     if (buffer.getUnderlineColorAt(cellIdx) != 0 ||
         buffer.getUriAt(cellIdx) != null) {
       return false;
