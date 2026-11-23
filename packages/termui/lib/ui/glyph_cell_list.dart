@@ -143,6 +143,11 @@ final class GlyphCellList extends ListBase<String> {
   /// Writes packed [scalarCode] at [index] while maintaining live cluster counts
   /// and triggering sparse compaction if needed.
   void setCodeAt(int index, int scalarCode) {
+    assert(
+      (scalarCode & clusterFlag) == 0 ||
+          (scalarCode & payloadMask) < _clusterStrings.length,
+      'Cluster code out of range for GlyphCellList',
+    );
     final prevIsCluster = (_codes[index] & clusterFlag) != 0;
     _setCodeRaw(index, scalarCode);
     if (prevIsCluster && _clusterStrings.length > compactionMinEntries) {
@@ -156,6 +161,10 @@ final class GlyphCellList extends ListBase<String> {
     RangeError.checkValidRange(start, end, _codes.length);
     if (start == end) return;
     final nextIsCluster = (scalarCode & clusterFlag) != 0;
+    assert(
+      !nextIsCluster || (scalarCode & payloadMask) < _clusterStrings.length,
+      'Cluster code out of range for GlyphCellList',
+    );
     if (start == 0 && end == _codes.length && !nextIsCluster) {
       _codes.fillRange(0, end, scalarCode);
       if (_clusterStrings.isNotEmpty) {

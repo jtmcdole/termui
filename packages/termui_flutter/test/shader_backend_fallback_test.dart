@@ -5,6 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
 import 'package:termui_flutter/src/rendering/gpu_frame_watchdog.dart';
 import 'package:termui_flutter/src/rendering/impellerc_compiler_io.dart';
+import 'package:termui_flutter/src/rendering/impellerc_compiler_stub.dart'
+    if (dart.library.io) 'package:termui_flutter/src/rendering/impellerc_compiler_io.dart'
+    as gpu_compiler;
 import 'package:termui_flutter/src/rendering/shader_backend.dart';
 import 'package:termui_flutter/src/rendering/shader_backend_disabled.dart';
 import 'package:termui_flutter/src/rendering/shader_backend_factory.dart';
@@ -708,6 +711,162 @@ void main() {
       expect(reused.buffer, 'normal_1_1024');
       expect(createdNormal, 2);
       expect(createdOversized, 2);
+    });
+  });
+
+  group('H5 proof: ui.Image disposal during async toByteData readback', () {
+    test('disposing wallpaperImage during first await causes uncloned second toByteData to throw while upfront clone() succeeds', () async {
+      // Exact sequence in WebGl2ShaderBackend.renderPassesAsync:
+      // 1. await _readImageRgba(inputImage)
+      // 2. (caller disposes wallpaperImage while first await is in flight)
+      // 3. await _readImageRgba(wallpaperImage)
+      final inputImg = await _createSoftwareImage(width: 8, height: 6);
+      final wallpaperImg = await _createSoftwareImage(width: 8, height: 6);
+      addTearDown(inputImg.dispose);
+
+      final firstRead = inputImg.toByteData(format: ui.ImageByteFormat.rawRgba);
+      // Simulate caller disposing wallpaperImage while first readback is in flight.
+      wallpaperImg.dispose();
+      await firstRead;
+
+      Object? secondReadError;
+      try {
+        await wallpaperImg.toByteData(format: ui.ImageByteFormat.rawRgba);
+      } on Object catch (error) {
+        secondReadError = error;
+      }
+      expect(
+        secondReadError,
+        isNotNull,
+        reason:
+            'Uncloned wallpaperImage disposed during first await must throw '
+            'when toByteData() is called on it afterwards.',
+      );
+      // Verify exact error is from disposed ui.Image.
+      expect(secondReadError, isA<AssertionError>());
+
+      // With readImageRgbaSafely started synchronously before any await,
+      // both images are cloned upfront so caller disposal mid-readback
+      // cannot break pixel readback or post-await width/height lookup.
+      final srcInput = await _createSoftwareImage(width: 8, height: 6);
+      final srcWallpaper = await _createSoftwareImage(width: 8, height: 6);
+      final f1 = readImageRgbaSafely(srcInput);
+      final f2 = readImageRgbaSafely(srcWallpaper);
+      srcInput.dispose();
+      srcWallpaper.dispose();
+      final p1 = await f1;
+      final p2 = await f2;
+      expect(p1, isNotNull);
+      expect(p2, isNotNull);
+      expect(p1!.width, 8);
+      expect(p1.height, 6);
+      expect(p1.bytes.lengthInBytes, 8 * 6 * 4);
+      expect(p2!.width, 8);
+      expect(p2.height, 6);
+      expect(p2.bytes.lengthInBytes, 8 * 6 * 4);
+
+      // Already-disposed ui.Image returns null cleanly instead of throwing.
+      final alreadyDisposed = await _createSoftwareImage(width: 4, height: 4);
+      alreadyDisposed.dispose();
+      expect(await readImageRgbaSafely(alreadyDisposed), isNull);
+      expect(await readImageRgbaSafely(null), isNull);
+    });
+  });
+
+  group('FlutterGpuShaderBackend post-await disposal guards', () {
+    test('M3a: FlutterGpuShaderBackend.compile throws StateError if backend is disposed while compiling', () async {
+      final tempCache = Directory.systemTemp.createTempSync(
+        'termui_m3_compile_cache_',
+      );
+      addTearDown(() => tempCache.deleteSync(recursive: true));
+
+      final compiler = gpu_compiler.ImpellercCompiler(
+        cacheDirectoryPath: tempCache.path,
+      );
+      final backend = FlutterGpuShaderBackend.tryCreate(compiler: compiler);
+      if (backend == null || !compiler.isAvailable) {
+        // Software flutter_tester without --enable-impeller --enable-flutter-gpu.
+        return;
+      }
+      addTearDown(backend.dispose);
+
+      final compileFuture = backend.compile(
+        'm3_disposed_compile',
+        BuiltinShaders.scanlineOverlayGlsl,
+      );
+      // Dispose backend while _compiler.compile(...) subprocess is in flight.
+      backend.dispose();
+
+      await expectLater(
+        compileFuture,
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('disposed'),
+          ),
+        ),
+      );
+    });
+
+    test('M3b: FlutterGpuShaderBackend.reload throws StateError if handle or backend is disposed while compiling', () async {
+      final tempCache = Directory.systemTemp.createTempSync(
+        'termui_m3_reload_cache_',
+      );
+      addTearDown(() => tempCache.deleteSync(recursive: true));
+
+      final compiler = gpu_compiler.ImpellercCompiler(
+        cacheDirectoryPath: tempCache.path,
+      );
+      final backend = FlutterGpuShaderBackend.tryCreate(compiler: compiler);
+      if (backend == null || !compiler.isAvailable) {
+        return;
+      }
+      addTearDown(backend.dispose);
+
+      final handle1 = await backend.compile(
+        'm3_reload_handle',
+        BuiltinShaders.scanlineOverlayGlsl,
+      );
+      final reloadDisposedHandle = backend.reload(
+        handle1,
+        BuiltinShaders.crtLottesGlsl,
+      );
+      // Dispose handle while reload's _compiler.compile(...) is in flight.
+      handle1.dispose();
+
+      await expectLater(
+        reloadDisposedHandle,
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('disposed'),
+          ),
+        ),
+      );
+
+      final handle2 = await backend.compile(
+        'm3_reload_backend',
+        BuiltinShaders.scanlineOverlayGlsl,
+      );
+      final reloadDisposedBackend = backend.reload(
+        handle2,
+        BuiltinShaders.wallpaperWaveGlsl,
+      );
+      // Dispose backend while reload's _compiler.compile(...) is in flight.
+      backend.dispose();
+
+      await expectLater(
+        reloadDisposedBackend,
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('disposed'),
+          ),
+        ),
+      );
     });
   });
 }

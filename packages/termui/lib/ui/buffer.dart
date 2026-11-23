@@ -749,8 +749,7 @@ class Buffer {
   }
 
   @pragma('vm:prefer-inline')
-  void _clearSplitWideEdges(int rowOffset, int startX, int endX, int fillCode) {
-    if (fillCode == GlyphCellList.wideContinuationCode) return;
+  void _clearSplitWideEdges(int rowOffset, int startX, int endX) {
     final codes = _glyphCells.codesView;
     final rowStart = rowOffset + startX;
     if (startX > 0 &&
@@ -835,15 +834,12 @@ class Buffer {
     if (!isCellValid(x, y)) return;
     final useBlend = blend ?? defaultBlend;
     final charIdx = y * width + x;
-    final charCode = char != null ? _glyphCells.encodeGrapheme(char) : null;
-    final isWide =
-        char != null &&
-        charCode != GlyphCellList.wideContinuationCode &&
-        isWideGrapheme(char);
-    if (charCode != null) {
-      if (charCode != GlyphCellList.wideContinuationCode) {
+    final isWide = char != null && char.isNotEmpty && isWideGrapheme(char);
+    if (char != null) {
+      if (char.isNotEmpty) {
         _resetOverwrittenWideAt(x, charIdx);
       }
+      final charCode = _glyphCells.encodeGrapheme(char);
       _glyphCells.setCodeAt(charIdx, charCode);
       if (isWide && x + 1 < width) _placeWideContinuationAt(x, charIdx);
     }
@@ -963,10 +959,13 @@ class Buffer {
     if (startX >= endX || startY >= endY) return;
 
     if (char != null) {
-      final fillCode = _glyphCells.encodeGrapheme(char);
+      final clearWideEdges = char.isNotEmpty;
       for (var y = startY; y < endY; y++) {
         final rowOffset = y * width;
-        _clearSplitWideEdges(rowOffset, startX, endX, fillCode);
+        if (clearWideEdges) {
+          _clearSplitWideEdges(rowOffset, startX, endX);
+        }
+        final fillCode = _glyphCells.encodeGrapheme(char);
         _glyphCells.fillCodeRange(
           rowOffset + startX,
           rowOffset + endX,

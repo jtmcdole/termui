@@ -503,28 +503,53 @@ void _validateIapOptions({
   }
 }
 
-typedef _ParsedCliFlags = ({
-  String? serverUrl,
-  String? token,
-  String? tokenFile,
-  String? casterToken,
-  String? casterTokenFile,
-  String? iapServiceAccount,
-  String? iapKeyFile,
-  String? gcloudPath,
-  String? traceOut,
-  String? traceSeconds,
-  bool hasToken,
-  bool hasTokenFile,
-  bool hasCasterToken,
-  bool hasCasterTokenFile,
-  bool hasIapServiceAccount,
-  bool hasIapKeyFile,
-  bool hasGcloudPath,
-  bool hasTraceOut,
-  bool hasTraceSeconds,
-  bool traceExit,
-});
+// Immutable carrier class rather than a 20-field record (which triggers a
+// dart2wasm TFA crash in Dart 3.14, dart-lang/sdk#64709).
+final class _ParsedCliFlags {
+  final String? serverUrl;
+  final String? token;
+  final String? tokenFile;
+  final String? casterToken;
+  final String? casterTokenFile;
+  final String? iapServiceAccount;
+  final String? iapKeyFile;
+  final String? gcloudPath;
+  final String? traceOut;
+  final String? traceSeconds;
+  final bool hasToken;
+  final bool hasTokenFile;
+  final bool hasCasterToken;
+  final bool hasCasterTokenFile;
+  final bool hasIapServiceAccount;
+  final bool hasIapKeyFile;
+  final bool hasGcloudPath;
+  final bool hasTraceOut;
+  final bool hasTraceSeconds;
+  final bool traceExit;
+
+  const _ParsedCliFlags({
+    required this.serverUrl,
+    required this.token,
+    required this.tokenFile,
+    required this.casterToken,
+    required this.casterTokenFile,
+    required this.iapServiceAccount,
+    required this.iapKeyFile,
+    required this.gcloudPath,
+    required this.traceOut,
+    required this.traceSeconds,
+    required this.hasToken,
+    required this.hasTokenFile,
+    required this.hasCasterToken,
+    required this.hasCasterTokenFile,
+    required this.hasIapServiceAccount,
+    required this.hasIapKeyFile,
+    required this.hasGcloudPath,
+    required this.hasTraceOut,
+    required this.hasTraceSeconds,
+    required this.traceExit,
+  });
+}
 
 _ParsedCliFlags _parseCliArgs(List<String> args) {
   String? serverUrl;
@@ -591,7 +616,7 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
         traceExit = true;
     }
   }
-  return (
+  return _ParsedCliFlags(
     serverUrl: serverUrl,
     token: token,
     tokenFile: tokenFile,

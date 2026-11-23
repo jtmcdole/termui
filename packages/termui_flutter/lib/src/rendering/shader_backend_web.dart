@@ -381,14 +381,18 @@ final class WebGl2ShaderBackend
 
     final needsInputUpload =
         inputImage != null && !identical(inputImage, _cachedInputImage);
-    final inputData = needsInputUpload
-        ? await _readImageRgba(inputImage)
-        : null;
     final needsWallpaperUpload =
         wallpaperImage != null &&
         !identical(wallpaperImage, _cachedWallpaperImage);
-    final wallpaperData = needsWallpaperUpload
-        ? await _readImageRgba(wallpaperImage)
+    // Start both cloned readbacks synchronously before any await so callers
+    // disposing either ui.Image mid-frame cannot invalidate the second read.
+    final inputFuture = needsInputUpload ? _readImageRgba(inputImage) : null;
+    final wallpaperFuture = needsWallpaperUpload
+        ? _readImageRgba(wallpaperImage)
+        : null;
+    final inputData = inputFuture != null ? await inputFuture : null;
+    final wallpaperData = wallpaperFuture != null
+        ? await wallpaperFuture
         : null;
 
     if (_isContextUnavailable) return null;
@@ -1305,7 +1309,7 @@ final class WebGl2ShaderBackend
 
   Future<bool> _primeImageDeduplicated(
     ui.Image image,
-    bool Function(ui.Image image, ByteData? data) uploader,
+    bool Function(ui.Image image, RgbaImagePixels? data) uploader,
   ) {
     final existing = _primingInFlight[image];
     if (existing != null) return existing;
@@ -1316,7 +1320,7 @@ final class WebGl2ShaderBackend
 
   Future<bool> _primeImageOnce(
     ui.Image image,
-    bool Function(ui.Image image, ByteData? data) uploader,
+    bool Function(ui.Image image, RgbaImagePixels? data) uploader,
   ) async {
     try {
       final data = await _readImageRgba(image);
@@ -1330,7 +1334,7 @@ final class WebGl2ShaderBackend
     }
   }
 
-  bool _syncAtlasTexture(ui.Image image, ByteData? data) {
+  bool _syncAtlasTexture(ui.Image image, RgbaImagePixels? data) {
     if (data == null) return false;
     final tracing = ShaderPerfTrace.isEnabled;
     final spanStart = tracing
@@ -1341,14 +1345,14 @@ final class WebGl2ShaderBackend
         existing: _atlasTexture,
         existingWidth: _atlasWidth,
         existingHeight: _atlasHeight,
-        width: image.width,
-        height: image.height,
-        rgbaData: data,
+        width: data.width,
+        height: data.height,
+        rgbaData: data.bytes,
       );
       if (uploaded == null) return false;
       _atlasTexture = uploaded;
-      _atlasWidth = image.width;
-      _atlasHeight = image.height;
+      _atlasWidth = data.width;
+      _atlasHeight = data.height;
       _cachedAtlasImage = image;
       _atlasFilterMode = web.WebGL2RenderingContext.LINEAR;
       return true;
@@ -1359,22 +1363,22 @@ final class WebGl2ShaderBackend
     }
   }
 
-  bool _syncKittyTexture(ui.Image image, ByteData? data) {
+  bool _syncKittyTexture(ui.Image image, RgbaImagePixels? data) {
     if (data == null) return false;
     final existing = _kittyTextures.remove(image);
     final uploaded = _uploadRgbaTexture(
       existing: existing?.texture,
       existingWidth: existing?.width ?? 0,
       existingHeight: existing?.height ?? 0,
-      width: image.width,
-      height: image.height,
-      rgbaData: data,
+      width: data.width,
+      height: data.height,
+      rgbaData: data.bytes,
     );
     if (uploaded == null) return false;
     _kittyTextures[image] = _GlCachedTexture(
       texture: uploaded,
-      width: image.width,
-      height: image.height,
+      width: data.width,
+      height: data.height,
     );
     while (_kittyTextures.length > _maxKittyTextureCacheEntries) {
       final oldestKey = _kittyTextures.keys.first;
@@ -2375,12 +2379,14 @@ final class WebGl2ShaderBackend
     );
   }
 
-  Future<ByteData?> _readImageRgba(ui.Image? image) async {
-    if (image == null) return null;
-    return image.toByteData(format: ui.ImageByteFormat.rawRgba);
-  }
+  Future<RgbaImagePixels?> _readImageRgba(ui.Image? image) =>
+      readImageRgbaSafely(image);
 
-  bool _syncInputTexture(ui.Image? image, ByteData? data, bool needsUpload) {
+  bool _syncInputTexture(
+    ui.Image? image,
+    RgbaImagePixels? data,
+    bool needsUpload,
+  ) {
     if (image == null) {
       _cachedInputImage = null;
       return false;
@@ -2393,21 +2399,21 @@ final class WebGl2ShaderBackend
       existing: _inputTexture,
       existingWidth: _inputWidth,
       existingHeight: _inputHeight,
-      width: image.width,
-      height: image.height,
-      rgbaData: data,
+      width: data.width,
+      height: data.height,
+      rgbaData: data.bytes,
     );
     if (uploaded == null) return false;
     _inputTexture = uploaded;
-    _inputWidth = image.width;
-    _inputHeight = image.height;
+    _inputWidth = data.width;
+    _inputHeight = data.height;
     _cachedInputImage = image;
     return true;
   }
 
   bool _syncWallpaperTexture(
     ui.Image? image,
-    ByteData? data,
+    RgbaImagePixels? data,
     bool needsUpload,
   ) {
     if (image == null) {
@@ -2422,14 +2428,14 @@ final class WebGl2ShaderBackend
       existing: _wallpaperTexture,
       existingWidth: _wallpaperWidth,
       existingHeight: _wallpaperHeight,
-      width: image.width,
-      height: image.height,
-      rgbaData: data,
+      width: data.width,
+      height: data.height,
+      rgbaData: data.bytes,
     );
     if (uploaded == null) return false;
     _wallpaperTexture = uploaded;
-    _wallpaperWidth = image.width;
-    _wallpaperHeight = image.height;
+    _wallpaperWidth = data.width;
+    _wallpaperHeight = data.height;
     _cachedWallpaperImage = image;
     return true;
   }

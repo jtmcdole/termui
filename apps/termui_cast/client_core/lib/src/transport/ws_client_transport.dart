@@ -84,6 +84,13 @@ final class WsClientTransport {
     IapTokenProvider? iapTokenProvider,
     bool replaceIapTokenProvider = false,
   }) {
+    if (!replaceIapTokenProvider && iapTokenProvider != null) {
+      throw ArgumentError.value(
+        iapTokenProvider,
+        'iapTokenProvider',
+        'Requires replaceIapTokenProvider: true.',
+      );
+    }
     final resolvedUri = _validateServerUri(endpoint.serverUri);
     final IapTokenProvider? nextIapProvider;
     if (replaceIapTokenProvider) {

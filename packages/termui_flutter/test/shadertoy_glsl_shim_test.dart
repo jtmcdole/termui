@@ -815,5 +815,108 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           ? 'impellerc binary not found in Flutter SDK cache'
           : false,
     );
+
+    test(
+      'rejects line-spliced #\\<newline>include directive that impellerc would otherwise preprocess',
+      () {
+        const lineSplicedInclude =
+            '#\\\n'
+            'include "secret.glsl"\n'
+            'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+            '  fragColor = SECRET_COLOR;\n'
+            '}\n';
+
+        // First verify whether real impellerc actually processes the
+        // backslash-newline line splice when not blocked by the shim.
+        final tmpDir = Directory.systemTemp.createTempSync(
+          'termui_splice_test_',
+        );
+        final incDir = Directory('${tmpDir.path}/inc')..createSync();
+        try {
+          File('${incDir.path}/secret.glsl').writeAsStringSync(
+            '#define SECRET_COLOR vec4(1.0, 0.25, 0.5, 1.0)\n',
+          );
+          final vertFile = File('${tmpDir.path}/vertex.glsl')
+            ..writeAsStringSync(ShadertoyGlslShim.impellerVertexShaderSource);
+
+          ShimmedShaderPair? shimmed;
+          try {
+            shimmed = ShadertoyGlslShim.shim(
+              lineSplicedInclude,
+              shaderId: 'spliced_inc',
+            );
+          } on ShaderCompileException {
+            // Expected once fixed.
+          }
+
+          if (shimmed != null) {
+            final fragFile = File('${tmpDir.path}/spliced.frag.glsl')
+              ..writeAsStringSync(shimmed.impellerFragmentGlsl);
+            final outFile = File('${tmpDir.path}/spliced.shaderbundle');
+            final bundleSpec = jsonEncode(<String, Object?>{
+              ShadertoyGlslShim.vertexShaderName: <String, Object?>{
+                'type': 'vertex',
+                'file': vertFile.path,
+              },
+              ShadertoyGlslShim.fragmentShaderName: <String, Object?>{
+                'type': 'fragment',
+                'file': fragFile.path,
+              },
+            });
+            final result = Process.runSync(impellerc!, <String>[
+              '--shader-bundle=$bundleSpec',
+              '--sl=${outFile.path}',
+              '--include=${incDir.path}',
+              '--verbose',
+            ]);
+            fail(
+              'ShadertoyGlslShim allowed line-spliced #\\\\\\ninclude! '
+              'impellerc exitCode=${result.exitCode}, '
+              'outExists=${outFile.existsSync()}, '
+              'stderr=${result.stderr}',
+            );
+          }
+        } finally {
+          tmpDir.deleteSync(recursive: true);
+        }
+
+        expect(
+          () => ShadertoyGlslShim.shim(
+            lineSplicedInclude,
+            shaderId: 'spliced_inc',
+          ),
+          throwsA(
+            isA<ShaderCompileException>().having(
+              (e) => e.message,
+              'message',
+              contains('#include'),
+            ),
+          ),
+        );
+
+        const crlfSplicedInclude =
+            '#inc\\\r\n'
+            'lude "secret.glsl"\r\n'
+            'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\r\n'
+            '  fragColor = vec4(1.0);\r\n'
+            '}\r\n';
+        expect(
+          () => ShadertoyGlslShim.shim(
+            crlfSplicedInclude,
+            shaderId: 'spliced_crlf',
+          ),
+          throwsA(
+            isA<ShaderCompileException>().having(
+              (e) => e.message,
+              'message',
+              contains('#include'),
+            ),
+          ),
+        );
+      },
+      skip: impellerc == null
+          ? 'impellerc binary not found in Flutter SDK cache'
+          : false,
+    );
   });
 }

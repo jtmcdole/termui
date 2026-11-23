@@ -383,6 +383,103 @@ void main() {
         );
       },
     );
+
+    test(
+      'H1: default subprocess runner executes gcloud from a spaced SDK path with a spaced temp directory',
+      () async {
+        final sandbox = Directory.systemTemp.createTempSync('iap_h1_spaces_');
+        addTearDown(() async {
+          if (sandbox.existsSync()) {
+            await sandbox.delete(recursive: true);
+          }
+        });
+
+        final spacedSdkBin = Directory(
+          '${sandbox.path}${Platform.pathSeparator}Google Cloud SDK${Platform.pathSeparator}bin',
+        )..createSync(recursive: true);
+        final spacedTempDir = Directory(
+          '${sandbox.path}${Platform.pathSeparator}John Doe${Platform.pathSeparator}Temp',
+        )..createSync(recursive: true);
+
+        final writerDart =
+            File('${spacedSdkBin.path}${Platform.pathSeparator}writer.dart')
+              ..writeAsStringSync(
+                'import "dart:io";\n'
+                'void main(List<String> args) {\n'
+                '  final claim = File(args[args.length - 2]);\n'
+                '  if (!claim.existsSync()) {\n'
+                '    stderr.writeln("missing claim: \${claim.path}");\n'
+                '    exit(2);\n'
+                '  }\n'
+                '  File(args.last).writeAsStringSync("spaced-path-jwt\\n");\n'
+                '}\n',
+              );
+
+        final String wrapperPath;
+        if (Platform.isWindows) {
+          wrapperPath = '${spacedSdkBin.path}\\gcloud.cmd';
+          File(wrapperPath).writeAsStringSync(
+            '@echo off\r\n"${Platform.resolvedExecutable}" "${writerDart.path}" %*\r\n',
+          );
+        } else {
+          wrapperPath = '${spacedSdkBin.path}/gcloud';
+          File(wrapperPath).writeAsStringSync(
+            '#!/bin/sh\nexec "${Platform.resolvedExecutable}" "${writerDart.path}" "\$@"\n',
+          );
+          Process.runSync('chmod', ['+x', wrapperPath]);
+        }
+
+        // 1. Direct invocation with spaced gcloud executable path.
+        final directSigner = IapJwtSigner(
+          serviceAccount: 'viewer@proj.iam.gserviceaccount.com',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+          gcloudExecutable: wrapperPath,
+        );
+        check(await directSigner.getBearerToken()).equals('spaced-path-jwt');
+
+        // 2. Child Dart VM whose system TEMP/TMP contains spaces ("John Doe")
+        // AND whose gcloud executable path contains spaces ("Google Cloud SDK").
+        final probeScript =
+            File(
+              '${sandbox.path}${Platform.pathSeparator}run_signer.dart',
+            )..writeAsStringSync(
+              'import "dart:io";\n'
+              'import "package:termui_cast_protocol/termui_cast_protocol_io.dart";\n'
+              'Future<void> main(List<String> args) async {\n'
+              '  final signer = IapJwtSigner(\n'
+              '    serviceAccount: "viewer@proj.iam.gserviceaccount.com",\n'
+              '    targetAudienceUrl: "https://relay.run.app/v1/client",\n'
+              '    gcloudExecutable: args.first,\n'
+              '  );\n'
+              '  stdout.write(await signer.getBearerToken());\n'
+              '}\n',
+            );
+
+        final packageConfigPath = Uri.parse(
+          Platform.packageConfig!,
+        ).toFilePath();
+        final childEnv = Map<String, String>.of(Platform.environment)
+          ..['TEMP'] = spacedTempDir.path
+          ..['TMP'] = spacedTempDir.path
+          ..['TMPDIR'] = spacedTempDir.path;
+        final childResult = await Process.run(
+          Platform.resolvedExecutable,
+          <String>[
+            'run',
+            '--packages=$packageConfigPath',
+            probeScript.path,
+            wrapperPath,
+          ],
+          workingDirectory: Directory.current.path,
+          environment: childEnv,
+        );
+        check(
+          childResult.exitCode,
+          because: 'stdout=${childResult.stdout}\nstderr=${childResult.stderr}',
+        ).equals(0);
+        check('${childResult.stdout}'.trim()).equals('spaced-path-jwt');
+      },
+    );
   });
 
   group('gcloud executable probing and resolution', () {

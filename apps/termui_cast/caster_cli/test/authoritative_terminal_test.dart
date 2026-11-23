@@ -1482,4 +1482,157 @@ void _defineAuthoritativeTracerTests() {
       check(hostReplies.single).contains('backend=flutter_gpu,glsl=1');
     },
   );
+
+  test(
+    'H4a: exiting alt-screen preserves primary shaders/regions in replay and restores them in pending frames',
+    () {
+      final auth = AuthoritativeTerminal(
+        sessionId: const SessionId('h4-alt-screen'),
+        initialCols: 40,
+        initialRows: 12,
+      );
+      addTearDown(auth.dispose);
+
+      // Define a primary-screen GLSL shader and region, then drain pending frames.
+      auth.writeOutput(
+        utf8.encode(
+          ShaderApcEncoder.encodeDefine(
+            id: 'glow',
+            glslSource: 'void mainImage(out vec4 o, in vec2 c) {}',
+          ).join(),
+        ),
+      );
+      auth.writeOutput(
+        utf8.encode(
+          ShaderApcEncoder.encodeRegion(
+            ShaderRegion(
+              id: 'primary_r',
+              shaderId: 'glow',
+              sourceRects: const [Rect(1, 2, 10, 3)],
+            ),
+          ),
+        ),
+      );
+      auth.takePendingShaderFrames();
+
+      // Enter alt-screen, define an alt-screen region, and drain.
+      auth.writeOutput(utf8.encode('\x1b[?1049h'));
+      auth.writeOutput(
+        utf8.encode(
+          ShaderApcEncoder.encodeRegion(
+            ShaderRegion(
+              id: 'alt_r',
+              shaderId: 'glow',
+              sourceRects: const [Rect(0, 0, 5, 2)],
+            ),
+          ),
+        ),
+      );
+      auth.takePendingShaderFrames();
+
+      // Exit alt-screen: VirtualTerminal restores primary buffer's shader regions
+      // and emits TerminalResetShaderEvent(target: .all, altScreenExit: true).
+      auth.writeOutput(utf8.encode('\x1b[?1049l'));
+
+      final pendingAfterExit = auth.takePendingShaderFrames();
+      check(
+        pendingAfterExit.any((f) => f.payload is CastResetShaderPayload),
+      ).isTrue();
+      check(
+        pendingAfterExit.any(
+          (f) =>
+              f.payload is CastDefineShaderPayload &&
+              (f.payload as CastDefineShaderPayload).id == 'glow',
+        ),
+      ).isTrue();
+      check(
+        pendingAfterExit.any(
+          (f) =>
+              f.payload is CastRegionShaderPayload &&
+              (f.payload as CastRegionShaderPayload).id == 'primary_r' &&
+              !(f.payload as CastRegionShaderPayload).remove,
+        ),
+      ).isTrue();
+
+      final replay = auth.buildShaderReplayFrames();
+      check(
+        replay.any(
+          (f) =>
+              f.payload is CastDefineShaderPayload &&
+              (f.payload as CastDefineShaderPayload).id == 'glow',
+        ),
+      ).isTrue();
+      check(
+        replay.any(
+          (f) =>
+              f.payload is CastRegionShaderPayload &&
+              (f.payload as CastRegionShaderPayload).id == 'primary_r' &&
+              !(f.payload as CastRegionShaderPayload).remove,
+        ),
+      ).isTrue();
+      check(
+        replay.any(
+          (f) =>
+              f.payload is CastRegionShaderPayload &&
+              (f.payload as CastRegionShaderPayload).id == 'alt_r',
+        ),
+      ).isFalse();
+    },
+  );
+
+  test(
+    'H4b: scrolling shifts region and cell transform coordinates in buildShaderReplayFrames to match VirtualTerminal.buffer',
+    () {
+      final auth = AuthoritativeTerminal(
+        sessionId: const SessionId('h4-scroll'),
+        initialCols: 20,
+        initialRows: 10,
+      );
+      addTearDown(auth.dispose);
+
+      // Attach region at row 5 and cell transform at (2, 5).
+      auth.writeOutput(
+        utf8.encode(
+          ShaderApcEncoder.encodeRegion(
+            ShaderRegion(
+              id: 'banner',
+              shaderId: 'pulse',
+              sourceRects: const [Rect(1, 5, 8, 2)],
+            ),
+          ),
+        ),
+      );
+      auth.writeOutput(
+        utf8.encode(
+          ShaderApcEncoder.encodeTransform(
+            col: 2,
+            row: 5,
+            transform: const CellTransform(dx: 0.25, dy: -0.5),
+          ),
+        ),
+      );
+      auth.takePendingShaderFrames();
+
+      // Scroll terminal up 2 rows (CSI 2 S) -> VirtualTerminal shifts row 5 -> row 3.
+      auth.writeOutput(utf8.encode('\x1b[2S'));
+      check(auth.buffer.shaderRegions.single.sourceRects.single.y).equals(3);
+      check(auth.buffer.getCellTransform(2, 3)).isNotNull();
+      check(auth.buffer.getCellTransform(2, 5)).isNull();
+
+      // Replay frames must report shifted row 3, NOT stale row 5.
+      final replay = auth.buildShaderReplayFrames();
+      final regionPayload = replay
+          .map((f) => f.payload)
+          .whereType<CastRegionShaderPayload>()
+          .single;
+      check(regionPayload.region!.sourceRects.single.y).equals(3);
+
+      final xformPayload = replay
+          .map((f) => f.payload)
+          .whereType<CastTransformsShaderPayload>()
+          .single;
+      check(xformPayload.entries.single.col).equals(2);
+      check(xformPayload.entries.single.row).equals(3);
+    },
+  );
 }

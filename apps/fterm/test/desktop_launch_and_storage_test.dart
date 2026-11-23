@@ -18,7 +18,8 @@ import 'package:fterm/src/settings_storage.dart';
 import 'package:fterm/src/settings_storage_io.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver_io.dart';
-import 'package:material_ui/material_ui.dart' show Color, Scaffold;
+import 'package:material_ui/material_ui.dart'
+    show Color, FilledButton, Scaffold;
 import 'package:path/path.dart' as p;
 import 'package:termui/termui.dart' show TerminalBrightness, TerminalColorTheme;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart'
@@ -1927,6 +1928,227 @@ void _definePersistentIapAndGcloudTests() {
         await tester.pump();
         expect(
           find.text('Auto-detected: /opt/homebrew/bin/gcloud'),
+          findsOneWidget,
+        );
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await settleCastApp(tester, cycles: 2);
+      },
+    );
+
+    test('M5: startup applies hydrated saved gcloudPath even when CLI IAP flags supplied iapTokenProvider', () async {
+      const savedGcloud =
+          '/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud';
+      final storage = _CountingSettingsStorage();
+      saveStoredRelayCredentials(
+        storage,
+        const RelayCredentials(gcloudPath: savedGcloud),
+      );
+
+      final relayUri = Uri.parse('wss://relay.example.com/v1/client');
+      Future<String> startupProvider() async => 'startup-without-gcloud';
+
+      final builderCalls =
+          <({Uri uri, String? sa, String? key, String? gcloud})>[];
+      IapTokenProvider? fakeBuilder({
+        required Uri serverUri,
+        String? serviceAccount,
+        String? keyFilePath,
+        String? gcloudPath,
+      }) {
+        builderCalls.add((
+          uri: serverUri,
+          sa: serviceAccount,
+          key: keyFilePath,
+          gcloud: gcloudPath,
+        ));
+        return () async =>
+            'rebuilt:${serviceAccount ?? ""}:${gcloudPath ?? ""}';
+      }
+
+      final harness = AppThreeWayWsHarness();
+      addTearDown(harness.dispose);
+      final repo = CastClientRepository(
+        transport: WsClientTransport(
+          serverUri: relayUri,
+          token: 'tok',
+          iapTokenProvider: startupProvider,
+          channelFactory: harness.openClientChannel,
+        ),
+        enableReconnect: false,
+      );
+      final ws = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(
+          serverUri: relayUri,
+          token: 'tok',
+          promptForConnection: false,
+          iapServiceAccount: 'sa@proj.iam.gserviceaccount.com',
+          iapTokenProvider: startupProvider,
+        ),
+        repository: repo,
+        localHostDriver: _RecordingDesktopHostDriver(),
+        audioController: FtermAudioController(
+          requireUserGesture: false,
+          engineFactory: null,
+        ),
+        storage: storage,
+        resizeDebounce: Duration.zero,
+        iapProviderBuilder: fakeBuilder,
+        gcloudPathProber: () => null,
+      );
+      addTearDown(ws.dispose);
+
+      await ws.start();
+      expect(builderCalls, isNotEmpty);
+      expect(builderCalls.single.gcloud, equals(savedGcloud));
+      expect(
+        await ws.repository.transport.iapTokenProvider!(),
+        equals('rebuilt:sa@proj.iam.gserviceaccount.com:$savedGcloud'),
+      );
+    });
+
+    test('M6: connectRelay re-invokes iapProviderBuilder for keyFilePath to pick up on-disk rotation or deletion', () async {
+      final storage = _CountingSettingsStorage();
+      final harness = AppThreeWayWsHarness();
+      addTearDown(harness.dispose);
+
+      var builderInvocations = 0;
+      var simulateDeleted = false;
+      IapTokenProvider? fakeBuilder({
+        required Uri serverUri,
+        String? serviceAccount,
+        String? keyFilePath,
+        String? gcloudPath,
+      }) {
+        builderInvocations++;
+        if (simulateDeleted) {
+          throw const FormatException('IAP key file not found');
+        }
+        final version = builderInvocations;
+        return () async => 'key-jwt-v$version';
+      }
+
+      final repo = CastClientRepository(
+        transport: WsClientTransport(channelFactory: harness.openClientChannel),
+        enableReconnect: false,
+      );
+      final ws = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(promptForConnection: true),
+        repository: repo,
+        localHostDriver: _RecordingDesktopHostDriver(),
+        audioController: FtermAudioController(
+          requireUserGesture: false,
+          engineFactory: null,
+        ),
+        storage: storage,
+        resizeDebounce: Duration.zero,
+        iapProviderBuilder: fakeBuilder,
+      );
+      addTearDown(ws.dispose);
+
+      final wssUri = Uri.parse('wss://relay.example.com/v1/client');
+      await ws.connectRelay(
+        serverUri: wssUri,
+        clientToken: 't',
+        iapServiceAccount: '',
+        iapKeyFilePath: '/tmp/key.json',
+        gcloudPath: '',
+      );
+      expect(builderInvocations, equals(1));
+      expect(
+        await ws.repository.transport.iapTokenProvider!(),
+        equals('key-jwt-v1'),
+      );
+
+      // Second connectRelay with identical keyFilePath must re-invoke builder for key rotation.
+      await ws.connectRelay(
+        serverUri: wssUri,
+        clientToken: 't',
+        iapServiceAccount: '',
+        iapKeyFilePath: '/tmp/key.json',
+        gcloudPath: '',
+      );
+      expect(builderInvocations, equals(2));
+      expect(
+        await ws.repository.transport.iapTokenProvider!(),
+        equals('key-jwt-v2'),
+      );
+
+      // Third connectRelay after key file deletion must fail rather than returning stale cached signer.
+      simulateDeleted = true;
+      await expectLater(
+        () => ws.connectRelay(
+          serverUri: wssUri,
+          clientToken: 't',
+          iapServiceAccount: '',
+          iapKeyFilePath: '/tmp/key.json',
+          gcloudPath: '',
+        ),
+        throwsFormatException,
+      );
+      expect(builderInvocations, equals(3));
+    });
+
+    testWidgets(
+      'L4: Connect overlay resets _submitting state when connectRelay throws non-FormatException',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(760, 640));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final harness = AppThreeWayWsHarness();
+        addTearDown(harness.dispose);
+        final storage = _CountingSettingsStorage();
+
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(promptForConnection: true),
+            channelFactory: harness.openClientChannel,
+            localHostDriver: _RecordingDesktopHostDriver(),
+            settingsStorage: storage,
+            resizeDebounce: Duration.zero,
+            gcloudPathProber: () => null,
+            iapProviderBuilder: ({
+              required serverUri,
+              serviceAccount,
+              keyFilePath,
+              gcloudPath,
+            }) => throw StateError('simulated unexpected IAP builder crash'),
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester, cycles: 3);
+
+        workspace!.setOverlay(FtermOverlay.connect);
+        await tester.pump();
+
+        await tester.tap(find.byKey(const ValueKey('connect-iap-mode-sa')));
+        await tester.pump();
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-url-field')),
+          'wss://iap-relay.run.app/v1/client',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-token-field')),
+          'tok',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-iap-sa-field')),
+          'viewer@proj.iam.gserviceaccount.com',
+        );
+        await tester.pump();
+
+        await tester.tap(find.byKey(const ValueKey('connect-submit-button')));
+        await tester.pump();
+        expect(tester.takeException(), isNull);
+
+        final submitButton = tester.widget<FilledButton>(
+          find.byKey(const ValueKey('connect-submit-button')),
+        );
+        expect(submitButton.onPressed, isNotNull);
+        expect(find.text('Connect'), findsOneWidget);
+        expect(
+          find.textContaining('simulated unexpected IAP builder crash'),
           findsOneWidget,
         );
 
