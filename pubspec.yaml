@@ -56,11 +56,6 @@ buildpack:
   postbuild: cd /workspace/apps/fterm && flutter build web --wasm --no-web-resources-cdn --dart-define="FTERM_BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 melos:
-  command:
-    bootstrap:
-      environment:
-        sdk: ">=3.11.0 <4.0.0"
-        flutter: ">=3.41.0"
   scripts:
     analyze:
       run: dart run melos exec -c 1 -- "dart analyze"

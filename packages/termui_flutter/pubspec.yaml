@@ -20,11 +20,13 @@ platforms:
 resolution: workspace
 
 environment:
-  sdk: ">=3.11.0 <4.0.0"
-  flutter: ">=3.41.0"
+  sdk: ">=3.13.0 <4.0.0"
+  flutter: ">=3.50.0"
 
 dependencies:
   flutter:
+    sdk: flutter
+  flutter_gpu:
     sdk: flutter
   termui: ^0.20.2
   characters: ^1.4.0

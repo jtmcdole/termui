@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:developer' as dev;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
-import 'dart:developer' as dev;
+
 import 'package:clock/clock.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:termui/perf/tracer.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:termui/perf/fs_locator.dart';
+import 'package:termui/perf/tracer.dart';
+import 'package:termui/termui.dart' as tui;
+// ignore: implementation_imports
+import 'package:termui_flutter/src/rendering/painter.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
 void main() {
@@ -34,13 +38,33 @@ class BenchmarkApp extends StatelessWidget {
 }
 
 enum RenderMode {
+  tuiTailLog200x60(
+    'TuiAtlasPainter 200x60 (1-row tail log)',
+    'Mutates 1 tail row per frame on a 200x60 Buffer with TuiAtlasStagingCache.',
+    isTuiMode: true,
+  ),
+  tuiCursorBlink200x60(
+    'TuiAtlasPainter 200x60 (cursor blink)',
+    'Toggles 1 interior cursor cell per frame on a 200x60 Buffer (row compaction).',
+    isTuiMode: true,
+  ),
+  tuiCurlyDiagnostics200x60(
+    'TuiAtlasPainter 200x60 (curly underlines)',
+    'Dense SGR 4:3 curly, dotted, and dashed underlines via pre-baked atlas sprites (0 Paths).',
+    isTuiMode: true,
+  ),
+  tuiCjkNerdRedraw200x60(
+    'TuiAtlasPainter 200x60 (CJK/NerdFont redraw)',
+    'Full 200x60 dirty redraw with wide CJK glyphs, Nerd Font icons, and box drawing.',
+    isTuiMode: true,
+  ),
   drawRawAtlasSingle(
     'drawRawAtlas (Background only)',
     'One atlas draw call for background blocks.',
   ),
   drawRawAtlasDouble(
     'drawRawAtlas (Bg + Fg)',
-    'Two atlas draw calls (bg + fg characters) - Realistic TUI mode.',
+    'Two atlas draw calls (bg + fg characters) - Synthetic baseline.',
   ),
   drawRectLoop(
     'canvas.drawRect Loop',
@@ -53,7 +77,9 @@ enum RenderMode {
 
   final String name;
   final String description;
-  const RenderMode(this.name, this.description);
+  final bool isTuiMode;
+
+  const RenderMode(this.name, this.description, {this.isTuiMode = false});
 }
 
 class BenchmarkScreen extends StatefulWidget {
@@ -65,17 +91,22 @@ class BenchmarkScreen extends StatefulWidget {
 
 class _BenchmarkScreenState extends State<BenchmarkScreen>
     with SingleTickerProviderStateMixin {
-  late final Ticker _ticker;
-  RenderMode _currentMode = RenderMode.drawRawAtlasDouble;
+  static const int _tuiCols = 200;
+  static const int _tuiRows = 60;
+  static const int _legacyCols = 449;
+  static const int _legacyRows = 81;
 
-  // Terminal Dimensions
-  final int _cols = 449;
-  final int _rows = 81;
+  Ticker? _ticker;
+  RenderMode _currentMode = RenderMode.tuiTailLog200x60;
+  bool _enableRowCache = true;
 
-  // Measurement Stats
+  // Measurement stats
   double _cpuPaintTimeMs = 0.0;
   double _fps = 0.0;
+  int _lastRowHits = 0;
+  int _lastRowMisses = 0;
   int _frameCount = 0;
+  int _tickIndex = 0;
   int _lastFpsTimestamp = 0;
 
   bool _isRecordingTrace = false;
@@ -83,34 +114,48 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
 
   ui.Image? _whitePixelAtlas;
   ui.Image? _glyphAtlas;
+  GlyphAtlas? _tuiAtlas;
+  final TuiAtlasStagingCache _stagingCache = TuiAtlasStagingCache();
+  final tui.Buffer _tuiBuffer = tui.Buffer.blank(_tuiCols, _tuiRows);
+  final Map<(String, bool, bool, bool, Color), TextPainter> _fallbackPainters =
+      {};
+
+  int get _activeCols => _currentMode.isTuiMode ? _tuiCols : _legacyCols;
+  int get _activeRows => _currentMode.isTuiMode ? _tuiRows : _legacyRows;
 
   @override
   void initState() {
     super.initState();
     Tracer.initialize();
 
-    // Create benchmark assets
     _setupAtlases().then((_) {
+      if (!mounted) return;
+      _seedTuiBufferForMode(_currentMode);
       _lastFpsTimestamp = clock.now().millisecondsSinceEpoch;
-      _ticker = createTicker((_) {
-        if (mounted) {
-          setState(() {
-            _frameCount++;
-            final now = clock.now().millisecondsSinceEpoch;
-            final elapsed = now - _lastFpsTimestamp;
-            if (elapsed >= 500) {
-              _fps = (_frameCount * 1000.0) / elapsed;
-              _frameCount = 0;
-              _lastFpsTimestamp = now;
-            }
-          });
-        }
-      })..start();
+      _ticker = createTicker(_onTick)..start();
+      setState(() {});
+    });
+  }
+
+  void _onTick(Duration _) {
+    if (!mounted) return;
+    _tickIndex++;
+    if (_currentMode.isTuiMode) {
+      _mutateTuiBufferForTick(_currentMode, _tickIndex);
+    }
+    setState(() {
+      _frameCount++;
+      final now = clock.now().millisecondsSinceEpoch;
+      final elapsed = now - _lastFpsTimestamp;
+      if (elapsed >= 500) {
+        _fps = (_frameCount * 1000.0) / elapsed;
+        _frameCount = 0;
+        _lastFpsTimestamp = now;
+      }
     });
   }
 
   Future<void> _setupAtlases() async {
-    // 1. Create a 16x16 white pixel atlas for background coloring
     final recorderBg = ui.PictureRecorder();
     final canvasBg = Canvas(recorderBg);
     canvasBg.drawRect(
@@ -119,12 +164,10 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
     );
     final pictureBg = recorderBg.endRecording();
     _whitePixelAtlas = await pictureBg.toImage(16, 16);
+    pictureBg.dispose();
 
-    // 2. Create a simulated font glyph atlas (grid of letters)
     final recorderFg = ui.PictureRecorder();
     final canvasFg = Canvas(recorderFg);
-
-    // Draw 16x16 characters onto a 256x256 image
     for (var y = 0; y < 16; y++) {
       for (var x = 0; x < 16; x++) {
         final char = String.fromCharCode(32 + (y * 16 + x) % 95);
@@ -139,17 +182,168 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
           ),
           textDirection: TextDirection.ltr,
         )..layout();
-
         tp.paint(canvasFg, Offset(x * 16.0 + 2, y * 16.0 + 1));
+        tp.dispose();
       }
     }
     final pictureFg = recorderFg.endRecording();
     _glyphAtlas = await pictureFg.toImage(256, 256);
+    pictureFg.dispose();
+
+    final baseAtlas = await GlyphAtlasGenerator.generate(
+      fontSize: 13.0,
+      fontFamily: 'Cascadia Mono',
+      fontFamilyFallback: const ['MesloLGS NF'],
+    );
+    final expanded = await baseAtlas.addGlyphs(const [
+      '漢',
+      '字',
+      '中',
+      '文',
+      '終',
+      '端',
+      '\uE0B0',
+      '\uE0B2',
+      '\uF07C',
+      '\uE798',
+      '🚀',
+    ]);
+    if (!identical(expanded.image, baseAtlas.image)) {
+      baseAtlas.dispose();
+    }
+    _tuiAtlas = expanded;
+  }
+
+  void _seedTuiBufferForMode(RenderMode mode) {
+    _tuiBuffer.clear();
+    _stagingCache.invalidateAllRows();
+    switch (mode) {
+      case RenderMode.tuiTailLog200x60:
+        _seedLogRows(_tuiBuffer);
+      case RenderMode.tuiCursorBlink200x60:
+        _seedLogRows(_tuiBuffer);
+      case RenderMode.tuiCurlyDiagnostics200x60:
+        _seedCurlyDiagnosticRows(_tuiBuffer);
+      case RenderMode.tuiCjkNerdRedraw200x60:
+        _seedCjkNerdRows(_tuiBuffer, frame: 0);
+      case RenderMode.drawRawAtlasSingle ||
+          RenderMode.drawRawAtlasDouble ||
+          RenderMode.drawRectLoop ||
+          RenderMode.textPainterLoop:
+        break;
+    }
+  }
+
+  void _mutateTuiBufferForTick(RenderMode mode, int tick) {
+    switch (mode) {
+      case RenderMode.tuiTailLog200x60:
+        _writeTailLogRow(_tuiBuffer, _tuiRows - 1, tick);
+      case RenderMode.tuiCursorBlink200x60:
+        final idx = (30 * _tuiCols + 42) * 3 + 2;
+        final mods = _tuiBuffer.attributes[idx];
+        _tuiBuffer.attributes[idx] = tick.isEven
+            ? (mods | tui.Modifier.reverse)
+            : (mods & ~tui.Modifier.reverse);
+      case RenderMode.tuiCurlyDiagnostics200x60:
+        _writeCurlyDiagnosticRow(_tuiBuffer, tick % _tuiRows, tick);
+      case RenderMode.tuiCjkNerdRedraw200x60:
+        _seedCjkNerdRows(_tuiBuffer, frame: tick);
+      case RenderMode.drawRawAtlasSingle ||
+          RenderMode.drawRawAtlasDouble ||
+          RenderMode.drawRectLoop ||
+          RenderMode.textPainterLoop:
+        break;
+    }
+  }
+
+  static void _seedLogRows(tui.Buffer buf) {
+    for (var y = 0; y < buf.height; y++) {
+      _writeTailLogRow(buf, y, y);
+    }
+  }
+
+  static void _writeTailLogRow(tui.Buffer buf, int row, int seq) {
+    final line =
+        '[INFO ${seq.toString().padLeft(6, '0')}] '
+        'worker=atlas-stage row=$row status=OK '
+        'throughput=${(120 + (seq % 40))}fps delta=${seq % 99}us '
+        'payload=0123456789abcdef_0123456789abcdef_0123456789abcdef';
+    final fg = (seq % 3 == 0)
+        ? const tui.Color(0x62, 0xD1, 0x96)
+        : (seq % 3 == 1
+              ? const tui.Color(0xE6, 0xED, 0xF3)
+              : const tui.Color(0x79, 0xB8, 0xFF));
+    final bg = row.isEven
+        ? const tui.Color(0x14, 0x17, 0x1F)
+        : const tui.Color(0x1A, 0x1E, 0x28);
+    final style = tui.Style(foreground: fg, background: bg);
+    buf.writeString(0, row, line.padRight(buf.width), style);
+  }
+
+  static void _seedCurlyDiagnosticRows(tui.Buffer buf) {
+    for (var y = 0; y < buf.height; y++) {
+      _writeCurlyDiagnosticRow(buf, y, y);
+    }
+  }
+
+  static void _writeCurlyDiagnosticRow(tui.Buffer buf, int row, int seq) {
+    final ulStyle = switch ((row + seq) % 3) {
+      0 => tui.UnderlineStyle.curly,
+      1 => tui.UnderlineStyle.dashed,
+      _ => tui.UnderlineStyle.dotted,
+    };
+    final ulColor = switch ((row + seq) % 3) {
+      0 => const tui.Color(0xFF, 0x55, 0x55),
+      1 => const tui.Color(0xFF, 0xD8, 0x66),
+      _ => const tui.Color(0x56, 0xB6, 0xC2),
+    };
+    final text =
+        'diag[$row:${seq % 999}] unused_symbol_under_curl_check -> '
+        'expected TuiAtlasStagingCache match at col ${(seq * 7) % 120}';
+    buf.writeString(
+      0,
+      row,
+      text.padRight(buf.width),
+      tui.Style(
+        foreground: const tui.Color(0xE6, 0xED, 0xF3),
+        underlineStyle: ulStyle,
+        underlineColor: ulColor,
+      ),
+    );
+  }
+
+  static void _seedCjkNerdRows(tui.Buffer buf, {required int frame}) {
+    const glyphs = ['漢', '字', '中', '文', '終', '端'];
+    const icons = ['\uE0B0', '\uF07C', '\uE798', '│', '─'];
+    final accentFg = frame.isEven
+        ? const tui.Color(0x79, 0xB8, 0xFF)
+        : const tui.Color(0xA6, 0xE3, 0xA1);
+    final styleA = tui.Style(foreground: accentFg);
+    final styleB = const tui.Style(
+      foreground: tui.Color(0xE5, 0xC0, 0x7B),
+      modifiers: tui.Modifier.bold,
+    );
+    for (var y = 0; y < buf.height; y++) {
+      var x = 0;
+      while (x + 5 < buf.width) {
+        final idx = (x + y + frame) % glyphs.length;
+        buf.writeString(x, y, icons[(x + y) % icons.length], styleB);
+        buf.writeString(x + 1, y, glyphs[idx], styleA);
+        buf.writeString(x + 3, y, 'ok', styleA);
+        x += 5;
+      }
+    }
   }
 
   @override
   void dispose() {
-    _ticker.dispose();
+    _ticker?.dispose();
+    _whitePixelAtlas?.dispose();
+    _glyphAtlas?.dispose();
+    _tuiAtlas?.dispose();
+    for (final tp in _fallbackPainters.values) {
+      tp.dispose();
+    }
     super.dispose();
   }
 
@@ -216,7 +410,6 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
       _traceFilePath = path;
     });
 
-    // Run for 200 frames (approx 3.3 seconds at 60fps)
     var framesRemaining = 200;
     Timer.periodic(const Duration(milliseconds: 16), (timer) async {
       if (framesRemaining <= 0) {
@@ -246,7 +439,7 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
 
   @override
   Widget build(BuildContext context) {
-    if (_whitePixelAtlas == null || _glyphAtlas == null) {
+    if (_whitePixelAtlas == null || _glyphAtlas == null || _tuiAtlas == null) {
       return const Scaffold(
         body: Center(
           child: Column(
@@ -263,8 +456,6 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
         ),
       );
     }
-
-    final totalCells = _cols * _rows;
 
     return Scaffold(
       appBar: AppBar(
@@ -286,204 +477,301 @@ class _BenchmarkScreenState extends State<BenchmarkScreen>
       ),
       body: Column(
         children: [
-          // Control Panel
-          Container(
-            padding: const EdgeInsets.all(16),
-            color: const Color(0xFF1E1E24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'GRID RESOLUTION',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '${_cols}x$_rows cells ($totalCells total)',
-                            style: const TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            'PERFORMANCE',
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold,
-                              color: Colors.grey,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Text(
-                                '${_fps.toStringAsFixed(1)} FPS',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: _fps > 55
-                                      ? Colors.green
-                                      : (_fps > 30
-                                            ? Colors.orange
-                                            : Colors.red),
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Text(
-                                '${_cpuPaintTimeMs.toStringAsFixed(3)} ms CPU',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  color: _cpuPaintTimeMs < 1.0
-                                      ? Colors.green
-                                      : (_cpuPaintTimeMs < 8.0
-                                            ? Colors.orange
-                                            : Colors.red),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'RENDERING MODE',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.grey,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final mode in RenderMode.values)
-                      ChoiceChip(
-                        label: Text(mode.name),
-                        selected: _currentMode == mode,
-                        selectedColor: Theme.of(context).colorScheme.primary,
-                        onSelected: (selected) {
-                          if (selected) {
-                            setState(() {
-                              _currentMode = mode;
-                              _frameCount = 0;
-                              _lastFpsTimestamp = clock
-                                  .now()
-                                  .millisecondsSinceEpoch;
-                            });
-                          }
-                        },
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _currentMode.description,
-                  style: const TextStyle(
-                    fontSize: 13,
-                    color: Colors.grey,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.flash_on),
-                      label: const Text('Run Automated 200-Frame Benchmark'),
-                      onPressed: _isRecordingTrace
-                          ? null
-                          : _runAutomatedBenchmark,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Theme.of(
-                          context,
-                        ).colorScheme.secondary,
-                        foregroundColor: Colors.black,
-                      ),
-                    ),
-                    if (_isRecordingTrace) ...[
-                      const SizedBox(width: 16),
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.red,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'Recording trace: ${getDefaultFileSystem().path.basename(_traceFilePath)}',
-                          style: const TextStyle(
-                            color: Colors.red,
-                            fontSize: 12,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
-            ),
-          ),
-          // Interactive Terminal Grid Canvas Area
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black,
-                border: Border.all(color: const Color(0xFF2E2E38)),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              clipBehavior: Clip.hardEdge,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return CustomPaint(
-                    size: Size(constraints.maxWidth, constraints.maxHeight),
-                    painter: GridBenchmarkPainter(
-                      mode: _currentMode,
-                      whitePixelAtlas: _whitePixelAtlas!,
-                      glyphAtlas: _glyphAtlas!,
-                      cols: _cols,
-                      rows: _rows,
-                      onMeasure: (ms) {
-                        // Avoid setState here to prevent re-triggering painter build.
-                        // We update the state variable directly. Ticker will read it on next tick.
-                        _cpuPaintTimeMs = ms;
-                      },
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
+          _buildControlPanel(context),
+          Expanded(child: _buildCanvasArea()),
         ],
       ),
     );
   }
+
+  Widget _buildControlPanel(BuildContext context) {
+    final cols = _activeCols;
+    final rows = _activeRows;
+    final totalCells = cols * rows;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      color: const Color(0xFF1E1E24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildStatsRow(cols, rows, totalCells),
+          const SizedBox(height: 16),
+          const Text(
+            'RENDERING MODE',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: Colors.grey,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              for (final mode in RenderMode.values)
+                ChoiceChip(
+                  label: Text(mode.name),
+                  selected: _currentMode == mode,
+                  selectedColor: Theme.of(context).colorScheme.primary,
+                  onSelected: (selected) {
+                    if (!selected) return;
+                    setState(() {
+                      _currentMode = mode;
+                      _frameCount = 0;
+                      _lastFpsTimestamp = clock.now().millisecondsSinceEpoch;
+                      if (mode.isTuiMode) {
+                        _seedTuiBufferForMode(mode);
+                      }
+                    });
+                  },
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _currentMode.description,
+            style: const TextStyle(
+              fontSize: 13,
+              color: Colors.grey,
+              fontStyle: FontStyle.italic,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildActionsRow(context),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatsRow(int cols, int rows, int totalCells) {
+    final fpsColor = _fps > 55
+        ? Colors.green
+        : (_fps > 30 ? Colors.orange : Colors.red);
+    final cpuColor = _cpuPaintTimeMs < 0.4
+        ? Colors.green
+        : (_cpuPaintTimeMs < 2.0 ? Colors.orange : Colors.red);
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'GRID RESOLUTION',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${cols}x$rows cells ($totalCells total)',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'PERFORMANCE',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 16,
+                children: [
+                  Text(
+                    '${_fps.toStringAsFixed(1)} FPS',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: fpsColor,
+                    ),
+                  ),
+                  Text(
+                    '${_cpuPaintTimeMs.toStringAsFixed(3)} ms CPU',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: cpuColor,
+                    ),
+                  ),
+                  if (_currentMode.isTuiMode)
+                    Text(
+                      'Rows: $_lastRowHits hit / $_lastRowMisses miss',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.cyanAccent,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildActionsRow(BuildContext context) {
+    return Wrap(
+      spacing: 12,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        ElevatedButton.icon(
+          icon: const Icon(Icons.flash_on),
+          label: const Text('Run Automated 200-Frame Benchmark'),
+          onPressed: _isRecordingTrace ? null : _runAutomatedBenchmark,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.secondary,
+            foregroundColor: Colors.black,
+          ),
+        ),
+        if (_currentMode.isTuiMode)
+          FilterChip(
+            label: Text('Row Cache: ${_enableRowCache ? "ON" : "OFF"}'),
+            selected: _enableRowCache,
+            onSelected: (value) {
+              setState(() {
+                _enableRowCache = value;
+                _stagingCache.invalidateAllRows();
+              });
+            },
+          ),
+        if (_isRecordingTrace) ...[
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.red),
+          ),
+          Text(
+            'Recording trace: ${getDefaultFileSystem().path.basename(_traceFilePath)}',
+            style: const TextStyle(
+              color: Colors.red,
+              fontSize: 12,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCanvasArea() {
+    return Container(
+      margin: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        border: Border.all(color: const Color(0xFF2E2E38)),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      clipBehavior: Clip.hardEdge,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final size = Size(constraints.maxWidth, constraints.maxHeight);
+          if (_currentMode.isTuiMode) {
+            return CustomPaint(
+              size: size,
+              painter: _TuiAtlasBenchmarkPainter(
+                mode: _currentMode,
+                buffer: _tuiBuffer,
+                atlas: _tuiAtlas!,
+                stagingCache: _enableRowCache ? _stagingCache : null,
+                fallbackPainters: _fallbackPainters,
+                onMeasure: (ms, hits, misses) {
+                  _cpuPaintTimeMs = ms;
+                  _lastRowHits = hits;
+                  _lastRowMisses = misses;
+                },
+              ),
+            );
+          }
+          return CustomPaint(
+            size: size,
+            painter: GridBenchmarkPainter(
+              mode: _currentMode,
+              whitePixelAtlas: _whitePixelAtlas!,
+              glyphAtlas: _glyphAtlas!,
+              cols: _legacyCols,
+              rows: _legacyRows,
+              onMeasure: (ms) {
+                _cpuPaintTimeMs = ms;
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+final class _TuiAtlasBenchmarkPainter extends CustomPainter {
+  static final int _traceTuiPaintId = Tracer.registerString(
+    'TuiAtlasPainter:benchmark_paint',
+  );
+
+  final RenderMode mode;
+  final tui.Buffer buffer;
+  final GlyphAtlas atlas;
+  final TuiAtlasStagingCache? stagingCache;
+  final Map<(String, bool, bool, bool, Color), TextPainter> fallbackPainters;
+  final void Function(double ms, int hits, int misses) onMeasure;
+
+  const _TuiAtlasBenchmarkPainter({
+    required this.mode,
+    required this.buffer,
+    required this.atlas,
+    required this.stagingCache,
+    required this.fallbackPainters,
+    required this.onMeasure,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    dev.Timeline.startSync('TuiAtlasBenchmarkPainter.${mode.name}');
+    Tracer.record(_traceTuiPaintId, Phase.begin, TraceCategory.paint);
+    final sw = Stopwatch()..start();
+    try {
+      final painter = TuiAtlasPainter(
+        buffer: buffer,
+        atlas: atlas,
+        stagingCache: stagingCache,
+        fontFamily: 'Cascadia Mono',
+        fontFamilyFallback: const ['MesloLGS NF'],
+        fallbackPainters: fallbackPainters,
+        onMissingGlyphs: null,
+        defaultBackgroundArgb: 0xFF14171F,
+        defaultForegroundArgb: 0xFFE6EDF3,
+      );
+      painter.paint(canvas, size);
+    } finally {
+      sw.stop();
+      Tracer.record(_traceTuiPaintId, Phase.end, TraceCategory.paint);
+      dev.Timeline.finishSync();
+    }
+    onMeasure(
+      sw.elapsedMicroseconds / 1000.0,
+      stagingCache?.lastRowHits ?? 0,
+      stagingCache?.lastRowMisses ?? buffer.height,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TuiAtlasBenchmarkPainter oldDelegate) => true;
 }
 
 class GridBenchmarkPainter extends CustomPainter {
@@ -494,7 +782,6 @@ class GridBenchmarkPainter extends CustomPainter {
   final int rows;
   final void Function(double) onMeasure;
 
-  // Pre-allocated arrays for zero-GC drawRawAtlas
   late final Float32List transformsBg;
   late final Float32List rectsBg;
   late final Int32List colorsBg;
@@ -503,7 +790,6 @@ class GridBenchmarkPainter extends CustomPainter {
   late final Float32List rectsFg;
   late final Int32List colorsFg;
 
-  // Tracing string IDs
   static final int _tracePaintId = Tracer.registerString('paint');
   static final int _tracePrepId = Tracer.registerString('prepare_buffers');
   static final int _traceDrawId = Tracer.registerString('canvas_draw_calls');
@@ -517,13 +803,9 @@ class GridBenchmarkPainter extends CustomPainter {
     required this.onMeasure,
   }) {
     final count = cols * rows;
-
-    // Background arrays
     transformsBg = Float32List(count * 4);
     rectsBg = Float32List(count * 4);
     colorsBg = Int32List(count);
-
-    // Foreground arrays
     transformsFg = Float32List(count * 4);
     rectsFg = Float32List(count * 4);
     colorsFg = Int32List(count);
@@ -544,23 +826,11 @@ class GridBenchmarkPainter extends CustomPainter {
       final int end = (i + chunkSize < totalSprites)
           ? i + chunkSize
           : totalSprites;
-      final Float32List transformsSub = Float32List.sublistView(
-        transforms,
-        i * 4,
-        end * 4,
-      );
-      final Float32List rectsSub = Float32List.sublistView(
-        rects,
-        i * 4,
-        end * 4,
-      );
-      final Int32List colorsSub = Int32List.sublistView(colors, i, end);
-
       canvas.drawRawAtlas(
         image,
-        transformsSub,
-        rectsSub,
-        colorsSub,
+        Float32List.sublistView(transforms, i * 4, end * 4),
+        Float32List.sublistView(rects, i * 4, end * 4),
+        Int32List.sublistView(colors, i, end),
         blendMode,
         null,
         paint,
@@ -580,183 +850,17 @@ class GridBenchmarkPainter extends CustomPainter {
 
     switch (mode) {
       case RenderMode.drawRawAtlasSingle:
-        dev.Timeline.startSync('Prepare Buffers');
-        Tracer.record(_tracePrepId, Phase.begin, TraceCategory.paint);
-        // Prepare background block colors and transforms
-        for (var i = 0; i < count; i++) {
-          final col = i % cols;
-          final row = i ~/ cols;
-          final x = col * cellWidth;
-          final y = row * cellHeight;
-
-          // Scale 16x16 white square to cell size
-          transformsBg[i * 4 + 0] = cellWidth / 16.0;
-          transformsBg[i * 4 + 1] = 0.0;
-          transformsBg[i * 4 + 2] = x;
-          transformsBg[i * 4 + 3] = y;
-
-          rectsBg[i * 4 + 0] = 0.0;
-          rectsBg[i * 4 + 1] = 0.0;
-          rectsBg[i * 4 + 2] = 16.0;
-          rectsBg[i * 4 + 3] = 16.0;
-
-          // Color tint: Alternate blue and red
-          colorsBg[i] = ((col + row) % 2 == 0) ? 0xFF3F51B5 : 0xFFE91E63;
-        }
-        Tracer.record(_tracePrepId, Phase.end, TraceCategory.paint);
-        dev.Timeline.finishSync();
-
-        _drawRawAtlasInChunks(
-          canvas,
-          whitePixelAtlas,
-          transformsBg,
-          rectsBg,
-          colorsBg,
-          count,
-          BlendMode.srcIn,
-          Paint(),
-        );
-        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
-        dev.Timeline.finishSync();
-        break;
-
+        _paintAtlasSingle(canvas, cellWidth, cellHeight, count);
       case RenderMode.drawRawAtlasDouble:
-        dev.Timeline.startSync('Prepare Buffers');
-        Tracer.record(_tracePrepId, Phase.begin, TraceCategory.paint);
-        // 1. Prepare Background & Foreground buffers
-        for (var i = 0; i < count; i++) {
-          final col = i % cols;
-          final row = i ~/ cols;
-          final x = col * cellWidth;
-          final y = row * cellHeight;
-
-          // Scale 16x16 white square to cell size for background
-          transformsBg[i * 4 + 0] = cellWidth / 16.0;
-          transformsBg[i * 4 + 1] = 0.0;
-          transformsBg[i * 4 + 2] = x;
-          transformsBg[i * 4 + 3] = y;
-
-          rectsBg[i * 4 + 0] = 0.0;
-          rectsBg[i * 4 + 1] = 0.0;
-          rectsBg[i * 4 + 2] = 16.0;
-          rectsBg[i * 4 + 3] = 16.0;
-
-          colorsBg[i] = ((col + row) % 2 == 0) ? 0xFF121214 : 0xFF1A1A1E;
-
-          // Choose a simulated glyph index from the 16x16 glyph grid (256x256 atlas)
-          final glyphIndex = (col + row) % 256;
-          final srcX = (glyphIndex % 16) * 16.0;
-          final srcY = (glyphIndex ~/ 16) * 16.0;
-
-          // Foreground (Character text atlas)
-          final fgScale = cellWidth / 16.0;
-          transformsFg[i * 4 + 0] = fgScale;
-          transformsFg[i * 4 + 1] = 0.0;
-          transformsFg[i * 4 + 2] = x - fgScale * srcX;
-          transformsFg[i * 4 + 3] = y - fgScale * srcY;
-
-          rectsFg[i * 4 + 0] = srcX;
-          rectsFg[i * 4 + 1] = srcY;
-          rectsFg[i * 4 + 2] = srcX + 16.0;
-          rectsFg[i * 4 + 3] = srcY + 16.0;
-
-          // Foreground color tint: Alternate green, yellow, cyan
-          colorsFg[i] = (col % 3 == 0)
-              ? 0xFF00FF00
-              : (col % 3 == 1 ? 0xFFFFEB3B : 0xFF00E5FF);
-        }
-        Tracer.record(_tracePrepId, Phase.end, TraceCategory.paint);
-        dev.Timeline.finishSync();
-
-        // Draw backgrounds
-        _drawRawAtlasInChunks(
-          canvas,
-          whitePixelAtlas,
-          transformsBg,
-          rectsBg,
-          colorsBg,
-          count,
-          BlendMode.modulate,
-          Paint(),
-        );
-
-        // Draw foreground glyphs on top
-        _drawRawAtlasInChunks(
-          canvas,
-          glyphAtlas,
-          transformsFg,
-          rectsFg,
-          colorsFg,
-          count,
-          BlendMode.modulate,
-          Paint(),
-        );
-        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
-        dev.Timeline.finishSync();
-        break;
-
+        _paintAtlasDouble(canvas, cellWidth, cellHeight, count);
       case RenderMode.drawRectLoop:
-        dev.Timeline.startSync('Canvas DrawRect Loop');
-        Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
-        final bgPaint = Paint();
-        // Benchmark standard drawRect calls
-        for (var row = 0; row < rows; row++) {
-          for (var col = 0; col < cols; col++) {
-            final rect = Rect.fromLTWH(
-              col * cellWidth,
-              row * cellHeight,
-              cellWidth,
-              cellHeight,
-            );
-            bgPaint.color = ((col + row) % 2 == 0)
-                ? const Color(0xFF3F51B5)
-                : const Color(0xFFE91E63);
-            canvas.drawRect(rect, bgPaint);
-          }
-        }
-        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
-        dev.Timeline.finishSync();
-        break;
-
+        _paintDrawRectLoop(canvas, cellWidth, cellHeight);
       case RenderMode.textPainterLoop:
-        dev.Timeline.startSync('Canvas TextPainter Loop');
-        Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
-        final bgPaint = Paint();
-
-        // Note: Creating TextPainters in the paint loop is bad practice, but we do it to demonstrate the baseline standard approach's impact.
-        for (var row = 0; row < rows; row++) {
-          for (var col = 0; col < cols; col++) {
-            final rect = Rect.fromLTWH(
-              col * cellWidth,
-              row * cellHeight,
-              cellWidth,
-              cellHeight,
-            );
-
-            // Background
-            bgPaint.color = ((col + row) % 2 == 0)
-                ? const Color(0xFF121214)
-                : const Color(0xFF1A1A1E);
-            canvas.drawRect(rect, bgPaint);
-
-            // Foreground Text
-            final char = String.fromCharCode(65 + (col + row) % 26);
-            final tp = TextPainter(
-              text: TextSpan(
-                text: char,
-                style: TextStyle(
-                  fontSize: cellHeight * 0.8,
-                  color: Colors.green,
-                ),
-              ),
-              textDirection: TextDirection.ltr,
-            )..layout(maxWidth: cellWidth);
-
-            tp.paint(canvas, Offset(col * cellWidth, row * cellHeight));
-          }
-        }
-        Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
-        dev.Timeline.finishSync();
+        _paintTextPainterLoop(canvas, cellWidth, cellHeight);
+      case RenderMode.tuiTailLog200x60 ||
+          RenderMode.tuiCursorBlink200x60 ||
+          RenderMode.tuiCurlyDiagnostics200x60 ||
+          RenderMode.tuiCjkNerdRedraw200x60:
         break;
     }
 
@@ -764,6 +868,164 @@ class GridBenchmarkPainter extends CustomPainter {
     onMeasure(sw.elapsedMicroseconds / 1000.0);
     Tracer.record(_tracePaintId, Phase.end, TraceCategory.paint);
     dev.Timeline.finishSync();
+  }
+
+  void _paintAtlasSingle(
+    Canvas canvas,
+    double cellWidth,
+    double cellHeight,
+    int count,
+  ) {
+    Tracer.record(_tracePrepId, Phase.begin, TraceCategory.paint);
+    for (var i = 0; i < count; i++) {
+      final col = i % cols;
+      final row = i ~/ cols;
+      final base = i * 4;
+      transformsBg[base] = cellWidth / 16.0;
+      transformsBg[base + 1] = 0.0;
+      transformsBg[base + 2] = col * cellWidth;
+      transformsBg[base + 3] = row * cellHeight;
+      rectsBg[base] = 0.0;
+      rectsBg[base + 1] = 0.0;
+      rectsBg[base + 2] = 16.0;
+      rectsBg[base + 3] = 16.0;
+      colorsBg[i] = ((col + row) % 2 == 0) ? 0xFF3F51B5 : 0xFFE91E63;
+    }
+    Tracer.record(_tracePrepId, Phase.end, TraceCategory.paint);
+    Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
+    _drawRawAtlasInChunks(
+      canvas,
+      whitePixelAtlas,
+      transformsBg,
+      rectsBg,
+      colorsBg,
+      count,
+      BlendMode.srcIn,
+      Paint(),
+    );
+    Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
+  }
+
+  void _paintAtlasDouble(
+    Canvas canvas,
+    double cellWidth,
+    double cellHeight,
+    int count,
+  ) {
+    Tracer.record(_tracePrepId, Phase.begin, TraceCategory.paint);
+    final fgScale = cellWidth / 16.0;
+    for (var i = 0; i < count; i++) {
+      final col = i % cols;
+      final row = i ~/ cols;
+      final x = col * cellWidth;
+      final y = row * cellHeight;
+      final base = i * 4;
+      transformsBg[base] = fgScale;
+      transformsBg[base + 1] = 0.0;
+      transformsBg[base + 2] = x;
+      transformsBg[base + 3] = y;
+      rectsBg[base] = 0.0;
+      rectsBg[base + 1] = 0.0;
+      rectsBg[base + 2] = 16.0;
+      rectsBg[base + 3] = 16.0;
+      colorsBg[i] = ((col + row) % 2 == 0) ? 0xFF121214 : 0xFF1A1A1E;
+
+      final glyphIndex = (col + row) % 256;
+      final srcX = (glyphIndex % 16) * 16.0;
+      final srcY = (glyphIndex ~/ 16) * 16.0;
+      transformsFg[base] = fgScale;
+      transformsFg[base + 1] = 0.0;
+      transformsFg[base + 2] = x - fgScale * srcX;
+      transformsFg[base + 3] = y - fgScale * srcY;
+      rectsFg[base] = srcX;
+      rectsFg[base + 1] = srcY;
+      rectsFg[base + 2] = srcX + 16.0;
+      rectsFg[base + 3] = srcY + 16.0;
+      colorsFg[i] = (col % 3 == 0)
+          ? 0xFF00FF00
+          : (col % 3 == 1 ? 0xFFFFEB3B : 0xFF00E5FF);
+    }
+    Tracer.record(_tracePrepId, Phase.end, TraceCategory.paint);
+    Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
+    final paint = Paint();
+    _drawRawAtlasInChunks(
+      canvas,
+      whitePixelAtlas,
+      transformsBg,
+      rectsBg,
+      colorsBg,
+      count,
+      BlendMode.modulate,
+      paint,
+    );
+    _drawRawAtlasInChunks(
+      canvas,
+      glyphAtlas,
+      transformsFg,
+      rectsFg,
+      colorsFg,
+      count,
+      BlendMode.modulate,
+      paint,
+    );
+    Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
+  }
+
+  void _paintDrawRectLoop(Canvas canvas, double cellWidth, double cellHeight) {
+    Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
+    final bgPaint = Paint();
+    for (var row = 0; row < rows; row++) {
+      for (var col = 0; col < cols; col++) {
+        bgPaint.color = ((col + row) % 2 == 0)
+            ? const Color(0xFF3F51B5)
+            : const Color(0xFFE91E63);
+        canvas.drawRect(
+          Rect.fromLTWH(
+            col * cellWidth,
+            row * cellHeight,
+            cellWidth,
+            cellHeight,
+          ),
+          bgPaint,
+        );
+      }
+    }
+    Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
+  }
+
+  void _paintTextPainterLoop(
+    Canvas canvas,
+    double cellWidth,
+    double cellHeight,
+  ) {
+    Tracer.record(_traceDrawId, Phase.begin, TraceCategory.paint);
+    final bgPaint = Paint();
+    for (var row = 0; row < rows; row++) {
+      for (var col = 0; col < cols; col++) {
+        bgPaint.color = ((col + row) % 2 == 0)
+            ? const Color(0xFF121214)
+            : const Color(0xFF1A1A1E);
+        canvas.drawRect(
+          Rect.fromLTWH(
+            col * cellWidth,
+            row * cellHeight,
+            cellWidth,
+            cellHeight,
+          ),
+          bgPaint,
+        );
+        final tp = TextPainter(
+          text: TextSpan(
+            text: String.fromCharCode(65 + (col + row) % 26),
+            style: TextStyle(fontSize: cellHeight * 0.8, color: Colors.green),
+          ),
+          textDirection: TextDirection.ltr,
+        )..layout(maxWidth: cellWidth);
+        tp.paint(canvas, Offset(col * cellWidth, row * cellHeight));
+        tp.dispose();
+      }
+    }
+    Tracer.record(_traceDrawId, Phase.end, TraceCategory.paint);
   }
 
   @override

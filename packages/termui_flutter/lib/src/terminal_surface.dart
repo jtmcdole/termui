@@ -1,16 +1,20 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/buffer.dart';
+import 'package:termui/ui/glyph_cell_list.dart';
+import 'package:termui/ui/shader_region.dart';
 import 'package:termui/ui/style.dart';
 import 'package:termui/ui/terminal_palette.dart';
 import 'package:termui/ui/widgets/display/kitty_image.dart';
@@ -19,11 +23,34 @@ import 'package:termui/ui/widgets/interactive/selection_controller.dart';
 import 'backend.dart';
 import 'rendering/atlas.dart';
 import 'rendering/atlas_controller.dart';
+import 'rendering/cell_transform_painter.dart';
+import 'rendering/gpu_atlas_batch.dart';
+import 'rendering/gpu_frame_watchdog.dart';
 import 'rendering/painter.dart';
+import 'rendering/perf_trace.dart';
+import 'rendering/shader_backend.dart';
+import 'rendering/shader_controller.dart';
+import 'rendering/shader_host.dart';
+import 'rendering/shader_region_painter.dart';
+import 'rendering/shader_spec.dart';
+import 'rendering/staging_cache.dart';
 import 'selection_gesture_machine.dart';
 import 'service/terminal_service.dart';
 import 'terminal_ime_client.dart';
 import 'util/url_launcher.dart';
+
+/// Optional [Listenable] contract implemented by external terminal buffer
+/// compositors (such as `FtermPaneController`) to distinguish full cell-content
+/// mutations from overlay-only updates (`ShaderRegion` / `CellTransform`).
+///
+/// When [cellContentRevision] has not changed between notifications,
+/// [TerminalSurface] skips static glyph-atlas fallback scans and preserves its
+/// cached static direct-GPU quad batch and region masks.
+abstract interface class TerminalBufferChangeSignal implements Listenable {
+  /// Monotonic counter incremented whenever cell characters, attributes,
+  /// scrollback rows, or cursor cells change.
+  int get cellContentRevision;
+}
 
 /// A `Scaffold`-free terminal rendering and input surface.
 ///
@@ -169,6 +196,11 @@ final class TerminalSurface extends StatefulWidget {
   /// Enables multi-cell font ligatures. Defaults to `false`.
   final bool enableLigatures;
 
+  /// Enables per-row sprite staging cache in [TuiAtlasPainter]. Defaults to `true`.
+  ///
+  /// Set to `false` as a runtime rollback switch to restage every row on each paint.
+  final bool enableRowCache;
+
   /// Optional external text selection controller.
   final TerminalSelectionController? selectionController;
 
@@ -214,6 +246,51 @@ final class TerminalSurface extends StatefulWidget {
 
   /// Alignment of the cell-quantized terminal grid inside loose or bounded margins.
   final AlignmentGeometry alignment;
+
+  /// Optional controller managing compiled custom fragment shaders and
+  /// wallpaper textures across panes.
+  final TerminalShaderController? shaderController;
+
+  /// Optional declarative shader pass chains, animation mode, and wallpaper
+  /// configuration wrapped inside the screenshot `RepaintBoundary`.
+  final TerminalShaderConfig? shaderConfig;
+
+  /// Opacity multiplier (`0.0..1.0`) applied to default background cells and
+  /// canvas container fill so wallpapers and background shaders show through.
+  final double backgroundOpacity;
+
+  /// Active Ghostty cursor style constant (`0..3`, e.g.
+  /// [TerminalShaderUniforms.cursorStyleBlock]) forwarded to custom shaders.
+  final int cursorStyle;
+
+  /// Whether the terminal cursor is visible when [cursorVisibleProvider] is
+  /// omitted (forwarded to custom shaders as `iCursorVisible`).
+  final bool cursorVisible;
+
+  /// Optional live getter returning whether the terminal cursor is visible.
+  final bool Function()? cursorVisibleProvider;
+
+  /// Optional external [CliShaderRegistry] for managing CLI custom GLSL slots
+  /// and built-in region presets on this pane.
+  final CliShaderRegistry? cliShaderRegistry;
+
+  /// Optional external [GpuFrameWatchdog] monitoring custom CLI shaders on this
+  /// pane.
+  final GpuFrameWatchdog? gpuFrameWatchdog;
+
+  /// Optional callback invoked whenever a custom CLI shader ID is quarantined
+  /// by the per-pane [GpuFrameWatchdog].
+  final ShaderQuarantinedCallback? onCliShaderQuarantined;
+
+  /// Optional monotonic animation clock driving per-cell [CellTween] evaluation.
+  ///
+  /// Defaults to [SchedulerBinding.currentFrameTimeStamp] so animations lock
+  /// cleanly to frame vsync timestamps and remain deterministic in tests.
+  final Duration Function()? tweenClock;
+
+  /// Optional maximum ambient shader tick rate in frames per second forwarded
+  /// to [TerminalShaderHost.maxAmbientFps] (`null` = uncapped display vsync).
+  final double? maxAmbientFps;
 
   /// Creates a `Scaffold`-free [TerminalSurface].
   const TerminalSurface({
@@ -262,6 +339,7 @@ final class TerminalSurface extends StatefulWidget {
     this.service = const DefaultTerminalService(),
     this.enableBleed = kIsWeb,
     this.enableLigatures = false,
+    this.enableRowCache = true,
     this.selectionController,
     this.topVirtualRow = 0,
     this.topVirtualRowProvider,
@@ -275,6 +353,17 @@ final class TerminalSurface extends StatefulWidget {
     this.hoveredLinkAnimationInterval,
     this.enableHostShortcuts = true,
     this.alignment = Alignment.center,
+    this.shaderController,
+    this.shaderConfig,
+    this.backgroundOpacity = 1.0,
+    this.cursorStyle = TerminalShaderUniforms.cursorStyleBlock,
+    this.cursorVisible = true,
+    this.cursorVisibleProvider,
+    this.cliShaderRegistry,
+    this.gpuFrameWatchdog,
+    this.onCliShaderQuarantined,
+    this.tweenClock,
+    this.maxAmbientFps = TerminalShaderHost.defaultMaxAmbientFps,
   });
 
   @override
@@ -283,7 +372,7 @@ final class TerminalSurface extends StatefulWidget {
 
 /// State backing [TerminalSurface], exposed for diagnostics and widget tests.
 final class TerminalSurfaceState extends State<TerminalSurface>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, TickerProviderStateMixin {
   static const int _maxWheelStepsPerEvent = 32;
   static const Duration _scrollIdleReset = Duration(milliseconds: 250);
 
@@ -298,7 +387,64 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   late TerminalImeClient _imeClient;
   late bool _ownsImeClient;
   late _KittyGpuImageCache _kittyCache;
+  final TuiAtlasStagingCache _stagingCache = TuiAtlasStagingCache();
+  final GpuAtlasBatchBuilder _gpuBatchBuilder = GpuAtlasBatchBuilder();
+  final CellTransformAnimator _cellTransformAnimator = CellTransformAnimator();
+  final CellOverrideMaskBuilder _overrideMaskBuilder =
+      CellOverrideMaskBuilder();
+  final CellTransformGpuStager _cellTransformGpuStager =
+      CellTransformGpuStager();
+  final CellTransformPainter _cellTransformPainter = CellTransformPainter();
+  final ShaderRegionGpuStager _regionGpuStager = ShaderRegionGpuStager();
+  final ShaderRegionCanvasStager _regionCanvasStager =
+      ShaderRegionCanvasStager();
+  late CliShaderRegistry _cliShaderRegistry;
+  late bool _ownsCliShaderRegistry;
+  late GpuFrameWatchdog _gpuWatchdog;
+  late bool _ownsGpuWatchdog;
+  bool _attachedFrameTimingsToWatchdog = false;
+  Uint8List? _cellOverrideMask;
+  Ticker? _tweenTicker;
+  Duration _lastTweenStamp = Duration.zero;
+  Duration? _lastSyncedTweenStamp;
+  Buffer? _lastSyncedTransformBuf;
+  int _lastSyncedTransformRev = -1;
+  int _lastSyncedRegionRev = -1;
+  int _lastExternalCellContentRevision = -1;
+  int _directPaintVersion = 0;
+  int _directBatchInvalidationEpoch = 0;
+  int _overrideMaskHash = 0;
+  GpuAtlasQuadBatch? _cachedStaticBatch;
+  GpuAtlasQuadBatch? _cachedDirectBatch;
+  StagedRegionMasksResult? _cachedRegionMasks;
+  List<ComputedShaderRegionLayout>? _cachedRegionLayouts;
+  Buffer? _cachedDirectBuf;
+  GlyphAtlas? _cachedDirectAtlas;
+  Size _cachedDirectSize = Size.zero;
+  double _cachedDirectDpr = 0.0;
+  int _cachedDirectPaintVersion = -1;
+  int _cachedDirectNotifyVersion = -1;
+  int _cachedDirectTransformTickVersion = -1;
+  int _cachedDirectEpoch = -1;
+  int _cachedDirectOverrideHash = -1;
+  ({int col, int row})? _cachedDirectCursor;
+  (int, int)? _cachedDirectPtySize;
+  int _cachedDirectRegionRev = -1;
+  int _cachedDirectTransformRev = -1;
+  bool _cachedDirectHasTransforms = false;
   final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
+  final _ShaderMouseNotifier _shaderMouseNotifier = _ShaderMouseNotifier();
+  bool _shaderHasPointerClick = false;
+  bool _shaderPrimaryButtonDown = false;
+  double _shaderClickLogicalX = 0.0;
+  double _shaderClickLogicalY = 0.0;
+
+  TextPainter? _composingPainter;
+  String _composingPainterText = '';
+  String _composingPainterFontFamily = '';
+  List<String>? _composingPainterFontFallback;
+  double _composingPainterFontSize = 0.0;
+  int _composingPainterColorArgb = 0;
 
   bool _hadActiveBuffer = false;
   bool _bufferResourcesDirty = false;
@@ -344,6 +490,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   double _lastReportedCellH = 0.0;
   bool _geometrySyncScheduled = false;
   int? _imeViewId;
+  TerminalColorTheme? _cachedPaletteTheme;
+  Uint32List? _cachedPalette256Argb;
 
   Buffer? get _activeBuffer => widget.bufferProvider?.call() ?? widget.buffer;
 
@@ -395,9 +543,60 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   /// Active [TerminalSelectionController] used by this surface.
   TerminalSelectionController get selectionController => _selectionController;
 
+  /// Per-pane [CliShaderRegistry] managing compiled region presets and CLI
+  /// custom GLSL shaders.
+  CliShaderRegistry get cliShaderRegistry => _cliShaderRegistry;
+
+  /// Per-pane [GpuFrameWatchdog] monitoring custom CLI shaders.
+  GpuFrameWatchdog get gpuFrameWatchdog => _gpuWatchdog;
+
+  /// Compiles and registers a custom CLI GLSL shader [source] under [id] with
+  /// a bounded [timeout] (defaults to `4s`).
+  Future<CompiledShaderHandle?> registerCliShader({
+    required String id,
+    required String source,
+    bool usesPrevFrame = false,
+    Duration timeout = CliShaderRegistry.cliCompileTimeout,
+  }) => _cliShaderRegistry.registerCliShader(
+    id: id,
+    source: source,
+    usesPrevFrame: usesPrevFrame,
+    timeout: timeout,
+  );
+
+  /// Removes a compiled CLI shader slot [id] from this pane.
+  void removeCliShader(String id) {
+    _cliShaderRegistry.removeCliShader(id);
+    _paintNotifier.notify();
+  }
+
+  /// Quarantines custom CLI shader [id] on this pane while preserving built-in
+  /// presets and per-cell transforms.
+  void quarantineCliShader(String id, String reason) {
+    _cliShaderRegistry.quarantineShader(id, reason);
+    _paintNotifier.notify();
+  }
+
+  /// Whether the on-demand 120 Hz `CellTween` ticker is currently running.
+  @visibleForTesting
+  bool get debugIsTweenTickerActive => _tweenTicker?.isActive ?? false;
+
+  /// Active per-cell transform animator (for diagnostics and tests).
+  @visibleForTesting
+  CellTransformAnimator get debugCellTransformAnimator =>
+      _cellTransformAnimator;
+
   /// Active leaf state of the selection gesture HSM (for diagnostics and tests).
   @visibleForTesting
   SelectionGestureState get debugGestureState => _gestureMachine.state;
+
+  /// Active row-staging cache owned by this surface (for diagnostics and tests).
+  @visibleForTesting
+  TuiAtlasStagingCache get debugStagingCache => _stagingCache;
+
+  /// Cached IME pre-edit [TextPainter], if currently composing (for tests).
+  @visibleForTesting
+  TextPainter? get debugComposingPainter => _composingPainter;
 
   MouseCursor get _effectiveCursor =>
       (_builtinLinkOpenEnabled &&
@@ -421,6 +620,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _latchedClearedModifiers.retainAll(
       HardwareKeyboard.instance.logicalKeysPressed,
     );
+    _lastTweenStamp = _readCurrentTweenStamp();
+    _initCliShaderAndWatchdog();
     _initAtlasController();
     _initFocusAndSelection();
     _initImeClient();
@@ -428,14 +629,207 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _initModeFlags();
     _bindTerminalStreams();
     HardwareKeyboard.instance.addHandler(_onHardwareKeyEvent);
-    widget.bufferListenable?.addListener(_onExternalBufferChanged);
+    final listenable = widget.bufferListenable;
+    listenable?.addListener(_onExternalBufferChanged);
+    if (listenable is TerminalBufferChangeSignal) {
+      _lastExternalCellContentRevision = listenable.cellContentRevision;
+    }
     _hadActiveBuffer = _activeBuffer != null;
     _lastTopVirtualRow = _effectiveTopVirtualRow;
     _lastSelectionEpoch = widget.selectionEpochProvider?.call();
     _lastCursorPosition =
         widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
     _prepareActiveBufferResources();
+    _syncCellTransformsAndRegions(_activeBuffer);
   }
+
+  void _initCliShaderAndWatchdog() {
+    _ownsGpuWatchdog = widget.gpuFrameWatchdog == null;
+    _gpuWatchdog =
+        widget.gpuFrameWatchdog ??
+        GpuFrameWatchdog(
+          isBuiltinPreset: ShaderRegionPresets.isPreset,
+          onShaderQuarantined: _onWatchdogShaderQuarantined,
+        );
+    _syncWatchdogFrameTimings();
+    _ownsCliShaderRegistry = widget.cliShaderRegistry == null;
+    _cliShaderRegistry =
+        widget.cliShaderRegistry ??
+        CliShaderRegistry(
+          backend: widget.shaderController?.backend,
+          watchdog: _gpuWatchdog,
+        );
+    _cliShaderRegistry.attachWatchdog(_gpuWatchdog);
+    if (widget.shaderController != null) {
+      _cliShaderRegistry.attachBackend(widget.shaderController!.backend);
+      widget.shaderController!.addListener(_onShaderControllerChanged);
+    }
+  }
+
+  void _syncWatchdogFrameTimings() {
+    final shouldAttach =
+        widget.shaderController?.backendKind == ShaderBackendKind.flutterGpu;
+    if (shouldAttach) {
+      if (!_gpuWatchdog.isFrameTimingsAttached) {
+        _gpuWatchdog.attachFrameTimingsCallback();
+        _attachedFrameTimingsToWatchdog = true;
+      }
+      return;
+    }
+    if (_attachedFrameTimingsToWatchdog) {
+      _gpuWatchdog.detachFrameTimingsCallback();
+      _attachedFrameTimingsToWatchdog = false;
+    }
+  }
+
+  void _invalidateDirectBatchCache() {
+    _directBatchInvalidationEpoch++;
+    _cachedStaticBatch = null;
+    _cachedDirectBatch = null;
+    _cachedRegionMasks = null;
+    _cachedRegionLayouts = null;
+  }
+
+  void _onShaderControllerChanged() {
+    if (!mounted) return;
+    _invalidateDirectBatchCache();
+    final ctrl = widget.shaderController;
+    _cliShaderRegistry.attachBackend(ctrl?.backend);
+    _syncWatchdogFrameTimings();
+    _ensureRegionShadersCompiled(_activeBuffer);
+  }
+
+  void _onWatchdogShaderQuarantined(String shaderId, String reason) {
+    if (!mounted) return;
+    _cliShaderRegistry.quarantineShader(shaderId, reason);
+    widget.onCliShaderQuarantined?.call(shaderId, reason);
+    _paintNotifier.notify();
+  }
+
+  Duration _readCurrentTweenStamp() {
+    final customClock = widget.tweenClock;
+    final raw = customClock != null
+        ? customClock()
+        : SchedulerBinding.instance.currentSystemFrameTimeStamp;
+    if (raw >= _lastTweenStamp) {
+      _lastTweenStamp = raw;
+    }
+    return _lastTweenStamp;
+  }
+
+  double _nowTweenSec(Duration stamp) => stamp.inMicroseconds / 1e6;
+
+  void _syncCellTransformsAndRegions(Buffer? buf, {bool force = false}) {
+    if (buf == null) {
+      _lastSyncedTransformBuf = null;
+      _lastSyncedTweenStamp = null;
+      _lastSyncedTransformRev = -1;
+      _lastSyncedRegionRev = -1;
+      _cellTransformAnimator.reset();
+      _cellOverrideMask = null;
+      _overrideMaskHash = 0;
+      _gpuWatchdog.setActiveBuiltinPresets(false);
+      _syncTweenTicker();
+      return;
+    }
+    final frameStamp = _readCurrentTweenStamp();
+    if (!force &&
+        identical(buf, _lastSyncedTransformBuf) &&
+        frameStamp == _lastSyncedTweenStamp &&
+        buf.transformRevision == _lastSyncedTransformRev &&
+        buf.regionRevision == _lastSyncedRegionRev) {
+      return;
+    }
+    _lastSyncedTransformBuf = buf;
+    _lastSyncedTweenStamp = frameStamp;
+    _lastSyncedTransformRev = buf.transformRevision;
+    _lastSyncedRegionRev = buf.regionRevision;
+
+    _cellTransformAnimator.evaluate(
+      table: buf.cellTransforms,
+      cols: buf.width,
+      rows: buf.height,
+      nowSec: _nowTweenSec(frameStamp),
+    );
+    final replaceRegions = _collectActiveReplaceRegions(buf);
+    _cellOverrideMask = _overrideMaskBuilder.build(
+      cols: buf.width,
+      rows: buf.height,
+      activeTransforms: _cellTransformAnimator.activePoses,
+      replaceRegions: replaceRegions,
+    );
+    _overrideMaskHash = _overrideMaskBuilder.lastMaskHash;
+    _gpuWatchdog.setActiveBuiltinPresets(_hasActiveBuiltinPresetRegions(buf));
+    _syncTweenTicker();
+    _ensureRegionShadersCompiled(buf);
+  }
+
+  bool _hasActiveBuiltinPresetRegions(Buffer buf) {
+    if (!buf.hasShaderRegions) return false;
+    for (final region in buf.shaderRegions) {
+      if (ShaderRegionPresets.isPreset(region.shaderId)) return true;
+    }
+    return false;
+  }
+
+  List<ShaderRegion> _collectActiveReplaceRegions(Buffer buf) {
+    if (!buf.hasShaderRegions) return const <ShaderRegion>[];
+    List<ShaderRegion>? list;
+    for (final region in buf.shaderRegions) {
+      if (region.stage == ShaderRegionStage.replaceGlyphs &&
+          !_cliShaderRegistry.isQuarantined(region.shaderId)) {
+        (list ??= <ShaderRegion>[]).add(region);
+      }
+    }
+    return list ?? const <ShaderRegion>[];
+  }
+
+  void _ensureRegionShadersCompiled(Buffer? buf) {
+    if (buf == null || !buf.hasShaderRegions) return;
+    final ctrl = widget.shaderController;
+    if (ctrl == null || !ctrl.supportsCustomGlsl) return;
+    for (final region in buf.shaderRegions) {
+      if (_cliShaderRegistry.handleForShader(region.shaderId) != null) continue;
+      if (_cliShaderRegistry.isQuarantined(region.shaderId)) continue;
+      unawaited(
+        _cliShaderRegistry
+            .ensureRegionShaderCompiled(region)
+            .catchError((Object _) => null),
+      );
+    }
+  }
+
+  void _syncTweenTicker() {
+    if (_cellTransformAnimator.hasActiveTweens) {
+      final ticker = _tweenTicker ??= createTicker(_onTweenTick);
+      if (!ticker.isActive) {
+        ticker.start();
+      }
+      return;
+    }
+    if (_tweenTicker != null && _tweenTicker!.isActive) {
+      _tweenTicker!.stop();
+    }
+  }
+
+  void _notifyDirectSurfaceVisualChange() {
+    _invalidateDirectBatchCache();
+    _paintNotifier.notify();
+  }
+
+  void _onTweenTick(Duration _) {
+    if (!mounted) {
+      _tweenTicker?.stop();
+      return;
+    }
+    _syncCellTransformsAndRegions(_activeBuffer);
+    _paintNotifier.notifyTransformTick();
+  }
+
+  Uint8List? _readCellOverrideMask() => _cellOverrideMask;
+
+  List<EvaluatedCellEntry> _readTransformedCells() =>
+      _cellTransformAnimator.sortedEntries;
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -542,6 +936,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     });
     _ligaturesSubscription = terminal.watchEnableLigatures().listen((enabled) {
       if (!mounted) return;
+      _notifyDirectSurfaceVisualChange();
       setState(() {
         _enableLigatures = enabled;
       });
@@ -634,10 +1029,93 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   @override
   void didUpdateWidget(TerminalSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (_didDirectBatchPropsChange(oldWidget)) {
+      _invalidateDirectBatchCache();
+    }
     _syncAtlasControllerBinding(oldWidget);
     _syncFocusAndImeBindings(oldWidget);
     _syncTerminalAndBufferBindings(oldWidget);
     _syncThemeAndModeBindings(oldWidget);
+    _syncCliShaderAndWatchdogBindings(oldWidget);
+  }
+
+  bool _didDirectBatchPropsChange(TerminalSurface oldWidget) =>
+      _didDirectBatchSourcePropsChange(oldWidget) ||
+      _didDirectBatchStylePropsChange(oldWidget);
+
+  bool _didDirectBatchSourcePropsChange(TerminalSurface oldWidget) =>
+      !identical(oldWidget.buffer, widget.buffer) ||
+      !identical(oldWidget.terminal, widget.terminal) ||
+      !identical(oldWidget.atlasController, widget.atlasController) ||
+      !identical(oldWidget.selectionController, widget.selectionController) ||
+      !identical(oldWidget.shaderController, widget.shaderController) ||
+      !identical(oldWidget.cliShaderRegistry, widget.cliShaderRegistry) ||
+      oldWidget.activePtySize != widget.activePtySize ||
+      oldWidget.cursorPosition != widget.cursorPosition ||
+      oldWidget.cursorStyle != widget.cursorStyle ||
+      oldWidget.cursorVisible != widget.cursorVisible ||
+      oldWidget.enableLigatures != widget.enableLigatures ||
+      oldWidget.enableBuiltinSelection != widget.enableBuiltinSelection ||
+      oldWidget.topVirtualRow != widget.topVirtualRow ||
+      !identical(
+        oldWidget.topVirtualRowProvider,
+        widget.topVirtualRowProvider,
+      ) ||
+      !identical(
+        oldWidget.selectionEpochProvider,
+        widget.selectionEpochProvider,
+      );
+
+  bool _didDirectBatchStylePropsChange(TerminalSurface oldWidget) =>
+      oldWidget.fontSize != widget.fontSize ||
+      oldWidget.fontFamily != widget.fontFamily ||
+      !listEquals(oldWidget.fontFamilyFallback, widget.fontFamilyFallback) ||
+      oldWidget.backgroundColor != widget.backgroundColor ||
+      oldWidget.foregroundColor != widget.foregroundColor ||
+      oldWidget.backgroundOpacity != widget.backgroundOpacity ||
+      oldWidget.faintOpacity != widget.faintOpacity ||
+      oldWidget.palette != widget.palette ||
+      oldWidget.outOfBoundsDimColor != widget.outOfBoundsDimColor ||
+      oldWidget.shaderConfig != widget.shaderConfig ||
+      oldWidget.hoveredLinkStyler != widget.hoveredLinkStyler;
+
+  void _syncCliShaderAndWatchdogBindings(TerminalSurface oldWidget) {
+    if (!identical(oldWidget.shaderController, widget.shaderController)) {
+      oldWidget.shaderController?.removeListener(_onShaderControllerChanged);
+      widget.shaderController?.addListener(_onShaderControllerChanged);
+    }
+    if (!identical(oldWidget.gpuFrameWatchdog, widget.gpuFrameWatchdog)) {
+      if (_attachedFrameTimingsToWatchdog) {
+        _gpuWatchdog.detachFrameTimingsCallback();
+        _attachedFrameTimingsToWatchdog = false;
+      }
+      if (_ownsGpuWatchdog) {
+        _gpuWatchdog.dispose();
+      }
+      _ownsGpuWatchdog = widget.gpuFrameWatchdog == null;
+      _gpuWatchdog =
+          widget.gpuFrameWatchdog ??
+          GpuFrameWatchdog(
+            isBuiltinPreset: ShaderRegionPresets.isPreset,
+            onShaderQuarantined: _onWatchdogShaderQuarantined,
+          );
+    }
+    _syncWatchdogFrameTimings();
+    if (!identical(oldWidget.cliShaderRegistry, widget.cliShaderRegistry)) {
+      if (_ownsCliShaderRegistry) {
+        _cliShaderRegistry.dispose();
+      }
+      _ownsCliShaderRegistry = widget.cliShaderRegistry == null;
+      _cliShaderRegistry =
+          widget.cliShaderRegistry ??
+          CliShaderRegistry(
+            backend: widget.shaderController?.backend,
+            watchdog: _gpuWatchdog,
+          );
+    }
+    _cliShaderRegistry.attachWatchdog(_gpuWatchdog);
+    _cliShaderRegistry.attachBackend(widget.shaderController?.backend);
+    _syncCellTransformsAndRegions(_activeBuffer);
   }
 
   void _syncAtlasControllerBinding(TerminalSurface oldWidget) {
@@ -749,7 +1227,11 @@ final class TerminalSurfaceState extends State<TerminalSurface>
 
     if (oldWidget.bufferListenable != widget.bufferListenable) {
       oldWidget.bufferListenable?.removeListener(_onExternalBufferChanged);
-      widget.bufferListenable?.addListener(_onExternalBufferChanged);
+      final next = widget.bufferListenable;
+      next?.addListener(_onExternalBufferChanged);
+      _lastExternalCellContentRevision = next is TerminalBufferChangeSignal
+          ? next.cellContentRevision
+          : -1;
     }
 
     _syncBufferResourcesOnUpdate(oldWidget);
@@ -795,6 +1277,10 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       }
       _prepareActiveBufferResources();
     }
+    if (oldWidget.enableRowCache != widget.enableRowCache) {
+      _stagingCache.invalidateAllRows();
+    }
+    _syncComposingPainter();
     _gestureMachine.onEdgeAutoScroll = widget.onSelectionAutoScroll != null
         ? _handleEdgeAutoScroll
         : null;
@@ -820,10 +1306,36 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   @override
   void dispose() {
     _stopLinkHoverTicker();
+    _disposeCliShaderAndWatchdog();
     WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
     widget.bufferListenable?.removeListener(_onExternalBufferChanged);
     _cancelTerminalStreams();
+    _disposeOwnedControllers();
+    _disposeComposingPainter();
+    _kittyCache.dispose();
+    _paintNotifier.dispose();
+    _shaderMouseNotifier.dispose();
+    super.dispose();
+  }
+
+  void _disposeCliShaderAndWatchdog() {
+    _tweenTicker?.dispose();
+    _tweenTicker = null;
+    widget.shaderController?.removeListener(_onShaderControllerChanged);
+    if (_ownsCliShaderRegistry) {
+      _cliShaderRegistry.dispose();
+    }
+    if (_attachedFrameTimingsToWatchdog) {
+      _gpuWatchdog.detachFrameTimingsCallback();
+      _attachedFrameTimingsToWatchdog = false;
+    }
+    if (_ownsGpuWatchdog) {
+      _gpuWatchdog.dispose();
+    }
+  }
+
+  void _disposeOwnedControllers() {
     _focusNode.removeListener(_onFocusChanged);
     if (_ownsFocusNode) {
       _focusNode.dispose();
@@ -841,14 +1353,65 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (_ownsAtlasController) {
       _atlasController.dispose();
     }
-    _kittyCache.dispose();
-    _paintNotifier.dispose();
-    super.dispose();
+  }
+
+  void _disposeComposingPainter() {
+    _composingPainter?.dispose();
+    _composingPainter = null;
+    _composingPainterText = '';
+    _composingPainterFontFamily = '';
+    _composingPainterFontFallback = null;
+    _composingPainterFontSize = 0.0;
+    _composingPainterColorArgb = 0;
+  }
+
+  void _syncComposingPainter() {
+    final text = widget.enableIme ? _imeClient.composingText : '';
+    final atlas = _atlasController.atlas;
+    if (text.isEmpty || atlas == null) {
+      if (_composingPainter != null) _disposeComposingPainter();
+      return;
+    }
+    final fontFamily = _atlasController.fontFamily;
+    final fontFallback = _atlasController.fontFamilyFallback;
+    final fontSize = atlas.fontSize;
+    final colorArgb = widget.foregroundColor.toARGB32();
+    if (_composingPainter != null &&
+        _composingPainterText == text &&
+        _composingPainterFontFamily == fontFamily &&
+        listEquals(_composingPainterFontFallback, fontFallback) &&
+        _composingPainterFontSize == fontSize &&
+        _composingPainterColorArgb == colorArgb) {
+      return;
+    }
+    _composingPainter?.dispose();
+    _composingPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          fontFamily: fontFamily,
+          fontFamilyFallback: fontFallback,
+          fontSize: fontSize,
+          color: widget.foregroundColor,
+          height: 1.0,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    _composingPainterText = text;
+    _composingPainterFontFamily = fontFamily;
+    _composingPainterFontFallback = fontFallback == null
+        ? null
+        : List<String>.unmodifiable(fontFallback);
+    _composingPainterFontSize = fontSize;
+    _composingPainterColorArgb = colorArgb;
   }
 
   void _onAtlasChanged() {
     if (!mounted) return;
+    _invalidateDirectBatchCache();
     _syncTerminalCellMetrics();
+    _syncComposingPainter();
     _prepareActiveBufferResources();
     setState(() {});
     _scheduleGeometrySync();
@@ -875,7 +1438,27 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     final cursorMoved = cursor != _lastCursorPosition;
     _lastCursorPosition = cursor;
 
+    final listenable = widget.bufferListenable;
+    var overlayOnly = false;
+    if (listenable is TerminalBufferChangeSignal) {
+      final cellRev = listenable.cellContentRevision;
+      overlayOnly =
+          cellRev == _lastExternalCellContentRevision &&
+          hasBuf &&
+          _hadActiveBuffer &&
+          identical(buf, _lastPaintedBuffer) &&
+          activePty == _lastPaintedActivePtySize &&
+          !cursorMoved;
+      _lastExternalCellContentRevision = cellRev;
+    }
+    if (overlayOnly) {
+      _syncCellTransformsAndRegions(buf, force: true);
+      _paintNotifier.notifyTransformTick();
+      return;
+    }
+
     _bufferResourcesDirty = true;
+    _syncCellTransformsAndRegions(buf, force: true);
     if (cursorMoved) {
       _scheduleGeometrySync();
     }
@@ -893,6 +1476,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         (_imeClient.composingText.isNotEmpty && cursorMoved);
 
     if (needsWidgetRebuild) {
+      _directPaintVersion++;
       setState(() {});
       return;
     }
@@ -901,6 +1485,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
 
   void _onImeComposingChanged() {
     if (!mounted) return;
+    _invalidateDirectBatchCache();
+    _syncComposingPainter();
     setState(() {});
     _scheduleGeometrySync();
   }
@@ -916,6 +1502,61 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       }
     }
     widget.onFocusChanged?.call(hasFocus);
+    if (mounted && _hasShaderBinding) {
+      setState(() {});
+    }
+  }
+
+  bool get _hasShaderBinding =>
+      widget.shaderConfig != null || widget.shaderController != null;
+
+  double get _effectiveBackgroundOpacity {
+    final surfaceOpacity = widget.backgroundOpacity.isFinite
+        ? widget.backgroundOpacity.clamp(0.0, 1.0)
+        : 1.0;
+    final configOpacity = widget.shaderConfig?.backgroundOpacity;
+    if (configOpacity == null || !configOpacity.isFinite) {
+      return surfaceOpacity;
+    }
+    return math.min(surfaceOpacity, configOpacity.clamp(0.0, 1.0));
+  }
+
+  Color get _effectiveBackgroundColor {
+    final opacity = _effectiveBackgroundOpacity;
+    if (opacity >= 1.0) return widget.backgroundColor;
+    return widget.backgroundColor.withValues(
+      alpha: widget.backgroundColor.a * opacity,
+    );
+  }
+
+  Uint32List _resolvePalette256Argb() {
+    final existing = _cachedPalette256Argb;
+    if (existing != null && identical(_cachedPaletteTheme, widget.palette)) {
+      return existing;
+    }
+    final table = Uint32List(TerminalShaderUniforms.paletteLength);
+    for (var i = 0; i < table.length; i++) {
+      table[i] = widget.palette.resolveAnsi256(i).argb;
+    }
+    _cachedPaletteTheme = widget.palette;
+    _cachedPalette256Argb = table;
+    return table;
+  }
+
+  Rect? _readCursorRectLogical() {
+    final atlas = _atlasController.atlas;
+    if (atlas == null) return null;
+    final cursor =
+        widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
+    if (cursor == null || atlas.cellWidth <= 0 || atlas.cellHeight <= 0) {
+      return null;
+    }
+    return Rect.fromLTWH(
+      cursor.col * atlas.cellWidth,
+      cursor.row * atlas.cellHeight,
+      atlas.cellWidth,
+      atlas.cellHeight,
+    );
   }
 
   TextInputConfiguration _resolveImeConfiguration() {
@@ -946,6 +1587,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (!enabled) {
       _gestureMachine.dispatch(.reset);
     }
+    _notifyDirectSurfaceVisualChange();
     setState(() {
       _terminalBuiltinSelection = enabled;
     });
@@ -971,7 +1613,9 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   }
 
   void _flushDirtyBufferResources() {
-    if (!mounted || !_bufferResourcesDirty) return;
+    if (!mounted) return;
+    _syncCellTransformsAndRegions(_activeBuffer);
+    if (!_bufferResourcesDirty) return;
     _bufferResourcesDirty = false;
     _prepareActiveBufferResources();
   }
@@ -1168,7 +1812,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         _stopLinkHoverTicker();
         return;
       }
-      _paintNotifier.notify();
+      _notifyDirectSurfaceVisualChange();
     });
   }
 
@@ -1229,6 +1873,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (mounted &&
         (!_linkDetailsEqual(_hoveredLinkDetail, prevDetail) ||
             _hoveredLinkDetail != null)) {
+      _notifyDirectSurfaceVisualChange();
       setState(() {});
     }
   }
@@ -1366,7 +2011,43 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     );
   }
 
+  void _updateShaderPointerState(PointerEvent event) {
+    final lx = event.localPosition.dx;
+    final ly = event.localPosition.dy;
+    _syncShaderPointerButtons(event, lx, ly);
+    final sign = _shaderPrimaryButtonDown ? 1.0 : -1.0;
+    final clickZ = _shaderHasPointerClick ? sign * _shaderClickLogicalX : 0.0;
+    final clickW = _shaderHasPointerClick ? sign * _shaderClickLogicalY : 0.0;
+    _shaderMouseNotifier.update(
+      lx,
+      ly,
+      clickZ,
+      clickW,
+      notify: _hasShaderBinding,
+    );
+  }
+
+  void _syncShaderPointerButtons(PointerEvent event, double lx, double ly) {
+    if (event is PointerDownEvent) {
+      if ((event.buttons & kPrimaryMouseButton) != 0) {
+        _shaderHasPointerClick = true;
+        _shaderPrimaryButtonDown = true;
+        _shaderClickLogicalX = math.max(lx, 1e-3);
+        _shaderClickLogicalY = math.max(ly, 1e-3);
+      }
+      return;
+    }
+    if (event is PointerMoveEvent) {
+      if ((event.buttons & kPrimaryMouseButton) == 0) {
+        _shaderPrimaryButtonDown = false;
+      }
+      return;
+    }
+    _shaderPrimaryButtonDown = false;
+  }
+
   void _handlePointerEvent(PointerEvent event, Size layoutSize) {
+    _updateShaderPointerState(event);
     final coords = _resolvePointerCoords(event, layoutSize);
     if (coords == null) return;
 
@@ -1413,6 +2094,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   }
 
   void _handlePointerCancel(PointerCancelEvent event, Size layoutSize) {
+    _updateShaderPointerState(event);
     _resetScrollAccumulator();
     _lastPressedButton = term.MouseButton.left;
     _gestureMachine.dispatch(.pointerCancel);
@@ -1464,6 +2146,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       _dispatchRightPointerToHsm(coords, type, nextLink?.uri);
     }
     if (uriChanged && mounted) {
+      _notifyDirectSurfaceVisualChange();
       setState(() {});
     }
   }
@@ -1717,6 +2400,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _hoverLinkResolved = false;
     _stopLinkHoverTicker();
     if (hadHoveredLink && mounted) {
+      _notifyDirectSurfaceVisualChange();
       setState(() {});
     }
     widget.onPointerExit?.call(event);
@@ -1964,7 +2648,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       autofocus: widget.autofocus,
       onKeyEvent: (_, event) => _imeClient.handleKeyEvent(event),
       child: ColoredBox(
-        color: widget.backgroundColor,
+        color: _effectiveBackgroundColor,
         child: Align(
           alignment: widget.alignment,
           child: RepaintBoundary(
@@ -2044,6 +2728,412 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     child: _buildCanvasContainer(layoutSize),
   );
 
+  TuiAtlasPainter _createAtlasPainter(
+    Buffer buf, {
+    required String composingText,
+    required ({int col, int row})? cursor,
+    required (int, int)? activePty,
+    required Color effectiveBgColor,
+  }) => TuiAtlasPainter(
+    repaint: _paintNotifier,
+    buffer: buf,
+    atlas: _atlasController.atlas!,
+    stagingCache: widget.enableRowCache ? _stagingCache : null,
+    cellOverrideMaskProvider: _readCellOverrideMask,
+    transformedCellsProvider: _readTransformedCells,
+    cellTransformPainter: _cellTransformPainter,
+    composingPainter: _composingPainter,
+    fontFamily: _atlasController.fontFamily,
+    fontFamilyFallback: _atlasController.fontFamilyFallback,
+    fallbackPainters: _atlasController.fallbackPainters,
+    onMissingGlyphs: null,
+    onMissingStyledGlyphs: _atlasController.requestMissingStyledGlyphs,
+    onBeforePaint: _flushDirtyBufferResources,
+    enableBleed: widget.enableBleed,
+    enableLigatures: _enableLigatures,
+    ligaturePainters: _atlasController.ligaturePainters,
+    selectionController: _builtinSelectionEnabled ? _selectionController : null,
+    topVirtualRow: _effectiveTopVirtualRow,
+    topVirtualRowProvider: _readEffectiveTopVirtualRow,
+    hoveredLink: _isLinkHovered ? _hoveredLink : null,
+    hoveredLinkRowSpans: _isLinkHovered ? _hoveredLinkDetail?.rowSpans : null,
+    hoveredLinkStyler: widget.hoveredLinkStyler,
+    kittyImages: _kittyCache.images,
+    kittyImagesById: _kittyCache.imagesById,
+    defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+    defaultBackgroundArgb: effectiveBgColor.toARGB32(),
+    faintOpacity: widget.faintOpacity,
+    palette: widget.palette,
+    activePtyCols: activePty?.$1,
+    activePtyRows: activePty?.$2,
+    outOfBoundsDimColor: widget.outOfBoundsDimColor,
+    composingText: composingText,
+    cursorCol: cursor?.col ?? 0,
+    cursorRow: cursor?.row ?? 0,
+  );
+
+  bool _canReuseStaticBatchCache({
+    required Buffer buf,
+    required GlyphAtlas atlas,
+    required Size logicalSize,
+    required double devicePixelRatio,
+    required ({int col, int row})? cursor,
+    required (int, int)? activePty,
+  }) =>
+      _cachedStaticBatch != null &&
+      !_bufferResourcesDirty &&
+      identical(buf, _cachedDirectBuf) &&
+      identical(atlas, _cachedDirectAtlas) &&
+      logicalSize == _cachedDirectSize &&
+      devicePixelRatio == _cachedDirectDpr &&
+      _directPaintVersion == _cachedDirectPaintVersion &&
+      _paintNotifier.version == _cachedDirectNotifyVersion &&
+      _directBatchInvalidationEpoch == _cachedDirectEpoch &&
+      _overrideMaskHash == _cachedDirectOverrideHash &&
+      cursor == _cachedDirectCursor &&
+      activePty == _cachedDirectPtySize &&
+      buf.regionRevision == _cachedDirectRegionRev &&
+      buf.hasCellTransforms == _cachedDirectHasTransforms;
+
+  bool _canReuseDirectBatchCache({
+    required Buffer buf,
+    required GlyphAtlas atlas,
+    required Size logicalSize,
+    required double devicePixelRatio,
+    required ({int col, int row})? cursor,
+    required (int, int)? activePty,
+  }) =>
+      _cachedDirectBatch != null &&
+      !_cellTransformAnimator.hasActiveTweens &&
+      _paintNotifier.transformTickVersion ==
+          _cachedDirectTransformTickVersion &&
+      buf.transformRevision == _cachedDirectTransformRev &&
+      _canReuseStaticBatchCache(
+        buf: buf,
+        atlas: atlas,
+        logicalSize: logicalSize,
+        devicePixelRatio: devicePixelRatio,
+        cursor: cursor,
+        activePty: activePty,
+      );
+
+  bool _anyRegionOverlapsActiveTransforms(Buffer buf) {
+    final poses = _cellTransformAnimator.activePoses;
+    if (poses.isEmpty || !buf.hasShaderRegions || buf.width <= 0) return false;
+    final cols = buf.width;
+    for (final region in buf.shaderRegions) {
+      for (final rect in region.sourceRects) {
+        for (final cellIdx in poses.keys) {
+          final x = cellIdx % cols;
+          final y = cellIdx ~/ cols;
+          if (x >= rect.x &&
+              x < rect.x + rect.width &&
+              y >= rect.y &&
+              y < rect.y + rect.height) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  void _storeDirectBatchCache({
+    required GpuAtlasQuadBatch staticBatch,
+    required GpuAtlasQuadBatch batch,
+    required StagedRegionMasksResult? regionMasks,
+    required List<ComputedShaderRegionLayout> layouts,
+    required Buffer buf,
+    required GlyphAtlas atlas,
+    required Size logicalSize,
+    required double devicePixelRatio,
+    required ({int col, int row})? cursor,
+    required (int, int)? activePty,
+  }) {
+    _cachedStaticBatch = staticBatch;
+    _cachedDirectBatch = batch;
+    _cachedRegionMasks = regionMasks;
+    _cachedRegionLayouts = layouts;
+    _cachedDirectBuf = buf;
+    _cachedDirectAtlas = atlas;
+    _cachedDirectSize = logicalSize;
+    _cachedDirectDpr = devicePixelRatio;
+    _cachedDirectPaintVersion = _directPaintVersion;
+    _cachedDirectNotifyVersion = _paintNotifier.version;
+    _cachedDirectTransformTickVersion = _paintNotifier.transformTickVersion;
+    _cachedDirectEpoch = _directBatchInvalidationEpoch;
+    _cachedDirectOverrideHash = _overrideMaskHash;
+    _cachedDirectCursor = cursor;
+    _cachedDirectPtySize = activePty;
+    _cachedDirectRegionRev = buf.regionRevision;
+    _cachedDirectTransformRev = buf.transformRevision;
+    _cachedDirectHasTransforms = buf.hasCellTransforms;
+  }
+
+  GpuAtlasQuadBatch? _stageDirectTerminalBatch(
+    Size logicalSize,
+    double devicePixelRatio,
+  ) {
+    final tracing = ShaderPerfTrace.isEnabled;
+    final spanStart = tracing
+        ? ShaderPerfTrace.beginSpan('TerminalSurface.stageDirectBatch')
+        : 0;
+    try {
+      return _stageDirectTerminalBatchImpl(logicalSize, devicePixelRatio);
+    } finally {
+      if (tracing) {
+        ShaderPerfTrace.endSpan('TerminalSurface.stageDirectBatch', spanStart);
+      }
+    }
+  }
+
+  GpuAtlasQuadBatch? _stageDirectTerminalBatchImpl(
+    Size logicalSize,
+    double devicePixelRatio,
+  ) {
+    final buf = _activeBuffer;
+    final atlas = _atlasController.atlas;
+    if (buf == null || atlas == null) return null;
+    final activePty =
+        widget.activePtySizeProvider?.call() ?? widget.activePtySize;
+    final cursor =
+        widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
+    if (_canReuseDirectBatchCache(
+      buf: buf,
+      atlas: atlas,
+      logicalSize: logicalSize,
+      devicePixelRatio: devicePixelRatio,
+      cursor: cursor,
+      activePty: activePty,
+    )) {
+      if (ShaderPerfTrace.isEnabled) {
+        ShaderPerfTrace.incrementCounter('TerminalSurface.staticHit');
+      }
+      return _cachedDirectBatch;
+    }
+
+    _syncCellTransformsAndRegions(buf);
+    final effectiveBgColor = _effectiveBackgroundColor;
+    final canReuseStatic = _canReuseStaticBatchCache(
+      buf: buf,
+      atlas: atlas,
+      logicalSize: logicalSize,
+      devicePixelRatio: devicePixelRatio,
+      cursor: cursor,
+      activePty: activePty,
+    );
+    final GpuAtlasQuadBatch staticBatch;
+    if (canReuseStatic) {
+      if (ShaderPerfTrace.isEnabled) {
+        ShaderPerfTrace.incrementCounter('TerminalSurface.staticHit');
+      }
+      staticBatch = _cachedStaticBatch!;
+    } else {
+      if (ShaderPerfTrace.isEnabled) {
+        ShaderPerfTrace.incrementCounter('TerminalSurface.staticMiss');
+      }
+      _hadActiveBuffer = true;
+      _lastPaintedBuffer = buf;
+      _lastPaintedActivePtySize = activePty;
+      final painter = _createAtlasPainter(
+        buf,
+        composingText: '',
+        cursor: cursor,
+        activePty: activePty,
+        effectiveBgColor: effectiveBgColor,
+      );
+      staticBatch = painter.stageForGpu(
+        logicalSize,
+        devicePixelRatio,
+        _gpuBatchBuilder,
+      );
+    }
+
+    if (_cellTransformAnimator.activeCount <= 0 && !buf.hasShaderRegions) {
+      _storeDirectBatchCache(
+        staticBatch: staticBatch,
+        batch: staticBatch,
+        regionMasks: null,
+        layouts: const <ComputedShaderRegionLayout>[],
+        buf: buf,
+        atlas: atlas,
+        logicalSize: logicalSize,
+        devicePixelRatio: devicePixelRatio,
+        cursor: cursor,
+        activePty: activePty,
+      );
+      return staticBatch;
+    }
+
+    return _stageDynamicDirectSlices(
+      staticBatch: staticBatch,
+      canReuseStatic: canReuseStatic,
+      effectiveBgColor: effectiveBgColor,
+      buf: buf,
+      atlas: atlas,
+      logicalSize: logicalSize,
+      devicePixelRatio: devicePixelRatio,
+      cursor: cursor,
+      activePty: activePty,
+    );
+  }
+
+  GpuAtlasQuadBatch _stageDynamicDirectSlices({
+    required GpuAtlasQuadBatch staticBatch,
+    required bool canReuseStatic,
+    required Color effectiveBgColor,
+    required Buffer buf,
+    required GlyphAtlas atlas,
+    required Size logicalSize,
+    required double devicePixelRatio,
+    required ({int col, int row})? cursor,
+    required (int, int)? activePty,
+  }) {
+    final defaultFg = widget.foregroundColor.toARGB32();
+    final defaultBg = effectiveBgColor.toARGB32();
+    final xformSlice = _cellTransformGpuStager.stageTransformedCells(
+      buffer: buf,
+      atlas: atlas,
+      entries: _cellTransformAnimator.sortedEntries,
+      devicePixelRatio: devicePixelRatio,
+      defaultForegroundArgb: defaultFg,
+      defaultBackgroundArgb: defaultBg,
+      faintOpacity: widget.faintOpacity,
+      palette: widget.palette,
+    );
+    final canReuseMasks =
+        canReuseStatic &&
+        _cachedRegionMasks != null &&
+        !_anyRegionOverlapsActiveTransforms(buf);
+    final regionMasks = canReuseMasks
+        ? _cachedRegionMasks!
+        : _regionGpuStager.stageRegionMasks(
+            buffer: buf,
+            atlas: atlas,
+            regions: buf.shaderRegions,
+            paneLogicalSize: logicalSize,
+            devicePixelRatio: devicePixelRatio,
+            defaultForegroundArgb: defaultFg,
+            defaultBackgroundArgb: defaultBg,
+            faintOpacity: widget.faintOpacity,
+            palette: widget.palette,
+            activeTransforms: _cellTransformAnimator.activePoses,
+            isShaderQuarantined: _cliShaderRegistry.isQuarantined,
+          );
+    final result = staticBatch.withDynamicSlices(
+      transformedInstanceData: xformSlice.data,
+      transformedInstanceCount: xformSlice.count,
+      transformedUnderGlyphCount: xformSlice.underGlyphCount,
+      transformedGeneration: xformSlice.generation,
+      regionMaskInstanceData: regionMasks.data,
+      regionMaskInstanceCount: regionMasks.count,
+      regionMaskGeneration: regionMasks.generation,
+      regionMaskSlices: regionMasks.slices,
+      hasCanvasOnlyContent:
+          staticBatch.hasCanvasOnlyContent ||
+          xformSlice.hasCanvasOnlyFallback ||
+          regionMasks.hasCanvasOnlyFallback,
+    );
+    _storeDirectBatchCache(
+      staticBatch: staticBatch,
+      batch: result,
+      regionMasks: regionMasks,
+      layouts: regionMasks.layouts,
+      buf: buf,
+      atlas: atlas,
+      logicalSize: logicalSize,
+      devicePixelRatio: devicePixelRatio,
+      cursor: cursor,
+      activePty: activePty,
+    );
+    return result;
+  }
+
+  List<ComputedShaderRegionLayout> _provideRegionLayouts(
+    Size logicalSize,
+    double devicePixelRatio,
+  ) {
+    final buf = _activeBuffer;
+    final atlas = _atlasController.atlas;
+    if (buf == null || atlas == null || !buf.hasShaderRegions) {
+      return const <ComputedShaderRegionLayout>[];
+    }
+    final activePty =
+        widget.activePtySizeProvider?.call() ?? widget.activePtySize;
+    final cursor =
+        widget.cursorPositionProvider?.call() ?? widget.cursorPosition;
+    final cachedLayouts = _cachedRegionLayouts;
+    if (cachedLayouts != null &&
+        _canReuseStaticBatchCache(
+          buf: buf,
+          atlas: atlas,
+          logicalSize: logicalSize,
+          devicePixelRatio: devicePixelRatio,
+          cursor: cursor,
+          activePty: activePty,
+        )) {
+      return cachedLayouts;
+    }
+    final active = <ShaderRegion>[
+      for (final r in buf.shaderRegions)
+        if (!_cliShaderRegistry.isQuarantined(r.shaderId)) r,
+    ]..sort((a, b) => a.zIndex.compareTo(b.zIndex));
+    final limit = math.min(active.length, ShaderRegion.maxRegionsPerPane);
+    final layouts = <ComputedShaderRegionLayout>[];
+    for (var i = 0; i < limit; i++) {
+      if (layouts.length >= ShaderRegion.maxRegionsPerPane) break;
+      final regionLayouts = ComputedShaderRegionLayout.computeAll(
+        region: active[i],
+        gridCols: buf.width,
+        gridRows: buf.height,
+        cellWidth: atlas.cellWidth,
+        cellHeight: atlas.cellHeight,
+        paneLogicalSize: logicalSize,
+        devicePixelRatio: devicePixelRatio,
+        activeTransforms: _cellTransformAnimator.activePoses,
+      );
+      for (final layout in regionLayouts) {
+        if (layouts.length >= ShaderRegion.maxRegionsPerPane) break;
+        layouts.add(layout);
+      }
+    }
+    return ComputedShaderRegionLayout.applyPanePixelBudget(layouts);
+  }
+
+  Future<List<RenderedShaderRegionImage>> _renderRegionsFallbackAsync(
+    TerminalShaderBackend backend,
+    List<ShaderRegionPassInvocation> passes,
+    List<ComputedShaderRegionLayout> layouts,
+    double devicePixelRatio,
+    ui.Image? wallpaperImage,
+  ) {
+    final buf = _activeBuffer;
+    final atlas = _atlasController.atlas;
+    if (buf == null || atlas == null) {
+      return Future<List<RenderedShaderRegionImage>>.value(
+        const <RenderedShaderRegionImage>[],
+      );
+    }
+    return _regionCanvasStager.renderRegionsFallbackAsync(
+      backend: backend,
+      buffer: buf,
+      atlas: atlas,
+      layouts: layouts,
+      passes: passes,
+      devicePixelRatio: devicePixelRatio,
+      defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+      defaultBackgroundArgb: _effectiveBackgroundColor.toARGB32(),
+      faintOpacity: widget.faintOpacity,
+      palette: widget.palette,
+      fontFamily: _atlasController.fontFamily,
+      fontFamilyFallback: _atlasController.fontFamilyFallback,
+      fallbackPainters: _atlasController.fallbackPainters,
+      activeTransforms: _cellTransformAnimator.activePoses,
+      wallpaperImage: wallpaperImage,
+      watchdog: _gpuWatchdog,
+    );
+  }
+
   Widget _buildCanvasContainer(Size layoutSize) {
     final buf = _activeBuffer;
     final activePty =
@@ -2053,54 +3143,156 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _hadActiveBuffer = buf != null;
     _lastPaintedBuffer = buf;
     _lastPaintedActivePtySize = activePty;
-    return Container(
+    _syncComposingPainter();
+    final effectiveOpacity = _effectiveBackgroundOpacity;
+    final effectiveBgColor = _effectiveBackgroundColor;
+    final activeComposingText = widget.enableIme
+        ? _imeClient.composingText
+        : '';
+    final inlineComposingText = _hasShaderBinding ? '' : activeComposingText;
+    final canvasBox = Container(
       width: layoutSize.width,
       height: layoutSize.height,
-      color: widget.backgroundColor,
+      color: buf == null || effectiveOpacity >= 1.0
+          ? effectiveBgColor
+          : const ui.Color(0x00000000),
       child: buf == null
           ? const SizedBox()
           : CustomPaint(
               size: layoutSize,
-              painter: TuiAtlasPainter(
-                repaint: _paintNotifier,
-                buffer: buf,
-                atlas: _atlasController.atlas!,
-                fontFamily: _atlasController.fontFamily,
-                fontFamilyFallback: _atlasController.fontFamilyFallback,
-                fallbackPainters: _atlasController.fallbackPainters,
-                onMissingGlyphs: null,
-                onMissingStyledGlyphs:
-                    _atlasController.requestMissingStyledGlyphs,
-                onBeforePaint: _flushDirtyBufferResources,
-                enableBleed: widget.enableBleed,
-                enableLigatures: _enableLigatures,
-                ligaturePainters: _atlasController.ligaturePainters,
-                selectionController: _builtinSelectionEnabled
-                    ? _selectionController
-                    : null,
-                topVirtualRow: _effectiveTopVirtualRow,
-                topVirtualRowProvider: _readEffectiveTopVirtualRow,
-                hoveredLink: _isLinkHovered ? _hoveredLink : null,
-                hoveredLinkRowSpans: _isLinkHovered
-                    ? _hoveredLinkDetail?.rowSpans
-                    : null,
-                hoveredLinkStyler: widget.hoveredLinkStyler,
-                kittyImages: _kittyCache.images,
-                kittyImagesById: _kittyCache.imagesById,
-                defaultForegroundArgb: widget.foregroundColor.toARGB32(),
-                defaultBackgroundArgb: widget.backgroundColor.toARGB32(),
-                faintOpacity: widget.faintOpacity,
-                palette: widget.palette,
-                activePtyCols: activePty?.$1,
-                activePtyRows: activePty?.$2,
-                outOfBoundsDimColor: widget.outOfBoundsDimColor,
-                composingText: widget.enableIme ? _imeClient.composingText : '',
-                cursorCol: cursor?.col ?? 0,
-                cursorRow: cursor?.row ?? 0,
+              painter: _createAtlasPainter(
+                buf,
+                composingText: inlineComposingText,
+                cursor: cursor,
+                activePty: activePty,
+                effectiveBgColor: effectiveBgColor,
               ),
             ),
     );
+    if (!_hasShaderBinding) {
+      return canvasBox;
+    }
+    final atlas = _atlasController.atlas!;
+    final Widget shaderHost = TerminalShaderHost(
+      controller: widget.shaderController,
+      config: widget.shaderConfig ?? TerminalShaderConfig.empty,
+      paneKey: widget.key?.toString(),
+      cursorRectLogicalProvider: _readCursorRectLogical,
+      cursorColorArgb: widget.palette.cursorColor.argb,
+      cursorStyle: widget.cursorStyle,
+      cursorVisible:
+          widget.cursorVisibleProvider?.call() ?? widget.cursorVisible,
+      cursorVisibleProvider: widget.cursorVisibleProvider,
+      isFocused: _focusNode.hasFocus,
+      foregroundArgb: widget.foregroundColor.toARGB32(),
+      backgroundArgb: widget.backgroundColor.toARGB32(),
+      palette256Argb: _resolvePalette256Argb(),
+      cellSizeLogical: Size(atlas.cellWidth, atlas.cellHeight),
+      activityListenable: _paintNotifier,
+      activitySignal: _directPaintVersion,
+      directTerminalBatchProvider: buf == null
+          ? null
+          : _stageDirectTerminalBatch,
+      atlasImage: atlas.image,
+      atlasDevicePixelRatio: atlas.devicePixelRatio,
+      directLogicalSize: layoutSize,
+      cliShaderRegistry: _cliShaderRegistry,
+      watchdog: _gpuWatchdog,
+      regionLayoutsProvider: buf == null ? null : _provideRegionLayouts,
+      regionFallbackRenderer: buf == null ? null : _renderRegionsFallbackAsync,
+      mouseLogicalListenable: _shaderMouseNotifier,
+      maxAmbientFps: widget.maxAmbientFps,
+      child: canvasBox,
+    );
+    if (activeComposingText.isEmpty) {
+      return shaderHost;
+    }
+    return Stack(
+      fit: StackFit.passthrough,
+      children: <Widget>[
+        shaderHost,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: CustomPaint(
+              size: layoutSize,
+              painter: _TerminalComposingOverlayPainter(
+                cellWidth: atlas.cellWidth,
+                cellHeight: atlas.cellHeight,
+                cursorCol: cursor?.col ?? 0,
+                cursorRow: cursor?.row ?? 0,
+                composingText: activeComposingText,
+                composingPainter: _composingPainter,
+                fontFamily: _atlasController.fontFamily,
+                fontFamilyFallback: _atlasController.fontFamilyFallback,
+                fontSize: atlas.fontSize,
+                defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+                defaultBackgroundArgb: effectiveBgColor.toARGB32(),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
+}
+
+final class _TerminalComposingOverlayPainter extends CustomPainter {
+  final double cellWidth;
+  final double cellHeight;
+  final int cursorCol;
+  final int cursorRow;
+  final String composingText;
+  final TextPainter? composingPainter;
+  final String fontFamily;
+  final List<String>? fontFamilyFallback;
+  final double fontSize;
+  final int defaultForegroundArgb;
+  final int defaultBackgroundArgb;
+
+  const _TerminalComposingOverlayPainter({
+    required this.cellWidth,
+    required this.cellHeight,
+    required this.cursorCol,
+    required this.cursorRow,
+    required this.composingText,
+    required this.composingPainter,
+    required this.fontFamily,
+    required this.fontFamilyFallback,
+    required this.fontSize,
+    required this.defaultForegroundArgb,
+    required this.defaultBackgroundArgb,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (composingText.isEmpty || size.isEmpty) return;
+    TuiAtlasPainter.paintComposingOverlay(
+      canvas: canvas,
+      size: size,
+      cellWidth: cellWidth,
+      cellHeight: cellHeight,
+      cursorCol: cursorCol,
+      cursorRow: cursorRow,
+      composingText: composingText,
+      composingPainter: composingPainter,
+      fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
+      fontSize: fontSize,
+      defaultForegroundArgb: defaultForegroundArgb,
+      defaultBackgroundArgb: defaultBackgroundArgb,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _TerminalComposingOverlayPainter oldDelegate) =>
+      oldDelegate.composingText != composingText ||
+      oldDelegate.cursorCol != cursorCol ||
+      oldDelegate.cursorRow != cursorRow ||
+      oldDelegate.composingPainter != composingPainter ||
+      oldDelegate.cellWidth != cellWidth ||
+      oldDelegate.cellHeight != cellHeight ||
+      oldDelegate.defaultForegroundArgb != defaultForegroundArgb ||
+      oldDelegate.defaultBackgroundArgb != defaultBackgroundArgb;
 }
 
 final class _KittyGpuImageCache {
@@ -2128,18 +3320,28 @@ final class _KittyGpuImageCache {
     if (!buffer.hasKittyImages) return;
     final width = buffer.width;
     final total = width * buffer.height;
-    final chars = buffer.characters;
+    final codes = buffer.glyphCodes;
+    final glyphCells = buffer.glyphCellList;
     final attrs = buffer.attributes;
     KittyImageData? lastKittyData;
     for (var i = 0; i < total; i++) {
-      final mods = attrs[i * 3 + 2];
-      final hasKittyMod = Modifier.has(mods, Modifier.kittyPlaceholder);
-      final char = chars[i];
-      if (!hasKittyMod) {
-        if (char.length < 2 || !char.startsWith(kittyPlaceholderChar)) {
-          continue;
-        }
-      } else if (char.isEmpty || char == ' ') {
+      final code = codes[i];
+      if (code == GlyphCellList.wideContinuationCode ||
+          code == GlyphCellList.spaceCode) {
+        continue;
+      }
+      final hasKittyMod = Modifier.has(
+        attrs[i * 3 + 2],
+        Modifier.kittyPlaceholder,
+      );
+      if (!hasKittyMod &&
+          code != kittyPlaceholderCodePoint &&
+          (code & GlyphCellList.clusterFlag) == 0) {
+        continue;
+      }
+      final char = glyphCells.decodeCode(code);
+      if (!hasKittyMod &&
+          (char.length < 2 || !char.startsWith(kittyPlaceholderChar))) {
         continue;
       }
       lastKittyData = _resolveAndEnsure(
@@ -2284,5 +3486,51 @@ final class _KittyGpuImageCache {
 }
 
 final class _SurfaceRepaintNotifier extends ChangeNotifier {
-  void notify() => notifyListeners();
+  int version = 0;
+  int transformTickVersion = 0;
+
+  void notify() {
+    version++;
+    notifyListeners();
+  }
+
+  void notifyTransformTick() {
+    transformTickVersion++;
+    notifyListeners();
+  }
+}
+
+final class _ShaderMouseNotifier extends ChangeNotifier
+    implements ValueListenable<Float32List> {
+  final Float32List _value = Float32List.fromList(<double>[
+    double.nan,
+    double.nan,
+    0.0,
+    0.0,
+  ]);
+
+  @override
+  Float32List get value => _value;
+
+  void update(
+    double x,
+    double y,
+    double clickZ,
+    double clickW, {
+    required bool notify,
+  }) {
+    if (_value[0] == x &&
+        _value[1] == y &&
+        _value[2] == clickZ &&
+        _value[3] == clickW) {
+      return;
+    }
+    _value[0] = x;
+    _value[1] = y;
+    _value[2] = clickZ;
+    _value[3] = clickW;
+    if (notify) {
+      notifyListeners();
+    }
+  }
 }

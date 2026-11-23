@@ -1440,30 +1440,27 @@ void main() {
       },
     );
 
-    test(
-      'FlutterTerminalBackend DECSET mouse modes 9/1000/1002/1003 and RIS resets',
-      () {
-        final terminal = FlutterTerminal();
-        addTearDown(terminal.dispose);
-        final b = terminal.backend;
+    test('FlutterTerminalBackend DECSET mouse modes 9/1000/1002/1003 and RIS resets', () {
+      final terminal = FlutterTerminal();
+      addTearDown(terminal.dispose);
+      final b = terminal.backend;
+      expect(terminal.mouseTracking, isFalse);
+      for (final m in const ['9', '1000', '1002', '1003']) {
+        b.write('\x1b[?${m}h');
+        expect(terminal.mouseTracking, isTrue);
+        b.write('\x1b[?${m}l');
         expect(terminal.mouseTracking, isFalse);
-        for (final m in const ['9', '1000', '1002', '1003']) {
-          b.write('\x1b[?${m}h');
-          expect(terminal.mouseTracking, isTrue);
-          b.write('\x1b[?${m}l');
-          expect(terminal.mouseTracking, isFalse);
-        }
-        b.write('\x1b[?1000;1002h');
+      }
+      b.write('\x1b[?1000;1002h');
+      expect(terminal.mouseTracking, isTrue);
+      b.write('\x1b[?1000l');
+      expect(terminal.mouseTracking, isTrue);
+      for (final reset in const ['\x1bc', '\x1b[!p']) {
+        b.write('\x1b[?1003h');
         expect(terminal.mouseTracking, isTrue);
-        b.write('\x1b[?1000l');
-        expect(terminal.mouseTracking, isTrue);
-        for (final reset in const ['\x1bc', '\x1b[!p']) {
-          b.write('\x1b[?1003h');
-          expect(terminal.mouseTracking, isTrue);
-          b.write(reset);
-          expect(terminal.mouseTracking, isFalse);
-        }
-      },
-    );
+        b.write(reset);
+        expect(terminal.mouseTracking, isFalse);
+      }
+    });
   });
 }
