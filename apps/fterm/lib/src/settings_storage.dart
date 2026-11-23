@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
+import 'package:termui_flutter/termui_flutter.dart'
+    show ShaderAnimationMode, ShaderBackendKind;
 
 import 'settings_storage_stub.dart'
     if (dart.library.js_interop) 'settings_storage_web.dart'
@@ -54,6 +56,92 @@ enum UpdateCheckMode {
 
   /// Check automatically once every 24 hours and on user request.
   daily,
+}
+
+/// Security trust policy governing CLI `ESC _ S` artistic shaders and
+/// per-cell transforms on a local or remote `fterm` pane.
+enum CliShaderPolicy {
+  /// Block all CLI shaders, scoped regions, and per-cell transforms.
+  disabled('disabled'),
+
+  /// Allow built-in host presets and pane-clipped cell transforms; reject custom GLSL.
+  presetsAndTransforms('presets_and_transforms'),
+
+  /// Allow built-in presets and pane-clipped transforms; prompt once per custom GLSL SHA-256.
+  promptCustomGlsl('prompt_custom_glsl'),
+
+  /// Auto-trust custom GLSL shaders without prompting (intended for local dev panes).
+  allowLocalCustomGlsl('allow_local_custom_glsl');
+
+  /// Canonical JSON and wire identifier.
+  final String wireName;
+
+  const CliShaderPolicy(this.wireName);
+
+  /// Parses [raw] from its [wireName] (or enum [name]), returning [fallback] if unrecognized.
+  static CliShaderPolicy fromWireName(
+    Object? raw, {
+    required CliShaderPolicy fallback,
+  }) => switch (raw) {
+    'disabled' => disabled,
+    'presets_and_transforms' || 'presetsAndTransforms' => presetsAndTransforms,
+    'prompt_custom_glsl' || 'promptCustomGlsl' => promptCustomGlsl,
+    'allow_local_custom_glsl' || 'allowLocalCustomGlsl' => allowLocalCustomGlsl,
+    _ => fallback,
+  };
+}
+
+/// Controls how CLI full-pane `a=set` shaders combine with user Settings shaders.
+enum CliFullPaneShaderMode {
+  /// Default: CLI full-pane passes run before user shaders (CRT/bloom builds on top).
+  cliBeforeUser('cli_before_user'),
+
+  /// CLI full-pane chain replaces the user full-pane chain while active.
+  cliReplacesUser('cli_replaces_user'),
+
+  /// Prompt the user when both CLI `a=set` and user Settings shaders are active.
+  askOnConflict('ask_on_conflict');
+
+  /// Canonical JSON and wire identifier.
+  final String wireName;
+
+  const CliFullPaneShaderMode(this.wireName);
+
+  /// Parses [raw] from its [wireName] (or enum [name]), returning [fallback] if unrecognized.
+  static CliFullPaneShaderMode fromWireName(
+    Object? raw, {
+    CliFullPaneShaderMode fallback = CliFullPaneShaderMode.cliBeforeUser,
+  }) => switch (raw) {
+    'cli_before_user' || 'cliBeforeUser' => cliBeforeUser,
+    'cli_replaces_user' || 'cliReplacesUser' => cliReplacesUser,
+    'ask_on_conflict' || 'askOnConflict' => askOnConflict,
+    _ => fallback,
+  };
+}
+
+/// Preferred GPU adapter policy read at native Windows startup before the
+/// Flutter Impeller engine selects a DXGI adapter.
+enum GpuDriverPreference {
+  /// Use the operating system / driver default adapter (`NoPreference`).
+  auto('auto'),
+
+  /// Prefer a discrete / high-performance GPU (`HighPerformancePreference`).
+  highPerformance('highPerformance'),
+
+  /// Prefer an integrated / power-saving GPU (`LowPowerPreference`).
+  powerSaving('powerSaving');
+
+  /// Canonical JSON wire identifier (matched by `apps/fterm/windows/runner/main.cpp`).
+  final String wireName;
+
+  const GpuDriverPreference(this.wireName);
+
+  /// Parses [raw] from its [wireName] (or shorthand), falling back to [auto].
+  static GpuDriverPreference fromWireName(Object? raw) => switch (raw) {
+    'highPerformance' || 'high_performance' || 'high' => highPerformance,
+    'powerSaving' || 'power_saving' || 'low' => powerSaving,
+    _ => auto,
+  };
 }
 
 /// App-level `fterm` audio, font-size, shell, tab-bar, and auto-update
@@ -114,6 +202,9 @@ final class FtermPreferences {
   /// Optional release version string skipped by the user for automatic prompts.
   final String? skippedUpdateVersion;
 
+  /// Latest application version whose What's New modal the user has viewed.
+  final String? lastSeenWhatsNewVersion;
+
   /// HTTP `ETag` from the latest successful `git/matching-refs/tags/fterm-v`
   /// query.
   final String? lastReleaseTagEtag;
@@ -121,6 +212,47 @@ final class FtermPreferences {
   /// Cached `fterm-v*` tag names paired with [lastReleaseTagEtag] so `304`
   /// responses remain comparable across restarts and portable copies.
   final List<String> cachedReleaseTags;
+
+  /// Optional path or storage key for the user's background wallpaper image.
+  final String? backgroundImagePath;
+
+  /// Ordered list of background fragment shader paths or preset identifiers.
+  final List<String> backgroundShaderPaths;
+
+  /// Ordered list of foreground post-process shader paths or preset identifiers.
+  final List<String> foregroundShaderPaths;
+
+  /// Policy controlling when time-varying fragment shaders advance `iTime`.
+  final ShaderAnimationMode shaderAnimationMode;
+
+  /// Optional runtime override for the active shader backend (`null` uses
+  /// platform auto-selection).
+  final ShaderBackendKind? shaderBackendOverride;
+
+  /// Optional serialized JSON payload storing custom shader profile parameters.
+  final String? customShaderProfileJson;
+
+  /// Whether the in-app FPS and frame-timing performance HUD is visible.
+  final bool showPerfHud;
+
+  /// Preferred GPU adapter policy read by native desktop launchers on startup.
+  final GpuDriverPreference gpuDriverPreference;
+
+  /// Optional maximum ambient shader tick rate (`null` = uncapped, or positive
+  /// FPS such as `120`, `60`, or `30`).
+  final int? maxShaderFps;
+
+  /// Trust policy for CLI `ESC _ S` shaders and transforms on local panes.
+  final CliShaderPolicy localCliShaderPolicy;
+
+  /// Trust policy for CLI `ESC _ S` shaders and transforms on remote `termui_cast` panes.
+  final CliShaderPolicy remoteCliShaderPolicy;
+
+  /// Composition mode when a CLI `a=set` full-pane shader coexists with user shaders.
+  final CliFullPaneShaderMode cliFullPaneShaderMode;
+
+  /// Persisted lowercase SHA-256 hex digests of user-trusted custom CLI GLSL sources.
+  final Set<String> trustedCliShaderHashes;
 
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
@@ -136,8 +268,22 @@ final class FtermPreferences {
     this.includePrereleases = false,
     this.lastUpdateCheckUtc,
     this.skippedUpdateVersion,
+    this.lastSeenWhatsNewVersion,
     this.lastReleaseTagEtag,
     this.cachedReleaseTags = const [],
+    this.backgroundImagePath,
+    this.backgroundShaderPaths = const [],
+    this.foregroundShaderPaths = const [],
+    this.shaderAnimationMode = ShaderAnimationMode.focused,
+    this.shaderBackendOverride,
+    this.customShaderProfileJson,
+    this.showPerfHud = false,
+    this.gpuDriverPreference = GpuDriverPreference.auto,
+    this.maxShaderFps,
+    this.localCliShaderPolicy = CliShaderPolicy.promptCustomGlsl,
+    this.remoteCliShaderPolicy = CliShaderPolicy.disabled,
+    this.cliFullPaneShaderMode = CliFullPaneShaderMode.cliBeforeUser,
+    this.trustedCliShaderHashes = const <String>{},
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -163,9 +309,28 @@ final class FtermPreferences {
     bool clearLastUpdateCheckUtc = false,
     String? skippedUpdateVersion,
     bool clearSkippedUpdateVersion = false,
+    String? lastSeenWhatsNewVersion,
+    bool clearLastSeenWhatsNewVersion = false,
     String? lastReleaseTagEtag,
     bool clearLastReleaseTagEtag = false,
     List<String>? cachedReleaseTags,
+    String? backgroundImagePath,
+    bool clearBackgroundImagePath = false,
+    List<String>? backgroundShaderPaths,
+    List<String>? foregroundShaderPaths,
+    ShaderAnimationMode? shaderAnimationMode,
+    ShaderBackendKind? shaderBackendOverride,
+    bool clearShaderBackendOverride = false,
+    String? customShaderProfileJson,
+    bool clearCustomShaderProfileJson = false,
+    bool? showPerfHud,
+    GpuDriverPreference? gpuDriverPreference,
+    int? maxShaderFps,
+    bool clearMaxShaderFps = false,
+    CliShaderPolicy? localCliShaderPolicy,
+    CliShaderPolicy? remoteCliShaderPolicy,
+    CliFullPaneShaderMode? cliFullPaneShaderMode,
+    Set<String>? trustedCliShaderHashes,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -197,6 +362,11 @@ final class FtermPreferences {
       next: skippedUpdateVersion ?? this.skippedUpdateVersion,
       normalize: _normalizeOptionalText,
     ),
+    lastSeenWhatsNewVersion: _resolveOptionalField<String>(
+      clear: clearLastSeenWhatsNewVersion,
+      next: lastSeenWhatsNewVersion ?? this.lastSeenWhatsNewVersion,
+      normalize: _normalizeOptionalText,
+    ),
     lastReleaseTagEtag: _resolveOptionalField<String>(
       clear: clearLastReleaseTagEtag,
       next: lastReleaseTagEtag ?? this.lastReleaseTagEtag,
@@ -204,6 +374,39 @@ final class FtermPreferences {
     ),
     cachedReleaseTags: _normalizeTrimmedStrings(
       cachedReleaseTags ?? this.cachedReleaseTags,
+    ),
+    backgroundImagePath: _resolveOptionalField<String>(
+      clear: clearBackgroundImagePath,
+      next: backgroundImagePath ?? this.backgroundImagePath,
+      normalize: _normalizeOptionalText,
+    ),
+    backgroundShaderPaths: _normalizeTrimmedStrings(
+      backgroundShaderPaths ?? this.backgroundShaderPaths,
+    ),
+    foregroundShaderPaths: _normalizeTrimmedStrings(
+      foregroundShaderPaths ?? this.foregroundShaderPaths,
+    ),
+    shaderAnimationMode: shaderAnimationMode ?? this.shaderAnimationMode,
+    shaderBackendOverride: clearShaderBackendOverride
+        ? null
+        : (shaderBackendOverride ?? this.shaderBackendOverride),
+    customShaderProfileJson: _resolveOptionalField<String>(
+      clear: clearCustomShaderProfileJson,
+      next: customShaderProfileJson ?? this.customShaderProfileJson,
+      normalize: _normalizeOptionalText,
+    ),
+    showPerfHud: showPerfHud ?? this.showPerfHud,
+    gpuDriverPreference: gpuDriverPreference ?? this.gpuDriverPreference,
+    maxShaderFps: _resolveOptionalField<int>(
+      clear: clearMaxShaderFps,
+      next: maxShaderFps ?? this.maxShaderFps,
+      normalize: _normalizeMaxShaderFps,
+    ),
+    localCliShaderPolicy: localCliShaderPolicy ?? this.localCliShaderPolicy,
+    remoteCliShaderPolicy: remoteCliShaderPolicy ?? this.remoteCliShaderPolicy,
+    cliFullPaneShaderMode: cliFullPaneShaderMode ?? this.cliFullPaneShaderMode,
+    trustedCliShaderHashes: _normalizeHashes(
+      trustedCliShaderHashes ?? this.trustedCliShaderHashes,
     ),
   );
 
@@ -241,11 +444,50 @@ final class FtermPreferences {
     includePrereleases: decoded['includePrereleases'] == true,
     lastUpdateCheckUtc: _parseUtcDateTime(decoded['lastUpdateCheckUtc']),
     skippedUpdateVersion: _parseOptionalText(decoded['skippedUpdateVersion']),
+    lastSeenWhatsNewVersion: _parseOptionalText(
+      decoded['lastSeenWhatsNewVersion'],
+    ),
     lastReleaseTagEtag: _parseOptionalText(decoded['lastReleaseTagEtag']),
     cachedReleaseTags: _parseStringList(
       decoded['cachedReleaseTags'],
       trim: true,
     ),
+    backgroundImagePath: _parseOptionalText(decoded['backgroundImagePath']),
+    backgroundShaderPaths: _parseStringList(
+      decoded['backgroundShaderPaths'],
+      trim: true,
+    ),
+    foregroundShaderPaths: _parseStringList(
+      decoded['foregroundShaderPaths'],
+      trim: true,
+    ),
+    shaderAnimationMode: ShaderAnimationMode.fromWireName(
+      decoded['shaderAnimationMode'],
+    ),
+    shaderBackendOverride: ShaderBackendKind.tryFromWireName(
+      decoded['shaderBackendOverride'],
+    ),
+    customShaderProfileJson: _parseOptionalText(
+      decoded['customShaderProfileJson'],
+    ),
+    showPerfHud: decoded['showPerfHud'] == true,
+    gpuDriverPreference: GpuDriverPreference.fromWireName(
+      decoded['gpuDriverPreference'],
+    ),
+    maxShaderFps: _parseMaxShaderFps(decoded['maxShaderFps']),
+    localCliShaderPolicy: CliShaderPolicy.fromWireName(
+      decoded['localCliShaderPolicy'],
+      fallback: CliShaderPolicy.promptCustomGlsl,
+    ),
+    remoteCliShaderPolicy: CliShaderPolicy.fromWireName(
+      decoded['remoteCliShaderPolicy'],
+      fallback: CliShaderPolicy.disabled,
+    ),
+    cliFullPaneShaderMode: CliFullPaneShaderMode.fromWireName(
+      decoded['cliFullPaneShaderMode'],
+      fallback: CliFullPaneShaderMode.cliBeforeUser,
+    ),
+    trustedCliShaderHashes: _parseHashSet(decoded['trustedCliShaderHashes']),
   );
 
   static double _parseAudioVolume(Object? raw) => switch (raw) {
@@ -263,6 +505,16 @@ final class FtermPreferences {
       value == null || value.isNaN
       ? null
       : value.clamp(minFontSize, maxFontSize).toDouble();
+
+  static int? _parseMaxShaderFps(Object? raw) => switch (raw) {
+    final num value when value.isFinite => _normalizeMaxShaderFps(
+      value.round(),
+    ),
+    _ => null,
+  };
+
+  static int? _normalizeMaxShaderFps(int? value) =>
+      value == null || value <= 0 ? null : value.clamp(15, 240);
 
   static String? _parseOptionalText(Object? raw) => switch (raw) {
     final String value => _normalizeOptionalText(value),
@@ -315,6 +567,25 @@ final class FtermPreferences {
     return filtered.isEmpty ? const [] : List<String>.unmodifiable(filtered);
   }
 
+  static final RegExp _sha256Pattern = RegExp(r'^[a-fA-F0-9]{64}$');
+
+  static Set<String> _parseHashSet(Object? raw) => switch (raw) {
+    final List<Object?> items => _normalizeHashes(_extractStrings(items)),
+    _ => const <String>{},
+  };
+
+  static Set<String> _normalizeHashes(Iterable<String> hashes) {
+    final normalized = <String>{
+      for (final item in hashes)
+        if (item.trim().toLowerCase() case final clean
+            when _sha256Pattern.hasMatch(clean))
+          clean,
+    };
+    return normalized.isEmpty
+        ? const <String>{}
+        : Set<String>.unmodifiable(normalized);
+  }
+
   static bool _parseBool(Object? raw, {required bool fallback}) =>
       switch (raw) {
         final bool value => value,
@@ -338,8 +609,27 @@ final class FtermPreferences {
     if (_normalizedCheckUtc case final checkUtc?)
       'lastUpdateCheckUtc': checkUtc.toIso8601String(),
     'skippedUpdateVersion': ?skippedUpdateVersion,
+    'lastSeenWhatsNewVersion': ?lastSeenWhatsNewVersion,
     'lastReleaseTagEtag': ?lastReleaseTagEtag,
     if (cachedReleaseTags.isNotEmpty) 'cachedReleaseTags': cachedReleaseTags,
+    'backgroundImagePath': ?backgroundImagePath,
+    if (backgroundShaderPaths.isNotEmpty)
+      'backgroundShaderPaths': backgroundShaderPaths,
+    if (foregroundShaderPaths.isNotEmpty)
+      'foregroundShaderPaths': foregroundShaderPaths,
+    'shaderAnimationMode': shaderAnimationMode.wireName,
+    if (shaderBackendOverride case final backendOverride?)
+      'shaderBackendOverride': backendOverride.wireName,
+    'customShaderProfileJson': ?customShaderProfileJson,
+    if (showPerfHud) 'showPerfHud': true,
+    if (gpuDriverPreference != GpuDriverPreference.auto)
+      'gpuDriverPreference': gpuDriverPreference.wireName,
+    'maxShaderFps': ?maxShaderFps,
+    'localCliShaderPolicy': localCliShaderPolicy.wireName,
+    'remoteCliShaderPolicy': remoteCliShaderPolicy.wireName,
+    'cliFullPaneShaderMode': cliFullPaneShaderMode.wireName,
+    if (trustedCliShaderHashes.isNotEmpty)
+      'trustedCliShaderHashes': [...trustedCliShaderHashes]..sort(),
   });
 
   @override
@@ -358,11 +648,25 @@ final class FtermPreferences {
           other.includePrereleases == includePrereleases &&
           other._normalizedCheckUtc == _normalizedCheckUtc &&
           other.skippedUpdateVersion == skippedUpdateVersion &&
+          other.lastSeenWhatsNewVersion == lastSeenWhatsNewVersion &&
           other.lastReleaseTagEtag == lastReleaseTagEtag &&
-          listEquals(other.cachedReleaseTags, cachedReleaseTags);
+          listEquals(other.cachedReleaseTags, cachedReleaseTags) &&
+          other.backgroundImagePath == backgroundImagePath &&
+          listEquals(other.backgroundShaderPaths, backgroundShaderPaths) &&
+          listEquals(other.foregroundShaderPaths, foregroundShaderPaths) &&
+          other.shaderAnimationMode == shaderAnimationMode &&
+          other.shaderBackendOverride == shaderBackendOverride &&
+          other.customShaderProfileJson == customShaderProfileJson &&
+          other.showPerfHud == showPerfHud &&
+          other.gpuDriverPreference == gpuDriverPreference &&
+          other.maxShaderFps == maxShaderFps &&
+          other.localCliShaderPolicy == localCliShaderPolicy &&
+          other.remoteCliShaderPolicy == remoteCliShaderPolicy &&
+          other.cliFullPaneShaderMode == cliFullPaneShaderMode &&
+          setEquals(other.trustedCliShaderHashes, trustedCliShaderHashes);
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll(<Object?>[
     audioMuted,
     audioVolume,
     autoHideSingleTab,
@@ -375,9 +679,23 @@ final class FtermPreferences {
     includePrereleases,
     _normalizedCheckUtc,
     skippedUpdateVersion,
+    lastSeenWhatsNewVersion,
     lastReleaseTagEtag,
     Object.hashAll(cachedReleaseTags),
-  );
+    backgroundImagePath,
+    Object.hashAll(backgroundShaderPaths),
+    Object.hashAll(foregroundShaderPaths),
+    shaderAnimationMode,
+    shaderBackendOverride,
+    customShaderProfileJson,
+    showPerfHud,
+    gpuDriverPreference,
+    maxShaderFps,
+    localCliShaderPolicy,
+    remoteCliShaderPolicy,
+    cliFullPaneShaderMode,
+    Object.hashAllUnordered(trustedCliShaderHashes),
+  ]);
 }
 
 /// Relay connection credentials persisted on `0600` desktop storage when the

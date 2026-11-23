@@ -59,97 +59,94 @@ void main() {
 
 void _defineCastLaunchConfigTests() {
   group('CastLaunchConfig boundary parsing', () {
-    test(
-      'parses fragment token and environment settings, ignores ?server=/#server= and query tokens, and rejects non-ws schemes',
-      () {
-        final fromFragment = CastLaunchConfig.fromEnvironmentAndUri(
-          baseUri: Uri.parse(
-            'http://localhost:8080/#server=wss%3A%2F%2Fcast.example.com%2Fv1%2Fclient&token=frag-tok',
-          ),
-        );
-        expect(
-          fromFragment.serverUri.toString(),
-          equals('ws://localhost:8080/v1/client'),
-        );
-        expect(fromFragment.token, equals('frag-tok'));
-        expect(fromFragment.promptForConnection, isFalse);
+    test('parses fragment token and environment settings, ignores ?server=/#server= and query tokens, and rejects non-ws schemes', () {
+      final fromFragment = CastLaunchConfig.fromEnvironmentAndUri(
+        baseUri: Uri.parse(
+          'http://localhost:8080/#server=wss%3A%2F%2Fcast.example.com%2Fv1%2Fclient&token=frag-tok',
+        ),
+      );
+      expect(
+        fromFragment.serverUri.toString(),
+        equals('ws://localhost:8080/v1/client'),
+      );
+      expect(fromFragment.token, equals('frag-tok'));
+      expect(fromFragment.promptForConnection, isFalse);
 
-        final queryServerAndTokenIgnored = CastLaunchConfig.fromEnvironmentAndUri(
-          baseUri: Uri.parse(
-            'http://localhost:8080/?server=ws%3A%2F%2F127.0.0.1%3A9000%2Fv1%2Fclient&token=leaked-query-tok',
-          ),
-        );
-        expect(
-          queryServerAndTokenIgnored.serverUri.toString(),
-          equals('ws://localhost:8080/v1/client'),
-        );
-        expect(queryServerAndTokenIgnored.token, isEmpty);
-        expect(queryServerAndTokenIgnored.promptForConnection, isTrue);
+      final queryServerAndTokenIgnored = CastLaunchConfig.fromEnvironmentAndUri(
+        baseUri: Uri.parse(
+          'http://localhost:8080/?server=ws%3A%2F%2F127.0.0.1%3A9000%2Fv1%2Fclient&token=leaked-query-tok',
+        ),
+      );
+      expect(
+        queryServerAndTokenIgnored.serverUri.toString(),
+        equals('ws://localhost:8080/v1/client'),
+      );
+      expect(queryServerAndTokenIgnored.token, isEmpty);
+      expect(queryServerAndTokenIgnored.promptForConnection, isTrue);
 
-        final fragmentServerOverrideIgnored =
-            CastLaunchConfig.fromEnvironmentAndUri(
-              baseUri: Uri.parse(
-                'http://localhost:8080/#server=wss%3A%2F%2Fevil.example%2Fv1%2Fclient',
-              ),
-              envToken: 'build-env-secret',
-            );
-        expect(
-          fragmentServerOverrideIgnored.serverUri.toString(),
-          equals('ws://localhost:8080/v1/client'),
-        );
-        expect(fragmentServerOverrideIgnored.token, equals('build-env-secret'));
-        expect(fragmentServerOverrideIgnored.promptForConnection, isFalse);
+      final fragmentServerOverrideIgnored =
+          CastLaunchConfig.fromEnvironmentAndUri(
+            baseUri: Uri.parse(
+              'http://localhost:8080/#server=wss%3A%2F%2Fevil.example%2Fv1%2Fclient',
+            ),
+            envToken: 'build-env-secret',
+          );
+      expect(
+        fragmentServerOverrideIgnored.serverUri.toString(),
+        equals('ws://localhost:8080/v1/client'),
+      );
+      expect(fragmentServerOverrideIgnored.token, equals('build-env-secret'));
+      expect(fragmentServerOverrideIgnored.promptForConnection, isFalse);
 
-        final fromEnv = CastLaunchConfig.fromEnvironmentAndUri(
+      final fromEnv = CastLaunchConfig.fromEnvironmentAndUri(
+        baseUri: Uri.parse('http://localhost:8080/'),
+        envServerUrl: 'ws://127.0.0.1:9000/v1/client',
+        envToken: 'env-tok',
+      );
+      expect(
+        fromEnv.serverUri.toString(),
+        equals('ws://127.0.0.1:9000/v1/client'),
+      );
+      expect(fromEnv.token, equals('env-tok'));
+      expect(fromEnv.promptForConnection, isFalse);
+
+      final sameOriginHttps = CastLaunchConfig.fromEnvironmentAndUri(
+        baseUri: Uri.parse('https://cast.example.com/app/'),
+      );
+      expect(
+        sameOriginHttps.serverUri,
+        equals(Uri.parse('wss://cast.example.com/v1/client')),
+      );
+      expect(sameOriginHttps.promptForConnection, isTrue);
+
+      final sameOriginHttp = CastLaunchConfig.fromEnvironmentAndUri(
+        baseUri: Uri.parse('http://localhost:8080/'),
+      );
+      expect(
+        sameOriginHttp.serverUri,
+        equals(Uri.parse('ws://localhost:8080/v1/client')),
+      );
+      expect(sameOriginHttp.promptForConnection, isTrue);
+
+      final fileBaseFallback = CastLaunchConfig.fromEnvironmentAndUri(
+        baseUri: Uri.parse('file:///tmp/index.html'),
+      );
+      expect(
+        fileBaseFallback.serverUri,
+        equals(CastLaunchConfig.defaultServerUri),
+      );
+      expect(fileBaseFallback.promptForConnection, isTrue);
+
+      expect(scrubUrlFragment, returnsNormally);
+
+      expect(
+        () => CastLaunchConfig.fromEnvironmentAndUri(
           baseUri: Uri.parse('http://localhost:8080/'),
-          envServerUrl: 'ws://127.0.0.1:9000/v1/client',
-          envToken: 'env-tok',
-        );
-        expect(
-          fromEnv.serverUri.toString(),
-          equals('ws://127.0.0.1:9000/v1/client'),
-        );
-        expect(fromEnv.token, equals('env-tok'));
-        expect(fromEnv.promptForConnection, isFalse);
-
-        final sameOriginHttps = CastLaunchConfig.fromEnvironmentAndUri(
-          baseUri: Uri.parse('https://cast.example.com/app/'),
-        );
-        expect(
-          sameOriginHttps.serverUri,
-          equals(Uri.parse('wss://cast.example.com/v1/client')),
-        );
-        expect(sameOriginHttps.promptForConnection, isTrue);
-
-        final sameOriginHttp = CastLaunchConfig.fromEnvironmentAndUri(
-          baseUri: Uri.parse('http://localhost:8080/'),
-        );
-        expect(
-          sameOriginHttp.serverUri,
-          equals(Uri.parse('ws://localhost:8080/v1/client')),
-        );
-        expect(sameOriginHttp.promptForConnection, isTrue);
-
-        final fileBaseFallback = CastLaunchConfig.fromEnvironmentAndUri(
-          baseUri: Uri.parse('file:///tmp/index.html'),
-        );
-        expect(
-          fileBaseFallback.serverUri,
-          equals(CastLaunchConfig.defaultServerUri),
-        );
-        expect(fileBaseFallback.promptForConnection, isTrue);
-
-        expect(scrubUrlFragment, returnsNormally);
-
-        expect(
-          () => CastLaunchConfig.fromEnvironmentAndUri(
-            baseUri: Uri.parse('http://localhost:8080/'),
-            envServerUrl: 'ws://',
-          ),
-          throwsFormatException,
-        );
-      },
-    );
+          envServerUrl: 'ws://',
+        ),
+        throwsFormatException,
+      );
+    });
   });
 }
 
@@ -1021,11 +1018,10 @@ void _defineThemeLifecycleAndPixelMouseTests() {
           localHostDriver: driver,
           settingsStorage: storage,
           resizeDebounce: Duration.zero,
-          fileDropBridgeFactory:
-              ({required onDragHoverChanged, required onFilesDropped}) =>
-                  _TestFileDropBridge(
-                    onDispose: () => dropBridgeDisposed = true,
-                  ),
+          fileDropBridgeFactory: ({
+            required onDragHoverChanged,
+            required onFilesDropped,
+          }) => _TestFileDropBridge(onDispose: () => dropBridgeDisposed = true),
           onWorkspaceCreated: (ws) => workspace = ws,
         ),
       );
@@ -1054,107 +1050,104 @@ void _defineThemeLifecycleAndPixelMouseTests() {
     },
   );
 
-  test(
-    'FtermAudioController.needsGestureUnlock and FtermShortcutDispatcher unlock only on KeyDownEvent',
-    () async {
-      final audio = FtermAudioController(initialMuted: true);
-      expect(audio.needsGestureUnlock, isTrue);
-      expect(audio.hasUserGesture, isFalse);
+  test('FtermAudioController.needsGestureUnlock and FtermShortcutDispatcher unlock only on KeyDownEvent', () async {
+    final audio = FtermAudioController(initialMuted: true);
+    expect(audio.needsGestureUnlock, isTrue);
+    expect(audio.hasUserGesture, isFalse);
 
-      final repo = CastClientRepository(transport: WsClientTransport());
-      final driver = _ExitTestLocalHostDriver();
-      final workspace = FtermWorkspaceController(
-        launchConfig: CastLaunchConfig(),
-        repository: repo,
-        localHostDriver: driver,
-        audioController: audio,
-        storage: _MemorySettingsStorage(),
-      );
-      addTearDown(() async {
-        await workspace.dispose();
-        await repo.dispose();
-        await driver.dispose();
-      });
+    final repo = CastClientRepository(transport: WsClientTransport());
+    final driver = _ExitTestLocalHostDriver();
+    final workspace = FtermWorkspaceController(
+      launchConfig: CastLaunchConfig(),
+      repository: repo,
+      localHostDriver: driver,
+      audioController: audio,
+      storage: _MemorySettingsStorage(),
+    );
+    addTearDown(() async {
+      await workspace.dispose();
+      await repo.dispose();
+      await driver.dispose();
+    });
 
-      final dispatcher = FtermShortcutDispatcher(workspace: workspace);
+    final dispatcher = FtermShortcutDispatcher(workspace: workspace);
 
-      // KeyUpEvent and KeyRepeatEvent skip audio gesture unlock.
-      expect(
-        dispatcher.handleHostShortcut(
-          const KeyUpEvent(
-            physicalKey: PhysicalKeyboardKey.keyA,
-            logicalKey: LogicalKeyboardKey.keyA,
-            timeStamp: Duration.zero,
-          ),
-          const {},
+    // KeyUpEvent and KeyRepeatEvent skip audio gesture unlock.
+    expect(
+      dispatcher.handleHostShortcut(
+        const KeyUpEvent(
+          physicalKey: PhysicalKeyboardKey.keyA,
+          logicalKey: LogicalKeyboardKey.keyA,
+          timeStamp: Duration.zero,
         ),
-        isFalse,
-      );
-      expect(audio.hasUserGesture, isFalse);
+        const {},
+      ),
+      isFalse,
+    );
+    expect(audio.hasUserGesture, isFalse);
 
-      expect(
-        dispatcher.handleHostShortcut(
-          const KeyRepeatEvent(
-            physicalKey: PhysicalKeyboardKey.keyA,
-            logicalKey: LogicalKeyboardKey.keyA,
-            character: 'a',
-            timeStamp: Duration.zero,
-          ),
-          const {},
+    expect(
+      dispatcher.handleHostShortcut(
+        const KeyRepeatEvent(
+          physicalKey: PhysicalKeyboardKey.keyA,
+          logicalKey: LogicalKeyboardKey.keyA,
+          character: 'a',
+          timeStamp: Duration.zero,
         ),
-        isFalse,
-      );
-      expect(audio.hasUserGesture, isFalse);
+        const {},
+      ),
+      isFalse,
+    );
+    expect(audio.hasUserGesture, isFalse);
 
-      // KeyDownEvent unlocks when needsGestureUnlock is true.
-      expect(
-        dispatcher.handleHostShortcut(
-          const KeyDownEvent(
-            physicalKey: PhysicalKeyboardKey.keyA,
-            logicalKey: LogicalKeyboardKey.keyA,
-            character: 'a',
-            timeStamp: Duration.zero,
-          ),
-          const {},
+    // KeyDownEvent unlocks when needsGestureUnlock is true.
+    expect(
+      dispatcher.handleHostShortcut(
+        const KeyDownEvent(
+          physicalKey: PhysicalKeyboardKey.keyA,
+          logicalKey: LogicalKeyboardKey.keyA,
+          character: 'a',
+          timeStamp: Duration.zero,
         ),
-        isFalse,
-      );
-      expect(audio.hasUserGesture, isTrue);
-      expect(audio.needsGestureUnlock, isFalse);
+        const {},
+      ),
+      isFalse,
+    );
+    expect(audio.hasUserGesture, isTrue);
+    expect(audio.needsGestureUnlock, isFalse);
 
-      // Unmuted controller honors the 2s cooldown after 2 failures and stops
-      // retrying permanently after _maxInitAttempts (3) failures.
-      var initCalls = 0;
-      var now = DateTime(2026, 1, 1);
-      final failingAudio = FtermAudioController(
-        clock: Clock(() => now),
-        engineFactory: () => _FailingAudioEngine(() => initCalls++),
-      );
-      addTearDown(failingAudio.dispose);
-      expect(failingAudio.needsGestureUnlock, isTrue);
-      await failingAudio.notifyUserGesture();
-      await failingAudio.notifyUserGesture();
-      expect(initCalls, equals(2));
-      expect(failingAudio.needsGestureUnlock, isFalse);
+    // Unmuted controller honors the 2s cooldown after 2 failures and stops
+    // retrying permanently after _maxInitAttempts (3) failures.
+    var initCalls = 0;
+    var now = DateTime(2026, 1, 1);
+    final failingAudio = FtermAudioController(
+      clock: Clock(() => now),
+      engineFactory: () => _FailingAudioEngine(() => initCalls++),
+    );
+    addTearDown(failingAudio.dispose);
+    expect(failingAudio.needsGestureUnlock, isTrue);
+    await failingAudio.notifyUserGesture();
+    await failingAudio.notifyUserGesture();
+    expect(initCalls, equals(2));
+    expect(failingAudio.needsGestureUnlock, isFalse);
 
-      // Cooldown blocks immediate 3rd retry; advancing >=2s re-enables it.
-      await failingAudio.notifyUserGesture();
-      expect(initCalls, equals(2));
-      now = now.add(const Duration(seconds: 2));
-      expect(failingAudio.needsGestureUnlock, isTrue);
-      await failingAudio.notifyUserGesture();
-      expect(initCalls, equals(3));
-      now = now.add(const Duration(seconds: 10));
-      expect(failingAudio.needsGestureUnlock, isFalse);
-      await failingAudio.notifyUserGesture();
-      expect(initCalls, equals(3));
+    // Cooldown blocks immediate 3rd retry; advancing >=2s re-enables it.
+    await failingAudio.notifyUserGesture();
+    expect(initCalls, equals(2));
+    now = now.add(const Duration(seconds: 2));
+    expect(failingAudio.needsGestureUnlock, isTrue);
+    await failingAudio.notifyUserGesture();
+    expect(initCalls, equals(3));
+    now = now.add(const Duration(seconds: 10));
+    expect(failingAudio.needsGestureUnlock, isFalse);
+    await failingAudio.notifyUserGesture();
+    expect(initCalls, equals(3));
 
-      // Disposed controller clears needsGestureUnlock and returns synchronously.
-      await audio.dispose();
-      expect(audio.needsGestureUnlock, isFalse);
-      await audio.notifyUserGesture();
-    },
-  );
+    // Disposed controller clears needsGestureUnlock and returns synchronously.
+    await audio.dispose();
+    expect(audio.needsGestureUnlock, isFalse);
+    await audio.notifyUserGesture();
+  });
 }
 
 void _definePersistedPreferencesStartupTests() {
@@ -1187,9 +1180,10 @@ void _definePersistedPreferencesStartupTests() {
           localHostDriver: driver,
           settingsStorage: storage,
           resizeDebounce: Duration.zero,
-          fileDropBridgeFactory:
-              ({required onDragHoverChanged, required onFilesDropped}) =>
-                  _TestFileDropBridge(onDispose: () {}),
+          fileDropBridgeFactory: ({
+            required onDragHoverChanged,
+            required onFilesDropped,
+          }) => _TestFileDropBridge(onDispose: () {}),
           onWorkspaceCreated: (ws) => workspace = ws,
         );
         await tester.pumpWidget(
@@ -1384,10 +1378,10 @@ final class _ExitTestLocalPaneHost implements LocalPaneHost {
 
   _ExitTestLocalPaneHost({
     required this.id,
-    required PtyRouterSession session,
+    required this._session,
     required this.port,
     required this.backend,
-  }) : _session = session;
+  });
 
   @override
   Future<int> get exitCode => _session.exitCode;

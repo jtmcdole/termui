@@ -149,56 +149,53 @@ void main() {
   });
 
   group('renderAnnotatedScreenshotPng pixel compositing', () {
-    test(
-      'obliterates redacted pixels to opaque black, tints highlights, and leaves untouched pixels intact',
-      () async {
-        const bgColor = Color(0xFF00CCFF);
-        final source = await _createSolidImage(120, 80, bgColor);
-        addTearDown(source.dispose);
+    test('obliterates redacted pixels to opaque black, tints highlights, and leaves untouched pixels intact', () async {
+      const bgColor = Color(0xFF00CCFF);
+      final source = await _createSolidImage(120, 80, bgColor);
+      addTearDown(source.dispose);
 
-        // Unannotated export preserves exact pixels.
-        final rawPng = await renderAnnotatedScreenshotPng(source, const []);
-        expect(rawPng, isNotNull);
-        final rawCenter = await _readPngPixel(rawPng!, 60, 40);
-        expect(rawCenter, equals((r: 0, g: 0xCC, b: 0xFF, a: 255)));
+      // Unannotated export preserves exact pixels.
+      final rawPng = await renderAnnotatedScreenshotPng(source, const []);
+      expect(rawPng, isNotNull);
+      final rawCenter = await _readPngPixel(rawPng!, 60, 40);
+      expect(rawCenter, equals((r: 0, g: 0xCC, b: 0xFF, a: 255)));
 
-        // Annotated export: left blackout, right highlight, center untouched.
-        final annotatedPng = await renderAnnotatedScreenshotPng(source, const [
-          ScreenshotAnnotation(
-            tool: ScreenshotAnnotationTool.redact,
-            normalizedRect: Rect.fromLTRB(0.0, 0.0, 0.30, 1.0),
-          ),
-          ScreenshotAnnotation(
-            tool: ScreenshotAnnotationTool.highlight,
-            normalizedRect: Rect.fromLTRB(0.70, 0.10, 0.95, 0.90),
-          ),
-        ]);
-        expect(annotatedPng, isNotNull);
+      // Annotated export: left blackout, right highlight, center untouched.
+      final annotatedPng = await renderAnnotatedScreenshotPng(source, const [
+        ScreenshotAnnotation(
+          tool: ScreenshotAnnotationTool.redact,
+          normalizedRect: Rect.fromLTRB(0.0, 0.0, 0.30, 1.0),
+        ),
+        ScreenshotAnnotation(
+          tool: ScreenshotAnnotationTool.highlight,
+          normalizedRect: Rect.fromLTRB(0.70, 0.10, 0.95, 0.90),
+        ),
+      ]);
+      expect(annotatedPng, isNotNull);
 
-        // Redacted pixel (interior and edge) must be 100% opaque black.
-        expect(
-          await _readPngPixel(annotatedPng!, 15, 40),
-          equals((r: 0, g: 0, b: 0, a: 255)),
-        );
-        expect(
-          await _readPngPixel(annotatedPng, 0, 0),
-          equals((r: 0, g: 0, b: 0, a: 255)),
-        );
+      // Redacted pixel (interior and edge) must be 100% opaque black.
+      expect(
+        await _readPngPixel(annotatedPng!, 15, 40),
+        equals((r: 0, g: 0, b: 0, a: 255)),
+      );
+      expect(
+        await _readPngPixel(annotatedPng, 0, 0),
+        equals((r: 0, g: 0, b: 0, a: 255)),
+      );
 
-        // Center untouched pixel remains exact cyan.
-        expect(
-          await _readPngPixel(annotatedPng, 60, 40),
-          equals((r: 0, g: 0xCC, b: 0xFF, a: 255)),
-        );
+      // Center untouched pixel remains exact cyan.
+      expect(
+        await _readPngPixel(annotatedPng, 60, 40),
+        equals((r: 0, g: 0xCC, b: 0xFF, a: 255)),
+      );
 
-        // Highlighted pixel is visibly tinted yellow while staying non-black.
-        final hi = await _readPngPixel(annotatedPng, 98, 40);
-        expect(hi.a, equals(255));
-        expect(hi.r, greaterThan(40));
-        expect(hi.g, greaterThan(180));
-        expect(hi.b, lessThan(230));
-      },
-    );
+      // Highlighted pixel is visibly tinted yellow while staying non-black.
+      final hi = await _readPngPixel(annotatedPng, 98, 40);
+      expect(hi.a, equals(255));
+      expect(hi.r, greaterThan(40));
+      expect(hi.g, greaterThan(180));
+      expect(hi.b, lessThan(230));
+    });
   });
 
   group('FtermScreenshotEditorDialog widget interaction', () {

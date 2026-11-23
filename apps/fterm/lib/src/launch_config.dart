@@ -29,6 +29,18 @@ final class CastLaunchConfig {
   /// in-place desktop update (file paths canonicalized, raw secrets stripped).
   final List<String> relaunchArgs;
 
+  /// Optional base path for automatic startup performance trace recording
+  /// (`--trace-out` / `TERMUI_TRACE_OUT`).
+  final String? traceOutPath;
+
+  /// Optional auto-stop duration for startup performance trace recording
+  /// (`--trace-seconds` / `TERMUI_TRACE_SECONDS`).
+  final Duration? traceDuration;
+
+  /// Whether `fterm` should exit cleanly once a timed startup trace completes
+  /// (`--trace-exit`).
+  final bool traceExitOnComplete;
+
   /// Creates an explicit launch configuration.
   CastLaunchConfig({
     Uri? serverUri,
@@ -38,6 +50,9 @@ final class CastLaunchConfig {
     this.iapTokenProvider,
     this.iapTokenProviderFactory,
     List<String> relaunchArgs = const [],
+    this.traceOutPath,
+    this.traceDuration,
+    this.traceExitOnComplete = false,
   }) : serverUri = serverUri ?? defaultServerUri,
        relaunchArgs = relaunchArgs.isEmpty
            ? const []

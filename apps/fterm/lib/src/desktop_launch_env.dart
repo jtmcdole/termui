@@ -6,12 +6,11 @@ import 'desktop_launch_env_stub.dart'
 import 'launch_config.dart';
 
 /// Pure-Dart factory seam building a platform [IapTokenProvider] at startup.
-typedef DesktopIapProviderBuilder =
-    IapTokenProvider? Function({
-      required Uri serverUri,
-      String? serviceAccount,
-      String? keyFilePath,
-    });
+typedef DesktopIapProviderBuilder = IapTokenProvider? Function({
+  required Uri serverUri,
+  String? serviceAccount,
+  String? keyFilePath,
+});
 
 /// Startup connection overrides resolved from CLI flags or runtime environment
 /// variables on native desktop (`dart:io`) platforms.
@@ -60,6 +59,15 @@ final class DesktopLaunchOverrides {
   /// Whether `--iap-key-file` was explicitly supplied on the CLI.
   final bool hasCliIapKeyFile;
 
+  /// Optional base path for automatic startup performance trace recording.
+  final String? traceOutPath;
+
+  /// Optional positive auto-stop duration for startup performance tracing.
+  final Duration? traceDuration;
+
+  /// Whether `fterm` should exit automatically once a timed startup trace ends.
+  final bool traceExitOnComplete;
+
   /// Creates an immutable set of desktop launch overrides.
   const DesktopLaunchOverrides({
     this.serverUrl,
@@ -76,6 +84,9 @@ final class DesktopLaunchOverrides {
     this.hasCliCasterToken = false,
     this.hasCliIapServiceAccount = false,
     this.hasCliIapKeyFile = false,
+    this.traceOutPath,
+    this.traceDuration,
+    this.traceExitOnComplete = false,
   });
 
   /// Sanitized CLI arguments safe to forward across an auto-update relaunch
@@ -129,6 +140,21 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
     flag: '--iap-key-file',
     canonicalize: canonicalize,
   );
+  final cliTraceOut = _resolveRequiredTextFlag(
+    present: cli.hasTraceOut,
+    raw: cli.traceOut,
+    flag: '--trace-out',
+  );
+  final traceDuration = _resolveTraceDuration(
+    hasCliSeconds: cli.hasTraceSeconds,
+    cliSecondsRaw: cli.traceSeconds,
+    envSecondsRaw: environment['TERMUI_TRACE_SECONDS'],
+  );
+  if (cli.traceExit && traceDuration == null) {
+    throw const FormatException(
+      '--trace-exit requires --trace-seconds or TERMUI_TRACE_SECONDS.',
+    );
+  }
   final cliServer = _nonEmptyTrimmed(cli.serverUrl);
   final envKeyRaw = _nonEmptyTrimmed(environment['TERMUI_CAST_IAP_KEY_FILE']);
   return DesktopLaunchOverrides(
@@ -153,7 +179,33 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
     hasCliCasterToken: cli.hasCasterToken,
     hasCliIapServiceAccount: cli.hasIapServiceAccount,
     hasCliIapKeyFile: cli.hasIapKeyFile,
+    traceOutPath:
+        cliTraceOut ?? _nonEmptyTrimmed(environment['TERMUI_TRACE_OUT']),
+    traceDuration: traceDuration,
+    traceExitOnComplete: cli.traceExit,
   );
+}
+
+Duration? _resolveTraceDuration({
+  required bool hasCliSeconds,
+  required String? cliSecondsRaw,
+  required String? envSecondsRaw,
+}) {
+  if (hasCliSeconds) {
+    return _parsePositiveTraceSeconds(cliSecondsRaw, flag: '--trace-seconds');
+  }
+  final envTrimmed = _nonEmptyTrimmed(envSecondsRaw);
+  if (envTrimmed == null) return null;
+  return _parsePositiveTraceSeconds(envTrimmed, flag: 'TERMUI_TRACE_SECONDS');
+}
+
+Duration _parsePositiveTraceSeconds(String? raw, {required String flag}) {
+  final trimmed = _nonEmptyTrimmed(raw);
+  final parsed = trimmed == null ? null : int.tryParse(trimmed);
+  if (parsed == null || parsed <= 0) {
+    throw FormatException('Invalid positive integer for $flag: "$raw".');
+  }
+  return Duration(seconds: parsed);
 }
 
 void _validateMutualExclusions(_ParsedCliFlags cli) {
@@ -247,7 +299,14 @@ CastLaunchConfig resolveCastLaunchConfig({
     builder: builder,
   );
   final relaunchArgs = overrides.relaunchArgs;
-  if (iapProvider == null && iapFactory == null && relaunchArgs.isEmpty) {
+  final hasTraceConfig =
+      overrides.traceOutPath != null ||
+      overrides.traceDuration != null ||
+      overrides.traceExitOnComplete;
+  if (iapProvider == null &&
+      iapFactory == null &&
+      relaunchArgs.isEmpty &&
+      !hasTraceConfig) {
     return baseConfig;
   }
   return CastLaunchConfig(
@@ -258,6 +317,9 @@ CastLaunchConfig resolveCastLaunchConfig({
     iapTokenProvider: iapProvider,
     iapTokenProviderFactory: iapFactory,
     relaunchArgs: relaunchArgs,
+    traceOutPath: overrides.traceOutPath,
+    traceDuration: overrides.traceDuration,
+    traceExitOnComplete: overrides.traceExitOnComplete,
   );
 }
 
@@ -320,6 +382,16 @@ void reportDesktopStartupError(String message) =>
 /// Logs a non-fatal transport connection [error] on `dart:io` desktops.
 void logDesktopConnectError(Object error) =>
     impl.logPlatformConnectError(error);
+
+/// Launches a detached replacement `fterm` desktop process with sanitized
+/// [args], returning `false` on Web or when launch fails.
+Future<bool> relaunchDesktopApp({List<String> args = const []}) =>
+    impl.relaunchPlatformDesktopApp(args: args);
+
+/// Opens [directoryPath] in the OS file manager on desktop, returning `false`
+/// on Web or under `FLUTTER_TEST`.
+Future<bool> openDesktopDirectory(String directoryPath) =>
+    impl.openPlatformDirectory(directoryPath);
 
 IapTokenProvider? _resolveIapTokenProvider({
   required DesktopLaunchOverrides overrides,
@@ -388,12 +460,17 @@ typedef _ParsedCliFlags = ({
   String? casterTokenFile,
   String? iapServiceAccount,
   String? iapKeyFile,
+  String? traceOut,
+  String? traceSeconds,
   bool hasToken,
   bool hasTokenFile,
   bool hasCasterToken,
   bool hasCasterTokenFile,
   bool hasIapServiceAccount,
   bool hasIapKeyFile,
+  bool hasTraceOut,
+  bool hasTraceSeconds,
+  bool traceExit,
 });
 
 _ParsedCliFlags _parseCliArgs(List<String> args) {
@@ -404,12 +481,17 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
   String? casterTokenFile;
   String? iapServiceAccount;
   String? iapKeyFile;
+  String? traceOut;
+  String? traceSeconds;
   var hasToken = false;
   var hasTokenFile = false;
   var hasCasterToken = false;
   var hasCasterTokenFile = false;
   var hasIapServiceAccount = false;
   var hasIapKeyFile = false;
+  var hasTraceOut = false;
+  var hasTraceSeconds = false;
+  var traceExit = false;
   for (var i = 0; i < args.length; i++) {
     final current = args[i];
     if (current == '--') break;
@@ -438,6 +520,17 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
       case '--iap-key-file':
         iapKeyFile = readValue();
         hasIapKeyFile = true;
+      case '--trace-out':
+        traceOut = readValue();
+        hasTraceOut = true;
+      case '--trace-seconds':
+        traceSeconds = readValue();
+        hasTraceSeconds = true;
+      case '--trace-exit':
+        if (split != null) {
+          throw FormatException('Unexpected value for --trace-exit: $current');
+        }
+        traceExit = true;
     }
   }
   return (
@@ -448,12 +541,17 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
     casterTokenFile: casterTokenFile,
     iapServiceAccount: iapServiceAccount,
     iapKeyFile: iapKeyFile,
+    traceOut: traceOut,
+    traceSeconds: traceSeconds,
     hasToken: hasToken,
     hasTokenFile: hasTokenFile,
     hasCasterToken: hasCasterToken,
     hasCasterTokenFile: hasCasterTokenFile,
     hasIapServiceAccount: hasIapServiceAccount,
     hasIapKeyFile: hasIapKeyFile,
+    hasTraceOut: hasTraceOut,
+    hasTraceSeconds: hasTraceSeconds,
+    traceExit: traceExit,
   );
 }
 

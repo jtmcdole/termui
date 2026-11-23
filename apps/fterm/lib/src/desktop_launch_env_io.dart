@@ -5,6 +5,8 @@ import 'dart:io'
         FileSystemException,
         IOException,
         Platform,
+        Process,
+        ProcessStartMode,
         exit,
         stderr;
 
@@ -155,4 +157,62 @@ void logPlatformConnectError(
   try {
     (err ?? stderr).writeln('fterm: connect failed: $error');
   } on IOException catch (_) {}
+}
+
+/// Launches a detached replacement `fterm` process with sanitized [args],
+/// stripping `FTERM_GPU_PREFERENCE` so the restarted instance honors the newly
+/// saved `settings.json` GPU driver preference.
+Future<bool> relaunchPlatformDesktopApp({
+  List<String> args = const [],
+  Map<String, String>? environment,
+  Future<Object> Function(
+    String executable,
+    List<String> arguments, {
+    Map<String, String>? environment,
+    bool includeParentEnvironment,
+    ProcessStartMode mode,
+  })?
+  processStarter,
+}) async {
+  final env = Map<String, String>.of(environment ?? Platform.environment);
+  if (env.containsKey('FLUTTER_TEST')) return false;
+  env.remove('FTERM_GPU_PREFERENCE');
+  final starter = processStarter ?? Process.start;
+  try {
+    await starter(
+      Platform.resolvedExecutable,
+      args,
+      environment: env,
+      includeParentEnvironment: false,
+      mode: ProcessStartMode.detached,
+    );
+    return true;
+  } on Object {
+    return false;
+  }
+}
+
+/// Opens [directoryPath] in the native desktop file manager (`explorer.exe`,
+/// `open`, or `xdg-open`), returning `false` under `FLUTTER_TEST` or on failure.
+Future<bool> openPlatformDirectory(
+  String directoryPath, {
+  Map<String, String>? environment,
+}) async {
+  final env = environment ?? Platform.environment;
+  if (env.containsKey('FLUTTER_TEST')) return false;
+  final trimmed = directoryPath.trim();
+  if (trimmed.isEmpty || trimmed == '.') return false;
+  final executable = Platform.isWindows
+      ? 'explorer.exe'
+      : Platform.isMacOS
+      ? 'open'
+      : 'xdg-open';
+  try {
+    await Process.start(executable, <String>[
+      trimmed,
+    ], mode: ProcessStartMode.detached);
+    return true;
+  } on Object {
+    return false;
+  }
 }

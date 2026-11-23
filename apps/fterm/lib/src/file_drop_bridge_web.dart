@@ -80,10 +80,9 @@ final class _WebFileDropBridge implements FileDropBridge {
   bool _disposed = false;
 
   _WebFileDropBridge({
-    required void Function(bool isDraggingOver) onDragHoverChanged,
-    required void Function(List<DroppedFileSource> files) onFilesDropped,
-  }) : _onDragHoverChanged = onDragHoverChanged,
-       _onFilesDropped = onFilesDropped {
+    required this._onDragHoverChanged,
+    required this._onFilesDropped,
+  }) {
     _dragEnterHandler = _onDragEnter.toJS;
     _dragOverHandler = _onDragOver.toJS;
     _dragLeaveHandler = _onDragLeave.toJS;

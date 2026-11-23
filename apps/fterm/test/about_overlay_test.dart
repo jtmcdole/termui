@@ -39,228 +39,214 @@ void main() {
   });
 
   group('About models, SVG baking, services, and ViewModel', () {
-    test(
-      'FtermBuildMetadata reads appBuildName, formats build dates and SDK labels',
-      () {
-        final compileTime = FtermBuildMetadata.compileTime(defineBuildDate: '');
-        expect(compileTime.version, equals(kFtermBuildVersion));
-        expect(compileTime.displayVersion, startsWith('v$kFtermBuildVersion'));
-        expect(compileTime.formattedBuildDate, isNull);
+    test('FtermBuildMetadata reads appBuildName, formats build dates and SDK labels', () {
+      final compileTime = FtermBuildMetadata.compileTime(defineBuildDate: '');
+      expect(compileTime.version, equals(kFtermBuildVersion));
+      expect(compileTime.displayVersion, startsWith('v$kFtermBuildVersion'));
+      expect(compileTime.formattedBuildDate, isNull);
 
-        final withDateAndMeta = FtermBuildMetadata(
-          version: '0.3.0',
-          buildNumber: '42',
-          buildDateUtc: DateTime.utc(2026, 11, 18, 3, 5),
-          flutterVersion: '3.41.2',
-          flutterChannel: 'stable',
-          dartVersion: '3.11.0',
-        );
-        expect(withDateAndMeta.displayVersion, equals('v0.3.0+42'));
-        expect(
-          withDateAndMeta.formattedBuildDate,
-          equals('2026-11-18 03:05 UTC'),
-        );
-        expect(
-          withDateAndMeta.runtimeToolchainLabel,
-          equals('Flutter 3.41.2 (stable) · Dart 3.11.0'),
-        );
+      final withDateAndMeta = FtermBuildMetadata(
+        version: '0.3.0',
+        buildNumber: '42',
+        buildDateUtc: DateTime.utc(2026, 11, 18, 3, 5),
+        flutterVersion: '3.41.2',
+        flutterChannel: 'stable',
+        dartVersion: '3.11.0',
+      );
+      expect(withDateAndMeta.displayVersion, equals('v0.3.0+42'));
+      expect(
+        withDateAndMeta.formattedBuildDate,
+        equals('2026-11-18 03:05 UTC'),
+      );
+      expect(
+        withDateAndMeta.runtimeToolchainLabel,
+        equals('Flutter 3.41.2 (stable) · Dart 3.11.0'),
+      );
 
-        final cleared = withDateAndMeta.copyWith(clearBuildDate: true);
-        expect(cleared.formattedBuildDate, isNull);
-        expect(tryParseBuildDateUtc('  '), isNull);
-        expect(tryParseBuildDateUtc('not-a-date'), isNull);
-        expect(
-          tryParseBuildDateUtc('2026-11-18T03:15:30Z'),
-          equals(DateTime.utc(2026, 11, 18, 3, 15, 30)),
-        );
-      },
-    );
+      final cleared = withDateAndMeta.copyWith(clearBuildDate: true);
+      expect(cleared.formattedBuildDate, isNull);
+      expect(tryParseBuildDateUtc('  '), isNull);
+      expect(tryParseBuildDateUtc('not-a-date'), isNull);
+      expect(
+        tryParseBuildDateUtc('2026-11-18T03:15:30Z'),
+        equals(DateTime.utc(2026, 11, 18, 3, 15, 30)),
+      );
+    });
 
-    test(
-      'IoAboutService resolves FTERM_BUILD_DATE first, then async fterm exe mtime, else null',
-      () async {
-        const fromDefine = IoAboutService(
-          defineBuildDate: '2026-11-18T04:12:00Z',
-          resolvedExecutableOverride: '/usr/bin/flutter_tester',
-        );
-        expect(
-          await fromDefine.resolveBuildDateUtc(),
-          equals(DateTime.utc(2026, 11, 18, 4, 12)),
-        );
+    test('IoAboutService resolves FTERM_BUILD_DATE first, then async fterm exe mtime, else null', () async {
+      const fromDefine = IoAboutService(
+        defineBuildDate: '2026-11-18T04:12:00Z',
+        resolvedExecutableOverride: '/usr/bin/flutter_tester',
+      );
+      expect(
+        await fromDefine.resolveBuildDateUtc(),
+        equals(DateTime.utc(2026, 11, 18, 4, 12)),
+      );
 
-        String? probedPath;
-        final fromWindowsBinary = IoAboutService(
+      String? probedPath;
+      final fromWindowsBinary = IoAboutService(
+        defineBuildDate: '',
+        resolvedExecutableOverride: r'C:\opt\fterm\fterm.exe',
+        environmentOverride: const {},
+        executableModifiedUtcReader: (path) async {
+          probedPath = path;
+          return DateTime.utc(2026, 11, 17, 20, 45);
+        },
+      );
+      expect(
+        await fromWindowsBinary.resolveBuildDateUtc(),
+        equals(DateTime.utc(2026, 11, 17, 20, 45)),
+      );
+      expect(probedPath, equals(r'C:\opt\fterm\fterm.exe'));
+
+      String? probedPosixPath;
+      final fromPosixBinary = IoAboutService(
+        defineBuildDate: '',
+        resolvedExecutableOverride: '/opt/fterm/fterm',
+        environmentOverride: const {},
+        executableModifiedUtcReader: (path) async {
+          probedPosixPath = path;
+          return DateTime.utc(2026, 11, 17, 21, 0);
+        },
+      );
+      expect(
+        await fromPosixBinary.resolveBuildDateUtc(),
+        equals(DateTime.utc(2026, 11, 17, 21, 0)),
+      );
+      expect(probedPosixPath, equals('/opt/fterm/fterm'));
+
+      const ignoredTester = IoAboutService(
+        defineBuildDate: '',
+        resolvedExecutableOverride: '/sdk/flutter_tester',
+        environmentOverride: {},
+      );
+      expect(await ignoredTester.resolveBuildDateUtc(), isNull);
+
+      final realFileMissing = IoAboutService(
+        defineBuildDate: '',
+        resolvedExecutableOverride: Platform.isWindows
+            ? r'Z:\nonexistent-path\fterm.exe'
+            : '/nonexistent-fterm-dir/fterm',
+        environmentOverride: const {},
+      );
+      expect(await realFileMissing.resolveBuildDateUtc(), isNull);
+
+      const defaultInTest = IoAboutService(defineBuildDate: '');
+      expect(await defaultInTest.resolveBuildDateUtc(), isNull);
+
+      const webService = WebAboutService(
+        defineBuildDate: '2026-11-18T06:00:00Z',
+      );
+      expect(
+        webService.resolveCompileTimeMetadata().version,
+        equals(kFtermBuildVersion),
+      );
+      expect(
+        await webService.resolveBuildDateUtc(),
+        equals(DateTime.utc(2026, 11, 18, 6, 0)),
+      );
+
+      final clearedRepo = AboutRepository(
+        service: IoAboutService(
           defineBuildDate: '',
-          resolvedExecutableOverride: r'C:\opt\fterm\fterm.exe',
-          environmentOverride: const {},
-          executableModifiedUtcReader: (path) async {
-            probedPath = path;
-            return DateTime.utc(2026, 11, 17, 20, 45);
-          },
-        );
-        expect(
-          await fromWindowsBinary.resolveBuildDateUtc(),
-          equals(DateTime.utc(2026, 11, 17, 20, 45)),
-        );
-        expect(probedPath, equals(r'C:\opt\fterm\fterm.exe'));
-
-        String? probedPosixPath;
-        final fromPosixBinary = IoAboutService(
-          defineBuildDate: '',
-          resolvedExecutableOverride: '/opt/fterm/fterm',
-          environmentOverride: const {},
-          executableModifiedUtcReader: (path) async {
-            probedPosixPath = path;
-            return DateTime.utc(2026, 11, 17, 21, 0);
-          },
-        );
-        expect(
-          await fromPosixBinary.resolveBuildDateUtc(),
-          equals(DateTime.utc(2026, 11, 17, 21, 0)),
-        );
-        expect(probedPosixPath, equals('/opt/fterm/fterm'));
-
-        const ignoredTester = IoAboutService(
-          defineBuildDate: '',
-          resolvedExecutableOverride: '/sdk/flutter_tester',
-          environmentOverride: {},
-        );
-        expect(await ignoredTester.resolveBuildDateUtc(), isNull);
-
-        final realFileMissing = IoAboutService(
-          defineBuildDate: '',
-          resolvedExecutableOverride: Platform.isWindows
-              ? r'Z:\nonexistent-path\fterm.exe'
-              : '/nonexistent-fterm-dir/fterm',
-          environmentOverride: const {},
-        );
-        expect(await realFileMissing.resolveBuildDateUtc(), isNull);
-
-        const defaultInTest = IoAboutService(defineBuildDate: '');
-        expect(await defaultInTest.resolveBuildDateUtc(), isNull);
-
-        const webService = WebAboutService(
-          defineBuildDate: '2026-11-18T06:00:00Z',
-        );
-        expect(
-          webService.resolveCompileTimeMetadata().version,
-          equals(kFtermBuildVersion),
-        );
-        expect(
-          await webService.resolveBuildDateUtc(),
-          equals(DateTime.utc(2026, 11, 18, 6, 0)),
-        );
-
-        final clearedRepo = AboutRepository(
-          service: IoAboutService(
-            defineBuildDate: '',
-            compileTimeMetadataOverride: FtermBuildMetadata(
-              version: '7.8.9',
-              buildDateUtc: DateTime.utc(2026, 1, 1),
-            ),
+          compileTimeMetadataOverride: FtermBuildMetadata(
+            version: '7.8.9',
+            buildDateUtc: DateTime.utc(2026, 1, 1),
           ),
-        );
-        expect(clearedRepo.initialBuildMetadata().version, equals('7.8.9'));
-        expect(
-          (await clearedRepo.loadBuildMetadata()).formattedBuildDate,
-          isNull,
-        );
-      },
-    );
+        ),
+      );
+      expect(clearedRepo.initialBuildMetadata().version, equals('7.8.9'));
+      expect(
+        (await clearedRepo.loadBuildMetadata()).formattedBuildDate,
+        isNull,
+      );
+    });
 
-    test(
-      'bakeVersionIntoFtermSvg stamps XML-escaped pill and FtermLogoScene parses web/favicon.svg',
-      () async {
-        final rawSvg = await rootBundle.loadString('web/favicon.svg');
-        final baked = bakeVersionIntoFtermSvg(
-          rawSvg,
-          version: '0.3.0-rc.1+<dev>',
-        );
+    test('bakeVersionIntoFtermSvg stamps XML-escaped pill and FtermLogoScene parses web/favicon.svg', () async {
+      final rawSvg = await rootBundle.loadString('web/favicon.svg');
+      final baked = bakeVersionIntoFtermSvg(
+        rawSvg,
+        version: '0.3.0-rc.1+<dev>',
+      );
 
-        expect(baked, contains('id="ftermVersionBadge"'));
-        expect(baked, contains('v0.3.0-rc.1+&lt;dev&gt;'));
-        expect(baked, contains('</svg>'));
-        expect(
-          baked.indexOf('id="ftermVersionBadge"'),
-          lessThan(baked.lastIndexOf('</g>')),
-        );
+      expect(baked, contains('id="ftermVersionBadge"'));
+      expect(baked, contains('v0.3.0-rc.1+&lt;dev&gt;'));
+      expect(baked, contains('</svg>'));
+      expect(
+        baked.indexOf('id="ftermVersionBadge"'),
+        lessThan(baked.lastIndexOf('</g>')),
+      );
 
-        final scene = FtermLogoScene.parse(rawSvg);
-        expect(scene.bgStops, hasLength(3));
-        expect(scene.rimStops, hasLength(3));
-        expect(scene.fStops, hasLength(2));
-        expect(scene.gtStops, hasLength(3));
-        expect(
-          scene.fStemPath.computeMetrics().single.length,
-          greaterThan(500.0),
-        );
-        expect(
-          scene.fCrossbarPath.computeMetrics().single.length,
-          closeTo(210.0, 0.5),
-        );
-        expect(
-          scene.promptChevronPath.computeMetrics().single.length,
-          greaterThan(400.0),
-        );
-      },
-    );
+      final scene = FtermLogoScene.parse(rawSvg);
+      expect(scene.bgStops, hasLength(3));
+      expect(scene.rimStops, hasLength(3));
+      expect(scene.fStops, hasLength(2));
+      expect(scene.gtStops, hasLength(3));
+      expect(
+        scene.fStemPath.computeMetrics().single.length,
+        greaterThan(500.0),
+      );
+      expect(
+        scene.fCrossbarPath.computeMetrics().single.length,
+        closeTo(210.0, 0.5),
+      );
+      expect(
+        scene.promptChevronPath.computeMetrics().single.length,
+        greaterThan(400.0),
+      );
+    });
 
-    test(
-      'AboutRepository deduplicates license blocks per package and prioritizes first-party & bundled fonts',
-      () async {
-        final service = _FakeAboutService(
-          version: '9.4.2-rc.1',
-          buildDateUtc: _kPinnedTestBuildDateUtc,
-          licenseEntries: [
-            const LicenseEntryWithLineBreaks(['zlib_extra'], 'Zlib text.'),
-            const LicenseEntryWithLineBreaks([
-              'MesloLGS NF',
-            ], 'MesloLGS NF License.'),
-            const LicenseEntryWithLineBreaks([
-              'Cascadia Mono',
-            ], 'SIL Open Font License 1.1'),
-            const LicenseEntryWithLineBreaks(['fterm'], 'MIT License A'),
-            const LicenseEntryWithLineBreaks(['fterm'], 'MIT License A'),
-            const LicenseEntryWithLineBreaks(['alpha_pkg'], 'BSD-3'),
-          ],
-        );
-        final vm = AboutViewModel(
-          repository: AboutRepository(service: service),
-        );
-        addTearDown(vm.dispose);
-
-        await vm.ensureInitialized();
-        await vm.ensureLicensesLoaded();
-
-        expect(
-          vm.filteredPackages.map((p) => p.packageName).toList(),
-          equals([
-            'fterm',
-            'Cascadia Mono',
+    test('AboutRepository deduplicates license blocks per package and prioritizes first-party & bundled fonts', () async {
+      final service = _FakeAboutService(
+        version: '9.4.2-rc.1',
+        buildDateUtc: _kPinnedTestBuildDateUtc,
+        licenseEntries: [
+          const LicenseEntryWithLineBreaks(['zlib_extra'], 'Zlib text.'),
+          const LicenseEntryWithLineBreaks([
             'MesloLGS NF',
-            'alpha_pkg',
-            'zlib_extra',
-          ]),
-        );
-        expect(vm.filteredPackages.first.noticeCount, equals(1));
-        expect(vm.selectedPackageName, equals('fterm'));
-        expect(vm.metadata.version, equals('9.4.2-rc.1'));
-        expect(vm.metadata.displayVersion, equals('v9.4.2-rc.1'));
-        expect(vm.metadata.formattedBuildDate, equals('2026-11-18 03:15 UTC'));
-        expect(vm.versionedSvg, contains('v9.4.2-rc.1'));
+          ], 'MesloLGS NF License.'),
+          const LicenseEntryWithLineBreaks([
+            'Cascadia Mono',
+          ], 'SIL Open Font License 1.1'),
+          const LicenseEntryWithLineBreaks(['fterm'], 'MIT License A'),
+          const LicenseEntryWithLineBreaks(['fterm'], 'MIT License A'),
+          const LicenseEntryWithLineBreaks(['alpha_pkg'], 'BSD-3'),
+        ],
+      );
+      final vm = AboutViewModel(repository: AboutRepository(service: service));
+      addTearDown(vm.dispose);
 
-        vm.setFilterQuery('mono');
-        expect(
-          vm.filteredPackages.map((p) => p.packageName),
-          equals(['Cascadia Mono']),
-        );
-        expect(vm.selectedPackageName, equals('Cascadia Mono'));
+      await vm.ensureInitialized();
+      await vm.ensureLicensesLoaded();
 
-        vm.setFilterQuery('');
-        vm.selectPackage('alpha_pkg');
-        expect(vm.selectedPackageName, equals('alpha_pkg'));
-      },
-    );
+      expect(
+        vm.filteredPackages.map((p) => p.packageName).toList(),
+        equals([
+          'fterm',
+          'Cascadia Mono',
+          'MesloLGS NF',
+          'alpha_pkg',
+          'zlib_extra',
+        ]),
+      );
+      expect(vm.filteredPackages.first.noticeCount, equals(1));
+      expect(vm.selectedPackageName, equals('fterm'));
+      expect(vm.metadata.version, equals('9.4.2-rc.1'));
+      expect(vm.metadata.displayVersion, equals('v9.4.2-rc.1'));
+      expect(vm.metadata.formattedBuildDate, equals('2026-11-18 03:15 UTC'));
+      expect(vm.versionedSvg, contains('v9.4.2-rc.1'));
+
+      vm.setFilterQuery('mono');
+      expect(
+        vm.filteredPackages.map((p) => p.packageName),
+        equals(['Cascadia Mono']),
+      );
+      expect(vm.selectedPackageName, equals('Cascadia Mono'));
+
+      vm.setFilterQuery('');
+      vm.selectPackage('alpha_pkg');
+      expect(vm.selectedPackageName, equals('alpha_pkg'));
+    });
   });
 
   group('FtermAboutOverlay & FtermLicensesOverlay widget flows', () {

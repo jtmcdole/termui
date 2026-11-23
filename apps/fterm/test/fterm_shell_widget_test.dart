@@ -591,6 +591,56 @@ void main() {
     );
 
     testWidgets(
+      'fterm/window windowSizeMoveChanged pauses and resumes ambient shader ticks',
+      (tester) async {
+        final harness = AppThreeWayWsHarness();
+        await tester.runAsync(
+          () => harness.startCaster(id: 'win-s1', title: 'win'),
+        );
+
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(token: harness.token),
+            channelFactory: harness.openClientChannel,
+            settingsStorage: _MemSettings(),
+            audioControllerFactory: () =>
+                FtermAudioController(engineFactory: _WidgetFakeAudioEngine.new),
+            resizeDebounce: Duration.zero,
+            platformOverride: TargetPlatform.windows,
+            isWebOverride: false,
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester);
+        expect(workspace!.shaderController.ambientTicksPaused, isFalse);
+
+        const codec = StandardMethodCodec();
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'fterm/window',
+          codec.encodeMethodCall(
+            const MethodCall('windowSizeMoveChanged', true),
+          ),
+          (_) {},
+        );
+        expect(workspace!.shaderController.ambientTicksPaused, isTrue);
+
+        await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+          'fterm/window',
+          codec.encodeMethodCall(
+            const MethodCall('windowSizeMoveChanged', false),
+          ),
+          (_) {},
+        );
+        expect(workspace!.shaderController.ambientTicksPaused, isFalse);
+
+        await tester.runAsync(() => workspace!.dispose());
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.runAsync(harness.dispose);
+      },
+    );
+
+    testWidgets(
       '6px transparent splitter hit target drags off-center, top tab bar keeps >=48px drag space, F12 skips pane when overlay open, and Connect overlay scrolls in compact viewports',
       (tester) async {
         await tester.binding.setSurfaceSize(const Size(600, 420));
@@ -2448,6 +2498,19 @@ final class _WidgetMemPort implements TerminalPort {
 
   @override
   void removeAudioListener(void Function(TerminalAudioEvent event) listener) {}
+
+  @override
+  void addShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) {}
+
+  @override
+  void removeShaderListener(
+    void Function(TerminalShaderApcEvent event) listener,
+  ) {}
+
+  @override
+  void setShaderCapabilities(TerminalShaderCapabilities capabilities) {}
 
   @override
   void addClipboardListener(

@@ -419,6 +419,15 @@ final class _AboutLinksColumn extends StatelessWidget {
         ),
         const SizedBox(height: 6),
         _AboutActionLink(
+          key: const ValueKey('about-whats-new-button'),
+          icon: Icons.auto_awesome,
+          label: "What's New",
+          palette: palette,
+          accent: false,
+          onTap: workspace.openWhatsNew,
+        ),
+        const SizedBox(height: 6),
+        _AboutActionLink(
           key: const ValueKey('about-send-feedback'),
           icon: Icons.feedback_outlined,
           label: 'Send Feedback / Report Issue',

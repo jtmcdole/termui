@@ -46,9 +46,8 @@ void main() {
         await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
         await settleCastApp(tester, cycles: 3);
 
-        final wire = [
-          for (final chunk in pty.writtenInputs) utf8.decode(chunk),
-        ].join();
+        final wire = [for (final chunk in pty.writtenInputs) utf8.decode(chunk)]
+            .join();
         expect(wire, contains('\x1b[111;5u'));
         expect(wire, contains('\x1b[111;5:3u'));
         expect(wire, isNot(contains('\x1b[15;')));
