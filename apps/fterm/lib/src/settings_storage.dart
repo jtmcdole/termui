@@ -713,16 +713,33 @@ final class RelayCredentials {
   /// Saved caster bearer token used when publishing local shells.
   final String casterToken;
 
+  /// Saved Cloud Run IAP service account email (`gcloud` signing mode).
+  final String iapServiceAccount;
+
+  /// Saved Cloud Run IAP service account JSON key file path (local signing mode).
+  final String iapKeyFilePath;
+
+  /// Optional custom `gcloud` executable path override for IAP signing.
+  final String gcloudPath;
+
   /// Creates an immutable [RelayCredentials] value.
   const RelayCredentials({
     this.serverUrl = '',
     this.clientToken = '',
     this.casterToken = '',
+    this.iapServiceAccount = '',
+    this.iapKeyFilePath = '',
+    this.gcloudPath = '',
   });
 
   /// Whether all credential fields are empty.
   bool get isEmpty =>
-      serverUrl.isEmpty && clientToken.isEmpty && casterToken.isEmpty;
+      serverUrl.isEmpty &&
+      clientToken.isEmpty &&
+      casterToken.isEmpty &&
+      iapServiceAccount.isEmpty &&
+      iapKeyFilePath.isEmpty &&
+      gcloudPath.isEmpty;
 
   /// Decodes [RelayCredentials] from JSON string [raw], returning [empty] when
   /// missing or malformed.
@@ -732,26 +749,28 @@ final class RelayCredentials {
       final decoded = jsonDecode(raw);
       if (decoded is! Map<Object?, Object?>) return empty;
       return RelayCredentials(
-        serverUrl: decoded['serverUrl'] is String
-            ? decoded['serverUrl']! as String
-            : '',
-        clientToken: decoded['clientToken'] is String
-            ? decoded['clientToken']! as String
-            : '',
-        casterToken: decoded['casterToken'] is String
-            ? decoded['casterToken']! as String
-            : '',
+        serverUrl: _readString(decoded['serverUrl']),
+        clientToken: _readString(decoded['clientToken']),
+        casterToken: _readString(decoded['casterToken']),
+        iapServiceAccount: _readString(decoded['iapServiceAccount']),
+        iapKeyFilePath: _readString(decoded['iapKeyFilePath']),
+        gcloudPath: _readString(decoded['gcloudPath']),
       );
     } on Object {
       return empty;
     }
   }
 
+  static String _readString(Object? raw) => raw is String ? raw : '';
+
   /// Serializes these relay credentials as a JSON object string.
   String toJsonString() => jsonEncode(<String, Object?>{
     'serverUrl': serverUrl,
     'clientToken': clientToken,
     'casterToken': casterToken,
+    if (iapServiceAccount.isNotEmpty) 'iapServiceAccount': iapServiceAccount,
+    if (iapKeyFilePath.isNotEmpty) 'iapKeyFilePath': iapKeyFilePath,
+    if (gcloudPath.isNotEmpty) 'gcloudPath': gcloudPath,
   });
 
   @override
@@ -760,10 +779,20 @@ final class RelayCredentials {
       other is RelayCredentials &&
           other.serverUrl == serverUrl &&
           other.clientToken == clientToken &&
-          other.casterToken == casterToken;
+          other.casterToken == casterToken &&
+          other.iapServiceAccount == iapServiceAccount &&
+          other.iapKeyFilePath == iapKeyFilePath &&
+          other.gcloudPath == gcloudPath;
 
   @override
-  int get hashCode => Object.hash(serverUrl, clientToken, casterToken);
+  int get hashCode => Object.hash(
+    serverUrl,
+    clientToken,
+    casterToken,
+    iapServiceAccount,
+    iapKeyFilePath,
+    gcloudPath,
+  );
 }
 
 /// Writes [entries] in one coalesced batch when [storage] supports

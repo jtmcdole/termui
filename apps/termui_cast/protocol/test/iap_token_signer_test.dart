@@ -302,6 +302,244 @@ void main() {
         ),
       ).throws<ArgumentError>();
     });
+
+    test(
+      'preserves default and custom gcloudExecutable with injected processRunner and executes custom script directly',
+      () async {
+        final seenExecutables = <String>[];
+        final defaultRunnerSigner = IapJwtSigner(
+          serviceAccount: 'viewer@proj.iam.gserviceaccount.com',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+          processRunner: (executable, arguments) async {
+            seenExecutables.add(executable);
+            await File(arguments.last).writeAsString('jwt-default\n');
+            return ProcessResult(1, 0, '', '');
+          },
+        );
+        check(await defaultRunnerSigner.getBearerToken()).equals('jwt-default');
+        check(seenExecutables).deepEquals(['gcloud']);
+
+        seenExecutables.clear();
+        const customPath =
+            '/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud';
+        final customRunnerSigner = IapJwtSigner(
+          serviceAccount: 'viewer@proj.iam.gserviceaccount.com',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+          gcloudExecutable: customPath,
+          processRunner: (executable, arguments) async {
+            seenExecutables.add(executable);
+            await File(arguments.last).writeAsString('jwt-custom\n');
+            return ProcessResult(1, 0, '', '');
+          },
+        );
+        check(await customRunnerSigner.getBearerToken()).equals('jwt-custom');
+        check(seenExecutables).deepEquals([customPath]);
+
+        // Real subprocess run with an explicit fake gcloud wrapper.
+        final sandbox = Directory.systemTemp.createTempSync('iap_gcloud_ok_');
+        addTearDown(() async {
+          if (sandbox.existsSync()) {
+            await sandbox.delete(recursive: true);
+          }
+        });
+        final writerDart = File('${sandbox.path}/writer.dart')
+          ..writeAsStringSync(
+            'import "dart:io";\n'
+            'void main(List<String> args) {\n'
+            '  File(args.last).writeAsStringSync("real-subproc-jwt\\n");\n'
+            '}\n',
+          );
+        final String wrapperPath;
+        if (Platform.isWindows) {
+          wrapperPath = '${sandbox.path}\\custom_gcloud.cmd';
+          File(wrapperPath).writeAsStringSync(
+            '@echo off\r\n"${Platform.resolvedExecutable}" "${writerDart.path}" %*\r\n',
+          );
+        } else {
+          wrapperPath = '${sandbox.path}/custom_gcloud.sh';
+          File(wrapperPath).writeAsStringSync(
+            '#!/bin/sh\nexec "${Platform.resolvedExecutable}" "${writerDart.path}" "\$@"\n',
+          );
+          Process.runSync('chmod', ['+x', wrapperPath]);
+        }
+        final realSigner = IapJwtSigner(
+          serviceAccount: 'viewer@proj.iam.gserviceaccount.com',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+          gcloudExecutable: wrapperPath,
+        );
+        check(await realSigner.getBearerToken()).equals('real-subproc-jwt');
+
+        // Missing executable fails with ProcessException mentioning attempted path.
+        final missingExec = Platform.isWindows
+            ? '${sandbox.path}\\nonexistent_gcloud.cmd'
+            : '${sandbox.path}/nonexistent_gcloud';
+        final missingSigner = IapJwtSigner(
+          serviceAccount: 'viewer@proj.iam.gserviceaccount.com',
+          targetAudienceUrl: 'https://relay.run.app/v1/client',
+          gcloudExecutable: missingExec,
+        );
+        await check(missingSigner.getBearerToken()).throws<ProcessException>(
+          (e) => e.has((p) => p.executable, 'executable').equals(missingExec),
+        );
+      },
+    );
+  });
+
+  group('gcloud executable probing and resolution', () {
+    test('expandHomePath expands ~/ and ~\\ using HOME or USERPROFILE', () {
+      check(
+        expandHomePath(
+          '~/dvelopment/google-cloud-sdk/bin/gcloud',
+          environment: const {'HOME': '/Users/codefu/'},
+          operatingSystem: 'macos',
+        ),
+      ).equals('/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud');
+
+      check(
+        expandHomePath(
+          r'~\google-cloud-sdk\bin\gcloud.cmd',
+          environment: const {'USERPROFILE': r'C:\Users\alice\'},
+          operatingSystem: 'windows',
+        ),
+      ).equals(r'C:\Users\alice\google-cloud-sdk\bin\gcloud.cmd');
+
+      check(
+        expandHomePath(
+          '~/sdk/gcloud',
+          environment: const {},
+          operatingSystem: 'linux',
+        ),
+      ).equals('~/sdk/gcloud');
+
+      check(
+        expandHomePath(
+          '/usr/local/bin/gcloud',
+          environment: const {'HOME': '/Users/codefu'},
+          operatingSystem: 'macos',
+        ),
+      ).equals('/usr/local/bin/gcloud');
+    });
+
+    test(
+      'probeGcloudExecutable checks PATH before standard locations on macOS/Linux and Windows',
+      () {
+        // 1. macOS/Linux: PATH wins over standard Homebrew fallback.
+        final macBoth = <String>{
+          '/custom/bin/gcloud',
+          '/opt/homebrew/bin/gcloud',
+        };
+        check(
+          probeGcloudExecutable(
+            environment: const {
+              'PATH': '/empty:/custom/bin/',
+              'HOME': '/Users/codefu',
+            },
+            fileExists: macBoth.contains,
+            operatingSystem: 'macos',
+          ),
+        ).equals('/custom/bin/gcloud');
+
+        // 2. macOS/Linux: falls back to standard install locations when PATH is minimal (e.g. Dock launch).
+        final macStandard = <String>{
+          '/Users/codefu/google-cloud-sdk/bin/gcloud',
+        };
+        check(
+          probeGcloudExecutable(
+            environment: const {
+              'PATH': '/usr/bin:/bin',
+              'HOME': '/Users/codefu',
+            },
+            fileExists: macStandard.contains,
+            operatingSystem: 'macos',
+          ),
+        ).equals('/Users/codefu/google-cloud-sdk/bin/gcloud');
+
+        final homebrewOnly = <String>{
+          '/opt/homebrew/share/google-cloud-sdk/bin/gcloud',
+        };
+        check(
+          probeGcloudExecutable(
+            environment: const {'PATH': '/usr/bin:/bin'},
+            fileExists: homebrewOnly.contains,
+            operatingSystem: 'macos',
+          ),
+        ).equals('/opt/homebrew/share/google-cloud-sdk/bin/gcloud');
+
+        // 3. Windows: checks gcloud.cmd > gcloud.exe > gcloud in quoted Path entries.
+        final winPathFiles = <String>{
+          r'C:\Tools\sdk\bin\gcloud.exe',
+          r'C:\Tools\sdk\bin\gcloud.cmd',
+        };
+        check(
+          probeGcloudExecutable(
+            environment: const {'Path': r'"C:\Tools\sdk\bin\"'},
+            fileExists: winPathFiles.contains,
+            operatingSystem: 'windows',
+          ),
+        ).equals(r'C:\Tools\sdk\bin\gcloud.cmd');
+
+        // 4. Windows: falls back to LOCALAPPDATA / ProgramFiles / USERPROFILE standard locations.
+        final winFallback = <String>{
+          r'C:\Users\alice\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd',
+        };
+        check(
+          probeGcloudExecutable(
+            environment: const {
+              'PATH': r'C:\Windows\System32',
+              'LOCALAPPDATA': r'C:\Users\alice\AppData\Local',
+              'USERPROFILE': r'C:\Users\alice',
+            },
+            fileExists: winFallback.contains,
+            operatingSystem: 'windows',
+          ),
+        ).equals(
+          r'C:\Users\alice\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd',
+        );
+
+        // 5. Returns null when nothing matches.
+        check(
+          probeGcloudExecutable(
+            environment: const {'PATH': '/usr/bin', 'HOME': '/Users/codefu'},
+            fileExists: (_) => false,
+            operatingSystem: 'linux',
+          ),
+        ).isNull();
+      },
+    );
+
+    test(
+      'resolveGcloudExecutable prioritizes overridePath with ~/ expansion, then probe, then gcloud',
+      () {
+        check(
+          resolveGcloudExecutable(
+            overridePath: '  ~/dvelopment/google-cloud-sdk/bin/gcloud  ',
+            environment: const {
+              'HOME': '/Users/codefu',
+              'PATH': '/opt/homebrew/bin',
+            },
+            fileExists: (p) => p == '/opt/homebrew/bin/gcloud',
+            operatingSystem: 'macos',
+          ),
+        ).equals('/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud');
+
+        check(
+          resolveGcloudExecutable(
+            overridePath: '   ',
+            environment: const {'PATH': '/usr/bin'},
+            fileExists: (p) => p == '/opt/homebrew/bin/gcloud',
+            operatingSystem: 'macos',
+          ),
+        ).equals('/opt/homebrew/bin/gcloud');
+
+        check(
+          resolveGcloudExecutable(
+            environment: const {'PATH': '/usr/bin'},
+            fileExists: (_) => false,
+            operatingSystem: 'linux',
+          ),
+        ).equals('gcloud');
+      },
+    );
   });
 }
 

@@ -161,7 +161,7 @@ void _definePreferencesAndCliHygieneTests() {
         environment: const {},
         canonicalizePath: (raw) => '/abs/work/${raw.replaceFirst('./', '')}',
         iapProviderBuilder:
-            ({required serverUri, serviceAccount, keyFilePath}) =>
+            ({required serverUri, serviceAccount, keyFilePath, gcloudPath}) =>
                 () async => 'iap-jwt:$keyFilePath',
         onCliSecretWarning: (_) {},
       );
@@ -193,7 +193,7 @@ void _definePreferencesAndCliHygieneTests() {
         canonicalizePath: (raw) => '/home/dev/$raw',
         secretFileReader: (path) => 'secret-from-$path',
         iapProviderBuilder:
-            ({required serverUri, serviceAccount, keyFilePath}) =>
+            ({required serverUri, serviceAccount, keyFilePath, gcloudPath}) =>
                 () async => 'jwt',
       );
       expect(

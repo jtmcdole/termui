@@ -4,10 +4,12 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/desktop_launch_env.dart';
 import 'package:fterm/src/desktop_launch_env_io.dart';
 import 'package:fterm/src/font_loader.dart';
@@ -18,17 +20,21 @@ import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver_io.dart';
 import 'package:material_ui/material_ui.dart' show Color, Scaffold;
 import 'package:path/path.dart' as p;
-import 'package:termui/termui.dart' show TerminalColorTheme;
+import 'package:termui/termui.dart' show TerminalBrightness, TerminalColorTheme;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart'
     show
+        CastClientRepository,
         CastWorkspaceSettings,
         ClientConnectionState,
         DockPosition,
         TerminalThemeSettings,
-        ThemeAppearanceMode;
+        ThemeAppearanceMode,
+        WsClientTransport;
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol_io.dart';
 import 'package:termui_flutter/termui_flutter.dart';
+import 'package:termui_pty/termui_pty.dart'
+    show PtyRouter, PtyRouterSession, RoutedPtyBackend, TerminalPort;
 
 import 'support/app_three_way_harness.dart';
 
@@ -44,6 +50,7 @@ void main() {
   _defineFileSettingsStorageWidgetTests();
   _defineThrottledSettingsSaverTests();
   _defineDesktopIapWidgetTests();
+  _definePersistentIapAndGcloudTests();
 }
 
 void _defineDesktopLaunchConfigTests() {
@@ -702,11 +709,12 @@ void _defineDesktopIapLaunchTests() {
         ],
         environment: <String, String>{'TERMUI_CAST_IAP_KEY_FILE': keyFile.path},
         iapProviderBuilder:
-            ({required serverUri, serviceAccount, keyFilePath}) =>
+            ({required serverUri, serviceAccount, keyFilePath, gcloudPath}) =>
                 buildPlatformIapTokenProvider(
                   serverUri: serverUri,
                   serviceAccount: serviceAccount,
                   keyFilePath: keyFilePath,
+                  gcloudPath: gcloudPath,
                   clock: Clock.fixed(DateTime.utc(2026, 11, 10)),
                   processRunner: (_, arguments) async {
                     await File(arguments.last)
@@ -1467,4 +1475,600 @@ final class _CountingSettingsStorage implements BatchSettingsStorage {
 
   @override
   Future<void> flush() async {}
+}
+
+void _definePersistentIapAndGcloudTests() {
+  group('Persistent Cloud Run IAP credentials & gcloud path override', () {
+    test('RelayCredentials round-trips IAP & gcloudPath fields and stays backward-compatible with legacy JSON', () {
+      expect(RelayCredentials.empty.isEmpty, isTrue);
+
+      const full = RelayCredentials(
+        serverUrl: 'wss://relay.run.app/v1/client',
+        clientToken: 'viewer-tok',
+        casterToken: 'caster-tok',
+        iapServiceAccount: 'caster@proj.iam.gserviceaccount.com',
+        iapKeyFilePath: '/keys/sa.json',
+        gcloudPath: '/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud',
+      );
+      expect(full.isEmpty, isFalse);
+      final roundTripped = RelayCredentials.fromJsonString(full.toJsonString());
+      expect(roundTripped, equals(full));
+      expect(roundTripped.hashCode, equals(full.hashCode));
+
+      // Only gcloudPath populated still counts as non-empty.
+      const gcloudOnly = RelayCredentials(gcloudPath: '/custom/gcloud');
+      expect(gcloudOnly.isEmpty, isFalse);
+
+      // Legacy JSON missing the new keys decodes cleanly with empty defaults.
+      final legacy = RelayCredentials.fromJsonString(
+        jsonEncode(<String, Object?>{
+          'serverUrl': 'wss://legacy.example/v1/client',
+          'clientToken': 'old-client',
+          'casterToken': 'old-caster',
+        }),
+      );
+      expect(legacy.serverUrl, equals('wss://legacy.example/v1/client'));
+      expect(legacy.clientToken, equals('old-client'));
+      expect(legacy.casterToken, equals('old-caster'));
+      expect(legacy.iapServiceAccount, isEmpty);
+      expect(legacy.iapKeyFilePath, isEmpty);
+      expect(legacy.gcloudPath, isEmpty);
+    });
+
+    test('DesktopLaunchOverrides parses --gcloud-path and TERMUI_CAST_GCLOUD_PATH with CLI > env precedence and relaunchArgs', () async {
+      final desktopBase = Uri.parse('file:///Users/codefu/fterm/');
+      final seenCalls =
+          <({Uri uri, String? sa, String? key, String? gcloud})>[];
+
+      IapTokenProvider? recordingBuilder({
+        required Uri serverUri,
+        String? serviceAccount,
+        String? keyFilePath,
+        String? gcloudPath,
+      }) {
+        seenCalls.add((
+          uri: serverUri,
+          sa: serviceAccount,
+          key: keyFilePath,
+          gcloud: gcloudPath,
+        ));
+        return () async => 'jwt-$gcloudPath';
+      }
+
+      // 1. Env fallback populates CastLaunchConfig.gcloudPath & forwards to builder (omitted from relaunchArgs).
+      final fromEnv = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const ['--server=wss://relay.run.app/v1/client'],
+        environment: const {
+          'TERMUI_CAST_IAP_SERVICE_ACCOUNT':
+              'env-sa@proj.iam.gserviceaccount.com',
+          'TERMUI_CAST_GCLOUD_PATH':
+              '/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud',
+        },
+        canonicalizePath: (raw) => raw,
+        iapProviderBuilder: recordingBuilder,
+      );
+      expect(
+        fromEnv.iapServiceAccount,
+        equals('env-sa@proj.iam.gserviceaccount.com'),
+      );
+      expect(
+        fromEnv.gcloudPath,
+        equals('/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud'),
+      );
+      expect(
+        fromEnv.relaunchArgs,
+        equals(const ['--server', 'wss://relay.run.app/v1/client']),
+      );
+      expect(
+        seenCalls.single.gcloud,
+        equals('/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud'),
+      );
+
+      // 2. CLI --gcloud-path overrides TERMUI_CAST_GCLOUD_PATH and is included in relaunchArgs.
+      seenCalls.clear();
+      final fromCli = resolveCastLaunchConfig(
+        baseUri: desktopBase,
+        args: const [
+          '--server=wss://relay.run.app/v1/client',
+          '--iap-service-account=cli-sa@proj.iam.gserviceaccount.com',
+          '--gcloud-path=/opt/custom/bin/gcloud',
+        ],
+        environment: const {'TERMUI_CAST_GCLOUD_PATH': '/ignored/env/gcloud'},
+        canonicalizePath: (raw) => raw,
+        iapProviderBuilder: recordingBuilder,
+      );
+      expect(fromCli.gcloudPath, equals('/opt/custom/bin/gcloud'));
+      expect(
+        fromCli.relaunchArgs,
+        containsAllInOrder(const ['--gcloud-path', '/opt/custom/bin/gcloud']),
+      );
+      expect(seenCalls.single.gcloud, equals('/opt/custom/bin/gcloud'));
+
+      // Also forwards gcloudPath into scoped caster factory.
+      final casterProvider = fromCli.iapTokenProviderFor(
+        Uri.parse('wss://relay.run.app/v1/caster'),
+      );
+      expect(await casterProvider!(), equals('jwt-/opt/custom/bin/gcloud'));
+
+      // Blank --gcloud-path throws FormatException.
+      expect(
+        () => resolveCastLaunchConfig(
+          baseUri: desktopBase,
+          args: const ['--gcloud-path=   '],
+          environment: const {},
+        ),
+        throwsFormatException,
+      );
+    });
+
+    test('FtermWorkspaceController hydrates saved IAP + gcloudPath on startup, wires shareLocalPane, handles invalid saved key, and updates via connectRelay', () async {
+      final storage = _CountingSettingsStorage();
+      saveStoredRelayCredentials(
+        storage,
+        const RelayCredentials(
+          serverUrl: 'wss://saved-iap.run.app/v1/client',
+          clientToken: 'saved-viewer',
+          casterToken: 'saved-caster',
+          iapServiceAccount: 'saved-sa@proj.iam.gserviceaccount.com',
+          gcloudPath: '/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud',
+        ),
+      );
+
+      final builderCalls =
+          <({Uri uri, String? sa, String? key, String? gcloud})>[];
+      IapTokenProvider? fakeBuilder({
+        required Uri serverUri,
+        String? serviceAccount,
+        String? keyFilePath,
+        String? gcloudPath,
+      }) {
+        builderCalls.add((
+          uri: serverUri,
+          sa: serviceAccount,
+          key: keyFilePath,
+          gcloud: gcloudPath,
+        ));
+        if (keyFilePath == '/missing/key.json') {
+          throw const FormatException('IAP key file not found.');
+        }
+        return () async =>
+            'jwt:${serverUri.path}:${serviceAccount ?? keyFilePath}:${gcloudPath ?? "auto"}';
+      }
+
+      final harness = AppThreeWayWsHarness();
+      addTearDown(harness.dispose);
+      final driver = _RecordingDesktopHostDriver();
+      final repo = CastClientRepository(
+        transport: WsClientTransport(channelFactory: harness.openClientChannel),
+        enableReconnect: false,
+      );
+      final ws = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(promptForConnection: true),
+        repository: repo,
+        localHostDriver: driver,
+        audioController: FtermAudioController(
+          requireUserGesture: false,
+          engineFactory: null,
+        ),
+        storage: storage,
+        resizeDebounce: Duration.zero,
+        iapProviderBuilder: fakeBuilder,
+        gcloudPathProber: () => null,
+      );
+      addTearDown(ws.dispose);
+
+      expect(
+        ws.activeIapServiceAccount,
+        equals('saved-sa@proj.iam.gserviceaccount.com'),
+      );
+      expect(
+        ws.activeGcloudPath,
+        equals('/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud'),
+      );
+
+      await ws.start();
+      expect(ws.repository.transport.iapTokenProvider, isNotNull);
+      expect(
+        await ws.repository.transport.iapTokenProvider!(),
+        equals(
+          'jwt:/v1/client:saved-sa@proj.iam.gserviceaccount.com:/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud',
+        ),
+      );
+
+      // Local pane sharing resolves audience-scoped /v1/caster IAP provider from saved credentials!
+      final shared = await ws.togglePaneShare();
+      expect(shared, isTrue);
+      final shareIap = driver.hosts.single.lastShareIapProvider;
+      expect(shareIap, isNotNull);
+      expect(
+        await shareIap!(),
+        equals(
+          'jwt:/v1/caster:saved-sa@proj.iam.gserviceaccount.com:/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud',
+        ),
+      );
+
+      // connectRelay rejects ws:// + IAP, invalid SA email, both SA & key, and missing key file without mutating state.
+      await expectLater(
+        () => ws.connectRelay(
+          serverUri: Uri.parse('ws://127.0.0.1:8420/v1/client'),
+          clientToken: 't',
+          iapServiceAccount: 'ok@proj.iam.gserviceaccount.com',
+          iapKeyFilePath: '',
+        ),
+        throwsFormatException,
+      );
+      await expectLater(
+        () => ws.connectRelay(
+          serverUri: Uri.parse('wss://saved-iap.run.app/v1/client'),
+          clientToken: 't',
+          iapServiceAccount: 'bad-email',
+          iapKeyFilePath: '',
+        ),
+        throwsFormatException,
+      );
+      await expectLater(
+        () => ws.connectRelay(
+          serverUri: Uri.parse('wss://saved-iap.run.app/v1/client'),
+          clientToken: 't',
+          iapServiceAccount: 'ok@proj.iam.gserviceaccount.com',
+          iapKeyFilePath: '/keys/sa.json',
+        ),
+        throwsFormatException,
+      );
+      await expectLater(
+        () => ws.connectRelay(
+          serverUri: Uri.parse('wss://saved-iap.run.app/v1/client'),
+          clientToken: 't',
+          iapServiceAccount: '',
+          iapKeyFilePath: '/missing/key.json',
+        ),
+        throwsFormatException,
+      );
+      // Active state remained intact after validation failures.
+      expect(
+        ws.activeIapServiceAccount,
+        equals('saved-sa@proj.iam.gserviceaccount.com'),
+      );
+
+      // Switching to JSON Key File updates active state, transport provider, and persisted credentials.
+      await ws.connectRelay(
+        serverUri: Uri.parse('wss://other.run.app/v1/client'),
+        clientToken: 'viewer-2',
+        casterToken: 'caster-2',
+        iapServiceAccount: '',
+        iapKeyFilePath: '/valid/sa.json',
+        gcloudPath: '',
+      );
+      expect(ws.activeIapServiceAccount, isEmpty);
+      expect(ws.activeIapKeyFilePath, equals('/valid/sa.json'));
+      expect(ws.activeGcloudPath, isEmpty);
+      expect(
+        await ws.repository.transport.iapTokenProvider!(),
+        equals('jwt:/v1/client:/valid/sa.json:auto'),
+      );
+      final persistedKey = loadStoredRelayCredentials(storage);
+      expect(persistedKey.iapServiceAccount, isEmpty);
+      expect(persistedKey.iapKeyFilePath, equals('/valid/sa.json'));
+
+      // Clearing to None removes IAP provider from transport and storage.
+      await ws.connectRelay(
+        serverUri: Uri.parse('wss://other.run.app/v1/client'),
+        clientToken: 'viewer-2',
+        iapServiceAccount: '',
+        iapKeyFilePath: '',
+        gcloudPath: '',
+      );
+      expect(ws.repository.transport.iapTokenProvider, isNull);
+      expect(loadStoredRelayCredentials(storage).iapKeyFilePath, isEmpty);
+
+      // Corrupt/missing saved IAP key file on startup sets statusBanner gracefully instead of throwing.
+      final badStorage = _CountingSettingsStorage();
+      saveStoredRelayCredentials(
+        badStorage,
+        const RelayCredentials(
+          serverUrl: 'wss://bad-key.run.app/v1/client',
+          clientToken: 'tok',
+          iapKeyFilePath: '/missing/key.json',
+        ),
+      );
+      final badWs = FtermWorkspaceController(
+        launchConfig: CastLaunchConfig(promptForConnection: true),
+        repository: CastClientRepository(
+          transport: WsClientTransport(
+            channelFactory: harness.openClientChannel,
+          ),
+          enableReconnect: false,
+        ),
+        localHostDriver: _RecordingDesktopHostDriver(),
+        audioController: FtermAudioController(requireUserGesture: false),
+        storage: badStorage,
+        resizeDebounce: Duration.zero,
+        iapProviderBuilder: fakeBuilder,
+      );
+      addTearDown(badWs.dispose);
+      await badWs.start();
+      expect(
+        badWs.statusBanner,
+        contains('Saved Cloud Run IAP config invalid'),
+      );
+    });
+
+    testWidgets(
+      'Connect overlay displays auto-detected vs missing gcloud hint, validates IAP, connects with custom gcloudPath, and persists to settings.json',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(760, 640));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final tempDir = Directory.systemTemp.createTempSync('fterm_iap_ui_');
+        addTearDown(() => tempDir.deleteSync(recursive: true));
+        final settingsFile = File(p.join(tempDir.path, 'settings.json'));
+        final fileStorage = FileSettingsStorage(settingsFile);
+
+        final harness = AppThreeWayWsHarness();
+        addTearDown(harness.dispose);
+        final builtCalls =
+            <({Uri uri, String? sa, String? key, String? gcloud})>[];
+
+        String? probedPath;
+        FtermWorkspaceController? workspace;
+        await tester.pumpWidget(
+          FtermApp(
+            config: CastLaunchConfig(promptForConnection: true),
+            channelFactory: harness.openClientChannel,
+            localHostDriver: _RecordingDesktopHostDriver(),
+            settingsStorage: fileStorage,
+            resizeDebounce: Duration.zero,
+            gcloudPathProber: () => probedPath,
+            iapProviderBuilder:
+                ({
+                  required serverUri,
+                  serviceAccount,
+                  keyFilePath,
+                  gcloudPath,
+                }) {
+                  builtCalls.add((
+                    uri: serverUri,
+                    sa: serviceAccount,
+                    key: keyFilePath,
+                    gcloud: gcloudPath,
+                  ));
+                  return () async => 'ui-iap-jwt';
+                },
+            onWorkspaceCreated: (ws) => workspace = ws,
+          ),
+        );
+        await settleCastApp(tester, cycles: 3);
+
+        // Open Connect overlay when gcloud is NOT auto-detected (null).
+        workspace!.setOverlay(FtermOverlay.connect);
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('connect-iap-mode-none')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('connect-iap-mode-sa')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('connect-iap-mode-key')),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const ValueKey('connect-iap-mode-sa')));
+        await tester.pump();
+        expect(
+          find.text(
+            'gcloud not found on PATH — enter full path '
+            '(e.g. /Users/.../google-cloud-sdk/bin/gcloud)',
+          ),
+          findsOneWidget,
+        );
+
+        // Enter wss:// relay URL, viewer token, SA email, and custom gcloud path.
+        const customGcloud =
+            '/Users/codefu/dvelopment/google-cloud-sdk/bin/gcloud';
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-url-field')),
+          'wss://iap-relay.run.app/v1/client',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-token-field')),
+          harness.token,
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-iap-sa-field')),
+          'viewer@proj.iam.gserviceaccount.com',
+        );
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-gcloud-path-field')),
+          customGcloud,
+        );
+        await tester.pump();
+        expect(find.text('Using custom gcloud path'), findsOneWidget);
+
+        await tester.tap(find.byKey(const ValueKey('connect-submit-button')));
+        await settleCastApp(tester, cycles: 5);
+        await tester.runAsync(fileStorage.flush);
+
+        expect(
+          find.byKey(const ValueKey('fterm-overlay-connect')),
+          findsNothing,
+        );
+        expect(builtCalls, isNotEmpty);
+        expect(
+          builtCalls.last.sa,
+          equals('viewer@proj.iam.gserviceaccount.com'),
+        );
+        expect(builtCalls.last.gcloud, equals(customGcloud));
+
+        final persisted = loadStoredRelayCredentials(
+          FileSettingsStorage(settingsFile),
+        );
+        expect(
+          persisted.serverUrl,
+          equals('wss://iap-relay.run.app/v1/client'),
+        );
+        expect(
+          persisted.iapServiceAccount,
+          equals('viewer@proj.iam.gserviceaccount.com'),
+        );
+        expect(persisted.gcloudPath, equals(customGcloud));
+
+        // Verify auto-detected hint appears when gcloudPathProber finds a binary and override is blank.
+        probedPath = '/opt/homebrew/bin/gcloud';
+        workspace!.setOverlay(FtermOverlay.connect);
+        await tester.pump();
+        await tester.enterText(
+          find.byKey(const ValueKey('connect-gcloud-path-field')),
+          '',
+        );
+        await tester.pump();
+        expect(
+          find.text('Auto-detected: /opt/homebrew/bin/gcloud'),
+          findsOneWidget,
+        );
+
+        await tester.pumpWidget(const SizedBox.shrink());
+        await settleCastApp(tester, cycles: 2);
+      },
+    );
+  });
+}
+
+final class _RecordingRoutedBackend implements RoutedPtyBackend {
+  final StreamController<Uint8List> _outputController =
+      StreamController<Uint8List>();
+  final Completer<int> _exitCompleter = Completer<int>();
+  bool _disposed = false;
+
+  @override
+  Stream<Uint8List> get output => _outputController.stream;
+
+  @override
+  Future<int> get exitCode => _exitCompleter.future;
+
+  @override
+  void write(Uint8List bytes) {}
+
+  @override
+  void resize(int cols, int rows, {int pixelWidth = 0, int pixelHeight = 0}) {}
+
+  @override
+  void kill() {
+    if (!_exitCompleter.isCompleted) {
+      _exitCompleter.complete(0);
+    }
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    kill();
+    if (!_outputController.isClosed) {
+      await _outputController.close();
+    }
+  }
+}
+
+final class _RecordingDesktopHostDriver implements LocalHostDriver {
+  final PtyRouter _router = PtyRouter();
+  final List<_RecordingLocalPaneHost> hosts = [];
+
+  @override
+  bool get isSupported => true;
+
+  @override
+  Future<LocalPaneHost> openShell(LocalShellConfig config) async {
+    final session = _router.createSession(backend: _RecordingRoutedBackend());
+    final host = _RecordingLocalPaneHost(
+      id: 'rec-host-${hosts.length + 1}',
+      session: session,
+      port: session.openPort(),
+    );
+    hosts.add(host);
+    return host;
+  }
+
+  @override
+  Future<void> dispose() async {
+    for (final host in hosts) {
+      await host.dispose();
+    }
+    await _router.dispose();
+  }
+}
+
+final class _RecordingLocalPaneHost implements LocalPaneHost {
+  @override
+  final String id;
+  final PtyRouterSession _session;
+  @override
+  final TerminalPort port;
+  final StreamController<LocalShareSnapshot> _shareCtrl =
+      StreamController<LocalShareSnapshot>.broadcast();
+  LocalShareSnapshot _snapshot = LocalShareSnapshot.unshared;
+  IapTokenProvider? lastShareIapProvider;
+  bool _disposed = false;
+
+  _RecordingLocalPaneHost({
+    required this.id,
+    required this._session,
+    required this.port,
+  });
+
+  @override
+  Future<int> get exitCode => _session.exitCode;
+
+  @override
+  LocalShareSnapshot get shareSnapshot => _snapshot;
+
+  @override
+  Stream<LocalShareSnapshot> get shareUpdates => _shareCtrl.stream;
+
+  @override
+  Future<SessionId> startShare({
+    required Uri serverUri,
+    required String casterToken,
+    required String title,
+    String? uploadDirPath,
+    IapTokenProvider? iapTokenProvider,
+    CasterTransportOpener? channelOpener,
+  }) async {
+    lastShareIapProvider = iapTokenProvider;
+    const id = SessionId('shared-1');
+    _snapshot = const LocalShareSnapshot(
+      state: LocalShareState.live,
+      sessionId: id,
+    );
+    _shareCtrl.add(_snapshot);
+    return id;
+  }
+
+  @override
+  Future<void> stopShare() async {
+    _snapshot = LocalShareSnapshot.unshared;
+    _shareCtrl.add(_snapshot);
+  }
+
+  @override
+  void setColorScheme(TerminalBrightness brightness) {
+    _session.terminal.setColorScheme(brightness);
+  }
+
+  @override
+  bool isLiveRowWrapped(int row) => _session.terminal.isRowWrapped(row);
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    await port.dispose();
+    await _session.dispose();
+    if (!_shareCtrl.isClosed) {
+      await _shareCtrl.close();
+    }
+  }
 }

@@ -176,19 +176,25 @@ final class CastClientRepository {
   Future<void> reconnect(
     CastEndpoint endpoint, {
     bool retryOnFailure = true,
+    IapTokenProvider? iapTokenProvider,
+    bool replaceIapTokenProvider = false,
   }) async {
     if (_disposed) return;
+    final previous = _transport;
+    final nextTransport =
+        _transportFactory?.call(endpoint) ??
+        previous.copyWithEndpoint(
+          endpoint,
+          iapTokenProvider: iapTokenProvider,
+          replaceIapTokenProvider: replaceIapTokenProvider,
+        );
     final epoch = ++_epoch;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _detachSubscriptions();
-    final previous = _transport;
     _priorRxBytes += previous.rxBytes;
     _priorTxBytes += previous.txBytes;
     _resetAttachedPortsConnectionState();
-    final nextTransport =
-        _transportFactory?.call(endpoint) ??
-        previous.copyWithEndpoint(endpoint);
     _transport = nextTransport;
     _reconnectAttempt = 0;
     _fatalAuthError = false;

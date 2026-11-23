@@ -75,6 +75,12 @@ final class FtermApp extends StatefulWidget {
   /// Optional About metadata & license loader seam for deterministic tests.
   final AboutService? aboutService;
 
+  /// Optional desktop IAP token provider builder seam for tests.
+  final DesktopIapProviderBuilder? iapProviderBuilder;
+
+  /// Optional desktop `gcloud` executable prober seam for tests.
+  final String? Function()? gcloudPathProber;
+
   /// Optional test hook invoked with the created [FtermWorkspaceController].
   final void Function(FtermWorkspaceController workspace)? onWorkspaceCreated;
 
@@ -98,6 +104,8 @@ final class FtermApp extends StatefulWidget {
     this.updateService,
     this.updateTimerFactory,
     this.aboutService,
+    this.iapProviderBuilder,
+    this.gcloudPathProber,
     this.onWorkspaceCreated,
   });
 
@@ -176,6 +184,8 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
       updateService: widget.updateService,
       updateTimerFactory: widget.updateTimerFactory,
       aboutService: widget.aboutService,
+      iapProviderBuilder: widget.iapProviderBuilder,
+      gcloudPathProber: widget.gcloudPathProber,
       onFrameRedrawn: widget.onFrameRedrawn,
     );
     _appThemeMode = _resolveMaterialThemeMode();
