@@ -86,6 +86,124 @@ void main() {
     );
 
     test(
+      'copyWithEndpoint replaces or clears iapTokenProvider when replaceIapTokenProvider is true and rejects ws://',
+      () {
+        Future<String> providerA() async => 'iap-a';
+        Future<String> providerB() async => 'iap-b';
+        final noIap = WsClientTransport(
+          serverUri: Uri.parse('ws://127.0.0.1:8420/v1/client'),
+          token: 't1',
+        );
+
+        final installed = noIap.copyWithEndpoint(
+          (serverUri: Uri.parse('wss://relay.run.app/v1/client'), token: 't2'),
+          iapTokenProvider: providerA,
+          replaceIapTokenProvider: true,
+        );
+        check(identical(installed.iapTokenProvider, providerA)).isTrue();
+
+        final swapped = installed.copyWithEndpoint(
+          (serverUri: Uri.parse('wss://relay.run.app/v1/client'), token: 't3'),
+          iapTokenProvider: providerB,
+          replaceIapTokenProvider: true,
+        );
+        check(identical(swapped.iapTokenProvider, providerB)).isTrue();
+
+        final cleared = swapped.copyWithEndpoint(
+          (serverUri: Uri.parse('wss://relay.run.app/v1/client'), token: 't4'),
+          iapTokenProvider: null,
+          replaceIapTokenProvider: true,
+        );
+        check(cleared.iapTokenProvider).isNull();
+
+        check(
+          () => installed.copyWithEndpoint(
+            (
+              serverUri: Uri.parse('ws://127.0.0.1:8420/v1/client'),
+              token: 't5',
+            ),
+            iapTokenProvider: providerA,
+            replaceIapTokenProvider: true,
+          ),
+        ).throws<FormatException>();
+      },
+    );
+
+    test(
+      'repository.reconnect installs, swaps, and clears iapTokenProvider dynamically over wss://',
+      () => HttpOverrides.runWithHttpOverrides(() async {
+        final seenHeaders = <String?>[];
+        final server = await _bindMockIapTlsRelay(
+          expectedViewerToken: 'viewer-secret',
+          onUpgradeRequest: seenHeaders.add,
+          onAuthFrameToken: (_) {},
+        );
+        addTearDown(() => server.close(force: true));
+
+        final uri = Uri.parse('wss://127.0.0.1:${server.port}/v1/client');
+        final repository = CastClientRepository(
+          transport: WsClientTransport(
+            serverUri: Uri.parse('ws://127.0.0.1:1/v1/client'),
+          ),
+          enableReconnect: false,
+        );
+        addTearDown(repository.dispose);
+
+        final received = <CastMessage>[];
+        clientMessageReceivedEvent.addListener(repository.bus, received.add);
+
+        // 1. Install IAP provider on a transport originally created without one.
+        await repository.reconnect(
+          (serverUri: uri, token: 'viewer-secret'),
+          retryOnFailure: false,
+          iapTokenProvider: () async => 'iap-first',
+          replaceIapTokenProvider: true,
+        );
+        await _waitFor(() => received.any((m) => m is AuthAcceptedFrame));
+        check(seenHeaders).deepEquals(['Bearer iap-first']);
+
+        // 2. Reject ws:// with non-null iapTokenProvider without tearing down active transport.
+        await check(
+          repository.reconnect(
+            (
+              serverUri: Uri.parse('ws://127.0.0.1:8420/v1/client'),
+              token: 'viewer-secret',
+            ),
+            retryOnFailure: false,
+            iapTokenProvider: () async => 'iap-bad',
+            replaceIapTokenProvider: true,
+          ),
+        ).throws<FormatException>();
+        check(repository.transport.isConnected).isTrue();
+
+        // 3. Swap IAP provider to a fresh provider and verify updated Authorization header.
+        received.clear();
+        await repository.reconnect(
+          (serverUri: uri, token: 'viewer-secret'),
+          retryOnFailure: false,
+          iapTokenProvider: () async => 'iap-second',
+          replaceIapTokenProvider: true,
+        );
+        await _waitFor(() => received.any((m) => m is AuthAcceptedFrame));
+        check(
+          seenHeaders,
+        ).deepEquals(['Bearer iap-first', 'Bearer iap-second']);
+
+        // 4. Clear IAP provider -> server rejects missing Authorization header (401).
+        await check(
+          repository.reconnect(
+            (serverUri: uri, token: 'viewer-secret'),
+            retryOnFailure: false,
+            iapTokenProvider: null,
+            replaceIapTokenProvider: true,
+          ),
+        ).throws<Object>();
+        check(repository.transport.iapTokenProvider).isNull();
+        check(seenHeaders.last).isNull();
+      }, _TrustLoopbackCertHttpOverrides()),
+    );
+
+    test(
       'attaches refreshed Authorization: Bearer headers over wss:// and recovers viewer token via reconnect',
       () => HttpOverrides.runWithHttpOverrides(() async {
         final seenAuthHeaders = <String?>[];

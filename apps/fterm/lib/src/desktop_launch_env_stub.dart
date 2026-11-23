@@ -11,7 +11,11 @@ IapTokenProvider? buildPlatformIapTokenProvider({
   required Uri serverUri,
   String? serviceAccount,
   String? keyFilePath,
+  String? gcloudPath,
 }) => null;
+
+/// Returns `null` on Web where local `gcloud` execution is unavailable.
+String? probePlatformGcloudExecutable() => null;
 
 /// No-op startup error reporter on Web.
 void reportPlatformStartupError(String message) {}

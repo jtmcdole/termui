@@ -77,28 +77,43 @@ final class WsClientTransport {
        _channelFactory = channelFactory;
 
   /// Creates a fresh transport targeting [endpoint], preserving any injected
-  /// channel factory seam or compatible `wss://` IAP signer.
-  WsClientTransport copyWithEndpoint(CastEndpoint endpoint) {
+  /// channel factory seam or compatible `wss://` IAP signer unless
+  /// [replaceIapTokenProvider] is `true`.
+  WsClientTransport copyWithEndpoint(
+    CastEndpoint endpoint, {
+    IapTokenProvider? iapTokenProvider,
+    bool replaceIapTokenProvider = false,
+  }) {
     final resolvedUri = _validateServerUri(endpoint.serverUri);
-    final preservedIapProvider =
-        iapTokenProvider != null &&
-            resolvedUri.scheme == 'wss' &&
-            serverUri.scheme == 'wss' &&
-            TokenAuthenticator.iapAudienceForWebSocketUri(resolvedUri) ==
-                TokenAuthenticator.iapAudienceForWebSocketUri(serverUri)
-        ? iapTokenProvider
-        : null;
+    final IapTokenProvider? nextIapProvider;
+    if (replaceIapTokenProvider) {
+      if (iapTokenProvider != null && resolvedUri.scheme != 'wss') {
+        throw const FormatException(
+          'Cloud Run IAP authentication requires a wss:// server URI.',
+        );
+      }
+      nextIapProvider = iapTokenProvider;
+    } else {
+      nextIapProvider =
+          this.iapTokenProvider != null &&
+              resolvedUri.scheme == 'wss' &&
+              serverUri.scheme == 'wss' &&
+              TokenAuthenticator.iapAudienceForWebSocketUri(resolvedUri) ==
+                  TokenAuthenticator.iapAudienceForWebSocketUri(serverUri)
+          ? this.iapTokenProvider
+          : null;
+    }
     final customFactory = _customChannelFactory;
     return WsClientTransport._(
       serverUri: resolvedUri,
       token: endpoint.token,
-      iapTokenProvider: preservedIapProvider,
+      iapTokenProvider: nextIapProvider,
       customChannelFactory: customFactory,
       channelFactory:
           customFactory ??
           (() => openPlatformClientWebSocket(
             resolvedUri,
-            iapTokenProvider: preservedIapProvider,
+            iapTokenProvider: nextIapProvider,
           )),
     );
   }

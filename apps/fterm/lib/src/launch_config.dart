@@ -25,6 +25,18 @@ final class CastLaunchConfig {
   /// `wss://` target URI (such as `/v1/caster` vs `/v1/client`).
   final IapTokenProvider? Function(Uri targetUri)? iapTokenProviderFactory;
 
+  /// Optional startup Cloud Run IAP service account email
+  /// (`--iap-service-account` / `TERMUI_CAST_IAP_SERVICE_ACCOUNT`).
+  final String iapServiceAccount;
+
+  /// Optional startup Cloud Run IAP service account JSON key file path
+  /// (`--iap-key-file` / `TERMUI_CAST_IAP_KEY_FILE`).
+  final String iapKeyFilePath;
+
+  /// Optional startup `gcloud` executable path override
+  /// (`--gcloud-path` / `TERMUI_CAST_GCLOUD_PATH`).
+  final String gcloudPath;
+
   /// Sanitized CLI arguments forwarded when relaunching `fterm` after an
   /// in-place desktop update (file paths canonicalized, raw secrets stripped).
   final List<String> relaunchArgs;
@@ -49,6 +61,9 @@ final class CastLaunchConfig {
     this.promptForConnection = false,
     this.iapTokenProvider,
     this.iapTokenProviderFactory,
+    this.iapServiceAccount = '',
+    this.iapKeyFilePath = '',
+    this.gcloudPath = '',
     List<String> relaunchArgs = const [],
     this.traceOutPath,
     this.traceDuration,

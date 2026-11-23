@@ -12,6 +12,199 @@ import 'token_auth.dart';
 typedef ProcessRunner =
     Future<ProcessResult> Function(String executable, List<String> arguments);
 
+/// Expands a leading `~/` (or `~\` on Windows) in [rawPath] using `HOME`
+/// (or `USERPROFILE` on Windows) when available.
+String expandHomePath(
+  String rawPath, {
+  Map<String, String>? environment,
+  String? operatingSystem,
+}) {
+  final os = operatingSystem ?? Platform.operatingSystem;
+  final isWindows = os == 'windows';
+  final hasHomePrefix =
+      rawPath.startsWith('~/') || (isWindows && rawPath.startsWith(r'~\'));
+  if (!hasHomePrefix) return rawPath;
+  final env = environment ?? Platform.environment;
+  final home = _resolveHomeDir(env, isWindows: isWindows);
+  if (home == null) return rawPath;
+  final trimmedHome = _stripTrailingSeparators(home, isWindows: isWindows);
+  final suffix = rawPath.substring(2);
+  final sep = isWindows ? r'\' : '/';
+  return suffix.isEmpty ? trimmedHome : '$trimmedHome$sep$suffix';
+}
+
+/// Probes `PATH` and standard Google Cloud SDK installation locations for an
+/// existing `gcloud` executable, returning the first matching path or `null`.
+String? probeGcloudExecutable({
+  Map<String, String>? environment,
+  bool Function(String path)? fileExists,
+  String? operatingSystem,
+}) {
+  final env = environment ?? Platform.environment;
+  final exists = fileExists ?? ((path) => File(path).existsSync());
+  final os = operatingSystem ?? Platform.operatingSystem;
+  final isWindows = os == 'windows';
+
+  final fromPath = _probeGcloudInPath(
+    env: env,
+    exists: exists,
+    isWindows: isWindows,
+  );
+  if (fromPath != null) return fromPath;
+
+  for (final candidate in _standardGcloudCandidates(
+    env: env,
+    isWindows: isWindows,
+  )) {
+    if (exists(candidate)) return candidate;
+  }
+  return null;
+}
+
+/// Resolves the `gcloud` executable path, honoring any non-empty [overridePath]
+/// (with `~/` expansion) before probing standard SDK locations and falling back
+/// to `'gcloud'`.
+String resolveGcloudExecutable({
+  String? overridePath,
+  Map<String, String>? environment,
+  bool Function(String path)? fileExists,
+  String? operatingSystem,
+}) {
+  final trimmed = overridePath?.trim();
+  if (trimmed != null && trimmed.isNotEmpty) {
+    return expandHomePath(
+      trimmed,
+      environment: environment,
+      operatingSystem: operatingSystem,
+    );
+  }
+  return probeGcloudExecutable(
+        environment: environment,
+        fileExists: fileExists,
+        operatingSystem: operatingSystem,
+      ) ??
+      'gcloud';
+}
+
+String? _probeGcloudInPath({
+  required Map<String, String> env,
+  required bool Function(String path) exists,
+  required bool isWindows,
+}) {
+  final pathEnv = _readEnvVar(env, 'PATH', isWindows: isWindows);
+  if (pathEnv == null) return null;
+  final entrySep = isWindows ? ';' : ':';
+  final sep = isWindows ? r'\' : '/';
+  final names = isWindows
+      ? const <String>['gcloud.cmd', 'gcloud.exe', 'gcloud']
+      : const <String>['gcloud'];
+  for (final rawEntry in pathEnv.split(entrySep)) {
+    final cleaned = _cleanPathEntry(rawEntry, isWindows: isWindows);
+    if (cleaned.isEmpty) continue;
+    final dir = _stripTrailingSeparators(cleaned, isWindows: isWindows);
+    for (final name in names) {
+      final candidate = '$dir$sep$name';
+      if (exists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+List<String> _standardGcloudCandidates({
+  required Map<String, String> env,
+  required bool isWindows,
+}) {
+  if (isWindows) {
+    final localAppData = _readEnvVar(env, 'LOCALAPPDATA', isWindows: true);
+    final programFiles = _readEnvVar(env, 'ProgramFiles', isWindows: true);
+    final programFilesX86 = _readEnvVar(
+      env,
+      'ProgramFiles(x86)',
+      isWindows: true,
+    );
+    final userProfile = _readEnvVar(env, 'USERPROFILE', isWindows: true);
+    return <String>[
+      if (localAppData != null)
+        '${_stripTrailingSeparators(localAppData, isWindows: true)}'
+            r'\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd',
+      if (programFiles != null)
+        '${_stripTrailingSeparators(programFiles, isWindows: true)}'
+            r'\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd',
+      if (programFilesX86 != null)
+        '${_stripTrailingSeparators(programFilesX86, isWindows: true)}'
+            r'\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd',
+      if (userProfile != null)
+        '${_stripTrailingSeparators(userProfile, isWindows: true)}'
+            r'\google-cloud-sdk\bin\gcloud.cmd',
+    ];
+  }
+  final home = _resolveHomeDir(env, isWindows: false);
+  final trimmedHome = home == null
+      ? null
+      : _stripTrailingSeparators(home, isWindows: false);
+  return <String>[
+    '/opt/homebrew/bin/gcloud',
+    '/opt/homebrew/share/google-cloud-sdk/bin/gcloud',
+    '/usr/local/bin/gcloud',
+    '/usr/local/share/google-cloud-sdk/bin/gcloud',
+    '/usr/bin/gcloud',
+    '/snap/bin/gcloud',
+    if (trimmedHome != null) ...<String>[
+      '$trimmedHome/google-cloud-sdk/bin/gcloud',
+      '$trimmedHome/Downloads/google-cloud-sdk/bin/gcloud',
+    ],
+  ];
+}
+
+String? _resolveHomeDir(Map<String, String> env, {required bool isWindows}) {
+  if (isWindows) {
+    return _readEnvVar(env, 'USERPROFILE', isWindows: true) ??
+        _readEnvVar(env, 'HOME', isWindows: true);
+  }
+  return _readEnvVar(env, 'HOME', isWindows: false);
+}
+
+String? _readEnvVar(
+  Map<String, String> env,
+  String name, {
+  required bool isWindows,
+}) {
+  final direct = env[name]?.trim();
+  if (direct != null && direct.isNotEmpty) return direct;
+  if (!isWindows) return null;
+  final targetLower = name.toLowerCase();
+  for (final MapEntry(:key, :value) in env.entries) {
+    if (key.toLowerCase() == targetLower) {
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? null : trimmed;
+    }
+  }
+  return null;
+}
+
+String _cleanPathEntry(String raw, {required bool isWindows}) {
+  var entry = raw.trim();
+  if (isWindows &&
+      entry.length >= 2 &&
+      entry.startsWith('"') &&
+      entry.endsWith('"')) {
+    entry = entry.substring(1, entry.length - 1).trim();
+  }
+  return entry;
+}
+
+String _stripTrailingSeparators(String path, {required bool isWindows}) {
+  var end = path.length;
+  while (end > 1) {
+    final code = path.codeUnitAt(end - 1);
+    final isSep = code == 0x2f || (isWindows && code == 0x5c);
+    if (!isSep) break;
+    if (isWindows && end == 3 && path.codeUnitAt(1) == 0x3a) break;
+    end--;
+  }
+  return path.substring(0, end);
+}
+
 /// Parsed RSA private key parameters (`n`, `e`, `d`) from a PKCS#8 or PKCS#1 PEM.
 final class RsaPrivateKey {
   /// RSA modulus `n`.
@@ -365,11 +558,21 @@ final class IapJwtSigner {
     List<String> arguments,
     Duration timeout,
   ) async {
-    final process = await Process.start(
-      executable,
-      arguments,
-      runInShell: Platform.isWindows,
-    );
+    final Process process;
+    try {
+      process = await Process.start(
+        executable,
+        arguments,
+        runInShell: Platform.isWindows,
+      );
+    } on ProcessException catch (e) {
+      throw ProcessException(
+        executable,
+        arguments,
+        'Failed to launch "$executable": ${e.message}',
+        e.errorCode,
+      );
+    }
     final stdoutFuture = process.stdout
         .transform(systemEncoding.decoder)
         .join()
@@ -485,13 +688,22 @@ final class IapJwtSigner {
         jwtPath,
       ];
       final runner = _customProcessRunner;
+      final attemptedExecutable = runner != null
+          ? gcloudExecutable
+          : (gcloudExecutable == 'gcloud'
+                ? resolveGcloudExecutable()
+                : expandHomePath(gcloudExecutable));
       final result = runner != null
-          ? await runner(gcloudExecutable, args).timeout(signTimeout)
-          : await _runProcessWithTimeout(gcloudExecutable, args, signTimeout);
+          ? await runner(attemptedExecutable, args).timeout(signTimeout)
+          : await _runProcessWithTimeout(
+              attemptedExecutable,
+              args,
+              signTimeout,
+            );
       if (result.exitCode != 0) {
         final stderrText = '${result.stderr}'.trim();
         throw ProcessException(
-          'gcloud',
+          attemptedExecutable,
           <String>['iam', 'service-accounts', 'sign-jwt'],
           stderrText.isEmpty
               ? 'exit code ${result.exitCode}'

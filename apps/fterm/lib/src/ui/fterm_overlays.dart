@@ -313,6 +313,8 @@ Widget buildFtermOverlayHeader({
   );
 }
 
+enum _ConnectIapMode { none, serviceAccount, keyFile }
+
 final class _ConnectOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
@@ -327,21 +329,34 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
   late final TextEditingController _urlCtrl;
   late final TextEditingController _clientTokenCtrl;
   late final TextEditingController _casterTokenCtrl;
+  late final TextEditingController _iapSaCtrl;
+  late final TextEditingController _iapKeyCtrl;
+  late final TextEditingController _gcloudPathCtrl;
+  late _ConnectIapMode _iapMode;
+  String? _probedGcloudPath;
   String? _validationError;
   bool _submitting = false;
 
   @override
   void initState() {
     super.initState();
-    _urlCtrl = TextEditingController(
-      text: widget.workspace.activeRelayUri.toString(),
-    );
-    _clientTokenCtrl = TextEditingController(
-      text: widget.workspace.activeClientToken,
-    );
-    _casterTokenCtrl = TextEditingController(
-      text: widget.workspace.activeCasterToken,
-    );
+    final ws = widget.workspace;
+    _urlCtrl = TextEditingController(text: ws.activeRelayUri.toString());
+    _clientTokenCtrl = TextEditingController(text: ws.activeClientToken);
+    _casterTokenCtrl = TextEditingController(text: ws.activeCasterToken);
+    _iapSaCtrl = TextEditingController(text: ws.activeIapServiceAccount);
+    _iapKeyCtrl = TextEditingController(text: ws.activeIapKeyFilePath);
+    _gcloudPathCtrl = TextEditingController(text: ws.activeGcloudPath);
+    if (ws.activeIapKeyFilePath.isNotEmpty) {
+      _iapMode = _ConnectIapMode.keyFile;
+    } else if (ws.activeIapServiceAccount.isNotEmpty) {
+      _iapMode = _ConnectIapMode.serviceAccount;
+    } else {
+      _iapMode = _ConnectIapMode.none;
+    }
+    if (ws.isDesktopHost) {
+      _probedGcloudPath = ws.probeGcloudExecutable();
+    }
   }
 
   @override
@@ -349,14 +364,61 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
     _urlCtrl.dispose();
     _clientTokenCtrl.dispose();
     _casterTokenCtrl.dispose();
+    _iapSaCtrl.dispose();
+    _iapKeyCtrl.dispose();
+    _gcloudPathCtrl.dispose();
     super.dispose();
+  }
+
+  ({String? serviceAccount, String? keyFilePath, String? gcloudPath})
+  _resolveSubmitIapFields() {
+    if (!widget.workspace.isDesktopHost) {
+      return (serviceAccount: null, keyFilePath: null, gcloudPath: null);
+    }
+    final gcloudOverride = _gcloudPathCtrl.text.trim();
+    return switch (_iapMode) {
+      _ConnectIapMode.none => (
+        serviceAccount: '',
+        keyFilePath: '',
+        gcloudPath: gcloudOverride,
+      ),
+      _ConnectIapMode.serviceAccount => () {
+        final sa = _iapSaCtrl.text.trim();
+        if (sa.isEmpty) {
+          throw const FormatException(
+            'Enter a GCP service account email or select None.',
+          );
+        }
+        return (
+          serviceAccount: sa,
+          keyFilePath: '',
+          gcloudPath: gcloudOverride,
+        );
+      }(),
+      _ConnectIapMode.keyFile => () {
+        final keyPath = _iapKeyCtrl.text.trim();
+        if (keyPath.isEmpty) {
+          throw const FormatException(
+            'Enter a service account JSON key file path or select None.',
+          );
+        }
+        return (
+          serviceAccount: '',
+          keyFilePath: keyPath,
+          gcloudPath: gcloudOverride,
+        );
+      }(),
+    };
   }
 
   Future<void> _submit() async {
     if (_submitting) return;
     final Uri parsed;
+    final ({String? serviceAccount, String? keyFilePath, String? gcloudPath})
+    iapFields;
     try {
       parsed = CastLaunchConfig.parseRelayUri(_urlCtrl.text);
+      iapFields = _resolveSubmitIapFields();
     } on FormatException catch (e) {
       setState(() => _validationError = e.message);
       return;
@@ -365,11 +427,24 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
       _validationError = null;
       _submitting = true;
     });
-    await widget.workspace.connectRelay(
-      serverUri: parsed,
-      clientToken: _clientTokenCtrl.text,
-      casterToken: _casterTokenCtrl.text,
-    );
+    try {
+      await widget.workspace.connectRelay(
+        serverUri: parsed,
+        clientToken: _clientTokenCtrl.text,
+        casterToken: _casterTokenCtrl.text,
+        iapServiceAccount: iapFields.serviceAccount,
+        iapKeyFilePath: iapFields.keyFilePath,
+        gcloudPath: iapFields.gcloudPath,
+      );
+    } on FormatException catch (e) {
+      if (mounted) {
+        setState(() {
+          _validationError = e.message;
+          _submitting = false;
+        });
+      }
+      return;
+    }
     if (mounted) {
       setState(() => _submitting = false);
     }
@@ -431,6 +506,21 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
                 ),
                 onSubmitted: (_) => unawaited(_submit()),
               ),
+              const SizedBox(height: 12),
+              _ConnectIapSection(
+                palette: p,
+                mode: _iapMode,
+                saController: _iapSaCtrl,
+                keyController: _iapKeyCtrl,
+                gcloudPathController: _gcloudPathCtrl,
+                probedGcloudPath: _probedGcloudPath,
+                onModeChanged: (next) => setState(() {
+                  _iapMode = next;
+                  _validationError = null;
+                }),
+                onGcloudPathChanged: (_) => setState(() {}),
+                onSubmit: () => unawaited(_submit()),
+              ),
             ],
             const SizedBox(height: 14),
             Wrap(
@@ -463,16 +553,150 @@ final class _ConnectOverlayState extends State<_ConnectOverlay> {
     );
   }
 
-  static InputDecoration _inputDeco(String label, FtermOverlayPalette p) =>
-      InputDecoration(
-        labelText: label,
-        labelStyle: TextStyle(color: p.muted, fontSize: 11),
-        isDense: true,
-        border: OutlineInputBorder(borderSide: BorderSide(color: p.border)),
-        enabledBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: p.border),
+  static InputDecoration _inputDeco(
+    String label,
+    FtermOverlayPalette p, {
+    String? hint,
+  }) => InputDecoration(
+    labelText: label,
+    hintText: hint,
+    labelStyle: TextStyle(color: p.muted, fontSize: 11),
+    hintStyle: TextStyle(color: p.muted.withValues(alpha: 0.6), fontSize: 11),
+    isDense: true,
+    border: OutlineInputBorder(borderSide: BorderSide(color: p.border)),
+    enabledBorder: OutlineInputBorder(borderSide: BorderSide(color: p.border)),
+  );
+}
+
+final class _ConnectIapSection extends StatelessWidget {
+  final FtermOverlayPalette palette;
+  final _ConnectIapMode mode;
+  final TextEditingController saController;
+  final TextEditingController keyController;
+  final TextEditingController gcloudPathController;
+  final String? probedGcloudPath;
+  final ValueChanged<_ConnectIapMode> onModeChanged;
+  final ValueChanged<String> onGcloudPathChanged;
+  final VoidCallback onSubmit;
+
+  const _ConnectIapSection({
+    required this.palette,
+    required this.mode,
+    required this.saController,
+    required this.keyController,
+    required this.gcloudPathController,
+    required this.probedGcloudPath,
+    required this.onModeChanged,
+    required this.onGcloudPathChanged,
+    required this.onSubmit,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    final hasCustomGcloud = gcloudPathController.text.trim().isNotEmpty;
+    final (helperText, helperColor) = _gcloudHelperTextAndColor(
+      hasCustomGcloud: hasCustomGcloud,
+      probedGcloudPath: probedGcloudPath,
+      palette: p,
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Cloud Run IAP', style: TextStyle(color: p.muted, fontSize: 11)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            ChoiceChip(
+              key: const ValueKey('connect-iap-mode-none'),
+              label: const Text('None'),
+              selected: mode == _ConnectIapMode.none,
+              onSelected: (_) => onModeChanged(_ConnectIapMode.none),
+            ),
+            ChoiceChip(
+              key: const ValueKey('connect-iap-mode-sa'),
+              label: const Text('Service Account'),
+              selected: mode == _ConnectIapMode.serviceAccount,
+              onSelected: (_) => onModeChanged(_ConnectIapMode.serviceAccount),
+            ),
+            ChoiceChip(
+              key: const ValueKey('connect-iap-mode-key'),
+              label: const Text('JSON Key File'),
+              selected: mode == _ConnectIapMode.keyFile,
+              onSelected: (_) => onModeChanged(_ConnectIapMode.keyFile),
+            ),
+          ],
         ),
-      );
+        if (mode == _ConnectIapMode.serviceAccount) ...[
+          const SizedBox(height: 10),
+          TextField(
+            key: const ValueKey('connect-iap-sa-field'),
+            controller: saController,
+            decoration: _ConnectOverlayState._inputDeco(
+              'IAP Service Account Email',
+              p,
+              hint: 'name@project.iam.gserviceaccount.com',
+            ),
+            onSubmitted: (_) => onSubmit(),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            key: const ValueKey('connect-gcloud-path-field'),
+            controller: gcloudPathController,
+            decoration: _ConnectOverlayState._inputDeco(
+              'gcloud Path Override (optional)',
+              p,
+              hint: '/path/to/google-cloud-sdk/bin/gcloud',
+            ),
+            onChanged: onGcloudPathChanged,
+            onSubmitted: (_) => onSubmit(),
+          ),
+          if (helperText != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              helperText,
+              key: const ValueKey('connect-gcloud-probe-hint'),
+              style: TextStyle(color: helperColor, fontSize: 10),
+            ),
+          ],
+        ],
+        if (mode == _ConnectIapMode.keyFile) ...[
+          const SizedBox(height: 10),
+          TextField(
+            key: const ValueKey('connect-iap-key-field'),
+            controller: keyController,
+            decoration: _ConnectOverlayState._inputDeco(
+              'IAP Key File Path',
+              p,
+              hint: '/path/to/service-account.json',
+            ),
+            onSubmitted: (_) => onSubmit(),
+          ),
+        ],
+      ],
+    );
+  }
+
+  static (String?, Color) _gcloudHelperTextAndColor({
+    required bool hasCustomGcloud,
+    required String? probedGcloudPath,
+    required FtermOverlayPalette palette,
+  }) {
+    if (hasCustomGcloud) {
+      return ('Using custom gcloud path', palette.muted);
+    }
+    if (probedGcloudPath != null) {
+      return ('Auto-detected: $probedGcloudPath', palette.muted);
+    }
+    return (
+      'gcloud not found on PATH — enter full path '
+          '(e.g. /Users/.../google-cloud-sdk/bin/gcloud)',
+      palette.warning,
+    );
+  }
 }
 
 final class _SessionPickerOverlay extends StatelessWidget {

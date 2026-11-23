@@ -10,6 +10,7 @@ typedef DesktopIapProviderBuilder = IapTokenProvider? Function({
   required Uri serverUri,
   String? serviceAccount,
   String? keyFilePath,
+  String? gcloudPath,
 });
 
 /// Startup connection overrides resolved from CLI flags or runtime environment
@@ -47,6 +48,12 @@ final class DesktopLaunchOverrides {
   /// Canonicalized `TERMUI_CAST_IAP_KEY_FILE` environment fallback.
   final String? envIapKeyFile;
 
+  /// Optional canonicalized `gcloud` executable path override (CLI or env).
+  final String? gcloudPath;
+
+  /// Optional canonicalized `--gcloud-path` CLI override, if non-empty.
+  final String? cliGcloudPath;
+
   /// Whether `--token` was explicitly supplied on the CLI.
   final bool hasCliToken;
 
@@ -80,6 +87,8 @@ final class DesktopLaunchOverrides {
     this.cliIapKeyFile,
     this.envIapServiceAccount,
     this.envIapKeyFile,
+    this.gcloudPath,
+    this.cliGcloudPath,
     this.hasCliToken = false,
     this.hasCliCasterToken = false,
     this.hasCliIapServiceAccount = false,
@@ -98,6 +107,7 @@ final class DesktopLaunchOverrides {
     if (casterTokenFile case final ctf?) ...['--caster-token-file', ctf],
     if (cliIapServiceAccount case final sa?) ...['--iap-service-account', sa],
     if (cliIapKeyFile case final kf?) ...['--iap-key-file', kf],
+    if (cliGcloudPath case final gp?) ...['--gcloud-path', gp],
   ]);
 }
 
@@ -140,6 +150,12 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
     flag: '--iap-key-file',
     canonicalize: canonicalize,
   );
+  final cliGcloudPath = _resolveRequiredFileFlag(
+    present: cli.hasGcloudPath,
+    raw: cli.gcloudPath,
+    flag: '--gcloud-path',
+    canonicalize: canonicalize,
+  );
   final cliTraceOut = _resolveRequiredTextFlag(
     present: cli.hasTraceOut,
     raw: cli.traceOut,
@@ -157,6 +173,7 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
   }
   final cliServer = _nonEmptyTrimmed(cli.serverUrl);
   final envKeyRaw = _nonEmptyTrimmed(environment['TERMUI_CAST_IAP_KEY_FILE']);
+  final envGcloudRaw = _nonEmptyTrimmed(environment['TERMUI_CAST_GCLOUD_PATH']);
   return DesktopLaunchOverrides(
     serverUrl:
         cliServer ?? _nonEmptyTrimmed(environment['TERMUI_CAST_SERVER_URL']),
@@ -175,6 +192,10 @@ DesktopLaunchOverrides parseDesktopLaunchOverrides({
       environment['TERMUI_CAST_IAP_SERVICE_ACCOUNT'],
     ),
     envIapKeyFile: envKeyRaw == null ? null : canonicalize(envKeyRaw),
+    gcloudPath:
+        cliGcloudPath ??
+        (envGcloudRaw == null ? null : canonicalize(envGcloudRaw)),
+    cliGcloudPath: cliGcloudPath,
     hasCliToken: cli.hasToken,
     hasCliCasterToken: cli.hasCasterToken,
     hasCliIapServiceAccount: cli.hasIapServiceAccount,
@@ -298,13 +319,20 @@ CastLaunchConfig resolveCastLaunchConfig({
     startupProvider: iapProvider,
     builder: builder,
   );
+  final (selectedIapSa, selectedIapKey) = _selectIapCredentials(
+    overrides: overrides,
+    serverUri: baseConfig.serverUri,
+    requireWssForEnv: false,
+  );
   final relaunchArgs = overrides.relaunchArgs;
   final hasTraceConfig =
       overrides.traceOutPath != null ||
       overrides.traceDuration != null ||
       overrides.traceExitOnComplete;
+  final hasGcloudOverride = overrides.gcloudPath != null;
   if (iapProvider == null &&
       iapFactory == null &&
+      !hasGcloudOverride &&
       relaunchArgs.isEmpty &&
       !hasTraceConfig) {
     return baseConfig;
@@ -316,6 +344,9 @@ CastLaunchConfig resolveCastLaunchConfig({
     promptForConnection: baseConfig.promptForConnection,
     iapTokenProvider: iapProvider,
     iapTokenProviderFactory: iapFactory,
+    iapServiceAccount: selectedIapSa ?? '',
+    iapKeyFilePath: selectedIapKey ?? '',
+    gcloudPath: overrides.gcloudPath ?? '',
     relaunchArgs: relaunchArgs,
     traceOutPath: overrides.traceOutPath,
     traceDuration: overrides.traceDuration,
@@ -353,6 +384,7 @@ IapTokenProvider? Function(Uri targetUri)? _buildScopedIapProviderFactory({
         serverUri: targetUri,
         serviceAccount: serviceAccount,
         keyFilePath: keyFilePath,
+        gcloudPath: overrides.gcloudPath,
       ),
     );
   };
@@ -374,6 +406,24 @@ IapTokenProvider? Function(Uri targetUri)? _buildScopedIapProviderFactory({
       : (useEnv ? overrides.envIapKeyFile : null);
   return (serviceAccount, keyFilePath);
 }
+
+/// Builds a platform [IapTokenProvider] for [serverUri] on `dart:io` desktops,
+/// returning `null` on Web or when neither [serviceAccount] nor [keyFilePath] is set.
+IapTokenProvider? buildDesktopIapTokenProvider({
+  required Uri serverUri,
+  String? serviceAccount,
+  String? keyFilePath,
+  String? gcloudPath,
+}) => impl.buildPlatformIapTokenProvider(
+  serverUri: serverUri,
+  serviceAccount: serviceAccount,
+  keyFilePath: keyFilePath,
+  gcloudPath: gcloudPath,
+);
+
+/// Probes `PATH` and standard SDK install locations for `gcloud` on desktop,
+/// returning `null` when unavailable or on Web.
+String? probeDesktopGcloudExecutable() => impl.probePlatformGcloudExecutable();
 
 /// Reports a fatal startup configuration [message] on `dart:io` desktops.
 void reportDesktopStartupError(String message) =>
@@ -413,6 +463,7 @@ IapTokenProvider? _resolveIapTokenProvider({
     serverUri: serverUri,
     serviceAccount: serviceAccount,
     keyFilePath: keyFilePath,
+    gcloudPath: overrides.gcloudPath,
   );
 }
 
@@ -460,6 +511,7 @@ typedef _ParsedCliFlags = ({
   String? casterTokenFile,
   String? iapServiceAccount,
   String? iapKeyFile,
+  String? gcloudPath,
   String? traceOut,
   String? traceSeconds,
   bool hasToken,
@@ -468,6 +520,7 @@ typedef _ParsedCliFlags = ({
   bool hasCasterTokenFile,
   bool hasIapServiceAccount,
   bool hasIapKeyFile,
+  bool hasGcloudPath,
   bool hasTraceOut,
   bool hasTraceSeconds,
   bool traceExit,
@@ -481,6 +534,7 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
   String? casterTokenFile;
   String? iapServiceAccount;
   String? iapKeyFile;
+  String? gcloudPath;
   String? traceOut;
   String? traceSeconds;
   var hasToken = false;
@@ -489,6 +543,7 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
   var hasCasterTokenFile = false;
   var hasIapServiceAccount = false;
   var hasIapKeyFile = false;
+  var hasGcloudPath = false;
   var hasTraceOut = false;
   var hasTraceSeconds = false;
   var traceExit = false;
@@ -520,6 +575,9 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
       case '--iap-key-file':
         iapKeyFile = readValue();
         hasIapKeyFile = true;
+      case '--gcloud-path':
+        gcloudPath = readValue();
+        hasGcloudPath = true;
       case '--trace-out':
         traceOut = readValue();
         hasTraceOut = true;
@@ -541,6 +599,7 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
     casterTokenFile: casterTokenFile,
     iapServiceAccount: iapServiceAccount,
     iapKeyFile: iapKeyFile,
+    gcloudPath: gcloudPath,
     traceOut: traceOut,
     traceSeconds: traceSeconds,
     hasToken: hasToken,
@@ -549,6 +608,7 @@ _ParsedCliFlags _parseCliArgs(List<String> args) {
     hasCasterTokenFile: hasCasterTokenFile,
     hasIapServiceAccount: hasIapServiceAccount,
     hasIapKeyFile: hasIapKeyFile,
+    hasGcloudPath: hasGcloudPath,
     hasTraceOut: hasTraceOut,
     hasTraceSeconds: hasTraceSeconds,
     traceExit: traceExit,

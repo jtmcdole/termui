@@ -42,10 +42,14 @@ DesktopLaunchOverrides readPlatformLaunchOverrides(List<String> args) =>
       canonicalizePath: canonicalizePlatformFilePath,
     );
 
-/// Resolves [rawPath] against the startup working directory so relaunches from
-/// `/` (such as macOS `open -n`) keep valid file flag paths.
+/// Resolves [rawPath] against the startup working directory (expanding leading
+/// `~/` first) so relaunches from `/` (such as macOS `open -n`) keep valid file
+/// flag paths.
 String canonicalizePlatformFilePath(String rawPath) =>
-    p.normalize(File(rawPath).absolute.path);
+    p.normalize(File(expandHomePath(rawPath)).absolute.path);
+
+/// Probes `PATH` and standard SDK install locations for a `gcloud` executable.
+String? probePlatformGcloudExecutable() => probeGcloudExecutable();
 
 /// Reads and trims a bearer secret token from [path] at startup.
 String readPlatformSecretFileSync(String path) {
@@ -113,17 +117,24 @@ IapTokenProvider? buildPlatformIapTokenProvider({
   required Uri serverUri,
   String? serviceAccount,
   String? keyFilePath,
+  String? gcloudPath,
   Clock clock = const Clock(),
   ProcessRunner? processRunner,
 }) {
   if (serviceAccount == null && keyFilePath == null) return null;
-  final parsedKey = keyFilePath == null
+  final trimmedKey = keyFilePath?.trim();
+  final parsedKey = (trimmedKey == null || trimmedKey.isEmpty)
       ? null
-      : _loadCachedIapKeySync(keyFilePath);
+      : _loadCachedIapKeySync(expandHomePath(trimmedKey));
+  final trimmedGcloud = gcloudPath?.trim();
+  final resolvedGcloud = (trimmedGcloud != null && trimmedGcloud.isNotEmpty)
+      ? expandHomePath(trimmedGcloud)
+      : 'gcloud';
   return IapJwtSigner(
     serviceAccount: serviceAccount,
     serviceAccountKey: parsedKey,
     targetAudienceUrl: TokenAuthenticator.iapAudienceForWebSocketUri(serverUri),
+    gcloudExecutable: resolvedGcloud,
     clock: clock,
     processRunner: processRunner,
   ).getBearerToken;

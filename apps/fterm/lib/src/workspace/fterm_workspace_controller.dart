@@ -210,6 +210,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final Duration _resizeDebounce;
   final Clock _clock;
   final void Function(tui.Buffer buffer)? _onFrameRedrawn;
+  final DesktopIapProviderBuilder _iapProviderBuilder;
+  final String? Function() _gcloudPathProber;
+  final Map<String, IapTokenProvider?> _iapProviderCache =
+      <String, IapTokenProvider?>{};
 
   /// Fallback terminal font size (in logical pixels) when preferences omit it.
   final double defaultFontSize;
@@ -284,6 +288,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
   Uri _activeRelayUri;
   String _activeClientToken;
   String _activeCasterToken;
+  String _activeIapServiceAccount;
+  String _activeIapKeyFilePath;
+  String _activeGcloudPath;
+  bool _hasRuntimeIapOverride = false;
   bool _shouldAutoConnectRelay = false;
 
   /// Creates the workspace coordinator for `fterm`.
@@ -308,6 +316,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
     Future<void> Function()? onRequestExit,
     Future<bool> Function(List<String> args)? onRelaunchApp,
     Future<void> Function(String directoryPath)? openDirectoryHandler,
+    DesktopIapProviderBuilder? iapProviderBuilder,
+    String? Function()? gcloudPathProber,
     void Function(tui.Buffer buffer)? onFrameRedrawn,
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
@@ -337,6 +347,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
     onRequestExit: onRequestExit,
     onRelaunchApp: onRelaunchApp,
     openDirectoryHandler: openDirectoryHandler,
+    iapProviderBuilder: iapProviderBuilder,
+    gcloudPathProber: gcloudPathProber,
     onFrameRedrawn: onFrameRedrawn,
   );
 
@@ -363,10 +375,14 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required Future<void> Function()? onRequestExit,
     required Future<bool> Function(List<String> args)? onRelaunchApp,
     required this._openDirectoryHandler,
+    required DesktopIapProviderBuilder? iapProviderBuilder,
+    required String? Function()? gcloudPathProber,
     required this._onFrameRedrawn,
   }) : _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
        _clock = clock ?? const Clock(),
+       _iapProviderBuilder = iapProviderBuilder ?? buildDesktopIapTokenProvider,
+       _gcloudPathProber = gcloudPathProber ?? probeDesktopGcloudExecutable,
        _ownsTraceRecorder = traceRecorder == null,
        _onRequestExit = onRequestExit ?? _defaultRequestExit,
        _onRelaunchApp = onRelaunchApp ?? _defaultRelaunchApp,
@@ -390,6 +406,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
        _activeRelayUri = launchConfig.serverUri,
        _activeClientToken = launchConfig.token,
        _activeCasterToken = launchConfig.casterToken,
+       _activeIapServiceAccount = launchConfig.iapServiceAccount.trim(),
+       _activeIapKeyFilePath = launchConfig.iapKeyFilePath.trim(),
+       _activeGcloudPath = launchConfig.gcloudPath.trim(),
        _colorResolver = _buildColorResolver(
          initialSettings.themeSettings,
          initialBrightness,
@@ -467,10 +486,35 @@ final class FtermWorkspaceController extends ChangeNotifier {
         // Ignore corrupt stored URL and keep launchConfig fallback.
       }
     }
+    _hydrateSavedIapSettings();
     _shouldAutoConnectRelay =
         !launchConfig.promptForConnection ||
         _activeClientToken.isNotEmpty ||
         _relayCredentials.serverUrl.trim().isNotEmpty;
+  }
+
+  void _hydrateSavedIapSettings() {
+    final hasLaunchIap =
+        _activeIapServiceAccount.isNotEmpty ||
+        _activeIapKeyFilePath.isNotEmpty ||
+        launchConfig.iapTokenProvider != null ||
+        launchConfig.iapTokenProviderFactory != null;
+    if (!hasLaunchIap) {
+      final savedKey = _relayCredentials.iapKeyFilePath.trim();
+      final savedSa = _relayCredentials.iapServiceAccount.trim();
+      // Keep modes mutually exclusive if hand-edited settings.json sets both.
+      if (savedKey.isNotEmpty) {
+        _activeIapKeyFilePath = savedKey;
+        _activeIapServiceAccount = '';
+      } else if (savedSa.isNotEmpty) {
+        _activeIapServiceAccount = savedSa;
+        _activeIapKeyFilePath = '';
+      }
+    }
+    if (_activeGcloudPath.isEmpty &&
+        _relayCredentials.gcloudPath.trim().isNotEmpty) {
+      _activeGcloudPath = _relayCredentials.gcloudPath.trim();
+    }
   }
 
   /// Sub-listenable notified on tab/focus/overlay/theme/settings changes.
@@ -640,6 +684,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     serverUrl: _activeRelayUri.toString(),
     clientToken: _activeClientToken,
     casterToken: _activeCasterToken,
+    iapServiceAccount: _activeIapServiceAccount,
+    iapKeyFilePath: _activeIapKeyFilePath,
+    gcloudPath: _activeGcloudPath,
   );
 
   /// Active relay `/v1/client` URI.
@@ -650,6 +697,20 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   /// Active caster bearer token used when publishing local panes.
   String get activeCasterToken => _activeCasterToken;
+
+  /// Active Cloud Run IAP service account email (`''` when unset).
+  String get activeIapServiceAccount => _activeIapServiceAccount;
+
+  /// Active Cloud Run IAP service account JSON key file path (`''` when unset).
+  String get activeIapKeyFilePath => _activeIapKeyFilePath;
+
+  /// Active custom `gcloud` executable path override (`''` for auto-probing).
+  String get activeGcloudPath => _activeGcloudPath;
+
+  /// Probes `PATH` and standard SDK locations for an installed `gcloud`
+  /// executable on desktop, returning `null` when unavailable or on Web.
+  String? probeGcloudExecutable() =>
+      localHostDriver.isSupported ? _gcloudPathProber() : null;
 
   /// Resolved color theme matching current appearance & system polarity.
   tui.TerminalColorTheme get activeTerminalTheme => _colorResolver.theme;
@@ -1076,17 +1137,86 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   void _startInitialRelayConnection() {
-    if (_activeRelayUri != launchConfig.serverUri ||
-        _activeClientToken != launchConfig.token) {
+    final endpointChanged =
+        _activeRelayUri != launchConfig.serverUri ||
+        _activeClientToken != launchConfig.token;
+    IapTokenProvider? startupIap;
+    var replaceIap = false;
+    if (_activeRelayUri.scheme == 'wss' &&
+        (endpointChanged || launchConfig.iapTokenProvider == null)) {
+      try {
+        startupIap = resolveIapTokenProviderFor(_activeRelayUri);
+        replaceIap = startupIap != null;
+      } on Object catch (error) {
+        _setStatusBanner('Saved Cloud Run IAP config invalid: $error');
+        return;
+      }
+    }
+    if (endpointChanged || replaceIap) {
       unawaited(
-        repository.reconnect((
-          serverUri: _activeRelayUri,
-          token: _activeClientToken,
-        )),
+        repository.reconnect(
+          (serverUri: _activeRelayUri, token: _activeClientToken),
+          iapTokenProvider: startupIap,
+          replaceIapTokenProvider: replaceIap,
+        ),
       );
       return;
     }
     unawaited(repository.connect(retryOnFailure: true));
+  }
+
+  /// Resolves an audience-scoped [IapTokenProvider] for [targetUri] (`wss://`
+  /// only) from active runtime/saved IAP settings or startup [launchConfig].
+  IapTokenProvider? resolveIapTokenProviderFor(Uri targetUri) {
+    if (targetUri.scheme != 'wss') return null;
+    final fromLaunch = _tryReuseLaunchIapProvider(targetUri);
+    if (fromLaunch != null) return fromLaunch;
+    if (_activeIapServiceAccount.isEmpty && _activeIapKeyFilePath.isEmpty) {
+      return null;
+    }
+    final serviceAccount = _activeIapServiceAccount.isEmpty
+        ? null
+        : _activeIapServiceAccount;
+    final keyFilePath = _activeIapKeyFilePath.isEmpty
+        ? null
+        : _activeIapKeyFilePath;
+    if (serviceAccount != null &&
+        !TokenAuthenticator.isValidServiceAccountEmail(serviceAccount)) {
+      throw FormatException(
+        'Invalid GCP service account email: "$serviceAccount".',
+      );
+    }
+    final audience = TokenAuthenticator.iapAudienceForWebSocketUri(targetUri);
+    return _iapProviderCache.putIfAbsent(
+      audience,
+      () => _iapProviderBuilder(
+        serverUri: targetUri,
+        serviceAccount: serviceAccount,
+        keyFilePath: keyFilePath,
+        gcloudPath: _activeGcloudPath.isEmpty ? null : _activeGcloudPath,
+      ),
+    );
+  }
+
+  IapTokenProvider? _tryReuseLaunchIapProvider(Uri targetUri) {
+    if (_hasRuntimeIapOverride) return null;
+    if (_activeIapServiceAccount != launchConfig.iapServiceAccount.trim() ||
+        _activeIapKeyFilePath != launchConfig.iapKeyFilePath.trim() ||
+        _activeGcloudPath != launchConfig.gcloudPath.trim()) {
+      return null;
+    }
+    if (launchConfig.iapTokenProviderFactory != null) {
+      return launchConfig.iapTokenProviderFor(targetUri);
+    }
+    if (launchConfig.iapTokenProvider != null &&
+        launchConfig.serverUri.scheme == 'wss' &&
+        TokenAuthenticator.iapAudienceForWebSocketUri(targetUri) ==
+            TokenAuthenticator.iapAudienceForWebSocketUri(
+              launchConfig.serverUri,
+            )) {
+      return launchConfig.iapTokenProvider;
+    }
+    return null;
   }
 
   /// Connects or reconnects the relay client repository using explicit credentials
@@ -1095,9 +1225,62 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required Uri serverUri,
     required String clientToken,
     String? casterToken,
+    String? iapServiceAccount,
+    String? iapKeyFilePath,
+    String? gcloudPath,
     bool persistCredentials = true,
   }) async {
     if (_disposed) return;
+    final hasIapUpdate =
+        iapServiceAccount != null ||
+        iapKeyFilePath != null ||
+        gcloudPath != null;
+    final nextSa = iapServiceAccount != null
+        ? iapServiceAccount.trim()
+        : _activeIapServiceAccount;
+    final nextKey = iapKeyFilePath != null
+        ? iapKeyFilePath.trim()
+        : _activeIapKeyFilePath;
+    final nextGcloud = gcloudPath != null
+        ? gcloudPath.trim()
+        : _activeGcloudPath;
+
+    if (hasIapUpdate) {
+      _validateRelayIapSelection(
+        serverUri: serverUri,
+        serviceAccount: nextSa,
+        keyFilePath: nextKey,
+      );
+    }
+    final iapChanged =
+        nextSa != _activeIapServiceAccount ||
+        nextKey != _activeIapKeyFilePath ||
+        nextGcloud != _activeGcloudPath;
+    final nextIapProvider = _buildRelayIapProvider(
+      serverUri: serverUri,
+      hasIapUpdate: hasIapUpdate,
+      iapChanged: iapChanged,
+      serviceAccount: nextSa,
+      keyFilePath: nextKey,
+      gcloudPath: nextGcloud,
+    );
+
+    if (iapChanged) {
+      _iapProviderCache.clear();
+    }
+    if (hasIapUpdate) {
+      _hasRuntimeIapOverride = true;
+    }
+    _activeIapServiceAccount = nextSa;
+    _activeIapKeyFilePath = nextKey;
+    _activeGcloudPath = nextGcloud;
+    if (nextIapProvider != null && serverUri.scheme == 'wss') {
+      _iapProviderCache[TokenAuthenticator.iapAudienceForWebSocketUri(
+            serverUri,
+          )] =
+          nextIapProvider;
+    }
+
     _activeRelayUri = serverUri;
     _activeClientToken = clientToken;
     if (casterToken != null) {
@@ -1111,6 +1294,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
         serverUrl: serverUri.toString(),
         clientToken: clientToken,
         casterToken: _activeCasterToken,
+        iapServiceAccount: _activeIapServiceAccount,
+        iapKeyFilePath: _activeIapKeyFilePath,
+        gcloudPath: _activeGcloudPath,
       );
       saveStoredRelayCredentials(_storage, _relayCredentials);
     }
@@ -1118,7 +1304,62 @@ final class FtermWorkspaceController extends ChangeNotifier {
       _activeOverlay = FtermOverlay.none;
     }
     _notifyChromeChanged();
-    await repository.reconnect((serverUri: serverUri, token: clientToken));
+    await repository.reconnect(
+      (serverUri: serverUri, token: clientToken),
+      iapTokenProvider: nextIapProvider,
+      replaceIapTokenProvider: true,
+    );
+  }
+
+  static void _validateRelayIapSelection({
+    required Uri serverUri,
+    required String serviceAccount,
+    required String keyFilePath,
+  }) {
+    if (serviceAccount.isNotEmpty && keyFilePath.isNotEmpty) {
+      throw const FormatException(
+        'Specify either an IAP service account email or a JSON key file, not both.',
+      );
+    }
+    if ((serviceAccount.isNotEmpty || keyFilePath.isNotEmpty) &&
+        serverUri.scheme != 'wss') {
+      throw const FormatException(
+        'Cloud Run IAP authentication requires a wss:// relay URL.',
+      );
+    }
+    if (serviceAccount.isNotEmpty &&
+        !TokenAuthenticator.isValidServiceAccountEmail(serviceAccount)) {
+      throw const FormatException('Invalid GCP service account email.');
+    }
+  }
+
+  IapTokenProvider? _buildRelayIapProvider({
+    required Uri serverUri,
+    required bool hasIapUpdate,
+    required bool iapChanged,
+    required String serviceAccount,
+    required String keyFilePath,
+    required String gcloudPath,
+  }) {
+    if (serverUri.scheme != 'wss') return null;
+    if (!hasIapUpdate) {
+      return resolveIapTokenProviderFor(serverUri);
+    }
+    if (serviceAccount.isEmpty && keyFilePath.isEmpty) {
+      return null;
+    }
+    if (!iapChanged) {
+      final audience = TokenAuthenticator.iapAudienceForWebSocketUri(serverUri);
+      if (_iapProviderCache.containsKey(audience)) {
+        return _iapProviderCache[audience];
+      }
+    }
+    return _iapProviderBuilder(
+      serverUri: serverUri,
+      serviceAccount: serviceAccount.isEmpty ? null : serviceAccount,
+      keyFilePath: keyFilePath.isEmpty ? null : keyFilePath,
+      gcloudPath: gcloudPath.isEmpty ? null : gcloudPath,
+    );
   }
 
   /// Opens a new local shell tab (desktop only).
@@ -1526,7 +1767,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
           serverUri: resolvedServer,
           casterToken: resolvedToken,
           title: tabTitle,
-          iapTokenProvider: launchConfig.iapTokenProviderFor(resolvedServer),
+          iapTokenProvider: resolveIapTokenProviderFor(resolvedServer),
           channelOpener: channelOpener,
         );
         _ownedSharedSessionIds.add(assignedId);
