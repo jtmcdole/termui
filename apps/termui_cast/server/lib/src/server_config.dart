@@ -276,6 +276,7 @@ final class ServerConfig {
     List<String> args, {
     Map<String, String>? environment,
     Directory? currentDirectory,
+    String? resolvedExecutable,
   }) {
     final results = buildArgParser().parse(args);
     if (results['help'] as bool) return null;
@@ -335,7 +336,12 @@ final class ServerConfig {
       trustProxyClientAuth: trustProxyClientAuth,
       requireClientAuthHeader: requireClientAuthHeader,
       basePath: _resolveBasePath(results, env),
-      webRoot: _resolveWebRoot(results, env, cwd),
+      webRoot: _resolveWebRoot(
+        results,
+        env,
+        cwd,
+        resolvedExecutable: resolvedExecutable,
+      ),
       revision: _resolveRevision(results, env),
       allowedOrigins: _resolveAllowedOrigins(results, env),
       warnings: warnings,
@@ -548,11 +554,29 @@ final class ServerConfig {
     ];
   }
 
+  static const Set<String> _dartRuntimeBasenames = {
+    'dart',
+    'dart.exe',
+    'dartaotruntime',
+    'dartaotruntime.exe',
+    'flutter_tester',
+    'flutter_tester.exe',
+  };
+
+  static List<String> _executableWebCandidates(String exePath) {
+    if (exePath.isEmpty) return const [];
+    final base = p.basename(exePath).toLowerCase();
+    if (_dartRuntimeBasenames.contains(base)) return const [];
+    final exeDir = p.dirname(exePath);
+    return [p.join(exeDir, '..', 'web'), p.join(exeDir, 'web')];
+  }
+
   static String? _resolveWebRoot(
     ArgResults results,
     Map<String, String> env,
-    Directory cwd,
-  ) {
+    Directory cwd, {
+    String? resolvedExecutable,
+  }) {
     if (results['no-web'] as bool) return null;
     if (results.wasParsed('web-dir')) {
       return results['web-dir'] as String;
@@ -560,7 +584,9 @@ final class ServerConfig {
     if (env.containsKey('TERMUI_CAST_WEB_DIR')) {
       return _nonEmpty(env['TERMUI_CAST_WEB_DIR']);
     }
+    final exePath = resolvedExecutable ?? Platform.resolvedExecutable;
     final candidates = [
+      ..._executableWebCandidates(exePath),
       p.join(cwd.path, 'apps', 'fterm', 'build', 'web'),
       p.join(cwd.path, '..', '..', 'fterm', 'build', 'web'),
       p.join(cwd.path, '..', '..', '..', 'apps', 'fterm', 'build', 'web'),
@@ -575,7 +601,8 @@ final class ServerConfig {
 
 bool _hasValidIndexHtml(String dirPath) =>
     Directory(dirPath).existsSync() &&
-    File(p.join(dirPath, 'index.html')).existsSync();
+    (File(p.join(dirPath, 'index.html')).existsSync() ||
+        File(p.join(dirPath, 'index.html.gz')).existsSync());
 
 String? _nonEmpty(String? value) {
   final trimmed = value?.trim();

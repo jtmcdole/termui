@@ -50,6 +50,12 @@ tar -xzf fterm-linux-x64.tar.gz -C fterm
 ./fterm/fterm
 ```
 
+### Relay Server & Caster Bundles (`termui_cast_server-<os>-<arch>`, `termui_cast-<os>-<arch>`, `fterm-web.tar.gz`)
+
+- `termui_cast_server-<os>-<arch>.tar.gz` / `.zip` bundles `bin/termui_cast_server` with the prebuilt `fterm` WASM web viewer under `web/` (pre-compressed as `.gz` assets with no uncompressed duplicates). Running `./bin/termui_cast_server` auto-discovers `../web` on startup.
+- `termui_cast-<os>-<arch>.tar.gz` / `.zip` contains only the lightweight caster CLI (`bin/termui_cast` + native PTY libraries).
+- `fterm-web.tar.gz` is also attached standalone for external static web hosts or container mounts.
+
 ## Run in Chrome
 
 ```bash
