@@ -1,3 +1,7 @@
+## 0.21.1
+
+ - **REFACTOR**(termui): deduplicate shared internal helpers (#428).
+
 ## 0.21.0
 
 > Note: This release has breaking changes.

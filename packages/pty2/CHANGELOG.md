@@ -1,3 +1,7 @@
+## 0.10.1
+
+ - **FIX**(pty2): short-circuit process-group kill to avoid reaper race (#433).
+
 ## 0.10.0
 
 > Note: This release has breaking changes.

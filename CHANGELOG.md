@@ -11,6 +11,52 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - There are no breaking changes in this release.
+
+Packages with other changes:
+
+ - [`pty2` - `v0.10.1`](#pty2---v0101)
+ - [`termui` - `v0.21.1`](#termui---v0211)
+ - [`termui_hotreload` - `v0.6.39`](#termui_hotreload---v0639)
+ - [`termui_pty` - `v0.16.1`](#termui_pty---v0161)
+ - [`termui_flutter` - `v0.16.1`](#termui_flutter---v0161)
+ - [`termui_recorder` - `v0.10.13`](#termui_recorder---v01013)
+ - [`termui_test` - `v0.4.13`](#termui_test---v0413)
+ - [`termui_tinpot` - `v0.5.11`](#termui_tinpot---v0511)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_pty` - `v0.16.1`
+ - `termui_flutter` - `v0.16.1`
+ - `termui_recorder` - `v0.10.13`
+ - `termui_test` - `v0.4.13`
+ - `termui_tinpot` - `v0.5.11`
+
+---
+
+#### `pty2` - `v0.10.1`
+
+ - **FIX**(pty2): short-circuit process-group kill to avoid reaper race (#433).
+
+#### `termui` - `v0.21.1`
+
+ - **REFACTOR**(termui): deduplicate shared internal helpers (#428).
+
+#### `termui_hotreload` - `v0.6.39`
+
+ - **REFACTOR**: remove dead declarations found by undead.
+
+
+## 2026-11-24
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`fterm` - `v0.6.0`](#fterm---v060)
  - [`termui_cast_client_core` - `v0.5.0`](#termui_cast_client_core---v050)
  - [`termui_cast_protocol` - `v0.4.0`](#termui_cast_protocol---v040)
