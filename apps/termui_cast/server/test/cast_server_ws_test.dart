@@ -119,9 +119,9 @@ void main() {
         check(wildcardPortMatch).isNotNull();
         final wildcardPort = wildcardPortMatch!.group(1)!;
         check(wildcardText).contains('Listening on 0.0.0.0:$wildcardPort');
-        check(
-          wildcardText,
-        ).contains('Local HTTP: http://127.0.0.1:$wildcardPort/');
+        check(wildcardText).contains(
+          'Local HTTP: http://127.0.0.1:$wildcardPort/ (static web disabled)',
+        );
         check(wildcardText).contains(
           'Local WS:   ws://127.0.0.1:$wildcardPort/v1/caster '
           'and ws://127.0.0.1:$wildcardPort/v1/client',
@@ -130,12 +130,20 @@ void main() {
           wildcardErr.toString(),
         ).contains('WARNING: Binding non-loopback 0.0.0.0');
 
-        // 2. Loopback bind with --base-path logs concrete 127.0.0.1:<port> and subpath http:// and ws:// endpoints.
+        // 2. Loopback bind with --base-path and --web-dir logs concrete 127.0.0.1:<port> without "(static web disabled)".
+        final tempWebDir = Directory.systemTemp.createTempSync(
+          'cast_server_cli_web_',
+        );
+        addTearDown(() => tempWebDir.deleteSync(recursive: true));
+        File(
+          '${tempWebDir.path}${Platform.pathSeparator}index.html',
+        ).writeAsStringSync('<!doctype html><html></html>');
+
         final loopbackShutdown = StreamController<void>();
         addTearDown(loopbackShutdown.close);
         final loopbackOut = _NotifyingStringSink();
         final loopbackFuture = runServerCli(
-          const [
+          [
             '--host',
             '127.0.0.1',
             '--port',
@@ -143,7 +151,8 @@ void main() {
             '--base-path',
             '/term',
             '--insecure-no-auth',
-            '--no-web',
+            '--web-dir',
+            tempWebDir.path,
           ],
           out: loopbackOut,
           err: StringBuffer(),
@@ -162,12 +171,13 @@ void main() {
         check(loopbackText).contains('Listening on 127.0.0.1:$loopbackPort');
         check(
           loopbackText,
-        ).contains('HTTP: http://127.0.0.1:$loopbackPort/term/');
+        ).contains('HTTP: http://127.0.0.1:$loopbackPort/term/\n');
         check(loopbackText).contains(
           'WS:   ws://127.0.0.1:$loopbackPort/term/v1/caster '
           'and ws://127.0.0.1:$loopbackPort/term/v1/client',
         );
         check(loopbackText).not((it) => it.contains('Local HTTP:'));
+        check(loopbackText).not((it) => it.contains('(static web disabled)'));
 
         // 3. Wildcard IPv6 bind (::) brackets [::]:<port> and normalizes local endpoints to [::1].
         final ipv6Shutdown = StreamController<void>();
@@ -200,11 +210,48 @@ void main() {
         check(ipv6PortMatch).isNotNull();
         final ipv6Port = ipv6PortMatch!.group(1)!;
         check(ipv6Text).contains('Listening on [::]:$ipv6Port');
-        check(ipv6Text).contains('Local HTTP: http://[::1]:$ipv6Port/');
+        check(
+          ipv6Text,
+        ).contains('Local HTTP: http://[::1]:$ipv6Port/ (static web disabled)');
         check(ipv6Text).contains(
           'Local WS:   ws://[::1]:$ipv6Port/v1/caster '
           'and ws://[::1]:$ipv6Port/v1/client',
         );
+
+        // 4. Loopback IPv6 bind (::1) brackets [::1]:<port> without the "Local " prefix.
+        final ipv6LoopbackShutdown = StreamController<void>();
+        addTearDown(ipv6LoopbackShutdown.close);
+        final ipv6LoopbackOut = _NotifyingStringSink();
+        final ipv6LoopbackFuture = runServerCli(
+          const [
+            '--host',
+            '::1',
+            '--port',
+            '0',
+            '--insecure-no-auth',
+            '--no-web',
+          ],
+          out: ipv6LoopbackOut,
+          err: StringBuffer(),
+          shutdownSignal: ipv6LoopbackShutdown.stream,
+        );
+        await ipv6LoopbackOut.ready.future.timeout(const Duration(seconds: 3));
+        ipv6LoopbackShutdown.add(null);
+        check(await ipv6LoopbackFuture).equals(0);
+
+        final ipv6LoopbackText = ipv6LoopbackOut.buffer.toString();
+        final ipv6LoopbackPortMatch = RegExp(
+          r'ws://\[::1\]:(\d+)/v1/caster',
+        ).firstMatch(ipv6LoopbackText);
+        check(ipv6LoopbackPortMatch).isNotNull();
+        final ipv6LoopbackPort = ipv6LoopbackPortMatch!.group(1)!;
+        check(
+          ipv6LoopbackText,
+        ).contains('Listening on [::1]:$ipv6LoopbackPort');
+        check(ipv6LoopbackText).contains(
+          'HTTP: http://[::1]:$ipv6LoopbackPort/ (static web disabled)',
+        );
+        check(ipv6LoopbackText).not((it) => it.contains('Local HTTP:'));
       },
     );
   });
