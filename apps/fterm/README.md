@@ -2,6 +2,8 @@
 
 Flutter native desktop terminal multiplexer (`macos`, `linux`, `windows`) and WebAssembly client (`web`) for `termui_caster`, built on `package:termui_flutter`, `package:termui_pty`, `package:termui_audio_flutter`, and `package:termui_cast_client_core`.
 
+See [SPEC.md](../SPEC.md) for the custom terminal escape sequences (audio, shaders, cell transforms, queries) and chunked file transfer protocol.
+
 ## Features & Controls
 
 - **Desktop local startup**: Spawns your interactive shell (`$SHELL`, `pwsh.exe`, or `%COMSPEC%`) immediately on startup via `PtyRouter` and connects configured relays in the background.

@@ -38,6 +38,8 @@ flowchart LR
 
 ### Wire Protocol and Packet Routing
 
+See [SPEC.md](../SPEC.md) for the custom terminal escape sequences (audio, shaders, cell transforms, queries) and chunked file transfer (`0x12`–`0x15`) wire specification.
+
 ```mermaid
 sequenceDiagram
   autonumber
