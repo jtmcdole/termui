@@ -17,6 +17,8 @@ import 'package:termui_flutter/termui_flutter.dart';
 
 final class _FakeTerminalService implements TerminalService {
   final List<String> savedFiles = [];
+  final List<String> copiedTexts = [];
+  int pasteRequests = 0;
 
   @override
   Future<String?> saveScreenshot(String basename, Uint8List bytes) async {
@@ -25,10 +27,13 @@ final class _FakeTerminalService implements TerminalService {
   }
 
   @override
-  Future<void> setClipboard(String text) async {}
+  Future<void> setClipboard(String text) async => copiedTexts.add(text);
 
   @override
-  Future<String?> getClipboard() async => 'clip';
+  Future<String?> getClipboard() async {
+    pasteRequests++;
+    return 'clip';
+  }
 
   @override
   Future<bool> openUrl(String url) async => true;
@@ -177,6 +182,10 @@ void main() {
       'keeps idle editing selection at offset 0 on attach and post-commit resets for Flutter Web',
       _testIdleEditingStateNonNegativeSelection,
     );
+  });
+
+  group('TerminalMetaKeyPolicy & HostShortcutResult passthrough (#426)', () {
+    _defineMetaKeyPolicyTests();
   });
 }
 
@@ -1768,4 +1777,249 @@ Future<void> _testIdleEditingStateNonNegativeSelection(
   expect(fallbackStates.single['text'], equals(''));
   expect(fallbackStates.single['selectionBase'], equals(0));
   expect(fallbackStates.single['selectionExtent'], equals(0));
+}
+
+typedef _MetaMount = ({
+  List<term.InputEvent> events,
+  List<KeyEvent> bubbled,
+  _FakeTerminalService service,
+});
+
+Future<_MetaMount> _mountMetaSurface(
+  WidgetTester tester, {
+  Buffer? buffer,
+  FlutterTerminal? terminal,
+  TerminalSelectionController? selection,
+  int Function()? kittyFlags,
+  TerminalMetaKeyPolicy policy = .claimAll,
+  HostShortcutResult Function(KeyEvent, Set<term.Modifier>)? onHostShortcut,
+  _MetaMount? reuse,
+}) async {
+  final state =
+      reuse ??
+      (
+        events: <term.InputEvent>[],
+        bubbled: <KeyEvent>[],
+        service: _FakeTerminalService(),
+      );
+  final root = Directionality(
+    textDirection: .ltr,
+    child: Focus(
+      canRequestFocus: false,
+      onKeyEvent: (_, e) {
+        state.bubbled.add(e);
+        return .ignored;
+      },
+      child: SizedBox(
+        width: 320,
+        height: 200,
+        child: TerminalSurface(
+          terminal: terminal,
+          buffer: buffer ?? Buffer(20, 8),
+          service: state.service,
+          selectionController: selection,
+          kittyKeyboardFlagsProvider: kittyFlags,
+          metaKeyPolicy: policy,
+          onInputEvent: terminal == null ? state.events.add : null,
+          onHostShortcut: onHostShortcut,
+        ),
+      ),
+    ),
+  );
+  if (reuse != null) {
+    await tester.pumpWidget(root);
+    await tester.pump();
+    return state;
+  }
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(root);
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+  return state;
+}
+
+Future<(bool, bool)> _sendChord(
+  WidgetTester tester,
+  List<LogicalKeyboardKey> mods,
+  LogicalKeyboardKey key, {
+  String? ch,
+  bool modsFirstUp = false,
+  bool repeatAfterModsUp = false,
+}) async {
+  for (final m in mods) {
+    await tester.sendKeyDownEvent(m);
+  }
+  final down = await tester.sendKeyDownEvent(key, character: ch);
+  if (modsFirstUp) {
+    for (final m in mods.reversed) {
+      await tester.sendKeyUpEvent(m);
+    }
+  }
+  if (repeatAfterModsUp) {
+    expect(await tester.sendKeyRepeatEvent(key, character: ch), isFalse);
+  }
+  final up = await tester.sendKeyUpEvent(key);
+  if (!modsFirstUp) {
+    for (final m in mods.reversed) {
+      await tester.sendKeyUpEvent(m);
+    }
+  }
+  await tester.pump();
+  return (down, up);
+}
+
+void _defineMetaKeyPolicyTests() {
+  testWidgets(
+    'passThroughUnhandled ignores Ctrl+Option+Cmd+ArrowLeft across Kitty flags with Meta-first release',
+    (tester) async {
+      var flags = 0;
+      final m = await _mountMetaSurface(
+        tester,
+        kittyFlags: () => flags,
+        policy: .passThroughUnhandled,
+      );
+      for (final f in const [0, 1, 3, 11]) {
+        flags = f;
+        m.events.clear();
+        m.bubbled.clear();
+        final res = await _sendChord(
+          tester,
+          const [.controlLeft, .altLeft, .metaLeft],
+          .arrowLeft,
+          modsFirstUp: true,
+        );
+        expect(res, (false, false), reason: 'flags=$f');
+        expect(m.events, isEmpty, reason: 'flags=$f');
+        expect(
+          m.bubbled.where((e) => e.logicalKey == .arrowLeft),
+          hasLength(2),
+        );
+      }
+    },
+  );
+
+  testWidgets(
+    'claimWhenKittyActive ignores legacy Meta+ArrowLeft, claims flags == 3, and updates via didUpdateWidget',
+    (tester) async {
+      var flags = 0;
+      final m = await _mountMetaSurface(
+        tester,
+        kittyFlags: () => flags,
+        policy: .claimWhenKittyActive,
+      );
+      expect(await _sendChord(tester, const [.metaLeft], .arrowLeft), (
+        false,
+        false,
+      ));
+      expect(m.events, isEmpty);
+
+      flags = 3;
+      expect(await _sendChord(tester, const [.metaLeft], .arrowLeft), (
+        true,
+        true,
+      ));
+      expect(m.events, const [
+        term.KeyEvent('left', .left, modifiers: {.meta}),
+        term.KeyEvent('left', .left, modifiers: {.meta}, eventType: .release),
+      ]);
+
+      m.events.clear();
+      await _mountMetaSurface(
+        tester,
+        kittyFlags: () => flags,
+        policy: .passThroughUnhandled,
+        reuse: m,
+      );
+      expect(
+        await _sendChord(
+          tester,
+          const [.metaLeft],
+          .arrowLeft,
+          modsFirstUp: true,
+        ),
+        (false, false),
+      );
+      expect(m.events, isEmpty);
+    },
+  );
+
+  testWidgets('claimAll preserves Meta+S for FlutterTerminal', (tester) async {
+    final terminal = FlutterTerminal();
+    addTearDown(terminal.dispose);
+    final events = <term.InputEvent>[];
+    addTearDown(terminal.events.listen(events.add).cancel);
+    await _mountMetaSurface(tester, terminal: terminal);
+
+    final (down, _) = await _sendChord(
+      tester,
+      const [.metaLeft],
+      .keyS,
+      ch: 's',
+    );
+    expect(down, isTrue);
+    expect(events, const [
+      term.KeyEvent('s', .character, modifiers: {.meta}),
+    ]);
+  });
+
+  testWidgets(
+    'HostShortcutResult.passThrough bypasses built-in Cmd+V and F12 on down, repeat, and up',
+    (tester) async {
+      final m = await _mountMetaSurface(
+        tester,
+        kittyFlags: () => 3,
+        onHostShortcut: (e, mods) =>
+            e.logicalKey == .f12 ||
+                (e.logicalKey == .keyV && mods.contains(term.Modifier.meta))
+            ? .passThrough
+            : .unhandled,
+      );
+      expect(
+        await _sendChord(
+          tester,
+          const [.metaLeft],
+          .keyV,
+          ch: 'v',
+          modsFirstUp: true,
+          repeatAfterModsUp: true,
+        ),
+        (false, false),
+      );
+      expect(m.service.pasteRequests, 0);
+      expect(await _sendChord(tester, const [], .f12), (false, false));
+      expect(m.service.savedFiles, isEmpty);
+      expect(m.events, isEmpty);
+    },
+  );
+
+  testWidgets(
+    'built-in Cmd+C (with selection) and Cmd+V stay handled under passThroughUnhandled',
+    (tester) async {
+      final selection = TerminalSelectionController();
+      addTearDown(selection.dispose);
+      final m = await _mountMetaSurface(
+        tester,
+        buffer: Buffer(20, 8)..writeString(0, 0, 'hello world', Style.empty),
+        selection: selection,
+        policy: .passThroughUnhandled,
+      );
+      selection
+        ..startSelection(0, 0)
+        ..updateSelection(4, 0);
+      expect(
+        (await _sendChord(tester, const [.metaLeft], .keyC, ch: 'c')).$1,
+        isTrue,
+      );
+      expect(m.service.copiedTexts, ['hello']);
+      expect(m.events, isEmpty);
+
+      expect(
+        (await _sendChord(tester, const [.metaLeft], .keyV, ch: 'v')).$1,
+        isTrue,
+      );
+      expect(m.service.pasteRequests, 1);
+      expect(m.events, const [term.PasteEvent('clip')]);
+    },
+  );
 }

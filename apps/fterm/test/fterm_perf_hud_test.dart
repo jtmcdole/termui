@@ -427,9 +427,15 @@ void main() {
         );
         const mods = <ev.Modifier>{ev.Modifier.control, ev.Modifier.shift};
         expect(env.workspace.showPerfHud, isFalse);
-        expect(dispatcher.handleHostShortcut(event, mods), isTrue);
+        expect(
+          dispatcher.handleHostShortcut(event, mods),
+          equals(HostShortcutResult.handled),
+        );
         expect(env.workspace.showPerfHud, isTrue);
-        expect(dispatcher.handleHostShortcut(event, mods), isTrue);
+        expect(
+          dispatcher.handleHostShortcut(event, mods),
+          equals(HostShortcutResult.handled),
+        );
         expect(env.workspace.showPerfHud, isFalse);
       },
     );
@@ -615,7 +621,10 @@ void main() {
           timeStamp: Duration.zero,
         );
         const mods = <ev.Modifier>{ev.Modifier.control, ev.Modifier.shift};
-        expect(dispatcher.handleHostShortcut(f10, mods), isTrue);
+        expect(
+          dispatcher.handleHostShortcut(f10, mods),
+          equals(HostShortcutResult.handled),
+        );
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)),
         );

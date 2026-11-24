@@ -1082,7 +1082,7 @@ void _defineThemeLifecycleAndPixelMouseTests() {
         ),
         const {},
       ),
-      isFalse,
+      equals(HostShortcutResult.unhandled),
     );
     expect(audio.hasUserGesture, isFalse);
 
@@ -1096,7 +1096,7 @@ void _defineThemeLifecycleAndPixelMouseTests() {
         ),
         const {},
       ),
-      isFalse,
+      equals(HostShortcutResult.unhandled),
     );
     expect(audio.hasUserGesture, isFalse);
 
@@ -1111,7 +1111,7 @@ void _defineThemeLifecycleAndPixelMouseTests() {
         ),
         const {},
       ),
-      isFalse,
+      equals(HostShortcutResult.unhandled),
     );
     expect(audio.hasUserGesture, isTrue);
     expect(audio.needsGestureUnlock, isFalse);

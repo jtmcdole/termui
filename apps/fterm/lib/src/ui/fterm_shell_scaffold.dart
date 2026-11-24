@@ -442,10 +442,10 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
 
   KeyEventResult _handleRootKeyEvent(KeyEvent event) {
     final mods = _collectHardwareModifiers();
-    if (_shortcutDispatcher.handleHostShortcut(event, mods)) {
-      return KeyEventResult.handled;
-    }
-    return KeyEventResult.ignored;
+    return switch (_shortcutDispatcher.handleHostShortcut(event, mods)) {
+      .handled => .handled,
+      .passThrough || .unhandled => .ignored,
+    };
   }
 
   Future<void> _pasteClipboardToPane(FtermPaneController pane) async {
