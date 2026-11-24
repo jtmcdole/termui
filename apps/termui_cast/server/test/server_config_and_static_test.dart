@@ -832,6 +832,10 @@ void main() {
           ServerConfig(port: 0, webRoot: webDir.path, basePath: '/term/'),
         );
         addTearDown(prefixedServer.close);
+        check(prefixedServer.address).equals(InternetAddress.loopbackIPv4);
+        check(
+          prefixedServer.httpUri,
+        ).equals(Uri.parse('http://127.0.0.1:${prefixedServer.port}/term/'));
         check(prefixedServer.casterUri.path).equals('/term/v1/caster');
         check(prefixedServer.clientUri.path).equals('/term/v1/client');
 

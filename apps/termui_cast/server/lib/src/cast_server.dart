@@ -41,14 +41,20 @@ final class CastServer {
     );
   }
 
+  /// Bound interface address.
+  InternetAddress get address => _httpServer.address;
+
   /// Bound TCP port.
   int get port => _httpServer.port;
 
+  /// Normalized HTTP base URI for the server (`<basePath>/`).
+  Uri get httpUri => _endpointUri('http', '${config.basePath}/');
+
   /// WebSocket URI for caster peers (`<basePath>/v1/caster`).
-  Uri get casterUri => _endpointUri('${config.basePath}/v1/caster');
+  Uri get casterUri => _endpointUri('ws', '${config.basePath}/v1/caster');
 
   /// WebSocket URI for viewer client peers (`<basePath>/v1/client`).
-  Uri get clientUri => _endpointUri('${config.basePath}/v1/client');
+  Uri get clientUri => _endpointUri('ws', '${config.basePath}/v1/client');
 
   /// Binds an HTTP or HTTPS server according to [config].
   static Future<CastServer> bind(
@@ -97,14 +103,14 @@ final class CastServer {
     await _httpServer.close(force: true);
   }
 
-  Uri _endpointUri(String path) {
+  Uri _endpointUri(String scheme, String path) {
     final rawHost = _httpServer.address.address;
     final connectHost = switch (rawHost) {
       '0.0.0.0' => '127.0.0.1',
       '::' => '::1',
       _ => rawHost,
     };
-    return Uri(scheme: 'ws', host: connectHost, port: port, path: path);
+    return Uri(scheme: scheme, host: connectHost, port: port, path: path);
   }
 
   Future<void> _handleHttpRequest(HttpRequest request) async {
