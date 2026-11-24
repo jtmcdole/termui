@@ -223,16 +223,53 @@ class SplitPaneElement extends Element implements MouseEventHandler {
         : constraints.maxHeight;
 
     split._initLimits();
-    final totalSize = split.direction == LayoutDirection.horizontal ? w : h;
+    final isHorizontal = split.direction == .horizontal;
+    final totalSize = isHorizontal ? w : h;
     if (totalSize <= 0) {
       split._dividerX = 0;
       return Size(w, h);
     }
 
-    int dividerPos = _calculateDividerPos(totalSize);
+    final dividerPos = _clampDividerPos(
+      split,
+      totalSize,
+      _calculateDividerPos(totalSize),
+    );
+    split._dividerX = dividerPos;
 
-    int minW1 = split._origMin1 ?? 0;
-    int maxW1 = split._origMax1 ?? (totalSize - 1);
+    final secondSize = totalSize - dividerPos - 1;
+    _layoutPaneChild(
+      childElement1,
+      Offset.zero,
+      isHorizontal ? Size(dividerPos, h) : Size(w, dividerPos),
+      dividerPos,
+    );
+    _layoutPaneChild(
+      childElement2,
+      isHorizontal ? Offset(dividerPos + 1, 0) : Offset(0, dividerPos + 1),
+      isHorizontal ? Size(secondSize, h) : Size(w, secondSize),
+      secondSize,
+    );
+
+    return constraints.constrain(Size(w, h));
+  }
+
+  static void _layoutPaneChild(
+    Element? child,
+    Offset offset,
+    Size paneSize,
+    int primaryExtent,
+  ) {
+    if (child == null) return;
+    child.relativeOffset = offset;
+    if (primaryExtent > 0) {
+      child.layout(BoxConstraints.tight(paneSize));
+    }
+  }
+
+  static int _clampDividerPos(SplitPane split, int totalSize, int desired) {
+    var minW1 = split._origMin1 ?? 0;
+    var maxW1 = split._origMax1 ?? (totalSize - 1);
     if (split._origMin2 != null) {
       maxW1 = min(maxW1, totalSize - split._origMin2! - 1);
     }
@@ -242,41 +279,7 @@ class SplitPaneElement extends Element implements MouseEventHandler {
     minW1 = minW1.clamp(0, totalSize - 1);
     maxW1 = maxW1.clamp(0, totalSize - 1);
     if (minW1 > maxW1) minW1 = maxW1;
-
-    dividerPos = dividerPos.clamp(minW1, maxW1);
-    split._dividerX = dividerPos;
-
-    if (split.direction == LayoutDirection.horizontal) {
-      if (childElement1 != null) {
-        childElement1!.relativeOffset = Offset.zero;
-        if (dividerPos > 0) {
-          childElement1!.layout(BoxConstraints.tight(Size(dividerPos, h)));
-        }
-      }
-      if (childElement2 != null) {
-        childElement2!.relativeOffset = Offset(dividerPos + 1, 0);
-        final child2Width = w - dividerPos - 1;
-        if (child2Width > 0) {
-          childElement2!.layout(BoxConstraints.tight(Size(child2Width, h)));
-        }
-      }
-    } else {
-      if (childElement1 != null) {
-        childElement1!.relativeOffset = Offset.zero;
-        if (dividerPos > 0) {
-          childElement1!.layout(BoxConstraints.tight(Size(w, dividerPos)));
-        }
-      }
-      if (childElement2 != null) {
-        childElement2!.relativeOffset = Offset(0, dividerPos + 1);
-        final child2Height = h - dividerPos - 1;
-        if (child2Height > 0) {
-          childElement2!.layout(BoxConstraints.tight(Size(w, child2Height)));
-        }
-      }
-    }
-
-    return constraints.constrain(Size(w, h));
+    return desired.clamp(minW1, maxW1);
   }
 
   @override
@@ -288,47 +291,40 @@ class SplitPaneElement extends Element implements MouseEventHandler {
     if (w <= 0 || h <= 0) return;
 
     final dividerPos = split._dividerX;
+    if (dividerPos > 0 && childElement1 != null) {
+      childElement1!.paint(buffer, offset + childElement1!.relativeOffset);
+    }
 
-    if (split.direction == LayoutDirection.horizontal) {
-      if (dividerPos > 0 && childElement1 != null) {
-        childElement1!.paint(buffer, offset + childElement1!.relativeOffset);
-      }
+    _paintDivider(buffer, offset, split, dividerPos, w, h);
 
-      for (var y = 0; y < h; y++) {
-        buffer.setAttributes(
-          offset.dx + dividerPos,
-          offset.dy + y,
-          char: split.dividerChar,
-          fg: split.dividerStyle.foreground?.argb ?? 0,
-          bg: split.dividerStyle.background?.argb ?? 0,
-          modifiers: split.dividerStyle.modifiers,
-        );
-      }
+    final secondSize =
+        (split.direction == .horizontal ? w : h) - dividerPos - 1;
+    if (secondSize > 0 && childElement2 != null) {
+      childElement2!.paint(buffer, offset + childElement2!.relativeOffset);
+    }
+  }
 
-      final child2Width = w - dividerPos - 1;
-      if (child2Width > 0 && childElement2 != null) {
-        childElement2!.paint(buffer, offset + childElement2!.relativeOffset);
-      }
-    } else {
-      if (dividerPos > 0 && childElement1 != null) {
-        childElement1!.paint(buffer, offset + childElement1!.relativeOffset);
-      }
-
-      for (var x = 0; x < w; x++) {
-        buffer.setAttributes(
-          offset.dx + x,
-          offset.dy + dividerPos,
-          char: split.dividerChar,
-          fg: split.dividerStyle.foreground?.argb ?? 0,
-          bg: split.dividerStyle.background?.argb ?? 0,
-          modifiers: split.dividerStyle.modifiers,
-        );
-      }
-
-      final child2Height = h - dividerPos - 1;
-      if (child2Height > 0 && childElement2 != null) {
-        childElement2!.paint(buffer, offset + childElement2!.relativeOffset);
-      }
+  static void _paintDivider(
+    Buffer buffer,
+    Offset offset,
+    SplitPane split,
+    int dividerPos,
+    int width,
+    int height,
+  ) {
+    final fg = split.dividerStyle.foreground?.argb ?? 0;
+    final bg = split.dividerStyle.background?.argb ?? 0;
+    final isHorizontal = split.direction == .horizontal;
+    final length = isHorizontal ? height : width;
+    for (var i = 0; i < length; i++) {
+      buffer.setAttributes(
+        offset.dx + (isHorizontal ? dividerPos : i),
+        offset.dy + (isHorizontal ? i : dividerPos),
+        char: split.dividerChar,
+        fg: fg,
+        bg: bg,
+        modifiers: split.dividerStyle.modifiers,
+      );
     }
   }
 
@@ -359,73 +355,54 @@ class SplitPaneElement extends Element implements MouseEventHandler {
   @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     final split = widget as SplitPane;
-    if (split._lastArea == null) return;
+    final lastArea = split._lastArea;
+    if (lastArea == null) return;
     split._initLimits();
-    final totalSize = split.direction == LayoutDirection.horizontal
-        ? split._lastArea!.width
-        : split._lastArea!.height;
+    final isHorizontal = split.direction == .horizontal;
+    final totalSize = isHorizontal ? lastArea.width : lastArea.height;
     if (totalSize <= 0) return;
 
-    final mousePos = split.direction == LayoutDirection.horizontal
-        ? localX
-        : localY;
+    final mousePos = isHorizontal ? localX : localY;
 
-    if (event.type == MouseEventType.press) {
-      if (mousePos == split._dividerX) {
-        split._isDragging = true;
-      }
-    } else if (event.type == MouseEventType.release) {
-      split._isDragging = false;
-    } else if (event.type == MouseEventType.drag && split._isDragging) {
-      int newDividerPos = mousePos;
+    switch (event.type) {
+      case .press:
+        if (mousePos == split._dividerX) split._isDragging = true;
+      case .release:
+        split._isDragging = false;
+      case .drag when split._isDragging:
+        final newDividerPos = _clampDividerPos(split, totalSize, mousePos);
+        _updateDraggedConstraints(split, totalSize, newDividerPos);
+        split._dividerX = newDividerPos;
+      default:
+        break;
+    }
+  }
 
-      // Solve bounds/limits
-      int minW1 = split._origMin1 ?? 0;
-      int maxW1 = split._origMax1 ?? (totalSize - 1);
-      if (split._origMin2 != null) {
-        maxW1 = min(maxW1, totalSize - split._origMin2! - 1);
-      }
-      if (split._origMax2 != null) {
-        minW1 = max(minW1, totalSize - split._origMax2! - 1);
-      }
-      minW1 = minW1.clamp(0, totalSize - 1);
-      maxW1 = maxW1.clamp(0, totalSize - 1);
-      if (minW1 > maxW1) minW1 = maxW1;
-
-      newDividerPos = newDividerPos.clamp(minW1, maxW1);
-
-      // Mutate constraints in place
-      final c1 = split.constraint1;
-      if (c1 is LengthConstraint) {
+  static void _updateDraggedConstraints(
+    SplitPane split,
+    int totalSize,
+    int newDividerPos,
+  ) {
+    final remaining = totalSize - newDividerPos - 1;
+    switch (split.constraint1) {
+      case LengthConstraint():
         split.constraint1 = LengthConstraint(newDividerPos);
-        split.constraint2 = LengthConstraint(totalSize - newDividerPos - 1);
-      } else if (c1 is PercentageConstraint) {
+        split.constraint2 = LengthConstraint(remaining);
+      case PercentageConstraint():
         final p1 = (newDividerPos * 100 / totalSize).round().clamp(0, 100);
         split.constraint1 = PercentageConstraint(p1);
         split.constraint2 = PercentageConstraint(100 - p1);
-      } else if (c1 is FlexConstraint) {
+      case FlexConstraint():
         split.constraint1 = FlexConstraint(newDividerPos);
-        split.constraint2 = FlexConstraint(totalSize - newDividerPos - 1);
-      } else if (c1 is MinMaxConstraint) {
-        // Here we keep the min limits but update the current value via a new MinMaxConstraint.
-        // Wait, since MinMaxConstraint uses min to represent the preferred size, we update the min.
-        // But the original min limit is stored in _origMin1, so we still clamp correctly.
+        split.constraint2 = FlexConstraint(remaining);
+      case MinMaxConstraint():
         split.constraint1 = MinMaxConstraint(
           min: newDividerPos,
           max: split._origMax1 ?? 99999,
         );
-        if (split.constraint2 is MinMaxConstraint) {
-          split.constraint2 = MinMaxConstraint(
-            min: totalSize - newDividerPos - 1,
-            max: split._origMax2 ?? 99999,
-          );
-        } else {
-          split.constraint2 = MinMaxConstraint(
-            min: totalSize - newDividerPos - 1,
-          );
-        }
-      }
-      split._dividerX = newDividerPos;
+        split.constraint2 = split.constraint2 is MinMaxConstraint
+            ? MinMaxConstraint(min: remaining, max: split._origMax2 ?? 99999)
+            : MinMaxConstraint(min: remaining);
     }
   }
 }

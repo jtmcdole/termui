@@ -130,105 +130,65 @@ List<TraceSpan> computeSpans(List<TraceEvent> events) {
     (i) => MapEntry(i, events[i]),
   );
   indexedEvents.sort((a, b) {
-    int cmp = a.value.timestamp.compareTo(b.value.timestamp);
-    if (cmp != 0) return cmp;
-    return a.key.compareTo(b.key);
+    final cmp = a.value.timestamp.compareTo(b.value.timestamp);
+    return cmp != 0 ? cmp : a.key.compareTo(b.key);
   });
-  final sorted = [for (var e in indexedEvents) e.value];
+  final sorted = [for (final e in indexedEvents) e.value];
 
   final absoluteMaxTimestamp = sorted.isEmpty ? 0 : sorted.last.timestamp;
-
-  final List<TraceSpan> spans = [];
-  final Map<int, List<_StackEntry>> activeStacksByTid = {};
+  final spans = <TraceSpan>[];
+  final activeStacksByTid = <int, List<_StackEntry>>{};
 
   for (final event in sorted) {
-    final tid = event.tid;
-    activeStacksByTid.putIfAbsent(tid, () => []);
-    final stack = activeStacksByTid[tid]!;
-
-    if (event.phase == 'B') {
-      stack.add(_StackEntry(event, stack.length));
-    } else if (event.phase == 'E') {
-      int matchIdx = -1;
-      for (int i = stack.length - 1; i >= 0; i--) {
-        if (stack[i].event.name == event.name) {
-          matchIdx = i;
-          break;
-        }
-      }
-      if (matchIdx != -1) {
-        // Pop orphaned children above the matched parent
-        while (stack.length > matchIdx + 1) {
-          final orphanEntry = stack.removeLast();
-          final orphanEvent = orphanEntry.event;
-          spans.add(
-            TraceSpan(
-              name: orphanEvent.name,
-              category: orphanEvent.category,
-              startUs: orphanEvent.timestamp,
-              endUs: event.timestamp, // Auto-closed at parent's end
-              depth: orphanEntry.depth,
-              args: orphanEvent.args,
-            ),
-          );
-        }
-
-        // Pop the actual matched parent
-        final beginEntry = stack.removeLast();
-        final begin = beginEntry.event;
+    final stack = activeStacksByTid.putIfAbsent(event.tid, () => []);
+    switch (event.phase) {
+      case 'B':
+        stack.add(_StackEntry(event, stack.length));
+      case 'E':
+        _closeMatchingSpan(stack, event, spans);
+      case 'i':
+        spans.add(_spanFromEvent(event, event.timestamp + 1, stack.length));
+      case 'X':
         spans.add(
-          TraceSpan(
-            name: begin.name,
-            category: begin.category,
-            startUs: begin.timestamp,
-            endUs: event.timestamp,
-            depth: beginEntry.depth,
-            args: begin.args,
+          _spanFromEvent(
+            event,
+            event.timestamp + (event.dur ?? 1),
+            stack.length,
           ),
         );
-      }
-    } else if (event.phase == 'i') {
-      spans.add(
-        TraceSpan(
-          name: event.name,
-          category: event.category,
-          startUs: event.timestamp,
-          endUs: event.timestamp + 1,
-          depth: stack.length,
-          args: event.args,
-        ),
-      );
-    } else if (event.phase == 'X') {
-      spans.add(
-        TraceSpan(
-          name: event.name,
-          category: event.category,
-          startUs: event.timestamp,
-          endUs: event.timestamp + (event.dur ?? 1),
-          depth: stack.length,
-          args: event.args,
-        ),
-      );
     }
   }
-  for (final tid in activeStacksByTid.keys) {
-    for (final entry in activeStacksByTid[tid]!) {
-      final begin = entry.event;
-      spans.add(
-        TraceSpan(
-          name: begin.name,
-          category: begin.category,
-          startUs: begin.timestamp,
-          endUs:
-              absoluteMaxTimestamp, // Indicates missing 'E' phase is clamped to trace end
-          depth: entry.depth,
-          args: begin.args,
-        ),
-      );
+
+  for (final stack in activeStacksByTid.values) {
+    for (final entry in stack) {
+      spans.add(_spanFromEvent(entry.event, absoluteMaxTimestamp, entry.depth));
     }
   }
   return spans;
 }
+
+void _closeMatchingSpan(
+  List<_StackEntry> stack,
+  TraceEvent endEvent,
+  List<TraceSpan> spans,
+) {
+  final matchIdx = stack.lastIndexWhere((e) => e.event.name == endEvent.name);
+  if (matchIdx == -1) return;
+
+  while (stack.length > matchIdx) {
+    final entry = stack.removeLast();
+    spans.add(_spanFromEvent(entry.event, endEvent.timestamp, entry.depth));
+  }
+}
+
+TraceSpan _spanFromEvent(TraceEvent event, int endUs, int depth) => TraceSpan(
+  name: event.name,
+  category: event.category,
+  startUs: event.timestamp,
+  endUs: endUs,
+  depth: depth,
+  args: event.args,
+);
 
 Future<Map<String, Object>?> parseTraceFile(
   String path, {

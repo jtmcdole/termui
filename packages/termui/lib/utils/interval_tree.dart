@@ -59,10 +59,30 @@ class IntervalTree<T extends num> {
       return;
     }
 
-    // 1. Iterative Downward Path
-    final path = <IntervalNode<T>>[];
-    IntervalNode<T>? current = root;
+    final path = _insertLeaf(interval);
 
+    // 2. Backtrack & Balance
+    for (var i = path.length - 1; i >= 0; i--) {
+      final node = path[i];
+      node.update();
+      final newSubtreeRoot = _rebalanceNode(node);
+      if (newSubtreeRoot == null) continue;
+      if (i == 0) {
+        root = newSubtreeRoot;
+      } else {
+        final parent = path[i - 1];
+        if (parent.left == node) {
+          parent.left = newSubtreeRoot;
+        } else {
+          parent.right = newSubtreeRoot;
+        }
+      }
+    }
+  }
+
+  List<IntervalNode<T>> _insertLeaf(Interval<T> interval) {
+    final path = <IntervalNode<T>>[];
+    var current = root;
     while (current != null) {
       path.add(current);
       if (interval.start.compareTo(current.interval.start) < 0) {
@@ -79,46 +99,26 @@ class IntervalTree<T extends num> {
         current = current.right;
       }
     }
+    return path;
+  }
 
-    // 2. Backtrack & Balance
-    for (int i = path.length - 1; i >= 0; i--) {
-      final node = path[i];
-      node.update();
-
-      final balance = _getBalance(node);
-      IntervalNode<T>? newSubtreeRoot;
-
-      if (balance > 1) {
-        final leftChild = node.left!;
-        if (_getBalance(leftChild) >= 0) {
-          newSubtreeRoot = _rotateRight(node);
-        } else {
-          node.left = _rotateLeft(leftChild);
-          newSubtreeRoot = _rotateRight(node);
-        }
-      } else if (balance < -1) {
-        final rightChild = node.right!;
-        if (_getBalance(rightChild) <= 0) {
-          newSubtreeRoot = _rotateLeft(node);
-        } else {
-          node.right = _rotateRight(rightChild);
-          newSubtreeRoot = _rotateLeft(node);
-        }
+  IntervalNode<T>? _rebalanceNode(IntervalNode<T> node) {
+    final balance = _getBalance(node);
+    if (balance > 1) {
+      final leftChild = node.left!;
+      if (_getBalance(leftChild) < 0) {
+        node.left = _rotateLeft(leftChild);
       }
-
-      if (newSubtreeRoot != null) {
-        if (i == 0) {
-          root = newSubtreeRoot;
-        } else {
-          final parent = path[i - 1];
-          if (parent.left == node) {
-            parent.left = newSubtreeRoot;
-          } else {
-            parent.right = newSubtreeRoot;
-          }
-        }
-      }
+      return _rotateRight(node);
     }
+    if (balance < -1) {
+      final rightChild = node.right!;
+      if (_getBalance(rightChild) > 0) {
+        node.right = _rotateRight(rightChild);
+      }
+      return _rotateLeft(node);
+    }
+    return null;
   }
 
   /// Inserts multiple intervals. Optimized for sorted intervals.
