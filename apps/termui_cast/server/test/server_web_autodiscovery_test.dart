@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:checks/checks.dart';
@@ -100,8 +101,12 @@ void main() {
         for (final runtimeName in const [
           'dart',
           'dart.exe',
+          'dartvm',
+          'dartvm.exe',
           'dartaotruntime',
           'dartaotruntime.exe',
+          'dartcliruntime',
+          'dartcliruntime.exe',
           'flutter_tester',
           'flutter_tester.exe',
         ]) {
@@ -124,6 +129,48 @@ void main() {
           )!;
           check(cfg.webRoot, because: 'blank:"$blank"').isNull();
         }
+      },
+    );
+
+    test(
+      'runServerCli forwards currentDirectory and resolvedExecutable and logs auto-discovered web root',
+      () async {
+        final sandbox = Directory.systemTemp.createTempSync(
+          'cast_srv_cli_web_',
+        );
+        addTearDown(() => sandbox.deleteSync(recursive: true));
+
+        final bundleDir = Directory(p.join(sandbox.path, 'bundle'))
+          ..createSync();
+        final binDir = Directory(p.join(bundleDir.path, 'bin'))..createSync();
+        final webDir = Directory(p.join(bundleDir.path, 'web'))..createSync();
+        File(
+          p.join(webDir.path, 'index.html.gz'),
+        ).writeAsBytesSync(gzip.encode(const [60, 104, 116, 109, 108, 62]));
+        final unrelatedCwd = Directory(p.join(sandbox.path, 'cwd'))
+          ..createSync();
+
+        final out = StringBuffer();
+        final err = StringBuffer();
+        final stop = StreamController<void>();
+        addTearDown(stop.close);
+
+        final exitFuture = runServerCli(
+          const ['--port=0', '--insecure-no-auth'],
+          out: out,
+          err: err,
+          shutdownSignal: stop.stream,
+          environment: const {},
+          currentDirectory: unrelatedCwd,
+          resolvedExecutable: p.join(binDir.path, 'termui_cast_server'),
+        );
+
+        stop.add(null);
+        final code = await exitFuture;
+        check(code, because: 'stderr: $err').equals(0);
+        check(out.toString()).contains(
+          'Serving static web client from ${p.normalize(webDir.path)}',
+        );
       },
     );
   });

@@ -567,8 +567,12 @@ final class ServerConfig {
   static const Set<String> _dartRuntimeBasenames = {
     'dart',
     'dart.exe',
+    'dartvm',
+    'dartvm.exe',
     'dartaotruntime',
     'dartaotruntime.exe',
+    'dartcliruntime',
+    'dartcliruntime.exe',
     'flutter_tester',
     'flutter_tester.exe',
   };
