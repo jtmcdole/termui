@@ -155,8 +155,20 @@ jobs:
             (cd apps/fterm && flutter build "$DESKTOP_OS" --release --build-name="$RELEASE_VERSION" --dart-define="FTERM_BUILD_DATE=$BUILD_DATE")
             FLUTTER_BIN_DIR="$(dirname "$(command -v flutter)")"
             if [ "$DESKTOP_OS" = "macos" ]; then
-              IMPELLERC_SRC="${FLUTTER_BIN_DIR}/cache/artifacts/engine/darwin-arm64/impellerc"
-              test -f "$IMPELLERC_SRC"
+              IMPELLERC_SRC=""
+              for arch_dir in darwin-arm64 darwin-x64; do
+                candidate="${FLUTTER_BIN_DIR}/cache/artifacts/engine/${arch_dir}/impellerc"
+                if [ -f "$candidate" ]; then
+                  IMPELLERC_SRC="$candidate"
+                  break
+                fi
+              done
+              if [ -z "$IMPELLERC_SRC" ]; then
+                echo "::error::Missing impellerc under ${FLUTTER_BIN_DIR}/cache/artifacts/engine/{darwin-arm64,darwin-x64}" >&2
+                ls -la "${FLUTTER_BIN_DIR}/cache/artifacts/engine" >&2 || true
+                exit 1
+              fi
+              echo "Bundling impellerc from ${IMPELLERC_SRC}"
               MACOS_APP="apps/fterm/build/macos/Build/Products/Release/fterm.app"
               mkdir -p "${MACOS_APP}/Contents/Helpers"
               cp "$IMPELLERC_SRC" "${MACOS_APP}/Contents/Helpers/impellerc"
