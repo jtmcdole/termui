@@ -398,6 +398,33 @@ Future<void> _testImmediateUnsubscribedKillRace() async {
   }
 }
 
+Future<void> _testPostSetsidKillReportsDelivered() async {
+  for (var i = 0; i < 25; i++) {
+    final pty = PseudoTerminal.start('/bin/sh', const [
+      '-c',
+      'printf "READY\\n"; exec sleep 5',
+    ]);
+    final output = StringBuffer();
+    final ready = Completer<void>();
+    final sub = pty.out.listen((chunk) {
+      output.write(chunk);
+      if (output.toString().contains('READY') && !ready.isCompleted) {
+        ready.complete();
+      }
+    });
+    try {
+      await ready.future.timeout(const Duration(seconds: 5));
+      expect(pty.kill(), isTrue, reason: 'iteration $i');
+      final code = await pty.exitCode.timeout(const Duration(seconds: 5));
+      // kill() sends SIGTERM (128+15=143) followed by SIGHUP (128+1=129).
+      expect(code, anyOf(equals(129), equals(143)), reason: 'iteration $i');
+    } finally {
+      pty.kill(ProcessSignal.sigkill);
+      await sub.cancel();
+    }
+  }
+}
+
 void main() {
   test(
     'concurrent PseudoTerminal.start + Process.run returns exact exit codes '
@@ -457,6 +484,12 @@ void main() {
   test(
     'immediate kill() on unsubscribed ackProcessed PTY delivers signal before closing ptm',
     _testImmediateUnsubscribedKillRace,
+    testOn: 'posix',
+  );
+
+  test(
+    'kill() after setsid() reports delivered without racing reaper shim',
+    _testPostSetsidKillReportsDelivered,
     testOn: 'posix',
   );
 }
