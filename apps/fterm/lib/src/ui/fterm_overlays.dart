@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show listEquals;
+import 'package:flutter/foundation.dart' show TargetPlatform, listEquals;
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
 import 'package:termui/termui.dart' as tui;
@@ -28,6 +28,7 @@ import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
 import 'fterm_about_overlay.dart';
 import 'fterm_feedback_overlay.dart';
+import 'fterm_keyboard_settings_tab.dart';
 
 /// Modal overlays rendered over the terminal workspace when [FtermOverlay] !=
 /// [FtermOverlay.none].
@@ -41,6 +42,9 @@ final class FtermOverlayHost extends StatelessWidget {
   /// Whether this host renders in Web mode (hides native desktop update UI).
   final bool isWeb;
 
+  /// Optional platform override forwarded to platform-aware modal tabs.
+  final TargetPlatform? platformOverride;
+
   /// Optional callback capturing the active terminal pane as a [ui.Image]
   /// (ownership transfers to the caller for annotation and disposal).
   final Future<ui.Image?> Function()? onCaptureScreenshot;
@@ -51,6 +55,7 @@ final class FtermOverlayHost extends StatelessWidget {
     required this.workspace,
     this.onOpenUrl = openExternalUrl,
     this.isWeb = false,
+    this.platformOverride,
     this.onCaptureScreenshot,
   });
 
@@ -127,6 +132,7 @@ final class FtermOverlayHost extends StatelessWidget {
                       palette: palette,
                       onOpenUrl: onOpenUrl,
                       isWeb: isWeb,
+                      platformOverride: platformOverride,
                     ),
                     FtermOverlay.stats => _StatsOverlay(
                       workspace: workspace,
@@ -859,17 +865,21 @@ final class _SessionPickerOverlay extends StatelessWidget {
   }
 }
 
+enum _SettingsTab { general, keyboard }
+
 final class _SettingsOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
   final UrlOpener onOpenUrl;
   final bool isWeb;
+  final TargetPlatform? platformOverride;
 
   const _SettingsOverlay({
     required this.workspace,
     required this.palette,
     required this.onOpenUrl,
     required this.isWeb,
+    this.platformOverride,
   });
 
   @override
@@ -879,6 +889,7 @@ final class _SettingsOverlay extends StatefulWidget {
 final class _SettingsOverlayState extends State<_SettingsOverlay> {
   late final TextEditingController _shellExecCtrl;
   late final TextEditingController _shellArgsCtrl;
+  _SettingsTab _activeTab = .general;
 
   @override
   void initState() {
@@ -937,9 +948,6 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
   Widget build(BuildContext context) {
     final workspace = widget.workspace;
     final p = widget.palette;
-    final wsSettings = workspace.workspaceSettings;
-    final themeSettings = wsSettings.themeSettings;
-    final prefs = workspace.preferences;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -953,153 +961,41 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
               palette: p,
               onClose: workspace.dismissOverlay,
             ),
-            const SizedBox(height: 12),
-            Text('Appearance', style: TextStyle(color: p.muted, fontSize: 11)),
-            const SizedBox(height: 6),
+            const SizedBox(height: 10),
             Wrap(
               spacing: 6,
               children: [
-                for (final mode in ThemeAppearanceMode.values)
-                  ChoiceChip(
-                    key: ValueKey('settings-appearance-${mode.name}'),
-                    label: Text(mode.name),
-                    selected: themeSettings.appearanceMode == mode,
-                    onSelected: (_) => workspace.setThemeSettings(
-                      themeSettings.copyWith(appearanceMode: mode),
-                    ),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'Theme Preset',
-              style: TextStyle(color: p.muted, fontSize: 11),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              runSpacing: 6,
-              children: [
-                for (final preset in tui.TerminalColorTheme.presets)
-                  ChoiceChip(
-                    key: ValueKey('settings-theme-${preset.id}'),
-                    label: Text(preset.id),
-                    selected: workspace.activeTerminalTheme.id == preset.id,
-                    onSelected: (_) {
-                      final next = preset.brightness == .light
-                          ? themeSettings.copyWith(lightThemeId: preset.id)
-                          : themeSettings.copyWith(darkThemeId: preset.id);
-                      workspace.setThemeSettings(next);
-                    },
-                  ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            _FontSizeControls(workspace: workspace, palette: p),
-            const SizedBox(height: 10),
-            Text(
-              'Tab Bar Position',
-              style: TextStyle(color: p.muted, fontSize: 11),
-            ),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 6,
-              children: [
-                for (final pos in DockPosition.values)
-                  ChoiceChip(
-                    key: ValueKey('settings-dock-${pos.name}'),
-                    label: Text(pos.name),
-                    selected: wsSettings.dockPosition == pos,
-                    onSelected: (_) => workspace.setDockPosition(pos),
-                  ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            SwitchListTile.adaptive(
-              key: const ValueKey('settings-auto-hide-single'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Auto-hide tab bar on single tab'),
-              value: prefs.autoHideSingleTab,
-              onChanged: (v) => workspace.updatePreferences(
-                prefs.copyWith(autoHideSingleTab: v),
-              ),
-            ),
-            SwitchListTile.adaptive(
-              key: const ValueKey('settings-copy-on-select'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Copy on mouse selection'),
-              value: wsSettings.copyOnSelect,
-              onChanged: workspace.setCopyOnSelect,
-            ),
-            SwitchListTile.adaptive(
-              key: const ValueKey('settings-f12-toggle'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Enable F12 host shortcuts (screenshot/atlas)'),
-              value: wsSettings.f12ShortcutsEnabled,
-              onChanged: workspace.setF12ShortcutsEnabled,
-            ),
-            SwitchListTile.adaptive(
-              key: const ValueKey('settings-osc52-toggle'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Allow focused remote OSC 52 clipboard writes'),
-              value:
-                  wsSettings.osc52Policy == Osc52ClipboardPolicy.allowFocused,
-              onChanged: (enabled) => workspace.setOsc52Policy(
-                enabled
-                    ? Osc52ClipboardPolicy.allowFocused
-                    : Osc52ClipboardPolicy.deny,
-              ),
-            ),
-            SwitchListTile.adaptive(
-              key: const ValueKey('settings-audio-mute'),
-              dense: true,
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Mute terminal bell & APC audio'),
-              value: prefs.audioMuted,
-              onChanged: (v) =>
-                  workspace.updatePreferences(prefs.copyWith(audioMuted: v)),
-            ),
-            Row(
-              children: [
-                Text('Volume', style: TextStyle(color: p.muted, fontSize: 11)),
-                Expanded(
-                  child: Slider(
-                    value: prefs.audioVolume,
-                    onChanged: (v) => workspace.updatePreferences(
-                      prefs.copyWith(audioVolume: v),
-                    ),
-                  ),
+                ChoiceChip(
+                  key: const ValueKey('settings-tab-general'),
+                  label: const Text('General'),
+                  selected: _activeTab == .general,
+                  onSelected: (_) => setState(() => _activeTab = .general),
+                ),
+                ChoiceChip(
+                  key: const ValueKey('settings-tab-keyboard'),
+                  label: const Text('Keyboard'),
+                  selected: _activeTab == .keyboard,
+                  onSelected: (_) => setState(() => _activeTab = .keyboard),
                 ),
               ],
             ),
-            const SizedBox(height: 10),
-            _ShadersAndBackgroundSection(
-              workspace: workspace,
-              palette: p,
-              isWeb: widget.isWeb,
-            ),
-            if (workspace.isDesktopHost) ...[
-              const SizedBox(height: 8),
-              _DesktopShellOverrideSection(
-                workspace: workspace,
-                palette: p,
-                shellExecCtrl: _shellExecCtrl,
-                shellArgsCtrl: _shellArgsCtrl,
-              ),
-            ],
-            if (!widget.isWeb &&
-                workspace.updateViewModel.isSupportedDesktop) ...[
-              const SizedBox(height: 8),
-              _DesktopUpdatesSection(
+            const SizedBox(height: 12),
+            switch (_activeTab) {
+              .general => _SettingsGeneralTab(
                 workspace: workspace,
                 palette: p,
                 onOpenUrl: widget.onOpenUrl,
+                isWeb: widget.isWeb,
+                shellExecCtrl: _shellExecCtrl,
+                shellArgsCtrl: _shellArgsCtrl,
               ),
-            ],
+              .keyboard => FtermKeyboardSettingsTab(
+                workspace: workspace,
+                palette: p,
+                isWeb: widget.isWeb,
+                platformOverride: widget.platformOverride,
+              ),
+            },
             const SizedBox(height: 6),
             Wrap(
               alignment: WrapAlignment.end,
@@ -1133,6 +1029,170 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
           ],
         ),
       ),
+    );
+  }
+}
+
+final class _SettingsGeneralTab extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+  final UrlOpener onOpenUrl;
+  final bool isWeb;
+  final TextEditingController shellExecCtrl;
+  final TextEditingController shellArgsCtrl;
+
+  const _SettingsGeneralTab({
+    required this.workspace,
+    required this.palette,
+    required this.onOpenUrl,
+    required this.isWeb,
+    required this.shellExecCtrl,
+    required this.shellArgsCtrl,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    final wsSettings = workspace.workspaceSettings;
+    final themeSettings = wsSettings.themeSettings;
+    final prefs = workspace.preferences;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text('Appearance', style: TextStyle(color: p.muted, fontSize: 11)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          children: [
+            for (final mode in ThemeAppearanceMode.values)
+              ChoiceChip(
+                key: ValueKey('settings-appearance-${mode.name}'),
+                label: Text(mode.name),
+                selected: themeSettings.appearanceMode == mode,
+                onSelected: (_) => workspace.setThemeSettings(
+                  themeSettings.copyWith(appearanceMode: mode),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Text('Theme Preset', style: TextStyle(color: p.muted, fontSize: 11)),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final preset in tui.TerminalColorTheme.presets)
+              ChoiceChip(
+                key: ValueKey('settings-theme-${preset.id}'),
+                label: Text(preset.id),
+                selected: workspace.activeTerminalTheme.id == preset.id,
+                onSelected: (_) {
+                  final next = preset.brightness == .light
+                      ? themeSettings.copyWith(lightThemeId: preset.id)
+                      : themeSettings.copyWith(darkThemeId: preset.id);
+                  workspace.setThemeSettings(next);
+                },
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _FontSizeControls(workspace: workspace, palette: p),
+        const SizedBox(height: 10),
+        Text(
+          'Tab Bar Position',
+          style: TextStyle(color: p.muted, fontSize: 11),
+        ),
+        const SizedBox(height: 6),
+        Wrap(
+          spacing: 6,
+          children: [
+            for (final pos in DockPosition.values)
+              ChoiceChip(
+                key: ValueKey('settings-dock-${pos.name}'),
+                label: Text(pos.name),
+                selected: wsSettings.dockPosition == pos,
+                onSelected: (_) => workspace.setDockPosition(pos),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SwitchListTile.adaptive(
+          key: const ValueKey('settings-auto-hide-single'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Auto-hide tab bar on single tab'),
+          value: prefs.autoHideSingleTab,
+          onChanged: (v) =>
+              workspace.updatePreferences(prefs.copyWith(autoHideSingleTab: v)),
+        ),
+        SwitchListTile.adaptive(
+          key: const ValueKey('settings-copy-on-select'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Copy on mouse selection'),
+          value: wsSettings.copyOnSelect,
+          onChanged: workspace.setCopyOnSelect,
+        ),
+        SwitchListTile.adaptive(
+          key: const ValueKey('settings-osc52-toggle'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Allow focused remote OSC 52 clipboard writes'),
+          value: wsSettings.osc52Policy == Osc52ClipboardPolicy.allowFocused,
+          onChanged: (enabled) => workspace.setOsc52Policy(
+            enabled
+                ? Osc52ClipboardPolicy.allowFocused
+                : Osc52ClipboardPolicy.deny,
+          ),
+        ),
+        SwitchListTile.adaptive(
+          key: const ValueKey('settings-audio-mute'),
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Mute terminal bell & APC audio'),
+          value: prefs.audioMuted,
+          onChanged: (v) =>
+              workspace.updatePreferences(prefs.copyWith(audioMuted: v)),
+        ),
+        Row(
+          children: [
+            Text('Volume', style: TextStyle(color: p.muted, fontSize: 11)),
+            Expanded(
+              child: Slider(
+                value: prefs.audioVolume,
+                onChanged: (v) =>
+                    workspace.updatePreferences(prefs.copyWith(audioVolume: v)),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        _ShadersAndBackgroundSection(
+          workspace: workspace,
+          palette: p,
+          isWeb: isWeb,
+        ),
+        if (workspace.isDesktopHost) ...[
+          const SizedBox(height: 8),
+          _DesktopShellOverrideSection(
+            workspace: workspace,
+            palette: p,
+            shellExecCtrl: shellExecCtrl,
+            shellArgsCtrl: shellArgsCtrl,
+          ),
+        ],
+        if (!isWeb && workspace.updateViewModel.isSupportedDesktop) ...[
+          const SizedBox(height: 8),
+          _DesktopUpdatesSection(
+            workspace: workspace,
+            palette: p,
+            onOpenUrl: onOpenUrl,
+          ),
+        ],
+      ],
     );
   }
 }
