@@ -6,9 +6,6 @@ import 'package:termui_hotreload/termui_hotreload.dart';
 ///
 /// Then, modify the text or colors below and save the file to see the terminal update instantly.
 
-/// Global scene manager instance for the application.
-late final SceneManager globalSceneManager;
-
 /// Entry point for the simple hot-reload example.
 void main() async {
   // 1. One-liner that encapsulates HotReloader setup in development mode
