@@ -174,8 +174,9 @@ jobs:
               cp "$IMPELLERC_SRC" "${MACOS_APP}/Contents/Helpers/impellerc"
               chmod +x "${MACOS_APP}/Contents/Helpers/impellerc"
               codesign --force --sign - "${MACOS_APP}/Contents/Helpers/impellerc"
-              codesign --force --deep --sign - "${MACOS_APP}"
+              codesign --force --sign - --entitlements apps/fterm/macos/Runner/Release.entitlements "${MACOS_APP}"
               codesign --verify --deep --strict "${MACOS_APP}"
+              codesign -d --entitlements - --xml "${MACOS_APP}" | grep -q 'com.apple.security.network.client'
               COPYFILE_DISABLE=1 tar -C apps/fterm/build/macos/Build/Products/Release -czf "dist/fterm-${TARGET}.tar.gz" fterm.app
               tar -tzf "dist/fterm-${TARGET}.tar.gz" | grep -qx 'fterm.app/Contents/Helpers/impellerc'
             else
