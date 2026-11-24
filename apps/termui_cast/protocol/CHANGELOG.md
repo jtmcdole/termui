@@ -1,3 +1,12 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FEAT**(cast,fterm): persist Cloud Run IAP config and gcloud path override in Connect UI.
+ - **BREAKING** **FEAT**(cast-protocol): add SpawnSessionFrame, allowSpawn flags, and subpath URI resolution.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
 ## 0.3.0
 
  - Graduate package to a stable release. See pre-releases prior to this version for changelog entries.

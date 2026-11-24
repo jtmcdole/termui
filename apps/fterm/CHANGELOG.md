@@ -1,3 +1,14 @@
+## 0.6.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FEAT**(fterm): add subpath WS, proxy auto-connect, sessionStorage resume, remote spawn UI, and What's New.
+ - **FEAT**(fterm): add About-styled Web splash and Nerd Font v3 / COLRv1 emoji fonts.
+ - **FEAT**(cast,fterm): persist Cloud Run IAP config and gcloud path override in Connect UI.
+ - **FEAT**(fterm): add Ghostty GLSL shaders, GPU Driver picker, Perf HUD, tracing, and What's New.
+ - **BREAKING** **FEAT**(cast-protocol): add SpawnSessionFrame, allowSpawn flags, and subpath URI resolution.
+
 ## 0.5.0
 
  - Graduate package to a stable release. See pre-releases prior to this version for changelog entries.
