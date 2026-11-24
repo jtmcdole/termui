@@ -4,7 +4,7 @@
 > **Remote Code Execution (RCE) Risk:** `termui_caster` opens live interactive shells (`zsh`, `bash`, `pwsh`) over WebSockets with **no** built-in identity provider or IAM layer. Exposing a TTY relay without strong perimeter authentication (such as Google Cloud IAM + Identity-Aware Proxy) grants full RCE on the casting host. Always deploy internet-facing relays behind Identity-Aware Proxy (`--iap`), store tokens in Secret Manager, and follow [docs/setup.md](docs/setup.md).
 
 > [!NOTE]
-> **Status: Active `0.x` Releases.** Current workspace versions are `fterm` `v0.5.0`, `termui_cast_client_core` `v0.4.0`, and `termui_cast_server` / `termui_caster_cli` / `termui_cast_protocol` `v0.3.0`. Breaking wire and API changes may still land between minor releases before `1.0.0`.
+> **Status: Active `0.x` Releases.** See [GitHub Releases](https://github.com/jtmcdole/termui/releases) for published `fterm` and `termui_cast` release versions, or each package's `pubspec.yaml` and `CHANGELOG.md` for current workspace versions. Breaking wire and API changes may still land between minor releases before `1.0.0`.
 
 `termui_caster` streams live interactive TTY sessions over binary WebSockets across pure-Dart and Flutter workspace apps under `apps/`:
 
