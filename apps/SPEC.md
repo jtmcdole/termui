@@ -16,12 +16,12 @@ APC <prefix> <control> [ ; <payload> ] ST
 
 | Element | Encoding | Notes |
 | :------ | :------- | :---- |
-| `APC` | `0x1B 0x5F` (`ESC _`) or C1 `0x9F` | Starts an APC sequence. |
+| `APC` | `0x1B 0x5F` (`ESC _`) or C1 `0x9F` | Starts an APC sequence (`0x9F` applies to PTY `stdout`; host replies on `stdin` use `ESC _`). |
 | `<prefix>` | Single ASCII letter (`A` or `S`) | Selects the protocol. |
 | `<control>` | Comma-separated `key=value` pairs | Whitespace around keys and values is trimmed. No mandatory space follows `<prefix>`. |
 | `;` | `0x3B` | Separates `<control>` from `<payload>`. Reserved strictly for payload separation. |
 | `<payload>` | Standard Base64 (RFC 4648) | Optional. Whitespace inside `<payload>` is ignored before decoding. |
-| `ST` | `0x1B 0x5C` (`ESC \`), `0x9C`, or `0x07` (`BEL`) | Terminates the sequence. |
+| `ST` | `0x1B 0x5C` (`ESC \`), `0x9C`, or `0x07` (`BEL`) | Terminates the sequence (`0x9C` applies to PTY `stdout`; host replies on `stdin` use `ESC \` or `BEL`). |
 
 ### Parser Rules and Transport Safety
 
@@ -29,6 +29,7 @@ APC <prefix> <control> [ ; <payload> ] ST
 - The outer `AnsiParser` caps any single APC sequence at `1,400,000` characters. Individual protocols enforce tighter per-frame limits.
 - Tmux DCS passthrough (`ESC P tmux; ... ESC \`) is unwrapped for embedded APC and OSC sequences when inner `ESC` bytes are doubled.
 - Host-to-client reply actions (`a=waver` under `APC A` and `a=caps` under `APC S`) are ignored when received on PTY `stdout`. This prevents echo loops under canonical TTY line disciplines.
+- Host replies on PTY `stdin` (`a=waver`, `a=caps`) must use 7-bit `ESC _` and `ESC \` (or `BEL`). In `a=waver` replies, `a=waver` must appear immediately after `A` with no leading whitespace.
 - Malformed, out-of-range, or non-finite (`NaN`, `Infinity`) commands are ignored silently unless a reply format is defined.
 
 ---
@@ -46,7 +47,7 @@ Reference implementations:
 - Explicit wire IDs (`i`, `b`, `s`, `st`, `q`) must be positive 31-bit integers in `1 .. 2,147,483,647` (`0x7FFFFFFF`).
 - Boolean flags accept `1` / `true` and `0` / `false` (case-insensitive).
 - Volumes clamp to `[0.0, 1.0]`. Stereo pan clamps to `[-1.0, 1.0]`.
-- Playback speed clamps to `[0.125, 8.0]`.
+- Playback speed must be finite and `> 0`, and clamps to `[0.125, 8.0]`.
 - Durations are finite milliseconds `>= 0`. General transport durations clamp to `86,400,000` ms (24 hours).
 
 ### 2.1 Synthetic Tones (`a=tone`)
@@ -54,7 +55,7 @@ Reference implementations:
 Triggers a short synthesized waveform on the host audio engine.
 
 ```text
-ESC _ A a=tone,w=<wave>,f=<hz>,d=<ms>[,v=<vol>][,p=<pan>][,b=<busId>]; ST
+ESC _ A a=tone[,w=<wave>],f=<hz>,d=<ms>[,v=<vol>][,p=<pan>][,b=<busId>]; ST
 ```
 
 | Key | Required | Type / Range | Default | Description |
@@ -167,10 +168,10 @@ ESC _ A a=update,i=<clipId>[,v=<vol>][,p=<pan>][,s=<ms>][,pa=<0|1>][,sp=<rate>][
 | `p` | Float `[-1.0, 1.0]` | Stereo pan. |
 | `s` | Float `>= 0` | Seek position in milliseconds. |
 | `pa` | Bool (`0`/`1`) | Pause (`1`) or resume (`0`). |
-| `sp` | Float `[0.125, 8.0]` | Relative playback speed. Cancels any pending speed fade on an in-flight upload. |
+| `sp` | Float `> 0`, clamped `[0.125, 8.0]` | Relative playback speed. Cancels any pending speed fade on an in-flight upload. |
 | `pp` | Bool (`0`/`1`) | Preserve pitch when changing speed. |
 | `fv` | `<target>:<durMs>` | Fade volume to `target` (`[0.0, 1.0]`) over `durMs` milliseconds. |
-| `fs` | `<target>:<durMs>` | Fade playback speed to `target` (`[0.125, 8.0]`) over `durMs` milliseconds. |
+| `fs` | `<target>:<durMs>` | Fade playback speed to `target` (`> 0`, clamped `[0.125, 8.0]`) over `durMs` milliseconds. |
 | `st` | Float `>= 0` | Schedule automatic stop after `st` milliseconds. |
 
 At least one update field besides `i` must be present.
@@ -286,8 +287,8 @@ ESC _ S a=caps,backend=<backend>,glsl=<0|1>,xform=<0|1>,region=<0|1>,max_slots=<
 | `glsl` | `0` or `1` | Whether custom `a=define` GLSL uploads are permitted by host policy. |
 | `xform` | `0` or `1` | Whether per-cell transforms (`a=xform` / `a=xforms`) are supported. |
 | `region` | `0` or `1` | Whether scoped region shaders (`a=region`) are supported. |
-| `max_slots` | Integer `>= 0` | Maximum custom GLSL slots allowed per pane (typically `16`, or `0` when disabled). |
-| `max_regions` | Integer `>= 0` | Maximum active regions allowed per pane (typically `8`, or `0` when disabled). |
+| `max_slots` | Integer `>= 0` | Maximum custom GLSL slots allowed per pane (typically `16`, or `0` when policy is `disabled`). |
+| `max_regions` | Integer `>= 0` | Maximum active regions allowed per pane (typically `8`, or `0` when policy is `disabled`). |
 
 ### 3.2 Defining Custom GLSL Shaders (`a=define`)
 
@@ -308,7 +309,7 @@ ESC _ S a=define,id=<slotId>,m=<0|1>;<base64-utf8> ST
 - Decoded bytes must be non-empty, valid UTF-8, `<= 32 KiB`, and free of NUL (`0x00`) bytes.
 - Setting `persist=1` requests a previous-frame feedback texture (`iPrevFrame`) for the slot.
 - Re-defining an existing `id` replaces that slot without consuming an extra slot toward the 16-slot cap.
-- The reference encoder chunks raw UTF-8 bytes at `4,096` bytes (aligned to multiples of 3) per frame.
+- The reference encoder chunks raw UTF-8 bytes at `4,095` bytes per frame (`4,096` rounded down to a multiple of 3, giving `5,460` Base64 chars).
 
 #### GLSL Contract and Uniforms
 
@@ -335,7 +336,7 @@ The host shim compiles the source for Impeller GLSL 460 (`flutter_gpu`) and GLSL
 #### Host Trust Policy and Quarantine
 
 Because `a=define` runs untrusted GPU code, conforming hosts enforce user trust policies:
-- `disabled`: ignores all `APC S` visual effects and reports `backend=disabled,glsl=0,xform=0,region=0`.
+- `disabled`: ignores all `APC S` visual effects and reports `backend=disabled,glsl=0,xform=0,region=0,max_slots=0,max_regions=0`. If no GPU backend is active under another policy, the host may report `backend=disabled,glsl=0,xform=1,region=0,max_slots=16,max_regions=8`.
 - `presetsAndTransforms`: permits built-in presets and cell transforms, but rejects `a=define` custom GLSL.
 - `promptCustomGlsl`: hashes each `a=define` source with SHA-256 and prompts the user before compiling unknown hashes. Each pane queues at most `4` prompts, and approval binds strictly to the SHA-256 digest to prevent TOCTOU swaps.
 - `allowLocalCustomGlsl`: compiles custom GLSL automatically on local panes while keeping stricter controls on remote sessions.
@@ -400,8 +401,8 @@ Updates any subset of `p0..p7` without recompiling the shader or restating regio
 ESC _ S a=uniform[,id=<targetId>],p<n>=<value>[,...] ST
 ```
 
-- Omitting `id` targets the active full-pane CLI shader pass.
-- Supplying `id` targets the matching region or full-pane shader slot.
+- Omitting `id` targets all active full-pane CLI shader passes.
+- Supplying `id` targets the matching active scoped region (`a=region`).
 - Only specified `p0..p7` indices are overwritten; omitted indices retain their previous values.
 
 ### 3.6 Per-Cell Transforms (`a=xform` and `a=xforms`)
@@ -527,7 +528,7 @@ Every `termui_cast` frame starts with `[uint8 version = 8][uint8 tag]`, followed
 | `uint53` | Two big-endian `uint32` words (`hi = v ~/ 2^32`, `lo = v % 2^32`), range `0 .. 2^53 - 1`. |
 | `string16` | `uint16` UTF-8 byte length followed by UTF-8 bytes. |
 | `bytes32` | `uint32` byte length followed by raw bytes. |
-| `sessionId` | `string16` session identifier. |
+| `sessionId` | `string16` session identifier (`1..128` printable ASCII bytes `0x21..0x7E`; no `/`, `\`, `.`, or `..`). |
 
 ### Frame Definitions
 
@@ -539,7 +540,7 @@ Initiates a file upload and requests an exclusive `.part` staging file.
 | :---- | :--- | :---------- |
 | `sessionId` | `sessionId` | Target session. |
 | `transferId` | `uint32` | Client-assigned transfer correlation ID. |
-| `fileName` | `string16` | Sanitized base filename (`1..255` UTF-8 bytes, no path separators). |
+| `fileName` | `string16` | Sanitized base filename (`1..255` UTF-8 bytes; no `/`, `\`, C0/DEL/C1 controls, `.`, or `..`). |
 | `totalBytes` | `uint53` | Total file size in bytes. |
 
 #### `0x13` `FileUploadChunkFrame` (Client to Caster)
@@ -574,7 +575,7 @@ Paces the upload window and reports finalization or rejection.
 | `transferId` | `uint32` | Echoed from client frames. |
 | `status` | `uint8` | `0` = `ready`, `1` = `chunkAck`, `2` = `completed`, `3` = `rejected`. |
 | `nextOffset` | `uint53` | Cumulative bytes confirmed written by the caster. |
-| `message` | `string16` | Resolved host path on `completed`, diagnostic reason on `rejected`, empty otherwise. |
+| `message` | `string16` | Resolved host path on `completed`, diagnostic reason on `rejected`, empty otherwise (`<= 4,096` UTF-8 bytes). |
 
 ### Flow Control, Quotas, and Security
 
