@@ -608,6 +608,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                   workspace: widget.workspace,
                   onOpenUrl: widget.onOpenUrl,
                   isWeb: _isWeb,
+                  platformOverride: widget.platformOverride,
                   onCaptureScreenshot: _captureFocusedPaneScreenshot,
                 ),
               ),
