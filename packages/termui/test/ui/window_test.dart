@@ -1,3 +1,4 @@
+import 'package:termui/src/window_title.dart';
 import 'package:termui/termui.dart';
 import 'package:test/test.dart';
 
@@ -160,5 +161,124 @@ void main() {
         expect(truncated.isPositionOnTitle(1, 1), isFalse);
       },
     );
+
+    test('compact 1x3 window skips wide continuation cells', () {
+      final buffer = Buffer.blank(5, 5);
+      // Wide char at (1, 1) places a '' continuation cell at (2, 1).
+      buffer.writeString(1, 1, '漢', Style.empty);
+      expect(buffer.getCharacter(2, 1), '');
+
+      const borderFg = Color(255, 0, 0);
+      final win = Window(
+        title: 'X',
+        width: 1,
+        height: 3,
+        borderStyle: const Style(foreground: borderFg),
+        child: const SizedBox.shrink(),
+      );
+      final el = win.createElement()..mount(null);
+      el.layout(BoxConstraints.tight(const Size(1, 3)));
+      el.paint(buffer, const Offset(2, 0));
+
+      expect(buffer.getCharacter(2, 0), ' ');
+      expect(buffer.getForeground(2, 0), borderFg.argb);
+      expect(buffer.getCharacter(2, 1), '');
+      expect(buffer.getForeground(2, 1), isNot(borderFg.argb));
+      expect(buffer.getCharacter(2, 2), ' ');
+      expect(buffer.getForeground(2, 2), borderFg.argb);
+    });
+
+    test(
+      'onMouseEvent forwards all events, body clicks isolate drag, and globalX/globalY drive pan',
+      () {
+        final forwarded = <(MouseEventType, int, int)>[];
+        final panEvents = <(int, int)>[];
+        final resizeEvents = <(int, int)>[];
+        final win = Window(
+          title: 'Demo',
+          width: 20,
+          height: 8,
+          onMouseEvent: (e, lx, ly) => forwarded.add((e.type, lx, ly)),
+          onPan: (dx, dy) => panEvents.add((dx, dy)),
+          onResize: (w, h) => resizeEvents.add((w, h)),
+          child: const SizedBox.shrink(),
+        );
+        final el = win.createElement() as WindowElement..mount(null);
+        el.layout(BoxConstraints.tight(const Size(20, 8)));
+
+        // Body click + drag should not trigger pan or resize, but still forward.
+        el.handleMouseEvent(
+          const MouseEvent(x: 5, y: 3, button: .left, type: .press),
+          5,
+          3,
+        );
+        el.handleMouseEvent(
+          const MouseEvent(x: 10, y: 5, button: .left, type: .drag),
+          10,
+          5,
+        );
+        el.handleMouseEvent(
+          const MouseEvent(x: 10, y: 5, button: .none, type: .move),
+          10,
+          5,
+        );
+        expect(panEvents, isEmpty);
+        expect(resizeEvents, isEmpty);
+
+        // Title drag using globalX/globalY while local x/y stay fixed.
+        el.handleMouseEvent(
+          const MouseEvent(
+            x: 8,
+            y: 0,
+            globalX: 100,
+            globalY: 50,
+            button: .left,
+            type: .press,
+          ),
+          8,
+          0,
+        );
+        el.handleMouseEvent(
+          const MouseEvent(
+            x: 8,
+            y: 0,
+            globalX: 107,
+            globalY: 54,
+            button: .left,
+            type: .drag,
+          ),
+          8,
+          0,
+        );
+        el.handleMouseEvent(
+          const MouseEvent(
+            x: 8,
+            y: 0,
+            globalX: 107,
+            globalY: 54,
+            button: .left,
+            type: .release,
+          ),
+          8,
+          0,
+        );
+
+        expect(panEvents, [(7, 4)]);
+        expect(resizeEvents, isEmpty);
+        expect(forwarded, [
+          (MouseEventType.press, 5, 3),
+          (MouseEventType.drag, 10, 5),
+          (MouseEventType.move, 10, 5),
+          (MouseEventType.press, 8, 0),
+          (MouseEventType.drag, 8, 0),
+          (MouseEventType.release, 8, 0),
+        ]);
+      },
+    );
+
+    test('formatWindowTitle boundary cases', () {
+      expect(formatWindowTitle('Demo', 8), ' Demo ');
+      expect(formatWindowTitle('ABCDE', 8), ' A... ');
+    });
   });
 }

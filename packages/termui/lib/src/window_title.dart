@@ -1,6 +1,6 @@
 import 'package:characters/characters.dart';
 
-/// Formats [title] to fit inside a bordered frame of [width] cells.
+/// Formats [title] to fit inside a bordered frame of [width] grapheme clusters.
 ///
 /// Returns an empty string when [title] is empty or [width] is too narrow to
 /// display a truncated title.

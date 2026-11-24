@@ -506,16 +506,21 @@ class WindowElement extends Element implements MouseEventHandler {
     int h,
     Style borderStyle,
   ) {
+    final fg = borderStyle.foreground?.argb;
+    final bg = borderStyle.background?.argb;
+    final modifiers = borderStyle.modifiers;
     for (var y = 0; y < h; y++) {
+      final targetY = offset.dy + y;
       for (var x = 0; x < w; x++) {
-        if (buffer.getCharacter(offset.dx + x, offset.dy + y) == '') continue;
+        final targetX = offset.dx + x;
+        if (buffer.getCharacter(targetX, targetY) == '') continue;
         buffer.setAttributes(
-          offset.dx + x,
-          offset.dy + y,
+          targetX,
+          targetY,
           char: ' ',
-          fg: borderStyle.foreground?.argb,
-          bg: borderStyle.background?.argb,
-          modifiers: borderStyle.modifiers,
+          fg: fg,
+          bg: bg,
+          modifiers: modifiers,
         );
       }
     }
@@ -580,69 +585,58 @@ class WindowElement extends Element implements MouseEventHandler {
     final win = widget as Window;
 
     switch (event.type) {
-      case MouseEventType.press:
-        _handleMousePress(win, event, localX, localY);
-      case MouseEventType.drag:
-        _handleMouseDrag(win, event);
-      case MouseEventType.release:
+      case .press:
         _dragStartedOnTitle = false;
         _resizeStartedOnBottomLeft = false;
         _resizeStartedOnBottomRight = false;
-      default:
+
+        final isAtBottom = localY == win.height - 1;
+        final isNearBottomLeft =
+            (isAtBottom && localX <= 2) ||
+            (localX == 0 && localY >= win.height - 3);
+        final isNearBottomRight =
+            (isAtBottom && localX >= win.width - 3) ||
+            (localX == win.width - 1 && localY >= win.height - 3);
+
+        if (isNearBottomLeft) {
+          _resizeStartedOnBottomLeft = true;
+          _lastX = event.globalX ?? event.x;
+          _lastY = event.globalY ?? event.y;
+        } else if (isNearBottomRight) {
+          _resizeStartedOnBottomRight = true;
+          _lastX = event.globalX ?? event.x;
+          _lastY = event.globalY ?? event.y;
+        } else if (win.isPositionOnTitle(localX, localY)) {
+          _dragStartedOnTitle = true;
+          _lastX = event.globalX ?? event.x;
+          _lastY = event.globalY ?? event.y;
+        }
+      case .drag:
+        final mouseX = event.globalX ?? event.x;
+        final mouseY = event.globalY ?? event.y;
+        final dx = mouseX - _lastX;
+        final dy = mouseY - _lastY;
+        _lastX = mouseX;
+        _lastY = mouseY;
+
+        if (_dragStartedOnTitle) {
+          win.onPan?.call(dx, dy);
+        } else if (_resizeStartedOnBottomRight) {
+          win.onResize?.call(max(10, win.width + dx), max(5, win.height + dy));
+        } else if (_resizeStartedOnBottomLeft) {
+          final newWidth = max(10, win.width - dx);
+          final newHeight = max(5, win.height + dy);
+          win.onPan?.call(win.width - newWidth, 0);
+          win.onResize?.call(newWidth, newHeight);
+        }
+      case .release:
+        _dragStartedOnTitle = false;
+        _resizeStartedOnBottomLeft = false;
+        _resizeStartedOnBottomRight = false;
+      case .move:
         break;
     }
 
     win.onMouseEvent?.call(event, localX, localY);
-  }
-
-  void _handleMousePress(Window win, MouseEvent event, int localX, int localY) {
-    _dragStartedOnTitle = false;
-    _resizeStartedOnBottomLeft = false;
-    _resizeStartedOnBottomRight = false;
-
-    final isAtBottom = localY == win.height - 1;
-    final isNearBottomLeft =
-        (isAtBottom && localX <= 2) ||
-        (localX == 0 && localY >= win.height - 3);
-    final isNearBottomRight =
-        (isAtBottom && localX >= win.width - 3) ||
-        (localX == win.width - 1 && localY >= win.height - 3);
-
-    if (isNearBottomLeft) {
-      _resizeStartedOnBottomLeft = true;
-    } else if (isNearBottomRight) {
-      _resizeStartedOnBottomRight = true;
-    } else if (win.isPositionOnTitle(localX, localY)) {
-      _dragStartedOnTitle = true;
-    } else {
-      return;
-    }
-
-    _lastX = event.globalX ?? event.x;
-    _lastY = event.globalY ?? event.y;
-  }
-
-  void _handleMouseDrag(Window win, MouseEvent event) {
-    if (!_dragStartedOnTitle &&
-        !_resizeStartedOnBottomRight &&
-        !_resizeStartedOnBottomLeft) {
-      return;
-    }
-    final mouseX = event.globalX ?? event.x;
-    final mouseY = event.globalY ?? event.y;
-    final dx = mouseX - _lastX;
-    final dy = mouseY - _lastY;
-    _lastX = mouseX;
-    _lastY = mouseY;
-
-    if (_dragStartedOnTitle) {
-      win.onPan?.call(dx, dy);
-    } else if (_resizeStartedOnBottomRight) {
-      win.onResize?.call(max(10, win.width + dx), max(5, win.height + dy));
-    } else if (_resizeStartedOnBottomLeft) {
-      final newWidth = max(10, win.width - dx);
-      win.onPan?.call(win.width - newWidth, 0);
-      win.onResize?.call(newWidth, max(5, win.height + dy));
-    }
   }
 }

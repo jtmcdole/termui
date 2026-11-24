@@ -293,7 +293,22 @@ class ModalOverlayElement extends WindowElement {
         !modal.modalFocusNodes.any((node) => node.isFocused)) {
       modal.modalFocusNodes.first.requestFocus();
     }
-    _paintBackgroundScrim(buffer, offset, w, h, modal.dialogBounds);
+    final maxX = modal.dialogBounds.x + modal.dialogBounds.width;
+    final maxY = modal.dialogBounds.y + modal.dialogBounds.height;
+    for (var y = 0; y < h; y++) {
+      final insideY = y >= modal.dialogBounds.y && y < maxY;
+      final targetY = offset.dy + y;
+      for (var x = 0; x < w; x++) {
+        if (insideY && x >= modal.dialogBounds.x && x < maxX) continue;
+        final targetX = offset.dx + x;
+        final modifiers = buffer.getModifiers(targetX, targetY);
+        buffer.setAttributes(
+          targetX,
+          targetY,
+          modifiers: modifiers | Modifier.dim,
+        );
+      }
+    }
 
     final dialogX = offset.dx + modal.dialogBounds.x;
     final dialogY = offset.dy + modal.dialogBounds.y;
@@ -301,7 +316,13 @@ class ModalOverlayElement extends WindowElement {
     final dh = modal.dialogBounds.height;
 
     if (dw < 2 || dh < 2) {
-      _paintCompactDialog(buffer, dialogX, dialogY, dw, dh, modal.borderStyle);
+      buffer.fillRect(
+        Rect(dialogX, dialogY, dw, dh),
+        char: ' ',
+        fg: modal.borderStyle.foreground?.argb,
+        bg: modal.borderStyle.background?.argb,
+        modifiers: modal.borderStyle.modifiers,
+      );
       return;
     }
 
@@ -318,53 +339,6 @@ class ModalOverlayElement extends WindowElement {
     final contentArea = Rect(dialogX + 1, dialogY + 1, dw - 2, dh - 2);
     final contentViewport = Viewport(buffer, contentArea);
     childElement?.paint(contentViewport, Offset.zero);
-  }
-
-  static void _paintBackgroundScrim(
-    Buffer buffer,
-    Offset offset,
-    int width,
-    int height,
-    Rect dialogBounds,
-  ) {
-    final maxX = dialogBounds.x + dialogBounds.width;
-    final maxY = dialogBounds.y + dialogBounds.height;
-    for (var y = 0; y < height; y++) {
-      final insideY = y >= dialogBounds.y && y < maxY;
-      final targetY = offset.dy + y;
-      for (var x = 0; x < width; x++) {
-        if (insideY && x >= dialogBounds.x && x < maxX) continue;
-        final targetX = offset.dx + x;
-        final modifiers = buffer.getModifiers(targetX, targetY);
-        buffer.setAttributes(
-          targetX,
-          targetY,
-          modifiers: modifiers | Modifier.dim,
-        );
-      }
-    }
-  }
-
-  static void _paintCompactDialog(
-    Buffer buffer,
-    int dialogX,
-    int dialogY,
-    int dw,
-    int dh,
-    Style borderStyle,
-  ) {
-    for (var y = 0; y < dh; y++) {
-      for (var x = 0; x < dw; x++) {
-        buffer.setAttributes(
-          dialogX + x,
-          dialogY + y,
-          char: ' ',
-          fg: borderStyle.foreground?.argb,
-          bg: borderStyle.background?.argb,
-          modifiers: borderStyle.modifiers,
-        );
-      }
-    }
   }
 
   static void _paintDialogFrame(
