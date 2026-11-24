@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'package:characters/characters.dart';
+import 'package:termui/src/element_children.dart';
 import 'package:termui/termui.dart';
 
 /// A scrollable list of child widgets.
@@ -164,26 +165,11 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
   @override
   void rebuild() {
     final listView = widget as ListView;
-    final newElements = <Element>[];
-    for (var i = 0; i < listView.children.length; i++) {
-      final childWidget = listView.children[i];
-      if (i < childElements.length &&
-          Widget.canUpdate(childElements[i].widget, childWidget)) {
-        childElements[i].update(childWidget);
-        newElements.add(childElements[i]);
-      } else {
-        if (i < childElements.length) {
-          childElements[i].unmount();
-        }
-        final newEl = childWidget.createElement();
-        newEl.mount(this);
-        newElements.add(newEl);
-      }
-    }
-    for (var i = listView.children.length; i < childElements.length; i++) {
-      childElements[i].unmount();
-    }
-    childElements = newElements;
+    childElements = reconcileChildElements(
+      this,
+      childElements,
+      listView.children,
+    );
   }
 
   @override

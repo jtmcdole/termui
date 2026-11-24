@@ -1,3 +1,4 @@
+import 'package:termui/src/element_children.dart';
 import 'package:termui/termui.dart';
 
 /// A layout widget that stacks its children on top of each other.
@@ -55,26 +56,7 @@ class StackElement extends Element {
   @override
   void rebuild() {
     final stack = widget as Stack;
-    final newElements = <Element>[];
-    for (var i = 0; i < stack.children.length; i++) {
-      final childWidget = stack.children[i];
-      if (i < childElements.length &&
-          Widget.canUpdate(childElements[i].widget, childWidget)) {
-        childElements[i].update(childWidget);
-        newElements.add(childElements[i]);
-      } else {
-        if (i < childElements.length) {
-          childElements[i].unmount();
-        }
-        final newEl = childWidget.createElement();
-        newEl.mount(this);
-        newElements.add(newEl);
-      }
-    }
-    for (var i = stack.children.length; i < childElements.length; i++) {
-      childElements[i].unmount();
-    }
-    childElements = newElements;
+    childElements = reconcileChildElements(this, childElements, stack.children);
   }
 
   @override

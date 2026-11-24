@@ -1,4 +1,5 @@
 import 'package:characters/characters.dart';
+import 'package:termui/src/interactive_focus_helper.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
@@ -56,36 +57,19 @@ class ButtonState extends State<Button>
   }
 
   @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    final hasFocus = widget.focused || focusNode.hasFocus;
-    if (hasFocus &&
-        (event.baseKey == term.TermKey.space ||
-            event.baseKey == term.TermKey.enter)) {
-      widget.onPressed();
-      setState(() {});
-      return true;
-    }
-    return false;
-  }
+  bool handleKeyEvent(term.KeyEvent event) =>
+      handleActivationKeyEvent(event, onActivate: widget.onPressed);
 
   @override
-  Widget build(BuildContext context) {
-    return Focus(
-      focusNode: focusNode,
-      onFocusChange: (hasFocus) {
-        if (mounted) setState(() {});
-      },
-      onKeyEvent: (event) {
-        return handleKeyEvent(event);
-      },
-      child: _ButtonRenderWidget(
-        text: widget.text,
-        focused: focusNode.hasFocus || widget.focused,
-        style: widget.style,
-        focusedStyle: widget.focusedStyle,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => buildFocusableInteractive(
+    onKeyEvent: handleKeyEvent,
+    child: _ButtonRenderWidget(
+      text: widget.text,
+      focused: focusNode.hasFocus || widget.focused,
+      style: widget.style,
+      focusedStyle: widget.focusedStyle,
+    ),
+  );
 }
 
 class _ButtonRenderWidget extends Widget {

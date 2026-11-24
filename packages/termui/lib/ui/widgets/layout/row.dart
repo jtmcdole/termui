@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:termui/src/element_children.dart';
 import 'package:termui/termui.dart';
 
 /// A layout widget that arranges its children horizontally.
@@ -88,26 +89,7 @@ class RowElement extends Element {
   @override
   void rebuild() {
     final row = widget as Row;
-    final newElements = <Element>[];
-    for (var i = 0; i < row.children.length; i++) {
-      final childWidget = row.children[i];
-      if (i < childElements.length &&
-          Widget.canUpdate(childElements[i].widget, childWidget)) {
-        childElements[i].update(childWidget);
-        newElements.add(childElements[i]);
-      } else {
-        if (i < childElements.length) {
-          childElements[i].unmount();
-        }
-        final newEl = childWidget.createElement();
-        newEl.mount(this);
-        newElements.add(newEl);
-      }
-    }
-    for (var i = row.children.length; i < childElements.length; i++) {
-      childElements[i].unmount();
-    }
-    childElements = newElements;
+    childElements = reconcileChildElements(this, childElements, row.children);
   }
 
   @override

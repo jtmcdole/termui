@@ -1,4 +1,5 @@
 import 'package:characters/characters.dart';
+import 'package:termui/src/interactive_focus_helper.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
@@ -67,37 +68,22 @@ class RadioState<T> extends State<Radio<T>>
   }
 
   @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    final hasFocus = widget.focused || focusNode.hasFocus;
-    if (hasFocus &&
-        (event.baseKey == term.TermKey.space ||
-            event.baseKey == term.TermKey.enter)) {
-      widget.onChanged(widget.value);
-      setState(() {});
-      return true;
-    }
-    return false;
-  }
+  bool handleKeyEvent(term.KeyEvent event) => handleActivationKeyEvent(
+    event,
+    onActivate: () => widget.onChanged(widget.value),
+  );
 
   @override
-  Widget build(BuildContext context) {
-    return Focus(
-      focusNode: focusNode,
-      onFocusChange: (hasFocus) {
-        if (mounted) setState(() {});
-      },
-      onKeyEvent: (event) {
-        return handleKeyEvent(event);
-      },
-      child: _RadioRenderWidget(
-        isSelected: isSelected,
-        label: widget.label,
-        focused: focusNode.hasFocus || widget.focused,
-        style: widget.style,
-        focusedStyle: widget.focusedStyle,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => buildFocusableInteractive(
+    onKeyEvent: handleKeyEvent,
+    child: _RadioRenderWidget(
+      isSelected: isSelected,
+      label: widget.label,
+      focused: focusNode.hasFocus || widget.focused,
+      style: widget.style,
+      focusedStyle: widget.focusedStyle,
+    ),
+  );
 }
 
 class _RadioRenderWidget extends Widget {
