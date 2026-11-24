@@ -165,95 +165,103 @@ class Text extends Widget {
   List<String> _wrapText(String text, int maxWidth) {
     if (maxWidth <= 0) return [];
     final lines = <String>[];
-    final paragraphs = text.split('\n');
+    for (final paragraph in text.split('\n')) {
+      _wrapParagraph(paragraph, maxWidth, lines);
+    }
+    return lines;
+  }
 
-    for (final paragraph in paragraphs) {
-      if (paragraph.isEmpty) {
-        lines.add('');
+  static void _wrapParagraph(
+    String paragraph,
+    int maxWidth,
+    List<String> lines,
+  ) {
+    if (paragraph.isEmpty) {
+      lines.add('');
+      return;
+    }
+
+    var currentLine = '';
+    var currentLineLen = 0;
+
+    for (final word in paragraph.split(' ')) {
+      if (word.isEmpty) continue;
+      final wordWidth = measureStringWidth(word);
+
+      if (currentLine.isNotEmpty &&
+          currentLineLen + 1 + wordWidth <= maxWidth) {
+        currentLine += ' $word';
+        currentLineLen += 1 + wordWidth;
         continue;
       }
 
-      final words = paragraph.split(' ');
-      var currentLine = '';
-      var currentLineLen = 0;
-
-      for (final word in words) {
-        if (word.isEmpty) continue;
-
-        final wordWidth = measureStringWidth(word);
-
-        if (currentLine.isEmpty) {
-          if (wordWidth <= maxWidth) {
-            currentLine = word;
-            currentLineLen = wordWidth;
-          } else {
-            var temp = word.characters;
-            while (temp.isNotEmpty) {
-              var takeWidth = 0;
-              final chunk = StringBuffer();
-              while (temp.isNotEmpty) {
-                final char = temp.first;
-                final w = isWideGrapheme(char) ? 2 : 1;
-                if (takeWidth + w > maxWidth) break;
-                chunk.write(char);
-                takeWidth += w;
-                temp = temp.skip(1);
-              }
-              if (chunk.isNotEmpty) {
-                lines.add(chunk.toString());
-              } else {
-                lines.add(temp.first);
-                temp = temp.skip(1);
-              }
-            }
-          }
-        } else {
-          if (currentLineLen + 1 + wordWidth <= maxWidth) {
-            currentLine += ' $word';
-            currentLineLen += 1 + wordWidth;
-          } else {
-            lines.add(currentLine);
-            if (wordWidth <= maxWidth) {
-              currentLine = word;
-              currentLineLen = wordWidth;
-            } else {
-              var temp = word.characters;
-              currentLine = '';
-              currentLineLen = 0;
-              while (temp.isNotEmpty) {
-                var takeWidth = 0;
-                final chunk = StringBuffer();
-                while (temp.isNotEmpty) {
-                  final char = temp.first;
-                  final w = isWideGrapheme(char) ? 2 : 1;
-                  if (takeWidth + w > maxWidth) break;
-                  chunk.write(char);
-                  takeWidth += w;
-                  temp = temp.skip(1);
-                }
-                if (chunk.isNotEmpty) {
-                  if (currentLine.isEmpty) {
-                    currentLine = chunk.toString();
-                    currentLineLen = takeWidth;
-                  } else {
-                    lines.add(chunk.toString());
-                  }
-                } else {
-                  lines.add(temp.first);
-                  temp = temp.skip(1);
-                }
-              }
-            }
-          }
-        }
-      }
-
-      if (currentLine.isNotEmpty) {
+      final hadCurrentLine = currentLine.isNotEmpty;
+      if (hadCurrentLine) {
         lines.add(currentLine);
+        currentLine = '';
+        currentLineLen = 0;
       }
+
+      if (wordWidth <= maxWidth) {
+        currentLine = word;
+        currentLineLen = wordWidth;
+        continue;
+      }
+
+      (currentLine, currentLineLen) = _emitOversizedWord(
+        word,
+        maxWidth,
+        lines,
+        keepFirstInCurrentLine: hadCurrentLine,
+      );
     }
 
-    return lines;
+    if (currentLine.isNotEmpty) {
+      lines.add(currentLine);
+    }
+  }
+
+  static (String, int) _emitOversizedWord(
+    String word,
+    int maxWidth,
+    List<String> lines, {
+    required bool keepFirstInCurrentLine,
+  }) {
+    var currentLine = '';
+    var currentLineLen = 0;
+    var remaining = word.characters;
+    while (remaining.isNotEmpty) {
+      final (chunk, takeWidth, next) = _takeWordChunk(remaining, maxWidth);
+      remaining = next;
+      if (keepFirstInCurrentLine && takeWidth > 0 && currentLine.isEmpty) {
+        currentLine = chunk;
+        currentLineLen = takeWidth;
+      } else {
+        lines.add(chunk);
+      }
+    }
+    return (currentLine, currentLineLen);
+  }
+
+  static (String, int, Characters) _takeWordChunk(
+    Characters chars,
+    int maxWidth,
+  ) {
+    var takeWidth = 0;
+    final chunk = StringBuffer();
+    var remaining = chars;
+    while (remaining.isNotEmpty) {
+      final char = remaining.first;
+      final w = isWideGrapheme(char) ? 2 : 1;
+      if (takeWidth + w > maxWidth) break;
+      chunk.write(char);
+      takeWidth += w;
+      remaining = remaining.skip(1);
+    }
+    if (chunk.isNotEmpty) {
+      return (chunk.toString(), takeWidth, remaining);
+    }
+    return (remaining.first, 0, remaining.skip(1));
   }
 }
 

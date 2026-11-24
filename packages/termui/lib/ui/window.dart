@@ -494,108 +494,15 @@ class WindowElement extends Element implements MouseEventHandler {
     final win = widget as Window;
     final w = win.width;
     final h = win.height;
-    final paintOffset = offset;
 
     if (w < 2 || h < 2) {
-      for (var y = 0; y < h; y++) {
-        for (var x = 0; x < w; x++) {
-          if (buffer.getCharacter(paintOffset.dx + x, paintOffset.dy + y) !=
-              '') {
-            buffer.setAttributes(
-              paintOffset.dx + x,
-              paintOffset.dy + y,
-              char: ' ',
-              fg: win.borderStyle.foreground?.argb,
-              bg: win.borderStyle.background?.argb,
-              modifiers: win.borderStyle.modifiers,
-            );
-          }
-        }
-      }
+      _paintCompactWindow(buffer, offset, w, h, win.borderStyle);
       return;
     }
 
-    // Draw top border
-    final topBorder =
-        win.borderChars[0] + win.borderChars[1] * (w - 2) + win.borderChars[2];
-    buffer.writeString(
-      paintOffset.dx,
-      paintOffset.dy,
-      topBorder,
-      win.borderStyle,
-    );
+    _paintWindowFrame(buffer, offset, w, h, win);
 
-    // Draw close button [x] at the top right of the window border, e.g. at w - 4, w - 3, w - 2.
-    if (win.showCloseButton && w >= 6) {
-      buffer.writeString(
-        paintOffset.dx + w - 4,
-        paintOffset.dy,
-        '[x]',
-        win.borderStyle,
-      );
-    }
-
-    // Overlay title
-    if (win.title.isNotEmpty) {
-      final titleChars = win.title.characters;
-      final maxTitleLen = w - 4;
-      String displayedTitle;
-      if (titleChars.length > maxTitleLen) {
-        final cutLen = w - 7;
-        if (cutLen > 0) {
-          displayedTitle = ' ${titleChars.take(cutLen)}... ';
-        } else {
-          displayedTitle = '';
-        }
-      } else {
-        displayedTitle = ' ${win.title} ';
-      }
-
-      if (displayedTitle.isNotEmpty) {
-        final dispChars = displayedTitle.characters;
-        final titleX = max(1, min(w - 2, ((w - dispChars.length) / 2).floor()));
-        buffer.writeString(
-          paintOffset.dx + titleX,
-          paintOffset.dy,
-          displayedTitle,
-          win.titleStyle,
-        );
-      }
-    }
-
-    // Side borders
-    for (var y = 1; y < h - 1; y++) {
-      buffer.writeString(
-        paintOffset.dx,
-        paintOffset.dy + y,
-        win.borderChars[3],
-        win.borderStyle,
-      );
-      buffer.writeString(
-        paintOffset.dx + w - 1,
-        paintOffset.dy + y,
-        win.borderChars[5],
-        win.borderStyle,
-      );
-    }
-
-    // Bottom border
-    final bottomBorder =
-        win.borderChars[6] + win.borderChars[7] * (w - 2) + win.borderChars[8];
-    buffer.writeString(
-      paintOffset.dx,
-      paintOffset.dy + h - 1,
-      bottomBorder,
-      win.borderStyle,
-    );
-
-    // Render child content viewport
-    final contentArea = Rect(
-      paintOffset.dx + 1,
-      paintOffset.dy + 1,
-      w - 2,
-      h - 2,
-    );
+    final contentArea = Rect(offset.dx + 1, offset.dy + 1, w - 2, h - 2);
     final contentViewport = Viewport(buffer, contentArea);
     contentViewport.fillAttributes(
       char: ' ',
@@ -604,91 +511,162 @@ class WindowElement extends Element implements MouseEventHandler {
       modifiers: win.backgroundStyle.modifiers,
     );
 
-    if (childElement != null) {
-      childElement!.paint(contentViewport, Offset.zero);
+    childElement?.paint(contentViewport, Offset.zero);
+  }
+
+  static void _paintCompactWindow(
+    Buffer buffer,
+    Offset offset,
+    int w,
+    int h,
+    Style borderStyle,
+  ) {
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        if (buffer.getCharacter(offset.dx + x, offset.dy + y) == '') continue;
+        buffer.setAttributes(
+          offset.dx + x,
+          offset.dy + y,
+          char: ' ',
+          fg: borderStyle.foreground?.argb,
+          bg: borderStyle.background?.argb,
+          modifiers: borderStyle.modifiers,
+        );
+      }
     }
+  }
+
+  static void _paintWindowFrame(
+    Buffer buffer,
+    Offset offset,
+    int w,
+    int h,
+    Window win,
+  ) {
+    final topBorder =
+        win.borderChars[0] + win.borderChars[1] * (w - 2) + win.borderChars[2];
+    buffer.writeString(offset.dx, offset.dy, topBorder, win.borderStyle);
+
+    if (win.showCloseButton && w >= 6) {
+      buffer.writeString(offset.dx + w - 4, offset.dy, '[x]', win.borderStyle);
+    }
+
+    final displayedTitle = _formatWindowTitle(win.title, w);
+    if (displayedTitle.isNotEmpty) {
+      final titleX = max(
+        1,
+        min(w - 2, ((w - displayedTitle.characters.length) / 2).floor()),
+      );
+      buffer.writeString(
+        offset.dx + titleX,
+        offset.dy,
+        displayedTitle,
+        win.titleStyle,
+      );
+    }
+
+    for (var y = 1; y < h - 1; y++) {
+      buffer.writeString(
+        offset.dx,
+        offset.dy + y,
+        win.borderChars[3],
+        win.borderStyle,
+      );
+      buffer.writeString(
+        offset.dx + w - 1,
+        offset.dy + y,
+        win.borderChars[5],
+        win.borderStyle,
+      );
+    }
+
+    final bottomBorder =
+        win.borderChars[6] + win.borderChars[7] * (w - 2) + win.borderChars[8];
+    buffer.writeString(
+      offset.dx,
+      offset.dy + h - 1,
+      bottomBorder,
+      win.borderStyle,
+    );
+  }
+
+  static String _formatWindowTitle(String title, int width) {
+    if (title.isEmpty) return '';
+    final titleChars = title.characters;
+    if (titleChars.length <= width - 4) return ' $title ';
+    final cutLen = width - 7;
+    if (cutLen <= 0) return '';
+    return ' ${titleChars.take(cutLen)}... ';
   }
 
   @override
   void handleMouseEvent(MouseEvent event, int localX, int localY) {
     final win = widget as Window;
 
-    if (event.type == MouseEventType.press) {
-      _dragStartedOnTitle = false;
-      _resizeStartedOnBottomLeft = false;
-      _resizeStartedOnBottomRight = false;
-
-      // Check resize handles at bottom-left or bottom-right corners (with 2-cell tolerance)
-      final isAtBottomBorder = localY == win.height - 1;
-      final isAtLeftBorder = localX == 0;
-      final isAtRightBorder = localX == win.width - 1;
-
-      final isNearBottomLeft =
-          (isAtBottomBorder && localX <= 2) ||
-          (isAtLeftBorder && localY >= win.height - 3);
-      final isNearBottomRight =
-          (isAtBottomBorder && localX >= win.width - 3) ||
-          (isAtRightBorder && localY >= win.height - 3);
-
-      if (isNearBottomLeft) {
-        _resizeStartedOnBottomLeft = true;
-        _lastX = event.globalX ?? event.x;
-        _lastY = event.globalY ?? event.y;
-      } else if (isNearBottomRight) {
-        _resizeStartedOnBottomRight = true;
-        _lastX = event.globalX ?? event.x;
-        _lastY = event.globalY ?? event.y;
-      } else if (win.isPositionOnTitle(localX, localY)) {
-        _dragStartedOnTitle = true;
-        _lastX = event.globalX ?? event.x;
-        _lastY = event.globalY ?? event.y;
-      }
-
-      if (win.onMouseEvent != null) {
-        win.onMouseEvent!(event, localX, localY);
-      }
-    } else if (event.type == MouseEventType.drag) {
-      final mouseX = event.globalX ?? event.x;
-      final mouseY = event.globalY ?? event.y;
-
-      if (_dragStartedOnTitle) {
-        final dx = mouseX - _lastX;
-        final dy = mouseY - _lastY;
-        _lastX = mouseX;
-        _lastY = mouseY;
-        win.onPan?.call(dx, dy);
-      } else if (_resizeStartedOnBottomRight) {
-        final dx = mouseX - _lastX;
-        final dy = mouseY - _lastY;
-        _lastX = mouseX;
-        _lastY = mouseY;
-        final newWidth = max(10, win.width + dx);
-        final newHeight = max(5, win.height + dy);
-        win.onResize?.call(newWidth, newHeight);
-      } else if (_resizeStartedOnBottomLeft) {
-        final dx = mouseX - _lastX;
-        final dy = mouseY - _lastY;
-        _lastX = mouseX;
-        _lastY = mouseY;
-        final newWidth = max(10, win.width - dx);
-        final actualDx = win.width - newWidth;
-        final newHeight = max(5, win.height + dy);
-        win.onPan?.call(actualDx, 0);
-        win.onResize?.call(newWidth, newHeight);
-      }
-
-      if (win.onMouseEvent != null) {
-        win.onMouseEvent!(event, localX, localY);
-      }
-    } else {
-      if (event.type == MouseEventType.release) {
+    switch (event.type) {
+      case MouseEventType.press:
+        _handleMousePress(win, event, localX, localY);
+      case MouseEventType.drag:
+        _handleMouseDrag(win, event);
+      case MouseEventType.release:
         _dragStartedOnTitle = false;
         _resizeStartedOnBottomLeft = false;
         _resizeStartedOnBottomRight = false;
-      }
-      if (win.onMouseEvent != null) {
-        win.onMouseEvent!(event, localX, localY);
-      }
+      default:
+        break;
+    }
+
+    win.onMouseEvent?.call(event, localX, localY);
+  }
+
+  void _handleMousePress(Window win, MouseEvent event, int localX, int localY) {
+    _dragStartedOnTitle = false;
+    _resizeStartedOnBottomLeft = false;
+    _resizeStartedOnBottomRight = false;
+
+    final isAtBottom = localY == win.height - 1;
+    final isNearBottomLeft =
+        (isAtBottom && localX <= 2) ||
+        (localX == 0 && localY >= win.height - 3);
+    final isNearBottomRight =
+        (isAtBottom && localX >= win.width - 3) ||
+        (localX == win.width - 1 && localY >= win.height - 3);
+
+    if (isNearBottomLeft) {
+      _resizeStartedOnBottomLeft = true;
+    } else if (isNearBottomRight) {
+      _resizeStartedOnBottomRight = true;
+    } else if (win.isPositionOnTitle(localX, localY)) {
+      _dragStartedOnTitle = true;
+    } else {
+      return;
+    }
+
+    _lastX = event.globalX ?? event.x;
+    _lastY = event.globalY ?? event.y;
+  }
+
+  void _handleMouseDrag(Window win, MouseEvent event) {
+    if (!_dragStartedOnTitle &&
+        !_resizeStartedOnBottomRight &&
+        !_resizeStartedOnBottomLeft) {
+      return;
+    }
+    final mouseX = event.globalX ?? event.x;
+    final mouseY = event.globalY ?? event.y;
+    final dx = mouseX - _lastX;
+    final dy = mouseY - _lastY;
+    _lastX = mouseX;
+    _lastY = mouseY;
+
+    if (_dragStartedOnTitle) {
+      win.onPan?.call(dx, dy);
+    } else if (_resizeStartedOnBottomRight) {
+      win.onResize?.call(max(10, win.width + dx), max(5, win.height + dy));
+    } else if (_resizeStartedOnBottomLeft) {
+      final newWidth = max(10, win.width - dx);
+      win.onPan?.call(win.width - newWidth, 0);
+      win.onResize?.call(newWidth, max(5, win.height + dy));
     }
   }
 }

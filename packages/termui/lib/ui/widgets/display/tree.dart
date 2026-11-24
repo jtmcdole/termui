@@ -215,54 +215,59 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
     final nodes = flatNodes;
     if (nodes.isEmpty) return false;
 
-    bool handled = false;
-
-    if (event.type == KeyType.up) {
-      selectedIndex = selectedIndex - 1;
-      handled = true;
-    } else if (event.type == KeyType.down) {
-      selectedIndex = selectedIndex + 1;
-      handled = true;
-    } else if (event.type == KeyType.right) {
-      final flat = nodes[selectedIndex];
-      if (!flat.node.isLeaf) {
-        if (!flat.node.isExpanded) {
-          flat.node.isExpanded = true;
-          updateFlatNodes();
-        } else {
-          if (selectedIndex < nodes.length - 1) {
-            selectedIndex = selectedIndex + 1;
-          }
-        }
-      }
-      handled = true;
-    } else if (event.type == KeyType.left) {
-      final flat = nodes[selectedIndex];
-      if (!flat.node.isLeaf && flat.node.isExpanded) {
-        flat.node.isExpanded = false;
-        updateFlatNodes();
-      } else {
-        // Move to parent
-        final parent = flat.node.parent;
-        if (parent != null) {
-          final parentIdx = nodes.indexWhere((f) => f.node == parent);
-          if (parentIdx != -1) {
-            selectedIndex = parentIdx;
-          }
-        }
-      }
-      handled = true;
-    } else if (event.key == ' ' || event.type == KeyType.enter) {
-      if (widget.onSelect != null) {
-        widget.onSelect!(nodes[selectedIndex].node);
-      }
-      handled = true;
-    }
+    final handled = switch (event.type) {
+      KeyType.up => _selectDelta(-1),
+      KeyType.down => _selectDelta(1),
+      KeyType.right => _handleRightKey(nodes),
+      KeyType.left => _handleLeftKey(nodes),
+      KeyType.enter => _triggerSelect(nodes),
+      _ when event.key == ' ' => _triggerSelect(nodes),
+      _ => false,
+    };
 
     if (handled) {
       setState(() {});
     }
     return handled;
+  }
+
+  bool _selectDelta(int delta) {
+    selectedIndex = selectedIndex + delta;
+    return true;
+  }
+
+  bool _handleRightKey(List<FlatNode<T>> nodes) {
+    final flat = nodes[selectedIndex];
+    if (flat.node.isLeaf) return true;
+    if (!flat.node.isExpanded) {
+      flat.node.isExpanded = true;
+      updateFlatNodes();
+    } else if (selectedIndex < nodes.length - 1) {
+      selectedIndex = selectedIndex + 1;
+    }
+    return true;
+  }
+
+  bool _handleLeftKey(List<FlatNode<T>> nodes) {
+    final flat = nodes[selectedIndex];
+    if (!flat.node.isLeaf && flat.node.isExpanded) {
+      flat.node.isExpanded = false;
+      updateFlatNodes();
+      return true;
+    }
+    final parent = flat.node.parent;
+    if (parent != null) {
+      final parentIdx = nodes.indexWhere((f) => f.node == parent);
+      if (parentIdx != -1) {
+        selectedIndex = parentIdx;
+      }
+    }
+    return true;
+  }
+
+  bool _triggerSelect(List<FlatNode<T>> nodes) {
+    widget.onSelect?.call(nodes[selectedIndex].node);
+    return true;
   }
 
   @override
@@ -348,68 +353,63 @@ class _TreeWidgetElement extends Element {
     for (var i = 0; i < size.height; i++) {
       final nodeIdx = scrollOffsetVal + i;
       if (nodeIdx >= nodes.length) break;
-
-      final flat = nodes[nodeIdx];
       final isSelected = nodeIdx == selIdx;
-
-      var x = 0;
-
-      // 1. Ancestor guide lines
-      for (var depthIdx = 0; depthIdx < flat.depth - 1; depthIdx++) {
-        if (x >= size.width) break;
-        final isLast = flat.ancestorIsLast[depthIdx];
-        final part = isLast ? '   ' : '│  ';
-        viewport.writeString(
-          x,
-          i,
-          part,
-          isSelected ? activeSelectedStyle : tWidget.lineStyle,
-        );
-        x += 3;
-      }
-
-      // 2. Active node guide line
-      if (flat.depth > 0 && x < size.width) {
-        final isLast = flat.ancestorIsLast.last;
-        final part = isLast ? '└── ' : '├── ';
-        viewport.writeString(
-          x,
-          i,
-          part,
-          isSelected ? activeSelectedStyle : tWidget.lineStyle,
-        );
-        x += 4;
-      }
-
-      // 3. Expander indicator
-      if (x < size.width) {
-        final indicator = flat.node.isLeaf
-            ? '  '
-            : (flat.node.isExpanded ? '▼ ' : '▶ ');
-        viewport.writeString(
-          x,
-          i,
-          indicator,
-          isSelected ? activeSelectedStyle : tWidget.lineStyle,
-        );
-        x += 2;
-      }
-
-      // 4. Label
-      final remainingWidth = size.width - x;
-      if (remainingWidth > 0) {
-        final labelChars = flat.node.label.characters;
-        final labelText = labelChars.length > remainingWidth
-            ? labelChars.take(remainingWidth).toString()
-            : labelChars.toString() +
-                  (' ' * (remainingWidth - labelChars.length));
-        viewport.writeString(
-          x,
-          i,
-          labelText,
-          isSelected ? activeSelectedStyle : tWidget.unselectedStyle,
-        );
-      }
+      _paintRow(
+        viewport,
+        i,
+        nodes[nodeIdx],
+        guideStyle: isSelected ? activeSelectedStyle : tWidget.lineStyle,
+        labelStyle: isSelected ? activeSelectedStyle : tWidget.unselectedStyle,
+      );
     }
+  }
+
+  void _paintRow(
+    Viewport viewport,
+    int rowY,
+    FlatNode<Object?> flat, {
+    required Style guideStyle,
+    required Style labelStyle,
+  }) {
+    var x = _paintGuideLines(viewport, rowY, flat, guideStyle);
+
+    if (x < size.width) {
+      final indicator = flat.node.isLeaf
+          ? '  '
+          : (flat.node.isExpanded ? '▼ ' : '▶ ');
+      viewport.writeString(x, rowY, indicator, guideStyle);
+      x += 2;
+    }
+
+    final remainingWidth = size.width - x;
+    if (remainingWidth <= 0) return;
+
+    final labelChars = flat.node.label.characters;
+    final labelText = labelChars.length > remainingWidth
+        ? labelChars.take(remainingWidth).toString()
+        : labelChars.toString() + (' ' * (remainingWidth - labelChars.length));
+    viewport.writeString(x, rowY, labelText, labelStyle);
+  }
+
+  int _paintGuideLines(
+    Viewport viewport,
+    int rowY,
+    FlatNode<Object?> flat,
+    Style guideStyle,
+  ) {
+    var x = 0;
+    for (var depthIdx = 0; depthIdx < flat.depth - 1; depthIdx++) {
+      if (x >= size.width) return x;
+      final part = flat.ancestorIsLast[depthIdx] ? '   ' : '│  ';
+      viewport.writeString(x, rowY, part, guideStyle);
+      x += 3;
+    }
+
+    if (flat.depth > 0 && x < size.width) {
+      final part = flat.ancestorIsLast.last ? '└── ' : '├── ';
+      viewport.writeString(x, rowY, part, guideStyle);
+      x += 4;
+    }
+    return x;
   }
 }

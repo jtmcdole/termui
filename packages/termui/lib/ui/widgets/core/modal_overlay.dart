@@ -304,62 +304,19 @@ class ModalOverlayElement extends WindowElement {
     final h = size.height;
     if (w <= 0 || h <= 0) return;
 
-    // 1. Check/force focus to modal if it got lost/not set
-    bool anyFocused = false;
-    for (final node in modal.modalFocusNodes) {
-      if (node.isFocused) {
-        anyFocused = true;
-        break;
-      }
-    }
-    if (!anyFocused && modal.modalFocusNodes.isNotEmpty) {
-      modal.modalFocusNodes.first.requestFocus();
-    }
+    _ensureModalFocus(modal);
+    _paintBackgroundScrim(buffer, offset, w, h, modal.dialogBounds);
 
-    // 2. Draw the background scrim (dimming the cells beneath the modal)
-    for (var y = 0; y < h; y++) {
-      for (var x = 0; x < w; x++) {
-        final targetX = (offset.dx + x).toInt();
-        final targetY = (offset.dy + y).toInt();
-        final isInsideDialog =
-            x >= modal.dialogBounds.x &&
-            x < modal.dialogBounds.x + modal.dialogBounds.width &&
-            y >= modal.dialogBounds.y &&
-            y < modal.dialogBounds.y + modal.dialogBounds.height;
-        if (!isInsideDialog) {
-          final modifiers = buffer.getModifiers(targetX, targetY);
-          buffer.setAttributes(
-            targetX,
-            targetY,
-            modifiers: modifiers | Modifier.dim,
-          );
-        }
-      }
-    }
-
-    // 3. Draw the central dialog box inside dialogBounds
     final dialogX = offset.dx + modal.dialogBounds.x;
     final dialogY = offset.dy + modal.dialogBounds.y;
     final dw = modal.dialogBounds.width;
     final dh = modal.dialogBounds.height;
 
     if (dw < 2 || dh < 2) {
-      for (var y = 0; y < dh; y++) {
-        for (var x = 0; x < dw; x++) {
-          buffer.setAttributes(
-            (dialogX + x).toInt(),
-            (dialogY + y).toInt(),
-            char: ' ',
-            fg: modal.borderStyle.foreground?.argb,
-            bg: modal.borderStyle.background?.argb,
-            modifiers: modal.borderStyle.modifiers,
-          );
-        }
-      }
+      _paintCompactDialog(buffer, dialogX, dialogY, dw, dh, modal.borderStyle);
       return;
     }
 
-    // Clear the entire modal area
     buffer.fillRect(
       Rect(dialogX.toInt(), dialogY.toInt(), dw, dh),
       char: ' ',
@@ -368,45 +325,94 @@ class ModalOverlayElement extends WindowElement {
       modifiers: modal.backgroundStyle.modifiers,
     );
 
-    // Draw top border
+    _paintDialogFrame(buffer, dialogX, dialogY, dw, dh, modal);
+
+    final contentArea = Rect(dialogX + 1, dialogY + 1, dw - 2, dh - 2);
+    final contentViewport = Viewport(buffer, contentArea);
+    childElement?.paint(contentViewport, Offset.zero);
+  }
+
+  static void _ensureModalFocus(ModalOverlay modal) {
+    if (modal.modalFocusNodes.isEmpty) return;
+    if (modal.modalFocusNodes.any((node) => node.isFocused)) return;
+    modal.modalFocusNodes.first.requestFocus();
+  }
+
+  static void _paintBackgroundScrim(
+    Buffer buffer,
+    Offset offset,
+    int width,
+    int height,
+    Rect dialogBounds,
+  ) {
+    final maxX = dialogBounds.x + dialogBounds.width;
+    final maxY = dialogBounds.y + dialogBounds.height;
+    for (var y = 0; y < height; y++) {
+      final insideY = y >= dialogBounds.y && y < maxY;
+      final targetY = offset.dy + y;
+      for (var x = 0; x < width; x++) {
+        if (insideY && x >= dialogBounds.x && x < maxX) continue;
+        final targetX = offset.dx + x;
+        final modifiers = buffer.getModifiers(targetX, targetY);
+        buffer.setAttributes(
+          targetX,
+          targetY,
+          modifiers: modifiers | Modifier.dim,
+        );
+      }
+    }
+  }
+
+  static void _paintCompactDialog(
+    Buffer buffer,
+    int dialogX,
+    int dialogY,
+    int dw,
+    int dh,
+    Style borderStyle,
+  ) {
+    for (var y = 0; y < dh; y++) {
+      for (var x = 0; x < dw; x++) {
+        buffer.setAttributes(
+          dialogX + x,
+          dialogY + y,
+          char: ' ',
+          fg: borderStyle.foreground?.argb,
+          bg: borderStyle.background?.argb,
+          modifiers: borderStyle.modifiers,
+        );
+      }
+    }
+  }
+
+  static void _paintDialogFrame(
+    Buffer buffer,
+    int dialogX,
+    int dialogY,
+    int dw,
+    int dh,
+    ModalOverlay modal,
+  ) {
     final topBorder =
         modal.borderChars[0] +
         modal.borderChars[1] * (dw - 2) +
         modal.borderChars[2];
     buffer.writeString(dialogX, dialogY, topBorder, modal.borderStyle);
 
-    // Overlay title
-    if (modal.title.isNotEmpty) {
-      final titleChars = modal.title.characters;
-      final maxTitleLen = dw - 4;
-      String displayedTitle;
-      if (titleChars.length > maxTitleLen) {
-        final cutLen = dw - 7;
-        if (cutLen > 0) {
-          displayedTitle = ' ${titleChars.take(cutLen)}... ';
-        } else {
-          displayedTitle = '';
-        }
-      } else {
-        displayedTitle = ' ${modal.title} ';
-      }
-
-      if (displayedTitle.isNotEmpty) {
-        final dispChars = displayedTitle.characters;
-        final titleX = max(
-          1,
-          min(dw - 2, ((dw - dispChars.length) / 2).floor()),
-        );
-        buffer.writeString(
-          dialogX + titleX,
-          dialogY,
-          displayedTitle,
-          modal.titleStyle,
-        );
-      }
+    final displayedTitle = _formatDialogTitle(modal.title, dw);
+    if (displayedTitle.isNotEmpty) {
+      final titleX = max(
+        1,
+        min(dw - 2, ((dw - displayedTitle.characters.length) / 2).floor()),
+      );
+      buffer.writeString(
+        dialogX + titleX,
+        dialogY,
+        displayedTitle,
+        modal.titleStyle,
+      );
     }
 
-    // Side borders
     for (var y = 1; y < dh - 1; y++) {
       buffer.writeString(
         dialogX,
@@ -422,7 +428,6 @@ class ModalOverlayElement extends WindowElement {
       );
     }
 
-    // Bottom border
     final bottomBorder =
         modal.borderChars[6] +
         modal.borderChars[7] * (dw - 2) +
@@ -433,14 +438,15 @@ class ModalOverlayElement extends WindowElement {
       bottomBorder,
       modal.borderStyle,
     );
+  }
 
-    // Render child content viewport
-    final contentArea = Rect(dialogX + 1, dialogY + 1, dw - 2, dh - 2);
-    final contentViewport = Viewport(buffer, contentArea);
-
-    if (childElement != null) {
-      childElement!.paint(contentViewport, Offset.zero);
-    }
+  static String _formatDialogTitle(String title, int dialogWidth) {
+    if (title.isEmpty) return '';
+    final titleChars = title.characters;
+    if (titleChars.length <= dialogWidth - 4) return ' $title ';
+    final cutLen = dialogWidth - 7;
+    if (cutLen <= 0) return '';
+    return ' ${titleChars.take(cutLen)}... ';
   }
 }
 

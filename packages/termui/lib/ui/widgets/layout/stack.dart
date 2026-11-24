@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:termui/src/element_children.dart';
 import 'package:termui/termui.dart';
 
@@ -67,133 +69,124 @@ class StackElement extends Element {
 
   @override
   Size performLayout(BoxConstraints constraints) {
+    final (hasNonPositioned, maxW, maxH) = _layoutNonPositionedChildren(
+      constraints,
+    );
+    final resolvedSize = _resolveStackSize(
+      constraints,
+      hasNonPositioned,
+      maxW,
+      maxH,
+    );
+
+    for (final childEl in childElements) {
+      if (childEl.widget case final Positioned positioned) {
+        _layoutPositionedChild(childEl, positioned, resolvedSize);
+      }
+    }
+
+    return resolvedSize;
+  }
+
+  (bool, int, int) _layoutNonPositionedChildren(BoxConstraints constraints) {
     var maxW = 0;
     var maxH = 0;
     var hasNonPositioned = false;
-
-    // 1. First pass: lay out non-positioned children to determine the Stack's size.
     final childConstraints = BoxConstraints(
       minWidth: 0,
-      maxWidth: constraints.maxWidth < 0 ? 0 : constraints.maxWidth,
+      maxWidth: max(0, constraints.maxWidth),
       minHeight: 0,
-      maxHeight: constraints.maxHeight < 0 ? 0 : constraints.maxHeight,
+      maxHeight: max(0, constraints.maxHeight),
     );
-    for (var i = 0; i < childElements.length; i++) {
-      final childEl = childElements[i];
-      final childWidget = childEl.widget;
-
-      if (childWidget is! Positioned) {
-        hasNonPositioned = true;
-        childEl.relativeOffset = Offset.zero;
-        final childSize = childEl.layout(childConstraints);
-        if (childSize.width > maxW) maxW = childSize.width;
-        if (childSize.height > maxH) maxH = childSize.height;
-      }
+    for (final childEl in childElements) {
+      if (childEl.widget is Positioned) continue;
+      hasNonPositioned = true;
+      childEl.relativeOffset = Offset.zero;
+      final childSize = childEl.layout(childConstraints);
+      maxW = max(maxW, childSize.width);
+      maxH = max(maxH, childSize.height);
     }
+    return (hasNonPositioned, maxW, maxH);
+  }
 
-    // 2. Resolve the final size of the Stack.
-    int resolvedW;
-    int resolvedH;
+  static Size _resolveStackSize(
+    BoxConstraints constraints,
+    bool hasNonPositioned,
+    int maxW,
+    int maxH,
+  ) {
     if (hasNonPositioned) {
-      final resolvedSize = constraints.constrain(Size(maxW, maxH));
-      resolvedW = resolvedSize.width;
-      resolvedH = resolvedSize.height;
-    } else {
-      resolvedW = constraints.maxWidth == BoxConstraints.infinity
-          ? constraints.minWidth
-          : constraints.maxWidth;
-      resolvedH = constraints.maxHeight == BoxConstraints.infinity
-          ? constraints.minHeight
-          : constraints.maxHeight;
+      return constraints.constrain(Size(maxW, maxH));
     }
-
-    // 3. Second pass: lay out and position Positioned children using the resolved Stack size.
-    for (var i = 0; i < childElements.length; i++) {
-      final childEl = childElements[i];
-      final childWidget = childEl.widget;
-
-      if (childWidget is Positioned) {
-        final (minChildW, maxChildW, childX) = switch ((
-          childWidget.isCentered,
-          childWidget.left,
-          childWidget.right,
-          childWidget.width,
-        )) {
-          (true, _, _, int w) => (w, w, null as int?),
-          (true, _, _, null) => (0, resolvedW, null as int?),
-          (false, int left, int right, _) => (
-            (resolvedW - left - right) < 0 ? 0 : resolvedW - left - right,
-            (resolvedW - left - right) < 0 ? 0 : resolvedW - left - right,
-            left as int?,
-          ),
-          (false, int left, null, int w) => (w, w, left as int?),
-          (false, null, int right, int w) => (w, w, resolvedW - right - w),
-          (false, int left, null, null) => (
-            0,
-            (resolvedW - left) < 0 ? 0 : resolvedW - left,
-            left as int?,
-          ),
-          (false, null, int right, null) => (
-            0,
-            (resolvedW - right) < 0 ? 0 : resolvedW - right,
-            null as int?,
-          ),
-          (false, null, null, int w) => (w, w, 0 as int?),
-          (false, null, null, null) => (0, resolvedW, 0 as int?),
-        };
-
-        final (minChildH, maxChildH, childY) = switch ((
-          childWidget.isCentered,
-          childWidget.top,
-          childWidget.bottom,
-          childWidget.height,
-        )) {
-          (true, _, _, int h) => (h, h, null as int?),
-          (true, _, _, null) => (0, resolvedH, null as int?),
-          (false, int top, int bottom, _) => (
-            (resolvedH - top - bottom) < 0 ? 0 : resolvedH - top - bottom,
-            (resolvedH - top - bottom) < 0 ? 0 : resolvedH - top - bottom,
-            top as int?,
-          ),
-          (false, int top, null, int h) => (h, h, top as int?),
-          (false, null, int bottom, int h) => (h, h, resolvedH - bottom - h),
-          (false, int top, null, null) => (
-            0,
-            (resolvedH - top) < 0 ? 0 : resolvedH - top,
-            top as int?,
-          ),
-          (false, null, int bottom, null) => (
-            0,
-            (resolvedH - bottom) < 0 ? 0 : resolvedH - bottom,
-            null as int?,
-          ),
-          (false, null, null, int h) => (h, h, 0 as int?),
-          (false, null, null, null) => (0, resolvedH, 0 as int?),
-        };
-
-        final childSize = childEl.layout(
-          BoxConstraints(
-            minWidth: minChildW,
-            maxWidth: maxChildW,
-            minHeight: minChildH,
-            maxHeight: maxChildH,
-          ),
-        );
-
-        final finalX = childWidget.isCentered
-            ? (resolvedW - childSize.width) ~/ 2
-            : (childX ?? resolvedW - childWidget.right! - childSize.width);
-
-        final finalY = childWidget.isCentered
-            ? (resolvedH - childSize.height) ~/ 2
-            : (childY ?? resolvedH - childWidget.bottom! - childSize.height);
-
-        childEl.relativeOffset = Offset(finalX, finalY);
-      }
-    }
-
+    final resolvedW = constraints.maxWidth == BoxConstraints.infinity
+        ? constraints.minWidth
+        : constraints.maxWidth;
+    final resolvedH = constraints.maxHeight == BoxConstraints.infinity
+        ? constraints.minHeight
+        : constraints.maxHeight;
     return Size(resolvedW, resolvedH);
   }
+
+  static void _layoutPositionedChild(
+    Element childEl,
+    Positioned positioned,
+    Size stackSize,
+  ) {
+    final (minChildW, maxChildW, childX) = _resolvePositionedAxis(
+      isCentered: positioned.isCentered,
+      start: positioned.left,
+      end: positioned.right,
+      extent: positioned.width,
+      containerSize: stackSize.width,
+    );
+    final (minChildH, maxChildH, childY) = _resolvePositionedAxis(
+      isCentered: positioned.isCentered,
+      start: positioned.top,
+      end: positioned.bottom,
+      extent: positioned.height,
+      containerSize: stackSize.height,
+    );
+
+    final childSize = childEl.layout(
+      BoxConstraints(
+        minWidth: minChildW,
+        maxWidth: maxChildW,
+        minHeight: minChildH,
+        maxHeight: maxChildH,
+      ),
+    );
+
+    final finalX = positioned.isCentered
+        ? (stackSize.width - childSize.width) ~/ 2
+        : (childX ?? stackSize.width - positioned.right! - childSize.width);
+    final finalY = positioned.isCentered
+        ? (stackSize.height - childSize.height) ~/ 2
+        : (childY ?? stackSize.height - positioned.bottom! - childSize.height);
+
+    childEl.relativeOffset = Offset(finalX, finalY);
+  }
+
+  static (int, int, int?) _resolvePositionedAxis({
+    required bool isCentered,
+    required int? start,
+    required int? end,
+    required int? extent,
+    required int containerSize,
+  }) => switch ((isCentered, start, end, extent)) {
+    (true, _, _, int v) => (v, v, null),
+    (true, _, _, null) => (0, containerSize, null),
+    (false, int s, int e, _) => (
+      max(0, containerSize - s - e),
+      max(0, containerSize - s - e),
+      s,
+    ),
+    (false, int s, null, int v) => (v, v, s),
+    (false, null, int e, int v) => (v, v, containerSize - e - v),
+    (false, int s, null, null) => (0, max(0, containerSize - s), s),
+    (false, null, int e, null) => (0, max(0, containerSize - e), null),
+    (false, null, null, int v) => (v, v, 0),
+    (false, null, null, null) => (0, containerSize, 0),
+  };
 
   @override
   void performPaint(Buffer buffer, Offset offset) {

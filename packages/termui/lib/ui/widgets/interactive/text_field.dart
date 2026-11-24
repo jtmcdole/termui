@@ -704,168 +704,44 @@ class TextField extends StatefulWidget implements Focusable {
   }
 
   void _executeAction(TextFieldAction action) {
-    final lines = List<String>.from(controller.value.lines);
-    var lineIdx = cursorLine;
-    var colIdx = cursorColumn;
-    final chars = lines[lineIdx].characters;
-
-    switch (action) {
-      case TextFieldAction.moveLeft:
-        if (colIdx > 0) {
-          colIdx--;
-        } else if (lineIdx > 0 && multiline) {
-          lineIdx--;
-          colIdx = lines[lineIdx].characters.length;
-        }
-        break;
-
-      case TextFieldAction.moveRight:
-        if (colIdx < chars.length) {
-          colIdx++;
-        } else if (lineIdx < lines.length - 1 && multiline) {
-          lineIdx++;
-          colIdx = 0;
-        }
-        break;
-
-      case TextFieldAction.moveUp:
-        if (lineIdx > 0 && multiline) {
-          lineIdx--;
-          colIdx = min(colIdx, lines[lineIdx].characters.length);
-        }
-        break;
-
-      case TextFieldAction.moveDown:
-        if (lineIdx < lines.length - 1 && multiline) {
-          lineIdx++;
-          colIdx = min(colIdx, lines[lineIdx].characters.length);
-        }
-        break;
-
-      case TextFieldAction.moveWordLeft:
-        if (colIdx > 0) {
-          colIdx = _findWordBoundaryBackward(lines[lineIdx], colIdx);
-        } else if (lineIdx > 0 && multiline) {
-          lineIdx--;
-          colIdx = lines[lineIdx].characters.length;
-        }
-        break;
-
-      case TextFieldAction.moveWordRight:
-        if (colIdx < chars.length) {
-          colIdx = _findWordBoundaryForward(lines[lineIdx], colIdx);
-        } else if (lineIdx < lines.length - 1 && multiline) {
-          lineIdx++;
-          colIdx = 0;
-        }
-        break;
-
-      case TextFieldAction.moveToLineStart:
-        colIdx = 0;
-        break;
-
-      case TextFieldAction.moveToLineEnd:
-        colIdx = chars.length;
-        break;
-
-      case TextFieldAction.deleteLeft:
-        if (colIdx > 0) {
-          controller.saveStateToHistory();
-          lines[lineIdx] =
-              '${chars.take(colIdx - 1).string}${chars.skip(colIdx).string}';
-          colIdx--;
-        } else if (lineIdx > 0 && multiline) {
-          controller.saveStateToHistory();
-          final prevLine = lines[lineIdx - 1];
-          final currentLine = lines[lineIdx];
-          lines[lineIdx - 1] = prevLine + currentLine;
-          colIdx = prevLine.characters.length;
-          lines.removeAt(lineIdx);
-          lineIdx--;
-        }
-        break;
-
-      case TextFieldAction.deleteRight:
-        if (colIdx < chars.length) {
-          controller.saveStateToHistory();
-          lines[lineIdx] =
-              '${chars.take(colIdx).string}${chars.skip(colIdx + 1).string}';
-        } else if (lineIdx < lines.length - 1 && multiline) {
-          controller.saveStateToHistory();
-          final currentLine = lines[lineIdx];
-          final nextLine = lines[lineIdx + 1];
-          lines[lineIdx] = currentLine + nextLine;
-          lines.removeAt(lineIdx + 1);
-        }
-        break;
-
-      case TextFieldAction.deleteWordLeft:
-        if (colIdx > 0) {
-          final start = _findWordBoundaryBackward(lines[lineIdx], colIdx);
-          if (start < colIdx) {
-            controller.saveStateToHistory();
-            lines[lineIdx] =
-                '${chars.take(start).string}${chars.skip(colIdx).string}';
-            colIdx = start;
-          }
-        } else if (lineIdx > 0 && multiline) {
-          controller.saveStateToHistory();
-          final prevLine = lines[lineIdx - 1];
-          final currentLine = lines[lineIdx];
-          lines[lineIdx - 1] = prevLine + currentLine;
-          colIdx = prevLine.characters.length;
-          lines.removeAt(lineIdx);
-          lineIdx--;
-        }
-        break;
-
-      case TextFieldAction.deleteWordRight:
-        if (colIdx < chars.length) {
-          final end = _findWordBoundaryForward(lines[lineIdx], colIdx);
-          if (end > colIdx) {
-            controller.saveStateToHistory();
-            final prefix = chars.take(colIdx).toString();
-            final suffix = chars.skip(end).toString();
-            lines[lineIdx] = prefix + suffix;
-          }
-        } else if (lineIdx < lines.length - 1 && multiline) {
-          controller.saveStateToHistory();
-          final currentLine = lines[lineIdx];
-          final nextLine = lines[lineIdx + 1];
-          lines[lineIdx] = currentLine + nextLine;
-          lines.removeAt(lineIdx + 1);
-        }
-        break;
-
-      case TextFieldAction.deleteToLineStart:
-        if (colIdx > 0) {
-          controller.saveStateToHistory();
-          lines[lineIdx] = chars.skip(colIdx).toString();
-          colIdx = 0;
-        }
-        break;
-
-      case TextFieldAction.deleteToLineEnd:
-        if (colIdx < chars.length) {
-          controller.saveStateToHistory();
-          lines[lineIdx] = chars.take(colIdx).toString();
-        } else if (lineIdx < lines.length - 1 && multiline) {
-          controller.saveStateToHistory();
-          final currentLine = lines[lineIdx];
-          final nextLine = lines[lineIdx + 1];
-          lines[lineIdx] = currentLine + nextLine;
-          lines.removeAt(lineIdx + 1);
-        }
-        break;
-
-      case TextFieldAction.undo:
-        controller.undo();
-        return;
-
-      case TextFieldAction.redo:
-        controller.redo();
-        return;
+    if (action == TextFieldAction.undo) {
+      controller.undo();
+      return;
     }
+    if (action == TextFieldAction.redo) {
+      controller.redo();
+      return;
+    }
+
+    final lines = List<String>.from(controller.value.lines);
+    final (lineIdx, colIdx) = switch (action) {
+      TextFieldAction.moveLeft ||
+      TextFieldAction.moveRight ||
+      TextFieldAction.moveUp ||
+      TextFieldAction.moveDown ||
+      TextFieldAction.moveWordLeft ||
+      TextFieldAction.moveWordRight ||
+      TextFieldAction.moveToLineStart ||
+      TextFieldAction.moveToLineEnd => _applyMoveAction(
+        action,
+        lines,
+        cursorLine,
+        cursorColumn,
+      ),
+      TextFieldAction.deleteLeft ||
+      TextFieldAction.deleteRight ||
+      TextFieldAction.deleteWordLeft ||
+      TextFieldAction.deleteWordRight ||
+      TextFieldAction.deleteToLineStart ||
+      TextFieldAction.deleteToLineEnd => _applyDeleteAction(
+        action,
+        lines,
+        cursorLine,
+        cursorColumn,
+      ),
+      TextFieldAction.undo ||
+      TextFieldAction.redo => (cursorLine, cursorColumn),
+    };
 
     final nextText = lines.join('\n');
     final nextOffset = _getOffsetFromLineColumn(nextText, lineIdx, colIdx);
@@ -878,6 +754,242 @@ class TextField extends StatefulWidget implements Focusable {
         cursorColumn: colIdx,
       ),
     );
+  }
+
+  (int, int) _applyMoveAction(
+    TextFieldAction action,
+    List<String> lines,
+    int lineIdx,
+    int colIdx,
+  ) {
+    final lineLen = lines[lineIdx].characters.length;
+    return switch (action) {
+      TextFieldAction.moveLeft => _moveBackward(lines, lineIdx, colIdx, false),
+      TextFieldAction.moveWordLeft => _moveBackward(
+        lines,
+        lineIdx,
+        colIdx,
+        true,
+      ),
+      TextFieldAction.moveRight => _moveForward(
+        lines,
+        lineIdx,
+        colIdx,
+        lineLen,
+        false,
+      ),
+      TextFieldAction.moveWordRight => _moveForward(
+        lines,
+        lineIdx,
+        colIdx,
+        lineLen,
+        true,
+      ),
+      TextFieldAction.moveUp => _moveVertical(lines, lineIdx, colIdx, -1),
+      TextFieldAction.moveDown => _moveVertical(lines, lineIdx, colIdx, 1),
+      TextFieldAction.moveToLineStart => (lineIdx, 0),
+      TextFieldAction.moveToLineEnd => (lineIdx, lineLen),
+      _ => (lineIdx, colIdx),
+    };
+  }
+
+  (int, int) _moveBackward(
+    List<String> lines,
+    int lineIdx,
+    int colIdx,
+    bool byWord,
+  ) {
+    if (colIdx > 0) {
+      final nextCol = byWord
+          ? _findWordBoundaryBackward(lines[lineIdx], colIdx)
+          : colIdx - 1;
+      return (lineIdx, nextCol);
+    }
+    if (lineIdx > 0 && multiline) {
+      return (lineIdx - 1, lines[lineIdx - 1].characters.length);
+    }
+    return (lineIdx, colIdx);
+  }
+
+  (int, int) _moveForward(
+    List<String> lines,
+    int lineIdx,
+    int colIdx,
+    int lineLen,
+    bool byWord,
+  ) {
+    if (colIdx < lineLen) {
+      final nextCol = byWord
+          ? _findWordBoundaryForward(lines[lineIdx], colIdx)
+          : colIdx + 1;
+      return (lineIdx, nextCol);
+    }
+    if (lineIdx < lines.length - 1 && multiline) return (lineIdx + 1, 0);
+    return (lineIdx, colIdx);
+  }
+
+  (int, int) _moveVertical(
+    List<String> lines,
+    int lineIdx,
+    int colIdx,
+    int delta,
+  ) {
+    final target = lineIdx + delta;
+    if (!multiline || target < 0 || target >= lines.length) {
+      return (lineIdx, colIdx);
+    }
+    return (target, min(colIdx, lines[target].characters.length));
+  }
+
+  (int, int) _applyDeleteAction(
+    TextFieldAction action,
+    List<String> lines,
+    int lineIdx,
+    int colIdx,
+  ) {
+    final chars = lines[lineIdx].characters;
+    return switch (action) {
+      TextFieldAction.deleteLeft => _deleteLeft(lines, chars, lineIdx, colIdx),
+      TextFieldAction.deleteWordLeft => _deleteWordLeft(
+        lines,
+        chars,
+        lineIdx,
+        colIdx,
+      ),
+      TextFieldAction.deleteToLineStart => _deleteToLineStart(
+        lines,
+        chars,
+        lineIdx,
+        colIdx,
+      ),
+      TextFieldAction.deleteRight => _deleteRight(
+        lines,
+        chars,
+        lineIdx,
+        colIdx,
+      ),
+      TextFieldAction.deleteWordRight => _deleteWordRight(
+        lines,
+        chars,
+        lineIdx,
+        colIdx,
+      ),
+      TextFieldAction.deleteToLineEnd => _deleteToLineEnd(
+        lines,
+        chars,
+        lineIdx,
+        colIdx,
+      ),
+      _ => (lineIdx, colIdx),
+    };
+  }
+
+  (int, int) _deleteLeft(
+    List<String> lines,
+    Characters chars,
+    int lineIdx,
+    int colIdx,
+  ) {
+    if (colIdx <= 0) return _mergeWithPreviousLine(lines, lineIdx, colIdx);
+    controller.saveStateToHistory();
+    lines[lineIdx] =
+        '${chars.take(colIdx - 1).string}${chars.skip(colIdx).string}';
+    return (lineIdx, colIdx - 1);
+  }
+
+  (int, int) _deleteWordLeft(
+    List<String> lines,
+    Characters chars,
+    int lineIdx,
+    int colIdx,
+  ) {
+    if (colIdx <= 0) return _mergeWithPreviousLine(lines, lineIdx, colIdx);
+    final start = _findWordBoundaryBackward(lines[lineIdx], colIdx);
+    if (start >= colIdx) return (lineIdx, colIdx);
+    controller.saveStateToHistory();
+    lines[lineIdx] = '${chars.take(start).string}${chars.skip(colIdx).string}';
+    return (lineIdx, start);
+  }
+
+  (int, int) _deleteToLineStart(
+    List<String> lines,
+    Characters chars,
+    int lineIdx,
+    int colIdx,
+  ) {
+    if (colIdx <= 0) return (lineIdx, colIdx);
+    controller.saveStateToHistory();
+    lines[lineIdx] = chars.skip(colIdx).toString();
+    return (lineIdx, 0);
+  }
+
+  (int, int) _deleteRight(
+    List<String> lines,
+    Characters chars,
+    int lineIdx,
+    int colIdx,
+  ) {
+    if (colIdx >= chars.length) {
+      _mergeWithNextLine(lines, lineIdx);
+      return (lineIdx, colIdx);
+    }
+    controller.saveStateToHistory();
+    lines[lineIdx] =
+        '${chars.take(colIdx).string}${chars.skip(colIdx + 1).string}';
+    return (lineIdx, colIdx);
+  }
+
+  (int, int) _deleteWordRight(
+    List<String> lines,
+    Characters chars,
+    int lineIdx,
+    int colIdx,
+  ) {
+    if (colIdx >= chars.length) {
+      _mergeWithNextLine(lines, lineIdx);
+      return (lineIdx, colIdx);
+    }
+    final end = _findWordBoundaryForward(lines[lineIdx], colIdx);
+    if (end > colIdx) {
+      controller.saveStateToHistory();
+      lines[lineIdx] = '${chars.take(colIdx).string}${chars.skip(end).string}';
+    }
+    return (lineIdx, colIdx);
+  }
+
+  (int, int) _deleteToLineEnd(
+    List<String> lines,
+    Characters chars,
+    int lineIdx,
+    int colIdx,
+  ) {
+    if (colIdx >= chars.length) {
+      _mergeWithNextLine(lines, lineIdx);
+      return (lineIdx, colIdx);
+    }
+    controller.saveStateToHistory();
+    lines[lineIdx] = chars.take(colIdx).toString();
+    return (lineIdx, colIdx);
+  }
+
+  (int, int) _mergeWithPreviousLine(
+    List<String> lines,
+    int lineIdx,
+    int colIdx,
+  ) {
+    if (lineIdx <= 0 || !multiline) return (lineIdx, colIdx);
+    controller.saveStateToHistory();
+    final prevLine = lines[lineIdx - 1];
+    lines[lineIdx - 1] = prevLine + lines[lineIdx];
+    lines.removeAt(lineIdx);
+    return (lineIdx - 1, prevLine.characters.length);
+  }
+
+  void _mergeWithNextLine(List<String> lines, int lineIdx) {
+    if (lineIdx >= lines.length - 1 || !multiline) return;
+    controller.saveStateToHistory();
+    lines[lineIdx] = lines[lineIdx] + lines[lineIdx + 1];
+    lines.removeAt(lineIdx + 1);
   }
 
   /// Adjusts the scroll offset based on the viewport height.

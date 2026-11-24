@@ -218,23 +218,37 @@ class InkwellButtonState extends State<InkwellButton>
 
     if (W <= 0 || H <= 0) return;
 
-    final bool hasFocus = focusNode.hasFocus;
-    final bool isHighlighted = hasFocus || _isHovered;
-
-    Color resolvedHighlightBg =
+    final isHighlighted = focusNode.hasFocus || _isHovered;
+    final resolvedHighlightBg =
         widget.highlightBackground ?? _computeHighlightColor(widget.color1);
-    final Color effectiveBg = isHighlighted
-        ? resolvedHighlightBg
-        : widget.color1;
-    final Color effectiveFg =
-        isHighlighted && widget.highlightForeground != null
+    final effectiveBg = isHighlighted ? resolvedHighlightBg : widget.color1;
+    final effectiveFg = isHighlighted && widget.highlightForeground != null
         ? widget.highlightForeground!
         : (widget.textStyle.foreground ?? Colors.white);
     final baseStyle = Style(background: effectiveBg);
 
-    // Clear rendering area with transparent cells first
-    for (var y = 0; y < H; y++) {
-      for (var x = 0; x < W; x++) {
+    _clearTransparentArea(buffer, W, H);
+
+    if (W < 2 || H < 2) {
+      _renderCompact(buffer, W, H, effectiveBg, effectiveFg, baseStyle);
+      return;
+    }
+
+    final bodyWidth = W - 1;
+    final bodyHeight = H - 1;
+
+    if (_isHovered && !_isPressed) {
+      _paintHoverShadow(buffer, W, H);
+    }
+
+    _paintBodyBackground(buffer, bodyWidth, bodyHeight, baseStyle);
+    paintEffects(buffer, Rect(0, 0, bodyWidth, bodyHeight), baseStyle);
+    _paintBodyText(buffer, bodyWidth, bodyHeight, baseStyle, effectiveFg);
+  }
+
+  static void _clearTransparentArea(Buffer buffer, int width, int height) {
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
         buffer.setAttributes(
           x,
           y,
@@ -245,171 +259,172 @@ class InkwellButtonState extends State<InkwellButton>
         );
       }
     }
+  }
 
-    if (W < 2 || H < 2) {
-      // Fallback for extremely small sizes
-      for (var y = 0; y < H; y++) {
-        for (var x = 0; x < W; x++) {
-          buffer.setAttributes(
-            x,
-            y,
-            char: ' ',
-            fg: 0,
-            bg: effectiveBg.argb,
-            modifiers: Modifier.none,
-          );
-        }
-      }
-
-      // Delegate overlay drawing to the animation mixin
-      paintEffects(buffer, Rect(0, 0, W, H), baseStyle);
-
-      if (widget.text.isNotEmpty) {
-        final textLen = widget.text.characters.length;
-        final startX = max(0, (W - textLen) ~/ 2);
-
-        // Ensure text contrast against possibly animated background
-        final bgArgb = buffer.getBackground(startX, max(0, (H - 1) ~/ 2));
-        final bgColor = bgArgb != 0 ? Color.argb(bgArgb) : effectiveBg;
-
-        buffer.writeString(
-          startX,
-          max(0, (H - 1) ~/ 2),
-          widget.text,
-          widget.textStyle.merge(
-            Style(background: bgColor, foreground: effectiveFg),
-          ),
-        );
-      }
-      return;
-    }
-
-    // Body is always at (0, 0) in all states
-    const int bodyX = 0;
-    const int bodyY = 0;
-    final int bodyWidth = W - 1;
-    final int bodyHeight = H - 1;
-
-    // Draw shadow if hovering (and not pressed)
-    if (_isHovered && !_isPressed) {
-      final shadowStyle = const Style(
-        foreground: Color(64, 64, 64),
-        modifiers: Modifier.dim,
-      );
-      // Rightmost column W - 1 (from row 1 to H - 2) draws Right Half-Block '▐'
-      for (var y = 1; y < H - 1; y++) {
-        buffer.setAttributes(
-          W - 1,
-          y,
-          char: '▐',
-          fg: shadowStyle.foreground?.argb ?? 0,
-          bg: shadowStyle.background?.argb ?? 0,
-          modifiers: shadowStyle.modifiers,
-        );
-      }
-      // Bottom row H - 1 (from column 1 to W - 1) draws Lower Half-Block '▄'
-      for (var x = 1; x < W; x++) {
+  void _renderCompact(
+    Buffer buffer,
+    int width,
+    int height,
+    Color effectiveBg,
+    Color effectiveFg,
+    Style baseStyle,
+  ) {
+    for (var y = 0; y < height; y++) {
+      for (var x = 0; x < width; x++) {
         buffer.setAttributes(
           x,
-          H - 1,
-          char: '▄',
-          fg: shadowStyle.foreground?.argb ?? 0,
-          bg: shadowStyle.background?.argb ?? 0,
-          modifiers: shadowStyle.modifiers,
+          y,
+          char: ' ',
+          fg: 0,
+          bg: effectiveBg.argb,
+          modifiers: Modifier.none,
         );
       }
     }
 
-    // Draw body
-    final textChars = widget.text.characters.toList();
-    final textLen = textChars.length;
-    final textY = (bodyHeight - 1) ~/ 2;
-    final textX = (bodyWidth - textLen) ~/ 2;
+    paintEffects(buffer, Rect(0, 0, width, height), baseStyle);
 
-    // Paint baseline button cells (only spaces first)
+    if (widget.text.isEmpty) return;
+    final textLen = widget.text.characters.length;
+    final startX = max(0, (width - textLen) ~/ 2);
+    final textY = max(0, (height - 1) ~/ 2);
+    final bgArgb = buffer.getBackground(startX, textY);
+    final bgColor = bgArgb != 0 ? Color.argb(bgArgb) : effectiveBg;
+
+    buffer.writeString(
+      startX,
+      textY,
+      widget.text,
+      widget.textStyle.merge(
+        Style(background: bgColor, foreground: effectiveFg),
+      ),
+    );
+  }
+
+  static void _paintHoverShadow(Buffer buffer, int width, int height) {
+    const shadowStyle = Style(
+      foreground: Color(64, 64, 64),
+      modifiers: Modifier.dim,
+    );
+    final fg = shadowStyle.foreground?.argb ?? 0;
+    final bg = shadowStyle.background?.argb ?? 0;
+    for (var y = 1; y < height - 1; y++) {
+      buffer.setAttributes(
+        width - 1,
+        y,
+        char: '▐',
+        fg: fg,
+        bg: bg,
+        modifiers: shadowStyle.modifiers,
+      );
+    }
+    for (var x = 1; x < width; x++) {
+      buffer.setAttributes(
+        x,
+        height - 1,
+        char: '▄',
+        fg: fg,
+        bg: bg,
+        modifiers: shadowStyle.modifiers,
+      );
+    }
+  }
+
+  static void _paintBodyBackground(
+    Buffer buffer,
+    int bodyWidth,
+    int bodyHeight,
+    Style baseStyle,
+  ) {
+    final fg = baseStyle.foreground?.argb ?? 0;
+    final bg = baseStyle.background?.argb ?? 0;
     for (var by = 0; by < bodyHeight; by++) {
       for (var bx = 0; bx < bodyWidth; bx++) {
         buffer.setAttributes(
-          bodyX + bx,
-          bodyY + by,
+          bx,
+          by,
           char: ' ',
-          fg: baseStyle.foreground?.argb ?? 0,
-          bg: baseStyle.background?.argb ?? 0,
+          fg: fg,
+          bg: bg,
           modifiers: baseStyle.modifiers,
         );
       }
     }
+  }
 
-    // Delegate overlay drawing to the animation mixin
-    paintEffects(buffer, Rect(bodyX, bodyY, bodyWidth, bodyHeight), baseStyle);
+  void _paintBodyText(
+    Buffer buffer,
+    int bodyWidth,
+    int bodyHeight,
+    Style baseStyle,
+    Color effectiveFg,
+  ) {
+    final textChars = widget.text.characters.toList();
+    final textY = (bodyHeight - 1) ~/ 2;
+    if (textY < 0 || textY >= bodyHeight) return;
 
-    // Precalculate foreground styling and luminance outside the loop
-    Style baseResolvedTextStyle = widget.textStyle.merge(
+    final textX = (bodyWidth - textChars.length) ~/ 2;
+    final baseResolvedTextStyle = widget.textStyle.merge(
       Style(foreground: effectiveFg),
     );
-    double? baseFgLuminance;
-    if (baseResolvedTextStyle.foreground != null) {
-      final fgColor = baseResolvedTextStyle.foreground!;
-      baseFgLuminance =
-          0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
-    }
+    final fgColor = baseResolvedTextStyle.foreground;
+    final baseFgLuminance = fgColor == null
+        ? null
+        : 0.299 * fgColor.r + 0.587 * fgColor.g + 0.114 * fgColor.b;
 
-    // Now draw the text on top, adjusting foreground for contrast
-    for (var i = 0; i < textLen; i++) {
+    for (var i = 0; i < textChars.length; i++) {
       final bx = textX + i;
-      final by = textY;
+      if (bx < 0 || bx >= bodyWidth) continue;
 
-      String char = textChars[i];
-      if (bx >= 0 && bx < bodyWidth && by >= 0 && by < bodyHeight) {
-        final bgArgb = buffer.getBackground(bodyX + bx, bodyY + by);
-        final bgR = bgArgb != 0
-            ? (bgArgb >> 16) & 0xFF
-            : (baseStyle.background?.r ?? 0);
-        final bgG = bgArgb != 0
-            ? (bgArgb >> 8) & 0xFF
-            : (baseStyle.background?.g ?? 0);
-        final bgB = bgArgb != 0
-            ? bgArgb & 0xFF
-            : (baseStyle.background?.b ?? 0);
+      final bgArgb = buffer.getBackground(bx, textY);
+      final resolvedTextStyle = _resolveContrastTextStyle(
+        baseResolvedTextStyle,
+        baseFgLuminance,
+        bgArgb,
+        baseStyle.background,
+      );
 
-        Style resolvedTextStyle = baseResolvedTextStyle;
-        if (baseFgLuminance != null) {
-          final bgLuminance = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
-          // Check if contrast is too low (e.g. both dark or both light)
-          final bothDark = baseFgLuminance < 110 && bgLuminance < 110;
-          final bothLight = baseFgLuminance >= 110 && bgLuminance >= 110;
-          if (bothDark) {
-            final fg =
-                (widget.color1.r < 50 &&
-                    widget.color1.g < 50 &&
-                    widget.color1.b < 50)
-                ? Colors.white
-                : widget.color1;
-            resolvedTextStyle = widget.textStyle.merge(Style(foreground: fg));
-          } else if (bothLight) {
-            resolvedTextStyle = widget.textStyle.merge(
-              const Style(foreground: Colors.black),
-            );
-          }
-        }
-
-        final oldModifiers = buffer.getModifiers(bodyX + bx, bodyY + by);
-        var mergedModifiers = oldModifiers | resolvedTextStyle.modifiers;
-        if ((resolvedTextStyle.modifiers & Modifier.transparent) == 0) {
-          mergedModifiers &= ~Modifier.transparent;
-        }
-        final oldFg = buffer.getForeground(bodyX + bx, bodyY + by);
-
-        buffer.setAttributes(
-          bodyX + bx,
-          bodyY + by,
-          char: char,
-          fg: resolvedTextStyle.foreground?.argb ?? oldFg,
-          bg: resolvedTextStyle.background?.argb ?? bgArgb,
-          modifiers: mergedModifiers,
-        );
+      final oldModifiers = buffer.getModifiers(bx, textY);
+      var mergedModifiers = oldModifiers | resolvedTextStyle.modifiers;
+      if ((resolvedTextStyle.modifiers & Modifier.transparent) == 0) {
+        mergedModifiers &= ~Modifier.transparent;
       }
+      final oldFg = buffer.getForeground(bx, textY);
+
+      buffer.setAttributes(
+        bx,
+        textY,
+        char: textChars[i],
+        fg: resolvedTextStyle.foreground?.argb ?? oldFg,
+        bg: resolvedTextStyle.background?.argb ?? bgArgb,
+        modifiers: mergedModifiers,
+      );
     }
+  }
+
+  Style _resolveContrastTextStyle(
+    Style baseResolvedTextStyle,
+    double? baseFgLuminance,
+    int bgArgb,
+    Color? fallbackBg,
+  ) {
+    if (baseFgLuminance == null) return baseResolvedTextStyle;
+
+    final bgR = bgArgb != 0 ? (bgArgb >> 16) & 0xFF : (fallbackBg?.r ?? 0);
+    final bgG = bgArgb != 0 ? (bgArgb >> 8) & 0xFF : (fallbackBg?.g ?? 0);
+    final bgB = bgArgb != 0 ? bgArgb & 0xFF : (fallbackBg?.b ?? 0);
+    final bgLuminance = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
+
+    if (baseFgLuminance < 110 && bgLuminance < 110) {
+      final isDarkColor1 =
+          widget.color1.r < 50 && widget.color1.g < 50 && widget.color1.b < 50;
+      final fg = isDarkColor1 ? Colors.white : widget.color1;
+      return widget.textStyle.merge(Style(foreground: fg));
+    }
+    if (baseFgLuminance >= 110 && bgLuminance >= 110) {
+      return widget.textStyle.merge(const Style(foreground: Colors.black));
+    }
+    return baseResolvedTextStyle;
   }
 
   @override

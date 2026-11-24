@@ -138,47 +138,45 @@ class TableElement extends Element {
   @override
   void rebuild() {
     final table = widget as Table;
-    // Reconcile cell elements list
+    final colCount = table.headers.length;
     while (cellElements.length < table.rows.length) {
-      cellElements.add(
-        List.filled(table.headers.length, null, growable: false),
-      );
+      cellElements.add(List.filled(colCount, null, growable: false));
     }
     while (cellElements.length > table.rows.length) {
-      final removed = cellElements.removeLast();
-      for (final el in removed) {
-        el?.unmount();
-      }
+      _unmountRow(cellElements.removeLast());
     }
 
     for (var r = 0; r < table.rows.length; r++) {
-      final rowData = table.rows[r];
-      if (cellElements[r].length != table.headers.length) {
-        for (final el in cellElements[r]) {
-          el?.unmount();
-        }
-        cellElements[r] = List.filled(
-          table.headers.length,
-          null,
-          growable: false,
-        );
-      }
-      for (var c = 0; c < table.headers.length; c++) {
-        final cellData = c < rowData.length ? rowData[c] : '';
-        if (cellData case Widget _) {
-          Element? cellEl = cellElements[r][c];
-          if (cellEl != null && Widget.canUpdate(cellEl.widget, cellData)) {
-            cellEl.update(cellData);
-          } else {
-            cellEl?.unmount();
-            cellEl = cellData.createElement();
-            cellEl.mount(this);
-            cellElements[r][c] = cellEl;
-          }
+      _reconcileRow(r, table.rows[r], colCount);
+    }
+  }
+
+  static void _unmountRow(List<Element?> row) {
+    for (final el in row) {
+      el?.unmount();
+    }
+  }
+
+  void _reconcileRow(int rowIdx, List<Object?> rowData, int colCount) {
+    if (cellElements[rowIdx].length != colCount) {
+      _unmountRow(cellElements[rowIdx]);
+      cellElements[rowIdx] = List.filled(colCount, null, growable: false);
+    }
+    for (var c = 0; c < colCount; c++) {
+      final cellData = c < rowData.length ? rowData[c] : '';
+      if (cellData case Widget _) {
+        final existing = cellElements[rowIdx][c];
+        if (existing != null && Widget.canUpdate(existing.widget, cellData)) {
+          existing.update(cellData);
         } else {
-          cellElements[r][c]?.unmount();
-          cellElements[r][c] = null;
+          existing?.unmount();
+          final created = cellData.createElement();
+          created.mount(this);
+          cellElements[rowIdx][c] = created;
         }
+      } else {
+        cellElements[rowIdx][c]?.unmount();
+        cellElements[rowIdx][c] = null;
       }
     }
   }
@@ -243,101 +241,88 @@ class TableElement extends Element {
       return;
     }
 
-    // 1. Render Headers
-    final headerSb = StringBuffer();
-    for (var i = 0; i < table.headers.length; i++) {
-      final width = resolvedColumnWidths[i];
-      final text = table.headers[i];
-      final padded = padOrTruncate(text, width);
-      headerSb.write(padded);
-      if (i < table.headers.length - 1) headerSb.write(' ');
-    }
+    _paintHeader(buffer, offset, table, w);
+    buffer.writeString(offset.dx, offset.dy + 1, '─' * w, table.borderStyle);
 
-    final int columnsTotalWidth =
-        resolvedColumnWidths.fold<int>(0, (prev, val) => prev + val) +
-        (table.headers.isNotEmpty ? table.headers.length - 1 : 0);
-
-    String headerStr;
-    if (columnsTotalWidth <= w) {
-      if (columnsTotalWidth < w) {
-        headerSb.write(' ' * (w - columnsTotalWidth));
-      }
-      headerStr = headerSb.toString();
-    } else {
-      headerStr = padOrTruncate(headerSb.toString(), w);
-    }
-    buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
-
-    // 2. Render Header Divider Line
-    final dividerChar = '─';
-    final divider = dividerChar * w;
-    buffer.writeString(offset.dx, offset.dy + 1, divider, table.borderStyle);
-
-    // 3. Render Rows
     final usableHeight = h - 2;
     for (var r = 0; r < usableHeight; r++) {
       final rowIdx = table.scrollOffset + r;
       if (rowIdx >= table.rows.length) break;
+      _paintRow(buffer, offset, table, rowIdx, offset.dy + 2 + r, w);
+    }
+  }
 
-      final rowData = table.rows[rowIdx];
-      final isSelected = rowIdx == table.selectedRowIndex;
-      final currentStyle = isSelected ? table.selectedRowStyle : table.rowStyle;
+  void _paintHeader(Buffer buffer, Offset offset, Table table, int width) {
+    final headerSb = StringBuffer();
+    for (var i = 0; i < table.headers.length; i++) {
+      headerSb.write(padOrTruncate(table.headers[i], resolvedColumnWidths[i]));
+      if (i < table.headers.length - 1) headerSb.write(' ');
+    }
 
-      int startX = 0;
-      for (var c = 0; c < table.headers.length; c++) {
-        final colWidth = resolvedColumnWidths[c];
-        final cellData = c < rowData.length ? rowData[c] : '';
-        final cellStartX = columnXOffsets[c];
+    final columnsTotalWidth =
+        resolvedColumnWidths.fold<int>(0, (prev, val) => prev + val) +
+        (table.headers.length - 1);
 
-        final cellRect = Rect(
-          offset.dx + cellStartX,
-          offset.dy + 2 + r,
-          colWidth,
-          1,
+    final headerStr = columnsTotalWidth <= width
+        ? '${headerSb.toString()}${' ' * (width - columnsTotalWidth)}'
+        : padOrTruncate(headerSb.toString(), width);
+    buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
+  }
+
+  void _paintRow(
+    Buffer buffer,
+    Offset offset,
+    Table table,
+    int rowIdx,
+    int targetY,
+    int width,
+  ) {
+    final rowData = table.rows[rowIdx];
+    final currentStyle = rowIdx == table.selectedRowIndex
+        ? table.selectedRowStyle
+        : table.rowStyle;
+
+    var startX = 0;
+    for (var c = 0; c < table.headers.length; c++) {
+      final colWidth = resolvedColumnWidths[c];
+      final cellData = c < rowData.length ? rowData[c] : '';
+      final cellStartX = columnXOffsets[c];
+      final vp = Viewport(
+        buffer,
+        Rect(offset.dx + cellStartX, targetY, colWidth, 1),
+      );
+
+      if (cellData case Widget _) {
+        vp.fillAttributes(
+          char: ' ',
+          fg: currentStyle.foreground?.argb ?? 0,
+          bg: currentStyle.background?.argb ?? 0,
+          modifiers: currentStyle.modifiers,
         );
-        final vp = Viewport(buffer, cellRect);
-
-        if (cellData case Widget _) {
-          vp.fillAttributes(
-            char: ' ',
-            fg: currentStyle.foreground?.argb ?? 0,
-            bg: currentStyle.background?.argb ?? 0,
-            modifiers: currentStyle.modifiers,
-          );
-          final cellEl = cellElements[rowIdx][c];
-          if (cellEl != null) {
-            cellEl.paint(vp, Offset.zero);
-          }
-        } else {
-          final cellText = '$cellData';
-          final padded = padOrTruncate(cellText, colWidth);
-          vp.writeString(0, 0, padded, currentStyle);
-        }
-
-        if (c < table.headers.length - 1) {
-          final sepX = cellStartX + colWidth;
-          if (sepX < w) {
-            buffer.writeString(
-              offset.dx + sepX,
-              offset.dy + 2 + r,
-              ' ',
-              currentStyle,
-            );
-          }
-        }
-
-        startX += colWidth + 1;
-      }
-
-      if (startX < w) {
-        final remainder = w - startX;
-        buffer.writeString(
-          offset.dx + startX,
-          offset.dy + 2 + r,
-          ' ' * remainder,
+        cellElements[rowIdx][c]?.paint(vp, Offset.zero);
+      } else {
+        vp.writeString(
+          0,
+          0,
+          padOrTruncate('$cellData', colWidth),
           currentStyle,
         );
       }
+
+      final sepX = cellStartX + colWidth;
+      if (c < table.headers.length - 1 && sepX < width) {
+        buffer.writeString(offset.dx + sepX, targetY, ' ', currentStyle);
+      }
+      startX += colWidth + 1;
+    }
+
+    if (startX < width) {
+      buffer.writeString(
+        offset.dx + startX,
+        targetY,
+        ' ' * (width - startX),
+        currentStyle,
+      );
     }
   }
 }
