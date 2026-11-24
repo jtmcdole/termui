@@ -41,6 +41,8 @@ jobs:
             .github/actions/detect-changes/
             .github/actions/setup-soloud/
             .github/workflows/apps.yml
+            .github/workflows/release-fterm.yml
+            utils/package_fterm_web.sh
             apps/
             packages/pty2/
             packages/termui/
@@ -161,7 +163,7 @@ jobs:
   apps-gate:
     name: Apps
     needs: [changes, test-apps]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -169,6 +171,7 @@ jobs:
         shell: bash
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_RUN: ${{ needs.changes.outputs.run }}
           TEST_RESULT: ${{ needs.test-apps.result }}
         run: |
           set -euo pipefail
@@ -178,8 +181,13 @@ jobs:
             exit 1
           fi
 
-          if [ "$TEST_RESULT" != "success" ] && [ "$TEST_RESULT" != "skipped" ]; then
-            echo "::error::test-apps job ended with status: $TEST_RESULT"
+          if [ "$TEST_RESULT" = "skipped" ] && [ "$CHANGES_RUN" = "false" ]; then
+            echo "Apps gate passed (changes=$CHANGES_RESULT, run=$CHANGES_RUN, test-apps=$TEST_RESULT)."
+            exit 0
+          fi
+
+          if [ "$TEST_RESULT" != "success" ]; then
+            echo "::error::test-apps job ended with status: $TEST_RESULT (changes.run='$CHANGES_RUN')"
             exit 1
           fi
 
