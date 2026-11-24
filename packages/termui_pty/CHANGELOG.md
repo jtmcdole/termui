@@ -1,3 +1,9 @@
+## 0.16.0
+
+> Note: This release has breaking changes.
+
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
 ## 0.15.2
 
  - Update a dependency to the latest release.

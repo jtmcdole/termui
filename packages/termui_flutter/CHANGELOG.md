@@ -1,3 +1,11 @@
+## 0.16.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FIX**(termui_flutter): ignore hidden cursor moves in shader cursor tracking.
+ - **BREAKING** **FEAT**(termui_flutter): add direct flutter_gpu/WebGL2 atlas, Ghostty GLSL shim, live iMouse, and built-in presets.
+
 ## 0.15.2
 
  - **FEAT**(flutter,fterm): highlight per-row wrapped links and propagate local PTY wraps.
