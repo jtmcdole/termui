@@ -17,6 +17,8 @@ import 'package:termui_flutter/termui_flutter.dart';
 
 final class _FakeTerminalService implements TerminalService {
   final List<String> savedFiles = [];
+  final List<String> copiedTexts = [];
+  int pasteRequests = 0;
 
   @override
   Future<String?> saveScreenshot(String basename, Uint8List bytes) async {
@@ -25,10 +27,15 @@ final class _FakeTerminalService implements TerminalService {
   }
 
   @override
-  Future<void> setClipboard(String text) async {}
+  Future<void> setClipboard(String text) async {
+    copiedTexts.add(text);
+  }
 
   @override
-  Future<String?> getClipboard() async => 'clip';
+  Future<String?> getClipboard() async {
+    pasteRequests++;
+    return 'clip';
+  }
 
   @override
   Future<bool> openUrl(String url) async => true;
@@ -176,6 +183,29 @@ void main() {
     testWidgets(
       'keeps idle editing selection at offset 0 on attach and post-commit resets for Flutter Web',
       _testIdleEditingStateNonNegativeSelection,
+    );
+  });
+
+  group('TerminalMetaKeyPolicy & HostShortcutResult passthrough (#426)', () {
+    testWidgets(
+      'passThroughUnhandled ignores Ctrl+Option+Cmd+ArrowLeft across legacy & Kitty flags and suppresses orphan release after Meta up',
+      _testPassThroughUnhandledMetaAndOrphanRelease,
+    );
+    testWidgets(
+      'claimWhenKittyActive ignores Meta+ArrowLeft when flags == 0 and claims it when flags == 3',
+      _testClaimWhenKittyActiveMetaPolicy,
+    );
+    testWidgets(
+      'claimAll preserves Meta+S claiming for direct FlutterTerminal apps',
+      _testClaimAllPreservesMetaShortcutClaiming,
+    );
+    testWidgets(
+      'HostShortcutResult.passThrough bypasses built-in Cmd+V and F12 and ignores key-down and key-up',
+      _testHostShortcutPassThroughBypassesBuiltins,
+    );
+    testWidgets(
+      'built-in Cmd+C (with selection) and Cmd+V remain handled under passThroughUnhandled',
+      _testBuiltinsStillHandledUnderPassThroughUnhandled,
     );
   });
 }
@@ -1768,4 +1798,334 @@ Future<void> _testIdleEditingStateNonNegativeSelection(
   expect(fallbackStates.single['text'], equals(''));
   expect(fallbackStates.single['selectionBase'], equals(0));
   expect(fallbackStates.single['selectionExtent'], equals(0));
+}
+
+Future<void> _testPassThroughUnhandledMetaAndOrphanRelease(
+  WidgetTester tester,
+) async {
+  var kittyFlags = 0;
+  final events = <term.InputEvent>[];
+  final bubbledEvents = <KeyEvent>[];
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: Focus(
+          canRequestFocus: false,
+          onKeyEvent: (_, event) {
+            bubbledEvents.add(event);
+            return KeyEventResult.ignored;
+          },
+          child: SizedBox(
+            width: 320,
+            height: 200,
+            child: TerminalSurface(
+              buffer: Buffer(20, 8),
+              kittyKeyboardFlagsProvider: () => kittyFlags,
+              metaKeyPolicy: TerminalMetaKeyPolicy.passThroughUnhandled,
+              onInputEvent: events.add,
+            ),
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  for (final flags in const [0, 1, 3, 11]) {
+    kittyFlags = flags;
+    events.clear();
+    bubbledEvents.clear();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+    final downHandled = await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.arrowLeft,
+    );
+    // Release Meta BEFORE ArrowLeft so modifiers no longer include Meta on key-up.
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+    final upHandled = await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    expect(downHandled, isFalse, reason: 'down ignored for flags=$flags');
+    expect(upHandled, isFalse, reason: 'up ignored for flags=$flags');
+    expect(events, isEmpty, reason: '0 terminal events for flags=$flags');
+    expect(
+      bubbledEvents.where((e) => e.logicalKey == LogicalKeyboardKey.arrowLeft),
+      hasLength(2),
+      reason: 'both ArrowLeft down and up bubble for flags=$flags',
+    );
+  }
+}
+
+Future<void> _testClaimWhenKittyActiveMetaPolicy(WidgetTester tester) async {
+  var kittyFlags = 0;
+  final events = <term.KeyEvent>[];
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 320,
+          height: 200,
+          child: TerminalSurface(
+            buffer: Buffer(20, 8),
+            kittyKeyboardFlagsProvider: () => kittyFlags,
+            metaKeyPolicy: TerminalMetaKeyPolicy.claimWhenKittyActive,
+            onInputEvent: (e) {
+              if (e is term.KeyEvent) events.add(e);
+            },
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  // Legacy mode (flags == 0): Meta+ArrowLeft passes through untouched.
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  final legacyDown = await tester.sendKeyDownEvent(
+    LogicalKeyboardKey.arrowLeft,
+  );
+  final legacyUp = await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowLeft);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  await tester.pump();
+  expect(legacyDown, isFalse);
+  expect(legacyUp, isFalse);
+  expect(events, isEmpty);
+
+  // Kitty mode (flags == 3): Meta+ArrowLeft is claimed and emitted with release.
+  kittyFlags = 3;
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  final kittyDown = await tester.sendKeyDownEvent(LogicalKeyboardKey.arrowLeft);
+  final kittyUp = await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowLeft);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  await tester.pump();
+  expect(kittyDown, isTrue);
+  expect(kittyUp, isTrue);
+  expect(
+    events,
+    equals(const [
+      term.KeyEvent('left', term.KeyType.left, modifiers: {term.Modifier.meta}),
+      term.KeyEvent(
+        'left',
+        term.KeyType.left,
+        modifiers: {term.Modifier.meta},
+        eventType: term.KeyEventType.release,
+      ),
+    ]),
+  );
+
+  // Updating metaKeyPolicy via didUpdateWidget propagates to TerminalImeClient.
+  events.clear();
+  await tester.pumpWidget(
+    Directionality(
+      textDirection: TextDirection.ltr,
+      child: SizedBox(
+        width: 320,
+        height: 200,
+        child: TerminalSurface(
+          buffer: Buffer(20, 8),
+          kittyKeyboardFlagsProvider: () => kittyFlags,
+          metaKeyPolicy: TerminalMetaKeyPolicy.passThroughUnhandled,
+          onInputEvent: (e) {
+            if (e is term.KeyEvent) events.add(e);
+          },
+        ),
+      ),
+    ),
+  );
+  await tester.pump();
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  final updatedDown = await tester.sendKeyDownEvent(
+    LogicalKeyboardKey.arrowLeft,
+  );
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  final updatedUp = await tester.sendKeyUpEvent(LogicalKeyboardKey.arrowLeft);
+  await tester.pump();
+  expect(updatedDown, isFalse);
+  expect(updatedUp, isFalse);
+  expect(events, isEmpty);
+}
+
+Future<void> _testClaimAllPreservesMetaShortcutClaiming(
+  WidgetTester tester,
+) async {
+  final terminal = FlutterTerminal();
+  addTearDown(terminal.dispose);
+  final events = <term.KeyEvent>[];
+  final sub = terminal.events.listen((e) {
+    if (e is term.KeyEvent) events.add(e);
+  });
+  addTearDown(sub.cancel);
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 320,
+          height: 200,
+          child: TerminalSurface(terminal: terminal, buffer: Buffer(20, 8)),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  final downHandled = await tester.sendKeyDownEvent(
+    LogicalKeyboardKey.keyS,
+    character: 's',
+  );
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.keyS);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  await tester.pump();
+
+  expect(downHandled, isTrue);
+  expect(
+    events,
+    equals(const [
+      term.KeyEvent(
+        's',
+        term.KeyType.character,
+        modifiers: {term.Modifier.meta},
+      ),
+    ]),
+  );
+}
+
+Future<void> _testHostShortcutPassThroughBypassesBuiltins(
+  WidgetTester tester,
+) async {
+  final service = _FakeTerminalService();
+  final events = <term.InputEvent>[];
+  var kittyFlags = 3;
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 320,
+          height: 200,
+          child: TerminalSurface(
+            buffer: Buffer(20, 8),
+            service: service,
+            kittyKeyboardFlagsProvider: () => kittyFlags,
+            metaKeyPolicy: TerminalMetaKeyPolicy.claimAll,
+            onInputEvent: events.add,
+            onHostShortcut: (event, mods) {
+              if (event.logicalKey == LogicalKeyboardKey.f12) {
+                return HostShortcutResult.passThrough;
+              }
+              if (event.logicalKey == LogicalKeyboardKey.keyV &&
+                  mods.contains(term.Modifier.meta)) {
+                return HostShortcutResult.passThrough;
+              }
+              return HostShortcutResult.unhandled;
+            },
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  // Cmd+V bypassed built-in paste and ignored both down and up (even in Kitty mode).
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  final pasteDown = await tester.sendKeyDownEvent(
+    LogicalKeyboardKey.keyV,
+    character: 'v',
+  );
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  final pasteUp = await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+  await tester.pump();
+
+  expect(pasteDown, isFalse);
+  expect(pasteUp, isFalse);
+  expect(service.pasteRequests, equals(0));
+  expect(events, isEmpty);
+
+  // F12 bypassed built-in screenshot and ignored both down and up.
+  final f12Down = await tester.sendKeyDownEvent(LogicalKeyboardKey.f12);
+  final f12Up = await tester.sendKeyUpEvent(LogicalKeyboardKey.f12);
+  await tester.pump();
+
+  expect(f12Down, isFalse);
+  expect(f12Up, isFalse);
+  expect(service.savedFiles, isEmpty);
+  expect(events, isEmpty);
+}
+
+Future<void> _testBuiltinsStillHandledUnderPassThroughUnhandled(
+  WidgetTester tester,
+) async {
+  final service = _FakeTerminalService();
+  final selectionController = TerminalSelectionController();
+  addTearDown(selectionController.dispose);
+  final events = <term.InputEvent>[];
+  final buffer = Buffer(20, 8)..writeString(0, 0, 'hello world', Style.empty);
+
+  await tester.runAsync<void>(() async {
+    await tester.pumpWidget(
+      Directionality(
+        textDirection: TextDirection.ltr,
+        child: SizedBox(
+          width: 320,
+          height: 200,
+          child: TerminalSurface(
+            buffer: buffer,
+            service: service,
+            selectionController: selectionController,
+            metaKeyPolicy: TerminalMetaKeyPolicy.passThroughUnhandled,
+            onInputEvent: events.add,
+          ),
+        ),
+      ),
+    );
+    await _pumpUntilSurfaceReady(tester);
+  });
+  await tester.pumpAndSettle();
+
+  // Active selection: Cmd+C is handled as built-in copy, not passed through.
+  selectionController.startSelection(0, 0);
+  selectionController.updateSelection(4, 0);
+  expect(selectionController.hasSelection, isTrue);
+
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  final copyDown = await tester.sendKeyDownEvent(
+    LogicalKeyboardKey.keyC,
+    character: 'c',
+  );
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.keyC);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  await tester.pump();
+
+  expect(copyDown, isTrue);
+  expect(service.copiedTexts, equals(['hello']));
+  expect(events, isEmpty);
+
+  // Cmd+V is handled as built-in paste under passThroughUnhandled.
+  await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
+  final pasteDown = await tester.sendKeyDownEvent(
+    LogicalKeyboardKey.keyV,
+    character: 'v',
+  );
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.keyV);
+  await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);
+  await tester.pump();
+
+  expect(pasteDown, isTrue);
+  expect(service.pasteRequests, equals(1));
+  expect(events, equals(const [term.PasteEvent('clip')]));
 }

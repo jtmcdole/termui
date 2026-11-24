@@ -10,6 +10,8 @@ import 'package:flutter/services.dart'
         KeyRepeatEvent,
         LogicalKeyboardKey;
 import 'package:termui/terminal/event.dart' as ev;
+import 'package:termui_flutter/termui_flutter.dart'
+    show HostShortcutResult, TerminalMetaKeyPolicy;
 
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
@@ -73,24 +75,37 @@ final class FtermShortcutDispatcher {
   bool get _isMacOs => _platform == TargetPlatform.macOS;
   bool get _isWeb => _isWebOverride ?? kIsWeb;
 
-  /// Handles [event] with active [modifiers], returning `true` when the event
-  /// was consumed as an `fterm` shortcut or handled F12 passthrough.
-  bool handleHostShortcut(KeyEvent event, Set<ev.Modifier> modifiers) {
+  /// Resolves the active [TerminalMetaKeyPolicy] for unhandled `Meta`/`Cmd`
+  /// combinations based on platform and runtime.
+  TerminalMetaKeyPolicy resolveMetaKeyPolicy() =>
+      (_isWeb || _isMacOs) ? .passThroughUnhandled : .claimWhenKittyActive;
+
+  /// Handles [event] with active [modifiers], returning
+  /// [HostShortcutResult.handled] when consumed as an `fterm` shortcut or
+  /// handled F12 passthrough, or [HostShortcutResult.unhandled] otherwise.
+  HostShortcutResult handleHostShortcut(
+    KeyEvent event,
+    Set<ev.Modifier> modifiers,
+  ) {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return false;
+      return .unhandled;
     }
     if (event is KeyDownEvent && workspace.audioController.needsGestureUnlock) {
       unawaited(workspace.audioController.notifyUserGesture());
     }
 
     if (workspace.activeOverlay != FtermOverlay.none) {
-      return _handleOverlayKeyEvent(event);
+      return _handleOverlayKeyEvent(event) ? .handled : .unhandled;
     }
 
     if (workspace.isLeaderArmed) {
-      return _handleLeaderChord(event, modifiers);
+      return _handleLeaderChord(event, modifiers) ? .handled : .unhandled;
     }
 
+    return _handleWorkspaceShortcut(event, modifiers) ? .handled : .unhandled;
+  }
+
+  bool _handleWorkspaceShortcut(KeyEvent event, Set<ev.Modifier> modifiers) {
     if (_isCtrlBackslashLeader(event, modifiers)) {
       if (event is KeyDownEvent) {
         workspace.setLeaderArmed(true);
