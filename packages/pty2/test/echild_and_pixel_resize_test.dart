@@ -404,9 +404,11 @@ Future<void> _testPostSetsidKillReportsDelivered() async {
       '-c',
       'printf "READY\\n"; exec sleep 5',
     ]);
+    final output = StringBuffer();
     final ready = Completer<void>();
     final sub = pty.out.listen((chunk) {
-      if (chunk.contains('READY') && !ready.isCompleted) {
+      output.write(chunk);
+      if (output.toString().contains('READY') && !ready.isCompleted) {
         ready.complete();
       }
     });
