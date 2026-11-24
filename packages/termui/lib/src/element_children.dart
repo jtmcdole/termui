@@ -29,10 +29,3 @@ List<Element> reconcileChildElements(
   }
   return newElements;
 }
-
-/// Unmounts every element in [children].
-void unmountChildElements(List<Element> children) {
-  for (final child in children) {
-    child.unmount();
-  }
-}

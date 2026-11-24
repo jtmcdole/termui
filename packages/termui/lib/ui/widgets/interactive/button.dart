@@ -57,20 +57,11 @@ class ButtonState extends State<Button>
   }
 
   @override
-  bool handleKeyEvent(term.KeyEvent event) => handleActivationKeyEvent(
-    hasFocus: widget.focused || focusNode.hasFocus,
-    event: event,
-    onActivate: () {
-      widget.onPressed();
-      setState(() {});
-    },
-  );
+  bool handleKeyEvent(term.KeyEvent event) =>
+      handleActivationKeyEvent(event, onActivate: widget.onPressed);
 
   @override
   Widget build(BuildContext context) => buildFocusableInteractive(
-    focusNode: focusNode,
-    isMounted: () => mounted,
-    onFocusRebuild: () => setState(() {}),
     onKeyEvent: handleKeyEvent,
     child: _ButtonRenderWidget(
       text: widget.text,

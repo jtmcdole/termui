@@ -174,7 +174,9 @@ class ListViewElement extends Element implements MouseEventHandlerWithArea {
 
   @override
   void unmount() {
-    unmountChildElements(childElements);
+    for (final child in childElements) {
+      child.unmount();
+    }
     super.unmount();
   }
 

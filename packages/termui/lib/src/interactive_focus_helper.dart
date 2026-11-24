@@ -1,34 +1,34 @@
-import 'package:termui/termui.dart';
-import 'package:termui/terminal/terminal.dart' as term;
+import 'package:termui/terminal/event.dart';
+import 'package:termui/ui/widgets/core/focusable_state_mixin.dart';
+import 'package:termui/ui/widgets/core/widget.dart';
+import 'package:termui/ui/widgets/interactive/focus.dart';
 
-/// Handles Space/Enter activation for a focusable interactive control.
-bool handleActivationKeyEvent({
-  required bool hasFocus,
-  required term.KeyEvent event,
-  required void Function() onActivate,
-}) {
-  if (hasFocus &&
-      (event.baseKey == term.TermKey.space ||
-          event.baseKey == term.TermKey.enter)) {
-    onActivate();
-    return true;
+/// Shared keyboard activation and focus wrapping for [FocusableStateMixin]
+/// interactive controls.
+extension FocusableInteractiveExtension<T extends StatefulWidget>
+    on FocusableStateMixin<T> {
+  /// Handles Space/Enter activation when focused and schedules a rebuild.
+  bool handleActivationKeyEvent(
+    KeyEvent event, {
+    required void Function() onActivate,
+  }) {
+    if ((isWidgetFocused || focusNode.hasFocus) &&
+        (event.baseKey == TermKey.space || event.baseKey == TermKey.enter)) {
+      onActivate();
+      setState(() {});
+      return true;
+    }
+    return false;
   }
-  return false;
-}
 
-/// Wraps [child] in a [Focus] widget that triggers [onFocusRebuild] on focus
-/// changes and routes key events to [onKeyEvent].
-Widget buildFocusableInteractive({
-  required FocusNode focusNode,
-  required bool Function() isMounted,
-  required void Function() onFocusRebuild,
-  required bool Function(term.KeyEvent event) onKeyEvent,
-  required Widget child,
-}) {
-  return Focus(
+  /// Wraps [child] in a [Focus] widget wired to this state's [focusNode].
+  Widget buildFocusableInteractive({
+    required bool Function(KeyEvent event) onKeyEvent,
+    required Widget child,
+  }) => Focus(
     focusNode: focusNode,
     onFocusChange: (_) {
-      if (isMounted()) onFocusRebuild();
+      if (mounted) setState(() {});
     },
     onKeyEvent: onKeyEvent,
     child: child,

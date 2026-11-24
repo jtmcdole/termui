@@ -69,19 +69,12 @@ class RadioState<T> extends State<Radio<T>>
 
   @override
   bool handleKeyEvent(term.KeyEvent event) => handleActivationKeyEvent(
-    hasFocus: widget.focused || focusNode.hasFocus,
-    event: event,
-    onActivate: () {
-      widget.onChanged(widget.value);
-      setState(() {});
-    },
+    event,
+    onActivate: () => widget.onChanged(widget.value),
   );
 
   @override
   Widget build(BuildContext context) => buildFocusableInteractive(
-    focusNode: focusNode,
-    isMounted: () => mounted,
-    onFocusRebuild: () => setState(() {}),
     onKeyEvent: handleKeyEvent,
     child: _RadioRenderWidget(
       isSelected: isSelected,

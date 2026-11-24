@@ -278,58 +278,37 @@ final class FileUploadReceiver {
     '.upload-${sessionId.value}-${_randomHexToken()}.part',
   );
 
-  ({FileUploadAckFrame? rejection, String? partPath}) _prepareStagingPartPath(
-    FileUploadStartFrame frame,
-  ) {
-    _prepareUploadDirectory();
-    if (_isSymlinkPath(uploadDir.path)) {
-      return (
-        rejection: _rejectedAck(
-          frame.transferId,
-          0,
-          'Refusing to use symlink upload directory.',
-        ),
-        partPath: null,
-      );
-    }
-    final partPath = _nextStagingPartPath();
-    if (_isSymlinkPath(partPath)) {
-      return (
-        rejection: _rejectedAck(
-          frame.transferId,
-          0,
-          'Refusing to open symlink staging file.',
-        ),
-        partPath: null,
-      );
-    }
-    return (rejection: null, partPath: partPath);
-  }
-
-  FileUploadAckFrame _handleStagingOpenError(
-    FileUploadStartFrame frame,
-    Object error,
-  ) {
-    abortAll();
-    return _rejectedAck(
-      frame.transferId,
-      0,
-      'Failed to open staging file: $error',
-    );
-  }
-
   /// Handles [FileUploadStartFrame], creating a staging `.part` file exclusively.
   FileUploadAckFrame handleStart(FileUploadStartFrame frame) {
     final rejection = _validateStartPreconditions(frame);
     if (rejection != null) return rejection;
     try {
-      final prepared = _prepareStagingPartPath(frame);
-      if (prepared.rejection != null) return prepared.rejection!;
-      final partFile = File(prepared.partPath!)..createSync(exclusive: true);
+      _prepareUploadDirectory();
+      if (_isSymlinkPath(uploadDir.path)) {
+        return _rejectedAck(
+          frame.transferId,
+          0,
+          'Refusing to use symlink upload directory.',
+        );
+      }
+      final partPath = _nextStagingPartPath();
+      if (_isSymlinkPath(partPath)) {
+        return _rejectedAck(
+          frame.transferId,
+          0,
+          'Refusing to open symlink staging file.',
+        );
+      }
+      final partFile = File(partPath)..createSync(exclusive: true);
       final raf = partFile.openSync(mode: .writeOnly);
       return _activateStagingFile(frame, partFile, raf);
     } on Object catch (error) {
-      return _handleStagingOpenError(frame, error);
+      abortAll();
+      return _rejectedAck(
+        frame.transferId,
+        0,
+        'Failed to open staging file: $error',
+      );
     }
   }
 
@@ -340,13 +319,32 @@ final class FileUploadReceiver {
     final rejection = _validateStartPreconditions(frame);
     if (rejection != null) return rejection;
     try {
-      final prepared = _prepareStagingPartPath(frame);
-      if (prepared.rejection != null) return prepared.rejection!;
-      final partFile = await File(prepared.partPath!).create(exclusive: true);
+      _prepareUploadDirectory();
+      if (_isSymlinkPath(uploadDir.path)) {
+        return _rejectedAck(
+          frame.transferId,
+          0,
+          'Refusing to use symlink upload directory.',
+        );
+      }
+      final partPath = _nextStagingPartPath();
+      if (_isSymlinkPath(partPath)) {
+        return _rejectedAck(
+          frame.transferId,
+          0,
+          'Refusing to open symlink staging file.',
+        );
+      }
+      final partFile = await File(partPath).create(exclusive: true);
       final raf = await partFile.open(mode: .writeOnly);
       return _activateStagingFile(frame, partFile, raf);
     } on Object catch (error) {
-      return _handleStagingOpenError(frame, error);
+      abortAll();
+      return _rejectedAck(
+        frame.transferId,
+        0,
+        'Failed to open staging file: $error',
+      );
     }
   }
 
@@ -374,45 +372,30 @@ final class FileUploadReceiver {
     );
   }
 
-  FileUploadAckFrame _commitChunk(
-    _ActiveUploadState active,
-    FileUploadChunkFrame frame,
-    int nextEnd,
-  ) {
-    active.hashSink.add(frame.data);
-    active.bytesWritten = nextEnd;
-    return FileUploadAckFrame(
-      sessionId: sessionId,
-      transferId: frame.transferId,
-      status: .chunkAck,
-      nextOffset: active.bytesWritten,
-    );
-  }
-
-  FileUploadAckFrame _handleChunkWriteError(
-    _ActiveUploadState active,
-    FileUploadChunkFrame frame,
-    Object error,
-  ) {
-    final written = active.bytesWritten;
-    abortAll();
-    return _rejectedAck(
-      frame.transferId,
-      written,
-      'Disk write error during upload: $error',
-    );
-  }
-
   /// Appends [frame]'s bytes to the active `.part` file and updates the SHA-256 state.
   FileUploadAckFrame handleChunk(FileUploadChunkFrame frame) {
     final precheck = _validateChunkPreconditions(frame);
     if (precheck.rejection != null) return precheck.rejection!;
     final active = precheck.active!;
+    final nextEnd = precheck.nextEnd;
     try {
       active.raf.writeFromSync(frame.data);
-      return _commitChunk(active, frame, precheck.nextEnd);
+      active.hashSink.add(frame.data);
+      active.bytesWritten = nextEnd;
+      return FileUploadAckFrame(
+        sessionId: sessionId,
+        transferId: frame.transferId,
+        status: .chunkAck,
+        nextOffset: active.bytesWritten,
+      );
     } on Object catch (error) {
-      return _handleChunkWriteError(active, frame, error);
+      final written = active.bytesWritten;
+      abortAll();
+      return _rejectedAck(
+        frame.transferId,
+        written,
+        'Disk write error during upload: $error',
+      );
     }
   }
 
@@ -423,11 +406,25 @@ final class FileUploadReceiver {
     final precheck = _validateChunkPreconditions(frame);
     if (precheck.rejection != null) return precheck.rejection!;
     final active = precheck.active!;
+    final nextEnd = precheck.nextEnd;
     try {
       await active.raf.writeFrom(frame.data);
-      return _commitChunk(active, frame, precheck.nextEnd);
+      active.hashSink.add(frame.data);
+      active.bytesWritten = nextEnd;
+      return FileUploadAckFrame(
+        sessionId: sessionId,
+        transferId: frame.transferId,
+        status: .chunkAck,
+        nextOffset: active.bytesWritten,
+      );
     } on Object catch (error) {
-      return _handleChunkWriteError(active, frame, error);
+      final written = active.bytesWritten;
+      abortAll();
+      return _rejectedAck(
+        frame.transferId,
+        written,
+        'Disk write error during upload: $error',
+      );
     }
   }
 
@@ -462,66 +459,6 @@ final class FileUploadReceiver {
     return (rejection: null, active: active, nextEnd: nextEnd);
   }
 
-  ({(FileUploadAckFrame, String?)? mismatch, String? destinationPath})
-  _verifyDigestAndResolveDestination(
-    _ActiveUploadState active,
-    Uint8List expectedSha256,
-  ) {
-    active.hashSink.close();
-    final actualBytes = active.digestSink.value?.bytes;
-    if (actualBytes == null || !_bytesEqual(actualBytes, expectedSha256)) {
-      _safeDeleteFile(active.partFile);
-      return (
-        mismatch: (
-          _rejectedAck(
-            active.transferId,
-            active.bytesWritten,
-            'SHA-256 digest mismatch.',
-          ),
-          null,
-        ),
-        destinationPath: null,
-      );
-    }
-    return (
-      mismatch: null,
-      destinationPath: _resolveUniqueDestinationPath(active.sanitizedFileName),
-    );
-  }
-
-  (FileUploadAckFrame ack, String? completedPath) _completeUpload(
-    _ActiveUploadState active,
-    String destinationPath,
-  ) {
-    _totalUploadedBytes += active.bytesWritten;
-    _totalUploadedFiles += 1;
-    return (
-      FileUploadAckFrame(
-        sessionId: sessionId,
-        transferId: active.transferId,
-        status: .completed,
-        nextOffset: active.bytesWritten,
-        message: destinationPath,
-      ),
-      destinationPath,
-    );
-  }
-
-  (FileUploadAckFrame ack, String? completedPath) _handleFinalizeError(
-    _ActiveUploadState active,
-    Object error,
-  ) {
-    _safeDeleteFile(active.partFile);
-    return (
-      _rejectedAck(
-        active.transferId,
-        active.bytesWritten,
-        'Failed to finalize uploaded file: $error',
-      ),
-      null,
-    );
-  }
-
   /// Async variant of [handleEnd] closing and renaming without blocking the isolate.
   Future<(FileUploadAckFrame ack, String? completedPath)> handleEndAsync(
     FileUploadEndFrame frame,
@@ -532,12 +469,45 @@ final class FileUploadReceiver {
     _active = null;
     try {
       await active.raf.close();
-      final verified = _verifyDigestAndResolveDestination(active, frame.sha256);
-      if (verified.mismatch != null) return verified.mismatch!;
-      await active.partFile.rename(verified.destinationPath!);
-      return _completeUpload(active, verified.destinationPath!);
+      active.hashSink.close();
+      final actualBytes = active.digestSink.value?.bytes;
+      if (actualBytes == null || !_bytesEqual(actualBytes, frame.sha256)) {
+        _safeDeleteFile(active.partFile);
+        return (
+          _rejectedAck(
+            active.transferId,
+            active.bytesWritten,
+            'SHA-256 digest mismatch.',
+          ),
+          null,
+        );
+      }
+      final destinationPath = _resolveUniqueDestinationPath(
+        active.sanitizedFileName,
+      );
+      await active.partFile.rename(destinationPath);
+      _totalUploadedBytes += active.bytesWritten;
+      _totalUploadedFiles += 1;
+      return (
+        FileUploadAckFrame(
+          sessionId: sessionId,
+          transferId: active.transferId,
+          status: .completed,
+          nextOffset: active.bytesWritten,
+          message: destinationPath,
+        ),
+        destinationPath,
+      );
     } on Object catch (error) {
-      return _handleFinalizeError(active, error);
+      _safeDeleteFile(active.partFile);
+      return (
+        _rejectedAck(
+          active.transferId,
+          active.bytesWritten,
+          'Failed to finalize uploaded file: $error',
+        ),
+        null,
+      );
     }
   }
 
@@ -606,15 +576,45 @@ final class FileUploadReceiver {
     _active = null;
     try {
       active.raf.closeSync();
-      final verified = _verifyDigestAndResolveDestination(
-        active,
-        expectedSha256,
+      active.hashSink.close();
+      final actualBytes = active.digestSink.value?.bytes;
+      if (actualBytes == null || !_bytesEqual(actualBytes, expectedSha256)) {
+        _safeDeleteFile(active.partFile);
+        return (
+          _rejectedAck(
+            active.transferId,
+            active.bytesWritten,
+            'SHA-256 digest mismatch.',
+          ),
+          null,
+        );
+      }
+      final destinationPath = _resolveUniqueDestinationPath(
+        active.sanitizedFileName,
       );
-      if (verified.mismatch != null) return verified.mismatch!;
-      active.partFile.renameSync(verified.destinationPath!);
-      return _completeUpload(active, verified.destinationPath!);
+      active.partFile.renameSync(destinationPath);
+      _totalUploadedBytes += active.bytesWritten;
+      _totalUploadedFiles += 1;
+      return (
+        FileUploadAckFrame(
+          sessionId: sessionId,
+          transferId: active.transferId,
+          status: .completed,
+          nextOffset: active.bytesWritten,
+          message: destinationPath,
+        ),
+        destinationPath,
+      );
     } on Object catch (error) {
-      return _handleFinalizeError(active, error);
+      _safeDeleteFile(active.partFile);
+      return (
+        _rejectedAck(
+          active.transferId,
+          active.bytesWritten,
+          'Failed to finalize uploaded file: $error',
+        ),
+        null,
+      );
     }
   }
 

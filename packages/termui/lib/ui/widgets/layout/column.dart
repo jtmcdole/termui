@@ -80,7 +80,9 @@ class ColumnElement extends Element {
 
   @override
   void unmount() {
-    unmountChildElements(childElements);
+    for (final child in childElements) {
+      child.unmount();
+    }
     super.unmount();
   }
 

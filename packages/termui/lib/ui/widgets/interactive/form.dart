@@ -960,42 +960,11 @@ Widget _buildFormFieldLayout({
   ]);
 }
 
-Widget _buildTextInputFormField({
-  required FormField<String> field,
-  required FormFieldState<String> state,
-  required TextField input,
-  required int contentHeight,
-}) {
-  input.focused = field.focused;
-  if (input.value != state.value) {
-    input.value = state.value ?? '';
-  }
-
-  return _buildFormFieldLayout(
-    field: field,
-    state: state,
-    contentHeight: contentHeight,
-    content: TextField(
-      key: input.key,
-      controller: input.controller,
-      focused: field.focused,
-      style: input.style,
-      cursorStyle: input.cursorStyle,
-      placeholder: input.placeholder,
-      placeholderStyle: input.placeholderStyle,
-      multiline: input.multiline,
-      customShortcuts: input.customShortcuts,
-      focusNode: state.focusNode,
-      onFocusChange: state.handleFocusChange,
-      onKeyEvent: state.handleUnhandledKeyEvent,
-    ),
-  );
-}
-
-abstract class _BaseTextInputFormFieldState<W extends FormField<String>>
+sealed class _BaseTextInputFormFieldState<W extends FormField<String>>
     extends FormFieldState<String>
     implements KeyEventHandler {
   TextField _inputFor(W field);
+  int get _contentHeight => 1;
 
   @override
   bool get delegatesFocusToChild => true;
@@ -1041,33 +1010,42 @@ abstract class _BaseTextInputFormFieldState<W extends FormField<String>>
 
   @override
   bool handleKeyEvent(term.KeyEvent event) => widget.handleKeyEvent(event);
+
+  @override
+  Widget build(BuildContext context) {
+    final field = widget as W;
+    final input = _inputFor(field);
+    input.focused = field.focused;
+    if (input.value != value) {
+      input.value = value ?? '';
+    }
+    return wrapInteractiveField(
+      _buildFormFieldLayout(
+        field: field,
+        state: this,
+        contentHeight: _contentHeight,
+        content: TextField(
+          key: input.key,
+          controller: input.controller,
+          focused: field.focused,
+          style: input.style,
+          cursorStyle: input.cursorStyle,
+          placeholder: input.placeholder,
+          placeholderStyle: input.placeholderStyle,
+          multiline: input.multiline,
+          customShortcuts: input.customShortcuts,
+          focusNode: focusNode,
+          onFocusChange: handleFocusChange,
+          onKeyEvent: handleUnhandledKeyEvent,
+        ),
+      ),
+    );
+  }
 }
 
 class _TextFormFieldState extends _BaseTextInputFormFieldState<TextFormField> {
   @override
   TextField _inputFor(TextFormField field) => field._input;
-
-  @override
-  Widget build(BuildContext context) {
-    return wrapInteractiveField(
-      _TextFormFieldRenderWidget(widget as TextFormField, this),
-    );
-  }
-}
-
-class _TextFormFieldRenderWidget extends StatelessWidget {
-  final TextFormField widget;
-  final _TextFormFieldState state;
-
-  const _TextFormFieldRenderWidget(this.widget, this.state);
-
-  @override
-  Widget build(BuildContext context) => _buildTextInputFormField(
-    field: widget,
-    state: state,
-    input: widget._input,
-    contentHeight: 1,
-  );
 }
 
 /// A form field wrapping a multi-line text editing area.
@@ -1152,26 +1130,7 @@ class _TextAreaFormFieldState
   TextField _inputFor(TextAreaFormField field) => field._input;
 
   @override
-  Widget build(BuildContext context) {
-    return wrapInteractiveField(
-      _TextAreaFormFieldRenderWidget(widget as TextAreaFormField, this),
-    );
-  }
-}
-
-class _TextAreaFormFieldRenderWidget extends StatelessWidget {
-  final TextAreaFormField widget;
-  final _TextAreaFormFieldState state;
-
-  const _TextAreaFormFieldRenderWidget(this.widget, this.state);
-
-  @override
-  Widget build(BuildContext context) => _buildTextInputFormField(
-    field: widget,
-    state: state,
-    input: widget._input,
-    contentHeight: widget.fieldHeight,
-  );
+  int get _contentHeight => (widget as TextAreaFormField).fieldHeight;
 }
 
 /// An option in a selection form field.
