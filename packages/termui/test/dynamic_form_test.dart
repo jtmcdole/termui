@@ -710,6 +710,11 @@ void main() {
         final formState = tree.findState<FormState>()!;
         nameField.focused = true;
         nameField.handleKeyEvent(const KeyEvent('A', .character));
+        nameField.handleKeyEvent(const KeyEvent('B', .character));
+        nameField.handleKeyEvent(
+          const KeyEvent('z', .character, modifiers: {Modifier.control}),
+        );
+        expect(nameField.value, equals('A'));
         expect(formState.validate(), isTrue);
 
         formState.reset();
@@ -717,6 +722,16 @@ void main() {
         expect(nameField.cursorColumn, equals(0));
         expect(nameField.hasError, isFalse);
         expect(nameField.errorText, isNull);
+
+        // Undo/redo history from pre-reset edits must not restore old text.
+        nameField.handleKeyEvent(
+          const KeyEvent('z', .character, modifiers: {Modifier.control}),
+        );
+        nameField.handleKeyEvent(
+          const KeyEvent('y', .character, modifiers: {Modifier.control}),
+        );
+        expect(nameField.value, equals(''));
+        expect(nameField.hasError, isFalse);
 
         // Live editing and validation still work after reset.
         nameField.handleKeyEvent(const KeyEvent('B', .character));

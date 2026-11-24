@@ -262,6 +262,12 @@ class TextEditingController {
   void clear() {
     value = const TextEditingValue();
   }
+
+  /// Clears the undo and redo history stacks without modifying [value].
+  void clearHistory() {
+    _undoStack.clear();
+    _redoStack.clear();
+  }
 }
 
 /// An interactive single-line or multi-line text input field.

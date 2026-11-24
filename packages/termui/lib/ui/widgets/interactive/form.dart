@@ -983,7 +983,9 @@ sealed class _BaseTextInputFormFieldState<W extends FormField<String>>
 
   @override
   void reset() {
-    _syncInputValue(_inputFor(widget as W), widget.initialValue ?? '');
+    final input = _inputFor(widget as W);
+    _syncInputValue(input, widget.initialValue ?? '');
+    input.controller.clearHistory();
     super.reset();
   }
 
