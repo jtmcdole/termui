@@ -13,6 +13,7 @@ import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui_flutter/termui_flutter.dart'
     show HostShortcutResult, TerminalMetaKeyPolicy;
 
+import '../input/key_chord.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
 
@@ -86,9 +87,27 @@ final class FtermShortcutDispatcher {
           (_isWeb || _isMacOs) ? .passThroughUnhandled : .claimWhenKittyActive,
       };
 
+  /// Returns `true` when `(key, modifiers)` matches a user-configured
+  /// passthrough chord in `workspace.preferences.passthroughShortcuts`.
+  bool isPassthroughShortcut(
+    LogicalKeyboardKey key,
+    Set<ev.Modifier> modifiers,
+  ) {
+    final shortcuts = workspace.preferences.passthroughShortcuts;
+    if (shortcuts.isEmpty) return false;
+    for (final chord in shortcuts) {
+      if (chord.matches(key, modifiers)) return true;
+    }
+    final normalized = KeyChord.fromKeyEvent(key, modifiers);
+    if (normalized == null || normalized.key == key) return false;
+    return shortcuts.contains(normalized);
+  }
+
   /// Handles [event] with active [modifiers], returning
   /// [HostShortcutResult.handled] when consumed as an `fterm` shortcut or
-  /// handled F12 passthrough, or [HostShortcutResult.unhandled] otherwise.
+  /// handled F12 passthrough, [HostShortcutResult.passThrough] when matched by
+  /// a user-configured passthrough chord, or [HostShortcutResult.unhandled]
+  /// otherwise.
   HostShortcutResult handleHostShortcut(
     KeyEvent event,
     Set<ev.Modifier> modifiers,
@@ -104,6 +123,9 @@ final class FtermShortcutDispatcher {
     }
     if (workspace.isLeaderArmed) {
       return _handleLeaderChord(event, modifiers) ? .handled : .unhandled;
+    }
+    if (isPassthroughShortcut(event.logicalKey, modifiers)) {
+      return .passThrough;
     }
     return _handleWorkspaceShortcut(event, modifiers) ? .handled : .unhandled;
   }
