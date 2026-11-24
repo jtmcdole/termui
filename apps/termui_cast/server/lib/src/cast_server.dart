@@ -47,13 +47,23 @@ final class CastServer {
   /// Bound TCP port.
   int get port => _httpServer.port;
 
-  /// Normalized HTTP base URI for the server (`<basePath>/`).
+  /// Local-connectable HTTP base URI for the server (`<basePath>/`).
+  ///
+  /// Wildcard bind addresses (`0.0.0.0` and `::`) are normalized to loopback
+  /// (`127.0.0.1` and `::1`). Serves static web assets when [ServerConfig.webRoot]
+  /// is configured; `<basePath>/healthz` is always served relative to this URI.
   Uri get httpUri => _endpointUri('http', '${config.basePath}/');
 
-  /// WebSocket URI for caster peers (`<basePath>/v1/caster`).
+  /// Local-connectable WebSocket URI for caster peers (`<basePath>/v1/caster`).
+  ///
+  /// Wildcard bind addresses (`0.0.0.0` and `::`) are normalized to loopback
+  /// (`127.0.0.1` and `::1`).
   Uri get casterUri => _endpointUri('ws', '${config.basePath}/v1/caster');
 
-  /// WebSocket URI for viewer client peers (`<basePath>/v1/client`).
+  /// Local-connectable WebSocket URI for viewer client peers (`<basePath>/v1/client`).
+  ///
+  /// Wildcard bind addresses (`0.0.0.0` and `::`) are normalized to loopback
+  /// (`127.0.0.1` and `::1`).
   Uri get clientUri => _endpointUri('ws', '${config.basePath}/v1/client');
 
   /// Binds an HTTP or HTTPS server according to [config].
@@ -104,12 +114,15 @@ final class CastServer {
   }
 
   Uri _endpointUri(String scheme, String path) {
-    final rawHost = _httpServer.address.address;
-    final connectHost = switch (rawHost) {
-      '0.0.0.0' => '127.0.0.1',
-      '::' => '::1',
-      _ => rawHost,
-    };
+    final bound = _httpServer.address;
+    final String connectHost;
+    if (bound == InternetAddress.anyIPv4) {
+      connectHost = InternetAddress.loopbackIPv4.address;
+    } else if (bound == InternetAddress.anyIPv6) {
+      connectHost = InternetAddress.loopbackIPv6.address;
+    } else {
+      connectHost = bound.address;
+    }
     return Uri(scheme: scheme, host: connectHost, port: port, path: path);
   }
 

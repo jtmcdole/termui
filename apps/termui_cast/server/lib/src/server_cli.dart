@@ -47,7 +47,7 @@ Future<int> runServerCli(
       '[termui_cast_server] WARNING: --trust-proxy-client-auth is enabled; '
       '/v1/client accepts tokenless connections and relies on upstream '
       'perimeter auth ($headerNote). Ensure direct access to '
-      '${config.host.address}:${config.port} is blocked.',
+      '${_formatHostPort(config.host, config.port)} is blocked.',
     );
   }
 
@@ -68,7 +68,8 @@ Future<int> runServerCli(
     );
   } on SocketException catch (e) {
     stderrSink.writeln(
-      'Error: Failed to bind ${config.host.address}:${config.port}: ${e.message}',
+      'Error: Failed to bind ${_formatHostPort(config.host, config.port)}: '
+      '${e.message}',
     );
     return 78;
   } on FileSystemException catch (e) {
@@ -98,19 +99,22 @@ Future<int> runServerCli(
   return 0;
 }
 
+String _formatHostPort(InternetAddress address, int port) =>
+    address.type == InternetAddressType.IPv6
+    ? '[${address.address}]:$port'
+    : '${address.address}:$port';
+
 void _writeListeningSummary(StringSink out, CastServer server) {
   final addr = server.address;
-  final boundHost = addr.type == InternetAddressType.IPv6
-      ? '[${addr.address}]'
-      : addr.address;
-  final labelPrefix = switch (addr.address) {
-    '0.0.0.0' || '::' => 'Local ',
-    _ => '',
-  };
-  out
-    ..writeln('Listening on $boundHost:${server.port}')
-    ..writeln('  ${labelPrefix}HTTP: ${server.httpUri}')
-    ..writeln(
-      '  ${labelPrefix}WS:   ${server.casterUri} and ${server.clientUri}',
-    );
+  final isWildcard =
+      addr == InternetAddress.anyIPv4 || addr == InternetAddress.anyIPv6;
+  final labelPrefix = isWildcard ? 'Local ' : '';
+  final webSuffix = server.config.webRoot == null
+      ? ' (static web disabled)'
+      : '';
+  out.writeln(
+    'Listening on ${_formatHostPort(addr, server.port)}\n'
+    '  ${labelPrefix}HTTP: ${server.httpUri}$webSuffix\n'
+    '  ${labelPrefix}WS:   ${server.casterUri} and ${server.clientUri}',
+  );
 }
