@@ -113,6 +113,17 @@ void main() {
           )!;
           check(cfg.webRoot, because: runtimeName).isNull();
         }
+
+        // Empty or whitespace-only resolvedExecutable skips executable-adjacent probing.
+        for (final blank in const ['', '   ']) {
+          final cfg = ServerConfig.fromArgs(
+            const [],
+            environment: const {},
+            currentDirectory: unrelatedCwd,
+            resolvedExecutable: blank,
+          )!;
+          check(cfg.webRoot, because: 'blank:"$blank"').isNull();
+        }
       },
     );
   });

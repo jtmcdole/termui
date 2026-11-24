@@ -342,7 +342,12 @@ jobs:
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           function Assert-ZipEntries {
-            param([string]$ZipPath, [string[]]$RequiredEntries, [string[]]$ForbiddenEntries = @())
+            param(
+              [string]$ZipPath,
+              [string[]]$RequiredEntries,
+              [string[]]$ForbiddenEntries = @(),
+              [string[]]$ForbiddenPrefixes = @()
+            )
             $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $ZipPath))
             try {
               $names = $zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
@@ -356,11 +361,17 @@ jobs:
                   throw "Archive $ZipPath unexpectedly contains '$forbidden'"
                 }
               }
+              foreach ($prefix in $ForbiddenPrefixes) {
+                $matched = $names | Where-Object { $_.StartsWith($prefix) } | Select-Object -First 1
+                if ($matched) {
+                  throw "Archive $ZipPath unexpectedly contains '$matched' under '$prefix'"
+                }
+              }
             } finally {
               $zip.Dispose()
             }
           }
-          Assert-ZipEntries -ZipPath $casterZip -RequiredEntries @("bin/termui_cast.exe", "bin/conpty.dll", "bin/OpenConsole.exe", "bin/THIRD-PARTY-NOTICES.txt") -ForbiddenEntries @("bin/termui_cast_server.exe", "web/index.html")
+          Assert-ZipEntries -ZipPath $casterZip -RequiredEntries @("bin/termui_cast.exe", "bin/conpty.dll", "bin/OpenConsole.exe", "bin/THIRD-PARTY-NOTICES.txt") -ForbiddenEntries @("bin/termui_cast_server.exe") -ForbiddenPrefixes @("web/")
           Write-Output "Packaged $casterZip"
 
           New-Item -ItemType Directory -Force -Path build/server/bundle/bin | Out-Null
@@ -520,8 +531,8 @@ jobs:
             ```bash
             mkdir -p fterm && tar -xzf fterm-linux-x64.tar.gz -C fterm && ./fterm/fterm
             ```
-          - **Self-Hosted Relay Server (`termui_cast_server-<os>-<arch>.tar.gz` / `.zip`, plus standalone `fterm-web.tar.gz`)**: Each `termui_cast_server-<os>-<arch>` archive bundles `bin/termui_cast_server` together with the prebuilt WASM web viewer under `web/` (pre-compressed as `.gz` assets with no uncompressed duplicates). Extract the archive and run `./bin/termui_cast_server` — it auto-discovers the adjacent `web/` directory with no local Dart/Flutter SDK required. `fterm-web.tar.gz` is also attached standalone.
-          - **Caster CLI (`termui_cast-<os>-<arch>.tar.gz` / `.zip`)**: Lightweight PTY caster bundle containing `bin/termui_cast` and native PTY libraries (`lib/` on Unix, ConPTY binaries on Windows) without the web viewer assets.
+          - **Self-Hosted Relay Server (`termui_cast_server-<os>-<arch>.tar.gz` / `.zip`, plus standalone `fterm-web.tar.gz`)**: `termui_cast_server` is now packaged separately from `termui_cast-<os>-<arch>` together with the prebuilt WASM web viewer under `web/` (compressible assets stored as `.gz` without uncompressed duplicates). Extract the archive and run `./bin/termui_cast_server` — it auto-discovers the adjacent `web/` directory with no local Dart/Flutter SDK required. `fterm-web.tar.gz` contains the same gzip-only `web/` directory for `termui_cast_server --web-dir` or proxies configured for gzip-only static files.
+          - **Caster CLI (`termui_cast-<os>-<arch>.tar.gz` / `.zip`)**: Lightweight PTY caster bundle containing `bin/termui_cast` and native PTY libraries (`lib/` on Unix, ConPTY binaries on Windows) without `termui_cast_server` or `web/`.
           EOF
 
           # Always create as draft first so GitHub Immutable Releases locks the tag

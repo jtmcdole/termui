@@ -227,7 +227,7 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | `TERMUI_CAST_TOKEN` | Web App (`--dart-define`) | Default viewer token embedded into the web viewer static bundle (public to anyone able to load static assets unless gated behind IAP; prefer `#token=...` fragments or perimeter auth) |
 | `TERMUI_CAST_IAP_SERVICE_ACCOUNT` | Caster CLI | Service account email for keyless `gcloud iam service-accounts sign-jwt` IAP authentication |
 | `TERMUI_CAST_IAP_KEY_FILE` | Caster CLI | Path to a service account JSON key for pure-Dart RS256 IAP authentication |
-| `TERMUI_CAST_WEB_DIR` | Server | Directory path containing the compiled Flutter web assets (`build/web`) |
+| `TERMUI_CAST_WEB_DIR` | Server | Directory path containing the compiled Flutter web assets (`web/` or `apps/fterm/build/web`) |
 | `TERMUI_CAST_ALLOWED_ORIGINS` | Server | Comma-separated list of additional allowed `Origin` URLs for WebSocket upgrades (also permits matching `Host` headers on loopback) |
 | `TERMUI_CAST_REVISION` | Server | Explicit revision string reported on `/healthz` (defaults to `K_REVISION` on Cloud Run) |
 | `TERMUI_CAST_ALLOW_SPAWN` | Caster CLI | Set to `true`/`1` or `false`/`0` to control remote shell spawning (auto-enabled for interactive shells, off for non-shell commands) |
@@ -253,7 +253,7 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | `--require-client-auth-header` | `$TERMUI_CAST_REQUIRE_CLIENT_AUTH_HEADER` | Require a non-empty HTTP header on `/v1/client` upgrades (requires `--trust-proxy-client-auth`) |
 | `--base-path` | `""` (`$TERMUI_CAST_BASE_PATH`) | Mount `/healthz`, `/v1/caster`, `/v1/client`, and static assets under a URL subpath prefix (such as `/term`) |
 | `--allowed-origin` | `$TERMUI_CAST_ALLOWED_ORIGINS` | Additional allowed `Origin` header URLs (repeatable; on loopback, also permits matching proxied `Host` headers) |
-| `--web-dir` | `$TERMUI_CAST_WEB_DIR` (`apps/fterm/build/web`) | Directory of static WASM web viewer assets |
+| `--web-dir` | `$TERMUI_CAST_WEB_DIR` (auto-discovers sibling `../web`, `./web`, or `apps/fterm/build/web`) | Directory of static WASM web viewer assets (raw or gzip-only `.gz`) |
 | `--no-web` | `false` | Disable static web asset serving at `/` |
 | `--revision` | `$TERMUI_CAST_REVISION` (or `$K_REVISION`) | Server revision string reported on `/healthz` |
 
