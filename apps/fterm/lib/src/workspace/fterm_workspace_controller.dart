@@ -2917,8 +2917,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   /// Updates and persists [FtermPreferences] (`audioMuted`, `audioVolume`,
-  /// `autoHideSingleTab`, `macosOptionAsAlt`, `metaKeyMode`, `fontSize`, shell
-  /// overrides, and update preferences).
+  /// `autoHideSingleTab`, `macosOptionAsAlt`, `metaKeyMode`,
+  /// `passthroughShortcuts`, `fontSize`, shell overrides, and update
+  /// preferences).
   void updatePreferences(FtermPreferences next) {
     if (_disposed || _preferences == next) return;
     _preferences = next;
