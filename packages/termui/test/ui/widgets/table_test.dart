@@ -49,5 +49,100 @@ void main() {
       expect(buffer.getCharacter(10, 3), equals(' ')); // Separator space
       expect(buffer.getCharacter(11, 3), equals('v')); // Start of Col 2
     });
+
+    test(
+      'Table unmounts widget cells when rows shrink or headers change and truncates wide headers',
+      () {
+        final unmountedIds = <String>[];
+
+        final initialTable = Table(
+          headers: const ['HeaderOne', 'HeaderTwo'],
+          columnWidths: const [10, 10],
+          rows: [
+            [
+              _UnmountSpyCell(id: 'r0c0', onUnmount: unmountedIds.add),
+              _UnmountSpyCell(id: 'r0c1', onUnmount: unmountedIds.add),
+            ],
+            [
+              _UnmountSpyCell(id: 'r1c0', onUnmount: unmountedIds.add),
+              _UnmountSpyCell(id: 'r1c1', onUnmount: unmountedIds.add),
+            ],
+          ],
+        );
+
+        final element = initialTable.createElement() as TableElement;
+        element.mount(null);
+        addTearDown(element.unmount);
+
+        // Paint into a narrower width than columnsTotalWidth (10 + 10 + 1 = 21 > 12)
+        // to exercise header truncation.
+        element.layout(const BoxConstraints.tightFor(width: 12, height: 4));
+        final buffer = Buffer(12, 4);
+        element.paint(buffer, Offset.zero);
+
+        final headerLine = [
+          for (var x = 0; x < 12; x++) buffer.getCharacter(x, 0),
+        ].join();
+        expect(headerLine, equals('HeaderOne  H'));
+        expect(unmountedIds, isEmpty);
+
+        // Shrink rows from 2 to 1: row 1 cells must unmount.
+        element.update(
+          Table(
+            headers: const ['HeaderOne', 'HeaderTwo'],
+            columnWidths: const [10, 10],
+            rows: [
+              [
+                _UnmountSpyCell(id: 'r0c0', onUnmount: unmountedIds.add),
+                _UnmountSpyCell(id: 'r0c1', onUnmount: unmountedIds.add),
+              ],
+            ],
+          ),
+        );
+        expect(unmountedIds, equals(['r1c0', 'r1c1']));
+
+        // Change headers.length from 2 to 1: old row 0 cell elements must unmount
+        // before rebuilding the resized column slot list.
+        element.update(
+          Table(
+            headers: const ['OnlyHeader'],
+            columnWidths: const [10],
+            rows: [
+              [_UnmountSpyCell(id: 'r0c0_new', onUnmount: unmountedIds.add)],
+            ],
+          ),
+        );
+        expect(unmountedIds, equals(['r1c0', 'r1c1', 'r0c0', 'r0c1']));
+      },
+    );
   });
+}
+
+class _UnmountSpyCell extends Widget {
+  final String id;
+  final void Function(String id) onUnmount;
+
+  const _UnmountSpyCell({required this.id, required this.onUnmount});
+
+  @override
+  Element createElement() => _UnmountSpyCellElement(this);
+}
+
+class _UnmountSpyCellElement extends Element {
+  _UnmountSpyCellElement(_UnmountSpyCell super.widget);
+
+  @override
+  void unmount() {
+    (widget as _UnmountSpyCell).onUnmount((widget as _UnmountSpyCell).id);
+    super.unmount();
+  }
+
+  @override
+  Size performLayout(BoxConstraints constraints) =>
+      constraints.constrain(const Size(1, 1));
+
+  @override
+  void performPaint(Buffer buffer, Offset offset) {
+    buffer.writeString(offset.dx, offset.dy, 'x', Style.empty);
+  }
 }
