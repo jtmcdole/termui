@@ -11,6 +11,61 @@ See [Conventional Commits](https://conventionalcommits.org) for commit guideline
 
 Packages with breaking changes:
 
+ - [`fterm` - `v0.6.0`](#fterm---v060)
+ - [`termui_cast_client_core` - `v0.5.0`](#termui_cast_client_core---v050)
+ - [`termui_cast_protocol` - `v0.4.0`](#termui_cast_protocol---v040)
+ - [`termui_cast_server` - `v0.4.0`](#termui_cast_server---v040)
+ - [`termui_caster_cli` - `v0.4.0`](#termui_caster_cli---v040)
+
+Packages with other changes:
+
+ - There are no other changes in this release.
+
+---
+
+#### `fterm` - `v0.6.0`
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FEAT**(fterm): add subpath WS, proxy auto-connect, sessionStorage resume, remote spawn UI, and What's New.
+ - **FEAT**(fterm): add About-styled Web splash and Nerd Font v3 / COLRv1 emoji fonts.
+ - **FEAT**(cast,fterm): persist Cloud Run IAP config and gcloud path override in Connect UI.
+ - **FEAT**(fterm): add Ghostty GLSL shaders, GPU Driver picker, Perf HUD, tracing, and What's New.
+ - **BREAKING** **FEAT**(cast-protocol): add SpawnSessionFrame, allowSpawn flags, and subpath URI resolution.
+
+#### `termui_cast_client_core` - `v0.5.0`
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FEAT**(caster-cli,client-core): add multi-PTY shell spawning and client requestSpawnSession.
+ - **FEAT**(cast,fterm): persist Cloud Run IAP config and gcloud path override in Connect UI.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
+#### `termui_cast_protocol` - `v0.4.0`
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FEAT**(cast,fterm): persist Cloud Run IAP config and gcloud path override in Connect UI.
+ - **BREAKING** **FEAT**(cast-protocol): add SpawnSessionFrame, allowSpawn flags, and subpath URI resolution.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
+#### `termui_cast_server` - `v0.4.0`
+
+ - **FEAT**(cast-server): add loopback Host allowlist, static compression, subpath hosting, proxy auth, and spawn routing.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
+#### `termui_caster_cli` - `v0.4.0`
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FEAT**(caster-cli,client-core): add multi-PTY shell spawning and client requestSpawnSession.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
+
+## 2026-11-24
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
  - [`termui` - `v0.21.0`](#termui---v0210)
  - [`termui_flutter` - `v0.16.0`](#termui_flutter---v0160)
  - [`termui_pty` - `v0.16.0`](#termui_pty---v0160)

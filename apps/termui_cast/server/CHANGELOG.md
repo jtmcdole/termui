@@ -1,3 +1,10 @@
+## 0.4.0
+
+> Note: This release has breaking changes.
+
+ - **FEAT**(cast-server): add loopback Host allowlist, static compression, subpath hosting, proxy auth, and spawn routing.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
 ## 0.3.0
 
  - Graduate package to a stable release. See pre-releases prior to this version for changelog entries.
