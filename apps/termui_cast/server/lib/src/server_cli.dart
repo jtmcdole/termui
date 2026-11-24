@@ -7,12 +7,17 @@ import 'cast_server.dart';
 import 'server_config.dart';
 
 /// Runs the `termui_cast_server` CLI with [args], returning the process exit code.
+///
+/// Optional [currentDirectory] and [resolvedExecutable] overrides are forwarded
+/// to [ServerConfig.fromArgs] for deterministic testing.
 Future<int> runServerCli(
   List<String> args, {
   StringSink? out,
   StringSink? err,
   Stream<void>? shutdownSignal,
   Map<String, String>? environment,
+  Directory? currentDirectory,
+  String? resolvedExecutable,
 }) async {
   final stdoutSink = out ?? stdout;
   final stderrSink = err ?? stderr;
@@ -20,7 +25,12 @@ Future<int> runServerCli(
 
   final ServerConfig? config;
   try {
-    config = ServerConfig.fromArgs(args, environment: env);
+    config = ServerConfig.fromArgs(
+      args,
+      environment: env,
+      currentDirectory: currentDirectory,
+      resolvedExecutable: resolvedExecutable,
+    );
   } on FormatException catch (e) {
     stderrSink
       ..writeln('Error: ${e.message}')

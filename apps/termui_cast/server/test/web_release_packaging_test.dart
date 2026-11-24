@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:checks/checks.dart';
 import 'package:path/path.dart' as p;
+import 'package:termui_cast_server/src/static_web_handler.dart';
 import 'package:termui_cast_server/termui_cast_server.dart';
 import 'package:test/test.dart';
 
@@ -92,6 +93,21 @@ void main() {
     );
 
     test(
+      'package_fterm_web.sh extension list matches StaticWebHandler.compressibleExtensions',
+      () {
+        final script = packageScript.readAsStringSync();
+        final compressSection = script.split('gzip -9 -n -f').last;
+        final matches = RegExp(
+          r"-iname '\*(\.[a-z0-9]+)'",
+        ).allMatches(compressSection);
+        final scriptExtensions = {for (final m in matches) m.group(1)!};
+        check(
+          scriptExtensions,
+        ).deepEquals(StaticWebHandler.compressibleExtensions);
+      },
+    );
+
+    test(
       'package_fterm_web.sh produces gzip-only web/ tar.gz served over gzip, plain, SPA, and --base-path by CastServer',
       () async {
         check(packageScript.existsSync()).isTrue();
@@ -100,6 +116,14 @@ void main() {
             !_hasCommand('tar', const ['--version'])) {
           return;
         }
+
+        // --help exits 0 and prints usage to stdout.
+        final helpResult = await Process.run('bash', [
+          packageScript.path,
+          '--help',
+        ]);
+        check(helpResult.exitCode).equals(0);
+        check(helpResult.stdout as String).contains('Usage:');
 
         final sandbox = await Directory.systemTemp.createTemp(
           'fterm_web_pkg_test_',
@@ -131,12 +155,23 @@ void main() {
             0x00,
             for (var i = 0; i < 1024; i++) i % 23,
           ]),
+          p.join('canvaskit', 'skwasm.wasm'): const [
+            0x00,
+            0x61,
+            0x73,
+            0x6d,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+          ],
           'main.dart.mjs': utf8.encode('export const instantiated = true;\n'),
           'audio_unlock.js': utf8.encode('window.__unlock = () => {};\n'),
           'style.css': utf8.encode('body { background: #14171F; }\n'),
           'favicon.svg': utf8.encode(
             '<svg xmlns="http://www.w3.org/2000/svg"/>',
           ),
+          'Icon.SVG': utf8.encode('<svg xmlns="http://www.w3.org/2000/svg"/>'),
           'manifest.json': utf8.encode('{"name":"fterm"}\n'),
           p.join('assets', 'fonts', 'Test.ttf'): Uint8List.fromList([
             for (var i = 0; i < 1024; i++) (i * 7) % 31,
@@ -384,7 +419,48 @@ void main() {
         check(pngRes.headers.value(HttpHeaders.varyHeader)).isNull();
         check(pngRes.body).deepEquals(rawOnlyFixtures['favicon.png']!);
 
-        // 6. Rejects builds produced without --no-web-resources-cdn.
+        // 6. Corrupt .gz-only asset returns 500 cleanly instead of hanging.
+        await File(
+          p.join(webDir.path, 'corrupt.wasm.gz'),
+        ).writeAsBytes(const [0xDE, 0xAD, 0xBE, 0xEF]);
+        final corruptRes = await fetch('/corrupt.wasm');
+        check(corruptRes.statusCode).equals(HttpStatus.internalServerError);
+
+        // 7. Symlink-escaped .gz-only asset returns 403 without leaking content.
+        final outsideSecret = File(p.join(sandbox.path, 'secret.txt'))
+          ..writeAsStringSync('TOP_SECRET');
+        final escapedGz = Link(p.join(webDir.path, 'escape.wasm.gz'))
+          ..createSync(outsideSecret.path);
+        addTearDown(() {
+          if (escapedGz.existsSync()) escapedGz.deleteSync();
+        });
+        final escapedRes = await fetch('/escape.wasm', acceptEncoding: 'gzip');
+        check(escapedRes.statusCode).equals(HttpStatus.forbidden);
+        check(
+          utf8.decode(escapedRes.body, allowMalformed: true),
+        ).not((it) => it.contains('TOP_SECRET'));
+
+        // 8. Conditional 304 on gunzipped .gz-only asset uses cached raw ETag.
+        final rawWasmRes = await fetch('/main.dart.wasm');
+        final rawEtag = rawWasmRes.headers.value(HttpHeaders.etagHeader)!;
+        final revalReq = await client.getUrl(
+          Uri.parse('http://127.0.0.1:${server.port}/main.dart.wasm'),
+        );
+        revalReq.headers
+          ..removeAll(HttpHeaders.acceptEncodingHeader)
+          ..set(HttpHeaders.ifNoneMatchHeader, rawEtag);
+        final revalRes = await revalReq.close();
+        await revalRes.drain<void>();
+        check(revalRes.statusCode).equals(HttpStatus.notModified);
+
+        // 9. Rejects builds produced without --no-web-resources-cdn or invalid output paths.
+        final dirOutResult = await Process.run('bash', [
+          packageScript.path,
+          buildDir.path,
+          sandbox.path,
+        ]);
+        check(dirOutResult.exitCode).equals(64);
+
         final cdnBuildDir = await Directory(
           p.join(sandbox.path, 'cdn_web'),
         ).create();
