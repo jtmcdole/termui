@@ -35,7 +35,7 @@ final class StaticWebHandler {
   final String _canonicalRoot;
   final String _basePath;
   final int _baseSegmentCount;
-  final File _indexFile;
+  final String _indexPath;
   final Map<
     String,
     ({String basePath, int size, int modifiedMicros, String digest})
@@ -59,7 +59,7 @@ final class StaticWebHandler {
     : _baseSegmentCount = _basePath.isEmpty
           ? 0
           : _basePath.substring(1).split('/').length,
-      _indexFile = File(p.join(_canonicalRoot, 'index.html'));
+      _indexPath = p.join(_canonicalRoot, 'index.html');
 
   /// Handles an incoming HTTP [request] targeting the static web bundle.
   Future<void> handle(HttpRequest request) async {
@@ -102,7 +102,12 @@ final class StaticWebHandler {
         return;
       }
 
-      await _writeFileResponse(request, file);
+      await _writeFileResponse(
+        request,
+        file,
+        logicalPath: resolved.logicalPath,
+        gzipOnly: resolved.gzipOnly,
+      );
     } on FileSystemException {
       try {
         request.response.statusCode = HttpStatus.forbidden;
@@ -148,50 +153,119 @@ final class StaticWebHandler {
       !seg.contains(r'\') &&
       !seg.contains('\x00');
 
-  Future<({File? file, bool forbidden})> _resolveTargetFile(
-    String relPath,
-  ) async {
+  Future<({File? file, String logicalPath, bool gzipOnly, bool forbidden})>
+  _resolveTargetFile(String relPath) async {
     final candidate = p.normalize(p.join(_canonicalRoot, relPath));
     if (!p.isWithin(_canonicalRoot, candidate)) {
-      return (file: null, forbidden: true);
+      return (
+        file: null,
+        logicalPath: candidate,
+        gzipOnly: false,
+        forbidden: true,
+      );
     }
 
-    final file = File(candidate);
-    if (await file.exists()) {
-      final realPath = await file.resolveSymbolicLinks();
-      if (!p.isWithin(_canonicalRoot, realPath)) {
-        return (file: null, forbidden: true);
+    final rawResolved = await _resolveContainedFile(candidate);
+    if (rawResolved.forbidden || rawResolved.file != null) {
+      return (
+        file: rawResolved.file,
+        logicalPath: candidate,
+        gzipOnly: false,
+        forbidden: rawResolved.forbidden,
+      );
+    }
+
+    final ext = p.extension(relPath).toLowerCase();
+    if (_compressibleExtensions.contains(ext)) {
+      final gzResolved = await _resolveContainedFile('$candidate.gz');
+      if (gzResolved.forbidden || gzResolved.file != null) {
+        return (
+          file: gzResolved.file,
+          logicalPath: candidate,
+          gzipOnly: true,
+          forbidden: gzResolved.forbidden,
+        );
       }
-      return (file: File(realPath), forbidden: false);
     }
 
-    if (p.extension(relPath).isEmpty && await _indexFile.exists()) {
-      return (file: _indexFile, forbidden: false);
+    if (ext.isEmpty) {
+      return _resolveIndexTarget();
     }
-    return (file: null, forbidden: false);
+    return (
+      file: null,
+      logicalPath: candidate,
+      gzipOnly: false,
+      forbidden: false,
+    );
   }
 
-  Future<void> _writeFileResponse(HttpRequest request, File file) async {
+  Future<({File? file, String logicalPath, bool gzipOnly, bool forbidden})>
+  _resolveIndexTarget() async {
+    final raw = await _resolveContainedFile(_indexPath);
+    if (raw.forbidden || raw.file != null) {
+      return (
+        file: raw.file,
+        logicalPath: _indexPath,
+        gzipOnly: false,
+        forbidden: raw.forbidden,
+      );
+    }
+    final gz = await _resolveContainedFile('$_indexPath.gz');
+    return (
+      file: gz.file,
+      logicalPath: _indexPath,
+      gzipOnly: gz.file != null,
+      forbidden: gz.forbidden,
+    );
+  }
+
+  Future<({File? file, bool forbidden})> _resolveContainedFile(
+    String candidatePath,
+  ) async {
+    final file = File(candidatePath);
+    if (!await file.exists()) {
+      return (file: null, forbidden: false);
+    }
+    final realPath = await file.resolveSymbolicLinks();
+    if (!p.isWithin(_canonicalRoot, realPath)) {
+      return (file: null, forbidden: true);
+    }
+    return (file: File(realPath), forbidden: false);
+  }
+
+  Future<void> _writeFileResponse(
+    HttpRequest request,
+    File file, {
+    required String logicalPath,
+    required bool gzipOnly,
+  }) async {
     final stat = await file.stat();
     if (request.method != 'HEAD') {
       final probe = await file.open();
       await probe.close();
     }
-    final ext = p.extension(file.path).toLowerCase();
+    final ext = p.extension(logicalPath).toLowerCase();
     final isCompressible = _compressibleExtensions.contains(ext);
-    final rewriteIndex = _basePath.isNotEmpty && file.path == _indexFile.path;
-    final payload = await _prepareResponsePayload(
-      request,
-      file,
-      stat,
-      isCompressible: isCompressible,
-      rewriteIndex: rewriteIndex,
-    );
+    final rewriteIndex = _basePath.isNotEmpty && logicalPath == _indexPath;
+    final payload = gzipOnly
+        ? _prepareGzipOnlyPayload(
+            request,
+            file,
+            stat,
+            rewriteIndex: rewriteIndex,
+          )
+        : await _prepareResponsePayload(
+            request,
+            file,
+            stat,
+            isCompressible: isCompressible,
+            rewriteIndex: rewriteIndex,
+          );
 
     final response = request.response;
     _applyStandardHeaders(
       response,
-      file: file,
+      logicalPath: logicalPath,
       ext: ext,
       etag: payload.etag,
       isCompressible: isCompressible,
@@ -224,7 +298,7 @@ final class StaticWebHandler {
 
   void _applyStandardHeaders(
     HttpResponse response, {
-    required File file,
+    required String logicalPath,
     required String ext,
     required String etag,
     required bool isCompressible,
@@ -247,7 +321,7 @@ final class StaticWebHandler {
             "connect-src 'self' ws: wss:; frame-ancestors 'none'; "
             "base-uri 'self'; object-src 'none'",
       )
-      ..set(HttpHeaders.cacheControlHeader, _cacheControlForFile(file))
+      ..set(HttpHeaders.cacheControlHeader, _cacheControlForPath(logicalPath))
       ..set(HttpHeaders.etagHeader, etag);
     if (isCompressible) {
       response.headers.set(HttpHeaders.varyHeader, 'Accept-Encoding');
@@ -255,6 +329,53 @@ final class StaticWebHandler {
     if (contentEncoding != null) {
       response.headers.set(HttpHeaders.contentEncodingHeader, contentEncoding);
     }
+  }
+
+  _ResponsePayload _prepareGzipOnlyPayload(
+    HttpRequest request,
+    File file,
+    FileStat stat, {
+    required bool rewriteIndex,
+  }) {
+    final prefs = _parseAcceptEncoding(
+      request.headers[HttpHeaders.acceptEncodingHeader],
+    );
+    if (!rewriteIndex && prefs.gzip > 0) {
+      final digest = _digestForRawFile(file, stat);
+      return (
+        etag: '"$digest-gzip"',
+        contentEncoding: 'gzip',
+        contentLength: stat.size,
+        bytes: null,
+        streamFile: file,
+      );
+    }
+    if (rewriteIndex && prefs.gzip > 0) {
+      final entry = _gzipEntryFor(
+        file,
+        stat,
+        rewriteIndex: true,
+        sourceIsGzipped: true,
+      );
+      return (
+        etag: entry.etag,
+        contentEncoding: 'gzip',
+        contentLength: entry.bytes.length,
+        bytes: entry.bytes,
+        streamFile: null,
+      );
+    }
+    final rawBytes = rewriteIndex
+        ? _readRewrittenIndexBytes(file, sourceIsGzipped: true)
+        : Uint8List.fromList(gzip.decode(file.readAsBytesSync()));
+    final digest = '${sha256.convert(rawBytes)}';
+    return (
+      etag: '"$digest"',
+      contentEncoding: null,
+      contentLength: rawBytes.length,
+      bytes: rawBytes,
+      streamFile: null,
+    );
   }
 
   Future<_ResponsePayload> _prepareResponsePayload(
@@ -353,6 +474,7 @@ final class StaticWebHandler {
     File file,
     FileStat stat, {
     required bool rewriteIndex,
+    bool sourceIsGzipped = false,
   }) {
     final path = file.path;
     final modifiedMicros = stat.modified.microsecondsSinceEpoch;
@@ -365,7 +487,7 @@ final class StaticWebHandler {
     }
 
     final entityBytes = rewriteIndex
-        ? _readRewrittenIndexBytes(file)
+        ? _readRewrittenIndexBytes(file, sourceIsGzipped: sourceIsGzipped)
         : file.readAsBytesSync();
     final digest = '${sha256.convert(entityBytes)}';
     final compressed = Uint8List.fromList(gzip.encode(entityBytes));
@@ -397,8 +519,14 @@ final class StaticWebHandler {
     _gzipCacheBytes += size;
   }
 
-  Uint8List _readRewrittenIndexBytes(File file) {
-    final rawHtml = utf8.decode(file.readAsBytesSync(), allowMalformed: true);
+  Uint8List _readRewrittenIndexBytes(
+    File file, {
+    bool sourceIsGzipped = false,
+  }) {
+    final rawBytes = sourceIsGzipped
+        ? gzip.decode(file.readAsBytesSync())
+        : file.readAsBytesSync();
+    final rawHtml = utf8.decode(rawBytes, allowMalformed: true);
     final rewritten = rawHtml.replaceFirstMapped(
       _baseHrefPattern,
       (_) => '<base href="$_basePath/">',
@@ -501,8 +629,8 @@ final class StaticWebHandler {
     _ => ContentType.binary,
   };
 
-  String _cacheControlForFile(File file) {
-    final name = p.basename(file.path).toLowerCase();
+  String _cacheControlForPath(String logicalPath) {
+    final name = p.basename(logicalPath).toLowerCase();
     if (name == 'index.html' ||
         name == 'flutter_bootstrap.js' ||
         name == 'version.json' ||
@@ -511,7 +639,7 @@ final class StaticWebHandler {
         name.endsWith('.mjs')) {
       return 'no-cache';
     }
-    final rel = p.relative(file.path, from: _canonicalRoot).toLowerCase();
+    final rel = p.relative(logicalPath, from: _canonicalRoot).toLowerCase();
     if (rel.startsWith('canvaskit/') || rel.startsWith(r'canvaskit\')) {
       return 'no-cache';
     }

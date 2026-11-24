@@ -90,9 +90,47 @@ jobs:
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  build-web:
+    name: Build web viewer (WASM)
+    needs: preflight
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          channel: stable
+          cache: true
+
+      - name: Install workspace dependencies
+        run: flutter pub get
+
+      - name: Build and package fterm-web WASM bundle
+        run: |
+          mkdir -p dist
+          (cd apps/fterm && flutter build web --wasm --no-web-resources-cdn --build-name="$RELEASE_VERSION" --dart-define="FTERM_BUILD_DATE=$BUILD_DATE")
+          ./utils/package_fterm_web.sh apps/fterm/build/web dist/fterm-web.tar.gz
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          BUILD_DATE: ${{ needs.preflight.outputs.build_date }}
+
+      - name: Upload fterm-web bundle artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fterm-web
+          path: dist/fterm-web.tar.gz
+          if-no-files-found: error
+
   build:
     name: Build (${{ matrix.target }})
-    needs: preflight
+    needs: [preflight, build-web]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     permissions:
@@ -146,6 +184,12 @@ jobs:
 
       - name: Install workspace dependencies
         run: flutter pub get
+
+      - name: Download prebuilt fterm-web WASM bundle
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fterm-web
+          path: dist
 
       - name: Build and package Unix bundles
         if: runner.os != 'Windows'
@@ -205,14 +249,26 @@ jobs:
           CASTER_EXIT=$?
           set -e
           test "$CASTER_EXIT" -eq 3
-          dart compile exe apps/termui_cast/server/bin/termui_cast_server.dart -o build/caster/bundle/bin/termui_cast_server
-          ./build/caster/bundle/bin/termui_cast_server --help > /dev/null
+          COPYFILE_DISABLE=1 tar -C build/caster/bundle -czf "dist/termui_cast-${TARGET}.tar.gz" bin lib
+          tar -tzf "dist/termui_cast-${TARGET}.tar.gz" > build/caster/archive.list
+          grep -Fqx 'bin/termui_cast' build/caster/archive.list
+          ! grep -Eq '^(bin/termui_cast_server|web/)' build/caster/archive.list
+
+          mkdir -p build/server/bundle/bin
+          dart compile exe apps/termui_cast/server/bin/termui_cast_server.dart -o build/server/bundle/bin/termui_cast_server
+          ./build/server/bundle/bin/termui_cast_server --help > /dev/null
           set +e
-          ./build/caster/bundle/bin/termui_cast_server --host 0.0.0.0 2> /dev/null
+          ./build/server/bundle/bin/termui_cast_server --host 0.0.0.0 2> /dev/null
           SERVER_EXIT=$?
           set -e
           test "$SERVER_EXIT" -eq 64
-          tar -C build/caster/bundle -czf "dist/termui_cast-${TARGET}.tar.gz" bin lib
+          tar -xzf dist/fterm-web.tar.gz -C build/server/bundle
+          COPYFILE_DISABLE=1 tar -C build/server/bundle -czf "dist/termui_cast_server-${TARGET}.tar.gz" bin web
+          tar -tzf "dist/termui_cast_server-${TARGET}.tar.gz" > build/server/archive.list
+          grep -Fqx 'bin/termui_cast_server' build/server/archive.list
+          grep -Fqx 'web/index.html.gz' build/server/archive.list
+          grep -Fqx 'web/main.dart.wasm.gz' build/server/archive.list
+          ! grep -Eq '^web/(index\.html|main\.dart\.wasm(\.br)?)$' build/server/archive.list
         env:
           TARGET: ${{ matrix.target }}
           BUILD_DESKTOP: ${{ matrix.build_desktop }}
@@ -235,15 +291,6 @@ jobs:
           & "./build/caster/bundle/bin/termui_cast.exe" --help | Out-Null
           & "./build/caster/bundle/bin/termui_cast.exe" --download-conpty --server ws://127.0.0.1:9/v1/caster '--' cmd /c "exit 3"
           if ($LASTEXITCODE -ne 3) { throw "Expected exit code 3 from termui_cast.exe, got $LASTEXITCODE" }
-          dart compile exe apps/termui_cast/server/bin/termui_cast_server.dart -o build/caster/bundle/bin/termui_cast_server.exe
-          Write-Output "Verifying termui_cast_server.exe..."
-          & "./build/caster/bundle/bin/termui_cast_server.exe" --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Expected exit code 0 from termui_cast_server.exe --help, got $LASTEXITCODE" }
-          $serverProc = Start-Process -FilePath "./build/caster/bundle/bin/termui_cast_server.exe" -ArgumentList "--host", "0.0.0.0" -NoNewWindow -Wait -PassThru -RedirectStandardError "dist/server-check.err"
-          $serverErr = if (Test-Path "dist/server-check.err") { Get-Content "dist/server-check.err" -Raw } else { "" }
-          Remove-Item -Path "dist/server-check.err" -ErrorAction SilentlyContinue
-          if ($serverProc.ExitCode -ne 64) { throw "Expected exit code 64 from termui_cast_server.exe, got $($serverProc.ExitCode): $serverErr" }
-          $global:LASTEXITCODE = 0
 
           $conptyDir = Get-ChildItem -Path (Join-Path $env:LOCALAPPDATA "pty2\conpty\*\x64") -Directory |
             Sort-Object FullName -Descending |
@@ -295,7 +342,7 @@ jobs:
 
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           function Assert-ZipEntries {
-            param([string]$ZipPath, [string[]]$RequiredEntries)
+            param([string]$ZipPath, [string[]]$RequiredEntries, [string[]]$ForbiddenEntries = @())
             $zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $ZipPath))
             try {
               $names = $zip.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
@@ -304,12 +351,34 @@ jobs:
                   throw "Archive $ZipPath is missing required entry '$req'"
                 }
               }
+              foreach ($forbidden in $ForbiddenEntries) {
+                if ($names -contains $forbidden) {
+                  throw "Archive $ZipPath unexpectedly contains '$forbidden'"
+                }
+              }
             } finally {
               $zip.Dispose()
             }
           }
-          Assert-ZipEntries -ZipPath $casterZip -RequiredEntries @("bin/conpty.dll", "bin/OpenConsole.exe", "bin/THIRD-PARTY-NOTICES.txt")
+          Assert-ZipEntries -ZipPath $casterZip -RequiredEntries @("bin/termui_cast.exe", "bin/conpty.dll", "bin/OpenConsole.exe", "bin/THIRD-PARTY-NOTICES.txt") -ForbiddenEntries @("bin/termui_cast_server.exe", "web/index.html")
           Write-Output "Packaged $casterZip"
+
+          New-Item -ItemType Directory -Force -Path build/server/bundle/bin | Out-Null
+          dart compile exe apps/termui_cast/server/bin/termui_cast_server.dart -o build/server/bundle/bin/termui_cast_server.exe
+          Write-Output "Verifying termui_cast_server.exe..."
+          & "./build/server/bundle/bin/termui_cast_server.exe" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Expected exit code 0 from termui_cast_server.exe --help, got $LASTEXITCODE" }
+          $serverProc = Start-Process -FilePath "./build/server/bundle/bin/termui_cast_server.exe" -ArgumentList "--host", "0.0.0.0" -NoNewWindow -Wait -PassThru -RedirectStandardError "dist/server-check.err"
+          $serverErr = if (Test-Path "dist/server-check.err") { Get-Content "dist/server-check.err" -Raw } else { "" }
+          Remove-Item -Path "dist/server-check.err" -ErrorAction SilentlyContinue
+          if ($serverProc.ExitCode -ne 64) { throw "Expected exit code 64 from termui_cast_server.exe, got $($serverProc.ExitCode): $serverErr" }
+          $global:LASTEXITCODE = 0
+          tar.exe -xzf dist/fterm-web.tar.gz -C build/server/bundle
+          if ($LASTEXITCODE -ne 0) { throw "Failed to extract fterm-web.tar.gz ($LASTEXITCODE)" }
+          $serverZip = "dist/termui_cast_server-$($env:TARGET).zip"
+          Compress-Archive -Path "build/server/bundle/*" -DestinationPath $serverZip -Force
+          Assert-ZipEntries -ZipPath $serverZip -RequiredEntries @("bin/termui_cast_server.exe", "web/index.html.gz", "web/main.dart.wasm.gz") -ForbiddenEntries @("bin/termui_cast.exe", "bin/conpty.dll", "web/index.html", "web/main.dart.wasm", "web/main.dart.wasm.br")
+          Write-Output "Packaged $serverZip"
 
           if ($env:BUILD_DESKTOP -eq "true") {
             $ftermReleaseDir = "apps/fterm/build/windows/x64/runner/Release"
@@ -357,9 +426,16 @@ jobs:
           path: dist/termui_cast-${{ matrix.target }}.${{ matrix.archive_ext }}
           if-no-files-found: error
 
+      - name: Upload termui_cast_server bundle artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: termui_cast_server-${{ matrix.target }}
+          path: dist/termui_cast_server-${{ matrix.target }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
   release:
     name: Tag and Publish fterm Release
-    needs: [preflight, build]
+    needs: [preflight, build-web, build]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:
@@ -444,6 +520,8 @@ jobs:
             ```bash
             mkdir -p fterm && tar -xzf fterm-linux-x64.tar.gz -C fterm && ./fterm/fterm
             ```
+          - **Self-Hosted Relay Server (`termui_cast_server-<os>-<arch>.tar.gz` / `.zip`, plus standalone `fterm-web.tar.gz`)**: Each `termui_cast_server-<os>-<arch>` archive bundles `bin/termui_cast_server` together with the prebuilt WASM web viewer under `web/` (pre-compressed as `.gz` assets with no uncompressed duplicates). Extract the archive and run `./bin/termui_cast_server` — it auto-discovers the adjacent `web/` directory with no local Dart/Flutter SDK required. `fterm-web.tar.gz` is also attached standalone.
+          - **Caster CLI (`termui_cast-<os>-<arch>.tar.gz` / `.zip`)**: Lightweight PTY caster bundle containing `bin/termui_cast` and native PTY libraries (`lib/` on Unix, ConPTY binaries on Windows) without the web viewer assets.
           EOF
 
           # Always create as draft first so GitHub Immutable Releases locks the tag

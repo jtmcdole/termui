@@ -185,7 +185,7 @@ This produces a self-contained directory bundle at `build/caster/bundle/` contai
 Prebuilt `fterm` desktop apps and `termui_cast` CLI/server archives are published through a two-step Melos release pipeline:
 
 1. Run [`.github/workflows/release-fterm-prepare.yml`](../../.github/workflows/release-fterm-prepare.yml) (**Prepare fterm release**) to bump versions and generate `CHANGELOG.md` files across `apps/fterm` and `apps/termui_cast/*`, opening a `chore(fterm-release): ...` pull request. (If workspace dependencies under `packages/` also have pending changes, run **Prepare release** first.)
-2. Merge that pull request into `main` to start [`.github/workflows/release-fterm.yml`](../../.github/workflows/release-fterm.yml) (**Release fterm**), which builds all platform archives, tags `fterm-v<version>`, and publishes the GitHub Release.
+2. Merge that pull request into `main` to start [`.github/workflows/release-fterm.yml`](../../.github/workflows/release-fterm.yml) (**Release fterm**), which builds the WASM web viewer (`fterm-web.tar.gz`, pre-compressed as `.gz` assets with no uncompressed duplicates) once, packages `termui_cast_server-<os>-<arch>` (`bin/termui_cast_server` + `web/`, auto-discovered at `../web` on startup), packages lightweight `termui_cast-<os>-<arch>` caster archives (`bin/termui_cast` + PTY libraries), builds desktop `fterm` archives, tags `fterm-v<version>`, and publishes the GitHub Release.
 
 Release binaries are unsigned. On macOS, run `xattr -dr com.apple.quarantine` on the extracted `fterm.app` or `termui_cast` directory before starting it. On Windows, keep `conpty.dll` and `OpenConsole.exe` next to `termui_cast.exe` (inside `bin/`) or `fterm.exe`, and choose **More info -> Run anyway** if SmartScreen prompts on first run.
 
