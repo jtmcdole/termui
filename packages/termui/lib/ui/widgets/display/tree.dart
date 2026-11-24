@@ -221,9 +221,24 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
       case .down:
         selectedIndex = selectedIndex + 1;
       case .right:
-        _handleRightKey(nodes);
+        final flat = nodes[selectedIndex];
+        if (!flat.node.isLeaf && !flat.node.isExpanded) {
+          flat.node.isExpanded = true;
+          updateFlatNodes();
+        } else if (!flat.node.isLeaf && selectedIndex < nodes.length - 1) {
+          selectedIndex = selectedIndex + 1;
+        }
       case .left:
-        _handleLeftKey(nodes);
+        final flat = nodes[selectedIndex];
+        if (!flat.node.isLeaf && flat.node.isExpanded) {
+          flat.node.isExpanded = false;
+          updateFlatNodes();
+        } else if (flat.node.parent case final parent?) {
+          final parentIdx = nodes.indexWhere((f) => f.node == parent);
+          if (parentIdx != -1) {
+            selectedIndex = parentIdx;
+          }
+        }
       case .enter:
         widget.onSelect?.call(nodes[selectedIndex].node);
       case _ when event.key == ' ':
@@ -234,33 +249,6 @@ class TreeWidgetState<T> extends State<TreeWidget<T>>
 
     setState(() {});
     return true;
-  }
-
-  void _handleRightKey(List<FlatNode<T>> nodes) {
-    final flat = nodes[selectedIndex];
-    if (flat.node.isLeaf) return;
-    if (!flat.node.isExpanded) {
-      flat.node.isExpanded = true;
-      updateFlatNodes();
-    } else if (selectedIndex < nodes.length - 1) {
-      selectedIndex = selectedIndex + 1;
-    }
-  }
-
-  void _handleLeftKey(List<FlatNode<T>> nodes) {
-    final flat = nodes[selectedIndex];
-    if (!flat.node.isLeaf && flat.node.isExpanded) {
-      flat.node.isExpanded = false;
-      updateFlatNodes();
-      return;
-    }
-    final parent = flat.node.parent;
-    if (parent != null) {
-      final parentIdx = nodes.indexWhere((f) => f.node == parent);
-      if (parentIdx != -1) {
-        selectedIndex = parentIdx;
-      }
-    }
   }
 
   @override

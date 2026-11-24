@@ -164,7 +164,7 @@ class TableElement extends Element {
     }
     for (var c = 0; c < colCount; c++) {
       final cellData = c < rowData.length ? rowData[c] : '';
-      if (cellData case Widget _) {
+      if (cellData is Widget) {
         final existing = cellElements[rowIdx][c];
         if (existing != null && Widget.canUpdate(existing.widget, cellData)) {
           existing.update(cellData);
@@ -241,7 +241,19 @@ class TableElement extends Element {
       return;
     }
 
-    _paintHeader(buffer, offset, table, w);
+    final headerSb = StringBuffer();
+    for (var i = 0; i < table.headers.length; i++) {
+      headerSb.write(padOrTruncate(table.headers[i], resolvedColumnWidths[i]));
+      if (i < table.headers.length - 1) headerSb.write(' ');
+    }
+    final String headerStr;
+    if (totalContentWidth <= w) {
+      headerSb.write(' ' * (w - totalContentWidth));
+      headerStr = headerSb.toString();
+    } else {
+      headerStr = padOrTruncate(headerSb.toString(), w);
+    }
+    buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
     buffer.writeString(offset.dx, offset.dy + 1, '─' * w, table.borderStyle);
 
     final usableHeight = h - 2;
@@ -250,27 +262,6 @@ class TableElement extends Element {
       if (rowIdx >= table.rows.length) break;
       _paintRow(buffer, offset, table, rowIdx, offset.dy + 2 + r, w);
     }
-  }
-
-  void _paintHeader(Buffer buffer, Offset offset, Table table, int width) {
-    final headerSb = StringBuffer();
-    for (var i = 0; i < table.headers.length; i++) {
-      headerSb.write(padOrTruncate(table.headers[i], resolvedColumnWidths[i]));
-      if (i < table.headers.length - 1) headerSb.write(' ');
-    }
-
-    final columnsTotalWidth =
-        resolvedColumnWidths.fold<int>(0, (prev, val) => prev + val) +
-        (table.headers.length - 1);
-
-    final String headerStr;
-    if (columnsTotalWidth <= width) {
-      headerSb.write(' ' * (width - columnsTotalWidth));
-      headerStr = headerSb.toString();
-    } else {
-      headerStr = padOrTruncate(headerSb.toString(), width);
-    }
-    buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
   }
 
   void _paintRow(
@@ -296,7 +287,7 @@ class TableElement extends Element {
         Rect(offset.dx + cellStartX, targetY, colWidth, 1),
       );
 
-      if (cellData case Widget _) {
+      if (cellData is Widget) {
         vp.fillAttributes(
           char: ' ',
           fg: currentStyle.foreground?.argb ?? 0,

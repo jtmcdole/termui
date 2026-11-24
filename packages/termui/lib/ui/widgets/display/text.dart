@@ -230,10 +230,11 @@ class Text extends Widget {
   }) {
     var currentLine = '';
     var currentLineLen = 0;
-    var remaining = word.characters;
-    while (remaining.isNotEmpty) {
-      final (chunk, takeWidth, next) = _takeWordChunk(remaining, maxWidth);
-      remaining = next;
+    final range = word.characters.iterator;
+    var hasMore = range.moveNext();
+    while (hasMore) {
+      final (chunk, takeWidth, more) = _takeWordChunk(range, maxWidth);
+      hasMore = more;
       if (keepFirstInCurrentLine && takeWidth > 0 && currentLine.isEmpty) {
         currentLine = chunk;
         currentLineLen = takeWidth;
@@ -244,25 +245,26 @@ class Text extends Widget {
     return (currentLine, currentLineLen);
   }
 
-  static (String, int, Characters) _takeWordChunk(
-    Characters chars,
+  static (String, int, bool) _takeWordChunk(
+    CharacterRange range,
     int maxWidth,
   ) {
     var takeWidth = 0;
     final chunk = StringBuffer();
-    var remaining = chars;
-    while (remaining.isNotEmpty) {
-      final char = remaining.first;
+    var hasMore = true;
+    while (hasMore) {
+      final char = range.current;
       final w = isWideGrapheme(char) ? 2 : 1;
       if (takeWidth + w > maxWidth) break;
       chunk.write(char);
       takeWidth += w;
-      remaining = remaining.skip(1);
+      hasMore = range.moveNext();
     }
     if (chunk.isNotEmpty) {
-      return (chunk.toString(), takeWidth, remaining);
+      return (chunk.toString(), takeWidth, hasMore);
     }
-    return (remaining.first, 0, remaining.skip(1));
+    final char = range.current;
+    return (char, 0, range.moveNext());
   }
 }
 

@@ -279,12 +279,7 @@ class LazyTableElement extends Element {
         (hasHeaders ? table.headers.length - 1 : 0);
 
     if (hasHeaders) {
-      final headerStr = _formatLine(
-        table.headers,
-        table.headers.length,
-        columnsTotalWidth,
-        w,
-      );
+      final headerStr = _formatLine(table.headers, columnsTotalWidth, w);
       buffer.writeString(offset.dx, offset.dy, headerStr, table.headerStyle);
       buffer.writeString(offset.dx, offset.dy + 1, '─' * w, table.borderStyle);
     }
@@ -297,12 +292,7 @@ class LazyTableElement extends Element {
       final currentStyle = rowIdx == table.selectedRowIndex
           ? table.selectedRowStyle
           : table.rowStyle;
-      final rowStr = _formatLine(
-        rowData,
-        table.headers.length,
-        columnsTotalWidth,
-        w,
-      );
+      final rowStr = _formatLine(rowData, columnsTotalWidth, w);
       buffer.writeString(
         offset.dx,
         offset.dy + headerRowsCount + r,
@@ -312,12 +302,8 @@ class LazyTableElement extends Element {
     }
   }
 
-  String _formatLine(
-    List<String> cells,
-    int colCount,
-    int columnsTotalWidth,
-    int width,
-  ) {
+  String _formatLine(List<String> cells, int columnsTotalWidth, int width) {
+    final colCount = resolvedColumnWidths.length;
     final sb = StringBuffer();
     for (var c = 0; c < colCount; c++) {
       final cellText = c < cells.length ? cells[c] : '';
@@ -325,9 +311,7 @@ class LazyTableElement extends Element {
       if (c < colCount - 1) sb.write(' ');
     }
     if (columnsTotalWidth <= width) {
-      if (columnsTotalWidth < width) {
-        sb.write(' ' * (width - columnsTotalWidth));
-      }
+      sb.write(' ' * (width - columnsTotalWidth));
       return sb.toString();
     }
     return padOrTruncate(sb.toString(), width);

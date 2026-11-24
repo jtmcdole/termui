@@ -504,7 +504,13 @@ class DecoratedBoxElement extends SingleChildElement {
     }
 
     if (bgStyle != null) {
-      _paintBackground(buffer, area, bgStyle);
+      buffer.fillRect(
+        area,
+        char: ' ',
+        fg: bgStyle.foreground?.argb,
+        bg: bgStyle.background?.argb,
+        modifiers: bgStyle.modifiers,
+      );
     }
 
     final border = db.decoration.border;
@@ -514,32 +520,6 @@ class DecoratedBoxElement extends SingleChildElement {
 
     if (childElement != null) {
       childElement!.paint(buffer, offset + childElement!.relativeOffset);
-    }
-  }
-
-  static void _paintBackground(Buffer buffer, Rect area, Style bgStyle) {
-    final startY = max(0, -area.y);
-    final endY = min(area.height, buffer.height - area.y);
-    final startX = max(0, -area.x);
-    final endX = min(area.width, buffer.width - area.x);
-    if (startX >= endX || startY >= endY) return;
-
-    final bgFg = bgStyle.foreground?.argb;
-    final bgBg = bgStyle.background?.argb;
-    final bgModifiers = bgStyle.modifiers;
-
-    for (var y = startY; y < endY; y++) {
-      final drawY = area.y + y;
-      for (var x = startX; x < endX; x++) {
-        buffer.setAttributes(
-          area.x + x,
-          drawY,
-          char: ' ',
-          fg: bgFg,
-          bg: bgBg,
-          modifiers: bgModifiers,
-        );
-      }
     }
   }
 
@@ -782,7 +762,7 @@ final class _AngledBorderGradient extends _BorderGradient {
 
   @override
   Style styleAt(int x, int y, Style baseStyle) {
-    final color = pRange.abs() < 1e-5
+    final color = !pRange.isFinite || pRange.abs() < 1e-5
         ? startColor
         : _BorderGradient._interpolateRgb(
             startColor,
