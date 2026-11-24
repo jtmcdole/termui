@@ -4,7 +4,7 @@
 > **Remote Code Execution (RCE) Risk:** `termui_caster` opens live interactive shells (`zsh`, `bash`, `pwsh`) over WebSockets with **no** built-in identity provider or IAM layer. Exposing a TTY relay without strong perimeter authentication (such as Google Cloud IAM + Identity-Aware Proxy) grants full RCE on the casting host. Always deploy internet-facing relays behind Identity-Aware Proxy (`--iap`), store tokens in Secret Manager, and follow [docs/setup.md](docs/setup.md).
 
 > [!NOTE]
-> **Status: Active `0.x` Releases.** Current workspace versions are `fterm` `v0.5.0`, `termui_cast_client_core` `v0.4.0`, and `termui_cast_server` / `termui_caster_cli` / `termui_cast_protocol` `v0.3.0`. Breaking wire and API changes may still land between minor releases before `1.0.0`.
+> **Status: Active `0.x` Releases.** See [GitHub Releases](https://github.com/jtmcdole/termui/releases) for published `fterm` and `termui_cast` release versions, or each package's `pubspec.yaml` and `CHANGELOG.md` for current workspace versions. Breaking wire and API changes may still land between minor releases before `1.0.0`.
 
 `termui_caster` streams live interactive TTY sessions over binary WebSockets across pure-Dart and Flutter workspace apps under `apps/`:
 
@@ -185,9 +185,9 @@ This produces a self-contained directory bundle at `build/caster/bundle/` contai
 Prebuilt `fterm` desktop apps and `termui_cast` CLI/server archives are published through a two-step Melos release pipeline:
 
 1. Run [`.github/workflows/release-fterm-prepare.yml`](../../.github/workflows/release-fterm-prepare.yml) (**Prepare fterm release**) to bump versions and generate `CHANGELOG.md` files across `apps/fterm` and `apps/termui_cast/*`, opening a `chore(fterm-release): ...` pull request. (If workspace dependencies under `packages/` also have pending changes, run **Prepare release** first.)
-2. Merge that pull request into `main` to start [`.github/workflows/release-fterm.yml`](../../.github/workflows/release-fterm.yml) (**Release fterm**), which builds all platform archives, tags `fterm-v<version>`, and publishes the GitHub Release.
+2. Merge that pull request into `main` to start [`.github/workflows/release-fterm.yml`](../../.github/workflows/release-fterm.yml) (**Release fterm**), which builds the WASM web viewer (`fterm-web.tar.gz`, pre-compressed as `.gz` assets with no uncompressed duplicates) once, packages `termui_cast_server-<os>-<arch>` (`bin/termui_cast_server` + `web/`, auto-discovered at `../web` on startup), packages lightweight `termui_cast-<os>-<arch>` caster archives (`bin/termui_cast` + PTY libraries), builds desktop `fterm` archives, tags `fterm-v<version>`, and publishes the GitHub Release.
 
-Release binaries are unsigned. On macOS, run `xattr -dr com.apple.quarantine` on the extracted `fterm.app` or `termui_cast` directory before starting it. On Windows, keep `conpty.dll` and `OpenConsole.exe` next to `termui_cast.exe` (inside `bin/`) or `fterm.exe`, and choose **More info -> Run anyway** if SmartScreen prompts on first run.
+Release binaries are unsigned. On macOS, run `xattr -dr com.apple.quarantine` on the extracted `fterm.app`, `termui_cast`, or `termui_cast_server` directory before starting it. On Windows, keep `conpty.dll` and `OpenConsole.exe` next to `termui_cast.exe` (inside `bin/`) or `fterm.exe`, and choose **More info -> Run anyway** if SmartScreen prompts on first run.
 
 ### Relay Server (`termui_cast_server`) via `dart compile exe`
 
@@ -227,7 +227,7 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | `TERMUI_CAST_TOKEN` | Web App (`--dart-define`) | Default viewer token embedded into the web viewer static bundle (public to anyone able to load static assets unless gated behind IAP; prefer `#token=...` fragments or perimeter auth) |
 | `TERMUI_CAST_IAP_SERVICE_ACCOUNT` | Caster CLI | Service account email for keyless `gcloud iam service-accounts sign-jwt` IAP authentication |
 | `TERMUI_CAST_IAP_KEY_FILE` | Caster CLI | Path to a service account JSON key for pure-Dart RS256 IAP authentication |
-| `TERMUI_CAST_WEB_DIR` | Server | Directory path containing the compiled Flutter web assets (`build/web`) |
+| `TERMUI_CAST_WEB_DIR` | Server | Directory path containing the compiled Flutter web assets (`web/` or `apps/fterm/build/web`) |
 | `TERMUI_CAST_ALLOWED_ORIGINS` | Server | Comma-separated list of additional allowed `Origin` URLs for WebSocket upgrades (also permits matching `Host` headers on loopback) |
 | `TERMUI_CAST_REVISION` | Server | Explicit revision string reported on `/healthz` (defaults to `K_REVISION` on Cloud Run) |
 | `TERMUI_CAST_ALLOW_SPAWN` | Caster CLI | Set to `true`/`1` or `false`/`0` to control remote shell spawning (auto-enabled for interactive shells, off for non-shell commands) |
@@ -253,7 +253,7 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 | `--require-client-auth-header` | `$TERMUI_CAST_REQUIRE_CLIENT_AUTH_HEADER` | Require a non-empty HTTP header on `/v1/client` upgrades (requires `--trust-proxy-client-auth`) |
 | `--base-path` | `""` (`$TERMUI_CAST_BASE_PATH`) | Mount `/healthz`, `/v1/caster`, `/v1/client`, and static assets under a URL subpath prefix (such as `/term`) |
 | `--allowed-origin` | `$TERMUI_CAST_ALLOWED_ORIGINS` | Additional allowed `Origin` header URLs (repeatable; on loopback, also permits matching proxied `Host` headers) |
-| `--web-dir` | `$TERMUI_CAST_WEB_DIR` (`apps/fterm/build/web`) | Directory of static WASM web viewer assets |
+| `--web-dir` | `$TERMUI_CAST_WEB_DIR` (auto-discovers `../web` or `./web` next to a compiled binary, or workspace `apps/fterm/build/web`) | Directory of static WASM web viewer assets (raw or gzip-only `.gz`) |
 | `--no-web` | `false` | Disable static web asset serving at `/` |
 | `--revision` | `$TERMUI_CAST_REVISION` (or `$K_REVISION`) | Server revision string reported on `/healthz` |
 
@@ -306,7 +306,7 @@ All runtime environment variables use the `TERMUI_CAST_*` prefix.
 - Non-loopback bindings require `--caster-token` (`$TERMUI_CAST_CASTER_TOKEN`) plus `--client-token` (unless `--trust-proxy-client-auth` is enabled), and reject `--insecure-no-auth` with exit code `64`.
 - Loopback bindings reject non-loopback `Host` headers on WebSocket upgrades (`403 Forbidden`) to block DNS rebinding. Passing `--allowed-origin https://<public-host>` permits matching proxied `Host` headers (defaulting omitted ports to `443` or `80`, or matching an explicit port in `--allowed-origin`) while rejecting unlisted hosts.
 - Passing `--trust-proxy-client-auth` allows tokenless `/v1/client` upgrades behind upstream perimeter auth while keeping `/v1/caster` token-gated. Pair it with `--require-client-auth-header` and block direct access to the relay port. See [Self-Hosted Reverse Proxy Setup](docs/setup.md#self-hosted-reverse-proxy-setup).
-- Static web hosting negotiates `Accept-Encoding` (respecting `q=0`) and serves `.br` or `.gz` sidecars when present. Otherwise it caches in-memory `gzip` responses up to 32 MiB for compressible assets (`.wasm`, `.js`, `.mjs`, `.html`, `.json`, `.css`, `.svg`, `.ttf`, `.otf`) with `Vary: Accept-Encoding` and encoding-scoped ETags.
+- Static web hosting negotiates `Accept-Encoding` (respecting `q=0`), streams `.gz`-only pre-compressed bundles directly to gzip-capable browsers with async on-the-fly gunzip fallback for plain clients, serves `.br` or `.gz` sidecars when present alongside raw files, and otherwise caches in-memory `gzip` responses up to 32 MiB for compressible assets (`.wasm`, `.js`, `.mjs`, `.html`, `.json`, `.css`, `.svg`, `.ttf`, `.otf`) with `Vary: Accept-Encoding` and encoding-scoped ETags.
 - On HTTP(S) origins without an explicit server URL, `fterm` Web attempts one silent tokenless same-origin connection before opening the connect dialog. Manually entered client tokens and open tab or split layouts persist only in tab-scoped `window.sessionStorage` (never `window.localStorage`), scoped to the matching relay URL.
 - `termui_cast` enables remote shell spawning (`--allow-spawn`) automatically for recognized interactive shells and disables it for non-shell commands or scripts. Pass `--no-allow-spawn` to disable spawning on interactive shells.
 - Pre-auth WebSocket upgrades enforce a 2-second auth deadline, a 16 KiB pre-auth cap, and oldest-pending eviction at 32 pending upgrades (`503` at 256 peers).

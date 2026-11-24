@@ -6,18 +6,51 @@ on:
   pull_request:
     branches: [ main ]
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  changes:
+    name: Detect Package Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Check package-relevant paths
+        id: filter
+        uses: ./.github/actions/detect-changes
+        with:
+          label: Build and Test CI
+          paths: |
+            pubspec.yaml
+            pubspec.lock
+            analysis_options.yaml
+            .github/actions/detect-changes/
+            .github/actions/setup-soloud/
+            .github/workflows/dart.yml
+            packages/
+
   test:
     name: Build and Test (${{ matrix.os }}, ${{ matrix.suite }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -102,3 +135,36 @@ jobs:
           name: flutter-golden-failures
           path: packages/**/test/failures/*.png
           if-no-files-found: ignore
+
+  build-and-test-gate:
+    name: Build and Test
+    needs: [changes, test]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate Build and Test CI result
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_RUN: ${{ needs.changes.outputs.run }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::changes job ended with status: $CHANGES_RESULT"
+            exit 1
+          fi
+
+          if [ "$TEST_RESULT" = "skipped" ] && [ "$CHANGES_RUN" = "false" ]; then
+            echo "Build and Test gate passed (changes=$CHANGES_RESULT, run=$CHANGES_RUN, test=$TEST_RESULT)."
+            exit 0
+          fi
+
+          if [ "$TEST_RESULT" != "success" ]; then
+            echo "::error::test job ended with status: $TEST_RESULT (changes.run='$CHANGES_RUN')"
+            exit 1
+          fi
+
+          echo "Build and Test gate passed (changes=$CHANGES_RESULT, test=$TEST_RESULT)."

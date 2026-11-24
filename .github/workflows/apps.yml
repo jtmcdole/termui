@@ -3,38 +3,8 @@ name: Apps Build and Test
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - 'analysis_options.yaml'
-      - '.github/actions/setup-soloud/**'
-      - '.github/workflows/apps.yml'
-      - 'apps/**'
-      - 'packages/pty2/**'
-      - 'packages/termui/**'
-      - 'packages/termui_audio/**'
-      - 'packages/termui_audio_flutter/**'
-      - 'packages/termui_flutter/**'
-      - 'packages/termui_pty/**'
-      - 'packages/termui_recorder/**'
-      - 'packages/termui_test/**'
   pull_request:
     branches: [ main ]
-    paths:
-      - 'pubspec.yaml'
-      - 'pubspec.lock'
-      - 'analysis_options.yaml'
-      - '.github/actions/setup-soloud/**'
-      - '.github/workflows/apps.yml'
-      - 'apps/**'
-      - 'packages/pty2/**'
-      - 'packages/termui/**'
-      - 'packages/termui_audio/**'
-      - 'packages/termui_audio_flutter/**'
-      - 'packages/termui_flutter/**'
-      - 'packages/termui_pty/**'
-      - 'packages/termui_recorder/**'
-      - 'packages/termui_test/**'
 
 permissions: {}
 
@@ -43,8 +13,50 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  changes:
+    name: Detect App Changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          persist-credentials: false
+
+      - name: Check app-relevant paths
+        id: filter
+        uses: ./.github/actions/detect-changes
+        with:
+          label: Apps CI
+          paths: |
+            pubspec.yaml
+            pubspec.lock
+            analysis_options.yaml
+            .github/actions/detect-changes/
+            .github/actions/setup-soloud/
+            .github/workflows/apps.yml
+            .github/workflows/release-fterm.yml
+            utils/package_fterm_web.sh
+            apps/
+            packages/pty2/
+            packages/termui/
+            packages/termui_audio/
+            packages/termui_audio_flutter/
+            packages/termui_flutter/
+            packages/termui_pty/
+            packages/termui_recorder/
+            packages/termui_test/
+
   test-apps:
     name: Apps (${{ matrix.suite }}, ${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     permissions:
@@ -147,3 +159,36 @@ jobs:
           BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           flutter build web --wasm --no-web-resources-cdn --dart-define="FTERM_BUILD_DATE=${BUILD_DATE}"
           grep -q '"useLocalCanvasKit":true' build/web/flutter_bootstrap.js
+
+  apps-gate:
+    name: Apps
+    needs: [changes, test-apps]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate Apps CI result
+        shell: bash
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          CHANGES_RUN: ${{ needs.changes.outputs.run }}
+          TEST_RESULT: ${{ needs.test-apps.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "$CHANGES_RESULT" != "success" ]; then
+            echo "::error::changes job ended with status: $CHANGES_RESULT"
+            exit 1
+          fi
+
+          if [ "$TEST_RESULT" = "skipped" ] && [ "$CHANGES_RUN" = "false" ]; then
+            echo "Apps gate passed (changes=$CHANGES_RESULT, run=$CHANGES_RUN, test-apps=$TEST_RESULT)."
+            exit 0
+          fi
+
+          if [ "$TEST_RESULT" != "success" ]; then
+            echo "::error::test-apps job ended with status: $TEST_RESULT (changes.run='$CHANGES_RUN')"
+            exit 1
+          fi
+
+          echo "Apps gate passed (changes=$CHANGES_RESULT, test-apps=$TEST_RESULT)."

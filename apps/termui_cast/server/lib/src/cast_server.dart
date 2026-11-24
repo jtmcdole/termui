@@ -41,14 +41,30 @@ final class CastServer {
     );
   }
 
+  /// Bound interface address.
+  InternetAddress get address => _httpServer.address;
+
   /// Bound TCP port.
   int get port => _httpServer.port;
 
-  /// WebSocket URI for caster peers (`<basePath>/v1/caster`).
-  Uri get casterUri => _endpointUri('${config.basePath}/v1/caster');
+  /// Local-connectable HTTP base URI for the server (`<basePath>/`).
+  ///
+  /// Wildcard bind addresses (`0.0.0.0` and `::`) are normalized to loopback
+  /// (`127.0.0.1` and `::1`). Serves static web assets when [ServerConfig.webRoot]
+  /// is configured; `<basePath>/healthz` is always served relative to this URI.
+  Uri get httpUri => _endpointUri('http', '${config.basePath}/');
 
-  /// WebSocket URI for viewer client peers (`<basePath>/v1/client`).
-  Uri get clientUri => _endpointUri('${config.basePath}/v1/client');
+  /// Local-connectable WebSocket URI for caster peers (`<basePath>/v1/caster`).
+  ///
+  /// Wildcard bind addresses (`0.0.0.0` and `::`) are normalized to loopback
+  /// (`127.0.0.1` and `::1`).
+  Uri get casterUri => _endpointUri('ws', '${config.basePath}/v1/caster');
+
+  /// Local-connectable WebSocket URI for viewer client peers (`<basePath>/v1/client`).
+  ///
+  /// Wildcard bind addresses (`0.0.0.0` and `::`) are normalized to loopback
+  /// (`127.0.0.1` and `::1`).
+  Uri get clientUri => _endpointUri('ws', '${config.basePath}/v1/client');
 
   /// Binds an HTTP or HTTPS server according to [config].
   static Future<CastServer> bind(
@@ -97,14 +113,17 @@ final class CastServer {
     await _httpServer.close(force: true);
   }
 
-  Uri _endpointUri(String path) {
-    final rawHost = _httpServer.address.address;
-    final connectHost = switch (rawHost) {
-      '0.0.0.0' => '127.0.0.1',
-      '::' => '::1',
-      _ => rawHost,
-    };
-    return Uri(scheme: 'ws', host: connectHost, port: port, path: path);
+  Uri _endpointUri(String scheme, String path) {
+    final bound = _httpServer.address;
+    final String connectHost;
+    if (bound == InternetAddress.anyIPv4) {
+      connectHost = InternetAddress.loopbackIPv4.address;
+    } else if (bound == InternetAddress.anyIPv6) {
+      connectHost = InternetAddress.loopbackIPv6.address;
+    } else {
+      connectHost = bound.address;
+    }
+    return Uri(scheme: scheme, host: connectHost, port: port, path: path);
   }
 
   Future<void> _handleHttpRequest(HttpRequest request) async {

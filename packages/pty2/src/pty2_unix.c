@@ -783,8 +783,14 @@ PTY2_EXPORT int32_t pty2_kill_shell(void* main_state, int32_t sig) {
   int32_t reap_state = pty2_try_reap_locked(state, &shim_to_wait);
   if (reap_state == 0 && state->shell_pid > 1) {
     pid_t target = (pid_t)state->shell_pid;
-    (void)kill(-target, (int)sig);
-    delivered = (kill(target, (int)sig) == 0) ? 1 : 0;
+    // Once setsid() has run, target is the session leader of process group
+    // `target` and cannot leave it; short-circuiting on kill(-target, sig) == 0
+    // avoids racing with the reaper shim reaping target before kill(target, sig)
+    // and prevents double-delivering the signal. Fall back to kill(target, sig)
+    // if the child has not yet called setsid().
+    if (kill(-target, (int)sig) == 0 || kill(target, (int)sig) == 0) {
+      delivered = 1;
+    }
   }
   pthread_mutex_unlock(&state->lock);
 

@@ -396,7 +396,12 @@ chmod 600 ~/.config/termui_cast/caster.token
 ```
 
 3. Trust your proxy for viewer auth by passing `--trust-proxy-client-auth` and `--require-client-auth-header <header>`. When enabled, `termui_cast_server` allows tokenless `/v1/client` upgrades only when that HTTP header is non-empty. `fterm` Web attempts one silent same-origin connection on startup and skips the token dialog.
-4. Serve the compiled web bundle from `--web-dir apps/fterm/build/web`. `termui_cast_server` serves `.br` and `.gz` sidecars when present. Otherwise it caches on-the-fly `gzip` responses up to 32 MiB for compressible assets (`.wasm`, `.js`, `.mjs`, `.html`, `.json`, `.css`, `.svg`, `.ttf`, `.otf`).
+4. Serve the compiled web bundle. Each prebuilt `termui_cast_server-<os>-<arch>` release archive already bundles `web/` (built with `flutter build web --wasm --no-web-resources-cdn` and pre-compressed as `.gz` assets with no uncompressed duplicates) next to `bin/termui_cast_server`, so `./bin/termui_cast_server` auto-discovers `../web` with zero local SDK setup. (`termui_cast-<os>-<arch>` contains only the lightweight caster CLI and PTY libraries.) A standalone `fterm-web.tar.gz` archive is also attached to each GitHub Release.
+5. For source builds (`flutter build web --wasm --no-web-resources-cdn`), pass `--web-dir apps/fterm/build/web` (or let `termui_cast_server` auto-discover it from the repo root). `termui_cast_server` streams `.gz`-only assets directly to gzip-capable browsers over both HTTP and HTTPS (transparently decompressing for non-gzip clients or `--base-path` HTML rewrites), serves `.br`/`.gz` sidecars when present alongside raw files, and otherwise caches on-the-fly `gzip` responses up to 32 MiB for compressible assets (`.wasm`, `.js`, `.mjs`, `.html`, `.json`, `.css`, `.svg`, `.ttf`, `.otf`). To package a pre-compressed gzip-only `web/` archive from a source build:
+
+```bash
+./utils/package_fterm_web.sh apps/fterm/build/web dist/fterm-web.tar.gz
+```
 
 > [!CAUTION]
 > Never combine `--trust-proxy-client-auth` with direct network access to port `8420`. Make sure your reverse proxy strips any client-supplied copy of the header named in `--require-client-auth-header` before forwarding traffic. `termui_cast_server` rejects `--trust-proxy-client-auth` if you also set `--client-token*` or `--insecure-no-auth`.

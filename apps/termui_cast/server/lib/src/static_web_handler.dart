@@ -9,13 +9,16 @@ import 'server_config.dart';
 
 /// Serves pre-built static Flutter web / WASM assets with strict path-traversal
 /// protection, accurate MIME types, subpath `<base href>` rewriting, HTTP
-/// compression (`.br`/`.gz` sidecars + bounded in-memory gzip), and
+/// compression (`.gz`-only pre-compressed bundles with async on-the-fly gunzip
+/// fallback, `.br`/`.gz` sidecars, and bounded in-memory gzip), and
 /// extensionless SPA pass-through.
 final class StaticWebHandler {
   /// Maximum aggregate byte size retained in the in-memory gzip cache (`32 MiB`).
   static const int maxCompressedCacheBytes = 32 * 1024 * 1024;
 
-  static const Set<String> _compressibleExtensions = {
+  /// Lowercase asset extensions eligible for `.gz`-only resolution, `.br`/`.gz`
+  /// sidecars, and in-memory gzip compression.
+  static const Set<String> compressibleExtensions = {
     '.wasm',
     '.js',
     '.mjs',
@@ -35,12 +38,13 @@ final class StaticWebHandler {
   final String _canonicalRoot;
   final String _basePath;
   final int _baseSegmentCount;
-  final File _indexFile;
+  final String _indexPath;
   final Map<
     String,
     ({String basePath, int size, int modifiedMicros, String digest})
   >
   _digestCache = {};
+  final Map<String, _GunzipMetaCacheEntry> _gunzipMetaCache = {};
   final Map<String, _GzipCacheEntry> _gzipCache = {};
   int _gzipCacheBytes = 0;
 
@@ -59,7 +63,7 @@ final class StaticWebHandler {
     : _baseSegmentCount = _basePath.isEmpty
           ? 0
           : _basePath.substring(1).split('/').length,
-      _indexFile = File(p.join(_canonicalRoot, 'index.html'));
+      _indexPath = p.join(_canonicalRoot, 'index.html');
 
   /// Handles an incoming HTTP [request] targeting the static web bundle.
   Future<void> handle(HttpRequest request) async {
@@ -89,28 +93,33 @@ final class StaticWebHandler {
     }
 
     try {
-      final resolved = await _resolveTargetFile(relPath);
-      if (resolved.forbidden) {
-        request.response.statusCode = HttpStatus.forbidden;
-        await request.response.close();
-        return;
+      switch (await _resolveTargetFile(relPath)) {
+        case _ForbiddenTarget():
+          await _closeWithStatus(request.response, HttpStatus.forbidden);
+        case _NotFoundTarget():
+          await _closeWithStatus(request.response, HttpStatus.notFound);
+        case _FoundAsset(:final file, :final logicalPath, :final storage):
+          await _writeFileResponse(
+            request,
+            file,
+            logicalPath: logicalPath,
+            storage: storage,
+          );
       }
-      final file = resolved.file;
-      if (file == null) {
-        request.response.statusCode = HttpStatus.notFound;
-        await request.response.close();
-        return;
-      }
-
-      await _writeFileResponse(request, file);
     } on FileSystemException {
-      try {
-        request.response.statusCode = HttpStatus.forbidden;
-      } on StateError {
-        // Headers already sent while streaming; close the response stream cleanly.
-      }
-      await request.response.close();
+      await _closeWithStatus(request.response, HttpStatus.forbidden);
+    } on FormatException {
+      await _closeWithStatus(request.response, HttpStatus.internalServerError);
     }
+  }
+
+  Future<void> _closeWithStatus(HttpResponse response, int statusCode) async {
+    try {
+      response.statusCode = statusCode;
+    } on StateError {
+      // Headers already sent while streaming; close the response stream cleanly.
+    }
+    await response.close();
   }
 
   String? _extractSafeRelativePath(Uri uri) {
@@ -148,50 +157,100 @@ final class StaticWebHandler {
       !seg.contains(r'\') &&
       !seg.contains('\x00');
 
-  Future<({File? file, bool forbidden})> _resolveTargetFile(
-    String relPath,
-  ) async {
+  Future<_ResolvedTarget> _resolveTargetFile(String relPath) async {
     final candidate = p.normalize(p.join(_canonicalRoot, relPath));
     if (!p.isWithin(_canonicalRoot, candidate)) {
-      return (file: null, forbidden: true);
+      return const _ForbiddenTarget();
     }
 
-    final file = File(candidate);
-    if (await file.exists()) {
-      final realPath = await file.resolveSymbolicLinks();
-      if (!p.isWithin(_canonicalRoot, realPath)) {
-        return (file: null, forbidden: true);
-      }
-      return (file: File(realPath), forbidden: false);
+    final rawTarget = await _resolveContainedAsset(
+      candidate,
+      logicalPath: candidate,
+      storage: _AssetStorage.raw,
+    );
+    if (rawTarget is! _NotFoundTarget) return rawTarget;
+
+    final ext = p.extension(relPath).toLowerCase();
+    if (compressibleExtensions.contains(ext)) {
+      final gzTarget = await _resolveContainedAsset(
+        '$candidate.gz',
+        logicalPath: candidate,
+        storage: _AssetStorage.gzipOnly,
+      );
+      if (gzTarget is! _NotFoundTarget) return gzTarget;
     }
 
-    if (p.extension(relPath).isEmpty && await _indexFile.exists()) {
-      return (file: _indexFile, forbidden: false);
-    }
-    return (file: null, forbidden: false);
+    return ext.isEmpty ? _resolveIndexTarget() : const _NotFoundTarget();
   }
 
-  Future<void> _writeFileResponse(HttpRequest request, File file) async {
+  Future<_ResolvedTarget> _resolveIndexTarget() async {
+    final raw = await _resolveContainedAsset(
+      _indexPath,
+      logicalPath: _indexPath,
+      storage: _AssetStorage.raw,
+    );
+    if (raw is! _NotFoundTarget) return raw;
+    return _resolveContainedAsset(
+      '$_indexPath.gz',
+      logicalPath: _indexPath,
+      storage: _AssetStorage.gzipOnly,
+    );
+  }
+
+  Future<_ResolvedTarget> _resolveContainedAsset(
+    String candidatePath, {
+    required String logicalPath,
+    required _AssetStorage storage,
+  }) async {
+    final file = File(candidatePath);
+    if (!await file.exists()) {
+      return const _NotFoundTarget();
+    }
+    final realPath = await file.resolveSymbolicLinks();
+    if (!p.isWithin(_canonicalRoot, realPath)) {
+      return const _ForbiddenTarget();
+    }
+    return _FoundAsset(
+      file: File(realPath),
+      logicalPath: logicalPath,
+      storage: storage,
+    );
+  }
+
+  Future<void> _writeFileResponse(
+    HttpRequest request,
+    File file, {
+    required String logicalPath,
+    required _AssetStorage storage,
+  }) async {
     final stat = await file.stat();
     if (request.method != 'HEAD') {
       final probe = await file.open();
       await probe.close();
     }
-    final ext = p.extension(file.path).toLowerCase();
-    final isCompressible = _compressibleExtensions.contains(ext);
-    final rewriteIndex = _basePath.isNotEmpty && file.path == _indexFile.path;
-    final payload = await _prepareResponsePayload(
-      request,
-      file,
-      stat,
-      isCompressible: isCompressible,
-      rewriteIndex: rewriteIndex,
-    );
+    final ext = p.extension(logicalPath).toLowerCase();
+    final isCompressible = compressibleExtensions.contains(ext);
+    final rewriteIndex = _basePath.isNotEmpty && logicalPath == _indexPath;
+    final payload = switch (storage) {
+      _AssetStorage.gzipOnly => await _prepareGzipOnlyPayload(
+        request,
+        file,
+        stat,
+        rewriteIndex: rewriteIndex,
+      ),
+      _AssetStorage.raw => await _prepareResponsePayload(
+        request,
+        file,
+        stat,
+        isCompressible: isCompressible,
+        rewriteIndex: rewriteIndex,
+      ),
+    };
 
     final response = request.response;
     _applyStandardHeaders(
       response,
-      file: file,
+      logicalPath: logicalPath,
       ext: ext,
       etag: payload.etag,
       isCompressible: isCompressible,
@@ -212,19 +271,29 @@ final class StaticWebHandler {
       ..headers.contentLength = payload.contentLength;
 
     if (request.method != 'HEAD') {
-      final inMemory = payload.bytes;
-      if (inMemory != null) {
-        response.add(inMemory);
-      } else {
-        await response.addStream(payload.streamFile!.openRead());
-      }
+      await _writePayloadBody(response, payload);
     }
     await response.close();
   }
 
+  Future<void> _writePayloadBody(
+    HttpResponse response,
+    _ResponsePayload payload,
+  ) async {
+    if (payload.bytes case final bytes?) {
+      response.add(bytes);
+      return;
+    }
+    final source = payload.streamFile!.openRead();
+    final stream = payload.gunzipStream
+        ? source.transform(gzip.decoder)
+        : source;
+    await response.addStream(stream);
+  }
+
   void _applyStandardHeaders(
     HttpResponse response, {
-    required File file,
+    required String logicalPath,
     required String ext,
     required String etag,
     required bool isCompressible,
@@ -247,7 +316,7 @@ final class StaticWebHandler {
             "connect-src 'self' ws: wss:; frame-ancestors 'none'; "
             "base-uri 'self'; object-src 'none'",
       )
-      ..set(HttpHeaders.cacheControlHeader, _cacheControlForFile(file))
+      ..set(HttpHeaders.cacheControlHeader, _cacheControlForPath(logicalPath))
       ..set(HttpHeaders.etagHeader, etag);
     if (isCompressible) {
       response.headers.set(HttpHeaders.varyHeader, 'Accept-Encoding');
@@ -255,6 +324,45 @@ final class StaticWebHandler {
     if (contentEncoding != null) {
       response.headers.set(HttpHeaders.contentEncodingHeader, contentEncoding);
     }
+  }
+
+  Future<_ResponsePayload> _prepareGzipOnlyPayload(
+    HttpRequest request,
+    File file,
+    FileStat stat, {
+    required bool rewriteIndex,
+  }) async {
+    final prefs = _parseAcceptEncoding(
+      request.headers[HttpHeaders.acceptEncodingHeader],
+    );
+    if (!rewriteIndex && prefs.gzip > 0) {
+      final digest = _digestForRawFile(file, stat);
+      return (
+        etag: '"$digest-gzip"',
+        contentEncoding: 'gzip',
+        contentLength: stat.size,
+        bytes: null,
+        streamFile: file,
+        gunzipStream: false,
+      );
+    }
+    if (rewriteIndex) {
+      return _prepareRewrittenIndexPayload(
+        file,
+        stat,
+        prefs: prefs,
+        storage: _AssetStorage.gzipOnly,
+      );
+    }
+    final meta = await _gunzipMetaFor(file, stat);
+    return (
+      etag: '"${meta.rawDigest}"',
+      contentEncoding: null,
+      contentLength: meta.rawLength,
+      bytes: null,
+      streamFile: file,
+      gunzipStream: true,
+    );
   }
 
   Future<_ResponsePayload> _prepareResponsePayload(
@@ -272,15 +380,23 @@ final class StaticWebHandler {
         contentLength: stat.size,
         bytes: null,
         streamFile: file,
+        gunzipStream: false,
       );
     }
 
     final prefs = _parseAcceptEncoding(
       request.headers[HttpHeaders.acceptEncodingHeader],
     );
-    final sidecar = rewriteIndex
-        ? null
-        : await _resolvePreferredSidecar(file, prefs);
+    if (rewriteIndex) {
+      return _prepareRewrittenIndexPayload(
+        file,
+        stat,
+        prefs: prefs,
+        storage: _AssetStorage.raw,
+      );
+    }
+
+    final sidecar = await _resolvePreferredSidecar(file, prefs);
     if (sidecar != null) {
       final sidecarStat = await sidecar.file.stat();
       final digest = _digestForRawFile(sidecar.file, sidecarStat);
@@ -290,29 +406,19 @@ final class StaticWebHandler {
         contentLength: sidecarStat.size,
         bytes: null,
         streamFile: sidecar.file,
+        gunzipStream: false,
       );
     }
 
     if (prefs.gzip > 0) {
-      final entry = _gzipEntryFor(file, stat, rewriteIndex: rewriteIndex);
+      final entry = _gzipEntryFor(file, stat, rewriteIndex: false);
       return (
         etag: entry.etag,
         contentEncoding: 'gzip',
         contentLength: entry.bytes.length,
         bytes: entry.bytes,
         streamFile: null,
-      );
-    }
-
-    if (rewriteIndex) {
-      final rewritten = _readRewrittenIndexBytes(file);
-      final digest = '${sha256.convert(rewritten)}';
-      return (
-        etag: '"$digest"',
-        contentEncoding: null,
-        contentLength: rewritten.length,
-        bytes: rewritten,
-        streamFile: null,
+        gunzipStream: false,
       );
     }
 
@@ -323,7 +429,76 @@ final class StaticWebHandler {
       contentLength: stat.size,
       bytes: null,
       streamFile: file,
+      gunzipStream: false,
     );
+  }
+
+  _ResponsePayload _prepareRewrittenIndexPayload(
+    File file,
+    FileStat stat, {
+    required ({double br, double gzip}) prefs,
+    required _AssetStorage storage,
+  }) {
+    if (prefs.gzip > 0) {
+      final entry = _gzipEntryFor(
+        file,
+        stat,
+        rewriteIndex: true,
+        storage: storage,
+      );
+      return (
+        etag: entry.etag,
+        contentEncoding: 'gzip',
+        contentLength: entry.bytes.length,
+        bytes: entry.bytes,
+        streamFile: null,
+        gunzipStream: false,
+      );
+    }
+    final rewritten = _readRewrittenIndexBytes(file, storage: storage);
+    final digest = '${sha256.convert(rewritten)}';
+    return (
+      etag: '"$digest"',
+      contentEncoding: null,
+      contentLength: rewritten.length,
+      bytes: rewritten,
+      streamFile: null,
+      gunzipStream: false,
+    );
+  }
+
+  Future<({int rawLength, String rawDigest})> _gunzipMetaFor(
+    File file,
+    FileStat stat,
+  ) async {
+    final path = file.path;
+    final modifiedMicros = stat.modified.microsecondsSinceEpoch;
+    final cached = _gunzipMetaCache[path];
+    if (cached != null &&
+        cached.size == stat.size &&
+        cached.modifiedMicros == modifiedMicros) {
+      return (rawLength: cached.rawLength, rawDigest: cached.rawDigest);
+    }
+
+    late Digest digest;
+    final digestSink = ChunkedConversionSink<Digest>.withCallback(
+      (digests) => digest = digests.single,
+    );
+    final hashInput = sha256.startChunkedConversion(digestSink);
+    var rawLength = 0;
+    await for (final chunk in file.openRead().transform(gzip.decoder)) {
+      rawLength += chunk.length;
+      hashInput.add(chunk);
+    }
+    hashInput.close();
+    final rawDigest = '$digest';
+    _gunzipMetaCache[path] = (
+      size: stat.size,
+      modifiedMicros: modifiedMicros,
+      rawLength: rawLength,
+      rawDigest: rawDigest,
+    );
+    return (rawLength: rawLength, rawDigest: rawDigest);
   }
 
   Future<({File file, String encoding})?> _resolvePreferredSidecar(
@@ -353,6 +528,7 @@ final class StaticWebHandler {
     File file,
     FileStat stat, {
     required bool rewriteIndex,
+    _AssetStorage storage = _AssetStorage.raw,
   }) {
     final path = file.path;
     final modifiedMicros = stat.modified.microsecondsSinceEpoch;
@@ -365,7 +541,7 @@ final class StaticWebHandler {
     }
 
     final entityBytes = rewriteIndex
-        ? _readRewrittenIndexBytes(file)
+        ? _readRewrittenIndexBytes(file, storage: storage)
         : file.readAsBytesSync();
     final digest = '${sha256.convert(entityBytes)}';
     final compressed = Uint8List.fromList(gzip.encode(entityBytes));
@@ -397,8 +573,15 @@ final class StaticWebHandler {
     _gzipCacheBytes += size;
   }
 
-  Uint8List _readRewrittenIndexBytes(File file) {
-    final rawHtml = utf8.decode(file.readAsBytesSync(), allowMalformed: true);
+  Uint8List _readRewrittenIndexBytes(
+    File file, {
+    _AssetStorage storage = _AssetStorage.raw,
+  }) {
+    final rawBytes = switch (storage) {
+      _AssetStorage.gzipOnly => gzip.decode(file.readAsBytesSync()),
+      _AssetStorage.raw => file.readAsBytesSync(),
+    };
+    final rawHtml = utf8.decode(rawBytes, allowMalformed: true);
     final rewritten = rawHtml.replaceFirstMapped(
       _baseHrefPattern,
       (_) => '<base href="$_basePath/">',
@@ -501,8 +684,8 @@ final class StaticWebHandler {
     _ => ContentType.binary,
   };
 
-  String _cacheControlForFile(File file) {
-    final name = p.basename(file.path).toLowerCase();
+  String _cacheControlForPath(String logicalPath) {
+    final name = p.basename(logicalPath).toLowerCase();
     if (name == 'index.html' ||
         name == 'flutter_bootstrap.js' ||
         name == 'version.json' ||
@@ -511,13 +694,46 @@ final class StaticWebHandler {
         name.endsWith('.mjs')) {
       return 'no-cache';
     }
-    final rel = p.relative(file.path, from: _canonicalRoot).toLowerCase();
+    final rel = p.relative(logicalPath, from: _canonicalRoot).toLowerCase();
     if (rel.startsWith('canvaskit/') || rel.startsWith(r'canvaskit\')) {
       return 'no-cache';
     }
     return 'public, max-age=3600';
   }
 }
+
+enum _AssetStorage { raw, gzipOnly }
+
+sealed class _ResolvedTarget {
+  const _ResolvedTarget();
+}
+
+final class _FoundAsset extends _ResolvedTarget {
+  final File file;
+  final String logicalPath;
+  final _AssetStorage storage;
+
+  const _FoundAsset({
+    required this.file,
+    required this.logicalPath,
+    required this.storage,
+  });
+}
+
+final class _NotFoundTarget extends _ResolvedTarget {
+  const _NotFoundTarget();
+}
+
+final class _ForbiddenTarget extends _ResolvedTarget {
+  const _ForbiddenTarget();
+}
+
+typedef _GunzipMetaCacheEntry = ({
+  int size,
+  int modifiedMicros,
+  int rawLength,
+  String rawDigest,
+});
 
 typedef _GzipCacheEntry = ({
   String basePath,
@@ -533,4 +749,5 @@ typedef _ResponsePayload = ({
   int contentLength,
   Uint8List? bytes,
   File? streamFile,
+  bool gunzipStream,
 });
