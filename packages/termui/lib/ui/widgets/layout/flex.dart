@@ -97,6 +97,9 @@ List<Rect> splitRect(
     );
   }
 
+  // Rigid constraints are intentionally not scaled down on overflow so
+  // RowElement and ColumnElement can detect overflow and render warnings.
+
   // 3. Respect Max Constraints on MinMax
   for (var i = 0; i < constraints.length; i++) {
     if (constraints[i] case MinMaxConstraint(:final min, :final max)) {
@@ -110,21 +113,18 @@ List<Rect> splitRect(
   if (count == 0) return [];
 
   final remaining = totalSize - usedSize;
-  final sumOfSizes = List<int>.filled(count + 1, 0);
-  for (var i = 0; i < count; i++) {
-    sumOfSizes[i + 1] = sumOfSizes[i] + sizes[i];
-  }
-
+  var prefixSum = 0;
   final rects = <Rect>[];
   for (var i = 0; i < count; i++) {
     final offset = _resolveSplitChildOffset(
       mainAxisAlignment,
       remaining,
-      sumOfSizes[i],
+      prefixSum,
       i,
       count,
     );
     final size = sizes[i];
+    prefixSum += size;
     rects.add(
       isHorizontal
           ? Rect(
@@ -171,22 +171,16 @@ int _resolveSplitChildOffset(
   int index,
   int count,
 ) {
-  if (remaining <= 0) {
-    return switch (alignment) {
-      .end => remaining + prefixSum,
-      .center => (remaining ~/ 2) + prefixSum,
-      _ => prefixSum,
-    };
-  }
+  final spacing = max(0, remaining);
   return switch (alignment) {
     .start => prefixSum,
     .end => remaining + prefixSum,
     .center => (remaining ~/ 2) + prefixSum,
     .spaceBetween =>
-      count <= 1 ? prefixSum : ((remaining * index) ~/ (count - 1)) + prefixSum,
+      count <= 1 ? prefixSum : ((spacing * index) ~/ (count - 1)) + prefixSum,
     .spaceAround =>
-      (remaining * (index * 2 + 1) / (count * 2)).floor() + prefixSum,
-    .spaceEvenly => (remaining * (index + 1) / (count + 1)).floor() + prefixSum,
+      (spacing * (index * 2 + 1) / (count * 2)).floor() + prefixSum,
+    .spaceEvenly => (spacing * (index + 1) / (count + 1)).floor() + prefixSum,
   };
 }
 

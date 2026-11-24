@@ -140,7 +140,7 @@ List<TraceSpan> computeSpans(List<TraceEvent> events) {
   final activeStacksByTid = <int, List<_StackEntry>>{};
 
   for (final event in sorted) {
-    final stack = activeStacksByTid.putIfAbsent(event.tid, () => []);
+    final stack = activeStacksByTid[event.tid] ??= [];
     switch (event.phase) {
       case 'B':
         stack.add(_StackEntry(event, stack.length));

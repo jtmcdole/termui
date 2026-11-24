@@ -240,7 +240,7 @@ class SplitPaneElement extends Element implements MouseEventHandler {
     final secondSize = totalSize - dividerPos - 1;
     _layoutPaneChild(
       childElement1,
-      Offset.zero,
+      .zero,
       isHorizontal ? Size(dividerPos, h) : Size(w, dividerPos),
       dividerPos,
     );
@@ -263,7 +263,7 @@ class SplitPaneElement extends Element implements MouseEventHandler {
     if (child == null) return;
     child.relativeOffset = offset;
     if (primaryExtent > 0) {
-      child.layout(BoxConstraints.tight(paneSize));
+      child.layout(.tight(paneSize));
     }
   }
 
@@ -295,27 +295,10 @@ class SplitPaneElement extends Element implements MouseEventHandler {
       childElement1!.paint(buffer, offset + childElement1!.relativeOffset);
     }
 
-    _paintDivider(buffer, offset, split, dividerPos, w, h);
-
-    final secondSize =
-        (split.direction == .horizontal ? w : h) - dividerPos - 1;
-    if (secondSize > 0 && childElement2 != null) {
-      childElement2!.paint(buffer, offset + childElement2!.relativeOffset);
-    }
-  }
-
-  static void _paintDivider(
-    Buffer buffer,
-    Offset offset,
-    SplitPane split,
-    int dividerPos,
-    int width,
-    int height,
-  ) {
     final fg = split.dividerStyle.foreground?.argb ?? 0;
     final bg = split.dividerStyle.background?.argb ?? 0;
     final isHorizontal = split.direction == .horizontal;
-    final length = isHorizontal ? height : width;
+    final length = isHorizontal ? h : w;
     for (var i = 0; i < length; i++) {
       buffer.setAttributes(
         offset.dx + (isHorizontal ? dividerPos : i),
@@ -325,6 +308,11 @@ class SplitPaneElement extends Element implements MouseEventHandler {
         bg: bg,
         modifiers: split.dividerStyle.modifiers,
       );
+    }
+
+    final secondSize = (isHorizontal ? w : h) - dividerPos - 1;
+    if (secondSize > 0 && childElement2 != null) {
+      childElement2!.paint(buffer, offset + childElement2!.relativeOffset);
     }
   }
 
