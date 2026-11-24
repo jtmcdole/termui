@@ -83,6 +83,130 @@ void main() {
         check(runErr.toString()).contains('WARNING: Binding non-loopback');
       },
     );
+
+    test(
+      'logs bound host:port alongside clickable http:// and normalized ws:// endpoints (#425)',
+      () async {
+        // 1. Wildcard IPv4 bind (0.0.0.0) logs bound 0.0.0.0:<port> plus local http:// and ws:// endpoints.
+        final wildcardShutdown = StreamController<void>();
+        addTearDown(wildcardShutdown.close);
+        final wildcardOut = _NotifyingStringSink();
+        final wildcardErr = StringBuffer();
+        final wildcardFuture = runServerCli(
+          const [
+            '--host',
+            '0.0.0.0',
+            '--port',
+            '0',
+            '--caster-token',
+            'c-tok',
+            '--client-token',
+            'v-tok',
+            '--no-web',
+          ],
+          out: wildcardOut,
+          err: wildcardErr,
+          shutdownSignal: wildcardShutdown.stream,
+        );
+        await wildcardOut.ready.future.timeout(const Duration(seconds: 3));
+        wildcardShutdown.add(null);
+        check(await wildcardFuture).equals(0);
+
+        final wildcardText = wildcardOut.buffer.toString();
+        final wildcardPortMatch = RegExp(
+          r'ws://127\.0\.0\.1:(\d+)/v1/caster',
+        ).firstMatch(wildcardText);
+        check(wildcardPortMatch).isNotNull();
+        final wildcardPort = wildcardPortMatch!.group(1)!;
+        check(wildcardText).contains('Listening on 0.0.0.0:$wildcardPort');
+        check(
+          wildcardText,
+        ).contains('Local HTTP: http://127.0.0.1:$wildcardPort/');
+        check(wildcardText).contains(
+          'Local WS:   ws://127.0.0.1:$wildcardPort/v1/caster '
+          'and ws://127.0.0.1:$wildcardPort/v1/client',
+        );
+        check(
+          wildcardErr.toString(),
+        ).contains('WARNING: Binding non-loopback 0.0.0.0');
+
+        // 2. Loopback bind with --base-path logs concrete 127.0.0.1:<port> and subpath http:// and ws:// endpoints.
+        final loopbackShutdown = StreamController<void>();
+        addTearDown(loopbackShutdown.close);
+        final loopbackOut = _NotifyingStringSink();
+        final loopbackFuture = runServerCli(
+          const [
+            '--host',
+            '127.0.0.1',
+            '--port',
+            '0',
+            '--base-path',
+            '/term',
+            '--insecure-no-auth',
+            '--no-web',
+          ],
+          out: loopbackOut,
+          err: StringBuffer(),
+          shutdownSignal: loopbackShutdown.stream,
+        );
+        await loopbackOut.ready.future.timeout(const Duration(seconds: 3));
+        loopbackShutdown.add(null);
+        check(await loopbackFuture).equals(0);
+
+        final loopbackText = loopbackOut.buffer.toString();
+        final loopbackPortMatch = RegExp(
+          r'ws://127\.0\.0\.1:(\d+)/term/v1/caster',
+        ).firstMatch(loopbackText);
+        check(loopbackPortMatch).isNotNull();
+        final loopbackPort = loopbackPortMatch!.group(1)!;
+        check(loopbackText).contains('Listening on 127.0.0.1:$loopbackPort');
+        check(
+          loopbackText,
+        ).contains('HTTP: http://127.0.0.1:$loopbackPort/term/');
+        check(loopbackText).contains(
+          'WS:   ws://127.0.0.1:$loopbackPort/term/v1/caster '
+          'and ws://127.0.0.1:$loopbackPort/term/v1/client',
+        );
+        check(loopbackText).not((it) => it.contains('Local HTTP:'));
+
+        // 3. Wildcard IPv6 bind (::) brackets [::]:<port> and normalizes local endpoints to [::1].
+        final ipv6Shutdown = StreamController<void>();
+        addTearDown(ipv6Shutdown.close);
+        final ipv6Out = _NotifyingStringSink();
+        final ipv6Future = runServerCli(
+          const [
+            '--host',
+            '::',
+            '--port',
+            '0',
+            '--caster-token',
+            'c-tok',
+            '--client-token',
+            'v-tok',
+            '--no-web',
+          ],
+          out: ipv6Out,
+          err: StringBuffer(),
+          shutdownSignal: ipv6Shutdown.stream,
+        );
+        await ipv6Out.ready.future.timeout(const Duration(seconds: 3));
+        ipv6Shutdown.add(null);
+        check(await ipv6Future).equals(0);
+
+        final ipv6Text = ipv6Out.buffer.toString();
+        final ipv6PortMatch = RegExp(
+          r'ws://\[::1\]:(\d+)/v1/caster',
+        ).firstMatch(ipv6Text);
+        check(ipv6PortMatch).isNotNull();
+        final ipv6Port = ipv6PortMatch!.group(1)!;
+        check(ipv6Text).contains('Listening on [::]:$ipv6Port');
+        check(ipv6Text).contains('Local HTTP: http://[::1]:$ipv6Port/');
+        check(ipv6Text).contains(
+          'Local WS:   ws://[::1]:$ipv6Port/v1/caster '
+          'and ws://[::1]:$ipv6Port/v1/client',
+        );
+      },
+    );
   });
 
   group('CastServer ws:// and wss:// network integration', () {
