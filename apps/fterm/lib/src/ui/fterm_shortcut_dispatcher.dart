@@ -10,7 +10,8 @@ import 'package:flutter/services.dart'
         KeyRepeatEvent,
         LogicalKeyboardKey;
 import 'package:termui/terminal/event.dart' as ev;
-import 'package:termui_flutter/termui_flutter.dart' show HostShortcutResult;
+import 'package:termui_flutter/termui_flutter.dart'
+    show HostShortcutResult, TerminalMetaKeyPolicy;
 
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
@@ -73,6 +74,11 @@ final class FtermShortcutDispatcher {
   TargetPlatform get _platform => _platformOverride ?? defaultTargetPlatform;
   bool get _isMacOs => _platform == TargetPlatform.macOS;
   bool get _isWeb => _isWebOverride ?? kIsWeb;
+
+  /// Resolves the active [TerminalMetaKeyPolicy] for unhandled `Meta`/`Cmd`
+  /// combinations based on platform and runtime.
+  TerminalMetaKeyPolicy resolveMetaKeyPolicy() =>
+      (_isWeb || _isMacOs) ? .passThroughUnhandled : .claimWhenKittyActive;
 
   /// Handles [event] with active [modifiers], returning
   /// [HostShortcutResult.handled] when consumed as an `fterm` shortcut or

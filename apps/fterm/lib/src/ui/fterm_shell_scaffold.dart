@@ -722,6 +722,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               mouseTrackingProvider: pane.readMouseTracking,
               copyOnSelectProvider: _readCopyOnSelect,
               macosOptionAsAlt: widget.workspace.preferences.macosOptionAsAlt,
+              metaKeyPolicy: _shortcutDispatcher.resolveMetaKeyPolicy(),
               fontSize: fontSize,
               fontFamily: castPrimaryFontFamily,
               fontFamilyFallback: castFallbackFontFamilies,
