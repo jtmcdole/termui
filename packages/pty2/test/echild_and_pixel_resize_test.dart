@@ -402,7 +402,7 @@ Future<void> _testPostSetsidKillReportsDelivered() async {
   for (var i = 0; i < 25; i++) {
     final pty = PseudoTerminal.start('/bin/sh', const [
       '-c',
-      'printf "READY\\n"; sleep 5',
+      'printf "READY\\n"; exec sleep 5',
     ]);
     final ready = Completer<void>();
     final sub = pty.out.listen((chunk) {
@@ -410,13 +410,16 @@ Future<void> _testPostSetsidKillReportsDelivered() async {
         ready.complete();
       }
     });
-    addTearDown(sub.cancel);
-
-    await ready.future.timeout(const Duration(seconds: 5));
-    expect(pty.kill(), isTrue, reason: 'iteration $i');
-    final code = await pty.exitCode.timeout(const Duration(seconds: 5));
-    expect(code, isNot(equals(0)), reason: 'iteration $i');
-    await sub.cancel();
+    try {
+      await ready.future.timeout(const Duration(seconds: 5));
+      expect(pty.kill(), isTrue, reason: 'iteration $i');
+      final code = await pty.exitCode.timeout(const Duration(seconds: 5));
+      // kill() sends SIGTERM (128+15=143) followed by SIGHUP (128+1=129).
+      expect(code, anyOf(equals(129), equals(143)), reason: 'iteration $i');
+    } finally {
+      pty.kill(ProcessSignal.sigkill);
+      await sub.cancel();
+    }
   }
 }
 
