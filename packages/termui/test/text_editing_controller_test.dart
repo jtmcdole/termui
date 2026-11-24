@@ -62,5 +62,29 @@ void main() {
       controller.redo();
       expect(controller.text, equals('Change 2'));
     });
+
+    test('clearHistory clears undo and redo stacks without notifying', () {
+      final controller = TextEditingController(text: 'Initial');
+      controller.saveStateToHistory();
+      controller.text = 'Change 1';
+      controller.saveStateToHistory();
+      controller.text = 'Change 2';
+      controller.undo();
+      expect(controller.text, equals('Change 1'));
+
+      var notifications = 0;
+      controller.addListener(() => notifications++);
+
+      controller.clearHistory();
+      expect(notifications, equals(0));
+      expect(controller.text, equals('Change 1'));
+
+      controller.undo();
+      expect(controller.text, equals('Change 1'));
+
+      controller.redo();
+      expect(controller.text, equals('Change 1'));
+      expect(notifications, equals(0));
+    });
   });
 }

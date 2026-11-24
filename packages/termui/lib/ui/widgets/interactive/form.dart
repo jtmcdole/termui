@@ -963,11 +963,31 @@ Widget _buildFormFieldLayout({
 sealed class _BaseTextInputFormFieldState<W extends FormField<String>>
     extends FormFieldState<String>
     implements KeyEventHandler {
+  bool _syncingInput = false;
+
   TextField _inputFor(W field);
   int get _contentHeight => 1;
 
   @override
   bool get delegatesFocusToChild => true;
+
+  void _syncInputValue(TextField input, String targetValue) {
+    if (input.value == targetValue) return;
+    _syncingInput = true;
+    try {
+      input.value = targetValue;
+    } finally {
+      _syncingInput = false;
+    }
+  }
+
+  @override
+  void reset() {
+    final input = _inputFor(widget as W);
+    _syncInputValue(input, widget.initialValue ?? '');
+    input.controller.clearHistory();
+    super.reset();
+  }
 
   @override
   void initState() {
@@ -998,6 +1018,7 @@ sealed class _BaseTextInputFormFieldState<W extends FormField<String>>
   }
 
   void _onControllerChanged() {
+    if (_syncingInput) return;
     final newValue = _inputFor(widget as W).value;
     widget.value = newValue;
     final nextError = widget.validator?.call(newValue);
@@ -1016,9 +1037,7 @@ sealed class _BaseTextInputFormFieldState<W extends FormField<String>>
     final field = widget as W;
     final input = _inputFor(field);
     input.focused = field.focused;
-    if (input.value != value) {
-      input.value = value ?? '';
-    }
+    _syncInputValue(input, value ?? '');
     return wrapInteractiveField(
       _buildFormFieldLayout(
         field: field,

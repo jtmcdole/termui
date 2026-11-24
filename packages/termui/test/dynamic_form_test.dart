@@ -691,5 +691,190 @@ void main() {
         });
       },
     );
+
+    test(
+      'reset() on required TextFormField with empty initialValue keeps errorText cleared',
+      () {
+        final nameField = TextFormField(
+          label: 'Name',
+          initialValue: '',
+          validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+        );
+        final form = Form(child: Column([nameField]));
+
+        final tree = ElementWidget(form);
+        final buffer = Buffer.blank(40, 10);
+        tree.layout(BoxConstraints.tight(const Size(40, 10)));
+        tree.paint(buffer, Offset.zero);
+
+        final formState = tree.findState<FormState>()!;
+        nameField.focused = true;
+        nameField.handleKeyEvent(const KeyEvent('A', .character));
+        nameField.handleKeyEvent(const KeyEvent('B', .character));
+        nameField.handleKeyEvent(const KeyEvent('C', .character));
+        nameField.handleKeyEvent(
+          const KeyEvent('z', .character, modifiers: {Modifier.control}),
+        );
+        expect(nameField.value, equals('AB'));
+        expect(formState.validate(), isTrue);
+
+        formState.reset();
+        expect(nameField.value, equals(''));
+        expect(nameField.cursorColumn, equals(0));
+        expect(nameField.hasError, isFalse);
+        expect(nameField.errorText, isNull);
+
+        // Undo/redo history from pre-reset edits must not restore old text.
+        nameField.handleKeyEvent(
+          const KeyEvent('y', .character, modifiers: {Modifier.control}),
+        );
+        expect(nameField.value, equals(''));
+        nameField.handleKeyEvent(
+          const KeyEvent('z', .character, modifiers: {Modifier.control}),
+        );
+        expect(nameField.value, equals(''));
+        expect(nameField.hasError, isFalse);
+
+        // Live editing and validation still work after reset.
+        nameField.handleKeyEvent(const KeyEvent('B', .character));
+        expect(nameField.value, equals('B'));
+        expect(nameField.hasError, isFalse);
+        nameField.handleKeyEvent(const KeyEvent('', .backspace));
+        expect(nameField.value, equals(''));
+        expect(nameField.hasError, isTrue);
+        expect(nameField.errorText, equals('Required'));
+      },
+    );
+
+    test(
+      'reset() on required TextFormField with null initialValue preserves null and avoids validation',
+      () {
+        var validatorCalls = 0;
+        final emailField = TextFormField(
+          label: 'Email',
+          validator: (val) {
+            validatorCalls++;
+            return (val == null || !val.contains('@')) ? 'Invalid' : null;
+          },
+        );
+        final form = Form(child: Column([emailField]));
+
+        final tree = ElementWidget(form);
+        final buffer = Buffer.blank(40, 10);
+        tree.layout(BoxConstraints.tight(const Size(40, 10)));
+        tree.paint(buffer, Offset.zero);
+        expect(validatorCalls, equals(0));
+
+        emailField.focused = true;
+        emailField.handleKeyEvent(const KeyEvent('x', .character));
+        expect(emailField.hasError, isTrue);
+        expect(emailField.errorText, equals('Invalid'));
+
+        validatorCalls = 0;
+        tree.findState<FormState>()!.reset();
+        expect(emailField.value, isNull);
+        expect(emailField.cursorColumn, equals(0));
+        expect(emailField.hasError, isFalse);
+        expect(emailField.errorText, isNull);
+        expect(validatorCalls, equals(0));
+
+        // Subsequent rebuilds do not re-trigger validation or overwrite null.
+        tree.layout(BoxConstraints.tight(const Size(40, 10)));
+        tree.paint(buffer, Offset.zero);
+        expect(emailField.value, isNull);
+        expect(emailField.hasError, isFalse);
+        expect(validatorCalls, equals(0));
+      },
+    );
+
+    test(
+      'reset() on required TextAreaFormField with empty initialValue keeps errorText cleared',
+      () {
+        final bioField = TextAreaFormField(
+          label: 'Bio',
+          initialValue: '',
+          fieldHeight: 2,
+          validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+        );
+        final form = Form(child: Column([bioField]));
+
+        final tree = ElementWidget(form);
+        final buffer = Buffer.blank(40, 12);
+        tree.layout(BoxConstraints.tight(const Size(40, 12)));
+        tree.paint(buffer, Offset.zero);
+
+        final formState = tree.findState<FormState>()!;
+        bioField.focused = true;
+        bioField.handleKeyEvent(const KeyEvent('A', .character));
+        bioField.handleKeyEvent(const KeyEvent('\n', .enter));
+        bioField.handleKeyEvent(const KeyEvent('B', .character));
+        expect(formState.validate(), isTrue);
+        expect(bioField.cursorLine, equals(1));
+
+        formState.reset();
+        expect(bioField.value, equals(''));
+        expect(bioField.cursorLine, equals(0));
+        expect(bioField.cursorColumn, equals(0));
+        expect(bioField.hasError, isFalse);
+        expect(bioField.errorText, isNull);
+      },
+    );
+
+    test(
+      'PromptRunner: reset() keeps required TextFormField and TextAreaFormField cleared across pump',
+      () {
+        final nameField = TextFormField(
+          label: 'Name',
+          initialValue: '',
+          focused: true,
+          validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+        );
+        final notesField = TextAreaFormField(
+          label: 'Notes',
+          fieldHeight: 2,
+          validator: (val) => (val == null || val.isEmpty) ? 'Required' : null,
+        );
+        final form = Form(child: Column([nameField, notesField]));
+
+        _runInPrompt(form, (tester) async {
+          final formEl =
+              find
+                      .byType<Form>()
+                      .apply(collectAllElements(tester.rootElement!))
+                      .single
+                  as StatefulElement;
+          final formState = formEl.state as FormState;
+
+          await _type(tester, 'Ada');
+          await _press(tester, LogicalKey.tab);
+          await _type(tester, 'Note');
+          expect(formState.validate(), isTrue);
+
+          formState.reset();
+          // Synced immediately before next frame pump as well as after pump.
+          expect(nameField.value, equals(''));
+          expect(nameField.cursorColumn, equals(0));
+          expect(notesField.value, isNull);
+          expect(notesField.cursorColumn, equals(0));
+
+          await tester.pump();
+          expect(nameField.value, equals(''));
+          expect(nameField.hasError, isFalse);
+          expect(nameField.errorText, isNull);
+          expect(notesField.value, isNull);
+          expect(notesField.hasError, isFalse);
+          expect(notesField.errorText, isNull);
+
+          // Typing after reset still updates value and runs live validation.
+          await _type(tester, 'Z');
+          expect(notesField.value, equals('Z'));
+          expect(notesField.hasError, isFalse);
+          await _press(tester, LogicalKey.backspace);
+          expect(notesField.value, equals(''));
+          expect(notesField.hasError, isTrue);
+          expect(notesField.errorText, equals('Required'));
+        });
+      },
+    );
   });
 }
