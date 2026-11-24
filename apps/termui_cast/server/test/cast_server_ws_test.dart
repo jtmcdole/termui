@@ -87,48 +87,89 @@ void main() {
     test(
       'logs bound host:port alongside clickable http:// and normalized ws:// endpoints (#425)',
       () async {
-        // 1. Wildcard IPv4 bind (0.0.0.0) logs bound 0.0.0.0:<port> plus local http:// and ws:// endpoints.
-        final wildcardShutdown = StreamController<void>();
-        addTearDown(wildcardShutdown.close);
-        final wildcardOut = _NotifyingStringSink();
-        final wildcardErr = StringBuffer();
-        final wildcardFuture = runServerCli(
-          const [
-            '--host',
-            '0.0.0.0',
-            '--port',
-            '0',
-            '--caster-token',
-            'c-tok',
-            '--client-token',
-            'v-tok',
-            '--no-web',
-          ],
-          out: wildcardOut,
-          err: wildcardErr,
-          shutdownSignal: wildcardShutdown.stream,
-        );
-        await wildcardOut.ready.future.timeout(const Duration(seconds: 3));
-        wildcardShutdown.add(null);
-        check(await wildcardFuture).equals(0);
+        Future<bool> canBind(InternetAddress address) async {
+          try {
+            final probe = await ServerSocket.bind(address, 0);
+            await probe.close();
+            return true;
+          } on SocketException {
+            return false;
+          }
+        }
 
-        final wildcardText = wildcardOut.buffer.toString();
+        Future<({String out, String err})> runStartupCase(
+          List<String> args,
+        ) async {
+          final shutdown = StreamController<void>();
+          var signaled = false;
+          final out = _NotifyingStringSink();
+          final err = StringBuffer();
+          final cliFuture = runServerCli(
+            args,
+            out: out,
+            err: err,
+            shutdownSignal: shutdown.stream,
+          );
+          addTearDown(() async {
+            if (!signaled && !shutdown.isClosed) {
+              signaled = true;
+              shutdown.add(null);
+            }
+            if (!shutdown.isClosed) {
+              if (shutdown.hasListener) {
+                await shutdown.close();
+              } else {
+                unawaited(shutdown.close());
+              }
+            }
+            await cliFuture.timeout(
+              const Duration(seconds: 3),
+              onTimeout: () => -1,
+            );
+          });
+          await Future.any<void>([
+            out.ready.future,
+            cliFuture.then((code) {
+              if (!out.ready.isCompleted) {
+                fail(
+                  'runServerCli exited early with code $code before '
+                  'listening; stderr:\n$err',
+                );
+              }
+            }),
+          ]).timeout(const Duration(seconds: 3));
+          signaled = true;
+          shutdown.add(null);
+          check(because: 'stderr:\n$err', await cliFuture).equals(0);
+          return (out: out.buffer.toString(), err: err.toString());
+        }
+
+        // 1. Wildcard IPv4 bind (0.0.0.0) logs bound 0.0.0.0:<port> plus local http:// and ws:// endpoints.
+        final wildcard = await runStartupCase(const [
+          '--host',
+          '0.0.0.0',
+          '--port',
+          '0',
+          '--caster-token',
+          'c-tok',
+          '--client-token',
+          'v-tok',
+          '--no-web',
+        ]);
         final wildcardPortMatch = RegExp(
           r'ws://127\.0\.0\.1:(\d+)/v1/caster',
-        ).firstMatch(wildcardText);
+        ).firstMatch(wildcard.out);
         check(wildcardPortMatch).isNotNull();
         final wildcardPort = wildcardPortMatch!.group(1)!;
-        check(wildcardText).contains('Listening on 0.0.0.0:$wildcardPort');
-        check(wildcardText).contains(
+        check(wildcard.out).contains('Listening on 0.0.0.0:$wildcardPort');
+        check(wildcard.out).contains(
           'Local HTTP: http://127.0.0.1:$wildcardPort/ (static web disabled)',
         );
-        check(wildcardText).contains(
+        check(wildcard.out).contains(
           'Local WS:   ws://127.0.0.1:$wildcardPort/v1/caster '
           'and ws://127.0.0.1:$wildcardPort/v1/client',
         );
-        check(
-          wildcardErr.toString(),
-        ).contains('WARNING: Binding non-loopback 0.0.0.0');
+        check(wildcard.err).contains('WARNING: Binding non-loopback 0.0.0.0');
 
         // 2. Loopback bind with --base-path and --web-dir logs concrete 127.0.0.1:<port> without "(static web disabled)".
         final tempWebDir = Directory.systemTemp.createTempSync(
@@ -139,52 +180,36 @@ void main() {
           '${tempWebDir.path}${Platform.pathSeparator}index.html',
         ).writeAsStringSync('<!doctype html><html></html>');
 
-        final loopbackShutdown = StreamController<void>();
-        addTearDown(loopbackShutdown.close);
-        final loopbackOut = _NotifyingStringSink();
-        final loopbackFuture = runServerCli(
-          [
-            '--host',
-            '127.0.0.1',
-            '--port',
-            '0',
-            '--base-path',
-            '/term',
-            '--insecure-no-auth',
-            '--web-dir',
-            tempWebDir.path,
-          ],
-          out: loopbackOut,
-          err: StringBuffer(),
-          shutdownSignal: loopbackShutdown.stream,
-        );
-        await loopbackOut.ready.future.timeout(const Duration(seconds: 3));
-        loopbackShutdown.add(null);
-        check(await loopbackFuture).equals(0);
-
-        final loopbackText = loopbackOut.buffer.toString();
+        final loopback = await runStartupCase([
+          '--host',
+          '127.0.0.1',
+          '--port',
+          '0',
+          '--base-path',
+          '/term',
+          '--insecure-no-auth',
+          '--web-dir',
+          tempWebDir.path,
+        ]);
         final loopbackPortMatch = RegExp(
           r'ws://127\.0\.0\.1:(\d+)/term/v1/caster',
-        ).firstMatch(loopbackText);
+        ).firstMatch(loopback.out);
         check(loopbackPortMatch).isNotNull();
         final loopbackPort = loopbackPortMatch!.group(1)!;
-        check(loopbackText).contains('Listening on 127.0.0.1:$loopbackPort');
+        check(loopback.out).contains('Listening on 127.0.0.1:$loopbackPort');
         check(
-          loopbackText,
+          loopback.out,
         ).contains('HTTP: http://127.0.0.1:$loopbackPort/term/\n');
-        check(loopbackText).contains(
+        check(loopback.out).contains(
           'WS:   ws://127.0.0.1:$loopbackPort/term/v1/caster '
           'and ws://127.0.0.1:$loopbackPort/term/v1/client',
         );
-        check(loopbackText).not((it) => it.contains('Local HTTP:'));
-        check(loopbackText).not((it) => it.contains('(static web disabled)'));
+        check(loopback.out).not((it) => it.contains('Local HTTP:'));
+        check(loopback.out).not((it) => it.contains('(static web disabled)'));
 
         // 3. Wildcard IPv6 bind (::) brackets [::]:<port> and normalizes local endpoints to [::1].
-        final ipv6Shutdown = StreamController<void>();
-        addTearDown(ipv6Shutdown.close);
-        final ipv6Out = _NotifyingStringSink();
-        final ipv6Future = runServerCli(
-          const [
+        if (await canBind(InternetAddress.anyIPv6)) {
+          final ipv6 = await runStartupCase(const [
             '--host',
             '::',
             '--port',
@@ -194,64 +219,45 @@ void main() {
             '--client-token',
             'v-tok',
             '--no-web',
-          ],
-          out: ipv6Out,
-          err: StringBuffer(),
-          shutdownSignal: ipv6Shutdown.stream,
-        );
-        await ipv6Out.ready.future.timeout(const Duration(seconds: 3));
-        ipv6Shutdown.add(null);
-        check(await ipv6Future).equals(0);
-
-        final ipv6Text = ipv6Out.buffer.toString();
-        final ipv6PortMatch = RegExp(
-          r'ws://\[::1\]:(\d+)/v1/caster',
-        ).firstMatch(ipv6Text);
-        check(ipv6PortMatch).isNotNull();
-        final ipv6Port = ipv6PortMatch!.group(1)!;
-        check(ipv6Text).contains('Listening on [::]:$ipv6Port');
-        check(
-          ipv6Text,
-        ).contains('Local HTTP: http://[::1]:$ipv6Port/ (static web disabled)');
-        check(ipv6Text).contains(
-          'Local WS:   ws://[::1]:$ipv6Port/v1/caster '
-          'and ws://[::1]:$ipv6Port/v1/client',
-        );
+          ]);
+          final ipv6PortMatch = RegExp(
+            r'ws://\[::1\]:(\d+)/v1/caster',
+          ).firstMatch(ipv6.out);
+          check(ipv6PortMatch).isNotNull();
+          final ipv6Port = ipv6PortMatch!.group(1)!;
+          check(ipv6.out).contains('Listening on [::]:$ipv6Port');
+          check(ipv6.out).contains(
+            'Local HTTP: http://[::1]:$ipv6Port/ (static web disabled)',
+          );
+          check(ipv6.out).contains(
+            'Local WS:   ws://[::1]:$ipv6Port/v1/caster '
+            'and ws://[::1]:$ipv6Port/v1/client',
+          );
+        }
 
         // 4. Loopback IPv6 bind (::1) brackets [::1]:<port> without the "Local " prefix.
-        final ipv6LoopbackShutdown = StreamController<void>();
-        addTearDown(ipv6LoopbackShutdown.close);
-        final ipv6LoopbackOut = _NotifyingStringSink();
-        final ipv6LoopbackFuture = runServerCli(
-          const [
+        if (await canBind(InternetAddress.loopbackIPv6)) {
+          final ipv6Loopback = await runStartupCase(const [
             '--host',
             '::1',
             '--port',
             '0',
             '--insecure-no-auth',
             '--no-web',
-          ],
-          out: ipv6LoopbackOut,
-          err: StringBuffer(),
-          shutdownSignal: ipv6LoopbackShutdown.stream,
-        );
-        await ipv6LoopbackOut.ready.future.timeout(const Duration(seconds: 3));
-        ipv6LoopbackShutdown.add(null);
-        check(await ipv6LoopbackFuture).equals(0);
-
-        final ipv6LoopbackText = ipv6LoopbackOut.buffer.toString();
-        final ipv6LoopbackPortMatch = RegExp(
-          r'ws://\[::1\]:(\d+)/v1/caster',
-        ).firstMatch(ipv6LoopbackText);
-        check(ipv6LoopbackPortMatch).isNotNull();
-        final ipv6LoopbackPort = ipv6LoopbackPortMatch!.group(1)!;
-        check(
-          ipv6LoopbackText,
-        ).contains('Listening on [::1]:$ipv6LoopbackPort');
-        check(ipv6LoopbackText).contains(
-          'HTTP: http://[::1]:$ipv6LoopbackPort/ (static web disabled)',
-        );
-        check(ipv6LoopbackText).not((it) => it.contains('Local HTTP:'));
+          ]);
+          final ipv6LoopbackPortMatch = RegExp(
+            r'ws://\[::1\]:(\d+)/v1/caster',
+          ).firstMatch(ipv6Loopback.out);
+          check(ipv6LoopbackPortMatch).isNotNull();
+          final ipv6LoopbackPort = ipv6LoopbackPortMatch!.group(1)!;
+          check(
+            ipv6Loopback.out,
+          ).contains('Listening on [::1]:$ipv6LoopbackPort');
+          check(ipv6Loopback.out).contains(
+            'HTTP: http://[::1]:$ipv6LoopbackPort/ (static web disabled)',
+          );
+          check(ipv6Loopback.out).not((it) => it.contains('Local HTTP:'));
+        }
       },
     );
   });
