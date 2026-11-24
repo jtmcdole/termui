@@ -13,7 +13,7 @@ dependencies:
   clock: ^1.1.2
   crypto: ^3.0.8
   stream_channel: ^2.1.4
-  termui: ^0.21.0
+  termui: ^0.21.1
 
 dev_dependencies:
   checks: ^0.3.2
