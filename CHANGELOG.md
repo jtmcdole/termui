@@ -3,6 +3,52 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-24
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui` - `v0.21.0`](#termui---v0210)
+ - [`termui_flutter` - `v0.16.0`](#termui_flutter---v0160)
+ - [`termui_pty` - `v0.16.0`](#termui_pty---v0160)
+
+Packages with other changes:
+
+ - [`termui_recorder` - `v0.10.12`](#termui_recorder---v01012)
+ - [`termui_test` - `v0.4.12`](#termui_test---v0412)
+ - [`termui_hotreload` - `v0.6.38`](#termui_hotreload---v0638)
+ - [`termui_tinpot` - `v0.5.10`](#termui_tinpot---v0510)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.12`
+ - `termui_test` - `v0.4.12`
+ - `termui_hotreload` - `v0.6.38`
+ - `termui_tinpot` - `v0.5.10`
+
+---
+
+#### `termui` - `v0.21.0`
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
+#### `termui_flutter` - `v0.16.0`
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **FIX**(termui_flutter): ignore hidden cursor moves in shader cursor tracking.
+ - **BREAKING** **FEAT**(termui_flutter): add direct flutter_gpu/WebGL2 atlas, Ghostty GLSL shim, live iMouse, and built-in presets.
+
+#### `termui_pty` - `v0.16.0`
+
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
+
 ## 2026-11-20
 
 ### Changes

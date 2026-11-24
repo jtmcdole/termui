@@ -18,20 +18,20 @@ dependencies:
   material_ui: ^1.3.0
   path: ^1.9.1
   stream_channel: ^2.1.4
-  termui: ^0.20.2
+  termui: ^0.21.0
   termui_audio_flutter: ^0.5.1
   termui_cast_client_core: ^0.4.0
   termui_cast_protocol: ^0.3.0
   termui_caster_cli: ^0.3.0
-  termui_flutter: ^0.15.2
-  termui_pty: ^0.15.2
+  termui_flutter: ^0.16.0
+  termui_pty: ^0.16.0
   web: ^1.1.0
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   termui_cast_server: ^0.3.0
-  termui_test: ^0.4.11
+  termui_test: ^0.4.12
 
 flutter:
   uses-material-design: true

@@ -1,3 +1,10 @@
+## 0.21.0
+
+> Note: This release has breaking changes.
+
+ - **FIX**(shaders,cast,fterm): resolve Ship-It review defects and dart2wasm record crash.
+ - **BREAKING** **FEAT**(termui,pty,cast): add GlyphCellList, ESC _ S CLI shader/transform protocol, 0x1C cast frames, and perf tracing.
+
 ## 0.20.2
 
  - **FEAT**(termui): resolve hard-wrapped URLs and per-row link spans.
