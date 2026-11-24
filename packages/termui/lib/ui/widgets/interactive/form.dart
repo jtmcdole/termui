@@ -912,45 +912,124 @@ class TextFormField extends FormField<String> {
   State createState() => _TextFormFieldState();
 }
 
-class _TextFormFieldState extends FormFieldState<String>
+Widget _buildFormFieldLayout({
+  required FormField<Object?> field,
+  required FormFieldState<Object?> state,
+  required int contentHeight,
+  required Widget content,
+}) {
+  final hasError = state.hasError;
+  final errorText = state.errorText;
+
+  return Column(<Widget>[
+    SizedBox(
+      height: 1,
+      child: Text(
+        field.label,
+        style: Style(
+          foreground: hasError
+              ? CharmColors.cherry
+              : (field.focused ? CharmColors.charple : CharmColors.soda),
+          modifiers: field.focused ? Modifier.bold : Modifier.none,
+        ),
+      ),
+    ),
+    if (field.description.isNotEmpty)
+      SizedBox(
+        height: 1,
+        child: Text(
+          '  ${field.description}',
+          style: const Style(foreground: CharmColors.squid),
+        ),
+      ),
+    SizedBox(
+      height: contentHeight,
+      child: Padding(padding: const EdgeInsets.only(left: 2), child: content),
+    ),
+    if (hasError)
+      SizedBox(
+        height: 1,
+        child: Text(
+          '  ⚠ $errorText',
+          style: const Style(
+            foreground: CharmColors.cherry,
+            modifiers: Modifier.bold,
+          ),
+        ),
+      ),
+  ]);
+}
+
+Widget _buildTextInputFormField({
+  required FormField<String> field,
+  required FormFieldState<String> state,
+  required TextField input,
+  required int contentHeight,
+}) {
+  input.focused = field.focused;
+  if (input.value != state.value) {
+    input.value = state.value ?? '';
+  }
+
+  return _buildFormFieldLayout(
+    field: field,
+    state: state,
+    contentHeight: contentHeight,
+    content: TextField(
+      key: input.key,
+      controller: input.controller,
+      focused: field.focused,
+      style: input.style,
+      cursorStyle: input.cursorStyle,
+      placeholder: input.placeholder,
+      placeholderStyle: input.placeholderStyle,
+      multiline: input.multiline,
+      customShortcuts: input.customShortcuts,
+      focusNode: state.focusNode,
+      onFocusChange: state.handleFocusChange,
+      onKeyEvent: state.handleUnhandledKeyEvent,
+    ),
+  );
+}
+
+abstract class _BaseTextInputFormFieldState<W extends FormField<String>>
+    extends FormFieldState<String>
     implements KeyEventHandler {
+  TextField _inputFor(W field);
+
   @override
   bool get delegatesFocusToChild => true;
 
   @override
   void initState() {
     super.initState();
-    (widget as TextFormField)._input.controller.addListener(
-      _onControllerChanged,
-    );
+    _inputFor(widget as W).controller.addListener(_onControllerChanged);
   }
 
   @override
   void dispose() {
-    (widget as TextFormField)._input.controller.removeListener(
-      _onControllerChanged,
-    );
+    _inputFor(widget as W).controller.removeListener(_onControllerChanged);
     super.dispose();
   }
 
   @override
-  void didUpdateWidget(covariant TextFormField oldWidget) {
-    final nextWidget = widget as TextFormField;
+  void didUpdateWidget(covariant W oldWidget) {
+    final nextWidget = widget as W;
+    final oldInput = _inputFor(oldWidget);
+    final nextInput = _inputFor(nextWidget);
     if (!identical(oldWidget, nextWidget)) {
-      nextWidget._input.controller.value = oldWidget._input.controller.value;
-      nextWidget._input.scrollOffset = oldWidget._input.scrollOffset;
+      nextInput.controller.value = oldInput.controller.value;
+      nextInput.scrollOffset = oldInput.scrollOffset;
     }
     super.didUpdateWidget(oldWidget);
-    final oldController = oldWidget._input.controller;
-    final newController = nextWidget._input.controller;
-    if (newController != oldController) {
-      oldController.removeListener(_onControllerChanged);
-      newController.addListener(_onControllerChanged);
+    if (nextInput.controller != oldInput.controller) {
+      oldInput.controller.removeListener(_onControllerChanged);
+      nextInput.controller.addListener(_onControllerChanged);
     }
   }
 
   void _onControllerChanged() {
-    final newValue = (widget as TextFormField)._input.value;
+    final newValue = _inputFor(widget as W).value;
     widget.value = newValue;
     final nextError = widget.validator?.call(newValue);
     if (nextError != widget.errorText && mounted) {
@@ -961,9 +1040,12 @@ class _TextFormFieldState extends FormFieldState<String>
   }
 
   @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    return widget.handleKeyEvent(event);
-  }
+  bool handleKeyEvent(term.KeyEvent event) => widget.handleKeyEvent(event);
+}
+
+class _TextFormFieldState extends _BaseTextInputFormFieldState<TextFormField> {
+  @override
+  TextField _inputFor(TextFormField field) => field._input;
 
   @override
   Widget build(BuildContext context) {
@@ -980,71 +1062,12 @@ class _TextFormFieldRenderWidget extends StatelessWidget {
   const _TextFormFieldRenderWidget(this.widget, this.state);
 
   @override
-  Widget build(BuildContext context) {
-    widget._input.focused = widget.focused;
-    if (widget._input.value != state.value) {
-      widget._input.value = state.value ?? '';
-    }
-
-    final hasError = state.hasError;
-    final errorText = state.errorText;
-
-    final layoutItems = <Widget>[
-      SizedBox(
-        height: 1,
-        child: Text(
-          widget.label,
-          style: Style(
-            foreground: hasError
-                ? CharmColors.cherry
-                : (widget.focused ? CharmColors.charple : CharmColors.soda),
-            modifiers: widget.focused ? Modifier.bold : Modifier.none,
-          ),
-        ),
-      ),
-      if (widget.description.isNotEmpty)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ${widget.description}',
-            style: const Style(foreground: CharmColors.squid),
-          ),
-        ),
-      SizedBox(
-        height: 1,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 2),
-          child: TextField(
-            key: widget._input.key,
-            controller: widget._input.controller,
-            focused: widget.focused,
-            style: widget._input.style,
-            cursorStyle: widget._input.cursorStyle,
-            placeholder: widget._input.placeholder,
-            placeholderStyle: widget._input.placeholderStyle,
-            multiline: widget._input.multiline,
-            customShortcuts: widget._input.customShortcuts,
-            focusNode: state.focusNode,
-            onFocusChange: state.handleFocusChange,
-            onKeyEvent: state.handleUnhandledKeyEvent,
-          ),
-        ),
-      ),
-      if (hasError)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ⚠ $errorText',
-            style: const Style(
-              foreground: CharmColors.cherry,
-              modifiers: Modifier.bold,
-            ),
-          ),
-        ),
-    ];
-
-    return Column(layoutItems);
-  }
+  Widget build(BuildContext context) => _buildTextInputFormField(
+    field: widget,
+    state: state,
+    input: widget._input,
+    contentHeight: 1,
+  );
 }
 
 /// A form field wrapping a multi-line text editing area.
@@ -1120,61 +1143,13 @@ class TextAreaFormField extends FormField<String> {
   State createState() => _TextAreaFormFieldState();
 }
 
-class _TextAreaFormFieldState extends FormFieldState<String>
-    implements KeyEventHandler {
-  @override
-  bool get delegatesFocusToChild => true;
-
+class _TextAreaFormFieldState
+    extends _BaseTextInputFormFieldState<TextAreaFormField> {
   @override
   bool get consumesEnterInForm => true;
 
   @override
-  void initState() {
-    super.initState();
-    (widget as TextAreaFormField)._input.controller.addListener(
-      _onControllerChanged,
-    );
-  }
-
-  @override
-  void dispose() {
-    (widget as TextAreaFormField)._input.controller.removeListener(
-      _onControllerChanged,
-    );
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(covariant TextAreaFormField oldWidget) {
-    final nextWidget = widget as TextAreaFormField;
-    if (!identical(oldWidget, nextWidget)) {
-      nextWidget._input.controller.value = oldWidget._input.controller.value;
-      nextWidget._input.scrollOffset = oldWidget._input.scrollOffset;
-    }
-    super.didUpdateWidget(oldWidget);
-    final oldController = oldWidget._input.controller;
-    final newController = nextWidget._input.controller;
-    if (newController != oldController) {
-      oldController.removeListener(_onControllerChanged);
-      newController.addListener(_onControllerChanged);
-    }
-  }
-
-  void _onControllerChanged() {
-    final newValue = (widget as TextAreaFormField)._input.value;
-    widget.value = newValue;
-    final nextError = widget.validator?.call(newValue);
-    if (nextError != widget.errorText && mounted) {
-      setState(() {
-        widget.errorText = nextError;
-      });
-    }
-  }
-
-  @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    return widget.handleKeyEvent(event);
-  }
+  TextField _inputFor(TextAreaFormField field) => field._input;
 
   @override
   Widget build(BuildContext context) {
@@ -1191,71 +1166,12 @@ class _TextAreaFormFieldRenderWidget extends StatelessWidget {
   const _TextAreaFormFieldRenderWidget(this.widget, this.state);
 
   @override
-  Widget build(BuildContext context) {
-    widget._input.focused = widget.focused;
-    if (widget._input.value != state.value) {
-      widget._input.value = state.value ?? '';
-    }
-
-    final hasError = state.hasError;
-    final errorText = state.errorText;
-
-    final layoutItems = <Widget>[
-      SizedBox(
-        height: 1,
-        child: Text(
-          widget.label,
-          style: Style(
-            foreground: hasError
-                ? CharmColors.cherry
-                : (widget.focused ? CharmColors.charple : CharmColors.soda),
-            modifiers: widget.focused ? Modifier.bold : Modifier.none,
-          ),
-        ),
-      ),
-      if (widget.description.isNotEmpty)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ${widget.description}',
-            style: const Style(foreground: CharmColors.squid),
-          ),
-        ),
-      SizedBox(
-        height: widget.fieldHeight,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 2),
-          child: TextField(
-            key: widget._input.key,
-            controller: widget._input.controller,
-            focused: widget.focused,
-            style: widget._input.style,
-            cursorStyle: widget._input.cursorStyle,
-            placeholder: widget._input.placeholder,
-            placeholderStyle: widget._input.placeholderStyle,
-            multiline: widget._input.multiline,
-            customShortcuts: widget._input.customShortcuts,
-            focusNode: state.focusNode,
-            onFocusChange: state.handleFocusChange,
-            onKeyEvent: state.handleUnhandledKeyEvent,
-          ),
-        ),
-      ),
-      if (hasError)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ⚠ $errorText',
-            style: const Style(
-              foreground: CharmColors.cherry,
-              modifiers: Modifier.bold,
-            ),
-          ),
-        ),
-    ];
-
-    return Column(layoutItems);
-  }
+  Widget build(BuildContext context) => _buildTextInputFormField(
+    field: widget,
+    state: state,
+    input: widget._input,
+    contentHeight: widget.fieldHeight,
+  );
 }
 
 /// An option in a selection form field.
@@ -1401,51 +1317,12 @@ class _SelectFormFieldRenderWidget<T> extends StatelessWidget {
       );
     }
 
-    final hasError = state.hasError;
-    final errorText = state.errorText;
-
-    final layoutItems = <Widget>[
-      SizedBox(
-        height: 1,
-        child: Text(
-          widget.label,
-          style: Style(
-            foreground: hasError
-                ? CharmColors.cherry
-                : (widget.focused ? CharmColors.charple : CharmColors.soda),
-            modifiers: widget.focused ? Modifier.bold : Modifier.none,
-          ),
-        ),
-      ),
-      if (widget.description.isNotEmpty)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ${widget.description}',
-            style: const Style(foreground: CharmColors.squid),
-          ),
-        ),
-      SizedBox(
-        height: widget.options.length,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 2),
-          child: Column(optionItems),
-        ),
-      ),
-      if (hasError)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ⚠ $errorText',
-            style: const Style(
-              foreground: CharmColors.cherry,
-              modifiers: Modifier.bold,
-            ),
-          ),
-        ),
-    ];
-
-    return Column(layoutItems);
+    return _buildFormFieldLayout(
+      field: widget,
+      state: state,
+      contentHeight: widget.options.length,
+      content: Column(optionItems),
+    );
   }
 }
 
@@ -1541,59 +1418,20 @@ class _ConfirmFormFieldRenderWidget extends StatelessWidget {
           )
         : const Style(foreground: CharmColors.soda);
 
-    final hasError = state.hasError;
-    final errorText = state.errorText;
-
-    final layoutItems = <Widget>[
-      SizedBox(
-        height: 1,
-        child: Text(
-          widget.label,
-          style: Style(
-            foreground: hasError
-                ? CharmColors.cherry
-                : (widget.focused ? CharmColors.charple : CharmColors.soda),
-            modifiers: widget.focused ? Modifier.bold : Modifier.none,
-          ),
+    return _buildFormFieldLayout(
+      field: widget,
+      state: state,
+      contentHeight: 1,
+      content: RichText(
+        text: TextSpan(
+          children: [
+            TextSpan(text: ' [Yes] ', style: yesStyle),
+            const TextSpan(text: '   '),
+            TextSpan(text: '  No  ', style: noStyle),
+          ],
         ),
       ),
-      if (widget.description.isNotEmpty)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ${widget.description}',
-            style: const Style(foreground: CharmColors.squid),
-          ),
-        ),
-      SizedBox(
-        height: 1,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 2),
-          child: RichText(
-            text: TextSpan(
-              children: [
-                TextSpan(text: ' [Yes] ', style: yesStyle),
-                const TextSpan(text: '   '),
-                TextSpan(text: '  No  ', style: noStyle),
-              ],
-            ),
-          ),
-        ),
-      ),
-      if (hasError)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ⚠ $errorText',
-            style: const Style(
-              foreground: CharmColors.cherry,
-              modifiers: Modifier.bold,
-            ),
-          ),
-        ),
-    ];
-
-    return Column(layoutItems);
+    );
   }
 }
 
@@ -1753,50 +1591,11 @@ class _MultiSelectFormFieldRenderWidget<T> extends StatelessWidget {
       );
     }
 
-    final hasError = state.hasError;
-    final errorText = state.errorText;
-
-    final layoutItems = <Widget>[
-      SizedBox(
-        height: 1,
-        child: Text(
-          widget.label,
-          style: Style(
-            foreground: hasError
-                ? CharmColors.cherry
-                : (widget.focused ? CharmColors.charple : CharmColors.soda),
-            modifiers: widget.focused ? Modifier.bold : Modifier.none,
-          ),
-        ),
-      ),
-      if (widget.description.isNotEmpty)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ${widget.description}',
-            style: const Style(foreground: CharmColors.squid),
-          ),
-        ),
-      SizedBox(
-        height: widget.options.length,
-        child: Padding(
-          padding: const EdgeInsets.only(left: 2),
-          child: Column(optionItems),
-        ),
-      ),
-      if (hasError)
-        SizedBox(
-          height: 1,
-          child: Text(
-            '  ⚠ $errorText',
-            style: const Style(
-              foreground: CharmColors.cherry,
-              modifiers: Modifier.bold,
-            ),
-          ),
-        ),
-    ];
-
-    return Column(layoutItems);
+    return _buildFormFieldLayout(
+      field: widget,
+      state: state,
+      contentHeight: widget.options.length,
+      content: Column(optionItems),
+    );
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:termui/src/element_children.dart';
 import 'package:termui/termui.dart';
 
 /// A layout widget that arranges its children vertically.
@@ -70,33 +71,16 @@ class ColumnElement extends Element {
   @override
   void rebuild() {
     final column = widget as Column;
-    final newElements = <Element>[];
-    for (var i = 0; i < column.children.length; i++) {
-      final childWidget = column.children[i];
-      if (i < childElements.length &&
-          Widget.canUpdate(childElements[i].widget, childWidget)) {
-        childElements[i].update(childWidget);
-        newElements.add(childElements[i]);
-      } else {
-        if (i < childElements.length) {
-          childElements[i].unmount();
-        }
-        final newEl = childWidget.createElement();
-        newEl.mount(this);
-        newElements.add(newEl);
-      }
-    }
-    for (var i = column.children.length; i < childElements.length; i++) {
-      childElements[i].unmount();
-    }
-    childElements = newElements;
+    childElements = reconcileChildElements(
+      this,
+      childElements,
+      column.children,
+    );
   }
 
   @override
   void unmount() {
-    for (final child in childElements) {
-      child.unmount();
-    }
+    unmountChildElements(childElements);
     super.unmount();
   }
 

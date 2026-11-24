@@ -264,35 +264,13 @@ class LeafElement extends Element {
   void performPaint(Buffer buffer, Offset offset) {}
 }
 
-/// An [Element] that uses a [StatelessWidget] as its configuration.
-class StatelessElement extends Element {
+/// Shared single-child delegation and reconciliation for [StatelessElement],
+/// [StatefulElement], and [InheritedElement].
+mixin _SingleChildElementMixin on Element {
   /// The element corresponding to the built child widget.
   Element? childElement;
 
-  /// Creates a stateless element to manage a [StatelessWidget].
-  StatelessElement(StatelessWidget super.widget);
-
-  @override
-  /// Adds this element to the tree and builds the child element.
-  void mount(Element? parent) {
-    super.mount(parent);
-    rebuild();
-  }
-
-  @override
-  /// Removes this element and its child from the tree.
-  void unmount() {
-    childElement?.unmount();
-    super.unmount();
-  }
-
-  @override
-  /// Rebuilds the child widget configuration and updates the child element.
-  void rebuild() {
-    final builtWidget = runZoned(() {
-      return (widget as StatelessWidget).build(this);
-    }, zoneValues: {#buildContext: this});
-
+  void _reconcileChild(Widget builtWidget) {
     if (childElement != null &&
         Widget.canUpdate(childElement!.widget, builtWidget)) {
       if (!identical(childElement!.widget, builtWidget)) {
@@ -303,12 +281,6 @@ class StatelessElement extends Element {
       childElement = builtWidget.createElement();
       childElement!.mount(this);
     }
-  }
-
-  @override
-  void update(Widget newWidget) {
-    super.update(newWidget);
-    rebuild();
   }
 
   @override
@@ -341,13 +313,45 @@ class StatelessElement extends Element {
       childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
+/// An [Element] that uses a [StatelessWidget] as its configuration.
+class StatelessElement extends Element with _SingleChildElementMixin {
+  /// Creates a stateless element to manage a [StatelessWidget].
+  StatelessElement(StatelessWidget super.widget);
+
+  @override
+  /// Adds this element to the tree and builds the child element.
+  void mount(Element? parent) {
+    super.mount(parent);
+    rebuild();
+  }
+
+  @override
+  /// Removes this element and its child from the tree.
+  void unmount() {
+    childElement?.unmount();
+    super.unmount();
+  }
+
+  @override
+  /// Rebuilds the child widget configuration and updates the child element.
+  void rebuild() {
+    final builtWidget = runZoned(() {
+      return (widget as StatelessWidget).build(this);
+    }, zoneValues: {#buildContext: this});
+    _reconcileChild(builtWidget);
+  }
+
+  @override
+  void update(Widget newWidget) {
+    super.update(newWidget);
+    rebuild();
+  }
+}
+
 /// An [Element] that manages a [StatefulWidget] and its [State].
-class StatefulElement extends Element {
+class StatefulElement extends Element with _SingleChildElementMixin {
   /// The state associated with this element.
   late final State state;
-
-  /// The child element.
-  Element? childElement;
 
   /// Creates a stateful element to manage a [StatefulWidget].
   StatefulElement(StatefulWidget super.widget);
@@ -379,17 +383,7 @@ class StatefulElement extends Element {
     final builtWidget = runZoned(() {
       return state.build(this);
     }, zoneValues: {#buildContext: this});
-
-    if (childElement != null &&
-        Widget.canUpdate(childElement!.widget, builtWidget)) {
-      if (!identical(childElement!.widget, builtWidget)) {
-        childElement!.update(builtWidget);
-      }
-    } else {
-      childElement?.unmount();
-      childElement = builtWidget.createElement();
-      childElement!.mount(this);
-    }
+    _reconcileChild(builtWidget);
   }
 
   @override
@@ -408,42 +402,10 @@ class StatefulElement extends Element {
     state.reassemble();
     super.reassemble();
   }
-
-  @override
-  void visitChildren(void Function(Element child) visitor) {
-    if (childElement != null) visitor(childElement!);
-  }
-
-  @override
-  Size performLayout(BoxConstraints constraints) {
-    if (childElement != null) {
-      childElement!.relativeOffset = Offset.zero;
-      return childElement!.layout(constraints);
-    }
-    return constraints.constrain(Size.zero);
-  }
-
-  @override
-  void performPaint(Buffer buffer, Offset offset) {
-    if (childElement != null) {
-      childElement!.paint(buffer, offset + childElement!.relativeOffset);
-    }
-  }
-
-  @override
-  int getIntrinsicHeight(int width) =>
-      childElement?.getIntrinsicHeight(width) ?? 0;
-
-  @override
-  int getIntrinsicWidth(int height) =>
-      childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
 /// An [Element] that uses an [InheritedWidget] to propagate data down the tree.
-class InheritedElement extends Element {
-  /// The element corresponding to the built child widget.
-  Element? childElement;
-
+class InheritedElement extends Element with _SingleChildElementMixin {
   final Set<Element> _dependents = {};
 
   /// Creates an element to manage an [InheritedWidget].
@@ -459,17 +421,7 @@ class InheritedElement extends Element {
   @override
   /// Rebuilds the child widget configuration and updates the child element.
   void rebuild() {
-    final inheritedWidget = widget as InheritedWidget;
-    if (childElement != null &&
-        Widget.canUpdate(childElement!.widget, inheritedWidget.child)) {
-      if (!identical(childElement!.widget, inheritedWidget.child)) {
-        childElement!.update(inheritedWidget.child);
-      }
-    } else {
-      childElement?.unmount();
-      childElement = inheritedWidget.child.createElement();
-      childElement!.mount(this);
-    }
+    _reconcileChild((widget as InheritedWidget).child);
   }
 
   @override
@@ -505,35 +457,6 @@ class InheritedElement extends Element {
     childElement?.unmount();
     super.unmount();
   }
-
-  @override
-  void visitChildren(void Function(Element child) visitor) {
-    if (childElement != null) visitor(childElement!);
-  }
-
-  @override
-  Size performLayout(BoxConstraints constraints) {
-    if (childElement != null) {
-      childElement!.relativeOffset = Offset.zero;
-      return childElement!.layout(constraints);
-    }
-    return constraints.constrain(Size.zero);
-  }
-
-  @override
-  void performPaint(Buffer buffer, Offset offset) {
-    if (childElement != null) {
-      childElement!.paint(buffer, offset + childElement!.relativeOffset);
-    }
-  }
-
-  @override
-  int getIntrinsicHeight(int width) =>
-      childElement?.getIntrinsicHeight(width) ?? 0;
-
-  @override
-  int getIntrinsicWidth(int height) =>
-      childElement?.getIntrinsicWidth(height) ?? 0;
 }
 
 /// Element for [ElementWidget] that delegates layout, painting, and lifecycle.

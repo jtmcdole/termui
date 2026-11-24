@@ -1,4 +1,5 @@
 import 'package:characters/characters.dart';
+import 'package:termui/src/interactive_focus_helper.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 
@@ -68,37 +69,29 @@ class CheckboxState extends State<Checkbox>
   }
 
   @override
-  bool handleKeyEvent(term.KeyEvent event) {
-    final hasFocus = widget.focused || focusNode.hasFocus;
-    if (hasFocus &&
-        (event.baseKey == term.TermKey.space ||
-            event.baseKey == term.TermKey.enter)) {
+  bool handleKeyEvent(term.KeyEvent event) => handleActivationKeyEvent(
+    hasFocus: widget.focused || focusNode.hasFocus,
+    event: event,
+    onActivate: () {
       widget.onChanged(!widget.value);
       setState(() {});
-      return true;
-    }
-    return false;
-  }
+    },
+  );
 
   @override
-  Widget build(BuildContext context) {
-    return Focus(
-      focusNode: focusNode,
-      onFocusChange: (hasFocus) {
-        if (mounted) setState(() {});
-      },
-      onKeyEvent: (event) {
-        return handleKeyEvent(event);
-      },
-      child: _CheckboxRenderWidget(
-        value: widget.value,
-        label: widget.label,
-        focused: focusNode.hasFocus || widget.focused,
-        style: widget.style,
-        focusedStyle: widget.focusedStyle,
-      ),
-    );
-  }
+  Widget build(BuildContext context) => buildFocusableInteractive(
+    focusNode: focusNode,
+    isMounted: () => mounted,
+    onFocusRebuild: () => setState(() {}),
+    onKeyEvent: handleKeyEvent,
+    child: _CheckboxRenderWidget(
+      value: widget.value,
+      label: widget.label,
+      focused: focusNode.hasFocus || widget.focused,
+      style: widget.style,
+      focusedStyle: widget.focusedStyle,
+    ),
+  );
 }
 
 class _CheckboxRenderWidget extends Widget {
