@@ -1,0 +1,74 @@
+name: Detect Changes
+description: Check whether any watched git pathspecs changed in a pull_request or push event
+
+inputs:
+  paths:
+    description: Newline-separated list of git pathspecs to watch
+    required: true
+  label:
+    description: Human-readable workflow label for log output
+    required: false
+    default: CI
+
+outputs:
+  run:
+    description: "'true' if any watched path changed (or diff base could not be determined); 'false' otherwise"
+    value: ${{ steps.filter.outputs.run }}
+
+runs:
+  using: composite
+  steps:
+    - name: Check watched paths
+      id: filter
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        BEFORE_SHA: ${{ github.event.before }}
+        WATCH_PATHS: ${{ inputs.paths }}
+        LABEL: ${{ inputs.label }}
+      run: |
+        set -euo pipefail
+
+        pathspecs=()
+        while IFS= read -r line; do
+          line="${line#"${line%%[![:space:]]*}"}"
+          line="${line%"${line##*[![:space:]]}"}"
+          if [ -n "$line" ] && [[ "$line" != \#* ]]; then
+            pathspecs+=("$line")
+          fi
+        done <<< "$WATCH_PATHS"
+
+        if [ "${#pathspecs[@]}" -eq 0 ]; then
+          echo "::error::detect-changes requires at least one pathspec in 'paths'."
+          exit 1
+        fi
+
+        base=""
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          if git rev-parse --verify -q HEAD^2 >/dev/null; then
+            base="HEAD^1"
+          fi
+        elif [ "$EVENT_NAME" = "push" ]; then
+          if [ -n "$BEFORE_SHA" ] \
+            && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+            && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            base="$BEFORE_SHA"
+          fi
+        fi
+
+        if [ -z "$base" ]; then
+          echo "Could not determine diff base for event '$EVENT_NAME'; running $LABEL."
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        changed="$(git -c core.quotepath=false diff --name-only "$base" HEAD -- "${pathspecs[@]}")"
+
+        if [ -n "$changed" ]; then
+          echo "Relevant paths changed for $LABEL:"
+          echo "$changed"
+          echo "run=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "No relevant paths changed; skipping $LABEL."
+          echo "run=false" >> "$GITHUB_OUTPUT"
+        fi
