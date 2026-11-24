@@ -6,6 +6,7 @@ import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_flutter/termui_flutter.dart'
     show ShaderAnimationMode, ShaderBackendKind;
 
+import 'input/key_chord.dart';
 import 'settings_storage_stub.dart'
     if (dart.library.js_interop) 'settings_storage_web.dart'
     if (dart.library.io) 'settings_storage_io.dart'
@@ -158,6 +159,34 @@ enum GpuDriverPreference {
   };
 }
 
+/// Policy governing how unhandled `Meta`/`Cmd` key chords are dispatched
+/// relative to the host browser or operating system.
+enum FtermMetaKeyMode {
+  /// Pass through on Web and macOS; claim on Linux/Windows desktop when Kitty
+  /// keyboard protocol is active.
+  auto('auto'),
+
+  /// Always pass unhandled `Meta`/`Cmd` chords through to the host OS/browser.
+  passThrough('passThrough'),
+
+  /// Claim unhandled `Meta`/`Cmd` chords whenever Kitty keyboard protocol is
+  /// active (still passing through in legacy mode).
+  kitty('kitty');
+
+  /// Canonical JSON wire identifier.
+  final String wireName;
+
+  const FtermMetaKeyMode(this.wireName);
+
+  /// Parses [raw] from its [wireName] (or snake_case alias), falling back to
+  /// [auto].
+  static FtermMetaKeyMode fromWireName(Object? raw) => switch (raw) {
+    'passThrough' || 'pass_through' => .passThrough,
+    'kitty' => .kitty,
+    _ => .auto,
+  };
+}
+
 /// App-level `fterm` audio, font-size, shell, tab-bar, and auto-update
 /// preferences stored alongside [CastWorkspaceSettings].
 final class FtermPreferences {
@@ -268,6 +297,14 @@ final class FtermPreferences {
   /// Persisted lowercase SHA-256 hex digests of user-trusted custom CLI GLSL sources.
   final Set<String> trustedCliShaderHashes;
 
+  /// Policy controlling unhandled `Meta`/`Cmd` shortcut passthrough vs. Kitty
+  /// forwarding.
+  final FtermMetaKeyMode metaKeyMode;
+
+  /// User-configured key chords always passed through to the host OS or browser
+  /// ahead of `fterm` shortcuts and terminal input.
+  final List<KeyChord> passthroughShortcuts;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
@@ -298,6 +335,8 @@ final class FtermPreferences {
     this.remoteCliShaderPolicy = CliShaderPolicy.disabled,
     this.cliFullPaneShaderMode = CliFullPaneShaderMode.cliBeforeUser,
     this.trustedCliShaderHashes = const <String>{},
+    this.metaKeyMode = .auto,
+    this.passthroughShortcuts = const [],
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -345,6 +384,8 @@ final class FtermPreferences {
     CliShaderPolicy? remoteCliShaderPolicy,
     CliFullPaneShaderMode? cliFullPaneShaderMode,
     Set<String>? trustedCliShaderHashes,
+    FtermMetaKeyMode? metaKeyMode,
+    List<KeyChord>? passthroughShortcuts,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -421,6 +462,10 @@ final class FtermPreferences {
     cliFullPaneShaderMode: cliFullPaneShaderMode ?? this.cliFullPaneShaderMode,
     trustedCliShaderHashes: _normalizeHashes(
       trustedCliShaderHashes ?? this.trustedCliShaderHashes,
+    ),
+    metaKeyMode: metaKeyMode ?? this.metaKeyMode,
+    passthroughShortcuts: _normalizePassthroughShortcuts(
+      passthroughShortcuts ?? this.passthroughShortcuts,
     ),
   );
 
@@ -502,6 +547,10 @@ final class FtermPreferences {
       fallback: CliFullPaneShaderMode.cliBeforeUser,
     ),
     trustedCliShaderHashes: _parseHashSet(decoded['trustedCliShaderHashes']),
+    metaKeyMode: FtermMetaKeyMode.fromWireName(decoded['metaKeyMode']),
+    passthroughShortcuts: _parsePassthroughShortcuts(
+      decoded['passthroughShortcuts'],
+    ),
   );
 
   static double _parseAudioVolume(Object? raw) => switch (raw) {
@@ -600,6 +649,22 @@ final class FtermPreferences {
         : Set<String>.unmodifiable(normalized);
   }
 
+  static List<KeyChord> _parsePassthroughShortcuts(Object? raw) {
+    if (raw is! List<Object?>) return const [];
+    final chords = KeyChord.parseAll(_extractStrings(raw)).chords;
+    return chords.isEmpty ? const [] : List<KeyChord>.unmodifiable(chords);
+  }
+
+  static List<KeyChord> _normalizePassthroughShortcuts(List<KeyChord> chords) {
+    if (chords.isEmpty) return const [];
+    final seen = <KeyChord>{};
+    final unique = <KeyChord>[
+      for (final chord in chords)
+        if (seen.add(chord)) chord,
+    ];
+    return List<KeyChord>.unmodifiable(unique);
+  }
+
   static bool _parseBool(Object? raw, {required bool fallback}) =>
       switch (raw) {
         final bool value => value,
@@ -644,6 +709,10 @@ final class FtermPreferences {
     'cliFullPaneShaderMode': cliFullPaneShaderMode.wireName,
     if (trustedCliShaderHashes.isNotEmpty)
       'trustedCliShaderHashes': [...trustedCliShaderHashes]..sort(),
+    'metaKeyMode': metaKeyMode.wireName,
+    'passthroughShortcuts': [
+      for (final chord in passthroughShortcuts) chord.toCanonicalString(),
+    ],
   });
 
   @override
@@ -677,7 +746,9 @@ final class FtermPreferences {
           other.localCliShaderPolicy == localCliShaderPolicy &&
           other.remoteCliShaderPolicy == remoteCliShaderPolicy &&
           other.cliFullPaneShaderMode == cliFullPaneShaderMode &&
-          setEquals(other.trustedCliShaderHashes, trustedCliShaderHashes);
+          setEquals(other.trustedCliShaderHashes, trustedCliShaderHashes) &&
+          other.metaKeyMode == metaKeyMode &&
+          listEquals(other.passthroughShortcuts, passthroughShortcuts);
 
   @override
   int get hashCode => Object.hashAll(<Object?>[
@@ -709,6 +780,8 @@ final class FtermPreferences {
     remoteCliShaderPolicy,
     cliFullPaneShaderMode,
     Object.hashAllUnordered(trustedCliShaderHashes),
+    metaKeyMode,
+    Object.hashAll(passthroughShortcuts),
   ]);
 }
 

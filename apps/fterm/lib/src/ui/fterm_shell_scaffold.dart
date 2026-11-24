@@ -93,6 +93,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   Object? _lastLayoutSignature;
   bool _hadBakedAtlas = false;
   bool _atlasInitRequested = false;
+  bool _passedThroughEarlyF12 = false;
   DateTime? _lastTabTapAt;
   String? _lastTabTapId;
 
@@ -278,6 +279,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ws.showPerfHud,
       ws.maxShaderFps,
       ws.preferences.macosOptionAsAlt,
+      ws.preferences.metaKeyMode,
+      Object.hashAll(ws.preferences.passthroughShortcuts),
       ws.preferences.fontSize,
       ws.updateViewModel.status,
       resolvedFontSize ?? _resolvedFontSize(context),
@@ -401,6 +404,23 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     };
   }
 
+  bool _shouldPassThroughEarlyF12(KeyEvent event, Set<ev.Modifier> mods) {
+    final matches = _shortcutDispatcher.isPassthroughShortcut(
+      event.logicalKey,
+      mods,
+    );
+    if (event is KeyDownEvent) {
+      _passedThroughEarlyF12 = matches;
+      return matches;
+    }
+    if (event is KeyUpEvent) {
+      final wasPassedThrough = _passedThroughEarlyF12;
+      _passedThroughEarlyF12 = false;
+      return matches || wasPassedThrough;
+    }
+    return matches || _passedThroughEarlyF12;
+  }
+
   KeyEventResult _handleEarlyF12Event(KeyEvent event) {
     if (widget.workspace.activeOverlay != FtermOverlay.none) {
       return KeyEventResult.ignored;
@@ -409,6 +429,9 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       return KeyEventResult.ignored;
     }
     final mods = _collectHardwareModifiers();
+    if (_shouldPassThroughEarlyF12(event, mods)) {
+      return KeyEventResult.ignored;
+    }
     if (widget.workspace.f12ShortcutsEnabled &&
         mods.difference(const <ev.Modifier>{.shift}).isEmpty) {
       return KeyEventResult.ignored;
