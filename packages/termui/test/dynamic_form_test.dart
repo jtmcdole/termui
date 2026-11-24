@@ -711,10 +711,11 @@ void main() {
         nameField.focused = true;
         nameField.handleKeyEvent(const KeyEvent('A', .character));
         nameField.handleKeyEvent(const KeyEvent('B', .character));
+        nameField.handleKeyEvent(const KeyEvent('C', .character));
         nameField.handleKeyEvent(
           const KeyEvent('z', .character, modifiers: {Modifier.control}),
         );
-        expect(nameField.value, equals('A'));
+        expect(nameField.value, equals('AB'));
         expect(formState.validate(), isTrue);
 
         formState.reset();
@@ -725,10 +726,11 @@ void main() {
 
         // Undo/redo history from pre-reset edits must not restore old text.
         nameField.handleKeyEvent(
-          const KeyEvent('z', .character, modifiers: {Modifier.control}),
-        );
-        nameField.handleKeyEvent(
           const KeyEvent('y', .character, modifiers: {Modifier.control}),
+        );
+        expect(nameField.value, equals(''));
+        nameField.handleKeyEvent(
+          const KeyEvent('z', .character, modifiers: {Modifier.control}),
         );
         expect(nameField.value, equals(''));
         expect(nameField.hasError, isFalse);
