@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:characters/characters.dart';
 import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
+import 'package:termui/syntax.dart';
 import 'package:termui/termui.dart';
 import 'package:termui/ui/event.dart' as ev;
 import 'package:termui_test/termui_test.dart';
@@ -782,6 +783,676 @@ void main() {
           ),
           isTrue,
         );
+      },
+    );
+  });
+
+  group('TextField review regressions (H1-H9, M1-M5, M9)', () {
+    MouseEventConsumer findMouseConsumer(Element root) {
+      MouseEventConsumer? consumer;
+      void visit(Element e) {
+        if (e case final MouseEventConsumer c) {
+          consumer = c;
+          return;
+        }
+        e.visitChildren(visit);
+      }
+
+      visit(root);
+      return consumer!;
+    }
+
+    test('H1: out-of-bounds external TextEditingValue is clamped safely', () {
+      final controller = TextEditingController(text: 'hello');
+      controller.value = const TextEditingValue(
+        text: 'hello',
+        selection: TextSelection.collapsed(offset: 10, line: 3, column: 9),
+      );
+      final field = TextField(controller: controller, multiline: true);
+
+      expect(
+        () => field.handleKeyEvent(const KeyEvent('', KeyType.right)),
+        returnsNormally,
+      );
+      expect(field.cursorLine, equals(0));
+      expect(field.cursorColumn, equals(5));
+
+      controller.value = const TextEditingValue(
+        text: 'hello',
+        selection: TextSelection.collapsed(offset: 10, line: 3, column: 9),
+      );
+      expect(
+        () => field.handleKeyEvent(
+          const KeyEvent('', KeyType.left, modifiers: {ev.Modifier.control}),
+        ),
+        returnsNormally,
+      );
+      expect(field.cursorColumn, equals(0));
+
+      controller.value = const TextEditingValue(
+        text: 'hello',
+        selection: TextSelection.collapsed(offset: 10, line: 3, column: 9),
+      );
+      expect(
+        () => field.handleKeyEvent(const KeyEvent('!', KeyType.character)),
+        returnsNormally,
+      );
+      expect(field.value, equals('hello!'));
+
+      // Collapsing an out-of-bounds selection clamps offsets to text length.
+      controller.value = const TextEditingValue(
+        text: 'hi',
+        selection: TextSelection(
+          baseOffset: 0,
+          extentOffset: 99,
+          cursorLine: 4,
+          cursorColumn: 99,
+        ),
+      );
+      field.handleKeyEvent(const KeyEvent('', KeyType.right));
+      expect(controller.value.selection.baseOffset, equals(2));
+      expect(controller.value.selection.cursorLine, equals(0));
+      expect(controller.value.selection.cursorColumn, equals(2));
+
+      controller.value = const TextEditingValue(
+        text: 'hi',
+        selection: TextSelection(
+          baseOffset: 0,
+          extentOffset: 99,
+          cursorLine: 4,
+          cursorColumn: 99,
+        ),
+      );
+      field.handleKeyEvent(const KeyEvent('', KeyType.escape));
+      expect(controller.value.selection.isCollapsed, isTrue);
+      expect(controller.value.selection.baseOffset, equals(2));
+    });
+
+    test(
+      'H2: CRLF grapheme offsets, editing, mouse selection, and plain/styled paint stay synchronized',
+      () {
+        // insertText at line 1 col 0 inserts before first char of line 1.
+        final ctrl = TextEditingController(text: 'first\r\nsecond');
+        ctrl.value = const TextEditingValue(
+          text: 'first\r\nsecond',
+          selection: TextSelection.collapsed(offset: 6, line: 1, column: 0),
+        );
+        ctrl.insertText('X');
+        expect(ctrl.text, equals('first\r\nXsecond'));
+        expect(ctrl.value.selection.cursorLine, equals(1));
+        expect(ctrl.value.selection.cursorColumn, equals(1));
+
+        // Plain paint on CRLF must not emit raw '\r' into buffer cells.
+        final plainCtrl = TextEditingController(text: 'first\r\nsecond');
+        final plainField = TextField(
+          controller: plainCtrl,
+          multiline: true,
+          focused: false,
+        );
+        final plainEl = plainField.createElement()
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(12, 2)));
+        final plainBuf = Buffer.blank(12, 2);
+        plainEl.paint(plainBuf, Offset.zero);
+        expect(plainBuf.getCharacter(5, 0), equals(' '));
+        expect(_rowText(plainBuf, 0), equals('first'));
+        expect(_rowText(plainBuf, 1), equals('second'));
+
+        // Mouse selection on line 1 col 0..1 selects 's'.
+        final consumer = findMouseConsumer(plainEl);
+        consumer.handleMouseEvent(
+          const MouseEvent(
+            x: 1,
+            y: 2,
+            button: MouseButton.left,
+            type: MouseEventType.press,
+          ),
+          0,
+          1,
+        );
+        consumer.handleMouseEvent(
+          const MouseEvent(
+            x: 2,
+            y: 2,
+            button: MouseButton.left,
+            type: MouseEventType.drag,
+          ),
+          1,
+          1,
+        );
+        expect(plainCtrl.selectedText, equals('s'));
+        plainEl.unmount();
+
+        // Ctrl+A highlights last char on CRLF styled line and Right lands at col 6.
+        const selBg = Color(0x22, 0x44, 0x88);
+        final styledCtrl = TextEditingController(text: 'first\r\nsecond');
+        final styledField = TextField(
+          controller: styledCtrl,
+          multiline: true,
+          focused: false,
+          selectionStyle: const Style(background: selBg),
+          spanBuilder: (text, baseStyle) =>
+              TextSpan(text: text, style: baseStyle),
+        );
+        styledField.handleKeyEvent(
+          const KeyEvent(
+            'a',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        final styledEl = styledField.createElement()
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(12, 2)));
+        final styledBuf = Buffer.blank(12, 2);
+        styledEl.paint(styledBuf, Offset.zero);
+        expect(styledBuf.getBackground(5, 1), equals(selBg.argb));
+        styledEl.unmount();
+
+        styledField.handleKeyEvent(const KeyEvent('', KeyType.right));
+        expect(styledField.cursorLine, equals(1));
+        expect(styledField.cursorColumn, equals(6));
+
+        // Typing at EOL of CRLF line 0 preserves CRLF; Backspace at (1, 0) merges cleanly.
+        final editCtrl = TextEditingController(text: 'first\r\nsecond');
+        editCtrl.value = const TextEditingValue(
+          text: 'first\r\nsecond',
+          selection: TextSelection.collapsed(offset: 5, line: 0, column: 5),
+        );
+        final editField = TextField(controller: editCtrl, multiline: true);
+        editField.handleKeyEvent(const KeyEvent('!', KeyType.character));
+        expect(editField.value, equals('first!\r\nsecond'));
+        expect(editField.cursorLine, equals(0));
+        expect(editField.cursorColumn, equals(6));
+
+        editField.handleKeyEvent(const KeyEvent('', KeyType.right));
+        expect(editField.cursorLine, equals(1));
+        expect(editField.cursorColumn, equals(0));
+        editField.handleKeyEvent(const KeyEvent('', KeyType.backspace));
+        expect(editField.value, equals('first!second'));
+        expect(editField.cursorLine, equals(0));
+        expect(editField.cursorColumn, equals(6));
+      },
+    );
+
+    test(
+      'H3 & H4: combining marks and regional indicator pairs keep cursor in bounds',
+      () {
+        // H3a: combining mark after base char does not push cursorColumn past EOL.
+        final combiningField = TextField(initialText: 'e', multiline: false);
+        combiningField.handleKeyEvent(
+          const KeyEvent('\u0301', KeyType.character),
+        );
+        expect(combiningField.value, equals('e\u0301'));
+        expect(combiningField.value.characters.length, equals(1));
+        expect(combiningField.cursorColumn, equals(1));
+        combiningField.handleKeyEvent(
+          const KeyEvent('', KeyType.left, modifiers: {ev.Modifier.control}),
+        );
+        expect(combiningField.cursorColumn, equals(0));
+
+        // H3b: regional indicator pair merges into one flag grapheme and deletes cleanly.
+        final flagField = TextField(initialText: '🇺', multiline: false);
+        flagField.handleKeyEvent(const KeyEvent('🇸', KeyType.character));
+        expect(flagField.value, equals('🇺🇸'));
+        expect(flagField.cursorColumn, equals(1));
+        flagField.handleKeyEvent(const KeyEvent('', KeyType.backspace));
+        expect(flagField.value, isEmpty);
+
+        // H4: insertText with combining mark keeps cursor on line 0.
+        final multi = TextEditingController(text: 'e\nnext');
+        multi.value = const TextEditingValue(
+          text: 'e\nnext',
+          selection: TextSelection.collapsed(offset: 1, line: 0, column: 1),
+        );
+        multi.insertText('\u0301');
+        expect(multi.text, equals('e\u0301\nnext'));
+        expect(multi.value.selection.cursorLine, equals(0));
+        expect(multi.value.selection.cursorColumn, equals(1));
+      },
+    );
+
+    test(
+      'H5: 60 repaints of 2000-line doc with cached spanBuilder stay under 4ms/frame',
+      () {
+        final source = [
+          for (var i = 0; i < 2000; i++)
+            'vec4 c$i = texture(iChannel0, uv) + sin(iTime * 0.5) * float($i);',
+        ].join('\n');
+        final controller = TextEditingController(text: source);
+        final highlighter = SyntaxTextHighlighter(language: kGlslLanguageId);
+        final field = TextField(
+          controller: controller,
+          multiline: true,
+          style: const Style(background: Color(0x14, 0x17, 0x1F)),
+          spanBuilder: highlighter.buildFieldSpan,
+        );
+        final el = field.createElement()
+          ..mount(null)
+          ..rebuild();
+        el.layout(BoxConstraints.tight(const Size(80, 24)));
+        final buf = Buffer.blank(80, 24);
+        el.paint(buf, Offset.zero);
+
+        // Scroll deep into document and benchmark 60 cursor/scroll repaints.
+        controller.scrollOffset = 1500;
+        final sw = Stopwatch()..start();
+        for (var i = 0; i < 60; i++) {
+          el.paint(buf, Offset.zero);
+        }
+        sw.stop();
+        el.unmount();
+
+        expect(highlighter.debugHighlightCount, equals(1));
+        expect(sw.elapsedMicroseconds / 60000.0, lessThan(4.0));
+      },
+    );
+
+    test(
+      'H6 & H7: TextAreaFormField PageDown uses fieldHeight and rebuild keeps auto-scroll unlocked',
+      () {
+        final text = [for (var i = 0; i < 25; i++) 'line_$i'].join('\n');
+        final field = TextAreaFormField(
+          label: 'Code',
+          fieldHeight: 4,
+          initialValue: text,
+          focused: true,
+        );
+        final el = field.createElement()
+          ..mount(null)
+          ..rebuild();
+        el.layout(BoxConstraints.tight(const Size(30, 8)));
+
+        for (var i = 0; i < 25; i++) {
+          field.handleKeyEvent(const KeyEvent('up', KeyType.up));
+        }
+        expect(field.cursorLine, equals(0));
+        field.handleKeyEvent(const KeyEvent('pageDown', KeyType.pageDown));
+        expect(field.cursorLine, equals(3));
+        el.unmount();
+
+        // H6b: parent rebuild preserves viewport height on controller before layout.
+        final sharedCtrl = TextEditingController(text: text);
+        sharedCtrl.value = TextEditingValue(
+          text: text,
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+        final firstField = TextField(controller: sharedCtrl, multiline: true);
+        final firstEl = firstField.createElement()
+          ..mount(null)
+          ..rebuild()
+          ..layout(BoxConstraints.tight(const Size(20, 4)));
+        firstEl.unmount();
+
+        final rebuiltField = TextField(controller: sharedCtrl, multiline: true);
+        rebuiltField.handleKeyEvent(
+          const KeyEvent('pageDown', KeyType.pageDown),
+        );
+        expect(rebuiltField.cursorLine, equals(3));
+
+        // H7: TextAreaFormField rebuild via didUpdateWidget keeps cursor visible on shrink.
+        final shortText = [for (var i = 0; i < 10; i++) 'line_$i'].join('\n');
+        final f1 = TextAreaFormField(
+          label: 'Code',
+          fieldHeight: 6,
+          initialValue: shortText,
+          focused: true,
+        );
+        final formEl = f1.createElement()
+          ..mount(null)
+          ..rebuild();
+        formEl.layout(BoxConstraints.tight(const Size(30, 10)));
+        formEl.update(
+          TextAreaFormField(
+            label: 'Code',
+            fieldHeight: 3,
+            initialValue: shortText,
+            focused: true,
+          ),
+        );
+        formEl.rebuild();
+        formEl.layout(BoxConstraints.tight(const Size(30, 7)));
+        final buf = Buffer.blank(30, 7);
+        formEl.paint(buf, Offset.zero);
+        final visible = [
+          for (var y = 1; y <= 3; y++)
+            [for (var x = 2; x < 20; x++) buf.getCharacter(x, y)].join().trim(),
+        ];
+        formEl.unmount();
+        expect(visible, contains('line_9'));
+      },
+    );
+
+    test(
+      'H8: unfocused TextField resets stale auto horizontalScrollOffset when text shrinks',
+      () {
+        final controller = TextEditingController(text: '0123456789abcdefghij');
+        final focusedEl =
+            TextField(
+                controller: controller,
+                multiline: true,
+                focused: true,
+              ).createElement()
+              ..mount(null)
+              ..layout(BoxConstraints.tight(const Size(10, 2)));
+        expect(controller.horizontalScrollOffset, equals(11));
+        focusedEl.unmount();
+
+        controller.text = 'short';
+        final unfocusedEl =
+            TextField(
+                controller: controller,
+                multiline: true,
+                focused: false,
+              ).createElement()
+              ..mount(null)
+              ..layout(BoxConstraints.tight(const Size(10, 2)));
+        final buf = Buffer.blank(10, 2);
+        unfocusedEl.paint(buf, Offset.zero);
+        unfocusedEl.unmount();
+
+        expect(controller.horizontalScrollOffset, equals(0));
+        expect(_rowText(buf, 0), equals('short'));
+      },
+    );
+
+    test(
+      'H9: mouse drag originating outside TextField does not steal focus or select text',
+      () {
+        final tester = TerminalTester(size: const Point(20, 4));
+        tester.run(() async {
+          final controller = TextEditingController(text: 'hello world');
+          final headerFocus = FocusNode(id: 'header_focus');
+          final focusNode = FocusNode(id: 'tf_drag_guard');
+          final runner = PromptRunner<void>(
+            terminal: tester.terminal,
+            widget: Column([
+              Focus(
+                focusNode: headerFocus,
+                autofocus: true,
+                child: const SizedBox(
+                  width: 20,
+                  height: 1,
+                  child: Text('header'),
+                ),
+              ),
+              SizedBox(
+                width: 20,
+                height: 2,
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  multiline: true,
+                  focused: false,
+                ),
+              ),
+            ]),
+            alternateScreen: false,
+          );
+          await tester.runPrompt(runner, () async {
+            try {
+              await tester.pump();
+              expect(focusNode.hasFocus, isFalse);
+
+              // Press on header (row 1), drag into TextField (row 2).
+              runner.handleMouseEvent(
+                const MouseEvent(
+                  x: 1,
+                  y: 1,
+                  button: MouseButton.left,
+                  type: MouseEventType.press,
+                ),
+              );
+              runner.handleMouseEvent(
+                const MouseEvent(
+                  x: 4,
+                  y: 2,
+                  button: MouseButton.left,
+                  type: MouseEventType.drag,
+                ),
+              );
+              await tester.pump();
+              expect(focusNode.hasFocus, isFalse);
+              expect(controller.selectedText, isEmpty);
+
+              // Press inside TextField + drag selects normally, release ends drag.
+              runner.handleMouseEvent(
+                const MouseEvent(
+                  x: 1,
+                  y: 2,
+                  button: MouseButton.left,
+                  type: MouseEventType.press,
+                ),
+              );
+              runner.handleMouseEvent(
+                const MouseEvent(
+                  x: 6,
+                  y: 2,
+                  button: MouseButton.left,
+                  type: MouseEventType.drag,
+                ),
+              );
+              runner.handleMouseEvent(
+                const MouseEvent(
+                  x: 6,
+                  y: 2,
+                  button: MouseButton.left,
+                  type: MouseEventType.release,
+                ),
+              );
+              await tester.pump();
+              expect(focusNode.hasFocus, isTrue);
+              expect(controller.selectedText, equals('hello'));
+
+              // After release, another stray drag from header must not steal focus.
+              headerFocus.requestFocus();
+              await tester.pump();
+              expect(focusNode.hasFocus, isFalse);
+              runner.handleMouseEvent(
+                const MouseEvent(
+                  x: 1,
+                  y: 1,
+                  button: MouseButton.left,
+                  type: MouseEventType.press,
+                ),
+              );
+              runner.handleMouseEvent(
+                const MouseEvent(
+                  x: 3,
+                  y: 2,
+                  button: MouseButton.left,
+                  type: MouseEventType.drag,
+                ),
+              );
+              await tester.pump();
+              expect(focusNode.hasFocus, isFalse);
+            } finally {
+              runner.dispose();
+            }
+          });
+        });
+      },
+    );
+
+    test(
+      'M1 & M2: Ctrl+K/Ctrl+Backspace delete active selection and Up/Down collapse selection at boundary lines',
+      () {
+        // M1: Ctrl+K on Ctrl+A selection deletes entire buffer.
+        final kCtrl = TextEditingController(text: 'hello world');
+        final kField = TextField(controller: kCtrl, multiline: true);
+        kField.handleKeyEvent(
+          const KeyEvent(
+            'a',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        kField.handleKeyEvent(
+          const KeyEvent(
+            'k',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        expect(kField.value, isEmpty);
+
+        // M1: Ctrl+Backspace on backward selection deletes only the selection.
+        final bsCtrl = TextEditingController(text: 'hello');
+        bsCtrl.value = const TextEditingValue(
+          text: 'hello',
+          selection: TextSelection(
+            baseOffset: 5,
+            extentOffset: 2,
+            cursorLine: 0,
+            cursorColumn: 2,
+          ),
+        );
+        final bsField = TextField(controller: bsCtrl, multiline: true);
+        bsField.handleKeyEvent(
+          const KeyEvent(
+            '',
+            KeyType.backspace,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        expect(bsField.value, equals('he'));
+
+        // M2: Down arrow at last line collapses active Ctrl+A selection.
+        final navCtrl = TextEditingController(text: 'top\nbottom');
+        final navField = TextField(controller: navCtrl, multiline: true);
+        navField.handleKeyEvent(
+          const KeyEvent(
+            'a',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        expect(
+          navField.handleKeyEvent(const KeyEvent('', KeyType.down)),
+          isTrue,
+        );
+        expect(navCtrl.value.selection.isCollapsed, isTrue);
+
+        // M2: Up arrow at line 0 collapses active backward selection.
+        navCtrl.value = const TextEditingValue(
+          text: 'top\nbottom',
+          selection: TextSelection(
+            baseOffset: 10,
+            extentOffset: 0,
+            cursorLine: 0,
+            cursorColumn: 0,
+          ),
+        );
+        expect(navField.handleKeyEvent(const KeyEvent('', KeyType.up)), isTrue);
+        expect(navCtrl.value.selection.isCollapsed, isTrue);
+      },
+    );
+
+    test('M3: backward wall-clock jump does not coalesce typing edits', () {
+      var now = DateTime.utc(2026, 11, 24, 12, 0, 10);
+      withClock(Clock(() => now), () {
+        final controller = TextEditingController(
+          text: '',
+          undoCoalesceWindow: const Duration(milliseconds: 500),
+        );
+        final field = TextField(controller: controller, multiline: true);
+        field.handleKeyEvent(const KeyEvent('a', KeyType.character));
+        now = DateTime.utc(2026, 11, 24, 12, 0, 0);
+        field.handleKeyEvent(const KeyEvent('b', KeyType.character));
+        controller.undo();
+        expect(field.value, equals('a'));
+      });
+    });
+
+    test(
+      'M4: GLSL single-line rules on CRLF do not paint raw CR into TextField',
+      () {
+        final highlighter = SyntaxTextHighlighter(
+          language: kGlslLanguageId,
+          theme: TerminalColorTheme.termuiDark,
+        );
+        final field = TextField(
+          controller: TextEditingController(
+            text: '// @fterm-stage: fg\r\n// comment\r\n"hi"\r\nfloat x = 1.0;',
+          ),
+          multiline: true,
+          focused: false,
+          spanBuilder: highlighter.buildFieldSpan,
+        );
+        final el = field.createElement()
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(24, 4)));
+        final buf = Buffer.blank(24, 4);
+        el.paint(buf, Offset.zero);
+        el.unmount();
+
+        for (var y = 0; y < 4; y++) {
+          for (var x = 0; x < 24; x++) {
+            expect(buf.getCharacter(x, y), isNot(equals('\r')));
+          }
+        }
+        expect(buf.getCharacter(10, 1), equals(' '));
+      },
+    );
+
+    test(
+      'M5: wide grapheme straddling left edge preserves cellStyle on column 0',
+      () {
+        final controller = TextEditingController(text: '🔥abcd');
+        const selBg = Color(0x22, 0x44, 0x88);
+        final field = TextField(
+          controller: controller,
+          multiline: false,
+          focused: false,
+          selectionStyle: const Style(background: selBg),
+        );
+        field.handleKeyEvent(
+          const KeyEvent(
+            'a',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        controller.horizontalScrollOffset = 1;
+        final el = field.createElement()
+          ..mount(null)
+          ..layout(BoxConstraints.tight(const Size(6, 1)));
+        final buf = Buffer.blank(6, 1);
+        el.paint(buf, Offset.zero);
+        el.unmount();
+        expect(buf.getBackground(0, 0), equals(selBg.argb));
+      },
+    );
+
+    test(
+      'M9: mouse click with horizontalScrollOffset maps to scrolled column',
+      () {
+        final controller = TextEditingController(text: '0123456789abcdef');
+        final elem =
+            TextField(
+                controller: controller,
+                multiline: true,
+                focused: true,
+              ).createElement()
+              ..mount(null)
+              ..layout(BoxConstraints.tight(const Size(8, 2)));
+        controller.horizontalScrollOffset = 5;
+        final consumer = findMouseConsumer(elem);
+        expect(
+          consumer.handleMouseEvent(
+            const MouseEvent(
+              x: 3,
+              y: 1,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+            2,
+            0,
+          ),
+          isTrue,
+        );
+        expect(controller.value.selection.cursorColumn, equals(7));
+        elem.unmount();
       },
     );
   });

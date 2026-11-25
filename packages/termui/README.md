@@ -232,17 +232,25 @@ Manages vertical and horizontal offsets in discrete cell-based layouts.
   * `void dispose()`: Clears all listeners.
 
 ### TextEditingController (`lib/ui/widgets/interactive/text_field.dart`)
-Manages text input state, cursor selection coordinates, and change history.
+Manages text input state, cursor selection coordinates, persisted scroll offsets, and change history.
+* **Constructor**:
+  * `TextEditingController({String? text, Duration undoCoalesceWindow = Duration.zero})`: Initializes text and cursor at EOF; set `undoCoalesceWindow` to opt into clock-driven burst coalescing for consecutive single-grapheme edits.
 * **Public APIs**:
-  * `TextEditingValue get value` / `set value(TextEditingValue newValue)`: The current text and selection state.
-  * `String get text` / `set text(String newText)`: Text helper that updates the cursor to the end of the text.
-  * `void saveStateToHistory()`: Pushes the current value to the undo history stack (caps at 100 entries).
-  * `void undo()`: Reverts to the last history state.
-  * `void redo()`: Reapplies the last undone change.
-  * `void clear()`: Resets the text and selection states to empty.
+  * `TextEditingValue get value` / `set value(TextEditingValue newValue)`: The current text and selection state; updating `value` clears manual-scroll locks so layout resumes cursor tracking.
+  * `String get text` / `set text(String newText)`: Text helper that breaks any active undo burst and moves the cursor to the end of the text.
+  * `int get scrollOffset` / `set scrollOffset(int newOffset)`: Vertical top visible line persisted across rebuilds; assigning a different offset locks manual scroll until `value` changes.
+  * `int get horizontalScrollOffset` / `set horizontalScrollOffset(int newOffset)`: Horizontal leftmost visible column persisted across rebuilds; assigning a different offset locks manual horizontal scroll until `value` changes.
+  * `void syncScrollFrom(TextEditingController other)`: Copies scroll offsets, manual-scroll flags, and laid-out viewport height from another controller without locking manual scroll or notifying listeners.
+  * `String get selectedText`: Returns the active non-collapsed selection slice, or an empty string when collapsed.
+  * `bool deleteSelection()`: Deletes the active selection as one undoable edit, returning `true` when text was removed.
+  * `void insertText(String inserted, {bool multiline = true})`: Inserts or replaces the active selection with normalized line endings as a dedicated undo step.
+  * `void saveStateToHistory({bool coalesce = false})`: Pushes the current value to the undo history stack (caps at 100 entries), optionally coalescing consecutive typing bursts within `undoCoalesceWindow`.
+  * `void breakUndoBurst()`: Ends any active undo-coalescing burst so the next edit records a new undo entry.
+  * `void undo()` / `void redo()`: Reverts or reapplies history states.
+  * `void clear()` / `void clearHistory()`: Resets text/selection or clears undo/redo stacks.
 * **Associated Structs**:
-  * `TextEditingValue`: Immutable snapshot containing `final String text` and `final TextSelection selection`.
-  * `TextSelection`: Represents selection boundaries. Fields include `baseOffset`, `extentOffset`, `cursorLine`, `cursorColumn`, and `bool get isCollapsed`.
+  * `TextEditingValue`: Immutable snapshot containing `final String text`, `final TextSelection selection`, and `List<String> get lines`.
+  * `TextSelection`: Represents selection boundaries. Fields include `baseOffset`, `extentOffset`, `cursorLine`, `cursorColumn`, `int get start`, `int get end`, and `bool get isCollapsed`.
 
 ### FocusManager (`lib/ui/window.dart`)
 A singleton registry that manages the application's focus tree.
