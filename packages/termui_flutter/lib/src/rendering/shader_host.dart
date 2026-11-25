@@ -1650,33 +1650,44 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       atlasImage: atlasImage,
       batch: effectiveBatch,
     );
+    return _handleDirectSyncOutcome(
+      result: result,
+      backend: backend,
+      atlasImage: atlasImage,
+      batch: batch,
+      logicalSize: logicalSize,
+    );
+  }
+
+  ui.Image? _handleDirectSyncOutcome({
+    required ({ui.Image? image, bool failed}) result,
+    required DirectTerminalShaderBackend backend,
+    required ui.Image atlasImage,
+    required GpuAtlasQuadBatch batch,
+    required Size logicalSize,
+  }) {
     if (result.image != null) {
       _directPrimingSucceededWithoutFrame = false;
       _directOutputLogicalSize = logicalSize;
       _replaceDirectOutputImage(result.image);
       return result.image;
     }
-
     if (result.failed) {
       _directPrimingSucceededWithoutFrame = false;
       _enterDirectFallbackPostFrame(_DirectFallbackReason.runtimeError);
       return _directBridgeImageFor(logicalSize);
     }
-
     if (_wasLastSyncFrameSkipped(backend)) {
       return _directBridgeImageFor(logicalSize);
     }
-
     if (_directPrepareInFlight) {
       _enterDirectFallbackPostFrame(_DirectFallbackReason.priming);
       return _directBridgeImageFor(logicalSize);
     }
-
     if (_directPrimingSucceededWithoutFrame) {
       _enterDirectFallbackPostFrame(_DirectFallbackReason.runtimeError);
       return _directBridgeImageFor(logicalSize);
     }
-
     _prepareDirectResourcesAsync(backend, atlasImage, batch);
     _enterDirectFallbackPostFrame(_DirectFallbackReason.priming);
     return _directBridgeImageFor(logicalSize);
