@@ -1,3 +1,7 @@
+## 0.6.40
+
+ - Update a dependency to the latest release.
+
 ## 0.6.39
 
  - **REFACTOR**: remove dead declarations found by undead.

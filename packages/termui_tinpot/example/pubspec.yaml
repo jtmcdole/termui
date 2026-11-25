@@ -13,21 +13,21 @@ dependencies:
   flutter:
     sdk: flutter
   material_ui: ^1.3.0
-  termui: ^0.21.1
-  termui_flutter: ^0.16.1
-  termui_tinpot: ^0.5.11
+  termui: ^0.21.2
+  termui_flutter: ^0.17.0
+  termui_tinpot: ^0.5.12
   image: ^4.5.4
   desktop_drop: ^0.8.2
   cross_file: ^0.3.5+4
   file_selector: ^1.0.0
   clock: ^1.1.1
   file: ^7.0.0
-  termui_recorder: ^0.10.13
+  termui_recorder: ^0.10.14
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  termui_test: ^0.4.13
+  termui_test: ^0.4.14
 flutter:
   uses-material-design: true
 

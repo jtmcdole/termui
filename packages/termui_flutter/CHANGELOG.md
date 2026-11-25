@@ -1,3 +1,24 @@
+## 0.17.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**(termui_flutter): extract _handleDirectSyncOutcome from _renderDirectForPaintImpl.
+ - **FIX**(termui_flutter): address all 18 PR #474 review findings (H1-H7, M1-M7, L1-L4).
+ - **FIX**(review): address code review feedback - pass 1.
+ - **FIX**(termui_flutter): load fresh ShaderLibrary on reload instead of in-place reinit.
+ - **FIX**(termui_flutter): skip failed shader pipelines and stop black priming loops.
+ - **FIX**(termui_flutter): target GLSL ES 3.00 in impellerc and bump cache schema.
+ - **FEAT**(termui_flutter): add per-shader warmup window to GpuFrameWatchdog.
+ - **FEAT**(termui_flutter): track and skip quarantined custom shaders in host.
+ - **FEAT**(termui_flutter): wire multi-span diagnostics into impellerc and WebGL2.
+ - **FEAT**(termui_flutter): add pure-Dart GLSL diagnostic log parser.
+ - **FEAT**(termui_flutter): add static GLSL linter for stage and GPU hazards.
+ - **FEAT**(termui_flutter): attach source spans to GLSL shim errors.
+ - **FEAT**(termui_flutter): track per-pass shader compile errors.
+ - **FEAT**(termui_flutter): add span-annotated shader diagnostics.
+ - **FEAT**(termui_flutter): scope watchdog custom shaders by source.
+ - **BREAKING** **FEAT**(termui_flutter): add HostShortcutResult and TerminalMetaKeyPolicy to TerminalImeClient (#464).
+
 ## 0.16.1
 
  - Update a dependency to the latest release.
