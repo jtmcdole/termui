@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:source_span/source_span.dart';
 import 'package:termui/ui/shader_region.dart';
 
 import 'gpu_atlas_batch.dart';
@@ -142,6 +143,140 @@ final class ShaderRegionPassInvocation {
       (handle: handle, uniforms: uniforms, prevFrameKey: prevFrameKey);
 }
 
+/// Severity level of a [ShaderDiagnostic].
+enum ShaderDiagnosticSeverity {
+  /// Fatal validation or compilation error preventing shader execution.
+  error,
+
+  /// Non-fatal hazard or stage mismatch that may degrade or obscure rendering.
+  warning,
+
+  /// Informational hint or best-practice suggestion.
+  info,
+}
+
+/// Pipeline phase that produced a [ShaderDiagnostic].
+enum ShaderDiagnosticOrigin {
+  /// Produced by [ShadertoyGlslShim] static validation prior to compilation.
+  shim,
+
+  /// Produced by a platform GLSL compiler (`impellerc` or WebGL2).
+  compiler,
+
+  /// Produced by [ShadertoyGlslShim.lint] static lint rules.
+  linter,
+}
+
+/// Structured, span-addressable diagnostic emitted during shader validation,
+/// compilation, or linting.
+final class ShaderDiagnostic {
+  /// Diagnostic severity (`error`, `warning`, or `info`).
+  final ShaderDiagnosticSeverity severity;
+
+  /// Pipeline stage that emitted this diagnostic.
+  final ShaderDiagnosticOrigin origin;
+
+  /// Human-readable description of the problem.
+  final String message;
+
+  /// Optional 1-based line number in user GLSL source.
+  final int? line;
+
+  /// Optional 1-based UTF-16 column on [line].
+  final int? column;
+
+  /// Highlighted span length in UTF-16 code units (`>= 1` when [column] != null).
+  final int length;
+
+  /// Optional actionable fix suggestion (for example `'// @fterm-stage: bg'`).
+  final String? hint;
+
+  /// Creates an immutable [ShaderDiagnostic].
+  const ShaderDiagnostic({
+    required this.severity,
+    required this.origin,
+    required this.message,
+    this.line,
+    this.column,
+    this.length = 1,
+    this.hint,
+  });
+
+  /// Resolves this diagnostic's [line], [column], and [length] against
+  /// [sourceFile], clamping out-of-range coordinates safely.
+  ///
+  /// Returns `null` when [line] is `null`.
+  FileSpan? toSourceSpan(SourceFile sourceFile) {
+    final rawLine = line;
+    if (rawLine == null) return null;
+    if (sourceFile.length == 0 || sourceFile.lines <= 0) {
+      return sourceFile.span(0, 0);
+    }
+
+    final lineIndex = (rawLine - 1).clamp(0, sourceFile.lines - 1);
+    final lineStart = sourceFile.getOffset(lineIndex);
+    final lineEnd = _lineContentEnd(sourceFile, lineIndex, lineStart);
+    final rawColumn = column;
+    if (rawColumn == null) {
+      return sourceFile.span(lineStart, lineEnd);
+    }
+
+    final lineLen = lineEnd - lineStart;
+    final colIndex = (rawColumn - 1).clamp(0, lineLen);
+    final startOffset = lineStart + colIndex;
+    final spanLen = length < 1 ? 1 : length;
+    final endOffset = startOffset < lineEnd
+        ? (startOffset + spanLen).clamp(startOffset, lineEnd)
+        : startOffset;
+    return sourceFile.span(startOffset, endOffset);
+  }
+
+  static int _lineContentEnd(
+    SourceFile sourceFile,
+    int lineIndex,
+    int lineStart,
+  ) {
+    var end = lineIndex + 1 < sourceFile.lines
+        ? sourceFile.getOffset(lineIndex + 1)
+        : sourceFile.length;
+    while (end > lineStart) {
+      final ch = sourceFile.getText(end - 1, end);
+      if (ch == '\n' || ch == '\r') {
+        end--;
+      } else {
+        break;
+      }
+    }
+    return end;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is ShaderDiagnostic &&
+          other.severity == severity &&
+          other.origin == origin &&
+          other.message == message &&
+          other.line == line &&
+          other.column == column &&
+          other.length == length &&
+          other.hint == hint;
+
+  @override
+  int get hashCode =>
+      Object.hash(severity, origin, message, line, column, length, hint);
+
+  @override
+  String toString() {
+    final loc = line == null
+        ? ''
+        : column == null
+        ? ' ($line)'
+        : ' ($line:$column)';
+    return 'ShaderDiagnostic[${severity.name}/${origin.name}$loc]: $message';
+  }
+}
+
 /// Structured error raised when validating, shimming, or compiling a custom
 /// terminal fragment shader fails.
 final class ShaderCompileException implements Exception {
@@ -157,12 +292,16 @@ final class ShaderCompileException implements Exception {
   /// Optional raw compiler log (e.g. `impellerc` stderr or `gl.getShaderInfoLog`).
   final String? compilerLog;
 
+  /// Structured span-annotated diagnostics associated with this failure.
+  final List<ShaderDiagnostic> diagnostics;
+
   /// Creates a shader compilation exception.
   const ShaderCompileException({
     required this.shaderId,
     required this.message,
     this.lineNumber,
     this.compilerLog,
+    this.diagnostics = const <ShaderDiagnostic>[],
   });
 
   @override
