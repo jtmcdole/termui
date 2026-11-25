@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'shader_backend.dart';
+import 'shader_diagnostic_parser.dart';
 import 'shadertoy_glsl_shim.dart';
 
 /// Result of compiling a Ghostty Shadertoy `.glsl` shader into an Impeller
@@ -183,6 +184,7 @@ final class ImpellercCompiler {
       vertexGlsl: shimmed.impellerVertexGlsl,
       fragmentGlsl: shimmed.impellerFragmentGlsl,
       shaderId: shaderId,
+      userSource: normalizedUser,
       shimPrefixLineCount: prefixLines,
       userLineCount: userLines,
       timeoutOverride: timeoutOverride,
@@ -216,6 +218,7 @@ final class ImpellercCompiler {
       vertexEntryName: vertexEntryName,
       fragmentEntryName: fragmentEntryName,
       shaderId: shaderId,
+      userSource: fragmentGlsl,
       shimPrefixLineCount: shimPrefixLineCount,
       userLineCount: userLineCount,
       timeoutOverride: timeoutOverride,
@@ -237,6 +240,18 @@ final class ImpellercCompiler {
       bytes[5] == 0x50 &&
       bytes[6] == 0x53 &&
       bytes[7] == 0x42;
+
+  /// Parses `impellerc` [stderr] into span-annotated [ShaderDiagnostic] entries
+  /// mapped back to 1-based [userSource] coordinates.
+  static List<ShaderDiagnostic> parseDiagnostics(
+    String stderr, {
+    String userSource = '',
+    int shimPrefixLineCount = 0,
+  }) => parseImpellercDiagnostics(
+    stderr,
+    userSource: userSource,
+    shimPrefixLineCount: shimPrefixLineCount,
+  );
 
   /// Parses a 1-based line number from `impellerc` [stderr], adjusting by
   /// [shimPrefixLineCount] when the error falls inside the user's
@@ -333,6 +348,7 @@ final class ImpellercCompiler {
     String vertexEntryName = ShadertoyGlslShim.vertexShaderName,
     String fragmentEntryName = ShadertoyGlslShim.fragmentShaderName,
     required String shaderId,
+    required String userSource,
     required int shimPrefixLineCount,
     required int? userLineCount,
     required Duration? timeoutOverride,
@@ -374,6 +390,7 @@ final class ImpellercCompiler {
       vertexEntryName: vertexEntryName,
       fragmentEntryName: fragmentEntryName,
       shaderId: shaderId,
+      userSource: userSource,
       shimPrefixLineCount: shimPrefixLineCount,
       userLineCount: userLineCount,
       effectiveTimeout: effectiveTimeout,
@@ -396,6 +413,7 @@ final class ImpellercCompiler {
     required String vertexEntryName,
     required String fragmentEntryName,
     required String shaderId,
+    required String userSource,
     required int shimPrefixLineCount,
     required int? userLineCount,
     required Duration effectiveTimeout,
@@ -434,15 +452,24 @@ final class ImpellercCompiler {
       );
       if (result.exitCode != 0) {
         final combinedLog = _combineProcessOutput(result.stderr, result.stdout);
+        final diagnostics = parseDiagnostics(
+          combinedLog,
+          userSource: userSource,
+          shimPrefixLineCount: shimPrefixLineCount,
+        );
+        final firstError = firstErrorDiagnostic(diagnostics);
         throw ShaderCompileException(
           shaderId: shaderId,
-          message: formatCompilerError(combinedLog),
-          lineNumber: parseErrorLineNumber(
-            combinedLog,
-            shimPrefixLineCount: shimPrefixLineCount,
-            userLineCount: userLineCount,
-          ),
+          message: firstError?.message ?? formatCompilerError(combinedLog),
+          lineNumber:
+              firstError?.line ??
+              parseErrorLineNumber(
+                combinedLog,
+                shimPrefixLineCount: shimPrefixLineCount,
+                userLineCount: userLineCount,
+              ),
           compilerLog: combinedLog,
+          diagnostics: diagnostics,
         );
       }
       return await _readValidatedBundleFile(outFile, shaderId);

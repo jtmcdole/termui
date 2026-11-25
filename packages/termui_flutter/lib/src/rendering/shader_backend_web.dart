@@ -13,6 +13,7 @@ import 'gpu_atlas_shaders.dart';
 import 'gpu_frame_watchdog.dart';
 import 'perf_trace.dart';
 import 'shader_backend.dart';
+import 'shader_diagnostic_parser.dart';
 import 'shader_resource_pools.dart';
 import 'shader_spec.dart';
 import 'shadertoy_glsl_shim.dart';
@@ -45,17 +46,6 @@ final class WebGl2ShaderBackend
     0,
     0,
   ]);
-  static final RegExp _angleLinePattern = RegExp(
-    r'(?:ERROR|WARNING):\s*\d+:(\d+):',
-  );
-  static final RegExp _mesaLinePattern = RegExp(
-    r'^\s*\d+:(\d+)\s*(?:\(\d+\))?:',
-    multiLine: true,
-  );
-  static final RegExp _genericLinePattern = RegExp(
-    r'\bline\s+(\d+)\b',
-    caseSensitive: false,
-  );
   static final int _webgl2PrefixLineOffset = _computePrefixLineOffset();
 
   final web.OffscreenCanvas _canvas;
@@ -268,7 +258,11 @@ final class WebGl2ShaderBackend
           message: 'Failed to initialize WebGL2 rendering resources.',
         );
       }
-      program = await _compileAndLinkAsync(id, shimmed.webgl2FragmentGlsl);
+      program = await _compileAndLinkAsync(
+        id,
+        shimmed.webgl2FragmentGlsl,
+        userSource: shadertoyGlsl,
+      );
       if (_disposed) {
         if (!_gl.isContextLost()) {
           _gl.deleteProgram(program);
@@ -282,6 +276,7 @@ final class WebGl2ShaderBackend
       id: id,
       requestedPrevFrame: usesPrevFrame,
       usesPrevFrame: effectivePrevFrame,
+      userSource: shadertoyGlsl,
       webgl2FragmentGlsl: shimmed.webgl2FragmentGlsl,
       program: program,
     );
@@ -300,6 +295,7 @@ final class WebGl2ShaderBackend
         glHandle.requestedPrevFrame || shimmed.analysis.usesPrevFrame;
 
     if (_isContextUnavailable) {
+      glHandle.userSource = shadertoyGlsl;
       glHandle.webgl2FragmentGlsl = shimmed.webgl2FragmentGlsl;
       glHandle.usesPrevFrame = effectivePrevFrame;
       glHandle.program = null;
@@ -317,6 +313,7 @@ final class WebGl2ShaderBackend
     final nextProgram = await _compileAndLinkAsync(
       glHandle.id,
       shimmed.webgl2FragmentGlsl,
+      userSource: shadertoyGlsl,
     );
     if (_disposed || glHandle.isDisposed) {
       if (!_gl.isContextLost()) {
@@ -326,6 +323,7 @@ final class WebGl2ShaderBackend
     }
     final previousProgram = glHandle.program;
     glHandle.program = nextProgram;
+    glHandle.userSource = shadertoyGlsl;
     glHandle.webgl2FragmentGlsl = shimmed.webgl2FragmentGlsl;
     glHandle.usesPrevFrame = effectivePrevFrame;
     if (previousProgram != null && !_gl.isContextLost()) {
@@ -862,8 +860,9 @@ final class WebGl2ShaderBackend
 
   Future<web.WebGLProgram> _compileAndLinkAsync(
     String shaderId,
-    String fragmentGlsl,
-  ) async {
+    String fragmentGlsl, {
+    required String userSource,
+  }) async {
     final prepared = _startProgramLink(shaderId, fragmentGlsl);
     final program = prepared.$1;
     final fragShader = prepared.$2;
@@ -871,7 +870,12 @@ final class WebGl2ShaderBackend
       if (_hasParallelCompile) {
         await _awaitParallelLinkCompletion(program);
       }
-      return _finalizeProgramLink(shaderId, program, fragShader);
+      return _finalizeProgramLink(
+        shaderId,
+        program,
+        fragShader,
+        userSource: userSource,
+      );
     } on Object {
       if (!_gl.isContextLost()) {
         _gl.deleteShader(fragShader);
@@ -881,12 +885,21 @@ final class WebGl2ShaderBackend
     }
   }
 
-  web.WebGLProgram _compileAndLinkSync(String shaderId, String fragmentGlsl) {
+  web.WebGLProgram _compileAndLinkSync(
+    String shaderId,
+    String fragmentGlsl, {
+    required String userSource,
+  }) {
     final prepared = _startProgramLink(shaderId, fragmentGlsl);
     final program = prepared.$1;
     final fragShader = prepared.$2;
     try {
-      return _finalizeProgramLink(shaderId, program, fragShader);
+      return _finalizeProgramLink(
+        shaderId,
+        program,
+        fragShader,
+        userSource: userSource,
+      );
     } on Object {
       if (!_gl.isContextLost()) {
         _gl.deleteShader(fragShader);
@@ -944,8 +957,9 @@ final class WebGl2ShaderBackend
   web.WebGLProgram _finalizeProgramLink(
     String shaderId,
     web.WebGLProgram program,
-    web.WebGLShader fragShader,
-  ) {
+    web.WebGLShader fragShader, {
+    required String userSource,
+  }) {
     if (_isContextUnavailable) {
       throw ShaderCompileException(
         shaderId: shaderId,
@@ -956,7 +970,12 @@ final class WebGl2ShaderBackend
       _gl.getProgramParameter(program, web.WebGL2RenderingContext.LINK_STATUS),
     );
     if (!linked) {
-      throw _buildCompileException(shaderId, program, fragShader);
+      throw _buildCompileException(
+        shaderId,
+        program,
+        fragShader,
+        userSource: userSource,
+      );
     }
     _gl.detachShader(program, fragShader);
     _gl.deleteShader(fragShader);
@@ -993,8 +1012,9 @@ final class WebGl2ShaderBackend
   ShaderCompileException _buildCompileException(
     String shaderId,
     web.WebGLProgram program,
-    web.WebGLShader fragShader,
-  ) {
+    web.WebGLShader fragShader, {
+    String userSource = '',
+  }) {
     final fragCompiled = _asJsBool(
       _gl.getShaderParameter(
         fragShader,
@@ -1005,16 +1025,22 @@ final class WebGl2ShaderBackend
         ? (_gl.getProgramInfoLog(program) ?? 'WebGL2 program link failed.')
         : (_gl.getShaderInfoLog(fragShader) ??
               'WebGL2 fragment shader compilation failed.');
-    final trimmedLog = rawLog.trim();
-    final lineNumber = _parseInfoLogLineNumber(trimmedLog);
-    final firstLine = _firstNonEmptyLine(trimmedLog);
+    final trimmedLog = rawLog.replaceAll('\u0000', '').trim();
+    final diagnostics = parseWebGlDiagnostics(
+      trimmedLog,
+      userSource: userSource,
+      prefixLineOffset: _webgl2PrefixLineOffset,
+    );
+    final firstError = firstErrorDiagnostic(diagnostics);
+    final firstLine = firstError?.message ?? _firstNonEmptyLine(trimmedLog);
     return ShaderCompileException(
       shaderId: shaderId,
       message: firstLine.isEmpty
           ? 'WebGL2 shader compilation failed.'
           : firstLine,
-      lineNumber: lineNumber,
+      lineNumber: firstError?.line,
       compilerLog: trimmedLog.isEmpty ? null : trimmedLog,
+      diagnostics: diagnostics,
     );
   }
 
@@ -1122,6 +1148,7 @@ final class WebGl2ShaderBackend
       final compiled = _compileAndLinkSync(
         handle.id,
         handle.webgl2FragmentGlsl,
+        userSource: handle.userSource,
       );
       handle.program = compiled;
       return compiled;
@@ -2589,17 +2616,6 @@ final class WebGl2ShaderBackend
     return newlines;
   }
 
-  static int? _parseInfoLogLineNumber(String log) {
-    final match =
-        _angleLinePattern.firstMatch(log) ??
-        _mesaLinePattern.firstMatch(log) ??
-        _genericLinePattern.firstMatch(log);
-    final raw = match == null ? null : int.tryParse(match.group(1)!);
-    if (raw == null || raw <= 0) return null;
-    final adjusted = raw - _webgl2PrefixLineOffset;
-    return adjusted >= 1 ? adjusted : raw;
-  }
-
   static String _firstNonEmptyLine(String text) {
     for (final line in text.split('\n')) {
       final trimmed = line.trim();
@@ -2620,6 +2636,7 @@ final class _WebGl2ShaderHandle implements CompiledShaderHandle {
   @override
   bool usesPrevFrame;
 
+  String userSource;
   String webgl2FragmentGlsl;
   web.WebGLProgram? program;
   bool _disposed = false;
@@ -2629,6 +2646,7 @@ final class _WebGl2ShaderHandle implements CompiledShaderHandle {
     required this.id,
     required this.requestedPrevFrame,
     required this.usesPrevFrame,
+    required this.userSource,
     required this.webgl2FragmentGlsl,
     required this.program,
   });

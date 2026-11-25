@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'shader_backend.dart';
+import 'shader_diagnostic_parser.dart';
 import 'shadertoy_glsl_shim.dart';
 
 /// Result of compiling a Ghostty Shadertoy `.glsl` shader into an Impeller
@@ -115,6 +116,18 @@ final class ImpellercCompiler {
       bytes[5] == 0x50 &&
       bytes[6] == 0x53 &&
       bytes[7] == 0x42;
+
+  /// Parses `impellerc` [stderr] into span-annotated [ShaderDiagnostic] entries
+  /// mapped back to 1-based [userSource] coordinates.
+  static List<ShaderDiagnostic> parseDiagnostics(
+    String stderr, {
+    String userSource = '',
+    int shimPrefixLineCount = 0,
+  }) => parseImpellercDiagnostics(
+    stderr,
+    userSource: userSource,
+    shimPrefixLineCount: shimPrefixLineCount,
+  );
 
   /// Always returns `null` on stub platforms.
   static int? parseErrorLineNumber(
