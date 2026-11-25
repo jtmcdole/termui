@@ -291,5 +291,32 @@ void main() {
         );
       },
     );
+
+    test(
+      'throws ArgumentError for unregistered language and highlights .5 and 1. floats',
+      () {
+        expect(
+          () => SyntaxTextHighlighter(language: 'unregistered_lang_xyz'),
+          throwsA(
+            isA<ArgumentError>().having(
+              (e) => e.message,
+              'message',
+              contains('grammarJson'),
+            ),
+          ),
+        );
+
+        final highlighter = SyntaxTextHighlighter(
+          language: kGlslLanguageId,
+          theme: TerminalColorTheme.termuiDark,
+        );
+        final span = highlighter.highlight('float a = .5 + 1.;');
+        final buf = _paintRichText(span, width: 24, height: 1);
+        // Leading-dot '.5' and trailing-dot '1.' should share numeric foreground.
+        expect(buf.getForeground(10, 0), equals(buf.getForeground(11, 0)));
+        expect(buf.getForeground(15, 0), equals(buf.getForeground(16, 0)));
+        expect(buf.getForeground(10, 0), equals(buf.getForeground(15, 0)));
+      },
+    );
   });
 }

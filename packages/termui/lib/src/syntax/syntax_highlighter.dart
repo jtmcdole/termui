@@ -91,7 +91,9 @@ final class SyntaxTextHighlighter {
   ///
   /// When [language] is `'glsl'` and [grammarJson] is omitted,
   /// [registerGlslLanguage] is invoked automatically. Pass [grammarJson] to
-  /// register a custom TextMate JSON grammar under [language].
+  /// register a custom TextMate JSON grammar under [language]. Registration is
+  /// first-registration-wins per [language] id, and throws [ArgumentError] if
+  /// [language] has not been registered.
   SyntaxTextHighlighter({
     required this.language,
     TerminalColorTheme theme = TerminalColorTheme.termuiDark,
@@ -464,7 +466,15 @@ final class SyntaxTextHighlighter {
       themeJson,
       shl.TextStyle(foreground: shl.Color(theme.foreground.argb)),
     );
-    return shl.Highlighter(language: language, theme: shlTheme);
+    try {
+      return shl.Highlighter(language: language, theme: shlTheme);
+    } on TypeError {
+      throw ArgumentError.value(
+        language,
+        'language',
+        'Language is not registered; pass grammarJson to register it.',
+      );
+    }
   }
 
   static String _buildThemeJson(TerminalColorTheme theme) {
