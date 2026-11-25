@@ -782,5 +782,55 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
       },
     );
+
+    test('surfaces runtime GPU pipeline link errors in the shader editor instead of staying OK', () async {
+      final env = _createEnv();
+      final ws = env.workspace;
+      env.store.shaders['northern_nested_circles.glsl'] = _validBgGlsl;
+      addTearDown(() async {
+        await ws.dispose();
+        env.store.dispose();
+      });
+
+      String rowText(int y) {
+        final buf = ws.editorPanes.values.single.readDisplayBuffer();
+        return [for (var x = 0; x < buf.width; x++) buf.getCharacter(x, y)]
+            .join()
+            .trimRight();
+      }
+
+      await ws.openShaderEditorTab(pathOrKey: 'northern_nested_circles.glsl');
+      final editorPane = ws.editorPanes.values.single
+        ..updateViewportSize(100, 20, 8, 16);
+      editorPane.controller.setPreviewMode(ShaderEditorPreviewMode.background);
+      await editorPane.controller.triggerCompileNow();
+
+      expect(editorPane.controller.errorCount, equals(0));
+      expect(rowText(1), contains('OK'));
+
+      // Simulate lazy Impeller GLES pipeline link failure on first draw frame.
+      ws.shaderController.reportRuntimeError(
+        ShaderCompileException(
+          shaderId: editorPane.previewPassId,
+          message:
+              'GPU pipeline failed to link or draw shader '
+              '"${editorPane.previewPassId}": Exception: Failed to append draw',
+        ),
+      );
+
+      expect(editorPane.controller.errorCount, equals(1));
+      expect(
+        editorPane.controller.diagnostics.single.message,
+        contains('GPU pipeline failed to link or draw'),
+      );
+      final hintRibbon = rowText(1);
+      expect(hintRibbon, contains('1 error'));
+      expect(hintRibbon, isNot(contains('OK')));
+
+      // Clearing runtime compile errors returns the editor to OK.
+      ws.shaderController.clearLastCompileError();
+      expect(editorPane.controller.errorCount, equals(0));
+      expect(rowText(1), contains('OK'));
+    });
   });
 }
