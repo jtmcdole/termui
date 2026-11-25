@@ -274,6 +274,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final Future<void> Function(String directoryPath)? _openDirectoryHandler;
   StreamSubscription<ShaderDirectoryChange>? _shaderWatchSubscription;
   TerminalShaderConfig _activeShaderConfig = TerminalShaderConfig.empty;
+  bool _shadersEmergencyStopped = false;
+  String? _shaderEmergencyStopReason;
   Map<String, List<double>> _shaderParamsByPass = <String, List<double>>{};
   List<String> _availableCustomShaders = const <String>[];
   final Map<String, ShadertoyGlslAnalysis> _customShaderAnalyses =
@@ -779,6 +781,59 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Active compiled shader pass chains, animation mode, opacity, and
   /// wallpaper configuration forwarded to every pane's `TerminalSurface`.
   TerminalShaderConfig get activeShaderConfig => _activeShaderConfig;
+
+  /// Whether GPU shaders are currently bypassed by an active Emergency Stop.
+  bool get shadersEmergencyStopped => _shadersEmergencyStopped;
+
+  /// Optional human-readable reason for the active shader Emergency Stop
+  /// (for example when triggered automatically by a GPU frame watchdog).
+  String? get shaderEmergencyStopReason => _shaderEmergencyStopReason;
+
+  /// Immediately bypasses all GPU shaders without mutating saved shader chains
+  /// or background opacity preferences.
+  void triggerShaderEmergencyStop({String? reason}) {
+    if (_disposed) return;
+    final trimmed = reason?.trim();
+    final nextReason = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+    if (_shadersEmergencyStopped &&
+        (nextReason == null || _shaderEmergencyStopReason == nextReason)) {
+      return;
+    }
+    _shadersEmergencyStopped = true;
+    _shaderEmergencyStopReason = nextReason;
+    _statusBanner = nextReason == null
+        ? 'Shaders stopped (Ctrl+Shift+F6 to resume).'
+        : 'Shaders stopped: $nextReason';
+    _rebuildActiveShaderConfig();
+    _notifyChromeChanged();
+  }
+
+  /// Exits shader Emergency Stop, clears per-pane GPU watchdog quarantines,
+  /// and resynchronizes compiled shader passes with [shaderController].
+  Future<void> resumeShadersFromEmergencyStop() async {
+    if (_disposed || !_shadersEmergencyStopped) return;
+    _shadersEmergencyStopped = false;
+    _shaderEmergencyStopReason = null;
+    if (_statusBanner?.startsWith('Shaders stopped') ?? false) {
+      _statusBanner = null;
+    }
+    for (final pane in _panes.values) {
+      pane.gpuFrameWatchdog.clearQuarantine();
+    }
+    _rebuildActiveShaderConfig();
+    _notifyChromeChanged();
+    await _syncActiveShaders();
+  }
+
+  /// Toggles shader Emergency Stop (`Ctrl+Shift+F6` or `Ctrl+\ 0`).
+  void toggleShaderEmergencyStop() {
+    if (_disposed) return;
+    if (_shadersEmergencyStopped) {
+      unawaited(resumeShadersFromEmergencyStop());
+    } else {
+      triggerShaderEmergencyStop();
+    }
+  }
 
   /// Default opacity applied automatically when enabling a wallpaper or
   /// background shader while [backgroundOpacity] is still `1.0` (`100%`), so
@@ -2809,7 +2864,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
       animationMode: shaderAnimationMode,
       backgroundOpacity: backgroundOpacity,
       backgroundImage: _shaderController.wallpaperImage,
-      enabled: true,
+      enabled: !_shadersEmergencyStopped,
     );
   }
 
@@ -3095,8 +3150,22 @@ final class FtermWorkspaceController extends ChangeNotifier {
     String reason,
   ) {
     if (_disposed) return;
+    if (_isUserOrDraftShaderId(shaderId)) {
+      triggerShaderEmergencyStop(
+        reason: 'Shader "$shaderId" quarantined: $reason',
+      );
+      return;
+    }
     _setStatusBanner('Quarantined CLI shader "$shaderId": $reason');
   }
+
+  bool _isUserOrDraftShaderId(String shaderId) =>
+      shaderId.startsWith('background:') ||
+      shaderId.startsWith('foreground:') ||
+      shaderId.startsWith('editor:') ||
+      shaderId.startsWith('draft:') ||
+      _activeShaderConfig.backgroundPasses.any((p) => p.id == shaderId) ||
+      _activeShaderConfig.foregroundPasses.any((p) => p.id == shaderId);
 
   /// Cancels throttled timers and flushes settings immediately (e.g., on pause).
   void flushPendingSettings() {
