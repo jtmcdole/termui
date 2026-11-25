@@ -3092,8 +3092,23 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       pane.attachShaderBackend(_shaderController.backend);
     }
     _rebuildActiveShaderConfig();
+    _syncEditorRuntimeErrors();
     _syncShaderCompileBanner();
     _notifyChromeChanged();
+  }
+
+  void _syncEditorRuntimeErrors() {
+    for (final editor in _editorPanes.values) {
+      final ctrl = editor.controller;
+      if (ctrl.previewMode == ShaderEditorPreviewMode.off) {
+        ctrl.setRuntimeCompileError(null);
+        continue;
+      }
+      if (ctrl.isCompiling) continue;
+      ctrl.setRuntimeCompileError(
+        _shaderController.compileErrorForPass(editor.previewPassId),
+      );
+    }
   }
 
   void _onShaderDirectoryChanged(ShaderDirectoryChange _) {

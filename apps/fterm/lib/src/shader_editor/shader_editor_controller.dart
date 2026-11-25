@@ -123,6 +123,10 @@ final class ShaderEditorController extends ChangeNotifier {
   ShaderEditorBackgroundPreset _previewBackgroundPreset;
   double _bgPreviewOpacity;
 
+  List<ShaderDiagnostic> _staticDiagnostics = const <ShaderDiagnostic>[];
+  List<ShaderDiagnostic> _compilerDiagnostics = const <ShaderDiagnostic>[];
+  List<ShaderDiagnostic> _runtimeDiagnostics = const <ShaderDiagnostic>[];
+  String? _runtimeErrorSignature;
   List<ShaderDiagnostic> _diagnostics = const <ShaderDiagnostic>[];
   ShadertoyGlslAnalysis? _lastAnalysis;
   int? _lastCompileDurationMs;
@@ -286,6 +290,10 @@ final class ShaderEditorController extends ChangeNotifier {
   void setPreviewMode(ShaderEditorPreviewMode mode) {
     if (_disposed || _previewMode == mode) return;
     _previewMode = mode;
+    if (mode == ShaderEditorPreviewMode.off) {
+      _runtimeDiagnostics = const <ShaderDiagnostic>[];
+      _runtimeErrorSignature = null;
+    }
     _refreshStaticDiagnostics();
     _previewNotifier.emit();
     notifyListeners();
@@ -474,6 +482,26 @@ final class ShaderEditorController extends ChangeNotifier {
     return _runCompilePass();
   }
 
+  /// Records or clears a runtime GPU pipeline link or draw [error] surfaced
+  /// after static and offline compilation succeeded.
+  ///
+  /// Repeated calls with the same error signature (or `null` when already
+  /// clear) are no-ops so workspace controller updates never trigger rebuild
+  /// loops.
+  void setRuntimeCompileError(ShaderCompileException? error) {
+    if (_disposed) return;
+    final signature = error == null
+        ? null
+        : '${error.shaderId}|${error.lineNumber ?? ''}|${error.message}';
+    if (signature == _runtimeErrorSignature) return;
+    _runtimeErrorSignature = signature;
+    _runtimeDiagnostics = error == null
+        ? const <ShaderDiagnostic>[]
+        : _diagnosticsFromCompileException(error);
+    _rebuildDiagnostics();
+    notifyListeners();
+  }
+
   void _handleTextControllerChanged() {
     if (_disposed) return;
     final currentText = textController.text;
@@ -485,6 +513,9 @@ final class ShaderEditorController extends ChangeNotifier {
     if (_confirmingClose) {
       _confirmingClose = false;
     }
+    _compilerDiagnostics = const <ShaderDiagnostic>[];
+    _runtimeDiagnostics = const <ShaderDiagnostic>[];
+    _runtimeErrorSignature = null;
     _refreshStaticDiagnostics();
     _scheduleDebouncedCompile();
     notifyListeners();
@@ -501,7 +532,8 @@ final class ShaderEditorController extends ChangeNotifier {
     final snapshot = textController.text;
     final staticResult = _evaluateStaticChecks(snapshot);
     _lastAnalysis = staticResult.analysis;
-    _setDiagnostics(staticResult.diagnostics);
+    _staticDiagnostics = staticResult.diagnostics;
+    _rebuildDiagnostics();
   }
 
   Future<void> _runCompilePass() async {
@@ -513,11 +545,15 @@ final class ShaderEditorController extends ChangeNotifier {
 
     final staticResult = _evaluateStaticChecks(snapshot);
     _lastAnalysis = staticResult.analysis;
+    _staticDiagnostics = staticResult.diagnostics;
+    _runtimeDiagnostics = const <ShaderDiagnostic>[];
+    _runtimeErrorSignature = null;
 
     if (staticResult.hasShimError || _onCompile == null) {
       _lastCompileDurationMs = clock.now().difference(startedAt).inMilliseconds;
       _isCompiling = false;
-      _setDiagnostics(staticResult.diagnostics);
+      _compilerDiagnostics = const <ShaderDiagnostic>[];
+      _rebuildDiagnostics();
       if (!staticResult.hasShimError && mode != ShaderEditorPreviewMode.off) {
         _previewNotifier.emit();
       }
@@ -533,10 +569,8 @@ final class ShaderEditorController extends ChangeNotifier {
 
     _lastCompileDurationMs = clock.now().difference(startedAt).inMilliseconds;
     _isCompiling = false;
-    _setDiagnostics(<ShaderDiagnostic>[
-      ...compilerDiags,
-      ...staticResult.diagnostics,
-    ]);
+    _compilerDiagnostics = compilerDiags;
+    _rebuildDiagnostics();
     if (mode != ShaderEditorPreviewMode.off) {
       _previewNotifier.emit();
     }
@@ -550,15 +584,7 @@ final class ShaderEditorController extends ChangeNotifier {
     try {
       return await _onCompile!(snapshot, mode);
     } on ShaderCompileException catch (error) {
-      if (error.diagnostics.isNotEmpty) return error.diagnostics;
-      return <ShaderDiagnostic>[
-        ShaderDiagnostic(
-          severity: ShaderDiagnosticSeverity.error,
-          origin: ShaderDiagnosticOrigin.compiler,
-          message: error.message,
-          line: error.lineNumber,
-        ),
-      ];
+      return _diagnosticsFromCompileException(error);
     } on Object catch (error) {
       return <ShaderDiagnostic>[
         ShaderDiagnostic(
@@ -568,6 +594,20 @@ final class ShaderEditorController extends ChangeNotifier {
         ),
       ];
     }
+  }
+
+  static List<ShaderDiagnostic> _diagnosticsFromCompileException(
+    ShaderCompileException error,
+  ) {
+    if (error.diagnostics.isNotEmpty) return error.diagnostics;
+    return <ShaderDiagnostic>[
+      ShaderDiagnostic(
+        severity: ShaderDiagnosticSeverity.error,
+        origin: ShaderDiagnosticOrigin.compiler,
+        message: error.message,
+        line: error.lineNumber,
+      ),
+    ];
   }
 
   ({
@@ -614,9 +654,21 @@ final class ShaderEditorController extends ChangeNotifier {
               : TerminalShaderStage.background,
       };
 
-  void _setDiagnostics(List<ShaderDiagnostic> next) {
-    final sorted = List<ShaderDiagnostic>.from(next)..sort(_compareDiagnostics);
-    _diagnostics = sorted;
+  void _rebuildDiagnostics() {
+    final seen = <(ShaderDiagnosticSeverity, int?, int?, String)>{};
+    final merged = <ShaderDiagnostic>[];
+    for (final diag in <ShaderDiagnostic>[
+      ..._compilerDiagnostics,
+      ..._runtimeDiagnostics,
+      ..._staticDiagnostics,
+    ]) {
+      final key = (diag.severity, diag.line, diag.column, diag.message);
+      if (seen.add(key)) {
+        merged.add(diag);
+      }
+    }
+    merged.sort(_compareDiagnostics);
+    _diagnostics = merged;
     if (_diagnostics.isEmpty) {
       _selectedDiagnosticIndex = -1;
     } else if (_selectedDiagnosticIndex >= _diagnostics.length) {
