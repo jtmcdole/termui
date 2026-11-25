@@ -118,7 +118,7 @@ final class IoBinaryWebSocketSink implements StreamSink<Uint8List> {
       timedOut = true;
     }
     if (timedOut) {
-      _onCloseTimeout?.call();
+      _invokeIgnoringErrors(_onCloseTimeout);
     }
   }
 
@@ -242,6 +242,13 @@ final class _AbortableByteSubscription
 
 /// Adapts an open `dart:io` [WebSocket] into a binary [StreamChannel] and
 /// a close-code callback, rejecting non-binary frames with [ProtocolFormatException].
+///
+/// If provided, [onCloseTimeout] is invoked when the close handshake times out
+/// or [WebSocket.close] throws while the underlying stream has not yet emitted
+/// `onDone`. It is expected to force-destroy the underlying raw socket so the
+/// stream completes promptly, and providing it extends the post-close wait for
+/// `onDone` from `200ms` to `2500ms` before force-canceling the subscription.
+/// Errors thrown by [onCloseTimeout] are swallowed so teardown always completes.
 ({
   StreamChannel<Uint8List> channel,
   Future<void> Function(int code, String reason) closeWithCode,
@@ -257,6 +264,16 @@ wrapIoBinaryWebSocket(
   pingInterval: pingInterval,
   onCloseTimeout: onCloseTimeout,
 );
+
+void _invokeIgnoringErrors(void Function()? callback) {
+  try {
+    callback?.call();
+  } on Object catch (_) {}
+}
+
+void _resumeIfPaused(StreamSubscription<Object?> sub) {
+  if (sub.isPaused) sub.resume();
+}
 
 void _markCloseHandshakeDone(WebSocket ws, Completer<void> handshakeCompleter) {
   try {
@@ -289,15 +306,14 @@ _wrapIoBinaryWebSocketInternal(
   Future<void>? cancelSubFuture;
   Future<void> cancelSubAfterDone() {
     if (wsDone.isCompleted) return Future<void>.value();
-    return cancelSubFuture ??= () async {
-      try {
-        await wsDone.future.timeout(doneWaitTimeout);
-      } on TimeoutException {
+    return cancelSubFuture ??= wsDone.future.timeout(
+      doneWaitTimeout,
+      onTimeout: () async {
         if (!wsDone.isCompleted) {
           await sub.cancel();
         }
-      }
-    }();
+      },
+    );
   }
 
   incoming = StreamController<Uint8List>(
@@ -312,13 +328,11 @@ _wrapIoBinaryWebSocketInternal(
   sink = IoBinaryWebSocketSink(
     ws,
     handshakeDone: handshakeCompleter.future,
-    onPrepareClose: () {
-      if (sub.isPaused) sub.resume();
-    },
+    onPrepareClose: () => _resumeIfPaused(sub),
     onCloseTimeout: () {
-      if (sub.isPaused) sub.resume();
+      _resumeIfPaused(sub);
       if (!wsDone.isCompleted) {
-        destroySocket?.call();
+        _invokeIgnoringErrors(destroySocket);
       }
       _markCloseHandshakeDone(ws, handshakeCompleter);
       unawaited(cancelSubAfterDone());

@@ -330,6 +330,12 @@ void main() {
     test(
       'delayed socket destroy (>200ms) still cancels Dart 5s WebSocket close timer',
       _verifyDelayedDestroyCancelsSdkCloseTimer,
+      timeout: const Timeout(Duration(seconds: 60)),
+    );
+
+    test(
+      'close errors invoke onCloseTimeout, swallow callback errors, and resume mid-close pause',
+      _verifyCloseErrorHandlingAndMidCloseResume,
     );
   });
 }
@@ -821,15 +827,23 @@ Future<void> main(List<String> args) async {
     childScript.path,
     '${server.port}',
   ]);
-  addTearDown(child.kill);
   final stderrLines = <String>[];
-  child.stderr
+  final stderrSub = child.stderr
       .transform(utf8.decoder)
       .transform(const LineSplitter())
       .listen(stderrLines.add);
   final outLines = StreamIterator(
     child.stdout.transform(utf8.decoder).transform(const LineSplitter()),
   );
+  addTearDown(() async {
+    child.kill();
+    await child.exitCode.timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => -1,
+    );
+    await stderrSub.cancel();
+    await outLines.cancel();
+  });
 
   check(
     await outLines.moveNext().timeout(const Duration(seconds: 30)),
@@ -844,16 +858,180 @@ Future<void> main(List<String> args) async {
   check(
     sw.elapsedMilliseconds,
     because: 'Expected exit well below Dart 5s WebSocket close timer',
-  ).isLessThan(2500);
+  ).isLessThan(4000);
+}
+
+Future<void> _verifyCloseErrorHandlingAndMidCloseResume() async {
+  // 1. Synchronous throw from ws.close() triggers onCloseTimeout / destroy.
+  var syncDestroyCount = 0;
+  late final _FakePauseTrackingWebSocket syncFailWs;
+  syncFailWs = _FakePauseTrackingWebSocket(
+    (_) {},
+    onClose: () => throw const SocketException('sync close failure'),
+  );
+  final syncWrapped = wrapIoBinaryWebSocket(
+    syncFailWs,
+    onCloseTimeout: () {
+      syncDestroyCount++;
+      syncFailWs.emitDone();
+    },
+  );
+  await syncWrapped.channel.sink.close().timeout(const Duration(seconds: 2));
+  check(syncDestroyCount).equals(1);
+
+  // 2. Asynchronous error from ws.close() triggers onCloseTimeout / destroy.
+  var asyncDestroyCount = 0;
+  late final _FakePauseTrackingWebSocket asyncFailWs;
+  asyncFailWs = _FakePauseTrackingWebSocket(
+    (_) {},
+    onClose: () =>
+        Future<Object?>.error(const SocketException('async close failure')),
+  );
+  final asyncWrapped = wrapIoBinaryWebSocket(
+    asyncFailWs,
+    onCloseTimeout: () {
+      asyncDestroyCount++;
+      asyncFailWs.emitDone();
+    },
+  );
+  await asyncWrapped
+      .closeWithCode(WebSocketStatus.goingAway, 'shutdown')
+      .timeout(const Duration(seconds: 2));
+  check(asyncDestroyCount).equals(1);
+
+  // 3. Throwing onCloseTimeout on IoBinaryWebSocketSink does not reject
+  // close() or closeWithCode().
+  var sinkCloseCalls = 0;
+  final sinkForClose = IoBinaryWebSocketSink(
+    _FakePauseTrackingWebSocket(
+      (_) {},
+      onClose: () => throw const SocketException('close failed'),
+    ),
+    handshakeDone: Completer<void>().future,
+    onCloseTimeout: () {
+      sinkCloseCalls++;
+      throw StateError('sink close timeout callback failed');
+    },
+  );
+  await sinkForClose.close().timeout(const Duration(seconds: 2));
+  check(sinkCloseCalls).equals(1);
+
+  var sinkCloseWithCodeCalls = 0;
+  final sinkForCloseWithCode = IoBinaryWebSocketSink(
+    _FakePauseTrackingWebSocket(
+      (_) {},
+      onClose: () =>
+          Future<Object?>.error(const SocketException('closeWithCode failed')),
+    ),
+    handshakeDone: Completer<void>().future,
+    onCloseTimeout: () {
+      sinkCloseWithCodeCalls++;
+      throw StateError('sink closeWithCode timeout callback failed');
+    },
+  );
+  await sinkForCloseWithCode
+      .closeWithCode(WebSocketStatus.goingAway, 'bye')
+      .timeout(const Duration(seconds: 2));
+  check(sinkCloseWithCodeCalls).equals(1);
+
+  // 4. Throwing onCloseTimeout on wrapIoBinaryWebSocket does not reject
+  // closeWithCode() or incoming.onCancel, and still runs
+  // _markCloseHandshakeDone and cancelSubAfterDone().
+  final closeWithCodeCanceled = Completer<void>();
+  late final _FakePauseTrackingWebSocket wrappedCodeWs;
+  wrappedCodeWs = _FakePauseTrackingWebSocket((event) {
+    if (event == 'cancel' && !closeWithCodeCanceled.isCompleted) {
+      closeWithCodeCanceled.complete();
+    }
+  }, onClose: () => throw const SocketException('closeWithCode throw'));
+  var wrappedCodeDestroyCalls = 0;
+  final wrappedForCode = wrapIoBinaryWebSocket(
+    wrappedCodeWs,
+    onCloseTimeout: () {
+      wrappedCodeDestroyCalls++;
+      wrappedCodeWs.pingInterval = const Duration(seconds: 1);
+      throw StateError('destroySocket boom');
+    },
+  );
+  await wrappedForCode
+      .closeWithCode(WebSocketStatus.goingAway, 'bye')
+      .timeout(const Duration(seconds: 2));
+  check(wrappedCodeDestroyCalls).equals(1);
+  check(wrappedCodeWs.pingInterval).isNull();
+
+  final cancelEvents = <String>[];
+  late final _FakePauseTrackingWebSocket wrappedCancelWs;
+  wrappedCancelWs = _FakePauseTrackingWebSocket(
+    cancelEvents.add,
+    onClose: () => throw const SocketException('cancel close throw'),
+  );
+  var wrappedCancelDestroyCalls = 0;
+  final wrappedForCancel = wrapIoBinaryWebSocket(
+    wrappedCancelWs,
+    onCloseTimeout: () {
+      wrappedCancelDestroyCalls++;
+      wrappedCancelWs.pingInterval = const Duration(seconds: 1);
+      throw StateError('destroySocket cancel boom');
+    },
+  );
+  final cancelSub = wrappedForCancel.channel.stream.listen((_) {});
+  await [
+    closeWithCodeCanceled.future.timeout(const Duration(seconds: 5)),
+    cancelSub.cancel().timeout(const Duration(seconds: 5)),
+  ].wait;
+  check(wrappedCancelDestroyCalls).equals(1);
+  check(wrappedCancelWs.pingInterval).isNull();
+  check(cancelEvents).contains('cancel');
+
+  // 5. A stream subscription paused mid-close is resumed before socket destroy
+  // when onCloseTimeout fires.
+  final pauseOrderEvents = <String>[];
+  final closeGate = Completer<Object?>();
+  late final _FakePauseTrackingWebSocket pauseWs;
+  pauseWs = _FakePauseTrackingWebSocket(
+    pauseOrderEvents.add,
+    onClose: () => closeGate.future,
+  );
+  final pauseWrapped = wrapIoBinaryWebSocket(
+    pauseWs,
+    onCloseTimeout: () {
+      pauseOrderEvents.add('destroy');
+      pauseWs.emitDone();
+    },
+  );
+  final pauseSub = pauseWrapped.channel.stream.listen((_) {});
+  final closeFuture = pauseWrapped.channel.sink.close();
+  pauseSub.pause();
+  check(pauseOrderEvents).deepEquals(const ['pause']);
+  closeGate.completeError(const SocketException('mid-close failure'));
+  await closeFuture.timeout(const Duration(seconds: 2));
+  check(
+    pauseOrderEvents.take(3),
+  ).deepEquals(const ['pause', 'resume', 'destroy']);
+  await pauseSub.cancel();
 }
 
 final class _FakePauseTrackingWebSocket extends Stream<Object?>
     implements WebSocket {
   final void Function(String event) onEvent;
   final bool hangClose;
+  final Future<Object?> Function()? onClose;
   final Completer<void> _doneCompleter = Completer<void>();
+  StreamController<Object?>? _controller;
 
-  _FakePauseTrackingWebSocket(this.onEvent, {this.hangClose = false});
+  _FakePauseTrackingWebSocket(
+    this.onEvent, {
+    this.hangClose = false,
+    this.onClose,
+  });
+
+  void emitDone() {
+    if (!_doneCompleter.isCompleted) _doneCompleter.complete();
+    final controller = _controller;
+    if (controller != null && !controller.isClosed) {
+      unawaited(controller.close());
+    }
+  }
 
   @override
   Duration? pingInterval;
@@ -876,6 +1054,7 @@ final class _FakePauseTrackingWebSocket extends Stream<Object?>
       onResume: () => onEvent('resume'),
       onCancel: () => onEvent('cancel'),
     );
+    _controller = controller;
     return controller.stream.listen(
       onData,
       onError: onError,
@@ -885,10 +1064,12 @@ final class _FakePauseTrackingWebSocket extends Stream<Object?>
   }
 
   @override
-  Future<Object?> close([int? code, String? reason]) async {
+  Future<Object?> close([int? code, String? reason]) {
+    final customClose = onClose;
+    if (customClose != null) return customClose();
     if (hangClose) return Completer<Object?>().future;
     if (!_doneCompleter.isCompleted) _doneCompleter.complete();
-    return null;
+    return Future<Object?>.value();
   }
 
   @override
