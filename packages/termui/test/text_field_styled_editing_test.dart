@@ -61,6 +61,146 @@ void main() {
     FocusManager.instance.setPrimaryFocus(null);
   });
 
+  group('TextField spanBuilder & RichText/TextSpan styling', () {
+    test(
+      'renders TextSpan fg/bg/UnderlineStyle.curly + SGR 58 underlineColor, merges cursor style, handles wide graphemes, and clears trailing/EOL squiggles on reused buffers',
+      () {
+        const keywordColor = Color(0x56, 0x9C, 0xD6);
+        const bgTint = Color(0x1E, 0x22, 0x2A);
+        const squiggleColor = Color(0xFF, 0x44, 0x44);
+        const cursorBg = Color(0x44, 0x55, 0x66);
+
+        final controller = TextEditingController(text: 'vec 🔥x\nerr');
+        // Place cursor on 'v' (line 0, col 0) first.
+        controller.value = const TextEditingValue(
+          text: 'vec 🔥x\nerr',
+          selection: TextSelection.collapsed(offset: 0, line: 0, column: 0),
+        );
+
+        var includeSquiggle = true;
+        TextSpan buildSpans(String text, Style baseStyle) {
+          if (!includeSquiggle) {
+            return TextSpan(text: text, style: baseStyle);
+          }
+          return TextSpan(
+            style: baseStyle,
+            children: const <TextSpan>[
+              TextSpan(
+                text: 'vec',
+                style: Style(
+                  foreground: keywordColor,
+                  background: bgTint,
+                  modifiers: Modifier.bold,
+                ),
+              ),
+              TextSpan(text: ' '),
+              TextSpan(
+                text: '🔥',
+                style: Style(
+                  foreground: Color(0xFF, 0xCC, 0x00),
+                  underlineStyle: UnderlineStyle.curly,
+                  underlineColor: squiggleColor,
+                ),
+              ),
+              TextSpan(text: 'x\n'),
+              TextSpan(
+                text: 'err',
+                style: Style(
+                  underlineStyle: UnderlineStyle.curly,
+                  underlineColor: squiggleColor,
+                ),
+              ),
+            ],
+          );
+        }
+
+        final field = TextField(
+          controller: controller,
+          multiline: true,
+          focused: true,
+          cursorStyle: const Style(
+            background: cursorBg,
+            modifiers: Modifier.reverse,
+          ),
+          spanBuilder: buildSpans,
+        );
+
+        final element = field.createElement();
+        element.mount(null);
+        element.rebuild();
+        element.layout(BoxConstraints.tight(const Size(12, 3)));
+
+        final buffer = Buffer.blank(12, 3);
+        // Seed stale SGR 58 underlineColor across entire buffer to prove clearing.
+        for (var y = 0; y < 3; y++) {
+          for (var x = 0; x < 12; x++) {
+            buffer.setUnderlineColor(x, y, 0xFF00FF00);
+          }
+        }
+
+        element.paint(buffer, Offset.zero);
+
+        // Cell (0, 0) is 'v' under cursor: preserves token fg & bold, merges cursor bg & reverse.
+        expect(buffer.getCharacter(0, 0), equals('v'));
+        expect(buffer.getForeground(0, 0), equals(keywordColor.argb));
+        expect(buffer.getBackground(0, 0), equals(cursorBg.argb));
+        expect(Modifier.has(buffer.getModifiers(0, 0), Modifier.bold), isTrue);
+        expect(
+          Modifier.has(buffer.getModifiers(0, 0), Modifier.reverse),
+          isTrue,
+        );
+        expect(buffer.getUnderlineColor(0, 0), equals(0));
+
+        // Cell (1, 0) is 'e': styled token without cursor.
+        expect(buffer.getCharacter(1, 0), equals('e'));
+        expect(buffer.getForeground(1, 0), equals(keywordColor.argb));
+        expect(buffer.getBackground(1, 0), equals(bgTint.argb));
+
+        // Wide grapheme '🔥' at columns 4 and 5 carries curly underline + SGR 58 on both cells.
+        expect(buffer.getCharacter(4, 0), equals('🔥'));
+        expect(
+          Modifier.getUnderlineStyle(buffer.getModifiers(4, 0)),
+          equals(UnderlineStyle.curly),
+        );
+        expect(buffer.getUnderlineColor(4, 0), equals(squiggleColor.argb));
+        expect(buffer.getUnderlineColor(5, 0), equals(squiggleColor.argb));
+        expect(
+          Modifier.getUnderlineStyle(buffer.getModifiers(5, 0)),
+          equals(UnderlineStyle.curly),
+        );
+
+        // Trailing space at column 7 cleared stale underlineColor to 0.
+        expect(buffer.getCharacter(7, 0), equals(' '));
+        expect(buffer.getUnderlineColor(7, 0), equals(0));
+
+        // Line 1 'err' has curly squiggle color.
+        expect(buffer.getUnderlineColor(0, 1), equals(squiggleColor.argb));
+        expect(buffer.getUnderlineColor(2, 1), equals(squiggleColor.argb));
+        expect(buffer.getUnderlineColor(3, 1), equals(0));
+
+        // Move cursor to EOL of line 1 (col 3) and remove squiggles: verify
+        // EOL cursor and previously squiggled cells clear underlineColor to 0.
+        includeSquiggle = false;
+        controller.value = const TextEditingValue(
+          text: 'vec 🔥x\nerr',
+          selection: TextSelection.collapsed(offset: 10, line: 1, column: 3),
+        );
+        element.rebuild();
+        element.layout(BoxConstraints.tight(const Size(12, 3)));
+        element.paint(buffer, Offset.zero);
+
+        expect(buffer.getUnderlineColor(0, 1), equals(0));
+        expect(buffer.getUnderlineColor(2, 1), equals(0));
+        expect(buffer.getUnderlineColor(3, 1), equals(0));
+        expect(buffer.getBackground(3, 1), equals(cursorBg.argb));
+        expect(buffer.getUnderlineColor(4, 0), equals(0));
+        expect(buffer.getUnderlineColor(5, 0), equals(0));
+
+        element.unmount();
+      },
+    );
+  });
+
   group(
     'TextField controller scroll persistence, wheel, and PageUp/PageDown',
     () {

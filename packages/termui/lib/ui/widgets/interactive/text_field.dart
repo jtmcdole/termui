@@ -7,6 +7,9 @@ import 'package:termui/termui.dart';
 import 'package:termui/terminal/terminal.dart' as term;
 import 'package:termui/ui/event.dart' as ev;
 
+/// Builds a styled [TextSpan] tree representing [text] using [baseStyle].
+typedef TextFieldSpanBuilder = TextSpan Function(String text, Style baseStyle);
+
 /// Actions supported by the [TextField] widget.
 enum TextFieldAction {
   /// Move cursor left.
@@ -513,6 +516,11 @@ class TextField extends StatefulWidget implements Focusable {
   /// Optional fallback callback invoked when [handleKeyEvent] does not consume a key.
   final bool Function(KeyEvent event)? onKeyEvent;
 
+  /// Optional builder producing a styled [TextSpan] tree (reusing [RichText]'s
+  /// `StyledChar` colors, modifiers, `UnderlineStyle.curly`, and SGR 58
+  /// `Style.underlineColor`) for rendering non-obscured text.
+  final TextFieldSpanBuilder? spanBuilder;
+
   /// Optional number of spaces inserted when `Tab` (without modifiers) is pressed.
   ///
   /// Defaults to `null`, preserving standard `Tab` focus traversal.
@@ -548,6 +556,7 @@ class TextField extends StatefulWidget implements Focusable {
     this.focusNode,
     this.onFocusChange,
     this.onKeyEvent,
+    this.spanBuilder,
     this.tabSize,
   }) : controller =
            controller ?? TextEditingController(text: value ?? initialText) {
@@ -1407,6 +1416,24 @@ class _TextFieldRenderWidgetElement extends Element
     final mergedCursorStyle = textField.focused
         ? _getMergedStyle(textField)
         : textField.style;
+    final spanBuilder = textField.spanBuilder;
+    if (spanBuilder != null && !textField.obscureText) {
+      final styledLines = _buildStyledLines(
+        spanBuilder(textField.controller.value.text, textField.style),
+        textField.style,
+      );
+      _paintVisibleStyledLines(
+        buffer,
+        offset,
+        w,
+        h,
+        lines.length,
+        styledLines,
+        textField,
+        mergedCursorStyle,
+      );
+      return;
+    }
     _paintVisiblePlainLines(
       buffer,
       offset,
@@ -1416,6 +1443,35 @@ class _TextFieldRenderWidgetElement extends Element
       textField,
       mergedCursorStyle,
     );
+  }
+
+  void _paintVisibleStyledLines(
+    Buffer buffer,
+    Offset offset,
+    int width,
+    int height,
+    int lineCount,
+    List<List<StyledChar>> styledLines,
+    TextField textField,
+    Style mergedCursorStyle,
+  ) {
+    final cursorLine = textField.cursorLine;
+    for (var y = 0; y < height; y++) {
+      final lineIdx = textField.scrollOffset + y;
+      if (lineIdx >= lineCount) break;
+      final styledLine = lineIdx < styledLines.length
+          ? styledLines[lineIdx]
+          : const <StyledChar>[];
+      _paintStyledLine(
+        buffer,
+        Offset(offset.dx, offset.dy + y),
+        width,
+        styledLine,
+        textField,
+        mergedCursorStyle,
+        isCursorLine: textField.focused && lineIdx == cursorLine,
+      );
+    }
   }
 
   void _paintVisiblePlainLines(
@@ -1460,6 +1516,26 @@ class _TextFieldRenderWidgetElement extends Element
         underlineColor: 0,
       );
     }
+  }
+
+  static List<List<StyledChar>> _buildStyledLines(
+    TextSpan rootSpan,
+    Style baseStyle,
+  ) {
+    final allChars = <StyledChar>[];
+    rootSpan.buildStyledChars(allChars, baseStyle);
+    final lines = <List<StyledChar>>[];
+    var current = <StyledChar>[];
+    for (final sc in allChars) {
+      if (sc.char == '\n') {
+        lines.add(current);
+        current = <StyledChar>[];
+      } else {
+        current.add(sc);
+      }
+    }
+    lines.add(current);
+    return lines;
   }
 
   @override
@@ -1568,6 +1644,34 @@ class _TextFieldRenderWidgetElement extends Element
     );
   }
 
+  void _paintStyledLine(
+    Buffer buffer,
+    Offset rowOffset,
+    int width,
+    List<StyledChar> styledLine,
+    TextField textField,
+    Style mergedCursorStyle, {
+    required bool isCursorLine,
+  }) {
+    final result = _paintStyledLineGraphemes(
+      buffer,
+      rowOffset,
+      width,
+      styledLine,
+      textField,
+      isCursorLine: isCursorLine,
+    );
+    _paintTrailingAndEolCursor(
+      buffer,
+      rowOffset,
+      width,
+      result,
+      textField,
+      mergedCursorStyle,
+      isCursorLine: isCursorLine,
+    );
+  }
+
   void _paintTrailingAndEolCursor(
     Buffer buffer,
     Offset rowOffset,
@@ -1634,6 +1738,53 @@ class _TextFieldRenderWidgetElement extends Element
         (isCursorLine && graphemeIdx == textField.cursorColumn)
             ? mergedCursorStyle
             : textField.style,
+        textField.style,
+      );
+      if (placed == null) {
+        return (
+          graphemeCount: graphemeIdx,
+          displayEnd: displayEnd,
+          reachedLineEnd: false,
+        );
+      }
+      displayEnd = max(displayEnd, placed);
+      displayCol += step;
+      graphemeIdx++;
+    }
+    return (
+      graphemeCount: graphemeIdx,
+      displayEnd: displayEnd,
+      reachedLineEnd: true,
+    );
+  }
+
+  ({int graphemeCount, int displayEnd, bool reachedLineEnd})
+  _paintStyledLineGraphemes(
+    Buffer buffer,
+    Offset rowOffset,
+    int width,
+    List<StyledChar> styledLine,
+    TextField textField, {
+    required bool isCursorLine,
+  }) {
+    final hScroll = textField.horizontalScrollOffset;
+    var displayCol = 0;
+    var displayEnd = 0;
+    var graphemeIdx = 0;
+    for (final sc in styledLine) {
+      final step = max(1, graphemeWidth(sc.char));
+      final cellStyle = (isCursorLine && graphemeIdx == textField.cursorColumn)
+          ? sc.style.merge(textField.cursorStyle)
+          : sc.style;
+      final placed = _placeVisibleCell(
+        buffer,
+        rowOffset,
+        width,
+        hScroll,
+        displayCol,
+        step,
+        sc.char,
+        cellStyle,
         textField.style,
       );
       if (placed == null) {
