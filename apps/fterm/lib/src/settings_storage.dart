@@ -158,6 +158,34 @@ enum GpuDriverPreference {
   };
 }
 
+/// Policy governing how unhandled `Meta`/`Cmd` key chords are dispatched
+/// relative to the host browser or operating system.
+enum FtermMetaKeyMode {
+  /// Pass through on Web and macOS; claim on Linux/Windows desktop when Kitty
+  /// keyboard protocol is active.
+  auto('auto'),
+
+  /// Always pass unhandled `Meta`/`Cmd` chords through to the host OS/browser.
+  passThrough('passThrough'),
+
+  /// Claim unhandled `Meta`/`Cmd` chords whenever Kitty keyboard protocol is
+  /// active (still passing through in legacy mode).
+  kitty('kitty');
+
+  /// Canonical JSON wire identifier.
+  final String wireName;
+
+  const FtermMetaKeyMode(this.wireName);
+
+  /// Parses [raw] from its [wireName] (or snake_case alias), falling back to
+  /// [auto].
+  static FtermMetaKeyMode fromWireName(Object? raw) => switch (raw) {
+    'passThrough' || 'pass_through' => .passThrough,
+    'kitty' => .kitty,
+    _ => .auto,
+  };
+}
+
 /// App-level `fterm` audio, font-size, shell, tab-bar, and auto-update
 /// preferences stored alongside [CastWorkspaceSettings].
 final class FtermPreferences {
@@ -268,6 +296,10 @@ final class FtermPreferences {
   /// Persisted lowercase SHA-256 hex digests of user-trusted custom CLI GLSL sources.
   final Set<String> trustedCliShaderHashes;
 
+  /// Policy controlling unhandled `Meta`/`Cmd` shortcut passthrough vs. Kitty
+  /// forwarding.
+  final FtermMetaKeyMode metaKeyMode;
+
   /// Creates immutable [FtermPreferences].
   const FtermPreferences({
     this.audioMuted = false,
@@ -298,6 +330,7 @@ final class FtermPreferences {
     this.remoteCliShaderPolicy = CliShaderPolicy.disabled,
     this.cliFullPaneShaderMode = CliFullPaneShaderMode.cliBeforeUser,
     this.trustedCliShaderHashes = const <String>{},
+    this.metaKeyMode = .auto,
   });
 
   /// Returns [fontSize] (or [fallback] when unset), clamped to
@@ -345,6 +378,7 @@ final class FtermPreferences {
     CliShaderPolicy? remoteCliShaderPolicy,
     CliFullPaneShaderMode? cliFullPaneShaderMode,
     Set<String>? trustedCliShaderHashes,
+    FtermMetaKeyMode? metaKeyMode,
   }) => FtermPreferences(
     audioMuted: audioMuted ?? this.audioMuted,
     audioVolume: (audioVolume ?? this.audioVolume).clamp(0.0, 1.0).toDouble(),
@@ -422,6 +456,7 @@ final class FtermPreferences {
     trustedCliShaderHashes: _normalizeHashes(
       trustedCliShaderHashes ?? this.trustedCliShaderHashes,
     ),
+    metaKeyMode: metaKeyMode ?? this.metaKeyMode,
   );
 
   static T? _resolveOptionalField<T>({
@@ -502,6 +537,7 @@ final class FtermPreferences {
       fallback: CliFullPaneShaderMode.cliBeforeUser,
     ),
     trustedCliShaderHashes: _parseHashSet(decoded['trustedCliShaderHashes']),
+    metaKeyMode: FtermMetaKeyMode.fromWireName(decoded['metaKeyMode']),
   );
 
   static double _parseAudioVolume(Object? raw) => switch (raw) {
@@ -644,6 +680,7 @@ final class FtermPreferences {
     'cliFullPaneShaderMode': cliFullPaneShaderMode.wireName,
     if (trustedCliShaderHashes.isNotEmpty)
       'trustedCliShaderHashes': [...trustedCliShaderHashes]..sort(),
+    'metaKeyMode': metaKeyMode.wireName,
   });
 
   @override
@@ -677,7 +714,8 @@ final class FtermPreferences {
           other.localCliShaderPolicy == localCliShaderPolicy &&
           other.remoteCliShaderPolicy == remoteCliShaderPolicy &&
           other.cliFullPaneShaderMode == cliFullPaneShaderMode &&
-          setEquals(other.trustedCliShaderHashes, trustedCliShaderHashes);
+          setEquals(other.trustedCliShaderHashes, trustedCliShaderHashes) &&
+          other.metaKeyMode == metaKeyMode;
 
   @override
   int get hashCode => Object.hashAll(<Object?>[
@@ -709,6 +747,7 @@ final class FtermPreferences {
     remoteCliShaderPolicy,
     cliFullPaneShaderMode,
     Object.hashAllUnordered(trustedCliShaderHashes),
+    metaKeyMode,
   ]);
 }
 

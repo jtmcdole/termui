@@ -76,9 +76,15 @@ final class FtermShortcutDispatcher {
   bool get _isWeb => _isWebOverride ?? kIsWeb;
 
   /// Resolves the active [TerminalMetaKeyPolicy] for unhandled `Meta`/`Cmd`
-  /// combinations based on platform and runtime.
+  /// combinations based on `workspace.preferences.metaKeyMode`, platform, and
+  /// runtime.
   TerminalMetaKeyPolicy resolveMetaKeyPolicy() =>
-      (_isWeb || _isMacOs) ? .passThroughUnhandled : .claimWhenKittyActive;
+      switch (workspace.preferences.metaKeyMode) {
+        .passThrough => .passThroughUnhandled,
+        .kitty => .claimWhenKittyActive,
+        .auto =>
+          (_isWeb || _isMacOs) ? .passThroughUnhandled : .claimWhenKittyActive,
+      };
 
   /// Handles [event] with active [modifiers], returning
   /// [HostShortcutResult.handled] when consumed as an `fterm` shortcut or

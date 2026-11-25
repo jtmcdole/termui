@@ -278,6 +278,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ws.showPerfHud,
       ws.maxShaderFps,
       ws.preferences.macosOptionAsAlt,
+      ws.preferences.metaKeyMode,
       ws.preferences.fontSize,
       ws.updateViewModel.status,
       resolvedFontSize ?? _resolvedFontSize(context),

@@ -115,7 +115,7 @@ void main() {
     await loadCastFonts();
   });
 
-  test('resolveMetaKeyPolicy covers all 6 (OS × Web/Desktop) defaults', () {
+  test('resolveMetaKeyPolicy covers all 18 (OS × Web/Desktop × FtermMetaKeyMode) combinations', () {
     final repository = CastClientRepository(
       transport: WsClientTransport(
         serverUri: CastLaunchConfig.defaultServerUri,
@@ -141,25 +141,35 @@ void main() {
       TargetPlatform.windows,
     ];
     var checked = 0;
-    for (final platform in platforms) {
-      for (final isWeb in const [true, false]) {
-        final expected = (isWeb || platform == .macOS)
-            ? TerminalMetaKeyPolicy.passThroughUnhandled
-            : TerminalMetaKeyPolicy.claimWhenKittyActive;
-        final dispatcher = FtermShortcutDispatcher(
-          workspace: workspace,
-          platformOverride: platform,
-          isWebOverride: isWeb,
-        );
-        expect(
-          dispatcher.resolveMetaKeyPolicy(),
-          equals(expected),
-          reason: 'platform=$platform isWeb=$isWeb',
-        );
-        checked++;
+    for (final mode in FtermMetaKeyMode.values) {
+      workspace.updatePreferences(
+        workspace.preferences.copyWith(metaKeyMode: mode),
+      );
+      for (final platform in platforms) {
+        for (final isWeb in const [true, false]) {
+          final expected = switch (mode) {
+            .passThrough => TerminalMetaKeyPolicy.passThroughUnhandled,
+            .kitty => TerminalMetaKeyPolicy.claimWhenKittyActive,
+            .auto =>
+              (isWeb || platform == .macOS)
+                  ? TerminalMetaKeyPolicy.passThroughUnhandled
+                  : TerminalMetaKeyPolicy.claimWhenKittyActive,
+          };
+          final dispatcher = FtermShortcutDispatcher(
+            workspace: workspace,
+            platformOverride: platform,
+            isWebOverride: isWeb,
+          );
+          expect(
+            dispatcher.resolveMetaKeyPolicy(),
+            equals(expected),
+            reason: 'mode=$mode platform=$platform isWeb=$isWeb',
+          );
+          checked++;
+        }
       }
     }
-    expect(checked, equals(6));
+    expect(checked, equals(18));
   });
 
   group('End-to-end Meta shortcut passthrough (#426)', () {
@@ -227,6 +237,55 @@ void main() {
             for (final chunk in pty.writtenInputs) utf8.decode(chunk),
           ].join();
           expect(decoded, contains('\x1b[1;9D'));
+        },
+      ),
+    );
+
+    testWidgets(
+      'macOS Web live-switching metaKeyMode auto -> kitty emits \\x1b[1;9D in Kitty mode while staying ignored in legacy mode',
+      (tester) => _runMountedApp(
+        tester,
+        id: 'mac-live',
+        platform: .macOS,
+        isWeb: true,
+        body: (workspace, pty, _) async {
+          pty.emitRawAnsi('\x1b[>3u');
+          await settleCastApp(tester, cycles: 3);
+          pty.writtenInputs.clear();
+
+          // Default .auto on macOS Web passes through even in Kitty mode.
+          expect(
+            (await _sendChord(tester, const [.metaLeft], .arrowLeft)).$1,
+            isFalse,
+          );
+          expect(pty.writtenInputs, isEmpty);
+
+          // Live-switch .auto -> .kitty: Meta+ArrowLeft emits \x1b[1;9D.
+          workspace.updatePreferences(
+            workspace.preferences.copyWith(metaKeyMode: .kitty),
+          );
+          await settleCastApp(tester, cycles: 3);
+          pty.writtenInputs.clear();
+
+          expect(
+            (await _sendChord(tester, const [.metaLeft], .arrowLeft)).$1,
+            isTrue,
+          );
+          final kittyOutput = [
+            for (final chunk in pty.writtenInputs) utf8.decode(chunk),
+          ].join();
+          expect(kittyOutput, contains('\x1b[1;9D'));
+
+          // Pop back to legacy (\x1b[<u): .kitty still ignores legacy Meta chords.
+          pty.emitRawAnsi('\x1b[<u');
+          await settleCastApp(tester, cycles: 3);
+          pty.writtenInputs.clear();
+
+          expect(
+            (await _sendChord(tester, const [.metaLeft], .arrowLeft)).$1,
+            isFalse,
+          );
+          expect(pty.writtenInputs, isEmpty);
         },
       ),
     );
