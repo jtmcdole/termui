@@ -35,11 +35,20 @@ final class ShaderEditorView extends tui.StatelessWidget {
   /// Whether the editor pane currently owns keyboard focus.
   final bool focused;
 
+  /// Available viewport width in terminal columns.
+  final int viewportCols;
+
+  /// Available viewport height in terminal rows.
+  final int viewportRows;
+
   /// Optional callback invoked when the user confirms saving and closing.
   final void Function()? onConfirmSaveAndClose;
 
   /// Optional callback invoked when the user confirms discarding and closing.
   final void Function()? onConfirmDiscardAndClose;
+
+  /// Optional callback invoked when the user cancels close confirmation.
+  final void Function()? onCancelCloseConfirmation;
 
   /// Creates a [ShaderEditorView].
   const ShaderEditorView({
@@ -48,8 +57,11 @@ final class ShaderEditorView extends tui.StatelessWidget {
     required this.highlighter,
     required this.theme,
     this.focused = true,
+    this.viewportCols = 80,
+    this.viewportRows = 24,
     this.onConfirmSaveAndClose,
     this.onConfirmDiscardAndClose,
+    this.onCancelCloseConfirmation,
   });
 
   /// Returns the column width reserved for the line-number gutter given
@@ -59,9 +71,37 @@ final class ShaderEditorView extends tui.StatelessWidget {
     return digits + 3; // "<marker> <digits> "
   }
 
-  /// Returns the number of rows currently occupied by the diagnostics footer.
-  static int footerHeightForDiagnostics(int diagnosticCount) =>
-      math.min(maxFooterRows, math.max(0, diagnosticCount));
+  /// Whether the line-number gutter fits within [viewportCols] alongside at
+  /// least one column of code body.
+  static bool showGutterForViewport(int lineCount, int viewportCols) =>
+      viewportCols > gutterWidthForLines(lineCount);
+
+  /// Effective gutter column width rendered for [lineCount] and [viewportCols].
+  static int effectiveGutterWidth(int lineCount, int viewportCols) =>
+      showGutterForViewport(lineCount, viewportCols)
+      ? gutterWidthForLines(lineCount)
+      : 0;
+
+  /// Whether the 1-row hint ribbon is rendered for [viewportRows].
+  static bool showRibbonForViewport(int viewportRows) => viewportRows > 2;
+
+  /// Number of top chrome rows rendered above the code body for [viewportRows].
+  static int topChromeRowsForViewport(int viewportRows) =>
+      showRibbonForViewport(viewportRows) ? 2 : 1;
+
+  /// Returns the number of rows currently occupied by the diagnostics footer,
+  /// optionally clamped so the code body keeps at least 1 row inside
+  /// [viewportRows].
+  static int footerHeightForDiagnostics(
+    int diagnosticCount, {
+    int? viewportRows,
+  }) {
+    final desired = math.min(maxFooterRows, math.max(0, diagnosticCount));
+    if (viewportRows == null) return desired;
+    final reservedTop = topChromeRowsForViewport(viewportRows);
+    final maxFooter = math.max(0, viewportRows - reservedTop - 1);
+    return math.min(desired, maxFooter);
+  }
 
   @override
   tui.Widget build(tui.BuildContext context) {
@@ -70,51 +110,62 @@ final class ShaderEditorView extends tui.StatelessWidget {
       controller.diagnostics,
       palette,
     );
+    final showRibbon = showRibbonForViewport(viewportRows);
     final footerRows = footerHeightForDiagnostics(
       controller.diagnostics.length,
+      viewportRows: viewportRows,
+    );
+    final showGutter = showGutterForViewport(
+      controller.textController.value.lines.length,
+      viewportCols,
     );
 
     return tui.Column(<tui.Widget>[
       _EditorHeaderBar(
         controller: controller,
         palette: palette,
+        viewportCols: viewportCols,
         onConfirmSaveAndClose: onConfirmSaveAndClose,
         onConfirmDiscardAndClose: onConfirmDiscardAndClose,
+        onCancelCloseConfirmation: onCancelCloseConfirmation,
       ),
-      _EditorHintRibbon(controller: controller, palette: palette),
-      tui.Expanded(
-        child: tui.Row(<tui.Widget>[
-          _EditorGutter(controller: controller, palette: palette),
-          tui.Expanded(
-            child: tui.TextField(
-              controller: controller.textController,
-              multiline: true,
-              tabSize: 2,
-              focused:
-                  focused &&
-                  !controller.confirmingClose &&
-                  !controller.promptingSaveAs,
-              // Leave background null (bg == 0) so TerminalSurface applies
-              // previewBackgroundColorOverride and previewBackgroundOpacity,
-              // allowing background shaders to shine through in BG mode.
-              style: tui.Style(foreground: theme.foreground),
-              cursorStyle: tui.Style(
-                foreground: theme.cursorTextColor,
-                background: theme.cursorColor,
-              ),
-              selectionStyle: tui.Style(
-                foreground: palette.activeChipFg,
-                background: palette.activeChipBg,
-              ),
-              spanBuilder: (text, baseStyle) => highlighter.buildFieldSpan(
-                text,
-                baseStyle,
-                diagnostics: diagnosticSpans,
+      if (showRibbon)
+        _EditorHintRibbon(controller: controller, palette: palette),
+      if (viewportRows > 1)
+        tui.Expanded(
+          child: tui.Row(<tui.Widget>[
+            if (showGutter)
+              _EditorGutter(controller: controller, palette: palette),
+            tui.Expanded(
+              child: tui.TextField(
+                controller: controller.textController,
+                multiline: true,
+                tabSize: 2,
+                focused:
+                    focused &&
+                    !controller.confirmingClose &&
+                    !controller.promptingSaveAs,
+                // Leave background null (bg == 0) so TerminalSurface applies
+                // previewBackgroundColorOverride and previewBackgroundOpacity,
+                // allowing background shaders to shine through in BG mode.
+                style: tui.Style(foreground: theme.foreground),
+                cursorStyle: tui.Style(
+                  foreground: theme.cursorTextColor,
+                  background: theme.cursorColor,
+                ),
+                selectionStyle: tui.Style(
+                  foreground: palette.activeChipFg,
+                  background: palette.activeChipBg,
+                ),
+                spanBuilder: (text, baseStyle) => highlighter.buildFieldSpan(
+                  text,
+                  baseStyle,
+                  diagnostics: diagnosticSpans,
+                ),
               ),
             ),
-          ),
-        ], crossAxisAlignment: tui.CrossAxisAlignment.stretch),
-      ),
+          ], crossAxisAlignment: tui.CrossAxisAlignment.stretch),
+        ),
       if (footerRows > 0)
         _EditorDiagnosticsFooter(
           controller: controller,
@@ -250,6 +301,91 @@ final class _EditorChromePalette {
   );
 }
 
+final RegExp _controlWhitespace = RegExp(r'[\r\n\t]+');
+
+String _singleLine(String raw) => raw.replaceAll(_controlWhitespace, ' ');
+
+int _paintStyledText(
+  tui.Buffer buffer,
+  int startX,
+  int y,
+  int maxWidth,
+  int col,
+  String text, {
+  required int fg,
+  required int bg,
+  required int modifiers,
+  required int underlineColor,
+}) {
+  var x = col;
+  for (final ch in text.characters) {
+    final w = math.max(1, tui.graphemeWidth(ch));
+    if (x + w > maxWidth) break;
+    buffer.setAttributes(
+      startX + x,
+      y,
+      char: ch,
+      fg: fg,
+      bg: bg,
+      modifiers: modifiers,
+      underlineColor: underlineColor,
+    );
+    for (var pad = 1; pad < w; pad++) {
+      buffer.setAttributes(
+        startX + x + pad,
+        y,
+        char: '',
+        fg: fg,
+        bg: bg,
+        modifiers: modifiers,
+        underlineColor: underlineColor,
+      );
+    }
+    x += w;
+  }
+  return x;
+}
+
+int _paintSpanTree(
+  tui.Buffer buffer,
+  int startX,
+  int y,
+  int maxWidth,
+  int col,
+  tui.TextSpan span,
+  tui.Style inherited,
+) {
+  final style = span.style;
+  final effective = tui.Style(
+    foreground: style?.foreground ?? inherited.foreground,
+    background: style?.background ?? inherited.background,
+    modifiers: style != null
+        ? (inherited.modifiers | style.modifiers)
+        : inherited.modifiers,
+    underlineColor: style?.underlineColor ?? inherited.underlineColor,
+  );
+  var x = col;
+  if (span.text case final text? when text.isNotEmpty && x < maxWidth) {
+    x = _paintStyledText(
+      buffer,
+      startX,
+      y,
+      maxWidth,
+      x,
+      text,
+      fg: effective.foreground?.argb ?? 0,
+      bg: effective.background?.argb ?? 0,
+      modifiers: effective.modifiers,
+      underlineColor: effective.underlineColor?.argb ?? 0,
+    );
+  }
+  for (final child in span.children) {
+    if (x >= maxWidth) break;
+    x = _paintSpanTree(buffer, startX, y, maxWidth, x, child, effective);
+  }
+  return x;
+}
+
 final class _HitRange {
   final int startX;
   final int endX;
@@ -289,31 +425,27 @@ final class _ClickableStripElement extends tui.Element
   @override
   void performPaint(tui.Buffer buffer, tui.Offset offset) {
     final strip = widget as _ClickableStrip;
-    final fillStyle = tui.Style(background: strip.background);
+    final bgArgb = strip.background.argb;
     for (var x = 0; x < size.width; x++) {
       buffer.setAttributes(
         offset.dx + x,
         offset.dy,
         char: ' ',
         fg: 0,
-        bg: strip.background.argb,
+        bg: bgArgb,
         modifiers: tui.Modifier.none,
         underlineColor: 0,
       );
     }
-    final rich = tui.RichText(
-      text: tui.TextSpan(
-        style: fillStyle,
-        children: <tui.TextSpan>[strip.span],
-      ),
-      wrap: false,
-      maxLines: 1,
+    _paintSpanTree(
+      buffer,
+      offset.dx,
+      offset.dy,
+      size.width,
+      0,
+      strip.span,
+      tui.Style(background: strip.background),
     );
-    final el = rich.createElement();
-    el.mount(null);
-    el.layout(tui.BoxConstraints.tight(size));
-    el.paint(buffer, offset);
-    el.unmount();
   }
 
   @override
@@ -340,9 +472,10 @@ final class _StripBuilder {
   int _col = 0;
 
   void add(String text, tui.Style style, {void Function()? onTap}) {
+    final clean = _singleLine(text);
     final start = _col;
-    spans.add(tui.TextSpan(text: text, style: style));
-    _col += _displayWidth(text);
+    spans.add(tui.TextSpan(text: clean, style: style));
+    _col += _displayWidth(clean);
     if (onTap != null) {
       hits.add(_HitRange(start, _col, onTap));
     }
@@ -355,19 +488,40 @@ final class _StripBuilder {
     }
     return w;
   }
+
+  static String tailFit(String text, int maxCols) {
+    final clean = _singleLine(text);
+    if (maxCols <= 0) return '';
+    if (_displayWidth(clean) <= maxCols) return clean;
+    if (maxCols == 1) return '…';
+    final chars = clean.characters.toList(growable: false);
+    var width = 1; // leading '…'
+    var start = chars.length;
+    for (var i = chars.length - 1; i >= 0; i--) {
+      final w = math.max(1, tui.graphemeWidth(chars[i]));
+      if (width + w > maxCols) break;
+      width += w;
+      start = i;
+    }
+    return '…${chars.sublist(start).join()}';
+  }
 }
 
 final class _EditorHeaderBar extends tui.StatelessWidget {
   final ShaderEditorController controller;
   final _EditorChromePalette palette;
+  final int viewportCols;
   final void Function()? onConfirmSaveAndClose;
   final void Function()? onConfirmDiscardAndClose;
+  final void Function()? onCancelCloseConfirmation;
 
   const _EditorHeaderBar({
     required this.controller,
     required this.palette,
+    required this.viewportCols,
     this.onConfirmSaveAndClose,
     this.onConfirmDiscardAndClose,
+    this.onCancelCloseConfirmation,
   });
 
   @override
@@ -403,11 +557,7 @@ final class _EditorHeaderBar extends tui.StatelessWidget {
       background: palette.barBg,
     );
     b.add(' Unsaved changes in ${controller.shaderName}: ', warnStyle);
-    b.add(
-      '[Y: Save & Close]',
-      actionStyle,
-      onTap: () => unawaited(_saveAndClose()),
-    );
+    b.add('[Y: Save & Close]', actionStyle, onTap: onConfirmSaveAndClose);
     b.add(' ', normalStyle);
     b.add(
       '[N: Discard]',
@@ -417,23 +567,19 @@ final class _EditorHeaderBar extends tui.StatelessWidget {
         modifiers: tui.Modifier.bold,
       ),
       onTap: () {
-        controller.cancelCloseConfirmation();
-        onConfirmDiscardAndClose?.call();
+        if (onConfirmDiscardAndClose != null) {
+          onConfirmDiscardAndClose!();
+        } else {
+          controller.cancelCloseConfirmation();
+        }
       },
     );
     b.add(' ', normalStyle);
     b.add(
       '[Esc: Cancel]',
       normalStyle,
-      onTap: controller.cancelCloseConfirmation,
+      onTap: onCancelCloseConfirmation ?? controller.cancelCloseConfirmation,
     );
-  }
-
-  Future<void> _saveAndClose() async {
-    final saved = await controller.save();
-    if (saved) {
-      onConfirmSaveAndClose?.call();
-    }
   }
 
   void _buildSaveAsRow(_StripBuilder b) {
@@ -451,11 +597,32 @@ final class _EditorHeaderBar extends tui.StatelessWidget {
       foreground: palette.fg,
       background: palette.barBg,
     );
-    b.add(' Save As: ', labelStyle);
-    b.add(' ${controller.saveAsDraftName}█ ', inputStyle);
+    final err = controller.saveAsError;
+    final compactButtons = err != null && viewportCols < 90;
+    final enterLabel = compactButtons ? '[Enter]' : '[Enter: Save]';
+    final escLabel = compactButtons ? '[Esc]' : '[Esc: Cancel]';
+    final prefix = ' Save As: ';
+    final fixedChromeWidth =
+        prefix.length + 3 + 1 + enterLabel.length + 1 + escLabel.length;
+    final reservedErrorCols = err == null
+        ? 0
+        : math.min(
+            _StripBuilder._displayWidth(' $err'),
+            math.max(0, viewportCols - 32),
+          );
+    final maxDraftCols = math.max(
+      4,
+      viewportCols - fixedChromeWidth - reservedErrorCols,
+    );
+    final visibleDraft = _StripBuilder.tailFit(
+      controller.saveAsDraftName,
+      maxDraftCols,
+    );
+    b.add(prefix, labelStyle);
+    b.add(' $visibleDraft█ ', inputStyle);
     b.add(' ', normalStyle);
     b.add(
-      '[Enter: Save]',
+      enterLabel,
       tui.Style(
         foreground: palette.okFg,
         background: palette.barBg,
@@ -464,10 +631,10 @@ final class _EditorHeaderBar extends tui.StatelessWidget {
       onTap: () => unawaited(controller.confirmSaveAs()),
     );
     b.add(' ', normalStyle);
-    b.add('[Esc: Cancel]', normalStyle, onTap: controller.cancelSaveAs);
-    if (controller.saveAsError case final err?) {
+    b.add(escLabel, normalStyle, onTap: controller.cancelSaveAs);
+    if (err != null) {
       b.add(
-        '  $err',
+        compactButtons ? ' $err' : '  $err',
         tui.Style(
           foreground: palette.errorFg,
           background: palette.barBg,
@@ -591,6 +758,21 @@ final class _EditorHintRibbon extends tui.StatelessWidget {
   tui.Widget build(tui.BuildContext context) {
     final b = _StripBuilder();
     final bg = palette.ribbonBg;
+    if (controller.promptingSaveAs && controller.saveAsError != null) {
+      b.add(
+        ' ${controller.saveAsError} ',
+        tui.Style(
+          foreground: palette.errorFg,
+          background: bg,
+          modifiers: tui.Modifier.bold,
+        ),
+      );
+      return _ClickableStrip(
+        span: tui.TextSpan(children: b.spans),
+        background: bg,
+        hits: b.hits,
+      );
+    }
     final stageText = controller.hasExplicitStageDirective
         ? ' [F2] @fterm-stage:${controller.detectedStageHint.shortLabel}'
         : ' [F2] Insert @fterm-stage';
@@ -892,38 +1074,48 @@ final class _EditorDiagnosticsFooterElement extends tui.Element
       ShaderDiagnosticSeverity.info => 'i',
     };
     final loc = diag.line == null ? '?:?' : '${diag.line}:${diag.column ?? 1}';
-    final hintSuffix = diag.hint == null ? '' : '  Hint: ${diag.hint}';
-    final rich = tui.RichText(
-      wrap: false,
-      maxLines: 1,
-      text: tui.TextSpan(
-        style: tui.Style(foreground: textFg, background: bg),
-        children: <tui.TextSpan>[
-          tui.TextSpan(
-            text: ' $icon ',
-            style: tui.Style(
-              foreground: iconFg,
-              background: bg,
-              modifiers: tui.Modifier.bold,
-            ),
-          ),
-          tui.TextSpan(
-            text: '$loc ',
-            style: tui.Style(
-              foreground: isSelected ? palette.activeChipFg : palette.accentFg,
-              background: bg,
-              modifiers: tui.Modifier.bold,
-            ),
-          ),
-          tui.TextSpan(text: '${diag.message}$hintSuffix'),
-        ],
-      ),
+    final message = _singleLine(diag.message);
+    final hintSuffix = diag.hint == null
+        ? ''
+        : '  Hint: ${_singleLine(diag.hint!)}';
+    final bgArgb = bg.argb;
+    final locFg = isSelected ? palette.activeChipFg : palette.accentFg;
+    var x = _paintStyledText(
+      buffer,
+      rowOffset.dx,
+      rowOffset.dy,
+      size.width,
+      0,
+      ' $icon ',
+      fg: iconFg.argb,
+      bg: bgArgb,
+      modifiers: tui.Modifier.bold,
+      underlineColor: 0,
     );
-    final el = rich.createElement();
-    el.mount(null);
-    el.layout(tui.BoxConstraints.tight(tui.Size(size.width, 1)));
-    el.paint(buffer, rowOffset);
-    el.unmount();
+    x = _paintStyledText(
+      buffer,
+      rowOffset.dx,
+      rowOffset.dy,
+      size.width,
+      x,
+      '$loc ',
+      fg: locFg.argb,
+      bg: bgArgb,
+      modifiers: tui.Modifier.bold,
+      underlineColor: 0,
+    );
+    _paintStyledText(
+      buffer,
+      rowOffset.dx,
+      rowOffset.dy,
+      size.width,
+      x,
+      '$message$hintSuffix',
+      fg: textFg.argb,
+      bg: bgArgb,
+      modifiers: tui.Modifier.none,
+      underlineColor: 0,
+    );
   }
 
   @override

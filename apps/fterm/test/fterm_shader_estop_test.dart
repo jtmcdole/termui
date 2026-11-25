@@ -417,17 +417,62 @@ void main() {
       expect(watchdog.isQuarantined('foreground:custom_fg.glsl'), isFalse);
 
       // Editor draft shader quarantine also escalates to E-Stop.
-      final draftId = 'editor:${pane.paneId}';
-      watchdog.setActiveCustomShaders(<String>[draftId], source: 'host');
-      final draftFrames = watchdog.warmupFramesRemainingFor(draftId) + 3;
+      await ws.openShaderEditorTab();
+      final editorPane = ws.focusedEditorPane!;
+      final draftId = editorPane.previewPassId;
+      editorPane.gpuFrameWatchdog.setActiveCustomShaders(<String>[
+        draftId,
+      ], source: 'host');
+      final draftFrames =
+          editorPane.gpuFrameWatchdog.warmupFramesRemainingFor(draftId) + 3;
       for (var i = 0; i < draftFrames; i++) {
-        watchdog.recordShaderFrameDuration(
+        editorPane.gpuFrameWatchdog.recordShaderFrameDuration(
           draftId,
           const Duration(milliseconds: 60),
         );
       }
       expect(ws.shadersEmergencyStopped, isTrue);
       expect(ws.shaderEmergencyStopReason, contains(draftId));
+    });
+
+    test('M4: CLI shader using background:/foreground:/editor:/draft: prefixes stays pane-quarantined instead of tripping global E-Stop', () async {
+      final env = _createWorkspace();
+      final ws = env.workspace;
+      addTearDown(ws.dispose);
+
+      ws.setLocalCliShaderPolicy(CliShaderPolicy.allowLocalCustomGlsl);
+      await ws.openLocalShellTab();
+      final pane = ws.focusedPane!;
+      for (final spoofedId in const <String>[
+        'background:spoofed_cli',
+        'foreground:spoofed_cli',
+        'editor:spoofed_cli',
+        'draft:spoofed_cli',
+      ]) {
+        pane.cliShaderState.handleShaderEvent(
+          TerminalShaderDefineEvent(
+            id: spoofedId,
+            glslSource: _validCustomGlsl,
+          ),
+        );
+        pane.gpuFrameWatchdog.setActiveCustomShaders(<String>[
+          spoofedId,
+        ], source: 'cli');
+        final frames =
+            pane.gpuFrameWatchdog.warmupFramesRemainingFor(spoofedId) + 3;
+        for (var i = 0; i < frames; i++) {
+          pane.gpuFrameWatchdog.recordShaderFrameDuration(
+            spoofedId,
+            const Duration(milliseconds: 50),
+          );
+        }
+        expect(
+          ws.shadersEmergencyStopped,
+          isFalse,
+          reason: 'CLI shader "$spoofedId" must not trip global E-Stop',
+        );
+        expect(pane.gpuFrameWatchdog.isQuarantined(spoofedId), isTrue);
+      }
     });
 
     test(
@@ -628,6 +673,90 @@ void main() {
       );
       expect(ws.isLeaderArmed, isFalse);
       expect(ws.shadersEmergencyStopped, isFalse);
+    });
+
+    test(
+      r'M5: Ctrl+\ key repeat inside overlay keeps leader armed for 0',
+      () async {
+        final env = _createWorkspace();
+        final ws = env.workspace;
+        addTearDown(ws.dispose);
+
+        await ws.openLocalShellTab();
+        ws.setOverlay(FtermOverlay.settings);
+        final dispatcher = FtermShortcutDispatcher(
+          workspace: ws,
+          platformOverride: TargetPlatform.linux,
+          isWebOverride: false,
+        );
+
+        const leaderRepeat = KeyRepeatEvent(
+          physicalKey: PhysicalKeyboardKey.backslash,
+          logicalKey: LogicalKeyboardKey.backslash,
+          timeStamp: Duration(milliseconds: 400),
+        );
+        expect(
+          dispatcher.handleHostShortcut(leaderDown, ctrlOnly),
+          equals(HostShortcutResult.handled),
+        );
+        expect(
+          dispatcher.handleHostShortcut(leaderRepeat, ctrlOnly),
+          equals(HostShortcutResult.handled),
+        );
+        expect(ws.isLeaderArmed, isTrue);
+
+        expect(
+          dispatcher.handleHostShortcut(zeroDown, const <ev.Modifier>{}),
+          equals(HostShortcutResult.handled),
+        );
+        expect(ws.isLeaderArmed, isFalse);
+        expect(ws.shadersEmergencyStopped, isTrue);
+      },
+    );
+
+    test('M8: macOS Cmd+S saves focused shader editor and Cmd+Shift+S opens Save As', () async {
+      final env = _createWorkspace();
+      final ws = env.workspace;
+      addTearDown(ws.dispose);
+
+      await ws.openLocalShellTab();
+      final dispatcher = FtermShortcutDispatcher(
+        workspace: ws,
+        platformOverride: TargetPlatform.macOS,
+        isWebOverride: false,
+      );
+      const keySDown = KeyDownEvent(
+        physicalKey: PhysicalKeyboardKey.keyS,
+        logicalKey: LogicalKeyboardKey.keyS,
+        timeStamp: Duration.zero,
+      );
+      const cmdOnly = <ev.Modifier>{ev.Modifier.meta};
+      const cmdShift = <ev.Modifier>{ev.Modifier.meta, ev.Modifier.shift};
+
+      // On non-editor pane, Cmd+S is unhandled.
+      expect(
+        dispatcher.handleHostShortcut(keySDown, cmdOnly),
+        equals(HostShortcutResult.unhandled),
+      );
+
+      // On focused shader editor pane, Cmd+S saves and Cmd+Shift+S opens Save As.
+      await ws.openShaderEditorTab();
+      final editor = ws.focusedEditorPane!;
+      editor.controller.textController.text = _validCustomGlsl;
+      expect(editor.isDirty, isTrue);
+
+      expect(
+        dispatcher.handleHostShortcut(keySDown, cmdOnly),
+        equals(HostShortcutResult.handled),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(editor.isDirty, isFalse);
+
+      expect(
+        dispatcher.handleHostShortcut(keySDown, cmdShift),
+        equals(HostShortcutResult.handled),
+      );
+      expect(editor.controller.promptingSaveAs, isTrue);
     });
   });
 }

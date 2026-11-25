@@ -6,7 +6,8 @@ import 'dart:typed_data';
 import 'dart:ui' as ui show AppExitType;
 
 import 'package:clock/clock.dart';
-import 'package:flutter/foundation.dart' show ChangeNotifier, listEquals;
+import 'package:flutter/foundation.dart'
+    show ChangeNotifier, VoidCallback, listEquals;
 import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, ServicesBinding;
 import 'package:path/path.dart' as p;
@@ -255,6 +256,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final Map<String, ShaderEditorPane> _editorPanes = {};
   late final Map<String, ShaderEditorPane> _editorPanesView =
       UnmodifiableMapView<String, ShaderEditorPane>(_editorPanes);
+  final Map<String, VoidCallback> _editorListeners = <String, VoidCallback>{};
+  final Set<String> _pendingEditorShaderNames = <String>{};
   int _untitledShaderCounter = 0;
   final List<SessionSummary> _remoteDirectorySessions = [];
   final Set<SessionId> _ownedSharedSessionIds = {};
@@ -1286,11 +1289,19 @@ final class FtermWorkspaceController extends ChangeNotifier {
     final activeEditors = [..._editorPanes.values];
     _panes.clear();
     _editorPanes.clear();
+    _pendingEditorShaderNames.clear();
     _tabs.clear();
     _ownedSharedSessionIds.clear();
     _activeTabIndex = 0;
     for (final editor in activeEditors) {
-      editor.dispose();
+      _disposeEditorPane(editor);
+    }
+    if (activeEditors.isNotEmpty) {
+      try {
+        await _syncActiveShaders().timeout(const Duration(seconds: 1));
+      } on TimeoutException {
+        // Best-effort GPU handle teardown before update swap.
+      }
     }
     try {
       await Future.wait([
@@ -1686,34 +1697,43 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       pathOrKey: trimmedPath,
       clonePreset: clonePreset,
     );
-    if (_disposed || spec == null) return null;
-    if (trimmedPath != null && trimmedPath.isNotEmpty) {
-      final existing = _findExistingEditorPane(trimmedPath);
-      if (existing != null) {
-        focusPane(existing.paneId);
-        _activeOverlay = FtermOverlay.none;
-        _notifyChromeChanged();
-        return _tabs[existing.tabIndex].tabId;
+    final reservedName = spec != null && spec.sourcePath == null
+        ? spec.shaderName
+        : null;
+    try {
+      if (_disposed || spec == null) return null;
+      if (trimmedPath != null && trimmedPath.isNotEmpty) {
+        final existing = _findExistingEditorPane(trimmedPath);
+        if (existing != null) {
+          focusPane(existing.paneId);
+          _activeOverlay = FtermOverlay.none;
+          _notifyChromeChanged();
+          return _tabs[existing.tabIndex].tabId;
+        }
+      }
+
+      final paneId = _allocatePaneId();
+      final editor = _createShaderEditorPane(
+        paneId: paneId,
+        shaderName: spec.shaderName,
+        sourcePath: spec.sourcePath,
+        initialSource: spec.initialSource,
+      );
+      _editorPanes[paneId] = editor;
+      final tabId = _allocateTabId();
+      _tabs.add(
+        FtermTabState(tabId: tabId, splitTree: SplitTreeModel.single(paneId)),
+      );
+      _activeTabIndex = _tabs.length - 1;
+      _syncFocusedPaneStates();
+      _activeOverlay = FtermOverlay.none;
+      _notifyChromeChanged();
+      return tabId;
+    } finally {
+      if (reservedName != null) {
+        _pendingEditorShaderNames.remove(reservedName);
       }
     }
-
-    final paneId = _allocatePaneId();
-    final editor = _createShaderEditorPane(
-      paneId: paneId,
-      shaderName: spec.shaderName,
-      sourcePath: spec.sourcePath,
-      initialSource: spec.initialSource,
-    );
-    _editorPanes[paneId] = editor;
-    final tabId = _allocateTabId();
-    _tabs.add(
-      FtermTabState(tabId: tabId, splitTree: SplitTreeModel.single(paneId)),
-    );
-    _activeTabIndex = _tabs.length - 1;
-    _syncFocusedPaneStates();
-    _activeOverlay = FtermOverlay.none;
-    _notifyChromeChanged();
-    return tabId;
   }
 
   /// Persists the open shader editor pane [paneId] via [shaderProfileStore]
@@ -1725,22 +1745,22 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     return editor.controller.save();
   }
 
+  static String? _canonicalShaderKey(String? raw, String? shadersDir) {
+    final trimmed = raw?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    if (shadersDir != null && !p.isAbsolute(trimmed)) {
+      return p.normalize(p.join(shadersDir, trimmed));
+    }
+    return p.normalize(trimmed);
+  }
+
   ({int tabIndex, String paneId})? _findExistingEditorPane(String pathOrKey) {
-    final targetBase = p.basename(pathOrKey);
     final shadersDir = _shaderProfileStore.shadersDirectoryPath;
+    final targetKey = _canonicalShaderKey(pathOrKey, shadersDir);
+    if (targetKey == null) return null;
     for (final editor in _editorPanes.values) {
-      final existingPath = editor.sourcePath;
-      final resolvedExisting =
-          existingPath != null &&
-              shadersDir != null &&
-              !p.isAbsolute(existingPath)
-          ? p.join(shadersDir, existingPath)
-          : existingPath;
-      final matchesPath =
-          existingPath == pathOrKey || resolvedExisting == pathOrKey;
-      final matchesUntitled =
-          existingPath == null && editor.shaderName == targetBase;
-      if (!matchesPath && !matchesUntitled) continue;
+      final existingKey = _canonicalShaderKey(editor.sourcePath, shadersDir);
+      if (existingKey == null || !p.equals(existingKey, targetKey)) continue;
       final tabIndex = _findTabIndexContainingPane(editor.paneId);
       if (tabIndex >= 0) {
         return (tabIndex: tabIndex, paneId: editor.paneId);
@@ -1794,15 +1814,22 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     final usedNames = <String>{
       for (final editor in _editorPanes.values) editor.shaderName,
       for (final path in _availableCustomShaders) p.basename(path),
+      ..._pendingEditorShaderNames,
     };
     if (prefix != 'shader') {
       final direct = '$prefix.glsl';
-      if (!usedNames.contains(direct)) return direct;
+      if (!usedNames.contains(direct)) {
+        _pendingEditorShaderNames.add(direct);
+        return direct;
+      }
     }
     while (true) {
       final index = ++_untitledShaderCounter;
       final candidate = '${prefix}_$index.glsl';
-      if (!usedNames.contains(candidate)) return candidate;
+      if (!usedNames.contains(candidate)) {
+        _pendingEditorShaderNames.add(candidate);
+        return candidate;
+      }
     }
   }
 
@@ -1845,22 +1872,40 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     var wasDirty = controller.isDirty;
     var lastMode = controller.previewMode;
     var lastName = controller.shaderName;
-    controller.addListener(() {
+    var hadPreviewPass = editor.activePreviewPassSpec != null;
+    void listener() {
       if (_disposed) return;
       final dirtyChanged = controller.isDirty != wasDirty;
       final modeChanged = controller.previewMode != lastMode;
       final nameChanged = controller.shaderName != lastName;
+      final hasPreviewPass = editor.activePreviewPassSpec != null;
+      final previewPassCleared = hadPreviewPass && !hasPreviewPass;
       wasDirty = controller.isDirty;
       lastMode = controller.previewMode;
       lastName = controller.shaderName;
-      if (modeChanged &&
-          controller.previewMode == ShaderEditorPreviewMode.off) {
+      hadPreviewPass = hasPreviewPass;
+      if ((modeChanged &&
+              controller.previewMode == ShaderEditorPreviewMode.off) ||
+          previewPassCleared) {
         unawaited(_syncActiveShaders());
       }
       if (dirtyChanged || nameChanged) {
         _notifyChromeChanged();
       }
-    });
+    }
+
+    _editorListeners[editor.paneId] = listener;
+    controller.addListener(listener);
+  }
+
+  void _disposeEditorPane(ShaderEditorPane editor) {
+    final listener = _editorListeners.remove(editor.paneId);
+    if (listener != null) {
+      editor.controller.removeListener(listener);
+    }
+    editor.dispose();
+    editor.gpuFrameWatchdog.dispose();
+    editor.controller.dispose();
   }
 
   Future<List<ShaderDiagnostic>> _compileEditorDraft(
@@ -1886,11 +1931,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
   bool _isExternalShaderPath(String? sourcePath) {
     final trimmed = sourcePath?.trim();
-    if (trimmed == null || trimmed.isEmpty || !p.isAbsolute(trimmed)) {
-      return false;
+    if (trimmed == null || trimmed.isEmpty) return false;
+    if (!p.isAbsolute(trimmed)) {
+      return trimmed.contains('/') || trimmed.contains(r'\');
     }
     final shadersDir = _shaderProfileStore.shadersDirectoryPath;
-    return shadersDir == null || !p.isWithin(shadersDir, trimmed);
+    if (shadersDir == null) return true;
+    final resolvedFile = resolveCanonicalShaderPath(trimmed);
+    final resolvedDir = resolveCanonicalShaderPath(shadersDir);
+    return !p.equals(p.dirname(resolvedFile), resolvedDir);
   }
 
   Future<bool> _persistEditorShader(
@@ -2085,11 +2134,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _cancelPendingSpawnsForPane(targetPaneId);
     final removedPane = _panes.remove(targetPaneId);
     final removedEditor = _editorPanes.remove(targetPaneId);
-    final hadEditorPreview =
-        removedEditor != null &&
-        (removedEditor.activePreviewPassSpec != null ||
-            _shaderController.handleForPass(removedEditor.previewPassId) !=
-                null);
     final nextTree = tab.splitTree.closePane(targetPaneId);
     if (nextTree == null) {
       _removeTabAt(_tabs.indexOf(tab));
@@ -2103,9 +2147,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _syncFocusedPaneStates();
     _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
-    removedEditor?.dispose();
-    if (hadEditorPreview && !_disposed) {
-      unawaited(_syncActiveShaders());
+    if (removedEditor != null) {
+      _disposeEditorPane(removedEditor);
+      if (!_disposed) {
+        unawaited(_syncActiveShaders());
+      }
     }
     if (removedPane != null) {
       await removedPane.dispose(disposePort: true);
@@ -3220,13 +3266,38 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
   Future<void> _syncActiveShaders() async {
     if (_disposed) return;
-    await _shaderController.syncConfig(
-      _buildSyncShaderConfig(),
-      sourceLoader: _loadShaderSourceWithCli,
-    );
+    for (var attempt = 0; attempt < 4 && !_disposed; attempt++) {
+      final config = _buildSyncShaderConfig();
+      await _shaderController.syncConfig(
+        config,
+        sourceLoader: _loadShaderSourceWithCli,
+      );
+      if (_disposed) return;
+      if (_matchesShaderPassSet(config, _buildSyncShaderConfig())) {
+        break;
+      }
+    }
     if (_disposed) return;
     _syncShaderCompileBanner();
     _notifyChromeChanged();
+  }
+
+  static bool _matchesShaderPassSet(
+    TerminalShaderConfig a,
+    TerminalShaderConfig b,
+  ) {
+    if (a.enabled != b.enabled ||
+        a.backgroundPasses.length != b.backgroundPasses.length ||
+        a.foregroundPasses.length != b.foregroundPasses.length) {
+      return false;
+    }
+    for (var i = 0; i < a.backgroundPasses.length; i++) {
+      if (a.backgroundPasses[i].id != b.backgroundPasses[i].id) return false;
+    }
+    for (var i = 0; i < a.foregroundPasses.length; i++) {
+      if (a.foregroundPasses[i].id != b.foregroundPasses[i].id) return false;
+    }
+    return true;
   }
 
   Future<void> _loadPersistedWallpaper(String pathOrKey) async {
@@ -3560,7 +3631,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     String reason,
   ) {
     if (_disposed) return;
-    if (_isUserOrDraftShaderId(shaderId)) {
+    if (_isUserOrDraftShaderId(paneId, shaderId)) {
       triggerShaderEmergencyStop(
         reason: 'Shader "$shaderId" quarantined: $reason',
       );
@@ -3569,13 +3640,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _setStatusBanner('Quarantined CLI shader "$shaderId": $reason');
   }
 
-  bool _isUserOrDraftShaderId(String shaderId) =>
-      shaderId.startsWith('background:') ||
-      shaderId.startsWith('foreground:') ||
-      shaderId.startsWith('editor:') ||
-      shaderId.startsWith('draft:') ||
-      _activeShaderConfig.backgroundPasses.any((p) => p.id == shaderId) ||
-      _activeShaderConfig.foregroundPasses.any((p) => p.id == shaderId);
+  bool _isUserOrDraftShaderId(String paneId, String shaderId) {
+    final pane = _panes[paneId];
+    if (pane != null && pane.cliShaderState.hasCustomShader(shaderId)) {
+      return false;
+    }
+    return _activeShaderConfig.backgroundPasses.any((p) => p.id == shaderId) ||
+        _activeShaderConfig.foregroundPasses.any((p) => p.id == shaderId) ||
+        _editorPanes.values.any((e) => e.previewPassId == shaderId);
+  }
 
   /// Cancels throttled timers and flushes settings immediately (e.g., on pause).
   void flushPendingSettings() {
@@ -4291,10 +4364,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     final activeEditors = [..._editorPanes.values];
     _panes.clear();
     _editorPanes.clear();
+    _pendingEditorShaderNames.clear();
     _tabs.clear();
     _ownedSharedSessionIds.clear();
     for (final editor in activeEditors) {
-      editor.dispose();
+      _disposeEditorPane(editor);
     }
     await Future.wait([
       _disposePanesAndHost(activePanes),

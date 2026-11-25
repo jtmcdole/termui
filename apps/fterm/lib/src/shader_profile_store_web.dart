@@ -2,9 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:path/path.dart' as p;
 import 'package:web/web.dart' as web;
 
 import 'shader_profile_store.dart';
+
+/// Canonicalizes [rawPath] lexically on Web where filesystem symlinks do not
+/// exist.
+String resolveCanonicalShaderPath(String rawPath) => p.canonicalize(rawPath);
 
 /// Maximum raw wallpaper byte size persisted in browser `localStorage`
 /// (`2 MiB`, keeping base64 encoding safely within typical `5 MiB` origin

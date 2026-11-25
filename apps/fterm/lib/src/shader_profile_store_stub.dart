@@ -1,10 +1,15 @@
 import 'dart:typed_data';
 
+import 'package:path/path.dart' as p;
+
 import 'shader_profile_store.dart';
 
 /// Creates the fallback no-op [ShaderProfileStore] for unsupported platforms.
 ShaderProfileStore createPlatformShaderProfileStore() =>
     const _NoopShaderProfileStore();
+
+/// Canonicalizes [rawPath] lexically on unsupported platforms.
+String resolveCanonicalShaderPath(String rawPath) => p.canonicalize(rawPath);
 
 final class _NoopShaderProfileStore implements ShaderProfileStore {
   const _NoopShaderProfileStore();
