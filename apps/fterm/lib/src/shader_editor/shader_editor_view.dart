@@ -66,8 +66,6 @@ final class ShaderEditorView extends tui.StatelessWidget {
   @override
   tui.Widget build(tui.BuildContext context) {
     final palette = _EditorChromePalette.fromTheme(theme);
-    final effectiveBg =
-        controller.previewBackgroundColorOverride ?? theme.background;
     final diagnosticSpans = _toTextDiagnosticSpans(
       controller.diagnostics,
       palette,
@@ -93,10 +91,10 @@ final class ShaderEditorView extends tui.StatelessWidget {
               multiline: true,
               tabSize: 2,
               focused: focused && !controller.confirmingClose,
-              style: tui.Style(
-                foreground: theme.foreground,
-                background: effectiveBg,
-              ),
+              // Leave background null (bg == 0) so TerminalSurface applies
+              // previewBackgroundColorOverride and previewBackgroundOpacity,
+              // allowing background shaders to shine through in BG mode.
+              style: tui.Style(foreground: theme.foreground),
               cursorStyle: tui.Style(
                 foreground: theme.cursorTextColor,
                 background: theme.cursorColor,
@@ -649,6 +647,8 @@ final class _EditorGutterElement extends tui.Element {
     final severityByLine = _severityByLine(ctrl.diagnostics);
     final digitsWidth = math.max(2, size.width - 3);
 
+    final bgPreviewActive =
+        ctrl.previewMode == ShaderEditorPreviewMode.background;
     for (var y = 0; y < size.height; y++) {
       final lineIdx = scroll + y;
       final rowY = offset.dy + y;
@@ -662,6 +662,7 @@ final class _EditorGutterElement extends tui.Element {
         digitsWidth,
         severityByLine[lineIdx + 1],
         palette,
+        bgArgb: bgPreviewActive ? 0 : palette.gutterBg.argb,
       );
     }
   }
@@ -675,15 +676,16 @@ final class _EditorGutterElement extends tui.Element {
     int cursorLine,
     int digitsWidth,
     ShaderDiagnosticSeverity? severity,
-    _EditorChromePalette palette,
-  ) {
+    _EditorChromePalette palette, {
+    required int bgArgb,
+  }) {
     for (var x = 0; x < size.width; x++) {
       buffer.setAttributes(
         startX + x,
         rowY,
         char: ' ',
         fg: palette.mutedFg.argb,
-        bg: palette.gutterBg.argb,
+        bg: bgArgb,
         modifiers: tui.Modifier.none,
         underlineColor: 0,
       );
@@ -701,7 +703,7 @@ final class _EditorGutterElement extends tui.Element {
         rowY,
         char: marker,
         fg: palette.colorForSeverity(severity).argb,
-        bg: palette.gutterBg.argb,
+        bg: bgArgb,
         modifiers: tui.Modifier.bold,
         underlineColor: 0,
       );
@@ -717,7 +719,7 @@ final class _EditorGutterElement extends tui.Element {
         rowY,
         char: numText[i],
         fg: fg.argb,
-        bg: palette.gutterBg.argb,
+        bg: bgArgb,
         modifiers: mods,
         underlineColor: 0,
       );

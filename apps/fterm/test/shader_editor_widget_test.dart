@@ -633,5 +633,34 @@ void main() {
       expect(bufferChanges, greaterThan(0));
       pane.bufferListenable.removeListener(onBufferChange);
     });
+
+    test('uses default cell background (0) in code body and gutter in BG mode so TerminalSurface backgroundOpacity reveals background shaders', () {
+      const source =
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  fragColor = vec4(1.0);\n'
+          '}';
+      final controller = ShaderEditorController(
+        shaderName: 'bg_preview.glsl',
+        initialSource: source,
+        initialPreviewMode: ShaderEditorPreviewMode.background,
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'bg-alpha',
+        controller: controller,
+        initialCols: 80,
+        initialRows: 12,
+      );
+      addTearDown(pane.dispose);
+
+      final buf = pane.readDisplayBuffer();
+      final gutterW = ShaderEditorView.gutterWidthForLines(3);
+      // Code cells (row 3 = line 2, non-cursor row) must use bg == 0 so
+      // TerminalSurface applies previewBackgroundOpacity instead of painting
+      // an opaque 0xFF cell rect over the background shader.
+      expect(buf.getBackground(gutterW + 2, 3), equals(0));
+      expect(buf.getBackground(gutterW + 30, 3), equals(0));
+      // Gutter cell in BG preview mode also uses default bg == 0.
+      expect(buf.getBackground(1, 3), equals(0));
+    });
   });
 }
