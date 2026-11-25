@@ -1071,6 +1071,86 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       },
     );
 
+    test('ShadertoyGlslShim.lint detects all warning and info rules with exact spans', () {
+      // 1. FG shader ignoring iChannel0 + discard; + / 0.0 + missing @fterm-stage
+      const fgHazards = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  // discard; and 1.0 / 0.0 in comments must be ignored
+  float safe = 1.0 / 0.5 + 1.0 / 0.05 + 1.0 / 10.0;
+  float bad = safe / 0.0;
+  if (bad > 1.0) discard;
+  fragColor = vec4(1.0);
+}
+''';
+      final fgSourceFile = SourceFile.fromString(fgHazards);
+      final fgDiags = ShadertoyGlslShim.lint(
+        fgHazards,
+        stage: TerminalShaderStage.foreground,
+      );
+
+      final infoDiag = fgDiags.where(
+        (d) => d.severity == ShaderDiagnosticSeverity.info,
+      );
+      expect(infoDiag, hasLength(1));
+      expect(infoDiag.single.hint, equals('// @fterm-stage: bg'));
+
+      final warnings = fgDiags
+          .where((d) => d.severity == ShaderDiagnosticSeverity.warning)
+          .toList();
+      expect(warnings, hasLength(3));
+
+      final missingChannel0 = warnings.firstWhere(
+        (d) => d.message.contains('iChannel0'),
+      );
+      expect(
+        missingChannel0.toSourceSpan(fgSourceFile)!.text,
+        equals('mainImage'),
+      );
+
+      final divZero = warnings.firstWhere((d) => d.message.contains('zero'));
+      expect(divZero.line, equals(4));
+      expect(divZero.toSourceSpan(fgSourceFile)!.text, equals('/ 0.0'));
+
+      final discardWarn = warnings.firstWhere(
+        (d) => d.message.contains('discard;'),
+      );
+      expect(discardWarn.line, equals(5));
+      expect(discardWarn.toSourceSpan(fgSourceFile)!.text, equals('discard;'));
+
+      // 2. BG first pass reading iChannel0 with explicit @fterm-stage (no info diagnostic).
+      const bgReadsChannel0 = '''
+// @fterm-stage: bg
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = texture(iChannel0, fragCoord / max(iResolution.xy, vec2(1.0)));
+}
+''';
+      final bgDiags = ShadertoyGlslShim.lint(
+        bgReadsChannel0,
+        stage: TerminalShaderStage.background,
+      );
+      expect(bgDiags, hasLength(1));
+      expect(bgDiags.single.severity, ShaderDiagnosticSeverity.warning);
+      expect(bgDiags.single.line, equals(3));
+      expect(
+        bgDiags.single
+            .toSourceSpan(SourceFile.fromString(bgReadsChannel0))!
+            .text,
+        equals('iChannel0'),
+      );
+
+      // 3. Clean annotated FG shader emits zero diagnostics.
+      const cleanFg = '''
+// @fterm-stage: fg
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = texture(iChannel0, fragCoord / max(iResolution.xy, vec2(1.0)));
+}
+''';
+      expect(
+        ShadertoyGlslShim.lint(cleanFg, stage: TerminalShaderStage.foreground),
+        isEmpty,
+      );
+    });
+
     test(
       'TerminalShaderController tracks and prunes per-pass compile errors',
       () async {
