@@ -156,7 +156,10 @@ final class ShaderEditorController extends ChangeNotifier {
        _chainComposition = initialChainComposition,
        _previewBackgroundPreset = initialBackgroundPreset,
        _bgPreviewOpacity = initialBackgroundOpacity.clamp(0.1, 1.0),
-       textController = tui.TextEditingController(text: initialSource) {
+       textController = tui.TextEditingController(
+         text: initialSource,
+         undoCoalesceWindow: const Duration(milliseconds: 500),
+       ) {
     _onCompile = onCompile;
     _onSave = onSave;
     textController.value = tui.TextEditingValue(
