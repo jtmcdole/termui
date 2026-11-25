@@ -130,6 +130,13 @@ void main() {
     r'^\s*#\s*include\b',
     multiLine: true,
   );
+  static final RegExp _includeSpanPattern = RegExp(
+    r'#(?:[ \t]|/\*[\s\S]*?\*/|\\\r?\n)*include\b',
+  );
+  static final RegExp _hashDirectiveStartPattern = RegExp(
+    r'^\s*#',
+    multiLine: true,
+  );
   static final RegExp _versionDirectivePattern = RegExp(
     r'^\s*#\s*version\b',
     multiLine: true,
@@ -295,51 +302,67 @@ void main() {
 
   /// Validates and analyzes [source] without emitting target GLSL strings.
   ///
-  /// Throws [ShaderCompileException] if [source] exceeds [maxSourceBytes],
-  /// contains `#include` or `#version` directives, or omits `mainImage`.
+  /// Throws [ShaderCompileException] with span-annotated [ShaderDiagnostic]s
+  /// if [source] exceeds [maxSourceBytes], contains `#include` or `#version`
+  /// directives, or omits `mainImage`.
   static ShadertoyGlslAnalysis analyze(
     String source, {
     String shaderId = '<inline>',
   }) {
     final byteLength = utf8.encode(source).length;
     if (byteLength == 0) {
-      throw ShaderCompileException(
-        shaderId: shaderId,
-        message: 'Shader source is empty.',
-      );
+      _throwShimError(shaderId, 'Shader source is empty.', line: 1, column: 1);
     }
     if (byteLength > maxSourceBytes) {
-      throw ShaderCompileException(
-        shaderId: shaderId,
-        message:
-            'Shader source is $byteLength bytes, exceeding the '
-            '$maxSourceBytes byte (64 KiB) limit.',
+      _throwShimError(
+        shaderId,
+        'Shader source is $byteLength bytes, exceeding the '
+        '$maxSourceBytes byte (64 KiB) limit.',
+        line: 1,
+        column: 1,
       );
     }
     final spliced = source.replaceAll(_lineContinuationPattern, '');
     final stripped = _stripComments(spliced);
+    final masked = _maskComments(source);
     if (_includeDirectivePattern.hasMatch(source) ||
         _includeDirectivePattern.hasMatch(spliced) ||
         _includeDirectivePattern.hasMatch(stripped)) {
-      throw ShaderCompileException(
-        shaderId: shaderId,
-        message: '#include directives are disallowed in custom shaders.',
+      final loc = _locateIncludeSpan(source);
+      _throwShimError(
+        shaderId,
+        '#include directives are disallowed in custom shaders.',
+        line: loc.line,
+        column: loc.column,
+        length: loc.length,
+        hint: 'Inline helper functions directly instead of using #include.',
       );
     }
     if (_versionDirectivePattern.hasMatch(stripped)) {
-      throw ShaderCompileException(
-        shaderId: shaderId,
-        message:
-            '#version directives must be omitted; ShadertoyGlslShim injects '
-            'the target version header automatically.',
+      final loc = _locateDirectiveSpan(
+        source,
+        masked,
+        _versionDirectivePattern,
+      );
+      _throwShimError(
+        shaderId,
+        '#version directives must be omitted; ShadertoyGlslShim injects '
+        'the target version header automatically.',
+        line: loc.line,
+        column: loc.column,
+        length: loc.length,
+        hint: 'Remove the #version directive.',
       );
     }
     if (!_mainImagePattern.hasMatch(stripped)) {
-      throw ShaderCompileException(
-        shaderId: shaderId,
-        message:
-            'Shader must define `void mainImage(out vec4 fragColor, '
-            'in vec2 fragCoord)`.',
+      _throwShimError(
+        shaderId,
+        'Shader must define `void mainImage(out vec4 fragColor, '
+        'in vec2 fragCoord)`.',
+        line: 1,
+        column: 1,
+        hint:
+            'Add void mainImage(out vec4 fragColor, in vec2 fragCoord) { ... }',
       );
     }
     final samplesChannel0 = _channel0Pattern.hasMatch(stripped);
@@ -361,6 +384,89 @@ void main() {
       stageHint: stageHint,
       sourceByteLength: byteLength,
     );
+  }
+
+  static Never _throwShimError(
+    String shaderId,
+    String message, {
+    required int line,
+    required int column,
+    int length = 1,
+    String? hint,
+  }) {
+    throw ShaderCompileException(
+      shaderId: shaderId,
+      message: message,
+      lineNumber: line,
+      diagnostics: <ShaderDiagnostic>[
+        ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.error,
+          origin: ShaderDiagnosticOrigin.shim,
+          message: message,
+          line: line,
+          column: column,
+          length: length,
+          hint: hint,
+        ),
+      ],
+    );
+  }
+
+  static ({int line, int column, int length}) _locateIncludeSpan(
+    String source,
+  ) {
+    final match =
+        _includeSpanPattern.firstMatch(source) ??
+        _includeDirectivePattern.firstMatch(source) ??
+        _hashDirectiveStartPattern.firstMatch(source);
+    if (match == null) return (line: 1, column: 1, length: 1);
+    final hashOffset = source.indexOf('#', match.start);
+    final start = hashOffset >= 0 ? hashOffset : match.start;
+    return _spanFromOffsetRange(source, start, match.end);
+  }
+
+  static ({int line, int column, int length}) _locateDirectiveSpan(
+    String source,
+    String masked,
+    RegExp pattern,
+  ) {
+    final maskedMatch = pattern.firstMatch(masked);
+    if (maskedMatch != null) {
+      final hashOffset = masked.indexOf('#', maskedMatch.start);
+      final start = hashOffset >= 0 ? hashOffset : maskedMatch.start;
+      return _spanFromOffsetRange(source, start, maskedMatch.end);
+    }
+    final match = pattern.firstMatch(source);
+    if (match == null) return (line: 1, column: 1, length: 1);
+    final hashOffset = source.indexOf('#', match.start);
+    final start = hashOffset >= 0 ? hashOffset : match.start;
+    return _spanFromOffsetRange(source, start, match.end);
+  }
+
+  static ({int line, int column, int length}) _spanFromOffsetRange(
+    String source,
+    int start,
+    int end,
+  ) {
+    final safeStart = start.clamp(0, source.length);
+    var line = 1;
+    var lineStart = 0;
+    for (var i = 0; i < safeStart; i++) {
+      if (source.codeUnitAt(i) == 0x0A) {
+        line++;
+        lineStart = i + 1;
+      }
+    }
+    var clampedEnd = end.clamp(safeStart, source.length);
+    for (var i = safeStart; i < clampedEnd; i++) {
+      final unit = source.codeUnitAt(i);
+      if (unit == 0x0A || unit == 0x0D) {
+        clampedEnd = i;
+        break;
+      }
+    }
+    final length = clampedEnd > safeStart ? clampedEnd - safeStart : 1;
+    return (line: line, column: safeStart - lineStart + 1, length: length);
   }
 
   static ShaderStageHint _resolveStageHint({
@@ -612,5 +718,56 @@ void main() {
       i++;
     }
     return source.length;
+  }
+
+  /// Replaces comment characters with spaces while preserving `\r`/`\n` and
+  /// exact 1-to-1 UTF-16 code-unit offsets with [source].
+  static String _maskComments(String source) {
+    final buffer = StringBuffer();
+    final len = source.length;
+    var i = 0;
+    while (i < len) {
+      final ch = source.codeUnitAt(i);
+      final next = i + 1 < len ? source.codeUnitAt(i + 1) : 0;
+      if (ch == 0x2F && next == 0x2F) {
+        i = _maskLineComment(source, i, buffer);
+        continue;
+      }
+      if (ch == 0x2F && next == 0x2A) {
+        i = _maskBlockComment(source, i, buffer);
+        continue;
+      }
+      buffer.writeCharCode(ch);
+      i++;
+    }
+    return buffer.toString();
+  }
+
+  static int _maskLineComment(String source, int start, StringBuffer out) {
+    var i = start;
+    while (i < source.length) {
+      final ch = source.codeUnitAt(i);
+      if (ch == 0x0A || ch == 0x0D) return i;
+      out.writeCharCode(0x20);
+      i++;
+    }
+    return i;
+  }
+
+  static int _maskBlockComment(String source, int start, StringBuffer out) {
+    out.write('  ');
+    var i = start + 2;
+    while (i < source.length) {
+      final ch = source.codeUnitAt(i);
+      if (ch == 0x2A &&
+          i + 1 < source.length &&
+          source.codeUnitAt(i + 1) == 0x2F) {
+        out.write('  ');
+        return i + 2;
+      }
+      out.writeCharCode(ch == 0x0A || ch == 0x0D ? ch : 0x20);
+      i++;
+    }
+    return i;
   }
 }
