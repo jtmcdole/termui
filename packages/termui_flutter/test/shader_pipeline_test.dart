@@ -3626,6 +3626,142 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         expect(backend.prepareCallCount, lessThanOrEqualTo(2));
       },
     );
+
+    testWidgets(
+      're-primes direct mode on wallpaper swap instead of locking fallback and resets watchdog warmup when custom pass source changes',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 8,
+            height: 8,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 16,
+            height: 16,
+            color: const Color(0xFF112233),
+          ),
+        );
+        final wallpaperA = await tester.runAsync(
+          () => _createSolidImage(
+            width: 8,
+            height: 8,
+            color: const Color(0xFF440000),
+          ),
+        );
+        final wallpaperB = await tester.runAsync(
+          () => _createSolidImage(
+            width: 8,
+            height: 8,
+            color: const Color(0xFF004400),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        addTearDown(() => outputImg?.dispose());
+
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+        );
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        controller.setWallpaperImage(wallpaperA);
+        final watchdog = GpuFrameWatchdog(warmupFrameCount: 5);
+        addTearDown(watchdog.dispose);
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+
+        final batch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: const <GpuKittyQuad>[],
+          hasCanvasOnlyContent: false,
+        );
+
+        final configV1 = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:live_bg',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: _validStaticGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(configV1));
+
+        Widget buildHost(TerminalShaderConfig cfg) => Directionality(
+          textDirection: TextDirection.ltr,
+          child: Center(
+            child: TerminalShaderHost(
+              controller: controller,
+              config: cfg,
+              watchdog: watchdog,
+              activityListenable: activity,
+              atlasImage: atlasImg,
+              atlasDevicePixelRatio: 1.0,
+              directLogicalSize: const Size(120, 60),
+              directTerminalBatchProvider: (_, _) => batch,
+              child: const SizedBox(width: 120, height: 60),
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(buildHost(configV1));
+        for (var i = 0; i < 3; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+        expect(backend.prepareCallCount, equals(1));
+
+        // Exhaust warmup frames for user:live_bg.
+        for (var i = 0; i < 5; i++) {
+          watchdog.recordShaderFrameDuration(
+            'user:live_bg',
+            const Duration(milliseconds: 50),
+          );
+        }
+        expect(watchdog.warmupFramesRemainingFor('user:live_bg'), equals(0));
+
+        // Simulate controller wallpaper swap needing re-prime: must re-prime
+        // instead of locking into runtimeError fallback.
+        backend.primed = false;
+        controller.setWallpaperImage(wallpaperB);
+        await tester.pump();
+        for (var i = 0; i < 3; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+        expect(backend.prepareCallCount, equals(2));
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugIsDirectModeActive, isTrue);
+
+        // Editing inlineGlsl under the same pass id resets warmup frames.
+        final configV2 = configV1.copyWith(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:live_bg',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: '$_validStaticGlsl\n// edited',
+            ),
+          ],
+        );
+        await tester.runAsync(() => controller.syncConfig(configV2));
+        await tester.pumpWidget(buildHost(configV2));
+        expect(watchdog.warmupFramesRemainingFor('user:live_bg'), equals(5));
+      },
+    );
   });
 }
 

@@ -9,6 +9,7 @@ import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
 import 'package:termui_flutter/src/rendering/gpu_frame_watchdog.dart';
 import 'package:termui_flutter/src/rendering/shader_backend.dart';
 import 'package:termui_flutter/src/rendering/shader_controller.dart';
+import 'package:termui_flutter/src/rendering/shader_diagnostic_parser.dart';
 import 'package:termui_flutter/src/rendering/shader_region_painter.dart';
 import 'package:termui_flutter/src/rendering/shader_spec.dart';
 import 'package:termui_flutter/src/rendering/shadertoy_glsl_shim.dart';
@@ -1154,6 +1155,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     test(
       'TerminalShaderController tracks and prunes per-pass compile errors',
       () async {
+        TestWidgetsFlutterBinding.ensureInitialized();
         final backend = _StubCompileBackend();
         final controller = TerminalShaderController(backend: backend);
         addTearDown(controller.dispose);
@@ -1201,8 +1203,83 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         expect(controller.compileErrorForPass('bg:bad'), isNull);
         expect(controller.passCompileErrors, isEmpty);
         expect(controller.lastCompileError, isNull);
+
+        // L4: reportRuntimeError populates & deduplicates passCompileErrors,
+        // and clearLastCompileError clears passCompileErrors and notifies.
+        var notifications = 0;
+        controller.addListener(() => notifications++);
+        const runtimeErr = ShaderCompileException(
+          shaderId: 'bg:ok',
+          message: 'GPU link failed',
+        );
+        controller.reportRuntimeError(runtimeErr);
+        expect(controller.compileErrorForPass('bg:ok'), same(runtimeErr));
+        expect(notifications, equals(1));
+        controller.reportRuntimeError(
+          const ShaderCompileException(
+            shaderId: 'bg:ok',
+            message: 'GPU link failed',
+          ),
+        );
+        expect(notifications, equals(1));
+
+        controller.clearLastCompileError();
+        expect(controller.passCompileErrors, isEmpty);
+        expect(controller.lastCompileError, isNull);
+        expect(notifications, equals(2));
       },
     );
+
+    test('hardens diagnostic spans for commented #include, clamped epilogue lines, identifier boundaries, and leading WARNING prefixes', () {
+      // L1: Commented #include before real #include points to real directive.
+      const commentedInclude = '''
+// Do not use #include here
+#include "evil.glsl"
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''';
+      expect(
+        () => ShadertoyGlslShim.analyze(commentedInclude),
+        throwsA(
+          isA<ShaderCompileException>()
+              .having((e) => e.lineNumber, 'lineNumber', equals(2))
+              .having((e) => e.diagnostics.first.column, 'column', equals(1)),
+        ),
+      );
+
+      // M2: Clamped preamble/epilogue lines omit misleading column/token spans.
+      const shortUser = 'void mainImage(out vec4 fragColor) {\n}';
+      final epilogueDiags = parseWebGlDiagnostics(
+        "0:120(12): error: 'mainImage' : no matching overloaded function",
+        userSource: shortUser,
+        prefixLineOffset: 50,
+      );
+      expect(epilogueDiags, hasLength(1));
+      expect(epilogueDiags.first.line, equals(2));
+      expect(epilogueDiags.first.column, isNull);
+
+      // M3: Identifier token does not match mid-word substring.
+      expect(
+        resolveQuotedTokenSpan(
+          'float mixVal = 1.0;',
+          "ERROR: 'x' : undeclared identifier",
+        ),
+        isNull,
+      );
+
+      // L2: Leading WARNING prefix on named .glsl line parses as warning.
+      final warnDiags = parseImpellercDiagnostics(
+        'WARNING: fragment.glsl:51: implicit truncation of vector',
+        userSource: 'void mainImage(out vec4 c, in vec2 p) { c = vec4(1.0); }',
+        shimPrefixLineCount: 50,
+      );
+      expect(warnDiags, hasLength(1));
+      expect(
+        warnDiags.first.severity,
+        equals(ShaderDiagnosticSeverity.warning),
+      );
+    });
   });
 }
 

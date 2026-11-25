@@ -159,7 +159,10 @@ ShaderDiagnostic? _parseImpellercLine(
     final rawLineNum = int.tryParse(namedMatch.group(3) ?? '');
     if (rawLineNum == null || rawLineNum <= 0) return null;
     final explicitCol = int.tryParse(namedMatch.group(4) ?? '');
-    final severity = _parseSeverity(namedMatch.group(5));
+    final trailingSeverity = namedMatch.group(5);
+    final severity = trailingSeverity != null
+        ? _parseSeverity(trailingSeverity)
+        : _inferSeverityFromLine(namedMatch.group(1) ?? '');
     final message = namedMatch.group(6)!.trim();
     if (message.isEmpty) return null;
     return _buildLineDiagnostic(
@@ -253,15 +256,22 @@ ShaderDiagnostic _buildLineDiagnostic({
   required int prefixOffset,
   required List<String> userLines,
 }) {
+  final effectiveOffset = prefixOffset > 0 ? prefixOffset : 0;
+  final rawUserLine = rawLine - effectiveOffset;
+  final inUserRange =
+      rawUserLine >= 1 &&
+      (userLines.isEmpty || rawUserLine <= userLines.length);
   final userLine = _adjustUserLine(rawLine, prefixOffset, userLines.length);
   final lineText = userLine >= 1 && userLine <= userLines.length
       ? userLines[userLine - 1]
       : '';
-  final span = resolveQuotedTokenSpan(
-    lineText,
-    message,
-    explicitColumn: explicitColumn,
-  );
+  final span = inUserRange
+      ? resolveQuotedTokenSpan(
+          lineText,
+          message,
+          explicitColumn: explicitColumn,
+        )
+      : null;
   return ShaderDiagnostic(
     severity: severity,
     origin: ShaderDiagnosticOrigin.compiler,
@@ -319,8 +329,7 @@ int _findTokenOffset(String lineText, String token) {
     final wordPattern = RegExp(
       '(?<![A-Za-z0-9_])${RegExp.escape(token)}(?![A-Za-z0-9_])',
     );
-    final match = wordPattern.firstMatch(lineText);
-    if (match != null) return match.start;
+    return wordPattern.firstMatch(lineText)?.start ?? -1;
   }
   return lineText.indexOf(token);
 }
