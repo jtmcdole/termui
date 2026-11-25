@@ -4,7 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform;
+    show TargetPlatform, defaultTargetPlatform, visibleForTesting;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:termui/ui/shader_region.dart';
@@ -642,7 +642,9 @@ final class FlutterGpuShaderBackend
     GpuFrameWatchdog? watchdog,
   }) {
     _lastSyncFrameSkipped = false;
-    if (_disposed || passes.isEmpty || _hasQuarantinedPass(passes)) return null;
+    if (_disposed || passes.isEmpty) return null;
+    final activePasses = _filterHealthyPasses(passes);
+    if (activePasses.isEmpty) return null;
     final width = physicalSize.width.round();
     final height = physicalSize.height.round();
     if (width <= 0 || height <= 0) return null;
@@ -654,7 +656,7 @@ final class FlutterGpuShaderBackend
       return null;
     }
 
-    final paneKey = _paneKeyForPasses(passes, fallbackPrefix: 'bg');
+    final paneKey = _paneKeyForPasses(activePasses, fallbackPrefix: 'bg');
     final gateToken = _tryAcquireSyncFrameSlot(paneKey);
     if (gateToken == null) {
       _lastSyncFrameSkipped = true;
@@ -663,7 +665,7 @@ final class FlutterGpuShaderBackend
 
     final image = _renderPasses(
       paneKey: paneKey,
-      passes: passes,
+      passes: activePasses,
       width: width,
       height: height,
       inputTexture: null,
@@ -687,7 +689,9 @@ final class FlutterGpuShaderBackend
     ui.Image? wallpaperImage,
     GpuFrameWatchdog? watchdog,
   }) async {
-    if (_disposed || passes.isEmpty || _hasQuarantinedPass(passes)) return null;
+    if (_disposed || passes.isEmpty) return null;
+    final activePasses = _filterHealthyPasses(passes);
+    if (activePasses.isEmpty) return null;
     final width = physicalSize.width.round();
     final height = physicalSize.height.round();
     if (width <= 0 || height <= 0) return null;
@@ -705,14 +709,14 @@ final class FlutterGpuShaderBackend
     final wallpaperTexture = _wrapCachedWallpaperImage(wallpaperImage);
     final isForeground = inputImage != null;
     final paneKey = _paneKeyForPasses(
-      passes,
+      activePasses,
       fallbackPrefix: isForeground ? 'fg' : 'bg',
     );
 
     final completion = Completer<bool>();
     final image = _renderPasses(
       paneKey: paneKey,
-      passes: passes,
+      passes: activePasses,
       width: width,
       height: height,
       inputTexture: inputTexture,
@@ -770,10 +774,8 @@ final class FlutterGpuShaderBackend
     if (_disposed || _directPipelineFailed) return null;
     final pipeline = _directAtlasPipeline;
     if (pipeline == null) return null;
-    if (_hasQuarantinedPass(backgroundPasses) ||
-        _hasQuarantinedPass(foregroundPasses)) {
-      return null;
-    }
+    final activeBackgroundPasses = _filterHealthyPasses(backgroundPasses);
+    final activeForegroundPasses = _filterHealthyPasses(foregroundPasses);
 
     final width = physicalSize.width.round();
     final height = physicalSize.height.round();
@@ -801,8 +803,8 @@ final class FlutterGpuShaderBackend
       paneKey: paneKey,
       gateToken: gateToken,
       pipeline: pipeline,
-      backgroundPasses: backgroundPasses,
-      foregroundPasses: foregroundPasses,
+      backgroundPasses: activeBackgroundPasses,
+      foregroundPasses: activeForegroundPasses,
       width: width,
       height: height,
       atlasTexture: atlasTexture,
@@ -2290,9 +2292,7 @@ final class FlutterGpuShaderBackend
     final results = <_RenderedGpuRegion>[];
     var slotIndex = 0;
     for (final regionPass in batch.regionPasses) {
-      if (_hasQuarantinedPass(<ShaderPassInvocation>[
-        regionPass.toPassInvocation(),
-      ])) {
+      if (_isFailedHandle(regionPass.handle)) {
         continue;
       }
       final slice = _findRegionMaskSlice(
@@ -2872,15 +2872,32 @@ final class FlutterGpuShaderBackend
     );
   }
 
-  bool _hasQuarantinedPass(List<ShaderPassInvocation> passes) {
-    for (final pass in passes) {
-      final handle = pass.handle;
-      if (handle is _GpuCompiledShaderHandle && handle.isPipelineFailed) {
-        return true;
-      }
+  /// Filters [passes] to exclude shader handles whose GPU pipeline failed to
+  /// link or draw so healthy passes and direct atlas rendering continue
+  /// uninterrupted.
+  ///
+  /// Returns [passes] unchanged without allocating when all handles are
+  /// healthy.
+  @visibleForTesting
+  static List<ShaderPassInvocation> filterHealthyShaderPasses(
+    List<ShaderPassInvocation> passes, {
+    bool Function(CompiledShaderHandle handle) isFailed = _isFailedHandle,
+  }) {
+    if (passes.isEmpty || !passes.any((p) => isFailed(p.handle))) {
+      return passes;
     }
-    return false;
+    return <ShaderPassInvocation>[
+      for (final pass in passes)
+        if (!isFailed(pass.handle)) pass,
+    ];
   }
+
+  static bool _isFailedHandle(CompiledShaderHandle handle) =>
+      handle is _GpuCompiledShaderHandle && handle.isPipelineFailed;
+
+  static List<ShaderPassInvocation> _filterHealthyPasses(
+    List<ShaderPassInvocation> passes,
+  ) => filterHealthyShaderPasses(passes);
 
   ui.Image? _executeRingRender({
     required Object paneKey,
