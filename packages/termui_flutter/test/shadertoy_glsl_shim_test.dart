@@ -4,8 +4,11 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:source_span/source_span.dart';
 import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
+import 'package:termui_flutter/src/rendering/gpu_frame_watchdog.dart';
 import 'package:termui_flutter/src/rendering/shader_backend.dart';
+import 'package:termui_flutter/src/rendering/shader_controller.dart';
 import 'package:termui_flutter/src/rendering/shader_region_painter.dart';
 import 'package:termui_flutter/src/rendering/shader_spec.dart';
 import 'package:termui_flutter/src/rendering/shadertoy_glsl_shim.dart';
@@ -919,4 +922,263 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           : false,
     );
   });
+
+  group('ShaderDiagnostic, shim span errors, lint rules, and per-pass errors', () {
+    test(
+      'ShaderDiagnostic.toSourceSpan resolves and clamps coordinates safely',
+      () {
+        final sourceFile = SourceFile.fromString(
+          'line one\n  vec4 foo = bar;\n',
+          url: Uri.parse('shader.glsl'),
+        );
+
+        const exact = ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.error,
+          origin: ShaderDiagnosticOrigin.compiler,
+          message: 'undeclared identifier',
+          line: 2,
+          column: 14,
+          length: 3,
+        );
+        final exactSpan = exact.toSourceSpan(sourceFile);
+        expect(exactSpan, isNotNull);
+        expect(exactSpan!.text, equals('bar'));
+        expect(exactSpan.start.line, equals(1));
+        expect(exactSpan.start.column, equals(13));
+        expect(exact.toString(), contains('(2:14)'));
+
+        // Null line returns null.
+        const noLine = ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.info,
+          origin: ShaderDiagnosticOrigin.linter,
+          message: 'general note',
+        );
+        expect(noLine.toSourceSpan(sourceFile), isNull);
+
+        // Null column highlights the entire line content without trailing newline.
+        const fullLine = ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.warning,
+          origin: ShaderDiagnosticOrigin.linter,
+          message: 'line warning',
+          line: 1,
+        );
+        final fullLineSpan = fullLine.toSourceSpan(sourceFile);
+        expect(fullLineSpan!.text, equals('line one'));
+
+        // Out-of-range lines/columns/lengths clamp cleanly without throwing.
+        const outOfRange = ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.error,
+          origin: ShaderDiagnosticOrigin.compiler,
+          message: 'oob',
+          line: 99,
+          column: 99,
+          length: 50,
+        );
+        expect(outOfRange.toSourceSpan(sourceFile), isNotNull);
+
+        const negativeCoords = ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.error,
+          origin: ShaderDiagnosticOrigin.compiler,
+          message: 'neg',
+          line: -3,
+          column: 0,
+          length: 0,
+        );
+        final negSpan = negativeCoords.toSourceSpan(sourceFile);
+        expect(negSpan!.text, equals('l'));
+
+        // Empty source file never throws.
+        final emptyFile = SourceFile.fromString('');
+        expect(exact.toSourceSpan(emptyFile)!.text, equals(''));
+
+        // Value equality & hashCode.
+        const duplicate = ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.error,
+          origin: ShaderDiagnosticOrigin.compiler,
+          message: 'undeclared identifier',
+          line: 2,
+          column: 14,
+          length: 3,
+        );
+        expect(exact, equals(duplicate));
+        expect(exact.hashCode, equals(duplicate.hashCode));
+      },
+    );
+
+    test(
+      'ShadertoyGlslShim.analyze attaches exact line/column ShaderDiagnostics',
+      () {
+        const indentedInclude = '''
+// Header comment
+  #include "foo.glsl"
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''';
+        try {
+          ShadertoyGlslShim.analyze(indentedInclude, shaderId: 'inc.glsl');
+          fail('Expected ShaderCompileException');
+        } on ShaderCompileException catch (e) {
+          expect(e.lineNumber, equals(2));
+          expect(e.diagnostics, hasLength(1));
+          final diag = e.diagnostics.single;
+          expect(diag.severity, ShaderDiagnosticSeverity.error);
+          expect(diag.origin, ShaderDiagnosticOrigin.shim);
+          expect(diag.line, equals(2));
+          expect(diag.column, equals(3));
+          final span = diag.toSourceSpan(
+            SourceFile.fromString(indentedInclude),
+          );
+          expect(span!.text, equals('#include'));
+        }
+
+        const commentedThenRealVersion = '''
+// #version 300 es
+/* #version 450 */
+   #version 460 core
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''';
+        try {
+          ShadertoyGlslShim.analyze(
+            commentedThenRealVersion,
+            shaderId: 'ver.glsl',
+          );
+          fail('Expected ShaderCompileException');
+        } on ShaderCompileException catch (e) {
+          expect(e.lineNumber, equals(3));
+          expect(e.diagnostics, hasLength(1));
+          final diag = e.diagnostics.single;
+          expect(diag.line, equals(3));
+          expect(diag.column, equals(4));
+          final span = diag.toSourceSpan(
+            SourceFile.fromString(commentedThenRealVersion),
+          );
+          expect(span!.text, equals('#version'));
+        }
+
+        try {
+          ShadertoyGlslShim.analyze('vec4 x() { return vec4(1.0); }');
+          fail('Expected ShaderCompileException');
+        } on ShaderCompileException catch (e) {
+          expect(e.lineNumber, equals(1));
+          expect(e.diagnostics, hasLength(1));
+          expect(e.diagnostics.single.line, equals(1));
+          expect(e.diagnostics.single.column, equals(1));
+          expect(e.diagnostics.single.hint, isNotNull);
+        }
+      },
+    );
+
+    test(
+      'TerminalShaderController tracks and prunes per-pass compile errors',
+      () async {
+        final backend = _StubCompileBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+
+        const goodGlsl = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  fragColor = vec4(1.0);
+}
+''';
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:ok',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: goodGlsl,
+            ),
+            ShaderPassSpec(
+              id: 'bg:bad',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: '#version 460 core\n$goodGlsl',
+            ),
+          ],
+        );
+        await controller.syncConfig(config);
+
+        expect(controller.compileErrorForPass('bg:ok'), isNull);
+        final badErr = controller.compileErrorForPass('bg:bad');
+        expect(badErr, isNotNull);
+        expect(badErr!.diagnostics, hasLength(1));
+        expect(controller.passCompileErrors.keys, equals(<String>['bg:bad']));
+        expect(controller.lastCompileError, same(badErr));
+
+        // Removing the failing pass prunes its error cleanly.
+        await controller.syncConfig(
+          TerminalShaderConfig(
+            backgroundPasses: <ShaderPassSpec>[
+              ShaderPassSpec(
+                id: 'bg:ok',
+                stage: TerminalShaderStage.background,
+                inlineGlsl: goodGlsl,
+              ),
+            ],
+          ),
+        );
+        expect(controller.compileErrorForPass('bg:bad'), isNull);
+        expect(controller.passCompileErrors, isEmpty);
+        expect(controller.lastCompileError, isNull);
+      },
+    );
+  });
+}
+
+final class _StubHandle implements CompiledShaderHandle {
+  @override
+  final String id;
+
+  @override
+  final bool usesPrevFrame;
+
+  _StubHandle(this.id, this.usesPrevFrame);
+
+  @override
+  void dispose() {}
+}
+
+final class _StubCompileBackend implements TerminalShaderBackend {
+  @override
+  ShaderBackendKind get kind => ShaderBackendKind.flutterGpu;
+
+  @override
+  bool get supportsCustomGlsl => true;
+
+  @override
+  bool get supportsSyncBackground => true;
+
+  @override
+  Future<CompiledShaderHandle> compile(
+    String id,
+    String shadertoyGlsl, {
+    bool usesPrevFrame = false,
+  }) async => _StubHandle(id, usesPrevFrame);
+
+  @override
+  Future<void> reload(
+    CompiledShaderHandle handle,
+    String shadertoyGlsl,
+  ) async {}
+
+  @override
+  ui.Image? renderBackgroundSync({
+    required List<ShaderPassInvocation> passes,
+    required ui.Size physicalSize,
+    ui.Image? wallpaperImage,
+    GpuFrameWatchdog? watchdog,
+  }) => null;
+
+  @override
+  Future<ui.Image?> renderPassesAsync({
+    required List<ShaderPassInvocation> passes,
+    required ui.Size physicalSize,
+    ui.Image? inputImage,
+    ui.Image? wallpaperImage,
+    GpuFrameWatchdog? watchdog,
+  }) async => null;
+
+  @override
+  void dispose() {}
 }
