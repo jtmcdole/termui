@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_gpu/gpu.dart' as gpu;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:source_span/source_span.dart';
 import 'package:termui_flutter/src/rendering/builtin_shaders.dart';
 import 'package:termui_flutter/src/rendering/gpu_atlas_shaders.dart';
 import 'package:termui_flutter/src/rendering/impellerc_compiler_io.dart';
@@ -10,6 +11,7 @@ import 'package:termui_flutter/src/rendering/impellerc_compiler_stub.dart'
     as stub;
 import 'package:termui_flutter/src/rendering/shader_backend.dart';
 import 'package:termui_flutter/src/rendering/shader_backend_gpu.dart';
+import 'package:termui_flutter/src/rendering/shader_diagnostic_parser.dart';
 import 'package:termui_flutter/src/rendering/shader_region_painter.dart';
 import 'package:termui_flutter/src/rendering/shader_spec.dart';
 import 'package:termui_flutter/src/rendering/shadertoy_glsl_shim.dart';
@@ -221,6 +223,195 @@ void main() {
         ImpellercCompiler.formatCompilerError('   \n  '),
         contains('without diagnostic output'),
       );
+    });
+
+    test('parseImpellercDiagnostics extracts multi-error, warning, and info spans with shim clamping', () {
+      const userSource = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  float mixVal = max(0.0, x);
+  vec4 col = unknownVar;
+  fragColor = col;
+}
+''';
+      const log = '''
+Compilation failed for bundled shader "TerminalShaderFragment".
+"TerminalShaderFragment": GLSL to SPIRV failed; Compilation error. 3 error(s) and 1 warning(s).
+TerminalShaderFragment:77: warning: 'x' : variable is not initialized
+TerminalShaderFragment:78: error: 'unknownVar' : undeclared identifier
+TerminalShaderFragment:78: error: '=' : cannot convert from ' temp float' to ' temp highp 4-component vector of float'
+TerminalShaderFragment:79:15: info: 'col' : value truncated
+TerminalShaderVertex:4: error: 'a_pos' : invalid location
+TerminalShaderFragment:50: error: preamble failure
+TerminalShaderFragment:120: error: epilogue failure
+''';
+      final diagnostics = parseImpellercDiagnostics(
+        log,
+        userSource: userSource,
+        shimPrefixLineCount: 75,
+      );
+      final sourceFile = SourceFile.fromString(userSource);
+      expect(diagnostics, hasLength(7));
+
+      // Whole-word match finds 'x', not 'mixVal' or 'max'.
+      expect(diagnostics[0].severity, ShaderDiagnosticSeverity.warning);
+      expect(diagnostics[0].origin, ShaderDiagnosticOrigin.compiler);
+      expect(diagnostics[0].line, 2);
+      expect(diagnostics[0].toSourceSpan(sourceFile)!.text, 'x');
+
+      // Quoted identifier token span.
+      expect(diagnostics[1].severity, ShaderDiagnosticSeverity.error);
+      expect(diagnostics[1].line, 3);
+      expect(diagnostics[1].toSourceSpan(sourceFile)!.text, 'unknownVar');
+
+      // Quoted operator token span.
+      expect(diagnostics[2].line, 3);
+      expect(diagnostics[2].toSourceSpan(sourceFile)!.text, '=');
+
+      // Explicit column + info severity.
+      expect(diagnostics[3].severity, ShaderDiagnosticSeverity.info);
+      expect(diagnostics[3].line, 4);
+      expect(diagnostics[3].column, 15);
+      expect(diagnostics[3].toSourceSpan(sourceFile)!.text, 'col');
+
+      // Vertex shader error does not subtract fragment shim prefix.
+      expect(diagnostics[4].line, 4);
+
+      // Preamble and epilogue errors clamp into [1, userLineCount].
+      expect(diagnostics[5].line, 1);
+      expect(diagnostics[6].line, 5);
+
+      // firstErrorDiagnostic skips leading warnings.
+      expect(firstErrorDiagnostic(diagnostics), equals(diagnostics[1]));
+      expect(
+        firstErrorDiagnostic(<ShaderDiagnostic>[diagnostics[0]]),
+        equals(diagnostics[0]),
+      );
+      expect(firstErrorDiagnostic(const <ShaderDiagnostic>[]), isNull);
+
+      // Empty/whitespace and unstructured fallback logs.
+      expect(
+        parseImpellercDiagnostics('  \n\t ', userSource: userSource),
+        isEmpty,
+      );
+      final fallback = parseImpellercDiagnostics(
+        'linker: error: undefined symbol',
+        userSource: userSource,
+      );
+      expect(fallback, hasLength(1));
+      expect(fallback.single.line, isNull);
+      expect(fallback.single.message, 'undefined symbol');
+      expect(
+        parseImpellercDiagnostics(
+          'plain failure\nsecond',
+          userSource: '',
+        ).single.message,
+        'plain failure',
+      );
+      // Empty userSource still subtracts offset and clamps low values to 1.
+      expect(
+        parseImpellercDiagnostics(
+          'ERROR: 0:10: syntax error',
+          userSource: '',
+          shimPrefixLineCount: 20,
+        ).single.line,
+        1,
+      );
+    });
+
+    test('parseWebGlDiagnostics parses ANGLE, Mesa, generic line, and link logs with token spans', () {
+      const userSource = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  float unusedVar = 1.0;
+  fragColor = badToken + 1.0;
+}
+''';
+      final sourceFile = SourceFile.fromString(userSource);
+
+      // ANGLE multi-error/warning log with trailing NUL byte.
+      const angleLog =
+          "WARNING: 0:42: 'unusedVar' : unused variable\n"
+          "ERROR: 0:43: 'badToken' : undeclared identifier\n"
+          "ERROR: 0:43: '' : syntax error\u0000";
+      final angleDiags = parseWebGlDiagnostics(
+        angleLog,
+        userSource: userSource,
+        prefixLineOffset: 40,
+      );
+      expect(angleDiags, hasLength(3));
+      expect(angleDiags[0].severity, ShaderDiagnosticSeverity.warning);
+      expect(angleDiags[0].line, 2);
+      expect(angleDiags[0].toSourceSpan(sourceFile)!.text, 'unusedVar');
+      expect(angleDiags[1].severity, ShaderDiagnosticSeverity.error);
+      expect(angleDiags[1].line, 3);
+      expect(angleDiags[1].toSourceSpan(sourceFile)!.text, 'badToken');
+      expect(angleDiags[2].line, 3);
+      expect(angleDiags[2].column, isNull);
+
+      // Mesa multi-error/warning log with explicit 1-based columns.
+      const mesaLog =
+          "0:42(9): warning: unused variable 'unusedVar'\n"
+          "0:43(15): error: 'badToken' undeclared\n"
+          '0:43(24): error: invalid operator\n'
+          '0:43(15): preprocessor error: bad directive\n';
+      final mesaDiags = parseWebGlDiagnostics(
+        mesaLog,
+        userSource: userSource,
+        prefixLineOffset: 40,
+      );
+      expect(mesaDiags, hasLength(4));
+      expect(mesaDiags[0].severity, ShaderDiagnosticSeverity.warning);
+      expect(mesaDiags[0].line, 2);
+      expect(mesaDiags[0].column, 9);
+      expect(mesaDiags[0].toSourceSpan(sourceFile)!.text, 'unusedVar');
+      expect(mesaDiags[1].line, 3);
+      expect(mesaDiags[1].column, 15);
+      expect(mesaDiags[1].toSourceSpan(sourceFile)!.text, 'badToken');
+      expect(mesaDiags[2].column, 24);
+      expect(mesaDiags[2].length, 1);
+      expect(mesaDiags[3].severity, ShaderDiagnosticSeverity.error);
+      expect(mesaDiags[3].toSourceSpan(sourceFile)!.text, 'badToken');
+
+      // Generic line fallback with severities + link fallback + empty log.
+      const genericLog =
+          'WARNING: implicit cast on line 42\n'
+          'NOTE: check precision on line 43\n'
+          'ERROR: syntax error at line 99\n';
+      final genericDiags = parseWebGlDiagnostics(
+        genericLog,
+        userSource: userSource,
+        prefixLineOffset: 40,
+      );
+      expect(genericDiags, hasLength(3));
+      expect(genericDiags[0].severity, ShaderDiagnosticSeverity.warning);
+      expect(genericDiags[0].line, 2);
+      expect(genericDiags[1].severity, ShaderDiagnosticSeverity.info);
+      expect(genericDiags[1].line, 3);
+      expect(genericDiags[2].severity, ShaderDiagnosticSeverity.error);
+      expect(genericDiags[2].line, 4);
+
+      final linkDiag = parseWebGlDiagnostics(
+        'Fragment shader failed to link.\u0000',
+        userSource: userSource,
+        prefixLineOffset: 40,
+      );
+      expect(linkDiag, hasLength(1));
+      expect(linkDiag.single.line, isNull);
+      expect(linkDiag.single.message, 'Fragment shader failed to link.');
+      expect(
+        parseWebGlDiagnostics(
+          '\u0000  \n',
+          userSource: userSource,
+          prefixLineOffset: 40,
+        ),
+        isEmpty,
+      );
+
+      // Explicit column on empty line clamps safely.
+      expect(
+        resolveQuotedTokenSpan('', 'bad', explicitColumn: 5),
+        equals((column: 1, length: 1)),
+      );
+      expect(resolveQuotedTokenSpan('', "'foo'"), isNull);
     });
   });
 
@@ -837,9 +1028,41 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
                   (e) => e.compilerLog,
                   'compilerLog',
                   contains('TerminalShaderFragment'),
-                ),
+                )
+                .having((e) => e.diagnostics, 'diagnostics', isNotEmpty),
           ),
         );
+
+        // Multi-error shader produces multiple span-annotated ShaderDiagnostics.
+        const multiBrokenShader = '''
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec4 a = undeclared_one;
+  vec4 b = undeclared_two;
+  fragColor = a + b;
+}
+''';
+        ShaderCompileException? multiError;
+        try {
+          await compiler.compile(multiBrokenShader, shaderId: 'multi.glsl');
+        } on ShaderCompileException catch (error) {
+          multiError = error;
+        }
+        expect(multiError, isNotNull);
+        expect(multiError!.lineNumber, 2);
+        expect(multiError.message, contains('undeclared_one'));
+        expect(multiError.diagnostics.length, greaterThanOrEqualTo(2));
+
+        final sourceFile = SourceFile.fromString(multiBrokenShader);
+        final firstIdent = multiError.diagnostics.firstWhere(
+          (d) => d.message.contains('undeclared_one'),
+        );
+        final secondIdent = multiError.diagnostics.firstWhere(
+          (d) => d.message.contains('undeclared_two'),
+        );
+        expect(firstIdent.line, 2);
+        expect(firstIdent.toSourceSpan(sourceFile)!.text, 'undeclared_one');
+        expect(secondIdent.line, 3);
+        expect(secondIdent.toSourceSpan(sourceFile)!.text, 'undeclared_two');
       },
       skip: realImpellercPath == null
           ? 'impellerc binary not found in Flutter SDK cache'
@@ -930,6 +1153,23 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
           'TerminalShaderFragment:4:',
         ),
         isNull,
+      );
+      const paritySource = 'void mainImage() {\n  fragColor = badVar;\n}\n';
+      const parityLog =
+          "TerminalShaderFragment:12: error: 'badVar' : undeclared identifier\n";
+      expect(
+        stub.ImpellercCompiler.parseDiagnostics(
+          parityLog,
+          userSource: paritySource,
+          shimPrefixLineCount: 10,
+        ),
+        equals(
+          ImpellercCompiler.parseDiagnostics(
+            parityLog,
+            userSource: paritySource,
+            shimPrefixLineCount: 10,
+          ),
+        ),
       );
       expect(stub.ImpellercCompiler.formatCompilerError(' err '), 'err');
       expect(
