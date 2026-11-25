@@ -3,6 +3,71 @@
 All notable changes to this project will be documented in this file.
 See [Conventional Commits](https://conventionalcommits.org) for commit guidelines.
 
+## 2026-11-25
+
+### Changes
+
+---
+
+Packages with breaking changes:
+
+ - [`termui_flutter` - `v0.17.0`](#termui_flutter---v0170)
+
+Packages with other changes:
+
+ - [`termui` - `v0.21.2`](#termui---v0212)
+ - [`termui_recorder` - `v0.10.14`](#termui_recorder---v01014)
+ - [`termui_test` - `v0.4.14`](#termui_test---v0414)
+ - [`termui_hotreload` - `v0.6.40`](#termui_hotreload---v0640)
+ - [`termui_pty` - `v0.16.2`](#termui_pty---v0162)
+ - [`termui_tinpot` - `v0.5.12`](#termui_tinpot---v0512)
+
+Packages with dependency updates only:
+
+> Packages listed below depend on other packages in this workspace that have had changes. Their versions have been incremented to bump the minimum dependency versions of the packages they depend upon in this project.
+
+ - `termui_recorder` - `v0.10.14`
+ - `termui_test` - `v0.4.14`
+ - `termui_hotreload` - `v0.6.40`
+ - `termui_pty` - `v0.16.2`
+ - `termui_tinpot` - `v0.5.12`
+
+---
+
+#### `termui_flutter` - `v0.17.0`
+
+ - **REFACTOR**(termui_flutter): extract _handleDirectSyncOutcome from _renderDirectForPaintImpl.
+ - **FIX**(termui_flutter): address all 18 PR #474 review findings (H1-H7, M1-M7, L1-L4).
+ - **FIX**(review): address code review feedback - pass 1.
+ - **FIX**(termui_flutter): load fresh ShaderLibrary on reload instead of in-place reinit.
+ - **FIX**(termui_flutter): skip failed shader pipelines and stop black priming loops.
+ - **FIX**(termui_flutter): target GLSL ES 3.00 in impellerc and bump cache schema.
+ - **FEAT**(termui_flutter): add per-shader warmup window to GpuFrameWatchdog.
+ - **FEAT**(termui_flutter): track and skip quarantined custom shaders in host.
+ - **FEAT**(termui_flutter): wire multi-span diagnostics into impellerc and WebGL2.
+ - **FEAT**(termui_flutter): add pure-Dart GLSL diagnostic log parser.
+ - **FEAT**(termui_flutter): add static GLSL linter for stage and GPU hazards.
+ - **FEAT**(termui_flutter): attach source spans to GLSL shim errors.
+ - **FEAT**(termui_flutter): track per-pass shader compile errors.
+ - **FEAT**(termui_flutter): add span-annotated shader diagnostics.
+ - **FEAT**(termui_flutter): scope watchdog custom shaders by source.
+ - **BREAKING** **FEAT**(termui_flutter): add HostShortcutResult and TerminalMetaKeyPolicy to TerminalImeClient (#464).
+
+#### `termui` - `v0.21.2`
+
+ - **REFACTOR**(termui): reduce cognitive complexity in Window and ModalOverlay (#435).
+ - **FIX**(termui): address PR #473 review findings for TextField and syntax highlighting.
+ - **FIX**(review): address code review feedback - pass 1.
+ - **FIX**(termui): default TextEditingController undo coalescing to disabled.
+ - **FIX**(termui): prevent FormState.reset() from re-triggering validation and clear edit history (#445).
+ - **FEAT**(termui): add reusable syntax TextSpan highlighter library.
+ - **FEAT**(termui): add GLSL TextMate grammar with fterm directives.
+ - **FEAT**(termui): add multi-line text selection and block deletion to TextField.
+ - **FEAT**(termui): add TextField spanBuilder hook for TextSpan styling.
+ - **FEAT**(termui): add TextField scroll persistence, insertText, and editing shortcuts.
+ - **DOCS**(termui): document TextField selection, spanBuilder, and syntax library.
+
+
 ## 2026-11-24
 
 ### Changes

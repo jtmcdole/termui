@@ -1,3 +1,17 @@
+## 0.21.2
+
+ - **REFACTOR**(termui): reduce cognitive complexity in Window and ModalOverlay (#435).
+ - **FIX**(termui): address PR #473 review findings for TextField and syntax highlighting.
+ - **FIX**(review): address code review feedback - pass 1.
+ - **FIX**(termui): default TextEditingController undo coalescing to disabled.
+ - **FIX**(termui): prevent FormState.reset() from re-triggering validation and clear edit history (#445).
+ - **FEAT**(termui): add reusable syntax TextSpan highlighter library.
+ - **FEAT**(termui): add GLSL TextMate grammar with fterm directives.
+ - **FEAT**(termui): add multi-line text selection and block deletion to TextField.
+ - **FEAT**(termui): add TextField spanBuilder hook for TextSpan styling.
+ - **FEAT**(termui): add TextField scroll persistence, insertText, and editing shortcuts.
+ - **DOCS**(termui): document TextField selection, spanBuilder, and syntax library.
+
 ## 0.21.1
 
  - **REFACTOR**(termui): deduplicate shared internal helpers (#428).
