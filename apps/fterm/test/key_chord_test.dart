@@ -188,5 +188,62 @@ void main() {
       );
       expect(res.invalid, equals(const ['bad', 'Shift+A']));
     });
+
+    test('collidesWithBuiltinShortcut classifies universal, zoom, desktop', () {
+      bool hits(String s, TargetPlatform p, {bool web = false}) =>
+          KeyChord.collidesWithBuiltinShortcut(
+            KeyChord.tryParse(s)!,
+            platform: p,
+            isWeb: web,
+          );
+
+      final universal =
+          r'Ctrl+\ Cmd+C Ctrl+Shift+C Cmd+V Cmd+Shift+V Ctrl+Shift+V '
+                  'Ctrl+Insert Shift+Insert Shift+F12'
+              .split(' ');
+      for (final p in const [TargetPlatform.macOS, TargetPlatform.linux]) {
+        for (final web in const [false, true]) {
+          for (final s in universal) {
+            expect(hits(s, p, web: web), isTrue, reason: '$s $p web=$web');
+          }
+          expect(
+            KeyChord.collidesWithBuiltinShortcut(
+              KeyChord(key: .f12, modifiers: const {}),
+              platform: p,
+              isWeb: web,
+            ),
+            isTrue,
+          );
+          for (final safe in const ['Ctrl+Shift+I', 'Alt+F4', 'Ctrl+K']) {
+            expect(hits(safe, p, web: web), isFalse);
+          }
+        }
+      }
+      for (final s in 'Cmd+= Cmd+Shift+= Cmd+- Cmd+0'.split(' ')) {
+        expect(hits(s, .macOS, web: true), isTrue);
+        expect(hits(s, .linux), isFalse);
+      }
+      for (final s in 'Ctrl+= Ctrl+Shift+= Ctrl+- Ctrl+0'.split(' ')) {
+        expect(hits(s, .linux, web: true), isTrue);
+        expect(hits(s, .macOS), isFalse);
+      }
+      for (final s in 'Cmd+1 Cmd+9 Cmd+T Cmd+W Cmd+D Cmd+Shift+D Cmd+,'.split(
+        ' ',
+      )) {
+        expect(hits(s, .macOS), isTrue);
+        expect(hits(s, .macOS, web: true), isFalse);
+        expect(hits(s, .linux), isFalse);
+      }
+      const desk =
+          'Ctrl+Shift+1 Ctrl+Shift+9 Ctrl+Shift+T Ctrl+Shift+W Ctrl+Shift+D '
+          'Ctrl+Shift+E Ctrl+Shift+, Ctrl+Shift+F5 Ctrl+Shift+F9 Ctrl+Shift+F10';
+      for (final s in desk.split(' ')) {
+        expect(hits(s, .linux), isTrue);
+        expect(hits(s, .windows), isTrue);
+        expect(hits(s, .linux, web: true), isFalse);
+      }
+      expect(hits('Ctrl+Shift+F5', .macOS), isTrue);
+      expect(hits('Ctrl+Shift+T', .android), isFalse);
+    });
   });
 }

@@ -1,13 +1,17 @@
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/font_loader.dart';
 import 'package:fterm/src/input/key_chord.dart';
 import 'package:fterm/src/launch_config.dart';
 import 'package:fterm/src/settings_storage.dart';
+import 'package:fterm/src/ui/fterm_keyboard_settings_tab.dart';
+import 'package:fterm/src/ui/fterm_overlays.dart';
 import 'package:fterm/src/ui/fterm_shell_scaffold.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
@@ -261,5 +265,137 @@ void main() {
         await _disposeWs(tester, ws);
       },
     );
+
+    testWidgets(
+      'Record chord captures chord, ignores modifier, rejects bare key, cancels on Esc',
+      (tester) async {
+        final ws = _newWorkspace();
+        await _pumpSettings(tester, ws, openKeyboard: true);
+        final prompt = find.text('Press a chord (Esc to cancel)...');
+        final err = _k('settings-passthrough-error');
+
+        Future<void> press(List<LogicalKeyboardKey> keys) async {
+          for (final k in keys) {
+            await tester.sendKeyDownEvent(k);
+          }
+          for (final k in keys.reversed) {
+            await tester.sendKeyUpEvent(k);
+          }
+          await tester.pump();
+        }
+
+        await _tap(tester, 'settings-passthrough-record');
+        expect(prompt, findsOneWidget);
+
+        await press(const [.shiftLeft]);
+        expect(prompt, findsOneWidget);
+        expect(ws.preferences.passthroughShortcuts, isEmpty);
+
+        await press(const [.keyA]);
+        expect(err, findsOneWidget);
+
+        await press(const [.controlLeft, .shiftLeft, .keyI]);
+        expect(prompt, findsNothing);
+        expect(err, findsNothing);
+        expect(
+          ws.preferences.passthroughShortcuts,
+          equals([
+            KeyChord(
+              key: .keyI,
+              modifiers: const {ev.Modifier.control, ev.Modifier.shift},
+            ),
+          ]),
+        );
+
+        await _tap(tester, 'settings-passthrough-record');
+        await press(const [.controlLeft, .shiftLeft, .keyI]);
+        expect(prompt, findsNothing);
+        expect(err, findsOneWidget);
+
+        await _tap(tester, 'settings-passthrough-record');
+        await press(const [.escape]);
+        expect(prompt, findsNothing);
+        expect(ws.activeOverlay, FtermOverlay.settings);
+        expect(_k('fterm-overlay-settings'), findsOneWidget);
+
+        await _tap(tester, 'settings-passthrough-record');
+        await _tap(tester, 'settings-passthrough-record');
+        expect(prompt, findsNothing);
+        await _disposeWs(tester, ws);
+      },
+    );
+
+    testWidgets('presets adapt to platform/web and disappear once added', (
+      tester,
+    ) async {
+      final ws = _newWorkspace();
+      final palette = FtermOverlayPalette.fromTerminalTheme(
+        ws.activeTerminalTheme,
+      );
+      Future<void> pumpTab(TargetPlatform platform, bool isWeb) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: FtermKeyboardSettingsTab(
+                  workspace: ws,
+                  palette: palette,
+                  isWeb: isWeb,
+                  platformOverride: platform,
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      await pumpTab(.macOS, true);
+      expect(_k('settings-passthrough-preset-Meta+Equal'), findsOneWidget);
+      expect(_k('settings-passthrough-preset-Alt+Meta+I'), findsOneWidget);
+      await _tap(tester, 'settings-passthrough-preset-Meta+Equal');
+      expect(_k('settings-passthrough-preset-Meta+Equal'), findsNothing);
+      await _tap(tester, 'settings-passthrough-preset-Alt+Meta+I');
+      expect(find.text('Quick-add presets'), findsNothing);
+
+      ws.updatePreferences(
+        ws.preferences.copyWith(passthroughShortcuts: const []),
+      );
+      await pumpTab(.linux, true);
+      expect(_k('settings-passthrough-preset-Ctrl+Shift+I'), findsOneWidget);
+      expect(_k('settings-passthrough-preset-Alt+ArrowLeft'), findsOneWidget);
+
+      await pumpTab(.windows, false);
+      expect(_k('settings-passthrough-preset-Alt+F4'), findsOneWidget);
+      expect(_k('settings-passthrough-preset-Alt+Space'), findsOneWidget);
+
+      await pumpTab(.linux, false);
+      expect(_k('settings-passthrough-preset-Alt+F4'), findsOneWidget);
+      expect(_k('settings-passthrough-preset-Ctrl+Shift+I'), findsOneWidget);
+      await _disposeWs(tester, ws);
+    });
+
+    testWidgets('colliding chord shows collision hint while still storing it', (
+      tester,
+    ) async {
+      final ws = _newWorkspace();
+      await _pumpSettings(tester, ws, openKeyboard: true);
+      final hint = _k('settings-passthrough-collision-hint');
+      expect(hint, findsNothing);
+
+      await tester.enterText(_k('settings-passthrough-input'), r'Ctrl+\');
+      await _tap(tester, 'settings-passthrough-add');
+      expect(
+        ws.preferences.passthroughShortcuts,
+        contains(KeyChord.tryParse(r'Ctrl+\')!),
+      );
+      expect(hint, findsOneWidget);
+
+      final chip = _k('settings-passthrough-chip-Ctrl+Backslash');
+      tester.widget<InputChip>(chip).onDeleted!();
+      await tester.pump();
+      expect(hint, findsNothing);
+      await _disposeWs(tester, ws);
+    });
   });
 }
