@@ -3537,6 +3537,95 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         );
       },
     );
+
+    testWidgets(
+      'falls back to canvas child instead of looping black frames when direct render keeps returning null after priming succeeds',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final atlasImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 32,
+            height: 32,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        addTearDown(() => atlasImg?.dispose());
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 120,
+            height: 60,
+            color: const Color(0xFF2288EE),
+          ),
+        );
+        addTearDown(() => outputImg?.dispose());
+
+        final prepareCompleter = Completer<bool>();
+        final backend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: true,
+          prepareFuture: prepareCompleter.future,
+        )..forceNullDirectRender = true;
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+
+        final batch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: const <GpuKittyQuad>[],
+          hasCanvasOnlyContent: false,
+        );
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: Center(
+              child: TerminalShaderHost(
+                controller: controller,
+                config: TerminalShaderConfig.empty,
+                activityListenable: activity,
+                atlasImage: atlasImg,
+                atlasDevicePixelRatio: 1.0,
+                directLogicalSize: const Size(120, 60),
+                directTerminalBatchProvider: (_, _) => batch,
+                child: const SizedBox(
+                  key: Key('canvas-fallback-child'),
+                  width: 120,
+                  height: 60,
+                ),
+              ),
+            ),
+          ),
+        );
+
+        // Repaint while prepareDirectResources is still in flight stays in priming.
+        activity.fire();
+        await tester.pump();
+        expect(backend.prepareCallCount, equals(1));
+
+        prepareCompleter.complete(true);
+        for (var i = 0; i < 4; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        // Must exit direct mode to Canvas fallback so real tabs show terminal
+        // text instead of bouncing black frames in an infinite priming loop.
+        expect(hostState.debugIsDirectModeActive, isFalse);
+        expect(find.byKey(const Key('canvas-fallback-child')), findsOneWidget);
+        expect(backend.prepareCallCount, lessThanOrEqualTo(2));
+      },
+    );
   });
 }
 
@@ -3547,6 +3636,7 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
   Object? directRenderError;
   bool primed;
   bool simulateBackpressureSkip = false;
+  bool forceNullDirectRender = false;
   bool _lastSyncSkipped = false;
   int directSyncAttemptCount = 0;
   int directSyncRenderCount = 0;
@@ -3601,7 +3691,7 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
     if (error != null) {
       throw error;
     }
-    if (!primed) return null;
+    if (!primed || forceNullDirectRender) return null;
     if (simulateBackpressureSkip) {
       _lastSyncSkipped = true;
       return null;

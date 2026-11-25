@@ -244,6 +244,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   bool _directFallbackActive = false;
   bool _directFallbackScheduled = false;
   bool _directPrepareInFlight = false;
+  bool _directPrimingSucceededWithoutFrame = false;
   _DirectFallbackReason _directFallbackReason = _DirectFallbackReason.none;
 
   double _devicePixelRatio = 1.0;
@@ -537,18 +538,23 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   }
 
   void _maybeRecoverDirectModeOnUpdate(TerminalShaderHost oldWidget) {
+    final atlasChanged = !identical(oldWidget.atlasImage, widget.atlasImage);
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    if (controllerChanged ||
+        atlasChanged ||
+        oldWidget.config != widget.config) {
+      _directPrimingSucceededWithoutFrame = false;
+    }
     if (!_directFallbackActive ||
         !_canUseDirectTerminalRender ||
         _directPrepareInFlight) {
       return;
     }
-    final atlasChanged = !identical(oldWidget.atlasImage, widget.atlasImage);
     final dprChanged =
         oldWidget.atlasDevicePixelRatio != widget.atlasDevicePixelRatio;
-    final controllerChanged = !identical(
-      oldWidget.controller,
-      widget.controller,
-    );
     if (controllerChanged ||
         (_directFallbackReason == _DirectFallbackReason.runtimeError &&
             oldWidget.config != widget.config)) {
@@ -1645,17 +1651,29 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       batch: effectiveBatch,
     );
     if (result.image != null) {
+      _directPrimingSucceededWithoutFrame = false;
       _directOutputLogicalSize = logicalSize;
       _replaceDirectOutputImage(result.image);
       return result.image;
     }
 
     if (result.failed) {
+      _directPrimingSucceededWithoutFrame = false;
       _enterDirectFallbackPostFrame(_DirectFallbackReason.runtimeError);
       return _directBridgeImageFor(logicalSize);
     }
 
     if (_wasLastSyncFrameSkipped(backend)) {
+      return _directBridgeImageFor(logicalSize);
+    }
+
+    if (_directPrepareInFlight) {
+      _enterDirectFallbackPostFrame(_DirectFallbackReason.priming);
+      return _directBridgeImageFor(logicalSize);
+    }
+
+    if (_directPrimingSucceededWithoutFrame) {
+      _enterDirectFallbackPostFrame(_DirectFallbackReason.runtimeError);
       return _directBridgeImageFor(logicalSize);
     }
 
@@ -1731,6 +1749,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
           .then((ready) {
             _directPrepareInFlight = false;
             if (!mounted || !ready) return;
+            _directPrimingSucceededWithoutFrame = true;
             if (_directFallbackReason == _DirectFallbackReason.priming) {
               _directFallbackReason = _DirectFallbackReason.none;
               if (_directFallbackActive) {
