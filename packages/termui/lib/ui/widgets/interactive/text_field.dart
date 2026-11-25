@@ -245,6 +245,7 @@ class TextEditingController {
 
   int _scrollOffset = 0;
   int _horizontalScrollOffset = 0;
+  int _viewportHeight = 10;
   bool _manualScroll = false;
   bool _manualHorizontalScroll = false;
   DateTime? _lastBurstEditAt;
@@ -278,6 +279,9 @@ class TextEditingController {
   int get scrollOffset => _scrollOffset;
 
   /// Sets the vertical scroll offset, clamped to `>= 0`.
+  ///
+  /// Assigning a different offset locks manual scroll until [value] changes so
+  /// layout does not snap the viewport back to the cursor.
   set scrollOffset(int newOffset) {
     final clamped = newOffset < 0 ? 0 : newOffset;
     if (_scrollOffset != clamped) {
@@ -291,6 +295,9 @@ class TextEditingController {
   int get horizontalScrollOffset => _horizontalScrollOffset;
 
   /// Sets the horizontal scroll offset, clamped to `>= 0`.
+  ///
+  /// Assigning a different offset locks manual horizontal scroll until [value]
+  /// changes so layout does not snap the viewport back to the cursor.
   set horizontalScrollOffset(int newOffset) {
     final clamped = newOffset < 0 ? 0 : newOffset;
     if (_horizontalScrollOffset != clamped) {
@@ -298,6 +305,16 @@ class TextEditingController {
       _horizontalScrollOffset = clamped;
       _notify();
     }
+  }
+
+  /// Copies scroll offsets, manual-scroll flags, and laid-out viewport height
+  /// from [other] without forcing manual-scroll lock or notifying listeners.
+  void syncScrollFrom(TextEditingController other) {
+    _scrollOffset = other._scrollOffset;
+    _horizontalScrollOffset = other._horizontalScrollOffset;
+    _manualScroll = other._manualScroll;
+    _manualHorizontalScroll = other._manualHorizontalScroll;
+    _viewportHeight = other._viewportHeight;
   }
 
   void _setAutoScrollOffset(int newOffset, {bool notify = false}) {
@@ -368,10 +385,14 @@ class TextEditingController {
   void saveStateToHistory({bool coalesce = false}) {
     final allowCoalesce = coalesce && undoCoalesceWindow > Duration.zero;
     final now = clock.now();
+    final elapsed = _lastBurstEditAt == null
+        ? null
+        : now.difference(_lastBurstEditAt!);
     if (allowCoalesce &&
         _inInsertBurst &&
-        _lastBurstEditAt != null &&
-        now.difference(_lastBurstEditAt!) <= undoCoalesceWindow &&
+        elapsed != null &&
+        elapsed >= Duration.zero &&
+        elapsed <= undoCoalesceWindow &&
         _undoStack.isNotEmpty) {
       _lastBurstEditAt = now;
       _redoStack.clear();
@@ -428,7 +449,7 @@ class TextEditingController {
       final lineIdx = sel.cursorLine.clamp(0, lines.length - 1);
       final colIdx = sel.cursorColumn.clamp(
         0,
-        lines[lineIdx].characters.length,
+        _lineGraphemeCount(lines, lineIdx),
       );
       start = _offsetFromLines(lines, lineIdx, colIdx);
       end = start;
@@ -438,8 +459,12 @@ class TextEditingController {
     }
     final prefix = chars.take(start).string;
     final suffix = chars.skip(end).string;
-    final nextText = '$prefix$replacement$suffix';
-    final nextOffset = start + replacement.characters.length;
+    final mergedPrefix = '$prefix$replacement';
+    final nextText = '$mergedPrefix$suffix';
+    final nextOffset = min(
+      mergedPrefix.characters.length,
+      nextText.characters.length,
+    );
     final pos = _lineColumnFromOffset(nextText, nextOffset);
     value = TextEditingValue(
       text: nextText,
@@ -451,19 +476,35 @@ class TextEditingController {
     );
   }
 
+  static String _lineContent(List<String> lines, int index) {
+    final line = lines[index];
+    if (index < lines.length - 1 && line.endsWith('\r')) {
+      return line.substring(0, line.length - 1);
+    }
+    return line;
+  }
+
+  static int _lineGraphemeCount(List<String> lines, int index) =>
+      _lineContent(lines, index).characters.length;
+
+  static void _setLineContent(List<String> lines, int index, String content) {
+    final hasCr = index < lines.length - 1 && lines[index].endsWith('\r');
+    lines[index] = hasCr ? '$content\r' : content;
+  }
+
   static int _offsetFromLines(List<String> lines, int line, int column) {
     var offset = 0;
     for (var i = 0; i < line; i++) {
-      offset += lines[i].characters.length + 1;
+      offset += _lineGraphemeCount(lines, i) + 1;
     }
-    return offset + column;
+    return offset + column.clamp(0, _lineGraphemeCount(lines, line));
   }
 
   static ({int line, int col}) _lineColumnFromOffset(String text, int offset) {
     final lines = text.split('\n');
     var remaining = offset;
     for (var i = 0; i < lines.length; i++) {
-      final len = lines[i].characters.length;
+      final len = _lineGraphemeCount(lines, i);
       if (remaining <= len || i == lines.length - 1) {
         return (line: i, col: remaining.clamp(0, len));
       }
@@ -516,11 +557,15 @@ class TextEditingController {
 /// | `Ctrl + W` / `Alt + W` / `Alt + Backspace` | `deleteWordLeft` | Delete the word behind the cursor. |
 /// | `Ctrl + D` / `Ctrl + Del` | `deleteWordRight`| Delete the word in front of the cursor. |
 /// | `Ctrl + Z` / `Alt + Z` | `undo` | Revert the last text mutation. |
-/// | `Ctrl + Y` / `Alt + Y` | `redo` | Reapply a previously reverted mutation. |
+/// | `Ctrl + Shift + Z` / `Ctrl + Y` / `Alt + Y` | `redo` | Reapply a previously reverted mutation. |
 /// | `Ctrl + Left` | `moveWordLeft` | Move cursor one word backward. |
 /// | `Ctrl + Right` | `moveWordRight` | Move cursor one word forward. |
 /// | `Home` / `Ctrl + Shift + Left` | `moveToLineStart`| Move cursor to the beginning of the line. |
 /// | `End` / `Ctrl + Shift + Right` | `moveToLineEnd` | Move cursor to the end of the line. |
+/// | `PageUp` / `PageDown` | `pageUp` / `pageDown` | Move cursor by one viewport page in multiline mode. |
+/// | `Shift + Arrows` / `Shift + Home/End/PageUp/PageDown` | `select*` | Extend or shrink the active selection range. |
+/// | `Ctrl + A` | `selectAll` | Select the entire text buffer. |
+/// | `Escape` | collapse selection | Collapse an active selection at the cursor. |
 ///
 /// ### Example Usage
 ///
@@ -538,16 +583,19 @@ class TextEditingController {
 ///
 /// | Property | Type | Description |
 /// | :--- | :--- | :--- |
-/// | `controller` | [TextEditingController] | Holds the text value and selection state. |
+/// | `controller` | [TextEditingController] | Holds the text value, selection, and scroll state. |
 /// | `multiline` | [bool] | Enable multi-line input and wraps lines. |
 /// | `style` | [Style] | Formatting attributes for the input text. |
 /// | `cursorStyle` | [Style] | Highlighting style for the cursor cell. |
+/// | `selectionStyle` | [Style] | Highlighting style applied to selected ranges. |
 /// | `placeholder` | [String] | Ghost hint text displayed when field is empty. |
 /// | `placeholderStyle`| [Style] | Style of the placeholder hint text. |
 /// | `obscureText` | [bool] | Masks text characters for passwords/secrets. |
 /// | `obscuringCharacter` | [String] | Single grapheme character used for masking. |
 /// | `focused` | [bool] | Determines if cursor is drawn and keys are processed. |
 /// | `customShortcuts` | [Map]? | Custom key mappings for input actions. |
+/// | `spanBuilder` | [TextFieldSpanBuilder]? | Optional styled [TextSpan] builder (e.g. syntax highlighting). |
+/// | `tabSize` | [int]? | Optional spaces inserted on unmodified `Tab`. |
 class TextField extends StatefulWidget implements Focusable {
   /// The text editing controller.
   final TextEditingController controller;
@@ -602,7 +650,8 @@ class TextField extends StatefulWidget implements Focusable {
   /// Defaults to `null`, preserving standard `Tab` focus traversal.
   final int? tabSize;
 
-  int _viewportHeight = 10;
+  int get _viewportHeight => controller._viewportHeight;
+  set _viewportHeight(int value) => controller._viewportHeight = value;
 
   /// Vertical scroll offset, persisted on [controller].
   int get scrollOffset => controller.scrollOffset;
@@ -829,7 +878,10 @@ class TextField extends StatefulWidget implements Focusable {
     final text = controller.value.text;
     final lines = controller.value.lines;
     final currentLine = cursorLine.clamp(0, lines.length - 1);
-    final clampedCol = val.clamp(0, lines[currentLine].characters.length);
+    final clampedCol = val.clamp(
+      0,
+      TextEditingController._lineGraphemeCount(lines, currentLine),
+    );
     final nextOffset = _getOffsetFromLineColumn(text, currentLine, clampedCol);
     controller.value = TextEditingValue(
       text: text,
@@ -850,7 +902,10 @@ class TextField extends StatefulWidget implements Focusable {
     final text = controller.value.text;
     final lines = controller.value.lines;
     final nextLine = val.clamp(0, lines.length - 1);
-    final clampedCol = cursorColumn.clamp(0, lines[nextLine].characters.length);
+    final clampedCol = cursorColumn.clamp(
+      0,
+      TextEditingController._lineGraphemeCount(lines, nextLine),
+    );
     final nextOffset = _getOffsetFromLineColumn(text, nextLine, clampedCol);
     controller.value = TextEditingValue(
       text: text,
@@ -893,11 +948,7 @@ class TextField extends StatefulWidget implements Focusable {
     final lines = text.split('\n');
     if (line < 0) return 0;
     if (line >= lines.length) return text.characters.length;
-    var offset = 0;
-    for (var i = 0; i < line; i++) {
-      offset += lines[i].characters.length + 1;
-    }
-    return offset + column;
+    return TextEditingController._offsetFromLines(lines, line, column);
   }
 
   TextFieldAction? _matchShortcutAction(KeyEvent event) {
@@ -909,9 +960,12 @@ class TextField extends StatefulWidget implements Focusable {
   }
 
   bool _canExecuteVerticalMove(TextFieldAction action) => switch (action) {
-    TextFieldAction.moveUp => multiline && cursorLine > 0,
+    TextFieldAction.moveUp =>
+      multiline && (cursorLine > 0 || !controller.value.selection.isCollapsed),
     TextFieldAction.moveDown =>
-      multiline && cursorLine < controller.value.lines.length - 1,
+      multiline &&
+          (cursorLine < controller.value.lines.length - 1 ||
+              !controller.value.selection.isCollapsed),
     TextFieldAction.selectUp ||
     TextFieldAction.selectDown ||
     TextFieldAction.pageUp ||
@@ -941,14 +995,20 @@ class TextField extends StatefulWidget implements Focusable {
     if (key.trim().isEmpty) {
       controller.breakUndoBurst();
     }
-    final lines = [...controller.value.lines];
-    final lineIdx = cursorLine;
-    final colIdx = cursorColumn;
-    final current = lines[lineIdx].characters;
-    lines[lineIdx] =
-        '${current.take(colIdx).string}$key${current.skip(colIdx).string}';
+    final lines = controller.value.lines;
+    final lineIdx = cursorLine.clamp(0, lines.length - 1);
+    final content = TextEditingController._lineContent(lines, lineIdx);
+    final current = content.characters;
+    final colIdx = cursorColumn.clamp(0, current.length);
+    final prefix = current.take(colIdx).string;
+    final mergedPrefix = '$prefix$key';
+    final nextContent = '$mergedPrefix${current.skip(colIdx).string}';
+    TextEditingController._setLineContent(lines, lineIdx, nextContent);
 
-    final nextCol = colIdx + 1;
+    final nextCol = min(
+      mergedPrefix.characters.length,
+      nextContent.characters.length,
+    );
     final nextText = lines.join('\n');
     final nextOffset = _getOffsetFromLineColumn(nextText, lineIdx, nextCol);
 
@@ -1004,13 +1064,17 @@ class TextField extends StatefulWidget implements Focusable {
   }
 
   void _collapseSelectionAtCursor() {
+    final text = controller.value.text;
     final sel = controller.value.selection;
+    final maxOffset = text.characters.length;
+    final safeOffset = sel.extentOffset.clamp(0, maxOffset);
+    final pos = TextEditingController._lineColumnFromOffset(text, safeOffset);
     controller.value = TextEditingValue(
-      text: controller.value.text,
+      text: text,
       selection: TextSelection.collapsed(
-        offset: sel.extentOffset,
-        line: sel.cursorLine,
-        column: sel.cursorColumn,
+        offset: safeOffset,
+        line: pos.line,
+        column: pos.col,
       ),
     );
   }
@@ -1030,23 +1094,26 @@ class TextField extends StatefulWidget implements Focusable {
     }
 
     final sel = controller.value.selection;
-    final lines = List<String>.from(controller.value.lines);
+    final lines = controller.value.lines;
+    final safeLine = cursorLine.clamp(0, lines.length - 1);
+    final safeCol = cursorColumn.clamp(
+      0,
+      TextEditingController._lineGraphemeCount(lines, safeLine),
+    );
     if (_selectionMoveTarget(action) case final moveAction?) {
       final pos = _executeNavigationAction(
         moveAction,
         lines,
-        cursorLine,
-        cursorColumn,
+        safeLine,
+        safeCol,
       );
-      final nextOffset = _getOffsetFromLineColumn(
-        controller.value.text,
-        pos.line,
-        pos.col,
-      );
+      final text = controller.value.text;
+      final maxOffset = text.characters.length;
+      final nextOffset = _getOffsetFromLineColumn(text, pos.line, pos.col);
       controller.value = TextEditingValue(
-        text: controller.value.text,
+        text: text,
         selection: TextSelection(
-          baseOffset: sel.baseOffset,
+          baseOffset: sel.baseOffset.clamp(0, maxOffset),
           extentOffset: nextOffset,
           cursorLine: pos.line,
           cursorColumn: pos.col,
@@ -1056,16 +1123,20 @@ class TextField extends StatefulWidget implements Focusable {
     }
 
     if (!sel.isCollapsed && _collapsesSelectionDirectly(action)) {
-      final targetOffset = action == TextFieldAction.moveLeft
-          ? sel.start
-          : sel.end;
+      final text = controller.value.text;
+      final maxOffset = text.characters.length;
+      final targetOffset =
+          (action == TextFieldAction.moveLeft ? sel.start : sel.end).clamp(
+            0,
+            maxOffset,
+          );
       final pos = TextEditingController._lineColumnFromOffset(
-        controller.value.text,
+        text,
         targetOffset,
       );
       controller.breakUndoBurst();
       controller.value = TextEditingValue(
-        text: controller.value.text,
+        text: text,
         selection: TextSelection.collapsed(
           offset: targetOffset,
           line: pos.line,
@@ -1081,8 +1152,8 @@ class TextField extends StatefulWidget implements Focusable {
     }
 
     final pos = _isNavigationAction(action)
-        ? _executeNavigationAction(action, lines, cursorLine, cursorColumn)
-        : _executeDeletionAction(action, lines, cursorLine, cursorColumn);
+        ? _executeNavigationAction(action, lines, safeLine, safeCol)
+        : _executeDeletionAction(action, lines, safeLine, safeCol);
 
     final nextText = lines.join('\n');
     final nextOffset = _getOffsetFromLineColumn(nextText, pos.line, pos.col);
@@ -1108,7 +1179,10 @@ class TextField extends StatefulWidget implements Focusable {
         baseOffset: 0,
         extentOffset: total,
         cursorLine: lines.length - 1,
-        cursorColumn: lines.last.characters.length,
+        cursorColumn: TextEditingController._lineGraphemeCount(
+          lines,
+          lines.length - 1,
+        ),
       ),
     );
   }
@@ -1117,10 +1191,15 @@ class TextField extends StatefulWidget implements Focusable {
       action == TextFieldAction.moveLeft || action == TextFieldAction.moveRight;
 
   static bool _deletesSelectionBlock(TextFieldAction action) =>
-      action == TextFieldAction.deleteLeft ||
-      action == TextFieldAction.deleteRight ||
-      action == TextFieldAction.deleteWordLeft ||
-      action == TextFieldAction.deleteWordRight;
+      switch (action) {
+        TextFieldAction.deleteLeft ||
+        TextFieldAction.deleteRight ||
+        TextFieldAction.deleteWordLeft ||
+        TextFieldAction.deleteWordRight ||
+        TextFieldAction.deleteToLineStart ||
+        TextFieldAction.deleteToLineEnd => true,
+        _ => false,
+      };
 
   static TextFieldAction? _selectionMoveTarget(TextFieldAction action) =>
       switch (action) {
@@ -1170,7 +1249,7 @@ class TextField extends StatefulWidget implements Focusable {
       TextFieldAction.moveToLineStart => (line: lineIdx, col: 0),
       TextFieldAction.moveToLineEnd => (
         line: lineIdx,
-        col: lines[lineIdx].characters.length,
+        col: TextEditingController._lineGraphemeCount(lines, lineIdx),
       ),
       _ => (line: lineIdx, col: colIdx),
     };
@@ -1185,11 +1264,14 @@ class TextField extends StatefulWidget implements Focusable {
     if (delta < 0) {
       if (colIdx > 0) return (line: lineIdx, col: colIdx - 1);
       if (lineIdx > 0 && multiline) {
-        return (line: lineIdx - 1, col: lines[lineIdx - 1].characters.length);
+        return (
+          line: lineIdx - 1,
+          col: TextEditingController._lineGraphemeCount(lines, lineIdx - 1),
+        );
       }
       return (line: lineIdx, col: colIdx);
     }
-    if (colIdx < lines[lineIdx].characters.length) {
+    if (colIdx < TextEditingController._lineGraphemeCount(lines, lineIdx)) {
       return (line: lineIdx, col: colIdx + 1);
     }
     if (lineIdx < lines.length - 1 && multiline) {
@@ -1206,7 +1288,10 @@ class TextField extends StatefulWidget implements Focusable {
   ) {
     if (!multiline) return (line: lineIdx, col: colIdx);
     final nextLine = (lineIdx + delta).clamp(0, lines.length - 1);
-    final nextCol = min(colIdx, lines[nextLine].characters.length);
+    final nextCol = min(
+      colIdx,
+      TextEditingController._lineGraphemeCount(lines, nextLine),
+    );
     return (line: nextLine, col: nextCol);
   }
 
@@ -1218,7 +1303,10 @@ class TextField extends StatefulWidget implements Focusable {
   ) {
     final step = max(1, _viewportHeight > 1 ? _viewportHeight - 1 : 1);
     final nextLine = (lineIdx + direction * step).clamp(0, lines.length - 1);
-    final nextCol = min(colIdx, lines[nextLine].characters.length);
+    final nextCol = min(
+      colIdx,
+      TextEditingController._lineGraphemeCount(lines, nextLine),
+    );
     if (nextLine == lineIdx && nextCol == colIdx) {
       final viewport = max<int>(1, _viewportHeight);
       final maxScroll = max<int>(0, lines.length - viewport);
@@ -1238,11 +1326,17 @@ class TextField extends StatefulWidget implements Focusable {
     if (colIdx > 0) {
       return (
         line: lineIdx,
-        col: _findWordBoundaryBackward(lines[lineIdx], colIdx),
+        col: _findWordBoundaryBackward(
+          TextEditingController._lineContent(lines, lineIdx),
+          colIdx,
+        ),
       );
     }
     if (lineIdx > 0 && multiline) {
-      return (line: lineIdx - 1, col: lines[lineIdx - 1].characters.length);
+      return (
+        line: lineIdx - 1,
+        col: TextEditingController._lineGraphemeCount(lines, lineIdx - 1),
+      );
     }
     return (line: lineIdx, col: colIdx);
   }
@@ -1252,11 +1346,9 @@ class TextField extends StatefulWidget implements Focusable {
     int lineIdx,
     int colIdx,
   ) {
-    if (colIdx < lines[lineIdx].characters.length) {
-      return (
-        line: lineIdx,
-        col: _findWordBoundaryForward(lines[lineIdx], colIdx),
-      );
+    final content = TextEditingController._lineContent(lines, lineIdx);
+    if (colIdx < content.characters.length) {
+      return (line: lineIdx, col: _findWordBoundaryForward(content, colIdx));
     }
     if (lineIdx < lines.length - 1 && multiline) {
       return (line: lineIdx + 1, col: 0);
@@ -1288,11 +1380,14 @@ class TextField extends StatefulWidget implements Focusable {
     int lineIdx,
     int colIdx,
   ) {
-    final chars = lines[lineIdx].characters;
+    final chars = TextEditingController._lineContent(lines, lineIdx).characters;
     if (colIdx > 0) {
       controller.saveStateToHistory();
-      lines[lineIdx] =
-          '${chars.take(colIdx - 1).string}${chars.skip(colIdx).string}';
+      TextEditingController._setLineContent(
+        lines,
+        lineIdx,
+        '${chars.take(colIdx - 1).string}${chars.skip(colIdx).string}',
+      );
       return (line: lineIdx, col: colIdx - 1);
     }
     if (lineIdx > 0 && multiline) {
@@ -1306,11 +1401,14 @@ class TextField extends StatefulWidget implements Focusable {
     int lineIdx,
     int colIdx,
   ) {
-    final chars = lines[lineIdx].characters;
+    final chars = TextEditingController._lineContent(lines, lineIdx).characters;
     if (colIdx < chars.length) {
       controller.saveStateToHistory();
-      lines[lineIdx] =
-          '${chars.take(colIdx).string}${chars.skip(colIdx + 1).string}';
+      TextEditingController._setLineContent(
+        lines,
+        lineIdx,
+        '${chars.take(colIdx).string}${chars.skip(colIdx + 1).string}',
+      );
     } else if (lineIdx < lines.length - 1 && multiline) {
       _mergeWithNextLine(lines, lineIdx);
     }
@@ -1322,13 +1420,17 @@ class TextField extends StatefulWidget implements Focusable {
     int lineIdx,
     int colIdx,
   ) {
-    final chars = lines[lineIdx].characters;
+    final content = TextEditingController._lineContent(lines, lineIdx);
+    final chars = content.characters;
     if (colIdx > 0) {
-      final start = _findWordBoundaryBackward(lines[lineIdx], colIdx);
+      final start = _findWordBoundaryBackward(content, colIdx);
       if (start < colIdx) {
         controller.saveStateToHistory();
-        lines[lineIdx] =
-            '${chars.take(start).string}${chars.skip(colIdx).string}';
+        TextEditingController._setLineContent(
+          lines,
+          lineIdx,
+          '${chars.take(start).string}${chars.skip(colIdx).string}',
+        );
         return (line: lineIdx, col: start);
       }
       return (line: lineIdx, col: colIdx);
@@ -1344,13 +1446,17 @@ class TextField extends StatefulWidget implements Focusable {
     int lineIdx,
     int colIdx,
   ) {
-    final chars = lines[lineIdx].characters;
+    final content = TextEditingController._lineContent(lines, lineIdx);
+    final chars = content.characters;
     if (colIdx < chars.length) {
-      final end = _findWordBoundaryForward(lines[lineIdx], colIdx);
+      final end = _findWordBoundaryForward(content, colIdx);
       if (end > colIdx) {
         controller.saveStateToHistory();
-        lines[lineIdx] =
-            '${chars.take(colIdx).string}${chars.skip(end).string}';
+        TextEditingController._setLineContent(
+          lines,
+          lineIdx,
+          '${chars.take(colIdx).string}${chars.skip(end).string}',
+        );
       }
     } else if (lineIdx < lines.length - 1 && multiline) {
       _mergeWithNextLine(lines, lineIdx);
@@ -1365,7 +1471,12 @@ class TextField extends StatefulWidget implements Focusable {
   ) {
     if (colIdx <= 0) return (line: lineIdx, col: colIdx);
     controller.saveStateToHistory();
-    lines[lineIdx] = lines[lineIdx].characters.skip(colIdx).string;
+    final content = TextEditingController._lineContent(lines, lineIdx);
+    TextEditingController._setLineContent(
+      lines,
+      lineIdx,
+      content.characters.skip(colIdx).string,
+    );
     return (line: lineIdx, col: 0);
   }
 
@@ -1374,10 +1485,14 @@ class TextField extends StatefulWidget implements Focusable {
     int lineIdx,
     int colIdx,
   ) {
-    final chars = lines[lineIdx].characters;
+    final chars = TextEditingController._lineContent(lines, lineIdx).characters;
     if (colIdx < chars.length) {
       controller.saveStateToHistory();
-      lines[lineIdx] = chars.take(colIdx).string;
+      TextEditingController._setLineContent(
+        lines,
+        lineIdx,
+        chars.take(colIdx).string,
+      );
     } else if (lineIdx < lines.length - 1 && multiline) {
       _mergeWithNextLine(lines, lineIdx);
     }
@@ -1389,7 +1504,7 @@ class TextField extends StatefulWidget implements Focusable {
     int lineIdx,
   ) {
     controller.saveStateToHistory();
-    final prevLine = lines[lineIdx - 1];
+    final prevLine = TextEditingController._lineContent(lines, lineIdx - 1);
     lines[lineIdx - 1] = prevLine + lines[lineIdx];
     lines.removeAt(lineIdx);
     return (line: lineIdx - 1, col: prevLine.characters.length);
@@ -1397,7 +1512,8 @@ class TextField extends StatefulWidget implements Focusable {
 
   void _mergeWithNextLine(List<String> lines, int lineIdx) {
     controller.saveStateToHistory();
-    lines[lineIdx] = lines[lineIdx] + lines[lineIdx + 1];
+    lines[lineIdx] =
+        TextEditingController._lineContent(lines, lineIdx) + lines[lineIdx + 1];
     lines.removeAt(lineIdx + 1);
   }
 
@@ -1424,7 +1540,7 @@ class TextField extends StatefulWidget implements Focusable {
     if (lines.isEmpty || viewportWidth <= 0) return;
     final lineIdx = cursorLine.clamp(0, lines.length - 1);
     final metrics = _displayMetricsAt(
-      lines[lineIdx],
+      TextEditingController._lineContent(lines, lineIdx),
       cursorColumn,
       obscureText: obscureText,
     );
@@ -1591,6 +1707,13 @@ class _TextFieldRenderWidgetElement extends Element
 
   Style? _cachedMergedStyle;
   TextField? _cachedTextField;
+  TextSpan? _cachedRootSpan;
+  Style? _cachedStyledBaseStyle;
+  List<List<StyledChar>>? _cachedStyledLines;
+  String? _cachedText;
+  List<String>? _cachedLines;
+  List<int>? _cachedLineStarts;
+  bool _isDragging = false;
 
   Style _getMergedStyle(TextField textField) {
     if (_cachedTextField != textField) {
@@ -1598,6 +1721,39 @@ class _TextFieldRenderWidgetElement extends Element
       _cachedTextField = textField;
     }
     return _cachedMergedStyle!;
+  }
+
+  ({List<String> lines, List<int> lineStarts}) _ensureLineCache(String text) {
+    if (identical(_cachedText, text) &&
+        _cachedLines != null &&
+        _cachedLineStarts != null) {
+      return (lines: _cachedLines!, lineStarts: _cachedLineStarts!);
+    }
+    final lines = text.split('\n');
+    final starts = List<int>.filled(lines.length + 1, 0);
+    var offset = 0;
+    for (var i = 0; i < lines.length; i++) {
+      starts[i] = offset;
+      offset += TextEditingController._lineGraphemeCount(lines, i) + 1;
+    }
+    starts[lines.length] = offset;
+    _cachedText = text;
+    _cachedLines = lines;
+    _cachedLineStarts = starts;
+    return (lines: lines, lineStarts: starts);
+  }
+
+  List<List<StyledChar>> _getStyledLines(TextSpan rootSpan, Style baseStyle) {
+    if (identical(_cachedRootSpan, rootSpan) &&
+        _cachedStyledBaseStyle == baseStyle &&
+        _cachedStyledLines != null) {
+      return _cachedStyledLines!;
+    }
+    final built = _buildStyledLines(rootSpan, baseStyle);
+    _cachedRootSpan = rootSpan;
+    _cachedStyledBaseStyle = baseStyle;
+    _cachedStyledLines = built;
+    return built;
   }
 
   @override
@@ -1626,8 +1782,12 @@ class _TextFieldRenderWidgetElement extends Element
     } else if (height > 0) {
       textField.controller._clampScrollOffset(max(0, lines.length - height));
     }
-    if (textField.focused && !textField.controller._manualHorizontalScroll) {
-      textField.adjustHorizontalScroll(width);
+    if (!textField.controller._manualHorizontalScroll) {
+      if (textField.focused) {
+        textField.adjustHorizontalScroll(width);
+      } else {
+        textField.controller._setAutoHorizontalScrollOffset(0);
+      }
     }
 
     return constraints.constrain(Size(width, height));
@@ -1641,27 +1801,27 @@ class _TextFieldRenderWidgetElement extends Element
     final h = size.height;
     if (w <= 0 || h <= 0) return;
 
-    if (textField.value.isEmpty && textField.placeholder.isNotEmpty) {
+    final text = textField.controller.value.text;
+    if (text.isEmpty && textField.placeholder.isNotEmpty) {
       _paintPlaceholder(buffer, offset, textField);
       return;
     }
 
-    final lines = textField.controller.value.lines;
+    final cache = _ensureLineCache(text);
     final mergedCursorStyle = textField.focused
         ? _getMergedStyle(textField)
         : textField.style;
     final spanBuilder = textField.spanBuilder;
     if (spanBuilder != null && !textField.obscureText) {
-      final styledLines = _buildStyledLines(
-        spanBuilder(textField.controller.value.text, textField.style),
-        textField.style,
-      );
+      final rootSpan = spanBuilder(text, textField.style);
+      final styledLines = _getStyledLines(rootSpan, textField.style);
       _paintVisibleStyledLines(
         buffer,
         offset,
         w,
         h,
-        lines.length,
+        cache.lines.length,
+        cache.lineStarts,
         styledLines,
         textField,
         mergedCursorStyle,
@@ -1673,7 +1833,8 @@ class _TextFieldRenderWidgetElement extends Element
       offset,
       w,
       h,
-      lines,
+      cache.lines,
+      cache.lineStarts,
       textField,
       mergedCursorStyle,
     );
@@ -1685,13 +1846,12 @@ class _TextFieldRenderWidgetElement extends Element
     int width,
     int height,
     int lineCount,
+    List<int> lineStarts,
     List<List<StyledChar>> styledLines,
     TextField textField,
     Style mergedCursorStyle,
   ) {
     final cursorLine = textField.cursorLine;
-    final lines = textField.controller.value.lines;
-    var lineStartOffset = _lineStartOffset(lines, textField.scrollOffset);
     for (var y = 0; y < height; y++) {
       final lineIdx = textField.scrollOffset + y;
       if (lineIdx >= lineCount) break;
@@ -1705,10 +1865,9 @@ class _TextFieldRenderWidgetElement extends Element
         styledLine,
         textField,
         mergedCursorStyle,
-        lineStartOffset: lineStartOffset,
+        lineStartOffset: lineStarts[lineIdx],
         isCursorLine: textField.focused && lineIdx == cursorLine,
       );
-      lineStartOffset += lines[lineIdx].characters.length + 1;
     }
   }
 
@@ -1718,11 +1877,11 @@ class _TextFieldRenderWidgetElement extends Element
     int width,
     int height,
     List<String> lines,
+    List<int> lineStarts,
     TextField textField,
     Style mergedCursorStyle,
   ) {
     final cursorLine = textField.cursorLine;
-    var lineStartOffset = _lineStartOffset(lines, textField.scrollOffset);
     for (var y = 0; y < height; y++) {
       final lineIdx = textField.scrollOffset + y;
       if (lineIdx >= lines.length) break;
@@ -1730,23 +1889,13 @@ class _TextFieldRenderWidgetElement extends Element
         buffer,
         Offset(offset.dx, offset.dy + y),
         width,
-        lines[lineIdx],
+        TextEditingController._lineContent(lines, lineIdx),
         textField,
         mergedCursorStyle,
-        lineStartOffset: lineStartOffset,
+        lineStartOffset: lineStarts[lineIdx],
         isCursorLine: textField.focused && lineIdx == cursorLine,
       );
-      lineStartOffset += lines[lineIdx].characters.length + 1;
     }
-  }
-
-  static int _lineStartOffset(List<String> lines, int startLine) {
-    var offset = 0;
-    final limit = min(startLine, lines.length);
-    for (var i = 0; i < limit; i++) {
-      offset += lines[i].characters.length + 1;
-    }
-    return offset;
   }
 
   void _paintPlaceholder(Buffer buffer, Offset offset, TextField textField) {
@@ -1788,14 +1937,17 @@ class _TextFieldRenderWidgetElement extends Element
     return lines;
   }
 
+  bool _isWithinBounds(int localX, int localY) =>
+      localX >= 0 && localX < size.width && localY >= 0 && localY < size.height;
+
   @override
   bool handleMouseEvent(term.MouseEvent event, int localX, int localY) {
-    if (localX < 0 ||
-        localX >= size.width ||
-        localY < 0 ||
-        localY >= size.height) {
+    if (event.type == .release && event.button == .left) {
+      _isDragging = false;
       return false;
     }
+    if (!_isWithinBounds(localX, localY)) return false;
+
     final isPress = event.type == .press;
     final isDrag = event.type == .drag;
     if (!isPress && !isDrag) return false;
@@ -1806,7 +1958,26 @@ class _TextFieldRenderWidgetElement extends Element
       return _handleMouseWheel(textField, event.button);
     }
     if (event.button != .left) return false;
+    if (isDrag && !_isDragging) return false;
+    if (isPress) _isDragging = true;
 
+    _applyPointerSelection(
+      renderWidget,
+      textField,
+      localX,
+      localY,
+      extendSelection: isDrag || event.modifiers.contains(ev.Modifier.shift),
+    );
+    return true;
+  }
+
+  void _applyPointerSelection(
+    _TextFieldRenderWidget renderWidget,
+    TextField textField,
+    int localX,
+    int localY, {
+    required bool extendSelection,
+  }) {
     renderWidget.focusNode.requestFocus();
     textField.controller.breakUndoBurst();
     final text = textField.controller.value.text;
@@ -1816,7 +1987,7 @@ class _TextFieldRenderWidgetElement extends Element
       lines.length - 1,
     );
     final targetCol = _resolveClickedColumn(
-      lines[targetLine],
+      TextEditingController._lineContent(lines, targetLine),
       localX + textField.horizontalScrollOffset,
       obscureText: textField.obscureText,
     );
@@ -1825,10 +1996,11 @@ class _TextFieldRenderWidgetElement extends Element
       targetLine,
       targetCol,
     );
-    final extendSelection =
-        isDrag || event.modifiers.contains(ev.Modifier.shift);
     final baseOffset = extendSelection
-        ? textField.controller.value.selection.baseOffset
+        ? textField.controller.value.selection.baseOffset.clamp(
+            0,
+            text.characters.length,
+          )
         : nextOffset;
     textField.controller.value = TextEditingValue(
       text: text,
@@ -1839,7 +2011,6 @@ class _TextFieldRenderWidgetElement extends Element
         cursorColumn: targetCol,
       ),
     );
-    return true;
   }
 
   bool _handleMouseWheel(TextField textField, term.MouseButton button) {
@@ -2035,7 +2206,6 @@ class _TextFieldRenderWidgetElement extends Element
         step,
         char,
         cellStyle,
-        textField.style,
       );
       if (placed == null) {
         return (
@@ -2091,7 +2261,6 @@ class _TextFieldRenderWidgetElement extends Element
         step,
         sc.char,
         cellStyle,
-        textField.style,
       );
       if (placed == null) {
         return (
@@ -2122,7 +2291,6 @@ class _TextFieldRenderWidgetElement extends Element
     int step,
     String char,
     Style cellStyle,
-    Style fallbackStyle,
   ) {
     if (displayCol + step <= hScroll) return 0;
     final screenX = displayCol - hScroll;
@@ -2131,10 +2299,11 @@ class _TextFieldRenderWidgetElement extends Element
         rowOffset.dx,
         rowOffset.dy,
         char: ' ',
-        fg: fallbackStyle.foreground?.argb ?? 0,
-        bg: fallbackStyle.background?.argb ?? 0,
-        modifiers: fallbackStyle.modifiers,
-        underlineColor: 0,
+        fg: cellStyle.foreground?.argb ?? 0,
+        bg: cellStyle.background?.argb ?? 0,
+        modifiers: cellStyle.modifiers,
+        underlineColor: cellStyle.underlineColor?.argb ?? 0,
+        uri: cellStyle.uri,
       );
       return displayCol + step - hScroll;
     }

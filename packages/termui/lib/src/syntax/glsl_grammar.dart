@@ -1,4 +1,4 @@
-import 'package:syntax_highlight_lite/syntax_highlight_lite.dart' as shl;
+import 'syntax_highlighter.dart';
 
 /// Language identifier used when registering GLSL with `syntax_highlight_lite`.
 const String kGlslLanguageId = 'glsl';
@@ -30,13 +30,13 @@ const String kGlslTextMateGrammarJson = r'''
   "repository": {
     "fterm-directive": {
       "name": "meta.directive.fterm.glsl",
-      "match": "//[ \\t]*@(?:fterm-)?stage\\b[^\\n]*"
+      "match": "//[ \\t]*@(?:fterm-)?stage\\b[^\\r\\n]*"
     },
     "comments": {
       "patterns": [
         {
           "name": "comment.line.double-slash.glsl",
-          "match": "//[^\\n]*"
+          "match": "//[^\\r\\n]*"
         },
         {
           "name": "comment.block.glsl",
@@ -51,7 +51,7 @@ const String kGlslTextMateGrammarJson = r'''
     },
     "strings": {
       "name": "string.quoted.double.glsl",
-      "match": "\"(?:\\\\.|[^\"\\\\\\n])*\""
+      "match": "\"(?:\\\\.|[^\"\\\\\\r\\n])*\""
     },
     "shadertoy-uniforms": {
       "name": "variable.language.shadertoy.glsl",
@@ -93,5 +93,5 @@ const String kGlslTextMateGrammarJson = r'''
 ///
 /// Safe to call multiple times; subsequent calls are no-ops.
 void registerGlslLanguage() {
-  shl.Highlighter.addLanguage(kGlslLanguageId, kGlslTextMateGrammarJson);
+  registerSyntaxGrammarIfAbsent(kGlslLanguageId, kGlslTextMateGrammarJson);
 }

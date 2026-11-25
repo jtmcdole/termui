@@ -1008,7 +1008,7 @@ sealed class _BaseTextInputFormFieldState<W extends FormField<String>>
     final nextInput = _inputFor(nextWidget);
     if (!identical(oldWidget, nextWidget)) {
       nextInput.controller.value = oldInput.controller.value;
-      nextInput.scrollOffset = oldInput.scrollOffset;
+      nextInput.controller.syncScrollFrom(oldInput.controller);
     }
     super.didUpdateWidget(oldWidget);
     if (nextInput.controller != oldInput.controller) {

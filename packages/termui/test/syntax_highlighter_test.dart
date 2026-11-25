@@ -318,5 +318,243 @@ void main() {
         expect(buf.getForeground(10, 0), equals(buf.getForeground(15, 0)));
       },
     );
+
+    test(
+      'H10: light themes enforce >= 3.0 contrast on hardcoded bracket colors',
+      () {
+        const code = 'void mainImage(out vec4 c) { c = vec4(sin(iTime)); }';
+        for (final theme in const <TerminalColorTheme>[
+          TerminalColorTheme.termuiLight,
+          TerminalColorTheme.solarizedLight,
+          TerminalColorTheme.highContrastLight,
+        ]) {
+          final hl = SyntaxTextHighlighter(
+            language: kGlslLanguageId,
+            theme: theme,
+          );
+          final buf = _paintRichText(
+            hl.highlight(code),
+            width: code.length + 2,
+            height: 1,
+          );
+          for (var x = 0; x < code.length; x++) {
+            if (buf.getCharacter(x, 0) == ' ') continue;
+            final ratio = TerminalContrast.contrastRatio(
+              Color.argb(buf.getForeground(x, 0)),
+              theme.background,
+            );
+            expect(
+              ratio,
+              greaterThanOrEqualTo(3.0),
+              reason:
+                  'Low contrast for "${buf.getCharacter(x, 0)}" at col $x on $theme',
+            );
+          }
+        }
+      },
+    );
+
+    test(
+      'H5 & M8: buildFieldSpan caches wrapped span and children are unmodifiable',
+      () {
+        final hl = SyntaxTextHighlighter(language: kGlslLanguageId);
+        const code = 'float x = 1.0;';
+        const bgStyle = Style(background: Color(0x14, 0x17, 0x1F));
+
+        final plain = hl.highlight(code);
+        expect(() => plain.children.clear(), throwsUnsupportedError);
+
+        final withDiag = hl.highlight(
+          code,
+          diagnostics: const <TextDiagnosticSpan>[
+            TextDiagnosticSpan(
+              line: 1,
+              column: 1,
+              length: 5,
+              underlineColor: Colors.red,
+            ),
+          ],
+        );
+        expect(() => withDiag.children.clear(), throwsUnsupportedError);
+
+        final wrapped1 = hl.buildFieldSpan(code, bgStyle);
+        final wrapped2 = hl.buildFieldSpan(code, bgStyle);
+        expect(identical(wrapped1, wrapped2), isTrue);
+        expect(() => wrapped1.children.clear(), throwsUnsupportedError);
+
+        final wrappedOtherStyle = hl.buildFieldSpan(
+          code,
+          const Style(background: Color(0x22, 0x22, 0x22)),
+        );
+        expect(identical(wrapped1, wrappedOtherStyle), isFalse);
+      },
+    );
+
+    test(
+      'M6: malformed or conflicting grammarJson throws ArgumentError without poisoning cache',
+      () {
+        registerGlslLanguage();
+        expect(
+          () => SyntaxTextHighlighter(
+            language: kGlslLanguageId,
+            grammarJson: '{not valid json',
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => SyntaxTextHighlighter(
+            language: 'bad_json_lang',
+            grammarJson: '{bad',
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => SyntaxTextHighlighter(
+            language: 'bad_array_lang',
+            grammarJson: '[]',
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => SyntaxTextHighlighter(
+            language: 'bad_empty_obj_lang',
+            grammarJson: '{}',
+          ),
+          throwsArgumentError,
+        );
+        expect(
+          () => SyntaxTextHighlighter(
+            language: 'bad_regex_lang',
+            grammarJson:
+                '{"name":"X","scopeName":"source.x","patterns":[{"match":"[unclosed"}]}',
+          ),
+          throwsArgumentError,
+        );
+        // Broken #include throws ArgumentError and does NOT poison the language key.
+        expect(
+          () => SyntaxTextHighlighter(
+            language: 'recoverable_lang',
+            grammarJson:
+                '{"name":"X","scopeName":"source.x","patterns":[{"include":"#missing"}]}',
+          ),
+          throwsArgumentError,
+        );
+        const validGrammar =
+            '{"name":"Rec","scopeName":"source.rec","patterns":[{"name":"keyword.rec","match":"\\\\bfoo\\\\b"}]}';
+        final recovered = SyntaxTextHighlighter(
+          language: 'recoverable_lang',
+          grammarJson: validGrammar,
+        );
+        expect(recovered.highlight('foo').children, isNotEmpty);
+
+        // Idempotent re-registration succeeds; conflicting re-registration throws.
+        expect(
+          () => SyntaxTextHighlighter(
+            language: 'recoverable_lang',
+            grammarJson: validGrammar,
+          ),
+          returnsNormally,
+        );
+        expect(
+          () => SyntaxTextHighlighter(
+            language: 'recoverable_lang',
+            grammarJson:
+                '{"name":"Rec2","scopeName":"source.rec2","patterns":[{"name":"keyword.rec2","match":"\\\\bbar\\\\b"}]}',
+          ),
+          throwsArgumentError,
+        );
+      },
+    );
+
+    test(
+      'M7: 300 diagnostic overlay stays under 16ms on 2000-line doc and preserves overlap priority',
+      () {
+        final source = [
+          for (var i = 0; i < 2000; i++)
+            'vec4 c$i = texture(iChannel0, uv) + sin(iTime * 0.5) * float($i);',
+        ].join('\n');
+        final hl = SyntaxTextHighlighter(language: kGlslLanguageId)
+          ..highlight(source);
+        final diags = [
+          for (var i = 1; i <= 300; i++)
+            TextDiagnosticSpan(
+              line: i * 6,
+              column: 12,
+              length: 7,
+              underlineColor: Colors.red,
+            ),
+        ];
+        final sw = Stopwatch()..start();
+        hl.highlight(source, diagnostics: diags);
+        sw.stop();
+        expect(sw.elapsedMilliseconds, lessThan(16));
+
+        // Overlapping diagnostics keep first-in-list priority and preserve non-overlapping tail.
+        const overlapCode = 'float value = 1.0;';
+        final overlapSpan = hl.highlight(
+          overlapCode,
+          diagnostics: const <TextDiagnosticSpan>[
+            TextDiagnosticSpan(
+              line: 1,
+              column: 7,
+              length: 3,
+              underlineColor: Colors.red,
+            ),
+            TextDiagnosticSpan(
+              line: 1,
+              column: 5,
+              length: 8,
+              underlineColor: Colors.yellow,
+            ),
+          ],
+        );
+        final overlapBuf = _paintRichText(overlapSpan, width: 20, height: 1);
+        expect(overlapBuf.getUnderlineColor(4, 0), equals(Colors.yellow.argb));
+        expect(overlapBuf.getUnderlineColor(6, 0), equals(Colors.red.argb));
+        expect(overlapBuf.getUnderlineColor(8, 0), equals(Colors.red.argb));
+        expect(overlapBuf.getUnderlineColor(9, 0), equals(Colors.yellow.argb));
+      },
+    );
+
+    test(
+      'M10: mid-surrogate and combining-mark diagnostics snap to grapheme boundaries',
+      () {
+        final highlighter = SyntaxTextHighlighter(
+          language: kGlslLanguageId,
+          theme: TerminalColorTheme.termuiDark,
+        );
+        final emojiSpan = highlighter.highlight(
+          '// 🔥 comment',
+          diagnostics: const <TextDiagnosticSpan>[
+            TextDiagnosticSpan(
+              line: 1,
+              column: 5,
+              length: 1,
+              underlineColor: Colors.yellow,
+            ),
+          ],
+        );
+        final emojiChars = <StyledChar>[];
+        emojiSpan.buildStyledChars(emojiChars, Style.empty);
+        expect(emojiChars[3].char, equals('🔥'));
+        expect(emojiChars[3].style.underlineColor, equals(Colors.yellow));
+
+        final combiningSpan = highlighter.highlight(
+          '// e\u0301 ok',
+          diagnostics: const <TextDiagnosticSpan>[
+            TextDiagnosticSpan(
+              line: 1,
+              column: 5,
+              length: 1,
+              underlineColor: Colors.red,
+            ),
+          ],
+        );
+        final combiningChars = <StyledChar>[];
+        combiningSpan.buildStyledChars(combiningChars, Style.empty);
+        expect(combiningChars[3].char, equals('e\u0301'));
+        expect(combiningChars[3].style.underlineColor, equals(Colors.red));
+      },
+    );
   });
 }
