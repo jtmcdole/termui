@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -781,6 +782,53 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     );
 
     test(
+      'emits GLSL ES 3.00 (#version 300 es) instead of #version 100 for const array initializers',
+      () async {
+        final cacheDir = Directory.systemTemp.createTempSync(
+          'termui_gles300_shader_cache_',
+        );
+        addTearDown(() => cacheDir.deleteSync(recursive: true));
+
+        final compiler = ImpellercCompiler(
+          impellercPathOverride: realImpellercPath,
+          cacheDirectoryPath: cacheDir.path,
+        );
+
+        const arrayInitShader = '''
+const vec2 kCorners[] = vec2[](
+  vec2(0.0, 0.0),
+  vec2(1.0, 0.0),
+  vec2(0.0, 1.0),
+  vec2(1.0, 1.0)
+);
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / max(iResolution.xy, vec2(1.0));
+  vec2 c = kCorners[int(mod(iTime, 4.0))];
+  fragColor = vec4(uv, c.x, 1.0);
+}
+''';
+
+        final compiled = await compiler.compile(
+          arrayInitShader,
+          shaderId: 'northern_nested_circles_repro',
+        );
+        final bytes = compiled.bytes.buffer.asUint8List(
+          compiled.bytes.offsetInBytes,
+          compiled.bytes.lengthInBytes,
+        );
+        expect(ImpellercCompiler.isValidShaderBundleBytes(bytes), isTrue);
+
+        final bundleText = latin1.decode(bytes);
+        expect(bundleText, contains('#version 300 es'));
+        expect(bundleText, isNot(contains('#version 100')));
+      },
+      skip: realImpellercPath == null
+          ? 'impellerc binary not found in Flutter SDK cache'
+          : false,
+    );
+
+    test(
       'resolveSafeGpuColorFormat maps PixelFormat.unknown to b8g8r8a8UNormInt',
       () {
         expect(
@@ -803,6 +851,50 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         );
       },
     );
+
+    test('filterHealthyShaderPasses preserves healthy lists without copying and drops failed handles', () {
+      final uniforms = TerminalShaderUniforms(width: 640, height: 480);
+      final ShaderPassInvocation healthy = (
+        handle: const _FakeHandle('bg:healthy'),
+        uniforms: uniforms,
+        prevFrameKey: null,
+      );
+      final ShaderPassInvocation broken = (
+        handle: const _FakeHandle('bg:broken'),
+        uniforms: uniforms,
+        prevFrameKey: null,
+      );
+
+      const empty = <ShaderPassInvocation>[];
+      expect(
+        identical(
+          FlutterGpuShaderBackend.filterHealthyShaderPasses(empty),
+          empty,
+        ),
+        isTrue,
+      );
+
+      final allHealthy = <ShaderPassInvocation>[healthy];
+      expect(
+        identical(
+          FlutterGpuShaderBackend.filterHealthyShaderPasses(allHealthy),
+          allHealthy,
+        ),
+        isTrue,
+      );
+
+      final filtered = FlutterGpuShaderBackend.filterHealthyShaderPasses(
+        <ShaderPassInvocation>[healthy, broken],
+        isFailed: (h) => h.id == 'bg:broken',
+      );
+      expect(filtered.map((p) => p.handle.id), equals(<String>['bg:healthy']));
+
+      final allBroken = FlutterGpuShaderBackend.filterHealthyShaderPasses(
+        <ShaderPassInvocation>[broken],
+        isFailed: (h) => h.id == 'bg:broken',
+      );
+      expect(allBroken, isEmpty);
+    });
 
     test(
       'compiles GpuAtlasShaders instanced Impeller bundle via real impellerc into valid IPSB FlatBuffer',

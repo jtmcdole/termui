@@ -55,7 +55,7 @@ final class ImpellercCompiler {
     '/srv/opt/flutter/stable',
   ];
 
-  static const String _cacheSchemaVersion = 'v1';
+  static const String _cacheSchemaVersion = 'v2';
 
   static int _atomicWriteCounter = 0;
 
@@ -442,6 +442,7 @@ final class ImpellercCompiler {
         '--shader-bundle=$bundleSpec',
         '--sl=${outFile.path}',
         '--include=${incDir.path}',
+        '--gles-language-version=300',
         '--verbose',
       ];
       final result = await _runSubprocessWithTimeout(
