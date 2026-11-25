@@ -195,9 +195,9 @@ final class _GpuCompiledShaderHandle implements CompiledShaderHandle {
   final String id;
 
   final bool requestedUsesPrevFrame;
-  final gpu.ShaderLibrary library;
-  final gpu.Shader vertexShader;
-  final gpu.Shader fragmentShader;
+  gpu.ShaderLibrary library;
+  gpu.Shader vertexShader;
+  gpu.Shader fragmentShader;
   final GpuReflectionBindingCache reflectionCache = GpuReflectionBindingCache();
   final void Function(_GpuCompiledShaderHandle handle) onDispose;
 
@@ -243,9 +243,15 @@ final class _GpuCompiledShaderHandle implements CompiledShaderHandle {
   }
 
   void applyReload({
+    required gpu.ShaderLibrary nextLibrary,
+    required gpu.Shader nextVertexShader,
+    required gpu.Shader nextFragmentShader,
     required gpu.RenderPipeline nextPipeline,
     required bool analysisUsesPrevFrame,
   }) {
+    library = nextLibrary;
+    vertexShader = nextVertexShader;
+    fragmentShader = nextFragmentShader;
     pipeline = nextPipeline;
     _usesPrevFrame = requestedUsesPrevFrame || analysisUsesPrevFrame;
     _pipelineFailed = false;
@@ -612,19 +618,32 @@ final class FlutterGpuShaderBackend
     );
     _ensureNotDisposed();
     _requireOwnedHandle(gpuHandle);
-    final error = gpuHandle.library.reinitializeFromBytes(compiled.bytes);
-    if (error != null) {
+    // Load a fresh ShaderLibrary (unique library_id) instead of mutating in
+    // place via reinitializeFromBytes(). In Flutter 3.50's Impeller GLES
+    // backend, dirty-shader eviction runs unlocked pipelines_ erasure and
+    // ShaderLibraryGLES::UnregisterFunction under a ReaderLock, which races
+    // with active sibling tabs and can deadlock Windows ANGLE/GLES.
+    final nextLibrary = await _loadShaderLibrary(gpuHandle.id, compiled.bytes);
+    _ensureNotDisposed();
+    _requireOwnedHandle(gpuHandle);
+    final nextVertex = nextLibrary[ShadertoyGlslShim.vertexShaderName];
+    final nextFragment = nextLibrary[ShadertoyGlslShim.fragmentShaderName];
+    if (nextVertex == null || nextFragment == null) {
       throw ShaderCompileException(
         shaderId: gpuHandle.id,
-        message: 'Failed to reload Impeller shader library: $error',
+        message:
+            'Compiled shader bundle is missing vertex or fragment entrypoint.',
       );
     }
     final nextPipeline = _createPipeline(
       gpuHandle.id,
-      gpuHandle.vertexShader,
-      gpuHandle.fragmentShader,
+      nextVertex,
+      nextFragment,
     );
     gpuHandle.applyReload(
+      nextLibrary: nextLibrary,
+      nextVertexShader: nextVertex,
+      nextFragmentShader: nextFragment,
       nextPipeline: nextPipeline,
       analysisUsesPrevFrame: compiled.analysis.usesPrevFrame,
     );
