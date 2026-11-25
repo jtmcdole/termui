@@ -414,6 +414,121 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       );
       expect(resolveQuotedTokenSpan('', "'foo'"), isNull);
     });
+
+    test(
+      'avoids quadratic ReDoS on adversarial impellerc and Mesa log lines',
+      () {
+        final swNamedMulti = Stopwatch()..start();
+        parseImpellercDiagnostics('a.glsl' * 1600, userSource: '');
+        swNamedMulti.stop();
+        expect(swNamedMulti.elapsedMilliseconds, lessThan(200));
+
+        final swNamedSingle = Stopwatch()..start();
+        parseImpellercDiagnostics('${'a' * 16000}.glsl', userSource: '');
+        swNamedSingle.stop();
+        expect(swNamedSingle.elapsedMilliseconds, lessThan(200));
+
+        final swMesa = Stopwatch()..start();
+        parseWebGlDiagnostics(
+          '0:1${' ' * 16000}!',
+          userSource: '',
+          prefixLineOffset: 0,
+        );
+        swMesa.stop();
+        expect(swMesa.elapsedMilliseconds, lessThan(200));
+
+        // Delimiter-anchored named file pattern still matches colon- and
+        // whitespace-prefixed compiler lines as well as unprefixed lines.
+        final prefixed = parseImpellercDiagnostics(
+          'impellerc:foo.glsl:1:3: error: bad token',
+          userSource: 'float x = bad;',
+        );
+        expect(prefixed, hasLength(1));
+        expect(prefixed.single.line, equals(1));
+        expect(prefixed.single.column, equals(3));
+
+        // Mesa lines without explicit column still parse with trailing spaces.
+        final mesaNoCol = parseWebGlDiagnostics(
+          '0:12   : warning: precision hint',
+          userSource: '',
+          prefixLineOffset: 0,
+        );
+        expect(mesaNoCol, hasLength(1));
+        expect(mesaNoCol.single.line, equals(12));
+        expect(mesaNoCol.single.column, isNull);
+        expect(mesaNoCol.single.severity, ShaderDiagnosticSeverity.warning);
+      },
+    );
+
+    test('handles empty quotes before real quoted token and skips comments in token lookup', () {
+      const userSource =
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  fragColor = badToken + 1.0;\n'
+          '}\n';
+      final sourceFile = SourceFile.fromString(userSource);
+      final diags = parseWebGlDiagnostics(
+        "ERROR: 0:42: '' : syntax error, unexpected 'badToken'",
+        userSource: userSource,
+        prefixLineOffset: 40,
+      );
+      expect(diags, hasLength(1));
+      expect(diags.single.line, equals(2));
+      expect(diags.single.column, isNotNull);
+      expect(diags.single.toSourceSpan(sourceFile)!.text, equals('badToken'));
+
+      // Inline block comments and trailing line comments are masked before search.
+      const leadingCommentLine = '/* badToken */ fragColor = badToken;';
+      final leadingSpan = resolveQuotedTokenSpan(
+        leadingCommentLine,
+        "ERROR: 'badToken' : undeclared identifier",
+      );
+      expect(leadingSpan, isNotNull);
+      expect(leadingSpan!.column, equals(28));
+      expect(leadingSpan.length, equals('badToken'.length));
+
+      expect(
+        resolveQuotedTokenSpan(
+          'fragColor = vec4(1.0); // badToken',
+          "ERROR: 'badToken' : undeclared identifier",
+        ),
+        isNull,
+      );
+      expect(
+        resolveQuotedTokenSpan(
+          '/* unclosed badToken',
+          "ERROR: 'badToken' : undeclared identifier",
+        ),
+        isNull,
+      );
+    });
+
+    test(
+      'returns unmodifiable diagnostic lists from impellerc and WebGL parsers',
+      () {
+        final impParsed = parseImpellercDiagnostics(
+          'ERROR: TerminalShaderFragment:5: syntax error',
+          userSource: '',
+        );
+        final impFallback = parseImpellercDiagnostics(
+          'plain failure',
+          userSource: '',
+        );
+        final webParsed = parseWebGlDiagnostics(
+          'ERROR: 0:5: syntax error',
+          userSource: '',
+          prefixLineOffset: 0,
+        );
+        final webFallback = parseWebGlDiagnostics(
+          'Fragment shader failed to link.',
+          userSource: '',
+          prefixLineOffset: 0,
+        );
+        expect(() => impParsed.clear(), throwsUnsupportedError);
+        expect(() => impFallback.clear(), throwsUnsupportedError);
+        expect(() => webParsed.clear(), throwsUnsupportedError);
+        expect(() => webFallback.clear(), throwsUnsupportedError);
+      },
+    );
   });
 
   group('ImpellercCompiler executable and cache path resolution', () {

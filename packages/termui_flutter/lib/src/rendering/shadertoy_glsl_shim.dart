@@ -131,7 +131,7 @@ void main() {
     multiLine: true,
   );
   static final RegExp _includeSpanPattern = RegExp(
-    r'#(?:[ \t]|/\*[\s\S]*?\*/|\\\r?\n)*include\b',
+    r'#(?:[ \t]|\\\r?\n)*include\b',
   );
   static final RegExp _hashDirectiveStartPattern = RegExp(
     r'^\s*#',
@@ -141,9 +141,12 @@ void main() {
     r'^\s*#\s*version\b',
     multiLine: true,
   );
+  static final RegExp _versionSpanPattern = RegExp(
+    r'#(?:[ \t]|\\\r?\n)*version\b',
+  );
   static final RegExp _discardPattern = RegExp(r'\bdiscard\s*;');
   static final RegExp _divZeroPattern = RegExp(
-    r'/=?\s*(?:0+\.0*|0+)[fFuU]?(?![\d.xX])',
+    r'/=?\s*(?:0+\.0*|\.0+|0+)[fFuU]?(?![\d.xX])',
   );
   static final RegExp _mainImageNamePattern = RegExp(
     r'\bvoid\s+(mainImage)\s*\(',
@@ -331,11 +334,10 @@ void main() {
     }
     final spliced = source.replaceAll(_lineContinuationPattern, '');
     final stripped = _stripComments(spliced);
-    final masked = _maskComments(source);
     if (_includeDirectivePattern.hasMatch(source) ||
         _includeDirectivePattern.hasMatch(spliced) ||
         _includeDirectivePattern.hasMatch(stripped)) {
-      final loc = _locateIncludeSpan(source, masked);
+      final loc = _locateIncludeSpan(source, _maskComments(source));
       _throwShimError(
         shaderId,
         '#include directives are disallowed in custom shaders.',
@@ -348,8 +350,9 @@ void main() {
     if (_versionDirectivePattern.hasMatch(stripped)) {
       final loc = _locateDirectiveSpan(
         source,
-        masked,
+        _maskComments(source),
         _versionDirectivePattern,
+        fallbackSpanPattern: _versionSpanPattern,
       );
       _throwShimError(
         shaderId,
@@ -401,13 +404,14 @@ void main() {
   }) {
     if (source.trim().isEmpty) return const <ShaderDiagnostic>[];
     final masked = _maskComments(source);
+    final lineStarts = _computeLineStarts(source);
     final diagnostics = <ShaderDiagnostic>[];
-    _lintStageChannelUsage(source, masked, stage, diagnostics);
-    _lintDiscardUsage(source, masked, diagnostics);
-    _lintDivisionByZero(source, masked, diagnostics);
+    _lintStageChannelUsage(source, masked, lineStarts, stage, diagnostics);
+    _lintDiscardUsage(source, masked, lineStarts, diagnostics);
+    _lintDivisionByZero(source, masked, lineStarts, diagnostics);
     _lintMissingStageDirective(source, masked, diagnostics);
     diagnostics.sort(_compareDiagnostics);
-    return diagnostics;
+    return List<ShaderDiagnostic>.unmodifiable(diagnostics);
   }
 
   static int _compareDiagnostics(ShaderDiagnostic a, ShaderDiagnostic b) {
@@ -428,7 +432,7 @@ void main() {
       shaderId: shaderId,
       message: message,
       lineNumber: line,
-      diagnostics: <ShaderDiagnostic>[
+      diagnostics: List<ShaderDiagnostic>.unmodifiable(<ShaderDiagnostic>[
         ShaderDiagnostic(
           severity: ShaderDiagnosticSeverity.error,
           origin: ShaderDiagnosticOrigin.shim,
@@ -438,19 +442,20 @@ void main() {
           length: length,
           hint: hint,
         ),
-      ],
+      ]),
     );
   }
 
   static void _lintStageChannelUsage(
     String source,
     String masked,
+    List<int> lineStarts,
     TerminalShaderStage stage,
     List<ShaderDiagnostic> out,
   ) {
     final channel0Matches = _channel0Pattern.allMatches(masked).toList();
     if (stage == TerminalShaderStage.foreground && channel0Matches.isEmpty) {
-      final loc = _locateMainImageName(source, masked);
+      final loc = _locateMainImageName(source, masked, lineStarts: lineStarts);
       out.add(
         ShaderDiagnostic(
           severity: ShaderDiagnosticSeverity.warning,
@@ -470,7 +475,12 @@ void main() {
     }
     if (stage == TerminalShaderStage.background && channel0Matches.isNotEmpty) {
       for (final match in channel0Matches) {
-        final loc = _spanFromOffsetRange(source, match.start, match.end);
+        final loc = _spanFromOffsetRange(
+          source,
+          match.start,
+          match.end,
+          lineStarts: lineStarts,
+        );
         out.add(
           ShaderDiagnostic(
             severity: ShaderDiagnosticSeverity.warning,
@@ -493,10 +503,16 @@ void main() {
   static void _lintDiscardUsage(
     String source,
     String masked,
+    List<int> lineStarts,
     List<ShaderDiagnostic> out,
   ) {
     for (final match in _discardPattern.allMatches(masked)) {
-      final loc = _spanFromOffsetRange(source, match.start, match.end);
+      final loc = _spanFromOffsetRange(
+        source,
+        match.start,
+        match.end,
+        lineStarts: lineStarts,
+      );
       out.add(
         ShaderDiagnostic(
           severity: ShaderDiagnosticSeverity.warning,
@@ -516,10 +532,16 @@ void main() {
   static void _lintDivisionByZero(
     String source,
     String masked,
+    List<int> lineStarts,
     List<ShaderDiagnostic> out,
   ) {
     for (final match in _divZeroPattern.allMatches(masked)) {
-      final loc = _spanFromOffsetRange(source, match.start, match.end);
+      final loc = _spanFromOffsetRange(
+        source,
+        match.start,
+        match.end,
+        lineStarts: lineStarts,
+      );
       out.add(
         ShaderDiagnostic(
           severity: ShaderDiagnosticSeverity.warning,
@@ -568,8 +590,9 @@ void main() {
 
   static ({int line, int column, int length}) _locateMainImageName(
     String source,
-    String masked,
-  ) {
+    String masked, {
+    List<int>? lineStarts,
+  }) {
     final match = _mainImageNamePattern.firstMatch(masked);
     if (match == null) return (line: 1, column: 1, length: 1);
     final nameOffset = masked.indexOf('mainImage', match.start);
@@ -578,6 +601,7 @@ void main() {
       source,
       nameOffset,
       nameOffset + 'mainImage'.length,
+      lineStarts: lineStarts,
     );
   }
 
@@ -606,35 +630,59 @@ void main() {
   static ({int line, int column, int length}) _locateDirectiveSpan(
     String source,
     String masked,
-    RegExp pattern,
-  ) {
-    final maskedMatch = pattern.firstMatch(masked);
+    RegExp pattern, {
+    RegExp? fallbackSpanPattern,
+  }) {
+    final maskedMatch =
+        pattern.firstMatch(masked) ?? fallbackSpanPattern?.firstMatch(masked);
     if (maskedMatch != null) {
       final hashOffset = masked.indexOf('#', maskedMatch.start);
       final start = hashOffset >= 0 ? hashOffset : maskedMatch.start;
       return _spanFromOffsetRange(source, start, maskedMatch.end);
     }
-    final match = pattern.firstMatch(source);
+    final match =
+        pattern.firstMatch(source) ?? fallbackSpanPattern?.firstMatch(source);
     if (match == null) return (line: 1, column: 1, length: 1);
     final hashOffset = source.indexOf('#', match.start);
     final start = hashOffset >= 0 ? hashOffset : match.start;
     return _spanFromOffsetRange(source, start, match.end);
   }
 
+  static List<int> _computeLineStarts(String source) {
+    final starts = <int>[0];
+    for (var i = 0; i < source.length; i++) {
+      if (source.codeUnitAt(i) == 0x0A) {
+        starts.add(i + 1);
+      }
+    }
+    return starts;
+  }
+
+  static int _lineIndexForOffset(List<int> lineStarts, int offset) {
+    var lo = 0;
+    var hi = lineStarts.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= offset) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return lo;
+  }
+
   static ({int line, int column, int length}) _spanFromOffsetRange(
     String source,
     int start,
-    int end,
-  ) {
+    int end, {
+    List<int>? lineStarts,
+  }) {
     final safeStart = start.clamp(0, source.length);
-    var line = 1;
-    var lineStart = 0;
-    for (var i = 0; i < safeStart; i++) {
-      if (source.codeUnitAt(i) == 0x0A) {
-        line++;
-        lineStart = i + 1;
-      }
-    }
+    final starts = lineStarts ?? _computeLineStarts(source);
+    final lineIdx = _lineIndexForOffset(starts, safeStart);
+    final line = lineIdx + 1;
+    final lineStart = starts[lineIdx];
     var clampedEnd = end.clamp(safeStart, source.length);
     for (var i = safeStart; i < clampedEnd; i++) {
       final unit = source.codeUnitAt(i);
@@ -925,11 +973,36 @@ void main() {
     var i = start;
     while (i < source.length) {
       final ch = source.codeUnitAt(i);
+      if (ch == 0x5C) {
+        final contLen = _lineContinuationLength(source, i);
+        if (contLen == 2) {
+          out.write(' \n');
+          i += 2;
+          continue;
+        }
+        if (contLen == 3) {
+          out.write(' \r\n');
+          i += 3;
+          continue;
+        }
+      }
       if (ch == 0x0A || ch == 0x0D) return i;
       out.writeCharCode(0x20);
       i++;
     }
     return i;
+  }
+
+  static int _lineContinuationLength(String source, int backslashIndex) {
+    if (backslashIndex + 1 >= source.length) return 0;
+    final next = source.codeUnitAt(backslashIndex + 1);
+    if (next == 0x0A) return 2;
+    if (next == 0x0D &&
+        backslashIndex + 2 < source.length &&
+        source.codeUnitAt(backslashIndex + 2) == 0x0A) {
+      return 3;
+    }
+    return 0;
   }
 
   static int _maskBlockComment(String source, int start, StringBuffer out) {

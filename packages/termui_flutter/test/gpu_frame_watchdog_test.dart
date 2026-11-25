@@ -186,5 +186,32 @@ void main() {
       watchdog.reset();
       expect(watchdog.warmupFramesRemainingFor('host:aurora'), equals(0));
     });
+
+    test('setActiveCustomShaders trims source keys and rejects blank sources', () {
+      final watchdog = GpuFrameWatchdog();
+      addTearDown(watchdog.dispose);
+
+      expect(
+        () => watchdog.setActiveCustomShaders(const <String>[
+          'orphan:shader',
+        ], source: ''),
+        throwsArgumentError,
+      );
+      expect(
+        () => watchdog.setActiveCustomShaders(const <String>[
+          'orphan:shader',
+        ], source: '   \t\n '),
+        throwsArgumentError,
+      );
+      expect(watchdog.activeCustomShaderIds, isEmpty);
+
+      // Whitespace-padded source normalizes to the same key as trimmed source.
+      watchdog.setActiveCustomShaders(const <String>[
+        'host:trimmed',
+      ], source: ' host ');
+      expect(watchdog.activeCustomShaderIds, equals(<String>{'host:trimmed'}));
+      watchdog.setActiveCustomShaders(const <String>[], source: 'host');
+      expect(watchdog.activeCustomShaderIds, isEmpty);
+    });
   });
 }
