@@ -662,5 +662,127 @@ void main() {
         );
       },
     );
+
+    test(
+      'auto-scroll does not notify during layout, no-op scrollOffset keeps auto-scroll active, wide cursor stays visible, off-screen EOL does not paint at col 0, CRLF splits styled lines, and Shift+Up/Down stay inside multiline field',
+      () {
+        // H1 + M1: Layout auto-scroll must not notify listeners, and no-op
+        // scrollOffset = 0 assignment must not lock manual scroll.
+        var notifyCount = 0;
+        final scrollCtrl = TextEditingController(
+          text: 'line0\nline1\nline2\nline3\nline4',
+        );
+        scrollCtrl.addListener(() => notifyCount++);
+        scrollCtrl.scrollOffset = 0; // no-op should not lock manual scroll
+        scrollCtrl.horizontalScrollOffset = 0;
+        expect(notifyCount, equals(0));
+
+        final scrollField = TextField(
+          controller: scrollCtrl,
+          multiline: true,
+          focused: true,
+        );
+        final scrollEl = scrollField.createElement();
+        scrollEl.mount(null);
+        scrollEl.layout(BoxConstraints.tight(const Size(20, 2)));
+        expect(scrollCtrl.scrollOffset, equals(3));
+        expect(notifyCount, equals(0));
+        scrollEl.unmount();
+
+        // H2: Wide emoji glyph at right edge of viewport stays visible.
+        final wideCtrl = TextEditingController(text: '0123456789🔥');
+        wideCtrl.value = const TextEditingValue(
+          text: '0123456789🔥',
+          selection: TextSelection.collapsed(offset: 10, line: 0, column: 10),
+        );
+        final wideField = TextField(
+          controller: wideCtrl,
+          multiline: false,
+          focused: true,
+        );
+        final wideEl = wideField.createElement();
+        wideEl.mount(null);
+        wideEl.layout(BoxConstraints.tight(const Size(10, 1)));
+        expect(wideCtrl.horizontalScrollOffset, equals(2));
+        final wideBuf = Buffer.blank(10, 1);
+        wideEl.paint(wideBuf, Offset.zero);
+        expect(wideBuf.getCharacter(8, 0), equals('🔥'));
+        wideEl.unmount();
+
+        // M2: Off-screen EOL selection/cursor must not paint at screen col 0.
+        final eolCtrl = TextEditingController(text: '0123456789abcdef\nhi');
+        eolCtrl.value = const TextEditingValue(
+          text: '0123456789abcdef\nhi',
+          selection: TextSelection(
+            baseOffset: 0,
+            extentOffset: 19,
+            cursorLine: 1,
+            cursorColumn: 2,
+          ),
+        );
+        eolCtrl.horizontalScrollOffset = 10;
+        final eolField = TextField(
+          controller: eolCtrl,
+          multiline: true,
+          focused: true,
+          selectionStyle: const Style(background: Colors.blue),
+          cursorStyle: const Style(background: Colors.green),
+        );
+        final eolEl = eolField.createElement();
+        eolEl.mount(null);
+        eolEl.layout(BoxConstraints.tight(const Size(10, 2)));
+        final eolBuf = Buffer.blank(10, 2);
+        eolEl.paint(eolBuf, Offset.zero);
+        expect(eolBuf.getBackground(0, 1), isNot(equals(Colors.blue.argb)));
+        expect(eolBuf.getBackground(0, 1), isNot(equals(Colors.green.argb)));
+        eolEl.unmount();
+
+        // M3: CRLF styled lines split cleanly across rows.
+        final crlfCtrl = TextEditingController(text: 'first\r\nsecond');
+        final crlfField = TextField(
+          controller: crlfCtrl,
+          multiline: true,
+          focused: false,
+          spanBuilder: (text, baseStyle) =>
+              TextSpan(text: text, style: baseStyle),
+        );
+        final crlfEl = crlfField.createElement();
+        crlfEl.mount(null);
+        crlfEl.layout(BoxConstraints.tight(const Size(10, 2)));
+        final crlfBuf = Buffer.blank(10, 2);
+        crlfEl.paint(crlfBuf, Offset.zero);
+        expect(crlfBuf.getCharacter(0, 0), equals('f'));
+        expect(crlfBuf.getCharacter(0, 1), equals('s'));
+        crlfEl.unmount();
+
+        // M4: Shift+Up on line 0 and Shift+Down on last line stay handled.
+        final selCtrl = TextEditingController(text: 'top\nbottom');
+        selCtrl.value = const TextEditingValue(
+          text: 'top\nbottom',
+          selection: TextSelection.collapsed(offset: 0, line: 0, column: 0),
+        );
+        final selField = TextField(
+          controller: selCtrl,
+          multiline: true,
+          focused: true,
+        );
+        expect(
+          selField.handleKeyEvent(
+            const KeyEvent('', KeyType.up, modifiers: {ev.Modifier.shift}),
+          ),
+          isTrue,
+        );
+        selCtrl.value = const TextEditingValue(
+          text: 'top\nbottom',
+          selection: TextSelection.collapsed(offset: 10, line: 1, column: 6),
+        );
+        expect(
+          selField.handleKeyEvent(
+            const KeyEvent('', KeyType.down, modifiers: {ev.Modifier.shift}),
+          ),
+          isTrue,
+        );
+      },
+    );
   });
 }

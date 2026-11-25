@@ -280,8 +280,8 @@ class TextEditingController {
   /// Sets the vertical scroll offset, clamped to `>= 0`.
   set scrollOffset(int newOffset) {
     final clamped = newOffset < 0 ? 0 : newOffset;
-    _manualScroll = true;
     if (_scrollOffset != clamped) {
+      _manualScroll = true;
       _scrollOffset = clamped;
       _notify();
     }
@@ -293,34 +293,34 @@ class TextEditingController {
   /// Sets the horizontal scroll offset, clamped to `>= 0`.
   set horizontalScrollOffset(int newOffset) {
     final clamped = newOffset < 0 ? 0 : newOffset;
-    _manualHorizontalScroll = true;
     if (_horizontalScrollOffset != clamped) {
+      _manualHorizontalScroll = true;
       _horizontalScrollOffset = clamped;
       _notify();
     }
   }
 
-  void _setAutoScrollOffset(int newOffset) {
+  void _setAutoScrollOffset(int newOffset, {bool notify = false}) {
     final clamped = newOffset < 0 ? 0 : newOffset;
     if (_scrollOffset != clamped) {
       _scrollOffset = clamped;
-      _notify();
+      if (notify) _notify();
     }
   }
 
-  void _clampScrollOffset(int maxScroll) {
+  void _clampScrollOffset(int maxScroll, {bool notify = false}) {
     final upper = maxScroll < 0 ? 0 : maxScroll;
     if (_scrollOffset > upper) {
       _scrollOffset = upper;
-      _notify();
+      if (notify) _notify();
     }
   }
 
-  void _setAutoHorizontalScrollOffset(int newOffset) {
+  void _setAutoHorizontalScrollOffset(int newOffset, {bool notify = false}) {
     final clamped = newOffset < 0 ? 0 : newOffset;
     if (_horizontalScrollOffset != clamped) {
       _horizontalScrollOffset = clamped;
-      _notify();
+      if (notify) _notify();
     }
   }
 
@@ -909,10 +909,11 @@ class TextField extends StatefulWidget implements Focusable {
   }
 
   bool _canExecuteVerticalMove(TextFieldAction action) => switch (action) {
-    TextFieldAction.moveUp ||
-    TextFieldAction.selectUp => multiline && cursorLine > 0,
-    TextFieldAction.moveDown || TextFieldAction.selectDown =>
+    TextFieldAction.moveUp => multiline && cursorLine > 0,
+    TextFieldAction.moveDown =>
       multiline && cursorLine < controller.value.lines.length - 1,
+    TextFieldAction.selectUp ||
+    TextFieldAction.selectDown ||
     TextFieldAction.pageUp ||
     TextFieldAction.pageDown ||
     TextFieldAction.selectPageUp ||
@@ -1223,6 +1224,7 @@ class TextField extends StatefulWidget implements Focusable {
       final maxScroll = max<int>(0, lines.length - viewport);
       controller._setAutoScrollOffset(
         min<int>(maxScroll, max<int>(0, scrollOffset + direction * step)),
+        notify: true,
       );
     }
     return (line: nextLine, col: nextCol);
@@ -1421,21 +1423,24 @@ class TextField extends StatefulWidget implements Focusable {
     final lines = controller.value.lines;
     if (lines.isEmpty || viewportWidth <= 0) return;
     final lineIdx = cursorLine.clamp(0, lines.length - 1);
-    final cursorDisplayCol = _displayColumnAt(
+    final metrics = _displayMetricsAt(
       lines[lineIdx],
       cursorColumn,
       obscureText: obscureText,
     );
     var nextHorizontal = horizontalScrollOffset;
-    if (cursorDisplayCol < nextHorizontal) {
-      nextHorizontal = cursorDisplayCol;
-    } else if (cursorDisplayCol >= nextHorizontal + viewportWidth) {
-      nextHorizontal = cursorDisplayCol - viewportWidth + 1;
+    if (metrics.col < nextHorizontal) {
+      nextHorizontal = metrics.col;
+    } else if (metrics.col + metrics.width > nextHorizontal + viewportWidth) {
+      nextHorizontal = min(
+        metrics.col,
+        metrics.col + metrics.width - viewportWidth,
+      );
     }
     controller._setAutoHorizontalScrollOffset(nextHorizontal);
   }
 
-  static int _displayColumnAt(
+  static ({int col, int width}) _displayMetricsAt(
     String line,
     int graphemeCol, {
     required bool obscureText,
@@ -1443,11 +1448,12 @@ class TextField extends StatefulWidget implements Focusable {
     var col = 0;
     var idx = 0;
     for (final ch in line.characters) {
-      if (idx >= graphemeCol) break;
-      col += obscureText ? 1 : max(1, graphemeWidth(ch));
+      final step = obscureText ? 1 : max(1, graphemeWidth(ch));
+      if (idx >= graphemeCol) return (col: col, width: step);
+      col += step;
       idx++;
     }
-    return col;
+    return (col: col, width: 1);
   }
 
   @override
@@ -1771,7 +1777,7 @@ class _TextFieldRenderWidgetElement extends Element
     final lines = <List<StyledChar>>[];
     var current = <StyledChar>[];
     for (final sc in allChars) {
-      if (sc.char == '\n') {
+      if (sc.char == '\n' || sc.char == '\r\n') {
         lines.add(current);
         current = <StyledChar>[];
       } else {
@@ -1936,7 +1942,8 @@ class _TextFieldRenderWidgetElement extends Element
     Buffer buffer,
     Offset rowOffset,
     int width,
-    ({int graphemeCount, int displayEnd, bool reachedLineEnd}) painted,
+    ({int graphemeCount, int displayEnd, int eolScreenX, bool reachedLineEnd})
+    painted,
     TextField textField,
     Style mergedCursorStyle, {
     required int lineStartOffset,
@@ -1960,11 +1967,11 @@ class _TextFieldRenderWidgetElement extends Element
     );
     if (eolSelected &&
         painted.reachedLineEnd &&
-        painted.displayEnd >= 0 &&
-        painted.displayEnd < width) {
+        painted.eolScreenX >= 0 &&
+        painted.eolScreenX < width) {
       final selStyle = textField.style.merge(textField.selectionStyle);
       buffer.setAttributes(
-        rowOffset.dx + painted.displayEnd,
+        rowOffset.dx + painted.eolScreenX,
         rowOffset.dy,
         char: ' ',
         fg: selStyle.foreground?.argb ?? 0,
@@ -1976,10 +1983,10 @@ class _TextFieldRenderWidgetElement extends Element
     if (isCursorLine &&
         painted.reachedLineEnd &&
         textField.cursorColumn >= painted.graphemeCount &&
-        painted.displayEnd >= 0 &&
-        painted.displayEnd < width) {
+        painted.eolScreenX >= 0 &&
+        painted.eolScreenX < width) {
       buffer.setAttributes(
-        rowOffset.dx + painted.displayEnd,
+        rowOffset.dx + painted.eolScreenX,
         rowOffset.dy,
         fg: mergedCursorStyle.foreground?.argb ?? 0,
         bg: mergedCursorStyle.background?.argb ?? 0,
@@ -1989,7 +1996,7 @@ class _TextFieldRenderWidgetElement extends Element
     }
   }
 
-  ({int graphemeCount, int displayEnd, bool reachedLineEnd})
+  ({int graphemeCount, int displayEnd, int eolScreenX, bool reachedLineEnd})
   _paintLineGraphemes(
     Buffer buffer,
     Offset rowOffset,
@@ -2034,6 +2041,7 @@ class _TextFieldRenderWidgetElement extends Element
         return (
           graphemeCount: graphemeIdx,
           displayEnd: displayEnd,
+          eolScreenX: displayCol - hScroll,
           reachedLineEnd: false,
         );
       }
@@ -2044,11 +2052,12 @@ class _TextFieldRenderWidgetElement extends Element
     return (
       graphemeCount: graphemeIdx,
       displayEnd: displayEnd,
+      eolScreenX: displayCol - hScroll,
       reachedLineEnd: true,
     );
   }
 
-  ({int graphemeCount, int displayEnd, bool reachedLineEnd})
+  ({int graphemeCount, int displayEnd, int eolScreenX, bool reachedLineEnd})
   _paintStyledLineGraphemes(
     Buffer buffer,
     Offset rowOffset,
@@ -2088,6 +2097,7 @@ class _TextFieldRenderWidgetElement extends Element
         return (
           graphemeCount: graphemeIdx,
           displayEnd: displayEnd,
+          eolScreenX: displayCol - hScroll,
           reachedLineEnd: false,
         );
       }
@@ -2098,6 +2108,7 @@ class _TextFieldRenderWidgetElement extends Element
     return (
       graphemeCount: graphemeIdx,
       displayEnd: displayEnd,
+      eolScreenX: displayCol - hScroll,
       reachedLineEnd: true,
     );
   }

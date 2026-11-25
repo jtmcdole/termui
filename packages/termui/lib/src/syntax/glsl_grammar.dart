@@ -83,7 +83,7 @@ const String kGlslTextMateGrammarJson = r'''
     },
     "numbers": {
       "name": "constant.numeric.glsl",
-      "match": "\\b(?:0[xX][0-9a-fA-F]+[uU]?|(?:\\d+\\.\\d*|\\.\\d+)(?:[eE][+-]?\\d+)?[fF]?|\\d+[eE][+-]?\\d+[fF]?|\\d+[uU]?)\\b"
+      "match": "(?:\\b0[xX][0-9a-fA-F]+[uU]?\\b|\\b\\d+\\.\\d*(?:[eE][+-]?\\d+)?[fF]?(?!\\w)|(?<!\\w)\\.\\d+(?:[eE][+-]?\\d+)?[fF]?\\b|\\b\\d+(?:[eE][+-]?\\d+[fF]?|[uU]?)\\b)"
     }
   }
 }
