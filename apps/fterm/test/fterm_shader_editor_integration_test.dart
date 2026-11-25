@@ -697,12 +697,24 @@ void main() {
         await tester.pump();
         expect(ws.activeSplitTree!.isZoomed, isFalse);
 
-        // Watchdog quarantine on editor pane escalates to global E-Stop and renders
-        // high-contrast recovery pill OUTSIDE TerminalShaderHost.
+        // Watchdog warmup ignores initial slow frames; sustained slow frames
+        // after warmup escalate to global E-Stop and render the high-contrast
+        // recovery pill OUTSIDE TerminalShaderHost.
         final draftId = 'editor:${editorPane.paneId}';
         editorPane.gpuFrameWatchdog.setActiveCustomShaders(<String>[
           draftId,
         ], source: 'host');
+        final warmup = editorPane.gpuFrameWatchdog.warmupFramesRemainingFor(
+          draftId,
+        );
+        expect(warmup, greaterThan(0));
+        for (var i = 0; i < warmup; i++) {
+          editorPane.gpuFrameWatchdog.recordShaderFrameDuration(
+            draftId,
+            const Duration(milliseconds: 55),
+          );
+        }
+        expect(ws.shadersEmergencyStopped, isFalse);
         for (var i = 0; i < 3; i++) {
           editorPane.gpuFrameWatchdog.recordShaderFrameDuration(
             draftId,

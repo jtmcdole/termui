@@ -240,7 +240,10 @@ final class PaneCliShaderState {
        _trustedHashes = Set<String>.of(trustedHashes),
        watchdog =
            watchdog ??
-           GpuFrameWatchdog(isBuiltinPreset: ShaderRegionPresets.isPreset),
+           GpuFrameWatchdog(
+             warmupFrameCount: GpuFrameWatchdog.recommendedWarmupFrameCount,
+             isBuiltinPreset: ShaderRegionPresets.isPreset,
+           ),
        registry =
            registry ?? CliShaderRegistry(backend: backend, watchdog: watchdog) {
     this.registry.attachWatchdog(this.watchdog);
