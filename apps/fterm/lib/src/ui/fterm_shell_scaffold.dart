@@ -27,6 +27,7 @@ import 'package:termui_flutter/termui_flutter.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../settings_storage.dart';
+import '../shader_editor/shader_editor_pane.dart';
 import '../workspace/cli_shader_state.dart';
 import '../workspace/fterm_pane_controller.dart';
 import '../workspace/fterm_workspace_controller.dart';
@@ -270,6 +271,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ws.workspaceSettings.themeSettings.faintOpacity,
       ws.backgroundOpacity,
       ws.activeShaderConfig,
+      ws.shadersEmergencyStopped,
+      ws.shaderEmergencyStopReason,
       ws.shaderController.backendKind,
       ws.localCliShaderPolicy,
       ws.remoteCliShaderPolicy,
@@ -335,7 +338,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       _lastRequestedFocusedPaneId = null;
       return;
     }
-    final targetId = widget.workspace.focusedPane?.paneId;
+    final targetId = widget.workspace.focusedPaneId;
     if (targetId == null || targetId == _lastRequestedFocusedPaneId) return;
     _lastRequestedFocusedPaneId = targetId;
     WidgetsBinding.instance.addPostFrameCallback(
@@ -385,7 +388,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   );
 
   Future<ui.Image?> _captureFocusedPaneScreenshot() async {
-    final paneId = widget.workspace.focusedPane?.paneId;
+    final paneId = widget.workspace.focusedPaneId;
     if (paneId == null) return null;
     final boundary =
         _paneBoundaryKeys[paneId]?.currentContext?.findRenderObject()
@@ -602,6 +605,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                   topOffset: (showBar && dock == DockPosition.top) ? 36 : 12,
                 ),
               ),
+              if (widget.workspace.shadersEmergencyStopped)
+                _ShaderEmergencyStopPill(workspace: widget.workspace),
               ListenableBuilder(
                 listenable: widget.workspace.chromeNotifier,
                 builder: (_, _) => FtermOverlayHost(
@@ -627,12 +632,11 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     final tree = tab.splitTree;
     if (tree.isZoomed) {
       final zoomedId = tree.zoomedPaneId;
-      final zoomedPane = zoomedId == null
-          ? null
-          : widget.workspace.paneById(zoomedId);
-      if (zoomedPane != null) {
-        return _buildPaneLeaf(
-          pane: zoomedPane,
+      if (zoomedId != null &&
+          (widget.workspace.shaderEditorPaneById(zoomedId) != null ||
+              widget.workspace.paneById(zoomedId) != null)) {
+        return _buildLeafWidget(
+          paneId: zoomedId,
           tab: tab,
           showFocusBorder: false,
           theme: theme,
@@ -646,19 +650,172 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       tab: tab,
       workspace: widget.workspace,
       theme: theme,
-      buildLeaf: (paneId) {
-        final pane = widget.workspace.paneById(paneId);
-        if (pane == null) {
-          return ColoredBox(color: Color(theme.background.argb));
-        }
-        return _buildPaneLeaf(
-          pane: pane,
-          tab: tab,
-          showFocusBorder: tree.paneCount > 1,
-          theme: theme,
-          fontSize: fontSize,
-        );
-      },
+      buildLeaf: (paneId) => _buildLeafWidget(
+        paneId: paneId,
+        tab: tab,
+        showFocusBorder: tree.paneCount > 1,
+        theme: theme,
+        fontSize: fontSize,
+      ),
+    );
+  }
+
+  Widget _buildLeafWidget({
+    required String paneId,
+    required FtermTabState tab,
+    required bool showFocusBorder,
+    required tui.TerminalColorTheme theme,
+    required double fontSize,
+  }) {
+    final editorPane = widget.workspace.shaderEditorPaneById(paneId);
+    if (editorPane != null) {
+      return _buildEditorPaneLeaf(
+        editorPane: editorPane,
+        tab: tab,
+        showFocusBorder: showFocusBorder,
+        theme: theme,
+        fontSize: fontSize,
+      );
+    }
+    final pane = widget.workspace.paneById(paneId);
+    if (pane == null) {
+      return ColoredBox(color: Color(theme.background.argb));
+    }
+    return _buildPaneLeaf(
+      pane: pane,
+      tab: tab,
+      showFocusBorder: showFocusBorder,
+      theme: theme,
+      fontSize: fontSize,
+    );
+  }
+
+  Widget _buildEditorPaneLeaf({
+    required ShaderEditorPane editorPane,
+    required FtermTabState tab,
+    required bool showFocusBorder,
+    required tui.TerminalColorTheme theme,
+    required double fontSize,
+  }) {
+    final isFocused = editorPane.paneId == tab.splitTree.focusedPaneId;
+    final defaultBg = Color(theme.background.argb);
+    final fgColor = Color(theme.foreground.argb);
+    final borderColor = isFocused
+        ? Color(theme.cursorColor.argb)
+        : fgColor.withValues(alpha: 0.16);
+    final isZoomed = tab.splitTree.zoomedPaneId == editorPane.paneId;
+
+    final surface = Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => widget.workspace.focusPane(editorPane.paneId),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          RepaintBoundary(
+            key: _boundaryKeyForPane(editorPane.paneId),
+            child: ListenableBuilder(
+              listenable: editorPane.previewConfigListenable,
+              builder: (_, _) {
+                final bgOverride = editorPane.previewBackgroundColorOverride;
+                final surfaceBg = bgOverride != null
+                    ? Color(bgOverride.argb)
+                    : defaultBg;
+                return TerminalSurface(
+                  key: _surfaceKeyForPane(editorPane.paneId),
+                  atlasController: _atlasController,
+                  focusNode: _focusNodeForPane(editorPane.paneId),
+                  autofocus:
+                      isFocused &&
+                      widget.workspace.activeOverlay == FtermOverlay.none,
+                  bufferProvider: editorPane.readDisplayBuffer,
+                  bufferListenable: editorPane.bufferListenable,
+                  cursorPositionProvider: editorPane.readCursorPosition,
+                  cursorVisibleProvider: editorPane.readCursorVisible,
+                  mouseTracking: true,
+                  macosOptionAsAlt:
+                      widget.workspace.preferences.macosOptionAsAlt,
+                  fontSize: fontSize,
+                  fontFamily: castPrimaryFontFamily,
+                  fontFamilyFallback: castFallbackFontFamilies,
+                  backgroundColor: surfaceBg,
+                  foregroundColor: fgColor,
+                  backgroundOpacity: editorPane.previewBackgroundOpacity,
+                  shaderController: widget.workspace.shaderController,
+                  shaderConfig: editorPane.resolvePreviewShaderConfig(
+                    widget.workspace.activeShaderConfig,
+                  ),
+                  maxAmbientFps: widget.workspace.maxShaderFps?.toDouble(),
+                  gpuFrameWatchdog: editorPane.gpuFrameWatchdog,
+                  faintOpacity: widget
+                      .workspace
+                      .workspaceSettings
+                      .themeSettings
+                      .faintOpacity,
+                  palette: theme,
+                  service: _terminalService,
+                  enableHostShortcuts: true,
+                  alignment: Alignment.topLeft,
+                  onViewportSizeChanged: editorPane.updateViewportSize,
+                  onInputEvent: editorPane.handleInputEvent,
+                  onTextInput: editorPane.handleCommittedText,
+                  onHostShortcut: _shortcutDispatcher.handleHostShortcut,
+                  onFocusChanged: (hasFocus) {
+                    editorPane.setFocused(hasFocus);
+                    if (hasFocus) {
+                      widget.workspace.focusPane(editorPane.paneId);
+                    }
+                  },
+                );
+              },
+            ),
+          ),
+          if (isZoomed)
+            Positioned(
+              top: 6,
+              right: 8,
+              child: IgnorePointer(
+                child: Container(
+                  key: ValueKey('pane-pill-${editorPane.paneId}'),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Color.lerp(
+                      defaultBg,
+                      fgColor,
+                      0.14,
+                    )!.withValues(alpha: 0.88),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: fgColor.withValues(alpha: 0.2)),
+                  ),
+                  child: Text(
+                    'ZOOM',
+                    style: TextStyle(
+                      color: fgColor,
+                      fontSize: 10,
+                      fontFamily: castPrimaryFontFamily,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+
+    if (!showFocusBorder) {
+      return SizedBox.expand(
+        key: ValueKey('pane-leaf-${editorPane.paneId}'),
+        child: surface,
+      );
+    }
+    return Container(
+      key: ValueKey('pane-leaf-${editorPane.paneId}'),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor, width: 1.0),
+      ),
+      child: surface,
     );
   }
 
@@ -2233,6 +2390,94 @@ final class _CliFullPaneConflictBanner extends StatelessWidget {
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _ShaderEmergencyStopPill extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+
+  const _ShaderEmergencyStopPill({required this.workspace});
+
+  @override
+  Widget build(BuildContext context) {
+    final reason = workspace.shaderEmergencyStopReason;
+    final tooltip = reason == null
+        ? 'All GPU shaders bypassed via Emergency Stop.'
+        : 'Emergency Stop: $reason';
+    return Positioned(
+      bottom: 14,
+      right: 14,
+      child: Material(
+        color: Colors.transparent,
+        elevation: 12,
+        borderRadius: BorderRadius.circular(20),
+        child: Tooltip(
+          message: tooltip,
+          child: Container(
+            key: const ValueKey('fterm-shader-estop-pill'),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFFB42318),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFFFFE4E6), width: 1.5),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0xAA000000),
+                  blurRadius: 14,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(
+                  Icons.warning_amber_rounded,
+                  size: 16,
+                  color: Color(0xFFFFFFFF),
+                ),
+                const SizedBox(width: 6),
+                const Text(
+                  'Shaders Stopped (Ctrl+Shift+F6)',
+                  style: TextStyle(
+                    color: Color(0xFFFFFFFF),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: castPrimaryFontFamily,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                InkWell(
+                  key: const ValueKey('fterm-shader-estop-resume'),
+                  borderRadius: BorderRadius.circular(12),
+                  onTap: () =>
+                      unawaited(workspace.resumeShadersFromEmergencyStop()),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFFFFF),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Text(
+                      'Resume',
+                      style: TextStyle(
+                        color: Color(0xFF912018),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        fontFamily: castPrimaryFontFamily,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
