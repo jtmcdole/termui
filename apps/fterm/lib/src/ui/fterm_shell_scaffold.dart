@@ -779,6 +779,10 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               },
             ),
           ),
+          ListenableBuilder(
+            listenable: editorPane.controller,
+            builder: (_, _) => _buildOpaqueFgPreviewPill(editorPane),
+          ),
           if (isZoomed)
             Positioned(
               top: 6,
@@ -826,6 +830,102 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
         border: Border.all(color: borderColor, width: 1.0),
       ),
       child: surface,
+    );
+  }
+
+  Widget _buildOpaqueFgPreviewPill(ShaderEditorPane editorPane) {
+    final ctrl = editorPane.controller;
+    final hidesEditor =
+        !widget.workspace.shadersEmergencyStopped &&
+        ctrl.previewMode == ShaderEditorPreviewMode.foreground &&
+        !(ctrl.lastAnalysis?.samplesChannel0 ?? true);
+    if (!hidesEditor) return const SizedBox.shrink();
+
+    const pillBg = Color(0xE6261717);
+    const pillBorder = Color(0xFFFF6B6B);
+    const pillFg = Color(0xFFFFFFFF);
+    const actionBg = Color(0xFF3A2323);
+
+    return Positioned(
+      top: 8,
+      right: 12,
+      child: Material(
+        color: Colors.transparent,
+        child: Container(
+          key: ValueKey('editor-fg-opaque-pill-${editorPane.paneId}'),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: pillBg,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: pillBorder, width: 1.25),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'FG hides editor (no iChannel0)',
+                style: TextStyle(
+                  color: pillFg,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: castPrimaryFontFamily,
+                ),
+              ),
+              const SizedBox(width: 8),
+              InkWell(
+                key: ValueKey('editor-fg-switch-bg-${editorPane.paneId}'),
+                onTap: () =>
+                    ctrl.setPreviewMode(ShaderEditorPreviewMode.background),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: actionBg,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: pillBorder),
+                  ),
+                  child: const Text(
+                    'Switch to BG',
+                    style: TextStyle(
+                      color: pillFg,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: castPrimaryFontFamily,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              InkWell(
+                key: ValueKey('editor-fg-off-${editorPane.paneId}'),
+                onTap: () => ctrl.setPreviewMode(ShaderEditorPreviewMode.off),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: actionBg,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: pillBorder),
+                  ),
+                  child: const Text(
+                    'Off',
+                    style: TextStyle(
+                      color: pillFg,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: castPrimaryFontFamily,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 

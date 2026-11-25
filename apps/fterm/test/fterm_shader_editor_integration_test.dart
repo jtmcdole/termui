@@ -832,5 +832,83 @@ void main() {
       expect(editorPane.controller.errorCount, equals(0));
       expect(rowText(1), contains('OK'));
     });
+
+    testWidgets(
+      'renders an escape pill outside TerminalShaderHost when FG preview has no iChannel0',
+      (tester) async {
+        final env = _createEnv();
+        final ws = env.workspace;
+        env.store.shaders['northern_nested_circles.glsl'] = _validBgGlsl;
+        addTearDown(() async {
+          await tester.runAsync(ws.dispose);
+          env.store.dispose();
+        });
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: FtermShellScaffold(
+              workspace: ws,
+              onOpenUrl: (_) {},
+              platformOverride: TargetPlatform.linux,
+              isWebOverride: false,
+            ),
+          ),
+        );
+        await tester.runAsync(
+          () =>
+              ws.openShaderEditorTab(pathOrKey: 'northern_nested_circles.glsl'),
+        );
+        await tester.pump();
+
+        final editorPane = ws.editorPanes.values.single;
+        final pillKey = ValueKey('editor-fg-opaque-pill-${editorPane.paneId}');
+        expect(find.byKey(pillKey), findsNothing);
+
+        // Switching a background-only shader (no iChannel0) to FG surfaces an
+        // escape pill outside TerminalShaderHost so the user is never blinded.
+        editorPane.controller.setPreviewMode(
+          ShaderEditorPreviewMode.foreground,
+        );
+        await tester.pump();
+
+        expect(find.byKey(pillKey), findsOneWidget);
+        expect(
+          find.ancestor(
+            of: find.byKey(pillKey),
+            matching: find.byType(TerminalShaderHost),
+          ),
+          findsNothing,
+        );
+
+        // Tapping Switch to BG recovers immediately and dismisses the pill.
+        await tester.tap(
+          find.byKey(ValueKey('editor-fg-switch-bg-${editorPane.paneId}')),
+        );
+        await tester.pump();
+        expect(
+          editorPane.controller.previewMode,
+          equals(ShaderEditorPreviewMode.background),
+        );
+        expect(find.byKey(pillKey), findsNothing);
+
+        // Switching back to FG and tapping Off disables preview and hides pill.
+        editorPane.controller.setPreviewMode(
+          ShaderEditorPreviewMode.foreground,
+        );
+        await tester.pump();
+        expect(find.byKey(pillKey), findsOneWidget);
+        await tester.tap(
+          find.byKey(ValueKey('editor-fg-off-${editorPane.paneId}')),
+        );
+        await tester.pump();
+        expect(
+          editorPane.controller.previewMode,
+          equals(ShaderEditorPreviewMode.off),
+        );
+        expect(find.byKey(pillKey), findsNothing);
+
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   });
 }
