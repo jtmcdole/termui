@@ -32,6 +32,7 @@ dependencies:
   characters: ^1.4.0
   clock: ^1.1.2
   hierarchical_state_machine: ^2.4.0
+  source_span: ^1.10.0
   web: ^1.1.1
 
 dev_dependencies:
