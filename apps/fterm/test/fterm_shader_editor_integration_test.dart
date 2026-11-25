@@ -960,6 +960,74 @@ void main() {
         expect(env.store.shaders['my_new_effect.glsl'], isNotNull);
         expect(find.text('my_new_effect.glsl'), findsOneWidget);
 
+        // M1: Re-opening via Desktop full path inside shadersDirectory focuses
+        // the existing tab instead of opening a duplicate.
+        final reopenedId = await ws.openShaderEditorTab(
+          pathOrKey: '/tmp/fterm/shaders/my_new_effect.glsl',
+        );
+        expect(reopenedId, equals(tabId));
+        expect(ws.editorPanes.length, equals(1));
+
+        // H1: Editor TerminalSurface forwards metaKeyPolicy from preferences.
+        ws.updatePreferences(
+          ws.preferences.copyWith(metaKeyMode: FtermMetaKeyMode.passThrough),
+        );
+        await tester.pump();
+        final editorSurface = tester.widget<TerminalSurface>(
+          find.byType(TerminalSurface),
+        );
+        expect(
+          editorSurface.metaKeyPolicy,
+          equals(TerminalMetaKeyPolicy.passThroughUnhandled),
+        );
+
+        // M4: Opaque FG escape pill stays visible after a shim error while the
+        // previously compiled opaque FG handle remains active.
+        editorPane.controller.textController.text =
+            'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+            '  fragColor = vec4(1.0, 0.0, 0.0, 1.0);\n'
+            '}';
+        editorPane.controller.setPreviewMode(
+          ShaderEditorPreviewMode.foreground,
+        );
+        await editorPane.controller.triggerCompileNow();
+        await tester.pump();
+        final pillKey = ValueKey('editor-fg-opaque-pill-${editorPane.paneId}');
+        expect(find.byKey(pillKey), findsOneWidget);
+
+        editorPane.controller.textController.text =
+            '#version 460\nvoid broken() {}';
+        await editorPane.controller.triggerCompileNow();
+        await tester.pump();
+        expect(editorPane.controller.lastAnalysis, isNull);
+        expect(find.byKey(pillKey), findsOneWidget);
+
+        // M5: Emptying buffer and closing editor still prunes preview handle.
+        final previewPassId = editorPane.previewPassId;
+        expect(ws.shaderController.handleForPass(previewPassId), isNotNull);
+        editorPane.controller.textController.text = '';
+        editorPane.controller.markSaved();
+        await ws.closePane(editorPane.paneId);
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        expect(ws.shaderController.handleForPass(previewPassId), isNull);
+
+        // M2 + L1: Concurrent openShaderEditorTab dedupes, and saving an
+        // external absolute path outside shadersDirectory fails with banner.
+        env.store.shaders['/opt/external/ext.glsl'] =
+            'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+            '  fragColor = vec4(0.0);\n'
+            '}';
+        final opens = await Future.wait<String?>(<Future<String?>>[
+          ws.openShaderEditorTab(pathOrKey: '/opt/external/ext.glsl'),
+          ws.openShaderEditorTab(pathOrKey: '/opt/external/ext.glsl'),
+        ]);
+        expect(opens[0], equals(opens[1]));
+        expect(ws.editorPanes.length, equals(1));
+        final extSaved = await ws.editorPanes.values.single.controller.save();
+        expect(extSaved, isFalse);
+        expect(ws.statusBanner, contains('Save As'));
+
         await tester.runAsync(ws.dispose);
         env.store.dispose();
         await tester.pumpWidget(const SizedBox.shrink());

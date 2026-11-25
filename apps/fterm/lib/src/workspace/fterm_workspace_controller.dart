@@ -1687,6 +1687,15 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       clonePreset: clonePreset,
     );
     if (_disposed || spec == null) return null;
+    if (trimmedPath != null && trimmedPath.isNotEmpty) {
+      final existing = _findExistingEditorPane(trimmedPath);
+      if (existing != null) {
+        focusPane(existing.paneId);
+        _activeOverlay = FtermOverlay.none;
+        _notifyChromeChanged();
+        return _tabs[existing.tabIndex].tabId;
+      }
+    }
 
     final paneId = _allocatePaneId();
     final editor = _createShaderEditorPane(
@@ -1718,10 +1727,19 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
   ({int tabIndex, String paneId})? _findExistingEditorPane(String pathOrKey) {
     final targetBase = p.basename(pathOrKey);
+    final shadersDir = _shaderProfileStore.shadersDirectoryPath;
     for (final editor in _editorPanes.values) {
-      final matchesPath = editor.sourcePath == pathOrKey;
+      final existingPath = editor.sourcePath;
+      final resolvedExisting =
+          existingPath != null &&
+              shadersDir != null &&
+              !p.isAbsolute(existingPath)
+          ? p.join(shadersDir, existingPath)
+          : existingPath;
+      final matchesPath =
+          existingPath == pathOrKey || resolvedExisting == pathOrKey;
       final matchesUntitled =
-          editor.sourcePath == null && editor.shaderName == targetBase;
+          existingPath == null && editor.shaderName == targetBase;
       if (!matchesPath && !matchesUntitled) continue;
       final tabIndex = _findTabIndexContainingPane(editor.paneId);
       if (tabIndex >= 0) {
@@ -1866,12 +1884,27 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     return const <ShaderDiagnostic>[];
   }
 
+  bool _isExternalShaderPath(String? sourcePath) {
+    final trimmed = sourcePath?.trim();
+    if (trimmed == null || trimmed.isEmpty || !p.isAbsolute(trimmed)) {
+      return false;
+    }
+    final shadersDir = _shaderProfileStore.shadersDirectoryPath;
+    return shadersDir == null || !p.isWithin(shadersDir, trimmed);
+  }
+
   Future<bool> _persistEditorShader(
     String shaderName,
     String? sourcePath,
     String source,
   ) async {
     if (_disposed) return false;
+    if (_isExternalShaderPath(sourcePath)) {
+      _lastShaderAssetError =
+          'External shader "$sourcePath" is outside the managed shaders folder. Use Save As to copy it into fterm.';
+      _setStatusBanner(_lastShaderAssetError!);
+      return false;
+    }
     final targetName = _resolveSaveShaderName(shaderName, sourcePath);
     try {
       await _shaderProfileStore.saveShaderSource(targetName, source);
@@ -2052,7 +2085,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _cancelPendingSpawnsForPane(targetPaneId);
     final removedPane = _panes.remove(targetPaneId);
     final removedEditor = _editorPanes.remove(targetPaneId);
-    final hadEditorPreview = removedEditor?.activePreviewPassSpec != null;
+    final hadEditorPreview =
+        removedEditor != null &&
+        (removedEditor.activePreviewPassSpec != null ||
+            _shaderController.handleForPass(removedEditor.previewPassId) !=
+                null);
     final nextTree = tab.splitTree.closePane(targetPaneId);
     if (nextTree == null) {
       _removeTabAt(_tabs.indexOf(tab));
