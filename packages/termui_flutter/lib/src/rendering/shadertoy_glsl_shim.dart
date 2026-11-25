@@ -335,7 +335,7 @@ void main() {
     if (_includeDirectivePattern.hasMatch(source) ||
         _includeDirectivePattern.hasMatch(spliced) ||
         _includeDirectivePattern.hasMatch(stripped)) {
-      final loc = _locateIncludeSpan(source);
+      final loc = _locateIncludeSpan(source, masked);
       _throwShimError(
         shaderId,
         '#include directives are disallowed in custom shaders.',
@@ -583,10 +583,19 @@ void main() {
 
   static ({int line, int column, int length}) _locateIncludeSpan(
     String source,
+    String masked,
   ) {
+    final maskedMatch =
+        _includeDirectivePattern.firstMatch(masked) ??
+        _includeSpanPattern.firstMatch(masked);
+    if (maskedMatch != null) {
+      final hashOffset = masked.indexOf('#', maskedMatch.start);
+      final start = hashOffset >= 0 ? hashOffset : maskedMatch.start;
+      return _spanFromOffsetRange(source, start, maskedMatch.end);
+    }
     final match =
-        _includeSpanPattern.firstMatch(source) ??
         _includeDirectivePattern.firstMatch(source) ??
+        _includeSpanPattern.firstMatch(source) ??
         _hashDirectiveStartPattern.firstMatch(source);
     if (match == null) return (line: 1, column: 1, length: 1);
     final hashOffset = source.indexOf('#', match.start);

@@ -245,6 +245,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   bool _directFallbackScheduled = false;
   bool _directPrepareInFlight = false;
   bool _directPrimingSucceededWithoutFrame = false;
+  ui.Image? _lastPrimedWallpaper;
+  Set<ui.Image> _lastPrimedKittyImages = Set<ui.Image>.identity();
+  final Map<String, CompiledShaderHandle> _lastWatchdogPassHandles =
+      <String, CompiledShaderHandle>{};
   _DirectFallbackReason _directFallbackReason = _DirectFallbackReason.none;
 
   double _devicePixelRatio = 1.0;
@@ -443,15 +447,49 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     final watchdog = widget.watchdog;
     if (watchdog == null) return;
     if (!widget.config.enabled || !_isBackendActive) {
+      _lastWatchdogPassHandles.clear();
       watchdog.setActiveCustomShaders(const <String>[], source: 'host');
       return;
     }
     final ctrl = widget.controller!;
-    watchdog.setActiveCustomShaders(
-      _collectActiveCustomHostPassIds(ctrl),
-      source: 'host',
-    );
+    final activeIds = _collectActiveCustomHostPassIds(ctrl);
+    watchdog.setActiveCustomShaders(activeIds, source: 'host');
+    final activeSet = activeIds.toSet();
+    _lastWatchdogPassHandles.removeWhere((id, _) => !activeSet.contains(id));
+    for (final id in activeIds) {
+      final handle = ctrl.handleForPass(id);
+      if (handle == null) continue;
+      final previous = _lastWatchdogPassHandles[id];
+      _lastWatchdogPassHandles[id] = handle;
+      if (previous != null && !identical(previous, handle)) {
+        watchdog.resetWarmup(id);
+      }
+    }
   }
+
+  void _resetWarmupForUpdatedHostPasses(TerminalShaderConfig oldConfig) {
+    final watchdog = widget.watchdog;
+    if (watchdog == null || oldConfig == widget.config) return;
+    final previousById = _customHostPassesById(oldConfig);
+    final currentById = _customHostPassesById(widget.config);
+    for (final entry in currentById.entries) {
+      final prev = previousById[entry.key];
+      if (prev == null) continue;
+      if (prev.inlineGlsl != entry.value.inlineGlsl ||
+          prev.customSourcePath != entry.value.customSourcePath) {
+        watchdog.resetWarmup(entry.key);
+      }
+    }
+  }
+
+  static Map<String, ShaderPassSpec> _customHostPassesById(
+    TerminalShaderConfig config,
+  ) => <String, ShaderPassSpec>{
+    for (final spec in config.backgroundPasses)
+      if (_isCustomHostPass(spec)) spec.id: spec,
+    for (final spec in config.foregroundPasses)
+      if (_isCustomHostPass(spec)) spec.id: spec,
+  };
 
   List<String> _collectActiveCustomHostPassIds(TerminalShaderController ctrl) =>
       <String>[
@@ -517,6 +555,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       );
     }
     _syncWatchdogCustomShaders();
+    _resetWarmupForUpdatedHostPasses(oldWidget.config);
     _syncFocusTransition(oldWidget);
     _syncActivityAndDirtyFlags(oldWidget);
     _maybeRecoverDirectModeOnUpdate(oldWidget);
@@ -1563,6 +1602,9 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     widget.activityListenable?.removeListener(_onExternalActivity);
     widget.mouseLogicalListenable?.removeListener(_onMouseChanged);
     widget.watchdog?.setActiveCustomShaders(const <String>[], source: 'host');
+    _lastPrimedWallpaper = null;
+    _lastPrimedKittyImages.clear();
+    _lastWatchdogPassHandles.clear();
     _backgroundOutputImage?.dispose();
     _backgroundOutputImage = null;
     _foregroundOutputImage?.dispose();
@@ -1618,6 +1660,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
 
     final batch = provider(logicalSize, _devicePixelRatio);
     if (batch == null || batch.hasCanvasOnlyContent) {
+      _directPrimingSucceededWithoutFrame = false;
       _enterDirectFallbackPostFrame(_DirectFallbackReason.canvasOnly);
       return _directBridgeImageFor(logicalSize);
     }
@@ -1684,7 +1727,11 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       _enterDirectFallbackPostFrame(_DirectFallbackReason.priming);
       return _directBridgeImageFor(logicalSize);
     }
-    if (_directPrimingSucceededWithoutFrame) {
+    final hasUnprimedInput =
+        !identical(_effectiveWallpaper, _lastPrimedWallpaper) ||
+        batch.kittyQuads.any((q) => !_lastPrimedKittyImages.contains(q.image));
+    if (_directPrimingSucceededWithoutFrame && !hasUnprimedInput) {
+      _directPrimingSucceededWithoutFrame = false;
       _enterDirectFallbackPostFrame(_DirectFallbackReason.runtimeError);
       return _directBridgeImageFor(logicalSize);
     }
@@ -1747,6 +1794,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   ) {
     if (_directPrepareInFlight) return;
     _directPrepareInFlight = true;
+    final wallpaper = _effectiveWallpaper;
     final kittyImages = <ui.Image>[
       for (final quad in batch.kittyQuads) quad.image,
     ];
@@ -1754,12 +1802,15 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       backend
           .prepareDirectResources(
             atlasImage: atlasImage,
-            wallpaperImage: _effectiveWallpaper,
+            wallpaperImage: wallpaper,
             kittyImages: kittyImages,
           )
           .then((ready) {
             _directPrepareInFlight = false;
             if (!mounted || !ready) return;
+            _lastPrimedWallpaper = wallpaper;
+            _lastPrimedKittyImages = Set<ui.Image>.identity()
+              ..addAll(kittyImages);
             _directPrimingSucceededWithoutFrame = true;
             if (_directFallbackReason == _DirectFallbackReason.priming) {
               _directFallbackReason = _DirectFallbackReason.none;

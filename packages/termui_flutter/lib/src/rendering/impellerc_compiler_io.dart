@@ -218,13 +218,31 @@ final class ImpellercCompiler {
       vertexEntryName: vertexEntryName,
       fragmentEntryName: fragmentEntryName,
       shaderId: shaderId,
-      userSource: fragmentGlsl,
+      userSource: _sliceUserSource(
+        fragmentGlsl,
+        shimPrefixLineCount: shimPrefixLineCount,
+        userLineCount: userLineCount,
+      ),
       shimPrefixLineCount: shimPrefixLineCount,
       userLineCount: userLineCount,
       timeoutOverride: timeoutOverride,
       useCache: useCache,
     );
     return result.bytes;
+  }
+
+  static String _sliceUserSource(
+    String fragmentGlsl, {
+    required int shimPrefixLineCount,
+    int? userLineCount,
+  }) {
+    if (shimPrefixLineCount <= 0 && userLineCount == null) return fragmentGlsl;
+    final lines = fragmentGlsl.split('\n');
+    final start = shimPrefixLineCount.clamp(0, lines.length);
+    final end = userLineCount != null
+        ? (start + userLineCount).clamp(start, lines.length)
+        : lines.length;
+    return lines.sublist(start, end).join('\n');
   }
 
   /// Computes a lowercase 64-character hexadecimal SHA-256 digest of UTF-8
