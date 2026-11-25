@@ -93,10 +93,10 @@ final class IoBinaryWebSocketSink implements StreamSink<Uint8List> {
     if (active != null) {
       await active;
     }
+    var timedOut = false;
     try {
       _ws.pingInterval = null;
       _onPrepareClose?.call();
-      var timedOut = false;
       await _ws
           .close(code, reason)
           .timeout(
@@ -114,10 +114,12 @@ final class IoBinaryWebSocketSink implements StreamSink<Uint8List> {
           },
         );
       }
-      if (timedOut) {
-        _onCloseTimeout?.call();
-      }
-    } on Object catch (_) {}
+    } on Object catch (_) {
+      timedOut = true;
+    }
+    if (timedOut) {
+      _onCloseTimeout?.call();
+    }
   }
 
   @override
@@ -248,10 +250,12 @@ wrapIoBinaryWebSocket(
   WebSocket ws, {
   int maxPayloadLength = BufferFrameCodec.maxFrameBytes,
   Duration pingInterval = const Duration(seconds: 20),
+  void Function()? onCloseTimeout,
 }) => _wrapIoBinaryWebSocketInternal(
   ws,
   maxPayloadLength: maxPayloadLength,
   pingInterval: pingInterval,
+  onCloseTimeout: onCloseTimeout,
 );
 
 void _markCloseHandshakeDone(WebSocket ws, Completer<void> handshakeCompleter) {
@@ -275,16 +279,25 @@ _wrapIoBinaryWebSocketInternal(
   ws.pingInterval = pingInterval;
   final handshakeCompleter = Completer<void>();
   final wsDone = Completer<void>();
+  final destroySocket = onCloseTimeout ?? meteredSocket?.destroy;
+  final doneWaitTimeout = destroySocket != null
+      ? const Duration(milliseconds: 2500)
+      : const Duration(milliseconds: 200);
   late final StreamSubscription<Object?> sub;
   late final IoBinaryWebSocketSink sink;
   late final StreamController<Uint8List> incoming;
-  Future<void> cancelSubAfterDone() async {
-    if (wsDone.isCompleted) return;
-    try {
-      await wsDone.future.timeout(const Duration(milliseconds: 200));
-    } on TimeoutException {
-      await sub.cancel();
-    }
+  Future<void>? cancelSubFuture;
+  Future<void> cancelSubAfterDone() {
+    if (wsDone.isCompleted) return Future<void>.value();
+    return cancelSubFuture ??= () async {
+      try {
+        await wsDone.future.timeout(doneWaitTimeout);
+      } on TimeoutException {
+        if (!wsDone.isCompleted) {
+          await sub.cancel();
+        }
+      }
+    }();
   }
 
   incoming = StreamController<Uint8List>(
@@ -303,7 +316,10 @@ _wrapIoBinaryWebSocketInternal(
       if (sub.isPaused) sub.resume();
     },
     onCloseTimeout: () {
-      (onCloseTimeout ?? meteredSocket?.destroy)?.call();
+      if (sub.isPaused) sub.resume();
+      if (!wsDone.isCompleted) {
+        destroySocket?.call();
+      }
       _markCloseHandshakeDone(ws, handshakeCompleter);
       unawaited(cancelSubAfterDone());
     },

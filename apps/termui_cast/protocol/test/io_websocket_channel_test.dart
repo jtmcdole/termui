@@ -326,6 +326,11 @@ void main() {
       'rejects HTTP redirects, malformed 101 upgrade headers, and cleans up timed-out late upgrades',
       _verifyUpgradeHardeningAndTimeoutCleanup,
     );
+
+    test(
+      'delayed socket destroy (>200ms) still cancels Dart 5s WebSocket close timer',
+      _verifyDelayedDestroyCancelsSdkCloseTimer,
+    );
   });
 }
 
@@ -672,6 +677,174 @@ Future<void> _assertTimeoutDestroysLateUpgradedSocket() async {
 
   await peerClosed.future.timeout(const Duration(seconds: 3));
   check(serverUpgraded).equals(1);
+}
+
+Future<void> _verifyDelayedDestroyCancelsSdkCloseTimer() async {
+  // Accept a real HTTP -> WebSocket 101 upgrade, then blackhole the TCP peer
+  // so the client's close handshake times out and invokes onCloseTimeout.
+  final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  final heldSockets = <Socket>[];
+  addTearDown(() async {
+    for (final s in heldSockets) {
+      s.destroy();
+    }
+    await server.close(force: true);
+  });
+  server.listen((req) async {
+    final key = req.headers.value('sec-websocket-key')!;
+    final accept = base64.encode(
+      sha1
+          .convert(utf8.encode('${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11'))
+          .bytes,
+    );
+    req.response
+      ..statusCode = HttpStatus.switchingProtocols
+      ..headers.add(HttpHeaders.connectionHeader, 'Upgrade')
+      ..headers.set(HttpHeaders.upgradeHeader, 'websocket')
+      ..headers.set('Sec-WebSocket-Accept', accept)
+      ..contentLength = 0;
+    final sock = await req.response.detachSocket();
+    heldSockets.add(sock);
+    sock.listen((_) {}, onError: (Object _) {});
+  });
+
+  final packageConfig = await Isolate.packageConfig;
+  check(packageConfig).isNotNull();
+  final tempDir = Directory.systemTemp.createTempSync('ws_close_timer_');
+  addTearDown(() => tempDir.deleteSync(recursive: true));
+  final childScript = File('${tempDir.path}/child_delayed_destroy.dart')
+    ..writeAsStringSync('''
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:termui_cast_protocol/termui_cast_protocol_io.dart';
+
+final class _DelayedDestroySocket extends Stream<Uint8List> implements Socket {
+  final Socket _inner;
+  _DelayedDestroySocket(this._inner);
+
+  @override
+  StreamSubscription<Uint8List> listen(
+    void Function(Uint8List event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => _inner.listen(
+    onData,
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
+
+  @override
+  void destroy() {
+    Timer(const Duration(milliseconds: 350), _inner.destroy);
+  }
+
+  @override
+  Encoding get encoding => _inner.encoding;
+  @override
+  set encoding(Encoding value) => _inner.encoding = value;
+  @override
+  void add(List<int> data) => _inner.add(data);
+  @override
+  void write(Object? object) => _inner.write(object);
+  @override
+  void writeln([Object? object = '']) => _inner.writeln(object);
+  @override
+  void writeAll(Iterable<Object?> objects, [String separator = '']) =>
+      _inner.writeAll(objects, separator);
+  @override
+  void writeCharCode(int charCode) => _inner.writeCharCode(charCode);
+  @override
+  void addError(Object error, [StackTrace? stackTrace]) =>
+      _inner.addError(error, stackTrace);
+  @override
+  Future<Object?> addStream(Stream<List<int>> stream) =>
+      _inner.addStream(stream);
+  @override
+  Future<Object?> flush() => _inner.flush();
+  @override
+  Future<Object?> close() => _inner.close();
+  @override
+  Future<Object?> get done => _inner.done;
+  @override
+  bool setOption(SocketOption option, bool enabled) =>
+      _inner.setOption(option, enabled);
+  @override
+  Uint8List getRawOption(RawSocketOption option) => _inner.getRawOption(option);
+  @override
+  void setRawOption(RawSocketOption option) => _inner.setRawOption(option);
+  @override
+  int get port => _inner.port;
+  @override
+  int get remotePort => _inner.remotePort;
+  @override
+  InternetAddress get address => _inner.address;
+  @override
+  InternetAddress get remoteAddress => _inner.remoteAddress;
+}
+
+Future<void> main(List<String> args) async {
+  final port = int.parse(args.single);
+  final client = HttpClient();
+  final req = await client.openUrl('GET', Uri.parse('http://127.0.0.1:\$port/ws'));
+  req.headers
+    ..set(HttpHeaders.connectionHeader, 'Upgrade')
+    ..set(HttpHeaders.upgradeHeader, 'websocket')
+    ..set('Sec-WebSocket-Key', 'dGhlIHNhbXBsZSBub25jZQ==')
+    ..set('Sec-WebSocket-Version', '13');
+  final response = await req.close();
+  final rawSocket = await response.detachSocket();
+  client.close();
+
+  final delayedSocket = _DelayedDestroySocket(rawSocket);
+  final ws = WebSocket.fromUpgradedSocket(
+    delayedSocket,
+    serverSide: false,
+    compression: CompressionOptions.compressionOff,
+  );
+  final (:channel, closeWithCode: _) = wrapIoBinaryWebSocket(
+    ws,
+    onCloseTimeout: delayedSocket.destroy,
+  );
+  final sub = channel.stream.listen((_) {}, onError: (Object _) {});
+  stdout.writeln('CLOSING');
+  unawaited(channel.sink.close());
+  unawaited(sub.cancel());
+}
+''');
+
+  final child = await Process.start(Platform.resolvedExecutable, [
+    '--packages=${packageConfig!.toFilePath()}',
+    childScript.path,
+    '${server.port}',
+  ]);
+  addTearDown(child.kill);
+  final stderrLines = <String>[];
+  child.stderr
+      .transform(utf8.decoder)
+      .transform(const LineSplitter())
+      .listen(stderrLines.add);
+  final outLines = StreamIterator(
+    child.stdout.transform(utf8.decoder).transform(const LineSplitter()),
+  );
+
+  check(
+    await outLines.moveNext().timeout(const Duration(seconds: 30)),
+    because: 'stderr=$stderrLines',
+  ).isTrue();
+  check(outLines.current).equals('CLOSING');
+  final sw = Stopwatch()..start();
+  final exitCode = await child.exitCode.timeout(const Duration(seconds: 10));
+  sw.stop();
+
+  check(exitCode, because: 'stderr=$stderrLines').equals(0);
+  check(
+    sw.elapsedMilliseconds,
+    because: 'Expected exit well below Dart 5s WebSocket close timer',
+  ).isLessThan(2500);
 }
 
 final class _FakePauseTrackingWebSocket extends Stream<Object?>
