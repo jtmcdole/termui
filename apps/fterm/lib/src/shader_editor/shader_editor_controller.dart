@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/widgets.dart'
     show ChangeNotifier, Listenable, StringCharacters;
 import 'package:source_span/source_span.dart';
@@ -91,6 +92,13 @@ final class ShaderEditorController extends ChangeNotifier {
   /// Default debounce delay between edits and GPU compilation.
   static const Duration defaultDebounce = Duration(milliseconds: 350);
 
+  /// Character count above which static GLSL analysis is debounced during
+  /// typing to keep keystroke latency within a single frame budget.
+  static const int largeBufferStaticCheckThreshold = 8192;
+
+  /// Debounce delay for static GLSL analysis on large buffers.
+  static const Duration staticCheckDebounce = Duration(milliseconds: 120);
+
   /// Default background opacity used to reveal background shaders in BG mode.
   static const double defaultBackgroundPreviewOpacity = 0.75;
 
@@ -122,7 +130,7 @@ final class ShaderEditorController extends ChangeNotifier {
   List<ShaderDiagnostic> _staticDiagnostics = const <ShaderDiagnostic>[];
   List<ShaderDiagnostic> _compilerDiagnostics = const <ShaderDiagnostic>[];
   List<ShaderDiagnostic> _runtimeDiagnostics = const <ShaderDiagnostic>[];
-  String? _runtimeErrorSignature;
+  ShaderCompileException? _lastRuntimeError;
   List<ShaderDiagnostic> _diagnostics = const <ShaderDiagnostic>[];
   ShadertoyGlslAnalysis? _lastAnalysis;
   int? _lastCompileDurationMs;
@@ -133,7 +141,9 @@ final class ShaderEditorController extends ChangeNotifier {
   String? _saveAsError;
   int _selectedDiagnosticIndex = -1;
   int _compileGeneration = 0;
+  int _saveGeneration = 0;
   Timer? _debounceTimer;
+  Timer? _staticCheckTimer;
   bool _disposed = false;
 
   /// Creates a [ShaderEditorController].
@@ -265,7 +275,9 @@ final class ShaderEditorController extends ChangeNotifier {
 
   /// Stage hint detected from directive or static uniform analysis.
   ShaderStageHint get detectedStageHint =>
-      _lastAnalysis?.stageHint ?? ShaderStageHint.any;
+      _lastAnalysis?.stageHint ??
+      _parseExplicitStageDirective(textController.value.lines) ??
+      ShaderStageHint.any;
 
   /// Compact list of active uniforms detected in the current shader.
   List<String> get activeUniformLabels {
@@ -313,8 +325,10 @@ final class ShaderEditorController extends ChangeNotifier {
       _debounceTimer?.cancel();
       _debounceTimer = null;
       _runtimeDiagnostics = const <ShaderDiagnostic>[];
-      _runtimeErrorSignature = null;
+      _lastRuntimeError = null;
     }
+    _staticCheckTimer?.cancel();
+    _staticCheckTimer = null;
     _refreshStaticDiagnostics();
     _previewNotifier.emit();
     notifyListeners();
@@ -384,16 +398,19 @@ final class ShaderEditorController extends ChangeNotifier {
     final existingIdx = _findStageDirectiveLine(lines);
     final int nextLine;
     if (existingIdx != null) {
-      lines[existingIdx] = directive;
+      final hasCr =
+          existingIdx < lines.length - 1 && lines[existingIdx].endsWith('\r');
+      lines[existingIdx] = hasCr ? '$directive\r' : directive;
       nextLine = sel.cursorLine;
     } else {
-      lines.insert(0, directive);
+      final hasCr = lines.length > 1 && lines[0].endsWith('\r');
+      lines.insert(0, hasCr ? '$directive\r' : directive);
       nextLine = sel.cursorLine + 1;
     }
     final clampedLine = nextLine.clamp(0, lines.length - 1);
     final clampedCol = sel.cursorColumn.clamp(
       0,
-      lines[clampedLine].characters.length,
+      _lineGraphemeLength(lines, clampedLine),
     );
     final nextText = lines.join('\n');
     textController.value = tui.TextEditingValue(
@@ -409,11 +426,12 @@ final class ShaderEditorController extends ChangeNotifier {
   /// Inserts the inferred stage annotation when absent, or cycles through
   /// `bg -> fg -> both` when one is already present.
   void cycleStageAnnotation() {
-    if (!hasExplicitStageDirective) {
+    final explicit = _parseExplicitStageDirective(textController.value.lines);
+    if (explicit == null) {
       insertStageAnnotation(detectedStageHint);
       return;
     }
-    final next = switch (detectedStageHint) {
+    final next = switch (explicit) {
       ShaderStageHint.background => ShaderStageHint.foreground,
       ShaderStageHint.foreground => ShaderStageHint.any,
       ShaderStageHint.any => ShaderStageHint.background,
@@ -428,7 +446,7 @@ final class ShaderEditorController extends ChangeNotifier {
     final lines = textController.value.lines;
     final lineIdx = ((diag.line ?? 1) - 1).clamp(0, lines.length - 1);
     final colIdx = _utf16ColumnToGraphemeColumn(
-      lines[lineIdx],
+      _lineContent(lines, lineIdx),
       (diag.column ?? 1) - 1,
     );
     textController.breakUndoBurst();
@@ -534,11 +552,12 @@ final class ShaderEditorController extends ChangeNotifier {
       notifyListeners();
       return false;
     }
+    final gen = ++_saveGeneration;
     final snapshot = textController.text;
     final saved = _onSave == null
         ? true
         : await _onSave(normalized, null, snapshot);
-    if (_disposed) return false;
+    if (_disposed || gen != _saveGeneration) return false;
     if (!saved) {
       _saveAsError = 'Unable to save "$normalized".';
       notifyListeners();
@@ -547,52 +566,67 @@ final class ShaderEditorController extends ChangeNotifier {
     _shaderName = normalized;
     _sourcePath = normalized;
     _savedSource = snapshot;
-    _confirmingClose = false;
+    if (!isDirty) {
+      _confirmingClose = false;
+    }
     _promptingSaveAs = false;
     _saveAsError = null;
     notifyListeners();
     return true;
   }
 
-  static final RegExp _illegalFilenameChars = RegExp(r'[\x00-\x1F:<>"|?*]');
+  static final RegExp _illegalFilenameChars = RegExp(r'[\x00-\x1F\x7F:<>"|?*]');
+  static final RegExp _winReservedStem = RegExp(
+    r'^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$',
+    caseSensitive: false,
+  );
 
   /// Validates and normalizes a user-supplied Save As [rawName], appending
   /// `.glsl` when no supported shader extension is present.
   ///
   /// Returns `null` for empty names, empty-stem dotfiles (`.glsl`/`.frag`),
-  /// path separators, traversal segments, or Windows-illegal filename
-  /// characters.
+  /// leading/trailing dots or whitespace on the stem, Windows reserved device
+  /// names (`CON`, `PRN`, `AUX`, `NUL`, `COM1..9`, `LPT1..9`), path
+  /// separators, traversal segments, or illegal control/filename characters.
   static String? normalizeSaveAsFilename(String rawName) {
     final trimmed = rawName.trim();
     if (trimmed.isEmpty ||
-        trimmed == '.' ||
-        trimmed == '..' ||
         trimmed.contains('/') ||
         trimmed.contains(r'\') ||
         _illegalFilenameChars.hasMatch(trimmed)) {
       return null;
     }
     final lower = trimmed.toLowerCase();
-    if (lower == '.glsl' || lower == '.frag') {
+    final hasExt = lower.endsWith('.glsl') || lower.endsWith('.frag');
+    final stem = hasExt ? trimmed.substring(0, trimmed.length - 5) : trimmed;
+    if (stem.isEmpty ||
+        stem.startsWith('.') ||
+        stem.endsWith('.') ||
+        stem.trim() != stem) {
       return null;
     }
-    if (lower.endsWith('.glsl') || lower.endsWith('.frag')) {
-      return trimmed;
+    final baseStem = stem.split('.').first;
+    if (_winReservedStem.hasMatch(stem) ||
+        _winReservedStem.hasMatch(baseStem)) {
+      return null;
     }
-    return '$trimmed.glsl';
+    return hasExt ? trimmed : '$stem.glsl';
   }
 
   /// Persists the current buffer via the configured save callback and marks
   /// the buffer clean on success.
   Future<bool> save() async {
     if (_disposed) return false;
+    final gen = ++_saveGeneration;
     final snapshot = textController.text;
     final saved = _onSave == null
         ? true
         : await _onSave(_shaderName, _sourcePath, snapshot);
-    if (_disposed || !saved) return false;
+    if (_disposed || !saved || gen != _saveGeneration) return false;
     _savedSource = snapshot;
-    _confirmingClose = false;
+    if (!isDirty) {
+      _confirmingClose = false;
+    }
     _promptingSaveAs = false;
     _saveAsError = null;
     notifyListeners();
@@ -602,6 +636,7 @@ final class ShaderEditorController extends ChangeNotifier {
   /// Marks the current buffer text as saved without invoking a save callback.
   void markSaved() {
     if (_disposed) return;
+    _saveGeneration++;
     _savedSource = textController.text;
     _confirmingClose = false;
     notifyListeners();
@@ -611,27 +646,38 @@ final class ShaderEditorController extends ChangeNotifier {
   Future<void> triggerCompileNow() {
     _debounceTimer?.cancel();
     _debounceTimer = null;
+    _staticCheckTimer?.cancel();
+    _staticCheckTimer = null;
     return _runCompilePass();
   }
 
   /// Records or clears a runtime GPU pipeline link or draw [error] surfaced
   /// after static and offline compilation succeeded.
   ///
-  /// Repeated calls with the same error signature (or `null` when already
-  /// clear) are no-ops so workspace controller updates never trigger rebuild
-  /// loops.
+  /// Repeated calls with an equivalent error (or `null` when already clear)
+  /// are no-ops so workspace controller updates never trigger rebuild loops.
   void setRuntimeCompileError(ShaderCompileException? error) {
     if (_disposed) return;
-    final signature = error == null
-        ? null
-        : '${error.shaderId}|${error.lineNumber ?? ''}|${error.message}';
-    if (signature == _runtimeErrorSignature) return;
-    _runtimeErrorSignature = signature;
+    if (_isSameRuntimeError(_lastRuntimeError, error)) return;
+    _lastRuntimeError = error;
     _runtimeDiagnostics = error == null
         ? const <ShaderDiagnostic>[]
         : _diagnosticsFromCompileException(error);
     _rebuildDiagnostics();
     notifyListeners();
+  }
+
+  static bool _isSameRuntimeError(
+    ShaderCompileException? a,
+    ShaderCompileException? b,
+  ) {
+    if (identical(a, b)) return true;
+    if (a == null || b == null) return false;
+    return a.shaderId == b.shaderId &&
+        a.lineNumber == b.lineNumber &&
+        a.message == b.message &&
+        a.compilerLog == b.compilerLog &&
+        listEquals(a.diagnostics, b.diagnostics);
   }
 
   void _handleTextControllerChanged() {
@@ -649,10 +695,26 @@ final class ShaderEditorController extends ChangeNotifier {
     _isCompiling = false;
     _compilerDiagnostics = const <ShaderDiagnostic>[];
     _runtimeDiagnostics = const <ShaderDiagnostic>[];
-    _runtimeErrorSignature = null;
-    _refreshStaticDiagnostics();
+    _lastRuntimeError = null;
+    if (currentText.length >= largeBufferStaticCheckThreshold) {
+      _scheduleDebouncedStaticCheck();
+    } else {
+      _staticCheckTimer?.cancel();
+      _staticCheckTimer = null;
+      _refreshStaticDiagnostics();
+    }
     _scheduleDebouncedCompile();
     notifyListeners();
+  }
+
+  void _scheduleDebouncedStaticCheck() {
+    _staticCheckTimer?.cancel();
+    _staticCheckTimer = Timer(staticCheckDebounce, () {
+      _staticCheckTimer = null;
+      if (_disposed) return;
+      _refreshStaticDiagnostics();
+      notifyListeners();
+    });
   }
 
   void _scheduleDebouncedCompile() {
@@ -672,6 +734,8 @@ final class ShaderEditorController extends ChangeNotifier {
 
   Future<void> _runCompilePass() async {
     if (_disposed) return;
+    _staticCheckTimer?.cancel();
+    _staticCheckTimer = null;
     final gen = ++_compileGeneration;
     final snapshot = textController.text;
     final mode = _previewMode;
@@ -681,7 +745,7 @@ final class ShaderEditorController extends ChangeNotifier {
     _lastAnalysis = staticResult.analysis;
     _staticDiagnostics = staticResult.diagnostics;
     _runtimeDiagnostics = const <ShaderDiagnostic>[];
-    _runtimeErrorSignature = null;
+    _lastRuntimeError = null;
 
     if (staticResult.hasShimError || _onCompile == null) {
       _lastCompileDurationMs = clock.now().difference(startedAt).inMilliseconds;
@@ -826,6 +890,21 @@ final class ShaderEditorController extends ChangeNotifier {
     return null;
   }
 
+  static ShaderStageHint? _parseExplicitStageDirective(List<String> lines) {
+    final idx = _findStageDirectiveLine(lines);
+    if (idx == null) return null;
+    final raw = _stageDirectiveLine
+        .firstMatch(lines[idx])
+        ?.group(1)
+        ?.toLowerCase();
+    return switch (raw) {
+      'background' || 'bg' => ShaderStageHint.background,
+      'foreground' || 'fg' => ShaderStageHint.foreground,
+      'both' || 'any' => ShaderStageHint.any,
+      _ => null,
+    };
+  }
+
   static int _compareDiagnostics(ShaderDiagnostic a, ShaderDiagnostic b) {
     final lineCmp = (a.line ?? 0).compareTo(b.line ?? 0);
     if (lineCmp != 0) return lineCmp;
@@ -834,12 +913,22 @@ final class ShaderEditorController extends ChangeNotifier {
     return a.severity.index.compareTo(b.severity.index);
   }
 
+  static String _lineContent(List<String> lines, int index) {
+    final line = lines[index];
+    return index < lines.length - 1 && line.endsWith('\r')
+        ? line.substring(0, line.length - 1)
+        : line;
+  }
+
+  static int _lineGraphemeLength(List<String> lines, int index) =>
+      _lineContent(lines, index).characters.length;
+
   static int _graphemeOffset(List<String> lines, int line, int column) {
     var offset = 0;
     for (var i = 0; i < line; i++) {
-      offset += lines[i].characters.length + 1;
+      offset += _lineGraphemeLength(lines, i) + 1;
     }
-    return offset + column;
+    return offset + column.clamp(0, _lineGraphemeLength(lines, line));
   }
 
   static int _utf16ColumnToGraphemeColumn(String line, int utf16Col) {
@@ -860,6 +949,8 @@ final class ShaderEditorController extends ChangeNotifier {
     _disposed = true;
     _debounceTimer?.cancel();
     _debounceTimer = null;
+    _staticCheckTimer?.cancel();
+    _staticCheckTimer = null;
     textController.removeListener(_handleTextControllerChanged);
     _previewNotifier.dispose();
     super.dispose();

@@ -12,7 +12,7 @@ See [SPEC.md](../SPEC.md) for the custom terminal escape sequences (audio, shade
 - **Smallest-viewport sizing**: Intersects viewport dimensions across active local and remote subscribers before resizing PTYs, dimming excess canvas margins cleanly.
 - **Audio & Web CSP**: Lazy first-gesture `FlutterAudioEngine` setup with stereo-panned `BEL` chimes, `ESC _ A` (`APC A`) tones/clips, and external `web/audio_unlock.js` (zero inline scripts).
 - **28px tab bar & 0px bottom bar**: Supports `top` (with `72px` macOS traffic-light inset and empty-strip window drag), `left`, `hidden`, and `autoHideSingle` modes, unread bell badges, and live vs user-pinned titles (`clearPin`).
-- **In-app GLSL shader editor (`Ctrl+\ e`)**: Opens a live Shadertoy GLSL editor tab with syntax highlighting, SGR 58 diagnostic squiggles, live BG/FG preview (`Solo` or `Blend`), multi-line selection, Save (`Alt+S`), and Save As (`Alt+Shift+S` / `Ctrl+Shift+S` or tab context menu).
+- **In-app GLSL shader editor (`Ctrl+\ e`)**: Opens a live Shadertoy GLSL editor tab with syntax highlighting, SGR 58 diagnostic squiggles, live BG/FG preview (`Solo` or `Blend`), multi-line selection, Save (`Alt+S` / `Cmd+S`), and Save As (`Alt+Shift+S` / `Cmd+Shift+S` / `Ctrl+Shift+S` or tab context menu).
 - **GPU shader Emergency Stop (`Ctrl+Shift+F6` or `Ctrl+\ 0`)**: Immediately bypasses all custom and preset shaders across desktop and web, paired with a per-shader `GpuFrameWatchdog` warmup grace window and an out-of-band recovery pill.
 
 ## Install from GitHub Releases

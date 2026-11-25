@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
@@ -11,6 +12,8 @@ import 'package:fterm/src/settings_storage.dart';
 import 'package:fterm/src/shader_editor/shader_editor_controller.dart';
 import 'package:fterm/src/shader_editor/shader_editor_view.dart';
 import 'package:fterm/src/shader_profile_store.dart';
+import 'package:fterm/src/shader_profile_store_io.dart'
+    show IoShaderProfileStore;
 import 'package:fterm/src/ui/fterm_shell_scaffold.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver.dart';
@@ -114,6 +117,7 @@ final class _MockHandle implements CompiledShaderHandle {
 final class _ValidatingMockGpuBackend implements TerminalShaderBackend {
   int compileCalls = 0;
   int reloadCalls = 0;
+  Completer<void>? compileGate;
 
   @override
   ShaderBackendKind get kind => ShaderBackendKind.flutterGpu;
@@ -155,6 +159,10 @@ final class _ValidatingMockGpuBackend implements TerminalShaderBackend {
     bool usesPrevFrame = false,
   }) async {
     compileCalls++;
+    final gate = compileGate;
+    if (gate != null && !gate.isCompleted) {
+      await gate.future;
+    }
     _validateGlsl(id, shadertoyGlsl);
     return _MockHandle(id: id, usesPrevFrame: usesPrevFrame);
   }
@@ -301,7 +309,7 @@ final class _FakeDesktopLocalHostDriver implements LocalHostDriver {
   _FakeShaderProfileStore store,
   _ValidatingMockGpuBackend backend,
 })
-_createEnv() {
+_createEnv({ShaderProfileStore? storeOverride}) {
   final storage = _MemorySettingsStorage();
   final store = _FakeShaderProfileStore();
   final backend = _ValidatingMockGpuBackend();
@@ -319,7 +327,7 @@ _createEnv() {
     storage: storage,
     resizeDebounce: Duration.zero,
     shaderController: shaderController,
-    shaderProfileStore: store,
+    shaderProfileStore: storeOverride ?? store,
   );
   return (workspace: workspace, store: store, backend: backend);
 }
@@ -1033,5 +1041,207 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
       },
     );
+  });
+
+  group('PR #475 review regression coverage (workspace & shell)', () {
+    test('H1: nested subdirectory and symlinked ancestor shaders require Save As without clobbering top-level files', () async {
+      final dir = await Directory.systemTemp.createTemp('fterm_h1_');
+      final outside = await Directory.systemTemp.createTemp('fterm_h1_out_');
+      final ioStore = IoShaderProfileStore(dir);
+      final env = _createEnv(storeOverride: ioStore);
+      final ws = env.workspace;
+      addTearDown(() async {
+        await ws.dispose();
+        ioStore.dispose();
+        env.store.dispose();
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+        if (outside.existsSync()) outside.deleteSync(recursive: true);
+      });
+
+      final rootFile = File('${dir.path}/glow.glsl')
+        ..writeAsStringSync('// ROOT\n$_validBgGlsl');
+      final subFile = File('${dir.path}/sub/glow.glsl')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('// SUB\n$_validBgGlsl');
+      final outsideSub = File('${outside.path}/sub/secret.glsl')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('// OUTSIDE\n$_validBgGlsl');
+      final extLink = Link('${dir.path}/ext')..createSync(outside.path);
+
+      // Nested subdirectory must be rejected as external and must NOT clobber root glow.glsl.
+      await ws.openShaderEditorTab(pathOrKey: subFile.path);
+      ws.focusedEditorPane!.controller.textController.text =
+          '// EDITED_SUB\n$_validBgGlsl';
+      expect(await ws.focusedEditorPane!.controller.save(), isFalse);
+      expect(rootFile.readAsStringSync(), startsWith('// ROOT'));
+      expect(ws.statusBanner, contains('Save As'));
+
+      // Symlinked ancestor path must be rejected as external and must NOT write into root dir.
+      final viaSymlink = '${extLink.path}/sub/secret.glsl';
+      expect(File(viaSymlink).existsSync(), isTrue);
+      await ws.openShaderEditorTab(pathOrKey: viaSymlink);
+      ws.focusedEditorPane!.controller.textController.text =
+          '// EDITED_EXT\n$_validBgGlsl';
+      expect(await ws.focusedEditorPane!.controller.save(), isFalse);
+      expect(File('${dir.path}/secret.glsl').existsSync(), isFalse);
+      expect(outsideSub.readAsStringSync(), startsWith('// OUTSIDE'));
+
+      // Direct child inside shadersDir still saves cleanly.
+      await ws.openShaderEditorTab(pathOrKey: rootFile.path);
+      ws.focusedEditorPane!.controller.textController.text =
+          '// UPDATED_ROOT\n$_validBgGlsl';
+      expect(await ws.focusedEditorPane!.controller.save(), isTrue);
+      expect(rootFile.readAsStringSync(), startsWith('// UPDATED_ROOT'));
+    });
+
+    testWidgets(
+      'H2: tab context menu resolves live tabId after tabs shift or close while menu is open',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1024, 720));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final env = _createEnv();
+        final ws = env.workspace;
+        await tester.runAsync(ws.openLocalShellTab);
+        final tab1Id = (await tester.runAsync(ws.openShaderEditorTab))!;
+        final tab2Id = (await tester.runAsync(ws.openLocalShellTab))!;
+        await _pumpApp(tester, ws);
+
+        // Open context menu on tab 1, then close tab 0 so tab 1 shifts from index 1 -> 0.
+        await tester.tap(
+          find.byKey(ValueKey('fterm-tab-$tab1Id')),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        await tester.runAsync(() => ws.closeTab(0, force: true));
+        await tester.pump();
+
+        // Clicking Close Tab must close tab 1 (leaving tab 2 intact), not tab 2.
+        await tester.tap(find.byKey(const ValueKey('tab-menu-close')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(ws.tabs.map((t) => t.tabId).toList(), equals(<String>[tab2Id]));
+
+        // Closing the menu's own tab while menu is open aborts safely without closing tab 2.
+        final tab3Id = (await tester.runAsync(ws.openShaderEditorTab))!;
+        await tester.pump();
+        await tester.tap(
+          find.byKey(ValueKey('fterm-tab-$tab3Id')),
+          buttons: kSecondaryMouseButton,
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.runAsync(() => ws.closeTab(1, force: true));
+        await tester.pump();
+        await tester.tap(find.byKey(const ValueKey('tab-menu-close')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(ws.tabs.map((t) => t.tabId).toList(), equals(<String>[tab2Id]));
+
+        await tester.runAsync(ws.dispose);
+        env.store.dispose();
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    test('H4 + H5 + M6: workspace disposes editor resources, prunes handles on empty buffer and in-flight close, and releases handles in prepareForUpdateSwap', () async {
+      final env = _createEnv();
+      final ws = env.workspace;
+      addTearDown(() async {
+        await ws.dispose();
+        env.store.dispose();
+      });
+
+      // H5a: Emptying buffer during in-flight compile and closing tab does not leak GPU handle.
+      await ws.openShaderEditorTab();
+      final editor1 = ws.focusedEditorPane!;
+      final watchdog1 = editor1.gpuFrameWatchdog;
+      env.backend.compileGate = Completer<void>();
+      editor1.controller.setPreviewMode(ShaderEditorPreviewMode.background);
+      final compile1 = editor1.controller.triggerCompileNow();
+      await Future<void>.delayed(Duration.zero);
+      editor1.controller.textController.text = '';
+      await ws.closeTab(0, force: true);
+      expect(watchdog1.isDisposed, isTrue);
+      env.backend.compileGate!.complete();
+      await compile1;
+      expect(ws.shaderController.handleForPass(editor1.previewPassId), isNull);
+
+      // H5b: Emptying an already-compiled open editor prunes its stale GPU handle.
+      env.backend.compileGate = null;
+      await ws.openShaderEditorTab();
+      final editor2 = ws.focusedEditorPane!;
+      editor2.controller.setPreviewMode(ShaderEditorPreviewMode.background);
+      await editor2.controller.triggerCompileNow();
+      expect(
+        ws.shaderController.handleForPass(editor2.previewPassId),
+        isNotNull,
+      );
+      editor2.controller.textController.text = '';
+      await Future<void>.delayed(Duration.zero);
+      expect(ws.shaderController.handleForPass(editor2.previewPassId), isNull);
+
+      // M6: prepareForUpdateSwap releases compiled editor GPU handles and disposes watchdogs.
+      editor2.controller.textController.text = _validBgGlsl;
+      await editor2.controller.triggerCompileNow();
+      expect(
+        ws.shaderController.handleForPass(editor2.previewPassId),
+        isNotNull,
+      );
+      final watchdog2 = editor2.gpuFrameWatchdog;
+      await ws.prepareForUpdateSwap();
+      expect(watchdog2.isDisposed, isTrue);
+      expect(ws.shaderController.handleForPass(editor2.previewPassId), isNull);
+    });
+
+    test('M1: dedupes absolute and relative managed paths, never hijacks untitled drafts, and assigns unique names to concurrent preset clones', () async {
+      final env = _createEnv();
+      final ws = env.workspace;
+      addTearDown(() async {
+        await ws.dispose();
+        env.store.dispose();
+      });
+
+      env.store.shaders['/tmp/fterm/shaders/glow.glsl'] = _validBgGlsl;
+      env.store.shaders['glow.glsl'] = _validBgGlsl;
+      final t1 = await ws.openShaderEditorTab(
+        pathOrKey: '/tmp/fterm/shaders/glow.glsl',
+      );
+      final t2 = await ws.openShaderEditorTab(pathOrKey: 'glow.glsl');
+      expect(t2, equals(t1));
+
+      // External file sharing basename with an untitled draft opens a separate tab.
+      final untitledTab = await ws.openShaderEditorTab();
+      final untitledName = ws.focusedEditorPane!.shaderName;
+      final externalPath = '/opt/external/$untitledName';
+      env.store.shaders[externalPath] = _validBgGlsl;
+      final extTab = await ws.openShaderEditorTab(pathOrKey: externalPath);
+      expect(extTab, isNotNull);
+      expect(extTab, isNot(equals(untitledTab)));
+
+      // Concurrent preset clones receive distinct shader names.
+      final clones = await Future.wait<String?>(<Future<String?>>[
+        ws.openShaderEditorTab(
+          clonePreset: TerminalShaderPreset.scanlineOverlay,
+        ),
+        ws.openShaderEditorTab(
+          clonePreset: TerminalShaderPreset.scanlineOverlay,
+        ),
+      ]);
+      expect(clones[0], isNotNull);
+      expect(clones[1], isNotNull);
+      expect(clones[0], isNot(equals(clones[1])));
+      final cloneNames = ws.editorPanes.values
+          .where((e) => e.shaderName.startsWith('scanline_overlay_custom'))
+          .map((e) => e.shaderName)
+          .toSet();
+      expect(cloneNames, hasLength(2));
+    });
   });
 }

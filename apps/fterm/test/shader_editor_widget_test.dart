@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/widgets.dart' show StringCharacters;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/shader_editor/shader_editor_controller.dart';
 import 'package:fterm/src/shader_editor/shader_editor_pane.dart';
@@ -55,7 +56,10 @@ void main() {
           initialCols: 100,
           initialRows: 16,
         );
-        addTearDown(pane.dispose);
+        addTearDown(() {
+          pane.dispose();
+          controller.dispose();
+        });
 
         await controller.triggerCompileNow();
 
@@ -156,7 +160,10 @@ void main() {
         initialPreviewMode: ShaderEditorPreviewMode.background,
       );
       final pane = ShaderEditorPane(paneId: 'p1', controller: controller);
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       // Default is Solo: overrides workspace passes with ONLY draft BG pass & 0.75 opacity.
       expect(
@@ -236,7 +243,10 @@ void main() {
         initialCols: 70,
         initialRows: 10,
       );
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       // Initially top code line (row 2) shows line 1.
       expect(_rowText(pane.readDisplayBuffer(), 2), startsWith('   1 '));
@@ -278,7 +288,10 @@ void main() {
         initialCols: 90,
         initialRows: 14,
       );
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       // Press F2: inserts inferred '// @fterm-stage: bg' at top.
       expect(controller.hasExplicitStageDirective, isFalse);
@@ -338,7 +351,10 @@ void main() {
         initialRows: 12,
         onCloseConfirmed: () => closeConfirmedCount++,
       );
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       expect(pane.isDirty, isFalse);
       expect(controller.previewBackgroundOpacity, closeTo(1.0, 1e-6));
@@ -496,7 +512,10 @@ void main() {
           paneId: 'gen-pane',
           controller: controller,
         );
-        addTearDown(pane.dispose);
+        addTearDown(() {
+          pane.dispose();
+          controller.dispose();
+        });
 
         // Edit 1 -> wait 200ms (still debounced, no compile yet).
         controller.textController.text =
@@ -570,7 +589,10 @@ void main() {
         initialCols: 80,
         initialRows: 12,
       );
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       var bufferChanges = 0;
       var previewChanges = 0;
@@ -650,7 +672,10 @@ void main() {
         initialCols: 80,
         initialRows: 12,
       );
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       final buf = pane.readDisplayBuffer();
       final gutterW = ShaderEditorView.gutterWidthForLines(3);
@@ -680,7 +705,10 @@ void main() {
         initialCols: 120,
         initialRows: 12,
       );
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       // Header shows [Save As] chip for untitled shaders.
       expect(_rowText(pane.readDisplayBuffer(), 0), contains('[Save As]'));
@@ -767,7 +795,10 @@ void main() {
         initialCols: 90,
         initialRows: 12,
       );
-      addTearDown(pane.dispose);
+      addTearDown(() {
+        pane.dispose();
+        controller.dispose();
+      });
 
       // Move to line 2 col 0, select lines 2 & 3 with Shift+Down twice.
       pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.down));
@@ -874,6 +905,619 @@ void main() {
       expect(saveResult, isFalse);
       expect(controller.promptingSaveAs, isTrue);
       expect(controller.saveAsError, contains('failing_name.glsl'));
+    });
+  });
+
+  group('PR #475 review regression coverage (controller, pane, view)', () {
+    test('H3: jumpToDiagnostic and insertStageAnnotation align grapheme offsets on CRLF buffers', () {
+      const crlf =
+          '// @fterm-stage: bg\r\n'
+          '// comment\r\n'
+          'void mainImage(out vec4 c, in vec2 p) {\r\n'
+          '  discard;\r\n'
+          '}\r\n';
+      final ctrl = ShaderEditorController(
+        shaderName: 'win.glsl',
+        initialSource: crlf,
+      );
+      addTearDown(ctrl.dispose);
+
+      final idx = ctrl.diagnostics.indexWhere(
+        (d) => d.message.contains('discard'),
+      );
+      expect(idx, greaterThanOrEqualTo(0));
+      ctrl.jumpToDiagnostic(idx);
+      final off = ctrl.textController.value.selection.baseOffset;
+      expect(
+        ctrl.source.characters.skip(off).take(7).string,
+        equals('discard'),
+      );
+
+      // insertStageAnnotation on CRLF without existing directive preserves CRLF and cursor offset.
+      const crlfNoStage =
+          '// header\r\n'
+          'void mainImage(out vec4 c, in vec2 p) {\r\n'
+          '  c = vec4(1.0);\r\n'
+          '}\r\n';
+      final ctrl2 = ShaderEditorController(
+        shaderName: 'win2.glsl',
+        initialSource: crlfNoStage,
+      );
+      addTearDown(ctrl2.dispose);
+      ctrl2.textController.value = tui.TextEditingValue(
+        text: crlfNoStage,
+        selection: const tui.TextSelection.collapsed(
+          offset: 10, // start of 'void mainImage...'
+          line: 1,
+          column: 0,
+        ),
+      );
+      ctrl2.insertStageAnnotation(ShaderStageHint.background);
+      expect(ctrl2.source, startsWith('// @fterm-stage: bg\r\n'));
+      final afterOff = ctrl2.textController.value.selection.baseOffset;
+      expect(
+        ctrl2.source.characters.skip(afterOff).take(14).string,
+        equals('void mainImage'),
+      );
+    });
+
+    test('H4: ShaderEditorPane.dispose preserves caller-injected controller and watchdog while disposing owned watchdog', () {
+      final controller = ShaderEditorController(shaderName: 'owned.glsl');
+      final sharedWatchdog = GpuFrameWatchdog();
+      addTearDown(() {
+        controller.dispose();
+        sharedWatchdog.dispose();
+      });
+
+      final paneWithInjected = ShaderEditorPane(
+        paneId: 'injected',
+        controller: controller,
+        gpuFrameWatchdog: sharedWatchdog,
+      );
+      paneWithInjected.dispose();
+
+      expect(sharedWatchdog.isDisposed, isFalse);
+      void noop() {}
+      controller.addListener(noop);
+      controller.removeListener(noop);
+
+      final paneWithOwnedWatchdog = ShaderEditorPane(
+        paneId: 'owned-wd',
+        controller: controller,
+      );
+      final ownedWatchdog = paneWithOwnedWatchdog.gpuFrameWatchdog;
+      paneWithOwnedWatchdog.dispose();
+      expect(ownedWatchdog.isDisposed, isTrue);
+    });
+
+    test('H6: concurrent save() and saveAs() drop stale completions and preserve dirty close guard', () async {
+      final saveCompleters = <Completer<bool>>[];
+      final ctrl = ShaderEditorController(
+        shaderName: 'race.glsl',
+        initialSource: 'v0',
+        onSave: (_, _, _) {
+          final c = Completer<bool>();
+          saveCompleters.add(c);
+          return c.future;
+        },
+      );
+      addTearDown(ctrl.dispose);
+
+      // Stale save() must not revert clean state after newer save() succeeds.
+      ctrl.textController.text = 'v1';
+      final s1 = ctrl.save();
+      ctrl.textController.text = 'v2';
+      final s2 = ctrl.save();
+      saveCompleters[1].complete(true);
+      expect(await s2, isTrue);
+      expect(ctrl.isDirty, isFalse);
+
+      saveCompleters[0].complete(true);
+      expect(await s1, isFalse);
+      expect(ctrl.isDirty, isFalse);
+
+      // Save completing for older snapshot while newer unsaved edit exists keeps confirmingClose active.
+      ctrl.textController.text = 'v3';
+      final s3 = ctrl.save();
+      ctrl.textController.text = 'v4';
+      expect(ctrl.requestClose(), isFalse);
+      expect(ctrl.confirmingClose, isTrue);
+      saveCompleters[2].complete(true);
+      await s3;
+      expect(ctrl.isDirty, isTrue);
+      expect(ctrl.confirmingClose, isTrue);
+
+      // Stale saveAs() must not overwrite shaderName/sourcePath set by newer saveAs().
+      final a1 = ctrl.saveAs('first_name');
+      final a2 = ctrl.saveAs('second_name');
+      saveCompleters[4].complete(true);
+      expect(await a2, isTrue);
+      expect(ctrl.shaderName, equals('second_name.glsl'));
+      saveCompleters[3].complete(true);
+      expect(await a1, isFalse);
+      expect(ctrl.shaderName, equals('second_name.glsl'));
+      expect(ctrl.sourcePath, equals('second_name.glsl'));
+    });
+
+    testWidgets(
+      'H7: keystroke and arrow move emit one buffer notification and large buffers debounce static diagnostics',
+      (tester) async {
+        const src =
+            '// @fterm-stage: bg\n'
+            'void mainImage(out vec4 c, in vec2 p) {\n'
+            '  c = vec4(1.0);\n'
+            '}\n';
+        final ctrl = ShaderEditorController(
+          shaderName: 'perf.glsl',
+          initialSource: src,
+        );
+        final pane = ShaderEditorPane(
+          paneId: 'perf',
+          controller: ctrl,
+          initialCols: 80,
+          initialRows: 12,
+        );
+        addTearDown(() {
+          pane.dispose();
+          ctrl.dispose();
+        });
+
+        var notifies = 0;
+        pane.bufferListenable.addListener(() => notifies++);
+
+        pane.handleInputEvent(const ev.KeyEvent('a', ev.KeyType.character));
+        expect(notifies, equals(1));
+
+        notifies = 0;
+        pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.right));
+        expect(notifies, equals(1));
+
+        notifies = 0;
+        pane.handleCommittedText('b');
+        expect(notifies, equals(1));
+
+        // Large buffer (>= 8192 chars) debounces static diagnostics instead of running synchronously per edit.
+        final padding = List<String>.filled(
+          260,
+          '// 0123456789abcdef0123456789abcdef',
+        ).join('\n');
+        final largeSrc =
+            '// @fterm-stage: bg\n$padding\n'
+            'void mainImage(out vec4 c, in vec2 p) {\n'
+            '  c = vec4(1.0);\n'
+            '}\n';
+        final largeCtrl = ShaderEditorController(
+          shaderName: 'large.glsl',
+          initialSource: largeSrc,
+        );
+        addTearDown(largeCtrl.dispose);
+        expect(largeCtrl.diagnostics, isEmpty);
+
+        largeCtrl.textController.text =
+            '$largeSrc\n// trailing\nvoid extra() { discard; }\n';
+        // Not yet evaluated synchronously during typing.
+        expect(largeCtrl.diagnostics, isEmpty);
+
+        // Fires after staticCheckDebounce (120ms).
+        await tester.pump(ShaderEditorController.staticCheckDebounce);
+        expect(
+          largeCtrl.diagnostics.any((d) => d.message.contains('discard')),
+          isTrue,
+        );
+      },
+    );
+
+    test('H8: Ctrl/Alt/Meta+N and Ctrl/Alt/Meta+Y do not discard or save-close in confirm prompt', () async {
+      var closed = false;
+      var saved = 0;
+      final ctrl = ShaderEditorController(
+        shaderName: 'd.glsl',
+        initialSource: 'a',
+        onSave: (_, _, _) async {
+          saved++;
+          return true;
+        },
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'd',
+        controller: ctrl,
+        onCloseConfirmed: () => closed = true,
+      );
+      addTearDown(() {
+        pane.dispose();
+        ctrl.dispose();
+      });
+
+      pane.handleInputEvent(const ev.KeyEvent('x', ev.KeyType.character));
+      expect(ctrl.requestClose(), isFalse);
+      expect(ctrl.confirmingClose, isTrue);
+
+      for (final mod in const [
+        ev.Modifier.control,
+        ev.Modifier.alt,
+        ev.Modifier.meta,
+      ]) {
+        pane.handleInputEvent(
+          ev.KeyEvent('n', ev.KeyType.character, modifiers: {mod}),
+        );
+        pane.handleInputEvent(
+          ev.KeyEvent('y', ev.KeyType.character, modifiers: {mod}),
+        );
+      }
+      await Future<void>.delayed(Duration.zero);
+      expect(closed, isFalse);
+      expect(saved, equals(0));
+      expect(ctrl.confirmingClose, isTrue);
+    });
+
+    test('M2: setRuntimeCompileError refreshes updated diagnostics list and compilerLog', () {
+      const validBg =
+          '// @fterm-stage: bg\nvoid mainImage(out vec4 c, in vec2 p) { c = vec4(1.0); }\n';
+      final ctrl = ShaderEditorController(
+        shaderName: 'rt.glsl',
+        initialSource: validBg,
+      );
+      addTearDown(ctrl.dispose);
+
+      const d1 = ShaderDiagnostic(
+        severity: ShaderDiagnosticSeverity.error,
+        origin: ShaderDiagnosticOrigin.compiler,
+        message: 'first detail',
+        line: 2,
+        column: 5,
+      );
+      const d2 = ShaderDiagnostic(
+        severity: ShaderDiagnosticSeverity.error,
+        origin: ShaderDiagnosticOrigin.compiler,
+        message: 'updated detail A',
+        line: 2,
+        column: 9,
+      );
+      const d3 = ShaderDiagnostic(
+        severity: ShaderDiagnosticSeverity.error,
+        origin: ShaderDiagnosticOrigin.compiler,
+        message: 'updated detail B',
+        line: 2,
+        column: 15,
+      );
+      ctrl.setRuntimeCompileError(
+        const ShaderCompileException(
+          shaderId: 'editor:p1',
+          lineNumber: 2,
+          message: 'link fail',
+          diagnostics: [d1],
+        ),
+      );
+      expect(ctrl.diagnostics.map((d) => d.message), contains('first detail'));
+
+      ctrl.setRuntimeCompileError(
+        const ShaderCompileException(
+          shaderId: 'editor:p1',
+          lineNumber: 2,
+          message: 'link fail',
+          diagnostics: [d2, d3],
+        ),
+      );
+      expect(
+        ctrl.diagnostics.map((d) => d.message),
+        containsAll(<String>['updated detail A', 'updated detail B']),
+      );
+    });
+
+    test('M3: cycleStageAnnotation cycles bg -> fg -> both -> bg when static analysis fails', () {
+      final ctrl = ShaderEditorController(
+        shaderName: 'draft.glsl',
+        initialSource: '// @fterm-stage: bg\nvoid incomplete(',
+      );
+      addTearDown(ctrl.dispose);
+      expect(ctrl.lastAnalysis, isNull);
+
+      ctrl.cycleStageAnnotation();
+      expect(ctrl.source.split('\n').first, equals('// @fterm-stage: fg'));
+      expect(ctrl.detectedStageHint, equals(ShaderStageHint.foreground));
+
+      ctrl.cycleStageAnnotation();
+      expect(ctrl.source.split('\n').first, equals('// @fterm-stage: both'));
+      expect(ctrl.detectedStageHint, equals(ShaderStageHint.any));
+
+      ctrl.cycleStageAnnotation();
+      expect(ctrl.source.split('\n').first, equals('// @fterm-stage: bg'));
+      expect(ctrl.detectedStageHint, equals(ShaderStageHint.background));
+    });
+
+    test('M7: Save & Close aborts on Esc cancel during async save and deduplicates double-clicks', () async {
+      final gate1 = Completer<bool>();
+      var saves = 0;
+      var closes = 0;
+      final ctrl = ShaderEditorController(
+        shaderName: 'close.glsl',
+        initialSource: 'a',
+        onSave: (_, _, _) {
+          saves++;
+          return saves == 1 ? gate1.future : Future<bool>.value(true);
+        },
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'm7',
+        controller: ctrl,
+        initialCols: 110,
+        initialRows: 10,
+        onCloseConfirmed: () => closes++,
+      );
+      addTearDown(() {
+        pane.dispose();
+        ctrl.dispose();
+      });
+
+      // Press Y, then Esc before save finishes -> must NOT close.
+      ctrl.textController.insertText('b');
+      ctrl.requestClose();
+      pane.handleInputEvent(const ev.KeyEvent('y', ev.KeyType.character));
+      pane.handleInputEvent(const ev.KeyEvent('escape', ev.KeyType.escape));
+      gate1.complete(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(saves, equals(1));
+      expect(closes, equals(0));
+
+      // Double-clicking [Y: Save & Close] runs only one save and one close.
+      final gate2 = Completer<bool>();
+      var saves2 = 0;
+      var closes2 = 0;
+      final ctrl2 = ShaderEditorController(
+        shaderName: 'close2.glsl',
+        initialSource: 'a',
+        onSave: (_, _, _) {
+          saves2++;
+          return gate2.future;
+        },
+      );
+      final pane2 = ShaderEditorPane(
+        paneId: 'm7b',
+        controller: ctrl2,
+        initialCols: 110,
+        initialRows: 10,
+        onCloseConfirmed: () => closes2++,
+      );
+      addTearDown(() {
+        pane2.dispose();
+        ctrl2.dispose();
+      });
+
+      ctrl2.textController.insertText('c');
+      ctrl2.requestClose();
+      final btnX = _findInRow(
+        pane2.readDisplayBuffer(),
+        0,
+        '[Y: Save & Close]',
+      );
+      expect(btnX, greaterThan(0));
+      pane2.handleInputEvent(
+        ev.MouseEvent(
+          x: btnX + 2,
+          y: 1,
+          button: ev.MouseButton.left,
+          type: ev.MouseEventType.press,
+        ),
+      );
+      pane2.handleInputEvent(
+        ev.MouseEvent(
+          x: btnX + 2,
+          y: 1,
+          button: ev.MouseButton.left,
+          type: ev.MouseEventType.press,
+        ),
+      );
+      gate2.complete(true);
+      await Future<void>.delayed(Duration.zero);
+      expect(saves2, equals(1));
+      expect(closes2, equals(1));
+    });
+
+    test(
+      'M9: short and narrow split viewports avoid layout overflow caution tape',
+      () {
+        const src =
+            'void mainImage(out vec4 c, in vec2 p) {\n'
+            '  float a = 1.0 / 0.0;\n'
+            '  float b = 2.0 / 0.0;\n'
+            '  float d = 3.0 / 0.0;\n'
+            '  float e = 4.0 / 0.0;\n'
+            '  discard;\n'
+            '}\n';
+        final ctrl = ShaderEditorController(
+          shaderName: 'tiny.glsl',
+          initialSource: src,
+        );
+        final pane = ShaderEditorPane(
+          paneId: 'tiny',
+          controller: ctrl,
+          initialCols: 60,
+          initialRows: 5,
+        );
+        addTearDown(() {
+          pane.dispose();
+          ctrl.dispose();
+        });
+
+        for (final (cols, rows) in const <(int, int)>[
+          (60, 5),
+          (60, 2),
+          (60, 1),
+          (3, 6),
+        ]) {
+          pane.updateViewportSize(cols, rows, 8, 16);
+          final buf = pane.readDisplayBuffer();
+          expect(
+            buf.characters.contains('▜'),
+            isFalse,
+            reason: 'Unexpected overflow caution tape at ${cols}x$rows',
+          );
+        }
+      },
+    );
+
+    test('M10: normalizeSaveAsFilename rejects Windows reserved stems, trailing/leading dots, and DEL bytes', () {
+      for (final bad in const <String>[
+        'CON',
+        'nul.glsl',
+        'PRN.frag',
+        'AUX',
+        'COM1',
+        'LPT9.glsl',
+        'CON.extra.glsl',
+        '...',
+        '..glsl',
+        '.glsl',
+        '.frag',
+        'foo.',
+        'foo .glsl',
+        'a\x7fb',
+      ]) {
+        expect(
+          ShaderEditorController.normalizeSaveAsFilename(bad),
+          isNull,
+          reason: 'Expected "$bad" to be rejected',
+        );
+      }
+      expect(
+        ShaderEditorController.normalizeSaveAsFilename('my.effect.glsl'),
+        equals('my.effect.glsl'),
+      );
+      expect(
+        ShaderEditorController.normalizeSaveAsFilename('effect.FRAG'),
+        equals('effect.FRAG'),
+      );
+      expect(
+        ShaderEditorController.normalizeSaveAsFilename('aurora'),
+        equals('aurora.glsl'),
+      );
+    });
+
+    test('M11: newlines in diagnostics and shaderName are sanitized without truncating text or shifting hits', () {
+      final ctrl = ShaderEditorController(
+        shaderName: 'a\nb.glsl',
+        initialSource:
+            '// @fterm-stage: bg\nvoid mainImage(out vec4 c, in vec2 p) {}\n',
+      );
+      ctrl.setRuntimeCompileError(
+        const ShaderCompileException(
+          shaderId: 'editor:p1',
+          message: 'GLSL error:\nundeclared identifier foo',
+          lineNumber: 2,
+        ),
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'p1',
+        controller: ctrl,
+        initialCols: 100,
+        initialRows: 10,
+      );
+      addTearDown(() {
+        pane.dispose();
+        ctrl.dispose();
+      });
+
+      final buf = pane.readDisplayBuffer();
+      final row0 = _rowText(buf, 0);
+      expect(row0, contains('a b.glsl'));
+      expect(row0, contains('[OFF|BG|FG]'));
+      final lastRow = _rowText(buf, buf.height - 1);
+      expect(lastRow, contains('GLSL error: undeclared identifier foo'));
+    });
+
+    test('L1: mouse release over header ends TextField drag selection', () {
+      final ctrl = ShaderEditorController(
+        shaderName: 'drag.glsl',
+        initialSource:
+            '// @fterm-stage: bg\nvoid mainImage(out vec4 c, in vec2 p) {}\n',
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'drag',
+        controller: ctrl,
+        initialCols: 80,
+        initialRows: 12,
+      );
+      addTearDown(() {
+        pane.dispose();
+        ctrl.dispose();
+      });
+
+      pane.handleInputEvent(
+        const ev.MouseEvent(
+          x: 10,
+          y: 3,
+          button: ev.MouseButton.left,
+          type: ev.MouseEventType.press,
+        ),
+      );
+      pane.handleInputEvent(
+        const ev.MouseEvent(
+          x: 10,
+          y: 1,
+          button: ev.MouseButton.left,
+          type: ev.MouseEventType.release,
+        ),
+      );
+      pane.handleInputEvent(
+        const ev.MouseEvent(
+          x: 20,
+          y: 3,
+          button: ev.MouseButton.left,
+          type: ev.MouseEventType.drag,
+        ),
+      );
+      expect(ctrl.textController.selectedText, isEmpty);
+    });
+
+    test('L2: wide glyph clipped at right edge reports cursor invisible', () {
+      final ctrl = ShaderEditorController(
+        shaderName: 'wide.glsl',
+        initialSource: '// @fterm-stage: bg\n// 中文测试中文\n',
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'wide',
+        controller: ctrl,
+        initialCols: 15,
+        initialRows: 10,
+      );
+      addTearDown(() {
+        pane.dispose();
+        ctrl.dispose();
+      });
+
+      pane.handleInputEvent(const ev.KeyEvent('down', ev.KeyType.down));
+      for (var i = 0; i < 6; i++) {
+        pane.handleInputEvent(const ev.KeyEvent('right', ev.KeyType.right));
+      }
+      ctrl.textController.horizontalScrollOffset = 0;
+      expect(pane.readCursorVisible(), isFalse);
+    });
+
+    test('L3: Save As validation error remains visible at 60 columns on header and ribbon', () async {
+      final ctrl = ShaderEditorController(
+        shaderName: 'my_long_shader_name.glsl',
+        initialSource: 'a',
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'narrow-save-as',
+        controller: ctrl,
+        initialCols: 60,
+        initialRows: 10,
+      );
+      addTearDown(() {
+        pane.dispose();
+        ctrl.dispose();
+      });
+
+      ctrl.beginSaveAs();
+      ctrl.appendSaveAsText('/bad');
+      await ctrl.confirmSaveAs();
+
+      final buf = pane.readDisplayBuffer();
+      final row0 = _rowText(buf, 0);
+      final row1 = _rowText(buf, 1);
+      expect(row0, contains('valid filename'));
+      expect(row1, contains('Enter a valid filename'));
     });
   });
 }

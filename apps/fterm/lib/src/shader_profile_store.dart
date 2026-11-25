@@ -94,6 +94,12 @@ abstract interface class ShaderProfileStore {
 ShaderProfileStore createPlatformShaderProfileStore() =>
     impl.createPlatformShaderProfileStore();
 
+/// Canonicalizes [rawPath], resolving existing filesystem symlinks on desktop
+/// platforms and falling back to lexical normalization when [rawPath] does not
+/// exist on disk or when running on Web.
+String resolveCanonicalShaderPath(String rawPath) =>
+    impl.resolveCanonicalShaderPath(rawPath);
+
 /// Returns whether [pathOrName] has a supported custom shader extension
 /// (`.glsl` or `.frag`, case-insensitive).
 bool isSupportedShaderFilename(String pathOrName) =>

@@ -3550,6 +3550,7 @@ final class _HelpOverlay extends StatelessWidget {
     (r'Ctrl+\ then x', 'Close focused pane / tab'),
     (r'Ctrl+\ then d / Space', 'Cycle tab bar (top -> left -> hidden)'),
     (r'Ctrl+\ then e', 'Open GLSL Shader Editor tab'),
+    ('Alt+S / Cmd+S (Shift: As)', 'Save active GLSL shader in editor'),
     (r'Ctrl+\ then , / i / ? / a', 'Settings / Stats / Help / About'),
     ('Cmd+T/W/D/Shift+D/1..9', 'Native macOS Desktop shortcuts'),
     ('Cmd+= / Cmd+- / Cmd+0', 'Zoom font in / out / reset (macOS)'),

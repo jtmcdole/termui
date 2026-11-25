@@ -1602,7 +1602,9 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   ) async {
     final overlayObj = Overlay.maybeOf(context)?.context.findRenderObject();
     if (overlayObj is! RenderBox) return;
+    final tabId = tab.tabId;
     final editorPane = _findTabEditorPane(tab);
+    final editorPaneId = editorPane?.paneId;
     final action = await showMenu<_TabContextAction>(
       context: context,
       position: RelativeRect.fromRect(
@@ -1612,7 +1614,12 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       items: _buildTabContextMenuItems(editorPane),
     );
     if (!mounted || action == null) return;
-    _applyTabContextAction(action, index: index, editorPane: editorPane);
+    final liveIndex = widget.workspace.tabs.indexWhere((t) => t.tabId == tabId);
+    if (liveIndex < 0) return;
+    final liveEditor = editorPaneId == null
+        ? null
+        : widget.workspace.shaderEditorPaneById(editorPaneId);
+    _applyTabContextAction(action, index: liveIndex, editorPane: liveEditor);
   }
 
   List<PopupMenuEntry<_TabContextAction>> _buildTabContextMenuItems(
@@ -1620,6 +1627,11 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   ) {
     final items = <PopupMenuEntry<_TabContextAction>>[];
     if (editorPane != null) {
+      final isMacOs =
+          (widget.platformOverride ?? defaultTargetPlatform) ==
+          TargetPlatform.macOS;
+      final saveShortcut = isMacOs ? 'Cmd+S' : 'Alt+S';
+      final saveAsShortcut = isMacOs ? 'Cmd+Shift+S' : 'Alt+Shift+S';
       final ctrl = editorPane.controller;
       final previewActive = ctrl.previewMode != ShaderEditorPreviewMode.off;
       final isSolo =
@@ -1630,15 +1642,15 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           ctrl.chainComposition ==
               ShaderEditorChainComposition.blendWithWorkspace;
       items.addAll(<PopupMenuEntry<_TabContextAction>>[
-        const PopupMenuItem<_TabContextAction>(
-          key: ValueKey('tab-menu-save-shader'),
+        PopupMenuItem<_TabContextAction>(
+          key: const ValueKey('tab-menu-save-shader'),
           value: _TabContextAction.saveShader,
-          child: Text('Save Shader (Alt+S)'),
+          child: Text('Save Shader ($saveShortcut)'),
         ),
-        const PopupMenuItem<_TabContextAction>(
-          key: ValueKey('tab-menu-save-shader-as'),
+        PopupMenuItem<_TabContextAction>(
+          key: const ValueKey('tab-menu-save-shader-as'),
           value: _TabContextAction.saveShaderAs,
-          child: Text('Save Shader As... (Alt+Shift+S)'),
+          child: Text('Save Shader As... ($saveAsShortcut)'),
         ),
         const PopupMenuDivider(),
         CheckedPopupMenuItem<_TabContextAction>(

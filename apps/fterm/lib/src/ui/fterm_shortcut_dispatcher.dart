@@ -165,7 +165,7 @@ final class FtermShortcutDispatcher {
 
   bool _handleOverlayKeyEvent(KeyEvent event, Set<ev.Modifier> modifiers) {
     if (workspace.isLeaderArmed) {
-      return _handleOverlayLeaderChord(event);
+      return _handleOverlayLeaderChord(event, modifiers);
     }
     if (_isCtrlBackslashLeader(event, modifiers)) {
       if (event is KeyDownEvent) {
@@ -182,8 +182,9 @@ final class FtermShortcutDispatcher {
     return false;
   }
 
-  bool _handleOverlayLeaderChord(KeyEvent event) {
-    if (_modifierKeys.contains(event.logicalKey)) {
+  bool _handleOverlayLeaderChord(KeyEvent event, Set<ev.Modifier> modifiers) {
+    if (_modifierKeys.contains(event.logicalKey) ||
+        (event is KeyRepeatEvent && _isCtrlBackslashLeader(event, modifiers))) {
       return true;
     }
     workspace.setLeaderArmed(false);
@@ -205,7 +206,8 @@ final class FtermShortcutDispatcher {
   }
 
   bool _handleLeaderChord(KeyEvent event, Set<ev.Modifier> modifiers) {
-    if (_modifierKeys.contains(event.logicalKey)) {
+    if (_modifierKeys.contains(event.logicalKey) ||
+        (event is KeyRepeatEvent && _isCtrlBackslashLeader(event, modifiers))) {
       return true;
     }
     workspace.setLeaderArmed(false);
@@ -446,6 +448,9 @@ final class FtermShortcutDispatcher {
     if (!cmdOnly) return false;
 
     final shift = modifiers.contains(ev.Modifier.shift);
+    if (key == LogicalKeyboardKey.keyS) {
+      return _handleEditorSaveShortcut(shift: shift);
+    }
     if (!shift) {
       final digit = _digitIndices[key];
       if (digit != null) {
@@ -460,6 +465,19 @@ final class FtermShortcutDispatcher {
       }
     }
     return _dispatchCommonNewCloseSplit(key, shift: shift);
+  }
+
+  bool _handleEditorSaveShortcut({required bool shift}) {
+    final editor = workspace.focusedEditorPane;
+    if (editor == null) return false;
+    final ctrl = editor.controller;
+    if (ctrl.confirmingClose || ctrl.promptingSaveAs) return true;
+    if (shift) {
+      ctrl.beginSaveAs();
+    } else {
+      unawaited(ctrl.save());
+    }
+    return true;
   }
 
   bool _handleLinuxWindowsShortcut(

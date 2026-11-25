@@ -62,6 +62,7 @@ final class ShaderEditorPane {
   final GpuFrameWatchdog gpuFrameWatchdog;
 
   final _EditorBufferNotifier _bufferNotifier = _EditorBufferNotifier();
+  final bool _ownsWatchdog;
   late final ValueListenable<tui.Buffer> _bufferListenable;
   late final SyntaxTextHighlighter _highlighter;
   late final tui.BuildOwner _buildOwner;
@@ -74,6 +75,11 @@ final class ShaderEditorPane {
   int _rows;
   bool _focused = true;
   bool _isRendering = false;
+  bool _deferRender = false;
+  bool _renderPending = false;
+  bool _isSavingAndClosing = false;
+  int _saveCloseGen = 0;
+  ({tui.MouseEventConsumer consumer, tui.Offset offset})? _mouseCapture;
   bool _disposed = false;
 
   /// Creates an in-process [ShaderEditorPane] backed by [controller].
@@ -87,6 +93,7 @@ final class ShaderEditorPane {
     VoidCallback? onCloseConfirmed,
   }) : _cols = math.max(1, initialCols),
        _rows = math.max(1, initialRows),
+       _ownsWatchdog = gpuFrameWatchdog == null,
        gpuFrameWatchdog = gpuFrameWatchdog ?? GpuFrameWatchdog(),
        _buffer = tui.Buffer.blank(
          math.max(1, initialCols),
@@ -148,14 +155,16 @@ final class ShaderEditorPane {
     final lines = controller.textController.value.lines;
     final sel = controller.textController.value.selection;
     final lineIdx = sel.cursorLine.clamp(0, lines.length - 1);
-    final gutterW = ShaderEditorView.gutterWidthForLines(lines.length);
+    final line = _lineContent(lines, lineIdx);
+    final gutterW = ShaderEditorView.effectiveGutterWidth(lines.length, _cols);
+    final topChrome = ShaderEditorView.topChromeRowsForViewport(_rows);
     final relRow = lineIdx - controller.textController.scrollOffset;
     final displayCol =
-        _displayColumnAt(lines[lineIdx], sel.cursorColumn) -
+        _displayColumnAt(line, sel.cursorColumn) -
         controller.textController.horizontalScrollOffset;
     return (
       col: (gutterW + displayCol).clamp(0, math.max(0, _cols - 1)),
-      row: (2 + relRow).clamp(0, math.max(0, _rows - 1)),
+      row: (topChrome + relRow).clamp(0, math.max(0, _rows - 1)),
     );
   }
 
@@ -168,18 +177,27 @@ final class ShaderEditorPane {
     final sel = controller.textController.value.selection;
     final lineIdx = sel.cursorLine.clamp(0, lines.length - 1);
     final relRow = lineIdx - controller.textController.scrollOffset;
+    final topChrome = ShaderEditorView.topChromeRowsForViewport(_rows);
     final footerRows = ShaderEditorView.footerHeightForDiagnostics(
       controller.diagnostics.length,
+      viewportRows: _rows,
     );
-    final bodyRows = math.max(0, _rows - 2 - footerRows);
+    final bodyRows = math.max(0, _rows - topChrome - footerRows);
     if (relRow < 0 || relRow >= bodyRows) return false;
 
-    final gutterW = ShaderEditorView.gutterWidthForLines(lines.length);
+    final gutterW = ShaderEditorView.effectiveGutterWidth(lines.length, _cols);
     final bodyCols = math.max(0, _cols - gutterW);
+    if (bodyCols <= 0) return false;
+    final line = _lineContent(lines, lineIdx);
+    final graphemes = line.characters;
+    final cursorCol = sel.cursorColumn;
+    final glyphWidth = cursorCol >= 0 && cursorCol < graphemes.length
+        ? math.max(1, tui.graphemeWidth(graphemes.elementAt(cursorCol)))
+        : 1;
     final displayCol =
-        _displayColumnAt(lines[lineIdx], sel.cursorColumn) -
+        _displayColumnAt(line, cursorCol) -
         controller.textController.horizontalScrollOffset;
-    return displayCol >= 0 && displayCol < bodyCols;
+    return displayCol >= 0 && displayCol + glyphWidth <= bodyCols;
   }
 
   /// Resolves the effective [TerminalShaderConfig] for this editor pane.
@@ -258,6 +276,7 @@ final class ShaderEditorPane {
     if (cols == _cols && rows == _rows) return;
     _cols = cols;
     _rows = rows;
+    _mouseCapture = null;
     _render(notify: true);
   }
 
@@ -279,35 +298,55 @@ final class ShaderEditorPane {
   /// Routes a high-level `termui` [event] to the editor chrome or `TextField`.
   bool handleInputEvent(ev.InputEvent event) {
     if (_disposed) return false;
-    final handled = switch (event) {
-      ev.FocusInEvent() => _onFocusEvent(true),
-      ev.FocusOutEvent() => _onFocusEvent(false),
-      ev.PasteEvent() => _handlePaste(event.text),
-      ev.MouseEvent() => _handleMouse(event),
-      ev.KeyEvent() => _handleKey(event),
-      ev.CursorPositionReportEvent() ||
-      ev.KittyGraphicsEvent() ||
-      ev.KittyKeyboardEvent() ||
-      ev.AudioApcReplyEvent() ||
-      ev.ShaderCapabilitiesEvent() => false,
-    };
-    if (handled) {
+    _deferRender = true;
+    _renderPending = false;
+    var handled = false;
+    try {
+      handled = _dispatchInputEvent(event);
+    } finally {
+      _deferRender = false;
+    }
+    if (handled || _renderPending) {
+      _renderPending = false;
       _render(notify: true);
     }
     return handled;
   }
 
+  bool _dispatchInputEvent(ev.InputEvent event) => switch (event) {
+    ev.FocusInEvent() => _onFocusEvent(true),
+    ev.FocusOutEvent() => _onFocusEvent(false),
+    ev.PasteEvent() => _handlePaste(event.text),
+    ev.MouseEvent() => _handleMouse(event),
+    ev.KeyEvent() => _handleKey(event),
+    ev.CursorPositionReportEvent() ||
+    ev.KittyGraphicsEvent() ||
+    ev.KittyKeyboardEvent() ||
+    ev.AudioApcReplyEvent() ||
+    ev.ShaderCapabilitiesEvent() => false,
+  };
+
   /// Inserts committed IME or printable UTF-8 text into the active editor.
   void handleCommittedText(String text) {
     if (_disposed || text.isEmpty) return;
+    _deferRender = true;
+    _renderPending = false;
+    try {
+      _applyCommittedText(text);
+    } finally {
+      _deferRender = false;
+    }
+    _renderPending = false;
+    _render(notify: true);
+  }
+
+  void _applyCommittedText(String text) {
     if (controller.confirmingClose) {
       _handleConfirmCloseChar(text);
-      _render(notify: true);
       return;
     }
     if (controller.promptingSaveAs) {
       controller.appendSaveAsText(text);
-      _render(notify: true);
       return;
     }
     if (text.characters.length == 1 && text != '\n' && text != '\r') {
@@ -315,7 +354,6 @@ final class ShaderEditorPane {
     } else {
       controller.textController.insertText(text, multiline: true);
     }
-    _render(notify: true);
   }
 
   bool _onFocusEvent(bool focused) {
@@ -334,9 +372,38 @@ final class ShaderEditorPane {
   }
 
   bool _handleMouse(ev.MouseEvent event) {
+    final sx = event.x - 1;
+    final sy = event.y - 1;
+    if (event.type == ev.MouseEventType.release && _mouseCapture != null) {
+      final capture = _mouseCapture!;
+      _mouseCapture = null;
+      capture.consumer.handleMouseEvent(
+        event,
+        sx - capture.offset.dx,
+        sy - capture.offset.dy,
+      );
+      return true;
+    }
+    if (event.type == ev.MouseEventType.drag && _mouseCapture != null) {
+      final capture = _mouseCapture!;
+      return capture.consumer.handleMouseEvent(
+        event,
+        sx - capture.offset.dx,
+        sy - capture.offset.dy,
+      );
+    }
     final root = _rootElement;
     if (root == null) return false;
-    return _routeMouseEvent(root, event, tui.Offset.zero);
+    final hit = _routeMouseEvent(root, event, tui.Offset.zero);
+    if (hit == null) return false;
+    final isButtonPress =
+        event.type == ev.MouseEventType.press &&
+        event.button != ev.MouseButton.wheelUp &&
+        event.button != ev.MouseButton.wheelDown;
+    if (isButtonPress) {
+      _mouseCapture = hit;
+    }
+    return true;
   }
 
   bool _handleKey(ev.KeyEvent event) {
@@ -350,6 +417,11 @@ final class ShaderEditorPane {
     if (_handleEditorShortcut(event)) return true;
     return _dispatchKeyToTextField(event);
   }
+
+  static bool _hasCommandModifier(Set<ev.Modifier> modifiers) =>
+      modifiers.contains(ev.Modifier.control) ||
+      modifiers.contains(ev.Modifier.alt) ||
+      modifiers.contains(ev.Modifier.meta);
 
   bool _handleSaveAsKey(ev.KeyEvent event) {
     if (event.type == ev.KeyType.escape) {
@@ -371,11 +443,8 @@ final class ShaderEditorPane {
       controller.clearSaveAsDraft();
       return true;
     }
-    final hasCmdMod =
-        event.modifiers.contains(ev.Modifier.control) ||
-        event.modifiers.contains(ev.Modifier.alt) ||
-        event.modifiers.contains(ev.Modifier.meta);
-    if (event.type == ev.KeyType.character && !hasCmdMod) {
+    if (event.type == ev.KeyType.character &&
+        !_hasCommandModifier(event.modifiers)) {
       controller.appendSaveAsText(event.key);
     }
     return true;
@@ -393,9 +462,11 @@ final class ShaderEditorPane {
     if (event.type != ev.KeyType.character || event.key.toLowerCase() != 's') {
       return false;
     }
-    final hasAlt = event.modifiers.contains(ev.Modifier.alt);
-    final hasCtrl = event.modifiers.contains(ev.Modifier.control);
-    if (hasAlt == hasCtrl) return false;
+    final primaryCount =
+        (event.modifiers.contains(ev.Modifier.alt) ? 1 : 0) +
+        (event.modifiers.contains(ev.Modifier.control) ? 1 : 0) +
+        (event.modifiers.contains(ev.Modifier.meta) ? 1 : 0);
+    if (primaryCount != 1) return false;
     if (event.modifiers.length == 1) {
       unawaited(controller.save());
       return true;
@@ -410,10 +481,11 @@ final class ShaderEditorPane {
 
   bool _handleConfirmCloseKey(ev.KeyEvent event) {
     if (event.type == ev.KeyType.escape) {
-      controller.cancelCloseConfirmation();
+      _cancelConfirmClose();
       return true;
     }
-    if (event.type == ev.KeyType.character) {
+    if (event.type == ev.KeyType.character &&
+        !_hasCommandModifier(event.modifiers)) {
       _handleConfirmCloseChar(event.key);
     }
     return true;
@@ -424,15 +496,32 @@ final class ShaderEditorPane {
     if (lower == 'y') {
       unawaited(_saveAndConfirmClose());
     } else if (lower == 'n') {
-      controller.cancelCloseConfirmation();
-      _onCloseConfirmed?.call();
+      _discardAndConfirmClose();
     }
   }
 
+  void _cancelConfirmClose() {
+    _saveCloseGen++;
+    controller.cancelCloseConfirmation();
+  }
+
+  void _discardAndConfirmClose() {
+    _saveCloseGen++;
+    controller.cancelCloseConfirmation();
+    _onCloseConfirmed?.call();
+  }
+
   Future<void> _saveAndConfirmClose() async {
-    final saved = await controller.save();
-    if (saved && !_disposed) {
-      _onCloseConfirmed?.call();
+    if (_isSavingAndClosing || _disposed) return;
+    _isSavingAndClosing = true;
+    final gen = ++_saveCloseGen;
+    try {
+      final saved = await controller.save();
+      if (saved && !_disposed && gen == _saveCloseGen) {
+        _onCloseConfirmed?.call();
+      }
+    } finally {
+      _isSavingAndClosing = false;
     }
   }
 
@@ -453,7 +542,8 @@ final class ShaderEditorPane {
     return found;
   }
 
-  static bool _routeMouseEvent(
+  static ({tui.MouseEventConsumer consumer, tui.Offset offset})?
+  _routeMouseEvent(
     tui.Element element,
     ev.MouseEvent event,
     tui.Offset absoluteOffset,
@@ -466,28 +556,29 @@ final class ShaderEditorPane {
         sx >= ox + element.size.width ||
         sy < oy ||
         sy >= oy + element.size.height) {
-      return false;
+      return null;
     }
 
     final children = <tui.Element>[];
     element.visitChildren(children.add);
     for (var i = children.length - 1; i >= 0; i--) {
       final child = children[i];
-      if (_routeMouseEvent(
+      final hit = _routeMouseEvent(
         child,
         event,
         absoluteOffset + child.relativeOffset,
-      )) {
-        return true;
-      }
+      );
+      if (hit != null) return hit;
     }
 
     final localX = sx - ox;
     final localY = sy - oy;
     if (element case final tui.MouseEventConsumer consumer) {
-      return consumer.handleMouseEvent(event, localX, localY);
+      if (consumer.handleMouseEvent(event, localX, localY)) {
+        return (consumer: consumer, offset: absoluteOffset);
+      }
     }
-    return false;
+    return null;
   }
 
   ShaderEditorView _buildRootWidget() => ShaderEditorView(
@@ -495,8 +586,11 @@ final class ShaderEditorPane {
     highlighter: _highlighter,
     theme: _theme,
     focused: _focused,
-    onConfirmSaveAndClose: _onCloseConfirmed,
-    onConfirmDiscardAndClose: _onCloseConfirmed,
+    viewportCols: _cols,
+    viewportRows: _rows,
+    onConfirmSaveAndClose: () => unawaited(_saveAndConfirmClose()),
+    onConfirmDiscardAndClose: _discardAndConfirmClose,
+    onCancelCloseConfirmation: _cancelConfirmClose,
   );
 
   void _mountAndRender({required bool notify}) {
@@ -507,15 +601,18 @@ final class ShaderEditorPane {
     _render(notify: notify);
   }
 
-  void _handleControllerChanged() {
-    if (_disposed) return;
+  void _requestRender() {
+    if (_disposed || _rootElement == null) return;
+    if (_deferRender) {
+      _renderPending = true;
+      return;
+    }
     _render(notify: true);
   }
 
-  void _renderIfReady() {
-    if (_disposed || _rootElement == null) return;
-    _render(notify: true);
-  }
+  void _handleControllerChanged() => _requestRender();
+
+  void _renderIfReady() => _requestRender();
 
   void _render({required bool notify}) {
     if (_disposed || _isRendering) return;
@@ -537,6 +634,13 @@ final class ShaderEditorPane {
     }
   }
 
+  static String _lineContent(List<String> lines, int index) {
+    final line = lines[index];
+    return index < lines.length - 1 && line.endsWith('\r')
+        ? line.substring(0, line.length - 1)
+        : line;
+  }
+
   static int _displayColumnAt(String line, int graphemeCol) {
     var col = 0;
     var idx = 0;
@@ -549,15 +653,21 @@ final class ShaderEditorPane {
   }
 
   /// Releases the mounted `termui` element tree, controller listeners, and
-  /// GPU frame watchdog.
+  /// any internally created GPU frame watchdog.
+  ///
+  /// Caller-supplied [controller] and [gpuFrameWatchdog] instances are not
+  /// disposed by this method.
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _saveCloseGen++;
+    _mouseCapture = null;
     controller.removeListener(_handleControllerChanged);
     _rootElement?.unmount();
     _rootElement = null;
-    gpuFrameWatchdog.dispose();
-    controller.dispose();
+    if (_ownsWatchdog) {
+      gpuFrameWatchdog.dispose();
+    }
     _bufferNotifier.dispose();
   }
 }

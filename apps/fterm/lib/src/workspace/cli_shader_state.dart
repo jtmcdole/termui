@@ -942,6 +942,13 @@ final class PaneCliShaderState {
     onPolicyUiChanged();
   }
 
+  /// Whether [shaderId] has been defined as a custom CLI shader on this pane
+  /// (either approved in this pane or compiled in [registry]).
+  bool hasCustomShader(String shaderId) =>
+      _approvedDefs.containsKey(shaderId) ||
+      registry.isCustomShader(shaderId) ||
+      registry.compiledShaderIds.contains(shaderId);
+
   bool _isShaderIdAllowed(String shaderId) {
     if (ShaderRegionPresets.isPreset(shaderId)) return true;
     if (_policy == CliShaderPolicy.presetsAndTransforms ||

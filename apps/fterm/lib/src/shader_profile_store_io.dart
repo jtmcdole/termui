@@ -43,6 +43,23 @@ ShaderProfileStore createPlatformShaderProfileStore({
   );
 }
 
+/// Canonicalizes [rawPath] and resolves symbolic links along the path or its
+/// parent directory when present on disk.
+String resolveCanonicalShaderPath(String rawPath) {
+  final normalized = p.canonicalize(rawPath);
+  try {
+    return File(normalized).resolveSymbolicLinksSync();
+  } on FileSystemException {
+    final parent = p.dirname(normalized);
+    final base = p.basename(normalized);
+    try {
+      return p.join(Directory(parent).resolveSymbolicLinksSync(), base);
+    } on FileSystemException {
+      return normalized;
+    }
+  }
+}
+
 /// Resolves `~/.config/fterm/shaders` on macOS/Linux or
 /// `%APPDATA%\fterm\shaders` on Windows, returning `null` when no home or
 /// app-data directory is set in [environment].
