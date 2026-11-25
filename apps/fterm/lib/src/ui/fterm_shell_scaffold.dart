@@ -27,6 +27,7 @@ import 'package:termui_flutter/termui_flutter.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../settings_storage.dart';
+import '../shader_editor/shader_editor_controller.dart';
 import '../shader_editor/shader_editor_pane.dart';
 import '../workspace/cli_shader_state.dart';
 import '../workspace/fterm_pane_controller.dart';
@@ -71,6 +72,15 @@ final class FtermShellScaffold extends StatefulWidget {
 
   @override
   State<FtermShellScaffold> createState() => _FtermShellScaffoldState();
+}
+
+enum _TabContextAction {
+  saveShader,
+  previewSolo,
+  previewBlend,
+  previewOff,
+  renameTab,
+  closeTab,
 }
 
 final class _FtermShellScaffoldState extends State<FtermShellScaffold>
@@ -1089,6 +1099,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       final border = fg.withValues(alpha: 0.14);
       final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
       final panes = widget.workspace.panes;
+      final editorPanes = widget.workspace.editorPanes;
 
       return Container(
         key: const ValueKey('fterm-tab-bar-top'),
@@ -1132,6 +1143,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                                       index: i,
                                       tab: widget.workspace.tabs[i],
                                       panes: panes,
+                                      editorPanes: editorPanes,
                                       theme: theme,
                                     ),
                                 ],
@@ -1170,6 +1182,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       final border = fg.withValues(alpha: 0.14);
       final isMacOsDesktop = !_isWeb && _platform == TargetPlatform.macOS;
       final panes = widget.workspace.panes;
+      final editorPanes = widget.workspace.editorPanes;
 
       return Container(
         key: const ValueKey('fterm-tab-bar-left'),
@@ -1192,6 +1205,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                   index: i,
                   tab: widget.workspace.tabs[i],
                   panes: panes,
+                  editorPanes: editorPanes,
                   theme: theme,
                 ),
               ),
@@ -1214,9 +1228,24 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
 
   List<Widget> _buildTabStatusBadges(
     tui.TerminalColorTheme theme, {
+    required String tabId,
     required bool shared,
     required bool exited,
+    required bool dirtyEditor,
   }) => [
+    if (dirtyEditor)
+      Padding(
+        padding: const EdgeInsets.only(right: 5),
+        child: Container(
+          key: ValueKey('fterm-tab-dirty-dot-$tabId'),
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(
+            color: Color(theme.resolveAnsi256(3).argb),
+            shape: BoxShape.circle,
+          ),
+        ),
+      ),
     if (shared)
       Padding(
         padding: const EdgeInsets.only(right: 4),
@@ -1233,46 +1262,83 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ),
   ];
 
+  Color _resolveTabBackground(
+    tui.TerminalColorTheme theme, {
+    required bool selected,
+    required bool dirtyEditor,
+  }) {
+    final activeBg = Color(theme.background.argb);
+    if (!dirtyEditor) {
+      return selected ? activeBg : Colors.transparent;
+    }
+    final warning = Color(theme.resolveAnsi256(3).argb);
+    return selected
+        ? Color.lerp(activeBg, warning, 0.16)!
+        : warning.withValues(alpha: 0.14);
+  }
+
   Widget _buildHorizontalTabChip({
     required int index,
     required FtermTabState tab,
     required Map<String, FtermPaneController> panes,
+    required Map<String, ShaderEditorPane> editorPanes,
     required tui.TerminalColorTheme theme,
   }) {
     final selected = index == widget.workspace.activeTabIndex;
     final fg = Color(theme.foreground.argb);
-    final activeBg = Color(theme.background.argb);
-    final title = tab.resolveTitle(panes);
-    final exited = tab.isExited(panes);
+    final warning = Color(theme.resolveAnsi256(3).argb);
+    final title = tab.resolveTitle(panes, editorPanes: editorPanes);
+    final exited = tab.isExited(panes, editorPanes: editorPanes);
     final shared = tab.isShared(panes);
+    final dirtyEditor = widget.workspace.tabHasDirtyShaderEditor(tab);
+    final chipBg = _resolveTabBackground(
+      theme,
+      selected: selected,
+      dirtyEditor: dirtyEditor,
+    );
 
     return GestureDetector(
       key: ValueKey('fterm-tab-${tab.tabId}'),
       behavior: HitTestBehavior.opaque,
       onTap: () => _handleTabTap(index, tab.tabId),
+      onSecondaryTapDown: (details) =>
+          unawaited(_showTabContextMenu(details.globalPosition, index, tab)),
       child: Container(
         height: tabBarHeight,
         constraints: const BoxConstraints(minWidth: 72, maxWidth: 180),
         padding: const EdgeInsets.symmetric(horizontal: 8),
         decoration: BoxDecoration(
-          color: selected ? activeBg : Colors.transparent,
+          color: chipBg,
           border: Border(
             right: BorderSide(color: fg.withValues(alpha: 0.12), width: 1),
+            bottom: dirtyEditor
+                ? BorderSide(color: warning, width: 2)
+                : BorderSide.none,
           ),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ..._buildTabStatusBadges(theme, shared: shared, exited: exited),
+            ..._buildTabStatusBadges(
+              theme,
+              tabId: tab.tabId,
+              shared: shared,
+              exited: exited,
+              dirtyEditor: dirtyEditor,
+            ),
             Flexible(
               child: Text(
                 title,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(
-                  color: selected ? fg : fg.withValues(alpha: 0.68),
+                  color: dirtyEditor
+                      ? warning
+                      : (selected ? fg : fg.withValues(alpha: 0.68)),
                   fontSize: 11,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                  fontWeight: (selected || dirtyEditor)
+                      ? FontWeight.w600
+                      : FontWeight.normal,
                   fontFamily: castPrimaryFontFamily,
                 ),
               ),
@@ -1315,67 +1381,235 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     required int index,
     required FtermTabState tab,
     required Map<String, FtermPaneController> panes,
+    required Map<String, ShaderEditorPane> editorPanes,
     required tui.TerminalColorTheme theme,
   }) {
     final selected = index == widget.workspace.activeTabIndex;
     final fg = Color(theme.foreground.argb);
-    final title = tab.resolveTitle(panes);
-    final exited = tab.isExited(panes);
+    final warning = Color(theme.resolveAnsi256(3).argb);
+    final title = tab.resolveTitle(panes, editorPanes: editorPanes);
+    final exited = tab.isExited(panes, editorPanes: editorPanes);
     final shared = tab.isShared(panes);
-    return InkWell(
-      key: ValueKey('fterm-tab-${tab.tabId}'),
-      onTap: () => _handleTabTap(index, tab.tabId),
-      child: Container(
-        height: tabBarHeight,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        color: selected ? Color(theme.background.argb) : Colors.transparent,
-        child: Row(
-          children: [
-            ..._buildTabStatusBadges(theme, shared: shared, exited: exited),
-            Expanded(
-              child: Text(
-                title,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: selected ? fg : fg.withValues(alpha: 0.7),
-                  fontSize: 11,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                  fontFamily: castPrimaryFontFamily,
-                ),
+    final dirtyEditor = widget.workspace.tabHasDirtyShaderEditor(tab);
+    final tileBg = _resolveTabBackground(
+      theme,
+      selected: selected,
+      dirtyEditor: dirtyEditor,
+    );
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onSecondaryTapDown: (details) =>
+          unawaited(_showTabContextMenu(details.globalPosition, index, tab)),
+      child: InkWell(
+        key: ValueKey('fterm-tab-${tab.tabId}'),
+        onTap: () => _handleTabTap(index, tab.tabId),
+        child: Container(
+          height: tabBarHeight,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            color: tileBg,
+            border: dirtyEditor
+                ? Border(left: BorderSide(color: warning, width: 2.5))
+                : null,
+          ),
+          child: Row(
+            children: [
+              ..._buildTabStatusBadges(
+                theme,
+                tabId: tab.tabId,
+                shared: shared,
+                exited: exited,
+                dirtyEditor: dirtyEditor,
               ),
-            ),
-            if (tab.unreadBellCount > 0)
-              Container(
-                key: ValueKey('fterm-tab-bell-${tab.tabId}'),
-                margin: const EdgeInsets.only(right: 4),
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                decoration: BoxDecoration(
-                  color: Color(theme.resolveAnsi256(3).argb),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+              Expanded(
                 child: Text(
-                  '${tab.unreadBellCount}',
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    color: Color(theme.background.argb),
-                    fontSize: 9,
-                    fontWeight: FontWeight.bold,
+                    color: dirtyEditor
+                        ? warning
+                        : (selected ? fg : fg.withValues(alpha: 0.7)),
+                    fontSize: 11,
+                    fontWeight: (selected || dirtyEditor)
+                        ? FontWeight.w600
+                        : FontWeight.normal,
+                    fontFamily: castPrimaryFontFamily,
                   ),
                 ),
               ),
-            InkWell(
-              key: ValueKey('fterm-tab-close-${tab.tabId}'),
-              onTap: () => unawaited(widget.workspace.closeTab(index)),
-              child: Icon(
-                Icons.close,
-                size: 12,
-                color: fg.withValues(alpha: 0.55),
+              if (tab.unreadBellCount > 0)
+                Container(
+                  key: ValueKey('fterm-tab-bell-${tab.tabId}'),
+                  margin: const EdgeInsets.only(right: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 1,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Color(theme.resolveAnsi256(3).argb),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${tab.unreadBellCount}',
+                    style: TextStyle(
+                      color: Color(theme.background.argb),
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              InkWell(
+                key: ValueKey('fterm-tab-close-${tab.tabId}'),
+                onTap: () => unawaited(widget.workspace.closeTab(index)),
+                child: Icon(
+                  Icons.close,
+                  size: 12,
+                  color: fg.withValues(alpha: 0.55),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
+  }
+
+  ShaderEditorPane? _findTabEditorPane(FtermTabState tab) {
+    final focusedEditor = widget.workspace.shaderEditorPaneById(
+      tab.splitTree.focusedPaneId,
+    );
+    if (focusedEditor != null) return focusedEditor;
+    for (final paneId in tab.splitTree.paneIds) {
+      final editor = widget.workspace.shaderEditorPaneById(paneId);
+      if (editor != null) return editor;
+    }
+    return null;
+  }
+
+  Future<void> _showTabContextMenu(
+    Offset globalPosition,
+    int index,
+    FtermTabState tab,
+  ) async {
+    final overlayObj = Overlay.maybeOf(context)?.context.findRenderObject();
+    if (overlayObj is! RenderBox) return;
+    final editorPane = _findTabEditorPane(tab);
+    final action = await showMenu<_TabContextAction>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+        Offset.zero & overlayObj.size,
+      ),
+      items: _buildTabContextMenuItems(editorPane),
+    );
+    if (!mounted || action == null) return;
+    _applyTabContextAction(action, index: index, editorPane: editorPane);
+  }
+
+  List<PopupMenuEntry<_TabContextAction>> _buildTabContextMenuItems(
+    ShaderEditorPane? editorPane,
+  ) {
+    final items = <PopupMenuEntry<_TabContextAction>>[];
+    if (editorPane != null) {
+      final ctrl = editorPane.controller;
+      final previewActive = ctrl.previewMode != ShaderEditorPreviewMode.off;
+      final isSolo =
+          previewActive &&
+          ctrl.chainComposition == ShaderEditorChainComposition.solo;
+      final isBlend =
+          previewActive &&
+          ctrl.chainComposition ==
+              ShaderEditorChainComposition.blendWithWorkspace;
+      items.addAll(<PopupMenuEntry<_TabContextAction>>[
+        const PopupMenuItem<_TabContextAction>(
+          key: ValueKey('tab-menu-save-shader'),
+          value: _TabContextAction.saveShader,
+          child: Text('Save Shader (Alt+S)'),
+        ),
+        const PopupMenuDivider(),
+        CheckedPopupMenuItem<_TabContextAction>(
+          key: const ValueKey('tab-menu-preview-solo'),
+          value: _TabContextAction.previewSolo,
+          checked: isSolo,
+          child: const Text('Preview: Solo'),
+        ),
+        CheckedPopupMenuItem<_TabContextAction>(
+          key: const ValueKey('tab-menu-preview-blend'),
+          value: _TabContextAction.previewBlend,
+          checked: isBlend,
+          child: const Text('Preview: Blend with Workspace'),
+        ),
+        CheckedPopupMenuItem<_TabContextAction>(
+          key: const ValueKey('tab-menu-preview-off'),
+          value: _TabContextAction.previewOff,
+          checked: !previewActive,
+          child: const Text('Preview: Off'),
+        ),
+        const PopupMenuDivider(),
+      ]);
+    }
+    items.addAll(const <PopupMenuEntry<_TabContextAction>>[
+      PopupMenuItem<_TabContextAction>(
+        key: ValueKey('tab-menu-rename'),
+        value: _TabContextAction.renameTab,
+        child: Text('Rename Tab'),
+      ),
+      PopupMenuItem<_TabContextAction>(
+        key: ValueKey('tab-menu-close'),
+        value: _TabContextAction.closeTab,
+        child: Text('Close Tab'),
+      ),
+    ]);
+    return items;
+  }
+
+  void _applyTabContextAction(
+    _TabContextAction action, {
+    required int index,
+    required ShaderEditorPane? editorPane,
+  }) {
+    switch (action) {
+      case _TabContextAction.saveShader:
+        if (editorPane != null) {
+          unawaited(widget.workspace.saveShaderEditorPane(editorPane.paneId));
+        }
+      case _TabContextAction.previewSolo:
+        if (editorPane != null) {
+          _activateEditorPreviewComposition(
+            editorPane,
+            ShaderEditorChainComposition.solo,
+          );
+        }
+      case _TabContextAction.previewBlend:
+        if (editorPane != null) {
+          _activateEditorPreviewComposition(
+            editorPane,
+            ShaderEditorChainComposition.blendWithWorkspace,
+          );
+        }
+      case _TabContextAction.previewOff:
+        editorPane?.controller.setPreviewMode(ShaderEditorPreviewMode.off);
+      case _TabContextAction.renameTab:
+        widget.workspace.selectTab(index);
+        widget.workspace.setOverlay(FtermOverlay.rename);
+      case _TabContextAction.closeTab:
+        unawaited(widget.workspace.closeTab(index));
+    }
+  }
+
+  void _activateEditorPreviewComposition(
+    ShaderEditorPane editorPane,
+    ShaderEditorChainComposition composition,
+  ) {
+    final ctrl = editorPane.controller;
+    ctrl.setChainComposition(composition);
+    if (ctrl.previewMode == ShaderEditorPreviewMode.off) {
+      final targetMode = ctrl.detectedStageHint == ShaderStageHint.foreground
+          ? ShaderEditorPreviewMode.foreground
+          : ShaderEditorPreviewMode.background;
+      ctrl.setPreviewMode(targetMode);
+    }
   }
 
   void _handleTabTap(int index, String tabId) {
