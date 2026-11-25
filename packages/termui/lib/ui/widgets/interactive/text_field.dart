@@ -238,6 +238,9 @@ class TextEditingController {
 
   /// Duration within which consecutive single-grapheme typing insertions
   /// coalesce into one undo history entry.
+  ///
+  /// Defaults to [Duration.zero] (disabled) so every keystroke creates its own
+  /// undo step unless a caller opts into burst coalescing.
   final Duration undoCoalesceWindow;
 
   int _scrollOffset = 0;
@@ -248,17 +251,15 @@ class TextEditingController {
   bool _inInsertBurst = false;
 
   /// Creates a [TextEditingController].
-  TextEditingController({
-    String? text,
-    this.undoCoalesceWindow = const Duration(milliseconds: 500),
-  }) : _value = TextEditingValue(
-         text: text ?? '',
-         selection: TextSelection.collapsed(
-           offset: (text ?? '').characters.length,
-           line: (text ?? '').split('\n').length - 1,
-           column: (text ?? '').split('\n').last.characters.length,
-         ),
-       );
+  TextEditingController({String? text, this.undoCoalesceWindow = Duration.zero})
+    : _value = TextEditingValue(
+        text: text ?? '',
+        selection: TextSelection.collapsed(
+          offset: (text ?? '').characters.length,
+          line: (text ?? '').split('\n').length - 1,
+          column: (text ?? '').split('\n').last.characters.length,
+        ),
+      );
 
   /// Gets the current editing value.
   TextEditingValue get value => _value;
@@ -365,8 +366,9 @@ class TextEditingController {
   /// a pause, newline, paste, deletion, cursor move, or an explicit
   /// `saveStateToHistory()` call.
   void saveStateToHistory({bool coalesce = false}) {
+    final allowCoalesce = coalesce && undoCoalesceWindow > Duration.zero;
     final now = clock.now();
-    if (coalesce &&
+    if (allowCoalesce &&
         _inInsertBurst &&
         _lastBurstEditAt != null &&
         now.difference(_lastBurstEditAt!) <= undoCoalesceWindow &&
@@ -378,8 +380,8 @@ class TextEditingController {
     _undoStack.add(_value);
     if (_undoStack.length > 100) _undoStack.removeAt(0);
     _redoStack.clear();
-    _inInsertBurst = coalesce;
-    _lastBurstEditAt = coalesce ? now : null;
+    _inInsertBurst = allowCoalesce;
+    _lastBurstEditAt = allowCoalesce ? now : null;
   }
 
   /// Currently selected text slice, or an empty string when collapsed.
@@ -496,6 +498,7 @@ class TextEditingController {
 
   /// Clears the undo and redo history stacks without modifying [value].
   void clearHistory() {
+    breakUndoBurst();
     _undoStack.clear();
     _redoStack.clear();
   }
