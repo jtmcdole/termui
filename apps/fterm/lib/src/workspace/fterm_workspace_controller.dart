@@ -18,10 +18,12 @@ import 'package:termui_flutter/termui_flutter.dart'
     show
         BuiltinShaders,
         DiagnosableShaderBackend,
+        GpuFrameWatchdog,
         ShaderAnimationMode,
         ShaderBackendDiagnostics,
         ShaderBackendKind,
         ShaderCompileException,
+        ShaderDiagnostic,
         ShaderPassSpec,
         ShaderStageHint,
         ShadertoyGlslAnalysis,
@@ -43,6 +45,8 @@ import '../launch_config.dart';
 import '../perf/fterm_trace_recorder.dart';
 import '../perf/trace_exporter.dart';
 import '../settings_storage.dart';
+import '../shader_editor/shader_editor_controller.dart';
+import '../shader_editor/shader_editor_pane.dart';
 import '../shader_profile_store.dart';
 import '../update/update_service.dart';
 import '../update/update_view_model.dart';
@@ -139,10 +143,17 @@ final class FtermTabState {
   /// Whether a user-pinned title currently overrides live shell titles.
   bool get isUserPinned => pinnedTitle != null && pinnedTitle!.isNotEmpty;
 
-  /// Resolves display title (`pinnedTitle` > live shell/remote title > fallback).
-  String resolveTitle(Map<String, FtermPaneController> panes) {
+  /// Resolves display title (`pinnedTitle` > editor/live shell title > fallback).
+  String resolveTitle(
+    Map<String, FtermPaneController> panes, {
+    Map<String, ShaderEditorPane>? editorPanes,
+  }) {
     final pinned = pinnedTitle;
     if (pinned != null && pinned.isNotEmpty) return pinned;
+    final editor = editorPanes?[splitTree.focusedPaneId];
+    if (editor != null) {
+      return editor.isDirty ? '${editor.shaderName}*' : editor.shaderName;
+    }
     final focused = panes[splitTree.focusedPaneId];
     if (focused == null) return 'fterm';
     final remote = focused.remotePort;
@@ -160,10 +171,14 @@ final class FtermTabState {
   }
 
   /// Whether all panes in this tab have exited.
-  bool isExited(Map<String, FtermPaneController> panes) {
+  bool isExited(
+    Map<String, FtermPaneController> panes, {
+    Map<String, ShaderEditorPane>? editorPanes,
+  }) {
     final ids = splitTree.paneIds;
     if (ids.isEmpty) return false;
     for (final id in ids) {
+      if (editorPanes?.containsKey(id) ?? false) return false;
       final pane = panes[id];
       if (pane != null && !pane.hasExited) return false;
     }
@@ -237,6 +252,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final Map<String, FtermPaneController> _panes = {};
   late final Map<String, FtermPaneController> _panesView =
       UnmodifiableMapView<String, FtermPaneController>(_panes);
+  final Map<String, ShaderEditorPane> _editorPanes = {};
+  late final Map<String, ShaderEditorPane> _editorPanesView =
+      UnmodifiableMapView<String, ShaderEditorPane>(_editorPanes);
+  int _untitledShaderCounter = 0;
   final List<SessionSummary> _remoteDirectorySessions = [];
   final Set<SessionId> _ownedSharedSessionIds = {};
   final Set<SessionId> _dismissedRemoteSessions = {};
@@ -581,18 +600,45 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// Active split tree in [activeTab], or `null` when empty.
   SplitTreeModel? get activeSplitTree => activeTab?.splitTree;
 
-  /// Focused pane controller in [activeTab], or `null` when empty.
+  /// Focused pane identifier in [activeTab], whether terminal or shader editor.
+  String? get focusedPaneId => activeTab?.splitTree.focusedPaneId;
+
+  /// Focused pane controller in [activeTab], or `null` when empty or focused on
+  /// a non-PTY pane such as a shader editor.
   FtermPaneController? get focusedPane {
-    final tab = activeTab;
-    if (tab == null) return null;
-    return _panes[tab.splitTree.focusedPaneId];
+    final id = focusedPaneId;
+    if (id == null) return null;
+    return _panes[id];
+  }
+
+  /// Focused shader editor pane in [activeTab], or `null` when not focused on
+  /// a shader editor.
+  ShaderEditorPane? get focusedEditorPane {
+    final id = focusedPaneId;
+    if (id == null) return null;
+    return _editorPanes[id];
   }
 
   /// Looks up a mounted pane controller by [paneId].
   FtermPaneController? paneById(String paneId) => _panes[paneId];
 
+  /// Looks up an open shader editor pane by [paneId].
+  ShaderEditorPane? shaderEditorPaneById(String paneId) => _editorPanes[paneId];
+
   /// Read-only view of all mounted pane controllers keyed by pane ID.
   Map<String, FtermPaneController> get panes => _panesView;
+
+  /// Read-only view of all open shader editor panes keyed by pane ID.
+  Map<String, ShaderEditorPane> get editorPanes => _editorPanesView;
+
+  /// Whether any shader editor pane inside [tab] holds unsaved changes.
+  bool tabHasDirtyShaderEditor(FtermTabState tab) {
+    for (final paneId in tab.splitTree.paneIds) {
+      final editor = _editorPanes[paneId];
+      if (editor != null && editor.isDirty) return true;
+    }
+    return false;
+  }
 
   /// Whether this host supports local interactive desktop shells.
   bool get isDesktopHost => localHostDriver.isSupported;
@@ -819,6 +865,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     }
     for (final pane in _panes.values) {
       pane.gpuFrameWatchdog.clearQuarantine();
+    }
+    for (final editor in _editorPanes.values) {
+      editor.gpuFrameWatchdog.clearQuarantine();
     }
     _rebuildActiveShaderConfig();
     _notifyChromeChanged();
@@ -1234,10 +1283,15 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _settingsSaver.flush();
     await _settingsSaver.flushAsync();
     final activePanes = [..._panes.values];
+    final activeEditors = [..._editorPanes.values];
     _panes.clear();
+    _editorPanes.clear();
     _tabs.clear();
     _ownedSharedSessionIds.clear();
     _activeTabIndex = 0;
+    for (final editor in activeEditors) {
+      editor.dispose();
+    }
     try {
       await Future.wait([
         for (final pane in activePanes) pane.dispose(disposePort: true),
@@ -1597,6 +1651,250 @@ final class FtermWorkspaceController extends ChangeNotifier {
     return tabId;
   }
 
+  static const String _defaultStarterShaderGlsl = '''
+// @fterm-stage: bg
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+  vec2 uv = fragCoord / max(iResolution.xy, vec2(1.0));
+  vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));
+  fragColor = vec4(col * 0.35, 1.0);
+}
+''';
+
+  /// Opens an in-app GLSL shader editor tab for an existing custom shader
+  /// ([pathOrKey]), a cloned built-in preset ([clonePreset]), or a fresh
+  /// starter shader when both are omitted.
+  ///
+  /// When [pathOrKey] is already open in an editor pane, focuses that pane
+  /// instead of opening a duplicate tab.
+  Future<String?> openShaderEditorTab({
+    String? pathOrKey,
+    TerminalShaderPreset? clonePreset,
+  }) async {
+    if (_disposed) return null;
+    final trimmedPath = pathOrKey?.trim();
+    if (trimmedPath != null && trimmedPath.isNotEmpty) {
+      final existing = _findExistingEditorPane(trimmedPath);
+      if (existing != null) {
+        focusPane(existing.paneId);
+        _activeOverlay = FtermOverlay.none;
+        _notifyChromeChanged();
+        return _tabs[existing.tabIndex].tabId;
+      }
+    }
+
+    final spec = await _resolveEditorTabSpec(
+      pathOrKey: trimmedPath,
+      clonePreset: clonePreset,
+    );
+    if (_disposed || spec == null) return null;
+
+    final paneId = _allocatePaneId();
+    final editor = _createShaderEditorPane(
+      paneId: paneId,
+      shaderName: spec.shaderName,
+      sourcePath: spec.sourcePath,
+      initialSource: spec.initialSource,
+    );
+    _editorPanes[paneId] = editor;
+    final tabId = _allocateTabId();
+    _tabs.add(
+      FtermTabState(tabId: tabId, splitTree: SplitTreeModel.single(paneId)),
+    );
+    _activeTabIndex = _tabs.length - 1;
+    _syncFocusedPaneStates();
+    _activeOverlay = FtermOverlay.none;
+    _notifyChromeChanged();
+    return tabId;
+  }
+
+  /// Persists the open shader editor pane [paneId] via [shaderProfileStore]
+  /// and reloads custom shaders on success.
+  Future<bool> saveShaderEditorPane(String paneId) async {
+    if (_disposed) return false;
+    final editor = _editorPanes[paneId];
+    if (editor == null) return false;
+    return editor.controller.save();
+  }
+
+  ({int tabIndex, String paneId})? _findExistingEditorPane(String pathOrKey) {
+    final targetBase = p.basename(pathOrKey);
+    for (final editor in _editorPanes.values) {
+      final matchesPath = editor.sourcePath == pathOrKey;
+      final matchesUntitled =
+          editor.sourcePath == null && editor.shaderName == targetBase;
+      if (!matchesPath && !matchesUntitled) continue;
+      final tabIndex = _findTabIndexContainingPane(editor.paneId);
+      if (tabIndex >= 0) {
+        return (tabIndex: tabIndex, paneId: editor.paneId);
+      }
+    }
+    return null;
+  }
+
+  Future<({String shaderName, String? sourcePath, String initialSource})?>
+  _resolveEditorTabSpec({
+    String? pathOrKey,
+    TerminalShaderPreset? clonePreset,
+  }) async {
+    if (pathOrKey != null && pathOrKey.isNotEmpty) {
+      try {
+        final loaded = await _shaderProfileStore.loadShaderSource(pathOrKey);
+        final base = p.basename(pathOrKey);
+        return (
+          shaderName: base.isNotEmpty ? base : pathOrKey,
+          sourcePath: pathOrKey,
+          initialSource: loaded,
+        );
+      } on Object catch (error) {
+        if (!_disposed) {
+          _lastShaderAssetError = '$error';
+          _setStatusBanner('Unable to open shader: $error');
+        }
+        return null;
+      }
+    }
+
+    if (clonePreset != null && clonePreset != TerminalShaderPreset.none) {
+      final source =
+          BuiltinShaders.sourceForPreset(clonePreset) ??
+          _defaultStarterShaderGlsl;
+      return (
+        shaderName: _allocateUniqueShaderName('${clonePreset.wireName}_custom'),
+        sourcePath: null,
+        initialSource: source,
+      );
+    }
+
+    return (
+      shaderName: _allocateUniqueShaderName('shader'),
+      sourcePath: null,
+      initialSource: _defaultStarterShaderGlsl,
+    );
+  }
+
+  String _allocateUniqueShaderName(String prefix) {
+    final usedNames = <String>{
+      for (final editor in _editorPanes.values) editor.shaderName,
+      for (final path in _availableCustomShaders) p.basename(path),
+    };
+    if (prefix != 'shader') {
+      final direct = '$prefix.glsl';
+      if (!usedNames.contains(direct)) return direct;
+    }
+    while (true) {
+      final index = ++_untitledShaderCounter;
+      final candidate = '${prefix}_$index.glsl';
+      if (!usedNames.contains(candidate)) return candidate;
+    }
+  }
+
+  ShaderEditorPane _createShaderEditorPane({
+    required String paneId,
+    required String shaderName,
+    required String? sourcePath,
+    required String initialSource,
+  }) {
+    final controller = ShaderEditorController(
+      shaderName: shaderName,
+      sourcePath: sourcePath,
+      initialSource: initialSource,
+      onCompile: (source, mode) => _compileEditorDraft(paneId, source, mode),
+      onSave: _persistEditorShader,
+    );
+    final watchdog = GpuFrameWatchdog(
+      onShaderQuarantined: (shaderId, reason) {
+        if (_disposed) return;
+        triggerShaderEmergencyStop(
+          reason: 'Shader "$shaderId" quarantined: $reason',
+        );
+      },
+    );
+    final editor = ShaderEditorPane(
+      paneId: paneId,
+      controller: controller,
+      theme: _colorResolver.theme,
+      gpuFrameWatchdog: watchdog,
+      onCloseConfirmed: () =>
+          unawaited(_closePaneInternal(paneId, force: true)),
+    );
+    _attachEditorListeners(editor);
+    return editor;
+  }
+
+  void _attachEditorListeners(ShaderEditorPane editor) {
+    final controller = editor.controller;
+    var wasDirty = controller.isDirty;
+    var lastMode = controller.previewMode;
+    controller.addListener(() {
+      if (_disposed) return;
+      final dirtyChanged = controller.isDirty != wasDirty;
+      final modeChanged = controller.previewMode != lastMode;
+      wasDirty = controller.isDirty;
+      lastMode = controller.previewMode;
+      if (modeChanged &&
+          controller.previewMode == ShaderEditorPreviewMode.off) {
+        unawaited(_syncActiveShaders());
+      }
+      if (dirtyChanged) {
+        _notifyChromeChanged();
+      }
+    });
+  }
+
+  Future<List<ShaderDiagnostic>> _compileEditorDraft(
+    String paneId,
+    String source,
+    ShaderEditorPreviewMode mode,
+  ) async {
+    if (_disposed) return const <ShaderDiagnostic>[];
+    final passId = 'editor:$paneId';
+    if (mode != ShaderEditorPreviewMode.off && !_shadersEmergencyStopped) {
+      await _syncActiveShaders();
+      final error = _shaderController.compileErrorForPass(passId);
+      if (error != null) throw error;
+      return const <ShaderDiagnostic>[];
+    }
+    if (!_shaderController.supportsCustomGlsl) {
+      return const <ShaderDiagnostic>[];
+    }
+    final handle = await _shaderController.backend.compile(passId, source);
+    handle.dispose();
+    return const <ShaderDiagnostic>[];
+  }
+
+  Future<bool> _persistEditorShader(
+    String shaderName,
+    String? sourcePath,
+    String source,
+  ) async {
+    if (_disposed) return false;
+    final targetName = _resolveSaveShaderName(shaderName, sourcePath);
+    try {
+      await _shaderProfileStore.saveShaderSource(targetName, source);
+      if (_disposed) return false;
+      _lastShaderAssetError = null;
+      await reloadShaders();
+      return true;
+    } on Object catch (error) {
+      if (!_disposed) {
+        _lastShaderAssetError = '$error';
+        _setStatusBanner('Shader save failed: $error');
+      }
+      return false;
+    }
+  }
+
+  static String _resolveSaveShaderName(String shaderName, String? sourcePath) {
+    final raw = (sourcePath != null && sourcePath.trim().isNotEmpty)
+        ? sourcePath.trim()
+        : shaderName.trim();
+    final candidate = (raw.contains('/') || raw.contains(r'\'))
+        ? p.basename(raw)
+        : raw;
+    if (candidate.isEmpty) return 'shader.glsl';
+    return isSupportedShaderFilename(candidate) ? candidate : '$candidate.glsl';
+  }
+
   /// Splits the currently focused pane along [axis].
   ///
   /// On Desktop hosts, spawns a new local shell in the new split pane (unless
@@ -1729,12 +2027,28 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (_disposed) return;
     final targetPaneId = paneId ?? activeTab?.splitTree.focusedPaneId;
     if (targetPaneId == null) return;
+    await _closePaneInternal(targetPaneId, force: false);
+  }
+
+  Future<void> _closePaneInternal(
+    String targetPaneId, {
+    required bool force,
+  }) async {
+    if (_disposed) return;
     final tabIdx = _findTabIndexContainingPane(targetPaneId);
     if (tabIdx < 0) return;
+
+    final editor = _editorPanes[targetPaneId];
+    if (!force && editor != null && !editor.controller.requestClose()) {
+      focusPane(targetPaneId);
+      return;
+    }
 
     final tab = _tabs[tabIdx];
     _cancelPendingSpawnsForPane(targetPaneId);
     final removedPane = _panes.remove(targetPaneId);
+    final removedEditor = _editorPanes.remove(targetPaneId);
+    final hadEditorPreview = removedEditor?.activePreviewPassSpec != null;
     final nextTree = tab.splitTree.closePane(targetPaneId);
     if (nextTree == null) {
       _removeTabAt(_tabs.indexOf(tab));
@@ -1748,6 +2062,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     _syncFocusedPaneStates();
     _persistWebWorkspaceResumeSnapshot();
     _notifyChromeChanged();
+    removedEditor?.dispose();
+    if (hadEditorPreview && !_disposed) {
+      unawaited(_syncActiveShaders());
+    }
     if (removedPane != null) {
       await removedPane.dispose(disposePort: true);
     }
@@ -1800,11 +2118,24 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   /// Closes an entire tab at [tabIndex] and disposes all of its panes.
-  Future<void> closeTab(int tabIndex) async {
+  ///
+  /// When [force] is `false` and the tab contains a dirty shader editor pane,
+  /// focuses that pane and opens its inline close confirmation prompt instead
+  /// of discarding unsaved changes.
+  Future<void> closeTab(int tabIndex, {bool force = false}) async {
     if (_disposed || tabIndex < 0 || tabIndex >= _tabs.length) return;
     final tab = _tabs[tabIndex];
+    if (!force) {
+      for (final paneId in tab.splitTree.paneIds) {
+        final editor = _editorPanes[paneId];
+        if (editor != null && !editor.controller.requestClose()) {
+          focusPane(paneId);
+          return;
+        }
+      }
+    }
     for (final paneId in [...tab.splitTree.paneIds]) {
-      await closePane(paneId);
+      await _closePaneInternal(paneId, force: true);
     }
   }
 
@@ -2015,7 +2346,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   String _resolveShareTitle(String paneId, FtermPaneController pane) {
     final tabIdx = _findTabIndexContainingPane(paneId);
     if (tabIdx >= 0) {
-      return _tabs[tabIdx].resolveTitle(_panes);
+      return _tabs[tabIdx].resolveTitle(_panes, editorPanes: _editorPanes);
     }
     return pane.shellTitle.isNotEmpty ? pane.shellTitle : 'fterm';
   }
@@ -2071,9 +2402,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     return FtermWorkspaceDiagnosticSummary(
       tabCount: _tabs.length,
       paneCount: activeSplitTree?.paneCount ?? 0,
-      focusedPaneKind: focused == null
-          ? 'none'
-          : (focused.isLocal ? 'local shell' : 'remote session (via relay)'),
+      focusedPaneKind: focused != null
+          ? (focused.isLocal ? 'local shell' : 'remote session (via relay)')
+          : (focusedEditorPane != null ? 'shader editor' : 'none'),
       usesRelay: usesRelay,
       activePtySize: focused == null
           ? null
@@ -2669,8 +3000,8 @@ final class FtermWorkspaceController extends ChangeNotifier {
     if (_disposed) return;
     _rebuildActiveShaderConfig();
     await _shaderController.reloadCustomShaders(
-      config: _activeShaderConfig,
-      sourceLoader: _shaderProfileStore.loadShaderSource,
+      config: _buildSyncShaderConfig(),
+      sourceLoader: _loadShaderSourceWithCli,
     );
     if (_disposed) return;
     _syncShaderCompileBanner();
@@ -2785,22 +3116,45 @@ final class FtermWorkspaceController extends ChangeNotifier {
   }
 
   TerminalShaderConfig _buildSyncShaderConfig() {
-    final cliBg = <ShaderPassSpec>[];
-    final cliFg = <ShaderPassSpec>[];
+    final extraBg = <ShaderPassSpec>[];
+    final extraFg = <ShaderPassSpec>[];
+    _collectCliFullPanePasses(extraBg, extraFg);
+    _collectEditorPreviewPasses(extraBg, extraFg);
+    if (extraBg.isEmpty && extraFg.isEmpty) return _activeShaderConfig;
+    return _activeShaderConfig.copyWith(
+      backgroundPasses: [..._activeShaderConfig.backgroundPasses, ...extraBg],
+      foregroundPasses: [..._activeShaderConfig.foregroundPasses, ...extraFg],
+    );
+  }
+
+  void _collectCliFullPanePasses(
+    List<ShaderPassSpec> bgOut,
+    List<ShaderPassSpec> fgOut,
+  ) {
     for (final pane in _panes.values) {
       for (final pass in pane.cliShaderState.collectActiveCliFullPanePasses()) {
         if (pass.stage == TerminalShaderStage.background) {
-          cliBg.add(pass);
+          bgOut.add(pass);
         } else {
-          cliFg.add(pass);
+          fgOut.add(pass);
         }
       }
     }
-    if (cliBg.isEmpty && cliFg.isEmpty) return _activeShaderConfig;
-    return _activeShaderConfig.copyWith(
-      backgroundPasses: [..._activeShaderConfig.backgroundPasses, ...cliBg],
-      foregroundPasses: [..._activeShaderConfig.foregroundPasses, ...cliFg],
-    );
+  }
+
+  void _collectEditorPreviewPasses(
+    List<ShaderPassSpec> bgOut,
+    List<ShaderPassSpec> fgOut,
+  ) {
+    for (final editor in _editorPanes.values) {
+      final pass = editor.activePreviewPassSpec;
+      if (pass == null) continue;
+      if (pass.stage == TerminalShaderStage.background) {
+        bgOut.add(pass);
+      } else {
+        fgOut.add(pass);
+      }
+    }
   }
 
   void _syncActiveCliFullPaneShaders() {
@@ -3799,6 +4153,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     for (final MapEntry(key: id, value: pane) in _panes.entries) {
       pane.setFocused(id == activePaneId && _workspaceVisible);
     }
+    for (final MapEntry(key: id, value: editor) in _editorPanes.entries) {
+      editor.setFocused(id == activePaneId && _workspaceVisible);
+    }
   }
 
   void _applyColorResolver() {
@@ -3808,6 +4165,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
     );
     for (final pane in _panes.values) {
       pane.setColorResolver(_colorResolver);
+    }
+    for (final editor in _editorPanes.values) {
+      editor.setTheme(_colorResolver.theme);
     }
   }
 
@@ -3872,9 +4232,14 @@ final class FtermWorkspaceController extends ChangeNotifier {
     }
     await _settingsSaver.flushAsync();
     final activePanes = [..._panes.values];
+    final activeEditors = [..._editorPanes.values];
     _panes.clear();
+    _editorPanes.clear();
     _tabs.clear();
     _ownedSharedSessionIds.clear();
+    for (final editor in activeEditors) {
+      editor.dispose();
+    }
     await Future.wait([
       _disposePanesAndHost(activePanes),
       audioController.dispose(),
