@@ -76,6 +76,7 @@ final class FtermShellScaffold extends StatefulWidget {
 
 enum _TabContextAction {
   saveShader,
+  saveShaderAs,
   previewSolo,
   previewBlend,
   previewOff,
@@ -1627,6 +1628,11 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
           value: _TabContextAction.saveShader,
           child: Text('Save Shader (Alt+S)'),
         ),
+        const PopupMenuItem<_TabContextAction>(
+          key: ValueKey('tab-menu-save-shader-as'),
+          value: _TabContextAction.saveShaderAs,
+          child: Text('Save Shader As... (Alt+Shift+S)'),
+        ),
         const PopupMenuDivider(),
         CheckedPopupMenuItem<_TabContextAction>(
           key: const ValueKey('tab-menu-preview-solo'),
@@ -1673,6 +1679,12 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       case _TabContextAction.saveShader:
         if (editorPane != null) {
           unawaited(widget.workspace.saveShaderEditorPane(editorPane.paneId));
+        }
+      case _TabContextAction.saveShaderAs:
+        if (editorPane != null) {
+          widget.workspace.selectTab(index);
+          widget.workspace.focusPane(editorPane.paneId);
+          editorPane.controller.beginSaveAs();
         }
       case _TabContextAction.previewSolo:
         if (editorPane != null) {

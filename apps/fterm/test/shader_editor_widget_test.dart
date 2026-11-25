@@ -662,5 +662,146 @@ void main() {
       // Gutter cell in BG preview mode also uses default bg == 0.
       expect(buf.getBackground(1, 3), equals(0));
     });
+
+    test('supports inline Save As prompt via Alt+Shift+S and [Save As] chip with filename validation and auto-.glsl suffix', () async {
+      final savedCalls = <(String, String?, String)>[];
+      final controller = ShaderEditorController(
+        shaderName: 'shader_1.glsl',
+        sourcePath: null,
+        initialSource: 'void mainImage(out vec4 c, in vec2 f) {}',
+        onSave: (name, path, src) async {
+          savedCalls.add((name, path, src));
+          return true;
+        },
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'save-as-pane',
+        controller: controller,
+        initialCols: 120,
+        initialRows: 12,
+      );
+      addTearDown(pane.dispose);
+
+      // Header shows [Save As] chip for untitled shaders.
+      expect(_rowText(pane.readDisplayBuffer(), 0), contains('[Save As]'));
+
+      // Trigger Save As via Alt+Shift+S -> opens inline prompt & hides body cursor.
+      pane.handleInputEvent(
+        const ev.KeyEvent(
+          's',
+          ev.KeyType.character,
+          modifiers: {ev.Modifier.alt, ev.Modifier.shift},
+        ),
+      );
+      expect(controller.promptingSaveAs, isTrue);
+      expect(controller.saveAsDraftName, equals('shader_1.glsl'));
+      expect(pane.readCursorVisible(), isFalse);
+      expect(
+        _rowText(pane.readDisplayBuffer(), 0),
+        contains('Save As:  shader_1.glsl█'),
+      );
+
+      // Ctrl+U clears draft, typing invalid path triggers validation error.
+      pane.handleInputEvent(
+        const ev.KeyEvent(
+          'u',
+          ev.KeyType.character,
+          modifiers: {ev.Modifier.control},
+        ),
+      );
+      expect(controller.saveAsDraftName, isEmpty);
+      pane.handleCommittedText('../bad');
+      pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.enter));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.promptingSaveAs, isTrue);
+      expect(controller.saveAsError, isNotNull);
+      expect(savedCalls, isEmpty);
+
+      // Clear, type valid stem without extension, backspace 1 char, re-type, Enter -> saves with .glsl.
+      pane.handleInputEvent(
+        const ev.KeyEvent(
+          'u',
+          ev.KeyType.character,
+          modifiers: {ev.Modifier.control},
+        ),
+      );
+      pane.handleCommittedText('aurora_ringx');
+      pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.backspace));
+      pane.handleInputEvent(const ev.KeyEvent('s', ev.KeyType.character));
+      pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.enter));
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.promptingSaveAs, isFalse);
+      expect(controller.shaderName, equals('aurora_rings.glsl'));
+      expect(controller.sourcePath, equals('aurora_rings.glsl'));
+      expect(controller.isDirty, isFalse);
+      expect(savedCalls, hasLength(1));
+      expect(savedCalls.single.$1, equals('aurora_rings.glsl'));
+      expect(savedCalls.single.$2, isNull);
+      expect(
+        _rowText(pane.readDisplayBuffer(), 0),
+        contains('aurora_rings.glsl'),
+      );
+
+      // Esc cancels Save As without saving.
+      controller.beginSaveAs();
+      expect(controller.promptingSaveAs, isTrue);
+      pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.escape));
+      expect(controller.promptingSaveAs, isFalse);
+    });
+
+    test('selects and deletes multi-line code blocks with Shift+Down and Backspace in ShaderEditorPane', () {
+      const source =
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  float a = 1.0;\n'
+          '  float b = 2.0;\n'
+          '  fragColor = vec4(1.0);\n'
+          '}';
+      final controller = ShaderEditorController(
+        shaderName: 'select.glsl',
+        initialSource: source,
+      );
+      final pane = ShaderEditorPane(
+        paneId: 'select-pane',
+        controller: controller,
+        initialCols: 90,
+        initialRows: 12,
+      );
+      addTearDown(pane.dispose);
+
+      // Move to line 2 col 0, select lines 2 & 3 with Shift+Down twice.
+      pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.down));
+      pane.handleInputEvent(
+        const ev.KeyEvent('', ev.KeyType.down, modifiers: {ev.Modifier.shift}),
+      );
+      pane.handleInputEvent(
+        const ev.KeyEvent('', ev.KeyType.down, modifiers: {ev.Modifier.shift}),
+      );
+      expect(
+        controller.textController.selectedText,
+        equals('  float a = 1.0;\n  float b = 2.0;\n'),
+      );
+
+      // Backspace removes both lines in one undoable step.
+      pane.handleInputEvent(const ev.KeyEvent('', ev.KeyType.backspace));
+      expect(
+        controller.source,
+        equals(
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  fragColor = vec4(1.0);\n'
+          '}',
+        ),
+      );
+
+      // Ctrl+Z restores the deleted block completely.
+      pane.handleInputEvent(
+        const ev.KeyEvent(
+          'z',
+          ev.KeyType.character,
+          modifiers: {ev.Modifier.control},
+        ),
+      );
+      expect(controller.source, equals(source));
+    });
   });
 }

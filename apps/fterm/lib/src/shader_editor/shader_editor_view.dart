@@ -90,7 +90,10 @@ final class ShaderEditorView extends tui.StatelessWidget {
               controller: controller.textController,
               multiline: true,
               tabSize: 2,
-              focused: focused && !controller.confirmingClose,
+              focused:
+                  focused &&
+                  !controller.confirmingClose &&
+                  !controller.promptingSaveAs,
               // Leave background null (bg == 0) so TerminalSurface applies
               // previewBackgroundColorOverride and previewBackgroundOpacity,
               // allowing background shaders to shine through in BG mode.
@@ -98,6 +101,10 @@ final class ShaderEditorView extends tui.StatelessWidget {
               cursorStyle: tui.Style(
                 foreground: theme.cursorTextColor,
                 background: theme.cursorColor,
+              ),
+              selectionStyle: tui.Style(
+                foreground: palette.activeChipFg,
+                background: palette.activeChipBg,
               ),
               spanBuilder: (text, baseStyle) => highlighter.buildFieldSpan(
                 text,
@@ -368,6 +375,8 @@ final class _EditorHeaderBar extends tui.StatelessWidget {
     final b = _StripBuilder();
     if (controller.confirmingClose) {
       _buildCloseConfirmRow(b);
+    } else if (controller.promptingSaveAs) {
+      _buildSaveAsRow(b);
     } else {
       _buildNormalHeaderRow(b);
     }
@@ -427,6 +436,47 @@ final class _EditorHeaderBar extends tui.StatelessWidget {
     }
   }
 
+  void _buildSaveAsRow(_StripBuilder b) {
+    final labelStyle = tui.Style(
+      foreground: palette.accentFg,
+      background: palette.barBg,
+      modifiers: tui.Modifier.bold,
+    );
+    final inputStyle = tui.Style(
+      foreground: palette.activeChipFg,
+      background: palette.activeChipBg,
+      modifiers: tui.Modifier.bold,
+    );
+    final normalStyle = tui.Style(
+      foreground: palette.fg,
+      background: palette.barBg,
+    );
+    b.add(' Save As: ', labelStyle);
+    b.add(' ${controller.saveAsDraftName}█ ', inputStyle);
+    b.add(' ', normalStyle);
+    b.add(
+      '[Enter: Save]',
+      tui.Style(
+        foreground: palette.okFg,
+        background: palette.barBg,
+        modifiers: tui.Modifier.bold,
+      ),
+      onTap: () => unawaited(controller.confirmSaveAs()),
+    );
+    b.add(' ', normalStyle);
+    b.add('[Esc: Cancel]', normalStyle, onTap: controller.cancelSaveAs);
+    if (controller.saveAsError case final err?) {
+      b.add(
+        '  $err',
+        tui.Style(
+          foreground: palette.errorFg,
+          background: palette.barBg,
+          modifiers: tui.Modifier.bold,
+        ),
+      );
+    }
+  }
+
   void _buildNormalHeaderRow(_StripBuilder b) {
     final baseStyle = tui.Style(
       foreground: palette.fg,
@@ -454,6 +504,17 @@ final class _EditorHeaderBar extends tui.StatelessWidget {
         modifiers: controller.isDirty ? tui.Modifier.bold : tui.Modifier.none,
       ),
       onTap: () => unawaited(controller.save()),
+    );
+    b.add(' ', baseStyle);
+    final isUntitled = controller.sourcePath == null;
+    b.add(
+      '[Save As]',
+      tui.Style(
+        foreground: isUntitled ? palette.accentFg : palette.mutedFg,
+        background: palette.barBg,
+        modifiers: isUntitled ? tui.Modifier.bold : tui.Modifier.none,
+      ),
+      onTap: controller.beginSaveAs,
     );
     b.add(
       ' E-Stop:Ctrl+Shift+F6',

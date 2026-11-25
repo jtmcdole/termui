@@ -161,7 +161,9 @@ final class ShaderEditorPane {
 
   /// Whether the editor cursor is currently visible within the code viewport.
   bool readCursorVisible() {
-    if (!_focused || controller.confirmingClose) return false;
+    if (!_focused || controller.confirmingClose || controller.promptingSaveAs) {
+      return false;
+    }
     final lines = controller.textController.value.lines;
     final sel = controller.textController.value.selection;
     final lineIdx = sel.cursorLine.clamp(0, lines.length - 1);
@@ -303,6 +305,11 @@ final class ShaderEditorPane {
       _render(notify: true);
       return;
     }
+    if (controller.promptingSaveAs) {
+      controller.appendSaveAsText(text);
+      _render(notify: true);
+      return;
+    }
     if (text.characters.length == 1 && text != '\n' && text != '\r') {
       _dispatchKeyToTextField(ev.KeyEvent(text, ev.KeyType.character));
     } else {
@@ -318,6 +325,10 @@ final class ShaderEditorPane {
 
   bool _handlePaste(String text) {
     if (controller.confirmingClose) return true;
+    if (controller.promptingSaveAs) {
+      controller.appendSaveAsText(text);
+      return true;
+    }
     controller.textController.insertText(text, multiline: true);
     return true;
   }
@@ -333,8 +344,41 @@ final class ShaderEditorPane {
     if (controller.confirmingClose) {
       return _handleConfirmCloseKey(event);
     }
+    if (controller.promptingSaveAs) {
+      return _handleSaveAsKey(event);
+    }
     if (_handleEditorShortcut(event)) return true;
     return _dispatchKeyToTextField(event);
+  }
+
+  bool _handleSaveAsKey(ev.KeyEvent event) {
+    if (event.type == ev.KeyType.escape) {
+      controller.cancelSaveAs();
+      return true;
+    }
+    if (event.type == ev.KeyType.enter) {
+      unawaited(controller.confirmSaveAs());
+      return true;
+    }
+    if (event.type == ev.KeyType.backspace) {
+      controller.backspaceSaveAsChar();
+      return true;
+    }
+    if (event.type == ev.KeyType.character &&
+        event.key.toLowerCase() == 'u' &&
+        event.modifiers.length == 1 &&
+        event.modifiers.contains(ev.Modifier.control)) {
+      controller.clearSaveAsDraft();
+      return true;
+    }
+    final hasCmdMod =
+        event.modifiers.contains(ev.Modifier.control) ||
+        event.modifiers.contains(ev.Modifier.alt) ||
+        event.modifiers.contains(ev.Modifier.meta);
+    if (event.type == ev.KeyType.character && !hasCmdMod) {
+      controller.appendSaveAsText(event.key);
+    }
+    return true;
   }
 
   bool _handleEditorShortcut(ev.KeyEvent event) {
@@ -346,14 +390,19 @@ final class ShaderEditorPane {
       controller.jumpToNextDiagnostic();
       return true;
     }
-    final isSave =
-        event.type == ev.KeyType.character &&
-        event.key.toLowerCase() == 's' &&
-        (event.modifiers.length == 1 &&
-            (event.modifiers.contains(ev.Modifier.alt) ||
-                event.modifiers.contains(ev.Modifier.control)));
-    if (isSave) {
+    if (event.type != ev.KeyType.character || event.key.toLowerCase() != 's') {
+      return false;
+    }
+    final hasAlt = event.modifiers.contains(ev.Modifier.alt);
+    final hasCtrl = event.modifiers.contains(ev.Modifier.control);
+    if (hasAlt == hasCtrl) return false;
+    if (event.modifiers.length == 1) {
       unawaited(controller.save());
+      return true;
+    }
+    if (event.modifiers.length == 2 &&
+        event.modifiers.contains(ev.Modifier.shift)) {
+      controller.beginSaveAs();
       return true;
     }
     return false;

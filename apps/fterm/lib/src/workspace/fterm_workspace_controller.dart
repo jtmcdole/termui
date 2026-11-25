@@ -1826,17 +1826,20 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     final controller = editor.controller;
     var wasDirty = controller.isDirty;
     var lastMode = controller.previewMode;
+    var lastName = controller.shaderName;
     controller.addListener(() {
       if (_disposed) return;
       final dirtyChanged = controller.isDirty != wasDirty;
       final modeChanged = controller.previewMode != lastMode;
+      final nameChanged = controller.shaderName != lastName;
       wasDirty = controller.isDirty;
       lastMode = controller.previewMode;
+      lastName = controller.shaderName;
       if (modeChanged &&
           controller.previewMode == ShaderEditorPreviewMode.off) {
         unawaited(_syncActiveShaders());
       }
-      if (dirtyChanged) {
+      if (dirtyChanged || nameChanged) {
         _notifyChromeChanged();
       }
     });
