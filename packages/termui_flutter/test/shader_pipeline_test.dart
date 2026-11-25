@@ -3325,6 +3325,219 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       },
     );
   });
+
+  group('TerminalShaderHost watchdog registration and quarantine filtering', () {
+    testWidgets(
+      'registers non-preset passes under host source without wiping cli shaders',
+      (tester) async {
+        final backend = _FakeShaderBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final watchdog = GpuFrameWatchdog();
+        addTearDown(watchdog.dispose);
+        final replacementWatchdog = GpuFrameWatchdog();
+        addTearDown(replacementWatchdog.dispose);
+
+        watchdog.setActiveCustomShaders(const <String>[
+          'cli:spark',
+        ], source: 'cli');
+
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:bg_custom',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: _validStaticGlsl,
+            ),
+            ShaderPassSpec(
+              id: 'bg:wave',
+              stage: TerminalShaderStage.background,
+              preset: TerminalShaderPreset.wallpaperWave,
+            ),
+          ],
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'editor:fg_draft',
+              stage: TerminalShaderStage.foreground,
+              inlineGlsl: _validStaticGlsl,
+            ),
+            ShaderPassSpec(
+              id: 'fg:scan',
+              stage: TerminalShaderStage.foreground,
+              preset: TerminalShaderPreset.scanlineOverlay,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(config));
+
+        Widget buildHost(TerminalShaderConfig cfg, GpuFrameWatchdog wd) =>
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: SizedBox(
+                width: 64,
+                height: 48,
+                child: TerminalShaderHost(
+                  controller: controller,
+                  config: cfg,
+                  watchdog: wd,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            );
+
+        await tester.pumpWidget(buildHost(config, watchdog));
+        expect(
+          watchdog.activeCustomShaderIds,
+          equals(<String>{'cli:spark', 'user:bg_custom', 'editor:fg_draft'}),
+        );
+
+        // Disabling config clears host passes without touching cli shaders.
+        await tester.pumpWidget(
+          buildHost(config.copyWith(enabled: false), watchdog),
+        );
+        expect(watchdog.activeCustomShaderIds, equals(<String>{'cli:spark'}));
+
+        // Re-enabling restores host registrations.
+        await tester.pumpWidget(buildHost(config, watchdog));
+        expect(
+          watchdog.activeCustomShaderIds,
+          equals(<String>{'cli:spark', 'user:bg_custom', 'editor:fg_draft'}),
+        );
+
+        // Swapping watchdog clears host entries on old watchdog only.
+        await tester.pumpWidget(buildHost(config, replacementWatchdog));
+        expect(watchdog.activeCustomShaderIds, equals(<String>{'cli:spark'}));
+        expect(
+          replacementWatchdog.activeCustomShaderIds,
+          equals(<String>{'user:bg_custom', 'editor:fg_draft'}),
+        );
+
+        // Disposing host clears host entries cleanly.
+        await tester.pumpWidget(const SizedBox.shrink());
+        expect(replacementWatchdog.activeCustomShaderIds, isEmpty);
+        expect(watchdog.activeCustomShaderIds, equals(<String>{'cli:spark'}));
+      },
+    );
+
+    testWidgets(
+      'skips quarantined custom passes while keeping built-in presets active',
+      (tester) async {
+        final backend = _FakeShaderBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final activity = _ManualNotifier();
+        addTearDown(activity.dispose);
+        final watchdog = GpuFrameWatchdog(
+          slowFrameThreshold: const Duration(milliseconds: 16),
+          consecutiveSlowFrameLimit: 2,
+        );
+        addTearDown(watchdog.dispose);
+
+        final config = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:bg_slow',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: _validStaticGlsl,
+            ),
+            ShaderPassSpec(
+              id: 'bg:wave',
+              stage: TerminalShaderStage.background,
+              preset: TerminalShaderPreset.wallpaperWave,
+            ),
+          ],
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'editor:fg_draft',
+              stage: TerminalShaderStage.foreground,
+              inlineGlsl: _validStaticGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(config));
+
+        Widget buildHost() => Directionality(
+          textDirection: TextDirection.ltr,
+          child: SizedBox(
+            width: 64,
+            height: 48,
+            child: TerminalShaderHost(
+              controller: controller,
+              config: config,
+              watchdog: watchdog,
+              activityListenable: activity,
+              child: const ColoredBox(color: Color(0xFF102030)),
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(buildHost());
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+
+        int countAsyncCallsFor(String passId) => backend.asyncPassCalls
+            .where((passes) => passes.any((p) => p.handle.id == passId))
+            .length;
+
+        expect(
+          backend.syncBackgroundCalls.last.map((p) => p.handle.id),
+          equals(<String>['user:bg_slow', 'bg:wave']),
+        );
+        expect(countAsyncCallsFor('editor:fg_draft'), greaterThanOrEqualTo(1));
+
+        // Quarantine custom passes via slow frames and direct quarantine.
+        watchdog.recordShaderFrameDuration(
+          'user:bg_slow',
+          const Duration(milliseconds: 50),
+        );
+        watchdog.recordShaderFrameDuration(
+          'user:bg_slow',
+          const Duration(milliseconds: 50),
+        );
+        watchdog.quarantineShader('editor:fg_draft', 'slow foreground');
+        // Built-in preset stays unaffected even if its ID appears in watchdog.
+        watchdog.quarantineShader('bg:wave', 'should not block preset');
+
+        expect(watchdog.isQuarantined('user:bg_slow'), isTrue);
+        expect(watchdog.isQuarantined('editor:fg_draft'), isTrue);
+
+        final fgCallsBefore = countAsyncCallsFor('editor:fg_draft');
+        activity.trigger();
+        await tester.pumpWidget(buildHost());
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(
+          backend.syncBackgroundCalls.last.map((p) => p.handle.id),
+          equals(<String>['bg:wave']),
+        );
+        expect(countAsyncCallsFor('editor:fg_draft'), equals(fgCallsBefore));
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugForegroundOutputImage, isNull);
+
+        // Clearing quarantine resumes custom pass rendering.
+        watchdog.clearQuarantine();
+        activity.trigger();
+        await tester.pumpWidget(buildHost());
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(
+          backend.syncBackgroundCalls.last.map((p) => p.handle.id),
+          equals(<String>['user:bg_slow', 'bg:wave']),
+        );
+        expect(
+          countAsyncCallsFor('editor:fg_draft'),
+          greaterThan(fgCallsBefore),
+        );
+      },
+    );
+  });
 }
 
 final class _FakeDirectShaderBackend extends _FakeShaderBackend
