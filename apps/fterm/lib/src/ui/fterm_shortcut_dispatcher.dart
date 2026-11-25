@@ -290,6 +290,10 @@ final class FtermShortcutDispatcher {
       workspace.toggleShaderEmergencyStop();
       return true;
     }
+    if (key == LogicalKeyboardKey.keyE) {
+      unawaited(workspace.openShaderEditorTab());
+      return true;
+    }
     final digit = _digitIndices[key];
     if (digit != null) {
       if (digit < workspace.tabs.length) {

@@ -12,6 +12,8 @@ import 'package:termui_flutter/termui_flutter.dart'
         ShaderAnimationMode,
         ShaderBackendKind,
         ShaderCompileException,
+        ShaderDiagnostic,
+        ShaderDiagnosticSeverity,
         ShaderPassSpec,
         ShaderStageHint,
         ShadertoyGlslShim,
@@ -1386,6 +1388,10 @@ final class _ShadersAndBackgroundSectionState
           palette: palette,
           onToggle: (entry) => unawaited(ws.toggleBackgroundShader(entry)),
           onMove: (from, to) => unawaited(ws.moveBackgroundShader(from, to)),
+          onEditCustom: (entry) =>
+              unawaited(ws.openShaderEditorTab(pathOrKey: entry)),
+          onClonePreset: (preset) =>
+              unawaited(ws.openShaderEditorTab(clonePreset: preset)),
         ),
         const SizedBox(height: 8),
         _ShaderChainSelector(
@@ -1405,6 +1411,10 @@ final class _ShadersAndBackgroundSectionState
           palette: palette,
           onToggle: (entry) => unawaited(ws.toggleForegroundShader(entry)),
           onMove: (from, to) => unawaited(ws.moveForegroundShader(from, to)),
+          onEditCustom: (entry) =>
+              unawaited(ws.openShaderEditorTab(pathOrKey: entry)),
+          onClonePreset: (preset) =>
+              unawaited(ws.openShaderEditorTab(clonePreset: preset)),
         ),
         const SizedBox(height: 8),
         _CustomShaderAddRow(
@@ -1549,29 +1559,82 @@ final class _ShaderCompileErrorBanner extends StatelessWidget {
     required this.palette,
   });
 
-  String _formatMessage() {
-    final err = compileError;
-    if (err != null) {
-      final loc = err.lineNumber == null ? '' : ' (line ${err.lineNumber})';
-      return '${err.shaderId}$loc: ${err.message}';
-    }
-    return assetError ?? '';
+  String _formatSingleCompileError(ShaderCompileException err) {
+    final loc = err.lineNumber == null ? '' : ' (line ${err.lineNumber})';
+    return '${err.shaderId}$loc: ${err.message}';
+  }
+
+  Color _colorForSeverity(ShaderDiagnosticSeverity severity) =>
+      switch (severity) {
+        ShaderDiagnosticSeverity.error => palette.danger,
+        ShaderDiagnosticSeverity.warning => palette.warning,
+        ShaderDiagnosticSeverity.info => palette.accent,
+      };
+
+  static String _formatDiagnosticLine(ShaderDiagnostic diag) {
+    final line = diag.line;
+    final col = diag.column;
+    final loc = line == null
+        ? ''
+        : (col == null ? 'L$line: ' : 'L$line:$col: ');
+    final hint = diag.hint;
+    final suffix = (hint != null && hint.isNotEmpty) ? ' ($hint)' : '';
+    return '$loc${diag.message}$suffix';
   }
 
   @override
-  Widget build(BuildContext context) => Container(
-    key: const ValueKey('settings-shader-compile-error'),
-    padding: const EdgeInsets.all(8),
-    decoration: BoxDecoration(
-      color: palette.danger.withValues(alpha: 0.12),
-      borderRadius: BorderRadius.circular(6),
-      border: Border.all(color: palette.danger),
-    ),
-    child: Text(
-      _formatMessage(),
-      style: TextStyle(color: palette.danger, fontSize: 11),
-    ),
-  );
+  Widget build(BuildContext context) {
+    final err = compileError;
+    final diags = err?.diagnostics ?? const <ShaderDiagnostic>[];
+    final asset = assetError;
+    return Container(
+      key: const ValueKey('settings-shader-compile-error'),
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: palette.danger.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: palette.danger),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (err != null && diags.isNotEmpty) ...[
+            Text(
+              '${err.shaderId} (${diags.length} '
+              '${diags.length == 1 ? 'diagnostic' : 'diagnostics'})',
+              style: TextStyle(
+                color: palette.danger,
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 4),
+            for (var i = 0; i < diags.length; i++)
+              Padding(
+                key: ValueKey('settings-shader-diagnostic-$i'),
+                padding: const EdgeInsets.only(top: 2),
+                child: Text(
+                  _formatDiagnosticLine(diags[i]),
+                  style: TextStyle(
+                    color: _colorForSeverity(diags[i].severity),
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+          ] else if (err != null)
+            Text(
+              _formatSingleCompileError(err),
+              style: TextStyle(color: palette.danger, fontSize: 11),
+            ),
+          if (asset != null && asset.isNotEmpty) ...[
+            if (err != null) const SizedBox(height: 4),
+            Text(asset, style: TextStyle(color: palette.danger, fontSize: 11)),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 final class _BackgroundOpacityControl extends StatelessWidget {
@@ -1803,6 +1866,8 @@ final class _ShaderChainSelector extends StatelessWidget {
   final FtermOverlayPalette palette;
   final void Function(String entry) onToggle;
   final void Function(int fromIndex, int toIndex) onMove;
+  final void Function(String entry) onEditCustom;
+  final void Function(TerminalShaderPreset preset) onClonePreset;
 
   const _ShaderChainSelector({
     required this.title,
@@ -1817,6 +1882,8 @@ final class _ShaderChainSelector extends StatelessWidget {
     required this.palette,
     required this.onToggle,
     required this.onMove,
+    required this.onEditCustom,
+    required this.onClonePreset,
   });
 
   bool _isRecommendedForStage(ShaderStageHint? hint) => switch (hint) {
@@ -1904,6 +1971,48 @@ final class _ShaderChainSelector extends StatelessWidget {
     );
   }
 
+  Widget _buildShaderChipEntry(String id, String label, bool isCustom) {
+    final preset = isCustom
+        ? TerminalShaderPreset.none
+        : TerminalShaderPreset.fromWireName(id);
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: _chipTooltip(id),
+          child: FilterChip(
+            key: ValueKey('$keyPrefix-$id'),
+            label: _buildChipLabel(id, label, isCustom),
+            selected: activeChain.contains(id),
+            onSelected: (_) => onToggle(id),
+          ),
+        ),
+        if (isCustom)
+          IconButton(
+            key: ValueKey('$keyPrefix-edit-$id'),
+            onPressed: () => onEditCustom(id),
+            icon: Icon(Icons.edit, size: 13, color: palette.muted),
+            tooltip: 'Edit $label in Shader Editor',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+          )
+        else if (preset != TerminalShaderPreset.none)
+          IconButton(
+            key: ValueKey('$keyPrefix-clone-$id'),
+            onPressed: () => onClonePreset(preset),
+            icon: Icon(
+              Icons.file_copy_outlined,
+              size: 13,
+              color: palette.muted,
+            ),
+            tooltip: 'Clone & Edit $label',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints.tightFor(width: 24, height: 24),
+          ),
+      ],
+    );
+  }
+
   String _chipTooltip(String id) {
     final samples = samplesChannel0For(id);
     final hint = stageHintFor(id);
@@ -1947,15 +2056,7 @@ final class _ShaderChainSelector extends StatelessWidget {
           runSpacing: 6,
           children: [
             for (final (id, label, isCustom) in options)
-              Tooltip(
-                message: _chipTooltip(id),
-                child: FilterChip(
-                  key: ValueKey('$keyPrefix-$id'),
-                  label: _buildChipLabel(id, label, isCustom),
-                  selected: activeChain.contains(id),
-                  onSelected: (_) => onToggle(id),
-                ),
-              ),
+              _buildShaderChipEntry(id, label, isCustom),
           ],
         ),
         if (warningMessage case final message?) ...[
@@ -2583,6 +2684,12 @@ final class _ShaderActionsRow extends StatelessWidget {
     spacing: 8,
     runSpacing: 6,
     children: [
+      FilledButton.icon(
+        key: const ValueKey('settings-new-shader-tab'),
+        onPressed: () => unawaited(workspace.openShaderEditorTab()),
+        icon: const Icon(Icons.code, size: 14),
+        label: const Text('New Shader Tab'),
+      ),
       if (isWeb)
         OutlinedButton.icon(
           key: const ValueKey('settings-upload-glsl'),
@@ -3442,12 +3549,14 @@ final class _HelpOverlay extends StatelessWidget {
     (r'Ctrl+\ then r', 'Rename tab or clear title pin'),
     (r'Ctrl+\ then x', 'Close focused pane / tab'),
     (r'Ctrl+\ then d / Space', 'Cycle tab bar (top -> left -> hidden)'),
+    (r'Ctrl+\ then e', 'Open GLSL Shader Editor tab'),
     (r'Ctrl+\ then , / i / ? / a', 'Settings / Stats / Help / About'),
     ('Cmd+T/W/D/Shift+D/1..9', 'Native macOS Desktop shortcuts'),
     ('Cmd+= / Cmd+- / Cmd+0', 'Zoom font in / out / reset (macOS)'),
     ('Ctrl+Shift+T/W/D/E', 'Native Linux / Windows shortcuts'),
     ('Ctrl+= / Ctrl+- / Ctrl+0', 'Zoom font in / out / reset (Linux/Win)'),
     ('Ctrl+Shift+F5', 'Reload custom fragment shaders (Desktop)'),
+    (r'Ctrl+Shift+F6 / Ctrl+\ 0', 'Emergency Stop / Resume GPU shaders'),
   ];
 
   @override
