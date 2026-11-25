@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/font_loader.dart';
+import 'package:fterm/src/input/key_chord.dart';
 import 'package:fterm/src/launch_config.dart';
 import 'package:fterm/src/settings_storage.dart';
 import 'package:fterm/src/ui/fterm_shell_scaffold.dart';
@@ -168,5 +169,97 @@ void main() {
       expect(ws.workspaceSettings.f12ShortcutsEnabled, !initialF12);
       await _disposeWs(tester, ws);
     });
+
+    testWidgets(
+      'adds aliases & batch chords, shows labels, removes chip, clears all',
+      (tester) async {
+        final ws = _newWorkspace();
+        await _pumpSettings(tester, ws, platform: .macOS, openKeyboard: true);
+        expect(_k('settings-passthrough-clear-all'), findsNothing);
+
+        final input = _k('settings-passthrough-input');
+        await tester.enterText(input, 'Cmd+K');
+        await tester.testTextInput.receiveAction(.done);
+        await tester.pump();
+        expect(
+          ws.preferences.passthroughShortcuts,
+          equals([KeyChord.tryParse('Meta+K')!]),
+        );
+        final metaK = _k('settings-passthrough-chip-Meta+K');
+        expect(
+          find.descendant(of: metaK, matching: find.text('Cmd+K')),
+          findsOneWidget,
+        );
+
+        await tester.enterText(input, 'Ctrl+Shift+I, Alt+F4');
+        await _tap(tester, 'settings-passthrough-add');
+        expect(
+          ws.preferences.passthroughShortcuts,
+          equals([
+            KeyChord.tryParse('Meta+K')!,
+            KeyChord.tryParse('Ctrl+Shift+I')!,
+            KeyChord.tryParse('Alt+F4')!,
+          ]),
+        );
+        final altF4 = _k('settings-passthrough-chip-Alt+F4');
+        expect(
+          find.descendant(of: altF4, matching: find.text('Option+F4')),
+          findsOneWidget,
+        );
+
+        final ctrlShiftI = _k('settings-passthrough-chip-Ctrl+Shift+I');
+        tester.widget<InputChip>(ctrlShiftI).onDeleted!();
+        await tester.pump();
+        expect(ctrlShiftI, findsNothing);
+        expect(
+          ws.preferences.passthroughShortcuts,
+          equals([KeyChord.tryParse('Meta+K')!, KeyChord.tryParse('Alt+F4')!]),
+        );
+
+        await _tap(tester, 'settings-passthrough-clear-all');
+        expect(ws.preferences.passthroughShortcuts, isEmpty);
+        expect(_k('settings-passthrough-clear-all'), findsNothing);
+        await _disposeWs(tester, ws);
+      },
+    );
+
+    testWidgets(
+      'rejects empty, unsafe, invalid, and duplicate input without mutating',
+      (tester) async {
+        final ws = _newWorkspace();
+        await _pumpSettings(tester, ws, openKeyboard: true);
+        final input = _k('settings-passthrough-input');
+        final err = _k('settings-passthrough-error');
+
+        for (final bad in const ['', 'a', 'Shift+A', 'Ctrl+Bogus']) {
+          await tester.enterText(input, bad);
+          await _tap(tester, 'settings-passthrough-add');
+          expect(err, findsOneWidget, reason: 'input="$bad"');
+          expect(ws.preferences.passthroughShortcuts, isEmpty);
+        }
+
+        await tester.enterText(input, 'Ctrl+Shift+I');
+        await tester.pump();
+        expect(err, findsNothing);
+        await _tap(tester, 'settings-passthrough-add');
+        expect(err, findsNothing);
+        expect(
+          ws.preferences.passthroughShortcuts,
+          equals([KeyChord.tryParse('Ctrl+Shift+I')!]),
+        );
+
+        await tester.enterText(input, 'ctrl+shift+i');
+        await _tap(tester, 'settings-passthrough-add');
+        expect(err, findsOneWidget);
+        expect(
+          ws.preferences.passthroughShortcuts,
+          equals([KeyChord.tryParse('Ctrl+Shift+I')!]),
+        );
+
+        await _tap(tester, 'settings-passthrough-clear-all');
+        expect(err, findsNothing);
+        await _disposeWs(tester, ws);
+      },
+    );
   });
 }
