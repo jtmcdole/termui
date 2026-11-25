@@ -38,6 +38,7 @@ final class TerminalShaderController extends ChangeNotifier {
   final Map<String, String> _compiledSources = <String, String>{};
   final Map<String, ShaderCompileException> _passErrors =
       <String, ShaderCompileException>{};
+  final Map<String, int> _passGenerations = <String, int>{};
   final List<ui.Image> _pendingImageDisposals = <ui.Image>[];
 
   TerminalShaderConfig _activeConfig = TerminalShaderConfig.empty;
@@ -133,6 +134,9 @@ final class TerminalShaderController extends ChangeNotifier {
 
   /// Returns the compiled handle for pass [id], or `null` if not compiled.
   CompiledShaderHandle? handleForPass(String id) => _handles[id];
+
+  /// Monotonic compile/reload revision for pass [id], or `0` if not compiled.
+  int passGenerationFor(String id) => _passGenerations[id] ?? 0;
 
   /// Returns the static GLSL analysis for pass [id], or `null` if unavailable.
   ShadertoyGlslAnalysis? analysisForPass(String id) => _analyses[id];
@@ -231,11 +235,8 @@ final class TerminalShaderController extends ChangeNotifier {
     if (_disposed) return;
     final current = _lastCompileError;
     final existingPassError = _passErrors[error.shaderId];
-    if (current != null &&
-        current.shaderId == error.shaderId &&
-        current.message == error.message &&
-        existingPassError != null &&
-        existingPassError.message == error.message) {
+    if (_isSameError(current, error) &&
+        _isSameError(existingPassError, error)) {
       return;
     }
     _lastCompileError = error;
@@ -251,6 +252,17 @@ final class TerminalShaderController extends ChangeNotifier {
     }
     notifyListeners();
   }
+
+  static bool _isSameError(
+    ShaderCompileException? existing,
+    ShaderCompileException next,
+  ) =>
+      existing != null &&
+      existing.shaderId == next.shaderId &&
+      existing.message == next.message &&
+      existing.lineNumber == next.lineNumber &&
+      existing.compilerLog == next.compilerLog &&
+      listEquals(existing.diagnostics, next.diagnostics);
 
   Future<void> _enqueue(Future<void> Function() action) {
     if (_disposed) return Future<void>.value();
@@ -278,6 +290,7 @@ final class TerminalShaderController extends ChangeNotifier {
     _analyses.clear();
     _compiledSources.clear();
     _passErrors.clear();
+    _passGenerations.clear();
     final oldBackend = _backend;
     _backend = _backendFactory(override);
     oldBackend.dispose();
@@ -318,6 +331,7 @@ final class TerminalShaderController extends ChangeNotifier {
         sourceLoader: _lastSourceLoader,
         forceReload: forceReload,
       );
+      if (_disposed) return;
       if (error != null) {
         _passErrors[spec.id] = error;
       } else {
@@ -355,10 +369,12 @@ final class TerminalShaderController extends ChangeNotifier {
       _analyses.remove(id);
       _compiledSources.remove(id);
       _passErrors.remove(id);
+      _passGenerations.remove(id);
     }
     _analyses.removeWhere((id, _) => !activeIds.contains(id));
     _compiledSources.removeWhere((id, _) => !activeIds.contains(id));
     _passErrors.removeWhere((id, _) => !activeIds.contains(id));
+    _passGenerations.removeWhere((id, _) => !activeIds.contains(id));
   }
 
   Future<ShaderCompileException?> _syncSinglePass(
@@ -374,7 +390,7 @@ final class TerminalShaderController extends ChangeNotifier {
       if (existing != null &&
           !forceReload &&
           _compiledSources[spec.id] == source) {
-        return null;
+        return _passErrors[spec.id];
       }
 
       final analysis = ShadertoyGlslShim.analyze(source, shaderId: spec.id);
@@ -425,6 +441,7 @@ final class TerminalShaderController extends ChangeNotifier {
       if (_disposed || !identical(activeBackend, _backend)) return;
       _analyses[spec.id] = analysis;
       _compiledSources[spec.id] = source;
+      _passGenerations[spec.id] = (_passGenerations[spec.id] ?? 0) + 1;
       return;
     }
 
@@ -440,6 +457,7 @@ final class TerminalShaderController extends ChangeNotifier {
     _handles[spec.id] = handle;
     _analyses[spec.id] = analysis;
     _compiledSources[spec.id] = source;
+    _passGenerations[spec.id] = (_passGenerations[spec.id] ?? 0) + 1;
   }
 
   void _swapWallpaperImage(ui.Image? nextImage) {
@@ -493,6 +511,7 @@ final class TerminalShaderController extends ChangeNotifier {
     _analyses.clear();
     _compiledSources.clear();
     _passErrors.clear();
+    _passGenerations.clear();
     _backend.dispose();
     _wallpaperImage?.dispose();
     _wallpaperImage = null;

@@ -292,8 +292,12 @@ final class ShaderCompileException implements Exception {
   /// Optional raw compiler log (e.g. `impellerc` stderr or `gl.getShaderInfoLog`).
   final String? compilerLog;
 
+  final List<ShaderDiagnostic> _diagnostics;
+
   /// Structured span-annotated diagnostics associated with this failure.
-  final List<ShaderDiagnostic> diagnostics;
+  List<ShaderDiagnostic> get diagnostics => _diagnostics.isEmpty
+      ? const <ShaderDiagnostic>[]
+      : List<ShaderDiagnostic>.unmodifiable(_diagnostics);
 
   /// Creates a shader compilation exception.
   const ShaderCompileException({
@@ -301,7 +305,7 @@ final class ShaderCompileException implements Exception {
     required this.message,
     this.lineNumber,
     this.compilerLog,
-    this.diagnostics = const <ShaderDiagnostic>[],
+    this._diagnostics = const <ShaderDiagnostic>[],
   });
 
   @override

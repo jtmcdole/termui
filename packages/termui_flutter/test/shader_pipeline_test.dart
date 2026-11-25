@@ -3762,6 +3762,414 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         expect(watchdog.warmupFramesRemainingFor('user:live_bg'), equals(5));
       },
     );
+
+    testWidgets(
+      'stale prepareDirectResources completions do not poison or stall direct mode on controller or atlas swaps',
+      (tester) async {
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final atlasA = await tester.runAsync(
+          () => _createSolidImage(
+            width: 8,
+            height: 8,
+            color: const Color(0xFFFFFFFF),
+          ),
+        );
+        final atlasB = await tester.runAsync(
+          () => _createSolidImage(
+            width: 16,
+            height: 16,
+            color: const Color(0xFFEEEEEE),
+          ),
+        );
+        final outputImg = await tester.runAsync(
+          () => _createSolidImage(
+            width: 16,
+            height: 16,
+            color: const Color(0xFF112233),
+          ),
+        );
+        addTearDown(() => atlasA?.dispose());
+        addTearDown(() => atlasB?.dispose());
+        addTearDown(() => outputImg?.dispose());
+
+        final batch = GpuAtlasQuadBatch(
+          instanceData: Float32List(16),
+          instanceCount: 1,
+          italicStartInstanceIndex: 1,
+          kittyInsertInstanceIndex: 1,
+          generation: 1,
+          defaultBackgroundArgb: 0xFF000000,
+          kittyQuads: const <GpuKittyQuad>[],
+          hasCanvasOnlyContent: false,
+        );
+
+        // 1A: Controller swap during in-flight priming (completing true).
+        final prepareA = Completer<bool>();
+        final backendA = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+          prepareFuture: prepareA.future,
+        );
+        final backendB = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+        );
+        final controllerA = TerminalShaderController(backend: backendA);
+        final controllerB = TerminalShaderController(backend: backendB);
+        addTearDown(controllerA.dispose);
+        addTearDown(controllerB.dispose);
+
+        Widget buildHost(TerminalShaderController ctrl, ui.Image? atlas) =>
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: Center(
+                child: TerminalShaderHost(
+                  controller: ctrl,
+                  config: TerminalShaderConfig.empty,
+                  atlasImage: atlas,
+                  atlasDevicePixelRatio: 1.0,
+                  directLogicalSize: const Size(120, 60),
+                  directTerminalBatchProvider: (_, _) => batch,
+                  child: const SizedBox(width: 120, height: 60),
+                ),
+              ),
+            );
+
+        await tester.pumpWidget(buildHost(controllerA, atlasA));
+        await tester.pump();
+        expect(backendA.prepareCallCount, equals(1));
+
+        await tester.pumpWidget(buildHost(controllerB, atlasA));
+        prepareA.complete(true);
+        for (var i = 0; i < 4; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+        var hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(backendB.prepareCallCount, greaterThanOrEqualTo(1));
+        expect(hostState.debugIsDirectModeActive, isTrue);
+
+        // 1B: atlasImage swap during in-flight priming primes the new atlas.
+        final prepareAtlasA = Completer<bool>();
+        final atlasBackend = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+          prepareHandler: (atlas) async {
+            if (identical(atlas, atlasA)) {
+              return prepareAtlasA.future;
+            }
+            return true;
+          },
+        );
+        final atlasController = TerminalShaderController(backend: atlasBackend);
+        addTearDown(atlasController.dispose);
+
+        await tester.pumpWidget(buildHost(atlasController, atlasA));
+        await tester.pump();
+        expect(atlasBackend.prepareCallCount, equals(1));
+
+        await tester.pumpWidget(buildHost(atlasController, atlasB));
+        prepareAtlasA.complete(true);
+        for (var i = 0; i < 4; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+        hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(atlasBackend.prepareCallCount, greaterThanOrEqualTo(2));
+        expect(hostState.debugIsDirectModeActive, isTrue);
+
+        // 1C: Controller swap during in-flight priming resolving false or
+        // throwing leaves healthy replacement backend active in direct mode.
+        final prepareFail = Completer<bool>();
+        final backendFail = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+          prepareFuture: prepareFail.future,
+        );
+        final backendHealthy = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+        );
+        final controllerFail = TerminalShaderController(backend: backendFail);
+        final controllerHealthy = TerminalShaderController(
+          backend: backendHealthy,
+        );
+        addTearDown(controllerFail.dispose);
+        addTearDown(controllerHealthy.dispose);
+
+        await tester.pumpWidget(buildHost(controllerFail, atlasA));
+        await tester.pump();
+        await tester.pumpWidget(buildHost(controllerHealthy, atlasA));
+        prepareFail.completeError(StateError('stale prime error'));
+        for (var i = 0; i < 4; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+        hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(backendHealthy.prepareCallCount, greaterThanOrEqualTo(1));
+        expect(hostState.debugIsDirectModeActive, isTrue);
+
+        // 1D: In-place backend switch on the same controller during in-flight
+        // priming invalidates the stale completion and primes the new backend.
+        final prepareOld = Completer<bool>();
+        final backendOld = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+          prepareFuture: prepareOld.future,
+        );
+        final backendSwitched = _FakeDirectShaderBackend(
+          syncOutputFactory: () => outputImg!.clone(),
+          primedInitially: false,
+        );
+        final switchingController = TerminalShaderController(
+          backend: backendOld,
+          backendFactory: (_) => backendSwitched,
+        );
+        addTearDown(switchingController.dispose);
+
+        await tester.pumpWidget(buildHost(switchingController, atlasA));
+        await tester.pump();
+        expect(backendOld.prepareCallCount, equals(1));
+
+        await tester.runAsync(
+          () =>
+              switchingController.setBackendOverride(ShaderBackendKind.webGl2),
+        );
+        prepareOld.complete(false);
+        for (var i = 0; i < 4; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+        hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(backendSwitched.prepareCallCount, greaterThanOrEqualTo(1));
+        expect(hostState.debugIsDirectModeActive, isTrue);
+      },
+    );
+
+    testWidgets(
+      'quarantining last custom foreground pass clears stale foreground image without widget rebuild',
+      (tester) async {
+        final backend = _FakeShaderBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final watchdog = GpuFrameWatchdog();
+        addTearDown(watchdog.dispose);
+        final activity = _TestPaintNotifier();
+        addTearDown(activity.dispose);
+
+        final config = TerminalShaderConfig(
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'editor:fg_draft',
+              stage: TerminalShaderStage.foreground,
+              inlineGlsl: _validStaticGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(config));
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: SizedBox(
+              width: 32,
+              height: 24,
+              child: TerminalShaderHost(
+                controller: controller,
+                config: config,
+                watchdog: watchdog,
+                activityListenable: activity,
+                child: const ColoredBox(color: Color(0xFF102030)),
+              ),
+            ),
+          ),
+        );
+        for (var i = 0; i < 3; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump();
+        }
+
+        final hostState = tester.state<TerminalShaderHostState>(
+          find.byType(TerminalShaderHost),
+        );
+        expect(hostState.debugForegroundOutputImage, isNotNull);
+
+        // Runtime quarantine triggers activityListenable without parent rebuild.
+        watchdog.quarantineShader('editor:fg_draft', 'slow foreground');
+        activity.fire();
+        await tester.pump();
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+
+        expect(hostState.debugForegroundOutputImage, isNull);
+
+        // Animated foreground pass quarantined while ticking also clears stale
+        // foreground output on the next tick without a parent rebuild.
+        watchdog.clearQuarantine();
+        final animatedConfig = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:wave',
+              stage: TerminalShaderStage.background,
+              preset: TerminalShaderPreset.wallpaperWave,
+            ),
+          ],
+          foregroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'editor:fg_anim',
+              stage: TerminalShaderStage.foreground,
+              inlineGlsl: _validAnimatedGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.always,
+        );
+        await tester.runAsync(() => controller.syncConfig(animatedConfig));
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: SizedBox(
+              width: 32,
+              height: 24,
+              child: TerminalShaderHost(
+                controller: controller,
+                config: animatedConfig,
+                watchdog: watchdog,
+                child: const ColoredBox(color: Color(0xFF102030)),
+              ),
+            ),
+          ),
+        );
+        for (var i = 0; i < 3; i++) {
+          await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+          await tester.pump(const Duration(milliseconds: 16));
+        }
+        expect(hostState.debugForegroundOutputImage, isNotNull);
+
+        watchdog.quarantineShader('editor:fg_anim', 'slow animated fg');
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(hostState.debugForegroundOutputImage, isNull);
+      },
+    );
+
+    testWidgets(
+      'reloadCustomShaders and async syncConfig grant fresh watchdog warmup frames after compilation',
+      (tester) async {
+        final backend = _FakeShaderBackend();
+        final controller = TerminalShaderController(backend: backend);
+        addTearDown(controller.dispose);
+        final watchdog = GpuFrameWatchdog(warmupFrameCount: 5);
+        addTearDown(watchdog.dispose);
+
+        var diskSource = _validStaticGlsl;
+        final diskConfig = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:disk_bg',
+              stage: TerminalShaderStage.background,
+              customSourcePath: '/virtual/live.glsl',
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(
+          () => controller.syncConfig(
+            diskConfig,
+            sourceLoader: (_) async => diskSource,
+          ),
+        );
+
+        Widget buildHost(TerminalShaderConfig cfg, GpuFrameWatchdog? wd) =>
+            Directionality(
+              textDirection: TextDirection.ltr,
+              child: SizedBox(
+                width: 32,
+                height: 24,
+                child: TerminalShaderHost(
+                  controller: controller,
+                  config: cfg,
+                  watchdog: wd,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+            );
+
+        await tester.pumpWidget(buildHost(diskConfig, watchdog));
+        for (var i = 0; i < 5; i++) {
+          watchdog.recordShaderFrameDuration(
+            'user:disk_bg',
+            const Duration(milliseconds: 50),
+          );
+        }
+        expect(watchdog.warmupFramesRemainingFor('user:disk_bg'), equals(0));
+
+        // H6a: In-place disk shader reload resets warmup without config change.
+        diskSource = '$_validStaticGlsl\n// modified on disk';
+        await tester.runAsync(
+          () => controller.reloadCustomShaders(
+            sourceLoader: (_) async => diskSource,
+          ),
+        );
+        await tester.pump();
+        expect(watchdog.warmupFramesRemainingFor('user:disk_bg'), equals(5));
+
+        // H6b: Updating widget.config before async syncConfig finishes must NOT
+        // drain warmup on old-shader frames; warmup resets when compile lands.
+        final inlineV1 = TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:inline_bg',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: _validStaticGlsl,
+            ),
+          ],
+          animationMode: ShaderAnimationMode.staticOnly,
+        );
+        await tester.runAsync(() => controller.syncConfig(inlineV1));
+        await tester.pumpWidget(buildHost(inlineV1, watchdog));
+        for (var i = 0; i < 5; i++) {
+          watchdog.recordShaderFrameDuration(
+            'user:inline_bg',
+            const Duration(milliseconds: 50),
+          );
+        }
+        expect(watchdog.warmupFramesRemainingFor('user:inline_bg'), equals(0));
+
+        final inlineV2 = inlineV1.copyWith(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'user:inline_bg',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: '$_validStaticGlsl\n// async edit',
+            ),
+          ],
+        );
+        // Host receives updated config while old shader is still active.
+        await tester.pumpWidget(buildHost(inlineV2, watchdog));
+        expect(watchdog.warmupFramesRemainingFor('user:inline_bg'), equals(0));
+
+        // Async compilation completes and swaps the pipeline -> fresh warmup!
+        await tester.runAsync(() => controller.syncConfig(inlineV2));
+        await tester.pump();
+        expect(watchdog.warmupFramesRemainingFor('user:inline_bg'), equals(5));
+
+        // Clearing watchdog to null clears internal tracking cleanly.
+        await tester.pumpWidget(buildHost(inlineV2, null));
+        expect(watchdog.activeCustomShaderIds, isEmpty);
+      },
+    );
   });
 }
 
@@ -3769,6 +4177,7 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
     implements DirectTerminalShaderBackend, DiagnosableShaderBackend {
   final ui.Image Function() syncOutputFactory;
   final Future<bool>? prepareFuture;
+  final Future<bool> Function(ui.Image atlasImage)? prepareHandler;
   Object? directRenderError;
   bool primed;
   bool simulateBackpressureSkip = false;
@@ -3785,6 +4194,7 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
     required this.syncOutputFactory,
     bool primedInitially = true,
     this.prepareFuture,
+    this.prepareHandler,
     this.directRenderError,
   }) : primed = primedInitially;
 
@@ -3804,6 +4214,12 @@ final class _FakeDirectShaderBackend extends _FakeShaderBackend
     Iterable<ui.Image> kittyImages = const <ui.Image>[],
   }) async {
     prepareCallCount++;
+    final handler = prepareHandler;
+    if (handler != null) {
+      final ok = await handler(atlasImage);
+      if (ok) primed = true;
+      return ok;
+    }
     if (prepareFuture != null) {
       return prepareFuture!;
     }

@@ -245,10 +245,12 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   bool _directFallbackScheduled = false;
   bool _directPrepareInFlight = false;
   bool _directPrimingSucceededWithoutFrame = false;
+  int _directPrepareGeneration = 0;
+  DirectTerminalShaderBackend? _lastDirectBackend;
+  ui.Image? _lastPrimedAtlas;
   ui.Image? _lastPrimedWallpaper;
   Set<ui.Image> _lastPrimedKittyImages = Set<ui.Image>.identity();
-  final Map<String, CompiledShaderHandle> _lastWatchdogPassHandles =
-      <String, CompiledShaderHandle>{};
+  final Map<String, int> _lastWatchdogPassGenerations = <String, int>{};
   _DirectFallbackReason _directFallbackReason = _DirectFallbackReason.none;
 
   double _devicePixelRatio = 1.0;
@@ -443,11 +445,14 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     return false;
   }
 
-  void _syncWatchdogCustomShaders() {
+  void _syncWatchdogCustomShaders({bool forceResetWarmup = false}) {
     final watchdog = widget.watchdog;
-    if (watchdog == null) return;
+    if (watchdog == null) {
+      _lastWatchdogPassGenerations.clear();
+      return;
+    }
     if (!widget.config.enabled || !_isBackendActive) {
-      _lastWatchdogPassHandles.clear();
+      _lastWatchdogPassGenerations.clear();
       watchdog.setActiveCustomShaders(const <String>[], source: 'host');
       return;
     }
@@ -455,41 +460,18 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     final activeIds = _collectActiveCustomHostPassIds(ctrl);
     watchdog.setActiveCustomShaders(activeIds, source: 'host');
     final activeSet = activeIds.toSet();
-    _lastWatchdogPassHandles.removeWhere((id, _) => !activeSet.contains(id));
+    _lastWatchdogPassGenerations.removeWhere(
+      (id, _) => !activeSet.contains(id),
+    );
     for (final id in activeIds) {
-      final handle = ctrl.handleForPass(id);
-      if (handle == null) continue;
-      final previous = _lastWatchdogPassHandles[id];
-      _lastWatchdogPassHandles[id] = handle;
-      if (previous != null && !identical(previous, handle)) {
+      final generation = ctrl.passGenerationFor(id);
+      final previous = _lastWatchdogPassGenerations[id];
+      _lastWatchdogPassGenerations[id] = generation;
+      if (forceResetWarmup || (previous != null && previous != generation)) {
         watchdog.resetWarmup(id);
       }
     }
   }
-
-  void _resetWarmupForUpdatedHostPasses(TerminalShaderConfig oldConfig) {
-    final watchdog = widget.watchdog;
-    if (watchdog == null || oldConfig == widget.config) return;
-    final previousById = _customHostPassesById(oldConfig);
-    final currentById = _customHostPassesById(widget.config);
-    for (final entry in currentById.entries) {
-      final prev = previousById[entry.key];
-      if (prev == null) continue;
-      if (prev.inlineGlsl != entry.value.inlineGlsl ||
-          prev.customSourcePath != entry.value.customSourcePath) {
-        watchdog.resetWarmup(entry.key);
-      }
-    }
-  }
-
-  static Map<String, ShaderPassSpec> _customHostPassesById(
-    TerminalShaderConfig config,
-  ) => <String, ShaderPassSpec>{
-    for (final spec in config.backgroundPasses)
-      if (_isCustomHostPass(spec)) spec.id: spec,
-    for (final spec in config.foregroundPasses)
-      if (_isCustomHostPass(spec)) spec.id: spec,
-  };
 
   List<String> _collectActiveCustomHostPassIds(TerminalShaderController ctrl) =>
       <String>[
@@ -514,6 +496,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     widget.cliShaderRegistry?.addListener(_onControllerChanged);
     widget.activityListenable?.addListener(_onExternalActivity);
     widget.mouseLogicalListenable?.addListener(_onMouseChanged);
+    _lastDirectBackend = _directBackend;
     _syncWatchdogCustomShaders();
   }
 
@@ -553,9 +536,11 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
         const <String>[],
         source: 'host',
       );
+      _lastWatchdogPassGenerations.clear();
     }
-    _syncWatchdogCustomShaders();
-    _resetWarmupForUpdatedHostPasses(oldWidget.config);
+    _syncWatchdogCustomShaders(
+      forceResetWarmup: !identical(oldWidget.controller, widget.controller),
+    );
     _syncFocusTransition(oldWidget);
     _syncActivityAndDirtyFlags(oldWidget);
     _maybeRecoverDirectModeOnUpdate(oldWidget);
@@ -576,34 +561,68 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     }
   }
 
+  void _invalidateDirectPriming({
+    required bool clearAtlas,
+    required bool clearExternalInputs,
+  }) {
+    _directPrimingSucceededWithoutFrame = false;
+    _directPrepareGeneration++;
+    _directPrepareInFlight = false;
+    if (clearAtlas) {
+      _lastPrimedAtlas = null;
+    }
+    if (clearExternalInputs) {
+      _lastPrimedWallpaper = null;
+      _lastPrimedKittyImages = Set<ui.Image>.identity();
+    }
+  }
+
+  bool _shouldClearDirectFallbackOnUpdate({
+    required bool controllerChanged,
+    required bool backendChanged,
+    required bool atlasChanged,
+    required bool configChanged,
+    required bool dprChanged,
+  }) {
+    if (controllerChanged || backendChanged) return true;
+    return switch (_directFallbackReason) {
+      _DirectFallbackReason.priming => atlasChanged || configChanged,
+      _DirectFallbackReason.runtimeError => configChanged,
+      _DirectFallbackReason.dprMismatch =>
+        (dprChanged || atlasChanged) && _isAtlasDprMatched,
+      _DirectFallbackReason.none || _DirectFallbackReason.canvasOnly => false,
+    };
+  }
+
   void _maybeRecoverDirectModeOnUpdate(TerminalShaderHost oldWidget) {
     final atlasChanged = !identical(oldWidget.atlasImage, widget.atlasImage);
     final controllerChanged = !identical(
       oldWidget.controller,
       widget.controller,
     );
-    if (controllerChanged ||
-        atlasChanged ||
-        oldWidget.config != widget.config) {
-      _directPrimingSucceededWithoutFrame = false;
+    final configChanged = oldWidget.config != widget.config;
+    final nextDirectBackend = _directBackend;
+    final backendChanged = !identical(_lastDirectBackend, nextDirectBackend);
+    _lastDirectBackend = nextDirectBackend;
+    if (controllerChanged || backendChanged || atlasChanged || configChanged) {
+      _invalidateDirectPriming(
+        clearAtlas: controllerChanged || backendChanged || atlasChanged,
+        clearExternalInputs: controllerChanged || backendChanged,
+      );
     }
     if (!_directFallbackActive ||
         !_canUseDirectTerminalRender ||
         _directPrepareInFlight) {
       return;
     }
-    final dprChanged =
-        oldWidget.atlasDevicePixelRatio != widget.atlasDevicePixelRatio;
-    if (controllerChanged ||
-        (_directFallbackReason == _DirectFallbackReason.runtimeError &&
-            oldWidget.config != widget.config)) {
-      _directFallbackActive = false;
-      _directFallbackReason = _DirectFallbackReason.none;
-      return;
-    }
-    if (_directFallbackReason == _DirectFallbackReason.dprMismatch &&
-        (dprChanged || atlasChanged) &&
-        _isAtlasDprMatched) {
+    if (_shouldClearDirectFallbackOnUpdate(
+      controllerChanged: controllerChanged,
+      backendChanged: backendChanged,
+      atlasChanged: atlasChanged,
+      configChanged: configChanged,
+      dprChanged:
+          oldWidget.atlasDevicePixelRatio != widget.atlasDevicePixelRatio,
+    )) {
       _directFallbackActive = false;
       _directFallbackReason = _DirectFallbackReason.none;
       return;
@@ -620,12 +639,14 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       widget.controller?.addListener(_onControllerChanged);
       _backgroundDirty = true;
       _childCaptureDirty = true;
+      _frameNotifier.notify();
     }
     if (!identical(oldWidget.cliShaderRegistry, widget.cliShaderRegistry)) {
       oldWidget.cliShaderRegistry?.removeListener(_onControllerChanged);
       widget.cliShaderRegistry?.addListener(_onControllerChanged);
       _regionFallbackDirty = true;
       _childCaptureDirty = true;
+      _frameNotifier.notify();
     }
     if (!identical(oldWidget.activityListenable, widget.activityListenable)) {
       oldWidget.activityListenable?.removeListener(_onExternalActivity);
@@ -689,11 +710,18 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     _backgroundDirty = true;
     _childCaptureDirty = true;
     _regionFallbackDirty = true;
+    final nextDirectBackend = _directBackend;
+    final backendChanged = !identical(_lastDirectBackend, nextDirectBackend);
+    if (backendChanged) {
+      _lastDirectBackend = nextDirectBackend;
+      _invalidateDirectPriming(clearAtlas: true, clearExternalInputs: true);
+    }
     if (_directFallbackActive &&
         _canUseDirectTerminalRender &&
         !_directPrepareInFlight &&
-        _directFallbackReason != _DirectFallbackReason.canvasOnly &&
-        _directFallbackReason != _DirectFallbackReason.runtimeError) {
+        (backendChanged ||
+            (_directFallbackReason != _DirectFallbackReason.canvasOnly &&
+                _directFallbackReason != _DirectFallbackReason.runtimeError))) {
       _directFallbackActive = false;
       _directFallbackReason = _DirectFallbackReason.none;
     }
@@ -740,6 +768,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     _frameNotifier.notify();
     if (_hasActiveRegionSupport) {
       _scheduleRegionFallbackRender();
+    }
+    if (!_hasCompiledForegroundPasses && _foregroundOutputImage != null) {
+      _replaceForegroundOutputImage(null);
+      setState(() {});
     }
     if (_hasCompiledForegroundPasses) {
       _scheduleForegroundRender();
@@ -916,6 +948,10 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     if (_hasActiveRegionSupport) {
       _regionFallbackDirty = true;
       _scheduleRegionFallbackRender();
+    }
+    if (!_hasCompiledForegroundPasses && _foregroundOutputImage != null) {
+      _replaceForegroundOutputImage(null);
+      setState(() {});
     }
     if (_hasCompiledForegroundPasses) {
       if (_hasCompiledBackgroundPasses || _hasActiveRegionSupport) {
@@ -1602,9 +1638,13 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     widget.activityListenable?.removeListener(_onExternalActivity);
     widget.mouseLogicalListenable?.removeListener(_onMouseChanged);
     widget.watchdog?.setActiveCustomShaders(const <String>[], source: 'host');
+    _directPrepareGeneration++;
+    _directPrepareInFlight = false;
+    _lastDirectBackend = null;
+    _lastPrimedAtlas = null;
     _lastPrimedWallpaper = null;
     _lastPrimedKittyImages.clear();
-    _lastWatchdogPassHandles.clear();
+    _lastWatchdogPassGenerations.clear();
     _backgroundOutputImage?.dispose();
     _backgroundOutputImage = null;
     _foregroundOutputImage?.dispose();
@@ -1728,6 +1768,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       return _directBridgeImageFor(logicalSize);
     }
     final hasUnprimedInput =
+        !identical(atlasImage, _lastPrimedAtlas) ||
         !identical(_effectiveWallpaper, _lastPrimedWallpaper) ||
         batch.kittyQuads.any((q) => !_lastPrimedKittyImages.contains(q.image));
     if (_directPrimingSucceededWithoutFrame && !hasUnprimedInput) {
@@ -1794,6 +1835,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   ) {
     if (_directPrepareInFlight) return;
     _directPrepareInFlight = true;
+    final generation = ++_directPrepareGeneration;
     final wallpaper = _effectiveWallpaper;
     final kittyImages = <ui.Image>[
       for (final quad in batch.kittyQuads) quad.image,
@@ -1806,8 +1848,14 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
             kittyImages: kittyImages,
           )
           .then((ready) {
+            if (!mounted ||
+                generation != _directPrepareGeneration ||
+                !identical(_directBackend, backend)) {
+              return;
+            }
             _directPrepareInFlight = false;
-            if (!mounted || !ready) return;
+            if (!ready) return;
+            _lastPrimedAtlas = atlasImage;
             _lastPrimedWallpaper = wallpaper;
             _lastPrimedKittyImages = Set<ui.Image>.identity()
               ..addAll(kittyImages);
@@ -1823,7 +1871,9 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
             _frameNotifier.notify();
           })
           .catchError((Object _) {
-            _directPrepareInFlight = false;
+            if (generation == _directPrepareGeneration) {
+              _directPrepareInFlight = false;
+            }
           }),
     );
   }
@@ -2077,7 +2127,9 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
               child: CustomPaint(
                 painter: _ForegroundShaderPainter(
                   repaint: _frameNotifier,
-                  imageProvider: () => _foregroundOutputImage,
+                  imageProvider: () => _hasCompiledForegroundPasses
+                      ? _foregroundOutputImage
+                      : null,
                   backgroundColor: Color(widget.backgroundArgb | 0xFF000000),
                   onPaintSize: _onForegroundPaint,
                 ),

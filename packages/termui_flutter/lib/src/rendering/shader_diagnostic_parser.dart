@@ -1,7 +1,7 @@
 import 'shader_backend.dart';
 
 final RegExp _namedFileDiagnosticPattern = RegExp(
-  r'^(.*?)(TerminalShaderFragment|TerminalShaderVertex|[^\s:]+\.glsl):(\d+)(?::(\d+))?:\s*(?:(error|warning|info|note)\s*:\s*)?(.+)$',
+  r'^([^\n]*?[\s:]|)(TerminalShaderFragment|TerminalShaderVertex|[^\s:]+\.glsl):(\d+)(?::(\d+))?:\s*(?:(error|warning|info|note)\s*:\s*)?(.+)$',
   caseSensitive: false,
 );
 
@@ -11,7 +11,7 @@ final RegExp _glslangAngleDiagnosticPattern = RegExp(
 );
 
 final RegExp _mesaDiagnosticPattern = RegExp(
-  r'^\s*\d+:(\d+)\s*(?:\((\d+)\))?\s*:\s*(?:(?:preprocessor\s+)?(error|warning|info|note)\s*:\s*)?(.+)$',
+  r'^\s*\d+:(\d+)\s*(?:\((\d+)\)\s*)?:\s*(?:(?:preprocessor\s+)?(error|warning|info|note)\s*:\s*)?(.+)$',
   caseSensitive: false,
 );
 
@@ -26,7 +26,7 @@ final RegExp _errorDetailPattern = RegExp(
 );
 
 final RegExp _quotedTokenPattern = RegExp(
-  r'''(?:'([^']+)'|`([^`]+)`|"([^"]+)")''',
+  r'''(?:'([^']*)'|`([^`]*)`|"([^"]*)")''',
 );
 
 final RegExp _identifierPattern = RegExp(r'^[A-Za-z_][A-Za-z0-9_]*$');
@@ -58,15 +58,17 @@ List<ShaderDiagnostic> parseImpellercDiagnostics(
       diagnostics.add(parsed);
     }
   }
-  if (diagnostics.isNotEmpty) return diagnostics;
+  if (diagnostics.isNotEmpty) {
+    return List<ShaderDiagnostic>.unmodifiable(diagnostics);
+  }
 
-  return <ShaderDiagnostic>[
+  return List<ShaderDiagnostic>.unmodifiable(<ShaderDiagnostic>[
     ShaderDiagnostic(
       severity: ShaderDiagnosticSeverity.error,
       origin: ShaderDiagnosticOrigin.compiler,
       message: _extractFallbackMessage(rawLines),
     ),
-  ];
+  ]);
 }
 
 /// Parses WebGL2 ANGLE, Mesa, or generic shader/program [infoLog] output into
@@ -96,15 +98,17 @@ List<ShaderDiagnostic> parseWebGlDiagnostics(
       diagnostics.add(parsed);
     }
   }
-  if (diagnostics.isNotEmpty) return diagnostics;
+  if (diagnostics.isNotEmpty) {
+    return List<ShaderDiagnostic>.unmodifiable(diagnostics);
+  }
 
-  return <ShaderDiagnostic>[
+  return List<ShaderDiagnostic>.unmodifiable(<ShaderDiagnostic>[
     ShaderDiagnostic(
       severity: ShaderDiagnosticSeverity.error,
       origin: ShaderDiagnosticOrigin.compiler,
       message: rawLines.first,
     ),
-  ];
+  ]);
 }
 
 /// Returns the first error-severity diagnostic in [diagnostics], falling back
@@ -325,13 +329,54 @@ List<String> _extractQuotedTokens(String message) {
 }
 
 int _findTokenOffset(String lineText, String token) {
+  final searchable = _maskSingleLineComments(lineText);
   if (_identifierPattern.hasMatch(token)) {
     final wordPattern = RegExp(
       '(?<![A-Za-z0-9_])${RegExp.escape(token)}(?![A-Za-z0-9_])',
     );
-    return wordPattern.firstMatch(lineText)?.start ?? -1;
+    return wordPattern.firstMatch(searchable)?.start ?? -1;
   }
-  return lineText.indexOf(token);
+  return searchable.indexOf(token);
+}
+
+String _maskSingleLineComments(String lineText) {
+  if (!lineText.contains('//') && !lineText.contains('/*')) {
+    return lineText;
+  }
+  final out = StringBuffer();
+  final len = lineText.length;
+  var i = 0;
+  while (i < len) {
+    final ch = lineText.codeUnitAt(i);
+    final next = i + 1 < len ? lineText.codeUnitAt(i + 1) : 0;
+    if (ch == 0x2F && next == 0x2F) {
+      out.write(' ' * (len - i));
+      break;
+    }
+    if (ch == 0x2F && next == 0x2A) {
+      i = _maskInlineBlockComment(lineText, i, out);
+      continue;
+    }
+    out.writeCharCode(ch);
+    i++;
+  }
+  return out.toString();
+}
+
+int _maskInlineBlockComment(String lineText, int start, StringBuffer out) {
+  out.write('  ');
+  var i = start + 2;
+  while (i < lineText.length) {
+    if (lineText.codeUnitAt(i) == 0x2A &&
+        i + 1 < lineText.length &&
+        lineText.codeUnitAt(i + 1) == 0x2F) {
+      out.write('  ');
+      return i + 2;
+    }
+    out.writeCharCode(0x20);
+    i++;
+  }
+  return i;
 }
 
 ShaderDiagnosticSeverity _parseSeverity(String? raw) =>

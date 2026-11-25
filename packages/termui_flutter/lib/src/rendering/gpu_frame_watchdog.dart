@@ -193,15 +193,19 @@ final class GpuFrameWatchdog {
     Iterable<String> customShaderIds, {
     String source = 'cli',
   }) {
+    final normalizedSource = source.trim();
+    if (normalizedSource.isEmpty) {
+      throw ArgumentError.value(source, 'source', 'Must not be blank.');
+    }
     if (_disposed) return;
     final nextForSource = <String>{
       for (final id in customShaderIds)
         if (!_isExempt(id)) id,
     };
     if (nextForSource.isEmpty) {
-      _activeCustomShadersBySource.remove(source);
+      _activeCustomShadersBySource.remove(normalizedSource);
     } else {
-      _activeCustomShadersBySource[source] = nextForSource;
+      _activeCustomShadersBySource[normalizedSource] = nextForSource;
     }
     _recomputeActiveCustomShaders();
   }

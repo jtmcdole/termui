@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -1280,6 +1281,279 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         equals(ShaderDiagnosticSeverity.warning),
       );
     });
+
+    test('avoids quadratic backtracking in _includeSpanPattern and scales linearly in lint()', () {
+      // H3: Unclosed #/* sequences before a line-continued #include stay fast.
+      final adversarialInclude = '${'#/* ' * 8000}\n#\\\ninclude "evil.glsl"\n';
+      final swInc = Stopwatch()..start();
+      expect(
+        () => ShadertoyGlslShim.analyze(adversarialInclude),
+        throwsA(isA<ShaderCompileException>()),
+      );
+      swInc.stop();
+      expect(swInc.elapsedMilliseconds, lessThan(200));
+
+      // M1: 64 KiB shader with 8,000 lint matches computes spans in O(N log L).
+      final largeLintSource =
+          '// @fterm-stage: bg\nvoid mainImage(out vec4 c, in vec2 p) {\n'
+          '${'a/=0.0;\n' * 8000}}\n';
+      final swLint = Stopwatch()..start();
+      final diags = ShadertoyGlslShim.lint(
+        largeLintSource,
+        stage: TerminalShaderStage.background,
+      );
+      swLint.stop();
+      expect(diags, hasLength(8000));
+      expect(diags.first.line, equals(3));
+      expect(diags.last.line, equals(8002));
+      expect(swLint.elapsedMilliseconds, lessThan(250));
+      // M2: lint() returns an unmodifiable list.
+      expect(() => diags.clear(), throwsUnsupportedError);
+    });
+
+    test('honors line continuations in // comments, #version spans, leading-dot zero literals, and deferred masking', () {
+      // M6: Line-continued // comment masks the following line for lint() too.
+      const lfContinuedComment =
+          '// commented out:\\\n'
+          'vec4 c = texture(iChannel0, uv);\n'
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  fragColor = vec4(1.0);\n'
+          '}\n';
+      expect(
+        ShadertoyGlslShim.analyze(lfContinuedComment).samplesChannel0,
+        isFalse,
+      );
+      final lfLint = ShadertoyGlslShim.lint(
+        lfContinuedComment,
+        stage: TerminalShaderStage.foreground,
+      );
+      expect(
+        lfLint.any(
+          (d) =>
+              d.severity == ShaderDiagnosticSeverity.warning &&
+              d.message.contains('iChannel0'),
+        ),
+        isTrue,
+      );
+
+      const crlfContinuedComment =
+          '// commented out:\\\r\n'
+          'vec4 c = texture(iChannel0, uv);\r\n'
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\r\n'
+          '  fragColor = vec4(1.0);\r\n'
+          '}\r\n';
+      expect(
+        ShadertoyGlslShim.analyze(crlfContinuedComment).samplesChannel0,
+        isFalse,
+      );
+      final crlfLint = ShadertoyGlslShim.lint(
+        crlfContinuedComment,
+        stage: TerminalShaderStage.foreground,
+      );
+      expect(
+        crlfLint.any(
+          (d) =>
+              d.severity == ShaderDiagnosticSeverity.warning &&
+              d.message.contains('iChannel0'),
+        ),
+        isTrue,
+      );
+
+      // M7: Line-continued #version after commented #version points to line 4.
+      const continuedVersion =
+          '/*\n#version 300 es\n*/\n#\\\nversion 460 core\n'
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  fragColor = vec4(1.0);\n'
+          '}\n';
+      expect(
+        () => ShadertoyGlslShim.analyze(continuedVersion),
+        throwsA(
+          isA<ShaderCompileException>().having(
+            (e) => e.lineNumber,
+            'lineNumber',
+            equals(4),
+          ),
+        ),
+      );
+
+      // L2: Leading-dot zero float literals (.0, .0f) trigger division-by-zero
+      // lint without false positives on .05, 0.1, or 0x10.
+      const dotZeroSource =
+          '// @fterm-stage: bg\n'
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  float ok = 1.0 / .05 + 1.0 / 0.1 + float(1 / 0x10);\n'
+          '  float a = 1.0 / .0;\n'
+          '  a /= .0f;\n'
+          '  fragColor = vec4(ok + a);\n'
+          '}\n';
+      final dotZeroDiags = ShadertoyGlslShim.lint(
+        dotZeroSource,
+        stage: TerminalShaderStage.background,
+      );
+      final zeroWarnings = dotZeroDiags
+          .where((d) => d.message.contains('zero'))
+          .toList();
+      expect(zeroWarnings, hasLength(2));
+      expect(zeroWarnings[0].line, equals(4));
+      expect(zeroWarnings[1].line, equals(5));
+
+      // L3: Valid large shaders analyze cleanly without eager comment masking.
+      final validLarge =
+          'void mainImage(out vec4 c, in vec2 p) {\n'
+          '${'// comment line\nfloat x = 1.0;\n' * 1200}'
+          '  c = vec4(1.0);\n}\n';
+      final analysis = ShadertoyGlslShim.analyze(validLarge);
+      expect(analysis.samplesChannel0, isFalse);
+      expect(
+        analysis.sourceByteLength,
+        lessThan(ShadertoyGlslShim.maxSourceBytes),
+      );
+    });
+
+    test('freezes ShaderCompileException.diagnostics, preserves runtime errors across syncConfig, updates dedup spans, and guards post-dispose writes', () async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      const goodGlsl =
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  fragColor = vec4(1.0);\n'
+          '}\n';
+
+      // M2: ShaderCompileException.diagnostics is unmodifiable even when
+      // constructed from a mutable list.
+      final mutableList = <ShaderDiagnostic>[
+        const ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.error,
+          origin: ShaderDiagnosticOrigin.compiler,
+          message: 'err',
+          line: 1,
+          column: 1,
+        ),
+      ];
+      final exc = ShaderCompileException(
+        shaderId: 'bg:bad',
+        message: 'err',
+        diagnostics: mutableList,
+      );
+      expect(() => exc.diagnostics.clear(), throwsUnsupportedError);
+      expect(
+        () => const ShaderCompileException(
+          shaderId: 'bg:empty',
+          message: 'empty',
+        ).diagnostics.clear(),
+        throwsUnsupportedError,
+      );
+
+      // H7 + M4: syncConfig preserves runtime error on unchanged pass, and
+      // reportRuntimeError updates changed lineNumber/diagnostics.
+      final backend = _StubCompileBackend();
+      final controller = TerminalShaderController(backend: backend);
+      addTearDown(controller.dispose);
+
+      final configV1 = TerminalShaderConfig(
+        backgroundPasses: <ShaderPassSpec>[
+          ShaderPassSpec(
+            id: 'bg:ok',
+            stage: TerminalShaderStage.background,
+            inlineGlsl: goodGlsl,
+          ),
+          ShaderPassSpec(
+            id: 'bg:fail',
+            stage: TerminalShaderStage.background,
+            inlineGlsl: goodGlsl,
+          ),
+        ],
+      );
+      await controller.syncConfig(configV1);
+
+      const firstErr = ShaderCompileException(
+        shaderId: 'bg:fail',
+        message: 'GPU link failed',
+        lineNumber: 2,
+        diagnostics: <ShaderDiagnostic>[
+          ShaderDiagnostic(
+            severity: ShaderDiagnosticSeverity.error,
+            origin: ShaderDiagnosticOrigin.compiler,
+            message: 'GPU link failed',
+            line: 2,
+            column: 3,
+          ),
+        ],
+      );
+      const updatedErr = ShaderCompileException(
+        shaderId: 'bg:fail',
+        message: 'GPU link failed',
+        lineNumber: 7,
+        diagnostics: <ShaderDiagnostic>[
+          ShaderDiagnostic(
+            severity: ShaderDiagnosticSeverity.error,
+            origin: ShaderDiagnosticOrigin.compiler,
+            message: 'GPU link failed',
+            line: 7,
+            column: 9,
+          ),
+        ],
+      );
+      controller.reportRuntimeError(firstErr);
+      controller.reportRuntimeError(updatedErr);
+      expect(controller.compileErrorForPass('bg:fail')?.lineNumber, equals(7));
+      expect(
+        controller.compileErrorForPass('bg:fail')?.diagnostics,
+        equals(updatedErr.diagnostics),
+      );
+      expect(
+        () => controller.compileErrorForPass('bg:fail')!.diagnostics.clear(),
+        throwsUnsupportedError,
+      );
+
+      // Updating bg:ok must NOT erase the active runtime error on bg:fail.
+      final configV2 = configV1.copyWith(
+        backgroundPasses: <ShaderPassSpec>[
+          ShaderPassSpec(
+            id: 'bg:ok',
+            stage: TerminalShaderStage.background,
+            inlineGlsl: '$goodGlsl\n// updated ok',
+          ),
+          configV1.backgroundPasses[1],
+        ],
+      );
+      await controller.syncConfig(configV2);
+      expect(controller.compileErrorForPass('bg:fail'), same(updatedErr));
+      expect(controller.lastCompileError, same(updatedErr));
+
+      // Reloading bg:fail clears its runtime error once compilation succeeds.
+      await controller.reloadCustomShaders();
+      expect(controller.compileErrorForPass('bg:fail'), isNull);
+      expect(controller.lastCompileError, isNull);
+      expect(controller.passGenerationFor('bg:fail'), equals(2));
+
+      // M3: Disposing controller while syncConfig awaits a failing pass keeps
+      // passCompileErrors empty.
+      final pendingCompile = Completer<CompiledShaderHandle>();
+      final slowBackend = _StubCompileBackend(pendingCompile: pendingCompile);
+      final doomedController = TerminalShaderController(backend: slowBackend);
+      final syncFuture = doomedController.syncConfig(
+        TerminalShaderConfig(
+          backgroundPasses: <ShaderPassSpec>[
+            ShaderPassSpec(
+              id: 'bg:slow',
+              stage: TerminalShaderStage.background,
+              inlineGlsl: goodGlsl,
+            ),
+          ],
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      doomedController.dispose();
+      pendingCompile.completeError(
+        const ShaderCompileException(
+          shaderId: 'bg:slow',
+          message: 'Backend disposed mid-compile',
+        ),
+      );
+      await syncFuture;
+      expect(doomedController.passCompileErrors, isEmpty);
+      expect(doomedController.compileErrorForPass('bg:slow'), isNull);
+      expect(doomedController.passGenerationFor('bg:slow'), equals(0));
+    });
   });
 }
 
@@ -1297,6 +1571,10 @@ final class _StubHandle implements CompiledShaderHandle {
 }
 
 final class _StubCompileBackend implements TerminalShaderBackend {
+  final Completer<CompiledShaderHandle>? pendingCompile;
+
+  _StubCompileBackend({this.pendingCompile});
+
   @override
   ShaderBackendKind get kind => ShaderBackendKind.flutterGpu;
 
@@ -1311,7 +1589,13 @@ final class _StubCompileBackend implements TerminalShaderBackend {
     String id,
     String shadertoyGlsl, {
     bool usesPrevFrame = false,
-  }) async => _StubHandle(id, usesPrevFrame);
+  }) async {
+    final pending = pendingCompile;
+    if (pending != null) {
+      return pending.future;
+    }
+    return _StubHandle(id, usesPrevFrame);
+  }
 
   @override
   Future<void> reload(
