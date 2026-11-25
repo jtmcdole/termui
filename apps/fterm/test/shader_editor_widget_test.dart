@@ -803,5 +803,77 @@ void main() {
       );
       expect(controller.source, equals(source));
     });
+
+    test('drops stale in-flight compile during debounce window, rejects dotfile/illegal Save As names, and shows inline error on failed saveAs', () async {
+      // M3: Empty-stem dotfiles and Windows-illegal chars rejected.
+      expect(ShaderEditorController.normalizeSaveAsFilename('.glsl'), isNull);
+      expect(ShaderEditorController.normalizeSaveAsFilename('.frag'), isNull);
+      expect(
+        ShaderEditorController.normalizeSaveAsFilename('bad:name.glsl'),
+        isNull,
+      );
+      expect(
+        ShaderEditorController.normalizeSaveAsFilename('bad*name'),
+        isNull,
+      );
+
+      const validShader =
+          'void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n'
+          '  fragColor = vec4(1.0);\n'
+          '}';
+      final firstCompile = Completer<List<ShaderDiagnostic>>();
+      var compileCalls = 0;
+      final controller = ShaderEditorController(
+        shaderName: 'race.glsl',
+        initialSource: validShader,
+        debounceDuration: const Duration(seconds: 10),
+        onCompile: (source, mode) {
+          compileCalls++;
+          if (compileCalls == 1) return firstCompile.future;
+          return Future<List<ShaderDiagnostic>>.value(
+            const <ShaderDiagnostic>[],
+          );
+        },
+        onSave: (_, _, _) async => false,
+      );
+      addTearDown(controller.dispose);
+
+      // Start compile generation 1.
+      final firstRun = controller.triggerCompileNow();
+      expect(controller.isCompiling, isTrue);
+
+      // Edit before generation 1 finishes; debounce window is 10s.
+      controller.textController.text = '$validShader\n// edit 2';
+      expect(controller.isCompiling, isFalse);
+
+      // Resolve stale generation 1 BEFORE debounce timer fires.
+      firstCompile.complete(const <ShaderDiagnostic>[
+        ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.error,
+          origin: ShaderDiagnosticOrigin.compiler,
+          message: 'stale error from gen 1',
+          line: 2,
+          column: 1,
+        ),
+      ]);
+      await firstRun;
+
+      // Stale error must NOT overwrite diagnostics during debounce window.
+      expect(
+        controller.diagnostics.where(
+          (d) => d.origin == ShaderDiagnosticOrigin.compiler,
+        ),
+        isEmpty,
+      );
+
+      // L2: Failed saveAs sets inline error and keeps Save As prompt open.
+      controller.beginSaveAs();
+      controller.clearSaveAsDraft();
+      controller.appendSaveAsText('failing_name');
+      final saveResult = await controller.confirmSaveAs();
+      expect(saveResult, isFalse);
+      expect(controller.promptingSaveAs, isTrue);
+      expect(controller.saveAsError, contains('failing_name.glsl'));
+    });
   });
 }

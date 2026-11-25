@@ -307,7 +307,11 @@ final class ShaderEditorController extends ChangeNotifier {
   void setPreviewMode(ShaderEditorPreviewMode mode) {
     if (_disposed || _previewMode == mode) return;
     _previewMode = mode;
+    _compileGeneration++;
+    _isCompiling = false;
     if (mode == ShaderEditorPreviewMode.off) {
+      _debounceTimer?.cancel();
+      _debounceTimer = null;
       _runtimeDiagnostics = const <ShaderDiagnostic>[];
       _runtimeErrorSignature = null;
     }
@@ -534,7 +538,12 @@ final class ShaderEditorController extends ChangeNotifier {
     final saved = _onSave == null
         ? true
         : await _onSave(normalized, null, snapshot);
-    if (_disposed || !saved) return false;
+    if (_disposed) return false;
+    if (!saved) {
+      _saveAsError = 'Unable to save "$normalized".';
+      notifyListeners();
+      return false;
+    }
     _shaderName = normalized;
     _sourcePath = normalized;
     _savedSource = snapshot;
@@ -545,21 +554,28 @@ final class ShaderEditorController extends ChangeNotifier {
     return true;
   }
 
+  static final RegExp _illegalFilenameChars = RegExp(r'[\x00-\x1F:<>"|?*]');
+
   /// Validates and normalizes a user-supplied Save As [rawName], appending
   /// `.glsl` when no supported shader extension is present.
   ///
-  /// Returns `null` for empty names or names containing path separators or
-  /// traversal segments.
+  /// Returns `null` for empty names, empty-stem dotfiles (`.glsl`/`.frag`),
+  /// path separators, traversal segments, or Windows-illegal filename
+  /// characters.
   static String? normalizeSaveAsFilename(String rawName) {
     final trimmed = rawName.trim();
     if (trimmed.isEmpty ||
         trimmed == '.' ||
         trimmed == '..' ||
         trimmed.contains('/') ||
-        trimmed.contains(r'\')) {
+        trimmed.contains(r'\') ||
+        _illegalFilenameChars.hasMatch(trimmed)) {
       return null;
     }
     final lower = trimmed.toLowerCase();
+    if (lower == '.glsl' || lower == '.frag') {
+      return null;
+    }
     if (lower.endsWith('.glsl') || lower.endsWith('.frag')) {
       return trimmed;
     }
@@ -629,6 +645,8 @@ final class ShaderEditorController extends ChangeNotifier {
     if (_confirmingClose) {
       _confirmingClose = false;
     }
+    _compileGeneration++;
+    _isCompiling = false;
     _compilerDiagnostics = const <ShaderDiagnostic>[];
     _runtimeDiagnostics = const <ShaderDiagnostic>[];
     _runtimeErrorSignature = null;
@@ -687,7 +705,8 @@ final class ShaderEditorController extends ChangeNotifier {
     _isCompiling = false;
     _compilerDiagnostics = compilerDiags;
     _rebuildDiagnostics();
-    if (mode != ShaderEditorPreviewMode.off) {
+    if (mode != ShaderEditorPreviewMode.off &&
+        _previewMode != ShaderEditorPreviewMode.off) {
       _previewNotifier.emit();
     }
     notifyListeners();

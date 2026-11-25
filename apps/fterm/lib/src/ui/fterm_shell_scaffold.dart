@@ -745,6 +745,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
                   mouseTracking: true,
                   macosOptionAsAlt:
                       widget.workspace.preferences.macosOptionAsAlt,
+                  metaKeyPolicy: _shortcutDispatcher.resolveMetaKeyPolicy(),
                   fontSize: fontSize,
                   fontFamily: castPrimaryFontFamily,
                   fontFamilyFallback: castFallbackFontFamilies,
@@ -836,10 +837,16 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
 
   Widget _buildOpaqueFgPreviewPill(ShaderEditorPane editorPane) {
     final ctrl = editorPane.controller;
+    final samplesChannel0 =
+        ctrl.lastAnalysis?.samplesChannel0 ??
+        widget.workspace.shaderController
+            .analysisForPass(editorPane.previewPassId)
+            ?.samplesChannel0 ??
+        true;
     final hidesEditor =
         !widget.workspace.shadersEmergencyStopped &&
         ctrl.previewMode == ShaderEditorPreviewMode.foreground &&
-        !(ctrl.lastAnalysis?.samplesChannel0 ?? true);
+        !samplesChannel0;
     if (!hidesEditor) return const SizedBox.shrink();
 
     const pillBg = Color(0xE6261717);
