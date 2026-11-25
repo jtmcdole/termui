@@ -922,5 +922,48 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
       },
     );
+
+    testWidgets(
+      'supports Save Shader As... from tab context menu and updates tab title on save',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(1024, 720));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final env = _createEnv();
+        final ws = env.workspace;
+        await tester.runAsync(() => ws.openShaderEditorTab());
+        await _pumpApp(tester, ws);
+
+        final editorPane = ws.editorPanes.values.single;
+        final tabId = ws.activeTab!.tabId;
+        final tabFinder = find.byKey(ValueKey('fterm-tab-$tabId'));
+        expect(tabFinder, findsOneWidget);
+
+        // Right-click tab -> Save Shader As... -> opens inline Save As prompt.
+        await tester.tap(tabFinder, buttons: kSecondaryMouseButton);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.tap(find.byKey(const ValueKey('tab-menu-save-shader-as')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        expect(editorPane.controller.promptingSaveAs, isTrue);
+
+        // Name the new shader and confirm -> persists and renames tab title.
+        editorPane.controller.clearSaveAsDraft();
+        editorPane.controller.appendSaveAsText('my_new_effect');
+        final saved = await editorPane.controller.confirmSaveAs();
+        await tester.pump();
+
+        expect(saved, isTrue);
+        expect(editorPane.shaderName, equals('my_new_effect.glsl'));
+        expect(env.store.shaders['my_new_effect.glsl'], isNotNull);
+        expect(find.text('my_new_effect.glsl'), findsOneWidget);
+
+        await tester.runAsync(ws.dispose);
+        env.store.dispose();
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   });
 }

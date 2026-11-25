@@ -104,18 +104,14 @@ final class ShaderEditorController extends ChangeNotifier {
   late final ShaderEditorCompileCallback? _onCompile;
   late final ShaderEditorSaveCallback? _onSave;
 
-  /// Display filename or logical shader name (e.g. `'my_shader.glsl'`).
-  final String shaderName;
-
-  /// Optional filesystem path or Web storage key for saving.
-  final String? sourcePath;
-
   /// Debounce duration applied before invoking async draft compilation.
   final Duration debounceDuration;
 
   /// Backing `termui` multiline text controller (owns text, selection, scroll).
   final tui.TextEditingController textController;
 
+  String _shaderName;
+  String? _sourcePath;
   String _savedSource;
   String _lastObservedText;
   ShaderEditorPreviewMode _previewMode;
@@ -132,6 +128,9 @@ final class ShaderEditorController extends ChangeNotifier {
   int? _lastCompileDurationMs;
   bool _isCompiling = false;
   bool _confirmingClose = false;
+  bool _promptingSaveAs = false;
+  String _saveAsDraftName = '';
+  String? _saveAsError;
   int _selectedDiagnosticIndex = -1;
   int _compileGeneration = 0;
   Timer? _debounceTimer;
@@ -139,8 +138,8 @@ final class ShaderEditorController extends ChangeNotifier {
 
   /// Creates a [ShaderEditorController].
   ShaderEditorController({
-    required this.shaderName,
-    this.sourcePath,
+    required this._shaderName,
+    this._sourcePath,
     String initialSource = '',
     ShaderEditorPreviewMode initialPreviewMode = ShaderEditorPreviewMode.off,
     ShaderEditorChainComposition initialChainComposition =
@@ -167,6 +166,12 @@ final class ShaderEditorController extends ChangeNotifier {
     textController.addListener(_handleTextControllerChanged);
     _refreshStaticDiagnostics();
   }
+
+  /// Display filename or logical shader name (e.g. `'my_shader.glsl'`).
+  String get shaderName => _shaderName;
+
+  /// Optional filesystem path or Web storage key for saving.
+  String? get sourcePath => _sourcePath;
 
   /// Current GLSL source text in the editor buffer.
   String get source => textController.text;
@@ -229,6 +234,15 @@ final class ShaderEditorController extends ChangeNotifier {
 
   /// Whether the inline unsaved-changes close confirmation bar is active.
   bool get confirmingClose => _confirmingClose;
+
+  /// Whether the inline Save As filename prompt is currently active.
+  bool get promptingSaveAs => _promptingSaveAs;
+
+  /// Current draft filename typed into the inline Save As prompt.
+  String get saveAsDraftName => _saveAsDraftName;
+
+  /// Validation error for the current Save As draft filename, if any.
+  String? get saveAsError => _saveAsError;
 
   /// Monotonic compile generation counter incremented on each compile start.
   int get compileGeneration => _compileGeneration;
@@ -452,6 +466,103 @@ final class ShaderEditorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Opens the inline Save As filename prompt pre-filled with [shaderName].
+  void beginSaveAs() {
+    if (_disposed) return;
+    _confirmingClose = false;
+    _promptingSaveAs = true;
+    _saveAsDraftName = _shaderName;
+    _saveAsError = null;
+    notifyListeners();
+  }
+
+  /// Dismisses the inline Save As filename prompt without saving.
+  void cancelSaveAs() {
+    if (_disposed || !_promptingSaveAs) return;
+    _promptingSaveAs = false;
+    _saveAsError = null;
+    notifyListeners();
+  }
+
+  /// Appends printable characters from [text] into [saveAsDraftName].
+  void appendSaveAsText(String text) {
+    if (_disposed || !_promptingSaveAs || text.isEmpty) return;
+    final sanitized = text.replaceAll('\r', '').replaceAll('\n', '');
+    if (sanitized.isEmpty) return;
+    _saveAsDraftName = '$_saveAsDraftName$sanitized';
+    _saveAsError = null;
+    notifyListeners();
+  }
+
+  /// Removes the final grapheme cluster from [saveAsDraftName].
+  void backspaceSaveAsChar() {
+    if (_disposed || !_promptingSaveAs || _saveAsDraftName.isEmpty) return;
+    final chars = _saveAsDraftName.characters;
+    _saveAsDraftName = chars.take(chars.length - 1).string;
+    _saveAsError = null;
+    notifyListeners();
+  }
+
+  /// Clears [saveAsDraftName] so the user can type a fresh filename.
+  void clearSaveAsDraft() {
+    if (_disposed || !_promptingSaveAs || _saveAsDraftName.isEmpty) return;
+    _saveAsDraftName = '';
+    _saveAsError = null;
+    notifyListeners();
+  }
+
+  /// Validates and persists the active Save As draft filename.
+  Future<bool> confirmSaveAs() {
+    if (_disposed || !_promptingSaveAs) return Future<bool>.value(false);
+    return saveAs(_saveAsDraftName);
+  }
+
+  /// Persists the current buffer under [targetName] via the configured save
+  /// callback, updating [shaderName] and [sourcePath] on success.
+  Future<bool> saveAs(String targetName) async {
+    if (_disposed) return false;
+    final normalized = normalizeSaveAsFilename(targetName);
+    if (normalized == null) {
+      _saveAsError = 'Enter a valid filename without / or \\.';
+      notifyListeners();
+      return false;
+    }
+    final snapshot = textController.text;
+    final saved = _onSave == null
+        ? true
+        : await _onSave(normalized, null, snapshot);
+    if (_disposed || !saved) return false;
+    _shaderName = normalized;
+    _sourcePath = normalized;
+    _savedSource = snapshot;
+    _confirmingClose = false;
+    _promptingSaveAs = false;
+    _saveAsError = null;
+    notifyListeners();
+    return true;
+  }
+
+  /// Validates and normalizes a user-supplied Save As [rawName], appending
+  /// `.glsl` when no supported shader extension is present.
+  ///
+  /// Returns `null` for empty names or names containing path separators or
+  /// traversal segments.
+  static String? normalizeSaveAsFilename(String rawName) {
+    final trimmed = rawName.trim();
+    if (trimmed.isEmpty ||
+        trimmed == '.' ||
+        trimmed == '..' ||
+        trimmed.contains('/') ||
+        trimmed.contains(r'\')) {
+      return null;
+    }
+    final lower = trimmed.toLowerCase();
+    if (lower.endsWith('.glsl') || lower.endsWith('.frag')) {
+      return trimmed;
+    }
+    return '$trimmed.glsl';
+  }
+
   /// Persists the current buffer via the configured save callback and marks
   /// the buffer clean on success.
   Future<bool> save() async {
@@ -459,10 +570,12 @@ final class ShaderEditorController extends ChangeNotifier {
     final snapshot = textController.text;
     final saved = _onSave == null
         ? true
-        : await _onSave(shaderName, sourcePath, snapshot);
+        : await _onSave(_shaderName, _sourcePath, snapshot);
     if (_disposed || !saved) return false;
     _savedSource = snapshot;
     _confirmingClose = false;
+    _promptingSaveAs = false;
+    _saveAsError = null;
     notifyListeners();
     return true;
   }
