@@ -378,7 +378,8 @@ void main() {
 
       // CLI shader quarantine stays scoped and does NOT trigger global E-Stop.
       watchdog.setActiveCustomShaders(const ['cli_only_fx'], source: 'cli');
-      for (var i = 0; i < 3; i++) {
+      final cliFrames = watchdog.warmupFramesRemainingFor('cli_only_fx') + 3;
+      for (var i = 0; i < cliFrames; i++) {
         watchdog.recordShaderFrameDuration(
           'cli_only_fx',
           const Duration(milliseconds: 50),
@@ -392,7 +393,9 @@ void main() {
       watchdog.setActiveCustomShaders(const [
         'foreground:custom_fg.glsl',
       ], source: 'host');
-      for (var i = 0; i < 3; i++) {
+      final fgFrames =
+          watchdog.warmupFramesRemainingFor('foreground:custom_fg.glsl') + 3;
+      for (var i = 0; i < fgFrames; i++) {
         watchdog.recordShaderFrameDuration(
           'foreground:custom_fg.glsl',
           const Duration(milliseconds: 55),
@@ -416,7 +419,8 @@ void main() {
       // Editor draft shader quarantine also escalates to E-Stop.
       final draftId = 'editor:${pane.paneId}';
       watchdog.setActiveCustomShaders(<String>[draftId], source: 'host');
-      for (var i = 0; i < 3; i++) {
+      final draftFrames = watchdog.warmupFramesRemainingFor(draftId) + 3;
+      for (var i = 0; i < draftFrames; i++) {
         watchdog.recordShaderFrameDuration(
           draftId,
           const Duration(milliseconds: 60),

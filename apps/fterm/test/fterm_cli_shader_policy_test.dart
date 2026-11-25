@@ -793,8 +793,10 @@ void main() {
         contains('slow_custom'),
       );
 
-      // Trip watchdog with 3 consecutive >33ms frames on slow_custom.
-      for (var i = 0; i < 3; i++) {
+      // Trip watchdog with warmup + 3 consecutive >33ms frames on slow_custom.
+      final totalSlowFrames =
+          pane.gpuFrameWatchdog.warmupFramesRemainingFor('slow_custom') + 3;
+      for (var i = 0; i < totalSlowFrames; i++) {
         pane.gpuFrameWatchdog.recordShaderFrameDuration(
           'slow_custom',
           const Duration(milliseconds: 50),
