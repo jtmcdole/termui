@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/scheduler.dart';
 
 /// Callback invoked when [GpuFrameWatchdog] quarantines an offending custom CLI
@@ -36,6 +37,14 @@ final class GpuFrameWatchdog {
   /// Default GPU command-buffer completion deadline before tripping quarantine.
   static const Duration defaultCompletionTimeout = Duration(seconds: 2);
 
+  /// Default per-shader warmup frame count (`0` for deterministic unit tests).
+  static const int defaultWarmupFrameCount = 0;
+
+  /// Recommended per-shader warmup frame count for live interactive hosts
+  /// (`24` frames in debug builds for pipeline compilation and JIT warmup,
+  /// `10` frames in release/profile builds).
+  static int get recommendedWarmupFrameCount => kDebugMode ? 24 : 10;
+
   /// Adaptive FPS ceiling applied to active built-in region presets after
   /// sustained slow frames (without quarantining built-in presets).
   static const double defaultThrottledPresetFps = 30.0;
@@ -57,6 +66,10 @@ final class GpuFrameWatchdog {
   /// Maximum wait for a submitted GPU command buffer completion callback.
   final Duration completionTimeout;
 
+  /// Number of initial measured frames skipped per newly activated shader to
+  /// avoid false quarantine during GPU pipeline compilation or debug warmup.
+  final int warmupFrameCount;
+
   /// Optional predicate identifying built-in host presets exempt from quarantine.
   final BuiltinShaderPredicate? isBuiltinPreset;
 
@@ -69,6 +82,7 @@ final class GpuFrameWatchdog {
   final Set<String> _activeCustomShaderIds = <String>{};
   final Set<String> _quarantinedShaderIds = <String>{};
   final Map<String, int> _consecutiveSlowFrames = <String, int>{};
+  final Map<String, int> _warmupFramesRemaining = <String, int>{};
   final Map<String, Duration> _lastFrameDurations = <String, Duration>{};
   final Map<int, _PendingGpuSubmission> _pendingSubmissions =
       <int, _PendingGpuSubmission>{};
@@ -89,9 +103,10 @@ final class GpuFrameWatchdog {
     this.slowFrameThreshold = defaultSlowFrameThreshold,
     this.consecutiveSlowFrameLimit = defaultConsecutiveSlowFrameLimit,
     this.completionTimeout = defaultCompletionTimeout,
+    int warmupFrameCount = defaultWarmupFrameCount,
     this.isBuiltinPreset,
     this.onShaderQuarantined,
-  });
+  }) : warmupFrameCount = warmupFrameCount < 0 ? 0 : warmupFrameCount;
 
   /// Unmodifiable view of custom CLI shader IDs currently quarantined on this pane.
   Set<String> get quarantinedShaderIds =>
@@ -116,6 +131,25 @@ final class GpuFrameWatchdog {
   /// Returns the current consecutive slow-frame streak for [shaderId].
   int consecutiveSlowFramesFor(String shaderId) =>
       _consecutiveSlowFrames[shaderId] ?? 0;
+
+  /// Returns the remaining warmup grace frames for [shaderId].
+  int warmupFramesRemainingFor(String shaderId) =>
+      _warmupFramesRemaining[shaderId] ?? 0;
+
+  /// Resets the per-shader warmup grace window for [shaderId], or for all
+  /// currently active custom shaders when [shaderId] is omitted.
+  void resetWarmup([String? shaderId]) {
+    if (_disposed || warmupFrameCount <= 0) return;
+    if (shaderId == null) {
+      for (final id in _activeCustomShaderIds) {
+        _warmupFramesRemaining[id] = warmupFrameCount;
+      }
+      return;
+    }
+    if (_activeCustomShaderIds.contains(shaderId)) {
+      _warmupFramesRemaining[shaderId] = warmupFrameCount;
+    }
+  }
 
   /// Number of in-flight GPU command submissions currently tracked for timeout.
   int get pendingSubmissionCount => _pendingSubmissions.length;
@@ -176,10 +210,18 @@ final class GpuFrameWatchdog {
     final union = <String>{
       for (final ids in _activeCustomShadersBySource.values) ...ids,
     };
+    if (warmupFrameCount > 0) {
+      for (final id in union) {
+        if (!_activeCustomShaderIds.contains(id)) {
+          _warmupFramesRemaining[id] = warmupFrameCount;
+        }
+      }
+    }
     _activeCustomShaderIds
       ..clear()
       ..addAll(union);
     _consecutiveSlowFrames.removeWhere((id, _) => !union.contains(id));
+    _warmupFramesRemaining.removeWhere((id, _) => !union.contains(id));
   }
 
   /// Attaches [handleFrameTimings] to [SchedulerBinding.instance] so Desktop
@@ -260,6 +302,12 @@ final class GpuFrameWatchdog {
       return;
     }
     _lastFrameDurations[shaderId] = duration;
+    final warmupRemaining = _warmupFramesRemaining[shaderId] ?? 0;
+    if (warmupRemaining > 0) {
+      _warmupFramesRemaining[shaderId] = warmupRemaining - 1;
+      _consecutiveSlowFrames[shaderId] = 0;
+      return;
+    }
     if (duration <= slowFrameThreshold) {
       _consecutiveSlowFrames[shaderId] = 0;
       return;
@@ -390,10 +438,12 @@ final class GpuFrameWatchdog {
     if (shaderId == null) {
       _quarantinedShaderIds.clear();
       _consecutiveSlowFrames.clear();
+      resetWarmup();
       return;
     }
     _quarantinedShaderIds.remove(shaderId);
     _consecutiveSlowFrames.remove(shaderId);
+    resetWarmup(shaderId);
   }
 
   /// Cancels pending submission timers and clears active tracking and
@@ -404,6 +454,7 @@ final class GpuFrameWatchdog {
     _activeCustomShaderIds.clear();
     _quarantinedShaderIds.clear();
     _consecutiveSlowFrames.clear();
+    _warmupFramesRemaining.clear();
     _lastFrameDurations.clear();
     _lastRasterDuration = null;
     _lastRasterAt = null;
@@ -422,6 +473,7 @@ final class GpuFrameWatchdog {
     _activeCustomShadersBySource.clear();
     _activeCustomShaderIds.clear();
     _consecutiveSlowFrames.clear();
+    _warmupFramesRemaining.clear();
     _lastFrameDurations.clear();
     _lastRasterDuration = null;
     _lastRasterAt = null;
