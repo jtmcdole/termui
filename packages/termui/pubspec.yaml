@@ -34,6 +34,7 @@ dependencies:
   file: ^7.0.0
   web: ^1.1.1
   path: ^1.9.0
+  syntax_highlight_lite: ^0.0.1
   win32: ^6.0.0
 
 dev_dependencies:
