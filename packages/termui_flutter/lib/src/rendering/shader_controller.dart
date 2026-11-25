@@ -36,6 +36,8 @@ final class TerminalShaderController extends ChangeNotifier {
   final Map<String, ShadertoyGlslAnalysis> _analyses =
       <String, ShadertoyGlslAnalysis>{};
   final Map<String, String> _compiledSources = <String, String>{};
+  final Map<String, ShaderCompileException> _passErrors =
+      <String, ShaderCompileException>{};
   final List<ui.Image> _pendingImageDisposals = <ui.Image>[];
 
   TerminalShaderConfig _activeConfig = TerminalShaderConfig.empty;
@@ -95,6 +97,14 @@ final class TerminalShaderController extends ChangeNotifier {
   /// Most recent compilation or validation error, cleared on the next clean
   /// compile or reload.
   ShaderCompileException? get lastCompileError => _lastCompileError;
+
+  /// Unmodifiable map of pass IDs to their most recent compilation errors.
+  Map<String, ShaderCompileException> get passCompileErrors =>
+      Map<String, ShaderCompileException>.unmodifiable(_passErrors);
+
+  /// Returns the most recent compilation error for pass [id], or `null` when
+  /// pass [id] compiled cleanly or is not active.
+  ShaderCompileException? compileErrorForPass(String id) => _passErrors[id];
 
   /// Active decoded wallpaper [ui.Image] managed by this controller, if any.
   ui.Image? get wallpaperImage => _wallpaperImage;
@@ -207,10 +217,11 @@ final class TerminalShaderController extends ChangeNotifier {
   /// Clears [wallpaperImage] and disposes the previous image post-frame.
   void clearWallpaperImage() => setWallpaperImage(null);
 
-  /// Clears any recorded [lastCompileError] diagnostic.
+  /// Clears any recorded [lastCompileError] and [passCompileErrors] diagnostics.
   void clearLastCompileError() {
-    if (_disposed || _lastCompileError == null) return;
+    if (_disposed || (_lastCompileError == null && _passErrors.isEmpty)) return;
     _lastCompileError = null;
+    _passErrors.clear();
     notifyListeners();
   }
 
@@ -219,12 +230,16 @@ final class TerminalShaderController extends ChangeNotifier {
   void reportRuntimeError(ShaderCompileException error) {
     if (_disposed) return;
     final current = _lastCompileError;
+    final existingPassError = _passErrors[error.shaderId];
     if (current != null &&
         current.shaderId == error.shaderId &&
-        current.message == error.message) {
+        current.message == error.message &&
+        existingPassError != null &&
+        existingPassError.message == error.message) {
       return;
     }
     _lastCompileError = error;
+    _passErrors[error.shaderId] = error;
     final scheduler = SchedulerBinding.instance;
     if (scheduler.schedulerPhase == SchedulerPhase.persistentCallbacks) {
       scheduler.addPostFrameCallback((_) {
@@ -262,6 +277,7 @@ final class TerminalShaderController extends ChangeNotifier {
     _disposeAllHandles();
     _analyses.clear();
     _compiledSources.clear();
+    _passErrors.clear();
     final oldBackend = _backend;
     _backend = _backendFactory(override);
     oldBackend.dispose();
@@ -302,6 +318,11 @@ final class TerminalShaderController extends ChangeNotifier {
         sourceLoader: _lastSourceLoader,
         forceReload: forceReload,
       );
+      if (error != null) {
+        _passErrors[spec.id] = error;
+      } else {
+        _passErrors.remove(spec.id);
+      }
       firstError ??= error;
     }
 
@@ -333,9 +354,11 @@ final class TerminalShaderController extends ChangeNotifier {
       _handles.remove(id)?.dispose();
       _analyses.remove(id);
       _compiledSources.remove(id);
+      _passErrors.remove(id);
     }
     _analyses.removeWhere((id, _) => !activeIds.contains(id));
     _compiledSources.removeWhere((id, _) => !activeIds.contains(id));
+    _passErrors.removeWhere((id, _) => !activeIds.contains(id));
   }
 
   Future<ShaderCompileException?> _syncSinglePass(
@@ -469,6 +492,7 @@ final class TerminalShaderController extends ChangeNotifier {
     _disposeAllHandles();
     _analyses.clear();
     _compiledSources.clear();
+    _passErrors.clear();
     _backend.dispose();
     _wallpaperImage?.dispose();
     _wallpaperImage = null;
