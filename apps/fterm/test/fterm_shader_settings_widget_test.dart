@@ -1270,5 +1270,135 @@ void main() {
         await tester.pumpWidget(const SizedBox.shrink());
       },
     );
+
+    testWidgets(
+      'launches shader editor tabs from New Shader Tab, custom Edit, and preset Clone & Edit buttons, renders multi-diagnostic compile errors, and lists editor/E-Stop chords in Help',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(960, 800));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final env = _buildWorkspace();
+        env.store.shaders['custom_fx.glsl'] = _validCustomGlsl;
+        await tester.runAsync(env.workspace.openLocalShellTab);
+        await tester.runAsync(env.workspace.refreshCustomShaders);
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: FtermShellScaffold(
+              workspace: env.workspace,
+              onOpenUrl: (_) {},
+              platformOverride: TargetPlatform.linux,
+              isWebOverride: false,
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // Multi-diagnostic compile error banner renders every diagnostic row.
+        env.createdBackends.single.nextCompileOrReloadError =
+            const ShaderCompileException(
+              shaderId: 'foreground:custom_fx.glsl',
+              message: "undeclared identifier 'foo'",
+              lineNumber: 2,
+              diagnostics: <ShaderDiagnostic>[
+                ShaderDiagnostic(
+                  severity: ShaderDiagnosticSeverity.error,
+                  origin: ShaderDiagnosticOrigin.compiler,
+                  message: "undeclared identifier 'foo'",
+                  line: 2,
+                  column: 10,
+                  length: 3,
+                ),
+                ShaderDiagnostic(
+                  severity: ShaderDiagnosticSeverity.warning,
+                  origin: ShaderDiagnosticOrigin.linter,
+                  message: 'Division by literal zero.',
+                  line: 3,
+                  column: 12,
+                  length: 5,
+                  hint: 'Clamp denominator with max().',
+                ),
+              ],
+            );
+        await tester.runAsync(
+          () => env.workspace.setForegroundShaderChain(const <String>[
+            'custom_fx.glsl',
+          ]),
+        );
+        env.workspace.setOverlay(FtermOverlay.settings);
+        await tester.pump();
+
+        final errorBanner = find.byKey(
+          const ValueKey('settings-shader-compile-error'),
+        );
+        expect(errorBanner, findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('settings-shader-diagnostic-0')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('settings-shader-diagnostic-1')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('L2:10'), findsOneWidget);
+        expect(find.textContaining('L3:12'), findsOneWidget);
+
+        // New Shader Tab button opens a fresh editor tab and dismisses Settings.
+        final newShaderBtn = find.byKey(
+          const ValueKey('settings-new-shader-tab'),
+        );
+        await tester.ensureVisible(newShaderBtn);
+        await tester.pump();
+        await tester.tap(newShaderBtn);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(env.workspace.activeOverlay, equals(FtermOverlay.none));
+        expect(env.workspace.focusedEditorPane, isNotNull);
+        expect(env.workspace.tabs, hasLength(2));
+
+        // Edit button on custom shader opens it in an editor tab.
+        env.workspace.setOverlay(FtermOverlay.settings);
+        await tester.pump();
+        final editCustomBtn = find.byKey(
+          const ValueKey('settings-fg-shader-edit-custom_fx.glsl'),
+        );
+        await tester.ensureVisible(editCustomBtn);
+        await tester.pump();
+        await tester.tap(editCustomBtn);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(env.workspace.focusedEditorPane?.shaderName, 'custom_fx.glsl');
+        expect(env.workspace.tabs, hasLength(3));
+
+        // Clone & Edit button on built-in preset opens a cloned editor tab.
+        env.workspace.setOverlay(FtermOverlay.settings);
+        await tester.pump();
+        final clonePresetBtn = find.byKey(
+          const ValueKey('settings-bg-shader-clone-wallpaper_wave'),
+        );
+        await tester.ensureVisible(clonePresetBtn);
+        await tester.pump();
+        await tester.tap(clonePresetBtn);
+        await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+        await tester.pump();
+        expect(
+          env.workspace.focusedEditorPane?.shaderName,
+          contains('wallpaper_wave_custom'),
+        );
+        expect(env.workspace.tabs, hasLength(4));
+
+        // Help overlay documents Ctrl+\ e and Ctrl+Shift+F6 / Ctrl+\ 0.
+        env.workspace.setOverlay(FtermOverlay.help);
+        await tester.pump();
+        expect(find.textContaining(r'Ctrl+\ then e'), findsOneWidget);
+        expect(
+          find.textContaining(r'Ctrl+Shift+F6 / Ctrl+\ 0'),
+          findsOneWidget,
+        );
+
+        await tester.runAsync(env.workspace.dispose);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
   });
 }
