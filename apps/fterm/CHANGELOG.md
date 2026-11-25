@@ -1,3 +1,36 @@
+## 0.7.0
+
+> Note: This release has breaking changes.
+
+ - **REFACTOR**(api): apply API review mitigations.
+ - **FIX**(review): address code review feedback - pass 1.
+ - **FIX**(fterm): opt into 500ms undo burst coalescing in ShaderEditorController.
+ - **FIX**(fterm): use default cell background in shader editor so BG preview shows.
+ - **FIX**(fterm): surface runtime GPU link errors in open shader editors.
+ - **FIX**(fterm): pass through unhandled Meta/Cmd chords by default on Web and macOS (#465).
+ - **FEAT**(fterm): add Save As workflow and selection highlight to shader editor.
+ - **FEAT**(fterm): enable GpuFrameWatchdog warmup for CLI and editor shaders.
+ - **FEAT**(fterm): add escape pill above opaque FG previews lacking iChannel0.
+ - **FEAT**(fterm): add dirty shader tab highlight and right-click context menu.
+ - **FEAT**(fterm): render shader editor pane leaves and E-Stop recovery pill.
+ - **FEAT**(fterm): add shader editor shortcut and settings overlay entry points.
+ - **FEAT**(fterm): track ShaderEditorPane lifecycle in workspace controller.
+ - **FEAT**(fterm): add in-process ShaderEditorPane host.
+ - **FEAT**(fterm): add pure termui ShaderEditorView widget.
+ - **FEAT**(fterm): add shader editor controller with debounced compile.
+ - **FEAT**(fterm): bind Ctrl+Shift+F6 and Ctrl+\ 0 hotkeys to shader E-Stop.
+ - **FEAT**(fterm): add shader emergency stop state and watchdog escalation.
+ - **FEAT**(fterm): add chord recorder, platform presets, and collision hints to Keyboard Settings (#471).
+ - **FEAT**(fterm): add Ignored Chords list and validated text input to Keyboard Settings tab (#470).
+ - **FEAT**(fterm): add General and Keyboard Settings tabs with Meta key policy and toggles (#469).
+ - **FEAT**(fterm): dispatch configured passthroughShortcuts through host and early-F12 handlers (#468).
+ - **FEAT**(fterm): add compact KeyChord codec and persist passthroughShortcuts in FtermPreferences (#467).
+ - **FEAT**(fterm): add configurable FtermMetaKeyMode preference for Meta/Cmd key policy (#466).
+ - **FEAT**(cast-server,release): bundle gzip-only fterm WASM viewer with termui_cast_server (#423).
+ - **DOCS**(fterm): document GLSL shader editor and Emergency Stop controls.
+ - **BREAKING** **FIX**(fterm): address all 22 PR #475 shader editor review findings.
+ - **BREAKING** **FEAT**(termui_flutter): add HostShortcutResult and TerminalMetaKeyPolicy to TerminalImeClient (#464).
+
 ## 0.6.0
 
 > Note: This release has breaking changes.

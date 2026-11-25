@@ -1,3 +1,12 @@
+## 0.4.1
+
+ - **REFACTOR**(api): apply API review mitigations.
+ - **REFACTOR**(api): apply API review mitigations.
+ - **FIX**(review): address code review feedback - pass 1.
+ - **FIX**(review): address code review feedback - pass 1.
+ - **FIX**(termui_cast_server): log bound address and clickable HTTP URL on startup.
+ - **FEAT**(cast-server,release): bundle gzip-only fterm WASM viewer with termui_cast_server (#423).
+
 ## 0.4.0
 
 > Note: This release has breaking changes.
