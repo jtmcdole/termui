@@ -118,8 +118,11 @@ final class FtermShortcutDispatcher {
     if (event is KeyDownEvent && workspace.audioController.needsGestureUnlock) {
       unawaited(workspace.audioController.notifyUserGesture());
     }
+    if (_handleEmergencyStopShortcut(event, modifiers)) {
+      return .handled;
+    }
     if (workspace.activeOverlay != FtermOverlay.none) {
-      return _handleOverlayKeyEvent(event) ? .handled : .unhandled;
+      return _handleOverlayKeyEvent(event, modifiers) ? .handled : .unhandled;
     }
     if (workspace.isLeaderArmed) {
       return _handleLeaderChord(event, modifiers) ? .handled : .unhandled;
@@ -146,7 +149,30 @@ final class FtermShortcutDispatcher {
     return _handleF12Gate(event, modifiers);
   }
 
-  bool _handleOverlayKeyEvent(KeyEvent event) {
+  bool _handleEmergencyStopShortcut(
+    KeyEvent event,
+    Set<ev.Modifier> modifiers,
+  ) {
+    if (!_isCtrlShiftKey(event.logicalKey, LogicalKeyboardKey.f6, modifiers)) {
+      return false;
+    }
+    if (event is KeyDownEvent) {
+      workspace.setLeaderArmed(false);
+      workspace.toggleShaderEmergencyStop();
+    }
+    return true;
+  }
+
+  bool _handleOverlayKeyEvent(KeyEvent event, Set<ev.Modifier> modifiers) {
+    if (workspace.isLeaderArmed) {
+      return _handleOverlayLeaderChord(event);
+    }
+    if (_isCtrlBackslashLeader(event, modifiers)) {
+      if (event is KeyDownEvent) {
+        workspace.setLeaderArmed(true);
+      }
+      return true;
+    }
     if (event.logicalKey == LogicalKeyboardKey.escape) {
       workspace.dismissOverlay();
       return true;
@@ -154,6 +180,17 @@ final class FtermShortcutDispatcher {
     // Let modal controls, FocusTraversalGroup (Tab), and DefaultTextEditingShortcuts
     // handle overlay keys while workspace panes stay excluded via ExcludeFocus.
     return false;
+  }
+
+  bool _handleOverlayLeaderChord(KeyEvent event) {
+    if (_modifierKeys.contains(event.logicalKey)) {
+      return true;
+    }
+    workspace.setLeaderArmed(false);
+    if (event is KeyDownEvent && _isZeroKey(event.logicalKey)) {
+      workspace.toggleShaderEmergencyStop();
+    }
+    return true;
   }
 
   bool _isCtrlBackslashLeader(KeyEvent event, Set<ev.Modifier> modifiers) {
@@ -249,6 +286,10 @@ final class FtermShortcutDispatcher {
     String? ch,
     bool shift,
   ) {
+    if (_isZeroKey(key)) {
+      workspace.toggleShaderEmergencyStop();
+      return true;
+    }
     final digit = _digitIndices[key];
     if (digit != null) {
       if (digit < workspace.tabs.length) {
@@ -375,6 +416,9 @@ final class FtermShortcutDispatcher {
     }
     return false;
   }
+
+  static bool _isZeroKey(LogicalKeyboardKey key) =>
+      key == LogicalKeyboardKey.digit0 || key == LogicalKeyboardKey.numpad0;
 
   static bool _isCtrlShiftKey(
     LogicalKeyboardKey actual,
