@@ -344,7 +344,7 @@ These widgets capture keyboard and mouse events:
 * `StreamBuilder`: Rebuilds its subtree in response to `Stream` snapshots.
 * `Switch`: Horizontal toggle switch.
 * `TabBar`: Navigation tab selector.
-* `TextField`: Multi-line or single-line text input field.
+* `TextField`: Multi-line or single-line text input field with controller-persisted scrolling, multi-line selection, and optional `spanBuilder` styling (pair with `package:termui/syntax.dart` for TextMate syntax highlighting and SGR 58 diagnostic squiggles).
 
 ### C. Display Widgets
 These widgets render static or dynamic visual elements:
