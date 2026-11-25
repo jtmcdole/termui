@@ -64,6 +64,8 @@ final class GpuFrameWatchdog {
   /// ID is quarantined on this pane.
   ShaderQuarantinedCallback? onShaderQuarantined;
 
+  final Map<String, Set<String>> _activeCustomShadersBySource =
+      <String, Set<String>>{};
   final Set<String> _activeCustomShaderIds = <String>{};
   final Set<String> _quarantinedShaderIds = <String>{};
   final Map<String, int> _consecutiveSlowFrames = <String, int>{};
@@ -145,20 +147,39 @@ final class GpuFrameWatchdog {
     }
   }
 
-  /// Updates the set of custom CLI shader IDs actively executing on this pane.
+  /// Updates the set of custom shader IDs actively executing on this pane for
+  /// [source] (defaulting to `'cli'`).
   ///
+  /// Distinct sources (for example `'cli'` for `CliShaderRegistry` and `'host'`
+  /// for `TerminalShaderHost`) are tracked independently and merged into
+  /// [activeCustomShaderIds], so updates from one source never clobber another.
   /// Built-in presets (where [isBuiltinPreset] returns `true`) are ignored and
   /// never tracked or quarantined.
-  void setActiveCustomShaders(Iterable<String> customShaderIds) {
+  void setActiveCustomShaders(
+    Iterable<String> customShaderIds, {
+    String source = 'cli',
+  }) {
     if (_disposed) return;
-    final next = <String>{
+    final nextForSource = <String>{
       for (final id in customShaderIds)
         if (!_isExempt(id)) id,
     };
+    if (nextForSource.isEmpty) {
+      _activeCustomShadersBySource.remove(source);
+    } else {
+      _activeCustomShadersBySource[source] = nextForSource;
+    }
+    _recomputeActiveCustomShaders();
+  }
+
+  void _recomputeActiveCustomShaders() {
+    final union = <String>{
+      for (final ids in _activeCustomShadersBySource.values) ...ids,
+    };
     _activeCustomShaderIds
       ..clear()
-      ..addAll(next);
-    _consecutiveSlowFrames.removeWhere((id, _) => !next.contains(id));
+      ..addAll(union);
+    _consecutiveSlowFrames.removeWhere((id, _) => !union.contains(id));
   }
 
   /// Attaches [handleFrameTimings] to [SchedulerBinding.instance] so Desktop
@@ -379,6 +400,7 @@ final class GpuFrameWatchdog {
   /// quarantined state (e.g. on pane reset or `ESC c` RIS).
   void reset() {
     _cancelPendingSubmissions();
+    _activeCustomShadersBySource.clear();
     _activeCustomShaderIds.clear();
     _quarantinedShaderIds.clear();
     _consecutiveSlowFrames.clear();
@@ -397,6 +419,7 @@ final class GpuFrameWatchdog {
     _disposed = true;
     detachFrameTimingsCallback();
     _cancelPendingSubmissions();
+    _activeCustomShadersBySource.clear();
     _activeCustomShaderIds.clear();
     _consecutiveSlowFrames.clear();
     _lastFrameDurations.clear();
