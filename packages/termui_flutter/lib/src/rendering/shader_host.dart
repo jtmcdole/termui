@@ -344,8 +344,30 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   bool get _hasCompiledForegroundPasses =>
       _isBackendActive && _hasAnyCompiledPass(widget.config.foregroundPasses);
 
+  static bool _isCustomHostPass(ShaderPassSpec spec) {
+    final hasInline = spec.inlineGlsl != null && spec.inlineGlsl!.isNotEmpty;
+    final hasPath =
+        spec.customSourcePath != null &&
+        spec.customSourcePath!.trim().isNotEmpty;
+    if (hasInline || hasPath) return true;
+    return spec.preset == null || spec.preset == TerminalShaderPreset.none;
+  }
+
+  static bool _isCompiledCustomHostPass(
+    TerminalShaderController ctrl,
+    ShaderPassSpec spec,
+  ) =>
+      _isCustomHostPass(spec) &&
+      spec.id.isNotEmpty &&
+      ctrl.handleForPass(spec.id) != null;
+
+  bool _isPassQuarantined(ShaderPassSpec spec) =>
+      _isCustomHostPass(spec) &&
+      (widget.watchdog?.isQuarantined(spec.id) ?? false);
+
   bool _isPassElided(ShaderPassSpec spec) =>
-      spec.preset == TerminalShaderPreset.cursorGlow && !_cursorVisible;
+      _isPassQuarantined(spec) ||
+      (spec.preset == TerminalShaderPreset.cursorGlow && !_cursorVisible);
 
   bool get _hasAnyActiveTimePass {
     final ctrl = widget.controller;
@@ -410,10 +432,33 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     final ctrl = widget.controller;
     if (ctrl == null || specs.isEmpty) return false;
     for (final spec in specs) {
+      if (_isPassQuarantined(spec)) continue;
       if (ctrl.handleForPass(spec.id) != null) return true;
     }
     return false;
   }
+
+  void _syncWatchdogCustomShaders() {
+    final watchdog = widget.watchdog;
+    if (watchdog == null) return;
+    if (!widget.config.enabled || !_isBackendActive) {
+      watchdog.setActiveCustomShaders(const <String>[], source: 'host');
+      return;
+    }
+    final ctrl = widget.controller!;
+    watchdog.setActiveCustomShaders(
+      _collectActiveCustomHostPassIds(ctrl),
+      source: 'host',
+    );
+  }
+
+  List<String> _collectActiveCustomHostPassIds(TerminalShaderController ctrl) =>
+      <String>[
+        for (final spec in widget.config.backgroundPasses)
+          if (_isCompiledCustomHostPass(ctrl, spec)) spec.id,
+        for (final spec in widget.config.foregroundPasses)
+          if (_isCompiledCustomHostPass(ctrl, spec)) spec.id,
+      ];
 
   @override
   void initState() {
@@ -430,6 +475,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     widget.cliShaderRegistry?.addListener(_onControllerChanged);
     widget.activityListenable?.addListener(_onExternalActivity);
     widget.mouseLogicalListenable?.addListener(_onMouseChanged);
+    _syncWatchdogCustomShaders();
   }
 
   @override
@@ -463,6 +509,13 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
   void didUpdateWidget(TerminalShaderHost oldWidget) {
     super.didUpdateWidget(oldWidget);
     _rebindListeners(oldWidget);
+    if (!identical(oldWidget.watchdog, widget.watchdog)) {
+      oldWidget.watchdog?.setActiveCustomShaders(
+        const <String>[],
+        source: 'host',
+      );
+    }
+    _syncWatchdogCustomShaders();
     _syncFocusTransition(oldWidget);
     _syncActivityAndDirtyFlags(oldWidget);
     _maybeRecoverDirectModeOnUpdate(oldWidget);
@@ -599,6 +652,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
       _directFallbackActive = false;
       _directFallbackReason = _DirectFallbackReason.none;
     }
+    _syncWatchdogCustomShaders();
     _syncTicker();
     setState(() {});
     _frameNotifier.notify();
@@ -1502,6 +1556,7 @@ final class TerminalShaderHostState extends State<TerminalShaderHost>
     widget.cliShaderRegistry?.removeListener(_onControllerChanged);
     widget.activityListenable?.removeListener(_onExternalActivity);
     widget.mouseLogicalListenable?.removeListener(_onMouseChanged);
+    widget.watchdog?.setActiveCustomShaders(const <String>[], source: 'host');
     _backgroundOutputImage?.dispose();
     _backgroundOutputImage = null;
     _foregroundOutputImage?.dispose();
