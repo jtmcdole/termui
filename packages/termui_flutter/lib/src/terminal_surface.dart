@@ -655,6 +655,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _gpuWatchdog =
         widget.gpuFrameWatchdog ??
         GpuFrameWatchdog(
+          warmupFrameCount: GpuFrameWatchdog.recommendedWarmupFrameCount,
           isBuiltinPreset: ShaderRegionPresets.isPreset,
           onShaderQuarantined: _onWatchdogShaderQuarantined,
         );
@@ -1105,6 +1106,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       _gpuWatchdog =
           widget.gpuFrameWatchdog ??
           GpuFrameWatchdog(
+            warmupFrameCount: GpuFrameWatchdog.recommendedWarmupFrameCount,
             isBuiltinPreset: ShaderRegionPresets.isPreset,
             onShaderQuarantined: _onWatchdogShaderQuarantined,
           );

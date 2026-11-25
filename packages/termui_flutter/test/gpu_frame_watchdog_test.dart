@@ -120,5 +120,71 @@ void main() {
       ], source: 'cli');
       expect(watchdog.activeCustomShaderIds, isEmpty);
     });
+
+    test('skips per-shader warmup frames before slow-frame quarantine while still quarantining explicit GPU failures immediately', () {
+      final quarantined = <String>[];
+      final watchdog = GpuFrameWatchdog(
+        slowFrameThreshold: const Duration(milliseconds: 33),
+        consecutiveSlowFrameLimit: 3,
+        warmupFrameCount: 4,
+        onShaderQuarantined: (id, _) => quarantined.add(id),
+      );
+      addTearDown(watchdog.dispose);
+
+      watchdog.setActiveCustomShaders(const <String>[
+        'host:circles',
+      ], source: 'host');
+      expect(watchdog.warmupFramesRemainingFor('host:circles'), equals(4));
+
+      // 4 slow warmup frames are recorded for telemetry but never quarantine.
+      for (var i = 0; i < 4; i++) {
+        watchdog.recordShaderFrameDuration(
+          'host:circles',
+          const Duration(milliseconds: 60),
+        );
+      }
+      expect(watchdog.warmupFramesRemainingFor('host:circles'), equals(0));
+      expect(watchdog.consecutiveSlowFramesFor('host:circles'), equals(0));
+      expect(
+        watchdog.lastFrameDurationFor('host:circles'),
+        equals(const Duration(milliseconds: 60)),
+      );
+      expect(watchdog.isQuarantined('host:circles'), isFalse);
+
+      // Adding a sibling shader gives only the new shader its own warmup.
+      watchdog.setActiveCustomShaders(const <String>[
+        'host:circles',
+        'host:aurora',
+      ], source: 'host');
+      expect(watchdog.warmupFramesRemainingFor('host:circles'), equals(0));
+      expect(watchdog.warmupFramesRemainingFor('host:aurora'), equals(4));
+
+      // Next 3 slow frames quarantine host:circles while host:aurora warms up.
+      for (var i = 0; i < 3; i++) {
+        watchdog.recordFrameTiming(const Duration(milliseconds: 55));
+      }
+      expect(watchdog.isQuarantined('host:circles'), isTrue);
+      expect(watchdog.isQuarantined('host:aurora'), isFalse);
+      expect(watchdog.warmupFramesRemainingFor('host:aurora'), equals(1));
+      expect(quarantined, equals(<String>['host:circles']));
+
+      // clearQuarantine restores warmup for the resumed shader.
+      watchdog.clearQuarantine('host:circles');
+      expect(watchdog.isQuarantined('host:circles'), isFalse);
+      expect(watchdog.warmupFramesRemainingFor('host:circles'), equals(4));
+
+      // Explicit command buffer failure still quarantines during warmup.
+      final token = watchdog.beginCommandSubmission(const <String>[
+        'host:circles',
+      ]);
+      watchdog.completeCommandSubmission(token, success: false);
+      expect(watchdog.isQuarantined('host:circles'), isTrue);
+
+      // resetWarmup refreshes active shaders and reset() clears warmup state.
+      watchdog.resetWarmup();
+      expect(watchdog.warmupFramesRemainingFor('host:aurora'), equals(4));
+      watchdog.reset();
+      expect(watchdog.warmupFramesRemainingFor('host:aurora'), equals(0));
+    });
   });
 }
