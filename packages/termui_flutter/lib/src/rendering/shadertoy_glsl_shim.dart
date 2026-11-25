@@ -141,6 +141,13 @@ void main() {
     r'^\s*#\s*version\b',
     multiLine: true,
   );
+  static final RegExp _discardPattern = RegExp(r'\bdiscard\s*;');
+  static final RegExp _divZeroPattern = RegExp(
+    r'/=?\s*(?:0+\.0*|0+)[fFuU]?(?![\d.xX])',
+  );
+  static final RegExp _mainImageNamePattern = RegExp(
+    r'\bvoid\s+(mainImage)\s*\(',
+  );
   static final RegExp _timeUsagePattern = RegExp(
     r'\b(?:iTime|iTimeDelta|iFrame)\b',
   );
@@ -386,6 +393,29 @@ void main() {
     );
   }
 
+  /// Runs non-fatal static lint checks on [source] for the target [stage] and
+  /// returns span-annotated warning and info [ShaderDiagnostic]s.
+  static List<ShaderDiagnostic> lint(
+    String source, {
+    required TerminalShaderStage stage,
+  }) {
+    if (source.trim().isEmpty) return const <ShaderDiagnostic>[];
+    final masked = _maskComments(source);
+    final diagnostics = <ShaderDiagnostic>[];
+    _lintStageChannelUsage(source, masked, stage, diagnostics);
+    _lintDiscardUsage(source, masked, diagnostics);
+    _lintDivisionByZero(source, masked, diagnostics);
+    _lintMissingStageDirective(source, masked, diagnostics);
+    diagnostics.sort(_compareDiagnostics);
+    return diagnostics;
+  }
+
+  static int _compareDiagnostics(ShaderDiagnostic a, ShaderDiagnostic b) {
+    final lineCmp = (a.line ?? 0).compareTo(b.line ?? 0);
+    if (lineCmp != 0) return lineCmp;
+    return (a.column ?? 0).compareTo(b.column ?? 0);
+  }
+
   static Never _throwShimError(
     String shaderId,
     String message, {
@@ -409,6 +439,145 @@ void main() {
           hint: hint,
         ),
       ],
+    );
+  }
+
+  static void _lintStageChannelUsage(
+    String source,
+    String masked,
+    TerminalShaderStage stage,
+    List<ShaderDiagnostic> out,
+  ) {
+    final channel0Matches = _channel0Pattern.allMatches(masked).toList();
+    if (stage == TerminalShaderStage.foreground && channel0Matches.isEmpty) {
+      final loc = _locateMainImageName(source, masked);
+      out.add(
+        ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.warning,
+          origin: ShaderDiagnosticOrigin.linter,
+          message:
+              'Foreground shader does not sample iChannel0 and will obscure '
+              'terminal text.',
+          line: loc.line,
+          column: loc.column,
+          length: loc.length,
+          hint:
+              'Sample texture(iChannel0, fragCoord / iResolution.xy) to '
+              'preserve terminal content.',
+        ),
+      );
+      return;
+    }
+    if (stage == TerminalShaderStage.background && channel0Matches.isNotEmpty) {
+      for (final match in channel0Matches) {
+        final loc = _spanFromOffsetRange(source, match.start, match.end);
+        out.add(
+          ShaderDiagnostic(
+            severity: ShaderDiagnosticSeverity.warning,
+            origin: ShaderDiagnosticOrigin.linter,
+            message:
+                'Background first pass samples iChannel0, which has no '
+                'terminal content yet.',
+            line: loc.line,
+            column: loc.column,
+            length: loc.length,
+            hint:
+                'Switch to Foreground stage or sample iChannel1 (wallpaper) '
+                'instead.',
+          ),
+        );
+      }
+    }
+  }
+
+  static void _lintDiscardUsage(
+    String source,
+    String masked,
+    List<ShaderDiagnostic> out,
+  ) {
+    for (final match in _discardPattern.allMatches(masked)) {
+      final loc = _spanFromOffsetRange(source, match.start, match.end);
+      out.add(
+        ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.warning,
+          origin: ShaderDiagnosticOrigin.linter,
+          message:
+              'discard; can cause premultiplied alpha artifacts in terminal '
+              'compositing.',
+          line: loc.line,
+          column: loc.column,
+          length: loc.length,
+          hint: 'Write fragColor = vec4(0.0); instead of discard;.',
+        ),
+      );
+    }
+  }
+
+  static void _lintDivisionByZero(
+    String source,
+    String masked,
+    List<ShaderDiagnostic> out,
+  ) {
+    for (final match in _divZeroPattern.allMatches(masked)) {
+      final loc = _spanFromOffsetRange(source, match.start, match.end);
+      out.add(
+        ShaderDiagnostic(
+          severity: ShaderDiagnosticSeverity.warning,
+          origin: ShaderDiagnosticOrigin.linter,
+          message: 'Division by literal zero produces NaN/Inf on GPU.',
+          line: loc.line,
+          column: loc.column,
+          length: loc.length,
+          hint: 'Guard the denominator with max(..., 1e-5).',
+        ),
+      );
+    }
+  }
+
+  static void _lintMissingStageDirective(
+    String source,
+    String masked,
+    List<ShaderDiagnostic> out,
+  ) {
+    if (_stageDirectivePattern.hasMatch(source)) return;
+    final inferred = _resolveStageHint(
+      source: source,
+      samplesChannel0: _channel0Pattern.hasMatch(masked),
+      samplesChannel1: _channel1Pattern.hasMatch(masked),
+      usesCursorUniforms: _cursorUniformPattern.hasMatch(masked),
+    );
+    final directive = switch (inferred) {
+      ShaderStageHint.background => '// @fterm-stage: bg',
+      ShaderStageHint.foreground => '// @fterm-stage: fg',
+      ShaderStageHint.any => '// @fterm-stage: both',
+    };
+    out.add(
+      ShaderDiagnostic(
+        severity: ShaderDiagnosticSeverity.info,
+        origin: ShaderDiagnosticOrigin.linter,
+        message:
+            'Missing // @fterm-stage: directive (inferred: '
+            '${inferred.shortLabel}).',
+        line: 1,
+        column: 1,
+        length: 1,
+        hint: directive,
+      ),
+    );
+  }
+
+  static ({int line, int column, int length}) _locateMainImageName(
+    String source,
+    String masked,
+  ) {
+    final match = _mainImageNamePattern.firstMatch(masked);
+    if (match == null) return (line: 1, column: 1, length: 1);
+    final nameOffset = masked.indexOf('mainImage', match.start);
+    if (nameOffset < 0) return (line: 1, column: 1, length: 1);
+    return _spanFromOffsetRange(
+      source,
+      nameOffset,
+      nameOffset + 'mainImage'.length,
     );
   }
 
