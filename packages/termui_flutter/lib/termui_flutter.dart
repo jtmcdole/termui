@@ -69,7 +69,8 @@ library;
 
 export 'src/backend.dart' show FlutterTerminal;
 export 'src/terminal.dart' show Terminal;
-export 'src/terminal_ime_client.dart' show TerminalImeClient;
+export 'src/terminal_ime_client.dart'
+    show HostShortcutResult, TerminalImeClient, TerminalMetaKeyPolicy;
 export 'src/terminal_surface.dart'
     show TerminalBufferChangeSignal, TerminalSurface;
 export 'src/service/terminal_service.dart'

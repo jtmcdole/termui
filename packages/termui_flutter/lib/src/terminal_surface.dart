@@ -133,7 +133,10 @@ final class TerminalSurface extends StatefulWidget {
   final void Function(String text)? onTextInput;
 
   /// Optional custom shortcut hook invoked before built-in shortcuts.
-  final bool Function(KeyEvent event, Set<term.Modifier> modifiers)?
+  final HostShortcutResult Function(
+    KeyEvent event,
+    Set<term.Modifier> modifiers,
+  )?
   onHostShortcut;
 
   /// Optional callback receiving screenshot/clipboard/status notifications.
@@ -162,6 +165,9 @@ final class TerminalSurface extends StatefulWidget {
 
   /// Treats macOS Option+printable keys as `Alt` instead of dead-key composition.
   final bool macosOptionAsAlt;
+
+  /// Policy for unhandled `Meta`/`Cmd` combinations after host/built-in shortcuts.
+  final TerminalMetaKeyPolicy metaKeyPolicy;
 
   /// Monospace font point size used when [atlasController] is omitted.
   final double fontSize;
@@ -328,6 +334,7 @@ final class TerminalSurface extends StatefulWidget {
     this.imeClient,
     this.enableIme = true,
     this.macosOptionAsAlt = false,
+    this.metaKeyPolicy = .claimAll,
     this.fontSize = 13.0,
     this.fontFamily = 'Cascadia Mono',
     this.fontFamilyFallback,
@@ -880,6 +887,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
         widget.imeClient ??
         TerminalImeClient(
           macosOptionAsAlt: widget.macosOptionAsAlt,
+          metaKeyPolicy: widget.metaKeyPolicy,
           routePrintableThroughIme: widget.enableIme,
         );
     _bindImeClient();
@@ -888,6 +896,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   void _bindImeClient() {
     _imeClient
       ..macosOptionAsAlt = widget.macosOptionAsAlt
+      ..metaKeyPolicy = widget.metaKeyPolicy
       ..routePrintableThroughIme = widget.enableIme
       ..bindSurfaceHandlers(
         kittyKeyboardFlags: () => _effectiveKittyFlags,
@@ -1696,12 +1705,16 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     widget.terminal?.injectEvent(event);
   }
 
-  bool _handleHostShortcut(KeyEvent event, Set<term.Modifier> mods) {
-    if (widget.onHostShortcut?.call(event, mods) ?? false) {
-      return true;
+  HostShortcutResult _handleHostShortcut(
+    KeyEvent event,
+    Set<term.Modifier> mods,
+  ) {
+    final hostResult = widget.onHostShortcut?.call(event, mods) ?? .unhandled;
+    if (hostResult != .unhandled) {
+      return hostResult;
     }
     if (!widget.enableHostShortcuts) {
-      return false;
+      return .unhandled;
     }
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.f12) {
@@ -1710,7 +1723,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       } else {
         unawaited(_performTakeScreenshot());
       }
-      return true;
+      return .handled;
     }
     if (_builtinSelectionEnabled &&
         _selectionController.hasSelection &&
@@ -1718,13 +1731,13 @@ final class TerminalSurfaceState extends State<TerminalSurface>
       if (event is KeyDownEvent) {
         _gestureMachine.dispatch(.copyShortcut);
       }
-      return true;
+      return .handled;
     }
     if (isTerminalPasteShortcut(key, mods)) {
       unawaited(_pasteFromClipboard());
-      return true;
+      return .handled;
     }
-    return false;
+    return .unhandled;
   }
 
   Future<void> _writeToClipboard(String text) async {

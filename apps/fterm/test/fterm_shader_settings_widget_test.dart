@@ -677,7 +677,11 @@ void main() {
             ),
             const <ev.Modifier>{ev.Modifier.control, ev.Modifier.shift},
           );
-          expect(handled, isTrue, reason: 'Ctrl+Shift+F5 on $platform');
+          expect(
+            handled,
+            equals(HostShortcutResult.handled),
+            reason: 'Ctrl+Shift+F5 on $platform',
+          );
           await tester.runAsync(() => Future<void>.delayed(Duration.zero));
           expect(backend.reloadCalls, equals(reloadsBefore + 1));
         }
@@ -701,7 +705,7 @@ void main() {
             ),
             const <ev.Modifier>{ev.Modifier.control, ev.Modifier.shift},
           );
-          expect(opened, isTrue);
+          expect(opened, equals(HostShortcutResult.handled));
           expect(env.workspace.activeOverlay, equals(FtermOverlay.settings));
         }
 
@@ -721,7 +725,7 @@ void main() {
             ),
             const <ev.Modifier>{ev.Modifier.meta},
           ),
-          isTrue,
+          equals(HostShortcutResult.handled),
         );
         expect(env.workspace.activeOverlay, equals(FtermOverlay.settings));
 
@@ -740,7 +744,7 @@ void main() {
             ),
             const <ev.Modifier>{ev.Modifier.control, ev.Modifier.shift},
           ),
-          isFalse,
+          equals(HostShortcutResult.unhandled),
         );
 
         // File-watcher event from ShaderProfileStore triggers automatic reload.

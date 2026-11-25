@@ -4,6 +4,37 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:termui/terminal/event.dart' as term;
 
+/// Outcome returned by a host shortcut handler before built-in terminal
+/// shortcuts and terminal key encoding run.
+enum HostShortcutResult {
+  /// Consumed by the host; claim the event and suppress matching IME deltas.
+  handled,
+
+  /// Explicitly yield the event to the OS/browser (bypassing built-in
+  /// shortcuts and terminal encoding on key-down, repeat, and key-up).
+  passThrough,
+
+  /// Not matched by the host; continue to built-in shortcuts and terminal
+  /// encoding.
+  unhandled,
+}
+
+/// Policy governing unhandled `Meta`/`Cmd` key combinations after host and
+/// built-in shortcuts decline them.
+enum TerminalMetaKeyPolicy {
+  /// Claim all unhandled `Meta+*` chords for the hosted terminal app.
+  claimAll,
+
+  /// Pass unhandled `Meta+*` chords to the OS/browser in legacy mode
+  /// (`(kittyKeyboardFlags & 0x1F) == 0`), and claim them when any Kitty
+  /// progressive keyboard protocol flag is active.
+  claimWhenKittyActive,
+
+  /// Pass all unhandled `Meta+*` chords to the OS/browser regardless of Kitty
+  /// keyboard protocol state.
+  passThroughUnhandled,
+}
+
 /// Collects currently pressed hardware modifiers from [HardwareKeyboard].
 Set<term.Modifier> collectHardwareModifiers() {
   final kb = HardwareKeyboard.instance;
@@ -260,7 +291,10 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   final bool Function()? _reportKeyReleaseEvents;
   final void Function(term.KeyEvent event)? _onKeyEvent;
   final void Function(String text)? _onTextInput;
-  final bool Function(KeyEvent event, Set<term.Modifier> modifiers)?
+  final HostShortcutResult Function(
+    KeyEvent event,
+    Set<term.Modifier> modifiers,
+  )?
   _onHostShortcut;
   final VoidCallback? _onComposingChanged;
   final VoidCallback? _onModifiersChanged;
@@ -270,17 +304,21 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
   bool Function()? _boundReportKeyRelease;
   void Function(term.KeyEvent event)? _boundOnKeyEvent;
   void Function(String text)? _boundOnTextInput;
-  bool Function(KeyEvent event, Set<term.Modifier> modifiers)?
+  HostShortcutResult Function(KeyEvent event, Set<term.Modifier> modifiers)?
   _boundOnHostShortcut;
   VoidCallback? _boundOnModifiersChanged;
   Set<term.Modifier> Function()? _boundModifiersProvider;
 
   final List<VoidCallback> _listeners = [];
   final Set<LogicalKeyboardKey> _suppressedHostShortcutKeys = {};
+  final Set<LogicalKeyboardKey> _passedThroughHostKeys = {};
   final List<_PendingClaimedKey> _pendingClaimedKeys = [];
 
   /// Whether macOS `Option`+printable keys act as `Alt` instead of dead-key composition.
   bool macosOptionAsAlt;
+
+  /// Policy for unhandled `Meta`/`Cmd` combinations after host/built-in shortcuts.
+  TerminalMetaKeyPolicy metaKeyPolicy;
 
   /// Whether non-Kitty printable keys route through `DeltaTextInputClient` instead of `Focus.onKeyEvent`.
   bool routePrintableThroughIme;
@@ -299,6 +337,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     this._kittyKeyboardFlags,
     this._reportKeyReleaseEvents,
     this.macosOptionAsAlt = false,
+    this.metaKeyPolicy = .claimAll,
     this.routePrintableThroughIme = true,
     this._onKeyEvent,
     this._onTextInput,
@@ -354,7 +393,8 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     required bool Function() reportKeyReleaseEvents,
     required void Function(term.KeyEvent event) onKeyEvent,
     void Function(String text)? onTextInput,
-    bool Function(KeyEvent event, Set<term.Modifier> modifiers)? onHostShortcut,
+    HostShortcutResult Function(KeyEvent event, Set<term.Modifier> modifiers)?
+    onHostShortcut,
     VoidCallback? onModifiersChanged,
     Set<term.Modifier> Function()? modifiersProvider,
   }) {
@@ -412,6 +452,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       existing.close();
     }
     _suppressedHostShortcutKeys.clear();
+    _passedThroughHostKeys.clear();
     _clearComposingState();
   }
 
@@ -454,7 +495,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     (_onModifiersChanged ?? _boundOnModifiersChanged)?.call();
 
     if (isComposing) {
-      return KeyEventResult.ignored;
+      return .ignored;
     }
 
     final flags = kittyKeyboardFlags;
@@ -469,12 +510,24 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       );
     }
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
-      return KeyEventResult.ignored;
+      return .ignored;
+    }
+    if (event is KeyDownEvent) {
+      _passedThroughHostKeys.remove(event.logicalKey);
     }
 
     final mods = (_boundModifiersProvider ?? collectHardwareModifiers)();
-    if (_tryHandleHostShortcut(event, mods)) {
-      return KeyEventResult.handled;
+    switch (_tryHandleHostShortcut(event, mods)) {
+      case .handled:
+        return .handled;
+      case .passThrough:
+        return _passThroughKey(event);
+      case .unhandled:
+        break;
+    }
+
+    if (_shouldPassThroughMeta(mods, flags)) {
+      return _passThroughKey(event);
     }
 
     final eventType = event is KeyRepeatEvent
@@ -484,32 +537,65 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     if (!kittyClaimAll &&
         routePrintableThroughIme &&
         !_shouldFocusHandleStandardModeKey(event.logicalKey, mods)) {
-      if (event is KeyDownEvent) {
-        _pendingClaimedKeys.removeWhere(
-          (entry) => entry.logicalKey == event.logicalKey,
-        );
-      }
-      return KeyEventResult.ignored;
+      _clearPendingClaimedKeyOnDown(event);
+      return .ignored;
     }
 
     return _claimKeyInFocus(event, mods, eventType);
   }
 
-  bool _tryHandleHostShortcut(KeyEvent event, Set<term.Modifier> mods) {
+  KeyEventResult _passThroughKey(KeyEvent event) {
+    _passedThroughHostKeys.add(event.logicalKey);
+    _clearPendingClaimedKeyOnDown(event);
+    return .ignored;
+  }
+
+  void _clearPendingClaimedKeyOnDown(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      _pendingClaimedKeys.removeWhere(
+        (entry) => entry.logicalKey == event.logicalKey,
+      );
+    }
+  }
+
+  bool _shouldPassThroughMeta(Set<term.Modifier> mods, int flags) {
+    if (!mods.contains(term.Modifier.meta)) return false;
+    return switch (metaKeyPolicy) {
+      .claimAll => false,
+      .claimWhenKittyActive => (flags & 0x1F) == 0,
+      .passThroughUnhandled => true,
+    };
+  }
+
+  HostShortcutResult _tryHandleHostShortcut(
+    KeyEvent event,
+    Set<term.Modifier> mods,
+  ) {
     final key = event.logicalKey;
     if (event is KeyDownEvent) {
       _suppressedHostShortcutKeys.remove(key);
     }
     final shortcutHandler = _onHostShortcut ?? _boundOnHostShortcut;
-    final handled = shortcutHandler != null && shortcutHandler(event, mods);
-    final isSuppressedRepeat =
-        event is KeyRepeatEvent && _suppressedHostShortcutKeys.contains(key);
-    if (!handled && !isSuppressedRepeat) {
-      return false;
+    final result = shortcutHandler?.call(event, mods) ?? .unhandled;
+    switch (result) {
+      case .handled:
+        _recordSuppressedClaimedKey(event, mods);
+        _suppressedHostShortcutKeys.add(key);
+        return .handled;
+      case .passThrough:
+        return .passThrough;
+      case .unhandled:
+        if (event is KeyRepeatEvent) {
+          if (_suppressedHostShortcutKeys.contains(key)) {
+            _recordSuppressedClaimedKey(event, mods);
+            return .handled;
+          }
+          if (_passedThroughHostKeys.contains(key)) {
+            return .passThrough;
+          }
+        }
+        return .unhandled;
     }
-    _recordSuppressedClaimedKey(event, mods);
-    _suppressedHostShortcutKeys.add(key);
-    return true;
   }
 
   KeyEventResult _handleKeyUpEvent(
@@ -517,12 +603,16 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     required bool kittyClaimAll,
     required bool reportReleases,
   }) {
+    final wasPassedThrough = _passedThroughHostKeys.remove(event.logicalKey);
+    if (wasPassedThrough) {
+      return .ignored;
+    }
     final wasSuppressed = _suppressedHostShortcutKeys.remove(event.logicalKey);
     if (!reportReleases && !kittyClaimAll) {
-      return KeyEventResult.ignored;
+      return .ignored;
     }
     if (wasSuppressed) {
-      return KeyEventResult.handled;
+      return .handled;
     }
     final mods = (_boundModifiersProvider ?? collectHardwareModifiers)();
     final resolved = resolveTerminalKeyEvent(
@@ -531,12 +621,12 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
       eventType: term.KeyEventType.release,
     );
     if (resolved == null) {
-      return KeyEventResult.ignored;
+      return .ignored;
     }
     if (reportReleases) {
       _emitKeyEvent(resolved);
     }
-    return KeyEventResult.handled;
+    return .handled;
   }
 
   bool _shouldFocusHandleStandardModeKey(
@@ -964,6 +1054,7 @@ final class TerminalImeClient with TextInputClient, DeltaTextInputClient {
     clearSurfaceHandlers();
     _listeners.clear();
     _suppressedHostShortcutKeys.clear();
+    _passedThroughHostKeys.clear();
     _pendingClaimedKeys.clear();
   }
 }
