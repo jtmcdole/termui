@@ -2,13 +2,18 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show TargetPlatform;
+import 'package:flutter/services.dart'
+    show KeyDownEvent, KeyRepeatEvent, LogicalKeyboardKey, PhysicalKeyboardKey;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/audio/fterm_audio_controller.dart';
 import 'package:fterm/src/launch_config.dart';
 import 'package:fterm/src/settings_storage.dart';
 import 'package:fterm/src/shader_profile_store.dart';
+import 'package:fterm/src/ui/fterm_shortcut_dispatcher.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver.dart';
+import 'package:termui/terminal/event.dart' as ev;
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_cast_protocol/termui_cast_protocol.dart';
@@ -445,5 +450,180 @@ void main() {
         );
       },
     );
+  });
+
+  group('FtermShortcutDispatcher shader Emergency Stop hotkeys', () {
+    const ctrlShift = <ev.Modifier>{ev.Modifier.control, ev.Modifier.shift};
+    const ctrlOnly = <ev.Modifier>{ev.Modifier.control};
+
+    const f6Down = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.f6,
+      logicalKey: LogicalKeyboardKey.f6,
+      timeStamp: Duration.zero,
+    );
+    const f6Repeat = KeyRepeatEvent(
+      physicalKey: PhysicalKeyboardKey.f6,
+      logicalKey: LogicalKeyboardKey.f6,
+      timeStamp: Duration.zero,
+    );
+    const leaderDown = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.backslash,
+      logicalKey: LogicalKeyboardKey.backslash,
+      timeStamp: Duration.zero,
+    );
+    const zeroDown = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.digit0,
+      logicalKey: LogicalKeyboardKey.digit0,
+      character: '0',
+      timeStamp: Duration.zero,
+    );
+    const numpadZeroDown = KeyDownEvent(
+      physicalKey: PhysicalKeyboardKey.numpad0,
+      logicalKey: LogicalKeyboardKey.numpad0,
+      character: '0',
+      timeStamp: Duration.zero,
+    );
+
+    test('Ctrl+Shift+F6 toggles E-Stop across Desktop and Web and even while an overlay is open', () async {
+      final env = _createWorkspace();
+      final ws = env.workspace;
+      addTearDown(ws.dispose);
+
+      await ws.openLocalShellTab();
+      await ws.setForegroundShaderChain(const <String>['custom_fg.glsl']);
+
+      for (final target in const <(TargetPlatform, bool)>[
+        (TargetPlatform.linux, false),
+        (TargetPlatform.windows, false),
+        (TargetPlatform.macOS, false),
+        (TargetPlatform.linux, true),
+      ]) {
+        final dispatcher = FtermShortcutDispatcher(
+          workspace: ws,
+          platformOverride: target.$1,
+          isWebOverride: target.$2,
+        );
+        ws.setOverlay(FtermOverlay.settings);
+
+        expect(
+          dispatcher.handleHostShortcut(f6Down, ctrlShift),
+          equals(HostShortcutResult.handled),
+        );
+        expect(ws.shadersEmergencyStopped, isTrue);
+        expect(ws.activeShaderConfig.enabled, isFalse);
+        expect(ws.activeOverlay, equals(FtermOverlay.settings));
+
+        // Key repeats are consumed without flipping state back.
+        expect(
+          dispatcher.handleHostShortcut(f6Repeat, ctrlShift),
+          equals(HostShortcutResult.handled),
+        );
+        expect(ws.shadersEmergencyStopped, isTrue);
+
+        // Second press resumes shaders.
+        expect(
+          dispatcher.handleHostShortcut(f6Down, ctrlShift),
+          equals(HostShortcutResult.handled),
+        );
+        expect(ws.shadersEmergencyStopped, isFalse);
+        expect(ws.activeShaderConfig.enabled, isTrue);
+        await Future<void>.delayed(Duration.zero);
+      }
+    });
+
+    test(r'Ctrl+\ 0 toggles E-Stop in normal workspace and while an overlay is open', () async {
+      final env = _createWorkspace();
+      final ws = env.workspace;
+      addTearDown(ws.dispose);
+
+      await ws.openLocalShellTab();
+      final dispatcher = FtermShortcutDispatcher(
+        workspace: ws,
+        platformOverride: TargetPlatform.linux,
+        isWebOverride: false,
+      );
+
+      // Normal workspace: Ctrl+\ 0 stops, Ctrl+\ numpad0 resumes.
+      expect(
+        dispatcher.handleHostShortcut(leaderDown, ctrlOnly),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.isLeaderArmed, isTrue);
+      expect(
+        dispatcher.handleHostShortcut(zeroDown, const <ev.Modifier>{}),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.isLeaderArmed, isFalse);
+      expect(ws.shadersEmergencyStopped, isTrue);
+
+      expect(
+        dispatcher.handleHostShortcut(leaderDown, ctrlOnly),
+        equals(HostShortcutResult.handled),
+      );
+      expect(
+        dispatcher.handleHostShortcut(numpadZeroDown, const <ev.Modifier>{}),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.shadersEmergencyStopped, isFalse);
+
+      // With an overlay open: Ctrl+\ 0 still triggers E-Stop.
+      ws.setOverlay(FtermOverlay.settings);
+      expect(
+        dispatcher.handleHostShortcut(leaderDown, ctrlOnly),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.isLeaderArmed, isTrue);
+
+      // Bare modifier press while chord armed keeps leader armed.
+      const shiftDown = KeyDownEvent(
+        physicalKey: PhysicalKeyboardKey.shiftLeft,
+        logicalKey: LogicalKeyboardKey.shiftLeft,
+        timeStamp: Duration.zero,
+      );
+      expect(
+        dispatcher.handleHostShortcut(shiftDown, const <ev.Modifier>{
+          ev.Modifier.shift,
+        }),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.isLeaderArmed, isTrue);
+
+      expect(
+        dispatcher.handleHostShortcut(zeroDown, const <ev.Modifier>{}),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.isLeaderArmed, isFalse);
+      expect(ws.shadersEmergencyStopped, isTrue);
+      expect(ws.activeOverlay, equals(FtermOverlay.settings));
+
+      // Non-zero chord while overlay open disarms leader without changing E-Stop.
+      expect(
+        dispatcher.handleHostShortcut(leaderDown, ctrlOnly),
+        equals(HostShortcutResult.handled),
+      );
+      const keyXDown = KeyDownEvent(
+        physicalKey: PhysicalKeyboardKey.keyX,
+        logicalKey: LogicalKeyboardKey.keyX,
+        timeStamp: Duration.zero,
+      );
+      expect(
+        dispatcher.handleHostShortcut(keyXDown, const <ev.Modifier>{}),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.isLeaderArmed, isFalse);
+      expect(ws.shadersEmergencyStopped, isTrue);
+
+      // Ctrl+Shift+F6 while leader is armed disarms leader and resumes.
+      expect(
+        dispatcher.handleHostShortcut(leaderDown, ctrlOnly),
+        equals(HostShortcutResult.handled),
+      );
+      expect(
+        dispatcher.handleHostShortcut(f6Down, ctrlShift),
+        equals(HostShortcutResult.handled),
+      );
+      expect(ws.isLeaderArmed, isFalse);
+      expect(ws.shadersEmergencyStopped, isFalse);
+    });
   });
 }
