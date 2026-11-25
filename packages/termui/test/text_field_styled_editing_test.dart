@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:characters/characters.dart';
 import 'package:clock/clock.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:termui/termui.dart';
@@ -515,6 +516,150 @@ void main() {
             expect(field.value, equals('1'));
           });
         });
+      },
+    );
+
+    test(
+      'supports multi-line Shift/Ctrl+A/mouse-drag selection, visual highlight, and single-undo block delete/replace',
+      () {
+        final controller = TextEditingController(
+          text: 'line one\nline two\nline three\nline four',
+        );
+        controller.value = TextEditingValue(
+          text: controller.text,
+          selection: const TextSelection.collapsed(offset: 0),
+        );
+        const selBg = Color(0x22, 0x44, 0x88);
+        const selFg = Color(0xFF, 0xFF, 0xFF);
+        final field = TextField(
+          controller: controller,
+          multiline: true,
+          tabSize: 2,
+          selectionStyle: const Style(foreground: selFg, background: selBg),
+          spanBuilder: (text, baseStyle) => TextSpan(
+            text: text,
+            style: const Style(foreground: Color(0xCC, 0xCC, 0xCC)),
+          ),
+        );
+
+        final elem = field.createElement();
+        elem.mount(null);
+        elem.layout(BoxConstraints.tight(const Size(30, 6)));
+        MouseEventConsumer? consumer;
+        void findConsumer(Element e) {
+          if (e case final MouseEventConsumer c) {
+            consumer = c;
+            return;
+          }
+          e.visitChildren(findConsumer);
+        }
+
+        findConsumer(elem);
+        final renderElem = consumer!;
+
+        // Shift+Down selects across line 0 into line 1.
+        field.handleKeyEvent(
+          const KeyEvent('', KeyType.down, modifiers: {ev.Modifier.shift}),
+        );
+        field.handleKeyEvent(
+          const KeyEvent('', KeyType.end, modifiers: {ev.Modifier.shift}),
+        );
+        expect(controller.selectedText, equals('line one\nline two'));
+
+        // Visual selection highlight paints selBg on selected styled cells and EOL.
+        final highlighted = Buffer.blank(30, 6);
+        elem.paint(highlighted, Offset.zero);
+        expect(highlighted.getBackground(0, 0), equals(selBg.argb));
+        expect(highlighted.getBackground(8, 0), equals(selBg.argb));
+        expect(highlighted.getBackground(2, 1), equals(selBg.argb));
+
+        // Escape collapses selection without deleting text.
+        expect(
+          field.handleKeyEvent(const KeyEvent('', KeyType.escape)),
+          isTrue,
+        );
+        expect(controller.value.selection.isCollapsed, isTrue);
+        expect(controller.selectedText, isEmpty);
+
+        // Mouse press on (0, 1) + drag to (4, 2) selects across lines 1..2.
+        expect(
+          renderElem.handleMouseEvent(
+            const MouseEvent(
+              x: 1,
+              y: 2,
+              button: MouseButton.left,
+              type: MouseEventType.press,
+            ),
+            0,
+            1,
+          ),
+          isTrue,
+        );
+        expect(
+          renderElem.handleMouseEvent(
+            const MouseEvent(
+              x: 5,
+              y: 3,
+              button: MouseButton.left,
+              type: MouseEventType.drag,
+            ),
+            4,
+            2,
+          ),
+          isTrue,
+        );
+        expect(controller.selectedText, equals('line two\nline'));
+
+        // Backspace deletes the selected block in one undoable step.
+        field.handleKeyEvent(const KeyEvent('', KeyType.backspace));
+        expect(field.value, equals('line one\n three\nline four'));
+        controller.undo();
+        expect(
+          field.value,
+          equals('line one\nline two\nline three\nline four'),
+        );
+
+        // Ctrl+A selects all, typing replaces the entire buffer cleanly.
+        field.handleKeyEvent(
+          const KeyEvent(
+            'a',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        expect(controller.selectedText, equals(field.value));
+        field.handleKeyEvent(const KeyEvent('x', KeyType.character));
+        expect(field.value, equals('x'));
+        controller.undo();
+        expect(
+          field.value,
+          equals('line one\nline two\nline three\nline four'),
+        );
+
+        // Left arrow collapses selection to start; Right arrow collapses to end.
+        field.handleKeyEvent(
+          const KeyEvent(
+            'a',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        field.handleKeyEvent(const KeyEvent('', KeyType.left));
+        expect(controller.value.selection.isCollapsed, isTrue);
+        expect(controller.value.selection.baseOffset, equals(0));
+        field.handleKeyEvent(
+          const KeyEvent(
+            'a',
+            KeyType.character,
+            modifiers: {ev.Modifier.control},
+          ),
+        );
+        field.handleKeyEvent(const KeyEvent('', KeyType.right));
+        expect(controller.value.selection.isCollapsed, isTrue);
+        expect(
+          controller.value.selection.baseOffset,
+          equals(field.value.characters.length),
+        );
       },
     );
   });

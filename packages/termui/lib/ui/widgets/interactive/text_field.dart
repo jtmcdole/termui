@@ -42,6 +42,39 @@ enum TextFieldAction {
   /// Move cursor to the end of the line.
   moveToLineEnd,
 
+  /// Extend selection left by one character.
+  selectLeft,
+
+  /// Extend selection right by one character.
+  selectRight,
+
+  /// Extend selection up by one line.
+  selectUp,
+
+  /// Extend selection down by one line.
+  selectDown,
+
+  /// Extend selection up by one viewport page.
+  selectPageUp,
+
+  /// Extend selection down by one viewport page.
+  selectPageDown,
+
+  /// Extend selection one word to the left.
+  selectWordLeft,
+
+  /// Extend selection one word to the right.
+  selectWordRight,
+
+  /// Extend selection to the start of the line.
+  selectToLineStart,
+
+  /// Extend selection to the end of the line.
+  selectToLineEnd,
+
+  /// Select the entire text buffer.
+  selectAll,
+
   /// Delete character to the left.
   deleteLeft,
 
@@ -147,6 +180,12 @@ class TextSelection {
 
   /// Whether the selection is collapsed.
   bool get isCollapsed => baseOffset == extentOffset;
+
+  /// Normalized inclusive start grapheme offset (`min(baseOffset, extentOffset)`).
+  int get start => min(baseOffset, extentOffset);
+
+  /// Normalized exclusive end grapheme offset (`max(baseOffset, extentOffset)`).
+  int get end => max(baseOffset, extentOffset);
 
   @override
   bool operator ==(Object other) =>
@@ -343,8 +382,27 @@ class TextEditingController {
     _lastBurstEditAt = coalesce ? now : null;
   }
 
-  /// Inserts [inserted] at the current cursor position, normalizing `\r\n` and
-  /// `\r` line endings.
+  /// Currently selected text slice, or an empty string when collapsed.
+  String get selectedText {
+    final sel = _value.selection;
+    if (sel.isCollapsed) return '';
+    final chars = _value.text.characters;
+    final start = sel.start.clamp(0, chars.length);
+    final end = sel.end.clamp(start, chars.length);
+    return chars.getRange(start, end).string;
+  }
+
+  /// Deletes the active non-collapsed selection as one undoable edit, returning
+  /// `true` when text was removed.
+  bool deleteSelection() {
+    if (_value.selection.isCollapsed) return false;
+    saveStateToHistory();
+    _replaceSelectionRange('');
+    return true;
+  }
+
+  /// Inserts [inserted] at the current cursor position (or replaces any active
+  /// selection), normalizing `\r\n` and `\r` line endings.
   ///
   /// When [multiline] is `false`, line breaks in [inserted] are stripped.
   /// Always starts a dedicated undo step so multi-character pastes undo cleanly.
@@ -355,39 +413,38 @@ class TextEditingController {
     if (effective.isEmpty) return;
 
     saveStateToHistory();
-    final lines = [..._value.lines];
-    final lineIdx = _value.selection.cursorLine.clamp(0, lines.length - 1);
-    final lineChars = lines[lineIdx].characters;
-    final colIdx = _value.selection.cursorColumn.clamp(0, lineChars.length);
-    final prefix = lineChars.take(colIdx).string;
-    final suffix = lineChars.skip(colIdx).string;
+    _replaceSelectionRange(effective);
+  }
 
-    final insertedLines = effective.split('\n');
-    final int nextLine;
-    final int nextCol;
-    if (insertedLines.length == 1) {
-      lines[lineIdx] = '$prefix${insertedLines.first}$suffix';
-      nextLine = lineIdx;
-      nextCol = colIdx + insertedLines.first.characters.length;
+  void _replaceSelectionRange(String replacement) {
+    final chars = _value.text.characters;
+    final sel = _value.selection;
+    final int start;
+    final int end;
+    if (sel.isCollapsed) {
+      final lines = _value.lines;
+      final lineIdx = sel.cursorLine.clamp(0, lines.length - 1);
+      final colIdx = sel.cursorColumn.clamp(
+        0,
+        lines[lineIdx].characters.length,
+      );
+      start = _offsetFromLines(lines, lineIdx, colIdx);
+      end = start;
     } else {
-      lines[lineIdx] = '$prefix${insertedLines.first}';
-      final trailing = <String>[
-        ...insertedLines.sublist(1, insertedLines.length - 1),
-        '${insertedLines.last}$suffix',
-      ];
-      lines.insertAll(lineIdx + 1, trailing);
-      nextLine = lineIdx + insertedLines.length - 1;
-      nextCol = insertedLines.last.characters.length;
+      start = sel.start.clamp(0, chars.length);
+      end = sel.end.clamp(start, chars.length);
     }
-
-    final nextText = lines.join('\n');
-    final nextOffset = _offsetFromLines(lines, nextLine, nextCol);
+    final prefix = chars.take(start).string;
+    final suffix = chars.skip(end).string;
+    final nextText = '$prefix$replacement$suffix';
+    final nextOffset = start + replacement.characters.length;
+    final pos = _lineColumnFromOffset(nextText, nextOffset);
     value = TextEditingValue(
       text: nextText,
       selection: TextSelection.collapsed(
         offset: nextOffset,
-        line: nextLine,
-        column: nextCol,
+        line: pos.line,
+        column: pos.col,
       ),
     );
   }
@@ -398,6 +455,19 @@ class TextEditingController {
       offset += lines[i].characters.length + 1;
     }
     return offset + column;
+  }
+
+  static ({int line, int col}) _lineColumnFromOffset(String text, int offset) {
+    final lines = text.split('\n');
+    var remaining = offset;
+    for (var i = 0; i < lines.length; i++) {
+      final len = lines[i].characters.length;
+      if (remaining <= len || i == lines.length - 1) {
+        return (line: i, col: remaining.clamp(0, len));
+      }
+      remaining -= len + 1;
+    }
+    return (line: 0, col: 0);
   }
 
   /// Undoes the last change.
@@ -494,6 +564,9 @@ class TextField extends StatefulWidget implements Focusable {
   /// Highlighting style for the cursor cell.
   Style cursorStyle;
 
+  /// Highlighting style applied to selected text ranges.
+  Style selectionStyle;
+
   /// Style of the placeholder hint text.
   Style placeholderStyle;
 
@@ -549,6 +622,7 @@ class TextField extends StatefulWidget implements Focusable {
     this.obscuringCharacter = '*',
     this.style = Style.empty,
     this.cursorStyle = const Style(modifiers: Modifier.underline),
+    this.selectionStyle = const Style(modifiers: Modifier.reverse),
     this.placeholder = '',
     this.placeholderStyle = const Style(foreground: Color(128, 128, 128)),
     this.focused = true,
@@ -626,6 +700,35 @@ class TextField extends StatefulWidget implements Focusable {
     const TextFieldShortcut(type: KeyType.home):
         TextFieldAction.moveToLineStart,
     const TextFieldShortcut(type: KeyType.end): TextFieldAction.moveToLineEnd,
+
+    // Selection
+    const TextFieldShortcut(type: KeyType.left, modifiers: {ev.Modifier.shift}):
+        TextFieldAction.selectLeft,
+    const TextFieldShortcut(
+      type: KeyType.right,
+      modifiers: {ev.Modifier.shift},
+    ): TextFieldAction.selectRight,
+    const TextFieldShortcut(type: KeyType.up, modifiers: {ev.Modifier.shift}):
+        TextFieldAction.selectUp,
+    const TextFieldShortcut(type: KeyType.down, modifiers: {ev.Modifier.shift}):
+        TextFieldAction.selectDown,
+    const TextFieldShortcut(
+      type: KeyType.pageUp,
+      modifiers: {ev.Modifier.shift},
+    ): TextFieldAction.selectPageUp,
+    const TextFieldShortcut(
+      type: KeyType.pageDown,
+      modifiers: {ev.Modifier.shift},
+    ): TextFieldAction.selectPageDown,
+    const TextFieldShortcut(type: KeyType.home, modifiers: {ev.Modifier.shift}):
+        TextFieldAction.selectToLineStart,
+    const TextFieldShortcut(type: KeyType.end, modifiers: {ev.Modifier.shift}):
+        TextFieldAction.selectToLineEnd,
+    const TextFieldShortcut(
+      type: KeyType.character,
+      key: 'a',
+      modifiers: {ev.Modifier.control},
+    ): TextFieldAction.selectAll,
 
     // Deletion
     const TextFieldShortcut(type: KeyType.backspace):
@@ -803,10 +906,14 @@ class TextField extends StatefulWidget implements Focusable {
   }
 
   bool _canExecuteVerticalMove(TextFieldAction action) => switch (action) {
-    TextFieldAction.moveUp => multiline && cursorLine > 0,
-    TextFieldAction.moveDown =>
+    TextFieldAction.moveUp ||
+    TextFieldAction.selectUp => multiline && cursorLine > 0,
+    TextFieldAction.moveDown || TextFieldAction.selectDown =>
       multiline && cursorLine < controller.value.lines.length - 1,
-    TextFieldAction.pageUp || TextFieldAction.pageDown => multiline,
+    TextFieldAction.pageUp ||
+    TextFieldAction.pageDown ||
+    TextFieldAction.selectPageUp ||
+    TextFieldAction.selectPageDown => multiline,
     _ => true,
   };
 
@@ -820,6 +927,11 @@ class TextField extends StatefulWidget implements Focusable {
       return;
     }
     if (key.isEmpty) return;
+
+    if (!controller.value.selection.isCollapsed) {
+      controller.insertText(key, multiline: multiline);
+      return;
+    }
 
     controller.saveStateToHistory(coalesce: true);
     if (key.trim().isEmpty) {
@@ -849,6 +961,13 @@ class TextField extends StatefulWidget implements Focusable {
 
   /// Handles key events to update the text area value and cursor position.
   bool handleKeyEvent(KeyEvent event) {
+    if (event.type == KeyType.escape &&
+        event.modifiers.isEmpty &&
+        !controller.value.selection.isCollapsed) {
+      _collapseSelectionAtCursor();
+      return true;
+    }
+
     if (event.type == KeyType.tab) {
       final spaces = tabSize;
       if (spaces == null || event.modifiers.isNotEmpty) return false;
@@ -880,6 +999,18 @@ class TextField extends StatefulWidget implements Focusable {
     return true;
   }
 
+  void _collapseSelectionAtCursor() {
+    final sel = controller.value.selection;
+    controller.value = TextEditingValue(
+      text: controller.value.text,
+      selection: TextSelection.collapsed(
+        offset: sel.extentOffset,
+        line: sel.cursorLine,
+        column: sel.cursorColumn,
+      ),
+    );
+  }
+
   void _executeAction(TextFieldAction action) {
     if (action == TextFieldAction.undo) {
       controller.undo();
@@ -889,8 +1020,62 @@ class TextField extends StatefulWidget implements Focusable {
       controller.redo();
       return;
     }
+    if (action == TextFieldAction.selectAll) {
+      _selectAll();
+      return;
+    }
 
+    final sel = controller.value.selection;
     final lines = List<String>.from(controller.value.lines);
+    if (_selectionMoveTarget(action) case final moveAction?) {
+      final pos = _executeNavigationAction(
+        moveAction,
+        lines,
+        cursorLine,
+        cursorColumn,
+      );
+      final nextOffset = _getOffsetFromLineColumn(
+        controller.value.text,
+        pos.line,
+        pos.col,
+      );
+      controller.value = TextEditingValue(
+        text: controller.value.text,
+        selection: TextSelection(
+          baseOffset: sel.baseOffset,
+          extentOffset: nextOffset,
+          cursorLine: pos.line,
+          cursorColumn: pos.col,
+        ),
+      );
+      return;
+    }
+
+    if (!sel.isCollapsed && _collapsesSelectionDirectly(action)) {
+      final targetOffset = action == TextFieldAction.moveLeft
+          ? sel.start
+          : sel.end;
+      final pos = TextEditingController._lineColumnFromOffset(
+        controller.value.text,
+        targetOffset,
+      );
+      controller.breakUndoBurst();
+      controller.value = TextEditingValue(
+        text: controller.value.text,
+        selection: TextSelection.collapsed(
+          offset: targetOffset,
+          line: pos.line,
+          column: pos.col,
+        ),
+      );
+      return;
+    }
+
+    if (!sel.isCollapsed && _deletesSelectionBlock(action)) {
+      controller.deleteSelection();
+      return;
+    }
+
     final pos = _isNavigationAction(action)
         ? _executeNavigationAction(action, lines, cursorLine, cursorColumn)
         : _executeDeletionAction(action, lines, cursorLine, cursorColumn);
@@ -907,6 +1092,46 @@ class TextField extends StatefulWidget implements Focusable {
       ),
     );
   }
+
+  void _selectAll() {
+    controller.breakUndoBurst();
+    final text = controller.value.text;
+    final lines = controller.value.lines;
+    final total = text.characters.length;
+    controller.value = TextEditingValue(
+      text: text,
+      selection: TextSelection(
+        baseOffset: 0,
+        extentOffset: total,
+        cursorLine: lines.length - 1,
+        cursorColumn: lines.last.characters.length,
+      ),
+    );
+  }
+
+  static bool _collapsesSelectionDirectly(TextFieldAction action) =>
+      action == TextFieldAction.moveLeft || action == TextFieldAction.moveRight;
+
+  static bool _deletesSelectionBlock(TextFieldAction action) =>
+      action == TextFieldAction.deleteLeft ||
+      action == TextFieldAction.deleteRight ||
+      action == TextFieldAction.deleteWordLeft ||
+      action == TextFieldAction.deleteWordRight;
+
+  static TextFieldAction? _selectionMoveTarget(TextFieldAction action) =>
+      switch (action) {
+        TextFieldAction.selectLeft => TextFieldAction.moveLeft,
+        TextFieldAction.selectRight => TextFieldAction.moveRight,
+        TextFieldAction.selectUp => TextFieldAction.moveUp,
+        TextFieldAction.selectDown => TextFieldAction.moveDown,
+        TextFieldAction.selectPageUp => TextFieldAction.pageUp,
+        TextFieldAction.selectPageDown => TextFieldAction.pageDown,
+        TextFieldAction.selectWordLeft => TextFieldAction.moveWordLeft,
+        TextFieldAction.selectWordRight => TextFieldAction.moveWordRight,
+        TextFieldAction.selectToLineStart => TextFieldAction.moveToLineStart,
+        TextFieldAction.selectToLineEnd => TextFieldAction.moveToLineEnd,
+        _ => null,
+      };
 
   static bool _isNavigationAction(TextFieldAction action) => switch (action) {
     TextFieldAction.moveLeft ||
@@ -1456,6 +1681,8 @@ class _TextFieldRenderWidgetElement extends Element
     Style mergedCursorStyle,
   ) {
     final cursorLine = textField.cursorLine;
+    final lines = textField.controller.value.lines;
+    var lineStartOffset = _lineStartOffset(lines, textField.scrollOffset);
     for (var y = 0; y < height; y++) {
       final lineIdx = textField.scrollOffset + y;
       if (lineIdx >= lineCount) break;
@@ -1469,8 +1696,10 @@ class _TextFieldRenderWidgetElement extends Element
         styledLine,
         textField,
         mergedCursorStyle,
+        lineStartOffset: lineStartOffset,
         isCursorLine: textField.focused && lineIdx == cursorLine,
       );
+      lineStartOffset += lines[lineIdx].characters.length + 1;
     }
   }
 
@@ -1484,6 +1713,7 @@ class _TextFieldRenderWidgetElement extends Element
     Style mergedCursorStyle,
   ) {
     final cursorLine = textField.cursorLine;
+    var lineStartOffset = _lineStartOffset(lines, textField.scrollOffset);
     for (var y = 0; y < height; y++) {
       final lineIdx = textField.scrollOffset + y;
       if (lineIdx >= lines.length) break;
@@ -1494,9 +1724,20 @@ class _TextFieldRenderWidgetElement extends Element
         lines[lineIdx],
         textField,
         mergedCursorStyle,
+        lineStartOffset: lineStartOffset,
         isCursorLine: textField.focused && lineIdx == cursorLine,
       );
+      lineStartOffset += lines[lineIdx].characters.length + 1;
     }
+  }
+
+  static int _lineStartOffset(List<String> lines, int startLine) {
+    var offset = 0;
+    final limit = min(startLine, lines.length);
+    for (var i = 0; i < limit; i++) {
+      offset += lines[i].characters.length + 1;
+    }
+    return offset;
   }
 
   void _paintPlaceholder(Buffer buffer, Offset offset, TextField textField) {
@@ -1546,11 +1787,13 @@ class _TextFieldRenderWidgetElement extends Element
         localY >= size.height) {
       return false;
     }
-    if (event.type != .press) return false;
+    final isPress = event.type == .press;
+    final isDrag = event.type == .drag;
+    if (!isPress && !isDrag) return false;
 
     final renderWidget = widget as _TextFieldRenderWidget;
     final textField = renderWidget.textFieldWidget;
-    if (event.button == .wheelUp || event.button == .wheelDown) {
+    if (isPress && (event.button == .wheelUp || event.button == .wheelDown)) {
       return _handleMouseWheel(textField, event.button);
     }
     if (event.button != .left) return false;
@@ -1573,10 +1816,15 @@ class _TextFieldRenderWidgetElement extends Element
       targetLine,
       targetCol,
     );
+    final extendSelection =
+        isDrag || event.modifiers.contains(ev.Modifier.shift);
+    final baseOffset = extendSelection
+        ? textField.controller.value.selection.baseOffset
+        : nextOffset;
     textField.controller.value = TextEditingValue(
       text: text,
       selection: TextSelection(
-        baseOffset: nextOffset,
+        baseOffset: baseOffset,
         extentOffset: nextOffset,
         cursorLine: targetLine,
         cursorColumn: targetCol,
@@ -1622,6 +1870,7 @@ class _TextFieldRenderWidgetElement extends Element
     String line,
     TextField textField,
     Style mergedCursorStyle, {
+    required int lineStartOffset,
     required bool isCursorLine,
   }) {
     final result = _paintLineGraphemes(
@@ -1631,6 +1880,7 @@ class _TextFieldRenderWidgetElement extends Element
       line,
       textField,
       mergedCursorStyle,
+      lineStartOffset: lineStartOffset,
       isCursorLine: isCursorLine,
     );
     _paintTrailingAndEolCursor(
@@ -1640,6 +1890,7 @@ class _TextFieldRenderWidgetElement extends Element
       result,
       textField,
       mergedCursorStyle,
+      lineStartOffset: lineStartOffset,
       isCursorLine: isCursorLine,
     );
   }
@@ -1651,6 +1902,7 @@ class _TextFieldRenderWidgetElement extends Element
     List<StyledChar> styledLine,
     TextField textField,
     Style mergedCursorStyle, {
+    required int lineStartOffset,
     required bool isCursorLine,
   }) {
     final result = _paintStyledLineGraphemes(
@@ -1659,6 +1911,7 @@ class _TextFieldRenderWidgetElement extends Element
       width,
       styledLine,
       textField,
+      lineStartOffset: lineStartOffset,
       isCursorLine: isCursorLine,
     );
     _paintTrailingAndEolCursor(
@@ -1668,9 +1921,13 @@ class _TextFieldRenderWidgetElement extends Element
       result,
       textField,
       mergedCursorStyle,
+      lineStartOffset: lineStartOffset,
       isCursorLine: isCursorLine,
     );
   }
+
+  static bool _isOffsetSelected(TextSelection sel, int offset) =>
+      !sel.isCollapsed && offset >= sel.start && offset < sel.end;
 
   void _paintTrailingAndEolCursor(
     Buffer buffer,
@@ -1679,6 +1936,7 @@ class _TextFieldRenderWidgetElement extends Element
     ({int graphemeCount, int displayEnd, bool reachedLineEnd}) painted,
     TextField textField,
     Style mergedCursorStyle, {
+    required int lineStartOffset,
     required bool isCursorLine,
   }) {
     for (var x = painted.displayEnd; x < width; x++) {
@@ -1689,6 +1947,26 @@ class _TextFieldRenderWidgetElement extends Element
         fg: textField.style.foreground?.argb ?? 0,
         bg: textField.style.background?.argb ?? 0,
         modifiers: textField.style.modifiers,
+        underlineColor: 0,
+      );
+    }
+    final sel = textField.controller.value.selection;
+    final eolSelected = _isOffsetSelected(
+      sel,
+      lineStartOffset + painted.graphemeCount,
+    );
+    if (eolSelected &&
+        painted.reachedLineEnd &&
+        painted.displayEnd >= 0 &&
+        painted.displayEnd < width) {
+      final selStyle = textField.style.merge(textField.selectionStyle);
+      buffer.setAttributes(
+        rowOffset.dx + painted.displayEnd,
+        rowOffset.dy,
+        char: ' ',
+        fg: selStyle.foreground?.argb ?? 0,
+        bg: selStyle.background?.argb ?? 0,
+        modifiers: selStyle.modifiers,
         underlineColor: 0,
       );
     }
@@ -1716,9 +1994,12 @@ class _TextFieldRenderWidgetElement extends Element
     String line,
     TextField textField,
     Style mergedCursorStyle, {
+    required int lineStartOffset,
     required bool isCursorLine,
   }) {
     final hScroll = textField.horizontalScrollOffset;
+    final sel = textField.controller.value.selection;
+    final selectedStyle = textField.style.merge(textField.selectionStyle);
     var displayCol = 0;
     var displayEnd = 0;
     var graphemeIdx = 0;
@@ -1727,6 +2008,14 @@ class _TextFieldRenderWidgetElement extends Element
           ? textField.obscuringCharacter
           : rawChar;
       final step = textField.obscureText ? 1 : max(1, graphemeWidth(char));
+      final Style cellStyle;
+      if (isCursorLine && graphemeIdx == textField.cursorColumn) {
+        cellStyle = mergedCursorStyle;
+      } else if (_isOffsetSelected(sel, lineStartOffset + graphemeIdx)) {
+        cellStyle = selectedStyle;
+      } else {
+        cellStyle = textField.style;
+      }
       final placed = _placeVisibleCell(
         buffer,
         rowOffset,
@@ -1735,9 +2024,7 @@ class _TextFieldRenderWidgetElement extends Element
         displayCol,
         step,
         char,
-        (isCursorLine && graphemeIdx == textField.cursorColumn)
-            ? mergedCursorStyle
-            : textField.style,
+        cellStyle,
         textField.style,
       );
       if (placed == null) {
@@ -1765,17 +2052,24 @@ class _TextFieldRenderWidgetElement extends Element
     int width,
     List<StyledChar> styledLine,
     TextField textField, {
+    required int lineStartOffset,
     required bool isCursorLine,
   }) {
     final hScroll = textField.horizontalScrollOffset;
+    final sel = textField.controller.value.selection;
     var displayCol = 0;
     var displayEnd = 0;
     var graphemeIdx = 0;
     for (final sc in styledLine) {
       final step = max(1, graphemeWidth(sc.char));
-      final cellStyle = (isCursorLine && graphemeIdx == textField.cursorColumn)
-          ? sc.style.merge(textField.cursorStyle)
-          : sc.style;
+      final Style cellStyle;
+      if (isCursorLine && graphemeIdx == textField.cursorColumn) {
+        cellStyle = sc.style.merge(textField.cursorStyle);
+      } else if (_isOffsetSelected(sel, lineStartOffset + graphemeIdx)) {
+        cellStyle = sc.style.merge(textField.selectionStyle);
+      } else {
+        cellStyle = sc.style;
+      }
       final placed = _placeVisibleCell(
         buffer,
         rowOffset,
