@@ -169,6 +169,17 @@ final class KeyChord {
     return (chords: chords, invalid: invalid);
   }
 
+  /// Returns `true` when [chord] collides with a built-in `fterm` shortcut on
+  /// [platform] / [isWeb]. Used for non-blocking collision hints in Settings.
+  static bool collidesWithBuiltinShortcut(
+    KeyChord chord, {
+    required TargetPlatform platform,
+    required bool isWeb,
+  }) =>
+      _isUniversalBuiltin(chord) ||
+      _isFontZoomBuiltin(chord, platform) ||
+      (!isWeb && _isDesktopBuiltin(chord, platform));
+
   /// Returns `true` when [key] and [mods] match this chord exactly.
   bool matches(LogicalKeyboardKey key, Set<ev.Modifier> mods) =>
       this.key == key &&
@@ -238,6 +249,64 @@ final class KeyChord {
           m.contains(ev.Modifier.alt) ||
           m.contains(ev.Modifier.meta) ||
           _table.shiftSafe.contains(k));
+
+  static bool _hasExactMods(
+    Set<ev.Modifier> actual,
+    Set<ev.Modifier> expected,
+  ) => actual.length == expected.length && actual.containsAll(expected);
+
+  static bool _isTabDigit(LogicalKeyboardKey k) =>
+      k.keyId >= LogicalKeyboardKey.digit1.keyId &&
+      k.keyId <= LogicalKeyboardKey.digit9.keyId;
+
+  static bool _isUniversalBuiltin(KeyChord c) {
+    final m = c.modifiers;
+    return switch (c.key) {
+      .backslash => _hasExactMods(m, const {.control}),
+      .f12 => m.isEmpty || _hasExactMods(m, const {.shift}),
+      .keyC =>
+        _hasExactMods(m, const {.meta}) ||
+            _hasExactMods(m, const {.control, .shift}),
+      .keyV =>
+        _hasExactMods(m, const {.meta}) ||
+            _hasExactMods(m, const {.meta, .shift}) ||
+            _hasExactMods(m, const {.control, .shift}),
+      .insert =>
+        _hasExactMods(m, const {.control}) || _hasExactMods(m, const {.shift}),
+      _ => false,
+    };
+  }
+
+  static bool _isFontZoomBuiltin(KeyChord c, TargetPlatform platform) {
+    final ev.Modifier primary = platform == .macOS ? .meta : .control;
+    final k = c.key;
+    if (_hasExactMods(c.modifiers, {primary})) {
+      return k == .equal || k == .minus || k == .digit0;
+    }
+    return k == .equal && _hasExactMods(c.modifiers, {primary, .shift});
+  }
+
+  static bool _isDesktopBuiltin(KeyChord c, TargetPlatform platform) {
+    final k = c.key;
+    final m = c.modifiers;
+    if (_hasExactMods(m, const {.control, .shift}) &&
+        (k == .f5 || k == .f9 || k == .f10)) {
+      return true;
+    }
+    return switch (platform) {
+      .macOS when _hasExactMods(m, const {.meta, .shift}) => k == .keyD,
+      .macOS when _hasExactMods(m, const {.meta}) =>
+        _isTabDigit(k) || k == .keyT || k == .keyW || k == .keyD || k == .comma,
+      .linux || .windows when _hasExactMods(m, const {.control, .shift}) =>
+        _isTabDigit(k) ||
+            k == .keyT ||
+            k == .keyW ||
+            k == .keyD ||
+            k == .keyE ||
+            k == .comma,
+      _ => false,
+    };
+  }
 
   @override
   bool operator ==(Object other) =>
