@@ -4,10 +4,11 @@ import 'package:flutter/services.dart'
     show Clipboard, ClipboardData, HardwareKeyboard;
 import 'package:material_ui/material_ui.dart';
 
-import '../automation/automation_models.dart';
-import 'fterm_overlays.dart';
+import '../../automation/automation_models.dart';
+import '../fterm_overlays.dart';
+import 'settings_primitives.dart';
 
-/// Settings tab configuring the loopback-only HTTP automation driver.
+/// Settings section configuring the loopback-only HTTP automation driver.
 ///
 /// Renders controls backed by [AutomationDriverViewModel] without owning any
 /// server or persistence logic directly.
@@ -29,13 +30,17 @@ final class FtermAutomationSettingsTab extends StatefulWidget {
   /// [HardwareKeyboard.instance].
   final bool Function()? isShiftPressed;
 
-  /// Creates the Automation tab rendered inside the `fterm` Settings modal.
+  /// Panel visibility, collapse state, and search-filter configuration.
+  final SettingsPanelFilter filter;
+
+  /// Creates the Automation section rendered inside the `fterm` Settings modal.
   const FtermAutomationSettingsTab({
     super.key,
     required this.driver,
     required this.palette,
     this.onCopyText,
     this.isShiftPressed,
+    this.filter = const SettingsPanelFilter.showAll(),
   });
 
   @override
@@ -188,57 +193,186 @@ final class _FtermAutomationSettingsTabState
 
   @override
   Widget build(BuildContext context) {
+    final filter = widget.filter;
     final driver = widget.driver;
     final palette = widget.palette;
-    final lastError = driver.lastError?.trim();
-    return Column(
-      mainAxisSize: .min,
-      crossAxisAlignment: .stretch,
+    final showNetwork =
+        filter.showPanel('automation-network') &&
+        (filter.showItem('automation-port') ||
+            filter.showItem('automation-password'));
+
+    return SettingsSpacedColumn(
       children: [
-        _AutomationEnableSection(
-          isSupported: driver.isSupported,
-          isRunning: driver.isRunning,
-          isToggling: _isToggling,
-          port: driver.port,
-          palette: palette,
-          onChanged: _toggleEnabled,
-        ),
-        if (lastError != null && lastError.isNotEmpty) ...[
-          const SizedBox(height: 8),
-          _AutomationErrorBanner(message: lastError, palette: palette),
-        ],
-        const SizedBox(height: 12),
-        _AutomationPortSection(
-          controller: _portController,
-          enabled: driver.isSupported && !driver.isRunning,
-          isRunning: driver.isRunning,
-          errorText: _portError,
-          palette: palette,
-          onChanged: _handlePortInput,
-          onSubmitted: _handlePortInput,
-        ),
-        const SizedBox(height: 12),
-        _AutomationPasswordSection(
-          controller: _passwordController,
-          showPassword: _showPassword,
-          isSupported: driver.isSupported,
-          hasEphemeralTokenOverride: driver.hasEphemeralTokenOverride,
-          feedback: _feedback,
-          palette: palette,
-          onToggleVisibility: _togglePasswordVisibility,
-          onCopy: _copyPassword,
-          onRegenerate: _regeneratePassword,
-        ),
-        const SizedBox(height: 12),
-        _AutomationPtyScopeSection(
-          allowPty: driver.allowPty,
-          enabled: driver.isSupported,
-          palette: palette,
-          onChanged: driver.setAllowPty,
-        ),
+        if (filter.showPanel('automation-driver'))
+          _AutomationDriverPanel(
+            driver: driver,
+            isToggling: _isToggling,
+            palette: palette,
+            filter: filter,
+            onToggleEnabled: _toggleEnabled,
+          ),
+        if (showNetwork)
+          _AutomationNetworkPanel(
+            driver: driver,
+            portController: _portController,
+            passwordController: _passwordController,
+            portError: _portError,
+            showPassword: _showPassword,
+            feedback: _feedback,
+            palette: palette,
+            filter: filter,
+            onPortInput: _handlePortInput,
+            onTogglePasswordVisibility: _togglePasswordVisibility,
+            onCopyPassword: _copyPassword,
+            onRegeneratePassword: _regeneratePassword,
+          ),
+        if (filter.showPanel('automation-scope'))
+          _AutomationScopePanel(
+            driver: driver,
+            palette: palette,
+            filter: filter,
+          ),
       ],
     );
   }
+}
+
+final class _AutomationDriverPanel extends StatelessWidget {
+  final AutomationDriverViewModel driver;
+  final bool isToggling;
+  final FtermOverlayPalette palette;
+  final SettingsPanelFilter filter;
+  final ValueChanged<bool> onToggleEnabled;
+
+  const _AutomationDriverPanel({
+    required this.driver,
+    required this.isToggling,
+    required this.palette,
+    required this.filter,
+    required this.onToggleEnabled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final lastError = driver.lastError?.trim();
+    return BlenderSettingsPanel(
+      id: 'automation-driver',
+      title: 'HTTP Automation Driver',
+      categoryBreadcrumb: filter.categoryBreadcrumb,
+      expanded: filter.panelExpanded('automation-driver'),
+      onToggleExpanded: filter.toggleFor('automation-driver'),
+      palette: palette,
+      child: SettingsSpacedColumn(
+        spacing: 8,
+        children: [
+          _AutomationEnableSection(
+            isSupported: driver.isSupported,
+            isRunning: driver.isRunning,
+            isToggling: isToggling,
+            port: driver.port,
+            palette: palette,
+            onChanged: onToggleEnabled,
+          ),
+          if (lastError != null && lastError.isNotEmpty)
+            _AutomationErrorBanner(message: lastError, palette: palette),
+        ],
+      ),
+    );
+  }
+}
+
+final class _AutomationNetworkPanel extends StatelessWidget {
+  final AutomationDriverViewModel driver;
+  final TextEditingController portController;
+  final TextEditingController passwordController;
+  final String? portError;
+  final bool showPassword;
+  final _PasswordFeedback feedback;
+  final FtermOverlayPalette palette;
+  final SettingsPanelFilter filter;
+  final ValueChanged<String> onPortInput;
+  final VoidCallback onTogglePasswordVisibility;
+  final VoidCallback onCopyPassword;
+  final VoidCallback onRegeneratePassword;
+
+  const _AutomationNetworkPanel({
+    required this.driver,
+    required this.portController,
+    required this.passwordController,
+    required this.portError,
+    required this.showPassword,
+    required this.feedback,
+    required this.palette,
+    required this.filter,
+    required this.onPortInput,
+    required this.onTogglePasswordVisibility,
+    required this.onCopyPassword,
+    required this.onRegeneratePassword,
+  });
+
+  @override
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'automation-network',
+    title: 'Network & Authentication',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('automation-network'),
+    onToggleExpanded: filter.toggleFor('automation-network'),
+    palette: palette,
+    child: SettingsSpacedColumn(
+      children: [
+        if (filter.showItem('automation-port'))
+          _AutomationPortSection(
+            controller: portController,
+            enabled: driver.isSupported && !driver.isRunning,
+            isRunning: driver.isRunning,
+            errorText: portError,
+            palette: palette,
+            onChanged: onPortInput,
+            onSubmitted: onPortInput,
+          ),
+        if (filter.showItem('automation-password'))
+          _AutomationPasswordSection(
+            controller: passwordController,
+            showPassword: showPassword,
+            isSupported: driver.isSupported,
+            hasEphemeralTokenOverride: driver.hasEphemeralTokenOverride,
+            feedback: feedback,
+            palette: palette,
+            onToggleVisibility: onTogglePasswordVisibility,
+            onCopy: onCopyPassword,
+            onRegenerate: onRegeneratePassword,
+          ),
+      ],
+    ),
+  );
+}
+
+final class _AutomationScopePanel extends StatelessWidget {
+  final AutomationDriverViewModel driver;
+  final FtermOverlayPalette palette;
+  final SettingsPanelFilter filter;
+
+  const _AutomationScopePanel({
+    required this.driver,
+    required this.palette,
+    required this.filter,
+  });
+
+  @override
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'automation-scope',
+    title: 'Terminal Access Scope',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('automation-scope'),
+    onToggleExpanded: filter.toggleFor('automation-scope'),
+    palette: palette,
+    child: _AutomationPtyScopeSection(
+      allowPty: driver.allowPty,
+      enabled: driver.isSupported,
+      palette: palette,
+      onChanged: driver.setAllowPty,
+    ),
+  );
 }
 
 final class _AutomationEnableSection extends StatelessWidget {
@@ -271,17 +405,14 @@ final class _AutomationEnableSection extends StatelessWidget {
         palette.muted,
       ),
     };
-    return SwitchListTile.adaptive(
-      key: const ValueKey('automation-enable-switch'),
-      dense: true,
-      contentPadding: .zero,
-      title: const Text('Enable HTTP Automation Driver'),
-      subtitle: Text(
-        statusText,
-        key: const ValueKey('automation-status-label'),
-        style: TextStyle(color: statusColor, fontSize: 11),
-      ),
+    return BlenderCheckboxRow(
+      label: 'Enable HTTP Driver',
+      caption: statusText,
+      captionColor: statusColor,
+      captionKey: const ValueKey('automation-status-label'),
+      controlKey: const ValueKey('automation-enable-switch'),
       value: isRunning,
+      palette: palette,
       onChanged: isSupported && !isToggling ? onChanged : null,
     );
   }
@@ -338,59 +469,50 @@ final class _AutomationPortSection extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: .min,
-    crossAxisAlignment: .stretch,
-    children: [
-      Text(
-        'Loopback Port',
-        style: TextStyle(color: palette.muted, fontSize: 11),
-      ),
-      const SizedBox(height: 6),
-      Row(
-        children: [
-          Text(
-            '127.0.0.1 :',
-            style: TextStyle(color: palette.foreground, fontSize: 12),
+  Widget build(BuildContext context) => BlenderPropertyRow(
+    label: 'Loopback Port',
+    palette: palette,
+    hint: errorText == null
+        ? null
+        : Text(
+            errorText!,
+            key: const ValueKey('automation-port-error'),
+            style: TextStyle(color: palette.danger, fontSize: 11),
           ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 120,
-            child: TextField(
-              key: const ValueKey('automation-port-field'),
-              controller: controller,
-              enabled: enabled,
-              keyboardType: .number,
-              decoration: InputDecoration(
-                isDense: true,
-                border: const OutlineInputBorder(),
-                hintText: '${AutomationDriverConfig.defaultPort}',
-                hintStyle: TextStyle(color: palette.muted, fontSize: 11),
-              ),
-              onChanged: onChanged,
-              onSubmitted: onSubmitted,
-            ),
-          ),
-          if (isRunning) ...[
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Stop driver to edit port',
-                style: TextStyle(color: palette.muted, fontSize: 11),
-              ),
-            ),
-          ],
-        ],
-      ),
-      if (errorText case final error?) ...[
-        const SizedBox(height: 4),
+    control: Row(
+      children: [
         Text(
-          error,
-          key: const ValueKey('automation-port-error'),
-          style: TextStyle(color: palette.danger, fontSize: 11),
+          '127.0.0.1 :',
+          style: TextStyle(color: palette.foreground, fontSize: 11.5),
         ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 110,
+          child: TextField(
+            key: const ValueKey('automation-port-field'),
+            controller: controller,
+            enabled: enabled,
+            keyboardType: .number,
+            style: TextStyle(color: palette.foreground, fontSize: 11.5),
+            decoration: blenderInputDecoration(
+              palette: palette,
+              hintText: '${AutomationDriverConfig.defaultPort}',
+            ),
+            onChanged: onChanged,
+            onSubmitted: onSubmitted,
+          ),
+        ),
+        if (isRunning) ...[
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Stop driver to edit port',
+              style: TextStyle(color: palette.muted, fontSize: 10.5),
+            ),
+          ),
+        ],
       ],
-    ],
+    ),
   );
 }
 
@@ -424,6 +546,27 @@ final class _AutomationPasswordSection extends StatelessWidget {
     .regenerated => 'Password regenerated.',
   };
 
+  Widget _buildHint() {
+    if (_feedbackText case final message?) {
+      return Text(
+        message,
+        key: const ValueKey('automation-password-feedback'),
+        style: TextStyle(color: palette.accent, fontSize: 10.5),
+      );
+    }
+    if (hasEphemeralTokenOverride) {
+      return Text(
+        'Using ephemeral token from FTERM_AUTOMATION_TOKEN.',
+        key: const ValueKey('automation-ephemeral-token-hint'),
+        style: TextStyle(color: palette.warning, fontSize: 10.5),
+      );
+    }
+    return Text(
+      'Shift+click Copy to copy base URL and Authorization header.',
+      style: TextStyle(color: palette.muted, fontSize: 10),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final copyConfirmed =
@@ -432,84 +575,55 @@ final class _AutomationPasswordSection extends StatelessWidget {
     final regenTooltip = hasEphemeralTokenOverride
         ? 'Disabled while FTERM_AUTOMATION_TOKEN environment override is active'
         : 'Regenerate password';
-    return Column(
-      mainAxisSize: .min,
-      crossAxisAlignment: .stretch,
-      children: [
-        Text(
-          'Bearer Password',
-          style: TextStyle(color: palette.muted, fontSize: 11),
-        ),
-        const SizedBox(height: 6),
-        Row(
-          children: [
-            Expanded(
-              child: TextField(
-                key: const ValueKey('automation-password-field'),
-                controller: controller,
-                readOnly: true,
-                obscureText: !showPassword,
-                decoration: const InputDecoration(
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-              ),
+    return BlenderPropertyRow(
+      label: 'Bearer Password',
+      palette: palette,
+      hint: _buildHint(),
+      control: Row(
+        children: [
+          Expanded(
+            child: TextField(
+              key: const ValueKey('automation-password-field'),
+              controller: controller,
+              readOnly: true,
+              obscureText: !showPassword,
+              style: TextStyle(color: palette.foreground, fontSize: 11.5),
+              decoration: blenderInputDecoration(palette: palette),
             ),
-            const SizedBox(width: 4),
-            IconButton(
-              key: const ValueKey('automation-password-visibility-btn'),
-              visualDensity: .compact,
-              tooltip: showPassword ? 'Hide password' : 'Show password',
-              icon: Icon(
-                showPassword
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
-                size: 16,
-              ),
-              onPressed: onToggleVisibility,
-            ),
-            IconButton(
-              key: const ValueKey('automation-password-copy-btn'),
-              visualDensity: .compact,
-              tooltip: 'Copy password (Shift+click to copy URL & Authorization header)',
-              icon: Icon(
-                copyConfirmed ? Icons.check : Icons.content_copy_outlined,
-                size: 16,
-                color: copyConfirmed ? palette.accent : null,
-              ),
-              onPressed: onCopy,
-            ),
-            IconButton(
-              key: const ValueKey('automation-password-regen-btn'),
-              visualDensity: .compact,
-              tooltip: regenTooltip,
-              icon: const Icon(Icons.refresh, size: 16),
-              onPressed: regenEnabled ? onRegenerate : null,
-            ),
-          ],
-        ),
-        if (_feedbackText case final message?) ...[
-          const SizedBox(height: 4),
-          Text(
-            message,
-            key: const ValueKey('automation-password-feedback'),
-            style: TextStyle(color: palette.accent, fontSize: 11),
           ),
-        ] else if (hasEphemeralTokenOverride) ...[
-          const SizedBox(height: 4),
-          Text(
-            'Using ephemeral token from FTERM_AUTOMATION_TOKEN.',
-            key: const ValueKey('automation-ephemeral-token-hint'),
-            style: TextStyle(color: palette.warning, fontSize: 11),
+          const SizedBox(width: 4),
+          IconButton(
+            key: const ValueKey('automation-password-visibility-btn'),
+            visualDensity: .compact,
+            tooltip: showPassword ? 'Hide password' : 'Show password',
+            icon: Icon(
+              showPassword
+                  ? Icons.visibility_off_outlined
+                  : Icons.visibility_outlined,
+              size: 16,
+            ),
+            onPressed: onToggleVisibility,
           ),
-        ] else ...[
-          const SizedBox(height: 4),
-          Text(
-            'Shift+click Copy to copy base URL and Authorization header.',
-            style: TextStyle(color: palette.muted, fontSize: 10),
+          IconButton(
+            key: const ValueKey('automation-password-copy-btn'),
+            visualDensity: .compact,
+            tooltip: 'Copy password (Shift+click to copy URL & Authorization header)',
+            icon: Icon(
+              copyConfirmed ? Icons.check : Icons.content_copy_outlined,
+              size: 16,
+              color: copyConfirmed ? palette.accent : null,
+            ),
+            onPressed: onCopy,
+          ),
+          IconButton(
+            key: const ValueKey('automation-password-regen-btn'),
+            visualDensity: .compact,
+            tooltip: regenTooltip,
+            icon: const Icon(Icons.refresh, size: 16),
+            onPressed: regenEnabled ? onRegenerate : null,
           ),
         ],
-      ],
+      ),
     );
   }
 }
@@ -528,20 +642,17 @@ final class _AutomationPtyScopeSection extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: .min,
-    crossAxisAlignment: .stretch,
+  Widget build(BuildContext context) => SettingsSpacedColumn(
+    spacing: 8,
     children: [
-      CheckboxListTile(
-        key: const ValueKey('automation-allow-pty-checkbox'),
-        dense: true,
-        contentPadding: .zero,
-        controlAffinity: .leading,
-        title: const Text('Allow PTY input, shell spawning & screen readback'),
+      BlenderCheckboxRow(
+        label: 'Allow PTY Access',
+        caption: 'Allow PTY input, shell spawning & screen readback',
+        controlKey: const ValueKey('automation-allow-pty-checkbox'),
         value: allowPty,
-        onChanged: enabled ? (value) => onChanged(value ?? false) : null,
+        palette: palette,
+        onChanged: enabled ? onChanged : null,
       ),
-      const SizedBox(height: 4),
       Container(
         key: const ValueKey('automation-pty-warning'),
         padding: const .symmetric(horizontal: 10, vertical: 8),

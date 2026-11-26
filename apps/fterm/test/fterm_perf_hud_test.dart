@@ -464,8 +464,8 @@ void main() {
         await tester.pump();
         expect(find.byKey(const ValueKey('fterm-perf-hud')), findsNothing);
 
-        // Open Settings and toggle Performance HUD switch on.
-        env.workspace.setOverlay(FtermOverlay.settings);
+        // Open Settings -> System and toggle Performance HUD switch on.
+        env.workspace.openSettingsOverlay(initialSection: .system);
         await tester.pump();
 
         final switchFinder = find.byKey(
@@ -794,7 +794,7 @@ void main() {
             ),
           ),
         );
-        env.workspace.setOverlay(FtermOverlay.settings);
+        env.workspace.openSettingsOverlay(initialSection: .system);
         await tester.pump();
 
         expect(
@@ -828,7 +828,9 @@ void main() {
         await tester.pump();
         expect(env.workspace.maxShaderFps, equals(60));
 
-        // Explicit 120 FPS chip updates maxShaderFps and propagates to mounted TerminalSurface.
+        // Explicit 120 FPS control on Shaders tab updates maxShaderFps and propagates to mounted TerminalSurface.
+        await tester.tap(find.byKey(const ValueKey('settings-tab-shaders')));
+        await tester.pump();
         final fps120Chip = find.byKey(
           const ValueKey('settings-max-shader-fps-120'),
         );
@@ -995,7 +997,7 @@ void main() {
             ),
           ),
         );
-        env.workspace.setOverlay(FtermOverlay.settings);
+        env.workspace.openSettingsOverlay(initialSection: .system);
         await tester.pump();
 
         final highPerfChip = find.byKey(
@@ -1092,7 +1094,7 @@ void main() {
             ),
           ),
         );
-        idleEnv.workspace.setOverlay(FtermOverlay.settings);
+        idleEnv.workspace.openSettingsOverlay(initialSection: .system);
         await tester.pump();
 
         final chip = find.byKey(

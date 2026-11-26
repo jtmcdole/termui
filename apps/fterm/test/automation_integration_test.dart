@@ -831,9 +831,9 @@ void main() {
           findsOneWidget,
         );
 
-        // Switch to General while Settings stays open, then request Automation ->
+        // Switch to Interface while Settings stays open, then request Automation ->
         // switches immediately even though Settings was already mounted.
-        await tester.tap(find.byKey(const ValueKey('settings-tab-general')));
+        await tester.tap(find.byKey(const ValueKey('settings-tab-interface')));
         await _settleApp(tester);
         expect(
           find.byKey(const ValueKey('automation-enable-switch')),
@@ -982,7 +982,7 @@ void main() {
         ws.openSettingsOverlay(initialSection: .automation);
         await _settleApp(tester);
         expect(
-          find.byKey(const ValueKey('settings-tab-general')),
+          find.byKey(const ValueKey('settings-tab-interface')),
           findsOneWidget,
         );
         expect(

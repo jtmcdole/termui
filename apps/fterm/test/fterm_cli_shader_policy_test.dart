@@ -1010,8 +1010,14 @@ void main() {
           contains(PaneCliShaderState.computeSha256(_validCustomGlslB)),
         );
 
-        // Open Settings overlay -> CLI policy section and trusted hash reset appear.
-        ws.setOverlay(FtermOverlay.settings);
+        // Open Settings -> Shaders and expand the CLI Shaders panel.
+        ws.openSettingsOverlay(initialSection: .shaders);
+        await tester.pump();
+        final cliPanelHeader = find.byKey(
+          const ValueKey('settings-panel-header-shaders-cli'),
+        );
+        await tester.ensureVisible(cliPanelHeader);
+        await tester.tap(cliPanelHeader);
         await tester.pump();
 
         expect(

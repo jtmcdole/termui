@@ -98,16 +98,31 @@ enum FtermOverlay {
   whatsNew,
 }
 
-/// Top-level tab selected inside [FtermOverlay.settings].
+/// Sidebar section selected inside [FtermOverlay.settings].
 enum FtermSettingsSection {
-  /// Appearance, shell defaults, shaders, audio, and desktop update controls.
-  general,
+  /// Tab bar placement, auto-hide, clipboard, and selection behavior.
+  interface,
 
-  /// Keyboard shortcut reference and terminal passthrough configuration.
+  /// Appearance mode, color theme presets, typography, and background.
+  themes,
+
+  /// GPU fragment shader chains, parameters, frame pacing, and CLI shaders.
+  shaders,
+
+  /// Meta/Cmd key policy, ignored passthrough chords, and host keys.
   keyboard,
+
+  /// Desktop-only default shell executable, arguments, and login flag.
+  shell,
+
+  /// Graphics adapter, performance HUD, and terminal sound controls.
+  system,
 
   /// Desktop-only loopback HTTP automation driver controls.
   automation,
+
+  /// Desktop-only release check and self-update controls.
+  updates,
 }
 
 typedef _WhatsNewPreviewSnapshot = ({
@@ -297,6 +312,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   late final AutomationRouter _automationRouter;
   AutomationPointerDispatcher? _automationPointerDispatcher;
   FtermSettingsSection? _requestedSettingsSection;
+  FtermSettingsSection _lastSettingsSection = FtermSettingsSection.interface;
 
   /// Cross-platform performance trace recorder bound to this workspace.
   late final FtermTraceRecorder traceRecorder;
@@ -324,6 +340,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
   final Map<String, ShadertoyGlslAnalysis> _customShaderAnalyses =
       <String, ShadertoyGlslAnalysis>{};
   String? _lastShaderAssetError;
+  String? _lastWallpaperError;
   String? _lastLoggedShareError;
   bool _lastUpdateWasError = false;
 
@@ -1231,6 +1248,9 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   /// Most recent wallpaper or shader file I/O validation error, if any.
   String? get lastShaderAssetError => _lastShaderAssetError;
+
+  /// Latest wallpaper image load or upload error, or `null` when healthy.
+  String? get lastWallpaperError => _lastWallpaperError;
 
   /// Sorted custom `.glsl` / `.frag` paths discovered in [shaderProfileStore].
   List<String> get availableCustomShaders => _availableCustomShaders;
@@ -2557,13 +2577,24 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   /// Opens or dismisses a workspace modal overlay.
   void setOverlay(FtermOverlay overlay) => _setOverlay(overlay);
 
+  /// Last sidebar section selected in [FtermOverlay.settings] during this
+  /// session (defaults to [FtermSettingsSection.interface]).
+  FtermSettingsSection get lastSettingsSection => _lastSettingsSection;
+
+  /// Records [section] as the last visited Settings sidebar section for this
+  /// session so reopening Settings restores the user's place.
+  void rememberSettingsSection(FtermSettingsSection section) {
+    _lastSettingsSection = section;
+  }
+
   /// Opens [FtermOverlay.settings] focused on [initialSection], or switches
   /// directly to [initialSection] when Settings is already visible.
   void openSettingsOverlay({
-    FtermSettingsSection initialSection = FtermSettingsSection.general,
+    FtermSettingsSection initialSection = FtermSettingsSection.interface,
   }) {
     if (_disposed) return;
     _requestedSettingsSection = initialSection;
+    _lastSettingsSection = initialSection;
     if (_activeOverlay != FtermOverlay.settings) {
       _setOverlay(FtermOverlay.settings);
       return;
@@ -3137,6 +3168,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     final trimmed = path?.trim();
     if (trimmed == null || trimmed.isEmpty) {
       _lastShaderAssetError = null;
+      _lastWallpaperError = null;
       _preferences = _preferences.copyWith(clearBackgroundImagePath: true);
       _shaderController.clearWallpaperImage();
       _rebuildActiveShaderConfig();
@@ -3144,6 +3176,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       _notifyChromeChanged();
       return;
     }
+    _lastWallpaperError = null;
     _preferences = _preferences.copyWith(backgroundImagePath: trimmed);
     _maybeAutoLowerBackgroundOpacity();
     _rebuildActiveShaderConfig();
@@ -3161,6 +3194,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       await _shaderController.setWallpaperBytes(bytes);
       if (_disposed) return;
       _lastShaderAssetError = null;
+      _lastWallpaperError = null;
       _preferences = _preferences.copyWith(backgroundImagePath: key.trim());
       _maybeAutoLowerBackgroundOpacity();
       _rebuildActiveShaderConfig();
@@ -3168,7 +3202,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       _notifyChromeChanged();
     } on Object catch (error) {
       if (_disposed) return;
-      _lastShaderAssetError = '$error';
+      final message = '$error';
+      _lastShaderAssetError = message;
+      _lastWallpaperError = message;
       _setStatusBanner('Wallpaper failed: $error');
     }
   }
@@ -3438,11 +3474,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       await _shaderController.setWallpaperBytes(bytes);
       if (_disposed) return;
       _lastShaderAssetError = null;
+      _lastWallpaperError = null;
       _rebuildActiveShaderConfig();
       _notifyChromeChanged();
     } on Object catch (error) {
       if (_disposed) return;
-      _lastShaderAssetError = '$error';
+      final message = '$error';
+      _lastShaderAssetError = message;
+      _lastWallpaperError = message;
       _setStatusBanner('Wallpaper failed: $error');
     }
   }
@@ -3685,6 +3724,34 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       defaultDockPosition: _workspaceSettings.dockPosition,
     );
     _preferences = loadStoredPreferences(_storage);
+    _applyCurrentSettingsToRuntime();
+    return true;
+  }
+
+  /// Resets all user-configurable workspace settings and preferences back to
+  /// factory defaults and persists them to storage.
+  ///
+  /// Preserves internal release-tracking metadata (such as
+  /// [FtermPreferences.lastSeenWhatsNewVersion]) so resetting preferences does
+  /// not re-trigger one-time release modals.
+  void resetSettingsToDefaults() {
+    if (_disposed) return;
+    _workspaceSettings = CastWorkspaceSettings.defaults;
+    _preferences = FtermPreferences.defaults.copyWith(
+      lastSeenWhatsNewVersion: _preferences.lastSeenWhatsNewVersion,
+      lastUpdateCheckUtc: _preferences.lastUpdateCheckUtc,
+      lastReleaseTagEtag: _preferences.lastReleaseTagEtag,
+      cachedReleaseTags: _preferences.cachedReleaseTags,
+    );
+    _settingsSaver.save(_workspaceSettings);
+    _settingsSaver.savePreferences(_preferences);
+    _settingsSaver.flush();
+    _applyCurrentSettingsToRuntime();
+  }
+
+  void _applyCurrentSettingsToRuntime() {
+    _lastShaderAssetError = null;
+    _lastWallpaperError = null;
     audioController
       ..setMuted(_preferences.audioMuted)
       ..setVolume(_preferences.audioVolume);
@@ -3692,6 +3759,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _shaderParamsByPass = _decodeShaderParamsMap(
       _preferences.customShaderProfileJson,
     );
+    if (_preferences.backgroundImagePath case final path?) {
+      unawaited(_loadPersistedWallpaper(path));
+    } else {
+      _shaderController.clearWallpaperImage();
+    }
     _rebuildActiveShaderConfig();
     unawaited(
       _shaderController.setBackendOverride(
@@ -3704,7 +3776,6 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _syncPaneCliShaderPolicies();
     updateViewModel.onPreferencesChanged();
     _notifyChromeChanged();
-    return true;
   }
 
   /// Synchronizes system dark/light brightness changes onto theme & local shells.

@@ -5,9 +5,9 @@ import 'package:fterm/src/font_loader.dart';
 import 'package:fterm/src/input/key_chord.dart';
 import 'package:fterm/src/launch_config.dart';
 import 'package:fterm/src/settings_storage.dart';
-import 'package:fterm/src/ui/fterm_keyboard_settings_tab.dart';
 import 'package:fterm/src/ui/fterm_overlays.dart';
 import 'package:fterm/src/ui/fterm_shell_scaffold.dart';
+import 'package:fterm/src/ui/settings/fterm_keyboard_settings_tab.dart';
 import 'package:fterm/src/workspace/fterm_workspace_controller.dart';
 import 'package:fterm/src/workspace/local_host_driver.dart';
 import 'package:material_ui/material_ui.dart';
@@ -57,8 +57,12 @@ FtermWorkspaceController _newWorkspace() {
 }
 
 Finder _k(String key) => find.byKey(ValueKey(key));
-bool _chipSelected(WidgetTester t, String key) =>
-    t.widget<ChoiceChip>(_k(key)).selected;
+bool _navSelected(WidgetTester t, String key) {
+  final semantics = t.widget<Semantics>(
+    find.ancestor(of: _k(key), matching: find.byType(Semantics)).first,
+  );
+  return semantics.properties.selected == true;
+}
 
 Future<void> _tap(WidgetTester t, String key) async {
   await t.ensureVisible(_k(key));
@@ -102,26 +106,26 @@ void main() {
   });
 
   group('Settings tabs and FtermKeyboardSettingsTab', () {
-    testWidgets('defaults to General, switches to Keyboard, keeps actions', (
+    testWidgets('defaults to Interface, switches to Keyboard, keeps actions', (
       tester,
     ) async {
       final ws = _newWorkspace();
       await _pumpSettings(tester, ws);
 
-      expect(_chipSelected(tester, 'settings-tab-general'), isTrue);
+      expect(_navSelected(tester, 'settings-tab-interface'), isTrue);
       expect(_k('settings-auto-hide-single'), findsOneWidget);
       expect(_k('settings-f12-toggle'), findsNothing);
       expect(_k('settings-open-about'), findsOneWidget);
 
       await _tap(tester, 'settings-tab-keyboard');
-      expect(_chipSelected(tester, 'settings-tab-keyboard'), isTrue);
+      expect(_navSelected(tester, 'settings-tab-keyboard'), isTrue);
       expect(_k('settings-auto-hide-single'), findsNothing);
       for (final id in const [
         'settings-meta-mode-auto',
         'settings-f12-toggle',
         'settings-open-about',
         'settings-open-connect',
-        'settings-reload-storage',
+        'settings-prefs-menu',
       ]) {
         expect(_k(id), findsOneWidget);
       }
@@ -271,7 +275,7 @@ void main() {
       (tester) async {
         final ws = _newWorkspace();
         await _pumpSettings(tester, ws, openKeyboard: true);
-        final prompt = find.text('Press a chord (Esc to cancel)...');
+        final prompt = find.text('Press a chord (Esc to cancel)…');
         final err = _k('settings-passthrough-error');
 
         Future<void> press(List<LogicalKeyboardKey> keys) async {
