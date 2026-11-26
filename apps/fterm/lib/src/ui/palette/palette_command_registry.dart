@@ -73,6 +73,14 @@ const List<(GpuDriverPreference pref, String label)> _gpuDriverOptions = [
   (.powerSaving, 'Power Saving'),
 ];
 
+const List<String> _shaderParamAxes = <String>['x', 'y', 'z'];
+
+const List<CliShaderPolicy> _remoteCliShaderPolicies = <CliShaderPolicy>[
+  .disabled,
+  .presetsAndTransforms,
+  .promptCustomGlsl,
+];
+
 /// Platform and capability context controlling palette command visibility,
 /// active badges, and shortcut hints.
 final class PaletteContext {
@@ -127,7 +135,9 @@ List<PaletteItem> buildPaletteCommands(PaletteContext context) =>
       ..._buildAppearanceCommands(context),
       ..._buildShaderPresetCommands(context),
       ..._buildCustomShaderCommands(context),
+      ..._buildShaderParamSliderCommands(context),
       ..._buildShaderControlCommands(context),
+      ..._buildCliShaderPolicyCommands(context),
       ..._buildSettingsToggleCommands(context),
       ..._buildSettingsEnumCommands(context),
       ..._buildSettingsSectionCommands(context),
@@ -434,8 +444,46 @@ void _applyThemePreset(
 List<PaletteItem> _buildAppearanceCommands(PaletteContext ctx) {
   final ws = ctx.workspace;
   final currentMode = ws.workspaceSettings.themeSettings.appearanceMode;
-  final fontLabel = _formatFontSize(ws.effectiveFontSize);
+  final fontSize = ws.effectiveFontSize;
+  final fontLabel = _formatFontSize(fontSize);
+  final wallpaperPath = ws.backgroundImagePath;
   return <PaletteItem>[
+    PaletteItem(
+      id: 'appearance.background_opacity',
+      category: 'Appearance',
+      title: 'Background Opacity',
+      keywords:
+          'background opacity transparency alpha translucent glass slider',
+      icon: Icons.opacity,
+      slider: PaletteSliderSpec(
+        value: ws.backgroundOpacity.clamp(0.0, 1.0),
+        min: 0.0,
+        max: 1.0,
+        step: 0.05,
+        formatValue: _formatPercent,
+        onChanged: ws.setBackgroundOpacity,
+      ),
+    ),
+    PaletteItem(
+      id: 'appearance.font_size',
+      category: 'Appearance',
+      title: 'Font Size',
+      keywords: 'font size text zoom pt points scale typography slider',
+      icon: Icons.format_size,
+      slider: PaletteSliderSpec(
+        value: fontSize.clamp(
+          FtermPreferences.minFontSize,
+          FtermPreferences.maxFontSize,
+        ),
+        min: FtermPreferences.minFontSize,
+        max: FtermPreferences.maxFontSize,
+        step: 1.0,
+        divisions: (FtermPreferences.maxFontSize - FtermPreferences.minFontSize)
+            .round(),
+        formatValue: _formatFontSize,
+        onChanged: ws.setFontSize,
+      ),
+    ),
     for (final mode in ThemeAppearanceMode.values)
       PaletteItem(
         id: 'appearance.mode.${mode.name}',
@@ -478,6 +526,25 @@ List<PaletteItem> _buildAppearanceCommands(PaletteContext ctx) {
       icon: Icons.format_size,
       onExecute: ws.resetFontSize,
     ),
+    PaletteItem(
+      id: 'appearance.wallpaper_set',
+      category: 'Appearance',
+      title: 'Set Wallpaper...',
+      subtitle: wallpaperPath ?? 'None',
+      keywords: 'wallpaper background image png jpeg webp picture set',
+      icon: Icons.wallpaper_outlined,
+      onExecute: () => ws.openSettingsOverlay(initialSection: .themes),
+    ),
+    if (wallpaperPath != null)
+      PaletteItem(
+        id: 'appearance.wallpaper_clear',
+        category: 'Appearance',
+        title: 'Clear Wallpaper',
+        subtitle: wallpaperPath,
+        keywords: 'wallpaper background image clear remove reset',
+        icon: Icons.hide_image_outlined,
+        onExecute: () => ws.setBackgroundImagePath(null),
+      ),
   ];
 }
 
@@ -633,6 +700,137 @@ PaletteItem _buildCustomShaderItem(
   );
 }
 
+List<PaletteItem> _buildShaderParamSliderCommands(PaletteContext ctx) {
+  final ws = ctx.workspace;
+  final activePassIds = _collectActiveShaderPassIds(ws);
+  if (activePassIds.isEmpty) return const <PaletteItem>[];
+  return <PaletteItem>[
+    for (final passId in activePassIds)
+      ..._buildSingleShaderPassParamSliders(ws, passId),
+  ];
+}
+
+List<String> _collectActiveShaderPassIds(FtermWorkspaceController ws) {
+  final seen = <String>{};
+  final result = <String>[];
+  void consider(String id) {
+    final trimmed = id.trim();
+    if (trimmed.isNotEmpty && seen.add(trimmed)) {
+      result.add(trimmed);
+    }
+  }
+
+  final config = ws.activeShaderConfig;
+  for (final pass in config.backgroundPasses) {
+    consider(pass.id);
+  }
+  for (final pass in config.foregroundPasses) {
+    consider(pass.id);
+  }
+  for (final entry in ws.backgroundShaderChain) {
+    consider(entry);
+  }
+  for (final entry in ws.foregroundShaderChain) {
+    consider(entry);
+  }
+  return result;
+}
+
+List<PaletteItem> _buildSingleShaderPassParamSliders(
+  FtermWorkspaceController ws,
+  String passId,
+) {
+  final values = ws.shaderParamsFor(passId);
+  final label = p.basename(passId);
+  return <PaletteItem>[
+    for (var i = 0; i < _shaderParamAxes.length; i++)
+      PaletteItem(
+        id: 'shader.param.$passId.${_shaderParamAxes[i]}',
+        category: 'Shader',
+        title: '$label uParams0.${_shaderParamAxes[i]}',
+        keywords:
+            'shader param uniform uparams intensity slider $passId $label '
+            '${_shaderParamAxes[i]}',
+        icon: Icons.tune,
+        slider: PaletteSliderSpec(
+          value: values[i].clamp(0.0, 2.0),
+          min: 0.0,
+          max: 2.0,
+          step: 0.05,
+          formatValue: _formatShaderParam,
+          onChanged: (v) => ws.setShaderParam(passId, i, v),
+        ),
+      ),
+  ];
+}
+
+List<PaletteItem> _buildCliShaderPolicyCommands(PaletteContext ctx) {
+  final ws = ctx.workspace;
+  final localPolicy = ws.localCliShaderPolicy;
+  final remotePolicy = ws.remoteCliShaderPolicy;
+  final stackingMode = ws.cliFullPaneShaderMode;
+  final trustedCount = ws.trustedCliShaderHashes.length;
+  return <PaletteItem>[
+    for (final policy in CliShaderPolicy.values)
+      PaletteItem(
+        id: 'shader.cli_local_policy.${policy.name}',
+        category: 'CLI Shader',
+        title: 'Local Policy: ${_cliPolicyLabel(policy)}',
+        activeBadge: localPolicy == policy ? 'Active' : null,
+        keywords:
+            'cli esc s local shader transform policy trust ${policy.wireName}',
+        icon: Icons.security_outlined,
+        onExecute: () => ws.setLocalCliShaderPolicy(policy),
+      ),
+    for (final policy in _remoteCliShaderPolicies)
+      PaletteItem(
+        id: 'shader.cli_remote_policy.${policy.name}',
+        category: 'CLI Shader',
+        title: 'Remote Policy: ${_cliPolicyLabel(policy)}',
+        activeBadge: remotePolicy == policy ? 'Active' : null,
+        keywords:
+            'cli esc s remote cast relay shader policy trust '
+            '${policy.wireName}',
+        icon: Icons.security_outlined,
+        onExecute: () => ws.setRemoteCliShaderPolicy(policy),
+      ),
+    for (final mode in CliFullPaneShaderMode.values)
+      PaletteItem(
+        id: 'shader.cli_stacking.${mode.name}',
+        category: 'CLI Shader',
+        title: 'Stacking: ${_cliStackingLabel(mode)}',
+        activeBadge: stackingMode == mode ? 'Active' : null,
+        keywords:
+            'cli full pane stacking conflict shader replace ${mode.wireName}',
+        icon: Icons.layers_outlined,
+        onExecute: () => ws.setCliFullPaneShaderMode(mode),
+      ),
+    PaletteItem(
+      id: 'shader.cli_dev_auto_trust',
+      category: 'CLI Shader',
+      title: 'Toggle Dev Auto-Trust GLSL',
+      activeBadge: _boolBadge(localPolicy == .allowLocalCustomGlsl),
+      keywords: 'cli dev auto trust local custom glsl shader',
+      icon: Icons.verified_user_outlined,
+      onExecute: () => ws.setLocalCliShaderPolicy(
+        ws.localCliShaderPolicy == .allowLocalCustomGlsl
+            ? .promptCustomGlsl
+            : .allowLocalCustomGlsl,
+      ),
+    ),
+    if (trustedCount > 0)
+      PaletteItem(
+        id: 'shader.cli_reset_trusted_hashes',
+        category: 'CLI Shader',
+        title: 'Reset Trusted GLSL Hashes',
+        activeBadge: '$trustedCount trusted',
+        keywords: 'cli sha256 trusted hashes reset clear glsl',
+        icon: Icons.delete_sweep_outlined,
+        onExecute: ws.clearTrustedCliShaderHashes,
+      ),
+  ];
+}
+
 List<PaletteItem> _buildShaderControlCommands(PaletteContext ctx) {
   final ws = ctx.workspace;
   final backendOverride = ws.shaderBackendOverride;
@@ -771,6 +969,22 @@ List<PaletteItem> _buildSettingsToggleCommands(PaletteContext ctx) {
       ),
     ),
     PaletteItem(
+      id: 'system.audio_volume',
+      category: 'System',
+      title: 'Output Volume',
+      keywords: 'sound audio output volume gain loudness slider',
+      icon: Icons.volume_up,
+      slider: PaletteSliderSpec(
+        value: prefs.audioVolume.clamp(0.0, 1.0),
+        min: 0.0,
+        max: 1.0,
+        step: 0.05,
+        formatValue: _formatPercent,
+        onChanged: (v) =>
+            ws.updatePreferences(ws.preferences.copyWith(audioVolume: v)),
+      ),
+    ),
+    PaletteItem(
       id: 'settings.toggle.perf_hud',
       category: 'Settings',
       title: 'Toggle Performance HUD',
@@ -814,7 +1028,7 @@ List<PaletteItem> _buildSettingsToggleCommands(PaletteContext ctx) {
           ws.preferences.copyWith(loginShell: !ws.preferences.loginShell),
         ),
       ),
-    if (!ctx.isWeb)
+    if (!ctx.isWeb) ...<PaletteItem>[
       PaletteItem(
         id: 'settings.toggle.automation_driver',
         category: 'Automation',
@@ -825,6 +1039,47 @@ List<PaletteItem> _buildSettingsToggleCommands(PaletteContext ctx) {
         onExecute: () =>
             ws.automationDriver.setEnabled(!ws.automationDriver.isRunning),
       ),
+      PaletteItem(
+        id: 'settings.toggle.automation_pty_scope',
+        category: 'Automation',
+        title: 'Toggle Automation PTY Access',
+        activeBadge: _boolBadge(ws.automationDriver.allowPty),
+        keywords: 'automation pty input spawn readback mouse scope security',
+        icon: Icons.smart_toy_outlined,
+        onExecute: () =>
+            ws.automationDriver.setAllowPty(!ws.automationDriver.allowPty),
+      ),
+    ],
+    if (!ctx.isWeb && ctx.supportsUpdates) ...<PaletteItem>[
+      PaletteItem(
+        id: 'settings.toggle.updates_daily',
+        category: 'Updates',
+        title: 'Toggle Daily Update Checks',
+        activeBadge: _boolBadge(prefs.updateCheckMode == .daily),
+        keywords: 'update automatic daily background check schedule',
+        icon: Icons.system_update_alt,
+        onExecute: () => ws.updatePreferences(
+          ws.preferences.copyWith(
+            updateCheckMode: ws.preferences.updateCheckMode == .daily
+                ? .manual
+                : .daily,
+          ),
+        ),
+      ),
+      PaletteItem(
+        id: 'settings.toggle.updates_prereleases',
+        category: 'Updates',
+        title: 'Toggle Pre-Release Updates',
+        activeBadge: _boolBadge(prefs.includePrereleases),
+        keywords: 'update prerelease pre-release beta rc canary',
+        icon: Icons.system_update_alt,
+        onExecute: () => ws.updatePreferences(
+          ws.preferences.copyWith(
+            includePrereleases: !ws.preferences.includePrereleases,
+          ),
+        ),
+      ),
+    ],
   ];
 }
 
@@ -1197,6 +1452,25 @@ String _metaKeyLabel(FtermMetaKeyMode mode) => switch (mode) {
   .passThrough => 'Pass Through',
   .kitty => 'Kitty Only',
 };
+
+String _cliPolicyLabel(CliShaderPolicy policy) => switch (policy) {
+  .disabled => 'Disabled',
+  .presetsAndTransforms => 'Presets & Transforms',
+  .promptCustomGlsl => 'Prompt Custom GLSL',
+  .allowLocalCustomGlsl => 'Allow Local GLSL (Dev)',
+};
+
+String _cliStackingLabel(CliFullPaneShaderMode mode) => switch (mode) {
+  .cliBeforeUser => 'CLI Before User',
+  .cliReplacesUser => 'CLI Replaces User',
+  .askOnConflict => 'Ask on Conflict',
+};
+
+String _formatPercent(double value) =>
+    '${(value.clamp(0.0, 1.0) * 100).round()}%';
+
+String _formatShaderParam(double value) =>
+    value.clamp(0.0, 2.0).toStringAsFixed(2);
 
 String _formatFontSize(double size) => size == size.roundToDouble()
     ? '${size.toInt()} pt'

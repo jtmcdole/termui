@@ -47,6 +47,45 @@ ParsedPaletteInput parsePaletteInput(String rawInput) {
   };
 }
 
+/// Configuration for an inline interactive slider rendered inside a
+/// [PaletteItem] row (for example Background Opacity, Font Size, Output
+/// Volume, or active shader parameters).
+final class PaletteSliderSpec {
+  /// Current value of the setting, clamped to `[min, max]` when rendered.
+  final double value;
+
+  /// Inclusive minimum slider bound.
+  final double min;
+
+  /// Inclusive maximum slider bound.
+  final double max;
+
+  /// Increment applied per keyboard step (`Alt+ArrowLeft` / `Alt+ArrowRight`)
+  /// or inline `−` / `+` button tap.
+  final double step;
+
+  /// Optional discrete division count passed to Flutter's `Slider`.
+  final int? divisions;
+
+  /// Formats [value] for the right-aligned readout label (e.g. `85%`, `14 pt`).
+  final String Function(double value) formatValue;
+
+  /// Callback invoked immediately as the user drags or steps the slider.
+  final void Function(double value) onChanged;
+
+  /// Creates an immutable [PaletteSliderSpec].
+  const PaletteSliderSpec({
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.step,
+    this.divisions,
+    required this.formatValue,
+    required this.onChanged,
+  }) : assert(max > min, 'max must be greater than min'),
+       assert(step > 0, 'step must be positive');
+}
+
 /// Immutable row entry rendered inside the Command Palette results list.
 final class PaletteItem {
   /// Stable unique identifier used for selection tracking and session MRU.
@@ -85,6 +124,9 @@ final class PaletteItem {
   /// Optional live preview callback invoked when this item becomes highlighted.
   final VoidCallback? onPreview;
 
+  /// Optional inline slider specification rendered directly in this row.
+  final PaletteSliderSpec? slider;
+
   /// Creates an immutable [PaletteItem].
   const PaletteItem({
     required this.id,
@@ -99,6 +141,7 @@ final class PaletteItem {
     this.groupLabel,
     this.onExecute,
     this.onPreview,
+    this.slider,
   });
 
   /// Returns a copy with updated match indices or section grouping.
@@ -119,5 +162,6 @@ final class PaletteItem {
     groupLabel: clearGroupLabel ? null : (groupLabel ?? this.groupLabel),
     onExecute: onExecute,
     onPreview: onPreview,
+    slider: slider,
   );
 }

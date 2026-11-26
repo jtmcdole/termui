@@ -1366,5 +1366,76 @@ void main() {
         );
       },
     );
+
+    testWidgets(
+      'inline sliders adjust opacity, volume, and active shader params live without closing or overflowing',
+      (tester) async {
+        final env = await _mountShell(
+          tester,
+          platform: TargetPlatform.linux,
+          surfaceSize: const Size(360, 520),
+        );
+        final ws = env.workspace;
+        await ws.toggleForegroundShader('crt_lottes');
+
+        ws.openCommandPalette(initialInput: '> opacity');
+        await tester.pumpAndSettle();
+
+        // Opacity slider renders inline with live readout and stepper buttons.
+        final sliderFinder = find.byKey(
+          const ValueKey('palette-slider-appearance.background_opacity'),
+        );
+        final valueFinder = find.byKey(
+          const ValueKey('palette-slider-value-appearance.background_opacity'),
+        );
+        final decFinder = find.byKey(
+          const ValueKey('palette-slider-dec-appearance.background_opacity'),
+        );
+        expect(sliderFinder, findsOneWidget);
+        expect(tester.widget<Text>(valueFinder).data, equals('100%'));
+
+        // Clicking decrement steps opacity live without closing palette.
+        await tester.tap(decFinder);
+        await tester.pump();
+        expect(ws.activeOverlay, FtermOverlay.commandPalette);
+        expect(ws.backgroundOpacity, closeTo(0.95, 1e-6));
+        expect(tester.widget<Text>(valueFinder).data, equals('95%'));
+
+        // Alt+ArrowLeft also steps the selected slider via keyboard.
+        await tester.sendKeyDownEvent(LogicalKeyboardKey.altLeft);
+        await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+        await tester.sendKeyUpEvent(LogicalKeyboardKey.altLeft);
+        await tester.pump();
+        expect(ws.backgroundOpacity, closeTo(0.90, 1e-6));
+        expect(tester.widget<Text>(valueFinder).data, equals('90%'));
+
+        // Switching query to shader param renders uParams0.x slider and updates live.
+        await tester.enterText(
+          find.byKey(const ValueKey('palette-input')),
+          '> crt_lottes uParams0.x',
+        );
+        await tester.pump();
+        final paramIncFinder = find.byKey(
+          const ValueKey('palette-slider-inc-shader.param.crt_lottes.x'),
+        );
+        expect(paramIncFinder, findsOneWidget);
+        final beforeParam = ws.shaderParamsFor('crt_lottes')[0];
+        await tester.tap(paramIncFinder);
+        await tester.pump();
+        expect(
+          ws.shaderParamsFor('crt_lottes')[0],
+          closeTo(beforeParam + 0.05, 1e-5),
+        );
+        expect(ws.activeOverlay, FtermOverlay.commandPalette);
+
+        // Pressing Enter on the selected slider closes the palette cleanly.
+        await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+        await tester.pumpAndSettle();
+        expect(ws.activeOverlay, FtermOverlay.none);
+        expect(ws.recentCommandIds, contains('appearance.background_opacity'));
+        expect(ws.recentCommandIds, contains('shader.param.crt_lottes.x'));
+        expect(tester.takeException(), isNull);
+      },
+    );
   });
 }

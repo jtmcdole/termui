@@ -57,6 +57,7 @@ final class _FtermCommandPaletteOverlayState
   static const double _titleOnlyTileHeight = 30.0;
   static const double _titleWithBadgeTileHeight = 32.0;
   static const double _subtitleTileHeight = 46.0;
+  static const double _sliderTileHeight = 56.0;
 
   late final TextEditingController _inputController;
   late final FocusNode _inputFocusNode;
@@ -148,6 +149,9 @@ final class _FtermCommandPaletteOverlayState
       _moveSelection(-1);
       return .handled;
     }
+    if (_handleSelectedSliderKey(key)) {
+      return .handled;
+    }
     if (key == LogicalKeyboardKey.enter ||
         key == LogicalKeyboardKey.numpadEnter) {
       if (event is KeyDownEvent) {
@@ -156,6 +160,36 @@ final class _FtermCommandPaletteOverlayState
       return .handled;
     }
     return .ignored;
+  }
+
+  PaletteSliderSpec? get _selectedSlider {
+    if (_selectedIndex < 0 || _selectedIndex >= _items.length) return null;
+    return _items[_selectedIndex].slider;
+  }
+
+  bool _handleSelectedSliderKey(LogicalKeyboardKey key) {
+    final slider = _selectedSlider;
+    if (slider == null || !_isAltOnlyPressed()) return false;
+    final direction = switch (key) {
+      LogicalKeyboardKey.arrowLeft => -1.0,
+      LogicalKeyboardKey.arrowRight => 1.0,
+      _ => 0.0,
+    };
+    if (direction == 0.0) return false;
+    _handleSliderChanged(
+      _selectedIndex,
+      slider,
+      slider.value + direction * slider.step,
+    );
+    return true;
+  }
+
+  static bool _isAltOnlyPressed() {
+    final kb = HardwareKeyboard.instance;
+    return kb.isAltPressed &&
+        !kb.isControlPressed &&
+        !kb.isMetaPressed &&
+        !kb.isShiftPressed;
   }
 
   KeyEventResult _handleOuterKeyEvent(FocusNode _, KeyEvent event) {
@@ -200,6 +234,7 @@ final class _FtermCommandPaletteOverlayState
   }
 
   static double _estimateTileHeight(PaletteItem item) {
+    if (item.slider != null) return _sliderTileHeight;
     if (item.subtitle case final sub? when sub.isNotEmpty) {
       return _subtitleTileHeight;
     }
@@ -515,9 +550,58 @@ final class _FtermCommandPaletteOverlayState
     _executeItem(_items[_selectedIndex]);
   }
 
+  void _selectRow(int index) {
+    if (index < 0 || index >= _items.length || index == _selectedIndex) return;
+    setState(() {
+      _selectedIndex = index;
+    });
+    _applySelectedPreview();
+  }
+
+  void _handleSliderChanged(
+    int index,
+    PaletteSliderSpec slider,
+    double rawValue,
+  ) {
+    if (index < 0 || index >= _items.length) return;
+    final clamped = rawValue.clamp(slider.min, slider.max).toDouble();
+    final item = _items[index];
+    final isCommandRecordable =
+        _mode == .commands ||
+        (_mode == .quickSwitch && !item.id.startsWith('switch.'));
+    if (isCommandRecordable) {
+      widget.workspace.recordRecentCommand(item.id);
+    }
+    slider.onChanged(clamped);
+    if (!mounted) return;
+    setState(() {
+      _selectedIndex = index;
+      _refreshItemsInPlace();
+    });
+  }
+
+  void _refreshItemsInPlace() {
+    if (_mode != .commands && _mode != .quickSwitch) return;
+    final fresh = _mode == .commands
+        ? buildPaletteCommands(_createPaletteContext())
+        : buildQuickSwitchItems(_createPaletteContext());
+    final byId = <String, PaletteItem>{for (final item in fresh) item.id: item};
+    _items = List<PaletteItem>.unmodifiable(<PaletteItem>[
+      for (final current in _items)
+        if (byId[current.id] case final updated?)
+          updated.copyWith(
+            matchedTitleIndices: current.matchedTitleIndices,
+            groupLabel: current.groupLabel,
+            clearGroupLabel: current.groupLabel == null,
+          )
+        else
+          current,
+    ]);
+  }
+
   void _executeItem(PaletteItem item) {
     final action = item.onExecute;
-    if (action == null) return;
+    if (action == null && item.slider == null) return;
     final isCommandRecordable =
         _mode == .commands ||
         (_mode == .quickSwitch && !item.id.startsWith('switch.'));
@@ -529,9 +613,11 @@ final class _FtermCommandPaletteOverlayState
     } else {
       widget.workspace.rollbackCommandPalettePreview();
     }
-    final result = action();
-    if (result is Future<void>) {
-      unawaited(result);
+    if (action != null) {
+      final result = action();
+      if (result is Future<void>) {
+        unawaited(result);
+      }
     }
     if (widget.workspace.activeOverlay == FtermOverlay.commandPalette) {
       widget.workspace.dismissOverlay();
@@ -580,7 +666,10 @@ final class _FtermCommandPaletteOverlayState
               ),
             ),
           Divider(height: 1, thickness: 1, color: p.border),
-          _PaletteFooterBar(palette: p),
+          _PaletteFooterBar(
+            palette: p,
+            hasSelectedSlider: _selectedSlider != null,
+          ),
         ],
       ),
     );
@@ -593,7 +682,12 @@ final class _FtermCommandPaletteOverlayState
       item: item,
       palette: widget.palette,
       selected: index == _selectedIndex,
-      onTap: () => _executeItem(item),
+      onTap: item.slider != null
+          ? () => _selectRow(index)
+          : () => _executeItem(item),
+      onSliderChanged: item.slider == null
+          ? null
+          : (value) => _handleSliderChanged(index, item.slider!, value),
     );
     if (!showGroupHeader) return tile;
     return Column(
@@ -863,18 +957,21 @@ final class _PaletteResultTile extends StatelessWidget {
   final FtermOverlayPalette palette;
   final bool selected;
   final VoidCallback onTap;
+  final ValueChanged<double>? onSliderChanged;
 
   const _PaletteResultTile({
     required this.item,
     required this.palette,
     required this.selected,
     required this.onTap,
+    this.onSliderChanged,
   });
 
   @override
   Widget build(BuildContext context) {
     final p = palette;
     final bg = selected ? p.accent.withValues(alpha: 0.16) : Colors.transparent;
+    final slider = item.slider;
     return InkWell(
       key: ValueKey('palette-item-${item.id}'),
       canRequestFocus: false,
@@ -882,61 +979,204 @@ final class _PaletteResultTile extends StatelessWidget {
       child: Container(
         color: bg,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            if (item.icon case final icon?) ...<Widget>[
-              Icon(icon, size: 14, color: selected ? p.accent : p.muted),
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: <Widget>[
-                  _HighlightedTitleText(
-                    category: item.category,
-                    title: item.title,
-                    matchedIndices: item.matchedTitleIndices,
-                    palette: p,
+            Row(
+              children: <Widget>[
+                if (item.icon case final icon?) ...<Widget>[
+                  Icon(icon, size: 14, color: selected ? p.accent : p.muted),
+                  const SizedBox(width: 8),
+                ],
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      _HighlightedTitleText(
+                        category: item.category,
+                        title: item.title,
+                        matchedIndices: item.matchedTitleIndices,
+                        palette: p,
+                      ),
+                      if (slider == null &&
+                          item.subtitle != null &&
+                          item.subtitle!.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 1),
+                          child: Text(
+                            item.subtitle!,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: p.muted, fontSize: 10.5),
+                          ),
+                        ),
+                    ],
                   ),
-                  if (item.subtitle case final sub? when sub.isNotEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 1),
-                      child: Text(
-                        sub,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: p.muted, fontSize: 10.5),
+                ),
+                if (slider != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 8),
+                    child: Text(
+                      slider.formatValue(slider.value),
+                      key: ValueKey('palette-slider-value-${item.id}'),
+                      style: TextStyle(
+                        color: p.accent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: castPrimaryFontFamily,
                       ),
                     ),
-                ],
-              ),
+                  ),
+                if (item.activeBadge case final badge? when badge.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: _PaletteBadgePill(
+                      text: badge,
+                      foreground: p.accent,
+                      background: p.accent.withValues(alpha: 0.15),
+                      borderColor: p.accent.withValues(alpha: 0.45),
+                    ),
+                  ),
+                if (item.shortcutHint case final hint? when hint.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 6),
+                    child: _PaletteBadgePill(
+                      text: hint,
+                      foreground: p.muted,
+                      background: p.surfaceAlt,
+                      borderColor: p.border,
+                    ),
+                  ),
+              ],
             ),
-            if (item.activeBadge case final badge? when badge.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: _PaletteBadgePill(
-                  text: badge,
-                  foreground: p.accent,
-                  background: p.accent.withValues(alpha: 0.15),
-                  borderColor: p.accent.withValues(alpha: 0.45),
-                ),
-              ),
-            if (item.shortcutHint case final hint? when hint.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(left: 6),
-                child: _PaletteBadgePill(
-                  text: hint,
-                  foreground: p.muted,
-                  background: p.surfaceAlt,
-                  borderColor: p.border,
-                ),
+            if (slider != null && onSliderChanged != null)
+              _PaletteInlineSlider(
+                itemId: item.id,
+                slider: slider,
+                palette: p,
+                indent: item.icon != null ? 22.0 : 0.0,
+                onChanged: onSliderChanged!,
               ),
           ],
         ),
       ),
     );
   }
+}
+
+final class _PaletteInlineSlider extends StatelessWidget {
+  final String itemId;
+  final PaletteSliderSpec slider;
+  final FtermOverlayPalette palette;
+  final double indent;
+  final ValueChanged<double> onChanged;
+
+  const _PaletteInlineSlider({
+    required this.itemId,
+    required this.slider,
+    required this.palette,
+    required this.indent,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = palette;
+    final clamped = slider.value.clamp(slider.min, slider.max).toDouble();
+    return Padding(
+      padding: EdgeInsets.only(left: indent, top: 2),
+      child: SizedBox(
+        height: 22,
+        child: Row(
+          children: <Widget>[
+            _SliderStepButton(
+              key: ValueKey('palette-slider-dec-$itemId'),
+              label: '−',
+              palette: p,
+              onTap: clamped > slider.min
+                  ? () => onChanged(clamped - slider.step)
+                  : null,
+            ),
+            Expanded(
+              child: SliderTheme(
+                data: SliderTheme.of(context).copyWith(
+                  trackHeight: 3.5,
+                  thumbShape: const RoundSliderThumbShape(
+                    enabledThumbRadius: 5.5,
+                  ),
+                  overlayShape: const RoundSliderOverlayShape(
+                    overlayRadius: 10,
+                  ),
+                  activeTrackColor: p.accent,
+                  inactiveTrackColor: p.surfaceAlt,
+                  thumbColor: p.foreground,
+                ),
+                child: Slider(
+                  key: ValueKey('palette-slider-$itemId'),
+                  value: clamped,
+                  min: slider.min,
+                  max: slider.max,
+                  divisions: slider.divisions,
+                  onChanged: onChanged,
+                ),
+              ),
+            ),
+            _SliderStepButton(
+              key: ValueKey('palette-slider-inc-$itemId'),
+              label: '+',
+              palette: p,
+              onTap: clamped < slider.max
+                  ? () => onChanged(clamped + slider.step)
+                  : null,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+final class _SliderStepButton extends StatelessWidget {
+  final String label;
+  final FtermOverlayPalette palette;
+  final VoidCallback? onTap;
+
+  const _SliderStepButton({
+    super.key,
+    required this.label,
+    required this.palette,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    canRequestFocus: false,
+    borderRadius: BorderRadius.circular(3),
+    onTap: onTap,
+    child: Container(
+      width: 20,
+      height: 18,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: palette.surfaceAlt,
+        borderRadius: BorderRadius.circular(3),
+        border: Border.all(color: palette.border),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: onTap == null
+              ? palette.muted.withValues(alpha: 0.4)
+              : palette.foreground,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          height: 1.0,
+        ),
+      ),
+    ),
+  );
 }
 
 final class _HighlightedTitleText extends StatelessWidget {
@@ -1055,8 +1295,12 @@ final class _PaletteBadgePill extends StatelessWidget {
 
 final class _PaletteFooterBar extends StatelessWidget {
   final FtermOverlayPalette palette;
+  final bool hasSelectedSlider;
 
-  const _PaletteFooterBar({required this.palette});
+  const _PaletteFooterBar({
+    required this.palette,
+    this.hasSelectedSlider = false,
+  });
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -1073,7 +1317,9 @@ final class _PaletteFooterBar extends StatelessWidget {
         ),
         const SizedBox(width: 8),
         Text(
-          '↑↓ nav  ↵ run  Esc close',
+          hasSelectedSlider
+              ? 'Alt+←→ adjust  ↵ done  Esc close'
+              : '↑↓ nav  ↵ run  Esc close',
           style: TextStyle(color: palette.muted, fontSize: 10.5),
         ),
       ],

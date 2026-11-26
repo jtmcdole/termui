@@ -24,12 +24,19 @@ const int _titleMatchBoost = 20;
 const int _categoryTitleBoost = 10;
 const int _keywordOnlyPenalty = 15;
 const int _combinedKeywordPenalty = 20;
+const int _outOfOrderTokenPenalty = 12;
+
+final RegExp _tokenWhitespace = RegExp(r'\s+');
 
 /// Performs case-insensitive subsequence fuzzy matching of [query] against
 /// [candidate], scoring prefix matches, word boundaries (`:`, ` `, `_`, `-`,
 /// `/`), camelCase transitions, consecutive streaks, and shorter candidates.
 ///
-/// Returns `null` when [query] is not a subsequence of [candidate].
+/// When [query] contains multiple space-separated tokens and does not match
+/// [candidate] in order as a single subsequence, falls back to out-of-order
+/// multi-token matching where every token must match [candidate].
+///
+/// Returns `null` when [query] cannot match [candidate].
 FuzzyMatchResult? fuzzyMatch(String query, String candidate) {
   final trimmed = query.trim();
   if (trimmed.isEmpty) {
@@ -37,7 +44,26 @@ FuzzyMatchResult? fuzzyMatch(String query, String candidate) {
   }
   if (candidate.isEmpty) return null;
 
-  final queryChars = trimmed.characters.toList(growable: false);
+  final direct = _fuzzyMatchSingle(trimmed, candidate);
+  if (direct != null) return direct;
+
+  final tokens = _splitQueryTokens(trimmed);
+  if (tokens.length < 2) return null;
+  return _fuzzyMatchTokensUnordered(tokens, candidate);
+}
+
+List<String> _splitQueryTokens(String trimmedQuery) {
+  if (!trimmedQuery.contains(' ') && !trimmedQuery.contains('\t')) {
+    return <String>[trimmedQuery];
+  }
+  return <String>[
+    for (final token in trimmedQuery.split(_tokenWhitespace))
+      if (token.isNotEmpty) token,
+  ];
+}
+
+FuzzyMatchResult? _fuzzyMatchSingle(String query, String candidate) {
+  final queryChars = query.characters.toList(growable: false);
   final candChars = candidate.characters.toList(growable: false);
   if (queryChars.length > candChars.length) return null;
 
@@ -64,8 +90,27 @@ FuzzyMatchResult? fuzzyMatch(String query, String candidate) {
   );
 }
 
+FuzzyMatchResult? _fuzzyMatchTokensUnordered(
+  List<String> tokens,
+  String candidate,
+) {
+  var totalScore = -_outOfOrderTokenPenalty;
+  final mergedIndices = <int>{};
+  for (final token in tokens) {
+    final match = _fuzzyMatchSingle(token, candidate);
+    if (match == null) return null;
+    totalScore += match.score;
+    mergedIndices.addAll(match.matchedIndices);
+  }
+  final sortedIndices = mergedIndices.toList(growable: false)..sort();
+  return (score: totalScore, matchedIndices: sortedIndices);
+}
+
 /// Scores a palette entry across [title], optional [category], and [keywords],
 /// always returning `matchedIndices` mapped into [title].
+///
+/// Supports both ordered subsequence queries and space-separated out-of-order
+/// multi-token queries across [title], [category], and [keywords].
 FuzzyMatchResult? matchPaletteEntry(
   String query, {
   required String title,
@@ -77,8 +122,33 @@ FuzzyMatchResult? matchPaletteEntry(
     return (score: 0, matchedIndices: const <int>[]);
   }
 
+  final direct = _matchSingleEntryQuery(
+    trimmed,
+    title: title,
+    category: category,
+    keywords: keywords,
+  );
+  if (direct != null) return direct;
+
+  final tokens = _splitQueryTokens(trimmed);
+  if (tokens.length < 2) return null;
+  return _matchEntryTokensUnordered(
+    tokens,
+    title: title,
+    category: category,
+    keywords: keywords,
+  );
+}
+
+FuzzyMatchResult? _matchSingleEntryQuery(
+  String query, {
+  required String title,
+  required String? category,
+  required String keywords,
+  bool matchKeywordsPerWord = false,
+}) {
   FuzzyMatchResult? best;
-  final titleMatch = fuzzyMatch(trimmed, title);
+  final titleMatch = _fuzzyMatchSingle(query, title);
   if (titleMatch != null) {
     best = (
       score: titleMatch.score + _titleMatchBoost,
@@ -89,7 +159,7 @@ FuzzyMatchResult? matchPaletteEntry(
   final hasCategory = category != null && category.isNotEmpty;
   if (hasCategory) {
     final prefix = '$category: ';
-    final combinedMatch = fuzzyMatch(trimmed, '$prefix$title');
+    final combinedMatch = _fuzzyMatchSingle(query, '$prefix$title');
     if (combinedMatch != null) {
       final candidateScore = combinedMatch.score + _categoryTitleBoost;
       if (best == null || candidateScore > best.score) {
@@ -107,11 +177,37 @@ FuzzyMatchResult? matchPaletteEntry(
   if (best != null) return best;
 
   return _matchEntryKeywords(
-    trimmed,
+    query,
     title: title,
     category: category,
     keywords: keywords,
+    perWordOnly: matchKeywordsPerWord,
   );
+}
+
+FuzzyMatchResult? _matchEntryTokensUnordered(
+  List<String> tokens, {
+  required String title,
+  required String? category,
+  required String keywords,
+}) {
+  var totalScore =
+      -(_titleMatchBoost * (tokens.length - 1)) - _outOfOrderTokenPenalty;
+  final mergedIndices = <int>{};
+  for (final token in tokens) {
+    final match = _matchSingleEntryQuery(
+      token,
+      title: title,
+      category: category,
+      keywords: keywords,
+      matchKeywordsPerWord: true,
+    );
+    if (match == null) return null;
+    totalScore += match.score;
+    mergedIndices.addAll(match.matchedIndices);
+  }
+  final sortedIndices = mergedIndices.toList(growable: false)..sort();
+  return (score: totalScore, matchedIndices: sortedIndices);
 }
 
 FuzzyMatchResult? _matchEntryKeywords(
@@ -119,9 +215,13 @@ FuzzyMatchResult? _matchEntryKeywords(
   required String title,
   required String? category,
   required String keywords,
+  bool perWordOnly = false,
 }) {
   if (keywords.isEmpty) return null;
-  final keywordMatch = fuzzyMatch(query, keywords);
+  if (perWordOnly) {
+    return _matchBestKeywordWord(query, keywords);
+  }
+  final keywordMatch = _fuzzyMatchSingle(query, keywords);
   if (keywordMatch != null) {
     return (
       score: keywordMatch.score - _keywordOnlyPenalty,
@@ -130,7 +230,7 @@ FuzzyMatchResult? _matchEntryKeywords(
   }
   final prefix = category != null && category.isNotEmpty ? '$category ' : '';
   final fullText = '$prefix$title $keywords';
-  final fullMatch = fuzzyMatch(query, fullText);
+  final fullMatch = _fuzzyMatchSingle(query, fullText);
   if (fullMatch == null) return null;
   return (
     score: fullMatch.score - _combinedKeywordPenalty,
@@ -140,6 +240,21 @@ FuzzyMatchResult? _matchEntryKeywords(
       titleLen: title.characters.length,
     ),
   );
+}
+
+FuzzyMatchResult? _matchBestKeywordWord(String token, String keywords) {
+  int? bestScore;
+  for (final word in keywords.split(_tokenWhitespace)) {
+    if (word.isEmpty) continue;
+    final match = _fuzzyMatchSingle(token, word);
+    if (match == null) continue;
+    final score = match.score - _keywordOnlyPenalty;
+    if (bestScore == null || score > bestScore) {
+      bestScore = score;
+    }
+  }
+  if (bestScore == null) return null;
+  return (score: bestScore, matchedIndices: const <int>[]);
 }
 
 List<int> _shiftIndicesForTitle(

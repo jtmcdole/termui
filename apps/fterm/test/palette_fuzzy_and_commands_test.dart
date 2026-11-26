@@ -542,6 +542,80 @@ void main() {
         expect(combined.matchedIndices, equals(<int>[0, 1, 2, 3]));
       },
     );
+
+    test('supports space-separated out-of-order token matching with merged highlights and in-order preference', () {
+      // Out-of-order tokens in fuzzyMatch merge sorted highlight indices.
+      final unordered = fuzzyMatch('opacity bg', 'Background Opacity');
+      final ordered = fuzzyMatch('bg opacity', 'Background Opacity');
+      expect(unordered, isNotNull);
+      expect(ordered, isNotNull);
+      expect(ordered!.score, greaterThan(unordered!.score));
+      // 'bg' -> B(0), g(4); 'opacity' -> 11..17.
+      expect(
+        unordered.matchedIndices,
+        equals(<int>[0, 4, 11, 12, 13, 14, 15, 16, 17]),
+      );
+
+      // Missing second token returns null.
+      expect(fuzzyMatch('opacity missing', 'Background Opacity'), isNull);
+
+      // Out-of-order tokens across category, title, and keywords in matchPaletteEntry.
+      final acrossCategory = matchPaletteEntry(
+        'crt shader',
+        title: 'Toggle crt_lottes',
+        category: 'Shader',
+        keywords: 'gpu glsl',
+      );
+      expect(acrossCategory, isNotNull);
+      // Highlights 'crt' in title (indices 7, 8, 9).
+      expect(acrossCategory!.matchedIndices, equals(<int>[7, 8, 9]));
+
+      final acrossKeywordAndTitle = matchPaletteEntry(
+        'alpha opacity',
+        title: 'Background Opacity',
+        category: 'Appearance',
+        keywords: 'transparency alpha glass',
+      );
+      expect(acrossKeywordAndTitle, isNotNull);
+      expect(
+        acrossKeywordAndTitle!.matchedIndices,
+        equals(<int>[11, 12, 13, 14, 15, 16, 17]),
+      );
+
+      // In-order query still outranks reversed tokens on the same palette entry.
+      final entryOrdered = matchPaletteEntry(
+        'bg opacity',
+        title: 'Background Opacity',
+        category: 'Appearance',
+      );
+      final entryReversed = matchPaletteEntry(
+        'opacity bg',
+        title: 'Background Opacity',
+        category: 'Appearance',
+      );
+      expect(entryOrdered, isNotNull);
+      expect(entryReversed, isNotNull);
+      expect(entryOrdered!.score, greaterThan(entryReversed!.score));
+
+      // Extra whitespace and missing token guard.
+      expect(
+        matchPaletteEntry(
+          '  dark   gruv  ',
+          title: 'gruvbox_dark',
+          category: 'Theme',
+        ),
+        isNotNull,
+      );
+      expect(
+        matchPaletteEntry(
+          'opacity nonexistent',
+          title: 'Background Opacity',
+          category: 'Appearance',
+          keywords: 'alpha glass',
+        ),
+        isNull,
+      );
+    });
   });
 
   group('parsePaletteInput & PaletteMode', () {
@@ -1248,6 +1322,163 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
       expect(filtered.first.id, equals('switch.remote.rem-prod'));
       expect(filtered.first.matchedTitleIndices, equals(<int>[0, 1, 2, 3]));
       expect(filtered.first.groupLabel, isNull);
+    });
+
+    test('exposes inline sliders for opacity, font size, output volume, and active shader params', () async {
+      final ws = _createWorkspace();
+      addTearDown(ws.dispose);
+      final ctx = PaletteContext(
+        workspace: ws,
+        isWeb: false,
+        platform: .linux,
+        isDesktopHost: true,
+        supportsUpdates: true,
+      );
+
+      final initialCatalog = buildPaletteCommands(ctx);
+
+      // Background Opacity slider.
+      final opacityItem = _byId(
+        initialCatalog,
+        'appearance.background_opacity',
+      );
+      expect(opacityItem.slider, isNotNull);
+      expect(opacityItem.slider!.min, equals(0.0));
+      expect(opacityItem.slider!.max, equals(1.0));
+      expect(opacityItem.slider!.formatValue(0.65), equals('65%'));
+      opacityItem.slider!.onChanged(0.65);
+      expect(ws.backgroundOpacity, closeTo(0.65, 1e-6));
+
+      // Font Size slider.
+      final fontItem = _byId(initialCatalog, 'appearance.font_size');
+      expect(fontItem.slider, isNotNull);
+      expect(fontItem.slider!.min, equals(FtermPreferences.minFontSize));
+      expect(fontItem.slider!.max, equals(FtermPreferences.maxFontSize));
+      fontItem.slider!.onChanged(18.0);
+      expect(ws.effectiveFontSize, equals(18.0));
+
+      // Output Volume slider.
+      final volumeItem = _byId(initialCatalog, 'system.audio_volume');
+      expect(volumeItem.slider, isNotNull);
+      expect(volumeItem.slider!.formatValue(0.4), equals('40%'));
+      volumeItem.slider!.onChanged(0.4);
+      expect(ws.preferences.audioVolume, closeTo(0.4, 1e-6));
+
+      // Shader param sliders hidden when no shader pass is active.
+      expect(
+        initialCatalog.where((i) => i.id.startsWith('shader.param.')),
+        isEmpty,
+      );
+
+      // Enabling a shader exposes uParams0.x / y / z sliders for that pass.
+      await ws.toggleForegroundShader('crt_lottes');
+      final withShader = buildPaletteCommands(ctx);
+      final paramX = _byId(withShader, 'shader.param.crt_lottes.x');
+      final paramY = _byId(withShader, 'shader.param.crt_lottes.y');
+      final paramZ = _byId(withShader, 'shader.param.crt_lottes.z');
+      expect(paramX.slider, isNotNull);
+      expect(paramY.slider, isNotNull);
+      expect(paramZ.slider, isNotNull);
+      expect(paramX.slider!.max, equals(2.0));
+      expect(paramX.slider!.formatValue(1.35), equals('1.35'));
+      paramX.slider!.onChanged(1.35);
+      expect(ws.shaderParamsFor('crt_lottes')[0], closeTo(1.35, 1e-5));
+    });
+
+    test('exposes CLI shader policies, wallpaper, automation PTY scope, and update toggles with platform gating', () async {
+      final ws = _createWorkspace();
+      addTearDown(ws.dispose);
+
+      final desktopCtx = PaletteContext(
+        workspace: ws,
+        isWeb: false,
+        platform: .linux,
+        isDesktopHost: true,
+        supportsUpdates: true,
+      );
+      final webCtx = PaletteContext(
+        workspace: ws,
+        isWeb: true,
+        platform: .linux,
+        isDesktopHost: false,
+        supportsUpdates: false,
+      );
+
+      final desktopItems = buildPaletteCommands(desktopCtx);
+      final desktopIds = {for (final item in desktopItems) item.id};
+      final webIds = {for (final item in buildPaletteCommands(webCtx)) item.id};
+
+      // Wallpaper set always present; clear appears only when set.
+      expect(desktopIds, contains('appearance.wallpaper_set'));
+      expect(desktopIds, isNot(contains('appearance.wallpaper_clear')));
+      await ws.setBackgroundImagePath('wallpaper.png');
+      final withWallpaper = buildPaletteCommands(desktopCtx);
+      final clearWallpaper = _byId(withWallpaper, 'appearance.wallpaper_clear');
+      await clearWallpaper.onExecute!();
+      expect(ws.backgroundImagePath, isNull);
+
+      // CLI shader local/remote policies, stacking, dev auto-trust.
+      await _byId(
+        desktopItems,
+        'shader.cli_local_policy.presetsAndTransforms',
+      ).onExecute!();
+      expect(
+        ws.localCliShaderPolicy,
+        equals(CliShaderPolicy.presetsAndTransforms),
+      );
+
+      await _byId(
+        desktopItems,
+        'shader.cli_remote_policy.disabled',
+      ).onExecute!();
+      expect(ws.remoteCliShaderPolicy, equals(CliShaderPolicy.disabled));
+
+      await _byId(
+        desktopItems,
+        'shader.cli_stacking.cliReplacesUser',
+      ).onExecute!();
+      expect(
+        ws.cliFullPaneShaderMode,
+        equals(CliFullPaneShaderMode.cliReplacesUser),
+      );
+
+      await _byId(desktopItems, 'shader.cli_dev_auto_trust').onExecute!();
+      expect(
+        ws.localCliShaderPolicy,
+        equals(CliShaderPolicy.allowLocalCustomGlsl),
+      );
+      await _byId(
+        buildPaletteCommands(desktopCtx),
+        'shader.cli_dev_auto_trust',
+      ).onExecute!();
+      expect(ws.localCliShaderPolicy, equals(CliShaderPolicy.promptCustomGlsl));
+
+      // Automation PTY scope: desktop-only.
+      expect(desktopIds, contains('settings.toggle.automation_pty_scope'));
+      expect(webIds, isNot(contains('settings.toggle.automation_pty_scope')));
+      final initialAllowPty = ws.automationDriver.allowPty;
+      await _byId(
+        desktopItems,
+        'settings.toggle.automation_pty_scope',
+      ).onExecute!();
+      expect(ws.automationDriver.allowPty, equals(!initialAllowPty));
+
+      // Updates toggles: desktop + supportsUpdates only.
+      expect(desktopIds, contains('settings.toggle.updates_daily'));
+      expect(desktopIds, contains('settings.toggle.updates_prereleases'));
+      expect(webIds, isNot(contains('settings.toggle.updates_daily')));
+      expect(webIds, isNot(contains('settings.toggle.updates_prereleases')));
+
+      final initialDaily = ws.preferences.updateCheckMode == .daily;
+      await _byId(desktopItems, 'settings.toggle.updates_daily').onExecute!();
+      expect(ws.preferences.updateCheckMode == .daily, equals(!initialDaily));
+
+      final initialPre = ws.preferences.includePrereleases;
+      await _byId(
+        desktopItems,
+        'settings.toggle.updates_prereleases',
+      ).onExecute!();
+      expect(ws.preferences.includePrereleases, equals(!initialPre));
     });
   });
 }
