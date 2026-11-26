@@ -524,10 +524,14 @@ void main() {
         await tester.pump();
         expect(env.openedDirectories, equals(const ['/tmp/fterm/shaders']));
 
-        // Shader Settings switches directly to FtermOverlay.settings.
+        // Shader Settings switches directly to FtermOverlay.settings on Shaders tab.
         await tester.tap(find.byKey(const ValueKey('whats-new-open-settings')));
         await tester.pump();
         expect(env.workspace.activeOverlay, equals(FtermOverlay.settings));
+        expect(
+          find.byKey(const ValueKey('settings-shaders-section')),
+          findsOneWidget,
+        );
 
         // Reopen What's New from About overlay after pill is gone.
         env.workspace.setOverlay(FtermOverlay.about);

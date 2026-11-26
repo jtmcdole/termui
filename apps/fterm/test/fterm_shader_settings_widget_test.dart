@@ -417,8 +417,8 @@ void main() {
         await tester.runAsync(() => Future<void>.delayed(Duration.zero));
         await tester.pump();
 
-        // Open Settings overlay.
-        env.workspace.setOverlay(FtermOverlay.settings);
+        // Open Settings overlay on Shaders tab.
+        env.workspace.openSettingsOverlay(initialSection: .shaders);
         await tester.pump();
 
         // Active backend badge renders 'flutterGpu'.
@@ -430,6 +430,10 @@ void main() {
           find.descendant(of: badgeFinder, matching: find.text('flutterGpu')),
           findsOneWidget,
         );
+
+        // Switch to Themes tab for Background Opacity & Wallpaper controls.
+        await tester.tap(find.byKey(const ValueKey('settings-tab-themes')));
+        await tester.pump();
 
         // Adjust backgroundOpacity slider and verify persistence + TerminalSurface forwarding.
         final opacitySliderFinder = find.byKey(
@@ -483,6 +487,10 @@ void main() {
         await tester.pump();
         expect(env.workspace.backgroundImagePath, isNull);
         expect(env.workspace.shaderController.wallpaperImage, isNull);
+
+        // Return to Shaders tab for shader preset chains.
+        await tester.tap(find.byKey(const ValueKey('settings-tab-shaders')));
+        await tester.pump();
 
         // Select background preset wallpaper_wave & foreground preset crt_lottes.
         final bgChip = find.byKey(
@@ -771,7 +779,7 @@ void main() {
         await env.workspace.setForegroundShaderChain(const <String>[
           'broken.glsl',
         ]);
-        env.workspace.setOverlay(FtermOverlay.settings);
+        env.workspace.openSettingsOverlay(initialSection: .shaders);
 
         await tester.pumpWidget(
           MaterialApp(
@@ -904,7 +912,7 @@ void main() {
           'smoke_and_ghosts.glsl',
           'wallpaper_wave',
         ]);
-        env.workspace.setOverlay(FtermOverlay.settings);
+        env.workspace.openSettingsOverlay(initialSection: .shaders);
 
         await tester.pumpWidget(
           MaterialApp(
@@ -1182,7 +1190,7 @@ void main() {
           defaultBackendKind: ShaderBackendKind.webGl2,
           shadersDir: null,
         );
-        env.workspace.setOverlay(FtermOverlay.settings);
+        env.workspace.openSettingsOverlay(initialSection: .shaders);
 
         await tester.pumpWidget(
           MaterialApp(
@@ -1325,7 +1333,7 @@ void main() {
             'custom_fx.glsl',
           ]),
         );
-        env.workspace.setOverlay(FtermOverlay.settings);
+        env.workspace.openSettingsOverlay(initialSection: .shaders);
         await tester.pump();
 
         final errorBanner = find.byKey(

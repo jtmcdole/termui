@@ -1903,7 +1903,7 @@ void main() {
         );
         await settleCastApp(tester, cycles: 3);
 
-        workspace!.setOverlay(FtermOverlay.settings);
+        workspace!.openSettingsOverlay(initialSection: .themes);
         await settleCastApp(tester);
         await tester.tap(find.byKey(const ValueKey('settings-font-increase')));
         await settleCastApp(tester);
@@ -1915,6 +1915,8 @@ void main() {
         await settleCastApp(tester);
         expect(workspace!.preferences.fontSize, isNull);
 
+        await tester.tap(find.byKey(const ValueKey('settings-tab-shell')));
+        await settleCastApp(tester);
         await tester.ensureVisible(
           find.byKey(const ValueKey('settings-shell-preset-zsh')),
         );

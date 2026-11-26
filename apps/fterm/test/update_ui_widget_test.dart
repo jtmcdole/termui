@@ -65,8 +65,8 @@ void main() {
         await tester.pump();
         expect(workspace!.shouldShowTabBar, isFalse);
 
-        // Open Settings overlay and click "Check for Updates".
-        workspace!.setOverlay(FtermOverlay.settings);
+        // Open Settings -> Updates and click "Check for Updates".
+        workspace!.openSettingsOverlay(initialSection: .updates);
         await tester.pump();
         expect(
           find.byKey(const ValueKey('settings-updates-section')),
@@ -292,7 +292,7 @@ void main() {
         );
 
         // Read-only install shows "Open GitHub Release" instead of "Download Update", plus "Skip Version".
-        desktopWs!.setOverlay(FtermOverlay.settings);
+        desktopWs!.openSettingsOverlay(initialSection: .updates);
         await tester.pump();
         expect(
           find.byKey(const ValueKey('settings-update-open-release')),
@@ -315,7 +315,15 @@ void main() {
         // Advance clock by 25 hours and simulate AppLifecycleState.resumed:
         // check fires, sees skipped 0.3.0 on background check, and stays idle!
         now = now.add(const Duration(hours: 25));
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
         tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.inactive,
+        );
         tester.binding.handleAppLifecycleStateChanged(
           AppLifecycleState.resumed,
         );
@@ -358,8 +366,8 @@ void main() {
         await tester.pump();
         expect(ws!.updateViewModel.status, equals(UpdateStatus.readyToRestart));
 
-        // Open Settings and click Restart to Update (0 local shells -> runs immediately, hits TCC EPERM!).
-        ws!.setOverlay(FtermOverlay.settings);
+        // Open Settings -> Updates and click Restart to Update (0 local shells -> runs immediately, hits TCC EPERM!).
+        ws!.openSettingsOverlay(initialSection: .updates);
         await tester.pump();
         await tester.ensureVisible(
           find.byKey(const ValueKey('settings-update-restart')),

@@ -10,12 +10,13 @@ import 'package:flutter/services.dart'
 import 'package:material_ui/material_ui.dart';
 import 'package:termui/terminal/event.dart' as ev;
 
-import '../input/key_chord.dart';
-import '../settings_storage.dart';
-import '../workspace/fterm_workspace_controller.dart';
-import 'fterm_overlays.dart';
+import '../../input/key_chord.dart';
+import '../../settings_storage.dart';
+import '../../workspace/fterm_workspace_controller.dart';
+import '../fterm_overlays.dart';
+import 'settings_primitives.dart';
 
-/// Settings tab configuring Meta/Cmd key policy, user-defined passthrough
+/// Settings section configuring Meta/Cmd key policy, user-defined passthrough
 /// ("ignored") key chords, and keyboard host toggles.
 final class FtermKeyboardSettingsTab extends StatefulWidget {
   /// Backing workspace controller mutated by keyboard settings controls.
@@ -30,13 +31,17 @@ final class FtermKeyboardSettingsTab extends StatefulWidget {
   /// Optional platform override for hermetic cross-platform testing.
   final TargetPlatform? platformOverride;
 
-  /// Creates the Keyboard tab rendered inside the `fterm` Settings modal.
+  /// Panel visibility, collapse state, and search-filter configuration.
+  final SettingsPanelFilter filter;
+
+  /// Creates the Keyboard section rendered inside the `fterm` Settings modal.
   const FtermKeyboardSettingsTab({
     super.key,
     required this.workspace,
     required this.palette,
     required this.isWeb,
     this.platformOverride,
+    this.filter = const SettingsPanelFilter.showAll(),
   });
 
   @override
@@ -222,31 +227,27 @@ final class _FtermKeyboardSettingsTabState
 
   @override
   Widget build(BuildContext context) {
+    final filter = widget.filter;
+    final palette = widget.palette;
     return ListenableBuilder(
       listenable: widget.workspace.chromeNotifier,
-      builder: (_, _) {
-        final workspace = widget.workspace;
-        final prefs = workspace.preferences;
-        final platform = _platform;
-        return Column(
-          mainAxisSize: .min,
-          crossAxisAlignment: .stretch,
-          children: [
-            _MetaKeyPolicySection(
-              mode: prefs.metaKeyMode,
-              platform: platform,
+      builder: (_, _) => SettingsSpacedColumn(
+        children: [
+          if (filter.showPanel('keyboard-meta'))
+            _KeyboardMetaPanel(
+              workspace: widget.workspace,
+              platform: _platform,
               isWeb: widget.isWeb,
-              palette: widget.palette,
-              onSelected: (mode) => workspace.updatePreferences(
-                prefs.copyWith(metaKeyMode: mode),
-              ),
+              palette: palette,
+              filter: filter,
             ),
-            const SizedBox(height: 12),
-            _PassthroughShortcutsSection(
-              chords: prefs.passthroughShortcuts,
-              platform: platform,
+          if (filter.showPanel('keyboard-passthrough'))
+            _KeyboardPassthroughPanel(
+              chords: widget.workspace.preferences.passthroughShortcuts,
+              platform: _platform,
               isWeb: widget.isWeb,
-              palette: widget.palette,
+              palette: palette,
+              filter: filter,
               inputController: _chordInputCtrl,
               recordFocusNode: _recordFocusNode,
               isRecording: _recording,
@@ -256,14 +257,183 @@ final class _FtermKeyboardSettingsTabState
               onToggleRecording: _toggleRecording,
               onRecordKeyEvent: _handleRecordKeyEvent,
               onRemoveChord: _removeChord,
-              onClearAll: _clearAllChords,
               onAddPreset: _addPresetChord,
+              onClearAll: _clearAllChords,
             ),
-            const SizedBox(height: 10),
-            _KeyboardTogglesSection(workspace: workspace),
-          ],
-        );
-      },
+          if (filter.showPanel('keyboard-host-keys'))
+            _KeyboardHostKeysPanel(
+              workspace: widget.workspace,
+              palette: palette,
+              filter: filter,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _KeyboardMetaPanel extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final TargetPlatform platform;
+  final bool isWeb;
+  final FtermOverlayPalette palette;
+  final SettingsPanelFilter filter;
+
+  const _KeyboardMetaPanel({
+    required this.workspace,
+    required this.platform,
+    required this.isWeb,
+    required this.palette,
+    required this.filter,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = workspace.preferences;
+    return BlenderSettingsPanel(
+      id: 'keyboard-meta',
+      title: 'Meta / Cmd Key Policy',
+      categoryBreadcrumb: filter.categoryBreadcrumb,
+      expanded: filter.panelExpanded('keyboard-meta'),
+      onToggleExpanded: filter.toggleFor('keyboard-meta'),
+      palette: palette,
+      child: _MetaKeyPolicySection(
+        mode: prefs.metaKeyMode,
+        platform: platform,
+        isWeb: isWeb,
+        palette: palette,
+        onSelected: (mode) =>
+            workspace.updatePreferences(prefs.copyWith(metaKeyMode: mode)),
+      ),
+    );
+  }
+}
+
+final class _KeyboardPassthroughPanel extends StatelessWidget {
+  final List<KeyChord> chords;
+  final TargetPlatform platform;
+  final bool isWeb;
+  final FtermOverlayPalette palette;
+  final SettingsPanelFilter filter;
+  final TextEditingController inputController;
+  final FocusNode recordFocusNode;
+  final bool isRecording;
+  final String? inputError;
+  final VoidCallback onInputChanged;
+  final VoidCallback onSubmitInput;
+  final VoidCallback onToggleRecording;
+  final FocusOnKeyEventCallback onRecordKeyEvent;
+  final ValueChanged<KeyChord> onRemoveChord;
+  final ValueChanged<KeyChord> onAddPreset;
+  final VoidCallback onClearAll;
+
+  const _KeyboardPassthroughPanel({
+    required this.chords,
+    required this.platform,
+    required this.isWeb,
+    required this.palette,
+    required this.filter,
+    required this.inputController,
+    required this.recordFocusNode,
+    required this.isRecording,
+    required this.inputError,
+    required this.onInputChanged,
+    required this.onSubmitInput,
+    required this.onToggleRecording,
+    required this.onRecordKeyEvent,
+    required this.onRemoveChord,
+    required this.onAddPreset,
+    required this.onClearAll,
+  });
+
+  @override
+  Widget build(BuildContext context) => BlenderSettingsPanel(
+    id: 'keyboard-passthrough',
+    title: 'Ignored Chords (Do Not Intercept)',
+    categoryBreadcrumb: filter.categoryBreadcrumb,
+    expanded: filter.panelExpanded('keyboard-passthrough'),
+    onToggleExpanded: filter.toggleFor('keyboard-passthrough'),
+    palette: palette,
+    trailing: chords.isNotEmpty
+        ? TextButton(
+            key: const ValueKey('settings-passthrough-clear-all'),
+            onPressed: onClearAll,
+            style: TextButton.styleFrom(
+              visualDensity: .compact,
+              padding: const .symmetric(horizontal: 8, vertical: 2),
+              minimumSize: .zero,
+              tapTargetSize: .shrinkWrap,
+            ),
+            child: const Text('Clear all'),
+          )
+        : null,
+    child: _PassthroughShortcutsSection(
+      chords: chords,
+      platform: platform,
+      isWeb: isWeb,
+      palette: palette,
+      inputController: inputController,
+      recordFocusNode: recordFocusNode,
+      isRecording: isRecording,
+      inputError: inputError,
+      onInputChanged: onInputChanged,
+      onSubmitInput: onSubmitInput,
+      onToggleRecording: onToggleRecording,
+      onRecordKeyEvent: onRecordKeyEvent,
+      onRemoveChord: onRemoveChord,
+      onAddPreset: onAddPreset,
+    ),
+  );
+}
+
+final class _KeyboardHostKeysPanel extends StatelessWidget {
+  final FtermWorkspaceController workspace;
+  final FtermOverlayPalette palette;
+  final SettingsPanelFilter filter;
+
+  const _KeyboardHostKeysPanel({
+    required this.workspace,
+    required this.palette,
+    required this.filter,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final prefs = workspace.preferences;
+    final wsSettings = workspace.workspaceSettings;
+    return BlenderSettingsPanel(
+      id: 'keyboard-host-keys',
+      title: 'Host & Platform Keys',
+      categoryBreadcrumb: filter.categoryBreadcrumb,
+      expanded: filter.panelExpanded('keyboard-host-keys'),
+      onToggleExpanded: filter.toggleFor('keyboard-host-keys'),
+      palette: palette,
+      child: SettingsSpacedColumn(
+        spacing: 8,
+        children: [
+          if (filter.showItem('keyboard-macos-option'))
+            BlenderCheckboxRow(
+              label: 'macOS Option as Alt',
+              caption:
+                  'Emit Alt+key instead of macOS Option dead-key composition',
+              value: prefs.macosOptionAsAlt,
+              controlKey: const ValueKey('settings-macos-option-as-alt'),
+              palette: palette,
+              onChanged: (v) => workspace.updatePreferences(
+                prefs.copyWith(macosOptionAsAlt: v),
+              ),
+            ),
+          if (filter.showItem('keyboard-f12-shortcuts'))
+            BlenderCheckboxRow(
+              label: 'F12 Host Shortcuts',
+              caption: 'Enable F12 screenshot and Shift+F12 atlas reload keys',
+              value: wsSettings.f12ShortcutsEnabled,
+              controlKey: const ValueKey('settings-f12-toggle'),
+              palette: palette,
+              onChanged: workspace.setF12ShortcutsEnabled,
+            ),
+        ],
+      ),
     );
   }
 }
@@ -271,7 +441,7 @@ final class _FtermKeyboardSettingsTabState
 final class _MetaKeyPolicySection extends StatelessWidget {
   static const List<(FtermMetaKeyMode, String)> _modes = [
     (.auto, 'Auto'),
-    (.passThrough, 'Always Pass Through'),
+    (.passThrough, 'Pass Through'),
     (.kitty, 'Kitty Only'),
   ];
 
@@ -311,35 +481,27 @@ final class _MetaKeyPolicySection extends StatelessWidget {
   };
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: .min,
-    crossAxisAlignment: .stretch,
-    children: [
-      Text(
-        'Meta / Cmd Key Policy',
-        style: TextStyle(color: palette.muted, fontSize: 11),
-      ),
-      const SizedBox(height: 6),
-      Wrap(
-        spacing: 6,
-        runSpacing: 6,
-        children: [
-          for (final (candidate, label) in _modes)
-            ChoiceChip(
-              key: ValueKey('settings-meta-mode-${candidate.name}'),
-              label: Text(label),
-              selected: mode == candidate,
-              onSelected: (_) => onSelected(candidate),
-            ),
-        ],
-      ),
-      const SizedBox(height: 6),
-      Text(
-        _summaryText(mode: mode, platform: platform, isWeb: isWeb),
-        key: const ValueKey('settings-meta-mode-summary'),
-        style: TextStyle(color: palette.muted, fontSize: 11),
-      ),
-    ],
+  Widget build(BuildContext context) => BlenderPropertyRow(
+    label: 'Meta / Cmd Mode',
+    palette: palette,
+    hint: Text(
+      _summaryText(mode: mode, platform: platform, isWeb: isWeb),
+      key: const ValueKey('settings-meta-mode-summary'),
+      style: TextStyle(color: palette.muted, fontSize: 10.5),
+    ),
+    control: BlenderSegmentedControl<FtermMetaKeyMode>(
+      value: mode,
+      palette: palette,
+      options: [
+        for (final (candidate, label) in _modes)
+          BlenderSegmentedOption<FtermMetaKeyMode>(
+            key: ValueKey('settings-meta-mode-${candidate.name}'),
+            value: candidate,
+            label: label,
+          ),
+      ],
+      onChanged: onSelected,
+    ),
   );
 }
 
@@ -357,7 +519,6 @@ final class _PassthroughShortcutsSection extends StatelessWidget {
   final VoidCallback onToggleRecording;
   final FocusOnKeyEventCallback onRecordKeyEvent;
   final ValueChanged<KeyChord> onRemoveChord;
-  final VoidCallback onClearAll;
   final ValueChanged<KeyChord> onAddPreset;
 
   const _PassthroughShortcutsSection({
@@ -374,7 +535,6 @@ final class _PassthroughShortcutsSection extends StatelessWidget {
     required this.onToggleRecording,
     required this.onRecordKeyEvent,
     required this.onRemoveChord,
-    required this.onClearAll,
     required this.onAddPreset,
   });
 
@@ -383,30 +543,7 @@ final class _PassthroughShortcutsSection extends StatelessWidget {
     mainAxisSize: .min,
     crossAxisAlignment: .stretch,
     children: [
-      Row(
-        children: [
-          Expanded(
-            child: Text(
-              'Ignored Chords (Do Not Intercept)',
-              style: TextStyle(color: palette.muted, fontSize: 11),
-            ),
-          ),
-          if (chords.isNotEmpty)
-            TextButton(
-              key: const ValueKey('settings-passthrough-clear-all'),
-              onPressed: onClearAll,
-              style: TextButton.styleFrom(
-                visualDensity: .compact,
-                padding: const .symmetric(horizontal: 8, vertical: 2),
-                minimumSize: .zero,
-                tapTargetSize: .shrinkWrap,
-              ),
-              child: const Text('Clear all'),
-            ),
-        ],
-      ),
       if (chords.isNotEmpty) ...[
-        const SizedBox(height: 6),
         _ActivePassthroughChords(
           chords: chords,
           platform: platform,
@@ -414,8 +551,8 @@ final class _PassthroughShortcutsSection extends StatelessWidget {
           palette: palette,
           onRemoveChord: onRemoveChord,
         ),
+        const SizedBox(height: 8),
       ],
-      const SizedBox(height: 8),
       _PassthroughInputRow(
         controller: inputController,
         recordFocusNode: recordFocusNode,
@@ -527,60 +664,83 @@ final class _PassthroughInputRow extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: .min,
-    crossAxisAlignment: .stretch,
-    children: [
-      Row(
-        children: [
-          Expanded(
-            child: TextField(
-              key: const ValueKey('settings-passthrough-input'),
-              controller: controller,
-              decoration: InputDecoration(
-                isDense: true,
-                hintText: 'e.g. Ctrl+Shift+I, Alt+F4',
-                hintStyle: TextStyle(color: palette.muted, fontSize: 11),
-              ),
-              onChanged: (_) => onInputChanged(),
-              onSubmitted: (_) => onSubmitInput(),
-            ),
-          ),
-          const SizedBox(width: 6),
-          OutlinedButton(
-            key: const ValueKey('settings-passthrough-add'),
-            onPressed: onSubmitInput,
-            child: const Text('Add'),
-          ),
-          const SizedBox(width: 6),
-          OutlinedButton.icon(
-            key: const ValueKey('settings-passthrough-record'),
-            onPressed: onToggleRecording,
-            icon: Icon(
-              isRecording
-                  ? Icons.stop_circle_outlined
-                  : Icons.fiber_manual_record_outlined,
-              size: 14,
-            ),
-            label: Text(isRecording ? 'Cancel' : 'Record chord'),
-          ),
-        ],
+  Widget build(BuildContext context) {
+    final textField = TextField(
+      key: const ValueKey('settings-passthrough-input'),
+      controller: controller,
+      style: TextStyle(color: palette.foreground, fontSize: 11.5),
+      decoration: blenderInputDecoration(
+        palette: palette,
+        hintText: 'e.g. Ctrl+Shift+I, Alt+F4',
       ),
-      Focus(
-        focusNode: recordFocusNode,
-        onKeyEvent: onRecordKeyEvent,
-        child: isRecording
-            ? Padding(
-                padding: const .only(top: 6),
-                child: Text(
-                  'Press a chord (Esc to cancel)...',
-                  style: TextStyle(color: palette.accent, fontSize: 11),
-                ),
-              )
-            : const SizedBox.shrink(),
+      onChanged: (_) => onInputChanged(),
+      onSubmitted: (_) => onSubmitInput(),
+    );
+    final addButton = OutlinedButton(
+      key: const ValueKey('settings-passthrough-add'),
+      onPressed: onSubmitInput,
+      child: const Text('Add'),
+    );
+    final recordButton = OutlinedButton.icon(
+      key: const ValueKey('settings-passthrough-record'),
+      onPressed: onToggleRecording,
+      icon: Icon(
+        isRecording
+            ? Icons.stop_circle_outlined
+            : Icons.fiber_manual_record_outlined,
+        size: 14,
       ),
-    ],
-  );
+      label: Text(isRecording ? 'Cancel' : 'Record chord'),
+    );
+
+    return Column(
+      mainAxisSize: .min,
+      crossAxisAlignment: .stretch,
+      children: [
+        LayoutBuilder(
+          builder: (_, constraints) {
+            if (constraints.maxWidth < 340) {
+              return Column(
+                mainAxisSize: .min,
+                crossAxisAlignment: .stretch,
+                children: [
+                  textField,
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [addButton, recordButton],
+                  ),
+                ],
+              );
+            }
+            return Row(
+              children: [
+                Expanded(child: textField),
+                const SizedBox(width: 6),
+                addButton,
+                const SizedBox(width: 6),
+                recordButton,
+              ],
+            );
+          },
+        ),
+        Focus(
+          focusNode: recordFocusNode,
+          onKeyEvent: onRecordKeyEvent,
+          child: isRecording
+              ? Padding(
+                  padding: const .only(top: 6),
+                  child: Text(
+                    'Press a chord (Esc to cancel)…',
+                    style: TextStyle(color: palette.accent, fontSize: 11),
+                  ),
+                )
+              : const SizedBox.shrink(),
+        ),
+      ],
+    );
+  }
 }
 
 final class _PassthroughPresetsRow extends StatelessWidget {
@@ -637,41 +797,6 @@ final class _PassthroughPresetsRow extends StatelessWidget {
                 onPressed: () => onAddPreset(preset),
               ),
           ],
-        ),
-      ],
-    );
-  }
-}
-
-final class _KeyboardTogglesSection extends StatelessWidget {
-  final FtermWorkspaceController workspace;
-
-  const _KeyboardTogglesSection({required this.workspace});
-
-  @override
-  Widget build(BuildContext context) {
-    final prefs = workspace.preferences;
-    final wsSettings = workspace.workspaceSettings;
-    return Column(
-      mainAxisSize: .min,
-      crossAxisAlignment: .stretch,
-      children: [
-        SwitchListTile.adaptive(
-          key: const ValueKey('settings-macos-option-as-alt'),
-          dense: true,
-          contentPadding: .zero,
-          title: const Text('macOS Option key acts as Alt'),
-          value: prefs.macosOptionAsAlt,
-          onChanged: (v) =>
-              workspace.updatePreferences(prefs.copyWith(macosOptionAsAlt: v)),
-        ),
-        SwitchListTile.adaptive(
-          key: const ValueKey('settings-f12-toggle'),
-          dense: true,
-          contentPadding: .zero,
-          title: const Text('Enable F12 host shortcuts (screenshot/atlas)'),
-          value: wsSettings.f12ShortcutsEnabled,
-          onChanged: workspace.setF12ShortcutsEnabled,
         ),
       ],
     );

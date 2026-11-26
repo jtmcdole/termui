@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fterm/src/automation/automation_models.dart';
-import 'package:fterm/src/ui/fterm_automation_settings_tab.dart';
 import 'package:fterm/src/ui/fterm_overlays.dart';
+import 'package:fterm/src/ui/settings/fterm_automation_settings_tab.dart';
 import 'package:material_ui/material_ui.dart';
 
 final class _FakeAutomationDriverViewModel extends ChangeNotifier
@@ -144,7 +144,7 @@ void main() {
       await _pumpTab(tester, driver);
 
       expect(
-        tester.widget<SwitchListTile>(_byKey('automation-enable-switch')).value,
+        tester.widget<Checkbox>(_byKey('automation-enable-switch')).value,
         isFalse,
       );
       expect(find.text('Listening on 127.0.0.1:9911'), findsNothing);
@@ -155,7 +155,7 @@ void main() {
       expect(driver.enabledCalls, equals(const [true]));
       expect(driver.isRunning, isTrue);
       expect(
-        tester.widget<SwitchListTile>(_byKey('automation-enable-switch')).value,
+        tester.widget<Checkbox>(_byKey('automation-enable-switch')).value,
         isTrue,
       );
       expect(find.text('Listening on 127.0.0.1:9911'), findsOneWidget);
@@ -392,7 +392,7 @@ void main() {
         await _pumpTab(tester, driver);
 
         final checkboxFinder = _byKey('automation-allow-pty-checkbox');
-        expect(tester.widget<CheckboxListTile>(checkboxFinder).value, isFalse);
+        expect(tester.widget<Checkbox>(checkboxFinder).value, isFalse);
         expect(_byKey('automation-pty-warning'), findsOneWidget);
 
         await tester.tap(checkboxFinder);
@@ -400,7 +400,7 @@ void main() {
 
         expect(driver.allowPty, isTrue);
         expect(driver.allowPtyCalls, equals(const [true]));
-        expect(tester.widget<CheckboxListTile>(checkboxFinder).value, isTrue);
+        expect(tester.widget<Checkbox>(checkboxFinder).value, isTrue);
 
         await tester.tap(checkboxFinder);
         await tester.pump();
@@ -417,9 +417,7 @@ void main() {
       await _pumpTab(tester, driver);
 
       expect(
-        tester
-            .widget<SwitchListTile>(_byKey('automation-enable-switch'))
-            .onChanged,
+        tester.widget<Checkbox>(_byKey('automation-enable-switch')).onChanged,
         isNull,
       );
       expect(
@@ -434,7 +432,7 @@ void main() {
       );
       expect(
         tester
-            .widget<CheckboxListTile>(_byKey('automation-allow-pty-checkbox'))
+            .widget<Checkbox>(_byKey('automation-allow-pty-checkbox'))
             .onChanged,
         isNull,
       );
@@ -454,9 +452,7 @@ void main() {
         await _pumpTab(tester, driver);
 
         expect(
-          tester
-              .widget<SwitchListTile>(_byKey('automation-enable-switch'))
-              .value,
+          tester.widget<Checkbox>(_byKey('automation-enable-switch')).value,
           isTrue,
         );
         expect(find.text('Listening on 127.0.0.1:8123'), findsOneWidget);
@@ -466,7 +462,7 @@ void main() {
         );
         expect(
           tester
-              .widget<CheckboxListTile>(_byKey('automation-allow-pty-checkbox'))
+              .widget<Checkbox>(_byKey('automation-allow-pty-checkbox'))
               .value,
           isTrue,
         );
