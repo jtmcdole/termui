@@ -324,6 +324,9 @@ flutter::EncodableMap ApplyWindowBounds(HWND hwnd,
     return MakeUnsupportedBounds();
   }
   const BoundsMutation mutation = ParseBoundsMutation(args);
+  if (!IsWindowVisible(hwnd)) {
+    ShowWindow(hwnd, mutation.focus ? SW_SHOWNORMAL : SW_SHOWNOACTIVATE);
+  }
   if ((mutation.has_move() || mutation.has_size()) &&
       (IsIconic(hwnd) || IsZoomed(hwnd))) {
     ShowWindow(hwnd, mutation.focus ? SW_RESTORE : SW_SHOWNOACTIVATE);

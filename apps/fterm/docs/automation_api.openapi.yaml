@@ -1,0 +1,1919 @@
+openapi: 3.2.0
+$self: ./automation_api.openapi.yaml
+info:
+  title: fterm HTTP Automation Driver API
+  summary: Stateless loopback HTTP API for driving the fterm desktop terminal multiplexer.
+  version: 1.0.0
+  description: |
+    Local-only (`127.0.0.1`) HTTP automation interface embedded in desktop builds of `fterm`.
+
+    ### Security & Transport Guardrails
+    - **Loopback bind + Host allowlist:** Binds strictly to `127.0.0.1:<port>` and requires a single `Host` header equal to `127.0.0.1:<port>` or `localhost:<port>` (`403 forbidden_host` otherwise).
+    - **Browser CORS protection:** `OPTIONS` requests return `405 method_not_allowed` with zero `Access-Control-*` headers.
+    - **Constant-time Bearer authentication:** Every request requires `Authorization: Bearer <token>` (`401 unauthorized` on mismatch). Rotating the password in Settings revokes the old token immediately.
+    - **Scope separation:** All routes under **Base Scope** are available when the driver is enabled. Routes under **PTY Scope** (`/v1/tabs/spawn`, `/v1/pty/write`, `/v1/screen`, `/v1/screen/find`, `/v1/input/mouse`) return `403 pty_scope_disabled` unless **Allow PTY** is explicitly enabled.
+    - **Strict JSON + FIFO serialization:** `POST` requests require `Content-Type: application/json` (`415`), a JSON object body capped at `256 KiB` (`413`), and execute in FIFO arrival order. All responses set `Cache-Control: no-store`.
+
+servers:
+  - url: http://{host}:{port}
+    description: Local loopback fterm automation server
+    variables:
+      host:
+        default: 127.0.0.1
+        enum:
+          - 127.0.0.1
+          - localhost
+      port:
+        default: '9911'
+        description: Configured loopback port (1-65535; default 9911).
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Base Scope
+    summary: UI, window, shader, tab navigation, and shader-only pointer endpoints
+    description: Available whenever the HTTP Automation Driver is enabled.
+    kind: nav
+  - name: PTY Scope
+    summary: Shell spawning, raw PTY I/O, screen reading, and pane mouse dispatch
+    description: Requires both the HTTP Automation Driver and the Allow PTY toggle (or `--automation-allow-pty`).
+    kind: nav
+  - name: State
+    parent: Base Scope
+    summary: Aggregate workspace snapshot
+  - name: Window
+    parent: Base Scope
+    summary: Native window bounds and capture geometry
+  - name: UI
+    parent: Base Scope
+    summary: Font size, themes, Perf HUD, and modal overlays
+  - name: Shaders
+    parent: Base Scope
+    summary: Workspace shader chains and live GLSL shader editor
+  - name: Tabs
+    parent: Base Scope
+    summary: Tab and split-pane inspection, focus, and closing
+  - name: Pointer
+    parent: Base Scope
+    summary: Shader-only iMouse pointer injection
+  - name: PTY
+    parent: PTY Scope
+    summary: Local shell spawning and raw PTY byte writes
+  - name: Screen
+    parent: PTY Scope
+    summary: Visible terminal grid readback and text/regex search
+  - name: Mouse
+    parent: PTY Scope
+    summary: Pane-level mouse dispatch to TUI apps and shader iMouse
+
+paths:
+  /v1/state:
+    get:
+      operationId: getState
+      tags:
+        - State
+      summary: Read aggregate workspace state
+      description: Returns window bounds, active overlay, theme, font size, Perf HUD state, active shader chains, background opacity, and all tabs/panes (omits FPS).
+      responses:
+        '200':
+          description: Current workspace state snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/window/bounds:
+    get:
+      operationId: getWindowBounds
+      tags:
+        - Window
+      summary: Read current window bounds and active grid dimensions
+      description: Queries `MethodChannel('fterm/window')` for DWM-compensated physical and logical bounds, DPR, chrome flags, and the focused pane's `cols`/`rows`.
+      responses:
+        '200':
+          description: Current window bounds snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WindowBoundsEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      operationId: setWindowBounds
+      tags:
+        - Window
+      summary: Snap native window bounds and capture flags
+      description: |
+        Applies snap-only window placement, size, `squareCorners`, `alwaysOnTop`, and `focus` via `MethodChannel('fterm/window')`.
+        On Windows, automatically restores minimized/maximized windows, compensates for DWM extended-frame shadow borders, and performs cross-monitor DPI correction.
+        Awaits frame settle (plus resize debounce settle when width/height change) before returning updated bounds and `cols`/`rows`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WindowBoundsRequest'
+            examples:
+              snap1080p:
+                summary: Snap to 1920x1080 top-left physical pixels with square corners
+                dataValue:
+                  x: 0
+                  y: 0
+                  width: 1920
+                  height: 1080
+                  units: physical
+                  squareCorners: true
+                  focus: true
+      responses:
+        '200':
+          description: Updated window bounds and focused pane dimensions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WindowBoundsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/ui:
+    get:
+      operationId: getUi
+      tags:
+        - UI
+      summary: Read UI settings and available theme presets
+      responses:
+        '200':
+          description: Current UI state snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UiEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      operationId: updateUi
+      tags:
+        - UI
+      summary: Update font size, theme, Perf HUD, or modal overlay
+      description: |
+        Applies any subset of `fontSize`, `theme`, `perfHud`, and `overlay`, then awaits one frame settle.
+        Selecting a `theme` matches `TerminalColorTheme.presets` by ID or case-insensitive name and switches `appearanceMode` polarity (`light` or `dark`) to match the preset.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UiUpdateRequest'
+            examples:
+              cleanCaptureChrome:
+                summary: Set 16pt font, enable Perf HUD, dismiss overlays
+                dataValue:
+                  fontSize: 16
+                  perfHud: true
+                  overlay: none
+      responses:
+        '200':
+          description: Updated UI state snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UiEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/shader:
+    get:
+      operationId: getShader
+      tags:
+        - Shaders
+      summary: Read active workspace shader chains and available presets
+      responses:
+        '200':
+          description: Current workspace shader configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShaderEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      operationId: updateShader
+      tags:
+        - Shaders
+      summary: Update workspace background/foreground shader chains and opacity
+      description: |
+        Clears and/or replaces ordered background and foreground shader chains (built-in preset wire names or custom `.glsl` paths) and optional `backgroundOpacity`.
+        Explicit `backgroundOpacity` is applied after chain updates so background auto-reveal never overwrites it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShaderUpdateRequest'
+            examples:
+              applyCrtForeground:
+                summary: Apply CRT foreground shader with explicit opacity
+                dataValue:
+                  foreground:
+                    - crt
+                  backgroundOpacity: 0.85
+      responses:
+        '200':
+          description: Updated workspace shader configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShaderEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/shader/editor:
+    get:
+      operationId: getShaderEditor
+      tags:
+        - Shaders
+      summary: Inspect the active or first open live GLSL shader editor tab
+      description: 'Returns `{ "open": false }` if no shader editor pane is open, or full editor buffer state and diagnostics when open.'
+      responses:
+        '200':
+          description: Current shader editor state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShaderEditorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+    post:
+      operationId: updateShaderEditor
+      tags:
+        - Shaders
+      summary: Open, configure, edit, and compile the live GLSL shader editor tab
+      description: |
+        Opens or focuses a shader editor tab (cloning a built-in `preset`, opening a `path`, reusing an existing editor, or opening a fresh starter), optionally updates `source` or performs a first-occurrence `find`/`replace`, updates `previewMode`/`composition`, and runs `triggerCompileNow()` when `awaitCompile` is true (default).
+        Returns `422 shader_compile_error` with structured GLSL diagnostics if compilation produces error-severity diagnostics.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ShaderEditorUpdateRequest'
+            examples:
+              openAndPatch:
+                summary: Open shader editor in background preview mode and patch a constant
+                dataValue:
+                  open: true
+                  previewMode: bg
+                  composition: solo
+                  find: '0.35'
+                  replace: '0.60'
+                  awaitCompile: true
+      responses:
+        '200':
+          description: Shader editor state after edit and compilation.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShaderEditorUpdateEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '404':
+          description: No shader editor pane is open (`editor_not_found`) or `find` pattern did not match (`find_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          description: GLSL compilation failed (`shader_compile_error`) with line/column diagnostics in `error.details`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShaderCompileErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/tabs:
+    get:
+      operationId: getTabs
+      tags:
+        - Tabs
+      summary: List workspace tabs and split panes
+      responses:
+        '200':
+          description: Current tabs and split-pane geometry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabsEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/tabs/select:
+    post:
+      operationId: selectTabOrPane
+      tags:
+        - Tabs
+      summary: Select a tab or focus a specific split pane
+      description: |
+        Requires at least one selector (`paneId`, `tabId`, `index`, or case-insensitive `title`).
+        When `paneId` is provided, focuses that pane directly; otherwise resolves the tab in precedence order `tabId` > `index` > `title`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TabSelectRequest'
+      responses:
+        '200':
+          description: Updated tabs snapshot after selection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '404':
+          description: Target tab (`tab_not_found`) or pane (`pane_not_found`) was not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/tabs/close:
+    post:
+      operationId: closeTabOrPane
+      tags:
+        - Tabs
+      summary: Close a pane or tab
+      description: |
+        Closes `paneId` if provided, else closes the tab matched by `tabId` or `index`, else closes the currently focused pane.
+        `force` defaults to `true` so unsaved `ShaderEditorPane` buffers close cleanly without blocking on confirmation prompts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TabCloseRequest'
+      responses:
+        '200':
+          description: Updated tabs snapshot after closing.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabsEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '404':
+          description: Target tab (`tab_not_found`) or pane (`pane_not_found`) was not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/input/pointer:
+    post:
+      operationId: injectShaderPointer
+      tags:
+        - Pointer
+      summary: Inject shader-only iMouse pointer state
+      description: |
+        Updates `TerminalSurfaceState`'s `iMouse` uniform directly using normalized `[0, 1]` coordinates without moving the OS cursor or emitting PTY mouse bytes.
+        Set `"clear": true` to reset pointer state and click history to zero.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PointerInputRequest'
+            examples:
+              hoverCenter:
+                summary: Hover at center of focused pane
+                dataValue:
+                  x: 0.5
+                  y: 0.5
+                  pressed: false
+              clearPointer:
+                summary: Clear injected shader pointer
+                dataValue:
+                  clear: true
+      responses:
+        '200':
+          description: Pointer state applied or cleared.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PointerInputEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHost'
+        '404':
+          description: Pane not found (`pane_not_found`), dispatcher unattached (`surface_unavailable`), or surface not mounted (`surface_not_mounted`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/tabs/spawn:
+    post:
+      operationId: spawnTabOrSplit
+      tags:
+        - PTY
+      summary: Spawn a new local shell tab or split pane (PTY scope)
+      description: |
+        Requires **Allow PTY**.
+        - Omit `split` to open a new top-level tab.
+        - Pass `split: "horizontal"` to split side-by-side (`Row`) or `split: "vertical"` to split top-and-bottom (`Column`).
+        - When only `cwd` is supplied (no `command`), preserves the user's configured shell executable, arguments, and login-shell preference.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TabSpawnRequest'
+            examples:
+              splitSideBySide:
+                summary: Open a side-by-side split pane with custom title
+                dataValue:
+                  split: horizontal
+                  title: demo-pane
+      responses:
+        '200':
+          description: Newly spawned tab and pane identifiers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TabSpawnEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHostOrPty'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: Local shell spawn failed (`spawn_failed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/pty/write:
+    post:
+      operationId: writePtyBytes
+      tags:
+        - PTY
+      summary: Write raw UTF-8 or base64 bytes to a PTY pane (PTY scope)
+      description: |
+        Requires **Allow PTY**.
+        Provide exactly one of `text` (encoded as UTF-8) or `base64` (decoded raw bytes, useful for binary or `ESC _ S` sequences).
+        Writes are chunked at 4096 bytes and automatically scroll the pane back to the bottom if scrolled up.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PtyWriteRequest'
+            examples:
+              runCommand:
+                summary: Send a shell command with carriage return
+                dataValue:
+                  text: "echo HELLO_FTERM\r"
+      responses:
+        '200':
+          description: Bytes written to the PTY.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PtyWriteEnvelope'
+        '400':
+          description: Validation error (`bad_request`) or target is a shader editor pane (`editor_pane_not_writable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHostOrPty'
+        '404':
+          description: Target or focused pane was not found (`pane_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: Target PTY pane has already exited (`pane_exited`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/screen:
+    get:
+      operationId: getScreen
+      tags:
+        - Screen
+      summary: Read visible terminal buffer lines and cursor state (PTY scope)
+      description: Requires **Allow PTY**. Reads the visible `tui.Buffer` grid and cursor from the requested `paneId` (or currently focused pane, supporting both PTY panes and `ShaderEditorPane`).
+      parameters:
+        - name: paneId
+          in: query
+          required: false
+          description: Optional pane ID to inspect (defaults to the focused pane).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Visible screen snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHostOrPty'
+        '404':
+          description: Target or focused pane was not found (`pane_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/screen/find:
+    post:
+      operationId: findInScreen
+      tags:
+        - Screen
+      summary: Search visible screen rows for literal text or regex (PTY scope)
+      description: |
+        Requires **Allow PTY**.
+        Scans visible rows of `tui.Buffer.characters` (skipping empty continuation cells of wide CJK/emoji glyphs) and returns every match with exact 0-based cell coordinates (`row`, `col`, `endCol`) plus normalized `[0, 1]` center coordinates (`x`, `y`) ready for `/v1/input/mouse` or `/v1/input/pointer`.
+        Provide exactly one non-empty `text` or `regex`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScreenFindRequest'
+            examples:
+              findButton:
+                summary: Locate a TUI button label on screen
+                dataValue:
+                  text: '[ OK ]'
+                  caseSensitive: true
+      responses:
+        '200':
+          description: All matching spans in the visible buffer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScreenFindEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHostOrPty'
+        '404':
+          description: Target or focused pane was not found (`pane_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/input/mouse:
+    post:
+      operationId: sendPaneMouseInput
+      tags:
+        - Mouse
+      summary: Dispatch pane-level mouse event to TUI PTY and shader iMouse (PTY scope)
+      description: |
+        Requires **Allow PTY**.
+        Accepts either 0-based cell coordinates (`col`, `row`) or normalized pane coordinates (`x`, `y` in `[0, 1]`).
+        Updates shader `iMouse` state AND dispatches 1-based `ev.MouseEvent` to `FtermPaneController.sendInputEvent` (or `ShaderEditorPane.handleInputEvent`).
+        - `"click"` dispatches `press` followed immediately by `release`.
+        - `"scroll"` dispatches `ceil(|deltaY|)` (clamped to `1..20`) wheel events (`deltaY < 0` scrolls up, `deltaY > 0` scrolls down; default `1.0`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MouseInputRequest'
+            examples:
+              clickCell:
+                summary: Left-click a TUI button at cell (12, 4)
+                dataValue:
+                  action: click
+                  col: 12
+                  row: 4
+                  button: left
+              scrollUp:
+                summary: Scroll up 3 ticks at center of pane
+                dataValue:
+                  action: scroll
+                  x: 0.5
+                  y: 0.5
+                  deltaY: -3
+      responses:
+        '200':
+          description: Resolved coordinates and dispatched action.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MouseInputEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/ForbiddenHostOrPty'
+        '404':
+          description: Target or focused pane was not found (`pane_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: Target PTY pane has already exited (`pane_exited`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: xxxxx-xxxxx-xxxxx-xxxxx
+      description: Persisted automation password from Settings -> Automation (or ephemeral `FTERM_AUTOMATION_TOKEN` env override).
+
+  responses:
+    BadRequest:
+      description: Malformed JSON or invalid request parameter (`invalid_json` or `bad_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthorized:
+      description: 'Missing or invalid `Authorization: Bearer <token>` header (`unauthorized`).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ForbiddenHost:
+      description: Request `Host` header is not `127.0.0.1:<port>` or `localhost:<port>` (`forbidden_host`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ForbiddenHostOrPty:
+      description: Disallowed `Host` header (`forbidden_host`) or Allow PTY toggle is disabled (`pty_scope_disabled`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    MethodNotAllowed:
+      description: Unsupported HTTP method or rejected `OPTIONS` CORS preflight (`method_not_allowed`). Emits zero `Access-Control-*` headers.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    PayloadTooLarge:
+      description: Request body exceeds `256 KiB` (`payload_too_large`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    UnsupportedMediaType:
+      description: 'Missing or non-`application/json` `Content-Type` header on `POST` (`unsupported_media_type`).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    InternalError:
+      description: Unexpected server error (`internal_error`) or server stopping (`server_stopped` / `503`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+
+  schemas:
+    # -------------------------------------------------------------------------
+    # Envelopes & Error Models
+    # -------------------------------------------------------------------------
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Machine-readable snake_case error identifier.
+          examples:
+            - bad_request
+            - unauthorized
+            - pty_scope_disabled
+        message:
+          type: string
+          description: Human-readable error explanation.
+        details:
+          type: object
+          additionalProperties: true
+          description: Optional structured diagnostic payload (present on `422 shader_compile_error`).
+
+    ErrorEnvelope:
+      type: object
+      required:
+        - ok
+        - error
+      properties:
+        ok:
+          const: false
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+
+    # -------------------------------------------------------------------------
+    # Window Bounds
+    # -------------------------------------------------------------------------
+    WindowBoundsRect:
+      type: object
+      required:
+        - x
+        - y
+        - width
+        - height
+      properties:
+        x:
+          type: number
+        y:
+          type: number
+        width:
+          type: number
+          minimum: 0
+        height:
+          type: number
+          minimum: 0
+
+    WindowBoundsSnapshot:
+      type: object
+      required:
+        - supported
+        - dpr
+        - alwaysOnTop
+        - squareCorners
+      properties:
+        supported:
+          type: boolean
+          description: True on platforms implementing `getBounds`/`setBounds` on `fterm/window` (currently Windows).
+        physical:
+          $ref: '#/components/schemas/WindowBoundsRect'
+          description: Visible DWM-compensated frame in physical pixels (omitted when `supported` is false).
+        logical:
+          $ref: '#/components/schemas/WindowBoundsRect'
+          description: Visible frame in DPI-scaled logical pixels (omitted when `supported` is false).
+        dpr:
+          type: number
+          exclusiveMinimum: 0
+          description: Window device pixel ratio (`dpi / 96.0`).
+        alwaysOnTop:
+          type: boolean
+        squareCorners:
+          type: boolean
+
+    WindowBoundsResult:
+      allOf:
+        - $ref: '#/components/schemas/WindowBoundsSnapshot'
+        - type: object
+          properties:
+            cols:
+              type: integer
+              minimum: 1
+              description: Focused pane width in cells (omitted if no pane is open).
+            rows:
+              type: integer
+              minimum: 1
+              description: Focused pane height in cells (omitted if no pane is open).
+
+    WindowBoundsEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/WindowBoundsResult'
+
+    WindowBoundsRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        x:
+          type: number
+          description: Optional target left edge in `units`.
+        y:
+          type: number
+          description: Optional target top edge in `units`.
+        width:
+          type: number
+          exclusiveMinimum: 0
+          description: Optional positive target width in `units`.
+        height:
+          type: number
+          exclusiveMinimum: 0
+          description: Optional positive target height in `units`.
+        units:
+          type: string
+          enum:
+            - physical
+            - logical
+          default: physical
+        squareCorners:
+          type: boolean
+          description: Suppresses Windows 11 rounded corners when true.
+        alwaysOnTop:
+          type: boolean
+          description: Pins or unpins topmost Z-order.
+        focus:
+          type: boolean
+          description: Activates and brings the window to the foreground when true.
+
+    # -------------------------------------------------------------------------
+    # State & Tabs
+    # -------------------------------------------------------------------------
+    PaneSummary:
+      type: object
+      required:
+        - paneId
+        - kind
+        - cols
+        - rows
+        - focused
+        - title
+      properties:
+        paneId:
+          type: string
+        kind:
+          type: string
+          enum:
+            - local_pty
+            - remote_pty
+            - shader_editor
+            - unknown
+        cols:
+          type: integer
+          minimum: 0
+        rows:
+          type: integer
+          minimum: 0
+        focused:
+          type: boolean
+        title:
+          type: string
+        exited:
+          type: boolean
+          description: Present on `local_pty` and `remote_pty` panes.
+        isDirty:
+          type: boolean
+          description: Present on `shader_editor` panes.
+
+    TabSummary:
+      type: object
+      required:
+        - index
+        - tabId
+        - title
+        - active
+        - focusedPaneId
+        - zoomedPaneId
+        - panes
+      properties:
+        index:
+          type: integer
+          minimum: 0
+        tabId:
+          type: string
+        title:
+          type: string
+        active:
+          type: boolean
+        focusedPaneId:
+          type: string
+        zoomedPaneId:
+          type:
+            - string
+            - 'null'
+        panes:
+          type: array
+          items:
+            $ref: '#/components/schemas/PaneSummary'
+
+    TabsSnapshot:
+      type: object
+      required:
+        - activeTabIndex
+        - activeTabId
+        - focusedPaneId
+        - tabs
+      properties:
+        activeTabIndex:
+          type: integer
+        activeTabId:
+          type:
+            - string
+            - 'null'
+        focusedPaneId:
+          type:
+            - string
+            - 'null'
+        tabs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TabSummary'
+
+    TabsEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/TabsSnapshot'
+
+    StateResult:
+      type: object
+      required:
+        - window
+        - overlay
+        - theme
+        - appearanceMode
+        - fontSize
+        - perfHud
+        - backgroundShaderChain
+        - foregroundShaderChain
+        - backgroundOpacity
+        - activeTabIndex
+        - activeTabId
+        - focusedPaneId
+        - tabs
+      properties:
+        window:
+          $ref: '#/components/schemas/WindowBoundsSnapshot'
+        overlay:
+          type: string
+          description: Active `FtermOverlay` name (e.g., `none`, `settings`, `help`, `about`, `whatsNew`).
+        theme:
+          type: string
+          description: Active terminal theme preset ID.
+        appearanceMode:
+          type: string
+          enum:
+            - system
+            - dark
+            - light
+        fontSize:
+          type: number
+        perfHud:
+          type: boolean
+        backgroundShaderChain:
+          type: array
+          items:
+            type: string
+        foregroundShaderChain:
+          type: array
+          items:
+            type: string
+        backgroundOpacity:
+          type: number
+          minimum: 0
+          maximum: 1
+        activeTabIndex:
+          type: integer
+        activeTabId:
+          type:
+            - string
+            - 'null'
+        focusedPaneId:
+          type:
+            - string
+            - 'null'
+        tabs:
+          type: array
+          items:
+            $ref: '#/components/schemas/TabSummary'
+
+    StateEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/StateResult'
+
+    TabSelectRequest:
+      type: object
+      description: Provide at least one of `paneId`, `tabId`, `index`, or `title`.
+      properties:
+        paneId:
+          type: string
+        tabId:
+          type: string
+        index:
+          type: integer
+          minimum: 0
+        title:
+          type: string
+          description: Case-insensitive resolved tab title match.
+
+    TabCloseRequest:
+      type: object
+      properties:
+        paneId:
+          type: string
+        tabId:
+          type: string
+        index:
+          type: integer
+          minimum: 0
+        force:
+          type: boolean
+          default: true
+          description: Forces closing dirty shader editor panes without confirmation prompts.
+
+    TabSpawnRequest:
+      type: object
+      properties:
+        split:
+          type: string
+          enum:
+            - horizontal
+            - vertical
+          description: Omit for a new tab; `horizontal` splits side-by-side (`Row`), `vertical` splits top-and-bottom (`Column`).
+        title:
+          type: string
+          description: Optional pinned tab title applied after spawn.
+        command:
+          type: string
+          minLength: 1
+          description: Optional shell executable override.
+        args:
+          type: array
+          items:
+            type: string
+          description: Optional arguments forwarded to `command`.
+        cwd:
+          type: string
+          minLength: 1
+          description: Optional working directory (preserves user shell defaults when `command` is omitted).
+
+    TabSpawnResult:
+      type: object
+      required:
+        - tabId
+        - paneId
+      properties:
+        tabId:
+          type: string
+        paneId:
+          type: string
+
+    TabSpawnEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/TabSpawnResult'
+
+    # -------------------------------------------------------------------------
+    # UI
+    # -------------------------------------------------------------------------
+    UiSnapshot:
+      type: object
+      required:
+        - fontSize
+        - theme
+        - appearanceMode
+        - availableThemes
+        - perfHud
+        - overlay
+      properties:
+        fontSize:
+          type: number
+        theme:
+          type: string
+        appearanceMode:
+          type: string
+          enum:
+            - system
+            - dark
+            - light
+        availableThemes:
+          type: array
+          items:
+            type: string
+        perfHud:
+          type: boolean
+        overlay:
+          type: string
+
+    UiEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/UiSnapshot'
+
+    UiUpdateRequest:
+      type: object
+      properties:
+        fontSize:
+          type: number
+          exclusiveMinimum: 0
+          description: Clamped internally to `[6.0, maxFontSize]`.
+        theme:
+          type: string
+          description: Preset ID or case-insensitive preset name from `availableThemes`.
+        perfHud:
+          type: boolean
+        overlay:
+          type: string
+          enum:
+            - none
+            - settings
+            - help
+            - about
+            - whatsNew
+
+    # -------------------------------------------------------------------------
+    # Shaders & Shader Editor
+    # -------------------------------------------------------------------------
+    ShaderSnapshot:
+      type: object
+      required:
+        - background
+        - foreground
+        - backgroundOpacity
+        - availablePresets
+      properties:
+        background:
+          type: array
+          items:
+            type: string
+        foreground:
+          type: array
+          items:
+            type: string
+        backgroundOpacity:
+          type: number
+          minimum: 0
+          maximum: 1
+        availablePresets:
+          type: array
+          items:
+            type: string
+
+    ShaderEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/ShaderSnapshot'
+
+    ShaderUpdateRequest:
+      type: object
+      properties:
+        clear:
+          type: boolean
+          default: false
+          description: Clears both background and foreground chains before applying `background`/`foreground`.
+        background:
+          type: array
+          items:
+            type: string
+        foreground:
+          type: array
+          items:
+            type: string
+        backgroundOpacity:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    ShaderDiagnosticItem:
+      type: object
+      required:
+        - severity
+        - origin
+        - message
+        - length
+      properties:
+        severity:
+          type: string
+          enum:
+            - error
+            - warning
+            - info
+        origin:
+          type: string
+        message:
+          type: string
+        line:
+          type: integer
+          minimum: 1
+        column:
+          type: integer
+          minimum: 1
+        length:
+          type: integer
+          minimum: 0
+        hint:
+          type: string
+
+    ShaderEditorClosedState:
+      type: object
+      required:
+        - open
+      properties:
+        open:
+          const: false
+
+    ShaderEditorOpenState:
+      type: object
+      required:
+        - open
+        - paneId
+        - tabId
+        - shaderName
+        - sourcePath
+        - previewMode
+        - composition
+        - isDirty
+        - source
+        - diagnostics
+      properties:
+        open:
+          const: true
+        paneId:
+          type: string
+        tabId:
+          type: string
+        shaderName:
+          type: string
+        sourcePath:
+          type:
+            - string
+            - 'null'
+        previewMode:
+          type: string
+          enum:
+            - off
+            - bg
+            - fg
+        composition:
+          type: string
+          enum:
+            - solo
+            - blend
+        isDirty:
+          type: boolean
+        source:
+          type: string
+        diagnostics:
+          type: array
+          items:
+            $ref: '#/components/schemas/ShaderDiagnosticItem'
+
+    ShaderEditorEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          oneOf:
+            - $ref: '#/components/schemas/ShaderEditorClosedState'
+            - $ref: '#/components/schemas/ShaderEditorOpenState'
+
+    ShaderEditorUpdateResult:
+      allOf:
+        - $ref: '#/components/schemas/ShaderEditorOpenState'
+        - type: object
+          required:
+            - compiled
+          properties:
+            compiled:
+              const: true
+
+    ShaderEditorUpdateEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/ShaderEditorUpdateResult'
+
+    ShaderCompileErrorEnvelope:
+      type: object
+      required:
+        - ok
+        - error
+      properties:
+        ok:
+          const: false
+        error:
+          type: object
+          required:
+            - code
+            - message
+            - details
+          properties:
+            code:
+              const: shader_compile_error
+            message:
+              type: string
+            details:
+              type: object
+              required:
+                - paneId
+                - tabId
+                - compiled
+                - diagnostics
+              properties:
+                paneId:
+                  type: string
+                tabId:
+                  type: string
+                compiled:
+                  const: false
+                diagnostics:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ShaderDiagnosticItem'
+
+    ShaderEditorUpdateRequest:
+      type: object
+      description: Specify at most one of `preset` or `path`; `source` cannot be combined with `find`/`replace`.
+      properties:
+        open:
+          type: boolean
+          default: true
+          description: Opens/focuses an editor tab when true; requires an already-open editor when false (`404 editor_not_found` otherwise).
+        preset:
+          type: string
+          description: Built-in shader preset wireName or enum name to clone into a new editor tab.
+        path:
+          type: string
+          description: Existing custom shader file path or storage key to open/focus.
+        previewMode:
+          type: string
+          enum:
+            - off
+            - bg
+            - background
+            - fg
+            - foreground
+        composition:
+          type: string
+          enum:
+            - solo
+            - blend
+            - blendWithWorkspace
+        source:
+          type: string
+          description: Replaces the full GLSL editor buffer.
+        find:
+          type: string
+          minLength: 1
+          description: First-occurrence substring to replace (must be paired with `replace`; returns `404 find_not_found` if absent).
+        replace:
+          type: string
+          description: Replacement text for `find`.
+        awaitCompile:
+          type: boolean
+          default: true
+          description: Triggers immediate compilation and returns `422` if error diagnostics exist.
+
+    # -------------------------------------------------------------------------
+    # PTY, Screen & Mouse/Pointer Input
+    # -------------------------------------------------------------------------
+    PtyWriteRequest:
+      type: object
+      description: Provide exactly one of `text` or `base64`.
+      properties:
+        text:
+          type: string
+          description: UTF-8 string written directly to the PTY.
+        base64:
+          type: string
+          format: byte
+          description: Base64-encoded raw bytes written directly to the PTY.
+        paneId:
+          type: string
+          description: Optional target pane ID (defaults to focused pane).
+
+    PtyWriteResult:
+      type: object
+      required:
+        - paneId
+        - bytesWritten
+      properties:
+        paneId:
+          type: string
+        bytesWritten:
+          type: integer
+          minimum: 0
+
+    PtyWriteEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/PtyWriteResult'
+
+    ScreenCursor:
+      type: object
+      required:
+        - col
+        - row
+        - visible
+      properties:
+        col:
+          type: integer
+          minimum: 0
+        row:
+          type: integer
+          minimum: 0
+        visible:
+          type: boolean
+
+    ScreenSnapshot:
+      type: object
+      required:
+        - paneId
+        - cols
+        - rows
+        - cursor
+        - lines
+      properties:
+        paneId:
+          type: string
+        cols:
+          type: integer
+          minimum: 1
+        rows:
+          type: integer
+          minimum: 1
+        cursor:
+          $ref: '#/components/schemas/ScreenCursor'
+        lines:
+          type: array
+          items:
+            type: string
+
+    ScreenEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/ScreenSnapshot'
+
+    ScreenFindRequest:
+      type: object
+      description: Provide exactly one non-empty `text` or `regex`.
+      properties:
+        text:
+          type: string
+          minLength: 1
+        regex:
+          type: string
+          minLength: 1
+        caseSensitive:
+          type: boolean
+          default: true
+        paneId:
+          type: string
+          description: Optional target pane ID (defaults to focused pane).
+
+    ScreenMatch:
+      type: object
+      required:
+        - row
+        - col
+        - endCol
+        - text
+        - x
+        - y
+      properties:
+        row:
+          type: integer
+          minimum: 0
+        col:
+          type: integer
+          minimum: 0
+          description: Zero-based inclusive starting cell column.
+        endCol:
+          type: integer
+          minimum: 0
+          description: Zero-based exclusive ending cell column (includes trailing wide-glyph continuation cell).
+        text:
+          type: string
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Normalized horizontal center coordinate `(col + endCol) / (2 * cols)`.
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Normalized vertical center coordinate `(row + 0.5) / rows`.
+
+    ScreenFindResult:
+      type: object
+      required:
+        - paneId
+        - cols
+        - rows
+        - matches
+      properties:
+        paneId:
+          type: string
+        cols:
+          type: integer
+          minimum: 1
+        rows:
+          type: integer
+          minimum: 1
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScreenMatch'
+
+    ScreenFindEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/ScreenFindResult'
+
+    PointerInputRequest:
+      type: object
+      description: 'Provide normalized `x` and `y` in `[0, 1]`, or set `clear: true`.'
+      properties:
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+        pressed:
+          type: boolean
+          default: false
+        clear:
+          type: boolean
+          default: false
+        paneId:
+          type: string
+          description: Optional target pane ID (defaults to focused pane).
+
+    PointerInjectedResult:
+      type: object
+      required:
+        - paneId
+        - x
+        - y
+        - pressed
+      properties:
+        paneId:
+          type: string
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+        pressed:
+          type: boolean
+
+    PointerClearedResult:
+      type: object
+      required:
+        - paneId
+        - cleared
+      properties:
+        paneId:
+          type: string
+        cleared:
+          const: true
+
+    PointerInputEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          oneOf:
+            - $ref: '#/components/schemas/PointerInjectedResult'
+            - $ref: '#/components/schemas/PointerClearedResult'
+
+    MouseInputRequest:
+      type: object
+      required:
+        - action
+      description: Provide either zero-based cell coordinates (`col`, `row`) or normalized coordinates (`x`, `y` in `[0, 1]`).
+      properties:
+        action:
+          type: string
+          enum:
+            - move
+            - down
+            - drag
+            - up
+            - click
+            - scroll
+        col:
+          type: integer
+          minimum: 0
+        row:
+          type: integer
+          minimum: 0
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+        button:
+          type: string
+          enum:
+            - left
+            - middle
+            - right
+          default: left
+        deltaY:
+          type: number
+          default: 1
+          description: Non-zero scroll delta used when `action == "scroll"` (`< 0` scrolls up, `> 0` scrolls down; `ceil(|deltaY|)` clamped to `1..20` steps).
+        shift:
+          type: boolean
+          default: false
+        ctrl:
+          type: boolean
+          default: false
+        alt:
+          type: boolean
+          default: false
+        paneId:
+          type: string
+          description: Optional target pane ID (defaults to focused pane).
+
+    MouseInputResult:
+      type: object
+      required:
+        - paneId
+        - action
+        - col
+        - row
+        - x
+        - y
+      properties:
+        paneId:
+          type: string
+        action:
+          type: string
+          enum:
+            - move
+            - down
+            - drag
+            - up
+            - click
+            - scroll
+        col:
+          type: integer
+          minimum: 0
+        row:
+          type: integer
+          minimum: 0
+        x:
+          type: number
+          minimum: 0
+          maximum: 1
+        y:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    MouseInputEnvelope:
+      type: object
+      required:
+        - ok
+        - result
+      properties:
+        ok:
+          const: true
+        result:
+          $ref: '#/components/schemas/MouseInputResult'

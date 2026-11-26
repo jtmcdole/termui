@@ -344,8 +344,7 @@ final class PtyCoreWindows implements PtyCore, Finalizable {
       _closeRawHandle(hOutWritePipe.value);
     }
 
-    if (pipe1.error != win32.ERROR_SUCCESS ||
-        pipe2.error != win32.ERROR_SUCCESS) {
+    if (!pipe1.value || !pipe2.value) {
       closeConPtyPipes();
       return null;
     }

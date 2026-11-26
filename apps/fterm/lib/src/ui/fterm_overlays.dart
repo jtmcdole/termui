@@ -29,6 +29,7 @@ import '../update/update_view_model.dart';
 import '../workspace/fterm_workspace_controller.dart';
 import '../workspace/split_tree_model.dart';
 import 'fterm_about_overlay.dart';
+import 'fterm_automation_settings_tab.dart';
 import 'fterm_feedback_overlay.dart';
 import 'fterm_keyboard_settings_tab.dart';
 
@@ -867,8 +868,6 @@ final class _SessionPickerOverlay extends StatelessWidget {
   }
 }
 
-enum _SettingsTab { general, keyboard }
-
 final class _SettingsOverlay extends StatefulWidget {
   final FtermWorkspaceController workspace;
   final FtermOverlayPalette palette;
@@ -891,7 +890,7 @@ final class _SettingsOverlay extends StatefulWidget {
 final class _SettingsOverlayState extends State<_SettingsOverlay> {
   late final TextEditingController _shellExecCtrl;
   late final TextEditingController _shellArgsCtrl;
-  _SettingsTab _activeTab = .general;
+  FtermSettingsSection _activeTab = .general;
 
   @override
   void initState() {
@@ -901,6 +900,7 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
     _shellArgsCtrl = TextEditingController(
       text: FtermWorkspaceController.formatShellArguments(prefs.shellArguments),
     );
+    _consumeRequestedSection();
     widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
   }
 
@@ -913,11 +913,21 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
       );
       widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
     }
+    _consumeRequestedSection();
     _syncControllersFromPreferences();
+  }
+
+  void _consumeRequestedSection() {
+    final requested = widget.workspace.consumeRequestedSettingsSection();
+    if (requested == null) return;
+    _activeTab = (widget.isWeb && requested == .automation)
+        ? .general
+        : requested;
   }
 
   void _onWorkspaceChromeChanged() {
     if (!mounted) return;
+    _consumeRequestedSection();
     _syncControllersFromPreferences();
     setState(() {});
   }
@@ -950,6 +960,9 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
   Widget build(BuildContext context) {
     final workspace = widget.workspace;
     final p = widget.palette;
+    final activeTab = (widget.isWeb && _activeTab == .automation)
+        ? FtermSettingsSection.general
+        : _activeTab;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -970,19 +983,26 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
                 ChoiceChip(
                   key: const ValueKey('settings-tab-general'),
                   label: const Text('General'),
-                  selected: _activeTab == .general,
+                  selected: activeTab == .general,
                   onSelected: (_) => setState(() => _activeTab = .general),
                 ),
                 ChoiceChip(
                   key: const ValueKey('settings-tab-keyboard'),
                   label: const Text('Keyboard'),
-                  selected: _activeTab == .keyboard,
+                  selected: activeTab == .keyboard,
                   onSelected: (_) => setState(() => _activeTab = .keyboard),
                 ),
+                if (!widget.isWeb)
+                  ChoiceChip(
+                    key: const ValueKey('settings-tab-automation'),
+                    label: const Text('Automation'),
+                    selected: activeTab == .automation,
+                    onSelected: (_) => setState(() => _activeTab = .automation),
+                  ),
               ],
             ),
             const SizedBox(height: 12),
-            switch (_activeTab) {
+            switch (activeTab) {
               .general => _SettingsGeneralTab(
                 workspace: workspace,
                 palette: p,
@@ -996,6 +1016,10 @@ final class _SettingsOverlayState extends State<_SettingsOverlay> {
                 palette: p,
                 isWeb: widget.isWeb,
                 platformOverride: widget.platformOverride,
+              ),
+              .automation => FtermAutomationSettingsTab(
+                driver: workspace.automationDriver,
+                palette: p,
               ),
             },
             const SizedBox(height: 6),

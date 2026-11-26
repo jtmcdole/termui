@@ -188,6 +188,48 @@ flutter::UIThreadPolicy ResolveStartupUiThreadPolicy() {
   return flutter::UIThreadPolicy::Default;
 }
 
+std::wstring Utf16FromUtf8(const std::string& utf8_string) {
+  if (utf8_string.empty()) {
+    return {};
+  }
+  const int target_length = ::MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, utf8_string.data(),
+      static_cast<int>(utf8_string.size()), nullptr, 0);
+  if (target_length <= 0) {
+    return {};
+  }
+  std::wstring utf16_string(static_cast<size_t>(target_length), L'\0');
+  const int converted = ::MultiByteToWideChar(
+      CP_UTF8, MB_ERR_INVALID_CHARS, utf8_string.data(),
+      static_cast<int>(utf8_string.size()), utf16_string.data(), target_length);
+  if (converted <= 0) {
+    return {};
+  }
+  return utf16_string;
+}
+
+std::wstring ResolveStartupWindowTitle(
+    const std::vector<std::string>& arguments) {
+  constexpr const char kPrefix[] = "--window-title=";
+  constexpr size_t kPrefixLen = sizeof(kPrefix) - 1;
+  std::string raw_title;
+  for (size_t i = 0; i < arguments.size(); ++i) {
+    const std::string& arg = arguments[i];
+    if (arg == "--window-title" && i + 1 < arguments.size()) {
+      raw_title = arguments[++i];
+    } else if (arg.size() > kPrefixLen &&
+               arg.compare(0, kPrefixLen, kPrefix) == 0) {
+      raw_title = arg.substr(kPrefixLen);
+    }
+  }
+  const std::string trimmed = TrimAscii(raw_title);
+  if (trimmed.empty()) {
+    return L"fterm";
+  }
+  const std::wstring wide = Utf16FromUtf8(trimmed);
+  return wide.empty() ? L"fterm" : wide;
+}
+
 }  // namespace
 
 int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
@@ -206,6 +248,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
+  const std::wstring window_title =
+      ResolveStartupWindowTitle(command_line_arguments);
 
   project.set_dart_entrypoint_arguments(std::move(command_line_arguments));
   project.set_enable_flutter_gpu(true);
@@ -218,7 +262,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"fterm", origin, size)) {
+  if (!window.Create(window_title, origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

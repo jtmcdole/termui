@@ -24,6 +24,7 @@ import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 import 'package:termui_flutter/termui_flutter.dart';
 
+import '../automation/automation_models.dart';
 import '../file_drop_bridge.dart';
 import '../font_loader.dart';
 import '../settings_storage.dart';
@@ -94,6 +95,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
   GlyphAtlasController? _atlasController;
   late FtermShortcutDispatcher _shortcutDispatcher;
   late final TerminalService _terminalService;
+  late final AutomationPointerDispatcher _automationPointerDispatcher;
   final Map<String, FocusNode> _paneFocusNodes = {};
   final Map<String, GlobalKey<State<TerminalSurface>>> _paneSurfaceKeys = {};
   final Map<String, GlobalKey> _paneBoundaryKeys = {};
@@ -156,6 +158,13 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       isWebOverride: widget.isWebOverride,
     );
     _terminalService = _FtermTerminalService(onOpenUrl: widget.onOpenUrl);
+    _automationPointerDispatcher = _ScaffoldAutomationPointerDispatcher(
+      surfaceKeys: _paneSurfaceKeys,
+      isMounted: () => mounted,
+    );
+    widget.workspace.attachAutomationPointerDispatcher(
+      _automationPointerDispatcher,
+    );
     widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
     _lastLayoutSignature = _computeLayoutSignature(
       resolvedFontSize: initialFontSize,
@@ -261,8 +270,12 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       );
     }
     if (!identical(oldWidget.workspace, widget.workspace)) {
+      oldWidget.workspace.attachAutomationPointerDispatcher(null);
       oldWidget.workspace.chromeNotifier.removeListener(
         _onWorkspaceChromeChanged,
+      );
+      widget.workspace.attachAutomationPointerDispatcher(
+        _automationPointerDispatcher,
       );
       widget.workspace.chromeNotifier.addListener(_onWorkspaceChromeChanged);
       _lastRequestedFocusedPaneId = null;
@@ -297,6 +310,9 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       Object.hashAll(ws.preferences.passthroughShortcuts),
       ws.preferences.fontSize,
       ws.updateViewModel.status,
+      ws.automationDriver.isRunning,
+      ws.automationDriver.allowPty,
+      ws.automationDriver.port,
       resolvedFontSize ?? _resolvedFontSize(context),
       for (final tab in ws.tabs) ...[
         tab.tabId,
@@ -538,6 +554,7 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
     WidgetsBinding.instance.removeObserver(this);
     FocusManager.instance.removeEarlyKeyEventHandler(_handleEarlyF12Event);
     _atlasController?.removeListener(_onAtlasChanged);
+    widget.workspace.attachAutomationPointerDispatcher(null);
     widget.workspace.chromeNotifier.removeListener(_onWorkspaceChromeChanged);
     for (final node in _paneFocusNodes.values) {
       node.dispose();
@@ -618,6 +635,15 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
               ),
               if (widget.workspace.shadersEmergencyStopped)
                 _ShaderEmergencyStopPill(workspace: widget.workspace),
+              if (!showBar && widget.workspace.automationDriver.isRunning)
+                _AutomationCornerPill(
+                  driver: widget.workspace.automationDriver,
+                  theme: theme,
+                  topOffset: widget.workspace.showPerfHud ? 68.0 : 8.0,
+                  onTap: () => widget.workspace.openSettingsOverlay(
+                    initialSection: .automation,
+                  ),
+                ),
               ListenableBuilder(
                 listenable: widget.workspace.chromeNotifier,
                 builder: (_, _) => FtermOverlayHost(
@@ -1768,6 +1794,8 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
 
     return [
       if (widget.workspace.isLeaderArmed) _buildLeaderBadge(theme),
+      if (widget.workspace.automationDriver.isRunning)
+        _buildAutomationActiveIndicator(theme),
       if (widget.workspace.shouldShowWhatsNewPill)
         _buildWhatsNewPill(theme, compact: compactWhatsNew),
       _buildConnectActionButton(theme),
@@ -1816,6 +1844,15 @@ final class _FtermShellScaffoldState extends State<FtermShellScaffold>
       ),
     ];
   }
+
+  Widget _buildAutomationActiveIndicator(tui.TerminalColorTheme theme) =>
+      _AutomationActiveIndicator(
+        driver: widget.workspace.automationDriver,
+        theme: theme,
+        height: tabBarHeight,
+        onTap: () =>
+            widget.workspace.openSettingsOverlay(initialSection: .automation),
+      );
 
   Widget _buildWhatsNewPill(
     tui.TerminalColorTheme theme, {
@@ -2841,6 +2878,181 @@ final class _ShaderEmergencyStopPill extends StatelessWidget {
                   ),
                 ),
               ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _ScaffoldAutomationPointerDispatcher
+    implements AutomationPointerDispatcher {
+  final Map<String, GlobalKey<State<TerminalSurface>>> _surfaceKeys;
+  final bool Function() _isMounted;
+
+  const _ScaffoldAutomationPointerDispatcher({
+    required this._surfaceKeys,
+    required this._isMounted,
+  });
+
+  TerminalSurfaceState? _resolveSurface(String paneId) {
+    if (!_isMounted()) return null;
+    final state = _surfaceKeys[paneId]?.currentState;
+    return state is TerminalSurfaceState ? state : null;
+  }
+
+  @override
+  bool injectPointer({
+    required String paneId,
+    required double x,
+    required double y,
+    bool pressed = false,
+  }) {
+    final surface = _resolveSurface(paneId);
+    if (surface == null) return false;
+    surface.injectShaderPointerNormalized(x: x, y: y, pressed: pressed);
+    return true;
+  }
+
+  @override
+  bool clearPointer({required String paneId}) {
+    final surface = _resolveSurface(paneId);
+    if (surface == null) return false;
+    surface.clearInjectedShaderPointer();
+    return true;
+  }
+}
+
+String _formatAutomationIndicatorTooltip(AutomationDriverViewModel driver) {
+  final scope = driver.allowPty ? 'Base + PTY' : 'Base only';
+  return 'Automation driver listening on 127.0.0.1:${driver.port} ($scope) '
+      '— Open Automation settings';
+}
+
+Color _automationIndicatorDotColor(
+  tui.TerminalColorTheme theme, {
+  required bool allowPty,
+}) => allowPty
+    ? Color(theme.resolveAnsi256(3).argb)
+    : Color(theme.resolveAnsi256(4).argb);
+
+final class _AutomationActiveIndicator extends StatelessWidget {
+  final AutomationDriverViewModel driver;
+  final tui.TerminalColorTheme theme;
+  final double height;
+  final VoidCallback onTap;
+
+  const _AutomationActiveIndicator({
+    required this.driver,
+    required this.theme,
+    required this.height,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = Color(theme.foreground.argb);
+    final dotColor = _automationIndicatorDotColor(
+      theme,
+      allowPty: driver.allowPty,
+    );
+    return Tooltip(
+      message: _formatAutomationIndicatorTooltip(driver),
+      child: InkWell(
+        key: const ValueKey('fterm-automation-indicator'),
+        onTap: onTap,
+        child: SizedBox(
+          width: 24,
+          height: height,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Icon(
+                Icons.api_outlined,
+                size: 14,
+                color: fg.withValues(alpha: 0.72),
+              ),
+              Positioned(
+                right: 3,
+                top: 5,
+                child: Container(
+                  key: const ValueKey('fterm-automation-indicator-dot'),
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: dotColor,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _AutomationCornerPill extends StatelessWidget {
+  final AutomationDriverViewModel driver;
+  final tui.TerminalColorTheme theme;
+  final double topOffset;
+  final VoidCallback onTap;
+
+  const _AutomationCornerPill({
+    required this.driver,
+    required this.theme,
+    required this.topOffset,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = Color(theme.foreground.argb);
+    final bg = Color(theme.background.argb);
+    final dotColor = _automationIndicatorDotColor(
+      theme,
+      allowPty: driver.allowPty,
+    );
+    return Positioned(
+      top: topOffset,
+      right: 8,
+      child: Material(
+        color: Colors.transparent,
+        child: Tooltip(
+          message: _formatAutomationIndicatorTooltip(driver),
+          child: InkWell(
+            key: const ValueKey('fterm-automation-corner-pill'),
+            borderRadius: BorderRadius.circular(4),
+            onTap: onTap,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+              decoration: BoxDecoration(
+                color: Color.lerp(bg, fg, 0.14)!.withValues(alpha: 0.88),
+                borderRadius: BorderRadius.circular(4),
+                border: Border.all(color: fg.withValues(alpha: 0.2)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.api_outlined,
+                    size: 12,
+                    color: fg.withValues(alpha: 0.78),
+                  ),
+                  const SizedBox(width: 4),
+                  Container(
+                    key: const ValueKey('fterm-automation-corner-pill-dot'),
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: dotColor,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),
