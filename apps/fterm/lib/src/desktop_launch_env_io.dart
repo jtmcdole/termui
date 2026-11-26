@@ -171,8 +171,9 @@ void logPlatformConnectError(
 }
 
 /// Launches a detached replacement `fterm` process with sanitized [args],
-/// stripping `FTERM_GPU_PREFERENCE` so the restarted instance honors the newly
-/// saved `settings.json` GPU driver preference.
+/// stripping `FTERM_GPU_PREFERENCE` and `FTERM_AUTOMATION_TOKEN` so the
+/// restarted instance honors saved GPU settings and does not inherit ephemeral
+/// automation secrets.
 Future<bool> relaunchPlatformDesktopApp({
   List<String> args = const [],
   Map<String, String>? environment,
@@ -187,7 +188,9 @@ Future<bool> relaunchPlatformDesktopApp({
 }) async {
   final env = Map<String, String>.of(environment ?? Platform.environment);
   if (env.containsKey('FLUTTER_TEST')) return false;
-  env.remove('FTERM_GPU_PREFERENCE');
+  env
+    ..remove('FTERM_GPU_PREFERENCE')
+    ..remove('FTERM_AUTOMATION_TOKEN');
   final starter = processStarter ?? Process.start;
   try {
     await starter(
