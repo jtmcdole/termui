@@ -97,6 +97,8 @@ export 'src/rendering/perf_trace.dart'
     show PerfPhaseStats, PerfTraceSummary, ShaderPerfTrace;
 export 'src/rendering/painter.dart'
     show HoveredLinkCellStyles, HoveredLinkStyler;
+export 'src/rendering/search_highlight.dart'
+    show TerminalSearchHighlight, TerminalSearchHighlightsProvider;
 export 'src/rendering/shader_backend.dart'
     show
         CompiledShaderHandle,

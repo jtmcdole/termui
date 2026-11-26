@@ -29,6 +29,7 @@ import 'package:termui_flutter/termui_flutter.dart'
         ShaderStageHint,
         ShadertoyGlslAnalysis,
         ShadertoyGlslShim,
+        TerminalSearchHighlight,
         TerminalShaderConfig,
         TerminalShaderController,
         TerminalShaderPreset,
@@ -96,6 +97,9 @@ enum FtermOverlay {
 
   /// Release highlights and interactive live shader preview showcase.
   whatsNew,
+
+  /// Top-anchored VS Code-style Command Palette (`>`, Quick Switcher, `:`, `%`).
+  commandPalette,
 }
 
 /// Sidebar section selected inside [FtermOverlay.settings].
@@ -130,6 +134,13 @@ typedef _WhatsNewPreviewSnapshot = ({
   List<String> foregroundChain,
   double backgroundOpacity,
   bool showPerfHud,
+});
+
+typedef _CommandPalettePreviewSnapshot = ({
+  String? paneId,
+  int? scrollOffsetLines,
+  String? editorPaneId,
+  ({tui.TextSelection selection, int scrollOffset})? editorNavigation,
 });
 
 final class _PendingRemoteSpawn {
@@ -313,6 +324,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
   AutomationPointerDispatcher? _automationPointerDispatcher;
   FtermSettingsSection? _requestedSettingsSection;
   FtermSettingsSection _lastSettingsSection = FtermSettingsSection.interface;
+  static const int _maxRecentCommands = 20;
+  final List<String> _recentCommandIds = <String>[];
+  String? _requestedCommandPaletteInput;
+  _CommandPalettePreviewSnapshot? _commandPalettePreviewSnapshot;
 
   /// Cross-platform performance trace recorder bound to this workspace.
   late final FtermTraceRecorder traceRecorder;
@@ -2610,6 +2625,90 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     return requested;
   }
 
+  /// Session-only recently executed Command Palette command IDs, newest first
+  /// (capped at 20 entries).
+  List<String> get recentCommandIds =>
+      List<String>.unmodifiable(_recentCommandIds);
+
+  /// Records [commandId] at the front of the session-only MRU list.
+  void recordRecentCommand(String commandId) {
+    if (_disposed || commandId.isEmpty) return;
+    _recentCommandIds
+      ..remove(commandId)
+      ..insert(0, commandId);
+    if (_recentCommandIds.length > _maxRecentCommands) {
+      _recentCommandIds.removeRange(
+        _maxRecentCommands,
+        _recentCommandIds.length,
+      );
+    }
+  }
+
+  /// Opens [FtermOverlay.commandPalette] pre-filled with [initialInput], or
+  /// updates the requested input when already visible.
+  void openCommandPalette({String initialInput = '>'}) {
+    if (_disposed) return;
+    _requestedCommandPaletteInput = initialInput;
+    if (_activeOverlay != FtermOverlay.commandPalette) {
+      _setOverlay(FtermOverlay.commandPalette);
+      return;
+    }
+    _notifyChromeChanged();
+  }
+
+  /// Returns and clears the most recent initial input requested via
+  /// [openCommandPalette], or `null` if none is pending.
+  String? consumeRequestedCommandPaletteInput() {
+    final requested = _requestedCommandPaletteInput;
+    _requestedCommandPaletteInput = null;
+    return requested;
+  }
+
+  /// Captures the focused pane scrollback offset or shader editor navigation
+  /// snapshot so uncommitted Command Palette previews can roll back cleanly.
+  void captureCommandPalettePreviewSnapshot() {
+    if (_disposed) return;
+    final pane = focusedPane;
+    final editor = focusedEditorPane;
+    _commandPalettePreviewSnapshot = (
+      paneId: pane?.paneId,
+      scrollOffsetLines: pane?.scrollOffsetLines,
+      editorPaneId: editor?.paneId,
+      editorNavigation: editor?.controller.captureNavigationSnapshot(),
+    );
+  }
+
+  /// Commits the current Command Palette preview by discarding the rollback
+  /// snapshot and clearing transient terminal search highlights.
+  void commitCommandPalettePreview() {
+    if (_disposed) return;
+    _commandPalettePreviewSnapshot = null;
+    _clearAllPaneSearchHighlights();
+  }
+
+  void _clearAllPaneSearchHighlights() {
+    for (final pane in _panes.values) {
+      pane.setSearchHighlights(const <TerminalSearchHighlight>[]);
+    }
+  }
+
+  void _rollbackCommandPalettePreview() {
+    final snapshot = _commandPalettePreviewSnapshot;
+    _commandPalettePreviewSnapshot = null;
+    _clearAllPaneSearchHighlights();
+    if (snapshot == null) return;
+    if (snapshot.paneId case final paneId?) {
+      if (snapshot.scrollOffsetLines case final offset?) {
+        _panes[paneId]?.setScrollOffsetLines(offset);
+      }
+    }
+    if (snapshot.editorPaneId case final editorPaneId?) {
+      if (snapshot.editorNavigation case final nav?) {
+        _editorPanes[editorPaneId]?.controller.restoreNavigationSnapshot(nav);
+      }
+    }
+  }
+
   void _setOverlay(FtermOverlay overlay) {
     if (_disposed || _activeOverlay == overlay) return;
     if (_activeOverlay == FtermOverlay.whatsNew &&
@@ -2618,6 +2717,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     } else if (overlay == FtermOverlay.whatsNew &&
         _whatsNewPreviewSnapshot == null) {
       _whatsNewPreviewSnapshot = _captureWhatsNewPreviewSnapshot();
+    }
+    if (_activeOverlay == FtermOverlay.commandPalette &&
+        overlay != FtermOverlay.commandPalette) {
+      _rollbackCommandPalettePreview();
+    } else if (overlay == FtermOverlay.commandPalette &&
+        _commandPalettePreviewSnapshot == null) {
+      captureCommandPalettePreviewSnapshot();
     }
     _activeOverlay = overlay;
     _leaderArmed = false;
@@ -2684,6 +2790,9 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     }
     if (_activeOverlay == FtermOverlay.whatsNew) {
       _whatsNewPreviewSnapshot = null;
+    }
+    if (_activeOverlay == FtermOverlay.commandPalette) {
+      _rollbackCommandPalettePreview();
     }
     if (_activeOverlay != FtermOverlay.none) {
       _activeOverlay = FtermOverlay.none;

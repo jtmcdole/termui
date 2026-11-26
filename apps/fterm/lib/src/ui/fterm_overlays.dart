@@ -160,6 +160,7 @@ final class FtermOverlayHost extends StatelessWidget {
                         palette: palette,
                         isWeb: isWeb,
                       ),
+                      FtermOverlay.commandPalette => const SizedBox.shrink(),
                     },
                   ),
                 ),

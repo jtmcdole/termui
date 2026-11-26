@@ -28,6 +28,7 @@ import 'rendering/gpu_atlas_batch.dart';
 import 'rendering/gpu_frame_watchdog.dart';
 import 'rendering/painter.dart';
 import 'rendering/perf_trace.dart';
+import 'rendering/search_highlight.dart';
 import 'rendering/shader_backend.dart';
 import 'rendering/shader_controller.dart';
 import 'rendering/shader_host.dart';
@@ -298,6 +299,19 @@ final class TerminalSurface extends StatefulWidget {
   /// to [TerminalShaderHost.maxAmbientFps] (`null` = uncapped display vsync).
   final double? maxAmbientFps;
 
+  /// Optional live getter returning active search match highlights to overlay
+  /// above the terminal surface.
+  final TerminalSearchHighlightsProvider? searchHighlightsProvider;
+
+  /// Optional [Listenable] notifying when [searchHighlightsProvider] changes.
+  final Listenable? searchHighlightsListenable;
+
+  /// Optional base color used for inactive search highlight spans.
+  final Color? searchMatchColor;
+
+  /// Optional base color used for the active search highlight span and border.
+  final Color? activeSearchMatchColor;
+
   /// Creates a `Scaffold`-free [TerminalSurface].
   const TerminalSurface({
     super.key,
@@ -371,6 +385,10 @@ final class TerminalSurface extends StatefulWidget {
     this.onCliShaderQuarantined,
     this.tweenClock,
     this.maxAmbientFps = TerminalShaderHost.defaultMaxAmbientFps,
+    this.searchHighlightsProvider,
+    this.searchHighlightsListenable,
+    this.searchMatchColor,
+    this.activeSearchMatchColor,
   });
 
   @override
@@ -441,6 +459,8 @@ final class TerminalSurfaceState extends State<TerminalSurface>
   bool _cachedDirectHasTransforms = false;
   final _SurfaceRepaintNotifier _paintNotifier = _SurfaceRepaintNotifier();
   final _ShaderMouseNotifier _shaderMouseNotifier = _ShaderMouseNotifier();
+  bool _hasSearchHighlights = false;
+  Listenable? _searchOverlayRepaint;
   bool _shaderHasPointerClick = false;
   bool _shaderPrimaryButtonDown = false;
   double _shaderClickLogicalX = 0.0;
@@ -681,6 +701,9 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     if (listenable is TerminalBufferChangeSignal) {
       _lastExternalCellContentRevision = listenable.cellContentRevision;
     }
+    _hasSearchHighlights = _readHasSearchHighlights();
+    _rebuildSearchOverlayRepaint();
+    widget.searchHighlightsListenable?.addListener(_onSearchHighlightsChanged);
     _hadActiveBuffer = _activeBuffer != null;
     _lastTopVirtualRow = _effectiveTopVirtualRow;
     _lastSelectionEpoch = widget.selectionEpochProvider?.call();
@@ -1087,6 +1110,7 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _syncTerminalAndBufferBindings(oldWidget);
     _syncThemeAndModeBindings(oldWidget);
     _syncCliShaderAndWatchdogBindings(oldWidget);
+    _syncSearchHighlightsBinding(oldWidget);
   }
 
   bool _didDirectBatchPropsChange(TerminalSurface oldWidget) =>
@@ -1361,6 +1385,10 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     WidgetsBinding.instance.removeObserver(this);
     HardwareKeyboard.instance.removeHandler(_onHardwareKeyEvent);
     widget.bufferListenable?.removeListener(_onExternalBufferChanged);
+    widget.searchHighlightsListenable?.removeListener(
+      _onSearchHighlightsChanged,
+    );
+    _searchOverlayRepaint = null;
     _cancelTerminalStreams();
     _disposeOwnedControllers();
     _disposeComposingPainter();
@@ -1540,6 +1568,46 @@ final class TerminalSurfaceState extends State<TerminalSurface>
     _syncComposingPainter();
     setState(() {});
     _scheduleGeometrySync();
+  }
+
+  bool _readHasSearchHighlights() =>
+      widget.searchHighlightsProvider?.call().isNotEmpty ?? false;
+
+  void _rebuildSearchOverlayRepaint() {
+    final listenable = widget.searchHighlightsListenable;
+    _searchOverlayRepaint = listenable == null
+        ? _paintNotifier
+        : Listenable.merge(<Listenable>[_paintNotifier, listenable]);
+  }
+
+  void _syncSearchHighlightsBinding(TerminalSurface oldWidget) {
+    if (!identical(
+      oldWidget.searchHighlightsListenable,
+      widget.searchHighlightsListenable,
+    )) {
+      oldWidget.searchHighlightsListenable?.removeListener(
+        _onSearchHighlightsChanged,
+      );
+      widget.searchHighlightsListenable?.addListener(
+        _onSearchHighlightsChanged,
+      );
+      _rebuildSearchOverlayRepaint();
+    }
+    _hasSearchHighlights = _readHasSearchHighlights();
+    if (_hasSearchHighlights &&
+        oldWidget.topVirtualRow != widget.topVirtualRow) {
+      _paintNotifier.notify();
+    }
+  }
+
+  void _onSearchHighlightsChanged() {
+    if (!mounted) return;
+    final next = _readHasSearchHighlights();
+    if (next != _hasSearchHighlights) {
+      setState(() {
+        _hasSearchHighlights = next;
+      });
+    }
   }
 
   void _onFocusChanged() {
@@ -3241,71 +3309,134 @@ final class TerminalSurfaceState extends State<TerminalSurface>
               ),
             ),
     );
-    if (!_hasShaderBinding) {
-      return canvasBox;
-    }
-    final atlas = _atlasController.atlas!;
-    final Widget shaderHost = TerminalShaderHost(
-      controller: widget.shaderController,
-      config: widget.shaderConfig ?? TerminalShaderConfig.empty,
-      paneKey: widget.key?.toString(),
-      cursorRectLogicalProvider: _readCursorRectLogical,
-      cursorColorArgb: widget.palette.cursorColor.argb,
-      cursorStyle: widget.cursorStyle,
-      cursorVisible:
-          widget.cursorVisibleProvider?.call() ?? widget.cursorVisible,
-      cursorVisibleProvider: widget.cursorVisibleProvider,
-      isFocused: _focusNode.hasFocus,
-      foregroundArgb: widget.foregroundColor.toARGB32(),
-      backgroundArgb: widget.backgroundColor.toARGB32(),
-      palette256Argb: _resolvePalette256Argb(),
-      cellSizeLogical: Size(atlas.cellWidth, atlas.cellHeight),
-      activityListenable: _paintNotifier,
-      activitySignal: _directPaintVersion,
-      directTerminalBatchProvider: buf == null
-          ? null
-          : _stageDirectTerminalBatch,
-      atlasImage: atlas.image,
-      atlasDevicePixelRatio: atlas.devicePixelRatio,
-      directLogicalSize: layoutSize,
-      cliShaderRegistry: _cliShaderRegistry,
-      watchdog: _gpuWatchdog,
-      regionLayoutsProvider: buf == null ? null : _provideRegionLayouts,
-      regionFallbackRenderer: buf == null ? null : _renderRegionsFallbackAsync,
-      mouseLogicalListenable: _shaderMouseNotifier,
-      maxAmbientFps: widget.maxAmbientFps,
-      child: canvasBox,
-    );
-    if (activeComposingText.isEmpty) {
-      return shaderHost;
+    final atlas = _atlasController.atlas;
+    final Widget baseSurface = _hasShaderBinding
+        ? _buildShaderHost(
+            layoutSize: layoutSize,
+            atlas: atlas!,
+            buf: buf,
+            canvasBox: canvasBox,
+          )
+        : canvasBox;
+    final showSearchOverlay =
+        _hasSearchHighlights &&
+        widget.searchHighlightsProvider != null &&
+        buf != null &&
+        atlas != null;
+    final showComposingOverlay =
+        _hasShaderBinding && activeComposingText.isNotEmpty && atlas != null;
+    if (!showSearchOverlay && !showComposingOverlay) {
+      return baseSurface;
     }
     return Stack(
       fit: StackFit.passthrough,
       children: <Widget>[
-        shaderHost,
-        Positioned.fill(
-          child: IgnorePointer(
-            child: CustomPaint(
-              size: layoutSize,
-              painter: _TerminalComposingOverlayPainter(
-                cellWidth: atlas.cellWidth,
-                cellHeight: atlas.cellHeight,
-                cursorCol: cursor?.col ?? 0,
-                cursorRow: cursor?.row ?? 0,
-                composingText: activeComposingText,
-                composingPainter: _composingPainter,
-                fontFamily: _atlasController.fontFamily,
-                fontFamilyFallback: _atlasController.fontFamilyFallback,
-                fontSize: atlas.fontSize,
-                defaultForegroundArgb: widget.foregroundColor.toARGB32(),
-                defaultBackgroundArgb: effectiveBgColor.toARGB32(),
-              ),
-            ),
+        baseSurface,
+        if (showSearchOverlay)
+          _buildSearchHighlightOverlay(
+            layoutSize: layoutSize,
+            atlas: atlas,
+            buf: buf,
           ),
-        ),
+        if (showComposingOverlay)
+          _buildComposingOverlay(
+            layoutSize: layoutSize,
+            atlas: atlas,
+            cursor: cursor,
+            activeComposingText: activeComposingText,
+            effectiveBgColor: effectiveBgColor,
+          ),
       ],
     );
   }
+
+  Widget _buildShaderHost({
+    required Size layoutSize,
+    required GlyphAtlas atlas,
+    required Buffer? buf,
+    required Widget canvasBox,
+  }) => TerminalShaderHost(
+    controller: widget.shaderController,
+    config: widget.shaderConfig ?? TerminalShaderConfig.empty,
+    paneKey: widget.key?.toString(),
+    cursorRectLogicalProvider: _readCursorRectLogical,
+    cursorColorArgb: widget.palette.cursorColor.argb,
+    cursorStyle: widget.cursorStyle,
+    cursorVisible: widget.cursorVisibleProvider?.call() ?? widget.cursorVisible,
+    cursorVisibleProvider: widget.cursorVisibleProvider,
+    isFocused: _focusNode.hasFocus,
+    foregroundArgb: widget.foregroundColor.toARGB32(),
+    backgroundArgb: widget.backgroundColor.toARGB32(),
+    palette256Argb: _resolvePalette256Argb(),
+    cellSizeLogical: Size(atlas.cellWidth, atlas.cellHeight),
+    activityListenable: _paintNotifier,
+    activitySignal: _directPaintVersion,
+    directTerminalBatchProvider: buf == null ? null : _stageDirectTerminalBatch,
+    atlasImage: atlas.image,
+    atlasDevicePixelRatio: atlas.devicePixelRatio,
+    directLogicalSize: layoutSize,
+    cliShaderRegistry: _cliShaderRegistry,
+    watchdog: _gpuWatchdog,
+    regionLayoutsProvider: buf == null ? null : _provideRegionLayouts,
+    regionFallbackRenderer: buf == null ? null : _renderRegionsFallbackAsync,
+    mouseLogicalListenable: _shaderMouseNotifier,
+    maxAmbientFps: widget.maxAmbientFps,
+    child: canvasBox,
+  );
+
+  Widget _buildSearchHighlightOverlay({
+    required Size layoutSize,
+    required GlyphAtlas atlas,
+    required Buffer buf,
+  }) => Positioned.fill(
+    child: IgnorePointer(
+      child: CustomPaint(
+        size: layoutSize,
+        painter: TerminalSearchHighlightPainter(
+          repaint: _searchOverlayRepaint,
+          highlightsProvider: widget.searchHighlightsProvider!,
+          topVirtualRowProvider: _readEffectiveTopVirtualRow,
+          cellWidth: atlas.cellWidth,
+          cellHeight: atlas.cellHeight,
+          cols: buf.width,
+          rows: buf.height,
+          matchColor:
+              widget.searchMatchColor ??
+              Color(widget.palette.resolveAnsi256(4).argb),
+          activeMatchColor:
+              widget.activeSearchMatchColor ??
+              Color(widget.palette.resolveAnsi256(3).argb),
+        ),
+      ),
+    ),
+  );
+
+  Widget _buildComposingOverlay({
+    required Size layoutSize,
+    required GlyphAtlas atlas,
+    required ({int col, int row})? cursor,
+    required String activeComposingText,
+    required Color effectiveBgColor,
+  }) => Positioned.fill(
+    child: IgnorePointer(
+      child: CustomPaint(
+        size: layoutSize,
+        painter: _TerminalComposingOverlayPainter(
+          cellWidth: atlas.cellWidth,
+          cellHeight: atlas.cellHeight,
+          cursorCol: cursor?.col ?? 0,
+          cursorRow: cursor?.row ?? 0,
+          composingText: activeComposingText,
+          composingPainter: _composingPainter,
+          fontFamily: _atlasController.fontFamily,
+          fontFamilyFallback: _atlasController.fontFamilyFallback,
+          fontSize: atlas.fontSize,
+          defaultForegroundArgb: widget.foregroundColor.toARGB32(),
+          defaultBackgroundArgb: effectiveBgColor.toARGB32(),
+        ),
+      ),
+    ),
+  );
 }
 
 final class _TerminalComposingOverlayPainter extends CustomPainter {
