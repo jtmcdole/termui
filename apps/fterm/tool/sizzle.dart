@@ -3127,10 +3127,8 @@ String? _resolveUserShaderPath(
 }
 
 File? _resolveRepoAsset({
-  required String windowsRelPath,
   required String posixRelPath,
   required String workingDir,
-  bool? isWindows,
 }) {
   final segments = posixRelPath.split('/');
   var dir = Directory(workingDir).absolute;
