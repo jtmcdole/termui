@@ -39,6 +39,9 @@ import '../about/about_repository.dart';
 import '../about/about_service.dart';
 import '../about/about_view_model.dart';
 import '../audio/fterm_audio_controller.dart';
+import '../automation/automation_driver_controller.dart';
+import '../automation/automation_models.dart';
+import '../automation/automation_router.dart';
 import '../desktop_launch_env.dart';
 import '../feedback/diagnostic_log.dart';
 import '../feedback/feedback_models.dart';
@@ -93,6 +96,18 @@ enum FtermOverlay {
 
   /// Release highlights and interactive live shader preview showcase.
   whatsNew,
+}
+
+/// Top-level tab selected inside [FtermOverlay.settings].
+enum FtermSettingsSection {
+  /// Appearance, shell defaults, shaders, audio, and desktop update controls.
+  general,
+
+  /// Keyboard shortcut reference and terminal passthrough configuration.
+  keyboard,
+
+  /// Desktop-only loopback HTTP automation driver controls.
+  automation,
 }
 
 typedef _WhatsNewPreviewSnapshot = ({
@@ -277,6 +292,12 @@ final class FtermWorkspaceController extends ChangeNotifier {
   /// About & open-source licenses ViewModel shared by modal overlays.
   late final AboutViewModel aboutViewModel;
 
+  /// Loopback HTTP automation driver lifecycle and configuration controller.
+  late final AutomationDriverController _automationDriver;
+  late final AutomationRouter _automationRouter;
+  AutomationPointerDispatcher? _automationPointerDispatcher;
+  FtermSettingsSection? _requestedSettingsSection;
+
   /// Cross-platform performance trace recorder bound to this workspace.
   late final FtermTraceRecorder traceRecorder;
   final bool _ownsTraceRecorder;
@@ -363,6 +384,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     DesktopIapProviderBuilder? iapProviderBuilder,
     String? Function()? gcloudPathProber,
     void Function(tui.Buffer buffer)? onFrameRedrawn,
+    AutomationWindowBridge? automationWindowBridge,
+    AutomationHttpServerBackend? automationServerBackend,
+    AutomationPointerDispatcher? automationPointerDispatcher,
+    Future<void> Function()? automationFrameSettle,
   }) => FtermWorkspaceController._(
     launchConfig: launchConfig,
     repository: repository,
@@ -396,6 +421,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     iapProviderBuilder: iapProviderBuilder,
     gcloudPathProber: gcloudPathProber,
     onFrameRedrawn: onFrameRedrawn,
+    automationWindowBridge: automationWindowBridge,
+    automationServerBackend: automationServerBackend,
+    automationPointerDispatcher: automationPointerDispatcher,
+    automationFrameSettle: automationFrameSettle,
   );
 
   FtermWorkspaceController._({
@@ -426,6 +455,10 @@ final class FtermWorkspaceController extends ChangeNotifier {
     required DesktopIapProviderBuilder? iapProviderBuilder,
     required String? Function()? gcloudPathProber,
     required this._onFrameRedrawn,
+    required AutomationWindowBridge? automationWindowBridge,
+    required AutomationHttpServerBackend? automationServerBackend,
+    required AutomationPointerDispatcher? automationPointerDispatcher,
+    required Future<void> Function()? automationFrameSettle,
   }) : _storage = storage,
        _settingsSaver = ThrottledSettingsSaver(storage),
        _clock = clock ?? const Clock(),
@@ -498,6 +531,22 @@ final class FtermWorkspaceController extends ChangeNotifier {
         service: aboutService ?? createDefaultAboutService(),
       ),
     );
+    _automationPointerDispatcher = automationPointerDispatcher;
+    _automationRouter = AutomationRouter(
+      workspace: this,
+      windowBridge:
+          automationWindowBridge ?? const UnsupportedAutomationWindowBridge(),
+      readPointerDispatcher: () => _automationPointerDispatcher,
+      awaitFrameSettle: automationFrameSettle,
+      resizeSettleDelay: _resizeDebounce == Duration.zero
+          ? Duration.zero
+          : _resizeDebounce + const Duration(milliseconds: 16),
+    );
+    _automationDriver = AutomationDriverController(
+      onRequest: _automationRouter.handleRequest,
+      storage: _storage,
+      backend: automationServerBackend,
+    )..addListener(_onAutomationDriverChanged);
     if (repository.transport.isConnected) {
       _connectionState = ClientConnectionState.connecting;
     }
@@ -589,6 +638,45 @@ final class FtermWorkspaceController extends ChangeNotifier {
 
   /// Sub-listenable notified on tab/focus/overlay/theme/settings changes.
   ChangeNotifier get chromeNotifier => _chromeNotifier;
+
+  /// Loopback HTTP automation driver lifecycle and configuration controller.
+  AutomationDriverController get automationDriver => _automationDriver;
+
+  /// Attaches or detaches the [AutomationPointerDispatcher] backed by mounted
+  /// `TerminalSurfaceState` instances in `FtermShellScaffold`.
+  void attachAutomationPointerDispatcher(
+    AutomationPointerDispatcher? dispatcher,
+  ) {
+    _automationPointerDispatcher = dispatcher;
+  }
+
+  void _onAutomationDriverChanged() => _notifyChromeChanged();
+
+  /// Writes raw [bytes] directly to the backing PTY of [paneId] in 4096-byte
+  /// chunks, jumping back to the live bottom row when scrolled up.
+  AutomationPtyWriteResult sendRawPtyBytes(String paneId, Uint8List bytes) {
+    if (_disposed) return AutomationPtyWriteResult.notFound;
+    if (_editorPanes.containsKey(paneId)) {
+      return AutomationPtyWriteResult.editorPane;
+    }
+    final pane = _panes[paneId];
+    if (pane == null) return AutomationPtyWriteResult.notFound;
+    if (pane.hasExited) return AutomationPtyWriteResult.exited;
+    if (pane.scrollOffsetLines > 0) {
+      pane.jumpToBottom();
+    }
+    const maxChunkBytes = 4096;
+    if (bytes.isEmpty) return AutomationPtyWriteResult.ok;
+    if (bytes.length <= maxChunkBytes) {
+      pane.port.sendInput(bytes);
+      return AutomationPtyWriteResult.ok;
+    }
+    for (var offset = 0; offset < bytes.length; offset += maxChunkBytes) {
+      final end = math.min(bytes.length, offset + maxChunkBytes);
+      pane.port.sendInput(Uint8List.sublistView(bytes, offset, end));
+    }
+    return AutomationPtyWriteResult.ok;
+  }
 
   /// Ordered workspace tabs.
   List<FtermTabState> get tabs => List<FtermTabState>.unmodifiable(_tabs);
@@ -1329,6 +1417,7 @@ final class FtermWorkspaceController extends ChangeNotifier {
         _startInitialRelayConnection();
       }
       _maybeStartLaunchTrace();
+      await _maybeStartAutomationDriver();
       return;
     }
     if (launchConfig.promptForConnection && _activeClientToken.isEmpty) {
@@ -1338,6 +1427,23 @@ final class FtermWorkspaceController extends ChangeNotifier {
     }
     _syncAutoRemoteTabs();
     _maybeStartLaunchTrace();
+    await _maybeStartAutomationDriver();
+  }
+
+  Future<void> _maybeStartAutomationDriver() async {
+    if (_disposed) return;
+    if (!launchConfig.automationDriverEnabled &&
+        !launchConfig.automationAllowPty &&
+        launchConfig.automationPort == null &&
+        launchConfig.automationTokenOverride == null) {
+      return;
+    }
+    await _automationDriver.applyStartupFlags(
+      enabled: launchConfig.automationDriverEnabled,
+      allowPty: launchConfig.automationAllowPty,
+      portOverride: launchConfig.automationPort,
+      tokenOverride: launchConfig.automationTokenOverride,
+    );
   }
 
   void _maybeStartLaunchTrace() {
@@ -2109,11 +2215,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
   /// Closes [paneId] (or the currently focused pane), promoting its sibling or
   /// closing the containing tab when it is the final pane.
-  Future<void> closePane([String? paneId]) async {
+  ///
+  /// When [force] is `true`, closes dirty shader editor panes immediately
+  /// without opening the inline unsaved-changes confirmation prompt.
+  Future<void> closePane([String? paneId, bool force = false]) async {
     if (_disposed) return;
     final targetPaneId = paneId ?? activeTab?.splitTree.focusedPaneId;
     if (targetPaneId == null) return;
-    await _closePaneInternal(targetPaneId, force: false);
+    await _closePaneInternal(targetPaneId, force: force);
   }
 
   Future<void> _closePaneInternal(
@@ -2447,6 +2556,28 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
   /// Opens or dismisses a workspace modal overlay.
   void setOverlay(FtermOverlay overlay) => _setOverlay(overlay);
+
+  /// Opens [FtermOverlay.settings] focused on [initialSection], or switches
+  /// directly to [initialSection] when Settings is already visible.
+  void openSettingsOverlay({
+    FtermSettingsSection initialSection = FtermSettingsSection.general,
+  }) {
+    if (_disposed) return;
+    _requestedSettingsSection = initialSection;
+    if (_activeOverlay != FtermOverlay.settings) {
+      _setOverlay(FtermOverlay.settings);
+      return;
+    }
+    _notifyChromeChanged();
+  }
+
+  /// Returns and clears the most recent section requested via
+  /// [openSettingsOverlay], or `null` if none is pending.
+  FtermSettingsSection? consumeRequestedSettingsSection() {
+    final requested = _requestedSettingsSection;
+    _requestedSettingsSection = null;
+    return requested;
+  }
 
   void _setOverlay(FtermOverlay overlay) {
     if (_disposed || _activeOverlay == overlay) return;
@@ -3467,6 +3598,16 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     _notifyChromeChanged();
   }
 
+  /// Sets the persisted base terminal font size to [size], clamped to
+  /// `[FtermPreferences.minFontSize, FtermPreferences.maxFontSize]`.
+  void setFontSize(double size) {
+    if (_disposed || !size.isFinite) return;
+    final clamped = size
+        .clamp(FtermPreferences.minFontSize, FtermPreferences.maxFontSize)
+        .toDouble();
+    updatePreferences(_preferences.copyWith(fontSize: clamped));
+  }
+
   /// Adjusts the persisted base terminal font size by [delta], clamped to
   /// `[FtermPreferences.minFontSize, FtermPreferences.maxFontSize]`.
   void adjustFontSize(double delta) {
@@ -4351,6 +4492,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     );
     updateViewModel.dispose();
     aboutViewModel.dispose();
+    _automationPointerDispatcher = null;
+    _automationDriver.removeListener(_onAutomationDriverChanged);
+    await _automationDriver.setEnabled(false);
+    _automationDriver.dispose();
     final shaderWatchSubscription = _shaderWatchSubscription;
     _shaderWatchSubscription = null;
     _shaderController.removeListener(_onShaderControllerChanged);

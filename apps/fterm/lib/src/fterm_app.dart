@@ -2,12 +2,16 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:clock/clock.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:material_ui/material_ui.dart';
 import 'package:termui/termui.dart' as tui;
 import 'package:termui_cast_client_core/termui_cast_client_core.dart';
 
 import 'about/about_service.dart';
 import 'audio/fterm_audio_controller.dart';
+import 'automation/automation_http_server_stub.dart';
+import 'automation/automation_models.dart';
+import 'automation/window_channel_bridge.dart';
 import 'desktop_launch_env.dart';
 import 'feedback/diagnostic_log.dart';
 import 'file_drop_bridge.dart';
@@ -84,6 +88,15 @@ final class FtermApp extends StatefulWidget {
   /// Optional test hook invoked with the created [FtermWorkspaceController].
   final void Function(FtermWorkspaceController workspace)? onWorkspaceCreated;
 
+  /// Optional native window bounds bridge seam for automation tests.
+  final AutomationWindowBridge? automationWindowBridge;
+
+  /// Optional loopback HTTP server backend seam for automation tests.
+  final AutomationHttpServerBackend? automationServerBackend;
+
+  /// Optional frame-settle hook for automation mutations in widget tests.
+  final Future<void> Function()? automationFrameSettle;
+
   /// Creates the root `fterm` Flutter application.
   const FtermApp({
     super.key,
@@ -107,6 +120,9 @@ final class FtermApp extends StatefulWidget {
     this.iapProviderBuilder,
     this.gcloudPathProber,
     this.onWorkspaceCreated,
+    this.automationWindowBridge,
+    this.automationServerBackend,
+    this.automationFrameSettle,
   });
 
   @override
@@ -169,6 +185,15 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
         widget.audioControllerFactory?.call() ??
         FtermAudioController(clock: widget.clock);
     final hostDriver = widget.localHostDriver ?? createLocalHostDriver();
+    final isWeb = widget.isWebOverride ?? kIsWeb;
+    final windowBridge =
+        widget.automationWindowBridge ??
+        (isWeb
+            ? const UnsupportedAutomationWindowBridge()
+            : const MethodChannelWindowBridge());
+    final serverBackend =
+        widget.automationServerBackend ??
+        (isWeb ? const StubAutomationHttpServer() : null);
 
     _workspace = FtermWorkspaceController(
       launchConfig: widget.config,
@@ -187,6 +212,9 @@ final class _FtermAppState extends State<FtermApp> with WidgetsBindingObserver {
       iapProviderBuilder: widget.iapProviderBuilder,
       gcloudPathProber: widget.gcloudPathProber,
       onFrameRedrawn: widget.onFrameRedrawn,
+      automationWindowBridge: windowBridge,
+      automationServerBackend: serverBackend,
+      automationFrameSettle: widget.automationFrameSettle,
     );
     _appThemeMode = _resolveMaterialThemeMode();
     _workspace.chromeNotifier.addListener(_onWorkspaceThemeChanged);
