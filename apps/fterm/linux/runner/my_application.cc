@@ -76,6 +76,10 @@ static void my_application_activate(GApplication* application) {
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
+  // TODO(automation): Register an FlMethodChannel named "fterm/window" and
+  // implement "getBounds" and "setBounds" via GTK window geometry APIs for
+  // Linux window automation parity with Windows.
+
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
 
